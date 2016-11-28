@@ -58,7 +58,7 @@ SDTSocketProvider::NewSocket(int32_t family,
                              const char *host,
                              int32_t port,
                              nsIProxyInfo *proxy,
-                             const nsACString & aFirstPartyDomain,
+                             const mozilla::NeckoOriginAttributes &aOriginAttributes,
                              uint32_t flags,
                              PRFileDesc **result,
                              nsISupports **securityInfo)
@@ -94,7 +94,7 @@ SDTSocketProvider::NewSocket(int32_t family,
     goto onfail;
   }
 
-  rv = provider->AddToSocket(family, host, port, proxy, aFirstPartyDomain,
+  rv = provider->AddToSocket(family, host, port, proxy, aOriginAttributes,
                              flags, fd, getter_AddRefs(secInfo));
 
   if (NS_FAILED(rv)) {
@@ -135,7 +135,7 @@ SDTSocketProvider::AddToSocket(int32_t family,
                                const char *host,
                                int32_t port,
                                nsIProxyInfo *proxy,
-                               const nsACString & aFirstPartyDomain,
+                               const mozilla::NeckoOriginAttributes &aOriginAttributes,
                                uint32_t flags,
                                PRFileDesc *sock,
                                nsISupports **socksInfo)
