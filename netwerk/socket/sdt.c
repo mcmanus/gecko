@@ -161,7 +161,7 @@ static PRIntervalTime sMaxRTO; // MaxRTO in interval that we do not need to conv
 #define RTT_FACTOR_ALPHA 0.125
 #define RTT_FACTOR_BETA 0.25
 
-static struct tcp_congestion_ops *cc;// = tcp_general;
+static struct sdt_congestion_control_ops *cc;// = sdt_cc;
 
 //static uint32_t amplificationPacket = 2;
 
@@ -557,7 +557,7 @@ LogRanges(struct aDataChunk_t *chunk)
   assert(chunk);
 
   struct range32_t *r = chunk->mNotSentRanges;
-  fprintf(stdout, "\mNotSentRanges for chunk %p:\n", chunk);
+  fprintf(stdout, "mNotSentRanges for chunk %p:\n", chunk);
   while(r) {
     fprintf(stdout, "Range: %p %d %d\n", r, r->mStart, r->mEnd);
     r = r->mNext;
@@ -1042,7 +1042,7 @@ CreateNewSDTSendDataStr()
 static uint64_t
 DataQueueFull(struct SDT_SendDataStruct_t *sendDataStr)
 {
-   fprintf(stderr, "DataQueueFull queued=%lld max=%lld\n",
+   fprintf(stderr, "DataQueueFull queued=%lu max=%lu\n",
            sendDataStr->mDataQueued, sendDataStr->mMaxDataQueued );
    return sendDataStr->mDataQueued >= sendDataStr->mMaxDataQueued;
 }
@@ -1656,7 +1656,7 @@ PacketAcked(struct SDT_SendDataStruct_t *sendDataStr, uint64_t seqNum)
   while (pkt->mFrameInfos) {
     struct aFrameInfo_t *frame = pkt->mFrameInfos;
 
-    uint8_t hadNotSentData = frame->mDataChunk->mNotSentRanges;
+    uint8_t hadNotSentData = !!(frame->mDataChunk->mNotSentRanges);
     AckSomeDataSentFromChunk(frame->mDataChunk, frame->mRange.mStart,
                              frame->mRange.mEnd);
     if (hadNotSentData && !frame->mDataChunk->mNotSentRanges) {
@@ -1836,17 +1836,9 @@ struct sdt_t
 
   uint64_t aNextPacketId;
 
-  //CUBIC private data
-  // This will not work on all platforms, because of the alligment.
-  // I will submit this first version and change it later.
-  uint64_t cc_general_private[28];
+  // The congestion control parameters.
+  struct sdt_cc_t ccData;
 };
-
-void*
-sdt_GetCCPrivate(struct sdt_t *sdt)
-{
-  return sdt->cc_general_private;
-}
 
 struct sdt_t *sdt_newHandle()
 {
@@ -1885,7 +1877,7 @@ struct sdt_t *sdt_newHandle()
 
   handle->aNextPacketId = 1;
 
-  cc->Init(handle);
+  cc->Init(&handle->ccData);
 
   return handle;
 
@@ -2247,7 +2239,7 @@ sLayerSendTo(PRFileDesc *fd, const void *bufp, int32_t amount,
     return rv;
   }
 
-  if (rv != dataLen) {
+  if (rv != (int32_t)dataLen) {
     DEV_ABORT();
     // todo set err
     return -1;
@@ -2259,7 +2251,7 @@ sLayerSendTo(PRFileDesc *fd, const void *bufp, int32_t amount,
   }
 
   if (PacketNeedAck(&handle->mSDTSendDataStr)) {
-    cc->OnPacketSent(handle, handle->aNextPacketId, rv);
+    cc->OnPacketSent(&handle->ccData, handle->aNextPacketId, rv);
   }
 
   handle->aNextPacketId++;
@@ -2542,7 +2534,8 @@ NeedRetransmissionDupAck(struct sdt_t *handle)
   while (handle->mSDTSendDataStr.mSentPacketInfo.mFirst &&
          (handle->mSDTSendDataStr.mSentPacketInfo.mFirst->mPacketSeqNum <= handle->aLargestAcked)) {
 
-    cc->OnPacketLost(handle, handle->mSDTSendDataStr.mSentPacketInfo.mFirst->mPacketSeqNum,
+    cc->OnPacketLost(&handle->ccData,
+                     handle->mSDTSendDataStr.mSentPacketInfo.mFirst->mPacketSeqNum,
                      handle->mSDTSendDataStr.mSentPacketInfo.mFirst->mSize);
     assert(MarkPacketLost(&handle->mSDTSendDataStr,
            handle->mSDTSendDataStr.mSentPacketInfo.mFirst));
@@ -2797,7 +2790,8 @@ RecvAck(struct sdt_t *handle, uint8_t type)
     while (newlyAckedFirst) {
       struct aAckedPacket_t *curr = newlyAckedFirst;
       newlyAckedFirst = newlyAckedFirst->mNext;
-      cc->OnPacketAcked(handle, curr->mId, handle->aSmallestUnacked,
+      cc->OnPacketAcked(&handle->ccData, curr->mId,
+                        handle->aSmallestUnacked,
                         curr->mSize, curr->mRtt, curr->mHasRtt);
       free(curr);
     }
@@ -2825,7 +2819,7 @@ CheckRetransmissionTimers(struct sdt_t *handle)
     fprintf(stderr, "ERTimerExpired\n");
     assert(handle->mSDTSendDataStr.mSentPacketInfo.mFirst);
     struct aPacketInfo_t *pkt = handle->mSDTSendDataStr.mSentPacketInfo.mFirst;
-    cc->OnPacketLost(handle, pkt->mPacketSeqNum, pkt->mSize);
+    cc->OnPacketLost(&handle->ccData, pkt->mPacketSeqNum, pkt->mSize);
     MarkPacketLost(&handle->mSDTSendDataStr, pkt);
 
     StopERTimer(handle);
@@ -2841,7 +2835,7 @@ CheckRetransmissionTimers(struct sdt_t *handle)
     }
     handle->rto *= 2;
     handle->numOfRTORetrans++;
-    cc->OnRetransmissionTimeout(handle);
+    cc->OnRetransmissionTimeout(&handle->ccData);
     // This is a bit incorrect, but it is ok. We  should restart it when we do
     // resend this pkt.
     RestartRTOTimer(handle);
@@ -4137,7 +4131,7 @@ MaybeSendPacket(PRFileDesc *fd, struct sdt_t *handle)
     return -1;
   }
 
-  if (!cc->CanSend(handle) ||
+  if (!cc->CanSend(&handle->ccData) ||
       (!HasDataForTransmission(&handle->mSDTSendDataStr) &&
        !DoWeNeedToSendAck(handle))) {
     PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
@@ -4191,7 +4185,7 @@ MaybeSendPacket(PRFileDesc *fd, struct sdt_t *handle)
     }
   } while (pkt->mWritten && (rv > 0) &&
            HasDataForTransmission(&handle->mSDTSendDataStr) &&
-           cc->CanSend(handle));
+           cc->CanSend(&handle->ccData));
 
   free(pkt);
   return rv;
@@ -4319,7 +4313,7 @@ qLayerWrite(PRFileDesc *fd, const void *buf, int32_t amount)
   // If we can send according to cwnd, this is an ack, a retransmission or
   // we are writnig 0 bytes.
   int32_t rv = -1;
-  if (cc->CanSend(handle) || !amount) {
+  if (cc->CanSend(&handle->ccData) || !amount) {
     rv = fd->lower->methods->write(fd->lower, buf, amount);
     return rv;
   } else {
@@ -4418,7 +4412,7 @@ qLayerPoll(PRFileDesc *fd, PRInt16 how_flags, PRInt16 *p_out_flags)
 
   if (handle->state == SDT_TRANSFERRING) {
     if ((how_flags & PR_POLL_WRITE) &&
-        !(cc->CanSend(handle) ||
+        !(cc->CanSend(&handle->ccData) ||
           DoWeNeedToSendAck(handle))) { //&& !qAllowSend(handle)) {
       how_flags^= PR_POLL_WRITE;
     }
@@ -4560,7 +4554,7 @@ sdt_ensureInit()
   sMethods.close = genericClose;
   aMethods.close = genericClose;
 
-  cc = &tcp_general;
+  cc = &sdt_cc;
 }
 
 PRFileDesc *

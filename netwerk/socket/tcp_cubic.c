@@ -60,7 +60,7 @@ static int fast_convergence = 1;
 
 // HYSTART_ACK_TRAIN with rtt ~ 0 does not work well.
 static int hystart_detect = HYSTART_DELAY; // | HYSTART_ACK_TRAIN;
-static int hystart_low_window = 16;
+static unsigned int hystart_low_window = 16;
 static int hystart_ack_delta = 2;
 
 const uint32_t beta_scale = 8 * (BICTCP_BETA_SCALE+beta) / 3
@@ -68,53 +68,19 @@ const uint32_t beta_scale = 8 * (BICTCP_BETA_SCALE+beta) / 3
 static uint32_t cube_rtt_scale = 410; //bic_scale * 10;
 const uint64_t cube_factor = (1ull << (10+3*BICTCP_HZ)) / (bic_scale * 10);
 
-struct tcp_congestion_variant_ops cubic_cc = {
-  .Init = cubic_Reset,
-  .OnPacketAcked = cubic_OnPacketAcked,
-  .OnPacketLost = cubic_OnPacketLost,
-  .OnRetransmissionTimeout = cubic_Reset,
-  .OnSendAfterIdle = cubic_OnSendAfterIdle
-};
-
-struct tcp_congestion_slowstart_variant_ops hystart = {
-  .Init = hystart_Reset,
-  .OnPacketAcked = hystart_OnPacketAcked,
-  .OnRetransmissionTimeout = hystart_Reset
-};
-
-/* BIC TCP Parameters */
-struct bictcp {
-  uint32_t cnt; /* increase cwnd by 1 after ACKs */
-  uint32_t last_max_cwnd; /* last maximum snd_cwnd */
-  uint32_t last_cwnd; /* the last snd_cwnd */
-  uint32_t last_time; /* time when updated last_cwnd */
-  uint32_t bic_origin_point; /* origin point of bic function */
-  uint32_t bic_K; /* time to origin point from the beginning of the current epoch */
-  PRIntervalTime epoch_start;	/* beginning of an epoch */
-  uint32_t ack_cnt;	/* number of acks */
-  uint32_t tcp_cwnd;	/* estimated tcp cwnd */
-  uint32_t sample_cnt;	/* number of samples to decide curr_rtt */
-  uint32_t found;		/* the exit point is found? */
-  PRIntervalTime round_start;	/* beginning of each round */
-  uint32_t end_seq;	/* end_seq of the round */
-  PRIntervalTime last_ack;	/* last time when the ACK spacing is close */
-  uint32_t curr_rtt;	/* the minimum rtt of current round */
-};
-
-inline void
-cubic_Reset(struct tcp_general_struct *tcp_g)
+void
+cubic_Reset(union sdt_cc_variation_t *cc)
 {
-  struct bictcp *ca = tcp_general_cc_data(tcp_g);
-  ca->cnt = 0;
-  ca->last_max_cwnd = 0;
-  ca->last_cwnd = 0;
-  ca->last_time = 0;
-  ca->bic_origin_point = 0;
-  ca->bic_K = 0;
-  ca->epoch_start = 0;
-  ca->ack_cnt = 0;
-  ca->tcp_cwnd = 0;
-  ca->found = 0;
+  cc->cubic.cnt = 0;
+  cc->cubic.last_max_cwnd = 0;
+  cc->cubic.last_cwnd = 0;
+  cc->cubic.last_time = 0;
+  cc->cubic.bic_origin_point = 0;
+  cc->cubic.bic_K = 0;
+  cc->cubic.epoch_start = 0;
+  cc->cubic.ack_cnt = 0;
+  cc->cubic.tcp_cwnd = 0;
+  cc->cubic.found = 0;
 }
 
 // The next 3 functions are cbrt.
@@ -222,7 +188,7 @@ cubic_root(uint64_t a)
  * Update cubic values.
  */
 void
-bictcp_update(struct bictcp *ca, uint32_t cwnd, PRIntervalTime rtt_min)
+bictcp_update(struct cubic_t *ca, uint32_t cwnd, PRIntervalTime rtt_min)
 {
   uint32_t delta, bic_target, max_cnt;
   uint64_t offs, t;
@@ -308,7 +274,7 @@ bictcp_update(struct bictcp *ca, uint32_t cwnd, PRIntervalTime rtt_min)
     ca->cnt = 20; /* increase cwnd 5% per RTT */
   }
 
-tcp_friendliness:
+//tcp_friendliness:
 
   /* TCP Friendly */
   {
@@ -336,16 +302,18 @@ tcp_friendliness:
 }
 
 uint32_t
-cubic_OnPacketAcked(struct tcp_general_struct *tcp_g, uint32_t packetId)
+cubic_OnPacketAcked(union sdt_cc_variation_t *cc,
+                    struct sdt_cc_t *ccData,
+                    uint32_t packetId)
 {
-  struct bictcp *ca = tcp_general_cc_data(tcp_g);
+  struct cubic_t *ca = &cc->cubic;
 
-  uint32_t cwnd = tcp_general_snd_cwnd(tcp_g);
+  uint32_t cwnd = sdt_cc_snd_cwnd(ccData);
 
   /* Discard delay samples right after fast recovery */
   // Do update only for (PR_IntervalNow() - ca->epoch_start) >= 10
   if (!ca->epoch_start || (int32_t)(PR_IntervalNow() - ca->epoch_start) >= 10) {
-    bictcp_update(ca, cwnd, tcp_general_rtt_min(tcp_g));
+    bictcp_update(ca, cwnd, sdt_cc_rtt_min(ccData));
   }
 
   return ca->cnt;
@@ -353,10 +321,11 @@ cubic_OnPacketAcked(struct tcp_general_struct *tcp_g, uint32_t packetId)
 
 // loss detected.
 uint32_t
-cubic_OnPacketLost(struct tcp_general_struct *tcp_g)
+cubic_OnPacketLost(union sdt_cc_variation_t *cc,
+                   struct sdt_cc_t *ccData)
 {
-  struct bictcp *ca = tcp_general_cc_data(tcp_g);
-  uint32_t packetsInFilght = tcp_general_packets_in_flight(tcp_g);
+  struct cubic_t *ca = &cc->cubic;
+  uint32_t packetsInFilght = sdt_cc_packets_in_flight(ccData);
   ca->epoch_start = 0; /* end of epoch */
 
   /* Wmax and fast convergence */
@@ -372,13 +341,14 @@ cubic_OnPacketLost(struct tcp_general_struct *tcp_g)
 }
 
 void
-cubic_OnSendAfterIdle(struct tcp_general_struct *tcp_g)
+cubic_OnSendAfterIdle(union sdt_cc_variation_t *cc,
+                      struct sdt_cc_t *ccData)
 {
-  struct bictcp *ca = tcp_general_cc_data(tcp_g);
+  struct cubic_t *ca = &cc->cubic;
   PRIntervalTime now = PR_IntervalNow();
   PRIntervalTime delta;
 
-  delta = now - tcp_general_last_time_sent(tcp_g);
+  delta = now - sdt_cc_last_time_sent(ccData);
 
   /* We were application limited (idle) for a while.
    * Shift epoch_start to keep cwnd growth to cubic curve.
@@ -392,25 +362,22 @@ cubic_OnSendAfterIdle(struct tcp_general_struct *tcp_g)
 }
 
 void
-hystart_Reset(struct tcp_general_struct *tcp_g)
+hystart_Reset(struct cubic_t *cc, struct sdt_cc_t *ccData)
 {
-  struct bictcp *ca = tcp_general_cc_data(tcp_g);
-
-  ca->round_start = ca->last_ack = PR_IntervalNow();
-  ca->end_seq = tcp_general_last_sent(tcp_g);
-  ca->curr_rtt = 0;
-  ca->sample_cnt = 0;
-  ca->found = 0;
+  cc->round_start = cc->last_ack = PR_IntervalNow();
+  cc->end_seq = sdt_cc_last_sent(ccData);
+  cc->curr_rtt = 0;
+  cc->sample_cnt = 0;
+  cc->found = 0;
 }
 
 uint32_t
-hystart_update(struct tcp_general_struct *tcp_g, PRIntervalTime last_rtt)
+hystart_update(struct cubic_t *ca,
+               struct sdt_cc_t *ccData, PRIntervalTime last_rtt)
 {
-  uint32_t cwnd = tcp_general_snd_cwnd(tcp_g);
-  uint32_t ssthresh = tcp_general_snd_ssthresh(tcp_g);
-  uint32_t rtt_min = tcp_general_rtt_min(tcp_g);
-
-  struct bictcp *ca = tcp_general_cc_data(tcp_g);
+  uint32_t cwnd = sdt_cc_snd_cwnd(ccData);
+  uint32_t ssthresh = sdt_cc_snd_ssthresh(ccData);
+  uint32_t rtt_min = sdt_cc_rtt_min(ccData);
 
   if (ca->found & hystart_detect) {
     return ssthresh;
@@ -420,9 +387,9 @@ hystart_update(struct tcp_general_struct *tcp_g, PRIntervalTime last_rtt)
     PRIntervalTime now = PR_IntervalNow();
 
     /* first detection parameter - ack-train detection */
-    if ((int32_t)(now - ca->last_ack) <= PR_MillisecondsToInterval(hystart_ack_delta)) {
+    if ((int32_t)(now - ca->last_ack) <= (int32_t)PR_MillisecondsToInterval(hystart_ack_delta)) {
       ca->last_ack = now;
-      if ((int32_t)(now - ca->round_start) > rtt_min >> 1) {
+      if ((int32_t)(now - ca->round_start) > (int32_t)(rtt_min >> 1)) {
         ca->found |= HYSTART_ACK_TRAIN;
         ssthresh = cwnd;
       }
@@ -451,21 +418,36 @@ hystart_update(struct tcp_general_struct *tcp_g, PRIntervalTime last_rtt)
  * ratio = (15*ratio + sample) / 16
  */
 uint32_t
-hystart_OnPacketAcked(struct tcp_general_struct *tcp_g, uint32_t packetId,
+hystart_OnPacketAcked(union sdt_cc_variation_t *cc,
+                      struct sdt_cc_t *ccData, uint32_t packetId,
                       PRIntervalTime last_rtt)
 {
-  struct bictcp *ca = tcp_general_cc_data(tcp_g);
+  struct cubic_t *ca = &cc->cubic;
 
-  uint32_t cwnd = tcp_general_snd_cwnd(tcp_g);
-  uint32_t ssthresh = tcp_general_snd_ssthresh(tcp_g);
+  uint32_t cwnd = sdt_cc_snd_cwnd(ccData);
+  uint32_t ssthresh = sdt_cc_snd_ssthresh(ccData);
 
   if ((ca->end_seq < packetId)) {
-    hystart_Reset(tcp_g);
+    hystart_Reset(ca, ccData);
   }
 
   /* hystart triggers when cwnd is larger than some threshold */
   if (cwnd >= hystart_low_window) {
-    ssthresh = hystart_update(tcp_g, last_rtt);
+    ssthresh = hystart_update(ca, ccData, last_rtt);
   }
   return ssthresh;
 }
+
+struct sdt_congestion_control_variation_ops cubic_cc = {
+  .Init = cubic_Reset,
+  .OnPacketAcked = cubic_OnPacketAcked,
+  .OnPacketLost = cubic_OnPacketLost,
+  .OnRetransmissionTimeout = cubic_Reset,
+  .OnSendAfterIdle = cubic_OnSendAfterIdle
+};
+
+struct sdt_slowstart_variation_ops hystart = {
+  .Init = hystart_Reset,
+  .OnPacketAcked = hystart_OnPacketAcked,
+  .OnRetransmissionTimeout = hystart_Reset
+};

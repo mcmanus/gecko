@@ -32,10 +32,6 @@ int32_t sdt_GetData(PRFileDesc *aFd);
 uint8_t sdt_HasData(PRFileDesc *aFd);
 uint8_t sdt_SocketWritable(PRFileDesc *aFd);
 
-struct sdt_t;
-void *sdt_GetCCPrivate(struct sdt_t *sdt);
-
-
 /* error codes */
 #define SDTE_OK             0
 #define SDTE_OUT_OF_MEMORY -1
