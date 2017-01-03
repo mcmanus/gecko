@@ -13,7 +13,6 @@
 #include "ssl.h"
 #include "unistd.h"
 
-#include "qPacketQueue.h"
 #include "sdt_common.h"
 #include "congestion_control.h"
 #include "tcp_general.h"
@@ -87,10 +86,11 @@ TODO add session identifier for mobility.
 #define HTTP2_FRAME_FLAG_PRIORITY      0x20
 #define HTTP2_FRAME_FLAG_ACK           0x01
 
-#define HTTP2_SETTINGS_ENABLE_PUSH         0x02
-#define HTTP2_SETTINGS_TYPE_MAX_CONCURRENT 0x03
-#define HTTP2_SETTINGS_TYPE_INITIAL_WINDOW 0x04
-#define HTTP2_SETTINGS_MAX_FRAME_SIZE      0x05
+#define HTTP2_SETTINGS_TYPE_HEADER_TABLE_SIZE 0x01
+#define HTTP2_SETTINGS_ENABLE_PUSH            0x02
+#define HTTP2_SETTINGS_TYPE_MAX_CONCURRENT    0x03
+#define HTTP2_SETTINGS_TYPE_INITIAL_WINDOW    0x04
+#define HTTP2_SETTINGS_MAX_FRAME_SIZE         0x05
 
 #define HTTP2_HEADERLEN                9
 
@@ -137,7 +137,8 @@ const uint8_t magicHello[] = {
   // can tls for https be removed if e2e?
 #endif
 
-static uint32_t aBufferLenMax = 1048576; // number of queued packets
+// max amout of outstanding data (sender buffer). (1048576*1400)
+static uint64_t aBufferLenMax = 1468006400;
 
 // our standard time unit is a microsecond
 static uint64_t qMaxCreditsDefault = 80000; // ums worth of full bucket
@@ -147,6 +148,8 @@ static uint8_t aMaxNumOfRTORetrans = 6;
 
 #define DUPACK_THRESH 3
 #define EARLY_RETRANSMIT_FACTOR 0.25
+
+#define NUMBER_OF_TIMESTAMPS_STORED 8
 
 #define MAX_RTO 60000 // 60s
 #define MIN_RTO 1000 // 1s
@@ -264,11 +267,1416 @@ struct range_t
   struct range_t *mNext;
 };
 
-enum SDTConnectionState {
-  SDT_CONNECTING, // Until DTLS handshake finishes
-  SDT_TRANSFERRING,
-  SDT_CLOSING
+
+struct aPacket_t
+{
+  uint32_t mSize;
+  uint32_t mWritten;
+  // the buffer lives at the end of the struct.
 };
+
+// FOR TESTING!!!!!
+struct aPacket_t *
+CreatePacket(uint32_t size)
+{
+  struct aPacket_t *pkt =
+    (struct aPacket_t *) malloc (sizeof(struct aPacket_t) + size);
+  if (!pkt) {
+    return NULL;
+  }
+  pkt->mSize = size;
+  return pkt;
+}
+
+struct range32_t
+{
+  uint32_t mStart;
+  uint32_t mEnd;
+  struct range32_t *mNext;
+};
+
+static int32_t
+AddRange(struct range32_t **rangeList, uint32_t start, uint32_t end)
+{
+  struct range32_t *rcurr = *rangeList;
+  struct range32_t *rprev = NULL;
+  while (rcurr && (rcurr->mStart < start)) {
+    rprev = rcurr;
+    rcurr = rcurr->mNext;
+  }
+
+  if ((!rprev || (rprev->mEnd < start)) && (!rcurr || (rcurr->mStart > end))) {
+    // Add a new range.
+    struct range32_t *r =
+      (struct range32_t *) malloc (sizeof(struct range32_t));
+    if (!r) {
+      return SDTE_OUT_OF_MEMORY;
+    }
+    r->mStart = start;
+    r->mEnd = end;
+    r->mNext = rcurr;
+    if (rprev) {
+      rprev->mNext = r;
+    } else {
+      *rangeList = r;
+    }
+  } else {
+    if (rprev && rprev->mEnd >= start) {
+      if (rprev->mEnd <= end) {
+        // Extend rprev.
+        rprev->mEnd = end;
+      }
+    } else if (rcurr) {
+      // Extend rcurr
+      rcurr->mStart = start;
+      if (rcurr->mEnd < end) {
+        rcurr->mEnd = end;
+      }
+      rprev = rcurr;
+      rcurr = rcurr->mNext;
+    }
+
+    // Check if extended rprev contains some other ranges.
+    while (rcurr && rcurr->mStart <= rprev->mEnd) {
+      if (rcurr->mEnd > rprev->mEnd) {
+        rprev->mEnd = rcurr->mEnd;
+      }
+
+      rprev->mNext = rcurr->mNext;
+      free(rcurr);
+      rcurr = rprev->mNext;
+    }
+  }
+  return 0;
+}
+
+static int32_t
+RemoveRange(struct range32_t **rangeList, uint32_t start, uint32_t end,
+            struct range32_t **removedRanges)
+{
+  assert(end - start);
+  assert(!removedRanges || (*removedRanges == NULL));
+  struct range32_t *rcurr = *rangeList;
+  struct range32_t *rprev = NULL;
+  while (rcurr && (rcurr->mStart < start)) {
+    rprev = rcurr;
+    rcurr = rcurr->mNext;
+  }
+
+  if ((!rprev || (rprev->mEnd <= start)) && (!rcurr || (rcurr->mStart > end))) {
+      // Range does not exist!
+  } else {
+
+    if (rprev && rprev->mEnd > start) {
+
+      if (rprev->mEnd <= end) {
+        // Remove a part of the rprev start.
+        if (removedRanges) {
+          struct range32_t *r =
+            (struct range32_t *) malloc (sizeof(struct range32_t));
+          if (!r) {
+            return SDTE_OUT_OF_MEMORY;
+          }
+          r->mStart = start;
+          r->mEnd = rprev->mEnd;
+          r->mNext = *removedRanges;
+          *removedRanges = r;
+        }
+        rprev->mEnd = start;
+      } else {
+        // split rprev!
+        struct range32_t *r =
+          (struct range32_t *) malloc (sizeof(struct range32_t));
+        if (!r) {
+          return SDTE_OUT_OF_MEMORY;
+        }
+        r->mStart = end;
+        r->mEnd = rprev->mEnd;
+        rprev->mEnd = start;
+        r->mNext = rprev->mNext;
+        rprev->mNext = r;
+
+        if (removedRanges) {
+          r = (struct range32_t *) malloc (sizeof(struct range32_t));
+          if (!r) {
+            return SDTE_OUT_OF_MEMORY;
+          }
+          r->mStart = start;
+          r->mEnd = end;
+          r->mNext = *removedRanges;
+          *removedRanges = r;
+        }
+      }
+    }
+
+    // Remove from rcurr and check if the next ranges needs to be removed!
+    while (rcurr && rcurr->mEnd <= end) {
+      struct range32_t *r = rcurr;
+      if (rprev) {
+        rprev->mNext = rcurr->mNext;
+        rcurr = rprev->mNext;
+      } else {
+        *rangeList = rcurr->mNext;
+        rcurr = *rangeList;
+      }
+
+      if (removedRanges) {
+        r->mNext = *removedRanges;
+        *removedRanges = r;
+      } else {
+        free(r);
+      }
+    }
+    if (rcurr && rcurr->mStart < end) {
+      if (removedRanges) {
+        struct range32_t *r =
+            (struct range32_t *) malloc (sizeof(struct range32_t));
+        if (!r) {
+          return SDTE_OUT_OF_MEMORY;
+        }
+        r->mStart = rcurr->mStart;
+        r->mEnd = end;
+        r->mNext = *removedRanges;
+        *removedRanges = r;
+      }
+      rcurr->mStart = end;
+    }
+  }
+  return 0;
+}
+
+enum ChunkType {
+  DATA_CHUNK,
+  HEADER_CHUNK,
+  CONTROL_CHUNK
+};
+
+// This contains only chunk data and its size.
+struct aChunk_t {
+  uint32_t mSize;
+  uint32_t mWritten;
+  // the buffer lives at the end of the struct
+};
+
+// Streams are going to save data in chunks as they are arriving from the
+// application. For data and header frames a chunk is actually a h2 frame
+// without frame header and for control frame is complete sdt control frame.
+// A chunk data will be delete as soon as all the data is acked. We need to keep
+// track of chunk's parts that are still not send or sent but not acked, i.e.
+// mNotSentRanges and mUnackedRanges. When some data is sent the corresponding
+// range is moved from mNotSentRanges to mUnackedRanges. When some data are
+// lost the corresponding range is moved from mUnackedRanges to mNotSentRanges.
+// When some data are acked the corresponding range is removed.
+struct aDataChunk_t
+{
+  uint32_t mRefCnt;
+  enum ChunkType mType;
+  struct range32_t *mNotSentRanges;
+  struct range32_t *mUnackedRanges; // this is a chain of unacked ranges of this
+                                    // chunk.
+  uint8_t mH2Flags; // This are H2 flags;
+  uint64_t mOffset; // offset of the first byte of the chunk.
+
+  // These parameters are needed only for Header frames.
+  uint32_t mStreamId;
+  uint8_t mContinuationFrame;
+
+  // Needed for control frames.
+  uint8_t mIsPingPkt;
+
+  struct aDataChunk_t *mNext;
+  struct aChunk_t *mData;
+};
+
+struct aDataChunk_t *
+CreateChunk(enum ChunkType type, uint32_t size, uint32_t flags,
+            uint32_t streamId)
+{
+  struct aDataChunk_t *chunk =
+    (struct aDataChunk_t *) calloc (1, sizeof(struct aDataChunk_t));
+  if (!chunk) {
+    return NULL;
+  }
+
+  chunk->mData = (struct aChunk_t *) malloc(sizeof(struct aChunk_t) + size);
+
+  if (!chunk->mData) {
+    free(chunk);
+    return NULL;
+  }
+  chunk->mData->mSize = size;
+  chunk->mData->mWritten = 0;
+
+  chunk->mType = type;
+  chunk->mH2Flags = flags;
+  chunk->mStreamId = streamId;
+
+  return chunk;
+}
+
+static unsigned char *
+GetDataChunkBuf(struct aDataChunk_t *chunk)
+{
+  assert(chunk);
+  assert(chunk->mData);
+
+  struct aChunk_t *data = chunk->mData;
+
+  return (unsigned char *)(data + 1);
+}
+
+void
+FreeDataChunk(struct aDataChunk_t *chunk)
+{
+  assert(chunk->mRefCnt);
+  chunk->mRefCnt--;
+
+  if (!chunk->mRefCnt) {
+    while(chunk->mNotSentRanges) {
+      struct range32_t *r = chunk->mNotSentRanges;
+      chunk->mNotSentRanges = chunk->mNotSentRanges->mNext;
+      free(r);
+    }
+
+    while(chunk->mUnackedRanges) {
+      struct range32_t *r = chunk->mUnackedRanges;
+      chunk->mUnackedRanges = chunk->mUnackedRanges->mNext;
+      free(r);
+    }
+
+    if (chunk->mData) {
+      free(chunk->mData);
+    }
+  }
+}
+
+void
+LogRanges(struct aDataChunk_t *chunk)
+{
+ return;
+  assert(chunk);
+
+  struct range32_t *r = chunk->mNotSentRanges;
+  fprintf(stdout, "\mNotSentRanges for chunk %p:\n", chunk);
+  while(r) {
+    fprintf(stdout, "Range: %p %d %d\n", r, r->mStart, r->mEnd);
+    r = r->mNext;
+  }
+  fprintf(stdout, "\nmUnackedRanges for chunk %p:\n", chunk);
+  r = chunk->mUnackedRanges;
+  while(r) {
+    fprintf(stdout, "Range: %p %d %d\n", r, r->mStart, r->mEnd);
+    r = r->mNext;
+  }
+  fprintf(stdout, "\nRanges printed!\n");
+}
+
+//FOR TESTING!!!!!
+int32_t
+ChunkRefCnt(struct aDataChunk_t *chunk)
+{
+  return chunk->mRefCnt;
+}
+
+//FOR TESTING!!!!!
+void
+ChunkAddRef(struct aDataChunk_t *chunk)
+{
+  chunk->mRefCnt++;
+}
+
+// FOR TESTING!!!!
+void
+AddNewRange(struct aDataChunk_t *chunk, uint32_t start, uint32_t end)
+{
+  AddRange(&chunk->mNotSentRanges, start, end);
+}
+
+// FOR TESTING!!!!
+uint32_t
+NumNotSentRanges(struct aDataChunk_t *chunk)
+{
+  uint32_t cnt = 0;
+  struct range32_t *r = chunk->mNotSentRanges;
+  while(r) {
+    cnt++;
+    r = r->mNext;
+  }
+  return cnt;
+}
+
+// FOR TESTING!!!!
+uint8_t
+HasNotSentRange(struct aDataChunk_t *chunk, uint32_t start, uint32_t end)
+{
+  struct range32_t *r = chunk->mNotSentRanges;
+  while(r) {
+    if (r->mStart == start && r->mEnd == end) {
+      return 1;
+    }
+    r = r->mNext;
+  }
+  return 0;
+}
+
+// FOR TESTING!!!!
+uint32_t
+NumUnackedRanges(struct aDataChunk_t *chunk)
+{
+  uint32_t cnt = 0;
+  struct range32_t *r = chunk->mUnackedRanges;
+  while(r) {
+    cnt++;
+    r = r->mNext;
+  }
+  return cnt;
+}
+
+// FOR TESTING!!!!
+uint8_t
+HasUnackedRange(struct aDataChunk_t *chunk, uint32_t start, uint32_t end)
+{
+  struct range32_t *r = chunk->mUnackedRanges;
+  while(r) {
+    if (r->mStart == start && r->mEnd == end) {
+      return 1;
+    }
+    r = r->mNext;
+  }
+  return 0;
+}
+
+// It always sends from the first mNotSentRange so we only need length.
+int32_t
+SomeDataSentFromChunk(struct aDataChunk_t *chunk, uint16_t len)
+{
+  assert(chunk->mNotSentRanges);
+  assert(len);
+  assert(len <= (chunk->mNotSentRanges->mEnd - chunk->mNotSentRanges->mStart));
+
+  uint32_t start = chunk->mNotSentRanges->mStart;
+  uint32_t end = start + len;
+
+  int32_t rv = RemoveRange(&chunk->mNotSentRanges, start, end, NULL);
+  if (rv) {
+    return rv;
+  }
+  rv = AddRange(&chunk->mUnackedRanges, start, end);
+
+  LogRanges(chunk);
+  return rv;
+}
+
+int32_t
+AckSomeDataSentFromChunk(struct aDataChunk_t *chunk, uint32_t start,
+                         uint32_t end)
+{
+  assert(end - start);
+
+  uint32_t rv = RemoveRange(&chunk->mUnackedRanges, start, end, NULL);
+  if (rv) {
+    return rv;
+  }
+
+  rv = RemoveRange(&chunk->mNotSentRanges, start, end, NULL);
+  if (rv) {
+    return rv;
+  }
+  LogRanges(chunk);
+
+  return 0;
+}
+
+int32_t
+SomeDataLostFromChunk(struct aDataChunk_t *chunk, uint32_t start,
+                         uint32_t end)
+{
+  assert(end - start);
+
+  struct range32_t *removed = NULL;
+  // Remove ranges from mUnackedRanges but only add the actually removed
+  // ranges to mNotSentRanges, because some ranges could have been already
+  // acked.
+  int32_t rv = RemoveRange(&chunk->mUnackedRanges, start, end, &removed);
+  if (rv) {
+    goto fail;
+  }
+
+  while (removed) {
+    struct range32_t *r = removed;
+    rv = AddRange(&chunk->mNotSentRanges, r->mStart, r->mEnd);
+    if (rv) {
+      goto fail;
+    }
+
+    removed = removed->mNext;
+    free(r);
+    r = removed;
+  }
+
+  LogRanges(chunk);
+
+  return rv;
+
+  fail:
+  while (removed) {
+    struct range32_t *r = removed;
+    removed = removed->mNext;
+    free(r);
+    r = removed;
+  }
+}
+
+struct aDataChunkQueue_t
+{
+  struct aDataChunk_t *mFirst;
+  struct aDataChunk_t *mLast;
+};
+
+static void
+AddChunk(struct aDataChunkQueue_t *queue, struct aDataChunk_t *chunk)
+{
+  assert(queue);
+  assert(chunk);
+  chunk->mRefCnt++;
+
+  if (queue->mLast) {
+    queue->mLast->mNext = chunk;
+    queue->mLast = chunk;
+  } else {
+    queue->mFirst = queue->mLast = chunk;
+  }
+}
+
+static void
+RemoveChunk(struct aDataChunkQueue_t *queue, struct aDataChunk_t *chunk)
+{
+  assert(queue);
+  assert(chunk);
+  struct aDataChunk_t *prev = NULL;
+  struct aDataChunk_t *curr = queue->mFirst;
+  while (curr && curr != chunk) {
+    prev = curr;
+    curr = curr->mNext;
+  }
+
+  if (curr) {
+    if (prev) {
+      prev->mNext = curr->mNext;
+    } else {
+      queue->mFirst = curr->mNext;
+    }
+
+    if (curr == queue->mLast) {
+      queue->mLast = prev;
+    }
+  }
+  FreeDataChunk(curr);
+}
+
+struct aOutgoingStreamInfo_t
+{
+  uint32_t mStreamId;
+  uint64_t mNextOffset;
+  uint64_t mWindowSize;
+
+  struct aDataChunkQueue_t mDataQueue;
+
+  struct aOutgoingStreamInfo_t *mNext;
+};
+
+struct aOutputHeaderInfo_t
+{
+  uint64_t mNextOffset;
+  struct aDataChunkQueue_t mDataQueue;
+};
+
+struct aDataChunkTransmissionElement_t
+{
+  struct aDataChunk_t *mDataChunk;
+  struct aDataChunkTransmissionElement_t *mNext;
+};
+
+struct aDataChunkTransmissionQueue_t
+{
+  struct aDataChunkTransmissionElement_t *mFirst;
+  struct aDataChunkTransmissionElement_t *mLast;
+};
+
+static int32_t
+AddChunkToTransmissionQueue(struct aDataChunkTransmissionQueue_t *queue,
+                            struct aDataChunk_t *chunk)
+{
+  struct aDataChunkTransmissionElement_t *elem =
+   (struct aDataChunkTransmissionElement_t *) calloc (1, sizeof(struct aDataChunkTransmissionElement_t));
+  if (!elem) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+
+  elem->mDataChunk = chunk;
+
+  chunk->mRefCnt++;
+
+  if (!queue->mFirst) {
+    queue->mFirst = queue->mLast = elem;
+  } else {
+    queue->mLast->mNext = elem;
+    queue->mLast = elem;
+  }
+  return SDTE_OK;
+}
+
+static void
+RemoveChunkFromTransmissionQueue(struct aDataChunkTransmissionQueue_t *queue,
+                                 struct aDataChunk_t *chunk)
+{
+  assert(queue->mFirst);
+
+  struct aDataChunkTransmissionElement_t *elemPrev = NULL;
+  struct aDataChunkTransmissionElement_t *elemCurr = queue->mFirst;
+  while (elemCurr && elemCurr->mDataChunk != chunk) {
+    elemPrev = elemCurr;
+    elemCurr = elemCurr->mNext;
+  }
+
+  // The chunk must be in the queue.
+  assert(elemCurr);
+
+  if (!elemPrev) {
+    queue->mFirst = elemCurr->mNext;
+  } else {
+    elemPrev->mNext = elemCurr->mNext;
+  }
+
+  if (queue->mLast == elemCurr) {
+    queue->mLast = elemPrev;
+  }
+
+  FreeDataChunk(elemCurr->mDataChunk);
+  free(elemCurr);
+}
+
+struct aFrameInfo_t
+{
+  struct range32_t mRange;
+  struct aDataChunk_t *mDataChunk;
+  struct aFrameInfo_t *mNext;
+};
+
+static void
+FreeFrame(struct aFrameInfo_t *frame)
+{
+  assert(frame->mDataChunk);
+  FreeDataChunk(frame->mDataChunk);
+  free(frame);
+}
+
+// This structure keeps information about a sent packet. It hold info about
+// the frames it contains. It is used when the packet is acked to remove the
+// acked data.
+struct aPacketInfo_t
+{
+  uint64_t mPacketSeqNum;
+  struct aFrameInfo_t *mFrameInfos;
+  uint8_t mIsPingPkt;
+  uint32_t mSize;
+  PRIntervalTime mSentTime;
+  struct aPacketInfo_t *mNext;
+};
+
+static int32_t
+AddFrameInfo(struct aPacketInfo_t *pktInfo, struct aDataChunk_t *chunk,
+             uint32_t start, uint32_t end)
+{
+  assert(chunk);
+  assert(end - start);
+
+  struct aFrameInfo_t *frameInfo = (struct aFrameInfo_t*) malloc (sizeof(struct aFrameInfo_t));
+  if (!frameInfo) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+
+  frameInfo->mRange.mStart = start;
+  frameInfo->mRange.mEnd = end;
+  frameInfo->mDataChunk = chunk;
+  chunk->mRefCnt++;
+
+  frameInfo->mNext = NULL;
+  if (!pktInfo->mFrameInfos) {
+    pktInfo->mFrameInfos = frameInfo;
+  } else {
+    struct aFrameInfo_t *f = pktInfo->mFrameInfos;
+    while (f->mNext) f = f->mNext;
+    f->mNext = frameInfo;
+  }
+  return 0;
+}
+
+static void
+FreePacketInfo(struct aPacketInfo_t *pktInfo)
+{
+  while (pktInfo->mFrameInfos) {
+    struct aFrameInfo_t *f = pktInfo->mFrameInfos;
+    pktInfo->mFrameInfos = pktInfo->mFrameInfos->mNext;
+    FreeFrame(f);
+  }
+}
+
+struct aPacketInfoQueue_t
+{
+  struct aPacketInfo_t *mFirst;
+  struct aPacketInfo_t *mLast;
+};
+
+static int32_t
+AddPacketInfoToQueue(struct aPacketInfoQueue_t *queue,
+                      struct aPacketInfo_t *pktInfo)
+{
+  pktInfo->mNext = NULL;
+  if (!queue->mFirst) {
+    queue->mFirst = queue->mLast = pktInfo;
+  } else {
+    queue->mLast->mNext = pktInfo;
+    queue->mLast = pktInfo;
+  }
+  return SDTE_OK;
+}
+
+static void
+RemovePacketInfoFromQueue(struct aPacketInfoQueue_t *queue,
+                          struct aPacketInfo_t *pktInfo)
+{
+  assert(queue->mFirst);
+
+  struct aPacketInfo_t *prev = NULL;
+  struct aPacketInfo_t *curr = queue->mFirst;
+  while (curr && curr != pktInfo) {
+    prev = curr;
+    curr = curr->mNext;
+  }
+
+  // The pktInfo must be in the queue.
+  assert(curr);
+
+  if (!prev) {
+    queue->mFirst = curr->mNext;
+  } else {
+    prev->mNext = curr->mNext;
+  }
+
+  if (queue->mLast == curr) {
+    queue->mLast = prev;
+  }
+}
+
+static struct aPacketInfo_t *
+RemovePacketInfoFromQueueWithId(struct aPacketInfoQueue_t *queue,
+                                uint64_t seqNum)
+{
+  struct aPacketInfo_t *prev = NULL;
+  struct aPacketInfo_t *curr = queue->mFirst;
+  while (curr) {
+    prev = curr;
+    curr = curr->mNext;
+  }
+  prev = NULL;
+  curr = queue->mFirst;
+  while (curr && curr->mPacketSeqNum != seqNum) {
+    prev = curr;
+    curr = curr->mNext;
+  }
+
+  if (curr) {
+    if (!prev) {
+      queue->mFirst = curr->mNext;
+    } else {
+      prev->mNext = curr->mNext;
+    }
+
+    if (queue->mLast == curr) {
+      queue->mLast = prev;
+    }
+  }
+
+  return curr;
+}
+
+struct SDT_SendDataStruct_t
+{
+  // Data queues!
+  struct aDataChunkQueue_t mOutgoingControlFrames;
+  struct aOutgoingStreamInfo_t *mOutgoingStreams;
+  struct aOutputHeaderInfo_t mOutgoingHeaders;
+
+  // mDataChunkTransmissionQueue holds a list of data chunks that are waiting
+  // to be transmitted.
+  // TODO: make this a priority queue, e.g. send HEADER up to the last of high
+  // priority stream etc.
+  struct aDataChunkTransmissionQueue_t mDataChunkTransmissionQueue;
+
+  // Transmitted packet infos (send not acked packets).
+  struct aPacketInfoQueue_t mSentPacketInfo;
+  // PacketInfo of Lost packets. TODO: dragana - how long to keep them for detecting spurious retransmissions!!!
+  struct aPacketInfoQueue_t mLostPacketInfo;
+
+  // Holds the packet info of the packet being sent. The packet is created on
+  // the aLayer but finally sent on the sLayer. It is created in the
+  // PreparePacket function and deleted or queued in the PacketSent function.
+  struct aPacketInfo_t * mPacketBeingSent;
+
+  // The max amount of outstanding data (sender buffer size)
+  uint64_t mMaxDataQueued;
+  // The current amount of outstanding data.
+  uint64_t mDataQueued;
+};
+
+// FOR TESTING!!!!
+struct SDT_SendDataStruct_t *
+CreateNewSDTSendDataStr()
+{
+  return (struct SDT_SendDataStruct_t *) calloc (1, sizeof(struct SDT_SendDataStruct_t));
+}
+
+// Helper functions!!!
+
+static uint64_t
+DataQueueFull(struct SDT_SendDataStruct_t *sendDataStr)
+{
+   fprintf(stderr, "DataQueueFull queued=%lld max=%lld\n",
+           sendDataStr->mDataQueued, sendDataStr->mMaxDataQueued );
+   return sendDataStr->mDataQueued >= sendDataStr->mMaxDataQueued;
+}
+
+uint8_t
+HasDataForTransmission(struct SDT_SendDataStruct_t *sendDataStr)
+{
+  return !!(sendDataStr->mDataChunkTransmissionQueue.mFirst);
+}
+
+uint8_t
+HasUnackedPackets(struct SDT_SendDataStruct_t *sendDataStr)
+{
+  return !!(sendDataStr->mSentPacketInfo.mFirst);
+}
+
+static uint64_t
+SmallestPktSeqNumNotAcked(struct SDT_SendDataStruct_t *sendDataStr)
+{
+  if (!sendDataStr->mSentPacketInfo.mFirst) {
+    return 0;
+  }
+  return sendDataStr->mSentPacketInfo.mFirst->mPacketSeqNum;
+}
+
+static struct aOutgoingStreamInfo_t*
+FindOutgoingStream(struct SDT_SendDataStruct_t *sendDataStr, uint32_t streamId)
+{
+  assert((streamId != 1) && (streamId != 3));
+
+  struct aOutgoingStreamInfo_t *prev = 0, *curr = sendDataStr->mOutgoingStreams;
+  while (curr && (curr->mStreamId < streamId)) {
+    prev = curr;
+    curr = curr->mNext;
+  }
+  if (!curr || (curr->mStreamId != streamId)) {
+    struct aOutgoingStreamInfo_t *stream =
+      (struct aOutgoingStreamInfo_t *) malloc (sizeof(struct aOutgoingStreamInfo_t));
+    if (!stream) {
+      return NULL;
+    }
+    stream->mStreamId = streamId;
+    stream->mNextOffset = 0;
+    stream->mWindowSize = (2 << 16) - 1;
+    stream->mDataQueue.mFirst = NULL;
+    stream->mDataQueue.mLast = NULL;
+    stream->mNext = curr;
+    if (!prev) {
+      sendDataStr->mOutgoingStreams = stream;
+    } else {
+      prev->mNext = stream;
+    }
+    curr = stream;
+  }
+  return curr;
+}
+
+// Creating chunk and adding to a queue!!!
+static struct aDataChunk_t *
+CreateDataChunk(struct SDT_SendDataStruct_t *sendDataStr,
+                enum ChunkType type, uint32_t streamId, uint32_t size,
+                uint32_t flags, uint8_t continuation)
+{
+  struct aDataChunk_t *chunk = CreateChunk(type, size, flags, streamId);
+  if (!chunk) {
+    return NULL;
+  }
+
+  chunk->mRefCnt++;
+
+  switch(type) {
+  case DATA_CHUNK:
+  {
+    // Find stream info.
+    struct aOutgoingStreamInfo_t *stream = FindOutgoingStream(sendDataStr,
+                                                              streamId);
+    if (!stream) {
+      FreeDataChunk(chunk);
+      return NULL;
+    }
+    chunk->mOffset = stream->mNextOffset;
+    stream->mNextOffset += size;
+    AddChunk(&stream->mDataQueue, chunk);
+    break;
+  }
+  case HEADER_CHUNK:
+    chunk->mOffset = sendDataStr->mOutgoingHeaders.mNextOffset;
+    sendDataStr->mOutgoingHeaders.mNextOffset += size;
+    chunk->mContinuationFrame = continuation;
+    AddChunk(&sendDataStr->mOutgoingHeaders.mDataQueue, chunk);
+    break;
+  case CONTROL_CHUNK:
+    AddChunk(&sendDataStr->mOutgoingControlFrames, chunk);
+  }
+
+  FreeDataChunk(chunk);
+  return chunk;
+}
+
+// FOR TESTING !!!!!
+struct aDataChunk_t *
+CreateDataChunkForTest(struct SDT_SendDataStruct_t *sendDataStr,
+                       uint32_t streamId, uint32_t size)
+{
+  return CreateDataChunk(sendDataStr, DATA_CHUNK, streamId, size, 0, 0);
+}
+
+// Clear data structure!!!
+void
+ClearSDTSendDataStr(struct SDT_SendDataStruct_t *sendDataStr)
+{
+  while (sendDataStr->mOutgoingControlFrames.mFirst) {
+    struct aDataChunk_t *doneC = sendDataStr->mOutgoingControlFrames.mFirst;
+    sendDataStr->mOutgoingControlFrames.mFirst = doneC->mNext;
+    FreeDataChunk(doneC);
+  }
+
+  struct aOutgoingStreamInfo_t *doneSI, *currSI = sendDataStr->mOutgoingStreams;
+  while (currSI) {
+    doneSI = currSI;
+    currSI = currSI->mNext;
+    while (doneSI->mDataQueue.mFirst) {
+      struct aDataChunk_t *doneC = doneSI->mDataQueue.mFirst;
+      doneSI->mDataQueue.mFirst = doneC->mNext;
+      FreeDataChunk(doneC);
+    }
+    free(doneSI);
+  }
+
+  while (sendDataStr->mOutgoingHeaders.mDataQueue.mFirst) {
+    struct aDataChunk_t *doneC = sendDataStr->mOutgoingHeaders.mDataQueue.mFirst;
+    sendDataStr->mOutgoingHeaders.mDataQueue.mFirst = doneC->mNext;
+    FreeDataChunk(doneC);
+  }
+
+  while (sendDataStr->mDataChunkTransmissionQueue.mFirst) {
+    struct aDataChunkTransmissionElement_t *elem = sendDataStr->mDataChunkTransmissionQueue.mFirst;
+    sendDataStr->mDataChunkTransmissionQueue.mFirst = elem->mNext;
+    free(elem);
+  }
+
+  while (sendDataStr->mSentPacketInfo.mFirst) {
+    struct aPacketInfo_t *pktInfo = sendDataStr->mSentPacketInfo.mFirst;
+    sendDataStr->mSentPacketInfo.mFirst = pktInfo->mNext;
+    FreePacketInfo(pktInfo);
+  }
+
+  while (sendDataStr->mLostPacketInfo.mFirst) {
+    struct aPacketInfo_t *pktInfo = sendDataStr->mLostPacketInfo.mFirst;
+    sendDataStr->mLostPacketInfo.mFirst = pktInfo->mNext;
+    FreePacketInfo(pktInfo);
+  }
+}
+
+int32_t
+AddChunkRange(struct SDT_SendDataStruct_t *sendDataStr,
+              struct aDataChunk_t *chunk, uint32_t start, uint32_t end)
+{
+  assert(chunk->mData->mWritten == start);
+  assert(chunk->mData->mSize >= end);
+
+  uint8_t addForTrans = !chunk->mNotSentRanges;
+  uint32_t rv = AddRange(&chunk->mNotSentRanges, start, end);
+
+  if (rv) {
+    return rv;
+  }
+
+  chunk->mData->mWritten += (end - start);
+
+  if (addForTrans) {
+    rv = AddChunkToTransmissionQueue(&sendDataStr->mDataChunkTransmissionQueue, chunk);
+    if (rv) {
+      return rv;
+    }
+  }
+
+  sendDataStr->mDataQueued += (end - start);
+
+  LogRanges(chunk);
+  return 0;
+}
+
+// Data are written to a chunk using the WriteDataToDataChunk function which
+// takes a buffer and does data copy or using the GetDataChunkBuf function
+// which returns raw buffer (the user must take care of a buffer overflow). The
+// user of GetDataChunkBuf must call AddChunkRange, this function will add the
+// corresponding range and do additional necessary steps like adding the chunk
+// to the transmission queue etc.
+static int32_t
+WriteDataToDataChunk(struct SDT_SendDataStruct_t *sendDataStr,
+                     struct aDataChunk_t *chunk, const unsigned char *buf,
+                     int32_t toWrite)
+{
+  fprintf(stderr, "WriteDataToDataChunk toWrite=%d \n", toWrite);
+
+  assert(chunk->mData);
+  assert(chunk->mData->mSize >= chunk->mData->mWritten + toWrite);
+
+  unsigned char *chunkBuf = GetDataChunkBuf(chunk);
+
+  memcpy(chunkBuf + chunk->mData->mWritten, buf, toWrite);
+
+  int32_t rv = AddChunkRange(sendDataStr, chunk, chunk->mData->mWritten,
+                             chunk->mData->mWritten + toWrite);
+  if (rv) {
+    return rv;
+  }
+
+  LogRanges(chunk);
+  return toWrite;
+}
+
+static int32_t
+SDTFrameSent(struct SDT_SendDataStruct_t *sendDataStr,
+             struct aDataChunk_t *chunk, uint16_t len,
+             struct aPacketInfo_t *pktInfo)
+{
+  assert(chunk->mNotSentRanges);
+
+  uint32_t start = chunk->mNotSentRanges->mStart;
+
+  int32_t rv = SomeDataSentFromChunk(chunk, len);
+  if (rv) {
+    return rv;
+  }
+
+  rv = AddFrameInfo(pktInfo, chunk, start, start + len);
+  if (rv) {
+    return rv;
+  }
+
+  if (!chunk->mNotSentRanges) {
+    RemoveChunkFromTransmissionQueue(&sendDataStr->mDataChunkTransmissionQueue,
+                                     chunk);
+  }
+
+  if (chunk->mType == CONTROL_CHUNK) {
+    pktInfo->mIsPingPkt = chunk->mIsPingPkt;
+  }
+
+  return 0;
+}
+
+static uint8_t
+WriteControlFrame(struct SDT_SendDataStruct_t *sendDataStr,
+                  struct aDataChunk_t *chunk,
+                  struct aPacket_t *pkt, struct aPacketInfo_t *pktInfo)
+{
+  assert(chunk);
+  assert(pkt);
+  assert(pktInfo);
+
+  uint16_t len = chunk->mNotSentRanges->mEnd - chunk->mNotSentRanges->mStart;
+
+  if ((pkt->mSize - pkt->mWritten) < len) {
+    return 0;
+  }
+
+  unsigned char *chunkBuf = GetDataChunkBuf(chunk);
+  unsigned char *pktBuf = (unsigned char *)(pkt + 1);
+  memcpy(pktBuf + pkt->mWritten, chunkBuf, len);
+  pkt->mWritten += len;
+
+  if (SDTFrameSent(sendDataStr, chunk, len, pktInfo)) {
+    return 0;
+  }
+  return 1;
+}
+
+static void WriteSDTCommonStreamFrameHeader(struct aPacket_t *pkt,
+                                            uint8_t flags,
+                                            uint32_t streamId, uint64_t offset,
+                                            uint16_t len);
+static void WriteSDTHeaderFrameHeader(struct aPacket_t *pkt, uint8_t flags,
+                                      uint8_t type, uint32_t streamId,
+                                      uint16_t len);
+static uint16_t hSDTFrameOrHeaderLen(uint8_t type, uint8_t flags);
+
+static uint8_t
+WriteHeaderFrame(struct SDT_SendDataStruct_t *sendDataStr,
+                 struct aDataChunk_t *chunk,
+                 struct aPacket_t *pkt, struct aPacketInfo_t *pktInfo)
+{
+  assert(chunk);
+  assert(pkt);
+  assert(pktInfo);
+
+  if ((pkt->mSize - pkt->mWritten) <=
+       hSDTFrameOrHeaderLen(HTTP2_FRAME_TYPE_HEADERS, 0)) {
+    return 0;
+  }
+
+  uint16_t len = pkt->mSize - pkt->mWritten -
+                 hSDTFrameOrHeaderLen(HTTP2_FRAME_TYPE_HEADERS, 0);
+
+  if (len > (chunk->mNotSentRanges->mEnd - chunk->mNotSentRanges->mStart)) {
+    len = chunk->mNotSentRanges->mEnd - chunk->mNotSentRanges->mStart;
+  }
+
+  WriteSDTCommonStreamFrameHeader(pkt, 0, 3,
+                                  chunk->mOffset + chunk->mNotSentRanges->mStart,
+                                  len + HTTP2_HEADERLEN);
+
+  uint8_t type = HTTP2_FRAME_TYPE_HEADERS;
+
+  if (chunk->mNotSentRanges->mStart || chunk->mContinuationFrame) {
+    type = HTTP2_FRAME_TYPE_CONTINUATION;
+  }
+
+  uint8_t flags = 0;
+  // Check if it is the first header frame for a stream and if it has a
+  // priorityflag
+  if (!chunk->mNotSentRanges->mStart) {
+    flags |= chunk->mH2Flags & HTTP2_FRAME_FLAG_PRIORITY;
+  }
+
+  if ((chunk->mNotSentRanges->mStart + len) == chunk->mData->mSize) {
+    flags |= chunk->mH2Flags & (HTTP2_FRAME_FLAG_END_STREAM |
+                              HTTP2_FRAME_FLAG_END_HEADERS);
+  }
+  // TODO: Optimize Header frames!!!
+  WriteSDTHeaderFrameHeader(pkt, flags, type, chunk->mStreamId,
+                            len);
+
+  unsigned char *pktbuf = (unsigned char *)(pkt + 1);
+  unsigned char *chunkbuf = GetDataChunkBuf(chunk);
+  memcpy(pktbuf + pkt->mWritten, chunkbuf + chunk->mNotSentRanges->mStart, len);
+  SDTFrameSent(sendDataStr, chunk, len, pktInfo);
+  pkt->mWritten += len;
+
+  return 1;
+}
+
+static uint8_t
+WriteDataFrame(struct SDT_SendDataStruct_t *sendDataStr,
+               struct aDataChunk_t *chunk,
+               struct aPacket_t *pkt, struct aPacketInfo_t *pktInfo)
+{
+  assert(chunk);
+  assert(pkt);
+  assert(pktInfo);
+
+  if ((pkt->mSize - pkt->mWritten) <=
+       hSDTFrameOrHeaderLen(HTTP2_FRAME_TYPE_DATA, 0)) {
+    return 0;
+  }
+
+  uint16_t lenRemaining = pkt->mSize - pkt->mWritten -
+                          hSDTFrameOrHeaderLen(HTTP2_FRAME_TYPE_DATA, 0);
+
+  uint16_t len = chunk->mNotSentRanges->mEnd - chunk->mNotSentRanges->mStart;
+  len = (len > lenRemaining) ? lenRemaining : len;
+
+  uint8_t flags = 0;
+  if ((chunk->mH2Flags & HTTP2_FRAME_FLAG_END_STREAM) &&
+      ((chunk->mNotSentRanges->mStart + len) == chunk->mData->mSize)) {
+    flags |= SDT_FIN_BIT;
+  }
+
+  // Data frames are streams so we can concatenate data from multiple chunks.
+  struct aDataChunk_t *currChunk = chunk;
+  while ((lenRemaining > len) &&
+         ((currChunk->mNotSentRanges->mEnd == currChunk->mData->mSize) &&
+         currChunk->mNext &&
+         (currChunk->mNext->mOffset == (currChunk->mOffset + currChunk->mData->mSize)) &&
+         currChunk->mNext->mNotSentRanges &&
+         !currChunk->mNext->mNotSentRanges->mStart)) {
+
+    currChunk = currChunk->mNext;
+    len += currChunk->mNotSentRanges->mEnd - currChunk->mNotSentRanges->mStart;
+    len = (len > lenRemaining) ? lenRemaining : len;
+
+    if ((currChunk->mH2Flags & HTTP2_FRAME_FLAG_END_STREAM) &&
+        ((currChunk->mNotSentRanges->mStart + len) == currChunk->mData->mSize)) {
+      assert(!flags);
+      flags |= SDT_FIN_BIT;
+    }
+  }
+
+  WriteSDTCommonStreamFrameHeader(pkt, flags, chunk->mStreamId,
+                                  chunk->mOffset + chunk->mNotSentRanges->mStart,
+                                  len);
+  unsigned char *pktbuf = (unsigned char *)(pkt + 1);
+  uint16_t currLen = 0;
+  while (currLen < len) {
+    unsigned char *chunkbuf = GetDataChunkBuf(chunk);
+    uint16_t toSend = chunk->mNotSentRanges->mEnd - chunk->mNotSentRanges->mStart;
+    toSend = (toSend > (len - currLen)) ? len - currLen : toSend;
+    memcpy(pktbuf + pkt->mWritten, chunkbuf + chunk->mNotSentRanges->mStart,
+           toSend);
+    pkt->mWritten += toSend;
+    currLen += toSend;
+    SDTFrameSent(sendDataStr, chunk, toSend, pktInfo);
+    chunk = chunk->mNext;
+  }
+
+  return 1;
+}
+
+// This function return true(1) if it has written some new data into the packet
+// and false(0) if there is no data to be sent or an error occur (the only
+// error that can occur is oom(we should handle this differently)).
+static uint8_t
+WriteFrame(struct SDT_SendDataStruct_t *sendDataStr,
+           struct aPacket_t *pkt,
+           struct aPacketInfo_t *pktInfo)
+{
+  uint8_t rv = 0;
+
+  if (sendDataStr->mDataChunkTransmissionQueue.mFirst) {
+    switch(sendDataStr->mDataChunkTransmissionQueue.mFirst->mDataChunk->mType) {
+      case CONTROL_CHUNK:
+        rv = WriteControlFrame(sendDataStr,
+                               sendDataStr->mDataChunkTransmissionQueue.mFirst->mDataChunk,
+                               pkt, pktInfo);
+        break;
+      case HEADER_CHUNK:
+        rv = WriteHeaderFrame(sendDataStr,
+                              sendDataStr->mDataChunkTransmissionQueue.mFirst->mDataChunk,
+                              pkt, pktInfo);
+        break;
+      case DATA_CHUNK:
+        rv = WriteDataFrame(sendDataStr,
+                            sendDataStr->mDataChunkTransmissionQueue.mFirst->mDataChunk,
+                            pkt, pktInfo);
+    }
+
+    // If a complete chunk has been sent, SDTFrameSent will delete the chunk
+    // from mDataChunkTransmissionQueue!!!
+  }
+  return rv;
+}
+
+int32_t
+PreparePacket(struct SDT_SendDataStruct_t *sendDataStr, struct aPacket_t *pkt,
+              uint64_t nextPacketId)
+{
+  assert(!sendDataStr->mPacketBeingSent);
+  struct aPacketInfo_t *pktInfo =
+    (struct aPacketInfo_t *) calloc (1, sizeof(struct aPacketInfo_t));
+  if (!pktInfo) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+
+  while (WriteFrame(sendDataStr, pkt, pktInfo)) {
+    // If we have real data not just an ack, set the packet sequence number,
+    // because we need to remember this packet for retransmissions.
+    if (!sendDataStr->mPacketBeingSent) {
+      pktInfo->mPacketSeqNum = nextPacketId;
+      sendDataStr->mPacketBeingSent = pktInfo;
+    }
+  }
+
+  if (!sendDataStr->mPacketBeingSent) {
+    FreePacketInfo(pktInfo);
+  }
+  return 0;
+}
+
+static uint8_t
+PacketNeedAck(struct SDT_SendDataStruct_t *sendDataStr)
+{
+  return !!(sendDataStr->mPacketBeingSent);
+}
+
+uint8_t
+PacketSent(struct SDT_SendDataStruct_t *sendDataStr, uint8_t sent)
+{
+  if (sendDataStr->mPacketBeingSent) {
+    if (sent) {
+      sendDataStr->mPacketBeingSent->mSentTime = PR_IntervalNow();
+      AddPacketInfoToQueue(&sendDataStr->mSentPacketInfo,
+                           sendDataStr->mPacketBeingSent);
+    } else {
+      // The packet has not been sent. We need to revert the action.
+      struct aFrameInfo_t *frame = sendDataStr->mPacketBeingSent->mFrameInfos;
+      while (frame) {
+        uint8_t addForTrans = !frame->mDataChunk->mNotSentRanges;
+
+        // This function has a strange name but it does what we want. e.g. move
+        // range from unacked to notSent.
+        SomeDataLostFromChunk(frame->mDataChunk, frame->mRange.mStart,
+                              frame->mRange.mEnd);
+
+        if (addForTrans && frame->mDataChunk->mNotSentRanges) {
+          int32_t rv = AddChunkToTransmissionQueue(&sendDataStr->mDataChunkTransmissionQueue,
+                                                   frame->mDataChunk);
+          if (rv) {
+            FreePacketInfo(sendDataStr->mPacketBeingSent);
+            sendDataStr->mPacketBeingSent = NULL;
+            return 0;
+          }
+        }
+        frame = frame->mNext;
+      }
+      FreePacketInfo(sendDataStr->mPacketBeingSent);
+    }
+    sendDataStr->mPacketBeingSent = NULL;
+    return 1;
+  }
+  return 0;
+}
+
+// Marking a packet as lost!!!
+static int32_t
+MarkPacketLost(struct SDT_SendDataStruct_t *sendDataStr,
+               struct aPacketInfo_t *pkt)
+{
+  assert(pkt);
+  assert(sendDataStr->mSentPacketInfo.mFirst ||
+         sendDataStr->mLostPacketInfo.mFirst);
+
+  struct aFrameInfo_t *frame = pkt->mFrameInfos;
+  while (frame) {
+    uint8_t addForTrans = !frame->mDataChunk->mNotSentRanges;
+
+    SomeDataLostFromChunk(frame->mDataChunk, frame->mRange.mStart,
+                          frame->mRange.mEnd);
+
+    if (addForTrans && frame->mDataChunk->mNotSentRanges) {
+      int32_t rv =
+        AddChunkToTransmissionQueue(&sendDataStr->mDataChunkTransmissionQueue,
+                                    frame->mDataChunk);
+      if (rv) {
+        return rv;
+      }
+    }
+    frame = frame->mNext;
+  }
+
+  RemovePacketInfoFromQueue(&sendDataStr->mSentPacketInfo, pkt);
+
+  AddPacketInfoToQueue(&sendDataStr->mLostPacketInfo, pkt);
+
+  return SDTE_OK;
+}
+
+// FOR TESTING!!!!
+int32_t
+MarkPacketLostWithId(struct SDT_SendDataStruct_t *sendDataStr,
+                     uint32_t pktSeqNum)
+{
+  assert(sendDataStr->mSentPacketInfo.mFirst);
+  struct aPacketInfo_t *pkt = sendDataStr->mSentPacketInfo.mFirst;
+  while (pkt && pkt->mPacketSeqNum != pktSeqNum) {
+    pkt = pkt->mNext;
+  }
+
+  if (!pkt) {
+    pkt = sendDataStr->mLostPacketInfo.mFirst;
+    while (pkt && pkt->mPacketSeqNum != pktSeqNum) {
+      pkt = pkt->mNext;
+    }
+  }
+
+  if (!pkt) {
+    return -1;
+  }
+
+  return MarkPacketLost(sendDataStr, pkt);
+}
+
+// Removing chunks!!!!
+static int32_t
+RemoveChunkFromBuffer(struct SDT_SendDataStruct_t *sendDataStr,
+                      struct aDataChunk_t *chunk)
+{
+  switch(chunk->mType) {
+  case CONTROL_CHUNK:
+    RemoveChunk(&sendDataStr->mOutgoingControlFrames, chunk);
+    break;
+  case HEADER_CHUNK:
+    RemoveChunk(&sendDataStr->mOutgoingHeaders.mDataQueue, chunk);
+    break;
+  case DATA_CHUNK:
+  {
+    // Find stream info.
+    struct aOutgoingStreamInfo_t *stream = FindOutgoingStream(sendDataStr,
+                                                              chunk->mStreamId);
+    if (!stream) {
+      FreeDataChunk(chunk);
+      return -1;
+    }
+    RemoveChunk(&stream->mDataQueue, chunk);
+  }
+  }
+
+  sendDataStr->mDataQueued -= chunk->mData->mSize;
+  free(chunk->mData);
+  chunk->mData = NULL;
+  return 0;
+}
+
+struct aPacketInfo_t *
+PacketAcked(struct SDT_SendDataStruct_t *sendDataStr, uint64_t seqNum)
+{
+  struct aPacketInfo_t *pkt =
+    RemovePacketInfoFromQueueWithId(&sendDataStr->mSentPacketInfo, seqNum);
+
+  if (!pkt) {
+    // Check if it is marked as lost!
+    pkt = RemovePacketInfoFromQueueWithId(&sendDataStr->mLostPacketInfo, seqNum);
+    // spurious retransmission!!!!
+  }
+
+  if (!pkt) {
+    return NULL;
+  }
+
+  while (pkt->mFrameInfos) {
+    struct aFrameInfo_t *frame = pkt->mFrameInfos;
+
+    uint8_t hadNotSentData = frame->mDataChunk->mNotSentRanges;
+    AckSomeDataSentFromChunk(frame->mDataChunk, frame->mRange.mStart,
+                             frame->mRange.mEnd);
+    if (hadNotSentData && !frame->mDataChunk->mNotSentRanges) {
+      RemoveChunkFromTransmissionQueue(&sendDataStr->mDataChunkTransmissionQueue,
+                                       frame->mDataChunk);
+    }
+
+    // If everything is acked, free data buffer!
+    if (!frame->mDataChunk->mNotSentRanges && !frame->mDataChunk->mUnackedRanges &&
+        frame->mDataChunk->mData && (frame->mDataChunk->mData->mSize == frame->mDataChunk->mData->mWritten)) {
+      // Everything was acked!
+      // Remove the chunk from the stream and delete its data!
+      RemoveChunkFromBuffer(sendDataStr, frame->mDataChunk);
+      assert(frame->mDataChunk->mData == NULL);
+    }
+    pkt->mFrameInfos = pkt->mFrameInfos->mNext;
+    FreeFrame(frame);
+  }
+  return pkt;
+}
 
 enum SDTH2SState {
   SDT_H2S_NEWFRAME,
@@ -276,12 +1684,10 @@ enum SDTH2SState {
   SDT_H2S_PADDING
 };
 
-struct hStreamInfo_t
-{
-  uint32_t mStreamId;
-  uint64_t mNextOffset;
-  uint64_t mWindowSize;
-  struct hStreamInfo_t *mNext;
+enum SDTConnectionState {
+  SDT_CONNECTING, // Until DTLS handshake finishes
+  SDT_TRANSFERRING,
+  SDT_CLOSING
 };
 
 struct hFrame_t
@@ -320,33 +1726,20 @@ struct sdt_t
 
   enum SDTConnectionState state;
 
-  // Not yet transmitted.
-  struct aPacketQueue_t aTransmissionQueue;
-  // Transmitted not acked.
-  struct aPacketQueue_t aRetransmissionQueue;
-
-  // Pkt currently being transferred. This is used for the communication between
-  // a and s layer: 1) if it is NULL it is an ack or DTLS handshake packet.
-  //                2) not NULL it is new packet or a retransmission.
-  struct aPacket_t *aPktTransmit;
-
-  // Max number of outstanding packets (sender buffer size)
-  uint32_t mMaxBufferedPkt;
-
   uint64_t aLargestAcked;
   uint64_t aSmallestUnacked;
 
   struct range_t *aRecvAckRange; // We are keeping track of the ack ranges that
                                  // a sender has already received from the
                                  // receiver. So we can search
-                                 // aRetransmissionQueue only for a diff.
+                                 // mSDTSendDataStr only for a diff.
                                  // These are actually ACKed(SACK) ranges not
                                  // NACKed!!! (easier to compare, even though
                                  // we get NACK ranges in an ACK)
 
   // TODO add this.
   // Let's keep track of acks so that we do not need to go though
-  // aRetransmissionQueue for nacked acks. They are not in queue so that will
+  // mSDTSendDataStr for nacked acks. They are not in queue so that will
   // cause the search ti go through the whole queue.
 //  uint64_t ackStart; // this is the lowest.
 //  unsigned char acks[SDT_REPLAY_WINDOW / 8];
@@ -372,21 +1765,31 @@ struct sdt_t
   uint32_t aLayerBufferUsed;
 
   // This is for received packet
-  uint8_t aLargestRecvEpoch;
   uint64_t aLargestRecvId;
   PRIntervalTime aLargestRecvTime;
-  uint8_t aNumTimeStamps;
-  uint64_t aTSSeqNums[10];
+  uint8_t aNumTimestamps;
+  uint64_t aTSSeqNums[NUMBER_OF_TIMESTAMPS_STORED];
   // TODO we can also get rtt for acks, currently partially implemented. Acks
-  // have different pkt size, maybe use that. (if we do not need it easy to fix
-  // this)
-  // We keep last 10 timestamps and this is array is used as a ring.
-  PRIntervalTime aTimestamps[10];
-  struct range_t *aNackRange; // NACK ranges to send in a ACK
+  // have different pkt size, maybe it is useful. (if we do not need it is easy
+  // to remove it)
+  // We keep last NUMBER_OF_TIMESTAMPS_STORED timestamps and this is array is
+  // used as a ring.
+  // aNumTimestamps is used as the number of timestamps and as the index where
+  // the next timestamp should be written. Therefore, if we have less than
+  // NUMBER_OF_TIMESTAMPS_STORED timestamps, aNumTimestamps is the real number
+  // of timestamps. If we have NUMBER_OF_TIMESTAMPS_STORED timestamps,
+  // aNumTimestamps is between NUMBER_OF_TIMESTAMPS_STORED and
+  // 2*NUMBER_OF_TIMESTAMPS_STORED
+  PRIntervalTime aTimestamps[NUMBER_OF_TIMESTAMPS_STORED];
+
+  // Not acked packet ranges. They will be sent in an ACK.
+  struct range_t *aNackRange;
+  // This is a flag that tell us that we need to send an ACK.
   uint8_t aNeedAck;
 
   PRIntervalTime aNextToRetransmit;
 
+  // RTT parameter neede for RTT and RTO calculation.
   PRIntervalTime srtt;
   PRIntervalTime rttvar;
   PRIntervalTime minrtt;
@@ -399,29 +1802,33 @@ struct sdt_t
   PRIntervalTime ERTimer; // TODO: the same as RTOTimer
   uint8_t ERTimerSet;
 
+  // This is for pacing - currently not implemented.
   PRTime qLastCredit;
   // credits are key in ums
   uint64_t qCredits;
   uint64_t qMaxCredits;
   uint64_t qPacingRate;
 
-  uint16_t hDataLen;
-  uint8_t hPadding;
+  // When we receive H2 frame we store header infos in the following variables.
+  // They are decoded in the decodeH2Header and DecodeH2Frames function.
+  uint8_t hType;
   uint8_t hFlags;
-  uint32_t hStream;
-  struct hStreamInfo_t *hOutgoingStreams;
+  uint16_t hDataLen;
+  uint32_t hSDTStreamId;
+  uint8_t hPadding;
+  struct aDataChunk_t *hCurrentDataChunk;
+  enum SDTH2SState hState;
+  uint8_t hMagicHello;
+
+  struct SDT_SendDataStruct_t mSDTSendDataStr;
+
+  // This are structures for ordering incoming frames.
   struct hStream_t *hIncomingStreams;
   struct hStream_t *hIncomingHeaders;
   struct hFrame_t *hOrderedFramesLast;
   struct hFrame_t *hOrderedFramesFirst;
-  struct hStreamInfo_t *hOutgoingHeaders;
-  uint32_t hSDTStreamId;
-  uint8_t hType;
-  struct hStreamInfo_t *hCurrentStream;
-  enum SDTH2SState hState;
-  uint64_t hOffsetAll;
-  uint8_t hMagicHello;
-  uint8_t hSettingRecv;
+
+
 
   uint8_t numOfRTORetrans;
 
@@ -448,13 +1855,14 @@ struct sdt_t *sdt_newHandle()
   if (!handle) {
     return NULL;
   }
+
   handle->publicHeader = 1 + 8; // connectionId nad packetId
   handle->payloadsize = SDT_PAYLOADSIZE_MAX - 1;
   handle->cleartextpayloadsize = SDT_CLEARTEXTPAYLOADSIZE_MAX - handle->publicHeader;
 
   handle->state = SDT_CONNECTING;
 
-  handle->mMaxBufferedPkt = aBufferLenMax;
+  handle->mSDTSendDataStr.mMaxDataQueued = aBufferLenMax;
 
   handle->aNextToRetransmit = 0xffffffffUL;
 
@@ -467,30 +1875,12 @@ struct sdt_t *sdt_newHandle()
   handle->qPacingRate = qPacingRateDefault;
 
   handle->hIncomingHeaders =
-    (struct hStream_t *) malloc (sizeof(struct hStream_t));
+    (struct hStream_t *) calloc (1, sizeof(struct hStream_t));
 
   if (!handle->hIncomingHeaders) {
     goto fail;
   }
 
-  handle->hIncomingHeaders->mFrames = NULL;
-  handle->hIncomingHeaders->mSDTOffset = 0;
-  // These parameters are ignored for header stream.
-  handle->hIncomingHeaders->mWindowSize = 0;
-  handle->hIncomingHeaders->mStreamId = 0;
-  handle->hIncomingHeaders->mHeaderDone = 0;
-  handle->hIncomingHeaders->mEnded = 0;
-  handle->hIncomingHeaders->mNext = NULL;
-
-  handle->hOutgoingHeaders =
-    (struct hStreamInfo_t *) malloc (sizeof(struct hStreamInfo_t));
-  if (!handle->hOutgoingHeaders) {
-    goto fail;
-  }
-  handle->hOutgoingHeaders->mStreamId = 3;
-  handle->hOutgoingHeaders->mNextOffset = 0;
-  handle->hOutgoingHeaders->mNext = NULL;
-  handle->hOutgoingHeaders->mWindowSize = 0;
   handle->hState = SDT_H2S_NEWFRAME;
 
   handle->aNextPacketId = 1;
@@ -500,104 +1890,17 @@ struct sdt_t *sdt_newHandle()
   return handle;
 
   fail:
-  free(handle->hIncomingHeaders);
+  if (handle->hIncomingHeaders) {
+    free(handle->hIncomingHeaders);
+  }
+
   free(handle);
   return NULL;
-}
-
-
-void PacketQueueAddNew(struct aPacketQueue_t *queue, struct aPacket_t *pkt)
-{
-  pkt->mNext = NULL;
-  if (queue->mLen) {
-    assert(queue->mFirst);
-    assert(queue->mLast);
-    assert(!queue->mLast->mNext);
-    queue->mLast->mNext = pkt;
-    queue->mLast = pkt;
-  } else {
-    assert(!queue->mFirst);
-    assert(!queue->mLast);
-    queue->mLast = pkt;
-    queue->mFirst = pkt;
-  }
-  ++queue->mLen;
-}
-
-struct aPacket_t *
-PacketQueueRemoveFirstPkt(struct aPacketQueue_t *queue)
-{
-  if (!queue->mFirst) {
-    return NULL;
-  }
-
-  struct aPacket_t *done = queue->mFirst;
-  if (queue->mLast == done) {
-    queue->mLast = NULL;
-  }
-  queue->mFirst = done->mNext;
-  --queue->mLen;
-  done->mNext = NULL;
-  return done;
-}
-
-struct aPacket_t *
-PacketQueueRemovePktWithId(struct aPacketQueue_t *queue, uint64_t id)
-{
-  if (!queue->mFirst) {
-    return NULL;
-  }
-
-  struct aPacket_t *curr = queue->mFirst;
-  struct aPacket_t *prev = NULL;
-
-  while (curr) {
-    for (uint32_t i = 0; i < curr->mIdsNum; i++) {
-      if (curr->mIds[i].mSeq == id) {
-        if (prev) {
-          prev->mNext = curr->mNext;
-        } else {
-          queue->mFirst = curr->mNext;
-        }
-        if (!curr->mNext) {
-          queue->mLast = prev;
-        }
-        curr->mNext = NULL;
-        queue->mLen--;
-        return curr;
-      }
-    }
-    prev = curr;
-    curr = curr->mNext;
-  }
-  return NULL;
-}
-
-
-void
-PacketQueueRemoveAll(struct aPacketQueue_t *queue)
-{
-  if (!queue->mFirst) {
-    return;
-  }
-
-  struct aPacket_t *curr = queue->mFirst;
-  struct aPacket_t *done;
-  while (curr) {
-    done = curr;
-    curr = curr->mNext;
-    free(done);
-  }
-  queue->mFirst = queue->mLast = NULL;
-  queue->mLen = 0;
 }
 
 static void
 sdt_freeHandle(struct sdt_t *handle)
 {
-
-  PacketQueueRemoveAll(&handle->aTransmissionQueue);
-  PacketQueueRemoveAll(&handle->aRetransmissionQueue);
   struct range_t *curr = handle->aRecvAckRange;
   struct range_t *done;
   while (curr) {
@@ -612,12 +1915,8 @@ sdt_freeHandle(struct sdt_t *handle)
     free(done);
   }
 
-  struct hStreamInfo_t *doneSI, *currSI = handle->hOutgoingStreams;
-  while (currSI) {
-    doneSI = currSI;
-    currSI = currSI->mNext;
-    free(doneSI);
-  }
+  ClearSDTSendDataStr(&handle->mSDTSendDataStr);
+
   struct hStream_t *doneS, *currS = handle->hIncomingStreams;
   while (currS) {
     doneS = currS;
@@ -633,27 +1932,8 @@ sdt_freeHandle(struct sdt_t *handle)
   }
 
   free(handle->hIncomingHeaders);
-  free(handle->hOutgoingHeaders);
 
   free(handle);
-}
-
-uint64_t
-FindSmallestUnacked(struct aPacketQueue_t *queue)
-{
-  if (!queue->mFirst) {
-    return 0;
-  }
-
-  uint64_t id =queue->mFirst->mOriginalId;
-  struct aPacket_t *curr = queue->mFirst->mNext;
-  while (curr) {
-    if (id > curr->mOriginalId) {
-      id = curr->mOriginalId;
-    }
-    curr = curr->mNext;
-  }
-  return id;
 }
 
 uint16_t
@@ -679,8 +1959,7 @@ sdt_GetNextTimer(PRFileDesc *fd)
 }
 
 static unsigned int
-sdt_preprocess(struct sdt_t *handle,
-               unsigned char *pkt, uint32_t len)
+sdt_preprocess(struct sdt_t *handle, unsigned char *pkt, uint32_t len)
 {
   if (len < (13)) {
     DEV_ABORT();
@@ -730,18 +2009,20 @@ static PRIOMethods qMethods;
 static PRIOMethods sMethods;
 static PRIOMethods aMethods;
 
-uint8_t
-sLayerPacketReceived(struct sdt_t *handle, uint16_t epoch, uint64_t seq)
-{
-  uint8_t newPkt = 0;
+//==============================================================================
+// Decoding and encoding sLayer packets.
+// sLayer reads packet sequence number and uses it to mark packer as received.
+//==============================================================================
 
-  if (handle->aLargestRecvEpoch < epoch) {
-    handle->aLargestRecvEpoch = epoch;
-  }
+static int32_t
+sLayerPacketReceived(struct sdt_t *handle, uint16_t epoch, uint64_t seq,
+                     uint8_t *newPkt)
+{
+  *newPkt = 0;
 
   fprintf(stderr, "%d sLayerPacketReceived largest receive till now=%lu; this "
-          "packet seq=%lu handle=%p\n", PR_IntervalNow(), handle->aLargestRecvId,
-          seq, (void *)handle);
+          "packet seq=%lu handle=%p\n",
+          PR_IntervalNow(), handle->aLargestRecvId, seq, (void *)handle);
 
   PRIntervalTime now = PR_IntervalNow();
 
@@ -752,6 +2033,9 @@ sLayerPacketReceived(struct sdt_t *handle, uint16_t epoch, uint64_t seq)
       // packet id.
       struct range_t *range =
         (struct range_t *) malloc (sizeof(struct range_t));
+      if (!range) {
+        return SDTE_OUT_OF_MEMORY;
+      }
       range->mStart = handle->aLargestRecvId + 1;
       range->mEnd = seq - 1;
       range->mNext = handle->aNackRange;
@@ -759,7 +2043,7 @@ sLayerPacketReceived(struct sdt_t *handle, uint16_t epoch, uint64_t seq)
     }
     handle->aLargestRecvId = seq;
     handle->aLargestRecvTime = now;
-    newPkt = 1;
+    *newPkt = 1;
 
   } else {
     struct range_t* curr = handle->aNackRange;
@@ -772,7 +2056,7 @@ sLayerPacketReceived(struct sdt_t *handle, uint16_t epoch, uint64_t seq)
 
     if (!curr || (curr->mEnd < seq)) {
       // Duplicate just ignore it.
-      newPkt = 0;
+      *newPkt = 0;
 
     } else {
       // This packet was NACK previously
@@ -796,6 +2080,9 @@ sLayerPacketReceived(struct sdt_t *handle, uint16_t epoch, uint64_t seq)
         // Split the range.
         struct range_t *newRange =
           (struct range_t *) malloc (sizeof(struct range_t));
+        if (!newRange) {
+          return SDTE_OUT_OF_MEMORY;
+        }
         newRange->mStart = seq + 1;
         newRange->mEnd = curr->mEnd;
         curr->mEnd = seq -1;
@@ -807,17 +2094,19 @@ sLayerPacketReceived(struct sdt_t *handle, uint16_t epoch, uint64_t seq)
         }
       }
 
-      newPkt = 1;
+      *newPkt = 1;
     }
   }
-  if (newPkt) {
-    handle->aTSSeqNums[handle->aNumTimeStamps % 10] = seq;
-    handle->aTimestamps[handle->aNumTimeStamps % 10] = now;
-    handle->aNumTimeStamps++;
-    handle->aNumTimeStamps = (handle->aNumTimeStamps == 20) ?
-     10 : handle->aNumTimeStamps;
+  if (*newPkt) {
+    int inx = handle->aNumTimestamps % NUMBER_OF_TIMESTAMPS_STORED;
+    handle->aTSSeqNums[inx] = seq;
+    handle->aTimestamps[inx] = now;
+    handle->aNumTimestamps++;
+    if (handle->aNumTimestamps == (NUMBER_OF_TIMESTAMPS_STORED << 2)) {
+     handle->aNumTimestamps = NUMBER_OF_TIMESTAMPS_STORED;
+    }
   }
-  return newPkt;
+  return 0;
 }
 
 /**
@@ -827,7 +2116,7 @@ sLayerPacketReceived(struct sdt_t *handle, uint16_t epoch, uint64_t seq)
  *  +--------+--------+--------+--------+--    --+
  *  |ConnectionId (0, 8, 32 or 64)         ...   |
  *  +--------+--------+--------+--------+--    --+
- *  |Paket id (32)                      |
+ *  |Packet id (32)                     |
  *  +--------+--------+--------+--------+
  */
 #define PUBLIC_FLAG_RESET 0x02
@@ -876,14 +2165,16 @@ sLayerEncodePublicContent(struct sdt_t *handle, const void *buf,
   return amount + handle->publicHeader;
 }
 
+//==============================================================================
+
 static int32_t
 sLayerRecv(PRFileDesc *fd, void *buf, int32_t amount,
            int flags, PRIntervalTime to)
 {
-  int32_t rv = fd->lower->methods->recv(fd->lower, buf, amount, flags, to);
+  int32_t recvRv = fd->lower->methods->recv(fd->lower, buf, amount, flags, to);
 
-  if (rv < 0) {
-    return rv;
+  if (recvRv < 0) {
+    return recvRv;
   }
 
   struct sdt_t *handle = (struct sdt_t *)(fd->secret);
@@ -892,30 +2183,33 @@ sLayerRecv(PRFileDesc *fd, void *buf, int32_t amount,
     return -1;
   }
 
-  handle->sBytesRead += rv;
+  handle->sBytesRead += recvRv;
 
-  rv = sLayerDecodePublicContent(handle, buf, rv);
+  recvRv = sLayerDecodePublicContent(handle, buf, recvRv);
 
-  if (!sdt_preprocess(handle, buf, rv)) {
+  if (!sdt_preprocess(handle, buf, recvRv)) {
     assert(0);
     return -1;
   }
 
   fprintf(stderr," %dsLayer Recv got %d of ciphertext this=%p "
           "type=%d epoch=%X seq=0x%lX dtlsLen=%d sBytesRead=%ld sRecvPktId:%ld\n",
-          PR_IntervalNow(), rv, (void *)handle,
+          PR_IntervalNow(), recvRv, (void *)handle,
           handle->sRecvRecordType, handle->sRecvEpoch, handle->sRecvSeq,
           handle->sRecvDtlsLen, handle->sBytesRead, handle->sRecvPktId);
 
   if (handle->sRecvPktId != 0) {
-    uint8_t newPkt = sLayerPacketReceived(handle, 0, handle->sRecvPktId);
+    uint8_t newPkt = 0;
+    int32_t rv = sLayerPacketReceived(handle, 0, handle->sRecvPktId, &newPkt);
+    if (rv) {
+      return rv;
+    }
     if (!newPkt) {
       PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
-      rv = -1;
+      return -1;
     }
   }
-
-  return rv;
+  return recvRv;
 }
 
 static int32_t
@@ -941,16 +2235,6 @@ sLayerSendTo(PRFileDesc *fd, const void *bufp, int32_t amount,
     return -1;
   }
 
-//TODO: this is implemented in this way because I was using it for testing.
-  uint32_t epoch = 0;
-  memcpy (&epoch, buf + 3, 2);
-  epoch = ntohs(epoch);
-  uint64_t id = 0;
-  memcpy (&id, buf + 7, 4);
-  id = ntohl(id);
-  id += ((uint64_t)((uint8_t*)buf)[5]) << 40;
-  id += ((uint64_t)((uint8_t*)buf)[6]) << 32;
-
   uint32_t dataLen = sLayerEncodePublicContent(handle, buf, amount);
 
   int rv = fd->lower->methods->sendto(fd->lower, handle->sLayerSendBuffer,
@@ -959,8 +2243,8 @@ sLayerSendTo(PRFileDesc *fd, const void *bufp, int32_t amount,
   fprintf(stderr,"%d sLayer send %p %d rv=%d\n", PR_IntervalNow(),
           (void *)handle, amount, rv);
 
-  if (rv < 0) {
-    return -1;
+  if (rv <= 0) {
+    return rv;
   }
 
   if (rv != dataLen) {
@@ -974,39 +2258,15 @@ sLayerSendTo(PRFileDesc *fd, const void *bufp, int32_t amount,
     return amount;
   }
 
-  if (!handle->aPktTransmit) {
-    // It is a ACK.
-    handle->aNextPacketId++;
-    return amount;
+  if (PacketNeedAck(&handle->mSDTSendDataStr)) {
+    cc->OnPacketSent(handle, handle->aNextPacketId, rv);
   }
 
-  // Remember last 3 Ids. TODO: 2 is enough
-  if (!handle->aPktTransmit->mIdsNum) {
-    // Remembre the original id. This is only for debugging.
-    handle->aPktTransmit->mOriginalId = handle->aNextPacketId;
-  } else if (handle->aPktTransmit->mIdsNum == NUM_RETRANSMIT_IDS) {
-    for (int i = 0; i < NUM_RETRANSMIT_IDS -1; i++) {
-      handle->aPktTransmit->mIds[i] = handle->aPktTransmit->mIds[i + 1];
-    }
-    handle->aPktTransmit->mIdsNum--;
-  }
-
-  assert(handle->aPktTransmit->mIdsNum < NUM_RETRANSMIT_IDS);
-  int inx = handle->aPktTransmit->mIdsNum++;
-
-  handle->aLargestSentEpoch = epoch;
-  handle->aLargestSentId = handle->aNextPacketId;
-
-  handle->aPktTransmit->mIds[inx].mEpoch = 0;
-  handle->aPktTransmit->mIds[inx].mSeq = handle->aNextPacketId++;
-  handle->aPktTransmit->mIds[inx].mSentTime = PR_IntervalNow();
-
-//fprintf(stderr, "Send id: %lu time: %u pkt: %p inx: %d\n", handle->aPktTransmit->mIds[inx].mSeq, handle->aPktTransmit->mIds[inx].mSentTime, handle->aPktTransmit, inx);
-
+  handle->aNextPacketId++;
   return amount;
 }
 
-uint8_t
+static uint8_t
 DoWeNeedToSendAck(struct sdt_t *handle)
 {
   // TODO: Decide when we are going to send ack, for each new packet probably,
@@ -1014,8 +2274,8 @@ DoWeNeedToSendAck(struct sdt_t *handle)
   return handle->aNeedAck;
 }
 
-struct aPacket_t *
-MakeAckPkt(struct sdt_t *handle)
+static void
+MakeAckPkt(struct sdt_t *handle, struct aPacket_t *pkt)
 {
   // TODO: For now we are always sanding as much as it can fit in a pkt.
   // To fix:
@@ -1025,12 +2285,6 @@ MakeAckPkt(struct sdt_t *handle)
   // 3) if number of consecutive lost packet exceed 256, current implementation
   //    will fail. make continues ranges.
 
-  struct aPacket_t *pkt =
-    (struct aPacket_t *) malloc (sizeof(struct aPacket_t) +
-                                 handle->cleartextpayloadsize);
-  pkt->mIdsNum = 0;
-  pkt->mNext = NULL;
-  pkt->mForRetransmission = 0;
   unsigned char *buf = (unsigned char *)(pkt + 1);
 
   buf[0] = 0x40;
@@ -1043,14 +2297,14 @@ MakeAckPkt(struct sdt_t *handle)
                          handle->aLargestRecvTime));
   memcpy(buf + 10, &num32, 4);
   uint8_t numTS = 0;
-  uint32_t offset = 15;
-  int i = handle->aNumTimeStamps - 1;
+  pkt->mWritten += 15;
+  int i = handle->aNumTimestamps - 1;
   int prevInx = 0;
-  for (; i >= 0 && i >= handle->aNumTimeStamps - 10; i--) {
-    int inx = i % 10;
+  for (; i >= 0 && i >= handle->aNumTimestamps - NUMBER_OF_TIMESTAMPS_STORED; i--) {
+    int inx = i % NUMBER_OF_TIMESTAMPS_STORED;
     if ((handle->aLargestRecvId - handle->aTSSeqNums[inx]) < 255) {
-      buf[offset] = (uint8_t)(handle->aLargestRecvId - handle->aTSSeqNums[inx]);
-      offset++;
+      buf[pkt->mWritten] = (uint8_t)(handle->aLargestRecvId - handle->aTSSeqNums[inx]);
+      pkt->mWritten++;
       if (!numTS) {
         num32 = htonl(PR_IntervalToMicroseconds(PR_IntervalNow() -
                                                 handle->aTimestamps[inx]));
@@ -1059,8 +2313,8 @@ MakeAckPkt(struct sdt_t *handle)
                                                 handle->aTimestamps[inx]));
       }
 //fprintf(stderr, "MakeAck last %d %d %d %d %d %d\n", handle->aLargestRecvId, handle->aTSSeqNums[inx], ntohl(num32), i, handle->aNumTimeStamps, numTS);
-      memcpy(buf + offset, &num32, 4);
-      offset += 4;
+      memcpy(buf + pkt->mWritten, &num32, 4);
+      pkt->mWritten += 4;
       prevInx = inx;
       numTS++;
     }
@@ -1068,13 +2322,13 @@ MakeAckPkt(struct sdt_t *handle)
   buf[14] = numTS;
   uint8_t numR = 0;
   if (handle->aNackRange) {
-    uint32_t offsetRangeNum = offset;
-    offset++;
+    uint32_t offsetRangeNum = pkt->mWritten;
+    pkt->mWritten++;
     buf[0] = 0x60;
     struct range_t *curr = handle->aNackRange;
     struct range_t *prev = NULL;
     uint32_t continuesLeft = 0;
-    while (curr && (offset < (handle->cleartextpayloadsize - 9))) {
+    while (curr && (pkt->mWritten < (pkt->mSize - 9))) {
       if (!numR) {
         num64 = htonll(handle->aLargestRecvId - curr->mEnd);
       } else if (!continuesLeft) {
@@ -1083,32 +2337,30 @@ MakeAckPkt(struct sdt_t *handle)
         num64 = 0;
       }
 //fprintf(stderr, "MakeAck range %lu %lu\n", curr->mStart, curr->mEnd);
-      memcpy(buf + offset, &num64, 8);
-      offset += 8;
+      memcpy(buf + pkt->mWritten, &num64, 8);
+      pkt->mWritten += 8;
       uint64_t rangeLength = (!continuesLeft) ? curr->mEnd - curr->mStart :
                                                 continuesLeft;
       if (rangeLength > 256) {
-        buf[offset] = 255;
+        buf[pkt->mWritten] = 255;
         continuesLeft = rangeLength - 256;
       } else {
-        buf[offset] = (uint8_t)(rangeLength);
+        buf[pkt->mWritten] = (uint8_t)(rangeLength);
         prev = curr;
         curr = curr->mNext;
       }
       numR++;
-      offset++;
+      pkt->mWritten++;
     }
     buf[offsetRangeNum] = numR;
   }
   handle->aNeedAck = 0;
-  pkt->mSize = offset;
-  return pkt;
 }
 
 // r is timeRecv - timeSent and delay is delay at receiver
 // srtt uses r and minrtt uses clean rtt r - delay. minrtt still not used,
 // maybe not needed, it is from quic.
-void
+static void
 CalculateRTT(struct sdt_t *handle, PRIntervalTime r, PRIntervalTime delay)
 {
   // RFC 6298
@@ -1144,7 +2396,7 @@ CalculateRTT(struct sdt_t *handle, PRIntervalTime r, PRIntervalTime delay)
   }
 }
 
-void
+static void
 MaybeStartRTOTimer(struct sdt_t *handle)
 {
   if (!handle->RTOTimerSet) {
@@ -1153,79 +2405,50 @@ MaybeStartRTOTimer(struct sdt_t *handle)
   }
 }
 
-void
+static void
 StopRTOTimer(struct sdt_t *handle)
 {
   handle->RTOTimerSet = 0;
 }
 
-void
+static void
 RestartRTOTimer(struct sdt_t *handle)
 {
   assert(handle->RTOTimerSet);
   handle->RTOTimer = PR_IntervalNow() + handle->rto;
 }
 
-uint8_t
+static uint8_t
 RTOTimerExpired(struct sdt_t *handle, PRIntervalTime now)
 {
   return (handle->RTOTimerSet && (handle->RTOTimer < now));
 }
 
-void
+static void
 StartERTimer(struct sdt_t *handle)
 {
   handle->ERTimerSet = 1;
   handle->ERTimer = PR_IntervalNow() + handle->srtt * EARLY_RETRANSMIT_FACTOR;
 }
 
-uint8_t
+static uint8_t
 ERTimerExpired(struct sdt_t *handle, PRIntervalTime now)
 {
   return (handle->ERTimerSet && (handle->ERTimer < now));
 }
 
-void
+static void
 StopERTimer(struct sdt_t *handle)
 {
   handle->ERTimerSet = 0;
 }
 
-void
-NeedRetransmissionDupAck(struct sdt_t *handle)
-{
-  if (!handle->aTransmissionQueue.mFirst) {
-    return;
-  }
-
-  struct aPacket_t *curr = handle->aRetransmissionQueue.mFirst;
-
-  while (curr &&
-         (handle->aLargestAcked >= (curr->mIds[curr->mIdsNum - 1].mSeq + DUPACK_THRESH))) {
-
-    if (!curr->mForRetransmission) {
-      cc->OnPacketLost(handle, curr->mIds[curr->mIdsNum - 1].mSeq,
-                       curr->mSize + DTLS_PART + handle->publicHeader);
-      curr->mForRetransmission = 1;
-    }
-    curr = curr->mNext;
-  }
-}
-
-int8_t
-RetransmitQueued(struct sdt_t *handle)
-{
-  return handle->aRetransmissionQueue.mFirst &&
-         handle->aRetransmissionQueue.mFirst->mForRetransmission;
-}
-
-int8_t
+static int8_t
 NeedToSendRetransmit(struct sdt_t *handle)
 {
   PRIntervalTime now = PR_IntervalNow();
   return RTOTimerExpired(handle, now) ||
-         ERTimerExpired(handle, now) ||
-         RetransmitQueued(handle);
+         ERTimerExpired(handle, now);
 }
 
 static int hMakePingAck(struct sdt_t *handle);
@@ -1240,9 +2463,10 @@ struct aAckedPacket_t
 };
 
 static int
-RemoveRange(struct sdt_t *handle, uint64_t end, uint64_t start, int numTS,
-            uint32_t *tsDelay, uint64_t *tsSeqno,
-            struct aAckedPacket_t **acked)
+RemoveAckedRange(struct sdt_t *handle, uint64_t end, uint64_t start, int numTS,
+                 uint32_t *tsDelay, uint64_t *tsSeqno,
+                 struct aAckedPacket_t **ackedFirst,
+                 struct aAckedPacket_t **ackedLast)
 {
   // This function removes range of newly acked packets and updates rtt, rto.
 
@@ -1250,33 +2474,28 @@ RemoveRange(struct sdt_t *handle, uint64_t end, uint64_t start, int numTS,
   // TODO keep track of ACK packets. Because acks are not in retransmission
   // queue search will need to through the whole queue.
 
-  struct aAckedPacket_t *ackedPkts = NULL, *lastPkt = NULL;
-  struct aPacket_t *pkt = NULL;
+  struct aPacketInfo_t *pkt = NULL;
   for (uint64_t i = start; i <= end; i++) {
-    pkt = PacketQueueRemovePktWithId(&handle->aRetransmissionQueue, i);
+    pkt = PacketAcked(&handle->mSDTSendDataStr, i);
 
     // We are also acking acks so maybe there is no pkt
     if (pkt) {
-      // I expect that numTS should be really small 1-2 (currently it is 10 :)),
-      // so this is not that slow and pkt->mIdsNum is in 99.99% of the cases
-      // only 1.
-      // TODO: this can be optimize  by preprocessing tsDelay and tsSeqno.
+      // Currently the max numTS is NUMBER_OF_TIMESTAMPS_STORED,
+      // TODO: this can be optimize by preprocessing tsDelay and tsSeqno. We
+      // should get timestamps only for non acked packet.
       int ts = 0;
       PRIntervalTime rtt = 0;
       uint8_t hasRtt = 0;
       while (!rtt && ts < numTS) {
         // Use this measurement only if delay is not greater than rtt.
         if ((tsDelay[ts] < handle->srtt) || !handle->srtt) {
-          for (uint32_t id = 0; id < pkt->mIdsNum; id++) {
-            if (pkt->mIds[id].mSeq == tsSeqno[ts]) {
-              rtt = PR_IntervalNow() - pkt->mIds[id].mSentTime;
-              hasRtt = 1;
-              fprintf(stderr, "DDDDD rtt %d delay %d\n", PR_IntervalNow() - pkt->mIds[id].mSentTime, tsDelay[ts]);
-              CalculateRTT(handle,
-                           PR_IntervalNow() - pkt->mIds[id].mSentTime,
-                           tsDelay[ts]);
-              break;
-            }
+          if (pkt->mPacketSeqNum == tsSeqno[ts]) {
+            rtt = PR_IntervalNow() - pkt->mSentTime;
+            hasRtt = 1;
+            CalculateRTT(handle,
+                         PR_IntervalNow() - pkt->mSentTime,
+                         tsDelay[ts]);
+            break;
           }
         }
         ts++;
@@ -1292,11 +2511,11 @@ RemoveRange(struct sdt_t *handle, uint64_t end, uint64_t start, int numTS,
       ack->mRtt = rtt;
       ack->mHasRtt = hasRtt;
       ack->mNext = NULL;
-      if (!lastPkt) {
-        ackedPkts = lastPkt = ack;
+      if (!*ackedFirst) {
+        *ackedLast = *ackedFirst = ack;
       } else {
-        lastPkt->mNext = ack;
-        lastPkt = ack;
+        (*ackedLast)->mNext = ack;
+        *ackedLast = ack;
       }
 
       if (pkt->mIsPingPkt) {
@@ -1308,14 +2527,26 @@ RemoveRange(struct sdt_t *handle, uint64_t end, uint64_t start, int numTS,
       free(pkt);
     }
   }
-  *acked = ackedPkts;
+
   return 0;
 
   cleanup:
   free(pkt);
-  free(lastPkt);
-  *acked = NULL;
   return SDTE_OUT_OF_MEMORY;
+}
+
+
+static void
+NeedRetransmissionDupAck(struct sdt_t *handle)
+{
+  while (handle->mSDTSendDataStr.mSentPacketInfo.mFirst &&
+         (handle->mSDTSendDataStr.mSentPacketInfo.mFirst->mPacketSeqNum <= handle->aLargestAcked)) {
+
+    cc->OnPacketLost(handle, handle->mSDTSendDataStr.mSentPacketInfo.mFirst->mPacketSeqNum,
+                     handle->mSDTSendDataStr.mSentPacketInfo.mFirst->mSize);
+    assert(MarkPacketLost(&handle->mSDTSendDataStr,
+           handle->mSDTSendDataStr.mSentPacketInfo.mFirst));
+  }
 }
 
 static int
@@ -1327,7 +2558,9 @@ RecvAck(struct sdt_t *handle, uint8_t type)
 
   // If we have a loss reported in the packet, we need to call OnPacketLost
   // before calling OnPacketAcked, because of a cwnd calculation.
-  struct aAckedPacket_t *newlyAcked = 0;
+  struct aAckedPacket_t *newlyAckedFirst = 0;
+  struct aAckedPacket_t *newlyAckedLast = 0;
+  int rc = SDTE_OK;
 
   uint8_t hasRanges = (type == 0x60);
 
@@ -1389,10 +2622,12 @@ RecvAck(struct sdt_t *handle, uint8_t type)
       return SDTE_OK;
     }
 
-    int rc = RemoveRange(handle, largestRecv, handle->aLargestAcked + 1,
-                         numTS, tsDelay, tsSeqno, &newlyAcked);
-    if (rc)
-      return rc;
+    rc = RemoveAckedRange(handle, largestRecv, handle->aLargestAcked + 1,
+                          numTS, tsDelay, tsSeqno, &newlyAckedFirst, &newlyAckedLast);
+    if (rc) {
+      goto cleanup;
+    }
+
     handle->aLargestAcked = largestRecv;
   } else {
 
@@ -1437,6 +2672,10 @@ RecvAck(struct sdt_t *handle, uint8_t type)
     if (!curr) {
       // There was no NACK till now.
       curr = (struct range_t *) malloc (sizeof(struct range_t));
+      if (!curr) {
+        rc = SDTE_OUT_OF_MEMORY;
+        goto cleanup;
+      }
       curr->mNext = NULL;
       curr->mStart = handle->aLargestAcked;
       curr->mEnd = 0;
@@ -1452,21 +2691,19 @@ RecvAck(struct sdt_t *handle, uint8_t type)
         curr = curr->mNext;
       } else if (newRanges[i].mEnd > curr->mStart) {
         // completly new one.
-        int rc;
-        if (!newlyAcked) {
-          rc = RemoveRange(handle, newRanges[i].mStart,
-                           newRanges[i].mEnd, numTS, tsDelay, tsSeqno,
-                           &newlyAcked);
-        } else {
-          rc = RemoveRange(handle, newRanges[i].mStart,
-                           newRanges[i].mEnd, numTS, tsDelay, tsSeqno,
-                           &newlyAcked->mNext);
+        rc = RemoveAckedRange(handle, newRanges[i].mStart,
+                              newRanges[i].mEnd, numTS, tsDelay, tsSeqno,
+                              &newlyAckedFirst, &newlyAckedLast);
+        if (rc) {
+          goto cleanup;
         }
-        if (rc)
-          return rc;
 
         struct range_t *newRange =
           (struct range_t *) malloc (sizeof(struct range_t));
+        if (!newRange) {
+          rc = SDTE_OUT_OF_MEMORY;
+          goto cleanup;
+        }
         newRange->mStart = newRanges[i].mStart;
         newRange->mEnd = newRanges[i].mEnd;
         newRange->mNext = curr;
@@ -1481,16 +2718,12 @@ RecvAck(struct sdt_t *handle, uint8_t type)
         assert(newRanges[i].mEnd <= curr->mEnd);
 
         if (newRanges[i].mStart > curr->mStart) {
-          int rc;
-          if (!newlyAcked) {
-            rc = RemoveRange(handle, newRanges[i].mStart, curr->mStart,
-                             numTS, tsDelay, tsSeqno, &newlyAcked);
-          } else {
-            rc = RemoveRange(handle, newRanges[i].mStart, curr->mStart,
-                             numTS, tsDelay, tsSeqno, &newlyAcked->mNext);
+          rc = RemoveAckedRange(handle, newRanges[i].mStart, curr->mStart,
+                                numTS, tsDelay, tsSeqno,
+                                &newlyAckedFirst, &newlyAckedLast);
+          if (rc) {
+            goto cleanup;
           }
-          if (rc)
-            return rc;
           curr->mStart = newRanges[i].mStart;
         }
 
@@ -1501,16 +2734,12 @@ RecvAck(struct sdt_t *handle, uint8_t type)
 
             if (nextR->mStart > newRanges[i].mEnd) {
               // merge 2 ranges
-              int rc;
-              if (!newlyAcked) {
-                rc = RemoveRange(handle, curr->mEnd, nextR->mStart,
-                                 numTS, tsDelay, tsSeqno, &newlyAcked);
-              } else {
-                rc = RemoveRange(handle, curr->mEnd, nextR->mStart,
-                                 numTS, tsDelay, tsSeqno, &newlyAcked->mNext);
+              rc = RemoveAckedRange(handle, curr->mEnd, nextR->mStart,
+                                    numTS, tsDelay, tsSeqno,
+                                    &newlyAckedFirst, &newlyAckedLast);
+              if (rc) {
+                goto cleanup;
               }
-              if (rc)
-                return rc;
 
               curr->mEnd =  nextR->mEnd;
               curr->mNext = nextR->mNext;
@@ -1519,16 +2748,12 @@ RecvAck(struct sdt_t *handle, uint8_t type)
           }
         }
         if (newRanges[i].mEnd < curr->mEnd) {
-          int rc;
-          if (!newlyAcked) {
-            rc = RemoveRange(handle, curr->mEnd, newRanges[i].mEnd,
-                             numTS, tsDelay, tsSeqno, &newlyAcked);
-          } else {
-            rc = RemoveRange(handle, curr->mEnd, newRanges[i].mEnd,
-                             numTS, tsDelay, tsSeqno, &newlyAcked->mNext);
+          rc = RemoveAckedRange(handle, curr->mEnd, newRanges[i].mEnd,
+                                numTS, tsDelay, tsSeqno,
+                                &newlyAckedFirst, &newlyAckedLast);
+          if (rc) {
+            goto cleanup;
           }
-          if (rc)
-            return rc;
 
           curr->mEnd = newRanges[i].mEnd;
         }
@@ -1543,22 +2768,22 @@ RecvAck(struct sdt_t *handle, uint8_t type)
     handle->aLayerBufferLen = handle->aLayerBufferUsed = 0;
   }
 
-  if (newlyAcked) {
+  if (newlyAckedFirst) {
     NeedRetransmissionDupAck(handle);
 
     uint64_t oldSmallestUnacked = handle->aSmallestUnacked;
-    if ((handle->aRetransmissionQueue.mLen == 0)) {
+    if (!HasUnackedPackets(&handle->mSDTSendDataStr)) {
       // All packets are acked stop RTO timer.
       StopRTOTimer(handle);
       StopERTimer(handle);
       handle->aSmallestUnacked = handle->aLargestAcked + 1;
     } else {
-      // Some new packet(s) are acked - restart rto timer.
+      // Some new packet(s) are acked and we have outstanding packets - restart
+      // rto timer.
       RestartRTOTimer(handle);
       if (hasRanges) {
-        // This can be done more efficiently!!!
-        handle->aSmallestUnacked = FindSmallestUnacked(&handle->aRetransmissionQueue);
-        assert(handle->aSmallestUnacked);
+        //TODO: dragana check this.
+        handle->aSmallestUnacked = SmallestPktSeqNumNotAcked(&handle->mSDTSendDataStr);
       } else {
         handle->aSmallestUnacked = handle->aLargestAcked;
       }
@@ -1566,48 +2791,53 @@ RecvAck(struct sdt_t *handle, uint8_t type)
 
     if (hasRanges && oldSmallestUnacked < handle->aSmallestUnacked) {
       // Send Stop waiting!
-      // Maybe swend stop waiting only if a whole range is asked.
+      // Maybe send stop waiting only if a whole range is asked.
       // also after e.g. 2 retransmissions.
     }
-    struct aAckedPacket_t *curr = newlyAcked;
-    while (curr) {
-      newlyAcked = newlyAcked->mNext;
+    while (newlyAckedFirst) {
+      struct aAckedPacket_t *curr = newlyAckedFirst;
+      newlyAckedFirst = newlyAckedFirst->mNext;
       cc->OnPacketAcked(handle, curr->mId, handle->aSmallestUnacked,
                         curr->mSize, curr->mRtt, curr->mHasRtt);
       free(curr);
-      curr = newlyAcked;
     }
   }
 
-  if ((handle->aRetransmissionQueue.mLen) &&
+  if ((HasDataForTransmission(&handle->mSDTSendDataStr)) &&
       (handle->aLargestSentId == handle->aLargestAcked)) {
     StartERTimer(handle);
   }
   return SDTE_OK;
+
+  cleanup:
+  while (newlyAckedFirst) {
+    struct aAckedPacket_t *curr = newlyAckedFirst;
+    newlyAckedFirst = newlyAckedFirst->mNext;
+    free(curr);
+  }
+  return rc;
 }
 
-void
+static void
 CheckRetransmissionTimers(struct sdt_t *handle)
 {
   if (ERTimerExpired(handle, PR_IntervalNow())) {
     fprintf(stderr, "ERTimerExpired\n");
-    assert(handle->aRetransmissionQueue.mFirst);
-    struct aPacket_t *pkt = handle->aRetransmissionQueue.mFirst;
-    if (!pkt->mForRetransmission) {
-      cc->OnPacketLost(handle, pkt->mIds[pkt->mIdsNum - 1].mSeq,
-        pkt->mSize + DTLS_PART + handle->publicHeader);
-      pkt->mForRetransmission = 1;
-    }
+    assert(handle->mSDTSendDataStr.mSentPacketInfo.mFirst);
+    struct aPacketInfo_t *pkt = handle->mSDTSendDataStr.mSentPacketInfo.mFirst;
+    cc->OnPacketLost(handle, pkt->mPacketSeqNum, pkt->mSize);
+    MarkPacketLost(&handle->mSDTSendDataStr, pkt);
+
     StopERTimer(handle);
 
   } else if (RTOTimerExpired(handle, PR_IntervalNow())) {
     fprintf(stderr, "RTOTimerExpired\n");
-    assert(handle->aRetransmissionQueue.mFirst);
-    struct aPacket_t *curr = handle->aRetransmissionQueue.mFirst;
+    assert(handle->mSDTSendDataStr.mSentPacketInfo.mFirst);
+    struct aPacketInfo_t *pkt = handle->mSDTSendDataStr.mSentPacketInfo.mFirst;
     // Mare all for retransmission.
-    while (curr) {
-      curr->mForRetransmission = 1;
-      curr = curr->mNext;
+    while (pkt) {
+      MarkPacketLost(&handle->mSDTSendDataStr, pkt);
+      pkt = handle->mSDTSendDataStr.mSentPacketInfo.mFirst;
     }
     handle->rto *= 2;
     handle->numOfRTORetrans++;
@@ -1616,31 +2846,6 @@ CheckRetransmissionTimers(struct sdt_t *handle)
     // resend this pkt.
     RestartRTOTimer(handle);
   }
-}
-
-static struct hStreamInfo_t*
-hFindOutgoingStream(struct sdt_t *handle, uint32_t streamId)
-{
-  struct hStreamInfo_t *prev = 0, *curr = handle->hOutgoingStreams;
-  while (curr && (curr->mStreamId < streamId)) {
-    prev = curr;
-    curr = curr->mNext;
-  }
-  if (!curr || (curr->mStreamId != streamId)) {
-    struct hStreamInfo_t *stream =
-      (struct hStreamInfo_t *) malloc (sizeof(struct hStreamInfo_t));
-    stream->mStreamId = streamId;
-    stream->mNextOffset = 0;
-    stream->mWindowSize = (2 << 16) - 1;
-    stream->mNext = curr;
-    if (!prev) {
-      handle->hOutgoingStreams = stream;
-    } else {
-      prev->mNext = stream;
-    }
-    curr = stream;
-  }
-  return curr;
 }
 
 static struct hStream_t*
@@ -1654,6 +2859,9 @@ hFindStream(struct sdt_t *handle, uint32_t streamId)
   if (!curr || (curr->mStreamId != streamId)) {
     struct hStream_t *stream =
       (struct hStream_t*) malloc (sizeof(struct hStream_t));
+    if (!stream) {
+      return NULL;
+    }
     stream->mStreamId = streamId;
     stream->mSDTOffset = 0;
     stream->mWindowSize = (2 << 16) - 1;
@@ -1701,9 +2909,6 @@ hOrderFrameToStream(struct hStream_t* stream, struct hFrame_t *frame)
     return;
   }
 
-  fprintf(stderr, "hOrderFrameToStream %lu %d\n", frame->mSDTOffset,
-          frame->mSDTLength);
-
   struct hFrame_t *prev = 0, *curr = stream->mFrames;
   while (curr && (curr->mSDTOffset < frame->mSDTOffset)) {
     prev = curr;
@@ -1741,7 +2946,7 @@ hAddSortedHttp2Frame(struct sdt_t *handle, struct hFrame_t *frame)
   handle->hOrderedFramesLast = frame;
 }
 
-static void
+static int
 hOrderStreamFrame(struct sdt_t *handle, struct hFrame_t *frame,
                   uint32_t streamId)
 {
@@ -1750,6 +2955,10 @@ hOrderStreamFrame(struct sdt_t *handle, struct hFrame_t *frame,
   assert(!frame->mNext);
 
   struct hStream_t* stream = hFindStream(handle, streamId);
+
+  if (!stream) {
+    return SDTE_OUT_OF_MEMORY;
+  }
 
   // Add frame.
   hOrderFrameToStream(stream, frame);
@@ -1772,9 +2981,10 @@ hOrderStreamFrame(struct sdt_t *handle, struct hFrame_t *frame,
   if (stream->mEnded) {
     hRemoveStream(handle, streamId);
   }
+  return SDTE_OK;
 }
 
-static void
+static int
 hOrderHeaderFrame(struct sdt_t *handle, struct hFrame_t *frame)
 {
   fprintf(stderr, "hOrderHeaderFrame\n");
@@ -1798,20 +3008,24 @@ hOrderHeaderFrame(struct sdt_t *handle, struct hFrame_t *frame)
     memcpy(&streamId, frame + 5, 4);
     streamId = ntohl(streamId);
     assert((streamId != 1) && (streamId != 3));
-    if (streamId % 2) {
-      streamId -= 4;
-    }
 
     struct hStream_t* stream = NULL;
     if ((flags & HTTP2_FRAME_FLAG_END_STREAM) ||
         (flags & HTTP2_FRAME_FLAG_END_HEADERS)) {
       stream = hFindStream(handle, streamId);
+      if (!stream) {
+        return SDTE_OUT_OF_MEMORY;
+      }
       stream->mHeaderDone = flags & HTTP2_FRAME_FLAG_END_HEADERS;
       stream->mEnded = flags & HTTP2_FRAME_FLAG_END_STREAM;
     }
 
-    uint32_t streamIdNet = htonl(streamId);
-    memcpy(frame + 5, &streamIdNet, 4);
+    uint32_t h2Stream = streamId;
+    if (h2Stream % 2) {
+      h2Stream -= 4;
+    }
+    h2Stream = htonl(h2Stream);
+    memcpy(frame + 5, &h2Stream, 4);
 
     struct hFrame_t *doneFrame = handle->hIncomingHeaders->mFrames;
     handle->hIncomingHeaders->mFrames = handle->hIncomingHeaders->mFrames->mNext;
@@ -1828,13 +3042,17 @@ hOrderHeaderFrame(struct sdt_t *handle, struct hFrame_t *frame)
       hRemoveStream(handle, streamId);
     }
   }
+  return 0;
 }
 
-static void
+static int
 hMakeMagicFrame(struct sdt_t *handle)
 {
   struct hFrame_t *frame = (struct hFrame_t*) malloc (sizeof(struct hFrame_t) +
                                                       24);
+  if (!frame) {
+    return SDTE_OUT_OF_MEMORY;
+  }
   frame->mNext = 0;
   frame->mSDTOffset = 0;
   frame->mSDTLength = 0;
@@ -1845,15 +3063,19 @@ hMakeMagicFrame(struct sdt_t *handle)
   uint8_t *framebuf = (uint8_t*)(frame + 1);
   memcpy(framebuf, magicHello, 24);
   hAddSortedHttp2Frame(handle, frame);
+  return 0;
 }
 
-static void
+static int
 hMakeSettingsSettingsAckFrame(struct sdt_t *handle, uint8_t ack)
 {
-  uint16_t frameLen = HTTP2_HEADERLEN + (ack ? 0 : 6);
+  uint16_t frameLen = HTTP2_HEADERLEN + (ack ? 0 : 18);
 
   struct hFrame_t *frame = (struct hFrame_t*) malloc (sizeof(struct hFrame_t) +
                                                       frameLen);
+  if (!frame) {
+    return SDTE_OUT_OF_MEMORY;
+  }
   frame->mNext = 0;
   frame->mSDTOffset = 0;
   frame->mSDTLength = 0;
@@ -1866,7 +3088,7 @@ hMakeSettingsSettingsAckFrame(struct sdt_t *handle, uint8_t ack)
   framebuf[frame->mDataSize] = 0;
   frame->mDataSize += 1;
 
-  uint16_t len = ack ? 0 : 6;
+  uint16_t len = ack ? 0 : 18;
   len = htons(len);
   memcpy(framebuf + frame->mDataSize, &len, 2);
   frame->mDataSize += 2;
@@ -1887,18 +3109,31 @@ hMakeSettingsSettingsAckFrame(struct sdt_t *handle, uint8_t ack)
 
   if (!ack) {
     framebuf[frame->mDataSize] = 0;
+    framebuf[frame->mDataSize + 1] = HTTP2_SETTINGS_TYPE_HEADER_TABLE_SIZE;
+    uint32_t val = htonl(65536);
+    memcpy(framebuf + frame->mDataSize + 2, &val, 4);
+    frame->mDataSize += 6;
+
+    framebuf[frame->mDataSize] = 0;
     framebuf[frame->mDataSize + 1] = HTTP2_SETTINGS_TYPE_INITIAL_WINDOW;
-    uint32_t val = htonl(1048576);
+    val = htonl(131072);
+    memcpy(framebuf + frame->mDataSize + 2, &val, 4);
+    frame->mDataSize += 6;
+
+    framebuf[frame->mDataSize] = 0;
+    framebuf[frame->mDataSize + 1] = HTTP2_SETTINGS_MAX_FRAME_SIZE;
+    val = htonl( 0x4000);
     memcpy(framebuf + frame->mDataSize + 2, &val, 4);
     frame->mDataSize += 6;
   }
   hAddSortedHttp2Frame(handle, frame);
+  return 0;
 }
 
 static int
 hMakePingAck(struct sdt_t *handle)
 {
-  // Ping paket was been acked send an h2 ping ack.
+  // A ping packet was been acked, send an h2 ping ack.
   fprintf(stderr, "Send HTTP2 PING ACK.\n");
   struct hFrame_t *frame =
     (struct hFrame_t*)malloc(sizeof(struct hFrame_t) +
@@ -1933,8 +3168,14 @@ sdt2h2(struct sdt_t *handle)
   // If there is no magic sent we need to sent it and settings too.
   if (!handle->hMagicHello) {
     handle->hMagicHello = 1;
-    hMakeMagicFrame(handle);
-    hMakeSettingsSettingsAckFrame(handle, 0);
+    int rc = hMakeMagicFrame(handle);
+    if (rc) {
+      return rc;
+    }
+    rc = hMakeSettingsSettingsAckFrame(handle, 0);
+    if (rc) {
+      return rc;
+    }
   }
 
   while ((handle->aLayerBufferLen - handle->aLayerBufferUsed) > 0) {
@@ -1962,9 +3203,12 @@ sdt2h2(struct sdt_t *handle)
       struct hFrame_t *frame =
         (struct hFrame_t*)malloc(sizeof(struct hFrame_t) + len +
                                  ((streamId == 3) ? 0 : HTTP2_HEADERLEN));
+      if (!frame) {
+        return SDTE_OUT_OF_MEMORY;
+      }
       frame->mNext = 0;
       frame->mSDTOffset = offset;
-      frame->mSDTLength = len;
+      frame->mSDTLength = len - HTTP2_HEADERLEN;
       frame->mDataSize = len + ((streamId == 3) ? 0 : HTTP2_HEADERLEN);
       frame->mDataRead = 0;
       frame->mLast = 0;
@@ -1978,7 +3222,10 @@ sdt2h2(struct sdt_t *handle)
         memcpy(buf, handle->aLayerBuffer + handle->aLayerBufferUsed, len);
         handle->aLayerBufferUsed += len;
         // Rewritting of id will be done later;
-        hOrderHeaderFrame(handle, frame);
+        int rc = hOrderHeaderFrame(handle, frame);
+        if (rc) {
+          return rc;
+        }
 
       } else {
         fprintf(stderr, "SDT_FRAME_TYPE_STREAM received a data frame.\n");
@@ -1996,13 +3243,18 @@ sdt2h2(struct sdt_t *handle)
         buf[4] = (frame->mLast) ? HTTP2_FRAME_FLAG_END_STREAM : 0;
 
         assert((streamId != 1) && (streamId != 3));
-        if (streamId % 2) {
-          streamId -= 4;
+        uint32_t h2Stream = streamId;
+        if (h2Stream % 2) {
+          h2Stream -= 4;
         }
-        uint32_t streamIdN = htonl(streamId);
-        memcpy(buf + 5, &streamIdN, 4);
+        h2Stream = htonl(h2Stream);
+        memcpy(buf + 5, &h2Stream, 4);
 
-        hOrderStreamFrame(handle, frame, streamId);
+        int rc = hOrderStreamFrame(handle, frame, streamId);
+        if (rc) {
+          free(frame);
+          return rc;
+        }
       }
     } else if (type & SDT_FRAME_TYPE_ACK) {
       // This is an ACK frame.
@@ -2034,6 +3286,9 @@ sdt2h2(struct sdt_t *handle)
             struct hFrame_t *frame =
               (struct hFrame_t*)malloc(sizeof(struct hFrame_t) +
                                        HTTP2_HEADERLEN + 4);
+            if (!frame) {
+              return SDTE_OUT_OF_MEMORY;
+            }
             frame->mType = HTTP2_FRAME_TYPE_RST_STREAM;
             frame->mNext = 0;
             frame->mSDTOffset = 0;
@@ -2060,17 +3315,22 @@ sdt2h2(struct sdt_t *handle)
             buf[3] = HTTP2_FRAME_TYPE_RST_STREAM;
             buf[4] = 0;
             assert((streamId != 1) && (streamId != 3));
-            if (streamId % 2) {
-              streamId -= 4;
+            uint32_t h2Stream = streamId;
+            if (h2Stream % 2) {
+              h2Stream -= 4;
             }
-            uint32_t streamIdN = htonl(streamId);
-            memcpy(buf + 5, &streamIdN, 4);
+            h2Stream = htonl(h2Stream);
+            memcpy(buf + 5, &h2Stream, 4);
             memcpy(buf + HTTP2_HEADERLEN,
                    handle->aLayerBuffer + handle->aLayerBufferUsed,
                    4);
             handle->aLayerBufferUsed += 4;
 
-            hOrderStreamFrame(handle, frame, streamId);
+            int rc = hOrderStreamFrame(handle, frame, streamId);
+            if (rc) {
+              free(frame);
+              return rc;
+            }
             break;
           }
         case SDT_FRAME_TYPE_CONNECTION_CLOSE:
@@ -2093,6 +3353,9 @@ sdt2h2(struct sdt_t *handle)
             struct hFrame_t *frame =
               (struct hFrame_t*)malloc(sizeof(struct hFrame_t) +
                                        HTTP2_HEADERLEN + 8 + len);
+            if (!frame) {
+              return SDTE_OUT_OF_MEMORY;
+            }
             frame->mType = HTTP2_FRAME_TYPE_GOAWAY;
             frame->mNext = 0;
             frame->mSDTOffset = 0;
@@ -2149,13 +3412,10 @@ sdt2h2(struct sdt_t *handle)
 
             assert((streamId != 1) && (streamId != 3));
 
-            if (streamId % 2) {
-              streamId -= 4;
-            }
+            struct aOutgoingStreamInfo_t *streamInfo =
+              FindOutgoingStream(&handle->mSDTSendDataStr, streamId);
 
-            struct hStreamInfo_t *streamInfo = hFindOutgoingStream(handle,
-                                                                   streamId);
-
+            // TODO: dragana take a look at this!
             if (!streamInfo) {
               // ignore
               fprintf(stderr, "No record for stream %d\n", streamId);
@@ -2172,6 +3432,9 @@ sdt2h2(struct sdt_t *handle)
                 struct hFrame_t *frame =
                   (struct hFrame_t*)malloc(sizeof(struct hFrame_t) +
                                            HTTP2_HEADERLEN + 4);
+                if (!frame) {
+                  return SDTE_OUT_OF_MEMORY;
+                }
                 frame->mNext = 0;
                 frame->mSDTOffset = 0;
                 frame->mSDTLength = 0;
@@ -2185,6 +3448,9 @@ sdt2h2(struct sdt_t *handle)
                 buf[3] = HTTP2_FRAME_TYPE_WINDOW_UPDATE;
                 buf[4] = 0;
 
+                if (streamId % 2) {
+                  streamId -= 4;
+                }
                 streamId = htonl(streamId);
                 memcpy(buf + 5, &streamId, 4);
 
@@ -2228,6 +3494,9 @@ sdt2h2(struct sdt_t *handle)
             struct hFrame_t *frame =
               (struct hFrame_t*)malloc(sizeof(struct hFrame_t) +
                                        HTTP2_HEADERLEN + 8);
+            if (!frame) {
+              return SDTE_OUT_OF_MEMORY;
+            }
             frame->mNext = 0;
             frame->mSDTOffset = 0;
             frame->mSDTLength = 0;
@@ -2268,6 +3537,9 @@ sdt2h2(struct sdt_t *handle)
             struct hFrame_t *frame =
               (struct hFrame_t*)malloc(sizeof(struct hFrame_t) +
                                        HTTP2_HEADERLEN + 5);
+            if (!frame) {
+              return SDTE_OUT_OF_MEMORY;
+            }
             frame->mNext = 0;
             frame->mSDTOffset = 0;
             frame->mSDTLength = 0;
@@ -2402,19 +3674,6 @@ sdt_GetData(PRFileDesc *fd)
 
   sdt2h2(handle);
 
-  if (handle->aNeedAck) {
-    struct aPacket_t *pkt = MakeAckPkt(handle);
-    unsigned char *buf = (unsigned char *)(pkt + 1);
-    int rv = fd->lower->methods->write(fd->lower,
-                                       buf,
-                                       pkt->mSize);
-    free(pkt);
-    if (rv < 0) {
-      return rv;
-    }
-    handle->aNeedAck = 0;
-  }
-
   return 0;
 }
 
@@ -2436,7 +3695,7 @@ hSDTFrameOrHeaderLen(uint8_t type, uint8_t flags)
       }
       break;
     case HTTP2_FRAME_TYPE_PRIORITY:
-      minLen = 4 + 1;
+      minLen = 1 + 4 + 5;
       break;
     case HTTP2_FRAME_TYPE_RST_STREAM:
       minLen = 1 + 4 + 8 + 4;
@@ -2449,10 +3708,13 @@ hSDTFrameOrHeaderLen(uint8_t type, uint8_t flags)
       break;
     case HTTP2_FRAME_TYPE_PING:
       minLen = 1;
+      break;
     case HTTP2_FRAME_TYPE_GOAWAY:
-      minLen = 1 + 4 + 4;
+      minLen = 1 + 4 + 4 + 2;
+      break;
     case HTTP2_FRAME_TYPE_WINDOW_UPDATE:
       minLen = 1 + 4 + 8;
+      break;
     case HTTP2_FRAME_TYPE_ALTSVC:
     case HTTP2_FRAME_TYPE_LAST:
       minLen = 0;
@@ -2461,16 +3723,252 @@ hSDTFrameOrHeaderLen(uint8_t type, uint8_t flags)
 }
 
 static void
-h22sdt(struct sdt_t *handle, struct aPacket_t *pkt, const unsigned char *buf,
-       int32_t amount, uint32_t *read)
+decodeH2Header(struct sdt_t *handle, const unsigned char *buf)
 {
-  LogBuffer("h22std ", buf, amount);
+  handle->hType = ((uint8_t*)buf)[3];
+  handle->hFlags = ((uint8_t*)buf)[3 + 1];
+  memcpy(&handle->hDataLen, buf + 1, 2);
+  handle->hDataLen = ntohs(handle->hDataLen);
+  memcpy(&handle->hSDTStreamId, buf + 3 + 1 + 1, 4);
+  handle->hSDTStreamId = ntohl(handle->hSDTStreamId);
+  if (handle->hSDTStreamId % 2) {
+    handle->hSDTStreamId += 4;
+  }
+}
+
+static uint8_t
+IsH2ControlFrame(uint8_t type)
+{
+  if ((type == HTTP2_FRAME_TYPE_DATA) ||
+      (type == HTTP2_FRAME_TYPE_HEADERS) ||
+      (type == HTTP2_FRAME_TYPE_CONTINUATION)) {
+    return 0;
+  }
+
+  return 1;
+}
+
+static int
+MakeSDTControlFrameFromH2AndQueueIt(struct sdt_t *handle,
+                                    const unsigned char *buf)
+{
+  int32_t read = 0;
+  uint16_t size = hSDTFrameOrHeaderLen(handle->hType, handle->hFlags);
+
+  struct aDataChunk_t *chunk = NULL;
+  unsigned char *chunkBuf;
+  if (size) {
+    // Chunk is own by mSDTSendDataStr!!!!
+    chunk = CreateDataChunk(&handle->mSDTSendDataStr, CONTROL_CHUNK, 0, size,
+                            0, 0);
+
+    if (!chunk) {
+      return SDTE_OUT_OF_MEMORY;
+    }
+
+    uint32_t rv = AddChunkRange(&handle->mSDTSendDataStr, chunk, 0, size);
+
+    if (rv) {
+      // Chunk will be freed by RemoveDataChunk.
+      RemoveChunkFromBuffer(&handle->mSDTSendDataStr, chunk);
+      return SDTE_OUT_OF_MEMORY;
+    }
+
+    chunkBuf = GetDataChunkBuf(chunk);
+  }
+
+  uint16_t curr = 0;
+
+  switch (handle->hType) {
+    case HTTP2_FRAME_TYPE_PRIORITY:
+    {
+      fprintf(stderr, "HTTP2_FRAME_TYPE_PRIORITY\n");
+      // Priority is not described readly.
+      chunkBuf[curr] = SDT_FRAME_TYPE_PRIORITY;
+      curr += 1;
+      uint32_t id = htonl(handle->hSDTStreamId);
+      memcpy(chunkBuf + curr, &id, 4);
+      curr += 4;
+      memcpy(chunkBuf + curr, buf + read, 5);
+      read += 5;
+      curr += 5;
+      break;
+    }
+
+    case HTTP2_FRAME_TYPE_RST_STREAM:
+    {
+      fprintf(stderr, "HTTP2_FRAME_TYPE_RST_STREAM\n");
+      chunkBuf[curr] = SDT_FRAME_TYPE_RST_STREAM;
+      curr += 1;
+      uint32_t id = htonl(handle->hSDTStreamId);
+      memcpy(chunkBuf + curr, &id, 4);
+      curr += 4;
+      struct aOutgoingStreamInfo_t *stream =
+        FindOutgoingStream(&handle->mSDTSendDataStr, handle->hSDTStreamId);
+      assert(stream);
+      uint64_t offset = htonll(stream->mNextOffset);
+      memcpy(chunkBuf + curr, &offset, 8);
+      curr += 8;
+      memcpy(chunkBuf + curr, buf + read, 4);
+      curr += 4;
+      read += handle->hDataLen;
+    }
+    break;
+
+    case HTTP2_FRAME_TYPE_SETTINGS:
+    {
+      fprintf(stderr, "HTTP2_FRAME_TYPE_SETTINGS\n");
+      if (handle->hFlags & HTTP2_FRAME_FLAG_ACK) {
+        // ignore ack.
+      } else {
+        // ignore but make a SETTING ACK frame
+        int rc = hMakeSettingsSettingsAckFrame(handle, 1);
+        if (rc) {
+          return rc;
+        }
+      }
+      read += handle->hDataLen;
+    }
+    break;
+
+    case HTTP2_FRAME_TYPE_PUSH_PROMISE:
+      fprintf(stderr, "HTTP2_FRAME_TYPE_PUSH_PROMISE\n");
+      assert(0);
+
+    case HTTP2_FRAME_TYPE_PING:
+      fprintf(stderr, "HTTP2_FRAME_TYPE_PING\n");
+      if (!(handle->hFlags & HTTP2_FRAME_FLAG_ACK)) {
+        chunkBuf[curr] = SDT_FRAME_TYPE_PING;
+        curr += 1;
+        chunk->mIsPingPkt = 1;
+      }
+      read += 8;
+      break;
+
+    case HTTP2_FRAME_TYPE_GOAWAY:
+      fprintf(stderr, "HTTP2_FRAME_TYPE_GOAWAY\n");
+      chunkBuf[curr] = SDT_FRAME_TYPE_GOAWAY;
+      curr += 1;
+      memcpy(chunkBuf + curr, buf + read + 4, 4);
+      curr += 4;
+      uint32_t sdtId;
+      memcpy(&sdtId, buf + read, 4);
+      sdtId = ntohl(sdtId);
+      // SDT id. Number 1 and 3 are reserved.
+      if (sdtId % 2) {
+        sdtId += 4;
+      }
+      sdtId = htonl(sdtId + 2);
+
+      memcpy(chunkBuf + curr, &sdtId, 4);
+      curr += 4;
+      memset(chunkBuf + curr, 0, 2);
+      curr += 2;
+      read += handle->hDataLen;
+      break;
+
+    case HTTP2_FRAME_TYPE_WINDOW_UPDATE:
+    {
+      fprintf(stderr, "HTTP2_FRAME_TYPE_WINDOW_UPDATE\n");
+      chunkBuf[curr] = SDT_FRAME_TYPE_WINDOW_UPDATE;
+      curr += 1;
+      uint32_t id = htonl(handle->hSDTStreamId);
+      memcpy(chunkBuf + curr, &id, 4);
+      curr += 4;
+      uint32_t increase;
+      memcpy(&increase, buf + read, 4);
+      read += 4;
+      increase = ntohl(increase);
+      struct hStream_t* stream = hFindStream(handle, handle->hSDTStreamId);
+      if (!stream) {
+        RemoveChunkFromBuffer(&handle->mSDTSendDataStr, chunk);
+        return SDTE_OUT_OF_MEMORY;
+      }
+      stream->mWindowSize += increase;
+      uint64_t offset;
+      offset = stream->mWindowSize;
+      offset = htonll(offset);
+      memcpy(chunkBuf + curr, &offset, 8);
+      curr += 8;
+      break;
+    }
+
+    case HTTP2_FRAME_TYPE_ALTSVC:
+      fprintf(stderr, "HTTP2_FRAME_TYPE_ALTSVC\n");
+      read += handle->hDataLen;
+      break;
+
+    case HTTP2_FRAME_TYPE_LAST:
+      fprintf(stderr, "HTTP2_FRAME_TYPE_LAST\n");
+      read += handle->hDataLen;
+      break;
+    default:
+      assert(0);
+  }
+
+  assert(curr == size);
+
+  return read;
+}
+
+static void
+WriteSDTCommonStreamFrameHeader(struct aPacket_t *pkt, uint8_t flags,
+                                uint32_t streamId, uint64_t offset,
+                                uint16_t len)
+{
+  unsigned char *pktbuf = (unsigned char *)(pkt + 1);
+
+  pktbuf[pkt->mWritten] = SDT_FRAME_TYPE_STREAM2;
+  pktbuf[pkt->mWritten] |= flags;
+  pkt->mWritten++;
+
+  streamId = htonl(streamId);
+  memcpy(pktbuf + pkt->mWritten, &streamId, 4);
+  pkt->mWritten += 4;
+
+  offset = htonll(offset);
+  memcpy(pktbuf + pkt->mWritten, &offset, 8);
+  pkt->mWritten += 8;
+
+  len = htons(len);
+  memcpy(pktbuf + pkt->mWritten, &len, 2);
+  pkt->mWritten += 2;
+}
+
+// Header frame have additional header, i.e. stream id.
+static void
+WriteSDTHeaderFrameHeader(struct aPacket_t *pkt, uint8_t flags, uint8_t type,
+                          uint32_t streamId, uint16_t len)
+{
+  unsigned char *pktbuf = (unsigned char *)(pkt + 1);
+
+  // I am not sure about this, I understood it like this.
+  pktbuf[pkt->mWritten] = 0;
+  pkt->mWritten += 1;
+  len = htons(len);
+  memcpy(pktbuf + pkt->mWritten, &len, 2);
+  pkt->mWritten += 2;
+
+  pktbuf[pkt->mWritten] = type; // HEADER or CONTINUATION
+  pkt->mWritten += 1;
+
+  pktbuf[pkt->mWritten] = flags;
+  pkt->mWritten += 1;
+
+  streamId = htonl(streamId);
+  memcpy(pktbuf + pkt->mWritten, &streamId, 4);
+  pkt->mWritten += 4;
+}
+
+static int32_t
+DecodeH2Frames(struct sdt_t *handle, const unsigned char *buf, uint32_t amount)
+{
+  LogBuffer("DecodeH2Frames", buf, amount);
 
   uint8_t done = 0;
-  unsigned char *pktbuf = (unsigned char *)(pkt + 1);
-  *read = 0;
-  pkt->mSize = 0;
+  int32_t read = 0;
 
+  // TODO: SDT will send the setting as part of tls handshake.
   if (!handle->hMagicHello) {
     // 24 + 4
     if (amount < 28) {
@@ -2480,298 +3978,99 @@ h22sdt(struct sdt_t *handle, struct aPacket_t *pkt, const unsigned char *buf,
         assert(0);
       }
       handle->hMagicHello = 1;
-      *read = 24;
+      read = 24;
       // check if next frame is setting, it must be!
-      assert(((uint8_t*)buf)[*read + 3] == HTTP2_FRAME_TYPE_SETTINGS);
+      assert(((uint8_t*)buf)[read + 3] == HTTP2_FRAME_TYPE_SETTINGS);
       // ignore but sinulate a SETTING frame
-      hMakeSettingsSettingsAckFrame(handle, 0);
-      handle->hSettingRecv = 1;
+      int rc = hMakeSettingsSettingsAckFrame(handle, 0);
+      if (rc) {
+        return rc;
+      }
     }
   }
 
-  while (!done && ((pkt->mSize < handle->cleartextpayloadsize) ||
-                   (handle->hState == SDT_H2S_PADDING))) {
-
+  while (!done && (amount - read)) {
     switch (handle->hState) {
       case SDT_H2S_NEWFRAME:
       {
         // If we do not have the whole http2 header, we cannot do much.
-        if ((amount - *read) < HTTP2_HEADERLEN) {
+        if ((amount - read) < HTTP2_HEADERLEN) {
           done = 1;
           continue;
         }
 
-        handle->hType = ((uint8_t*)buf)[*read + 3];
-        handle->hFlags = ((uint8_t*)buf)[*read + 3 + 1];
-
-        // Check if we have place for a sdt frame in the out going buffer.
-        if (hSDTFrameOrHeaderLen(handle->hType, handle->hFlags) >
-            (handle->cleartextpayloadsize - pkt->mSize)) {
-          done = 1;
-          continue;
-        }
-        memcpy(&handle->hDataLen, buf + *read + 1, 2);
-        handle->hDataLen = ntohs(handle->hDataLen);
-        handle->hFlags = ((uint8_t*)buf)[*read + 3 + 1];
+        // Decode h2 common header.
+        decodeH2Header(handle, buf + read);
         handle->hPadding = 0;
-        uint16_t len;
-        if ((handle->hType == HTTP2_FRAME_TYPE_DATA) ||
-            (handle->hType == HTTP2_FRAME_TYPE_HEADERS) ||
-            (handle->hType == HTTP2_FRAME_TYPE_CONTINUATION)) {
 
-          //Padding length.
+        // We will decode control packets only if the complete h2 frame is in
+        // the buffer. For other frames we want to have only the complete
+        // header and the padding info.
+
+        if (IsH2ControlFrame(handle->hType)) {
+          if ((amount - read) < (HTTP2_HEADERLEN + handle->hDataLen)) {
+            done = 1;
+            continue;
+          }
+        } else {
+          // Decode Padding for DATA, HEADER and CONTINUATION frame.
+          handle->hPadding = 0;
           if (handle->hFlags & 0x08) {
-            if ((amount - *read) < (HTTP2_HEADERLEN + 1)) {
+            if ((amount - read) < (HTTP2_HEADERLEN + 1)) {
               done = 1;
               continue;
             }
-            handle->hPadding = ((uint8_t*)buf)[*read + HTTP2_HEADERLEN];
+            handle->hPadding = ((uint8_t*)buf)[read + HTTP2_HEADERLEN];
             // fix data length.
             handle->hDataLen -= 1;
             handle->hDataLen -= handle->hPadding;
           }
-          len = handle->cleartextpayloadsize - pkt->mSize -
-                hSDTFrameOrHeaderLen(handle->hType, 0);
-          len = (len > (handle->hDataLen)) ?
-                 (handle->hDataLen) : len;
+        }
+
+        // After h2 common header and padding are decoded we can move on
+        read += HTTP2_HEADERLEN + ((handle->hPadding) ? 1 : 0);
+        if (IsH2ControlFrame(handle->hType)) {
+          int rc = MakeSDTControlFrameFromH2AndQueueIt(handle, buf + read);
+          if (rc < 0) {
+            return rc;
+          }
+          read += rc;
         } else {
-          len = handle->hDataLen;
-        }
+          handle->hCurrentDataChunk =
+            CreateDataChunk(&handle->mSDTSendDataStr,
+                            (handle->hType == HTTP2_FRAME_TYPE_DATA) ? DATA_CHUNK : HEADER_CHUNK,
+                             handle->hSDTStreamId, handle->hDataLen,
+                             handle->hFlags,
+                             (handle->hType == HTTP2_FRAME_TYPE_CONTINUATION));
 
-        // Maybe optimize this.
-        if ((amount - *read) < (len + HTTP2_HEADERLEN +
-                              ((handle->hPadding) ? 1 : 0))) {
-          done = 1;
-          continue;
-        }
-
-        uint32_t http2StreamId;
-        memcpy(&http2StreamId, buf + *read + 3 + 1 + 1, 4);
-        http2StreamId = ntohl(http2StreamId);
-        *read += HTTP2_HEADERLEN;
-        *read = *read + ((handle->hPadding) ? 1 : 0);
-
-        // Find stream info.
-        handle->hCurrentStream = hFindOutgoingStream(handle, http2StreamId);
-
-        // SDT id. Number 1 and 3 are reserved.
-        handle->hSDTStreamId = http2StreamId;
-        if (http2StreamId % 2) {
-          handle->hSDTStreamId += 4;
-        }
-
-        handle->hSDTStreamId = htonl(handle->hSDTStreamId);
-
-        switch (handle->hType) {
-          case HTTP2_FRAME_TYPE_DATA:
-          case HTTP2_FRAME_TYPE_HEADERS:  // header/continuation frames are not documented good.
-          case HTTP2_FRAME_TYPE_CONTINUATION:
-          {
-            fprintf(stderr, "HTTP2_FRAME_TYPE_DATA or HEADERS or "
-                            "CONTINUATION\n");
-            handle->hState = SDT_H2S_FILLFRAME;
-            break;
+          if (!handle->hCurrentDataChunk) {
+            return SDTE_OUT_OF_MEMORY;
           }
 
-          case HTTP2_FRAME_TYPE_PRIORITY:
-            fprintf(stderr, "HTTP2_FRAME_TYPE_PRIORITY\n");
-            // Priority is not described readly.
-            pktbuf[pkt->mSize] = SDT_FRAME_TYPE_PRIORITY;
-            pkt->mSize += 1;
-            memcpy(pktbuf + pkt->mSize, &handle->hSDTStreamId, 4);
-            pkt->mSize += 4;
-            memcpy(pktbuf + pkt->mSize, buf + *read, 5);
-            *read += 5;
-            pkt->mSize += 5;
-            break;
-
-          case HTTP2_FRAME_TYPE_RST_STREAM:
-          {
-            fprintf(stderr, "HTTP2_FRAME_TYPE_RST_STREAM\n");
-            pktbuf[pkt->mSize] = SDT_FRAME_TYPE_RST_STREAM;
-            pkt->mSize += 1;
-            memcpy(pktbuf + pkt->mSize, &handle->hSDTStreamId, 4);
-            pkt->mSize += 4;
-            uint64_t offset = htonll(handle->hCurrentStream->mNextOffset);
-            memcpy(pktbuf + pkt->mSize, &offset, 8);
-            pkt->mSize += 8;
-            memcpy(pktbuf + pkt->mSize, buf + *read, 4);
-            pkt->mSize += 4;
-            *read += len;
-            break;
-          }
-
-          case HTTP2_FRAME_TYPE_SETTINGS:
-            {
-              fprintf(stderr, "HTTP2_FRAME_TYPE_SETTINGS\n");
-              if (handle->hFlags & HTTP2_FRAME_FLAG_ACK) {
-                // ignore ack.
-              } else {
-                // ignore but make a SETTING ACK frame
-                hMakeSettingsSettingsAckFrame(handle, 1);
-                handle->hSettingRecv = 1;
-              }
-              *read += len;
-            }
-            break;
-          case HTTP2_FRAME_TYPE_PUSH_PROMISE:
-            fprintf(stderr, "HTTP2_FRAME_TYPE_PUSH_PROMISE\n");
-            assert(0);
-
-          case HTTP2_FRAME_TYPE_PING:
-            fprintf(stderr, "HTTP2_FRAME_TYPE_PING\n");
-            if (!(handle->hFlags & HTTP2_FRAME_FLAG_ACK)) {
-              pktbuf[pkt->mSize] = SDT_FRAME_TYPE_PING;
-              pkt->mSize += 1;
-              pkt->mIsPingPkt = 1;
-            }
-            *read += 8;
-            break;
-
-          case HTTP2_FRAME_TYPE_GOAWAY:
-            fprintf(stderr, "HTTP2_FRAME_TYPE_GOAWAY\n");
-            pktbuf[pkt->mSize] = SDT_FRAME_TYPE_GOAWAY;
-            pkt->mSize += 1;
-            memcpy(pktbuf + pkt->mSize, buf + *read + 4, 4);
-            pkt->mSize += 4;
-            uint32_t sdtId;
-            memcpy(&sdtId, buf + *read, 4);
-            sdtId = ntohl(sdtId);
-            // SDT id. Number 1 and 3 are reserved.
-            if (sdtId % 2) {
-              sdtId += 4;
-            }
-            sdtId = htonl(sdtId + 2);
-
-            memcpy(pktbuf + pkt->mSize, &sdtId, 4);
-            pkt->mSize += 4;
-            memset(pktbuf + pkt->mSize, 0, 2);
-            pkt->mSize += 2;
-            *read += len;
-            break;
-
-          case HTTP2_FRAME_TYPE_WINDOW_UPDATE:
-            fprintf(stderr, "HTTP2_FRAME_TYPE_WINDOW_UPDATE\n");
-            pktbuf[pkt->mSize] = SDT_FRAME_TYPE_WINDOW_UPDATE;
-            pkt->mSize += 1;
-            memcpy(pktbuf + pkt->mSize, &handle->hSDTStreamId, 4);
-            pkt->mSize += 4;
-            uint32_t increase;
-            memcpy(&increase, buf + *read, 4);
-            *read += 4;
-            increase = ntohl(increase);
-            struct hStream_t* stream = hFindStream(handle, http2StreamId);
-            stream->mWindowSize += increase;
-            uint64_t offset;
-            offset = stream->mWindowSize;
-            offset = htonll(offset);
-            memcpy(pktbuf + pkt->mSize, &offset, 8);
-            pkt->mSize += 8;
-            break;
-
-          case HTTP2_FRAME_TYPE_ALTSVC:
-            fprintf(stderr, "HTTP2_FRAME_TYPE_ALTSVC\n");
-            *read += len;
-            break;
-
-          case HTTP2_FRAME_TYPE_LAST:
-            fprintf(stderr, "HTTP2_FRAME_TYPE_LAST\n");
-            *read += len;
-            break;
-
+          fprintf(stderr, "HTTP2_FRAME_TYPE_DATA or HEADERS or "
+                          "CONTINUATION\n");
+          handle->hState = SDT_H2S_FILLFRAME;
         }
         break;
       }
       case SDT_H2S_FILLFRAME:
       {
         fprintf(stderr, "SDT_H2S_FILLFRAME\n");
-        assert((handle->hType == HTTP2_FRAME_TYPE_DATA) ||
-               (handle->hType == HTTP2_FRAME_TYPE_HEADERS) ||
-               (handle->hType == HTTP2_FRAME_TYPE_CONTINUATION));
+        assert(!IsH2ControlFrame(handle->hType));
 
-        uint16_t toRead;
-        toRead = handle->cleartextpayloadsize - pkt->mSize -
-                 hSDTFrameOrHeaderLen(HTTP2_FRAME_TYPE_DATA, 0);
-        if (handle->hType != HTTP2_FRAME_TYPE_DATA) {
-          toRead -= HTTP2_HEADERLEN;
+        uint16_t toRead = ((amount - read) > handle->hDataLen) ?
+          handle->hDataLen : (amount - read);
+
+        int32_t rv = WriteDataToDataChunk(&handle->mSDTSendDataStr,
+                                          handle->hCurrentDataChunk, buf + read,
+                                          toRead);
+        if (rv < 0) {
+          return rv;
         }
 
-        toRead = (toRead > handle->hDataLen) ? handle->hDataLen : toRead;
+        assert(rv == toRead);
 
-        // Maybe optimize this.
-        if ((amount - *read) < toRead) {
-          done = 1;
-          continue;
-        }
-
-        pktbuf[pkt->mSize] = SDT_FRAME_TYPE_STREAM2;
-
-        if (handle->hType == HTTP2_FRAME_TYPE_DATA) {
-          if ((handle->hFlags & HTTP2_FRAME_FLAG_END_STREAM) &&
-              (handle->hDataLen == toRead)) {
-            pktbuf[pkt->mSize] |= SDT_FIN_BIT;
-          }
-        }
-        pkt->mSize += 1;
-
-        if (handle->hType == HTTP2_FRAME_TYPE_DATA) {
-          memcpy(pktbuf + pkt->mSize, &handle->hSDTStreamId, 4);
-        } else {
-          uint32_t id = htonl(3);
-          memcpy(pktbuf + pkt->mSize, &id, 4);
-        }
-        pkt->mSize += 4;
-
-        uint64_t offset;
-        if (handle->hType == HTTP2_FRAME_TYPE_DATA) {
-          offset = htonll(handle->hCurrentStream->mNextOffset);
-        } else {
-          offset = htonll(handle->hOutgoingHeaders->mNextOffset);
-        }
-        memcpy(pktbuf + pkt->mSize, &offset, 8);
-        pkt->mSize += 8;
-
-        uint16_t len = toRead;
-        if (handle->hType != HTTP2_FRAME_TYPE_DATA) {
-          len += HTTP2_HEADERLEN;
-        }
-
-        if (handle->hType == HTTP2_FRAME_TYPE_DATA) {
-          handle->hCurrentStream->mNextOffset += len;
-        } else {
-          handle->hOutgoingHeaders->mNextOffset += len;
-        }
-        handle->hOffsetAll += len; // Needed for WINDOW_UPDATE.
-
-        len = htons(len);
-        memcpy(pktbuf + pkt->mSize, &len, 2);
-        pkt->mSize += 2;
-
-        if (handle->hType != HTTP2_FRAME_TYPE_DATA) {
-          // I am not sure about this, I understood it like this.
-          pktbuf[pkt->mSize] = 0;
-          pkt->mSize += 1;
-          len = toRead;
-          len = htons(len);
-          memcpy(pktbuf + pkt->mSize, &len, 2);
-          pkt->mSize += 2;
-          pktbuf[pkt->mSize] = handle->hType;
-          pkt->mSize += 1;
-          pktbuf[pkt->mSize] = handle->hFlags & HTTP2_FRAME_FLAG_PRIORITY;
-          handle->hFlags &= ~HTTP2_FRAME_FLAG_PRIORITY; // only on the first one.
-          handle->hType = HTTP2_FRAME_TYPE_CONTINUATION; // The next one must be HTTP2_FRAME_TYPE_CONTINUATION.
-          if (handle->hDataLen == toRead) {
-            pktbuf[pkt->mSize] |= (handle->hFlags & (HTTP2_FRAME_FLAG_END_STREAM |
-                                                     HTTP2_FRAME_FLAG_END_HEADERS));
-          }
-          pkt->mSize += 1;
-          memcpy(pktbuf + pkt->mSize, &handle->hSDTStreamId, 4);
-          pkt->mSize += 4;
-        }
-
-        memcpy(pktbuf + pkt->mSize, buf + *read, toRead);
-        pkt->mSize += toRead;
-        *read += toRead;
+        read += toRead;
         assert(handle->hDataLen >= toRead);
         handle->hDataLen -= toRead;
 
@@ -2787,12 +4086,11 @@ h22sdt(struct sdt_t *handle, struct aPacket_t *pkt, const unsigned char *buf,
       case SDT_H2S_PADDING:
       {
         fprintf(stderr, "SDT_H2S_PADDING\n");
-        assert((handle->hType == HTTP2_FRAME_TYPE_DATA) ||
-               (handle->hType == HTTP2_FRAME_TYPE_HEADERS) ||
-               (handle->hType == HTTP2_FRAME_TYPE_CONTINUATION));
-        uint32_t len = ((amount - *read) > handle->hPadding) ?
-                       handle->hPadding : (amount - *read);
-        *read += len;
+        assert(!IsH2ControlFrame(handle->hType));
+
+        uint32_t len = ((amount - read) > handle->hPadding) ?
+                       handle->hPadding : (amount - read);
+        read += len;
         assert(handle->hPadding >= len);
         handle->hPadding -= len;
         if (!handle->hPadding) {
@@ -2804,8 +4102,99 @@ h22sdt(struct sdt_t *handle, struct aPacket_t *pkt, const unsigned char *buf,
         assert(0);
     }
   }
+  return read;
+}
 
-  LogBuffer("h22sdt buffer ", pktbuf, pkt->mSize);
+static int32_t
+MaybeQueueData(struct sdt_t *handle, const unsigned char *buf, uint32_t amount)
+{
+  if (!amount || DataQueueFull(&handle->mSDTSendDataStr)) {
+    return SDTE_OK;
+  }
+
+  PR_STATIC_ASSERT((handle->cleartextpayloadsize) <= SDT_MTU);
+
+  return DecodeH2Frames(handle, buf, amount);
+}
+
+static int32_t
+PreparePacketDataAndAck(struct sdt_t *handle, struct aPacket_t *pkt)
+{
+  if (DoWeNeedToSendAck(handle)) {
+    MakeAckPkt(handle, pkt);
+  }
+
+  return PreparePacket(&handle->mSDTSendDataStr, pkt, handle->aNextPacketId);
+}
+
+static int32_t
+MaybeSendPacket(PRFileDesc *fd, struct sdt_t *handle)
+{
+  // 1) Check if a timer expired
+  CheckRetransmissionTimers(handle);
+  if (handle->numOfRTORetrans > aMaxNumOfRTORetrans) {
+    PR_SetError(PR_IO_TIMEOUT_ERROR, 0);
+    return -1;
+  }
+
+  if (!cc->CanSend(handle) ||
+      (!HasDataForTransmission(&handle->mSDTSendDataStr) &&
+       !DoWeNeedToSendAck(handle))) {
+    PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
+    return -1;
+  }
+
+  // 3) Send a packet.
+  // Because of the congestion control we need to send as much as we can.
+  // (SocketTransport we call read, then write then read... on the socket.
+  //  If ack arrives and increases cwnd, write must be called more than once
+  //  to send as much as we can. If we do not do that, if we call it just
+  //  once bytes_in_flights will be less than cwnd and on the next ack cc is
+  //  app limited.)
+  struct aPacket_t *pkt =
+    (struct aPacket_t *) malloc (sizeof(struct aPacket_t) +
+                                 handle->cleartextpayloadsize);
+  if (!pkt) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+  pkt->mSize = handle->cleartextpayloadsize;
+
+  int32_t rv = 0;
+  do {
+    pkt->mWritten = 0;
+
+    rv = PreparePacketDataAndAck(handle, pkt);
+    if (rv) {
+      free(pkt);
+    }
+
+    if (pkt->mWritten) {
+      unsigned char *pktBuf = (unsigned char *)(pkt + 1);
+
+      rv = fd->lower->methods->write(fd->lower,
+                                     pktBuf,
+                                     pkt->mWritten);
+
+      LogBuffer("MaybeSendPacket - pkt buffer: ", pktBuf, pkt->mWritten);
+      fprintf(stderr, "MaybeSendPacket rv=%d\n", rv);
+
+      if ((rv > 0) && PacketSent(&handle->mSDTSendDataStr, 1)) {
+        // We have sent a packet!
+
+        // Start rto timer if needed. The RTO timer is started only for data
+        // packets.
+        MaybeStartRTOTimer(handle);
+      } else {
+        // Packet has not been sent, so remove it.
+        PacketSent(&handle->mSDTSendDataStr, 0);
+      }
+    }
+  } while (pkt->mWritten && (rv > 0) &&
+           HasDataForTransmission(&handle->mSDTSendDataStr) &&
+           cc->CanSend(handle));
+
+  free(pkt);
+  return rv;
 }
 
 static int32_t
@@ -2819,11 +4208,6 @@ aLayerWrite(PRFileDesc *fd, const void *buf, int32_t amount)
 
   fprintf(stderr, "%d aLayerWrite state=%d amount=%d [%p]\n", PR_IntervalNow(),
           handle->state, amount, (void *)handle);
-  fprintf(stderr, "%d aLayerWrite aTransmissionQueue= %d "
-          "aRetransmissionQueue=%d mMaxBufferedPkt=%d\n",
-          PR_IntervalNow(), handle->aTransmissionQueue.mLen,
-          handle->aRetransmissionQueue.mLen, handle->mMaxBufferedPkt);
-
   switch (handle->state) {
   case SDT_CONNECTING:
     {
@@ -2849,118 +4233,21 @@ aLayerWrite(PRFileDesc *fd, const void *buf, int32_t amount)
   case SDT_TRANSFERRING:
     {
 
-      fprintf(stderr, "aLayerWrite state=SDT_TRANSFERRING queued=%d max=%d\n",
-              handle->aTransmissionQueue.mLen +
-              handle->aRetransmissionQueue.mLen,
-              handle->mMaxBufferedPkt );
-      uint32_t dataRead = 0;
+      fprintf(stderr, "aLayerWrite state=SDT_TRANSFERRING\n");
 
-      // 1) Accept new data if there is space
-      if (amount && ((handle->aTransmissionQueue.mLen +
-           handle->aRetransmissionQueue.mLen) < handle->mMaxBufferedPkt)) {
+      // Queue data for transmission!
+      int32_t dataRead = MaybeQueueData(handle, buf, amount);
+      fprintf(stderr, "aLayerWrite: data read %d\n", dataRead);
 
-        PR_STATIC_ASSERT((handle->cleartextpayloadsize) <= SDT_MTU);
-
-        struct aPacket_t *pkt =
-          (struct aPacket_t *) malloc (sizeof(struct aPacket_t) +
-                                       handle->cleartextpayloadsize);
-
-        pkt->mIdsNum = 0;
-        pkt->mForRetransmission = 0;
-        pkt->mSize = 0;
-        pkt->mIsPingPkt = 0;
-
-        h22sdt(handle, pkt, buf, amount, &dataRead);
-        unsigned char *pktbuf = (unsigned char *)(pkt + 1);
-        LogBuffer("h22sdt buffer ", pktbuf, pkt->mSize);
-        fprintf(stderr, "aLayerWrite: data read %d written %d\n",
-                dataRead, pkt->mSize);
-        if (pkt->mSize > 0) {
-          PacketQueueAddNew(&handle->aTransmissionQueue, pkt);
-        } else {
-          free (pkt);
-        }
+      if (dataRead < 0) {
+        return dataRead;
       }
 
-      // 2) Check if a timer expired
-      CheckRetransmissionTimers(handle);
-      if (handle->numOfRTORetrans > aMaxNumOfRTORetrans) {
-        PR_SetError(PR_IO_TIMEOUT_ERROR, 0);
-        return -1;
+      int32_t rv = MaybeSendPacket(fd, handle);
+      if (rv <= 0 && (PR_GetError() != PR_WOULD_BLOCK_ERROR)) {
+        return rv;
       }
 
-      // 3) Send a packet.
-      // Because of the congestion control we need to send as much as we can.
-      // (SocketTransport we call read, then write then read... on the socket.
-      //  If ack arrives and increases cwnd, write must be call more than once
-      //  to send as mach as we can. If we do not do that, if we call it just
-      //  once bytes_in_fligts will be less than cwnd and on the next ack cc is
-      //  app limited.)
-      if (RetransmitQueued(handle)) {
-        handle->aPktTransmit = handle->aRetransmissionQueue.mFirst;
-      } else {
-        handle->aPktTransmit = handle->aTransmissionQueue.mFirst;
-      }
-      int32_t rv = 0;
-
-      while ((rv > -1) && handle->aPktTransmit) {
-        unsigned char *pktbuf = (unsigned char *)(handle->aPktTransmit + 1);
-//LogBuffer("aLayerSendTo pkt ", buf, amount + sizeof(struct aPacket_t));
-        rv = fd->lower->methods->write(fd->lower,
-                                       pktbuf,
-                                       handle->aPktTransmit->mSize);
-        if (rv < 0) {
-          handle->aPktTransmit = NULL;
-          PRErrorCode errCode = PR_GetError();
-          if (errCode != PR_WOULD_BLOCK_ERROR) {
-            return rv;
-          }
-        } else {
-          // Start rto timer if needed. RTO timere is started only for data
-          // packets.
-          MaybeStartRTOTimer(handle);
-
-          fprintf(stderr, "LayerSendTo amount=%d newDataRead=%d pkt_sz=%d "
-                  "rv=%d pkt=%p number_of_ids=%d\n",
-                  amount, dataRead, handle->aPktTransmit->mSize, rv,
-                  (void *)handle->aPktTransmit, handle->aPktTransmit->mIdsNum);
-
-//        buf = (unsigned char *)(handle->aPktTransmit);
-//        LogBuffer("aLayerSendTo pkt 2", buf,
-//                  handle->aPktTransmit->mSize + sizeof(struct aPacket_t));
-
-          if (!handle->aPktTransmit->mForRetransmission) {
-            PacketQueueRemoveFirstPkt(&handle->aTransmissionQueue);
-          } else {
-            PacketQueueRemoveFirstPkt(&handle->aRetransmissionQueue);
-            handle->aPktTransmit->mForRetransmission = 0;
-          }
-          PacketQueueAddNew(&handle->aRetransmissionQueue, handle->aPktTransmit);
-
-          if (RetransmitQueued(handle)) {
-            handle->aPktTransmit = handle->aRetransmissionQueue.mFirst;
-          } else {
-            handle->aPktTransmit = handle->aTransmissionQueue.mFirst;
-          }
-        }
-      }
-
-      // 4) Send an ack if necessary.
-      if (DoWeNeedToSendAck(handle)) {
-        struct aPacket_t *pkt = MakeAckPkt(handle);
-        unsigned char *buf = (unsigned char *)(pkt + 1);
-        int rv = fd->lower->methods->write(fd->lower,
-                                           buf,
-                                           pkt->mSize);
-        free(pkt);
-
-        if (rv < 0) {
-          PRErrorCode errCode = PR_GetError();
-          if (errCode != PR_WOULD_BLOCK_ERROR) {
-            return rv;
-          }
-        }
-      }
       if (dataRead) {
         return dataRead;
       } else {
@@ -2968,6 +4255,7 @@ aLayerWrite(PRFileDesc *fd, const void *buf, int32_t amount)
         return -1;
       }
     }
+    break;
   case SDT_CLOSING:
     // TODO CLOSING part!!!
     assert (0);
@@ -2976,7 +4264,7 @@ aLayerWrite(PRFileDesc *fd, const void *buf, int32_t amount)
   return -1;
 }
 
-int
+static int
 qAllowSend(struct sdt_t *handle)
 {
   // first update credits
@@ -2992,7 +4280,7 @@ qAllowSend(struct sdt_t *handle)
   return (handle->qCredits >= handle->qPacingRate);
 }
 
-void
+static void
 qChargeSend(struct sdt_t *handle)
 {
   if (handle->qCredits < handle->qPacingRate) {
@@ -3031,12 +4319,8 @@ qLayerWrite(PRFileDesc *fd, const void *buf, int32_t amount)
   // If we can send according to cwnd, this is an ack, a retransmission or
   // we are writnig 0 bytes.
   int32_t rv = -1;
-  if (cc->CanSend(handle) || !handle->aPktTransmit || !amount) {
+  if (cc->CanSend(handle) || !amount) {
     rv = fd->lower->methods->write(fd->lower, buf, amount);
-    if ((rv > 0) && handle->aPktTransmit) {
-      cc->OnPacketSent(handle, handle->aPktTransmit->mIds[handle->aPktTransmit->mIdsNum - 1].mSeq,
-                       handle->aPktTransmit->mSize + DTLS_PART + handle->publicHeader);
-    }
     return rv;
   } else {
     PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
@@ -3159,7 +4443,7 @@ aLayerPoll(PRFileDesc *fd, PRInt16 how_flags, PRInt16 *p_out_flags)
   if (handle->state == SDT_TRANSFERRING) {
     if ((how_flags & PR_POLL_WRITE) &&
         !(NeedToSendRetransmit(handle) ||
-          handle->aTransmissionQueue.mLen ||
+          HasDataForTransmission(&handle->mSDTSendDataStr) ||
           DoWeNeedToSendAck(handle))) {
 
       how_flags ^= PR_POLL_WRITE;
@@ -3213,11 +4497,11 @@ sdt_SocketWritable(PRFileDesc * fd)
     return 0;
   }
 
-  return ((handle->aTransmissionQueue.mLen + handle->aRetransmissionQueue.mLen)
-          < handle->mMaxBufferedPkt);
+  return !DataQueueFull(&handle->mSDTSendDataStr);
 }
 
 static int sdt_once = 0;
+
 void
 sdt_ensureInit()
 {
