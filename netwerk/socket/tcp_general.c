@@ -38,9 +38,11 @@ sdt_cc_Init(struct sdt_cc_t *ccData)
   ccData->snd_cwnd = TCP_IW;
   ccData->cwnd_cnt = 0;
   ccData->snd_ssthresh = initial_ssthresh;
+  ccData->rtt_min = 0;
   ccData->snd_prior_cwnd = 0;
   ccData->snd_prior_ssthresh = 0;
   ccData->waitForRetransmit = 0;
+  ccData->last_packet_sent_at_loss_event = 0;
   cc->Init(&ccData->cc_data);
   slowstart->Init(&ccData->cc_data, ccData);
 }
@@ -96,9 +98,8 @@ sdt_cc_OnPacketAcked(struct sdt_cc_t *ccData,
                          uint8_t hasRtt) // hasRtt needed because we need to differentiate between not existing rtt and 0 value.
 {
   assert(ccData->bytes_in_flight >= packetSize);
-  fprintf(stderr, "sdt_cc_OnPacketAcked %d %d\n", packetId, rtt);
 
-  if (hasRtt && ((ccData->last_sent == 0) || ccData->rtt_min > rtt)) {
+  if (hasRtt && ((ccData->largest_ack == 0) || ccData->rtt_min > rtt)) {
     ccData->rtt_min = rtt;
   }
 

@@ -44,8 +44,8 @@
 /* Number of delay samples for detecting the increase of delay */
 #define HYSTART_MIN_SAMPLES 8
 
-// in quick the following 2 values are 2 and 16
-#define HYSTART_DELAY_MIN PR_MillisecondsToInterval(2)
+// in the paper the following 2 values are 2 and 8, in linux they are 4 and 16ms
+#define HYSTART_DELAY_MIN PR_MillisecondsToInterval(4)
  //(4U<<3)
 #define HYSTART_DELAY_MAX PR_MillisecondsToInterval(16)
  //(16U<<3)
@@ -80,7 +80,12 @@ cubic_Reset(union sdt_cc_variation_t *cc)
   cc->cubic.epoch_start = 0;
   cc->cubic.ack_cnt = 0;
   cc->cubic.tcp_cwnd = 0;
+  cc->cubic.curr_rtt = 0;
   cc->cubic.found = 0;
+
+#ifdef DEBUG
+  cc->cubic.time = 0;
+#endif
 }
 
 // The next 3 functions are cbrt.
@@ -194,7 +199,12 @@ bictcp_update(struct cubic_t *ca, uint32_t cwnd, PRIntervalTime rtt_min)
   uint64_t offs, t;
 
   ca->ack_cnt++; /* count the number of ACKed packets */
+
+#ifdef DEBUG
+  PRIntervalTime now = (ca->time) ? ca->time : PR_IntervalNow();
+#else
   PRIntervalTime now = PR_IntervalNow();
+#endif
 
   if (ca->last_cwnd == cwnd &&
       (now - ca->last_time) <= PR_MillisecondsToInterval(30)) {
@@ -312,7 +322,13 @@ cubic_OnPacketAcked(union sdt_cc_variation_t *cc,
 
   /* Discard delay samples right after fast recovery */
   // Do update only for (PR_IntervalNow() - ca->epoch_start) >= 10
-  if (!ca->epoch_start || (int32_t)(PR_IntervalNow() - ca->epoch_start) >= 10) {
+#ifdef DEBUG
+  PRIntervalTime now = (ca->time) ? ca->time : PR_IntervalNow();
+#else
+  PRIntervalTime now = PR_IntervalNow();
+#endif
+
+  if (!ca->epoch_start || (int32_t)(now - ca->epoch_start) >= 10) {
     bictcp_update(ca, cwnd, sdt_cc_rtt_min(ccData));
   }
 
@@ -345,7 +361,13 @@ cubic_OnSendAfterIdle(union sdt_cc_variation_t *cc,
                       struct sdt_cc_t *ccData)
 {
   struct cubic_t *ca = &cc->cubic;
+
+#ifdef DEBUG
+  PRIntervalTime now = (ca->time) ? ca->time : PR_IntervalNow();
+#else
   PRIntervalTime now = PR_IntervalNow();
+#endif
+
   PRIntervalTime delta;
 
   delta = now - sdt_cc_last_time_sent(ccData);
@@ -364,7 +386,13 @@ cubic_OnSendAfterIdle(union sdt_cc_variation_t *cc,
 void
 hystart_Reset(struct cubic_t *cc, struct sdt_cc_t *ccData)
 {
-  cc->round_start = cc->last_ack = PR_IntervalNow();
+#ifdef DEBUG
+  PRIntervalTime now = (cc->time) ? cc->time : PR_IntervalNow();
+#else
+  PRIntervalTime now = PR_IntervalNow();
+#endif
+
+  cc->round_start = cc->last_ack = now;
   cc->end_seq = sdt_cc_last_sent(ccData);
   cc->curr_rtt = 0;
   cc->sample_cnt = 0;
@@ -384,7 +412,12 @@ hystart_update(struct cubic_t *ca,
   }
 
   if (hystart_detect & HYSTART_ACK_TRAIN) {
-    PRIntervalTime now = PR_IntervalNow();
+
+#ifdef DEBUG
+  PRIntervalTime now = (ca->time) ? ca->time : PR_IntervalNow();
+#else
+  PRIntervalTime now = PR_IntervalNow();
+#endif
 
     /* first detection parameter - ack-train detection */
     if ((int32_t)(now - ca->last_ack) <= (int32_t)PR_MillisecondsToInterval(hystart_ack_delta)) {
@@ -397,17 +430,20 @@ hystart_update(struct cubic_t *ca,
   }
 
   if (hystart_detect & HYSTART_DELAY) {
-    ca->sample_cnt++;
-    /* obtain the minimum delay of more than sampling packets */
-    if (ca->sample_cnt <= HYSTART_MIN_SAMPLES) {
-      if ((ca->sample_cnt == 1) || ca->curr_rtt > last_rtt) {
+    /* obtain the minimum delay of all sampling packets */
+    if (ca->sample_cnt < HYSTART_MIN_SAMPLES) {
+      if ((ca->sample_cnt == 0) || ca->curr_rtt > last_rtt) {
         ca->curr_rtt = last_rtt;
       }
-    }
-    if (ca->sample_cnt == HYSTART_MIN_SAMPLES) {
-      if (ca->curr_rtt > rtt_min + HYSTART_DELAY_THRESH(rtt_min >> 3)) {
-        ca->found |= HYSTART_DELAY;
-        ssthresh = cwnd;
+       ca->sample_cnt++;
+       // We need to check this only once per round!!!
+      if (ca->sample_cnt == HYSTART_MIN_SAMPLES) {
+        // in the paper rtt is devided by 16, but in linux it is 8.
+        // also in the paper thay use the last rtt sample instead of rtt_min.
+        if (ca->curr_rtt > rtt_min + HYSTART_DELAY_THRESH(rtt_min >> 3)) {
+          ca->found |= HYSTART_DELAY;
+          ssthresh = cwnd;
+        }
       }
     }
   }
@@ -431,7 +467,9 @@ hystart_OnPacketAcked(union sdt_cc_variation_t *cc,
     hystart_Reset(ca, ccData);
   }
 
-  /* hystart triggers when cwnd is larger than some threshold */
+  /* hystart triggers when cwnd is larger than some threshold, because i needs
+    to sample 8 acks and considdering a delayed ack hystart_low_window is set to
+    16. */
   if (cwnd >= hystart_low_window) {
     ssthresh = hystart_update(ca, ccData, last_rtt);
   }

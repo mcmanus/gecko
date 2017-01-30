@@ -29,6 +29,11 @@ struct cubic_t
   uint32_t end_seq;	/* end_seq of the round */
   PRIntervalTime last_ack;	/* last time when the ACK spacing is close */
   uint32_t curr_rtt;	/* the minimum rtt of current round */
+
+#ifdef DEBUG
+  // DEBUG
+  PRIntervalTime time; // This is time use for tests only!!!!
+#endif
 };
 
 union sdt_cc_variation_t
