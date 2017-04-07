@@ -36,6 +36,7 @@
 #include "nsNSSComponent.h"
 #include "nsPrintfCString.h"
 #include "nsServiceManagerUtils.h"
+#include "nsNetCID.h"
 #include "pkix/pkixtypes.h"
 #include "prmem.h"
 #include "prnetdb.h"
@@ -1803,6 +1804,7 @@ nsSSLIOLayerHelpers::treatUnsafeNegotiationAsBroken()
   MutexAutoLock lock(mutex);
   return mTreatUnsafeNegotiationAsBroken;
 }
+static NS_DEFINE_CID(kSocketProviderServiceCID, NS_SOCKETPROVIDERSERVICE_CID);
 
 nsresult
 nsSSLIOLayerNewSocket(int32_t family,
@@ -2352,7 +2354,14 @@ nsSSLIOLayerImportFD(PRFileDesc* fd,
                      const char* host)
 {
   nsNSSShutDownPreventionLock locker;
-  PRFileDesc* sslSock = SSL_ImportFD(nullptr, fd);
+  PRFileDesc* sslSock;
+  if (PR_GetDescType(PR_GetIdentitiesLayer(fd, PR_NSPR_IO_LAYER)) ==
+      PR_DESC_SOCKET_UDP) {
+    sslSock = DTLS_ImportFD(nullptr, fd);
+  } else {
+    sslSock = SSL_ImportFD(nullptr, fd);
+  }
+
   if (!sslSock) {
     MOZ_ASSERT_UNREACHABLE("NSS: Error importing socket");
     return nullptr;

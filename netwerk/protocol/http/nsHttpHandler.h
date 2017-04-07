@@ -110,6 +110,7 @@ public:
 
     bool           IsSpdyEnabled() { return mEnableSpdy; }
     bool           IsHttp2Enabled() { return mHttp2Enabled; }
+    bool           IsHttp2sdtEnabled() { return mHttp2sdtEnabled; }
     bool           EnforceHttp2TlsProfile() { return mEnforceHttp2TlsProfile; }
     bool           CoalesceSpdy() { return mCoalesceSpdy; }
     bool           UseSpdyPersistentSettings() { return mSpdyPersistentSettings; }
@@ -163,6 +164,8 @@ public:
     int32_t GetTCPKeepaliveLongLivedIdleTime() {
       return mTCPKeepaliveLongLivedIdleTimeS;
     }
+
+    uint32_t SdtChunkSize() { return mSdtChunkSize; }
 
     // returns the HTTP framing check level preference, as controlled with
     // network.http.enforce-framing.http1 and network.http.enforce-framing.soft
@@ -496,6 +499,7 @@ private:
 
     uint32_t           mEnableSpdy : 1;
     uint32_t           mHttp2Enabled : 1;
+    uint32_t           mHttp2sdtEnabled : 1;
     uint32_t           mUseH2Deps : 1;
     uint32_t           mEnforceHttp2TlsProfile : 1;
     uint32_t           mCoalesceSpdy : 1;
@@ -568,6 +572,7 @@ private:
 
     // The default size (in bytes) of the HPACK decompressor table.
     uint32_t mDefaultHpackBuffer;
+    uint32_t mSdtChunkSize;
 
     // The max size (in bytes) for received Http response header.
     uint32_t mMaxHttpResponseHeaderSize;

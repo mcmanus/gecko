@@ -8,7 +8,7 @@
 #include "HttpLog.h"
 
 /*
-  Currently supported is h2
+  Currently supported are h2 and h2s
 */
 
 #include "nsHttp.h"
@@ -37,7 +37,8 @@ ASpdySession::NewSpdySession(uint32_t version,
 {
   // This is a necko only interface, so we can enforce version
   // requests as a precondition
-  MOZ_ASSERT(version == HTTP_VERSION_2,
+  MOZ_ASSERT(version == HTTP_VERSION_2 ||
+             version == SDT_VERSION_1,
              "Unsupported spdy version");
 
   // Don't do a runtime check of IsSpdyV?Enabled() here because pref value
@@ -47,7 +48,12 @@ ASpdySession::NewSpdySession(uint32_t version,
 
   Telemetry::Accumulate(Telemetry::SPDY_VERSION2, version);
 
-  return new Http2Session(aTransport, version, attemptingEarlyData);
+  if (version == HTTP_VERSION_2) {
+    return new Http2Session(aTransport, version, attemptingEarlyData);
+  } else if (version == SDT_VERSION_1) {
+    // We use normal http2. A transformation from http2 to sdt is down the stack.
+    return new Http2Session(aTransport, version, attemptingEarlyData);
+  }
 }
 
 SpdyInformation::SpdyInformation()
@@ -57,6 +63,12 @@ SpdyInformation::SpdyInformation()
   Version[0] = HTTP_VERSION_2;
   VersionString[0] = NS_LITERAL_CSTRING("h2");
   ALPNCallbacks[0] = Http2Session::ALPNCallback;
+  IsMozSDT[1] = false;
+
+  Version[1] = SDT_VERSION_1;
+  VersionString[1] = NS_LITERAL_CSTRING("h2s");
+  ALPNCallbacks[1] = Http2Session::ALPNCallback;
+  IsMozSDT[1] = true;
 }
 
 bool
@@ -64,7 +76,13 @@ SpdyInformation::ProtocolEnabled(uint32_t index) const
 {
   MOZ_ASSERT(index < kCount, "index out of range");
 
-  return gHttpHandler->IsHttp2Enabled();
+  switch (index) {
+  case 0:
+    return gHttpHandler->IsHttp2Enabled();
+  case 1:
+    return gHttpHandler->IsHttp2sdtEnabled();
+  }
+  return false;
 }
 
 nsresult

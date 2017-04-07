@@ -681,7 +681,7 @@ nsHttpConnection::SetupSSL()
     // of this function
     mNPNComplete = true;
 
-    if (!mConnInfo->FirstHopSSL() || mForcePlainText) {
+    if (!(mConnInfo->FirstHopSSL() || mSocketTransport->IsMozSDT()) || mForcePlainText) {
         return;
     }
 
@@ -715,14 +715,17 @@ nsHttpConnection::SetupNPNList(nsISSLSocketControl *ssl, uint32_t caps)
         // For NPN, In the case of overlap, matching priority is driven by
         // the order of the server's advertisement - with index 0 used when
         // there is no match.
-        protocolArray.AppendElement(NS_LITERAL_CSTRING("http/1.1"));
+        if (!mSocketTransport->IsMozSDT()) {
+          protocolArray.AppendElement(NS_LITERAL_CSTRING("http/1.1"));
+        }
 
         if (gHttpHandler->IsSpdyEnabled() &&
             !(caps & NS_HTTP_DISALLOW_SPDY)) {
             LOG(("nsHttpConnection::SetupSSL Allow SPDY NPN selection"));
             const SpdyInformation *info = gHttpHandler->SpdyInfo();
             for (uint32_t index = SpdyInformation::kCount; index > 0; --index) {
-                if (info->ProtocolEnabled(index - 1) &&
+                if ((mSocketTransport->IsMozSDT() == info->IsMozSDT[index - 1]) &&
+                    info->ProtocolEnabled(index - 1) &&
                     info->ALPNCallbacks[index - 1](ssl)) {
                     protocolArray.AppendElement(info->VersionString[index - 1]);
                 }

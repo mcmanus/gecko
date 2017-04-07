@@ -842,4 +842,5 @@ if (envport !== undefined) {
     portSelection = -1;
   }
 }
-server.listen(portSelection, "0.0.0.0", 200, listenok);
+//server.listen(portSelection, "0.0.0.0", 200, listenok);
+server.listen(5300, "0.0.0.0", 200, listenok);

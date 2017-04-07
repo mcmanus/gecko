@@ -258,4 +258,16 @@ interface nsISocketTransport : nsITransport
     attribute boolean keepaliveEnabled;
     void setKeepaliveVals(in long keepaliveIdleTime,
                           in long keepaliveRetryInterval);
+
+    readonly attribute boolean MozSDT;
+
+%{ C++
+    inline bool IsMozSDT()
+    {
+        bool mozSDT;
+        nsresult rv = GetMozSDT(&mozSDT);
+        MOZ_ASSERT(NS_SUCCEEDED(rv));
+        return mozSDT;
+    }
+%}
 };

@@ -99,7 +99,7 @@ public:
   SpdyInformation();
   ~SpdyInformation() {}
 
-  static const uint32_t kCount = 1;
+  static const uint32_t kCount = 2;
 
   // determine the index (0..kCount-1) of the spdy information that
   // correlates to the npn string. NS_FAILED() if no match is found.
@@ -116,6 +116,7 @@ public:
   // that we will offer in the client hello (such as version). There has
   // not been a Server Hello received yet, so not much else can be considered.
   ALPNCallback ALPNCallbacks[kCount];
+  bool IsMozSDT[kCount];
 };
 
 } // namespace net

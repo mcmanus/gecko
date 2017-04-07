@@ -1,0 +1,6 @@
+#!/bin/sh
+CERTDIR=/tmp/sdt-proxy
+UTIL=../../obj-x86_64-pc-linux-gnu/dist/bin/certutil
+mkdir -p $CERTDIR
+$UTIL -N -d $CERTDIR
+$UTIL -S -d $CERTDIR -n sdt -u v -t C,C,C -s CN=std-proxy -x
