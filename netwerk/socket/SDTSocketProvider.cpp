@@ -42,7 +42,7 @@ using mozilla::LogLevel;
 
 namespace mozilla { namespace net {
 
-PRLogModuleInfo *gSDTLog = nullptr;
+LazyLogModule gSDTLog("sdt");
 #define LOG(args) MOZ_LOG(gSDTLog, mozilla::LogLevel::Debug, args)
 
 SDTSocketProvider::SDTSocketProvider()
@@ -58,7 +58,7 @@ SDTSocketProvider::NewSocket(int32_t family,
                              const char *host,
                              int32_t port,
                              nsIProxyInfo *proxy,
-                             const mozilla::NeckoOriginAttributes &aOriginAttributes,
+                             const OriginAttributes &aOriginAttributes,
                              uint32_t flags,
                              PRFileDesc **result,
                              nsISupports **securityInfo)
@@ -70,10 +70,6 @@ SDTSocketProvider::NewSocket(int32_t family,
   nsCOMPtr<nsISocketProviderService> spserv;
 
   nsresult rv;
-
-  if (!gSDTLog) {
-    gSDTLog = PR_NewLogModule("sdt");
-  }
 
   LOG(("SDTSocketProvider::NewSocket %p\n", this));
 
@@ -135,7 +131,7 @@ SDTSocketProvider::AddToSocket(int32_t family,
                                const char *host,
                                int32_t port,
                                nsIProxyInfo *proxy,
-                               const mozilla::NeckoOriginAttributes &aOriginAttributes,
+                               const OriginAttributes &aOriginAttributes,
                                uint32_t flags,
                                PRFileDesc *sock,
                                nsISupports **socksInfo)

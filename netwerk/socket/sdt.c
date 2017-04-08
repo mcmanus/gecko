@@ -18,6 +18,7 @@
 #include "tcp_general.h"
 
 // TODO connection reusing
+// TODO lots of compile warnings
 
 /*
 an SDT Socket

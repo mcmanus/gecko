@@ -9,8 +9,7 @@
 namespace mozilla {
 namespace net {
 
-
-extern PRLogModuleInfo *gSDTLog;
+extern LazyLogModule gSDTLog;
 
 SDTUpper::SDTUpper(PRFileDesc *aFd)
   : mFd(aFd)
