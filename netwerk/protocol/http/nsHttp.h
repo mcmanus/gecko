@@ -27,12 +27,12 @@ namespace mozilla {
 class Mutex;
 
 namespace net {
-    enum {
+    enum { // these need to fit in a uint_8
         // SPDY_VERSION_2 = 2, REMOVED
         // SPDY_VERSION_3 = 3, REMOVED
         // SPDY_VERSION_31 = 4, REMOVED
         HTTP_VERSION_2 = 5,
-        SDT_VERSION_1 = 6
+        //   QUIC_VERSION_1 = 6, this will be RFC
 
         // leave room for official versions. telem goes to 48
         // 24 was a internal spdy/3.1
@@ -43,6 +43,15 @@ namespace net {
         // 29 was http/2-draft13
         // 30 was h2-14 and h2-15
         // 31 was h2-16
+
+        // quic packet header would represent draft 0xXXXX as 0xff00XXXX
+        // v1 of RFC as 0x00000001 reserved to 0x0000ffff
+        // experiments can be had 0x00010000 -> 0xfeffffff
+        // For non ID, we can use experiment space
+        // moz space of f173f0cX (last 4 bits avil) should be registered in wiki
+        // https://github.com/quicwg/base-drafts/wiki/QUIC-Versions
+        QUIC_EXPERIMENT_0 = 32, // 0xF173f0C0 + 0
+        
     };
 
 typedef uint8_t nsHttpVersion;

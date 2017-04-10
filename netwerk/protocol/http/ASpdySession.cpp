@@ -39,8 +39,8 @@ ASpdySession::NewSpdySession(uint32_t version,
   // This is a necko only interface, so we can enforce version
   // requests as a precondition
   MOZ_ASSERT(version == HTTP_VERSION_2 ||
-             version == SDT_VERSION_1,
-             "Unsupported spdy version");
+             version == QUIC_EXPERIMENT_0,
+             "unsupported multistreamed transport");
 
   // Don't do a runtime check of IsSpdyV?Enabled() here because pref value
   // may have changed since starting negotiation. The selected protocol comes
@@ -52,7 +52,8 @@ ASpdySession::NewSpdySession(uint32_t version,
   if (version == HTTP_VERSION_2) {
     return new Http2Session(aTransport, version, attemptingEarlyData);
   }
-  MOZ_ASSERT(version == SDT_VERSION_1);
+  MOZ_ASSERT(version == QUIC_EXPERIMENT_0);
+  
   // We use normal http2. A transformation from http2 to sdt is down the stack.
   return new Http2Session(aTransport, version, attemptingEarlyData);
 }
@@ -66,7 +67,7 @@ SpdyInformation::SpdyInformation()
   ALPNCallbacks[0] = Http2Session::ALPNCallback;
   IsQUIC[1] = false;
 
-  Version[1] = SDT_VERSION_1;
+  Version[1] = QUIC_EXPERIMENT_0;
   VersionString[1] = NS_LITERAL_CSTRING("hq");
   ALPNCallbacks[1] = Http2Session::ALPNCallback;
   IsQUIC[1] = true;
