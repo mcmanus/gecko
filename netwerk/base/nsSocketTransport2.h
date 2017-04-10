@@ -466,7 +466,7 @@ private:
     int32_t mKeepaliveRetryIntervalS;
     int32_t mKeepaliveProbeCount;
 
-    bool mMozSdt;
+    bool mQUIC;
 };
 
 } // namespace net

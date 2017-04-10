@@ -64,12 +64,12 @@ SpdyInformation::SpdyInformation()
   Version[0] = HTTP_VERSION_2;
   VersionString[0] = NS_LITERAL_CSTRING("h2");
   ALPNCallbacks[0] = Http2Session::ALPNCallback;
-  IsMozSDT[1] = false;
+  IsQUIC[1] = false;
 
   Version[1] = SDT_VERSION_1;
   VersionString[1] = NS_LITERAL_CSTRING("h2s"); // todo hq
   ALPNCallbacks[1] = Http2Session::ALPNCallback;
-  IsMozSDT[1] = true;
+  IsQUIC[1] = true;
 }
 
 bool

@@ -116,7 +116,7 @@ public:
   // that we will offer in the client hello (such as version). There has
   // not been a Server Hello received yet, so not much else can be considered.
   ALPNCallback ALPNCallbacks[kCount];
-  bool IsMozSDT[kCount];
+  bool IsQUIC[kCount];
 };
 
 } // namespace net

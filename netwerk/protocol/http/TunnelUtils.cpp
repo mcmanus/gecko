@@ -1528,7 +1528,7 @@ SocketTransportShim::Bind(NetAddr *aLocalAddr)
 }
 
 NS_IMETHODIMP
-SocketTransportShim::GetMozSDT(bool *aMozSDT)
+SocketTransportShim::GetContainsQUIC(bool *)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
