@@ -79,7 +79,7 @@ AltSvcMapping::ProcessHeader(const nsCString &buf, const nsCString &originScheme
   for (uint32_t index = 0; index < parsedAltSvc.mValues.Length(); ++index) {
     uint32_t maxage = 86400; // default
     nsAutoCString hostname;
-    nsAutoCString npnToken;
+    nsAutoCString alpnToken;
     int32_t portno = originPort;
     bool clearEntry = false;
 
@@ -98,7 +98,7 @@ AltSvcMapping::ProcessHeader(const nsCString &buf, const nsCString &originScheme
         }
 
         // h2=[hostname]:443
-        npnToken = currentName;
+        alpnToken = currentName;
         int32_t colonIndex = currentValue.FindChar(':');
         if (colonIndex >= 0) {
           portno =
@@ -126,14 +126,14 @@ AltSvcMapping::ProcessHeader(const nsCString &buf, const nsCString &originScheme
 
     // unescape modifies a c string in place, so afterwards
     // update nsCString length
-    nsUnescape(npnToken.BeginWriting());
-    npnToken.SetLength(strlen(npnToken.BeginReading()));
+    nsUnescape(alpnToken.BeginWriting());
+    alpnToken.SetLength(strlen(alpnToken.BeginReading()));
 
     uint32_t spdyIndex;
     SpdyInformation *spdyInfo = gHttpHandler->SpdyInfo();
-    if (!(NS_SUCCEEDED(spdyInfo->GetNPNIndex(npnToken, &spdyIndex)) &&
+    if (!(NS_SUCCEEDED(spdyInfo->GetALPNIndex(alpnToken, &spdyIndex)) &&
           spdyInfo->ProtocolEnabled(spdyIndex))) {
-      LOG(("Alt Svc unknown protocol %s, ignoring", npnToken.get()));
+      LOG(("Alt Svc unknown protocol %s, ignoring", alpnToken.get()));
       continue;
     }
 
@@ -143,7 +143,7 @@ AltSvcMapping::ProcessHeader(const nsCString &buf, const nsCString &originScheme
                                                       originHost, originPort,
                                                       username, privateBrowsing,
                                                       NowInSeconds() + maxage,
-                                                      hostname, portno, npnToken,
+                                                      hostname, portno, alpnToken,
                                                       originAttributes);
     if (mapping->TTL() <= 0) {
       LOG(("Alt Svc invalid map"));
@@ -167,7 +167,7 @@ AltSvcMapping::AltSvcMapping(DataStorage *storage, int32_t epoch,
                              uint32_t expiresAt,
                              const nsACString &alternateHost,
                              int32_t alternatePort,
-                             const nsACString &npnToken,
+                             const nsACString &alpnToken,
                              const OriginAttributes &originAttributes)
   : mStorage(storage)
   , mStorageEpoch(epoch)
@@ -180,7 +180,7 @@ AltSvcMapping::AltSvcMapping(DataStorage *storage, int32_t epoch,
   , mExpiresAt(expiresAt)
   , mValidated(false)
   , mMixedScheme(false)
-  , mNPNToken(npnToken)
+  , mALPNToken(alpnToken)
   , mOriginAttributes(originAttributes)
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -317,7 +317,7 @@ AltSvcMapping::RouteEquals(AltSvcMapping *map)
   MOZ_ASSERT(map->mHashKey.Equals(mHashKey));
   return mAlternateHost.Equals(map->mAlternateHost) &&
     (mAlternatePort == map->mAlternatePort) &&
-    mNPNToken.Equals(map->mNPNToken);
+    mALPNToken.Equals(map->mALPNToken);
 }
 
 void
@@ -326,7 +326,7 @@ AltSvcMapping::GetConnectionInfo(nsHttpConnectionInfo **outCI,
                                  const OriginAttributes &originAttributes)
 {
   RefPtr<nsHttpConnectionInfo> ci =
-    new nsHttpConnectionInfo(mOriginHost, mOriginPort, mNPNToken,
+    new nsHttpConnectionInfo(mOriginHost, mOriginPort, mALPNToken,
                              mUsername, pi, originAttributes,
                              mAlternateHost, mAlternatePort);
 
@@ -357,7 +357,7 @@ AltSvcMapping::Serialize(nsCString &out)
   out.Append(':');
   out.AppendInt(mExpiresAt);
   out.Append(':');
-  out.Append(mNPNToken);
+  out.Append(mALPNToken);
   out.Append(':');
   out.Append(mValidated ? 'y' : 'n');
   out.Append(':');
@@ -403,7 +403,7 @@ COMPILER ERROR
     _NS_NEXT_TOKEN;
     mExpiresAt = nsCString(Substring(str, start, idx - start)).ToInteger(&code);
     _NS_NEXT_TOKEN;
-    mNPNToken = Substring(str, start, idx - start);
+    mALPNToken = Substring(str, start, idx - start);
     _NS_NEXT_TOKEN;
     mValidated = Substring(str, start, idx - start).Equals(NS_LITERAL_CSTRING("y"));
     _NS_NEXT_TOKEN;

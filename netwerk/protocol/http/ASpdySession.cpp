@@ -88,14 +88,14 @@ SpdyInformation::ProtocolEnabled(uint32_t index) const
 }
 
 nsresult
-SpdyInformation::GetNPNIndex(const nsACString &npnString,
+SpdyInformation::GetALPNIndex(const nsACString &alpnString,
                              uint32_t *result) const
 {
-  if (npnString.IsEmpty())
+  if (alpnString.IsEmpty())
     return NS_ERROR_FAILURE;
 
   for (uint32_t index = 0; index < kCount; ++index) {
-    if (npnString.Equals(VersionString[index])) {
+    if (alpnString.Equals(VersionString[index])) {
       *result = index;
       return NS_OK;
     }

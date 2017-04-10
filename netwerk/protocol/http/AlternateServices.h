@@ -55,7 +55,7 @@ private: // ctor from ProcessHeader
                 uint32_t expiresAt,
                 const nsACString &alternateHost,
                 int32_t alternatePort,
-                const nsACString &npnToken,
+                const nsACString &alpnToken,
                 const OriginAttributes &originAttributes);
 public:
   AltSvcMapping(DataStorage *storage, int32_t storageEpoch, const nsCString &serialized);
@@ -121,7 +121,7 @@ private:
   MOZ_INIT_OUTSIDE_CTOR bool mHttps; // origin is https://
   MOZ_INIT_OUTSIDE_CTOR bool mMixedScheme; // .wk allows http and https on same con
 
-  nsCString mNPNToken;
+  nsCString mALPNToken;
 
   OriginAttributes mOriginAttributes;
 };

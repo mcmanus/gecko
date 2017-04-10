@@ -102,14 +102,14 @@ public:
   static const uint32_t kCount = 2;
 
   // determine the index (0..kCount-1) of the spdy information that
-  // correlates to the npn string. NS_FAILED() if no match is found.
-  MOZ_MUST_USE nsresult GetNPNIndex(const nsACString &npnString, uint32_t *result) const;
+  // correlates to the alpn string. NS_FAILED() if no match is found.
+  MOZ_MUST_USE nsresult GetALPNIndex(const nsACString &npnString, uint32_t *result) const;
 
   // determine if a version of the protocol is enabled for index < kCount
   bool ProtocolEnabled(uint32_t index) const;
 
-  uint8_t   Version[kCount]; // telemetry enum e.g. SPDY_VERSION_31
-  nsCString VersionString[kCount]; // npn string e.g. "spdy/3.1"
+  uint8_t   Version[kCount]; // telemetry enum e.g. HTTP_VERSION_2
+  nsCString VersionString[kCount]; // alpn string e.g. "h2"
 
   // the ALPNCallback function allows the protocol stack to decide whether or
   // not to offer a particular protocol based on the known TLS information
