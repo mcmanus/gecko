@@ -20,7 +20,7 @@
 #define NS_HTTP_VERSION_0_9      9
 #define NS_HTTP_VERSION_1_0     10
 #define NS_HTTP_VERSION_1_1     11
-#define NS_HTTP_VERSION_2_0     20
+#define NS_HTTP_VERSION_2       20
 
 namespace mozilla {
 

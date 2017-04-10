@@ -486,7 +486,7 @@ private:
     // insist on >= http/2
     uint32_t version = mConnection->Version();
     LOG(("AltSvcTransaction::MaybeValidate() %p version %d\n", this, version));
-    if (version != HTTP_VERSION_2) {
+    if (version <= NS_HTTP_VERSION_2) {
       LOG(("AltSvcTransaction::MaybeValidate %p Failed due to protocol version", this));
       return;
     }
@@ -732,7 +732,7 @@ TransactionObserver::Complete(nsHttpTransaction *aTrans, nsresult reason)
   }
   uint32_t version = conn->Version();
   mVersionOK = (((reason == NS_BASE_STREAM_CLOSED) || (reason == NS_OK)) &&
-                conn->Version() == HTTP_VERSION_2);
+                conn->Version() == NS_HTTP_VERSION_2);
 
   nsCOMPtr<nsISupports> secInfo;
   conn->GetSecurityInfo(getter_AddRefs(secInfo));

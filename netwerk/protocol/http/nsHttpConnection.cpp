@@ -1546,7 +1546,7 @@ nsHttpConnection::EndIdleMonitoring()
 uint32_t
 nsHttpConnection::Version()
 {
-    return mUsingSpdyVersion  ? mUsingSpdyVersion : mLastHttpResponseVersion;
+    return mUsingSpdyVersion ? NS_HTTP_VERSION_2 : mLastHttpResponseVersion;
 }
 
 //-----------------------------------------------------------------------------

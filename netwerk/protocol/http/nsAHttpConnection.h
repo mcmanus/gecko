@@ -144,7 +144,7 @@ public:
     // any thread.
     virtual void SetSecurityCallbacks(nsIInterfaceRequestor* aCallbacks) = 0;
 
-    // nsHttp.h version
+    // nsHttp.h version e.g. NS_HTTP_VERSION_
     virtual uint32_t Version() = 0;
 
     // Throttling control, can be called only on the socket thread. HTTP/1
@@ -225,7 +225,7 @@ NS_DEFINE_STATIC_IID_ACCESSOR(nsAHttpConnection, NS_AHTTPCONNECTION_IID)
             return nullptr;                 \
         return (fwdObject)->Transport();   \
     }                                      \
-    uint32_t Version() override        \
+    uint32_t Version() override            \
     {                                      \
         return (fwdObject) ?               \
             (fwdObject)->Version() :       \

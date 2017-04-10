@@ -168,9 +168,11 @@ public:
     void EndIdleMonitoring();
 
     bool UsingSpdy() { return !!mUsingSpdyVersion; }
-    uint8_t GetSpdyVersion() { return mUsingSpdyVersion; }
     bool EverUsedSpdy() { return mEverUsedSpdy; }
     PRIntervalTime Rtt() { return mRtt; }
+
+    // 0 if not multistreamed, otherwise HTTP_VERSION_2, etc.. from nsHttp.h
+    uint8_t GetSpdyVersion() { return mUsingSpdyVersion; }
 
     // true when connection SSL NPN phase is complete and we know
     // authoritatively whether UsingSpdy() or not.
@@ -219,7 +221,8 @@ public:
         return mTrafficStamp &&
             (mTrafficCount == (mTotalBytesWritten + mTotalBytesRead));
     }
-    // override of nsAHttpConnection
+
+    // nsHttp.h version e.g. NS_HTTP_VERSION_ (nsAHttpConnection definition)
     virtual uint32_t Version();
 
     bool TestJoinConnection(const nsACString &hostname, int32_t port);
@@ -343,7 +346,7 @@ private:
     bool                            mNPNComplete;
     bool                            mSetupSSLCalled;
 
-    // version level in use, 0 if unused
+    // version level in use (HTTP_VERSION_2, etc..), 0 if unused
     uint8_t                         mUsingSpdyVersion;
 
     RefPtr<ASpdySession>            mSpdySession;

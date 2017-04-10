@@ -768,7 +768,7 @@ HttpConnInfo::SetHTTP1ProtocolVersion(uint8_t pv)
     case NS_HTTP_VERSION_1_1:
         protocolVersion.AssignLiteral(u"http/1.1");
         break;
-    case NS_HTTP_VERSION_2_0:
+    case NS_HTTP_VERSION_2:
         protocolVersion.AssignLiteral(u"http/2.0");
         break;
     default:

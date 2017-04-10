@@ -232,7 +232,8 @@ nsHttp::GetProtocolVersion(uint32_t pv)
 {
     switch (pv) {
     case HTTP_VERSION_2:
-    case NS_HTTP_VERSION_2_0:
+    case QUIC_EXPERIMENT_0:
+    case NS_HTTP_VERSION_2:
         return "h2";
     case NS_HTTP_VERSION_1_0:
         return "http/1.0";
