@@ -151,7 +151,7 @@ public:
       initOK = false;
     }
 
-    unsigned char npnList[] = "\003h2s";
+    unsigned char npnList[] = "\002hq";
     if (SSL_SetNextProtoNego(sdt, npnList, 4) != SECSuccess) {
       assert(0);
     }

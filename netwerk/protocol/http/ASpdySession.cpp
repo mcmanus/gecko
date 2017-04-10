@@ -8,7 +8,7 @@
 #include "HttpLog.h"
 
 /*
-  Currently supported are h2 and h2s
+  Currently supported are h2 and hq
 */
 
 #include "nsHttp.h"
@@ -67,7 +67,7 @@ SpdyInformation::SpdyInformation()
   IsQUIC[1] = false;
 
   Version[1] = SDT_VERSION_1;
-  VersionString[1] = NS_LITERAL_CSTRING("h2s"); // todo hq
+  VersionString[1] = NS_LITERAL_CSTRING("hq");
   ALPNCallbacks[1] = Http2Session::ALPNCallback;
   IsQUIC[1] = true;
 }
