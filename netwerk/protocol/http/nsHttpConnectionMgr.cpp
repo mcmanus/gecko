@@ -3051,8 +3051,8 @@ nsHalfOpenSocket::SetupStreams(nsISocketTransport **transport,
     const char *socketTypes[1];
     uint32_t typeCount = 0;
     const nsHttpConnectionInfo *ci = mEnt->mConnInfo;
-    if (!isBackup && gHttpHandler->IsSDTEnabled()) {
-        socketTypes[typeCount++] = "moz-sdt";
+    if (!isBackup && gHttpHandler->IsQUICEnabled()) {
+        socketTypes[typeCount++] = "moz-sdt"; // todo
     } else if (ci->FirstHopSSL()) {
         socketTypes[typeCount++] = "ssl";
     } else {

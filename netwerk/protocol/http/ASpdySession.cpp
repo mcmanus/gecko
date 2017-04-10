@@ -54,7 +54,7 @@ ASpdySession::NewSpdySession(uint32_t version,
   }
   MOZ_ASSERT(version == SDT_VERSION_1);
   // We use normal http2. A transformation from http2 to sdt is down the stack.
-  return new SDTSession(aTransport, version); // todo early data
+  return new Http2Session(aTransport, version, attemptingEarlyData);
 }
 
 SpdyInformation::SpdyInformation()
@@ -67,8 +67,8 @@ SpdyInformation::SpdyInformation()
   IsMozSDT[1] = false;
 
   Version[1] = SDT_VERSION_1;
-  VersionString[1] = NS_LITERAL_CSTRING("h2s");
-  ALPNCallbacks[1] = SDTSession::ALPNCallback;
+  VersionString[1] = NS_LITERAL_CSTRING("h2s"); // todo hq
+  ALPNCallbacks[1] = Http2Session::ALPNCallback;
   IsMozSDT[1] = true;
 }
 
@@ -81,7 +81,7 @@ SpdyInformation::ProtocolEnabled(uint32_t index) const
   case 0:
     return gHttpHandler->IsHttp2Enabled();
   case 1:
-    return gHttpHandler->IsSDTEnabled();
+    return gHttpHandler->IsQUICEnabled();
   }
   return false;
 }
