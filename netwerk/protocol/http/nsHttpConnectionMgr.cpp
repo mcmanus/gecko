@@ -3052,7 +3052,7 @@ nsHalfOpenSocket::SetupStreams(nsISocketTransport **transport,
     uint32_t typeCount = 0;
     const nsHttpConnectionInfo *ci = mEnt->mConnInfo;
     if (!isBackup && gHttpHandler->IsQUICEnabled()) {
-        socketTypes[typeCount++] = "moz-sdt"; // todo
+        socketTypes[typeCount++] = "quic";
     } else if (ci->FirstHopSSL()) {
         socketTypes[typeCount++] = "ssl";
     } else {

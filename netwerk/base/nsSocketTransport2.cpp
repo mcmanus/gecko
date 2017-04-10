@@ -894,7 +894,7 @@ nsSocketTransport::Init(const char **types, uint32_t typeCount,
         }
     }
     if (mTypeCount) {
-        mQUIC = strcmp(mTypes[0], "moz-sdt") == 0;
+        mQUIC = strcmp(mTypes[0], "quic") == 0;
     }
 
     return NS_OK;
