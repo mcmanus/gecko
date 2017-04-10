@@ -18,9 +18,12 @@ CXXFLAGS = $(CFLAGS)
 
 CFLAGS+=-pedantic -Wall
 
+# todo - need version with openssl
 LINKOBJS = $(OBJROOT)/dist/lib/libssl3.so $(OBJROOT)/dist/lib/libnss3.so
 
 LIBS = -lnspr4
+
+#todo rust with c bindings?
 
 OBJS = sdt-proxy.o sdt.o tcp_cubic.o tcp_general.o uLayer.o
 
