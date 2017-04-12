@@ -49,6 +49,7 @@
 #include "nsILoadGroupChild.h"
 #include "mozilla/ConsoleReportCollector.h"
 #include "LoadInfo.h"
+#include "NullPrincipal.h"
 #include "nsISSLSocketControl.h"
 #include "mozilla/Telemetry.h"
 #include "nsIURL.h"
@@ -3134,6 +3135,13 @@ HttpBaseChannel::SetupReplacementChannel(nsIURI       *newURI,
     nsCOMPtr<nsILoadInfo> newLoadInfo =
       static_cast<mozilla::LoadInfo*>(mLoadInfo.get())->Clone();
 
+    nsContentPolicyType contentPolicyType = mLoadInfo->GetExternalContentPolicyType();
+    if (contentPolicyType == nsIContentPolicy::TYPE_DOCUMENT ||
+        contentPolicyType == nsIContentPolicy::TYPE_SUBDOCUMENT) {
+      nsCOMPtr<nsIPrincipal> nullPrincipalToInherit = NullPrincipal::Create();
+      newLoadInfo->SetPrincipalToInherit(nullPrincipalToInherit);
+    }
+
     // re-compute the origin attributes of the loadInfo if it's top-level load.
     bool isTopLevelDoc =
       newLoadInfo->GetExternalContentPolicyType() == nsIContentPolicy::TYPE_DOCUMENT;
@@ -3610,6 +3618,84 @@ HttpBaseChannel::TimingAllowCheck(nsIPrincipal *aOrigin, bool *_retval)
 }
 
 NS_IMETHODIMP
+HttpBaseChannel::GetLaunchServiceWorkerStart(TimeStamp* _retval) {
+  MOZ_ASSERT(_retval);
+  *_retval = mLaunchServiceWorkerStart;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::SetLaunchServiceWorkerStart(TimeStamp aTimeStamp) {
+  mLaunchServiceWorkerStart = aTimeStamp;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::GetLaunchServiceWorkerEnd(TimeStamp* _retval) {
+  MOZ_ASSERT(_retval);
+  *_retval = mLaunchServiceWorkerEnd;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::SetLaunchServiceWorkerEnd(TimeStamp aTimeStamp) {
+  mLaunchServiceWorkerEnd = aTimeStamp;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::GetDispatchFetchEventStart(TimeStamp* _retval) {
+  MOZ_ASSERT(_retval);
+  *_retval = mDispatchFetchEventStart;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::SetDispatchFetchEventStart(TimeStamp aTimeStamp) {
+  mDispatchFetchEventStart = aTimeStamp;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::GetDispatchFetchEventEnd(TimeStamp* _retval) {
+  MOZ_ASSERT(_retval);
+  *_retval = mDispatchFetchEventEnd;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::SetDispatchFetchEventEnd(TimeStamp aTimeStamp) {
+  mDispatchFetchEventEnd = aTimeStamp;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::GetHandleFetchEventStart(TimeStamp* _retval) {
+  MOZ_ASSERT(_retval);
+  *_retval = mHandleFetchEventStart;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::SetHandleFetchEventStart(TimeStamp aTimeStamp) {
+  mHandleFetchEventStart = aTimeStamp;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::GetHandleFetchEventEnd(TimeStamp* _retval) {
+  MOZ_ASSERT(_retval);
+  *_retval = mHandleFetchEventEnd;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::SetHandleFetchEventEnd(TimeStamp aTimeStamp) {
+  mHandleFetchEventEnd = aTimeStamp;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 HttpBaseChannel::GetDomainLookupStart(TimeStamp* _retval) {
   *_retval = mTransactionTimings.domainLookupStart;
   return NS_OK;
@@ -3693,6 +3779,12 @@ HttpBaseChannel::Get##name##Time(PRTime* _retval) {            \
 
 IMPL_TIMING_ATTR(ChannelCreation)
 IMPL_TIMING_ATTR(AsyncOpen)
+IMPL_TIMING_ATTR(LaunchServiceWorkerStart)
+IMPL_TIMING_ATTR(LaunchServiceWorkerEnd)
+IMPL_TIMING_ATTR(DispatchFetchEventStart)
+IMPL_TIMING_ATTR(DispatchFetchEventEnd)
+IMPL_TIMING_ATTR(HandleFetchEventStart)
+IMPL_TIMING_ATTR(HandleFetchEventEnd)
 IMPL_TIMING_ATTR(DomainLookupStart)
 IMPL_TIMING_ATTR(DomainLookupEnd)
 IMPL_TIMING_ATTR(ConnectStart)

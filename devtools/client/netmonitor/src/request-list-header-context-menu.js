@@ -4,13 +4,13 @@
 
 "use strict";
 
-const Menu = require("devtools/client/framework/menu");
-const MenuItem = require("devtools/client/framework/menu-item");
+const { showMenu } = require("devtools/client/netmonitor/src/utils/menu");
+const { HEADERS } = require("./constants");
 const { L10N } = require("./utils/l10n");
 
-const stringMap = {
-  status: "status3"
-};
+const stringMap = HEADERS
+  .filter((header) => header.hasOwnProperty("label"))
+  .reduce((acc, { name, label }) => Object.assign(acc, { [name]: label }), {});
 
 class RequestListHeaderContextMenu {
   constructor({ toggleColumn, resetColumns }) {
@@ -29,12 +29,12 @@ class RequestListHeaderContextMenu {
   /**
    * Handle the context menu opening.
    */
-  open({ screenX = 0, screenY = 0 } = {}) {
-    let menu = new Menu();
+  open(event = {}) {
+    let menu = [];
     let onlyOneColumn = this.visibleColumns.length === 1;
 
     for (let [column, shown] of this.columns) {
-      menu.append(new MenuItem({
+      menu.push({
         id: `request-list-header-${column}-toggle`,
         label: L10N.getStr(`netmonitor.toolbar.${stringMap[column] || column}`),
         type: "checkbox",
@@ -42,19 +42,18 @@ class RequestListHeaderContextMenu {
         click: () => this.toggleColumn(column),
         // We don't want to allow hiding the last visible column
         disabled: onlyOneColumn && shown,
-      }));
+      });
     }
 
-    menu.append(new MenuItem({ type: "separator" }));
+    menu.push({ type: "separator" });
 
-    menu.append(new MenuItem({
+    menu.push({
       id: "request-list-header-reset-columns",
       label: L10N.getStr("netmonitor.toolbar.resetColumns"),
       click: () => this.resetColumns(),
-    }));
+    });
 
-    menu.popup(screenX, screenY, { doc: window.parent.document });
-    return menu;
+    return showMenu(event, menu);
   }
 }
 

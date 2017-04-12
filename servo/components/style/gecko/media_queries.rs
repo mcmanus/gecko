@@ -7,6 +7,7 @@
 use app_units::Au;
 use cssparser::{CssStringWriter, Parser, Token};
 use euclid::Size2D;
+use font_metrics::get_metrics_provider_for_product;
 use gecko_bindings::bindings;
 use gecko_bindings::structs::{nsCSSValue, nsCSSUnit, nsStringBuffer};
 use gecko_bindings::structs::{nsMediaExpression_Range, nsMediaFeature};
@@ -408,11 +409,12 @@ impl Expression {
             // If there's no colon, this is a media query of the form
             // '(<feature>)', that is, there's no value specified.
             //
-            // FIXME(emilio): We need to check for range operators too here when
-            // we support them, see:
-            //
-            // https://drafts.csswg.org/mediaqueries/#mq-ranges
+            // Gecko doesn't allow ranged expressions without a value, so just
+            // reject them here too.
             if input.try(|i| i.expect_colon()).is_err() {
+                if range != nsMediaExpression_Range::eEqual {
+                    return Err(())
+                }
                 return Ok(Expression::new(feature, None, range));
             }
 
@@ -499,6 +501,8 @@ impl Expression {
 
         let default_values = device.default_computed_values();
 
+        let provider = get_metrics_provider_for_product();
+
         // http://dev.w3.org/csswg/mediaqueries3/#units
         // em units are relative to the initial font-size.
         let context = computed::Context {
@@ -509,7 +513,8 @@ impl Expression {
             // This cloning business is kind of dumb.... It's because Context
             // insists on having an actual ComputedValues inside itself.
             style: default_values.clone(),
-            font_metrics_provider: None,
+            font_metrics_provider: &provider,
+            in_media_query: true,
         };
 
         let required_value = match self.value {

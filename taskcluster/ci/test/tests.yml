@@ -606,6 +606,7 @@ mochitest-clipboard:
     suite: mochitest/clipboard
     treeherder-symbol: tc-M(cl)
     loopback-video: true
+    docker-image: {"in-tree": "desktop1604-test"}
     instance-size: xlarge
     e10s:
       by-test-platform:
@@ -914,6 +915,7 @@ mochitest-style:
     suite: mochitest/plain-style
     treeherder-symbol: tc-M(s)
     loopback-video: true
+    docker-image: {"in-tree": "desktop1604-test"}
     e10s: both
     run-on-projects:
         by-test-platform:
@@ -936,6 +938,7 @@ mochitest-chrome-style:
     suite: mochitest/chrome-style
     treeherder-symbol: tc-M(cs)
     loopback-video: true
+    docker-image: {"in-tree": "desktop1604-test"}
     run-on-projects:
         by-test-platform:
             linux64-stylo/.*: [ 'stylo', 'autoland', 'mozilla-inbound', 'mozilla-central', 'try' ]
@@ -979,8 +982,6 @@ reftest:
             default: 3600
     e10s:
         by-test-platform:
-            # bug 1351272
-            windows7-32/debug: false
             macosx.*: true
             default: both
     mozharness:
@@ -1025,11 +1026,6 @@ reftest-no-accel:
         by-test-platform:
             macosx.*: 1
             default: 8
-    e10s:
-        by-test-platform:
-            # bug 1351272
-            windows7-32/debug: false
-            default: both
     mozharness:
         script: desktop_unittest.py
         no-read-buildbot-config: true
@@ -1102,6 +1098,21 @@ robocop:
             - android/androidarm_4_3.py
         extra-options:
             - --test-suite=robocop
+
+geckoview:
+    description: "Geckoview run"
+    suite: geckoview
+    treeherder-symbol: tc(gv)
+    instance-size: xlarge
+    loopback-video: true
+    e10s: false
+    mozharness:
+        script: android_emulator_unittest.py
+        no-read-buildbot-config: true
+        config:
+            - android/androidarm_4_3.py
+        extra-options:
+            - --test-suite=geckoview
 
 talos-chrome:
     description: "Talos chrome"

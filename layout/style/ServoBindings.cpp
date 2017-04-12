@@ -7,6 +7,7 @@
 #include "mozilla/ServoBindings.h"
 
 #include "ChildIterator.h"
+#include "GeckoProfiler.h"
 #include "gfxFontFamilyList.h"
 #include "nsAnimationManager.h"
 #include "nsAttrValueInlines.h"
@@ -26,6 +27,7 @@
 #include "nsIPresShell.h"
 #include "nsIPresShellInlines.h"
 #include "nsIPrincipal.h"
+#include "nsFontMetrics.h"
 #include "nsMappedAttributes.h"
 #include "nsMediaFeatures.h"
 #include "nsNameSpaceManager.h"
@@ -40,6 +42,7 @@
 #include "mozilla/EffectSet.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/Keyframe.h"
+#include "mozilla/Mutex.h"
 #include "mozilla/ServoElementSnapshot.h"
 #include "mozilla/ServoRestyleManager.h"
 #include "mozilla/StyleAnimationValue.h"
@@ -50,6 +53,7 @@
 #include "mozilla/dom/HTMLTableCellElement.h"
 #include "mozilla/dom/HTMLBodyElement.h"
 #include "mozilla/LookAndFeel.h"
+#include "mozilla/URLExtraData.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -908,6 +912,27 @@ Gecko_CopyFontFamilyFrom(nsFont* dst, const nsFont* src)
 }
 
 void
+Gecko_SetImageOrientation(nsStyleVisibility* aVisibility,
+                          double aRadians, bool aFlip)
+{
+  aVisibility->mImageOrientation =
+    nsStyleImageOrientation::CreateAsAngleAndFlip(aRadians, aFlip);
+}
+
+void
+Gecko_SetImageOrientationAsFromImage(nsStyleVisibility* aVisibility)
+{
+  aVisibility->mImageOrientation = nsStyleImageOrientation::CreateAsFromImage();
+}
+
+void
+Gecko_CopyImageOrientationFrom(nsStyleVisibility* aDst,
+                               const nsStyleVisibility* aSrc)
+{
+  aDst->mImageOrientation = aSrc->mImageOrientation;
+}
+
+void
 Gecko_SetListStyleType(nsStyleList* style_struct, uint32_t type)
 {
   // Builtin counter styles are static and use no-op refcounting, and thus are
@@ -981,6 +1006,12 @@ Gecko_SetUrlImageValue(nsStyleImage* aImage, ServoBundledURI aURI)
   RefPtr<nsStyleImageRequest> req =
     CreateStyleImageRequest(nsStyleImageRequest::Mode::Track, aURI);
   aImage->SetImageRequest(req.forget());
+}
+
+void
+Gecko_SetImageElement(nsStyleImage* aImage, nsIAtom* aAtom) {
+  MOZ_ASSERT(aImage);
+  aImage->SetElementId(do_AddRef(aAtom));
 }
 
 void
@@ -1106,6 +1137,13 @@ Gecko_ClearPODTArray(void* aArray, size_t aElementSize, size_t aElementAlign)
 
   base->template ShiftData<nsTArrayInfallibleAllocator>(0, base->Length(), 0,
                                                         aElementSize, aElementAlign);
+}
+
+void
+Gecko_CopyStyleGridTemplateValues(nsStyleGridTemplate* aGridTemplate,
+                                  const nsStyleGridTemplate* aOther)
+{
+  *aGridTemplate = *aOther;
 }
 
 void
@@ -1576,10 +1614,70 @@ Gecko_nsStyleFont_CopyLangFrom(nsStyleFont* aFont, const nsStyleFont* aSource)
   aFont->mLanguage = aSource->mLanguage;
 }
 
-nscoord
-Gecko_nsStyleFont_GetBaseSize(const nsStyleFont* aFont, RawGeckoPresContextBorrowed aPresContext)
+void
+FontSizePrefs::CopyFrom(const LangGroupFontPrefs& prefs)
 {
-  return aPresContext->GetDefaultFont(aFont->mGenericID, aFont->mLanguage)->size;
+  mDefaultVariableSize = prefs.mDefaultVariableFont.size;
+  mDefaultFixedSize = prefs.mDefaultFixedFont.size;
+  mDefaultSerifSize = prefs.mDefaultSerifFont.size;
+  mDefaultSansSerifSize = prefs.mDefaultSansSerifFont.size;
+  mDefaultMonospaceSize = prefs.mDefaultMonospaceFont.size;
+  mDefaultCursiveSize = prefs.mDefaultCursiveFont.size;
+  mDefaultFantasySize = prefs.mDefaultFantasyFont.size;
+}
+
+FontSizePrefs
+Gecko_GetBaseSize(nsIAtom* aLanguage)
+{
+  LangGroupFontPrefs prefs;
+  nsCOMPtr<nsIAtom> langGroupAtom = StaticPresData::Get()->GetUncachedLangGroup(aLanguage);
+
+  prefs.Initialize(langGroupAtom);
+  FontSizePrefs sizes;
+  sizes.CopyFrom(prefs);
+
+  return sizes;
+}
+
+static Mutex* sServoFontMetricsLock = nullptr;
+
+void
+InitializeServo()
+{
+  URLExtraData::InitDummy();
+  Servo_Initialize(URLExtraData::Dummy());
+
+  sServoFontMetricsLock = new Mutex("Gecko_GetFontMetrics");
+}
+
+void
+ShutdownServo()
+{
+  delete sServoFontMetricsLock;
+  Servo_Shutdown();
+}
+
+GeckoFontMetrics
+Gecko_GetFontMetrics(RawGeckoPresContextBorrowed aPresContext,
+                     bool aIsVertical,
+                     const nsStyleFont* aFont,
+                     nscoord aFontSize,
+                     bool aUseUserFontSet)
+{
+  MutexAutoLock lock(*sServoFontMetricsLock);
+  GeckoFontMetrics ret;
+  // Safe because we are locked, and this function is only
+  // ever called from Servo parallel traversal or the main thread
+  nsPresContext* presContext = const_cast<nsPresContext*>(aPresContext);
+  presContext->SetUsesExChUnits(true);
+  RefPtr<nsFontMetrics> fm = nsRuleNode::GetMetricsFor(presContext, aIsVertical,
+                                                       aFont, aFontSize,
+                                                       aUseUserFontSet);
+  ret.mXSize = fm->XHeight();
+  gfxFloat zeroWidth = fm->GetThebesFontGroup()->GetFirstValidFont()->
+                           GetMetrics(fm->Orientation()).zeroOrAveCharWidth;
+  ret.mChSize = ceil(aPresContext->AppUnitsPerDevPixel() * zeroWidth);
+  return ret;
 }
 
 void
@@ -1676,6 +1774,19 @@ void
 Gecko_Construct_nsStyleVariables(nsStyleVariables* ptr)
 {
   new (ptr) nsStyleVariables();
+}
+
+void
+Gecko_RegisterProfilerThread(const char* name)
+{
+  char stackTop;
+  profiler_register_thread(name, &stackTop);
+}
+
+void
+Gecko_UnregisterProfilerThread()
+{
+  profiler_unregister_thread();
 }
 
 #include "nsStyleStructList.h"

@@ -161,6 +161,7 @@ EXPORTS += [
     'nsURIHashKey.h',
     'nsURLHelper.h',
     'nsURLParsers.h',
+    'SimpleChannel.h',
 ]
 
 EXPORTS.mozilla += [
@@ -250,6 +251,7 @@ UNIFIED_SOURCES += [
     'RedirectChannelRegistrar.cpp',
     'RequestContextService.cpp',
     'SimpleBuffer.cpp',
+    'SimpleChannel.cpp',
     'StreamingProtocolService.cpp',
     'ThrottleQueue.cpp',
     'ThrottlingService.cpp',

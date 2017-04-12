@@ -226,7 +226,8 @@ static Http2ControlFx sControlFunctions[] = {
   Http2Session::RecvWindowUpdate,
   Http2Session::RecvContinuation,
   Http2Session::RecvAltSvc, // extension for type 0x0A
-  Http2Session::RecvOrigin  // extension for type 0x0B
+  Http2Session::RecvUnused, // 0x0B was BLOCKED still radioactive
+  Http2Session::RecvOrigin  // extension for type 0x0C
 };
 
 bool
@@ -2306,6 +2307,15 @@ Http2Session::Received421(nsHttpConnectionInfo *ci)
   LOG3(("Http2Session::Received421 %p key %s removed\n", this, key.get()));
 }
 
+nsresult
+Http2Session::RecvUnused(Http2Session *self)
+{
+  LOG3(("Http2Session %p unknown frame type %x ignored\n",
+        self, self->mInputFrameType));
+  self->ResetDownstreamState();
+  return NS_OK;
+}
+
 // defined as an http2 extension - origin
 // defines receipt of frame type 0x0b.. http://httpwg.org/http-extensions/origin-frame.html
 // as this is an extension, never generate protocol error - just ignore problems
@@ -2514,10 +2524,6 @@ Http2Session::ReadSegmentsAgain(nsAHttpSegmentReader *reader,
       return *countRead ? NS_OK : NS_BASE_STREAM_WOULD_BLOCK;
     }
 
-    if (!m0RTTStreams.Contains(stream->StreamID())) {
-      m0RTTStreams.AppendElement(stream->StreamID());
-    }
-
     // Need to adjust this to only take as much as we can fit in with the
     // preamble/settings/priority stuff
     count -= (mOutputQueueUsed - mOutputQueueSent);
@@ -2538,6 +2544,12 @@ Http2Session::ReadSegmentsAgain(nsAHttpSegmentReader *reader,
     // hole of stream->ReadSegments, and we want to make sure we return the
     // proper value to our caller.
     *countRead += earlyDataUsed;
+  }
+
+  if (mAttemptingEarlyData && !m0RTTStreams.Contains(stream->StreamID())) {
+    LOG3(("Http2Session::ReadSegmentsAgain adding stream %d to m0RTTStreams\n",
+          stream->StreamID()));
+    m0RTTStreams.AppendElement(stream->StreamID());
   }
 
   // Not every permutation of stream->ReadSegents produces data (and therefore

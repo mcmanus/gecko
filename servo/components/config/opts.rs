@@ -25,8 +25,7 @@ use url::{self, Url};
 
 
 /// Global flags for Servo, currently set on the command line.
-#[derive(Clone)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Opts {
     pub is_running_problem_test: bool,
 
@@ -86,10 +85,6 @@ pub struct Opts {
     /// may wish to turn this flag on in order to benchmark style recalculation against other
     /// browser engines.
     pub bubble_inline_sizes_separately: bool,
-
-    /// True if we should show borders on all layers and tiles for
-    /// debugging purposes (`--show-debug-borders`).
-    pub show_debug_borders: bool,
 
     /// True if we should show borders on all fragments for debugging purposes
     /// (`--show-debug-fragment-borders`).
@@ -286,9 +281,6 @@ pub struct DebugOptions {
     /// Enable all heartbeats for profiling.
     pub profile_heartbeats: bool,
 
-    /// Paint borders along layer and tile boundaries.
-    pub show_compositor_borders: bool,
-
     /// Paint borders along fragment boundaries.
     pub show_fragment_borders: bool,
 
@@ -370,7 +362,6 @@ impl DebugOptions {
                 "relayout-event" => self.relayout_event = true,
                 "profile-script-events" => self.profile_script_events = true,
                 "profile-heartbeats" => self.profile_heartbeats = true,
-                "show-compositor-borders" => self.show_compositor_borders = true,
                 "show-fragment-borders" => self.show_fragment_borders = true,
                 "show-parallel-paint" => self.show_parallel_paint = true,
                 "show-parallel-layout" => self.show_parallel_layout = true,
@@ -446,8 +437,7 @@ fn print_debug_usage(app: &str) -> ! {
     process::exit(0)
 }
 
-#[derive(Clone)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+#[derive(Clone, Deserialize, Serialize)]
 pub enum OutputOptions {
     FileName(String),
     Stdout(f64)
@@ -527,7 +517,6 @@ pub fn default_opts() -> Opts {
         headless: true,
         hard_fail: true,
         bubble_inline_sizes_separately: false,
-        show_debug_borders: false,
         show_debug_fragment_borders: false,
         show_debug_parallel_paint: false,
         show_debug_parallel_layout: false,
@@ -843,7 +832,6 @@ pub fn from_cmdline_args(args: &[String]) -> ArgumentParsingResult {
         sandbox: opt_match.opt_present("S"),
         random_pipeline_closure_probability: random_pipeline_closure_probability,
         random_pipeline_closure_seed: random_pipeline_closure_seed,
-        show_debug_borders: debug_options.show_compositor_borders,
         show_debug_fragment_borders: debug_options.show_fragment_borders,
         show_debug_parallel_paint: debug_options.show_parallel_paint,
         show_debug_parallel_layout: debug_options.show_parallel_layout,
