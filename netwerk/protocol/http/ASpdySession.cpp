@@ -18,6 +18,7 @@
 #include "PSpdyPush.h"
 #include "Http2Push.h"
 #include "Http2Session.h"
+#include "SDTSession.h"
 
 #include "mozilla/Telemetry.h"
 
@@ -50,10 +51,10 @@ ASpdySession::NewSpdySession(uint32_t version,
 
   if (version == HTTP_VERSION_2) {
     return new Http2Session(aTransport, version, attemptingEarlyData);
-  } else if (version == SDT_VERSION_1) {
-    // We use normal http2. A transformation from http2 to sdt is down the stack.
-    return new Http2Session(aTransport, version, attemptingEarlyData);
   }
+  MOZ_ASSERT(version == SDT_VERSION_1);
+  // We use normal http2. A transformation from http2 to sdt is down the stack.
+  return new SDTSession(aTransport, version); // todo early data
 }
 
 SpdyInformation::SpdyInformation()
@@ -67,7 +68,7 @@ SpdyInformation::SpdyInformation()
 
   Version[1] = SDT_VERSION_1;
   VersionString[1] = NS_LITERAL_CSTRING("h2s");
-  ALPNCallbacks[1] = Http2Session::ALPNCallback;
+  ALPNCallbacks[1] = SDTSession::ALPNCallback;
   IsMozSDT[1] = true;
 }
 
@@ -80,7 +81,7 @@ SpdyInformation::ProtocolEnabled(uint32_t index) const
   case 0:
     return gHttpHandler->IsHttp2Enabled();
   case 1:
-    return gHttpHandler->IsHttp2sdtEnabled();
+    return gHttpHandler->IsSDTEnabled();
   }
   return false;
 }

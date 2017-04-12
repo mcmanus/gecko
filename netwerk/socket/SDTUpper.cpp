@@ -404,5 +404,16 @@ fail:
   return nullptr;
 }
 
+PRFileDesc *
+sdt_getSDTFD(PRFileDesc *aFd)
+{
+  mozilla::net::SDTUpper *handle = (mozilla::net::SDTUpper *)(aFd->secret);
+  if (!handle) {
+    MOZ_ASSERT(false);
+    return nullptr;
+  }
+  return  handle->GetFD();
+}
+
 } // namespace mozilla::net
 } // namespace mozilla

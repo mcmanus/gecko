@@ -17,6 +17,10 @@
 #include "congestion_control.h"
 #include "tcp_general.h"
 
+// H2 mapping will move to a separate layer but for now I want to separate 2
+// versions. So Firefox side needs H2MAPPING unset and proxy side needs it set.
+#define H2MAPPING 1
+
 // TODO connection reusing
 // TODO lots of compile warnings
 
@@ -64,6 +68,13 @@ TODO add session identifier for mobility.
    for a different runtime (rust?) and a c ABI layer. (can go do that?) But
    that's premature compared to working on the basics of the protocol atm. */
 
+#define HTTP2_TRANSFORMAION 1
+
+#define DEFAULTE_WINDOW_SIZE (2 << 16) - 1
+#define DEFAULTE_RWIN 65535
+// max amout of outstanding data (sender buffer). (1048576*1400)
+static uint64_t aBufferLenMax = 1468006400;
+
 #define DTLS_TYPE_CHANGE_CIPHER 20
 #define DTLS_TYPE_ALERT         21
 #define DTLS_TYPE_HANDSHAKE     22
@@ -84,6 +95,7 @@ TODO add session identifier for mobility.
 
 #define HTTP2_FRAME_FLAG_END_STREAM    0x01
 #define HTTP2_FRAME_FLAG_END_HEADERS   0x04
+#define HTTP2_FRAME_FLAG_PADDED        0x08
 #define HTTP2_FRAME_FLAG_PRIORITY      0x20
 #define HTTP2_FRAME_FLAG_ACK           0x01
 
@@ -96,7 +108,6 @@ TODO add session identifier for mobility.
 #define HTTP2_HEADERLEN                9
 
 #define SDT_FRAME_TYPE_STREAM              0x80
-#define SDT_FRAME_TYPE_STREAM2             0xBF
 #define SDT_FRAME_TYPE_ACK                 0x40
 #define SDT_FRAME_TYPE_CONGESTION_FEEDBACK 0x20
 #define SDT_FRAME_TYPE_PADDING             0x00
@@ -105,11 +116,13 @@ TODO add session identifier for mobility.
 #define SDT_FRAME_TYPE_GOAWAY              0x03
 #define SDT_FRAME_TYPE_WINDOW_UPDATE       0x04
 #define SDT_FRAME_TYPE_BLOCKED             0x05
-#define SDT_FRAME_TYPE_STOP_WAITING        0x06
 #define SDT_FRAME_TYPE_PING                0x07
 #define SDT_FRAME_TYPE_PRIORITY            0x08
 
-#define SDT_FIN_BIT 0x40
+// 1(frame type) + 2(length) + 4(stream) + 8(offset)
+#define SDT_FRAME_TYPE_STREAM_HEADER_SIZE 15
+#define SDT_FRAME_STREAM_FIN_BIT 0x40
+#define SDT_FRAME_STREAM_DATA_LENGTH_BIT 0x20
 
 const uint8_t magicHello[] = {
   0x50, 0x52, 0x49, 0x20, 0x2a, 0x20, 0x48, 0x54,
@@ -139,7 +152,7 @@ const uint8_t magicHello[] = {
 #endif
 
 // max amout of outstanding data (sender buffer). (1048576*1400)
-static uint64_t aBufferLenMax = 1468006400;
+//static uint64_t aBufferLenMax = 1468006400;
 
 // our standard time unit is a microsecond
 static uint64_t qMaxCreditsDefault = 80000; // ums worth of full bucket
@@ -165,6 +178,290 @@ static PRIntervalTime sMaxRTO; // MaxRTO in interval that we do not need to conv
 static struct sdt_congestion_control_ops *cc;// = sdt_cc;
 
 //static uint32_t amplificationPacket = 2;
+
+//------------------------------------------------------------------------------
+// DECODE and ENCODE frames !!!! START
+//------------------------------------------------------------------------------
+
+uint8_t
+sdt_decode_OffsetLength(uint8_t type)
+{
+  // 0, 16, 24, 32, 40 ,48, 56, 64
+  type = (type >> 2) & 0x07;
+  return (type) ? type + 1 : 0;
+}
+
+uint8_t
+sdt_decode_StreamIdLength(uint8_t type)
+{
+  // 8, 16, 24, 32
+  return ((type & 0x03) + 1);
+}
+
+int32_t
+sdt_decode_StreamFrame(const uint8_t *buf, uint16_t length,
+                       uint32_t *streamId, uint8_t *streamIdLen,
+                       uint64_t *offset, uint8_t *offsetLen,
+                       uint8_t *fin, uint16_t *frameLen)
+{
+  uint32_t read = 0;
+  assert(length >= 1);
+
+  uint8_t type = buf[0];
+  read++;
+
+  if (type & SDT_FRAME_STREAM_FIN_BIT) {
+    *fin = 1;
+  }
+
+  *streamIdLen = sdt_decode_StreamIdLength(type);
+  *offsetLen = sdt_decode_OffsetLength(type);
+
+  if (type & SDT_FRAME_STREAM_DATA_LENGTH_BIT) {
+    if (length < (3 + *streamIdLen + *offsetLen)) {
+      return SDTE_PROTOCOL_ERROR;
+    }
+    memcpy(frameLen, buf + read, 2);
+    *frameLen = ntohs(*frameLen);
+    read += 2;
+  } else {
+    if (length < (1 + *streamIdLen + *offsetLen)) {
+      return SDTE_PROTOCOL_ERROR;
+    }
+    *frameLen = length - 1 - *offsetLen - *streamIdLen;
+  }
+
+  if (!*frameLen && !*fin) {
+    return SDTE_PROTOCOL_ERROR;
+  }
+  if (length < (read + *streamIdLen + *offsetLen + *frameLen)) {
+    return SDTE_PROTOCOL_ERROR;
+  }
+
+  *streamId = 0;
+  switch(*streamIdLen) {
+  case 1:
+    *streamId = (uint64_t)buf[read];
+    break;
+  case 2:
+  {
+    uint16_t id;
+    memcpy(&id, buf + read, 2);
+    *streamId = ntohs(id);
+    break;
+  }
+  case 3:
+  {
+    uint16_t id;
+    memcpy(&id, buf + read + 1, 2);
+    *streamId = ntohs(id);
+    *streamId += ((uint64_t)buf[read]) << 16;
+  }
+  case 4:
+  {
+    uint32_t id;
+    memcpy(&id, buf + read, 4);
+    *streamId = ntohl(id);
+    break;
+  }
+  default:
+    assert(0);
+  }
+  read += *streamIdLen;
+
+  switch (*offsetLen) {
+  case 0:
+    *offset = 0;
+    break;
+  case 2:
+  {
+    uint16_t off;
+    memcpy(&off, buf + read, 2);
+    *offset = ntohs(off);
+    break;
+  }
+  case 3:
+  {
+    uint16_t off;
+    memcpy(&off, buf + read + 1, 2);
+    *offset = ntohs(off);
+    *offset += ((uint64_t)buf[read]) << 16;
+    break;
+  }
+  case 4:
+  {
+    uint32_t off;
+    memcpy(&off, buf + read, 4);
+    *offset = ntohl(off);
+    break;
+  }
+  case 5:
+  {
+    uint32_t off;
+    memcpy(&off, buf + read + 1, 4);
+    *offset = ntohl(off);
+    *offset += ((uint64_t)buf[read]) << 32;
+    break;
+  }
+  case 6:
+  {
+    uint32_t off;
+    memcpy(&off, buf + read + 2, 4);
+    *offset = ntohl(off);
+    *offset += ((uint64_t)buf[read + 1]) << 32;
+    *offset += ((uint64_t)buf[read]) << 40;
+    break;
+  }
+  case 7:
+  {
+    uint32_t off;
+    memcpy(&off, buf + read + 3, 4);
+    *offset = ntohl(off);
+    *offset += ((uint64_t)buf[read + 2]) << 32;
+    *offset += ((uint64_t)buf[read + 1]) << 40;
+    *offset += ((uint64_t)buf[read]) << 48;
+    break;
+  }
+  case 8:
+  {
+    memcpy(&offset, buf + read, 8);
+    *offset = ntohll(*offset);
+    break;
+  }
+  default:
+    assert(0);
+  }
+  read += *offsetLen;
+
+  fprintf(stderr, "sdt_decode_StreamFrame: streamId=%u streamIdLen=%d "
+                  "offset=%lu offsetLen=%d fin=%d frameLen=%d read=%d\n",
+                  *streamId, *streamIdLen, *offset, *offsetLen, *fin, *frameLen,
+                  read);
+  return read;
+}
+
+int32_t
+sdt_encode_StreamFrame(uint8_t *buf,
+                       uint32_t streamId, uint8_t streamIdLen,
+                       uint64_t offset, uint8_t offsetLen,
+                       uint8_t fin, uint8_t addFrameLen, uint16_t frameLen)
+{
+  fprintf(stderr, "sdt_encode_StramFrame: streamId=%d streamIdLen=%d "
+          "offset=%lu offsetLen=%d fin=%d frameLength=%d\n",
+          streamId, streamIdLen,
+          offset, offsetLen, fin, frameLen);
+
+  buf[0] = SDT_FRAME_TYPE_STREAM;
+  if (fin) {
+    buf[0] |= SDT_FRAME_STREAM_FIN_BIT;
+  }
+  if (offsetLen) {
+    buf[0] |= (offsetLen - 1) << 2;
+  }
+  buf[0] |= (streamIdLen - 1);
+
+  int32_t written = 1;
+
+  if (addFrameLen) {
+    buf[0] |= SDT_FRAME_STREAM_DATA_LENGTH_BIT;
+    frameLen = htons(frameLen);
+    memcpy(buf + 1, &frameLen, 2);
+    written += 2;
+  }
+
+  switch (streamIdLen) {
+  case 1:
+  {
+    uint8_t id = (uint8_t)streamId;
+    memcpy(buf + written, &id, 1);
+    break;
+  }
+  case 2:
+  {
+    uint16_t id;
+    id = htons((uint16_t)streamId);
+    memcpy(buf + written, &id, 2);
+    break;
+  }
+  case 3:
+  {
+    uint16_t id = htons((uint16_t)streamId);
+    memcpy(buf + written + 1, &id, 2);
+    buf[written] = (uint8_t)(streamId >> 16);
+  }
+  case 4:
+  {
+    uint32_t id = htonl(streamId);
+    memcpy(buf + written, &id, 4);
+    break;
+  }
+  default:
+    assert(0);
+  }
+  written += streamIdLen;
+
+  switch (offsetLen) {
+  case 0:
+    break;
+  case 2:
+  {
+    uint16_t off = htons((uint16_t)offset);
+    memcpy(buf + written, &off, 2);
+    break;
+  }
+  case 3:
+  {
+    uint16_t off = htons((uint16_t)offset);
+    memcpy(buf + written + 1, &off, 2);
+    buf[written] = (uint8_t)(offset >> 16);
+    break;
+  }
+  case 4:
+  {
+    uint32_t off = htonl((uint32_t)offset);
+    memcpy(buf + written, &off, 4);
+    break;
+  }
+  case 5:
+  {
+    uint32_t off = htonl((uint32_t)offset);
+    memcpy(buf + written + 1, &off, 4);
+    buf[written] = (uint8_t)(offset >> 32);
+    break;
+  }
+  case 6:
+  {
+    uint32_t off = htonl((uint32_t)offset);
+    memcpy(buf + written + 2, &off, 4);
+    buf[written + 1] = (uint8_t)(offset >> 32);
+    buf[written] = (uint8_t)(offset >> 40);
+    break;
+  }
+  case 7:
+  {
+    uint32_t off = htonl((uint32_t)offset);
+    memcpy(buf + written + 3, &off, 4);
+    buf[written + 2] = (uint8_t)(offset >> 32);
+    buf[written + 1] = (uint8_t)(offset >> 40);
+    buf[written] = (uint8_t)(offset >> 48);
+    break;
+  }
+  case 8:
+  {
+    offset = htonll(offset);
+    memcpy(buf + written, &offset, 8);
+    break;
+  }
+  default:
+    assert(0);
+  }
+  written += offsetLen;
+  return written;
+}
+
+//------------------------------------------------------------------------------
+// DECODE and ENCODE frames !!!! END
+//------------------------------------------------------------------------------
 
 // a generic read to recv mapping
 int32_t
@@ -233,7 +530,7 @@ weakDtor(PRFileDesc *fd)
 void
 LogBuffer(const char *label, const unsigned char *data, uint32_t datalen)
 {
-  return;
+//  return;
   // Max line is (16 * 3) + 10(prefix) + newline + null
   char linebuf[128];
   uint32_t index;
@@ -448,7 +745,6 @@ RemoveRange(struct range32_t **rangeList, uint32_t start, uint32_t end,
 
 enum ChunkType {
   DATA_CHUNK,
-  HEADER_CHUNK,
   CONTROL_CHUNK
 };
 
@@ -475,23 +771,17 @@ struct aDataChunk_t
   struct range32_t *mNotSentRanges;
   struct range32_t *mUnackedRanges; // this is a chain of unacked ranges of this
                                     // chunk.
-  uint8_t mH2Flags; // This are H2 flags;
+  uint8_t mFin; // The last data chunk for this stream;
   uint64_t mOffset; // offset of the first byte of the chunk.
 
-  // These parameters are needed only for Header frames.
   uint32_t mStreamId;
-  uint8_t mContinuationFrame;
-
-  // Needed for control frames.
-  uint8_t mIsPingPkt;
 
   struct aDataChunk_t *mNext;
   struct aChunk_t *mData;
 };
 
 struct aDataChunk_t *
-CreateChunk(enum ChunkType type, uint32_t size, uint32_t flags,
-            uint32_t streamId)
+CreateChunk(enum ChunkType type, uint32_t size, uint32_t streamId)
 {
   struct aDataChunk_t *chunk =
     (struct aDataChunk_t *) calloc (1, sizeof(struct aDataChunk_t));
@@ -509,7 +799,7 @@ CreateChunk(enum ChunkType type, uint32_t size, uint32_t flags,
   chunk->mData->mWritten = 0;
 
   chunk->mType = type;
-  chunk->mH2Flags = flags;
+  chunk->mFin = 0;
   chunk->mStreamId = streamId;
 
   return chunk;
@@ -726,6 +1016,7 @@ SomeDataLostFromChunk(struct aDataChunk_t *chunk, uint32_t start,
     free(r);
     r = removed;
   }
+  return rv;
 }
 
 struct aDataChunkQueue_t
@@ -775,22 +1066,37 @@ RemoveChunk(struct aDataChunkQueue_t *queue, struct aDataChunk_t *chunk)
   FreeDataChunk(curr);
 }
 
+enum StreamState_t
+{
+  STREAM_IDLE,
+  STREAM_OPEN,
+  STREAM_CLOSED
+};
+
 struct aOutgoingStreamInfo_t
 {
+  enum StreamState_t mState;
   uint32_t mStreamId;
-  uint64_t mNextOffset;
-  uint64_t mWindowSize;
+  uint64_t mNextOffsetToBuffer;
+  uint64_t mNextOffsetToSend;
+  uint64_t mCanSendOffset;
+  uint8_t mStreamReset;
+  uint8_t mWaitingForRSTReply;
 
   struct aDataChunkQueue_t mDataQueue;
 
   struct aOutgoingStreamInfo_t *mNext;
 };
 
-struct aOutputHeaderInfo_t
+void
+SendFrame(struct aOutgoingStreamInfo_t *stream)
 {
-  uint64_t mNextOffset;
-  struct aDataChunkQueue_t mDataQueue;
-};
+  assert(stream->mState != STREAM_CLOSED);
+
+  if (stream->mState == STREAM_IDLE) {
+    stream->mState = STREAM_OPEN;
+  }
+}
 
 struct aDataChunkTransmissionElement_t
 {
@@ -1007,7 +1313,6 @@ struct SDT_SendDataStruct_t
   // Data queues!
   struct aDataChunkQueue_t mOutgoingControlFrames;
   struct aOutgoingStreamInfo_t *mOutgoingStreams;
-  struct aOutputHeaderInfo_t mOutgoingHeaders;
 
   // mDataChunkTransmissionQueue holds a list of data chunks that are waiting
   // to be transmitted.
@@ -1025,10 +1330,24 @@ struct SDT_SendDataStruct_t
   // PreparePacket function and deleted or queued in the PacketSent function.
   struct aPacketInfo_t * mPacketBeingSent;
 
-  // The max amount of outstanding data (sender buffer size)
-  uint64_t mMaxDataQueued;
+  // The cumulative aount of data that can be sent.
+  uint64_t mCanSendSessionOffset;
+  // Amount of send data.
+  uint64_t mSessionDataSent;
+  // This incueds sent data and queued data. This is a cumulative count. We will
+  // never queue more than mCanSendSessionOffset, so:
+  // mSessionDataSentAndQueued <= mCanSendSessionOffset
+  // mSessionDataSent <= mSessionDataSentAndQueued
+  uint64_t mSessionDataSentAndQueued;
+
+  // The server rwin for new streams as determined from a SETTINGS frame
+  uint32_t mServerInitialStreamWindow;
+
   // The current amount of outstanding data.
   uint64_t mDataQueued;
+
+  uint8_t mNextToWriteSet;
+  uint32_t mNextToWriteId;
 };
 
 // FOR TESTING!!!!
@@ -1040,28 +1359,67 @@ CreateNewSDTSendDataStr()
 
 // Helper functions!!!
 
-static uint64_t
-DataQueueFull(struct SDT_SendDataStruct_t *sendDataStr)
+uint32_t
+sdt_send_GetStreamSet(struct SDT_SendDataStruct_t *sendDataStr)
 {
-   fprintf(stderr, "DataQueueFull queued=%lu max=%lu\n",
-           sendDataStr->mDataQueued, sendDataStr->mMaxDataQueued );
-   return sendDataStr->mDataQueued >= sendDataStr->mMaxDataQueued;
+  assert(sendDataStr->mNextToWriteSet && // Must be set.
+         sendDataStr->mNextToWriteId); // Must not be 0.
+
+  sendDataStr->mNextToWriteSet = 0;
+  return sendDataStr->mNextToWriteId;
+}
+
+
+static uint64_t
+sdt_send_CanSendData(struct SDT_SendDataStruct_t *sendDataStr)
+{
+//  fprintf(stderr, "sdt_send_CanSendData queued=%lu send data=%lu "
+//          "send and queued data=%lu max=%lu\n",
+//          sendDataStr->mDataQueued, sendDataStr->mSessionDataSent,
+//          sendDataStr->mSessionDataSentAndQueued,
+//          sendDataStr->mCanSendSessionOffset);
+
+  return sendDataStr->mCanSendSessionOffset > sendDataStr->mSessionDataSentAndQueued;
+}
+
+static uint64_t
+sdt_send_CanSendDataStream(struct SDT_SendDataStruct_t *sendDataStr,
+                           struct aOutgoingStreamInfo_t *stream)
+{
+  fprintf(stderr, "sdt_send_CanSendDataStream queued=%lu send data=%lu "
+          "send and queued data=%lu max=%lu\n"
+          "streamId=%u, next offset to queue =%lu offset to sent=%lu, can send "
+          "offset=%lu\n",
+          sendDataStr->mDataQueued, sendDataStr->mSessionDataSent,
+          sendDataStr->mSessionDataSentAndQueued,
+          sendDataStr->mCanSendSessionOffset, stream->mStreamId,
+          stream->mNextOffsetToBuffer, stream->mNextOffsetToSend,
+          stream->mCanSendOffset);
+
+  if ((sendDataStr->mCanSendSessionOffset > sendDataStr->mSessionDataSentAndQueued) &&
+      (stream->mCanSendOffset > stream->mNextOffsetToBuffer)) {
+    uint64_t amount = stream->mCanSendOffset - stream->mNextOffsetToBuffer;
+    uint64_t amountSession = sendDataStr->mCanSendSessionOffset -
+                              sendDataStr->mSessionDataSentAndQueued;
+    return (amountSession > amount) ? amount : amountSession;
+  }
+  return 0;
 }
 
 uint8_t
-HasDataForTransmission(struct SDT_SendDataStruct_t *sendDataStr)
+sdt_send_HasDataForTransmission(struct SDT_SendDataStruct_t *sendDataStr)
 {
   return !!(sendDataStr->mDataChunkTransmissionQueue.mFirst);
 }
 
 uint8_t
-HasUnackedPackets(struct SDT_SendDataStruct_t *sendDataStr)
+sdt_send_HasUnackedPackets(struct SDT_SendDataStruct_t *sendDataStr)
 {
   return !!(sendDataStr->mSentPacketInfo.mFirst);
 }
 
 static uint64_t
-SmallestPktSeqNumNotAcked(struct SDT_SendDataStruct_t *sendDataStr)
+sdt_send_SmallestPktSeqNumNotAcked(struct SDT_SendDataStruct_t *sendDataStr)
 {
   if (!sendDataStr->mSentPacketInfo.mFirst) {
     return 0;
@@ -1069,78 +1427,284 @@ SmallestPktSeqNumNotAcked(struct SDT_SendDataStruct_t *sendDataStr)
   return sendDataStr->mSentPacketInfo.mFirst->mPacketSeqNum;
 }
 
-static struct aOutgoingStreamInfo_t*
-FindOutgoingStream(struct SDT_SendDataStruct_t *sendDataStr, uint32_t streamId)
+static int32_t
+sdt_send_createStream(struct SDT_SendDataStruct_t *sendDataStr,
+                      uint32_t streamId)
 {
-  assert((streamId != 1) && (streamId != 3));
-
   struct aOutgoingStreamInfo_t *prev = 0, *curr = sendDataStr->mOutgoingStreams;
   while (curr && (curr->mStreamId < streamId)) {
     prev = curr;
     curr = curr->mNext;
   }
+  assert(!curr || (curr->mStreamId != streamId));
+
+  struct aOutgoingStreamInfo_t *stream =
+    (struct aOutgoingStreamInfo_t *) malloc (sizeof(struct aOutgoingStreamInfo_t));
+  if (!stream) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+
+  stream->mState = STREAM_IDLE;
+  stream->mStreamId = streamId;
+  stream->mNextOffsetToSend = 0;
+  stream->mNextOffsetToBuffer = 0;
+  stream->mCanSendOffset = sendDataStr->mServerInitialStreamWindow;
+  stream->mDataQueue.mFirst = NULL;
+  stream->mDataQueue.mLast = NULL;
+  stream->mStreamReset = 0;
+  stream->mWaitingForRSTReply = 0;
+  stream->mNext = curr;
+  if (!prev) {
+    sendDataStr->mOutgoingStreams = stream;
+  } else {
+    prev->mNext = stream;
+  }
+
+  return SDTE_OK;
+}
+
+static int32_t
+sdt_send_removeStream(struct SDT_SendDataStruct_t *sendDataStr,
+                      uint32_t streamId)
+{
+  struct aOutgoingStreamInfo_t *prev = 0, *curr = sendDataStr->mOutgoingStreams;
+  while (curr && (curr->mStreamId != streamId)) {
+    prev = curr;
+    curr = curr->mNext;
+  }
+  assert(curr && (curr->mStreamId == streamId));
+  assert(!curr->mDataQueue.mFirst);
+
+  if (!prev) {
+    sendDataStr->mOutgoingStreams = curr->mNext;
+  } else {
+    prev->mNext = curr->mNext;
+  }
+
+  return SDTE_OK;
+}
+
+static struct aOutgoingStreamInfo_t*
+sdt_send_FindStream(struct SDT_SendDataStruct_t *sendDataStr,
+                    uint32_t streamId)
+{
+  struct aOutgoingStreamInfo_t *curr = sendDataStr->mOutgoingStreams;
+  while (curr && (curr->mStreamId < streamId)) {
+    curr = curr->mNext;
+  }
   if (!curr || (curr->mStreamId != streamId)) {
-    struct aOutgoingStreamInfo_t *stream =
-      (struct aOutgoingStreamInfo_t *) malloc (sizeof(struct aOutgoingStreamInfo_t));
-    if (!stream) {
-      return NULL;
-    }
-    stream->mStreamId = streamId;
-    stream->mNextOffset = 0;
-    stream->mWindowSize = (2 << 16) - 1;
-    stream->mDataQueue.mFirst = NULL;
-    stream->mDataQueue.mLast = NULL;
-    stream->mNext = curr;
-    if (!prev) {
-      sendDataStr->mOutgoingStreams = stream;
-    } else {
-      prev->mNext = stream;
-    }
-    curr = stream;
+    return NULL;
   }
   return curr;
 }
 
 // Creating chunk and adding to a queue!!!
 static struct aDataChunk_t *
-CreateDataChunk(struct SDT_SendDataStruct_t *sendDataStr,
-                enum ChunkType type, uint32_t streamId, uint32_t size,
-                uint32_t flags, uint8_t continuation)
+sdt_send_CreateDataChunk(struct SDT_SendDataStruct_t *sendDataStr,
+                         struct aOutgoingStreamInfo_t *stream, uint32_t size)
 {
-  struct aDataChunk_t *chunk = CreateChunk(type, size, flags, streamId);
+  assert(stream && size);
+  assert(stream->mNextOffsetToBuffer + size <= stream->mCanSendOffset);
+  assert(sendDataStr->mSessionDataSentAndQueued + size <=
+         sendDataStr->mCanSendSessionOffset);
+
+  struct aDataChunk_t *chunk = CreateChunk(DATA_CHUNK, size, stream->mStreamId);
   if (!chunk) {
     return NULL;
   }
 
   chunk->mRefCnt++;
 
-  switch(type) {
-  case DATA_CHUNK:
-  {
-    // Find stream info.
-    struct aOutgoingStreamInfo_t *stream = FindOutgoingStream(sendDataStr,
-                                                              streamId);
-    if (!stream) {
-      FreeDataChunk(chunk);
-      return NULL;
-    }
-    chunk->mOffset = stream->mNextOffset;
-    stream->mNextOffset += size;
-    AddChunk(&stream->mDataQueue, chunk);
-    break;
-  }
-  case HEADER_CHUNK:
-    chunk->mOffset = sendDataStr->mOutgoingHeaders.mNextOffset;
-    sendDataStr->mOutgoingHeaders.mNextOffset += size;
-    chunk->mContinuationFrame = continuation;
-    AddChunk(&sendDataStr->mOutgoingHeaders.mDataQueue, chunk);
-    break;
-  case CONTROL_CHUNK:
-    AddChunk(&sendDataStr->mOutgoingControlFrames, chunk);
-  }
+  chunk->mOffset = stream->mNextOffsetToBuffer;
+  stream->mNextOffsetToBuffer += size;
+  sendDataStr->mSessionDataSentAndQueued += size;
+  AddChunk(&stream->mDataQueue, chunk);
 
   FreeDataChunk(chunk);
   return chunk;
+}
+
+static int32_t RemoveChunkFromBuffer(struct SDT_SendDataStruct_t *sendDataStr,
+                                     struct aDataChunk_t *chunk);
+
+static int32_t
+AddChunkRange(struct SDT_SendDataStruct_t *sendDataStr,
+              struct aDataChunk_t *chunk, uint32_t start, uint32_t end);
+
+// This function willl create a contorl chunk and return a pointer to the chunk
+// buffer. 
+static uint8_t *
+sdt_send_CreateControlChunk(struct SDT_SendDataStruct_t *sendDataStr,
+                            uint32_t size)
+{
+  struct aDataChunk_t *chunk = CreateChunk(CONTROL_CHUNK, size, 0);
+  if (!chunk) {
+    return NULL;
+  }
+
+  AddChunk(&sendDataStr->mOutgoingControlFrames, chunk);
+
+  uint32_t rv = AddChunkRange(sendDataStr, chunk, 0, size);
+
+  if (rv) {
+    // This can only failed with SDTE_OUT_OF_MEMORY error!
+    // Chunk will be freed by RemoveDataChunk.
+    RemoveChunkFromBuffer(sendDataStr, chunk);
+    return NULL;
+  }
+
+  return GetDataChunkBuf(chunk);
+}
+
+static struct aDataChunk_t *
+sdt_send_CreateDataChunkStreamId(struct SDT_SendDataStruct_t *sendDataStr,
+                                 uint32_t streamId, uint32_t size)
+{
+  struct aOutgoingStreamInfo_t* stream =
+    sdt_send_FindStream(sendDataStr, streamId);
+  assert(stream);
+
+  return sdt_send_CreateDataChunk(sendDataStr, stream, size);
+}
+
+static int32_t
+sdt_send_MaybeBufferData(struct SDT_SendDataStruct_t *sendDataStr,
+                         const uint8_t *buf, uint32_t amount)
+{
+  uint32_t streamId = sdt_send_GetStreamSet(sendDataStr);
+  assert(streamId);
+
+  fprintf(stderr, "sdt_send_MaybeBufferData: amount=%d streamId=%d\n",
+          amount, streamId);
+
+  struct aOutgoingStreamInfo_t* stream =
+    sdt_send_FindStream(sendDataStr, streamId);
+  assert(stream && stream->mState != STREAM_CLOSED);
+
+  uint64_t canSendAmount = sdt_send_CanSendDataStream(sendDataStr,
+                                                      stream);
+
+  fprintf(stderr, "sdt_send_MaybeBufferData: canSendAmount=%lu\n",
+          canSendAmount);
+  if (!canSendAmount) {
+    return SDTE_WOULD_BLOCK;
+  }
+
+  canSendAmount = (canSendAmount > amount) ? amount : canSendAmount;
+
+  struct aDataChunk_t *chunk = sdt_send_CreateDataChunk(sendDataStr, stream,
+                                                        canSendAmount);
+
+  if (!chunk) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+
+  unsigned char *chunkBuf = GetDataChunkBuf(chunk);
+
+  memcpy(chunkBuf, buf, canSendAmount);
+  int32_t rv = AddChunkRange(sendDataStr, chunk, 0, canSendAmount);
+  if (rv) {
+    return rv;
+  }
+  LogRanges(chunk);
+  return canSendAmount;
+}
+
+static int32_t
+sdt_send_CloseStream(struct SDT_SendDataStruct_t *sendDataStr,
+                     uint32_t streamId)
+{
+  // Find stream info.
+  struct aOutgoingStreamInfo_t *stream = sdt_send_FindStream(sendDataStr,
+                                                             streamId);
+  if (!stream) {
+    return SDTE_NOT_AVAILABLE;
+  }
+    
+  assert(stream->mState == STREAM_OPEN);
+  stream->mState = STREAM_CLOSED;
+  struct aDataChunk_t *chunk = sdt_send_CreateDataChunk(sendDataStr, stream, 0);
+
+  if (!chunk) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+  assert(stream->mDataQueue.mLast);
+  stream->mDataQueue.mLast->mFin = 1;
+  return SDTE_OK;
+}
+
+
+int32_t
+sdt_send_RST_STREAM(struct SDT_SendDataStruct_t *sendStr, uint32_t streamId,
+                    uint64_t offset)
+{
+ //TODO!!!!
+  return SDTE_OK;
+}
+
+static int32_t
+sdt_send_ResetStream(struct SDT_SendDataStruct_t *sendDataStr,
+                     uint32_t streamId, uint8_t sendRST)
+{
+  // Find stream info.
+  struct aOutgoingStreamInfo_t *stream = sdt_send_FindStream(sendDataStr,
+                                                             streamId);
+  if (!stream) {
+    return SDTE_NOT_AVAILABLE;
+  }
+
+  if (!stream->mStreamReset) {
+    while (stream->mDataQueue.mFirst) {
+      struct aDataChunk_t *chunk = stream->mDataQueue.mFirst;
+      if (chunk->mNotSentRanges) {
+        RemoveChunkFromTransmissionQueue(&sendDataStr->mDataChunkTransmissionQueue,
+                                         chunk);
+      }
+      if (chunk->mData) {
+        sendDataStr->mDataQueued -= chunk->mData->mSize;
+        free(chunk->mData);
+        chunk->mData = NULL;
+      }
+
+      while (chunk->mNotSentRanges) {
+         struct range32_t *range = chunk->mNotSentRanges;
+         chunk->mNotSentRanges = range->mNext;
+         free(range);
+      }
+
+      while (chunk->mUnackedRanges) {
+         struct range32_t *range = chunk->mUnackedRanges;
+         chunk->mUnackedRanges = range->mNext;
+         free(range);
+      }
+
+      stream->mDataQueue.mFirst = chunk->mNext;
+      FreeDataChunk(chunk);
+    }
+
+    stream->mDataQueue.mFirst = stream->mDataQueue.mLast = NULL;
+    
+    assert((sendDataStr->mSessionDataSentAndQueued - sendDataStr->mSessionDataSent) >=
+           (stream->mNextOffsetToBuffer - stream->mNextOffsetToSend));
+    sendDataStr->mSessionDataSentAndQueued -= stream->mNextOffsetToBuffer - stream->mNextOffsetToSend;
+  }
+
+  if (sendRST) {
+    assert(!stream->mStreamReset);
+    assert(stream->mState != STREAM_CLOSED);
+    stream->mWaitingForRSTReply = 1;
+    stream->mStreamReset = 1;
+    stream->mState = STREAM_CLOSED;
+    sdt_send_RST_STREAM(sendDataStr, streamId, stream->mNextOffsetToSend);
+  } else {
+    if (stream->mState != STREAM_CLOSED) {
+      sdt_send_RST_STREAM(sendDataStr, streamId, stream->mNextOffsetToSend);
+    }
+    stream->mStreamReset = 1;
+    stream->mState = STREAM_CLOSED;
+  }
+
+  return SDTE_OK;
 }
 
 // FOR TESTING !!!!!
@@ -1148,11 +1712,11 @@ struct aDataChunk_t *
 CreateDataChunkForTest(struct SDT_SendDataStruct_t *sendDataStr,
                        uint32_t streamId, uint32_t size)
 {
-  return CreateDataChunk(sendDataStr, DATA_CHUNK, streamId, size, 0, 0);
+  return sdt_send_CreateDataChunkStreamId(sendDataStr, streamId, size);
 }
 
 // Clear data structure!!!
-void
+static void
 ClearSDTSendDataStr(struct SDT_SendDataStruct_t *sendDataStr)
 {
   while (sendDataStr->mOutgoingControlFrames.mFirst) {
@@ -1171,12 +1735,6 @@ ClearSDTSendDataStr(struct SDT_SendDataStruct_t *sendDataStr)
       FreeDataChunk(doneC);
     }
     free(doneSI);
-  }
-
-  while (sendDataStr->mOutgoingHeaders.mDataQueue.mFirst) {
-    struct aDataChunk_t *doneC = sendDataStr->mOutgoingHeaders.mDataQueue.mFirst;
-    sendDataStr->mOutgoingHeaders.mDataQueue.mFirst = doneC->mNext;
-    FreeDataChunk(doneC);
   }
 
   while (sendDataStr->mDataChunkTransmissionQueue.mFirst) {
@@ -1198,7 +1756,7 @@ ClearSDTSendDataStr(struct SDT_SendDataStruct_t *sendDataStr)
   }
 }
 
-int32_t
+static int32_t
 AddChunkRange(struct SDT_SendDataStruct_t *sendDataStr,
               struct aDataChunk_t *chunk, uint32_t start, uint32_t end)
 {
@@ -1227,18 +1785,19 @@ AddChunkRange(struct SDT_SendDataStruct_t *sendDataStr,
   return 0;
 }
 
-// Data are written to a chunk using the WriteDataToDataChunk function which
-// takes a buffer and does data copy or using the GetDataChunkBuf function
+#ifdef H2MAPPING
+// Data are written to a chunk using the sdt_send_WriteDataToDataChunk function
+// which takes a buffer and does data copy or using the GetDataChunkBuf function
 // which returns raw buffer (the user must take care of a buffer overflow). The
 // user of GetDataChunkBuf must call AddChunkRange, this function will add the
 // corresponding range and do additional necessary steps like adding the chunk
 // to the transmission queue etc.
 static int32_t
-WriteDataToDataChunk(struct SDT_SendDataStruct_t *sendDataStr,
-                     struct aDataChunk_t *chunk, const unsigned char *buf,
-                     int32_t toWrite)
+sdt_send_WriteDataToDataChunk(struct SDT_SendDataStruct_t *sendDataStr,
+                              struct aDataChunk_t *chunk,
+                              const unsigned char *buf, int32_t toWrite)
 {
-  fprintf(stderr, "WriteDataToDataChunk toWrite=%d \n", toWrite);
+  fprintf(stderr, "sdt_send_WriteDataToDataChunk toWrite=%d \n", toWrite);
 
   assert(chunk->mData);
   assert(chunk->mData->mSize >= chunk->mData->mWritten + toWrite);
@@ -1256,6 +1815,7 @@ WriteDataToDataChunk(struct SDT_SendDataStruct_t *sendDataStr,
   LogRanges(chunk);
   return toWrite;
 }
+#endif
 
 static int32_t
 SDTFrameSent(struct SDT_SendDataStruct_t *sendDataStr,
@@ -1279,10 +1839,6 @@ SDTFrameSent(struct SDT_SendDataStruct_t *sendDataStr,
   if (!chunk->mNotSentRanges) {
     RemoveChunkFromTransmissionQueue(&sendDataStr->mDataChunkTransmissionQueue,
                                      chunk);
-  }
-
-  if (chunk->mType == CONTROL_CHUNK) {
-    pktInfo->mIsPingPkt = chunk->mIsPingPkt;
   }
 
   return 0;
@@ -1311,69 +1867,10 @@ WriteControlFrame(struct SDT_SendDataStruct_t *sendDataStr,
   if (SDTFrameSent(sendDataStr, chunk, len, pktInfo)) {
     return 0;
   }
-  return 1;
-}
 
-static void WriteSDTCommonStreamFrameHeader(struct aPacket_t *pkt,
-                                            uint8_t flags,
-                                            uint32_t streamId, uint64_t offset,
-                                            uint16_t len);
-static void WriteSDTHeaderFrameHeader(struct aPacket_t *pkt, uint8_t flags,
-                                      uint8_t type, uint32_t streamId,
-                                      uint16_t len);
-static uint16_t hSDTFrameOrHeaderLen(uint8_t type, uint8_t flags);
-
-static uint8_t
-WriteHeaderFrame(struct SDT_SendDataStruct_t *sendDataStr,
-                 struct aDataChunk_t *chunk,
-                 struct aPacket_t *pkt, struct aPacketInfo_t *pktInfo)
-{
-  assert(chunk);
-  assert(pkt);
-  assert(pktInfo);
-
-  if ((pkt->mSize - pkt->mWritten) <=
-       hSDTFrameOrHeaderLen(HTTP2_FRAME_TYPE_HEADERS, 0)) {
-    return 0;
+  if (chunkBuf[0] == SDT_FRAME_TYPE_PING) {
+    pktInfo->mIsPingPkt = 1;
   }
-
-  uint16_t len = pkt->mSize - pkt->mWritten -
-                 hSDTFrameOrHeaderLen(HTTP2_FRAME_TYPE_HEADERS, 0);
-
-  if (len > (chunk->mNotSentRanges->mEnd - chunk->mNotSentRanges->mStart)) {
-    len = chunk->mNotSentRanges->mEnd - chunk->mNotSentRanges->mStart;
-  }
-
-  WriteSDTCommonStreamFrameHeader(pkt, 0, 3,
-                                  chunk->mOffset + chunk->mNotSentRanges->mStart,
-                                  len + HTTP2_HEADERLEN);
-
-  uint8_t type = HTTP2_FRAME_TYPE_HEADERS;
-
-  if (chunk->mNotSentRanges->mStart || chunk->mContinuationFrame) {
-    type = HTTP2_FRAME_TYPE_CONTINUATION;
-  }
-
-  uint8_t flags = 0;
-  // Check if it is the first header frame for a stream and if it has a
-  // priorityflag
-  if (!chunk->mNotSentRanges->mStart) {
-    flags |= chunk->mH2Flags & HTTP2_FRAME_FLAG_PRIORITY;
-  }
-
-  if ((chunk->mNotSentRanges->mStart + len) == chunk->mData->mSize) {
-    flags |= chunk->mH2Flags & (HTTP2_FRAME_FLAG_END_STREAM |
-                              HTTP2_FRAME_FLAG_END_HEADERS);
-  }
-  // TODO: Optimize Header frames!!!
-  WriteSDTHeaderFrameHeader(pkt, flags, type, chunk->mStreamId,
-                            len);
-
-  unsigned char *pktbuf = (unsigned char *)(pkt + 1);
-  unsigned char *chunkbuf = GetDataChunkBuf(chunk);
-  memcpy(pktbuf + pkt->mWritten, chunkbuf + chunk->mNotSentRanges->mStart, len);
-  SDTFrameSent(sendDataStr, chunk, len, pktInfo);
-  pkt->mWritten += len;
 
   return 1;
 }
@@ -1383,51 +1880,68 @@ WriteDataFrame(struct SDT_SendDataStruct_t *sendDataStr,
                struct aDataChunk_t *chunk,
                struct aPacket_t *pkt, struct aPacketInfo_t *pktInfo)
 {
+  fprintf(stderr, "WriteDataFrame\n");
   assert(chunk);
   assert(pkt);
   assert(pktInfo);
 
-  if ((pkt->mSize - pkt->mWritten) <=
-       hSDTFrameOrHeaderLen(HTTP2_FRAME_TYPE_DATA, 0)) {
+  if ((pkt->mSize - pkt->mWritten) <= SDT_FRAME_TYPE_STREAM_HEADER_SIZE) {
     return 0;
   }
 
   uint16_t lenRemaining = pkt->mSize - pkt->mWritten -
-                          hSDTFrameOrHeaderLen(HTTP2_FRAME_TYPE_DATA, 0);
+                          SDT_FRAME_TYPE_STREAM_HEADER_SIZE;
 
   uint16_t len = chunk->mNotSentRanges->mEnd - chunk->mNotSentRanges->mStart;
   len = (len > lenRemaining) ? lenRemaining : len;
 
-  uint8_t flags = 0;
-  if ((chunk->mH2Flags & HTTP2_FRAME_FLAG_END_STREAM) &&
+  uint8_t fin = 0;
+  if (chunk->mFin &&
       ((chunk->mNotSentRanges->mStart + len) == chunk->mData->mSize)) {
-    flags |= SDT_FIN_BIT;
+    fin = 1;
   }
 
   // Data frames are streams so we can concatenate data from multiple chunks.
   struct aDataChunk_t *currChunk = chunk;
-  while ((lenRemaining > len) &&
+  while (((lenRemaining > len) &&
+          (currChunk->mNotSentRanges->mEnd == currChunk->mData->mSize) &&
+          currChunk->mNext &&
+          (currChunk->mNext->mOffset == (currChunk->mOffset + currChunk->mData->mSize)) &&
+          currChunk->mNext->mNotSentRanges &&
+          !currChunk->mNext->mNotSentRanges->mStart
+         ) ||
          ((currChunk->mNotSentRanges->mEnd == currChunk->mData->mSize) &&
-         currChunk->mNext &&
-         (currChunk->mNext->mOffset == (currChunk->mOffset + currChunk->mData->mSize)) &&
-         currChunk->mNext->mNotSentRanges &&
-         !currChunk->mNext->mNotSentRanges->mStart)) {
+          currChunk->mNext &&
+          (currChunk->mNext->mOffset == (currChunk->mOffset + currChunk->mData->mSize)) &&
+          currChunk->mNext->mNotSentRanges &&
+          !currChunk->mNext->mNotSentRanges->mStart &&
+          !currChunk->mNext->mData->mSize &&
+          currChunk->mNext->mFin
+         )) {
 
     currChunk = currChunk->mNext;
-    len += currChunk->mNotSentRanges->mEnd - currChunk->mNotSentRanges->mStart;
-    len = (len > lenRemaining) ? lenRemaining : len;
+    uint64_t lenChunk = currChunk->mNotSentRanges->mEnd - currChunk->mNotSentRanges->mStart;
+    if ((len + lenChunk) > lenRemaining) {
+      lenChunk = lenRemaining - len;
+    }
+    len += lenChunk;
 
-    if ((currChunk->mH2Flags & HTTP2_FRAME_FLAG_END_STREAM) &&
-        ((currChunk->mNotSentRanges->mStart + len) == currChunk->mData->mSize)) {
-      assert(!flags);
-      flags |= SDT_FIN_BIT;
+    if (currChunk->mFin &&
+        ((currChunk->mNotSentRanges->mStart + lenChunk) == currChunk->mData->mSize)) {
+      assert(!fin);
+      fin = 1;
     }
   }
 
-  WriteSDTCommonStreamFrameHeader(pkt, flags, chunk->mStreamId,
-                                  chunk->mOffset + chunk->mNotSentRanges->mStart,
-                                  len);
   unsigned char *pktbuf = (unsigned char *)(pkt + 1);
+  int32_t written = sdt_encode_StreamFrame(pktbuf + pkt->mWritten,
+                                           chunk->mStreamId, 4,
+                                           chunk->mOffset + chunk->mNotSentRanges->mStart,
+                                           (chunk->mOffset + chunk->mNotSentRanges->mStart) ? 8 : 0,
+                                           fin, 1, len);
+  assert(written > 0);
+  pkt->mWritten += written;
+
   uint16_t currLen = 0;
   while (currLen < len) {
     unsigned char *chunkbuf = GetDataChunkBuf(chunk);
@@ -1437,10 +1951,17 @@ WriteDataFrame(struct SDT_SendDataStruct_t *sendDataStr,
            toSend);
     pkt->mWritten += toSend;
     currLen += toSend;
-    SDTFrameSent(sendDataStr, chunk, toSend, pktInfo);
+    if (SDTFrameSent(sendDataStr, chunk, toSend, pktInfo)) {
+      return 0;
+    }
     chunk = chunk->mNext;
   }
 
+  if (fin && chunk && chunk->mData && !chunk->mData->mSize) {
+    if (SDTFrameSent(sendDataStr, chunk, 0, pktInfo)) {
+      return 0;
+    }
+  }
   return 1;
 }
 
@@ -1460,11 +1981,6 @@ WriteFrame(struct SDT_SendDataStruct_t *sendDataStr,
         rv = WriteControlFrame(sendDataStr,
                                sendDataStr->mDataChunkTransmissionQueue.mFirst->mDataChunk,
                                pkt, pktInfo);
-        break;
-      case HEADER_CHUNK:
-        rv = WriteHeaderFrame(sendDataStr,
-                              sendDataStr->mDataChunkTransmissionQueue.mFirst->mDataChunk,
-                              pkt, pktInfo);
         break;
       case DATA_CHUNK:
         rv = WriteDataFrame(sendDataStr,
@@ -1518,6 +2034,21 @@ PacketSent(struct SDT_SendDataStruct_t *sendDataStr, uint8_t sent)
       sendDataStr->mPacketBeingSent->mSentTime = PR_IntervalNow();
       AddPacketInfoToQueue(&sendDataStr->mSentPacketInfo,
                            sendDataStr->mPacketBeingSent);
+
+      struct aFrameInfo_t *frame = sendDataStr->mPacketBeingSent->mFrameInfos;
+      while (frame) {
+        // Find stream info.
+        struct aOutgoingStreamInfo_t *stream = sdt_send_FindStream(sendDataStr,
+                                                                   frame->mDataChunk->mStreamId);
+        uint64_t lastOffset = frame->mDataChunk->mOffset + frame->mRange.mEnd;
+        assert(stream->mNextOffsetToBuffer <= lastOffset);
+        if (stream->mNextOffsetToSend < lastOffset) {
+          assert(sendDataStr->mSessionDataSentAndQueued >=
+                 (lastOffset - stream->mNextOffsetToSend + sendDataStr->mSessionDataSent));
+          sendDataStr->mSessionDataSent += (lastOffset - stream->mNextOffsetToSend);
+          stream->mNextOffsetToSend = lastOffset;
+        }
+      }
     } else {
       // The packet has not been sent. We need to revert the action.
       struct aFrameInfo_t *frame = sendDataStr->mPacketBeingSent->mFrameInfos;
@@ -1616,14 +2147,11 @@ RemoveChunkFromBuffer(struct SDT_SendDataStruct_t *sendDataStr,
   case CONTROL_CHUNK:
     RemoveChunk(&sendDataStr->mOutgoingControlFrames, chunk);
     break;
-  case HEADER_CHUNK:
-    RemoveChunk(&sendDataStr->mOutgoingHeaders.mDataQueue, chunk);
-    break;
   case DATA_CHUNK:
   {
     // Find stream info.
-    struct aOutgoingStreamInfo_t *stream = FindOutgoingStream(sendDataStr,
-                                                              chunk->mStreamId);
+    struct aOutgoingStreamInfo_t *stream = sdt_send_FindStream(sendDataStr,
+                                                               chunk->mStreamId);
     if (!stream) {
       FreeDataChunk(chunk);
       return -1;
@@ -1638,7 +2166,7 @@ RemoveChunkFromBuffer(struct SDT_SendDataStruct_t *sendDataStr,
   return 0;
 }
 
-struct aPacketInfo_t *
+static struct aPacketInfo_t *
 PacketAcked(struct SDT_SendDataStruct_t *sendDataStr, uint64_t seqNum)
 {
   struct aPacketInfo_t *pkt =
@@ -1679,6 +2207,70 @@ PacketAcked(struct SDT_SendDataStruct_t *sendDataStr, uint64_t seqNum)
   return pkt;
 }
 
+static int32_t
+sdt_send_WINDOW_UPDATE(struct SDT_SendDataStruct_t *sendDataStr,
+                       uint32_t streamId, uint64_t offset)
+{
+  fprintf(stderr, "Send WINDOW_UPDATE for stream %u offset=%lu\n",
+                  streamId, offset);
+
+  // Chunk is own by sendDataStr!!!!
+  uint8_t *chunkBuf = sdt_send_CreateControlChunk(sendDataStr, 13);
+
+  if (!chunkBuf) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+
+  chunkBuf[0] = SDT_FRAME_TYPE_WINDOW_UPDATE;
+  streamId = htonl(streamId);
+  memcpy(chunkBuf + 1, &streamId, 4);
+  offset = htonll(offset);
+  memcpy(chunkBuf + 5, &offset, 8);
+
+  return SDTE_OK;
+}
+
+static int32_t
+sdt_send_PING(struct SDT_SendDataStruct_t *sendDataStr)
+{
+  fprintf(stderr, "Send PING.\n");
+
+  // Chunk is own by sendDataStr!!!!
+  uint8_t *chunkBuf = sdt_send_CreateControlChunk(sendDataStr, 1);
+
+  if (!chunkBuf) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+
+  chunkBuf[0] = SDT_FRAME_TYPE_PING;
+}
+
+static int32_t
+sdt_send_GOAWAY(struct SDT_SendDataStruct_t *sendDataStr, uint32_t error,
+                uint32_t lastGoodStream, uint16_t reasonLen,
+                const unsigned char *reason)
+{
+  fprintf(stderr, "Send GOAWAY\n");
+
+  // Chunk is own by sendDataStr!!!!
+  uint8_t *chunkBuf = sdt_send_CreateControlChunk(sendDataStr, 11 + reasonLen);
+
+  if (!chunkBuf) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+
+  chunkBuf[0] = SDT_FRAME_TYPE_GOAWAY;
+  error = htonl(error);
+  memcpy(chunkBuf + 1, &error, 4);
+  lastGoodStream = htonl(lastGoodStream);
+  memcpy(chunkBuf + 5, &lastGoodStream, 4);
+  reasonLen = htons(reasonLen);
+  memcpy(chunkBuf + 9, &reasonLen, 2);
+  memcpy(chunkBuf + 9, reason, reasonLen);
+
+  return SDTE_OK;
+}
+
 enum SDTH2SState {
   SDT_H2S_NEWFRAME,
   SDT_H2S_FILLFRAME,
@@ -1691,33 +2283,1155 @@ enum SDTConnectionState {
   SDT_CLOSING
 };
 
-struct hFrame_t
+struct recvDataFrame_t
 {
   uint8_t mType;
-  uint64_t mSDTOffset;
-  uint16_t mSDTLength;
+  uint64_t mOffset;
   uint8_t mLast;
   uint16_t mDataSize;
   uint16_t mDataRead;
-  struct hFrame_t* mNext;
+  struct recvDataFrame_t* mNext;
   // the buffer lives at the end of the struct
 };
 
-struct hStream_t
+struct recvStream_t
 {
+  enum StreamState_t mState;
   uint32_t mStreamId;
-  uint64_t mSDTOffset;
+  uint64_t mOffset; // Next offset to give to the app.
+  uint64_t mCanSendOffset;
   uint64_t mWindowSize;
+  uint64_t mNotAckedOffset;
+  uint64_t mLastSentOffset;
+
   uint8_t mHeaderDone;
-  uint8_t mEnded;
-  struct hFrame_t *mFrames;
-  struct hStream_t *mNext;
+  uint8_t mStreamReset;
+  uint8_t mWaitingForRSTReply;
+  uint64_t mEndOffset; // Final byte offset sent on the stream.
+  struct recvDataFrame_t *mFrames;
+  struct recvStream_t *mNext;
+
+  // This is pointer use only for mReadyStreamsFirst queue!
+  struct recvStream_t *mNextReadyStream;
 };
+
+static void
+FreeRecvStream(struct recvStream_t *stream)
+{
+  struct recvDataFrame_t *done = stream->mFrames;
+  while (done) {
+    stream->mFrames = done->mNext;
+    free(done);
+    done = stream->mFrames;
+  }
+  free(stream);
+}
+
+static void
+RecvFrame(struct recvStream_t *stream)
+{
+  assert(stream->mState != STREAM_CLOSED);
+
+  stream->mState = STREAM_OPEN;
+}
+
+static void
+RecvFin(struct recvStream_t *stream)
+{
+  assert(stream->mState == STREAM_OPEN);
+
+  stream->mState = STREAM_CLOSED;
+}
+
+struct SDT_RecvDataStruct_t
+{
+  // This are structures for ordering incoming frames.
+  struct recvStream_t *mIncomingStreams;
+  uint64_t mSessionOffset;
+  uint64_t mCanSendSessionOffset;
+  uint64_t mNotAckedOffset;
+  uint64_t mLastSentOffset;
+
+#ifdef H2MAPPING
+  struct recvDataFrame_t *mH2OrderedFramesLast;
+  struct recvDataFrame_t *mH2OrderedFramesFirst;
+
+  uint8_t mH2MagicHello;
+  // ONLY H2 MAPPING HELPER VARIABLES!!!
+  struct recvDataFrame_t *mH2Header_Frame;
+  uint8_t mH2Header_HeaderBuf[HTTP2_HEADERLEN];
+  uint32_t mH2Header_Read;
+  uint8_t  mH2Header_Fin;
+  uint32_t mH2Header_Stream;
+
+#else
+  uint32_t mReadyStreamsNum;
+  struct recvStream_t *mReadyStreamsFirst;
+  struct recvStream_t *mReadyStreamsLast;
+
+  uint8_t mNextToReadSet;
+  uint32_t mNextToReadId;
+#endif
+
+  // The initial value of the local stream and session window
+  uint32_t mInitialRwin;
+
+  // The send structure is needed fpr sending control frames like WINDOW_UPDATE.
+  struct SDT_SendDataStruct_t *mSendStr;
+};
+
+static void
+ClearSDTRecvDataStr(struct SDT_RecvDataStruct_t *recvStr)
+{
+  struct recvStream_t *doneS, *currS = recvStr->mIncomingStreams;
+  while (currS) {
+    doneS = currS;
+    currS = currS->mNext;
+    FreeRecvStream(doneS);
+  }
+
+#ifdef H2MAPPING
+  struct recvDataFrame_t *doneF, *currF = recvStr->mH2OrderedFramesFirst;
+  while (currF) {
+    doneF = currF;
+    currF = currF->mNext;
+    free(doneF);
+  }
+#endif
+}
+
+static struct recvStream_t*
+sdt_recv_FindStream(struct SDT_RecvDataStruct_t *recvStr,
+                    uint32_t streamId)
+{
+  struct recvStream_t *curr = recvStr->mIncomingStreams;
+  while (curr && (curr->mStreamId < streamId)) {
+    curr = curr->mNext;
+  }
+  if (!curr || (curr->mStreamId != streamId)) {
+    return NULL;
+  }
+  return curr;
+}
+
+static void
+sdt_recv_IncrementWindowForSession(struct SDT_RecvDataStruct_t *recvStr,
+                                   uint32_t bytes)
+{
+  if (bytes) {
+    recvStr->mNotAckedOffset += bytes;
+    recvStr->mLastSentOffset = recvStr->mCanSendSessionOffset +
+                               recvStr->mNotAckedOffset;
+    sdt_send_WINDOW_UPDATE(recvStr->mSendStr, 0, recvStr->mLastSentOffset);
+  }
+}
+
+static void
+sdt_recv_IncrementWindowForStream(struct SDT_RecvDataStruct_t *recvStr,
+                                  struct recvStream_t *stream, uint32_t bytes)
+{
+  if (bytes) {
+    stream->mNotAckedOffset += bytes;
+    sdt_send_WINDOW_UPDATE(recvStr->mSendStr, stream->mStreamId,
+                           stream->mCanSendOffset + stream->mNotAckedOffset);
+  }
+}
+
+#ifdef H2MAPPING
+
+static int H2_MakeMagicFrame(struct SDT_RecvDataStruct_t *recvStr);
+static int32_t H2_MakeSettingsSettingsAckFrame(struct SDT_RecvDataStruct_t *recvStr,
+                                               uint8_t ack);
+
+// This frames are ready to be given to Http2.
+static int32_t
+H2_AddSortedHttp2Frame(struct SDT_RecvDataStruct_t *recvStr,
+                       struct recvDataFrame_t *frame)
+{
+  fprintf(stderr, "H2_AddSortedHttp2Frame %p size=%d \n",
+          frame, frame->mDataSize);
+    // If there is no magic sent we need to sent it and settings too.
+  if (!recvStr->mH2MagicHello) {
+    recvStr->mH2MagicHello = 1;
+    int32_t rc = H2_MakeMagicFrame(recvStr);
+    if (rc) {
+      return rc;
+    }
+    rc = H2_MakeSettingsSettingsAckFrame(recvStr, 0);
+    if (rc) {
+      return rc;
+    }
+  }
+
+  assert(!frame->mNext);
+
+  if (recvStr->mH2OrderedFramesLast) {
+    recvStr->mH2OrderedFramesLast->mNext = frame;
+  } else {
+    recvStr->mH2OrderedFramesFirst = frame;
+  }
+  recvStr->mH2OrderedFramesLast = frame;
+  return SDTE_OK;
+}
+
+static int32_t
+H2_MakeMagicFrame(struct SDT_RecvDataStruct_t *recvStr)
+{
+  struct recvDataFrame_t *frame =
+    (struct recvDataFrame_t*) malloc (sizeof(struct recvDataFrame_t) + 24);
+  if (!frame) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+  frame->mNext = 0;
+  frame->mOffset = 0;
+  frame->mDataSize = 24;
+  frame->mDataRead = 0;
+  frame->mLast = 0;
+
+  uint8_t *framebuf = (uint8_t*)(frame + 1);
+  memcpy(framebuf, magicHello, 24);
+  return H2_AddSortedHttp2Frame(recvStr, frame);
+}
+
+static int32_t
+H2_MakeSettingsSettingsAckFrame(struct SDT_RecvDataStruct_t *recvStr,
+                                uint8_t ack)
+{
+  uint16_t frameLen = HTTP2_HEADERLEN + (ack ? 0 : 18);
+
+  struct recvDataFrame_t *frame =
+    (struct recvDataFrame_t*) malloc (sizeof(struct recvDataFrame_t) +
+                                      frameLen);
+  if (!frame) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+  frame->mNext = 0;
+  frame->mOffset = 0;
+  frame->mDataSize = 0;
+  frame->mDataRead = 0;
+  frame->mLast = 0;
+
+  uint8_t *framebuf = (uint8_t*)(frame + 1);
+
+  framebuf[frame->mDataSize] = 0;
+  frame->mDataSize += 1;
+
+  uint16_t len = ack ? 0 : 18;
+  len = htons(len);
+  memcpy(framebuf + frame->mDataSize, &len, 2);
+  frame->mDataSize += 2;
+
+  framebuf[frame->mDataSize] = HTTP2_FRAME_TYPE_SETTINGS;
+  frame->mDataSize++;
+
+  if (ack) {
+    framebuf[frame->mDataSize] = HTTP2_FRAME_FLAG_ACK; //ACK
+  } else {
+    framebuf[frame->mDataSize] = 0;
+  }
+  frame->mDataSize++;
+
+  uint32_t id = 0;
+  memcpy(framebuf + frame->mDataSize, &id, 4);
+  frame->mDataSize += 4;
+
+  if (!ack) {
+    framebuf[frame->mDataSize] = 0;
+    framebuf[frame->mDataSize + 1] = HTTP2_SETTINGS_TYPE_HEADER_TABLE_SIZE;
+    uint32_t val = htonl(65536);
+    memcpy(framebuf + frame->mDataSize + 2, &val, 4);
+    frame->mDataSize += 6;
+
+    framebuf[frame->mDataSize] = 0;
+    framebuf[frame->mDataSize + 1] = HTTP2_SETTINGS_TYPE_INITIAL_WINDOW;
+    val = htonl(131072);
+    memcpy(framebuf + frame->mDataSize + 2, &val, 4);
+    frame->mDataSize += 6;
+
+    framebuf[frame->mDataSize] = 0;
+    framebuf[frame->mDataSize + 1] = HTTP2_SETTINGS_MAX_FRAME_SIZE;
+    val = htonl( 0x4000);
+    memcpy(framebuf + frame->mDataSize + 2, &val, 4);
+    frame->mDataSize += 6;
+  }
+  return H2_AddSortedHttp2Frame(recvStr, frame);
+}
+
+static int32_t
+H2_Make_PING_ACK(struct SDT_RecvDataStruct_t *recvStr)
+{
+  // A ping packet was been acked, send an h2 ping ack.
+  fprintf(stderr, "Make HTTP2 PING ACK.\n");
+  struct recvDataFrame_t *frame =
+    (struct recvDataFrame_t*) malloc (sizeof(struct recvDataFrame_t) +
+                                      HTTP2_HEADERLEN + 8);
+  if (!frame)
+    return SDTE_OUT_OF_MEMORY;
+
+  frame->mNext = 0;
+  frame->mOffset = 0;
+  frame->mDataSize = HTTP2_HEADERLEN + 8;
+  frame->mDataRead = 0;
+  frame->mLast = 0;
+
+  uint8_t *buf = (uint8_t*)(frame + 1);
+  buf[0] = 0;
+  uint16_t len = htons(8);
+  memcpy(buf + 1, &len, 2);
+  buf[3] = HTTP2_FRAME_TYPE_PING;
+  buf[4] = HTTP2_FRAME_FLAG_ACK;
+  memset(buf + HTTP2_HEADERLEN, 0, 8);
+  return H2_AddSortedHttp2Frame(recvStr, frame);
+}
+
+uint8_t
+H2_IsDataStream(uint32_t streamId)
+{
+  streamId = streamId & 0x3;
+  return (streamId == 3) || (streamId == 0);
+}
+
+uint32_t
+H2_SDTStreamId2H2(uint32_t streamId)
+{
+  if (streamId & (uint32_t)0x1) {
+    streamId = streamId >> 2;
+  } else {
+    streamId = streamId >> 1;
+    if (streamId & (uint32_t)0x1) {
+      streamId++;
+    }
+  }
+  return streamId;
+}
+
+static int32_t
+H2_Make_RST_STREAM(struct SDT_RecvDataStruct_t *recvStr, uint32_t streamId,
+                   uint32_t offset)
+{
+  // RST only when the data stream is reset not header stream!
+  if (!H2_IsDataStream(streamId)) {
+    return SDTE_OK;
+  }
+
+  // I am going to queue this one as if it is a data packet
+  struct recvDataFrame_t *frame =
+    (struct recvDataFrame_t*) malloc (sizeof(struct recvDataFrame_t) +
+                                      HTTP2_HEADERLEN + 4);
+  if (!frame) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+
+  frame->mType = HTTP2_FRAME_TYPE_RST_STREAM;
+  frame->mNext = 0;
+  frame->mOffset = 0;
+  frame->mDataSize = HTTP2_HEADERLEN + 4;
+  frame->mDataRead = 0;
+  frame->mLast = 1;
+
+  uint8_t *buf = (uint8_t*)(frame + 1);
+  buf[0] = 0;
+  uint16_t lenN = htons(4);
+  memcpy(buf + 1, &lenN, 2);
+  buf[3] = HTTP2_FRAME_TYPE_RST_STREAM;
+  buf[4] = 0;
+
+  assert((streamId != 1) && (streamId != 3));
+  uint32_t h2Stream = H2_SDTStreamId2H2(streamId);
+  h2Stream = htonl(h2Stream);
+  memcpy(buf + 5, &h2Stream, 4);
+  offset = htonl(offset);
+  memcpy(buf + HTTP2_HEADERLEN, &offset, 4);
+
+  return H2_AddSortedHttp2Frame(recvStr, frame);
+}
+
+static int32_t
+H2_Make_GOAWAY(struct SDT_RecvDataStruct_t *recvStr, uint32_t streamId,
+               uint32_t errorCode, uint8_t *buf, uint16_t len)
+{
+  struct recvDataFrame_t *frame =
+    (struct recvDataFrame_t*)malloc(sizeof(struct recvDataFrame_t) + HTTP2_HEADERLEN + 8 +
+                             len);
+  if (!frame) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+
+  frame->mType = HTTP2_FRAME_TYPE_GOAWAY;
+  frame->mNext = 0;
+  frame->mOffset = 0;
+  frame->mDataSize = HTTP2_HEADERLEN + 8 + len;
+  frame->mDataRead = 0;
+  frame->mLast = 0;
+
+  uint8_t *frameBuf = (uint8_t*)(frame + 1);
+
+  frameBuf[0] = 0;
+  uint16_t lenN = htons(8 + len);
+  memcpy(frameBuf + 1, &lenN, 2);
+  frameBuf[3] = HTTP2_FRAME_TYPE_GOAWAY;
+  frameBuf[4] = 0;
+  memset(frameBuf + 5, 0, 4);
+
+  assert((streamId != 1) && (streamId != 3));
+  uint32_t h2Stream = H2_SDTStreamId2H2(streamId);
+  h2Stream = htonl(h2Stream);
+  memcpy(frameBuf + HTTP2_HEADERLEN, &h2Stream, 4);
+
+  errorCode = htonl(errorCode);
+  memcpy(frameBuf + HTTP2_HEADERLEN + 4, &errorCode, 4);
+
+  memcpy(frameBuf + HTTP2_HEADERLEN+ 8, buf, len);
+
+  return H2_AddSortedHttp2Frame(recvStr, frame);
+}
+
+static int32_t
+H2_Make_WINDOW_UPDATE(struct SDT_RecvDataStruct_t *recvStr, uint32_t streamId,
+                      uint64_t increment)
+{
+  while (increment) {
+    uint32_t incr;
+    if (increment > (uint32_t)(2<< (31 - 1))) {
+      incr = (2<< (31 - 1));
+    } else {
+      incr = increment;
+    }
+
+    struct recvDataFrame_t *frame = (struct recvDataFrame_t*)malloc(sizeof(struct recvDataFrame_t) +
+                                                      HTTP2_HEADERLEN + 4);
+    if (!frame) {
+      return SDTE_OUT_OF_MEMORY;
+    }
+
+    frame->mNext = 0;
+    frame->mOffset = 0;
+    frame->mDataSize = HTTP2_HEADERLEN + 4;
+    frame->mDataRead = 0;
+    frame->mLast = 0;
+
+    uint8_t *buf = (uint8_t*)(frame + 1);
+    buf[0] = 0;
+    uint16_t len = htons(4);
+    memcpy(buf + 1, &len, 2);
+    buf[3] = HTTP2_FRAME_TYPE_WINDOW_UPDATE;
+    buf[4] = 0;
+
+    assert((streamId != 1) && (streamId != 3));
+    uint32_t h2Stream = H2_SDTStreamId2H2(streamId);
+    h2Stream = htonl(h2Stream);
+    memcpy(buf + 5, &h2Stream, 4);
+
+    incr = htonl(incr);
+    memcpy(buf + HTTP2_HEADERLEN, &incr, 4);
+    int32_t rv = H2_AddSortedHttp2Frame(recvStr, frame);
+    if (rv) {
+      return rv;
+    }
+  }
+  return SDTE_OK;
+}
+
+static int32_t
+H2_Make_STREAM_FRAME(struct SDT_RecvDataStruct_t *recvStr, uint32_t streamId,
+                     const uint8_t *data, uint16_t len)
+{
+  struct recvDataFrame_t *frame =
+    (struct recvDataFrame_t*)malloc(sizeof(struct recvDataFrame_t) +
+                             HTTP2_HEADERLEN + len);
+  if (!frame) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+
+  frame->mType = HTTP2_FRAME_TYPE_RST_STREAM;
+  frame->mNext = 0;
+  frame->mOffset = 0;
+  frame->mDataSize = HTTP2_HEADERLEN + len;
+  frame->mDataRead = 0;
+
+  uint8_t *buf = (uint8_t*)(frame + 1);
+  buf[0] = 0;
+  uint16_t dataLen = htons(len);
+  memcpy(buf + 1, &dataLen, 2);
+  buf[3] = HTTP2_FRAME_TYPE_DATA;
+  buf[4] = (frame->mLast) ? HTTP2_FRAME_FLAG_END_STREAM : 0;
+
+  assert((streamId != 1) && (streamId != 3));
+  uint32_t h2Stream = H2_SDTStreamId2H2(streamId);
+  h2Stream = htonl(h2Stream);
+  memcpy(buf + 5, &h2Stream, 4);
+  memcpy(buf + HTTP2_HEADERLEN, data, len);
+  return H2_AddSortedHttp2Frame(recvStr, frame);
+}
+
+static int32_t
+H2_Make_PING(struct SDT_RecvDataStruct_t *recvStr)
+{
+  struct recvDataFrame_t *frame =
+    (struct recvDataFrame_t*)malloc(sizeof(struct recvDataFrame_t) +
+                             HTTP2_HEADERLEN + 8);
+  if (!frame) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+
+  frame->mNext = 0;
+  frame->mOffset = 0;
+  frame->mDataSize = HTTP2_HEADERLEN + 8;
+  frame->mDataRead = 0;
+  frame->mLast = 0;
+
+  uint8_t *buf = (uint8_t*)(frame + 1);
+  buf[0] = 0;
+  uint16_t len = htons(8);
+  memcpy(buf + 1, &len, 2);
+  buf[3] = HTTP2_FRAME_TYPE_PING;
+  buf[4] = 0;
+  memset(buf + HTTP2_HEADERLEN, 0, 8);
+  return H2_AddSortedHttp2Frame(recvStr, frame);
+}
+
+struct sdt_t;
+int32_t sdt_EnsureStreamCreated(struct sdt_t *handle, uint32_t streamId);
+
+static int
+H2_OrderFramesReadyForApp(struct SDT_RecvDataStruct_t *recvStr,
+                          struct sdt_t *handle,
+                          struct recvStream_t* stream)
+{
+// TODO CONTINUATION frames will not work properly!!!!!!!
+  assert(stream->mStreamId != 1);
+  if (!stream->mHeaderDone && stream->mStreamId != 3) {
+    return 0;
+  }
+
+  // Check if we have some ordered packets.
+  while (stream->mFrames && (stream->mOffset == stream->mFrames->mOffset)) {
+    struct recvDataFrame_t *frameOrd = stream->mFrames;
+
+    stream->mFrames = stream->mFrames->mNext;
+    frameOrd->mNext = NULL;
+    stream->mOffset += frameOrd->mDataSize;
+
+    fprintf(stderr, "H2_OrderFramesReadyForApp one done %lu %d\n",
+            frameOrd->mOffset, frameOrd->mDataSize);
+
+    if (stream->mStreamId != 3) {
+      int32_t rv = H2_Make_STREAM_FRAME(recvStr, stream->mStreamId,
+                                        (uint8_t*)(frameOrd + 1),
+                                        frameOrd->mDataSize);
+      if (rv) {
+        return rv;
+      }
+    } else {
+      uint32_t len = frameOrd->mDataSize;
+      uint8_t *buf = (uint8_t*)(frameOrd + 1);
+fprintf(stderr, "DDDDDD1 %d %p %d %d\n", len, recvStr->mH2Header_Frame,
+        recvStr->mH2Header_Read, HTTP2_HEADERLEN);
+      while (len) {
+        if (!recvStr->mH2Header_Frame) {
+          uint32_t headerLen = HTTP2_HEADERLEN - recvStr->mH2Header_Read;
+          headerLen = (len > headerLen) ? headerLen : len;
+fprintf(stderr, "DDDDD2 %d\n", headerLen);
+          memcpy(recvStr->mH2Header_HeaderBuf + recvStr->mH2Header_Read,
+                 buf, headerLen);
+          len -=  headerLen;
+          recvStr->mH2Header_Read += headerLen;
+
+          assert (recvStr->mH2Header_Read <= HTTP2_HEADERLEN);
+fprintf(stderr, "DDDDD2 %d\n", recvStr->mH2Header_Read);
+          if (recvStr->mH2Header_Read == HTTP2_HEADERLEN) {
+            uint16_t frameLen;
+            memcpy(&frameLen, recvStr->mH2Header_HeaderBuf + 1, 2);
+            frameLen = ntohs(frameLen);
+
+            recvStr->mH2Header_Frame = (struct recvDataFrame_t *) malloc (sizeof(struct recvDataFrame_t) +
+                                                                          HTTP2_HEADERLEN +
+                                                                          frameLen);
+            if (!recvStr->mH2Header_Frame) {
+              return SDTE_OUT_OF_MEMORY;
+            }
+            recvStr->mH2Header_Frame->mNext = 0;
+            recvStr->mH2Header_Frame->mOffset = 0;
+            recvStr->mH2Header_Frame->mDataSize = HTTP2_HEADERLEN + frameLen;
+            recvStr->mH2Header_Frame->mDataRead = 0;
+            recvStr->mH2Header_Frame->mLast = 0;
+            uint8_t *frameBuf = (uint8_t*)(recvStr->mH2Header_Frame + 1);
+
+fprintf(stderr, "DDDDD2 %p %d %d\n", recvStr->mH2Header_Frame, recvStr->mH2Header_Frame->mDataSize, recvStr->mH2Header_Read);
+            memcpy(frameBuf, recvStr->mH2Header_HeaderBuf, HTTP2_HEADERLEN);
+
+            recvStr->mH2Header_Fin = recvStr->mH2Header_HeaderBuf[4] & HTTP2_FRAME_FLAG_END_HEADERS;
+            if (recvStr->mH2Header_Fin) {
+              memcpy(&recvStr->mH2Header_Stream,
+                     recvStr->mH2Header_HeaderBuf + 5, 4);
+              recvStr->mH2Header_Stream = ntohl(recvStr->mH2Header_Stream);
+
+              int32_t rv = sdt_EnsureStreamCreated(handle,
+                                                   recvStr->mH2Header_Stream);
+              if (rv) {
+                return rv;
+              }
+            }
+          }
+        } else {
+          uint32_t toRead = recvStr->mH2Header_Frame->mDataSize - recvStr->mH2Header_Read;
+          toRead = (len > toRead) ? toRead : len;
+          uint8_t *frameBuf = (uint8_t*)(recvStr->mH2Header_Frame + 1);
+          memcpy(frameBuf + recvStr->mH2Header_Read, buf, toRead);
+fprintf(stderr, "DDDDD2 %p %d %d %d %d\n", recvStr->mH2Header_Frame, recvStr->mH2Header_Frame->mDataSize, recvStr->mH2Header_Read, toRead, len);
+          len -= toRead;
+          recvStr->mH2Header_Read += toRead;
+        }
+
+        if (recvStr->mH2Header_Frame &&
+            (recvStr->mH2Header_Read == recvStr->mH2Header_Frame->mDataSize)) {
+          int32_t rv = H2_AddSortedHttp2Frame(recvStr, recvStr->mH2Header_Frame);
+          if (rv) {
+            return rv;
+          }
+
+          recvStr->mH2Header_Frame = NULL;
+          recvStr->mH2Header_Read = 0;
+          if (recvStr->mH2Header_Fin) {
+            assert(recvStr->mH2Header_Stream);
+            struct recvStream_t* dataStream = sdt_recv_FindStream(recvStr,
+                                                                  recvStr->mH2Header_Stream);
+            if (dataStream) {
+              // It can be that the stream is already closed!
+              dataStream->mHeaderDone = 1;
+              int rv = H2_OrderFramesReadyForApp(recvStr, handle, dataStream);
+              if (rv) {
+                return rv;
+              }
+            }
+          }
+          recvStr->mH2Header_Stream = 0;
+          recvStr->mH2Header_Fin = 0;
+        }
+      }
+    }
+  }
+  return SDTE_OK;
+}
+
+static int
+H2_Recv(struct SDT_RecvDataStruct_t *recvStr, void *buf, int32_t amount,
+        int flags)
+{
+  fprintf(stderr, "H2_Recv amount=%d\n", amount);
+  if (!recvStr->mH2OrderedFramesFirst) {
+    PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
+    return -1;
+  }
+  // Making it so complicated because of PR_MSG_PEEK.
+  struct recvDataFrame_t *frame = recvStr->mH2OrderedFramesFirst;
+  uint32_t frameSize = frame->mDataSize;
+  uint32_t frameAlreadyRead = frame->mDataRead;
+  int32_t read = 0;
+  while ((read < amount) && frame) {
+    fprintf(stderr, "H2_Recv read=%d next frame data size=%d read=%d\n",
+            read, frameSize, frameAlreadyRead);
+    uint8_t *framebuf = (uint8_t*)(frame + 1);
+    int32_t toRead = frameSize - frameAlreadyRead;
+    toRead = (toRead > (amount - read)) ? (amount - read) : toRead;
+    memcpy((uint8_t *)buf + read,
+           framebuf + frameAlreadyRead,
+           toRead);
+    read += toRead;
+    if (!(flags & PR_MSG_PEEK)) {
+      recvStr->mH2OrderedFramesFirst->mDataRead += toRead;
+    }
+    frameAlreadyRead += toRead;
+    if (frameAlreadyRead == frameSize) {
+      frame = frame->mNext;
+      if (frame) {
+        frameSize = frame->mDataSize;
+        frameAlreadyRead = frame->mDataRead;
+      }
+fprintf(stderr, "DDDDD  %p %p\n", recvStr->mH2OrderedFramesFirst, frame);
+      if (!(flags & PR_MSG_PEEK)) {
+        struct recvDataFrame_t *done = recvStr->mH2OrderedFramesFirst;
+        recvStr->mH2OrderedFramesFirst = done->mNext;
+        if (!recvStr->mH2OrderedFramesFirst) {
+          recvStr->mH2OrderedFramesLast = NULL;
+        }
+        free(done);
+      }
+    }
+  }
+
+  if (!read) {
+    PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
+    return -1;
+  }
+
+  return read;
+}
+#endif
+
+static int
+sdt_recv_createStream(struct SDT_RecvDataStruct_t *recvStr, uint32_t streamId)
+{
+  struct recvStream_t *prev = 0, *curr = recvStr->mIncomingStreams;
+  while (curr && (curr->mStreamId < streamId)) {
+    prev = curr;
+    curr = curr->mNext;
+  }
+  assert(!curr || (curr->mStreamId != streamId));
+  struct recvStream_t *stream =
+    (struct recvStream_t*) calloc (1, sizeof(struct recvStream_t));
+  if (!stream) {
+    return SDTE_OUT_OF_MEMORY;
+  }
+  stream->mState = STREAM_IDLE;
+  stream->mStreamId = streamId;
+  stream->mCanSendOffset = recvStr->mInitialRwin;
+  stream->mWindowSize = recvStr->mInitialRwin;
+  stream->mNext = curr;
+
+  if (!prev) {
+    recvStr->mIncomingStreams = stream;
+  } else {
+    prev->mNext = stream;
+  }
+  return SDTE_OK;
+}
+
+static int
+sdt_recv_removeStream(struct SDT_RecvDataStruct_t *recvStr, uint32_t streamId)
+{
+  struct recvStream_t *prev = 0, *curr = recvStr->mIncomingStreams;
+  while (curr && (curr->mStreamId < streamId)) {
+    prev = curr;
+    curr = curr->mNext;
+  }
+  assert(curr && (curr->mStreamId == streamId));
+  assert(!curr->mFrames);
+
+  if (!prev) {
+    recvStr->mIncomingStreams = curr->mNext;
+  } else {
+    prev->mNext = curr->mNext;
+  }
+
+  free(curr);
+
+  return SDTE_OK;
+}
+
+static int32_t
+sdt_recv_ResetStream(struct SDT_RecvDataStruct_t *recvStr, uint32_t streamId,
+                     uint64_t offset, uint8_t sendRST)
+{
+  struct recvStream_t *stream = sdt_recv_FindStream(recvStr, streamId);
+
+  if (!stream) {
+    // this is a duplicate, just ignore it! TODO!!!!!!!!!!!!!
+    return SDTE_NOT_AVAILABLE;
+  }
+
+  // App should not try to reset stream that was already reset
+  assert(!(sendRST && stream->mStreamReset));
+
+  uint64_t bytesToFree = 0;
+  if (!stream->mStreamReset) {
+    stream->mStreamReset = 1;
+    struct recvDataFrame_t *frame = stream->mFrames;
+    while (frame) {
+      stream->mFrames = frame->mNext;
+      bytesToFree += frame->mDataSize;
+      free(frame);
+      frame = stream->mFrames;
+    }
+  }
+
+  if (sendRST) {
+    stream->mWaitingForRSTReply = 1;
+
+    if (stream->mState == STREAM_CLOSED) {
+      // The stream has been arealy closed.
+      assert(sendRST);
+      bytesToFree = stream->mEndOffset - stream->mOffset;
+      stream->mWaitingForRSTReply = 0;
+    }
+  } else {
+    if (!stream->mStreamReset) {
+      assert(stream->mState != STREAM_CLOSED);
+#ifdef H2_MAPPING
+      // Send stream->mOffset  as the final offset to look like it is a like
+      // TCP reliable transport.
+      int32_t rv = H2_Make_RST_STREAM(recvStr, streamId, stream->mOffset);
+      if (rv) {
+        return rv;
+      }
+#endif
+    }
+
+    if (stream->mStreamReset && !stream->mWaitingForRSTReply) {
+        // This is a dup.
+        assert(stream->mStreamReset && (offset == stream->mEndOffset));
+        return SDTE_OK;
+    }
+    assert(offset >= stream->mOffset);
+    assert(offset <= stream->mCanSendOffset);
+    bytesToFree = offset - stream->mOffset;
+    stream->mEndOffset = stream->mOffset = offset;
+    stream->mWaitingForRSTReply = 0;
+  }
+
+  stream->mStreamReset = 1;
+  stream->mState = STREAM_CLOSED;
+  stream->mOffset += bytesToFree;
+  sdt_recv_IncrementWindowForSession(recvStr, bytesToFree);
+
+  return SDTE_OK;
+}
+
+static void
+AddStreamReadyToRead(struct SDT_RecvDataStruct_t *recvStr,
+                     struct sdt_t *handle,
+                     struct recvStream_t *stream)
+{
+#ifdef H2MAPPING
+  H2_OrderFramesReadyForApp(recvStr, handle, stream);
+#else
+
+  assert(stream->mFrames && (stream->mOffset == stream->mFrames->mOffset));
+  assert(!stream->mNextReadyStream);
+
+  if (recvStr->mReadyStreamsLast) {
+    recvStr->mReadyStreamsLast->mNextReadyStream = stream;
+  } else {
+    recvStr->mReadyStreamsFirst = stream;
+  }
+  recvStr->mReadyStreamsLast = stream;
+  recvStr->mReadyStreamsNum++;
+
+#endif
+}
+
+static int
+hOrderStreamFrame(struct SDT_RecvDataStruct_t *recvStr,
+                  struct sdt_t *handle,
+                  struct recvStream_t *stream, uint64_t offset, uint32_t len,
+                  uint8_t finSet, const uint8_t *buf)
+{
+  fprintf(stderr, "hOrderStreamFrame \n");
+
+  if (offset + len < stream->mOffset) {
+    // It is a dup.
+    return SDTE_OK;
+  }
+
+  uint32_t read = 0;
+  // If part of the data in this packet is already send to application, ignore it.
+  // This make the following code easier!
+  if (offset < stream->mOffset) {
+    len = len - (stream->mOffset - offset);
+    read += (stream->mOffset - offset);
+    offset = stream->mOffset;
+  }
+
+  struct recvDataFrame_t *prev = 0, *curr = stream->mFrames;
+  while (curr && (curr->mOffset <= offset)) {
+    prev = curr;
+    curr = curr->mNext;
+  }
+
+  while (len) {
+    if (prev &&
+        ((prev->mOffset + prev->mDataSize) > offset)) {
+      if (len <= (prev->mOffset + prev->mDataSize - offset)) {
+        read += len;
+        len = 0;
+        break;
+      }
+      len -= (prev->mOffset + prev->mDataSize - offset);
+      read += (prev->mOffset + prev->mDataSize - offset);
+      offset = prev->mOffset + prev->mDataSize;
+    }
+    uint32_t flen = len;
+    if (curr && ((offset + len) > curr->mOffset)) {
+      flen = curr->mOffset - offset;
+    }
+
+    if (flen) {
+      struct recvDataFrame_t *frame =
+        (struct recvDataFrame_t*) malloc (sizeof(struct recvDataFrame_t) + flen);
+      if (!frame) {
+        return SDTE_OUT_OF_MEMORY;
+      }
+
+
+      frame->mNext = 0;
+      frame->mOffset = offset;
+      frame->mDataSize = flen;
+      frame->mDataRead = 0;
+      frame->mLast = 0;
+
+      if (flen == len) {
+        frame->mLast = finSet;
+      }
+
+      uint8_t *bufFrame = (uint8_t*)(frame + 1);
+
+      memcpy(bufFrame, buf + read, flen);
+      len -= flen;
+      read += flen;
+      offset += flen;
+      frame->mNext = curr;
+      if (prev) {
+        prev->mNext = frame;
+      } else {
+        stream->mFrames = frame;
+      }
+
+      RecvFrame(stream);
+      if (frame->mLast) {
+        RecvFin(stream);
+      }
+      if (stream->mOffset == frame->mOffset) {
+        AddStreamReadyToRead(recvStr, handle, stream);
+      }
+    }
+
+    prev = curr;
+    curr = (curr) ? curr->mNext : NULL;
+  }
+
+  assert(!len);
+  return SDTE_OK;
+}
+
+static void
+sdt_recv_RemoveStreamFromReadyQueue(struct SDT_RecvDataStruct_t *recvStr,
+                                    struct recvStream_t *stream)
+{
+#ifndef H2MAPPING
+  struct recvStream_t *streamP = recvStr->mReadyStreamsFirst;
+  assert(streamP);
+  if (streamP == stream) {
+    recvStr->mReadyStreamsFirst = stream->mNextReadyStream;
+    if (!recvStr->mReadyStreamsFirst) {
+      recvStr->mReadyStreamsLast = NULL;
+    }
+  } else {
+    while (streamP->mNextReadyStream && (streamP->mNextReadyStream != stream)) {
+      streamP = streamP->mNextReadyStream;
+    }
+
+    assert(streamP->mNextReadyStream);
+
+    streamP->mNextReadyStream = stream->mNextReadyStream;
+
+    if (stream == recvStr->mReadyStreamsLast) {
+      recvStr->mReadyStreamsLast = streamP;
+    }
+  }
+
+  stream->mNextReadyStream = NULL;
+  recvStr->mReadyStreamsNum--;
+#endif
+}
+
+static int
+Received_STREAM_FRAME(struct SDT_RecvDataStruct_t *recvStr,
+                      struct sdt_t *handle, uint32_t streamId,
+                      uint64_t offset, uint16_t len, uint8_t finSet,
+                      const uint8_t *buf)
+{
+  // First ensure that if this is a new remote stream that it has been created.
+  int32_t rv = sdt_EnsureStreamCreated(handle, streamId);
+  if (rv) {
+    return rv;
+  }
+  struct recvStream_t *stream = sdt_recv_FindStream(recvStr, streamId);
+
+  // If there is no stream, that means that the stream has been closed.
+  if (!stream) {
+    return SDTE_STREAM_DELETED;
+  }
+
+  assert((offset + len) <= stream->mCanSendOffset);
+
+  if (stream->mState == STREAM_CLOSED) {
+    if (stream->mWaitingForRSTReply) {
+      assert(stream->mStreamReset);
+      if (finSet) {
+        stream->mEndOffset = offset + len;
+        stream->mWaitingForRSTReply = 0;
+        assert(stream->mEndOffset >= stream->mOffset);
+        sdt_recv_IncrementWindowForSession(recvStr,
+                                           stream->mEndOffset - stream->mOffset);
+      }
+    } else {
+      // We ave received RST or FIN so be sure to check:
+      if ((offset +len) > stream->mEndOffset) {
+        // TODO GO_AWAY with error!!!
+        return SDTE_FATAL_ERROR;
+      }
+    }
+
+    if (stream->mStreamReset) {
+      // Ignore the packet.
+      return SDTE_OK;
+    }
+  } else if (finSet) {
+    stream->mEndOffset = offset + len;
+    stream->mState = STREAM_CLOSED;
+  }
+
+  return hOrderStreamFrame(recvStr, handle, stream, offset, len, finSet, buf);
+}
+
+#ifndef H2MAPPING
+static int
+SDT_Recv(struct SDT_RecvDataStruct_t *recvStr, void *buf, int32_t amount,
+         int flags, uint8_t tlsHandshake)
+{
+  assert(recvStr->mNextToReadSet || tlsHandshake || (flags & PR_MSG_PEEK));
+  recvStr->mNextToReadSet = 0;
+
+  struct recvStream_t *stream = sdt_recv_FindStream(recvStr,
+                                                    recvStr->mNextToReadId);
+
+//TODO
+  if (!stream) {
+    return -1;
+  }
+
+  // Assert that we have the needed stream and that that stream is not reset.
+  assert(stream &&
+         !((stream->mState == STREAM_CLOSED) && stream->mStreamReset));
+
+  if (!stream->mFrames ||
+      (stream->mOffset != (stream->mFrames->mOffset + stream->mFrames->mDataRead))) {
+
+    // DEBUG
+    struct recvStream_t *streamP = recvStr->mReadyStreamsFirst;
+    while (streamP && streamP != stream) {
+      streamP = streamP->mNext;
+    }
+    assert(!streamP);
+    // End DEBUG
+
+    PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
+    return -1;
+  }
+
+  // Making it so complecated because of PR_MSG_PEEK.
+  struct recvDataFrame_t *frame = stream->mFrames;
+  uint32_t frameSize = frame->mDataSize;
+  uint32_t frameAlreadyRead = frame->mDataRead;
+  uint32_t nextOffset = stream->mOffset;
+  int32_t read = 0;
+  while ((read < amount) && frame) {
+    uint8_t *framebuf = (uint8_t*)(frame + 1);
+    int32_t toRead = frameSize - frameAlreadyRead;
+    toRead = (toRead > (amount - read)) ? (amount - read) : toRead;
+    memcpy(((uint8_t *)buf) + read,
+           framebuf + frameAlreadyRead,
+           toRead);
+    read += toRead;
+    if (!(flags & PR_MSG_PEEK)) {
+      frame->mDataRead += toRead;
+      stream->mOffset += toRead;
+    }
+    frameAlreadyRead += toRead;
+    nextOffset += toRead;
+    if (frameAlreadyRead == frameSize) {
+      frame = frame->mNext;
+      // If the next one is not the next in row, do not read it!!!
+      if (frame && (frame->mOffset != nextOffset)) {
+        frame = NULL;
+      }
+      if (frame) {
+        frameSize = frame->mDataSize;
+        frameAlreadyRead = frame->mDataRead;
+      }
+      if (!(flags & PR_MSG_PEEK)) {
+        struct recvDataFrame_t *done = stream->mFrames;
+        stream->mFrames = done->mNext;
+        if (!stream->mFrames || (stream->mOffset != stream->mFrames->mOffset)) {
+          sdt_recv_RemoveStreamFromReadyQueue(recvStr, stream);
+        }
+        free(done);
+      }
+    }
+  }
+
+  if (!(flags & PR_MSG_PEEK)) {
+    sdt_recv_IncrementWindowForSession(recvStr, read);
+    sdt_recv_IncrementWindowForStream(recvStr, stream, read);
+  }
+
+  if (!read) {
+    PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
+    return -1;
+  }
+
+  return read;
+}
+#endif
+
+static int
+Received_WINDOW_UPDATE(struct SDT_RecvDataStruct_t *recvStr, uint32_t streamId,
+                       uint64_t offset)
+{
+  if (streamId == 0) {
+    if (recvStr->mSendStr->mCanSendSessionOffset >= offset) {
+      // ignore if the offset is smaller then mCanSendSessionOffset.
+      fprintf(stderr, "Old windows update current win=%lu offset= %lu\n",
+              recvStr->mSendStr->mCanSendSessionOffset, offset);
+      return SDTE_OK;
+    }
+
+#ifdef H2MAPPING
+    int rv = H2_Make_WINDOW_UPDATE(recvStr, streamId,
+                                   offset - recvStr->mSendStr->mCanSendSessionOffset);
+    if (rv) {
+      return rv;
+    }
+#endif
+
+    recvStr->mSendStr->mCanSendSessionOffset = offset;
+  } else {
+
+    struct aOutgoingStreamInfo_t *streamInfo =
+      sdt_send_FindStream(recvStr->mSendStr, streamId);
+
+    // TODO: dragana take a look at this!
+    if (!streamInfo) {
+      // ignore
+      fprintf(stderr, "No record for stream %d\n", streamId);
+      return SDTE_OK;
+    }
+
+    if (offset <= streamInfo->mCanSendOffset) {
+      // ignore if the offset is smaller then mCanSendOffset.
+      fprintf(stderr, "Old windows update current win=%lu offset= %lu\n",
+              streamInfo->mCanSendOffset, offset);
+      return SDTE_OK;
+    }
+
+#ifdef H2MAPPING
+    if (streamId != 1) {
+      int rv = H2_Make_WINDOW_UPDATE(recvStr, streamId,
+                                     offset - streamInfo->mCanSendOffset);
+      if (rv) {
+        return rv;
+      }
+    }
+#endif
+    streamInfo->mCanSendOffset = offset;
+  }
+  return SDTE_OK;
+}
 
 struct sdt_t
 {
   uint64_t connectionId; // session identifier for mobility. TODO not used now.
-  uint8_t publicHeader;
+  uint8_t publicHeaderLen;
   uint16_t payloadsize;
   uint16_t cleartextpayloadsize;
 
@@ -1810,52 +3524,57 @@ struct sdt_t
   uint64_t qMaxCredits;
   uint64_t qPacingRate;
 
+#ifdef H2MAPPING
   // When we receive H2 frame we store header infos in the following variables.
   // They are decoded in the decodeH2Header and DecodeH2Frames function.
   uint8_t hType;
   uint8_t hFlags;
   uint16_t hDataLen;
+  uint32_t hH2StreamId;
   uint32_t hSDTStreamId;
   uint8_t hPadding;
   struct aDataChunk_t *hCurrentDataChunk;
   enum SDTH2SState hState;
   uint8_t hMagicHello;
+#endif
 
   struct SDT_SendDataStruct_t mSDTSendDataStr;
 
-  // This are structures for ordering incoming frames.
-  struct hStream_t *hIncomingStreams;
-  struct hStream_t *hIncomingHeaders;
-  struct hFrame_t *hOrderedFramesLast;
-  struct hFrame_t *hOrderedFramesFirst;
-
-
+  struct SDT_RecvDataStruct_t mSDTRecvDataStr;
 
   uint8_t numOfRTORetrans;
 
   PRFileDesc *fd; // weak ptr, don't close
 
   uint64_t aNextPacketId;
+  uint64_t mNextStreamIdLocal;
+  uint64_t mNextStreamIdRemote;
 
   // The congestion control parameters.
   struct sdt_cc_t ccData;
 };
 
-struct sdt_t *sdt_newHandle()
+struct sdt_t *
+sdt_newHandle(uint8_t server)
 {
-  struct sdt_t *handle = (struct sdt_t *) calloc(sizeof(struct sdt_t), 1);
+  struct sdt_t *handle = (struct sdt_t *) calloc (1, sizeof(struct sdt_t));
 
   if (!handle) {
     return NULL;
   }
 
-  handle->publicHeader = 1 + 8; // connectionId nad packetId
+  handle->isServer = server;
+  handle->publicHeaderLen = 1 + 8; // connectionId nad packetId
   handle->payloadsize = SDT_PAYLOADSIZE_MAX - 1;
-  handle->cleartextpayloadsize = SDT_CLEARTEXTPAYLOADSIZE_MAX - handle->publicHeader;
+  handle->cleartextpayloadsize = SDT_CLEARTEXTPAYLOADSIZE_MAX - handle->publicHeaderLen;
 
   handle->state = SDT_CONNECTING;
 
-  handle->mSDTSendDataStr.mMaxDataQueued = aBufferLenMax;
+  handle->mSDTSendDataStr.mCanSendSessionOffset = aBufferLenMax;
+  handle->mSDTSendDataStr.mServerInitialStreamWindow = DEFAULTE_RWIN;
+  handle->mSDTRecvDataStr.mSendStr = &handle->mSDTSendDataStr;
+  handle->mSDTRecvDataStr.mInitialRwin = DEFAULTE_RWIN;
+  handle->mSDTRecvDataStr.mCanSendSessionOffset = aBufferLenMax;
 
   handle->aNextToRetransmit = 0xffffffffUL;
 
@@ -1867,28 +3586,17 @@ struct sdt_t *sdt_newHandle()
   handle->qMaxCredits = qPacingRateDefault * 3; // TODO: not use currently
   handle->qPacingRate = qPacingRateDefault;
 
-  handle->hIncomingHeaders =
-    (struct hStream_t *) calloc (1, sizeof(struct hStream_t));
-
-  if (!handle->hIncomingHeaders) {
-    goto fail;
-  }
-
+#ifdef H2MAPPING
   handle->hState = SDT_H2S_NEWFRAME;
+#endif
 
   handle->aNextPacketId = 1;
+  handle->mNextStreamIdLocal = (server) ? 2 : 3;
+  handle->mNextStreamIdRemote = (server) ? 3 : 2;
 
   cc->Init(&handle->ccData);
 
   return handle;
-
-  fail:
-  if (handle->hIncomingHeaders) {
-    free(handle->hIncomingHeaders);
-  }
-
-  free(handle);
-  return NULL;
 }
 
 static void
@@ -1910,45 +3618,124 @@ sdt_freeHandle(struct sdt_t *handle)
 
   ClearSDTSendDataStr(&handle->mSDTSendDataStr);
 
-  struct hStream_t *doneS, *currS = handle->hIncomingStreams;
-  while (currS) {
-    doneS = currS;
-    currS = currS->mNext;
-    free(doneS);
-  }
-
-  struct hFrame_t *doneF, *currF = handle->hOrderedFramesFirst;
-  while (currF) {
-    doneF = currF;
-    currF = currF->mNext;
-    free(doneF);
-  }
-
-  free(handle->hIncomingHeaders);
+  ClearSDTRecvDataStr(&handle->mSDTRecvDataStr);
 
   free(handle);
 }
 
-uint16_t
-sdt_GetNextTimer(PRFileDesc *fd)
+int32_t
+sdt_CreateStream(struct sdt_t *handle, uint32_t *streamId)
 {
-  struct sdt_t *handle = (struct sdt_t *)(fd->secret);
-  if (!handle) {
-    assert (0);
-    return -1;
+  assert(streamId);
+
+  assert(handle->mNextStreamIdLocal);
+  int32_t rv = sdt_send_createStream(&handle->mSDTSendDataStr,
+                                     handle->mNextStreamIdLocal);
+
+  if (rv) {
+    return rv;
   }
 
-  uint16_t nextTimer = UINT16_MAX;
-  PRIntervalTime now = PR_IntervalNow();
+  rv = sdt_recv_createStream(&handle->mSDTRecvDataStr,
+                             handle->mNextStreamIdLocal);
+  if (rv) {
+     sdt_send_removeStream(&handle->mSDTSendDataStr,
+                           handle->mNextStreamIdLocal);
+    return rv;
+  }
+  *streamId = handle->mNextStreamIdLocal;
+  handle->mNextStreamIdLocal += 2;
+  return SDTE_OK;
+}
 
-  if (handle->RTOTimerSet && (nextTimer > (handle->RTOTimer - now))) {
-    nextTimer = handle->RTOTimer - now;
+int32_t
+sdt_EnsureRemoteStreamCreated(struct sdt_t *handle, uint32_t streamId)
+{
+  // Assert that this is remote streamId;
+  assert((streamId & 1) == handle->isServer);
+  while (handle->mNextStreamIdRemote &&
+         (handle->mNextStreamIdRemote <= streamId)) {
+    int32_t rv = sdt_send_createStream(&handle->mSDTSendDataStr,
+                                       handle->mNextStreamIdRemote);
+    if (rv) {
+      return rv;
+    }
+
+    rv = sdt_recv_createStream(&handle->mSDTRecvDataStr,
+                               handle->mNextStreamIdRemote);
+    if (rv) {
+      sdt_send_removeStream(&handle->mSDTSendDataStr,
+                            handle->mNextStreamIdRemote);
+      return rv;
+    }
+    handle->mNextStreamIdRemote += 2;
+  }
+  return SDTE_OK;
+}
+
+int32_t
+sdt_EnsureStreamCreated(struct sdt_t *handle, uint32_t streamId)
+{
+  int32_t rv = SDTE_OK;
+
+  if ((streamId & (uint32_t)0x1) != handle->isServer) {
+    // It is localy opened stream!!!
+    assert(!handle->mNextStreamIdLocal ||
+           (handle->mNextStreamIdLocal > streamId));
+  } else {
+    rv = sdt_EnsureRemoteStreamCreated(handle, streamId);
+  }
+  return rv;
+}
+
+int32_t
+sdt_LocalCloseStream(struct sdt_t *handle, uint32_t streamId)
+{
+  assert(streamId);
+
+  return sdt_send_CloseStream(&handle->mSDTSendDataStr, streamId);
+}
+
+int32_t
+sdt_ResetStream_Internal(struct sdt_t *handle, uint32_t streamId,
+                         uint64_t offset, uint8_t sendRST)
+{
+  assert(streamId);
+
+  if (sendRST) {
+    if ((streamId & 1) != handle->isServer) {
+      // It is localy opened stream!!!
+      assert(!handle->mNextStreamIdLocal ||
+             (handle->mNextStreamIdLocal > streamId));
+    } else {
+      // It is remote opened stream!!!
+      assert(!handle->mNextStreamIdRemote ||
+             (handle->mNextStreamIdRemote > streamId));
+    }
+  } else {
+    if ((streamId & 1) != handle->isServer) {
+      // It is localy opened stream!!!
+      assert(!handle->mNextStreamIdLocal ||
+             (handle->mNextStreamIdLocal > streamId));
+    } else {
+      // It can be that some pakets are reordered or lost so we have not
+      // received some frames that hd opened new streams. We need to open them
+      // now.
+      int32_t rv = sdt_EnsureRemoteStreamCreated(handle, streamId);
+      if (rv) {
+        return rv;
+      }
+    }
   }
 
-  if (handle->ERTimerSet && (nextTimer > (handle->ERTimer - now))) {
-    nextTimer = handle->ERTimer - now;
+  int32_t rv = sdt_send_ResetStream(&handle->mSDTSendDataStr, streamId,
+                                    sendRST);
+  if (rv) {
+    return rv;
   }
-  return nextTimer;
+
+  return sdt_recv_ResetStream(&handle->mSDTRecvDataStr, streamId, offset,
+                              sendRST);
 }
 
 static unsigned int
@@ -2130,9 +3917,9 @@ sLayerDecodePublicContent(struct sdt_t *handle, unsigned char *buf,
   memcpy(&id, buf + 1, 8);
   handle->sRecvPktId = ntohll(id);
 
-  memmove(buf, buf + handle->publicHeader, amount - handle->publicHeader);
-  LogBuffer("To decode: ", buf, amount-handle->publicHeader);
-  return amount - handle->publicHeader;
+  memmove(buf, buf + handle->publicHeaderLen, amount - handle->publicHeaderLen);
+  LogBuffer("To decode: ", buf, amount-handle->publicHeaderLen);
+  return amount - handle->publicHeaderLen;
 }
 
 static uint32_t
@@ -2143,7 +3930,7 @@ sLayerEncodePublicContent(struct sdt_t *handle, const void *buf,
   // will adapt tls
 
   LogBuffer("To encode: ", buf, amount);
-  memcpy(handle->sLayerSendBuffer + handle->publicHeader, buf, amount);
+  memcpy(handle->sLayerSendBuffer + handle->publicHeaderLen, buf, amount);
   // For now we do not have connectionID
   handle->sLayerSendBuffer[0] = 0x0;
   if ((((uint8_t*)buf)[0]) == DTLS_TYPE_DATA) {
@@ -2155,7 +3942,7 @@ sLayerEncodePublicContent(struct sdt_t *handle, const void *buf,
     memset(handle->sLayerSendBuffer + 1, 0, 8);
   }
 
-  return amount + handle->publicHeader;
+  return amount + handle->publicHeaderLen;
 }
 
 //==============================================================================
@@ -2285,7 +4072,7 @@ MakeAckPkt(struct sdt_t *handle, struct aPacket_t *pkt)
   uint64_t num64 = htonll(handle->aLargestRecvId);
 
   memcpy(buf + 2, &num64, 8);
-  // TODO: fix this. (hint: largestReceicved time delta)
+  // TODO: fix this. (hint: largestReceived time delta)
   uint32_t num32 = htonl(PR_IntervalToMicroseconds(PR_IntervalNow() -
                          handle->aLargestRecvTime));
   memcpy(buf + 10, &num32, 4);
@@ -2444,8 +4231,6 @@ NeedToSendRetransmit(struct sdt_t *handle)
          ERTimerExpired(handle, now);
 }
 
-static int hMakePingAck(struct sdt_t *handle);
-
 struct aAckedPacket_t
 {
   uint64_t mId;
@@ -2500,7 +4285,7 @@ RemoveAckedRange(struct sdt_t *handle, uint64_t end, uint64_t start, int numTS,
         goto cleanup;
       }
       ack->mId = i;
-      ack->mSize = pkt->mSize + DTLS_PART + handle->publicHeader;
+      ack->mSize = pkt->mSize + DTLS_PART + handle->publicHeaderLen;
       ack->mRtt = rtt;
       ack->mHasRtt = hasRtt;
       ack->mNext = NULL;
@@ -2511,12 +4296,15 @@ RemoveAckedRange(struct sdt_t *handle, uint64_t end, uint64_t start, int numTS,
         *ackedLast = ack;
       }
 
+#ifdef H2MAPPING
       if (pkt->mIsPingPkt) {
-        int rc = hMakePingAck(handle);
+        int rc = H2_Make_PING_ACK(&handle->mSDTRecvDataStr);
         if (rc) {
           goto cleanup;
         }
+
       }
+#endif
       free(pkt);
     }
   }
@@ -2544,11 +4332,11 @@ NeedRetransmissionDupAck(struct sdt_t *handle)
 }
 
 static int
-RecvAck(struct sdt_t *handle, uint8_t type)
+RecvAck(struct sdt_t *handle)
 {
   fprintf(stderr, "RecvAck [this=%p]\n", (void *)handle);
 
-  assert((handle->aLayerBufferLen - handle->aLayerBufferUsed) >= 15);
+  assert((handle->aLayerBufferLen - handle->aLayerBufferUsed) >= 16);
 
   // If we have a loss reported in the packet, we need to call OnPacketLost
   // before calling OnPacketAcked, because of a cwnd calculation.
@@ -2556,6 +4344,8 @@ RecvAck(struct sdt_t *handle, uint8_t type)
   struct aAckedPacket_t *newlyAckedLast = 0;
   int rc = SDTE_OK;
 
+  uint8_t type = handle->aLayerBuffer[handle->aLayerBufferUsed];
+  handle->aLayerBufferUsed++;
   uint8_t hasRanges = (type == 0x60);
 
   uint64_t largestRecv;
@@ -2766,7 +4556,7 @@ RecvAck(struct sdt_t *handle, uint8_t type)
     NeedRetransmissionDupAck(handle);
 
     uint64_t oldSmallestUnacked = handle->aSmallestUnacked;
-    if (!HasUnackedPackets(&handle->mSDTSendDataStr)) {
+    if (!sdt_send_HasUnackedPackets(&handle->mSDTSendDataStr)) {
       // All packets are acked stop RTO timer.
       StopRTOTimer(handle);
       StopERTimer(handle);
@@ -2777,7 +4567,7 @@ RecvAck(struct sdt_t *handle, uint8_t type)
       RestartRTOTimer(handle);
       if (hasRanges) {
         //TODO: dragana check this.
-        handle->aSmallestUnacked = SmallestPktSeqNumNotAcked(&handle->mSDTSendDataStr);
+        handle->aSmallestUnacked = sdt_send_SmallestPktSeqNumNotAcked(&handle->mSDTSendDataStr);
       } else {
         handle->aSmallestUnacked = handle->aLargestAcked;
       }
@@ -2798,7 +4588,7 @@ RecvAck(struct sdt_t *handle, uint8_t type)
     }
   }
 
-  if ((HasDataForTransmission(&handle->mSDTSendDataStr)) &&
+  if ((sdt_send_HasDataForTransmission(&handle->mSDTSendDataStr)) &&
       (handle->aLargestSentId == handle->aLargestAcked)) {
     StartERTimer(handle);
   }
@@ -2843,418 +4633,53 @@ CheckRetransmissionTimers(struct sdt_t *handle)
   }
 }
 
-static struct hStream_t*
-hFindStream(struct sdt_t *handle, uint32_t streamId)
-{
-  struct hStream_t *prev = 0, *curr = handle->hIncomingStreams;
-  while (curr && (curr->mStreamId < streamId)) {
-    prev = curr;
-    curr = curr->mNext;
-  }
-  if (!curr || (curr->mStreamId != streamId)) {
-    struct hStream_t *stream =
-      (struct hStream_t*) malloc (sizeof(struct hStream_t));
-    if (!stream) {
-      return NULL;
-    }
-    stream->mStreamId = streamId;
-    stream->mSDTOffset = 0;
-    stream->mWindowSize = (2 << 16) - 1;
-    stream->mHeaderDone = 0;
-    stream->mFrames = 0;
-    stream->mNext = curr;
-    if (!prev) {
-      handle->hIncomingStreams = stream;
-    } else {
-      prev->mNext = stream;
-    }
-    curr = stream;
-  }
-  return curr;
-}
-
-static void
-hRemoveStream(struct sdt_t *handle, uint32_t streamId)
-{
-  struct hStream_t *prev = 0, *curr = handle->hIncomingStreams;
-  while (curr && (curr->mStreamId < streamId)) {
-    prev = curr;
-    curr = curr->mNext;
-  }
-  if (!curr || (curr->mStreamId != streamId)) {
-    fprintf(stderr, "hRemoveStream no stream %d", streamId);
-    return;
-  }
-
-  if (!prev) {
-    handle->hIncomingStreams = curr->mNext;
-  } else {
-    prev->mNext = curr->mNext;
-  }
-  free(curr);
-}
-
-static void
-hOrderFrameToStream(struct hStream_t* stream, struct hFrame_t *frame)
-{
-  if (frame->mSDTOffset < stream->mSDTOffset) {
-    // It is a dup.
-    assert((frame->mSDTOffset + frame->mSDTLength) <= stream->mSDTOffset);
-    free(frame);
-    return;
-  }
-
-  struct hFrame_t *prev = 0, *curr = stream->mFrames;
-  while (curr && (curr->mSDTOffset < frame->mSDTOffset)) {
-    prev = curr;
-    curr = curr->mNext;
-  }
-
-  if (curr && (curr->mSDTOffset == frame->mSDTOffset)) {
-    // It is a dup.
-    assert(curr->mSDTLength == frame->mSDTLength);
-    free(frame);
-    return;
-  }
-
-  assert(!curr || ((frame->mSDTOffset + frame->mSDTLength) <= curr->mSDTOffset));
-  assert(!prev || ((prev->mSDTOffset + prev->mSDTLength) <= frame->mSDTOffset));
-  frame->mNext = curr;
-  if (!prev) {
-    stream->mFrames = frame;
-  } else {
-    prev->mNext = frame;
-  }
-}
-
-// This frames are ready to be given to Http2.
-static void
-hAddSortedHttp2Frame(struct sdt_t *handle, struct hFrame_t *frame)
-{
-  assert(!frame->mNext);
-  // This are not ordered.
-  if (handle->hOrderedFramesLast) {
-    handle->hOrderedFramesLast->mNext = frame;
-  } else {
-    handle->hOrderedFramesFirst = frame;
-  }
-  handle->hOrderedFramesLast = frame;
-}
-
 static int
-hOrderStreamFrame(struct sdt_t *handle, struct hFrame_t *frame,
-                  uint32_t streamId)
+sdt_DecodeFrames(struct sdt_t *handle)
 {
-  fprintf(stderr, "hOrderStreamFrame \n");
-
-  assert(!frame->mNext);
-
-  struct hStream_t* stream = hFindStream(handle, streamId);
-
-  if (!stream) {
-    return SDTE_OUT_OF_MEMORY;
-  }
-
-  // Add frame.
-  hOrderFrameToStream(stream, frame);
-
-  // Check if we have some ordered packets.
-  while (stream->mFrames && (stream->mSDTOffset == stream->mFrames->mSDTOffset)) {
-    struct hFrame_t *frameOrd = stream->mFrames;
-
-    stream->mFrames = stream->mFrames->mNext;
-    frameOrd->mNext = NULL;
-    stream->mSDTOffset += frameOrd->mSDTLength;
-    stream->mEnded = frameOrd->mLast;
-    assert(!stream->mEnded || !stream->mFrames);
-
-    fprintf(stderr, "hOrderStreamFrame one done %lu %d\n",
-            frameOrd->mSDTOffset, frameOrd->mSDTLength);
-
-    hAddSortedHttp2Frame(handle, frameOrd);
-  }
-  if (stream->mEnded) {
-    hRemoveStream(handle, streamId);
-  }
-  return SDTE_OK;
-}
-
-static int
-hOrderHeaderFrame(struct sdt_t *handle, struct hFrame_t *frame)
-{
-  fprintf(stderr, "hOrderHeaderFrame\n");
-
-  assert(!frame->mNext);
-
-  // Add frame.
-  hOrderFrameToStream(handle->hIncomingHeaders, frame);
-
-  // Check if we have some ordered packets.
-  while (handle->hIncomingHeaders->mFrames &&
-         (handle->hIncomingHeaders->mSDTOffset ==
-          handle->hIncomingHeaders->mFrames->mSDTOffset)) {
-    uint8_t *frame = (uint8_t *)(handle->hIncomingHeaders->mFrames + 1);
-    uint8_t type = frame[3];
-    uint8_t flags = frame[4];
-    assert((type == HTTP2_FRAME_TYPE_HEADERS) ||
-           (type == HTTP2_FRAME_TYPE_CONTINUATION));
-
-    uint32_t streamId;
-    memcpy(&streamId, frame + 5, 4);
-    streamId = ntohl(streamId);
-    assert((streamId != 1) && (streamId != 3));
-
-    struct hStream_t* stream = NULL;
-    if ((flags & HTTP2_FRAME_FLAG_END_STREAM) ||
-        (flags & HTTP2_FRAME_FLAG_END_HEADERS)) {
-      stream = hFindStream(handle, streamId);
-      if (!stream) {
-        return SDTE_OUT_OF_MEMORY;
-      }
-      stream->mHeaderDone = flags & HTTP2_FRAME_FLAG_END_HEADERS;
-      stream->mEnded = flags & HTTP2_FRAME_FLAG_END_STREAM;
-    }
-
-    uint32_t h2Stream = streamId;
-    if (h2Stream % 2) {
-      h2Stream -= 4;
-    }
-    h2Stream = htonl(h2Stream);
-    memcpy(frame + 5, &h2Stream, 4);
-
-    struct hFrame_t *doneFrame = handle->hIncomingHeaders->mFrames;
-    handle->hIncomingHeaders->mFrames = handle->hIncomingHeaders->mFrames->mNext;
-    handle->hIncomingHeaders->mSDTOffset += doneFrame->mSDTLength;
-    doneFrame->mNext = NULL;
-
-    fprintf(stderr, "hOrderHeaderFrame one done %lu %d\n",
-            doneFrame->mSDTOffset, doneFrame->mSDTLength);
-
-    hAddSortedHttp2Frame(handle, doneFrame);
-
-    if (stream && stream->mHeaderDone && stream->mEnded) {
-      assert(!stream->mFrames);
-      hRemoveStream(handle, streamId);
-    }
-  }
-  return 0;
-}
-
-static int
-hMakeMagicFrame(struct sdt_t *handle)
-{
-  struct hFrame_t *frame = (struct hFrame_t*) malloc (sizeof(struct hFrame_t) +
-                                                      24);
-  if (!frame) {
-    return SDTE_OUT_OF_MEMORY;
-  }
-  frame->mNext = 0;
-  frame->mSDTOffset = 0;
-  frame->mSDTLength = 0;
-  frame->mDataSize = 24;
-  frame->mDataRead = 0;
-  frame->mLast = 0;
-
-  uint8_t *framebuf = (uint8_t*)(frame + 1);
-  memcpy(framebuf, magicHello, 24);
-  hAddSortedHttp2Frame(handle, frame);
-  return 0;
-}
-
-static int
-hMakeSettingsSettingsAckFrame(struct sdt_t *handle, uint8_t ack)
-{
-  uint16_t frameLen = HTTP2_HEADERLEN + (ack ? 0 : 18);
-
-  struct hFrame_t *frame = (struct hFrame_t*) malloc (sizeof(struct hFrame_t) +
-                                                      frameLen);
-  if (!frame) {
-    return SDTE_OUT_OF_MEMORY;
-  }
-  frame->mNext = 0;
-  frame->mSDTOffset = 0;
-  frame->mSDTLength = 0;
-  frame->mDataSize = 0;
-  frame->mDataRead = 0;
-  frame->mLast = 0;
-
-  uint8_t *framebuf = (uint8_t*)(frame + 1);
-
-  framebuf[frame->mDataSize] = 0;
-  frame->mDataSize += 1;
-
-  uint16_t len = ack ? 0 : 18;
-  len = htons(len);
-  memcpy(framebuf + frame->mDataSize, &len, 2);
-  frame->mDataSize += 2;
-
-  framebuf[frame->mDataSize] = HTTP2_FRAME_TYPE_SETTINGS;
-  frame->mDataSize++;
-
-  if (ack) {
-    framebuf[frame->mDataSize] = HTTP2_FRAME_FLAG_ACK; //ACK
-  } else {
-    framebuf[frame->mDataSize] = 0;
-  }
-  frame->mDataSize++;
-
-  uint32_t id = 0;
-  memcpy(framebuf + frame->mDataSize, &id, 4);
-  frame->mDataSize += 4;
-
-  if (!ack) {
-    framebuf[frame->mDataSize] = 0;
-    framebuf[frame->mDataSize + 1] = HTTP2_SETTINGS_TYPE_HEADER_TABLE_SIZE;
-    uint32_t val = htonl(65536);
-    memcpy(framebuf + frame->mDataSize + 2, &val, 4);
-    frame->mDataSize += 6;
-
-    framebuf[frame->mDataSize] = 0;
-    framebuf[frame->mDataSize + 1] = HTTP2_SETTINGS_TYPE_INITIAL_WINDOW;
-    val = htonl(131072);
-    memcpy(framebuf + frame->mDataSize + 2, &val, 4);
-    frame->mDataSize += 6;
-
-    framebuf[frame->mDataSize] = 0;
-    framebuf[frame->mDataSize + 1] = HTTP2_SETTINGS_MAX_FRAME_SIZE;
-    val = htonl( 0x4000);
-    memcpy(framebuf + frame->mDataSize + 2, &val, 4);
-    frame->mDataSize += 6;
-  }
-  hAddSortedHttp2Frame(handle, frame);
-  return 0;
-}
-
-static int
-hMakePingAck(struct sdt_t *handle)
-{
-  // A ping packet was been acked, send an h2 ping ack.
-  fprintf(stderr, "Send HTTP2 PING ACK.\n");
-  struct hFrame_t *frame =
-    (struct hFrame_t*)malloc(sizeof(struct hFrame_t) +
-                             HTTP2_HEADERLEN + 8);
-  if (!frame)
-    return SDTE_OUT_OF_MEMORY;
-
-  frame->mNext = 0;
-  frame->mSDTOffset = 0;
-  frame->mSDTLength = 0;
-  frame->mDataSize = HTTP2_HEADERLEN + 8;
-  frame->mDataRead = 0;
-  frame->mLast = 0;
-
-  uint8_t *buf = (uint8_t*)(frame + 1);
-  buf[0] = 0;
-  uint16_t len = htons(8);
-  memcpy(buf + 1, &len, 2);
-  buf[3] = HTTP2_FRAME_TYPE_PING;
-  buf[4] = HTTP2_FRAME_FLAG_ACK;
-  memset(buf + HTTP2_HEADERLEN, 0, 8);
-  hAddSortedHttp2Frame(handle, frame);
-  return 0;
-}
-
-static int
-sdt2h2(struct sdt_t *handle)
-{
-  LogBuffer("sdt2h2 buffer ", handle->aLayerBuffer,
+  LogBuffer("sdt_DecodeFrames buffer ", handle->aLayerBuffer,
             handle->aLayerBufferLen );
 
-  // If there is no magic sent we need to sent it and settings too.
-  if (!handle->hMagicHello) {
-    handle->hMagicHello = 1;
-    int rc = hMakeMagicFrame(handle);
-    if (rc) {
-      return rc;
-    }
-    rc = hMakeSettingsSettingsAckFrame(handle, 0);
-    if (rc) {
-      return rc;
-    }
-  }
-
-  while ((handle->aLayerBufferLen - handle->aLayerBufferUsed) > 0) {
+  while (handle->aLayerBufferLen > handle->aLayerBufferUsed) {
     uint8_t type = handle->aLayerBuffer[handle->aLayerBufferUsed];
-    handle->aLayerBufferUsed++;
     if (type & SDT_FRAME_TYPE_STREAM) {
       fprintf(stderr, "SDT_SDT_FRAME_TYPE_STREAM received\n");
       // This is a stream frame.
       handle->aNeedAck = 1;
-      assert((handle->aLayerBufferLen - handle->aLayerBufferUsed) >= 14);
-      uint32_t streamId;
-      memcpy(&streamId, handle->aLayerBuffer + handle->aLayerBufferUsed, 4);
-      streamId = ntohl(streamId);
-      handle->aLayerBufferUsed += 4;
-      uint64_t offset;
-      memcpy(&offset, handle->aLayerBuffer + handle->aLayerBufferUsed, 8);
-      offset = ntohll(offset);
-      handle->aLayerBufferUsed += 8;
-      uint16_t len;
-      memcpy(&len, handle->aLayerBuffer + handle->aLayerBufferUsed, 2);
-      len = ntohs(len);
-      handle->aLayerBufferUsed += 2;
-      assert(len <= (handle->aLayerBufferLen - handle->aLayerBufferUsed));
 
-      struct hFrame_t *frame =
-        (struct hFrame_t*)malloc(sizeof(struct hFrame_t) + len +
-                                 ((streamId == 3) ? 0 : HTTP2_HEADERLEN));
-      if (!frame) {
-        return SDTE_OUT_OF_MEMORY;
+      uint32_t streamId = 0;
+      uint8_t streamIdLen = 0;
+      uint64_t offset = 0;
+      uint8_t offsetLen = 0;
+      uint8_t fin = 0;
+      uint16_t frameLen = 0;
+
+      int32_t read = sdt_decode_StreamFrame(handle->aLayerBuffer + handle->aLayerBufferUsed,
+                                            handle->aLayerBufferLen - handle->aLayerBufferUsed,
+                                            &streamId, &streamIdLen,
+                                            &offset, &offsetLen,
+                                            &fin, &frameLen);
+      if (read < 0) {
+        return read;
       }
-      frame->mNext = 0;
-      frame->mSDTOffset = offset;
-      frame->mSDTLength = len - HTTP2_HEADERLEN;
-      frame->mDataSize = len + ((streamId == 3) ? 0 : HTTP2_HEADERLEN);
-      frame->mDataRead = 0;
-      frame->mLast = 0;
+      handle->aLayerBufferUsed += read;
 
-      if (streamId == 3) {
-        // It is a header.
-        fprintf(stderr, "SDT_FRAME_TYPE_STREAM received a header frame.\n");
-        frame->mType = HTTP2_FRAME_TYPE_HEADERS;
+      // For now TODO
+      assert(streamIdLen == 4);
+      assert((offsetLen == 8) || (offsetLen == 0));
 
-        uint8_t *buf = (uint8_t*)(frame + 1);
-        memcpy(buf, handle->aLayerBuffer + handle->aLayerBufferUsed, len);
-        handle->aLayerBufferUsed += len;
-        // Rewritting of id will be done later;
-        int rc = hOrderHeaderFrame(handle, frame);
-        if (rc) {
-          return rc;
-        }
-
-      } else {
-        fprintf(stderr, "SDT_FRAME_TYPE_STREAM received a data frame.\n");
-        frame->mType = HTTP2_FRAME_TYPE_DATA;
-        frame->mLast = !!(type & 0x40);
-
-        uint8_t *buf = (uint8_t*)(frame + 1);
-        memcpy(buf + HTTP2_HEADERLEN,
-               handle->aLayerBuffer + handle->aLayerBufferUsed, len);
-        handle->aLayerBufferUsed += len;
-        buf[0] = 0;
-        len = htons(len);
-        memcpy(buf + 1, &len, 2);
-        buf[3] = HTTP2_FRAME_TYPE_DATA;
-        buf[4] = (frame->mLast) ? HTTP2_FRAME_FLAG_END_STREAM : 0;
-
-        assert((streamId != 1) && (streamId != 3));
-        uint32_t h2Stream = streamId;
-        if (h2Stream % 2) {
-          h2Stream -= 4;
-        }
-        h2Stream = htonl(h2Stream);
-        memcpy(buf + 5, &h2Stream, 4);
-
-        int rc = hOrderStreamFrame(handle, frame, streamId);
-        if (rc) {
-          free(frame);
-          return rc;
-        }
+      int rc = Received_STREAM_FRAME(&handle->mSDTRecvDataStr, handle, streamId,
+                                     offset, frameLen, fin,
+                                     handle->aLayerBuffer + handle->aLayerBufferUsed);
+      if (rc < 0) {
+        return rc;
       }
+
+      handle->aLayerBufferUsed += frameLen;
+
     } else if (type & SDT_FRAME_TYPE_ACK) {
       // This is an ACK frame.
       fprintf(stderr, "SDT_FRAME_TYPE_ACK received\n");
-      int rc = RecvAck(handle, type);
+      int rc = RecvAck(handle);
       if (rc)
         return rc;
     } else if (type & SDT_FRAME_TYPE_CONGESTION_FEEDBACK) {
@@ -3262,14 +4687,19 @@ sdt2h2(struct sdt_t *handle)
       // Currently not implemented, ignore frame.
       // I assume it has only type field.
       fprintf(stderr, "SDT_FRAME_TYPE_STOP_CONGESTION_FEEDBACK received.\n");
+      handle->aLayerBufferUsed++;
       handle->aNeedAck = 1;
     } else {
       handle->aNeedAck = 1;
+      handle->aLayerBufferUsed++; // frame type byte.
       switch (type) {
         case SDT_FRAME_TYPE_PADDING:
-          // Ignore the rest of the packet.
+          // Ignore 0x0 bytes.
           fprintf(stderr, "SDT_FRAME_TYPE_PADDING received.\n");
-          handle->aLayerBufferUsed = 0;
+          while ((handle->aLayerBufferLen >= handle->aLayerBufferUsed) &&
+                 handle->aLayerBuffer[handle->aLayerBufferUsed] == 0) {
+            handle->aLayerBufferUsed++;
+          }
           handle->aLayerBufferLen = 0;
           break;
         case SDT_FRAME_TYPE_RST_STREAM:
@@ -3277,118 +4707,90 @@ sdt2h2(struct sdt_t *handle)
             fprintf(stderr, "SDT_FRAME_TYPE_RST_STREAM received.\n");
             assert((handle->aLayerBufferLen - handle->aLayerBufferUsed) >=
                    (4 + 8 + 4));
-            // I am going to queue this one as if it is a data packet
-            struct hFrame_t *frame =
-              (struct hFrame_t*)malloc(sizeof(struct hFrame_t) +
-                                       HTTP2_HEADERLEN + 4);
-            if (!frame) {
-              return SDTE_OUT_OF_MEMORY;
+
+            uint32_t error;
+            memcpy(&error, handle->aLayerBuffer + handle->aLayerBufferUsed,
+                   4);
+            error = ntohl(error);
+            handle->aLayerBufferUsed += 4;
+
+            uint32_t streamId;
+            memcpy(&streamId, handle->aLayerBuffer + handle->aLayerBufferUsed,
+                   4);
+            handle->aLayerBufferUsed += 4;
+
+            uint64_t offset;
+            memcpy(&offset,
+                   handle->aLayerBuffer + handle->aLayerBufferUsed,
+                   8);
+            offset = ntohll(offset);
+            handle->aLayerBufferUsed += 8;
+
+            int rv = sdt_ResetStream_Internal(handle, streamId, offset, 0);
+            if (rv) {
+              return rv;
             }
-            frame->mType = HTTP2_FRAME_TYPE_RST_STREAM;
-            frame->mNext = 0;
-            frame->mSDTOffset = 0;
-            frame->mSDTLength = 0;
-            frame->mDataSize = HTTP2_HEADERLEN + 4;
-            frame->mDataRead = 0;
-            frame->mLast = 1;
+          }
+        case SDT_FRAME_TYPE_CONNECTION_CLOSE:
+          // We are closing connection
+          // TODO
+          {
+            fprintf(stderr, "SDT_FRAME_TYPE_CONNECTION_CLOSE received.\n");
+            handle->state = SDT_CLOSING;
+            uint32_t errorCode;
+              memcpy(&errorCode, handle->aLayerBuffer + handle->aLayerBufferUsed,
+                     4);
+            errorCode =ntohl(errorCode);
+            handle->aLayerBufferUsed += 4;
+
+            uint16_t len;
+            memcpy(&len, handle->aLayerBuffer + handle->aLayerBufferUsed, 2);
+            len = ntohs(len);
+            handle->aLayerBufferUsed += 2;
+
+            assert((handle->aLayerBufferLen - handle->aLayerBufferUsed) >= len);
+            if ((handle->aLayerBufferUsed + len) == SDT_CLEARTEXTPAYLOADSIZE_MAX) {
+              len--;
+            }
+            handle->aLayerBuffer[handle->aLayerBufferUsed + len] =0;
+            fprintf(stderr, "SDT_FRAME_TYPE_CONNECTION_CLOSE - error %d, "
+                            "error text: %s\n", errorCode,
+                            handle->aLayerBuffer + handle->aLayerBufferUsed);
+          }
+          return SDTE_OK;
+        case SDT_FRAME_TYPE_GOAWAY:
+          {
+            fprintf(stderr, "SDT_FRAME_TYPE_GOWAY received\n");
+
+            uint32_t errorCode;
+            memcpy(&errorCode, handle->aLayerBuffer + handle->aLayerBufferUsed,
+                   4);
+            errorCode =ntohl(errorCode);
+            handle->aLayerBufferUsed += 4;
 
             uint32_t streamId;
             memcpy(&streamId, handle->aLayerBuffer + handle->aLayerBufferUsed,
                    4);
             streamId = ntohl(streamId);
             handle->aLayerBufferUsed += 4;
-            memcpy(&frame->mSDTOffset,
-                   handle->aLayerBuffer + handle->aLayerBufferUsed,
-                   8);
-            frame->mSDTOffset = ntohll(frame->mSDTOffset);
-
-            handle->aLayerBufferUsed += 8;
-            uint8_t *buf = (uint8_t*)(frame + 1);
-            buf[0] = 0;
-            uint16_t lenN = htons(4);
-            memcpy(buf + 1, &lenN, 2);
-            buf[3] = HTTP2_FRAME_TYPE_RST_STREAM;
-            buf[4] = 0;
-            assert((streamId != 1) && (streamId != 3));
-            uint32_t h2Stream = streamId;
-            if (h2Stream % 2) {
-              h2Stream -= 4;
-            }
-            h2Stream = htonl(h2Stream);
-            memcpy(buf + 5, &h2Stream, 4);
-            memcpy(buf + HTTP2_HEADERLEN,
-                   handle->aLayerBuffer + handle->aLayerBufferUsed,
-                   4);
-            handle->aLayerBufferUsed += 4;
-
-            int rc = hOrderStreamFrame(handle, frame, streamId);
-            if (rc) {
-              free(frame);
-              return rc;
-            }
-            break;
-          }
-        case SDT_FRAME_TYPE_CONNECTION_CLOSE:
-          // We are closing connection
-          fprintf(stderr, "SDT_FRAME_TYPE_CONNECTION_CLOSE received.\n");
-          handle->state = SDT_CLOSING;
-          return SDTE_OK;
-        case SDT_FRAME_TYPE_GOAWAY:
-          {
-            fprintf(stderr, "SDT_FRAME_TYPE_GOWAY received\n");
-            // TODO: Check if there is new streams not given to the application.
 
             // Get the length of error message.
             uint16_t len;
-            memcpy(&len,
-                   handle->aLayerBuffer + handle->aLayerBufferUsed + 8, 2);
+            memcpy(&len, handle->aLayerBuffer + handle->aLayerBufferUsed, 2);
             len = ntohs(len);
-            assert((handle->aLayerBufferLen - handle->aLayerBufferUsed) >=
-                   (8 + 2 + len));
-            struct hFrame_t *frame =
-              (struct hFrame_t*)malloc(sizeof(struct hFrame_t) +
-                                       HTTP2_HEADERLEN + 8 + len);
-            if (!frame) {
-              return SDTE_OUT_OF_MEMORY;
-            }
-            frame->mType = HTTP2_FRAME_TYPE_GOAWAY;
-            frame->mNext = 0;
-            frame->mSDTOffset = 0;
-            frame->mSDTLength = 0;
-            frame->mDataSize = HTTP2_HEADERLEN + 8 + len;
-            frame->mDataRead = 0;
-            frame->mLast = 0;
-
-            uint8_t *buf = (uint8_t*)(frame + 1);
-
-            buf[0] = 0;
-            uint16_t lenN = htons(8 + len);
-            memcpy(buf + 1, &lenN, 2);
-            buf[3] = HTTP2_FRAME_TYPE_GOAWAY;
-            buf[4] = 0;
-            memset(buf + 5, 0, 4);
-
-            uint32_t streamId;
-            memcpy(&streamId,
-                   handle->aLayerBuffer + handle->aLayerBufferUsed + 4, 4);
-            streamId = ntohl(streamId);
-            assert((streamId != 1) && (streamId != 3));
-            if (streamId % 2) {
-              streamId -= 4;
-            }
-            streamId = htonl(streamId);
-            memcpy(buf + HTTP2_HEADERLEN, &streamId, 4);
-            memcpy(buf + HTTP2_HEADERLEN + 4,
-                   handle->aLayerBuffer + handle->aLayerBufferUsed,
-                   4);
-            handle->aLayerBufferUsed += 8;
-
-            memcpy(buf + 17,
-                   handle->aLayerBuffer + handle->aLayerBufferUsed,
-                   len);
             handle->aLayerBufferUsed += 2;
-            handle->aLayerBufferUsed += len;
-            hAddSortedHttp2Frame(handle, frame);
+
+            assert((handle->aLayerBufferLen - handle->aLayerBufferUsed) >= len);
+
+            if ((handle->aLayerBufferUsed + len) == SDT_CLEARTEXTPAYLOADSIZE_MAX) {
+              len--;
+            }
+            handle->aLayerBuffer[handle->aLayerBufferUsed + len] =0;
+            fprintf(stderr, "SDT_FRAME_TYPE_GOAWAY - error %d, "
+                            "error text: %s\n", errorCode,
+                            handle->aLayerBuffer + handle->aLayerBufferUsed);
+//TODO!!!!
+//            Received_GOAWAY(handle, streamId);
           }
           break;
 
@@ -3405,58 +4807,13 @@ sdt2h2(struct sdt_t *handle)
             handle->aLayerBufferUsed += 4;
             streamId = ntohl(streamId);
 
-            assert((streamId != 1) && (streamId != 3));
+            uint64_t offset;
+            memcpy(&offset, handle->aLayerBuffer + handle->aLayerBufferUsed,
+                   8);
+            offset = ntohll(offset);
+            handle->aLayerBufferUsed += 8;
 
-            struct aOutgoingStreamInfo_t *streamInfo =
-              FindOutgoingStream(&handle->mSDTSendDataStr, streamId);
-
-            // TODO: dragana take a look at this!
-            if (!streamInfo) {
-              // ignore
-              fprintf(stderr, "No record for stream %d\n", streamId);
-              handle->aLayerBufferUsed += 8;
-            } else {
-              uint64_t offset;
-              memcpy(&offset, handle->aLayerBuffer + handle->aLayerBufferUsed,
-                     8);
-              offset = ntohll(offset);
-              handle->aLayerBufferUsed += 8;
-
-              // ignore if the offset is smaller then mWindowSize.
-              if (offset > streamInfo->mWindowSize) {
-                struct hFrame_t *frame =
-                  (struct hFrame_t*)malloc(sizeof(struct hFrame_t) +
-                                           HTTP2_HEADERLEN + 4);
-                if (!frame) {
-                  return SDTE_OUT_OF_MEMORY;
-                }
-                frame->mNext = 0;
-                frame->mSDTOffset = 0;
-                frame->mSDTLength = 0;
-                frame->mDataSize = HTTP2_HEADERLEN + 4;
-                frame->mDataRead = 0;
-                frame->mLast = 0;
-                uint8_t *buf = (uint8_t*)(frame + 1);
-                buf[0] = 0;
-                uint16_t len = htons(4);
-                memcpy(buf + 1, &len, 2);
-                buf[3] = HTTP2_FRAME_TYPE_WINDOW_UPDATE;
-                buf[4] = 0;
-
-                if (streamId % 2) {
-                  streamId -= 4;
-                }
-                streamId = htonl(streamId);
-                memcpy(buf + 5, &streamId, 4);
-
-                assert((offset - streamInfo->mWindowSize) < (2ll << 32));
-                uint32_t increase = offset - streamInfo->mWindowSize;
-                increase = htonl(increase);
-                streamInfo->mWindowSize = offset;
-                memcpy(buf + HTTP2_HEADERLEN, &increase, 4);
-                hAddSortedHttp2Frame(handle, frame);
-              }
-            }
+            Received_WINDOW_UPDATE(&handle->mSDTRecvDataStr, streamId, offset);
           }
           break;
 
@@ -3475,46 +4832,24 @@ sdt2h2(struct sdt_t *handle)
                     streamId);
             break;
           }
-        case SDT_FRAME_TYPE_STOP_WAITING:
-          // TODO
-          fprintf(stderr, "SDT_FRAME_TYPE_STOP_WAITING received.\n");
-          assert((handle->aLayerBufferLen - handle->aLayerBufferUsed) >= 8);
-          handle->aLayerBufferUsed += 4;
-          break;
 
         case SDT_FRAME_TYPE_PING:
           {
             // Propagate PING to h2.
             fprintf(stderr, "SDT_FRAME_TYPE_PING received.\n");
-            struct hFrame_t *frame =
-              (struct hFrame_t*)malloc(sizeof(struct hFrame_t) +
-                                       HTTP2_HEADERLEN + 8);
-            if (!frame) {
-              return SDTE_OUT_OF_MEMORY;
-            }
-            frame->mNext = 0;
-            frame->mSDTOffset = 0;
-            frame->mSDTLength = 0;
-            frame->mDataSize = HTTP2_HEADERLEN + 8;
-            frame->mDataRead = 0;
-            frame->mLast = 0;
 
-            uint8_t *buf = (uint8_t*)(frame + 1);
-            buf[0] = 0;
-            uint16_t len = htons(8);
-            memcpy(buf + 1, &len, 2);
-            buf[3] = HTTP2_FRAME_TYPE_PING;
-            buf[4] = 0;
-            memset(buf + HTTP2_HEADERLEN, 0, 8);
-            hAddSortedHttp2Frame(handle, frame);
+#ifdef H2MAPPING
+            H2_Make_PING(&handle->mSDTRecvDataStr);
+#endif
           }
           break;
 
         case SDT_FRAME_TYPE_PRIORITY:
           {
+//TODO not implemented
             fprintf(stderr, "SDT_FRAME_TYPE_PRIORITY received.\n");
             // Priority is not described readly.(there are 2 versions)
-            assert((handle->aLayerBufferLen - handle->aLayerBufferUsed) >=
+/*            assert((handle->aLayerBufferLen - handle->aLayerBufferUsed) >=
                    4 + 5);
             uint32_t streamId;
             memcpy(&streamId,
@@ -3523,21 +4858,21 @@ sdt2h2(struct sdt_t *handle)
             handle->aLayerBufferUsed += 4;
             streamId = ntohl(streamId);
 
-            assert((streamId != 1) && (streamId != 3));
+            assert((streamId != 1));
 
             if (streamId % 2) {
-              streamId -= 4;
+              streamId -= 2;
             }
 
-            struct hFrame_t *frame =
-              (struct hFrame_t*)malloc(sizeof(struct hFrame_t) +
+            struct recvDataFrame_t *frame =
+              (struct recvDataFrame_t*)malloc(sizeof(struct recvDataFrame_t) +
                                        HTTP2_HEADERLEN + 5);
             if (!frame) {
               return SDTE_OUT_OF_MEMORY;
             }
             frame->mNext = 0;
-            frame->mSDTOffset = 0;
-            frame->mSDTLength = 0;
+            frame->mOffset = 0;
+            frame->mLength = 0;
             frame->mDataSize = HTTP2_HEADERLEN + 5;
             frame->mDataRead = 0;
             frame->mLast = 0;
@@ -3556,7 +4891,7 @@ sdt2h2(struct sdt_t *handle)
                    handle->aLayerBuffer + handle->aLayerBufferUsed,
                    5);
             handle->aLayerBufferUsed += 5;
-            hAddSortedHttp2Frame(handle, frame);
+            hAddSortedHttp2Frame(handle, frame);*/
           }
           break;
       }
@@ -3593,57 +4928,18 @@ aLayerRecv(PRFileDesc *fd, void *bufp, int32_t amount,
     }
   }
 
-  if (!handle->hOrderedFramesFirst) {
-    PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
-    return -1;
-  }
-
-  // Making it so complecated because of PR_MSG_PEEK.
-  struct hFrame_t *frame = handle->hOrderedFramesFirst;
-  uint32_t frameSize = frame->mDataSize;
-  uint32_t frameAlreadyRead = frame->mDataRead;
-  int32_t read = 0;
-  while ((read < amount) && frame) {
-    uint8_t *framebuf = (uint8_t*)(frame + 1);
-    int32_t toRead = frameSize - frameAlreadyRead;
-    toRead = (toRead > (amount - read)) ? (amount - read) : toRead;
-    memcpy(buf + read,
-           framebuf + frameAlreadyRead,
-           toRead);
-    read += toRead;
-    if (!(flags & PR_MSG_PEEK)) {
-      handle->hOrderedFramesFirst->mDataRead += toRead;
-    }
-    frameAlreadyRead += toRead;
-    if (frameAlreadyRead == frameSize) {
-      frame = frame->mNext;
-      if (frame) {
-        frameSize = frame->mDataSize;
-        frameAlreadyRead = frame->mDataRead;
-      }
-      if (!(flags & PR_MSG_PEEK)) {
-        struct hFrame_t *done = handle->hOrderedFramesFirst;
-        handle->hOrderedFramesFirst = done->mNext;
-        if (!handle->hOrderedFramesFirst) {
-          handle->hOrderedFramesLast = NULL;
-        }
-        free(done);
-      }
-    }
-  }
-
-  if (!read) {
-    PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
-    return -1;
-  }
-
-  return read;
+#ifdef H2MAPPING
+  return H2_Recv(&handle->mSDTRecvDataStr, buf, amount, flags);
+#else
+  return SDT_Recv(&handle->mSDTRecvDataStr, buf, amount, flags,
+                  (handle->state == SDT_CONNECTING));
+#endif
 }
 
 int32_t
 sdt_GetData(PRFileDesc *fd)
 {
-  fprintf(stderr, "%d sdt_GetData\n", PR_IntervalNow());
+//  fprintf(stderr, "%d sdt_GetData\n", PR_IntervalNow());
 
   struct sdt_t *handle = (struct sdt_t *)(fd->secret);
   if (!handle) {
@@ -3667,10 +4963,12 @@ sdt_GetData(PRFileDesc *fd)
 
   handle->numOfRTORetrans = 0;
 
-  sdt2h2(handle);
+  sdt_DecodeFrames(handle);
 
   return 0;
 }
+
+#ifdef H2MAPPING
 
 // Returns header length for data and header frames and
 // frame length for others (This include sdt header and all mandatory fields).
@@ -3685,9 +4983,6 @@ hSDTFrameOrHeaderLen(uint8_t type, uint8_t flags)
     case HTTP2_FRAME_TYPE_HEADERS:
     case HTTP2_FRAME_TYPE_CONTINUATION:
       minLen  = 1 + 4 + 8 + 2 + 9;
-      if (flags & HTTP2_FRAME_FLAG_PRIORITY) {
-        minLen  += 4 + 1;
-      }
       break;
     case HTTP2_FRAME_TYPE_PRIORITY:
       minLen = 1 + 4 + 5;
@@ -3717,22 +5012,31 @@ hSDTFrameOrHeaderLen(uint8_t type, uint8_t flags)
   return minLen;
 }
 
+void
+sdt_H22SDTStreamId(uint32_t h2StreamId, uint32_t *sdtStreamId)
+{
+  if (h2StreamId & 1) {
+    sdtStreamId[0] = 2 * h2StreamId + 1;
+    sdtStreamId[1] = 2 * h2StreamId + 3;
+  } else {
+    sdtStreamId[0] = 2 * h2StreamId -2;
+    sdtStreamId[1] = 2 * h2StreamId;
+  }
+}
+
 static void
-decodeH2Header(struct sdt_t *handle, const unsigned char *buf)
+H2_decodeH2Header(struct sdt_t *handle, const unsigned char *buf)
 {
   handle->hType = ((uint8_t*)buf)[3];
   handle->hFlags = ((uint8_t*)buf)[3 + 1];
   memcpy(&handle->hDataLen, buf + 1, 2);
   handle->hDataLen = ntohs(handle->hDataLen);
-  memcpy(&handle->hSDTStreamId, buf + 3 + 1 + 1, 4);
-  handle->hSDTStreamId = ntohl(handle->hSDTStreamId);
-  if (handle->hSDTStreamId % 2) {
-    handle->hSDTStreamId += 4;
-  }
+  memcpy(&handle->hH2StreamId, buf + 3 + 1 + 1, 4);
+  handle->hH2StreamId = ntohl(handle->hH2StreamId);
 }
 
 static uint8_t
-IsH2ControlFrame(uint8_t type)
+H2_IsH2ControlFrame(uint8_t type)
 {
   if ((type == HTTP2_FRAME_TYPE_DATA) ||
       (type == HTTP2_FRAME_TYPE_HEADERS) ||
@@ -3744,33 +5048,11 @@ IsH2ControlFrame(uint8_t type)
 }
 
 static int
-MakeSDTControlFrameFromH2AndQueueIt(struct sdt_t *handle,
-                                    const unsigned char *buf)
+H2_MakeSDTControlFrameFromH2AndQueueIt(struct sdt_t *handle,
+                                       const unsigned char *buf)
 {
   int32_t read = 0;
   uint16_t size = hSDTFrameOrHeaderLen(handle->hType, handle->hFlags);
-
-  struct aDataChunk_t *chunk = NULL;
-  unsigned char *chunkBuf;
-  if (size) {
-    // Chunk is own by mSDTSendDataStr!!!!
-    chunk = CreateDataChunk(&handle->mSDTSendDataStr, CONTROL_CHUNK, 0, size,
-                            0, 0);
-
-    if (!chunk) {
-      return SDTE_OUT_OF_MEMORY;
-    }
-
-    uint32_t rv = AddChunkRange(&handle->mSDTSendDataStr, chunk, 0, size);
-
-    if (rv) {
-      // Chunk will be freed by RemoveDataChunk.
-      RemoveChunkFromBuffer(&handle->mSDTSendDataStr, chunk);
-      return SDTE_OUT_OF_MEMORY;
-    }
-
-    chunkBuf = GetDataChunkBuf(chunk);
-  }
 
   uint16_t curr = 0;
 
@@ -3779,33 +5061,32 @@ MakeSDTControlFrameFromH2AndQueueIt(struct sdt_t *handle,
     {
       fprintf(stderr, "HTTP2_FRAME_TYPE_PRIORITY\n");
       // Priority is not described readly.
-      chunkBuf[curr] = SDT_FRAME_TYPE_PRIORITY;
+      // TODO PRIORITY!!!
+/*      chunkBuf[curr] = SDT_FRAME_TYPE_PRIORITY;
       curr += 1;
       uint32_t id = htonl(handle->hSDTStreamId);
       memcpy(chunkBuf + curr, &id, 4);
       curr += 4;
-      memcpy(chunkBuf + curr, buf + read, 5);
+      memcpy(chunkBuf + curr, buf + read, 5);*/
       read += 5;
-      curr += 5;
+//      curr += 5;
       break;
     }
 
     case HTTP2_FRAME_TYPE_RST_STREAM:
     {
       fprintf(stderr, "HTTP2_FRAME_TYPE_RST_STREAM\n");
-      chunkBuf[curr] = SDT_FRAME_TYPE_RST_STREAM;
-      curr += 1;
-      uint32_t id = htonl(handle->hSDTStreamId);
-      memcpy(chunkBuf + curr, &id, 4);
-      curr += 4;
-      struct aOutgoingStreamInfo_t *stream =
-        FindOutgoingStream(&handle->mSDTSendDataStr, handle->hSDTStreamId);
-      assert(stream);
-      uint64_t offset = htonll(stream->mNextOffset);
-      memcpy(chunkBuf + curr, &offset, 8);
-      curr += 8;
-      memcpy(chunkBuf + curr, buf + read, 4);
-      curr += 4;
+      // One h2 stream corresponds to 2 sdt streams.
+      uint32_t sdtStreamId[2];
+      sdt_H22SDTStreamId(handle->hH2StreamId, sdtStreamId);
+      int32_t rv = sdt_ResetStream_Internal(handle, sdtStreamId[0], 0, 1);
+      if (rv) {
+        return rv;
+      }
+      rv = sdt_ResetStream_Internal(handle, sdtStreamId[1], 0, 1);
+      if (rv) {
+        return rv;
+      }
       read += handle->hDataLen;
     }
     break;
@@ -3817,7 +5098,7 @@ MakeSDTControlFrameFromH2AndQueueIt(struct sdt_t *handle,
         // ignore ack.
       } else {
         // ignore but make a SETTING ACK frame
-        int rc = hMakeSettingsSettingsAckFrame(handle, 1);
+        int rc = H2_MakeSettingsSettingsAckFrame(&handle->mSDTRecvDataStr, 1);
         if (rc) {
           return rc;
         }
@@ -3832,59 +5113,44 @@ MakeSDTControlFrameFromH2AndQueueIt(struct sdt_t *handle,
 
     case HTTP2_FRAME_TYPE_PING:
       fprintf(stderr, "HTTP2_FRAME_TYPE_PING\n");
+      // Ignore a PING ack.
       if (!(handle->hFlags & HTTP2_FRAME_FLAG_ACK)) {
-        chunkBuf[curr] = SDT_FRAME_TYPE_PING;
-        curr += 1;
-        chunk->mIsPingPkt = 1;
+        int32_t rv = sdt_send_PING(&handle->mSDTSendDataStr);
+        if (rv) {
+          return rv;
+        }
       }
       read += 8;
       break;
 
     case HTTP2_FRAME_TYPE_GOAWAY:
       fprintf(stderr, "HTTP2_FRAME_TYPE_GOAWAY\n");
-      chunkBuf[curr] = SDT_FRAME_TYPE_GOAWAY;
-      curr += 1;
-      memcpy(chunkBuf + curr, buf + read + 4, 4);
-      curr += 4;
-      uint32_t sdtId;
-      memcpy(&sdtId, buf + read, 4);
-      sdtId = ntohl(sdtId);
-      // SDT id. Number 1 and 3 are reserved.
-      if (sdtId % 2) {
-        sdtId += 4;
-      }
-      sdtId = htonl(sdtId + 2);
 
-      memcpy(chunkBuf + curr, &sdtId, 4);
-      curr += 4;
-      memset(chunkBuf + curr, 0, 2);
-      curr += 2;
+      uint32_t h2LastGoodStreamId;
+      memcpy(&h2LastGoodStreamId, buf + read, 4);
+      h2LastGoodStreamId = ntohl(h2LastGoodStreamId);
+      uint32_t sdtStreamId[2];
+      sdt_H22SDTStreamId(h2LastGoodStreamId, sdtStreamId);
+
+      uint32_t error;
+      memcpy(&error, buf + read + 4, 4);
+      error = ntohl(error);
+
+      uint16_t reasonLen = handle->hDataLen - 8;
+
+      int32_t rv = sdt_send_GOAWAY(&handle->mSDTSendDataStr, error,
+                                   sdtStreamId[1], reasonLen, buf + 8);
+      if (rv) {
+        return rv;
+      }
       read += handle->hDataLen;
       break;
 
     case HTTP2_FRAME_TYPE_WINDOW_UPDATE:
     {
       fprintf(stderr, "HTTP2_FRAME_TYPE_WINDOW_UPDATE\n");
-      chunkBuf[curr] = SDT_FRAME_TYPE_WINDOW_UPDATE;
-      curr += 1;
-      uint32_t id = htonl(handle->hSDTStreamId);
-      memcpy(chunkBuf + curr, &id, 4);
-      curr += 4;
-      uint32_t increase;
-      memcpy(&increase, buf + read, 4);
+      // Ignoring!
       read += 4;
-      increase = ntohl(increase);
-      struct hStream_t* stream = hFindStream(handle, handle->hSDTStreamId);
-      if (!stream) {
-        RemoveChunkFromBuffer(&handle->mSDTSendDataStr, chunk);
-        return SDTE_OUT_OF_MEMORY;
-      }
-      stream->mWindowSize += increase;
-      uint64_t offset;
-      offset = stream->mWindowSize;
-      offset = htonll(offset);
-      memcpy(chunkBuf + curr, &offset, 8);
-      curr += 8;
       break;
     }
 
@@ -3906,57 +5172,8 @@ MakeSDTControlFrameFromH2AndQueueIt(struct sdt_t *handle,
   return read;
 }
 
-static void
-WriteSDTCommonStreamFrameHeader(struct aPacket_t *pkt, uint8_t flags,
-                                uint32_t streamId, uint64_t offset,
-                                uint16_t len)
-{
-  unsigned char *pktbuf = (unsigned char *)(pkt + 1);
-
-  pktbuf[pkt->mWritten] = SDT_FRAME_TYPE_STREAM2;
-  pktbuf[pkt->mWritten] |= flags;
-  pkt->mWritten++;
-
-  streamId = htonl(streamId);
-  memcpy(pktbuf + pkt->mWritten, &streamId, 4);
-  pkt->mWritten += 4;
-
-  offset = htonll(offset);
-  memcpy(pktbuf + pkt->mWritten, &offset, 8);
-  pkt->mWritten += 8;
-
-  len = htons(len);
-  memcpy(pktbuf + pkt->mWritten, &len, 2);
-  pkt->mWritten += 2;
-}
-
-// Header frame have additional header, i.e. stream id.
-static void
-WriteSDTHeaderFrameHeader(struct aPacket_t *pkt, uint8_t flags, uint8_t type,
-                          uint32_t streamId, uint16_t len)
-{
-  unsigned char *pktbuf = (unsigned char *)(pkt + 1);
-
-  // I am not sure about this, I understood it like this.
-  pktbuf[pkt->mWritten] = 0;
-  pkt->mWritten += 1;
-  len = htons(len);
-  memcpy(pktbuf + pkt->mWritten, &len, 2);
-  pkt->mWritten += 2;
-
-  pktbuf[pkt->mWritten] = type; // HEADER or CONTINUATION
-  pkt->mWritten += 1;
-
-  pktbuf[pkt->mWritten] = flags;
-  pkt->mWritten += 1;
-
-  streamId = htonl(streamId);
-  memcpy(pktbuf + pkt->mWritten, &streamId, 4);
-  pkt->mWritten += 4;
-}
-
 static int32_t
-DecodeH2Frames(struct sdt_t *handle, const unsigned char *buf, uint32_t amount)
+H2_DecodeH2Frames(struct sdt_t *handle, const unsigned char *buf, uint32_t amount)
 {
   LogBuffer("DecodeH2Frames", buf, amount);
 
@@ -3974,13 +5191,6 @@ DecodeH2Frames(struct sdt_t *handle, const unsigned char *buf, uint32_t amount)
       }
       handle->hMagicHello = 1;
       read = 24;
-      // check if next frame is setting, it must be!
-      assert(((uint8_t*)buf)[read + 3] == HTTP2_FRAME_TYPE_SETTINGS);
-      // ignore but sinulate a SETTING frame
-      int rc = hMakeSettingsSettingsAckFrame(handle, 0);
-      if (rc) {
-        return rc;
-      }
     }
   }
 
@@ -3995,14 +5205,13 @@ DecodeH2Frames(struct sdt_t *handle, const unsigned char *buf, uint32_t amount)
         }
 
         // Decode h2 common header.
-        decodeH2Header(handle, buf + read);
-        handle->hPadding = 0;
+        H2_decodeH2Header(handle, buf + read);
 
         // We will decode control packets only if the complete h2 frame is in
         // the buffer. For other frames we want to have only the complete
         // header and the padding info.
 
-        if (IsH2ControlFrame(handle->hType)) {
+        if (H2_IsH2ControlFrame(handle->hType)) {
           if ((amount - read) < (HTTP2_HEADERLEN + handle->hDataLen)) {
             done = 1;
             continue;
@@ -4010,7 +5219,7 @@ DecodeH2Frames(struct sdt_t *handle, const unsigned char *buf, uint32_t amount)
         } else {
           // Decode Padding for DATA, HEADER and CONTINUATION frame.
           handle->hPadding = 0;
-          if (handle->hFlags & 0x08) {
+          if (handle->hFlags & HTTP2_FRAME_FLAG_PADDED) {
             if ((amount - read) < (HTTP2_HEADERLEN + 1)) {
               done = 1;
               continue;
@@ -4024,22 +5233,113 @@ DecodeH2Frames(struct sdt_t *handle, const unsigned char *buf, uint32_t amount)
 
         // After h2 common header and padding are decoded we can move on
         read += HTTP2_HEADERLEN + ((handle->hPadding) ? 1 : 0);
-        if (IsH2ControlFrame(handle->hType)) {
-          int rc = MakeSDTControlFrameFromH2AndQueueIt(handle, buf + read);
+        if (H2_IsH2ControlFrame(handle->hType)) {
+          int rc = H2_MakeSDTControlFrameFromH2AndQueueIt(handle, buf + read);
           if (rc < 0) {
             return rc;
           }
           read += rc;
         } else {
-          handle->hCurrentDataChunk =
-            CreateDataChunk(&handle->mSDTSendDataStr,
-                            (handle->hType == HTTP2_FRAME_TYPE_DATA) ? DATA_CHUNK : HEADER_CHUNK,
-                             handle->hSDTStreamId, handle->hDataLen,
-                             handle->hFlags,
-                             (handle->hType == HTTP2_FRAME_TYPE_CONTINUATION));
+          uint32_t sdtStreamId[2];
+          sdt_H22SDTStreamId(handle->hH2StreamId, sdtStreamId);
+          if ((sdtStreamId[0] & 1) != handle->isServer) {
+            // This is a localy stream!!!
+            if (!handle->mNextStreamIdLocal) {
+              // TODO make GOWAY
+              return SDTE_NO_MORE_STREAM_IDS;
+            }
+            assert(handle->mNextStreamIdLocal <= sdtStreamId[0]);
+            if (handle->mNextStreamIdLocal == sdtStreamId[0]) {
+              uint32_t streamId;
+              int32_t rv = sdt_CreateStream(handle, &streamId);
+              if (rv) {
+                return rv;
+              }
+              assert(sdtStreamId[0] == streamId);
+              rv = sdt_CreateStream(handle, &streamId);
+              if (rv) {
+                return rv;
+              }
+              assert(sdtStreamId[1] == streamId);
+            }
+          } else {
+            // This is remote stream. The stream must be already opened.
+            assert(!handle->mNextStreamIdRemote ||
+                   (handle->mNextStreamIdRemote > sdtStreamId[1]));
+          }
+          int32_t streamId;
+          if ((sdtStreamId[0] % 2) != handle->isServer) {
+            streamId = sdtStreamId[0];
+          } else {
+            streamId = sdtStreamId[1];
+          }
+          if (handle->hType == HTTP2_FRAME_TYPE_DATA) {
+            handle->hCurrentDataChunk =
+              sdt_send_CreateDataChunkStreamId(&handle->mSDTSendDataStr,
+                                               streamId,
+                                               handle->hDataLen);
+            if (handle->hFlags & HTTP2_FRAME_FLAG_END_STREAM) {
+              sdt_send_CloseStream(&handle->mSDTSendDataStr,
+                                   handle->hSDTStreamId);
+            }
+          } else {
+            handle->hCurrentDataChunk =
+              sdt_send_CreateDataChunkStreamId(&handle->mSDTSendDataStr, 3,
+                                               handle->hDataLen +  HTTP2_HEADERLEN);
+          }
 
           if (!handle->hCurrentDataChunk) {
             return SDTE_OUT_OF_MEMORY;
+          }
+
+          if (handle->hType != HTTP2_FRAME_TYPE_DATA) {
+            // For Headers we are sending complete h2 headers as well!
+            if (handle->hFlags & HTTP2_FRAME_FLAG_PADDED) {
+              int32_t rv = sdt_send_WriteDataToDataChunk(&handle->mSDTSendDataStr,
+                                                         handle->hCurrentDataChunk,
+                                                         buf + read - HTTP2_HEADERLEN,
+                                                         1);
+              if (rv < 0) {
+                return rv;
+              }
+              uint16_t len = htons(handle->hDataLen);
+              rv = sdt_send_WriteDataToDataChunk(&handle->mSDTSendDataStr,
+                                                 handle->hCurrentDataChunk,
+                                                 &len, 2);
+              if (rv < 0) {
+                return rv;
+              }
+              rv = sdt_send_WriteDataToDataChunk(&handle->mSDTSendDataStr,
+                                                 handle->hCurrentDataChunk,
+                                                 buf + read - HTTP2_HEADERLEN + 3,
+                                                 1);
+              if (rv < 0) {
+                return rv;
+              }
+              int8_t flag = buf[read - HTTP2_HEADERLEN + 4] & ~HTTP2_FRAME_FLAG_PADDED;
+              rv = sdt_send_WriteDataToDataChunk(&handle->mSDTSendDataStr,
+                                                 handle->hCurrentDataChunk,
+                                                 &flag, 1);
+              if (rv < 0) {
+                return rv;
+              }
+              streamId = htonl(streamId);
+              rv = sdt_send_WriteDataToDataChunk(&handle->mSDTSendDataStr,
+                                                 &streamId,
+                                                 buf + read - HTTP2_HEADERLEN + 5,
+                                                 4);
+              if (rv < 0) {
+                return rv;
+              }
+            } else {
+              int32_t rv = sdt_send_WriteDataToDataChunk(&handle->mSDTSendDataStr,
+                                                         handle->hCurrentDataChunk,
+                                                         buf + read - HTTP2_HEADERLEN,
+                                                         HTTP2_HEADERLEN);
+              if (rv < 0) {
+                return rv;
+              }
+            }
           }
 
           fprintf(stderr, "HTTP2_FRAME_TYPE_DATA or HEADERS or "
@@ -4051,14 +5351,14 @@ DecodeH2Frames(struct sdt_t *handle, const unsigned char *buf, uint32_t amount)
       case SDT_H2S_FILLFRAME:
       {
         fprintf(stderr, "SDT_H2S_FILLFRAME\n");
-        assert(!IsH2ControlFrame(handle->hType));
+        assert(!H2_IsH2ControlFrame(handle->hType));
 
         uint16_t toRead = ((amount - read) > handle->hDataLen) ?
           handle->hDataLen : (amount - read);
 
-        int32_t rv = WriteDataToDataChunk(&handle->mSDTSendDataStr,
-                                          handle->hCurrentDataChunk, buf + read,
-                                          toRead);
+        int32_t rv = sdt_send_WriteDataToDataChunk(&handle->mSDTSendDataStr,
+                                                   handle->hCurrentDataChunk, buf + read,
+                                                   toRead);
         if (rv < 0) {
           return rv;
         }
@@ -4081,7 +5381,7 @@ DecodeH2Frames(struct sdt_t *handle, const unsigned char *buf, uint32_t amount)
       case SDT_H2S_PADDING:
       {
         fprintf(stderr, "SDT_H2S_PADDING\n");
-        assert(!IsH2ControlFrame(handle->hType));
+        assert(!H2_IsH2ControlFrame(handle->hType));
 
         uint32_t len = ((amount - read) > handle->hPadding) ?
                        handle->hPadding : (amount - read);
@@ -4099,17 +5399,22 @@ DecodeH2Frames(struct sdt_t *handle, const unsigned char *buf, uint32_t amount)
   }
   return read;
 }
+#endif
 
 static int32_t
 MaybeQueueData(struct sdt_t *handle, const unsigned char *buf, uint32_t amount)
 {
-  if (!amount || DataQueueFull(&handle->mSDTSendDataStr)) {
+  if (!amount) {
     return SDTE_OK;
   }
 
-  PR_STATIC_ASSERT((handle->cleartextpayloadsize) <= SDT_MTU);
+#ifdef H2MAPPING
+  return H2_DecodeH2Frames(handle, buf, amount);
+#else
 
-  return DecodeH2Frames(handle, buf, amount);
+  return sdt_send_MaybeBufferData(&handle->mSDTSendDataStr, buf, amount);
+
+#endif
 }
 
 static int32_t
@@ -4125,6 +5430,8 @@ PreparePacketDataAndAck(struct sdt_t *handle, struct aPacket_t *pkt)
 static int32_t
 MaybeSendPacket(PRFileDesc *fd, struct sdt_t *handle)
 {
+  fprintf(stderr, "MaybeSendPacket numOfRTORetrans=%d\n",
+          handle->numOfRTORetrans);
   // 1) Check if a timer expired
   CheckRetransmissionTimers(handle);
   if (handle->numOfRTORetrans > aMaxNumOfRTORetrans) {
@@ -4132,8 +5439,13 @@ MaybeSendPacket(PRFileDesc *fd, struct sdt_t *handle)
     return -1;
   }
 
+  fprintf(stderr, "MaybeSendPacket cc->CanSend=%d, "
+          "sdt_send_HasDataForTransmission=%d\n",
+          cc->CanSend(&handle->ccData),
+          sdt_send_HasDataForTransmission(&handle->mSDTSendDataStr));
+  // 2) check cc limit.
   if (!cc->CanSend(&handle->ccData) ||
-      (!HasDataForTransmission(&handle->mSDTSendDataStr) &&
+      (!sdt_send_HasDataForTransmission(&handle->mSDTSendDataStr) &&
        !DoWeNeedToSendAck(handle))) {
     PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
     return -1;
@@ -4185,7 +5497,7 @@ MaybeSendPacket(PRFileDesc *fd, struct sdt_t *handle)
       }
     }
   } while (pkt->mWritten && (rv > 0) &&
-           HasDataForTransmission(&handle->mSDTSendDataStr) &&
+           sdt_send_HasDataForTransmission(&handle->mSDTSendDataStr) &&
            cc->CanSend(&handle->ccData));
 
   free(pkt);
@@ -4438,7 +5750,7 @@ aLayerPoll(PRFileDesc *fd, PRInt16 how_flags, PRInt16 *p_out_flags)
   if (handle->state == SDT_TRANSFERRING) {
     if ((how_flags & PR_POLL_WRITE) &&
         !(NeedToSendRetransmit(handle) ||
-          HasDataForTransmission(&handle->mSDTSendDataStr) ||
+          sdt_send_HasDataForTransmission(&handle->mSDTSendDataStr) ||
           DoWeNeedToSendAck(handle))) {
 
       how_flags ^= PR_POLL_WRITE;
@@ -4479,7 +5791,11 @@ sdt_HasData(PRFileDesc *fd)
     return 0;
   }
 
-  return (handle->hOrderedFramesFirst != 0);
+#ifdef H2MAPPING
+  return (handle->mSDTRecvDataStr.mH2OrderedFramesFirst != 0);
+#else
+  return (handle->mSDTRecvDataStr.mReadyStreamsFirst != 0);
+#endif
 }
 
 uint8_t
@@ -4492,7 +5808,198 @@ sdt_SocketWritable(PRFileDesc * fd)
     return 0;
   }
 
-  return !DataQueueFull(&handle->mSDTSendDataStr);
+  return sdt_send_CanSendData(&handle->mSDTSendDataStr);
+}
+
+uint16_t
+sdt_GetNextTimer(PRFileDesc *fd)
+{
+  struct sdt_t *handle = (struct sdt_t *)(fd->secret);
+  if (!handle) {
+    assert (0);
+    return -1;
+  }
+
+  uint16_t nextTimer = UINT16_MAX;
+  PRIntervalTime now = PR_IntervalNow();
+
+  if (handle->RTOTimerSet && (nextTimer > (handle->RTOTimer - now))) {
+    nextTimer = handle->RTOTimer - now;
+  }
+
+  if (handle->ERTimerSet && (nextTimer > (handle->ERTimer - now))) {
+    nextTimer = handle->ERTimer - now;
+  }
+  return nextTimer;
+}
+
+int32_t
+sdt_OpenStream(PRFileDesc * fd, uint32_t *streamId)
+{
+  assert(PR_GetLayersIdentity(fd) == aIdentity);
+  assert(streamId);
+  *streamId = 0;
+
+  struct sdt_t *handle = (struct sdt_t *)(fd->secret);
+  if (!handle) {
+    assert(0);
+    return 0;
+  }
+
+  if (!handle->mNextStreamIdLocal) {
+    return SDTE_NO_MORE_STREAM_IDS;
+  }
+
+  return sdt_CreateStream(handle, streamId);
+}
+int32_t
+sdt_CloseStream(PRFileDesc *fd, uint32_t streamId)
+{
+  assert(PR_GetLayersIdentity(fd) == aIdentity);
+  assert(streamId);
+
+  struct sdt_t *handle = (struct sdt_t *)(fd->secret);
+  if (!handle) {
+    assert(0);
+    return 0;
+  }
+
+  return sdt_LocalCloseStream(handle, streamId);
+}
+
+int32_t
+sdt_ResetStream(PRFileDesc *fd, uint32_t streamId)
+{
+  assert(PR_GetLayersIdentity(fd) == aIdentity);
+  assert(streamId);
+
+  struct sdt_t *handle = (struct sdt_t *)(fd->secret);
+  if (!handle) {
+    assert(0);
+    return 0;
+  }
+
+  int32_t rv = sdt_ResetStream_Internal(handle, streamId, 0, 1);
+  assert(!rv);
+
+  return sdt_send_RST_STREAM(&handle->mSDTSendDataStr, streamId, 1);
+}
+
+int32_t
+sdt_GetStreamsReadyToRead(PRFileDesc * fd, uint32_t **streamIds, uint32_t *num)
+{
+#ifndef H2MAPPING
+  assert(PR_GetLayersIdentity(fd) == aIdentity);
+  struct sdt_t *handle = (struct sdt_t *)(fd->secret);
+  if (!handle) {
+    assert(0);
+    return 0;
+  }
+
+  if (!handle->mSDTRecvDataStr.mReadyStreamsFirst) {
+    num = 0;
+    return SDTE_OK;
+  }
+
+  *streamIds = (uint32_t *) malloc (4 * handle->mSDTRecvDataStr.mReadyStreamsNum);
+
+  struct recvStream_t *stream = handle->mSDTRecvDataStr.mReadyStreamsFirst;
+  uint32_t n = 0;
+  while (stream) {
+    *streamIds[n++] = stream->mStreamId;
+    stream = stream->mNextReadyStream;
+  }
+  *num =n;
+#endif
+  return SDTE_OK;
+}
+
+int32_t
+sdt_SetNextStreamToRead(PRFileDesc * fd, uint32_t streamId)
+{
+#ifndef H2MAPPING
+  assert(PR_GetLayersIdentity(fd) == aIdentity);
+  assert(streamId); // cannot be 0.
+
+  struct sdt_t *handle = (struct sdt_t *)(fd->secret);
+  if (!handle) {
+    assert(0);
+    return 0;
+  }
+  assert(!handle->mSDTRecvDataStr.mNextToReadSet);
+
+  if (!streamId) {
+    handle->mSDTRecvDataStr.mNextToReadSet = 0;
+    handle->mSDTRecvDataStr.mNextToReadId = 0;
+  } else {
+    struct recvStream_t *streamInfo =
+      sdt_recv_FindStream(&handle->mSDTRecvDataStr, streamId);
+    if (streamInfo->mStreamReset) {
+      return SDT_STREAM_RST;
+    } else if (streamInfo->mState == STREAM_CLOSED) {
+      return SDT_STREAM_FIN;
+    }
+
+    handle->mSDTRecvDataStr.mNextToReadSet = 1;
+    handle->mSDTRecvDataStr.mNextToReadId = streamId;
+  }
+#endif
+  return SDTE_OK;
+}
+
+int32_t
+sdt_SetNextStreamToWrite(PRFileDesc * fd, uint32_t streamId)
+{
+  fprintf(stderr, "sdt_SetNextStreamToWrite %lu\n", streamId);
+  assert(PR_GetLayersIdentity(fd) == aIdentity);
+
+  struct sdt_t *handle = (struct sdt_t *)(fd->secret);
+  if (!handle) {
+    assert(0);
+    return 0;
+  }
+  assert(!handle->mSDTSendDataStr.mNextToWriteSet);
+
+  if (!streamId) {
+    handle->mSDTSendDataStr.mNextToWriteSet = 0;
+    handle->mSDTSendDataStr.mNextToWriteId = 0;
+  } else {
+    struct aOutgoingStreamInfo_t *streamInfo =
+      sdt_send_FindStream(&handle->mSDTSendDataStr, streamId);
+    fprintf(stderr, "sdt_SetNextStreamToWrite %p closed=%d reset=%d\n",
+            streamInfo, streamInfo->mState == STREAM_CLOSED,
+            streamInfo->mStreamReset);
+    if (streamInfo->mStreamReset) {
+      return SDT_STREAM_RST;
+    } else if (streamInfo->mState == STREAM_CLOSED) {
+      return SDT_STREAM_FIN;
+    }
+    handle->mSDTSendDataStr.mNextToWriteSet = 1;
+    handle->mSDTSendDataStr.mNextToWriteId = streamId;
+  }
+
+  return SDTE_OK;
+}
+
+uint8_t
+sdt_StreamCanWriteData(PRFileDesc * fd, uint32_t streamId)
+{
+  assert(PR_GetLayersIdentity(fd) == aIdentity);
+  assert(streamId); // cannot be 0
+
+  struct sdt_t *handle = (struct sdt_t *)(fd->secret);
+  if (!handle) {
+    assert(0);
+    return 0;
+  }
+
+  struct aOutgoingStreamInfo_t *stream = sdt_send_FindStream(&handle->mSDTSendDataStr,
+                                                             streamId);
+  if (!stream) {
+    return 0;
+  }
+
+  return sdt_send_CanSendDataStream(&handle->mSDTSendDataStr, stream);
 }
 
 static int sdt_once = 0;
@@ -4570,11 +6077,11 @@ sdt_openSocket(PRIntn af)
   opt.value.non_blocking =  1;
   PR_SetSocketOption(fd, &opt);
 
-  return sdt_addSDTLayers(fd);
+  return sdt_addSDTLayers(fd, 0);
 }
 
 PRFileDesc *
-sdt_addSDTLayers(PRFileDesc *fd)
+sdt_addSDTLayers(PRFileDesc *fd, uint8_t isServer)
 {
   PRFileDesc *sLayer = NULL;
 
@@ -4586,7 +6093,7 @@ sdt_addSDTLayers(PRFileDesc *fd)
 
   sLayer->dtor = strongDtor;
 
-  struct sdt_t *handle = sdt_newHandle();
+  struct sdt_t *handle = sdt_newHandle(isServer);
   if (!handle) {
     goto fail;
   }

@@ -1577,7 +1577,7 @@ pref("network.http.bypass-cachelock-threshold", 250);
 // Try and use SPDY when using SSL
 pref("network.http.spdy.enabled", true);
 pref("network.http.spdy.enabled.http2", true);
-pref("network.http.spdy.enabled.http2sdt", true);
+pref("network.http.spdy.enabled.sdt", true);
 pref("network.http.spdy.enabled.deps", true);
 pref("network.http.spdy.enforce-tls-profile", true);
 pref("network.http.spdy.chunk-size", 16000);
@@ -1593,7 +1593,6 @@ pref("network.http.spdy.pull-allowance", 12582912); // 12MB
 pref("network.http.spdy.default-concurrent", 100);
 pref("network.http.spdy.default-hpack-buffer", 65536); // 64k
 
-pref("network.http.sdt.chunk-size", 1336);
 // TODO still not used.
 pref("network.http.sdt.default-port", 5300);
 

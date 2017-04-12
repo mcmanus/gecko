@@ -91,6 +91,8 @@ UNIFIED_SOURCES += [
     'nsHttpTransaction.cpp',
     'NullHttpChannel.cpp',
     'NullHttpTransaction.cpp',
+    'SDTSession.cpp',
+    'SDTStream.cpp',
     'TunnelUtils.cpp',
 ]
 
@@ -116,6 +118,7 @@ FINAL_LIBRARY = 'xul'
 LOCAL_INCLUDES += [
     '/dom/base',
     '/netwerk/base',
+    '/netwerk/socket',
 ]
 
 EXTRA_COMPONENTS += [

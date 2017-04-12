@@ -55,7 +55,7 @@ int flowCount = 0;
 void
 LogIO(const char *label, const char *data, uint32_t datalen)
 {
-  return;
+//  return;
   // Max line is (16 * 3) + 10(prefix) + newline + null
   char linebuf[128];
   uint32_t index;
@@ -114,7 +114,7 @@ public:
 
     sdt_ensureInit();
 
-    sdt = sdt_addSDTLayers(layerU);
+    sdt = sdt_addSDTLayers(layerU, 1);
 
     if (!sdt) {
       return;

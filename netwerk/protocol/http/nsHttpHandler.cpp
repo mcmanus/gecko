@@ -208,7 +208,7 @@ nsHttpHandler::nsHttpHandler()
     , mDebugObservations(false)
     , mEnableSpdy(false)
     , mHttp2Enabled(true)
-    , mHttp2sdtEnabled(true)
+    , mSDTEnabled(true)
     , mUseH2Deps(true)
     , mEnforceHttp2TlsProfile(true)
     , mCoalesceSpdy(true)
@@ -239,7 +239,6 @@ nsHttpHandler::nsHttpHandler()
     , mEnforceH1Framing(FRAMECHECK_BARELY)
     , mKeepEmptyResponseHeadersAsEmtpyString(false)
     , mDefaultHpackBuffer(4096)
-    , mSdtChunkSize(1300)
     , mMaxHttpResponseHeaderSize(393216)
     , mFocusedWindowTransactionRatio(0.9f)
     , mProcessId(0)
@@ -1306,10 +1305,10 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
             mHttp2Enabled = cVar;
     }
 
-    if (PREF_CHANGED(HTTP_PREF("spdy.enabled.http2sdt"))) {
-        rv = prefs->GetBoolPref(HTTP_PREF("spdy.enabled.http2sdt"), &cVar);
+    if (PREF_CHANGED(HTTP_PREF("spdy.enabled.sdt"))) {
+        rv = prefs->GetBoolPref(HTTP_PREF("spdy.enabled.sdt"), &cVar);
         if (NS_SUCCEEDED(rv))
-            mHttp2sdtEnabled = cVar;
+            mSDTEnabled = cVar;
     }
 
     if (PREF_CHANGED(HTTP_PREF("spdy.enabled.deps"))) {
@@ -1348,12 +1347,6 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
         rv = prefs->GetIntPref(HTTP_PREF("spdy.chunk-size"), &val);
         if (NS_SUCCEEDED(rv))
             mSpdySendingChunkSize = (uint32_t) clamped(val, 1, 0x3fff);
-    }
-
-    if (PREF_CHANGED(HTTP_PREF("sdt.chunk-size"))) {
-        rv = prefs->GetIntPref(HTTP_PREF("sdt.chunk-size"), &val);
-        if (NS_SUCCEEDED(rv))
-            mSdtChunkSize = (uint32_t)val;
     }
 
     // The amount of idle seconds on a spdy connection before initiating a

@@ -12,8 +12,6 @@
 namespace mozilla {
 namespace net {
 
-PRFileDesc *sdt_createSDTSocket(PRFileDesc *aFd);
-
 class SDTUpper final : public nsASocketHandler {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -38,6 +36,7 @@ public:
   uint64_t ByteCountSent() override { return mByteWriteCount; }
   uint64_t ByteCountReceived() override { return mByteReadCount; }
 
+  PRFileDesc *GetFD() { return mFd; }
 private:
   ~SDTUpper() {}
 
@@ -53,6 +52,7 @@ private:
 };
 
 PRFileDesc * sdt_createSDTSocket(PRFileDesc *aFd);
+PRFileDesc * sdt_getSDTFD(PRFileDesc *aFd);
 
 } // namespace mozilla::net
 } // namespace mozilla

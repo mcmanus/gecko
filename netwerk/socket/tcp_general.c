@@ -197,9 +197,9 @@ sdt_cc_UndoCwnd (struct sdt_cc_t *ccData)
 uint8_t
 sdt_cc_CanSend(struct sdt_cc_t *ccData)
 {
-  fprintf(stderr, "sdt_cc_CanSend %d %d %d \n",
-          ccData->bytes_in_flight, ccData->packets_in_flight,
-          ccData->snd_cwnd * TCP_GENERAL_MSS);
+//  fprintf(stderr, "sdt_cc_CanSend %d %d %d \n",
+//          ccData->bytes_in_flight, ccData->packets_in_flight,
+//          ccData->snd_cwnd * TCP_GENERAL_MSS);
 //  return (ca->bytes_in_flight + TCP_GENERAL_MSS) <=
 //         (ca->snd_cwnd * TCP_GENERAL_MSS);
   return ccData->packets_in_flight < ccData->snd_cwnd;
