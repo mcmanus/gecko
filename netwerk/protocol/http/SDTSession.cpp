@@ -490,6 +490,35 @@ SDTSession::DontReuse()
 }
 
 uint32_t
+SDTSession::SpdyVersion()
+{
+  return HTTP_VERSION_2;
+}
+
+bool
+SDTSession::TestJoinConnection(const nsACString &hostname, int32_t port)
+{
+  return false;
+  // todo
+}
+
+bool
+SDTSession::JoinConnection(const nsACString &hostname, int32_t port)
+{
+  return false;
+  // todo
+}
+
+already_AddRefed<nsHttpConnection>
+SDTSession::HttpConnection()
+{
+  if (mConnection) {
+    return mConnection->HttpConnection();
+  }
+  return nullptr;
+}
+
+uint32_t
 SDTSession::GetWriteQueueSize()
 {
   MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
@@ -2765,21 +2794,6 @@ SDTSession::TakeHttpConnection()
   return nullptr;
 }
 
-uint32_t
-SDTSession::CancelPipeline(nsresult reason)
-{
-  // we don't pipeline inside http/2, so this isn't an issue
-  return 0;
-}
-
-nsAHttpTransaction::Classifier
-SDTSession::Classification()
-{
-  if (!mConnection)
-    return nsAHttpTransaction::CLASS_GENERAL;
-  return mConnection->Classification();
-}
-
 void
 SDTSession::GetSecurityCallbacks(nsIInterfaceRequestor **aOut)
 {
@@ -2874,42 +2888,6 @@ SDTSession::TakeSubTransactions(
     iter.Remove();
   }
   return NS_OK;
-}
-
-nsresult
-SDTSession::AddTransaction(nsAHttpTransaction *)
-{
-  // This API is meant for pipelining, SDTSession's should be
-  // extended with AddStream()
-
-  MOZ_ASSERT(false,
-             "SDTSession::AddTransaction() should not be called");
-
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-uint32_t
-SDTSession::PipelineDepth()
-{
-  return IsDone() ? 0 : 1;
-}
-
-nsresult
-SDTSession::SetPipelinePosition(int32_t position)
-{
-  // This API is meant for pipelining, SDTSession's should be
-  // extended with AddStream()
-
-  MOZ_ASSERT(false,
-             "SDTSession::SetPipelinePosition() should not be called");
-
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-int32_t
-SDTSession::PipelinePosition()
-{
-  return 0;
 }
 
 //-----------------------------------------------------------------------------

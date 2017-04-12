@@ -3300,8 +3300,8 @@ nsSocketTransport::SendPRBlockingTelemetry(PRIntervalTime aStart,
     }
 }
 
-nsresult
-MapSDTErrorToNSError(uint32_t aSDTError)
+static nsresult
+MapSDTErrorToNSError(int32_t aSDTError)
 {
   switch (aSDTError) {
   case SDTE_OK:
