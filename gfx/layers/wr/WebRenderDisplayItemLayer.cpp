@@ -22,6 +22,16 @@ WebRenderDisplayItemLayer::RenderLayer(wr::DisplayListBuilder& aBuilder)
     return;
   }
 
+  Maybe<WrImageMask> mask = BuildWrMaskLayer(false);
+  WrImageMask* imageMask = mask.ptrOr(nullptr);
+  if (imageMask) {
+    gfx::Rect rect = TransformedVisibleBoundsRelativeToParent();
+    gfx::Rect overflow(0.0, 0.0, rect.width, rect.height);
+    aBuilder.PushScrollLayer(wr::ToWrRect(rect),
+                             wr::ToWrRect(overflow),
+                             imageMask);
+  }
+
   if (mItem) {
     wr::DisplayListBuilder builder(WrBridge()->GetPipeline());
     // We might have recycled this layer. Throw away the old commands.
@@ -34,16 +44,21 @@ WebRenderDisplayItemLayer::RenderLayer(wr::DisplayListBuilder& aBuilder)
 
   aBuilder.PushBuiltDisplayList(Move(mBuiltDisplayList));
   WrBridge()->AddWebRenderParentCommands(mParentCommands);
+
+  if (imageMask) {
+    aBuilder.PopScrollLayer();
+  }
 }
 
-uint64_t
-WebRenderDisplayItemLayer::SendImageContainer(ImageContainer* aContainer)
+Maybe<wr::ImageKey>
+WebRenderDisplayItemLayer::SendImageContainer(ImageContainer* aContainer,
+                                              nsTArray<layers::WebRenderParentCommand>& aParentCommands)
 {
   if (mImageContainer != aContainer) {
     AutoLockImage autoLock(aContainer);
     Image* image = autoLock.GetImage();
     if (!image) {
-      return 0;
+      return Nothing();
     }
 
     if (!mImageClient) {
@@ -51,7 +66,7 @@ WebRenderDisplayItemLayer::SendImageContainer(ImageContainer* aContainer)
                                                     WrBridge(),
                                                     TextureFlags::DEFAULT);
       if (!mImageClient) {
-        return 0;
+        return Nothing();
       }
       mImageClient->Connect();
     }
@@ -62,13 +77,20 @@ WebRenderDisplayItemLayer::SendImageContainer(ImageContainer* aContainer)
     }
     MOZ_ASSERT(mExternalImageId);
 
-    if (mImageClient && !mImageClient->UpdateImage(aContainer, /* unused */0)) {
-      return 0;
+    if (!mImageClient->UpdateImage(aContainer, /* unused */0)) {
+      return Nothing();
     }
     mImageContainer = aContainer;
   }
 
-  return mExternalImageId;
+  WrImageKey key;
+  key.mNamespace = WrBridge()->GetNamespace();
+  key.mHandle = WrBridge()->GetNextResourceId();
+  aParentCommands.AppendElement(layers::OpAddExternalImage(
+                                mExternalImageId,
+                                key));
+  WrManager()->AddImageKeyForDiscard(key);
+  return Some(key);
 }
 
 } // namespace layers

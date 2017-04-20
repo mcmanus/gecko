@@ -9,7 +9,7 @@
 #include <map>
 #include <stdint.h>                     // for uint32_t, uint64_t, uint8_t
 #include <stdio.h>                      // for FILE
-#include <sys/types.h>                  // for int32_t, int64_t
+#include <sys/types.h>                  // for int32_t
 #include "FrameMetrics.h"               // for FrameMetrics
 #include "Units.h"                      // for LayerMargin, LayerPoint, ParentLayerIntRect
 #include "gfxContext.h"
@@ -328,6 +328,9 @@ public:
    */
   virtual void Composite() {}
 
+  virtual void SetNeedsComposite(bool aNeedsComposite) {}
+  virtual bool NeedsComposite() const { return false; }
+
   virtual bool HasShadowManagerInternal() const { return false; }
   bool HasShadowManager() const { return HasShadowManagerInternal(); }
   virtual void StorePluginWidgetConfigurations(const nsTArray<nsIWidget::Configuration>& aConfigurations) {}
@@ -592,6 +595,8 @@ public:
    */
   virtual void FlushRendering() { }
 
+  virtual void SendInvalidRegion(const nsIntRegion& aRegion) {}
+
   /**
    * Checks if we need to invalidate the OS widget to trigger
    * painting when updating this layer manager.
@@ -655,9 +660,6 @@ public:
                                       nsTArray<float>& aFrameIntervals);
 
   void RecordFrame();
-  void PostPresent();
-
-  void BeginTabSwitch();
 
   static bool IsLogEnabled();
   static mozilla::LogModule* GetLog();
@@ -769,8 +771,6 @@ private:
     bool mIsPaused;
   };
   FramesTimingRecording mRecording;
-
-  TimeStamp mTabSwitchStart;
 
 public:
   /*
@@ -2865,7 +2865,7 @@ public:
   // These getters can be used anytime.
   virtual RefLayer* AsRefLayer() override { return this; }
 
-  virtual int64_t GetReferentId() { return mId; }
+  virtual uint64_t GetReferentId() { return mId; }
 
   /**
    * DRAWING PHASE ONLY

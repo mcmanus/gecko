@@ -111,16 +111,7 @@ WebRenderBridgeChild::DPEnd(wr::DisplayListBuilder &aBuilder, const gfx::IntSize
 uint64_t
 WebRenderBridgeChild::GetNextExternalImageId()
 {
-  static uint32_t sNextID = 1;
-  ++sNextID;
-  MOZ_RELEASE_ASSERT(sNextID != UINT32_MAX);
-
-  // XXX replace external image id allocation with webrender's id allocation.
-  // Use proc id as IdNamespace for now.
-  uint32_t procId = static_cast<uint32_t>(base::GetCurrentProcId());
-  uint64_t imageId = procId;
-  imageId = imageId << 32 | sNextID;
-  return imageId;
+  return GetCompositorBridgeChild()->GetNextExternalImageId();
 }
 
 uint64_t
@@ -147,7 +138,12 @@ WebRenderBridgeChild::AllocExternalImageIdForCompositable(CompositableClient* aC
 void
 WebRenderBridgeChild::DeallocExternalImageId(uint64_t aImageId)
 {
-  MOZ_ASSERT(!mDestroyed);
+  if (mDestroyed) {
+    // This can happen if the IPC connection was torn down, because, e.g.
+    // the GPU process died.
+    return;
+  }
+
   MOZ_ASSERT(aImageId);
   SendRemoveExternalImageId(aImageId);
 }
@@ -156,13 +152,11 @@ struct FontFileData
 {
   wr::ByteBuffer mFontBuffer;
   uint32_t mFontIndex;
-  float mGlyphSize;
 };
 
 static void
 WriteFontFileData(const uint8_t* aData, uint32_t aLength, uint32_t aIndex,
-                  float aGlyphSize, uint32_t aVariationCount,
-                  const ScaledFont::VariationSetting* aVariations, void* aBaton)
+                  void* aBaton)
 {
   FontFileData* data = static_cast<FontFileData*>(aBaton);
 
@@ -172,7 +166,6 @@ WriteFontFileData(const uint8_t* aData, uint32_t aLength, uint32_t aIndex,
   memcpy(data->mFontBuffer.mData, aData, aLength);
 
   data->mFontIndex = aIndex;
-  data->mGlyphSize = aGlyphSize;
 }
 
 void
@@ -197,8 +190,8 @@ WebRenderBridgeChild::PushGlyphs(wr::DisplayListBuilder& aBuilder, const nsTArra
 
     for (size_t j = 0; j < glyphs.Length(); j++) {
       wr_glyph_instances[j].index = glyphs[j].mIndex;
-      wr_glyph_instances[j].x = glyphs[j].mPosition.x - aOffset.x;
-      wr_glyph_instances[j].y = glyphs[j].mPosition.y - aOffset.y;
+      wr_glyph_instances[j].point.x = glyphs[j].mPosition.x - aOffset.x;
+      wr_glyph_instances[j].point.y = glyphs[j].mPosition.y - aOffset.y;
     }
     aBuilder.PushText(wr::ToWrRect(aBounds),
                       clipRegion,
@@ -228,7 +221,7 @@ WebRenderBridgeChild::GetFontKeyForScaledFont(gfx::ScaledFont* aScaledFont)
   }
 
   FontFileData data;
-  if (!aScaledFont->GetFontFileData(WriteFontFileData, &data) ||
+  if (!unscaled->GetFontFileData(WriteFontFileData, &data) ||
       !data.mFontBuffer.mData) {
     return key;
   }

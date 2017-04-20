@@ -37,7 +37,9 @@
 #include "nsStyleStruct.h"
 #include "nsStyleUtil.h"
 #include "nsTArray.h"
+#include "nsTransitionManager.h"
 
+#include "mozilla/DeclarationBlockInlines.h"
 #include "mozilla/EffectCompositor.h"
 #include "mozilla/EffectSet.h"
 #include "mozilla/EventStates.h"
@@ -47,7 +49,7 @@
 #include "mozilla/ServoRestyleManager.h"
 #include "mozilla/StyleAnimationValue.h"
 #include "mozilla/SystemGroup.h"
-#include "mozilla/DeclarationBlockInlines.h"
+#include "mozilla/ServoMediaList.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ElementInlines.h"
 #include "mozilla/dom/HTMLTableCellElement.h"
@@ -86,7 +88,7 @@ Gecko_IsInDocument(RawGeckoNodeBorrowed aNode)
   return aNode->IsInComposedDoc();
 }
 
-#ifdef DEBUG
+#ifdef MOZ_DEBUG_RUST
 bool
 Gecko_FlattenedTreeParentIsParent(RawGeckoNodeBorrowed aNode)
 {
@@ -448,6 +450,7 @@ Gecko_StyleAnimationsEquals(RawGeckoStyleAnimationListBorrowed aA,
 void
 Gecko_UpdateAnimations(RawGeckoElementBorrowed aElement,
                        nsIAtom* aPseudoTagOrNull,
+                       ServoComputedValuesBorrowedOrNull aOldComputedValues,
                        ServoComputedValuesBorrowedOrNull aComputedValues,
                        ServoComputedValuesBorrowedOrNull aParentComputedValues,
                        UpdateAnimationsTasks aTaskBits)
@@ -476,6 +479,14 @@ Gecko_UpdateAnimations(RawGeckoElementBorrowed aElement,
         UpdateAnimations(const_cast<dom::Element*>(aElement), pseudoType,
                          servoValues);
     }
+    if (tasks & UpdateAnimationsTasks::CSSTransitions) {
+      MOZ_ASSERT(aOldComputedValues);
+      const ServoComputedValuesWithParent oldServoValues =
+        { aOldComputedValues, nullptr };
+      presContext->TransitionManager()->
+        UpdateTransitions(const_cast<dom::Element*>(aElement), pseudoType,
+                          oldServoValues, servoValues);
+    }
     if (tasks & UpdateAnimationsTasks::EffectProperties) {
       presContext->EffectCompositor()->UpdateEffectProperties(
         servoValues, const_cast<dom::Element*>(aElement), pseudoType);
@@ -502,18 +513,73 @@ bool
 Gecko_ElementHasCSSAnimations(RawGeckoElementBorrowed aElement,
                               nsIAtom* aPseudoTagOrNull)
 {
-  MOZ_ASSERT(!aPseudoTagOrNull ||
-             aPseudoTagOrNull == nsCSSPseudoElements::before ||
-             aPseudoTagOrNull == nsCSSPseudoElements::after);
-
-  CSSPseudoElementType pseudoType =
-    nsCSSPseudoElements::GetPseudoType(aPseudoTagOrNull,
-                                       CSSEnabledState::eForAllContent);
   nsAnimationManager::CSSAnimationCollection* collection =
     nsAnimationManager::CSSAnimationCollection
-                      ::GetAnimationCollection(aElement, pseudoType);
+                      ::GetAnimationCollection(aElement, aPseudoTagOrNull);
 
   return collection && !collection->mAnimations.IsEmpty();
+}
+
+bool
+Gecko_ElementHasCSSTransitions(RawGeckoElementBorrowed aElement,
+                               nsIAtom* aPseudoTagOrNull)
+{
+  nsTransitionManager::CSSTransitionCollection* collection =
+    nsTransitionManager::CSSTransitionCollection
+                       ::GetAnimationCollection(aElement, aPseudoTagOrNull);
+
+  return collection && !collection->mAnimations.IsEmpty();
+}
+
+size_t
+Gecko_ElementTransitions_Length(RawGeckoElementBorrowed aElement,
+                                nsIAtom* aPseudoTagOrNull)
+{
+  nsTransitionManager::CSSTransitionCollection* collection =
+    nsTransitionManager::CSSTransitionCollection
+                       ::GetAnimationCollection(aElement, aPseudoTagOrNull);
+
+  return collection ? collection->mAnimations.Length() : 0;
+}
+
+static CSSTransition*
+GetCurrentTransitionAt(RawGeckoElementBorrowed aElement,
+                       nsIAtom* aPseudoTagOrNull,
+                       size_t aIndex)
+{
+  nsTransitionManager::CSSTransitionCollection* collection =
+    nsTransitionManager::CSSTransitionCollection
+                       ::GetAnimationCollection(aElement, aPseudoTagOrNull);
+  if (!collection) {
+    return nullptr;
+  }
+  nsTArray<RefPtr<CSSTransition>>& transitions = collection->mAnimations;
+  return aIndex < transitions.Length()
+         ? transitions[aIndex].get()
+         : nullptr;
+}
+
+nsCSSPropertyID
+Gecko_ElementTransitions_PropertyAt(RawGeckoElementBorrowed aElement,
+                                    nsIAtom* aPseudoTagOrNull,
+                                    size_t aIndex)
+{
+  CSSTransition* transition = GetCurrentTransitionAt(aElement,
+                                                     aPseudoTagOrNull,
+                                                     aIndex);
+  return transition ? transition->TransitionProperty()
+                    : nsCSSPropertyID::eCSSProperty_UNKNOWN;
+}
+
+RawServoAnimationValueBorrowedOrNull
+Gecko_ElementTransitions_EndValueAt(RawGeckoElementBorrowed aElement,
+                                    nsIAtom* aPseudoTagOrNull,
+                                    size_t aIndex)
+{
+  CSSTransition* transition = GetCurrentTransitionAt(aElement,
+                                                     aPseudoTagOrNull,
+                                                     aIndex);
+  return transition ? transition->ToValue().mServo.get() : nullptr;
 }
 
 double
@@ -956,14 +1022,11 @@ ServoBundledURI::IntoCssUrl()
   MOZ_ASSERT(mExtraData->GetReferrer());
   MOZ_ASSERT(mExtraData->GetPrincipal());
 
-  nsString url;
-  nsDependentCSubstring urlString(reinterpret_cast<const char*>(mURLString),
-                                  mURLStringLength);
-  AppendUTF8toUTF16(urlString, url);
-  RefPtr<nsStringBuffer> urlBuffer = nsCSSValue::BufferFromString(url);
+  NS_ConvertUTF8toUTF16 url(reinterpret_cast<const char*>(mURLString),
+                            mURLStringLength);
 
   RefPtr<css::URLValue> urlValue =
-    new css::URLValue(urlBuffer, do_AddRef(mExtraData));
+    new css::URLValue(url, do_AddRef(mExtraData));
   return urlValue.forget();
 }
 
@@ -989,14 +1052,11 @@ CreateStyleImageRequest(nsStyleImageRequest::Mode aModeFlags,
   MOZ_ASSERT(aURI.mExtraData->GetReferrer());
   MOZ_ASSERT(aURI.mExtraData->GetPrincipal());
 
-  nsString url;
-  nsDependentCSubstring urlString(reinterpret_cast<const char*>(aURI.mURLString),
-                                  aURI.mURLStringLength);
-  AppendUTF8toUTF16(urlString, url);
-  RefPtr<nsStringBuffer> urlBuffer = nsCSSValue::BufferFromString(url);
+  NS_ConvertUTF8toUTF16 url(reinterpret_cast<const char*>(aURI.mURLString),
+                            aURI.mURLStringLength);
 
   RefPtr<nsStyleImageRequest> req =
-    new nsStyleImageRequest(aModeFlags, urlBuffer, do_AddRef(aURI.mExtraData));
+    new nsStyleImageRequest(aModeFlags, url, do_AddRef(aURI.mExtraData));
   return req.forget();
 }
 
@@ -1302,7 +1362,7 @@ Gecko_SetStyleCoordCalcValue(nsStyleUnit* aUnit, nsStyleUnion* aValue, nsStyleCo
 }
 
 void
-Gecko_CopyClipPathValueFrom(mozilla::StyleShapeSource* aDst, const mozilla::StyleShapeSource* aSrc)
+Gecko_CopyShapeSourceFrom(mozilla::StyleShapeSource* aDst, const mozilla::StyleShapeSource* aSrc)
 {
   MOZ_ASSERT(aDst);
   MOZ_ASSERT(aSrc);
@@ -1311,16 +1371,16 @@ Gecko_CopyClipPathValueFrom(mozilla::StyleShapeSource* aDst, const mozilla::Styl
 }
 
 void
-Gecko_DestroyClipPath(mozilla::StyleShapeSource* aClip)
+Gecko_DestroyShapeSource(mozilla::StyleShapeSource* aShape)
 {
-  aClip->~StyleShapeSource();
+  aShape->~StyleShapeSource();
 }
 
 void
-Gecko_StyleClipPath_SetURLValue(mozilla::StyleShapeSource* aClip, ServoBundledURI aURI)
+Gecko_StyleShapeSource_SetURLValue(mozilla::StyleShapeSource* aShape, ServoBundledURI aURI)
 {
   RefPtr<css::URLValue> url = aURI.IntoCssUrl();
-  aClip->SetURL(url.get());
+  aShape->SetURL(url.get());
 }
 
 mozilla::StyleBasicShape*
@@ -1687,25 +1747,14 @@ Gecko_LoadStyleSheet(css::Loader* aLoader,
                      RawGeckoURLExtraData* aBaseURLData,
                      const uint8_t* aURLString,
                      uint32_t aURLStringLength,
-                     const uint8_t* aMediaString,
-                     uint32_t aMediaStringLength)
+                     RawServoMediaListStrong aMediaList)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aLoader, "Should've catched this before");
   MOZ_ASSERT(aParent, "Only used for @import, so parent should exist!");
   MOZ_ASSERT(aURLString, "Invalid URLs shouldn't be loaded!");
   MOZ_ASSERT(aBaseURLData, "Need base URL data");
-  RefPtr<nsMediaList> media = new nsMediaList();
-  if (aMediaStringLength) {
-    MOZ_ASSERT(aMediaString);
-    // TODO(emilio, bug 1325878): This is not great, though this is going away
-    // soon anyway, when we can have a Servo-backed nsMediaList.
-    nsDependentCSubstring medium(reinterpret_cast<const char*>(aMediaString),
-                                 aMediaStringLength);
-    nsCSSParser mediumParser(aLoader);
-    mediumParser.ParseMediaList(
-        NS_ConvertUTF8toUTF16(medium), nullptr, 0, media);
-  }
+  RefPtr<dom::MediaList> media = new ServoMediaList(aMediaList.Consume());
 
   nsDependentCSubstring urlSpec(reinterpret_cast<const char*>(aURLString),
                                 aURLStringLength);
@@ -1728,6 +1777,25 @@ const nsMediaFeature*
 Gecko_GetMediaFeatures()
 {
   return nsMediaFeatures::features;
+}
+
+nsCSSKeyword
+Gecko_LookupCSSKeyword(const uint8_t* aString, uint32_t aLength)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  nsDependentCSubstring keyword(reinterpret_cast<const char*>(aString), aLength);
+  return nsCSSKeywords::LookupKeyword(keyword);
+}
+
+const char*
+Gecko_CSSKeywordString(nsCSSKeyword aKeyword, uint32_t* aLength)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aLength);
+  const nsAFlatCString& value = nsCSSKeywords::GetStringValue(aKeyword);
+  *aLength = value.Length();
+  return value.get();
 }
 
 nsCSSFontFaceRule*

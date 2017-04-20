@@ -525,13 +525,10 @@ nsImageRenderer::Draw(nsPresContext*       aPresContext,
     }
     case eStyleImageType_Gradient:
     {
-      Maybe<nsCSSGradientRenderer> renderer =
-        nsCSSGradientRenderer::Create(aPresContext, mGradientData,
-                                      aDest, aFill, aRepeatSize, aSrc, mSize);
+      nsCSSGradientRenderer renderer =
+        nsCSSGradientRenderer::Create(aPresContext, mGradientData, mSize);
 
-      if (renderer) {
-        renderer->Paint(*ctx, aDirtyRect, aOpacity);
-      }
+      renderer.Paint(*ctx, aDest, aFill, aRepeatSize, aSrc, aDirtyRect, aOpacity);
       break;
     }
     case eStyleImageType_Element:
@@ -583,6 +580,7 @@ nsImageRenderer::Draw(nsPresContext*       aPresContext,
 void
 nsImageRenderer::BuildWebRenderDisplayItems(nsPresContext*       aPresContext,
                                             mozilla::wr::DisplayListBuilder&            aBuilder,
+                                            nsTArray<WebRenderParentCommand>&           aParentCommands,
                                             mozilla::layers::WebRenderDisplayItemLayer* aLayer,
                                             const nsRect&        aDirtyRect,
                                             const nsRect&        aDest,
@@ -604,13 +602,38 @@ nsImageRenderer::BuildWebRenderDisplayItems(nsPresContext*       aPresContext,
   switch (mType) {
     case eStyleImageType_Gradient:
     {
-      Maybe<nsCSSGradientRenderer> renderer =
-        nsCSSGradientRenderer::Create(aPresContext, mGradientData,
-                                   aDest, aFill, aRepeatSize, aSrc, mSize);
+      nsCSSGradientRenderer renderer =
+        nsCSSGradientRenderer::Create(aPresContext, mGradientData, mSize);
 
-      if (renderer) {
-        renderer->BuildWebRenderDisplayItems(aBuilder, aLayer, aOpacity);
+      renderer.BuildWebRenderDisplayItems(aBuilder, aLayer, aDest, aFill, aRepeatSize, aSrc, aOpacity);
+      break;
+    }
+    case eStyleImageType_Image:
+    {
+      RefPtr<layers::ImageContainer> container = mImageContainer->GetImageContainer(aLayer->WrManager(),
+                                                                                    ConvertImageRendererToDrawFlags(mFlags));
+      if (!container) {
+        NS_WARNING("Failed to get image container");
+        return;
       }
+      Maybe<wr::ImageKey> key = aLayer->SendImageContainer(container, aParentCommands);
+      if (key.isNothing()) {
+        return;
+      }
+
+      const int32_t appUnitsPerDevPixel = mForFrame->PresContext()->AppUnitsPerDevPixel();
+      Rect destRect = NSRectToRect(aDest, appUnitsPerDevPixel);
+      Rect dest = aLayer->RelativeToParent(destRect);
+
+      Rect fillRect = NSRectToRect(aFill, appUnitsPerDevPixel);
+      Rect fill = aLayer->RelativeToParent(fillRect);
+
+      Rect clip = fill;
+      Size gapSize((aRepeatSize.width - aDest.width) / appUnitsPerDevPixel,
+                   (aRepeatSize.height - aDest.height) / appUnitsPerDevPixel);
+      aBuilder.PushImage(wr::ToWrRect(fill), aBuilder.BuildClipRegion(wr::ToWrRect(clip)),
+                         wr::ToWrSize(dest.Size()), wr::ToWrSize(gapSize),
+                         wr::ImageRendering::Auto, key.value());
       break;
     }
     default:
@@ -681,6 +704,7 @@ nsImageRenderer::DrawLayer(nsPresContext*       aPresContext,
 void
 nsImageRenderer::BuildWebRenderDisplayItemsForLayer(nsPresContext*       aPresContext,
                                                     mozilla::wr::DisplayListBuilder& aBuilder,
+                                                    nsTArray<WebRenderParentCommand>& aParentCommands,
                                                     WebRenderDisplayItemLayer*       aLayer,
                                                     const nsRect&        aDest,
                                                     const nsRect&        aFill,
@@ -698,7 +722,7 @@ nsImageRenderer::BuildWebRenderDisplayItemsForLayer(nsPresContext*       aPresCo
     return;
   }
 
-  BuildWebRenderDisplayItems(aPresContext, aBuilder, aLayer,
+  BuildWebRenderDisplayItems(aPresContext, aBuilder, aParentCommands, aLayer,
                              aDirty, aDest, aFill, aAnchor, aRepeatSize,
                              CSSIntRect(0, 0,
                                         nsPresContext::AppUnitsToIntCSSPixels(mSize.width),
@@ -963,5 +987,12 @@ nsImageRenderer::PurgeCacheForViewportChange(
       mImageContainer->GetType() == imgIContainer::TYPE_VECTOR) {
     mImage->PurgeCacheForViewportChange(aSVGViewportSize, aHasIntrinsicRatio);
   }
+}
+
+already_AddRefed<nsStyleGradient>
+nsImageRenderer::GetGradientData()
+{
+  RefPtr<nsStyleGradient> res = mGradientData;
+  return res.forget();
 }
 

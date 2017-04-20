@@ -39,15 +39,15 @@ import org.mozilla.gecko.updater.UpdateServiceHelper;
 import org.mozilla.gecko.util.ActivityResultHandler;
 import org.mozilla.gecko.util.ActivityUtils;
 import org.mozilla.gecko.util.BundleEventListener;
-import org.mozilla.gecko.util.ColorUtil;
 import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.FileUtils;
 import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.PrefUtils;
 import org.mozilla.gecko.util.ThreadUtils;
-import org.mozilla.gecko.webapps.WebAppActivity;
 
+import android.animation.Animator;
+import android.animation.ObjectAnimator;
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
@@ -109,6 +109,8 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.mozilla.gecko.util.ViewUtil;
+import org.mozilla.gecko.widget.AnchoredPopup;
+import org.mozilla.gecko.widget.ActionModePresenter;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -137,7 +139,8 @@ public abstract class GeckoApp
     GeckoMenu.Callback,
     GeckoMenu.MenuPresenter,
     Tabs.OnTabsChangedListener,
-    ViewTreeObserver.OnGlobalLayoutListener {
+    ViewTreeObserver.OnGlobalLayoutListener,
+    AnchoredPopup.OnVisibilityChangeListener {
 
     private static final String LOGTAG = "GeckoApp";
     private static final long ONE_DAY_MS = TimeUnit.MILLISECONDS.convert(1, TimeUnit.DAYS);
@@ -350,6 +353,8 @@ public abstract class GeckoApp
     private boolean mWasFirstTabShownAfterActivityUnhidden;
 
     abstract public int getLayout();
+
+    abstract public View getDoorhangerOverlay();
 
     protected void processTabQueue() {};
 
@@ -830,6 +835,18 @@ public abstract class GeckoApp
             int count = prefs.getInt(PREFS_FLASH_USAGE, 0);
             prefs.edit().putInt(PREFS_FLASH_USAGE, ++count).apply();
         }
+    }
+
+    /**
+     * To get a presenter which will response for text-selection. In preMarshmallow Android we want
+     * to provide different UI action when user select a text. Text-selection class will uses this
+     * presenter to trigger UI updating.
+     *
+     * @return a presenter which handle showing/hiding of action mode UI. return *null* if this
+     * activity doesn't handle any text-selection event.
+     */
+    protected ActionModePresenter getTextSelectPresenter() {
+        return null;
     }
 
     /**
@@ -1325,7 +1342,7 @@ public abstract class GeckoApp
         mMainLayout.getViewTreeObserver().addOnGlobalLayoutListener(this);
 
         if (Versions.preMarshmallow) {
-            mTextSelection = new ActionBarTextSelection(this);
+            mTextSelection = new ActionBarTextSelection(this, getTextSelectPresenter());
         } else {
             mTextSelection = new FloatingToolbarTextSelection(this, mLayerView);
         }
@@ -1564,8 +1581,31 @@ public abstract class GeckoApp
 
     protected void initializeChrome() {
         mDoorHangerPopup = new DoorHangerPopup(this);
+        mDoorHangerPopup.setOnVisibilityChangeListener(this);
         mPluginContainer = (AbsoluteLayout) findViewById(R.id.plugin_container);
         mFormAssistPopup = (FormAssistPopup) findViewById(R.id.form_assist_popup);
+    }
+
+    @Override
+    public void onDoorHangerShow() {
+        final View overlay = getDoorhangerOverlay();
+        if (overlay != null) {
+            final Animator alphaAnimator = ObjectAnimator.ofFloat(overlay, "alpha", 1);
+            alphaAnimator.setDuration(250);
+
+            alphaAnimator.start();
+        }
+    }
+
+    @Override
+    public void onDoorHangerHide() {
+        final View overlay = getDoorhangerOverlay();
+        if (overlay != null) {
+            final Animator alphaAnimator = ObjectAnimator.ofFloat(overlay, "alpha", 0);
+            alphaAnimator.setDuration(200);
+
+            alphaAnimator.start();
+        }
     }
 
     /**

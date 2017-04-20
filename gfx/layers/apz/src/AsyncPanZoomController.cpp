@@ -1286,12 +1286,17 @@ nsEventStatus AsyncPanZoomController::OnScaleBegin(const PinchGestureInput& aEve
   APZC_LOG("%p got a scale-begin in state %d\n", this, mState);
 
   mPinchPaintTimerSet = false;
-  mX.StartTouch(aEvent.mLocalFocusPoint.x, aEvent.mTime);
-  mY.StartTouch(aEvent.mLocalFocusPoint.y, aEvent.mTime);
   // Note that there may not be a touch block at this point, if we received the
   // PinchGestureEvent directly from widget code without any touch events.
   if (HasReadyTouchBlock() && !GetCurrentTouchBlock()->TouchActionAllowsPinchZoom()) {
     return nsEventStatus_eIgnore;
+  }
+
+  // If zooming is not allowed, this is a two-finger pan.
+  // Start tracking panning distance and velocity.
+  if (!mZoomConstraints.mAllowZoom) {
+    mX.StartTouch(aEvent.mLocalFocusPoint.x, aEvent.mTime);
+    mY.StartTouch(aEvent.mLocalFocusPoint.y, aEvent.mTime);
   }
 
   // For platforms that don't support APZ zooming, dispatch a message to the
@@ -1312,8 +1317,6 @@ nsEventStatus AsyncPanZoomController::OnScaleBegin(const PinchGestureInput& aEve
 
 nsEventStatus AsyncPanZoomController::OnScale(const PinchGestureInput& aEvent) {
   APZC_LOG("%p got a scale in state %d\n", this, mState);
-  mX.UpdateWithTouchAtDevicePoint(aEvent.mLocalFocusPoint.x, 0, aEvent.mTime);
-  mY.UpdateWithTouchAtDevicePoint(aEvent.mLocalFocusPoint.y, 0, aEvent.mTime);
  
   if (HasReadyTouchBlock() && !GetCurrentTouchBlock()->TouchActionAllowsPinchZoom()) {
     return nsEventStatus_eIgnore;
@@ -1321,6 +1324,13 @@ nsEventStatus AsyncPanZoomController::OnScale(const PinchGestureInput& aEvent) {
 
   if (mState != PINCHING) {
     return nsEventStatus_eConsumeNoDefault;
+  }
+
+  // If zooming is not allowed, this is a two-finger pan.
+  // Tracking panning distance and velocity.
+  if (!mZoomConstraints.mAllowZoom) {
+    mX.UpdateWithTouchAtDevicePoint(aEvent.mLocalFocusPoint.x, 0, aEvent.mTime);
+    mY.UpdateWithTouchAtDevicePoint(aEvent.mLocalFocusPoint.y, 0, aEvent.mTime);
   }
 
   if (!gfxPrefs::APZAllowZooming()) {
@@ -1460,14 +1470,16 @@ nsEventStatus AsyncPanZoomController::OnScaleEnd(const PinchGestureInput& aEvent
   if (aEvent.mLocalFocusPoint.x != -1 && aEvent.mLocalFocusPoint.y != -1) {
     if (mZoomConstraints.mAllowZoom) {
       mPanDirRestricted = false;
+      mX.StartTouch(aEvent.mLocalFocusPoint.x, aEvent.mTime);
+      mY.StartTouch(aEvent.mLocalFocusPoint.y, aEvent.mTime);
       SetState(TOUCHING);
     } else {
+      // If zooming isn't allowed, StartTouch() was already called
+      // in OnScaleBegin().
       StartPanning(aEvent.mLocalFocusPoint);
     }
   } else {
     // Otherwise, handle the fingers being lifted.
-    mX.EndTouch(aEvent.mTime);
-    mY.EndTouch(aEvent.mTime);
     if (mZoomConstraints.mAllowZoom) {
       ReentrantMonitorAutoEnter lock(mMonitor);
 
@@ -1489,6 +1501,8 @@ nsEventStatus AsyncPanZoomController::OnScaleEnd(const PinchGestureInput& aEvent
       ScrollSnap();
     } else {
       // when zoom is not allowed
+      mX.EndTouch(aEvent.mTime);
+      mY.EndTouch(aEvent.mTime);
       if (mState == PINCHING) {
         // still pinching
         if (HasReadyTouchBlock()) {

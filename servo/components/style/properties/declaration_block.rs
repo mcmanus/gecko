@@ -9,7 +9,7 @@
 use cssparser::{DeclarationListParser, parse_important};
 use cssparser::{Parser, AtRuleParser, DeclarationParser, Delimiter};
 use error_reporting::ParseErrorReporter;
-use parser::{ParserContext, log_css_error};
+use parser::{LengthParsingMode, ParserContext, log_css_error};
 use std::fmt;
 use style_traits::ToCss;
 use stylesheets::{CssRuleType, Origin, UrlExtraData};
@@ -60,6 +60,11 @@ impl fmt::Debug for PropertyDeclarationBlock {
 }
 
 impl PropertyDeclarationBlock {
+    /// Returns the number of declarations in the block.
+    pub fn len(&self) -> usize {
+        self.declarations.len()
+    }
+
     /// Create an empty block
     pub fn new() -> Self {
         PropertyDeclarationBlock {
@@ -354,6 +359,21 @@ impl PropertyDeclarationBlock {
             longhands: longhands,
         }
     }
+
+    /// Returns true if the declaration block has a CSSWideKeyword for the given
+    /// property.
+    #[cfg(feature = "gecko")]
+    pub fn has_css_wide_keyword(&self, property: &PropertyId) -> bool {
+        if let PropertyId::Longhand(id) = *property {
+            if !self.longhands.contains(id) {
+                return false
+            }
+        }
+        self.declarations.iter().any(|&(ref decl, _)|
+            decl.id().is_or_is_longhand_of(property) &&
+            decl.get_css_wide_keyword().is_some()
+        )
+    }
 }
 
 impl ToCss for PropertyDeclarationBlock {
@@ -612,8 +632,12 @@ pub fn parse_style_attribute(input: &str,
                              url_data: &UrlExtraData,
                              error_reporter: &ParseErrorReporter)
                              -> PropertyDeclarationBlock {
-    let context = ParserContext::new(Origin::Author, url_data, error_reporter);
-    parse_property_declaration_list(&context, &mut Parser::new(input), CssRuleType::Style)
+    let context = ParserContext::new(Origin::Author,
+                                     url_data,
+                                     error_reporter,
+                                     Some(CssRuleType::Style),
+                                     LengthParsingMode::Default);
+    parse_property_declaration_list(&context, &mut Parser::new(input))
 }
 
 /// Parse a given property declaration. Can result in multiple
@@ -624,11 +648,16 @@ pub fn parse_style_attribute(input: &str,
 pub fn parse_one_declaration(id: PropertyId,
                              input: &str,
                              url_data: &UrlExtraData,
-                             error_reporter: &ParseErrorReporter)
+                             error_reporter: &ParseErrorReporter,
+                             length_parsing_mode: LengthParsingMode)
                              -> Result<ParsedDeclaration, ()> {
-    let context = ParserContext::new(Origin::Author, url_data, error_reporter);
+    let context = ParserContext::new(Origin::Author,
+                                     url_data,
+                                     error_reporter,
+                                     Some(CssRuleType::Style),
+                                     length_parsing_mode);
     Parser::new(input).parse_entirely(|parser| {
-        ParsedDeclaration::parse(id, &context, parser, false, CssRuleType::Style)
+        ParsedDeclaration::parse(id, &context, parser)
             .map_err(|_| ())
     })
 }
@@ -636,7 +665,6 @@ pub fn parse_one_declaration(id: PropertyId,
 /// A struct to parse property declarations.
 struct PropertyDeclarationParser<'a, 'b: 'a> {
     context: &'a ParserContext<'b>,
-    rule_type: CssRuleType,
 }
 
 
@@ -654,7 +682,7 @@ impl<'a, 'b> DeclarationParser for PropertyDeclarationParser<'a, 'b> {
                    -> Result<(ParsedDeclaration, Importance), ()> {
         let id = try!(PropertyId::parse(name.into()));
         let parsed = input.parse_until_before(Delimiter::Bang, |input| {
-            ParsedDeclaration::parse(id, self.context, input, false, self.rule_type)
+            ParsedDeclaration::parse(id, self.context, input)
                 .map_err(|_| ())
         })?;
         let importance = match input.try(parse_important) {
@@ -673,13 +701,11 @@ impl<'a, 'b> DeclarationParser for PropertyDeclarationParser<'a, 'b> {
 /// Parse a list of property declarations and return a property declaration
 /// block.
 pub fn parse_property_declaration_list(context: &ParserContext,
-                                       input: &mut Parser,
-                                       rule_type: CssRuleType)
+                                       input: &mut Parser)
                                        -> PropertyDeclarationBlock {
     let mut block = PropertyDeclarationBlock::new();
     let parser = PropertyDeclarationParser {
         context: context,
-        rule_type: rule_type,
     };
     let mut iter = DeclarationListParser::new(input, parser);
     while let Some(declaration) = iter.next() {

@@ -144,11 +144,11 @@ MP3TrackDemuxer::Init()
   mInfo->mChannels = mChannels;
   mInfo->mBitDepth = 16;
   mInfo->mMimeType = "audio/mpeg";
-  mInfo->mDuration = Duration().ToMicroseconds();
+  mInfo->mDuration = Duration();
 
   MP3LOG("Init mInfo={mRate=%d mChannels=%d mBitDepth=%d mDuration=%" PRId64 "}",
          mInfo->mRate, mInfo->mChannels, mInfo->mBitDepth,
-         mInfo->mDuration);
+         mInfo->mDuration.ToMicroseconds());
 
   return mSamplesPerSecond && mChannels;
 }
@@ -605,12 +605,12 @@ MP3TrackDemuxer::GetNextFrame(const MediaByteRange& aRange)
   UpdateState(aRange);
 
   frame->mTime = Duration(mFrameIndex - 1).ToMicroseconds();
-  frame->mDuration = Duration(1).ToMicroseconds();
+  frame->mDuration = Duration(1);
   frame->mTimecode = frame->mTime;
   frame->mKeyframe = true;
 
   MOZ_ASSERT(frame->mTime >= 0);
-  MOZ_ASSERT(frame->mDuration > 0);
+  MOZ_ASSERT(frame->mDuration.IsPositive());
 
   if (mNumParsedFrames == 1) {
     // First frame parsed, let's read VBR info if available.

@@ -163,6 +163,7 @@ static const char BEFORE_FIRST_PAINT[] = "before-first-paint";
 
 typedef nsDataHashtable<nsUint64HashKey, TabChild*> TabChildMap;
 static TabChildMap* sTabChildren;
+StaticMutex sTabChildrenMutex;
 
 TabChildBase::TabChildBase()
   : mTabChildGlobal(nullptr)
@@ -355,19 +356,24 @@ TabChild::FindTabChild(const TabId& aTabId)
 /*static*/ already_AddRefed<TabChild>
 TabChild::Create(nsIContentChild* aManager,
                  const TabId& aTabId,
+                 const TabId& aSameTabGroupAs,
                  const TabContext &aContext,
                  uint32_t aChromeFlags)
 {
-    RefPtr<TabChild> iframe = new TabChild(aManager, aTabId,
-                                             aContext, aChromeFlags);
-    return iframe.forget();
+  RefPtr<TabChild> groupChild = FindTabChild(aSameTabGroupAs);
+  dom::TabGroup* group = groupChild ? groupChild->TabGroup() : nullptr;
+  RefPtr<TabChild> iframe = new TabChild(aManager, aTabId, group,
+                                         aContext, aChromeFlags);
+  return iframe.forget();
 }
 
 TabChild::TabChild(nsIContentChild* aManager,
                    const TabId& aTabId,
+                   dom::TabGroup* aTabGroup,
                    const TabContext& aContext,
                    uint32_t aChromeFlags)
   : TabContext(aContext)
+  , mTabGroup(aTabGroup)
   , mRemoteFrame(nullptr)
   , mManager(aManager)
   , mChromeFlags(aChromeFlags)
@@ -565,6 +571,10 @@ TabChild::DoUpdateZoomConstraints(const uint32_t& aPresShellId,
 nsresult
 TabChild::Init()
 {
+  if (!mTabGroup) {
+    mTabGroup = TabGroup::GetFromActor(this);
+  }
+
   nsCOMPtr<nsIWebBrowser> webBrowser = do_CreateInstance(NS_WEBBROWSER_CONTRACTID);
   if (!webBrowser) {
     NS_ERROR("Couldn't create a nsWebBrowser?");
@@ -1089,6 +1099,8 @@ TabChild::DestroyWindow()
 
 
     if (mLayersId != 0) {
+      StaticMutexAutoLock lock(sTabChildrenMutex);
+
       MOZ_ASSERT(sTabChildren);
       sTabChildren->Remove(mLayersId);
       if (!sTabChildren->Count()) {
@@ -2669,6 +2681,8 @@ TabChild::InitRenderingState(const TextureFactoryIdentifier& aTextureFactoryIden
 
     mRemoteFrame = static_cast<RenderFrameChild*>(aRenderFrame);
     if (aLayersId != 0) {
+      StaticMutexAutoLock lock(sTabChildrenMutex);
+
       if (!sTabChildren) {
         sTabChildren = new TabChildMap;
       }
@@ -2958,6 +2972,8 @@ TabChild::DoSendAsyncMessage(JSContext* aCx,
 /* static */ nsTArray<RefPtr<TabChild>>
 TabChild::GetAll()
 {
+  StaticMutexAutoLock lock(sTabChildrenMutex);
+
   nsTArray<RefPtr<TabChild>> list;
   if (!sTabChildren) {
     return list;
@@ -2984,6 +3000,7 @@ TabChild::GetFrom(nsIPresShell* aPresShell)
 TabChild*
 TabChild::GetFrom(uint64_t aLayersId)
 {
+  StaticMutexAutoLock lock(sTabChildrenMutex);
   if (!sTabChildren) {
     return nullptr;
   }
@@ -3333,9 +3350,7 @@ TabChildSHistoryListener::SHistoryDidUpdate(bool aTruncate /* = false */)
 mozilla::dom::TabGroup*
 TabChild::TabGroup()
 {
-  nsCOMPtr<nsPIDOMWindowOuter> window = do_GetInterface(WebNavigation());
-  MOZ_ASSERT(window);
-  return window->TabGroup();
+  return mTabGroup;
 }
 
 /*******************************************************************************

@@ -1,4 +1,3 @@
-
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim: set ts=8 sts=4 et sw=4 tw=99: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -303,14 +302,6 @@ mozJSComponentLoader::ReallyInit()
     nsresult rv;
 
     mReuseLoaderGlobal = Preferences::GetBool("jsloader.reuseGlobal");
-
-    // XXXkhuey B2G child processes have some sort of preferences race that
-    // results in getting the wrong value.
-    // But we don't want that on Firefox Mulet as it break most Firefox JSMs...
-    // Also disable on debug builds to break js components that rely on this.
-#if defined(MOZ_B2G) && !defined(MOZ_MULET) && !defined(DEBUG)
-    mReuseLoaderGlobal = true;
-#endif
 
     nsCOMPtr<nsIScriptSecurityManager> secman =
         do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID);

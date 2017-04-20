@@ -591,7 +591,7 @@ this.PlacesUtils = {
   registerShutdownFunction: function PU_registerShutdownFunction(aFunc) {
     // If this is the first registered function, add the shutdown observer.
     if (this._shutdownFunctions.length == 0) {
-      Services.obs.addObserver(this, this.TOPIC_SHUTDOWN, false);
+      Services.obs.addObserver(this, this.TOPIC_SHUTDOWN);
     }
     this._shutdownFunctions.push(aFunc);
   },
@@ -1560,7 +1560,7 @@ this.PlacesUtils = {
 
     // Delaying to catch issues with asynchronous behavior while waiting
     // to implement asynchronous annotations in bug 699844.
-    Services.tm.mainThread.dispatch(function() {
+    Services.tm.dispatchToMainThread(function() {
       if (aCharset && aCharset.length > 0) {
         PlacesUtils.annotations.setPageAnnotation(
           aURI, PlacesUtils.CHARSET_ANNO, aCharset, 0,
@@ -1570,7 +1570,7 @@ this.PlacesUtils = {
           aURI, PlacesUtils.CHARSET_ANNO);
       }
       deferred.resolve();
-    }, Ci.nsIThread.DISPATCH_NORMAL);
+    });
 
     return deferred.promise;
   },
@@ -1585,7 +1585,7 @@ this.PlacesUtils = {
   getCharsetForURI: function PU_getCharsetForURI(aURI) {
     let deferred = Promise.defer();
 
-    Services.tm.mainThread.dispatch(function() {
+    Services.tm.dispatchToMainThread(function() {
       let charset = null;
 
       try {
@@ -1594,7 +1594,7 @@ this.PlacesUtils = {
       } catch (ex) { }
 
       deferred.resolve(charset);
-    }, Ci.nsIThread.DISPATCH_NORMAL);
+    });
 
     return deferred.promise;
   },
@@ -1669,6 +1669,23 @@ this.PlacesUtils = {
       }
     });
     return deferred.promise;
+  },
+
+   /**
+   * Returns the passed URL with a #size ref for the specified size and
+   * devicePixelRatio.
+   *
+   * @param window
+   *        The window where the icon will appear.
+   * @param href
+   *        The string href we should add the ref to.
+   * @param size
+   *        The target image size
+   * @return The URL with the fragment at the end, in the same formar as input.
+   */
+  urlWithSizeRef(window, href, size) {
+    return href + (href.includes("#") ? "&" : "#") +
+           "size=" + (Math.round(size) * window.devicePixelRatio);
   },
 
   /**
@@ -1869,7 +1886,11 @@ this.PlacesUtils = {
          JOIN descendants ON b2.parent = descendants.id AND b2.id <> :tags_folder)
        SELECT d.level, d.id, d.guid, d.parent, d.parentGuid, d.type,
               d.position AS [index], d.title, d.dateAdded, d.lastModified,
-              h.url, f.url AS iconuri,
+              h.url, (SELECT icon_url FROM moz_icons i
+                      JOIN moz_icons_to_pages ON icon_id = i.id
+                      JOIN moz_pages_w_icons pi ON page_id = pi.id
+                      WHERE pi.page_url_hash = hash(h.url) AND pi.page_url = h.url
+                      ORDER BY width DESC LIMIT 1) AS iconuri,
               (SELECT GROUP_CONCAT(t.title, ',')
                FROM moz_bookmarks b2
                JOIN moz_bookmarks t ON t.id = +b2.parent AND t.parent = :tags_folder
@@ -1884,7 +1905,6 @@ this.PlacesUtils = {
        FROM descendants d
        LEFT JOIN moz_bookmarks b3 ON b3.id = d.parent
        LEFT JOIN moz_places h ON h.id = d.fk
-       LEFT JOIN moz_favicons f ON f.id = h.favicon_id
        ORDER BY d.level, d.parent, d.position`;
 
 
@@ -1955,7 +1975,7 @@ this.PlacesUtils = {
       // So we let everyone else have a go every few items (bug 1186714).
       if (++yieldCounter % 50 == 0) {
         yield new Promise(resolve => {
-          Services.tm.currentThread.dispatch(resolve, Ci.nsIThread.DISPATCH_NORMAL);
+          Services.tm.dispatchToMainThread(resolve);
         });
       }
     }
@@ -2439,7 +2459,7 @@ XPCOMUtils.defineLazyGetter(this, "gKeywordsCachePromise", () =>
         }),
       };
 
-      PlacesUtils.bookmarks.addObserver(observer, false);
+      PlacesUtils.bookmarks.addObserver(observer);
       PlacesUtils.registerShutdownFunction(() => {
         PlacesUtils.bookmarks.removeObserver(observer);
       });
@@ -2581,7 +2601,7 @@ var GuidHelper = {
         onItemVisited() {},
         onItemMoved() {},
       };
-      PlacesUtils.bookmarks.addObserver(this.observer, false);
+      PlacesUtils.bookmarks.addObserver(this.observer);
       PlacesUtils.registerShutdownFunction(() => {
         PlacesUtils.bookmarks.removeObserver(this.observer);
       });

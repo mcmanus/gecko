@@ -106,6 +106,7 @@ import org.mozilla.gecko.util.MenuUtils;
 import org.mozilla.gecko.util.PrefUtils;
 import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.util.ThreadUtils;
+import org.mozilla.gecko.widget.ActionModePresenter;
 import org.mozilla.gecko.widget.AnchoredPopup;
 
 import org.mozilla.gecko.widget.GeckoActionProvider;
@@ -189,7 +190,7 @@ public class BrowserApp extends GeckoApp
                                    OnUrlOpenListener,
                                    OnUrlOpenInBackgroundListener,
                                    AnchoredPopup.OnVisibilityChangeListener,
-                                   ActionModeCompat.Presenter,
+                                   ActionModePresenter,
                                    LayoutInflater.Factory {
     private static final String LOGTAG = "GeckoBrowserApp";
 
@@ -229,7 +230,7 @@ public class BrowserApp extends GeckoApp
     public ActionModeCompatView mActionBar;
     private VideoPlayer mVideoPlayer;
     private BrowserToolbar mBrowserToolbar;
-    private View mDoorhangerOverlay;
+    private View doorhangerOverlay;
     // We can't name the TabStrip class because it's not included on API 9.
     private TabStripInterface mTabStrip;
     private ToolbarProgressView mProgressView;
@@ -729,7 +730,7 @@ public class BrowserApp extends GeckoApp
         mFindInPageBar = (FindInPageBar) findViewById(R.id.find_in_page);
         mMediaCastingBar = (MediaCastingBar) findViewById(R.id.media_casting);
 
-        mDoorhangerOverlay = findViewById(R.id.doorhanger_overlay);
+        doorhangerOverlay = findViewById(R.id.doorhanger_overlay);
 
         EventDispatcher.getInstance().registerGeckoThreadListener(this,
             "Search:Keyword",
@@ -1045,7 +1046,7 @@ public class BrowserApp extends GeckoApp
         }
 
         if (mActionMode != null) {
-            endActionModeCompat();
+            endActionMode();
             return;
         }
 
@@ -1619,19 +1620,7 @@ public class BrowserApp extends GeckoApp
     @Override
     public void onDoorHangerShow() {
         mDynamicToolbar.setVisible(true, VisibilityTransition.ANIMATE);
-
-        final Animator alphaAnimator = ObjectAnimator.ofFloat(mDoorhangerOverlay, "alpha", 1);
-        alphaAnimator.setDuration(250);
-
-        alphaAnimator.start();
-    }
-
-    @Override
-    public void onDoorHangerHide() {
-        final Animator alphaAnimator = ObjectAnimator.ofFloat(mDoorhangerOverlay, "alpha", 0);
-        alphaAnimator.setDuration(200);
-
-        alphaAnimator.start();
+        super.onDoorHangerShow();
     }
 
     private void setToolbarMargin(int margin) {
@@ -1862,6 +1851,10 @@ public class BrowserApp extends GeckoApp
             case "Menu:Add":
                 final MenuItemInfo info = new MenuItemInfo();
                 info.label = message.getString("name");
+                if (info.label == null) {
+                    Log.e(LOGTAG, "Invalid menu item name");
+                    return;
+                }
                 info.id = message.getInt("id") + ADDON_MENU_OFFSET;
                 info.checked = message.getBoolean("checked", false);
                 info.enabled = message.getBoolean("enabled", true);
@@ -4075,6 +4068,11 @@ public class BrowserApp extends GeckoApp
     @Override
     public int getLayout() { return R.layout.gecko_app; }
 
+    @Override
+    public View getDoorhangerOverlay() {
+        return doorhangerOverlay;
+    }
+
     public SearchEngineManager getSearchEngineManager() {
         return mSearchEngineManager;
     }
@@ -4085,9 +4083,14 @@ public class BrowserApp extends GeckoApp
         return mReadingListHelper;
     }
 
+    @Override
+    protected ActionModePresenter getTextSelectPresenter() {
+        return this;
+    }
+
     /* Implementing ActionModeCompat.Presenter */
     @Override
-    public void startActionModeCompat(final ActionModeCompat.Callback callback) {
+    public void startActionMode(final ActionModeCompat.Callback callback) {
         // If actionMode is null, we're not currently showing one. Flip to the action mode view
         if (mActionMode == null) {
             mActionBarFlipper.showNext();
@@ -4108,11 +4111,12 @@ public class BrowserApp extends GeckoApp
         if (callback.onCreateActionMode(mActionMode, mActionMode.getMenu())) {
             mActionMode.invalidate();
         }
+        mActionMode.animateIn();
     }
 
     /* Implementing ActionModeCompat.Presenter */
     @Override
-    public void endActionModeCompat() {
+    public void endActionMode() {
         if (mActionMode == null) {
             return;
         }

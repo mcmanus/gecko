@@ -1176,7 +1176,7 @@ SDTStream::ClearTransactionsBlockedOnTunnel()
   if (!mIsTunnel) {
     return;
   }
-  gHttpHandler->ConnMgr()->ProcessPendingQ(mTransaction->ConnectionInfo());
+  Unused << gHttpHandler->ConnMgr()->ProcessPendingQ(mTransaction->ConnectionInfo());
 }
 
 void

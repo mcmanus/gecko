@@ -42,6 +42,7 @@
 #endif
 
 using namespace mozilla;
+using namespace dom;
 
 #if defined(MOZ_MEMORY)
 #  define HAVE_JEMALLOC_STATS 1
@@ -1711,8 +1712,8 @@ nsMemoryReporterManager::StartGettingReports()
                                    s->mAnonymize, parentDMDFile,
                                    s->mFinishReporting, s->mFinishReportingData);
 
-  nsTArray<ContentParent*> childWeakRefs;
-  ContentParent::GetAll(childWeakRefs);
+  nsTArray<dom::ContentParent*> childWeakRefs;
+  dom::ContentParent::GetAll(childWeakRefs);
   if (!childWeakRefs.IsEmpty()) {
     // Request memory reports from child processes.  This happens
     // after the parent report so that the parent's main thread will

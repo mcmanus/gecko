@@ -36,7 +36,7 @@ ${helpers.gecko_keyword_conversion(Keyword('border-style',
                                    "none solid double dotted dashed hidden groove ridge inset outset"),
                                    type="::values::specified::BorderStyle")}
 % for side in ALL_SIDES:
-    <%helpers:longhand name="border-${side[0]}-width" boxed="True" animation_type="normal" logical="${side[1]}"
+    <%helpers:longhand name="border-${side[0]}-width" animation_type="normal" logical="${side[1]}"
                        alias="${maybe_moz_logical_alias(product, side, '-moz-border-%s-width')}"
                        spec="${maybe_logical_spec(side, 'width')}">
         use app_units::Au;
@@ -525,16 +525,16 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
     }
 
     impl Parse for SingleSpecifiedValue {
-        fn parse(_context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+        fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
             if input.try(|input| input.expect_ident_matching("auto")).is_ok() {
                 return Ok(SingleSpecifiedValue::Auto);
             }
 
-            if let Ok(len) = input.try(|input| LengthOrPercentage::parse_non_negative(input)) {
+            if let Ok(len) = input.try(|input| LengthOrPercentage::parse_non_negative(context, input)) {
                 return Ok(SingleSpecifiedValue::LengthOrPercentage(len));
             }
 
-            let num = try!(Number::parse_non_negative(input));
+            let num = try!(Number::parse_non_negative(context, input));
             Ok(SingleSpecifiedValue::Number(num))
         }
     }

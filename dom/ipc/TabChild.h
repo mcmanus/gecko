@@ -278,6 +278,7 @@ public:
    */
   TabChild(nsIContentChild* aManager,
            const TabId& aTabId,
+           TabGroup* aTabGroup,
            const TabContext& aContext,
            uint32_t aChromeFlags);
 
@@ -286,6 +287,7 @@ public:
   /** Return a TabChild with the given attributes. */
   static already_AddRefed<TabChild>
   Create(nsIContentChild* aManager, const TabId& aTabId,
+         const TabId& aSameTabGroupAs,
          const TabContext& aContext, uint32_t aChromeFlags);
 
   // Let managees query if it is safe to send messages.
@@ -769,6 +771,7 @@ private:
 
   TextureFactoryIdentifier mTextureFactoryIdentifier;
   nsCOMPtr<nsIWebNavigation> mWebNav;
+  RefPtr<mozilla::dom::TabGroup> mTabGroup;
   RefPtr<PuppetWidget> mPuppetWidget;
   nsCOMPtr<nsIURI> mLastURI;
   RenderFrameChild* mRemoteFrame;

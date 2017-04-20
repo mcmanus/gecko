@@ -117,6 +117,7 @@ public:
     NS_IMETHOD OnAuthAvailable() override;
     NS_IMETHOD OnAuthCancelled(bool userCancel) override;
     NS_IMETHOD CloseStickyConnection() override;
+    NS_IMETHOD ForceNoSpdy() override;
     // Functions we implement from nsIHttpAuthenticableChannel but are
     // declared in HttpBaseChannel must be implemented in this class. We
     // just call the HttpBaseChannel:: impls.
@@ -307,7 +308,8 @@ private:
     // is required, this funciton will just return NS_OK and BeginConnectActual()
     // will be called when callback. See Bug 1325054 for more information.
     nsresult BeginConnect();
-
+    void     HandleBeginConnectContinue();
+    MOZ_MUST_USE nsresult BeginConnectContinue();
     MOZ_MUST_USE nsresult ContinueBeginConnectWithResult();
     void     ContinueBeginConnect();
     MOZ_MUST_USE nsresult Connect();
@@ -339,6 +341,8 @@ private:
     MOZ_MUST_USE nsresult ContinueOnStartRequest1(nsresult);
     MOZ_MUST_USE nsresult ContinueOnStartRequest2(nsresult);
     MOZ_MUST_USE nsresult ContinueOnStartRequest3(nsresult);
+
+    void OnClassOfServiceUpdated();
 
     bool InitLocalBlockList(const InitLocalBlockListCallback& aCallback);
 
@@ -662,7 +666,7 @@ private:
 
     // Determines if it's possible and advisable to race the network request
     // with the cache fetch, and proceeds to do so.
-    nsresult MaybeRaceNetworkWithCache();
+    nsresult MaybeRaceCacheWithNetwork();
 
     nsresult TriggerNetwork(int32_t aTimeout);
     void CancelNetworkRequest(nsresult aStatus);
@@ -677,7 +681,7 @@ private:
     // Will be true if the onCacheEntryAvailable callback is not called by the
     // time we send the network request. This could also be true when we are
     // bypassing the cache.
-    Atomic<bool> mRacingNetAndCache;
+    Atomic<bool> mRaceCacheWithNetwork;
 
 protected:
     virtual void DoNotifyListenerCleanup() override;

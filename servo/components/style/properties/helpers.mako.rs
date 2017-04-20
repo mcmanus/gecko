@@ -267,8 +267,21 @@
                             DeclaredValue::Value(ref specified_value) => {
                                 let computed = specified_value.to_computed_value(context);
                                 % if property.ident == "font_size":
-                                    if let longhands::font_size::SpecifiedValue::Keyword(kw) = **specified_value {
-                                        context.mutate_style().font_size_keyword = Some(kw);
+                                    if let longhands::font_size::SpecifiedValue::Keyword(kw, fraction)
+                                                        = **specified_value {
+                                        context.mutate_style().font_size_keyword = Some((kw, fraction));
+                                    } else if let Some(ratio) = specified_value.as_font_ratio() {
+                                        // In case a font-size-relative value was applied to a keyword
+                                        // value, we must preserve this fact in case the generic font family
+                                        // changes. relative values (em and %) applied to keywords must be
+                                        // recomputed from the base size for the keyword and the relative size.
+                                        //
+                                        // See bug 1355707
+                                        if let Some((kw, fraction)) = context.inherited_style().font_size_keyword {
+                                            context.mutate_style().font_size_keyword = Some((kw, fraction * ratio));
+                                        } else {
+                                            context.mutate_style().font_size_keyword = None;
+                                        }
                                     } else {
                                         context.mutate_style().font_size_keyword = None;
                                     }
@@ -294,7 +307,7 @@
                                                             .to_computed_value(context);
                                         context.mutate_style().mutate_${data.current_style_struct.name_lower}()
                                                .set_font_size(computed);
-                                        context.mutate_style().font_size_keyword = Some(Default::default());
+                                        context.mutate_style().font_size_keyword = Some((Default::default(), 1.));
                                     % else:
                                         // We assume that it's faster to use copy_*_from rather than
                                         // set_*(get_initial_value());
@@ -382,9 +395,33 @@
 
 <%def name="single_keyword(name, values, vector=False, **kwargs)">
     <%call expr="single_keyword_computed(name, values, vector, **kwargs)">
-        use values::computed::ComputedValueAsSpecified;
+        % if not "extra_specified" in kwargs and ("aliases" in kwargs or (("extra_%s_aliases" % product) in kwargs)):
+            impl ToComputedValue for SpecifiedValue {
+                type ComputedValue = computed_value::T;
+
+                #[inline]
+                fn to_computed_value(&self, _context: &Context) -> computed_value::T {
+                    match *self {
+                        % for value in data.longhands_by_name[name].keyword.values_for(product):
+                            SpecifiedValue::${to_rust_ident(value)} => computed_value::T::${to_rust_ident(value)},
+                        % endfor
+                    }
+                }
+                #[inline]
+                fn from_computed_value(computed: &computed_value::T) -> Self {
+                    match *computed {
+                        % for value in data.longhands_by_name[name].keyword.values_for(product):
+                            computed_value::T::${to_rust_ident(value)} => SpecifiedValue::${to_rust_ident(value)},
+                        % endfor
+                    }
+                }
+            }
+        % else:
+            use values::computed::ComputedValueAsSpecified;
+            impl ComputedValueAsSpecified for SpecifiedValue {}
+        % endif
+
         use values::HasViewportPercentage;
-        impl ComputedValueAsSpecified for SpecifiedValue {}
         no_viewport_percentage!(SpecifiedValue);
     </%call>
 </%def>
@@ -431,17 +468,25 @@
         keyword_kwargs = {a: kwargs.pop(a, None) for a in [
             'gecko_constant_prefix', 'gecko_enum_prefix',
             'extra_gecko_values', 'extra_servo_values',
+            'aliases', 'extra_gecko_aliases', 'extra_servo_aliases',
             'custom_consts', 'gecko_inexhaustive',
         ]}
     %>
 
     <%def name="inner_body(keyword, extra_specified=None, needs_conversion=False)">
-        % if extra_specified:
+        % if extra_specified or keyword.aliases_for(product):
             use style_traits::ToCss;
             define_css_keyword_enum! { SpecifiedValue:
-                % for value in keyword.values_for(product) + extra_specified.split():
-                    "${value}" => ${to_rust_ident(value)},
-                % endfor
+                values {
+                    % for value in keyword.values_for(product) + (extra_specified or "").split():
+                        "${value}" => ${to_rust_ident(value)},
+                    % endfor
+                }
+                aliases {
+                    % for alias, value in keyword.aliases_for(product).iteritems():
+                        "${alias}" => ${to_rust_ident(value)},
+                    % endfor
+                }
             }
         % else:
             pub use self::computed_value::T as SpecifiedValue;
@@ -480,6 +525,7 @@
                 conversion_values = keyword.values_for(product)
                 if extra_specified:
                     conversion_values += extra_specified.split()
+                conversion_values += keyword.aliases_for(product).keys()
             %>
             ${gecko_keyword_conversion(keyword, values=conversion_values)}
         % endif
@@ -722,8 +768,6 @@
 
 <%def name="alias_to_nscsspropertyid(alias)">
     <%
-        if alias == "word-wrap":
-            return "nsCSSPropertyID_eCSSPropertyAlias_WordWrap"
         return "nsCSSPropertyID::eCSSPropertyAlias_%s" % to_camel_case(alias)
     %>
 </%def>

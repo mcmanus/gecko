@@ -10,21 +10,21 @@
 use Atom;
 use animation::{self, Animation, PropertyAnimation};
 use atomic_refcell::AtomicRefMut;
+use bit_vec::BitVec;
 use cache::{LRUCache, LRUCacheMutIterator};
 use cascade_info::CascadeInfo;
-use context::{SequentialTask, SharedStyleContext, StyleContext};
+use context::{CurrentElementInfo, SelectorFlagsMap, SharedStyleContext, StyleContext};
 use data::{ComputedStyle, ElementData, ElementStyles, RestyleData};
 use dom::{AnimationRules, SendElement, TElement, TNode};
 use font_metrics::FontMetricsProvider;
 use properties::{CascadeFlags, ComputedValues, SKIP_ROOT_AND_ITEM_BASED_DISPLAY_FIXUP, cascade};
 use properties::longhands::display::computed_value as display;
-use restyle_hints::{RESTYLE_STYLE_ATTRIBUTE, RESTYLE_CSS_ANIMATIONS, RestyleHint};
+use restyle_hints::{RESTYLE_STYLE_ATTRIBUTE, RESTYLE_CSS_ANIMATIONS, RESTYLE_CSS_TRANSITIONS, RestyleHint};
 use rule_tree::{CascadeLevel, RuleTree, StrongRuleNode};
 use selector_parser::{PseudoElement, RestyleDamage, SelectorImpl};
 use selectors::bloom::BloomFilter;
 use selectors::matching::{ElementSelectorFlags, StyleRelations};
 use selectors::matching::AFFECTED_BY_PSEUDO_ELEMENTS;
-#[cfg(feature = "servo")] use servo_config::opts;
 use sink::ForgetfulSink;
 use std::sync::Arc;
 use stylist::ApplicableDeclarationBlock;
@@ -53,6 +53,8 @@ struct StyleSharingCandidate<E: TElement> {
     element: SendElement<E>,
     /// The cached class names.
     class_attributes: Option<Vec<Atom>>,
+    /// The cached result of matching this entry against the revalidation selectors.
+    revalidation_match_results: Option<BitVec>,
 }
 
 impl<E: TElement> PartialEq<StyleSharingCandidate<E>> for StyleSharingCandidate<E> {
@@ -95,18 +97,18 @@ pub enum CacheMiss {
     Class,
     /// The presentation hints didn't match.
     PresHints,
-    /// The element and the candidate didn't match the same set of
-    /// sibling-affecting rules.
-    SiblingRules,
-    /// The element and the candidate didn't match the same set of style
-    /// affecting attribute selectors.
-    AttrRules,
+    /// The element and the candidate didn't match the same set of revalidation
+    /// selectors.
+    Revalidation,
 }
 
 fn element_matches_candidate<E: TElement>(element: &E,
                                           candidate: &mut StyleSharingCandidate<E>,
                                           candidate_element: &E,
-                                          shared_context: &SharedStyleContext)
+                                          shared: &SharedStyleContext,
+                                          bloom: &BloomFilter,
+                                          info: &mut CurrentElementInfo,
+                                          selector_flags_map: &mut SelectorFlagsMap<E>)
                                           -> Result<ComputedStyle, CacheMiss> {
     macro_rules! miss {
         ($miss: ident) => {
@@ -154,16 +156,9 @@ fn element_matches_candidate<E: TElement>(element: &E,
         miss!(PresHints)
     }
 
-    if !match_same_sibling_affecting_rules(element,
-                                           candidate_element,
-                                           shared_context) {
-        miss!(SiblingRules)
-    }
-
-    if !match_same_style_affecting_attributes_rules(element,
-                                                    candidate_element,
-                                                    shared_context) {
-        miss!(AttrRules)
+    if !revalidate(element, candidate, candidate_element,
+                   shared, bloom, info, selector_flags_map) {
+        miss!(Revalidation)
     }
 
     let data = candidate_element.borrow_data().unwrap();
@@ -203,19 +198,60 @@ fn have_same_class<E: TElement>(element: &E,
     element_class_attributes == *candidate.class_attributes.as_ref().unwrap()
 }
 
-// TODO: These re-match the candidate every time, which is suboptimal.
 #[inline]
-fn match_same_style_affecting_attributes_rules<E: TElement>(element: &E,
-                                                            candidate: &E,
-                                                            ctx: &SharedStyleContext) -> bool {
-    ctx.stylist.match_same_style_affecting_attributes_rules(element, candidate)
-}
+fn revalidate<E: TElement>(element: &E,
+                           candidate: &mut StyleSharingCandidate<E>,
+                           candidate_element: &E,
+                           shared: &SharedStyleContext,
+                           bloom: &BloomFilter,
+                           info: &mut CurrentElementInfo,
+                           selector_flags_map: &mut SelectorFlagsMap<E>)
+                           -> bool {
+    // NB: We could avoid matching ancestor selectors entirely (rather than
+    // just depending on the bloom filter), at the expense of some complexity.
+    // Gecko bug 1354965 tracks this.
+    //
+    // We could also be even more careful about only matching the minimal number
+    // of revalidation selectors until we find a mismatch. Gecko bug 1355668
+    // tracks this.
+    //
+    // These potential optimizations may not be worth the complexity.
+    let stylist = &shared.stylist;
 
-#[inline]
-fn match_same_sibling_affecting_rules<E: TElement>(element: &E,
-                                                   candidate: &E,
-                                                   ctx: &SharedStyleContext) -> bool {
-    ctx.stylist.match_same_sibling_affecting_rules(element, candidate)
+    if info.revalidation_match_results.is_none() {
+        // It's important to set the selector flags. Otherwise, if we succeed in
+        // sharing the style, we may not set the slow selector flags for the
+        // right elements (which may not necessarily be |element|), causing missed
+        // restyles after future DOM mutations.
+        //
+        // Gecko's test_bug534804.html exercises this. A minimal testcase is:
+        // <style> #e:empty + span { ... } </style>
+        // <span id="e">
+        //   <span></span>
+        // </span>
+        // <span></span>
+        //
+        // The style sharing cache will get a hit for the second span. When the
+        // child span is subsequently removed from the DOM, missing selector
+        // flags would cause us to miss the restyle on the second span.
+        let mut set_selector_flags = |el: &E, flags: ElementSelectorFlags| {
+            element.apply_selector_flags(selector_flags_map, el, flags);
+        };
+        info.revalidation_match_results =
+            Some(stylist.match_revalidation_selectors(element, bloom,
+                                                      &mut set_selector_flags));
+    }
+
+    if candidate.revalidation_match_results.is_none() {
+        candidate.revalidation_match_results =
+            Some(stylist.match_revalidation_selectors(candidate_element, bloom,
+                                                      &mut |_, _| {}));
+    }
+
+    let for_element = info.revalidation_match_results.as_ref().unwrap();
+    let for_candidate = candidate.revalidation_match_results.as_ref().unwrap();
+    debug_assert!(for_element.len() == for_candidate.len());
+    for_element == for_candidate
 }
 
 static STYLE_SHARING_CANDIDATE_CACHE_SIZE: usize = 8;
@@ -228,6 +264,11 @@ impl<E: TElement> StyleSharingCandidateCache<E> {
         }
     }
 
+    /// Returns the number of entries in the cache.
+    pub fn num_entries(&self) -> usize {
+        self.cache.num_entries()
+    }
+
     fn iter_mut(&mut self) -> LRUCacheMutIterator<StyleSharingCandidate<E>> {
         self.cache.iter_mut()
     }
@@ -238,7 +279,8 @@ impl<E: TElement> StyleSharingCandidateCache<E> {
     pub fn insert_if_possible(&mut self,
                               element: &E,
                               style: &Arc<ComputedValues>,
-                              relations: StyleRelations) {
+                              relations: StyleRelations,
+                              revalidation_match_results: Option<BitVec>) {
         let parent = match element.parent_element() {
             Some(element) => element,
             None => {
@@ -255,7 +297,7 @@ impl<E: TElement> StyleSharingCandidateCache<E> {
         }
 
         let box_style = style.get_box();
-        if box_style.transition_property_count() > 0 {
+        if box_style.specifies_transitions() {
             debug!("Failing to insert to the cache: transitions");
             return;
         }
@@ -271,6 +313,7 @@ impl<E: TElement> StyleSharingCandidateCache<E> {
         self.cache.insert(StyleSharingCandidate {
             element: unsafe { SendElement::new(*element) },
             class_attributes: None,
+            revalidation_match_results: revalidation_match_results,
         });
     }
 
@@ -434,10 +477,14 @@ trait PrivateMatchMethods: TElement {
 
         // Handle animations.
         if animate && !context.shared.traversal_flags.for_animation_only() {
+            let pseudo_style = pseudo_style.as_ref().map(|&(ref pseudo, ref computed_style)| {
+                (*pseudo, &**computed_style)
+            });
             self.process_animations(context,
                                     &mut old_values,
                                     &mut new_values,
-                                    pseudo);
+                                    primary_style,
+                                    &pseudo_style);
         }
 
         // Accumulate restyle damage.
@@ -453,32 +500,59 @@ trait PrivateMatchMethods: TElement {
         }
     }
 
+    /// get_after_change_style removes the transition rules from the ComputedValues.
+    /// If there is no transition rule in the ComputedValues, it returns None.
     #[cfg(feature = "gecko")]
     fn get_after_change_style(&self,
                               context: &mut StyleContext<Self>,
                               primary_style: &ComputedStyle,
                               pseudo_style: &Option<(&PseudoElement, &ComputedStyle)>)
-                              -> Arc<ComputedValues> {
+                              -> Option<Arc<ComputedValues>> {
         let style = &pseudo_style.as_ref().map_or(primary_style, |p| &*p.1);
         let rule_node = &style.rules;
         let without_transition_rules =
             context.shared.stylist.rule_tree.remove_transition_rule_if_applicable(rule_node);
         if without_transition_rules == *rule_node {
-            // Note that unwrapping here is fine, because the style is
-            // only incomplete during the styling process.
-            return style.values.as_ref().unwrap().clone();
+            // We don't have transition rule in this case, so return None to let the caller
+            // use the original ComputedValues.
+            return None;
         }
 
         let mut cascade_flags = CascadeFlags::empty();
         if self.skip_root_and_item_based_display_fixup() {
-            cascade_flags.insert(SKIP_ROOT_AND_ITEM_BASED_DISPLAY_FIXUP)
+            cascade_flags.insert(SKIP_ROOT_AND_ITEM_BASED_DISPLAY_FIXUP);
         }
-        self.cascade_with_rules(context.shared,
-                                &context.thread_local.font_metrics_provider,
-                                &without_transition_rules,
-                                primary_style,
-                                cascade_flags,
-                                pseudo_style.is_some())
+        Some(self.cascade_with_rules(context.shared,
+                                     &context.thread_local.font_metrics_provider,
+                                     &without_transition_rules,
+                                     primary_style,
+                                     cascade_flags,
+                                     pseudo_style.is_some()))
+    }
+
+    #[cfg(feature = "gecko")]
+    fn needs_animations_update(&self,
+                               old_values: &Option<Arc<ComputedValues>>,
+                               new_values: &Arc<ComputedValues>,
+                               pseudo: Option<&PseudoElement>) -> bool {
+        let ref new_box_style = new_values.get_box();
+        let has_new_animation_style = new_box_style.animation_name_count() >= 1 &&
+                                      new_box_style.animation_name_at(0).0.len() != 0;
+        let has_animations = self.has_css_animations(pseudo);
+
+        old_values.as_ref().map_or(has_new_animation_style, |ref old| {
+            let ref old_box_style = old.get_box();
+            let old_display_style = old_box_style.clone_display();
+            let new_display_style = new_box_style.clone_display();
+            // FIXME: Bug 1344581: We still need to compare keyframe rules.
+            !old_box_style.animations_equals(&new_box_style) ||
+             (old_display_style == display::T::none &&
+              new_display_style != display::T::none &&
+              has_new_animation_style) ||
+             (old_display_style != display::T::none &&
+              new_display_style == display::T::none &&
+              has_animations)
+        })
     }
 
     #[cfg(feature = "gecko")]
@@ -486,40 +560,64 @@ trait PrivateMatchMethods: TElement {
                           context: &mut StyleContext<Self>,
                           old_values: &mut Option<Arc<ComputedValues>>,
                           new_values: &mut Arc<ComputedValues>,
-                          pseudo: Option<&PseudoElement>) {
-        use context::{CSS_ANIMATIONS, EFFECT_PROPERTIES};
+                          primary_style: &ComputedStyle,
+                          pseudo_style: &Option<(&PseudoElement, &ComputedStyle)>) {
+        use context::{CSS_ANIMATIONS, CSS_TRANSITIONS, EFFECT_PROPERTIES};
         use context::UpdateAnimationsTasks;
 
-        let ref new_box_style = new_values.get_box();
-        let has_new_animation_style = new_box_style.animation_name_count() >= 1 &&
-                                      new_box_style.animation_name_at(0).0.len() != 0;
-        let has_animations = self.has_css_animations(pseudo);
-
+        let pseudo = pseudo_style.map(|(p, _)| p);
         let mut tasks = UpdateAnimationsTasks::empty();
-        let needs_update_animations =
-            old_values.as_ref().map_or(has_new_animation_style, |ref old| {
-                let ref old_box_style = old.get_box();
-                let old_display_style = old_box_style.clone_display();
-                let new_display_style = new_box_style.clone_display();
-                // FIXME: Bug 1344581: We still need to compare keyframe rules.
-                !old_box_style.animations_equals(&new_box_style) ||
-                 (old_display_style == display::T::none &&
-                  new_display_style != display::T::none &&
-                  has_new_animation_style) ||
-                 (old_display_style != display::T::none &&
-                  new_display_style == display::T::none &&
-                  has_animations)
-            });
-        if needs_update_animations {
+        if self.needs_animations_update(old_values, new_values, pseudo) {
             tasks.insert(CSS_ANIMATIONS);
         }
+
+        let before_change_style = if self.might_need_transitions_update(&old_values.as_ref(),
+                                                                        new_values,
+                                                                        pseudo) {
+            let after_change_style = if self.has_css_transitions(pseudo) {
+                self.get_after_change_style(context, primary_style, pseudo_style)
+            } else {
+                None
+            };
+
+            // In order to avoid creating a SequentialTask for transitions which may not be updated,
+            // we check it per property to make sure Gecko side will really update transition.
+            let needs_transitions_update = {
+                // We borrow new_values here, so need to add a scope to make sure we release it
+                // before assigning a new value to it.
+                let after_change_style_ref = match after_change_style {
+                    Some(ref value) => value,
+                    None => &new_values
+                };
+                self.needs_transitions_update(old_values.as_ref().unwrap(),
+                                              after_change_style_ref,
+                                              pseudo)
+            };
+
+            if needs_transitions_update {
+                if let Some(values_without_transitions) = after_change_style {
+                    *new_values = values_without_transitions;
+                }
+                tasks.insert(CSS_TRANSITIONS);
+
+                // We need to clone old_values into SequentialTask, so we can use it later.
+                old_values.clone()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         if self.has_animations(pseudo) {
             tasks.insert(EFFECT_PROPERTIES);
         }
+
         if !tasks.is_empty() {
-            let task = SequentialTask::update_animations(self.as_node().as_element().unwrap(),
-                                                         pseudo.cloned(),
-                                                         tasks);
+            let task = ::context::SequentialTask::update_animations(*self,
+                                                                    pseudo.cloned(),
+                                                                    before_change_style,
+                                                                    tasks);
             context.thread_local.tasks.push(task);
         }
     }
@@ -529,7 +627,8 @@ trait PrivateMatchMethods: TElement {
                           context: &mut StyleContext<Self>,
                           old_values: &mut Option<Arc<ComputedValues>>,
                           new_values: &mut Arc<ComputedValues>,
-                          _pseudo: Option<&PseudoElement>) {
+                          _primary_style: &ComputedStyle,
+                          _pseudo_style: &Option<(&PseudoElement, &ComputedStyle)>) {
         let possibly_expired_animations =
             &mut context.thread_local.current_element_info.as_mut().unwrap()
                         .possibly_expired_animations;
@@ -651,11 +750,15 @@ trait PrivateMatchMethods: TElement {
     }
 
     fn share_style_with_candidate_if_possible(&self,
-                                              shared_context: &SharedStyleContext,
-                                              candidate: &mut StyleSharingCandidate<Self>)
+                                              candidate: &mut StyleSharingCandidate<Self>,
+                                              shared: &SharedStyleContext,
+                                              bloom: &BloomFilter,
+                                              info: &mut CurrentElementInfo,
+                                              selector_flags_map: &mut SelectorFlagsMap<Self>)
                                               -> Result<ComputedStyle, CacheMiss> {
         let candidate_element = *candidate.element;
-        element_matches_candidate(self, candidate, &candidate_element, shared_context)
+        element_matches_candidate(self, candidate, &candidate_element,
+                                  shared, bloom, info, selector_flags_map)
     }
 }
 
@@ -677,16 +780,6 @@ pub enum StyleSharingBehavior {
     Allow,
     /// Style sharing disallowed.
     Disallow,
-}
-
-#[cfg(feature = "servo")]
-fn is_share_style_cache_disabled() -> bool {
-    opts::get().disable_share_style_cache
-}
-
-#[cfg(not(feature = "servo"))]
-fn is_share_style_cache_disabled() -> bool {
-    false
 }
 
 /// The public API that elements expose for selector matching.
@@ -718,11 +811,23 @@ pub trait MatchMethods : TElement {
 
         // If the style is shareable, add it to the LRU cache.
         if sharing == StyleSharingBehavior::Allow && relations_are_shareable(&primary_relations) {
+            // If we previously tried to match this element against the cache,
+            // the revalidation match results will already be cached. Otherwise
+            // we'll have None, and compute them later on-demand.
+            //
+            // If we do have the results, grab them here to satisfy the borrow
+            // checker.
+            let revalidation_match_results = context.thread_local
+                                                    .current_element_info
+                                                    .as_mut().unwrap()
+                                                    .revalidation_match_results
+                                                    .take();
             context.thread_local
                    .style_sharing_candidate_cache
                    .insert_if_possible(self,
                                        data.styles().primary.values(),
-                                       primary_relations);
+                                       primary_relations,
+                                       revalidation_match_results);
         }
     }
 
@@ -753,9 +858,9 @@ pub trait MatchMethods : TElement {
         let mut rule_nodes_changed = false;
         let bloom = context.thread_local.bloom_filter.filter();
 
-        let tasks = &mut context.thread_local.tasks;
+        let map = &mut context.thread_local.selector_flags;
         let mut set_selector_flags = |element: &Self, flags: ElementSelectorFlags| {
-            self.apply_selector_flags(tasks, element, flags);
+            self.apply_selector_flags(map, element, flags);
         };
 
         // Compute the primary rule node.
@@ -795,9 +900,9 @@ pub trait MatchMethods : TElement {
             Vec::<ApplicableDeclarationBlock>::with_capacity(16);
         let mut rule_nodes_changed = false;
 
-        let tasks = &mut context.thread_local.tasks;
+        let map = &mut context.thread_local.selector_flags;
         let mut set_selector_flags = |element: &Self, flags: ElementSelectorFlags| {
-            self.apply_selector_flags(tasks, element, flags);
+            self.apply_selector_flags(map, element, flags);
         };
 
         // Borrow the stuff we need here so the borrow checker doesn't get mad
@@ -874,31 +979,36 @@ pub trait MatchMethods : TElement {
     ///
     /// Anyway, let's do the obvious thing for now.
     fn apply_selector_flags(&self,
-                            tasks: &mut Vec<SequentialTask<Self>>,
+                            map: &mut SelectorFlagsMap<Self>,
                             element: &Self,
                             flags: ElementSelectorFlags) {
-        // Apply the selector flags.
+        // Handle flags that apply to the element.
         let self_flags = flags.for_self();
         if !self_flags.is_empty() {
             if element == self {
+                // If this is the element we're styling, we have exclusive
+                // access to the element, and thus it's fine inserting them,
+                // even from the worker.
                 unsafe { element.set_selector_flags(self_flags); }
             } else {
+                // Otherwise, this element is an ancestor of the current element
+                // we're styling, and thus multiple children could write to it
+                // if we did from here.
+                //
+                // Instead, we can read them, and post them if necessary as a
+                // sequential task in order for them to be processed later.
                 if !element.has_selector_flags(self_flags) {
-                    let task =
-                        SequentialTask::set_selector_flags(element.clone(),
-                                                           self_flags);
-                    tasks.push(task);
+                    map.insert_flags(*element, self_flags);
                 }
             }
         }
+
+        // Handle flags that apply to the parent.
         let parent_flags = flags.for_parent();
         if !parent_flags.is_empty() {
             if let Some(p) = element.parent_element() {
-                // Avoid the overhead of the SequentialTask if the flags are
-                // already set.
                 if !p.has_selector_flags(parent_flags) {
-                    let task = SequentialTask::set_selector_flags(p, parent_flags);
-                    tasks.push(task);
+                    map.insert_flags(p, parent_flags);
                 }
             }
         }
@@ -930,24 +1040,43 @@ pub trait MatchMethods : TElement {
                 }
             };
 
-            // RESTYLE_CSS_ANIMATIONS is processed prior to other restyle hints
-            // in the name of animation-only traversal. Rest of restyle hints
+            // RESTYLE_CSS_ANIMATIONS or RESTYLE_CSS_TRANSITIONS is processed prior to other
+            // restyle hints in the name of animation-only traversal. Rest of restyle hints
             // will be processed in a subsequent normal traversal.
-            if hint.contains(RESTYLE_CSS_ANIMATIONS) {
+            if hint.intersects(RestyleHint::for_animations()) {
                 debug_assert!(context.shared.traversal_flags.for_animation_only());
 
-                let animation_rule = self.get_animation_rule(None);
-                replace_rule_node(CascadeLevel::Animations,
-                                  animation_rule.as_ref(),
-                                  primary_rules);
-
-                let pseudos = &mut element_styles.pseudos;
-                for pseudo in pseudos.keys().iter().filter(|p| p.is_before_or_after()) {
-                    let animation_rule = self.get_animation_rule(Some(&pseudo));
-                    let pseudo_rules = &mut pseudos.get_mut(&pseudo).unwrap().rules;
-                    replace_rule_node(CascadeLevel::Animations,
+                use data::EagerPseudoStyles;
+                let mut replace_rule_node_for_animation = |level: CascadeLevel,
+                                                           primary_rules: &mut StrongRuleNode,
+                                                           pseudos: &mut EagerPseudoStyles| {
+                    let animation_rule = self.get_animation_rule_by_cascade(None, level);
+                    replace_rule_node(level,
                                       animation_rule.as_ref(),
-                                      pseudo_rules);
+                                      primary_rules);
+
+                    for pseudo in pseudos.keys().iter().filter(|p| p.is_before_or_after()) {
+                        let animation_rule = self.get_animation_rule_by_cascade(Some(&pseudo), level);
+                        let pseudo_rules = &mut pseudos.get_mut(&pseudo).unwrap().rules;
+                        replace_rule_node(level,
+                                          animation_rule.as_ref(),
+                                          pseudo_rules);
+                    }
+                };
+
+                // Apply Transition rules and Animation rules if the corresponding restyle hint
+                // is contained.
+                let pseudos = &mut element_styles.pseudos;
+                if hint.contains(RESTYLE_CSS_TRANSITIONS) {
+                    replace_rule_node_for_animation(CascadeLevel::Transitions,
+                                                    primary_rules,
+                                                    pseudos);
+                }
+
+                if hint.contains(RESTYLE_CSS_ANIMATIONS) {
+                    replace_rule_node_for_animation(CascadeLevel::Animations,
+                                                    primary_rules,
+                                                    pseudos);
                 }
             } else if hint.contains(RESTYLE_STYLE_ATTRIBUTE) {
                 let style_attribute = self.style_attribute();
@@ -970,32 +1099,42 @@ pub trait MatchMethods : TElement {
     /// live nodes in it, and we have no way to guarantee that at the type
     /// system level yet.
     unsafe fn share_style_if_possible(&self,
-                                      style_sharing_candidate_cache:
-                                        &mut StyleSharingCandidateCache<Self>,
-                                      shared_context: &SharedStyleContext,
+                                      context: &mut StyleContext<Self>,
                                       data: &mut AtomicRefMut<ElementData>)
                                       -> StyleSharingResult {
-        if is_share_style_cache_disabled() {
+        if context.shared.options.disable_style_sharing_cache {
+            debug!("{:?} Cannot share style: style sharing cache disabled", self);
             return StyleSharingResult::CannotShare
         }
 
         if self.parent_element().is_none() {
+            debug!("{:?} Cannot share style: element has style attribute", self);
             return StyleSharingResult::CannotShare
         }
 
         if self.style_attribute().is_some() {
+            debug!("{:?} Cannot share style: element has style attribute", self);
             return StyleSharingResult::CannotShare
         }
 
         if self.has_attr(&ns!(), &local_name!("id")) {
+            debug!("{:?} Cannot share style: element has id", self);
             return StyleSharingResult::CannotShare
         }
 
+        let cache = &mut context.thread_local.style_sharing_candidate_cache;
+        let current_element_info =
+            &mut context.thread_local.current_element_info.as_mut().unwrap();
+        let bloom = context.thread_local.bloom_filter.filter();
+        let selector_flags_map = &mut context.thread_local.selector_flags;
         let mut should_clear_cache = false;
-        for (i, candidate) in style_sharing_candidate_cache.iter_mut().enumerate() {
+        for (i, candidate) in cache.iter_mut().enumerate() {
             let sharing_result =
-                self.share_style_with_candidate_if_possible(shared_context,
-                                                            candidate);
+                self.share_style_with_candidate_if_possible(candidate,
+                                                            &context.shared,
+                                                            bloom,
+                                                            current_element_info,
+                                                            selector_flags_map);
             match sharing_result {
                 Ok(shared_style) => {
                     // Yay, cache hit. Share the style.
@@ -1005,7 +1144,8 @@ pub trait MatchMethods : TElement {
                     let old_values = data.get_styles_mut()
                                          .and_then(|s| s.primary.values.take());
                     if let Some(old) = old_values {
-                        self.accumulate_damage(shared_context, data.restyle_mut(), &old,
+                        self.accumulate_damage(&context.shared,
+                                               data.restyle_mut(), &old,
                                                shared_style.values(), None);
                     }
 
@@ -1033,15 +1173,17 @@ pub trait MatchMethods : TElement {
                         // Too expensive failure, give up, we don't want another
                         // one of these.
                         CacheMiss::PresHints |
-                        CacheMiss::SiblingRules |
-                        CacheMiss::AttrRules => break,
+                        CacheMiss::Revalidation => break,
                         _ => {}
                     }
                 }
             }
         }
+
+        debug!("{:?} Cannot share style: {} cache entries", self, cache.num_entries());
+
         if should_clear_cache {
-            style_sharing_candidate_cache.clear();
+            cache.clear();
         }
 
         StyleSharingResult::CannotShare

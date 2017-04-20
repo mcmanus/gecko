@@ -18,7 +18,6 @@ const PBKDF2_KEY_BYTES = 16;
 const CRYPTO_COLLECTION = "crypto";
 const KEYS_WBO = "keys";
 
-Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://services-common/async.js");
@@ -308,7 +307,7 @@ Sync11Service.prototype = {
 
     Svc.Obs.add("weave:service:setup-complete", this);
     Svc.Obs.add("sync:collection_changed", this); // Pulled from FxAccountsCommon
-    Services.prefs.addObserver(PREFS_BRANCH + "engine.", this, false);
+    Services.prefs.addObserver(PREFS_BRANCH + "engine.", this);
 
     this.scheduler = new SyncScheduler(this);
 

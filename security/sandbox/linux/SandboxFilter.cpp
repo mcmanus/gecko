@@ -655,8 +655,15 @@ public:
     CASES_FOR_fchown:
     case __NR_fchmod:
     case __NR_flock:
-#endif
       return Allow();
+
+      // Bug 1354731: proprietary GL drivers try to mknod() their devices
+    case __NR_mknod: {
+      Arg<mode_t> mode(1);
+      return If((mode & S_IFMT) == S_IFCHR, Error(EPERM))
+        .Else(InvalidSyscall());
+    }
+#endif
 
     case __NR_readlinkat:
 #ifdef DESKTOP
@@ -772,6 +779,7 @@ public:
       return Allow();
 
     case __NR_eventfd2:
+    case __NR_inotify_init:
     case __NR_inotify_init1:
     case __NR_inotify_add_watch:
     case __NR_inotify_rm_watch:

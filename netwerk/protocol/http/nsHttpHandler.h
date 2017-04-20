@@ -205,6 +205,12 @@ public:
         return mConnMgr->RescheduleTransaction(trans, priority);
     }
 
+    void ThrottleTransaction(nsHttpTransaction *trans,
+                                              bool throttle)
+    {
+        mConnMgr->ThrottleTransaction(trans, throttle);
+    }
+
     // Called to cancel a transaction, which may or may not be assigned to
     // a connection.  Callable from any thread.
     MOZ_MUST_USE nsresult CancelTransaction(nsHttpTransaction *trans,
@@ -375,7 +381,7 @@ private:
     void     PrefsChanged(nsIPrefBranch *prefs, const char *pref);
 
     MOZ_MUST_USE nsresult SetAccept(const char *);
-    MOZ_MUST_USE nsresult SetAcceptLanguages(const char *);
+    MOZ_MUST_USE nsresult SetAcceptLanguages();
     MOZ_MUST_USE nsresult SetAcceptEncodings(const char *, bool mIsSecure);
 
     MOZ_MUST_USE nsresult InitConnectionMgr();
@@ -469,6 +475,7 @@ private:
     nsCString      mUserAgent;
     nsXPIDLCString mUserAgentOverride;
     bool           mUserAgentIsDirty; // true if mUserAgent should be rebuilt
+    bool           mAcceptLanguagesIsDirty;
 
 
     bool           mPromptTempRedirect;

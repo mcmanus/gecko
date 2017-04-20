@@ -21,6 +21,7 @@ import android.support.annotation.StyleRes;
 import android.support.design.widget.Snackbar;
 import android.support.v4.util.SparseArrayCompat;
 import android.support.v7.app.ActionBar;
+import android.support.v7.view.ActionMode;
 import android.support.v7.widget.Toolbar;
 import android.text.TextUtils;
 import android.util.Log;
@@ -44,6 +45,7 @@ import org.mozilla.gecko.util.Clipboard;
 import org.mozilla.gecko.util.ColorUtil;
 import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.IntentUtils;
+import org.mozilla.gecko.widget.ActionModePresenter;
 import org.mozilla.gecko.widget.GeckoPopupMenu;
 
 import java.util.List;
@@ -54,6 +56,7 @@ public class CustomTabsActivity extends GeckoApp implements Tabs.OnTabsChangedLi
 
     private final SparseArrayCompat<PendingIntent> menuItemsIntent = new SparseArrayCompat<>();
     private GeckoPopupMenu popupMenu;
+    private View doorhangerOverlay;
     private ActionBarPresenter actionBarPresenter;
     private ProgressBar mProgressView;
     // A state to indicate whether this activity is finishing with customize animation
@@ -62,6 +65,8 @@ public class CustomTabsActivity extends GeckoApp implements Tabs.OnTabsChangedLi
     // Bug 1351605 - getIntent() not always returns the intent which started this activity.
     // Therefore we make a copy in case of this Activity is re-created.
     private Intent startIntent;
+
+    private MenuItem menuItemControl;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -77,6 +82,8 @@ public class CustomTabsActivity extends GeckoApp implements Tabs.OnTabsChangedLi
         }
 
         setThemeFromToolbarColor();
+
+        doorhangerOverlay = findViewById(R.id.custom_tabs_doorhanger_overlay);
 
         mProgressView = (ProgressBar) findViewById(R.id.page_progress);
         final Toolbar toolbar = (Toolbar) findViewById(R.id.actionbar);
@@ -152,6 +159,11 @@ public class CustomTabsActivity extends GeckoApp implements Tabs.OnTabsChangedLi
     @Override
     public int getLayout() {
         return R.layout.customtabs_activity;
+    }
+
+    @Override
+    public View getDoorhangerOverlay() {
+        return doorhangerOverlay;
     }
 
     @Override
@@ -254,8 +266,8 @@ public class CustomTabsActivity extends GeckoApp implements Tabs.OnTabsChangedLi
             case R.id.custom_tabs_menu_forward:
                 onForwardClicked();
                 return true;
-            case R.id.custom_tabs_menu_reload:
-                onReloadClicked();
+            case R.id.custom_tabs_menu_control:
+                onLoadingControlClicked();
                 return true;
             case R.id.custom_tabs_menu_open_in:
                 onOpenInClicked();
@@ -269,6 +281,25 @@ public class CustomTabsActivity extends GeckoApp implements Tabs.OnTabsChangedLi
         }
 
         return super.onOptionsItemSelected(item);
+    }
+
+    @Override
+    protected ActionModePresenter getTextSelectPresenter() {
+        return new ActionModePresenter() {
+            private ActionMode mMode;
+
+            @Override
+            public void startActionMode(ActionMode.Callback callback) {
+                mMode = startSupportActionMode(callback);
+            }
+
+            @Override
+            public void endActionMode() {
+                if (mMode != null) {
+                    mMode.finish();
+                }
+            }
+        };
     }
 
     private void bindNavigationCallback(@NonNull final Toolbar toolbar) {
@@ -341,6 +372,8 @@ public class CustomTabsActivity extends GeckoApp implements Tabs.OnTabsChangedLi
             openItem.setTitle(getString(R.string.custom_tabs_menu_item_open_in, name));
         }
 
+        menuItemControl = geckoMenu.findItem(R.id.custom_tabs_menu_control);
+
         geckoMenu.addFooterView(
                 getLayoutInflater().inflate(R.layout.customtabs_options_menu_footer, geckoMenu, false),
                 null,
@@ -378,12 +411,24 @@ public class CustomTabsActivity extends GeckoApp implements Tabs.OnTabsChangedLi
         } else {
             mProgressView.setVisibility(View.GONE);
         }
+
+        if (menuItemControl != null) {
+            Drawable icon = menuItemControl.getIcon();
+            icon.setLevel(progress);
+        }
     }
 
-    private void onReloadClicked() {
+    /**
+     * Call this method to reload page, or stop page loading if progress not complete yet.
+     */
+    private void onLoadingControlClicked() {
         final Tab tab = Tabs.getInstance().getSelectedTab();
         if (tab != null) {
-            tab.doReload(true);
+            if (tab.getLoadProgress() == Tab.LOAD_PROGRESS_STOP) {
+                tab.doReload(true);
+            } else {
+                tab.doStop();
+            }
         }
     }
 
@@ -405,6 +450,7 @@ public class CustomTabsActivity extends GeckoApp implements Tabs.OnTabsChangedLi
             intent.setData(Uri.parse(tab.getURL()));
             intent.setAction(Intent.ACTION_VIEW);
             startActivity(intent);
+            finish();
         }
     }
 

@@ -1883,8 +1883,8 @@ JS_GlobalObjectTraceHook(JSTracer* trc, JSObject* global)
         return;
 
     // Trace the compartment for any GC things that should only stick around if
-    // we know the compartment is live.
-    global->compartment()->trace(trc);
+    // we know the global is live.
+    global->compartment()->traceGlobal(trc);
 
     if (JSTraceOp trace = global->compartment()->creationOptions().getTrace())
         trace(trc, global);
@@ -4589,9 +4589,8 @@ Evaluate(JSContext* cx, ScopeKind scopeKind, HandleObject env,
     MOZ_ASSERT_IF(!IsGlobalLexicalEnvironment(env), scopeKind == ScopeKind::NonSyntactic);
 
     options.setIsRunOnce(true);
-    SourceCompressionTask sct(cx);
     RootedScript script(cx, frontend::CompileGlobalScript(cx, cx->tempLifoAlloc(),
-                                                          scopeKind, options, srcBuf, &sct));
+                                                          scopeKind, options, srcBuf));
     if (!script)
         return false;
 
@@ -4599,8 +4598,6 @@ Evaluate(JSContext* cx, ScopeKind scopeKind, HandleObject env,
 
     bool result = Execute(cx, script, *env,
                           options.noScriptRval ? nullptr : rval.address());
-    if (!sct.complete())
-        result = false;
 
     // After evaluation, the compiled script will not be run again.
     // script->ensureRanAnalysis allocated 1 analyze::Bytecode for every opcode
@@ -7040,11 +7037,10 @@ JS::DeserializeWasmModule(PRFileDesc* bytecode, PRFileDesc* maybeCompiled,
 }
 
 JS_PUBLIC_API(void)
-JS::SetLargeAllocationFailureCallback(JSContext* cx, JS::LargeAllocationFailureCallback lafc,
-                                      void* data)
+JS::SetProcessLargeAllocationFailureCallback(JS::LargeAllocationFailureCallback lafc)
 {
-    cx->runtime()->largeAllocationFailureCallback = lafc;
-    cx->runtime()->largeAllocationFailureCallbackData = data;
+    MOZ_ASSERT(!OnLargeAllocationFailure);
+    OnLargeAllocationFailure = lafc;
 }
 
 JS_PUBLIC_API(void)

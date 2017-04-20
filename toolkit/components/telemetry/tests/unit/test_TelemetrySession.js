@@ -19,6 +19,7 @@ Cu.import("resource://gre/modules/TelemetryStorage.jsm", this);
 Cu.import("resource://gre/modules/TelemetryEnvironment.jsm", this);
 Cu.import("resource://gre/modules/TelemetrySend.jsm", this);
 Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
+Cu.import("resource://gre/modules/TelemetryReportingPolicy.jsm", this);
 Cu.import("resource://gre/modules/Task.jsm", this);
 Cu.import("resource://gre/modules/Promise.jsm", this);
 Cu.import("resource://gre/modules/Preferences.jsm");
@@ -42,8 +43,6 @@ const APP_NAME = "XPCShell";
 
 const IGNORE_HISTOGRAM_TO_CLONE = "MEMORY_HEAP_ALLOCATED";
 const IGNORE_CLONED_HISTOGRAM = "test::ignore_me_also";
-const ADDON_NAME = "Telemetry test addon";
-const ADDON_HISTOGRAM = "addon-histogram";
 // Add some unicode characters here to ensure that sending them works correctly.
 const SHUTDOWN_TIME = 10000;
 const FAILED_PROFILE_LOCK_ATTEMPTS = 2;
@@ -65,6 +64,7 @@ const PREF_SERVER = PREF_BRANCH + "server";
 const PREF_FHR_UPLOAD_ENABLED = "datareporting.healthreport.uploadEnabled";
 const PREF_BYPASS_NOTIFICATION = "datareporting.policy.dataSubmissionPolicyBypassNotification";
 const PREF_SHUTDOWN_PINGSENDER = "toolkit.telemetry.shutdownPingSender.enabled";
+const PREF_POLICY_FIRSTRUN = "toolkit.telemetry.reportingpolicy.firstRun";
 
 const DATAREPORTING_DIR = "datareporting";
 const ABORTED_PING_FILE_NAME = "aborted-session-ping";
@@ -101,11 +101,6 @@ function fakeIdleNotification(topic) {
 function setupTestData() {
 
   Services.startup.interrupted = true;
-  Telemetry.registerAddonHistogram(ADDON_NAME, ADDON_HISTOGRAM,
-                                   Telemetry.HISTOGRAM_LINEAR,
-                                   1, 5, 6);
-  let h1 = Telemetry.getAddonHistogram(ADDON_NAME, ADDON_HISTOGRAM);
-  h1.add(1);
   let h2 = Telemetry.getHistogramById("TELEMETRY_TEST_COUNT");
   h2.add();
 
@@ -419,11 +414,6 @@ function checkPayload(payload, reason, successfulPings, savedPings) {
 
   Assert.ok("MEMORY_JS_GC_HEAP" in payload.histograms); // UNITS_BYTES
   Assert.ok("MEMORY_JS_COMPARTMENTS_SYSTEM" in payload.histograms); // UNITS_COUNT
-
-  // We should have included addon histograms.
-  Assert.ok("addonHistograms" in payload);
-  Assert.ok(ADDON_NAME in payload.addonHistograms);
-  Assert.ok(ADDON_HISTOGRAM in payload.addonHistograms[ADDON_NAME]);
 
   Assert.ok(("mainThread" in payload.slowSQL) &&
                 ("otherThreads" in payload.slowSQL));
@@ -1377,6 +1367,9 @@ add_task(function* test_sendShutdownPing() {
   }
 
   Preferences.set(PREF_SHUTDOWN_PINGSENDER, true);
+  Preferences.set(PREF_POLICY_FIRSTRUN, false);
+  // Make sure the reporting policy picks up the updated pref.
+  TelemetryReportingPolicy.testUpdateFirstRun();
   PingServer.clearRequests();
 
   // Shutdown telemetry and wait for an incoming ping.
@@ -1406,12 +1399,26 @@ add_task(function* test_sendShutdownPing() {
   yield TelemetryController.testReset();
   yield TelemetryController.testShutdown();
 
+  // Make sure we have no pending pings between the runs.
+  yield TelemetryStorage.testClearPendingPings();
 
-  // Reset the pref and restart Telemetry.
-  Preferences.reset(PREF_SHUTDOWN_PINGSENDER);
   // We cannot reset PREF_BYPASS_NOTIFICATION, as we need it to be
   // |true| in tests.
   Preferences.set(PREF_BYPASS_NOTIFICATION, true);
+
+  // With both upload enabled and the policy shown, make sure we don't
+  // send the shutdown ping using the pingsender on the first
+  // subsession.
+  Preferences.set(PREF_POLICY_FIRSTRUN, true);
+  // Make sure the reporting policy picks up the updated pref.
+  TelemetryReportingPolicy.testUpdateFirstRun();
+
+  yield TelemetryController.testReset();
+  yield TelemetryController.testShutdown();
+
+  // Reset the pref and restart Telemetry.
+  Preferences.set(PREF_SHUTDOWN_PINGSENDER, false);
+  Preferences.reset(PREF_POLICY_FIRSTRUN);
   PingServer.resetPingHandler();
   yield TelemetryController.testReset();
 });
@@ -1796,7 +1803,7 @@ add_task(function* test_schedulerComputerSleep() {
   // We emulate the mentioned timeout behavior by sending the wake notification
   // instead of triggering the timeout callback.
   // This should trigger a daily ping, because we passed midnight.
-  Services.obs.notifyObservers(null, "wake_notification", null);
+  Services.obs.notifyObservers(null, "wake_notification");
 
   dailyPing = yield PingServer.promiseNextPing();
   Assert.equal(dailyPing.payload.info.reason, REASON_DAILY,
@@ -1896,7 +1903,7 @@ add_task(function* test_schedulerNothingDue() {
 add_task(function* test_pingExtendedStats() {
   const EXTENDED_PAYLOAD_FIELDS = [
     "chromeHangs", "threadHangStats", "log", "slowSQL", "fileIOReports", "lateWrites",
-    "addonHistograms", "addonDetails", "webrtc"
+    "addonDetails", "webrtc"
   ];
 
   if (AppConstants.platform == "android") {

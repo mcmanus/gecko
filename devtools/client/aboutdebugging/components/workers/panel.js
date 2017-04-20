@@ -58,7 +58,7 @@ module.exports = createClass({
     client.addListener("processListChanged", this.updateWorkers);
     client.addListener("registration-changed", this.updateWorkers);
 
-    Services.prefs.addObserver(PROCESS_COUNT_PREF, this.updateMultiE10S, false);
+    Services.prefs.addObserver(PROCESS_COUNT_PREF, this.updateMultiE10S);
 
     this.updateMultiE10S();
     this.updateWorkers();
@@ -75,7 +75,9 @@ module.exports = createClass({
   },
 
   updateMultiE10S() {
-    let processCount = Services.prefs.getIntPref(PROCESS_COUNT_PREF);
+    // We watch the pref but set the state based on
+    // nsIXULRuntime::maxWebProcessCount.
+    let processCount = Services.appinfo.maxWebProcessCount;
     this.setState({ processCount });
   },
 

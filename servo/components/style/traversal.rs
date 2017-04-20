@@ -4,8 +4,6 @@
 
 //! Traversing the DOM tree; the bloom filter.
 
-#![deny(missing_docs)]
-
 use atomic_refcell::{AtomicRefCell, AtomicRefMut};
 use context::{SharedStyleContext, StyleContext, ThreadLocalStyleContext};
 use data::{ElementData, ElementStyles, StoredRestyleHint};
@@ -601,7 +599,7 @@ pub fn recalc_style_at<E, D>(traversal: &D,
                           "animation restyle hint should be handled during \
                            animation-only restyles");
             r.recascade = false;
-            r.hint.propagate()
+            r.hint.propagate(&context.shared.traversal_flags)
         },
     };
     debug_assert!(data.has_current_styles() ||
@@ -680,15 +678,13 @@ fn compute_style<E, D>(_traversal: &D,
     use matching::StyleSharingResult::*;
 
     context.thread_local.statistics.elements_styled += 1;
-    let shared_context = context.shared;
     let kind = data.restyle_kind();
 
     // First, try the style sharing cache. If we get a match we can skip the rest
     // of the work.
     if let MatchAndCascade = kind {
         let sharing_result = unsafe {
-            let cache = &mut context.thread_local.style_sharing_candidate_cache;
-            element.share_style_if_possible(cache, shared_context, &mut data)
+            element.share_style_if_possible(context, &mut data)
         };
         if let StyleWasShared(index) = sharing_result {
             context.thread_local.statistics.styles_shared += 1;

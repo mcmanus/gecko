@@ -30,11 +30,11 @@ const PanelUI = {
   get kElements() {
     return {
       contents: "PanelUI-contents",
-      mainView: "PanelUI-mainView",
-      multiView: "PanelUI-multiView",
+      mainView: gPhotonStructure ? "appMenu-mainView" : "PanelUI-mainView",
+      multiView: gPhotonStructure ? "appMenu-multiView" : "PanelUI-multiView",
       helpView: "PanelUI-helpView",
       menuButton: "PanelUI-menu-button",
-      panel: gPhotonStructure ? "PanelUI-photon-popup" : "PanelUI-popup",
+      panel: gPhotonStructure ? "appMenu-popup" : "PanelUI-popup",
       notificationPanel: "PanelUI-notification-popup",
       scroller: "PanelUI-contents-scroller",
       footer: "PanelUI-footer"
@@ -58,9 +58,9 @@ const PanelUI = {
     this.menuButton.addEventListener("keypress", this);
     this._overlayScrollListenerBoundFn = this._overlayScrollListener.bind(this);
 
-    Services.obs.addObserver(this, "fullscreen-nav-toolbox", false);
-    Services.obs.addObserver(this, "panelUI-notification-main-action", false);
-    Services.obs.addObserver(this, "panelUI-notification-dismissed", false);
+    Services.obs.addObserver(this, "fullscreen-nav-toolbox");
+    Services.obs.addObserver(this, "panelUI-notification-main-action");
+    Services.obs.addObserver(this, "panelUI-notification-dismissed");
 
     window.addEventListener("fullscreen", this);
     window.matchMedia("(-moz-overlay-scrollbars)").addListener(this._overlayScrollListenerBoundFn);
@@ -349,7 +349,7 @@ const PanelUI = {
               resolve();
             }
           };
-          Services.obs.addObserver(delayedStartupObserver, "browser-delayed-startup-finished", false);
+          Services.obs.addObserver(delayedStartupObserver, "browser-delayed-startup-finished");
         });
       }
 

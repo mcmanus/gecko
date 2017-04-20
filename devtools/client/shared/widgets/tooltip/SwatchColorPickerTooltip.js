@@ -194,7 +194,7 @@ SwatchColorPickerTooltip.prototype = Heritage.extend(SwatchBasedEditorTooltip.pr
 
   _colorToRgba: function (color) {
     color = new colorUtils.CssColor(color, this.cssColor4);
-    let rgba = color._getRGBATuple();
+    let rgba = color.getRGBATuple();
     return [rgba.r, rgba.g, rgba.b, rgba.a];
   },
 
@@ -202,6 +202,14 @@ SwatchColorPickerTooltip.prototype = Heritage.extend(SwatchBasedEditorTooltip.pr
     let colorObj = new colorUtils.CssColor(color);
     colorObj.setAuthoredUnitFromColor(this._originalColor, this.cssColor4);
     return colorObj.toString();
+  },
+
+  /**
+   * Overriding the SwatchBasedEditorTooltip.isEditing function to consider the
+   * eyedropper.
+   */
+  isEditing: function () {
+    return this.tooltip.isVisible() || this.eyedropperOpen;
   },
 
   destroy: function () {

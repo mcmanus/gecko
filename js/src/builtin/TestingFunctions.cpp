@@ -2675,6 +2675,31 @@ SharedMemoryEnabled(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
+static bool
+SharedArrayRawBufferCount(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    args.rval().setInt32(SharedArrayRawBuffer::liveBuffers());
+    return true;
+}
+
+static bool
+SharedArrayRawBufferRefcount(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() != 1 || !args[0].isObject()) {
+        JS_ReportErrorASCII(cx, "Expected SharedArrayBuffer object");
+        return false;
+    }
+    RootedObject obj(cx, &args[0].toObject());
+    if (!obj->is<SharedArrayBufferObject>()) {
+        JS_ReportErrorASCII(cx, "Expected SharedArrayBuffer object");
+        return false;
+    }
+    args.rval().setInt32(obj->as<SharedArrayBufferObject>().rawBufferObject()->refcount());
+    return true;
+}
+
 #ifdef NIGHTLY_BUILD
 static bool
 ObjectAddress(JSContext* cx, unsigned argc, Value* vp)
@@ -4305,6 +4330,17 @@ GetErrorNotes(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
+static bool
+IsConstructor(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() < 1)
+        args.rval().setBoolean(false);
+    else
+        args.rval().setBoolean(IsConstructor(args[0]));
+    return true;
+}
+
 static const JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("gc", ::GC, 0, 0,
 "gc([obj] | 'zone' [, 'shrinking'])",
@@ -4743,6 +4779,14 @@ gc::ZealModeHelpText),
 "sharedMemoryEnabled()",
 "  Return true if SharedArrayBuffer and Atomics are enabled"),
 
+    JS_FN_HELP("sharedArrayRawBufferCount", SharedArrayRawBufferCount, 0, 0,
+"sharedArrayRawBufferCount()",
+"  Return the number of live SharedArrayRawBuffer objects"),
+
+    JS_FN_HELP("sharedArrayRawBufferRefcount", SharedArrayRawBufferRefcount, 0, 0,
+"sharedArrayRawBufferRefcount(sab)",
+"  Return the reference count of the SharedArrayRawBuffer object held by sab"),
+
 #ifdef NIGHTLY_BUILD
     JS_FN_HELP("objectAddress", ObjectAddress, 1, 0,
 "objectAddress(obj)",
@@ -4866,6 +4910,10 @@ gc::ZealModeHelpText),
 "TimeSinceCreation()",
 "  Returns the time in milliseconds since process creation.\n"
 "  This uses a clock compatible with the profiler.\n"),
+
+    JS_FN_HELP("isConstructor", IsConstructor, 1, 0,
+"isConstructor(value)",
+"  Returns whether the value is considered IsConstructor.\n"),
 
     JS_FS_HELP_END
 };

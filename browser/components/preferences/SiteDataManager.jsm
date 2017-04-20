@@ -43,7 +43,7 @@ this.SiteDataManager = {
   _quotaUsageRequests: null,
 
   updateSites() {
-    Services.obs.notifyObservers(null, "sitedatamanager:updating-sites", null);
+    Services.obs.notifyObservers(null, "sitedatamanager:updating-sites");
 
     // Clear old data and requests first
     this._sites.clear();
@@ -74,7 +74,7 @@ this.SiteDataManager = {
 
     Promise.all([this._updateQuotaPromise, this._updateDiskCachePromise])
            .then(() => {
-             Services.obs.notifyObservers(null, "sitedatamanager:sites-updated", null);
+             Services.obs.notifyObservers(null, "sitedatamanager:sites-updated");
            });
   },
 
@@ -109,7 +109,13 @@ this.SiteDataManager = {
   },
 
   _updateAppCache() {
-    let groups = this._appCache.getGroups();
+    let groups = null;
+    try {
+      groups =  this._appCache.getGroups();
+    } catch (e) {
+      return;
+    }
+
     for (let site of this._sites.values()) {
       for (let group of groups) {
         let uri = Services.io.newURI(group);

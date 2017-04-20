@@ -51,6 +51,13 @@ namespace gfx {
 
 using namespace mozilla::layers;
 
+enum class FallbackType : uint32_t
+{
+  NONE = 0,
+  DECODINGDISABLED,
+  DISABLED,
+};
+
 static StaticAutoPtr<GPUProcessManager> sSingleton;
 
 GPUProcessManager*
@@ -75,6 +82,7 @@ GPUProcessManager::Shutdown()
 GPUProcessManager::GPUProcessManager()
  : mTaskFactory(this),
    mNextLayerTreeId(0),
+   mNextNamespace(0),
    mNextResetSequenceNo(0),
    mNumProcessAttempts(0),
    mDeviceResetCount(0),
@@ -163,6 +171,9 @@ GPUProcessManager::DisableGPUProcess(const char* aMessage)
 
   gfxPlatform::NotifyGPUProcessDisabled();
 
+  Telemetry::Accumulate(Telemetry::GPU_PROCESS_CRASH_FALLBACKS,
+                        uint32_t(FallbackType::DISABLED));
+
   DestroyProcess();
   ShutdownVsyncIOThread();
 }
@@ -194,7 +205,7 @@ GPUProcessManager::EnsureImageBridgeChild()
   }
 
   if (!EnsureGPUReady()) {
-    ImageBridgeChild::InitSameProcess();
+    ImageBridgeChild::InitSameProcess(AllocateNamespace());
     return;
   }
 
@@ -211,7 +222,7 @@ GPUProcessManager::EnsureImageBridgeChild()
   }
 
   mGPUChild->SendInitImageBridge(Move(parentPipe));
-  ImageBridgeChild::InitWithGPUProcess(Move(childPipe));
+  ImageBridgeChild::InitWithGPUProcess(Move(childPipe), AllocateNamespace());
 }
 
 void
@@ -379,6 +390,14 @@ GPUProcessManager::OnProcessUnexpectedShutdown(GPUProcessHost* aHost)
     SprintfLiteral(disableMessage, "GPU process disabled after %d attempts",
                    mNumProcessAttempts);
     DisableGPUProcess(disableMessage);
+  } else if (mNumProcessAttempts > uint32_t(gfxPrefs::GPUProcessMaxRestartsWithDecoder()) &&
+             mDecodeVideoOnGpuProcess) {
+    mDecodeVideoOnGpuProcess = false;
+    Telemetry::Accumulate(Telemetry::GPU_PROCESS_CRASH_FALLBACKS,
+                                     uint32_t(FallbackType::DECODINGDISABLED));
+  } else {
+    Telemetry::Accumulate(Telemetry::GPU_PROCESS_CRASH_FALLBACKS,
+                                     uint32_t(FallbackType::NONE));
   }
 
   HandleProcessLost();
@@ -582,7 +601,8 @@ GPUProcessManager::CreateTopLevelCompositor(nsBaseWidget* aWidget,
     aScale,
     aOptions,
     aUseExternalSurfaceSize,
-    aSurfaceSize);
+    aSurfaceSize,
+    AllocateNamespace());
 }
 
 RefPtr<CompositorSession>
@@ -611,7 +631,8 @@ GPUProcessManager::CreateRemoteSession(nsBaseWidget* aWidget,
   RefPtr<CompositorBridgeChild> child = CompositorBridgeChild::CreateRemote(
     mProcessToken,
     aLayerManager,
-    Move(childPipe));
+    Move(childPipe),
+    AllocateNamespace());
   if (!child) {
     gfxCriticalNote << "Failed to create CompositorBridgeChild";
     return nullptr;
@@ -669,7 +690,8 @@ GPUProcessManager::CreateContentBridges(base::ProcessId aOtherProcess,
                                         ipc::Endpoint<PCompositorBridgeChild>* aOutCompositor,
                                         ipc::Endpoint<PImageBridgeChild>* aOutImageBridge,
                                         ipc::Endpoint<PVRManagerChild>* aOutVRBridge,
-                                        ipc::Endpoint<dom::PVideoDecoderManagerChild>* aOutVideoManager)
+                                        ipc::Endpoint<dom::PVideoDecoderManagerChild>* aOutVideoManager,
+                                        nsTArray<uint32_t>* aNamespaces)
 {
   if (!CreateContentCompositorBridge(aOtherProcess, aOutCompositor) ||
       !CreateContentImageBridge(aOtherProcess, aOutImageBridge) ||
@@ -680,6 +702,9 @@ GPUProcessManager::CreateContentBridges(base::ProcessId aOtherProcess,
   // VideoDeocderManager is only supported in the GPU process, so we allow this to be
   // fallible.
   CreateContentVideoDecoderManager(aOtherProcess, aOutVideoManager);
+  // Allocates 2 namaspaces(for CompositorBridgeChild and ImageBridgeChild)
+  aNamespaces->AppendElement(AllocateNamespace());
+  aNamespaces->AppendElement(AllocateNamespace());
   return true;
 }
 
@@ -797,7 +822,9 @@ void
 GPUProcessManager::CreateContentVideoDecoderManager(base::ProcessId aOtherProcess,
                                                     ipc::Endpoint<dom::PVideoDecoderManagerChild>* aOutEndpoint)
 {
-  if (!EnsureGPUReady() || !MediaPrefs::PDMUseGPUDecoder()) {
+  if (!EnsureGPUReady() ||
+      !MediaPrefs::PDMUseGPUDecoder() ||
+      !mDecodeVideoOnGpuProcess) {
     return;
   }
 
@@ -859,6 +886,13 @@ GPUProcessManager::AllocateLayerTreeId()
 {
   MOZ_ASSERT(NS_IsMainThread());
   return ++mNextLayerTreeId;
+}
+
+uint32_t
+GPUProcessManager::AllocateNamespace()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  return ++mNextNamespace;
 }
 
 bool

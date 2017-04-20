@@ -181,7 +181,7 @@ StorageActors.defaults = function (typeName, observationTopics) {
       this.populateStoresForHosts();
       if (observationTopics) {
         observationTopics.forEach((observationTopic) => {
-          Services.obs.addObserver(this, observationTopic, false);
+          Services.obs.addObserver(this, observationTopic);
         });
       }
       this.onWindowReady = this.onWindowReady.bind(this);
@@ -492,7 +492,7 @@ StorageActors.createActor({
       return host == null;
     }
 
-    host = trimHttpHttps(host);
+    host = trimHttpHttpsPort(host);
 
     if (cookie.host.startsWith(".")) {
       return ("." + host).endsWith(cookie.host);
@@ -742,7 +742,7 @@ var cookieHelpers = {
       host = "";
     }
 
-    host = trimHttpHttps(host);
+    host = trimHttpHttpsPort(host);
 
     let cookies = Services.cookies.getCookiesFromHost(host, originAttributes);
     let store = [];
@@ -878,7 +878,7 @@ var cookieHelpers = {
       opts.path = split[2];
     }
 
-    host = trimHttpHttps(host);
+    host = trimHttpHttpsPort(host);
 
     function hostMatches(cookieHost, matchHost) {
       if (cookieHost == null) {
@@ -921,7 +921,7 @@ var cookieHelpers = {
   },
 
   addCookieObservers() {
-    Services.obs.addObserver(cookieHelpers, "cookie-changed", false);
+    Services.obs.addObserver(cookieHelpers, "cookie-changed");
     return null;
   },
 
@@ -2418,7 +2418,12 @@ exports.setupParentProcessForIndexedDB = function ({ mm, prefix }) {
 /**
  * General helpers
  */
-function trimHttpHttps(url) {
+function trimHttpHttpsPort(url) {
+  let match = url.match(/(.+):\d+$/);
+
+  if (match) {
+    url = match[1];
+  }
   if (url.startsWith("http://")) {
     return url.substr(7);
   }
@@ -2464,8 +2469,8 @@ let StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
 
     // Notifications that help us keep track of newly added windows and windows
     // that got removed
-    Services.obs.addObserver(this, "content-document-global-created", false);
-    Services.obs.addObserver(this, "inner-window-destroyed", false);
+    Services.obs.addObserver(this, "content-document-global-created");
+    Services.obs.addObserver(this, "inner-window-destroyed");
     this.onPageChange = this.onPageChange.bind(this);
 
     let handler = tabActor.chromeEventHandler;

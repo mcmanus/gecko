@@ -14,7 +14,6 @@ Cu.import("resource://services-common/utils.js");
 Cu.import("resource://services-common/tokenserverclient.js");
 Cu.import("resource://services-crypto/utils.js");
 Cu.import("resource://services-sync/util.js");
-Cu.import("resource://services-common/tokenserverclient.js");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://services-sync/constants.js");
 Cu.import("resource://gre/modules/Promise.jsm");
@@ -122,7 +121,7 @@ this.BrowserIDManager.prototype = {
 
   initialize() {
     for (let topic of OBSERVER_TOPICS) {
-      Services.obs.addObserver(this, topic, false);
+      Services.obs.addObserver(this, topic);
     }
   },
 
@@ -216,7 +215,7 @@ this.BrowserIDManager.prototype = {
         if (isInitialSync) {
           this._log.info("Doing initial sync actions");
           Svc.Prefs.set("firstSync", "resetClient");
-          Services.obs.notifyObservers(null, "weave:service:setup-complete", null);
+          Services.obs.notifyObservers(null, "weave:service:setup-complete");
           Weave.Utils.nextTick(Weave.Service.sync, Weave.Service);
         }
       }).catch(authErr => {
@@ -276,7 +275,7 @@ this.BrowserIDManager.prototype = {
         // this event or start the next sync until after authentication is done
         // (which is signaled by `this.whenReadyToAuthenticate.promise` resolving).
         this.whenReadyToAuthenticate.promise.then(() => {
-          Services.obs.notifyObservers(null, "weave:service:setup-complete", null);
+          Services.obs.notifyObservers(null, "weave:service:setup-complete");
           return new Promise(resolve => { Weave.Utils.nextTick(resolve, null); })
         }).then(() => {
           Weave.Service.sync();
@@ -653,7 +652,7 @@ this.BrowserIDManager.prototype = {
       return Promise.resolve();
     }
     const notifyStateChanged =
-      () => Services.obs.notifyObservers(null, "weave:service:login:change", null);
+      () => Services.obs.notifyObservers(null, "weave:service:login:change");
     // reset this._token as a safety net to reduce the possibility of us
     // repeatedly attempting to use an invalid token if _fetchTokenForUser throws.
     this._token = null;

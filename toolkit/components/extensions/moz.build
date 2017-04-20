@@ -14,6 +14,7 @@ EXTRA_JS_MODULES += [
     'ExtensionCommon.jsm',
     'ExtensionContent.jsm',
     'ExtensionManagement.jsm',
+    'ExtensionPageChild.jsm',
     'ExtensionParent.jsm',
     'ExtensionPermissions.jsm',
     'ExtensionPreferencesManager.jsm',
@@ -38,7 +39,10 @@ TESTING_JS_MODULES += [
     'ExtensionXPCShellUtils.jsm',
 ]
 
-DIRS += ['schemas']
+DIRS += [
+    'schemas',
+    'webrequest',
+]
 
 JAR_MANIFESTS += ['jar.mn']
 

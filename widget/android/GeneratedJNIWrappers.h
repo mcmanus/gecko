@@ -3004,6 +3004,26 @@ public:
                 mozilla::jni::DispatchTarget::PROXY;
     };
 
+    struct OnReattach_t {
+        typedef Window Owner;
+        typedef void ReturnType;
+        typedef void SetterType;
+        typedef mozilla::jni::Args<
+                GeckoView::Param> Args;
+        static constexpr char name[] = "onReattach";
+        static constexpr char signature[] =
+                "(Lorg/mozilla/gecko/GeckoView;)V";
+        static const bool isStatic = false;
+        static const mozilla::jni::ExceptionMode exceptionMode =
+                mozilla::jni::ExceptionMode::ABORT;
+        static const mozilla::jni::CallingThread callingThread =
+                mozilla::jni::CallingThread::GECKO;
+        static const mozilla::jni::DispatchTarget dispatchTarget =
+                mozilla::jni::DispatchTarget::CURRENT;
+    };
+
+    auto OnReattach(GeckoView::Param) const -> void;
+
     struct Open_t {
         typedef Window Owner;
         typedef void ReturnType;
@@ -3015,10 +3035,11 @@ public:
                 mozilla::jni::Object::Param,
                 mozilla::jni::String::Param,
                 mozilla::jni::Object::Param,
-                int32_t> Args;
+                int32_t,
+                bool> Args;
         static constexpr char name[] = "open";
         static constexpr char signature[] =
-                "(Lorg/mozilla/gecko/GeckoView$Window;Lorg/mozilla/gecko/GeckoView;Ljava/lang/Object;Lorg/mozilla/gecko/EventDispatcher;Ljava/lang/String;Lorg/mozilla/gecko/util/GeckoBundle;I)V";
+                "(Lorg/mozilla/gecko/GeckoView$Window;Lorg/mozilla/gecko/GeckoView;Ljava/lang/Object;Lorg/mozilla/gecko/EventDispatcher;Ljava/lang/String;Lorg/mozilla/gecko/util/GeckoBundle;IZ)V";
         static const bool isStatic = true;
         static const mozilla::jni::ExceptionMode exceptionMode =
                 mozilla::jni::ExceptionMode::ABORT;
@@ -5187,14 +5208,16 @@ public:
                 mozilla::jni::DispatchTarget::CURRENT;
     };
 
-    struct OnInputExhausted_t {
+    struct OnInputStatus_t {
         typedef NativeCallbacks Owner;
         typedef void ReturnType;
         typedef void SetterType;
-        typedef mozilla::jni::Args<> Args;
-        static constexpr char name[] = "onInputExhausted";
+        typedef mozilla::jni::Args<
+                int64_t,
+                bool> Args;
+        static constexpr char name[] = "onInputStatus";
         static constexpr char signature[] =
-                "()V";
+                "(JZ)V";
         static const bool isStatic = false;
         static const mozilla::jni::ExceptionMode exceptionMode =
                 mozilla::jni::ExceptionMode::ABORT;

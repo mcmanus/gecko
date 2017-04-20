@@ -7,11 +7,8 @@
  */
 
 .boxmodel-container {
-  /* The view will grow bigger as the window gets resized, until 400px */
-  max-width: 400px;
-  margin: 0px auto;
-  padding: 0;
   overflow: auto;
+  padding-bottom: 4px;
 }
 
 /* Header */
@@ -33,9 +30,11 @@
   position: relative;
   color: var(--theme-selection-color);
   /* Make sure there is some space between the window's edges and the regions */
-  margin: 14px 14px 4px 14px;
+  margin: 14px auto;
   width: calc(100% - 2 * 14px);
   min-width: 240px;
+  /* The view will grow bigger as the window gets resized, until 400px */
+  max-width: 400px;
 }
 
 .boxmodel-box {
@@ -114,7 +113,8 @@
 
 .boxmodel-main > p > span,
 .boxmodel-main > p > input,
-.boxmodel-content {
+.boxmodel-content,
+.boxmodel-size > span {
   vertical-align: middle;
   pointer-events: auto;
 }
@@ -316,12 +316,16 @@
 /* Box Model Properties: contains a list of relevant box model properties */
 
 .boxmodel-properties-header {
-  display: flex;
-  padding: 2px 0;
+  padding: 2px 3px;
 }
 
-.boxmodel-properties-wrapper {
-  padding: 0 9px;
+.boxmodel-properties-expander {
+  vertical-align: middle;
+  display: inline-block;
+}
+
+.boxmodel-properties-wrapper .property-view {
+  padding-inline-start: 17px;
 }
 
 .boxmodel-properties-wrapper .property-name-container {

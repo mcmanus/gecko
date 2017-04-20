@@ -590,7 +590,7 @@ def set_profile(config, tests):
     """Set profiling mode for tests."""
     for test in tests:
         if config.config['args'].profile and test['suite'] == 'talos':
-            test['mozharness']['extra-options'].append('--spsProfile')
+            test['mozharness']['extra-options'].append('--geckoProfile')
         yield test
 
 
@@ -627,6 +627,28 @@ def set_test_type(config, tests):
 
 
 @transforms.add
+def parallel_stylo_tests(config, tests):
+    """Ensure that any stylo tests running with e10s enabled also test
+    parallel traversal in the style system."""
+
+    for test in tests:
+        if not test['test-platform'].startswith('linux64-stylo/'):
+            yield test
+            continue
+
+        e10s = test['e10s']
+        # We should have already handled 'both' in an earlier transform.
+        assert e10s != 'both'
+        if not e10s:
+            yield test
+            continue
+
+        test['mozharness'].setdefault('extra-options', [])\
+                          .append('--parallel-stylo-traversal')
+        yield test
+
+
+@transforms.add
 def make_job_description(config, tests):
     """Convert *test* descriptions to *job* descriptions (input to
     taskgraph.transforms.job)"""
@@ -657,8 +679,7 @@ def make_job_description(config, tests):
         attributes.update({
             'build_platform': attr_build_platform,
             'build_type': attr_build_type,
-            # only keep the first portion of the test platform
-            'test_platform': test['test-platform'].split('/')[0],
+            'test_platform': test['test-platform'],
             'test_chunk': str(test['this-chunk']),
             'unittest_suite': suite,
             'unittest_flavor': flavor,

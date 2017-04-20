@@ -576,9 +576,18 @@
               return true;
             },
 
-            _isForInitialAboutBlank(aWebProgress, aLocation) {
+            _isForInitialAboutBlank(aWebProgress, aStateFlags, aLocation) {
               if (!this.mBlank || !aWebProgress.isTopLevel) {
                 return false;
+              }
+
+              // If the state has STATE_STOP, and no requests were in flight, then this
+              // must be the initial "stop" for the initial about:blank document.
+              const nsIWebProgressListener = Components.interfaces.nsIWebProgressListener;
+              if (aStateFlags & nsIWebProgressListener.STATE_STOP &&
+                  this.mRequestCount == 0 &&
+                  !aLocation) {
+                return true;
               }
 
               let location = aLocation ? aLocation.spec : "";
@@ -623,7 +632,9 @@
                 originalLocation = aRequest.originalURI;
               } catch (ex) {}
 
-              let ignoreBlank = this._isForInitialAboutBlank(aWebProgress, location);
+              let ignoreBlank = this._isForInitialAboutBlank(aWebProgress, aStateFlags,
+                                                             location);
+
               // If we were ignoring some messages about the initial about:blank, and we
               // got the STATE_STOP for it, we'll want to pay attention to those messages
               // from here forward. Similarly, if we conclude that this state change
@@ -2242,7 +2253,7 @@
             // transition in that case.
             let animate = !aSkipAnimation &&
                           this.tabContainer.getAttribute("overflow") != "true" &&
-                          Services.prefs.getBoolPref("browser.tabs.animate");
+                          Services.prefs.getBoolPref("toolkit.cosmeticAnimations.enabled");
             if (!animate) {
               t.setAttribute("fadein", "true");
               setTimeout(function(tabContainer) {
@@ -2382,11 +2393,9 @@
 
             if (animate) {
               requestAnimationFrame(function() {
-                this.tabContainer._handleTabTelemetryStart(t, aURI);
-
                 // kick the animation off
                 t.setAttribute("fadein", "true");
-              }.bind(this));
+              });
             }
 
             return t;
@@ -2531,29 +2540,21 @@
         <parameter name="aParams"/>
         <body>
           <![CDATA[
-            // We collect Telemetry on how long it takes to close a tab.
-            // Sometimes, tabs animate closed, and sometimes they don't, and
-            // it doesn't really make sense to put timings for both cases in the
-            // same bucket.
-            //
-            // We decide later on whether or not we're actually going to animate
-            // the tab closed. In order to capture as much of the time we care
-            // about with these stopwatches, but also in order to avoid any
-            // unnecessary work (since calculating whether or not we're going
-            // to do the animation might involved a style flush), we start
-            // stopwatches for both the animating and non-animating case. When
-            // we decide that we're animating, we cancel the non-animating case,
-            // and vice-versa. Then, in _endRemoveTab, we "finish" both
-            // stopwatches, which is a no-op for cancelled stopwatches.
-            TelemetryStopwatch.start("FX_TAB_CLOSE_TIME_ANIM_MS", aTab);
-            TelemetryStopwatch.start("FX_TAB_CLOSE_TIME_NO_ANIM_MS", aTab);
-
             if (aParams) {
               var animate = aParams.animate;
               var byMouse = aParams.byMouse;
               var skipPermitUnload = aParams.skipPermitUnload;
             }
 
+            // Telemetry stopwatches may already be running if removeTab gets
+            // called again for an already closing tab.
+            if (!TelemetryStopwatch.running("FX_TAB_CLOSE_TIME_ANIM_MS", aTab) &&
+                !TelemetryStopwatch.running("FX_TAB_CLOSE_TIME_NO_ANIM_MS", aTab)) {
+              // Speculatevely start both stopwatches now. We'll cancel one of
+              // the two later depending on whether we're animating.
+              TelemetryStopwatch.start("FX_TAB_CLOSE_TIME_ANIM_MS", aTab);
+              TelemetryStopwatch.start("FX_TAB_CLOSE_TIME_NO_ANIM_MS", aTab);
+            }
             window.maybeRecordAbandonmentTelemetry(aTab, "tabClosed");
 
             // Handle requests for synchronously removing an already
@@ -2584,7 +2585,7 @@
                 this._removingTabs.length > 3 /* don't want lots of concurrent animations */ ||
                 aTab.getAttribute("fadein") != "true" /* fade-in transition hasn't been triggered yet */ ||
                 window.getComputedStyle(aTab).maxWidth == "0.1px" /* fade-in transition hasn't moved yet */ ||
-                !Services.prefs.getBoolPref("browser.tabs.animate")) {
+                !Services.prefs.getBoolPref("toolkit.cosmeticAnimations.enabled")) {
               // We're not animating, so we can cancel the animation stopwatch.
               TelemetryStopwatch.cancel("FX_TAB_CLOSE_TIME_ANIM_MS", aTab);
               this._endRemoveTab(aTab);
@@ -2593,8 +2594,6 @@
 
             // We're animating, so we can cancel the non-animation stopwatch.
             TelemetryStopwatch.cancel("FX_TAB_CLOSE_TIME_NO_ANIM_MS", aTab);
-
-            this.tabContainer._handleTabTelemetryStart(aTab);
 
             this._blurTab(aTab);
             aTab.style.maxWidth = ""; // ensure that fade-out transition happens
@@ -4877,7 +4876,7 @@
                 tab.linkedBrowser &&
                 tab.linkedBrowser.isRemoteBrowser) {
               label += " - e10s";
-              if (Services.prefs.getIntPref("dom.ipc.processCount") > 1) {
+              if (Services.appinfo.maxWebProcessCount > 1) {
                 label += " (" + tab.linkedBrowser.frameLoader.tabParent.osPid + ")";
               }
             }
@@ -4945,38 +4944,7 @@
               break;
             }
             case "contextmenu": {
-              let spellInfo = data.spellInfo;
-              if (spellInfo)
-                spellInfo.target = aMessage.target.messageManager;
-              let documentURIObject = makeURI(data.docLocation,
-                                              data.charSet,
-                                              makeURI(data.baseURI));
-              gContextMenuContentData = { isRemote: true,
-                                          event: aMessage.objects.event,
-                                          popupNode: aMessage.objects.popupNode,
-                                          browser,
-                                          editFlags: data.editFlags,
-                                          spellInfo,
-                                          principal: data.principal,
-                                          customMenuItems: data.customMenuItems,
-                                          addonInfo: data.addonInfo,
-                                          documentURIObject,
-                                          docLocation: data.docLocation,
-                                          charSet: data.charSet,
-                                          referrer: data.referrer,
-                                          referrerPolicy: data.referrerPolicy,
-                                          contentType: data.contentType,
-                                          contentDisposition: data.contentDisposition,
-                                          frameOuterWindowID: data.frameOuterWindowID,
-                                          selectionInfo: data.selectionInfo,
-                                          disableSetDesktopBackground: data.disableSetDesktopBg,
-                                          loginFillInfo: data.loginFillInfo,
-                                          parentAllowsMixedContent: data.parentAllowsMixedContent,
-                                          userContextId: data.userContextId,
-                                        };
-              let popup = browser.ownerDocument.getElementById("contentAreaContextMenu");
-              let event = gContextMenuContentData.event;
-              popup.openPopupAtScreen(event.screenX, event.screenY, true);
+              openContextMenu(aMessage);
               break;
             }
             case "DOMWindowFocus": {
@@ -5147,7 +5115,7 @@
           this.mCurrentBrowser = document.getAnonymousElementByAttribute(this, "anonid", "initialBrowser");
           this.mCurrentBrowser.permanentKey = {};
 
-          Services.obs.addObserver(this, "contextual-identity-updated", false);
+          Services.obs.addObserver(this, "contextual-identity-updated");
 
           this.mCurrentTab = this.tabContainer.firstChild;
           const nsIEventListenerService =
@@ -5217,7 +5185,7 @@
           // To correctly handle keypresses for potential FindAsYouType, while
           // the tab's find bar is not yet initialized.
           this._findAsYouType = Services.prefs.getBoolPref("accessibility.typeaheadfind");
-          Services.prefs.addObserver("accessibility.typeaheadfind", this, false);
+          Services.prefs.addObserver("accessibility.typeaheadfind", this);
           messageManager.addMessageListener("Findbar:Keypress", this);
 
           // Add listeners for prerender messages
@@ -5695,9 +5663,7 @@
           window.addEventListener("resize", this);
           window.addEventListener("load", this);
 
-          this._tabAnimationLoggingEnabled = Services.prefs.getBoolPref("browser.tabs.animationLogging.enabled", false);
-          this._browserNewtabpageEnabled = Services.prefs.getBoolPref("browser.newtabpage.enabled");
-          Services.prefs.addObserver("privacy.userContext", this, false);
+          Services.prefs.addObserver("privacy.userContext", this);
           this.observe(null, "nsPref:changed", "privacy.userContext.enabled");
         ]]>
       </constructor>
@@ -5919,6 +5885,12 @@
 
       <method name="adjustTabstrip">
         <body><![CDATA[
+          // If we're overflowing, tab widths don't change anymore, so we can
+          // return early to avoid flushing layout.
+          if (this.getAttribute("overflow") == "true") {
+            return;
+          }
+
           let numTabs = this.childNodes.length -
                         this.tabbrowser._removingTabs.length;
           if (numTabs > 2) {
@@ -6252,7 +6224,7 @@
               if (width != this.mTabstripWidth) {
                 this.adjustTabstrip();
                 this._fillTrailingGap();
-                this._handleTabSelect();
+                this._handleTabSelect(false);
                 this.mTabstripWidth = width;
               }
               break;
@@ -6433,81 +6405,6 @@
         </body>
       </method>
 
-      <method name="_handleTabTelemetryStart">
-        <parameter name="aTab"/>
-        <parameter name="aURI"/>
-        <body>
-        <![CDATA[
-          // Animation-smoothness telemetry/logging
-          if (Services.telemetry.canRecordExtended || this._tabAnimationLoggingEnabled) {
-            if (aURI == "about:newtab" && (aTab._tPos == 1 || aTab._tPos == 2)) {
-              // Indicate newtab page animation where other tabs are unaffected
-              // (for which case, the 2nd or 3rd tabs are good representatives, even if not absolute)
-              aTab._recordingTabOpenPlain = true;
-            }
-            aTab._recordingHandle = window.QueryInterface(Ci.nsIInterfaceRequestor)
-                                          .getInterface(Ci.nsIDOMWindowUtils)
-                                          .startFrameTimeRecording();
-          }
-
-          // Overall animation duration
-          aTab._animStartTime = Date.now();
-        ]]>
-        </body>
-      </method>
-
-      <method name="_handleTabTelemetryEnd">
-        <parameter name="aTab"/>
-        <body>
-        <![CDATA[
-          if (!aTab._animStartTime) {
-            return;
-          }
-
-          aTab._animStartTime = 0;
-
-          // Handle tab animation smoothness telemetry/logging of frame intervals and paint times
-          if (!("_recordingHandle" in aTab)) {
-            return;
-          }
-
-          let intervals = window.QueryInterface(Ci.nsIInterfaceRequestor)
-                                .getInterface(Ci.nsIDOMWindowUtils)
-                                .stopFrameTimeRecording(aTab._recordingHandle);
-          delete aTab._recordingHandle;
-          let frameCount = intervals.length;
-
-          if (this._tabAnimationLoggingEnabled) {
-            let msg = "Tab " + (aTab.closing ? "close" : "open") + " (Frame-interval):\n";
-            for (let i = 0; i < frameCount; i++) {
-              msg += Math.round(intervals[i]) + "\n";
-            }
-            Services.console.logStringMessage(msg);
-          }
-
-          // For telemetry, the first frame interval is not useful since it may represent an interval
-          // to a relatively old frame (prior to recording start). So we'll ignore it for the average.
-          if (frameCount > 1) {
-            let averageInterval = 0;
-            for (let i = 1; i < frameCount; i++) {
-              averageInterval += intervals[i];
-            }
-            averageInterval = averageInterval / (frameCount - 1);
-
-            Services.telemetry.getHistogramById("FX_TAB_ANIM_ANY_FRAME_INTERVAL_MS").add(averageInterval);
-
-            if (aTab._recordingTabOpenPlain) {
-              delete aTab._recordingTabOpenPlain;
-              // While we do have a telemetry probe NEWTAB_PAGE_ENABLED to monitor newtab preview, it'll be
-              // easier to overview the data without slicing by it. Hence the additional histograms with _PREVIEW.
-              let preview = this._browserNewtabpageEnabled ? "_PREVIEW" : "";
-              Services.telemetry.getHistogramById("FX_TAB_ANIM_OPEN" + preview + "_FRAME_INTERVAL_MS").add(averageInterval);
-            }
-          }
-        ]]>
-        </body>
-      </method>
-
       <method name="getRelatedElement">
         <parameter name="aTab"/>
         <body>
@@ -6536,8 +6433,6 @@
           return;
 
         var tab = event.target;
-
-        this._handleTabTelemetryEnd(tab);
 
         if (tab.getAttribute("fadein") == "true") {
           if (tab._fullyOpen)
@@ -7104,7 +6999,8 @@
                   class="tab-content" align="center">
           <xul:image xbl:inherits="fadein,pinned,busy,progress,selected=visuallyselected"
                      class="tab-throbber"
-                     role="presentation"/>
+                     role="presentation"
+                     layer="true" />
           <xul:image xbl:inherits="src=image,loadingprincipal=iconLoadingPrincipal,fadein,pinned,selected=visuallyselected,busy,crashed,sharing"
                      anonid="tab-icon-image"
                      class="tab-icon-image"
@@ -7698,7 +7594,7 @@
           if (val) {
             this.setAttribute("label", val);
             this.removeAttribute("inactive");
-            this._calcMouseTargetRect();
+            this._mouseTargetRect = null;
             MousePosTracker.addListener(this);
           } else {
             this.setAttribute("inactive", "true");
@@ -7714,6 +7610,9 @@
 
       <method name="getMouseTargetRect">
         <body><![CDATA[
+          if (!this._mouseTargetRect) {
+            this._calcMouseTargetRect();
+          }
           return this._mouseTargetRect;
         ]]></body>
       </method>
@@ -7738,7 +7637,7 @@
 
           switch (event.type) {
             case "resize":
-              this._calcMouseTargetRect();
+              this._mouseTargetRect = null;
               break;
           }
         ]]></body>
@@ -7769,7 +7668,7 @@
 
           if (!this.hasAttribute("sizelimit")) {
             this.setAttribute("sizelimit", "true");
-            this._calcMouseTargetRect();
+            this._mouseTargetRect = null;
           }
         </body>
       </method>

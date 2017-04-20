@@ -581,10 +581,10 @@ OggDemuxer::ReadMetadata()
       mInfo.mMetadataDuration.emplace(TimeUnit::FromInfinity());
     }
     if (HasAudio()) {
-      mInfo.mAudio.mDuration = mInfo.mMetadataDuration->ToMicroseconds();
+      mInfo.mAudio.mDuration = mInfo.mMetadataDuration.ref();
     }
     if (HasVideo()) {
-      mInfo.mVideo.mDuration = mInfo.mMetadataDuration->ToMicroseconds();
+      mInfo.mVideo.mDuration = mInfo.mMetadataDuration.ref();
     }
   } else {
     OGG_DEBUG("no audio or video tracks");
@@ -1357,7 +1357,7 @@ OggTrackDemuxer::NextSample()
     // We've encountered an end of bitstream packet; check for a chained
     // bitstream following this one.
     // This will also update mSharedAudioTrackInfo.
-    mParent->ReadOggChain(TimeUnit::FromMicroseconds(data->GetEndTime()));
+    mParent->ReadOggChain(data->GetEndTime());
   }
   return data;
 }

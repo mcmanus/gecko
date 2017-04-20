@@ -139,7 +139,7 @@ VideoDecoderParent::RecvInput(const MediaRawDataIPDL& aData)
   data->mOffset = aData.base().offset();
   data->mTime = aData.base().time();
   data->mTimecode = aData.base().timecode();
-  data->mDuration = aData.base().duration();
+  data->mDuration = media::TimeUnit::FromMicroseconds(aData.base().duration());
   data->mKeyframe = aData.base().keyframe();
 
   DeallocShmem(aData.buffer());
@@ -164,6 +164,11 @@ VideoDecoderParent::ProcessDecodedData(
 {
   MOZ_ASSERT(OnManagerThread());
 
+  // If the video decoder bridge has shut down, stop.
+  if (!mKnowsCompositor->GetTextureForwarder()) {
+    return;
+  }
+
   for (const auto& data : aData) {
     MOZ_ASSERT(data->mType == MediaData::VIDEO_DATA,
                 "Can only decode videos using VideoDecoderParent!");
@@ -187,7 +192,8 @@ VideoDecoderParent::ProcessDecodedData(
 
     VideoDataIPDL output(
       MediaDataIPDL(data->mOffset, data->mTime, data->mTimecode,
-                    data->mDuration, data->mFrames, data->mKeyframe),
+                    data->mDuration.ToMicroseconds(),
+                    data->mFrames, data->mKeyframe),
       video->mDisplay,
       texture ? texture->GetSize() : IntSize(),
       texture ? mParent->StoreImage(video->mImage, texture)

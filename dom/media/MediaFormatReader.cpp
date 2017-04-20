@@ -10,7 +10,6 @@
 #include "MediaData.h"
 #include "MediaInfo.h"
 #include "MediaFormatReader.h"
-#include "MediaPrefs.h"
 #include "MediaResource.h"
 #include "VideoUtils.h"
 #include "VideoFrameContainer.h"
@@ -752,8 +751,6 @@ public:
 
   RefPtr<ShutdownPromise> Shutdown()
   {
-    mData->mAudioDemuxer = nullptr;
-    mData->mVideoDemuxer = nullptr;
     RefPtr<Data> data = mData.forget();
     return InvokeAsync(mTaskQueue, __func__, [data]() {
       // We need to clear our reference to the demuxer now. So that in the event
@@ -761,6 +758,8 @@ public:
       // mediasource demuxer that is waiting on more data, it will force the
       // init promise to be rejected.
       data->mDemuxer = nullptr;
+      data->mAudioDemuxer = nullptr;
+      data->mVideoDemuxer = nullptr;
       return ShutdownPromise::CreateAndResolve(true, __func__);
     });
   }
@@ -920,7 +919,7 @@ public:
 
   nsresult GetNextRandomAccessPoint(TimeUnit* aTime) override
   {
-    AutoLock lock(this, __func__);
+    MutexAutoLock lock(mMutex);
     if (NS_SUCCEEDED(mNextRandomAccessPointResult)) {
       *aTime = mNextRandomAccessPoint;
     }
@@ -944,32 +943,14 @@ public:
 
   TimeIntervals GetBuffered() override
   {
-    AutoLock lock(this, __func__);
+    MutexAutoLock lock(mMutex);
     return mBuffered;
   }
 
   void BreakCycles() override { }
 
 private:
-  class AutoLock : public MutexAutoLock
-  {
-  public:
-    AutoLock(Wrapper* aThis, const char* aCallSite)
-      : MutexAutoLock(aThis->mMutex)
-      , mThis(aThis)
-    {
-      mThis->mCallSite = aCallSite;
-    }
-    ~AutoLock()
-    {
-      mThis->mCallSite = nullptr;
-    }
-  private:
-    Wrapper* const mThis;
-  };
-
   Mutex mMutex;
-  const char* mCallSite = nullptr;
   const RefPtr<AutoTaskQueue> mTaskQueue;
   const bool mGetSamplesMayBlock;
   const UniquePtr<TrackInfo> mInfo;
@@ -983,9 +964,6 @@ private:
 
   ~Wrapper()
   {
-    if (mCallSite != nullptr) {
-      MOZ_CRASH_UNSAFE_PRINTF("destroying a still-owned lock! callsite=%s", mCallSite);
-    }
     RefPtr<MediaTrackDemuxer> trackDemuxer = mTrackDemuxer.forget();
     mTaskQueue->Dispatch(NS_NewRunnableFunction(
       [trackDemuxer]() { trackDemuxer->BreakCycles(); }));
@@ -998,7 +976,7 @@ private:
       // Detached.
       return;
     }
-    AutoLock lock(this, __func__);
+    MutexAutoLock lock(mMutex);
     mNextRandomAccessPointResult =
       mTrackDemuxer->GetNextRandomAccessPoint(&mNextRandomAccessPoint);
   }
@@ -1010,7 +988,7 @@ private:
       // Detached.
       return;
     }
-    AutoLock lock(this, __func__);
+    MutexAutoLock lock(mMutex);
     mBuffered = mTrackDemuxer->GetBuffered();
   }
 };
@@ -1328,10 +1306,15 @@ MediaFormatReader::AsyncReadMetadata()
 }
 
 void
-MediaFormatReader::OnDemuxerInitDone(nsresult)
+MediaFormatReader::OnDemuxerInitDone(const MediaResult& aResult)
 {
   MOZ_ASSERT(OnTaskQueue());
   mDemuxerInitRequest.Complete();
+
+  if (NS_FAILED(aResult) && MediaPrefs::MediaWarningsAsErrors()) {
+    mMetadataPromise.Reject(aResult, __func__);
+    return;
+  }
 
   mDemuxerInitDone = true;
 
@@ -1416,12 +1399,12 @@ MediaFormatReader::OnDemuxerInitDone(nsresult)
     mInfo.mCrypto = *crypto;
   }
 
-  int64_t videoDuration = HasVideo() ? mInfo.mVideo.mDuration : 0;
-  int64_t audioDuration = HasAudio() ? mInfo.mAudio.mDuration : 0;
+  auto videoDuration = HasVideo() ? mInfo.mVideo.mDuration : TimeUnit::Zero();
+  auto audioDuration = HasAudio() ? mInfo.mAudio.mDuration : TimeUnit::Zero();
 
-  int64_t duration = std::max(videoDuration, audioDuration);
-  if (duration != -1) {
-    mInfo.mMetadataDuration = Some(TimeUnit::FromMicroseconds(duration));
+  auto duration = std::max(videoDuration, audioDuration);
+  if (duration.IsPositive()) {
+    mInfo.mMetadataDuration = Some(duration);
   }
 
   mInfo.mMediaSeekable = mDemuxer->IsSeekable();
@@ -1451,6 +1434,16 @@ MediaFormatReader::OnDemuxerInitDone(nsresult)
     if (HasVideo()) {
       RequestDemuxSamples(TrackInfo::kVideoTrack);
     }
+  }
+
+  if (aResult != NS_OK && mDecoder) {
+    RefPtr<AbstractMediaDecoder> decoder = mDecoder;
+    mDecoder->AbstractMainThread()->Dispatch(NS_NewRunnableFunction(
+      [decoder, aResult] () {
+        if (decoder->GetOwner()) {
+          decoder->GetOwner()->DecodeWarning(aResult);
+        }
+      }));
   }
 
   MaybeResolveMetadataPromise();
@@ -1731,7 +1724,8 @@ MediaFormatReader::NotifyNewOutput(
   auto& decoder = GetDecoderData(aTrack);
   for (auto& sample : aResults) {
     LOGV("Received new %s sample time:%" PRId64 " duration:%" PRId64,
-        TrackTypeToStr(aTrack), sample->mTime, sample->mDuration);
+         TrackTypeToStr(aTrack), sample->mTime,
+         sample->mDuration.ToMicroseconds());
     decoder.mOutput.AppendElement(sample);
     decoder.mNumSamplesOutput++;
     decoder.mNumOfConsecutiveError = 0;
@@ -2017,9 +2011,8 @@ MediaFormatReader::HandleDemuxedSamples(
       if (sample->mKeyframe) {
         ScheduleUpdate(aTrack);
       } else {
-        TimeInterval time =
-          TimeInterval(TimeUnit::FromMicroseconds(sample->mTime),
-                       TimeUnit::FromMicroseconds(sample->GetEndTime()));
+        auto time = TimeInterval(
+          TimeUnit::FromMicroseconds(sample->mTime), sample->GetEndTime());
         InternalSeekTarget seekTarget =
           decoder.mTimeThreshold.refOr(InternalSeekTarget(time, false));
         LOG("Stream change occurred on a non-keyframe. Seeking to:%" PRId64,
@@ -2226,7 +2219,7 @@ MediaFormatReader::Update(TrackType aTrack)
       decoder.mSizeOfQueue -= 1;
       decoder.mLastSampleTime =
         Some(TimeInterval(TimeUnit::FromMicroseconds(output->mTime),
-                          TimeUnit::FromMicroseconds(output->GetEndTime())));
+                          output->GetEndTime()));
       decoder.mNumSamplesOutputTotal++;
       ReturnOutput(output, aTrack);
       // We have a decoded sample ready to be returned.
@@ -2386,7 +2379,7 @@ MediaFormatReader::ReturnOutput(MediaData* aData, TrackType aTrack)
   MOZ_ASSERT(GetDecoderData(aTrack).HasPromise());
   MOZ_DIAGNOSTIC_ASSERT(aData->mType != MediaData::NULL_DATA);
   LOG("Resolved data promise for %s [%" PRId64 ", %" PRId64 "]", TrackTypeToStr(aTrack),
-      aData->mTime, aData->GetEndTime());
+      aData->mTime, aData->GetEndTime().ToMicroseconds());
 
   if (aTrack == TrackInfo::kAudioTrack) {
     AudioData* audioData = static_cast<AudioData*>(aData);

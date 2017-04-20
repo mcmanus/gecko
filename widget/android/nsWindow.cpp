@@ -290,7 +290,8 @@ public:
                      jni::Object::Param aDispatcher,
                      jni::String::Param aChromeURI,
                      jni::Object::Param aSettings,
-                     int32_t screenId);
+                     int32_t aScreenId,
+                     bool aPrivateMode);
 
     // Close and destroy the nsWindow.
     void Close();
@@ -1209,7 +1210,8 @@ nsWindow::GeckoViewSupport::Open(const jni::Class::LocalRef& aCls,
                                  jni::Object::Param aDispatcher,
                                  jni::String::Param aChromeURI,
                                  jni::Object::Param aSettings,
-                                 int32_t aScreenId)
+                                 int32_t aScreenId,
+                                 bool aPrivateMode)
 {
     MOZ_ASSERT(NS_IsMainThread());
 
@@ -1236,8 +1238,12 @@ nsWindow::GeckoViewSupport::Open(const jni::Class::LocalRef& aCls,
         androidView->mSettings = java::GeckoBundle::Ref::From(aSettings);
     }
 
+    nsAutoCString chromeFlags("chrome,dialog=0,resizable,scrollbars");
+    if (aPrivateMode) {
+        chromeFlags += ",private";
+    }
     nsCOMPtr<mozIDOMWindowProxy> domWindow;
-    ww->OpenWindow(nullptr, url, nullptr, "chrome,dialog=0,resizable,scrollbars=yes",
+    ww->OpenWindow(nullptr, url, nullptr, chromeFlags.get(),
                    androidView, getter_AddRefs(domWindow));
     MOZ_RELEASE_ASSERT(domWindow);
 
@@ -1326,6 +1332,8 @@ nsWindow::GeckoViewSupport::Reattach(const GeckoView::Window::LocalRef& inst,
     MOZ_ASSERT(window.mAndroidView);
     window.mAndroidView->mEventDispatcher->Attach(
             java::EventDispatcher::Ref::From(aDispatcher), mDOMWindow);
+
+    mGeckoViewWindow->OnReattach(aView);
 }
 
 void

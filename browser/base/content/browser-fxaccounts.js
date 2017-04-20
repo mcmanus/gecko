@@ -65,10 +65,7 @@ var gFxAccounts = {
   get loginFailed() {
     // Referencing Weave.Service will implicitly initialize sync, and we don't
     // want to force that - so first check if it is ready.
-    let service = Cc["@mozilla.org/weave/service;1"]
-                  .getService(Components.interfaces.nsISupports)
-                  .wrappedJSObject;
-    if (!service.ready) {
+    if (!this.weaveService.ready) {
       return false;
     }
     // LOGIN_FAILED_LOGIN_REJECTED explicitly means "you must log back in".
@@ -115,7 +112,7 @@ var gFxAccounts = {
     }
 
     for (let topic of this.topics) {
-      Services.obs.addObserver(this, topic, false);
+      Services.obs.addObserver(this, topic);
     }
 
     gNavToolbox.addEventListener("customizationstarting", this);
@@ -376,7 +373,8 @@ var gFxAccounts = {
   },
 
   updateTabContextMenu(aPopupMenu, aTargetTab) {
-    if (!this.sendTabToDeviceEnabled) {
+    if (!this.sendTabToDeviceEnabled ||
+        !this.weaveService.ready) {
       return;
     }
 
@@ -388,7 +386,8 @@ var gFxAccounts = {
   },
 
   initPageContextMenu(contextMenu) {
-    if (!this.sendTabToDeviceEnabled) {
+    if (!this.sendTabToDeviceEnabled ||
+        !this.weaveService.ready) {
       return;
     }
 
@@ -422,3 +421,10 @@ XPCOMUtils.defineLazyGetter(gFxAccounts, "FxAccountsCommon", function() {
 
 XPCOMUtils.defineLazyModuleGetter(this, "EnsureFxAccountsWebChannel",
   "resource://gre/modules/FxAccountsWebChannel.jsm");
+
+
+XPCOMUtils.defineLazyGetter(gFxAccounts, "weaveService", function() {
+  return Components.classes["@mozilla.org/weave/service;1"]
+                   .getService(Components.interfaces.nsISupports)
+                   .wrappedJSObject;
+});

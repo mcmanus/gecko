@@ -9,6 +9,9 @@
 @import "resource://devtools/client/shared/components/tabs/tabs.css";
 @import "resource://devtools/client/shared/components/tabs/tabbar.css";
 @import "chrome://devtools/skin/components-frame.css";
+@import "chrome://devtools/content/sourceeditor/codemirror/lib/codemirror.css";
+@import "chrome://devtools/content/sourceeditor/codemirror/addon/dialog/dialog.css";
+@import "chrome://devtools/content/sourceeditor/codemirror/mozilla.css";
 
 :root.theme-dark {
   --table-splitter-color: rgba(255,255,255,0.15);
@@ -78,7 +81,9 @@ body,
   display: flex;
 }
 
-.devtools-toolbar-container {
+.devtools-toolbar-container.devtools-toolbar {
+  height: auto !important;
+  flex-wrap: wrap;
   justify-content: space-between;
 }
 
@@ -96,6 +101,17 @@ body,
 .cropped-textbox .textbox-input {
   /* workaround for textbox not supporting the @crop attribute */
   text-overflow: ellipsis;
+}
+
+.learn-more-link {
+  color: var(--theme-highlight-blue);
+  cursor: pointer;
+  margin: 0 5px;
+  white-space: nowrap;
+}
+
+.learn-more-link:hover {
+  text-decoration: underline;
 }
 
 /* Status bar */
@@ -147,6 +163,8 @@ body,
 
 .notice-perf-message {
   margin-top: 2px;
+  display: flex;
+  align-items: center;
 }
 
 .requests-list-perf-notice-button {
@@ -183,11 +201,9 @@ body,
 }
 
 .requests-list-contents {
-  display: flex;
-  flex-direction: column;
+  height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
-  flex: 1;
   --timings-scale: 1;
   --timings-rev-scale: 1;
 }
@@ -328,7 +344,7 @@ body,
 .requests-list-status {
   max-width: 6em;
   text-align: center;
-  width: 10vw;
+  width: 8vw;
 }
 
 .requests-list-method,
@@ -355,6 +371,14 @@ body,
 
 .requests-list-security-and-domain {
   width: 14vw;
+}
+
+.requests-list-remoteip {
+  width: 8vw;
+}
+
+.requests-list-protocol {
+  width: 7vw;
 }
 
 .requests-security-state-icon {
@@ -825,10 +849,7 @@ body,
   height: 100%;
 }
 
-.editor-container,
-.editor-mount,
-.panel-container iframe {
-  border: none;
+.source-editor-mount {
   width: 100%;
   height: 100%;
 }
@@ -858,18 +879,6 @@ body,
 
 .theme-dark .tabpanel-summary-value {
   color: var(--theme-selection-color);
-}
-
-.learn-more-link {
-  color: var(--theme-highlight-blue);
-  cursor: pointer;
-  margin: 0 5px;
-  white-space: nowrap;
-  flex-grow: 1;
-}
-
-.learn-more-link:hover {
-  text-decoration: underline;
 }
 
 /* Headers tabpanel */
@@ -920,6 +929,10 @@ body,
 
 .headers-summary .status-text {
     width: auto!important;
+}
+
+.headers-summary .learn-more-link {
+  flex-grow: 1;
 }
 
 /* Response tabpanel */
@@ -1110,13 +1123,7 @@ body,
   opacity: 0.8;
 }
 
-.requests-list-network-summary-button > .summary-info-text {
-  opacity: 0.8;
-  margin-inline-start: 0.5em;
-}
-
-.requests-list-network-summary-button:hover > .summary-info-icon,
-.requests-list-network-summary-button:hover > .summary-info-text {
+.requests-list-network-summary-button:hover > .summary-info-icon {
   opacity: 1;
 }
 
@@ -1153,6 +1160,14 @@ body,
 .statistics-panel .pie-table-chart-container {
   width: 100%;
   height: 100%;
+}
+
+.statistics-panel .learn-more-link {
+  font-weight: 400;
+}
+
+.statistics-panel .table-chart-title {
+  display: flex;
 }
 
 .pie-table-chart-container {
@@ -1303,7 +1318,6 @@ body,
 
   .requests-list-status {
     max-width: none;
-    width: 10vw;
   }
 
   .requests-list-status-code {
@@ -1324,12 +1338,16 @@ body,
     width: 16vw;
   }
 
+  .requests-list-remoteip {
+    width: 8vw;
+  }
+
   .requests-list-cause,
   .requests-list-type,
   .requests-list-transferred,
   .requests-list-size {
     max-width: none;
-    width: 10vw;
+    width: 8vw;
   }
 
   .requests-list-waterfall {

@@ -10,6 +10,7 @@
 #include "ClientLayerManager.h"
 #include "gfxPlatform.h"
 #include "mozilla/dom/TabChild.h"
+#include "mozilla/dom/TabGroup.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/Hal.h"
 #include "mozilla/IMEStateManager.h"
@@ -160,7 +161,7 @@ PuppetWidget::InitIMEState()
   if (mNeedIMEStateInit) {
     mContentCache.Clear();
     mTabChild->SendUpdateContentCache(mContentCache);
-    mIMEPreferenceOfParent = nsIMEUpdatePreference();
+    mIMENotificationRequestsOfParent = IMENotificationRequests();
     mNeedIMEStateInit = false;
   }
 }
@@ -309,9 +310,10 @@ PuppetWidget::Invalidate(const LayoutDeviceIntRect& aRect)
 
   mDirtyRegion.Or(mDirtyRegion, aRect);
 
-  if (!mDirtyRegion.IsEmpty() && !mPaintTask.IsPending()) {
+  if (mTabChild && !mDirtyRegion.IsEmpty() && !mPaintTask.IsPending()) {
     mPaintTask = new PaintTask(this);
-    NS_DispatchToCurrentThread(mPaintTask.get());
+    nsCOMPtr<nsIRunnable> event(mPaintTask.get());
+    mTabChild->TabGroup()->Dispatch("PuppetWidget::Invalidate", TaskCategory::Other, event.forget());
     return;
   }
 }
@@ -840,9 +842,9 @@ PuppetWidget::NotifyIMEOfFocusChange(const IMENotification& aIMENotification)
     mContentCache.Clear();
   }
 
-  mIMEPreferenceOfParent = nsIMEUpdatePreference();
+  mIMENotificationRequestsOfParent = IMENotificationRequests();
   if (!mTabChild->SendNotifyIMEFocus(mContentCache, aIMENotification,
-                                     &mIMEPreferenceOfParent)) {
+                                     &mIMENotificationRequestsOfParent)) {
     return NS_ERROR_FAILURE;
   }
   return NS_OK;
@@ -864,12 +866,13 @@ PuppetWidget::NotifyIMEOfCompositionUpdate(
   return NS_OK;
 }
 
-nsIMEUpdatePreference
-PuppetWidget::GetIMEUpdatePreference()
+IMENotificationRequests
+PuppetWidget::GetIMENotificationRequests()
 {
   if (mNativeTextEventDispatcherListener) {
-    // Use mNativeTextEventDispatcherListener for IME preference.
-    return mNativeTextEventDispatcherListener->GetIMEUpdatePreference();
+    // Use mNativeTextEventDispatcherListener for retrieving IME notification
+    // requests because non-native IME may have transaction.
+    return mNativeTextEventDispatcherListener->GetIMENotificationRequests();
   }
 
   // e10s requires IME content cache in in the TabParent for handling query
@@ -880,12 +883,14 @@ PuppetWidget::GetIMEUpdatePreference()
     // But if a plugin has focus, we cannot receive text nor selection change
     // in the plugin.  Therefore, PuppetWidget needs to receive only position
     // change event for updating the editor rect cache.
-    return nsIMEUpdatePreference(mIMEPreferenceOfParent.mWantUpdates |
-                                 nsIMEUpdatePreference::NOTIFY_POSITION_CHANGE);
+    return IMENotificationRequests(
+             mIMENotificationRequestsOfParent.mWantUpdates |
+             IMENotificationRequests::NOTIFY_POSITION_CHANGE);
   }
-  return nsIMEUpdatePreference(mIMEPreferenceOfParent.mWantUpdates |
-                               nsIMEUpdatePreference::NOTIFY_TEXT_CHANGE |
-                               nsIMEUpdatePreference::NOTIFY_POSITION_CHANGE );
+  return IMENotificationRequests(
+           mIMENotificationRequestsOfParent.mWantUpdates |
+           IMENotificationRequests::NOTIFY_TEXT_CHANGE |
+           IMENotificationRequests::NOTIFY_POSITION_CHANGE);
 }
 
 nsresult
@@ -912,7 +917,7 @@ PuppetWidget::NotifyIMEOfTextChange(const IMENotification& aIMENotification)
 
   // TabParent doesn't this this to cache.  we don't send the notification
   // if parent process doesn't request NOTIFY_TEXT_CHANGE.
-  if (mIMEPreferenceOfParent.WantTextChange()) {
+  if (mIMENotificationRequestsOfParent.WantTextChange()) {
     mTabChild->SendNotifyIMETextChange(mContentCache, aIMENotification);
   } else {
     mTabChild->SendUpdateContentCache(mContentCache);
@@ -990,7 +995,7 @@ PuppetWidget::NotifyIMEOfPositionChange(const IMENotification& aIMENotification)
       NS_WARN_IF(!mContentCache.CacheSelection(this, &aIMENotification))) {
     return NS_ERROR_FAILURE;
   }
-  if (mIMEPreferenceOfParent.WantPositionChanged()) {
+  if (mIMENotificationRequestsOfParent.WantPositionChanged()) {
     mTabChild->SendNotifyIMEPositionChange(mContentCache, aIMENotification);
   } else {
     mTabChild->SendUpdateContentCache(mContentCache);
@@ -1102,7 +1107,8 @@ PuppetWidget::Paint()
                          "PuppetWidget", 0);
 #endif
 
-    if (mozilla::layers::LayersBackend::LAYERS_CLIENT == mLayerManager->GetBackendType()) {
+    if (mLayerManager->GetBackendType() == mozilla::layers::LayersBackend::LAYERS_CLIENT ||
+        mLayerManager->GetBackendType() == mozilla::layers::LayersBackend::LAYERS_WR) {
       // Do nothing, the compositor will handle drawing
       if (mTabChild) {
         mTabChild->NotifyPainted();
@@ -1421,13 +1427,6 @@ PuppetScreenManager::ScreenForRect(int32_t inLeft,
                                    nsIScreen** outScreen)
 {
   return GetPrimaryScreen(outScreen);
-}
-
-NS_IMETHODIMP
-PuppetScreenManager::GetSystemDefaultScale(float *aDefaultScale)
-{
-  *aDefaultScale = 1.0f;
-  return NS_OK;
 }
 
 nsIWidgetListener*

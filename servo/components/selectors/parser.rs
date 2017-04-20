@@ -121,9 +121,52 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
     }
 }
 
+/// Copied from Gecko, where it was noted to be unmeasured.
+const NUM_ANCESTOR_HASHES: usize = 4;
+
+/// The cores parts of a selector used for matching. This exists to make that
+/// information accessibly separately from the specificity and pseudo-element
+/// information that lives on |Selector| proper. We may want to refactor things
+/// and move that information elsewhere, at which point we could rename this
+/// to |Selector|.
+#[derive(PartialEq, Eq, Hash, Clone)]
+pub struct SelectorInner<Impl: SelectorImpl> {
+    /// The selector data.
+    pub complex: Arc<ComplexSelector<Impl>>,
+    /// Ancestor hashes for the bloom filter. We precompute these and store
+    /// them inline to optimize cache performance during selector matching.
+    /// This matters a lot.
+    pub ancestor_hashes: [u32; NUM_ANCESTOR_HASHES],
+}
+
+impl<Impl: SelectorImpl> SelectorInner<Impl> {
+    pub fn new(c: Arc<ComplexSelector<Impl>>) -> Self {
+        let mut hashes = [0; NUM_ANCESTOR_HASHES];
+        {
+            // Compute ancestor hashes for the bloom filter.
+            let mut hash_iter =
+                iter_ancestors(&c).flat_map(|x| x.compound_selector.iter())
+                                  .map(|x| x.ancestor_hash())
+                                  .filter(|x| x.is_some())
+                                  .map(|x| x.unwrap());
+            for i in 0..NUM_ANCESTOR_HASHES {
+                hashes[i] = match hash_iter.next() {
+                    Some(x) => x,
+                    None => break,
+                }
+            }
+        }
+
+        SelectorInner {
+            complex: c,
+            ancestor_hashes: hashes,
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub struct Selector<Impl: SelectorImpl> {
-    pub complex_selector: Arc<ComplexSelector<Impl>>,
+    pub inner: SelectorInner<Impl>,
     pub pseudo_element: Option<Impl::PseudoElement>,
     pub specificity: u32,
 }
@@ -141,11 +184,11 @@ impl<Impl: SelectorImpl> SelectorMethods for Selector<Impl> {
     fn visit<V>(&self, visitor: &mut V) -> bool
         where V: SelectorVisitor<Impl = Impl>,
     {
-        self.complex_selector.visit(visitor)
+        self.inner.complex.visit(visitor)
     }
 }
 
-impl<Impl: SelectorImpl> SelectorMethods for Arc<ComplexSelector<Impl>> {
+impl<Impl: SelectorImpl> SelectorMethods for ComplexSelector<Impl> {
     type Impl = Impl;
 
     fn visit<V>(&self, visitor: &mut V) -> bool
@@ -184,6 +227,9 @@ impl<Impl: SelectorImpl> SelectorMethods for SimpleSelector<Impl> {
         where V: SelectorVisitor<Impl = Impl>,
     {
         use self::SimpleSelector::*;
+        if !visitor.visit_simple_selector(self) {
+            return false;
+        }
 
         match *self {
             Negation(ref negated) => {
@@ -220,6 +266,35 @@ impl<Impl: SelectorImpl> SelectorMethods for SimpleSelector<Impl> {
 pub struct ComplexSelector<Impl: SelectorImpl> {
     pub compound_selector: Vec<SimpleSelector<Impl>>,
     pub next: Option<(Arc<ComplexSelector<Impl>>, Combinator)>,  // c.next is left of c
+}
+
+struct AncestorIterator<'a, Impl: 'a + SelectorImpl> {
+    curr: Option<&'a Arc<ComplexSelector<Impl>>>,
+}
+
+impl<'a, Impl: SelectorImpl> Iterator for AncestorIterator<'a, Impl> {
+    type Item = &'a Arc<ComplexSelector<Impl>>;
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(sel) = self.curr.take() {
+            let (next_sel, is_ancestor) = match sel.next {
+                None => (None, true),
+                Some((ref sel, comb)) =>
+                    (Some(sel), matches!(comb, Combinator::Child | Combinator::Descendant)),
+            };
+            self.curr = next_sel;
+            if is_ancestor {
+                break;
+            }
+        }
+
+        self.curr
+    }
+}
+
+fn iter_ancestors<Impl: SelectorImpl>(sel: &Arc<ComplexSelector<Impl>>) -> AncestorIterator<Impl> {
+    AncestorIterator {
+        curr: Some(sel)
+    }
 }
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug, Hash)]
@@ -265,6 +340,34 @@ pub enum SimpleSelector<Impl: SelectorImpl> {
     OnlyOfType,
     NonTSPseudoClass(Impl::NonTSPseudoClass),
     // ...
+}
+
+impl<Impl: SelectorImpl> SimpleSelector<Impl> {
+    /// Compute the ancestor hash to check against the bloom filter.
+    fn ancestor_hash(&self) -> Option<u32> {
+        match *self {
+            SimpleSelector::LocalName(LocalName { ref name, ref lower_name }) => {
+                // Only insert the local-name into the filter if it's all lowercase.
+                // Otherwise we would need to test both hashes, and our data structures
+                // aren't really set up for that.
+                if name == lower_name {
+                    Some(name.precomputed_hash())
+                } else {
+                    None
+                }
+            },
+            SimpleSelector::Namespace(ref namespace) => {
+                Some(namespace.url.precomputed_hash())
+            },
+            SimpleSelector::ID(ref id) => {
+                Some(id.precomputed_hash())
+            },
+            SimpleSelector::Class(ref class) => {
+                Some(class.precomputed_hash())
+            },
+            _ => None,
+        }
+    }
 }
 
 #[derive(Eq, PartialEq, Clone, Hash, Copy, Debug)]
@@ -318,6 +421,9 @@ impl<Impl: SelectorImpl> Debug for Selector<Impl> {
     }
 }
 
+impl<Impl: SelectorImpl> Debug for SelectorInner<Impl> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { self.complex.to_css(f) }
+}
 impl<Impl: SelectorImpl> Debug for ComplexSelector<Impl> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { self.to_css(f) }
 }
@@ -350,7 +456,7 @@ impl<Impl: SelectorImpl> ToCss for SelectorList<Impl> {
 
 impl<Impl: SelectorImpl> ToCss for Selector<Impl> {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        self.complex_selector.to_css(dest)?;
+        self.inner.complex.to_css(dest)?;
         if let Some(ref pseudo) = self.pseudo_element {
             pseudo.to_css(dest)?;
         }
@@ -360,12 +466,29 @@ impl<Impl: SelectorImpl> ToCss for Selector<Impl> {
 
 impl<Impl: SelectorImpl> ToCss for ComplexSelector<Impl> {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        if let Some((ref next, ref combinator)) = self.next {
-            next.to_css(dest)?;
-            combinator.to_css(dest)?;
-        }
-        for simple in &self.compound_selector {
-            simple.to_css(dest)?;
+       use smallvec::SmallVec;
+       let mut current = self;
+       let mut nodes = SmallVec::<[&Self;8]>::new();
+       nodes.push(current);
+
+       loop {
+           match current.next {
+               None => break,
+               Some((ref next, _)) => {
+                   current = &**next;
+                   nodes.push(next);
+               }
+           }
+       }
+
+       for selector in nodes.iter().rev() {
+           if let Some((_, ref combinator)) = selector.next {
+               combinator.to_css(dest)?;
+           }
+
+           for simple in &selector.compound_selector {
+               simple.to_css(dest)?;
+           }
         }
         Ok(())
     }
@@ -407,7 +530,7 @@ impl<Impl: SelectorImpl> ToCss for SimpleSelector<Impl> {
                 attr_selector_to_css(a, " = ", v, match case {
                     CaseSensitivity::CaseSensitive => None,
                     CaseSensitivity::CaseInsensitive => Some(" i"),
-                 }, dest)
+                }, dest)
             }
             AttrDashMatch(ref a, ref v) => attr_selector_to_css(a, " |= ", v, None, dest),
             AttrIncludesNeverMatch(ref a, ref v) |
@@ -652,7 +775,7 @@ fn parse_selector<P, Impl>(parser: &P, input: &mut CssParser) -> Result<Selector
         parse_complex_selector_and_pseudo_element(parser, input)?;
     Ok(Selector {
         specificity: specificity(&complex, pseudo_element.as_ref()),
-        complex_selector: Arc::new(complex),
+        inner: SelectorInner::new(Arc::new(complex)),
         pseudo_element: pseudo_element,
     })
 }
@@ -1161,7 +1284,7 @@ pub mod tests {
     impl SelectorMethods for PseudoClass {
         type Impl = DummySelectorImpl;
 
-        fn visit<V>(&self, visitor: &mut V) -> bool
+        fn visit<V>(&self, _visitor: &mut V) -> bool
             where V: SelectorVisitor<Impl = Self::Impl> { true }
     }
 
@@ -1285,48 +1408,48 @@ pub mod tests {
         assert_eq!(parse(":lang(4)"), Err(())) ;
         assert_eq!(parse(":lang(en US)"), Err(())) ;
         assert_eq!(parse("EeÉ"), Ok(SelectorList(vec!(Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec!(SimpleSelector::LocalName(LocalName {
                     name: DummyAtom::from("EeÉ"),
                     lower_name: DummyAtom::from("eeÉ") })),
                 next: None,
-            }),
+            })),
             pseudo_element: None,
             specificity: specificity(0, 0, 1),
         }))));
         assert_eq!(parse(".foo:lang(en-US)"), Ok(SelectorList(vec!(Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec![
                     SimpleSelector::Class(DummyAtom::from("foo")),
                     SimpleSelector::NonTSPseudoClass(PseudoClass::Lang("en-US".to_owned()))
                 ],
                 next: None,
-            }),
+            })),
             pseudo_element: None,
             specificity: specificity(0, 2, 0),
         }))));
         assert_eq!(parse("#bar"), Ok(SelectorList(vec!(Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec!(SimpleSelector::ID(DummyAtom::from("bar"))),
                 next: None,
-            }),
+            })),
             pseudo_element: None,
             specificity: specificity(1, 0, 0),
         }))));
         assert_eq!(parse("e.foo#bar"), Ok(SelectorList(vec!(Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec!(SimpleSelector::LocalName(LocalName {
                                             name: DummyAtom::from("e"),
                                             lower_name: DummyAtom::from("e") }),
                                        SimpleSelector::Class(DummyAtom::from("foo")),
                                        SimpleSelector::ID(DummyAtom::from("bar"))),
                 next: None,
-            }),
+            })),
             pseudo_element: None,
             specificity: specificity(1, 1, 1),
         }))));
         assert_eq!(parse("e.foo #bar"), Ok(SelectorList(vec!(Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec!(SimpleSelector::ID(DummyAtom::from("bar"))),
                 next: Some((Arc::new(ComplexSelector {
                     compound_selector: vec!(SimpleSelector::LocalName(LocalName {
@@ -1335,7 +1458,7 @@ pub mod tests {
                                            SimpleSelector::Class(DummyAtom::from("foo"))),
                     next: None,
                 }), Combinator::Descendant)),
-            }),
+            })),
             pseudo_element: None,
             specificity: specificity(1, 1, 1),
         }))));
@@ -1343,7 +1466,7 @@ pub mod tests {
         // https://github.com/mozilla/servo/pull/1652
         let mut parser = DummyParser::default();
         assert_eq!(parse_ns("[Foo]", &parser), Ok(SelectorList(vec!(Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec!(SimpleSelector::AttrExists(AttrSelector {
                     name: DummyAtom::from("Foo"),
                     lower_name: DummyAtom::from("foo"),
@@ -1353,14 +1476,14 @@ pub mod tests {
                     }),
                 })),
                 next: None,
-            }),
+            })),
             pseudo_element: None,
             specificity: specificity(0, 1, 0),
         }))));
         assert_eq!(parse_ns("svg|circle", &parser), Err(()));
         parser.ns_prefixes.insert(DummyAtom("svg".into()), DummyAtom(SVG.into()));
         assert_eq!(parse_ns("svg|circle", &parser), Ok(SelectorList(vec![Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec![
                     SimpleSelector::Namespace(Namespace {
                         prefix: Some(DummyAtom("svg".into())),
@@ -1372,7 +1495,7 @@ pub mod tests {
                     })
                 ],
                 next: None,
-            }),
+            })),
             pseudo_element: None,
             specificity: specificity(0, 0, 1),
         }])));
@@ -1382,7 +1505,7 @@ pub mod tests {
         // https://github.com/servo/rust-selectors/pull/82
         parser.default_ns = Some(MATHML.into());
         assert_eq!(parse_ns("[Foo]", &parser), Ok(SelectorList(vec!(Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec![
                     SimpleSelector::Namespace(Namespace {
                         prefix: None,
@@ -1398,13 +1521,13 @@ pub mod tests {
                     }),
                 ],
                 next: None,
-            }),
+            })),
             pseudo_element: None,
             specificity: specificity(0, 1, 0),
         }))));
         // Default namespace does apply to type selectors
         assert_eq!(parse_ns("e", &parser), Ok(SelectorList(vec!(Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec!(
                     SimpleSelector::Namespace(Namespace {
                         prefix: None,
@@ -1415,12 +1538,12 @@ pub mod tests {
                         lower_name: DummyAtom::from("e") }),
                 ),
                 next: None,
-            }),
+            })),
             pseudo_element: None,
             specificity: specificity(0, 0, 1),
         }))));
         assert_eq!(parse("[attr |= \"foo\"]"), Ok(SelectorList(vec![Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec![
                     SimpleSelector::AttrDashMatch(AttrSelector {
                         name: DummyAtom::from("attr"),
@@ -1432,23 +1555,23 @@ pub mod tests {
                     }, DummyAtom::from("foo"))
                 ],
                 next: None,
-            }),
+            })),
             pseudo_element: None,
             specificity: specificity(0, 1, 0),
         }])));
         // https://github.com/mozilla/servo/issues/1723
         assert_eq!(parse("::before"), Ok(SelectorList(vec!(Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec!(),
                 next: None,
-            }),
+            })),
             pseudo_element: Some(PseudoElement::Before),
             specificity: specificity(0, 0, 1),
         }))));
         // https://github.com/servo/servo/issues/15335
         assert_eq!(parse(":: before"), Err(()));
         assert_eq!(parse("div ::after"), Ok(SelectorList(vec!(Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec!(),
                 next: Some((Arc::new(ComplexSelector {
                     compound_selector: vec!(SimpleSelector::LocalName(LocalName {
@@ -1456,12 +1579,12 @@ pub mod tests {
                         lower_name: DummyAtom::from("div") })),
                     next: None,
                 }), Combinator::Descendant)),
-            }),
+            })),
             pseudo_element: Some(PseudoElement::After),
             specificity: specificity(0, 0, 2),
         }))));
         assert_eq!(parse("#d1 > .ok"), Ok(SelectorList(vec![Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec![
                     SimpleSelector::Class(DummyAtom::from("ok")),
                 ],
@@ -1471,12 +1594,12 @@ pub mod tests {
                     ],
                     next: None,
                 }), Combinator::Child)),
-            }),
+            })),
             pseudo_element: None,
             specificity: (1 << 20) + (1 << 10) + (0 << 0),
         }])));
         assert_eq!(parse(":not(.babybel, #provel.old)"), Ok(SelectorList(vec!(Selector {
-            complex_selector: Arc::new(ComplexSelector {
+            inner: SelectorInner::new(Arc::new(ComplexSelector {
                 compound_selector: vec!(SimpleSelector::Negation(
                     vec!(
                         Arc::new(ComplexSelector {
@@ -1493,9 +1616,31 @@ pub mod tests {
                     )
                 )),
                 next: None,
-            }),
+            })),
             pseudo_element: None,
             specificity: specificity(1, 1, 0),
         }))));
+    }
+
+    struct TestVisitor {
+        seen: Vec<String>,
+    }
+
+    impl SelectorVisitor for TestVisitor {
+        type Impl = DummySelectorImpl;
+
+        fn visit_simple_selector(&mut self, s: &SimpleSelector<DummySelectorImpl>) -> bool {
+            let mut dest = String::new();
+            s.to_css(&mut dest).unwrap();
+            self.seen.push(dest);
+            true
+        }
+    }
+
+    #[test]
+    fn visitor() {
+        let mut test_visitor = TestVisitor { seen: vec![], };
+        parse(":not(:hover) ~ label").unwrap().0[0].visit(&mut test_visitor);
+        assert!(test_visitor.seen.contains(&":hover".into()));
     }
 }

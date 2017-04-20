@@ -18,6 +18,7 @@ use std::f32::consts::PI;
 use std::fmt;
 use std::ops::Mul;
 use style_traits::ToCss;
+use style_traits::values::specified::AllowedNumericType;
 use super::{Auto, CSSFloat, CSSInteger, HasViewportPercentage, Either, None_};
 use super::computed::{self, Context};
 use super::computed::{Shadow as ComputedShadow, ToComputedValue};
@@ -29,6 +30,7 @@ pub use self::grid::{GridLine, TrackKeyword};
 pub use self::image::{AngleOrCorner, ColorStop, EndingShape as GradientEndingShape, Gradient};
 pub use self::image::{GradientKind, HorizontalDirection, Image, ImageRect, LengthOrKeyword};
 pub use self::image::{LengthOrPercentageOrKeyword, SizeKeyword, VerticalDirection};
+pub use self::length::AbsoluteLength;
 pub use self::length::{FontRelativeLength, ViewportPercentageLength, CharacterWidth, Length, CalcLengthOrPercentage};
 pub use self::length::{Percentage, LengthOrNone, LengthOrNumber, LengthOrPercentage, LengthOrPercentageOrAuto};
 pub use self::length::{LengthOrPercentageOrNone, LengthOrPercentageOrAutoOrContent, NoCalcLength, CalcUnit};
@@ -207,12 +209,12 @@ impl<'a> Mul<CSSFloat> for &'a SimplifiedValueNode {
 }
 
 #[allow(missing_docs)]
-pub fn parse_integer(input: &mut Parser) -> Result<Integer, ()> {
+pub fn parse_integer(context: &ParserContext, input: &mut Parser) -> Result<Integer, ()> {
     match try!(input.next()) {
         Token::Number(ref value) => value.int_value.ok_or(()).map(Integer::new),
         Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
             let ast = try!(input.parse_nested_block(|i| {
-                CalcLengthOrPercentage::parse_sum(i, CalcUnit::Integer)
+                CalcLengthOrPercentage::parse_sum(context, i, CalcUnit::Integer)
             }));
 
             let mut result = None;
@@ -235,16 +237,26 @@ pub fn parse_integer(input: &mut Parser) -> Result<Integer, ()> {
 }
 
 #[allow(missing_docs)]
-pub fn parse_number(input: &mut Parser) -> Result<Number, ()> {
+pub fn parse_number(context: &ParserContext, input: &mut Parser) -> Result<Number, ()> {
+    parse_number_with_clamping_mode(context, input, AllowedNumericType::All)
+}
+
+#[allow(missing_docs)]
+pub fn parse_number_with_clamping_mode(context: &ParserContext,
+                                       input: &mut Parser,
+                                       clamping_mode: AllowedNumericType)
+                                       -> Result<Number, ()> {
     match try!(input.next()) {
-        Token::Number(ref value) => {
+        Token::Number(ref value) if clamping_mode.is_ok(value.value) => {
             Ok(Number {
                 value: value.value.min(f32::MAX).max(f32::MIN),
-                was_calc: false,
+                calc_clamping_mode: None,
             })
         },
         Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
-            let ast = try!(input.parse_nested_block(|i| CalcLengthOrPercentage::parse_sum(i, CalcUnit::Number)));
+            let ast = try!(input.parse_nested_block(|i| {
+                CalcLengthOrPercentage::parse_sum(context, i, CalcUnit::Number)
+            }));
 
             let mut result = None;
 
@@ -260,7 +272,7 @@ pub fn parse_number(input: &mut Parser) -> Result<Number, ()> {
                 Some(result) => {
                     Ok(Number {
                         value: result.min(f32::MAX).max(f32::MIN),
-                        was_calc: true,
+                        calc_clamping_mode: Some(clamping_mode),
                     })
                 },
                 _ => Err(())
@@ -297,9 +309,9 @@ impl BorderRadiusSize {
 
 impl Parse for BorderRadiusSize {
     #[inline]
-    fn parse(_context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
-        let first = try!(LengthOrPercentage::parse_non_negative(input));
-        let second = input.try(LengthOrPercentage::parse_non_negative)
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+        let first = try!(LengthOrPercentage::parse_non_negative(context, input));
+        let second = input.try(|i| LengthOrPercentage::parse_non_negative(context, i))
             .unwrap_or_else(|()| first.clone());
         Ok(BorderRadiusSize(Size2D::new(first, second)))
     }
@@ -427,11 +439,11 @@ impl Angle {
 
 impl Parse for Angle {
     /// Parses an angle according to CSS-VALUES § 6.1.
-    fn parse(_context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
         match try!(input.next()) {
             Token::Dimension(ref value, ref unit) => Angle::parse_dimension(value.value, unit),
             Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
-                input.parse_nested_block(CalcLengthOrPercentage::parse_angle)
+                input.parse_nested_block(|i| CalcLengthOrPercentage::parse_angle(context, i))
             },
             _ => Err(())
         }
@@ -456,12 +468,12 @@ impl Angle {
     /// unitless 0 angle and stores it as '0deg'. We can remove this and
     /// get back to the unified version Angle::parse once
     /// https://github.com/w3c/csswg-drafts/issues/1162 is resolved.
-    pub fn parse_with_unitless(_context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+    pub fn parse_with_unitless(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
         match try!(input.next()) {
             Token::Dimension(ref value, ref unit) => Angle::parse_dimension(value.value, unit),
             Token::Number(ref value) if value.value == 0. => Ok(Angle::zero()),
             Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
-                input.parse_nested_block(CalcLengthOrPercentage::parse_angle)
+                input.parse_nested_block(|i| CalcLengthOrPercentage::parse_angle(context, i))
             },
             _ => Err(())
         }
@@ -484,8 +496,8 @@ pub fn parse_border_radius(context: &ParserContext, input: &mut Parser) -> Resul
 }
 
 #[allow(missing_docs)]
-pub fn parse_border_width(input: &mut Parser) -> Result<Length, ()> {
-    input.try(Length::parse_non_negative).or_else(|()| {
+pub fn parse_border_width(context: &ParserContext, input: &mut Parser) -> Result<Length, ()> {
+    input.try(|i| Length::parse_non_negative(context, i)).or_else(|()| {
         match_ignore_ascii_case! { &try!(input.expect_ident()),
             "thin" => Ok(Length::from_px(1.)),
             "medium" => Ok(Length::from_px(3.)),
@@ -506,8 +518,8 @@ pub enum BorderWidth {
 }
 
 impl Parse for BorderWidth {
-    fn parse(_context: &ParserContext, input: &mut Parser) -> Result<BorderWidth, ()> {
-        match input.try(Length::parse_non_negative) {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<BorderWidth, ()> {
+        match input.try(|i| Length::parse_non_negative(context, i)) {
             Ok(length) => Ok(BorderWidth::Width(length)),
             Err(_) => match_ignore_ascii_case! { &try!(input.expect_ident()),
                "thin" => Ok(BorderWidth::Thin),
@@ -542,7 +554,7 @@ impl HasViewportPercentage for BorderWidth {
         match *self {
             BorderWidth::Thin | BorderWidth::Medium | BorderWidth::Thick => false,
             BorderWidth::Width(ref length) => length.has_viewport_percentage()
-         }
+        }
     }
 }
 
@@ -658,13 +670,13 @@ impl ToComputedValue for Time {
 }
 
 impl Parse for Time {
-    fn parse(_context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
         match input.next() {
             Ok(Token::Dimension(ref value, ref unit)) => {
                 Time::parse_dimension(value.value, &unit)
             }
             Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("calc") => {
-                input.parse_nested_block(CalcLengthOrPercentage::parse_time)
+                input.parse_nested_block(|i| CalcLengthOrPercentage::parse_time(context, i))
             }
             _ => Err(())
         }
@@ -689,45 +701,42 @@ impl ToCss for Time {
 #[allow(missing_docs)]
 pub struct Number {
     /// The numeric value itself.
-    pub value: CSSFloat,
-    /// Whether this came from a `calc()` expression. This is needed for
-    /// serialization purposes, since `calc(1)` should still serialize to
-    /// `calc(1)`, not just `1`.
-    was_calc: bool,
+    value: CSSFloat,
+    /// If this number came from a calc() expression, this tells how clamping
+    /// should be done on the value.
+    calc_clamping_mode: Option<AllowedNumericType>,
 }
 
 no_viewport_percentage!(Number);
 
 impl Parse for Number {
-    fn parse(_context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
-        parse_number(input)
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+        parse_number(context, input)
     }
 }
 
 impl Number {
-    fn parse_with_minimum(input: &mut Parser, min: CSSFloat) -> Result<Number, ()> {
-        match parse_number(input) {
-            Ok(value) if value.value >= min => Ok(value),
-            _ => Err(()),
-        }
-    }
-
     /// Returns a new number with the value `val`.
     pub fn new(val: CSSFloat) -> Self {
         Number {
             value: val,
-            was_calc: false,
+            calc_clamping_mode: None,
         }
     }
 
-    #[allow(missing_docs)]
-    pub fn parse_non_negative(input: &mut Parser) -> Result<Number, ()> {
-        Number::parse_with_minimum(input, 0.0)
+    /// Returns the numeric value, clamped if needed.
+    pub fn get(&self) -> f32 {
+        self.calc_clamping_mode.map_or(self.value, |mode| mode.clamp(self.value))
     }
 
     #[allow(missing_docs)]
-    pub fn parse_at_least_one(input: &mut Parser) -> Result<Number, ()> {
-        Number::parse_with_minimum(input, 1.0)
+    pub fn parse_non_negative(context: &ParserContext, input: &mut Parser) -> Result<Number, ()> {
+        parse_number_with_clamping_mode(context, input, AllowedNumericType::NonNegative)
+    }
+
+    #[allow(missing_docs)]
+    pub fn parse_at_least_one(context: &ParserContext, input: &mut Parser) -> Result<Number, ()> {
+        parse_number_with_clamping_mode(context, input, AllowedNumericType::AtLeastOne)
     }
 }
 
@@ -735,13 +744,13 @@ impl ToComputedValue for Number {
     type ComputedValue = CSSFloat;
 
     #[inline]
-    fn to_computed_value(&self, _: &Context) -> CSSFloat { self.value }
+    fn to_computed_value(&self, _: &Context) -> CSSFloat { self.get() }
 
     #[inline]
     fn from_computed_value(computed: &CSSFloat) -> Self {
         Number {
             value: *computed,
-            was_calc: false,
+            calc_clamping_mode: None,
         }
     }
 }
@@ -750,11 +759,11 @@ impl ToCss for Number {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result
         where W: fmt::Write,
     {
-        if self.was_calc {
+        if self.calc_clamping_mode.is_some() {
             dest.write_str("calc(")?;
         }
         self.value.to_css(dest)?;
-        if self.was_calc {
+        if self.calc_clamping_mode.is_some() {
             dest.write_str(")")?;
         }
         Ok(())
@@ -774,12 +783,12 @@ pub enum NumberOrPercentage {
 no_viewport_percentage!(NumberOrPercentage);
 
 impl Parse for NumberOrPercentage {
-    fn parse(_context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
         if let Ok(per) = input.try(Percentage::parse_non_negative) {
             return Ok(NumberOrPercentage::Percentage(per));
         }
 
-        Number::parse_non_negative(input).map(NumberOrPercentage::Number)
+        Number::parse_non_negative(context, input).map(NumberOrPercentage::Number)
     }
 }
 
@@ -800,8 +809,8 @@ pub struct Opacity(Number);
 no_viewport_percentage!(Opacity);
 
 impl Parse for Opacity {
-    fn parse(_context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
-        parse_number(input).map(Opacity)
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+        parse_number(context, input).map(Opacity)
     }
 }
 
@@ -859,27 +868,27 @@ impl Integer {
 no_viewport_percentage!(Integer);
 
 impl Parse for Integer {
-    fn parse(_context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
-        parse_integer(input)
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+        parse_integer(context, input)
     }
 }
 
 impl Integer {
-    fn parse_with_minimum(input: &mut Parser, min: i32) -> Result<Integer, ()> {
-        match parse_integer(input) {
+    fn parse_with_minimum(context: &ParserContext, input: &mut Parser, min: i32) -> Result<Integer, ()> {
+        match parse_integer(context, input) {
             Ok(value) if value.value() >= min => Ok(value),
             _ => Err(()),
         }
     }
 
     #[allow(missing_docs)]
-    pub fn parse_non_negative(input: &mut Parser) -> Result<Integer, ()> {
-        Integer::parse_with_minimum(input, 0)
+    pub fn parse_non_negative(context: &ParserContext, input: &mut Parser) -> Result<Integer, ()> {
+        Integer::parse_with_minimum(context, input, 0)
     }
 
     #[allow(missing_docs)]
-    pub fn parse_positive(input: &mut Parser) -> Result<Integer, ()> {
-        Integer::parse_with_minimum(input, 1)
+    pub fn parse_positive(context: &ParserContext, input: &mut Parser) -> Result<Integer, ()> {
+        Integer::parse_with_minimum(context, input, 1)
     }
 }
 
@@ -989,7 +998,7 @@ impl ToComputedValue for Shadow {
 impl Shadow {
     // disable_spread_and_inset is for filter: drop-shadow(...)
     #[allow(missing_docs)]
-    pub fn parse(context:  &ParserContext, input: &mut Parser, disable_spread_and_inset: bool) -> Result<Shadow, ()> {
+    pub fn parse(context: &ParserContext, input: &mut Parser, disable_spread_and_inset: bool) -> Result<Shadow, ()> {
         let mut lengths = [Length::zero(), Length::zero(), Length::zero(), Length::zero()];
         let mut lengths_parsed = false;
         let mut color = None;
@@ -1006,7 +1015,7 @@ impl Shadow {
                 if let Ok(value) = input.try(|i| Length::parse(context, i)) {
                     lengths[0] = value;
                     lengths[1] = try!(Length::parse(context, input));
-                    if let Ok(value) = input.try(|i| Length::parse_non_negative(i)) {
+                    if let Ok(value) = input.try(|i| Length::parse_non_negative(context, i)) {
                         lengths[2] = value;
                         if !disable_spread_and_inset {
                             if let Ok(value) = input.try(|i| Length::parse(context, i)) {
@@ -1203,14 +1212,14 @@ pub type LengthOrPercentageOrNumber = Either<LengthOrPercentage, Number>;
 
 impl LengthOrPercentageOrNumber {
     /// parse a <length-percentage> | <number> enforcing that the contents aren't negative
-    pub fn parse_non_negative(_: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
+    pub fn parse_non_negative(context: &ParserContext, input: &mut Parser) -> Result<Self, ()> {
         // NB: Parse numbers before Lengths so we are consistent about how to
         // recognize and serialize "0".
-        if let Ok(num) = input.try(Number::parse_non_negative) {
+        if let Ok(num) = input.try(|i| Number::parse_non_negative(context, i)) {
             return Ok(Either::Second(num))
         }
 
-        LengthOrPercentage::parse_non_negative(input).map(Either::First)
+        LengthOrPercentage::parse_non_negative(context, input).map(Either::First)
     }
 }
 

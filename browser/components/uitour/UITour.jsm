@@ -662,7 +662,12 @@ this.UITour = {
       }
     }
 
-    this.initForBrowser(browser, window);
+    // For performance reasons, only call initForBrowser if we did something
+    // that will require a teardownTourForBrowser call later.
+    // getConfiguration (called from about:home) doesn't require any future
+    // uninitialization.
+    if (action != "getConfiguration")
+      this.initForBrowser(browser, window);
 
     return true;
   },
@@ -679,7 +684,7 @@ this.UITour = {
     }
     this.tourBrowsersByWindow.get(window).add(aBrowser);
 
-    Services.obs.addObserver(this, "message-manager-close", false);
+    Services.obs.addObserver(this, "message-manager-close");
 
     window.addEventListener("SSWindowClosing", this);
   },

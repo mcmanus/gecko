@@ -131,8 +131,7 @@ void Gecko_LoadStyleSheet(mozilla::css::Loader* loader,
                           RawGeckoURLExtraData* base_url_data,
                           const uint8_t* url_bytes,
                           uint32_t url_length,
-                          const uint8_t* media_bytes,
-                          uint32_t media_length);
+                          RawServoMediaListStrong media_list);
 
 // By default, Servo walks the DOM by traversing the siblings of the DOM-view
 // first child. This generally works, but misses anonymous children, which we
@@ -198,6 +197,7 @@ bool Gecko_StyleAnimationsEquals(RawGeckoStyleAnimationListBorrowed,
                                  RawGeckoStyleAnimationListBorrowed);
 void Gecko_UpdateAnimations(RawGeckoElementBorrowed aElement,
                             nsIAtom* aPseudoTagOrNull,
+                            ServoComputedValuesBorrowedOrNull aOldComputedValues,
                             ServoComputedValuesBorrowedOrNull aComputedValues,
                             ServoComputedValuesBorrowedOrNull aParentComputedValues,
                             mozilla::UpdateAnimationsTasks aTaskBits);
@@ -205,6 +205,18 @@ bool Gecko_ElementHasAnimations(RawGeckoElementBorrowed aElement,
                                 nsIAtom* aPseudoTagOrNull);
 bool Gecko_ElementHasCSSAnimations(RawGeckoElementBorrowed aElement,
                                    nsIAtom* aPseudoTagOrNull);
+bool Gecko_ElementHasCSSTransitions(RawGeckoElementBorrowed aElement,
+                                    nsIAtom* aPseudoTagOrNull);
+size_t Gecko_ElementTransitions_Length(RawGeckoElementBorrowed aElement,
+                                       nsIAtom* aPseudoTagOrNull);
+nsCSSPropertyID Gecko_ElementTransitions_PropertyAt(
+  RawGeckoElementBorrowed aElement,
+  nsIAtom* aPseudoTagOrNull,
+  size_t aIndex);
+RawServoAnimationValueBorrowedOrNull Gecko_ElementTransitions_EndValueAt(
+  RawGeckoElementBorrowed aElement,
+  nsIAtom* aPseudoTagOrNull,
+  size_t aIndex);
 double Gecko_GetProgressFromComputedTiming(RawGeckoComputedTimingBorrowed aComputedTiming);
 double Gecko_GetPositionInSegment(
   RawGeckoAnimationPropertySegmentBorrowed aSegment,
@@ -340,11 +352,11 @@ void Gecko_ResetStyleCoord(nsStyleUnit* unit, nsStyleUnion* value);
 // Set an nsStyleCoord to a computed `calc()` value
 void Gecko_SetStyleCoordCalcValue(nsStyleUnit* unit, nsStyleUnion* value, nsStyleCoord::CalcValue calc);
 
-void Gecko_CopyClipPathValueFrom(mozilla::StyleShapeSource* dst, const mozilla::StyleShapeSource* src);
+void Gecko_CopyShapeSourceFrom(mozilla::StyleShapeSource* dst, const mozilla::StyleShapeSource* src);
 
-void Gecko_DestroyClipPath(mozilla::StyleShapeSource* clip);
+void Gecko_DestroyShapeSource(mozilla::StyleShapeSource* shape);
 mozilla::StyleBasicShape* Gecko_NewBasicShape(mozilla::StyleBasicShapeType type);
-void Gecko_StyleClipPath_SetURLValue(mozilla::StyleShapeSource* clip, ServoBundledURI uri);
+void Gecko_StyleShapeSource_SetURLValue(mozilla::StyleShapeSource* shape, ServoBundledURI uri);
 
 void Gecko_ResetFilters(nsStyleEffects* effects, size_t new_len);
 void Gecko_CopyFiltersFrom(nsStyleEffects* aSrc, nsStyleEffects* aDest);
@@ -422,6 +434,8 @@ void InitializeServo();
 void ShutdownServo();
 
 const nsMediaFeature* Gecko_GetMediaFeatures();
+nsCSSKeyword Gecko_LookupCSSKeyword(const uint8_t* string, uint32_t len);
+const char* Gecko_CSSKeywordString(nsCSSKeyword keyword, uint32_t* len);
 
 // Font face rule
 // Creates and returns a new (already-addrefed) nsCSSFontFaceRule object.

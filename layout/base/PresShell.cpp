@@ -853,7 +853,7 @@ PresShell::PresShell()
   mReflowCountMgr->SetPresContext(mPresContext);
   mReflowCountMgr->SetPresShell(this);
 #endif
-  mLoadBegin = TimeStamp::Now();
+  mLastOSWake = mLoadBegin = TimeStamp::Now();
 
   mSelectionFlags = nsISelectionDisplay::DISPLAY_TEXT | nsISelectionDisplay::DISPLAY_IMAGES;
   mIsThemeSupportDisabled = false;
@@ -965,9 +965,7 @@ PresShell::Init(nsIDocument* aDocument,
 
   // Bind the context to the presentation shell.
   mPresContext = aPresContext;
-  StyleBackendType backend = aStyleSet->IsServo() ? StyleBackendType::Servo
-                                                  : StyleBackendType::Gecko;
-  aPresContext->AttachShell(this, backend);
+  mPresContext->AttachShell(this, aStyleSet->BackendType());
 
   // Now we can initialize the style set. Make sure to set the member before
   // calling Init, since various subroutines need to find the style set off
@@ -1025,6 +1023,7 @@ PresShell::Init(nsIDocument* aDocument,
       os->AddObserver(this, "chrome-flush-skin-caches", false);
 #endif
       os->AddObserver(this, "memory-pressure", false);
+      os->AddObserver(this, NS_WIDGET_WAKE_OBSERVER_TOPIC, false);
     }
   }
 
@@ -1252,6 +1251,7 @@ PresShell::Destroy()
       os->RemoveObserver(this, "chrome-flush-skin-caches");
 #endif
       os->RemoveObserver(this, "memory-pressure");
+      os->RemoveObserver(this, NS_WIDGET_WAKE_OBSERVER_TOPIC);
     }
   }
 
@@ -4608,7 +4608,9 @@ nsIPresShell::RestyleForCSSRuleChanges()
   // Even if we have no frames, we can end up styling those when creating
   // them, and it's important for Servo to know that it needs to use the
   // correct styles.
-  if (mStyleSet->IsServo()) {
+  // We don't do this notification if author styles are disabled, because
+  // the ServoStyleSet has already taken care of it.
+  if (mStyleSet->IsServo() && !mStyleSet->AsServo()->GetAuthorStyleDisabled()) {
     mStyleSet->AsServo()->NoteStyleSheetsChanged();
   }
 
@@ -8253,6 +8255,7 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent,
 
   if (Telemetry::CanRecordBase() &&
       !aEvent->mTimeStamp.IsNull() &&
+      aEvent->mTimeStamp > mLastOSWake &&
       aEvent->AsInputEvent()) {
     double millis = (TimeStamp::Now() - aEvent->mTimeStamp).ToMilliseconds();
     Telemetry::Accumulate(Telemetry::INPUT_EVENT_RESPONSE_MS, millis);
@@ -9686,6 +9689,10 @@ PresShell::Observe(nsISupports* aSubject,
       DoUpdateApproximateFrameVisibility(/* aRemoveOnly = */ true);
     }
     return NS_OK;
+  }
+
+  if (!nsCRT::strcmp(aTopic, NS_WIDGET_WAKE_OBSERVER_TOPIC)) {
+    mLastOSWake = TimeStamp::Now();
   }
 
   NS_WARNING("unrecognized topic in PresShell::Observe");

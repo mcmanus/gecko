@@ -192,7 +192,7 @@ CacheRegisterAllocator::saveIonLiveRegisters(MacroAssembler& masm, LiveRegisterS
     // work. Try to keep it simple by taking one small step at a time.
 
     // Step 1. Discard any dead operands so we can reuse their registers.
-    freeDeadOperandRegisters();
+    freeDeadOperandLocations(masm);
 
     // Step 2. Figure out the size of our live regs.
     size_t sizeOfLiveRegsInBytes =
@@ -292,6 +292,8 @@ CacheRegisterAllocator::saveIonLiveRegisters(MacroAssembler& masm, LiveRegisterS
         }
         masm.PushRegsInMask(liveRegs);
     }
+    freePayloadSlots_.clear();
+    freeValueSlots_.clear();
 
     MOZ_ASSERT(masm.framePushed() == ionScript->frameSize() + sizeOfLiveRegsInBytes);
 
@@ -424,8 +426,36 @@ IonCacheIRCompiler::init()
         allocator.initInputLocation(0, ic->environment(), JSVAL_TYPE_OBJECT);
         break;
       }
+      case CacheKind::BindName: {
+        IonBindNameIC* ic = ic_->asBindNameIC();
+        Register output = ic->output();
+
+        available.add(output);
+        available.add(ic->temp());
+
+        liveRegs_.emplace(ic->liveRegs());
+        outputUnchecked_.emplace(TypedOrValueRegister(MIRType::Object, AnyRegister(output)));
+
+        MOZ_ASSERT(numInputs == 1);
+        allocator.initInputLocation(0, ic->environment(), JSVAL_TYPE_OBJECT);
+        break;
+      }
       case CacheKind::In:
         MOZ_CRASH("Invalid cache");
+      case CacheKind::HasOwn: {
+        IonHasOwnIC* ic = ic_->asHasOwnIC();
+        Register output = ic->output();
+
+        available.add(output);
+
+        liveRegs_.emplace(ic->liveRegs());
+        outputUnchecked_.emplace(TypedOrValueRegister(MIRType::Boolean, AnyRegister(output)));
+
+        MOZ_ASSERT(numInputs == 2);
+        allocator.initInputLocation(0, ic->id());
+        allocator.initInputLocation(1, ic->value());
+        break;
+      }
     }
 
     if (liveRegs_)
@@ -532,6 +562,22 @@ IonCacheIRCompiler::emitGuardGroup()
         return false;
 
     masm.branchTestObjGroup(Assembler::NotEqual, obj, group, failure->label());
+    return true;
+}
+
+bool
+IonCacheIRCompiler::emitGuardGroupHasUnanalyzedNewScript()
+{
+    ObjectGroup* group = groupStubField(reader.stubOffset());
+    AutoScratchRegister scratch1(allocator, masm);
+    AutoScratchRegister scratch2(allocator, masm);
+
+    FailurePath* failure;
+    if (!addFailurePath(&failure))
+        return false;
+
+    masm.movePtr(ImmGCPtr(group), scratch1);
+    masm.guardGroupHasUnanalyzedNewScript(scratch1, scratch2, failure->label());
     return true;
 }
 
@@ -993,6 +1039,33 @@ IonCacheIRCompiler::emitCallProxyGetByValueResult()
     masm.storeCallResultValue(output);
     return true;
 }
+
+typedef bool (*ProxyHasOwnFn)(JSContext*, HandleObject, HandleValue, MutableHandleValue);
+static const VMFunction ProxyHasOwnInfo = FunctionInfo<ProxyHasOwnFn>(ProxyHasOwn, "ProxyHasOwn");
+
+bool
+IonCacheIRCompiler::emitCallProxyHasOwnResult()
+{
+    AutoSaveLiveRegisters save(*this);
+    AutoOutputRegister output(*this);
+
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+    ValueOperand idVal = allocator.useValueRegister(masm, reader.valOperandId());
+
+    allocator.discardStack(masm);
+
+    prepareVMCall(masm);
+
+    masm.Push(idVal);
+    masm.Push(obj);
+
+    if (!callVM(masm, ProxyHasOwnInfo))
+        return false;
+
+    masm.storeCallResultValue(output);
+    return true;
+}
+
 
 bool
 IonCacheIRCompiler::emitLoadUnboxedPropertyResult()

@@ -31,6 +31,7 @@ mod common {
 #[cfg(feature = "bindgen")]
 mod bindings {
     use bindgen::{Builder, CodegenConfig};
+    use bindgen::chooser::{EnumVariantCustomBehavior, EnumVariantValue, TypeChooser};
     use regex::Regex;
     use std::cmp;
     use std::collections::HashSet;
@@ -258,6 +259,23 @@ mod bindings {
             .collect()
     }
 
+    #[derive(Debug)]
+    struct Callbacks;
+    impl TypeChooser for Callbacks {
+        fn enum_variant_behavior(&self,
+                                 enum_name: Option<&str>,
+                                 variant_name: &str,
+                                 _variant_value: EnumVariantValue)
+                                 -> Option<EnumVariantCustomBehavior> {
+            if enum_name.map_or(false, |n| n == "nsCSSPropertyID") &&
+               variant_name.starts_with("eCSSProperty_COUNT") {
+                Some(EnumVariantCustomBehavior::Constify)
+            } else {
+                None
+            }
+        }
+    }
+
     pub fn generate_structs(build_type: BuildType) {
         let mut builder = Builder::get_initial_builder(build_type)
             .enable_cxx_namespaces()
@@ -296,12 +314,14 @@ mod bindings {
             .hide_type("nsString")
             .bitfield_enum("nsChangeHint")
             .bitfield_enum("nsRestyleHint")
-            .constified_enum("UpdateAnimationsTasks");
+            .constified_enum("UpdateAnimationsTasks")
+            .type_chooser(Box::new(Callbacks));
         let whitelist_vars = [
             "NS_THEME_.*",
             "NODE_.*",
             "NS_FONT_.*",
             "NS_STYLE_.*",
+            "NS_MATHML_.*",
             "NS_RADIUS_.*",
             "BORDER_COLOR_.*",
             "BORDER_STYLE_.*",
@@ -447,6 +467,7 @@ mod bindings {
             "mozilla::Side",
             "mozilla::binding_danger::AssertAndSuppressCleanupPolicy",
             "RawServoAnimationValueMapBorrowed",
+            "mozilla::LengthParsingMode",
         ];
         let opaque_types = [
             "std::pair__PCCP",
@@ -701,6 +722,7 @@ mod bindings {
             "ServoStyleSheet",
             "EffectCompositor_CascadeLevel",
             "UpdateAnimationsTasks",
+            "LengthParsingMode",
         ];
         struct ArrayType {
             cpp_type: &'static str,

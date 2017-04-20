@@ -339,7 +339,7 @@ ${helpers.predefined_type("clip",
             if let Ok(function_name) = input.try(|input| input.expect_function()) {
                 filters.push(try!(input.parse_nested_block(|input| {
                     match_ignore_ascii_case! { &function_name,
-                        "blur" => specified::Length::parse_non_negative(input).map(SpecifiedFilter::Blur),
+                        "blur" => specified::Length::parse_non_negative(context, input).map(SpecifiedFilter::Blur),
                         "brightness" => parse_factor(input).map(SpecifiedFilter::Brightness),
                         "contrast" => parse_factor(input).map(SpecifiedFilter::Contrast),
                         "grayscale" => parse_factor(input).map(SpecifiedFilter::Grayscale),
@@ -439,7 +439,7 @@ pub struct OriginParseResult {
 
 pub fn parse_origin(context: &ParserContext, input: &mut Parser) -> Result<OriginParseResult,()> {
     use values::specified::{LengthOrPercentage, Percentage};
-    let (mut horizontal, mut vertical, mut depth) = (None, None, None);
+    let (mut horizontal, mut vertical, mut depth, mut horizontal_is_center) = (None, None, None, false);
     loop {
         if let Err(_) = input.try(|input| {
             let token = try!(input.expect_ident());
@@ -448,12 +448,16 @@ pub fn parse_origin(context: &ParserContext, input: &mut Parser) -> Result<Origi
                 "left" => {
                     if horizontal.is_none() {
                         horizontal = Some(LengthOrPercentage::Percentage(Percentage(0.0)))
+                    } else if horizontal_is_center && vertical.is_none() {
+                        vertical = Some(LengthOrPercentage::Percentage(Percentage(0.5)));
+                        horizontal = Some(LengthOrPercentage::Percentage(Percentage(0.0)));
                     } else {
                         return Err(())
                     }
                 },
                 "center" => {
                     if horizontal.is_none() {
+                        horizontal_is_center = true;
                         horizontal = Some(LengthOrPercentage::Percentage(Percentage(0.5)))
                     } else if vertical.is_none() {
                         vertical = Some(LengthOrPercentage::Percentage(Percentage(0.5)))
@@ -464,6 +468,9 @@ pub fn parse_origin(context: &ParserContext, input: &mut Parser) -> Result<Origi
                 "right" => {
                     if horizontal.is_none() {
                         horizontal = Some(LengthOrPercentage::Percentage(Percentage(1.0)))
+                    } else if horizontal_is_center && vertical.is_none() {
+                        vertical = Some(LengthOrPercentage::Percentage(Percentage(0.5)));
+                        horizontal = Some(LengthOrPercentage::Percentage(Percentage(1.0)));
                     } else {
                         return Err(())
                     }

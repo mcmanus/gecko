@@ -24,6 +24,7 @@
 #include "mozilla/ipc/MessageLink.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/MozPromise.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/NotNull.h"
 #include "mozilla/UniquePtr.h"
@@ -376,8 +377,15 @@ public:
     GetActorEventTarget();
 
 protected:
+    // Override this method in top-level protocols to change the event target
+    // for a new actor (and its sub-actors).
     virtual already_AddRefed<nsIEventTarget>
     GetConstructedEventTarget(const Message& aMsg) { return nullptr; }
+
+    // Override this method in top-level protocols to change the event target
+    // for specific messages.
+    virtual already_AddRefed<nsIEventTarget>
+    GetSpecificMessageEventTarget(const Message& aMsg) { return nullptr; }
 
     virtual void SetEventTargetForActorInternal(IProtocol* aActor, nsIEventTarget* aEventTarget);
 

@@ -20,10 +20,11 @@
 #include "mozilla/dom/MediaQueryListBinding.h"
 
 class nsIDocument;
-class nsMediaList;
 
 namespace mozilla {
 namespace dom {
+
+class MediaList;
 
 class MediaQueryList final : public DOMEventTargetHelper,
                              public PRCList
@@ -52,21 +53,15 @@ public:
   void AddListener(EventListener* aListener, ErrorResult& aRv);
   void RemoveListener(EventListener* aListener, ErrorResult& aRv);
 
-  EventHandlerNonNull* GetOnchange();
-  void SetOnchange(EventHandlerNonNull* aCallback);
-
   using nsIDOMEventTarget::AddEventListener;
-  using nsIDOMEventTarget::RemoveEventListener;
 
   virtual void AddEventListener(const nsAString& aType,
                                 EventListener* aCallback,
                                 const AddEventListenerOptionsOrBoolean& aOptions,
                                 const Nullable<bool>& aWantsUntrusted,
                                 ErrorResult& aRv) override;
-  virtual void RemoveEventListener(const nsAString& aType,
-                                   EventListener* aCallback,
-                                   const EventListenerOptionsOrBoolean& aOptions,
-                                   ErrorResult& aRv) override;
+
+  IMPL_EVENT_HANDLER(change)
 
   bool HasListeners();
 
@@ -74,8 +69,6 @@ public:
 
 private:
   void RecomputeMatches();
-
-  void UpdateMustKeepAlive();
 
   // We only need a pointer to the document to support lazy
   // reevaluation following dynamic changes.  However, this lazy
@@ -93,10 +86,9 @@ private:
   // linked list.
   nsCOMPtr<nsIDocument> mDocument;
 
-  RefPtr<nsMediaList> mMediaList;
+  RefPtr<MediaList> mMediaList;
   bool mMatches;
   bool mMatchesValid;
-  bool mIsKeptAlive;
 };
 
 } // namespace dom

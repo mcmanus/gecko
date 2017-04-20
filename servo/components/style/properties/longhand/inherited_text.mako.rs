@@ -45,18 +45,18 @@
         }
     }
     /// normal | <number> | <length> | <percentage>
-    pub fn parse(_: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
         use cssparser::Token;
         use std::ascii::AsciiExt;
 
         // We try to parse as a Number first because, for 'line-height', we want
         // "0" to be parsed as a plain Number rather than a Length (0px); this
         // matches the behaviour of all major browsers
-        if let Ok(number) = input.try(specified::Number::parse_non_negative) {
+        if let Ok(number) = input.try(|i| specified::Number::parse_non_negative(context, i)) {
             return Ok(SpecifiedValue::Number(number))
         }
 
-        if let Ok(lop) = input.try(specified::LengthOrPercentage::parse_non_negative) {
+        if let Ok(lop) = input.try(|i| specified::LengthOrPercentage::parse_non_negative(context, i)) {
             return Ok(SpecifiedValue::LengthOrPercentage(lop))
         }
 
@@ -406,7 +406,7 @@ ${helpers.single_keyword("text-align-last",
     % endif
 </%helpers:longhand>
 
-<%helpers:longhand name="letter-spacing" boxed="True" animation_type="normal"
+<%helpers:longhand name="letter-spacing" animation_type="normal"
                    spec="https://drafts.csswg.org/css-text/#propdef-letter-spacing">
     use std::fmt;
     use style_traits::ToCss;
@@ -664,6 +664,7 @@ ${helpers.single_keyword("text-align-last",
 
 <%helpers:single_keyword_computed name="white-space"
                                   values="normal pre nowrap pre-wrap pre-line"
+                                  extra_gecko_values="-moz-pre-space"
                                   gecko_constant_prefix="NS_STYLE_WHITESPACE"
                                   needs_conversion="True"
                                   animation_type="none"
@@ -673,6 +674,7 @@ ${helpers.single_keyword("text-align-last",
     impl ComputedValueAsSpecified for SpecifiedValue {}
     no_viewport_percentage!(SpecifiedValue);
 
+    % if product != "gecko":
     impl SpecifiedValue {
         pub fn allow_wrap(&self) -> bool {
             match *self {
@@ -704,6 +706,7 @@ ${helpers.single_keyword("text-align-last",
             }
         }
     }
+    % endif
 </%helpers:single_keyword_computed>
 
 <%helpers:longhand name="text-shadow" animation_type="normal"
@@ -1208,7 +1211,7 @@ ${helpers.predefined_type(
     "-moz-tab-size", "LengthOrNumber",
     "::values::Either::Second(8.0)",
     "parse_non_negative",
-    products="gecko", boxed=True, animation_type="none",
+    products="gecko", animation_type="none",
     spec="https://drafts.csswg.org/css-text-3/#tab-size-property")}
 
 
@@ -1229,7 +1232,7 @@ ${helpers.predefined_type(
     complex_color=True, need_clone=True,
     spec="https://compat.spec.whatwg.org/#the-webkit-text-stroke-color")}
 
-<%helpers:longhand products="gecko" name="-webkit-text-stroke-width" boxed="True" animation_type="none"
+<%helpers:longhand products="gecko" name="-webkit-text-stroke-width" animation_type="none"
                    spec="https://compat.spec.whatwg.org/#the-webkit-text-stroke-width">
     use app_units::Au;
     use std::fmt;
@@ -1271,9 +1274,6 @@ ${helpers.single_keyword("ruby-position", "over under",
 // CSS Writing Modes Module Level 3
 // https://drafts.csswg.org/css-writing-modes-3/
 
-// The spec has "digits <integer>?" value in addition. But that value is
-// at-risk, and Gecko's layout code doesn't support that either. So we
-// can just take the easy way for now.
 ${helpers.single_keyword("text-combine-upright", "none all",
                          products="gecko", animation_type="none",
                          spec="https://drafts.csswg.org/css-writing-modes-3/#text-combine-upright")}

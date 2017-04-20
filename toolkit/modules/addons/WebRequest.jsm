@@ -30,6 +30,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "WebRequestUpload",
 
 XPCOMUtils.defineLazyGetter(this, "ExtensionError", () => ExtensionUtils.ExtensionError);
 
+let WebRequestListener = Components.Constructor("@mozilla.org/webextensions/webRequestListener;1",
+                                                "nsIWebRequestListener", "init");
+
 function attachToChannel(channel, key, data) {
   if (channel instanceof Ci.nsIWritablePropertyBag2) {
     let wrapper = {wrappedJSObject: data};
@@ -67,7 +70,7 @@ var RequestId = {
 };
 
 function runLater(job) {
-  Services.tm.currentThread.dispatch(job, Ci.nsIEventTarget.DISPATCH_NORMAL);
+  Services.tm.dispatchToMainThread(job);
 }
 
 function parseFilter(filter) {
@@ -326,10 +329,10 @@ var ContentPolicyManager = {
 };
 ContentPolicyManager.init();
 
-function StartStopListener(manager, loadContext) {
+function StartStopListener(manager, channel, loadContext) {
   this.manager = manager;
   this.loadContext = loadContext;
-  this.orig = null;
+  new WebRequestListener(this, channel);
 }
 
 StartStopListener.prototype = {
@@ -338,20 +341,10 @@ StartStopListener.prototype = {
 
   onStartRequest: function(request, context) {
     this.manager.onStartRequest(request, this.loadContext);
-    this.orig.onStartRequest(request, context);
   },
 
   onStopRequest(request, context, statusCode) {
-    try {
-      this.orig.onStopRequest(request, context, statusCode);
-    } catch (e) {
-      Cu.reportError(e);
-    }
     this.manager.onStopRequest(request, this.loadContext);
-  },
-
-  onDataAvailable(...args) {
-    return this.orig.onDataAvailable(...args);
   },
 };
 
@@ -558,7 +551,7 @@ HttpObserverManager = {
     let needModify = this.listeners.opening.size || this.listeners.modify.size || this.listeners.afterModify.size;
     if (needModify && !this.modifyInitialized) {
       this.modifyInitialized = true;
-      Services.obs.addObserver(this, "http-on-modify-request", false);
+      Services.obs.addObserver(this, "http-on-modify-request");
     } else if (!needModify && this.modifyInitialized) {
       this.modifyInitialized = false;
       Services.obs.removeObserver(this, "http-on-modify-request");
@@ -573,9 +566,9 @@ HttpObserverManager = {
 
     if (needExamine && !this.examineInitialized) {
       this.examineInitialized = true;
-      Services.obs.addObserver(this, "http-on-examine-response", false);
-      Services.obs.addObserver(this, "http-on-examine-cached-response", false);
-      Services.obs.addObserver(this, "http-on-examine-merged-response", false);
+      Services.obs.addObserver(this, "http-on-examine-response");
+      Services.obs.addObserver(this, "http-on-examine-cached-response");
+      Services.obs.addObserver(this, "http-on-examine-merged-response");
     } else if (!needExamine && this.examineInitialized) {
       this.examineInitialized = false;
       Services.obs.removeObserver(this, "http-on-examine-response");
@@ -1000,9 +993,7 @@ HttpObserverManager = {
         let responseStatus = channel.responseStatus;
         // skip redirections, https://bugzilla.mozilla.org/show_bug.cgi?id=728901#c8
         if (responseStatus < 300 || responseStatus >= 400) {
-          let listener = new StartStopListener(this, loadContext);
-          let orig = channel.setNewListener(listener);
-          listener.orig = orig;
+          new StartStopListener(this, channel, loadContext);
           channelData.hasListener = true;
         }
       }

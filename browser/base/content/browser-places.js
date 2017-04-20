@@ -298,24 +298,23 @@ var StarUI = {
         parent.setAttribute("open", "true");
       }
     }
-    let panel = this.panel;
-    let target = panel;
-    if (target.parentNode) {
-      // By targeting the panel's parent and using a capturing listener, we
-      // can have our listener called before others waiting for the panel to
-      // be shown (which probably expect the panel to be fully initialized)
-      target = target.parentNode;
-    }
-    target.addEventListener("popupshown", function shownListener(event) {
-      if (event.target == panel) {
-        target.removeEventListener("popupshown", shownListener, true);
-
-        gEditItemOverlay.initPanel({ node: aNode
-                                   , hiddenRows: ["description", "location",
-                                                  "loadInSidebar", "keyword"]
-                                   , focusedElement: "preferred"});
+    let onPanelReady = fn => {
+      let target = this.panel;
+      if (target.parentNode) {
+        // By targeting the panel's parent and using a capturing listener, we
+        // can have our listener called before others waiting for the panel to
+        // be shown (which probably expect the panel to be fully initialized)
+        target = target.parentNode;
       }
-    }, true);
+      target.addEventListener("popupshown", function(event) {
+        fn();
+      }, {"capture": true, "once": true});
+    };
+    gEditItemOverlay.initPanel({ node: aNode
+                               , onPanelReady
+                               , hiddenRows: ["description", "location",
+                                              "loadInSidebar", "keyword"]
+                               , focusedElement: "preferred"});
 
     this.panel.openPopup(aAnchorElement, aPosition);
   }),
@@ -1486,7 +1485,7 @@ var BookmarkingUI = {
       }
     };
 
-    Services.prefs.addObserver(this.RECENTLY_BOOKMARKED_PREF, prefObserver, false);
+    Services.prefs.addObserver(this.RECENTLY_BOOKMARKED_PREF, prefObserver);
     PlacesUtils.bookmarks.addObserver(this._recentlyBookmarkedObserver, true);
 
     // The context menu doesn't exist in non-browser windows on Mac
@@ -2015,7 +2014,7 @@ var BookmarkingUI = {
 
 var AutoShowBookmarksToolbar = {
   init() {
-    Services.obs.addObserver(this, "autoshow-bookmarks-toolbar", false);
+    Services.obs.addObserver(this, "autoshow-bookmarks-toolbar");
   },
 
   uninit() {

@@ -114,11 +114,26 @@ ProxyObject::setSameCompartmentPrivate(const Value& priv)
 void
 ProxyObject::nuke()
 {
+    // When nuking scripted proxies, isCallable and isConstructor values for
+    // the proxy needs to be preserved. Do this before clearing the target.
+    uint32_t callable = handler()->isCallable(this);
+    uint32_t constructor = handler()->isConstructor(this);
+
     // Clear the target reference.
     setSameCompartmentPrivate(NullValue());
 
     // Update the handler to make this a DeadObjectProxy.
-    setHandler(&DeadObjectProxy::singleton);
+    if (callable) {
+        if (constructor)
+            setHandler(DeadObjectProxy<DeadProxyIsCallableIsConstructor>::singleton());
+        else
+            setHandler(DeadObjectProxy<DeadProxyIsCallableNotConstructor>::singleton());
+    } else {
+        if (constructor)
+            setHandler(DeadObjectProxy<DeadProxyNotCallableIsConstructor>::singleton());
+        else
+            setHandler(DeadObjectProxy<DeadProxyNotCallableNotConstructor>::singleton());
+    }
 
     // The proxy's extra slots are not cleared and will continue to be
     // traced. This avoids the possibility of triggering write barriers while

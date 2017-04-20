@@ -60,7 +60,7 @@ PlacesViewBase.prototype = {
 
     let result = history.executeQueries(queries.value, queries.value.length,
                                         options.value);
-    result.addObserver(this, false);
+    result.addObserver(this);
     return val;
   },
 
@@ -508,14 +508,10 @@ PlacesViewBase.prototype = {
       return;
 
     // Here we need the <menu>.
-    if (elt.localName == "menupopup")
+    if (elt.localName == "menupopup") {
       elt = elt.parentNode;
-
-    let icon = aPlacesNode.icon;
-    if (!icon)
-      elt.removeAttribute("image");
-    else if (icon != elt.getAttribute("image"))
-      elt.setAttribute("image", icon);
+    }
+    elt.setAttribute("image", aPlacesNode.icon);
   },
 
   nodeAnnotationChanged:

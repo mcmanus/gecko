@@ -12,6 +12,7 @@ use media_queries::MediaList;
 use self::encoding::{EncodingRef, DecoderTrap};
 use shared_lock::SharedRwLock;
 use std::str;
+use std::sync::Arc;
 use stylesheets::{Stylesheet, StylesheetLoader, Origin, UrlExtraData};
 
 struct RustEncoding;
@@ -62,10 +63,11 @@ impl Stylesheet {
         Stylesheet::from_str(&string,
                              url_data,
                              origin,
-                             media,
+                             Arc::new(shared_lock.wrap(media)),
                              shared_lock,
                              stylesheet_loader,
-                             error_reporter)
+                             error_reporter,
+                             0u64)
     }
 
     /// Updates an empty stylesheet with a set of bytes that reached over the

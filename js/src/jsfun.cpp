@@ -882,7 +882,8 @@ CreateFunctionPrototype(JSContext* cx, JSProtoKey key)
                                              sourceObject,
                                              begin,
                                              ss->length(),
-                                             0));
+                                             0,
+                                             ss->length()));
     if (!script || !JSScript::initFunctionPrototype(cx, script, functionProto))
         return nullptr;
 
@@ -1019,7 +1020,13 @@ js::FunctionToString(JSContext* cx, HandleFunction fun, bool prettyPrint)
     }
 
     bool funIsNonArrowLambda = fun->isLambda() && !fun->isArrow();
-    bool haveSource = fun->isInterpreted() && !fun->isSelfHostedBuiltin();
+
+    // Default class constructors are self-hosted, but have their source
+    // objects overridden to refer to the span of the class statement or
+    // expression. Non-default class constructors are never self-hosted. So,
+    // all class constructors always have source.
+    bool haveSource = fun->isInterpreted() && (fun->isClassConstructor() ||
+                                               !fun->isSelfHostedBuiltin());
 
     // If we're not in pretty mode, put parentheses around lambda functions
     // so that eval returns lambda, not function statement.
@@ -1060,7 +1067,7 @@ js::FunctionToString(JSContext* cx, HandleFunction fun, bool prettyPrint)
     };
 
     if (haveSource) {
-        Rooted<JSFlatString*> src(cx, JSScript::sourceDataWithPrelude(cx, script));
+        Rooted<JSFlatString*> src(cx, JSScript::sourceDataForToString(cx, script));
         if (!src)
             return nullptr;
 
@@ -1080,27 +1087,18 @@ js::FunctionToString(JSContext* cx, HandleFunction fun, bool prettyPrint)
             return nullptr;
         }
     } else {
-        bool derived = fun->infallibleIsDefaultClassConstructor(cx);
-        if (derived && fun->isDerivedClassConstructor()) {
-            if (!AppendPrelude() ||
-                !out.append("(...args) {\n    ") ||
-                !out.append("super(...args);\n}"))
-            {
-                return nullptr;
-            }
-        } else {
-            if (!AppendPrelude() ||
-                !out.append("() {\n    "))
-                return nullptr;
+        // Default class constructors should always haveSource.
+        MOZ_ASSERT(!fun->infallibleIsDefaultClassConstructor(cx));
 
-            if (!derived) {
-                if (!out.append("[native code]"))
-                    return nullptr;
-            }
+        if (!AppendPrelude() ||
+            !out.append("() {\n    "))
+            return nullptr;
 
-            if (!out.append("\n}"))
-                return nullptr;
-        }
+        if (!out.append("[native code]"))
+            return nullptr;
+
+        if (!out.append("\n}"))
+            return nullptr;
     }
     return out.finishString();
 }
@@ -1495,11 +1493,12 @@ JSFunction::createScriptForLazilyInterpretedFunction(JSContext* cx, HandleFuncti
         // Parse and compile the script from source.
         size_t lazyLength = lazy->end() - lazy->begin();
         UncompressedSourceCache::AutoHoldEntry holder;
-        const char16_t* chars = lazy->scriptSource()->chars(cx, holder, lazy->begin(), lazyLength);
-        if (!chars)
+        ScriptSource::PinnedChars chars(cx, lazy->scriptSource(), holder,
+                                        lazy->begin(), lazyLength);
+        if (!chars.get())
             return false;
 
-        if (!frontend::CompileLazyFunction(cx, lazy, chars, lazyLength)) {
+        if (!frontend::CompileLazyFunction(cx, lazy, chars.get(), lazyLength)) {
             // The frontend may have linked the function and the non-lazy
             // script together during bytecode compilation. Reset it now on
             // error.
@@ -2084,7 +2083,11 @@ NewFunctionClone(JSContext* cx, HandleFunction fun, NewObjectKind newKind,
 
     clone->setArgCount(fun->nargs());
     clone->setFlags(flags);
-    clone->initAtom(fun->displayAtom());
+
+    JSAtom* atom = fun->displayAtom();
+    if (atom)
+        cx->markAtom(atom);
+    clone->initAtom(atom);
 
     if (allocKind == AllocKind::FUNCTION_EXTENDED) {
         if (fun->isExtended() && fun->compartment() == cx->compartment()) {

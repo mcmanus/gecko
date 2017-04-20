@@ -19,6 +19,7 @@
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Services.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/intl/LocaleService.h"
 
 #include "nsAppRunner.h"
 #include "mozilla/XREAppData.h"
@@ -288,6 +289,7 @@ using mozilla::Unused;
 using mozilla::scache::StartupCache;
 using mozilla::dom::ContentParent;
 using mozilla::dom::ContentChild;
+using mozilla::intl::LocaleService;
 
 // Save literal putenv string to environment variable.
 static void
@@ -929,6 +931,13 @@ NS_IMETHODIMP
 nsXULAppInfo::GetBrowserTabsRemoteAutostart(bool* aResult)
 {
   *aResult = BrowserTabsRemoteAutostart();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::GetMaxWebProcessCount(uint32_t* aResult)
+{
+  *aResult = mozilla::GetMaxWebProcessCount();
   return NS_OK;
 }
 
@@ -3965,7 +3974,7 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
   }
 #endif
 
-#if defined(MOZ_UPDATER) && !defined(MOZ_WIDGET_ANDROID)
+#if defined(MOZ_UPDATER) && !defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_WIDGET_GONK)
   // Check for and process any available updates
   nsCOMPtr<nsIFile> updRoot;
   bool persistent;
@@ -4371,13 +4380,8 @@ XREMain::XRE_mainRun()
 
 #ifdef MOZ_CRASHREPORTER
   nsCString userAgentLocale;
-  // Try a localized string first. This pref is always a localized string in
-  // Fennec, and might be elsewhere, too.
-  if (NS_SUCCEEDED(Preferences::GetLocalizedCString("general.useragent.locale", &userAgentLocale))) {
-    CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("useragent_locale"), userAgentLocale);
-  } else if (NS_SUCCEEDED(Preferences::GetCString("general.useragent.locale", &userAgentLocale))) {
-    CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("useragent_locale"), userAgentLocale);
-  }
+  LocaleService::GetInstance()->GetAppLocaleAsLangTag(userAgentLocale);
+  CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("useragent_locale"), userAgentLocale);
 #endif
 
   appStartup->GetShuttingDown(&mShuttingDown);
@@ -5021,8 +5025,10 @@ MultiprocessBlockPolicy() {
   return 0;
 }
 
+namespace mozilla {
+
 bool
-mozilla::BrowserTabsRemoteAutostart()
+BrowserTabsRemoteAutostart()
 {
   if (gBrowserTabsRemoteAutostartInitialized) {
     return gBrowserTabsRemoteAutostart;
@@ -5081,13 +5087,47 @@ mozilla::BrowserTabsRemoteAutostart()
   return gBrowserTabsRemoteAutostart;
 }
 
-namespace mozilla {
+uint32_t
+GetMaxWebProcessCount()
+{
+  // multiOptOut is in int to allow us to run multiple experiments without
+  // introducing multiple prefs a la the autostart.N prefs.
+  if (Preferences::GetInt("dom.ipc.multiOptOut", 0) >=
+          nsIXULRuntime::E10S_MULTI_EXPERIMENT) {
+    return 1;
+  }
+
+  const char* optInPref = "dom.ipc.processCount";
+  uint32_t optInPrefValue = Preferences::GetInt(optInPref, 1);
+
+  // If the user has set dom.ipc.processCount, respect their decision
+  // regardless of add-ons that might affect their experience or experiment
+  // cohort.
+  if (Preferences::HasUserValue(optInPref)) {
+    return std::max(1u, optInPrefValue);
+  }
+
+  // If there are add-ons that would make the user's experience poor, don't
+  // use more than one web content process.
+  if (Preferences::GetBool("extensions.e10sMultiBlocksEnabling", false) &&
+      Preferences::GetBool("extensions.e10sMultiBlockedByAddons", false)) {
+    return 1;
+  }
+
+  if (Preferences::HasUserValue("dom.ipc.processCount.web")) {
+    // The user didn't opt in or out so read the .web version of the pref.
+    return std::max(1, Preferences::GetInt("dom.ipc.processCount.web", 1));
+  }
+  return optInPrefValue;
+}
+
 const char*
 PlatformBuildID()
 {
   return gToolkitBuildID;
 }
-}
+
+} // namespace mozilla
 
 void
 SetupErrorHandling(const char* progname)

@@ -82,6 +82,7 @@ function processPrefFile(url) {
 function setPrefs() {
   processPrefFile(resourceURI.spec + "./client/preferences/devtools.js");
   processPrefFile(resourceURI.spec + "./client/preferences/debugger.js");
+  processPrefFile(resourceURI.spec + "./client/webide/webide-prefs.js");
 }
 
 // Helper to listen to a key on all windows
@@ -169,7 +170,7 @@ function reload(event) {
   dump("Reload DevTools.  (reload-toolbox:" + reloadToolbox + ")\n");
 
   // Invalidate xul cache in order to see changes made to chrome:// files
-  Services.obs.notifyObservers(null, "startupcache-invalidate", null);
+  Services.obs.notifyObservers(null, "startupcache-invalidate");
 
   // This frame script is going to be executed in all processes:
   // parent and child
@@ -177,7 +178,7 @@ function reload(event) {
     /* Flush message manager cached frame scripts as well as chrome locales */
     let obs = Components.classes["@mozilla.org/observer-service;1"]
                         .getService(Components.interfaces.nsIObserverService);
-    obs.notifyObservers(null, "message-manager-flush-caches", null);
+    obs.notifyObservers(null, "message-manager-flush-caches");
 
     /* Also purge cached modules in child processes, we do it a few lines after
        in the parent process */

@@ -31,13 +31,13 @@ def talos_task(n, tp):
     }, {}))
 
 tasks = {k: v for k, v in [
-    unittest_task('mochitest-browser-chrome', 'linux'),
-    unittest_task('mochitest-browser-chrome-e10s', 'linux64'),
-    unittest_task('mochitest-chrome', 'linux'),
-    unittest_task('mochitest-webgl', 'linux'),
-    unittest_task('crashtest-e10s', 'linux'),
-    unittest_task('gtest', 'linux64'),
-    talos_task('dromaeojs', 'linux64'),
+    unittest_task('mochitest-browser-chrome', 'linux/opt'),
+    unittest_task('mochitest-browser-chrome-e10s', 'linux64/debug'),
+    unittest_task('mochitest-chrome', 'linux/this'),
+    unittest_task('mochitest-webgl', 'linux/that'),
+    unittest_task('crashtest-e10s', 'linux/other'),
+    unittest_task('gtest', 'linux64/asan'),
+    talos_task('dromaeojs', 'linux64/psan'),
 ]}
 unittest_tasks = {k: v for k, v in tasks.iteritems()
                   if 'unittest_try_name' in v.attributes}
@@ -289,8 +289,8 @@ class TestTryOptionSyntax(unittest.TestCase):
         self.assertEqual(tos.env, ['VAR1=value1', 'VAR2=value2'])
 
     def test_profile(self):
-        "--spsProfile sets profile to true"
-        tos = TryOptionSyntax('try: --spsProfile', empty_graph)
+        "--geckoProfile sets profile to true"
+        tos = TryOptionSyntax('try: --geckoProfile', empty_graph)
         self.assertTrue(tos.profile)
 
     def test_tag(self):

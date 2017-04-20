@@ -707,7 +707,7 @@ var SessionStoreInternal = {
 
     Services.prefs.addObserver("browser.sessionstore.debug", () => {
       gDebuggingEnabled = this._prefBranch.getBoolPref("sessionstore.debug");
-    }, false);
+    });
 
     this._max_tabs_undo = this._prefBranch.getIntPref("sessionstore.max_tabs_undo");
     this._prefBranch.addObserver("sessionstore.max_tabs_undo", this, true);
@@ -717,7 +717,7 @@ var SessionStoreInternal = {
 
 
     gResistFingerprintingEnabled = Services.prefs.getBoolPref("privacy.resistFingerprinting");
-    Services.prefs.addObserver("privacy.resistFingerprinting", this, false);
+    Services.prefs.addObserver("privacy.resistFingerprinting", this);
   },
 
   /**
@@ -952,7 +952,7 @@ var SessionStoreInternal = {
         // This callback is used exclusively by tests that want to
         // monitor the progress of network loads.
         if (gDebuggingEnabled) {
-          Services.obs.notifyObservers(browser, NOTIFY_TAB_RESTORED, null);
+          Services.obs.notifyObservers(browser, NOTIFY_TAB_RESTORED);
         }
 
         SessionStoreInternal._resetLocalTabRestoringState(tab);
@@ -1149,7 +1149,7 @@ var SessionStoreInternal = {
           this._deferredInitialState = gSessionStartup.state;
 
           // Nothing to restore now, notify observers things are complete.
-          Services.obs.notifyObservers(null, NOTIFY_WINDOWS_RESTORED, "");
+          Services.obs.notifyObservers(null, NOTIFY_WINDOWS_RESTORED);
         } else {
           TelemetryTimestamps.add("sessionRestoreRestoring");
           this._restoreCount = aInitialState.windows ? aInitialState.windows.length : 0;
@@ -1167,7 +1167,7 @@ var SessionStoreInternal = {
         }
       } else {
         // Nothing to restore, notify observers things are complete.
-        Services.obs.notifyObservers(null, NOTIFY_WINDOWS_RESTORED, "");
+        Services.obs.notifyObservers(null, NOTIFY_WINDOWS_RESTORED);
       }
     // this window was opened by _openWindowWithState
     } else if (!this._isWindowLoaded(aWindow)) {
@@ -1282,7 +1282,7 @@ var SessionStoreInternal = {
             Services.obs.removeObserver(obs, topic);
             resolve();
           }
-        }, "browser-delayed-startup-finished", false);
+        }, "browser-delayed-startup-finished");
       });
 
       // We are ready for initialization as soon as the session file has been
@@ -1309,7 +1309,7 @@ var SessionStoreInternal = {
         this._sessionInitialized = true;
 
         if (initialState) {
-          Services.obs.notifyObservers(null, NOTIFY_RESTORING_ON_STARTUP, "");
+          Services.obs.notifyObservers(null, NOTIFY_RESTORING_ON_STARTUP);
         }
         TelemetryStopwatch.start("FX_SESSION_RESTORE_STARTUP_ONLOAD_INITIAL_WINDOW_MS");
         this.initializeWindow(aWindow, initialState);
@@ -1603,7 +1603,7 @@ var SessionStoreInternal = {
             Services.obs.addObserver(function obs(subject, topic) {
               Services.obs.removeObserver(obs, topic);
               resolve();
-            }, "oop-frameloader-crashed", false);
+            }, "oop-frameloader-crashed");
           });
           promises.push(promiseOFC);
 
@@ -1611,7 +1611,7 @@ var SessionStoreInternal = {
             Services.obs.addObserver(function obs(subject, topic) {
               Services.obs.removeObserver(obs, topic);
               resolve();
-            }, "ipc:content-shutdown", false);
+            }, "ipc:content-shutdown");
           });
           promises.push(promiseICS);
 
@@ -2663,7 +2663,7 @@ var SessionStoreInternal = {
       throw Components.Exception("Last session can not be restored");
     }
 
-    Services.obs.notifyObservers(null, NOTIFY_INITIATING_MANUAL_RESTORE, "");
+    Services.obs.notifyObservers(null, NOTIFY_INITIATING_MANUAL_RESTORE);
 
     // First collect each window with its id...
     let windows = {};
@@ -3443,7 +3443,7 @@ var SessionStoreInternal = {
 
     this._sendWindowRestoredNotification(aWindow);
 
-    Services.obs.notifyObservers(aWindow, NOTIFY_SINGLE_WINDOW_RESTORED, "");
+    Services.obs.notifyObservers(aWindow, NOTIFY_SINGLE_WINDOW_RESTORED);
 
     this._sendRestoreCompletedNotifications();
   },
@@ -3700,8 +3700,7 @@ var SessionStoreInternal = {
       userTypedClear: tabData.userTypedClear || 0
     });
 
-    browser.messageManager.sendAsyncMessage("SessionStore:restoreHistory",
-                                            {tabData, epoch, loadArguments});
+    this._sendRestoreHistory(browser, {tabData, epoch, loadArguments});
 
     // Update tab label and icon to show something
     // while we wait for the messages to be processed.
@@ -3784,7 +3783,7 @@ var SessionStoreInternal = {
       // will be ignored and don't override any tab data set when restoring.
       let epoch = this.startNextEpoch(browser);
 
-      browser.messageManager.sendAsyncMessage("SessionStore:restoreHistory", {
+      this._sendRestoreHistory(browser, {
         tabData,
         epoch,
         loadArguments: aLoadArguments,
@@ -4034,7 +4033,7 @@ var SessionStoreInternal = {
     }
     this._closedObjectsChanged = false;
     setTimeout(() => {
-      Services.obs.notifyObservers(null, NOTIFY_CLOSED_OBJECTS_CHANGED, null);
+      Services.obs.notifyObservers(null, NOTIFY_CLOSED_OBJECTS_CHANGED);
     }, 0);
   },
 
@@ -4425,8 +4424,7 @@ var SessionStoreInternal = {
 
     // This was the last window restored at startup, notify observers.
     Services.obs.notifyObservers(null,
-      this._browserSetState ? NOTIFY_BROWSER_STATE_RESTORED : NOTIFY_WINDOWS_RESTORED,
-      "");
+      this._browserSetState ? NOTIFY_BROWSER_STATE_RESTORED : NOTIFY_WINDOWS_RESTORED);
 
     this._browserSetState = false;
     this._restoreCount = -1;
@@ -4720,7 +4718,40 @@ var SessionStoreInternal = {
     // and not garbage-collected until then.
     promise.then(() => timer.cancel(), () => timer.cancel());
     return promise;
-  }
+  },
+
+  /**
+   * Send the "SessionStore:restoreHistory" message to content, triggering a
+   * content restore. This method is intended to be used internally by
+   * SessionStore, as it also ensures that permissions are avaliable in the
+   * content process before triggering the history restore in the content
+   * process.
+   *
+   * @param browser The browser to transmit the permissions for
+   * @param options The options data to send to content.
+   */
+  _sendRestoreHistory(browser, options) {
+    // If the tabData which we're sending down has any sessionStorage associated
+    // with it, we need to send down permissions for the domains, as this
+    // information will be needed to correctly restore the session.
+    if (options.tabData.storage) {
+      for (let origin of Object.getOwnPropertyNames(options.tabData.storage)) {
+        try {
+          let {frameLoader} = browser.QueryInterface(Components.interfaces.nsIFrameLoaderOwner);
+          if (frameLoader.tabParent) {
+            let attrs = browser.contentPrincipal.originAttributes;
+            let dataPrincipal = Services.scriptSecurityManager.createCodebasePrincipalFromOrigin(origin);
+            let principal = Services.scriptSecurityManager.createCodebasePrincipal(dataPrincipal.URI, attrs);
+            frameLoader.tabParent.transmitPermissionsForPrincipal(principal);
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    }
+
+    browser.messageManager.sendAsyncMessage("SessionStore:restoreHistory", options);
+  },
 };
 
 /**
@@ -4746,7 +4777,7 @@ var TabRestoreQueue = {
       }
 
       const PREF = "browser.sessionstore.restore_on_demand";
-      Services.prefs.addObserver(PREF, updateValue, false);
+      Services.prefs.addObserver(PREF, updateValue);
       return updateValue();
     },
 
@@ -4760,7 +4791,7 @@ var TabRestoreQueue = {
       }
 
       const PREF = "browser.sessionstore.restore_pinned_tabs_on_demand";
-      Services.prefs.addObserver(PREF, updateValue, false);
+      Services.prefs.addObserver(PREF, updateValue);
       return updateValue();
     },
 
@@ -4774,7 +4805,7 @@ var TabRestoreQueue = {
       }
 
       const PREF = "browser.sessionstore.restore_hidden_tabs";
-      Services.prefs.addObserver(PREF, updateValue, false);
+      Services.prefs.addObserver(PREF, updateValue);
       return updateValue();
     }
   },
@@ -4955,7 +4986,7 @@ var LastSession = {
   clear() {
     if (this._state) {
       this._state = null;
-      Services.obs.notifyObservers(null, NOTIFY_LAST_SESSION_CLEARED, null);
+      Services.obs.notifyObservers(null, NOTIFY_LAST_SESSION_CLEARED);
     }
   }
 };

@@ -6,6 +6,12 @@
 
 "use strict";
 
+const CONTENT_MIME_TYPE_ABBREVIATIONS = {
+  "ecmascript": "js",
+  "javascript": "js",
+  "x-javascript": "js"
+};
+
 /**
  * Extracts any urlencoded form data sections (e.g. "?foo=bar&baz=42") from a
  * POST request.
@@ -112,7 +118,8 @@ function getAbbreviatedMimeType(mimeType) {
   if (!mimeType) {
     return "";
   }
-  return (mimeType.split(";")[0].split("/")[1] || "").split("+")[0];
+  let abbrevType = (mimeType.split(";")[0].split("/")[1] || "").split("+")[0];
+  return CONTENT_MIME_TYPE_ABBREVIATIONS[abbrevType] || abbrevType;
 }
 
 /**
@@ -240,6 +247,47 @@ function parseFormData(sections) {
   });
 }
 
+/**
+ * Reduces an IP address into a number for easier sorting
+ *
+ * @param {string} ip - IP address to reduce
+ * @return {number} the number representing the IP address
+ */
+function ipToLong(ip) {
+  if (!ip) {
+    // Invalid IP
+    return -1;
+  }
+
+  let base;
+  let octets = ip.split(".");
+
+  if (octets.length === 4) { // IPv4
+    base = 10;
+  } else if (ip.includes(":")) { // IPv6
+    let numberOfZeroSections = 8 - ip.replace(/^:+|:+$/g, "").split(/:+/g).length;
+    octets = ip
+      .replace("::", `:${"0:".repeat(numberOfZeroSections)}`)
+      .replace(/^:|:$/g, "")
+      .split(":");
+    base = 16;
+  } else { // Invalid IP
+    return -1;
+  }
+  return octets.map((val, ix, arr) => {
+    return parseInt(val, base) * Math.pow(256, (arr.length - 1) - ix);
+  }).reduce((sum, val) => {
+    return sum + val;
+  }, 0);
+}
+
+/**
+ * Compare two objects on a subset of their properties
+ */
+function propertiesEqual(props, item1, item2) {
+  return item1 === item2 || props.every(p => item1[p] === item2[p]);
+}
+
 module.exports = {
   getFormDataSections,
   fetchHeaders,
@@ -255,4 +303,6 @@ module.exports = {
   getUrlDetails,
   parseQueryString,
   parseFormData,
+  propertiesEqual,
+  ipToLong,
 };

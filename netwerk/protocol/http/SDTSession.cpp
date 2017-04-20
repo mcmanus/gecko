@@ -2949,5 +2949,10 @@ SDTSession::StreamCanWrite(uint32_t aStreamId)
   return canWrite;
 }
 
+void
+SDTSession::ThrottleResponse(bool aThrottle)
+{
+  // Response throttling later
+}
 } // namespace net
 } // namespace mozilla

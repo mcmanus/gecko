@@ -14,6 +14,7 @@ function mockSyncedTabs() {
           id: "guid_desktop",
           type: "client",
           name: "My Desktop",
+          lastModified: 1492201200,
           tabs: [
             {
               title: "http://example.com/10",
@@ -53,7 +54,7 @@ function promiseTabsUpdated() {
     Services.obs.addObserver(function onNotification(aSubject, aTopic, aData) {
       Services.obs.removeObserver(onNotification, aTopic);
       resolve();
-    }, "synced-tabs-menu:test:tabs-updated", false);
+    }, "synced-tabs-menu:test:tabs-updated");
   });
 }
 

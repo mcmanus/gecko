@@ -139,7 +139,14 @@
 
   <!-- General tab -->
 
-  <!-- Accessibility -->
+  <!-- Accessibility
+   * accessibility.browsewithcaret
+     - true enables keyboard navigation and selection within web pages using a
+       visible caret, false uses normal keyboard navigation with no caret
+   * accessibility.typeaheadfind
+     - when set to true, typing outside text areas and input boxes will
+       automatically start searching for what's typed within the current
+       document; when set to false, no search action happens -->
   <preference id="accessibility.browsewithcaret"
               name="accessibility.browsewithcaret"
               type="bool"/>
@@ -154,7 +161,16 @@
               name="ui.osk.enabled"
               type="bool"/>
 #endif
-  <!-- Browsing -->
+  <!-- Browsing
+   * general.autoScroll
+     - when set to true, clicking the scroll wheel on the mouse activates a
+       mouse mode where moving the mouse down scrolls the document downward with
+       speed correlated with the distance of the cursor from the original
+       position at which the click occurred (and likewise with movement upward);
+       if false, this behavior is disabled
+   * general.smoothScroll
+     - set to true to enable finer page scrolling than line-by-line on page-up,
+       page-down, and other such page movements -->
   <preference id="general.autoScroll"
               name="general.autoScroll"
               type="bool"/>
@@ -225,6 +241,7 @@
       <hbox align="center" class="indent">
         <label id="isNotDefaultLabel" flex="1">&isNotDefault.label;</label>
         <button id="setDefaultButton"
+                class="accessory-button"
                 label="&setAsMyDefaultBrowser2.label;" accesskey="&setAsMyDefaultBrowser2.accesskey;"
                 preference="pref.general.disable_button.default_browser"/>
       </hbox>
@@ -239,8 +256,8 @@
   <html:table id="startupTable">
     <html:tr>
       <html:td class="label-cell">
-        <label accesskey="&startupPage.accesskey;"
-               control="browserStartupPage">&startupPage.label;</label>
+        <label accesskey="&startupPage2.accesskey;"
+               control="browserStartupPage">&startupPage2.label;</label>
       </html:td>
       <html:td class="content-cell">
         <menulist id="browserStartupPage"
@@ -262,8 +279,8 @@
     </html:tr>
     <html:tr>
       <html:td class="label-cell">
-        <label accesskey="&homepage.accesskey;"
-               control="browserHomePage">&homepage.label;</label>
+        <label accesskey="&homepage2.accesskey;"
+               control="browserHomePage">&homepage2.label;</label>
       </html:td>
       <html:td class="content-cell">
         <textbox id="browserHomePage"
@@ -302,7 +319,7 @@
 </groupbox>
 
 <!-- Default Search Engine -->
-<groupbox id="defaultEngineGroup" align="start" data-category="paneGeneral">
+<groupbox id="defaultEngineGroup" align="start" data-category="paneGeneral" data-subcategory="search">
   <caption label="&defaultSearchEngine.label;"/>
   <label>&chooseYourDefaultSearchEngine.label;</label>
   <menulist id="defaultEngine">
@@ -323,7 +340,7 @@
   </vbox>
 </groupbox>
 
-<groupbox id="oneClickSearchProvidersGroup" data-category="paneGeneral">
+<groupbox id="oneClickSearchProvidersGroup" data-category="paneGeneral" data-subcategory="search">
   <caption label="&oneClickSearchEngines.label;"/>
   <label>&chooseWhichOneToDisplay.label;</label>
 
@@ -341,21 +358,19 @@
   <hbox>
     <button id="restoreDefaultSearchEngines"
             label="&restoreDefaultSearchEngines.label;"
-            accesskey="&restoreDefaultSearchEngines.accesskey;"
-            />
+            accesskey="&restoreDefaultSearchEngines.accesskey;"/>
     <spacer flex="1"/>
     <button id="removeEngineButton"
-            class="searchEngineAction"
+            class="searchEngineAction accessory-button"
             label="&removeEngine.label;"
             accesskey="&removeEngine.accesskey;"
-            disabled="true"
-            />
+            disabled="true"/>
   </hbox>
 
   <separator class="thin"/>
 
   <hbox id="addEnginesBox" pack="start">
-    <label id="addEngines" class="text-link" value="&addMoreSearchEngines.label;"/>
+    <label id="addEngines" class="text-link" value="&addMoreSearchEngines2.label;"/>
   </hbox>
 </groupbox>
 
@@ -425,6 +440,7 @@
   <hbox id="languagesBox" align="center">
     <description flex="1" control="chooseLanguage">&chooseLanguage.label;</description>
     <button id="chooseLanguage"
+            class="accessory-button"
             label="&chooseButton.label;"
             accesskey="&chooseButton.accesskey;"/>
   </hbox>
@@ -444,7 +460,9 @@
         <label>&translation.options.attribution.afterLogo;</label>
       </hbox>
     </hbox>
-    <button id="translateButton" label="&translateExceptions.label;"
+    <button id="translateButton"
+            class="accessory-button"
+            label="&translateExceptions.label;"
             accesskey="&translateExceptions.accesskey;"/>
   </hbox>
   <hbox>
@@ -470,9 +488,9 @@
     <rows id="fontsRows">
       <row id="fontRow">
         <hbox align="center">
-          <label control="defaultFont" accesskey="&defaultFont.accesskey;">&defaultFont.label;</label>
+          <label control="defaultFont" accesskey="&defaultFont2.accesskey;">&defaultFont2.label;</label>
           <menulist id="defaultFont" delayprefsave="true" onsyncfrompreference="return FontBuilder.readFontSelection(this);"/>
-          <label id="defaultFontSizeLabel" control="defaultFontSize" accesskey="&defaultSize.accesskey;">&defaultSize.label;</label>
+          <label id="defaultFontSizeLabel" control="defaultFontSize" accesskey="&defaultSize2.accesskey;">&defaultSize2.label;</label>
           <menulist id="defaultFontSize" delayprefsave="true">
             <menupopup>
               <menuitem value="9" label="9"/>
@@ -503,13 +521,17 @@
             </menupopup>
           </menulist>
         </hbox>
-        <button id="advancedFonts" icon="select-font"
+        <button id="advancedFonts"
+                class="accessory-button"
+                icon="select-font"
                 label="&advancedFonts.label;"
                 accesskey="&advancedFonts.accesskey;"/>
       </row>
       <row id="colorsRow">
         <hbox/>
-        <button id="colors" icon="select-color"
+        <button id="colors"
+                class="accessory-button"
+                icon="select-color"
                 label="&colors.label;"
                 accesskey="&colors.accesskey;"/>
       </row>

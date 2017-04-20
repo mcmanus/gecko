@@ -37,7 +37,6 @@
 #include "gc/GCInternals.h"
 #include "jit/arm/Simulator-arm.h"
 #include "jit/arm64/vixl/Simulator-vixl.h"
-#include "jit/IonBuilder.h"
 #include "jit/JitCompartment.h"
 #include "jit/mips32/Simulator-mips32.h"
 #include "jit/mips64/Simulator-mips64.h"
@@ -64,6 +63,7 @@ using JS::DoubleNaNValue;
 
 /* static */ MOZ_THREAD_LOCAL(JSContext*) js::TlsContext;
 /* static */ Atomic<size_t> JSRuntime::liveRuntimesCount;
+Atomic<JS::LargeAllocationFailureCallback> js::OnLargeAllocationFailure;
 
 namespace js {
     bool gCanUseExtraThreads = true;
@@ -170,12 +170,10 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     offthreadIonCompilationEnabled_(true),
     parallelParsingEnabled_(true),
     autoWritableJitCodeActive_(false),
-    largeAllocationFailureCallback(nullptr),
     oomCallback(nullptr),
     debuggerMallocSizeOf(ReturnZeroSize),
     lastAnimationTime(0),
     performanceMonitoring_(thisFromCtor()),
-    ionLazyLinkListSize_(0),
     stackFormat_(parentRuntime ? js::StackFormat::Default
                                : js::StackFormat::SpiderMonkey)
 {
@@ -304,6 +302,7 @@ JSRuntime::destroyRuntime()
          */
         CancelOffThreadIonCompile(this);
         CancelOffThreadParses(this);
+        CancelOffThreadCompressions(this);
 
         /* Remove persistent GC roots. */
         gc.finishRoots();
@@ -326,8 +325,6 @@ JSRuntime::destroyRuntime()
 
     AutoNoteSingleThreadedRegion anstr;
 
-    MOZ_ASSERT(ionLazyLinkListSize_ == 0);
-    MOZ_ASSERT(ionLazyLinkList().isEmpty());
     MOZ_ASSERT_IF(!geckoProfiler().enabled(), !singleThreadedExecutionRequired_);
 
     MOZ_ASSERT(!hasHelperThreadZones());
@@ -832,8 +829,8 @@ JSRuntime::onOutOfMemory(AllocFunction allocFunc, size_t nbytes, void* reallocPt
 void*
 JSRuntime::onOutOfMemoryCanGC(AllocFunction allocFunc, size_t bytes, void* reallocPtr)
 {
-    if (largeAllocationFailureCallback && bytes >= LARGE_ALLOCATION)
-        largeAllocationFailureCallback(largeAllocationFailureCallbackData);
+    if (OnLargeAllocationFailure && bytes >= LARGE_ALLOCATION)
+        OnLargeAllocationFailure();
     return onOutOfMemory(allocFunc, bytes, reallocPtr);
 }
 
@@ -901,36 +898,6 @@ JS::IsProfilingEnabledForContext(JSContext* cx)
 {
     MOZ_ASSERT(cx);
     return cx->runtime()->geckoProfiler().enabled();
-}
-
-JSRuntime::IonBuilderList&
-JSRuntime::ionLazyLinkList()
-{
-    MOZ_ASSERT(CurrentThreadCanAccessRuntime(this),
-               "Should only be mutated by the active thread.");
-    return ionLazyLinkList_.ref();
-}
-
-void
-JSRuntime::ionLazyLinkListRemove(jit::IonBuilder* builder)
-{
-    MOZ_ASSERT(CurrentThreadCanAccessRuntime(this),
-               "Should only be mutated by the active thread.");
-    MOZ_ASSERT(ionLazyLinkListSize_ > 0);
-
-    builder->removeFrom(ionLazyLinkList());
-    ionLazyLinkListSize_--;
-
-    MOZ_ASSERT(ionLazyLinkList().isEmpty() == (ionLazyLinkListSize_ == 0));
-}
-
-void
-JSRuntime::ionLazyLinkListAdd(jit::IonBuilder* builder)
-{
-    MOZ_ASSERT(CurrentThreadCanAccessRuntime(this),
-               "Should only be mutated by the active thread.");
-    ionLazyLinkList().insertFront(builder);
-    ionLazyLinkListSize_++;
 }
 
 JS_PUBLIC_API(void)

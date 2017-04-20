@@ -39,6 +39,7 @@
 
 extern crate app_units;
 extern crate atomic_refcell;
+extern crate bit_vec;
 #[macro_use]
 extern crate bitflags;
 #[allow(unused_extern_crates)] extern crate byteorder;
@@ -115,6 +116,7 @@ pub mod stylist;
 pub mod sequential;
 pub mod sink;
 pub mod str;
+pub mod stylesheet_set;
 pub mod stylesheets;
 pub mod supports;
 pub mod thread_state;

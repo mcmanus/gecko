@@ -449,9 +449,9 @@ fails == 335628-1.html 335628-1.html
 fails == 336147-1.html 336147-1.html
 fails == 336153-1.html 336153-1.html
 fails == 338251-p.html 338251-p.html
-== 338251-p-oh.html 338251-p-oh.html
+fails == 338251-p-oh.html 338251-p-oh.html
 fails == 338251-pre.html 338251-pre.html
-== 338251-pre-oh.html 338251-pre-oh.html
+fails == 338251-pre-oh.html 338251-pre-oh.html
 == 339289-1.html 339289-1.html
 == 341043-1a.html 341043-1a.html
 == 341043-1b.html 341043-1b.html
@@ -467,7 +467,7 @@ fails == 346774-1a.html 346774-1a.html
 fails == 346774-1b.html 346774-1b.html
 fails == 346774-1c.html 346774-1c.html
 == 347348-1.xhtml 347348-1.xhtml
-== 347496-1.xhtml 347496-1.xhtml
+fails == 347496-1.xhtml 347496-1.xhtml
 == 347912-1.html 347912-1.html
 fails == 348049-1.xhtml 348049-1.xhtml
 fails == 348516-1.html 348516-1.html
@@ -532,7 +532,7 @@ fails == 349695-1b.html 349695-1b.html
 fails == 359903-1.html 359903-1.html
 fails == 359903-2.html 359903-2.html
 == 360065-1.html 360065-1.html
-asserts-if(stylo,1) == 360746-1.html 360746-1.html # Bug 1341721
+== 360746-1.html 360746-1.html
 == 360757-1a.html 360757-1a.html
 == 360757-1b.html 360757-1b.html
 == 361091-1.html 361091-1.html
@@ -551,8 +551,8 @@ asserts-if(stylo,1) == 360746-1.html 360746-1.html # Bug 1341721
 == 363370-1.html 363370-1.html
 == 363402-1.html 363402-1.html
 == 363637-1.html 363637-1.html
-== 363706-1.html 363706-1.html # Bug 1324348
-== 363706-1.html 363706-1.html # Bug 1324348
+fails fails == 363706-1.html 363706-1.html # Bug 1324348
+fails fails == 363706-1.html 363706-1.html # Bug 1324348
 fails == 363728-1.html 363728-1.html
 == 363728-2.html 363728-2.html
 fails == 363858-1.html 363858-1.html
@@ -643,7 +643,7 @@ fails == 370422-1.html 370422-1.html
 fails == 370629-2.html 370629-2.html
 == 370692-1.xhtml 370692-1.xhtml
 == 371041-1.html 371041-1.html
-== 371043-1.html 371043-1.html
+fails == 371043-1.html 371043-1.html
 == 371354-1.html 371354-1.html
 == 371483-1.html 371483-1.html
 == 371561-1.html 371561-1.html
@@ -788,8 +788,8 @@ skip-if(!winWidget) == 391045.html 391045.html
 == 391140-1.html 391140-1.html
 == 391412-1a.html 391412-1a.html
 == 391412-1b.html 391412-1b.html
-== 391909-1.html 391909-1.html
-== 391979.html 391979.html
+fails == 391909-1.html 391909-1.html
+fails == 391979.html 391979.html
 fails == 391994-1.html 391994-1.html
 == 392047.html 392047.html
 fails == 392435-1.html 392435-1.html
@@ -823,7 +823,7 @@ fails == 395130-2.html 395130-2.html
 == 397428-1.html 397428-1.html
 == 397844-1.xhtml 397844-1.xhtml
 == 398092-1.html 398092-1.html
-== 398101-1.html 398101-1.html
+fails == 398101-1.html 398101-1.html
 == 398144-1.html 398144-1.html
 == 398682-1.html 398682-1.html
 == 398797-1a.html 398797-1a.html
@@ -892,7 +892,7 @@ fails == 403519-1.html 403519-1.html
 == 404030-1.html 404030-1.html
 == 404030-1-notref.html 404030-1-notref.html
 == 404030-1-notref2.html 404030-1-notref2.html
-fails == 404123-1.html 404123-1.html
+== 404123-1.html 404123-1.html
 fails == 404123-2.html 404123-2.html
 == 404123-3.html 404123-3.html
 # may fail "randomly" on OS X, doesn't seem to be rendering usefully anyhow - bug 602469
@@ -1138,7 +1138,7 @@ fails == 430412-1.html 430412-1.html
 == 431520-1.html 431520-1.html
 == 431948-1.html 431948-1.html
 == 433640-1.html 433640-1.html
-fails == 433700.html 433700.html
+== 433700.html 433700.html
 == 436356-1.html 436356-1.html
 == 436356-2.html 436356-2.html
 == 438537-1.html 438537-1.html
@@ -1197,7 +1197,7 @@ fails pref(dom.use_xbl_scopes_for_remote_xul,true) == 449149-1b.html 449149-1b.h
 == 455105-2.html 455105-2.html
 fails == 455171-5.html 455171-5.html
 fails == 455280-1.xhtml 455280-1.xhtml
-== 455826-1.html 455826-1.html
+fails == 455826-1.html 455826-1.html
 fails-if(cocoaWidget) fails-if(Android) == 456147.xul 456147.xul
 == 456219-1a.html 456219-1a.html
 == 456219-1b.html 456219-1b.html
@@ -1394,7 +1394,7 @@ fuzzy-if(skiaContent,1,17000) == 498228-1.xul 498228-1.xul
 == 501257-1a.html 501257-1a.html
 == 501257-1b.html 501257-1b.html
 == 501257-1.xhtml 501257-1.xhtml
-fails == 501627-1.html 501627-1.html
+== 501627-1.html 501627-1.html
 == 502288-1.html 502288-1.html
 fails == 502447-1.html 502447-1.html
 == 502795-1.html 502795-1.html
@@ -1583,7 +1583,8 @@ fails == 580863-1.html 580863-1.html
 == 582037-1b.html 582037-1b.html
 fuzzy-if(Android,3,256) == 582037-2a.html 582037-2a.html
 fuzzy-if(Android,3,256) == 582037-2b.html 582037-2b.html
-asserts(1-2) == 582146-1.html 582146-1.html
+# 582146-1 has the ame assertions as gecko, plus "non-root reflow roots must not have scrollable overflow" from bug 718883
+asserts(1-3) == 582146-1.html 582146-1.html
 fails == 582476-1.svg 582476-1.svg
 == 584400-dash-length.svg 584400-dash-length.svg
 == 584699-1.html 584699-1.html
@@ -1756,7 +1757,7 @@ fails == 814952-1.html 814952-1.html
 fails == 815593-1.html 815593-1.html
 == 816359-1.html 816359-1.html
 == 816458-1.html 816458-1.html
-fails == 816948-1.html 816948-1.html
+== 816948-1.html 816948-1.html
 == 817019-1.html 817019-1.html
 fails == 818276-1.html 818276-1.html
 fails == 825999.html 825999.html
@@ -1769,7 +1770,7 @@ fails == 825999.html 825999.html
 fails == 844178.html 844178.html
 == 846144-1.html 846144-1.html
 == 847850-1.html 847850-1.html
-fails == 848421-1.html 848421-1.html
+== 848421-1.html 848421-1.html
 fails == 849407-1.html 849407-1.html
 == 849996-1.html 849996-1.html
 == 858803-1.html 858803-1.html
@@ -1979,14 +1980,14 @@ fails == 1294102-1.html 1294102-1.html
 fails == 1315113-1.html 1315113-1.html
 fails == 1315113-2.html 1315113-2.html
 == 1315632-1.html 1315632-1.html
-fails == 1316719-1a.html 1316719-1a.html
-fails == 1316719-1b.html 1316719-1b.html
-fails == 1316719-1c.html 1316719-1c.html
+== 1316719-1a.html 1316719-1a.html
+== 1316719-1b.html 1316719-1b.html
+== 1316719-1c.html 1316719-1c.html
 
 HTTP == 652991-1a.html 652991-1a.html
 HTTP == 652991-1b.html 652991-1b.html
 HTTP == 652991-2.html 652991-2.html
 HTTP == 652991-3.html 652991-3.html
-fails HTTP == 652991-4.html 652991-4.html
+HTTP == 652991-4.html 652991-4.html
 == 1330051.svg 1330051.svg
 == 1352464-1.html 1352464-1.html

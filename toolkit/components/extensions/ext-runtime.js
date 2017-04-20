@@ -2,16 +2,14 @@
 
 XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
                                   "resource://gre/modules/AddonManager.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "AddonManagerPrivate",
+                                  "resource://gre/modules/AddonManager.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Extension",
                                   "resource://gre/modules/Extension.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ExtensionManagement",
                                   "resource://gre/modules/ExtensionManagement.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
                                   "resource://gre/modules/NetUtil.jsm");
-
-var {
-  SingletonEventManager,
-} = ExtensionUtils;
 
 this.runtime = class extends ExtensionAPI {
   getAPI(context) {
@@ -38,7 +36,7 @@ this.runtime = class extends ExtensionAPI {
           let listener = () => {
             switch (extension.startupReason) {
               case "APP_STARTUP":
-                if (Extension.browserUpdated) {
+                if (AddonManagerPrivate.browserUpdated) {
                   fire.sync({reason: "browser_update"});
                 }
                 break;

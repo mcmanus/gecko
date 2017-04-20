@@ -225,12 +225,8 @@ ${helpers.single_keyword("font-style",
                          gecko_constant_prefix="NS_FONT_STYLE",
                          gecko_ffi_name="mFont.style",
                          spec="https://drafts.csswg.org/css-fonts/#propdef-font-style",
-                         animation_type="none")}
-
-${helpers.single_keyword("font-variant",
-                         "normal small-caps",
-                         spec="https://drafts.csswg.org/css-fonts/#propdef-font-variant",
-                         animation_type="none")}
+                         animation_type="none",
+                         needs_conversion=True)}
 
 
 <% font_variant_caps_custom_consts= { "small-caps": "SMALLCAPS",
@@ -240,10 +236,10 @@ ${helpers.single_keyword("font-variant",
                                       "titling-caps": "TITLING" } %>
 
 ${helpers.single_keyword("font-variant-caps",
-                         "normal small-caps all-small petite-caps unicase titling-caps",
+                         "normal small-caps",
+                         extra_gecko_values="all-small petite-caps unicase titling-caps",
                          gecko_constant_prefix="NS_FONT_VARIANT_CAPS",
                          gecko_ffi_name="mFont.variantCaps",
-                         products="gecko",
                          spec="https://drafts.csswg.org/css-fonts/#propdef-font-variant-caps",
                          custom_consts=font_variant_caps_custom_consts,
                          animation_type="none")}
@@ -292,19 +288,24 @@ ${helpers.single_keyword("font-variant-caps",
                 _ => Err(())
             }
         }).or_else(|()| {
-            match try!(input.expect_integer()) {
-                100 => Ok(SpecifiedValue::Weight100),
-                200 => Ok(SpecifiedValue::Weight200),
-                300 => Ok(SpecifiedValue::Weight300),
-                400 => Ok(SpecifiedValue::Weight400),
-                500 => Ok(SpecifiedValue::Weight500),
-                600 => Ok(SpecifiedValue::Weight600),
-                700 => Ok(SpecifiedValue::Weight700),
-                800 => Ok(SpecifiedValue::Weight800),
-                900 => Ok(SpecifiedValue::Weight900),
+            SpecifiedValue::from_int(input.expect_integer()?)
+        })
+    }
+
+    impl SpecifiedValue {
+        pub fn from_int(kw: i32) -> Result<Self, ()> {
+            match kw {
+                % for weight in range(100, 901, 100):
+                    ${weight} => Ok(SpecifiedValue::Weight${weight}),
+                % endfor
                 _ => Err(())
             }
-        })
+        }
+
+        pub fn from_gecko_keyword(kw: u32) -> Self {
+            Self::from_int(kw as i32).expect("Found unexpected value in style
+                                              struct for font-weight property")
+        }
     }
 
     /// Used in @font-face, where relative keywords are not allowed.
@@ -415,13 +416,14 @@ ${helpers.single_keyword("font-variant-caps",
     use std::fmt;
     use style_traits::ToCss;
     use values::{FONT_MEDIUM_PX, HasViewportPercentage};
-    use values::specified::{LengthOrPercentage, Length, NoCalcLength, Percentage};
+    use values::specified::{FontRelativeLength, LengthOrPercentage, Length};
+    use values::specified::{NoCalcLength, Percentage};
 
     impl ToCss for SpecifiedValue {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
             match *self {
                 SpecifiedValue::Length(ref lop) => lop.to_css(dest),
-                SpecifiedValue::Keyword(kw) => kw.to_css(dest),
+                SpecifiedValue::Keyword(kw, _) => kw.to_css(dest),
                 SpecifiedValue::Smaller => dest.write_str("smaller"),
                 SpecifiedValue::Larger => dest.write_str("larger"),
             }
@@ -441,9 +443,21 @@ ${helpers.single_keyword("font-variant-caps",
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub enum SpecifiedValue {
         Length(specified::LengthOrPercentage),
-        Keyword(KeywordSize),
+        /// A keyword value, along with a ratio.
+        /// The ratio in any specified keyword value
+        /// will be 1, but we cascade keywordness even
+        /// after font-relative (percent and em) values
+        /// have been applied, which is where the keyword
+        /// comes in. See bug 1355707
+        Keyword(KeywordSize, f32),
         Smaller,
         Larger,
+    }
+
+    impl From<specified::LengthOrPercentage> for SpecifiedValue {
+        fn from(other: specified::LengthOrPercentage) -> Self {
+            SpecifiedValue::Length(other)
+        }
     }
 
     pub mod computed_value {
@@ -596,7 +610,22 @@ ${helpers.single_keyword("font-variant-caps",
                 6 => XXLarge,
                 // If value is greater than 7, let it be 7.
                 _ => XXXLarge,
-            })
+            }, 1.)
+        }
+
+        /// If this value is specified as a ratio of the parent font (em units or percent)
+        /// return the ratio
+        pub fn as_font_ratio(&self) -> Option<f32> {
+            if let SpecifiedValue::Length(ref lop) = *self {
+                if let LengthOrPercentage::Percentage(pc) = *lop {
+                    return Some(pc.0)
+                } else if let LengthOrPercentage::Length(ref nocalc) = *lop {
+                    if let NoCalcLength::FontRelative(FontRelativeLength::Em(em)) = *nocalc {
+                        return Some(em)
+                    }
+                }
+            }
+            None
         }
     }
 
@@ -608,7 +637,7 @@ ${helpers.single_keyword("font-variant-caps",
 
     #[inline]
     pub fn get_initial_specified_value() -> SpecifiedValue {
-        SpecifiedValue::Keyword(Medium)
+        SpecifiedValue::Keyword(Medium, 1.)
     }
 
     impl ToComputedValue for SpecifiedValue {
@@ -637,8 +666,8 @@ ${helpers.single_keyword("font-variant-caps",
                     calc.length() + context.inherited_style().get_font().clone_font_size()
                                            .scale_by(calc.percentage())
                 }
-                SpecifiedValue::Keyword(ref key) => {
-                    key.to_computed_value(context)
+                SpecifiedValue::Keyword(ref key, fraction) => {
+                    key.to_computed_value(context).scale_by(fraction)
                 }
                 SpecifiedValue::Smaller => {
                     FontRelativeLength::Em(0.85).to_computed_value(context,
@@ -659,13 +688,13 @@ ${helpers.single_keyword("font-variant-caps",
         }
     }
     /// <length> | <percentage> | <absolute-size> | <relative-size>
-    pub fn parse(_: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
-        if let Ok(lop) = input.try(specified::LengthOrPercentage::parse_non_negative) {
+    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+        if let Ok(lop) = input.try(|i| specified::LengthOrPercentage::parse_non_negative(context, i)) {
             return Ok(SpecifiedValue::Length(lop))
         }
 
         if let Ok(kw) = input.try(KeywordSize::parse) {
-            return Ok(SpecifiedValue::Keyword(kw))
+            return Ok(SpecifiedValue::Keyword(kw, 1.))
         }
 
         match_ignore_ascii_case! {&*input.expect_ident()?,
@@ -766,14 +795,14 @@ ${helpers.single_keyword("font-variant-caps",
     }
 
     /// none | <number>
-    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
         use values::specified::Number;
 
         if input.try(|input| input.expect_ident_matching("none")).is_ok() {
             return Ok(SpecifiedValue::None);
         }
 
-        Ok(SpecifiedValue::Number(try!(Number::parse_non_negative(input))))
+        Ok(SpecifiedValue::Number(try!(Number::parse_non_negative(context, input))))
     }
 </%helpers:longhand>
 
@@ -858,6 +887,495 @@ ${helpers.single_keyword("font-kerning",
                          gecko_constant_prefix="NS_FONT_KERNING",
                          spec="https://drafts.csswg.org/css-fonts/#propdef-font-stretch",
                          animation_type="none")}
+
+/// FIXME: Implement proper handling of each values.
+/// https://github.com/servo/servo/issues/15957
+<%helpers:longhand name="font-variant-alternates" products="gecko" animation_type="none"
+                   spec="https://drafts.csswg.org/css-fonts/#propdef-font-variant-alternates">
+    use std::fmt;
+    use style_traits::ToCss;
+    use values::HasViewportPercentage;
+    use values::computed::ComputedValueAsSpecified;
+
+    impl ComputedValueAsSpecified for SpecifiedValue {}
+    no_viewport_percentage!(SpecifiedValue);
+
+    bitflags! {
+        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+        pub flags SpecifiedValue: u8 {
+            const NORMAL = 0,
+            const HISTORICAL_FORMS = 0x01,
+            const STYLISTIC = 0x02,
+            const STYLESET = 0x04,
+            const CHARACTER_VARIANT = 0x08,
+            const SWASH = 0x10,
+            const ORNAMENTS = 0x20,
+            const ANNOTATION = 0x40,
+        }
+    }
+
+    impl ToCss for SpecifiedValue {
+        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+            if self.is_empty() {
+                return dest.write_str("normal")
+            }
+
+            let mut has_any = false;
+
+            macro_rules! write_value {
+                ($ident:ident => $str:expr) => {
+                    if self.intersects($ident) {
+                        if has_any {
+                            try!(dest.write_str(" "));
+                        }
+                        has_any = true;
+                        try!(dest.write_str($str));
+                    }
+                }
+            }
+
+            write_value!(HISTORICAL_FORMS => "historical-forms");
+            write_value!(STYLISTIC => "stylistic");
+            write_value!(STYLESET => "styleset");
+            write_value!(CHARACTER_VARIANT => "character-variant");
+            write_value!(SWASH => "swash");
+            write_value!(ORNAMENTS => "ornaments");
+            write_value!(ANNOTATION => "annotation");
+
+            debug_assert!(has_any);
+            Ok(())
+        }
+    }
+
+    pub mod computed_value {
+        pub type T = super::SpecifiedValue;
+    }
+    #[inline]
+    pub fn get_initial_value() -> computed_value::T {
+        computed_value::T::empty()
+    }
+    #[inline]
+    pub fn get_initial_specified_value() -> SpecifiedValue {
+        SpecifiedValue::empty()
+    }
+
+    /// normal |
+    ///  [ stylistic(<feature-value-name>)           ||
+    ///    historical-forms                          ||
+    ///    styleset(<feature-value-name> #)          ||
+    ///    character-variant(<feature-value-name> #) ||
+    ///    swash(<feature-value-name>)               ||
+    ///    ornaments(<feature-value-name>)           ||
+    ///    annotation(<feature-value-name>) ]
+    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+        let mut result = SpecifiedValue::empty();
+
+        if input.try(|input| input.expect_ident_matching("normal")).is_ok() {
+            return Ok(result)
+        }
+
+        while let Ok(ident) = input.try(|input| input.expect_ident()) {
+            let flag = match_ignore_ascii_case! { &ident,
+                "stylistic" => STYLISTIC,
+                "historical-forms" => HISTORICAL_FORMS,
+                "styleset" => STYLESET,
+                "character-variant" => CHARACTER_VARIANT,
+                "swash" => SWASH,
+                "ornaments" => ORNAMENTS,
+                "annotation" => ANNOTATION,
+                _ => return Err(()),
+            };
+            if result.intersects(flag) {
+                return Err(())
+            }
+            result.insert(flag);
+        }
+
+        if !result.is_empty() {
+            Ok(result)
+        } else {
+            Err(())
+        }
+    }
+</%helpers:longhand>
+
+macro_rules! exclusive_value {
+    (($value:ident, $set:expr) => $ident:ident) => {
+        if $value.intersects($set) {
+            return Err(())
+        } else {
+            $ident
+        }
+    }
+}
+
+<%helpers:longhand name="font-variant-east-asian" products="gecko" animation_type="none"
+                   spec="https://drafts.csswg.org/css-fonts/#propdef-font-variant-east-asian">
+    use std::fmt;
+    use style_traits::ToCss;
+    use values::HasViewportPercentage;
+    use values::computed::ComputedValueAsSpecified;
+
+    impl ComputedValueAsSpecified for SpecifiedValue {}
+    no_viewport_percentage!(SpecifiedValue);
+
+    bitflags! {
+        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+        pub flags SpecifiedValue: u16 {
+            const NORMAL = 0,
+            const JIS78 = 0x01,
+            const JIS83 = 0x02,
+            const JIS90 = 0x04,
+            const JIS04 = 0x08,
+            const SIMPLIFIED = 0x10,
+            const TRADITIONAL = 0x20,
+            const FULL_WIDTH = 0x40,
+            const PROPORTIONAL_WIDTH = 0x80,
+            const RUBY = 0x100,
+        }
+    }
+
+    impl ToCss for SpecifiedValue {
+        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+            if self.is_empty() {
+                return dest.write_str("normal")
+            }
+
+            let mut has_any = false;
+
+            macro_rules! write_value {
+                ($ident:ident => $str:expr) => {
+                    if self.intersects($ident) {
+                        if has_any {
+                            try!(dest.write_str(" "));
+                        }
+                        has_any = true;
+                        try!(dest.write_str($str));
+                    }
+                }
+            }
+
+            write_value!(JIS78 => "jis78");
+            write_value!(JIS83 => "jis83");
+            write_value!(JIS90 => "jis90");
+            write_value!(JIS04 => "jis04");
+            write_value!(SIMPLIFIED => "simplified");
+            write_value!(TRADITIONAL => "traditional");
+            write_value!(FULL_WIDTH => "full-width");
+            write_value!(PROPORTIONAL_WIDTH => "proportional-width");
+            write_value!(RUBY => "ruby");
+
+            debug_assert!(has_any);
+            Ok(())
+        }
+    }
+
+    pub mod computed_value {
+        pub type T = super::SpecifiedValue;
+    }
+    #[inline]
+    pub fn get_initial_value() -> computed_value::T {
+        computed_value::T::empty()
+    }
+    #[inline]
+    pub fn get_initial_specified_value() -> SpecifiedValue {
+        SpecifiedValue::empty()
+    }
+
+    /// normal | [ <east-asian-variant-values> || <east-asian-width-values> || ruby ]
+    /// <east-asian-variant-values> = [ jis78 | jis83 | jis90 | jis04 | simplified | traditional ]
+    /// <east-asian-width-values>   = [ full-width | proportional-width ]
+    <% east_asian_variant_values = "JIS78 | JIS83 | JIS90 | JIS04 | SIMPLIFIED | TRADITIONAL" %>
+    <% east_asian_width_values = "FULL_WIDTH | PROPORTIONAL_WIDTH" %>
+    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+        let mut result = SpecifiedValue::empty();
+
+        if input.try(|input| input.expect_ident_matching("normal")).is_ok() {
+            return Ok(result)
+        }
+
+        while let Ok(ident) = input.try(|input| input.expect_ident()) {
+            let flag = match_ignore_ascii_case! { &ident,
+                "jis78" =>
+                    exclusive_value!((result, ${east_asian_variant_values}) => JIS78),
+                "jis83" =>
+                    exclusive_value!((result, ${east_asian_variant_values}) => JIS83),
+                "jis90" =>
+                    exclusive_value!((result, ${east_asian_variant_values}) => JIS90),
+                "jis04" =>
+                    exclusive_value!((result, ${east_asian_variant_values}) => JIS04),
+                "simplified" =>
+                    exclusive_value!((result, ${east_asian_variant_values}) => SIMPLIFIED),
+                "traditional" =>
+                    exclusive_value!((result, ${east_asian_variant_values}) => TRADITIONAL),
+                "full-width" =>
+                    exclusive_value!((result, ${east_asian_width_values}) => FULL_WIDTH),
+                "proportional-width" =>
+                    exclusive_value!((result, ${east_asian_width_values}) => PROPORTIONAL_WIDTH),
+                "ruby" =>
+                    exclusive_value!((result, RUBY) => RUBY),
+                _ => return Err(()),
+            };
+            result.insert(flag);
+        }
+
+        if !result.is_empty() {
+            Ok(result)
+        } else {
+            Err(())
+        }
+    }
+</%helpers:longhand>
+
+<%helpers:longhand name="font-variant-ligatures" products="gecko" animation_type="none"
+                   spec="https://drafts.csswg.org/css-fonts/#propdef-font-variant-ligatures">
+    use std::fmt;
+    use style_traits::ToCss;
+    use values::HasViewportPercentage;
+    use values::computed::ComputedValueAsSpecified;
+
+    impl ComputedValueAsSpecified for SpecifiedValue {}
+    no_viewport_percentage!(SpecifiedValue);
+
+    bitflags! {
+        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+        pub flags SpecifiedValue: u16 {
+            const NORMAL = 0,
+            const NONE = 0x01,
+            const COMMON_LIGATURES = 0x02,
+            const NO_COMMON_LIGATURES = 0x04,
+            const DISCRETIONARY_LIGATURES = 0x08,
+            const NO_DISCRETIONARY_LIGATURES = 0x10,
+            const HISTORICAL_LIGATURES = 0x20,
+            const NO_HISTORICAL_LIGATURES = 0x40,
+            const CONTEXTUAL = 0x80,
+            const NO_CONTEXTUAL = 0x100,
+        }
+    }
+
+    impl ToCss for SpecifiedValue {
+        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+            if self.is_empty() {
+                return dest.write_str("normal")
+            }
+            if self.contains(NONE) {
+                return dest.write_str("none")
+            }
+
+            let mut has_any = false;
+
+            macro_rules! write_value {
+                ($ident:ident => $str:expr) => {
+                    if self.intersects($ident) {
+                        if has_any {
+                            try!(dest.write_str(" "));
+                        }
+                        has_any = true;
+                        try!(dest.write_str($str));
+                    }
+                }
+            }
+
+            write_value!(COMMON_LIGATURES => "common-ligatures");
+            write_value!(NO_COMMON_LIGATURES => "no-common-ligatures");
+            write_value!(DISCRETIONARY_LIGATURES => "discretionary-ligatures");
+            write_value!(NO_DISCRETIONARY_LIGATURES => "no-discretionary-ligatures");
+            write_value!(HISTORICAL_LIGATURES => "historical-ligatures");
+            write_value!(NO_HISTORICAL_LIGATURES => "no-historical-ligatures");
+            write_value!(CONTEXTUAL => "contextual");
+            write_value!(NO_CONTEXTUAL => "no-contextual");
+
+            debug_assert!(has_any);
+            Ok(())
+        }
+    }
+
+    pub mod computed_value {
+        pub type T = super::SpecifiedValue;
+    }
+    #[inline]
+    pub fn get_initial_value() -> computed_value::T {
+        computed_value::T::empty()
+    }
+    #[inline]
+    pub fn get_initial_specified_value() -> SpecifiedValue {
+        SpecifiedValue::empty()
+    }
+
+    /// normal | none |
+    /// [ <common-lig-values> ||
+    ///   <discretionary-lig-values> ||
+    ///   <historical-lig-values> ||
+    ///   <contextual-alt-values> ]
+    /// <common-lig-values>        = [ common-ligatures | no-common-ligatures ]
+    /// <discretionary-lig-values> = [ discretionary-ligatures | no-discretionary-ligatures ]
+    /// <historical-lig-values>    = [ historical-ligatures | no-historical-ligatures ]
+    /// <contextual-alt-values>    = [ contextual | no-contextual ]
+    <% common_lig_values = "COMMON_LIGATURES | NO_COMMON_LIGATURES" %>
+    <% discretionary_lig_values = "DISCRETIONARY_LIGATURES | NO_DISCRETIONARY_LIGATURES" %>
+    <% historical_lig_values = "HISTORICAL_LIGATURES | NO_HISTORICAL_LIGATURES" %>
+    <% contextual_alt_values = "CONTEXTUAL | NO_CONTEXTUAL" %>
+    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+        let mut result = SpecifiedValue::empty();
+
+        if input.try(|input| input.expect_ident_matching("normal")).is_ok() {
+            return Ok(result)
+        }
+        if input.try(|input| input.expect_ident_matching("none")).is_ok() {
+            return Ok(NONE)
+        }
+
+        while let Ok(ident) = input.try(|input| input.expect_ident()) {
+            let flag = match_ignore_ascii_case! { &ident,
+                "common-ligatures" =>
+                    exclusive_value!((result, ${common_lig_values}) => COMMON_LIGATURES),
+                "no-common-ligatures" =>
+                    exclusive_value!((result, ${common_lig_values}) => NO_COMMON_LIGATURES),
+                "discretionary-ligatures" =>
+                    exclusive_value!((result, ${discretionary_lig_values}) => DISCRETIONARY_LIGATURES),
+                "no-discretionary-ligatures" =>
+                    exclusive_value!((result, ${discretionary_lig_values}) => NO_DISCRETIONARY_LIGATURES),
+                "historical-ligatures" =>
+                    exclusive_value!((result, ${historical_lig_values}) => HISTORICAL_LIGATURES),
+                "no-historical-ligatures" =>
+                    exclusive_value!((result, ${historical_lig_values}) => NO_HISTORICAL_LIGATURES),
+                "contextual" =>
+                    exclusive_value!((result, ${contextual_alt_values}) => CONTEXTUAL),
+                "no-contextual" =>
+                    exclusive_value!((result, ${contextual_alt_values}) => NO_CONTEXTUAL),
+                _ => return Err(()),
+            };
+            result.insert(flag);
+        }
+
+        if !result.is_empty() {
+            Ok(result)
+        } else {
+            Err(())
+        }
+    }
+</%helpers:longhand>
+
+<%helpers:longhand name="font-variant-numeric" products="gecko" animation_type="none"
+                   spec="https://drafts.csswg.org/css-fonts/#propdef-font-variant-numeric">
+    use std::fmt;
+    use style_traits::ToCss;
+    use values::HasViewportPercentage;
+    use values::computed::ComputedValueAsSpecified;
+
+    impl ComputedValueAsSpecified for SpecifiedValue {}
+    no_viewport_percentage!(SpecifiedValue);
+
+    bitflags! {
+        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+        pub flags SpecifiedValue: u8 {
+            const NORMAL = 0,
+            const LINING_NUMS = 0x01,
+            const OLDSTYLE_NUMS = 0x02,
+            const PROPORTIONAL_NUMS = 0x04,
+            const TABULAR_NUMS = 0x08,
+            const DIAGONAL_FRACTIONS = 0x10,
+            const STACKED_FRACTIONS = 0x20,
+            const SLASHED_ZERO = 0x40,
+            const ORDINAL = 0x80,
+        }
+    }
+
+    impl ToCss for SpecifiedValue {
+        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+            if self.is_empty() {
+                return dest.write_str("normal")
+            }
+
+            let mut has_any = false;
+
+            macro_rules! write_value {
+                ($ident:ident => $str:expr) => {
+                    if self.intersects($ident) {
+                        if has_any {
+                            try!(dest.write_str(" "));
+                        }
+                        has_any = true;
+                        try!(dest.write_str($str));
+                    }
+                }
+            }
+
+            write_value!(LINING_NUMS => "lining-nums");
+            write_value!(OLDSTYLE_NUMS => "oldstyle-nums");
+            write_value!(PROPORTIONAL_NUMS => "proportional-nums");
+            write_value!(TABULAR_NUMS => "tabular-nums");
+            write_value!(DIAGONAL_FRACTIONS => "diagonal-fractions");
+            write_value!(STACKED_FRACTIONS => "stacked-fractions");
+            write_value!(SLASHED_ZERO => "slashed-zero");
+            write_value!(ORDINAL => "ordinal");
+
+            debug_assert!(has_any);
+            Ok(())
+        }
+    }
+
+    pub mod computed_value {
+        pub type T = super::SpecifiedValue;
+    }
+    #[inline]
+    pub fn get_initial_value() -> computed_value::T {
+        computed_value::T::empty()
+    }
+    #[inline]
+    pub fn get_initial_specified_value() -> SpecifiedValue {
+        SpecifiedValue::empty()
+    }
+
+    /// normal |
+    ///  [ <numeric-figure-values>   ||
+    ///    <numeric-spacing-values>  ||
+    ///    <numeric-fraction-values> ||
+    ///    ordinal                   ||
+    ///    slashed-zero ]
+    /// <numeric-figure-values>   = [ lining-nums | oldstyle-nums ]
+    /// <numeric-spacing-values>  = [ proportional-nums | tabular-nums ]
+    /// <numeric-fraction-values> = [ diagonal-fractions | stacked-fractions ]
+    <% numeric_figure_values = "LINING_NUMS | OLDSTYLE_NUMS" %>
+    <% numeric_spacing_values = "PROPORTIONAL_NUMS | TABULAR_NUMS" %>
+    <% numeric_fraction_values = "DIAGONAL_FRACTIONS | STACKED_FRACTIONS" %>
+    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+        let mut result = SpecifiedValue::empty();
+
+        if input.try(|input| input.expect_ident_matching("normal")).is_ok() {
+            return Ok(result)
+        }
+
+        while let Ok(ident) = input.try(|input| input.expect_ident()) {
+            let flag = match_ignore_ascii_case! { &ident,
+                "ordinal" =>
+                    exclusive_value!((result, ORDINAL) => ORDINAL),
+                "slashed-zero" =>
+                    exclusive_value!((result, SLASHED_ZERO) => SLASHED_ZERO),
+                "lining-nums" =>
+                    exclusive_value!((result, ${numeric_figure_values}) => LINING_NUMS ),
+                "oldstyle-nums" =>
+                    exclusive_value!((result, ${numeric_figure_values}) => OLDSTYLE_NUMS ),
+                "proportional-nums" =>
+                    exclusive_value!((result, ${numeric_spacing_values}) => PROPORTIONAL_NUMS ),
+                "tabular-nums" =>
+                    exclusive_value!((result, ${numeric_spacing_values}) => TABULAR_NUMS ),
+                "diagonal-fractions" =>
+                    exclusive_value!((result, ${numeric_fraction_values}) => DIAGONAL_FRACTIONS ),
+                "stacked-fractions" =>
+                    exclusive_value!((result, ${numeric_fraction_values}) => STACKED_FRACTIONS ),
+                _ => return Err(()),
+            };
+            result.insert(flag);
+        }
+
+        if !result.is_empty() {
+            Ok(result)
+        } else {
+            Err(())
+        }
+    }
+</%helpers:longhand>
 
 ${helpers.single_keyword("font-variant-position",
                          "normal sub super",
@@ -1096,8 +1614,7 @@ ${helpers.single_keyword("font-variant-position",
 </%helpers:longhand>
 
 <%helpers:longhand name="-x-lang" products="gecko" animation_type="none" internal="True"
-                   spec="Internal (not web-exposed)"
-                   internal="True">
+                   spec="Internal (not web-exposed)">
     use values::HasViewportPercentage;
     use values::computed::ComputedValueAsSpecified;
     pub use self::computed_value::T as SpecifiedValue;
@@ -1131,3 +1648,156 @@ ${helpers.single_keyword("font-variant-position",
         Err(())
     }
 </%helpers:longhand>
+
+// MathML properties
+<%helpers:longhand name="-moz-script-size-multiplier" products="gecko" animation_type="none"
+                   predefined_type="Number" gecko_ffi_name="mScriptSizeMultiplier"
+                   spec="Internal (not web-exposed)"
+                   internal="True" disable_when_testing="True">
+    use values::HasViewportPercentage;
+    use values::computed::ComputedValueAsSpecified;
+    pub use self::computed_value::T as SpecifiedValue;
+
+    impl ComputedValueAsSpecified for SpecifiedValue {}
+    no_viewport_percentage!(SpecifiedValue);
+
+    pub mod computed_value {
+        pub type T = f32;
+    }
+
+    #[inline]
+    pub fn get_initial_value() -> computed_value::T {
+        ::gecko_bindings::structs::NS_MATHML_DEFAULT_SCRIPT_SIZE_MULTIPLIER
+    }
+
+    pub fn parse(_context: &ParserContext, _input: &mut Parser) -> Result<SpecifiedValue, ()> {
+        debug_assert!(false, "Should be set directly by presentation attributes only.");
+        Err(())
+    }
+</%helpers:longhand>
+
+<%helpers:longhand name="-moz-script-level" products="gecko" animation_type="none"
+                   predefined_type="Integer" gecko_ffi_name="mScriptLevel"
+                   spec="Internal (not web-exposed)"
+                   internal="True" disable_when_testing="True" need_clone="True">
+    use std::fmt;
+    use style_traits::ToCss;
+    use values::HasViewportPercentage;
+
+    no_viewport_percentage!(SpecifiedValue);
+
+    pub mod computed_value {
+        pub type T = i8;
+    }
+
+    #[inline]
+    pub fn get_initial_value() -> computed_value::T {
+        0
+    }
+
+    #[derive(Copy, Clone, PartialEq, Debug)]
+    pub enum SpecifiedValue {
+        Relative(i32),
+        Absolute(i32),
+        Auto
+    }
+
+    impl ToCss for SpecifiedValue {
+        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+            match *self {
+                SpecifiedValue::Auto => dest.write_str("auto"),
+                SpecifiedValue::Relative(rel) => write!(dest, "{}", rel),
+                // can only be specified by pres attrs; should not
+                // serialize to anything else
+                SpecifiedValue::Absolute(_) => Ok(()),
+            }
+        }
+    }
+
+    impl ToComputedValue for SpecifiedValue {
+        type ComputedValue = computed_value::T;
+
+        fn to_computed_value(&self, cx: &Context) -> i8 {
+            use properties::longhands::_moz_math_display::SpecifiedValue as DisplayValue;
+            use std::{cmp, i8};
+
+            let int = match *self {
+                SpecifiedValue::Auto => {
+                    let parent = cx.inherited_style().get_font().clone__moz_script_level() as i32;
+                    let display = cx.inherited_style().get_font().clone__moz_math_display();
+                    if display == DisplayValue::inline {
+                        parent + 1
+                    } else {
+                        parent
+                    }
+                }
+                SpecifiedValue::Relative(rel) => {
+                    let parent = cx.inherited_style().get_font().clone__moz_script_level();
+                    parent as i32 + rel
+                }
+                SpecifiedValue::Absolute(abs) => abs,
+            };
+            cmp::min(int, i8::MAX as i32) as i8
+        }
+        fn from_computed_value(other: &computed_value::T) -> Self {
+            SpecifiedValue::Absolute(*other as i32)
+        }
+    }
+
+    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+        if let Ok(i) = input.try(|i| i.expect_integer()) {
+            return Ok(SpecifiedValue::Relative(i))
+        }
+        input.expect_ident_matching("auto")?;
+        Ok(SpecifiedValue::Auto)
+    }
+</%helpers:longhand>
+
+${helpers.single_keyword("-moz-math-display",
+                         "inline block",
+                         gecko_constant_prefix="NS_MATHML_DISPLAYSTYLE",
+                         gecko_ffi_name="mMathDisplay",
+                         products="gecko",
+                         spec="Internal (not web-exposed)",
+                         animation_type="none",
+                         need_clone="True")}
+
+${helpers.single_keyword("-moz-math-variant",
+                         """normal bold italic bold-italic script bold-script
+                            fraktur double-struck bold-fraktur sans-serif
+                            bold-sans-serif sans-serif-italic sans-serif-bold-italic
+                            monospace initial tailed looped stretched""",
+                         gecko_constant_prefix="NS_MATHML_MATHVARIANT",
+                         gecko_ffi_name="mMathVariant",
+                         products="gecko",
+                         spec="Internal (not web-exposed)",
+                         animation_type="none",
+                         needs_conversion=True)}
+
+<%helpers:longhand name="-moz-script-min-size" products="gecko" animation_type="none"
+                   predefined_type="Length" gecko_ffi_name="mScriptMinSize"
+                   spec="Internal (not web-exposed)"
+                   internal="True" disable_when_testing="True">
+    use app_units::Au;
+    use gecko_bindings::structs::NS_MATHML_DEFAULT_SCRIPT_MIN_SIZE_PT;
+    use values::HasViewportPercentage;
+    use values::computed::ComputedValueAsSpecified;
+    use values::specified::length::{AU_PER_PT, Length};
+
+    pub type SpecifiedValue = Length;
+
+    pub mod computed_value {
+        pub type T = super::Au;
+    }
+
+    #[inline]
+    pub fn get_initial_value() -> computed_value::T {
+        Au((NS_MATHML_DEFAULT_SCRIPT_MIN_SIZE_PT as f32 * AU_PER_PT) as i32)
+    }
+
+    pub fn parse(_context: &ParserContext, _input: &mut Parser) -> Result<SpecifiedValue, ()> {
+        debug_assert!(false, "Should be set directly by presentation attributes only.");
+        Err(())
+    }
+</%helpers:longhand>
+

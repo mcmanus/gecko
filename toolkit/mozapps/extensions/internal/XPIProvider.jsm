@@ -61,9 +61,10 @@ XPCOMUtils.defineLazyModuleGetter(this, "isAddonPartOfE10SRollout",
 XPCOMUtils.defineLazyModuleGetter(this, "LegacyExtensionsUtils",
                                   "resource://gre/modules/LegacyExtensionsUtils.jsm");
 
+const {nsIBlocklistService} = Ci;
 XPCOMUtils.defineLazyServiceGetter(this, "Blocklist",
                                    "@mozilla.org/extensions/blocklist;1",
-                                   Ci.nsIBlocklistService);
+                                   "nsIBlocklistService");
 XPCOMUtils.defineLazyServiceGetter(this,
                                    "ChromeRegistry",
                                    "@mozilla.org/chrome/chrome-registry;1",
@@ -91,7 +92,6 @@ XPCOMUtils.defineLazyGetter(this, "IconDetails", () => {
   const {ExtensionUtils} = Cu.import("resource://gre/modules/ExtensionUtils.jsm", {});
   return ExtensionUtils.IconDetails;
 });
-
 
 Cu.importGlobalProperties(["URL"]);
 
@@ -132,6 +132,7 @@ const PREF_E10S_BLOCK_ENABLE          = "extensions.e10sBlocksEnabling";
 const PREF_E10S_ADDON_BLOCKLIST       = "extensions.e10s.rollout.blocklist";
 const PREF_E10S_ADDON_POLICY          = "extensions.e10s.rollout.policy";
 const PREF_E10S_HAS_NONEXEMPT_ADDON   = "extensions.e10s.rollout.hasAddon";
+const PREF_ALLOW_NON_MPC              = "extensions.allow-non-mpc-extensions";
 
 const PREF_EM_MIN_COMPAT_APP_VERSION      = "extensions.minCompatibleAppVersion";
 const PREF_EM_MIN_COMPAT_PLATFORM_VERSION = "extensions.minCompatiblePlatformVersion";
@@ -185,6 +186,8 @@ const XPI_SIGNATURE_CHECK_PERIOD      = 24 * 60 * 60;
 
 XPCOMUtils.defineConstant(this, "DB_SCHEMA", 19);
 
+XPCOMUtils.defineLazyPreferenceGetter(this, "ALLOW_NON_MPC", PREF_ALLOW_NON_MPC);
+
 const NOTIFICATION_TOOLBOXPROCESS_LOADED      = "ToolboxProcessLoaded";
 
 // Properties that exist in the install manifest
@@ -205,10 +208,10 @@ const PENDING_INSTALL_METADATA =
 // DB schema version to ensure changes are picked up ASAP.
 const STATIC_BLOCKLIST_PATTERNS = [
   { creator: "Mozilla Corp.",
-    level: Blocklist.STATE_BLOCKED,
+    level: nsIBlocklistService.STATE_BLOCKED,
     blockID: "i162" },
   { creator: "Mozilla.org",
-    level: Blocklist.STATE_BLOCKED,
+    level: nsIBlocklistService.STATE_BLOCKED,
     blockID: "i162" }
 ];
 
@@ -769,7 +772,7 @@ function isUsableAddon(aAddon) {
     return false;
   }
 
-  if (aAddon.blocklistState == Blocklist.STATE_BLOCKED) {
+  if (aAddon.blocklistState == nsIBlocklistService.STATE_BLOCKED) {
     logger.warn(`Add-on ${aAddon.id} is blocklisted.`);
     return false;
   }
@@ -803,6 +806,11 @@ function isUsableAddon(aAddon) {
 
     if (aAddon.dependencies.some(id => !isActive(id)))
       return false;
+  }
+
+  if (!ALLOW_NON_MPC && aAddon.multiprocessCompatible !== true) {
+    logger.warn(`disabling ${aAddon.id} since it is not multiprocess compatible`);
+    return false;
   }
 
   if (AddonManager.checkCompatibility) {
@@ -963,15 +971,17 @@ var loadManifestFromWebManifest = Task.async(function*(aUri) {
   let extension = new ExtensionData(uri);
 
   let manifest = yield extension.loadManifest();
-  let theme = !!manifest.theme;
 
   // Read the list of available locales, and pre-load messages for
   // all locales.
-  let locales = yield extension.initAllLocales();
+  let locales = (extension.errors.length == 0) ?
+                yield extension.initAllLocales() : null;
 
-  // If there were any errors loading the extension, bail out now.
-  if (extension.errors.length)
+  if (extension.errors.length > 0) {
     throw new Error("Extension is invalid");
+  }
+
+  let theme = Boolean(manifest.theme);
 
   let bss = (manifest.browser_specific_settings && manifest.browser_specific_settings.gecko)
       || (manifest.applications && manifest.applications.gecko) || {};
@@ -1073,7 +1083,7 @@ var loadManifestFromWebManifest = Task.async(function*(aUri) {
   addon.targetPlatforms = [];
   // Themes are disabled by default, except when they're installed from a web page.
   addon.userDisabled = theme;
-  addon.softDisabled = addon.blocklistState == Blocklist.STATE_SOFTBLOCKED;
+  addon.softDisabled = addon.blocklistState == nsIBlocklistService.STATE_SOFTBLOCKED;
 
   return addon;
 });
@@ -1346,7 +1356,7 @@ let loadManifestFromRDF = Task.async(function*(aUri, aStream) {
     addon.userDisabled = false;
   }
 
-  addon.softDisabled = addon.blocklistState == Blocklist.STATE_SOFTBLOCKED;
+  addon.softDisabled = addon.blocklistState == nsIBlocklistService.STATE_SOFTBLOCKED;
   addon.applyBackgroundUpdates = AddonManager.AUTOUPDATE_DEFAULT;
 
   // Experiments are managed and updated through an external "experiments
@@ -1687,15 +1697,15 @@ function buildJarURI(aJarfile, aPath) {
  *        The ZIP/XPI/JAR file as a nsIFile
  */
 function flushJarCache(aJarFile) {
-  Services.obs.notifyObservers(aJarFile, "flush-cache-entry", null);
+  Services.obs.notifyObservers(aJarFile, "flush-cache-entry");
   Services.mm.broadcastAsyncMessage(MSG_JAR_FLUSH, aJarFile.path);
 }
 
 function flushChromeCaches() {
   // Init this, so it will get the notification.
-  Services.obs.notifyObservers(null, "startupcache-invalidate", null);
+  Services.obs.notifyObservers(null, "startupcache-invalidate");
   // Flush message manager cached scripts
-  Services.obs.notifyObservers(null, "message-manager-flush-caches", null);
+  Services.obs.notifyObservers(null, "message-manager-flush-caches");
   // Also dispatch this event to child processes
   Services.mm.broadcastAsyncMessage(MSG_MESSAGE_MANAGER_CACHES_FLUSH, null);
 }
@@ -2807,13 +2817,14 @@ this.XPIProvider = {
                                                           null);
       this.enabledAddons = "";
 
-      Services.prefs.addObserver(PREF_EM_MIN_COMPAT_APP_VERSION, this, false);
-      Services.prefs.addObserver(PREF_EM_MIN_COMPAT_PLATFORM_VERSION, this, false);
-      Services.prefs.addObserver(PREF_E10S_ADDON_BLOCKLIST, this, false);
-      Services.prefs.addObserver(PREF_E10S_ADDON_POLICY, this, false);
+      Services.prefs.addObserver(PREF_EM_MIN_COMPAT_APP_VERSION, this);
+      Services.prefs.addObserver(PREF_EM_MIN_COMPAT_PLATFORM_VERSION, this);
+      Services.prefs.addObserver(PREF_E10S_ADDON_BLOCKLIST, this);
+      Services.prefs.addObserver(PREF_E10S_ADDON_POLICY, this);
       if (!REQUIRE_SIGNING)
-        Services.prefs.addObserver(PREF_XPI_SIGNATURES_REQUIRED, this, false);
-      Services.obs.addObserver(this, NOTIFICATION_FLUSH_PERMISSIONS, false);
+        Services.prefs.addObserver(PREF_XPI_SIGNATURES_REQUIRED, this);
+      Services.prefs.addObserver(PREF_ALLOW_NON_MPC, this);
+      Services.obs.addObserver(this, NOTIFICATION_FLUSH_PERMISSIONS);
 
       // Cu.isModuleLoaded can fail here for external XUL apps where there is
       // no chrome.manifest that defines resource://devtools.
@@ -2826,7 +2837,7 @@ this.XPIProvider = {
                                    this.onDebugConnectionChange.bind(this));
         } else {
           // Else, wait for it to load
-          Services.obs.addObserver(this, NOTIFICATION_TOOLBOXPROCESS_LOADED, false);
+          Services.obs.addObserver(this, NOTIFICATION_TOOLBOXPROCESS_LOADED);
         }
       }
 
@@ -2848,13 +2859,13 @@ this.XPIProvider = {
       }
 
       if (flushCaches) {
-        Services.obs.notifyObservers(null, "startupcache-invalidate", null);
+        Services.obs.notifyObservers(null, "startupcache-invalidate");
         // UI displayed early in startup (like the compatibility UI) may have
         // caused us to cache parts of the skin or locale in memory. These must
         // be flushed to allow extension provided skins and locales to take full
         // effect
-        Services.obs.notifyObservers(null, "chrome-flush-skin-caches", null);
-        Services.obs.notifyObservers(null, "chrome-flush-caches", null);
+        Services.obs.notifyObservers(null, "chrome-flush-skin-caches");
+        Services.obs.notifyObservers(null, "chrome-flush-caches");
       }
 
       this.enabledAddons = Preferences.get(PREF_EM_ENABLED_ADDONS, "");
@@ -2927,7 +2938,7 @@ this.XPIProvider = {
           }
           Services.obs.removeObserver(this, "quit-application-granted");
         }
-      }, "quit-application-granted", false);
+      }, "quit-application-granted");
 
       // Detect final-ui-startup for telemetry reporting
       Services.obs.addObserver({
@@ -2936,7 +2947,7 @@ this.XPIProvider = {
           XPIProvider.runPhase = XPI_AFTER_UI_STARTUP;
           Services.obs.removeObserver(this, "final-ui-startup");
         }
-      }, "final-ui-startup", false);
+      }, "final-ui-startup");
 
       AddonManagerPrivate.recordTimestamp("XPI_startup_end");
 
@@ -2993,7 +3004,7 @@ this.XPIProvider = {
       done.then(
         ret => {
           logger.debug("Notifying XPI shutdown observers");
-          Services.obs.notifyObservers(null, "xpi-provider-shutdown", null);
+          Services.obs.notifyObservers(null, "xpi-provider-shutdown");
         },
         err => {
           logger.debug("Notifying XPI shutdown observers");
@@ -3004,7 +3015,7 @@ this.XPIProvider = {
       return done;
     }
     logger.debug("Notifying XPI shutdown observers");
-    Services.obs.notifyObservers(null, "xpi-provider-shutdown", null);
+    Services.obs.notifyObservers(null, "xpi-provider-shutdown");
     return undefined;
   },
 
@@ -4476,6 +4487,7 @@ this.XPIProvider = {
         this.updateAddonAppDisabledStates();
         break;
       case PREF_XPI_SIGNATURES_REQUIRED:
+      case PREF_ALLOW_NON_MPC:
         this.updateAddonAppDisabledStates();
         break;
 
@@ -4831,8 +4843,9 @@ this.XPIProvider = {
         activeAddon.bootstrapScope[feature] = gGlobalScope[feature];
 
       // Define a console for the add-on
-      activeAddon.bootstrapScope["console"] = new ConsoleAPI(
-        { consoleID: "addon/" + aId });
+      XPCOMUtils.defineLazyGetter(
+        activeAddon.bootstrapScope, "console",
+        () => new ConsoleAPI({ consoleID: "addon/" + aId }));
 
       // As we don't want our caller to control the JS version used for the
       // bootstrap file, we run loadSubScript within the context of the
@@ -6305,7 +6318,7 @@ class DownloadAddonInstall extends AddonInstall {
       }
       this.channel.asyncOpen2(listener);
 
-      Services.obs.addObserver(this, "network:offline-about-to-go-offline", false);
+      Services.obs.addObserver(this, "network:offline-about-to-go-offline");
     } catch (e) {
       logger.warn("Failed to start download for addon " + this.sourceURI.spec, e);
       this.state = AddonManager.STATE_DOWNLOAD_FAILED;
@@ -7738,7 +7751,7 @@ AddonWrapper.prototype = {
       if (!this.temporarilyInstalled) {
         let addonFile = addon.getResourceURI;
         XPIProvider.updateAddonDisabledState(addon, true);
-        Services.obs.notifyObservers(addonFile, "flush-cache-entry", null);
+        Services.obs.notifyObservers(addonFile, "flush-cache-entry");
         XPIProvider.updateAddonDisabledState(addon, false)
         resolve();
       } else {

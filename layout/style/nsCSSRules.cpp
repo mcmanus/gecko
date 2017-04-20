@@ -494,9 +494,10 @@ MediaRule::SetConditionText(const nsAString& aConditionText)
 // GroupRule interface
 /* virtual */ bool
 MediaRule::UseForPresentation(nsPresContext* aPresContext,
-                                   nsMediaQueryResultCacheKey& aKey)
+                              nsMediaQueryResultCacheKey& aKey)
 {
   if (mMedia) {
+    MOZ_ASSERT(aPresContext);
     return mMedia->Matches(aPresContext, &aKey);
   }
   return true;

@@ -875,12 +875,7 @@ function getDir(aKey, aIFace) {
  * exists in nsHttpHandler.cpp when building the UA string.
  */
 function getLocale() {
-  let locale = getLocalizedPref(LOCALE_PREF);
-  if (locale)
-    return locale;
-
-  // Not localized.
-  return Services.prefs.getCharPref(LOCALE_PREF);
+  return Services.locale.getRequestedLocale();
 }
 
 /**
@@ -2637,7 +2632,7 @@ const gEmptyParseSubmissionResult =
       Object.freeze(new ParseSubmissionResult(null, "", -1, 0));
 
 function executeSoon(func) {
-  Services.tm.mainThread.dispatch(func, Ci.nsIThread.DISPATCH_NORMAL);
+  Services.tm.dispatchToMainThread(func);
 }
 
 /**
@@ -4674,11 +4669,11 @@ SearchService.prototype = {
     }
     this._observersAdded = true;
 
-    Services.obs.addObserver(this, SEARCH_ENGINE_TOPIC, false);
-    Services.obs.addObserver(this, QUIT_APPLICATION_TOPIC, false);
+    Services.obs.addObserver(this, SEARCH_ENGINE_TOPIC);
+    Services.obs.addObserver(this, QUIT_APPLICATION_TOPIC);
 
     if (AppConstants.MOZ_BUILD_APP == "mobile/android") {
-      Services.prefs.addObserver(LOCALE_PREF, this, false);
+      Services.prefs.addObserver(LOCALE_PREF, this);
     }
 
     // The current stage of shutdown. Used to help analyze crash

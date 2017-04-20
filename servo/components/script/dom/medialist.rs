@@ -2,12 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use core::default::Default;
 use cssparser::Parser;
 use dom::bindings::codegen::Bindings::MediaListBinding;
 use dom::bindings::codegen::Bindings::MediaListBinding::MediaListMethods;
 use dom::bindings::js::{JS, Root};
-use dom::bindings::reflector::{Reflector, reflect_dom_object};
+use dom::bindings::reflector::{DomObject, Reflector, reflect_dom_object};
 use dom::bindings::str::DOMString;
 use dom::cssstylesheet::CSSStyleSheet;
 use dom::window::Window;
@@ -15,7 +14,9 @@ use dom_struct::dom_struct;
 use std::sync::Arc;
 use style::media_queries::{MediaQuery, parse_media_query_list};
 use style::media_queries::MediaList as StyleMediaList;
+use style::parser::{LengthParsingMode, ParserContext};
 use style::shared_lock::{SharedRwLock, Locked};
+use style::stylesheets::CssRuleType;
 use style_traits::ToCss;
 
 #[dom_struct]
@@ -65,12 +66,17 @@ impl MediaListMethods for MediaList {
         // Step 2
         if value.is_empty() {
             // Step 1
-            *media_queries = StyleMediaList::default();
+            *media_queries = StyleMediaList::empty();
             return;
         }
         // Step 3
         let mut parser = Parser::new(&value);
-        *media_queries = parse_media_query_list(&mut parser);
+        let global = self.global();
+        let win = global.as_window();
+        let url = win.get_url();
+        let context = ParserContext::new_for_cssom(&url, win.css_error_reporter(), Some(CssRuleType::Media),
+                                                   LengthParsingMode::Default);
+        *media_queries = parse_media_query_list(&context, &mut parser);
     }
 
     // https://drafts.csswg.org/cssom/#dom-medialist-length
@@ -99,7 +105,12 @@ impl MediaListMethods for MediaList {
     fn AppendMedium(&self, medium: DOMString) {
         // Step 1
         let mut parser = Parser::new(&medium);
-        let m = MediaQuery::parse(&mut parser);
+        let global = self.global();
+        let win = global.as_window();
+        let url = win.get_url();
+        let context = ParserContext::new_for_cssom(&url, win.css_error_reporter(), Some(CssRuleType::Media),
+                                                   LengthParsingMode::Default);
+        let m = MediaQuery::parse(&context, &mut parser);
         // Step 2
         if let Err(_) = m {
             return;
@@ -120,7 +131,12 @@ impl MediaListMethods for MediaList {
     fn DeleteMedium(&self, medium: DOMString) {
         // Step 1
         let mut parser = Parser::new(&medium);
-        let m = MediaQuery::parse(&mut parser);
+        let global = self.global();
+        let win = global.as_window();
+        let url = win.get_url();
+        let context = ParserContext::new_for_cssom(&url, win.css_error_reporter(), Some(CssRuleType::Media),
+                                                   LengthParsingMode::Default);
+        let m = MediaQuery::parse(&context, &mut parser);
         // Step 2
         if let Err(_) = m {
             return;

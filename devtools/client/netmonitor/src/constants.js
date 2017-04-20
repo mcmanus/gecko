@@ -127,9 +127,18 @@ const HEADERS = [
     canFilter: false,
   },
   {
+    name: "protocol",
+    canFilter: true,
+  },
+  {
     name: "domain",
     boxName: "security-and-domain",
     canFilter: true,
+  },
+  {
+    name: "remoteip",
+    canFilter: true,
+    filterKey: "remote-ip",
   },
   {
     name: "cause",

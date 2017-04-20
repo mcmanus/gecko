@@ -220,7 +220,7 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
     <% vertical_align = data.longhands_by_name["vertical-align"] %>
     <% vertical_align.keyword = Keyword("vertical-align",
                                         "baseline sub super top text-top middle bottom text-bottom",
-                                        extra_gecko_values="middle-with-baseline") %>
+                                        extra_gecko_values="-moz-middle-with-baseline") %>
     <% vertical_align_keywords = vertical_align.keyword.values_for(product) %>
 
     ${helpers.gecko_keyword_conversion(vertical_align.keyword)}
@@ -558,24 +558,24 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
     }
 
     impl Parse for SpecifiedValue {
-        fn parse(_context: &ParserContext, input: &mut ::cssparser::Parser) -> Result<Self, ()> {
+        fn parse(context: &ParserContext, input: &mut ::cssparser::Parser) -> Result<Self, ()> {
             if let Ok(function_name) = input.try(|input| input.expect_function()) {
                 return match_ignore_ascii_case! { &function_name,
                     "cubic-bezier" => {
                         let (mut p1x, mut p1y, mut p2x, mut p2y) =
                             (Number::new(0.0), Number::new(0.0), Number::new(0.0), Number::new(0.0));
                         try!(input.parse_nested_block(|input| {
-                            p1x = try!(specified::parse_number(input));
+                            p1x = try!(specified::parse_number(context, input));
                             try!(input.expect_comma());
-                            p1y = try!(specified::parse_number(input));
+                            p1y = try!(specified::parse_number(context, input));
                             try!(input.expect_comma());
-                            p2x = try!(specified::parse_number(input));
+                            p2x = try!(specified::parse_number(context, input));
                             try!(input.expect_comma());
-                            p2y = try!(specified::parse_number(input));
+                            p2y = try!(specified::parse_number(context, input));
                             Ok(())
                         }));
-                        if p1x.value < 0.0 || p1x.value > 1.0 ||
-                           p2x.value < 0.0 || p2x.value > 1.0 {
+                        if p1x.get() < 0.0 || p1x.get() > 1.0 ||
+                           p2x.get() < 0.0 || p2x.get() > 1.0 {
                             return Err(())
                         }
 
@@ -585,7 +585,7 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
                     "steps" => {
                         let (mut step_count, mut start_end) = (specified::Integer::new(0), StartEnd::End);
                         try!(input.parse_nested_block(|input| {
-                            step_count = try!(specified::parse_integer(input));
+                            step_count = try!(specified::parse_integer(context, input));
                             if step_count.value() < 1 {
                                 return Err(())
                             }
@@ -816,16 +816,26 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
     impl Parse for SpecifiedValue {
         fn parse(_context: &ParserContext, input: &mut ::cssparser::Parser) -> Result<Self, ()> {
             use cssparser::Token;
-            Ok(match input.next() {
-                Ok(Token::Ident(ref value)) => SpecifiedValue(if value == "none" {
-                    // FIXME We may want to support `@keyframes ""` at some point.
-                    atom!("")
-                } else {
-                    Atom::from(&**value)
-                }),
-                Ok(Token::QuotedString(value)) => SpecifiedValue(Atom::from(&*value)),
+            use properties::CSSWideKeyword;
+            use std::ascii::AsciiExt;
+
+            let atom = match input.next() {
+                Ok(Token::Ident(ref value)) => {
+                    if CSSWideKeyword::from_ident(value).is_some() {
+                        // We allow any ident for the animation-name except one
+                        // of the CSS-wide keywords.
+                        return Err(());
+                    } else if value.eq_ignore_ascii_case("none") {
+                        // FIXME We may want to support `@keyframes ""` at some point.
+                        atom!("")
+                    } else {
+                        Atom::from(&**value)
+                    }
+                }
+                Ok(Token::QuotedString(value)) => Atom::from(&*value),
                 _ => return Err(()),
-            })
+            };
+            Ok(SpecifiedValue(atom))
         }
     }
     no_viewport_percentage!(SpecifiedValue);
@@ -1057,12 +1067,12 @@ ${helpers.single_keyword("animation-fill-mode",
         }
     }
 
-    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
         if input.try(|input| input.expect_ident_matching("none")).is_ok() {
             Ok(SpecifiedValue::None)
         } else if input.try(|input| input.expect_function_matching("repeat")).is_ok() {
             input.parse_nested_block(|input| {
-                LengthOrPercentage::parse_non_negative(input).map(SpecifiedValue::Repeat)
+                LengthOrPercentage::parse_non_negative(context, input).map(SpecifiedValue::Repeat)
             })
         } else {
             Err(())
@@ -1349,7 +1359,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
                 "matrix" => {
                     try!(input.parse_nested_block(|input| {
                         let values = try!(input.parse_comma_separated(|input| {
-                            specified::parse_number(input)
+                            specified::parse_number(context, input)
                         }));
                         if values.len() != 6 {
                             return Err(())
@@ -1367,7 +1377,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
                 },
                 "matrix3d" => {
                     try!(input.parse_nested_block(|input| {
-                        let values = try!(input.parse_comma_separated(specified::parse_number));
+                        let values = try!(input.parse_comma_separated(|i| specified::parse_number(context, i)));
                         if values.len() != 16 {
                             return Err(())
                         }
@@ -1426,9 +1436,9 @@ ${helpers.predefined_type("scroll-snap-coordinate",
                 },
                 "scale" => {
                     try!(input.parse_nested_block(|input| {
-                        let sx = try!(specified::parse_number(input));
+                        let sx = try!(specified::parse_number(context, input));
                         if input.try(|input| input.expect_comma()).is_ok() {
-                            let sy = try!(specified::parse_number(input));
+                            let sy = try!(specified::parse_number(context, input));
                             result.push(SpecifiedOperation::Scale(sx, Some(sy)));
                         } else {
                             result.push(SpecifiedOperation::Scale(sx, None));
@@ -1438,32 +1448,32 @@ ${helpers.predefined_type("scroll-snap-coordinate",
                 },
                 "scalex" => {
                     try!(input.parse_nested_block(|input| {
-                        let sx = try!(specified::parse_number(input));
+                        let sx = try!(specified::parse_number(context, input));
                         result.push(SpecifiedOperation::ScaleX(sx));
                         Ok(())
                     }))
                 },
                 "scaley" => {
                     try!(input.parse_nested_block(|input| {
-                        let sy = try!(specified::parse_number(input));
+                        let sy = try!(specified::parse_number(context, input));
                         result.push(SpecifiedOperation::ScaleY(sy));
                         Ok(())
                     }))
                 },
                 "scalez" => {
                     try!(input.parse_nested_block(|input| {
-                        let sz = try!(specified::parse_number(input));
+                        let sz = try!(specified::parse_number(context, input));
                         result.push(SpecifiedOperation::ScaleZ(sz));
                         Ok(())
                     }))
                 },
                 "scale3d" => {
                     try!(input.parse_nested_block(|input| {
-                        let sx = try!(specified::parse_number(input));
+                        let sx = try!(specified::parse_number(context, input));
                         try!(input.expect_comma());
-                        let sy = try!(specified::parse_number(input));
+                        let sy = try!(specified::parse_number(context, input));
                         try!(input.expect_comma());
-                        let sz = try!(specified::parse_number(input));
+                        let sz = try!(specified::parse_number(context, input));
                         result.push(SpecifiedOperation::Scale3D(sx, sy, sz));
                         Ok(())
                     }))
@@ -1498,11 +1508,11 @@ ${helpers.predefined_type("scroll-snap-coordinate",
                 },
                 "rotate3d" => {
                     try!(input.parse_nested_block(|input| {
-                        let ax = try!(specified::parse_number(input));
+                        let ax = try!(specified::parse_number(context, input));
                         try!(input.expect_comma());
-                        let ay = try!(specified::parse_number(input));
+                        let ay = try!(specified::parse_number(context, input));
                         try!(input.expect_comma());
-                        let az = try!(specified::parse_number(input));
+                        let az = try!(specified::parse_number(context, input));
                         try!(input.expect_comma());
                         let theta = try!(specified::Angle::parse_with_unitless(context,input));
                         // TODO(gw): Check the axis can be normalized!!
@@ -1538,7 +1548,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
                 },
                 "perspective" => {
                     try!(input.parse_nested_block(|input| {
-                        let d = try!(specified::Length::parse_non_negative(input));
+                        let d = try!(specified::Length::parse_non_negative(context, input));
                         result.push(SpecifiedOperation::Perspective(d));
                         Ok(())
                     }))
@@ -1854,13 +1864,11 @@ ${helpers.predefined_type("perspective",
                           gecko_ffi_name="mChildPerspective",
                           spec="https://drafts.csswg.org/css-transforms/#perspective",
                           extra_prefixes="moz webkit",
-                          boxed=True,
                           creates_stacking_context=True,
                           fixpos_cb=True,
                           animation_type="normal")}
 
-// FIXME: This prop should be animatable
-<%helpers:longhand name="perspective-origin" boxed="True" animation_type="none" extra_prefixes="moz webkit"
+<%helpers:longhand name="perspective-origin" boxed="True" animation_type="normal" extra_prefixes="moz webkit"
                    spec="https://drafts.csswg.org/css-transforms/#perspective-origin-property">
     use std::fmt;
     use style_traits::ToCss;
@@ -1868,22 +1876,11 @@ ${helpers.predefined_type("perspective",
     use values::specified::{LengthOrPercentage, Percentage};
 
     pub mod computed_value {
+        use properties::animated_properties::Interpolate;
         use values::computed::LengthOrPercentage;
+        use values::computed::Position;
 
-        #[derive(Clone, Copy, Debug, PartialEq)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub struct T {
-            pub horizontal: LengthOrPercentage,
-            pub vertical: LengthOrPercentage,
-        }
-    }
-
-    impl ToCss for computed_value::T {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self.horizontal.to_css(dest));
-            try!(dest.write_str(" "));
-            self.vertical.to_css(dest)
-        }
+        pub type T = Position;
     }
 
     impl HasViewportPercentage for SpecifiedValue {
@@ -2296,5 +2293,32 @@ ${helpers.single_keyword("-moz-orient",
                 Ok((Atom::from(ident)))
             }).map(SpecifiedValue::AnimateableFeatures)
         }
+    }
+</%helpers:longhand>
+
+<%helpers:longhand name="shape-outside" products="gecko" animation_type="none" boxed="True"
+                   spec="https://drafts.csswg.org/css-shapes/#shape-outside-property">
+    use std::fmt;
+    use style_traits::ToCss;
+    use values::specified::basic_shape::{ShapeBox, ShapeSource};
+    use values::HasViewportPercentage;
+
+    no_viewport_percentage!(SpecifiedValue);
+
+    pub mod computed_value {
+        use values::computed::basic_shape::{ShapeBox, ShapeSource};
+
+        pub type T = ShapeSource<ShapeBox>;
+    }
+
+    pub type SpecifiedValue = ShapeSource<ShapeBox>;
+
+    #[inline]
+    pub fn get_initial_value() -> computed_value::T {
+        Default::default()
+    }
+
+    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+        ShapeSource::parse(context, input)
     }
 </%helpers:longhand>

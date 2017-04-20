@@ -12,7 +12,6 @@
 #include "mozilla/Preferences.h"
 
 #include "nsError.h"
-#include "nsDOMString.h"
 #include "nsIDOMCSSPrimitiveValue.h"
 #include "nsIFrame.h"
 #include "nsIFrameInlines.h"
@@ -68,11 +67,11 @@ using namespace mozilla::dom;
 already_AddRefed<nsComputedDOMStyle>
 NS_NewComputedDOMStyle(dom::Element* aElement, const nsAString& aPseudoElt,
                        nsIPresShell* aPresShell,
-                       nsComputedDOMStyle::StyleType aStyleType)
+                       nsComputedDOMStyle::AnimationFlag aFlag)
 {
   RefPtr<nsComputedDOMStyle> computedStyle;
-  computedStyle = new nsComputedDOMStyle(aElement, aPseudoElt, aPresShell,
-                                         aStyleType);
+  computedStyle = new nsComputedDOMStyle(aElement, aPseudoElt,
+                                         aPresShell, aFlag);
   return computedStyle.forget();
 }
 
@@ -246,47 +245,21 @@ nsComputedStyleMap::Update()
 nsComputedDOMStyle::nsComputedDOMStyle(dom::Element* aElement,
                                        const nsAString& aPseudoElt,
                                        nsIPresShell* aPresShell,
-                                       StyleType aStyleType)
+                                       AnimationFlag aFlag)
   : mDocumentWeak(nullptr)
   , mOuterFrame(nullptr)
   , mInnerFrame(nullptr)
   , mPresShell(nullptr)
-  , mStyleType(aStyleType)
   , mStyleContextGeneration(0)
   , mExposeVisitedStyle(false)
   , mResolvedStyleContext(false)
+  , mAnimationFlag(aFlag)
 {
   MOZ_ASSERT(aElement && aPresShell);
 
   mDocumentWeak = do_GetWeakReference(aPresShell->GetDocument());
-
   mContent = aElement;
-
-  if (!DOMStringIsNull(aPseudoElt) && !aPseudoElt.IsEmpty() &&
-      aPseudoElt.First() == char16_t(':')) {
-    // deal with two-colon forms of aPseudoElt
-    nsAString::const_iterator start, end;
-    aPseudoElt.BeginReading(start);
-    aPseudoElt.EndReading(end);
-    NS_ASSERTION(start != end, "aPseudoElt is not empty!");
-    ++start;
-    bool haveTwoColons = true;
-    if (start == end || *start != char16_t(':')) {
-      --start;
-      haveTwoColons = false;
-    }
-    mPseudo = NS_Atomize(Substring(start, end));
-    MOZ_ASSERT(mPseudo);
-
-    // There aren't any non-CSS2 pseudo-elements with a single ':'
-    if (!haveTwoColons &&
-        (!nsCSSPseudoElements::IsPseudoElement(mPseudo) ||
-         !nsCSSPseudoElements::IsCSS2PseudoElement(mPseudo))) {
-      // XXXbz I'd really rather we threw an exception or something, but
-      // the DOM spec sucks.
-      mPseudo = nullptr;
-    }
-  }
+  mPseudo = nsCSSPseudoElements::GetPseudoAtom(aPseudoElt);
 
   MOZ_ASSERT(aPresShell->GetPresContext());
 }
@@ -429,8 +402,7 @@ nsComputedDOMStyle::GetAuthoredPropertyValue(const nsAString& aPropertyName,
 already_AddRefed<nsStyleContext>
 nsComputedDOMStyle::GetStyleContext(Element* aElement,
                                     nsIAtom* aPseudo,
-                                    nsIPresShell* aPresShell,
-                                    StyleType aStyleType)
+                                    nsIPresShell* aPresShell)
 {
   // If the content has a pres shell, we must use it.  Otherwise we'd
   // potentially mix rule trees by using the wrong pres shell's style
@@ -446,7 +418,7 @@ nsComputedDOMStyle::GetStyleContext(Element* aElement,
 
   presShell->FlushPendingNotifications(FlushType::Style);
 
-  return GetStyleContextNoFlush(aElement, aPseudo, presShell, aStyleType);
+  return GetStyleContextNoFlush(aElement, aPseudo, presShell);
 }
 
 namespace {
@@ -481,7 +453,6 @@ public:
                        Element* aElement,
                        CSSPseudoElementType aType,
                        nsStyleContext* aParentContext,
-                       nsComputedDOMStyle::StyleType aStyleType,
                        bool aInDocWithShell)
   {
     MOZ_ASSERT(mAnimationFlag == nsComputedDOMStyle::eWithAnimation,
@@ -499,30 +470,6 @@ public:
     } else {
       result = aStyleSet->ResolveStyleFor(aElement, aParentContext,
                                           LazyComputeBehavior::Allow);
-    }
-    if (aStyleType == nsComputedDOMStyle::StyleType::eDefaultOnly) {
-      // We really only want the user and UA rules.  Filter out the other ones.
-      nsTArray< nsCOMPtr<nsIStyleRule> > rules;
-      for (nsRuleNode* ruleNode = result->RuleNode();
-           !ruleNode->IsRoot();
-           ruleNode = ruleNode->GetParent()) {
-        if (ruleNode->GetLevel() == SheetType::Agent ||
-            ruleNode->GetLevel() == SheetType::User) {
-          rules.AppendElement(ruleNode->GetRule());
-        }
-      }
-
-      // We want to build a list of user/ua rules that is in order from least to
-      // most important, so we have to reverse the list.
-      // Integer division to get "stop" is purposeful here: if length is odd, we
-      // don't have to do anything with the middle element of the array.
-      for (uint32_t i = 0, length = rules.Length(), stop = length / 2;
-           i < stop; ++i) {
-        rules[i].swap(rules[length - i - 1]);
-      }
-
-      result = aStyleSet->AsGecko()->ResolveStyleForRules(aParentContext,
-                                                          rules);
     }
     return result.forget();
   }
@@ -576,7 +523,6 @@ already_AddRefed<nsStyleContext>
 nsComputedDOMStyle::DoGetStyleContextNoFlush(Element* aElement,
                                              nsIAtom* aPseudo,
                                              nsIPresShell* aPresShell,
-                                             StyleType aStyleType,
                                              AnimationFlag aAnimationFlag)
 {
   MOZ_ASSERT(aElement, "NULL element");
@@ -598,7 +544,6 @@ nsComputedDOMStyle::DoGetStyleContextNoFlush(Element* aElement,
   // check is needed due to bug 135040 (to avoid using
   // mPrimaryFrame). Remove it once that's fixed.
   if (!aPseudo &&
-      aStyleType == eAll &&
       inDocWithShell &&
       !aElement->IsHTMLElement(nsGkAtoms::area)) {
     nsIFrame* frame = nsLayoutUtils::GetStyleFrame(aElement);
@@ -652,11 +597,7 @@ nsComputedDOMStyle::DoGetStyleContextNoFlush(Element* aElement,
   // For Servo, compute the result directly without recursively building up
   // a throwaway style context chain.
   if (ServoStyleSet* servoSet = styleSet->GetAsServo()) {
-    if (aStyleType == eDefaultOnly) {
-      NS_WARNING("stylo: ServoStyleSets cannot supply UA-only styles yet");
-      return nullptr;
-    }
-    return servoSet->ResolveTransientStyle(aElement, type);
+    return servoSet->ResolveTransientStyle(aElement, aPseudo, type);
   }
 
   RefPtr<nsStyleContext> parentContext;
@@ -664,7 +605,7 @@ nsComputedDOMStyle::DoGetStyleContextNoFlush(Element* aElement,
   // Don't resolve parent context for document fragments.
   if (parent && parent->IsElement()) {
     parentContext = GetStyleContextNoFlush(parent->AsElement(), nullptr,
-                                           aPresShell, aStyleType);
+                                           aPresShell);
   }
 
   StyleResolver styleResolver(presContext, aAnimationFlag);
@@ -673,7 +614,6 @@ nsComputedDOMStyle::DoGetStyleContextNoFlush(Element* aElement,
     return styleResolver.ResolveWithAnimation(styleSet,
                                               aElement, type,
                                               parentContext,
-                                              aStyleType,
                                               inDocWithShell);
   }
 
@@ -818,8 +758,7 @@ nsComputedDOMStyle::UpdateCurrentStyleSources(bool aNeedsLayoutFlush)
   // XXX the !mContent->IsHTMLElement(nsGkAtoms::area)
   // check is needed due to bug 135040 (to avoid using
   // mPrimaryFrame). Remove it once that's fixed.
-  if (!mPseudo && mStyleType == eAll &&
-      !mContent->IsHTMLElement(nsGkAtoms::area)) {
+  if (!mPseudo && !mContent->IsHTMLElement(nsGkAtoms::area)) {
     mOuterFrame = mContent->GetPrimaryFrame();
     mInnerFrame = mOuterFrame;
     if (mOuterFrame) {
@@ -867,8 +806,7 @@ nsComputedDOMStyle::UpdateCurrentStyleSources(bool aNeedsLayoutFlush)
     RefPtr<nsStyleContext> resolvedStyleContext =
       nsComputedDOMStyle::GetStyleContext(mContent->AsElement(),
                                           mPseudo,
-                                          mPresShell,
-                                          mStyleType);
+                                          mPresShell);
     if (!resolvedStyleContext) {
       ClearStyleContext();
       return;
@@ -884,6 +822,17 @@ nsComputedDOMStyle::UpdateCurrentStyleSources(bool aNeedsLayoutFlush)
     SetResolvedStyleContext(Move(resolvedStyleContext));
     NS_ASSERTION(mPseudo || !mStyleContext->HasPseudoElementData(),
                  "should not have pseudo-element data");
+  }
+
+  if (mAnimationFlag == eWithoutAnimation) {
+    // We will support Servo in bug 1311257.
+    MOZ_ASSERT(mPresShell->StyleSet()->IsGecko(),
+               "eWithoutAnimationRules support Gecko only");
+    nsStyleSet* styleSet = mPresShell->StyleSet()->AsGecko();
+    RefPtr<nsStyleContext> unanimatedStyleContext =
+      styleSet->ResolveStyleByRemovingAnimation(
+        mContent->AsElement(), mStyleContext, eRestyle_AllHintsWithAnimations);
+    SetResolvedStyleContext(Move(unanimatedStyleContext));
   }
 
   // mExposeVisitedStyle is set to true only by testing APIs that
@@ -3928,10 +3877,9 @@ nsComputedDOMStyle::DoGetTextDecorationLine()
     val->SetIdent(eCSSKeyword_none);
   } else {
     nsAutoString decorationLineString;
-    // Clear the -moz-anchor-decoration bit and the OVERRIDE_ALL bits -- we
-    // don't want these to appear in the computed style.
-    intValue &= ~(NS_STYLE_TEXT_DECORATION_LINE_PREF_ANCHORS |
-                  NS_STYLE_TEXT_DECORATION_LINE_OVERRIDE_ALL);
+    // Clear the OVERRIDE_ALL bits -- we don't want these to appear in
+    // the computed style.
+    intValue &= ~NS_STYLE_TEXT_DECORATION_LINE_OVERRIDE_ALL;
     nsStyleUtil::AppendBitmaskCSSValue(eCSSProperty_text_decoration_line,
       intValue, NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE,
       NS_STYLE_TEXT_DECORATION_LINE_BLINK, decorationLineString);

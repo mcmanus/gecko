@@ -28,7 +28,6 @@
 #include "ThreadInfo.h"
 #include "nsIHttpProtocolHandler.h"
 #include "nsIObserverService.h"
-#include "nsIProfileSaveEvent.h"
 #include "nsIXULAppInfo.h"
 #include "nsIXULRuntime.h"
 #include "nsDirectoryServiceUtils.h"
@@ -270,8 +269,8 @@ private:
 
   // Info on all the registered threads, both live and dead. ThreadIds in
   // mLiveThreads are unique. ThreadIds in mDeadThreads may not be, because
-  // ThreadIds can be reused. HasProfile() is true for all ThreadInfos in
-  // mDeadThreads because we don't hold onto ThreadInfos for non-profiled dead
+  // ThreadIds can be reused. IsBeingProfiled() is true for all ThreadInfos in
+  // mDeadThreads because we don't hold on to ThreadInfos for non-profiled dead
   // threads.
   ThreadVector mLiveThreads;
   ThreadVector mDeadThreads;
@@ -574,9 +573,9 @@ struct AutoWalkJSStack
 
 static void
 MergeStacksIntoProfile(PS::LockRef aLock, ProfileBuffer* aBuffer,
-                       TickSample* aSample, NativeStack& aNativeStack)
+                       const TickSample& aSample, NativeStack& aNativeStack)
 {
-  NotNull<PseudoStack*> pseudoStack = aSample->mPseudoStack;
+  NotNull<PseudoStack*> pseudoStack = aSample.mPseudoStack;
   volatile js::ProfileEntry* pseudoFrames = pseudoStack->mStack;
   uint32_t pseudoCount = pseudoStack->stackSize();
 
@@ -589,7 +588,7 @@ MergeStacksIntoProfile(PS::LockRef aLock, ProfileBuffer* aBuffer,
   // sampled JIT entries inside the JS engine. See note below concerning 'J'
   // entries.
   uint32_t startBufferGen;
-  startBufferGen = aSample->mIsSynchronous
+  startBufferGen = aSample.mIsSynchronous
                  ? UINT32_MAX
                  : aBuffer->mGeneration;
   uint32_t jsCount = 0;
@@ -601,19 +600,19 @@ MergeStacksIntoProfile(PS::LockRef aLock, ProfileBuffer* aBuffer,
     AutoWalkJSStack autoWalkJSStack;
     const uint32_t maxFrames = mozilla::ArrayLength(jsFrames);
 
-    if (aSample && autoWalkJSStack.walkAllowed) {
+    if (autoWalkJSStack.walkAllowed) {
       JS::ProfilingFrameIterator::RegisterState registerState;
-      registerState.pc = aSample->mPC;
-      registerState.sp = aSample->mSP;
-      registerState.lr = aSample->mLR;
-      registerState.fp = aSample->mFP;
+      registerState.pc = aSample.mPC;
+      registerState.sp = aSample.mSP;
+      registerState.lr = aSample.mLR;
+      registerState.fp = aSample.mFP;
 
       JS::ProfilingFrameIterator jsIter(pseudoStack->mContext,
                                         registerState,
                                         startBufferGen);
       for (; jsCount < maxFrames && !jsIter.done(); ++jsIter) {
         // See note below regarding 'J' entries.
-        if (aSample->mIsSynchronous || jsIter.isWasm()) {
+        if (aSample.mIsSynchronous || jsIter.isWasm()) {
           uint32_t extracted =
             jsIter.extractStack(jsFrames, jsCount, maxFrames);
           jsCount += extracted;
@@ -728,7 +727,7 @@ MergeStacksIntoProfile(PS::LockRef aLock, ProfileBuffer* aBuffer,
       // JIT code. This means that if we inserted such OptInfoAddr entries into
       // the buffer, nsRefreshDriver would now be holding on to a backtrace
       // with stale JIT code return addresses.
-      if (aSample->mIsSynchronous ||
+      if (aSample.mIsSynchronous ||
           jsFrame.kind == JS::ProfilingFrameIterator::Frame_Wasm) {
         AddDynamicCodeLocationTag(aBuffer, jsFrame.label);
       } else {
@@ -758,7 +757,7 @@ MergeStacksIntoProfile(PS::LockRef aLock, ProfileBuffer* aBuffer,
   //
   // Do not do this for synchronous samples, which use their own
   // ProfileBuffers instead of the global one in ProfilerState.
-  if (!aSample->mIsSynchronous && pseudoStack->mContext) {
+  if (!aSample.mIsSynchronous && pseudoStack->mContext) {
     MOZ_ASSERT(aBuffer->mGeneration >= startBufferGen);
     uint32_t lapCount = aBuffer->mGeneration - startBufferGen;
     JS::UpdateJSContextProfilerSampleBufferGen(pseudoStack->mContext,
@@ -784,7 +783,7 @@ StackWalkCallback(uint32_t aFrameNumber, void* aPC, void* aSP, void* aClosure)
 
 static void
 DoNativeBacktrace(PS::LockRef aLock, ProfileBuffer* aBuffer,
-                  TickSample* aSample)
+                  const TickSample& aSample)
 {
   void* pc_array[1000];
   void* sp_array[1000];
@@ -799,21 +798,21 @@ DoNativeBacktrace(PS::LockRef aLock, ProfileBuffer* aBuffer,
   // the FramePointerStackWalk() and MozStackWalk() calls below will use 1..N.
   // This is a bit weird but it doesn't matter because StackWalkCallback()
   // doesn't use the frame number argument.
-  StackWalkCallback(/* frameNum */ 0, aSample->mPC, aSample->mSP, &nativeStack);
+  StackWalkCallback(/* frameNum */ 0, aSample.mPC, aSample.mSP, &nativeStack);
 
   uint32_t maxFrames = uint32_t(nativeStack.size - nativeStack.count);
 
 #if defined(GP_OS_darwin) || (defined(GP_PLAT_x86_windows))
-  void* stackEnd = aSample->mStackTop;
-  if (aSample->mFP >= aSample->mSP && aSample->mFP <= stackEnd) {
+  void* stackEnd = aSample.mStackTop;
+  if (aSample.mFP >= aSample.mSP && aSample.mFP <= stackEnd) {
     FramePointerStackWalk(StackWalkCallback, /* skipFrames */ 0, maxFrames,
-                          &nativeStack, reinterpret_cast<void**>(aSample->mFP),
+                          &nativeStack, reinterpret_cast<void**>(aSample.mFP),
                           stackEnd);
   }
 #else
   // Win64 always omits frame pointers so for it we use the slower
   // MozStackWalk().
-  uintptr_t thread = GetThreadHandle(aSample->mPlatformData);
+  uintptr_t thread = GetThreadHandle(aSample.mPlatformData);
   MOZ_ASSERT(thread);
   MozStackWalk(StackWalkCallback, /* skipFrames */ 0, maxFrames, &nativeStack,
                thread, /* platformData */ nullptr);
@@ -826,7 +825,7 @@ DoNativeBacktrace(PS::LockRef aLock, ProfileBuffer* aBuffer,
 #ifdef USE_EHABI_STACKWALK
 static void
 DoNativeBacktrace(PS::LockRef aLock, ProfileBuffer* aBuffer,
-                  TickSample* aSample)
+                  const TickSample& aSample)
 {
   void* pc_array[1000];
   void* sp_array[1000];
@@ -838,9 +837,9 @@ DoNativeBacktrace(PS::LockRef aLock, ProfileBuffer* aBuffer,
   };
 
   const mcontext_t* mcontext =
-    &reinterpret_cast<ucontext_t*>(aSample->mContext)->uc_mcontext;
+    &reinterpret_cast<ucontext_t*>(aSample.mContext)->uc_mcontext;
   mcontext_t savedContext;
-  NotNull<PseudoStack*> pseudoStack = aSample->mPseudoStack;
+  NotNull<PseudoStack*> pseudoStack = aSample.mPseudoStack;
 
   // The pseudostack contains an "EnterJIT" frame whenever we enter
   // JIT code with profiling enabled; the stack pointer value points
@@ -884,7 +883,7 @@ DoNativeBacktrace(PS::LockRef aLock, ProfileBuffer* aBuffer,
   // Now unwind whatever's left (starting from either the last EnterJIT frame
   // or, if no EnterJIT was found, the original registers).
   nativeStack.count += EHABIStackWalk(*mcontext,
-                                      aSample->mStackTop,
+                                      aSample.mStackTop,
                                       sp_array + nativeStack.count,
                                       pc_array + nativeStack.count,
                                       nativeStack.size - nativeStack.count);
@@ -915,10 +914,10 @@ ASAN_memcpy(void* aDst, const void* aSrc, size_t aLen)
 
 static void
 DoNativeBacktrace(PS::LockRef aLock, ProfileBuffer* aBuffer,
-                  TickSample* aSample)
+                  const TickSample& aSample)
 {
   const mcontext_t* mc =
-    &reinterpret_cast<ucontext_t*>(aSample->mContext)->uc_mcontext;
+    &reinterpret_cast<ucontext_t*>(aSample.mContext)->uc_mcontext;
 
   lul::UnwindRegs startRegs;
   memset(&startRegs, 0, sizeof(startRegs));
@@ -947,6 +946,32 @@ DoNativeBacktrace(PS::LockRef aLock, ProfileBuffer* aBuffer,
   // assumes that the TaggedUWord holding the stack pointer value is valid, but
   // it should be, since it was constructed that way in the code just above.
 
+  // We could construct |stackImg| so that LUL reads directly from the stack in
+  // question, rather than from a copy of it.  That would reduce overhead and
+  // space use a bit.  However, it gives a problem with dynamic analysis tools
+  // (ASan, TSan, Valgrind) which is that such tools will report invalid or
+  // racing memory accesses, and such accesses will be reported deep inside LUL.
+  // By taking a copy here, we can either sanitise the copy (for Valgrind) or
+  // copy it using an unchecked memcpy (for ASan, TSan).  That way we don't have
+  // to try and suppress errors inside LUL.
+  //
+  // N_STACK_BYTES is set to 160KB.  This is big enough to hold all stacks
+  // observed in some minutes of testing, whilst keeping the size of this
+  // function (DoNativeBacktrace)'s frame reasonable.  Most stacks observed in
+  // practice are small, 4KB or less, and so the copy costs are insignificant
+  // compared to other profiler overhead.
+  //
+  // |stackImg| is allocated on this (the sampling thread's) stack.  That
+  // implies that the frame for this function is at least N_STACK_BYTES large.
+  // In general it would be considered unacceptable to have such a large frame
+  // on a stack, but it only exists for the unwinder thread, and so is not
+  // expected to be a problem.  Allocating it on the heap is troublesome because
+  // this function runs whilst the sampled thread is suspended, so any heap
+  // allocation risks deadlock.  Allocating it as a global variable is not
+  // thread safe, which would be a problem if we ever allow multiple sampler
+  // threads.  Hence allocating it on the stack seems to be the least-worst
+  // option.
+
   lul::StackImage stackImg;
 
   {
@@ -962,7 +987,7 @@ DoNativeBacktrace(PS::LockRef aLock, ProfileBuffer* aBuffer,
 #else
 #   error "Unknown plat"
 #endif
-    uintptr_t end = reinterpret_cast<uintptr_t>(aSample->mStackTop);
+    uintptr_t end = reinterpret_cast<uintptr_t>(aSample.mStackTop);
     uintptr_t ws  = sizeof(void*);
     start &= ~(ws-1);
     end   &= ~(ws-1);
@@ -1016,10 +1041,8 @@ DoNativeBacktrace(PS::LockRef aLock, ProfileBuffer* aBuffer,
     reinterpret_cast<void**>(framePCs),
     reinterpret_cast<void**>(frameSPs),
     mozilla::ArrayLength(framePCs),
-    0
+    framesUsed
   };
-
-  nativeStack.count = framesUsed;
 
   MergeStacksIntoProfile(aLock, aBuffer, aSample, nativeStack);
 
@@ -1034,27 +1057,27 @@ DoNativeBacktrace(PS::LockRef aLock, ProfileBuffer* aBuffer,
 
 static void
 DoSampleStackTrace(PS::LockRef aLock, ProfileBuffer* aBuffer,
-                   TickSample* aSample)
+                   const TickSample& aSample)
 {
   NativeStack nativeStack = { nullptr, nullptr, 0, 0 };
   MergeStacksIntoProfile(aLock, aBuffer, aSample, nativeStack);
 
   if (gPS->FeatureLeaf(aLock)) {
-    aBuffer->addTag(ProfileBufferEntry::NativeLeafAddr((void*)aSample->mPC));
+    aBuffer->addTag(ProfileBufferEntry::NativeLeafAddr((void*)aSample.mPC));
   }
 }
 
 // This function is called for each sampling period with the current program
 // counter. It is called within a signal and so must be re-entrant.
 static void
-Tick(PS::LockRef aLock, ProfileBuffer* aBuffer, TickSample* aSample)
+Tick(PS::LockRef aLock, ProfileBuffer* aBuffer, const TickSample& aSample)
 {
-  aBuffer->addTagThreadId(aSample->mThreadId, aSample->mLastSample);
+  aBuffer->addTagThreadId(aSample.mThreadId, aSample.mLastSample);
 
-  mozilla::TimeDuration delta = aSample->mTimeStamp - gPS->StartTime(aLock);
+  mozilla::TimeDuration delta = aSample.mTimeStamp - gPS->StartTime(aLock);
   aBuffer->addTag(ProfileBufferEntry::Time(delta.ToMilliseconds()));
 
-  NotNull<PseudoStack*> pseudoStack = aSample->mPseudoStack;
+  NotNull<PseudoStack*> pseudoStack = aSample.mPseudoStack;
 
 #if defined(HAVE_NATIVE_UNWIND)
   if (gPS->FeatureStackWalk(aLock)) {
@@ -1067,7 +1090,7 @@ Tick(PS::LockRef aLock, ProfileBuffer* aBuffer, TickSample* aSample)
 
   // Don't process the PseudoStack's markers if we're synchronously sampling
   // the current thread.
-  if (!aSample->mIsSynchronous) {
+  if (!aSample.mIsSynchronous) {
     ProfilerMarkerLinkedList* pendingMarkersList =
       pseudoStack->getPendingMarkers();
     while (pendingMarkersList && pendingMarkersList->peek()) {
@@ -1077,21 +1100,21 @@ Tick(PS::LockRef aLock, ProfileBuffer* aBuffer, TickSample* aSample)
     }
   }
 
-  if (aSample->mResponsiveness && aSample->mResponsiveness->HasData()) {
+  if (aSample.mResponsiveness && aSample.mResponsiveness->HasData()) {
     mozilla::TimeDuration delta =
-      aSample->mResponsiveness->GetUnresponsiveDuration(aSample->mTimeStamp);
+      aSample.mResponsiveness->GetUnresponsiveDuration(aSample.mTimeStamp);
     aBuffer->addTag(ProfileBufferEntry::Responsiveness(delta.ToMilliseconds()));
   }
 
   // rssMemory is equal to 0 when we are not recording.
-  if (aSample->mRSSMemory != 0) {
-    double rssMemory = static_cast<double>(aSample->mRSSMemory);
+  if (aSample.mRSSMemory != 0) {
+    double rssMemory = static_cast<double>(aSample.mRSSMemory);
     aBuffer->addTag(ProfileBufferEntry::ResidentMemory(rssMemory));
   }
 
   // ussMemory is equal to 0 when we are not recording.
-  if (aSample->mUSSMemory != 0) {
-    double ussMemory = static_cast<double>(aSample->mUSSMemory);
+  if (aSample.mUSSMemory != 0) {
+    double ussMemory = static_cast<double>(aSample.mUSSMemory);
     aBuffer->addTag(ProfileBufferEntry::UnsharedMemory(ussMemory));
   }
 
@@ -1107,31 +1130,6 @@ Tick(PS::LockRef aLock, ProfileBuffer* aBuffer, TickSample* aSample)
 
 ////////////////////////////////////////////////////////////////////////
 // BEGIN saving/streaming code
-
-class ProfileSaveEvent final : public nsIProfileSaveEvent
-{
-public:
-  typedef void (*AddSubProfileFunc)(const char* aProfile, void* aClosure);
-  NS_DECL_ISUPPORTS
-
-  ProfileSaveEvent(AddSubProfileFunc aFunc, void* aClosure)
-    : mFunc(aFunc)
-    , mClosure(aClosure)
-  {}
-
-  NS_IMETHOD AddSubProfile(const char* aProfile) override {
-    mFunc(aProfile, mClosure);
-    return NS_OK;
-  }
-
-private:
-  ~ProfileSaveEvent() {}
-
-  AddSubProfileFunc mFunc;
-  void* mClosure;
-};
-
-NS_IMPL_ISUPPORTS(ProfileSaveEvent, nsIProfileSaveEvent)
 
 const static uint64_t kJS_MAX_SAFE_UINTEGER = +9007199254740991ULL;
 
@@ -1168,7 +1166,7 @@ AppendSharedLibraries(JSONWriter& aWriter)
 
 #ifdef MOZ_TASK_TRACER
 static void
-StreamNameAndThreadId(const char* aName, int aThreadId)
+StreamNameAndThreadId(JSONWriter& aWriter, const char* aName, int aThreadId)
 {
   aWriter.StartObjectElement();
   {
@@ -1203,13 +1201,13 @@ StreamTaskTracer(PS::LockRef aLock, SpliceableJSONWriter& aWriter)
     const PS::ThreadVector& liveThreads = gPS->LiveThreads(aLock);
     for (size_t i = 0; i < liveThreads.size(); i++) {
       ThreadInfo* info = liveThreads.at(i);
-      StreamNameAndThreadId(info->Name(), info->ThreadId());
+      StreamNameAndThreadId(aWriter, info->Name(), info->ThreadId());
     }
 
     const PS::ThreadVector& deadThreads = gPS->DeadThreads(aLock);
     for (size_t i = 0; i < deadThreads.size(); i++) {
       ThreadInfo* info = deadThreads.at(i);
-      StreamNameAndThreadId(info->Name(), info->ThreadId());
+      StreamNameAndThreadId(aWriter, info->Name(), info->ThreadId());
     }
   }
   aWriter.EndArray();
@@ -1224,7 +1222,7 @@ StreamMetaJSCustomObject(PS::LockRef aLock, SpliceableJSONWriter& aWriter)
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
-  aWriter.IntProperty("version", 4);
+  aWriter.IntProperty("version", 5);
   aWriter.DoubleProperty("interval", gPS->Interval(aLock));
   aWriter.IntProperty("stackwalk", gPS->FeatureStackWalk(aLock));
 
@@ -1296,25 +1294,6 @@ StreamMetaJSCustomObject(PS::LockRef aLock, SpliceableJSONWriter& aWriter)
   }
 }
 
-struct SubprocessClosure
-{
-  explicit SubprocessClosure(SpliceableJSONWriter* aWriter)
-    : mWriter(aWriter)
-  {}
-
-  SpliceableJSONWriter* mWriter;
-};
-
-static void
-SubProcessCallback(const char* aProfile, void* aClosure)
-{
-  // Called by the observer to get their profile data included as a sub profile.
-  SubprocessClosure* closure = (SubprocessClosure*)aClosure;
-
-  // Add the string profile into the profile.
-  closure->mWriter->StringElement(aProfile);
-}
-
 #if defined(PROFILE_JAVA)
 static void
 BuildJavaThreadJSObject(SpliceableJSONWriter& aWriter)
@@ -1371,43 +1350,41 @@ BuildJavaThreadJSObject(SpliceableJSONWriter& aWriter)
 #endif
 
 static void
-StreamJSON(PS::LockRef aLock, SpliceableJSONWriter& aWriter, double aSinceTime)
+locked_profiler_stream_json_for_this_process(PS::LockRef aLock, SpliceableJSONWriter& aWriter, double aSinceTime)
 {
-  LOG("StreamJSON");
+  LOG("locked_profiler_stream_json_for_this_process");
 
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
   MOZ_RELEASE_ASSERT(gPS && gPS->IsActive(aLock));
 
-  aWriter.Start(SpliceableJSONWriter::SingleLineStyle);
+  // Put shared library info
+  aWriter.StartArrayProperty("libs");
+  AppendSharedLibraries(aWriter);
+  aWriter.EndArray();
+
+  // Put meta data
+  aWriter.StartObjectProperty("meta");
   {
-    // Put shared library info
-    aWriter.StartArrayProperty("libs");
-    AppendSharedLibraries(aWriter);
-    aWriter.EndArray();
+    StreamMetaJSCustomObject(aLock, aWriter);
+  }
+  aWriter.EndObject();
 
-    // Put meta data
-    aWriter.StartObjectProperty("meta");
-    {
-      StreamMetaJSCustomObject(aLock, aWriter);
-    }
+  // Data of TaskTracer doesn't belong in the circular buffer.
+  if (gPS->FeatureTaskTracer(aLock)) {
+    aWriter.StartObjectProperty("tasktracer");
+    StreamTaskTracer(aLock, aWriter);
     aWriter.EndObject();
+  }
 
-    // Data of TaskTracer doesn't belong in the circular buffer.
-    if (gPS->FeatureTaskTracer(aLock)) {
-      aWriter.StartObjectProperty("tasktracer");
-      StreamTaskTracer(aLock, aWriter);
-      aWriter.EndObject();
-    }
-
-    // Lists the samples for each thread profile
-    aWriter.StartArrayProperty("threads");
-    {
-      gPS->SetIsPaused(aLock, true);
+  // Lists the samples for each thread profile
+  aWriter.StartArrayProperty("threads");
+  {
+    gPS->SetIsPaused(aLock, true);
 
       const PS::ThreadVector& liveThreads = gPS->LiveThreads(aLock);
       for (size_t i = 0; i < liveThreads.size(); i++) {
         ThreadInfo* info = liveThreads.at(i);
-        if (!info->HasProfile()) {
+        if (!info->IsBeingProfiled()) {
           continue;
         }
         info->StreamJSON(gPS->Buffer(aLock), aWriter, gPS->StartTime(aLock),
@@ -1417,47 +1394,46 @@ StreamJSON(PS::LockRef aLock, SpliceableJSONWriter& aWriter, double aSinceTime)
       const PS::ThreadVector& deadThreads = gPS->DeadThreads(aLock);
       for (size_t i = 0; i < deadThreads.size(); i++) {
         ThreadInfo* info = deadThreads.at(i);
-        MOZ_ASSERT(info->HasProfile());
+        MOZ_ASSERT(info->IsBeingProfiled());
         info->StreamJSON(gPS->Buffer(aLock), aWriter, gPS->StartTime(aLock),
                          aSinceTime);
       }
 
-      // When notifying observers in other places in this file we are careful
-      // to do it when gPSMutex is unlocked, to avoid deadlocks. But that's not
-      // necessary here, because "profiler-subprocess" observers just call back
-      // into SubprocessCallback, which is simple and doesn't lock gPSMutex.
-      if (CanNotifyObservers()) {
-        // Send a event asking any subprocesses (plugins) to
-        // give us their information
-        SubprocessClosure closure(&aWriter);
-        nsCOMPtr<nsIObserverService> os =
-          mozilla::services::GetObserverService();
-        if (os) {
-          RefPtr<ProfileSaveEvent> pse =
-            new ProfileSaveEvent(SubProcessCallback, &closure);
-          os->NotifyObservers(pse, "profiler-subprocess", nullptr);
-        }
-      }
-
 #if defined(PROFILE_JAVA)
-      if (gPS->FeatureJava(aLock)) {
-        java::GeckoJavaSampler::Pause();
+    if (gPS->FeatureJava(aLock)) {
+      java::GeckoJavaSampler::Pause();
 
-        aWriter.Start();
-        {
-          BuildJavaThreadJSObject(aWriter);
-        }
-        aWriter.End();
-
-        java::GeckoJavaSampler::Unpause();
+      aWriter.Start();
+      {
+        BuildJavaThreadJSObject(aWriter);
       }
+      aWriter.End();
+
+      java::GeckoJavaSampler::Unpause();
+    }
 #endif
 
-      gPS->SetIsPaused(aLock, false);
-    }
-    aWriter.EndArray();
+    gPS->SetIsPaused(aLock, false);
   }
-  aWriter.End();
+  aWriter.EndArray();
+}
+
+bool
+profiler_stream_json_for_this_process(SpliceableJSONWriter& aWriter, double aSinceTime)
+{
+  LOG("profiler_stream_json_for_this_process");
+
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  MOZ_RELEASE_ASSERT(gPS);
+
+  PS::AutoLock lock(gPSMutex);
+
+  if (!gPS->IsActive(lock)) {
+    return false;
+  }
+
+  locked_profiler_stream_json_for_this_process(lock, aWriter, aSinceTime);
+  return true;
 }
 
 // END saving/streaming code
@@ -1585,7 +1561,7 @@ public:
 
   // This runs on the sampler thread.  It suspends and resumes the samplee
   // threads.
-  void SuspendAndSampleAndResumeThread(PS::LockRef aLock, TickSample* aSample);
+  void SuspendAndSampleAndResumeThread(PS::LockRef aLock, TickSample& aSample);
 
   // This runs on (is!) the sampler thread.
   void Run();
@@ -1665,7 +1641,7 @@ SamplerThread::Run()
         for (uint32_t i = 0; i < liveThreads.size(); i++) {
           ThreadInfo* info = liveThreads[i];
 
-          if (!info->HasProfile()) {
+          if (!info->IsBeingProfiled()) {
             // We are not interested in profiling this thread.
             continue;
           }
@@ -1700,7 +1676,7 @@ SamplerThread::Run()
 
           TickSample sample(info, rssMemory, ussMemory);
 
-          SuspendAndSampleAndResumeThread(lock, &sample);
+          SuspendAndSampleAndResumeThread(lock, sample);
         }
 
 #if defined(USE_LUL_STACKWALK)
@@ -1911,10 +1887,9 @@ locked_register_thread(PS::LockRef aLock, const char* aName, void* stackTop)
 
   tlsPseudoStack.set(pseudoStack.get());
 
-  if (ShouldProfileThread(aLock, info)) {
-    info->SetHasProfile();
-
-    if (gPS->IsActive(aLock) && gPS->FeatureJS(aLock)) {
+  if (gPS->IsActive(aLock) && ShouldProfileThread(aLock, info)) {
+    info->StartProfiling();
+    if (gPS->FeatureJS(aLock)) {
       // This startJSSampling() call is on-thread, so we can poll manually to
       // start JS sampling immediately.
       pseudoStack->startJSSampling();
@@ -2152,14 +2127,20 @@ profiler_get_profile(double aSinceTime)
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
   MOZ_RELEASE_ASSERT(gPS);
 
-  PS::AutoLock lock(gPSMutex);
-
-  if (!gPS->IsActive(lock)) {
-    return nullptr;
-  }
-
   SpliceableChunkedJSONWriter b;
-  StreamJSON(lock, b, aSinceTime);
+  b.Start(SpliceableJSONWriter::SingleLineStyle);
+  {
+    if (!profiler_stream_json_for_this_process(b, aSinceTime)) {
+      return nullptr;
+    }
+
+    // Don't include profiles from other processes because this is a
+    // synchronous function.
+    b.StartArrayProperty("processes");
+    b.EndArray();
+  }
+  b.End();
+
   return b.WriteFunc()->CopyData();
 }
 
@@ -2206,7 +2187,17 @@ locked_profiler_save_profile_to_file(PS::LockRef aLock, const char* aFilename)
   stream.open(aFilename);
   if (stream.is_open()) {
     SpliceableJSONWriter w(mozilla::MakeUnique<OStreamJSONWriteFunc>(stream));
-    StreamJSON(aLock, w, /* sinceTime */ 0);
+    w.Start(SpliceableJSONWriter::SingleLineStyle);
+    {
+      locked_profiler_stream_json_for_this_process(aLock, w, /* sinceTime */ 0);
+
+      // Don't include profiles from other processes because this is a
+      // synchronous function.
+      w.StartArrayProperty("processes");
+      w.EndArray();
+    }
+    w.End();
+
     stream.close();
   }
 }
@@ -2386,8 +2377,7 @@ locked_profiler_start(PS::LockRef aLock, int aEntries, double aInterval,
     ThreadInfo* info = liveThreads.at(i);
 
     if (ShouldProfileThread(aLock, info)) {
-      info->SetHasProfile();
-      info->Stack()->reinitializeOnResume();
+      info->StartProfiling();
       if (featureJS) {
         info->Stack()->startJSSampling();
       }
@@ -2513,14 +2503,15 @@ locked_profiler_stop(PS::LockRef aLock)
   }
 #endif
 
-  // Stop JS sampling live threads.
-  if (gPS->FeatureJS(aLock)) {
-    PS::ThreadVector& liveThreads = gPS->LiveThreads(aLock);
-    for (uint32_t i = 0; i < liveThreads.size(); i++) {
-      ThreadInfo* info = liveThreads.at(i);
-      if (info->HasProfile()) {
+  // Stop sampling live threads.
+  PS::ThreadVector& liveThreads = gPS->LiveThreads(aLock);
+  for (uint32_t i = 0; i < liveThreads.size(); i++) {
+    ThreadInfo* info = liveThreads.at(i);
+    if (info->IsBeingProfiled()) {
+      if (gPS->FeatureJS(aLock)) {
         info->Stack()->stopJSSampling();
       }
+      info->StopProfiling();
     }
   }
 
@@ -2532,8 +2523,9 @@ locked_profiler_stop(PS::LockRef aLock)
   }
 
   if (gPS->FeatureJS(aLock)) {
-    // We just called stopJSSampling() on all relevant threads. We can also
-    // manually poll the current thread so it stops profiling immediately.
+    // We just called stopJSSampling() (through ThreadInfo::StopProfiling) on
+    // all relevant threads. We can also manually poll the current thread so
+    // it stops profiling immediately.
     if (PseudoStack* stack = tlsPseudoStack.get()) {
       stack->pollJSSampling();
     }
@@ -2708,7 +2700,8 @@ profiler_is_active()
 void
 profiler_set_frame_number(int aFrameNumber)
 {
-  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  // This function runs both on (via tests) and off the main thread.
+
   MOZ_RELEASE_ASSERT(gPS);
 
   PS::AutoLock lock(gPSMutex);
@@ -2745,7 +2738,7 @@ profiler_unregister_thread()
   ThreadInfo* info = FindLiveThreadInfo(lock, &i);
   if (info) {
     DEBUG_LOG("profiler_unregister_thread: %s", info->Name());
-    if (gPS->IsActive(lock) && info->HasProfile()) {
+    if (gPS->IsActive(lock) && info->IsBeingProfiled()) {
       gPS->DeadThreads(lock).push_back(info);
     } else {
       delete info;
@@ -2878,7 +2871,7 @@ profiler_get_backtrace()
 #endif
 #endif
 
-  Tick(lock, buffer, &sample);
+  Tick(lock, buffer, sample);
 
   return UniqueProfilerBacktrace(
     new ProfilerBacktrace("SyncProfile", tid, buffer));
@@ -3076,7 +3069,7 @@ profiler_clear_js_context()
     // Flush this thread's ThreadInfo, if it is being profiled.
     ThreadInfo* info = FindLiveThreadInfo(lock);
     MOZ_RELEASE_ASSERT(info);
-    if (info->HasProfile()) {
+    if (info->IsBeingProfiled()) {
       info->FlushSamplesAndMarkers(gPS->Buffer(lock), gPS->StartTime(lock));
     }
 
