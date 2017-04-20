@@ -2706,7 +2706,7 @@ nsSocketTransport::GetInterface(const nsIID &iid, void **result)
     if (iid.Equals(NS_GET_IID(nsIDNSRecord))) {
         return mDNSRecord ?
             mDNSRecord->QueryInterface(iid, result) : NS_ERROR_NO_INTERFACE;
-    } else if (iid.Equals(NS_GET_IID(nsISocketTransportSDT)) && !mMozSdt) {
+    } else if (iid.Equals(NS_GET_IID(nsISocketTransportSDT)) && !mQUIC) {
         *result = nullptr;
         return NS_ERROR_NO_INTERFACE;
     }
