@@ -6080,9 +6080,10 @@ nsHttpChannel::BeginConnect()
                                                       host, port,
                                                       mPrivateBrowsing,
                                                       originAttributes))) {
-        LOG(("nsHttpChannel %p Alt Service Mapping Found %s://%s:%d [%s]\n",
+        LOG(("nsHttpChannel %p Alt Service Mapping Found %s://%s:%d [%s] alpn=%s\n",
              this, scheme.get(), mapping->AlternateHost().get(),
-             mapping->AlternatePort(), mapping->HashKey().get()));
+             mapping->AlternatePort(), mapping->HashKey().get(),
+             mapping->Alpn().get()));
 
         if (!(mLoadFlags & LOAD_ANONYMOUS) && !mPrivateBrowsing) {
             nsAutoCString altUsedLine(mapping->AlternateHost());
@@ -6111,6 +6112,8 @@ nsHttpChannel::BeginConnect()
             AppendASCIItoUTF16(mapping->AlternateHost().get(), message);
             message.Append(NS_LITERAL_STRING(":"));
             message.AppendInt(mapping->AlternatePort());
+            message.Append(NS_LITERAL_STRING(" alpn="));
+            AppendASCIItoUTF16(mapping->Alpn().get(), message);
             consoleService->LogStringMessage(message.get());
         }
 

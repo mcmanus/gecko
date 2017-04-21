@@ -70,6 +70,7 @@ public:
   const nsCString &OriginHost() const { return mOriginHost; }
   uint32_t OriginPort() const { return mOriginPort; }
   const nsCString &HashKey() const { return mHashKey; }
+  const nsCString &Alpn() const { return mALPNToken; }
   uint32_t AlternatePort() const { return mAlternatePort; }
   bool Validated() { return mValidated; }
   int32_t GetExpiresAt() { return mExpiresAt; }

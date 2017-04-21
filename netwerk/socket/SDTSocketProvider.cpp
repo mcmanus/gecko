@@ -16,11 +16,14 @@
 #include "SDTUpper.h"
 
 #if 0
- /* README
+ /*
 
  TODO Patrick's list (at best a partial list)
+
+ * agressive reaping and suppressing of established altsvc mappings becuase
+   there is no backup socket
+
  * reliabiity (optional).. via ack.. notion of deadline notion of ack with uni-tt
- * happy eyeballs
  * uuid and h2 should be able to go longer the normal connect/close cycle..
  * timeouts
  * mtu detection
