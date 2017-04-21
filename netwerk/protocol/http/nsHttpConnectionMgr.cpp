@@ -3050,8 +3050,16 @@ nsHalfOpenSocket::SetupStreams(nsISocketTransport **transport,
     nsresult rv;
     const char *socketTypes[1];
     uint32_t typeCount = 0;
-    const nsHttpConnectionInfo *ci = mEnt->mConnInfo;
-    if (!isBackup && gHttpHandler->IsQUICEnabled()) {
+    nsHttpConnectionInfo *ci = mEnt->mConnInfo;
+
+    MOZ_ASSERT(ci);
+    bool isQUIC = ci->GetALPNToken().Equals(nsCString(ASpdySession::kHQAlpn));
+
+    if (isBackup && isQUIC) {
+        return NS_ERROR_FAILURE;
+    }
+
+    if (isQUIC) {
         socketTypes[typeCount++] = "quic";
     } else if (ci->FirstHopSSL()) {
         socketTypes[typeCount++] = "ssl";

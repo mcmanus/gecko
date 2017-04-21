@@ -459,7 +459,6 @@ public:
 
 private:
   // check on alternate route.
-  // also evaluate 'reasonable assurances' for opportunistic security
   void MaybeValidate(nsresult reason)
   {
     MOZ_ASSERT(mMapping->HTTPS()); // http:// uses the .wk path
@@ -489,6 +488,26 @@ private:
     if (version <= NS_HTTP_VERSION_2) {
       LOG(("AltSvcTransaction::MaybeValidate %p Failed due to protocol version", this));
       return;
+    }
+
+    const nsCString &alpn = mConnectionInfo->GetALPNToken();
+    RefPtr<nsHttpConnection> concreteConn(mConnection->HttpConnection());
+    if (concreteConn->GetSpdyVersion() == HTTP_VERSION_2) {
+      if (!alpn.Equals(nsCString(ASpdySession::kH2Alpn))) {
+        LOG(("AltSvcTransaction::MaybeValidate % failed "
+             "unexpectedly received h2", this));
+        return;
+      }
+    } else if (concreteConn->GetSpdyVersion() == QUIC_EXPERIMENT_0) {
+      if (!alpn.Equals(nsCString(ASpdySession::kHQAlpn))) {
+        LOG(("AltSvcTransaction::MaybeValidate % failed "
+             "unexpectedly received hq", this));
+        return;
+      }
+    } else {
+      MOZ_ASSERT(false);
+      LOG(("AltSvcTransaction::MaybeValidate % failed "
+           "unrecognized alpn", this));
     }
 
     nsCOMPtr<nsISupports> secInfo;
