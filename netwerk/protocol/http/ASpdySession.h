@@ -62,6 +62,7 @@ public:
 
   const static uint32_t kDefaultMaxConcurrent = 100;
 
+  // todo these should be nsCString to avoid a billion string ctors
   static const char *kH2Alpn; // h2
   static const char *kHQAlpn; // hq
 

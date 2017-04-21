@@ -747,6 +747,7 @@ nsSocketTransport::nsSocketTransport()
     , mProxyTransparent(false)
     , mProxyTransparentResolvesHost(false)
     , mHttpsProxy(false)
+    , mQuicProxy(false)
     , mConnectionFlags(0)
     , mReuseAddrPort(false)
     , mState(STATE_CLOSED)
@@ -824,6 +825,7 @@ nsSocketTransport::Init(const char **types, uint32_t typeCount,
 
     if (proxyInfo) {
         mHttpsProxy = proxyInfo->IsHTTPS();
+        mQuicProxy =  proxyInfo->IsQUIC();
     }
 
     const char *proxyType = nullptr;

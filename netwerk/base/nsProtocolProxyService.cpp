@@ -45,6 +45,7 @@ namespace net {
 
   extern const char kProxyType_HTTP[];
   extern const char kProxyType_HTTPS[];
+  extern const char kProxyType_QUIC[];
   extern const char kProxyType_SOCKS[];
   extern const char kProxyType_SOCKS4[];
   extern const char kProxyType_SOCKS5[];
@@ -804,6 +805,7 @@ nsProtocolProxyService::CanUseProxy(nsIURI *aURI, int32_t defaultPort)
 // nsProxyInfo in order to compare by string pointer
 const char kProxyType_HTTP[]    = "http";
 const char kProxyType_HTTPS[]   = "https";
+const char kProxyType_QUIC[]    = "quic";
 const char kProxyType_PROXY[]   = "proxy";
 const char kProxyType_SOCKS[]   = "socks";
 const char kProxyType_SOCKS4[]  = "socks4";
@@ -834,6 +836,8 @@ nsProtocolProxyService::ExtractProxyInfo(const char *start,
     case 4:
         if (PL_strncasecmp(start, kProxyType_HTTP, 5) == 0) {
             type = kProxyType_HTTP;
+        } else if (PL_strncasecmp(start, kProxyType_QUIC, 4) == 0) {
+            type = kProxyType_QUIC;
         }
         break;
     case 5:
@@ -875,6 +879,8 @@ nsProtocolProxyService::ExtractProxyInfo(const char *start,
         if (type == kProxyType_HTTP) {
             port = 80;
         } else if (type == kProxyType_HTTPS) {
+            port = 443;
+        } else if (type == kProxyType_QUIC) {
             port = 443;
         } else {
             port = 1080;
@@ -1078,7 +1084,9 @@ nsProtocolProxyService::ProcessPACString(const nsCString &pacString,
     nsProxyInfo *pi = nullptr, *first = nullptr, *last = nullptr;
     while (*proxies) {
         proxies = ExtractProxyInfo(proxies, aResolveFlags, &pi);
-        if (pi && (pi->mType == kProxyType_HTTPS) && !mProxyOverTLS) {
+        if (pi &&
+            ((pi->mType == kProxyType_HTTPS) || (pi->mType == kProxyType_QUIC)) &&
+            !mProxyOverTLS) {
             delete pi;
             pi = nullptr;
         }
@@ -1307,6 +1315,7 @@ nsProtocolProxyService::NewProxyInfoWithAuth(const nsACString &aType,
     static const char *types[] = {
         kProxyType_HTTP,
         kProxyType_HTTPS,
+        kProxyType_QUIC,
         kProxyType_SOCKS,
         kProxyType_SOCKS4,
         kProxyType_DIRECT
@@ -1996,6 +2005,7 @@ nsProtocolProxyService::PruneProxyInfo(const nsProtocolInfo &info,
         nsProxyInfo *last = nullptr, *iter = head;
         while (iter) {
             if ((iter->Type() == kProxyType_HTTP) ||
+                (iter->Type() == kProxyType_QUIC) ||
                 (iter->Type() == kProxyType_HTTPS)) {
                 // reject!
                 if (last)

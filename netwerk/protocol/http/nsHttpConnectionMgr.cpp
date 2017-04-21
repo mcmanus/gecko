@@ -3054,6 +3054,7 @@ nsHalfOpenSocket::SetupStreams(nsISocketTransport **transport,
 
     MOZ_ASSERT(ci);
     bool isQUIC = ci->GetALPNToken().Equals(nsCString(ASpdySession::kHQAlpn));
+    isQUIC = isQUIC || (ci->ProxyInfo() && ci->ProxyInfo()->IsQUIC());
 
     if (isBackup && isQUIC) {
         return NS_ERROR_FAILURE;

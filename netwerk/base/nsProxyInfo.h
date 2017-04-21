@@ -44,6 +44,7 @@ public:
   bool IsDirect();
   bool IsHTTP();
   bool IsHTTPS();
+  bool IsQUIC();
   bool IsSOCKS();
 
 private:
