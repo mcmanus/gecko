@@ -1192,7 +1192,7 @@ nsHttpConnectionMgr::RestrictConnections(nsConnectionEntry *ent)
         bool confirmedRestrict = false;
         for (uint32_t index = 0; index < ent->mActiveConns.Length(); ++index) {
             nsHttpConnection *conn = ent->mActiveConns[index];
-            if (!conn->ReportedNPN() || conn->CanDirectlyActivate()) {
+            if (!conn->ReportedALPN() || conn->CanDirectlyActivate()) {
                 confirmedRestrict = true;
                 break;
             }

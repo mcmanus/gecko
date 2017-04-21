@@ -69,7 +69,7 @@ nsHttpConnection::nsHttpConnection()
     , mTrafficStamp(false)
     , mHttp1xTransactionCount(0)
     , mRemainingConnectionUses(0xffffffff)
-    , mNPNComplete(false)
+    , mALPNComplete(false)
     , mSetupSSLCalled(false)
     , mUsingSpdyVersion(0)
     , mPriority(nsISupportsPriority::PRIORITY_NORMAL)
@@ -340,11 +340,11 @@ nsHttpConnection::StartSpdy(uint8_t spdyVersion)
 }
 
 bool
-nsHttpConnection::EnsureNPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
-                                    uint32_t &aOut0RTTBytesWritten)
+nsHttpConnection::EnsureALPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
+                                     uint32_t &aOut0RTTBytesWritten)
 {
-    // If for some reason the components to check on NPN aren't available,
-    // this function will just return true to continue on and disable SPDY
+    // If for some reason the components to check on ALPN aren't available,
+    // this function will just return true to continue on and disable h2
 
     aOut0RTTWriteHandshakeValue = NS_OK;
     aOut0RTTBytesWritten = 0;
@@ -352,27 +352,27 @@ nsHttpConnection::EnsureNPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
     MOZ_ASSERT(mSocketTransport);
     if (!mSocketTransport) {
         // this cannot happen
-        mNPNComplete = true;
+        mALPNComplete = true;
         return true;
     }
 
-    if (mNPNComplete) {
+    if (mALPNComplete) {
         return true;
     }
 
     nsresult rv;
     nsCOMPtr<nsISupports> securityInfo;
     nsCOMPtr<nsISSLSocketControl> ssl;
-    nsAutoCString negotiatedNPN;
+    nsAutoCString negotiatedALPN;
 
     GetSecurityInfo(getter_AddRefs(securityInfo));
     if (!securityInfo) {
-        goto npnComplete;
+        goto alpnComplete;
     }
 
     ssl = do_QueryInterface(securityInfo, &rv);
     if (NS_FAILED(rv))
-        goto npnComplete;
+        goto alpnComplete;
 
     if (!m0RTTChecked) {
         // We reuse m0RTTChecked. We want to send this status only once.
@@ -381,7 +381,7 @@ nsHttpConnection::EnsureNPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
                                         0);
     }
 
-    rv = ssl->GetNegotiatedNPN(negotiatedNPN);
+    rv = ssl->GetNegotiatedNPN(negotiatedALPN);
     if (!m0RTTChecked && (rv == NS_ERROR_NOT_CONNECTED) &&
         !mConnInfo->UsingProxy()) {
         // There is no ALPN info (yet!). We need to consider doing 0RTT. We
@@ -394,28 +394,28 @@ nsHttpConnection::EnsureNPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
             // if ssl->DriveHandshake() has never been called the value
             // for AlpnEarlySelection is still not set. So call it here and
             // check again.
-            LOG(("nsHttpConnection::EnsureNPNComplete %p - "
+            LOG(("nsHttpConnection::EnsureALPNComplete %p - "
                  "early selected alpn not available, we will try one more time.",
                  this));
             // Let's do DriveHandshake again.
             rv = ssl->DriveHandshake();
             if (NS_FAILED(rv) && rv != NS_BASE_STREAM_WOULD_BLOCK) {
-                goto npnComplete;
+                goto alpnComplete;
             }
 
             // Check NegotiatedNPN first.
-            rv = ssl->GetNegotiatedNPN(negotiatedNPN);
+            rv = ssl->GetNegotiatedNPN(negotiatedALPN);
             if (rv == NS_ERROR_NOT_CONNECTED) {
                 rvEarlyAlpn = ssl->GetAlpnEarlySelection(mEarlyNegotiatedALPN);
             }
         }
 
         if (NS_FAILED(rvEarlyAlpn)) {
-            LOG(("nsHttpConnection::EnsureNPNComplete %p - "
+            LOG(("nsHttpConnection::EnsureALPNComplete %p - "
                  "early selected alpn not available", this));
             mEarlyDataNegotiated = false;
         } else {
-            LOG(("nsHttpConnection::EnsureNPNComplete %p -"
+            LOG(("nsHttpConnection::EnsureALPNComplete %p -"
                  "early selected alpn: %s", this, mEarlyNegotiatedALPN.get()));
             uint32_t infoIndex;
             const SpdyInformation *info = gHttpHandler->SpdyInfo();
@@ -423,14 +423,14 @@ nsHttpConnection::EnsureNPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
                 // This is the HTTP/1 case.
                 // Check if early-data is allowed for this transaction.
                 if (mTransaction->Do0RTT()) {
-                    LOG(("nsHttpConnection::EnsureNPNComplete [this=%p] - We "
+                    LOG(("nsHttpConnection::EnsureALPNComplete [this=%p] - We "
                          "can do 0RTT (http/1)!", this));
                     mWaitingFor0RTTResponse = true;
                 }
             } else {
                 // We have h2, we can at least 0-RTT the preamble and opening
                 // SETTINGS, etc, and maybe some of the first request
-                LOG(("nsHttpConnection::EnsureNPNComplete [this=%p] - Starting "
+                LOG(("nsHttpConnection::EnsureALPNComplete [this=%p] - Starting "
                      "0RTT for h2!", this));
                 mWaitingFor0RTTResponse = true;
                 Start0RTTSpdy(info->Version[infoIndex]);
@@ -445,39 +445,39 @@ nsHttpConnection::EnsureNPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
                 nsIOService::gDefaultSegmentSize, &aOut0RTTBytesWritten);
             if (NS_FAILED(aOut0RTTWriteHandshakeValue) &&
                 aOut0RTTWriteHandshakeValue != NS_BASE_STREAM_WOULD_BLOCK) {
-                goto npnComplete;
+                goto alpnComplete;
             }
-            LOG(("nsHttpConnection::EnsureNPNComplete [this=%p] - written %d "
+            LOG(("nsHttpConnection::EnsureALPNComplete [this=%p] - written %d "
                  "bytes during 0RTT", this, aOut0RTTBytesWritten));
             mContentBytesWritten0RTT += aOut0RTTBytesWritten;
         }
 
         rv = ssl->DriveHandshake();
         if (NS_FAILED(rv) && rv != NS_BASE_STREAM_WOULD_BLOCK) {
-            goto npnComplete;
+            goto alpnComplete;
         }
 
         return false;
     }
 
     if (NS_SUCCEEDED(rv)) {
-        LOG(("nsHttpConnection::EnsureNPNComplete %p [%s] negotiated to '%s'%s\n",
-             this, mConnInfo->HashKey().get(), negotiatedNPN.get(),
+        LOG(("nsHttpConnection::EnsureALPNComplete %p [%s] negotiated to '%s'%s\n",
+             this, mConnInfo->HashKey().get(), negotiatedALPN.get(),
              mTLSFilter ? " [Double Tunnel]" : ""));
 
         bool earlyDataAccepted = false;
         if (mWaitingFor0RTTResponse) {
             // Check if early data has been accepted.
             rv = ssl->GetEarlyDataAccepted(&earlyDataAccepted);
-            LOG(("nsHttpConnection::EnsureNPNComplete [this=%p] - early data "
+            LOG(("nsHttpConnection::EnsureALPNComplete [this=%p] - early data "
                  "that was sent during 0RTT %s been accepted [rv=%" PRIx32 "].",
                  this, earlyDataAccepted ? "has" : "has not", static_cast<uint32_t>(rv)));
 
             if (NS_FAILED(rv) ||
-                NS_FAILED(mTransaction->Finish0RTT(!earlyDataAccepted, negotiatedNPN != mEarlyNegotiatedALPN))) {
-                LOG(("nsHttpConection::EnsureNPNComplete [this=%p] closing transaction %p", this, mTransaction.get()));
+                NS_FAILED(mTransaction->Finish0RTT(!earlyDataAccepted, negotiatedALPN != mEarlyNegotiatedALPN))) {
+                LOG(("nsHttpConection::EnsureALPNComplete [this=%p] closing transaction %p", this, mTransaction.get()));
                 mTransaction->Close(NS_ERROR_NET_RESET);
-                goto npnComplete;
+                goto alpnComplete;
             }
         }
 
@@ -501,20 +501,20 @@ nsHttpConnection::EnsureNPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
         mWaitingFor0RTTResponse = false;
 
         if (!earlyDataAccepted) {
-            LOG(("nsHttpConnection::EnsureNPNComplete [this=%p] early data not accepted", this));
+            LOG(("nsHttpConnection::EnsureALPNComplete [this=%p] early data not accepted", this));
             uint32_t infoIndex;
             const SpdyInformation *info = gHttpHandler->SpdyInfo();
-            if (NS_SUCCEEDED(info->GetALPNIndex(negotiatedNPN, &infoIndex))) {
+            if (NS_SUCCEEDED(info->GetALPNIndex(negotiatedALPN, &infoIndex))) {
                 StartSpdy(info->Version[infoIndex]);
             }
         } else {
-          LOG(("nsHttpConnection::EnsureNPNComplete [this=%p] - %" PRId64 " bytes "
+          LOG(("nsHttpConnection::EnsureALPNComplete [this=%p] - %" PRId64 " bytes "
                "has been sent during 0RTT.", this, mContentBytesWritten0RTT));
           mContentBytesWritten = mContentBytesWritten0RTT;
           if (mSpdySession) {
               // We had already started 0RTT-spdy, now we need to fully set up
               // spdy, since we know we're sticking with it.
-              LOG(("nsHttpConnection::EnsureNPNComplete [this=%p] - finishing "
+              LOG(("nsHttpConnection::EnsureALPNComplete [this=%p] - finishing "
                    "StartSpdy for 0rtt spdy session %p", this, mSpdySession.get()));
               StartSpdy(mSpdySession->SpdyVersion());
           }
@@ -523,9 +523,9 @@ nsHttpConnection::EnsureNPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
         Telemetry::Accumulate(Telemetry::SPDY_NPN_CONNECT, UsingSpdy());
     }
 
-npnComplete:
-    LOG(("nsHttpConnection::EnsureNPNComplete [this=%p] setting complete to true", this));
-    mNPNComplete = true;
+alpnComplete:
+    LOG(("nsHttpConnection::EnsureALPNComplete [this=%p] setting complete to true", this));
+    mALPNComplete = true;
 
     mTransaction->OnTransportStatus(mSocketTransport,
                                     NS_NET_STATUS_TLS_HANDSHAKE_ENDED,
@@ -533,16 +533,16 @@ npnComplete:
     if (mWaitingFor0RTTResponse) {
         // Didn't get 0RTT OK, back out of the "attempting 0RTT" state
         mWaitingFor0RTTResponse = false;
-        LOG(("nsHttpConnection::EnsureNPNComplete [this=%p] 0rtt failed", this));
-        if (NS_FAILED(mTransaction->Finish0RTT(true, negotiatedNPN != mEarlyNegotiatedALPN))) {
+        LOG(("nsHttpConnection::EnsureALPNComplete [this=%p] 0rtt failed", this));
+        if (NS_FAILED(mTransaction->Finish0RTT(true, negotiatedALPN != mEarlyNegotiatedALPN))) {
             mTransaction->Close(NS_ERROR_NET_RESET);
         }
         mContentBytesWritten0RTT = 0;
     }
 
-    if (mDid0RTTSpdy && negotiatedNPN != mEarlyNegotiatedALPN) {
+    if (mDid0RTTSpdy && negotiatedALPN != mEarlyNegotiatedALPN) {
         // Reset the work done by Start0RTTSpdy
-        LOG(("nsHttpConnection::EnsureNPNComplete [this=%p] resetting Start0RTTSpdy", this));
+        LOG(("nsHttpConnection::EnsureALPNComplete [this=%p] resetting Start0RTTSpdy", this));
         mUsingSpdyVersion = 0;
         mTransaction = nullptr;
         mSpdySession = nullptr;
@@ -676,12 +676,12 @@ nsHttpConnection::SetupSSL()
         return;
     mSetupSSLCalled = true;
 
-    if (mNPNComplete)
+    if (mALPNComplete)
         return;
 
     // we flip this back to false if SetNPNList succeeds at the end
     // of this function
-    mNPNComplete = true;
+    mALPNComplete = true;
 
     if (!(mConnInfo->FirstHopSSL() || mSocketTransport->IsQUIC()) || mForcePlainText) {
         return;
@@ -699,22 +699,20 @@ nsHttpConnection::SetupSSL()
     MOZ_ASSERT(NS_SUCCEEDED(rv));
 }
 
-// The naming of NPN is historical - this function creates the basic
-// offer list for both NPN and ALPN. ALPN validation callbacks are made
-// now before the handshake is complete, and NPN validation callbacks
-// are made during the handshake.
+// Create offer list for both ALPN. ALPN validation callbacks are made
+// now before the handshake is complete
 nsresult
-nsHttpConnection::SetupNPNList(nsISSLSocketControl *ssl, uint32_t caps)
+nsHttpConnection::SetupALPNList(nsISSLSocketControl *ssl, uint32_t caps)
 {
     nsTArray<nsCString> protocolArray;
 
-    nsCString npnToken = mConnInfo->GetNPNToken();
-    if (npnToken.IsEmpty()) {
+    nsCString alpnToken = mConnInfo->GetALPNToken();
+    if (alpnToken.IsEmpty()) {
         // The first protocol is used as the fallback if none of the
         // protocols supported overlap with the server's list.
         // When using ALPN the advertised preferences are protocolArray indicies
         // {1, .., N, 0} in decreasing order.
-        // For NPN, In the case of overlap, matching priority is driven by
+        // For ALPN, In the case of overlap, matching priority is driven by
         // the order of the server's advertisement - with index 0 used when
         // there is no match.
         if (!mSocketTransport->IsQUIC()) {
@@ -723,7 +721,7 @@ nsHttpConnection::SetupNPNList(nsISSLSocketControl *ssl, uint32_t caps)
 
         if (gHttpHandler->IsSpdyEnabled() &&
             !(caps & NS_HTTP_DISALLOW_SPDY)) {
-            LOG(("nsHttpConnection::SetupSSL Allow SPDY NPN selection"));
+            LOG(("nsHttpConnection::SetupSSL Allow SPDY ALPN selection"));
             const SpdyInformation *info = gHttpHandler->SpdyInfo();
             for (uint32_t index = SpdyInformation::kCount; index > 0; --index) {
                 if ((mSocketTransport->IsQUIC() == info->IsQUIC[index - 1]) &&
@@ -734,13 +732,13 @@ nsHttpConnection::SetupNPNList(nsISSLSocketControl *ssl, uint32_t caps)
             }
         }
     } else {
-        LOG(("nsHttpConnection::SetupSSL limiting NPN selection to %s",
-             npnToken.get()));
-        protocolArray.AppendElement(npnToken);
+        LOG(("nsHttpConnection::SetupSSL limiting ALPN selection to %s",
+             alpnToken.get()));
+        protocolArray.AppendElement(alpnToken);
     }
 
     nsresult rv = ssl->SetNPNList(protocolArray);
-    LOG(("nsHttpConnection::SetupNPNList %p %" PRIx32 "\n",
+    LOG(("nsHttpConnection::SetupALPNList %p %" PRIx32 "\n",
          this, static_cast<uint32_t>(rv)));
     return rv;
 }
@@ -868,9 +866,9 @@ nsHttpConnection::InitSSLParams(bool connectingToProxy, bool proxyStartSSL)
         }
     }
 
-    if (NS_SUCCEEDED(SetupNPNList(ssl, mTransactionCaps))) {
+    if (NS_SUCCEEDED(SetupALPNList(ssl, mTransactionCaps))) {
         LOG(("InitSSLParams Setting up SPDY Negotiation OK"));
-        mNPNComplete = false;
+        mALPNComplete = false;
     }
 
     return NS_OK;
@@ -983,7 +981,7 @@ nsHttpConnection::IsAlive()
         return false;
 
     // SocketTransport::IsAlive can run the SSL state machine, so make sure
-    // the NPN options are set before that happens.
+    // the ALPN options are set before that happens.
     SetupSSL();
 
     bool alive;
@@ -1120,7 +1118,7 @@ nsHttpConnection::OnHeadersAvailable(nsAHttpTransaction *trans,
     // socket write request.
     if (mProxyConnectStream) {
         MOZ_ASSERT(!mUsingSpdyVersion,
-                   "SPDY NPN Complete while using proxy connect stream");
+                   "SPDY ALPN Complete while using proxy connect stream");
         mProxyConnectStream = nullptr;
         bool isHttps =
             mTransaction ? mTransaction->ConnectionInfo()->EndToEndSSL() :
@@ -1662,10 +1660,10 @@ nsHttpConnection::OnSocketWritable()
         // The SSL handshake must be completed before the transaction->readsegments()
         // processing can proceed because we need to know how to format the
         // request differently for http/1, http/2, spdy, etc.. and that is
-        // negotiated with NPN/ALPN in the SSL handshake.
+        // negotiated with ALPN/ALPN in the SSL handshake.
 
         if (mConnInfo->UsingHttpsProxy() &&
-            !EnsureNPNComplete(rv, transactionBytes)) {
+            !EnsureALPNComplete(rv, transactionBytes)) {
             MOZ_ASSERT(!transactionBytes);
             mSocketOutCondition = NS_BASE_STREAM_WOULD_BLOCK;
         } else if (mProxyConnectStream) {
@@ -1675,7 +1673,7 @@ nsHttpConnection::OnSocketWritable()
             rv = mProxyConnectStream->ReadSegments(ReadFromStream, this,
                                                    nsIOService::gDefaultSegmentSize,
                                                    &transactionBytes);
-        } else if (!EnsureNPNComplete(rv, transactionBytes)) {
+        } else if (!EnsureALPNComplete(rv, transactionBytes)) {
             if (NS_SUCCEEDED(rv) && !transactionBytes &&
                 NS_SUCCEEDED(mSocketOutCondition)) {
                 mSocketOutCondition = NS_BASE_STREAM_WOULD_BLOCK;
@@ -1814,16 +1812,16 @@ nsHttpConnection::OnSocketReadable()
     bool again = true;
 
     do {
-        if (!mProxyConnectInProgress && !mNPNComplete) {
+        if (!mProxyConnectInProgress && !mALPNComplete) {
             // Unless we are setting up a tunnel via CONNECT, prevent reading
-            // from the socket until the results of NPN
+            // from the socket until the results of ALPN
             // negotiation are known (which is determined from the write path).
             // If the server speaks SPDY it is likely the readable data here is
-            // a spdy settings frame and without NPN it would be misinterpreted
+            // a spdy settings frame and without ALPN it would be misinterpreted
             // as HTTP/*
 
             LOG(("nsHttpConnection::OnSocketReadable %p return due to inactive "
-                 "tunnel setup but incomplete NPN state\n", this));
+                 "tunnel setup but incomplete ALPN state\n", this));
             rv = NS_OK;
             break;
         }
@@ -1954,7 +1952,7 @@ nsHttpConnection::SetupProxyConnect()
     LOG(("nsHttpConnection::SetupProxyConnect [this=%p]\n", this));
     NS_ENSURE_TRUE(!mProxyConnectStream, NS_ERROR_ALREADY_INITIALIZED);
     MOZ_ASSERT(!mUsingSpdyVersion,
-               "SPDY NPN Complete while using proxy connect stream");
+               "SPDY ALPN Complete while using proxy connect stream");
 
     nsAutoCString buf;
     nsHttpRequestHead request;

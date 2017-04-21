@@ -174,9 +174,9 @@ public:
     // 0 if not multistreamed, otherwise HTTP_VERSION_2, etc.. from nsHttp.h
     uint8_t GetSpdyVersion() { return mUsingSpdyVersion; }
 
-    // true when connection SSL NPN phase is complete and we know
+    // true when connection SSL ALPN phase is complete and we know
     // authoritatively whether UsingSpdy() or not.
-    bool ReportedNPN() { return mReportedSpdy; }
+    bool ReportedALPN() { return mReportedSpdy; }
 
     // When the connection is active this is called up to once every 1 second
     // return the interval (in seconds) that the connection next wants to
@@ -241,7 +241,7 @@ private:
     // called to cause the underlying socket to start speaking SSL
     MOZ_MUST_USE nsresult InitSSLParams(bool connectingToProxy,
                                         bool ProxyStartSSL);
-    MOZ_MUST_USE nsresult SetupNPNList(nsISSLSocketControl *ssl, uint32_t caps);
+    MOZ_MUST_USE nsresult SetupALPNList(nsISSLSocketControl *ssl, uint32_t caps);
 
     MOZ_MUST_USE nsresult OnTransactionDone(nsresult reason);
     MOZ_MUST_USE nsresult OnSocketWritable();
@@ -252,13 +252,13 @@ private:
     PRIntervalTime IdleTime();
     bool     IsAlive();
 
-    // Makes certain the SSL handshake is complete and NPN negotiation
+    // Makes certain the SSL handshake is complete and ALPN negotiation
     // has had a chance to happen
-    MOZ_MUST_USE bool EnsureNPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
+    MOZ_MUST_USE bool EnsureALPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
                                         uint32_t &aOut0RTTBytesWritten);
     void     SetupSSL();
 
-    // Start the Spdy transaction handler when NPN indicates spdy/*
+    // Start the h2 transaction handler when ALPN indicates >= h2
     void     StartSpdy(uint8_t versionLevel);
     // Like the above, but do the bare minimum to do 0RTT data, so we can back
     // it out, if necessary
@@ -268,7 +268,7 @@ private:
     nsresult TryTakeSubTransactions(nsTArray<RefPtr<nsAHttpTransaction> > &list);
     nsresult MoveTransactionsToSpdy(nsresult status, nsTArray<RefPtr<nsAHttpTransaction> > &list);
 
-    // Directly Add a transaction to an active connection for SPDY
+    // Directly Add a transaction to an active connection for h2
     MOZ_MUST_USE nsresult AddTransaction(nsAHttpTransaction *, int32_t);
 
     // Used to set TCP keepalives for fast detection of dead connections during
@@ -343,7 +343,7 @@ private:
     uint32_t                        mRemainingConnectionUses;
 
     // SPDY related
-    bool                            mNPNComplete;
+    bool                            mALPNComplete;
     bool                            mSetupSSLCalled;
 
     // version level in use (HTTP_VERSION_2, etc..), 0 if unused

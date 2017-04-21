@@ -37,7 +37,7 @@ class nsHttpConnectionInfo: public ARefBase
 public:
     nsHttpConnectionInfo(const nsACString &originHost,
                          int32_t originPort,
-                         const nsACString &npnToken,
+                         const nsACString &alpnToken,
                          const nsACString &username,
                          nsProxyInfo *proxyInfo,
                          const OriginAttributes &originAttributes,
@@ -48,7 +48,7 @@ public:
     // origin information
     nsHttpConnectionInfo(const nsACString &originHost,
                          int32_t originPort,
-                         const nsACString &npnToken,
+                         const nsACString &alpnToken,
                          const nsACString &username,
                          nsProxyInfo *proxyInfo,
                          const OriginAttributes &originAttributes,
@@ -124,7 +124,7 @@ public:
 
     const nsCString &GetNetworkInterfaceId() const { return mNetworkInterfaceId; }
 
-    const nsCString &GetNPNToken() { return mNPNToken; }
+    const nsCString &GetALPNToken() { return mALPNToken; }
     const nsCString &GetUsername() { return mUsername; }
 
     const OriginAttributes &GetOriginAttributes() { return mOriginAttributes; }
@@ -153,7 +153,7 @@ public:
 private:
     void Init(const nsACString &host,
               int32_t port,
-              const nsACString &npnToken,
+              const nsACString &alpnToken,
               const nsACString &username,
               nsProxyInfo* proxyInfo,
               const OriginAttributes &originAttributes,
@@ -173,7 +173,7 @@ private:
     bool                   mUsingHttpsProxy;
     bool                   mEndToEndSSL;
     bool                   mUsingConnect;  // if will use CONNECT with http proxy
-    nsCString              mNPNToken;
+    nsCString              mALPNToken;
     OriginAttributes       mOriginAttributes;
 
 // for RefPtr

@@ -134,8 +134,8 @@ nsHttpConnection::PrintDiagnostics(nsCString &log)
 {
   log.AppendPrintf("    CanDirectlyActivate = %d\n", CanDirectlyActivate());
 
-  log.AppendPrintf("    npncomplete = %d  setupSSLCalled = %d\n",
-                   mNPNComplete, mSetupSSLCalled);
+  log.AppendPrintf("    alpncomplete = %d  setupSSLCalled = %d\n",
+                   mALPNComplete, mSetupSSLCalled);
 
   log.AppendPrintf("    spdyVersion = %d  reportedSpdy = %d everspdy = %d\n",
                    mUsingSpdyVersion, mReportedSpdy, mEverUsedSpdy);

@@ -48,19 +48,19 @@ namespace net {
 
 nsHttpConnectionInfo::nsHttpConnectionInfo(const nsACString &originHost,
                                            int32_t originPort,
-                                           const nsACString &npnToken,
+                                           const nsACString &alpnToken,
                                            const nsACString &username,
                                            nsProxyInfo *proxyInfo,
                                            const OriginAttributes &originAttributes,
                                            bool endToEndSSL)
     : mRoutedPort(443)
 {
-    Init(originHost, originPort, npnToken, username, proxyInfo, originAttributes, endToEndSSL);
+    Init(originHost, originPort, alpnToken, username, proxyInfo, originAttributes, endToEndSSL);
 }
 
 nsHttpConnectionInfo::nsHttpConnectionInfo(const nsACString &originHost,
                                            int32_t originPort,
-                                           const nsACString &npnToken,
+                                           const nsACString &alpnToken,
                                            const nsACString &username,
                                            nsProxyInfo *proxyInfo,
                                            const OriginAttributes &originAttributes,
@@ -73,12 +73,12 @@ nsHttpConnectionInfo::nsHttpConnectionInfo(const nsACString &originHost,
     if (!originHost.Equals(routedHost) || (originPort != routedPort)) {
         mRoutedHost = routedHost;
     }
-    Init(originHost, originPort, npnToken, username, proxyInfo, originAttributes, true);
+    Init(originHost, originPort, alpnToken, username, proxyInfo, originAttributes, true);
 }
 
 void
 nsHttpConnectionInfo::Init(const nsACString &host, int32_t port,
-                           const nsACString &npnToken,
+                           const nsACString &alpnToken,
                            const nsACString &username,
                            nsProxyInfo* proxyInfo,
                            const OriginAttributes &originAttributes,
@@ -90,7 +90,7 @@ nsHttpConnectionInfo::Init(const nsACString &host, int32_t port,
     mProxyInfo = proxyInfo;
     mEndToEndSSL = e2eSSL;
     mUsingConnect = false;
-    mNPNToken = npnToken;
+    mALPNToken = alpnToken;
     mOriginAttributes = originAttributes;
 
     mUsingHttpsProxy = (proxyInfo && proxyInfo->IsHTTPS());
@@ -217,9 +217,9 @@ void nsHttpConnectionInfo::BuildHashKey()
         mHashKey.Append('>');
     }
 
-    if (!mNPNToken.IsEmpty()) {
-        mHashKey.AppendLiteral(" {NPN-TOKEN ");
-        mHashKey.Append(mNPNToken);
+    if (!mALPNToken.IsEmpty()) {
+        mHashKey.AppendLiteral(" {ALPN-TOKEN ");
+        mHashKey.Append(mALPNToken);
         mHashKey.AppendLiteral("}");
     }
 
@@ -241,11 +241,11 @@ nsHttpConnectionInfo::Clone() const
 {
     nsHttpConnectionInfo *clone;
     if (mRoutedHost.IsEmpty()) {
-        clone = new nsHttpConnectionInfo(mOrigin, mOriginPort, mNPNToken, mUsername, mProxyInfo,
+        clone = new nsHttpConnectionInfo(mOrigin, mOriginPort, mALPNToken, mUsername, mProxyInfo,
                                          mOriginAttributes, mEndToEndSSL);
     } else {
         MOZ_ASSERT(mEndToEndSSL);
-        clone = new nsHttpConnectionInfo(mOrigin, mOriginPort, mNPNToken, mUsername, mProxyInfo,
+        clone = new nsHttpConnectionInfo(mOrigin, mOriginPort, mALPNToken, mUsername, mProxyInfo,
                                          mOriginAttributes, mRoutedHost, mRoutedPort);
     }
 
@@ -301,7 +301,7 @@ nsHttpConnectionInfo::CreateWildCard(nsHttpConnectionInfo **outParam)
 
     RefPtr<nsHttpConnectionInfo> clone;
     clone = new nsHttpConnectionInfo(NS_LITERAL_CSTRING("*"), 0,
-                                     mNPNToken, mUsername, mProxyInfo,
+                                     mALPNToken, mUsername, mProxyInfo,
                                      mOriginAttributes, true);
     // Make sure the anonymous and private flags are transferred!
     clone->SetAnonymous(GetAnonymous());
