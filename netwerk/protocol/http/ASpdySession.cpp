@@ -25,6 +25,9 @@
 namespace mozilla {
 namespace net {
 
+const char *ASpdySession::kH2Alpn = "h2";
+const char *ASpdySession::kHQAlpn = "hq";
+
 ASpdySession::ASpdySession()
 {
 }
@@ -63,12 +66,12 @@ SpdyInformation::SpdyInformation()
   // highest index of enabled protocols is the
   // most preferred for ALPN negotiaton
   Version[0] = HTTP_VERSION_2;
-  VersionString[0] = NS_LITERAL_CSTRING("h2");
+  VersionString[0] = nsCString(ASpdySession::kH2Alpn);
   ALPNCallbacks[0] = Http2Session::ALPNCallback;
   IsQUIC[1] = false;
 
   Version[1] = QUIC_EXPERIMENT_0;
-  VersionString[1] = NS_LITERAL_CSTRING("hq");
+  VersionString[1] = nsCString(ASpdySession::kHQAlpn);
   ALPNCallbacks[1] = Http2Session::ALPNCallback;
   IsQUIC[1] = true;
 }

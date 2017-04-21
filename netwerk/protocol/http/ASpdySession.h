@@ -28,7 +28,8 @@ public:
   virtual PRIntervalTime IdleTime() = 0;
   virtual uint32_t ReadTimeoutTick(PRIntervalTime now) = 0;
   virtual void DontReuse() = 0;
-  virtual uint32_t SpdyVersion() = 0;
+
+  virtual uint32_t SpdyVersion() = 0; // HTTP_VERSION_2, QUIC_EXPERIMENT_0, etc..
 
   static ASpdySession *NewSpdySession(uint32_t version, nsISocketTransport *, bool);
 
@@ -60,6 +61,9 @@ public:
   const static uint32_t kInitialRwin = 12 * 1024 * 1024; // 12MB
 
   const static uint32_t kDefaultMaxConcurrent = 100;
+
+  static const char *kH2Alpn; // h2
+  static const char *kHQAlpn; // hq
 
   // soft errors are errors that terminate a stream without terminating the
   // connection. In general non-network errors are stream errors as well

@@ -492,7 +492,7 @@ SDTSession::DontReuse()
 uint32_t
 SDTSession::SpdyVersion()
 {
-  return HTTP_VERSION_2;
+  return QUIC_EXPERIMENT_0;
 }
 
 bool

@@ -231,10 +231,11 @@ const char*
 nsHttp::GetProtocolVersion(uint32_t pv)
 {
     switch (pv) {
-    case HTTP_VERSION_2:
     case QUIC_EXPERIMENT_0:
+        return ASpdySession::kHQAlpn;
+    case HTTP_VERSION_2:
     case NS_HTTP_VERSION_2:
-        return "h2";
+        return ASpdySession::kH2Alpn;
     case NS_HTTP_VERSION_1_0:
         return "http/1.0";
     case NS_HTTP_VERSION_1_1:

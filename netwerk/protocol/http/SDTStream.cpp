@@ -791,7 +791,8 @@ SDTStream::ConvertResponseHeaders(Http2Decompressor *decompressor,
   // The decoding went ok. Now we can customize and clean up.
 
   aHeadersIn.Truncate();
-  aHeadersOut.Append("X-Firefox-Spdy: h2");
+  aHeadersOut.Append("X-Firefox-Spdy: ");
+  aHeadersOut.Append(ASpdySession::kHQAlpn);
   aHeadersOut.Append("\r\n\r\n");
   LOG (("decoded response headers are:\n%s", aHeadersOut.BeginReading()));
   if (mIsTunnel && !mPlainTextTunnel) {
