@@ -14,6 +14,7 @@
 #include "nsISocketProviderService.h"
 #include "nsNetCID.h"
 #include "SDTUpper.h"
+#include "QUICLog.h"
 
 #if 0
  /*
@@ -45,8 +46,7 @@ using mozilla::LogLevel;
 
 namespace mozilla { namespace net {
 
-LazyLogModule gSDTLog("sdt");
-#define LOG(args) MOZ_LOG(gSDTLog, mozilla::LogLevel::Debug, args)
+LazyLogModule gQUICLog("quic");
 
 SDTSocketProvider::SDTSocketProvider()
 {
@@ -144,6 +144,7 @@ SDTSocketProvider::AddToSocket(int32_t family,
 
 
 NS_IMPL_ISUPPORTS(SDTSocketProvider, nsISocketProvider)
+#undef LOG
 
 } } // namespace mozilla::net
 

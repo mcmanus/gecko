@@ -5,11 +5,10 @@
 #include "SDTUpper.h"
 #include "mozilla/Logging.h"
 #include "sdt_common.h"
+#include "QUICLog.h"
 
 namespace mozilla {
 namespace net {
-
-extern LazyLogModule gSDTLog;
 
 SDTUpper::SDTUpper(PRFileDesc *aFd)
   : mFd(aFd)
@@ -415,5 +414,6 @@ sdt_getSDTFD(PRFileDesc *aFd)
   return  handle->GetFD();
 }
 
+#undef LOG
 } // namespace mozilla::net
 } // namespace mozilla
