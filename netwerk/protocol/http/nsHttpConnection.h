@@ -171,7 +171,8 @@ public:
     bool EverUsedSpdy() { return mEverUsedSpdy; }
     PRIntervalTime Rtt() { return mRtt; }
 
-    // 0 if not multistreamed, otherwise HTTP_VERSION_2, etc.. from nsHttp.h
+    // 0 if not multistreamed, otherwise ASpdySession::WireVersion()
+    // e.g. HTTP_VERSION_2 or QUIC_EXPERIMENT_0
     uint8_t GetSpdyVersion() { return mUsingSpdyVersion; }
 
     // true when connection SSL ALPN phase is complete and we know

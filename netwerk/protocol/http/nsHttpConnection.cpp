@@ -516,7 +516,7 @@ nsHttpConnection::EnsureALPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
               // spdy, since we know we're sticking with it.
               LOG(("nsHttpConnection::EnsureALPNComplete [this=%p] - finishing "
                    "StartSpdy for 0rtt spdy session %p", this, mSpdySession.get()));
-              StartSpdy(mSpdySession->SpdyVersion());
+              StartSpdy(mSpdySession->WireVersion());
           }
         }
 

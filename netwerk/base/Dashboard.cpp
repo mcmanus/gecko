@@ -779,8 +779,13 @@ HttpConnInfo::SetHTTP1ProtocolVersion(uint8_t pv)
 void
 HttpConnInfo::SetHTTP2ProtocolVersion(uint8_t pv)
 {
-    MOZ_ASSERT (pv == HTTP_VERSION_2);
-    protocolVersion.Assign(u"h2");
+    if (pv == HTTP_VERSION_2) {
+        protocolVersion = NS_ConvertUTF8toUTF16(ASpdySession::kH2Alpn);
+    } else if (pv == QUIC_EXPERIMENT_0) {
+        protocolVersion = NS_ConvertUTF8toUTF16(ASpdySession::kHQAlpn);
+    } else {
+        MOZ_ASSERT(0);
+    }
 }
 
 NS_IMETHODIMP

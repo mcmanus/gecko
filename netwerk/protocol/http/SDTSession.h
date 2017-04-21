@@ -46,7 +46,7 @@ public:
                  bool, nsIInterfaceRequestor *) override;
   bool CanReuse() override { return !mShouldGoAway && !mClosed; }
   bool RoomForMoreStreams() override;
-  uint32_t SpdyVersion() override;
+  uint32_t WireVersion() override;
   bool TestJoinConnection(const nsACString &hostname, int32_t port) override;
   bool JoinConnection(const nsACString &hostname, int32_t port) override;
   void ThrottleResponse(bool aThrottle) override;

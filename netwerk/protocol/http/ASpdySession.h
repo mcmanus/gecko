@@ -29,7 +29,7 @@ public:
   virtual uint32_t ReadTimeoutTick(PRIntervalTime now) = 0;
   virtual void DontReuse() = 0;
 
-  virtual uint32_t SpdyVersion() = 0; // HTTP_VERSION_2, QUIC_EXPERIMENT_0, etc..
+  virtual uint32_t WireVersion() = 0; // HTTP_VERSION_2, QUIC_EXPERIMENT_0, etc..
 
   static ASpdySession *NewSpdySession(uint32_t version, nsISocketTransport *, bool);
 

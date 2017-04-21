@@ -582,7 +582,7 @@ Http2Session::DontReuse()
 }
 
 uint32_t
-Http2Session::SpdyVersion()
+Http2Session::WireVersion()
 {
   return HTTP_VERSION_2;
 }

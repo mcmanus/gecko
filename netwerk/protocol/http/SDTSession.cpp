@@ -490,7 +490,7 @@ SDTSession::DontReuse()
 }
 
 uint32_t
-SDTSession::SpdyVersion()
+SDTSession::WireVersion()
 {
   return QUIC_EXPERIMENT_0;
 }
