@@ -1,6 +1,6 @@
 * a freeform list of work items for mcmanus
 
-* test http2 and altsvc broken and test_origin.js
+* test http2
 * try?
 
 * test udp is generated for alt-svc validation (xpcshell might help)

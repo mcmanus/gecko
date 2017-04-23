@@ -485,7 +485,7 @@ private:
     // insist on >= http/2
     uint32_t version = mConnection->Version();
     LOG(("AltSvcTransaction::MaybeValidate() %p version %d\n", this, version));
-    if (version <= NS_HTTP_VERSION_2) {
+    if (version < NS_HTTP_VERSION_2) {
       LOG(("AltSvcTransaction::MaybeValidate %p Failed due to protocol version", this));
       return;
     }
@@ -506,7 +506,7 @@ private:
       }
     } else {
       MOZ_ASSERT(false);
-      LOG(("AltSvcTransaction::MaybeValidate % failed "
+      LOG(("AltSvcTransaction::MaybeValidate %p failed "
            "unrecognized alpn", this));
     }
 
