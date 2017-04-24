@@ -975,8 +975,8 @@ function test_complete() {
 // make sure post_big runs first to test race condition in restarting
 // a stalled stream when a SETTINGS frame arrives
 var tests = [ test_http2_post_big
-            , test_http2_basic
-           /* , test_http2_concurrent
+	    , test_http2_basic
+            , test_http2_concurrent
             , test_http2_concurrent_post
             , test_http2_basic_unblocked_dep
             , test_http2_nospdy
@@ -986,7 +986,7 @@ var tests = [ test_http2_post_big
             , test_http2_push4
             , test_http2_push5
             , test_http2_push6
-//            , test_http2_altsvc
+            , test_http2_altsvc
             , test_http2_doubleheader
             , test_http2_xhr
             , test_http2_header
@@ -1017,7 +1017,6 @@ var tests = [ test_http2_post_big
             , test_http2_push_userContext1
             , test_http2_push_userContext2
             , test_http2_push_userContext3
-*/
             // cleanup
             , test_complete
             ];
@@ -1074,9 +1073,9 @@ function addCertOverride(host, port, bits) {
   try {
     var url;
     if (port) {
-      url = "https://" + host + ":" + port + "/";
+      url = "https://" + host + ":" + port + "/certOverride";
     } else {
-      url = "https://" + host + "/";
+      url = "https://" + host + "/certOverride";
     }
     req.open("GET", url, false);
     req.channel.notificationCallbacks = new CertOverrideListener(host, port, bits);
@@ -1108,7 +1107,7 @@ function resetPrefs() {
 
 function run_test() {
   var env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment);
-  serverPort = 5500;//env.get("MOZHTTP2_PORT");
+  serverPort = env.get("MOZHTTP2_PORT");
   do_check_neq(serverPort, null);
   dump("using port " + serverPort + "\n");
 
