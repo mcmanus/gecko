@@ -747,7 +747,6 @@ nsSocketTransport::nsSocketTransport()
     , mProxyTransparent(false)
     , mProxyTransparentResolvesHost(false)
     , mHttpsProxy(false)
-    , mQuicProxy(false)
     , mConnectionFlags(0)
     , mReuseAddrPort(false)
     , mState(STATE_CLOSED)
@@ -825,7 +824,6 @@ nsSocketTransport::Init(const char **types, uint32_t typeCount,
 
     if (proxyInfo) {
         mHttpsProxy = proxyInfo->IsHTTPS();
-        mQuicProxy =  proxyInfo->IsQUIC();
     }
 
     const char *proxyType = nullptr;
@@ -837,6 +835,7 @@ nsSocketTransport::Init(const char **types, uint32_t typeCount,
         proxyType = proxyInfo->Type();
         if (proxyType && (proxyInfo->IsHTTP() ||
                           proxyInfo->IsHTTPS() ||
+                          proxyInfo->IsQUIC() ||
                           proxyInfo->IsDirect() ||
                           !strcmp(proxyType, "unknown"))) {
             proxyType = nullptr;
@@ -1474,7 +1473,7 @@ nsSocketTransport::InitiateSocket()
     if (SOCKET_LOG_ENABLED()) {
         char buf[kNetAddrMaxCStrBufSize];
         NetAddrToString(&mNetAddr, buf, sizeof(buf));
-        SOCKET_LOG(("  trying address: %s\n", buf));
+        SOCKET_LOG(("  trying address: %s:%d\n", buf, SocketPort()));
     }
 
     //

@@ -304,7 +304,6 @@ private:
     bool                   mProxyTransparent;
     bool                   mProxyTransparentResolvesHost;
     bool                   mHttpsProxy;
-    bool                   mQuicProxy;
     uint32_t               mConnectionFlags;
     bool                   mReuseAddrPort;
 

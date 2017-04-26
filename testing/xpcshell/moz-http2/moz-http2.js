@@ -798,7 +798,7 @@ function handleRequest(req, res) {
   else if (u.pathname.substring(0,8) === "/origin-") { // test_origin.js coalescing
     res.setHeader("x-client-port", req.remotePort);
   }
-  else if (u.pathname.substring(0,6) === "/quic-") { // test_quic.js h2 components
+  else if (u.pathname.substring(0,7) === "/quic-b") { // test_quic.js h2 components
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Alt-Svc', 'hq=' + req.headers['x-altsvc']);
   }  

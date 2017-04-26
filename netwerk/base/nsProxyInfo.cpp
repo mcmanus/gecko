@@ -113,7 +113,8 @@ nsProxyInfo::IsHTTP()
 bool
 nsProxyInfo::IsHTTPS()
 {
-  return mType == kProxyType_HTTPS;
+  return mType == kProxyType_HTTPS ||
+    mType == kProxyType_QUIC;
 }
 
 bool

@@ -4,6 +4,9 @@ Cu.import("resource://gre/modules/NetUtil.jsm");
 // test1 uses alt-svc to bootstrap quic from h2, fetch same resource in a
 // loop until the quic server (hardcoded on 8443 todo) responds
 
+// test2 uses a proxy configuration to route all requests to a specific proxy
+// (again hardcoded on 8443 todo) over quic
+
 var h2Port;
 var quicPort = ":8443"; // todo
 var prefs;
@@ -45,6 +48,8 @@ function resetPrefs() {
   prefs.setBoolPref("network.http.spdy.enabled.http2", http2pref);
   prefs.setBoolPref("network.http.originextension", quicpref);
   prefs.clearUserPref("network.dns.localDomains");
+  prefs.clearUserPref("network.proxy.autoconfig_url");
+  prefs.clearUserPref("network.proxy.type");
 }
 
 function readFile(file) {
@@ -152,8 +157,19 @@ function doTest1()
 {
   dump("doTest1()\n");
   origin = "https://foo.example.com:" + h2Port + "/quic-bootstrap";
-  nextTest = testsDone;
+  nextTest = doTest2;
   do_test_pending();
   doTest();
 }
 
+function doTest2()
+{
+  dump("doTest2()\n");
+  var pac = 'data:text/plain, function FindProxyForURL(url, host) {return "QUIC localhost:8443";}';
+  origin = "https://foo.example.com:" + h2Port + "/quic-2";
+  prefs.setIntPref("network.proxy.type", 2);
+  prefs.setCharPref("network.proxy.autoconfig_url", pac);
+  nextTest = testsDone;
+  do_test_pending();
+  doTest();
+}
