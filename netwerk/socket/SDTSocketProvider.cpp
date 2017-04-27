@@ -25,16 +25,12 @@
    there is no backup socket
 
  * reliabiity (optional).. via ack.. notion of deadline notion of ack with uni-tt
- * uuid and h2 should be able to go longer the normal connect/close cycle..
- * timeouts
  * mtu detection
  * congestion control (latency sensitive)
  * poll()
- * fec
  * psm integration for auth and cipher selection
  * investigate dtlscon pmtu change
  * have psm and http use common pref for finding transport layer
- * better h2 integration where fec is per headers and reliability per stream
  * lib logging
  * assert normalization
  */
