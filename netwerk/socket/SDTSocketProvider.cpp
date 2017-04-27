@@ -78,7 +78,7 @@ SDTSocketProvider::NewSocket(int32_t family,
 
   fd = sdt_openSocket(family);
 
-  if (fd <= 0) {
+  if (!fd) {
     LOG(("SDTSocketProvider::NewSocket fail %p\n", this));
     goto onfail;
   }
@@ -101,12 +101,12 @@ SDTSocketProvider::NewSocket(int32_t family,
   }
 
   fd = sdt_addALayer(fd);
-  if (fd <= 0) {
+  if (!fd) {
     goto onfail;
   }
 
   sdtFd = sdt_createSDTSocket(fd);
-  if (sdtFd <= 0) {
+  if (!sdtFd) {
     goto onfail;
   }
 
