@@ -75,7 +75,7 @@ var PointerlockFsWarning = {
     if (aOrigin) {
       this._origin = aOrigin;
     }
-    let uri = BrowserUtils.makeURI(this._origin);
+    let uri = Services.io.newURI(this._origin);
     let host = null;
     try {
       host = uri.host;
@@ -636,7 +636,8 @@ var FullScreen = {
       }
     }
 
-    ToolbarIconColor.inferFromText();
+    ToolbarIconColor.inferFromText("fullscreen", aEnterFS);
+
 
     // For Lion fullscreen, all fullscreen controls are hidden, don't
     // bother to touch them. If we don't stop here, the following code

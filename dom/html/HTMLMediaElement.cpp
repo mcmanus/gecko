@@ -22,6 +22,7 @@
 #include "nsGenericHTMLElement.h"
 #include "nsAttrValueInlines.h"
 #include "nsPresContext.h"
+#include "nsIClassOfService.h"
 #include "nsIPresShell.h"
 #include "nsGkAtoms.h"
 #include "nsSize.h"
@@ -1159,6 +1160,12 @@ public:
       return;
     }
 
+    nsCOMPtr<nsIClassOfService> cos;
+    if (aElement->mUseUrgentStartForChannel &&
+        (cos = do_QueryInterface(channel))) {
+      cos->AddClassFlags(nsIClassOfService::UrgentStart);
+    }
+
     // The listener holds a strong reference to us.  This creates a
     // reference cycle, once we've set mChannel, which is manually broken
     // in the listener's OnStartRequest method after it is finished with
@@ -1436,23 +1443,6 @@ NS_IMPL_BOOL_ATTR(HTMLMediaElement, Autoplay, autoplay)
 NS_IMPL_BOOL_ATTR(HTMLMediaElement, Loop, loop)
 NS_IMPL_BOOL_ATTR(HTMLMediaElement, DefaultMuted, muted)
 NS_IMPL_ENUM_ATTR_DEFAULT_VALUE(HTMLMediaElement, Preload, preload, nullptr)
-
-NS_IMETHODIMP
-HTMLMediaElement::GetMozAudioChannelType(nsAString& aValue)
-{
-  nsString defaultValue;
-  AudioChannelService::GetDefaultAudioChannelString(defaultValue);
-
-  NS_ConvertUTF16toUTF8 str(defaultValue);
-  GetEnumAttr(nsGkAtoms::mozaudiochannel, str.get(), aValue);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-HTMLMediaElement::SetMozAudioChannelType(const nsAString& aValue)
-{
-  return SetAttrHelper(nsGkAtoms::mozaudiochannel, aValue);
-}
 
 NS_IMETHODIMP_(bool)
 HTMLMediaElement::IsVideo()
@@ -3891,6 +3881,14 @@ HTMLMediaElement::PlayInternal(ErrorResult& aRv)
   // Play was not blocked so assume user interacted with the element.
   mHasUserInteraction = true;
 
+  if (mPreloadAction == HTMLMediaElement::PRELOAD_NONE) {
+    // The media load algorithm will be initiated by a user interaction.
+    // We want to boost the channel priority for better responsiveness.
+    // Note this must be done before UpdatePreloadAction() which will
+    // update |mPreloadAction|.
+    mUseUrgentStartForChannel = true;
+  }
+
   StopSuspendingAfterFirstFrame();
   SetPlayedOrSeeked(true);
 
@@ -4127,75 +4125,10 @@ bool HTMLMediaElement::ParseAttribute(int32_t aNamespaceID,
     if (aAttribute == nsGkAtoms::preload) {
       return aResult.ParseEnumValue(aValue, kPreloadTable, false);
     }
-
-    // Remove the b2g-specific audio channel setting in bug1299390.
-    if (aAttribute == nsGkAtoms::mozaudiochannel) {
-      const nsAttrValue::EnumTable* table =
-        AudioChannelService::GetAudioChannelTable();
-      MOZ_ASSERT(table);
-
-      bool parsed = aResult.ParseEnumValue(aValue, table, false, &table[0]);
-      if (!parsed) {
-        return false;
-      }
-
-      AudioChannel audioChannel = static_cast<AudioChannel>(aResult.GetEnumValue());
-
-      if (audioChannel == mAudioChannel ||
-          !CheckAudioChannelPermissions(aValue)) {
-        return true;
-      }
-
-      // We cannot change the AudioChannel of a decoder.
-      if (mDecoder) {
-        return true;
-      }
-
-      mAudioChannel = audioChannel;
-
-      if (mSrcStream) {
-        RefPtr<MediaStream> stream = GetSrcMediaStream();
-        if (stream) {
-          stream->SetAudioChannelType(mAudioChannel);
-        }
-      }
-
-      return true;
-    }
   }
 
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
                                               aResult);
-}
-
-bool HTMLMediaElement::CheckAudioChannelPermissions(const nsAString& aString)
-{
-  // Only normal channel doesn't need permission.
-  if (aString.EqualsASCII("normal")) {
-    return true;
-  }
-
-  // Maybe this audio channel is equal to the default value from the pref.
-  nsString audioChannel;
-  AudioChannelService::GetDefaultAudioChannelString(audioChannel);
-  if (audioChannel.Equals(aString)) {
-    return true;
-  }
-
-  nsCOMPtr<nsIPermissionManager> permissionManager =
-    services::GetPermissionManager();
-  if (!permissionManager) {
-    return false;
-  }
-
-  uint32_t perm = nsIPermissionManager::UNKNOWN_ACTION;
-  permissionManager->TestExactPermissionFromPrincipal(NodePrincipal(),
-    nsCString(NS_LITERAL_CSTRING("audio-channel-") + NS_ConvertUTF16toUTF8(aString)).get(), &perm);
-  if (perm != nsIPermissionManager::ALLOW_ACTION) {
-    return false;
-  }
-
-  return true;
 }
 
 void HTMLMediaElement::DoneCreatingElement()
@@ -4672,7 +4605,7 @@ nsresult HTMLMediaElement::InitializeDecoderForChannel(nsIChannel* aChannel,
 
   LOG(LogLevel::Debug, ("%p Created decoder %p for type %s", this, decoder.get(), mimeType.get()));
 
-  bool isPrivateBrowsing = nsContentUtils::IsInPrivateBrowsing(OwnerDoc());
+  bool isPrivateBrowsing = NodePrincipal()->GetPrivateBrowsingId() > 0;
   RefPtr<MediaResource> resource = MediaResource::Create(
     decoder->GetResourceCallback(), aChannel, isPrivateBrowsing);
 
@@ -7046,15 +6979,6 @@ HTMLMediaElement::GetOrCreateTextTrackManager()
     mTextTrackManager->AddListeners();
   }
   return mTextTrackManager;
-}
-
-void
-HTMLMediaElement::SetMozAudioChannelType(AudioChannel aValue, ErrorResult& aRv)
-{
-  nsString channel;
-  channel.AssignASCII(AudioChannelValues::strings[uint32_t(aValue)].value,
-                      AudioChannelValues::strings[uint32_t(aValue)].length);
-  SetHTMLAttr(nsGkAtoms::mozaudiochannel, channel, aRv);
 }
 
 MediaDecoderOwner::NextFrameStatus

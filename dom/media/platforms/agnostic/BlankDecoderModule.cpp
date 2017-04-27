@@ -117,7 +117,7 @@ BlankAudioDataCreator::Create(MediaRawData* aSample)
   }
   RefPtr<AudioData> data(new AudioData(aSample->mOffset,
                                        aSample->mTime,
-                                       aSample->mDuration.ToMicroseconds(),
+                                       aSample->mDuration,
                                        uint32_t(frames.value()),
                                        Move(samples),
                                        mChannelCount,

@@ -1288,7 +1288,11 @@ pref("privacy.trackingprotection.pbmode.enabled",  true);
 pref("privacy.trackingprotection.annotate_channels",  true);
 // Lower the priority of network loads for resources on the tracking protection list.
 // Note that this requires the privacy.trackingprotection.annotate_channels pref to be on in order to have any effect.
-pref("privacy.trackingprotection.lower_network_priority",  false);
+#ifdef NIGHTLY_BUILD
+pref("privacy.trackingprotection.lower_network_priority", true);
+#else
+pref("privacy.trackingprotection.lower_network_priority", false);
+#endif
 
 pref("dom.event.contextmenu.enabled",       true);
 pref("dom.event.clipboardevents.enabled",   true);
@@ -1528,7 +1532,7 @@ pref("network.http.sendRefererHeader",      2);
 pref("network.http.referer.userControlPolicy", 3);
 // false=real referer, true=spoof referer (use target URI as referer)
 pref("network.http.referer.spoofSource", false);
-// false=allow onion referer, true=hide onion referer (use target URI as referer)
+// false=allow onion referer, true=hide onion referer (use empty referer)
 pref("network.http.referer.hideOnionSource", false);
 // 0=full URI, 1=scheme+host+port+path, 2=scheme+host+port
 pref("network.http.referer.trimmingPolicy", 0);
@@ -2757,11 +2761,7 @@ pref("layout.css.text-justify.enabled", true);
 
 // Is support for CSS "float: inline-{start,end}" and
 // "clear: inline-{start,end}" enabled?
-#if defined(MOZ_B2G) || !defined(RELEASE_OR_BETA)
 pref("layout.css.float-logical-values.enabled", true);
-#else
-pref("layout.css.float-logical-values.enabled", false);
-#endif
 
 // Is support for the CSS4 image-orientation property enabled?
 pref("layout.css.image-orientation.enabled", true);
@@ -5061,6 +5061,8 @@ pref("dom.vr.enabled", false);
 // presentation due to the high sensitivity of the proximity sensor in some
 // headsets, so it is off by default.
 pref("dom.vr.autoactivate.enabled", false);
+// The threshold value of trigger inputs for VR controllers
+pref("dom.vr.controller_trigger_threshold", "0.1");
 // Maximum number of milliseconds the browser will wait for content to call
 // VRDisplay.requestPresent after emitting vrdisplayactivate during VR
 // link traversal.  This prevents a long running event handler for

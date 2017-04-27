@@ -57,7 +57,6 @@ class MOZ_STACK_CLASS BytecodeCompiler
     JSScript* compileScript(HandleObject environment, SharedContext* sc);
     bool checkLength();
     bool createScriptSource(const Maybe<uint32_t>& parameterListEnd);
-    bool enqueueOffThreadSourceCompression();
     bool canLazilyParse();
     bool createParser();
     bool createSourceAndParser(const Maybe<uint32_t>& parameterListEnd = Nothing());
@@ -83,11 +82,10 @@ class MOZ_STACK_CLASS BytecodeCompiler
 
     RootedScriptSource sourceObject;
     ScriptSource* scriptSource;
-    SourceCompressionTask* sourceCompressionTask_;
 
     Maybe<UsedNameTracker> usedNames;
-    Maybe<Parser<SyntaxParseHandler>> syntaxParser;
-    Maybe<Parser<FullParseHandler>> parser;
+    Maybe<Parser<SyntaxParseHandler, char16_t>> syntaxParser;
+    Maybe<Parser<FullParseHandler, char16_t>> parser;
 
     Directives directives;
     TokenStream::Position startPosition;
@@ -173,7 +171,6 @@ BytecodeCompiler::BytecodeCompiler(JSContext* cx,
     enclosingScope(cx, enclosingScope),
     sourceObject(cx),
     scriptSource(nullptr),
-    sourceCompressionTask_(nullptr),
     directives(options.strictOption),
     startPosition(keepAtoms),
     script(cx)
@@ -220,40 +217,6 @@ BytecodeCompiler::createScriptSource(const Maybe<uint32_t>& parameterListEnd)
 }
 
 bool
-BytecodeCompiler::enqueueOffThreadSourceCompression()
-{
-    // There are several cases where source compression is not a good idea:
-    //  - If the script is tiny, then compression will save little or no space.
-    //  - If there is only one core, then compression will contend with JS
-    //    execution (which hurts benchmarketing).
-    //
-    // Otherwise, enqueue a compression task to be processed when a major
-    // GC is requested.
-
-    if (!scriptSource->hasUncompressedSource())
-        return true;
-
-    bool canCompressOffThread =
-        HelperThreadState().cpuCount > 1 &&
-        HelperThreadState().threadCount >= 2 &&
-        CanUseExtraThreads();
-    const size_t TINY_SCRIPT = 256;
-    if (TINY_SCRIPT <= sourceBuffer.length() && canCompressOffThread) {
-        // Heap allocate the task. It will be freed upon compression
-        // completing in AttachFinishedCompressedSources.
-        SourceCompressionTask* task = cx->new_<SourceCompressionTask>(cx->runtime(),
-                                                                      scriptSource);
-        if (!task)
-            return false;
-        if (!EnqueueOffThreadCompression(cx, task))
-            return false;
-        sourceCompressionTask_ = task;
-    }
-
-    return true;
-}
-
-bool
 BytecodeCompiler::canLazilyParse()
 {
     return options.canLazilyParse &&
@@ -273,8 +236,7 @@ BytecodeCompiler::createParser()
 
     if (canLazilyParse()) {
         syntaxParser.emplace(cx, alloc, options, sourceBuffer.get(), sourceBuffer.length(),
-                             /* foldConstants = */ false, *usedNames,
-                             (Parser<SyntaxParseHandler>*) nullptr, (LazyScript*) nullptr);
+                             /* foldConstants = */ false, *usedNames, nullptr, nullptr);
 
         if (!syntaxParser->checkOptions())
             return false;
@@ -416,7 +378,7 @@ BytecodeCompiler::compileScript(HandleObject environment, SharedContext* sc)
     script->scriptSource()->recordParseEnded();
 
     // Enqueue an off-thread source compression task after finishing parsing.
-    if (!enqueueOffThreadSourceCompression())
+    if (!scriptSource->tryCompressOffThread(cx))
         return nullptr;
 
     MOZ_ASSERT_IF(!cx->helperThread(), !cx->isExceptionPending());
@@ -481,7 +443,7 @@ BytecodeCompiler::compileModule()
     module->setInitialEnvironment(env);
 
     // Enqueue an off-thread source compression task after finishing parsing.
-    if (!enqueueOffThreadSourceCompression())
+    if (!scriptSource->tryCompressOffThread(cx))
         return nullptr;
 
     MOZ_ASSERT_IF(!cx->helperThread(), !cx->isExceptionPending());
@@ -537,7 +499,7 @@ BytecodeCompiler::compileStandaloneFunction(MutableHandleFunction fun,
         return false;
 
     // Enqueue an off-thread source compression task after finishing parsing.
-    if (!enqueueOffThreadSourceCompression())
+    if (!scriptSource->tryCompressOffThread(cx))
         return false;
 
     return true;
@@ -547,12 +509,6 @@ ScriptSourceObject*
 BytecodeCompiler::sourceObjectPtr() const
 {
     return sourceObject.get();
-}
-
-SourceCompressionTask*
-BytecodeCompiler::sourceCompressionTask() const
-{
-    return sourceCompressionTask_;
 }
 
 ScriptSourceObject*
@@ -606,22 +562,17 @@ class MOZ_STACK_CLASS AutoInitializeSourceObject
 {
     BytecodeCompiler& compiler_;
     ScriptSourceObject** sourceObjectOut_;
-    SourceCompressionTask** sourceCompressionTaskOut_;
 
   public:
     AutoInitializeSourceObject(BytecodeCompiler& compiler,
-                               ScriptSourceObject** sourceObjectOut,
-                               SourceCompressionTask** sourceCompressionTaskOut)
+                               ScriptSourceObject** sourceObjectOut)
       : compiler_(compiler),
-        sourceObjectOut_(sourceObjectOut),
-        sourceCompressionTaskOut_(sourceCompressionTaskOut)
+        sourceObjectOut_(sourceObjectOut)
     { }
 
     ~AutoInitializeSourceObject() {
         if (sourceObjectOut_)
             *sourceObjectOut_ = compiler_.sourceObjectPtr();
-        if (sourceCompressionTaskOut_)
-            *sourceCompressionTaskOut_ = compiler_.sourceCompressionTask();
     }
 };
 
@@ -629,12 +580,11 @@ JSScript*
 frontend::CompileGlobalScript(JSContext* cx, LifoAlloc& alloc, ScopeKind scopeKind,
                               const ReadOnlyCompileOptions& options,
                               SourceBufferHolder& srcBuf,
-                              ScriptSourceObject** sourceObjectOut,
-                              SourceCompressionTask** sourceCompressionTaskOut)
+                              ScriptSourceObject** sourceObjectOut)
 {
     MOZ_ASSERT(scopeKind == ScopeKind::Global || scopeKind == ScopeKind::NonSyntactic);
     BytecodeCompiler compiler(cx, alloc, options, srcBuf, /* enclosingScope = */ nullptr);
-    AutoInitializeSourceObject autoSSO(compiler, sourceObjectOut, sourceCompressionTaskOut);
+    AutoInitializeSourceObject autoSSO(compiler, sourceObjectOut);
     return compiler.compileGlobalScript(scopeKind);
 }
 
@@ -643,19 +593,17 @@ frontend::CompileEvalScript(JSContext* cx, LifoAlloc& alloc,
                             HandleObject environment, HandleScope enclosingScope,
                             const ReadOnlyCompileOptions& options,
                             SourceBufferHolder& srcBuf,
-                            ScriptSourceObject** sourceObjectOut,
-                            SourceCompressionTask** sourceCompressionTaskOut)
+                            ScriptSourceObject** sourceObjectOut)
 {
     BytecodeCompiler compiler(cx, alloc, options, srcBuf, enclosingScope);
-    AutoInitializeSourceObject autoSSO(compiler, sourceObjectOut, sourceCompressionTaskOut);
+    AutoInitializeSourceObject autoSSO(compiler, sourceObjectOut);
     return compiler.compileEvalScript(environment, enclosingScope);
 }
 
 ModuleObject*
 frontend::CompileModule(JSContext* cx, const ReadOnlyCompileOptions& optionsInput,
                         SourceBufferHolder& srcBuf, LifoAlloc& alloc,
-                        ScriptSourceObject** sourceObjectOut,
-                        SourceCompressionTask** sourceCompressionTaskOut)
+                        ScriptSourceObject** sourceObjectOut)
 {
     MOZ_ASSERT(srcBuf.get());
     MOZ_ASSERT_IF(sourceObjectOut, *sourceObjectOut == nullptr);
@@ -667,7 +615,7 @@ frontend::CompileModule(JSContext* cx, const ReadOnlyCompileOptions& optionsInpu
 
     RootedScope emptyGlobalScope(cx, &cx->global()->emptyGlobalScope());
     BytecodeCompiler compiler(cx, alloc, options, srcBuf, emptyGlobalScope);
-    AutoInitializeSourceObject autoSSO(compiler, sourceObjectOut, sourceCompressionTaskOut);
+    AutoInitializeSourceObject autoSSO(compiler, sourceObjectOut);
     return compiler.compileModule();
 }
 
@@ -724,8 +672,9 @@ frontend::CompileLazyFunction(JSContext* cx, Handle<LazyScript*> lazy, const cha
     UsedNameTracker usedNames(cx);
     if (!usedNames.init())
         return false;
-    Parser<FullParseHandler> parser(cx, cx->tempLifoAlloc(), options, chars, length,
-                                    /* foldConstants = */ true, usedNames, nullptr, lazy);
+    Parser<FullParseHandler, char16_t> parser(cx, cx->tempLifoAlloc(), options, chars, length,
+                                              /* foldConstants = */ true, usedNames, nullptr,
+                                              lazy);
     if (!parser.checkOptions())
         return false;
 

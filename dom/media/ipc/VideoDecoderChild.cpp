@@ -48,11 +48,11 @@ VideoDecoderChild::RecvOutput(const VideoDataIPDL& aData)
   RefPtr<VideoData> video = VideoData::CreateFromImage(
     aData.display(),
     aData.base().offset(),
-    aData.base().time(),
+    media::TimeUnit::FromMicroseconds(aData.base().time()),
     media::TimeUnit::FromMicroseconds(aData.base().duration()),
     image,
     aData.base().keyframe(),
-    aData.base().timecode());
+    media::TimeUnit::FromMicroseconds(aData.base().timecode()));
 
   mDecodedData.AppendElement(Move(video));
   return IPC_OK();
@@ -230,8 +230,8 @@ VideoDecoderChild::Decode(MediaRawData* aSample)
   memcpy(buffer.get<uint8_t>(), aSample->Data(), aSample->Size());
 
   MediaRawDataIPDL sample(MediaDataIPDL(aSample->mOffset,
-                                        aSample->mTime,
-                                        aSample->mTimecode,
+                                        aSample->mTime.ToMicroseconds(),
+                                        aSample->mTimecode.ToMicroseconds(),
                                         aSample->mDuration.ToMicroseconds(),
                                         aSample->mFrames,
                                         aSample->mKeyframe),

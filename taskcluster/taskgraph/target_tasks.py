@@ -177,7 +177,7 @@ def target_tasks_graphics(full_task_graph, parameters):
 def target_tasks_valgrind(full_task_graph, parameters):
     """Target tasks that only run on the cedar branch."""
     def filter(task):
-        platform = task.attributes.get('test_platform').split('/')[0]
+        platform = task.attributes.get('test_platform', '').split('/')[0]
         if platform not in ['linux64']:
             return False
 
@@ -193,7 +193,7 @@ def target_tasks_valgrind(full_task_graph, parameters):
 def target_tasks_code_coverage(full_task_graph, parameters):
     """Target tasks that generate coverage data."""
     def filter(task):
-        platform = task.attributes.get('test_platform').split('/')[0]
+        platform = task.attributes.get('test_platform', '').split('/')[0]
         if platform not in ('linux64-ccov', 'linux64-jsdcov'):
             return False
         return True
@@ -303,4 +303,19 @@ def target_tasks_stylo(full_task_graph, parameters):
         if platform not in ('linux64-stylo'):
             return False
         return True
+    return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
+
+
+# nightly_linux should be refactored to be nightly_all once
+# https://bugzilla.mozilla.org/show_bug.cgi?id=1267425 dependent bugs are
+# implemented
+@_target_task('nightly_macosx')
+def target_tasks_nightly_macosx(full_task_graph, parameters):
+    """Select the set of tasks required for a nightly build of macosx. The
+    nightly build process involves a pipeline of builds, signing,
+    and, eventually, uploading the tasks to balrog."""
+    def filter(task):
+        platform = task.attributes.get('build_platform')
+        if platform in ('macosx64-nightly', ):
+            return task.attributes.get('nightly', False)
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]

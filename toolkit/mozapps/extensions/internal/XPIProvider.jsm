@@ -808,7 +808,8 @@ function isUsableAddon(aAddon) {
       return false;
   }
 
-  if (!ALLOW_NON_MPC && aAddon.multiprocessCompatible !== true) {
+  if (!ALLOW_NON_MPC && aAddon.type == "extension" &&
+      aAddon.multiprocessCompatible !== true) {
     logger.warn(`disabling ${aAddon.id} since it is not multiprocess compatible`);
     return false;
   }
@@ -966,7 +967,7 @@ function getRDFProperty(aDs, aResource, aProperty) {
 var loadManifestFromWebManifest = Task.async(function*(aUri) {
   // We're passed the URI for the manifest file. Get the URI for its
   // parent directory.
-  let uri = NetUtil.newURI("./", null, aUri);
+  let uri = Services.io.newURI("./", null, aUri);
 
   let extension = new ExtensionData(uri);
 
@@ -1246,7 +1247,7 @@ let loadManifestFromRDF = Task.async(function*(aUri, aStream) {
     }
 
     if (addon.hasEmbeddedWebExtension) {
-      let uri = NetUtil.newURI("webextension/manifest.json", null, aUri);
+      let uri = Services.io.newURI("webextension/manifest.json", null, aUri);
       let embeddedAddon = yield loadManifestFromWebManifest(uri);
       if (embeddedAddon.optionsURL) {
         if (addon.optionsType || addon.optionsURL)
@@ -1669,7 +1670,7 @@ function getURIForResourceInFile(aFile, aPath) {
     if (aPath)
       aPath.split("/").forEach(part => resource.append(part));
 
-    return NetUtil.newURI(resource);
+    return Services.io.newFileURI(resource);
   }
 
   return buildJarURI(aFile, aPath);
@@ -1687,7 +1688,7 @@ function getURIForResourceInFile(aFile, aPath) {
 function buildJarURI(aJarfile, aPath) {
   let uri = Services.io.newFileURI(aJarfile);
   uri = "jar:" + uri.spec + "!/" + aPath;
-  return NetUtil.newURI(uri);
+  return Services.io.newURI(uri);
 }
 
 /**
@@ -1794,8 +1795,13 @@ function getSignedStatus(aRv, aCert, aAddonID) {
         }
       }
 
-      if (aCert.organizationalUnit == "Mozilla Components")
+      if (aCert.organizationalUnit == "Mozilla Components") {
         return AddonManager.SIGNEDSTATE_SYSTEM;
+      }
+
+      if (aCert.organizationalUnit == "Mozilla Extensions") {
+        return AddonManager.SIGNEDSTATE_PRIVILEGED;
+      }
 
       return /preliminary/i.test(aCert.organizationalUnit)
                ? AddonManager.SIGNEDSTATE_PRELIMINARY
@@ -2467,6 +2473,8 @@ this.XPIStates = {
   },
 };
 
+const hasOwnProperty = Function.call.bind({}.hasOwnProperty);
+
 this.XPIProvider = {
   get name() {
     return "XPIProvider";
@@ -2514,6 +2522,23 @@ this.XPIProvider = {
   _toolboxProcessLoaded: false,
   // Have we started shutting down bootstrap add-ons?
   _closing: false,
+
+  /**
+   * Returns true if the add-on with the given ID is currently active,
+   * without forcing the add-ons database to load.
+   *
+   * @param {string} addonId
+   *        The ID of the add-on to check.
+   * @returns {boolean}
+   */
+  addonIsActive(addonId) {
+    if (hasOwnProperty(this.bootstrappedAddons, addonId)) {
+      return true;
+    }
+
+    let [, state] = XPIStates.findAddon(addonId);
+    return state && state.enabled;
+  },
 
   /**
    * Returns an array of the add-on values in `bootstrappedAddons`,
@@ -3977,7 +4002,7 @@ this.XPIProvider = {
   getInstallForURL(aUrl, aHash, aName, aIcons, aVersion, aBrowser,
                              aCallback) {
     let location = XPIProvider.installLocationsByName[KEY_APP_PROFILE];
-    let url = NetUtil.newURI(aUrl);
+    let url = Services.io.newURI(aUrl);
 
     let options = {
       hash: aHash,
@@ -6589,10 +6614,10 @@ class StagedAddonInstall extends AddonInstall {
     this.version = manifest.version;
     this.icons = manifest.icons;
     this.releaseNotesURI = manifest.releaseNotesURI ?
-                           NetUtil.newURI(manifest.releaseNotesURI) :
+                           Services.io.newURI(manifest.releaseNotesURI) :
                            null;
     this.sourceURI = manifest.sourceURI ?
-                     NetUtil.newURI(manifest.sourceURI) :
+                     Services.io.newURI(manifest.sourceURI) :
                      null;
     this.file = null;
     this.addon = manifest;
@@ -6638,7 +6663,7 @@ function createLocalInstall(file, location) {
  *         The metadata about the new version from the update manifest
  */
 function createUpdate(aCallback, aAddon, aUpdate) {
-  let url = NetUtil.newURI(aUpdate.updateURL);
+  let url = Services.io.newURI(aUpdate.updateURL);
 
   Task.spawn(function*() {
     let opts = {
@@ -6658,7 +6683,7 @@ function createUpdate(aCallback, aAddon, aUpdate) {
     }
     try {
       if (aUpdate.updateInfoURL)
-        install.releaseNotesURI = NetUtil.newURI(escapeAddonURI(aAddon, aUpdate.updateInfoURL));
+        install.releaseNotesURI = Services.io.newURI(escapeAddonURI(aAddon, aUpdate.updateInfoURL));
     } catch (e) {
       // If the releaseNotesURI cannot be parsed then just ignore it.
     }
@@ -7775,7 +7800,7 @@ AddonWrapper.prototype = {
   getResourceURI(aPath) {
     let addon = addonFor(this);
     if (!aPath)
-      return NetUtil.newURI(addon._sourceBundle);
+      return Services.io.newFileURI(addon._sourceBundle);
 
     return getURIForResourceInFile(addon._sourceBundle, aPath);
   }
@@ -7911,7 +7936,7 @@ function defineAddonWrapperProperty(name, getter) {
       return null;
     if (fromRepo)
       return target;
-    return NetUtil.newURI(target);
+    return Services.io.newURI(target);
   });
 });
 

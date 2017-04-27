@@ -34,7 +34,6 @@ use dom::create::create_element;
 use dom::document::{Document, LayoutDocumentHelpers};
 use dom::documentfragment::DocumentFragment;
 use dom::domrect::DOMRect;
-use dom::domrectlist::DOMRectList;
 use dom::domtokenlist::DOMTokenList;
 use dom::event::Event;
 use dom::eventtarget::EventTarget;
@@ -468,7 +467,7 @@ impl LayoutElementHelpers for LayoutJS<Element> {
             hints.push(from_declaration(
                 shared_lock,
                 PropertyDeclaration::FontFamily(
-                        font_family::computed_value::T(vec![
+                        font_family::SpecifiedValue::Values(vec![
                             font_family::computed_value::FontFamily::from_atom(
                                 font_family)]))));
         }
@@ -1632,17 +1631,16 @@ impl ElementMethods for Element {
     }
 
     // https://drafts.csswg.org/cssom-view/#dom-element-getclientrects
-    fn GetClientRects(&self) -> Root<DOMRectList> {
+    fn GetClientRects(&self) -> Vec<Root<DOMRect>> {
         let win = window_from_node(self);
         let raw_rects = self.upcast::<Node>().content_boxes();
-        let rects = raw_rects.iter().map(|rect| {
+        raw_rects.iter().map(|rect| {
             DOMRect::new(win.upcast(),
                          rect.origin.x.to_f64_px(),
                          rect.origin.y.to_f64_px(),
                          rect.size.width.to_f64_px(),
                          rect.size.height.to_f64_px())
-        });
-        DOMRectList::new(&win, rects)
+        }).collect()
     }
 
     // https://drafts.csswg.org/cssom-view/#dom-element-getboundingclientrect

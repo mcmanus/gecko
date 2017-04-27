@@ -999,6 +999,13 @@ pref("security.sandbox.content.level", 1);
 // allow stack tracing.  This does not require a restart to take effect.
 pref("security.sandbox.windows.log.stackTraceDepth", 0);
 #endif
+
+// This controls the strength of the Windows GPU process sandbox.  Changes
+// will require restart.
+// For information on what the level number means, see
+// SetSecurityLevelForGPUProcess() in
+// security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+pref("security.sandbox.gpu.level", 1);
 #endif
 
 #if defined(XP_MACOSX) && defined(MOZ_SANDBOX) && defined(MOZ_CONTENT_SANDBOX)
@@ -1523,7 +1530,6 @@ pref("dom.ipc.reportProcessHangs", false);
 pref("dom.ipc.reportProcessHangs", true);
 #endif
 
-pref("browser.reader.detectedFirstArticle", false);
 // Don't limit how many nodes we care about on desktop:
 pref("reader.parse-node-limit", 0);
 
@@ -1612,6 +1618,9 @@ pref("browser.crashReports.unsubmittedCheck.autoSubmit", false);
 pref("browser.formautofill.experimental", false);
 pref("browser.formautofill.enabled", false);
 pref("browser.formautofill.loglevel", "Warn");
+
+// Whether or not to restore a session with lazy-browser tabs.
+pref("browser.sessionstore.restore_tabs_lazily", true);
 
 // Enable safebrowsing v4 tables (suffixed by "-proto") update.
 #ifdef NIGHTLY_BUILD

@@ -148,7 +148,6 @@ nsImageRenderer::PrepareImage()
         bool isEntireImage;
         bool success =
           mImage->ComputeActualCropRect(actualCropRect, &isEntireImage);
-        NS_ASSERTION(success, "ComputeActualCropRect() should not fail here");
         if (!success || actualCropRect.IsEmpty()) {
           // The cropped image has zero size
           mPrepareResult = DrawResult::BAD_IMAGE;
@@ -513,7 +512,7 @@ nsImageRenderer::Draw(nsPresContext*       aPresContext,
       CSSIntSize imageSize(nsPresContext::AppUnitsToIntCSSPixels(mSize.width),
                            nsPresContext::AppUnitsToIntCSSPixels(mSize.height));
       result =
-        nsLayoutUtils::DrawBackgroundImage(*ctx,
+        nsLayoutUtils::DrawBackgroundImage(*ctx, mForFrame,
                                            aPresContext,
                                            mImageContainer, imageSize,
                                            samplingFilter,
@@ -920,7 +919,7 @@ nsImageRenderer::DrawBorderImageComponent(nsPresContext*       aPresContext,
     nsRect tile = ComputeTile(fillRect, aHFill, aVFill, aUnitSize, repeatSize);
     CSSIntSize imageSize(srcRect.width, srcRect.height);
     return nsLayoutUtils::DrawBackgroundImage(*aRenderingContext.ThebesContext(),
-                                              aPresContext,
+                                              mForFrame, aPresContext,
                                               subImage, imageSize, samplingFilter,
                                               tile, fillRect, repeatSize,
                                               tile.TopLeft(), aDirtyRect,

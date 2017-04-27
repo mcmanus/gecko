@@ -693,13 +693,6 @@ public:
 
   double MozFragmentEnd();
 
-  AudioChannel MozAudioChannelType() const
-  {
-    return mAudioChannel;
-  }
-
-  void SetMozAudioChannelType(AudioChannel aValue, ErrorResult& aRv);
-
   AudioTrackList* AudioTracks();
 
   VideoTrackList* VideoTracks();
@@ -750,9 +743,6 @@ public:
   // dormancy checks to prevent dormant processing for an element
   // that will soon be gone.
   bool IsBeingDestroyed();
-
-  IMPL_EVENT_HANDLER(mozinterruptbegin)
-  IMPL_EVENT_HANDLER(mozinterruptend)
 
   // These are used for testing only
   float ComputedVolume() const;
@@ -1250,9 +1240,6 @@ protected:
 
   void ReportTelemetry();
 
-  // Check the permissions for audiochannel.
-  bool CheckAudioChannelPermissions(const nsAString& aType);
-
   // Seeks to aTime seconds. aSeekType can be Exact to seek to exactly the
   // seek target, or PrevSyncPoint if a quicker but less precise seek is
   // desired, and we'll seek to the sync point (keyframe and/or start of the
@@ -1623,6 +1610,10 @@ protected:
 
   // True if a same-origin check has been done for the media element and resource.
   bool mMediaSecurityVerified;
+
+  // True if we should set nsIClassOfService::UrgentStart to the channel to
+  // get the response ASAP for better user responsiveness.
+  bool mUseUrgentStartForChannel = false;
 
   // The CORS mode when loading the media element
   CORSMode mCORSMode;

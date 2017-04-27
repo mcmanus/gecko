@@ -886,11 +886,11 @@ public abstract class GeckoApp
                 ListView listView = ((AlertDialog) dialog).getListView();
                 SparseBooleanArray checkedItemPositions = listView.getCheckedItemPositions();
 
-                // An array of the indices of the permissions we want to clear
+                // An array of the indices of the permissions we want to clear.
                 final ArrayList<Integer> permissionsToClear = new ArrayList<>();
                 for (int i = 0; i < checkedItemPositions.size(); i++) {
-                    if (checkedItemPositions.get(i)) {
-                        permissionsToClear.add(i);
+                    if (checkedItemPositions.valueAt(i)) {
+                        permissionsToClear.add(checkedItemPositions.keyAt(i));
                     }
                 }
 
@@ -1783,9 +1783,6 @@ public abstract class GeckoApp
 
             if (GeckoThread.isRunning()) {
                 geckoConnected();
-                if (mLayerView != null) {
-                    mLayerView.setPaintState(LayerView.PAINT_BEFORE_FIRST);
-                }
             }
         }
     }
@@ -1886,14 +1883,18 @@ public abstract class GeckoApp
     }
 
     @RobocopTarget
-    public static EventDispatcher getEventDispatcher() {
+    public static @NonNull EventDispatcher getEventDispatcher() {
         final GeckoApp geckoApp = (GeckoApp) GeckoAppShell.getGeckoInterface();
         return geckoApp.getAppEventDispatcher();
     }
 
     @Override
-    public EventDispatcher getAppEventDispatcher() {
-        return mLayerView != null ? mLayerView.getEventDispatcher() : null;
+    public @NonNull EventDispatcher getAppEventDispatcher() {
+        if (mLayerView == null) {
+            throw new IllegalStateException("Must not call getAppEventDispatcher() until after onCreate()");
+        }
+
+        return mLayerView.getEventDispatcher();
     }
 
     @Override

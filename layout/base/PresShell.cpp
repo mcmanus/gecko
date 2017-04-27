@@ -200,10 +200,6 @@
 #include "mozilla/dom/ImageTracker.h"
 #include "nsIDocShellTreeOwner.h"
 
-#ifdef MOZ_B2G
-#include "nsIHardwareKeyHandler.h"
-#endif
-
 #ifdef MOZ_TASK_TRACER
 #include "GeckoTaskTracer.h"
 using namespace mozilla::tasktracer;
@@ -2948,44 +2944,6 @@ PresShell::CreateFramesFor(nsIContent* aContent)
   fc->EndUpdate();
 
   --mChangeNestCount;
-}
-
-nsresult
-PresShell::RecreateFramesFor(nsIContent* aContent)
-{
-  NS_ENSURE_TRUE(mPresContext, NS_ERROR_FAILURE);
-  if (!mDidInitialize) {
-    // Nothing to do here.  In fact, if we proceed and aContent is the
-    // root we will crash.
-    return NS_OK;
-  }
-
-  // Don't call RecreateFramesForContent since that is not exported and we want
-  // to keep the number of entrypoints down.
-
-  NS_ASSERTION(mViewManager, "Should have view manager");
-
-  // Have to make sure that the content notifications are flushed before we
-  // start messing with the frame model; otherwise we can get content doubling.
-  mDocument->FlushPendingNotifications(FlushType::ContentAndNotify);
-
-  nsAutoScriptBlocker scriptBlocker;
-
-  nsStyleChangeList changeList(mPresContext->StyleSet()->BackendType());
-  changeList.AppendChange(nullptr, aContent, nsChangeHint_ReconstructFrame);
-
-  // We might have restyles pending when we're asked to recreate frames.
-  // Record that we're OK with stale styles being returned, to avoid assertions.
-  ServoStyleSet::AutoAllowStaleStyles guard(mStyleSet->GetAsServo());
-
-  // Mark ourselves as not safe to flush while we're doing frame construction.
-  ++mChangeNestCount;
-  RestyleManager* restyleManager = mPresContext->RestyleManager();
-  restyleManager->ProcessRestyledFrames(changeList);
-  restyleManager->FlushOverflowChangedTracker();
-  --mChangeNestCount;
-
-  return NS_OK;
 }
 
 void
@@ -6376,7 +6334,7 @@ PresShell::RecordShadowStyleChange(ShadowRoot* aShadowRoot)
 }
 
 void
-PresShell::Paint(nsView*        aViewToPaint,
+PresShell::Paint(nsView*         aViewToPaint,
                  const nsRegion& aDirtyRegion,
                  uint32_t        aFlags)
 {
@@ -6425,11 +6383,10 @@ PresShell::Paint(nsView*        aViewToPaint,
 
   nsAutoNotifyDidPaint notifyDidPaint(this, aFlags);
 
-  // Whether or not we should set first paint when painting is
-  // suppressed is debatable. For now we'll do it because
-  // B2G relies on first paint to configure the viewport and
-  // we only want to do that when we have real content to paint.
-  // See Bug 798245
+  // Whether or not we should set first paint when painting is suppressed
+  // is debatable. For now we'll do it because B2G relied on first paint
+  // to configure the viewport and we only want to do that when we have
+  // real content to paint. See Bug 798245
   if (mIsFirstPaint && !mPaintingSuppressed) {
     layerManager->SetIsFirstPaint();
     mIsFirstPaint = false;

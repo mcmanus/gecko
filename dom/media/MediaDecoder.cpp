@@ -129,6 +129,8 @@ StaticRefPtr<MediaMemoryTracker> MediaMemoryTracker::sUniqueInstance;
 
 LazyLogModule gMediaTimerLog("MediaTimer");
 
+constexpr TimeUnit MediaDecoder::DEFAULT_NEXT_FRAME_AVAILABLE_BUFFERED;
+
 void
 MediaDecoder::InitStatics()
 {
@@ -1391,10 +1393,10 @@ MediaDecoder::GetSeekable()
     return GetBuffered();
   } else {
     return media::TimeIntervals(
-      media::TimeInterval(media::TimeUnit::FromMicroseconds(0),
+      media::TimeInterval(TimeUnit::Zero(),
                           IsInfinite()
-                          ? media::TimeUnit::FromInfinity()
-                          : media::TimeUnit::FromSeconds(GetDuration())));
+                          ? TimeUnit::FromInfinity()
+                          : TimeUnit::FromSeconds(GetDuration())));
   }
 }
 
@@ -1404,7 +1406,7 @@ MediaDecoder::SetFragmentEndTime(double aTime)
   MOZ_ASSERT(NS_IsMainThread());
   if (mDecoderStateMachine) {
     mDecoderStateMachine->DispatchSetFragmentEndTime(
-      media::TimeUnit::FromSeconds(aTime));
+      TimeUnit::FromSeconds(aTime));
   }
 }
 
@@ -1770,12 +1772,10 @@ MediaDecoder::NextFrameBufferedStatus()
   MOZ_ASSERT(NS_IsMainThread());
   // Next frame hasn't been decoded yet.
   // Use the buffered range to consider if we have the next frame available.
-  media::TimeUnit currentPosition =
-    media::TimeUnit::FromMicroseconds(CurrentPosition());
+  TimeUnit currentPosition = TimeUnit::FromMicroseconds(CurrentPosition());
   media::TimeInterval interval(
     currentPosition,
-    currentPosition
-    + media::TimeUnit::FromMicroseconds(DEFAULT_NEXT_FRAME_AVAILABLE_BUFFERED));
+    currentPosition + DEFAULT_NEXT_FRAME_AVAILABLE_BUFFERED);
   return GetBuffered().Contains(interval)
          ? MediaDecoderOwner::NEXT_FRAME_AVAILABLE
          : MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE;

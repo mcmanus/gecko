@@ -795,16 +795,27 @@ or run without that action (ie: --no-{action})"
 
         buildid = None
         if c.get("is_automation"):
-            if self.buildbot_config['properties'].get('buildid'):
-                self.info("Determining buildid from buildbot properties")
-                buildid = self.buildbot_config['properties']['buildid'].encode(
-                    'ascii', 'replace'
-                )
+            if self.buildbot_config.get('properties'):
+                # We're on buildbot
+                if self.buildbot_config.get('properties').get('buildid'):
+                    # Try may not provide a buildid. This means, it's gonna be generated
+                    # below.
+                    self.info("Determining buildid from buildbot properties")
+                    buildid = self.buildbot_config['properties']['buildid'].encode(
+                        'ascii', 'replace'
+                    )
             else:
-                # for taskcluster, there are no buildbot properties, and we pass
+                # We're on taskcluster.
+                # In this case, there are no buildbot properties, and we must pass
                 # MOZ_BUILD_DATE into mozharness as an environment variable, only
                 # to have it pass the same value out with the same name.
-                buildid = os.environ.get('MOZ_BUILD_DATE')
+                try:
+                    buildid = os.environ['MOZ_BUILD_DATE']
+                except KeyError:
+                    self.fatal(
+                        "MOZ_BUILD_DATE must be provided as an environment var on Taskcluster"
+                    )
+
 
         if not buildid:
             self.info("Creating buildid through current time")
@@ -1908,13 +1919,21 @@ or run without that action (ie: --no-{action})"
             'subtests': [],
         }
 
-        for stat in ['cache_write_errors', 'requests_not_cacheable']:
-            yield {
-                'name': 'sccache %s' % stat,
-                'value': stats['stats'][stat],
-                'extraOptions': self.perfherder_resource_options(),
-                'subtests': [],
-            }
+        yield {
+            'name': 'sccache cache_write_errors',
+            'value': stats['stats']['cache_write_errors'],
+            'extraOptions': self.perfherder_resource_options(),
+            'alertThreshold': 50.0,
+            'subtests': [],
+        }
+
+        yield {
+            'name': 'sccache requests_not_cacheable',
+            'value': stats['stats']['requests_not_cacheable'],
+            'extraOptions': self.perfherder_resource_options(),
+            'alertThreshold': 50.0,
+            'subtests': [],
+        }
 
     def get_firefox_version(self):
         versionFilePath = os.path.join(

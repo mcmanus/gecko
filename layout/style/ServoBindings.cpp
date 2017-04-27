@@ -36,6 +36,7 @@
 #include "nsString.h"
 #include "nsStyleStruct.h"
 #include "nsStyleUtil.h"
+#include "nsSVGElement.h"
 #include "nsTArray.h"
 #include "nsTransitionManager.h"
 
@@ -69,6 +70,9 @@ using namespace mozilla::dom;
   }
 #include "mozilla/ServoArcTypeList.h"
 #undef SERVO_ARC_TYPE
+
+
+static Mutex* sServoFontMetricsLock = nullptr;
 
 uint32_t
 Gecko_ChildrenCount(RawGeckoNodeBorrowed aNode)
@@ -453,7 +457,7 @@ Gecko_UpdateAnimations(RawGeckoElementBorrowed aElement,
                        ServoComputedValuesBorrowedOrNull aOldComputedValues,
                        ServoComputedValuesBorrowedOrNull aComputedValues,
                        ServoComputedValuesBorrowedOrNull aParentComputedValues,
-                       UpdateAnimationsTasks aTaskBits)
+                       UpdateAnimationsTasks aTasks)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aElement);
@@ -466,7 +470,6 @@ Gecko_UpdateAnimations(RawGeckoElementBorrowed aElement,
     return;
   }
 
-  UpdateAnimationsTasks tasks = static_cast<UpdateAnimationsTasks>(aTaskBits);
   if (presContext->IsDynamic() && aElement->IsInComposedDoc()) {
     const ServoComputedValuesWithParent servoValues =
       { aComputedValues, aParentComputedValues };
@@ -474,12 +477,23 @@ Gecko_UpdateAnimations(RawGeckoElementBorrowed aElement,
       nsCSSPseudoElements::GetPseudoType(aPseudoTagOrNull,
                                          CSSEnabledState::eForAllContent);
 
-    if (tasks & UpdateAnimationsTasks::CSSAnimations) {
+    if (aTasks & UpdateAnimationsTasks::CSSAnimations) {
       presContext->AnimationManager()->
         UpdateAnimations(const_cast<dom::Element*>(aElement), pseudoType,
                          servoValues);
     }
-    if (tasks & UpdateAnimationsTasks::CSSTransitions) {
+
+    // aComputedValues might be nullptr if the target element is now in a
+    // display:none subtree. We still call Gecko_UpdateAnimations in this case
+    // because we need to stop CSS animations in the display:none subtree.
+    // However, we don't need to update transitions since they are stopped by
+    // RestyleManager::AnimationsWithDestroyedFrame so we just return early
+    // here.
+    if (!aComputedValues) {
+      return;
+    }
+
+    if (aTasks & UpdateAnimationsTasks::CSSTransitions) {
       MOZ_ASSERT(aOldComputedValues);
       const ServoComputedValuesWithParent oldServoValues =
         { aOldComputedValues, nullptr };
@@ -487,7 +501,7 @@ Gecko_UpdateAnimations(RawGeckoElementBorrowed aElement,
         UpdateTransitions(const_cast<dom::Element*>(aElement), pseudoType,
                           oldServoValues, servoValues);
     }
-    if (tasks & UpdateAnimationsTasks::EffectProperties) {
+    if (aTasks & UpdateAnimationsTasks::EffectProperties) {
       presContext->EffectCompositor()->UpdateEffectProperties(
         servoValues, const_cast<dom::Element*>(aElement), pseudoType);
     }
@@ -614,6 +628,20 @@ Gecko_AnimationGetBaseStyle(void* aBaseStyles, nsCSSPropertyID aProperty)
 }
 
 void
+Gecko_StyleTransition_SetUnsupportedProperty(StyleTransition* aTransition,
+                                             nsIAtom* aAtom)
+{
+  nsCSSPropertyID id =
+    nsCSSProps::LookupProperty(nsDependentAtomString(aAtom),
+                               CSSEnabledState::eForAllContent);
+  if (id == eCSSProperty_UNKNOWN || id == eCSSPropertyExtra_variable) {
+    aTransition->SetUnknownProperty(id, aAtom);
+  } else {
+    aTransition->SetProperty(id);
+  }
+}
+
+void
 Gecko_FillAllBackgroundLists(nsStyleImageLayers* aLayers, uint32_t aMaxLen)
 {
   nsRuleNode::FillAllBackgroundLists(*aLayers, aMaxLen);
@@ -650,7 +678,7 @@ Gecko_MatchStringArgPseudo(RawGeckoElementBorrowed aElement,
   EventStates dummyMask; // mask is never read because we pass aDependence=nullptr
   return nsCSSRuleProcessor::StringPseudoMatches(aElement, aType, aIdent,
                                                  aElement->OwnerDoc(), true,
-                                                 dummyMask, false, aSetSlowSelectorFlag, nullptr);
+                                                 dummyMask, aSetSlowSelectorFlag, nullptr);
 }
 
 nsIAtom*
@@ -904,6 +932,12 @@ Gecko_Atomize(const char* aString, uint32_t aLength)
   return NS_Atomize(nsDependentCSubstring(aString, aLength)).take();
 }
 
+nsIAtom*
+Gecko_Atomize16(const nsAString* aString)
+{
+  return NS_Atomize(*aString).take();
+}
+
 void
 Gecko_AddRefAtom(nsIAtom* aAtom)
 {
@@ -949,6 +983,33 @@ Gecko_AtomEqualsUTF8IgnoreCase(nsIAtom* aAtom, const char* aString, uint32_t aLe
 }
 
 void
+Gecko_EnsureMozBorderColors(nsStyleBorder* aBorder)
+{
+  aBorder->EnsureBorderColors();
+}
+
+void Gecko_ClearMozBorderColors(nsStyleBorder* aBorder, mozilla::Side aSide)
+{
+  aBorder->ClearBorderColors(aSide);
+}
+
+void
+Gecko_AppendMozBorderColors(nsStyleBorder* aBorder, mozilla::Side aSide,
+                            nscolor aColor)
+{
+  aBorder->AppendBorderColor(aSide, aColor);
+}
+
+void
+Gecko_CopyMozBorderColors(nsStyleBorder* aDest, const nsStyleBorder* aSrc,
+                          mozilla::Side aSide)
+{
+  if (aSrc->mBorderColors) {
+    aDest->CopyBorderColorsFrom(aSrc->mBorderColors[aSide], aSide);
+  }
+}
+
+void
 Gecko_FontFamilyList_Clear(FontFamilyList* aList) {
   aList->Clear();
 }
@@ -976,6 +1037,35 @@ Gecko_CopyFontFamilyFrom(nsFont* dst, const nsFont* src)
 {
   dst->fontlist = src->fontlist;
 }
+
+void
+Gecko_nsFont_InitSystem(nsFont* aDest, int32_t aFontId,
+                        const nsStyleFont* aFont, RawGeckoPresContextBorrowed aPresContext)
+{
+  MutexAutoLock lock(*sServoFontMetricsLock);
+  const nsFont* defaultVariableFont =
+    aPresContext->GetDefaultFont(kPresContext_DefaultVariableFont_ID,
+                                 aFont->mLanguage);
+
+  // We have passed uninitialized memory to this function,
+  // initialize it. We can't simply return an nsFont because then
+  // we need to know its size beforehand. Servo cannot initialize nsFont
+  // itself, so this will do.
+  nsFont* system = new (aDest) nsFont(*defaultVariableFont);
+
+  MOZ_RELEASE_ASSERT(system);
+
+  *aDest = *defaultVariableFont;
+  LookAndFeel::FontID fontID = static_cast<LookAndFeel::FontID>(aFontId);
+  nsRuleNode::ComputeSystemFont(aDest, fontID, aPresContext, defaultVariableFont);
+}
+
+void
+Gecko_nsFont_Destroy(nsFont* aDest)
+{
+  aDest->~nsFont();
+}
+
 
 void
 Gecko_SetImageOrientation(nsStyleVisibility* aVisibility,
@@ -1699,8 +1789,6 @@ Gecko_GetBaseSize(nsIAtom* aLanguage)
   return sizes;
 }
 
-static Mutex* sServoFontMetricsLock = nullptr;
-
 void
 InitializeServo()
 {
@@ -1724,6 +1812,9 @@ Gecko_GetFontMetrics(RawGeckoPresContextBorrowed aPresContext,
                      nscoord aFontSize,
                      bool aUseUserFontSet)
 {
+  // This function is still unsafe due to frobbing DOM and network
+  // off main thread. We currently disable it in Servo, see bug 1356105
+  MOZ_ASSERT(NS_IsMainThread());
   MutexAutoLock lock(*sServoFontMetricsLock);
   GeckoFontMetrics ret;
   // Safe because we are locked, and this function is only
@@ -1809,6 +1900,12 @@ void
 Gecko_CSSFontFaceRule_GetCssText(const nsCSSFontFaceRule* aRule,
                                  nsAString* aResult)
 {
+  // GetCSSText serializes nsCSSValues, which have a heap write
+  // hazard when dealing with color values (nsCSSKeywords::AddRefTable)
+  // We only serialize on the main thread; assert to convince the analysis
+  // and prevent accidentally calling this elsewhere
+  MOZ_ASSERT(NS_IsMainThread());
+
   aRule->GetCssText(*aResult);
 }
 

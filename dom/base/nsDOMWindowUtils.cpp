@@ -3049,13 +3049,20 @@ nsDOMWindowUtils::IsPartOfOpaqueLayer(nsIDOMElement* aElement, bool* aResult)
     return NS_ERROR_FAILURE;
   }
 
-  PaintedLayer* layer = FrameLayerBuilder::GetDebugSingleOldPaintedLayerForFrame(frame);
-  if (!layer) {
-    return NS_ERROR_FAILURE;
+  ColorLayer* colorLayer = FrameLayerBuilder::GetDebugSingleOldLayerForFrame<ColorLayer>(frame);
+  if (colorLayer) {
+    auto color = colorLayer->GetColor();
+    *aResult = color.a == 1.0f;
+    return NS_OK;
   }
 
-  *aResult = (layer->GetContentFlags() & Layer::CONTENT_OPAQUE);
-  return NS_OK;
+  PaintedLayer* paintedLayer = FrameLayerBuilder::GetDebugSingleOldLayerForFrame<PaintedLayer>(frame);
+  if (paintedLayer) {
+    *aResult = paintedLayer->IsOpaque();
+    return NS_OK;
+  }
+
+  return NS_ERROR_FAILURE;
 }
 
 NS_IMETHODIMP
@@ -3078,7 +3085,7 @@ nsDOMWindowUtils::NumberOfAssignedPaintedLayers(nsIDOMElement** aElements,
       return NS_ERROR_FAILURE;
     }
 
-    PaintedLayer* layer = FrameLayerBuilder::GetDebugSingleOldPaintedLayerForFrame(frame);
+    PaintedLayer* layer = FrameLayerBuilder::GetDebugSingleOldLayerForFrame<PaintedLayer>(frame);
     if (!layer) {
       return NS_ERROR_FAILURE;
     }
@@ -3749,11 +3756,11 @@ nsDOMWindowUtils::GetOMTAStyle(nsIDOMElement* aElement,
 
   RefPtr<nsROCSSPrimitiveValue> cssValue = nullptr;
   nsIFrame* frame = element->GetPrimaryFrame();
-  if (frame && !aPseudoElement.IsEmpty()) {
+  if (!aPseudoElement.IsEmpty()) {
     if (aPseudoElement.EqualsLiteral("::before")) {
-      frame = nsLayoutUtils::GetBeforeFrame(frame);
+      frame = nsLayoutUtils::GetBeforeFrame(element);
     } else if (aPseudoElement.EqualsLiteral("::after")) {
-      frame = nsLayoutUtils::GetAfterFrame(frame);
+      frame = nsLayoutUtils::GetAfterFrame(element);
     } else {
       return NS_ERROR_INVALID_ARG;
     }
@@ -4152,21 +4159,6 @@ nsDOMWindowUtils::HasRuleProcessorUsedByMultipleStyleSets(uint32_t aSheetType,
 }
 
 NS_IMETHODIMP
-nsDOMWindowUtils::SetNextPaintSyncId(int32_t aSyncId)
-{
-  if (nsIWidget* widget = GetWidget()) {
-    RefPtr<LayerManager> lm = widget->GetLayerManager();
-    if (lm && lm->AsClientLayerManager()) {
-      lm->AsClientLayerManager()->SetNextPaintSyncId(aSyncId);
-      return NS_OK;
-    }
-  }
-
-  NS_WARNING("Paint sync id could not be set on the ClientLayerManager");
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 nsDOMWindowUtils::RespectDisplayPortSuppression(bool aEnabled)
 {
   nsCOMPtr<nsIPresShell> shell(GetPresShell());
@@ -4230,7 +4222,7 @@ struct StateTableEntry
 };
 
 static constexpr StateTableEntry kManuallyManagedStates[] = {
-  // none yet; but for example: { "highlight", NS_EVENT_STATE_HIGHLIGHT },
+  { "-moz-autofill", NS_EVENT_STATE_AUTOFILL },
   { nullptr, EventStates() },
 };
 

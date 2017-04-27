@@ -1488,6 +1488,7 @@
             var aOriginPrincipal;
             var aOpener;
             var aCreateLazyBrowser;
+            var aNextTabParentId;
             if (arguments.length == 2 &&
                 typeof arguments[1] == "object" &&
                 !(arguments[1] instanceof Ci.nsIURI)) {
@@ -1512,6 +1513,7 @@
               aOpener                   = params.opener;
               aIsPrerendered            = params.isPrerendered;
               aCreateLazyBrowser        = params.createLazyBrowser;
+              aNextTabParentId          = params.nextTabParentId;
             }
 
             var bgLoad = (aLoadInBackground != null) ? aLoadInBackground :
@@ -1538,7 +1540,8 @@
                                   originPrincipal: aOriginPrincipal,
                                   sameProcessAsFrameLoader: aSameProcessAsFrameLoader,
                                   opener: aOpener,
-                                  isPrerendered: aIsPrerendered });
+                                  isPrerendered: aIsPrerendered,
+                                  nextTabParentId: aNextTabParentId });
             if (!bgLoad)
               this.selectedTab = tab;
 
@@ -1974,6 +1977,11 @@
 
             b.setAttribute("autoscrollpopup", this._autoScrollPopup.id);
 
+            if (aParams.nextTabParentId) {
+              // Gecko is going to read this attribute and use it.
+              b.setAttribute("nextTabParentId", aParams.nextTabParentId.toString());
+            }
+
             if (aParams.sameProcessAsFrameLoader) {
               b.sameProcessAsFrameLoader = aParams.sameProcessAsFrameLoader;
             }
@@ -2034,7 +2042,8 @@
         "addProgressListener", "removeProgressListener", "audioPlaybackStarted",
         "audioPlaybackStopped", "adjustPriority", "pauseMedia", "stopMedia",
         "blockMedia", "resumeMedia", "mute", "unmute", "blockedPopups", "lastURI",
-        "purgeSessionHistory", "stopScroll", "startScroll"
+        "purgeSessionHistory", "stopScroll", "startScroll",
+        "userTypedValue", "userTypedClear"
       ]</field>
 
       <method name="_createLazyBrowser">
@@ -2052,17 +2061,67 @@
               switch (name) {
                 case "permitUnload":
                   getter = () => {
-                    return function() {
+                    return () => {
                       return { permitUnload: true, timedOut: false };
                     };
                   };
                   break;
+                case "reload":
+                case "reloadWithFlags":
+                  getter = () => {
+                    return (params) => {
+                      // Wait for load handler to be instantiated before
+                      // initializing the reload.
+                      aTab.addEventListener("SSTabRestoring", () => {
+                        browser[name](params);
+                      }, { once: true });
+                      gBrowser._insertBrowser(aTab);
+                    };
+                  };
+                  break;
+                case "isRemoteBrowser":
+                  getter = () => {
+                    return browser.getAttribute("remote") == "true";
+                  };
+                  break;
+                case "audioMuted":
+                  getter = () => {
+                    return false;
+                  };
+                  break;
+                case "currentURI":
+                  getter = () => {
+                    let url = SessionStore.getLazyTabValue(aTab, "url");
+                    return Services.io.newURI(url);
+                  };
+                  break;
+                case "contentTitle":
+                  getter = () => {
+                    return SessionStore.getLazyTabValue(aTab, "title");
+                  };
+                  break;
+                case "userTypedValue":
+                case "userTypedClear":
+                  getter = () => {
+                    return SessionStore.getLazyTabValue(aTab, name);
+                  };
+                  break;
                 default:
                   getter = () => {
+                    if (AppConstants.NIGHTLY_BUILD) {
+                      let message =
+                        `[bug 1345098] Lazy browser prematurely inserted via '${name}' property access:\n`
+                      console.log(message + new Error().stack);
+                    }
                     this._insertBrowser(aTab);
                     return browser[name];
                   };
                   setter = (value) => {
+                    if (AppConstants.NIGHTLY_BUILD) {
+                      let message =
+                        `[bug 1345098] Lazy browser prematurely inserted via '${name}' property access:\n`
+                      console.log(message + new Error().stack);
+                    }
                     this._insertBrowser(aTab);
                     return browser[name] = value;
                   };
@@ -2084,9 +2143,8 @@
           <![CDATA[
             "use strict";
 
-            // If browser is already inserted, or aTab doesn't have a
-            // browser, don't do anything.
-            if (aTab.linkedPanel || !aTab.linkedBrowser) {
+            // If browser is already inserted don't do anything.
+            if (aTab.linkedPanel) {
               return;
             }
 
@@ -2178,6 +2236,7 @@
             var aOpener;
             var aCreateLazyBrowser;
             var aSkipBackgroundNotify;
+            var aNextTabParentId;
             if (arguments.length == 2 &&
                 typeof arguments[1] == "object" &&
                 !(arguments[1] instanceof Ci.nsIURI)) {
@@ -2205,6 +2264,7 @@
               aIsPrerendered            = params.isPrerendered;
               aCreateLazyBrowser        = params.createLazyBrowser;
               aSkipBackgroundNotify     = params.skipBackgroundNotify;
+              aNextTabParentId          = params.nextTabParentId;
             }
 
             // if we're adding tabs, we're past interrupt mode, ditch the owner
@@ -2313,7 +2373,8 @@
                                         userContextId: aUserContextId,
                                         sameProcessAsFrameLoader: aSameProcessAsFrameLoader,
                                         opener: aOpener,
-                                        isPrerendered: aIsPrerendered });
+                                        isPrerendered: aIsPrerendered,
+                                        nextTabParentId: aNextTabParentId });
             }
 
             t.linkedBrowser = b;
@@ -4876,7 +4937,8 @@
                 tab.linkedBrowser &&
                 tab.linkedBrowser.isRemoteBrowser) {
               label += " - e10s";
-              if (Services.appinfo.maxWebProcessCount > 1) {
+              if (tab.linkedBrowser.frameLoader &&
+                  Services.appinfo.maxWebProcessCount > 1) {
                 label += " (" + tab.linkedBrowser.frameLoader.tabParent.osPid + ")";
               }
             }
@@ -7245,6 +7307,11 @@
         <parameter name="aMuteReason"/>
         <body>
         <![CDATA[
+          // Do not attempt to toggle mute state if browser is lazy.
+          if (!this.linkedPanel) {
+            return;
+          }
+
           let tabContainer = this.parentNode;
           let browser = this.linkedBrowser;
           let modifiedAttrs = [];

@@ -758,25 +758,32 @@ BrowserGlue.prototype = {
                           nb.PRIORITY_WARNING_MEDIUM, buttons);
   },
 
+  _notifyDisabledNonMpc() {
+    let win = RecentWindow.getMostRecentBrowserWindow();
+    if (!win)
+      return;
+
+    let message = win.gNavigatorBundle.getString("nonMpcDisabled.message");
+    let buttons = [
+      {
+        label: win.gNavigatorBundle.getString("nonMpcDisabled.manage.label"),
+        accessKey: win.gNavigatorBundle.getString("nonMpcDisabled.manage.accessKey"),
+        callback() {
+          win.BrowserOpenAddonsMgr("addons://list/extension");
+        }
+      },
+    ];
+
+    let nb = win.document.getElementById("high-priority-global-notificationbox");
+    nb.appendNotification(message, "non-mpc-addons-disabled", "",
+                          nb.PRIORITY_WARNING_MEDIUM, buttons);
+  },
+
   _firstWindowTelemetry(aWindow) {
-    let SCALING_PROBE_NAME = "";
-    switch (AppConstants.platform) {
-      case "win":
-        SCALING_PROBE_NAME = "DISPLAY_SCALING_MSWIN";
-        break;
-      case "macosx":
-        SCALING_PROBE_NAME = "DISPLAY_SCALING_OSX";
-        break;
-      case "linux":
-        SCALING_PROBE_NAME = "DISPLAY_SCALING_LINUX";
-        break;
-    }
-    if (SCALING_PROBE_NAME) {
-      let scaling = aWindow.devicePixelRatio * 100;
-      try {
-        Services.telemetry.getHistogramById(SCALING_PROBE_NAME).add(scaling);
-      } catch (ex) {}
-    }
+    let scaling = aWindow.devicePixelRatio * 100;
+    try {
+      Services.telemetry.getHistogramById("DISPLAY_SCALING").add(scaling);
+    } catch (ex) {}
   },
 
   // the first browser window has finished initializing
@@ -962,6 +969,10 @@ BrowserGlue.prototype = {
           }
         }
       });
+    }
+
+    if (AddonManager.nonMpcDisabled) {
+      this._notifyDisabledNonMpc();
     }
 
     // Perform default browser checking.
@@ -1859,7 +1870,7 @@ BrowserGlue.prototype = {
 
       Services.prefs.clearUserPref("browser.tabs.animate");
       Services.prefs.clearUserPref("browser.fullscreen.animate");
-      Services.prefs.clearUserPref("browser.tabs.animate");
+      Services.prefs.clearUserPref("alerts.disableSlidingEffect");
     }
 
     // Update the migration version.

@@ -76,10 +76,31 @@ impl ToCss for FontRelativeLength {
     }
 }
 
+/// A source to resolve font-relative units against
+pub enum FontBaseSize {
+    /// Use the font-size of the current element
+    CurrentStyle,
+    /// Use the inherited font-size
+    InheritedStyle,
+    /// Use a custom base size
+    Custom(Au),
+}
+
+impl FontBaseSize {
+    /// Calculate the actual size for a given context
+    pub fn resolve(&self, context: &Context) -> Au {
+        match *self {
+            FontBaseSize::Custom(size) => size,
+            FontBaseSize::CurrentStyle => context.style().get_font().clone_font_size(),
+            FontBaseSize::InheritedStyle => context.inherited_style().get_font().clone_font_size(),
+        }
+    }
+}
+
 impl FontRelativeLength {
-    /// Computes the font-relative length. We use the use_inherited flag to
-    /// special-case the computation of font-size.
-    pub fn to_computed_value(&self, context: &Context, use_inherited: bool) -> Au {
+    /// Computes the font-relative length. We use the base_size
+    /// flag to pass a different size for computing font-size and unconstrained font-size
+    pub fn to_computed_value(&self, context: &Context, base_size: FontBaseSize) -> Au {
         fn query_font_metrics(context: &Context, reference_font_size: Au) -> FontMetricsQueryResult {
             context.font_metrics_provider.query(context.style().get_font(),
                                                 reference_font_size,
@@ -88,11 +109,7 @@ impl FontRelativeLength {
                                                 context.device)
         }
 
-        let reference_font_size = if use_inherited {
-            context.inherited_style().get_font().clone_font_size()
-        } else {
-            context.style().get_font().clone_font_size()
-        };
+        let reference_font_size = base_size.resolve(context);
 
         let root_font_size = context.style().root_font_size;
         match *self {
@@ -1129,7 +1146,9 @@ impl ToCss for LengthOrPercentage {
         }
     }
 }
+
 impl LengthOrPercentage {
+    #[inline]
     /// Returns a `zero` length.
     pub fn zero() -> LengthOrPercentage {
         LengthOrPercentage::Length(NoCalcLength::zero())
@@ -1143,8 +1162,12 @@ impl LengthOrPercentage {
                 NoCalcLength::parse_dimension(context, value.value, unit).map(LengthOrPercentage::Length),
             Token::Percentage(ref value) if num_context.is_ok(value.unit_value) =>
                 Ok(LengthOrPercentage::Percentage(Percentage(value.unit_value))),
-            Token::Number(ref value) if value.value == 0. =>
-                Ok(LengthOrPercentage::zero()),
+            Token::Number(ref value) => {
+                if value.value != 0. && !context.length_parsing_mode.allows_unitless_lengths() {
+                    return Err(())
+                }
+                Ok(LengthOrPercentage::Length(NoCalcLength::Absolute(AbsoluteLength::Px(value.value))))
+            }
             Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
                 let calc = try!(input.parse_nested_block(|i| {
                     CalcLengthOrPercentage::parse_length_or_percentage(context, i)
@@ -1267,8 +1290,14 @@ impl LengthOrPercentageOrAuto {
                 NoCalcLength::parse_dimension(context, value.value, unit).map(LengthOrPercentageOrAuto::Length),
             Token::Percentage(ref value) if num_context.is_ok(value.unit_value) =>
                 Ok(LengthOrPercentageOrAuto::Percentage(Percentage(value.unit_value))),
-            Token::Number(ref value) if value.value == 0. =>
-                Ok(Self::zero()),
+            Token::Number(ref value) if value.value == 0. => {
+                if value.value != 0. && !context.length_parsing_mode.allows_unitless_lengths() {
+                    return Err(())
+                }
+                Ok(LengthOrPercentageOrAuto::Length(
+                    NoCalcLength::Absolute(AbsoluteLength::Px(value.value))
+                ))
+            }
             Token::Ident(ref value) if value.eq_ignore_ascii_case("auto") =>
                 Ok(LengthOrPercentageOrAuto::Auto),
             Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
@@ -1346,8 +1375,14 @@ impl LengthOrPercentageOrNone {
                 NoCalcLength::parse_dimension(context, value.value, unit).map(LengthOrPercentageOrNone::Length),
             Token::Percentage(ref value) if num_context.is_ok(value.unit_value) =>
                 Ok(LengthOrPercentageOrNone::Percentage(Percentage(value.unit_value))),
-            Token::Number(ref value) if value.value == 0. =>
-                Ok(LengthOrPercentageOrNone::Length(NoCalcLength::zero())),
+            Token::Number(ref value) if value.value == 0. => {
+                if value.value != 0. && !context.length_parsing_mode.allows_unitless_lengths() {
+                    return Err(())
+                }
+                Ok(LengthOrPercentageOrNone::Length(
+                    NoCalcLength::Absolute(AbsoluteLength::Px(value.value))
+                ))
+            }
             Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
                 let calc = try!(input.parse_nested_block(|i| {
                     CalcLengthOrPercentage::parse_length_or_percentage(context, i)

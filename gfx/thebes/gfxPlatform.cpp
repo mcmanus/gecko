@@ -90,7 +90,6 @@
 
 #ifdef MOZ_WIDGET_ANDROID
 #include "TexturePoolOGL.h"
-#include "mozilla/layers/UiCompositorControllerChild.h"
 #endif
 
 #ifdef USE_SKIA
@@ -255,8 +254,7 @@ CrashStatsLogForwarder::UpdateStringsVector(const std::string& aString)
   MOZ_ASSERT(index >= 0 && index < (int32_t)mMaxCapacity);
   MOZ_ASSERT(index <= mIndex && index <= (int32_t)mBuffer.size());
 
-  bool ignored;
-  double tStamp = (TimeStamp::NowLoRes()-TimeStamp::ProcessCreation(ignored)).ToSecondsSigDigits();
+  double tStamp = (TimeStamp::NowLoRes() - TimeStamp::ProcessCreation()).ToSecondsSigDigits();
 
   // Checking for index >= mBuffer.size(), rather than index == mBuffer.size()
   // just out of paranoia, but we know index <= mBuffer.size().
@@ -990,9 +988,6 @@ gfxPlatform::ShutdownLayersIPC()
         gfx::VRManagerChild::ShutDown();
         layers::CompositorBridgeChild::ShutDown();
         layers::ImageBridgeChild::ShutDown();
-#if defined(MOZ_WIDGET_ANDROID)
-        layers::UiCompositorControllerChild::Shutdown();
-#endif // defined(MOZ_WIDGET_ANDROID)
         // This has to happen after shutting down the child protocols.
         layers::CompositorThreadHolder::Shutdown();
         if (gfxVars::UseWebRender()) {

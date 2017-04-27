@@ -189,6 +189,7 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["dom.ipc.processCount", {what: RECORD_PREF_VALUE}],
   ["dom.max_script_run_time", {what: RECORD_PREF_VALUE}],
   ["experiments.manifest.uri", {what: RECORD_PREF_VALUE}],
+  ["extensions.allow-non-mpc-extensions", {what: RECORD_PREF_VALUE}],
   ["extensions.autoDisableScopes", {what: RECORD_PREF_VALUE}],
   ["extensions.enabledScopes", {what: RECORD_PREF_VALUE}],
   ["extensions.blocklist.enabled", {what: RECORD_PREF_VALUE}],
@@ -423,7 +424,7 @@ function getWindowsVersionInfo() {
   let kernel32 = ctypes.open("kernel32");
   try {
     let GetVersionEx = kernel32.declare("GetVersionExW",
-                                        ctypes.default_abi,
+                                        ctypes.winapi_abi,
                                         BOOL,
                                         OSVERSIONINFOEXW.ptr);
     let winVer = OSVERSIONINFOEXW();
@@ -624,6 +625,8 @@ EnvironmentAddonBuilder.prototype = {
           updateDay: Utils.millisecondsToDays(updateDate.getTime()),
           signedState: addon.signedState,
           isSystem: addon.isSystem,
+          isWebExtension: addon.isWebExtension,
+          multiprocessCompatible: Boolean(addon.multiprocessCompatible),
         };
 
         if (addon.signedState !== undefined)

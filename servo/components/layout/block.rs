@@ -43,6 +43,7 @@ use flow_list::FlowList;
 use fragment::{CoordinateSystem, Fragment, FragmentBorderBoxIterator, Overflow};
 use fragment::{IS_INLINE_FLEX_ITEM, IS_BLOCK_FLEX_ITEM};
 use gfx_traits::print_tree::PrintTree;
+use incremental::RelayoutMode;
 use layout_debug;
 use model::{AdjoiningMargins, CollapsibleMargins, IntrinsicISizes, MarginCollapseInfo, MaybeAuto};
 use model::{specified, specified_or_none};
@@ -52,7 +53,7 @@ use servo_geometry::max_rect;
 use std::cmp::{max, min};
 use std::fmt;
 use std::sync::Arc;
-use style::computed_values::{border_collapse, box_sizing, display, float, overflow_x, overflow_y};
+use style::computed_values::{border_collapse, box_sizing, display, float, overflow_x};
 use style::computed_values::{position, text_align};
 use style::context::SharedStyleContext;
 use style::logical_geometry::{LogicalPoint, LogicalRect, LogicalSize, WritingMode};
@@ -324,22 +325,20 @@ impl CandidateBSizeIterator {
             (LengthOrPercentageOrAuto::Percentage(percent), Some(block_container_block_size)) => {
                 MaybeAuto::Specified(block_container_block_size.scale_by(percent))
             }
-            (LengthOrPercentageOrAuto::Calc(calc), Some(block_container_block_size)) => {
-                MaybeAuto::Specified(calc.length() + block_container_block_size.scale_by(calc.percentage()))
+            (LengthOrPercentageOrAuto::Calc(calc), _) => {
+                MaybeAuto::from_option(calc.to_computed(block_container_block_size))
             }
             (LengthOrPercentageOrAuto::Percentage(_), None) |
-            (LengthOrPercentageOrAuto::Auto, _) |
-            (LengthOrPercentageOrAuto::Calc(_), _) => MaybeAuto::Auto,
+            (LengthOrPercentageOrAuto::Auto, _) => MaybeAuto::Auto,
             (LengthOrPercentageOrAuto::Length(length), _) => MaybeAuto::Specified(length),
         };
         let max_block_size = match (fragment.style.max_block_size(), block_container_block_size) {
             (LengthOrPercentageOrNone::Percentage(percent), Some(block_container_block_size)) => {
                 Some(block_container_block_size.scale_by(percent))
             }
-            (LengthOrPercentageOrNone::Calc(calc), Some(block_container_block_size)) => {
-                Some(block_container_block_size.scale_by(calc.percentage()) + calc.length())
+            (LengthOrPercentageOrNone::Calc(calc), _) => {
+                calc.to_computed(block_container_block_size)
             }
-            (LengthOrPercentageOrNone::Calc(_), _) |
             (LengthOrPercentageOrNone::Percentage(_), None) |
             (LengthOrPercentageOrNone::None, _) => None,
             (LengthOrPercentageOrNone::Length(length), _) => Some(length),
@@ -348,10 +347,9 @@ impl CandidateBSizeIterator {
             (LengthOrPercentage::Percentage(percent), Some(block_container_block_size)) => {
                 block_container_block_size.scale_by(percent)
             }
-            (LengthOrPercentage::Calc(calc), Some(block_container_block_size)) => {
-                calc.length() + block_container_block_size.scale_by(calc.percentage())
+            (LengthOrPercentage::Calc(calc), _) => {
+                calc.to_computed(block_container_block_size).unwrap_or(Au(0))
             }
-            (LengthOrPercentage::Calc(calc), None) => calc.length(),
             (LengthOrPercentage::Percentage(_), None) => Au(0),
             (LengthOrPercentage::Length(length), _) => length,
         };
@@ -1168,15 +1166,14 @@ impl BlockFlow {
         let content_block_size = self.fragment.style().content_block_size();
 
         match (content_block_size, containing_block_size) {
-            (LengthOrPercentageOrAuto::Calc(calc), Some(container_size)) => {
-                Some(container_size.scale_by(calc.percentage()) + calc.length())
+            (LengthOrPercentageOrAuto::Calc(calc), _) => {
+                calc.to_computed(containing_block_size)
             }
             (LengthOrPercentageOrAuto::Length(length), _) => Some(length),
             (LengthOrPercentageOrAuto::Percentage(percent), Some(container_size)) => {
                 Some(container_size.scale_by(percent))
             }
             (LengthOrPercentageOrAuto::Percentage(_), None) |
-            (LengthOrPercentageOrAuto::Calc(_), None) |
             (LengthOrPercentageOrAuto::Auto, None) => {
                 None
             }
@@ -1443,7 +1440,7 @@ impl BlockFlow {
                 FormattingContextType::Other
             }
             _ if style.get_box().overflow_x != overflow_x::T::visible ||
-                    style.get_box().overflow_y != overflow_y::T(overflow_x::T::visible) ||
+                    style.get_box().overflow_y != overflow_x::T::visible ||
                     style.is_multicol() => {
                 FormattingContextType::Block
             }
@@ -1549,7 +1546,7 @@ impl BlockFlow {
             self.assign_inline_sizes(layout_context);
             // Re-run layout on our children.
             for child in flow::mut_base(self).children.iter_mut() {
-                sequential::traverse_flow_tree_preorder(child, layout_context);
+                sequential::traverse_flow_tree_preorder(child, layout_context, RelayoutMode::Force);
             }
             // Assign our final-final block size.
             self.assign_block_size(layout_context);
@@ -1680,7 +1677,7 @@ impl BlockFlow {
 
     pub fn overflow_style_may_require_scroll_root(&self) -> bool {
         match (self.fragment.style().get_box().overflow_x,
-               self.fragment.style().get_box().overflow_y.0) {
+               self.fragment.style().get_box().overflow_y) {
             (overflow_x::T::auto, _) | (overflow_x::T::scroll, _) | (overflow_x::T::hidden, _) |
             (_, overflow_x::T::auto) | (_, overflow_x::T::scroll) | (_, overflow_x::T::hidden) =>
                 true,

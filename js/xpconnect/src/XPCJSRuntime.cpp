@@ -813,7 +813,7 @@ XPCJSRuntime::FinalizeCallback(JSFreeOp* fop,
         return;
 
     switch (status) {
-        case JSFINALIZE_GROUP_START:
+        case JSFINALIZE_GROUP_PREPARE:
         {
             MOZ_ASSERT(!self->mDoingFinalization, "bad state");
 
@@ -821,18 +821,25 @@ XPCJSRuntime::FinalizeCallback(JSFreeOp* fop,
             self->mGCIsRunning = true;
 
             self->mDoingFinalization = true;
+
+            break;
+        }
+        case JSFINALIZE_GROUP_START:
+        {
+            MOZ_ASSERT(self->mDoingFinalization, "bad state");
+
+            MOZ_ASSERT(self->mGCIsRunning, "bad state");
+            self->mGCIsRunning = false;
+
             break;
         }
         case JSFINALIZE_GROUP_END:
         {
-            MOZ_ASSERT(self->mDoingFinalization, "bad state");
-            self->mDoingFinalization = false;
-
             // Sweep scopes needing cleanup
             XPCWrappedNativeScope::KillDyingScopes();
 
-            MOZ_ASSERT(self->mGCIsRunning, "bad state");
-            self->mGCIsRunning = false;
+            MOZ_ASSERT(self->mDoingFinalization, "bad state");
+            self->mDoingFinalization = false;
 
             break;
         }
@@ -913,7 +920,7 @@ XPCJSRuntime::WeakPointerZonesCallback(JSContext* cx, void* data)
 
     self->mWrappedJSMap->UpdateWeakPointersAfterGC();
 
-    XPCWrappedNativeScope::UpdateWeakPointersAfterGC();
+    XPCWrappedNativeScope::UpdateWeakPointersInAllScopesAfterGC();
 }
 
 /* static */ void
@@ -1533,9 +1540,17 @@ ReportZoneStats(const JS::ZoneStats& zStats,
         zStats.typePool,
         "Type sets and related data.");
 
+    ZCREPORT_BYTES(pathPrefix + NS_LITERAL_CSTRING("jit-zone"),
+        zStats.jitZone,
+        "The JIT zone.");
+
     ZCREPORT_BYTES(pathPrefix + NS_LITERAL_CSTRING("baseline/optimized-stubs"),
         zStats.baselineStubsOptimized,
         "The Baseline JIT's optimized IC stubs (excluding code).");
+
+    ZCREPORT_BYTES(pathPrefix + NS_LITERAL_CSTRING("jit-cached-cfg"),
+        zStats.cachedCFG,
+        "The cached CFG to construct Ion code out of it.");
 
     size_t stringsNotableAboutMemoryGCHeap = 0;
     size_t stringsNotableAboutMemoryMallocHeap = 0;
@@ -2463,6 +2478,8 @@ JSReporter::CollectReports(WindowPaths* windowPaths,
         return;
     }
 
+    JS::CollectTraceLoggerStateStats(&rtStats);
+
     size_t xpcJSRuntimeSize = xpcrt->SizeOfIncludingThis(JSMallocSizeOf);
 
     size_t wrappedJSSize = xpcrt->GetMultiCompartmentWrappedJSMap()->SizeOfWrappedJS(JSMallocSizeOf);
@@ -2498,6 +2515,11 @@ JSReporter::CollectReports(WindowPaths* windowPaths,
     REPORT_BYTES(NS_LITERAL_CSTRING("js-main-runtime/runtime"),
         KIND_OTHER, rtTotal,
         "The sum of all measurements under 'explicit/js-non-window/runtime/'.");
+
+    // Report the numbers for memory used by tracelogger.
+    REPORT_BYTES(NS_LITERAL_CSTRING("tracelogger"),
+        KIND_OTHER, rtStats.runtime.tracelogger,
+        "The memory used for the tracelogger, including the graph and events.");
 
     // Report the numbers for memory outside of compartments.
 

@@ -44,6 +44,8 @@
 #include "js/MemoryMetrics.h"
 #include "js/SliceBudget.h"
 #include "vm/Debugger.h"
+#include "vm/TraceLogging.h"
+#include "vm/TraceLoggingGraph.h"
 #include "wasm/WasmSignalHandlers.h"
 
 #include "jscntxtinlines.h"
@@ -265,9 +267,6 @@ JSRuntime::init(JSContext* cx, uint32_t maxbytes, uint32_t maxNurseryBytes)
     if (!caches().init())
         return false;
 
-    if (!wasm().init())
-        return false;
-
     return true;
 }
 
@@ -279,8 +278,6 @@ JSRuntime::destroyRuntime()
     MOZ_ASSERT(initialized_);
 
     sharedIntlData.ref().destroyInstance();
-
-    wasm().destroy();
 
     if (gcInitialized) {
         /*
@@ -470,6 +467,10 @@ JSRuntime::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::Runtim
         rtSizes->contexts += cx->sizeOfExcludingThis(mallocSizeOf);
         rtSizes->temporary += cx->tempLifoAlloc().sizeOfExcludingThis(mallocSizeOf);
         rtSizes->interpreterStack += cx->interpreterStack().sizeOfExcludingThis(mallocSizeOf);
+#ifdef JS_TRACE_LOGGING
+        if (cx->traceLogger)
+            rtSizes->tracelogger += cx->traceLogger->sizeOfIncludingThis(mallocSizeOf);
+#endif
     }
 
     if (MathCache* cache = caches().maybeGetMathCache())
@@ -505,12 +506,13 @@ static bool
 InvokeInterruptCallback(JSContext* cx)
 {
     MOZ_ASSERT(cx->requestDepth >= 1);
+    MOZ_ASSERT(!cx->compartment()->isAtomsCompartment());
 
     cx->runtime()->gc.gcIfRequested();
 
     // A worker thread may have requested an interrupt after finishing an Ion
     // compilation.
-    jit::AttachFinishedCompilations(cx);
+    jit::AttachFinishedCompilations(cx->zone()->group(), cx);
 
     // Important: Additional callbacks can occur inside the callback handler
     // if it re-enters the JS engine. The embedding must ensure that the

@@ -55,6 +55,10 @@ ServoRestyleManager::PostRestyleEvent(Element* aElement,
     return;
   }
 
+  if (aRestyleHint & ~eRestyle_AllHintsWithAnimations) {
+    mHaveNonAnimationRestyles = true;
+  }
+
   Servo_NoteExplicitHints(aElement, aRestyleHint, aMinChangeHint);
 }
 
@@ -70,6 +74,8 @@ ServoRestyleManager::RebuildAllStyleData(nsChangeHint aExtraHint,
                                          nsRestyleHint aRestyleHint)
 {
   StyleSet()->RebuildData();
+
+  mHaveNonAnimationRestyles = true;
 
   // NOTE(emilio): GeckoRestlyeManager does a sync style flush, which seems
   // not to be needed in my testing.
@@ -329,25 +335,16 @@ ServoRestyleManager::FrameForPseudoElement(const nsIContent* aContent,
                                            nsIAtom* aPseudoTagOrNull)
 {
   MOZ_ASSERT_IF(aPseudoTagOrNull, aContent->IsElement());
-  nsIFrame* primaryFrame = aContent->GetPrimaryFrame();
-
   if (!aPseudoTagOrNull) {
-    return primaryFrame;
+    return aContent->GetPrimaryFrame();
   }
 
-  // FIXME(emilio): Need to take into account display: contents pseudos!
-  if (!primaryFrame) {
-    return nullptr;
-  }
-
-  // NOTE: we probably need to special-case display: contents here. Gecko's
-  // RestyleManager passes the primary frame of the parent instead.
   if (aPseudoTagOrNull == nsCSSPseudoElements::before) {
-    return nsLayoutUtils::GetBeforeFrameForContent(primaryFrame, aContent);
+    return nsLayoutUtils::GetBeforeFrame(aContent);
   }
 
   if (aPseudoTagOrNull == nsCSSPseudoElements::after) {
-    return nsLayoutUtils::GetAfterFrameForContent(primaryFrame, aContent);
+    return nsLayoutUtils::GetAfterFrame(aContent);
   }
 
   MOZ_CRASH("Unkown pseudo-element given to "
@@ -387,6 +384,9 @@ ServoRestyleManager::ProcessPendingRestyles()
   // in a loop because certain rare paths in the frame constructor (like
   // uninstalling XBL bindings) can trigger additional style validations.
   mInStyleRefresh = true;
+  if (mHaveNonAnimationRestyles) {
+    ++mAnimationGeneration;
+  }
   while (styleSet->StyleDocument()) {
     // Recreate style contexts, and queue up change hints (which also handle
     // lazy frame construction).
@@ -419,6 +419,7 @@ ServoRestyleManager::ProcessPendingRestyles()
 
   FlushOverflowChangedTracker();
 
+  mHaveNonAnimationRestyles = false;
   mInStyleRefresh = false;
   styleSet->AssertTreeIsClean();
 

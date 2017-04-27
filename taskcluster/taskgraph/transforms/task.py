@@ -411,7 +411,7 @@ task_description_schema = Schema({
         }],
 
         # "Invalid" is a noop for try and other non-supported branches
-        Required('google-play-track'): Any('production', 'beta', 'alpha', 'invalid'),
+        Required('google-play-track'): Any('production', 'beta', 'alpha', 'rollout', 'invalid'),
         Required('dry-run', default=True): bool,
         Optional('rollout-percentage'): int,
     }),
@@ -439,6 +439,7 @@ GROUP_NAMES = {
     'tc-X': 'Xpcshell tests executed by TaskCluster',
     'tc-X-e10s': 'Xpcshell tests executed by TaskCluster with e10s',
     'tc-L10n': 'Localised Repacks executed by Taskcluster',
+    'tc-L10n-Rpk': 'Localized Repackaged Repacks executed by Taskcluster',
     'tc-BM-L10n': 'Beetmover for locales executed by Taskcluster',
     'tc-Up': 'Balrog submission of updates, executed by Taskcluster',
     'tc-cs': 'Checksum signing executed by Taskcluster',

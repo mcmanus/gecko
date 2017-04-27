@@ -191,6 +191,13 @@ public:
   virtual bool
   DeallocPMemoryStreamChild(PMemoryStreamChild* aActor) override;
 
+  virtual PIPCBlobInputStreamChild*
+  AllocPIPCBlobInputStreamChild(const nsID& aID,
+                                const uint64_t& aSize) override;
+
+  virtual bool
+  DeallocPIPCBlobInputStreamChild(PIPCBlobInputStreamChild* aActor) override;
+
   virtual PHalChild* AllocPHalChild() override;
   virtual bool DeallocPHalChild(PHalChild*) override;
 
@@ -365,6 +372,9 @@ public:
   virtual mozilla::ipc::IPCResult RecvGeolocationError(const uint16_t& errorCode) override;
 
   virtual mozilla::ipc::IPCResult RecvUpdateDictionaryList(InfallibleTArray<nsString>&& aDictionaries) override;
+
+  virtual mozilla::ipc::IPCResult RecvUpdateAppLocales(nsTArray<nsCString>&& aAppLocales) override;
+  virtual mozilla::ipc::IPCResult RecvUpdateRequestedLocales(nsTArray<nsCString>&& aRequestedLocales) override;
 
   virtual mozilla::ipc::IPCResult RecvAddPermission(const IPC::Permission& permission) override;
 
@@ -574,7 +584,7 @@ public:
                        const GetFilesResponseResult& aResult) override;
 
   virtual mozilla::ipc::IPCResult
-  RecvBlobURLRegistration(const nsCString& aURI, PBlobChild* aBlobChild,
+  RecvBlobURLRegistration(const nsCString& aURI, const IPCBlob& aBlob,
                           const IPC::Principal& aPrincipal) override;
 
   virtual mozilla::ipc::IPCResult
