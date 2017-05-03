@@ -19,6 +19,7 @@
 #include "mozilla/LookAndFeel.h" // For LookAndFeel::GetInt
 #include "mozilla/KeyframeUtils.h"
 #include "mozilla/ServoBindings.h"
+#include "mozilla/ServoComputedValuesWithParent.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TypeTraits.h"
 #include "Layers.h" // For Layer
@@ -660,7 +661,7 @@ KeyframeEffectReadOnly::ComposeStyleRule(
 // better to remove the duplicated code.
 void
 KeyframeEffectReadOnly::ComposeStyleRule(
-  const RawServoAnimationValueMap& aAnimationValues,
+  RawServoAnimationValueMap& aAnimationValues,
   const AnimationProperty& aProperty,
   const AnimationPropertySegment& aSegment,
   const ComputedTiming& aComputedTiming)
@@ -1880,8 +1881,8 @@ KeyframeEffectReadOnly::ComposeStyle<RefPtr<AnimValuesStyleRule>&>(
 
 template
 void
-KeyframeEffectReadOnly::ComposeStyle<const RawServoAnimationValueMap&>(
-  const RawServoAnimationValueMap& aAnimationValues,
+KeyframeEffectReadOnly::ComposeStyle<RawServoAnimationValueMap&>(
+  RawServoAnimationValueMap& aAnimationValues,
   const nsCSSPropertyIDSet& aPropertiesToSkip);
 
 } // namespace dom

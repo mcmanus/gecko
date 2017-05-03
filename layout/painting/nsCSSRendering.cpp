@@ -820,24 +820,28 @@ nsCSSRendering::PaintBorderWithStyleBorder(nsPresContext* aPresContext,
     }
   }
 
-  if (aStyleBorder.IsBorderImageLoaded()) {
-    DrawResult result;
+  if (!aStyleBorder.mBorderImageSource.IsEmpty()) {
+    DrawResult result = DrawResult::SUCCESS;
 
     uint32_t irFlags = 0;
     if (aFlags & PaintBorderFlags::SYNC_DECODE_IMAGES) {
       irFlags |= nsImageRenderer::FLAG_SYNC_DECODE_IMAGES;
     }
 
+    // Creating the border image renderer will request a decode, and we rely on
+    // that happening.
     Maybe<nsCSSBorderImageRenderer> renderer =
       nsCSSBorderImageRenderer::CreateBorderImageRenderer(aPresContext, aForFrame, aBorderArea,
                                                           aStyleBorder, aDirtyRect, aSkipSides,
                                                           irFlags, &result);
-    if (!renderer) {
-      return result;
-    }
+    if (aStyleBorder.IsBorderImageLoaded()) {
+      if (!renderer) {
+        return result;
+      }
 
-    return renderer->DrawBorderImage(aPresContext, aRenderingContext,
-                                     aForFrame, aDirtyRect);
+      return renderer->DrawBorderImage(aPresContext, aRenderingContext,
+                                       aForFrame, aDirtyRect);
+    }
   }
 
   DrawResult result = DrawResult::SUCCESS;
@@ -1231,11 +1235,11 @@ nsCSSRendering::FindNonTransparentBackgroundFrame(nsIFrame* aFrame,
 bool
 nsCSSRendering::IsCanvasFrame(nsIFrame* aFrame)
 {
-  nsIAtom* frameType = aFrame->GetType();
-  return frameType == nsGkAtoms::canvasFrame ||
-         frameType == nsGkAtoms::rootFrame ||
-         frameType == nsGkAtoms::pageContentFrame ||
-         frameType == nsGkAtoms::viewportFrame;
+  LayoutFrameType frameType = aFrame->Type();
+  return frameType == LayoutFrameType::Canvas ||
+         frameType == LayoutFrameType::Root ||
+         frameType == LayoutFrameType::PageContent ||
+         frameType == LayoutFrameType::Viewport;
 }
 
 nsIFrame*
@@ -1749,7 +1753,7 @@ nsCSSRendering::PaintBoxShadowInner(nsPresContext* aPresContext,
   }
 
   nsCSSShadowArray* shadows = aForFrame->StyleEffects()->mBoxShadow;
-  NS_ASSERTION(aForFrame->GetType() == nsGkAtoms::fieldSetFrame ||
+  NS_ASSERTION(aForFrame->IsFieldSetFrame() ||
                aFrameArea.Size() == aForFrame->GetSize(), "unexpected size");
 
   nsRect paddingRect = GetBoxShadowInnerPaddingRect(aForFrame, aFrameArea);
@@ -1968,7 +1972,7 @@ nsCSSRendering::CanBuildWebRenderDisplayItemsForStyleImageLayer(nsPresContext& a
          aBackgroundStyle->mImage.mLayers[aLayer].mImage.GetType() == eStyleImageType_Image;
 }
 
-void
+DrawResult
 nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayer(const PaintBGParams& aParams,
                                                              mozilla::wr::DisplayListBuilder& aBuilder,
                                                              nsTArray<WebRenderParentCommand>& aParentCommands,
@@ -1985,12 +1989,12 @@ nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayer(const PaintBGParams
     // draw the background. The canvas really should be drawing the
     // bg, but there's no way to hook that up via css.
     if (!aParams.frame->StyleDisplay()->UsedAppearance()) {
-      return;
+      return DrawResult::NOT_READY;
     }
 
     nsIContent* content = aParams.frame->GetContent();
     if (!content || content->GetParent()) {
-      return;
+      return DrawResult::NOT_READY;
     }
 
     sc = aParams.frame->StyleContext();
@@ -2131,7 +2135,7 @@ nsCSSRendering::GetImageLayerClip(const nsStyleImageLayers::Layer& aLayer,
   StyleGeometryBox layerClip = ComputeBoxValue(aForFrame, aLayer.mClip);
   if (IsSVGStyleGeometryBox(layerClip)) {
     MOZ_ASSERT(aForFrame->IsFrameOfType(nsIFrame::eSVG) &&
-               (aForFrame->GetType() != nsGkAtoms::svgOuterSVGFrame));
+               !aForFrame->IsSVGOuterSVGFrame());
 
     // The coordinate space of clipArea is svg user space.
     nsRect clipArea =
@@ -2171,7 +2175,7 @@ nsCSSRendering::GetImageLayerClip(const nsStyleImageLayers::Layer& aLayer,
   }
 
   MOZ_ASSERT(!aForFrame->IsFrameOfType(nsIFrame::eSVG) ||
-             aForFrame->GetType() == nsGkAtoms::svgOuterSVGFrame);
+             aForFrame->IsSVGOuterSVGFrame());
 
   // Compute the outermost boundary of the area that might be painted.
   // Same coordinate space as aBorderArea.
@@ -2195,7 +2199,7 @@ nsCSSRendering::GetImageLayerClip(const nsStyleImageLayers::Layer& aLayer,
 
   aClipState->mBGClipArea = clipBorderArea;
 
-  if (aForFrame->GetType() == nsGkAtoms::scrollFrame &&
+  if (aForFrame->IsScrollFrame() &&
       NS_STYLE_IMAGELAYER_ATTACHMENT_LOCAL == aLayer.mAttachment) {
     // As of this writing, this is still in discussion in the CSS Working Group
     // http://lists.w3.org/Archives/Public/www-style/2013Jul/0250.html
@@ -2709,7 +2713,7 @@ nsCSSRendering::PaintStyleImageLayerWithSC(const PaintBGParams& aParams,
   return result;
 }
 
-void
+DrawResult
 nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayerWithSC(const PaintBGParams& aParams,
                                                                    mozilla::wr::DisplayListBuilder& aBuilder,
                                                                    nsTArray<WebRenderParentCommand>& aParentCommands,
@@ -2747,7 +2751,7 @@ nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayerWithSC(const PaintBG
   // Skip the following layer painting code if we found the dirty region is
   // empty or the current layer is not selected for drawing.
   if (clipState.mDirtyRectInDevPx.IsEmpty()) {
-    return;
+    return DrawResult::SUCCESS;
   }
 
   nsBackgroundLayerState state =
@@ -2756,13 +2760,15 @@ nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayerWithSC(const PaintBG
                       clipState.mBGClipArea, layer, nullptr);
 
   if (!state.mFillArea.IsEmpty()) {
-    state.mImageRenderer.BuildWebRenderDisplayItemsForLayer(&aParams.presCtx,
-                                   aBuilder, aParentCommands, aLayer,
-                                   state.mDestArea, state.mFillArea,
-                                   state.mAnchor + paintBorderArea.TopLeft(),
-                                   clipState.mDirtyRectInAppUnits,
-                                   state.mRepeatSize, aParams.opacity);
+    return state.mImageRenderer.BuildWebRenderDisplayItemsForLayer(&aParams.presCtx,
+                                     aBuilder, aParentCommands, aLayer,
+                                     state.mDestArea, state.mFillArea,
+                                     state.mAnchor + paintBorderArea.TopLeft(),
+                                     clipState.mDirtyRectInAppUnits,
+                                     state.mRepeatSize, aParams.opacity);
   }
+
+  return DrawResult::SUCCESS;
 }
 
 nsRect
@@ -2782,7 +2788,7 @@ nsCSSRendering::ComputeImageLayerPositioningArea(nsPresContext* aPresContext,
 
   if (IsSVGStyleGeometryBox(layerOrigin)) {
     MOZ_ASSERT(aForFrame->IsFrameOfType(nsIFrame::eSVG) &&
-               (aForFrame->GetType() != nsGkAtoms::svgOuterSVGFrame));
+               !aForFrame->IsSVGOuterSVGFrame());
     *aAttachedToFrame = aForFrame;
 
     positionArea =
@@ -2801,11 +2807,11 @@ nsCSSRendering::ComputeImageLayerPositioningArea(nsPresContext* aPresContext,
   }
 
   MOZ_ASSERT(!aForFrame->IsFrameOfType(nsIFrame::eSVG) ||
-             aForFrame->GetType() == nsGkAtoms::svgOuterSVGFrame);
+             aForFrame->IsSVGOuterSVGFrame());
 
-  nsIAtom* frameType = aForFrame->GetType();
+  LayoutFrameType frameType = aForFrame->Type();
   nsIFrame* geometryFrame = aForFrame;
-  if (MOZ_UNLIKELY(frameType == nsGkAtoms::scrollFrame &&
+  if (MOZ_UNLIKELY(frameType == LayoutFrameType::Scroll &&
                    NS_STYLE_IMAGELAYER_ATTACHMENT_LOCAL == aLayer.mAttachment)) {
     nsIScrollableFrame* scrollableFrame = do_QueryFrame(aForFrame);
     positionArea = nsRect(
@@ -2832,7 +2838,7 @@ nsCSSRendering::ComputeImageLayerPositioningArea(nsPresContext* aPresContext,
     return positionArea;
   }
 
-  if (MOZ_UNLIKELY(frameType == nsGkAtoms::canvasFrame)) {
+  if (MOZ_UNLIKELY(frameType == LayoutFrameType::Canvas)) {
     geometryFrame = aForFrame->PrincipalChildList().FirstChild();
     // geometryFrame might be null if this canvas is a page created
     // as an overflow container (e.g. the in-flow content has already
@@ -2875,8 +2881,8 @@ nsCSSRendering::ComputeImageLayerPositioningArea(nsPresContext* aPresContext,
     NS_ASSERTION(attachedToFrame, "no root frame");
     nsIFrame* pageContentFrame = nullptr;
     if (aPresContext->IsPaginated()) {
-      pageContentFrame =
-        nsLayoutUtils::GetClosestFrameOfType(aForFrame, nsGkAtoms::pageContentFrame);
+      pageContentFrame = nsLayoutUtils::GetClosestFrameOfType(
+        aForFrame, LayoutFrameType::PageContent);
       if (pageContentFrame) {
         attachedToFrame = pageContentFrame;
       }

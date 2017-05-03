@@ -363,10 +363,6 @@ public:
   bool ChromeRulesEnabled() const {
     return mIsChrome;
   }
-  bool UserRulesEnabled() const {
-    return mParsingMode == css::eAgentSheetFeatures ||
-           mParsingMode == css::eUserSheetFeatures;
-  }
 
   CSSEnabledState EnabledState() const {
     static_assert(int(CSSEnabledState::eForAllContent) == 0,
@@ -376,7 +372,7 @@ public:
     if (AgentRulesEnabled()) {
       enabledState |= CSSEnabledState::eInUASheets;
     }
-    if (mIsChrome) {
+    if (ChromeRulesEnabled()) {
       enabledState |= CSSEnabledState::eInChrome;
     }
     return enabledState;
@@ -924,6 +920,7 @@ protected:
                                          uint32_t& aVariantMask,
                                          bool *aHadFinalWS);
   bool ParseCalcTerm(nsCSSValue& aValue, uint32_t& aVariantMask);
+  bool ParseContextProperties();
   bool RequireWhitespace();
 
   // For "flex" shorthand property, defined in CSS Flexbox spec
@@ -8065,6 +8062,50 @@ CSSParserImpl::ParseCounter(nsCSSValue& aValue)
 }
 
 bool
+CSSParserImpl::ParseContextProperties()
+{
+  nsCSSValue listValue;
+  nsCSSValueList* currentListValue = listValue.SetListValue();
+  bool first = true;
+  for (;;) {
+    const uint32_t variantMask = VARIANT_IDENTIFIER |
+                                 VARIANT_INHERIT |
+                                 VARIANT_NONE;
+    nsCSSValue value;
+    if (!ParseSingleTokenVariant(value, variantMask, nullptr)) {
+      return false;
+    }
+
+    if (value.GetUnit() != eCSSUnit_Ident) {
+      if (first) {
+        AppendValue(eCSSProperty__moz_context_properties, value);
+        return true;
+      } else {
+        return false;
+      }
+    }
+
+    value.AtomizeIdentValue();
+    nsIAtom* atom = value.GetAtomValue();
+    if (atom == nsGkAtoms::_default) {
+      return false;
+    }
+
+    currentListValue->mValue = Move(value);
+
+    if (!ExpectSymbol(',', true)) {
+      break;
+    }
+    currentListValue->mNext = new nsCSSValueList;
+    currentListValue = currentListValue->mNext;
+    first = false;
+  }
+
+  AppendValue(eCSSProperty__moz_context_properties, listValue);
+  return true;
+}
+
+bool
 CSSParserImpl::ParseAttr(nsCSSValue& aValue)
 {
   if (!GetToken(true)) {
@@ -8723,6 +8764,10 @@ CSSParserImpl::ParseGridTrackSize(nsCSSValue& aValue,
     return CSSParseResult::NotFound;
   }
   if (mToken.mIdent.LowerCaseEqualsLiteral("fit-content")) {
+    if (requireFixedSize) {
+      UngetToken();
+      return CSSParseResult::Error;
+    }
     nsCSSValue::Array* func = aValue.InitFunction(eCSSKeyword_fit_content, 1);
     if (ParseGridTrackBreadth(func->Item(1)) == CSSParseResult::Ok &&
         func->Item(1).IsLengthPercentCalcUnit() &&
@@ -11708,6 +11753,8 @@ CSSParserImpl::ParsePropertyByFunction(nsCSSPropertyID aPropID)
     return ParseBorderSide(kColumnRuleIDs, false);
   case eCSSProperty_content:
     return ParseContent();
+  case eCSSProperty__moz_context_properties:
+    return ParseContextProperties();
   case eCSSProperty_counter_increment:
   case eCSSProperty_counter_reset:
     return ParseCounterData(aPropID);
@@ -17255,6 +17302,7 @@ CSSParserImpl::ParsePaint(nsCSSPropertyID aPropID)
     return false;
   }
 
+  bool hasFallback = false;
   bool canHaveFallback = x.GetUnit() == eCSSUnit_URL ||
                          x.GetUnit() == eCSSUnit_Enumerated;
   if (canHaveFallback) {
@@ -17262,17 +17310,16 @@ CSSParserImpl::ParsePaint(nsCSSPropertyID aPropID)
       ParseVariant(y, VARIANT_COLOR | VARIANT_NONE, nullptr);
     if (result == CSSParseResult::Error) {
       return false;
-    } else if (result == CSSParseResult::NotFound) {
-      y.SetNoneValue();
     }
+    hasFallback = (result != CSSParseResult::NotFound);
   }
 
-  if (!canHaveFallback) {
-    AppendValue(aPropID, x);
-  } else {
+  if (hasFallback) {
     nsCSSValue val;
     val.SetPairValue(x, y);
     AppendValue(aPropID, val);
+  } else {
+    AppendValue(aPropID, x);
   }
   return true;
 }

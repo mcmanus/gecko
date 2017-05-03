@@ -165,6 +165,16 @@ typedef uint32_t nsSplittableType;
 
 //----------------------------------------------------------------------
 
+namespace mozilla {
+
+enum class LayoutFrameType : uint8_t {
+#define FRAME_TYPE(ty_) ty_,
+#include "mozilla/FrameTypeList.h"
+#undef FRAME_TYPE
+};
+
+} // namespace mozilla
+
 enum nsSelectionAmount {
   eSelectCharacter = 0, // a single Unicode character;
                         // do not use this (prefer Cluster) unless you
@@ -592,13 +602,14 @@ public:
 
   NS_DECL_QUERYFRAME_TARGET(nsIFrame)
 
-  nsIFrame()
+  explicit nsIFrame(mozilla::LayoutFrameType aType)
     : mRect()
     , mContent(nullptr)
     , mStyleContext(nullptr)
     , mParent(nullptr)
     , mNextSibling(nullptr)
     , mPrevSibling(nullptr)
+    , mType(aType)
   {
     mozilla::PodZero(&mOverflow);
   }
@@ -1165,17 +1176,23 @@ public:
 
   NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(BidiDataProperty, mozilla::FrameBidiData)
 
-  mozilla::FrameBidiData GetBidiData()
+  mozilla::FrameBidiData GetBidiData() const
   {
-    return Properties().Get(BidiDataProperty());
+    bool exists;
+    mozilla::FrameBidiData bidiData =
+      Properties().Get(BidiDataProperty(), &exists);
+    if (!exists) {
+      bidiData.precedingControl = mozilla::kBidiLevelNone;
+    }
+    return bidiData;
   }
 
-  nsBidiLevel GetBaseLevel()
+  nsBidiLevel GetBaseLevel() const
   {
     return GetBidiData().baseLevel;
   }
 
-  nsBidiLevel GetEmbeddingLevel()
+  nsBidiLevel GetEmbeddingLevel() const
   {
     return GetBidiData().embeddingLevel;
   }
@@ -2582,10 +2599,12 @@ public:
   nsPoint GetOffsetToCrossDoc(const nsIFrame* aOther, const int32_t aAPD) const;
 
   /**
-   * Get the screen rect of the frame in pixels.
-   * @return the pixel rect of the frame in screen coordinates.
+   * Get the rect of the frame relative to the top-left corner of the
+   * screen in CSS pixels.
+   * @return the CSS pixel rect of the frame relative to the top-left
+   *         corner of the screen.
    */
-  nsIntRect GetScreenRect() const;
+  mozilla::CSSIntRect GetScreenRect() const;
 
   /**
    * Get the screen rect of the frame in app units.
@@ -2615,11 +2634,19 @@ public:
   nsIWidget* GetNearestWidget(nsPoint& aOffset) const;
 
   /**
-   * Get the "type" of the frame. May return nullptr.
+   * Get the "type" of the frame.
    *
-   * @see nsGkAtoms
+   * @see mozilla::LayoutFrameType
    */
-  virtual nsIAtom* GetType() const = 0;
+  mozilla::LayoutFrameType Type() const { return mType; }
+
+#define FRAME_TYPE(name_)                                                      \
+  bool Is##name_##Frame() const                                                \
+  {                                                                            \
+    return mType == mozilla::LayoutFrameType::name_;                           \
+  }
+#include "mozilla/FrameTypeList.h"
+#undef FRAME_TYPE
 
   /**
    * Returns a transformation matrix that converts points in this frame's
@@ -3779,6 +3806,9 @@ protected:
 
   /** @see GetWritingMode() */
   mozilla::WritingMode mWritingMode;
+
+  /** The type of the frame. */
+  mozilla::LayoutFrameType mType;
 
   // Helpers
   /**

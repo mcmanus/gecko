@@ -85,12 +85,6 @@ nsBulletFrame::GetFrameName(nsAString& aResult) const
 }
 #endif
 
-nsIAtom*
-nsBulletFrame::GetType() const
-{
-  return nsGkAtoms::bulletFrame;
-}
-
 bool
 nsBulletFrame::IsEmpty()
 {
@@ -282,6 +276,7 @@ private:
   void
   CreateWebRenderCommandsForPath(nsDisplayItem* aItem,
                                  wr::DisplayListBuilder& aBuilder,
+                                 nsTArray<layers::WebRenderParentCommand>& aParentCommands,
                                  layers::WebRenderDisplayItemLayer* aLayer);
 
   void
@@ -323,7 +318,7 @@ BulletRenderer::CreateWebRenderCommands(nsDisplayItem* aItem,
   if (IsImageType()) {
     CreateWebRenderCommandsForImage(aItem, aBuilder, aParentCommands, aLayer);
   } else if (IsPathType()) {
-    CreateWebRenderCommandsForPath(aItem, aBuilder, aLayer);
+    CreateWebRenderCommandsForPath(aItem, aBuilder, aParentCommands, aLayer);
   } else {
     MOZ_ASSERT(IsTextType());
     CreateWebRenderCommandsForText(aItem, aBuilder, aLayer);
@@ -462,10 +457,9 @@ BulletRenderer::CreateWebRenderCommandsForImage(nsDisplayItem* aItem,
   }
 
   const int32_t appUnitsPerDevPixel = aItem->Frame()->PresContext()->AppUnitsPerDevPixel();
-  Rect destRect =
-    NSRectToRect(mDest, appUnitsPerDevPixel);
-  Rect destRectTransformed = aLayer->RelativeToParent(destRect);
-  IntRect dest = RoundedToInt(destRectTransformed);
+  LayoutDeviceRect destRect = LayoutDeviceRect::FromAppUnits(mDest, appUnitsPerDevPixel);
+  LayerRect destRectTransformed = aLayer->RelativeToParent(destRect);
+  LayerIntRect dest = RoundedToInt(destRectTransformed);
 
   WrClipRegion clipRegion = aBuilder.BuildClipRegion(wr::ToWrRect(dest));
 
@@ -478,11 +472,15 @@ BulletRenderer::CreateWebRenderCommandsForImage(nsDisplayItem* aItem,
 void
 BulletRenderer::CreateWebRenderCommandsForPath(nsDisplayItem* aItem,
                                                wr::DisplayListBuilder& aBuilder,
+                                               nsTArray<layers::WebRenderParentCommand>& aParentCommands,
                                                layers::WebRenderDisplayItemLayer* aLayer)
 {
   MOZ_ASSERT(IsPathType());
-  // Not supported yet.
-  MOZ_CRASH("unreachable");
+  MOZ_ASSERT(aLayer->GetDisplayItem() == aItem);
+
+  if (!aLayer->PushItemAsImage(aBuilder, aParentCommands)) {
+    NS_WARNING("Fail to create WebRender commands for Bullet path.");
+  }
 }
 
 void
@@ -498,9 +496,9 @@ BulletRenderer::CreateWebRenderCommandsForText(nsDisplayItem* aItem,
   nsDisplayListBuilder* builder = layer->GetDisplayListBuilder();
   const int32_t appUnitsPerDevPixel = aItem->Frame()->PresContext()->AppUnitsPerDevPixel();
   bool dummy;
-  Rect destRect =
-    NSRectToRect(aItem->GetBounds(builder, &dummy), appUnitsPerDevPixel);
-  Rect destRectTransformed = aLayer->RelativeToParent(destRect);
+  LayoutDeviceRect destRect = LayoutDeviceRect::FromAppUnits(
+      aItem->GetBounds(builder, &dummy), appUnitsPerDevPixel);
+  gfx::Rect destRectTransformed = aLayer->RelativeToParent(destRect).ToUnknownRect();
 
   layer->WrBridge()->PushGlyphs(aBuilder, mGlyphs, mFont, aLayer->GetOffsetToParent(),
                                 destRectTransformed, destRectTransformed);
@@ -596,7 +594,7 @@ nsDisplayBullet::GetLayerState(nsDisplayListBuilder* aBuilder,
                                LayerManager* aManager,
                                const ContainerLayerParameters& aParameters)
 {
-  if (!gfxPrefs::LayersAllowBulletLayers()) {
+  if (!ShouldUseAdvancedLayer(aManager, gfxPrefs::LayersAllowBulletLayers)) {
     return LAYER_NONE;
   }
 
@@ -608,11 +606,6 @@ nsDisplayBullet::GetLayerState(nsDisplayListBuilder* aBuilder,
     CreateBulletRenderer(ctx, ToReferenceFrame());
 
   if (!br) {
-    return LAYER_NONE;
-  }
-
-  // Only support image and text type.
-  if (!br->IsImageType() && !br->IsTextType()) {
     return LAYER_NONE;
   }
 

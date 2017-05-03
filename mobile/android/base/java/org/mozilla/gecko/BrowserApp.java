@@ -21,7 +21,6 @@ import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.DynamicToolbar.VisibilityTransition;
 import org.mozilla.gecko.Tabs.TabEvents;
 import org.mozilla.gecko.animation.PropertyAnimator;
-import org.mozilla.gecko.animation.ViewHelper;
 import org.mozilla.gecko.bookmarks.BookmarkEditFragment;
 import org.mozilla.gecko.bookmarks.BookmarkUtils;
 import org.mozilla.gecko.bookmarks.EditBookmarkTask;
@@ -45,7 +44,6 @@ import org.mozilla.gecko.firstrun.FirstrunAnimationContainer;
 import org.mozilla.gecko.gfx.DynamicToolbarAnimator;
 import org.mozilla.gecko.gfx.DynamicToolbarAnimator.PinReason;
 import org.mozilla.gecko.gfx.ImmutableViewportMetrics;
-import org.mozilla.gecko.gfx.LayerView;
 import org.mozilla.gecko.home.BrowserSearch;
 import org.mozilla.gecko.home.HomeBanner;
 import org.mozilla.gecko.home.HomeConfig;
@@ -101,7 +99,6 @@ import org.mozilla.gecko.util.ActivityUtils;
 import org.mozilla.gecko.util.Clipboard;
 import org.mozilla.gecko.util.ContextUtils;
 import org.mozilla.gecko.util.EventCallback;
-import org.mozilla.gecko.util.FloatUtils;
 import org.mozilla.gecko.util.GamepadUtils;
 import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.HardwareUtils;
@@ -112,7 +109,6 @@ import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.widget.ActionModePresenter;
 import org.mozilla.gecko.widget.AnchoredPopup;
-
 import org.mozilla.gecko.widget.GeckoActionProvider;
 
 import android.app.Activity;
@@ -166,7 +162,6 @@ import android.view.Window;
 import android.view.animation.Interpolator;
 import android.widget.Button;
 import android.widget.ListView;
-import android.widget.RelativeLayout;
 import android.widget.ViewFlipper;
 import org.mozilla.gecko.switchboard.AsyncConfigLoader;
 import org.mozilla.gecko.switchboard.SwitchBoard;
@@ -184,6 +179,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Vector;
 import java.util.regex.Pattern;
+
+import static org.mozilla.gecko.Tab.TabType;
+import static org.mozilla.gecko.Tabs.INVALID_TAB_ID;
 
 public class BrowserApp extends GeckoApp
                         implements TabsPanel.TabsLayoutChangeListener,
@@ -214,7 +212,7 @@ public class BrowserApp extends GeckoApp
     private static final String BROWSER_SEARCH_TAG = "browser_search";
 
     // Request ID for startActivityForResult.
-    private static final int ACTIVITY_REQUEST_PREFERENCES = 1001;
+    public static final int ACTIVITY_REQUEST_PREFERENCES = 1001;
     private static final int ACTIVITY_REQUEST_TAB_QUEUE = 2001;
     public static final int ACTIVITY_REQUEST_FIRST_READERVIEW_BOOKMARK = 3001;
     public static final int ACTIVITY_RESULT_FIRST_READERVIEW_BOOKMARKS_GOTO_BOOKMARKS = 3002;
@@ -354,6 +352,11 @@ public class BrowserApp extends GeckoApp
 
     @Override
     public void onTabChanged(Tab tab, TabEvents msg, String data) {
+        if (!mInitialized) {
+            super.onTabChanged(tab, msg, data);
+            return;
+        }
+
         if (tab == null) {
             // Only RESTORED is allowed a null tab: it's the only event that
             // isn't tied to a specific tab.
@@ -432,6 +435,11 @@ public class BrowserApp extends GeckoApp
         }
 
         super.onTabChanged(tab, msg, data);
+    }
+
+    @Override
+    protected boolean saveAsLastSelectedTab(Tab tab) {
+        return tab.getType() == TabType.BROWSING;
     }
 
     private void updateEditingModeForTab(final Tab selectedTab) {
@@ -1146,6 +1154,45 @@ public class BrowserApp extends GeckoApp
 
         for (BrowserAppDelegate delegate : delegates) {
             delegate.onResume(this);
+        }
+    }
+
+    @Override
+    protected void restoreLastSelectedTab() {
+        if (mIgnoreLastSelectedTab) {
+            // We're either the first activity to run, so our startup code will (have) handle(d) tab
+            // selection, or else we've received a new intent and want to open and select a new tab
+            // as well.
+            return;
+        }
+
+        if (mLastSelectedTabId < 0) {
+            // Normally, session restore will select the correct tab when starting up, however this
+            // is linked to Gecko powering up. If we're not the first activity to launch, the
+            // previously running activity might have already overwritten this by selecting a tab of
+            // its own.
+            // Therefore we check whether the session file parser has left a note for us with the
+            // correct tab to be initially selected on *BrowserApp* startup.
+            SharedPreferences prefs = getSharedPreferencesForProfile();
+            mLastSelectedTabId = prefs.getInt(STARTUP_SELECTED_TAB, INVALID_TAB_ID);
+            mLastSessionUUID = prefs.getString(STARTUP_SESSION_UUID, null);
+
+            SharedPreferences.Editor editor = prefs.edit();
+            editor.remove(STARTUP_SELECTED_TAB);
+            editor.remove(STARTUP_SESSION_UUID);
+            editor.apply();
+        }
+
+        final Tabs tabs = Tabs.getInstance();
+        final Tab tabToSelect = tabs.getTab(mLastSelectedTabId);
+
+        if (tabToSelect != null && GeckoApplication.getSessionUUID().equals(mLastSessionUUID) &&
+                tabToSelect.getType() == TabType.BROWSING) {
+            tabs.selectTab(mLastSelectedTabId);
+        } else {
+            if (!tabs.selectLastTab(TabType.BROWSING)) {
+                tabs.loadUrl(Tabs.getHomepageForStartupTab(this), Tabs.LOADURL_NEW_TAB);
+            }
         }
     }
 
@@ -1983,7 +2030,7 @@ public class BrowserApp extends GeckoApp
                 Telemetry.addToHistogram("BROWSER_IS_USER_DEFAULT",
                         (isDefaultBrowser(Intent.ACTION_VIEW) ? 1 : 0));
                 Telemetry.addToHistogram("FENNEC_CUSTOM_HOMEPAGE",
-                        (TextUtils.isEmpty(Tabs.getHomepage(this)) ? 0 : 1));
+                        (Tabs.hasHomepage(this) ? 1 : 0));
 
                 final SharedPreferences prefs = GeckoSharedPrefs.forProfile(getContext());
                 final boolean hasCustomHomepanels =
@@ -2763,7 +2810,7 @@ public class BrowserApp extends GeckoApp
                 @Override
                 public void onFinish() {
                     if (mFirstrunAnimationContainer.showBrowserHint() &&
-                        TextUtils.isEmpty(Tabs.getHomepage(BrowserApp.this))) {
+                        !Tabs.hasHomepage(BrowserApp.this)) {
                         enterEditingMode();
                     }
                 }

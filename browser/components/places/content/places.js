@@ -482,11 +482,11 @@ var PlacesOrganizer = {
                  getService(Ci.nsIProperties);
     let backupsDir = dirSvc.get("Desk", Ci.nsILocalFile);
     let fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
-    let fpCallback = function fpCallback_done(aResult) {
+    let fpCallback = aResult => {
       if (aResult != Ci.nsIFilePicker.returnCancel) {
         this.restoreBookmarksFromFile(fp.file.path);
       }
-    }.bind(this);
+    };
 
     fp.init(window, PlacesUIUtils.getString("bookmarksRestoreTitle"),
             Ci.nsIFilePicker.modeOpen);
@@ -757,7 +757,8 @@ var PlacesSearchBox = {
     if (this._folders.length == 0) {
       this._folders.push(PlacesUtils.bookmarksMenuFolderId,
                          PlacesUtils.unfiledBookmarksFolderId,
-                         PlacesUtils.toolbarFolderId);
+                         PlacesUtils.toolbarFolderId,
+                         PlacesUtils.mobileFolderId);
     }
     return this._folders;
   },
@@ -943,7 +944,8 @@ var PlacesQueryBuilder = {
         filterCollection = "bookmarks";
         folders.push(PlacesUtils.bookmarksMenuFolderId,
                      PlacesUtils.toolbarFolderId,
-                     PlacesUtils.unfiledBookmarksFolderId);
+                     PlacesUtils.unfiledBookmarksFolderId,
+                     PlacesUtils.mobileFolderId);
         break;
       case "downloads":
         filterCollection = "downloads";

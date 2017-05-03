@@ -381,7 +381,6 @@ var BrowserApp = {
 
   startup: function startup() {
     window.QueryInterface(Ci.nsIDOMChromeWindow).browserDOMWindow = new nsBrowserAccess();
-    dump("zerdatime " + Date.now() + " - browser chrome startup finished.");
     Services.obs.notifyObservers(this.browser, "BrowserChrome:Ready");
 
     this.deck = document.getElementById("browsers");
@@ -2202,12 +2201,16 @@ var BrowserApp = {
   },
 };
 
-async function notifyManifestStatus(browser) {
+async function notifyManifestStatus(tab) {
   try {
-    const manifest = await Manifests.getManifest(browser);
+    const manifest = await Manifests.getManifest(tab.browser);
     const evtType = (manifest && manifest.installed) ?
       "Website:AppEntered" : "Website:AppLeft";
-    GlobalEventDispatcher.sendRequest({type: evtType});
+
+    GlobalEventDispatcher.sendRequest({
+      type: evtType,
+      tabId: tab.id,
+    });
   } catch (err) {
     Cu.reportError("Error sending status: " + err.message);
   }
@@ -2344,11 +2347,11 @@ var NativeWindow = {
         aButtons.length = 2;
       }
 
-      aButtons.forEach((function(aButton) {
+      aButtons.forEach(aButton => {
         this._callbacks[this._callbacksId] = { cb: aButton.callback, prompt: this._promptId };
         aButton.callback = this._callbacksId;
         this._callbacksId++;
-      }).bind(this));
+      });
 
       this._promptId++;
       let json = {
@@ -2551,7 +2554,7 @@ var NativeWindow = {
     },
 
     imageShareableContext: {
-      matches: function imageShareableContextMatches(aElement) {
+      matches: aElement => {
         let imgSrc = '';
         if (aElement instanceof Ci.nsIDOMHTMLImageElement) {
           imgSrc = aElement.src;
@@ -2571,7 +2574,7 @@ var NativeWindow = {
         let MAX_IMG_SRC_LEN = 62500;
         let isTooLong = imgSrc.length >= MAX_IMG_SRC_LEN;
         return !isTooLong && this.NativeWindow.contextmenus.imageSaveableContext.matches(aElement);
-      }.bind(this)
+      }
     },
 
     mediaSaveableContext: {
@@ -3661,7 +3664,8 @@ Tab.prototype = {
       desktopMode: this.desktopMode,
       isPrivate: isPrivate,
       tabId: this.id,
-      parentId: this.parentId
+      parentId: this.parentId,
+      type: this.type
     };
 
     if (aParams.delayLoad) {
@@ -4096,10 +4100,10 @@ Tab.prototype = {
 
         if (docURI.startsWith("about:certerror") || docURI.startsWith("about:blocked")) {
           this.browser.addEventListener("click", ErrorPageEventHandler, true);
-          let listener = function() {
+          let listener = () => {
             this.browser.removeEventListener("click", ErrorPageEventHandler, true);
             this.browser.removeEventListener("pagehide", listener, true);
-          }.bind(this);
+          };
 
           this.browser.addEventListener("pagehide", listener, true);
         }
@@ -4514,7 +4518,7 @@ Tab.prototype = {
 
     GlobalEventDispatcher.sendRequest(message);
 
-    notifyManifestStatus(this.browser);
+    notifyManifestStatus(this);
 
     if (!sameDocument) {
       // XXX This code assumes that this is the earliest hook we have at which
@@ -6256,7 +6260,7 @@ var SearchEngines = {
       window: browser.contentWindow
     }).setSingleChoiceItems(engines.map(function(e) {
       return { label: e.title };
-    })).show((function(data) {
+    })).show(data => {
       if (data.button == -1)
         return;
 
@@ -6273,7 +6277,7 @@ var SearchEngines = {
 
         GlobalEventDispatcher.sendRequest(newEngineMessage);
       }
-    }).bind(this));
+    });
   },
 
   addOpenSearchEngine: function addOpenSearchEngine(engine) {

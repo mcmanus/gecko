@@ -325,6 +325,16 @@ public:
   static bool ContentIsCrossDocDescendantOf(nsINode* aPossibleDescendant,
                                               nsINode* aPossibleAncestor);
 
+  /**
+   * As with ContentIsCrossDocDescendantOf but crosses shadow boundaries but not
+   * cross document boundaries.
+   *
+   * @see nsINode::GetFlattenedTreeParentNode()
+   */
+  static bool
+  ContentIsFlattenedTreeDescendantOf(const nsINode* aPossibleDescendant,
+                                     const nsINode* aPossibleAncestor);
+
   /*
    * This method fills the |aArray| with all ancestor nodes of |aNode|
    * including |aNode| at the zero index.
@@ -2173,6 +2183,14 @@ public:
   }
 
   /**
+   * Returns true if the requestIdleCallback API should be enabled.
+   */
+  static bool RequestIdleCallbackEnabled()
+  {
+    return sRequestIdleCallbackEnabled;
+  }
+
+  /**
    * Return true if this doc is controlled by a ServiceWorker.
    */
   static bool IsControlledByServiceWorker(nsIDocument* aDocument);
@@ -2878,6 +2896,13 @@ public:
    */
   static uint64_t GenerateTabId();
 
+  /**
+   * Check whether we should skip moving the cursor for a same-value .value set
+   * on a text input or textarea.
+   */
+  static bool
+  SkipCursorMoveForSameValueSet() { return sSkipCursorMoveForSameValueSet; }
+
 private:
   static bool InitializeEventTable();
 
@@ -3002,6 +3027,8 @@ private:
   static bool sAnimationsAPICoreEnabled;
   static bool sAnimationsAPIElementAnimateEnabled;
   static bool sGetBoxQuadsEnabled;
+  static bool sSkipCursorMoveForSameValueSet;
+  static bool sRequestIdleCallbackEnabled;
   static uint32_t sCookiesLifetimePolicy;
   static uint32_t sCookiesBehavior;
 

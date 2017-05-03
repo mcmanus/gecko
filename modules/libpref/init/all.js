@@ -366,7 +366,7 @@ pref("media.wave.enabled", true);
 pref("media.webm.enabled", true);
 
 pref("media.eme.chromium-api.enabled", true);
-pref("media.eme.chromium-api.video-shmems", 3);
+pref("media.eme.chromium-api.video-shmems", 4);
 
 #ifdef MOZ_APPLEMEDIA
 #ifdef MOZ_WIDGET_UIKIT
@@ -999,6 +999,9 @@ pref("devtools.defaultColorUnit", "authored");
 // Used for devtools debugging
 pref("devtools.dump.emit", false);
 
+// Controls whether EventEmitter module throws dump message on each emit
+pref("toolkit.dump.emit", false);
+
 // Disable device discovery logging
 pref("devtools.discovery.log", false);
 // Whether to scan for DevTools devices via WiFi
@@ -1247,6 +1250,10 @@ pref("dom.select_popup_in_parent.enabled", false);
 
 // Enable Directory API. By default, disabled.
 pref("dom.input.dirpicker", false);
+
+// Enable not moving the cursor to end when a text input or textarea has .value
+// set to the value it already has.  By default, enabled.
+pref("dom.input.skip_cursor_move_for_same_value_set", true);
 
 // Enables system messages and activities
 pref("dom.sysmsg.enabled", false);
@@ -1915,6 +1922,11 @@ pref("network.dns.blockDotOnion", true);
 
 // These domains are treated as localhost equivalent
 pref("network.dns.localDomains", "");
+
+// When non empty all non-localhost DNS queries (including IP addresses)
+// resolve to this value. The value can be a name or an IP address.
+// domains mapped to localhost with localDomains stay localhost.
+pref("network.dns.forceResolve", "");
 
 // Contols whether or not "localhost" should resolve when offline
 pref("network.dns.offline-localhost", true);
@@ -4666,7 +4678,6 @@ pref("layers.dump-host-layers", false);
 pref("layers.draw-borders", false);
 pref("layers.draw-tile-borders", false);
 pref("layers.draw-bigimage-borders", false);
-pref("layers.frame-counter", false);
 pref("layers.enable-tiles", false);
 pref("layers.single-tile.enabled", true);
 pref("layers.low-precision-buffer", false);
@@ -5204,6 +5215,10 @@ pref("urlclassifier.gethashnoise", 4);
 
 // Gethash timeout for Safebrowsing.
 pref("urlclassifier.gethash.timeout_ms", 5000);
+// Update server response timeout for Safebrowsing.
+pref("urlclassifier.update.response_timeout_ms", 5000);
+// Download update timeout for Safebrowsing.
+pref("urlclassifier.update.timeout_ms", 60000);
 
 // If an urlclassifier table has not been updated in this number of seconds,
 // a gethash request will be forced to check that the result is still in
@@ -5671,7 +5686,7 @@ pref("browser.storageManager.pressureNotification.usageThresholdGB", 5);
 // when the page is reloaded. To turn this feature off, just set the limit to 0.
 pref("prompts.authentication_dialog_abuse_limit", 3);
 
-pref("dom.IntersectionObserver.enabled", false);
+pref("dom.IntersectionObserver.enabled", true);
 
 // Whether module scripts (<script type="module">) are enabled for content.
 pref("dom.moduleScripts.enabled", false);
@@ -5696,3 +5711,4 @@ pref("layers.advanced.boxshadow-outer-layers", 2);
 pref("layers.advanced.caret-layers", 2);
 pref("layers.advanced.displaybuttonborder-layers", 2);
 pref("layers.advanced.outline-layers", 2);
+pref("layers.advanced.solid-color-layers", 2);

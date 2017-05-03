@@ -43,6 +43,7 @@ class AnimValuesStyleRule;
 enum class CSSPseudoElementType : uint8_t;
 class ErrorResult;
 struct AnimationRule;
+struct ServoComputedValuesWithParent;
 struct TimingParams;
 
 namespace dom {
@@ -102,13 +103,6 @@ struct AnimationProperty
   {
     return !(*this == aOther);
   }
-};
-
-struct ServoComputedValuesWithParent
-{
-  const ServoComputedValues* mCurrentStyle;
-  const ServoComputedValues* mParentStyle;
-  explicit operator bool() const { return true; }
 };
 
 struct ElementPropertyTransition;
@@ -437,7 +431,7 @@ private:
                         const AnimationPropertySegment& aSegment,
                         const ComputedTiming& aComputedTiming);
 
-  void ComposeStyleRule(const RawServoAnimationValueMap& aAnimationValues,
+  void ComposeStyleRule(RawServoAnimationValueMap& aAnimationValues,
                         const AnimationProperty& aProperty,
                         const AnimationPropertySegment& aSegment,
                         const ComputedTiming& aComputedTiming);

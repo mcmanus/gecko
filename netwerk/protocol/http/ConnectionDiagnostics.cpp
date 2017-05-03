@@ -36,7 +36,7 @@ nsHttpConnectionMgr::PrintDiagnostics()
 void
 nsHttpConnectionMgr::OnMsgPrintDiagnostics(int32_t, ARefBase *)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   nsCOMPtr<nsIConsoleService> consoleService =
     do_GetService(NS_CONSOLESERVICE_CONTRACTID);

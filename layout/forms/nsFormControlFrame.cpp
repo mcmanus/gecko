@@ -18,18 +18,12 @@ using namespace mozilla;
 //#define FCF_NOISY
 
 nsFormControlFrame::nsFormControlFrame(nsStyleContext* aContext)
-  : nsAtomicContainerFrame(aContext)
+  : nsAtomicContainerFrame(aContext, LayoutFrameType::FormControl)
 {
 }
 
 nsFormControlFrame::~nsFormControlFrame()
 {
-}
-
-nsIAtom*
-nsFormControlFrame::GetType() const
-{
-  return nsGkAtoms::formControlFrame;
 }
 
 void

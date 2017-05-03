@@ -17,8 +17,8 @@ use selector_parser::{AttrValue, NonTSPseudoClass, Snapshot, SelectorImpl};
 use selectors::{Element, MatchAttr};
 use selectors::matching::{ElementSelectorFlags, StyleRelations};
 use selectors::matching::matches_selector;
-use selectors::parser::{AttrSelector, Combinator, ComplexSelector, Component};
-use selectors::parser::{SelectorInner, SelectorIter, SelectorMethods};
+use selectors::parser::{AttrSelector, Combinator, Component, Selector};
+use selectors::parser::{SelectorInner, SelectorMethods};
 use selectors::visitor::SelectorVisitor;
 use std::clone::Clone;
 
@@ -62,6 +62,11 @@ bitflags! {
         /// attribute has changed, and this change didn't have any other
         /// dependencies.
         const RESTYLE_STYLE_ATTRIBUTE = 0x40,
+
+        /// Replace the style data coming from SMIL animations without updating
+        /// any other style data. This hint is only processed in animation-only
+        /// traversal which is prior to normal traversal.
+        const RESTYLE_SMIL = 0x80,
     }
 }
 
@@ -95,27 +100,29 @@ pub fn assert_restyle_hints_match() {
         nsRestyleHint_eRestyle_CSSTransitions => RESTYLE_CSS_TRANSITIONS,
         nsRestyleHint_eRestyle_CSSAnimations => RESTYLE_CSS_ANIMATIONS,
         nsRestyleHint_eRestyle_StyleAttribute => RESTYLE_STYLE_ATTRIBUTE,
+        nsRestyleHint_eRestyle_StyleAttribute_Animations => RESTYLE_SMIL,
     }
 }
 
 impl RestyleHint {
     /// The subset hints that affect the styling of a single element during the
     /// traversal.
+    #[inline]
     pub fn for_self() -> Self {
-        RESTYLE_SELF | RESTYLE_STYLE_ATTRIBUTE | RESTYLE_CSS_ANIMATIONS | RESTYLE_CSS_TRANSITIONS
+        RESTYLE_SELF | RESTYLE_STYLE_ATTRIBUTE | Self::for_animations()
     }
 
     /// The subset hints that are used for animation restyle.
+    #[inline]
     pub fn for_animations() -> Self {
-        RESTYLE_CSS_ANIMATIONS | RESTYLE_CSS_TRANSITIONS
+        RESTYLE_SMIL | RESTYLE_CSS_ANIMATIONS | RESTYLE_CSS_TRANSITIONS
     }
 }
 
 #[cfg(feature = "gecko")]
 impl From<nsRestyleHint> for RestyleHint {
     fn from(raw: nsRestyleHint) -> Self {
-        use std::mem;
-        let raw_bits: u32 = unsafe { mem::transmute(raw) };
+        let raw_bits: u32 = raw.0;
         // FIXME(bholley): Finish aligning the binary representations here and
         // then .expect() the result of the checked version.
         if Self::from_bits(raw_bits).is_none() {
@@ -410,32 +417,6 @@ fn is_attr_selector(sel: &Component<SelectorImpl>) -> bool {
     }
 }
 
-/// Whether a selector containing this simple selector needs to be explicitly
-/// matched against both the style sharing cache entry and the candidate.
-///
-///
-/// We use this for selectors that can have different matching behavior between
-/// siblings that are otherwise identical as far as the cache is concerned.
-fn needs_cache_revalidation(sel: &Component<SelectorImpl>) -> bool {
-    match *sel {
-        Component::Empty |
-        Component::FirstChild |
-        Component::LastChild |
-        Component::OnlyChild |
-        Component::NthChild(..) |
-        Component::NthLastChild(..) |
-        Component::NthOfType(..) |
-        Component::NthLastOfType(..) |
-        Component::FirstOfType |
-        Component::LastOfType |
-        Component::OnlyOfType => true,
-        // FIXME(emilio): This sets the "revalidation" flag for :any, which is
-        // probably expensive given we use it a lot in UA sheets.
-        Component::NonTSPseudoClass(ref p) => p.state_flag().is_empty(),
-        _ => false,
-    }
-}
-
 fn combinator_to_restyle_hint(combinator: Option<Combinator>) -> RestyleHint {
     match combinator {
         None => RESTYLE_SELF,
@@ -501,34 +482,13 @@ struct Dependency {
 /// of them is sensitive to attribute or state changes.
 struct SensitivitiesVisitor {
     sensitivities: Sensitivities,
-    hint: RestyleHint,
-    needs_revalidation: bool,
 }
 
 impl SelectorVisitor for SensitivitiesVisitor {
     type Impl = SelectorImpl;
-
-    fn visit_complex_selector(&mut self,
-                              _: SelectorIter<SelectorImpl>,
-                              combinator: Option<Combinator>) -> bool {
-        self.hint |= combinator_to_restyle_hint(combinator);
-        self.needs_revalidation |= self.hint.contains(RESTYLE_LATER_SIBLINGS);
-
-        true
-    }
-
     fn visit_simple_selector(&mut self, s: &Component<SelectorImpl>) -> bool {
         self.sensitivities.states.insert(selector_to_state(s));
-
-        if !self.sensitivities.attrs {
-            self.sensitivities.attrs = is_attr_selector(s);
-            self.needs_revalidation = true;
-        }
-
-        if !self.needs_revalidation {
-            self.needs_revalidation = needs_cache_revalidation(s);
-        }
-
+        self.sensitivities.attrs |= is_attr_selector(s);
         true
     }
 }
@@ -563,54 +523,66 @@ impl DependencySet {
         }
     }
 
-    /// Adds a selector to this `DependencySet`, and returns whether it may need
-    /// cache revalidation, that is, whether two siblings of the same "shape"
-    /// may have different style due to this selector.
-    pub fn note_selector(&mut self,
-                         base: &ComplexSelector<SelectorImpl>)
-                         -> bool
-    {
-        let mut next = Some(base.clone());
+    /// Adds a selector to this `DependencySet`.
+    pub fn note_selector(&mut self, selector: &Selector<SelectorImpl>) {
         let mut combinator = None;
-        let mut needs_revalidation = false;
+        let mut iter = selector.inner.complex.iter();
+        let mut index = 0;
 
-        while let Some(current) = next.take() {
-            // Set up our visitor.
+        loop {
+            let sequence_start = index;
             let mut visitor = SensitivitiesVisitor {
-                sensitivities: Sensitivities::new(),
-                hint: combinator_to_restyle_hint(combinator),
-                needs_revalidation: false,
+                sensitivities: Sensitivities::new()
             };
 
-            {
-                // Visit all the simple selectors.
-                let mut iter = current.iter();
-                let mut index = 0usize;
-                for ss in &mut iter {
-                    ss.visit(&mut visitor);
-                    index += 1;
-                }
-
-                // Prepare the next sequence of simple selectors.
-                if let Some(next_combinator) = iter.next_sequence() {
-                    next = Some(current.slice_from(index + 1));
-                    combinator = Some(next_combinator);
-                }
+            // Visit all the simple selectors in this sequence.
+            //
+            // Note that this works because we can't have combinators nested
+            // inside simple selectors (i.e. in :not() or :-moz-any()). If we
+            // ever support that we'll need to visit complex selectors as well.
+            for ss in &mut iter {
+                ss.visit(&mut visitor);
+                index += 1; // Account for the simple selector.
             }
 
-            // Note what we found.
-            needs_revalidation |= visitor.needs_revalidation;
+            // If we found a sensitivity, add an entry in the dependency set.
             if !visitor.sensitivities.is_empty() {
+                let mut hint = combinator_to_restyle_hint(combinator);
+                let dep_selector;
+                if sequence_start == 0 {
+                    if selector.pseudo_element.is_some() {
+                        // TODO(emilio): use more fancy restyle hints to avoid
+                        // restyling the whole subtree when pseudos change.
+                        //
+                        // We currently need is_pseudo_element to handle eager
+                        // pseudos (so the style the parent stores doesn't
+                        // become stale), and restyle_descendants to handle all
+                        // of them (::before and ::after, because we find them
+                        // in the subtree, and other lazy pseudos for the same
+                        // reason).
+                        hint |= RESTYLE_SELF | RESTYLE_DESCENDANTS;
+                    }
+
+                    // Reuse the bloom hashes if this is the base selector.
+                    dep_selector = selector.inner.clone();
+                } else {
+                    dep_selector = SelectorInner::new(selector.inner.complex.slice_from(sequence_start));
+                }
+
                 self.add_dependency(Dependency {
                     sensitivities: visitor.sensitivities,
-                    hint: visitor.hint,
-                    selector: SelectorInner::new(current),
-                })
+                    hint: hint,
+                    selector: dep_selector,
+                });
             }
 
-        }
+            combinator = iter.next_sequence();
+            if combinator.is_none() {
+                break;
+            }
 
-        needs_revalidation
+            index += 1; // Account for the combinator.
+        }
     }
 
     /// Create an empty `DependencySet`.

@@ -33,9 +33,11 @@ struct TableReflowInput;
 
 struct BCPropertyData;
 
-static inline bool IS_TABLE_CELL(nsIAtom* frameType) {
-  return nsGkAtoms::tableCellFrame == frameType ||
-    nsGkAtoms::bcTableCellFrame == frameType;
+static inline bool
+IS_TABLE_CELL(mozilla::LayoutFrameType frameType)
+{
+  return frameType == mozilla::LayoutFrameType::TableCell ||
+         frameType == mozilla::LayoutFrameType::BCTableCell;
 }
 
 class nsDisplayTableItem : public nsDisplayItem
@@ -248,9 +250,9 @@ public:
 
   // Return the closest sibling of aPriorChildFrame (including aPriroChildFrame)
   // of type aChildType.
-  static nsIFrame* GetFrameAtOrBefore(nsIFrame*       aParentFrame,
-                                      nsIFrame*       aPriorChildFrame,
-                                      nsIAtom*        aChildType);
+  static nsIFrame* GetFrameAtOrBefore(nsIFrame* aParentFrame,
+                                      nsIFrame* aPriorChildFrame,
+                                      mozilla::LayoutFrameType aChildType);
   bool IsAutoBSize(mozilla::WritingMode aWM);
 
   /** @return true if aDisplayType represents a rowgroup of any sort
@@ -376,13 +378,6 @@ public:
 
   virtual nsStyleContext*
   GetParentStyleContext(nsIFrame** aProviderFrame) const override;
-
-  /**
-   * Get the "type" of the frame
-   *
-   * @see nsGkAtoms::tableFrame
-   */
-  virtual nsIAtom* GetType() const override;
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
   {

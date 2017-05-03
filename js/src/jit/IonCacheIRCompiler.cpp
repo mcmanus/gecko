@@ -441,6 +441,7 @@ IonCacheIRCompiler::init()
         break;
       }
       case CacheKind::In:
+      case CacheKind::TypeOf:
         MOZ_CRASH("Invalid cache");
       case CacheKind::HasOwn: {
         IonHasOwnIC* ic = ic_->asHasOwnIC();
@@ -529,10 +530,6 @@ IonCacheIRCompiler::compile()
                                            ImmPtr(newStubCode.get()),
                                            ImmPtr((void*)-1));
     }
-
-    // All barriers are emitted off-by-default, enable them if needed.
-    if (cx_->zone()->needsIncrementalBarrier())
-        newStubCode->togglePreBarriers(true, DontReprotect);
 
     return newStubCode;
 }
@@ -1144,6 +1141,13 @@ IonCacheIRCompiler::emitLoadEnvironmentDynamicSlotResult()
     // Load the value.
     masm.loadTypedOrValue(slot, output);
     return true;
+}
+
+
+bool
+IonCacheIRCompiler::emitLoadStringResult()
+{
+    MOZ_CRASH("not used in ion");
 }
 
 static bool
@@ -1985,8 +1989,8 @@ IonCacheIRCompiler::emitLoadDOMExpandoValueGuardGeneration()
     if (!addFailurePath(&failure))
         return false;
 
-    masm.loadPtr(Address(obj, ProxyObject::offsetOfValues()), scratch1);
-    Address expandoAddr(scratch1, ProxyObject::offsetOfExtraSlotInValues(GetDOMProxyExpandoSlot()));
+    masm.loadPtr(Address(obj, ProxyObject::offsetOfReservedSlots()), scratch1);
+    Address expandoAddr(scratch1, detail::ProxyReservedSlots::offsetOfPrivateSlot());
 
     // Guard the ExpandoAndGeneration* matches the proxy's ExpandoAndGeneration.
     masm.loadValue(expandoAddr, output);

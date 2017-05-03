@@ -379,6 +379,7 @@ TabChild::TabChild(nsIContentChild* aManager,
   , mChromeFlags(aChromeFlags)
   , mActiveSuppressDisplayport(0)
   , mLayersId(0)
+  , mBeforeUnloadListeners(0)
   , mLayersConnected(true)
   , mDidFakeShow(false)
   , mNotified(false)
@@ -401,6 +402,9 @@ TabChild::TabChild(nsIContentChild* aManager,
   , mLayerObserverEpoch(0)
 #if defined(XP_WIN) && defined(ACCESSIBILITY)
   , mNativeWindowHandle(0)
+#endif
+#if defined(ACCESSIBILITY)
+  , mTopLevelDocAccessibleChild(nullptr)
 #endif
 {
   nsWeakPtr weakPtrThis(do_GetWeakReference(static_cast<nsITabChild*>(this)));  // for capture by the lambda
@@ -3313,6 +3317,28 @@ TabChild::ForcePaint(uint64_t aLayerObserverEpoch)
 
   nsAutoScriptBlocker scriptBlocker;
   RecvSetDocShellIsActive(true, false, aLayerObserverEpoch);
+}
+
+void
+TabChild::BeforeUnloadAdded()
+{
+  if (mBeforeUnloadListeners == 0) {
+    SendSetHasBeforeUnload(true);
+  }
+
+  mBeforeUnloadListeners++;
+  MOZ_ASSERT(mBeforeUnloadListeners >= 0);
+}
+
+void
+TabChild::BeforeUnloadRemoved()
+{
+  mBeforeUnloadListeners--;
+  MOZ_ASSERT(mBeforeUnloadListeners >= 0);
+
+  if (mBeforeUnloadListeners == 0) {
+    SendSetHasBeforeUnload(false);
+  }
 }
 
 already_AddRefed<nsISHistory>

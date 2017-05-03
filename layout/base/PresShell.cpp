@@ -34,6 +34,7 @@
 #include "mozilla/MouseEvents.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/TextEvents.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/TouchEvents.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Unused.h"
@@ -565,6 +566,9 @@ private:
 bool PresShell::sDisableNonTestMouseEvents = false;
 
 mozilla::LazyLogModule PresShell::gLog("PresShell");
+
+mozilla::TimeStamp PresShell::sLastInputCreated;
+mozilla::TimeStamp PresShell::sLastInputProcessed;
 
 #ifdef DEBUG
 static void
@@ -1766,8 +1770,9 @@ PresShell::Initialize(nscoord aWidth, nscoord aHeight)
       f->RemoveStateBits(NS_FRAME_NO_COMPONENT_ALPHA);
     }
     nsCOMPtr<nsIPresShell> shell;
-    if (f->GetType() == nsGkAtoms::subDocumentFrame &&
-        (shell = static_cast<nsSubDocumentFrame*>(f)->GetSubdocumentPresShellForPainting(0)) &&
+    if (f->IsSubDocumentFrame() &&
+        (shell = static_cast<nsSubDocumentFrame*>(f)
+                   ->GetSubdocumentPresShellForPainting(0)) &&
         shell->GetPresContext()->IsRootContentDocument()) {
       // Root content documents build a 'force active' layer, and component alpha flattening
       // can't be propagated across that so no need to invalidate above this frame.
@@ -2469,10 +2474,10 @@ nsIPresShell::GetRootScrollFrame() const
 {
   nsIFrame* rootFrame = mFrameConstructor->GetRootFrame();
   // Ensure root frame is a viewport frame
-  if (!rootFrame || nsGkAtoms::viewportFrame != rootFrame->GetType())
+  if (!rootFrame || !rootFrame->IsViewportFrame())
     return nullptr;
   nsIFrame* theFrame = rootFrame->PrincipalChildList().FirstChild();
-  if (!theFrame || nsGkAtoms::scrollFrame != theFrame->GetType())
+  if (!theFrame || !theFrame->IsScrollFrame())
     return nullptr;
   return theFrame;
 }
@@ -2753,7 +2758,7 @@ PresShell::FrameNeedsReflow(nsIFrame *aFrame, IntrinsicDirty aIntrinsicDirty,
         nsIFrame *f = stack.ElementAt(stack.Length() - 1);
         stack.RemoveElementAt(stack.Length() - 1);
 
-        if (f->GetType() == nsGkAtoms::placeholderFrame) {
+        if (f->IsPlaceholderFrame()) {
           nsIFrame *oof = nsPlaceholderFrame::GetRealFrameForPlaceholder(f);
           if (!nsLayoutUtils::IsProperAncestorFrame(subtreeRoot, oof)) {
             // We have another distinct subtree we need to mark.
@@ -2949,6 +2954,12 @@ PresShell::CreateFramesFor(nsIContent* aContent)
 void
 nsIPresShell::PostRecreateFramesFor(Element* aElement)
 {
+  if (MOZ_UNLIKELY(!mDidInitialize)) {
+    // Nothing to do here. In fact, if we proceed and aElement is the root, we
+    // will crash.
+    return;
+  }
+
   mPresContext->RestyleManager()->PostRestyleEvent(aElement, nsRestyleHint(0),
                                                    nsChangeHint_ReconstructFrame);
 }
@@ -3262,9 +3273,7 @@ AccumulateFrameBounds(nsIFrame* aContainerFrame,
       f = prevFrame->GetParent();
     }
 
-    if (f != aFrame &&
-        f &&
-        f->GetType() == nsGkAtoms::blockFrame) {
+    if (f != aFrame && f && f->IsBlockFrame()) {
       // find the line containing aFrame and increase the top of |offset|.
       if (f != aPrevBlock) {
         aLines = f->GetLineIterator();
@@ -3529,8 +3538,8 @@ PresShell::DoScrollContentIntoView()
 
   // Make sure we skip 'frame' ... if it's scrollable, we should use its
   // scrollable ancestor as the container.
-  nsIFrame* container =
-    nsLayoutUtils::GetClosestFrameOfType(frame->GetParent(), nsGkAtoms::scrollFrame);
+  nsIFrame* container = nsLayoutUtils::GetClosestFrameOfType(
+    frame->GetParent(), LayoutFrameType::Scroll);
   if (!container) {
     // nothing can be scrolled
     return;
@@ -4559,19 +4568,6 @@ nsIPresShell::RestyleForCSSRuleChanges()
     mPresContext->RebuildCounterStyles();
   }
 
-  // Tell Servo that the contents of style sheets have changed.
-  //
-  // NB: It's important to do so before bailing out.
-  //
-  // Even if we have no frames, we can end up styling those when creating
-  // them, and it's important for Servo to know that it needs to use the
-  // correct styles.
-  // We don't do this notification if author styles are disabled, because
-  // the ServoStyleSet has already taken care of it.
-  if (mStyleSet->IsServo() && !mStyleSet->AsServo()->GetAuthorStyleDisabled()) {
-    mStyleSet->AsServo()->NoteStyleSheetsChanged();
-  }
-
   Element* root = mDocument->GetRootElement();
   if (!mDidInitialize) {
     // Nothing to do here, since we have no frames yet
@@ -4607,6 +4603,11 @@ PresShell::RecordStyleSheetChange(StyleSheet* aStyleSheet)
 
   if (mStylesHaveChanged)
     return;
+
+  // Tell Servo that the contents of style sheets have changed.
+  if (ServoStyleSet* set = mStyleSet->GetAsServo()) {
+    set->NoteStyleSheetsChanged();
+  }
 
   if (aStyleSheet->IsGecko()) {
     // XXXheycam ServoStyleSheets don't support <style scoped> yet.
@@ -4824,7 +4825,7 @@ PresShell::ClipListToRange(nsDisplayListBuilder *aBuilder,
     if (content) {
       bool atStart = (content == aRange->GetStartParent());
       bool atEnd = (content == aRange->GetEndParent());
-      if ((atStart || atEnd) && frame->GetType() == nsGkAtoms::textFrame) {
+      if ((atStart || atEnd) && frame->IsTextFrame()) {
         int32_t frameStartOffset, frameEndOffset;
         frame->GetOffsets(frameStartOffset, frameEndOffset);
 
@@ -5312,20 +5313,39 @@ PresShell::AddCanvasBackgroundColorItem(nsDisplayListBuilder& aBuilder,
   // color background behind a scrolled transparent background. Instead,
   // we'll try to move the color background into the scrolled content
   // by making nsDisplayCanvasBackground paint it.
-  if (!aFrame->GetParent()) {
+  // If we're only adding an unscrolled item, then pretend that we've
+  // already done it.
+  bool addedScrollingBackgroundColor = (aFlags & APPEND_UNSCROLLED_ONLY);
+  if (!aFrame->GetParent() && !addedScrollingBackgroundColor) {
     nsIScrollableFrame* sf =
       aFrame->PresContext()->PresShell()->GetRootScrollFrameAsScrollable();
     if (sf) {
       nsCanvasFrame* canvasFrame = do_QueryFrame(sf->GetScrolledFrame());
       if (canvasFrame && canvasFrame->IsVisibleForPainting(&aBuilder)) {
-        if (AddCanvasBackgroundColor(aList, canvasFrame, bgcolor, mHasCSSBackgroundColor))
-          return;
+        addedScrollingBackgroundColor =
+          AddCanvasBackgroundColor(aList, canvasFrame, bgcolor, mHasCSSBackgroundColor);
       }
     }
   }
 
-  aList.AppendNewToBottom(
-    new (&aBuilder) nsDisplaySolidColor(&aBuilder, aFrame, aBounds, bgcolor));
+  // With async scrolling, we'd like to have two instances of the background
+  // color: one that scrolls with the content (for the reasons stated above),
+  // and one underneath which does not scroll with the content, but which can
+  // be shown during checkerboarding and overscroll.
+  // We can only do that if the color is opaque.
+  bool forceUnscrolledItem = nsLayoutUtils::UsesAsyncScrolling(aFrame) &&
+                             NS_GET_A(bgcolor) == 255;
+  if ((aFlags & ADD_FOR_SUBDOC) && gfxPrefs::LayoutUseContainersForRootFrames()) {
+    // If we're using ContainerLayers for a subdoc, then any items we add here will
+    // still be scrolled (since we're inside the container at this point), so don't
+    // bother and we will do it manually later.
+    forceUnscrolledItem = false;
+  }
+
+  if (!addedScrollingBackgroundColor || forceUnscrolledItem) {
+    aList.AppendNewToBottom(
+      new (&aBuilder) nsDisplaySolidColor(&aBuilder, aFrame, aBounds, bgcolor));
+  }
 }
 
 static bool IsTransparentContainerElement(nsPresContext* aPresContext)
@@ -8214,11 +8234,24 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent,
       !aEvent->mTimeStamp.IsNull() &&
       aEvent->mTimeStamp > mLastOSWake &&
       aEvent->AsInputEvent()) {
-    double millis = (TimeStamp::Now() - aEvent->mTimeStamp).ToMilliseconds();
+    TimeStamp now = TimeStamp::Now();
+    double millis = (now - aEvent->mTimeStamp).ToMilliseconds();
     Telemetry::Accumulate(Telemetry::INPUT_EVENT_RESPONSE_MS, millis);
     if (mDocument && mDocument->GetReadyStateEnum() != nsIDocument::READYSTATE_COMPLETE) {
       Telemetry::Accumulate(Telemetry::LOAD_INPUT_EVENT_RESPONSE_MS, millis);
     }
+
+    if (!sLastInputProcessed || sLastInputProcessed < aEvent->mTimeStamp) {
+      if (sLastInputProcessed) {
+        // This input event was created after we handled the last one.
+        // Accumulate the previous events' coalesced duration.
+        double lastMillis = (sLastInputProcessed - sLastInputCreated).ToMilliseconds();
+        Telemetry::Accumulate(Telemetry::INPUT_EVENT_RESPONSE_COALESCED_MS,
+                              lastMillis);
+      }
+      sLastInputCreated = aEvent->mTimeStamp;
+    }
+    sLastInputProcessed = now;
   }
 
   return rv;
@@ -8449,8 +8482,9 @@ PresShell::AdjustContextMenuKeyEvent(WidgetMouseEvent* aEvent)
       nsCOMPtr<nsIWidget> widget = popupFrame->GetNearestWidget();
       aEvent->mWidget = widget;
       LayoutDeviceIntPoint widgetPoint = widget->WidgetToScreenOffset();
-      aEvent->mRefPoint = LayoutDeviceIntPoint::FromUnknownPoint(
-        itemFrame->GetScreenRect().BottomLeft()) - widgetPoint;
+      aEvent->mRefPoint = LayoutDeviceIntPoint::FromAppUnitsToNearest(
+        itemFrame->GetScreenRectInAppUnits().BottomLeft(),
+        itemFrame->PresContext()->AppUnitsPerDevPixel()) - widgetPoint;
 
       mCurrentEventContent = itemFrame->GetContent();
       mCurrentEventFrame = itemFrame;
@@ -9556,7 +9590,7 @@ static bool
 ReframeImageBoxes(nsIFrame *aFrame, void *aClosure)
 {
   nsStyleChangeList *list = static_cast<nsStyleChangeList*>(aClosure);
-  if (aFrame->GetType() == nsGkAtoms::imageBoxFrame) {
+  if (aFrame->IsImageBoxFrame()) {
     list->AppendChange(aFrame, aFrame->GetContent(),
                        nsChangeHint_ReconstructFrame);
     return false; // don't walk descendants
@@ -9863,7 +9897,7 @@ CompareTrees(nsPresContext* aFirstPresContext, nsIFrame* aFirstFrame,
     return true;
   // XXX Evil hack to reduce false positives; I can't seem to figure
   // out how to flush scrollbar changes correctly
-  //if (aFirstFrame->GetType() == nsGkAtoms::scrollbarFrame)
+  //if (aFirstFrame->IsScrollbarFrame())
   //  return true;
   bool ok = true;
   nsIFrame::ChildListIterator lists1(aFirstFrame);

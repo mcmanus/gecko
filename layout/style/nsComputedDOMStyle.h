@@ -198,6 +198,8 @@ private:
 
   already_AddRefed<CSSValue> GetMarginWidthFor(mozilla::Side aSide);
 
+  already_AddRefed<CSSValue> GetFallbackValue(const nsStyleSVGPaint* aPaint);
+
   already_AddRefed<CSSValue> GetSVGPaintFor(bool aFill);
 
   // Appends all aLineNames (may be empty) space-separated to aResult.
@@ -599,6 +601,8 @@ private:
   already_AddRefed<CSSValue> DoGetFilter();
   already_AddRefed<CSSValue> DoGetMaskType();
   already_AddRefed<CSSValue> DoGetPaintOrder();
+
+  already_AddRefed<CSSValue> DoGetContextProperties();
 
   /* Custom properties */
   already_AddRefed<CSSValue> DoGetCustomProperty(const nsAString& aPropertyName);

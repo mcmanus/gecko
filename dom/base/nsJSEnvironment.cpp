@@ -61,7 +61,7 @@
 #include "mozilla/dom/DOMExceptionBinding.h"
 #include "mozilla/dom/ErrorEvent.h"
 #include "nsAXPCNativeCallContext.h"
-#include "mozilla/CycleCollectedJSContext.h"
+#include "mozilla/CycleCollectedJSRuntime.h"
 #include "mozilla/SystemGroup.h"
 
 #include "nsJSPrincipals.h"
@@ -81,7 +81,6 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/asmjscache/AsmJSCache.h"
 #include "mozilla/dom/CanvasRenderingContext2DBinding.h"
-#include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/ContentEvents.h"
 
 #include "nsCycleCollectionNoteRootCallback.h"
@@ -1220,7 +1219,7 @@ nsJSContext::GarbageCollectNow(JS::gcreason::Reason aReason,
   if (sNeedsFullGC) {
     JS::PrepareForFullGC(sContext);
   } else {
-    CycleCollectedJSContext::Get()->PrepareWaitingZonesForGC();
+    CycleCollectedJSRuntime::Get()->PrepareWaitingZonesForGC();
   }
 
   if (aIncremental == IncrementalGC) {
@@ -1478,9 +1477,20 @@ nsJSContext::RunCycleCollectorSlice()
       TimeStamp now = TimeStamp::Now();
 
       // Only run a limited slice if we're within the max running time.
-      if (TimeBetween(gCCStats.mBeginTime, now) < kMaxICCDuration) {
-        float sliceMultiplier = std::max(TimeBetween(gCCStats.mEndSliceTime, now) / (float)kICCIntersliceDelay, 1.0f);
-        budget = js::SliceBudget(js::TimeBudget(kICCSliceBudget * sliceMultiplier));
+      uint32_t runningTime = TimeBetween(gCCStats.mBeginTime, now);
+      if (runningTime < kMaxICCDuration) {
+        // Try to make up for a delay in running this slice.
+        float sliceDelayMultiplier = TimeBetween(gCCStats.mEndSliceTime, now) / (float)kICCIntersliceDelay;
+        float delaySliceBudget = kICCSliceBudget * sliceDelayMultiplier;
+
+        // Increase slice budgets up to |maxLaterSlice| as we approach
+        // half way through the ICC, to avoid large sync CCs.
+        float percentToHalfDone = std::min(2.0f * runningTime / kMaxICCDuration, 1.0f);
+        const float maxLaterSlice = 40.0f;
+        float laterSliceBudget = maxLaterSlice * percentToHalfDone;
+
+        budget = js::SliceBudget(js::TimeBudget(std::max({delaySliceBudget,
+                  laterSliceBudget, (float)kICCSliceBudget})));
       }
     }
   }
@@ -1941,7 +1951,7 @@ nsJSContext::PokeGC(JS::gcreason::Reason aReason,
 
   if (aObj) {
     JS::Zone* zone = JS::GetObjectZone(aObj);
-    CycleCollectedJSContext::Get()->AddZoneWaitingForGC(zone);
+    CycleCollectedJSRuntime::Get()->AddZoneWaitingForGC(zone);
   } else if (aReason != JS::gcreason::CC_WAITING) {
     sNeedsFullGC = true;
   }

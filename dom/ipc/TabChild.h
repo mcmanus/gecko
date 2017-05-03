@@ -675,6 +675,18 @@ public:
 
   mozilla::dom::TabGroup* TabGroup();
 
+#if defined(ACCESSIBILITY)
+  void SetTopLevelDocAccessibleChild(PDocAccessibleChild* aTopLevelChild)
+  {
+    mTopLevelDocAccessibleChild = aTopLevelChild;
+  }
+
+  PDocAccessibleChild* GetTopLevelDocAccessibleChild()
+  {
+    return mTopLevelDocAccessibleChild;
+  }
+#endif
+
 protected:
   virtual ~TabChild();
 
@@ -780,6 +792,7 @@ private:
   uint32_t mChromeFlags;
   int32_t mActiveSuppressDisplayport;
   uint64_t mLayersId;
+  int64_t mBeforeUnloadListeners;
   CSSRect mUnscaledOuterRect;
   nscolor mLastBackgroundColor;
   bool mLayersConnected;
@@ -841,6 +854,10 @@ private:
   // The handle associated with the native window that contains this tab
   uintptr_t mNativeWindowHandle;
 #endif // defined(XP_WIN)
+
+#if defined(ACCESSIBILITY)
+  PDocAccessibleChild* mTopLevelDocAccessibleChild;
+#endif
 
   DISALLOW_EVIL_CONSTRUCTORS(TabChild);
 };

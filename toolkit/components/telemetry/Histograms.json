@@ -225,6 +225,14 @@
     "kind": "boolean",
     "description": "blocklist.xml has been loaded synchronously *** No longer needed (bug 1156565). Delete histogram and accumulation code! ***"
   },
+  "BOX_ALIGN_PROPS_IN_BLOCKS_FLAG": {
+    "alert_emails": ["bwerth@mozilla.com"],
+    "bug_numbers": [1351383],
+    "releaseChannelCollection": "opt-out",
+    "expires_in_version": "57",
+    "kind": "boolean",
+    "description": "Whether we have layed out any display:block containers with not-yet-supported properties from CSS Box Align."
+  },
   "CHECKERBOARD_DURATION": {
     "alert_emails": ["kgupta@mozilla.com"],
     "bug_numbers": [1238040],
@@ -369,9 +377,9 @@
   "CREATE_EVENT_BEFOREUNLOADEVENT" : {
     "alert_emails": ["ayg@aryeh.name"],
     "description": "Was document.createEvent(\"beforeunloadevent\") ever called",
-    "expires_in_version": "56",
+    "expires_in_version": "60",
     "kind": "count",
-    "bug_numbers": [1295588, 1251198]
+    "bug_numbers": [1295588, 1251198, 1358893]
   },
   "CREATE_EVENT_COMPOSITIONEVENT" : {
     "alert_emails": ["ayg@aryeh.name"],
@@ -2048,6 +2056,14 @@
       "high": 60000,
       "n_buckets": 100,
       "description": "Time in milliseconds that http channel spent suspended between AsyncOpen and OnStartRequest."
+  },
+  "NETWORK_RACE_CACHE_WITH_NETWORK_USAGE": {
+    "expires_in_version": "58",
+    "alert_emails": ["necko@mozilla.com"],
+    "bug_numbers": [1354409],
+    "kind": "enumerated",
+    "n_values": 4,
+    "description": "Whether we raced network with the cache. (0=network & no racing, 1=cache & no racing, 2=network & raced, 3=cache & raced)"
   },
   "HTTP_AUTH_DIALOG_STATS": {
     "expires_in_version": "never",
@@ -4211,6 +4227,15 @@
     "bug_numbers": [1336903],
     "description": "Server response time to update request (ms). Keyed by provider"
   },
+  "URLCLASSIFIER_UPDATE_TIMEOUT": {
+    "alert_emails": ["safebrowsing-telemetry@mozilla.org"],
+    "expires_in_version": "61",
+    "kind": "enumerated",
+    "keyed": true,
+    "n_values": 4,
+    "bug_numbers": [1336904],
+    "description": " Whether or not an update timed out (0 = no timeout, 1 = server respond timeout, 2 = overall timeout). Keyed by provider"
+  },
   "URLCLASSIFIER_COMPLETE_REMOTE_STATUS2": {
     "alert_emails": ["safebrowsing-telemetry@mozilla.org"],
     "expires_in_version": "never",
@@ -4246,7 +4271,6 @@
     "bug_numbers": [1336903],
     "description": "Server response time to getHash request (ms). Keyed by provider"
   },
-
   "URLCLASSIFIER_UPDATE_ERROR": {
     "alert_emails": ["safebrowsing-telemetry@mozilla.org"],
     "expires_in_version": "59",
@@ -5581,6 +5605,15 @@
     "n_buckets": 50,
     "description": "Time (ms) from the Input event being created to the end of it being handled"
   },
+  "INPUT_EVENT_RESPONSE_COALESCED_MS": {
+    "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
+    "bug_numbers": [1357457],
+    "expires_in_version": "61",
+    "kind": "exponential",
+    "high": 10000,
+    "n_buckets": 50,
+    "description": "Time (ms) from the Input event being created to the end of it being handled, but with overlapping events coalesced."
+  },
   "LOAD_INPUT_EVENT_RESPONSE_MS": {
     "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
     "bug_numbers": [1298101],
@@ -5638,6 +5671,14 @@
     "high": 30000,
     "n_buckets": 10,
     "description": "Session restore: Duration of the longest uninterruptible operation while collecting data in the content process (ms)"
+  },
+  "FX_SESSION_RESTORE_PRIVACY_LEVEL": {
+    "alert_emails": ["session-restore-telemetry-alerts@mozilla.com"],
+    "expires_in_version": "60",
+    "kind": "enumerated",
+    "n_values": 3,
+    "bug_numbers": [1360810],
+    "description": "Session restore: The privacy level chosen by the user (0: Collect data from all sites, 1: Collect data only from non-HTTPS sites, 2: Collect no data)"
   },
   "FX_SESSION_RESTORE_SERIALIZE_DATA_MS": {
     "alert_emails": ["session-restore-telemetry-alerts@mozilla.com"],
@@ -7198,6 +7239,13 @@
     "bug_numbers": [1297556, 1257777],
     "description": "Records a value each time Fennec remote decoding process crashes unexpected while decoding media content.",
     "releaseChannelCollection": "opt-out"
+  },
+  "MEDIA_EME_SECURE_CONTEXT": {
+    "alert_emails": ["cpearce@mozilla.com"],
+    "expires_in_version": "60",
+    "kind": "boolean",
+    "description": "Reports whether a navigator.requestMediaKeySystemAccess() was called in a secure context (i.e. on an origin served over HTTPS) or not.",
+    "bug_numbers": [1360438]
   },
   "VIDEO_MFT_OUTPUT_NULL_SAMPLES": {
     "alert_emails": ["cpearce@mozilla.com"],
@@ -10410,6 +10458,20 @@
     "n_values": 100,
     "releaseChannelCollection": "opt-out",
     "description": "Graphics Crash Reason (...)"
+  },
+  "APZ_AWARE_KEY_LISTENERS": {
+    "alert_emails": ["rhunt@mozilla.com"],
+    "bug_numbers": [1352654],
+    "expires_in_version": "58",
+    "kind": "boolean",
+    "description": "The percentage of pages with a non-passive key event on the path to the root scrolling element that would disable APZ key scrolling. This is tracked for non system principal windows, so it applies to toplevel windows and subframes/iframes, but not chrome windows. "
+  },
+  "APZ_AWARE_MOUSEMOVE_LISTENERS": {
+    "alert_emails": ["rhunt@mozilla.com"],
+    "bug_numbers": [1352654],
+    "expires_in_version": "58",
+    "kind": "boolean",
+    "description": "The percentage of pages with a mousemove listener anywhere in the document that would disable APZ key scrolling. This is tracked for non system principal windows, so it applies to toplevel windows and subframes/iframes, but not chrome windows."
   },
   "SCROLL_INPUT_METHODS": {
     "alert_emails": ["botond@mozilla.com"],

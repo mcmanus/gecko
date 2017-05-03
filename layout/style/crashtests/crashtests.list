@@ -39,7 +39,7 @@ load 460209-1.html
 load 460217-1.html
 load 460323-1.html
 load 466845-1.html
-load 469432-1.xhtml
+skip-if(stylo) load 469432-1.xhtml # bug 1361235
 load 472195-1.html
 load 472237-1.html # will fail, test for leak (474704)
 HTTP(..) load 472237-1.html
@@ -170,4 +170,5 @@ load 1328535-1.html
 load 1331272.html
 HTTP load 1333001-1.html
 pref(dom.animations-api.core.enabled,true) load 1340344.html
+load 1342316-1.html
 load 1356601-1.html

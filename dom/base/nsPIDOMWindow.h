@@ -669,6 +669,7 @@ protected:
   bool                   mMayHavePaintEventListener;
   bool                   mMayHaveTouchEventListener;
   bool                   mMayHaveMouseEnterLeaveEventListener;
+  bool                   mMayHaveMouseMoveEventListener;
   bool                   mMayHavePointerEnterLeaveEventListener;
 
   // Used to detect whether we have called FreeInnerObjects() (e.g. to ensure
@@ -816,6 +817,24 @@ public:
 
   /**
    * Call this to check whether some node (this window, its document,
+   * or content in that document) has or had a mousemove event listener.
+   */
+  bool HasMouseMoveEventListeners()
+  {
+    return mMayHaveMouseMoveEventListener;
+  }
+
+  /**
+   * Call this to indicate that some node (this window, its document,
+   * or content in that document) has or had a mousemove event listener.
+   */
+  void SetHasMouseMoveEventListeners()
+  {
+    mMayHaveMouseMoveEventListener = true;
+  }
+
+  /**
+   * Call this to check whether some node (this window, its document,
    * or content in that document) has a mouseenter/leave event listener.
    */
   bool HasMouseEnterLeaveEventListeners()
@@ -889,6 +908,8 @@ public:
   void SyncStateFromParentWindow();
 
   bool IsPlayingAudio();
+
+  bool IsDocumentLoaded() const;
 
   mozilla::dom::TimeoutManager& TimeoutManager();
 

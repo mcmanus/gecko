@@ -49,9 +49,6 @@ with Files('tests/xpcshell/test_UpdateUtils*.js'):
 with Files('tests/xpcshell/test_client_id.js'):
     BUG_COMPONENT = ('Toolkit', 'Telemetry')
 
-with Files('tests/xpcshell/test_session_recorder.js'):
-    BUG_COMPONENT = ('Toolkit', 'Telemetry')
-
 with Files('AsyncPrefs.jsm'):
     BUG_COMPONENT = ('Core', 'Security: Process Sandboxing')
 
@@ -142,9 +139,6 @@ with Files('RemoteWebProgress.jsm'):
 with Files('ResponsivenessMonitor.jsm'):
     BUG_COMPONENT = ('Firefox', 'Migration')
 
-with Files('SessionRecorder.jsm'):
-    BUG_COMPONENT = ('Toolkit', 'Telemetry')
-
 with Files('ShortcutUtils.jsm'):
     BUG_COMPONENT = ('Firefox', 'Toolbars and Customization')
 
@@ -193,6 +187,7 @@ EXTRA_JS_MODULES += [
     'debug.js',
     'DeferredTask.jsm',
     'Deprecated.jsm',
+    'EventEmitter.jsm',
     'FileUtils.jsm',
     'Finder.jsm',
     'FinderHighlighter.jsm',
@@ -240,12 +235,10 @@ EXTRA_JS_MODULES += [
     'SelectParentHelper.jsm',
     'ServiceRequest.jsm',
     'Services.jsm',
-    'SessionRecorder.jsm',
     'sessionstore/FormData.jsm',
     'sessionstore/ScrollPosition.jsm',
     'sessionstore/XPathGenerator.jsm',
     'ShortcutUtils.jsm',
-    'Sntp.jsm',
     'Sqlite.jsm',
     'Task.jsm',
     'Timer.jsm',

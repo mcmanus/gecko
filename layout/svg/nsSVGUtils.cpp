@@ -156,8 +156,7 @@ nsSVGUtils::GetNearestSVGViewport(nsIFrame *aFrame)
   for (; aFrame &&  aFrame->IsFrameOfType(nsIFrame::eSVG);
        aFrame = aFrame->GetParent()) {
     NS_ASSERTION(aFrame->IsFrameOfType(nsIFrame::eSVG), "SVG frame expected");
-    if (aFrame->GetType() == nsGkAtoms::svgInnerSVGFrame ||
-        aFrame->GetType() == nsGkAtoms::svgOuterSVGFrame) {
+    if (aFrame->IsSVGInnerSVGFrame() || aFrame->IsSVGOuterSVGFrame()) {
       return aFrame;
     }
   }
@@ -250,8 +249,7 @@ nsSVGUtils::ScheduleReflowSVG(nsIFrame *aFrame)
 
     outerSVGFrame = static_cast<nsSVGOuterSVGFrame*>(f);
 
-    MOZ_ASSERT(outerSVGFrame &&
-               outerSVGFrame->GetType() == nsGkAtoms::svgOuterSVGFrame,
+    MOZ_ASSERT(outerSVGFrame && outerSVGFrame->IsSVGOuterSVGFrame(),
                "Did not find nsSVGOuterSVGFrame!");
   }
 
@@ -414,11 +412,11 @@ nsSVGUtils::GetCanvasTM(nsIFrame *aFrame)
     return GetCSSPxToDevPxMatrix(aFrame);
   }
 
-  nsIAtom* type = aFrame->GetType();
-  if (type == nsGkAtoms::svgForeignObjectFrame) {
+  LayoutFrameType type = aFrame->Type();
+  if (type == LayoutFrameType::SVGForeignObject) {
     return static_cast<nsSVGForeignObjectFrame*>(aFrame)->GetCanvasTM();
   }
-  if (type == nsGkAtoms::svgOuterSVGFrame) {
+  if (type == LayoutFrameType::SVGOuterSVG) {
     return GetCSSPxToDevPxMatrix(aFrame);
   }
 
@@ -1111,7 +1109,7 @@ nsSVGUtils::GetBBox(nsIFrame* aFrame, uint32_t aFlags,
     // cases.
     nsIFrame* ancestor = GetFirstNonAAncestorFrame(aFrame);
     if (ancestor && nsSVGUtils::IsInSVGTextSubtree(ancestor)) {
-      while (ancestor->GetType() != nsGkAtoms::svgTextFrame) {
+      while (!ancestor->IsSVGTextFrame()) {
         ancestor = ancestor->GetParent();
       }
     }
@@ -1127,7 +1125,7 @@ nsSVGUtils::GetBBox(nsIFrame* aFrame, uint32_t aFlags,
   }
 
   const bool isOuterSVG = svg && !hasSVGLayout;
-  MOZ_ASSERT_IF(isOuterSVG, aFrame->GetType() == nsGkAtoms::svgOuterSVGFrame);
+  MOZ_ASSERT_IF(isOuterSVG, aFrame->IsSVGOuterSVGFrame());
   if (!svg ||
       (isOuterSVG && (aFlags & eUseFrameBoundsForOuterSVG))) {
     // An HTML element or an SVG outer frame.
@@ -1159,7 +1157,7 @@ nsSVGUtils::GetBBox(nsIFrame* aFrame, uint32_t aFlags,
     matrix = *aToBoundsSpace;
   }
 
-  if (aFrame->GetType() == nsGkAtoms::svgForeignObjectFrame) {
+  if (aFrame->IsSVGForeignObjectFrame()) {
     // The spec says getBBox "Returns the tight bounding box in *current user
     // space*". So we should really be doing this for all elements, but that
     // needs investigation to check that we won't break too much content.
@@ -1187,10 +1185,9 @@ nsSVGUtils::GetBBox(nsIFrame* aFrame, uint32_t aFlags,
     if (hasClip) {
       clipRect =
         nsSVGUtils::GetClipRectForFrame(aFrame, x, y, width, height);
-        if (aFrame->GetType() == nsGkAtoms::svgForeignObjectFrame ||
-            aFrame->GetType() == nsGkAtoms::svgUseFrame) {
-          clipRect = matrix.TransformBounds(clipRect);
-        }
+      if (aFrame->IsSVGForeignObjectFrame() || aFrame->IsSVGUseFrame()) {
+        clipRect = matrix.TransformBounds(clipRect);
+      }
     }
     nsSVGEffects::EffectProperties effectProperties =
       nsSVGEffects::GetEffectProperties(aFrame);
@@ -1206,7 +1203,7 @@ nsSVGUtils::GetBBox(nsIFrame* aFrame, uint32_t aFlags,
         if (units->AnimVal() == SVG_UNIT_TYPE_OBJECTBOUNDINGBOX) {
           matrix.Translate(gfxPoint(x, y));
           matrix.Scale(width, height);
-        } else if (aFrame->GetType() == nsGkAtoms::svgForeignObjectFrame) {
+        } else if (aFrame->IsSVGForeignObjectFrame()) {
           matrix.Reset();
         }
         bbox =
@@ -1252,7 +1249,7 @@ nsSVGUtils::FrameSpaceInCSSPxToUserSpaceOffset(nsIFrame *aFrame)
 
   // For foreignObject frames, nsSVGUtils::GetBBox applies their local
   // transform, so we need to do the same here.
-  if (aFrame->GetType() == nsGkAtoms::svgForeignObjectFrame) {
+  if (aFrame->IsSVGForeignObjectFrame()) {
     gfxMatrix transform = static_cast<nsSVGElement*>(aFrame->GetContent())->
         PrependLocalTransformsTo(gfxMatrix(), eChildToUserSpace);
     NS_ASSERTION(!transform.HasNonTranslation(), "we're relying on this being an offset-only transform");
@@ -1307,16 +1304,16 @@ nsSVGUtils::CanOptimizeOpacity(nsIFrame *aFrame)
   if (!(aFrame->GetStateBits() & NS_FRAME_SVG_LAYOUT)) {
     return false;
   }
-  nsIAtom *type = aFrame->GetType();
-  if (type != nsGkAtoms::svgImageFrame &&
-      type != nsGkAtoms::svgGeometryFrame) {
+  LayoutFrameType type = aFrame->Type();
+  if (type != LayoutFrameType::SVGImage &&
+      type != LayoutFrameType::SVGGeometry) {
     return false;
   }
   if (aFrame->StyleEffects()->HasFilters()) {
     return false;
   }
   // XXX The SVG WG is intending to allow fill, stroke and markers on <image>
-  if (type == nsGkAtoms::svgImageFrame) {
+  if (type == LayoutFrameType::SVGImage) {
     return true;
   }
   const nsStyleSVG *style = aFrame->StyleSVG();
@@ -1350,7 +1347,7 @@ nsSVGUtils::GetFirstNonAAncestorFrame(nsIFrame* aStartFrame)
 {
   for (nsIFrame *ancestorFrame = aStartFrame; ancestorFrame;
        ancestorFrame = ancestorFrame->GetParent()) {
-    if (ancestorFrame->GetType() != nsGkAtoms::svgAFrame) {
+    if (!ancestorFrame->IsSVGAFrame()) {
       return ancestorFrame;
     }
   }
@@ -1457,10 +1454,18 @@ nsSVGUtils::GetFallbackOrPaintColor(nsStyleContext *aStyleContext,
 {
   const nsStyleSVGPaint &paint = aStyleContext->StyleSVG()->*aFillOrStroke;
   nsStyleContext *styleIfVisited = aStyleContext->GetStyleIfVisited();
-  bool isServer = paint.Type() == eStyleSVGPaintType_Server ||
-                  paint.Type() == eStyleSVGPaintType_ContextFill ||
-                  paint.Type() == eStyleSVGPaintType_ContextStroke;
-  nscolor color = isServer ? paint.GetFallbackColor() : paint.GetColor();
+  nscolor color;
+  switch (paint.Type()) {
+    case eStyleSVGPaintType_Server:
+    case eStyleSVGPaintType_ContextFill:
+    case eStyleSVGPaintType_ContextStroke:
+      color = paint.GetFallbackType() == eStyleSVGFallbackType_Color ?
+                paint.GetFallbackColor() : NS_RGBA(0, 0, 0, 0);
+      break;
+    default:
+      color = paint.GetColor();
+      break;
+  }
   if (styleIfVisited) {
     const nsStyleSVGPaint &paintIfVisited =
       styleIfVisited->StyleSVG()->*aFillOrStroke;
@@ -1546,6 +1551,10 @@ nsSVGUtils::MakeFillPatternFor(nsIFrame* aFrame,
     }
   }
 
+  if (style->mFill.GetFallbackType() == eStyleSVGFallbackType_None) {
+    return DrawResult::SUCCESS;
+  }
+
   // On failure, use the fallback colour in case we have an
   // objectBoundingBox where the width or height of the object is zero.
   // See http://www.w3.org/TR/SVG11/coords.html#ObjectBoundingBox
@@ -1620,6 +1629,10 @@ nsSVGUtils::MakeStrokePatternFor(nsIFrame* aFrame,
       aOutPattern->Init(*pattern->GetPattern(dt));
       return result;
     }
+  }
+
+  if (style->mStroke.GetFallbackType() == eStyleSVGFallbackType_None) {
+    return DrawResult::SUCCESS;
   }
 
   // On failure, use the fallback colour in case we have an

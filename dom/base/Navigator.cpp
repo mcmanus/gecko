@@ -69,6 +69,7 @@
 #include "nsStreamUtils.h"
 #include "WidgetUtils.h"
 #include "nsIPresentationService.h"
+#include "nsIScriptError.h"
 
 #include "mozilla/dom/MediaDevices.h"
 #include "MediaManager.h"
@@ -95,6 +96,7 @@
 
 #include "mozilla/EMEUtils.h"
 #include "mozilla/DetailedPromise.h"
+#include "mozilla/Unused.h"
 
 namespace mozilla {
 namespace dom {
@@ -1997,14 +1999,17 @@ ToCString(const MediaKeySystemConfiguration& aConfig)
 }
 
 static nsCString
-RequestKeySystemAccessLogString(const nsAString& aKeySystem,
-                                const Sequence<MediaKeySystemConfiguration>& aConfigs)
+RequestKeySystemAccessLogString(
+  const nsAString& aKeySystem,
+  const Sequence<MediaKeySystemConfiguration>& aConfigs,
+  bool aIsSecureContext)
 {
   nsCString str;
   str.AppendPrintf("Navigator::RequestMediaKeySystemAccess(keySystem='%s' options=",
                    NS_ConvertUTF16toUTF8(aKeySystem).get());
   str.Append(ToCString(aConfigs));
-  str.AppendLiteral(")");
+  str.AppendLiteral(") secureContext=");
+  str.AppendInt(aIsSecureContext);
   return str;
 }
 
@@ -2013,7 +2018,29 @@ Navigator::RequestMediaKeySystemAccess(const nsAString& aKeySystem,
                                        const Sequence<MediaKeySystemConfiguration>& aConfigs,
                                        ErrorResult& aRv)
 {
-  EME_LOG("%s", RequestKeySystemAccessLogString(aKeySystem, aConfigs).get());
+  EME_LOG("%s",
+          RequestKeySystemAccessLogString(
+            aKeySystem, aConfigs, mWindow->IsSecureContext())
+            .get());
+
+  Telemetry::Accumulate(Telemetry::MEDIA_EME_SECURE_CONTEXT,
+                        mWindow->IsSecureContext());
+
+  if (!mWindow->IsSecureContext()) {
+    nsIDocument* doc = mWindow->GetExtantDoc();
+    nsString uri;
+    if (doc) {
+      Unused << doc->GetDocumentURI(uri);
+    }
+    const char16_t* params[] = { uri.get() };
+    nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                    NS_LITERAL_CSTRING("Media"),
+                                    doc,
+                                    nsContentUtils::eDOM_PROPERTIES,
+                                    "MediaEMEInsecureContextDeprecatedWarning",
+                                    params,
+                                    ArrayLength(params));
+  }
 
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(mWindow);
   RefPtr<DetailedPromise> promise =

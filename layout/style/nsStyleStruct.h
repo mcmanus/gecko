@@ -3376,12 +3376,18 @@ protected:
   nscoord mTwipsPerPixel;
 };
 
-enum nsStyleSVGPaintType {
+enum nsStyleSVGPaintType : uint8_t {
   eStyleSVGPaintType_None = 1,
   eStyleSVGPaintType_Color,
   eStyleSVGPaintType_Server,
   eStyleSVGPaintType_ContextFill,
   eStyleSVGPaintType_ContextStroke
+};
+
+enum nsStyleSVGFallbackType : uint8_t {
+  eStyleSVGFallbackType_NotSet,
+  eStyleSVGFallbackType_None,
+  eStyleSVGFallbackType_Color,
 };
 
 enum nsStyleSVGOpacitySource : uint8_t {
@@ -3404,9 +3410,18 @@ public:
   void SetNone();
   void SetColor(nscolor aColor);
   void SetPaintServer(mozilla::css::URLValue* aPaintServer,
+                      nsStyleSVGFallbackType aFallbackType,
                       nscolor aFallbackColor);
+  void SetPaintServer(mozilla::css::URLValue* aPaintServer) {
+    SetPaintServer(aPaintServer, eStyleSVGFallbackType_NotSet,
+                   NS_RGB(0, 0, 0));
+  }
   void SetContextValue(nsStyleSVGPaintType aType,
+                       nsStyleSVGFallbackType aFallbackType,
                        nscolor aFallbackColor);
+  void SetContextValue(nsStyleSVGPaintType aType) {
+    SetContextValue(aType, eStyleSVGFallbackType_NotSet, NS_RGB(0, 0, 0));
+  }
 
   nscolor GetColor() const {
     MOZ_ASSERT(mType == eStyleSVGPaintType_Color);
@@ -3416,6 +3431,10 @@ public:
   mozilla::css::URLValue* GetPaintServer() const {
     MOZ_ASSERT(mType == eStyleSVGPaintType_Server);
     return mPaint.mPaintServer;
+  }
+
+  nsStyleSVGFallbackType GetFallbackType() const {
+    return mFallbackType;
   }
 
   nscolor GetFallbackColor() const {
@@ -3439,6 +3458,7 @@ private:
     mozilla::css::URLValue* mPaintServer;
   } mPaint;
   nsStyleSVGPaintType mType;
+  nsStyleSVGFallbackType mFallbackType;
   nscolor mFallbackColor;
 };
 
@@ -3468,6 +3488,7 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVG
   RefPtr<mozilla::css::URLValue> mMarkerMid;   // [inherited]
   RefPtr<mozilla::css::URLValue> mMarkerStart; // [inherited]
   nsTArray<nsStyleCoord> mStrokeDasharray;  // [inherited] coord, percent, factor
+  nsTArray<nsCOMPtr<nsIAtom>> mContextProps;
 
   nsStyleCoord     mStrokeDashoffset; // [inherited] coord, percent, factor
   nsStyleCoord     mStrokeWidth;      // [inherited] coord, percent, factor
@@ -3485,6 +3506,15 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleSVG
   uint8_t          mStrokeLinecap;    // [inherited] see nsStyleConsts.h
   uint8_t          mStrokeLinejoin;   // [inherited] see nsStyleConsts.h
   uint8_t          mTextAnchor;       // [inherited] see nsStyleConsts.h
+  uint8_t          mContextPropsBits; // [inherited] see nsStyleConsts.h.
+                                      // Stores a bitfield representation of
+                                      // the specified properties.
+
+  /// Returns true if style has been set to expose the computed values of
+  /// certain properties (such as 'fill') to the contents of any linked images.
+  bool ExposesContextProperties() const {
+    return bool(mContextPropsBits);
+  }
 
   nsStyleSVGOpacitySource FillOpacitySource() const {
     uint8_t value = (mContextFlags & FILL_OPACITY_SOURCE_MASK) >>

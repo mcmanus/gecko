@@ -99,9 +99,13 @@ test_description_schema = Schema({
     # The `run_on_projects` attribute, defaulting to "all".  This dictates the
     # projects on which this task should be included in the target task set.
     # See the attributes documentation for details.
-    Optional('run-on-projects', default=['all']): optionally_keyed_by(
+    #
+    # Note that the special case 'built-projects', the default, uses the parent
+    # build task's run-on-projects, meaning that tests run only on platforms
+    # that are built.
+    Optional('run-on-projects', default='built-projects'): optionally_keyed_by(
         'test-platform',
-        [basestring]),
+        Any([basestring], 'built-projects')),
 
     # the sheriffing tier for this task (default: set based on test platform)
     Optional('tier'): optionally_keyed_by(
@@ -268,6 +272,9 @@ test_description_schema = Schema({
     # the label of the build task generating the materials to test
     'build-label': basestring,
 
+    # the build's attributes
+    'build-attributes': {basestring: object},
+
     # the platform on which the tests will run
     'test-platform': basestring,
 
@@ -326,7 +333,7 @@ def set_defaults(config, tests):
 
         test.setdefault('os-groups', [])
         test.setdefault('chunks', 1)
-        test.setdefault('run-on-projects', ['all'])
+        test.setdefault('run-on-projects', 'built-projects')
         test.setdefault('instance-size', 'default')
         test.setdefault('max-run-time', 3600)
         test.setdefault('reboot', True)
@@ -377,18 +384,6 @@ def set_treeherder_machine_platform(config, tests):
     for test in tests:
         test['treeherder-machine-platform'] = translation.get(
             test['build-platform'], test['test-platform'])
-        yield test
-
-
-@transforms.add
-def set_asan_docker_image(config, tests):
-    """Set the appropriate task.extra.treeherder.docker-image"""
-    # Linux64-asan has many leaks with running mochitest-media jobs
-    # on Ubuntu 16.04, please remove this when bug 1289209 is resolved
-    for test in tests:
-        if test['suite'] == 'mochitest/mochitest-media' and \
-           test['build-platform'] == 'linux64-asan/opt':
-            test['docker-image'] = {"in-tree": "desktop-test"}
         yield test
 
 
@@ -507,6 +502,15 @@ def enable_code_coverage(config, tests):
             test['run-on-projects'] = []
         elif test['build-platform'] == 'linux64-jsdcov/opt':
             test['run-on-projects'] = []
+        yield test
+
+
+@transforms.add
+def handle_run_on_projects(config, tests):
+    """Handle translating `built-projects` appropriately"""
+    for test in tests:
+        if test['run-on-projects'] == 'built-projects':
+            test['run-on-projects'] = test['build-attributes'].get('run_on_projects', ['all'])
         yield test
 
 
@@ -696,7 +700,7 @@ def make_job_description(config, tests):
         jobdesc['dependencies'] = {'build': build_label}
         jobdesc['expires-after'] = test['expires-after']
         jobdesc['routes'] = []
-        jobdesc['run-on-projects'] = test.get('run-on-projects', ['all'])
+        jobdesc['run-on-projects'] = test['run-on-projects']
         jobdesc['scopes'] = []
         jobdesc['tags'] = test.get('tags', {})
         jobdesc['optimizations'] = [['seta']]  # always run SETA for tests

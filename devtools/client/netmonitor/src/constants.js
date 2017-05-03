@@ -118,6 +118,10 @@ const HEADERS = [
     canFilter: true,
   },
   {
+    name: "scheme",
+    canFilter: true,
+  },
+  {
     name: "domain",
     canFilter: true,
   },
@@ -132,6 +136,15 @@ const HEADERS = [
   },
   {
     name: "type",
+    canFilter: false,
+  },
+  {
+    name: "cookies",
+    canFilter: false,
+  },
+  {
+    name: "setCookies",
+    boxName: "set-cookies",
     canFilter: false,
   },
   {

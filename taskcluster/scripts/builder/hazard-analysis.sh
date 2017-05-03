@@ -114,7 +114,16 @@ function grab_artifacts () {
         # Do not error out if no files found
         shopt -s nullglob
         set +e
-        for f in *.txt *.lst run-analysis.sh; do
+        local important
+        important=(refs.txt unnecessary.txt hazards.txt gcFunctions.txt allFunctions.txt heapWriteHazards.txt)
+
+        # Bundle up the less important but still useful intermediate outputs,
+        # just to cut down on the clutter in treeherder's Job Details pane.
+        tar -acvf "${artifacts}/hazardIntermediates.tar.xz" --exclude-from <(for f in "${important[@]}"; do echo $f; done) *.txt *.lst build_xgill.log
+
+        # Upload the important outputs individually, so that they will be
+        # visible in Job Details and accessible to automated jobs.
+        for f in "${important[@]}"; do
             gzip -9 -c "$f" > "${artifacts}/$f.gz"
         done
 
@@ -151,7 +160,7 @@ function check_hazards () {
         exit 1
     fi
 
-    NUM_ALLOWED_WRITE_HAZARDS=7
+    NUM_ALLOWED_WRITE_HAZARDS=3
     if [ $NUM_WRITE_HAZARDS -gt $NUM_ALLOWED_WRITE_HAZARDS ]; then
         echo "TEST-UNEXPECTED-FAIL $NUM_WRITE_HAZARDS heap write hazards detected out of $NUM_ALLOWED_WRITE_HAZARDS allowed" >&2
         echo "TinderboxPrint: documentation<br/><a href='https://wiki.mozilla.org/Javascript:Hazard_Builds#Diagnosing_a_heap_write_hazard_failure'>heap write hazard analysis failures</a>, visit \"Inspect Task\" link for hazard details"

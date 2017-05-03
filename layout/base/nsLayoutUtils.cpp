@@ -596,7 +596,8 @@ GetMinAndMaxScaleForAnimationProperty(const nsIFrame* aFrame,
       if (!baseStyle.IsNull()) {
         // FIXME: Bug 1334036: We need to get the baseStyle for
         //        RawServoAnimationValue.
-        UpdateMinMaxScale(aFrame, { baseStyle, nullptr }, aMinScale, aMaxScale);
+        UpdateMinMaxScale(aFrame, AnimationValue(baseStyle),
+                          aMinScale, aMaxScale);
       }
 
       for (const AnimationPropertySegment& segment : prop.mSegments) {
@@ -1520,8 +1521,7 @@ nsLayoutUtils::GetChildListNameFor(nsIFrame* aChildFrame)
       // Out-of-flows that are DISPLAY_POPUP must be kids of the root popup set
 #ifdef DEBUG
       nsIFrame* parent = aChildFrame->GetParent();
-      NS_ASSERTION(parent && parent->GetType() == nsGkAtoms::popupSetFrame,
-                   "Unexpected parent");
+      NS_ASSERTION(parent && parent->IsPopupSetFrame(), "Unexpected parent");
 #endif // DEBUG
 
       id = nsIFrame::kPopupList;
@@ -1532,12 +1532,12 @@ nsLayoutUtils::GetChildListNameFor(nsIFrame* aChildFrame)
     }
 
   } else {
-    nsIAtom* childType = aChildFrame->GetType();
-    if (nsGkAtoms::menuPopupFrame == childType) {
+    LayoutFrameType childType = aChildFrame->Type();
+    if (LayoutFrameType::MenuPopup == childType) {
       nsIFrame* parent = aChildFrame->GetParent();
       MOZ_ASSERT(parent, "nsMenuPopupFrame can't be the root frame");
       if (parent) {
-        if (parent->GetType() == nsGkAtoms::popupSetFrame) {
+        if (parent->IsPopupSetFrame()) {
           id = nsIFrame::kPopupList;
         } else {
           nsIFrame* firstPopup = parent->GetChildList(nsIFrame::kPopupList).FirstChild();
@@ -1550,7 +1550,7 @@ nsLayoutUtils::GetChildListNameFor(nsIFrame* aChildFrame)
       } else {
         id = nsIFrame::kPrincipalList;
       }
-    } else if (nsGkAtoms::tableColGroupFrame == childType) {
+    } else if (LayoutFrameType::TableColGroup == childType) {
       id = nsIFrame::kColGroupList;
     } else if (aChildFrame->IsTableCaption()) {
       id = nsIFrame::kCaptionList;
@@ -1622,11 +1622,11 @@ nsLayoutUtils::GetAfterFrame(const nsIContent* aContent)
 // static
 nsIFrame*
 nsLayoutUtils::GetClosestFrameOfType(nsIFrame* aFrame,
-                                     nsIAtom* aFrameType,
+                                     LayoutFrameType aFrameType,
                                      nsIFrame* aStopAt)
 {
   for (nsIFrame* frame = aFrame; frame; frame = frame->GetParent()) {
-    if (frame->GetType() == aFrameType) {
+    if (frame->Type() == aFrameType) {
       return frame;
     }
     if (frame == aStopAt) {
@@ -1636,11 +1636,17 @@ nsLayoutUtils::GetClosestFrameOfType(nsIFrame* aFrame,
   return nullptr;
 }
 
+/* static */ nsIFrame*
+nsLayoutUtils::GetPageFrame(nsIFrame* aFrame)
+{
+  return GetClosestFrameOfType(aFrame, LayoutFrameType::Page);
+}
+
 // static
 nsIFrame*
 nsLayoutUtils::GetStyleFrame(nsIFrame* aFrame)
 {
-  if (aFrame->GetType() == nsGkAtoms::tableWrapperFrame) {
+  if (aFrame->IsTableWrapperFrame()) {
     nsIFrame* inner = aFrame->PrincipalChildList().FirstChild();
     // inner may be null, if aFrame is mid-destruction
     return inner;
@@ -1673,8 +1679,7 @@ nsLayoutUtils::GetRealPrimaryFrameFor(const nsIContent* aContent)
 
 nsIFrame*
 nsLayoutUtils::GetFloatFromPlaceholder(nsIFrame* aFrame) {
-  NS_ASSERTION(nsGkAtoms::placeholderFrame == aFrame->GetType(),
-               "Must have a placeholder here");
+  NS_ASSERTION(aFrame->IsPlaceholderFrame(), "Must have a placeholder here");
   if (aFrame->GetStateBits() & PLACEHOLDER_FOR_FLOAT) {
     nsIFrame *outOfFlowFrame =
       nsPlaceholderFrame::GetRealFrameForPlaceholder(aFrame);
@@ -2892,7 +2897,7 @@ nsRect
 nsLayoutUtils::ClampRectToScrollFrames(nsIFrame* aFrame, const nsRect& aRect)
 {
   nsIFrame* closestScrollFrame =
-    nsLayoutUtils::GetClosestFrameOfType(aFrame, nsGkAtoms::scrollFrame);
+    nsLayoutUtils::GetClosestFrameOfType(aFrame, LayoutFrameType::Scroll);
 
   nsRect resultRect = aRect;
 
@@ -2910,9 +2915,8 @@ nsLayoutUtils::ClampRectToScrollFrames(nsIFrame* aFrame, const nsRect& aRect)
     }
 
     // Get next ancestor scroll frame.
-    closestScrollFrame =
-      nsLayoutUtils::GetClosestFrameOfType(closestScrollFrame->GetParent(),
-                                           nsGkAtoms::scrollFrame);
+    closestScrollFrame = nsLayoutUtils::GetClosestFrameOfType(
+      closestScrollFrame->GetParent(), LayoutFrameType::Scroll);
   }
 
   return resultRect;
@@ -3008,9 +3012,8 @@ GetContainingSVGTextFrame(nsIFrame* aFrame)
     return nullptr;
   }
 
-  return static_cast<SVGTextFrame*>
-    (nsLayoutUtils::GetClosestFrameOfType(aFrame->GetParent(),
-                                          nsGkAtoms::svgTextFrame));
+  return static_cast<SVGTextFrame*>(nsLayoutUtils::GetClosestFrameOfType(
+    aFrame->GetParent(), LayoutFrameType::SVGText));
 }
 
 nsPoint
@@ -3591,18 +3594,18 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
       aFrame->BuildDisplayListForStackingContext(&builder, dirtyRect, &list);
     }
 
-    nsIAtom* frameType = aFrame->GetType();
+    LayoutFrameType frameType = aFrame->Type();
 
     // For the viewport frame in print preview/page layout we want to paint
     // the grey background behind the page, not the canvas color.
-    if (frameType == nsGkAtoms::viewportFrame &&
+    if (frameType == LayoutFrameType::Viewport &&
         nsLayoutUtils::NeedsPrintPreviewBackground(presContext)) {
       nsRect bounds = nsRect(builder.ToReferenceFrame(aFrame),
                              aFrame->GetSize());
       nsDisplayListBuilder::AutoBuildingDisplayList
         buildingDisplayList(&builder, aFrame, bounds, false);
       presShell->AddPrintPreviewBackgroundItem(builder, list, aFrame, bounds);
-    } else if (frameType != nsGkAtoms::pageFrame) {
+    } else if (frameType != LayoutFrameType::Page) {
       // For printing, this function is first called on an nsPageFrame, which
       // creates a display list with a PageContent item. The PageContent item's
       // paint function calls this function on the nsPageFrame's child which is
@@ -4011,7 +4014,7 @@ struct MOZ_RAII BoxToRectAndText : public BoxToRect {
 
     // Get all the text in aFrame and child frames, while respecting
     // the content offsets in each of the nsTextFrames.
-    if (aFrame->GetType() == nsGkAtoms::textFrame) {
+    if (aFrame->IsTextFrame()) {
       nsTextFrame* textFrame = static_cast<nsTextFrame*>(aFrame);
 
       nsIFrame::RenderedText renderedText = textFrame->GetRenderedText(
@@ -4378,7 +4381,7 @@ nsLayoutUtils::GetFontMetricsForFrame(const nsIFrame* aFrame, float aInflation)
   nsStyleContext* styleContext = aFrame->StyleContext();
   uint8_t variantWidth = NS_FONT_VARIANT_WIDTH_NORMAL;
   if (styleContext->IsTextCombined()) {
-    MOZ_ASSERT(aFrame->GetType() == nsGkAtoms::textFrame);
+    MOZ_ASSERT(aFrame->IsTextFrame());
     auto textFrame = static_cast<const nsTextFrame*>(aFrame);
     auto clusters = textFrame->CountGraphemeClusters();
     if (clusters == 2) {
@@ -4652,9 +4655,10 @@ GetPercentBSize(const nsStyleCoord& aStyle,
     NS_ASSERTION(bSizeCoord.GetUnit() == eStyleUnit_Auto ||
                  bSizeCoord.HasPercent(),
                  "unknown block-size unit");
-    nsIAtom* fType = f->GetType();
-    if (fType != nsGkAtoms::viewportFrame && fType != nsGkAtoms::canvasFrame &&
-        fType != nsGkAtoms::pageContentFrame) {
+    LayoutFrameType fType = f->Type();
+    if (fType != LayoutFrameType::Viewport &&
+        fType != LayoutFrameType::Canvas &&
+        fType != LayoutFrameType::PageContent) {
       // There's no basis for the percentage height, so it acts like auto.
       // Should we consider a max-height < min-height pair a basis for
       // percentage heights?  The spec is somewhat unclear, and not doing
@@ -4830,8 +4834,8 @@ FormControlShrinksForPercentISize(nsIFrame* aFrame)
     return false;
   }
 
-  nsIAtom* fType = aFrame->GetType();
-  if (fType == nsGkAtoms::meterFrame || fType == nsGkAtoms::progressFrame) {
+  LayoutFrameType fType = aFrame->Type();
+  if (fType == LayoutFrameType::Meter || fType == LayoutFrameType::Progress) {
     // progress and meter do have this shrinking behavior
     // FIXME: Maybe these should be nsIFormControlFrame?
     return true;
@@ -4843,8 +4847,8 @@ FormControlShrinksForPercentISize(nsIFrame* aFrame)
     return false;
   }
 
-  if (fType == nsGkAtoms::gfxButtonControlFrame ||
-      fType == nsGkAtoms::HTMLButtonControlFrame) {
+  if (fType == LayoutFrameType::GfxButtonControl ||
+      fType == LayoutFrameType::HTMLButtonControl) {
     // Buttons don't have this shrinking behavior.  (Note that color
     // inputs do, even though they inherit from button, so we can't use
     // do_QueryFrame here.)
@@ -5231,7 +5235,7 @@ nsLayoutUtils::IntrinsicForAxis(PhysicalAxis        aAxis,
     }
   }
 
-  if (aFrame->GetType() == nsGkAtoms::tableFrame) {
+  if (aFrame->IsTableFrame()) {
     // Tables can't shrink smaller than their intrinsic minimum width,
     // no matter what.
     min = aFrame->GetMinISize(aRenderingContext);
@@ -5439,7 +5443,7 @@ nsLayoutUtils::MarkDescendantsDirty(nsIFrame *aSubtreeRoot)
 
       f->MarkIntrinsicISizesDirty();
 
-      if (f->GetType() == nsGkAtoms::placeholderFrame) {
+      if (f->IsPlaceholderFrame()) {
         nsIFrame *oof = nsPlaceholderFrame::GetRealFrameForPlaceholder(f);
         if (!nsLayoutUtils::IsProperAncestorFrame(subtreeRoot, oof)) {
           // We have another distinct subtree we need to mark.
@@ -5962,15 +5966,15 @@ nsLayoutUtils::GetFirstLinePosition(WritingMode aWM,
   if (!block) {
     // For the first-line baseline we also have to check for a table, and if
     // so, use the baseline of its first row.
-    nsIAtom* fType = aFrame->GetType();
-    if (fType == nsGkAtoms::tableWrapperFrame  ||
-        fType == nsGkAtoms::flexContainerFrame ||
-        fType == nsGkAtoms::gridContainerFrame) {
-      if ((fType == nsGkAtoms::gridContainerFrame &&
+    LayoutFrameType fType = aFrame->Type();
+    if (fType == LayoutFrameType::TableWrapper ||
+        fType == LayoutFrameType::FlexContainer ||
+        fType == LayoutFrameType::GridContainer) {
+      if ((fType == LayoutFrameType::GridContainer &&
            aFrame->HasAnyStateBits(NS_STATE_GRID_SYNTHESIZE_BASELINE)) ||
-          (fType == nsGkAtoms::flexContainerFrame &&
+          (fType == LayoutFrameType::FlexContainer &&
            aFrame->HasAnyStateBits(NS_STATE_FLEX_SYNTHESIZE_BASELINE)) ||
-          (fType == nsGkAtoms::tableWrapperFrame &&
+          (fType == LayoutFrameType::TableWrapper &&
            static_cast<const nsTableWrapperFrame*>(aFrame)->GetRowCount() == 0)) {
         // empty grid/flex/table container
         aResult->mBStart = 0;
@@ -5988,7 +5992,7 @@ nsLayoutUtils::GetFirstLinePosition(WritingMode aWM,
     }
 
     // For first-line baselines, we have to consider scroll frames.
-    if (fType == nsGkAtoms::scrollFrame) {
+    if (fType == LayoutFrameType::Scroll) {
       nsIScrollableFrame *sFrame = do_QueryFrame(const_cast<nsIFrame*>(aFrame));
       if (!sFrame) {
         NS_NOTREACHED("not scroll frame");
@@ -6006,7 +6010,7 @@ nsLayoutUtils::GetFirstLinePosition(WritingMode aWM,
       return false;
     }
 
-    if (fType == nsGkAtoms::fieldSetFrame) {
+    if (fType == LayoutFrameType::FieldSet) {
       LinePosition kidPosition;
       nsIFrame* kid = aFrame->PrincipalChildList().FirstChild();
       // kid might be a legend frame here, but that's ok.
@@ -6073,7 +6077,7 @@ nsLayoutUtils::GetLastLineBaseline(WritingMode aWM,
         *aResult = kidBaseline +
           kid->GetLogicalNormalPosition(aWM, containerSize).B(aWM);
         return true;
-      } else if (kid->GetType() == nsGkAtoms::scrollFrame) {
+      } else if (kid->IsScrollFrame()) {
         // Defer to nsFrame::GetLogicalBaseline (which synthesizes a baseline
         // from the margin-box).
         kidBaseline = kid->GetLogicalBaseline(aWM);
@@ -6163,8 +6167,7 @@ nsLayoutUtils::GetClosestLayer(nsIFrame* aFrame)
   nsIFrame* layer;
   for (layer = aFrame; layer; layer = layer->GetParent()) {
     if (layer->IsAbsPosContainingBlock() ||
-        (layer->GetParent() &&
-          layer->GetParent()->GetType() == nsGkAtoms::scrollFrame))
+        (layer->GetParent() && layer->GetParent()->IsScrollFrame()))
       break;
   }
   if (layer)
@@ -6918,7 +6921,7 @@ nsLayoutUtils::GetFrameTransparency(nsIFrame* aBackgroundFrame,
   // We need an uninitialized window to be treated as opaque because
   // doing otherwise breaks window display effects on some platforms,
   // specifically Vista. (bug 450322)
-  if (aBackgroundFrame->GetType() == nsGkAtoms::viewportFrame &&
+  if (aBackgroundFrame->IsViewportFrame() &&
       !aBackgroundFrame->PrincipalChildList().FirstChild()) {
     return eTransparencyOpaque;
   }
@@ -6938,14 +6941,14 @@ nsLayoutUtils::GetFrameTransparency(nsIFrame* aBackgroundFrame,
 static bool IsPopupFrame(nsIFrame* aFrame)
 {
   // aFrame is a popup it's the list control frame dropdown for a combobox.
-  nsIAtom* frameType = aFrame->GetType();
-  if (frameType == nsGkAtoms::listControlFrame) {
+  LayoutFrameType frameType = aFrame->Type();
+  if (frameType == LayoutFrameType::ListControl) {
     nsListControlFrame* lcf = static_cast<nsListControlFrame*>(aFrame);
     return lcf->IsInDropDownMode();
   }
 
   // ... or if it's a XUL menupopup frame.
-  return frameType == nsGkAtoms::menuPopupFrame;
+  return frameType == LayoutFrameType::MenuPopup;
 }
 
 /* static */ bool
@@ -7122,9 +7125,9 @@ nsLayoutUtils::IsReallyFixedPos(nsIFrame* aFrame)
                     NS_STYLE_POSITION_FIXED,
                   "IsReallyFixedPos called on non-'position:fixed' frame");
 
-  nsIAtom *parentType = aFrame->GetParent()->GetType();
-  return parentType == nsGkAtoms::viewportFrame ||
-         parentType == nsGkAtoms::pageContentFrame;
+  LayoutFrameType parentType = aFrame->GetParent()->Type();
+  return parentType == LayoutFrameType::Viewport ||
+         parentType == LayoutFrameType::PageContent;
 }
 
 nsLayoutUtils::SurfaceFromElementResult
@@ -7469,7 +7472,7 @@ static bool
 IsInLetterFrame(nsIFrame *aFrame)
 {
   for (nsIFrame *f = aFrame->GetParent(); f; f = f->GetParent()) {
-    if (f->GetType() == nsGkAtoms::letterFrame) {
+    if (f->IsLetterFrame()) {
       return true;
     }
   }
@@ -7511,7 +7514,7 @@ GetFontFacesForFramesInner(nsIFrame* aFrame, nsFontFaceList* aFontFaceList)
 {
   NS_PRECONDITION(aFrame, "NULL frame pointer");
 
-  if (aFrame->GetType() == nsGkAtoms::textFrame) {
+  if (aFrame->IsTextFrame()) {
     if (!aFrame->GetPrevContinuation()) {
       nsLayoutUtils::GetFontFacesForText(aFrame, 0, INT32_MAX, true,
                                          aFontFaceList);
@@ -7555,7 +7558,7 @@ nsLayoutUtils::GetFontFacesForText(nsIFrame* aFrame,
 {
   NS_PRECONDITION(aFrame, "NULL frame pointer");
 
-  if (aFrame->GetType() != nsGkAtoms::textFrame) {
+  if (!aFrame->IsTextFrame()) {
     return NS_OK;
   }
 
@@ -7603,7 +7606,7 @@ nsLayoutUtils::SizeOfTextRunsForFrames(nsIFrame* aFrame,
 
   size_t total = 0;
 
-  if (aFrame->GetType() == nsGkAtoms::textFrame) {
+  if (aFrame->IsTextFrame()) {
     nsTextFrame* textFrame = static_cast<nsTextFrame*>(aFrame);
     for (uint32_t i = 0; i < 2; ++i) {
       gfxTextRun *run = textFrame->GetTextRun(
@@ -7933,24 +7936,22 @@ nsLayoutUtils::FontSizeInflationInner(const nsIFrame *aFrame,
        f && !f->IsContainerForFontSizeInflation();
        f = f->GetParent()) {
     nsIContent* content = f->GetContent();
-    nsIAtom* fType = f->GetType();
+    LayoutFrameType fType = f->Type();
     nsIFrame* parent = f->GetParent();
     // Also, if there is more than one frame corresponding to a single
     // content node, we want the outermost one.
     if (!(parent && parent->GetContent() == content) &&
         // ignore width/height on inlines since they don't apply
-        fType != nsGkAtoms::inlineFrame &&
+        fType != LayoutFrameType::Inline &&
         // ignore width on radios and checkboxes since we enlarge them and
         // they have width/height in ua.css
-        fType != nsGkAtoms::formControlFrame) {
+        fType != LayoutFrameType::FormControl) {
       // ruby annotations should have the same inflation as its
       // grandparent, which is the ruby frame contains the annotation.
-      if (fType == nsGkAtoms::rubyTextFrame) {
-        MOZ_ASSERT(parent &&
-                   parent->GetType() == nsGkAtoms::rubyTextContainerFrame);
+      if (fType == LayoutFrameType::RubyText) {
+        MOZ_ASSERT(parent && parent->IsRubyTextContainerFrame());
         nsIFrame* grandparent = parent->GetParent();
-        MOZ_ASSERT(grandparent &&
-                   grandparent->GetType() == nsGkAtoms::rubyFrame);
+        MOZ_ASSERT(grandparent && grandparent->IsRubyFrame());
         return FontSizeInflationFor(grandparent);
       }
       nsStyleCoord stylePosWidth = f->StylePosition()->mWidth;
@@ -8065,7 +8066,7 @@ nsLayoutUtils::FontSizeInflationFor(const nsIFrame *aFrame)
 {
   if (nsSVGUtils::IsInSVGTextSubtree(aFrame)) {
     const nsIFrame* container = aFrame;
-    while (container->GetType() != nsGkAtoms::svgTextFrame) {
+    while (!container->IsSVGTextFrame()) {
       container = container->GetParent();
     }
     NS_ASSERTION(container, "expected to find an ancestor SVGTextFrame");
@@ -8984,7 +8985,7 @@ nsLayoutUtils::GetFrameTextContent(nsIFrame* aFrame, nsAString& aResult)
 /* static */ void
 nsLayoutUtils::AppendFrameTextContent(nsIFrame* aFrame, nsAString& aResult)
 {
-  if (aFrame->GetType() == nsGkAtoms::textFrame) {
+  if (aFrame->IsTextFrame()) {
     auto textFrame = static_cast<nsTextFrame*>(aFrame);
     auto offset = textFrame->GetContentOffset();
     auto length = textFrame->GetContentLength();
@@ -9203,15 +9204,14 @@ LineHasNonEmptyContentWorker(nsIFrame* aFrame)
 {
   // Look for non-empty frames, but ignore inline and br frames.
   // For inline frames, descend into the children, if any.
-  if (aFrame->GetType() == nsGkAtoms::inlineFrame) {
+  if (aFrame->IsInlineFrame()) {
     for (nsIFrame* child : aFrame->PrincipalChildList()) {
       if (LineHasNonEmptyContentWorker(child)) {
         return true;
       }
     }
   } else {
-    if (aFrame->GetType() != nsGkAtoms::brFrame &&
-        !aFrame->IsEmpty()) {
+    if (!aFrame->IsBrFrame() && !aFrame->IsEmpty()) {
       return true;
     }
   }
@@ -9243,7 +9243,7 @@ nsLayoutUtils::IsInvisibleBreak(nsINode* aNode, nsIFrame** aNextLineFrame)
     return false;
   }
   nsIFrame* frame = aNode->AsElement()->GetPrimaryFrame();
-  if (!frame || frame->GetType() != nsGkAtoms::brFrame) {
+  if (!frame || !frame->IsBrFrame()) {
     return false;
   }
 

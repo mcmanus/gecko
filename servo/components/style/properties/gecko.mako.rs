@@ -102,30 +102,13 @@ pub struct ComputedValues {
 }
 
 impl ComputedValues {
-    pub fn inherit_from(parent: &Self, default: &Self) -> Arc<Self> {
-        Arc::new(ComputedValues {
-            custom_properties: parent.custom_properties.clone(),
-            writing_mode: parent.writing_mode,
-            root_font_size: parent.root_font_size,
-            font_size_keyword: parent.font_size_keyword,
-            cached_system_font: None,
-            % for style_struct in data.style_structs:
-            % if style_struct.inherited:
-            ${style_struct.ident}: parent.${style_struct.ident}.clone(),
-            % else:
-            ${style_struct.ident}: default.${style_struct.ident}.clone(),
-            % endif
-            % endfor
-        })
-    }
-
     pub fn new(custom_properties: Option<Arc<ComputedValuesMap>>,
-           writing_mode: WritingMode,
-           root_font_size: Au,
-           font_size_keyword: Option<(longhands::font_size::KeywordSize, f32)>,
-            % for style_struct in data.style_structs:
-           ${style_struct.ident}: Arc<style_structs::${style_struct.name}>,
-            % endfor
+               writing_mode: WritingMode,
+               root_font_size: Au,
+               font_size_keyword: Option<(longhands::font_size::KeywordSize, f32)>,
+               % for style_struct in data.style_structs:
+               ${style_struct.ident}: Arc<style_structs::${style_struct.name}>,
+               % endfor
     ) -> Self {
         ComputedValues {
             custom_properties: custom_properties,
@@ -166,6 +149,11 @@ impl ComputedValues {
     pub fn get_${style_struct.name_lower}(&self) -> &style_structs::${style_struct.name} {
         &self.${style_struct.ident}
     }
+
+    pub fn ${style_struct.name_lower}_arc(&self) -> &Arc<style_structs::${style_struct.name}> {
+        &self.${style_struct.ident}
+    }
+
     #[inline]
     pub fn mutate_${style_struct.name_lower}(&mut self) -> &mut style_structs::${style_struct.name} {
         Arc::make_mut(&mut self.${style_struct.ident})
@@ -173,18 +161,12 @@ impl ComputedValues {
     % endfor
 
     pub fn custom_properties(&self) -> Option<Arc<ComputedValuesMap>> {
-        self.custom_properties.as_ref().map(|x| x.clone())
+        self.custom_properties.clone()
     }
 
     #[allow(non_snake_case)]
     pub fn has_moz_binding(&self) -> bool {
         !self.get_box().gecko.mBinding.mPtr.mRawPtr.is_null()
-    }
-
-    #[allow(non_snake_case)]
-    pub fn in_top_layer(&self) -> bool {
-        matches!(self.get_box().clone__moz_top_layer(),
-                 longhands::_moz_top_layer::SpecifiedValue::top)
     }
 
     // FIXME(bholley): Implement this properly.
@@ -413,6 +395,7 @@ fn color_to_nscolor_zero_currentcolor(color: Color) -> structs::nscolor {
     pub fn set_${ident}(&mut self, mut v: longhands::${ident}::computed_value::T) {
         use values::computed::SVGPaintKind;
         use self::structs::nsStyleSVGPaintType;
+        use self::structs::nsStyleSVGFallbackType;
 
         let ref mut paint = ${get_gecko_property(gecko_ffi_name)};
         unsafe {
@@ -441,6 +424,7 @@ fn color_to_nscolor_zero_currentcolor(color: Color) -> structs::nscolor {
         }
 
         if let Some(fallback) = fallback {
+            paint.mFallbackType = nsStyleSVGFallbackType::eStyleSVGFallbackType_Color;
             paint.mFallbackColor = color_to_nscolor_zero_currentcolor(fallback);
         }
     }
@@ -944,9 +928,7 @@ fn static_assert() {
         }
 
         if let Some(image) = v.0 {
-            // TODO: We need to make border-image-source match with background-image
-            // until then we are setting with_url to false
-            self.gecko.mBorderImageSource.set(image, false, &mut false)
+            self.gecko.mBorderImageSource.set(image, &mut false)
         }
     }
 
@@ -1789,7 +1771,7 @@ fn static_assert() {
                           scroll-snap-points-x scroll-snap-points-y transform
                           scroll-snap-type-y scroll-snap-coordinate
                           perspective-origin transform-origin -moz-binding will-change
-                          shape-outside contain""" %>
+                          shape-outside contain touch-action""" %>
 <%self:impl_trait style_struct_name="Box" skip_longhands="${skip_box_longhands}">
 
     // We manually-implement the |display| property until we get general
@@ -1999,7 +1981,7 @@ fn static_assert() {
                 "length" : "bindings::Gecko_CSSValue_SetAbsoluteLength(%s, %s.0)",
                 "percentage" : "bindings::Gecko_CSSValue_SetPercentage(%s, %s)",
                 "lop" : "%s.set_lop(%s)",
-                "angle" : "bindings::Gecko_CSSValue_SetAngle(%s, %s.radians())",
+                "angle" : "%s.set_angle(%s)",
                 "number" : "bindings::Gecko_CSSValue_SetNumber(%s, %s)",
             }
         %>
@@ -2076,7 +2058,7 @@ fn static_assert() {
             css_value_getters = {
                 "length" : "Au(bindings::Gecko_CSSValue_GetAbsoluteLength(%s))",
                 "lop" : "%s.get_lop()",
-                "angle" : "Angle::from_radians(bindings::Gecko_CSSValue_GetAngle(%s))",
+                "angle" : "%s.get_angle()",
                 "number" : "bindings::Gecko_CSSValue_GetNumber(%s)",
             }
         %>
@@ -2105,7 +2087,6 @@ fn static_assert() {
         use properties::longhands::transform::computed_value;
         use properties::longhands::transform::computed_value::ComputedMatrix;
         use properties::longhands::transform::computed_value::ComputedOperation;
-        use values::computed::Angle;
 
         if self.gecko.mSpecifiedTransform.mRawPtr.is_null() {
             return computed_value::T(None);
@@ -2507,6 +2488,12 @@ fn static_assert() {
     }
 
     ${impl_simple_copy("contain", "mContain")}
+
+    pub fn set_touch_action(&mut self, v: longhands::touch_action::computed_value::T) {
+        self.gecko.mTouchAction = v.bits();
+    }
+
+    ${impl_simple_copy("touch_action", "mTouchAction")}
 </%self:impl_trait>
 
 <%def name="simple_image_array_property(name, shorthand, field_name)">
@@ -2766,12 +2753,12 @@ fn static_assert() {
                                                                 .mLayers.iter_mut()) {
             % if shorthand == "background":
                 if let Some(image) = image.0 {
-                    geckoimage.mImage.set(image, true, cacheable)
+                    geckoimage.mImage.set(image, cacheable)
                 }
             % else:
                 use properties::longhands::mask_image::single_value::computed_value::T;
                 match image {
-                    T::Image(image) => geckoimage.mImage.set(image, true, cacheable),
+                    T::Image(image) => geckoimage.mImage.set(image, cacheable),
                     _ => ()
                 }
             % endif
@@ -2794,10 +2781,6 @@ fn static_assert() {
         % for member in fill_fields.split():
             max_len = cmp::max(max_len, self.gecko.${image_layers_field}.${member}Count);
         % endfor
-
-        // XXXManishearth Gecko does an optimization here where it only
-        // fills things in if any of the properties have been set
-
         unsafe {
             // While we could do this manually, we'd need to also manually
             // run all the copy constructors, so we just delegate to gecko
@@ -3156,7 +3139,7 @@ fn static_assert() {
                                                   CoordDataValue::Factor(factor),
                                                   gecko_filter),
                 HueRotate(angle)   => fill_filter(NS_STYLE_FILTER_HUE_ROTATE,
-                                                  CoordDataValue::Radian(angle.radians()),
+                                                  CoordDataValue::from(angle),
                                                   gecko_filter),
                 Invert(factor)     => fill_filter(NS_STYLE_FILTER_INVERT,
                                                   CoordDataValue::Factor(factor),
@@ -3257,6 +3240,13 @@ fn static_assert() {
         self.gecko.mBorderSpacingCol = other.gecko.mBorderSpacingCol;
         self.gecko.mBorderSpacingRow = other.gecko.mBorderSpacingRow;
     }
+
+    pub fn clone_border_spacing(&self) -> longhands::border_spacing::computed_value::T {
+        longhands::border_spacing::computed_value::T {
+            horizontal: Au(self.gecko.mBorderSpacingCol),
+            vertical: Au(self.gecko.mBorderSpacingRow)
+        }
+    }
 </%self:impl_trait>
 
 
@@ -3264,13 +3254,12 @@ fn static_assert() {
                   skip_longhands="text-align text-emphasis-style text-shadow line-height letter-spacing word-spacing
                                   -webkit-text-stroke-width text-emphasis-position -moz-tab-size -moz-text-size-adjust">
 
-    <% text_align_keyword = Keyword("text-align", "start end left right center justify -moz-center -moz-left " +
-                                                  "-moz-right char") %>
+    <% text_align_keyword = Keyword("text-align",
+                                    "start end left right center justify -moz-center -moz-left -moz-right char",
+                                    gecko_strip_moz_prefix=False) %>
     <% text_align_reachable_keyword = Keyword("text-align", "start end left right center justify char") %>
     ${impl_keyword('text_align', 'mTextAlign', text_align_keyword, need_clone=False)}
-    // Stable rust errors on unreachable patterns, and there is overlap, so we run with the overlapping
-    // constants removed
-    ${impl_keyword_clone('text_align', 'mTextAlign', text_align_reachable_keyword)}
+    ${impl_keyword_clone('text_align', 'mTextAlign', text_align_keyword)}
 
     pub fn set_text_shadow(&mut self, v: longhands::text_shadow::computed_value::T) {
         self.gecko.mTextShadow.replace_with_new(v.0.len() as u32);
@@ -3777,8 +3766,8 @@ clip-path
 
         for (mut gecko, servo) in self.gecko.mStrokeDasharray.iter_mut().zip(v.0.into_iter()) {
             match servo {
-                Either::First(lop) => gecko.set(lop),
-                Either::Second(number) => gecko.set_value(CoordDataValue::Factor(number)),
+                Either::First(number) => gecko.set_value(CoordDataValue::Factor(number)),
+                Either::Second(lop) => gecko.set(lop),
             }
         }
     }
@@ -4055,6 +4044,15 @@ clip-path
             }
         }
     % endfor
+</%self:impl_trait>
+
+<%self:impl_trait style_struct_name="UI" skip_longhands="-moz-force-broken-image-icon">
+    #[allow(non_snake_case)]
+    pub fn set__moz_force_broken_image_icon(&mut self, v: longhands::_moz_force_broken_image_icon::computed_value::T) {
+        self.gecko.mForceBrokenImageIcon = v.0 as u8;
+    }
+
+    ${impl_simple_copy("_moz_force_broken_image_icon", "mForceBrokenImageIcon")}
 </%self:impl_trait>
 
 <%self:impl_trait style_struct_name="XUL"

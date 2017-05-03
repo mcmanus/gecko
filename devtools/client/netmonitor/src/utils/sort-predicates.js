@@ -56,6 +56,11 @@ function protocol(first, second) {
   return result || waterfall(first, second);
 }
 
+function scheme(first, second) {
+  const result = compareValues(first.urlDetails.scheme, second.urlDetails.scheme);
+  return result || waterfall(first, second);
+}
+
 function domain(first, second) {
   const firstDomain = first.urlDetails.host.toLowerCase();
   const secondDomain = second.urlDetails.host.toLowerCase();
@@ -74,6 +79,26 @@ function cause(first, second) {
   const firstCause = first.cause.type;
   const secondCause = second.cause.type;
   const result = compareValues(firstCause, secondCause);
+  return result || waterfall(first, second);
+}
+
+function setCookies(first, second) {
+  let { responseCookies: firstResponseCookies = { cookies: [] } } = first;
+  let { responseCookies: secondResponseCookies = { cookies: [] } } = second;
+  firstResponseCookies = firstResponseCookies.cookies || firstResponseCookies;
+  secondResponseCookies = secondResponseCookies.cookies || secondResponseCookies;
+  const result =
+    compareValues(firstResponseCookies.length, secondResponseCookies.length);
+  return result || waterfall(first, second);
+}
+
+function cookies(first, second) {
+  let { requestCookies: firstRequestCookies = { cookies: [] } } = first;
+  let { requestCookies: secondRequestCookies = { cookies: [] } } = second;
+  firstRequestCookies = firstRequestCookies.cookies || firstRequestCookies;
+  secondRequestCookies = secondRequestCookies.cookies || secondRequestCookies;
+  const result =
+    compareValues(firstRequestCookies.length, secondRequestCookies.length);
   return result || waterfall(first, second);
 }
 
@@ -99,6 +124,9 @@ exports.Sorters = {
   method,
   file,
   protocol,
+  scheme,
+  cookies,
+  setCookies,
   domain,
   remoteip,
   cause,

@@ -103,6 +103,7 @@
 #include "nsIDocShell.h"
 #include "nsIDocCharset.h"
 #include "nsIDocument.h"
+#include "nsIDocumentInlines.h"
 #include "Crypto.h"
 #include "nsIDOMDocument.h"
 #include "nsIDOMElement.h"
@@ -977,6 +978,7 @@ nsPIDOMWindow<T>::nsPIDOMWindow(nsPIDOMWindowOuter *aOuterWindow)
   mIsHandlingResizeEvent(false), mIsInnerWindow(aOuterWindow != nullptr),
   mMayHavePaintEventListener(false), mMayHaveTouchEventListener(false),
   mMayHaveMouseEnterLeaveEventListener(false),
+  mMayHaveMouseMoveEventListener(false),
   mMayHavePointerEnterLeaveEventListener(false),
   mInnerObjectsFreed(false),
   mIsModalContentWindow(false),
@@ -1116,7 +1118,7 @@ protected:
   static nsGlobalWindow* GetOuterWindow(JSObject *proxy)
   {
     nsGlobalWindow* outerWindow = nsGlobalWindow::FromSupports(
-      static_cast<nsISupports*>(js::GetProxyExtra(proxy, 0).toPrivate()));
+      static_cast<nsISupports*>(js::GetProxyReservedSlot(proxy, 0).toPrivate()));
     MOZ_ASSERT_IF(outerWindow, outerWindow->IsOuterWindow());
     return outerWindow;
   }
@@ -1143,9 +1145,12 @@ static const js::ClassExtension OuterWindowProxyClassExtension = PROXY_MAKE_EXT(
     nsOuterWindowProxy::ObjectMoved
 );
 
+// Give OuterWindowProxyClass 2 reserved slots, like the other wrappers, so
+// JSObject::swap can swap it with CrossCompartmentWrappers without requiring
+// malloc.
 const js::Class OuterWindowProxyClass = PROXY_CLASS_WITH_EXT(
     "Proxy",
-    0, /* additional class flags */
+    JSCLASS_HAS_RESERVED_SLOTS(2), /* additional class flags */
     &OuterWindowProxyClassExtension);
 
 const char *
@@ -1570,7 +1575,8 @@ nsGlobalWindow::nsGlobalWindow(nsGlobalWindow *aOuterWindow)
     mIsValidatingTabGroup(false),
 #endif
     mCanSkipCCGeneration(0),
-    mAutoActivateVRDisplayID(0)
+    mAutoActivateVRDisplayID(0),
+    mBeforeUnloadListenerCount(0)
 {
   AssertIsOnMainThread();
 
@@ -1605,6 +1611,13 @@ nsGlobalWindow::nsGlobalWindow(nsGlobalWindow *aOuterWindow)
     // |this| is an outer window. Outer windows start out frozen and
     // remain frozen until they get an inner window.
     MOZ_ASSERT(IsFrozen());
+  }
+
+  if (XRE_IsContentProcess()) {
+    nsCOMPtr<nsIDocShell> docShell = GetDocShell();
+    if (docShell) {
+      mTabChild = docShell->GetTabChild();
+    }
   }
 
   // We could have failed the first time through trying
@@ -1730,7 +1743,7 @@ nsGlobalWindow::~nsGlobalWindow()
   if (IsOuterWindow()) {
     JSObject *proxy = GetWrapperMaybeDead();
     if (proxy) {
-      js::SetProxyExtra(proxy, 0, js::PrivateValue(nullptr));
+      js::SetProxyReservedSlot(proxy, 0, js::PrivateValue(nullptr));
     }
 
     // An outer window is destroyed with inner windows still possibly
@@ -2033,6 +2046,23 @@ nsGlobalWindow::FreeInnerObjects()
 {
   NS_ASSERTION(IsInnerWindow(), "Don't free inner objects on an outer window");
 
+  if (mDoc && !nsContentUtils::IsSystemPrincipal(mDoc->NodePrincipal())) {
+    EventTarget* win = this;
+    EventTarget* html = mDoc->GetHtmlElement();
+    EventTarget* body = mDoc->GetBodyElement();
+
+    bool mouseAware = AsInner()->HasMouseMoveEventListeners();
+    bool keyboardAware = win->MayHaveAPZAwareKeyEventListener() ||
+                         mDoc->MayHaveAPZAwareKeyEventListener() ||
+                         (html && html->MayHaveAPZAwareKeyEventListener()) ||
+                         (body && body->MayHaveAPZAwareKeyEventListener());
+
+    Telemetry::Accumulate(Telemetry::APZ_AWARE_MOUSEMOVE_LISTENERS,
+                          mouseAware ? 1 : 0);
+    Telemetry::Accumulate(Telemetry::APZ_AWARE_KEY_LISTENERS,
+                          keyboardAware ? 1 : 0);
+  }
+
   // Make sure that this is called before we null out the document and
   // other members that the window destroyed observers could
   // re-create.
@@ -2122,6 +2152,12 @@ nsGlobalWindow::FreeInnerObjects()
   DisableVRUpdates();
   mHasVREvents = false;
   mVRDisplays.Clear();
+
+  if (mTabChild) {
+    while (mBeforeUnloadListenerCount-- > 0) {
+      mTabChild->BeforeUnloadRemoved();
+    }
+  }
 }
 
 //*****************************************************************************
@@ -2261,6 +2297,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGlobalWindow)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSuspendedDoc)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mIndexedDB)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocumentPrincipal)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTabChild)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDoc)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mIdleService)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mWakeLock)
@@ -2344,6 +2381,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGlobalWindow)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mSuspendedDoc)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mIndexedDB)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocumentPrincipal)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mTabChild)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDoc)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mIdleService)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mWakeLock)
@@ -2808,6 +2846,39 @@ nsGlobalWindow::ComputeIsSecureContext(nsIDocument* aDocument, SecureContextFlag
   return false;
 }
 
+static JS::CompartmentCreationOptions&
+SelectZoneGroup(nsGlobalWindow* aNewInner,
+                JS::CompartmentCreationOptions& aOptions)
+{
+  JS::CompartmentCreationOptions options;
+
+  if (aNewInner->GetOuterWindow()) {
+    nsGlobalWindow *top = aNewInner->GetTopInternal();
+
+    // If we have a top-level window, use its zone (and zone group).
+    if (top && top->GetGlobalJSObject()) {
+      return aOptions.setExistingZone(top->GetGlobalJSObject());
+    }
+  }
+
+  // If we're in the parent process, don't bother with zone groups.
+  if (XRE_IsParentProcess()) {
+    return aOptions.setNewZoneInSystemZoneGroup();
+  }
+
+  // Otherwise, find a zone group from the TabGroup. Typically we only have to
+  // go through one iteration of this loop.
+  RefPtr<TabGroup> tabGroup = aNewInner->TabGroup();
+  for (nsPIDOMWindowOuter* outer : tabGroup->GetWindows()) {
+    nsGlobalWindow* window = nsGlobalWindow::Cast(outer);
+    if (JSObject* global = window->GetGlobalJSObject()) {
+      return aOptions.setNewZoneInExistingZoneGroup(global);
+    }
+  }
+
+  return aOptions.setNewZoneInNewZoneGroup();
+}
+
 /**
  * Create a new global object that will be used for an inner window.
  * Return the native global and an nsISupports 'holder' that can be used
@@ -2831,22 +2902,15 @@ CreateNativeGlobalForInner(JSContext* aCx,
   nsCOMPtr<nsIExpandedPrincipal> nsEP = do_QueryInterface(aPrincipal);
   MOZ_RELEASE_ASSERT(!nsEP, "DOMWindow with nsEP is not supported");
 
-  nsGlobalWindow *top = nullptr;
-  if (aNewInner->GetOuterWindow()) {
-    top = aNewInner->GetTopInternal();
-  }
-
   JS::CompartmentOptions options;
+
+  SelectZoneGroup(aNewInner, options.creationOptions());
 
   // Sometimes add-ons load their own XUL windows, either as separate top-level
   // windows or inside a browser element. In such cases we want to tag the
   // window's compartment with the add-on ID. See bug 1092156.
   if (nsContentUtils::IsSystemPrincipal(aPrincipal)) {
     options.creationOptions().setAddonId(MapURIToAddonID(aURI));
-  }
-
-  if (top && top->GetGlobalJSObject()) {
-    options.creationOptions().setExistingZone(top->GetGlobalJSObject());
   }
 
   options.creationOptions().setSecureContext(aIsSecureContext);
@@ -3118,7 +3182,7 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
         NewOuterWindowProxy(cx, newInnerGlobal, thisChrome));
       NS_ENSURE_TRUE(outer, NS_ERROR_FAILURE);
 
-      js::SetProxyExtra(outer, 0, js::PrivateValue(ToSupports(this)));
+      js::SetProxyReservedSlot(outer, 0, js::PrivateValue(ToSupports(this)));
 
       // Inform the nsJSContext, which is the canonical holder of the outer.
       mContext->SetWindowProxy(outer);
@@ -3136,8 +3200,8 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
 
       JS::Rooted<JSObject*> obj(cx, GetWrapperPreserveColor());
 
-      js::SetProxyExtra(obj, 0, js::PrivateValue(nullptr));
-      js::SetProxyExtra(outerObject, 0, js::PrivateValue(nullptr));
+      js::SetProxyReservedSlot(obj, 0, js::PrivateValue(nullptr));
+      js::SetProxyReservedSlot(outerObject, 0, js::PrivateValue(nullptr));
 
       outerObject = xpc::TransplantObject(cx, obj, outerObject);
       if (!outerObject) {
@@ -3145,7 +3209,7 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
         return NS_ERROR_FAILURE;
       }
 
-      js::SetProxyExtra(outerObject, 0, js::PrivateValue(ToSupports(this)));
+      js::SetProxyReservedSlot(outerObject, 0, js::PrivateValue(ToSupports(this)));
 
       SetWrapper(outerObject);
 
@@ -4330,6 +4394,12 @@ nsPIDOMWindowInner::IsPlayingAudio()
   return acs->IsWindowActive(outer);
 }
 
+bool
+nsPIDOMWindowInner::IsDocumentLoaded() const
+{
+  return mIsDocumentLoaded;
+}
+
 mozilla::dom::TimeoutManager&
 nsPIDOMWindowInner::TimeoutManager()
 {
@@ -5026,11 +5096,11 @@ nsGlobalWindow::MayResolve(jsid aId)
     return false;
   }
 
-  if (aId == XPCJSContext::Get()->GetStringID(XPCJSContext::IDX_COMPONENTS)) {
+  if (aId == XPCJSRuntime::Get()->GetStringID(XPCJSContext::IDX_COMPONENTS)) {
     return true;
   }
 
-  if (aId == XPCJSContext::Get()->GetStringID(XPCJSContext::IDX_CONTROLLERS)) {
+  if (aId == XPCJSRuntime::Get()->GetStringID(XPCJSContext::IDX_CONTROLLERS)) {
     // We only resolve .controllers in release builds and on non-chrome windows,
     // but let's not worry about any of that stuff.
     return true;
@@ -5097,6 +5167,14 @@ nsGlobalWindow::IsShowModalDialogEnabled(JSContext*, JSObject*)
   }
 
   return !sIsDisabled && !XRE_IsContentProcess();
+}
+
+/* static */ bool
+nsGlobalWindow::IsRequestIdleCallbackEnabled(JSContext* aCx, JSObject* aObj)
+{
+  // The requestIdleCallback should always be enabled for system code.
+  return nsContentUtils::RequestIdleCallbackEnabled() ||
+         nsContentUtils::IsSystemCaller(aCx);
 }
 
 nsIDOMOfflineResourceList*
@@ -5749,11 +5827,6 @@ nsGlobalWindow::GetOuterSize(CallerType aCallerType, ErrorResult& aError)
   if (!treeOwnerAsWin) {
     aError.Throw(NS_ERROR_FAILURE);
     return nsIntSize(0, 0);
-  }
-
-  nsGlobalWindow* rootWindow = nsGlobalWindow::Cast(GetPrivateRoot());
-  if (rootWindow) {
-    rootWindow->FlushPendingNotifications(FlushType::Layout);
   }
 
   nsIntSize sizeDevPixels;
@@ -13384,11 +13457,33 @@ nsGlobalWindow::EventListenerAdded(nsIAtom* aType)
     NotifyVREventListenerAdded();
   }
 
+  if (aType == nsGkAtoms::onbeforeunload &&
+      mTabChild &&
+      (!mDoc || !(mDoc->GetSandboxFlags() & SANDBOXED_MODALS))) {
+    MOZ_ASSERT(IsInnerWindow());
+    mBeforeUnloadListenerCount++;
+    MOZ_ASSERT(mBeforeUnloadListenerCount > 0);
+    mTabChild->BeforeUnloadAdded();
+  }
+
   // We need to initialize localStorage in order to receive notifications.
   if (aType == nsGkAtoms::onstorage) {
     ErrorResult rv;
     GetLocalStorage(rv);
     rv.SuppressException();
+  }
+}
+
+void
+nsGlobalWindow::EventListenerRemoved(nsIAtom* aType)
+{
+  if (aType == nsGkAtoms::onbeforeunload &&
+      mTabChild &&
+      (!mDoc || !(mDoc->GetSandboxFlags() & SANDBOXED_MODALS))) {
+    MOZ_ASSERT(IsInnerWindow());
+    mBeforeUnloadListenerCount--;
+    MOZ_ASSERT(mBeforeUnloadListenerCount >= 0);
+    mTabChild->BeforeUnloadRemoved();
   }
 }
 
@@ -13960,7 +14055,7 @@ nsGlobalWindow::BeginWindowMove(Event& aMouseDownEvent, Element* aPanel,
 #ifdef MOZ_XUL
   if (aPanel) {
     nsIFrame* frame = aPanel->GetPrimaryFrame();
-    if (!frame || frame->GetType() != nsGkAtoms::menuPopupFrame) {
+    if (!frame || !frame->IsMenuPopupFrame()) {
       return;
     }
 

@@ -2883,9 +2883,10 @@ StyleAnimationValue::AddWeighted(nsCSSPropertyID aProperty,
     case eUnit_Enumerated:
       switch (aProperty) {
         case eCSSProperty_font_stretch: {
-          // Animate just like eUnit_Integer.
-          int32_t result = floor(aCoeff1 * double(aValue1.GetIntValue()) +
-                                 aCoeff2 * double(aValue2.GetIntValue()));
+          // https://drafts.csswg.org/css-fonts-3/#font-stretch-animation
+          double interpolatedValue = aCoeff1 * double(aValue1.GetIntValue()) +
+                                     aCoeff2 * double(aValue2.GetIntValue());
+          int32_t result = floor(interpolatedValue + 0.5);
           if (result < NS_STYLE_FONT_STRETCH_ULTRA_CONDENSED) {
             result = NS_STYLE_FONT_STRETCH_ULTRA_CONDENSED;
           } else if (result > NS_STYLE_FONT_STRETCH_ULTRA_EXPANDED) {
@@ -2917,10 +2918,10 @@ StyleAnimationValue::AddWeighted(nsCSSPropertyID aProperty,
       return true;
     }
     case eUnit_Integer: {
-      // http://dev.w3.org/csswg/css3-transitions/#animation-of-property-types-
-      // says we should use floor
-      int32_t result = floor(aCoeff1 * double(aValue1.GetIntValue()) +
-                             aCoeff2 * double(aValue2.GetIntValue()));
+      // https://drafts.csswg.org/css-transitions/#animtype-integer
+      double interpolatedValue = aCoeff1 * double(aValue1.GetIntValue()) +
+                                 aCoeff2 * double(aValue2.GetIntValue());
+      int32_t result = floor(interpolatedValue + 0.5);
       if (aProperty == eCSSProperty_font_weight) {
         if (result < 100) {
           result = 100;
@@ -4191,6 +4192,16 @@ StyleClipBasicShapeToCSSArray(const StyleShapeSource& aClipPath,
   return true;
 }
 
+static void
+SetFallbackValue(nsCSSValuePair* aPair, const nsStyleSVGPaint& aPaint)
+{
+  if (aPaint.GetFallbackType() == eStyleSVGFallbackType_Color) {
+    aPair->mYValue.SetColorValue(aPaint.GetFallbackColor());
+  } else {
+    aPair->mYValue.SetNoneValue();
+  }
+}
+
 bool
 StyleAnimationValue::ExtractComputedValue(nsCSSPropertyID aProperty,
                                           nsStyleContext* aStyleContext,
@@ -4708,22 +4719,33 @@ StyleAnimationValue::ExtractComputedValue(nsCSSPropertyID aProperty,
             NS_WARNING("Null paint server");
             return false;
           }
-          nsAutoPtr<nsCSSValuePair> pair(new nsCSSValuePair);
-          pair->mXValue.SetURLValue(url);
-          pair->mYValue.SetColorValue(paint.GetFallbackColor());
-          aComputedValue.SetAndAdoptCSSValuePairValue(pair.forget(),
-                                                      eUnit_CSSValuePair);
+          if (paint.GetFallbackType() != eStyleSVGFallbackType_NotSet) {
+            nsAutoPtr<nsCSSValuePair> pair(new nsCSSValuePair);
+            pair->mXValue.SetURLValue(url);
+            SetFallbackValue(pair, paint);
+            aComputedValue.SetAndAdoptCSSValuePairValue(pair.forget(),
+                                                        eUnit_CSSValuePair);
+          } else {
+            auto result = MakeUnique<nsCSSValue>();
+            result->SetURLValue(url);
+            aComputedValue.SetAndAdoptCSSValueValue(
+              result.release(), eUnit_URL);
+          }
           return true;
         }
         case eStyleSVGPaintType_ContextFill:
         case eStyleSVGPaintType_ContextStroke: {
-          nsAutoPtr<nsCSSValuePair> pair(new nsCSSValuePair);
-          pair->mXValue.SetIntValue(paint.Type() == eStyleSVGPaintType_ContextFill ?
-                                    NS_COLOR_CONTEXT_FILL : NS_COLOR_CONTEXT_STROKE,
-                                    eCSSUnit_Enumerated);
-          pair->mYValue.SetColorValue(paint.GetFallbackColor());
-          aComputedValue.SetAndAdoptCSSValuePairValue(pair.forget(),
-                                                      eUnit_CSSValuePair);
+          int32_t value = paint.Type() == eStyleSVGPaintType_ContextFill ?
+                            NS_COLOR_CONTEXT_FILL : NS_COLOR_CONTEXT_STROKE;
+          if (paint.GetFallbackType() != eStyleSVGFallbackType_NotSet) {
+            nsAutoPtr<nsCSSValuePair> pair(new nsCSSValuePair);
+            pair->mXValue.SetIntValue(value, eCSSUnit_Enumerated);
+            SetFallbackValue(pair, paint);
+            aComputedValue.SetAndAdoptCSSValuePairValue(pair.forget(),
+                                                        eUnit_CSSValuePair);
+          } else {
+            aComputedValue.SetIntValue(value, eUnit_Enumerated);
+          }
           return true;
         }
         default:

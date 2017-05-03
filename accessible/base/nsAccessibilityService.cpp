@@ -1142,9 +1142,9 @@ nsAccessibilityService::CreateAccessible(nsINode* aNode,
     // accessible for it.
     if (!newAcc && aContext->IsXULTabpanels() &&
         content->GetParent() == aContext->GetContent()) {
-      nsIAtom* frameType = frame->GetType();
-      if (frameType == nsGkAtoms::boxFrame ||
-          frameType == nsGkAtoms::scrollFrame) {
+      LayoutFrameType frameType = frame->Type();
+      if (frameType == LayoutFrameType::Box ||
+          frameType == LayoutFrameType::Scroll) {
         newAcc = new XULTabpanelAccessible(content, document);
       }
     }
@@ -1615,12 +1615,12 @@ nsAccessibilityService::CreateAccessibleByFrameType(nsIFrame* aFrame,
       if (table) {
         nsIContent* parentContent = aContent->GetParent();
         nsIFrame* parentFrame = parentContent->GetPrimaryFrame();
-        if (parentFrame->GetType() != nsGkAtoms::tableWrapperFrame) {
+        if (!parentFrame->IsTableWrapperFrame()) {
           parentContent = parentContent->GetParent();
           parentFrame = parentContent->GetPrimaryFrame();
         }
 
-        if (parentFrame->GetType() == nsGkAtoms::tableWrapperFrame &&
+        if (parentFrame->IsTableWrapperFrame() &&
             table->GetContent() == parentContent) {
           newAcc = new HTMLTableRowAccessible(aContent, document);
         }

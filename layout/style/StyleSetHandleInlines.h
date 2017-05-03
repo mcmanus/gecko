@@ -123,14 +123,11 @@ StyleSetHandle::Ptr::ResolvePseudoElementStyle(dom::Element* aParentElement,
                                       aPseudoElement));
 }
 
-// aFlags is an nsStyleSet flags bitfield
 already_AddRefed<nsStyleContext>
 StyleSetHandle::Ptr::ResolveInheritingAnonymousBoxStyle(nsIAtom* aPseudoTag,
-                                                        nsStyleContext* aParentContext,
-                                                        uint32_t aFlags)
+                                                        nsStyleContext* aParentContext)
 {
-  FORWARD(ResolveInheritingAnonymousBoxStyle, (aPseudoTag, aParentContext,
-                                               aFlags));
+  FORWARD(ResolveInheritingAnonymousBoxStyle, (aPseudoTag, aParentContext));
 }
 
 already_AddRefed<nsStyleContext>
@@ -188,7 +185,7 @@ StyleSetHandle::Ptr::InsertStyleSheetBefore(SheetType aType,
   FORWARD_CONCRETE(
     InsertStyleSheetBefore,
     (aType, aNewSheet->AsGecko(), aReferenceSheet->AsGecko()),
-    (aType, aReferenceSheet->AsServo(), aReferenceSheet->AsServo()));
+    (aType, aNewSheet->AsServo(), aReferenceSheet->AsServo()));
 }
 
 int32_t

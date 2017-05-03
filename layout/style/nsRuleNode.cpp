@@ -9357,32 +9357,51 @@ SetSVGPaint(const nsCSSValue& aValue, const nsStyleSVGPaint& parentPaint,
     } else {
       aResult.SetColor(NS_RGB(0, 0, 0));
     }
+  } else if (aValue.GetUnit() == eCSSUnit_URL) {
+    aResult.SetPaintServer(aValue.GetURLStructValue());
+  } else if (aValue.GetUnit() == eCSSUnit_Enumerated) {
+    switch (aValue.GetIntValue()) {
+    case NS_COLOR_CONTEXT_FILL:
+      aResult.SetContextValue(eStyleSVGPaintType_ContextFill);
+      break;
+    case NS_COLOR_CONTEXT_STROKE:
+      aResult.SetContextValue(eStyleSVGPaintType_ContextStroke);
+      break;
+    default:
+      NS_NOTREACHED("unknown keyword as paint server value");
+    }
   } else if (SetColor(aValue, NS_RGB(0, 0, 0), aPresContext, aContext,
                       color, aConditions)) {
     aResult.SetColor(color);
   } else if (aValue.GetUnit() == eCSSUnit_Pair) {
     const nsCSSValuePair& pair = aValue.GetPairValue();
 
+    nsStyleSVGFallbackType fallbackType;
     nscolor fallback;
     if (pair.mYValue.GetUnit() == eCSSUnit_None) {
+      fallbackType = eStyleSVGFallbackType_None;
       fallback = NS_RGBA(0, 0, 0, 0);
     } else {
       MOZ_ASSERT(pair.mYValue.GetUnit() != eCSSUnit_Inherit,
                  "cannot inherit fallback colour");
+      fallbackType = eStyleSVGFallbackType_Color;
       SetColor(pair.mYValue, NS_RGB(0, 0, 0), aPresContext, aContext,
                fallback, aConditions);
     }
 
     if (pair.mXValue.GetUnit() == eCSSUnit_URL) {
-      aResult.SetPaintServer(pair.mXValue.GetURLStructValue(), fallback);
+      aResult.SetPaintServer(pair.mXValue.GetURLStructValue(),
+                             fallbackType, fallback);
     } else if (pair.mXValue.GetUnit() == eCSSUnit_Enumerated) {
 
       switch (pair.mXValue.GetIntValue()) {
       case NS_COLOR_CONTEXT_FILL:
-        aResult.SetContextValue(eStyleSVGPaintType_ContextFill, fallback);
+        aResult.SetContextValue(eStyleSVGPaintType_ContextFill,
+                                fallbackType, fallback);
         break;
       case NS_COLOR_CONTEXT_STROKE:
-        aResult.SetContextValue(eStyleSVGPaintType_ContextStroke, fallback);
+        aResult.SetContextValue(eStyleSVGPaintType_ContextStroke,
+                                fallbackType, fallback);
         break;
       default:
         NS_NOTREACHED("unknown keyword as paint server value");
@@ -9728,6 +9747,48 @@ nsRuleNode::ComputeSVGData(void* aStartStruct,
            SETVAL_ENUMERATED | SETVAL_UNSET_INHERIT,
            parentSVG->mTextAnchor,
            NS_STYLE_TEXT_ANCHOR_START);
+
+  // -moz-context-properties:
+  const nsCSSValue* contextPropsValue = aRuleData->ValueForContextProperties();
+  switch (contextPropsValue->GetUnit()) {
+  case eCSSUnit_Null:
+    break;
+
+  case eCSSUnit_List:
+  case eCSSUnit_ListDep: {
+    svg->mContextProps.Clear();
+    svg->mContextPropsBits = 0;
+    for (const nsCSSValueList* item = contextPropsValue->GetListValue();
+         item; item = item->mNext)
+    {
+      nsIAtom* atom = item->mValue.GetAtomValue();
+      svg->mContextProps.AppendElement(atom);
+      if (atom == nsGkAtoms::fill) {
+        svg->mContextPropsBits |= NS_STYLE_CONTEXT_PROPERTY_FILL;
+      } else if (atom == nsGkAtoms::stroke) {
+        svg->mContextPropsBits |= NS_STYLE_CONTEXT_PROPERTY_STROKE;
+      }
+    }
+    break;
+  }
+
+  case eCSSUnit_Inherit:
+    svg->mContextProps.Clear();
+    svg->mContextProps.AppendElements(parentSVG->mContextProps);
+    svg->mContextPropsBits = parentSVG->mContextPropsBits;
+    conditions.SetUncacheable();
+    break;
+
+  case eCSSUnit_Initial:
+  case eCSSUnit_None:
+  case eCSSUnit_Unset:
+    svg->mContextProps.Clear();
+    svg->mContextPropsBits = 0;
+    break;
+
+  default:
+    MOZ_ASSERT(false, "unrecognized -moz-context-properties value");
+  }
 
   COMPUTE_END_INHERITED(SVG, svg)
 }

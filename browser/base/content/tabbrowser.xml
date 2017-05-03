@@ -1065,6 +1065,8 @@
               return;
 
             if (!aForceUpdate) {
+              document.commandDispatcher.lock();
+
               TelemetryStopwatch.start("FX_TAB_SWITCH_UPDATE_MS");
               if (!gMultiProcessBrowser) {
                 // old way of measuring tab paint which is not valid with e10s.
@@ -1274,6 +1276,8 @@
             this.tabContainer._setPositionalAttributes();
 
             if (!gMultiProcessBrowser) {
+              document.commandDispatcher.unlock();
+
               let event = new CustomEvent("TabSwitchDone", {
                 bubbles: true,
                 cancelable: true
@@ -2059,6 +2063,34 @@
               let getter;
               let setter;
               switch (name) {
+                case "audioMuted":
+                  getter = () => {
+                    return false;
+                  };
+                  break;
+                case "contentTitle":
+                  getter = () => {
+                    return SessionStore.getLazyTabValue(aTab, "title");
+                  };
+                  break;
+                case "currentURI":
+                  getter = () => {
+                    let url = SessionStore.getLazyTabValue(aTab, "url");
+                    return Services.io.newURI(url);
+                  };
+                  break;
+                case "getTabBrowser":
+                  getter = () => {
+                    return () => {
+                      return this;
+                    };
+                  };
+                  break;
+                case "isRemoteBrowser":
+                  getter = () => {
+                    return browser.getAttribute("remote") == "true";
+                  };
+                  break;
                 case "permitUnload":
                   getter = () => {
                     return () => {
@@ -2077,27 +2109,6 @@
                       }, { once: true });
                       gBrowser._insertBrowser(aTab);
                     };
-                  };
-                  break;
-                case "isRemoteBrowser":
-                  getter = () => {
-                    return browser.getAttribute("remote") == "true";
-                  };
-                  break;
-                case "audioMuted":
-                  getter = () => {
-                    return false;
-                  };
-                  break;
-                case "currentURI":
-                  getter = () => {
-                    let url = SessionStore.getLazyTabValue(aTab, "url");
-                    return Services.io.newURI(url);
-                  };
-                  break;
-                case "contentTitle":
-                  getter = () => {
-                    return SessionStore.getLazyTabValue(aTab, "title");
                   };
                   break;
                 case "userTypedValue":
@@ -3394,7 +3405,7 @@
         </getter>
         <setter>
           <![CDATA[
-          if (gNavToolbox.collapsed) {
+          if (gNavToolbox.collapsed && !this._allowTabChange) {
             return this.mTabBox.selectedTab;
           }
           // Update the tab
@@ -3973,6 +3984,8 @@
               if (fromBrowser) {
                 fromBrowser.removeAttribute("primary");
               }
+
+              document.commandDispatcher.unlock();
 
               let event = new CustomEvent("TabSwitchDone", {
                 bubbles: true,

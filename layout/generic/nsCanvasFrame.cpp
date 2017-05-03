@@ -312,12 +312,10 @@ nsDisplayCanvasBackgroundColor::CreateWebRenderCommands(mozilla::wr::DisplayList
   nsRect bgClipRect = frame->CanvasArea() + offset;
   int32_t appUnitsPerDevPixel = mFrame->PresContext()->AppUnitsPerDevPixel();
 
-  Rect devPxRect(Float(bgClipRect.x / appUnitsPerDevPixel),
-                 Float(bgClipRect.y / appUnitsPerDevPixel),
-                 Float(bgClipRect.width / appUnitsPerDevPixel),
-                 Float(bgClipRect.height / appUnitsPerDevPixel));
+  LayoutDeviceRect rect = LayoutDeviceRect::FromAppUnits(
+          bgClipRect, appUnitsPerDevPixel);
 
-  Rect transformedRect = aLayer->RelativeToParent(devPxRect);
+  LayerRect transformedRect = aLayer->RelativeToParent(rect);
   aBuilder.PushRect(wr::ToWrRect(transformedRect),
                     aBuilder.BuildClipRegion(wr::ToWrRect(transformedRect)),
                     wr::ToWrColor(ToDeviceColor(mColor)));
@@ -809,15 +807,8 @@ nsCanvasFrame::Reflow(nsPresContext*           aPresContext,
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowInput, aDesiredSize);
 }
 
-nsIAtom*
-nsCanvasFrame::GetType() const
-{
-  return nsGkAtoms::canvasFrame;
-}
-
-nsresult 
-nsCanvasFrame::GetContentForEvent(WidgetEvent* aEvent,
-                                  nsIContent** aContent)
+nsresult
+nsCanvasFrame::GetContentForEvent(WidgetEvent* aEvent, nsIContent** aContent)
 {
   NS_ENSURE_ARG_POINTER(aContent);
   nsresult rv = nsFrame::GetContentForEvent(aEvent,

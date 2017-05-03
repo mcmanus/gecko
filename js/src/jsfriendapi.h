@@ -343,38 +343,6 @@ JS_DefineFunctionsWithHelp(JSContext* cx, JS::HandleObject obj, const JSFunction
 
 namespace js {
 
-extern JS_FRIEND_DATA(const js::ClassOps) ProxyClassOps;
-extern JS_FRIEND_DATA(const js::ClassExtension) ProxyClassExtension;
-extern JS_FRIEND_DATA(const js::ObjectOps) ProxyObjectOps;
-
-/*
- * Helper Macros for creating JSClasses that function as proxies.
- *
- * NB: The macro invocation must be surrounded by braces, so as to
- *     allow for potential JSClass extensions.
- */
-#define PROXY_MAKE_EXT(objectMoved)                                     \
-    {                                                                   \
-        js::proxy_WeakmapKeyDelegate,                                   \
-        objectMoved                                                     \
-    }
-
-#define PROXY_CLASS_WITH_EXT(name, flags, extPtr)                                       \
-    {                                                                                   \
-        name,                                                                           \
-        js::Class::NON_NATIVE |                                                         \
-            JSCLASS_IS_PROXY |                                                          \
-            JSCLASS_DELAY_METADATA_BUILDER |                                            \
-            flags,                                                                      \
-        &js::ProxyClassOps,                                                             \
-        JS_NULL_CLASS_SPEC,                                                             \
-        extPtr,                                                                         \
-        &js::ProxyObjectOps                                                             \
-    }
-
-#define PROXY_CLASS_DEF(name, flags) \
-  PROXY_CLASS_WITH_EXT(name, flags, &js::ProxyClassExtension)
-
 extern JS_FRIEND_API(JSObject*)
 proxy_WeakmapKeyDelegate(JSObject* obj);
 
@@ -451,9 +419,9 @@ IsAtomsZone(JS::Zone* zone);
 
 struct WeakMapTracer
 {
-    JSContext* context;
+    JSRuntime* runtime;
 
-    explicit WeakMapTracer(JSContext* cx) : context(cx) {}
+    explicit WeakMapTracer(JSRuntime* rt) : runtime(rt) {}
 
     // Weak map tracer callback, called once for every binding of every
     // weak map that was live at the time of the last garbage collection.
@@ -468,7 +436,7 @@ extern JS_FRIEND_API(void)
 TraceWeakMaps(WeakMapTracer* trc);
 
 extern JS_FRIEND_API(bool)
-AreGCGrayBitsValid(JSContext* cx);
+AreGCGrayBitsValid(JSRuntime* rt);
 
 extern JS_FRIEND_API(bool)
 ZoneGlobalsAreAllGray(JS::Zone* zone);
@@ -505,7 +473,7 @@ IterateGrayObjectsUnderCC(JS::Zone* zone, GCThingCallback cellCallback, void* da
 //
 // This doesn't trace weak maps as these are handled separately.
 extern JS_FRIEND_API(bool)
-CheckGrayMarkingState(JSContext* cx);
+CheckGrayMarkingState(JSRuntime* rt);
 #endif
 
 #ifdef JS_HAS_CTYPES
@@ -554,6 +522,8 @@ struct Object {
     shadow::Shape*      shape;
     JS::Value*          slots;
     void*               _1;
+
+    static const size_t MAX_FIXED_SLOTS = 16;
 
     size_t numFixedSlots() const { return shape->slotInfo >> Shape::FIXED_SLOTS_SHIFT; }
     JS::Value* fixedSlots() const {
@@ -722,6 +692,11 @@ GetObjectPrivate(JSObject* obj)
     return *addr;
 }
 
+/**
+ * Get the value stored in an object's reserved slot. This can be used with
+ * both native objects and proxies, but if |obj| is known to be a proxy
+ * GetProxyReservedSlot is a bit more efficient.
+ */
 inline const JS::Value&
 GetReservedSlot(JSObject* obj, size_t slot)
 {
@@ -730,15 +705,20 @@ GetReservedSlot(JSObject* obj, size_t slot)
 }
 
 JS_FRIEND_API(void)
-SetReservedOrProxyPrivateSlotWithBarrier(JSObject* obj, size_t slot, const JS::Value& value);
+SetReservedSlotWithBarrier(JSObject* obj, size_t slot, const JS::Value& value);
 
+/**
+ * Store a value in an object's reserved slot. This can be used with
+ * both native objects and proxies, but if |obj| is known to be a proxy
+ * SetProxyReservedSlot is a bit more efficient.
+ */
 inline void
 SetReservedSlot(JSObject* obj, size_t slot, const JS::Value& value)
 {
     MOZ_ASSERT(slot < JSCLASS_RESERVED_SLOTS(GetObjectClass(obj)));
     shadow::Object* sobj = reinterpret_cast<shadow::Object*>(obj);
     if (sobj->slotRef(slot).isGCThing() || value.isGCThing())
-        SetReservedOrProxyPrivateSlotWithBarrier(obj, slot, value);
+        SetReservedSlotWithBarrier(obj, slot, value);
     else
         sobj->slotRef(slot) = value;
 }
@@ -1289,11 +1269,10 @@ typedef enum DOMProxyShadowsResult {
 typedef DOMProxyShadowsResult
 (* DOMProxyShadowsCheck)(JSContext* cx, JS::HandleObject object, JS::HandleId id);
 JS_FRIEND_API(void)
-SetDOMProxyInformation(const void* domProxyHandlerFamily, uint32_t domProxyExpandoSlot,
+SetDOMProxyInformation(const void* domProxyHandlerFamily,
                        DOMProxyShadowsCheck domProxyShadowsCheck);
 
 const void* GetDOMProxyHandlerFamily();
-uint32_t GetDOMProxyExpandoSlot();
 DOMProxyShadowsCheck GetDOMProxyShadowsCheck();
 inline bool DOMProxyIsShadowing(DOMProxyShadowsResult result) {
     return result == Shadows ||
@@ -2983,6 +2962,20 @@ EnableAccessValidation(JSContext* cx, bool enabled);
 // should be made from whichever thread owns |global| at a given time.
 extern JS_FRIEND_API(void)
 SetCompartmentValidAccessPtr(JSContext* cx, JS::HandleObject global, bool* accessp);
+
+// If the JS engine wants to block so that other cooperative threads can run, it
+// will call the yield callback. It may do this if it needs to access a ZoneGroup
+// that is held by another thread (such as the system zone group).
+typedef void
+(* YieldCallback)(JSContext* cx);
+
+extern JS_FRIEND_API(void)
+SetCooperativeYieldCallback(JSContext* cx, YieldCallback callback);
+
+// Returns true if the system zone is available (i.e., if no cooperative contexts
+// are using it now).
+extern JS_FRIEND_API(bool)
+SystemZoneAvailable(JSContext* cx);
 
 } /* namespace js */
 

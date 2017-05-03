@@ -30,14 +30,13 @@ to mochitest command.
 ## Failures
 
 * Media query support:
-  * test_media_queries.html [156]
-  * test_media_queries_dynamic.html [11]
+  * test_media_queries.html [38]
+  * test_media_queries_dynamic.html [6]
   * test_media_queries_dynamic_xbl.html [2]
   * test_webkit_device_pixel_ratio.html: -webkit-device-pixel-ratio [3]
   * browser_bug453896.js [8]
 * Animation support:
-  * test_transitions_and_reframes.html: pseudo frames bug 1331047 [4]
-  * test_animations.html: 6 of them bug 1331047 [25]
+  * test_animations.html [5]
   * test_animations_dynamic_changes.html [1]
   * test_bug716226.html [1]
   * OMTA
@@ -52,11 +51,8 @@ to mochitest command.
     * test_animations_reverse.html [1]
   * SMIL Animation
     * test_restyles_in_smil_animation.html [2]
-  * CSS Timing Functions: Frames timing functions
-    * test_value_storage.html `frames` [30]
   * Property parsing and computation:
     * test_property_syntax_errors.html `animation` [20]
-    * test_value_storage.html `animation` [15]
 * CSSOM support:
   * \@import bug 1352968
     * test_bug221428.html [1]
@@ -65,7 +61,7 @@ to mochitest command.
     * test_keyframes_rules.html [1]
     * test_rules_out_of_sheets.html [1]
   * \@support bug 1355394
-    * test_supports_rules.html [1]
+    * test_supports_rules.html [6]
 * test_bug357614.html: case-insensitivity for old attrs in attr selector servo/servo#15006 [2]
 * test_bug387615.html: servo/servo#15006 [1]
 * test_bug397427.html: @import issue bug 1331291 and CSSOM support of @import [1]
@@ -73,18 +69,14 @@ to mochitest command.
   * test_bug413958.html `monitorConsole` [3]
   * test_parser_diagnostics_unprintables.html [550]
 * Transition support:
-  * test_compute_data_with_start_struct.html `transition` [2]
-  * test_transitions.html: pseudo elements [10]
+  * test_transitions.html: pseudo elements [12]
   * Events:
     * test_animations_event_order.html [2]
 * test_computed_style.html `gradient`: -moz- and -webkit-prefixed gradient values [35]
 * ... `mask`: mask-image isn't set properly bug 1341667 [10]
-* ... `fill`: svg paint should distinguish whether there is fallback bug 1347409 [2]
-* ... `stroke`: svg paint should distinguish whether there is fallback bug 1347409 [2]
 * character not properly escaped servo/servo#15947
   * test_parse_url.html [1]
   * test_bug829816.html [8]
-* test_compute_data_with_start_struct.html `timing-function`: incorrectly computing keywords to bezier function servo/servo#15086 [2]
 * \@counter-style support bug 1328319
   * test_counter_descriptor_storage.html [1]
   * test_counter_style.html [5]
@@ -125,36 +117,17 @@ to mochitest command.
   * test_initial_storage.html `grid` [*]
   * test_property_syntax_errors.html `grid`: actually there are issues with this [*]
   * test_value_storage.html `'grid` [*]
-* url value from decl setter bug 1330503
-  * test_compute_data_with_start_struct.html `border-image-source` [2]
-  * test_inherit_computation.html `border-image` [2]
-  * test_initial_computation.html `border-image` [4]
 * Unimplemented prefixed properties:
-  * -moz-force-broken-image-icon servo/servo#16001
-    * test_compute_data_with_start_struct.html `-moz-force-broken-image-icon` [2]
-    * test_inherit_computation.html `-moz-force-broken-image-icon` [2]
-    * test_inherit_storage.html `-moz-force-broken-image-icon` [2]
-    * test_initial_computation.html `-moz-force-broken-image-icon` [4]
-    * test_initial_storage.html `-moz-force-broken-image-icon` [4]
-    * test_value_storage.html `-moz-force-broken-image-icon` [4]
   * -moz-transform: need different parsing rules servo/servo#16003
-    * test_value_storage.html `-moz-transform`: need different parsing rules bug 1357906 [72]
+    * test_value_storage.html `-moz-transform`: need different parsing rules bug 1357906 [70]
   * test_variables.html `var(--var6)`: -x-system-font [1]
 * Unimplemented CSS properties:
   * place-{content,items,self} shorthands servo/servo#16391
     * test_align_shorthand_serialization.html [8]
-    * test_value_storage.html `place-` [7]
   * font-variant-{alternates,east-asian,ligatures,numeric} properties servo/servo#15957
     * test_property_syntax_errors.html `font-variant-alternates` [2]
     * test_value_storage.html `font-variant` [176]
     * test_specified_value_serialization.html `bug-721136` [1]
-  * touch-action property servo/servo#16372
-    * test_compute_data_with_start_struct.html `touch-action` [2]
-    * test_inherit_computation.html `touch-action` [2]
-    * test_inherit_storage.html `touch-action` [2]
-    * test_initial_computation.html `touch-action` [4]
-    * test_initial_storage.html `touch-action` [4]
-    * test_value_storage.html `touch-action` [14]
 * Properties implemented but not in geckolib:
   * font-feature-settings property servo/servo#15975
     * test_compute_data_with_start_struct.html `font-feature-settings` [2]
@@ -165,12 +138,8 @@ to mochitest command.
     * test_value_storage.html `font-feature-settings` [112]
   * image-orientation property bug 1341758
     * test_value_storage.html `image-orientation` [40]
-  * flexbox / grid position properties servo/servo#15001
-    * test_value_storage.html `align-` [9]
-    * ... `justify-` [14]
 * Stylesheet cloning is somehow busted bug 1348481
-  * test_selectors.html `cloned correctly` [157]
-  * ... `matched clone` [204]
+  * test_selectors.html `matched clone` [3]
 * Unsupported prefixed values
   * moz-prefixed gradient functions bug 1337655
     * test_value_storage.html `-moz-linear-gradient` [322]
@@ -192,14 +161,11 @@ to mochitest command.
     * test_value_storage.html `cursor` [4]
   * -webkit-{flex,inline-flex} for display servo/servo#15400
     * test_webkit_flex_display.html [4]
-  * test_pixel_lengths.html `mozmm`: mozmm unit bug 1356104 [3]
 * Unsupported values
   * SVG-only values of pointer-events not recognized
     * test_value_storage.html `pointer-events` [1]
   * new syntax of rgba?() and hsla?() functions servo/rust-cssparser#113
     * test_computed_style.html `css-color-4` [2]
-  * color interpolation hint not supported servo/servo#15166
-    * test_value_storage.html `'linear-gradient` [50]
   * SVG-in-OpenType values not supported servo/servo#15211 bug 1355412
     * test_value_storage.html `context-` [7]
     * test_bug798843_pref.html [7]
@@ -217,7 +183,6 @@ to mochitest command.
   * border-radius and -moz-outline-radius shorthand servo/servo#15169
   * color value not canonicalized servo/servo#15397
     * test_shorthand_property_getters.html `should condense to canonical case` [2]
-  * test_variables.html `--weird`: name of custom property is not escaped properly servo/servo#15399 [1]
   * :not(*) doesn't serialize properly servo/servo#16017
     * test_selectors.html `:not()` [8]
     * ... `:not(html|)` [1]
@@ -271,7 +236,7 @@ to mochitest command.
   * test_rule_serialization.html [2]
   * test_moz_document_rules.html [13]
   * test_bug511909.html `@-moz-document` [4]
-  * test_condition_text.html: also \@supports [7]
+  * test_condition_text.html: also \@supports [11]
 * getComputedStyle style doesn't contain custom properties bug 1336891
   * test_variable_serialization_computed.html [35]
   * test_variables.html `custom property name` [2]
@@ -299,7 +264,6 @@ to mochitest command.
 
 ## Unknown / Unsure
 
-* test_additional_sheets.html: one sub-test cascade order is wrong [1]
 * test_selectors_on_anonymous_content.html: xbl and :nth-child [1]
 * test_parse_rule.html `rgb(0, 128, 0)`: color properties not getting computed [5]
 

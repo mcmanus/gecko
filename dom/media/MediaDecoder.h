@@ -252,17 +252,6 @@ public:
 
   already_AddRefed<GMPCrashHelper> GetCrashHelper() override;
 
-protected:
-  // Updates the media duration. This is called while the media is being
-  // played, calls before the media has reached loaded metadata are ignored.
-  // The duration is assumed to be an estimate, and so a degree of
-  // instability is expected; if the incoming duration is not significantly
-  // different from the existing duration, the change request is ignored.
-  // If the incoming duration is significantly different, the duration is
-  // changed, this causes a durationchanged event to fire to the media
-  // element.
-  void UpdateEstimatedMediaDuration(int64_t aDuration) override;
-
 public:
   // Returns true if this media supports random seeking. False for example with
   // chained ogg files.
@@ -397,17 +386,6 @@ private:
   // notifies any thread blocking on this object's monitor of the
   // change. Call on the main thread only.
   virtual void ChangeState(PlayState aState);
-
-  // Called from MetadataLoaded(). Ask its owner to create audio/video tracks
-  // and adds them to its owner's audio/video track list.
-  // Call on the main thread only.
-  void ConstructMediaTracks();
-
-  // Ask its owner to remove all audio tracks and video tracks that are
-  // previously added into the track list.
-  // Call on the main thread only.
-  void RemoveMediaTracks();
-
 
   // Called when the video has completed playing.
   // Call on the main thread only.
@@ -568,9 +546,9 @@ protected:
   // This corresponds to the "current position" in HTML5.
   // We allow omx subclasses to substitute an alternative current position for
   // usage with the audio offload player.
-  virtual int64_t CurrentPosition()
+  virtual media::TimeUnit CurrentPosition()
   {
-    return mCurrentPosition.Ref().ToMicroseconds();
+    return mCurrentPosition.Ref();
   }
 
   // Official duration of the media resource as observed by script.
@@ -696,11 +674,6 @@ protected:
   // or play the media again.
   bool mMinimizePreroll;
 
-  // True if audio tracks and video tracks are constructed and added into the
-  // owenr's track list, false if all tracks are removed from the owner's track
-  // list.
-  bool mMediaTracksConstructed;
-
   // True if we've already fired metadataloaded.
   bool mFiredMetadataLoaded;
 
@@ -775,13 +748,6 @@ protected:
 
   Canonical<bool> mPreservesPitch;
 
-  // Media duration according to the demuxer's current estimate.
-  // Note that it's quite bizarre for this to live on the main thread - it would
-  // make much more sense for this to be owned by the demuxer's task queue. But
-  // currently this is only every changed in NotifyDataArrived, which runs on
-  // the main thread. That will need to be cleaned up at some point.
-  Canonical<media::NullableTimeUnit> mEstimatedDuration;
-
   // Media duration set explicitly by JS. At present, this is only ever present
   // for MSE.
   Canonical<Maybe<double>> mExplicitDuration;
@@ -826,10 +792,6 @@ public:
   AbstractCanonical<bool>* CanonicalPreservesPitch()
   {
     return &mPreservesPitch;
-  }
-  AbstractCanonical<media::NullableTimeUnit>* CanonicalEstimatedDuration()
-  {
-    return &mEstimatedDuration;
   }
   AbstractCanonical<Maybe<double>>* CanonicalExplicitDuration()
   {

@@ -339,19 +339,43 @@ impl PropertyAnimation {
 
     /// Update the given animation at a given point of progress.
     pub fn update(&self, style: &mut ComputedValues, time: f64) {
-        let progress = match self.timing_function {
+        let timing_function = match self.timing_function {
+            TransitionTimingFunction::Keyword(keyword) =>
+                keyword.to_non_keyword_value(),
+            other => other,
+        };
+        let progress = match timing_function {
             TransitionTimingFunction::CubicBezier(p1, p2) => {
                 // See `WebCore::AnimationBase::solveEpsilon(double)` in WebKit.
                 let epsilon = 1.0 / (200.0 * (self.duration.seconds() as f64));
                 Bezier::new(Point2D::new(p1.x as f64, p1.y as f64),
                             Point2D::new(p2.x as f64, p2.y as f64)).solve(time, epsilon)
-            }
+            },
             TransitionTimingFunction::Steps(steps, StartEnd::Start) => {
                 (time * (steps as f64)).ceil() / (steps as f64)
-            }
+            },
             TransitionTimingFunction::Steps(steps, StartEnd::End) => {
                 (time * (steps as f64)).floor() / (steps as f64)
-            }
+            },
+            TransitionTimingFunction::Frames(frames) => {
+                // https://drafts.csswg.org/css-timing/#frames-timing-functions
+                let mut out = (time * (frames as f64)).floor() / ((frames - 1) as f64);
+                if out > 1.0 {
+                    // FIXME: Basically, during the animation sampling process, the input progress
+                    // should be in the range of [0, 1]. However, |time| is not accurate enough
+                    // here, which means |time| could be larger than 1.0 in the last animation
+                    // frame. (It should be equal to 1.0 exactly.) This makes the output of frames
+                    // timing function jumps to the next frame/level.
+                    // However, this solution is still not correct because |time| is possible
+                    // outside the range of [0, 1] after introducing Web Animations. We should fix
+                    // this problem when implementing web animations.
+                    out = 1.0;
+                }
+                out
+            },
+            TransitionTimingFunction::Keyword(_) => {
+                panic!("Keyword function should not appear")
+            },
         };
 
         self.property.update(style, progress);
@@ -451,7 +475,8 @@ fn compute_style_for_animation_step(context: &SharedStyleContext,
                                                /* cascade_info = */ None,
                                                &*context.error_reporter,
                                                font_metrics_provider,
-                                               CascadeFlags::empty());
+                                               CascadeFlags::empty(),
+                                               context.quirks_mode);
             computed
         }
     }

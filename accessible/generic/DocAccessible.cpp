@@ -1455,7 +1455,7 @@ DocAccessible::NotifyOfLoading(bool aIsReloading)
   if (!IsLoadEventTarget())
     return;
 
-  if (aIsReloading) {
+  if (aIsReloading && !mLoadEventType) {
     // Fire reload and state busy events on existing document accessible while
     // event from user input flag can be calculated properly and accessible
     // is alive. When new document gets loaded then this one is destroyed.
@@ -1481,6 +1481,9 @@ DocAccessible::DoInitialUpdate()
       if (RefPtr<dom::TabChild> tabChild = dom::TabChild::GetFrom(docShell)) {
         DocAccessibleChild* ipcDoc = new DocAccessibleChild(this, tabChild);
         SetIPCDoc(ipcDoc);
+        if (IsRoot()) {
+          tabChild->SetTopLevelDocAccessibleChild(ipcDoc);
+        }
 
 #if defined(XP_WIN)
         IAccessibleHolder holder(CreateHolderFromAccessible(this));

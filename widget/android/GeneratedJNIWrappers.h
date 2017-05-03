@@ -2191,10 +2191,11 @@ public:
         typedef void SetterType;
         typedef mozilla::jni::Args<
                 int32_t,
+                int32_t,
                 int32_t> Args;
         static constexpr char name[] = "onImeUpdateComposition";
         static constexpr char signature[] =
-                "(II)V";
+                "(III)V";
         static const bool isStatic = false;
         static const mozilla::jni::ExceptionMode exceptionMode =
                 mozilla::jni::ExceptionMode::ABORT;
@@ -2295,6 +2296,8 @@ public:
     };
 
     auto UpdateCompositionRects(mozilla::jni::ObjectArray::Param) const -> void;
+
+    static const int32_t FLAG_KEEP_CURRENT_COMPOSITION = 1;
 
     static const mozilla::jni::CallingThread callingThread =
             mozilla::jni::CallingThread::ANY;
@@ -3562,14 +3565,14 @@ public:
 
     auto GetCompositor() const -> mozilla::jni::Object::LocalRef;
 
-    struct CompositorCreated_t {
+    struct IsCompositorReady_t {
         typedef LayerView Owner;
         typedef bool ReturnType;
         typedef bool SetterType;
         typedef mozilla::jni::Args<> Args;
-        static constexpr char name[] = "mCompositorCreated";
+        static constexpr char name[] = "isCompositorReady";
         static constexpr char signature[] =
-                "Z";
+                "()Z";
         static const bool isStatic = false;
         static const mozilla::jni::ExceptionMode exceptionMode =
                 mozilla::jni::ExceptionMode::ABORT;
@@ -3579,9 +3582,7 @@ public:
                 mozilla::jni::DispatchTarget::CURRENT;
     };
 
-    auto CompositorCreated() const -> bool;
-
-    auto CompositorCreated(bool) const -> void;
+    auto IsCompositorReady() const -> bool;
 
     static const mozilla::jni::CallingThread callingThread =
             mozilla::jni::CallingThread::UI;

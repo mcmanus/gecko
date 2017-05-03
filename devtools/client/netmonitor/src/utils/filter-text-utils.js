@@ -31,17 +31,21 @@
 "use strict";
 
 const { HEADERS } = require("../constants");
+const { getFormattedIPAndPort } = require("./format-utils");
 const HEADER_FILTERS = HEADERS
   .filter(h => h.canFilter)
   .map(h => h.filterKey || h.name);
 
 const FILTER_FLAGS = [
   ...HEADER_FILTERS,
-  "scheme",
+  "set-cookie-domain",
+  "set-cookie-name",
+  "set-cookie-value",
   "mime-type",
   "larger-than",
   "is",
   "has-response-header",
+  "regexp",
 ];
 
 /*
@@ -89,6 +93,8 @@ function parseFilters(query) {
 
 function processFlagFilter(type, value) {
   switch (type) {
+    case "regexp":
+      return value;
     case "size":
     case "transferred":
     case "larger-than":
@@ -116,6 +122,8 @@ function getSizeOrder(size) {
 
 function isFlagFilterMatch(item, { type, value, negative }) {
   let match = true;
+  let { responseCookies = { cookies: [] } } = item;
+  responseCookies = responseCookies.cookies || responseCookies;
   switch (type) {
     case "status-code":
       match = item.status === value;
@@ -132,7 +140,8 @@ function isFlagFilterMatch(item, { type, value, negative }) {
       match = item.urlDetails.host.toLowerCase().includes(value);
       break;
     case "remote-ip":
-      match = `${item.remoteAddress}:${item.remotePort}`.toLowerCase().includes(value);
+      match = getFormattedIPAndPort(item.remoteAddress, item.remotePort)
+        .toLowerCase().includes(value);
       break;
     case "has-response-header":
       if (typeof item.responseHeaders === "object") {
@@ -172,8 +181,33 @@ function isFlagFilterMatch(item, { type, value, negative }) {
       }
       break;
     case "scheme":
-      let scheme = new URL(item.url).protocol.replace(":", "").toLowerCase();
-      match = scheme === value;
+      match = item.urlDetails.scheme === value;
+      break;
+    case "regexp":
+      try {
+        let pattern = new RegExp(value);
+        match = pattern.test(item.url);
+      } catch (e) {
+        match = false;
+      }
+      break;
+    case "set-cookie-domain":
+      if (responseCookies.length > 0) {
+        let host = item.urlDetails.host;
+        let i = responseCookies.findIndex(c => {
+          let domain = c.hasOwnProperty("domain") ? c.domain : host;
+          return domain === value;
+        });
+        match = i > -1;
+      } else {
+        match = false;
+      }
+      break;
+    case "set-cookie-name":
+      match = responseCookies.findIndex(c => c.name.toLowerCase() === value) > -1;
+      break;
+    case "set-cookie-value":
+      match = responseCookies.findIndex(c => c.value.toLowerCase() === value) > -1;
       break;
   }
   if (negative) {

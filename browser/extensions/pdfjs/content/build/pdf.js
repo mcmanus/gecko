@@ -31,9 +31,9 @@ return /******/ (function(modules) { // webpackBootstrap
 /******/ 	function __w_pdfjs_require__(moduleId) {
 /******/
 /******/ 		// Check if module is in cache
-/******/ 		if(installedModules[moduleId])
+/******/ 		if(installedModules[moduleId]) {
 /******/ 			return installedModules[moduleId].exports;
-/******/
+/******/ 		}
 /******/ 		// Create a new module (and put it into the cache)
 /******/ 		var module = installedModules[moduleId] = {
 /******/ 			i: moduleId,
@@ -402,7 +402,7 @@ function createValidAbsoluteUrl(url, baseUrl) {
 }
 function shadow(obj, prop, value) {
   Object.defineProperty(obj, prop, {
-    value: value,
+    value,
     enumerable: true,
     configurable: true,
     writable: false
@@ -966,7 +966,7 @@ var createBlob = function createBlob(data, contentType) {
 var createObjectURL = function createObjectURLClosure() {
   var digits = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
   return function createObjectURL(data, contentType, forceDataSchema = false) {
-    if (!forceDataSchema) {
+    if (!forceDataSchema && URL.createObjectURL) {
       var blob = createBlob(data, contentType);
       return URL.createObjectURL(blob);
     }
@@ -1019,8 +1019,8 @@ function MessageHandler(sourceName, targetName, comObj) {
           return action[0].call(action[1], data.data);
         }).then(function (result) {
           comObj.postMessage({
-            sourceName: sourceName,
-            targetName: targetName,
+            sourceName,
+            targetName,
             isReply: true,
             callbackId: data.callbackId,
             data: result
@@ -1030,8 +1030,8 @@ function MessageHandler(sourceName, targetName, comObj) {
             reason = reason + '';
           }
           comObj.postMessage({
-            sourceName: sourceName,
-            targetName: targetName,
+            sourceName,
+            targetName,
             isReply: true,
             callbackId: data.callbackId,
             error: reason
@@ -1047,30 +1047,30 @@ function MessageHandler(sourceName, targetName, comObj) {
   comObj.addEventListener('message', this._onComObjOnMessage);
 }
 MessageHandler.prototype = {
-  on: function messageHandlerOn(actionName, handler, scope) {
+  on(actionName, handler, scope) {
     var ah = this.actionHandler;
     if (ah[actionName]) {
       error('There is already an actionName called "' + actionName + '"');
     }
     ah[actionName] = [handler, scope];
   },
-  send: function messageHandlerSend(actionName, data, transfers) {
+  send(actionName, data, transfers) {
     var message = {
       sourceName: this.sourceName,
       targetName: this.targetName,
       action: actionName,
-      data: data
+      data
     };
     this.postMessage(message, transfers);
   },
-  sendWithPromise: function messageHandlerSendWithPromise(actionName, data, transfers) {
+  sendWithPromise(actionName, data, transfers) {
     var callbackId = this.callbackIndex++;
     var message = {
       sourceName: this.sourceName,
       targetName: this.targetName,
       action: actionName,
-      data: data,
-      callbackId: callbackId
+      data,
+      callbackId
     };
     var capability = createPromiseCapability();
     this.callbacksCapabilities[callbackId] = capability;
@@ -1081,14 +1081,14 @@ MessageHandler.prototype = {
     }
     return capability.promise;
   },
-  postMessage: function (message, transfers) {
+  postMessage(message, transfers) {
     if (transfers && this.postMessageTransfers) {
       this.comObj.postMessage(message, transfers);
     } else {
       this.comObj.postMessage(message);
     }
   },
-  destroy: function () {
+  destroy() {
     this.comObj.removeEventListener('message', this._onComObjOnMessage);
   }
 };
@@ -1196,8 +1196,8 @@ DOMCanvasFactory.prototype = {
     canvas.width = width;
     canvas.height = height;
     return {
-      canvas: canvas,
-      context: context
+      canvas,
+      context
     };
   },
   reset: function DOMCanvasFactory_reset(canvasAndContextPair, width, height) {
@@ -1220,7 +1220,7 @@ var DOMCMapReaderFactory = function DOMCMapReaderFactoryClosure() {
     this.isCompressed = params.isCompressed || false;
   }
   DOMCMapReaderFactory.prototype = {
-    fetch: function (params) {
+    fetch(params) {
       var name = params.name;
       if (!name) {
         return Promise.reject(new Error('CMap name must be specified.'));
@@ -1559,8 +1559,8 @@ var AnnotationElement = function AnnotationElementClosure() {
         container.appendChild(trigger);
       }
       var popupElement = new PopupElement({
-        container: container,
-        trigger: trigger,
+        container,
+        trigger,
         color: data.color,
         title: data.title,
         contents: data.contents,
@@ -2044,7 +2044,7 @@ var AnnotationLayer = function AnnotationLayerClosure() {
           continue;
         }
         var element = annotationElementFactory.create({
-          data: data,
+          data,
           layer: parameters.div,
           page: parameters.page,
           viewport: parameters.viewport,
@@ -2203,8 +2203,8 @@ function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
     source.initialData = pdfDataRangeTransport.initialData;
   }
   return worker.messageHandler.sendWithPromise('GetDocRequest', {
-    docId: docId,
-    source: source,
+    docId,
+    source,
     disableRange: (0, _dom_utils.getDefaultSetting)('disableRange'),
     maxImageSize: (0, _dom_utils.getDefaultSetting)('maxImageSize'),
     disableFontFace: (0, _dom_utils.getDefaultSetting)('disableFontFace'),
@@ -2236,7 +2236,7 @@ var PDFDocumentLoadingTask = function PDFDocumentLoadingTaskClosure() {
     get promise() {
       return this._capability.promise;
     },
-    destroy: function () {
+    destroy() {
       this.destroyed = true;
       var transportDestroyed = !this._transport ? Promise.resolve() : this._transport.destroy();
       return transportDestroyed.then(function () {
@@ -2536,7 +2536,7 @@ var PDFPageProxy = function PDFPageProxyClosure() {
       this.pendingCleanup = false;
       return Promise.all(waitOn);
     },
-    destroy: function () {
+    destroy() {
       (0, _util.deprecated)('page destroy method, use cleanup() instead');
       this.cleanup();
     },
@@ -2615,7 +2615,7 @@ var PDFWorker = function PDFWorkerClosure() {
     this._deferred = Promise.resolve(undefined);
   }
   FakeWorkerPort.prototype = {
-    postMessage: function (obj, transfers) {
+    postMessage(obj, transfers) {
       function cloneValue(value) {
         if (typeof value !== 'object' || value === null) {
           return value;
@@ -2666,14 +2666,14 @@ var PDFWorker = function PDFWorkerClosure() {
         }, this);
       }.bind(this));
     },
-    addEventListener: function (name, listener) {
+    addEventListener(name, listener) {
       this._listeners.push(listener);
     },
-    removeEventListener: function (name, listener) {
+    removeEventListener(name, listener) {
       var i = this._listeners.indexOf(listener);
       this._listeners.splice(i, 1);
     },
-    terminate: function () {
+    terminate() {
       this._listeners = [];
     }
   };
@@ -2888,15 +2888,15 @@ var WorkerTransport = function WorkerTransportClosure() {
       if (pdfDataRangeTransport) {
         pdfDataRangeTransport.addRangeListener(function (begin, chunk) {
           messageHandler.send('OnDataRange', {
-            begin: begin,
-            chunk: chunk
+            begin,
+            chunk
           });
         });
         pdfDataRangeTransport.addProgressListener(function (loaded) {
-          messageHandler.send('OnDataProgress', { loaded: loaded });
+          messageHandler.send('OnDataProgress', { loaded });
         });
         pdfDataRangeTransport.addProgressiveReadListener(function (chunk) {
-          messageHandler.send('OnDataRange', { chunk: chunk });
+          messageHandler.send('OnDataRange', { chunk });
         });
         messageHandler.on('RequestDataRange', function transportDataRange(data) {
           pdfDataRangeTransport.requestDataRange(data.begin, data.end);
@@ -2913,9 +2913,9 @@ var WorkerTransport = function WorkerTransportClosure() {
       messageHandler.on('PasswordRequest', function transportPasswordRequest(exception) {
         this._passwordCapability = (0, _util.createPromiseCapability)();
         if (loadingTask.onPassword) {
-          var updatePassword = function (password) {
-            this._passwordCapability.resolve({ password: password });
-          }.bind(this);
+          var updatePassword = password => {
+            this._passwordCapability.resolve({ password });
+          };
           loadingTask.onPassword(updatePassword, exception.code);
         } else {
           this._passwordCapability.reject(new _util.PasswordException(exception.message, exception.code));
@@ -2981,7 +2981,7 @@ var WorkerTransport = function WorkerTransportClosure() {
             var fontRegistry = null;
             if ((0, _dom_utils.getDefaultSetting)('pdfBug') && _util.globalScope.FontInspector && _util.globalScope['FontInspector'].enabled) {
               fontRegistry = {
-                registerFont: function (font, url) {
+                registerFont(font, url) {
                   _util.globalScope['FontInspector'].fontAdded(font, url);
                 }
               };
@@ -2989,7 +2989,7 @@ var WorkerTransport = function WorkerTransportClosure() {
             var font = new _font_loader.FontFaceObject(exportedData, {
               isEvalSuported: (0, _dom_utils.getDefaultSetting)('isEvalSupported'),
               disableFontFace: (0, _dom_utils.getDefaultSetting)('disableFontFace'),
-              fontRegistry: fontRegistry
+              fontRegistry
             });
             this.fontLoader.bind([font], function fontReady(fontObjs) {
               this.commonObjs.resolve(id, font);
@@ -3112,8 +3112,8 @@ var WorkerTransport = function WorkerTransportClosure() {
             }
             resolve({
               data: buf,
-              width: width,
-              height: height
+              width,
+              height
             });
           };
           img.onerror = function () {
@@ -3140,7 +3140,7 @@ var WorkerTransport = function WorkerTransportClosure() {
       if (pageIndex in this.pagePromises) {
         return this.pagePromises[pageIndex];
       }
-      var promise = this.messageHandler.sendWithPromise('GetPage', { pageIndex: pageIndex }).then(function (pageInfo) {
+      var promise = this.messageHandler.sendWithPromise('GetPage', { pageIndex }).then(function (pageInfo) {
         if (this.destroyed) {
           throw new Error('Transport destroyed');
         }
@@ -3152,21 +3152,21 @@ var WorkerTransport = function WorkerTransportClosure() {
       return promise;
     },
     getPageIndex: function WorkerTransport_getPageIndexByRef(ref) {
-      return this.messageHandler.sendWithPromise('GetPageIndex', { ref: ref }).catch(function (reason) {
+      return this.messageHandler.sendWithPromise('GetPageIndex', { ref }).catch(function (reason) {
         return Promise.reject(new Error(reason));
       });
     },
     getAnnotations: function WorkerTransport_getAnnotations(pageIndex, intent) {
       return this.messageHandler.sendWithPromise('GetAnnotations', {
-        pageIndex: pageIndex,
-        intent: intent
+        pageIndex,
+        intent
       });
     },
     getDestinations: function WorkerTransport_getDestinations() {
       return this.messageHandler.sendWithPromise('GetDestinations', null);
     },
     getDestination: function WorkerTransport_getDestination(id) {
-      return this.messageHandler.sendWithPromise('GetDestination', { id: id });
+      return this.messageHandler.sendWithPromise('GetDestination', { id });
     },
     getPageLabels: function WorkerTransport_getPageLabels() {
       return this.messageHandler.sendWithPromise('GetPageLabels', null);
@@ -3378,11 +3378,11 @@ var InternalRenderTask = function InternalRenderTaskClosure() {
 var _UnsupportedManager = function UnsupportedManagerClosure() {
   var listeners = [];
   return {
-    listen: function (cb) {
+    listen(cb) {
       (0, _util.deprecated)('Global UnsupportedManager.listen is used: ' + ' use PDFDocumentLoadingTask.onUnsupportedFeature instead');
       listeners.push(cb);
     },
-    notify: function (featureId) {
+    notify(featureId) {
       for (var i = 0, ii = listeners.length; i < ii; i++) {
         listeners[i](featureId);
       }
@@ -3391,8 +3391,8 @@ var _UnsupportedManager = function UnsupportedManagerClosure() {
 }();
 var version, build;
 {
-  exports.version = version = '1.8.243';
-  exports.build = build = '96cb599e';
+  exports.version = version = '1.8.290';
+  exports.build = build = '60c232bc';
 }
 exports.getDocument = getDocument;
 exports.PDFDataRangeTransport = PDFDataRangeTransport;
@@ -3532,7 +3532,7 @@ var renderTextLayer = function renderTextLayerClosure() {
         bottom: b[3],
         div: textDiv,
         size: [divWidth, divHeight],
-        m: m
+        m
       });
     }
   }
@@ -4355,8 +4355,8 @@ var WebGLUtils = function WebGLUtilsClosure() {
       } catch (e) {}
       return (0, _util.shadow)(this, 'isEnabled', enabled);
     },
-    composeSMask: composeSMask,
-    drawFigures: drawFigures,
+    composeSMask,
+    drawFigures,
     clear: cleanup
   };
 }();
@@ -4394,8 +4394,8 @@ if (!_util.globalScope.PDFJS) {
 }
 var PDFJS = _util.globalScope.PDFJS;
 {
-  PDFJS.version = '1.8.243';
-  PDFJS.build = '96cb599e';
+  PDFJS.version = '1.8.290';
+  PDFJS.build = '60c232bc';
 }
 PDFJS.pdfBug = false;
 if (PDFJS.verbosity !== undefined) {
@@ -4403,10 +4403,10 @@ if (PDFJS.verbosity !== undefined) {
 }
 delete PDFJS.verbosity;
 Object.defineProperty(PDFJS, 'verbosity', {
-  get: function () {
+  get() {
     return (0, _util.getVerbosityLevel)();
   },
-  set: function (level) {
+  set(level) {
     (0, _util.setVerbosityLevel)(level);
   },
   enumerable: true,
@@ -4619,7 +4619,7 @@ var CachedCanvases = function CachedCanvasesClosure() {
       }
       return canvasEntry;
     },
-    clear: function () {
+    clear() {
       for (var id in this.cache) {
         var canvasEntry = this.cache[id];
         this.canvasFactory.destroy(canvasEntry);
@@ -5031,7 +5031,7 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
     if (!smask.transferMap && _webgl.WebGLUtils.isEnabled) {
       var composed = _webgl.WebGLUtils.composeSMask(layerCtx.canvas, mask, {
         subtype: smask.subtype,
-        backdrop: backdrop
+        backdrop
       });
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.drawImage(composed, smask.offsetX, smask.offsetY);
@@ -5566,10 +5566,10 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
         var paths = this.pendingTextPaths || (this.pendingTextPaths = []);
         paths.push({
           transform: ctx.mozCurrentTransform,
-          x: x,
-          y: y,
-          fontSize: fontSize,
-          addToPath: addToPath
+          x,
+          y,
+          fontSize,
+          addToPath
         });
       }
     },
@@ -5761,10 +5761,9 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       if (IR[0] === 'TilingPattern') {
         var color = IR[1];
         var baseTransform = this.baseTransform || this.ctx.mozCurrentTransform.slice();
-        var self = this;
         var canvasGraphicsFactory = {
-          createCanvasGraphics: function (ctx) {
-            return new CanvasGraphics(ctx, self.commonObjs, self.objs, self.canvasFactory);
+          createCanvasGraphics: ctx => {
+            return new CanvasGraphics(ctx, this.commonObjs, this.objs, this.canvasFactory);
           }
         };
         pattern = new _pattern_helper.TilingPattern(IR, color, this.ctx, canvasGraphicsFactory, baseTransform);
@@ -5884,10 +5883,10 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
         this.smaskStack.push({
           canvas: scratchCanvas.canvas,
           context: groupCtx,
-          offsetX: offsetX,
-          offsetY: offsetY,
-          scaleX: scaleX,
-          scaleY: scaleY,
+          offsetX,
+          offsetY,
+          scaleX,
+          scaleY,
           subtype: group.smask.subtype,
           backdrop: group.smask.backdrop,
           transferMap: group.smask.transferMap || null,
@@ -5960,7 +5959,7 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
         var currentTransform = ctx.mozCurrentTransformInverse;
         var position = this.getCanvasPosition(0, 0);
         this.imageLayer.appendImage({
-          objId: objId,
+          objId,
           left: position[0],
           top: position[1],
           width: w / currentTransform[0],
@@ -5980,8 +5979,8 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
         if (width <= MAX_SIZE_TO_COMPILE && height <= MAX_SIZE_TO_COMPILE) {
           glyph.compiled = compileType3Glyph({
             data: img.data,
-            width: width,
-            height: height
+            width,
+            height
           });
         } else {
           glyph.compiled = null;
@@ -6123,7 +6122,7 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
       if (this.imageLayer) {
         var position = this.getCanvasPosition(0, -height);
         this.imageLayer.appendImage({
-          imgData: imgData,
+          imgData,
           left: position[0],
           top: position[1],
           width: width / currentTransform[0],
@@ -6148,7 +6147,7 @@ var CanvasGraphics = function CanvasGraphicsClosure() {
         if (this.imageLayer) {
           var position = this.getCanvasPosition(entry.x, entry.y);
           this.imageLayer.appendImage({
-            imgData: imgData,
+            imgData,
             left: position[0],
             top: position[1],
             width: w,
@@ -6498,8 +6497,8 @@ var createMeshCanvas = function createMeshCanvasClosure() {
     var scaleX = boundsWidth / width;
     var scaleY = boundsHeight / height;
     var context = {
-      coords: coords,
-      colors: colors,
+      coords,
+      colors,
       offsetX: -offsetX,
       offsetY: -offsetY,
       scaleX: 1 / scaleX,
@@ -6533,11 +6532,11 @@ var createMeshCanvas = function createMeshCanvasClosure() {
       canvas = tmpCanvas.canvas;
     }
     return {
-      canvas: canvas,
+      canvas,
       offsetX: offsetX - BORDER_SIZE * scaleX,
       offsetY: offsetY - BORDER_SIZE * scaleY,
-      scaleX: scaleX,
-      scaleY: scaleY
+      scaleX,
+      scaleY
     };
   }
   return createMeshCanvas;
@@ -6709,8 +6708,8 @@ exports.TilingPattern = TilingPattern;
 "use strict";
 
 
-var pdfjsVersion = '1.8.243';
-var pdfjsBuild = '96cb599e';
+var pdfjsVersion = '1.8.290';
+var pdfjsBuild = '60c232bc';
 var pdfjsSharedUtil = __w_pdfjs_require__(0);
 var pdfjsDisplayGlobal = __w_pdfjs_require__(8);
 var pdfjsDisplayAPI = __w_pdfjs_require__(3);

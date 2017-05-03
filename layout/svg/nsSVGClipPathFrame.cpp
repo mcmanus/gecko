@@ -397,23 +397,23 @@ nsSVGClipPathFrame::IsValid()
   for (nsIFrame* kid = mFrames.FirstChild(); kid;
        kid = kid->GetNextSibling()) {
 
-    nsIAtom* kidType = kid->GetType();
+    LayoutFrameType kidType = kid->Type();
 
-    if (kidType == nsGkAtoms::svgUseFrame) {
+    if (kidType == LayoutFrameType::SVGUse) {
       for (nsIFrame* grandKid : kid->PrincipalChildList()) {
 
-        nsIAtom* grandKidType = grandKid->GetType();
+        LayoutFrameType grandKidType = grandKid->Type();
 
-        if (grandKidType != nsGkAtoms::svgGeometryFrame &&
-            grandKidType != nsGkAtoms::svgTextFrame) {
+        if (grandKidType != LayoutFrameType::SVGGeometry &&
+            grandKidType != LayoutFrameType::SVGText) {
           return false;
         }
       }
       continue;
     }
 
-    if (kidType != nsGkAtoms::svgGeometryFrame &&
-        kidType != nsGkAtoms::svgTextFrame) {
+    if (kidType != LayoutFrameType::SVGGeometry &&
+        kidType != LayoutFrameType::SVGText) {
       return false;
     }
   }
@@ -451,12 +451,6 @@ nsSVGClipPathFrame::Init(nsIContent*       aContent,
 
   AddStateBits(NS_STATE_SVG_CLIPPATH_CHILD);
   nsSVGContainerFrame::Init(aContent, aParent, aPrevInFlow);
-}
-
-nsIAtom *
-nsSVGClipPathFrame::GetType() const
-{
-  return nsGkAtoms::svgClipPathFrame;
 }
 
 gfxMatrix

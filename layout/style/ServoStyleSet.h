@@ -174,12 +174,10 @@ public:
 
   // Get a style context for an anonymous box.  aPseudoTag is the pseudo-tag to
   // use and must be non-null.  It must be an anon box, and must be one that
-  // inherits style from the given aParentContext.  aFlags is an nsStyleSet
-  // flags bitfield.
+  // inherits style from the given aParentContext.
   already_AddRefed<nsStyleContext>
   ResolveInheritingAnonymousBoxStyle(nsIAtom* aPseudoTag,
-                                     nsStyleContext* aParentContext,
-                                     uint32_t aFlags = 0);
+                                     nsStyleContext* aParentContext);
 
   // Get a style context for an anonymous box that does not inherit style from
   // anything.  aPseudoTag is the pseudo-tag to use and must be non-null.  It
@@ -354,11 +352,40 @@ private:
   already_AddRefed<ServoComputedValues> ResolveStyleLazily(dom::Element* aElement,
                                                            nsIAtom* aPseudoTag);
 
+  uint32_t FindSheetOfType(SheetType aType,
+                           ServoStyleSheet* aSheet);
+
+  uint32_t PrependSheetOfType(SheetType aType,
+                              ServoStyleSheet* aSheet,
+                              uint32_t aReuseUniqueID = 0);
+
+  uint32_t AppendSheetOfType(SheetType aType,
+                             ServoStyleSheet* aSheet,
+                             uint32_t aReuseUniqueID = 0);
+
+  uint32_t InsertSheetOfType(SheetType aType,
+                             ServoStyleSheet* aSheet,
+                             uint32_t aBeforeUniqueID,
+                             uint32_t aReuseUniqueID = 0);
+
+  uint32_t RemoveSheetOfType(SheetType aType,
+                             ServoStyleSheet* aSheet);
+
+  struct Entry {
+    uint32_t uniqueID;
+    RefPtr<ServoStyleSheet> sheet;
+
+    // Provide a cast operator to simplify calling
+    // nsIDocument::FindDocStyleSheetInsertionPoint.
+    operator ServoStyleSheet*() const { return sheet; }
+  };
+
   nsPresContext* mPresContext;
   UniquePtr<RawServoStyleSet> mRawSet;
   EnumeratedArray<SheetType, SheetType::Count,
-                  nsTArray<RefPtr<ServoStyleSheet>>> mSheets;
+                  nsTArray<Entry>> mEntries;
   int32_t mBatching;
+  uint32_t mUniqueIDCounter;
   bool mAllowResolveStaleStyles;
   bool mAuthorStyleDisabled;
 

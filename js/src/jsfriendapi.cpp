@@ -546,14 +546,12 @@ js::GetOriginalEval(JSContext* cx, HandleObject scope, MutableHandleObject eval)
 }
 
 JS_FRIEND_API(void)
-js::SetReservedOrProxyPrivateSlotWithBarrier(JSObject* obj, size_t slot, const js::Value& value)
+js::SetReservedSlotWithBarrier(JSObject* obj, size_t slot, const js::Value& value)
 {
-    if (IsProxy(obj)) {
-        MOZ_ASSERT(slot == 0);
-        obj->as<ProxyObject>().setSameCompartmentPrivate(value);
-    } else {
+    if (IsProxy(obj))
+        obj->as<ProxyObject>().setReservedSlot(slot, value);
+    else
         obj->as<NativeObject>().setSlot(slot, value);
-    }
 }
 
 void
@@ -607,9 +605,9 @@ js::TraceWeakMaps(WeakMapTracer* trc)
 }
 
 extern JS_FRIEND_API(bool)
-js::AreGCGrayBitsValid(JSContext* cx)
+js::AreGCGrayBitsValid(JSRuntime* rt)
 {
-    return cx->runtime()->gc.areGrayBitsValid();
+    return rt->gc.areGrayBitsValid();
 }
 
 JS_FRIEND_API(bool)
@@ -1102,7 +1100,7 @@ struct DumpHeapTracer : public JS::CallbackTracer, public WeakMapTracer
 
     DumpHeapTracer(FILE* fp, JSContext* cx)
       : JS::CallbackTracer(cx, DoNotTraceWeakMaps),
-        js::WeakMapTracer(cx), prefix(""), output(fp)
+        js::WeakMapTracer(cx->runtime()), prefix(""), output(fp)
     {}
 
   private:
@@ -1298,15 +1296,13 @@ js::GetDOMCallbacks(JSContext* cx)
 }
 
 static const void* gDOMProxyHandlerFamily = nullptr;
-static uint32_t gDOMProxyExpandoSlot = 0;
 static DOMProxyShadowsCheck gDOMProxyShadowsCheck;
 
 JS_FRIEND_API(void)
-js::SetDOMProxyInformation(const void* domProxyHandlerFamily, uint32_t domProxyExpandoSlot,
+js::SetDOMProxyInformation(const void* domProxyHandlerFamily,
                            DOMProxyShadowsCheck domProxyShadowsCheck)
 {
     gDOMProxyHandlerFamily = domProxyHandlerFamily;
-    gDOMProxyExpandoSlot = domProxyExpandoSlot;
     gDOMProxyShadowsCheck = domProxyShadowsCheck;
 }
 
@@ -1314,12 +1310,6 @@ const void*
 js::GetDOMProxyHandlerFamily()
 {
     return gDOMProxyHandlerFamily;
-}
-
-uint32_t
-js::GetDOMProxyExpandoSlot()
-{
-    return gDOMProxyExpandoSlot;
 }
 
 DOMProxyShadowsCheck
@@ -1491,4 +1481,17 @@ JS_FRIEND_API(void)
 js::SetCompartmentValidAccessPtr(JSContext* cx, JS::HandleObject global, bool* accessp)
 {
     global->compartment()->setValidAccessPtr(accessp);
+}
+
+JS_FRIEND_API(void)
+js::SetCooperativeYieldCallback(JSContext* cx, YieldCallback callback)
+{
+    cx->setYieldCallback(callback);
+}
+
+JS_FRIEND_API(bool)
+js::SystemZoneAvailable(JSContext* cx)
+{
+    CooperatingContext& owner = cx->runtime()->gc.systemZoneGroup->ownerContext();
+    return owner.context() == cx || owner.context() == nullptr;
 }

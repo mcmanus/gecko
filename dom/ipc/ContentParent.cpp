@@ -2405,6 +2405,16 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
 
     nsTArray<ServiceWorkerRegistrationData> registrations;
     swr->GetRegistrations(registrations);
+
+    // Send down to the content process the permissions for each of the
+    // registered service worker scopes.
+    for (auto& registration : registrations) {
+      nsCOMPtr<nsIPrincipal> principal = PrincipalInfoToPrincipal(registration.principal());
+      if (principal) {
+        TransmitPermissionsForPrincipal(principal);
+      }
+    }
+
     Unused << SendInitServiceWorkers(ServiceWorkerConfiguration(registrations));
   }
 
@@ -5045,10 +5055,9 @@ ContentParent::ForceTabPaint(TabParent* aTabParent, uint64_t aLayerObserverEpoch
 }
 
 nsresult
-ContentParent::TransmitPermissionsFor(nsIChannel* aChannel)
+ContentParent::AboutToLoadHttpFtpWyciwygDocumentForChild(nsIChannel* aChannel)
 {
   MOZ_ASSERT(aChannel);
-#ifdef MOZ_PERMISSIONS
 
   nsresult rv;
   if (!aChannel->IsDocument()) {
@@ -5068,7 +5077,6 @@ ContentParent::TransmitPermissionsFor(nsIChannel* aChannel)
 
   rv = TransmitPermissionsForPrincipal(principal);
   NS_ENSURE_SUCCESS(rv, rv);
-#endif
 
   return NS_OK;
 }
@@ -5263,6 +5271,18 @@ ContentParent::RecvClassifyLocal(const URIParams& aURI, const nsCString& aTables
     return IPC_FAIL_NO_REASON(this);
   }
   *aRv = uriClassifier->ClassifyLocalWithTables(uri, aTables, *aResults);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+ContentParent::RecvAllocPipelineId(RefPtr<AllocPipelineIdPromise>&& aPromise)
+{
+  GPUProcessManager* pm = GPUProcessManager::Get();
+  if (!pm) {
+    aPromise->Reject(PromiseRejectReason::HandlerRejected, __func__);
+    return IPC_OK();
+  }
+  aPromise->Resolve(wr::AsPipelineId(pm->AllocateLayerTreeId()), __func__);
   return IPC_OK();
 }
 

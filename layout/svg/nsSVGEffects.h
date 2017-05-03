@@ -76,7 +76,7 @@ public:
    * @param aOK this is only for the convenience of callers. We set *aOK to false
    * if the frame is the wrong type
    */
-  nsIFrame* GetReferencedFrame(nsIAtom* aFrameType, bool* aOK);
+  nsIFrame* GetReferencedFrame(mozilla::LayoutFrameType aFrameType, bool* aOK);
 
   Element* GetReferencedElement();
 
