@@ -14,8 +14,10 @@ XPIDL_SOURCES += [
 
 XPIDL_MODULE = 'necko_socket'
 
+# todo he quic include can go away when sdt does
 LOCAL_INCLUDES += [
     '/netwerk/base',
+    '/netwerk/protocol/http/quic',
 ]
 
 UNIFIED_SOURCES += [
@@ -23,7 +25,6 @@ UNIFIED_SOURCES += [
     'nsSOCKSIOLayer.cpp',
     'nsSOCKSSocketProvider.cpp',
     'nsUDPSocketProvider.cpp',
-    'SDTSocketProvider.cpp',
     'SDTUpper.cpp',
 ]
 

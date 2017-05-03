@@ -1236,9 +1236,11 @@ nsSocketTransport::BuildSocket(PRFileDesc *&fd, bool &proxyTransparent, bool &us
                     // we need to setup ALPN here.
                     nsTArray<nsCString> protocolArray;
                     protocolArray.AppendElement(NS_LITERAL_CSTRING("hq"));
-                    rv = secCtrl->SetNPNList(protocolArray);
-                    if (NS_FAILED(rv)) {
-                        break;
+                    if (secCtrl) {
+                        rv = secCtrl->SetNPNList(protocolArray);
+                        if (NS_FAILED(rv)) {
+                            break;
+                        }
                     }
                 }
             }

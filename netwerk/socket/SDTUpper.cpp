@@ -2,10 +2,12 @@
 
 #include "DNS.h"
 #include "nsNetAddr.h"
-#include "SDTUpper.h"
+#include "nspr.h"
+#include "prerror.h"
 #include "mozilla/Logging.h"
 #include "sdt_common.h"
-#include "QUICLog.h"
+#include "SDTUpper.h"
+#include "QuicLog.h"
 
 namespace mozilla {
 namespace net {
