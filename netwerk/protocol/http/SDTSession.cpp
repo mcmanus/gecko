@@ -97,7 +97,7 @@ SDTSession::SDTSession(nsISocketTransport *aSocketTransport, uint32_t version)
   , mGoAwayOnPush(false)
   , mUseH2Deps(false)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   nsCOMPtr<nsISocketTransportSDT> sdtTrans = do_QueryInterface(mSocketTransport);
   MOZ_ASSERT(sdtTrans);
@@ -214,7 +214,7 @@ static SDTControlFx sControlFunctions[] = {
 bool
 SDTSession::RoomForMoreConcurrent()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   return true;
 }
 
@@ -242,7 +242,7 @@ SDTSession::ReadTimeoutTick(PRIntervalTime now)
 uint32_t
 SDTSession::RegisterStreamID(SDTStream *stream, uint32_t aNewID)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mNextStreamID < 0xfffffff0,
              "should have stopped admitting streams");
   MOZ_ASSERT(!(aNewID & 1),
@@ -297,7 +297,7 @@ SDTSession::AddStream(nsAHttpTransaction *aHttpTransaction,
                         bool aUseTunnel,
                         nsIInterfaceRequestor *aCallbacks)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   // integrity check
   if (mStreamTransactionHash.Get(aHttpTransaction)) {
@@ -362,7 +362,7 @@ void
 SDTSession::QueueStream(SDTStream *stream)
 {
   // will be removed via processpending or a shutdown path
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(!stream->CountAsActive());
   MOZ_ASSERT(!stream->Queued());
 
@@ -384,7 +384,7 @@ SDTSession::QueueStream(SDTStream *stream)
 void
 SDTSession::ProcessPending()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   SDTStream*stream;
   while (RoomForMoreConcurrent() &&
@@ -404,7 +404,7 @@ nsresult
 SDTSession::NetworkRead(nsAHttpSegmentWriter *writer, char *buf,
                           uint32_t count, uint32_t *countWritten)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   if (!count) {
     *countWritten = 0;
@@ -521,7 +521,7 @@ SDTSession::HttpConnection()
 uint32_t
 SDTSession::GetWriteQueueSize()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   return mReadyForWrite.GetSize();
 }
@@ -529,7 +529,7 @@ SDTSession::GetWriteQueueSize()
 void
 SDTSession::ChangeDownstreamState(enum internalStateType newState)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   LOG3(("SDTSession::ChangeDownstreamState() %p from %X to %X",
         this, mDownstreamState, newState));
@@ -539,7 +539,7 @@ SDTSession::ChangeDownstreamState(enum internalStateType newState)
 void
 SDTSession::ResetDownstreamState()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   LOG3(("SDTSession::ResetDownstreamState() %p", this));
   ChangeDownstreamState(BUFFERING_FRAME_HEADER);
@@ -636,7 +636,7 @@ SDTSession::UncompressAndDiscard(bool isPush)
 void
 SDTSession::GeneratePriority(uint32_t aID, uint8_t aPriorityWeight)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   LOG3(("SDTSession::GeneratePriority %p %X %X\n",
         this, aID, aPriorityWeight));
 
@@ -662,7 +662,7 @@ SDTSession::GeneratePriority(uint32_t aID, uint8_t aPriorityWeight)
 void
 SDTSession::SendHello()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   LOG3(("SDTSession::SendHello %p\n", this));
 
   // sized for magic + 5 settings and a session window update and 5 priority frames
@@ -751,7 +751,7 @@ bool
 SDTSession::VerifyStream(SDTStream *aStream, uint32_t aOptionalID = 0)
 {
   // This is annoying, but at least it is O(1)
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
 #ifndef DEBUG
   // Only do the real verification in debug builds
@@ -808,7 +808,7 @@ void
 SDTSession::CleanupStream(SDTStream *aStream, nsresult aResult,
                           errorType aResetCode)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   LOG3(("SDTSession::CleanupStream %p %p 0x%X %X\n",
         this, aStream, aStream ? aStream->StreamID() : 0, aResult));
   if (!aStream) {
@@ -886,7 +886,7 @@ SDTSession::CleanupStream(SDTStream *aStream, nsresult aResult,
 void
 SDTSession::CleanupStream(uint32_t aID, nsresult aResult, errorType aResetCode)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   SDTStream *stream = mStreamIDHash.Get(aID);
   LOG3(("SDTSession::CleanupStream %p by ID 0x%X to stream %p\n",
         this, aID, stream));
@@ -917,7 +917,7 @@ SDTSession::RemoveStreamFromQueues(SDTStream *aStream)
 void
 SDTSession::CloseStream(SDTStream *aStream, nsresult aResult)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   LOG3(("SDTSession::CloseStream %p %p 0x%x %X\n",
         this, aStream, aStream->StreamID(), aResult));
 
@@ -1665,7 +1665,7 @@ void
 SDTSession::OnTransportStatus(nsITransport* aTransport,
                               nsresult aStatus, int64_t aProgress)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   switch (aStatus) {
     // These should appear only once, deliver to the first
@@ -1720,7 +1720,7 @@ nsresult
 SDTSession::ReadSegmentsAgain(nsAHttpSegmentReader *reader,
                                 uint32_t count, uint32_t *countRead, bool *again)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   MOZ_ASSERT(!mSegmentReader || !reader || (mSegmentReader == reader),
              "Inconsistent Write Function Callback");
@@ -1853,7 +1853,7 @@ SDTSession::WriteSegmentsAgain(nsAHttpSegmentWriter *writer,
                                uint32_t count, uint32_t *countWritten,
                                  bool *again)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   LOG3(("SDTSession::WriteSegments %p InternalState %X\n",
         this, mDownstreamState));
@@ -2238,7 +2238,7 @@ SDTSession::ProcessConnectedPush(SDTStream *pushConnectedStream,
 void
 SDTSession::Close(nsresult aReason)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   if (mClosed)
     return;
@@ -2281,7 +2281,7 @@ void
 SDTSession::CloseTransaction(nsAHttpTransaction *aTransaction,
                                nsresult aResult)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   LOG3(("SDTSession::CloseTransaction %p %p %x", this, aTransaction, aResult));
 
   // Generally this arrives as a cancel event from the connection manager.
@@ -2308,7 +2308,7 @@ nsresult
 SDTSession::OnReadSegment(const char *buf,
                             uint32_t count, uint32_t *countRead)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   nsresult rv;
 
   // If we can release old queued data then we can try and write the new
@@ -2403,7 +2403,7 @@ nsresult
 SDTSession::OnWriteSegment(char *buf,
                            uint32_t count, uint32_t *countWritten)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   nsresult rv;
 
   if (!mSegmentWriter) {
@@ -2481,7 +2481,7 @@ SDTSession::SetNeedsCleanup(SDTStream *stream)
 uint32_t
 SDTSession::FindTunnelCount(nsHttpConnectionInfo *aConnInfo)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   uint32_t rv = 0;
   mTunnelHash.Get(aConnInfo->HashKey(), &rv);
   return rv;
@@ -2490,7 +2490,7 @@ SDTSession::FindTunnelCount(nsHttpConnectionInfo *aConnInfo)
 void
 SDTSession::RegisterTunnel(SDTStream *aTunnel)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   nsHttpConnectionInfo *ci = aTunnel->Transaction()->ConnectionInfo();
   uint32_t newcount = FindTunnelCount(ci) + 1;
   mTunnelHash.Remove(ci->HashKey());
@@ -2502,7 +2502,7 @@ SDTSession::RegisterTunnel(SDTStream *aTunnel)
 void
 SDTSession::UnRegisterTunnel(SDTStream *aTunnel)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   nsHttpConnectionInfo *ci = aTunnel->Transaction()->ConnectionInfo();
   MOZ_ASSERT(FindTunnelCount(ci));
   uint32_t newcount = FindTunnelCount(ci) - 1;
@@ -2536,7 +2536,7 @@ void
 SDTSession::DispatchOnTunnel(nsAHttpTransaction *aHttpTransaction,
                              nsIInterfaceRequestor *aCallbacks)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   nsHttpTransaction *trans = aHttpTransaction->QueryHttpTransaction();
   nsHttpConnectionInfo *ci = aHttpTransaction->ConnectionInfo();
   MOZ_ASSERT(trans);
@@ -2575,7 +2575,7 @@ SDTSession::SendPing()
 bool
 SDTSession::MaybeReTunnel(nsAHttpTransaction *aHttpTransaction)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   nsHttpTransaction *trans = aHttpTransaction->QueryHttpTransaction();
   LOG(("SDTSession::MaybeReTunnel %p trans=%p\n", this, trans));
   if (!trans || trans->TunnelProvider() != this) {
@@ -2713,7 +2713,7 @@ SDTSession::ConfirmTLSProfile()
 void
 SDTSession::TransactionHasDataToWrite(nsAHttpTransaction *caller)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   LOG3(("SDTSession::TransactionHasDataToWrite %p trans=%p", this, caller));
 
   // a trapped signal from the http transaction to the connection that
@@ -2746,7 +2746,7 @@ SDTSession::TransactionHasDataToWrite(nsAHttpTransaction *caller)
 void
 SDTSession::TransactionHasDataToRecv(nsAHttpTransaction *caller)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   LOG3(("SDTSession::TransactionHasDataToRecv %p trans=%p", this, caller));
 
   // a signal from the http transaction to the connection that it will consume more
@@ -2764,7 +2764,7 @@ SDTSession::TransactionHasDataToRecv(nsAHttpTransaction *caller)
 void
 SDTSession::TransactionHasDataToWrite(SDTStream *stream)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   LOG3(("SDTSession::TransactionHasDataToWrite %p stream=%p ID=0x%x",
         this, stream, stream->StreamID()));
 
@@ -2856,7 +2856,7 @@ SDTSession::Available()
 nsHttpRequestHead *
 SDTSession::RequestHead()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(false,
              "SDTSession::RequestHead() "
              "should not be called after http/2 is setup");
@@ -2897,7 +2897,7 @@ SDTSession::TakeSubTransactions(
 nsAHttpConnection *
 SDTSession::Connection()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   return mConnection;
 }
 

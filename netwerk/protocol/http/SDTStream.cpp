@@ -70,7 +70,7 @@ SDTStream::SDTStream(nsAHttpTransaction *httpTransaction,
   , mIsTunnel(false)
   , mPlainTextTunnel(false)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   LOG3(("SDTStream::SDTStream %p", this));
 
@@ -115,7 +115,7 @@ SDTStream::ReadSegments(nsAHttpSegmentReader *reader,
   LOG3(("SDTStream %p ReadSegments reader=%p count=%d state=%x",
         this, reader, count, mUpstreamState));
 
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   nsresult rv = NS_ERROR_UNEXPECTED;
   mRequestBlockedOnRead = 0;
@@ -237,7 +237,7 @@ SDTStream::WriteSegments(nsAHttpSegmentWriter *writer,
                          uint32_t count,
                          uint32_t *countWritten)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(!mSegmentWriter, "segment writer in progress");
 
   LOG3(("SDTStream::WriteSegments %p count=%d state=%x",
@@ -332,7 +332,7 @@ SDTStream::ParseHttpRequestHeaders(const char *buf,
   // Returns NS_OK even if the headers are incomplete
   // set mRequestHeadersDone flag if they are complete
 
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mUpstreamState == GENERATING_HEADERS);
   MOZ_ASSERT(!mRequestHeadersDone);
 
@@ -1016,7 +1016,7 @@ SDTStream::OnReadSegment(const char *buf,
   LOG3(("SDTStream::OnReadSegment %p count=%d state=%x",
         this, count, mUpstreamState));
 
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mSegmentReader, "OnReadSegment with null mSegmentReader");
 
   nsresult rv = NS_ERROR_UNEXPECTED;
@@ -1093,8 +1093,7 @@ SDTStream::OnReadSegment(const char *buf,
     rv = mSession->OnReadSegment(buf, count,
                                  countRead);
 
-    LOG(("SDTStream %p id 0x%x sent %u",
-         rv, *countRead));
+    LOG(("SDTStream %p id 0x%x rv=%x sent %u", this, mStreamID, rv, *countRead));
 
     if (NS_FAILED(rv)) {
       return rv;
@@ -1138,7 +1137,7 @@ SDTStream::OnWriteSegment(char *buf,
   LOG3(("SDTStream::OnWriteSegment %p count=%d state=%x 0x%X\n",
         this, count, mUpstreamState, mStreamID));
 
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mSegmentWriter);
 
 /*  if (mPushSource) {
@@ -1172,7 +1171,7 @@ SDTStream::OnWriteSegment(char *buf,
 void
 SDTStream::ClearTransactionsBlockedOnTunnel()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   if (!mIsTunnel) {
     return;
