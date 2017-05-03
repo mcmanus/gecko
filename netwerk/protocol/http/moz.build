@@ -96,6 +96,17 @@ UNIFIED_SOURCES += [
     'TunnelUtils.cpp',
 ]
 
+# todo make part of unified - but its faster right now as singletons
+SOURCES += [
+    'quic/QuicSession.cpp',
+    'quic/QuicSocketProvider.cpp',
+]
+
+# these should really build their own lib
+SOURCES += [
+    'quic/mozquic/MozQuic.cpp',
+]
+
 # These files cannot be built in unified mode because of OS X headers.
 SOURCES += [
     'nsHttpHandler.cpp',
@@ -119,6 +130,7 @@ LOCAL_INCLUDES += [
     '/dom/base',
     '/netwerk/base',
     '/netwerk/socket',
+    'quic/mozquic',
 ]
 
 EXTRA_COMPONENTS += [
