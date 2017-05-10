@@ -33,7 +33,8 @@ extern "C" {
   int mozquic_destroy_connection(mozquic_connection_t *inSession);
   int mozquic_start_connection(mozquic_connection_t *inSession);
 
-  int mozquic_osfd(mozquic_connection_t *inSession);
+  int  mozquic_osfd(mozquic_connection_t *inSession);
+  void mozquic_setosfd(mozquic_connection_t *inSession, int fd);
 #ifdef __cplusplus
 }
 #endif

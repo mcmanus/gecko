@@ -55,14 +55,8 @@ QuicSocketProvider::NewSocket(int32_t family,
     QuicSession::SetMethods(&quicMethods);
   }
 
-  PRFileDesc *fd = nullptr;
   struct mozquic_connection_t *session = nullptr;
   struct mozquic_config_t config;
-
-  fd = PR_CreateIOLayerStub(quicIdentity, &quicMethods);
-  if (!fd) {
-    goto onfail;
-  }
 
   memset (&config, 0, sizeof (config));
   config.domain = family;
@@ -70,23 +64,21 @@ QuicSocketProvider::NewSocket(int32_t family,
   config.originPort = port;
   config.handleIO = 0;
 
+  QuicSession *qSession = nullptr;
+
   if (mozquic_new_connection(&session, &config) != MOZQUIC_OK) {
     goto onfail;
   }
-  new QuicSession(fd, session, &config); // fd takes possession of session ptr
 
+  qSession = new QuicSession(quicIdentity, &quicMethods, session, &config);
+  
   LOG(("QuicSocketProvider::NewSocket ok %p\n", this));
-  *result = fd;
+  *result = qSession->GetFD();
   return NS_OK;
 
 onfail:
   LOG(("QuicSocketProvider::NewSocket fail %p\n", this));
 
-  if (fd) {
-    PR_Close(fd);
-    *result = nullptr;
-
-  }
   if (session) {
     mozquic_destroy_connection(session);
   }

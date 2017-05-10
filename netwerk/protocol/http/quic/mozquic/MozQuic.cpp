@@ -90,6 +90,13 @@ extern "C" {
     return conn->udp;
   }
 
+  void mozquic_setosfd(mozquic_connection_t *conn, int fd)
+  {
+    if (conn) {
+      conn->udp = fd;
+    }
+  }
+
 #ifdef __cplusplus
 }
 #endif

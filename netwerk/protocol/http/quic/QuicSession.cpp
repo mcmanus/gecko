@@ -5,22 +5,23 @@
 
 #include "mozilla/Assertions.h"
 #include "QuicSession.h"
+#include "private/pprio.h"
 #include <sys/socket.h>
 
 namespace mozilla { namespace net {
 
-  QuicSession::QuicSession(PRFileDesc *fd, mozquic_connection_t *session,
-                           mozquic_config_t *config)
+  QuicSession::QuicSession(PRDescIdentity quicIdentity, PRIOMethods *quicMethods,
+                           mozquic_connection_t *session, mozquic_config_t *config)
   : mClosed(false)
   , mDestroyOnClose(true)
-  , mFD(fd)
   , mSession(session)
 {
-  fd->secret = (struct PRFilePrivate *)this;
-
-  PRFileDesc *udpLayer =
+  // todo deal with failures
+  mFD =
     PR_OpenUDPSocket(config->domain == AF_INET ? PR_AF_INET : PR_AF_INET6);
-  PR_PushIOLayer(udpLayer, PR_GetLayersIdentity(udpLayer), fd);
+  PRFileDesc *fd = PR_CreateIOLayerStub(quicIdentity, quicMethods);
+  fd->secret = (struct PRFilePrivate *)this;
+  PR_PushIOLayer(mFD, PR_NSPR_IO_LAYER, fd);
   MOZ_ASSERT(!config->handleIO);
 }
 
@@ -71,6 +72,12 @@ QuicSession::NSPRConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime t
   if (!self || self->mClosed || !self->mSession) {
     return PR_FAILURE;
   }
+  PRStatus connResult = fd->lower->methods->connect(fd->lower, addr, to);
+  if (connResult != PR_SUCCESS) {
+    return connResult;
+  }
+
+  mozquic_setosfd(self->mSession, PR_FileDesc2NativeHandle(fd));
   if (mozquic_start_connection(self->mSession) != MOZQUIC_OK) {
     return PR_FAILURE;
   }
