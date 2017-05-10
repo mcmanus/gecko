@@ -32,6 +32,7 @@ struct mozquic_connection_t {
   int                 isV6;
   char *originName;
   int originPort;
+  int handleIO;
   mozilla::net::MozQuic *q;
 };
 struct mozquic_stream_t {

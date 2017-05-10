@@ -16,21 +16,21 @@ namespace mozilla { namespace net {
 class QuicSession final
 {
 public:
-    QuicSession(PRFileDesc *fd, mozquic_connection_t *session);
+  QuicSession(PRFileDesc *fd, mozquic_connection_t *session, mozquic_config_t *config);
 
-    static PRStatus NSPRConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime to);
-    static PRStatus NSPRClose(PRFileDesc *fd);
-    static PRStatus NSPRSetSockOpt(PRFileDesc *fd, const PRSocketOptionData *opt);
-    static PRStatus NSPRGetSockName(PRFileDesc *fd, PRNetAddr *addr);
-    static void SetMethods(PRIOMethods *outMethods);
+  static PRStatus NSPRConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime to);
+  static PRStatus NSPRClose(PRFileDesc *fd);
+  static PRStatus NSPRSetSockOpt(PRFileDesc *fd, const PRSocketOptionData *opt);
+  static PRStatus NSPRGetSockName(PRFileDesc *fd, PRNetAddr *addr);
+  static void SetMethods(PRIOMethods *outMethods);
 
 private:
-    ~QuicSession();
+  ~QuicSession();
 
-    bool         mClosed;
-    bool         mDestroyOnClose;
-    PRFileDesc  *mFD;
-    mozquic_connection_t *mSession;
+  bool         mClosed;
+  bool         mDestroyOnClose;
+  PRFileDesc  *mFD;
+  mozquic_connection_t *mSession;
 };
 
 } } // namespace mozilla::net

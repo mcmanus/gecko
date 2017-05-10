@@ -26,6 +26,7 @@ extern "C" {
 //    const struct sockaddr *address;
     const char *originName;
     int originPort;
+    int handleIO; // true if library should schedule read and write events
   };
 
   int mozquic_new_connection(mozquic_connection_t **outSession, mozquic_config_t *inConfig);

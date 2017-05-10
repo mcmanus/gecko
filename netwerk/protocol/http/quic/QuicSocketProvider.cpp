@@ -68,11 +68,12 @@ QuicSocketProvider::NewSocket(int32_t family,
   config.domain = family;
   config.originName = host;
   config.originPort = port;
+  config.handleIO = 0;
 
   if (mozquic_new_connection(&session, &config) != MOZQUIC_OK) {
     goto onfail;
   }
-  new QuicSession(fd, session); // fd takes possession of session ptr
+  new QuicSession(fd, session, &config); // fd takes possession of session ptr
 
   LOG(("QuicSocketProvider::NewSocket ok %p\n", this));
   *result = fd;

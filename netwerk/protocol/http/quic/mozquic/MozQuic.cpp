@@ -6,6 +6,7 @@
 #include "MozQuic.h"
 #include "MozQuicInternal.h"
 
+#include "assert.h"
 #include "netinet/ip.h"
 #include "stdlib.h"
 #include "unistd.h"
@@ -40,7 +41,8 @@ extern "C" {
     connPtr = *outConnection;
     memset(connPtr, 0, sizeof(mozquic_connection_t));
     connPtr->q = new mozilla::net::MozQuic();
-
+    connPtr->handleIO = inConfig->handleIO;
+    assert(!inConfig->handleIO); // todo
     if (inConfig->domain == AF_INET) {
       connPtr->isV6 = 0;
 //      memcpy(&connPtr->v4addr, inConfig->address, sizeof (struct sockaddr_in));
