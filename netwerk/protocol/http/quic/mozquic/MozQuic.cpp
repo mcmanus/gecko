@@ -80,6 +80,14 @@ extern "C" {
     return self->StartConnection();
   }
 
+  int mozquic_osfd(mozquic_connection_t *conn)
+  {
+    if (!conn) {
+      return MOZQUIC_ERR_INVALID;
+    }
+    return conn->udp;
+  }
+
 #ifdef __cplusplus
 }
 #endif

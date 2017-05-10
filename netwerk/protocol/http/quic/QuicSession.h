@@ -21,6 +21,7 @@ public:
     static PRStatus NSPRConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime to);
     static PRStatus NSPRClose(PRFileDesc *fd);
     static PRStatus NSPRSetSockOpt(PRFileDesc *fd, const PRSocketOptionData *opt);
+    static PRStatus NSPRGetSockName(PRFileDesc *fd, PRNetAddr *addr);
     static void SetMethods(PRIOMethods *outMethods);
 
 private:

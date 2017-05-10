@@ -30,9 +30,9 @@ extern "C" {
 
   int mozquic_new_connection(mozquic_connection_t **outSession, mozquic_config_t *inConfig);
   int mozquic_destroy_connection(mozquic_connection_t *inSession);
-
   int mozquic_start_connection(mozquic_connection_t *inSession);
 
+  int mozquic_osfd(mozquic_connection_t *inSession);
 #ifdef __cplusplus
 }
 #endif

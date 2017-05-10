@@ -3,7 +3,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/Assertions.h"
 #include "QuicSession.h"
+#include <sys/socket.h>
 
 namespace mozilla { namespace net {
 
@@ -48,6 +50,7 @@ QuicSession::SetMethods(PRIOMethods *outMethods)
   outMethods->connect = NSPRConnect;
   outMethods->close =   NSPRClose;
   outMethods->setsocketoption = NSPRSetSockOpt;
+  outMethods->getsockname = NSPRGetSockName;
 }
 
 PRStatus
@@ -68,6 +71,38 @@ PRStatus
 QuicSession::NSPRSetSockOpt(PRFileDesc *fd, const PRSocketOptionData *opt)
 {
   // todo?
+  return PR_SUCCESS;
+}
+
+PRStatus
+QuicSession::NSPRGetSockName(PRFileDesc *fd, PRNetAddr *outAddr)
+{
+  QuicSession *self = reinterpret_cast<QuicSession *>(fd->secret);
+  if (!self || self->mClosed || !self->mSession) {
+    return PR_FAILURE;
+  }
+  int udp = mozquic_osfd(self->mSession);
+  struct sockaddr_in6 real, *v6;
+  struct sockaddr_in  *v4;
+  struct sockaddr     *addr;
+  socklen_t addrlen;
+
+  addr = reinterpret_cast<struct sockaddr *>(&real);
+  v4   = reinterpret_cast<struct sockaddr_in *>(&real);
+  v6   = &real;
+  addrlen = sizeof (real);
+  
+  getsockname(udp, addr, &addrlen);
+  if (addrlen == sizeof (struct sockaddr_in6)) {
+    outAddr->ipv6.family = PR_AF_INET6;
+    outAddr->ipv6.port = v6->sin6_port;
+    memcpy(&outAddr->ipv6.ip, &v6->sin6_addr, sizeof (PRIPv6Addr));
+  } else {
+    MOZ_ASSERT(addrlen == sizeof(struct sockaddr_in));
+    outAddr->inet.family = PR_AF_INET;
+    outAddr->inet.port = v4->sin_port;
+    memcpy(&outAddr->inet.ip, &v4->sin_addr, sizeof (PRUint32));
+  }
   return PR_SUCCESS;
 }
 
