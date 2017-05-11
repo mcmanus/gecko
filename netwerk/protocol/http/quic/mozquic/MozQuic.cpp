@@ -82,6 +82,15 @@ extern "C" {
     return self->StartConnection();
   }
 
+  int mozquic_IO(mozquic_connection_t *conn)
+  {
+    if (!conn) {
+      return MOZQUIC_ERR_INVALID;
+    }
+    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn->q));
+    return self->IO();
+  }
+
   int mozquic_osfd(mozquic_connection_t *conn)
   {
     if (!conn) {
@@ -107,6 +116,13 @@ int
 MozQuic::StartConnection()
 {
   fprintf(stderr, "DID IT2\n\n\n\n");
+  return MOZQUIC_OK;
+}
+
+int
+MozQuic::IO()
+{
+  fprintf(stderr,"todo IO()\n");
   return MOZQUIC_OK;
 }
 

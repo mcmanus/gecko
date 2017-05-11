@@ -1178,7 +1178,7 @@ nsSocketTransport::BuildSocket(PRFileDesc *&fd, bool &proxyTransparent, bool &us
             if (mConnectionFlags & nsISocketTransport::BE_CONSERVATIVE)
                 controlFlags |= nsISocketProvider::BE_CONSERVATIVE;
 
-            nsCOMPtr<nsISupports> secinfo;
+            nsCOMPtr<nsISupports> secinfo; // todo
             if (i == 0) {
                 // if this is the first type, we'll want the 
                 // service to allocate a new socket
@@ -2330,6 +2330,7 @@ nsSocketTransport::Close(nsresult reason)
 NS_IMETHODIMP
 nsSocketTransport::GetSecurityInfo(nsISupports **secinfo)
 {
+    // todo for quic
     MutexAutoLock lock(mLock);
     NS_IF_ADDREF(*secinfo = mSecInfo);
     return NS_OK;

@@ -17,6 +17,7 @@ public:
   ~MozQuic() {}
 
   int StartConnection();
+  int IO();
 private:
 };
 }}

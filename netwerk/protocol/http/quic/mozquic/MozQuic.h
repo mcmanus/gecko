@@ -35,6 +35,11 @@ extern "C" {
 
   int  mozquic_osfd(mozquic_connection_t *inSession);
   void mozquic_setosfd(mozquic_connection_t *inSession, int fd);
+
+  // IO handlers
+  // if library is handling IO this does not need to be called
+  int mozquic_IO(mozquic_connection_t *inSession);
+
 #ifdef __cplusplus
 }
 #endif

@@ -10,12 +10,22 @@
 
 #include "nspr.h"
 #include "MozQuic.h"
+#include "nsISSLSocketControl.h"
+#include "nsCOMPtr.h"
+#include "nsString.h"
+#include "nsTArray.h"
+
+class nsIInterfaceRequestor;
 
 namespace mozilla { namespace net {
 
-class QuicSession final
+class QuicSession final :
+  public nsISSLSocketControl      
 {
 public:
+  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_NSISSLSOCKETCONTROL
+
   QuicSession(PRDescIdentity quicIdentity, PRIOMethods *quicMethods,
               mozquic_connection_t *session, mozquic_config_t *config);
 
@@ -26,6 +36,9 @@ public:
   PRFileDesc *GetFD() { return mFD; }
 private:
   ~QuicSession();
+
+  nsCOMPtr<nsIInterfaceRequestor> mCallbacks;
+  nsTArray<nsCString> mALPNList;
 
   bool         mClosed;
   bool         mDestroyOnClose;

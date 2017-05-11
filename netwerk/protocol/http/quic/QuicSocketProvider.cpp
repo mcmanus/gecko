@@ -46,6 +46,7 @@ QuicSocketProvider::NewSocket(int32_t family,
                              PRFileDesc **result,
                              nsISupports **securityInfo)
 {
+  // todo securityinfo - nsISSLSocketControl
   LOG(("QuicSocketProvider::NewSocket %p\n", this));
 
   if (!quicInit) {
@@ -66,19 +67,17 @@ QuicSocketProvider::NewSocket(int32_t family,
 
   QuicSession *qSession = nullptr;
 
-  if (mozquic_new_connection(&session, &config) != MOZQUIC_OK) {
-    goto onfail;
-  }
-
-  qSession = new QuicSession(quicIdentity, &quicMethods, session, &config);
+  if (mozquic_new_connection(&session, &config) == MOZQUIC_OK) {
+    qSession = new QuicSession(quicIdentity, &quicMethods, session, &config);
   
-  LOG(("QuicSocketProvider::NewSocket ok %p\n", this));
-  *result = qSession->GetFD();
-  return NS_OK;
-
-onfail:
+    LOG(("QuicSocketProvider::NewSocket ok %p\n", this));
+    *result = qSession->GetFD();
+    nsCOMPtr<nsISupports> secInfo(qSession);
+    *securityInfo = secInfo.forget().take();
+    return NS_OK;
+  }
+  
   LOG(("QuicSocketProvider::NewSocket fail %p\n", this));
-
   if (session) {
     mozquic_destroy_connection(session);
   }
