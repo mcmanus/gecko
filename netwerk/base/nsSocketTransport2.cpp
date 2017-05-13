@@ -36,9 +36,6 @@
 #include "nsICancelable.h"
 #include <algorithm>
 
-#include "sdt.h"
-#include "SDTUpper.h"
-
 #include "nsPrintfCString.h"
 #include "xpcpublic.h"
 
@@ -1229,20 +1226,6 @@ nsSocketTransport::BuildSocket(PRFileDesc *&fd, bool &proxyTransparent, bool &us
                     secCtrl->SetNotificationCallbacks(callbacks);
                 // remember if socket type is SSL so we can ProxyStartSSL if need be.
                 usingSSL = isSSL;
-                if (mQUIC) {
-                    // SDT will start DTLS on PR_Connect because udp is
-                    // connectionless and only way to know that a server
-                    // speaks SDT is to send it a DTLS handshake packet so
-                    // we need to setup ALPN here.
-                    nsTArray<nsCString> protocolArray;
-                    protocolArray.AppendElement(NS_LITERAL_CSTRING("hq"));
-                    if (secCtrl) {
-                        rv = secCtrl->SetNPNList(protocolArray);
-                        if (NS_FAILED(rv)) {
-                            break;
-                        }
-                    }
-                }
             }
             else if ((strcmp(mTypes[i], "socks") == 0) ||
                      (strcmp(mTypes[i], "socks4") == 0)) {
@@ -2212,7 +2195,6 @@ nsSocketTransport::IsLocal(bool *aIsLocal)
 
 NS_IMPL_ISUPPORTS(nsSocketTransport,
                   nsISocketTransport,
-                  nsISocketTransportSDT,
                   nsITransport,
                   nsIDNSListener,
                   nsIClassInfo,
@@ -2708,9 +2690,6 @@ nsSocketTransport::GetInterface(const nsIID &iid, void **result)
     if (iid.Equals(NS_GET_IID(nsIDNSRecord))) {
         return mDNSRecord ?
             mDNSRecord->QueryInterface(iid, result) : NS_ERROR_NO_INTERFACE;
-    } else if (iid.Equals(NS_GET_IID(nsISocketTransportSDT)) && !mQUIC) {
-        *result = nullptr;
-        return NS_ERROR_NO_INTERFACE;
     }
     return this->QueryInterface(iid, result);
 }
@@ -3300,145 +3279,6 @@ nsSocketTransport::SendPRBlockingTelemetry(PRIntervalTime aStart,
         Telemetry::Accumulate(aIDNormal,
                               PR_IntervalToMilliseconds(now - aStart));
     }
-}
-
-static nsresult
-MapSDTErrorToNSError(int32_t aSDTError)
-{
-  switch (aSDTError) {
-  case SDTE_OK:
-      return NS_OK;
-  case SDTE_OUT_OF_MEMORY:
-      return NS_ERROR_OUT_OF_MEMORY;
-  case SDTE_NOT_AVAILABLE:
-      return NS_ERROR_NOT_AVAILABLE;
-  case SDTE_NO_MORE_STREAM_IDS:
-      return NS_ERROR_NOT_AVAILABLE;
-  case SDTE_WOULD_BLOCK:
-      return NS_BASE_STREAM_WOULD_BLOCK;
-  default:
-      return NS_ERROR_FAILURE;
-  }
-}
-
-NS_IMETHODIMP
-nsSocketTransport::OpenStream(uint32_t *aStreamId)
-{
-    PRFileDescAutoLock fd(this);
-    if (!fd.IsInitialized()) {
-        return NS_ERROR_NOT_CONNECTED;
-    }
-
-    PRFileDesc *sdtFD = sdt_getSDTFD(fd);
-    MOZ_ASSERT(sdtFD);
-    return MapSDTErrorToNSError(sdt_OpenStream(sdtFD, aStreamId));
-}
-
-NS_IMETHODIMP
-nsSocketTransport::CloseStream(uint32_t aStreamId)
-{
-    PRFileDescAutoLock fd(this);
-    if (!fd.IsInitialized()) {
-        return NS_ERROR_NOT_CONNECTED;
-    }
-
-    PRFileDesc *sdtFD = sdt_getSDTFD(fd);
-    MOZ_ASSERT(sdtFD);
-    return MapSDTErrorToNSError(sdt_CloseStream(sdtFD, aStreamId));
-}
-
-NS_IMETHODIMP
-nsSocketTransport::ResetStream(uint32_t aStreamId)
-{
-    PRFileDescAutoLock fd(this);
-    if (!fd.IsInitialized()) {
-        return NS_ERROR_NOT_CONNECTED;
-    }
-
-    PRFileDesc *sdtFD = sdt_getSDTFD(fd);
-    MOZ_ASSERT(sdtFD);
-    return MapSDTErrorToNSError(sdt_ResetStream(sdtFD, aStreamId));
-}
-
-NS_IMETHODIMP
-nsSocketTransport::GetStreamsReadyToRead(nsTArray<uint32_t> &aStreamIds)
-{
-    PRFileDescAutoLock fd(this);
-    if (!fd.IsInitialized()) {
-        return NS_ERROR_NOT_CONNECTED;
-    }
-
-    PRFileDesc *sdtFD = sdt_getSDTFD(fd);
-    MOZ_ASSERT(sdtFD);
-    uint32_t *streams;
-    uint32_t num;
-    nsresult rv = MapSDTErrorToNSError(sdt_GetStreamsReadyToRead(sdtFD, &streams, &num));
-    if (NS_FAILED(rv)) {
-        return rv;
-    }
-    for (uint32_t i = 0; i < num; i++) {
-        aStreamIds.AppendElement(streams[i]);
-    }
-    free(streams);
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsSocketTransport::SetNextStreamToRead(uint32_t aStreamId,
-                                       int32_t *aStatus)
-{
-    PRFileDescAutoLock fd(this);
-    if (!fd.IsInitialized()) {
-        return NS_ERROR_NOT_CONNECTED;
-    }
-
-    PRFileDesc *sdtFD = sdt_getSDTFD(fd);
-    MOZ_ASSERT(sdtFD);
-
-    *aStatus = SDTE_OK;
-
-    int32_t rvSdt = sdt_SetNextStreamToRead(sdtFD, aStreamId);
-    if ((rvSdt == SDT_STREAM_RST) || (rvSdt == SDT_STREAM_FIN)) {
-        *aStatus = rvSdt;
-        return NS_ERROR_FAILURE;
-    }
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsSocketTransport::SetNextStreamToWrite(uint32_t aStreamId,
-                                        int32_t *aStatus)
-{
-    PRFileDescAutoLock fd(this);
-    if (!fd.IsInitialized()) {
-        return NS_ERROR_NOT_CONNECTED;
-    }
-
-    PRFileDesc *sdtFD = sdt_getSDTFD(fd);
-    MOZ_ASSERT(sdtFD);
-
-    *aStatus = SDTE_OK;
-
-    int32_t rvSdt = sdt_SetNextStreamToWrite(sdtFD, aStreamId);
-    if ((rvSdt == SDT_STREAM_RST) || (rvSdt == SDT_STREAM_FIN)) {
-        *aStatus = rvSdt;
-        return NS_ERROR_FAILURE;
-    }
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsSocketTransport::StreamCanWrite(uint32_t aStreamId, bool *aCanWrite)
-{
-    PRFileDescAutoLock fd(this);
-    if (!fd.IsInitialized()) {
-        return NS_ERROR_NOT_CONNECTED;
-    }
-
-    PRFileDesc *sdtFD = sdt_getSDTFD(fd);
-    MOZ_ASSERT(sdtFD);
-    *aCanWrite = sdt_StreamCanWriteData(sdtFD, aStreamId);
-    return NS_OK;
 }
 
 } // namespace net

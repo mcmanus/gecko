@@ -18,7 +18,6 @@
 #include "PSpdyPush.h"
 #include "Http2Push.h"
 #include "Http2Session.h"
-#include "SDTSession.h"
 
 #include "mozilla/Telemetry.h"
 
@@ -57,7 +56,6 @@ ASpdySession::NewSpdySession(uint32_t version,
   }
   MOZ_ASSERT(version == QUIC_EXPERIMENT_0);
   
-  // We use normal http2. A transformation from http2 to sdt is down the stack.
   return new Http2Session(aTransport, version, attemptingEarlyData);
 }
 

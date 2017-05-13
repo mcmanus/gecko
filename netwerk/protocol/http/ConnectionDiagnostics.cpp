@@ -10,7 +10,6 @@
 #include "nsHttpConnectionMgr.h"
 #include "nsHttpConnection.h"
 #include "Http2Session.h"
-#include "SDTSession.h"
 #include "nsHttpHandler.h"
 #include "nsIConsoleService.h"
 #include "nsHttpRequestHead.h"
@@ -197,33 +196,6 @@ Http2Session::PrintDiagnostics(nsCString &log)
   else
     log.AppendPrintf("     No Ping Outstanding\n");
 }
-
-void
-SDTSession::PrintDiagnostics(nsCString &log)
-{
-  log.AppendPrintf("     ::: SDT\n");
-  log.AppendPrintf("     shouldgoaway = %d mClosed = %d CanReuse = %d nextID=0x%X\n",
-                   mShouldGoAway, mClosed, CanReuse(), mNextStreamID);
-
-  log.AppendPrintf("     roomformorestreams = %d roomformoreconcurrent = %d\n",
-                   RoomForMoreStreams(), RoomForMoreConcurrent());
-
-  log.AppendPrintf("     transactionHashCount = %d streamIDHashCount = %d\n",
-                   mStreamTransactionHash.Count(),
-                   mStreamIDHash.Count());
-
-  log.AppendPrintf("     Queued Stream Size = %d\n", mQueuedStreams.GetSize());
-
-  PRIntervalTime now = PR_IntervalNow();
-
-  log.AppendPrintf("     Ping Timeout = %ums\n",
-                   PR_IntervalToMilliseconds(gHttpHandler->SpdyPingTimeout()));
-  log.AppendPrintf("     Idle for Any Activity (ping) = %ums\n",
-                   PR_IntervalToMilliseconds(now - mLastReadEpoch));
-  log.AppendPrintf("     Idle for Data Activity = %ums\n",
-                   PR_IntervalToMilliseconds(now - mLastDataReadEpoch));
-}
-
 
 void
 nsHttpTransaction::PrintDiagnostics(nsCString &log)

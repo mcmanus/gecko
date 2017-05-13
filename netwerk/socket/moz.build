@@ -14,10 +14,8 @@ XPIDL_SOURCES += [
 
 XPIDL_MODULE = 'necko_socket'
 
-# todo he quic include can go away when sdt does
 LOCAL_INCLUDES += [
     '/netwerk/base',
-    '/netwerk/protocol/http/quic',
 ]
 
 UNIFIED_SOURCES += [
@@ -25,20 +23,6 @@ UNIFIED_SOURCES += [
     'nsSOCKSIOLayer.cpp',
     'nsSOCKSSocketProvider.cpp',
     'nsUDPSocketProvider.cpp',
-    'SDTUpper.cpp',
-]
-
-SOURCES += [
-    'sdt.c',
-    'tcp_cubic.c',
-    'tcp_general.c',
-    'uLayer.c',
-]
-
-EXPORTS += [
-    'congestion_control.h',
-    'tcp_cubic.h',
-    'tcp_general.h',
 ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':

@@ -16,7 +16,6 @@
 
 #include "nsIInterfaceRequestor.h"
 #include "nsISocketTransport.h"
-#include "nsISocketTransportSDT.h"
 #include "nsIAsyncInputStream.h"
 #include "nsIAsyncOutputStream.h"
 #include "nsIDNSListener.h"
@@ -116,13 +115,11 @@ class nsSocketTransport final : public nsASocketHandler
                               , public nsIDNSListener
                               , public nsIClassInfo
                               , public nsIInterfaceRequestor
-                              , public nsISocketTransportSDT
 {
 public:
     NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSITRANSPORT
     NS_DECL_NSISOCKETTRANSPORT
-    NS_DECL_NSISOCKETTRANSPORTSDT
     NS_DECL_NSIDNSLISTENER
     NS_DECL_NSICLASSINFO
     NS_DECL_NSIINTERFACEREQUESTOR

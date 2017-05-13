@@ -103,7 +103,6 @@ XPIDL_SOURCES += [
     'nsISimpleStreamListener.idl',
     'nsISocketFilter.idl',
     'nsISocketTransport.idl',
-    'nsISocketTransportSDT.idl',
     'nsISocketTransportService.idl',
     'nsISpeculativeConnect.idl',
     'nsIStandardURL.idl',
