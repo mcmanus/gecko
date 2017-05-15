@@ -104,6 +104,7 @@ SOURCES += [
 SOURCES += [
     'quic/mozquic/fnv.c',
     'quic/mozquic/MozQuic.cpp',
+    'quic/mozquic/MozQuicStream.cpp',
 ]
 
 # These files cannot be built in unified mode because of OS X headers.

@@ -9,6 +9,9 @@
 #include <netinet/ip.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <forward_list>
+#include <memory>
+#include "MozQuicStream.h"
 
 namespace mozilla { namespace net {
 
@@ -28,7 +31,9 @@ enum connectionState
   SERVER_STATE_UNINITIALIZED = 0,
 };
 
-class MozQuic final
+class MozQuicStreamPair;
+
+class MozQuic final : public MozQuicWriter
 {
 public:
   MozQuic(bool handleIO);
@@ -48,12 +53,17 @@ public:
   void SetErrorCB(int (*fx)(mozquic_connection_t *, uint32_t err, char *)) { mErrorCB = fx; }
   void SetFD(int fd) { mFD = fd; }
   int  GetFD() { return mFD; }
+
+//  uint32_t DoWriter(unsigned char *data, uint32_t len) override;
+  uint32_t DoWriter(std::unique_ptr<MozQuicStreamChunk> &p) override;
 private:
   void RaiseError(uint32_t err, char *reason);
 
-  int Transmit(unsigned char *, uint32_t len);
-  int Recv(unsigned char *, uint32_t len, uint32_t &outLen);
+  uint32_t Transmit(unsigned char *, uint32_t len);
+  uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen);
   void GetHandShakeOutputData(unsigned char *, uint16_t &out, uint16_t avail);
+  int ProcessServerCleartext(unsigned char *, uint32_t size);
+
   int Send1RTT();
   int Recv1RTT();
   void Log(char *);
@@ -76,8 +86,15 @@ private:
   unsigned char *mStream0Out; // convenience ptr
   unsigned char *mStream0Allocation; // todo this is awful
   uint32_t mStream0OutAvail;
+
+  std::unique_ptr<MozQuicStreamPair> mStream0;
+
+  // todo this is suboptimal
+  std::list<std::unique_ptr<MozQuicStreamChunk>> mUnAcked;
 };
-}}
+
+}} //namespace
+  
 
 #ifdef __cplusplus
 extern "C" {

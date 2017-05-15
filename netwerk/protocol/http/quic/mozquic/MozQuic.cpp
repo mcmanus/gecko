@@ -5,6 +5,7 @@
 
 #include "MozQuic.h"
 #include "MozQuicInternal.h"
+#include "MozQuicStream.h"
 
 #include "assert.h"
 #include "netinet/ip.h"
@@ -101,6 +102,7 @@ MozQuic::MozQuic(bool handleIO)
   , mStream0Out(nullptr)
   , mStream0Allocation(nullptr)
   , mStream0OutAvail(0)
+  , mStream0(new MozQuicStreamPair(0, this))
 {
 }
 
@@ -181,7 +183,7 @@ MozQuic::Log(char *msg)
   }
 }
 
-int
+uint32_t
 MozQuic::Recv(unsigned char *pkt, uint32_t avail, uint32_t &outLen)
 {
   if (mReceiverCallback) {
@@ -194,7 +196,7 @@ MozQuic::Recv(unsigned char *pkt, uint32_t avail, uint32_t &outLen)
   return MOZQUIC_OK;
 }
 
-int
+uint32_t
 MozQuic::Transmit (unsigned char *pkt, uint32_t len)
 {
   if (mTransmitCallback) {
@@ -275,6 +277,7 @@ MozQuic::Send1RTT()
     return MOZQUIC_ERR_GENERAL;
   }
 
+  mStream0->Flush();
   // we need a client hello from nss up to
   // kMozQuicMTU - 17 (hdr) - 8 (stream header) - 8 (csum)
   uint16_t clientHelloLen = 0;
@@ -327,11 +330,13 @@ MozQuic::Send1RTT()
   mStream0Offset += clientHelloLen;
   mNextPacketID++;
   Transmit(pkt, kMozQuicMTU);
+  mStream0->Flush();
+
   return MOZQUIC_OK;
 }
 
 int
-MozQuic::ProcessServerCleartext(pkt, pktSize)
+MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
 {
   // need retrans
   // connid from server
@@ -375,11 +380,12 @@ MozQuic::Recv1RTT()
   case 0x83: // Server Stateless Retry
     assert(false);
     // todo mvp
+    // meara is great!
     break;
   case 0x84: // Server cleartext
     return ProcessServerCleartext(pkt, pktSize);
     break;
-  case 0x84: // Client cleartext
+  case 0x85: // Client cleartext
     assert(false);
     // todo mvp
     break;
@@ -388,7 +394,25 @@ MozQuic::Recv1RTT()
     Log((char *)"recv1rtt unexpected type");
     break;
   }
-  return MOZ_QUIC_OK;
+  return MOZQUIC_OK;
+}
+
+uint32_t
+MozQuic::DoWriter(std::unique_ptr<MozQuicStreamChunk> &p)
+{
+
+  // TODO NOW - this is not a packet! This is data written
+  // from a stream
+  // if transmit of this data succeeds, we need to move the pointer to
+  // the unacked list
+
+  uint32_t code = Transmit(p->mData.get(), p->mLen);
+  if (code == MOZQUIC_OK) {
+        // move it from unwritten to unacked
+    std::unique_ptr<MozQuicStreamChunk> tmp(std::move(p));
+    mUnAcked.push_back(std::move(tmp));
+  }
+  return code;
 }
 
 }}
