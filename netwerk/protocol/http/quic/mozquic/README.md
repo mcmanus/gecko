@@ -2,6 +2,7 @@
 for handle io
 * thread to poll for its own events .. look at config handle-socket
 * socket() and connect()
+* psm and cert verification
 
 ---
 

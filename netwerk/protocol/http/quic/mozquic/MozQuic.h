@@ -29,20 +29,32 @@ extern "C" {
     int originPort;
     int handleIO; // true if library should schedule read and write events
 
-    void (*logging_callback)(char *); // todo va arg
-    int  (*transmit_callback)(unsigned char *, uint32_t len);
+    void (*logging_callback)(mozquic_connection_t *, char *); // todo va arg
+    int  (*transmit_callback)(mozquic_connection_t *, unsigned char *, uint32_t len);
+
+    // TLS API
+    int (*perform_handshake_callback)(mozquic_connection_t *, int fd);
   };
 
   int mozquic_new_connection(mozquic_connection_t **outSession, mozquic_config_t *inConfig);
   int mozquic_destroy_connection(mozquic_connection_t *inSession);
   int mozquic_start_connection(mozquic_connection_t *inSession);
 
+
+  ////////////////////////////////////////////////////
+  // IO handlers
+  // if library is handling IO this does not need to be called
+  // otherwise call it to indicate IO should be handled
+  int mozquic_IO(mozquic_connection_t *inSession);
+  // todo need one to get the pollset
+
   int  mozquic_osfd(mozquic_connection_t *inSession);
   void mozquic_setosfd(mozquic_connection_t *inSession, int fd);
 
-  // IO handlers
-  // if library is handling IO this does not need to be called
-  int mozquic_IO(mozquic_connection_t *inSession);
+  // the mozquic application may either delegate TLS handling to the lib
+  // or may imlement the TLS API : perform_handshake_callback and then
+  // mozquic_handshake_complete(ERRORCODE)
+  void mozquic_handshake_complete(mozquic_connection_t *session, int err);
 
 #ifdef __cplusplus
 }

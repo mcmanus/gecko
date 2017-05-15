@@ -49,8 +49,9 @@ public:
   int StartConnection();
   int IO();
 
-  void SetLogger(void(*fx)(char *)) { mLogCallback = fx; }
-  void SetTransmiter(int(*fx)(unsigned char *, uint32_t)) { mTransmitCallback = fx; }
+  void SetLogger(void (*fx)(mozquic_connection_t *, char *)) { mLogCallback = fx; }
+  void SetTransmiter(int(*fx)(mozquic_connection_t *,
+                              unsigned char *, uint32_t)) { mTransmitCallback = fx; }
   void SetFD(int fd) { mFD = fd; }
   int  GetFD() { return mFD; }
 
@@ -65,8 +66,8 @@ private:
   uint64_t mConnectionID;
   uint32_t mNextPacketID;
 
-  void (*mLogCallback)(char *); // todo va arg
-  int  (*mTransmitCallback)(unsigned char *, uint32_t len);
+  void (*mLogCallback)(mozquic_connection_t *, char *); // todo va arg
+  int  (*mTransmitCallback)(mozquic_connection_t *, unsigned char *, uint32_t len);
 };
 }}
 
