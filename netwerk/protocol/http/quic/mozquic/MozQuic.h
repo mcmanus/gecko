@@ -7,6 +7,7 @@
 #define mozquic_h__
 
 /* This interface is straight C - the library implementation is not. */
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,6 +28,9 @@ extern "C" {
     const char *originName;
     int originPort;
     int handleIO; // true if library should schedule read and write events
+
+    void (*logging_callback)(char *); // todo va arg
+    int  (*transmit_callback)(unsigned char *, uint32_t len);
   };
 
   int mozquic_new_connection(mozquic_connection_t **outSession, mozquic_config_t *inConfig);

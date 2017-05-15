@@ -10,6 +10,8 @@
 #include "netinet/ip.h"
 #include "stdlib.h"
 #include "unistd.h"
+#include "time.h"
+#include "fnv.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,9 +42,6 @@ extern "C" {
 
     connPtr = *outConnection;
     memset(connPtr, 0, sizeof(mozquic_connection_t));
-    connPtr->q = new mozilla::net::MozQuic();
-    connPtr->handleIO = inConfig->handleIO;
-    assert(!inConfig->handleIO); // todo
     if (inConfig->domain == AF_INET) {
       connPtr->isV6 = 0;
 //      memcpy(&connPtr->v4addr, inConfig->address, sizeof (struct sockaddr_in));
@@ -50,9 +49,15 @@ extern "C" {
       connPtr->isV6 = 1;
 //      memcpy(&connPtr->v6addr, inConfig->address, sizeof (struct sockaddr_in6));
     }
+
+    connPtr->q = new mozilla::net::MozQuic();
+    connPtr->handleIO = inConfig->handleIO;
+    assert(!inConfig->handleIO); // todo
+    connPtr->q->SetLogger(inConfig->logging_callback);
+    connPtr->q->SetTransmiter(inConfig->transmit_callback);
+
     connPtr->originName = strdup(inConfig->originName);
     connPtr->originPort = inConfig->originPort;
-    connPtr->udp = socket(inConfig->domain, SOCK_DGRAM, 0);
     return MOZQUIC_OK;
   }
 
@@ -60,9 +65,6 @@ extern "C" {
   {
     if (!inConnection) {
       return MOZQUIC_ERR_INVALID;
-    }
-    if (inConnection->udp > 0) {
-      close(inConnection->udp);
     }
     if (inConnection->originName) {
       free(inConnection->originName);
@@ -93,16 +95,18 @@ extern "C" {
 
   int mozquic_osfd(mozquic_connection_t *conn)
   {
-    if (!conn) {
+    if (!conn || !conn->q) {
       return MOZQUIC_ERR_INVALID;
     }
-    return conn->udp;
+    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn->q));
+    return self->GetFD();
   }
 
   void mozquic_setosfd(mozquic_connection_t *conn, int fd)
   {
-    if (conn) {
-      conn->udp = fd;
+    if (conn && conn->q) {
+      mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn->q));
+      self->SetFD(fd);
     }
   }
 
@@ -115,15 +119,93 @@ namespace mozilla { namespace net {
 int
 MozQuic::StartConnection()
 {
-  fprintf(stderr, "DID IT2\n\n\n\n");
+  if (mIsClient) {
+    mConnectionState = CLIENT_STATE_SEND_1RTT;
+    // todo seed prng sensibly
+    srandom(time(NULL));
+    for (int i=0; i < 4; i++) {
+      mConnectionID = mConnectionID << 16;
+      mConnectionID = mConnectionID | (random() & 0xffff);
+    }
+    for (int i=0; i < 2; i++) {
+      mNextPacketID = mNextPacketID << 16;
+      mNextPacketID = mNextPacketID | (random() & 0xffff);
+    }
+  } else {
+    assert(false);
+    // todo
+  }
+
   return MOZQUIC_OK;
 }
 
 int
 MozQuic::IO()
 {
+  if (mIsClient) {
+    switch (mConnectionState) {
+    case CLIENT_STATE_SEND_1RTT:
+      return Send1RTT();
+      break;
+    default:
+      assert(false);
+      // todo
+    }
+  } else {
+    assert(false);
+    // todo
+  }
+  
   fprintf(stderr,"todo IO()\n");
   return MOZQUIC_OK;
 }
+
+int
+MozQuic::Transmit (unsigned char *pkt, uint32_t len)
+{
+  if (mTransmitCallback) {
+    return mTransmitCallback(pkt, len);
+  }
+  send(mFD, pkt, len, 0); // todo errs
+  return MOZQUIC_OK;
+}
+
+int
+MozQuic::Send1RTT() 
+{
+  unsigned char pkt[kMozQuicMTU];
+
+  // section 5.4.1 of transport
+  // long form header 17 bytes
+  pkt[0] = 0x82;
+  memcpy(pkt + 1, &mConnectionID, 8);
+  memcpy(pkt + 9, &mNextPacketID, 4);
+  memcpy(pkt + 13, &kMozQuicVersion, 4);
+  mNextPacketID++;
+
+  // we need a client hello from nss up to
+  // kMozQuicMTU - 17 (hdr) - 1 (stream type) - 8 (csum
+
+  // stream frame type byte is 0xd0 and header is
+  // 2 bytes of len, 0x00 (stream 0), then
+  // len bytes of data
+  pkt[17] = 0xd;
+  memcpy (pkt + 18, clientHello, clientHelloLen);
+
+  // then padding as needed up to 1272
+  uint32_t paddingNeeded = kMozQuicMTU - 17 - 1 - 8 - clientHelloLen;
+  memset (pkt + 17 + 1 + clientHelloLen, 0, paddingNeeded);
+
+  // then 8 bytes of checksum on cleartext packets
+  assert (FNV64size == 8);
+  if (FNV64block(pkt, kMozQuicMTU - 8, pkt + kMozQuicMTU - 8) != 0) {
+    // todo log
+    return MOZQUIC_ERR_GENERAL;
+  }
+
+  Transmit(pkt, kMozQuicMTU);
+  return MOZQUIC_OK;
+}
+
 
 }}

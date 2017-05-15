@@ -6,19 +6,67 @@
 #ifndef mozquicinternal_h__
 #define mozquicinternal_h__
 
-#include "netinet/ip.h"
+#include <netinet/ip.h>
+#include <stdint.h>
+#include <unistd.h>
 
 namespace mozilla { namespace net {
+
+// todo handle more than 1
+static const uint32_t kMozQuicVersion = 0xf123f0c5;
+static const uint32_t kMozQuicMTU = 1280; // todo pmtud
+    
+enum connectionState
+{
+  CLIENT_STATE_UNINITIALIZED,
+  CLIENT_STATE_SEND_0RTT,
+  CLIENT_STATE_SEND_1RTT,
+  CLIENT_STATE_WAIT_0RTT,
+  CLIENT_STATE_WAIT_1RTT,
+  CLIENT_STATE_CONNECTED,
+  CLIENT_STATE_CLOSED,  // todo more shutdown states
+
+  SERVER_STATE_UNINITIALIZED = 0,
+};
 
 class MozQuic final
 {
 public:
-  MozQuic() {}
-  ~MozQuic() {}
-
+  MozQuic()
+    : mFD(-1)
+    , mIsClient(true)
+    , mConnectionState(CLIENT_STATE_UNINITIALIZED)
+    , mLogCallback(nullptr)
+    , mTransmitCallback(nullptr)
+    {}
+  ~MozQuic()
+  {
+    if (mFD > 0) {
+      close(mFD);
+    }
+  }
+  
   int StartConnection();
   int IO();
+
+  void SetLogger(void(*fx)(char *)) { mLogCallback = fx; }
+  void SetTransmiter(int(*fx)(unsigned char *, uint32_t)) { mTransmitCallback = fx; }
+  void SetFD(int fd);
+  int  GetFD() { return mFD; }
+
 private:
+  int Transmit(unsigned char *, uint32_t len);
+  int Send1RTT();
+
+  int  mFD;
+  bool mIsClient;
+  enum connectionState mConnectionState;
+
+  uint64_t mConnectionID;
+  uint32_t mNextPacketID;
+
+  void (*mLogCallback)(char *); // todo va arg
+  int  (*mTransmitCallback)(unsigned char *, uint32_t len);
 };
 }}
 
@@ -27,7 +75,6 @@ extern "C" {
 #endif
 
 struct mozquic_connection_t {
-  int                 udp;
   //  struct sockaddr_in  v4addr;
   //  struct sockaddr_in6 v6addr;
   int                 isV6;
