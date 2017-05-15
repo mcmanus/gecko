@@ -190,6 +190,9 @@ MozQuic::Send1RTT()
   // 2 bytes of len, 0x00 (stream 0), then
   // len bytes of data
   pkt[17] = 0xd;
+  unsigned char clientHello[80];
+  uint32_t clientHelloLen = 80;
+  memset (clientHello, 0xbb, clientHelloLen);
   memcpy (pkt + 18, clientHello, clientHelloLen);
 
   // then padding as needed up to 1272

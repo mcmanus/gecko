@@ -51,7 +51,7 @@ public:
 
   void SetLogger(void(*fx)(char *)) { mLogCallback = fx; }
   void SetTransmiter(int(*fx)(unsigned char *, uint32_t)) { mTransmitCallback = fx; }
-  void SetFD(int fd);
+  void SetFD(int fd) { mFD = fd; }
   int  GetFD() { return mFD; }
 
 private:
