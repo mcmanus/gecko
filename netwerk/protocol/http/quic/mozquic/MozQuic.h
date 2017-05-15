@@ -16,7 +16,8 @@ extern "C" {
   enum {
     MOZQUIC_OK = 0,
     MOZQUIC_ERR_GENERAL = 1,
-    MOZQUIC_ERR_INVALID = 2
+    MOZQUIC_ERR_INVALID = 2,
+    MOZQUIC_ERR_MEMORY  = 3
   };
 
 
@@ -31,11 +32,13 @@ extern "C" {
     int handleIO; // true if library should schedule read and write events
 
     void (*logging_callback)(mozquic_connection_t *, char *); // todo va arg
-    int  (*transmit_callback)(mozquic_connection_t *, unsigned char *, uint32_t len);
+    int  (*send_callback)(mozquic_connection_t *, unsigned char *, uint32_t len);
+    int  (*recv_callback)(mozquic_connection_t *, unsigned char *, uint32_t len, uint32_t *outLen);
     int  (*error_callback)(mozquic_connection_t *, uint32_t err, char *);
 
     // TLS API
-    int (*perform_handshake_callback)(mozquic_connection_t *, int fd);
+    int (*handshake_input)(mozquic_connection_t *, unsigned char *data,
+                           uint32_t len);
   };
 
   int mozquic_new_connection(mozquic_connection_t **outSession, mozquic_config_t *inConfig);
@@ -54,8 +57,10 @@ extern "C" {
   void mozquic_setosfd(mozquic_connection_t *inSession, int fd);
 
   // the mozquic application may either delegate TLS handling to the lib
-  // or may imlement the TLS API : perform_handshake_callback and then
+  // or may imlement the TLS API : mozquic_handshake_input/output and then
   // mozquic_handshake_complete(ERRORCODE)
+  void mozquic_handshake_output(mozquic_connection_t *session,
+                                unsigned char *data, uint32_t data_len);
   void mozquic_handshake_complete(mozquic_connection_t *session, int err);
 
 #ifdef __cplusplus

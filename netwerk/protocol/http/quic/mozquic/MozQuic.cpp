@@ -40,8 +40,9 @@ extern "C" {
     *outConnection = (void *)q;
 
     q->SetLogger(inConfig->logging_callback);
-    q->SetTransmiter(inConfig->transmit_callback);
-    q->SetHandShaker(inConfig->perform_handshake_callback);
+    q->SetTransmiter(inConfig->send_callback);
+    q->SetReceiver(inConfig->recv_callback);
+    q->SetHandShakeInput(inConfig->handshake_input);
     q->SetErrorCB(inConfig->error_callback);
 
 //    connPtr->originName = strdup(inConfig->originName);
@@ -86,13 +87,40 @@ extern "C" {
 
 namespace mozilla { namespace net {
 
+MozQuic::MozQuic(bool handleIO)
+  : mFD(-1)
+  , mHandleIO(handleIO)
+  , mIsClient(true)
+  , mConnectionState(CLIENT_STATE_UNINITIALIZED)
+  , mStream0Offset(0)
+  , mLogCallback(nullptr)
+  , mTransmitCallback(nullptr)
+  , mReceiverCallback(nullptr)
+  , mHandShakeInput(nullptr)
+  , mErrorCB(nullptr)
+  , mStream0Out(nullptr)
+  , mStream0Allocation(nullptr)
+  , mStream0OutAvail(0)
+{
+}
+
+MozQuic::~MozQuic()
+{
+  if (mFD > 0) {
+    close(mFD);
+  }
+  if (mStream0Allocation) {
+    free (mStream0Allocation);
+  }
+}
+  
 int
 MozQuic::StartConnection()
 {
   assert(!mHandleIO); // todo
 
   if (mIsClient) {
-    mConnectionState = CLIENT_STATE_SEND_1RTT;
+    mConnectionState = CLIENT_STATE_1RTT;
     // todo seed prng sensibly
     srandom(time(NULL));
     for (int i=0; i < 4; i++) {
@@ -116,13 +144,23 @@ MozQuic::IO()
 {
   if (mIsClient) {
     switch (mConnectionState) {
-    case CLIENT_STATE_SEND_1RTT:
+    case CLIENT_STATE_1RTT:
       return Send1RTT();
       break;
     default:
       assert(false);
       // todo
     }
+
+    switch (mConnectionState) {
+    case CLIENT_STATE_1RTT:
+      return Recv1RTT();
+      break;
+    default:
+      assert(false);
+      // todo
+    }
+
   } else {
     assert(false);
     // todo
@@ -144,6 +182,19 @@ MozQuic::Log(char *msg)
 }
 
 int
+MozQuic::Recv(unsigned char *pkt, uint32_t avail, uint32_t &outLen)
+{
+  if (mReceiverCallback) {
+    return mReceiverCallback(this, pkt, avail, &outLen);
+  }
+  ssize_t amt = recv(mFD, pkt, avail, 0);
+  outLen = amt > 0 ? amt : 0;
+  // todo errs
+
+  return MOZQUIC_OK;
+}
+
+int
 MozQuic::Transmit (unsigned char *pkt, uint32_t len)
 {
   if (mTransmitCallback) {
@@ -162,13 +213,54 @@ MozQuic::RaiseError(uint32_t e, char *reason)
   }
 }
 
+// this is called by the application when the application is handling
+// the TLS stream (so that it can do more sophisticated handling
+// of certs etc like gecko PSM does)
 void
-MozQuic::GetHandShakerData(unsigned char *p, uint16_t &outLen,
-                           uint16_t available)
+MozQuic::HandShakeOutput(unsigned char *buf, uint32_t datalen)
 {
-  assert(mHandShaker);
-  outLen = 80;
-  memset(p, 0xbb, 80);
+  // todo this is awful mvp stuff
+  if (mStream0Out == mStream0Allocation) {
+    // null case and totally unused case
+    mStream0Allocation = (unsigned char *)realloc(mStream0Allocation, datalen + mStream0OutAvail);
+    mStream0Out = mStream0Allocation;
+  } else {
+    unsigned char *newbuf = (unsigned char *) malloc(datalen + mStream0OutAvail);
+    if (newbuf) {
+      memcpy (newbuf, mStream0Out, mStream0OutAvail);
+    }
+    free (mStream0Allocation);
+    mStream0Out = mStream0Allocation = newbuf;
+  }
+
+  if (mStream0Out) {
+    memcpy (mStream0Out + mStream0OutAvail, buf, datalen);
+    mStream0OutAvail += datalen;
+  } else {
+    RaiseError(MOZQUIC_ERR_MEMORY, (char *) "allocation err");
+  }
+}
+
+void
+MozQuic::GetHandShakeOutputData(unsigned char *p, uint16_t &outLen,
+                                uint16_t available)
+{
+  assert(mHandShakeInput);
+  outLen = mStream0OutAvail;
+  if (!outLen) {
+    return;
+  }
+  if (outLen > available) {
+    outLen = available;
+  }
+  memcpy(p, mStream0Out, outLen);
+  mStream0OutAvail -= outLen;
+  mStream0Out += outLen;
+  if (!mStream0OutAvail) {
+    free (mStream0Allocation);
+    mStream0Allocation = nullptr;
+    mStream0Out = nullptr;
+  }
 }
   
 int
@@ -176,7 +268,7 @@ MozQuic::Send1RTT()
 {
   unsigned char pkt[kMozQuicMTU];
 
-  if (!mHandShaker) {
+  if (!mHandShakeInput) {
     // todo handle doing this internally
     assert(false);
     RaiseError(MOZQUIC_ERR_GENERAL, (char *)"need handshaker");
@@ -186,8 +278,8 @@ MozQuic::Send1RTT()
   // we need a client hello from nss up to
   // kMozQuicMTU - 17 (hdr) - 8 (stream header) - 8 (csum)
   uint16_t clientHelloLen = 0;
-  GetHandShakerData(pkt + 17 + 8, clientHelloLen,
-                    kMozQuicMTU - 17 - 8 - 8);
+  GetHandShakeOutputData(pkt + 17 + 8, clientHelloLen,
+                         kMozQuicMTU - 17 - 8 - 8);
   if (clientHelloLen < 1) {
     Log((char *)"Send1RTT has no data to send");
     return MOZQUIC_OK;
@@ -238,5 +330,65 @@ MozQuic::Send1RTT()
   return MOZQUIC_OK;
 }
 
+int
+MozQuic::ProcessServerCleartext(pkt, pktSize)
+{
+  // need retrans
+  // connid from server
+  // rand pkt #
+  // stream, ack, padding
+  // should ack
+}
+
+int
+MozQuic::Recv1RTT() 
+{
+  if (!mHandShakeInput) {
+    // todo handle doing this internally
+    assert(false);
+    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"need handshaker");
+    return MOZQUIC_ERR_GENERAL;
+  }
+
+  unsigned char pkt[kMozQuicMSS];
+  uint32_t pktSize = 0;
+  int code = Recv(pkt, kMozQuicMSS, pktSize);
+  if (code != MOZQUIC_OK) {
+    return code;
+  }
+
+  if (!pktSize) {
+    Log((char *)"recv1rtt no packet");
+    return MOZQUIC_OK;
+  }
+  Log((char *)"recv1rtt packet found");
+
+  // the min packet is 9 bytes
+  if (pktSize < 9) {
+    Log((char *)"recv1rtt packet too short");
+    return MOZQUIC_OK;
+  }
+
+  uint8_t type = pkt[0];
+  type = (type & 0x80) ? (type & 0x7f) : (type & 0x1f);
+  switch (type) {
+  case 0x83: // Server Stateless Retry
+    assert(false);
+    // todo mvp
+    break;
+  case 0x84: // Server cleartext
+    return ProcessServerCleartext(pkt, pktSize);
+    break;
+  case 0x84: // Client cleartext
+    assert(false);
+    // todo mvp
+    break;
+    
+  default:
+    Log((char *)"recv1rtt unexpected type");
+    break;
+  }
+  return MOZ_QUIC_OK;
+}
 
 }}
