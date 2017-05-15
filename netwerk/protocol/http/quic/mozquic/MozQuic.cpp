@@ -41,6 +41,8 @@ extern "C" {
 
     q->SetLogger(inConfig->logging_callback);
     q->SetTransmiter(inConfig->transmit_callback);
+    q->SetHandShaker(inConfig->perform_handshake_callback);
+    q->SetErrorCB(inConfig->error_callback);
 
 //    connPtr->originName = strdup(inConfig->originName);
 //    connPtr->originPort = inConfig->originPort;
@@ -140,9 +142,26 @@ MozQuic::Transmit (unsigned char *pkt, uint32_t len)
   return MOZQUIC_OK;
 }
 
+void
+MozQuic::RaiseError(uint32_t e, char *reason)
+{
+  if (mErrorCB) {
+    mErrorCB(this, e, reason);
+  } else {
+    fprintf(stderr,"RAISE ERROR %X ::%s::\n", e, reason);
+  }
+}
+  
 int
 MozQuic::Send1RTT() 
 {
+  if (!mHandShaker) {
+    // todo handle doing this internally
+    assert(false);
+    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"need handshaker");
+    return MOZQUIC_ERR_GENERAL;
+  }
+
   unsigned char pkt[kMozQuicMTU];
 
   // section 5.4.1 of transport
@@ -151,31 +170,47 @@ MozQuic::Send1RTT()
   memcpy(pkt + 1, &mConnectionID, 8);
   memcpy(pkt + 9, &mNextPacketID, 4);
   memcpy(pkt + 13, &kMozQuicVersion, 4);
-  mNextPacketID++;
 
   // we need a client hello from nss up to
   // kMozQuicMTU - 17 (hdr) - 1 (stream type) - 8 (csum
 
-  // stream frame type byte is 0xd0 and header is
-  // 2 bytes of len, 0x00 (stream 0), then
-  // len bytes of data
-  pkt[17] = 0xd;
   unsigned char clientHello[80];
-  uint32_t clientHelloLen = 80;
+  uint16_t clientHelloLen = 80;
   memset (clientHello, 0xbb, clientHelloLen);
-  memcpy (pkt + 18, clientHello, clientHelloLen);
+
+  if ((17 + 8 + 8 + clientHelloLen) > kMozQuicMTU) {
+    // todo handle this as multiple packets
+    assert(false);
+    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"client hello too big");
+    return MOZQUIC_ERR_GENERAL;
+  }
+
+  // stream header is 8 bytes long
+  // 1 type + 2 bytes of len, 1 stream id,
+  // 4 bytes of offset. That's type 0xd8
+  pkt[17] = 0xd8;
+  uint16_t tmp = htons(clientHelloLen);
+  memcpy(pkt + 18, &tmp, 2);
+  pkt[20] = 0;
+
+  // 4 bytes of offset is normally a waste, but it just comes
+  // out of padding
+  pkt[21] = pkt[22] = pkt[23] = pkt[24] = mStream0Offset; // offset
+  memcpy (pkt + 17 + 8, clientHello, clientHelloLen);
+  mStream0Offset += clientHelloLen;
 
   // then padding as needed up to 1272
-  uint32_t paddingNeeded = kMozQuicMTU - 17 - 1 - 8 - clientHelloLen;
-  memset (pkt + 17 + 1 + clientHelloLen, 0, paddingNeeded);
+  uint32_t paddingNeeded = kMozQuicMTU - 17 - 8 - 8 - clientHelloLen;
+  memset (pkt + 17 + 8 + clientHelloLen, 0, paddingNeeded);
 
   // then 8 bytes of checksum on cleartext packets
   assert (FNV64size == 8);
   if (FNV64block(pkt, kMozQuicMTU - 8, pkt + kMozQuicMTU - 8) != 0) {
-    // todo log
+    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"hash err");
     return MOZQUIC_ERR_GENERAL;
   }
 
+  mNextPacketID++;
   Transmit(pkt, kMozQuicMTU);
   return MOZQUIC_OK;
 }

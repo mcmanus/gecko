@@ -32,6 +32,7 @@ extern "C" {
 
     void (*logging_callback)(mozquic_connection_t *, char *); // todo va arg
     int  (*transmit_callback)(mozquic_connection_t *, unsigned char *, uint32_t len);
+    int  (*error_callback)(mozquic_connection_t *, uint32_t err, char *);
 
     // TLS API
     int (*perform_handshake_callback)(mozquic_connection_t *, int fd);

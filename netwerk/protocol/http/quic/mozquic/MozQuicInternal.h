@@ -37,8 +37,11 @@ public:
     , mHandleIO(handleIO)
     , mIsClient(true)
     , mConnectionState(CLIENT_STATE_UNINITIALIZED)
+    , mStream0Offset(0)
     , mLogCallback(nullptr)
     , mTransmitCallback(nullptr)
+    , mHandShaker(nullptr)
+    , mErrorCB(nullptr)
     {}
   ~MozQuic()
   {
@@ -53,10 +56,13 @@ public:
   void SetLogger(void (*fx)(mozquic_connection_t *, char *)) { mLogCallback = fx; }
   void SetTransmiter(int(*fx)(mozquic_connection_t *,
                               unsigned char *, uint32_t)) { mTransmitCallback = fx; }
+  void SetHandShaker(int (*fx)(mozquic_connection_t *, int fd)) { mHandShaker = fx; }
+  void SetErrorCB(int (*fx)(mozquic_connection_t *, uint32_t err, char *)) { mErrorCB = fx; }
   void SetFD(int fd) { mFD = fd; }
   int  GetFD() { return mFD; }
-
 private:
+  void RaiseError(uint32_t err, char *reason);
+
   int Transmit(unsigned char *, uint32_t len);
   int Send1RTT();
 
@@ -67,9 +73,12 @@ private:
 
   uint64_t mConnectionID;
   uint32_t mNextPacketID;
+  uint32_t mStream0Offset;
 
   void (*mLogCallback)(mozquic_connection_t *, char *); // todo va arg
   int  (*mTransmitCallback)(mozquic_connection_t *, unsigned char *, uint32_t len);
+  int  (*mHandShaker)(mozquic_connection_t *, int);
+  int  (*mErrorCB)(mozquic_connection_t *, uint32_t, char *);
 };
 }}
 
