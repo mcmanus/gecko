@@ -20,8 +20,6 @@ extern "C" {
   int mozquic_new_connection(mozquic_connection_t **outConnection,
                              mozquic_config_t *inConfig)
   {
-    mozquic_connection_t *connPtr = NULL;
-
     if (!outConnection || !inConfig) {
       return MOZQUIC_ERR_INVALID;
     }
@@ -35,79 +33,49 @@ extern "C" {
       return MOZQUIC_ERR_INVALID;
     }
 
-    *outConnection = (mozquic_connection_t *) malloc (sizeof (mozquic_connection_t));
-    if (!*outConnection) {
+    mozilla::net::MozQuic *q = new mozilla::net::MozQuic(inConfig->handleIO);
+    if (!q) {
       return MOZQUIC_ERR_GENERAL;
     }
+    *outConnection = (void *)q;
 
-    connPtr = *outConnection;
-    memset(connPtr, 0, sizeof(mozquic_connection_t));
-    if (inConfig->domain == AF_INET) {
-      connPtr->isV6 = 0;
-//      memcpy(&connPtr->v4addr, inConfig->address, sizeof (struct sockaddr_in));
-    } else {
-      connPtr->isV6 = 1;
-//      memcpy(&connPtr->v6addr, inConfig->address, sizeof (struct sockaddr_in6));
-    }
+    q->SetLogger(inConfig->logging_callback);
+    q->SetTransmiter(inConfig->transmit_callback);
 
-    connPtr->q = new mozilla::net::MozQuic();
-    connPtr->handleIO = inConfig->handleIO;
-    assert(!inConfig->handleIO); // todo
-    connPtr->q->SetLogger(inConfig->logging_callback);
-    connPtr->q->SetTransmiter(inConfig->transmit_callback);
-
-    connPtr->originName = strdup(inConfig->originName);
-    connPtr->originPort = inConfig->originPort;
+//    connPtr->originName = strdup(inConfig->originName);
+//    connPtr->originPort = inConfig->originPort;
     return MOZQUIC_OK;
   }
 
-  int mozquic_destroy_connection(mozquic_connection_t *inConnection)
+  int mozquic_destroy_connection(mozquic_connection_t *conn)
   {
-    if (!inConnection) {
-      return MOZQUIC_ERR_INVALID;
-    }
-    if (inConnection->originName) {
-      free(inConnection->originName);
-    }
-    delete (inConnection->q);
-    memset(inConnection, 0, sizeof(mozquic_connection_t));
-
+    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    delete self;
     return MOZQUIC_OK;
   }
 
   int mozquic_start_connection(mozquic_connection_t *conn)
   {
-    if (!conn) {
-      return MOZQUIC_ERR_INVALID;
-    }
-    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn->q));
+    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
     return self->StartConnection();
   }
 
   int mozquic_IO(mozquic_connection_t *conn)
   {
-    if (!conn) {
-      return MOZQUIC_ERR_INVALID;
-    }
-    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn->q));
+    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
     return self->IO();
   }
 
   int mozquic_osfd(mozquic_connection_t *conn)
   {
-    if (!conn || !conn->q) {
-      return MOZQUIC_ERR_INVALID;
-    }
-    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn->q));
+    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
     return self->GetFD();
   }
 
   void mozquic_setosfd(mozquic_connection_t *conn, int fd)
   {
-    if (conn && conn->q) {
-      mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn->q));
-      self->SetFD(fd);
-    }
+    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    self->SetFD(fd);
   }
 
 #ifdef __cplusplus
@@ -119,6 +87,8 @@ namespace mozilla { namespace net {
 int
 MozQuic::StartConnection()
 {
+  assert(!mHandleIO); // todo
+
   if (mIsClient) {
     mConnectionState = CLIENT_STATE_SEND_1RTT;
     // todo seed prng sensibly
@@ -164,7 +134,7 @@ int
 MozQuic::Transmit (unsigned char *pkt, uint32_t len)
 {
   if (mTransmitCallback) {
-    return mTransmitCallback(pkt, len);
+    return mTransmitCallback(this, pkt, len);
   }
   send(mFD, pkt, len, 0); // todo errs
   return MOZQUIC_OK;

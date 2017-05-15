@@ -19,8 +19,9 @@ extern "C" {
     MOZQUIC_ERR_INVALID = 2
   };
 
-  struct mozquic_connection_t;
-  struct mozquic_stream_t;
+
+  typedef void mozquic_connection_t;
+
   struct mozquic_config_t 
   {
     int domain; // AF_INET or AF_INET6

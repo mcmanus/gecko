@@ -56,7 +56,7 @@ QuicSocketProvider::NewSocket(int32_t family,
     QuicSession::SetMethods(&quicMethods);
   }
 
-  struct mozquic_connection_t *session = nullptr;
+  mozquic_connection_t *session = nullptr;
   struct mozquic_config_t config;
 
   memset (&config, 0, sizeof (config));

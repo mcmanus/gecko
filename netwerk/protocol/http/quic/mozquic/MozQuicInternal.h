@@ -32,8 +32,9 @@ enum connectionState
 class MozQuic final
 {
 public:
-  MozQuic()
+  MozQuic(bool handleIO)
     : mFD(-1)
+    , mHandleIO(handleIO)
     , mIsClient(true)
     , mConnectionState(CLIENT_STATE_UNINITIALIZED)
     , mLogCallback(nullptr)
@@ -60,6 +61,7 @@ private:
   int Send1RTT();
 
   int  mFD;
+  bool mHandleIO;
   bool mIsClient;
   enum connectionState mConnectionState;
 
@@ -75,7 +77,7 @@ private:
 extern "C" {
 #endif
 
-struct mozquic_connection_t {
+struct mozquic_connection_t_old {
   //  struct sockaddr_in  v4addr;
   //  struct sockaddr_in6 v6addr;
   int                 isV6;
@@ -83,9 +85,6 @@ struct mozquic_connection_t {
   int originPort;
   int handleIO;
   mozilla::net::MozQuic *q;
-};
-struct mozquic_stream_t {
-  void *ptr;
 };
 
 #ifdef __cplusplus
