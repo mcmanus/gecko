@@ -64,7 +64,9 @@ private:
   void RaiseError(uint32_t err, char *reason);
 
   int Transmit(unsigned char *, uint32_t len);
+  void GetHandShakerData(unsigned char *, uint16_t &out, uint16_t avail);
   int Send1RTT();
+  void Log(char *);
 
   int  mFD;
   bool mHandleIO;

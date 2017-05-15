@@ -128,8 +128,19 @@ MozQuic::IO()
     // todo
   }
   
-  fprintf(stderr,"todo IO()\n");
+  Log((char *)"todo IO()\n");
   return MOZQUIC_OK;
+}
+
+void
+MozQuic::Log(char *msg) 
+{
+  // todo default mLogCallback can be dev/null
+  if (mLogCallback) {
+    mLogCallback(this, msg);
+  } else {
+    fprintf(stderr,"MozQuic Logger :%s:\n", msg);
+  }
 }
 
 int
@@ -145,16 +156,26 @@ MozQuic::Transmit (unsigned char *pkt, uint32_t len)
 void
 MozQuic::RaiseError(uint32_t e, char *reason)
 {
+  Log(reason);
   if (mErrorCB) {
     mErrorCB(this, e, reason);
-  } else {
-    fprintf(stderr,"RAISE ERROR %X ::%s::\n", e, reason);
   }
+}
+
+void
+MozQuic::GetHandShakerData(unsigned char *p, uint16_t &outLen,
+                           uint16_t available)
+{
+  assert(mHandShaker);
+  outLen = 80;
+  memset(p, 0xbb, 80);
 }
   
 int
 MozQuic::Send1RTT() 
 {
+  unsigned char pkt[kMozQuicMTU];
+
   if (!mHandShaker) {
     // todo handle doing this internally
     assert(false);
@@ -162,7 +183,15 @@ MozQuic::Send1RTT()
     return MOZQUIC_ERR_GENERAL;
   }
 
-  unsigned char pkt[kMozQuicMTU];
+  // we need a client hello from nss up to
+  // kMozQuicMTU - 17 (hdr) - 8 (stream header) - 8 (csum)
+  uint16_t clientHelloLen = 0;
+  GetHandShakerData(pkt + 17 + 8, clientHelloLen,
+                    kMozQuicMTU - 17 - 8 - 8);
+  if (clientHelloLen < 1) {
+    Log((char *)"Send1RTT has no data to send");
+    return MOZQUIC_OK;
+  }
 
   // section 5.4.1 of transport
   // long form header 17 bytes
@@ -170,13 +199,6 @@ MozQuic::Send1RTT()
   memcpy(pkt + 1, &mConnectionID, 8);
   memcpy(pkt + 9, &mNextPacketID, 4);
   memcpy(pkt + 13, &kMozQuicVersion, 4);
-
-  // we need a client hello from nss up to
-  // kMozQuicMTU - 17 (hdr) - 1 (stream type) - 8 (csum
-
-  unsigned char clientHello[80];
-  uint16_t clientHelloLen = 80;
-  memset (clientHello, 0xbb, clientHelloLen);
 
   if ((17 + 8 + 8 + clientHelloLen) > kMozQuicMTU) {
     // todo handle this as multiple packets
@@ -191,13 +213,13 @@ MozQuic::Send1RTT()
   pkt[17] = 0xd8;
   uint16_t tmp = htons(clientHelloLen);
   memcpy(pkt + 18, &tmp, 2);
-  pkt[20] = 0;
+  pkt[20] = 0; // stream 0
 
   // 4 bytes of offset is normally a waste, but it just comes
   // out of padding
   pkt[21] = pkt[22] = pkt[23] = pkt[24] = mStream0Offset; // offset
-  memcpy (pkt + 17 + 8, clientHello, clientHelloLen);
-  mStream0Offset += clientHelloLen;
+
+  // clientHelloLen Bytes @ pkt + 17 + 8 are already full of data
 
   // then padding as needed up to 1272
   uint32_t paddingNeeded = kMozQuicMTU - 17 - 8 - 8 - clientHelloLen;
@@ -210,6 +232,7 @@ MozQuic::Send1RTT()
     return MOZQUIC_ERR_GENERAL;
   }
 
+  mStream0Offset += clientHelloLen;
   mNextPacketID++;
   Transmit(pkt, kMozQuicMTU);
   return MOZQUIC_OK;
