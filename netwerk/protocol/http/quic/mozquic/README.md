@@ -14,6 +14,8 @@ binary bsd advertising clause for fnv1
 
 --
 
+supply and read!
+
 retransmissions
 ack generation
 ack recpt

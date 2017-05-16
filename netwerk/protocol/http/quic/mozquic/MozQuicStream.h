@@ -15,13 +15,15 @@ namespace mozilla { namespace net {
 class MozQuicStreamChunk
 {
 public:
-  MozQuicStreamChunk(uint32_t id, uint64_t offset, unsigned char *data, uint32_t len);
+  MozQuicStreamChunk(uint32_t id, uint64_t offset, unsigned char *data,
+                     uint32_t len, bool fin);
   ~MozQuicStreamChunk();
 
   std::unique_ptr<unsigned char []>mData;
   uint32_t mLen;
   uint32_t mStreamID;
   uint64_t mOffset;
+  bool     mFin;
 
   // when unacked these are set
   uint64_t mPacketNum;
@@ -55,6 +57,8 @@ public:
   MozQuicStreamIn(uint32_t id);
   ~MozQuicStreamIn();
   uint32_t Read();
+  uint32_t Supply(std::unique_ptr<MozQuicStreamChunk> &p);
+
 private:
   std::list<MozQuicStreamChunk> mBuffered;
 };
@@ -64,6 +68,10 @@ class MozQuicStreamPair
 public:
   MozQuicStreamPair(uint32_t id, MozQuicWriter *);
   ~MozQuicStreamPair();
+
+  uint32_t Supply(std::unique_ptr<MozQuicStreamChunk> &p) {
+    return mIn.Supply(p);
+  }
     
   uint32_t Read() {
     return mIn.Read();

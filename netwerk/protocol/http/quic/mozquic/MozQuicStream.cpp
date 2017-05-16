@@ -45,18 +45,20 @@ MozQuicStreamOut::~MozQuicStreamOut()
 uint32_t
 MozQuicStreamOut::Write(unsigned char *data, uint32_t len)
 {
-  std::unique_ptr<MozQuicStreamChunk> tmp(new MozQuicStreamChunk(mStreamID, mOffset, data, len));
+  std::unique_ptr<MozQuicStreamChunk> tmp(new MozQuicStreamChunk(mStreamID, mOffset, data, len, false));
   mOffset += len;
   return mWriter->DoWriter(tmp);
 }
 
 // todo an interface that doesn't copy would be good
 MozQuicStreamChunk::MozQuicStreamChunk(uint32_t id, uint64_t offset,
-                                       unsigned char *data, uint32_t len)
+                                       unsigned char *data, uint32_t len,
+                                       bool fin)
   : mData(new unsigned char[len])
   , mLen(len)
   , mStreamID(id)
   , mOffset(offset)
+  , mFin(fin)
   , mTransmitTime(0)
   , mRetransmitted(false)
 {

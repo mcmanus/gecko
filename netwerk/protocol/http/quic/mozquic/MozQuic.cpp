@@ -94,6 +94,7 @@ MozQuic::MozQuic(bool handleIO)
   , mHandleIO(handleIO)
   , mIsClient(true)
   , mConnectionState(CLIENT_STATE_UNINITIALIZED)
+  , mVersion(kMozQuicVersion1)
   , mLogCallback(nullptr)
   , mTransmitCallback(nullptr)
   , mReceiverCallback(nullptr)
@@ -135,9 +136,63 @@ MozQuic::StartConnection()
   return MOZQUIC_OK;
 }
 
+uint32_t
+MozQuic::Intake()
+{
+  // check state
+  assert (mConnectionState == CLIENT_STATE_1RTT); // todo mvp
+
+  unsigned char pkt[kMozQuicMSS];
+  do {
+    uint32_t pktSize = 0;
+    int code = Recv(pkt, kMozQuicMSS, pktSize);
+    // todo 17 assumes long form
+    if (code != MOZQUIC_OK || !pktSize || pktSize < 17) {
+      return code;
+    }
+    Log((char *)"intake found");
+
+    if (!(pkt[0] & 0x80)) {
+      // short form header when we only expect long form
+      // cleartext
+      Log((char *)"short form header at wrong time");
+      continue;
+    }
+
+    uint8_t type = pkt[0] & 0x7f;
+    switch (type) {
+    case 0x01: // version negotiation
+      assert(false);
+      // todo mvp
+      break;
+    case 0x03: // Server Stateless Retry
+      assert(false);
+      // todo mvp
+      break;
+    case 0x04: // Server cleartext
+      ProcessServerCleartext(pkt, pktSize);
+      break;
+    case 0x05: // Client cleartext
+      assert(false);
+      // todo mvp
+      break;
+
+    default:
+      // reject anything that is nto a cleartext packet (not right, but later)
+      Log((char *)"recv1rtt unexpected type");
+      // todo this could actually be protected packet
+      // and ideally would be queued. for now we rely on retrans
+      break;
+    }
+  } while (1);
+
+  return MOZQUIC_OK;
+}
+
 int
 MozQuic::IO()
 {
+  Intake();
   if (mIsClient) {
     switch (mConnectionState) {
     case CLIENT_STATE_1RTT:
@@ -236,13 +291,98 @@ int
 MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
 {
   // received a 0x84 packet
-  assert(false); // todo mvp
+  // cleartext is always in long form
+  assert(pkt[0] & 0x80);
+  assert(pkt[0] == 0x84);
+  assert(pktSize >= 17);
+
+  uint32_t pktNum;
+  memcpy(&pktNum, pkt + 9, 4);
+  pktNum = ntohl(pktNum);
+  uint32_t version;
+  memcpy(&version, pkt + 13, 4);
+  version = ntohl(version);
+  if (version != mVersion) {
+    Log((char *)"wrong version");
+    return MOZQUIC_ERR_GENERAL;
+    // this should not abort session as its
+    // not authenticated
+  }
   
-  // need retrans
-  // connid from server
-  // rand pkt #
-  // stream, ack, padding
-  // should ack
+  memcpy(&mConnectionID, pkt + 1, 8);
+  // todo log change
+
+  
+  unsigned char *framePtr = pkt + 17;
+  unsigned char *endPtr = pkt + pktSize;
+
+  while (framePtr < endPtr) {
+    unsigned char type = framePtr[0];
+    if (type == FRAME_TYPE_PADDING) {
+      framePtr++;
+      continue;
+    } else if ((type & FRAME_MASK_STREAM) == FRAME_MASK_STREAM_RESULT) {
+      bool finBit = (type & 0x20);
+      bool lenBit = (type & 0x10);
+
+      uint32_t lenLen = lenBit ? 2 : 0;
+      uint32_t offsetLen = (type & 0x0c) >> 2;
+      if (offsetLen == 1) {
+        offsetLen = 2;
+      } else if (offsetLen == 2) {
+        offsetLen = 4;
+      } else if (offsetLen == 3) {
+        offsetLen = 8;
+      }
+
+      uint32_t idLen = (type & 0x03) + 1;
+      uint32_t bytesNeeded = 1 + lenLen + idLen + offsetLen;
+      if (framePtr + bytesNeeded > endPtr) {
+        RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame header short");
+        return MOZQUIC_ERR_GENERAL;
+      }
+      uint16_t dataLen;
+      if (lenBit) {
+        memcpy (&dataLen, framePtr + 1, 2);
+        dataLen = ntohs(dataLen);
+      } else {
+        dataLen = endPtr - (framePtr + bytesNeeded);
+      }
+      
+      // todo log frame len
+      bytesNeeded += dataLen;
+      if (framePtr + bytesNeeded > endPtr) {
+        RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame data short");
+        return MOZQUIC_ERR_GENERAL;
+      }
+      framePtr += 1 + lenLen;
+      uint32_t streamID = 0;
+      memcpy(&streamID + (4 - idLen), framePtr, idLen);
+      framePtr += idLen;
+      streamID = ntohl(streamID);
+      if (streamID != 0) {
+        RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream 0 expected");
+        return MOZQUIC_ERR_GENERAL;
+      }
+
+      uint64_t offset = 0;
+      memcpy(&offset + (8 - offsetLen), framePtr, offsetLen);
+      framePtr += offsetLen;
+      offset = ntohll(offset);
+
+      std::unique_ptr<MozQuicStreamChunk>
+        tmp(new MozQuicStreamChunk(streamID, offset, framePtr, dataLen, finBit));
+      mStream0->Supply(tmp);
+      framePtr += dataLen;
+      // todo mvp generate ACK
+    } else if ((type & FRAME_MASK_ACK) == FRAME_MASK_ACK_RESULT) {
+      assert(false);
+      // todo mvp process ack
+    } else {
+      RaiseError(MOZQUIC_ERR_GENERAL, (char *) "unexpected frame type");
+      return MOZQUIC_ERR_GENERAL;
+    }
+  }
 }
 
 int
@@ -310,7 +450,8 @@ MozQuic::FlushStream0()
   memcpy(pkt + 1, &mConnectionID, 8);
   tmp32 = htonl(mNextPacketID);
   memcpy(pkt + 9, &tmp32, 4);
-  memcpy(pkt + 13, &kMozQuicVersion, 4);
+  tmp32 = htonl(mVersion);
+  memcpy(pkt + 13, &tmp32, 4);
 
   uint32_t room = kMozQuicMTU - 17 - 8; // long form + csum
   unsigned char *framePtr = pkt + 17;
