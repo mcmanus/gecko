@@ -13,6 +13,7 @@
 #include "unistd.h"
 #include "time.h"
 #include "fnv.h"
+#include "sys/time.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -93,15 +94,11 @@ MozQuic::MozQuic(bool handleIO)
   , mHandleIO(handleIO)
   , mIsClient(true)
   , mConnectionState(CLIENT_STATE_UNINITIALIZED)
-  , mStream0Offset(0)
   , mLogCallback(nullptr)
   , mTransmitCallback(nullptr)
   , mReceiverCallback(nullptr)
   , mHandShakeInput(nullptr)
   , mErrorCB(nullptr)
-  , mStream0Out(nullptr)
-  , mStream0Allocation(nullptr)
-  , mStream0OutAvail(0)
   , mStream0(new MozQuicStreamPair(0, this))
 {
 }
@@ -110,9 +107,6 @@ MozQuic::~MozQuic()
 {
   if (mFD > 0) {
     close(mFD);
-  }
-  if (mStream0Allocation) {
-    free (mStream0Allocation);
   }
 }
   
@@ -221,55 +215,12 @@ MozQuic::RaiseError(uint32_t e, char *reason)
 void
 MozQuic::HandShakeOutput(unsigned char *buf, uint32_t datalen)
 {
-  // todo this is awful mvp stuff
-  if (mStream0Out == mStream0Allocation) {
-    // null case and totally unused case
-    mStream0Allocation = (unsigned char *)realloc(mStream0Allocation, datalen + mStream0OutAvail);
-    mStream0Out = mStream0Allocation;
-  } else {
-    unsigned char *newbuf = (unsigned char *) malloc(datalen + mStream0OutAvail);
-    if (newbuf) {
-      memcpy (newbuf, mStream0Out, mStream0OutAvail);
-    }
-    free (mStream0Allocation);
-    mStream0Out = mStream0Allocation = newbuf;
-  }
-
-  if (mStream0Out) {
-    memcpy (mStream0Out + mStream0OutAvail, buf, datalen);
-    mStream0OutAvail += datalen;
-  } else {
-    RaiseError(MOZQUIC_ERR_MEMORY, (char *) "allocation err");
-  }
+  mStream0->Write(buf, datalen);
 }
 
-void
-MozQuic::GetHandShakeOutputData(unsigned char *p, uint16_t &outLen,
-                                uint16_t available)
-{
-  assert(mHandShakeInput);
-  outLen = mStream0OutAvail;
-  if (!outLen) {
-    return;
-  }
-  if (outLen > available) {
-    outLen = available;
-  }
-  memcpy(p, mStream0Out, outLen);
-  mStream0OutAvail -= outLen;
-  mStream0Out += outLen;
-  if (!mStream0OutAvail) {
-    free (mStream0Allocation);
-    mStream0Allocation = nullptr;
-    mStream0Out = nullptr;
-  }
-}
-  
 int
 MozQuic::Send1RTT() 
 {
-  unsigned char pkt[kMozQuicMTU];
-
   if (!mHandShakeInput) {
     // todo handle doing this internally
     assert(false);
@@ -277,67 +228,16 @@ MozQuic::Send1RTT()
     return MOZQUIC_ERR_GENERAL;
   }
 
-  mStream0->Flush();
-  // we need a client hello from nss up to
-  // kMozQuicMTU - 17 (hdr) - 8 (stream header) - 8 (csum)
-  uint16_t clientHelloLen = 0;
-  GetHandShakeOutputData(pkt + 17 + 8, clientHelloLen,
-                         kMozQuicMTU - 17 - 8 - 8);
-  if (clientHelloLen < 1) {
-    Log((char *)"Send1RTT has no data to send");
-    return MOZQUIC_OK;
-  }
-
-  // section 5.4.1 of transport
-  // long form header 17 bytes
-  pkt[0] = 0x82;
-  memcpy(pkt + 1, &mConnectionID, 8);
-  memcpy(pkt + 9, &mNextPacketID, 4);
-  memcpy(pkt + 13, &kMozQuicVersion, 4);
-
-  if ((17 + 8 + 8 + clientHelloLen) > kMozQuicMTU) {
-    // todo handle this as multiple packets
-    assert(false);
-    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"client hello too big");
-    return MOZQUIC_ERR_GENERAL;
-  }
-
-  // stream header is 8 bytes long
-  // 1 type + 2 bytes of len, 1 stream id,
-  // 4 bytes of offset. That's type 0xd8
-  pkt[17] = 0xd8;
-  uint16_t tmp = htons(clientHelloLen);
-  memcpy(pkt + 18, &tmp, 2);
-  pkt[20] = 0; // stream 0
-
-  // 4 bytes of offset is normally a waste, but it just comes
-  // out of padding
-  pkt[21] = pkt[22] = pkt[23] = pkt[24] = mStream0Offset; // offset
-
-  // clientHelloLen Bytes @ pkt + 17 + 8 are already full of data
-
-  // then padding as needed up to 1272
-  uint32_t paddingNeeded = kMozQuicMTU - 17 - 8 - 8 - clientHelloLen;
-  memset (pkt + 17 + 8 + clientHelloLen, 0, paddingNeeded);
-
-  // then 8 bytes of checksum on cleartext packets
-  assert (FNV64size == 8);
-  if (FNV64block(pkt, kMozQuicMTU - 8, pkt + kMozQuicMTU - 8) != 0) {
-    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"hash err");
-    return MOZQUIC_ERR_GENERAL;
-  }
-
-  mStream0Offset += clientHelloLen;
-  mNextPacketID++;
-  Transmit(pkt, kMozQuicMTU);
-  mStream0->Flush();
-
+  Flush();
   return MOZQUIC_OK;
 }
 
 int
 MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
 {
+  // received a 0x84 packet
+  assert(false); // todo mvp
+  
   // need retrans
   // connid from server
   // rand pkt #
@@ -398,6 +298,110 @@ MozQuic::Recv1RTT()
 }
 
 uint32_t
+MozQuic::FlushStream0()
+{
+  unsigned char pkt[kMozQuicMTU];
+  uint32_t tmp32; // todo check range
+  assert (mConnectionState == CLIENT_STATE_1RTT);
+
+  // section 5.4.1 of transport
+  // long form header 17 bytes
+  pkt[0] = 0x82;
+  memcpy(pkt + 1, &mConnectionID, 8);
+  tmp32 = htonl(mNextPacketID);
+  memcpy(pkt + 9, &tmp32, 4);
+  memcpy(pkt + 13, &kMozQuicVersion, 4);
+
+  uint32_t room = kMozQuicMTU - 17 - 8; // long form + csum
+  unsigned char *framePtr = pkt + 17;
+  
+  std::list<std::unique_ptr<MozQuicStreamChunk>>::iterator iter;
+  iter = mUnWritten.begin();
+  while (iter != mUnWritten.end()) {
+    if ((*iter)->mStreamID == 0) {
+      if (room < (*iter)->mLen + 8) {
+        break;
+      }
+
+      // stream header is 8 bytes long
+      // 1 type + 2 bytes of len, 1 stream id,
+      // 4 bytes of offset. That's type 0xd8
+      framePtr[0] = 0xd8;
+      uint16_t tmp16 = (*iter)->mLen;
+      // todo check range
+      tmp16 = htons(tmp16);
+      memcpy(framePtr + 1, &tmp16, 2);
+      framePtr[3] = 0; // stream 0
+
+      // 4 bytes of offset is normally a waste, but it just comes
+      // out of padding
+      tmp32 = (*iter)->mOffset;
+      tmp32 = htonl(tmp32);
+      memcpy(framePtr + 4, &tmp32, 4);
+      memcpy(framePtr + 8, (*iter)->mData.get(), (*iter)->mLen);
+      framePtr += 8 + (*iter)->mLen;
+
+      (*iter)->mPacketNum = mNextPacketID;
+      (*iter)->mTransmitTime = Timestamp();
+      (*iter)->mRetransmitted = false;
+
+      // move it to the unacked list
+      std::unique_ptr<MozQuicStreamChunk> x(std::move(*iter));
+      mUnAcked.push_back(std::move(x));
+      iter = mUnWritten.erase(iter);
+    } else {
+      iter++;
+    }
+  }
+
+  if (framePtr != (pkt + 17)) {
+    // then padding as needed up to 1272
+    uint32_t paddingNeeded = kMozQuicMTU - 8 - (framePtr - pkt);
+    memset (framePtr, 0, paddingNeeded);
+    framePtr += paddingNeeded;
+
+    // then 8 bytes of checksum on cleartext packets
+    assert (FNV64size == 8);
+    if (FNV64block(pkt, kMozQuicMTU - 8, framePtr) != 0) {
+      RaiseError(MOZQUIC_ERR_GENERAL, (char *)"hash err");
+      return MOZQUIC_ERR_GENERAL;
+    }
+    uint32_t code = Transmit(pkt, kMozQuicMTU);
+    if (code != MOZQUIC_OK) {
+      return code;
+    }
+    mNextPacketID++;
+    // each member of the list needs to 
+  }
+
+  if (iter != mUnWritten.end()) {
+    return FlushStream0();
+  }
+  return MOZQUIC_OK;
+}
+
+uint64_t
+MozQuic::Timestamp()
+{
+  // ms since epoch
+  struct timeval tv;
+  gettimeofday(&tv, nullptr);
+  return (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
+}
+
+uint32_t
+MozQuic::Flush()
+{
+  // obviously have to deal with more than this :)
+  assert (mConnectionState == CLIENT_STATE_1RTT);
+
+  if (mConnectionState == CLIENT_STATE_1RTT) {
+    return FlushStream0();
+  }
+  return MOZQUIC_OK;
+}
+
+uint32_t
 MozQuic::DoWriter(std::unique_ptr<MozQuicStreamChunk> &p)
 {
 
@@ -406,13 +410,12 @@ MozQuic::DoWriter(std::unique_ptr<MozQuicStreamChunk> &p)
   // if transmit of this data succeeds, we need to move the pointer to
   // the unacked list
 
-  uint32_t code = Transmit(p->mData.get(), p->mLen);
-  if (code == MOZQUIC_OK) {
-        // move it from unwritten to unacked
-    std::unique_ptr<MozQuicStreamChunk> tmp(std::move(p));
-    mUnAcked.push_back(std::move(tmp));
-  }
-  return code;
+  // obviously have to deal with more than this :)
+  assert (mConnectionState ==  CLIENT_STATE_1RTT);
+
+  mUnWritten.push_back(std::move(p));
+
+  return MOZQUIC_OK;
 }
 
 }}

@@ -61,9 +61,11 @@ private:
 
   uint32_t Transmit(unsigned char *, uint32_t len);
   uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen);
-  void GetHandShakeOutputData(unsigned char *, uint16_t &out, uint16_t avail);
   int ProcessServerCleartext(unsigned char *, uint32_t size);
 
+  uint64_t Timestamp();
+  uint32_t Flush();
+  uint32_t FlushStream0();
   int Send1RTT();
   int Recv1RTT();
   void Log(char *);
@@ -75,7 +77,6 @@ private:
 
   uint64_t mConnectionID;
   uint32_t mNextPacketID;
-  uint32_t mStream0Offset;
 
   void (*mLogCallback)(mozquic_connection_t *, char *); // todo va arg
   int  (*mTransmitCallback)(mozquic_connection_t *, unsigned char *, uint32_t len);
@@ -83,13 +84,10 @@ private:
   int  (*mHandShakeInput)(mozquic_connection_t *, unsigned char *, uint32_t len);
   int  (*mErrorCB)(mozquic_connection_t *, uint32_t, char *);
 
-  unsigned char *mStream0Out; // convenience ptr
-  unsigned char *mStream0Allocation; // todo this is awful
-  uint32_t mStream0OutAvail;
-
   std::unique_ptr<MozQuicStreamPair> mStream0;
 
   // todo this is suboptimal
+  std::list<std::unique_ptr<MozQuicStreamChunk>> mUnWritten;
   std::list<std::unique_ptr<MozQuicStreamChunk>> mUnAcked;
 };
 
