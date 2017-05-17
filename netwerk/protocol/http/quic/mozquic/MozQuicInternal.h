@@ -84,7 +84,6 @@ private:
   uint32_t Flush();
   uint32_t FlushStream0();
   int Send1RTT();
-  int Recv1RTT();
   void Log(char *);
 
   int  mFD;

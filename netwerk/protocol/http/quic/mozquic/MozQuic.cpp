@@ -83,6 +83,14 @@ extern "C" {
     self->SetFD(fd);
   }
 
+  void mozquic_handshake_output(mozquic_connection_t *conn,
+                                unsigned char *data, uint32_t data_len)
+  {
+    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    self->HandShakeOutput(data, data_len);
+  }
+  
+  
 #ifdef __cplusplus
 }
 #endif
@@ -197,15 +205,6 @@ MozQuic::IO()
     switch (mConnectionState) {
     case CLIENT_STATE_1RTT:
       return Send1RTT();
-      break;
-    default:
-      assert(false);
-      // todo
-    }
-
-    switch (mConnectionState) {
-    case CLIENT_STATE_1RTT:
-      return Recv1RTT();
       break;
     default:
       assert(false);
@@ -386,58 +385,6 @@ MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
   return MOZQUIC_OK;
 }
 
-int
-MozQuic::Recv1RTT() 
-{
-  if (!mHandShakeInput) {
-    // todo handle doing this internally
-    assert(false);
-    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"need handshaker");
-    return MOZQUIC_ERR_GENERAL;
-  }
-
-  unsigned char pkt[kMozQuicMSS];
-  uint32_t pktSize = 0;
-  int code = Recv(pkt, kMozQuicMSS, pktSize);
-  if (code != MOZQUIC_OK) {
-    return code;
-  }
-
-  if (!pktSize) {
-    Log((char *)"recv1rtt no packet");
-    return MOZQUIC_OK;
-  }
-  Log((char *)"recv1rtt packet found");
-
-  // the min packet is 9 bytes
-  if (pktSize < 9) {
-    Log((char *)"recv1rtt packet too short");
-    return MOZQUIC_OK;
-  }
-
-  uint8_t type = pkt[0];
-  type = (type & 0x80) ? (type & 0x7f) : (type & 0x1f);
-  switch (type) {
-  case 0x83: // Server Stateless Retry
-    assert(false);
-    // todo mvp
-    // meara is great!
-    break;
-  case 0x84: // Server cleartext
-    return ProcessServerCleartext(pkt, pktSize);
-    break;
-  case 0x85: // Client cleartext
-    assert(false);
-    // todo mvp
-    break;
-    
-  default:
-    Log((char *)"recv1rtt unexpected type");
-    break;
-  }
-  return MOZQUIC_OK;
-}
-
 uint32_t
 MozQuic::FlushStream0()
 {
@@ -547,10 +494,8 @@ uint32_t
 MozQuic::DoWriter(std::unique_ptr<MozQuicStreamChunk> &p)
 {
 
-  // TODO NOW - this is not a packet! This is data written
-  // from a stream
-  // if transmit of this data succeeds, we need to move the pointer to
-  // the unacked list
+  // this data gets queued to unwritten and framed and
+  // transmitted after prioritization by flush()
 
   // obviously have to deal with more than this :)
   assert (mConnectionState ==  CLIENT_STATE_1RTT);
