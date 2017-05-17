@@ -28,15 +28,15 @@ extern "C" {
     const char *originName;
     int originPort;
     int handleIO; // true if library should schedule read and write events
+    void *closure;
 
-    void (*logging_callback)(mozquic_connection_t *, char *); // todo va arg
-    int  (*send_callback)(mozquic_connection_t *, unsigned char *, uint32_t len);
-    int  (*recv_callback)(mozquic_connection_t *, unsigned char *, uint32_t len, uint32_t *outLen);
-    int  (*error_callback)(mozquic_connection_t *, uint32_t err, char *);
+    void (*logging_callback)(void *, char *); // todo va arg
+    int  (*send_callback)(void *, unsigned char *, uint32_t len);
+    int  (*recv_callback)(void *, unsigned char *, uint32_t len, uint32_t *outLen);
+    int  (*error_callback)(void *, uint32_t err, char *);
 
     // TLS API
-    int (*handshake_input)(mozquic_connection_t *, unsigned char *data,
-                           uint32_t len);
+    int (*handshake_input)(void *, unsigned char *data, uint32_t len);
   };
 
   int mozquic_new_connection(mozquic_connection_t **outSession, mozquic_config_t *inConfig);

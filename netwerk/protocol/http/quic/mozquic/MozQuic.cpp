@@ -36,6 +36,7 @@ extern "C" {
     }
     *outConnection = (void *)q;
 
+    q->SetClosure(inConfig->closure);
     q->SetLogger(inConfig->logging_callback);
     q->SetTransmiter(inConfig->send_callback);
     q->SetReceiver(inConfig->recv_callback);
@@ -98,6 +99,7 @@ MozQuic::MozQuic(bool handleIO)
   , mIsClient(true)
   , mConnectionState(CLIENT_STATE_UNINITIALIZED)
   , mVersion(kMozQuicVersion1)
+  , mClosure(this)
   , mLogCallback(nullptr)
   , mTransmitCallback(nullptr)
   , mReceiverCallback(nullptr)
@@ -226,7 +228,7 @@ MozQuic::Log(char *msg)
 {
   // todo default mLogCallback can be dev/null
   if (mLogCallback) {
-    mLogCallback(this, msg);
+    mLogCallback(mClosure, msg);
   } else {
     fprintf(stderr,"MozQuic Logger :%s:\n", msg);
   }
@@ -236,7 +238,7 @@ uint32_t
 MozQuic::Recv(unsigned char *pkt, uint32_t avail, uint32_t &outLen)
 {
   if (mReceiverCallback) {
-    return mReceiverCallback(this, pkt, avail, &outLen);
+    return mReceiverCallback(mClosure, pkt, avail, &outLen);
   }
   ssize_t amt = recv(mFD, pkt, avail, 0);
   outLen = amt > 0 ? amt : 0;
@@ -249,7 +251,7 @@ uint32_t
 MozQuic::Transmit (unsigned char *pkt, uint32_t len)
 {
   if (mTransmitCallback) {
-    return mTransmitCallback(this, pkt, len);
+    return mTransmitCallback(mClosure, pkt, len);
   }
   send(mFD, pkt, len, 0); // todo errs
   return MOZQUIC_OK;
@@ -260,7 +262,7 @@ MozQuic::RaiseError(uint32_t e, char *reason)
 {
   Log(reason);
   if (mErrorCB) {
-    mErrorCB(this, e, reason);
+    mErrorCB(mClosure, e, reason);
   }
 }
 
@@ -294,7 +296,7 @@ MozQuic::Send1RTT()
       return code;
     }
     if (amt > 0) {
-      mHandShakeInput(this, buf, amt);
+      mHandShakeInput(mClosure, buf, amt);
     }
   }
   return MOZQUIC_OK;

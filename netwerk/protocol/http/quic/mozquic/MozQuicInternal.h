@@ -59,6 +59,7 @@ public:
   int IO();
   void HandShakeOutput(unsigned char *, uint32_t amt);
 
+  void SetClosure(void *closure) { mClosure = closure; }
   void SetLogger(void (*fx)(mozquic_connection_t *, char *)) { mLogCallback = fx; }
   void SetTransmiter(int(*fx)(mozquic_connection_t *,
                               unsigned char *, uint32_t)) { mTransmitCallback = fx; }
@@ -96,6 +97,7 @@ private:
   uint64_t mConnectionID;
   uint32_t mNextPacketID;
 
+  void *mClosure;
   void (*mLogCallback)(mozquic_connection_t *, char *); // todo va arg
   int  (*mTransmitCallback)(mozquic_connection_t *, unsigned char *, uint32_t len);
   int  (*mReceiverCallback)(mozquic_connection_t *, unsigned char *, uint32_t len, uint32_t *outlen);

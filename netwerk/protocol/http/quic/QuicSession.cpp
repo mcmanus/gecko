@@ -31,6 +31,8 @@ QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   config.originName = host;
   config.originPort = port;
   config.handleIO = 0;
+  config.closure = this;
+  config.handshake_input = MozQuicHandshakeCallback;
 
   // todo deal with failures
   mozquic_new_connection(&mSession, &config);
@@ -54,6 +56,24 @@ QuicSession::~QuicSession()
     PR_Close(mFD);
     mFD = nullptr;
   }
+}
+
+NS_IMETHODIMP
+QuicSession::DriveHandshake()
+{
+  fprintf(stderr,"drivehandshake\n");
+  // TODO - feed mozquic via mozquic_handshake_output() tls to send to server
+  // in drivehandshake()
+  return (mozquic_IO(mSession) == MOZQUIC_OK) ? NS_OK : NS_ERROR_FAILURE;
+}
+
+int
+QuicSession::MozQuicHandshakeCallback(void *closure,
+                                      unsigned char *data, uint32_t len)
+{
+  QuicSession *self = reinterpret_cast<QuicSession *>(closure);
+  // TODO - feed this data to PSM as it is the server reply
+  return MOZQUIC_OK;
 }
 
 PRStatus
@@ -156,13 +176,6 @@ NS_IMETHODIMP QuicSession::GetEarlyDataAccepted(bool *aEarlyDataAccepted)
   // todo
   *aEarlyDataAccepted = false;
   return NS_OK;
-}
-
-/* void driveHandshake (); */
-NS_IMETHODIMP QuicSession::DriveHandshake()
-{
-  fprintf(stderr,"drivehandshake\n");
-  return (mozquic_IO(mSession) == MOZQUIC_OK) ? NS_OK : NS_ERROR_FAILURE;
 }
 
 /* boolean joinConnection (in ACString npnProtocol, in ACString hostname, in long port); */
