@@ -30,11 +30,6 @@ extern "C" {
       return MOZQUIC_ERR_INVALID;
     }
 
-    if ((inConfig->domain != AF_INET) &&
-        (inConfig->domain != AF_INET6)) {
-      return MOZQUIC_ERR_INVALID;
-    }
-
     mozilla::net::MozQuic *q = new mozilla::net::MozQuic(inConfig->handleIO);
     if (!q) {
       return MOZQUIC_ERR_GENERAL;
@@ -110,6 +105,7 @@ MozQuic::MozQuic(bool handleIO)
   , mErrorCB(nullptr)
   , mStream0(new MozQuicStreamPair(0, this))
 {
+  assert(!handleIO); // todo
 }
 
 MozQuic::~MozQuic()

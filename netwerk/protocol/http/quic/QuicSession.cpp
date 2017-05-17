@@ -11,19 +11,35 @@
 
 namespace mozilla { namespace net {
 
-  QuicSession::QuicSession(PRDescIdentity quicIdentity, PRIOMethods *quicMethods,
-                           mozquic_connection_t *session, mozquic_config_t *config)
+static bool quicInit = false;
+static PRDescIdentity quicIdentity;
+static PRIOMethods quicMethods;
+
+QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   : mClosed(false)
   , mDestroyOnClose(true)
-  , mSession(session)
 {
+  if (!quicInit) {
+    quicInit = true;
+    quicIdentity = PR_GetUniqueIdentity("quicSocket");
+    quicMethods = *PR_GetDefaultIOMethods();
+    SetMethods(&quicMethods);
+  }
+
+  mozquic_config_t config;
+  memset (&config, 0, sizeof (config));
+  config.originName = host;
+  config.originPort = port;
+  config.handleIO = 0;
+
   // todo deal with failures
+  mozquic_new_connection(&mSession, &config);
+ 
   mFD =
-    PR_OpenUDPSocket(config->domain == AF_INET ? PR_AF_INET : PR_AF_INET6);
-  PRFileDesc *fd = PR_CreateIOLayerStub(quicIdentity, quicMethods);
+    PR_OpenUDPSocket(v4 ? PR_AF_INET : PR_AF_INET6);
+  PRFileDesc *fd = PR_CreateIOLayerStub(quicIdentity, &quicMethods);
   fd->secret = (struct PRFilePrivate *)this;
   PR_PushIOLayer(mFD, PR_NSPR_IO_LAYER, fd);
-  MOZ_ASSERT(!config->handleIO);
 }
 
 QuicSession::~QuicSession()

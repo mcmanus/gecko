@@ -24,9 +24,6 @@ using mozilla::LogLevel;
 namespace mozilla { namespace net {
 
 LazyLogModule gQUICLog("quic");
-static bool quicInit = false;
-static PRDescIdentity quicIdentity;
-static PRIOMethods quicMethods;
 
 QuicSocketProvider::QuicSocketProvider()
 {
@@ -49,39 +46,13 @@ QuicSocketProvider::NewSocket(int32_t family,
   // todo securityinfo - nsISSLSocketControl
   LOG(("QuicSocketProvider::NewSocket %p\n", this));
 
-  if (!quicInit) {
-    quicInit = true;
-    quicIdentity = PR_GetUniqueIdentity("quicSocket");
-    quicMethods = *PR_GetDefaultIOMethods();
-    QuicSession::SetMethods(&quicMethods);
-  }
-
-  mozquic_connection_t *session = nullptr;
-  struct mozquic_config_t config;
-
-  memset (&config, 0, sizeof (config));
-  config.domain = family;
-  config.originName = host;
-  config.originPort = port;
-  config.handleIO = 0;
-
-  QuicSession *qSession = nullptr;
-
-  if (mozquic_new_connection(&session, &config) == MOZQUIC_OK) {
-    qSession = new QuicSession(quicIdentity, &quicMethods, session, &config);
+  QuicSession *qSession = new QuicSession(host, port, family == AF_INET);
   
-    LOG(("QuicSocketProvider::NewSocket ok %p\n", this));
-    *result = qSession->GetFD();
-    nsCOMPtr<nsISupports> secInfo(qSession);
-    *securityInfo = secInfo.forget().take();
-    return NS_OK;
-  }
-  
-  LOG(("QuicSocketProvider::NewSocket fail %p\n", this));
-  if (session) {
-    mozquic_destroy_connection(session);
-  }
-  return NS_ERROR_SOCKET_CREATE_FAILED;
+  LOG(("QuicSocketProvider::NewSocket ok %p\n", this));
+  *result = qSession->GetFD();
+  nsCOMPtr<nsISupports> secInfo(qSession);
+  *securityInfo = secInfo.forget().take();
+  return NS_OK;
 }
 
 NS_IMETHODIMP

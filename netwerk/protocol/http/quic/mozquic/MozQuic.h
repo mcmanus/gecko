@@ -25,8 +25,6 @@ extern "C" {
 
   struct mozquic_config_t 
   {
-    int domain; // AF_INET or AF_INET6
-//    const struct sockaddr *address;
     const char *originName;
     int originPort;
     int handleIO; // true if library should schedule read and write events

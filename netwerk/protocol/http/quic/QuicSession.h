@@ -26,8 +26,7 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSISSLSOCKETCONTROL
 
-  QuicSession(PRDescIdentity quicIdentity, PRIOMethods *quicMethods,
-              mozquic_connection_t *session, mozquic_config_t *config);
+  QuicSession(const char *host, int32_t port, bool v4);
 
   static PRStatus NSPRConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime to);
   static PRStatus NSPRClose(PRFileDesc *fd);
