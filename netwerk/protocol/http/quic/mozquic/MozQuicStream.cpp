@@ -38,9 +38,37 @@ MozQuicStreamIn::~MozQuicStreamIn()
 uint32_t
 MozQuicStreamIn::Read(unsigned char *buffer, uint32_t avail, uint32_t &amt, bool &fin)
 {
-  // need to find offset
+  amt = 0;
+  if (mFinRecvd && mFinOffset == mOffset) {
+    fin = true;
+    return MOZQUIC_OK;
+  }
+  fin = false;
+  if (mAvailable.empty()) {
+    return MOZQUIC_OK;
+  }
+
   std::list<std::unique_ptr<MozQuicStreamChunk>>::iterator i = mAvailable.begin();
-  std::list<std::unique_ptr<MozQuicStreamChunk>>::iterator end = mAvailable.end();
+  if ((*i)->mOffset > mOffset) {
+    // no data yet
+    return MOZQUIC_OK;
+  }
+  uint64_t skip = mOffset - (*i)->mOffset;
+  unsigned char *src = (*i)->mData.get() + skip;
+  uint64_t copyLen = (*i)->mLen - skip;
+  if (copyLen > avail) {
+    copyLen = avail;
+  }
+  memcpy (buffer, src, copyLen);
+  mOffset += copyLen;
+  if (mFinRecvd && mFinOffset == mOffset) {
+    fin = true;
+  }
+  if (mOffset == (*i)->mOffset + (*i)->mLen) {
+    // we dont need this buffer anymore
+    mAvailable.erase(i);
+  }
+  return MOZQUIC_OK;
 }
 
 uint32_t
