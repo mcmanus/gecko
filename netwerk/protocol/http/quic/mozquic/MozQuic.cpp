@@ -383,6 +383,7 @@ MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
       return MOZQUIC_ERR_GENERAL;
     }
   }
+  return MOZQUIC_OK;
 }
 
 int

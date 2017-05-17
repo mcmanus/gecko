@@ -56,11 +56,15 @@ class MozQuicStreamIn
 public:
   MozQuicStreamIn(uint32_t id);
   ~MozQuicStreamIn();
-  uint32_t Read();
+  uint32_t Read(unsigned char *buffer, uint32_t avail, uint32_t &amt, bool &fin);
   uint32_t Supply(std::unique_ptr<MozQuicStreamChunk> &p);
 
 private:
-  std::list<MozQuicStreamChunk> mBuffered;
+  uint64_t mOffset;
+  uint64_t mFinOffset;
+  bool     mFinRecvd;
+  
+  std::list<std::unique_ptr<MozQuicStreamChunk>> mAvailable;
 };
 
 class MozQuicStreamPair
@@ -72,9 +76,10 @@ public:
   uint32_t Supply(std::unique_ptr<MozQuicStreamChunk> &p) {
     return mIn.Supply(p);
   }
-    
-  uint32_t Read() {
-    return mIn.Read();
+
+  // todo it would be nice to have a zero copy interface
+  uint32_t Read(unsigned char *buffer, uint32_t avail, uint32_t &amt, bool &fin) {
+    return mIn.Read(buffer, avail, amt, fin);
   }
 
   uint32_t Write(unsigned char *data, uint32_t len) {
