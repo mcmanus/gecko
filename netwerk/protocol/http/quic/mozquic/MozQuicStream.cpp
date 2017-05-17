@@ -161,6 +161,24 @@ MozQuicStreamIn::Supply(std::unique_ptr<MozQuicStreamChunk> &d)
   return MOZQUIC_OK;
 }
 
+bool
+MozQuicStreamIn::Empty()
+{
+  if (mFinRecvd && mFinOffset == mOffset) {
+    return false;
+  }
+  if (mAvailable.empty()) {
+    return true;
+  }
+
+  std::list<std::unique_ptr<MozQuicStreamChunk>>::iterator i = mAvailable.begin();
+  if ((*i)->mOffset > mOffset) {
+    return true;
+  }
+  
+  return false;
+}
+    
 MozQuicStreamOut::MozQuicStreamOut(uint32_t id, MozQuicWriter *w)
   : mWriter(w)
   , mStreamID(id)

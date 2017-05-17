@@ -200,11 +200,16 @@ MozQuic::Intake()
 int
 MozQuic::IO()
 {
+  uint32_t code;
+
   Intake();
   if (mIsClient) {
     switch (mConnectionState) {
     case CLIENT_STATE_1RTT:
-      return Send1RTT();
+      code = Send1RTT();
+      if (code != MOZQUIC_OK) {
+        return code;
+      }
       break;
     default:
       assert(false);
@@ -283,6 +288,19 @@ MozQuic::Send1RTT()
   }
 
   Flush();
+  if (!mStream0->Empty()) {
+    unsigned char buf[kMozQuicMSS];
+    uint32_t amt = 0;
+    bool fin = false;
+    
+    uint32_t code = mStream0->Read(buf, kMozQuicMSS, amt, fin);
+    if (code != MOZQUIC_OK) {
+      return code;
+    }
+    if (amt > 0) {
+      mHandShakeInput(this, buf, amt);
+    }
+  }
   return MOZQUIC_OK;
 }
 

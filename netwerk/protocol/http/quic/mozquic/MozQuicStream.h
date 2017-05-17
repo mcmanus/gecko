@@ -58,6 +58,7 @@ public:
   ~MozQuicStreamIn();
   uint32_t Read(unsigned char *buffer, uint32_t avail, uint32_t &amt, bool &fin);
   uint32_t Supply(std::unique_ptr<MozQuicStreamChunk> &p);
+  bool     Empty();
 
 private:
   uint64_t mOffset;
@@ -80,6 +81,10 @@ public:
   // todo it would be nice to have a zero copy interface
   uint32_t Read(unsigned char *buffer, uint32_t avail, uint32_t &amt, bool &fin) {
     return mIn.Read(buffer, avail, amt, fin);
+  }
+
+  bool Empty() {
+    return mIn.Empty();
   }
 
   uint32_t Write(unsigned char *data, uint32_t len) {
