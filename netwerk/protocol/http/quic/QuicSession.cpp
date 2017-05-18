@@ -8,12 +8,16 @@
 #include "private/pprio.h"
 #include <sys/socket.h>
 #include "nsIInterfaceRequestor.h"
+#include "nsISocketProviderService.h"
+#include "nsISocketProvider.h"
+#include "nsNetCID.h"
+#include "nsServiceManagerUtils.h"   // do_GetService
 
 namespace mozilla { namespace net {
 
 static bool quicInit = false;
-static PRDescIdentity quicIdentity;
-static PRIOMethods quicMethods;
+static PRDescIdentity quicIdentity, psmHelperIdentity;
+static PRIOMethods quicMethods, psmHelperMethods;
 
 QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   : mClosed(false)
@@ -22,8 +26,10 @@ QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   if (!quicInit) {
     quicInit = true;
     quicIdentity = PR_GetUniqueIdentity("quicSocket");
+    psmHelperIdentity = PR_GetUniqueIdentity("psmHelper");
     quicMethods = *PR_GetDefaultIOMethods();
-    SetMethods(&quicMethods);
+    psmHelperMethods = *PR_GetDefaultIOMethods();
+    SetMethods(&quicMethods, &psmHelperMethods);
   }
 
   mozquic_config_t config;
@@ -42,6 +48,21 @@ QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   PRFileDesc *fd = PR_CreateIOLayerStub(quicIdentity, &quicMethods);
   fd->secret = (struct PRFilePrivate *)this;
   PR_PushIOLayer(mFD, PR_NSPR_IO_LAYER, fd);
+
+  mPSMHelper = PR_CreateIOLayerStub(psmHelperIdentity, &psmHelperMethods);
+  mPSMHelper->secret = (struct PRFilePrivate *)this;
+
+  nsCOMPtr<nsISupports> secinfo;
+  nsCOMPtr<nsISocketProvider> provider;
+  nsCOMPtr<nsISocketProviderService> spserv = // todo mozilla::services cache
+    do_GetService(NS_SOCKETPROVIDERSERVICE_CONTRACTID);
+
+  if (spserv) {
+    spserv->GetSocketProvider("ssl", getter_AddRefs(provider));
+  }
+  provider->AddToSocket(PR_AF_INET, host, port, nullptr,
+                        OriginAttributes(), 0, mPSMHelper,
+                        getter_AddRefs(secinfo));  
 }
 
 QuicSession::~QuicSession()
@@ -93,13 +114,12 @@ QuicSession::NSPRClose(PRFileDesc *fd)
 }
 
 void
-QuicSession::SetMethods(PRIOMethods *outMethods)
+QuicSession::SetMethods(PRIOMethods *quicMethods, PRIOMethods *psmHelperMethods)
 {
-  if (!outMethods) {
-    return;
+  if (quicMethods) {
+    quicMethods->connect = NSPRConnect;
+    quicMethods->close =   NSPRClose;
   }
-  outMethods->connect = NSPRConnect;
-  outMethods->close =   NSPRClose;
 }
 
 PRStatus

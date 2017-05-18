@@ -30,7 +30,7 @@ public:
 
   static PRStatus NSPRConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime to);
   static PRStatus NSPRClose(PRFileDesc *fd);
-  static void SetMethods(PRIOMethods *outMethods);
+  static void SetMethods(PRIOMethods *quitMethods, PRIOMethods *psmHelperMethods);
   static int MozQuicHandshakeCallback(mozquic_connection_t *session,
                                       unsigned char *data, uint32_t len);
   
@@ -44,6 +44,7 @@ private:
   bool         mClosed;
   bool         mDestroyOnClose;
   PRFileDesc  *mFD;
+  PRFileDesc  *mPSMHelper;
   mozquic_connection_t *mSession;
 };
 
