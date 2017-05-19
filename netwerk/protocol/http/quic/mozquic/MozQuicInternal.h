@@ -71,7 +71,6 @@ public:
   void SetFD(int fd) { mFD = fd; }
   int  GetFD() { return mFD; }
 
-//  uint32_t DoWriter(unsigned char *data, uint32_t len) override;
   uint32_t DoWriter(std::unique_ptr<MozQuicStreamChunk> &p) override;
 private:
   void RaiseError(uint32_t err, char *reason);

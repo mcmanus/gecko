@@ -12,6 +12,9 @@
 #include "nsISocketProvider.h"
 #include "nsNetCID.h"
 #include "nsServiceManagerUtils.h"   // do_GetService
+#include "nsIAsyncInputStream.h"
+#include "nsIAsyncOutputStream.h"
+#include "mozilla/Unused.h"
 
 namespace mozilla { namespace net {
 
@@ -52,7 +55,6 @@ QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   mPSMHelper = PR_CreateIOLayerStub(psmHelperIdentity, &psmHelperMethods);
   mPSMHelper->secret = (struct PRFilePrivate *)this;
 
-  nsCOMPtr<nsISupports> secinfo;
   nsCOMPtr<nsISocketProvider> provider;
   nsCOMPtr<nsISocketProviderService> spserv = // todo mozilla::services cache
     do_GetService(NS_SOCKETPROVIDERSERVICE_CONTRACTID);
@@ -60,9 +62,20 @@ QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   if (spserv) {
     spserv->GetSocketProvider("ssl", getter_AddRefs(provider));
   }
+
   provider->AddToSocket(PR_AF_INET, host, port, nullptr,
                         OriginAttributes(), 0, mPSMHelper,
-                        getter_AddRefs(secinfo));  
+                        getter_AddRefs(mPSMHelperSecInfo));
+    
+  mPSMSSLSocketControl = do_QueryInterface(mPSMHelperSecInfo);
+  PRNetAddr addr;
+  memset(&addr,0,sizeof(addr));
+  addr.raw.family = PR_AF_INET;
+  PR_Connect(mPSMHelper, &addr, 0);
+
+  Unused << NS_NewPipe2(getter_AddRefs(mPSMBufferInput),
+                        getter_AddRefs(mPSMBufferOutput),
+                        true, true, 0, UINT32_MAX);
 }
 
 QuicSession::~QuicSession()
@@ -77,6 +90,10 @@ QuicSession::~QuicSession()
     PR_Close(mFD);
     mFD = nullptr;
   }
+  if (mPSMHelper) {
+    PR_Close(mPSMHelper);
+    mPSMHelper = nullptr;
+  }
 }
 
 NS_IMETHODIMP
@@ -85,6 +102,10 @@ QuicSession::DriveHandshake()
   fprintf(stderr,"drivehandshake\n");
   // TODO - feed mozquic via mozquic_handshake_output() tls to send to server
   // in drivehandshake()
+  if (!mPSMSSLSocketControl) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  mPSMSSLSocketControl->DriveHandshake();
   return (mozquic_IO(mSession) == MOZQUIC_OK) ? NS_OK : NS_ERROR_FAILURE;
 }
 
@@ -93,7 +114,19 @@ QuicSession::MozQuicHandshakeCallback(void *closure,
                                       unsigned char *data, uint32_t len)
 {
   QuicSession *self = reinterpret_cast<QuicSession *>(closure);
-  // TODO - feed this data to PSM as it is the server reply
+  // feed this data to PSM as it is the server reply
+  // that has to be pulled via recv(mPSMHelper)
+  // do so by storing in the pipe/buffer and waiting for recv
+  uint32_t amt = 0;
+
+  while (len > 0) {
+    if (NS_FAILED(self->mPSMBufferOutput->Write((const char *)data, len, &amt))) {
+      return MOZQUIC_ERR_GENERAL;
+    }
+    len -= amt;
+    data += amt;
+  }
+
   return MOZQUIC_OK;
 }
 
@@ -113,6 +146,24 @@ QuicSession::NSPRClose(PRFileDesc *fd)
   return (fd->methods->close)(fd);
 }
 
+PRStatus
+QuicSession::NSPRGetPeerName(PRFileDesc *aFD, PRNetAddr *addr)
+{
+  memset(addr,0,sizeof(*addr));
+  addr->raw.family = PR_AF_INET;
+  return PR_SUCCESS;
+}
+
+PRStatus
+QuicSession::NSPRGetSocketOption(PRFileDesc *aFD, PRSocketOptionData *aOpt)
+{
+  if (aOpt->option == PR_SockOpt_Nonblocking) {
+    aOpt->value.non_blocking = PR_TRUE;
+    return PR_SUCCESS;
+  }
+  return PR_FAILURE;
+}
+
 void
 QuicSession::SetMethods(PRIOMethods *quicMethods, PRIOMethods *psmHelperMethods)
 {
@@ -120,6 +171,62 @@ QuicSession::SetMethods(PRIOMethods *quicMethods, PRIOMethods *psmHelperMethods)
     quicMethods->connect = NSPRConnect;
     quicMethods->close =   NSPRClose;
   }
+  if (psmHelperMethods) {
+    // ssl stack triggers getpeername and default impl asserts(false)
+    psmHelperMethods->getpeername = NSPRGetPeerName;
+    psmHelperMethods->getsocketoption = NSPRGetSocketOption;
+    psmHelperMethods->connect = psmHelperConnect;
+    psmHelperMethods->write = psmHelperWrite;
+    psmHelperMethods->send = psmHelperSend;
+    psmHelperMethods->recv = psmHelperRecv;
+    psmHelperMethods->read = psmHelperRead;
+//    psmHelperMethods->close = FilterClose;
+  }
+}
+
+int
+QuicSession::psmHelperWrite(PRFileDesc *fd, const void *aBuf, int32_t aAmount)
+{
+  // data has come from psm and needs to be written into mozquic library
+  QuicSession *self = reinterpret_cast<QuicSession *>(fd->secret);
+  mozquic_handshake_output(self->mSession, (unsigned char *)aBuf, aAmount);
+  return aAmount;
+}
+
+int
+QuicSession::psmHelperSend(PRFileDesc *aFD, const void *aBuf, int32_t aAmount,
+                           int , PRIntervalTime)
+{
+  return psmHelperWrite(aFD, aBuf, aAmount);
+}
+
+int32_t
+QuicSession::psmHelperRead(PRFileDesc *fd, void *buf, int32_t amount)
+{
+  // psm is asking to read any data that has been provided from the mozquic
+  // library off the network on stream 0. We keep that in the pipe buffer and it
+  // was written there during MozQuicHandshakeCallback()
+  uint32_t count = 0;
+  QuicSession *self = reinterpret_cast<QuicSession *>(fd->secret);
+  nsresult rv = self->mPSMBufferInput->Read((char *)buf, amount, &count);
+  if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
+    PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
+    return -1;
+  }
+  return count;
+}
+
+int32_t
+QuicSession::psmHelperRecv(PRFileDesc *fd, void *buf, int32_t amount, int flags,
+                           PRIntervalTime timeout)
+{
+  return psmHelperRead(fd, buf, amount);
+}
+  
+PRStatus
+QuicSession::psmHelperConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime to)
+{
+  return PR_SUCCESS;
 }
 
 PRStatus
