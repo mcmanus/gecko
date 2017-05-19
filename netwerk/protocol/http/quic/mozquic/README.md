@@ -19,14 +19,8 @@ supply and read!
 retransmissions
 ack generation
 ack recpt
-out of order recpt
 
-test case of out of order
+--
 
-
-
-
-npm install gyp
-gyp --depth=. --generator-output=obj
-cd obj; make
+.a needs to restrict exported objects
 
