@@ -14,6 +14,7 @@
 #include "time.h"
 #include "fnv.h"
 #include "sys/time.h"
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {

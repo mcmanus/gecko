@@ -13,38 +13,22 @@ SOURCES += [
     'QuicSocketProvider.cpp',
 ]
 
-# these should really build their own lib
-SOURCES += [
-    'mozquic/fnv.c',
-    'mozquic/MozQuic.cpp',
-    'mozquic/MozQuicStream.cpp',
-]
-
 LOCAL_INCLUDES += [
     'mozquic',
 ]
 
 FINAL_LIBRARY = 'xul'
 
-#include('/build/gyp_base.mozbuild')
-#Library('mozquic')
-#USE_LIBS += [
-#    'mozquic',
-#]
-#
-#gyp_vars['python'] = CONFIG['PYTHON']
-## The MOZQUIC gyp files do not have a default for this.
-#gyp_vars['mozquic_dist_dir'] = '$PRODUCT_DIR/dist'
-#gyp_vars['mozquic_dist_obj_dir'] = '$PRODUCT_DIR/dist/bin'
-#if CONFIG['CLANG_CXX'] or CONFIG['CLANG_CL']:
-#    gyp_vars['cc_is_clang'] = 1
-#
-#GYP_DIRS += ['mozquic']
-#GYP_DIRS['mozquic'].input = 'mozquic/mozquic.gyp'
-#GYP_DIRS['mozquic'].variables = gyp_vars
-#sandbox_vars = {
-#    'NO_VISIBILITY_FLAGS': True,
-#    'ALLOW_COMPILER_WARNINGS': True,
-#    'NO_PGO': True,
-#}
-#GYP_DIRS['mozquic'].no_unified = True
+include('/build/gyp.mozbuild')
+GYP_DIRS += [
+    'mozquic',
+]
+
+GYP_DIRS['mozquic'].input = 'mozquic/mozquic.gyp'
+GYP_DIRS['mozquic'].variables = gyp_vars
+# We allow warnings for third-party code that can be updated from upstream.
+GYP_DIRS['mozquic'].sandbox_vars['ALLOW_COMPILER_WARNINGS'] = True
+GYP_DIRS['mozquic'].sandbox_vars['FINAL_LIBRARY'] = 'xul'
+#GYP_DIRS['mozquic'].non_unified_sources += mozquic_non_unified_sources
+#todo
+GYP_DIRS['mozquic'].no_unified = True

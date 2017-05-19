@@ -26,3 +26,7 @@ test case of out of order
 
 
 
+npm install gyp
+gyp --depth=. --generator-output=obj
+cd obj; make
+

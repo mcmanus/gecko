@@ -7,9 +7,10 @@
 #include "MozQuicInternal.h"
 #include "MozQuicStream.h"
 
-#include "assert.h"
-#include "stdlib.h"
-#include "unistd.h"
+#include <assert.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
 
 namespace mozilla { namespace net {
 
