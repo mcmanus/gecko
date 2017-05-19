@@ -7,6 +7,10 @@
 with Files('**'):
     BUG_COMPONENT = ('Core', 'Networking: HTTP')
 
+DIRS += [
+    'quic',
+]
+
 XPIDL_SOURCES += [
     'nsIHstsPrimingCallback.idl',
     'nsIHttpActivityObserver.idl',
@@ -94,19 +98,6 @@ UNIFIED_SOURCES += [
     'TunnelUtils.cpp',
 ]
 
-# todo make part of unified - but its faster right now as singletons
-SOURCES += [
-    'quic/QuicSession.cpp',
-    'quic/QuicSocketProvider.cpp',
-]
-
-# these should really build their own lib
-SOURCES += [
-    'quic/mozquic/fnv.c',
-    'quic/mozquic/MozQuic.cpp',
-    'quic/mozquic/MozQuicStream.cpp',
-]
-
 # These files cannot be built in unified mode because of OS X headers.
 SOURCES += [
     'nsHttpHandler.cpp',
@@ -130,7 +121,6 @@ LOCAL_INCLUDES += [
     '/dom/base',
     '/netwerk/base',
     '/netwerk/socket',
-    'quic/mozquic',
 ]
 
 EXTRA_COMPONENTS += [

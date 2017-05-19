@@ -1,0 +1,50 @@
+# -*- Mode: python; indent-tabs-mode: nil; tab-width: 40 -*-
+# vim: set filetype=python:
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+with Files('**'):
+    BUG_COMPONENT = ('Core', 'Networking: HTTP')
+
+# todo make part of unified - but its faster right now as singletons
+SOURCES += [
+    'QuicSession.cpp',
+    'QuicSocketProvider.cpp',
+]
+
+# these should really build their own lib
+SOURCES += [
+    'mozquic/fnv.c',
+    'mozquic/MozQuic.cpp',
+    'mozquic/MozQuicStream.cpp',
+]
+
+LOCAL_INCLUDES += [
+    'mozquic',
+]
+
+FINAL_LIBRARY = 'xul'
+
+#include('/build/gyp_base.mozbuild')
+#Library('mozquic')
+#USE_LIBS += [
+#    'mozquic',
+#]
+#
+#gyp_vars['python'] = CONFIG['PYTHON']
+## The MOZQUIC gyp files do not have a default for this.
+#gyp_vars['mozquic_dist_dir'] = '$PRODUCT_DIR/dist'
+#gyp_vars['mozquic_dist_obj_dir'] = '$PRODUCT_DIR/dist/bin'
+#if CONFIG['CLANG_CXX'] or CONFIG['CLANG_CL']:
+#    gyp_vars['cc_is_clang'] = 1
+#
+#GYP_DIRS += ['mozquic']
+#GYP_DIRS['mozquic'].input = 'mozquic/mozquic.gyp'
+#GYP_DIRS['mozquic'].variables = gyp_vars
+#sandbox_vars = {
+#    'NO_VISIBILITY_FLAGS': True,
+#    'ALLOW_COMPILER_WARNINGS': True,
+#    'NO_PGO': True,
+#}
+#GYP_DIRS['mozquic'].no_unified = True
