@@ -9,11 +9,13 @@
 <%helpers:longhand name="content" boxed="True" animation_value_type="none"
                    spec="https://drafts.csswg.org/css-content/#propdef-content">
     use cssparser::Token;
-    use std::ascii::AsciiExt;
     use values::computed::ComputedValueAsSpecified;
+    #[cfg(feature = "gecko")]
+    use values::generics::CounterStyleOrNone;
+    #[cfg(feature = "gecko")]
     use values::specified::url::SpecifiedUrl;
-    use values::HasViewportPercentage;
 
+    #[cfg(feature = "servo")]
     use super::list_style_type;
 
     pub use self::computed_value::T as SpecifiedValue;
@@ -23,12 +25,16 @@
     no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
-        use super::super::list_style_type;
-
         use cssparser;
         use std::fmt;
         use style_traits::ToCss;
+        #[cfg(feature = "gecko")]
         use values::specified::url::SpecifiedUrl;
+
+        #[cfg(feature = "servo")]
+        type CounterStyleType = super::super::list_style_type::computed_value::T;
+        #[cfg(feature = "gecko")]
+        type CounterStyleType = ::values::generics::CounterStyleOrNone;
 
         #[derive(Debug, PartialEq, Eq, Clone)]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
@@ -36,9 +42,9 @@
             /// Literal string content.
             String(String),
             /// `counter(name, style)`.
-            Counter(String, list_style_type::computed_value::T),
+            Counter(String, CounterStyleType),
             /// `counters(name, separator, style)`.
-            Counters(String, String, list_style_type::computed_value::T),
+            Counters(String, String, CounterStyleType),
             /// `open-quote`.
             OpenQuote,
             /// `close-quote`.
@@ -64,20 +70,20 @@
                     ContentItem::String(ref s) => {
                         cssparser::serialize_string(&**s, dest)
                     }
-                    ContentItem::Counter(ref s, ref list_style_type) => {
+                    ContentItem::Counter(ref s, ref counter_style) => {
                         try!(dest.write_str("counter("));
                         try!(cssparser::serialize_identifier(&**s, dest));
                         try!(dest.write_str(", "));
-                        try!(list_style_type.to_css(dest));
+                        try!(counter_style.to_css(dest));
                         dest.write_str(")")
                     }
-                    ContentItem::Counters(ref s, ref separator, ref list_style_type) => {
-                        try!(dest.write_str("counter("));
+                    ContentItem::Counters(ref s, ref separator, ref counter_style) => {
+                        try!(dest.write_str("counters("));
                         try!(cssparser::serialize_identifier(&**s, dest));
                         try!(dest.write_str(", "));
                         try!(cssparser::serialize_string(&**separator, dest));
                         try!(dest.write_str(", "));
-                        try!(list_style_type.to_css(dest));
+                        try!(counter_style.to_css(dest));
                         dest.write_str(")")
                     }
                     ContentItem::OpenQuote => dest.write_str("open-quote"),
@@ -134,6 +140,22 @@
         computed_value::T::normal
     }
 
+    #[cfg(feature = "servo")]
+    fn parse_counter_style(context: &ParserContext, input: &mut Parser) -> list_style_type::computed_value::T {
+        input.try(|input| {
+            input.expect_comma()?;
+            list_style_type::parse(context, input)
+        }).unwrap_or(list_style_type::computed_value::T::decimal)
+    }
+
+    #[cfg(feature = "gecko")]
+    fn parse_counter_style(context: &ParserContext, input: &mut Parser) -> CounterStyleOrNone {
+        input.try(|input| {
+            input.expect_comma()?;
+            CounterStyleOrNone::parse(context, input)
+        }).unwrap_or(CounterStyleOrNone::decimal())
+    }
+
     // normal | none | [ <string> | <counter> | open-quote | close-quote | no-open-quote |
     // no-close-quote ]+
     // TODO: <uri>, attr(<identifier>)
@@ -148,7 +170,8 @@
         let mut content = vec![];
         loop {
             % if product == "gecko":
-                if let Ok(url) = input.try(|i| SpecifiedUrl::parse(context, i)) {
+                if let Ok(mut url) = input.try(|i| SpecifiedUrl::parse(context, i)) {
+                    url.build_image_value();
                     content.push(ContentItem::Url(url));
                     continue;
                 }
@@ -161,20 +184,14 @@
                     content.push(try!(match_ignore_ascii_case! { &name,
                         "counter" => input.parse_nested_block(|input| {
                             let name = try!(input.expect_ident()).into_owned();
-                            let style = input.try(|input| {
-                                try!(input.expect_comma());
-                                list_style_type::parse(context, input)
-                            }).unwrap_or(list_style_type::computed_value::T::decimal);
+                            let style = parse_counter_style(context, input);
                             Ok(ContentItem::Counter(name, style))
                         }),
                         "counters" => input.parse_nested_block(|input| {
                             let name = try!(input.expect_ident()).into_owned();
                             try!(input.expect_comma());
                             let separator = try!(input.expect_string()).into_owned();
-                            let style = input.try(|input| {
-                                try!(input.expect_comma());
-                                list_style_type::parse(context, input)
-                            }).unwrap_or(list_style_type::computed_value::T::decimal);
+                            let style = parse_counter_style(context, input);
                             Ok(ContentItem::Counters(name, separator, style))
                         }),
                         % if product == "gecko":
@@ -239,11 +256,9 @@
                    spec="https://drafts.csswg.org/css-lists/#propdef-counter-increment">
     use std::fmt;
     use style_traits::ToCss;
-    use super::content;
-    use values::{HasViewportPercentage, CustomIdent};
+    use values::CustomIdent;
 
-    use cssparser::{Token, serialize_identifier};
-    use std::borrow::{Cow, ToOwned};
+    use cssparser::Token;
 
     #[derive(Debug, Clone, PartialEq)]
     pub struct SpecifiedValue(pub Vec<(CustomIdent, specified::Integer)>);
@@ -261,7 +276,6 @@
             fn to_css<W>(&self, dest: &mut W) -> fmt::Result
                 where W: fmt::Write,
             {
-                use cssparser::serialize_identifier;
                 if self.0.is_empty() {
                     return dest.write_str("none")
                 }
@@ -331,8 +345,6 @@
     }
 
     pub fn parse_common(context: &ParserContext, default_value: i32, input: &mut Parser) -> Result<SpecifiedValue, ()> {
-        use std::ascii::AsciiExt;
-
         if input.try(|input| input.expect_ident_matching("none")).is_ok() {
             return Ok(SpecifiedValue(Vec::new()))
         }

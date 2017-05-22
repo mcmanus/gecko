@@ -20,6 +20,11 @@
 #include <d3d11.h>
 #include <ddraw.h>
 
+#ifdef MOZ_CRASHREPORTER
+#include "nsExceptionHandler.h"
+#include "nsPrintfCString.h"
+#endif
+
 namespace mozilla {
 namespace gfx {
 
@@ -136,7 +141,12 @@ DeviceManagerDx::CreateCompositorDevices()
   mD3D11Module.disown();
 
   MOZ_ASSERT(mCompositorDevice);
-  return d3d11.IsEnabled();
+  if (!d3d11.IsEnabled()) {
+    return false;
+  }
+
+  PreloadAttachmentsOnCompositorThread();
+  return true;
 }
 
 void
@@ -623,6 +633,13 @@ DeviceManagerDx::MaybeResetAndReacquireDevices()
     Telemetry::Accumulate(Telemetry::DEVICE_RESET_REASON, uint32_t(resetReason));
   }
 
+#ifdef MOZ_CRASHREPORTER
+  nsPrintfCString reasonString("%d", int(resetReason));
+  CrashReporter::AnnotateCrashReport(
+    NS_LITERAL_CSTRING("DeviceResetReason"),
+    reasonString);
+#endif
+
   bool createCompositorDevice = !!mCompositorDevice;
   bool createContentDevice = !!mContentDevice;
 
@@ -821,6 +838,17 @@ DeviceManagerDx::CanInitializeKeyedMutexTextures()
   // Disable this on all Intel devices because of crashes.
   // See bug 1292923.
   return (mDeviceStatus->adapter().VendorId != 0x8086 || gfxPrefs::Direct3D11AllowIntelMutex());
+}
+
+bool
+DeviceManagerDx::HasCrashyInitData()
+{
+  MutexAutoLock lock(mDeviceLock);
+  if (!mDeviceStatus) {
+    return false;
+  }
+
+  return (mDeviceStatus->adapter().VendorId == 0x8086 && !IsWin10OrLater());
 }
 
 bool

@@ -57,12 +57,12 @@ var whitelist = new Set([
   {file: "chrome://global/locale/printjoboptions.dtd",
    platforms: ["macosx", "win"]},
 
-  // services/cloudsync/CloudSyncLocal.jsm
-  {file: "chrome://weave/locale/errors.properties"},
-
   // devtools/client/inspector/bin/dev-server.js
   {file: "chrome://devtools/content/inspector/markup/markup.xhtml",
    isFromDevTools: true},
+
+  // Kept for add-on compatibility, should be removed in bug 851471.
+  {file: "chrome://mozapps/skin/downloads/downloadIcon.png"},
 
   // extensions/pref/autoconfig/src/nsReadConfig.cpp
   {file: "resource://gre/defaults/autoconfig/prefcalls.js"},
@@ -98,11 +98,11 @@ var whitelist = new Set([
    platforms: ["linux", "win"]},
   {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/mac/platformKeys.properties",
    platforms: ["linux", "win"]},
-  {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/unix/accessible.properties",
+  {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/gtk/accessible.properties",
    platforms: ["macosx", "win"]},
-  {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/unix/intl.properties",
+  {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/gtk/intl.properties",
    platforms: ["macosx", "win"]},
-  {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/unix/platformKeys.properties",
+  {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/gtk/platformKeys.properties",
    platforms: ["macosx", "win"]},
   {file: "resource://gre/chrome/en-US/locale/en-US/global-platform/win/accessible.properties",
    platforms: ["linux", "macosx"]},
@@ -114,17 +114,12 @@ var whitelist = new Set([
   // browser/extensions/pdfjs/content/web/viewer.js#7450
   {file: "resource://pdf.js/web/debugger.js"},
 
-
   // Starting from here, files in the whitelist are bugs that need fixing.
   // Bug 1339420
   {file: "chrome://branding/content/icon128.png"},
   // Bug 1339424 (wontfix?)
   {file: "chrome://browser/locale/taskbar.properties",
    platforms: ["linux", "macosx"]},
-  // Bug 1320156
-  {file: "chrome://browser/skin/Privacy-16.png", platforms: ["linux"]},
-  // Bug 1343584
-  {file: "chrome://browser/skin/click-to-play-warning-stripes.png"},
   // Bug 1343824
   {file: "chrome://browser/skin/customizableui/customize-illustration-rtl@2x.png",
    platforms: ["linux", "win"]},
@@ -163,35 +158,7 @@ var whitelist = new Set([
   {file: "chrome://global/skin/arrow/panelarrow-vertical.svg",
    platforms: ["linux"]},
   // Bug 1348362
-  {file: "chrome://global/skin/icons/Close.gif", platforms: ["win"]},
-  {file: "chrome://global/skin/icons/Error.png", platforms: ["linux", "macosx"]},
-  {file: "chrome://global/skin/icons/Landscape.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/Minimize.gif", platforms: ["win"]},
-  {file: "chrome://global/skin/icons/Portrait.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/Print-preview.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/Question.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/Restore.gif", platforms: ["win"]},
-  {file: "chrome://global/skin/icons/Search-close.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/Search-glass.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/Warning.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/checkbox.png", platforms: ["macosx"]},
-  {file: "chrome://global/skin/icons/checkbox@2x.png", platforms: ["macosx"]},
-  {file: "chrome://global/skin/icons/close-inverted.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/close-inverted@2x.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/close.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/close@2x.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/collapse.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/error-64.png", platforms: ["linux", "win"]},
-  {file: "chrome://global/skin/icons/error-large.png", platforms: ["macosx"]},
-  {file: "chrome://global/skin/icons/expand.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/folder-item.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/question-large.png", platforms: ["macosx"]},
-  {file: "chrome://global/skin/icons/warning-32.png", platforms: ["macosx"]},
   {file: "chrome://global/skin/icons/warning-64.png", platforms: ["linux", "win"]},
-  {file: "chrome://global/skin/icons/warning-large.png", platforms: ["linux"]},
-  {file: "chrome://global/skin/icons/windowControls.png", platforms: ["linux"]},
-  // Bug 1348521
-  {file: "chrome://global/skin/linkTree.css"},
   // Bug 1348522
   {file: "chrome://global/skin/media/clicktoplay-bgtexture.png"},
   {file: "chrome://global/skin/media/videoClickToPlayButton.svg"},
@@ -214,10 +181,6 @@ var whitelist = new Set([
   // Bug 1348533
   {file: "chrome://mozapps/skin/downloads/buttons.png", platforms: ["macosx"]},
   {file: "chrome://mozapps/skin/downloads/downloadButtons.png", platforms: ["linux", "win"]},
-  // Bug 1348555
-  {file: "chrome://mozapps/skin/extensions/dictionaryGeneric-16.png"},
-  {file: "chrome://mozapps/skin/extensions/search.png", platforms: ["macosx"]},
-  {file: "chrome://mozapps/skin/extensions/themeGeneric-16.png"},
   // Bug 1348556
   {file: "chrome://mozapps/skin/plugins/pluginBlocked.png"},
   // Bug 1348558
@@ -235,10 +198,6 @@ var whitelist = new Set([
   {file: "resource://gre/modules/Manifest.jsm"},
   // Bug 1351089
   {file: "resource://gre/modules/PresentationDeviceInfoManager.jsm"},
-  // Bug 1351091
-  {file: "resource://gre/modules/Profiler.jsm"},
-  // Bug 1351658
-  {file: "resource://gre/modules/PropertyListUtils.jsm", platforms: ["linux", "win"]},
   // Bug 1351097
   {file: "resource://gre/modules/accessibility/AccessFu.jsm"},
   // Bug 1351637
@@ -546,11 +505,11 @@ function findChromeUrlsFromArray(array, prefix) {
   }
 }
 
-add_task(function* checkAllTheFiles() {
+add_task(async function checkAllTheFiles() {
   let libxulPath = OS.Constants.Path.libxul;
   if (AppConstants.platform != "macosx")
     libxulPath = OS.Constants.Path.libDir + "/" + libxulPath;
-  let libxul = yield OS.File.read(libxulPath);
+  let libxul = await OS.File.read(libxulPath);
   findChromeUrlsFromArray(libxul, "chrome://");
   findChromeUrlsFromArray(libxul, "resource://");
   // Handle NS_LITERAL_STRING.
@@ -564,7 +523,7 @@ add_task(function* checkAllTheFiles() {
   // This asynchronously produces a list of URLs (sadly, mostly sync on our
   // test infrastructure because it runs against jarfiles there, and
   // our zipreader APIs are all sync)
-  let uris = yield generateURIsFromDirTree(appDir, [".css", ".manifest", ".json", ".jpg", ".png", ".gif", ".svg",  ".dtd", ".properties"].concat(kCodeExtensions));
+  let uris = await generateURIsFromDirTree(appDir, [".css", ".manifest", ".json", ".jpg", ".png", ".gif", ".svg",  ".dtd", ".properties"].concat(kCodeExtensions));
 
   // Parse and remove all manifests from the list.
   // NOTE that this must be done before filtering out devtools paths
@@ -581,7 +540,7 @@ add_task(function* checkAllTheFiles() {
   });
 
   // Wait for all manifest to be parsed
-  yield Promise.all(manifestPromises);
+  await Promise.all(manifestPromises);
 
   // We build a list of promises that get resolved when their respective
   // files have loaded and produced no errors.
@@ -596,7 +555,7 @@ add_task(function* checkAllTheFiles() {
   }
 
   // Wait for all the files to have actually loaded:
-  yield Promise.all(allPromises);
+  await Promise.all(allPromises);
 
   // Keep only chrome:// files, and filter out either the devtools paths or
   // the non-devtools paths:

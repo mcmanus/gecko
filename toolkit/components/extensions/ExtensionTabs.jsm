@@ -25,6 +25,7 @@ const {
   DefaultWeakMap,
   EventEmitter,
   ExtensionError,
+  defineLazyGetter,
   getWinUtils,
 } = ExtensionUtils;
 
@@ -180,7 +181,7 @@ class TabBase {
    *        Returns true if this is a private browsing tab, false otherwise.
    *        @readonly
    */
-  get incognito() {
+  get _incognito() {
     return PrivateBrowsingUtils.isBrowserPrivate(this.browser);
   }
 
@@ -642,6 +643,8 @@ class TabBase {
   }
 }
 
+defineLazyGetter(TabBase.prototype, "incognito", function() { return this._incognito; });
+
 // Note: These must match the values in windows.json.
 const WINDOW_ID_NONE = -1;
 const WINDOW_ID_CURRENT = -2;
@@ -916,7 +919,7 @@ class WindowBase {
    *
    * @returns {Iterator<TabBase>}
    */
-  * getTabs() {
+  getTabs() {
     throw new Error("Not implemented");
   }
   /* eslint-enable valid-jsdoc */
@@ -1812,7 +1815,7 @@ class WindowManagerBase {
    * @returns {Iterator<WindowBase>}
    * @abstract
    */
-  * getAll() {
+  getAll() {
     throw new Error("Not implemented");
   }
 

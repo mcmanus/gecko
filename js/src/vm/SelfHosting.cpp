@@ -30,6 +30,7 @@
 #include "builtin/Object.h"
 #include "builtin/Promise.h"
 #include "builtin/Reflect.h"
+#include "builtin/RegExp.h"
 #include "builtin/SelfHostingDefines.h"
 #include "builtin/SIMD.h"
 #include "builtin/TypedObject.h"
@@ -502,39 +503,31 @@ intrinsic_FinishBoundFunctionInit(JSContext* cx, unsigned argc, Value* vp)
     bound->setExtendedSlot(BOUND_FUN_LENGTH_SLOT, NumberValue(length));
 
     // Try to avoid invoking the resolve hook.
-    JSAtom* name = nullptr;
-    if (targetObj->is<JSFunction>() && !targetObj->as<JSFunction>().hasResolvedName())
-        name = targetObj->as<JSFunction>().getUnresolvedName(cx);
+    RootedAtom name(cx);
+    if (targetObj->is<JSFunction>() && !targetObj->as<JSFunction>().hasResolvedName()) {
+        if (!JSFunction::getUnresolvedName(cx, targetObj.as<JSFunction>(), &name))
+            return false;
+    }
 
-    RootedString rootedName(cx);
-    if (name) {
-        rootedName = name;
-    } else {
+    // 19.2.3.2 Function.prototype.bind, steps 9-11.
+    if (!name) {
         // 19.2.3.2 Function.prototype.bind, step 9.
         RootedValue targetName(cx);
         if (!GetProperty(cx, targetObj, targetObj, cx->names().name, &targetName))
             return false;
 
         // 19.2.3.2 Function.prototype.bind, step 10.
-        if (targetName.isString())
-            rootedName = targetName.toString();
+        if (targetName.isString() && !targetName.toString()->empty()) {
+            name = AtomizeString(cx, targetName.toString());
+            if (!name)
+                return false;
+        } else {
+            name = cx->names().empty;
+        }
     }
 
-    // 19.2.3.2 Function.prototype.bind, step 11 (Inlined SetFunctionName).
     MOZ_ASSERT(!bound->hasGuessedAtom());
-    if (rootedName && !rootedName->empty()) {
-        StringBuffer sb(cx);
-        if (!sb.append(cx->names().boundWithSpace) || !sb.append(rootedName))
-            return false;
-
-        RootedAtom nameAtom(cx, sb.finishAtom());
-        if (!nameAtom)
-            return false;
-
-        bound->setAtom(nameAtom);
-    } else {
-        bound->setAtom(cx->names().boundWithSpace);
-    }
+    bound->setAtom(name);
 
     args.rval().setUndefined();
     return true;
@@ -3060,7 +3053,8 @@ CloneObject(JSContext* cx, HandleNativeObject selfHostedObject)
         RegExpObject& reobj = selfHostedObject->as<RegExpObject>();
         RootedAtom source(cx, reobj.getSource());
         MOZ_ASSERT(source->isPermanentAtom());
-        clone = RegExpObject::create(cx, source, reobj.getFlags(), nullptr, cx->tempLifoAlloc());
+        clone = RegExpObject::create(cx, source, reobj.getFlags(),
+                                     nullptr, nullptr, cx->tempLifoAlloc());
     } else if (selfHostedObject->is<DateObject>()) {
         clone = JS::NewDateObject(cx, selfHostedObject->as<DateObject>().clippedTime());
     } else if (selfHostedObject->is<BooleanObject>()) {

@@ -69,6 +69,9 @@ talos:
 awsy:
     - awsy
 
+headless:
+    - marionette-headless
+
 ##
 # Limited test sets for specific platforms
 
@@ -78,6 +81,11 @@ stylo-tests:
     - reftest-stylo
     - mochitest-style
     - mochitest-chrome-style
+
+stylo-sequential-tests:
+    - crashtest
+    - reftest-stylo
+    - mochitest-style
 
 qr-tests:
     - cppunit
@@ -187,6 +195,7 @@ macosx64-tests-talos:
     - talos-other
     - talos-svgr
     - talos-tp5o
+    - talos-perf-reftest
 
 linux32-tests:
     - cppunit
@@ -228,7 +237,6 @@ android-common-tests:
     - mochitest-clipboard
     - mochitest-gpu
     - mochitest-media
-    - mochitest-webgl
     - reftest
     - xpcshell
 

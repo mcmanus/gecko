@@ -502,7 +502,8 @@ Http2Session::NetworkRead(nsAHttpSegmentWriter *writer, char *buf,
 void
 Http2Session::SetWriteCallbacks()
 {
-  if (mConnection && (GetWriteQueueSize() || mOutputQueueUsed)) {
+  if (mConnection &&
+      (GetWriteQueueSize() || (mOutputQueueUsed > mOutputQueueSent))) {
     Unused << mConnection->ResumeSend();
   }
 }
@@ -1388,18 +1389,12 @@ Http2Session::ResponseHeadersComplete()
                                                      mDecompressBuffer,
                                                      mFlatHTTPResponseHeaders,
                                                      httpResponseCode);
-  if (rv == NS_ERROR_ABORT) {
-    LOG(("Http2Session::ResponseHeadersComplete ConvertResponseHeaders aborted\n"));
-    if (mInputFrameDataStream->IsTunnel()) {
-      rv = gHttpHandler->ConnMgr()->CancelTransactions(
-        mInputFrameDataStream->Transaction()->ConnectionInfo(),
-        NS_ERROR_CONNECTION_REFUSED);
-      if (NS_FAILED(rv)) {
-        LOG(("Http2Session::ResponseHeadersComplete "
-             "CancelTransactions failed: %08x\n", static_cast<uint32_t>(rv)));
-      }
-    }
-    CleanupStream(mInputFrameDataStream, rv, CANCEL_ERROR);
+  if (rv == NS_ERROR_NET_RESET) {
+    LOG(("Http2Session::ResponseHeadersComplete %p ConvertResponseHeaders reset\n", this));
+    // This means the stream found connection-oriented auth. Treat this like we
+    // got a reset with HTTP_1_1_REQUIRED.
+    mInputFrameDataStream->Transaction()->DisableSpdy();
+    CleanupStream(mInputFrameDataStream, NS_ERROR_NET_RESET, CANCEL_ERROR);
     ResetDownstreamState();
     return NS_OK;
   } else if (NS_FAILED(rv)) {
@@ -2549,10 +2544,10 @@ Http2Session::ReadSegmentsAgain(nsAHttpSegmentReader *reader,
     *countRead += earlyDataUsed;
   }
 
-  if (mAttemptingEarlyData && !m0RTTStreams.Contains(stream->StreamID())) {
+  if (mAttemptingEarlyData && !m0RTTStreams.Contains(stream)) {
     LOG3(("Http2Session::ReadSegmentsAgain adding stream %d to m0RTTStreams\n",
           stream->StreamID()));
-    m0RTTStreams.AppendElement(stream->StreamID());
+    m0RTTStreams.AppendElement(stream);
   }
 
   // Not every permutation of stream->ReadSegents produces data (and therefore
@@ -3120,9 +3115,8 @@ Http2Session::Finish0RTT(bool aRestart, bool aAlpnChanged)
         aRestart, aAlpnChanged));
 
   for (size_t i = 0; i < m0RTTStreams.Length(); ++i) {
-    Http2Stream *stream = mStreamIDHash.Get(m0RTTStreams[i]);
-    if (stream) {
-      stream->Finish0RTT(aRestart, aAlpnChanged);
+    if (m0RTTStreams[i]) {
+      m0RTTStreams[i]->Finish0RTT(aRestart, aAlpnChanged);
     }
   }
 
@@ -3156,6 +3150,19 @@ Http2Session::Finish0RTT(bool aRestart, bool aAlpnChanged)
   RealignOutputQueue();
 
   return NS_OK;
+}
+
+void
+Http2Session::SetFastOpenStatus(uint8_t aStatus)
+{
+  LOG3(("Http2Session::SetFastOpenStatus %d [this=%p]",
+        aStatus, this));
+
+  for (size_t i = 0; i < m0RTTStreams.Length(); ++i) {
+    if (m0RTTStreams[i]) {
+      m0RTTStreams[i]->Transaction()->SetFastOpenStatus(aStatus);
+    }
+  }
 }
 
 nsresult
@@ -4026,13 +4033,6 @@ void
 Http2Session::SetDNSWasRefreshed()
 {
   MOZ_ASSERT(false, "Http2Session::SetDNSWasRefreshed()");
-}
-
-uint64_t
-Http2Session::Available()
-{
-  MOZ_ASSERT(false, "Http2Session::Available()");
-  return 0;
 }
 
 nsHttpRequestHead *

@@ -7,10 +7,13 @@
 #ifndef mozilla_ServoStyleSet_h
 #define mozilla_ServoStyleSet_h
 
+#include "mozilla/EffectCompositor.h"
 #include "mozilla/EnumeratedArray.h"
 #include "mozilla/EventStates.h"
+#include "mozilla/PostTraversalTask.h"
 #include "mozilla/ServoBindingTypes.h"
 #include "mozilla/ServoElementSnapshot.h"
+#include "mozilla/ServoUtils.h"
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/SheetType.h"
 #include "mozilla/UniquePtr.h"
@@ -30,12 +33,15 @@ class ServoRestyleManager;
 class ServoStyleSheet;
 struct Keyframe;
 struct ServoComputedValuesWithParent;
+class ServoElementSnapshotTable;
 } // namespace mozilla
+class nsCSSCounterStyleRule;
 class nsIContent;
 class nsIDocument;
 class nsStyleContext;
 class nsPresContext;
 struct nsTimingFunction;
+struct RawServoRuleNode;
 struct TreeMatchContext;
 
 namespace mozilla {
@@ -47,6 +53,8 @@ namespace mozilla {
 class ServoStyleSet
 {
   friend class ServoRestyleManager;
+  typedef ServoElementSnapshotTable SnapshotTable;
+
 public:
   class AutoAllowStaleStyles
   {
@@ -85,6 +93,11 @@ public:
     return sInServoTraversal;
   }
 
+  static ServoStyleSet* Current()
+  {
+    return sInServoTraversal;
+  }
+
   ServoStyleSet();
   ~ServoStyleSet();
 
@@ -105,12 +118,6 @@ public:
   ResolveStyleFor(dom::Element* aElement,
                   nsStyleContext* aParentContext,
                   LazyComputeBehavior aMayCompute);
-
-  already_AddRefed<nsStyleContext>
-  ResolveStyleFor(dom::Element* aElement,
-                  nsStyleContext* aParentContext,
-                  LazyComputeBehavior aMayCompute,
-                  TreeMatchContext& aTreeMatchContext);
 
   // Get a style context for a text node (which no rules will match).
   //
@@ -154,7 +161,7 @@ public:
   // style attributes; otherwise, it is ignored.
   already_AddRefed<nsStyleContext>
   ResolvePseudoElementStyle(dom::Element* aOriginatingElement,
-                            mozilla::CSSPseudoElementType aType,
+                            CSSPseudoElementType aType,
                             nsStyleContext* aParentContext,
                             dom::Element* aPseudoElement);
 
@@ -170,7 +177,8 @@ public:
   // Similar to ResolveTransientStyle() but returns ServoComputedValues.
   // Unlike ResolveServoStyle() this function calls PreTraverseSync().
   already_AddRefed<ServoComputedValues>
-  ResolveTransientServoStyle(dom::Element* aElement, nsIAtom* aPseudoTag);
+  ResolveTransientServoStyle(dom::Element* aElement,
+                             CSSPseudoElementType aPseudoTag);
 
   // Get a style context for an anonymous box.  aPseudoTag is the pseudo-tag to
   // use and must be non-null.  It must be an anon box, and must be one that
@@ -205,13 +213,7 @@ public:
   already_AddRefed<nsStyleContext>
   ProbePseudoElementStyle(dom::Element* aOriginatingElement,
                           mozilla::CSSPseudoElementType aType,
-                          nsStyleContext* aParentContext);
-
-  already_AddRefed<nsStyleContext>
-  ProbePseudoElementStyle(dom::Element* aOriginatingElement,
-                          mozilla::CSSPseudoElementType aType,
                           nsStyleContext* aParentContext,
-                          TreeMatchContext& aTreeMatchContext,
                           dom::Element* aPseudoElement = nullptr);
 
   // Test if style is dependent on content state
@@ -223,11 +225,28 @@ public:
 
   /**
    * Performs a Servo traversal to compute style for all dirty nodes in the
-   * document.  This will traverse all of the document's style roots (that
-   * is, its document element, and the roots of the document-level native
-   * anonymous content).  Returns true if a post-traversal is required.
+   * document.
+   *
+   * This will traverse all of the document's style roots (that is, its document
+   * element, and the roots of the document-level native anonymous content).
+   *
+   * |aRestyleBehavior| should be `Normal` or `ForCSSRuleChanges`.
+   * We need to specify |ForCSSRuleChanges| to try to update all CSS animations
+   * when we call this function due to CSS rule changes since @keyframes rules
+   * may have changed.
+   *
+   * Returns true if a post-traversal is required.
    */
-  bool StyleDocument();
+  bool StyleDocument(TraversalRestyleBehavior aRestyleBehavior);
+
+  /**
+   * Performs a Servo animation-only traversal to compute style for all nodes
+   * with the animation-only dirty bit in the document.
+   *
+   * This will traverse all of the document's style roots (that is, its document
+   * element, and the roots of the document-level native anonymous content).
+   */
+  bool StyleDocumentForAnimationOnly();
 
   /**
    * Eagerly styles a subtree of unstyled nodes that was just appended to the
@@ -268,10 +287,11 @@ public:
 #endif
 
   /**
-   * Rebuild the style data. This will force a stylesheet flush, and also
-   * recompute the default computed styles.
+   * Clears the style data, both style sheet data and cached non-inheriting
+   * style contexts, and marks the stylist as needing an unconditional full
+   * rebuild, including a device reset.
    */
-  void RebuildData();
+  void ClearDataAndMarkDeviceDirty();
 
   /**
    * Resolve style for the given element, and return it as a
@@ -279,10 +299,10 @@ public:
    */
   already_AddRefed<ServoComputedValues> ResolveServoStyle(dom::Element* aElement);
 
-  bool FillKeyframesForName(const nsString& aName,
-                            const nsTimingFunction& aTimingFunction,
-                            const ServoComputedValues* aComputedValues,
-                            nsTArray<Keyframe>& aKeyframes);
+  bool GetKeyframesForName(const nsString& aName,
+                           const nsTimingFunction& aTimingFunction,
+                           const ServoComputedValues* aComputedValues,
+                           nsTArray<Keyframe>& aKeyframes);
 
   nsTArray<ComputedKeyframeValues>
   GetComputedKeyframeValuesFor(const nsTArray<Keyframe>& aKeyframes,
@@ -292,8 +312,11 @@ public:
 
   bool AppendFontFaceRules(nsTArray<nsFontFaceRuleContainer>& aArray);
 
+  nsCSSCounterStyleRule* CounterStyleRuleForName(nsIAtom* aName);
+
   already_AddRefed<ServoComputedValues>
-  GetBaseComputedValuesForElement(dom::Element* aElement, nsIAtom* aPseudoTag);
+  GetBaseComputedValuesForElement(dom::Element* aElement,
+                                  CSSPseudoElementType aPseudoType);
 
   /**
    * Resolve style for a given declaration block with/without the parent style.
@@ -304,7 +327,48 @@ public:
   ResolveForDeclarations(ServoComputedValuesBorrowedOrNull aParentOrNull,
                          RawServoDeclarationBlockBorrowed aDeclarations);
 
+  already_AddRefed<RawServoAnimationValue>
+  ComputeAnimationValue(RawServoDeclarationBlock* aDeclaration,
+                        const ServoComputedValuesWithParent& aComputedValues);
+
+  void AppendTask(PostTraversalTask aTask)
+  {
+    MOZ_ASSERT(IsInServoTraversal());
+
+    // We currently only use PostTraversalTasks while the Servo font metrics
+    // mutex is locked.  If we need to use them in other situations during
+    // a traversal, we should assert that we've taken appropriate
+    // synchronization measures.
+    AssertIsMainThreadOrServoFontMetricsLocked();
+
+    mPostTraversalTasks.AppendElement(aTask);
+  }
+
 private:
+  // On construction, sets sInServoTraversal to the given ServoStyleSet.
+  // On destruction, clears sInServoTraversal and calls RunPostTraversalTasks.
+  class MOZ_STACK_CLASS AutoSetInServoTraversal
+  {
+  public:
+    explicit AutoSetInServoTraversal(ServoStyleSet* aSet)
+      : mSet(aSet)
+    {
+      MOZ_ASSERT(!sInServoTraversal);
+      MOZ_ASSERT(aSet);
+      sInServoTraversal = aSet;
+    }
+
+    ~AutoSetInServoTraversal()
+    {
+      MOZ_ASSERT(sInServoTraversal);
+      sInServoTraversal = nullptr;
+      mSet->RunPostTraversalTasks();
+    }
+
+  private:
+    ServoStyleSet* mSet;
+  };
+
   already_AddRefed<nsStyleContext> GetContext(already_AddRefed<ServoComputedValues>,
                                               nsStyleContext* aParentContext,
                                               nsIAtom* aPseudoTag,
@@ -318,24 +382,40 @@ private:
                                               LazyComputeBehavior aMayCompute);
 
   /**
+   * Rebuild the style data. This will force a stylesheet flush, and also
+   * recompute the default computed styles.
+   */
+  void RebuildData();
+
+  /**
+   * Gets the pending snapshots to handle from the restyle manager.
+   */
+  const SnapshotTable& Snapshots();
+
+  /**
    * Resolve all ServoDeclarationBlocks attached to mapped
    * presentation attributes cached on the document.
+   *
    * Call this before jumping into Servo's style system.
    */
   void ResolveMappedAttrDeclarationBlocks();
 
   /**
    * Perform all lazy operations required before traversing
-   * a subtree.  Returns whether a post-traversal is required.
+   * a subtree.
+   *
+   * Returns whether a post-traversal is required.
    */
   bool PrepareAndTraverseSubtree(RawGeckoElementBorrowed aRoot,
                                  TraversalRootBehavior aRootBehavior,
                                  TraversalRestyleBehavior aRestyleBehavior);
 
   /**
-   * Clear our cached mNonInheritingStyleContexts.  We do this when we want to
-   * make sure those style contexts won't live too long (e.g. when rebuilding
-   * all style data or when shutting down the style set).
+   * Clear our cached mNonInheritingStyleContexts.
+   *
+   * We do this when we want to make sure those style contexts won't live too
+   * long (e.g. when rebuilding all style data or when shutting down the style
+   * set).
    */
   void ClearNonInheritingStyleContexts();
 
@@ -345,49 +425,86 @@ private:
    * When aRoot is null, the entire document is pre-traversed.  Otherwise,
    * only the subtree rooted at aRoot is pre-traversed.
    */
-  void PreTraverse(dom::Element* aRoot = nullptr);
+  void PreTraverse(dom::Element* aRoot = nullptr,
+                   EffectCompositor::AnimationRestyleType =
+                     EffectCompositor::AnimationRestyleType::Throttled);
   // Subset of the pre-traverse steps that involve syncing up data
   void PreTraverseSync();
 
-  already_AddRefed<ServoComputedValues> ResolveStyleLazily(dom::Element* aElement,
-                                                           nsIAtom* aPseudoTag);
-
-  uint32_t FindSheetOfType(SheetType aType,
-                           ServoStyleSheet* aSheet);
-
-  uint32_t PrependSheetOfType(SheetType aType,
-                              ServoStyleSheet* aSheet,
-                              uint32_t aReuseUniqueID = 0);
-
-  uint32_t AppendSheetOfType(SheetType aType,
-                             ServoStyleSheet* aSheet,
-                             uint32_t aReuseUniqueID = 0);
-
-  uint32_t InsertSheetOfType(SheetType aType,
-                             ServoStyleSheet* aSheet,
-                             uint32_t aBeforeUniqueID,
-                             uint32_t aReuseUniqueID = 0);
-
-  uint32_t RemoveSheetOfType(SheetType aType,
-                             ServoStyleSheet* aSheet);
-
-  struct Entry {
-    uint32_t uniqueID;
-    RefPtr<ServoStyleSheet> sheet;
-
-    // Provide a cast operator to simplify calling
-    // nsIDocument::FindDocStyleSheetInsertionPoint.
-    operator ServoStyleSheet*() const { return sheet; }
+  /**
+   * A tri-state used to track which kind of stylist state we may need to
+   * update.
+   */
+  enum class StylistState : uint8_t {
+    /** The stylist is not dirty, we should do nothing */
+    NotDirty,
+    /** The style sheets have changed, so we need to update the style data. */
+    StyleSheetsDirty,
+    /**
+     * All style data is dirty and both style sheet data and default computed
+     * values need to be recomputed.
+     */
+    FullyDirty,
   };
+
+  /**
+   * Note that the stylist needs a style flush due to style sheet changes.
+   */
+  void SetStylistStyleSheetsDirty()
+  {
+    if (mStylistState == StylistState::NotDirty) {
+      mStylistState = StylistState::StyleSheetsDirty;
+    }
+  }
+
+  bool StylistNeedsUpdate() const
+  {
+    return mStylistState != StylistState::NotDirty;
+  }
+
+  /**
+   * Update the stylist as needed to ensure style data is up-to-date.
+   *
+   * This should only be called if StylistNeedsUpdate returns true.
+   */
+  void UpdateStylist();
+
+  /**
+   * Helper for correctly calling RebuildStylist without paying the cost of an
+   * extra function call in the common no-rebuild-needed case.
+   */
+  void UpdateStylistIfNeeded()
+  {
+    if (StylistNeedsUpdate()) {
+      UpdateStylist();
+    }
+  }
+
+  already_AddRefed<ServoComputedValues>
+    ResolveStyleLazily(dom::Element* aElement, CSSPseudoElementType aPseudoType);
+
+  void RunPostTraversalTasks();
+
+  void PrependSheetOfType(SheetType aType,
+                          ServoStyleSheet* aSheet);
+
+  void AppendSheetOfType(SheetType aType,
+                         ServoStyleSheet* aSheet);
+
+  void InsertSheetOfType(SheetType aType,
+                         ServoStyleSheet* aSheet,
+                         ServoStyleSheet* aBeforeSheet);
+
+  void RemoveSheetOfType(SheetType aType,
+                         ServoStyleSheet* aSheet);
 
   nsPresContext* mPresContext;
   UniquePtr<RawServoStyleSet> mRawSet;
   EnumeratedArray<SheetType, SheetType::Count,
-                  nsTArray<Entry>> mEntries;
-  int32_t mBatching;
-  uint32_t mUniqueIDCounter;
+                  nsTArray<RefPtr<ServoStyleSheet>>> mSheets;
   bool mAllowResolveStaleStyles;
   bool mAuthorStyleDisabled;
+  StylistState mStylistState;
 
   // Stores pointers to our cached style contexts for non-inheriting anonymous
   // boxes.
@@ -395,7 +512,13 @@ private:
                   nsCSSAnonBoxes::NonInheriting::_Count,
                   RefPtr<nsStyleContext>> mNonInheritingStyleContexts;
 
-  static bool sInServoTraversal;
+  // Tasks to perform after a traversal, back on the main thread.
+  //
+  // These are similar to Servo's SequentialTasks, except that they are
+  // posted by C++ code running on style worker threads.
+  nsTArray<PostTraversalTask> mPostTraversalTasks;
+
+  static ServoStyleSet* sInServoTraversal;
 };
 
 } // namespace mozilla

@@ -326,13 +326,10 @@ TextEditRules::DidDoAction(Selection* aSelection,
   }
 }
 
-NS_IMETHODIMP
-TextEditRules::DocumentIsEmpty(bool* aDocumentIsEmpty)
+NS_IMETHODIMP_(bool)
+TextEditRules::DocumentIsEmpty()
 {
-  NS_ENSURE_TRUE(aDocumentIsEmpty, NS_ERROR_NULL_POINTER);
-
-  *aDocumentIsEmpty = (mBogusNode != nullptr);
-  return NS_OK;
+  return (mBogusNode != nullptr);
 }
 
 void
@@ -533,7 +530,7 @@ TextEditRules::HandleNewLines(nsString& aString,
       aString.ReplaceChar(CRLF, ' ');
       break;
     case nsIPlaintextEditor::eNewlinesStrip:
-      aString.StripChars(CRLF);
+      aString.StripCRLF();
       break;
     case nsIPlaintextEditor::eNewlinesPasteToFirst:
     default: {

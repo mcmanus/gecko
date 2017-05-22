@@ -2078,6 +2078,12 @@ PresShell::SetIgnoreFrameDestruction(bool aIgnore)
 void
 PresShell::NotifyDestroyingFrame(nsIFrame* aFrame)
 {
+  // We must remove these from FrameLayerBuilder::DisplayItemData::mFrameList here,
+  // otherwise the DisplayItemData destructor will use the destroyed frame when it
+  // tries to remove it from the (array) value of this property.
+  FrameLayerBuilder::RemoveFrameFromLayerManager(aFrame, aFrame->DisplayItemData());
+  aFrame->DisplayItemData().Clear();
+
   if (!mIgnoreFrameDestruction) {
     mDocument->StyleImageLoader()->DropRequestsForFrame(aFrame);
 
@@ -2115,13 +2121,6 @@ PresShell::NotifyDestroyingFrame(nsIFrame* aFrame)
     }
 
     mFramesToDirty.RemoveEntry(aFrame);
-  } else {
-    // We must delete this property in situ so that its destructor removes the
-    // frame from FrameLayerBuilder::DisplayItemData::mFrameList -- otherwise
-    // the DisplayItemData destructor will use the destroyed frame when it
-    // tries to remove it from the (array) value of this property.
-    mPresContext->PropertyTable()->
-      Delete(aFrame, FrameLayerBuilder::LayerManagerDataProperty());
   }
 }
 
@@ -4585,12 +4584,14 @@ nsIPresShell::RestyleForCSSRuleChanges()
     // If scopeRoots is empty, we know that mStylesHaveChanged was true at
     // the beginning of this function, and that we need to restyle the whole
     // document.
-    restyleManager->PostRestyleEvent(root, eRestyle_Subtree,
-                                     nsChangeHint(0));
+    restyleManager->PostRestyleEventForCSSRuleChanges(root,
+                                                      eRestyle_Subtree,
+                                                      nsChangeHint(0));
   } else {
     for (Element* scopeRoot : scopeRoots) {
-      restyleManager->PostRestyleEvent(scopeRoot, eRestyle_Subtree,
-                                       nsChangeHint(0));
+      restyleManager->PostRestyleEventForCSSRuleChanges(scopeRoot,
+                                                        eRestyle_Subtree,
+                                                        nsChangeHint(0));
     }
   }
 }
@@ -6947,10 +6948,7 @@ FlushThrottledStyles(nsIDocument *aDocument, void *aData)
   if (shell && shell->IsVisible()) {
     nsPresContext* presContext = shell->GetPresContext();
     if (presContext) {
-      if (presContext->RestyleManager()->IsGecko()) {
-        // XXX stylo: ServoRestyleManager doesn't support animations yet.
-        presContext->RestyleManager()->AsGecko()->UpdateOnlyAnimationStyles();
-      }
+      presContext->RestyleManager()->UpdateOnlyAnimationStyles();
     }
   }
 
@@ -8010,6 +8008,13 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent,
     bool touchIsNew = false;
     bool isHandlingUserInput = false;
 
+    if (mCurrentEventContent && aEvent->IsTargetedAtFocusedWindow()) {
+      nsFocusManager* fm = nsFocusManager::GetFocusManager();
+      if (fm) {
+         fm->FlushBeforeEventHandlingIfNeeded(mCurrentEventContent);
+      }
+    }
+
     // XXX How about IME events and input events for plugins?
     if (aEvent->IsTrusted()) {
       switch (aEvent->mMessage) {
@@ -8157,6 +8162,8 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent,
     // bug 329430
     aEvent->mTarget = nullptr;
 
+    TimeStamp handlerStartTime = TimeStamp::Now();
+
     // 1. Give event to event manager for pre event state changes and
     //    generation of synthetic events.
     rv = manager->PreHandleEvent(mPresContext, aEvent, mCurrentEventFrame,
@@ -8228,6 +8235,39 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent,
     default:
       break;
     }
+
+    if (aEvent->IsTrusted() && aEvent->mTimeStamp > mLastOSWake) {
+      switch (aEvent->mMessage) {
+        case eKeyPress:
+        case eKeyDown:
+        case eKeyUp:
+          Telemetry::AccumulateTimeDelta(Telemetry::INPUT_EVENT_HANDLED_KEYBOARD_MS, handlerStartTime);
+          break;
+        case eMouseDown:
+          Telemetry::AccumulateTimeDelta(Telemetry::INPUT_EVENT_HANDLED_MOUSE_DOWN_MS, handlerStartTime);
+          break;
+        case eMouseUp:
+          Telemetry::AccumulateTimeDelta(Telemetry::INPUT_EVENT_HANDLED_MOUSE_UP_MS, handlerStartTime);
+          break;
+        case eMouseMove:
+          if (aEvent->mFlags.mHandledByAPZ) {
+            Telemetry::AccumulateTimeDelta(Telemetry::INPUT_EVENT_HANDLED_APZ_MOUSE_MOVE_MS, handlerStartTime);
+          }
+          break;
+        case eWheel:
+          if (aEvent->mFlags.mHandledByAPZ) {
+            Telemetry::AccumulateTimeDelta(Telemetry::INPUT_EVENT_HANDLED_APZ_WHEEL_MS, handlerStartTime);
+          }
+          break;
+        case eTouchMove:
+          if (aEvent->mFlags.mHandledByAPZ) {
+            Telemetry::AccumulateTimeDelta(Telemetry::INPUT_EVENT_HANDLED_APZ_TOUCH_MOVE_MS, handlerStartTime);
+          }
+          break;
+        default:
+          break;
+      }
+    }
   }
 
   if (Telemetry::CanRecordBase() &&
@@ -8249,6 +8289,10 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent,
         Telemetry::Accumulate(Telemetry::INPUT_EVENT_RESPONSE_COALESCED_MS,
                               lastMillis);
       }
+      sLastInputCreated = aEvent->mTimeStamp;
+    } else if (aEvent->mTimeStamp < sLastInputCreated) {
+      // This event was created before the last input. May be processing out
+      // of order, so coalesce backwards, too.
       sLastInputCreated = aEvent->mTimeStamp;
     }
     sLastInputProcessed = now;

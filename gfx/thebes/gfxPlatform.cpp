@@ -152,8 +152,6 @@ using namespace mozilla::gfx;
 gfxPlatform *gPlatform = nullptr;
 static bool gEverInitialized = false;
 
-const ContentDeviceData* gContentDeviceInitData = nullptr;
-
 static Mutex* gGfxPlatformPrefsLock = nullptr;
 
 // These two may point to the same profile
@@ -529,8 +527,6 @@ gfxPlatform*
 gfxPlatform::GetPlatform()
 {
     if (!gPlatform) {
-        MOZ_RELEASE_ASSERT(!XRE_IsContentProcess(),
-                           "Content Process should have called InitChild() before first GetPlatform()");
         Init();
     }
     return gPlatform;
@@ -540,19 +536,6 @@ bool
 gfxPlatform::Initialized()
 {
   return !!gPlatform;
-}
-
-/* static */ void
-gfxPlatform::InitChild(const ContentDeviceData& aData)
-{
-  MOZ_ASSERT(XRE_IsContentProcess());
-  MOZ_RELEASE_ASSERT(!gPlatform,
-                     "InitChild() should be called before first GetPlatform()");
-  // Make the provided initial ContentDeviceData available to the init
-  // routines, so they don't have to do a sync request from the parent.
-  gContentDeviceInitData = &aData;
-  Init();
-  gContentDeviceInitData = nullptr;
 }
 
 void RecordingPrefChanged(const char *aPrefName, void *aClosure)
@@ -853,7 +836,13 @@ gfxPlatform::InitMoz2DLogging()
 /* static */ bool
 gfxPlatform::IsHeadless()
 {
-    return PR_GetEnv("MOZ_HEADLESS");
+    static bool initialized = false;
+    static bool headless = false;
+    if (!initialized) {
+      initialized = true;
+      headless = PR_GetEnv("MOZ_HEADLESS");
+    }
+    return headless;
 }
 
 static bool sLayersIPCIsUp = false;
@@ -965,9 +954,6 @@ gfxPlatform::InitLayersIPC()
             wr::RenderThread::Start();
         }
         layers::CompositorThreadHolder::Start();
-#ifdef XP_WIN
-        gfx::DeviceManagerDx::PreloadAttachmentsOnCompositorThread();
-#endif
     }
 }
 
@@ -2045,7 +2031,7 @@ static void ShutdownCMS()
 void
 gfxPlatform::SetupClusterBoundaries(gfxTextRun *aTextRun, const char16_t *aString)
 {
-    if (aTextRun->GetFlags() & gfxTextRunFactory::TEXT_IS_8BIT) {
+    if (aTextRun->GetFlags() & gfx::ShapedTextFlags::TEXT_IS_8BIT) {
         // 8-bit text doesn't have clusters.
         // XXX is this true in all languages???
         // behdad: don't think so.  Czech for example IIRC has a
@@ -2101,6 +2087,7 @@ gfxPlatform::FontsPrefsChanged(const char *aPref)
     } else if (!strcmp(GFX_PREF_OPENTYPE_SVG, aPref)) {
         mOpenTypeSVGEnabled = UNINITIALIZED_VALUE;
         gfxFontCache::GetCache()->AgeAllGenerations();
+        gfxFontCache::GetCache()->NotifyGlyphsChanged();
     }
 }
 
@@ -2360,6 +2347,11 @@ gfxPlatform::InitWebRenderConfig()
 
   if (prefEnabled) {
     featureWebRender.UserEnable("Enabled by pref");
+  } else {
+    const char* env = PR_GetEnv("MOZ_WEBRENDER");
+    if (env && *env == '1') {
+      featureWebRender.UserEnable("Enabled by envvar");
+    }
   }
 
   // WebRender relies on the GPU process when on Windows
@@ -2679,11 +2671,6 @@ void
 gfxPlatform::FetchAndImportContentDeviceData()
 {
   MOZ_ASSERT(XRE_IsContentProcess());
-
-  if (gContentDeviceInitData) {
-    ImportContentDeviceData(*gContentDeviceInitData);
-    return;
-  }
 
   mozilla::dom::ContentChild* cc = mozilla::dom::ContentChild::GetSingleton();
 

@@ -7,7 +7,7 @@
 #define MEDIA_PREFS_H
 
 #ifdef MOZ_WIDGET_ANDROID
-#include "AndroidBridge.h"
+#include "GeneratedJNIWrappers.h"
 #endif
 
 #include "mozilla/Atomics.h"
@@ -181,6 +181,8 @@ private:
   DECL_MEDIA_PREF("media.rust.mp4parser",                     EnableRustMP4Parser, bool, false);
 #endif
 
+  DECL_MEDIA_PREF("media.mp4.enabled",                        MP4Enabled, bool, false);
+
   // Error/warning handling, Decoder Doctor
   DECL_MEDIA_PREF("media.playback.warnings-as-errors",        MediaWarningsAsErrors, bool, false);
   DECL_MEDIA_PREF("media.playback.warnings-as-errors.stagefright-vs-rust",
@@ -199,8 +201,7 @@ private:
   static int32_t MediaDecoderLimitDefault()
   {
 #ifdef MOZ_WIDGET_ANDROID
-    if (AndroidBridge::Bridge() &&
-        AndroidBridge::Bridge()->GetAPIVersion() < 18) {
+    if (jni::GetAPIVersion() < 18) {
       // Older Android versions have broken support for multiple simultaneous
       // decoders, see bug 1278574.
       return 1;

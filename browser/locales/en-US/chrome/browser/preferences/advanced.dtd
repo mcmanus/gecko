@@ -31,17 +31,17 @@
 <!ENTITY healthReportDesc.label          "Helps you understand your browser performance and shares data with &vendorShortName; about your browser health">
 <!ENTITY enableHealthReport.label        "Enable &brandShortName; Health Report">
 <!ENTITY enableHealthReport.accesskey    "R">
-<!ENTITY healthReportLearnMore.label     "Learn More">
+<!ENTITY healthReportLearnMore.label     "Learn more">
 
 <!ENTITY telemetryDesc.label             "Shares performance, usage, hardware and customization data about your browser with &vendorShortName; to help us make &brandShortName; better">
 <!ENTITY enableTelemetryData.label       "Share Additional Data (i.e., Telemetry)">
 <!ENTITY enableTelemetryData.accesskey   "T">
-<!ENTITY telemetryLearnMore.label        "Learn More">
+<!ENTITY telemetryLearnMore.label        "Learn more">
 
 <!ENTITY crashReporterDesc2.label         "Crash reports help &vendorShortName; fix problems and make your browser more stable and secure">
 <!ENTITY alwaysSubmitCrashReports.label   "Allow &brandShortName; to send backlogged crash reports on your behalf">
 <!ENTITY alwaysSubmitCrashReports.accesskey "c">
-<!ENTITY crashReporterLearnMore.label     "Learn More">
+<!ENTITY crashReporterLearnMore.label     "Learn more">
 
 <!ENTITY networkTab.label                "Network">
 
@@ -81,7 +81,19 @@
 
 <!ENTITY updateTab.label                 "Update">
 
+<!-- LOCALIZATION NOTE (updateApplication.label):
+  Strings from aboutDialog.dtd are displayed in this section of the preferences.
+  Please check for possible accesskey conflicts.
+-->
 <!ENTITY updateApplication.label         "&brandShortName; Updates">
+<!-- LOCALIZATION NOTE (updateApplication.version.*): updateApplication.version.pre
+# is followed by a version number, keep the trailing space or replace it with a
+# different character as needed. updateApplication.version.post is displayed
+# after the version number, and is empty on purpose for English. You can use it
+# if required by your language.
+ -->
+<!ENTITY updateApplication.version.pre   "Version ">
+<!ENTITY updateApplication.version.post  "">
 <!ENTITY updateApplication.description   "Allow &brandShortName; to">
 <!ENTITY updateAuto2.label               "Automatically install updates (recommended for improved security)">
 <!ENTITY updateAuto2.accesskey           "A">
@@ -132,6 +144,8 @@
                                          "Recommended performance settings are tailored to your computer.">
 <!ENTITY useRecommendedPerformanceSettings.accesskey
                                          "U">
+<!ENTITY performanceSettingsLearnMore.label
+                                         "Learn more">
 <!ENTITY limitContentProcess.label       "Content process limit">
 <!ENTITY limitContentProcess.description
                                          "More content processes can make &brandShortName; more responsive when using multiple tabs, but will also consume more memory.">

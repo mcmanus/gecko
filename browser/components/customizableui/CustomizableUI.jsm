@@ -29,6 +29,11 @@ XPCOMUtils.defineLazyServiceGetter(this, "gELS",
   "@mozilla.org/eventlistenerservice;1", "nsIEventListenerService");
 XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
                                   "resource://gre/modules/LightweightThemeManager.jsm");
+XPCOMUtils.defineLazyPreferenceGetter(this, "gPhotonStructure", "browser.photon.structure.enabled", false,
+  (pref, oldValue, newValue) => {
+    CustomizableUIInternal._updateAreasForPhoton();
+    CustomizableUIInternal.notifyListeners("onPhotonChanged");
+  });
 
 const kNSXUL = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
@@ -38,7 +43,6 @@ const kPrefCustomizationState        = "browser.uiCustomization.state";
 const kPrefCustomizationAutoAdd      = "browser.uiCustomization.autoAdd";
 const kPrefCustomizationDebug        = "browser.uiCustomization.debug";
 const kPrefDrawInTitlebar            = "browser.tabs.drawInTitlebar";
-const kPrefWebIDEInNavbar            = "devtools.webide.widget.inNavbarByDefault";
 
 const kExpectedWindowURL = "chrome://browser/content/browser.xul";
 
@@ -155,6 +159,8 @@ var gUIStateBeforeReset = {
   currentTheme: null,
 };
 
+var gDefaultPanelPlacements = null;
+
 XPCOMUtils.defineLazyGetter(this, "log", () => {
   let scope = {};
   Cu.import("resource://gre/modules/Console.jsm", scope);
@@ -227,19 +233,8 @@ var CustomizableUIInternal = {
       }
     }
 
-    this.registerArea(CustomizableUI.AREA_PANEL, {
-      anchor: "PanelUI-menu-button",
-      type: CustomizableUI.TYPE_MENU_PANEL,
-      defaultPlacements: panelPlacements
-    }, true);
-    PanelWideWidgetTracker.init();
-
-    if (Services.prefs.getBoolPref("browser.photon.structure.enabled")) {
-      this.registerArea(CustomizableUI.AREA_FIXED_OVERFLOW_PANEL, {
-        type: CustomizableUI.TYPE_MENU_PANEL,
-        defaultPlacements: [],
-      }, true);
-    }
+    gDefaultPanelPlacements = panelPlacements;
+    this._updateAreasForPhoton();
 
     let navbarPlacements = [
       "urlbar-container",
@@ -251,10 +246,6 @@ var CustomizableUIInternal = {
 
     if (AppConstants.MOZ_DEV_EDITION) {
       navbarPlacements.splice(2, 0, "developer-button");
-    }
-
-    if (Services.prefs.getBoolPref(kPrefWebIDEInNavbar)) {
-      navbarPlacements.push("webide-button");
     }
 
     // Place this last, when createWidget is called for pocket, it will
@@ -308,6 +299,34 @@ var CustomizableUIInternal = {
       defaultPlacements: ["addonbar-closebutton", "status-bar"],
       defaultCollapsed: false,
     }, true);
+  },
+
+  _updateAreasForPhoton() {
+    if (gPhotonStructure) {
+      if (gAreas.has(CustomizableUI.AREA_PANEL)) {
+        this.unregisterArea(CustomizableUI.AREA_PANEL, true);
+      }
+      this.registerArea(CustomizableUI.AREA_FIXED_OVERFLOW_PANEL, {
+        type: CustomizableUI.TYPE_MENU_PANEL,
+        defaultPlacements: [],
+      }, true);
+    } else {
+      if (gAreas.has(CustomizableUI.AREA_FIXED_OVERFLOW_PANEL)) {
+        this.unregisterArea(CustomizableUI.AREA_FIXED_OVERFLOW_PANEL, true);
+      }
+      // In tests we destroy some widgets. Those should be removed from the
+      // default placements when re-registering the panel.
+      let placementsToUse = Array.from(gDefaultPanelPlacements);
+      if (!gPalette.has("e10s-button") && placementsToUse.includes("e10s-button")) {
+        placementsToUse.splice(placementsToUse.indexOf("e10s-button"), 1);
+      }
+      this.registerArea(CustomizableUI.AREA_PANEL, {
+        anchor: "PanelUI-menu-button",
+        type: CustomizableUI.TYPE_MENU_PANEL,
+        defaultPlacements: placementsToUse,
+      }, true);
+      PanelWideWidgetTracker.init();
+    }
   },
 
   get _builtinToolbars() {
@@ -3732,7 +3751,7 @@ this.CustomizableUI = {
     while (node && !place) {
       if (node.localName == "toolbar")
         place = "toolbar";
-      else if (node.id == CustomizableUI.AREA_PANEL)
+      else if (node.id == CustomizableUI.AREA_PANEL || node.id == CustomizableUI.AREA_FIXED_OVERFLOW_PANEL)
         place = "panel";
       else if (node.id == "customization-palette")
         place = "palette";
@@ -4154,7 +4173,7 @@ OverflowableToolbar.prototype = {
     if (this._chevron.open) {
       this._panel.hidePopup();
       this._chevron.open = false;
-    } else {
+    } else if (this._panel.state != "hiding") {
       this.show();
     }
   },

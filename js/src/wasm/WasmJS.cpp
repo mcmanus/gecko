@@ -815,6 +815,7 @@ WasmModuleObject::create(JSContext* cx, Module& module, HandleObject proto)
 
     obj->initReservedSlot(MODULE_SLOT, PrivateValue(&module));
     module.AddRef();
+    cx->zone()->updateJitCodeMallocBytes(module.codeLength());
     return obj;
 }
 
@@ -1131,7 +1132,7 @@ WasmInstanceObject::getExportedFunction(JSContext* cx, HandleWasmInstanceObject 
     // asm.js needs to act like a normal JS function which means having the name
     // from the original source and being callable as a constructor.
     if (instance.isAsmJS()) {
-        RootedAtom name(cx, instance.code().getFuncAtom(cx, funcIndex));
+        RootedAtom name(cx, instance.getFuncAtom(cx, funcIndex));
         if (!name)
             return false;
 
@@ -1791,14 +1792,6 @@ WebAssembly_toSource(JSContext* cx, unsigned argc, Value* vp)
 #endif
 
 static bool
-Nop(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    args.rval().setUndefined();
-    return true;
-}
-
-static bool
 Reject(JSContext* cx, const CompileArgs& args, UniqueChars error, Handle<PromiseObject*> promise)
 {
     if (!error) {
@@ -1918,11 +1911,7 @@ WebAssembly_compile(JSContext* cx, unsigned argc, Value* vp)
         return false;
     }
 
-    RootedFunction nopFun(cx, NewNativeFunction(cx, Nop, 0, nullptr));
-    if (!nopFun)
-        return false;
-
-    Rooted<PromiseObject*> promise(cx, PromiseObject::create(cx, nopFun));
+    Rooted<PromiseObject*> promise(cx, PromiseObject::createSkippingExecutor(cx));
     if (!promise)
         return false;
 
@@ -2015,11 +2004,7 @@ WebAssembly_instantiate(JSContext* cx, unsigned argc, Value* vp)
         return false;
     }
 
-    RootedFunction nopFun(cx, NewNativeFunction(cx, Nop, 0, nullptr));
-    if (!nopFun)
-        return false;
-
-    Rooted<PromiseObject*> promise(cx, PromiseObject::create(cx, nopFun));
+    Rooted<PromiseObject*> promise(cx, PromiseObject::createSkippingExecutor(cx));
     if (!promise)
         return false;
 

@@ -617,7 +617,7 @@ imgRequestProxy* NewStaticProxy(imgRequestProxy* aThis)
 {
   nsCOMPtr<nsIPrincipal> currentPrincipal;
   aThis->GetImagePrincipal(getter_AddRefs(currentPrincipal));
-  RefPtr<Image> image = aThis->GetImage();
+  RefPtr<image::Image> image = aThis->GetImage();
   return new imgRequestProxyStatic(image, currentPrincipal);
 }
 
@@ -643,8 +643,6 @@ imgRequestProxy::PerformClone(imgINotificationObserver* aObserver,
                               imgRequestProxy* (aAllocFn)(imgRequestProxy*),
                               imgRequestProxy** aClone)
 {
-  MOZ_RELEASE_ASSERT(NS_IsMainThread());
-
   NS_PRECONDITION(aClone, "Null out param");
 
   LOG_SCOPE(gImgLog, "imgRequestProxy::Clone");

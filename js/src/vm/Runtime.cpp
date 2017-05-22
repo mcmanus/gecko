@@ -177,7 +177,6 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     liveRuntimesCount++;
 
     /* Initialize infallibly first, so we can goto bad and JS_DestroyRuntime. */
-    JS_INIT_CLIST(&onNewGlobalObjectWatchers());
 
     PodZero(&asmJSCacheOps);
     lcovOutput().init();
@@ -695,8 +694,13 @@ FreeOp::isDefaultFreeOp() const
 JSObject*
 JSRuntime::getIncumbentGlobal(JSContext* cx)
 {
-    MOZ_ASSERT(cx->getIncumbentGlobalCallback,
-               "Must set a callback using SetGetIncumbentGlobalCallback before using Promises");
+    // If the embedding didn't set a callback for getting the incumbent
+    // global, the currently active global is used.
+    if (!cx->getIncumbentGlobalCallback) {
+        if (!cx->compartment())
+            return nullptr;
+        return cx->global();
+    }
 
     return cx->getIncumbentGlobalCallback(cx);
 }

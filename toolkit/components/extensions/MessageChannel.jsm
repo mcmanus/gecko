@@ -112,8 +112,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "ExtensionUtils",
                                   "resource://gre/modules/ExtensionUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
                                   "resource://gre/modules/PromiseUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-                                  "resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "MessageManagerProxy",
                             () => ExtensionUtils.MessageManagerProxy);
@@ -458,7 +456,10 @@ this.MessageChannel = {
    *        message by returning `false`. See `getHandlers` for the parameters.
    */
   addListener(targets, messageName, handler) {
-    for (let target of [].concat(targets)) {
+    if (!Array.isArray(targets)) {
+      targets = [targets];
+    }
+    for (let target of targets) {
       this.messageManagers.get(target).addHandler(messageName, handler);
     }
   },
@@ -474,7 +475,10 @@ this.MessageChannel = {
    *    The handler to stop dispatching to.
    */
   removeListener(targets, messageName, handler) {
-    for (let target of [].concat(targets)) {
+    if (!Array.isArray(targets)) {
+      targets = [targets];
+    }
+    for (let target of targets) {
       if (this.messageManagers.has(target)) {
         this.messageManagers.get(target).removeHandler(messageName, handler);
       }

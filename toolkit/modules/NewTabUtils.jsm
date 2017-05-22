@@ -12,7 +12,6 @@ const Cu = Components.utils;
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 Cu.importGlobalProperties(["btoa"]);
 
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
@@ -484,8 +483,6 @@ var PinnedLinks = {
       return false;
     }
     aLink.type = "history";
-    // always remove targetedSite
-    delete aLink.targetedSite;
     return true;
   },
 
@@ -870,13 +867,13 @@ var ActivityStreamProvider = {
    * @returns {Promise} Returns a promise with the array of links with favicon data,
    *                    mimeType, and byte array length
    */
-  _addFavicons: Task.async(function*(aLinks) {
+  async _addFavicons(aLinks) {
     if (aLinks.length) {
       // Each link in the array needs a favicon for it's page - so we fire off
       // a promise for each link to compute the favicon data and attach it back
       // to the original link object. We must wait until all favicons for
       // the array of links are computed before returning
-      yield Promise.all(aLinks.map(link => new Promise(resolve => {
+      await Promise.all(aLinks.map(link => new Promise(resolve => {
         return PlacesUtils.favicons.getFaviconDataForPage(
             Services.io.newURI(link.url),
             (iconuri, len, data, mime) => {
@@ -906,7 +903,7 @@ var ActivityStreamProvider = {
       ));
     }
     return aLinks;
-  }),
+  },
 
   /**
    * Add the eTLD to each link in the array of links.
@@ -928,82 +925,6 @@ var ActivityStreamProvider = {
   },
 
   /*
-   * Initializes Activity Stream provider - adds a history observer and a
-   * bookmarks observer.
-   */
-  init() {
-    PlacesUtils.history.addObserver(this.historyObserver, true);
-    PlacesUtils.bookmarks.addObserver(this.bookmarksObsever, true);
-  },
-
-  /**
-   * A set of functions called by @mozilla.org/browser/nav-historyservice
-   * All history events are emitted from this object.
-   */
-  historyObserver: {
-    onDeleteURI(uri) {
-      Services.obs.notifyObservers(null, "newtab-deleteURI", {url: uri.spec});
-    },
-
-    onClearHistory() {
-      Services.obs.notifyObservers(null, "newtab-clearHistory");
-    },
-
-    onFrecencyChanged(uri, newFrecency, guid, hidden, lastVisitDate) {
-      if (!hidden && lastVisitDate) {
-        Services.obs.notifyObservers(null, "newtab-linkChanged", {
-          url: uri.spec,
-          frecency: newFrecency,
-          lastVisitDate,
-          type: "history"
-        });
-      }
-    },
-
-    onManyFrecenciesChanged() {
-      Services.obs.notifyObservers(null, "newtab-manyLinksChanged");
-    },
-
-    onTitleChanged(uri, newTitle) {
-      Services.obs.notifyObservers(null, "newtab-linkChanged", {url: uri.spec, title: newTitle});
-    },
-
-    QueryInterface: XPCOMUtils.generateQI([Ci.nsINavHistoryObserver,
-                                           Ci.nsISupportsWeakReference])
-  },
-
-  /**
-   * A set of functions called by @mozilla.org/browser/nav-bookmarks-service
-   * All bookmark events are emitted from this object.
-   */
-  bookmarksObsever: {
-    onItemAdded(id, folderId, index, type, uri, title, dateAdded, guid) {
-      if (type === PlacesUtils.bookmarks.TYPE_BOOKMARK) {
-        ActivityStreamProvider.getBookmark(guid).then(bookmark => {
-          Services.obs.notifyObservers(null, "newtab-bookmarkAdded", bookmark);
-        }).catch(Cu.reportError);
-      }
-    },
-
-    onItemRemoved(id, folderId, index, type, uri) {
-      if (type === PlacesUtils.bookmarks.TYPE_BOOKMARK) {
-        Services.obs.notifyObservers(null, "newtab-bookmarkRemoved", {bookmarkId: id, url: uri.spec});
-      }
-    },
-
-    onItemChanged(id, property, isAnnotation, value, lastModified, type, parent, guid) {
-      if (type === PlacesUtils.bookmarks.TYPE_BOOKMARK) {
-        ActivityStreamProvider.getBookmark(guid).then(bookmark => {
-          Services.obs.notifyObservers(null, "newtab-bookmarkChanged", bookmark);
-        }).catch(Cu.reportError);
-      }
-    },
-
-    QueryInterface: XPCOMUtils.generateQI([Ci.nsINavBookmarkObserver,
-                                           Ci.nsISupportsWeakReference])
-  },
-
-  /*
    * Gets the top frecent sites for Activity Stream.
    *
    * @param {Object} aOptions
@@ -1011,7 +932,7 @@ var ActivityStreamProvider = {
    *
    * @returns {Promise} Returns a promise with the array of links as payload.
    */
-  getTopFrecentSites: Task.async(function*(aOptions = {}) {
+  async getTopFrecentSites(aOptions = {}) {
     let {ignoreBlocked} = aOptions;
 
     // GROUP first by rev_host to get the most-frecent page of an exact host
@@ -1046,7 +967,7 @@ var ActivityStreamProvider = {
                     ORDER BY frecency DESC, lastVisitDate DESC, url
                     LIMIT ${limit}`;
 
-    let links = yield this.executePlacesQuery(sqlQuery, {
+    let links = await this.executePlacesQuery(sqlQuery, {
       columns: [
         "bookmarkGuid",
         "frecency",
@@ -1062,9 +983,9 @@ var ActivityStreamProvider = {
       links = links.filter(link => !BlockedLinks.isBlocked(link));
     }
     links = links.slice(0, TOP_SITES_LIMIT);
-    links = yield this._addFavicons(links);
+    links = await this._addFavicons(links);
     return this._processLinks(links);
-  }),
+  },
 
   /**
    * Gets a specific bookmark given an id
@@ -1072,8 +993,8 @@ var ActivityStreamProvider = {
    * @param {String} aGuid
    *          A bookmark guid to use as a refrence to fetch the bookmark
    */
-  getBookmark: Task.async(function*(aGuid) {
-    let bookmark = yield PlacesUtils.bookmarks.fetch(aGuid);
+  async getBookmark(aGuid) {
+    let bookmark = await PlacesUtils.bookmarks.fetch(aGuid);
     if (!bookmark) {
       return null;
     }
@@ -1083,32 +1004,32 @@ var ActivityStreamProvider = {
     result.lastModified = bookmark.lastModified.getTime();
     result.url = bookmark.url.href;
     return result;
-  }),
+  },
 
   /**
    * Gets History size
    *
    * @returns {Promise} Returns a promise with the count of moz_places records
    */
-  getHistorySize: Task.async(function*() {
+  async getHistorySize() {
     let sqlQuery = `SELECT count(*) FROM moz_places
                     WHERE hidden = 0 AND last_visit_date NOT NULL`;
 
-    let result = yield this.executePlacesQuery(sqlQuery);
+    let result = await this.executePlacesQuery(sqlQuery);
     return result;
-  }),
+  },
 
   /**
    * Gets Bookmarks count
    *
    * @returns {Promise} Returns a promise with the count of bookmarks
    */
-  getBookmarksSize: Task.async(function*() {
+  async getBookmarksSize() {
     let sqlQuery = `SELECT count(*) FROM moz_bookmarks WHERE type = :type`;
 
-    let result = yield this.executePlacesQuery(sqlQuery, {params: {type: PlacesUtils.bookmarks.TYPE_BOOKMARK}});
+    let result = await this.executePlacesQuery(sqlQuery, {params: {type: PlacesUtils.bookmarks.TYPE_BOOKMARK}});
     return result;
-  }),
+  },
 
   /**
    * Executes arbitrary query against places database
@@ -1123,12 +1044,12 @@ var ActivityStreamProvider = {
    *
    * @returns {Promise} Returns a promise with the array of retrieved items
    */
-  executePlacesQuery: Task.async(function*(aQuery, aOptions = {}) {
+  async executePlacesQuery(aQuery, aOptions = {}) {
     let {columns, params} = aOptions;
     let items = [];
     let queryError = null;
-    let conn = yield PlacesUtils.promiseDBConnection();
-    yield conn.executeCached(aQuery, params, aRow => {
+    let conn = await PlacesUtils.promiseDBConnection();
+    await conn.executeCached(aQuery, params, aRow => {
       try {
         let item = null;
         // if columns array is given construct an object
@@ -1154,7 +1075,7 @@ var ActivityStreamProvider = {
       throw new Error(queryError);
     }
     return items;
-  })
+  }
 };
 
 /**
@@ -1172,7 +1093,7 @@ var ActivityStreamLinks = {
   },
 
   onLinkBlocked(aLink) {
-    Services.obs.notifyObservers(null, "newtab-linkChanged", {url: aLink.url, blocked: true})
+    Services.obs.notifyObservers(null, "newtab-linkBlocked", aLink.url);
   },
 
   /**
@@ -1220,9 +1141,9 @@ var ActivityStreamLinks = {
    *
    * @return {Promise} Returns a promise with the array of links as the payload
    */
-  getTopSites: Task.async(function*(aOptions = {}) {
+  async getTopSites(aOptions = {}) {
     return ActivityStreamProvider.getTopFrecentSites(aOptions);
-  })
+  }
 };
 
 /**
@@ -1530,6 +1451,14 @@ var Links = {
       if (links && links.sortedLinks) {
         linkLists.push(links.sortedLinks.slice());
       }
+    }
+
+    return this.mergeLinkLists(linkLists);
+  },
+
+  mergeLinkLists: function Links_mergeLinkLists(linkLists) {
+    if (linkLists.length == 1) {
+      return linkLists[0];
     }
 
     function getNextLink() {
@@ -1843,7 +1772,6 @@ this.NewTabUtils = {
   init: function NewTabUtils_init() {
     if (this.initWithoutProviders()) {
       PlacesProvider.init();
-      ActivityStreamProvider.init();
       Links.addProvider(PlacesProvider);
       BlockedLinks.addObserver(Links);
       BlockedLinks.addObserver(ActivityStreamLinks);

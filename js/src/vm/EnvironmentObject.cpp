@@ -14,7 +14,6 @@
 #include "jsiter.h"
 
 #include "builtin/ModuleObject.h"
-#include "frontend/ParseNode.h"
 #include "gc/Policy.h"
 #include "vm/ArgumentsObject.h"
 #include "vm/AsyncFunction.h"
@@ -3094,23 +3093,6 @@ js::GetDebugEnvironmentForGlobalLexicalEnvironment(JSContext* cx)
 {
     EnvironmentIter ei(cx, &cx->global()->lexicalEnvironment(), &cx->global()->emptyGlobalScope());
     return GetDebugEnvironment(cx, ei);
-}
-
-// See declaration and documentation in jsfriendapi.h
-JS_FRIEND_API(JSObject*)
-js::GetNearestEnclosingWithEnvironmentObjectForFunction(JSFunction* fun)
-{
-    if (!fun->isInterpreted())
-        return &fun->global();
-
-    JSObject* env = fun->environment();
-    while (env && !env->is<WithEnvironmentObject>())
-        env = env->enclosingEnvironment();
-
-    if (!env)
-        return &fun->global();
-
-    return &env->as<WithEnvironmentObject>().object();
 }
 
 bool

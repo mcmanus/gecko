@@ -698,8 +698,7 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
         return self._mach(target=target, env=env)
 
     def _get_mach_executable(self):
-        python = self.query_exe('python2.7')
-        return [python, 'mach']
+        return [sys.executable, 'mach']
 
     def _get_make_executable(self):
         config = self.config
@@ -1033,30 +1032,34 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
             return fn
 
     def _run_tooltool(self):
+        env = self.query_bootstrap_env()
         config = self.config
         dirs = self.query_abs_dirs()
         if not config.get('tooltool_manifest_src'):
             return self.warning(ERROR_MSGS['tooltool_manifest_undetermined'])
-        fetch_script_path = os.path.join(dirs['abs_tools_dir'],
-                                         'scripts/tooltool/tooltool_wrapper.sh')
         tooltool_manifest_path = os.path.join(dirs['abs_mozilla_dir'],
                                               config['tooltool_manifest_src'])
         cmd = [
-            'sh',
-            fetch_script_path,
+            sys.executable, '-u',
+            os.path.join(dirs['abs_mozilla_dir'], 'mach'),
+            'artifact',
+            'toolchain',
+            '-v',
+            '--retry', '4',
+            '--tooltool-manifest',
             tooltool_manifest_path,
+            '--tooltool-url',
             config['tooltool_url'],
-            config['tooltool_bootstrap'],
         ]
-        cmd.extend(config['tooltool_script'])
         auth_file = self._get_tooltool_auth_file()
         if auth_file and os.path.exists(auth_file):
             cmd.extend(['--authentication-file', auth_file])
         cache = config['bootstrap_env'].get('TOOLTOOL_CACHE')
         if cache:
-            cmd.extend(['-c', cache])
+            cmd.extend(['--cache-dir', cache])
         self.info(str(cmd))
-        self.run_command(cmd, cwd=dirs['abs_mozilla_dir'], halt_on_failure=True)
+        self.run_command(cmd, cwd=dirs['abs_mozilla_dir'], halt_on_failure=True,
+                         env=env)
 
     def funsize_props(self):
         """Set buildbot properties required to trigger funsize tasks

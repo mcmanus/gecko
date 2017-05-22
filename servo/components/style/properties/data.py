@@ -18,7 +18,8 @@ SYSTEM_FONT_LONGHANDS = """font_family font_size font_style
                            font_variant_position font_weight
                            font_size_adjust font_variant_alternates
                            font_variant_ligatures font_variant_east_asian
-                           font_variant_numeric font_language_override""".split()
+                           font_variant_numeric font_language_override
+                           font_feature_settings""".split()
 
 
 def maybe_moz_logical_alias(product, side, prop):
@@ -126,6 +127,15 @@ class Keyword(object):
     def maybe_cast(self, type_str):
         return "as " + type_str if self.needs_cast() else ""
 
+    def casted_constant_name(self, value, cast_type):
+        if cast_type is None:
+            raise TypeError("We should specify the cast_type.")
+
+        if self.gecko_enum_prefix is None:
+            return cast_type.upper() + "_" + self.gecko_constant(value)
+        else:
+            return cast_type.upper() + "_" + self.gecko_constant(value).upper().replace("::", "_")
+
 
 def arg_to_bool(arg):
     if isinstance(arg, bool):
@@ -140,7 +150,7 @@ class Longhand(object):
                  need_clone=False, need_index=False, gecko_ffi_name=None, depend_on_viewport_size=False,
                  allowed_in_keyframe_block=True, complex_color=False, cast_type='u8',
                  has_uncacheable_values=False, logical=False, alias=None, extra_prefixes=None, boxed=False,
-                 flags=None, allowed_in_page_rule=False, allow_quirks=False):
+                 flags=None, allowed_in_page_rule=False, allow_quirks=False, vector=False):
         self.name = name
         if not spec:
             raise TypeError("Spec should be specified for %s" % name)
@@ -167,6 +177,7 @@ class Longhand(object):
         self.flags = flags.split() if flags else []
         self.allowed_in_page_rule = arg_to_bool(allowed_in_page_rule)
         self.allow_quirks = allow_quirks
+        self.is_vector = vector
 
         # https://drafts.csswg.org/css-animations/#keyframes
         # > The <declaration-list> inside of <keyframe-block> accepts any CSS property

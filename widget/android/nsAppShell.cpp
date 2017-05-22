@@ -70,6 +70,7 @@
 #include "GeckoProcessManager.h"
 #include "GeckoScreenOrientation.h"
 #include "PrefsHelper.h"
+#include "fennec/GeckoApp.h"
 #include "fennec/MemoryMonitor.h"
 #include "fennec/Telemetry.h"
 #include "fennec/ThumbnailHelper.h"
@@ -239,11 +240,7 @@ public:
 
     static int64_t RunUiThreadCallback()
     {
-        if (!AndroidBridge::Bridge()) {
-            return -1;
-        }
-
-        return AndroidBridge::Bridge()->RunDelayedUiThreadTasks();
+        return AndroidUiThread::RunDelayedTasksIfValid();
     }
 };
 
@@ -368,11 +365,6 @@ public:
                 aName->ToString(), aTopic->ToCString().get(),
                 aCookie->ToString().get());
     }
-
-    static void OnFullScreenPluginHidden(jni::Object::Param aView)
-    {
-        nsPluginInstanceOwner::ExitFullScreen(aView.Get());
-    }
 };
 
 nsAppShell::nsAppShell()
@@ -407,6 +399,7 @@ nsAppShell::nsAppShell()
 
         if (jni::IsFennec()) {
             mozilla::ANRReporter::Init();
+            mozilla::GeckoApp::Init();
             mozilla::MemoryMonitor::Init();
             mozilla::widget::Telemetry::Init();
             mozilla::ThumbnailHelper::Init();
@@ -511,6 +504,7 @@ nsAppShell::Init()
         obsServ->AddObserver(this, "browser-delayed-startup-finished", false);
         obsServ->AddObserver(this, "profile-after-change", false);
         obsServ->AddObserver(this, "tab-child-created", false);
+        obsServ->AddObserver(this, "quit-application", false);
         obsServ->AddObserver(this, "quit-application-granted", false);
         obsServ->AddObserver(this, "xpcom-shutdown", false);
 
@@ -606,11 +600,19 @@ nsAppShell::Observe(nsISupports* aSubject,
             const auto window = static_cast<nsWindow*>(widget.get());
             window->EnableEventDispatcher();
         }
+    } else if (!strcmp(aTopic, "quit-application")) {
+        if (jni::IsAvailable()) {
+            const bool restarting =
+                    aData && NS_LITERAL_STRING("restart").Equals(aData);
+            java::GeckoThread::SetState(
+                    restarting ?
+                    java::GeckoThread::State::RESTARTING() :
+                    java::GeckoThread::State::EXITING());
+        }
+        removeObserver = true;
+
     } else if (!strcmp(aTopic, "quit-application-granted")) {
         if (jni::IsAvailable()) {
-            java::GeckoThread::SetState(
-                    java::GeckoThread::State::EXITING());
-
             // We are told explicitly to quit, perhaps due to
             // nsIAppStartup::Quit being called. We should release our hold on
             // nsIAppStartup and let it continue to quit.

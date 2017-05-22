@@ -25,12 +25,11 @@ ${helpers.single_keyword("caption-side", "top bottom",
     use app_units::Au;
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::specified::{AllowQuirks, Length};
 
     pub mod computed_value {
         use app_units::Au;
-        use properties::animated_properties::{ComputeDistance, Interpolate};
+        use properties::animated_properties::Animatable;
 
         #[derive(Clone, Copy, Debug, PartialEq)]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
@@ -40,17 +39,18 @@ ${helpers.single_keyword("caption-side", "top bottom",
         }
 
         /// https://drafts.csswg.org/css-transitions/#animtype-simple-list
-        impl Interpolate for T {
+        impl Animatable for T {
             #[inline]
-            fn interpolate(&self, other: &Self, time: f64) -> Result<Self, ()> {
+            fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64)
+                -> Result<Self, ()> {
                 Ok(T {
-                    horizontal: try!(self.horizontal.interpolate(&other.horizontal, time)),
-                    vertical: try!(self.vertical.interpolate(&other.vertical, time)),
+                    horizontal: try!(self.horizontal.add_weighted(&other.horizontal,
+                                                                  self_portion, other_portion)),
+                    vertical: try!(self.vertical.add_weighted(&other.vertical,
+                                                              self_portion, other_portion)),
                 })
             }
-        }
 
-        impl ComputeDistance for T {
             #[inline]
             fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
                 self.compute_squared_distance(other).map(|sd| sd.sqrt())
@@ -64,14 +64,7 @@ ${helpers.single_keyword("caption-side", "top bottom",
         }
     }
 
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            self.horizontal.has_viewport_percentage() ||
-            self.vertical.as_ref().map_or(false, |v| v.has_viewport_percentage())
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub struct SpecifiedValue {
         pub horizontal: Length,

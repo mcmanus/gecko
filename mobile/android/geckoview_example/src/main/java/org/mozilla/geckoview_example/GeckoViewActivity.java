@@ -11,6 +11,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.WindowManager;
 
 import org.mozilla.gecko.GeckoView;
 import org.mozilla.gecko.GeckoViewSettings;
@@ -29,6 +30,11 @@ public class GeckoViewActivity extends Activity {
         super.onCreate(savedInstanceState);
         Log.i(LOGTAG, "zerdatime " + SystemClock.elapsedRealtime() +
               " - application start");
+
+        if (BuildConfig.DEBUG) {
+            // In debug builds, we want to load JavaScript resources fresh with each build.
+            GeckoView.preload(this, "-purgecaches");
+        }
 
         setContentView(R.layout.geckoview_activity);
 
@@ -78,6 +84,12 @@ public class GeckoViewActivity extends Activity {
         @Override
         public void onTitleChange(GeckoView view, String title) {
             Log.i(LOGTAG, "Content title changed to " + title);
+        }
+
+        @Override
+        public void onFullScreen(final GeckoView view, final boolean fullScreen) {
+            getWindow().setFlags(fullScreen ? WindowManager.LayoutParams.FLAG_FULLSCREEN : 0,
+                                 WindowManager.LayoutParams.FLAG_FULLSCREEN);
         }
     }
 

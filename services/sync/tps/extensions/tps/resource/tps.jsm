@@ -624,7 +624,7 @@ var TPS = {
         item.decrypt(collectionKey);
         items.push(item.cleartext);
       };
-      collection.get();
+      Async.promiseSpinningly(collection.get());
       return items;
     };
     let serverRecordDumpStr;
@@ -900,10 +900,9 @@ var TPS = {
       // parse the test file
       Services.scriptloader.loadSubScript(file, this);
       this._currentPhase = phase;
+      // cleanup phases are in the format `cleanup-${profileName}`.
       if (this._currentPhase.startsWith("cleanup-")) {
-        let profileToClean = Cc["@mozilla.org/toolkit/profile-service;1"]
-                             .getService(Ci.nsIToolkitProfileService)
-                             .selectedProfile.name;
+        let profileToClean = this._currentPhase.slice("cleanup-".length);
         this.phases[this._currentPhase] = profileToClean;
         this.Phase(this._currentPhase, [[this.Cleanup]]);
       } else {

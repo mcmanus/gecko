@@ -1520,9 +1520,7 @@ class InputStreamParent final
   InputStreamParams* mParams;
   OptionalFileDescriptorSet* mFDs;
 
-#ifdef DEBUG
-  PRThread* mOwningThread;
-#endif
+  NS_DECL_OWNINGTHREAD
 
 public:
   InputStreamParent()
@@ -1530,10 +1528,6 @@ public:
     , mParams(nullptr)
     , mFDs(nullptr)
   {
-#ifdef DEBUG
-    mOwningThread = PR_GetCurrentThread();
-#endif
-
     AssertIsOnOwningThread();
 
     MOZ_COUNT_CTOR(InputStreamParent);
@@ -1546,10 +1540,6 @@ public:
     , mParams(aParams)
     , mFDs(aFDs)
   {
-#ifdef DEBUG
-    mOwningThread = PR_GetCurrentThread();
-#endif
-
     AssertIsOnOwningThread();
     MOZ_ASSERT(aSyncLoopGuard);
     MOZ_ASSERT(!*aSyncLoopGuard);
@@ -1569,9 +1559,7 @@ public:
   void
   AssertIsOnOwningThread() const
   {
-#ifdef DEBUG
-    MOZ_ASSERT(PR_GetCurrentThread() == mOwningThread);
-#endif
+    NS_ASSERT_OWNINGTHREAD(InputStreamParent);
   }
 
   bool
@@ -4802,12 +4790,7 @@ BlobParent::RecvBlobStreamSync(const uint64_t& aStart,
 
   // The actor is alive and will be doing asynchronous work to load the stream.
   // Spin a nested loop here while we wait for it.
-  nsIThread* currentThread = NS_GetCurrentThread();
-  MOZ_ASSERT(currentThread);
-
-  while (!finished) {
-    MOZ_ALWAYS_TRUE(NS_ProcessNextEvent(currentThread));
-  }
+  MOZ_ALWAYS_TRUE(SpinEventLoopUntil([&]() { return finished; }));
 
   return IPC_OK();
 }

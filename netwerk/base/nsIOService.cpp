@@ -188,6 +188,9 @@ nsIOService::nsIOService()
     , mNetworkLinkServiceInitialized(false)
     , mChannelEventSinks(NS_CHANNEL_EVENT_SINK_CATEGORY)
     , mNetworkNotifyChanged(true)
+    , mTotalRequests(0)
+    , mCacheWon(0)
+    , mNetWon(0)
     , mLastOfflineStateChange(PR_IntervalNow())
     , mLastConnectivityChange(PR_IntervalNow())
     , mLastNetworkLinkChange(PR_IntervalNow())
@@ -369,10 +372,14 @@ nsresult
 nsIOService::RecheckCaptivePortal()
 {
   MOZ_ASSERT(NS_IsMainThread(), "Must be called on the main thread");
-  if (mCaptivePortalService) {
-    mCaptivePortalService->RecheckCaptivePortal();
+  if (!mCaptivePortalService) {
+    return NS_OK;
   }
-  return NS_OK;
+  nsCOMPtr<nsIRunnable> task =
+    NewRunnableMethod("nsIOService::RecheckCaptivePortal",
+                      mCaptivePortalService,
+                      &nsICaptivePortalService::RecheckCaptivePortal);
+  return NS_DispatchToMainThread(task);
 }
 
 nsresult
@@ -407,7 +414,7 @@ nsIOService::RecheckCaptivePortalIfLocalRedirect(nsIChannel* newChan)
     PRNetAddrToNetAddr(&prAddr, &netAddr);
     if (IsIPAddrLocal(&netAddr)) {
         // Redirects to local IP addresses are probably captive portals
-        mCaptivePortalService->RecheckCaptivePortal();
+        RecheckCaptivePortal();
     }
 
     return NS_OK;
@@ -583,6 +590,35 @@ NS_IMETHODIMP
 nsIOService::ExtractScheme(const nsACString &inURI, nsACString &scheme)
 {
     return net_ExtractURLScheme(inURI, scheme);
+}
+
+NS_IMETHODIMP
+nsIOService::HostnameIsLocalIPAddress(nsIURI *aURI, bool *aResult)
+{
+  NS_ENSURE_ARG_POINTER(aURI);
+
+  nsCOMPtr<nsIURI> innerURI = NS_GetInnermostURI(aURI);
+  NS_ENSURE_ARG_POINTER(innerURI);
+
+  nsAutoCString host;
+  nsresult rv = innerURI->GetAsciiHost(host);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  *aResult = false;
+
+  PRNetAddr addr;
+  PRStatus result = PR_StringToNetAddr(host.get(), &addr);
+  if (result == PR_SUCCESS) {
+    NetAddr netAddr;
+    PRNetAddrToNetAddr(&addr, &netAddr);
+    if (IsIPAddrLocal(&netAddr)) {
+      *aResult = true;
+    }
+  }
+
+  return NS_OK;
 }
 
 NS_IMETHODIMP 

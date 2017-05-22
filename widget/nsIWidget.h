@@ -1688,6 +1688,14 @@ private:
 
 public:
     /**
+     * If key events have not been handled by content or XBL handlers, they can
+     * be offered to the system (for custom application shortcuts set in system
+     * preferences, for example).
+     */
+    virtual void
+    PostHandleKeyEvent(mozilla::WidgetKeyboardEvent* aEvent);
+
+    /**
      * Activates a native menu item at the position specified by the index
      * string. The index string is a string of positive integers separated
      * by the "|" (pipe) character. The last integer in the string represents
@@ -1809,21 +1817,19 @@ public:
     virtual MOZ_MUST_USE nsresult
     AttachNativeKeyEvent(mozilla::WidgetKeyboardEvent& aEvent) = 0;
 
-    /*
-     * Execute native key bindings for aType.
+    /**
+     * Retrieve edit commands when the key combination of aEvent is used
+     * in platform native applications.
      */
-    typedef void (*DoCommandCallback)(mozilla::Command, void*);
-    enum NativeKeyBindingsType
+    enum NativeKeyBindingsType : uint8_t
     {
       NativeKeyBindingsForSingleLineEditor,
       NativeKeyBindingsForMultiLineEditor,
       NativeKeyBindingsForRichTextEditor
     };
-    virtual bool ExecuteNativeKeyBinding(
-                        NativeKeyBindingsType aType,
-                        const mozilla::WidgetKeyboardEvent& aEvent,
-                        DoCommandCallback aCallback,
-                        void* aCallbackData) = 0;
+    virtual void GetEditCommands(NativeKeyBindingsType aType,
+                                 const mozilla::WidgetKeyboardEvent& aEvent,
+                                 nsTArray<mozilla::CommandInt>& aCommands);
 
     /*
      * Retrieves a reference to notification requests of IME.  Note that the
@@ -1949,6 +1955,13 @@ public:
      */
     virtual CompositorBridgeChild* GetRemoteRenderer()
     { return nullptr; }
+
+    /**
+     * Returns true if the widget requires synchronous repaints on resize,
+     * false otherwise.
+     */
+    virtual bool SynchronouslyRepaintOnResize()
+    { return true; }
 
     /**
      * Some platforms (only cocoa right now) round widget coordinates to the

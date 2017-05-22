@@ -13,7 +13,7 @@ use media_queries::MediaList;
 use self::encoding::{EncodingRef, DecoderTrap};
 use shared_lock::SharedRwLock;
 use std::str;
-use std::sync::Arc;
+use stylearc::Arc;
 use stylesheets::{Stylesheet, StylesheetLoader, Origin, UrlExtraData};
 
 struct RustEncoding;
@@ -88,6 +88,7 @@ impl Stylesheet {
                               &string,
                               url_data,
                               stylesheet_loader,
-                              error_reporter)
+                              error_reporter,
+                              0)
     }
 }

@@ -104,6 +104,7 @@
   <string name="bookmark_folder_items">&bookmark_folder_items;</string>
   <string name="bookmark_folder_one_item">&bookmark_folder_one_item;</string>
   <string name="bookmark_parent_folder">&bookmark_parent_folder;</string>
+  <string name="bookmark_add_folder">&bookmark_add_folder;</string>
 
   <string name="reader_saved_offline">&reader_saved_offline;</string>
   <string name="reader_switch_to_bookmarks">&reader_switch_to_bookmarks;</string>
@@ -435,6 +436,7 @@
   <string name="bookmark_edit_name">&bookmark_edit_name;</string>
   <string name="bookmark_edit_location">&bookmark_edit_location;</string>
   <string name="bookmark_edit_keyword">&bookmark_edit_keyword;</string>
+  <string name="bookmark_select_folder">&bookmark_select_folder;</string>
 
   <string name="pref_use_master_password">&pref_use_master_password;</string>
   <string name="masterpassword_create_title">&masterpassword_create_title;</string>
@@ -617,6 +619,7 @@
   <string name="whatsnew_notification_summary">&whatsnew_notification_summary;</string>
   <!-- https://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/new-android -->
   <string name="whatsnew_notification_url">https://support.mozilla.org/1/mobile/&formatS1;/&formatS2;/&formatS3;/new-android</string>
+  <string name="aurora_transition_notification_url">https://support.mozilla.org/1/mobile/&formatS1;/&formatS2;/&formatS3;/aurora-transition</string>
 
   <string name="promotion_add_to_homescreen">&promotion_add_to_homescreen;</string>
 

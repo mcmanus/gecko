@@ -12,6 +12,7 @@
 
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
+#include "mozilla/layers/PLayerTransactionChild.h"
 #include "mozilla/layers/ImageBridgeChild.h"
 #include "LiveResizeListener.h"
 #include "nsBaseWidget.h"
@@ -162,6 +163,7 @@ nsBaseWidget::nsBaseWidget()
 , mSizeMode(nsSizeMode_Normal)
 , mPopupLevel(ePopupLevelTop)
 , mPopupType(ePopupTypeAny)
+, mHasRemoteContent(false)
 , mCompositorWidgetDelegate(nullptr)
 , mUpdateCursor(true)
 , mUseAttachedEvents(false)
@@ -315,42 +317,9 @@ void nsBaseWidget::DestroyLayerManager()
 }
 
 void
-nsBaseWidget::OnRenderingDeviceReset(uint64_t aSeqNo)
+nsBaseWidget::OnRenderingDeviceReset()
 {
-  if (!mLayerManager || !mCompositorSession) {
-    return;
-  }
-
-  nsTArray<LayersBackend> backendHints;
-  gfxPlatform::GetPlatform()->GetCompositorBackends(ComputeShouldAccelerate(), backendHints);
-
-  // If the existing compositor does not use acceleration, and this widget
-  // should not be accelerated, then there's no point in resetting.
-  //
-  // Note that if this widget should be accelerated, but instead has a basic
-  // compositor, we still reset just in case we're now in the position to get
-  // accelerated layers again.
-  RefPtr<ClientLayerManager> clm = mLayerManager->AsClientLayerManager();
-  if (!ComputeShouldAccelerate() &&
-      clm->GetCompositorBackendType() == LayersBackend::LAYERS_BASIC)
-  {
-    return;
-  }
-
-  // Recreate the compositor.
-  TextureFactoryIdentifier identifier;
-  if (!mCompositorSession->Reset(backendHints, aSeqNo, &identifier)) {
-    // No action was taken, so we don't have to do anything.
-    return;
-  }
-
-  // Invalidate all layers.
-  FrameLayerBuilder::InvalidateAllLayers(mLayerManager);
-
-  // Update the texture factory identifier.
-  clm->UpdateTextureFactoryIdentifier(identifier, aSeqNo);
-  ImageBridgeChild::IdentifyCompositorTextureHost(identifier);
-  gfx::VRManagerChild::IdentifyTextureHost(identifier);
+  DestroyLayerManager();
 }
 
 void
@@ -412,6 +381,7 @@ void nsBaseWidget::BaseCreate(nsIWidget* aParent,
     mBorderStyle = aInitData->mBorderStyle;
     mPopupLevel = aInitData->mPopupLevel;
     mPopupType = aInitData->mPopupHint;
+    mHasRemoteContent = aInitData->mHasRemoteContent;
   }
 
   if (aParent) {
@@ -922,7 +892,9 @@ bool
 nsBaseWidget::UseAPZ()
 {
   return (gfxPlatform::AsyncPanZoomEnabled() &&
-          (WindowType() == eWindowType_toplevel || WindowType() == eWindowType_child));
+          (WindowType() == eWindowType_toplevel ||
+           WindowType() == eWindowType_child ||
+           (WindowType() == eWindowType_popup && HasRemoteContent())));
 }
 
 void nsBaseWidget::CreateCompositor()
@@ -1285,9 +1257,8 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
 
   bool enableWR = gfx::gfxVars::UseWebRender();
   bool enableAPZ = UseAPZ();
-  if (enableWR && !gfxPrefs::APZAllowWithWebRender()) {
-    // Disable APZ on widgets using WebRender, since it doesn't work yet. Allow
-    // it on non-WR widgets or if the pref forces it on.
+  if (enableWR) {
+    // Disable APZ on widgets using WebRender, since it doesn't work yet.
     enableAPZ = false;
   }
   CompositorOptions options(enableAPZ, enableWR);
@@ -1344,8 +1315,13 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
 
     bool success = false;
     if (!backendHints.IsEmpty()) {
-      shadowManager = mCompositorBridgeChild->SendPLayerTransactionConstructor(
-        backendHints, 0, &textureFactoryIdentifier, &success);
+      shadowManager =
+        mCompositorBridgeChild->SendPLayerTransactionConstructor(backendHints, 0);
+      if (shadowManager->SendGetTextureFactoryIdentifier(&textureFactoryIdentifier) &&
+          textureFactoryIdentifier.mParentBackend != LayersBackend::LAYERS_NONE)
+      {
+        success = true;
+      }
     }
 
     if (!success) {
@@ -2306,6 +2282,20 @@ nsIWidget::OnWindowedPluginKeyEvent(const NativeEventData& aKeyEventData,
                                     nsIKeyEventInPluginCallback* aCallback)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+void
+nsIWidget::PostHandleKeyEvent(mozilla::WidgetKeyboardEvent* aEvent)
+{
+}
+
+void
+nsIWidget::GetEditCommands(nsIWidget::NativeKeyBindingsType aType,
+                           const WidgetKeyboardEvent& aEvent,
+                           nsTArray<CommandInt>& aCommands)
+{
+  MOZ_ASSERT(aEvent.IsTrusted());
+  MOZ_ASSERT(aCommands.IsEmpty());
 }
 
 namespace mozilla {

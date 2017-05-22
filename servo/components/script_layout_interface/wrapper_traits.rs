@@ -10,20 +10,21 @@ use OpaqueStyleAndLayoutData;
 use SVGSVGData;
 use atomic_refcell::AtomicRefCell;
 use gfx_traits::{ByteIndex, FragmentType, combine_id_with_fragment_type};
-use html5ever_atoms::{Namespace, LocalName};
-use msg::constellation_msg::PipelineId;
+use html5ever::{Namespace, LocalName};
+use msg::constellation_msg::{BrowsingContextId, PipelineId};
 use range::Range;
 use servo_url::ServoUrl;
 use std::fmt::Debug;
-use std::sync::Arc;
+use style::attr::AttrValue;
 use style::computed_values::display;
 use style::context::SharedStyleContext;
 use style::data::ElementData;
-use style::dom::{LayoutIterator, NodeInfo, PresentationalHintsSynthetizer, TNode};
+use style::dom::{LayoutIterator, NodeInfo, PresentationalHintsSynthesizer, TNode};
 use style::dom::OpaqueNode;
 use style::font_metrics::ServoMetricsProvider;
 use style::properties::{CascadeFlags, ServoComputedValues};
 use style::selector_parser::{PseudoElement, PseudoElementCascadeType, SelectorImpl};
+use style::stylearc::Arc;
 use webrender_traits::ClipId;
 
 #[derive(Copy, PartialEq, Clone, Debug)]
@@ -271,6 +272,10 @@ pub trait ThreadSafeLayoutNode: Clone + Copy + Debug + GetLayoutData + NodeInfo 
 
     fn svg_data(&self) -> Option<SVGSVGData>;
 
+    /// If this node is an iframe element, returns its browsing context ID. If this node is
+    /// not an iframe element, fails.
+    fn iframe_browsing_context_id(&self) -> BrowsingContextId;
+
     /// If this node is an iframe element, returns its pipeline ID. If this node is
     /// not an iframe element, fails.
     fn iframe_pipeline_id(&self) -> PipelineId;
@@ -306,7 +311,7 @@ pub trait DangerousThreadSafeLayoutNode: ThreadSafeLayoutNode {
 pub trait ThreadSafeLayoutElement: Clone + Copy + Sized + Debug +
                                    ::selectors::Element<Impl=SelectorImpl> +
                                    GetLayoutData +
-                                   PresentationalHintsSynthetizer {
+                                   PresentationalHintsSynthesizer {
     type ConcreteThreadSafeLayoutNode: ThreadSafeLayoutNode<ConcreteThreadSafeLayoutElement = Self>;
 
     fn as_node(&self) -> Self::ConcreteThreadSafeLayoutNode;
@@ -330,6 +335,8 @@ pub trait ThreadSafeLayoutElement: Clone + Copy + Sized + Debug +
 
     #[inline]
     fn get_attr(&self, namespace: &Namespace, name: &LocalName) -> Option<&str>;
+
+    fn get_attr_enum(&self, namespace: &Namespace, name: &LocalName) -> Option<&AttrValue>;
 
     fn get_style_data(&self) -> Option<&AtomicRefCell<ElementData>>;
 

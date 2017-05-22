@@ -294,7 +294,7 @@ LocalAllocPolicy::ProcessRequest()
 
   GlobalAllocPolicy::Instance(mTrack).Alloc()->Then(
     mOwnerThread, __func__,
-    [self, token](Token* aToken) {
+    [self, token](RefPtr<Token> aToken) {
       self->mTokenRequest.Complete();
       token->Append(aToken);
       self->mPendingPromise.Resolve(token, __func__);
@@ -570,8 +570,9 @@ public:
     RefPtr<Token> token = mToken.forget();
     return decoder->Shutdown()->Then(
       AbstractThread::GetCurrent(), __func__,
-      [token]() {},
-      [token]() { MOZ_RELEASE_ASSERT(false, "Can't reach here"); });
+      [token]() {
+        return ShutdownPromise::CreateAndResolve(true, __func__);
+      });
   }
 
 private:
@@ -587,9 +588,9 @@ MediaFormatReader::DecoderFactory::RunStage(Data& aData)
       MOZ_ASSERT(!aData.mToken);
       aData.mPolicy->Alloc()->Then(
         mOwner->OwnerThread(), __func__,
-        [this, &aData] (Token* aToken) {
+        [this, &aData] (RefPtr<Token> aToken) {
           aData.mTokenRequest.Complete();
-          aData.mToken = aToken;
+          aData.mToken = aToken.forget();
           aData.mStage = Stage::CreateDecoder;
           RunStage(aData);
         },
@@ -889,8 +890,14 @@ public:
              mTaskQueue, __func__,
              [self, aTime]() { return self->mTrackDemuxer->Seek(aTime); })
       ->Then(mTaskQueue, __func__,
-             [self]() { self->UpdateRandomAccessPoint(); },
-             [self]() { self->UpdateRandomAccessPoint(); });
+             [self](const TimeUnit& aTime) {
+               self->UpdateRandomAccessPoint();
+               return SeekPromise::CreateAndResolve(aTime, __func__);
+             },
+             [self](const MediaResult& aError) {
+               self->UpdateRandomAccessPoint();
+               return SeekPromise::CreateAndReject(aError, __func__);
+             });
   }
 
   RefPtr<SamplesPromise> GetSamples(int32_t aNumSamples) override
@@ -901,8 +908,14 @@ public:
                          return self->mTrackDemuxer->GetSamples(aNumSamples);
                        })
       ->Then(mTaskQueue, __func__,
-             [self]() { self->UpdateRandomAccessPoint(); },
-             [self]() { self->UpdateRandomAccessPoint(); });
+             [self](RefPtr<SamplesHolder> aSamples) {
+               self->UpdateRandomAccessPoint();
+               return SamplesPromise::CreateAndResolve(aSamples.forget(), __func__);
+             },
+             [self](const MediaResult& aError) {
+               self->UpdateRandomAccessPoint();
+               return SamplesPromise::CreateAndReject(aError, __func__);
+             });
   }
 
   bool GetSamplesMayBlock() const override
@@ -938,8 +951,14 @@ public:
                  aTimeThreshold);
              })
       ->Then(mTaskQueue, __func__,
-             [self]() { self->UpdateRandomAccessPoint(); },
-             [self]() { self->UpdateRandomAccessPoint(); });
+             [self](uint32_t aVal) {
+               self->UpdateRandomAccessPoint();
+               return SkipAccessPointPromise::CreateAndResolve(aVal, __func__);
+             },
+             [self](const SkipFailureHolder& aError) {
+               self->UpdateRandomAccessPoint();
+               return SkipAccessPointPromise::CreateAndReject(aError, __func__);
+             });
   }
 
   TimeIntervals GetBuffered() override
@@ -997,12 +1016,14 @@ private:
 RefPtr<MediaDataDemuxer::InitPromise>
 MediaFormatReader::DemuxerProxy::Init()
 {
+  using InitPromise = MediaDataDemuxer::InitPromise;
+
   RefPtr<Data> data = mData;
   RefPtr<AutoTaskQueue> taskQueue = mTaskQueue;
   return InvokeAsync(mTaskQueue, __func__,
                      [data, taskQueue]() {
                        if (!data->mDemuxer) {
-                         return MediaDataDemuxer::InitPromise::CreateAndReject(
+                         return InitPromise::CreateAndReject(
                            NS_ERROR_DOM_MEDIA_CANCELED, __func__);
                        }
                        return data->mDemuxer->Init();
@@ -1010,7 +1031,8 @@ MediaFormatReader::DemuxerProxy::Init()
     ->Then(taskQueue, __func__,
            [data, taskQueue]() {
              if (!data->mDemuxer) { // Was shutdown.
-               return;
+               return InitPromise::CreateAndReject(
+                   NS_ERROR_DOM_MEDIA_CANCELED, __func__);
              }
              data->mNumAudioTrack =
                data->mDemuxer->GetNumberTracks(TrackInfo::kAudioTrack);
@@ -1043,8 +1065,11 @@ MediaFormatReader::DemuxerProxy::Init()
              data->mShouldComputeStartTime =
                data->mDemuxer->ShouldComputeStartTime();
              data->mInitDone = true;
+             return InitPromise::CreateAndResolve(NS_OK, __func__);
            },
-           []() {});
+           [](const MediaResult& aError) {
+             return InitPromise::CreateAndReject(aError, __func__);
+           });
 }
 
 RefPtr<MediaFormatReader::NotifyDataArrivedPromise>
@@ -1293,10 +1318,9 @@ MediaFormatReader::AsyncReadMetadata()
 
   if (mInitDone) {
     // We are returning from dormant.
-    RefPtr<MetadataHolder> metadata = new MetadataHolder();
-    metadata->mInfo = mInfo;
-    metadata->mTags = nullptr;
-    return MetadataPromise::CreateAndResolve(metadata, __func__);
+    MetadataHolder metadata;
+    metadata.mInfo = MakeUnique<MediaInfo>(mInfo);
+    return MetadataPromise::CreateAndResolve(Move(metadata), __func__);
   }
 
   RefPtr<MetadataPromise> p = mMetadataPromise.Ensure(__func__);
@@ -1471,16 +1495,16 @@ MediaFormatReader::MaybeResolveMetadataPromise()
     mInfo.mStartTime = startTime; // mInfo.mStartTime is initialized to 0.
   }
 
-  RefPtr<MetadataHolder> metadata = new MetadataHolder();
-  metadata->mInfo = mInfo;
-  metadata->mTags = mTags->Count() ? mTags.release() : nullptr;
+  MetadataHolder metadata;
+  metadata.mInfo = MakeUnique<MediaInfo>(mInfo);
+  metadata.mTags = mTags->Count() ? Move(mTags) : nullptr;
 
   // We now have all the informations required to calculate the initial buffered
   // range.
   mHasStartTime = true;
   UpdateBuffered();
 
-  mMetadataPromise.Resolve(metadata, __func__);
+  mMetadataPromise.Resolve(Move(metadata), __func__);
 }
 
 bool
@@ -1614,6 +1638,8 @@ MediaFormatReader::OnDemuxFailed(TrackType aTrack, const MediaResult& aError)
 void
 MediaFormatReader::DoDemuxVideo()
 {
+  using SamplesPromise = MediaTrackDemuxer::SamplesPromise;
+
   auto p = mVideo.mTrackDemuxer->GetSamples(1);
 
   if (mVideo.mFirstDemuxedSampleTime.isNothing()) {
@@ -1621,9 +1647,11 @@ MediaFormatReader::DoDemuxVideo()
     p = p->Then(OwnerThread(), __func__,
                 [self] (RefPtr<MediaTrackDemuxer::SamplesHolder> aSamples) {
                   self->OnFirstDemuxCompleted(TrackInfo::kVideoTrack, aSamples);
+                  return SamplesPromise::CreateAndResolve(aSamples.forget(), __func__);
                 },
                 [self] (const MediaResult& aError) {
                   self->OnFirstDemuxFailed(TrackInfo::kVideoTrack, aError);
+                  return SamplesPromise::CreateAndReject(aError, __func__);
                 });
   }
 
@@ -1687,6 +1715,8 @@ MediaFormatReader::RequestAudioData()
 void
 MediaFormatReader::DoDemuxAudio()
 {
+  using SamplesPromise = MediaTrackDemuxer::SamplesPromise;
+
   auto p = mAudio.mTrackDemuxer->GetSamples(1);
 
   if (mAudio.mFirstDemuxedSampleTime.isNothing()) {
@@ -1694,9 +1724,11 @@ MediaFormatReader::DoDemuxAudio()
     p = p->Then(OwnerThread(), __func__,
                 [self] (RefPtr<MediaTrackDemuxer::SamplesHolder> aSamples) {
                   self->OnFirstDemuxCompleted(TrackInfo::kAudioTrack, aSamples);
+                  return SamplesPromise::CreateAndResolve(aSamples.forget(), __func__);
                 },
                 [self] (const MediaResult& aError) {
                   self->OnFirstDemuxFailed(TrackInfo::kAudioTrack, aError);
+                  return SamplesPromise::CreateAndReject(aError, __func__);
                 });
   }
 
@@ -2898,9 +2930,7 @@ MediaFormatReader::NotifyDataArrived()
 {
   MOZ_ASSERT(OnTaskQueue());
 
-  if (mShutdown
-      || !mDemuxer
-      || (!mDemuxerInitDone && !mDemuxerInitRequest.Exists())) {
+  if (mShutdown || !mDemuxer || !mDemuxerInitDone) {
     return;
   }
 

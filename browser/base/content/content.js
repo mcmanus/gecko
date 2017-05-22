@@ -12,7 +12,6 @@ var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "E10SUtils",
   "resource:///modules/E10SUtils.jsm");
@@ -51,6 +50,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "WebNavigationFrames",
   "resource://gre/modules/WebNavigationFrames.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Feeds",
   "resource:///modules/Feeds.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "findCssSelector",
+  "resource://gre/modules/css-selector.js");
 
 Cu.importGlobalProperties(["URL"]);
 
@@ -129,14 +130,10 @@ var handleContentContextMenu = function(event) {
   let parentAllowsMixedContent = !!docShell.mixedContentChannel;
 
   // get referrer attribute from clicked link and parse it
-  // if per element referrer is enabled, the element referrer overrules
-  // the document wide referrer
-  if (Services.prefs.getBoolPref("network.http.enablePerElementReferrer")) {
-    let referrerAttrValue = Services.netUtils.parseAttributePolicyString(event.target.
-                            getAttribute("referrerpolicy"));
-    if (referrerAttrValue !== Ci.nsIHttpChannel.REFERRER_POLICY_UNSET) {
-      referrerPolicy = referrerAttrValue;
-    }
+  let referrerAttrValue = Services.netUtils.parseAttributePolicyString(event.target.
+                          getAttribute("referrerpolicy"));
+  if (referrerAttrValue !== Ci.nsIHttpChannel.REFERRER_POLICY_UNSET) {
+    referrerPolicy = referrerAttrValue;
   }
 
   let disableSetDesktopBg = null;
@@ -168,6 +165,7 @@ var handleContentContextMenu = function(event) {
 
   let loadContext = docShell.QueryInterface(Ci.nsILoadContext);
   let userContextId = loadContext.originAttributes.userContextId;
+  let popupNodeSelectors = getNodeSelectors(event.target);
 
   if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
     let editFlags = SpellCheckHelper.isEditable(event.target, content);
@@ -187,13 +185,18 @@ var handleContentContextMenu = function(event) {
 
     let customMenuItems = PageMenuChild.build(event.target);
     let principal = doc.nodePrincipal;
+
     sendRpcMessage("contextmenu",
                    { editFlags, spellInfo, customMenuItems, addonInfo,
                      principal, docLocation, charSet, baseURI, referrer,
                      referrerPolicy, contentType, contentDisposition,
                      frameOuterWindowID, selectionInfo, disableSetDesktopBg,
-                     loginFillInfo, parentAllowsMixedContent, userContextId },
-                   { event, popupNode: event.target });
+                     loginFillInfo, parentAllowsMixedContent, userContextId,
+                     popupNodeSelectors,
+                   }, {
+                     event,
+                     popupNode: event.target,
+                   });
   } else {
     // Break out to the parent window and pass the add-on info along
     let browser = docShell.chromeEventHandler;
@@ -202,6 +205,7 @@ var handleContentContextMenu = function(event) {
       isRemote: false,
       event,
       popupNode: event.target,
+      popupNodeSelectors,
       browser,
       addonInfo,
       documentURIObject: doc.documentURIObject,
@@ -249,6 +253,28 @@ const PREF_SSL_IMPACT = PREF_SSL_IMPACT_ROOTS.reduce((prefs, root) => {
   return prefs.concat(Services.prefs.getChildList(root));
 }, []);
 
+/**
+ * Retrieve the array of CSS selectors corresponding to the provided node. The first item
+ * of the array is the selector of the node in its owner document. Additional items are
+ * used if the node is inside a frame, each representing the CSS selector for finding the
+ * frame element in its parent document.
+ *
+ * This format is expected by DevTools in order to handle the Inspect Node context menu
+ * item.
+ *
+ * @param  {Node}
+ *         The node for which the CSS selectors should be computed
+ * @return {Array} array of css selectors (strings).
+ */
+function getNodeSelectors(node) {
+  let selectors = [];
+  while (node) {
+    selectors.push(findCssSelector(node));
+    node = node.ownerGlobal.frameElement;
+  }
+
+  return selectors;
+}
 
 function getSerializedSecurityInfo(docShell) {
   let serhelper = Cc["@mozilla.org/network/serialization-helper;1"]
@@ -527,8 +553,7 @@ var ClickEventHandler = {
     // if per element referrer is enabled, the element referrer overrules
     // the document wide referrer
     let referrerPolicy = ownerDoc.referrerPolicy;
-    if (Services.prefs.getBoolPref("network.http.enablePerElementReferrer") &&
-        node) {
+    if (node) {
       let referrerAttrValue = Services.netUtils.parseAttributePolicyString(node.
                               getAttribute("referrerpolicy"));
       if (referrerAttrValue !== Ci.nsIHttpChannel.REFERRER_POLICY_UNSET) {
@@ -1167,7 +1192,7 @@ var PageInfoListener = {
   // Only called once to get the media tab's media elements from the content page.
   getMediaInfo(document, window, strings) {
     let frameList = this.goThroughFrames(document, window);
-    Task.spawn(() => this.processFrames(document, frameList, strings));
+    this.processFrames(document, frameList, strings);
   },
 
   goThroughFrames(document, window) {
@@ -1183,7 +1208,7 @@ var PageInfoListener = {
     return frameList;
   },
 
-  *processFrames(document, frameList, strings) {
+  async processFrames(document, frameList, strings) {
     let nodeCount = 0;
     for (let doc of frameList) {
       let iterator = doc.createTreeWalker(doc, content.NodeFilter.SHOW_ELEMENT);
@@ -1199,7 +1224,7 @@ var PageInfoListener = {
 
         if (++nodeCount % 500 == 0) {
           // setTimeout every 500 elements so we don't keep blocking the content process.
-          yield new Promise(resolve => setTimeout(resolve, 10));
+          await new Promise(resolve => setTimeout(resolve, 10));
         }
       }
     }

@@ -472,7 +472,7 @@ const CustomizableWidgets = [
       clientItem.setAttribute("itemtype", "client");
       let window = doc.defaultView;
       clientItem.setAttribute("tooltiptext",
-        window.gSyncUI.formatLastSyncDate(new Date(client.lastModified)));
+        window.gSync.formatLastSyncDate(new Date(client.lastModified)));
       clientItem.textContent = client.name;
 
       attachFragment.appendChild(clientItem);
@@ -750,7 +750,19 @@ const CustomizableWidgets = [
             return;
           aArea = aArea || this.currentArea;
           updateCombinedWidgetStyle(node, aArea, true);
-        }
+        },
+
+        // Hack. This can go away when the old menu panel goes away (post photon).
+        // We need it right now for the case where we re-register the old-style
+        // main menu panel if photon is disabled at runtime, and we automatically
+        // put the widgets in there, so they get the right style in the panel.
+        onAreaNodeRegistered: (aArea, aContainer) => {
+          if (aContainer.ownerDocument == node.ownerDocument &&
+              aArea == this.currentArea &&
+              aArea == CustomizableUI.AREA_PANEL) {
+            updateCombinedWidgetStyle(node, aArea, true);
+          }
+        },
       };
       CustomizableUI.addListener(listener);
 
@@ -846,7 +858,19 @@ const CustomizableWidgets = [
             return;
           aArea = aArea || this.currentArea;
           updateCombinedWidgetStyle(node, aArea);
-        }
+        },
+
+        // Hack. This can go away when the old menu panel goes away (post photon).
+        // We need it right now for the case where we re-register the old-style
+        // main menu panel if photon is disabled at runtime, and we automatically
+        // put the widgets in there, so they get the right style in the panel.
+        onAreaNodeRegistered: (aArea, aContainer) => {
+          if (aContainer.ownerDocument == node.ownerDocument &&
+              aArea == this.currentArea &&
+              aArea == CustomizableUI.AREA_PANEL) {
+            updateCombinedWidgetStyle(node, aArea);
+          }
+        },
       };
       CustomizableUI.addListener(listener);
 
@@ -1052,6 +1076,9 @@ const CustomizableWidgets = [
         }
       };
       CustomizableUI.addListener(listener);
+      this.onInit();
+    },
+    onInit() {
       if (!this.charsetInfo) {
         this.charsetInfo = CharsetMenu.getData();
       }
@@ -1153,7 +1180,7 @@ let preferencesButton = {
   defaultArea: CustomizableUI.AREA_PANEL,
   onCommand(aEvent) {
     let win = aEvent.target.ownerGlobal;
-    win.openPreferences();
+    win.openPreferences(undefined, {origin: "preferencesButton"});
   }
 };
 if (AppConstants.platform == "win") {

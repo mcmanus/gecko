@@ -27,9 +27,9 @@ def yasm_version(yasm):
 # Until we move all the yasm consumers out of old-configure.
 # bug 1257904
 add_old_configure_assignment('_YASM_MAJOR_VERSION',
-                             delayed_getattr(yasm_version, 'major'))
+                             yasm_version.major)
 add_old_configure_assignment('_YASM_MINOR_VERSION',
-                             delayed_getattr(yasm_version, 'minor'))
+                             yasm_version.minor)
 
 @depends(yasm, target)
 def yasm_asflags(yasm, target):
@@ -413,9 +413,11 @@ def check_compiler(compiler, language, target):
 @imports(_from='__builtin__', _import='open')
 @imports('json')
 @imports('subprocess')
+@imports('sys')
 def get_vc_paths(topsrcdir):
     def vswhere(args):
-        return json.loads(subprocess.check_output([os.path.join(topsrcdir, 'build/win32/vswhere.exe'), '-format', 'json'] + args))
+        encoding = 'mbcs' if sys.platform == 'win32' else 'utf-8'
+        return json.loads(subprocess.check_output([os.path.join(topsrcdir, 'build/win32/vswhere.exe'), '-format', 'json'] + args).decode(encoding, 'replace'))
 
     # Can't pass -requires with -legacy, so query each separately.
     # Legacy versions first (VS2015)
@@ -565,9 +567,10 @@ def compiler(language, host_or_target, c_compiler=None, other_compiler=None,
     '''
     assert host_or_target in (host, target)
     assert language in ('C', 'C++')
-    assert language == 'C' or c_compiler
-    assert host_or_target == target or other_compiler
-    assert language == 'C' or host_or_target == target or other_c_compiler
+    assert language == 'C' or c_compiler is not None
+    assert host_or_target == target or other_compiler is not None
+    assert language == 'C' or host_or_target == target or \
+        other_c_compiler is not None
 
     host_or_target_str = {
         host: 'host',
@@ -619,7 +622,10 @@ def compiler(language, host_or_target, c_compiler=None, other_compiler=None,
     # executable, when cross compiling with clang, default to the same compiler
     # as the target compiler, resetting flags.
     if host_or_target == host:
-        args = (c_compiler, other_c_compiler) if other_c_compiler else ()
+        if other_c_compiler is not None:
+            args = (c_compiler, other_c_compiler)
+        else:
+            args = ()
 
         @depends(provided_compiler, other_compiler, cross_compiling, *args)
         def provided_compiler(value, other_compiler, cross_compiling, *args):
@@ -639,7 +645,7 @@ def compiler(language, host_or_target, c_compiler=None, other_compiler=None,
     # result from check_prog as CC/CXX/HOST_CC/HOST_CXX and b) have to let
     # old-configure AC_SUBST it (because it's autoconf doing it, not us)
     compiler = check_prog('_%s' % var, what=what, progs=default_compilers,
-                          input=delayed_getattr(provided_compiler, 'compiler'),
+                          input=provided_compiler.compiler,
                           paths=toolchain_search_path)
 
     @depends(compiler, provided_compiler, compiler_wrapper, host_or_target)
@@ -785,11 +791,11 @@ def compiler(language, host_or_target, c_compiler=None, other_compiler=None,
     # old-configure to do some of its still existing checks.
     if language == 'C':
         set_config(
-            '%s_TYPE' % var, delayed_getattr(valid_compiler, 'type'))
+            '%s_TYPE' % var, valid_compiler.type)
         add_old_configure_assignment(
-            '%s_TYPE' % var, delayed_getattr(valid_compiler, 'type'))
+            '%s_TYPE' % var, valid_compiler.type)
         add_old_configure_assignment(
-            '%s_VERSION' % var, delayed_getattr(valid_compiler, 'version'))
+            '%s_VERSION' % var, valid_compiler.version)
 
     valid_compiler = compiler_class(valid_compiler)
 

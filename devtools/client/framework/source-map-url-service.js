@@ -30,6 +30,7 @@ function SourceMapURLService(target, sourceMapService) {
  * Reset the service.  This flushes the internal cache.
  */
 SourceMapURLService.prototype.reset = function () {
+  this._sourceMapService.clearSourceMaps();
   this._urls.clear();
 };
 
@@ -52,8 +53,8 @@ SourceMapURLService.prototype._onSourceUpdated = function (_, sourceEvent) {
   let { source } = sourceEvent;
   let { generatedUrl, url, actor: id, sourceMapURL } = source;
 
-  // As long as the actor is also handling source maps, we want the
-  // generated URL if it is available.  This will be going away in bug 1349354.
+  // |generatedUrl| comes from the actor and is extracted from the
+  // source code by SpiderMonkey.
   let seenUrl = generatedUrl || url;
   this._urls.set(seenUrl, { id, url: seenUrl, sourceMapURL });
 };
@@ -83,7 +84,13 @@ SourceMapURLService.prototype.originalPositionFor = async function (url, line, c
   await this._sourceMapService.getOriginalURLs(urlInfo);
   const location = { sourceId: urlInfo.id, line, column, sourceUrl: url };
   let resolvedLocation = await this._sourceMapService.getOriginalLocation(location);
-  return resolvedLocation === location ? null : resolvedLocation;
+  if (!resolvedLocation ||
+      (resolvedLocation.line === location.line &&
+       resolvedLocation.column === location.column &&
+       resolvedLocation.sourceUrl === location.sourceUrl)) {
+    return null;
+  }
+  return resolvedLocation;
 };
 
 exports.SourceMapURLService = SourceMapURLService;

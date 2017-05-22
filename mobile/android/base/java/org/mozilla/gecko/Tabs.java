@@ -599,7 +599,7 @@ public class Tabs implements BundleEventListener {
         }
 
         Tab parent = getTab(tab.getParentId());
-        if (parent != null) {
+        if (parent != null && parent.getType() == type) {
             // If the next tab is a sibling, switch to it. Otherwise go back to the parent.
             if (nextTab != null && nextTab.getParentId() == tab.getParentId())
                 return nextTab;
@@ -725,7 +725,7 @@ public class Tabs implements BundleEventListener {
 
         } else if ("Tab:Select".equals(event)) {
             if (message.getBoolean("foreground", false)) {
-                GeckoAppShell.launchOrBringToFront();
+                GeckoApp.launchOrBringToFront();
             }
             selectTab(tab.getId());
 
@@ -963,6 +963,7 @@ public class Tabs implements BundleEventListener {
      *
      * @return first Tab with the given URL, or null if there is no such tab.
      */
+    @RobocopTarget
     public Tab getFirstTabForUrl(String url) {
         return getFirstTabForUrlHelper(url, null, TabType.BROWSING);
     }

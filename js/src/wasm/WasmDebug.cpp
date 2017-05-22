@@ -75,15 +75,24 @@ GeneratedSourceMap::searchLineByOffset(JSContext* cx, uint32_t offset, size_t* e
     return true;
 }
 
+size_t
+GeneratedSourceMap::sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const
+{
+    size_t size = exprlocs_.sizeOfExcludingThis(mallocSizeOf);
+    if (sortedByOffsetExprLocIndices_)
+        size += sortedByOffsetExprLocIndices_->sizeOfIncludingThis(mallocSizeOf);
+    return size;
+}
+
 DebugState::DebugState(SharedCode code,
-                       const Metadata& metadata,
-                       const ShareableBytes* maybeBytecode)
+                       const ShareableBytes* maybeBytecode,
+                       bool binarySource)
   : code_(Move(code)),
-    metadata_(&metadata),
     maybeBytecode_(maybeBytecode),
+    binarySource_(binarySource),
     enterAndLeaveFrameTrapsCounter_(0)
 {
-    MOZ_ASSERT_IF(metadata_->debugEnabled, maybeBytecode);
+    MOZ_ASSERT_IF(debugEnabled(), maybeBytecode);
 }
 
 const char enabledMessage[] =
@@ -93,7 +102,22 @@ const char tooBigMessage[] =
     "Unfortunately, this WebAssembly module is too big to view as text.\n"
     "We are working hard to remove this limitation.";
 
+const char notGeneratedMessage[] =
+    "WebAssembly text generation was disabled.";
+
 static const unsigned TooBig = 1000000;
+
+static const uint32_t DefaultBinarySourceColumnNumber = 1;
+
+static const CallSite*
+SlowCallSiteSearchByOffset(const Metadata& metadata, uint32_t offset)
+{
+    for (const CallSite& callSite : metadata.callSites) {
+        if (callSite.lineOrBytecode() == offset && callSite.kind() == CallSiteDesc::Breakpoint)
+            return &callSite;
+    }
+    return nullptr;
+}
 
 JSString*
 DebugState::createText(JSContext* cx)
@@ -104,6 +128,10 @@ DebugState::createText(JSContext* cx)
             return nullptr;
 
         MOZ_ASSERT(!maybeSourceMap_);
+    } else if (binarySource_) {
+        if (!buffer.append(notGeneratedMessage))
+            return nullptr;
+        return buffer.finishString();
     } else if (maybeBytecode_->bytes.length() > TooBig) {
         if (!buffer.append(tooBigMessage))
             return nullptr;
@@ -157,8 +185,15 @@ struct LineComparator
 bool
 DebugState::getLineOffsets(JSContext* cx, size_t lineno, Vector<uint32_t>* offsets)
 {
-    if (!metadata_->debugEnabled)
+    if (!debugEnabled())
         return true;
+
+    if (binarySource_) {
+        const CallSite* callsite = SlowCallSiteSearchByOffset(metadata(), lineno);
+        if (callsite && !offsets->append(lineno))
+            return false;
+        return true;
+    }
 
     if (!ensureSourceMap(cx))
         return false;
@@ -187,11 +222,46 @@ DebugState::getLineOffsets(JSContext* cx, size_t lineno, Vector<uint32_t>* offse
 }
 
 bool
+DebugState::getAllColumnOffsets(JSContext* cx, Vector<ExprLoc>* offsets)
+{
+    if (!metadata().debugEnabled)
+        return true;
+
+    if (binarySource_) {
+        for (const CallSite& callSite : metadata().callSites) {
+            if (callSite.kind() != CallSite::Breakpoint)
+                continue;
+            uint32_t offset = callSite.lineOrBytecode();
+            if (!offsets->emplaceBack(offset, DefaultBinarySourceColumnNumber, offset))
+                return false;
+        }
+        return true;
+    }
+
+    if (!ensureSourceMap(cx))
+        return false;
+
+    if (!maybeSourceMap_)
+        return true; // no source text available, keep offsets empty.
+
+    return offsets->appendAll(maybeSourceMap_->exprlocs());
+}
+
+bool
 DebugState::getOffsetLocation(JSContext* cx, uint32_t offset, bool* found, size_t* lineno, size_t* column)
 {
     *found = false;
-    if (!metadata_->debugEnabled)
+    if (!debugEnabled())
         return true;
+
+    if (binarySource_) {
+        if (!SlowCallSiteSearchByOffset(metadata(), offset))
+            return true; // offset was not found
+        *found = true;
+        *lineno = offset;
+        *column = DefaultBinarySourceColumnNumber;
+        return true;
+    }
 
     if (!ensureSourceMap(cx))
         return false;
@@ -214,8 +284,14 @@ bool
 DebugState::totalSourceLines(JSContext* cx, uint32_t* count)
 {
     *count = 0;
-    if (!metadata_->debugEnabled)
+    if (!debugEnabled())
         return true;
+
+    if (binarySource_) {
+        if (maybeBytecode_)
+            *count = maybeBytecode_->length();
+        return true;
+    }
 
     if (!ensureSourceMap(cx))
         return false;
@@ -234,8 +310,8 @@ DebugState::stepModeEnabled(uint32_t funcIndex) const
 bool
 DebugState::incrementStepModeCount(JSContext* cx, uint32_t funcIndex)
 {
-    MOZ_ASSERT(metadata_->debugEnabled);
-    const CodeRange& codeRange = metadata_->codeRanges[metadata_->debugFuncToCodeRange[funcIndex]];
+    MOZ_ASSERT(debugEnabled());
+    const CodeRange& codeRange = codeRanges()[debugFuncToCodeRange(funcIndex)];
     MOZ_ASSERT(codeRange.isFunction());
 
     if (!stepModeCounters_.initialized() && !stepModeCounters_.init()) {
@@ -258,7 +334,7 @@ DebugState::incrementStepModeCount(JSContext* cx, uint32_t funcIndex)
                              codeRange.end() - codeRange.begin());
     AutoFlushICache afc("Code::incrementStepModeCount");
 
-    for (const CallSite& callSite : metadata_->callSites) {
+    for (const CallSite& callSite : callSites()) {
         if (callSite.kind() != CallSite::Breakpoint)
             continue;
         uint32_t offset = callSite.returnAddressOffset();
@@ -271,8 +347,8 @@ DebugState::incrementStepModeCount(JSContext* cx, uint32_t funcIndex)
 bool
 DebugState::decrementStepModeCount(JSContext* cx, uint32_t funcIndex)
 {
-    MOZ_ASSERT(metadata_->debugEnabled);
-    const CodeRange& codeRange = metadata_->codeRanges[metadata_->debugFuncToCodeRange[funcIndex]];
+    MOZ_ASSERT(debugEnabled());
+    const CodeRange& codeRange = codeRanges()[debugFuncToCodeRange(funcIndex)];
     MOZ_ASSERT(codeRange.isFunction());
 
     MOZ_ASSERT(stepModeCounters_.initialized() && !stepModeCounters_.empty());
@@ -287,7 +363,7 @@ DebugState::decrementStepModeCount(JSContext* cx, uint32_t funcIndex)
                              codeRange.end() - codeRange.begin());
     AutoFlushICache afc("Code::decrementStepModeCount");
 
-    for (const CallSite& callSite : metadata_->callSites) {
+    for (const CallSite& callSite : callSites()) {
         if (callSite.kind() != CallSite::Breakpoint)
             continue;
         uint32_t offset = callSite.returnAddressOffset();
@@ -299,29 +375,19 @@ DebugState::decrementStepModeCount(JSContext* cx, uint32_t funcIndex)
     return true;
 }
 
-static const CallSite*
-SlowCallSiteSearchByOffset(const Metadata& metadata, uint32_t offset)
-{
-    for (const CallSite& callSite : metadata.callSites) {
-        if (callSite.lineOrBytecode() == offset && callSite.kind() == CallSiteDesc::Breakpoint)
-            return &callSite;
-    }
-    return nullptr;
-}
-
 bool
 DebugState::hasBreakpointTrapAtOffset(uint32_t offset)
 {
-    if (!metadata_->debugEnabled)
+    if (!debugEnabled())
         return false;
-    return SlowCallSiteSearchByOffset(*metadata_, offset);
+    return SlowCallSiteSearchByOffset(metadata(), offset);
 }
 
 void
 DebugState::toggleBreakpointTrap(JSRuntime* rt, uint32_t offset, bool enabled)
 {
-    MOZ_ASSERT(metadata_->debugEnabled);
-    const CallSite* callSite = SlowCallSiteSearchByOffset(*metadata_, offset);
+    MOZ_ASSERT(debugEnabled());
+    const CallSite* callSite = SlowCallSiteSearchByOffset(metadata(), offset);
     if (!callSite)
         return;
     size_t debugTrapOffset = callSite->returnAddressOffset();
@@ -413,7 +479,7 @@ DebugState::toggleDebugTrap(uint32_t offset, bool enabled)
 {
     MOZ_ASSERT(offset);
     uint8_t* trap = code_->segment().base() + offset;
-    const Uint32Vector& farJumpOffsets = metadata_->debugTrapFarJumpOffsets;
+    const Uint32Vector& farJumpOffsets = metadata().debugTrapFarJumpOffsets;
     if (enabled) {
         MOZ_ASSERT(farJumpOffsets.length() > 0);
         size_t i = 0;
@@ -432,7 +498,7 @@ DebugState::toggleDebugTrap(uint32_t offset, bool enabled)
 void
 DebugState::adjustEnterAndLeaveFrameTrapsState(JSContext* cx, bool enabled)
 {
-    MOZ_ASSERT(metadata_->debugEnabled);
+    MOZ_ASSERT(debugEnabled());
     MOZ_ASSERT_IF(!enabled, enterAndLeaveFrameTrapsCounter_ > 0);
 
     bool wasEnabled = enterAndLeaveFrameTrapsCounter_ > 0;
@@ -447,7 +513,7 @@ DebugState::adjustEnterAndLeaveFrameTrapsState(JSContext* cx, bool enabled)
     AutoWritableJitCode awjc(cx->runtime(), code_->segment().base(), code_->segment().length());
     AutoFlushICache afc("Code::adjustEnterAndLeaveFrameTrapsState");
     AutoFlushICache::setRange(uintptr_t(code_->segment().base()), code_->segment().length());
-    for (const CallSite& callSite : metadata_->callSites) {
+    for (const CallSite& callSite : callSites()) {
         if (callSite.kind() != CallSite::EnterFrame && callSite.kind() != CallSite::LeaveFrame)
             continue;
         toggleDebugTrap(callSite.returnAddressOffset(), stillEnabled);
@@ -457,28 +523,28 @@ DebugState::adjustEnterAndLeaveFrameTrapsState(JSContext* cx, bool enabled)
 bool
 DebugState::debugGetLocalTypes(uint32_t funcIndex, ValTypeVector* locals, size_t* argsLength)
 {
-    MOZ_ASSERT(metadata_->debugEnabled);
+    MOZ_ASSERT(debugEnabled());
 
-    const ValTypeVector& args = metadata_->debugFuncArgTypes[funcIndex];
+    const ValTypeVector& args = metadata().debugFuncArgTypes[funcIndex];
     *argsLength = args.length();
     if (!locals->appendAll(args))
         return false;
 
     // Decode local var types from wasm binary function body.
-    const CodeRange& range = metadata_->codeRanges[metadata_->debugFuncToCodeRange[funcIndex]];
+    const CodeRange& range = codeRanges()[debugFuncToCodeRange(funcIndex)];
     // In wasm, the Code points to the function start via funcLineOrBytecode.
-    MOZ_ASSERT(!metadata_->isAsmJS() && maybeBytecode_);
+    MOZ_ASSERT(!metadata().isAsmJS() && maybeBytecode_);
     size_t offsetInModule = range.funcLineOrBytecode();
     Decoder d(maybeBytecode_->begin() + offsetInModule,  maybeBytecode_->end(),
               offsetInModule, /* error = */ nullptr);
-    return DecodeLocalEntries(d, metadata_->kind, locals);
+    return DecodeLocalEntries(d, metadata().kind, locals);
 }
 
 ExprType
 DebugState::debugGetResultType(uint32_t funcIndex)
 {
-    MOZ_ASSERT(metadata_->debugEnabled);
-    return metadata_->debugFuncReturnTypes[funcIndex];
+    MOZ_ASSERT(debugEnabled());
+    return metadata().debugFuncReturnTypes[funcIndex];
 }
 
 JSString*
@@ -491,7 +557,7 @@ DebugState::debugDisplayURL(JSContext* cx) const
     js::StringBuffer result(cx);
     if (!result.append("wasm:"))
         return nullptr;
-    if (const char* filename = metadata_->filename.get()) {
+    if (const char* filename = metadata().filename.get()) {
         js::StringBuffer filenamePrefix(cx);
         // EncodeURI returns false due to invalid chars or OOM -- fail only
         // during OOM.
@@ -504,7 +570,7 @@ DebugState::debugDisplayURL(JSContext* cx) const
         }
     }
 
-    const ModuleHash& hash = metadata_->hash;
+    const ModuleHash& hash = metadata().hash;
     for (size_t i = 0; i < sizeof(ModuleHash); i++) {
         char digit1 = hash[i] / 16, digit2 = hash[i] % 16;
         if (!result.append((char)(digit1 < 10 ? digit1 + '0' : digit1 + 'a' - 10)))
@@ -513,5 +579,57 @@ DebugState::debugDisplayURL(JSContext* cx) const
             return nullptr;
     }
     return result.finishString();
+}
 
+bool
+DebugState::getSourceMappingURL(JSContext* cx, MutableHandleString result) const
+{
+    result.set(nullptr);
+    if (!maybeBytecode_)
+        return true;
+
+    for (const CustomSection& customSection : metadata().customSections) {
+        const NameInBytecode& sectionName = customSection.name;
+        if (strlen(SourceMappingURLSectionName) != sectionName.length ||
+            memcmp(SourceMappingURLSectionName, maybeBytecode_->begin() + sectionName.offset,
+                   sectionName.length) != 0)
+        {
+            continue;
+        }
+
+        // Parse found "SourceMappingURL" custom section.
+        Decoder d(maybeBytecode_->begin() + customSection.offset,
+                  maybeBytecode_->begin() + customSection.offset + customSection.length,
+                  customSection.offset,
+                  /* error = */ nullptr);
+        uint32_t nchars;
+        if (!d.readVarU32(&nchars))
+            return true; // ignoring invalid section data
+        const uint8_t* chars;
+        if (!d.readBytes(nchars, &chars) || d.currentPosition() != d.end())
+            return true; // ignoring invalid section data
+
+        UTF8Chars utf8Chars(reinterpret_cast<const char*>(chars), nchars);
+        JSString* str = JS_NewStringCopyUTF8N(cx, utf8Chars);
+        if (!str)
+            return false;
+        result.set(str);
+        break;
+    }
+    return true;
+}
+
+void
+DebugState::addSizeOfMisc(MallocSizeOf mallocSizeOf,
+                          Metadata::SeenSet* seenMetadata,
+                          ShareableBytes::SeenSet* seenBytes,
+                          Code::SeenSet* seenCode,
+                          size_t* code,
+                          size_t* data) const
+{
+    code_->addSizeOfMiscIfNotSeen(mallocSizeOf, seenMetadata, seenCode, code, data);
+    if (maybeSourceMap_)
+        *data += maybeSourceMap_->sizeOfExcludingThis(mallocSizeOf);
+    if (maybeBytecode_)
+        *data += maybeBytecode_->sizeOfIncludingThisIfNotSeen(mallocSizeOf, seenBytes);
 }

@@ -173,10 +173,13 @@ nsDOMCSSAttributeDeclaration::GetCSSParsingEnvironment(CSSParsingEnvironment& aC
   aCSSParseEnv.mCSSLoader = doc->CSSLoader();
 }
 
-URLExtraData*
-nsDOMCSSAttributeDeclaration::GetURLData() const
+nsDOMCSSDeclaration::ServoCSSParsingEnvironment
+nsDOMCSSAttributeDeclaration::GetServoCSSParsingEnvironment() const
 {
-  return mElement->GetURLDataForStyleAttr();
+  return {
+    mElement->GetURLDataForStyleAttr(),
+    mElement->OwnerDoc()->GetCompatibilityMode(),
+  };
 }
 
 NS_IMETHODIMP

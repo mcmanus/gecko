@@ -15,15 +15,14 @@ config = {
         'checkout-sources',
         # 'setup-mock', windows do not use mock
         'build',
+        'generate-build-stats',
         'upload-files',
         'sendchange',
         'check-test',
-        'generate-build-stats',
         'update',  # decided by query_is_nightly()
     ],
     "buildbot_json_path": "buildprops.json",
     'exes': {
-        'python2.7': sys.executable,
         "buildbot": [
             sys.executable,
             'c:\\mozilla-build\\buildbotve\\scripts\\buildbot'
@@ -36,7 +35,6 @@ config = {
     'app_ini_path': '%(obj_dir)s/dist/bin/application.ini',
     # decides whether we want to use moz_sign_cmd in env
     'enable_signing': True,
-    'enable_ccache': False,
     'vcs_share_base': 'C:/builds/hg-shared',
     'objdir': 'obj-firefox',
     'tooltool_script': [sys.executable,
@@ -56,7 +54,6 @@ config = {
     'stage_platform': 'win64',
     'publish_nightly_en_US_routes': True,
     'env': {
-        'MOZ_AUTOMATION': '1',
         'HG_SHARE_BASE_DIR': 'C:/builds/hg-shared',
         'MOZ_CRASHREPORTER_NO_REPORT': '1',
         'MOZ_OBJDIR': 'obj-firefox',

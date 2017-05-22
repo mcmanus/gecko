@@ -6,6 +6,7 @@
 
 #![deny(unsafe_code)]
 
+use StyleArc;
 use app_units::Au;
 use canvas_traits::CanvasMsg;
 use context::{LayoutContext, with_thread_local_font_context};
@@ -25,7 +26,7 @@ use ipc_channel::ipc::IpcSender;
 use layout_debug;
 use model::{self, IntrinsicISizes, IntrinsicISizesContribution, MaybeAuto, SizeConstraint};
 use model::{style_length, ToGfxMatrix};
-use msg::constellation_msg::PipelineId;
+use msg::constellation_msg::{BrowsingContextId, PipelineId};
 use net_traits::image::base::{Image, ImageMetadata};
 use net_traits::image_cache::{ImageOrMetadataAvailable, UsePlaceholder};
 use range::*;
@@ -39,7 +40,6 @@ use std::borrow::ToOwned;
 use std::cmp::{Ordering, max, min};
 use std::collections::LinkedList;
 use std::sync::{Arc, Mutex};
-use style::arc_ptr_eq;
 use style::computed_values::{border_collapse, box_sizing, clear, color, display, mix_blend_mode};
 use style::computed_values::{overflow_wrap, overflow_x, position, text_decoration_line, transform};
 use style::computed_values::{transform_style, vertical_align, white_space, word_break};
@@ -95,10 +95,10 @@ pub struct Fragment {
     pub node: OpaqueNode,
 
     /// The CSS style of this fragment.
-    pub style: Arc<ServoComputedValues>,
+    pub style: StyleArc<ServoComputedValues>,
 
     /// The CSS style of this fragment when it's selected
-    pub selected_style: Arc<ServoComputedValues>,
+    pub selected_style: StyleArc<ServoComputedValues>,
 
     /// The position of this fragment relative to its owning flow. The size includes padding and
     /// border, but not margin.
@@ -378,7 +378,7 @@ impl ImageFragmentInfo {
         });
 
         let (image, metadata) = match image_or_metadata {
-            Some(ImageOrMetadataAvailable::ImageAvailable(i)) => {
+            Some(ImageOrMetadataAvailable::ImageAvailable(i, _)) => {
                 (Some(i.clone()), Some(ImageMetadata { height: i.height, width: i.width } ))
             }
             Some(ImageOrMetadataAvailable::MetadataAvailable(m)) => {
@@ -467,19 +467,23 @@ impl ImageFragmentInfo {
     }
 }
 
-/// A fragment that represents an inline frame (iframe). This stores the pipeline ID so that the
+/// A fragment that represents an inline frame (iframe). This stores the frame ID so that the
 /// size of this iframe can be communicated via the constellation to the iframe's own layout thread.
 #[derive(Clone)]
 pub struct IframeFragmentInfo {
-    /// The pipeline ID of this iframe.
+    /// The frame ID of this iframe.
+    pub browsing_context_id: BrowsingContextId,
+    /// The pipelineID of this iframe.
     pub pipeline_id: PipelineId,
 }
 
 impl IframeFragmentInfo {
     /// Creates the information specific to an iframe fragment.
     pub fn new<N: ThreadSafeLayoutNode>(node: &N) -> IframeFragmentInfo {
+        let browsing_context_id = node.iframe_browsing_context_id();
         let pipeline_id = node.iframe_pipeline_id();
         IframeFragmentInfo {
+            browsing_context_id: browsing_context_id,
             pipeline_id: pipeline_id,
         }
     }
@@ -672,8 +676,8 @@ impl Fragment {
     /// Constructs a new `Fragment` instance from an opaque node.
     pub fn from_opaque_node_and_style(node: OpaqueNode,
                                       pseudo: PseudoElementType<()>,
-                                      style: Arc<ServoComputedValues>,
-                                      selected_style: Arc<ServoComputedValues>,
+                                      style: StyleArc<ServoComputedValues>,
+                                      selected_style: StyleArc<ServoComputedValues>,
                                       mut restyle_damage: RestyleDamage,
                                       specific: SpecificFragmentInfo)
                                       -> Fragment {
@@ -702,7 +706,7 @@ impl Fragment {
     /// type. For the new anonymous fragment, layout-related values (border box, etc.) are reset to
     /// initial values.
     pub fn create_similar_anonymous_fragment(&self,
-                                             style: Arc<ServoComputedValues>,
+                                             style: StyleArc<ServoComputedValues>,
                                              specific: SpecificFragmentInfo)
                                              -> Fragment {
         let writing_mode = style.writing_mode;
@@ -903,8 +907,8 @@ impl Fragment {
         // cascading.
         let padding = if flags.contains(INTRINSIC_INLINE_SIZE_INCLUDES_PADDING) {
             let padding = style.logical_padding();
-            (model::specified(padding.inline_start, Au(0)) +
-             model::specified(padding.inline_end, Au(0)))
+            (padding.inline_start.to_used_value(Au(0)) +
+             padding.inline_end.to_used_value(Au(0)))
         } else {
             Au(0)
         };
@@ -931,8 +935,8 @@ impl Fragment {
         if flags.contains(INTRINSIC_INLINE_SIZE_INCLUDES_SPECIFIED) {
             specified = MaybeAuto::from_style(style.content_inline_size(),
                                               Au(0)).specified_or_zero();
-            specified = max(model::specified(style.min_inline_size(), Au(0)), specified);
-            if let Some(max) = model::specified_or_none(style.max_inline_size(), Au(0)) {
+            specified = max(style.min_inline_size().to_used_value(Au(0)), specified);
+            if let Some(max) = style.max_inline_size().to_used_value(Au(0)) {
                 specified = min(specified, max)
             }
 
@@ -1054,7 +1058,7 @@ impl Fragment {
                     // Note: We can not precompute the ratio and store it as a float, because
                     // doing so may result one pixel difference in calculation for certain
                     // images, thus make some tests fail.
-                    Au((inline_size.0 as i64 * intrinsic_block_size.0 as i64 /
+                    Au::new((inline_size.0 as i64 * intrinsic_block_size.0 as i64 /
                         intrinsic_inline_size.0 as i64) as i32)
                 } else {
                     intrinsic_block_size
@@ -1064,7 +1068,7 @@ impl Fragment {
             (MaybeAuto::Auto, MaybeAuto::Specified(block_size)) => {
                 let block_size = block_constraint.clamp(block_size);
                 let inline_size = if self.has_intrinsic_ratio() {
-                    Au((block_size.0 as i64 * intrinsic_inline_size.0 as i64 /
+                    Au::new((block_size.0 as i64 * intrinsic_inline_size.0 as i64 /
                        intrinsic_block_size.0 as i64) as i32)
                 } else {
                     intrinsic_inline_size
@@ -1080,10 +1084,10 @@ impl Fragment {
                     // First, create two rectangles that keep aspect ratio while may be clamped
                     // by the contraints;
                     let first_isize = inline_constraint.clamp(intrinsic_inline_size);
-                    let first_bsize = Au((first_isize.0 as i64 * intrinsic_block_size.0 as i64 /
+                    let first_bsize = Au::new((first_isize.0 as i64 * intrinsic_block_size.0 as i64 /
                                           intrinsic_inline_size.0 as i64) as i32);
                     let second_bsize = block_constraint.clamp(intrinsic_block_size);
-                    let second_isize = Au((second_bsize.0 as i64 * intrinsic_inline_size.0 as i64 /
+                    let second_isize = Au::new((second_bsize.0 as i64 * intrinsic_inline_size.0 as i64 /
                                            intrinsic_block_size.0 as i64) as i32);
                     let (inline_size, block_size) = match (first_isize.cmp(&intrinsic_inline_size) ,
                                                            second_isize.cmp(&intrinsic_inline_size)) {
@@ -1155,10 +1159,10 @@ impl Fragment {
         let border_width = self.border_width();
         SpeculatedInlineContentEdgeOffsets {
             start: MaybeAuto::from_style(logical_margin.inline_start, Au(0)).specified_or_zero() +
-                model::specified(logical_padding.inline_start, Au(0)) +
+                logical_padding.inline_start.to_used_value(Au(0)) +
                 border_width.inline_start,
             end: MaybeAuto::from_style(logical_margin.inline_end, Au(0)).specified_or_zero() +
-                model::specified(logical_padding.inline_end, Au(0)) +
+                logical_padding.inline_end.to_used_value(Au(0)) +
                 border_width.inline_end,
         }
     }
@@ -1487,10 +1491,10 @@ impl Fragment {
                         // the size constraints work properly.
                         // TODO(stshine): Find a cleaner way to do this.
                         let padding = self.style.logical_padding();
-                        self.border_padding.inline_start = model::specified(padding.inline_start, Au(0));
-                        self.border_padding.inline_end = model::specified(padding.inline_end, Au(0));
-                        self.border_padding.block_start = model::specified(padding.block_start, Au(0));
-                        self.border_padding.block_end = model::specified(padding.block_end, Au(0));
+                        self.border_padding.inline_start = padding.inline_start.to_used_value(Au(0));
+                        self.border_padding.inline_end = padding.inline_end.to_used_value(Au(0));
+                        self.border_padding.block_start = padding.block_start.to_used_value(Au(0));
+                        self.border_padding.block_end = padding.block_end.to_used_value(Au(0));
                         let border = self.border_width();
                         self.border_padding.inline_start += border.inline_start;
                         self.border_padding.inline_end += border.inline_end;
@@ -1500,7 +1504,11 @@ impl Fragment {
                         result_inline
                     }
                     LengthOrPercentageOrAuto::Length(length) => length,
-                    LengthOrPercentageOrAuto::Calc(calc) => calc.length(),
+                    LengthOrPercentageOrAuto::Calc(calc) => {
+                        // TODO(nox): This is probably wrong, because it accounts neither for
+                        // clamping (not sure if necessary here) nor percentage.
+                        calc.unclamped_length()
+                    },
                 };
 
                 let size_constraint = self.size_constraint(None, Direction::Inline);
@@ -1846,7 +1854,7 @@ impl Fragment {
         match (&mut self.specific, &next_fragment.specific) {
             (&mut SpecificFragmentInfo::ScannedText(ref mut this_info),
              &SpecificFragmentInfo::ScannedText(ref other_info)) => {
-                debug_assert!(arc_ptr_eq(&this_info.run, &other_info.run));
+                debug_assert!(::arc_ptr_eq(&this_info.run, &other_info.run));
                 this_info.range_end_including_stripped_whitespace =
                     other_info.range_end_including_stripped_whitespace;
                 if other_info.requires_line_break_afterward_if_wrapping_on_newlines() {
@@ -2229,8 +2237,7 @@ impl Fragment {
                     offset -= minimum_line_metrics.space_needed().scale_by(percentage)
                 }
                 vertical_align::T::LengthOrPercentage(LengthOrPercentage::Calc(formula)) => {
-                    offset -= minimum_line_metrics.space_needed().scale_by(formula.percentage()) +
-                        formula.length()
+                    offset -= formula.to_used_value(Some(minimum_line_metrics.space_needed())).unwrap()
                 }
             }
         }
@@ -2398,7 +2405,7 @@ impl Fragment {
         }
     }
 
-    pub fn repair_style(&mut self, new_style: &Arc<ServoComputedValues>) {
+    pub fn repair_style(&mut self, new_style: &StyleArc<ServoComputedValues>) {
         self.style = (*new_style).clone()
     }
 
@@ -2466,7 +2473,10 @@ impl Fragment {
         if self.style().get_effects().mix_blend_mode != mix_blend_mode::T::normal {
             return true
         }
-        if self.style().get_box().transform.0.is_some() {
+
+        if self.style().get_box().transform.0.is_some() ||
+           self.style().get_box().transform_style == transform_style::T::preserve_3d ||
+           self.style().overrides_transform_style() {
             return true
         }
 
@@ -2479,13 +2489,6 @@ impl Fragment {
         // Fixed position blocks always create stacking contexts.
         if self.style.get_box().position == position::T::fixed {
             return true
-        }
-
-        match self.style().get_used_transform_style() {
-            transform_style::T::flat | transform_style::T::preserve_3d => {
-                return true
-            }
-            transform_style::T::auto => {}
         }
 
         match (self.style().get_box().position,
@@ -2847,12 +2850,14 @@ impl Fragment {
 
         let mut transform = Matrix4D::identity();
         let transform_origin = &self.style.get_box().transform_origin;
-        let transform_origin_x = model::specified(transform_origin.horizontal,
-                                                  stacking_relative_border_box.size
-                                                                              .width).to_f32_px();
-        let transform_origin_y = model::specified(transform_origin.vertical,
-                                                  stacking_relative_border_box.size
-                                                                              .height).to_f32_px();
+        let transform_origin_x =
+            transform_origin.horizontal
+                .to_used_value(stacking_relative_border_box.size.width)
+                .to_f32_px();
+        let transform_origin_y =
+            transform_origin.vertical
+                .to_used_value(stacking_relative_border_box.size.height)
+                .to_f32_px();
         let transform_origin_z = transform_origin.depth.to_f32_px();
 
         let pre_transform = Matrix4D::create_translation(transform_origin_x,
@@ -2875,10 +2880,8 @@ impl Fragment {
                     Matrix4D::create_scale(sx, sy, sz)
                 }
                 transform::ComputedOperation::Translate(tx, ty, tz) => {
-                    let tx =
-                        model::specified(tx, stacking_relative_border_box.size.width).to_f32_px();
-                    let ty =
-                        model::specified(ty, stacking_relative_border_box.size.height).to_f32_px();
+                    let tx = tx.to_used_value(stacking_relative_border_box.size.width).to_f32_px();
+                    let ty = ty.to_used_value(stacking_relative_border_box.size.height).to_f32_px();
                     let tz = tz.to_f32_px();
                     Matrix4D::create_translation(tx, ty, tz)
                 }
@@ -2907,10 +2910,13 @@ impl Fragment {
             Either::First(length) => {
                 let perspective_origin = self.style().get_box().perspective_origin;
                 let perspective_origin =
-                    Point2D::new(model::specified(perspective_origin.horizontal,
-                                                  stacking_relative_border_box.size.width).to_f32_px(),
-                                 model::specified(perspective_origin.vertical,
-                                                  stacking_relative_border_box.size.height).to_f32_px());
+                    Point2D::new(
+                        perspective_origin.horizontal
+                            .to_used_value(stacking_relative_border_box.size.width)
+                            .to_f32_px(),
+                        perspective_origin.vertical
+                            .to_used_value(stacking_relative_border_box.size.height)
+                            .to_f32_px());
 
                 let pre_transform = Matrix4D::create_translation(perspective_origin.x,
                                                                  perspective_origin.y,

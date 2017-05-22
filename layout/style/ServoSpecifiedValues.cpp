@@ -48,6 +48,11 @@ ServoSpecifiedValues::SetIdentStringValue(nsCSSPropertyID aId,
 {
   nsCOMPtr<nsIAtom> atom = NS_Atomize(aValue);
   Servo_DeclarationBlock_SetIdentStringValue(mDecl, aId, atom);
+  if (aId == eCSSProperty__x_lang) {
+    // This forces the lang prefs result to be cached
+    // so that we can access them off main thread during traversal
+    mPresContext->ForceCacheLang(atom);
+  }
 }
 
 void
@@ -120,8 +125,6 @@ ServoSpecifiedValues::SetTextDecorationColorOverride()
 void
 ServoSpecifiedValues::SetBackgroundImage(nsAttrValue& aValue)
 {
-  // FIXME (bug 1310885) this should store resolved images directly on the servo
-  // side.
   nsAutoString str;
   aValue.ToString(str);
   Servo_DeclarationBlock_SetBackgroundImage(mDecl, str,

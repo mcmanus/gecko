@@ -9,8 +9,10 @@
 
 #include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/TaskCategory.h"
+#include "mozilla/TimeStamp.h"
 #include "nsCOMPtr.h"
 #include "nsISupportsImpl.h"
+#include "nsThreadUtils.h"
 
 class nsIEventTarget;
 class nsIRunnable;
@@ -21,22 +23,30 @@ namespace dom {
 class TabGroup;
 }
 
+#define NS_SCHEDULERGROUPRUNNABLE_IID \
+{ 0xd31b7420, 0x872b, 0x4cfb, \
+  { 0xa9, 0xc6, 0xae, 0x4c, 0x0f, 0x06, 0x36, 0x74 } }
+
 // The "main thread" in Gecko will soon be a set of cooperatively scheduled
 // "fibers". Global state in Gecko will be partitioned into a series of "groups"
 // (with roughly one group per tab). Runnables will be annotated with the set of
 // groups that they touch. Two runnables may run concurrently on different
 // fibers as long as they touch different groups.
 //
-// A Dispatcher is an abstract class to represent a "group". Essentially the
-// only functionality offered by a Dispatcher is the ability to dispatch
+// A SchedulerGroup is an abstract class to represent a "group". Essentially the
+// only functionality offered by a SchedulerGroup is the ability to dispatch
 // runnables to the group. TabGroup, DocGroup, and SystemGroup are the concrete
-// implementations of Dispatcher.
+// implementations of SchedulerGroup.
 class SchedulerGroup
 {
 public:
   SchedulerGroup();
 
   NS_INLINE_DECL_PURE_VIRTUAL_REFCOUNTING
+
+  // This method returns true if all members of the "group" are in a
+  // "background" state.
+  virtual bool IsBackground() const { return false; }
 
   class MOZ_STACK_CLASS AutoProcessEvent final {
   public:
@@ -47,13 +57,44 @@ public:
     SchedulerGroup* mPrevRunningDispatcher;
   };
 
+  // This function returns true if it's currently safe to run code associated
+  // with this SchedulerGroup. It will return true either if we're inside an
+  // unlabeled runnable or if we're inside a runnable labeled with this
+  // SchedulerGroup.
+  bool IsSafeToRun() const
+  {
+    return !sRunningDispatcher || mAccessValid;
+  }
+
   // Ensure that it's valid to access the TabGroup at this time.
   void ValidateAccess() const
   {
-    MOZ_ASSERT(!sRunningDispatcher || mAccessValid);
+    MOZ_ASSERT(IsSafeToRun());
   }
 
-  class Runnable;
+  class Runnable final : public mozilla::Runnable
+  {
+  public:
+    Runnable(already_AddRefed<nsIRunnable>&& aRunnable,
+             SchedulerGroup* aGroup);
+
+    SchedulerGroup* Group() const { return mGroup; }
+
+    NS_IMETHOD GetName(nsACString& aName) override;
+
+    bool IsBackground() const { return mGroup->IsBackground(); }
+
+    NS_DECL_ISUPPORTS_INHERITED
+    NS_DECL_NSIRUNNABLE
+
+    NS_DECLARE_STATIC_IID_ACCESSOR(NS_SCHEDULERGROUPRUNNABLE_IID);
+
+ private:
+    ~Runnable() = default;
+
+    nsCOMPtr<nsIRunnable> mRunnable;
+    RefPtr<SchedulerGroup> mGroup;
+  };
   friend class Runnable;
 
   bool* GetValidAccessPtr() { return &mAccessValid; }
@@ -75,6 +116,10 @@ public:
   static nsresult UnlabeledDispatch(const char* aName,
                                     TaskCategory aCategory,
                                     already_AddRefed<nsIRunnable>&& aRunnable);
+
+  static void MarkVsyncReceived();
+
+  static void MarkVsyncRan();
 
 protected:
   // Implementations are guaranteed that this method is called on the main
@@ -111,6 +156,8 @@ protected:
   nsCOMPtr<nsIEventTarget> mEventTargets[size_t(TaskCategory::Count)];
   RefPtr<AbstractThread> mAbstractThreads[size_t(TaskCategory::Count)];
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(SchedulerGroup::Runnable, NS_SCHEDULERGROUPRUNNABLE_IID);
 
 } // namespace mozilla
 

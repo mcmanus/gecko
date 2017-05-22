@@ -4780,7 +4780,7 @@ nsDocShell::LoadURIWithOptions(const char16_t* aURI,
   // Cleanup the empty spaces that might be on each end.
   uriString.Trim(" ");
   // Eliminate embedded newlines, which single-line text fields now allow:
-  uriString.StripChars("\r\n");
+  uriString.StripCRLF();
   NS_ENSURE_TRUE(!uriString.IsEmpty(), NS_ERROR_FAILURE);
 
   rv = NS_NewURI(getter_AddRefs(uri), uriString);
@@ -5497,11 +5497,16 @@ nsDocShell::Reload(uint32_t aReloadFlags)
 
     MOZ_ASSERT(triggeringPrincipal, "Need a valid triggeringPrincipal");
 
-    rv = InternalLoad(mCurrentURI,
+    // Stack variables to ensure changes to the member variables don't affect to
+    // the call.
+    nsCOMPtr<nsIURI> currentURI = mCurrentURI;
+    nsCOMPtr<nsIURI> referrerURI = mReferrerURI;
+    uint32_t referrerPolicy = mReferrerPolicy;
+    rv = InternalLoad(currentURI,
                       originalURI,
                       loadReplace,
-                      mReferrerURI,
-                      mReferrerPolicy,
+                      referrerURI,
+                      referrerPolicy,
                       triggeringPrincipal,
                       triggeringPrincipal,
                       flags,
@@ -5691,6 +5696,11 @@ nsDocShell::LoadPage(nsISupports* aPageDescriptor, uint32_t aDisplayType)
     }
     shEntry->SetURI(newUri);
     shEntry->SetOriginalURI(nullptr);
+    // shEntry's current triggering principal is whoever loaded that page initially.
+    // But now we're doing another load of the page, via an API that is only exposed
+    // to system code.  The triggering principal for this load should be the system
+    // principal.
+    shEntry->SetTriggeringPrincipal(nsContentUtils::GetSystemPrincipal());
   }
 
   rv = LoadHistoryEntry(shEntry, LOAD_HISTORY);
@@ -7566,7 +7576,7 @@ nsDocShell::OnRedirectStateChange(nsIChannel* aOldChannel,
         secMan->GetDocShellCodebasePrincipal(newURI, this,
                                              getter_AddRefs(principal));
         appCacheChannel->SetChooseApplicationCache(
-          NS_ShouldCheckAppCache(principal, UsePrivateBrowsing()));
+          NS_ShouldCheckAppCache(principal));
       }
     }
   }
@@ -9848,8 +9858,12 @@ nsDocShell::InternalLoad(nsIURI* aURI,
   if (!aWindowTarget.IsEmpty()) {
     // Locate the target DocShell.
     nsCOMPtr<nsIDocShellTreeItem> targetItem;
-    // Only _self, _parent, and _top are supported in noopener case.
-    if (!(aFlags & INTERNAL_LOAD_FLAGS_NO_OPENER) ||
+    // Only _self, _parent, and _top are supported in noopener case.  But we
+    // have to be careful to not apply that to the noreferrer case.  See bug
+    // 1358469.
+    bool allowNamedTarget = !(aFlags & INTERNAL_LOAD_FLAGS_NO_OPENER) ||
+                            (aFlags & INTERNAL_LOAD_FLAGS_DONT_SEND_REFERRER);
+    if (allowNamedTarget ||
         aWindowTarget.LowerCaseEqualsLiteral("_self") ||
         aWindowTarget.LowerCaseEqualsLiteral("_parent") ||
         aWindowTarget.LowerCaseEqualsLiteral("_top")) {
@@ -11155,7 +11169,7 @@ nsDocShell::DoURILoad(nsIURI* aURI,
         secMan->GetDocShellCodebasePrincipal(aURI, this,
                                              getter_AddRefs(principal));
         appCacheChannel->SetChooseApplicationCache(
-          NS_ShouldCheckAppCache(principal, UsePrivateBrowsing()));
+          NS_ShouldCheckAppCache(principal));
       }
     }
   }
@@ -14292,24 +14306,11 @@ nsDocShell::OnOverLink(nsIContent* aContent,
     }
   }
 
-  nsCOMPtr<nsITextToSubURI> textToSubURI =
-    do_GetService(NS_ITEXTTOSUBURI_CONTRACTID, &rv);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  // use url origin charset to unescape the URL
-  nsAutoCString charset;
-  rv = aURI->GetOriginCharset(charset);
-  NS_ENSURE_SUCCESS(rv, rv);
-
   nsAutoCString spec;
   rv = aURI->GetSpec(spec);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsAutoString uStr;
-  rv = textToSubURI->UnEscapeURIForUI(charset, spec, uStr);
-  NS_ENSURE_SUCCESS(rv, rv);
+  NS_ConvertUTF8toUTF16 uStr(spec);
 
   mozilla::net::PredictorPredict(aURI, mCurrentURI,
                                  nsINetworkPredictor::PREDICT_LINK,

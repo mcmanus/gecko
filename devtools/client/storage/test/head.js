@@ -621,9 +621,8 @@ function getRowCells(id, includeHidden = false) {
                                " .table-widget-cell[value='" + id + "']");
 
   if (!item) {
-    ok(false, "Row id '" + id + "' exists");
-
-    showAvailableIds();
+    ok(false, `The row id '${id}' that was passed to getRowCells() does not ` +
+              `exist. ${getAvailableIds()}`);
   }
 
   let index = table.columns.get(table.uniqueId).cellNodes.indexOf(item);
@@ -640,18 +639,27 @@ function getRowCells(id, includeHidden = false) {
 }
 
 /**
- * Show available ids.
+ * Get available ids... useful for error reporting.
  */
-function showAvailableIds() {
+function getAvailableIds() {
   let doc = gPanelWindow.document;
   let table = gUI.table;
 
-  info("Available ids:");
+  let out = "Available ids:\n";
   let cells = doc.querySelectorAll(".table-widget-column#" + table.uniqueId +
                                    " .table-widget-cell");
   for (let cell of cells) {
-    info("  - " + cell.getAttribute("value"));
+    out += `  - ${cell.getAttribute("value")}\n`;
   }
+
+  return out;
+}
+
+/**
+ * Show available ids.
+ */
+function showAvailableIds() {
+  info(getAvailableIds);
 }
 
 /**
@@ -667,6 +675,19 @@ function showAvailableIds() {
  */
 function getCellValue(id, column) {
   let row = getRowValues(id, true);
+
+  if (typeof row[column] === "undefined") {
+    let out = "";
+    for (let key in row) {
+      let value = row[key];
+
+      out += `  - ${key} = ${value}\n`;
+    }
+
+    ok(false, `The column name '${column}' that was passed to ` +
+              `getCellValue() does not exist. Current column names and row ` +
+              `values are:\n${out}`);
+  }
 
   return row[column];
 }
@@ -941,4 +962,40 @@ function toggleSidebar() {
 
 function sidebarToggleVisible() {
   return !gUI.sidebarToggleBtn.hidden;
+}
+
+/**
+ * Add an item.
+ * @param  {Array} store
+ *         An array containing the path to the store to which we wish to add an
+ *         item.
+ */
+function* performAdd(store) {
+  let storeName = store.join(" > ");
+  let toolbar = gPanelWindow.document.getElementById("storage-toolbar");
+  let type = store[0];
+
+  yield selectTreeItem(store);
+
+  let menuAdd = toolbar.querySelector(
+    "#add-button");
+
+  if (menuAdd.hidden) {
+    is(menuAdd.hidden, false,
+       `performAdd called for ${storeName} but it is not supported`);
+    return;
+  }
+
+  let eventEdit = gUI.table.once("row-edit");
+  let eventWait = gUI.once("store-objects-updated");
+
+  menuAdd.click();
+
+  let rowId = yield eventEdit;
+  yield eventWait;
+
+  let key = type === "cookies" ? "uniqueKey" : "name";
+  let value = getCellValue(rowId, key);
+
+  is(rowId, value, `Row '${rowId}' was successfully added.`);
 }

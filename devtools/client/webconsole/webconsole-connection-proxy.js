@@ -10,8 +10,7 @@ const {Utils: WebConsoleUtils} = require("devtools/client/webconsole/utils");
 const defer = require("devtools/shared/defer");
 const Services = require("Services");
 
-const STRINGS_URI = "devtools/client/locales/webconsole.properties";
-var l10n = new WebConsoleUtils.L10n(STRINGS_URI);
+const l10n = require("devtools/client/webconsole/webconsole-l10n");
 
 const PREF_CONNECTION_TIMEOUT = "devtools.debugger.remote-timeout";
 // Web Console connection proxy
@@ -308,7 +307,13 @@ WebConsoleConnectionProxy.prototype = {
    *        The message received from the server.
    */
   _onLogMessage: function (type, packet) {
-    if (this.webConsoleFrame && packet.from == this._consoleActor) {
+    if (!this.webConsoleFrame || packet.from != this._consoleActor) {
+      return;
+    }
+
+    if (this.webConsoleFrame.NEW_CONSOLE_OUTPUT_ENABLED) {
+      this.dispatchMessageAdd(packet);
+    } else {
       this.webConsoleFrame.handleLogMessage(packet);
     }
   },

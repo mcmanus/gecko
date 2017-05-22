@@ -18,11 +18,8 @@
 
 #include "wasm/WasmCode.h"
 
-#include "mozilla/Atomics.h"
 #include "mozilla/BinarySearch.h"
 #include "mozilla/EnumeratedRange.h"
-
-#include "jsprf.h"
 
 #include "jit/ExecutableAllocator.h"
 #ifdef JS_ION_PERF
@@ -32,27 +29,14 @@
 #include "wasm/WasmModule.h"
 #include "wasm/WasmSerialize.h"
 
-#include "jsobjinlines.h"
-
 #include "jit/MacroAssembler-inl.h"
-#include "vm/ArrayBufferObject-inl.h"
 
 using namespace js;
 using namespace js::jit;
 using namespace js::wasm;
-using mozilla::Atomic;
 using mozilla::BinarySearch;
 using mozilla::MakeEnumeratedRange;
 using JS::GenericNaN;
-
-// Limit the number of concurrent wasm code allocations per process. Note that
-// on Linux, the real maximum is ~32k, as each module requires 2 maps (RW/RX),
-// and the kernel's default max_map_count is ~65k.
-//
-// Note: this can be removed once writable/non-executable global data stops
-// being stored in the code segment.
-static Atomic<uint32_t> wasmCodeAllocations(0);
-static const uint32_t MaxWasmCodeAllocations = 16384;
 
 static uint32_t
 RoundupCodeLength(uint32_t codeLength)
@@ -63,13 +47,10 @@ RoundupCodeLength(uint32_t codeLength)
     return JS_ROUNDUP(codeLength, ExecutableCodePageSize);
 }
 
-static uint8_t*
-AllocateCodeSegment(JSContext* cx, uint32_t codeLength)
+/* static */ CodeSegment::UniqueCodeBytes
+CodeSegment::AllocateCodeBytes(uint32_t codeLength)
 {
     codeLength = RoundupCodeLength(codeLength);
-
-    if (wasmCodeAllocations >= MaxWasmCodeAllocations)
-        return nullptr;
 
     void* p = AllocateExecutableMemory(codeLength, ProtectionSetting::Writable);
 
@@ -83,21 +64,21 @@ AllocateCodeSegment(JSContext* cx, uint32_t codeLength)
         }
     }
 
-    if (!p) {
-        ReportOutOfMemory(cx);
+    if (!p)
         return nullptr;
-    }
 
-    cx->zone()->updateJitCodeMallocBytes(codeLength);
+    // We account for the bytes allocated in WasmModuleObject::create, where we
+    // have the necessary JSContext.
 
-    wasmCodeAllocations++;
-    return (uint8_t*)p;
+    return UniqueCodeBytes((uint8_t*)p, FreeCode(codeLength));
 }
 
-static void
-FreeCodeSegment(uint8_t* bytes, uint32_t codeLength)
+void
+CodeSegment::FreeCode::operator()(uint8_t* bytes)
 {
-    codeLength = RoundupCodeLength(codeLength);
+    MOZ_ASSERT(codeLength);
+    MOZ_ASSERT(codeLength == RoundupCodeLength(codeLength));
+
 #ifdef MOZ_VTUNE
     vtune::UnmarkBytes(bytes, codeLength);
 #endif
@@ -134,6 +115,33 @@ StaticallyLink(const CodeSegment& cs, const LinkData& linkData)
     }
 
     return true;
+}
+
+static void
+StaticallyUnlink(uint8_t* base, const LinkData& linkData)
+{
+    for (LinkData::InternalLink link : linkData.internalLinks) {
+        uint8_t* patchAt = base + link.patchAtOffset;
+        void* target = 0;
+        if (link.isRawPointerPatch())
+            *(void**)(patchAt) = target;
+        else
+            Assembler::PatchInstructionImmediate(patchAt, PatchedImmPtr(target));
+    }
+
+    for (auto imm : MakeEnumeratedRange(SymbolicAddress::Limit)) {
+        const Uint32Vector& offsets = linkData.symbolicLinks[imm];
+        if (offsets.empty())
+            continue;
+
+        void* target = SymbolicAddressTarget(imm);
+        for (uint32_t offset : offsets) {
+            uint8_t* patchAt = base + offset;
+            Assembler::PatchDataWithValueCheck(CodeLocationLabel(patchAt),
+                                               PatchedImmPtr((void*)-1),
+                                               PatchedImmPtr(target));
+        }
+    }
 }
 
 static void
@@ -185,66 +193,150 @@ SendCodeRangesToProfiler(const CodeSegment& cs, const Bytes& bytecode, const Met
 }
 
 /* static */ UniqueConstCodeSegment
-CodeSegment::create(JSContext* cx,
-                    const Bytes& codeBytes,
-                    const SharedBytes& bytecode,
+CodeSegment::create(MacroAssembler& masm,
+                    const ShareableBytes& bytecode,
                     const LinkData& linkData,
                     const Metadata& metadata)
 {
-    MOZ_ASSERT(codeBytes.length() % gc::SystemPageSize() == 0);
-    MOZ_ASSERT(linkData.functionCodeLength < codeBytes.length());
+    // Round up the code size to page size since this is eventually required by
+    // the executable-code allocator and for setting memory protection.
+    uint32_t bytesNeeded = masm.bytesNeeded();
+    uint32_t padding = ComputeByteAlignment(bytesNeeded, gc::SystemPageSize());
+    uint32_t codeLength = bytesNeeded + padding;
 
+    MOZ_ASSERT(linkData.functionCodeLength < codeLength);
+
+    UniqueCodeBytes codeBytes = AllocateCodeBytes(codeLength);
+    if (!codeBytes)
+        return nullptr;
+
+    // We'll flush the icache after static linking, in initialize().
+    masm.executableCopy(codeBytes.get(), /* flushICache = */ false);
+
+    // Zero the padding.
+    memset(codeBytes.get() + bytesNeeded, 0, padding);
+
+    return create(Move(codeBytes), codeLength, bytecode, linkData, metadata);
+}
+
+/* static */ UniqueConstCodeSegment
+CodeSegment::create(const Bytes& unlinkedBytes,
+                    const ShareableBytes& bytecode,
+                    const LinkData& linkData,
+                    const Metadata& metadata)
+{
+    // The unlinked bytes are a snapshot of the MacroAssembler's contents so
+    // round up just like in the MacroAssembler overload above.
+    uint32_t padding = ComputeByteAlignment(unlinkedBytes.length(), gc::SystemPageSize());
+    uint32_t codeLength = unlinkedBytes.length() + padding;
+
+    UniqueCodeBytes codeBytes = AllocateCodeBytes(codeLength);
+    if (!codeBytes)
+        return nullptr;
+
+    memcpy(codeBytes.get(), unlinkedBytes.begin(), unlinkedBytes.length());
+    memset(codeBytes.get() + unlinkedBytes.length(), 0, padding);
+
+    return create(Move(codeBytes), codeLength, bytecode, linkData, metadata);
+}
+
+/* static */ UniqueConstCodeSegment
+CodeSegment::create(UniqueCodeBytes codeBytes,
+                    uint32_t codeLength,
+                    const ShareableBytes& bytecode,
+                    const LinkData& linkData,
+                    const Metadata& metadata)
+{
     // These should always exist and should never be first in the code segment.
     MOZ_ASSERT(linkData.interruptOffset != 0);
     MOZ_ASSERT(linkData.outOfBoundsOffset != 0);
     MOZ_ASSERT(linkData.unalignedAccessOffset != 0);
 
-    uint8_t* codeBase = AllocateCodeSegment(cx, codeBytes.length());
-    if (!codeBase)
+    auto cs = js::MakeUnique<CodeSegment>();
+    if (!cs)
         return nullptr;
 
-    auto cs = cx->make_unique<const CodeSegment>(codeBase, linkData.functionCodeLength,
-                                                 codeBytes.length(),
-                                                 codeBase + linkData.interruptOffset,
-                                                 codeBase + linkData.outOfBoundsOffset,
-                                                 codeBase + linkData.unalignedAccessOffset);
-    if (!cs) {
-        FreeCodeSegment(codeBase, codeBytes.length());
+    if (!cs->initialize(Move(codeBytes), codeLength, bytecode, linkData, metadata))
         return nullptr;
-    }
 
-    {
-        JitContext jcx(CompileRuntime::get(cx->compartment()->runtimeFromAnyThread()));
-        AutoFlushICache afc("CodeSegment::create");
-        AutoFlushICache::setRange(uintptr_t(codeBase), cs->length());
-
-        memcpy(codeBase, codeBytes.begin(), codeBytes.length());
-        if (!StaticallyLink(*cs, linkData))
-            return nullptr;
-    }
-
-    // Reprotect the whole region to avoid having separate RW and RX mappings.
-    if (!ExecutableAllocator::makeExecutable(codeBase, RoundupCodeLength(cs->length()))) {
-        ReportOutOfMemory(cx);
-        return nullptr;
-    }
-
-    SendCodeRangesToProfiler(*cs, bytecode->bytes, metadata);
-
-    return cs;
+    return UniqueConstCodeSegment(cs.release());
 }
 
-CodeSegment::~CodeSegment()
+bool
+CodeSegment::initialize(UniqueCodeBytes codeBytes,
+                        uint32_t codeLength,
+                        const ShareableBytes& bytecode,
+                        const LinkData& linkData,
+                        const Metadata& metadata)
 {
-    if (!bytes_)
-        return;
+    MOZ_ASSERT(bytes_ == nullptr);
 
-    MOZ_ASSERT(wasmCodeAllocations > 0);
-    wasmCodeAllocations--;
+    bytes_ = Move(codeBytes);
+    functionLength_ = linkData.functionCodeLength;
+    length_ = codeLength;
+    interruptCode_ = bytes_.get() + linkData.interruptOffset;
+    outOfBoundsCode_ = bytes_.get() + linkData.outOfBoundsOffset;
+    unalignedAccessCode_ = bytes_.get() + linkData.unalignedAccessOffset;
 
-    MOZ_ASSERT(length() > 0);
+    if (!StaticallyLink(*this, linkData))
+        return false;
 
-    FreeCodeSegment(bytes_, length());
+    ExecutableAllocator::cacheFlush(bytes_.get(), RoundupCodeLength(codeLength));
+
+    // Reprotect the whole region to avoid having separate RW and RX mappings.
+    if (!ExecutableAllocator::makeExecutable(bytes_.get(), RoundupCodeLength(codeLength)))
+        return false;
+
+    SendCodeRangesToProfiler(*this, bytecode.bytes, metadata);
+
+    return true;
+}
+
+size_t
+CodeSegment::serializedSize() const
+{
+    return sizeof(uint32_t) + length_;
+}
+
+void
+CodeSegment::addSizeOfMisc(mozilla::MallocSizeOf mallocSizeOf, size_t* code, size_t* data) const
+{
+    *data += mallocSizeOf(this);
+    *code += RoundupCodeLength(length_);
+}
+
+uint8_t*
+CodeSegment::serialize(uint8_t* cursor, const LinkData& linkData) const
+{
+    cursor = WriteScalar<uint32_t>(cursor, length_);
+    uint8_t* base = cursor;
+    cursor = WriteBytes(cursor, bytes_.get(), length_);
+    StaticallyUnlink(base, linkData);
+    return cursor;
+}
+
+const uint8_t*
+CodeSegment::deserialize(const uint8_t* cursor, const ShareableBytes& bytecode,
+                         const LinkData& linkData, const Metadata& metadata)
+{
+    uint32_t length;
+    cursor = ReadScalar<uint32_t>(cursor, &length);
+    if (!cursor)
+        return nullptr;
+
+    MOZ_ASSERT(length_ % gc::SystemPageSize() == 0);
+    UniqueCodeBytes bytes = AllocateCodeBytes(length);
+    if (!bytes)
+        return nullptr;
+
+    cursor = ReadBytes(cursor, bytes.get(), length);
+    if (!cursor)
+        return nullptr;
+
+    if (!initialize(Move(bytes), length, bytecode, linkData, metadata))
+        return nullptr;
+
+    return cursor;
 }
 
 size_t
@@ -480,15 +572,16 @@ Metadata::getFuncName(const Bytes* maybeBytecode, uint32_t funcIndex, UTF8Bytes*
            name->append(afterFuncIndex, strlen(afterFuncIndex));
 }
 
-Code::Code(UniqueConstCodeSegment segment,
-           const Metadata& metadata,
-           const ShareableBytes* maybeBytecode)
+Code::Code(UniqueConstCodeSegment segment, const Metadata& metadata)
   : segment_(Move(segment)),
     metadata_(&metadata),
-    maybeBytecode_(maybeBytecode),
     profilingLabels_(mutexid::WasmCodeProfilingLabels, CacheableCharsVector())
 {
-    MOZ_ASSERT_IF(metadata_->debugEnabled, maybeBytecode);
+}
+
+Code::Code()
+  : profilingLabels_(mutexid::WasmCodeProfilingLabels, CacheableCharsVector())
+{
 }
 
 struct CallSiteRetAddrOffset
@@ -500,25 +593,72 @@ struct CallSiteRetAddrOffset
     }
 };
 
+size_t
+Code::serializedSize() const
+{
+    return metadata().serializedSize() +
+           segment().serializedSize();
+}
+
+uint8_t*
+Code::serialize(uint8_t* cursor, const LinkData& linkData) const
+{
+    MOZ_RELEASE_ASSERT(!metadata().debugEnabled);
+
+    cursor = metadata().serialize(cursor);
+    cursor = segment().serialize(cursor, linkData);
+    return cursor;
+}
+
+const uint8_t*
+Code::deserialize(const uint8_t* cursor, const SharedBytes& bytecode, const LinkData& linkData,
+                  Metadata* maybeMetadata)
+{
+    MutableMetadata metadata;
+    if (maybeMetadata) {
+        metadata = maybeMetadata;
+    } else {
+        metadata = js_new<Metadata>();
+        if (!metadata)
+            return nullptr;
+    }
+    cursor = metadata->deserialize(cursor);
+    if (!cursor)
+        return nullptr;
+
+    UniqueCodeSegment codeSegment = js::MakeUnique<CodeSegment>();
+    if (!codeSegment)
+        return nullptr;
+
+    cursor = codeSegment->deserialize(cursor, *bytecode, linkData, *metadata);
+    if (!cursor)
+        return nullptr;
+
+    segment_ = UniqueConstCodeSegment(codeSegment.release());
+    metadata_ = metadata;
+
+    return cursor;
+}
+
 const CallSite*
 Code::lookupCallSite(void* returnAddress) const
 {
     uint32_t target = ((uint8_t*)returnAddress) - segment_->base();
     size_t lowerBound = 0;
-    size_t upperBound = metadata_->callSites.length();
+    size_t upperBound = metadata().callSites.length();
 
     size_t match;
-    if (!BinarySearch(CallSiteRetAddrOffset(metadata_->callSites), lowerBound, upperBound, target, &match))
+    if (!BinarySearch(CallSiteRetAddrOffset(metadata().callSites), lowerBound, upperBound, target, &match))
         return nullptr;
 
-    return &metadata_->callSites[match];
+    return &metadata().callSites[match];
 }
 
 const CodeRange*
 Code::lookupRange(void* pc) const
 {
     CodeRange::OffsetInCode target((uint8_t*)pc - segment_->base());
-    return LookupInSorted(metadata_->codeRanges, target);
+    return LookupInSorted(metadata().codeRanges, target);
 }
 
 struct MemoryAccessOffset
@@ -537,30 +677,13 @@ Code::lookupMemoryAccess(void* pc) const
 
     uint32_t target = ((uint8_t*)pc) - segment_->base();
     size_t lowerBound = 0;
-    size_t upperBound = metadata_->memoryAccesses.length();
+    size_t upperBound = metadata().memoryAccesses.length();
 
     size_t match;
-    if (!BinarySearch(MemoryAccessOffset(metadata_->memoryAccesses), lowerBound, upperBound, target, &match))
+    if (!BinarySearch(MemoryAccessOffset(metadata().memoryAccesses), lowerBound, upperBound, target, &match))
         return nullptr;
 
-    return &metadata_->memoryAccesses[match];
-}
-
-bool
-Code::getFuncName(uint32_t funcIndex, UTF8Bytes* name) const
-{
-    const Bytes* maybeBytecode = maybeBytecode_ ? &maybeBytecode_.get()->bytes : nullptr;
-    return metadata_->getFuncName(maybeBytecode, funcIndex, name);
-}
-
-JSAtom*
-Code::getFuncAtom(JSContext* cx, uint32_t funcIndex) const
-{
-    UTF8Bytes name;
-    if (!getFuncName(funcIndex, &name))
-        return nullptr;
-
-    return AtomizeUTF8Chars(cx, name.begin(), name.length());
+    return &metadata().memoryAccesses[match];
 }
 
 // When enabled, generate profiling labels for every name in funcNames_ that is
@@ -568,7 +691,7 @@ Code::getFuncAtom(JSContext* cx, uint32_t funcIndex) const
 // since, once we start sampling, we'll be in a signal-handing context where we
 // cannot malloc.
 void
-Code::ensureProfilingLabels(bool profilingEnabled) const
+Code::ensureProfilingLabels(const Bytes* maybeBytecode, bool profilingEnabled) const
 {
     auto labels = profilingLabels_.lock();
 
@@ -580,7 +703,7 @@ Code::ensureProfilingLabels(bool profilingEnabled) const
     if (!labels->empty())
         return;
 
-    for (const CodeRange& codeRange : metadata_->codeRanges) {
+    for (const CodeRange& codeRange : metadata().codeRanges) {
         if (!codeRange.isFunction())
             continue;
 
@@ -589,10 +712,12 @@ Code::ensureProfilingLabels(bool profilingEnabled) const
         MOZ_ASSERT(bytecodeStr);
 
         UTF8Bytes name;
-        if (!getFuncName(codeRange.funcIndex(), &name) || !name.append(" (", 2))
+        if (!metadata_->getFuncName(maybeBytecode, codeRange.funcIndex(), &name))
+            return;
+        if (!name.append(" (", 2))
             return;
 
-        if (const char* filename = metadata_->filename.get()) {
+        if (const char* filename = metadata().filename.get()) {
             if (!name.append(filename, strlen(filename)))
                 return;
         } else {
@@ -631,16 +756,21 @@ Code::profilingLabel(uint32_t funcIndex) const
 }
 
 void
-Code::addSizeOfMisc(MallocSizeOf mallocSizeOf,
-                    Metadata::SeenSet* seenMetadata,
-                    ShareableBytes::SeenSet* seenBytes,
-                    size_t* code,
-                    size_t* data) const
+Code::addSizeOfMiscIfNotSeen(MallocSizeOf mallocSizeOf,
+                             Metadata::SeenSet* seenMetadata,
+                             Code::SeenSet* seenCode,
+                             size_t* code,
+                             size_t* data) const
 {
-    *code += segment_->length();
-    *data += mallocSizeOf(this) +
-             metadata_->sizeOfIncludingThisIfNotSeen(mallocSizeOf, seenMetadata);
+    auto p = seenCode->lookupForAdd(this);
+    if (p)
+        return;
+    bool ok = seenCode->add(p, this);
+    (void)ok;  // oh well
 
-    if (maybeBytecode_)
-        *data += maybeBytecode_->sizeOfIncludingThisIfNotSeen(mallocSizeOf, seenBytes);
+    *data += mallocSizeOf(this) +
+             metadata().sizeOfIncludingThisIfNotSeen(mallocSizeOf, seenMetadata) +
+             profilingLabels_.lock()->sizeOfExcludingThis(mallocSizeOf);
+
+    segment_->addSizeOfMisc(mallocSizeOf, code, data);
 }

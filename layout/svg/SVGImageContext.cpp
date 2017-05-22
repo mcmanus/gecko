@@ -22,24 +22,11 @@ SVGImageContext::MaybeStoreContextPaint(Maybe<SVGImageContext>& aContext,
                                         nsIFrame* aFromFrame,
                                         imgIContainer* aImgContainer)
 {
-  static bool sEnabledForContent = false;
-  static bool sEnabledForContentCached = false;
+  const nsStyleSVG* style = aFromFrame->StyleSVG();
 
-  if (!sEnabledForContentCached) {
-    Preferences::AddBoolVarCache(&sEnabledForContent,
-                                 "svg.context-properties.content.enabled", false);
-    sEnabledForContentCached = true;
-  }
-
-  if (!aFromFrame->StyleSVG()->ExposesContextProperties()) {
+  if (!style->ExposesContextProperties()) {
     // Content must have '-moz-context-properties' set to the names of the
     // properties it wants to expose to images it links to.
-    return;
-  }
-
-  if (!sEnabledForContent &&
-      !nsContentUtils::IsChromeDoc(aFromFrame->PresContext()->Document())) {
-    // Context paint is pref'ed off for content and this is a content doc.
     return;
   }
 
@@ -52,15 +39,13 @@ SVGImageContext::MaybeStoreContextPaint(Maybe<SVGImageContext>& aContext,
 
   RefPtr<SVGEmbeddingContextPaint> contextPaint = new SVGEmbeddingContextPaint();
 
-  const nsStyleSVG* style = aFromFrame->StyleSVG();
-
-  // XXX don't set values for properties not listed in 'context-properties'.
-
-  if (style->mFill.Type() == eStyleSVGPaintType_Color) {
+  if ((style->mContextPropsBits & NS_STYLE_CONTEXT_PROPERTY_FILL) &&
+      style->mFill.Type() == eStyleSVGPaintType_Color) {
     haveContextPaint = true;
     contextPaint->SetFill(style->mFill.GetColor());
   }
-  if (style->mStroke.Type() == eStyleSVGPaintType_Color) {
+  if ((style->mContextPropsBits & NS_STYLE_CONTEXT_PROPERTY_STROKE) &&
+      style->mStroke.Type() == eStyleSVGPaintType_Color) {
     haveContextPaint = true;
     contextPaint->SetStroke(style->mStroke.GetColor());
   }

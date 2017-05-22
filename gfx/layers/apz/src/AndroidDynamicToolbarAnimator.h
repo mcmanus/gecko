@@ -13,6 +13,7 @@
 #include "mozilla/ipc/Shmem.h"
 #include "mozilla/layers/Effects.h"
 #include "mozilla/layers/TextureHost.h"
+#include "mozilla/LinkedList.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/TimeStamp.h"
 #include "nsISupports.h"
@@ -57,7 +58,7 @@ public:
   // Returns nsEventStatus_eIgnore when the event is not consumed and
   // nsEventStatus_eConsumeNoDefault when the event was used to translate the
   // toolbar.
-  nsEventStatus ReceiveInputEvent(InputData& aEvent);
+  nsEventStatus ReceiveInputEvent(InputData& aEvent, const ScreenPoint& aScrollOffset);
   void SetMaxToolbarHeight(ScreenIntCoord aHeight);
   // When a pinned reason is set to true, the animator will prevent
   // touch events from altering the height of the toolbar. All pinned
@@ -68,8 +69,10 @@ public:
   void SetPinned(bool aPinned, int32_t aReason);
   // returns maximum number of Y device pixels the toolbar will cover when fully visible.
   ScreenIntCoord GetMaxToolbarHeight() const;
-  // returns the current number of Y device pixels the toolbar is currently showing.
+  // returns the current number of Y screen pixels the toolbar is currently showing.
   ScreenIntCoord GetCurrentToolbarHeight() const;
+  // returns the current number of Y screen pixels the content should be offset from the top of the surface.
+  ScreenIntCoord GetCurrentContentOffset() const;
   // returns the height in device pixels of the current Android surface used to display content and the toolbar.
   // This will only change when the surface provided by the system actually changes size such as when
   // the device is rotated or the virtual keyboard is made visible.
@@ -78,8 +81,6 @@ public:
   // shown, the content may extend beyond the bottom of the surface until the toolbar is completely
   // visible or hidden.
   ScreenIntCoord GetCompositionHeight() const;
-  // Returns true if the composition size has changed from the last time it was set.
-  bool SetCompositionSize(ScreenIntSize aSize);
   // Called to signal that root content is being scrolled. This prevents sub scroll frames from
   // affecting the toolbar when being scrolled up. The idea is a scrolling down will always
   // show the toolbar while scrolling up will only hide the toolbar if it is the root content
@@ -92,6 +93,8 @@ public:
   void FirstPaint();
   // Called whenever the root document's FrameMetrics have reached a steady state.
   void UpdateRootFrameMetrics(const FrameMetrics& aMetrics);
+  // Only update the frame metrics if the root composition size has changed
+  void MaybeUpdateCompositionSizeAndRootFrameMetrics(const FrameMetrics& aMetrics);
   // When aEnable is set to true, it informs the animator that the UI thread expects to
   // be notified when the layer tree  has been updated. Enabled currently by robocop tests.
   void EnableLayersUpdateNotifications(bool aEnable);
@@ -136,7 +139,7 @@ protected:
   void UpdateControllerCompositionHeight(ScreenIntCoord aHeight);
   void UpdateFixedLayerMargins();
   void NotifyControllerPendingAnimation(int32_t aDirection, AnimationStyle aStyle);
-  void StartCompositorAnimation(int32_t aDirection, AnimationStyle aStyle, ScreenIntCoord aHeight);
+  void StartCompositorAnimation(int32_t aDirection, AnimationStyle aStyle, ScreenIntCoord aHeight, bool aWaitForPageResize);
   void NotifyControllerAnimationStarted();
   void StopCompositorAnimation();
   void NotifyControllerAnimationStopped(ScreenIntCoord aHeight);
@@ -145,12 +148,19 @@ protected:
   void UpdateFrameMetrics(ScreenPoint aScrollOffset,
                           CSSToScreenScale aScale,
                           CSSRect aCssPageRect);
-  bool IsEnoughPageToHideToolbar(ScreenIntCoord delta);
+  // Returns true if the page is too small to animate the toolbar
+  // Also ensures the toolbar is visible.
+  bool PageTooSmallEnsureToolbarVisible();
   void ShowToolbarIfNotVisible(StaticToolbarState aCurrentToolbarState);
   void TranslateTouchEvent(MultiTouchInput& aTouchEvent);
   ScreenIntCoord GetFixedLayerMarginsBottom();
   void NotifyControllerSnapshotFailed();
   void CheckForResetOnNextMove(ScreenIntCoord aCurrentTouch);
+  // Returns true if the page scroll offset is near the bottom.
+  bool ScrollOffsetNearBottom() const;
+  // Returns true if toolbar is not completely visible nor completely hidden.
+  bool ToolbarInTransition();
+  void QueueMessage(int32_t aMessage);
 
   // Read only Compositor and Controller threads after Initialize()
   uint64_t mRootLayerTreeId;
@@ -160,13 +170,13 @@ protected:
   Atomic<uint32_t> mPinnedFlags;            // The toolbar should not be moved or animated unless no flags are set
 
   // Controller thread only
-  bool    mControllerScrollingRootContent;     // Set to true when the root content is being scrolled
-  bool    mControllerDragThresholdReached;     // Set to true when the drag threshold has been passed in a single drag
-  bool    mControllerCancelTouchTracking;      // Set to true when the UI thread requests the toolbar be made visible
-  bool    mControllerDragChangedDirection;     // Set to true if the drag ever goes in more than one direction
-  bool    mControllerResetOnNextMove;          // Set to true if transitioning from multiple touches to a single touch source
-                                               // Causes mControllerStartTouch, mControllerPreviousTouch, mControllerTotalDistance,
-                                               // mControllerDragThresholdReached, and mControllerLastDragDirection to be reset on next move
+  bool mControllerScrollingRootContent; // Set to true when the root content is being scrolled
+  bool mControllerDragThresholdReached; // Set to true when the drag threshold has been passed in a single drag
+  bool mControllerCancelTouchTracking;  // Set to true when the UI thread requests the toolbar be made visible
+  bool mControllerDragChangedDirection; // Set to true if the drag ever goes in more than one direction
+  bool mControllerResetOnNextMove;      // Set to true if transitioning from multiple touches to a single touch source
+                                        // Causes mControllerStartTouch, mControllerPreviousTouch, mControllerTotalDistance,
+                                        // mControllerDragThresholdReached, and mControllerLastDragDirection to be reset on next move
   ScreenIntCoord mControllerStartTouch;        // The Y position where the touch started
   ScreenIntCoord mControllerPreviousTouch;     // The previous Y position of the touch
   ScreenIntCoord mControllerTotalDistance;     // Total distance travel during the current touch
@@ -174,6 +184,7 @@ protected:
   ScreenIntCoord mControllerToolbarHeight;     // Current height of the toolbar
   ScreenIntCoord mControllerSurfaceHeight;     // Current height of the render surface
   ScreenIntCoord mControllerCompositionHeight; // Current height of the visible page
+  ScreenCoord mControllerRootScrollY;          // Current scroll Y value of the root scroll frame
   int32_t mControllerLastDragDirection;        // Direction of movement of the previous touch move event
   int32_t mControllerTouchCount;               // Counts the number of current touches.
   uint32_t mControllerLastEventTimeStamp;      // Time stamp for the previous touch event received
@@ -193,13 +204,29 @@ protected:
   };
 
   // Controller thread only
-  FrameMetricsState mControllerFrameMetrics;
+  FrameMetricsState mControllerFrameMetrics; // Updated when frame metrics are in a steady state.
+
+  class QueuedMessage : public LinkedListElement<QueuedMessage> {
+  public:
+    explicit QueuedMessage(int32_t aMessage) :
+      mMessage(aMessage) {}
+    int32_t mMessage;
+  private:
+    QueuedMessage() = delete;
+    QueuedMessage(const QueuedMessage&) = delete;
+    QueuedMessage& operator=(const QueuedMessage&) = delete;
+  };
 
   // Compositor thread only
-  bool    mCompositorShutdown;
-  bool    mCompositorAnimationDeferred;           // An animation has been deferred until the toolbar is unlocked
-  bool    mCompositorLayersUpdateEnabled;         // Flag set to true when the UI thread is expecting to be notified when a layer has been updated
-  AnimationStyle mCompositorAnimationStyle;       // Set to true when the snap should be immediately hidden or shown in the animation update
+  bool mCompositorShutdown;             // Set to true when the compositor has been shutdown
+  bool mCompositorAnimationDeferred;    // An animation has been deferred until the toolbar is unlocked
+  bool mCompositorLayersUpdateEnabled;  // Flag set to true when the UI thread is expecting to be notified when a layer has been updated
+  bool mCompositorAnimationStarted;     // Set to true when the compositor has actually started animating the static snapshot.
+  bool mCompositorReceivedFirstPaint;   // Set to true when a first paint occurs. Used by toolbar animator to detect a new page load.
+  bool mCompositorWaitForPageResize;    // Set to true if the bottom of the page has been reached and the toolbar animator should wait for the page to resize before ending animation.
+  bool mCompositorToolbarShowRequested; // Set to true if the animator has already requested the real toolbar chrome be shown
+  bool mCompositorSendResponseForSnapshotUpdate;  // Set to true when a message should be sent after a static toolbar snapshot update
+  AnimationStyle mCompositorAnimationStyle;       // Set to true when the snapshot should be immediately hidden or shown in the animation update
   ScreenIntCoord mCompositorMaxToolbarHeight;     // Should contain the same value as mControllerMaxToolbarHeight
   ScreenIntCoord mCompositorToolbarHeight;        // This value is only updated by the compositor thread when the mToolbarState == ToolbarAnimating
   ScreenIntCoord mCompositorSurfaceHeight;        // Current height of the render surface
@@ -211,6 +238,7 @@ protected:
   RefPtr<DataTextureSource> mCompositorToolbarTexture; // The OGL texture used to render the snapshot in the compositor
   RefPtr<EffectRGB> mCompositorToolbarEffect;          // Effect used to render the snapshot in the compositor
   TimeStamp mCompositorAnimationStartTimeStamp;        // Time stamp when the current animation started
+  AutoCleanLinkedList<QueuedMessage> mCompositorQueuedMessages; // Queue to contain messages sent before Initialize() called
 };
 
 } // namespace layers

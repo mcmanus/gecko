@@ -60,6 +60,7 @@
 #include "nsIDocument.h"
 #include "nsGlobalWindow.h"
 #include "nsDOMDataChannel.h"
+#include "mozilla/dom/Location.h"
 #include "mozilla/dom/Performance.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Telemetry.h"
@@ -74,7 +75,6 @@
 #include "nsNetUtil.h"
 #include "nsIURLParser.h"
 #include "nsIDOMDataChannel.h"
-#include "nsIDOMLocation.h"
 #include "NullPrincipal.h"
 #include "mozilla/PeerIdentity.h"
 #include "mozilla/dom/RTCCertificate.h"
@@ -609,9 +609,10 @@ PeerConnectionImpl::Initialize(PeerConnectionObserver& aObserver,
 
   nsAutoCString locationCStr;
 
-  if (nsCOMPtr<nsIDOMLocation> location = mWindow->GetLocation()) {
+  if (RefPtr<Location> location = mWindow->GetLocation()) {
     nsAutoString locationAStr;
-    location->ToString(locationAStr);
+    res = location->ToString(locationAStr);
+    NS_ENSURE_SUCCESS(res, res);
 
     CopyUTF16toUTF8(locationAStr, locationCStr);
   }
@@ -2364,17 +2365,6 @@ PeerConnectionImpl::GetMediaPipelineForTrack(MediaStreamTrack& aRecvTrack)
   }
 
   return nullptr;
-}
-
-nsresult
-PeerConnectionImpl::SelectSsrc(MediaStreamTrack& aRecvTrack,
-                               unsigned short aSsrcIndex)
-{
-  RefPtr<MediaPipeline> pipeline = GetMediaPipelineForTrack(aRecvTrack);
-  if (pipeline) {
-    pipeline->SelectSsrc_m(aSsrcIndex);
-  }
-  return NS_OK;
 }
 
 nsresult

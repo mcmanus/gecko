@@ -38,19 +38,20 @@
 #include "jArray.h"
 #include "nsHtml5ArrayCopy.h"
 #include "nsAHtml5TreeBuilderState.h"
-#include "nsHtml5Atoms.h"
+#include "nsGkAtoms.h"
 #include "nsHtml5ByteReadable.h"
 #include "nsIUnicodeDecoder.h"
 #include "nsHtml5Macros.h"
 #include "nsIContentHandle.h"
+#include "nsHtml5Portability.h"
 
 class nsHtml5StreamParser;
 
+class nsHtml5AttributeName;
+class nsHtml5ElementName;
 class nsHtml5Tokenizer;
 class nsHtml5TreeBuilder;
 class nsHtml5MetaScanner;
-class nsHtml5AttributeName;
-class nsHtml5ElementName;
 class nsHtml5UTF16Buffer;
 class nsHtml5StateSnapshot;
 class nsHtml5Portability;
@@ -59,6 +60,7 @@ class nsHtml5Portability;
 class nsHtml5StackNode
 {
   public:
+    int32_t idxInTreeBuilder;
     int32_t flags;
     nsIAtom* name;
     nsIAtom* popName;
@@ -78,12 +80,28 @@ class nsHtml5StackNode
     bool isSpecial();
     bool isFosterParenting();
     bool isHtmlIntegrationPoint();
-    nsHtml5StackNode(int32_t flags, int32_t ns, nsIAtom* name, nsIContentHandle* node, nsIAtom* popName, nsHtml5HtmlAttributes* attributes);
-    nsHtml5StackNode(nsHtml5ElementName* elementName, nsIContentHandle* node);
-    nsHtml5StackNode(nsHtml5ElementName* elementName, nsIContentHandle* node, nsHtml5HtmlAttributes* attributes);
-    nsHtml5StackNode(nsHtml5ElementName* elementName, nsIContentHandle* node, nsIAtom* popName);
-    nsHtml5StackNode(nsHtml5ElementName* elementName, nsIAtom* popName, nsIContentHandle* node);
-    nsHtml5StackNode(nsHtml5ElementName* elementName, nsIContentHandle* node, nsIAtom* popName, bool markAsIntegrationPoint);
+    explicit nsHtml5StackNode(int32_t idxInTreeBuilder);
+    void setValues(int32_t flags,
+                   int32_t ns,
+                   nsIAtom* name,
+                   nsIContentHandle* node,
+                   nsIAtom* popName,
+                   nsHtml5HtmlAttributes* attributes);
+    void setValues(nsHtml5ElementName* elementName, nsIContentHandle* node);
+    void setValues(nsHtml5ElementName* elementName,
+                   nsIContentHandle* node,
+                   nsHtml5HtmlAttributes* attributes);
+    void setValues(nsHtml5ElementName* elementName,
+                   nsIContentHandle* node,
+                   nsIAtom* popName);
+    void setValues(nsHtml5ElementName* elementName,
+                   nsIAtom* popName,
+                   nsIContentHandle* node);
+    void setValues(nsHtml5ElementName* elementName,
+                   nsIContentHandle* node,
+                   nsIAtom* popName,
+                   bool markAsIntegrationPoint);
+
   private:
     static int32_t prepareSvgFlags(int32_t flags);
     static int32_t prepareMathFlags(int32_t flags, bool markAsIntegrationPoint);
@@ -91,12 +109,11 @@ class nsHtml5StackNode
     ~nsHtml5StackNode();
     void dropAttributes();
     void retain();
-    void release();
+    void release(nsHtml5TreeBuilder* owningTreeBuilder);
+    bool isUnused();
     static void initializeStatics();
     static void releaseStatics();
 };
-
-
 
 #endif
 

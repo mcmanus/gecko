@@ -17,6 +17,7 @@
 #include "nsHistory.h"
 #include "nsDOMNavigationTiming.h"
 #include "nsIDOMStorageManager.h"
+#include "mozilla/dom/LocalStorage.h"
 #include "mozilla/dom/Storage.h"
 #include "mozilla/dom/IdleRequest.h"
 #include "mozilla/dom/Performance.h"
@@ -64,7 +65,7 @@
 #include "nsReadableUtils.h"
 #include "nsDOMClassInfo.h"
 #include "nsJSEnvironment.h"
-#include "ScriptSettings.h"
+#include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Likely.h"
 #include "mozilla/Sprintf.h"
@@ -561,6 +562,7 @@ NS_INTERFACE_MAP_END_INHERITING(TimeoutHandler)
 
 class IdleRequestExecutor final : public nsIRunnable
                                 , public nsICancelableRunnable
+                                , public nsINamed
                                 , public nsIIncrementalRunnable
 {
 public:
@@ -580,6 +582,7 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(IdleRequestExecutor, nsIRunnable)
 
   NS_DECL_NSIRUNNABLE
+  NS_DECL_NSINAMED
   nsresult Cancel() override;
   void SetDeadline(TimeStamp aDeadline) override;
 
@@ -646,9 +649,23 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(IdleRequestExecutor)
   NS_INTERFACE_MAP_ENTRY(nsIRunnable)
   NS_INTERFACE_MAP_ENTRY(nsICancelableRunnable)
+  NS_INTERFACE_MAP_ENTRY(nsINamed)
   NS_INTERFACE_MAP_ENTRY(nsIIncrementalRunnable)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIRunnable)
 NS_INTERFACE_MAP_END
+
+NS_IMETHODIMP
+IdleRequestExecutor::GetName(nsACString& aName)
+{
+    aName.AssignASCII("IdleRequestExecutor");
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+IdleRequestExecutor::SetName(const char* aName)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
 
 NS_IMETHODIMP
 IdleRequestExecutor::Run()
@@ -1933,7 +1950,6 @@ nsGlobalWindow::CleanUp()
   mPersonalbar = nullptr;
   mStatusbar = nullptr;
   mScrollbars = nullptr;
-  mLocation = nullptr;
   mHistory = nullptr;
   mCustomElements = nullptr;
   mFrames = nullptr;
@@ -2096,7 +2112,6 @@ nsGlobalWindow::FreeInnerObjects()
     mListenerManager = nullptr;
   }
 
-  mLocation = nullptr;
   mHistory = nullptr;
   mCustomElements = nullptr;
 
@@ -3147,15 +3162,6 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
 
     if (currentInner && currentInner->GetWrapperPreserveColor()) {
       if (oldDoc == aDocument) {
-        // Move the navigator from the old inner window to the new one since
-        // this is a document.write. This is safe from a same-origin point of
-        // view because document.write can only be used by the same origin.
-        newInnerWindow->mNavigator = currentInner->mNavigator;
-        currentInner->mNavigator = nullptr;
-        if (newInnerWindow->mNavigator) {
-          newInnerWindow->mNavigator->SetWindow(newInnerWindow->AsInner());
-        }
-
         // Make a copy of the old window's performance object on document.open.
         // Note that we have to force eager creation of it here, because we need
         // to grab the current document channel and whatnot before that changes.
@@ -8427,7 +8433,17 @@ nsGlobalWindow::ScrollTo(double aXScroll, double aYScroll)
 void
 nsGlobalWindow::ScrollTo(const ScrollToOptions& aOptions)
 {
-  FlushPendingNotifications(FlushType::Layout);
+  // When scrolling to a non-zero offset, we need to determine whether that
+  // position is within our scrollable range, so we need updated layout
+  // information which requires a layout flush, otherwise all we need is to
+  // flush frames to be able to access our scrollable frame here.
+  FlushType flushType = ((aOptions.mLeft.WasPassed() &&
+                          aOptions.mLeft.Value() > 0) ||
+                         (aOptions.mTop.WasPassed() &&
+                          aOptions.mTop.Value() > 0)) ?
+                          FlushType::Layout :
+                          FlushType::Frames;
+  FlushPendingNotifications(flushType);
   nsIScrollableFrame *sf = GetScrollFrame();
 
   if (sf) {
@@ -8453,7 +8469,14 @@ void
 nsGlobalWindow::ScrollTo(const CSSIntPoint& aScroll,
                          const ScrollOptions& aOptions)
 {
-  FlushPendingNotifications(FlushType::Layout);
+  // When scrolling to a non-zero offset, we need to determine whether that
+  // position is within our scrollable range, so we need updated layout
+  // information which requires a layout flush, otherwise all we need is to
+  // flush frames to be able to access our scrollable frame here.
+  FlushType flushType = (aScroll.x || aScroll.y) ?
+                          FlushType::Layout :
+                          FlushType::Frames;
+  FlushPendingNotifications(flushType);
   nsIScrollableFrame *sf = GetScrollFrame();
 
   if (sf) {
@@ -10449,26 +10472,18 @@ nsGlobalWindow::GetPrivateRoot()
 }
 
 Location*
-nsGlobalWindow::GetLocation(ErrorResult& aError)
-{
-  MOZ_RELEASE_ASSERT(IsInnerWindow());
-
-  nsIDocShell *docShell = GetDocShell();
-  if (!mLocation && docShell) {
-    mLocation = new Location(AsInner(), docShell);
-  }
-  return mLocation;
-}
-
-nsIDOMLocation*
 nsGlobalWindow::GetLocation()
 {
+  // This method can be called on the outer window as well.
   FORWARD_TO_INNER(GetLocation, (), nullptr);
 
-  ErrorResult dummy;
-  nsIDOMLocation* location = GetLocation(dummy);
-  dummy.SuppressException();
-  return location;
+  MOZ_RELEASE_ASSERT(IsInnerWindow());
+
+  if (!mLocation) {
+    mLocation = new dom::Location(AsInner(), GetDocShell());
+  }
+
+  return mLocation;
 }
 
 void
@@ -11064,13 +11079,46 @@ nsGlobalWindow::GetComputedStyle(Element& aElt, const nsAString& aPseudoElt,
                                  ErrorResult& aError)
 {
   MOZ_ASSERT(IsInnerWindow());
-  FORWARD_TO_OUTER_OR_THROW(GetComputedStyleOuter,
-                            (aElt, aPseudoElt), aError, nullptr);
+  return GetComputedStyleHelper(aElt, aPseudoElt, false, aError);
 }
 
 already_AddRefed<nsICSSDeclaration>
-nsGlobalWindow::GetComputedStyleOuter(Element& aElt,
-                                      const nsAString& aPseudoElt)
+nsGlobalWindow::GetDefaultComputedStyle(Element& aElt,
+                                        const nsAString& aPseudoElt,
+                                        ErrorResult& aError)
+{
+  MOZ_ASSERT(IsInnerWindow());
+  return GetComputedStyleHelper(aElt, aPseudoElt, true, aError);
+}
+
+nsresult
+nsGlobalWindow::GetComputedStyleHelper(nsIDOMElement* aElt,
+                                       const nsAString& aPseudoElt,
+                                       bool aDefaultStylesOnly,
+                                       nsIDOMCSSStyleDeclaration** aReturn)
+{
+  MOZ_ASSERT(IsInnerWindow());
+
+  NS_ENSURE_ARG_POINTER(aReturn);
+  *aReturn = nullptr;
+
+  nsCOMPtr<dom::Element> element = do_QueryInterface(aElt);
+  if (!element) {
+    return NS_ERROR_DOM_NOT_SUPPORTED_ERR;
+  }
+
+  ErrorResult rv;
+  nsCOMPtr<nsIDOMCSSStyleDeclaration> declaration =
+    GetComputedStyleHelper(*element, aPseudoElt, aDefaultStylesOnly, rv);
+  declaration.forget(aReturn);
+
+  return rv.StealNSResult();
+}
+
+already_AddRefed<nsICSSDeclaration>
+nsGlobalWindow::GetComputedStyleHelperOuter(Element& aElt,
+                                            const nsAString& aPseudoElt,
+                                            bool aDefaultStylesOnly)
 {
   MOZ_RELEASE_ASSERT(IsOuterWindow());
 
@@ -11102,9 +11150,22 @@ nsGlobalWindow::GetComputedStyleOuter(Element& aElt,
   }
 
   RefPtr<nsComputedDOMStyle> compStyle =
-    NS_NewComputedDOMStyle(&aElt, aPseudoElt, presShell);
+    NS_NewComputedDOMStyle(&aElt, aPseudoElt, presShell,
+                           aDefaultStylesOnly ? nsComputedDOMStyle::eDefaultOnly :
+                                                nsComputedDOMStyle::eAll);
 
   return compStyle.forget();
+}
+
+already_AddRefed<nsICSSDeclaration>
+nsGlobalWindow::GetComputedStyleHelper(Element& aElt,
+                                       const nsAString& aPseudoElt,
+                                       bool aDefaultStylesOnly,
+                                       ErrorResult& aError)
+{
+  FORWARD_TO_OUTER_OR_THROW(GetComputedStyleHelperOuter,
+                            (aElt, aPseudoElt, aDefaultStylesOnly),
+                            aError, nullptr);
 }
 
 Storage*
@@ -11122,7 +11183,7 @@ nsGlobalWindow::GetSessionStorage(ErrorResult& aError)
   if (mSessionStorage) {
     MOZ_LOG(gDOMLeakPRLog, LogLevel::Debug,
             ("nsGlobalWindow %p has %p sessionStorage", this, mSessionStorage.get()));
-    bool canAccess = mSessionStorage->CanAccess(principal);
+    bool canAccess = principal->Subsumes(mSessionStorage->Principal());
     NS_ASSERTION(canAccess,
                  "This window owned sessionStorage "
                  "that could not be accessed!");
@@ -11672,9 +11733,7 @@ nsGlobalWindow::ShowSlowScriptDialog()
       // script.
       RefPtr<nsGlobalWindow> outer = GetOuterWindowInternal();
       outer->EnterModalState();
-      while (!monitor->IsDebuggerStartupComplete()) {
-        NS_ProcessNextEvent(nullptr, true);
-      }
+      SpinEventLoopUntil([&]() { return monitor->IsDebuggerStartupComplete(); });
       outer->LeaveModalState();
       return ContinueSlowScript;
     }
@@ -12275,13 +12334,17 @@ nsGlobalWindow::CloneStorageEvent(const nsAString& aType,
       return nullptr;
     }
 
+    MOZ_ASSERT(storage->Type() == Storage::eLocalStorage);
+    RefPtr<LocalStorage> localStorage =
+      static_cast<LocalStorage*>(storage.get());
+
     // We must apply the current change to the 'local' localStorage.
-    storage->ApplyEvent(aEvent);
-  } else if (storageArea->GetType() == Storage::LocalStorage) {
-    storage = GetLocalStorage(aRv);
-  } else {
-    MOZ_ASSERT(storageArea->GetType() == Storage::SessionStorage);
+    localStorage->ApplyEvent(aEvent);
+  } else if (storageArea->Type() == Storage::eSessionStorage) {
     storage = GetSessionStorage(aRv);
+  } else {
+    MOZ_ASSERT(storageArea->Type() == Storage::eLocalStorage);
+    storage = GetLocalStorage(aRv);
   }
 
   if (aRv.Failed() || !storage) {

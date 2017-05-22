@@ -30,13 +30,13 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/Services.h"
+#include "mozilla/dom/ScriptLoader.h"
 #include "mozilla/dom/ScriptSettings.h"
 
 #include "nsContentUtils.h"
 #include "nsCCUncollectableMarker.h"
 #include "nsCycleCollectionNoteRootCallback.h"
 #include "nsCycleCollector.h"
-#include "nsScriptLoader.h"
 #include "jsapi.h"
 #include "jsprf.h"
 #include "js/MemoryMetrics.h"
@@ -62,10 +62,6 @@
 
 #ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
-#endif
-
-#if defined(MOZ_JEMALLOC4)
-#include "mozmemory.h"
 #endif
 
 #ifdef XP_WIN
@@ -152,18 +148,6 @@ public:
               mActive = false;
           }
       } else {
-#if defined(MOZ_JEMALLOC4)
-          if (mPurge) {
-              /* Jemalloc purges dirty pages regularly during free() when the
-               * ratio of dirty pages compared to active pages is higher than
-               * 1 << lg_dirty_mult. A high ratio can have an impact on
-               * performance, so we use the default ratio of 8, but force a
-               * regular purge of all remaining dirty pages, after cycle
-               * collection. */
-              Telemetry::AutoTimer<Telemetry::MEMORY_FREE_PURGED_PAGES_MS> timer;
-              jemalloc_free_dirty_pages();
-          }
-#endif
           mActive = false;
       }
       return NS_OK;
@@ -772,8 +756,7 @@ XPCJSRuntime::GCSliceCallback(JSContext* cx,
         return;
 
 #ifdef MOZ_CRASHREPORTER
-    CrashReporter::SetGarbageCollecting(progress == JS::GC_CYCLE_BEGIN ||
-                                        progress == JS::GC_SLICE_BEGIN);
+    CrashReporter::SetGarbageCollecting(progress == JS::GC_CYCLE_BEGIN);
 #endif
 
     if (self->mPrevGCSliceCallback)
@@ -1221,6 +1204,7 @@ XPCJSRuntime::Shutdown(JSContext* cx)
 
 XPCJSRuntime::~XPCJSRuntime()
 {
+    MOZ_COUNT_DTOR_INHERITED(XPCJSRuntime, CycleCollectedJSRuntime);
 }
 
 // If |*anonymizeID| is non-zero and this is a user compartment, the name will
@@ -2891,8 +2875,8 @@ ReadSourceFromFilename(JSContext* cx, const char* filename, char16_t** src, size
         ptr += bytesRead;
     }
 
-    rv = nsScriptLoader::ConvertToUTF16(scriptChannel, buf.get(), rawLen, EmptyString(),
-                                        nullptr, *src, *len);
+    rv = ScriptLoader::ConvertToUTF16(scriptChannel, buf.get(), rawLen,
+                                      EmptyString(), nullptr, *src, *len);
     NS_ENSURE_SUCCESS(rv, rv);
 
     if (!*src)
@@ -2952,6 +2936,7 @@ XPCJSRuntime::XPCJSRuntime(JSContext* aCx)
    mObjectHolderRoots(nullptr),
    mAsyncSnowWhiteFreer(new AsyncFreeSnowWhite())
 {
+    MOZ_COUNT_CTOR_INHERITED(XPCJSRuntime, CycleCollectedJSRuntime);
 }
 
 /* static */

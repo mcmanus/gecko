@@ -176,51 +176,27 @@ def mozharness_test_on_generic_worker(config, job, taskdesc):
 
     artifacts = [
         {
-            'name': 'public/logs/localconfig.json',
-            'path': 'logs/localconfig.json',
-            'type': 'file'
+            'name': 'public/logs',
+            'path': 'logs',
+            'type': 'directory'
         },
-        {
-            'name': 'public/logs/log_critical.log',
-            'path': 'logs/log_critical.log',
-            'type': 'file'
-        },
-        {
-            'name': 'public/logs/log_error.log',
-            'path': 'logs/log_error.log',
-            'type': 'file'
-        },
-        {
-            'name': 'public/logs/log_fatal.log',
-            'path': 'logs/log_fatal.log',
-            'type': 'file'
-        },
-        {
-            'name': 'public/logs/log_info.log',
-            'path': 'logs/log_info.log',
-            'type': 'file'
-        },
-        {
-            'name': 'public/logs/log_raw.log',
-            'path': 'logs/log_raw.log',
-            'type': 'file'
-        },
-        {
-            'name': 'public/logs/log_warning.log',
-            'path': 'logs/log_warning.log',
-            'type': 'file'
-        },
-        {
+    ]
+
+    # jittest doesn't have blob_upload_dir
+    if test['test-name'] != 'jittest':
+        artifacts.append({
             'name': 'public/test_info',
             'path': 'build/blobber_upload_dir',
             'type': 'directory'
-        }
-    ]
+        })
 
     build_platform = taskdesc['attributes']['build_platform']
+    build_type = taskdesc['attributes']['build_type']
 
-    target = 'firefox-{}.en-US.{}'.format(get_firefox_version(), build_platform) \
-        if build_platform.startswith('win') else 'target'
+    if build_platform == 'macosx64' and build_type == 'opt':
+        target = 'firefox-{}.en-US.{}'.format(get_firefox_version(), 'mac')
+    else:
+        target = 'target'
 
     installer_url = get_artifact_url('<build>', mozharness['build-artifact-name'])
 
@@ -287,6 +263,9 @@ def mozharness_test_on_generic_worker(config, job, taskdesc):
             mh_command.extend(['--download-symbols', mozharness['download-symbols']])
         else:
             mh_command.extend(['--download-symbols', 'true'])
+    if mozharness.get('include-blob-upload-branch'):
+        mh_command.append('--blob-upload-branch=' + config.params['project'])
+    mh_command.extend(mozharness.get('extra-options', []))
 
     # TODO: remove the need for run['chunked']
     if mozharness.get('chunked') or test['chunks'] > 1:
@@ -330,9 +309,14 @@ def mozharness_test_on_native_engine(config, job, taskdesc):
     mozharness = test['mozharness']
     worker = taskdesc['worker']
 
+    build_platform = taskdesc['attributes']['build_platform']
+    build_type = taskdesc['attributes']['build_type']
+    target = 'firefox-{}.en-US.{}'.format(get_firefox_version(), 'mac') \
+        if build_platform == 'macosx64' and build_type == 'opt' else 'target'
+
     installer_url = get_artifact_url('<build>', mozharness['build-artifact-name'])
     test_packages_url = get_artifact_url('<build>',
-                                         'public/build/target.test_packages.json')
+                                         'public/build/{}.test_packages.json'.format(target))
     mozharness_url = get_artifact_url('<build>',
                                       'public/build/mozharness.zip')
 
@@ -399,7 +383,7 @@ def mozharness_test_buildbot_bridge(config, job, taskdesc):
 
     branch = config.params['project']
     platform, build_type = test['build-platform'].split('/')
-    test_name = test.get('talos-try-name', test['test-name'])
+    test_name = test.get('try-name', test['test-name'])
     mozharness = test['mozharness']
 
     # mochitest e10s follows the pattern mochitest-e10s-<suffix>
@@ -411,13 +395,7 @@ def mozharness_test_buildbot_bridge(config, job, taskdesc):
         'mochitest-gpu',
         'mochitest-e10s',
     ]
-    test_name = test.get(
-                    'talos-try-name',
-                    test.get(
-                        'unittest-try-name',
-                        test['test-name']
-                    )
-                )
+    test_name = test.get('try-name', test['test-name'])
     if test['e10s'] and 'e10s' not in test_name:
         test_name += '-e10s'
 
@@ -452,7 +430,7 @@ def mozharness_test_buildbot_bridge(config, job, taskdesc):
         if variant == 'nightly ':
             variant = ''
         # this variant name has branch after the variant type in BBB bug 1338871
-        if variant == 'stylo ':
+        if variant == 'stylo ' or 'stylo-sequential':
             buildername = '{} {}{} talos {}'.format(
                 BUILDER_NAME_PREFIX[platform],
                 variant,

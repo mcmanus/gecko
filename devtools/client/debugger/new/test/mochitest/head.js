@@ -38,7 +38,8 @@ Services.scriptloader.loadSubScript(
   this
 );
 var { Toolbox } = require("devtools/client/framework/toolbox");
-const EXAMPLE_URL = "http://example.com/browser/devtools/client/debugger/new/test/mochitest/examples/";
+const EXAMPLE_URL =
+  "http://example.com/browser/devtools/client/debugger/new/test/mochitest/examples/";
 
 Services.prefs.setBoolPref("devtools.debugger.new-debugger-frontend", true);
 
@@ -175,7 +176,7 @@ function waitForSources(dbg, ...sources) {
     sources.map(url => {
       function sourceExists(state) {
         return getSources(state).some(s => {
-          return s.get("url").includes(url);
+          return (s.get("url") || "").includes(url);
         });
       }
 
@@ -207,13 +208,15 @@ function assertPausedLocation(dbg, source, line) {
   is(getSelectedSource(getState()).get("id"), source.id);
 
   // Check the pause location
-  const location = getPause(getState()).getIn(["frame", "location"]);
-  is(location.get("sourceId"), source.id);
-  is(location.get("line"), line);
+  const pause = getPause(getState());
+  const location = pause && pause.frame && pause.frame.location;
+
+  is(location.sourceId, source.id);
+  is(location.line, line);
 
   // Check the debug line
   ok(
-    dbg.win.cm.lineInfo(line - 1).wrapClass.includes("debug-line"),
+    getCM(dbg).lineInfo(line - 1).wrapClass.includes("debug-line"),
     "Line is highlighted as paused"
   );
 }
@@ -242,7 +245,7 @@ function assertHighlightLocation(dbg, source, line) {
     "Highlighted line is visible"
   );
   ok(
-    dbg.win.cm.lineInfo(line - 1).wrapClass.includes("highlight-line"),
+    getCM(dbg).lineInfo(line - 1).wrapClass.includes("highlight-line"),
     "Line is highlighted"
   );
 }
@@ -279,7 +282,7 @@ function waitForPaused(dbg) {
       }
       // Make sure the source text is completely loaded for the
       // source we are paused in.
-      const sourceId = pause.getIn(["frame", "location", "sourceId"]);
+      const sourceId = pause && pause.frame && pause.frame.location.sourceId;
       const sourceText = dbg.selectors.getSourceText(dbg.getState(), sourceId);
       return sourceText && !sourceText.get("loading");
     });
@@ -334,7 +337,7 @@ window.resumeTest = undefined;
  */
 function pauseTest() {
   info("Test paused. Invoke resumeTest to continue.");
-  return new Promise(resolve => resumeTest = resolve);
+  return new Promise(resolve => (resumeTest = resolve));
 }
 
 // Actions
@@ -356,7 +359,7 @@ function findSource(dbg, url) {
   }
 
   const sources = dbg.selectors.getSources(dbg.getState());
-  const source = sources.find(s => s.get("url").includes(url));
+  const source = sources.find(s => (s.get("url") || "").includes(url));
 
   if (!source) {
     throw new Error("Unable to find source: " + url);
@@ -558,12 +561,12 @@ const cmdOrCtrl = isLinux ? { ctrlKey: true } : { metaKey: true };
 // On Mac, going to beginning/end only works with meta+left/right.  On
 // Windows, it only works with home/end.  On Linux, apparently, either
 // ctrl+left/right or home/end work.
-const endKey = isMac ?
-      { code: "VK_RIGHT", modifiers: cmdOrCtrl } :
-      { code: "VK_END" };
-const startKey = isMac ? 
-      { code: "VK_LEFT", modifiers: cmdOrCtrl } :
-      { code: "VK_HOME" };
+const endKey = isMac
+  ? { code: "VK_RIGHT", modifiers: cmdOrCtrl }
+  : { code: "VK_END" };
+const startKey = isMac
+  ? { code: "VK_LEFT", modifiers: cmdOrCtrl }
+  : { code: "VK_HOME" };
 const keyMappings = {
   sourceSearch: { code: "p", modifiers: cmdOrCtrl },
   fileSearch: { code: "f", modifiers: cmdOrCtrl },
@@ -627,6 +630,7 @@ const selectors = {
   scopesHeader: ".scopes-pane ._header",
   breakpointItem: i => `.breakpoints-list .breakpoint:nth-child(${i})`,
   scopeNode: i => `.scopes-list .tree-node:nth-child(${i}) .object-label`,
+  scopeValue: i => `.scopes-list .tree-node:nth-child(${i}) .object-value`,
   frame: i => `.frames ul li:nth-child(${i})`,
   frames: ".frames ul li",
   gutter: i => `.CodeMirror-code *:nth-child(${i}) .CodeMirror-linenumber`,
@@ -741,4 +745,9 @@ function toggleCallStack(dbg) {
 
 function toggleScopes(dbg) {
   return findElement(dbg, "scopesHeader").click();
+}
+
+function getCM(dbg) {
+  const el = dbg.win.document.querySelector(".CodeMirror");
+  return el.CodeMirror;
 }

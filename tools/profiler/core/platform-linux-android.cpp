@@ -95,6 +95,11 @@ FillInSample(TickSample& aSample, ucontext_t* aContext)
   aSample.mSP = reinterpret_cast<Address>(mcontext.arm_sp);
   aSample.mFP = reinterpret_cast<Address>(mcontext.arm_fp);
   aSample.mLR = reinterpret_cast<Address>(mcontext.arm_lr);
+#elif defined(GP_ARCH_aarch64)
+  aSample.mPC = reinterpret_cast<Address>(mcontext.pc);
+  aSample.mSP = reinterpret_cast<Address>(mcontext.sp);
+  aSample.mFP = reinterpret_cast<Address>(mcontext.regs[29]);
+  aSample.mLR = reinterpret_cast<Address>(mcontext.regs[30]);
 #else
 # error "bad platform"
 #endif
@@ -108,33 +113,6 @@ int
 tgkill(pid_t tgid, pid_t tid, int signalno)
 {
   return syscall(SYS_tgkill, tgid, tid, signalno);
-}
-
-static void
-SleepMicro(int aMicroseconds)
-{
-  aMicroseconds = std::max(0, aMicroseconds);
-
-  if (aMicroseconds >= 1000000) {
-    // Use usleep for larger intervals, because the nanosleep
-    // code below only supports intervals < 1 second.
-    MOZ_ALWAYS_TRUE(!::usleep(aMicroseconds));
-    return;
-  }
-
-  struct timespec ts;
-  ts.tv_sec  = 0;
-  ts.tv_nsec = aMicroseconds * 1000UL;
-
-  int rv = ::nanosleep(&ts, &ts);
-
-  while (rv != 0 && errno == EINTR) {
-    // Keep waiting in case of interrupt.
-    // nanosleep puts the remaining time back into ts.
-    rv = ::nanosleep(&ts, &ts);
-  }
-
-  MOZ_ASSERT(!rv, "nanosleep call failed");
 }
 
 class PlatformData
@@ -351,6 +329,31 @@ SamplerThread::Stop(PSLockRef aLock)
   // loop of Run() iterates it won't get past the mActivityGeneration check,
   // and so won't send any signals.
   sigaction(SIGPROF, &mOldSigprofHandler, 0);
+}
+
+void
+SamplerThread::SleepMicro(uint32_t aMicroseconds)
+{
+  if (aMicroseconds >= 1000000) {
+    // Use usleep for larger intervals, because the nanosleep
+    // code below only supports intervals < 1 second.
+    MOZ_ALWAYS_TRUE(!::usleep(aMicroseconds));
+    return;
+  }
+
+  struct timespec ts;
+  ts.tv_sec  = 0;
+  ts.tv_nsec = aMicroseconds * 1000UL;
+
+  int rv = ::nanosleep(&ts, &ts);
+
+  while (rv != 0 && errno == EINTR) {
+    // Keep waiting in case of interrupt.
+    // nanosleep puts the remaining time back into ts.
+    rv = ::nanosleep(&ts, &ts);
+  }
+
+  MOZ_ASSERT(!rv, "nanosleep call failed");
 }
 
 void

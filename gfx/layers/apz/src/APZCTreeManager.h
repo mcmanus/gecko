@@ -27,6 +27,10 @@
 namespace mozilla {
 class MultiTouchInput;
 
+namespace wr {
+class WebRenderAPI;
+}
+
 namespace layers {
 
 class Layer;
@@ -145,6 +149,18 @@ public:
                             uint32_t aPaintSequenceNumber);
 
   /**
+   * Called when webrender is enabled, from the compositor thread. This function
+   * walks through the tree of APZC instances and tells webrender about the
+   * async scroll position. It also advances APZ animations to the specified
+   * sample time. In effect it is the webrender equivalent of (part of) the
+   * code in AsyncCompositionManager.
+   * Returns true if any APZ animations are in progress and we need to keep
+   * compositing.
+   */
+  bool PushStateToWR(wr::WebRenderAPI* aWrApi,
+                     const TimeStamp& aSampleTime);
+
+  /**
    * Walk the tree of APZCs and flushes the repaint requests for all the APZCS
    * corresponding to the given layers id. Finally, sends a flush complete
    * notification to the GeckoContentController for the layers id.
@@ -255,7 +271,7 @@ public:
    * some more details. This is only currently needed due to surface shifts
    * caused by the dynamic toolbar on Android.
    */
-  void AdjustScrollForSurfaceShift(const ScreenPoint& aShift) override;
+  void AdjustScrollForSurfaceShift(const ScreenPoint& aShift);
 
   /**
    * Calls Destroy() on all APZC instances attached to the tree, and resets the
@@ -438,7 +454,7 @@ public:
   RefPtr<HitTestingTreeNode> GetRootNode() const;
   already_AddRefed<AsyncPanZoomController> GetTargetAPZC(const ScreenPoint& aPoint,
                                                          HitTestResult* aOutHitResult,
-                                                         bool* aOutHitScrollbar = nullptr);
+                                                         HitTestingTreeNode** aOutScrollbarNode = nullptr);
   ScreenToParentLayerMatrix4x4 GetScreenToApzcTransform(const AsyncPanZoomController *aApzc) const;
   ParentLayerToScreenMatrix4x4 GetApzcToGeckoTransform(const AsyncPanZoomController *aApzc) const;
 
@@ -465,7 +481,7 @@ private:
                         HitTestingTreeNode* aNextSibling);
   already_AddRefed<AsyncPanZoomController> GetTargetAPZC(const ScrollableLayerGuid& aGuid);
   already_AddRefed<HitTestingTreeNode> GetTargetNode(const ScrollableLayerGuid& aGuid,
-                                                     GuidComparator aComparator);
+                                                     GuidComparator aComparator) const;
   HitTestingTreeNode* FindTargetNode(HitTestingTreeNode* aNode,
                                      const ScrollableLayerGuid& aGuid,
                                      GuidComparator aComparator);
@@ -473,7 +489,7 @@ private:
   AsyncPanZoomController* GetAPZCAtPoint(HitTestingTreeNode* aNode,
                                          const ParentLayerPoint& aHitTestPoint,
                                          HitTestResult* aOutHitResult,
-                                         bool* aOutHitScrollbar);
+                                         HitTestingTreeNode** aOutScrollbarNode);
   AsyncPanZoomController* FindRootApzcForLayersId(uint64_t aLayersId) const;
   AsyncPanZoomController* FindRootContentApzcForLayersId(uint64_t aLayersId) const;
   AsyncPanZoomController* FindRootContentOrRootApzc() const;
@@ -504,6 +520,9 @@ private:
                      const AsyncPanZoomController* apzc);
 
   void NotifyScrollbarDragRejected(const ScrollableLayerGuid& aGuid) const;
+
+  // Requires the caller to hold mTreeLock.
+  LayerToParentLayerMatrix4x4 ComputeTransformForNode(const HitTestingTreeNode* aNode) const;
 
 protected:
   /* The input queue where input events are held until we know enough to

@@ -25,6 +25,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "ExtensionManagement",
                                   "resource://gre/modules/ExtensionManagement.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Schemas",
                                   "resource://gre/modules/Schemas.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "WebNavigationFrames",
+                                  "resource://gre/modules/WebNavigationFrames.jsm");
 
 const CATEGORY_EXTENSION_SCRIPTS_ADDON = "webextension-scripts-addon";
 const CATEGORY_EXTENSION_SCRIPTS_DEVTOOLS = "webextension-scripts-devtools";
@@ -110,11 +112,12 @@ class ExtensionBaseContextChild extends BaseContext {
     this.setContentWindow(contentWindow);
 
     // This is the MessageSender property passed to extension.
-    // It can be augmented by the "page-open" hook.
     let sender = {id: extension.id};
     if (viewType == "tab") {
+      sender.frameId = WebNavigationFrames.getFrameId(contentWindow);
       sender.tabId = tabId;
-      this.tabId = tabId;
+      Object.defineProperty(this, "tabId",
+        {value: tabId, enumerable: true, configurable: true});
     }
     if (uri) {
       sender.url = uri.spec;
@@ -150,6 +153,12 @@ class ExtensionBaseContextChild extends BaseContext {
       let globalView = ExtensionPageChild.contentGlobals.get(this.messageManager);
       return globalView ? globalView.windowId : -1;
     }
+    return -1;
+  }
+
+  get tabId() {
+    // Will be overwritten in the constructor if necessary.
+    return -1;
   }
 
   // Called when the extension shuts down.

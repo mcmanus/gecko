@@ -15,7 +15,8 @@
                                     ${'font-variant-ligatures' if product == 'gecko' or data.testing else ''}
                                     ${'font-variant-numeric' if product == 'gecko' or data.testing else ''}
                                     ${'font-variant-position' if product == 'gecko' or data.testing else ''}
-                                    ${'font-language-override' if product == 'gecko' or data.testing else ''}"
+                                    ${'font-language-override' if product == 'gecko' or data.testing else ''}
+                                    ${'font-feature-settings' if product == 'gecko' or data.testing else ''}"
                     spec="https://drafts.csswg.org/css-fonts-3/#propdef-font">
     use properties::longhands::{font_family, font_style, font_weight, font_stretch};
     use properties::longhands::{font_size, line_height, font_variant_caps};
@@ -25,7 +26,7 @@
         gecko_sub_properties = "kerning language_override size_adjust \
                                 variant_alternates variant_east_asian \
                                 variant_ligatures variant_numeric \
-                                variant_position".split()
+                                variant_position feature_settings".split()
     %>
     % if product == "gecko" or data.testing:
         % for prop in gecko_sub_properties:
@@ -43,7 +44,7 @@
         let size;
         % if product == "gecko":
             if let Ok(sys) = input.try(SystemFont::parse) {
-                return Ok(Longhands {
+                return Ok(expanded! {
                      % for name in SYSTEM_FONT_LONGHANDS:
                          ${name}: ${name}::SpecifiedValue::system_font(sys),
                      % endfor
@@ -101,7 +102,7 @@
             None
         };
         let family = FontFamily::parse(input)?;
-        Ok(Longhands {
+        Ok(expanded! {
             % for name in "style weight stretch size variant_caps".split():
                 font_${name}: unwrap_or_initial!(font_${name}, ${name}),
             % endfor
@@ -121,8 +122,67 @@
             SomeSystem,
             None
         }
+    % endif
+    enum SerializeFor {
+        Normal,
+    % if product == "gecko":
+        Canvas,
+    % endif
+    }
 
-        impl<'a> LonghandsToSerialize<'a> {
+    impl<'a> LonghandsToSerialize<'a> {
+        fn to_css_for<W>(&self,
+                         serialize_for: SerializeFor,
+                         dest: &mut W) -> fmt::Result where W: fmt::Write {
+            % if product == "gecko":
+                match self.check_system() {
+                    CheckSystemResult::AllSystem(sys) => return sys.to_css(dest),
+                    CheckSystemResult::SomeSystem => return Ok(()),
+                    CheckSystemResult::None => ()
+                }
+            % endif
+
+            % if product == "gecko" or data.testing:
+                % for name in gecko_sub_properties:
+                    if self.font_${name} != &font_${name}::get_initial_specified_value() {
+                        return Ok(());
+                    }
+                % endfor
+            % endif
+
+            // In case of serialization for canvas font, we need to drop
+            // initial values of properties other than size and family.
+            % for name in "style variant_caps weight stretch".split():
+                let needs_this_property = match serialize_for {
+                    SerializeFor::Normal => true,
+                % if product == "gecko":
+                    SerializeFor::Canvas =>
+                        self.font_${name} != &font_${name}::get_initial_specified_value(),
+                % endif
+                };
+                if needs_this_property {
+                    self.font_${name}.to_css(dest)?;
+                    dest.write_str(" ")?;
+                }
+            % endfor
+
+            self.font_size.to_css(dest)?;
+
+            match *self.line_height {
+                line_height::SpecifiedValue::Normal => {},
+                _ => {
+                    dest.write_str("/")?;
+                    self.line_height.to_css(dest)?;
+                }
+            }
+
+            dest.write_str(" ")?;
+            self.font_family.to_css(dest)?;
+
+            Ok(())
+        }
+
+        % if product == "gecko":
             /// Check if some or all members are system fonts
             fn check_system(&self) -> CheckSystemResult {
                 let mut sys = None;
@@ -147,47 +207,18 @@
                     CheckSystemResult::None
                 }
             }
-        }
-    % endif
+
+            /// Serialize the shorthand value for canvas font attribute.
+            pub fn to_css_for_canvas<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+                self.to_css_for(SerializeFor::Canvas, dest)
+            }
+        % endif
+    }
 
     // This may be a bit off, unsure, possibly needs changes
     impl<'a> ToCss for LonghandsToSerialize<'a>  {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            % if product == "gecko":
-                match self.check_system() {
-                    CheckSystemResult::AllSystem(sys) => return sys.to_css(dest),
-                    CheckSystemResult::SomeSystem => return Ok(()),
-                    CheckSystemResult::None => ()
-                }
-            % endif
-
-    % if product == "gecko" or data.testing:
-        % for name in gecko_sub_properties:
-            if self.font_${name} != &font_${name}::get_initial_specified_value() {
-                return Ok(());
-            }
-        % endfor
-    % endif
-
-    % for name in "style variant_caps weight stretch".split():
-            self.font_${name}.to_css(dest)?;
-            dest.write_str(" ")?;
-    % endfor
-
-            self.font_size.to_css(dest)?;
-
-            match *self.line_height {
-                line_height::SpecifiedValue::Normal => {},
-                _ => {
-                    dest.write_str("/")?;
-                    self.line_height.to_css(dest)?;
-                }
-            }
-
-            dest.write_str(" ")?;
-            self.font_family.to_css(dest)?;
-
-            Ok(())
+            self.to_css_for(SerializeFor::Normal, dest)
         }
     }
 </%helpers:shorthand>
@@ -235,7 +266,7 @@
         if count == 0 || count > 1 {
             return Err(())
         }
-        Ok(Longhands {
+        Ok(expanded! {
             font_variant_caps: unwrap_or_initial!(font_variant_caps, caps),
             // FIXME: Bug 1356134 - parse all sub properties.
             % if product == "gecko" or data.testing:

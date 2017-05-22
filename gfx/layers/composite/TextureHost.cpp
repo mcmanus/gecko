@@ -22,6 +22,7 @@
 #include "mozilla/layers/TextureClient.h"
 #include "mozilla/layers/GPUVideoTextureHost.h"
 #include "mozilla/layers/WebRenderTextureHost.h"
+#include "mozilla/webrender/WebRenderAPI.h"
 #include "nsAString.h"
 #include "mozilla/RefPtr.h"                   // for nsRefPtr
 #include "nsPrintfCString.h"            // for nsPrintfCString
@@ -408,7 +409,8 @@ TextureHost::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   }
   AppendToString(aStream, mFlags, " [flags=", "]");
 #ifdef MOZ_DUMP_PAINTING
-  if (gfxPrefs::LayersDumpTexture() || profiler_feature_active("layersdump")) {
+  if (gfxPrefs::LayersDumpTexture() ||
+      profiler_feature_active(ProfilerFeature::LayersDump)) {
     nsAutoCString pfx(aPrefix);
     pfx += "  ";
 
@@ -431,12 +433,10 @@ TextureHost::Updated(const nsIntRegion* aRegion)
 TextureSource::TextureSource()
 : mCompositableCount(0)
 {
-    MOZ_COUNT_CTOR(TextureSource);
 }
 
 TextureSource::~TextureSource()
 {
-    MOZ_COUNT_DTOR(TextureSource);
 }
 
 const char*
@@ -554,6 +554,33 @@ BufferTextureHost::Unlock()
 {
   MOZ_ASSERT(mLocked);
   mLocked = false;
+}
+
+void
+BufferTextureHost::AddWRImage(wr::WebRenderAPI* aAPI,
+                              Range<const wr::ImageKey>& aImageKeys,
+                              const wr::ExternalImageId& aExtID)
+{
+  MOZ_ASSERT(aImageKeys.length() == 1);
+  // XXX handling YUV
+  gfx::SurfaceFormat wrFormat =
+      (GetFormat() == gfx::SurfaceFormat::YUV) ? gfx::SurfaceFormat::B8G8R8A8
+                                               : GetFormat();
+  gfx::SurfaceFormat format = GetFormat();
+  uint32_t wrStride = 0;
+
+  if (format == gfx::SurfaceFormat::YUV) {
+    // XXX this stride is used until yuv image rendering by webrender is used.
+    // Software converted RGB buffers strides are aliened to 16
+    wrStride = gfx::GetAlignedStride<16>(GetSize().width, BytesPerPixel(gfx::SurfaceFormat::B8G8R8A8));
+  } else {
+    wrStride = ImageDataSerializer::ComputeRGBStride(format, GetSize().width);
+  }
+
+  wr::ImageDescriptor descriptor(GetSize(), wrStride, wrFormat);
+  aAPI->AddExternalImageBuffer(aImageKeys[0],
+                               descriptor,
+                               aExtID);
 }
 
 void

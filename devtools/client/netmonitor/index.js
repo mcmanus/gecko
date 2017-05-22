@@ -24,7 +24,9 @@ EventEmitter.decorate(window);
 pref("devtools.netmonitor.enabled", true);
 pref("devtools.netmonitor.filters", "[\"all\"]");
 pref("devtools.netmonitor.hiddenColumns",
-     "[\"cookies\",\"protocol\",\"remoteip\",\"scheme\",\"setCookies\"]");
+     "[\"cookies\",\"duration\",\"endTime\",\"latency\"," +
+     "\"protocol\",\"remoteip\",\"responseTime\",\"scheme\",\"setCookies\",\"startTime\"]"
+);
 pref("devtools.netmonitor.panes-network-details-width", 550);
 pref("devtools.netmonitor.panes-network-details-height", 450);
 pref("devtools.netmonitor.har.defaultLogDir", "");
@@ -39,9 +41,12 @@ pref("devtools.netmonitor.har.enableAutoExportToFile", false);
 pref("devtools.webconsole.persistlog", false);
 
 const App = require("./src/components/app");
-const store = window.gStore = configureStore();
+const store = configureStore();
 const actions = bindActionCreators(require("./src/actions"), store.dispatch);
-const { NetMonitorController } = require("./src/netmonitor-controller");
+const { onConnect } = require("./src/connector");
+
+// Inject to global window for testing
+window.store = store;
 
 /**
  * Stylesheet links in devtools xhtml files are using chrome or resource URLs.
@@ -67,10 +72,10 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 });
 
-bootstrap(React, ReactDOM).then(connection => {
+bootstrap(React, ReactDOM).then((connection) => {
   if (!connection) {
     return;
   }
   renderRoot(React, ReactDOM, App, store);
-  NetMonitorController.startupNetMonitor(connection, actions);
+  onConnect(connection, actions, store.getState);
 });

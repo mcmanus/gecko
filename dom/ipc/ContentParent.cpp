@@ -24,7 +24,6 @@
 #include "chrome/common/process_watcher.h"
 
 #include "mozilla/a11y/PDocAccessible.h"
-#include "AudioChannelService.h"
 #ifdef MOZ_GECKO_PROFILER
 #include "CrossProcessProfilerController.h"
 #endif
@@ -85,6 +84,7 @@
 #include "mozilla/layers/ImageBridgeParent.h"
 #include "mozilla/layers/LayerTreeOwnerTracker.h"
 #include "mozilla/layout/RenderFrameParent.h"
+#include "mozilla/loader/ScriptCacheActors.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/media/MediaParent.h"
 #include "mozilla/Move.h"
@@ -94,6 +94,7 @@
 #include "mozilla/ProcessHangMonitor.h"
 #include "mozilla/ProcessHangMonitorIPC.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/ScriptPreloader.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/Telemetry.h"
@@ -284,6 +285,7 @@ using namespace mozilla::net;
 using namespace mozilla::jsipc;
 using namespace mozilla::psm;
 using namespace mozilla::widget;
+using mozilla::loader::PScriptCacheParent;
 
 // XXX Workaround for bug 986973 to maintain the existing broken semantics
 template<>
@@ -621,9 +623,6 @@ ContentParent::StartUp()
   BlobParent::Startup(BlobParent::FriendKey());
 
   BackgroundChild::Startup();
-
-  // Try to preallocate a process that we can use later.
-  PreallocatedProcessManager::AllocateAfterDelay();
 
   sDisableUnsafeCPOWWarnings = PR_GetEnv("DISABLE_UNSAFE_CPOW_WARNINGS");
 
@@ -2227,8 +2226,6 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
     SerializeURI(nullptr, xpcomInit.userContentSheetURL());
   }
 
-  gfxPlatform::GetPlatform()->BuildContentDeviceData(&xpcomInit.contentDeviceData());
-
   nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
   if (gfxInfo) {
     for (int32_t i = 1; i <= nsIGfxInfo::FEATURE_MAX_VALUE; ++i) {
@@ -2270,14 +2267,16 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
     Unused << SendAppInfo(version, buildID, name, UAName, ID, vendor);
   }
 
-  // Initialize the message manager (and load delayed scripts) now that we
-  // have established communications with the child.
-  mMessageManager->InitWithCallback(this);
-
   // Send the child its remote type. On Mac, this needs to be sent prior
   // to the message we send to enable the Sandbox (SendStartProcessSandbox)
   // because different remote types require different sandbox privileges.
   Unused << SendRemoteType(mRemoteType);
+
+  ScriptPreloader::InitContentChild(*this);
+
+  // Initialize the message manager (and load delayed scripts) now that we
+  // have established communications with the child.
+  mMessageManager->InitWithCallback(this);
 
   // Set the subprocess's priority.  We do this early on because we're likely
   // /lowering/ the process's CPU and memory priority, which it has inherited
@@ -2485,6 +2484,12 @@ ContentParent::OnCompositorUnexpectedShutdown()
 }
 
 void
+ContentParent::OnCompositorDeviceReset()
+{
+  Unused << SendReinitRenderingForDeviceReset();
+}
+
+void
 ContentParent::OnVarChanged(const GfxVarUpdate& aVar)
 {
   if (!mIPCOpen) {
@@ -2646,30 +2651,6 @@ ContentParent::RecvFirstIdle()
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult
-ContentParent::RecvAudioChannelChangeDefVolChannel(const int32_t& aChannel,
-                                                   const bool& aHidden)
-{
-  RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
-  MOZ_ASSERT(service);
-  service->SetDefaultVolumeControlChannelInternal(aChannel, aHidden, mChildID);
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult
-ContentParent::RecvAudioChannelServiceStatus(
-                                           const bool& aTelephonyChannel,
-                                           const bool& aContentOrNormalChannel,
-                                           const bool& aAnyChannel)
-{
-  RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
-  MOZ_ASSERT(service);
-
-  service->ChildStatusReceived(mChildID, aTelephonyChannel,
-                               aContentOrNormalChannel, aAnyChannel);
-  return IPC_OK();
-}
-
 // We want ContentParent to show up in CC logs for debugging purposes, but we
 // don't actually cycle collect it.
 NS_IMPL_CYCLE_COLLECTION_0(ContentParent)
@@ -2698,9 +2679,7 @@ ContentParent::Observe(nsISupports* aSubject,
     // Wait for shutdown to complete, so that we receive any shutdown
     // data (e.g. telemetry) from the child before we quit.
     // This loop terminate prematurely based on mForceKillTimer.
-    while (mIPCOpen && !mCalledKillHard) {
-      NS_ProcessNextEvent(nullptr, true);
-    }
+    SpinEventLoopUntil([&]() { return !mIPCOpen || mCalledKillHard; });
     NS_ASSERTION(!mSubprocess, "Close should have nulled mSubprocess");
   }
 
@@ -3117,6 +3096,19 @@ bool
 ContentParent::DeallocPTestShellParent(PTestShellParent* shell)
 {
   delete shell;
+  return true;
+}
+
+PScriptCacheParent*
+ContentParent::AllocPScriptCacheParent(const FileDescOrError& cacheFile, const bool& wantCacheData)
+{
+  return new loader::ScriptCacheParent(wantCacheData);
+}
+
+bool
+ContentParent::DeallocPScriptCacheParent(PScriptCacheParent* cache)
+{
+  delete static_cast<loader::ScriptCacheParent*>(cache);
   return true;
 }
 

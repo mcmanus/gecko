@@ -89,6 +89,12 @@ LayerTransactionParent::RecvShutdown()
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult
+LayerTransactionParent::RecvShutdownSync()
+{
+  return RecvShutdown();
+}
+
 void
 LayerTransactionParent::Destroy()
 {
@@ -393,11 +399,6 @@ LayerTransactionParent::RecvUpdate(const TransactionInfo& aInfo)
     case Edit::TOpAttachCompositable: {
       const OpAttachCompositable& op = edit.get_OpAttachCompositable();
       RefPtr<CompositableHost> host = FindCompositable(op.compositable());
-      if (mPendingCompositorUpdate) {
-        // Do not attach compositables from old layer trees. Return true since
-        // content cannot handle errors.
-        return IPC_OK();
-      }
       if (!Attach(AsLayer(op.layer()), host, false)) {
         return IPC_FAIL_NO_REASON(this);
       }
@@ -408,11 +409,6 @@ LayerTransactionParent::RecvUpdate(const TransactionInfo& aInfo)
     }
     case Edit::TOpAttachAsyncCompositable: {
       const OpAttachAsyncCompositable& op = edit.get_OpAttachAsyncCompositable();
-      if (mPendingCompositorUpdate) {
-        // Do not attach compositables from old layer trees. Return true since
-        // content cannot handle errors.
-        return IPC_OK();
-      }
       ImageBridgeParent* imageBridge = ImageBridgeParent::GetInstance(OtherPid());
       if (!imageBridge) {
         return IPC_FAIL_NO_REASON(this);
@@ -1050,6 +1046,18 @@ LayerTransactionParent::RecvRecordPaintTimes(const PaintTiming& aTiming)
   if (mLayerManager && mCompositorBridge->IsRemote()) {
     mLayerManager->RecordPaintTimes(aTiming);
   }
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+LayerTransactionParent::RecvGetTextureFactoryIdentifier(TextureFactoryIdentifier* aIdentifier)
+{
+  if (!mLayerManager) {
+    // Default constructor sets mParentBackend to LAYERS_NONE.
+    return IPC_OK();
+  }
+
+  *aIdentifier = mLayerManager->GetTextureFactoryIdentifier();
   return IPC_OK();
 }
 

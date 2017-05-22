@@ -197,8 +197,19 @@ button {
   flex: 1;
 }
 
-.addons-debugging-label {
+.service-worker-disabled-label,
+.addons-debugging-label,
+.addons-web-ext-tip {
   display: inline-block;
+  margin-inline-end: 1ch;
+}
+
+.addons-tip {
+  display: flex;
+  align-items: center;
+}
+
+.addons-tip-icon {
   margin-inline-end: 1ch;
 }
 
@@ -266,6 +277,10 @@ button {
 
 .addon-target-info-content {
   margin: 0;
+}
+
+.addon-target-info-more {
+  padding-left: 1ch;
 }
 
 .addon-target-button {

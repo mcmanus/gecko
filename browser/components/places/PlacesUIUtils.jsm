@@ -21,8 +21,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
                                   "resource://gre/modules/NetUtil.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-                                  "resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
                                   "resource:///modules/RecentWindow.jsm");
 
@@ -31,9 +29,6 @@ Cu.import("resource://gre/modules/PlacesUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesTransactions",
                                   "resource://gre/modules/PlacesTransactions.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "CloudSync",
-                                  "resource://gre/modules/CloudSync.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Weave",
                                   "resource://services-sync/main.js");
@@ -1504,12 +1499,12 @@ this.PlacesUIUtils = {
    * @return a node-like object suitable for initialising editBookmarkOverlay.
    * @throws if aFetchInfo is representing a separator.
    */
-  promiseNodeLikeFromFetchInfo: Task.async(function* (aFetchInfo) {
+  async promiseNodeLikeFromFetchInfo(aFetchInfo) {
     if (aFetchInfo.itemType == PlacesUtils.bookmarks.TYPE_SEPARATOR)
       throw new Error("promiseNodeLike doesn't support separators");
 
     return Object.freeze({
-      itemId: yield PlacesUtils.promiseItemId(aFetchInfo.guid),
+      itemId: await PlacesUtils.promiseItemId(aFetchInfo.guid),
       bookmarkGuid: aFetchInfo.guid,
       title: aFetchInfo.title,
       uri: aFetchInfo.url !== undefined ? aFetchInfo.url.href : "",
@@ -1531,7 +1526,7 @@ this.PlacesUIUtils = {
         return Ci.nsINavHistoryResultNode.RESULT_TYPE_URI;
       }
     });
-  }),
+  },
 
   /**
    * Shortcut for calling promiseNodeLikeFromFetchInfo on the result of
@@ -1539,12 +1534,12 @@ this.PlacesUIUtils = {
    *
    * @see promiseNodeLikeFromFetchInfo above and Bookmarks.fetch in Bookmarks.jsm.
    */
-  fetchNodeLike: Task.async(function* (aGuidOrInfo) {
-    let info = yield PlacesUtils.bookmarks.fetch(aGuidOrInfo);
+  async fetchNodeLike(aGuidOrInfo) {
+    let info = await PlacesUtils.bookmarks.fetch(aGuidOrInfo);
     if (!info)
       return null;
-    return (yield this.promiseNodeLikeFromFetchInfo(info));
-  })
+    return (await this.promiseNodeLikeFromFetchInfo(info));
+  }
 };
 
 

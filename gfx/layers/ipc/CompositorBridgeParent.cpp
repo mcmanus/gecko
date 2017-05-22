@@ -314,7 +314,6 @@ CompositorBridgeParent::CompositorBridgeParent(CSSToLayoutDeviceScale aScale,
   , mOptions(aOptions)
   , mPauseCompositionMonitor("PauseCompositionMonitor")
   , mResumeCompositionMonitor("ResumeCompositionMonitor")
-  , mResetCompositorMonitor("ResetCompositorMonitor")
   , mRootLayerTreeID(0)
   , mOverrideComposeReadiness(false)
   , mForceCompositionTask(nullptr)
@@ -397,25 +396,6 @@ CompositorBridgeParent::Initialize()
   }
 }
 
-mozilla::ipc::IPCResult
-CompositorBridgeParent::RecvReset(nsTArray<LayersBackend>&& aBackendHints,
-                                  const uint64_t& aSeqNo,
-                                  bool* aResult,
-                                  TextureFactoryIdentifier* aOutIdentifier)
-{
-  Maybe<TextureFactoryIdentifier> newIdentifier;
-  ResetCompositorTask(aBackendHints, aSeqNo, &newIdentifier);
-
-  if (newIdentifier) {
-    *aResult = true;
-    *aOutIdentifier = newIdentifier.value();
-  } else {
-    *aResult = false;
-  }
-
-  return IPC_OK();
-}
-
 uint64_t
 CompositorBridgeParent::RootLayerTreeId()
 {
@@ -492,6 +472,10 @@ CompositorBridgeParent::StopAndClearResources()
 
   // After this point, it is no longer legal to access the widget.
   mWidget = nullptr;
+
+  // Clear mAnimationStorage here to ensure that the compositor thread
+  // still exists when we destroy it.
+  mAnimationStorage = nullptr;
 }
 
 mozilla::ipc::IPCResult
@@ -540,6 +524,12 @@ CompositorBridgeParent::RecvMakeSnapshot(const SurfaceDescriptor& aInSnapshot,
 }
 
 mozilla::ipc::IPCResult
+CompositorBridgeParent::RecvWaitOnTransactionProcessed()
+{
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
 CompositorBridgeParent::RecvFlushRendering()
 {
   if (mCompositorScheduler->NeedsComposite()) {
@@ -547,6 +537,12 @@ CompositorBridgeParent::RecvFlushRendering()
     ForceComposeToTarget(nullptr);
   }
   return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+CompositorBridgeParent::RecvFlushRenderingAsync()
+{
+  return RecvFlushRendering();
 }
 
 mozilla::ipc::IPCResult
@@ -639,7 +635,6 @@ CompositorBridgeParent::ActorDestroy(ActorDestroyReason why)
   RemoveCompositor(mCompositorID);
 
   mCompositionManager = nullptr;
-  mAnimationStorage = nullptr;
 
   if (mApzcTreeManager) {
     mApzcTreeManager->ClearTree();
@@ -1437,9 +1432,7 @@ CompositorBridgeParent::NewCompositor(const nsTArray<LayersBackend>& aBackendHin
 
 PLayerTransactionParent*
 CompositorBridgeParent::AllocPLayerTransactionParent(const nsTArray<LayersBackend>& aBackendHints,
-                                                     const uint64_t& aId,
-                                                     TextureFactoryIdentifier* aTextureFactoryIdentifier,
-                                               bool *aSuccess)
+                                                     const uint64_t& aId)
 {
   MOZ_ASSERT(aId == 0);
 
@@ -1447,16 +1440,13 @@ CompositorBridgeParent::AllocPLayerTransactionParent(const nsTArray<LayersBacken
 
   if (!mLayerManager) {
     NS_WARNING("Failed to initialise Compositor");
-    *aSuccess = false;
     LayerTransactionParent* p = new LayerTransactionParent(nullptr, this, 0);
     p->AddIPDLReference();
     return p;
   }
 
   mCompositionManager = new AsyncCompositionManager(this, mLayerManager);
-  *aSuccess = true;
 
-  *aTextureFactoryIdentifier = mLayerManager->GetTextureFactoryIdentifier();
   LayerTransactionParent* p = new LayerTransactionParent(mLayerManager, this, 0);
   p->AddIPDLReference();
   return p;
@@ -1611,7 +1601,8 @@ CompositorBridgeParent::AllocPWebRenderBridgeParent(const wr::PipelineId& aPipel
   RefPtr<widget::CompositorWidget> widget = mWidget;
   RefPtr<wr::WebRenderAPI> api = wr::WebRenderAPI::Create(
     gfxPrefs::WebRenderProfilerEnabled(), this, Move(widget), aSize);
-  RefPtr<WebRenderCompositableHolder> holder = new WebRenderCompositableHolder();
+  RefPtr<WebRenderCompositableHolder> holder =
+    new WebRenderCompositableHolder(WebRenderBridgeParent::AllocIdNameSpace());
   MOZ_ASSERT(api); // TODO have a fallback
   api->SetRootPipeline(aPipelineId);
   mWrBridge = new WebRenderBridgeParent(this, aPipelineId, mWidget, nullptr, Move(api), Move(holder));
@@ -1645,6 +1636,12 @@ CompositorBridgeParent::DeallocPWebRenderBridgeParent(PWebRenderBridgeParent* aA
   }
   parent->Release(); // IPDL reference
   return true;
+}
+
+RefPtr<WebRenderBridgeParent>
+CompositorBridgeParent::GetWebRenderBridgeParent() const
+{
+  return mWrBridge;
 }
 
 void
@@ -1850,12 +1847,14 @@ CompositorBridgeParent::DidComposite(TimeStamp& aCompositeStart,
 void
 CompositorBridgeParent::NotifyDidCompositeToPipeline(const wr::PipelineId& aPipelineId, const wr::Epoch& aEpoch, TimeStamp& aCompositeStart, TimeStamp& aCompositeEnd)
 {
+  if (!mWrBridge) {
+    return;
+  }
+  mWrBridge->CompositableHolder()->Update(aPipelineId, aEpoch);
+
   if (mPaused) {
     return;
   }
-  MOZ_ASSERT(mWrBridge);
-
-  mWrBridge->CompositableHolder()->Update(aPipelineId, aEpoch);
 
   if (mWrBridge->PipelineId() == aPipelineId) {
     uint64_t transactionId = mWrBridge->FlushTransactionIdsForEpoch(aEpoch);
@@ -1925,105 +1924,6 @@ CompositorBridgeParent::InvalidateRemoteLayers()
       Unused << cpcp->SendInvalidateLayers(aLayersId);
     }
   });
-}
-
-bool
-CompositorBridgeParent::ResetCompositor(const nsTArray<LayersBackend>& aBackendHints,
-                                        uint64_t aSeqNo,
-                                        TextureFactoryIdentifier* aOutIdentifier)
-{
-  Maybe<TextureFactoryIdentifier> newIdentifier;
-  {
-    MonitorAutoLock lock(mResetCompositorMonitor);
-
-    CompositorLoop()->PostTask(NewRunnableMethod
-                               <StoreCopyPassByConstLRef<nsTArray<LayersBackend>>,
-                               uint64_t,
-                               Maybe<TextureFactoryIdentifier>*>(this,
-                                                                 &CompositorBridgeParent::ResetCompositorTask,
-                                                                 aBackendHints,
-                                                                 aSeqNo,
-                                                                 &newIdentifier));
-
-    mResetCompositorMonitor.Wait();
-  }
-
-  if (!newIdentifier) {
-    return false;
-  }
-
-  *aOutIdentifier = newIdentifier.value();
-  return true;
-}
-
-// Invoked on the compositor thread. The main thread is waiting on the given
-// monitor.
-void
-CompositorBridgeParent::ResetCompositorTask(const nsTArray<LayersBackend>& aBackendHints,
-                                            uint64_t aSeqNo,
-                                            Maybe<TextureFactoryIdentifier>* aOutNewIdentifier)
-{
-  // Perform the reset inside a lock, so the main thread can wake up as soon as
-  // possible. We notify child processes (if necessary) outside the lock.
-  Maybe<TextureFactoryIdentifier> newIdentifier;
-  {
-    MonitorAutoLock lock(mResetCompositorMonitor);
-
-    newIdentifier = ResetCompositorImpl(aBackendHints);
-    *aOutNewIdentifier = newIdentifier;
-
-    mResetCompositorMonitor.NotifyAll();
-  }
-
-  // NOTE: |aBackendHints|, and |aOutNewIdentifier| are now all invalid since
-  // they are allocated on ResetCompositor's stack on the main thread, which
-  // is no longer waiting on the lock.
-
-  if (!newIdentifier) {
-    // No compositor change; nothing to do.
-    return;
-  }
-
-  MonitorAutoLock lock(*sIndirectLayerTreesLock);
-  ForEachIndirectLayerTree([&] (LayerTreeState* lts, uint64_t layersId) -> void {
-    if (CrossProcessCompositorBridgeParent* cpcp = lts->mCrossProcessParent) {
-      Unused << cpcp->SendCompositorUpdated(layersId, newIdentifier.value(), aSeqNo);
-
-      if (LayerTransactionParent* ltp = lts->mLayerTree) {
-        ltp->SetPendingCompositorUpdate(aSeqNo);
-      }
-      lts->mPendingCompositorUpdate = Some(aSeqNo);
-    }
-  });
-}
-
-Maybe<TextureFactoryIdentifier>
-CompositorBridgeParent::ResetCompositorImpl(const nsTArray<LayersBackend>& aBackendHints)
-{
-  if (!mLayerManager) {
-    return Nothing();
-  }
-
-  RefPtr<Compositor> compositor = NewCompositor(aBackendHints);
-  if (!compositor) {
-    MOZ_RELEASE_ASSERT(compositor, "Failed to reset compositor.");
-  }
-
-  // Don't bother changing from basic->basic.
-  if (mCompositor &&
-      mCompositor->GetBackendType() == LayersBackend::LAYERS_BASIC &&
-      compositor->GetBackendType() == LayersBackend::LAYERS_BASIC)
-  {
-    return Nothing();
-  }
-
-  if (mCompositor) {
-    mCompositor->SetInvalid();
-  }
-  mCompositor = compositor;
-  mLayerManager->ChangeCompositor(compositor);
-
-  return Some(compositor->GetTextureFactoryIdentifier());
 }
 
 static void

@@ -359,11 +359,9 @@ ConvertRectArrayToJavaRectFArray(const nsTArray<LayoutDeviceIntRect>& aRects,
     for (size_t i = 0; i < length; i++) {
         LayoutDeviceIntRect tmp = aRects[i] + aOffset;
 
-        sdk::RectF::LocalRef rect(rects.Env());
-        sdk::RectF::New(tmp.x / aScale.scale, tmp.y / aScale.scale,
-                        (tmp.x + tmp.width) / aScale.scale,
-                        (tmp.y + tmp.height) / aScale.scale,
-                        &rect);
+        auto rect = sdk::RectF::New(tmp.x / aScale.scale, tmp.y / aScale.scale,
+                                    (tmp.x + tmp.width) / aScale.scale,
+                                    (tmp.y + tmp.height) / aScale.scale);
         rects->SetElement(i, rect);
     }
     return rects;
@@ -465,10 +463,8 @@ GeckoEditableSupport::OnKeyEvent(int32_t aAction, int32_t aKeyCode,
         mIMEKeyEvents.AppendElement(
                 UniquePtr<WidgetEvent>(pressEvent.Duplicate()));
     } else if (nsIWidget::UsePuppetWidgets()) {
-        AutoCacheNativeKeyCommands autoCache(
-                static_cast<PuppetWidget*>(widget.get()));
         // Don't use native key bindings.
-        autoCache.CacheNoCommands();
+        pressEvent.PreventNativeKeyBindings();
         dispatcher->MaybeDispatchKeypressEvents(pressEvent, status);
     } else {
         dispatcher->MaybeDispatchKeypressEvents(pressEvent, status);
@@ -803,10 +799,8 @@ GeckoEditableSupport::OnImeReplaceText(int32_t aStart, int32_t aEnd,
                     mDispatcher->DispatchKeyboardEvent(
                             event->mMessage, *event, status);
                 } else if (nsIWidget::UsePuppetWidgets()) {
-                    AutoCacheNativeKeyCommands autoCache(
-                            static_cast<PuppetWidget*>(widget.get()));
                     // Don't use native key bindings.
-                    autoCache.CacheNoCommands();
+                    event->PreventNativeKeyBindings();
                     mDispatcher->MaybeDispatchKeypressEvents(*event, status);
                 } else {
                     mDispatcher->MaybeDispatchKeypressEvents(*event, status);

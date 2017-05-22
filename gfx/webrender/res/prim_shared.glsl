@@ -48,6 +48,8 @@
 uniform sampler2DArray sCacheA8;
 uniform sampler2DArray sCacheRGBA8;
 
+uniform sampler2D sGradients;
+
 struct RectWithSize {
     vec2 p0;
     vec2 size;
@@ -101,16 +103,24 @@ RectWithEndpoint intersect_rect(RectWithEndpoint a, RectWithEndpoint b) {
     return RectWithEndpoint(p.xy, max(p.xy, p.zw));
 }
 
+float distance_to_line(vec2 p0, vec2 perp_dir, vec2 p) {
+    vec2 dir_to_p0 = p0 - p;
+    return dot(normalize(perp_dir), dir_to_p0);
+}
 
 // TODO: convert back to RectWithEndPoint if driver issues are resolved, if ever.
 flat varying vec4 vClipMaskUvBounds;
 varying vec3 vClipMaskUv;
+#ifdef WR_FEATURE_TRANSFORM
+    flat varying vec4 vLocalBounds;
+#endif
 
 #ifdef WR_VERTEX_SHADER
 
 #define VECS_PER_LAYER             13
 #define VECS_PER_RENDER_TASK        3
 #define VECS_PER_PRIM_GEOM          2
+#define VECS_PER_SPLIT_GEOM         3
 
 uniform sampler2D sLayers;
 uniform sampler2D sRenderTasks;
@@ -252,6 +262,23 @@ AlphaBatchTask fetch_alpha_batch_task(int index) {
     return task;
 }
 
+struct ReadbackTask {
+    vec2 render_target_origin;
+    vec2 size;
+    float render_target_layer_index;
+};
+
+ReadbackTask fetch_readback_task(int index) {
+    RenderTaskData data = fetch_render_task(index);
+
+    ReadbackTask task;
+    task.render_target_origin = data.data0.xy;
+    task.size = data.data0.zw;
+    task.render_target_layer_index = data.data1.x;
+
+    return task;
+}
+
 struct ClipArea {
     vec4 task_bounds;
     vec4 screen_origin_target_index;
@@ -314,8 +341,8 @@ struct Border {
     vec4 radii[2];
 };
 
-vec4 get_effective_border_widths(Border border) {
-    switch (int(border.style.x)) {
+vec4 get_effective_border_widths(Border border, int style) {
+    switch (style) {
         case BORDER_STYLE_DOUBLE:
             // Calculate the width of a border segment in a style: double
             // border. Round to the nearest CSS pixel.
@@ -698,6 +725,8 @@ TransformVertexInfo write_transform_vertex(RectWithSize instance_rect,
 
     gl_Position = uTransform * vec4(final_pos, z, 1.0);
 
+    vLocalBounds = vec4(local_rect.p0, local_rect.p1);
+
     vec4 layer_pos = get_layer_pos(device_pos / uDevicePixelRatio, layer);
 
     return TransformVertexInfo(layer_pos.xyw, device_pos);
@@ -747,21 +776,13 @@ Image fetch_image(int index) {
     return Image(data);
 }
 
-// YUV color spaces
-#define YUV_REC601 1
-#define YUV_REC709 2
-
 struct YuvImage {
-    vec4 y_st_rect;
-    vec4 u_st_rect;
-    vec4 v_st_rect;
     vec2 size;
-    int color_space;
 };
 
 YuvImage fetch_yuv_image(int index) {
     vec4 data = fetch_data_1(index);
-    return YuvImage(vec4(0.0), vec4(0.0), vec4(0.0), data.xy, int(data.z));
+    return YuvImage(data.xy);
 }
 
 struct BoxShadow {
@@ -785,38 +806,29 @@ void write_clip(vec2 global_pos, ClipArea area) {
 #endif //WR_VERTEX_SHADER
 
 #ifdef WR_FRAGMENT_SHADER
+
+#ifdef WR_FEATURE_TRANSFORM
 float signed_distance_rect(vec2 pos, vec2 p0, vec2 p1) {
     vec2 d = max(p0 - pos, pos - p1);
     return length(max(vec2(0.0), d)) + min(0.0, max(d.x, d.y));
 }
 
-vec2 init_transform_fs(vec3 local_pos, RectWithSize local_rect, out float fragment_alpha) {
+vec2 init_transform_fs(vec3 local_pos, out float fragment_alpha) {
     fragment_alpha = 1.0;
     vec2 pos = local_pos.xy / local_pos.z;
 
-    // Because the local rect is placed on whole coordinates, but the interpolation
-    // occurs at pixel centers, we need to offset the signed distance by that amount.
-    // In the simple case of no zoom, and no transform, this is 0.5. However, we
-    // need to scale this by the amount that the local rect is changing by per
-    // fragment, based on the current zoom and transform.
-    vec2 fw = fwidth(pos.xy);
-    vec2 dxdy = 0.5 * fw;
-
-    // Now get the actual signed distance. Inset the local rect by the offset amount
-    // above to get correct distance values. This ensures that we only apply
-    // anti-aliasing when the fragment has partial coverage.
-    float d = signed_distance_rect(pos,
-                                   local_rect.p0 + dxdy,
-                                   local_rect.p0 + local_rect.size - dxdy);
+    // Now get the actual signed distance.
+    float d = signed_distance_rect(pos, vLocalBounds.xy, vLocalBounds.zw);
 
     // Find the appropriate distance to apply the AA smoothstep over.
-    float afwidth = 0.5 / length(fw);
+    float afwidth = 0.5 * length(fwidth(pos.xy));
 
     // Only apply AA to fragments outside the signed distance field.
     fragment_alpha = 1.0 - smoothstep(0.0, afwidth, d);
 
     return pos;
 }
+#endif //WR_FEATURE_TRANSFORM
 
 float do_clip() {
     // anything outside of the mask is considered transparent
@@ -828,6 +840,7 @@ float do_clip() {
         all(inside) ? textureLod(sCacheA8, vClipMaskUv, 0.0).r : 0.0;
 }
 
+#ifdef WR_FEATURE_DITHERING
 vec4 dither(vec4 color) {
     const int matrix_mask = 7;
 
@@ -837,4 +850,101 @@ vec4 dither(vec4 color) {
 
     return color + vec4(noise, noise, noise, 0);
 }
+#else
+vec4 dither(vec4 color) {
+    return color;
+}
+#endif //WR_FEATURE_DITHERING
+
+vec4 sample_gradient(float offset, float gradient_repeat, float gradient_index, vec2 gradient_size) {
+    // Modulo the offset if the gradient repeats. We don't need to clamp non-repeating
+    // gradients because the gradient data texture is bound with CLAMP_TO_EDGE, and the
+    // first and last color entries are filled with the first and last stop colors
+    float x = mix(offset, fract(offset), gradient_repeat);
+
+    // Calculate the color entry index to use for this offset:
+    //     offsets < 0 use the first color entry, 0
+    //     offsets from [0, 1) use the color entries in the range of [1, N-1)
+    //     offsets >= 1 use the last color entry, N-1
+    //     so transform the range [0, 1) -> [1, N-1)
+    float gradient_entries = 0.5 * gradient_size.x;
+    x = x * (gradient_entries - 2.0) + 1.0;
+
+    // Calculate the texel to index into the gradient color entries:
+    //     floor(x) is the gradient color entry index
+    //     fract(x) is the linear filtering factor between start and end
+    //     so, 2 * floor(x) + 0.5 is the center of the start color
+    //     finally, add floor(x) to interpolate to end
+    x = 2.0 * floor(x) + 0.5 + fract(x);
+
+    // Gradient color entries are encoded with high bits in one row and low bits in the next
+    // So use linear filtering to mix (gradient_index + 1) with (gradient_index)
+    float y = gradient_index * 2.0 + 0.5 + 1.0 / 256.0;
+
+    // Finally sample and apply dithering
+    return dither(texture(sGradients, vec2(x, y) / gradient_size));
+}
+
+//
+// Signed distance to an ellipse.
+// Taken from http://www.iquilezles.org/www/articles/ellipsedist/ellipsedist.htm
+// Note that this fails for exact circles.
+//
+float sdEllipse( vec2 p, in vec2 ab ) {
+    p = abs( p ); if( p.x > p.y ){ p=p.yx; ab=ab.yx; }
+    float l = ab.y*ab.y - ab.x*ab.x;
+
+    float m = ab.x*p.x/l;
+    float n = ab.y*p.y/l;
+    float m2 = m*m;
+    float n2 = n*n;
+
+    float c = (m2 + n2 - 1.0)/3.0;
+    float c3 = c*c*c;
+
+    float q = c3 + m2*n2*2.0;
+    float d = c3 + m2*n2;
+    float g = m + m*n2;
+
+    float co;
+
+    if( d<0.0 )
+    {
+        float p = acos(q/c3)/3.0;
+        float s = cos(p);
+        float t = sin(p)*sqrt(3.0);
+        float rx = sqrt( -c*(s + t + 2.0) + m2 );
+        float ry = sqrt( -c*(s - t + 2.0) + m2 );
+        co = ( ry + sign(l)*rx + abs(g)/(rx*ry) - m)/2.0;
+    }
+    else
+    {
+        float h = 2.0*m*n*sqrt( d );
+        float s = sign(q+h)*pow( abs(q+h), 1.0/3.0 );
+        float u = sign(q-h)*pow( abs(q-h), 1.0/3.0 );
+        float rx = -s - u - c*4.0 + 2.0*m2;
+        float ry = (s - u)*sqrt(3.0);
+        float rm = sqrt( rx*rx + ry*ry );
+        float p = ry/sqrt(rm-rx);
+        co = (p + 2.0*g/rm - m)/2.0;
+    }
+
+    float si = sqrt( 1.0 - co*co );
+
+    vec2 r = vec2( ab.x*co, ab.y*si );
+
+    return length(r - p ) * sign(p.y-r.y);
+}
+
+float distance_to_ellipse(vec2 p, vec2 radii) {
+    // sdEllipse fails on exact circles, so handle equal
+    // radii here. The branch coherency should make this
+    // a performance win for the circle case too.
+    if (radii.x == radii.y) {
+        return length(p) - radii.x;
+    } else {
+        return sdEllipse(p, radii);
+    }
+}
+
 #endif //WR_FRAGMENT_SHADER

@@ -12,7 +12,6 @@ Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/PlacesUtils.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/PromiseUtils.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://testing-common/TestUtils.jsm");
@@ -25,7 +24,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "Sqlite",
 // Initialize profile.
 var gProfD = do_get_profile();
 
-Cu.import("resource://testing-common/AppInfo.jsm"); /* globals updateAppInfo */
+Cu.import("resource://testing-common/AppInfo.jsm");
 updateAppInfo();
 
 /**

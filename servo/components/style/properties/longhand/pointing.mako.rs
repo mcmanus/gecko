@@ -9,8 +9,8 @@
 <%helpers:longhand name="cursor" boxed="${product == 'gecko'}" animation_value_type="none"
   spec="https://drafts.csswg.org/css-ui/#cursor">
     pub use self::computed_value::T as SpecifiedValue;
-    use values::HasViewportPercentage;
     use values::computed::ComputedValueAsSpecified;
+    #[cfg(feature = "gecko")]
     use values::specified::url::SpecifiedUrl;
 
     impl ComputedValueAsSpecified for SpecifiedValue {}
@@ -20,6 +20,7 @@
         use std::fmt;
         use style_traits::cursor::Cursor;
         use style_traits::ToCss;
+        #[cfg(feature = "gecko")]
         use values::specified::url::SpecifiedUrl;
 
         #[derive(Clone, PartialEq, Copy, Debug)]
@@ -131,7 +132,10 @@
         let mut images = vec![];
         loop {
             match input.try(|input| parse_image(context, input)) {
-                Ok(image) => images.push(image),
+                Ok(mut image) => {
+                    image.url.build_image_value();
+                    images.push(image)
+                }
                 Err(()) => break,
             }
             try!(input.expect_comma());
@@ -148,7 +152,7 @@
 // is nonstandard, slated for CSS4-UI.
 // TODO(pcwalton): SVG-only values.
 ${helpers.single_keyword("pointer-events", "auto none", animation_value_type="none",
-                         extra_gecko_values="visiblepainted visiblefill visiblestroke visible painted fill stroke",
+                         extra_gecko_values="visiblepainted visiblefill visiblestroke visible painted fill stroke all",
                          spec="https://www.w3.org/TR/SVG11/interact.html#PointerEventsProperty")}
 
 ${helpers.single_keyword("-moz-user-input", "auto none enabled disabled",

@@ -45,6 +45,7 @@ class ErrorResult;
 struct AnimationRule;
 struct ServoComputedValuesWithParent;
 struct TimingParams;
+class EffectSet;
 
 namespace dom {
 class ElementOrCSSPseudoElement;
@@ -257,6 +258,9 @@ public:
     nsCSSPropertyID aProperty,
     const AnimationPerformanceWarning& aWarning);
 
+  // Record telemetry about the size of the content being animated.
+  void RecordFrameSizeTelemetry(uint32_t aPixelArea);
+
   // Cumulative change hint on each segment for each property.
   // This is used for deciding the animation is paint-only.
   void CalculateCumulativeChangeHint(nsStyleContext* aStyleContext);
@@ -275,10 +279,18 @@ public:
   // |aFrame| is used for calculation of scale values.
   bool ContainsAnimatedScale(const nsIFrame* aFrame) const;
 
-  StyleAnimationValue BaseStyle(nsCSSPropertyID aProperty) const
+  AnimationValue BaseStyle(nsCSSPropertyID aProperty) const
   {
-    StyleAnimationValue result;
-    DebugOnly<bool> hasProperty = mBaseStyleValues.Get(aProperty, &result);
+    AnimationValue result;
+    bool hasProperty = false;
+    if (mDocument->IsStyledByServo()) {
+      // We cannot use getters_AddRefs on RawServoAnimationValue because it is
+      // an incomplete type, so Get() doesn't work. Instead, use GetWeak, and
+      // then assign the raw pointer to a RefPtr.
+      result.mServo = mBaseStyleValuesForServo.GetWeak(aProperty, &hasProperty);
+    } else {
+      hasProperty = mBaseStyleValues.Get(aProperty, &result.mGecko);
+    }
     MOZ_ASSERT(hasProperty || result.IsNull());
     return result;
   }
@@ -377,7 +389,7 @@ protected:
   // Stylo version of the above function that also first checks for an additive
   // value in |aProperty|'s list of segments.
   void EnsureBaseStyle(const AnimationProperty& aProperty,
-                       nsIAtom* aPseudoAtom,
+                       CSSPseudoElementType aPseudoType,
                        nsPresContext* aPresContext,
                        RefPtr<ServoComputedValues>& aBaseComputedValues);
 
@@ -416,6 +428,10 @@ protected:
   // per effect:target pair so we use this member to record if we have already
   // reported a "ContentTooLarge" warning for the current target.
   bool mRecordedContentTooLarge = false;
+  // Similarly, as a point of comparison we record telemetry whether or not
+  // we get a "ContentTooLarge" warning, but again only once per effect:target
+  // pair.
+  bool mRecordedFrameSize = false;
 
 private:
   nsChangeHint mCumulativeChangeHint;
@@ -454,6 +470,8 @@ private:
   static bool IsGeometricProperty(const nsCSSPropertyID aProperty);
 
   static const TimeDuration OverflowRegionRefreshInterval();
+
+  void UpadateEffectSet(mozilla::EffectSet* aEffectSet = nullptr) const;
 
   // FIXME: This flag will be removed in bug 1324966.
   bool mIsComposingStyle = false;

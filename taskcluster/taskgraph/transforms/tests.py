@@ -35,6 +35,8 @@ from voluptuous import (
 
 import copy
 import logging
+import requests
+from collections import defaultdict
 
 WORKER_TYPE = {
     # default worker types keyed by instance-size
@@ -74,11 +76,9 @@ test_description_schema = Schema({
         basestring),
 
     # the name by which this test suite is addressed in try syntax; defaults to
-    # the test-name
-    Optional('unittest-try-name'): basestring,
-
-    # the name by which this talos test is addressed in try syntax
-    Optional('talos-try-name'): basestring,
+    # the test-name.  This will translate to the `unittest_try_name` or
+    # `talos_try_name` attribute.
+    Optional('try-name'): basestring,
 
     # additional tags to mark up this type of test
     Optional('tags'): {basestring: object},
@@ -130,6 +130,9 @@ test_description_schema = Schema({
     Required('e10s', default='both'): optionally_keyed_by(
         'test-platform', 'project',
         Any(bool, 'both')),
+
+    # Whether the task should run with WebRender enabled or not.
+    Optional('webrender', default=False): bool,
 
     # The EC2 instance size to run these tests on.
     Required('instance-size', default='default'): optionally_keyed_by(
@@ -331,6 +334,17 @@ def set_defaults(config, tests):
         else:
             test['allow-software-gl-layers'] = False
 
+        # Enable WebRender by default on the QuantumRender test platform, since
+        # the whole point of QuantumRender is to run with WebRender enabled.
+        # If other *-qr test platforms are added they should also be checked for
+        # here; currently linux64-qr is the only one.
+        if test['test-platform'].startswith('linux64-qr'):
+            test['webrender'] = True
+        else:
+            test.setdefault('webrender', False)
+
+        test.setdefault('try-name', test['test-name'])
+
         test.setdefault('os-groups', [])
         test.setdefault('chunks', 1)
         test.setdefault('run-on-projects', 'built-projects')
@@ -346,17 +360,20 @@ def set_target(config, tests):
     for test in tests:
         build_platform = test['build-platform']
         if build_platform.startswith('macosx'):
-            target = 'target.dmg'
+            if build_platform.split('/')[1] == 'opt':
+                target = 'firefox-{}.en-US.{}.dmg'.format(
+                    get_firefox_version(),
+                    'mac',
+                )
+            else:
+                target = 'target.dmg'
         elif build_platform.startswith('android'):
             if 'geckoview' in test['test-name']:
                 target = 'geckoview_example.apk'
             else:
                 target = 'target.apk'
         elif build_platform.startswith('win'):
-            target = 'firefox-{}.en-US.{}.zip'.format(
-                get_firefox_version(),
-                build_platform.split('/')[0]
-            )
+            target = 'target.zip'
         else:
             target = 'target.tar.bz2'
         test['mozharness']['build-artifact-name'] = 'public/build/' + target
@@ -391,21 +408,19 @@ def set_treeherder_machine_platform(config, tests):
 def set_worker_implementation(config, tests):
     """Set the worker implementation based on the test platform."""
     for test in tests:
-        if test['test-platform'].startswith('macosx'):
-            # see if '-g' appears in try syntax
-            if config.config['args'].generic_worker:
-                test['worker-implementation'] = 'generic-worker'
-            # see if '-w' appears in try syntax
-            elif config.config['args'].taskcluster_worker:
+        test_platform = test['test-platform']
+        if test_platform.startswith('macosx'):
+            if config.config['args'].taskcluster_worker:
                 test['worker-implementation'] = 'native-engine'
             else:
-                test['worker-implementation'] = 'buildbot-bridge'
+                test['worker-implementation'] = 'generic-worker'
         elif test.get('suite', '') == 'talos':
             test['worker-implementation'] = 'buildbot-bridge'
-        elif test['test-platform'].startswith('win'):
+        elif test_platform.startswith('win'):
             test['worker-implementation'] = 'generic-worker'
         else:
             test['worker-implementation'] = 'docker-worker'
+
         yield test
 
 
@@ -528,13 +543,19 @@ def split_e10s(config, tests):
             e10s = True
         if e10s:
             test['test-name'] += '-e10s'
+            test['try-name'] += '-e10s'
             test['e10s'] = True
             test['attributes']['e10s'] = True
             group, symbol = split_symbol(test['treeherder-symbol'])
             if group != '?':
                 group += '-e10s'
             test['treeherder-symbol'] = join_symbol(group, symbol)
-            test['mozharness']['extra-options'].append('--e10s')
+            if test['suite'] == 'talos':
+                for i, option in enumerate(test['mozharness']['extra-options']):
+                    if option.startswith('--suite='):
+                        test['mozharness']['extra-options'][i] += '-e10s'
+            else:
+                test['mozharness']['extra-options'].append('--e10s')
         yield test
 
 
@@ -581,6 +602,20 @@ def allow_software_gl_layers(config, tests):
 
 
 @transforms.add
+def enable_webrender(config, tests):
+    """
+    Handle the "webrender" property by passing a flag to mozharness if it is
+    enabled.
+    """
+    for test in tests:
+        if test.get('webrender'):
+            test['mozharness'].setdefault('extra-options', [])\
+                              .append("--enable-webrender")
+
+        yield test
+
+
+@transforms.add
 def set_retry_exit_status(config, tests):
     """Set the retry exit status to TBPL_RETRY, the value returned by mozharness
        scripts to indicate a transient failure that should be retried."""
@@ -613,9 +648,9 @@ def remove_linux_pgo_try_talos(config, tests):
     """linux64-pgo talos tests don't run on try."""
     def predicate(test):
         return not(
-            test['test-platform'] == 'linux64-pgo/opt'
-            and (test['suite'] == 'talos' or test['suite'] == 'awsy')
-            and config.params['project'] == 'try'
+            test['test-platform'] == 'linux64-pgo/opt' and
+            (test['suite'] == 'talos' or test['suite'] == 'awsy') and
+            config.params['project'] == 'try'
         )
     for test in filter(predicate, tests):
         yield test
@@ -636,7 +671,8 @@ def parallel_stylo_tests(config, tests):
     parallel traversal in the style system."""
 
     for test in tests:
-        if not test['test-platform'].startswith('linux64-stylo/'):
+        if (not test['test-platform'].startswith('linux64-stylo/')) and \
+           (not test['test-platform'].startswith('linux64-stylo-sequential/')):
             yield test
             continue
 
@@ -647,9 +683,42 @@ def parallel_stylo_tests(config, tests):
             yield test
             continue
 
-        test['mozharness'].setdefault('extra-options', [])\
-                          .append('--parallel-stylo-traversal')
-        yield test
+        # Bug 1356122 - Run Stylo tests in sequential mode
+        if test['test-platform'].startswith('linux64-stylo-sequential/'):
+            yield test
+
+        if test['test-platform'].startswith('linux64-stylo/'):
+            # add parallel stylo tests
+            test['mozharness'].setdefault('extra-options', [])\
+                              .append('--parallel-stylo-traversal')
+            yield test
+
+
+@transforms.add
+def allocate_to_bbb(config, tests):
+    """Make the load balancing between taskcluster and buildbot"""
+    j = get_load_balacing_settings()
+
+    tests_set = defaultdict(list)
+    for test in tests:
+        tests_set[test['test-platform']].append(test)
+
+    # Make the load balancing between taskcluster and buildbot
+    for test_platform, t in tests_set.iteritems():
+        # We sort the list to make the order of the tasks deterministic
+        t.sort(key=lambda x: (x['test-name'], x.get('this_chunk', 1)))
+        # The json file tells the percentage of tasks that run on
+        # taskcluster. The logic here is inverted, as tasks have been
+        # previously assigned to taskcluster. Therefore we assign the
+        # 1-p tasks to buildbot-bridge.
+        n = j.get(test_platform, 1.0)
+        if not (test_platform.startswith('mac')
+                and config.config['args'].taskcluster_worker):
+            for i in range(int(n * len(t)), len(t)):
+                t[i]['worker-implementation'] = 'buildbot-bridge'
+
+        for y in t:
+            yield y
 
 
 @transforms.add
@@ -664,11 +733,10 @@ def make_job_description(config, tests):
 
         build_label = test['build-label']
 
-        if 'talos-try-name' in test:
-            try_name = test['talos-try-name']
+        try_name = test['try-name']
+        if test['suite'] == 'talos':
             attr_try_name = 'talos_try_name'
         else:
-            try_name = test.get('unittest-try-name', test['test-name'])
             attr_try_name = 'unittest_try_name'
 
         attr_build_platform, attr_build_type = test['build-platform'].split('/', 1)
@@ -752,3 +820,11 @@ def normpath(path):
 def get_firefox_version():
     with open('browser/config/version.txt', 'r') as f:
         return f.readline().strip()
+
+
+def get_load_balacing_settings():
+    url = "https://s3.amazonaws.com/taskcluster-graph-scheduling/tests-load.json"
+    try:
+        return requests.get(url).json()
+    except Exception:
+        return {}

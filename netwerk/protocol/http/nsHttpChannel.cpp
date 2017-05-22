@@ -107,6 +107,10 @@
 #include "CacheStorageService.h"
 #include "HttpChannelParent.h"
 #include "nsIThrottlingService.h"
+#include "nsIBufferedStreams.h"
+#include "nsIFileStreams.h"
+#include "nsIMIMEInputStream.h"
+#include "nsIMultiplexInputStream.h"
 
 #ifdef MOZ_TASK_TRACER
 #include "GeckoTaskTracer.h"
@@ -140,8 +144,6 @@ static uint32_t sRCWNSmallResourceSizeKB = 256;
          ((mFirstResponseSource == RESPONSE_FROM_NETWORK) && (req != mTransactionPump))))
 
 static NS_DEFINE_CID(kStreamListenerTeeCID, NS_STREAMLISTENERTEE_CID);
-static NS_DEFINE_CID(kStreamTransportServiceCID,
-                     NS_STREAMTRANSPORTSERVICE_CID);
 
 enum CacheDisposition {
     kCacheHit = 1,
@@ -290,6 +292,8 @@ nsHttpChannel::nsHttpChannel()
     , mStronglyFramed(false)
     , mUsedNetwork(0)
     , mAuthConnectionRestartable(0)
+    , mReqContentLengthDetermined(0)
+    , mReqContentLength(0U)
     , mPushedStream(nullptr)
     , mLocalBlocklist(false)
     , mWarningReporter(nullptr)
@@ -510,9 +514,118 @@ nsHttpChannel::TryHSTSPriming()
     return ContinueConnect();
 }
 
+// nsIInputAvailableCallback (nsIStreamTransportService.idl)
+NS_IMETHODIMP
+nsHttpChannel::OnInputAvailableComplete(uint64_t size, nsresult status)
+{
+    MOZ_ASSERT(NS_IsMainThread(), "Wrong thread.");
+    LOG(("nsHttpChannel::OnInputAvailableComplete %p %" PRIx32 "\n",
+         this, static_cast<uint32_t>(status)));
+    if (NS_SUCCEEDED(status)) {
+        mReqContentLength = size;
+    } else {
+        // fall back to synchronous on the error path. should not happen.
+        if (NS_SUCCEEDED(mUploadStream->Available(&size))) {
+            mReqContentLength = size;
+        }
+    }
+
+    LOG(("nsHttpChannel::DetermineContentLength %p from sts\n", this));
+    mReqContentLengthDetermined = 1;
+    nsresult rv = mCanceled ? mStatus : ContinueConnect();
+    if (NS_FAILED(rv)) {
+        CloseCacheEntry(false);
+        Unused << AsyncAbort(rv);
+    }
+    return NS_OK;
+}
+
+// nsIFileStream needs to be sent to a worker thread
+// to do Available() as it may cause disk/IO. Unfortunately
+// we have to look at the streams wrapped by a few other
+// abstractions to be sure.
+static
+bool isFileStream(nsIInputStream *stream)
+{
+    if (!stream) {
+        return false;
+    }
+
+    nsCOMPtr<nsIFileInputStream> fileStream = do_QueryInterface(stream);
+    if (fileStream) {
+        return true;
+    }
+
+    nsCOMPtr<nsIBufferedInputStream> bufferedStream = do_QueryInterface(stream);
+    if (bufferedStream) {
+        nsCOMPtr<nsIInputStream> innerStream;
+        if (NS_SUCCEEDED(bufferedStream->GetData(getter_AddRefs(innerStream)))) {
+            return isFileStream(innerStream);
+        }
+    }
+
+    nsCOMPtr<nsIMIMEInputStream> mimeStream = do_QueryInterface(stream);
+    if (mimeStream) {
+        nsCOMPtr<nsIInputStream> innerStream;
+        if (NS_SUCCEEDED(mimeStream->GetData(getter_AddRefs(innerStream)))) {
+            return isFileStream(innerStream);
+        }
+    }
+
+    nsCOMPtr<nsIMultiplexInputStream> muxStream = do_QueryInterface(stream);
+    uint32_t muxCount = 0;
+    if (muxStream) {
+        muxStream->GetCount(&muxCount);
+        for (uint32_t i = 0; i < muxCount; ++i) {
+            nsCOMPtr<nsIInputStream> subStream;
+            if (NS_SUCCEEDED(muxStream->GetStream(i, getter_AddRefs(subStream))) &&
+                isFileStream(subStream)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+void
+nsHttpChannel::DetermineContentLength()
+{
+    nsCOMPtr<nsIStreamTransportService> sts(services::GetStreamTransportService());
+
+    if (!mUploadStream || !sts) {
+        LOG(("nsHttpChannel::DetermineContentLength %p no body\n", this));
+        mReqContentLength = 0U;
+        mReqContentLengthDetermined = 1;
+        return;
+    }
+
+    if (!isFileStream(mUploadStream)) {
+        mUploadStream->Available(&mReqContentLength);
+        LOG(("nsHttpChannel::DetermineContentLength %p from mem\n", this));
+        mReqContentLengthDetermined = 1;
+        return;
+    }
+
+    LOG(("nsHttpChannel::DetermineContentLength Async [this=%p]\n", this));
+    sts->InputAvailable(mUploadStream, this);
+}
+
 nsresult
 nsHttpChannel::ContinueConnect()
 {
+    // If we have a request body that is going to require bouncing to the STS
+    // in order to determine the content-length as doing it on the main thread
+    // will incur file IO some of the time.
+    if (!mReqContentLengthDetermined) {
+        // C-L might be determined sync or async. Sync will set
+        // mReqContentLengthDetermined to true in DetermineContentLength()
+        DetermineContentLength();
+    }
+    if (!mReqContentLengthDetermined) {
+        return NS_OK;
+    }
+
     // If we have had HSTS priming, we need to reevaluate whether we need
     // a CORS preflight. Bug: 1272440
     // If we need to start a CORS preflight, do it now!
@@ -1006,7 +1119,8 @@ nsHttpChannel::SetupTransaction()
 
     nsCOMPtr<nsIAsyncInputStream> responseStream;
     rv = mTransaction->Init(mCaps, mConnectionInfo, &mRequestHead,
-                            mUploadStream, mUploadStreamHasHeaders,
+                            mUploadStream, mReqContentLength,
+                            mUploadStreamHasHeaders,
                             NS_GetCurrentThread(), callbacks, this,
                             mTopLevelOuterContentWindowId,
                             getter_AddRefs(responseStream));
@@ -2083,6 +2197,11 @@ nsHttpChannel::ContinueProcessResponse1()
         LOG(("Waiting until resume to finish processing response [this=%p]\n", this));
         mCallOnResume = &nsHttpChannel::AsyncContinueProcessResponse;
         return NS_OK;
+    }
+
+    // Check if request was cancelled during http-on-examine-response.
+    if (mCanceled) {
+        return CallOnStartRequest();
     }
 
     uint32_t httpStatus = mResponseHead->Status();
@@ -3476,9 +3595,10 @@ nsHttpChannel::OpenCacheEntry(bool isHttps)
         }
     }
 
-    nsCOMPtr<nsICacheStorageService> cacheStorageService =
-        do_GetService("@mozilla.org/netwerk/cache-storage-service;1", &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
+    nsCOMPtr<nsICacheStorageService> cacheStorageService(services::GetCacheStorageService());
+    if (!cacheStorageService) {
+        return NS_ERROR_NOT_AVAILABLE;
+    }
 
     nsCOMPtr<nsICacheStorage> cacheStorage;
     nsCOMPtr<nsIURI> openURI;
@@ -3728,7 +3848,13 @@ nsHttpChannel::OnCacheEntryCheck(nsICacheEntry* entry, nsIApplicationCache* appC
     if (mRaceCacheWithNetwork && mFirstResponseSource == RESPONSE_FROM_NETWORK) {
         LOG(("Not using cached response because we've already got one from the network\n"));
         *aResult = ENTRY_NOT_WANTED;
+
+        // Net-win indicates that mOnStartRequestTimestamp is from net.
+        int64_t savedTime = (TimeStamp::Now() - mOnStartRequestTimestamp).ToMilliseconds();
+        Telemetry::Accumulate(Telemetry::NETWORK_RACE_CACHE_WITH_NETWORK_SAVED_TIME, savedTime);
         return NS_OK;
+    } else if (mRaceCacheWithNetwork && mFirstResponseSource == RESPONSE_PENDING) {
+        mOnCacheEntryCheckTimestamp = TimeStamp::Now();
     }
 
     nsAutoCString cacheControlRequestHeader;
@@ -4689,8 +4815,8 @@ nsHttpChannel::OpenCacheInputStream(nsICacheEntry* cacheEntry, bool startBufferi
     nsCOMPtr<nsITransport> transport;
     nsCOMPtr<nsIInputStream> wrapper;
 
-    nsCOMPtr<nsIStreamTransportService> sts =
-        do_GetService(kStreamTransportServiceCID, &rv);
+    nsCOMPtr<nsIStreamTransportService> sts(services::GetStreamTransportService());
+    rv = sts ? NS_OK : NS_ERROR_NOT_AVAILABLE;
     if (NS_SUCCEEDED(rv)) {
         rv = sts->CreateInputTransport(stream, int64_t(-1), int64_t(-1),
                                         true, getter_AddRefs(transport));
@@ -5231,9 +5357,10 @@ nsHttpChannel::InstallCacheListener(int64_t offset)
 
     nsCOMPtr<nsIEventTarget> cacheIOTarget;
     if (!CacheObserver::UseNewCache()) {
-        nsCOMPtr<nsICacheStorageService> serv =
-            do_GetService("@mozilla.org/netwerk/cache-storage-service;1", &rv);
-        NS_ENSURE_SUCCESS(rv, rv);
+        nsCOMPtr<nsICacheStorageService> serv(services::GetCacheStorageService());
+        if (!serv) {
+            return NS_ERROR_NOT_AVAILABLE;
+        }
 
         serv->GetIoTarget(getter_AddRefs(cacheIOTarget));
     }
@@ -5649,25 +5776,6 @@ NS_IMETHODIMP nsHttpChannel::CloseStickyConnection()
     return NS_OK;
 }
 
-NS_IMETHODIMP nsHttpChannel::ForceNoSpdy()
-{
-    LOG(("nsHttpChannel::ForceNoSpdy this=%p", this));
-
-    MOZ_ASSERT(mTransaction);
-    if (!mTransaction) {
-        return NS_ERROR_UNEXPECTED;
-    }
-
-    mAllowSpdy = 0;
-    mCaps |= NS_HTTP_DISALLOW_SPDY;
-
-    if (!(mTransaction->Caps() & NS_HTTP_DISALLOW_SPDY)) {
-        mTransaction->DisableSpdy();
-    }
-
-    return NS_OK;
-}
-
 NS_IMETHODIMP nsHttpChannel::ConnectionRestartable(bool aRestartable)
 {
     LOG(("nsHttpChannel::ConnectionRestartable this=%p, restartable=%d",
@@ -5701,6 +5809,7 @@ NS_INTERFACE_MAP_BEGIN(nsHttpChannel)
     NS_INTERFACE_MAP_ENTRY(nsITransportEventSink)
     NS_INTERFACE_MAP_ENTRY(nsISupportsPriority)
     NS_INTERFACE_MAP_ENTRY(nsIProtocolProxyCallback)
+    NS_INTERFACE_MAP_ENTRY(nsIInputAvailableCallback)
     NS_INTERFACE_MAP_ENTRY(nsIProxiedChannel)
     NS_INTERFACE_MAP_ENTRY(nsIHttpAuthenticableChannel)
     NS_INTERFACE_MAP_ENTRY(nsIApplicationCacheContainer)
@@ -5984,7 +6093,7 @@ nsHttpChannel::InitLocalBlockList(const InitLocalBlockListCallback& aCallback)
     }
 
     // Check to see if this principal exists on local blocklists.
-    nsCOMPtr<nsIURIClassifier> classifier = do_GetService(NS_URICLASSIFIERSERVICE_CONTRACTID);
+    nsCOMPtr<nsIURIClassifier> classifier(services::GetURIClassifier());
     RefPtr<nsChannelClassifier> channelClassifier = new nsChannelClassifier(this);
     bool tpEnabled = false;
     channelClassifier->ShouldEnableTrackingProtection(&tpEnabled);
@@ -6794,6 +6903,17 @@ nsHttpChannel::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
             // that are not keep-alive.
         } else if (WRONG_RACING_RESPONSE_SOURCE(request)) {
             LOG(("  Early return when racing. This response not needed."));
+
+            // Net wins, but OnCacheEntryCheck was already called.
+            if (mFirstResponseSource == RESPONSE_FROM_NETWORK &&
+                !mOnCacheEntryCheckTimestamp.IsNull()) {
+                TimeStamp currentTime = TimeStamp::Now();
+                int64_t savedTime = (currentTime - mOnStartRequestTimestamp).ToMilliseconds();
+                Telemetry::Accumulate(Telemetry::NETWORK_RACE_CACHE_WITH_NETWORK_SAVED_TIME, savedTime);
+
+                int64_t diffTime = (currentTime - mOnCacheEntryCheckTimestamp).ToMilliseconds();
+                Telemetry::Accumulate(Telemetry::NETWORK_RACE_CACHE_WITH_NETWORK_OCEC_ON_START_DIFF, diffTime);
+            }
             return NS_OK;
         }
     }
@@ -7005,23 +7125,6 @@ nsHttpChannel::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult st
             }
         }
     }
-
-    enum RaceCacheAndNetStatus
-    {
-        kDidNotRaceUsedNetwork = 0,
-        kDidNotRaceUsedCache = 1,
-        kRaceUsedNetwork = 2,
-        kRaceUsedCache = 3
-    };
-
-    RaceCacheAndNetStatus rcwnStatus = kDidNotRaceUsedNetwork;
-    if (request == mTransactionPump) {
-        rcwnStatus = mRaceCacheWithNetwork ?  kRaceUsedNetwork : kDidNotRaceUsedNetwork;
-    } else if (request == mCachePump) {
-        rcwnStatus = mRaceCacheWithNetwork ? kRaceUsedCache : kDidNotRaceUsedCache;
-    }
-    Telemetry::Accumulate(Telemetry::NETWORK_RACE_CACHE_WITH_NETWORK_USAGE,
-                          rcwnStatus);
 
     nsCOMPtr<nsICompressConvStats> conv = do_QueryInterface(mCompressListener);
     if (conv) {
@@ -7243,6 +7346,8 @@ nsHttpChannel::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult st
             }
         }
     }
+
+    ReportRcwnStats(request);
 
     // Register entry to the Performance resource timing
     mozilla::dom::Performance* documentPerformance = GetPerformance();
@@ -8257,8 +8362,8 @@ nsHttpChannel::DoInvalidateCacheEntry(nsIURI* aURI)
 
     LOG(("DoInvalidateCacheEntry [channel=%p key=%s]", this, key.get()));
 
-    nsCOMPtr<nsICacheStorageService> cacheStorageService =
-        do_GetService("@mozilla.org/netwerk/cache-storage-service;1", &rv);
+    nsCOMPtr<nsICacheStorageService> cacheStorageService(services::GetCacheStorageService());
+    rv = cacheStorageService ? NS_OK : NS_ERROR_FAILURE;
 
     nsCOMPtr<nsICacheStorage> cacheStorage;
     if (NS_SUCCEEDED(rv)) {
@@ -8736,8 +8841,46 @@ nsHttpChannel::SetDoNotTrack()
   }
 }
 
+void
+nsHttpChannel::ReportRcwnStats(nsIRequest* firstResponseRequest)
+{
+    if (!sRCWNEnabled) {
+        return;
+    }
+    enum RaceCacheAndNetStatus
+    {
+        kDidNotRaceUsedNetwork = 0,
+        kDidNotRaceUsedCache = 1,
+        kRaceUsedNetwork = 2,
+        kRaceUsedCache = 3
+    };
+    static const Telemetry::HistogramID kRcwnTelemetry[4] = {
+        Telemetry::NETWORK_RACE_CACHE_BANDWITH_NOT_RACE,
+        Telemetry::NETWORK_RACE_CACHE_BANDWITH_NOT_RACE,
+        Telemetry::NETWORK_RACE_CACHE_BANDWITH_RACE_NETWORK_WIN,
+        Telemetry::NETWORK_RACE_CACHE_BANDWITH_RACE_CACHE_WIN
+    };
+
+    RaceCacheAndNetStatus rcwnStatus = kDidNotRaceUsedNetwork;
+    if (firstResponseRequest == mTransactionPump) {
+        rcwnStatus = mRaceCacheWithNetwork ? kRaceUsedNetwork : kDidNotRaceUsedNetwork;
+    } else if (firstResponseRequest == mCachePump) {
+        rcwnStatus = mRaceCacheWithNetwork ? kRaceUsedCache : kDidNotRaceUsedCache;
+    }
+    Telemetry::Accumulate(Telemetry::NETWORK_RACE_CACHE_WITH_NETWORK_USAGE,
+                          rcwnStatus);
+    Telemetry::Accumulate(kRcwnTelemetry[rcwnStatus], mTransferSize);
+
+    gIOService->IncrementRequestNumber();
+    if (rcwnStatus == kRaceUsedCache) {
+        gIOService->IncrementCacheWonRequestNumber();
+    } else if (rcwnStatus == kRaceUsedNetwork) {
+        gIOService->IncrementNetWonRequestNumber();
+    }
+}
+
 static const size_t kPositiveBucketNumbers = 34;
-static const int64_t positiveBucketLevels[kPositiveBucketNumbers] =
+static const int64_t kPositiveBucketLevels[kPositiveBucketNumbers] =
 {
 	0, 10, 20, 30, 40, 50, 60, 70, 80, 90,
 	100, 200, 300, 400, 500, 600, 700, 800, 900, 1000,
@@ -8767,10 +8910,10 @@ inline int64_t
 nsHttpChannel::ComputeTelemetryBucketNumber(int64_t difftime_ms)
 {
 	int64_t absBucketIndex =
-		std::lower_bound(positiveBucketLevels,
-                     positiveBucketLevels + kPositiveBucketNumbers,
+		std::lower_bound(kPositiveBucketLevels,
+                     kPositiveBucketLevels + kPositiveBucketNumbers,
 	                   static_cast<int64_t>(mozilla::Abs(difftime_ms)))
-		- positiveBucketLevels;
+		- kPositiveBucketLevels;
 
 	return difftime_ms >= 0 ? 40 + absBucketIndex
 	                        : 40 - absBucketIndex;
@@ -8944,7 +9087,6 @@ nsHttpChannel::MaybeRaceCacheWithNetwork()
     if (mLoadFlags & (LOAD_ONLY_FROM_CACHE | LOAD_NO_NETWORK_IO)) {
         return NS_OK;
     }
-
 
     uint32_t threshold = mCacheOpenWithPriority ? sRCWNQueueSizePriority
                                                 : sRCWNQueueSizeNormal;

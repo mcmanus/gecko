@@ -9,6 +9,7 @@
 #include "mozilla/gfx/2D.h"
 #include "imgIContainer.h"
 #include "nsContainerFrame.h"
+#include "nsIDOMMutationEvent.h"
 #include "nsIImageLoadingContent.h"
 #include "nsLayoutUtils.h"
 #include "imgINotificationObserver.h"
@@ -67,10 +68,10 @@ public:
   NS_DECL_FRAMEARENA_HELPERS
 
   // nsSVGDisplayableFrame interface:
-  virtual DrawResult PaintSVG(gfxContext& aContext,
-                              const gfxMatrix& aTransform,
-                              const nsIntRect* aDirtyRect = nullptr,
-                              uint32_t aFlags = 0) override;
+  virtual void PaintSVG(gfxContext& aContext,
+                        const gfxMatrix& aTransform,
+                        imgDrawingParams& aImgParams,
+                        const nsIntRect* aDirtyRect = nullptr) override;
   virtual nsIFrame* GetFrameForPoint(const gfxPoint& aPoint) override;
   virtual void ReflowSVG() override;
 
@@ -226,10 +227,15 @@ nsSVGImageFrame::AttributeChanged(int32_t         aNameSpaceID,
       return NS_OK;
     }
   }
-  if ((aNameSpaceID == kNameSpaceID_XLink ||
-       aNameSpaceID == kNameSpaceID_None) &&
-      aAttribute == nsGkAtoms::href) {
-    SVGImageElement *element = static_cast<SVGImageElement*>(mContent);
+
+  // Currently our SMIL implementation does not modify the DOM attributes. Once
+  // we implement the SVG 2 SMIL behaviour this can be removed
+  // SVGImageElement::AfterSetAttr's implementation will be sufficient.
+  if (aModType == nsIDOMMutationEvent::SMIL &&
+      aAttribute == nsGkAtoms::href &&
+      (aNameSpaceID == kNameSpaceID_XLink ||
+       aNameSpaceID == kNameSpaceID_None)) {
+    SVGImageElement* element = static_cast<SVGImageElement*>(mContent);
 
     bool hrefIsSet =
       element->mStringAttributes[SVGImageElement::HREF].IsExplicitlySet() ||
@@ -325,14 +331,15 @@ nsSVGImageFrame::TransformContextForPainting(gfxContext* aGfxContext,
 
 //----------------------------------------------------------------------
 // nsSVGDisplayableFrame methods:
-DrawResult
+void
 nsSVGImageFrame::PaintSVG(gfxContext& aContext,
                           const gfxMatrix& aTransform,
-                          const nsIntRect *aDirtyRect,
-                          uint32_t aFlags)
+                          imgDrawingParams& aImgParams,
+                          const nsIntRect *aDirtyRect)
 {
-  if (!StyleVisibility()->IsVisible())
-    return DrawResult::SUCCESS;
+  if (!StyleVisibility()->IsVisible()) {
+    return;
+  }
 
   float x, y, width, height;
   SVGImageElement *imgElem = static_cast<SVGImageElement*>(mContent);
@@ -351,7 +358,6 @@ nsSVGImageFrame::PaintSVG(gfxContext& aContext,
       currentRequest->GetImage(getter_AddRefs(mImageContainer));
   }
 
-  DrawResult result = DrawResult::SUCCESS;
   if (mImageContainer) {
     gfxContextAutoSaveRestore autoRestorer(&aContext);
 
@@ -362,7 +368,7 @@ nsSVGImageFrame::PaintSVG(gfxContext& aContext,
     }
 
     if (!TransformContextForPainting(&aContext, aTransform)) {
-      return DrawResult::SUCCESS;
+      return ;
     }
 
     // fill-opacity doesn't affect <image>, so if we're allowed to
@@ -412,7 +418,7 @@ nsSVGImageFrame::PaintSVG(gfxContext& aContext,
       // Note: Can't use DrawSingleUnscaledImage for the TYPE_VECTOR case.
       // That method needs our image to have a fixed native width & height,
       // and that's not always true for TYPE_VECTOR images.
-      result = nsLayoutUtils::DrawSingleImage(
+      aImgParams.result &= nsLayoutUtils::DrawSingleImage(
         aContext,
         PresContext(),
         mImageContainer,
@@ -420,16 +426,16 @@ nsSVGImageFrame::PaintSVG(gfxContext& aContext,
         destRect,
         aDirtyRect ? dirtyRect : destRect,
         context,
-        aFlags);
+        aImgParams.imageFlags);
     } else { // mImageContainer->GetType() == TYPE_RASTER
-      result = nsLayoutUtils::DrawSingleUnscaledImage(
+      aImgParams.result &= nsLayoutUtils::DrawSingleUnscaledImage(
         aContext,
         PresContext(),
         mImageContainer,
         nsLayoutUtils::GetSamplingFilterForFrame(this),
         nsPoint(0, 0),
         aDirtyRect ? &dirtyRect : nullptr,
-        aFlags);
+        aImgParams.imageFlags);
     }
 
     if (opacity != 1.0f || StyleEffects()->mMixBlendMode != NS_STYLE_BLEND_NORMAL) {
@@ -437,8 +443,6 @@ nsSVGImageFrame::PaintSVG(gfxContext& aContext,
     }
     // gfxContextAutoSaveRestore goes out of scope & cleans up our gfxContext
   }
-
-  return result;
 }
 
 nsIFrame*

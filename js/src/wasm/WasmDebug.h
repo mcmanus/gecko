@@ -71,6 +71,8 @@ class GeneratedSourceMap
     void setTotalLines(uint32_t val) { totalLines_ = val; }
 
     bool searchLineByOffset(JSContext* cx, uint32_t offset, size_t* exprlocIndex);
+
+    size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
 };
 
 typedef UniquePtr<GeneratedSourceMap> UniqueGeneratedSourceMap;
@@ -80,11 +82,11 @@ typedef HashMap<uint32_t, WasmBreakpointSite*, DefaultHasher<uint32_t>, SystemAl
 class DebugState
 {
     const SharedCode         code_;
-    const SharedMetadata     metadata_;
     const SharedBytes        maybeBytecode_;
     UniqueGeneratedSourceMap maybeSourceMap_;
+    bool                     binarySource_;
 
-    // State maintained when debugging is enabled.  In this case, the Code is
+    // State maintained when debugging is enabled. In this case, the Code is
     // not actually shared, but is referenced uniquely by the instance that is
     // being debugged.
 
@@ -97,8 +99,11 @@ class DebugState
 
   public:
     DebugState(SharedCode code,
-               const Metadata& metadata,
-               const ShareableBytes* maybeBytecode);
+               const ShareableBytes* maybeBytecode,
+               bool binarySource);
+
+    const Bytes* maybeBytecode() const { return maybeBytecode_ ? &maybeBytecode_->bytes : nullptr; }
+    bool binarySource() const { return binarySource_; }
 
     // If the source bytecode was saved when this Code was constructed, this
     // method will render the binary as text. Otherwise, a diagnostic string
@@ -106,6 +111,7 @@ class DebugState
 
     JSString* createText(JSContext* cx);
     bool getLineOffsets(JSContext* cx, size_t lineno, Vector<uint32_t>* offsets);
+    bool getAllColumnOffsets(JSContext* cx, Vector<ExprLoc>* offsets);
     bool getOffsetLocation(JSContext* cx, uint32_t offset, bool* found, size_t* lineno, size_t* column);
     bool totalSourceLines(JSContext* cx, uint32_t* count);
 
@@ -140,6 +146,27 @@ class DebugState
     // Debug URL helpers.
 
     JSString* debugDisplayURL(JSContext* cx) const;
+    bool getSourceMappingURL(JSContext* cx, MutableHandleString result) const;
+
+    // Accessors for commonly used elements of linked structures.
+
+    const Metadata& metadata() const { return code_->metadata(); }
+    bool debugEnabled() const { return metadata().debugEnabled; }
+    const CodeRangeVector& codeRanges() const { return metadata().codeRanges; }
+    const CallSiteVector& callSites() const { return metadata().callSites; }
+
+    uint32_t debugFuncToCodeRange(uint32_t funcIndex) const {
+        return metadata().debugFuncToCodeRange[funcIndex];
+    }
+
+    // about:memory reporting:
+
+    void addSizeOfMisc(MallocSizeOf mallocSizeOf,
+                       Metadata::SeenSet* seenMetadata,
+                       ShareableBytes::SeenSet* seenBytes,
+                       Code::SeenSet* seenCode,
+                       size_t* code,
+                       size_t* data) const;
 };
 
 typedef UniquePtr<DebugState> UniqueDebugState;

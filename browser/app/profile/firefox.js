@@ -69,6 +69,8 @@ pref("extensions.screenshots.system-disabled", true);
 // Disable add-ons that are not installed by the user in all scopes by default.
 // See the SCOPE constants in AddonManager.jsm for values to use here.
 pref("extensions.autoDisableScopes", 15);
+// Scopes to scan for changes at startup.
+pref("extensions.startupScanScopes", 0);
 
 // This is where the profiler WebExtension API will look for breakpad symbols.
 // NOTE: deliberately http right now since https://symbols.mozilla.org is not supported.
@@ -238,7 +240,7 @@ pref("browser.shell.skipDefaultBrowserCheckOnFirstRun", false);
 #else
 pref("browser.shell.skipDefaultBrowserCheckOnFirstRun", true);
 #endif
-pref("browser.shell.skipDefaultBrowserCheck", true);
+pref("browser.shell.didSkipDefaultBrowserCheckOnFirstRun", false);
 pref("browser.shell.defaultBrowserCheckCount", 0);
 pref("browser.defaultbrowser.notificationbar", false);
 
@@ -318,10 +320,11 @@ pref("browser.urlbar.suggest.bookmark",             true);
 pref("browser.urlbar.suggest.openpage",             true);
 pref("browser.urlbar.suggest.searches",             false);
 pref("browser.urlbar.userMadeSearchSuggestionsChoice", false);
-// 4 here means the suggestion notification will be automatically
-// hidden the 4th day, so it will actually be shown on 3 different days.
+// The suggestion opt-in notification will be shown on 4 different days.
 pref("browser.urlbar.daysBeforeHidingSuggestionsPrompt", 4);
 pref("browser.urlbar.lastSuggestionsPromptDate", 20160601);
+// The suggestion opt-out hint will be hidden after being shown 4 times.
+pref("browser.urlbar.timesBeforeHidingSuggestionsHint", 4);
 
 // Limit the number of characters sent to the current search engine to fetch
 // suggestions.
@@ -359,12 +362,6 @@ pref("browser.download.useDownloadDir", true);
 pref("browser.download.folderList", 1);
 pref("browser.download.manager.addToRecentDocs", true);
 pref("browser.download.manager.resumeOnWakeDelay", 10000);
-
-#ifdef RELEASE_OR_BETA
-pref("browser.download.showPanelDropmarker", false);
-#else
-pref("browser.download.showPanelDropmarker", true);
-#endif
 
 // This allows disabling the animated notifications shown by
 // the Downloads Indicator when a download starts or completes.
@@ -678,10 +675,23 @@ pref("plugin.default.state", 1);
 // Plugins bundled in XPIs are enabled by default.
 pref("plugin.defaultXpi.state", 2);
 
-// Flash is enabled by default, and Java is click-to-activate by default on
-// all channels.
-pref("plugin.state.flash", 2);
+// Java is Click-to-Activate by default on all channels.
 pref("plugin.state.java", 1);
+
+// Flash is Click-to-Activate by default on Nightly,
+// Always-Activate on other channels.
+#ifdef NIGHTLY_BUILD
+pref("plugins.flashBlock.enabled", true);
+pref("plugin.state.flash", 1);
+
+// Prefer HTML5 video over Flash content, and don't
+// load plugin instances with no src declared.
+// These prefs are documented in details on all.js.
+pref("plugins.favorfallback.mode", "follow-ctp");
+pref("plugins.favorfallback.rules", "nosrc,video");
+#else
+pref("plugin.state.flash", 2);
+#endif
 
 #ifdef XP_WIN
 pref("browser.preferences.instantApply", false);
@@ -812,8 +822,6 @@ pref("browser.rights.3.shown", false);
 pref("browser.rights.override", true);
 #endif
 
-pref("browser.selfsupport.url", "https://self-repair.mozilla.org/%LOCALE%/repair");
-
 pref("browser.sessionstore.resume_from_crash", true);
 pref("browser.sessionstore.resume_session_once", false);
 
@@ -866,6 +874,8 @@ pref("browser.sessionstore.debug", false);
 pref("browser.sessionstore.debug.no_auto_updates", false);
 // Forget closed windows/tabs after two weeks
 pref("browser.sessionstore.cleanup.forget_closed_after", 1209600000);
+// Maximum number of bytes of DOMSessionStorage data we collect per origin.
+pref("browser.sessionstore.dom_storage_limit", 2048);
 
 // allow META refresh by default
 pref("accessibility.blockautorefresh", false);
@@ -1021,7 +1031,7 @@ pref("security.sandbox.windows.log.stackTraceDepth", 0);
 // For information on what the level number means, see
 // SetSecurityLevelForGPUProcess() in
 // security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
-pref("security.sandbox.gpu.level", 1);
+pref("security.sandbox.gpu.level", 0);
 #endif
 
 #if defined(XP_MACOSX) && defined(MOZ_SANDBOX) && defined(MOZ_CONTENT_SANDBOX)
@@ -1152,7 +1162,6 @@ pref("services.sync.prefs.sync.dom.event.contextmenu.enabled", true);
 pref("services.sync.prefs.sync.extensions.personas.current", true);
 pref("services.sync.prefs.sync.extensions.update.enabled", true);
 pref("services.sync.prefs.sync.intl.accept_languages", true);
-pref("services.sync.prefs.sync.javascript.enabled", true);
 pref("services.sync.prefs.sync.layout.spellcheckDefault", true);
 pref("services.sync.prefs.sync.lightweightThemes.selectedThemeID", true);
 pref("services.sync.prefs.sync.lightweightThemes.usedThemes", true);
@@ -1220,7 +1229,7 @@ pref("browser.newtabpage.introShown", false);
 // Toggles the content of 'about:newtab'. Shows the grid when enabled.
 pref("browser.newtabpage.enabled", true);
 
-// Toggles the enhanced content of 'about:newtab'. Shows sponsored tiles.
+// Toggles the directory tiles content of 'about:newtab'.
 sticky_pref("browser.newtabpage.enhanced", true);
 
 // enables Activity Stream inspired layout
@@ -1237,9 +1246,6 @@ pref("browser.newtabpage.columns", 5);
 
 // directory tiles download URL
 pref("browser.newtabpage.directory.source", "https://tiles.services.mozilla.com/v3/links/fetch/%LOCALE%/%CHANNEL%");
-
-// endpoint to send newtab click and view pings
-pref("browser.newtabpage.directory.ping", "https://tiles.services.mozilla.com/v3/links/");
 
 // activates Activity Stream
 pref("browser.newtabpage.activity-stream.enabled", false);
@@ -1273,8 +1279,6 @@ pref("pdfjs.previousHandler.alwaysAskBeforeHandling", false);
 // might keep around more than this, but we'll try to get down to this value).
 // (This is intentionally on the high side; see bug 746055.)
 pref("image.mem.max_decoded_image_kb", 256000);
-
-pref("social.sidebar.unload_timeout_ms", 10000);
 
 // Activation from inside of share panel is possible if activationPanelEnabled
 // is true. Pref'd off for release while usage testing is done through beta.
@@ -1383,9 +1387,6 @@ pref("identity.fxaccounts.remote.profile.uri", "https://profile.accounts.firefox
 
 // The remote URL of the FxA OAuth Server
 pref("identity.fxaccounts.remote.oauth.uri", "https://oauth.accounts.firefox.com/v1");
-
-// Whether we display profile images in the UI or not.
-pref("identity.fxaccounts.profile_image.enabled", true);
 
 // Token server used by the FxA Sync identity.
 pref("identity.sync.tokenserver.uri", "https://token.services.mozilla.com/1.0/sync/1.5");
@@ -1517,6 +1518,11 @@ pref("browser.tabs.crashReporting.email", "");
 pref("extensions.interposition.enabled", true);
 pref("extensions.interposition.prefetching", true);
 
+// But don't allow non-MPC extensions by default on Nightly
+#if defined(NIGHTLY_BUILD)
+pref("extensions.allow-non-mpc-extensions", false);
+#endif
+
 // Enable blocking of e10s and e10s-multi for add-on users on beta/release.
 #ifdef RELEASE_OR_BETA
 pref("extensions.e10sBlocksEnabling", true);
@@ -1576,6 +1582,8 @@ pref("browser.esedbreader.loglevel", "Error");
 
 pref("browser.laterrun.enabled", false);
 
+pref("dom.ipc.processPrelaunch.enabled", true);
+
 #ifdef EARLY_BETA_OR_EARLIER
 pref("browser.migrate.automigrate.enabled", true);
 #else
@@ -1633,9 +1641,13 @@ pref("browser.crashReports.unsubmittedCheck.chancesUntilSuppress", 4);
 pref("browser.crashReports.unsubmittedCheck.autoSubmit", false);
 
 // Preferences for the form autofill system extension
-pref("browser.formautofill.experimental", false);
-pref("browser.formautofill.enabled", true);
-pref("browser.formautofill.loglevel", "Warn");
+#ifdef NIGHTLY_BUILD
+pref("extensions.formautofill.experimental", true);
+#else
+pref("extensions.formautofill.experimental", false);
+#endif
+pref("extensions.formautofill.addresses.enabled", true);
+pref("extensions.formautofill.loglevel", "Warn");
 
 // Whether or not to restore a session with lazy-browser tabs.
 pref("browser.sessionstore.restore_tabs_lazily", true);
@@ -1645,3 +1657,5 @@ pref("browser.sessionstore.restore_tabs_lazily", true);
 pref("urlclassifier.malwareTable", "goog-malware-shavar,goog-unwanted-shavar,goog-malware-proto,goog-unwanted-proto,test-malware-simple,test-unwanted-simple");
 pref("urlclassifier.phishTable", "goog-phish-shavar,goog-phish-proto,test-phish-simple");
 #endif
+
+pref("browser.suppress_first_window_animation", true);

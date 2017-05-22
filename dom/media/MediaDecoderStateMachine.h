@@ -214,8 +214,8 @@ public:
 
   MediaEventSource<void>& OnMediaNotSeekable() const;
 
-  MediaEventSourceExc<nsAutoPtr<MediaInfo>,
-                      nsAutoPtr<MetadataTags>,
+  MediaEventSourceExc<UniquePtr<MediaInfo>,
+                      UniquePtr<MetadataTags>,
                       MediaDecoderEventVisibility>&
   MetadataLoadedEvent() { return mMetadataLoadedEvent; }
 
@@ -422,11 +422,6 @@ protected:
   // The decoder monitor must be held. This is only called on the
   // decode thread.
   void DecodeError(const MediaResult& aError);
-
-  // Dispatches a LoadedMetadataEvent.
-  // This is threadsafe and can be called on any thread.
-  // The decoder monitor must be held.
-  void EnqueueLoadedMetadataEvent();
 
   void EnqueueFirstFrameLoadedEvent();
 
@@ -636,13 +631,7 @@ private:
   // Stores presentation info required for playback.
   Maybe<MediaInfo> mInfo;
 
-  nsAutoPtr<MetadataTags> mMetadataTags;
-
   mozilla::MediaMetadataManager mMetadataManager;
-
-  // True if we are back from DECODER_STATE_DORMANT state and
-  // LoadedMetadataEvent was already sent.
-  bool mSentLoadedMetadataEvent;
 
   // True if we've decoded first frames (thus having the start time) and
   // notified the FirstFrameLoaded event. Note we can't initiate seek until the
@@ -680,8 +669,8 @@ private:
   MediaEventListener mAudibleListener;
   MediaEventListener mOnMediaNotSeekable;
 
-  MediaEventProducerExc<nsAutoPtr<MediaInfo>,
-                        nsAutoPtr<MetadataTags>,
+  MediaEventProducerExc<UniquePtr<MediaInfo>,
+                        UniquePtr<MetadataTags>,
                         MediaDecoderEventVisibility> mMetadataLoadedEvent;
   MediaEventProducerExc<nsAutoPtr<MediaInfo>,
                         MediaDecoderEventVisibility> mFirstFrameLoadedEvent;
@@ -779,6 +768,17 @@ public:
   {
     return &mIsAudioDataAudible;
   }
+
+#ifdef XP_WIN
+  // Whether we've called timeBeginPeriod(1) to request high resolution
+  // timers. We request high resolution timers when playback starts, and
+  // turn them off when playback is paused. Enabling high resolution
+  // timers can cause higher CPU usage and battery drain on Windows 7.
+  bool mHiResTimersRequested = false;
+  // Whether we should enable high resolution timers. This is initialized at
+  // MDSM construction, and mirrors the value of media.hi-res-timers.enabled.
+  const bool mShouldUseHiResTimers;
+#endif
 };
 
 } // namespace mozilla

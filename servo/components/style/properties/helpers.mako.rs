@@ -13,8 +13,11 @@
     <%def name="predefined_type_inner(name, type, initial_value, parse_method)">
         #[allow(unused_imports)]
         use app_units::Au;
+        #[allow(unused_imports)]
         use cssparser::{Color as CSSParserColor, RGBA};
+        #[allow(unused_imports)]
         use values::specified::AllowQuirks;
+        #[allow(unused_imports)]
         use smallvec::SmallVec;
         pub use values::specified::${type} as SpecifiedValue;
         pub mod computed_value {
@@ -74,26 +77,26 @@
 </%doc>
 <%def name="vector_longhand(name, gecko_only=False, allow_empty=False,
             delegate_animate=False, space_separated_allowed=False, **kwargs)">
-    <%call expr="longhand(name, **kwargs)">
+    <%call expr="longhand(name, vector=True, **kwargs)">
         % if not gecko_only:
             use smallvec::SmallVec;
             use std::fmt;
-            use values::HasViewportPercentage;
+            #[allow(unused_imports)]
+            use style_traits::HasViewportPercentage;
             use style_traits::ToCss;
 
-            impl HasViewportPercentage for SpecifiedValue {
-                fn has_viewport_percentage(&self) -> bool {
-                    let &SpecifiedValue(ref vec) = self;
-                    vec.iter().any(|ref x| x.has_viewport_percentage())
-                }
-            }
-
             pub mod single_value {
+                #[allow(unused_imports)]
                 use cssparser::Parser;
+                #[allow(unused_imports)]
                 use parser::{Parse, ParserContext};
+                #[allow(unused_imports)]
                 use properties::ShorthandId;
+                #[allow(unused_imports)]
                 use values::computed::{Context, ToComputedValue};
+                #[allow(unused_imports)]
                 use values::{computed, specified};
+                #[allow(unused_imports)]
                 use values::{Auto, Either, None_, Normal};
                 ${caller.body()}
             }
@@ -102,22 +105,26 @@
             pub mod computed_value {
                 pub use super::single_value::computed_value as single_value;
                 pub use self::single_value::T as SingleComputedValue;
-                use smallvec::SmallVec;
+                use smallvec::{IntoIter, SmallVec};
+                use values::computed::ComputedVecIter;
+
                 /// The computed value, effectively a list of single values.
                 #[derive(Debug, Clone, PartialEq)]
                 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
                 pub struct T(pub SmallVec<[single_value::T; 1]>);
 
                 % if delegate_animate:
-                    use properties::animated_properties::Interpolate;
-                    impl Interpolate for T {
-                        fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
-                            self.0.interpolate(&other.0, progress).map(T)
+                    use properties::animated_properties::Animatable;
+                    impl Animatable for T {
+                        fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64)
+                            -> Result<Self, ()> {
+                            self.0.add_weighted(&other.0, self_portion, other_portion).map(T)
                         }
-                    }
 
-                    use properties::animated_properties::ComputeDistance;
-                    impl ComputeDistance for T {
+                        fn add(&self, other: &Self) -> Result<Self, ()> {
+                            self.0.add(&other.0).map(T)
+                        }
+
                         #[inline]
                         fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
                             self.0.compute_distance(&other.0)
@@ -129,6 +136,16 @@
                         }
                     }
                 % endif
+
+                pub type Iter<'a, 'cx, 'cx_a> = ComputedVecIter<'a, 'cx, 'cx_a, super::single_value::SpecifiedValue>;
+
+                impl IntoIterator for T {
+                    type Item = single_value::T;
+                    type IntoIter = IntoIter<[single_value::T; 1]>;
+                    fn into_iter(self) -> Self::IntoIter {
+                        self.0.into_iter()
+                    }
+                }
             }
 
             impl ToCss for computed_value::T {
@@ -154,7 +171,7 @@
             }
 
             /// The specified value of ${name}.
-            #[derive(Debug, Clone, PartialEq)]
+            #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
             #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
             pub struct SpecifiedValue(pub Vec<single_value::SpecifiedValue>);
 
@@ -191,6 +208,7 @@
             }
 
             pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+                #[allow(unused_imports)]
                 use parser::parse_space_or_comma_separated;
 
                 <%
@@ -212,12 +230,19 @@
 
             pub use self::single_value::SpecifiedValue as SingleSpecifiedValue;
 
+            impl SpecifiedValue {
+                pub fn compute_iter<'a, 'cx, 'cx_a>(&'a self, context: &'cx Context<'cx_a>)
+                    -> computed_value::Iter<'a, 'cx, 'cx_a> {
+                    computed_value::Iter::new(context, &self.0)
+                }
+            }
+
             impl ToComputedValue for SpecifiedValue {
                 type ComputedValue = computed_value::T;
 
                 #[inline]
                 fn to_computed_value(&self, context: &Context) -> computed_value::T {
-                    computed_value::T(self.0.iter().map(|x| x.to_computed_value(context)).collect())
+                    computed_value::T(self.compute_iter(context).collect())
                 }
                 #[inline]
                 fn from_computed_value(computed: &computed_value::T) -> Self {
@@ -239,22 +264,35 @@
     %>
     /// ${property.spec}
     pub mod ${property.ident} {
-        #![allow(unused_imports)]
         % if not property.derived_from:
+            #[allow(unused_imports)]
             use cssparser::Parser;
+            #[allow(unused_imports)]
             use parser::{Parse, ParserContext};
+            #[allow(unused_imports)]
             use properties::{UnparsedValue, ShorthandId};
         % endif
+        #[allow(unused_imports)]
         use values::{Auto, Either, None_, Normal};
+        #[allow(unused_imports)]
         use cascade_info::CascadeInfo;
+        #[allow(unused_imports)]
         use error_reporting::ParseErrorReporter;
+        #[allow(unused_imports)]
         use properties::longhands;
+        #[allow(unused_imports)]
         use properties::{DeclaredValue, LonghandId, LonghandIdSet};
+        #[allow(unused_imports)]
         use properties::{CSSWideKeyword, ComputedValues, PropertyDeclaration};
+        #[allow(unused_imports)]
         use properties::style_structs;
-        use std::sync::Arc;
+        #[allow(unused_imports)]
+        use stylearc::Arc;
+        #[allow(unused_imports)]
         use values::computed::{Context, ToComputedValue};
+        #[allow(unused_imports)]
         use values::{computed, generics, specified};
+        #[allow(unused_imports)]
         use Atom;
         ${caller.body()}
         #[allow(unused_variables)]
@@ -294,7 +332,10 @@
                         % if property.logical:
                             let wm = context.style.writing_mode;
                         % endif
-                        <% maybe_wm = ", wm" if property.logical else "" %>
+                        <%
+                            maybe_wm = ", wm" if property.logical else ""
+                            maybe_cacheable = ", cacheable" if property.has_uncacheable_values == "True" else ""
+                        %>
                         match *value {
                             DeclaredValue::Value(ref specified_value) => {
                                 % if property.ident in SYSTEM_FONT_LONGHANDS and product == "gecko":
@@ -302,19 +343,30 @@
                                         longhands::system_font::resolve_system_font(sf, context);
                                     }
                                 % endif
-                                let computed = specified_value.to_computed_value(context);
-                                % if property.ident == "font_size":
-                                    longhands::font_size::cascade_specified_font_size(context,
-                                                                                      specified_value,
-                                                                                      computed,
-                                                                                      inherited_style.get_font());
+                                % if property.is_vector:
+                                    // In the case of a vector property we want to pass down
+                                    // an iterator so that this can be computed without allocation
+                                    //
+                                    // However, computing requires a context, but the style struct
+                                    // being mutated is on the context. We temporarily remove it,
+                                    // mutate it, and then put it back. Vector longhands cannot
+                                    // touch their own style struct whilst computing, else this will panic.
+                                    let mut s = context.mutate_style().take_${data.current_style_struct.name_lower}();
+                                    {
+                                        let iter = specified_value.compute_iter(context);
+                                        s.set_${property.ident}(iter ${maybe_cacheable});
+                                    }
+                                    context.mutate_style().put_${data.current_style_struct.name_lower}(s);
                                 % else:
-                                    % if property.has_uncacheable_values:
-                                    context.mutate_style().mutate_${data.current_style_struct.name_lower}()
-                                                          .set_${property.ident}(computed, cacheable ${maybe_wm});
+                                    let computed = specified_value.to_computed_value(context);
+                                     % if property.ident == "font_size":
+                                         longhands::font_size::cascade_specified_font_size(context,
+                                                                                           specified_value,
+                                                                                           computed,
+                                                                                           inherited_style.get_font());
                                     % else:
-                                    context.mutate_style().mutate_${data.current_style_struct.name_lower}()
-                                                          .set_${property.ident}(computed ${maybe_wm});
+                                        context.mutate_style().mutate_${data.current_style_struct.name_lower}()
+                                               .set_${property.ident}(computed ${maybe_cacheable} ${maybe_wm});
                                     % endif
                                 % endif
                             }
@@ -426,7 +478,6 @@
         keyword = keyword=Keyword(name, values, **keyword_kwargs)
     %>
     <%call expr="longhand(name, keyword=Keyword(name, values, **keyword_kwargs), **kwargs)">
-        use values::HasViewportPercentage;
         use properties::longhands::system_font::SystemFont;
         use std::fmt;
         use style_traits::ToCss;
@@ -548,7 +599,6 @@
             impl ComputedValueAsSpecified for SpecifiedValue {}
         % endif
 
-        use values::HasViewportPercentage;
         no_viewport_percentage!(SpecifiedValue);
     </%call>
 </%def>
@@ -710,18 +760,25 @@
     % if shorthand:
     /// ${shorthand.spec}
     pub mod ${shorthand.ident} {
-        #[allow(unused_imports)]
         use cssparser::Parser;
         use parser::ParserContext;
-        use properties::{PropertyDeclaration, ParsedDeclaration};
-        use properties::{ShorthandId, UnparsedValue, longhands};
+        use properties::{PropertyDeclaration, SourcePropertyDeclaration, MaybeBoxed};
+        use properties::{ShorthandId, LonghandId, UnparsedValue, longhands};
         use std::fmt;
-        use std::sync::Arc;
+        use stylearc::Arc;
         use style_traits::ToCss;
 
         pub struct Longhands {
             % for sub_property in shorthand.sub_properties:
-                pub ${sub_property.ident}: longhands::${sub_property.ident}::SpecifiedValue,
+                pub ${sub_property.ident}:
+                    % if sub_property.boxed:
+                        Box<
+                    % endif
+                    longhands::${sub_property.ident}::SpecifiedValue
+                    % if sub_property.boxed:
+                        >
+                    % endif
+                    ,
             % endfor
         }
 
@@ -781,7 +838,8 @@
 
         /// Parse the given shorthand and fill the result into the
         /// `declarations` vector.
-        pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<ParsedDeclaration, ()> {
+        pub fn parse_into(declarations: &mut SourcePropertyDeclaration,
+                     context: &ParserContext, input: &mut Parser) -> Result<(), ()> {
             input.look_for_var_functions();
             let start = input.position();
             let value = input.parse_entirely(|input| parse_value(context, input));
@@ -790,17 +848,29 @@
             }
             let var = input.seen_var_functions();
             if let Ok(value) = value {
-                Ok(ParsedDeclaration::${shorthand.camel_case}(value))
+                % for sub_property in shorthand.sub_properties:
+                    declarations.push(PropertyDeclaration::${sub_property.camel_case}(
+                        value.${sub_property.ident}
+                    ));
+                % endfor
+                Ok(())
             } else if var {
                 input.reset(start);
                 let (first_token_type, css) = try!(
                     ::custom_properties::parse_non_custom_with_var(input));
-                Ok(ParsedDeclaration::${shorthand.camel_case}WithVariables(Arc::new(UnparsedValue {
+                let unparsed = Arc::new(UnparsedValue {
                     css: css.into_owned(),
                     first_token_type: first_token_type,
                     url_data: context.url_data.clone(),
                     from_shorthand: Some(ShorthandId::${shorthand.camel_case}),
-                })))
+                });
+                % for sub_property in shorthand.sub_properties:
+                    declarations.push(PropertyDeclaration::WithVariables(
+                        LonghandId::${sub_property.camel_case},
+                        unparsed.clone()
+                    ));
+                % endfor
+                Ok(())
             } else {
                 Err(())
             }
@@ -830,7 +900,7 @@
                 try!(parse_four_sides(input, ${parser_function}));
                 let _unused = context;
             % endif
-            Ok(Longhands {
+            Ok(expanded! {
                 % for side in ["top", "right", "bottom", "left"]:
                     ${to_rust_ident(sub_property_pattern % side)}: ${side},
                 % endfor
@@ -941,34 +1011,29 @@
     %>
 </%def>
 
-/// Macro for defining Interpolate trait for tuple struct which has Option<T>,
+/// Macro for defining Animatable trait for tuple struct which has Option<T>,
 /// e.g. struct T(pub Option<Au>).
-<%def name="impl_interpolate_for_option_tuple(value_for_none)">
-    impl Interpolate for T {
+<%def name="impl_animatable_for_option_tuple(value_for_none)">
+    impl Animatable for T {
         #[inline]
-        fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+        fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64)
+            -> Result<Self, ()> {
             match (self, other) {
                 (&T(Some(ref this)), &T(Some(ref other))) => {
-                    Ok(T(this.interpolate(other, progress).ok()))
+                    Ok(T(this.add_weighted(other, self_portion, other_portion).ok()))
                 },
                 (&T(Some(ref this)), &T(None)) => {
-                    Ok(T(this.interpolate(&${value_for_none}, progress).ok()))
+                    Ok(T(this.add_weighted(&${value_for_none}, self_portion, other_portion).ok()))
                 },
                 (&T(None), &T(Some(ref other))) => {
-                    Ok(T(${value_for_none}.interpolate(other, progress).ok()))
+                    Ok(T(${value_for_none}.add_weighted(other, self_portion, other_portion).ok()))
                 },
                 (&T(None), &T(None)) => {
                     Ok(T(None))
                 },
             }
         }
-    }
-</%def>
 
-/// Macro for defining ComputeDistance trait for tuple struct which has Option<T>,
-/// e.g. struct T(pub Option<Au>).
-<%def name="impl_compute_distance_for_option_tuple(value_for_none)">
-    impl ComputeDistance for T {
         #[inline]
         fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
             match (self, other) {

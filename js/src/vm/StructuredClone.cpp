@@ -44,6 +44,7 @@
 #include "builtin/MapObject.h"
 #include "js/Date.h"
 #include "js/GCHashTable.h"
+#include "vm/RegExpObject.h"
 #include "vm/SavedFrame.h"
 #include "vm/SharedArrayObject.h"
 #include "vm/TypedArrayObject.h"
@@ -2125,7 +2126,7 @@ JSStructuredCloneReader::startRead(MutableHandleValue vp)
         if (!atom)
             return false;
 
-        RegExpObject* reobj = RegExpObject::create(context(), atom, flags, nullptr,
+        RegExpObject* reobj = RegExpObject::create(context(), atom, flags, nullptr, nullptr,
                                                    context()->tempLifoAlloc());
         if (!reobj)
             return false;

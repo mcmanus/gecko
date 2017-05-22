@@ -92,7 +92,6 @@ class nsIVariant;
 class nsViewManager;
 class nsPresContext;
 class nsRange;
-class nsScriptLoader;
 class nsSMILAnimationController;
 class nsSVGElement;
 class nsTextNode;
@@ -154,6 +153,7 @@ class NodeIterator;
 enum class OrientationType : uint8_t;
 class ProcessingInstruction;
 class Promise;
+class ScriptLoader;
 class StyleSheetList;
 class SVGDocument;
 class SVGSVGElement;
@@ -1368,7 +1368,7 @@ public:
   /**
    * Get the script loader for this document
    */
-  virtual nsScriptLoader* ScriptLoader() = 0;
+  virtual mozilla::dom::ScriptLoader* ScriptLoader() = 0;
 
   /**
    * Add/Remove an element to the document's id and name hashes
@@ -2464,8 +2464,20 @@ public:
   // Add aLink to the set of links that need their status resolved.
   void RegisterPendingLinkUpdate(mozilla::dom::Link* aLink);
 
-  // Update state on links in mLinksToUpdate.  This function must
-  // be called prior to selector matching.
+  // Update state on links in mLinksToUpdate.  This function must be called
+  // prior to selector matching that needs to differentiate between :link and
+  // :visited.  In particular, it does _not_ need to be called before doing any
+  // selector matching that uses TreeMatchContext::eNeverMatchVisited.  The only
+  // reason we haven't moved all calls to this function entirely inside the
+  // TreeMatchContext constructor is to not call it all the time during various
+  // style system and frame construction operations (though it would likely be a
+  // no-op for all but the first call).
+  //
+  // XXXbz Does this really need to be called before selector matching?  All it
+  // will do is ensure all the links involved are registered to observe history,
+  // which won't synchronously change their state to :visited anyway!  So
+  // calling this won't affect selector matching done immediately afterward, as
+  // far as I can tell.
   void FlushPendingLinkUpdates();
 
   void FlushPendingLinkUpdatesFromRunnable();

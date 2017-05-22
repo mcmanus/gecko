@@ -81,7 +81,6 @@ EXPORTS += [
     'jsalloc.h',
     'jsapi.h',
     'jsbytecode.h',
-    'jsclist.h',
     'jscpucfg.h',
     'jsfriendapi.h',
     'jsprf.h',
@@ -238,7 +237,6 @@ UNIFIED_SOURCES += [
     'jit/JitFrames.cpp',
     'jit/JitOptions.cpp',
     'jit/JitSpewer.cpp',
-    'jit/JSONPrinter.cpp',
     'jit/JSONSpewer.cpp',
     'jit/LICM.cpp',
     'jit/Linker.cpp',
@@ -325,7 +323,9 @@ UNIFIED_SOURCES += [
     'vm/GlobalObject.cpp',
     'vm/HelperThreads.cpp',
     'vm/Id.cpp',
+    'vm/Initialization.cpp',
     'vm/JSONParser.cpp',
+    'vm/JSONPrinter.cpp',
     'vm/MemoryMetrics.cpp',
     'vm/NativeObject.cpp',
     'vm/ObjectGroup.cpp',
@@ -396,8 +396,8 @@ UNIFIED_SOURCES += [
 # template instantiations.
 # jsdtoa.cpp cannot be built in unified mode because we want to suppress
 # compiler warnings in third-party dtoa.c.
-# jsmath.cpp cannot be built in unified mode because it needs to pull rand_s
-# from <stdlib.h> on Windows through a preprocessor define.
+# jsmath.cpp cannot be built in unified mode because it needs to re-#define the
+# RtlGenRandom declaration's calling convention in <ntsecapi.h> on Windows.
 # jsutil.cpp cannot be built in unified mode because it is needed for
 # check-vanilla-allocations.
 # StoreBuffer.cpp cannot be built in unified because its template
@@ -414,7 +414,6 @@ SOURCES += [
     'jsdtoa.cpp',
     'jsmath.cpp',
     'jsutil.cpp',
-    'vm/Initialization.cpp',
     'vm/Interpreter.cpp',
 ]
 
@@ -583,14 +582,12 @@ elif CONFIG['JS_CODEGEN_MIPS32'] or CONFIG['JS_CODEGEN_MIPS64']:
             ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':
-    SOURCES += [
+    UNIFIED_SOURCES += [
         'threading/windows/CpuCount.cpp',
         'threading/windows/Thread.cpp',
     ]
-    # _CRT_RAND_S must be #defined before #including stdlib.h to get rand_s()
-    DEFINES['_CRT_RAND_S'] = True
 else:
-    SOURCES += [
+    UNIFIED_SOURCES += [
         'threading/posix/CpuCount.cpp',
         'threading/posix/Thread.cpp',
     ]
@@ -734,11 +731,18 @@ if CONFIG['JS_HAS_CTYPES']:
         DEFINES['FFI_BUILDING'] = True
 
 if CONFIG['GNU_CXX']:
-    CXXFLAGS += ['-Wno-shadow', '-Werror=format']
+    # Also disable strict-aliasing for GCC compiler, that is enabled by default
+    # starting with version 7.1, see Bug 1363009
+    CXXFLAGS += ['-Wno-shadow', '-Werror=format', '-fno-strict-aliasing']
 
 # Suppress warnings in third-party code.
 if CONFIG['CLANG_CXX']:
     SOURCES['jsdtoa.cpp'].flags += ['-Wno-implicit-fallthrough']
 
-if CONFIG['OS_ARCH'] == 'WINNT':
-    DEFINES['NOMINMAX'] = True
+# Generate GC statistics phase data.
+GENERATED_FILES += ['gc/StatsPhasesGenerated.h']
+StatsPhasesGeneratedHeader = GENERATED_FILES['gc/StatsPhasesGenerated.h']
+StatsPhasesGeneratedHeader.script = 'gc/GenerateStatsPhases.py:generateHeader'
+GENERATED_FILES += ['gc/StatsPhasesGenerated.cpp']
+StatsPhasesGeneratedCpp = GENERATED_FILES['gc/StatsPhasesGenerated.cpp']
+StatsPhasesGeneratedCpp.script = 'gc/GenerateStatsPhases.py:generateCpp'

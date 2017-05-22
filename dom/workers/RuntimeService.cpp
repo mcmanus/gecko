@@ -256,7 +256,7 @@ GetWorkerPref(const nsACString& aPref,
 // "name|scriptSpec^key1=val1&key2=val2&key3=val3"
 void
 GenerateSharedWorkerKey(const nsACString& aScriptSpec,
-                        const nsACString& aName,
+                        const nsAString& aName,
                         const OriginAttributes& aAttrs,
                         nsCString& aKey)
 {
@@ -265,7 +265,7 @@ GenerateSharedWorkerKey(const nsACString& aScriptSpec,
 
   aKey.Truncate();
   aKey.SetCapacity(aName.Length() + aScriptSpec.Length() + suffix.Length() + 2);
-  aKey.Append(aName);
+  aKey.Append(NS_ConvertUTF16toUTF8(aName));
   aKey.Append('|');
   aKey.Append(aScriptSpec);
   aKey.Append(suffix);
@@ -1056,6 +1056,7 @@ public:
     : CycleCollectedJSRuntime(aCx)
     , mWorkerPrivate(aWorkerPrivate)
   {
+    MOZ_COUNT_CTOR_INHERITED(WorkerJSRuntime, CycleCollectedJSRuntime);
     MOZ_ASSERT(aWorkerPrivate);
   }
 
@@ -1068,6 +1069,7 @@ public:
 
   ~WorkerJSRuntime()
   {
+    MOZ_COUNT_DTOR_INHERITED(WorkerJSRuntime, CycleCollectedJSRuntime);
   }
 
   virtual void
@@ -1120,11 +1122,13 @@ public:
   explicit WorkerJSContext(WorkerPrivate* aWorkerPrivate)
     : mWorkerPrivate(aWorkerPrivate)
   {
+    MOZ_COUNT_CTOR_INHERITED(WorkerJSContext, CycleCollectedJSContext);
     MOZ_ASSERT(aWorkerPrivate);
   }
 
   ~WorkerJSContext()
   {
+    MOZ_COUNT_DTOR_INHERITED(WorkerJSContext, CycleCollectedJSContext);
     JSContext* cx = MaybeContext();
     if (!cx) {
       return;   // Initialize() must have failed
@@ -1681,7 +1685,7 @@ RuntimeService::RegisterWorker(WorkerPrivate* aWorkerPrivate)
     }
 
     if (isSharedWorker) {
-      const nsCString& sharedWorkerName = aWorkerPrivate->WorkerName();
+      const nsString& sharedWorkerName(aWorkerPrivate->WorkerName());
       nsAutoCString key;
       GenerateSharedWorkerKey(sharedWorkerScriptSpec, sharedWorkerName,
                               aWorkerPrivate->GetOriginAttributes(), key);
@@ -2428,7 +2432,7 @@ RuntimeService::ResumeWorkersForWindow(nsPIDOMWindowInner* aWindow)
 nsresult
 RuntimeService::CreateSharedWorker(const GlobalObject& aGlobal,
                                    const nsAString& aScriptURL,
-                                   const nsACString& aName,
+                                   const nsAString& aName,
                                    SharedWorker** aSharedWorker)
 {
   AssertIsOnMainThread();
@@ -2453,7 +2457,7 @@ nsresult
 RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
                                                WorkerLoadInfo* aLoadInfo,
                                                const nsAString& aScriptURL,
-                                               const nsACString& aName,
+                                               const nsAString& aName,
                                                SharedWorker** aSharedWorker)
 {
   AssertIsOnMainThread();
@@ -2498,7 +2502,8 @@ RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
   if (!workerPrivate) {
     workerPrivate =
       WorkerPrivate::Constructor(aCx, aScriptURL, false,
-                                 WorkerTypeShared, aName, aLoadInfo, rv);
+                                 WorkerTypeShared, aName, NullCString(),
+                                 aLoadInfo, rv);
     NS_ENSURE_TRUE(workerPrivate, rv.StealNSResult());
 
     created = true;
@@ -2709,6 +2714,13 @@ RuntimeService::MemoryPressureAllWorkers()
 uint32_t
 RuntimeService::ClampedHardwareConcurrency() const
 {
+  // The Firefox Hardware Report says 70% of Firefox users have exactly 2 cores.
+  // When the resistFingerprinting pref is set, we want to blend into the crowd
+  // so spoof navigator.hardwareConcurrency = 2 to reduce user uniqueness.
+  if (MOZ_UNLIKELY(nsContentUtils::ShouldResistFingerprinting())) {
+    return 2;
+  }
+
   // This needs to be atomic, because multiple workers, and even mainthread,
   // could race to initialize it at once.
   static Atomic<uint32_t> clampedHardwareConcurrency;

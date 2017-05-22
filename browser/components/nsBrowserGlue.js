@@ -16,6 +16,9 @@ Cu.import("resource://gre/modules/AsyncPrefs.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "WindowsUIUtils", "@mozilla.org/windows-ui-utils;1", "nsIWindowsUIUtils");
 XPCOMUtils.defineLazyServiceGetter(this, "AlertsService", "@mozilla.org/alerts-service;1", "nsIAlertsService");
+XPCOMUtils.defineLazyGetter(this, "WeaveService", () =>
+  Cc["@mozilla.org/weave/service;1"].getService().wrappedJSObject
+);
 
 // lazy module getters
 
@@ -31,18 +34,20 @@ XPCOMUtils.defineLazyServiceGetter(this, "AlertsService", "@mozilla.org/alerts-s
           PageThumbs:false, PdfJs:false, PermissionUI:false, PlacesBackups:false,
           PlacesUtils:false, PluralForm:false, PrivateBrowsingUtils:false,
           ProcessHangMonitor:false, ReaderParent:false, RecentWindow:false,
-          RemotePrompt:false, SelfSupportBackend:false, SessionStore:false,
+          RemotePrompt:false, SessionStore:false,
           ShellService:false, SimpleServiceDiscovery:false, TabCrashHandler:false,
           Task:false, UITour:false, WebChannel:false,
-          WindowsRegistry:false, webrtcUI:false, UserAgentOverrides: false */
+          WindowsRegistry:false, webrtcUI:false */
 
 /**
  * IF YOU ADD OR REMOVE FROM THIS LIST, PLEASE UPDATE THE LIST ABOVE AS WELL.
  * XXX Bug 1325373 is for making eslint detect these automatically.
  */
 
+let initializedModules = {};
+
 [
-  ["AboutHome", "resource:///modules/AboutHome.jsm"],
+  ["AboutHome", "resource:///modules/AboutHome.jsm", "init"],
   ["AboutNewTab", "resource:///modules/AboutNewTab.jsm"],
   ["AddonManager", "resource://gre/modules/AddonManager.jsm"],
   ["AsyncShutdown", "resource://gre/modules/AsyncShutdown.jsm"],
@@ -52,8 +57,8 @@ XPCOMUtils.defineLazyServiceGetter(this, "AlertsService", "@mozilla.org/alerts-s
   ["BrowserUITelemetry", "resource:///modules/BrowserUITelemetry.jsm"],
   ["BrowserUsageTelemetry", "resource:///modules/BrowserUsageTelemetry.jsm"],
   ["ContentClick", "resource:///modules/ContentClick.jsm"],
-  ["ContentPrefServiceParent", "resource://gre/modules/ContentPrefServiceParent.jsm"],
-  ["ContentSearch", "resource:///modules/ContentSearch.jsm"],
+  ["ContentPrefServiceParent", "resource://gre/modules/ContentPrefServiceParent.jsm", "alwaysInit"],
+  ["ContentSearch", "resource:///modules/ContentSearch.jsm", "init"],
   ["DateTimePickerHelper", "resource://gre/modules/DateTimePickerHelper.jsm"],
   ["DirectoryLinksProvider", "resource:///modules/DirectoryLinksProvider.jsm"],
   ["ExtensionsUI", "resource:///modules/ExtensionsUI.jsm"],
@@ -78,7 +83,6 @@ XPCOMUtils.defineLazyServiceGetter(this, "AlertsService", "@mozilla.org/alerts-s
   ["ReaderParent", "resource:///modules/ReaderParent.jsm"],
   ["RecentWindow", "resource:///modules/RecentWindow.jsm"],
   ["RemotePrompt", "resource:///modules/RemotePrompt.jsm"],
-  ["SelfSupportBackend", "resource:///modules/SelfSupportBackend.jsm"],
   ["SessionStore", "resource:///modules/sessionstore/SessionStore.jsm"],
   ["ShellService", "resource:///modules/ShellService.jsm"],
   ["SimpleServiceDiscovery", "resource://gre/modules/SimpleServiceDiscovery.jsm"],
@@ -87,9 +91,18 @@ XPCOMUtils.defineLazyServiceGetter(this, "AlertsService", "@mozilla.org/alerts-s
   ["UITour", "resource:///modules/UITour.jsm"],
   ["WebChannel", "resource://gre/modules/WebChannel.jsm"],
   ["WindowsRegistry", "resource://gre/modules/WindowsRegistry.jsm"],
-  ["webrtcUI", "resource:///modules/webrtcUI.jsm"],
-  ["UserAgentOverrides", "resource://gre/modules/UserAgentOverrides.jsm"],
-].forEach(([name, resource]) => XPCOMUtils.defineLazyModuleGetter(this, name, resource));
+  ["webrtcUI", "resource:///modules/webrtcUI.jsm", "init"],
+].forEach(([name, resource, init]) => {
+  if (init) {
+    XPCOMUtils.defineLazyGetter(this, name, () => {
+      Cu.import(resource, initializedModules);
+      initializedModules[name][init]();
+      return initializedModules[name];
+    });
+  } else {
+    XPCOMUtils.defineLazyModuleGetter(this, name, resource);
+  }
+});
 
 if (AppConstants.MOZ_CRASHREPORTER) {
   XPCOMUtils.defineLazyModuleGetter(this, "PluginCrashReporter",
@@ -108,6 +121,75 @@ XPCOMUtils.defineLazyGetter(this, "gBrowserBundle", function() {
   return Services.strings.createBundle("chrome://browser/locale/browser.properties");
 });
 
+const global = this;
+
+const listeners = {
+  ppmm: {
+    // PLEASE KEEP THIS LIST IN SYNC WITH THE LISTENERS ADDED IN ContentPrefServiceParent.init
+    "ContentPrefs:FunctionCall": ["ContentPrefServiceParent"],
+    "ContentPrefs:AddObserverForName": ["ContentPrefServiceParent"],
+    "ContentPrefs:RemoveObserverForName": ["ContentPrefServiceParent"],
+    // PLEASE KEEP THIS LIST IN SYNC WITH THE LISTENERS ADDED IN ContentPrefServiceParent.init
+    "FeedConverter:addLiveBookmark": ["Feeds"],
+    "WCCR:setAutoHandler": ["Feeds"],
+    "webrtc:UpdateGlobalIndicators": ["webrtcUI"],
+    "webrtc:UpdatingIndicators": ["webrtcUI"],
+  },
+
+  mm: {
+    "AboutHome:MaybeShowAutoMigrationUndoNotification": ["AboutHome"],
+    "AboutHome:RequestUpdate": ["AboutHome"],
+    "Content:Click": ["ContentClick"],
+    "ContentSearch": ["ContentSearch"],
+    "FormValidation:ShowPopup": ["FormValidationHandler"],
+    "FormValidation:HidePopup": ["FormValidationHandler"],
+    "Prompt:Open": ["RemotePrompt"],
+    "Reader:ArticleGet": ["ReaderParent"],
+    "Reader:FaviconRequest": ["ReaderParent"],
+    "Reader:UpdateReaderButton": ["ReaderParent"],
+    // PLEASE KEEP THIS LIST IN SYNC WITH THE LISTENERS ADDED IN LoginManagerParent.init
+    "RemoteLogins:findLogins": ["LoginManagerParent"],
+    "RemoteLogins:findRecipes": ["LoginManagerParent"],
+    "RemoteLogins:onFormSubmit": ["LoginManagerParent"],
+    "RemoteLogins:autoCompleteLogins": ["LoginManagerParent"],
+    "RemoteLogins:removeLogin": ["LoginManagerParent"],
+    "RemoteLogins:insecureLoginFormPresent": ["LoginManagerParent"],
+    // PLEASE KEEP THIS LIST IN SYNC WITH THE LISTENERS ADDED IN LoginManagerParent.init
+    "WCCR:registerProtocolHandler": ["Feeds"],
+    "WCCR:registerContentHandler": ["Feeds"],
+    "rtcpeer:CancelRequest": ["webrtcUI"],
+    "rtcpeer:Request": ["webrtcUI"],
+    "webrtc:CancelRequest": ["webrtcUI"],
+    "webrtc:Request": ["webrtcUI"],
+    "webrtc:StopRecording": ["webrtcUI"],
+    "webrtc:UpdateBrowserIndicators": ["webrtcUI"],
+  },
+
+  receiveMessage(modules, data) {
+    let val;
+    for (let module of modules[data.name]) {
+      try {
+        val = global[module].receiveMessage(data) || val;
+      } catch (e) {
+        Cu.reportError(e);
+      }
+    }
+    return val;
+  },
+
+  init() {
+    let receiveMessageMM = this.receiveMessage.bind(this, this.mm);
+    for (let message of Object.keys(this.mm)) {
+      Services.mm.addMessageListener(message, receiveMessageMM);
+    }
+
+    let receiveMessagePPMM = this.receiveMessage.bind(this, this.ppmm);
+    for (let message of Object.keys(this.ppmm)) {
+      Services.ppmm.addMessageListener(message, receiveMessagePPMM);
+    }
+  }
+};
+
 // Seconds of idle before trying to create a bookmarks backup.
 const BOOKMARKS_BACKUP_IDLE_TIME_SEC = 8 * 60;
 // Minimum interval between backups.  We try to not create more than one backup
@@ -116,6 +198,8 @@ const BOOKMARKS_BACKUP_MIN_INTERVAL_DAYS = 1;
 // Maximum interval between backups.  If the last backup is older than these
 // days we will try to create a new one more aggressively.
 const BOOKMARKS_BACKUP_MAX_INTERVAL_DAYS = 3;
+// Seconds of idle time before reporting media telemetry.
+const MEDIA_TELEMETRY_IDLE_TIME_SEC = 20;
 
 // Factory object
 const BrowserGlueServiceFactory = {
@@ -204,7 +288,7 @@ BrowserGlue.prototype = {
   observe: function BG_observe(subject, topic, data) {
     switch (topic) {
       case "notifications-open-settings":
-        this._openPreferences("privacy");
+        this._openPreferences("privacy", { origin: "notifOpenSettings" });
         break;
       case "prefservice:after-app-defaults":
         this._onAppDefaults();
@@ -431,8 +515,6 @@ BrowserGlue.prototype = {
       // and e10s are active together.
       E10SAccessibilityCheck.init();
     }
-
-    UserAgentOverrides.init();
   },
 
   // cleanup (called on application shutdown)
@@ -460,6 +542,10 @@ BrowserGlue.prototype = {
       this._idleService.removeIdleObserver(this, this._bookmarksBackupIdleTime);
       delete this._bookmarksBackupIdleTime;
     }
+    if (this._mediaTelemetryIdleObserver) {
+      this._idleService.removeIdleObserver(this._mediaTelemetryIdleObserver, MEDIA_TELEMETRY_IDLE_TIME_SEC);
+      delete this._mediaTelemetryIdleObserver;
+    }
     if (this._isPlacesInitObserver)
       os.removeObserver(this, "places-init-complete");
     if (this._isPlacesLockedObserver)
@@ -472,8 +558,6 @@ BrowserGlue.prototype = {
     os.removeObserver(this, "browser-search-engine-modified");
     os.removeObserver(this, "flash-plugin-hang");
     os.removeObserver(this, "xpi-signature-changed");
-
-    UserAgentOverrides.uninit();
   },
 
   _onAppDefaults: function BG__onAppDefaults() {
@@ -499,9 +583,24 @@ BrowserGlue.prototype = {
     // handle any UI migration
     this._migrateUI();
 
+    // This is support code for the location bar search suggestions; passing
+    // from opt-in to opt-out should respect the user's choice, thus we need
+    // to cache that choice in a pref for future use.
+    // Note: this is not in migrateUI because we need to uplift it. This
+    // code is also short-lived, since we can remove it as soon as opt-out
+    // search suggestions shipped in release (Bug 1344928).
+    try {
+      let urlbarPrefs = Services.prefs.getBranch("browser.urlbar.");
+      if (!urlbarPrefs.prefHasUserValue("searchSuggestionsChoice") &&
+          urlbarPrefs.getBoolPref("userMadeSearchSuggestionsChoice")) {
+        urlbarPrefs.setBoolPref("searchSuggestionsChoice",
+                                urlbarPrefs.getBoolPref("suggest.searches"));
+      }
+    } catch (ex) { /* missing any of the prefs is not critical */ }
+
+    listeners.init();
+
     PageThumbs.init();
-    webrtcUI.init();
-    AboutHome.init();
 
     DirectoryLinksProvider.init();
     NewTabUtils.init();
@@ -511,18 +610,6 @@ BrowserGlue.prototype = {
     SessionStore.init();
     BrowserUsageTelemetry.init();
     BrowserUITelemetry.init();
-    ContentSearch.init();
-    FormValidationHandler.init();
-
-    ContentClick.init();
-    RemotePrompt.init();
-    Feeds.init();
-    ContentPrefServiceParent.init();
-
-    LoginManagerParent.init();
-    ReaderParent.init();
-
-    SelfSupportBackend.init();
 
     if (AppConstants.INSTALL_COMPACT_THEMES) {
       let vendorShortName = gBrandBundle.GetStringFromName("vendorShortName");
@@ -638,12 +725,12 @@ BrowserGlue.prototype = {
     Services.prefs.setIntPref("browser.slowStartup.samples", samples);
   },
 
-  _calculateProfileAgeInDays: Task.async(function* () {
+  async _calculateProfileAgeInDays() {
     let ProfileAge = Cu.import("resource://gre/modules/ProfileAge.jsm", {}).ProfileAge;
     let profileAge = new ProfileAge(null, null);
 
-    let creationDate = yield profileAge.created;
-    let resetDate = yield profileAge.reset;
+    let creationDate = await profileAge.created;
+    let resetDate = await profileAge.reset;
 
     // if the profile was reset, consider the
     // reset date for its age.
@@ -651,7 +738,7 @@ BrowserGlue.prototype = {
 
     const ONE_DAY = 24 * 60 * 60 * 1000;
     return (Date.now() - profileDate) / ONE_DAY;
-  }),
+  },
 
   _showSlowStartupNotification(profileAge) {
     if (profileAge < 90) // 3 months
@@ -757,11 +844,14 @@ BrowserGlue.prototype = {
     if (!win)
       return;
 
-    let message = win.gNavigatorBundle.getString("nonMpcDisabled.message");
+    // This is only going to be on Nightly and only for the 55 and 56
+    // cycles, and it points to a wiki page that is not localized, so
+    // no need to localize the message here...
+    let message = "Due to performance testing, we have disabled some of your add-ons. They can be re-enabled in your browser settings.";
     let buttons = [
       {
-        label: win.gNavigatorBundle.getString("nonMpcDisabled.manage.label"),
-        accessKey: win.gNavigatorBundle.getString("nonMpcDisabled.manage.accessKey"),
+        label: "Manage Add-Ons",
+        accessKey: "M",
         callback() {
           win.BrowserOpenAddonsMgr("addons://list/extension");
         }
@@ -862,9 +952,34 @@ BrowserGlue.prototype = {
 
     AutoCompletePopup.init();
     DateTimePickerHelper.init();
+    // Check if Sync is configured
+    if (Services.prefs.prefHasUserValue("services.sync.username")) {
+      WeaveService.init();
+    }
 
     this._firstWindowTelemetry(aWindow);
     this._firstWindowLoaded();
+
+    this._mediaTelemetryIdleObserver = {
+      browserGlue: this,
+      observe(aSubject, aTopic, aData) {
+        if (aTopic != "idle") {
+          return;
+        }
+        this.browserGlue._sendMediaTelemetry();
+      }
+    };
+    this._idleService.addIdleObserver(this._mediaTelemetryIdleObserver,
+                                      MEDIA_TELEMETRY_IDLE_TIME_SEC);
+  },
+
+  _sendMediaTelemetry() {
+    let win = RecentWindow.getMostRecentBrowserWindow();
+    let v = win.document.createElementNS("http://www.w3.org/1999/xhtml", "video");
+    v.reportCanPlayTelemetry();
+    this._idleService.removeIdleObserver(this._mediaTelemetryIdleObserver,
+                                         MEDIA_TELEMETRY_IDLE_TIME_SEC);
+    delete this._mediaTelemetryIdleObserver;
   },
 
   /**
@@ -890,13 +1005,17 @@ BrowserGlue.prototype = {
       delete this._bookmarksBackupIdleTime;
     }
 
+    for (let mod of Object.values(initializedModules)) {
+      if (mod.uninit) {
+        mod.uninit();
+      }
+    }
+
     BrowserUsageTelemetry.uninit();
-    SelfSupportBackend.uninit();
+
     PageThumbs.uninit();
     AboutNewTab.uninit();
     NewTabUtils.uninit();
-    webrtcUI.uninit();
-    FormValidationHandler.uninit();
     AutoCompletePopup.uninit();
     DateTimePickerHelper.uninit();
   },
@@ -976,7 +1095,7 @@ BrowserGlue.prototype = {
 
       const skipDefaultBrowserCheck =
         Services.prefs.getBoolPref("browser.shell.skipDefaultBrowserCheckOnFirstRun") &&
-        Services.prefs.getBoolPref("browser.shell.skipDefaultBrowserCheck");
+        !Services.prefs.getBoolPref("browser.shell.didSkipDefaultBrowserCheckOnFirstRun");
 
       const usePromptLimit = !AppConstants.RELEASE_OR_BETA;
       let promptCount =
@@ -1010,7 +1129,7 @@ BrowserGlue.prototype = {
       // browser has been run a few times.
       if (willPrompt) {
         if (skipDefaultBrowserCheck) {
-          Services.prefs.setBoolPref("browser.shell.skipDefaultBrowserCheck", false);
+          Services.prefs.setBoolPref("browser.shell.didSkipDefaultBrowserCheckOnFirstRun", true);
           willPrompt = false;
         } else {
           promptCount++;
@@ -1360,7 +1479,7 @@ BrowserGlue.prototype = {
         () => BookmarkHTMLUtils.exportToFile(BookmarkHTMLUtils.defaultPath));
     }
 
-    Task.spawn(function* () {
+    (async () => {
       // Check if Safe Mode or the user has required to restore bookmarks from
       // default profile's bookmarks.html
       let restoreDefaultBookmarks = false;
@@ -1369,7 +1488,7 @@ BrowserGlue.prototype = {
           Services.prefs.getBoolPref("browser.bookmarks.restore_default_bookmarks");
         if (restoreDefaultBookmarks) {
           // Ensure that we already have a bookmarks backup for today.
-          yield this._backupBookmarks();
+          await this._backupBookmarks();
           importBookmarks = true;
         }
       } catch (ex) {}
@@ -1382,15 +1501,15 @@ BrowserGlue.prototype = {
       // from bookmarks.html, we will try to restore from JSON
       if (importBookmarks && !restoreDefaultBookmarks && !importBookmarksHTML) {
         // get latest JSON backup
-        lastBackupFile = yield PlacesBackups.getMostRecentBackup();
+        lastBackupFile = await PlacesBackups.getMostRecentBackup();
         if (lastBackupFile) {
           // restore from JSON backup
-          yield BookmarkJSONUtils.importFromFile(lastBackupFile, true);
+          await BookmarkJSONUtils.importFromFile(lastBackupFile, true);
           importBookmarks = false;
         } else {
           // We have created a new database but we don't have any backup available
           importBookmarks = true;
-          if (yield OS.File.exists(BookmarkHTMLUtils.defaultPath)) {
+          if (await OS.File.exists(BookmarkHTMLUtils.defaultPath)) {
             // If bookmarks.html is available in current profile import it...
             importBookmarksHTML = true;
           } else {
@@ -1409,8 +1528,8 @@ BrowserGlue.prototype = {
         // Now apply distribution customized bookmarks.
         // This should always run after Places initialization.
         try {
-          yield this._distributionCustomizer.applyBookmarks();
-          yield this.ensurePlacesDefaultQueriesInitialized();
+          await this._distributionCustomizer.applyBookmarks();
+          await this.ensurePlacesDefaultQueriesInitialized();
         } catch (e) {
           Cu.reportError(e);
         }
@@ -1426,24 +1545,24 @@ BrowserGlue.prototype = {
         if (restoreDefaultBookmarks) {
           // User wants to restore bookmarks.html file from default profile folder
           bookmarksUrl = "chrome://browser/locale/bookmarks.html";
-        } else if (yield OS.File.exists(BookmarkHTMLUtils.defaultPath)) {
+        } else if (await OS.File.exists(BookmarkHTMLUtils.defaultPath)) {
           bookmarksUrl = OS.Path.toFileURI(BookmarkHTMLUtils.defaultPath);
         }
 
         if (bookmarksUrl) {
           // Import from bookmarks.html file.
           try {
-            yield BookmarkHTMLUtils.importFromURL(bookmarksUrl, true);
+            await BookmarkHTMLUtils.importFromURL(bookmarksUrl, true);
           } catch (e) {
             Cu.reportError("Bookmarks.html file could be corrupt. " + e);
           }
           try {
             // Now apply distribution customized bookmarks.
             // This should always run after Places initialization.
-            yield this._distributionCustomizer.applyBookmarks();
+            await this._distributionCustomizer.applyBookmarks();
             // Ensure that smart bookmarks are created once the operation is
             // complete.
-            yield this.ensurePlacesDefaultQueriesInitialized();
+            await this.ensurePlacesDefaultQueriesInitialized();
           } catch (e) {
             Cu.reportError(e);
           }
@@ -1467,7 +1586,7 @@ BrowserGlue.prototype = {
         // If there is no backup, or the last bookmarks backup is too old, use
         // a more aggressive idle observer.
         if (lastBackupFile === undefined)
-          lastBackupFile = yield PlacesBackups.getMostRecentBackup();
+          lastBackupFile = await PlacesBackups.getMostRecentBackup();
         if (!lastBackupFile) {
             this._bookmarksBackupIdleTime /= 2;
         } else {
@@ -1495,7 +1614,7 @@ BrowserGlue.prototype = {
         this._idleService.addIdleObserver(this, this._bookmarksBackupIdleTime);
       }
 
-    }.bind(this)).catch(ex => {
+    })().catch(ex => {
       Cu.reportError(ex);
     }).then(() => {
       // NB: deliberately after the catch so that we always do this, even if
@@ -1508,16 +1627,16 @@ BrowserGlue.prototype = {
    * If a backup for today doesn't exist, this creates one.
    */
   _backupBookmarks: function BG__backupBookmarks() {
-    return Task.spawn(function*() {
-      let lastBackupFile = yield PlacesBackups.getMostRecentBackup();
+    return (async function() {
+      let lastBackupFile = await PlacesBackups.getMostRecentBackup();
       // Should backup bookmarks if there are no backups or the maximum
       // interval between backups elapsed.
       if (!lastBackupFile ||
           new Date() - PlacesBackups.getDateForFile(lastBackupFile) > BOOKMARKS_BACKUP_MIN_INTERVAL_DAYS * 86400000) {
         let maxBackups = Services.prefs.getIntPref("browser.bookmarks.max_backups");
-        yield PlacesBackups.create(maxBackups);
+        await PlacesBackups.create(maxBackups);
       }
-    });
+    })();
   },
 
   /**
@@ -1567,13 +1686,14 @@ BrowserGlue.prototype = {
     let clickCallback = (subject, topic, data) => {
       if (topic != "alertclickcallback")
         return;
-      this._openPreferences("sync");
+      this._openPreferences("sync", { origin: "doorhanger" });
     }
     AlertsService.showAlertNotification(null, title, body, true, null, clickCallback);
   },
 
+  // eslint-disable-next-line complexity
   _migrateUI: function BG__migrateUI() {
-    const UI_VERSION = 44;
+    const UI_VERSION = 45;
     const BROWSER_DOCURL = "chrome://browser/content/browser.xul";
 
     let currentUIVersion;
@@ -1867,6 +1987,15 @@ BrowserGlue.prototype = {
       Services.prefs.clearUserPref("alerts.disableSlidingEffect");
     }
 
+    if (currentUIVersion < 45) {
+      const LEGACY_PREF = "browser.shell.skipDefaultBrowserCheck";
+      if (Services.prefs.prefHasUserValue(LEGACY_PREF)) {
+        Services.prefs.setBoolPref("browser.shell.didSkipDefaultBrowserCheckOnFirstRun",
+                                   !Services.prefs.getBoolPref(LEGACY_PREF));
+        Services.prefs.clearUserPref(LEGACY_PREF);
+      }
+    }
+
     // Update the migration version.
     Services.prefs.setIntPref("browser.migration.version", UI_VERSION);
   },
@@ -1879,7 +2008,7 @@ BrowserGlue.prototype = {
     this._sanitizer.sanitize(aParentWindow);
   },
 
-  ensurePlacesDefaultQueriesInitialized: Task.async(function* () {
+  async ensurePlacesDefaultQueriesInitialized() {
     // This is the current smart bookmarks version, it must be increased every
     // time they change.
     // When adding a new smart bookmark below, its newInVersion property must
@@ -1935,14 +2064,14 @@ BrowserGlue.prototype = {
         if (queryId in smartBookmarks) {
           // Known smart bookmark.
           let smartBookmark = smartBookmarks[queryId];
-          smartBookmark.guid = yield PlacesUtils.promiseItemGuid(itemId);
+          smartBookmark.guid = await PlacesUtils.promiseItemGuid(itemId);
 
           if (!smartBookmark.url) {
-            yield PlacesUtils.bookmarks.remove(smartBookmark.guid);
+            await PlacesUtils.bookmarks.remove(smartBookmark.guid);
             continue;
           }
 
-          let bm = yield PlacesUtils.bookmarks.fetch(smartBookmark.guid);
+          let bm = await PlacesUtils.bookmarks.fetch(smartBookmark.guid);
           smartBookmark.parentGuid = bm.parentGuid;
           smartBookmark.index = bm.index;
         } else {
@@ -1967,7 +2096,7 @@ BrowserGlue.prototype = {
         // Remove old version of the smart bookmark if it exists, since it
         // will be replaced in place.
         if (smartBookmark.guid) {
-          yield PlacesUtils.bookmarks.remove(smartBookmark.guid);
+          await PlacesUtils.bookmarks.remove(smartBookmark.guid);
         }
 
         // Create the new smart bookmark and store its updated guid.
@@ -1977,8 +2106,8 @@ BrowserGlue.prototype = {
           else if (smartBookmark.parentGuid == PlacesUtils.bookmarks.menuGuid)
             smartBookmark.index = menuIndex++;
         }
-        smartBookmark = yield PlacesUtils.bookmarks.insert(smartBookmark);
-        let itemId = yield PlacesUtils.promiseItemId(smartBookmark.guid);
+        smartBookmark = await PlacesUtils.bookmarks.insert(smartBookmark);
+        let itemId = await PlacesUtils.promiseItemId(smartBookmark.guid);
         PlacesUtils.annotations.setItemAnnotation(itemId,
                                                   SMART_BOOKMARKS_ANNO,
                                                   queryId, 0,
@@ -1989,11 +2118,11 @@ BrowserGlue.prototype = {
       // separator below them in the bookmarks menu.
       if (smartBookmarksCurrentVersion == 0 &&
           smartBookmarkItemIds.length == 0) {
-        let bm = yield PlacesUtils.bookmarks.fetch({ parentGuid: PlacesUtils.bookmarks.menuGuid,
+        let bm = await PlacesUtils.bookmarks.fetch({ parentGuid: PlacesUtils.bookmarks.menuGuid,
                                                      index: menuIndex });
         // Don't add a separator if the menu was empty or there is one already.
         if (bm && bm.type != PlacesUtils.bookmarks.TYPE_SEPARATOR) {
-          yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_SEPARATOR,
+          await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_SEPARATOR,
                                                parentGuid: PlacesUtils.bookmarks.menuGuid,
                                                index: menuIndex });
         }
@@ -2004,7 +2133,7 @@ BrowserGlue.prototype = {
       Services.prefs.setIntPref(SMART_BOOKMARKS_PREF, SMART_BOOKMARKS_VERSION);
       Services.prefs.savePrefFile(null);
     }
-  }),
+  },
 
   /**
    * Open preferences even if there are no open windows.
@@ -2140,7 +2269,7 @@ BrowserGlue.prototype = {
     let clickCallback = (subject, topic, data) => {
       if (topic != "alertclickcallback")
         return;
-      this._openPreferences("sync");
+      this._openPreferences("sync", { origin: "devDisconnectedAlert"});
     }
     AlertsService.showAlertNotification(null, title, body, true, null, clickCallback);
   },

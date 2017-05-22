@@ -40,6 +40,7 @@
 #include "nsContentUtils.h"
 #include "nsMediaList.h"
 #include "nsCSSRules.h"
+#include "nsCSSCounterStyleRule.h"
 #include "nsCSSFontFaceRule.h"
 #include "nsStyleSet.h"
 #include "mozilla/dom/Element.h"
@@ -893,7 +894,11 @@ struct RuleCascadeData {
   nsTArray<nsCSSCounterStyleRule*> mCounterStyleRules;
 
   nsDataHashtable<nsStringHashKey, nsCSSKeyframesRule*> mKeyframesRuleTable;
-  nsDataHashtable<nsStringHashKey, nsCSSCounterStyleRule*> mCounterStyleRuleTable;
+  // The hashtable doesn't need to hold a strong reference to the name
+  // atom, because nsCSSCounterStyleRule always does. If the name changes
+  // we need to discard this table and rebuild it anyway.
+  nsDataHashtable<nsPtrHashKey<nsIAtom>,
+                  nsCSSCounterStyleRule*> mCounterStyleRuleTable;
 
   // Looks up or creates the appropriate list in |mAttributeSelectors|.
   // Returns null only on allocation failure.
@@ -3118,7 +3123,7 @@ nsCSSRuleProcessor::KeyframesRuleForName(nsPresContext* aPresContext,
 
 nsCSSCounterStyleRule*
 nsCSSRuleProcessor::CounterStyleRuleForName(nsPresContext* aPresContext,
-                                            const nsAString& aName)
+                                            nsIAtom* aName)
 {
   RuleCascadeData* cascade = GetRuleCascade(aPresContext);
 
@@ -3837,7 +3842,7 @@ nsCSSRuleProcessor::RefreshRuleCascade(nsPresContext* aPresContext)
       for (nsTArray<nsCSSCounterStyleRule*>::size_type i = 0,
            iEnd = newCascade->mCounterStyleRules.Length(); i < iEnd; ++i) {
         nsCSSCounterStyleRule* rule = newCascade->mCounterStyleRules[i];
-        newCascade->mCounterStyleRuleTable.Put(rule->GetName(), rule);
+        newCascade->mCounterStyleRuleTable.Put(rule->Name(), rule);
       }
 
       // mMustGatherDocumentRules controls whether we build mDocumentRules

@@ -16,6 +16,7 @@
 #identity-popup[connection=secure] [when-connection~=secure],
 #identity-popup[connection=chrome] [when-connection~=chrome],
 #identity-popup[connection=file] [when-connection~=file],
+#identity-popup[connection=extension] [when-connection~=extension],
 /* Show insecure login forms messages when needed. */
 #identity-popup[loginforms=insecure] [when-loginforms=insecure],
 /* Show weak cipher messages when needed. */
@@ -239,7 +240,9 @@
 
 #identity-popup[connection=secure-cert-user-overridden] #identity-popup-securityView,
 #identity-popup[connection=secure-cert-user-overridden] #identity-popup-security-content {
-  background-image: url(chrome://browser/skin/connection-mixed-passive-loaded.svg#icon);
+  background-image: url(chrome://browser/skin/connection-mixed-passive-loaded.svg);
+  -moz-context-properties: fill;
+  fill: GrayText;
 }
 
 #identity-popup[loginforms=insecure] #identity-popup-securityView,
@@ -247,6 +250,13 @@
 #identity-popup[mixedcontent~=active-loaded][isbroken] #identity-popup-securityView,
 #identity-popup[mixedcontent~=active-loaded][isbroken] #identity-popup-security-content {
   background-image: url(chrome://browser/skin/controlcenter/mcb-disabled.svg);
+}
+
+#identity-popup[connection=extension] #identity-popup-securityView,
+#identity-popup[connection=extension] #identity-popup-security-content {
+  background-image: url(chrome://browser/skin/controlcenter/extension.svg);
+  -moz-context-properties: fill;
+  fill: #60bf4c;
 }
 
 #identity-popup-security-descriptions > description {

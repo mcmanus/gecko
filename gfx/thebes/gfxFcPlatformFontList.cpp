@@ -448,7 +448,7 @@ gfxFontconfigFontEntry::MaybeReleaseFTFace()
     // only close out FT_Face for system fonts, not for data fonts
     if (!mIsDataUserFont) {
         if (mFTFace) {
-            FT_Done_Face(mFTFace);
+            Factory::ReleaseFTFace(mFTFace);
             mFTFace = nullptr;
         }
         mFTFaceInitialized = false;
@@ -652,6 +652,12 @@ PrepareFontOptions(FcPattern* aPattern,
     cairo_font_options_set_antialias(aFontOptions, antialias);
 }
 
+static void
+ReleaseFTUserFontData(void* aData)
+{
+  static_cast<FTUserFontData*>(aData)->Release();
+}
+
 cairo_scaled_font_t*
 gfxFontconfigFontEntry::CreateScaledFont(FcPattern* aRenderPattern,
                                          gfxFloat aAdjustedSize,
@@ -681,10 +687,15 @@ gfxFontconfigFontEntry::CreateScaledFont(FcPattern* aRenderPattern,
         // so that it gets deleted whenever cairo decides
         NS_ASSERTION(mFTFace, "FT_Face is null when setting user data");
         NS_ASSERTION(mUserFontData, "user font data is null when setting user data");
-        cairo_font_face_set_user_data(face,
-                                      &sFcFontlistUserFontDataKey,
-                                      new FTUserFontDataRef(mUserFontData),
-                                      FTUserFontDataRef::Destroy);
+        if (cairo_font_face_set_user_data(face,
+                                          &sFcFontlistUserFontDataKey,
+                                          mUserFontData,
+                                          ReleaseFTUserFontData) != CAIRO_STATUS_SUCCESS) {
+            NS_WARNING("Failed binding FTUserFontData to Cairo font face");
+            cairo_font_face_destroy(face);
+            return nullptr;
+        }
+        mUserFontData.get()->AddRef();
     }
 
     cairo_scaled_font_t *scaledFont = nullptr;
@@ -850,6 +861,15 @@ ChooseFontSize(gfxFontconfigFontEntry* aEntry,
             bestSize = size;
         }
     }
+    // If the font has bitmaps but wants to be scaled, then let it scale.
+    if (bestSize >= 0.0) {
+        FcBool scalable;
+        if (FcPatternGetBool(aEntry->GetPattern(),
+                             FC_SCALABLE, 0, &scalable) == FcResultMatch &&
+            scalable) {
+            return requestedSize;
+        }
+    }
     return bestSize;
 }
 
@@ -924,8 +944,8 @@ gfxFontconfigFontEntry::CopyFontTable(uint32_t aTableTag,
         if (FcPatternGetInteger(mFontPattern, FC_INDEX, 0, &index) != FcResultMatch) {
             index = 0; // default to 0 if not found in pattern
         }
-        if (FT_New_Face(gfxFcPlatformFontList::GetFTLibrary(),
-                        (const char*)filename, index, &mFTFace) != 0) {
+        mFTFace = Factory::NewFTFace(nullptr, ToCharPtr(filename), index);
+        if (!mFTFace) {
             return NS_ERROR_FAILURE;
         }
     }
@@ -1008,10 +1028,16 @@ gfxFontconfigFontFamily::AddFontPattern(FcPattern* aFontPattern)
     NS_ASSERTION(!mHasStyles,
                  "font patterns must not be added to already enumerated families");
 
-    FcBool scalable;
-    if (FcPatternGetBool(aFontPattern, FC_SCALABLE, 0, &scalable) != FcResultMatch ||
-        !scalable) {
+    FcBool outline;
+    if (FcPatternGetBool(aFontPattern, FC_OUTLINE, 0, &outline) != FcResultMatch ||
+        !outline) {
         mHasNonScalableFaces = true;
+
+        FcBool scalable;
+        if (FcPatternGetBool(aFontPattern, FC_SCALABLE, 0, &scalable) == FcResultMatch &&
+            scalable) {
+            mForceScalable = true;
+        }
     }
 
     nsCountedRef<FcPattern> pattern(aFontPattern);
@@ -1023,7 +1049,9 @@ static const double kRejectDistance = 10000.0;
 // Calculate a distance score representing the size disparity between the
 // requested style's size and the font entry's size.
 static double
-SizeDistance(gfxFontconfigFontEntry* aEntry, const gfxFontStyle& aStyle)
+SizeDistance(gfxFontconfigFontEntry* aEntry,
+             const gfxFontStyle& aStyle,
+             bool aForceScalable)
 {
     double requestedSize = SizeForStyle(aEntry, aStyle);
     double bestDist = -1.0;
@@ -1040,7 +1068,7 @@ SizeDistance(gfxFontconfigFontEntry* aEntry, const gfxFontStyle& aStyle)
     if (bestDist < 0.0) {
         // No size means scalable
         return -1.0;
-    } else if (5.0 * bestDist < requestedSize) {
+    } else if (aForceScalable || 5.0 * bestDist < requestedSize) {
         // fontconfig prefers a matching family or lang to pixelsize of bitmap
         // fonts. CSS suggests a tolerance of 20% on pixelsize.
         return bestDist;
@@ -1074,7 +1102,7 @@ gfxFontconfigFontFamily::FindAllFontsForStyle(const gfxFontStyle& aFontStyle,
     for (size_t i = 0; i < aFontEntryList.Length(); i++) {
         gfxFontconfigFontEntry* entry =
             static_cast<gfxFontconfigFontEntry*>(aFontEntryList[i]);
-        double dist = SizeDistance(entry, aFontStyle);
+        double dist = SizeDistance(entry, aFontStyle, mForceScalable);
         // If the entry is scalable or has a style that does not match
         // the group of unscalable fonts, then start a new group.
         if (dist < 0.0 ||
@@ -1416,16 +1444,13 @@ gfxFcPlatformFontList::MakePlatformFont(const nsAString& aFontName,
                                         const uint8_t* aFontData,
                                         uint32_t aLength)
 {
-    FT_Face face;
-    FT_Error error =
-        FT_New_Memory_Face(gfxFcPlatformFontList::GetFTLibrary(),
-                           aFontData, aLength, 0, &face);
-    if (error != FT_Err_Ok) {
+    FT_Face face = Factory::NewFTFaceFromData(nullptr, aFontData, aLength, 0);
+    if (!face) {
         NS_Free((void*)aFontData);
         return nullptr;
     }
     if (FT_Err_Ok != FT_Select_Charmap(face, FT_ENCODING_UNICODE)) {
-        FT_Done_Face(face);
+        Factory::ReleaseFTFace(face);
         NS_Free((void*)aFontData);
         return nullptr;
     }

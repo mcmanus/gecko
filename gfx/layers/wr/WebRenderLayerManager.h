@@ -88,6 +88,7 @@ public:
   virtual void RemoveDidCompositeObserver(DidCompositeObserver* aObserver) override;
 
   virtual void FlushRendering() override;
+  virtual void WaitOnTransactionProcessed() override;
 
   virtual void SendInvalidRegion(const nsIntRegion& aRegion) override;
 
@@ -99,6 +100,8 @@ public:
   }
   virtual bool NeedsComposite() const override { return mNeedsComposite; }
   virtual void SetIsFirstPaint() override { mIsFirstPaint = true; }
+
+  bool AsyncPanZoomEnabled() const override;
 
   DrawPaintedLayerCallback GetPaintedLayerCallback() const
   { return mPaintedLayerCallback; }
@@ -145,7 +148,7 @@ private:
 private:
   nsIWidget* MOZ_NON_OWNING_REF mWidget;
   std::vector<wr::ImageKey> mImageKeys;
-  std::vector<uint64_t> mDiscardedCompositorAnimationsIds;
+  nsTArray<uint64_t> mDiscardedCompositorAnimationsIds;
 
   /* PaintedLayer callbacks; valid at the end of a transaciton,
    * while rendering */

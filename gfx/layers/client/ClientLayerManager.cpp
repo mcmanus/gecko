@@ -647,11 +647,23 @@ ClientLayerManager::FlushRendering()
 {
   if (mWidget) {
     if (CompositorBridgeChild* remoteRenderer = mWidget->GetRemoteRenderer()) {
-      remoteRenderer->SendFlushRendering();
+      if (mWidget->SynchronouslyRepaintOnResize() || gfxPrefs::LayersForceSynchronousResize()) {
+        remoteRenderer->SendFlushRendering();
+      } else {
+        remoteRenderer->SendFlushRenderingAsync();
+      }
     }
   }
 }
 
+void
+ClientLayerManager::WaitOnTransactionProcessed()
+{
+  CompositorBridgeChild* remoteRenderer = GetCompositorBridgeChild();
+  if (remoteRenderer) {
+    remoteRenderer->SendWaitOnTransactionProcessed();
+  }
+}
 void
 ClientLayerManager::UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier,
                                                    uint64_t aDeviceResetSeqNo)

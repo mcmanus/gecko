@@ -373,6 +373,9 @@ public:
                                                        GetFontPrefsForLang(lang));
   }
 
+  void ForceCacheLang(nsIAtom *aLanguage);
+  void CacheAllLangs();
+
   /** Get a cached boolean pref, by its type */
   // *  - initially created for bugs 31816, 20760, 22963
   bool GetCachedBoolPref(nsPresContext_CachedBoolPrefType aPrefType) const
@@ -737,7 +740,18 @@ public:
    *         it was propagated from.
    */
   nsIContent* UpdateViewportScrollbarStylesOverride();
-  const ScrollbarStyles& GetViewportScrollbarStylesOverride()
+
+  /**
+   * Returns the cached result from the last call to
+   * UpdateViewportScrollbarStylesOverride() -- i.e. return the node
+   * whose scrollbar styles we have propagated to the viewport (or nullptr if
+   * there is no such node).
+   */
+  nsIContent* GetViewportScrollbarStylesOverrideNode() const {
+    return mViewportScrollbarOverrideNode;
+  }
+
+  const ScrollbarStyles& GetViewportScrollbarStylesOverride() const
   {
     return mViewportStyleScrollbar;
   }
@@ -1385,7 +1399,16 @@ protected:
 
   nscolor               mBodyTextColor;
 
+  // This is a non-owning pointer. May be null. If non-null, it's guaranteed
+  // to be pointing to a node that's still alive, because we'll reset it in
+  // UpdateViewportScrollbarStylesOverride() as part of the cleanup code
+  // when this node is removed from the document. (For <body> and the root node,
+  // this call happens in nsCSSFrameConstructor::ContentRemoved(). For
+  // fullscreen elements, it happens in the fullscreen-specific cleanup
+  // invoked by Element::UnbindFromTree().)
+  nsIContent* MOZ_NON_OWNING_REF mViewportScrollbarOverrideNode;
   ScrollbarStyles       mViewportStyleScrollbar;
+
   uint8_t               mFocusRingWidth;
 
   bool mExistThrottledUpdates;
@@ -1399,6 +1422,9 @@ protected:
   // language groups, so in the worst case scenario we'll need to traverse 31
   // link items.
   LangGroupFontPrefs    mLangGroupFontPrefs;
+
+  bool mFontGroupCacheDirty;
+  nsTHashtable<nsRefPtrHashKey<nsIAtom>> mLanguagesUsed;
 
   nscoord               mBorderWidthTable[3];
 

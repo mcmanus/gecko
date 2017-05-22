@@ -242,16 +242,6 @@ PROT_ListManager.prototype.kickoffUpdate_ = function (onDiskTableData)
       }
       log("Next update " + updateDelay + "ms from now");
 
-      // Set the last update time to verify if data is still valid.
-      let freshnessPref = "browser.safebrowsing.provider." + provider + ".lastupdatetime";
-      let freshness = this.prefs_.getPref(freshnessPref);
-      if (freshness) {
-        Object.keys(this.tablesData).forEach(function(table) {
-        if (this.tablesData[table].provider === provider) {
-          this.dbService_.setLastUpdateTime(table, freshness);
-        }}, this);
-      }
-
       this.updateCheckers_[updateUrl] =
         new G_Alarm(BindToObject(this.checkForUpdates, this, updateUrl),
                     updateDelay, false /* repeating */);
@@ -580,7 +570,7 @@ PROT_ListManager.prototype.updateError_ = function(table, updateUrl, result) {
                 this.updateInterval, false);
 
   Services.obs.notifyObservers(null, "safebrowsing-update-finished",
-                               "update error(" + result + ")");
+                               "update error: " + result);
 }
 
 /**
@@ -608,7 +598,7 @@ PROT_ListManager.prototype.downloadError_ = function(table, updateUrl, status) {
                 delay, false);
 
   Services.obs.notifyObservers(null, "safebrowsing-update-finished",
-                               "download error(" + status + ")");
+                               "download error: " + status);
 }
 
 PROT_ListManager.prototype.QueryInterface = function(iid) {

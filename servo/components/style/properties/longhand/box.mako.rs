@@ -31,7 +31,6 @@
     %>
     use values::computed::ComputedValueAsSpecified;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
@@ -170,7 +169,6 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
                                   gecko_inexhaustive="True"
                                   gecko_ffi_name="mFloat"
                                   spec="https://drafts.csswg.org/css-box/#propdef-float">
-    use values::HasViewportPercentage;
     no_viewport_percentage!(SpecifiedValue);
     impl ToComputedValue for SpecifiedValue {
         type ComputedValue = computed_value::T;
@@ -209,7 +207,6 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
                                   gecko_enum_prefix="StyleClear"
                                   gecko_ffi_name="mBreakType"
                                   spec="https://www.w3.org/TR/CSS2/visuren.html#flow-control">
-    use values::HasViewportPercentage;
     no_viewport_percentage!(SpecifiedValue);
     impl ToComputedValue for SpecifiedValue {
         type ComputedValue = computed_value::T;
@@ -263,7 +260,6 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
                    spec="https://www.w3.org/TR/CSS2/visudet.html#propdef-vertical-align">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::specified::AllowQuirks;
 
     <% vertical_align = data.longhands_by_name["vertical-align"] %>
@@ -274,18 +270,9 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
 
     ${helpers.gecko_keyword_conversion(vertical_align.keyword)}
 
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            match *self {
-                SpecifiedValue::LengthOrPercentage(ref length) => length.has_viewport_percentage(),
-                _ => false
-            }
-        }
-    }
-
     /// The `vertical-align` value.
     #[allow(non_camel_case_types)]
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub enum SpecifiedValue {
         % for keyword in vertical_align_keywords:
@@ -321,10 +308,9 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
 
     /// The computed value for `vertical-align`.
     pub mod computed_value {
-        use app_units::Au;
         use std::fmt;
         use style_traits::ToCss;
-        use values::{CSSFloat, computed};
+        use values::computed;
 
         /// The keywords are the same, and the `LengthOrPercentage` is computed
         /// here.
@@ -426,7 +412,6 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
     use values::specified::Time;
 
     pub use values::specified::Time as SpecifiedValue;
-    use values::HasViewportPercentage;
     no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
@@ -444,7 +429,7 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
     }
 
     pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
-        Time::parse(context, input)
+        Time::parse_non_negative(context, input)
     }
 </%helpers:vector_longhand>
 
@@ -458,7 +443,6 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
     use values::specified::Number;
     use euclid::point::{Point2D, TypedPoint2D};
     use std::fmt;
-    use std::marker::PhantomData;
     use style_traits::ToCss;
 
     // FIXME: This could use static variables and const functions when they are available.
@@ -499,7 +483,6 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
 
     pub mod computed_value {
         use euclid::point::Point2D;
-        use parser::{Parse, ParserContext};
         use std::fmt;
         use style_traits::ToCss;
         use super::FunctionKeyword;
@@ -764,7 +747,6 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
         }
     }
 
-    use values::HasViewportPercentage;
     no_viewport_percentage!(SpecifiedValue);
 
     #[inline]
@@ -795,8 +777,6 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
     pub use properties::animated_properties::TransitionProperty as SpecifiedValue;
 
     pub mod computed_value {
-        use std::fmt;
-        use style_traits::ToCss;
         // NB: Can't generate the type here because it needs all the longhands
         // generated beforehand.
         pub use super::SpecifiedValue as T;
@@ -810,7 +790,6 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
         TransitionProperty::All
     }
 
-    use values::HasViewportPercentage;
     no_viewport_percentage!(SpecifiedValue);
 
     impl ComputedValueAsSpecified for SpecifiedValue { }
@@ -824,7 +803,11 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
     pub use properties::longhands::transition_duration::single_value::SpecifiedValue;
     pub use properties::longhands::transition_duration::single_value::computed_value;
     pub use properties::longhands::transition_duration::single_value::{get_initial_value, get_initial_specified_value};
-    pub use properties::longhands::transition_duration::single_value::parse;
+
+    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+        use values::specified::Time;
+        Time::parse(context, input)
+    }
 </%helpers:vector_longhand>
 
 <%helpers:vector_longhand name="animation-name"
@@ -835,10 +818,9 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
                           spec="https://drafts.csswg.org/css-animations/#propdef-animation-name">
     use Atom;
     use std::fmt;
-    use std::ops::Deref;
     use style_traits::ToCss;
     use values::computed::ComputedValueAsSpecified;
-    use values::{HasViewportPercentage, KeyframesName};
+    use values::KeyframesName;
 
     pub mod computed_value {
         pub use super::SpecifiedValue as T;
@@ -933,7 +915,6 @@ ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
     use std::fmt;
     use style_traits::ToCss;
     use values::computed::ComputedValueAsSpecified;
-    use values::HasViewportPercentage;
 
     pub mod computed_value {
         pub use super::SpecifiedValue as T;
@@ -1031,27 +1012,17 @@ ${helpers.single_keyword("animation-fill-mode",
                           extra_prefixes="moz webkit",
                           spec="https://drafts.csswg.org/css-animations/#propdef-animation-delay",
                           allowed_in_keyframe_block="False">
-    pub use properties::longhands::transition_duration::single_value::computed_value;
-    pub use properties::longhands::transition_duration::single_value::get_initial_specified_value;
-    pub use properties::longhands::transition_duration::single_value::{get_initial_value, parse};
-    pub use properties::longhands::transition_duration::single_value::SpecifiedValue;
+    pub use properties::longhands::transition_delay::single_value::computed_value;
+    pub use properties::longhands::transition_delay::single_value::get_initial_specified_value;
+    pub use properties::longhands::transition_delay::single_value::{get_initial_value, parse};
+    pub use properties::longhands::transition_delay::single_value::SpecifiedValue;
 </%helpers:vector_longhand>
 
 <%helpers:longhand products="gecko" name="scroll-snap-points-y" animation_value_type="none"
                    spec="Nonstandard (https://www.w3.org/TR/2015/WD-css-snappoints-1-20150326/#scroll-snap-points)">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::specified::LengthOrPercentage;
-
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            match *self {
-                SpecifiedValue::Repeat(ref length) => length.has_viewport_percentage(),
-                _ => false
-            }
-        }
-    }
 
     pub mod computed_value {
         use values::computed::LengthOrPercentage;
@@ -1061,7 +1032,7 @@ ${helpers.single_keyword("animation-fill-mode",
         pub struct T(pub Option<LengthOrPercentage>);
     }
 
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub enum SpecifiedValue {
         None,
@@ -1171,9 +1142,8 @@ ${helpers.predefined_type("scroll-snap-coordinate",
     use values::specified::{LengthOrNumber, LengthOrPercentageOrNumber as LoPoNumber, Number};
     use style_traits::ToCss;
     use style_traits::values::Css;
-    use values::HasViewportPercentage;
 
-    use std::fmt::{self, Display};
+    use std::fmt;
 
     pub mod computed_value {
         use app_units::Au;
@@ -1249,7 +1219,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
     /// Multiple transform functions compose a transformation.
     ///
     /// Some transformations can be expressed by other more general functions.
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub enum SpecifiedOperation {
         /// Represents a 2D 2x3 matrix.
@@ -1324,41 +1294,6 @@ ${helpers.predefined_type("scroll-snap-coordinate",
         }
     }
 
-    impl HasViewportPercentage for SpecifiedOperation {
-        fn has_viewport_percentage(&self) -> bool {
-            match *self {
-                SpecifiedOperation::Translate(ref l1, None) |
-                SpecifiedOperation::TranslateX(ref l1) |
-                SpecifiedOperation::TranslateY(ref l1)  => {
-                    l1.has_viewport_percentage()
-                }
-                SpecifiedOperation::TranslateZ(ref l1) => {
-                    l1.has_viewport_percentage()
-                }
-                SpecifiedOperation::Translate(ref l1, Some(ref l2)) => {
-                    l1.has_viewport_percentage() ||
-                    l2.has_viewport_percentage()
-                }
-                SpecifiedOperation::Translate3D(ref l1, ref l2, ref l3) => {
-                    l1.has_viewport_percentage() ||
-                    l2.has_viewport_percentage() ||
-                    l3.has_viewport_percentage()
-                },
-                SpecifiedOperation::Perspective(ref length) => length.has_viewport_percentage(),
-                SpecifiedOperation::PrefixedMatrix{ ref e, ref f, .. } => {
-                    e.has_viewport_percentage() ||
-                    f.has_viewport_percentage()
-                },
-                SpecifiedOperation::PrefixedMatrix3D{ ref m41, ref m42, ref m43, .. } => {
-                    m41.has_viewport_percentage() ||
-                    m42.has_viewport_percentage() ||
-                    m43.has_viewport_percentage()
-                },
-                _ => false
-            }
-        }
-    }
-
     impl ToCss for SpecifiedOperation {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
             use self::SpecifiedOperation::*;
@@ -1418,14 +1353,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
         }
     }
 
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            let &SpecifiedValue(ref specified_ops) = self;
-            specified_ops.iter().any(|ref x| x.has_viewport_percentage())
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub struct SpecifiedValue(Vec<SpecifiedOperation>);
 
@@ -2143,11 +2071,11 @@ ${helpers.predefined_type("perspective",
                           animation_value_type="ComputedValue")}
 
 ${helpers.predefined_type("perspective-origin",
-                          "position::OriginPosition",
-                          "computed::position::OriginPosition::center()",
+                          "position::Position",
+                          "computed::position::Position::center()",
                           boxed="True",
                           extra_prefixes="moz webkit",
-                          spec="https://drafts.csswg.org/css-transforms/#perspective-origin-property",
+                          spec="https://drafts.csswg.org/css-transforms-2/#perspective-origin-property",
                           animation_value_type="ComputedValue")}
 
 ${helpers.single_keyword("backface-visibility",
@@ -2177,11 +2105,10 @@ ${helpers.single_keyword("transform-style",
     use app_units::Au;
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::specified::{NoCalcLength, LengthOrPercentage, Percentage};
 
     pub mod computed_value {
-        use properties::animated_properties::{ComputeDistance, Interpolate};
+        use properties::animated_properties::Animatable;
         use values::computed::{Length, LengthOrPercentage};
 
         #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2192,18 +2119,19 @@ ${helpers.single_keyword("transform-style",
             pub depth: Length,
         }
 
-        impl Interpolate for T {
+        impl Animatable for T {
             #[inline]
-            fn interpolate(&self, other: &Self, time: f64) -> Result<Self, ()> {
+            fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64)
+                -> Result<Self, ()> {
                 Ok(T {
-                    horizontal: try!(self.horizontal.interpolate(&other.horizontal, time)),
-                    vertical: try!(self.vertical.interpolate(&other.vertical, time)),
-                    depth: try!(self.depth.interpolate(&other.depth, time)),
+                    horizontal: try!(self.horizontal.add_weighted(&other.horizontal,
+                                                                  self_portion, other_portion)),
+                    vertical: try!(self.vertical.add_weighted(&other.vertical,
+                                                              self_portion, other_portion)),
+                    depth: try!(self.depth.add_weighted(&other.depth, self_portion, other_portion)),
                 })
             }
-        }
 
-        impl ComputeDistance for T {
             #[inline]
             fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
                 self.compute_squared_distance(other).map(|sd| sd.sqrt())
@@ -2218,15 +2146,7 @@ ${helpers.single_keyword("transform-style",
         }
     }
 
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            self.horizontal.has_viewport_percentage() ||
-            self.vertical.has_viewport_percentage() ||
-            self.depth.has_viewport_percentage()
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub struct SpecifiedValue {
         horizontal: LengthOrPercentage,
@@ -2302,7 +2222,6 @@ ${helpers.single_keyword("transform-style",
                    spec="https://drafts.csswg.org/css-contain/#contain-property">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::computed::ComputedValueAsSpecified;
 
     impl ComputedValueAsSpecified for SpecifiedValue {}
@@ -2404,20 +2323,24 @@ ${helpers.single_keyword("appearance",
 ${helpers.single_keyword("-moz-appearance",
                          """none button button-arrow-down button-arrow-next button-arrow-previous button-arrow-up
                             button-bevel button-focus caret checkbox checkbox-container checkbox-label checkmenuitem
-                            dualbutton groupbox listbox listitem menuarrow menubar menucheckbox menuimage menuitem
-                            menuitemtext menulist menulist-button menulist-text menulist-textfield menupopup menuradio
-                            menuseparator meterbar meterchunk number-input progressbar progressbar-vertical
-                            progresschunk
-                            progresschunk-vertical radio radio-container radio-label radiomenuitem range range-thumb
-                            resizer resizerpanel scale-horizontal scalethumbend scalethumb-horizontal scalethumbstart
-                            scalethumbtick scalethumb-vertical scale-vertical scrollbarbutton-down scrollbarbutton-left
-                            scrollbarbutton-right scrollbarbutton-up scrollbarthumb-horizontal scrollbarthumb-vertical
-                            scrollbartrack-horizontal scrollbartrack-vertical searchfield separator spinner
-                            spinner-downbutton spinner-textfield spinner-upbutton splitter statusbar statusbarpanel tab
-                            tabpanel tabpanels tab-scroll-arrow-back tab-scroll-arrow-forward textfield
-                            textfield-multiline toolbar toolbarbutton toolbarbutton-dropdown toolbargripper toolbox
-                            tooltip treeheader treeheadercell treeheadersortarrow treeitem treeline treetwisty
-                            treetwistyopen treeview -moz-win-borderless-glass -moz-win-browsertabbar-toolbox
+                            dialog dualbutton groupbox listbox listitem menuarrow menubar menucheckbox menuimage
+                            menuitem menuitemtext menulist menulist-button menulist-text menulist-textfield menupopup
+                            menuradio menuseparator meterbar meterchunk number-input progressbar progressbar-vertical
+                            progresschunk progresschunk-vertical radio radio-container radio-label radiomenuitem range
+                            range-thumb resizer resizerpanel scale-horizontal scalethumbend scalethumb-horizontal
+                            scalethumbstart scalethumbtick scalethumb-vertical scale-vertical scrollbar
+                            scrollbar-horizontal scrollbar-small scrollbar-vertical scrollbarbutton-down
+                            scrollbarbutton-left scrollbarbutton-right scrollbarbutton-up scrollbarthumb-horizontal
+                            scrollbarthumb-vertical scrollbartrack-horizontal scrollbartrack-vertical searchfield
+                            separator spinner spinner-downbutton spinner-textfield spinner-upbutton splitter statusbar
+                            statusbarpanel tab tabpanel tabpanels tab-scroll-arrow-back tab-scroll-arrow-forward
+                            textfield textfield-multiline toolbar toolbarbutton toolbarbutton-dropdown toolbargripper
+                            toolbox tooltip treeheader treeheadercell treeheadersortarrow treeitem treeline treetwisty
+                            treetwistyopen treeview window
+                            -moz-gtk-info-bar -moz-mac-active-source-list-selection -moz-mac-disclosure-button-closed
+                            -moz-mac-disclosure-button-open -moz-mac-fullscreen-button -moz-mac-help-button
+                            -moz-mac-source-list -moz-mac-source-list-selection -moz-mac-vibrancy-dark
+                            -moz-mac-vibrancy-light -moz-win-borderless-glass -moz-win-browsertabbar-toolbox
                             -moz-win-communications-toolbox -moz-win-exclude-glass -moz-win-glass -moz-win-media-toolbox
                             -moz-window-button-box -moz-window-button-box-maximized -moz-window-button-close
                             -moz-window-button-maximize -moz-window-button-minimize -moz-window-button-restore
@@ -2432,6 +2355,7 @@ ${helpers.single_keyword("-moz-appearance",
 
 ${helpers.predefined_type("-moz-binding", "UrlOrNone", "Either::Second(None_)",
                           products="gecko",
+                          boxed="True" if product == "gecko" else "False",
                           animation_value_type="none",
                           gecko_ffi_name="mBinding",
                           spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-binding)",
@@ -2450,7 +2374,6 @@ ${helpers.single_keyword("-moz-orient",
     use cssparser::serialize_identifier;
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::computed::ComputedValueAsSpecified;
 
     impl ComputedValueAsSpecified for SpecifiedValue {}
@@ -2523,7 +2446,6 @@ ${helpers.predefined_type("shape-outside", "basic_shape::ShapeWithShapeBox",
     use gecko_bindings::structs;
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::computed::ComputedValueAsSpecified;
 
     impl ComputedValueAsSpecified for SpecifiedValue {}

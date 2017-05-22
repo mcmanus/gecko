@@ -373,10 +373,10 @@ if (this.addMessageListener) {
   // Ignore ok/is in commonInit since they aren't defined in a chrome script.
   ok = is = () => {}; // eslint-disable-line no-native-reassign
 
+  Cu.import("resource://gre/modules/AppConstants.jsm");
   Cu.import("resource://gre/modules/LoginHelper.jsm");
   Cu.import("resource://gre/modules/LoginManagerParent.jsm");
   Cu.import("resource://gre/modules/Services.jsm");
-  Cu.import("resource://gre/modules/Task.jsm");
 
   function onStorageChanged(subject, topic, data) {
     sendAsyncMessage("storageChanged", {
@@ -398,23 +398,29 @@ if (this.addMessageListener) {
   addMessageListener("setupParent", ({selfFilling = false} = {selfFilling: false}) => {
     // Force LoginManagerParent to init for the tests since it's normally delayed
     // by apps such as on Android.
-    LoginManagerParent.init();
+    if (AppConstants.platform == "android") {
+      LoginManagerParent.init();
+    }
 
     commonInit(selfFilling);
     sendAsyncMessage("doneSetup");
   });
 
-  addMessageListener("loadRecipes", Task.async(function*(recipes) {
-    var recipeParent = yield LoginManagerParent.recipeParentPromise;
-    yield recipeParent.load(recipes);
-    sendAsyncMessage("loadedRecipes", recipes);
-  }));
+  addMessageListener("loadRecipes", function(recipes) {
+    (async function() {
+      var recipeParent = await LoginManagerParent.recipeParentPromise;
+      await recipeParent.load(recipes);
+      sendAsyncMessage("loadedRecipes", recipes);
+    })();
+  });
 
-  addMessageListener("resetRecipes", Task.async(function*() {
-    let recipeParent = yield LoginManagerParent.recipeParentPromise;
-    yield recipeParent.reset();
-    sendAsyncMessage("recipesReset");
-  }));
+  addMessageListener("resetRecipes", function() {
+    (async function() {
+      let recipeParent = await LoginManagerParent.recipeParentPromise;
+      await recipeParent.reset();
+      sendAsyncMessage("recipesReset");
+    })();
+  });
 
   addMessageListener("proxyLoginManager", msg => {
     // Recreate nsILoginInfo objects from vanilla JS objects.

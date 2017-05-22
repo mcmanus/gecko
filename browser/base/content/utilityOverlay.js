@@ -18,13 +18,17 @@ XPCOMUtils.defineLazyServiceGetter(this, "aboutNewTabService",
                                    "@mozilla.org/browser/aboutnewtab-service;1",
                                    "nsIAboutNewTabService");
 
-this.__defineGetter__("BROWSER_NEW_TAB_URL", () => {
-  if (PrivateBrowsingUtils.isWindowPrivate(window) &&
-      !PrivateBrowsingUtils.permanentPrivateBrowsing &&
-      !aboutNewTabService.overridden) {
-    return "about:privatebrowsing";
-  }
-  return aboutNewTabService.newTabURL;
+Object.defineProperty(this, "BROWSER_NEW_TAB_URL", {
+  configurable: true,
+  enumerable: true,
+  get() {
+    if (PrivateBrowsingUtils.isWindowPrivate(window) &&
+        !PrivateBrowsingUtils.permanentPrivateBrowsing &&
+        !aboutNewTabService.overridden) {
+      return "about:privatebrowsing";
+    }
+    return aboutNewTabService.newTabURL;
+  },
 });
 
 var TAB_DROP_TYPE = "application/x-moz-tabbrowser-tab";
@@ -711,6 +715,12 @@ function openAboutDialog() {
 }
 
 function openPreferences(paneID, extraArgs) {
+  let histogram = Services.telemetry.getHistogramById("FX_PREFERENCES_OPENED_VIA");
+  if (extraArgs && extraArgs.origin) {
+    histogram.add(extraArgs.origin);
+  } else {
+    histogram.add("other");
+  }
   function switchToAdvancedSubPane(doc) {
     if (extraArgs && extraArgs["advancedTab"]) {
       let advancedPaneTabs = doc.getElementById("advancedPrefs");
@@ -776,8 +786,8 @@ function openPreferences(paneID, extraArgs) {
   }
 }
 
-function openAdvancedPreferences(tabID) {
-  openPreferences("paneAdvanced", { "advancedTab": tabID });
+function openAdvancedPreferences(tabID, origin) {
+  openPreferences("paneAdvanced", { "advancedTab": tabID, origin });
 }
 
 /**

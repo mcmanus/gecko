@@ -96,6 +96,16 @@ JS_PCToLineNumber(JSScript* script, jsbytecode* pc, unsigned* columnp = nullptr)
 extern JS_FRIEND_API(bool)
 JS_IsDeadWrapper(JSObject* obj);
 
+/**
+ * Creates a new dead wrapper object in the given scope. To be used when
+ * attempting to wrap objects from scopes which are already dead.
+ *
+ * If origObject is passed, it must be an proxy object, and will be
+ * used to determine the characteristics of the new dead wrapper.
+ */
+extern JS_FRIEND_API(JSObject*)
+JS_NewDeadWrapper(JSContext* cx, JSObject* origObject = nullptr);
+
 /*
  * Used by the cycle collector to trace through a shape or object group and
  * all cycle-participating data it reaches, using bounded stack space.
@@ -382,6 +392,33 @@ SetSourceHook(JSContext* cx, mozilla::UniquePtr<SourceHook> hook);
 extern JS_FRIEND_API(mozilla::UniquePtr<SourceHook>)
 ForgetSourceHook(JSContext* cx);
 
+/**
+ * Use the runtime's internal handling of job queues for Promise jobs.
+ *
+ * Most embeddings, notably web browsers, will have their own task scheduling
+ * systems and need to integrate handling of Promise jobs into that, so they
+ * will want to manage job queues themselves. For basic embeddings such as the
+ * JS shell that don't have an event loop of their own, it's easier to have
+ * SpiderMonkey handle job queues internally.
+ *
+ * Note that the embedding still has to trigger processing of job queues at
+ * right time(s), such as after evaluation of a script has run to completion.
+ */
+extern JS_FRIEND_API(bool)
+UseInternalJobQueues(JSContext* cx);
+
+/**
+ * Instruct the runtime to stop draining the internal job queue.
+ *
+ * Useful if the embedding is in the process of quitting in reaction to a
+ * builtin being called, or if it wants to resume executing jobs later on.
+ */
+extern JS_FRIEND_API(void)
+StopDrainingJobQueue(JSContext* cx);
+
+extern JS_FRIEND_API(void)
+RunJobs(JSContext* cx);
+
 extern JS_FRIEND_API(JS::Zone*)
 GetCompartmentZone(JSCompartment* comp);
 
@@ -639,18 +676,6 @@ inline void AssertSameCompartment(JSObject* objA, JSObject* objB) {}
 
 JS_FRIEND_API(void)
 NotifyAnimationActivity(JSObject* obj);
-
-/**
- * Return the outermost enclosing function (script) of the scripted caller.
- * This function returns nullptr in several cases:
- *  - no script is running on the context
- *  - the caller is in global or eval code
- * In particular, this function will "stop" its outermost search at eval() and
- * thus it will really return the outermost enclosing function *since the
- * innermost eval*.
- */
-JS_FRIEND_API(JSFunction*)
-GetOutermostEnclosingFunctionOfScriptedCaller(JSContext* cx);
 
 JS_FRIEND_API(JSFunction*)
 DefineFunctionWithReserved(JSContext* cx, JSObject* obj, const char* name, JSNative call,
@@ -2812,14 +2837,6 @@ typedef long
 extern JS_FRIEND_API(void)
 SetJitExceptionHandler(JitExceptionHandler handler);
 #endif
-
-/**
- * Get the nearest enclosing with environment object for a given function. If
- * the function is not scripted or is not enclosed by a with scope, returns
- * the global.
- */
-extern JS_FRIEND_API(JSObject*)
-GetNearestEnclosingWithEnvironmentObjectForFunction(JSFunction* fun);
 
 /**
  * Get the first SavedFrame object in this SavedFrame stack whose principals are

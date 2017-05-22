@@ -12,6 +12,7 @@
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/FunctionBinding.h"
 #include "mozilla/dom/Performance.h"
+#include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/StructuredCloneHolder.h"
 #include "mozilla/dom/ToJSValue.h"
 #include "mozilla/dom/WorkletGlobalScope.h"
@@ -22,7 +23,6 @@
 #include "nsGlobalWindow.h"
 #include "nsJSUtils.h"
 #include "nsNetUtil.h"
-#include "ScriptSettings.h"
 #include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
 #include "WorkerScope.h"
@@ -90,17 +90,14 @@ public:
     : mMethodName(Console::MethodLog)
     , mTimeStamp(JS_Now() / PR_USEC_PER_MSEC)
     , mStartTimerValue(0)
-    , mStartTimerStatus(false)
+    , mStartTimerStatus(Console::eTimerUnknown)
     , mStopTimerDuration(0)
-    , mStopTimerStatus(false)
+    , mStopTimerStatus(Console::eTimerUnknown)
     , mCountValue(MAX_PAGE_COUNTERS)
     , mIDType(eUnknown)
     , mOuterIDNumber(0)
     , mInnerIDNumber(0)
     , mStatus(eUnused)
-#ifdef DEBUG
-    , mOwningThread(PR_GetCurrentThread())
-#endif
   {}
 
   bool
@@ -197,8 +194,7 @@ public:
   void
   AssertIsOnOwningThread() const
   {
-    MOZ_ASSERT(mOwningThread);
-    MOZ_ASSERT(PR_GetCurrentThread() == mOwningThread);
+    NS_ASSERT_OWNINGTHREAD(ConsoleCallData);
   }
 
   JS::Heap<JSObject*> mGlobal;
@@ -221,7 +217,7 @@ public:
   // when console.time() is used.
   DOMHighResTimeStamp mStartTimerValue;
   nsString mStartTimerLabel;
-  bool mStartTimerStatus;
+  Console::TimerStatus mStartTimerStatus;
 
   // These values are set in the owning thread and they contain the duration,
   // the name and the status of the StopTimer method. If status is false,
@@ -231,7 +227,7 @@ public:
   // console.timeEnd() is called.
   double mStopTimerDuration;
   nsString mStopTimerLabel;
-  bool mStopTimerStatus;
+  Console::TimerStatus mStopTimerStatus;
 
   // These 2 values are set by IncreaseCounter on the owning thread and they are
   // used CreateCounterValue. These members are set when console.count() is
@@ -292,10 +288,6 @@ public:
     // calling ReleaseCallData().
     eToBeDeleted
   } mStatus;
-
-#ifdef DEBUG
-  PRThread* mOwningThread;
-#endif
 
 private:
   ~ConsoleCallData()
@@ -823,9 +815,6 @@ Console::Create(nsPIDOMWindowInner* aWindow, ErrorResult& aRv)
 
 Console::Console(nsPIDOMWindowInner* aWindow)
   : mWindow(aWindow)
-#ifdef DEBUG
-  , mOwningThread(PR_GetCurrentThread())
-#endif
   , mOuterID(0)
   , mInnerID(0)
   , mStatus(eUnknown)
@@ -1129,12 +1118,6 @@ Console::Assert(const GlobalObject& aGlobal, bool aCondition,
 Console::Count(const GlobalObject& aGlobal, const nsAString& aLabel)
 {
   StringMethod(aGlobal, aLabel, MethodCount, NS_LITERAL_STRING("count"));
-}
-
-/* static */ void
-Console::NoopMethod(const GlobalObject& aGlobal)
-{
-  // Nothing to do.
 }
 
 namespace {
@@ -2017,7 +2000,7 @@ Console::UnstoreGroupName(nsAString& aName)
   return true;
 }
 
-bool
+Console::TimerStatus
 Console::StartTimer(JSContext* aCx, const JS::Value& aName,
                     DOMHighResTimeStamp aTimestamp,
                     nsAString& aTimerLabel,
@@ -2029,45 +2012,41 @@ Console::StartTimer(JSContext* aCx, const JS::Value& aName,
   *aTimerValue = 0;
 
   if (NS_WARN_IF(mTimerRegistry.Count() >= MAX_PAGE_TIMERS)) {
-    return false;
+    return eTimerMaxReached;
   }
 
   JS::Rooted<JS::Value> name(aCx, aName);
   JS::Rooted<JSString*> jsString(aCx, JS::ToString(aCx, name));
   if (NS_WARN_IF(!jsString)) {
-    return false;
+    return eTimerJSException;
   }
 
   nsAutoJSString label;
   if (NS_WARN_IF(!label.init(aCx, jsString))) {
-    return false;
-  }
-
-  DOMHighResTimeStamp entry = 0;
-  if (!mTimerRegistry.Get(label, &entry)) {
-    mTimerRegistry.Put(label, aTimestamp);
-  } else {
-    aTimestamp = entry;
+    return eTimerJSException;
   }
 
   aTimerLabel = label;
+
+  DOMHighResTimeStamp entry = 0;
+  if (mTimerRegistry.Get(label, &entry)) {
+    return eTimerAlreadyExists;
+  }
+
+  mTimerRegistry.Put(label, aTimestamp);
+
   *aTimerValue = aTimestamp;
-  return true;
+  return eTimerDone;
 }
 
 JS::Value
 Console::CreateStartTimerValue(JSContext* aCx, const nsAString& aTimerLabel,
-                               bool aTimerStatus) const
+                               TimerStatus aTimerStatus) const
 {
-  if (!aTimerStatus) {
-    RootedDictionary<ConsoleTimerError> error(aCx);
+  MOZ_ASSERT(aTimerStatus != eTimerUnknown);
 
-    JS::Rooted<JS::Value> value(aCx);
-    if (!ToJSValue(aCx, error, &value)) {
-      return JS::UndefinedValue();
-    }
-
-    return value;
+  if (aTimerStatus != eTimerDone) {
+    return CreateTimerError(aCx, aTimerLabel, aTimerStatus);
   }
 
   RootedDictionary<ConsoleTimerStart> timer(aCx);
@@ -2082,7 +2061,7 @@ Console::CreateStartTimerValue(JSContext* aCx, const nsAString& aTimerLabel,
   return value;
 }
 
-bool
+Console::TimerStatus
 Console::StopTimer(JSContext* aCx, const JS::Value& aName,
                    DOMHighResTimeStamp aTimestamp,
                    nsAString& aTimerLabel,
@@ -2096,32 +2075,33 @@ Console::StopTimer(JSContext* aCx, const JS::Value& aName,
   JS::Rooted<JS::Value> name(aCx, aName);
   JS::Rooted<JSString*> jsString(aCx, JS::ToString(aCx, name));
   if (NS_WARN_IF(!jsString)) {
-    return false;
+    return eTimerJSException;
   }
 
   nsAutoJSString key;
   if (NS_WARN_IF(!key.init(aCx, jsString))) {
-    return false;
+    return eTimerJSException;
   }
+
+  aTimerLabel = key;
 
   DOMHighResTimeStamp entry = 0;
   if (NS_WARN_IF(!mTimerRegistry.Get(key, &entry))) {
-    return false;
+    return eTimerDoesntExist;
   }
 
   mTimerRegistry.Remove(key);
 
-  aTimerLabel = key;
   *aTimerDuration = aTimestamp - entry;
-  return true;
+  return eTimerDone;
 }
 
 JS::Value
 Console::CreateStopTimerValue(JSContext* aCx, const nsAString& aLabel,
-                              double aDuration, bool aStatus) const
+                              double aDuration, TimerStatus aStatus) const
 {
-  if (!aStatus) {
-    return JS::UndefinedValue();
+  if (aStatus != eTimerDone) {
+    return CreateTimerError(aCx, aLabel, aStatus);
   }
 
   RootedDictionary<ConsoleTimerEnd> timer(aCx);
@@ -2130,6 +2110,46 @@ Console::CreateStopTimerValue(JSContext* aCx, const nsAString& aLabel,
 
   JS::Rooted<JS::Value> value(aCx);
   if (!ToJSValue(aCx, timer, &value)) {
+    return JS::UndefinedValue();
+  }
+
+  return value;
+}
+
+JS::Value
+Console::CreateTimerError(JSContext* aCx, const nsAString& aLabel,
+                          TimerStatus aStatus) const
+{
+  MOZ_ASSERT(aStatus != eTimerUnknown && aStatus != eTimerDone);
+
+  RootedDictionary<ConsoleTimerError> error(aCx);
+
+  error.mName = aLabel;
+
+  switch (aStatus) {
+  case eTimerAlreadyExists:
+    error.mError.AssignLiteral("timerAlreadyExists");
+    break;
+
+  case eTimerDoesntExist:
+    error.mError.AssignLiteral("timerDoesntExist");
+    break;
+
+  case eTimerJSException:
+    error.mError.AssignLiteral("timerJSError");
+    break;
+
+  case eTimerMaxReached:
+    error.mError.AssignLiteral("maxTimersExceeded");
+    break;
+
+  default:
+    MOZ_CRASH("Unsupported status");
+    break;
+  }
+
+  JS::Rooted<JS::Value> value(aCx);
+  if (!ToJSValue(aCx, error, &value)) {
     return JS::UndefinedValue();
   }
 
@@ -2387,8 +2407,7 @@ Console::SetConsoleEventHandler(AnyCallback* aHandler)
 void
 Console::AssertIsOnOwningThread() const
 {
-  MOZ_ASSERT(mOwningThread);
-  MOZ_ASSERT(PR_GetCurrentThread() == mOwningThread);
+  NS_ASSERT_OWNINGTHREAD(Console);
 }
 
 bool

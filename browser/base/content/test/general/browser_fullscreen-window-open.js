@@ -16,7 +16,7 @@ function test() {
 
   Services.prefs.setBoolPref(PREF_DISABLE_OPEN_NEW_WINDOW, true);
 
-  let newTab = gBrowser.addTab(gHttpTestRoot + TEST_FILE);
+  let newTab = BrowserTestUtils.addTab(gBrowser, gHttpTestRoot + TEST_FILE);
   gBrowser.selectedTab = newTab;
 
   whenTabLoaded(newTab, function() {
@@ -262,7 +262,7 @@ function waitForWindowOpen(aOptions) {
 }
 
 function executeWindowOpenInContent(aParam) {
-  ContentTask.spawn(gBrowser.selectedBrowser, JSON.stringify(aParam), function* (dataTestParam) {
+  ContentTask.spawn(gBrowser.selectedBrowser, JSON.stringify(aParam), async function(dataTestParam) {
     let testElm = content.document.getElementById("test");
     testElm.setAttribute("data-test-param", dataTestParam);
     testElm.click();

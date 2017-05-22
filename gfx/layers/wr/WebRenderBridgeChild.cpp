@@ -10,11 +10,14 @@
 #include "mozilla/layers/CompositableClient.h"
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/ImageDataSerializer.h"
+#include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/PTextureChild.h"
 #include "mozilla/webrender/WebRenderAPI.h"
 
 namespace mozilla {
 namespace layers {
+
+using namespace mozilla::gfx;
 
 WebRenderBridgeChild::WebRenderBridgeChild(const wr::PipelineId& aPipelineId)
   : mReadLockSequenceNumber(0)
@@ -99,16 +102,17 @@ WebRenderBridgeChild::DPEnd(wr::DisplayListBuilder &aBuilder,
   MOZ_ASSERT(!mDestroyed);
   MOZ_ASSERT(mIsInTransaction);
 
-  wr::BuiltDisplayList dl = aBuilder.Finalize();
+  wr::BuiltDisplayList dl;
+  WrSize contentSize;
+  aBuilder.Finalize(contentSize, dl);
   ByteBuffer dlData(Move(dl.dl));
-  ByteBuffer auxData(Move(dl.aux));
 
   if (aIsSync) {
     this->SendDPSyncEnd(aSize, mParentCommands, mDestroyedActors, GetFwdTransactionId(), aTransactionId,
-                        dlData, dl.dl_desc, auxData, dl.aux_desc, aScrollData);
+                        contentSize, dlData, dl.dl_desc, aScrollData);
   } else {
     this->SendDPEnd(aSize, mParentCommands, mDestroyedActors, GetFwdTransactionId(), aTransactionId,
-                    dlData, dl.dl_desc, auxData, dl.aux_desc, aScrollData);
+                    contentSize, dlData, dl.dl_desc, aScrollData);
   }
 
   mParentCommands.Clear();
@@ -178,16 +182,14 @@ WriteFontFileData(const uint8_t* aData, uint32_t aLength, uint32_t aIndex,
 
 void
 WebRenderBridgeChild::PushGlyphs(wr::DisplayListBuilder& aBuilder, const nsTArray<GlyphArray>& aGlyphs,
-                                 gfx::ScaledFont* aFont, const LayerPoint& aOffset, const gfx::Rect& aBounds,
-                                 const gfx::Rect& aClip)
+                                 gfx::ScaledFont* aFont, const StackingContextHelper& aSc,
+                                 const LayerRect& aBounds, const LayerRect& aClip)
 {
   MOZ_ASSERT(aFont);
   MOZ_ASSERT(!aGlyphs.IsEmpty());
 
   WrFontKey key = GetFontKeyForScaledFont(aFont);
   MOZ_ASSERT(key.mNamespace && key.mHandle);
-
-  WrClipRegion clipRegion = aBuilder.BuildClipRegion(wr::ToWrRect(aClip));
 
   for (size_t i = 0; i < aGlyphs.Length(); i++) {
     GlyphArray glyph_array = aGlyphs[i];
@@ -198,10 +200,12 @@ WebRenderBridgeChild::PushGlyphs(wr::DisplayListBuilder& aBuilder, const nsTArra
 
     for (size_t j = 0; j < glyphs.Length(); j++) {
       wr_glyph_instances[j].index = glyphs[j].mIndex;
-      wr_glyph_instances[j].point.x = glyphs[j].mPosition.x - aOffset.x;
-      wr_glyph_instances[j].point.y = glyphs[j].mPosition.y - aOffset.y;
+      wr_glyph_instances[j].point = aSc.ToRelativeWrPoint(
+              LayerPoint::FromUnknownPoint(glyphs[j].mPosition));
     }
-    aBuilder.PushText(wr::ToWrRect(aBounds),
+
+    WrClipRegionToken clipRegion = aBuilder.PushClipRegion(aSc.ToRelativeWrRect(aClip));
+    aBuilder.PushText(aSc.ToRelativeWrRect(aBounds),
                       clipRegion,
                       glyph_array.color().value(),
                       key,
@@ -322,6 +326,11 @@ WebRenderBridgeChild::AddOpDestroy(const OpDestroy& aOp)
 void
 WebRenderBridgeChild::ReleaseCompositable(const CompositableHandle& aHandle)
 {
+  if (!IPCOpen()) {
+    // This can happen if the IPC connection was torn down, because, e.g.
+    // the GPU process died.
+    return;
+  }
   if (!DestroyInTransaction(aHandle)) {
     SendReleaseCompositable(aHandle);
   }

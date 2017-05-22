@@ -80,7 +80,7 @@ def idlTypeNeedsCycleCollection(type):
         type.isObject() or
         type.isSpiderMonkeyInterface()):
         return False
-    elif type.isCallback() or type.isGeckoInterface():
+    elif type.isCallback() or type.isPromise() or type.isGeckoInterface():
         return True
     elif type.isUnion():
         return any(idlTypeNeedsCycleCollection(t) for t in type.flatMemberTypes)
@@ -424,6 +424,10 @@ def DOMClass(descriptor):
         hooks=NativePropertyHooks(descriptor))
 
 
+def InstanceReservedSlots(descriptor):
+    return INSTANCE_RESERVED_SLOTS + descriptor.interface.totalMembersInSlots
+
+
 class CGDOMJSClass(CGThing):
     """
     Generate a DOMJSClass for a given descriptor
@@ -438,7 +442,7 @@ class CGDOMJSClass(CGThing):
     def define(self):
         callHook = LEGACYCALLER_HOOK_NAME if self.descriptor.operations["LegacyCaller"] else 'nullptr'
         objectMovedHook = OBJECT_MOVED_HOOK_NAME if self.descriptor.wrapperCache else 'nullptr'
-        slotCount = INSTANCE_RESERVED_SLOTS + self.descriptor.interface.totalMembersInSlots
+        slotCount = InstanceReservedSlots(self.descriptor)
         classFlags = "JSCLASS_IS_DOMJSCLASS | JSCLASS_FOREGROUND_FINALIZE | "
         if self.descriptor.isGlobal():
             classFlags += "JSCLASS_DOM_GLOBAL | JSCLASS_GLOBAL_FLAGS_WITH_SLOTS(DOM_GLOBAL_SLOTS)"
@@ -528,9 +532,10 @@ class CGDOMProxyJSClass(CGThing):
         return ""
 
     def define(self):
+        slotCount = InstanceReservedSlots(self.descriptor)
         # We need one reserved slot (DOM_OBJECT_SLOT).
         flags = ["JSCLASS_IS_DOMJSCLASS",
-                 "JSCLASS_HAS_RESERVED_SLOTS(1)"]
+                 "JSCLASS_HAS_RESERVED_SLOTS(%d)" % slotCount]
         # We don't use an IDL annotation for JSCLASS_EMULATES_UNDEFINED because
         # we don't want people ever adding that to any interface other than
         # HTMLAllCollection.  So just hardcode it here.
@@ -1656,10 +1661,30 @@ class CGAddPropertyHook(CGAbstractClassHook):
 
 def finalizeHook(descriptor, hookName, freeOp, obj):
     finalize = ""
+    if descriptor.interface.getExtendedAttribute('OverrideBuiltins'):
+        finalize += fill(
+            """
+            // Either our proxy created an expando object or not.  If it did,
+            // then we would have preserved ourselves, and hence if we're going
+            // away so is our C++ object and we should reset its expando value.
+            // It's possible that in this situation the C++ object's reflector
+            // pointer has been nulled out, but if not it's pointing to us.  If
+            // our proxy did _not_ create an expando object then it's possible
+            // that we're no longer the reflector for our C++ object (and
+            // incremental finalization is finally getting to us), and that in
+            // the meantime the new reflector has created an expando object.
+            // In that case we do NOT want to clear the expando pointer in the
+            // C++ object.
+            //
+            // It's important to do this before we ClearWrapper, of course.
+            JSObject* reflector = self->GetWrapperMaybeDead();
+            if (!reflector || reflector == ${obj}) {
+              self->mExpandoAndGeneration.expando = JS::UndefinedValue();
+            }
+            """,
+            obj=obj)
     if descriptor.wrapperCache:
         finalize += "ClearWrapper(self, self, %s);\n" % obj
-    if descriptor.interface.getExtendedAttribute('OverrideBuiltins'):
-        finalize += "self->mExpandoAndGeneration.expando = JS::UndefinedValue();\n"
     if descriptor.isGlobal():
         finalize += "mozilla::dom::FinalizeGlobal(CastToJSFreeOp(%s), %s);\n" % (freeOp, obj)
     finalize += ("AddForDeferredFinalization<%s>(self);\n" %
@@ -3738,17 +3763,6 @@ class CGWrapWithCacheMethod(CGAbstractMethod):
         self.properties = properties
 
     def definition_body(self):
-        if self.descriptor.proxy:
-            preserveWrapper = dedent(
-                """
-                // For DOM proxies, the only reliable way to preserve the wrapper
-                // is to force creation of the expando object.
-                JS::Rooted<JSObject*> unused(aCx,
-                  DOMProxyHandler::EnsureExpandoObject(aCx, aReflector));
-                """)
-        else:
-            preserveWrapper = "PreserveWrapper(aObject);\n"
-
         failureCode = dedent(
             """
             aCache->ReleaseWrapper(aObject);
@@ -3804,7 +3818,7 @@ class CGWrapWithCacheMethod(CGAbstractMethod):
             // somewhat common) to have a non-null aGivenProto which is the
             // same as canonicalProto.
             if (proto != canonicalProto) {
-              $*{preserveWrapper}
+              PreserveWrapper(aObject);
             }
 
             return true;
@@ -3816,8 +3830,7 @@ class CGWrapWithCacheMethod(CGAbstractMethod):
                                                             failureCode),
             slots=InitMemberSlots(self.descriptor, failureCode),
             setImmutablePrototype=SetImmutablePrototype(self.descriptor,
-                                                        failureCode),
-            preserveWrapper=preserveWrapper)
+                                                        failureCode))
 
 
 class CGWrapMethod(CGAbstractMethod):
@@ -7798,6 +7811,15 @@ class CGPerSignatureCall(CGThing):
                              self.descriptor.interface.identifier.name,
                              self.idlNode.identifier.name))
         if setSlot:
+            if self.idlNode.isStatic():
+                raise TypeError(
+                    "Attribute %s.%s is static, so we don't have a useful slot "
+                    "to cache it in, because we don't have support for that on "
+                    "interface objects.  See "
+                    "https://bugzilla.mozilla.org/show_bug.cgi?id=1363870" %
+                    (self.descriptor.interface.identifier.name,
+                     self.idlNode.identifier.name))
+
             # When using a slot on the Xray expando, we need to make sure that
             # our initial conversion to a JS::Value is done in the caller
             # compartment.  When using a slot on our reflector, we want to do
@@ -12700,10 +12722,6 @@ class CGDescriptor(CGThing):
 
         if descriptor.concrete:
             if descriptor.proxy:
-                if descriptor.interface.totalMembersInSlots != 0:
-                    raise TypeError("We can't have extra reserved slots for "
-                                    "proxy interface %s" %
-                                    descriptor.interface.identifier.name)
                 cgThings.append(CGGeneric(fill(
                     """
                     static_assert(IsBaseOf<nsISupports, ${nativeType} >::value,
@@ -12724,8 +12742,9 @@ class CGDescriptor(CGThing):
             else:
                 cgThings.append(CGDOMJSClass(descriptor))
                 cgThings.append(CGGetJSClassMethod(descriptor))
-                if descriptor.interface.hasMembersInSlots():
-                    cgThings.append(CGUpdateMemberSlotsMethod(descriptor))
+
+            if descriptor.interface.hasMembersInSlots():
+                cgThings.append(CGUpdateMemberSlotsMethod(descriptor))
 
             if descriptor.isGlobal():
                 assert descriptor.wrapperCache

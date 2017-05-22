@@ -47,10 +47,6 @@ const ACTIVITY_TYPE = {
 
 // The panel's window global is an EventEmitter firing the following events:
 const EVENTS = {
-  // When the monitored target begins and finishes navigating.
-  TARGET_WILL_NAVIGATE: "NetMonitor:TargetWillNavigate",
-  TARGET_DID_NAVIGATE: "NetMonitor:TargetNavigate",
-
   // When a network or timeline event is received.
   // See https://developer.mozilla.org/docs/Tools/Web_Console/remoting for
   // more information about what each packet is supposed to deliver.
@@ -93,8 +89,7 @@ const EVENTS = {
   UPDATING_RESPONSE_CONTENT: "NetMonitor:NetworkEventUpdating:ResponseContent",
   RECEIVED_RESPONSE_CONTENT: "NetMonitor:NetworkEventUpdated:ResponseContent",
 
-  // Fired once the NetMonitorController establishes a connection to the debug
-  // target.
+  // Fired once the connection is established
   CONNECTED: "connected",
 };
 
@@ -158,9 +153,54 @@ const HEADERS = [
     canFilter: true,
   },
   {
+    name: "startTime",
+    boxName: "start-time",
+    canFilter: false,
+    subMenu: "timings",
+  },
+  {
+    name: "endTime",
+    boxName: "end-time",
+    canFilter: false,
+    subMenu: "timings",
+  },
+  {
+    name: "responseTime",
+    boxName: "response-time",
+    canFilter: false,
+    subMenu: "timings",
+  },
+  {
+    name: "duration",
+    canFilter: false,
+    subMenu: "timings",
+  },
+  {
+    name: "latency",
+    canFilter: false,
+    subMenu: "timings",
+  },
+  {
     name: "waterfall",
     canFilter: false,
   }
+];
+
+const HEADER_FILTERS = HEADERS
+  .filter(h => h.canFilter)
+  .map(h => h.filterKey || h.name);
+
+const FILTER_FLAGS = [
+  ...HEADER_FILTERS,
+  "set-cookie-domain",
+  "set-cookie-name",
+  "set-cookie-value",
+  "mime-type",
+  "larger-than",
+  "transferred-larger-than",
+  "is",
+  "has-response-header",
+  "regexp",
 ];
 
 const REQUESTS_WATERFALL = {
@@ -185,6 +225,7 @@ const general = {
   EVENTS,
   FILTER_SEARCH_DELAY: 200,
   HEADERS,
+  FILTER_FLAGS,
   SOURCE_EDITOR_SYNTAX_HIGHLIGHT_MAX_SIZE: 51200, // 50 KB in bytes
   REQUESTS_WATERFALL,
 };

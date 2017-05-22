@@ -5,19 +5,55 @@
 //! Tests for parsing and serialization of values/properties
 
 use cssparser::Parser;
+use euclid::size::TypedSize2D;
 use media_queries::CSSErrorReporterTest;
 use style::context::QuirksMode;
-use style::parser::{LengthParsingMode, ParserContext};
+use style::font_metrics::ServoMetricsProvider;
+use style::media_queries::{Device, MediaType};
+use style::parser::{PARSING_MODE_DEFAULT, ParserContext};
+use style::properties::{ComputedValues, StyleBuilder};
 use style::stylesheets::{CssRuleType, Origin};
+use style::values::computed::{Context, ToComputedValue};
+use style_traits::ToCss;
 
 fn parse<T, F: Fn(&ParserContext, &mut Parser) -> Result<T, ()>>(f: F, s: &str) -> Result<T, ()> {
     let url = ::servo_url::ServoUrl::parse("http://localhost").unwrap();
     let reporter = CSSErrorReporterTest;
     let context = ParserContext::new(Origin::Author, &url, &reporter, Some(CssRuleType::Style),
-                                     LengthParsingMode::Default,
+                                     PARSING_MODE_DEFAULT,
                                      QuirksMode::NoQuirks);
     let mut parser = Parser::new(s);
     f(&context, &mut parser)
+}
+
+fn parse_entirely<T, F: Fn(&ParserContext, &mut Parser) -> Result<T, ()>>(f: F, s: &str) -> Result<T, ()> {
+    parse(|context, parser| parser.parse_entirely(|p| f(context, p)), s)
+}
+
+fn assert_computed_serialization<C, F, T>(f: F, input: &str, output: &str)
+    where F: Fn(&ParserContext, &mut Parser) -> Result<T, ()>,
+          T: ToComputedValue<ComputedValue=C>, C: ToCss
+{
+    let viewport_size = TypedSize2D::new(0., 0.);
+    let initial_style = ComputedValues::initial_values();
+    let device = Device::new(MediaType::Screen, viewport_size);
+
+    let context = Context {
+        is_root_element: true,
+        device: &device,
+        inherited_style: initial_style,
+        layout_parent_style: initial_style,
+        style: StyleBuilder::for_derived_style(&initial_style),
+        cached_system_font: None,
+        font_metrics_provider: &ServoMetricsProvider,
+        in_media_query: false,
+        quirks_mode: QuirksMode::NoQuirks,
+    };
+
+    let parsed = parse(f, input).unwrap();
+    let computed = parsed.to_computed_value(&context);
+    let serialized = ToCss::to_css_string(&computed);
+    assert_eq!(serialized, output);
 }
 
 // This is a macro so that the file/line information
@@ -101,6 +137,7 @@ mod selectors;
 mod supports;
 mod text;
 mod text_overflow;
+mod transition_duration;
 mod transition_property;
 mod transition_timing_function;
 mod ui;

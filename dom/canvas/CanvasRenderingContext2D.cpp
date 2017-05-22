@@ -1081,7 +1081,7 @@ NS_INTERFACE_MAP_END
 
 
 // Initialize our static variables.
-uint32_t CanvasRenderingContext2D::sNumLivingContexts = 0;
+uintptr_t CanvasRenderingContext2D::sNumLivingContexts = 0;
 DrawTarget* CanvasRenderingContext2D::sErrorTarget = nullptr;
 static bool sMaxContextsInitialized = false;
 static int32_t sMaxContexts = 0;
@@ -2808,7 +2808,11 @@ CreateDeclarationForServo(nsCSSPropertyID aProperty,
   NS_ConvertUTF16toUTF8 value(aPropertyValue);
 
   RefPtr<RawServoDeclarationBlock> servoDeclarations =
-    Servo_ParseProperty(aProperty, &value, data).Consume();
+    Servo_ParseProperty(aProperty,
+                        &value,
+                        data,
+                        ParsingMode::Default,
+                        aDocument->GetCompatibilityMode()).Consume();
 
   if (!servoDeclarations) {
     // We got a syntax error.  The spec says this value must be ignored.
@@ -2824,7 +2828,8 @@ CreateDeclarationForServo(nsCSSPropertyID aProperty,
                                            &normalString,
                                            false,
                                            data,
-                                           LengthParsingMode::Default);
+                                           ParsingMode::Default,
+                                           aDocument->GetCompatibilityMode());
   }
 
   return servoDeclarations.forget();
@@ -2871,7 +2876,9 @@ GetFontStyleForServo(Element* aElement, const nsAString& aFont,
     // We need to use ResolveTransientServoStyle, which involves traversal,
     // instead of ResolveServoStyle() because we need up-to-date style even if
     // the canvas element is display:none.
-    parentStyle = styleSet->ResolveTransientServoStyle(aElement, nullptr);
+    parentStyle =
+      styleSet->ResolveTransientServoStyle(aElement,
+                                           CSSPseudoElementType::NotPseudo);
   } else {
     RefPtr<RawServoDeclarationBlock> declarations =
       CreateFontDeclarationForServo(NS_LITERAL_STRING("10px sans-serif"),
@@ -2894,9 +2901,7 @@ GetFontStyleForServo(Element* aElement, const nsAString& aFont,
   // parsed (including having line-height removed).  (Older drafts of
   // the spec required font sizes be converted to pixels, but that no
   // longer seems to be required.)
-  Servo_DeclarationBlock_SerializeOneValue(declarations,
-                                           eCSSProperty_font,
-                                           &aOutUsedFont);
+  Servo_SerializeFontValueForCanvas(declarations, &aOutUsedFont);
 
   return sc.forget();
 }
@@ -4266,17 +4271,18 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor : public nsBidiPresUtils::BidiProcess
   {
     mFontgrp->UpdateUserFonts(); // ensure user font generation is current
     // adjust flags for current direction run
-    uint32_t flags = mTextRunFlags;
+    gfx::ShapedTextFlags flags = mTextRunFlags;
     if (aDirection == NSBIDI_RTL) {
-      flags |= gfxTextRunFactory::TEXT_IS_RTL;
+      flags |= gfx::ShapedTextFlags::TEXT_IS_RTL;
     } else {
-      flags &= ~gfxTextRunFactory::TEXT_IS_RTL;
+      flags &= ~gfx::ShapedTextFlags::TEXT_IS_RTL;
     }
     mTextRun = mFontgrp->MakeTextRun(aText,
                                      aLength,
                                      mDrawTarget,
                                      mAppUnitsPerDevPixel,
                                      flags,
+                                     nsTextFrameUtils::Flags(),
                                      mMissingFonts);
   }
 
@@ -4489,7 +4495,7 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor : public nsBidiPresUtils::BidiProcess
   gfxRect mBoundingBox;
 
   // flags to use when creating textrun, based on CSS style
-  uint32_t mTextRunFlags;
+  gfx::ShapedTextFlags mTextRunFlags;
 
   // true iff the bounding box should be measured
   bool mDoMeasureBoundingBox;
@@ -4577,11 +4583,12 @@ CanvasRenderingContext2D::DrawOrMeasureText(const nsAString& aRawText,
 
   // If we don't have a style context, we can't set up vertical-text flags
   // (for now, at least; perhaps we need new Canvas API to control this).
-  processor.mTextRunFlags = canvasStyle ?
-    nsLayoutUtils::GetTextRunFlagsForStyle(canvasStyle,
-                                           canvasStyle->StyleFont(),
-                                           canvasStyle->StyleText(),
-                                           0) : 0;
+  processor.mTextRunFlags = canvasStyle
+    ? nsLayoutUtils::GetTextRunFlagsForStyle(canvasStyle,
+                                             canvasStyle->StyleFont(),
+                                             canvasStyle->StyleText(),
+                                             0)
+    : gfx::ShapedTextFlags();
 
   GetAppUnitsValues(&processor.mAppUnitsPerDevPixel, nullptr);
   processor.mPt = gfxPoint(aX, aY);
@@ -4675,11 +4682,11 @@ CanvasRenderingContext2D::DrawOrMeasureText(const nsAString& aRawText,
 
   // We can't query the textRun directly, as it may not have been created yet;
   // so instead we check the flags that will be used to initialize it.
-  uint16_t runOrientation =
-    (processor.mTextRunFlags & gfxTextRunFactory::TEXT_ORIENT_MASK);
-  if (runOrientation != gfxTextRunFactory::TEXT_ORIENT_HORIZONTAL) {
-    if (runOrientation == gfxTextRunFactory::TEXT_ORIENT_VERTICAL_MIXED ||
-        runOrientation == gfxTextRunFactory::TEXT_ORIENT_VERTICAL_UPRIGHT) {
+  gfx::ShapedTextFlags runOrientation =
+    (processor.mTextRunFlags & gfx::ShapedTextFlags::TEXT_ORIENT_MASK);
+  if (runOrientation != gfx::ShapedTextFlags::TEXT_ORIENT_HORIZONTAL) {
+    if (runOrientation == gfx::ShapedTextFlags::TEXT_ORIENT_VERTICAL_MIXED ||
+        runOrientation == gfx::ShapedTextFlags::TEXT_ORIENT_VERTICAL_UPRIGHT) {
       // Adjust to account for mTextRun being shaped using center baseline
       // rather than alphabetic.
       baselineAnchor -= (fontMetrics.emAscent - fontMetrics.emDescent) * .5f;

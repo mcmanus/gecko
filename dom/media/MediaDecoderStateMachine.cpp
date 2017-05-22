@@ -360,8 +360,8 @@ public:
     // a raw pointer here.
     Reader()->ReadMetadata()
       ->Then(OwnerThread(), __func__,
-        [this] (MetadataHolder* aMetadata) {
-          OnMetadataRead(aMetadata);
+        [this] (MetadataHolder&& aMetadata) {
+          OnMetadataRead(Move(aMetadata));
         },
         [this] (const MediaResult& aError) {
           OnMetadataNotRead(aError);
@@ -397,7 +397,7 @@ public:
   }
 
 private:
-  void OnMetadataRead(MetadataHolder* aMetadata);
+  void OnMetadataRead(MetadataHolder&& aMetadata);
 
   void OnMetadataNotRead(const MediaResult& aError)
   {
@@ -491,9 +491,14 @@ public:
     RefPtr<MediaDecoder::SeekPromise> x =
       mPendingSeek.mPromise.Ensure(__func__);
 
-    mMaster->ResetDecode();
-    mMaster->StopMediaSink();
-    mMaster->mReader->ReleaseResources();
+    // No need to call ResetDecode() and StopMediaSink() here.
+    // We will do them during seeking when exiting dormant.
+
+    // Ignore WAIT_FOR_DATA since we won't decode in dormant.
+    mMaster->mAudioWaitRequest.DisconnectIfExists();
+    mMaster->mVideoWaitRequest.DisconnectIfExists();
+
+    MaybeReleaseResources();
   }
 
   void Exit() override
@@ -520,7 +525,50 @@ public:
 
   void HandlePlayStateChanged(MediaDecoder::PlayState aPlayState) override;
 
+  void HandleAudioDecoded(AudioData*) override
+  {
+    MaybeReleaseResources();
+  }
+  void HandleVideoDecoded(VideoData*, TimeStamp) override
+  {
+    MaybeReleaseResources();
+  }
+  void HandleWaitingForAudio() override
+  {
+    MaybeReleaseResources();
+  }
+  void HandleWaitingForVideo() override
+  {
+    MaybeReleaseResources();
+  }
+  void HandleAudioCanceled() override
+  {
+    MaybeReleaseResources();
+  }
+  void HandleVideoCanceled() override
+  {
+    MaybeReleaseResources();
+  }
+  void HandleEndOfAudio() override
+  {
+    MaybeReleaseResources();
+  }
+  void HandleEndOfVideo() override
+  {
+    MaybeReleaseResources();
+  }
+
 private:
+  void MaybeReleaseResources()
+  {
+    if (!mMaster->mAudioDataRequest.Exists() &&
+        !mMaster->mVideoDataRequest.Exists()) {
+      // Release decoders only when they are idle. Otherwise it might cause
+      // decode error later when resetting decoders during seeking.
+      mMaster->mReader->ReleaseResources();
+    }
+  }
+
   SeekJob mPendingSeek;
 };
 
@@ -2082,15 +2130,14 @@ StateObject::SetSeekingState(SeekJob&& aSeekJob, EventVisibility aVisibility)
 
 void
 MediaDecoderStateMachine::
-DecodeMetadataState::OnMetadataRead(MetadataHolder* aMetadata)
+DecodeMetadataState::OnMetadataRead(MetadataHolder&& aMetadata)
 {
   mMetadataRequest.Complete();
 
   // Set mode to PLAYBACK after reading metadata.
   Resource()->SetReadMode(MediaCacheStream::MODE_PLAYBACK);
 
-  mMaster->mInfo.emplace(aMetadata->mInfo);
-  mMaster->mMetadataTags = aMetadata->mTags.forget();
+  mMaster->mInfo.emplace(*aMetadata.mInfo);
   mMaster->mMediaSeekable = Info().mMediaSeekable;
   mMaster->mMediaSeekableOnlyInBufferedRanges =
     Info().mMediaSeekableOnlyInBufferedRanges;
@@ -2118,7 +2165,10 @@ DecodeMetadataState::OnMetadataRead(MetadataHolder* aMetadata)
 
   MOZ_ASSERT(mMaster->mDuration.Ref().isSome());
 
-  mMaster->EnqueueLoadedMetadataEvent();
+  mMaster->mMetadataLoadedEvent.Notify(
+    Move(aMetadata.mInfo),
+    Move(aMetadata.mTags),
+    MediaDecoderEventVisibility::Observable);
 
   if (Info().IsEncrypted() && !mMaster->mCDMProxy) {
     // Metadata parsing was successful but we're still waiting for CDM caps
@@ -2633,7 +2683,6 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
   mAmpleAudioThreshold(detail::AMPLE_AUDIO_THRESHOLD),
   mAudioCaptured(false),
   mMinimizePreroll(aDecoder->GetMinimizePreroll()),
-  mSentLoadedMetadataEvent(false),
   mSentFirstFrameLoadedEvent(false),
   mVideoDecodeSuspended(false),
   mVideoDecodeSuspendTimer(mTaskQueue),
@@ -2658,20 +2707,14 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
   INIT_CANONICAL(mCurrentPosition, TimeUnit::Zero()),
   INIT_CANONICAL(mPlaybackOffset, 0),
   INIT_CANONICAL(mIsAudioDataAudible, false)
+#ifdef XP_WIN
+  , mShouldUseHiResTimers(Preferences::GetBool("media.hi-res-timers.enabled", true))
+#endif
 {
   MOZ_COUNT_CTOR(MediaDecoderStateMachine);
   NS_ASSERTION(NS_IsMainThread(), "Should be on main thread.");
 
   InitVideoQueuePrefs();
-
-#ifdef XP_WIN
-  // Ensure high precision timers are enabled on Windows, otherwise the state
-  // machine isn't woken up at reliable intervals to set the next frame, and we
-  // drop frames while painting. Note that multiple calls to this function
-  // per-process is OK, provided each call is matched by a corresponding
-  // timeEndPeriod() call.
-  timeBeginPeriod(1);
-#endif
 }
 
 #undef INIT_WATCHABLE
@@ -2684,7 +2727,7 @@ MediaDecoderStateMachine::~MediaDecoderStateMachine()
   MOZ_COUNT_DTOR(MediaDecoderStateMachine);
 
 #ifdef XP_WIN
-  timeEndPeriod(1);
+  MOZ_ASSERT(!mHiResTimersRequested);
 #endif
 }
 
@@ -2895,6 +2938,12 @@ MediaDecoderStateMachine::StopPlayback()
   if (IsPlaying()) {
     mMediaSink->SetPlaying(false);
     MOZ_ASSERT(!IsPlaying());
+#ifdef XP_WIN
+    if (mHiResTimersRequested) {
+      mHiResTimersRequested = false;
+      timeEndPeriod(1);
+    }
+#endif
   }
 }
 
@@ -2917,6 +2966,20 @@ void MediaDecoderStateMachine::MaybeStartPlayback()
   LOG("MaybeStartPlayback() starting playback");
   mOnPlaybackEvent.Notify(MediaEventType::PlaybackStarted);
   StartMediaSink();
+
+#ifdef XP_WIN
+  if (!mHiResTimersRequested && mShouldUseHiResTimers) {
+    mHiResTimersRequested = true;
+    // Ensure high precision timers are enabled on Windows, otherwise the state
+    // machine isn't woken up at reliable intervals to set the next frame, and we
+    // drop frames while painting. Note that each call must be matched by a
+    // corresponding timeEndPeriod() call. Enabling high precision timers causes
+    // the CPU to wake up more frequently on Windows 7 and earlier, which causes
+    // more CPU load and battery use. So we only enable high precision timers
+    // when we're actually playing.
+    timeBeginPeriod(1);
+  }
+#endif
 
   if (!IsPlaying()) {
     mMediaSink->SetPlaying(true);
@@ -3141,7 +3204,7 @@ MediaDecoderStateMachine::Seek(const SeekTarget& aTarget)
 RefPtr<MediaDecoder::SeekPromise>
 MediaDecoderStateMachine::InvokeSeek(const SeekTarget& aTarget)
 {
-  return InvokeAsync<SeekTarget&&>(
+  return InvokeAsync(
            OwnerThread(), this, __func__,
            &MediaDecoderStateMachine::Seek, aTarget);
 }
@@ -3172,7 +3235,7 @@ MediaDecoderStateMachine::RequestAudioData()
   RefPtr<MediaDecoderStateMachine> self = this;
   mReader->RequestAudioData()->Then(
     OwnerThread(), __func__,
-    [this, self] (AudioData* aAudio) {
+    [this, self] (RefPtr<AudioData> aAudio) {
       MOZ_ASSERT(aAudio);
       mAudioDataRequest.Complete();
       // audio->GetEndTime() is not always mono-increasing in chained ogg.
@@ -3219,7 +3282,7 @@ MediaDecoderStateMachine::RequestVideoData(bool aSkipToNextKeyframe,
   RefPtr<MediaDecoderStateMachine> self = this;
   mReader->RequestVideoData(aSkipToNextKeyframe, aCurrentTime)->Then(
     OwnerThread(), __func__,
-    [this, self, videoDecodeStartTime] (VideoData* aVideo) {
+    [this, self, videoDecodeStartTime] (RefPtr<VideoData> aVideo) {
       MOZ_ASSERT(aVideo);
       mVideoDataRequest.Complete();
       // Handle abnormal or negative timestamps.
@@ -3402,19 +3465,6 @@ MediaDecoderStateMachine::DecodeError(const MediaResult& aError)
   LOGW("Decode error");
   // Notify the decode error and MediaDecoder will shut down MDSM.
   mOnPlaybackErrorEvent.Notify(aError);
-}
-
-void
-MediaDecoderStateMachine::EnqueueLoadedMetadataEvent()
-{
-  MOZ_ASSERT(OnTaskQueue());
-  MediaDecoderEventVisibility visibility =
-    mSentLoadedMetadataEvent ? MediaDecoderEventVisibility::Suppressed
-                             : MediaDecoderEventVisibility::Observable;
-  mMetadataLoadedEvent.Notify(nsAutoPtr<MediaInfo>(new MediaInfo(Info())),
-                              Move(mMetadataTags),
-                              visibility);
-  mSentLoadedMetadataEvent = true;
 }
 
 void

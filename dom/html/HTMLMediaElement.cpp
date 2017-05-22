@@ -96,11 +96,18 @@
 #include "DecoderDoctorDiagnostics.h"
 #include "DecoderTraits.h"
 #include "MediaContainerType.h"
+#include "MP4Decoder.h"
 
 #include "ImageContainer.h"
 #include "nsRange.h"
 #include <algorithm>
 #include <cmath>
+#ifdef XP_WIN
+#include "objbase.h"
+// Some Windows header defines this, so undef it as it conflicts with our
+// function of the same name.
+#undef GetCurrentTime
+#endif
 
 static mozilla::LazyLogModule gMediaElementLog("nsMediaElement");
 static mozilla::LazyLogModule gMediaElementEventsLog("nsMediaElementEvents");
@@ -682,6 +689,8 @@ public:
     MOZ_ASSERT(!mIsShutDown);
     if (ShouldResetSuspend()) {
       SetSuspended(nsISuspendedTypes::NONE_SUSPENDED);
+      NotifyAudioPlaybackChanged(
+        AudioChannelService::AudibleChangedReasons::ePauseStateChanged);
     }
     UpdateAudioChannelPlayingState();
   }
@@ -1050,6 +1059,11 @@ private:
       return false;
     }
 
+    // No audio track
+    if (!mOwner->HasAudio()) {
+      return false;
+    }
+
     // A loop always is playing
     if (mOwner->HasAttr(kNameSpaceID_None, nsGkAtoms::loop)) {
       return true;
@@ -1164,6 +1178,10 @@ public:
     if (aElement->mUseUrgentStartForChannel &&
         (cos = do_QueryInterface(channel))) {
       cos->AddClassFlags(nsIClassOfService::UrgentStart);
+
+      // Reset the flag to avoid loading again without initiated by user
+      // interaction.
+      aElement->mUseUrgentStartForChannel = false;
     }
 
     // The listener holds a strong reference to us.  This creates a
@@ -1210,6 +1228,7 @@ public:
     // Per bug 1235183 comment 8, we can't spin the event loop from stable
     // state. Defer NS_NewChannel() to a new regular runnable.
     return NS_DispatchToMainThread(NewRunnableMethod<HTMLMediaElement*>(
+      "ChannelLoader::LoadInternal",
       this, &ChannelLoader::LoadInternal, aElement));
   }
 
@@ -1819,7 +1838,8 @@ void HTMLMediaElement::QueueLoadFromSourceTask()
 
   ChangeDelayLoadStatus(true);
   ChangeNetworkState(nsIDOMHTMLMediaElement::NETWORK_LOADING);
-  RefPtr<Runnable> r = NewRunnableMethod(this, &HTMLMediaElement::LoadFromSourceChildren);
+  RefPtr<Runnable> r = NewRunnableMethod("HTMLMediaElement::LoadFromSourceChildren",
+                                         this, &HTMLMediaElement::LoadFromSourceChildren);
   RunInStableState(r);
 }
 
@@ -1830,7 +1850,8 @@ void HTMLMediaElement::QueueSelectResourceTask()
     return;
   mHaveQueuedSelectResource = true;
   ChangeNetworkState(nsIDOMHTMLMediaElement::NETWORK_NO_SOURCE);
-  RefPtr<Runnable> r = NewRunnableMethod(this, &HTMLMediaElement::SelectResourceWrapper);
+  RefPtr<Runnable> r = NewRunnableMethod("HTMLMediaElement::SelectResourceWrapper",
+                                         this, &HTMLMediaElement::SelectResourceWrapper);
   RunInStableState(r);
 }
 
@@ -1877,6 +1898,12 @@ void HTMLMediaElement::DoLoad()
   // view" of a gallery of videos.
   if (EventStateManager::IsHandlingUserInput()) {
     mHasUserInteraction = true;
+
+    // Mark the channel as urgent-start when autopaly so that it will play the
+    // media from src after loading enough resource.
+    if (HasAttr(kNameSpaceID_None, nsGkAtoms::autoplay)) {
+      mUseUrgentStartForChannel = true;
+    }
   }
 
   SetPlayedOrSeeked(false);
@@ -1966,7 +1993,8 @@ void HTMLMediaElement::SelectResource()
     // set the networkState to NETWORK_EMPTY, and abort these steps; the
     // synchronous section ends.
     nsCOMPtr<nsIRunnable> event =
-        NewRunnableMethod<nsCString>(this, &HTMLMediaElement::NoSupportedMediaSourceError, nsCString());
+      NewRunnableMethod<nsCString>("HTMLMediaElement::NoSupportedMediaSourceError",
+                                   this, &HTMLMediaElement::NoSupportedMediaSourceError, nsCString());
     NS_DispatchToMainThread(event);
   } else {
     // Otherwise, the source elements will be used.
@@ -2125,7 +2153,8 @@ void HTMLMediaElement::NotifyMediaTrackDisabled(MediaTrack* aTrack)
         MOZ_ASSERT(outputTrack);
         if (outputTrack) {
           NS_DispatchToMainThread(
-            NewRunnableMethod(outputTrack, &MediaStreamTrack::OverrideEnded));
+            NewRunnableMethod("MediaStreamTrack::OverrideEnded",
+                              outputTrack, &MediaStreamTrack::OverrideEnded));
         }
 
         ms.mTrackPorts[i].second()->Destroy();
@@ -2171,7 +2200,8 @@ void HTMLMediaElement::DealWithFailedElement(nsIContent* aSourceElement)
 
   DispatchAsyncSourceError(aSourceElement);
   nsCOMPtr<nsIRunnable> event =
-    NewRunnableMethod(this, &HTMLMediaElement::QueueLoadFromSourceTask);
+    NewRunnableMethod("HTMLMediaElement::QueueLoadFromSourceTask",
+                      this, &HTMLMediaElement::QueueLoadFromSourceTask);
   NS_DispatchToMainThread(event);
 }
 
@@ -3289,6 +3319,7 @@ HTMLMediaElement::AddCaptureMediaTrackToOutputStream(MediaTrack* aTrack,
   if (aAsyncAddtrack) {
     NS_DispatchToMainThread(
       NewRunnableMethod<StoreRefPtrPassByPtr<MediaStreamTrack>>(
+        "DOMMediaStream::AddTrackInternal",
         aOutputStream.mStream, &DOMMediaStream::AddTrackInternal, track));
   } else {
     aOutputStream.mStream->AddTrackInternal(track);
@@ -3330,7 +3361,7 @@ HTMLMediaElement::CaptureStreamInternal(bool aFinishWhenEnded,
   if (!window) {
     return nullptr;
   }
-  if (ContainsRestrictedContent()) {
+  if (!aCaptureAudio && ContainsRestrictedContent()) {
     return nullptr;
   }
 
@@ -4204,7 +4235,8 @@ nsresult HTMLMediaElement::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttr,
 
 nsresult
 HTMLMediaElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                const nsAttrValue* aValue, bool aNotify)
+                                const nsAttrValue* aValue,
+                                const nsAttrValue* aOldValue, bool aNotify)
 {
   if (aNameSpaceID == kNameSpaceID_None && aName == nsGkAtoms::src) {
     mSrcMediaSource = nullptr;
@@ -4226,7 +4258,7 @@ HTMLMediaElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
   }
 
   return nsGenericHTMLElement::AfterSetAttr(aNameSpaceID, aName,
-                                            aValue, aNotify);
+                                            aValue, aOldValue, aNotify);
 }
 
 nsresult HTMLMediaElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
@@ -4581,7 +4613,6 @@ nsresult HTMLMediaElement::InitializeDecoderForChannel(nsIChannel* aChannel,
                                                        nsIStreamListener** aListener)
 {
   NS_ASSERTION(mLoadingSrc, "mLoadingSrc must already be set");
-  NS_ASSERTION(mDecoder == nullptr, "Shouldn't have a decoder");
 
   nsAutoCString mimeType;
 
@@ -7057,6 +7088,7 @@ HTMLMediaElement::SetMediaInfo(const MediaInfo& aInfo)
   const bool oldHasAudio = mMediaInfo.HasAudio();
   mMediaInfo = aInfo;
   if (aInfo.HasAudio() != oldHasAudio) {
+    UpdateAudioChannelPlayingState();
     NotifyAudioPlaybackChanged(
       AudioChannelService::AudibleChangedReasons::eDataAudibleChanged);
   }
@@ -7450,6 +7482,44 @@ HTMLMediaElement::AsyncRejectSeekDOMPromiseIfExists()
     mAbstractMainThread->Dispatch(r.forget());
     mSeekDOMPromise = nullptr;
   }
+}
+
+void
+HTMLMediaElement::ReportCanPlayTelemetry()
+{
+  LOG(LogLevel::Debug, ("%s", __func__));
+
+  RefPtr<nsIThread> thread;
+  nsresult rv = NS_NewNamedThread("MediaTelemetry", getter_AddRefs(thread));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return;
+  }
+
+  thread->Dispatch(
+    NS_NewRunnableFunction([thread]() {
+#if XP_WIN
+      // Windows Media Foundation requires MSCOM to be inited.
+      HRESULT hr = CoInitializeEx(0, COINIT_MULTITHREADED);
+      MOZ_ASSERT(hr == S_OK);
+#endif
+      bool aac = MP4Decoder::IsSupportedType(
+        MediaContainerType(MEDIAMIMETYPE("audio/mp4")), nullptr);
+      bool h264 = MP4Decoder::IsSupportedType(
+        MediaContainerType(MEDIAMIMETYPE("video/mp4")), nullptr);
+#if XP_WIN
+      CoUninitialize();
+#endif
+      AbstractThread::MainThread()->Dispatch(
+        NS_NewRunnableFunction([thread, aac, h264]() {
+          LOG(LogLevel::Debug, ("MediaTelemetry aac=%d h264=%d", aac, h264));
+          Telemetry::Accumulate(
+            Telemetry::HistogramID::VIDEO_CAN_CREATE_AAC_DECODER, aac);
+          Telemetry::Accumulate(
+            Telemetry::HistogramID::VIDEO_CAN_CREATE_H264_DECODER, h264);
+          thread->AsyncShutdown();
+        }));
+    }),
+    NS_DISPATCH_NORMAL);
 }
 
 } // namespace dom

@@ -35,8 +35,8 @@ interface nsIDOMCrypto;
    CrossOriginReadable] readonly attribute Window self;
   [Unforgeable, StoreInSlot, Pure] readonly attribute Document? document;
   [Throws] attribute DOMString name;
-  [PutForwards=href, Unforgeable, Throws,
-   CrossOriginReadable, CrossOriginWritable] readonly attribute Location? location;
+  [PutForwards=href, Unforgeable, BinaryName="getLocation",
+   CrossOriginReadable, CrossOriginWritable] readonly attribute Location location;
   [Throws] readonly attribute History history;
   [Func="CustomElementRegistry::IsCustomElementEnabled"]
   readonly attribute CustomElementRegistry customElements;
@@ -243,6 +243,9 @@ Window implements WindowModal;
 
 // Mozilla-specific stuff
 partial interface Window {
+  //[NewObject, Throws] CSSStyleDeclaration getDefaultComputedStyle(Element elt, optional DOMString pseudoElt = "");
+  [NewObject, Throws] CSSStyleDeclaration? getDefaultComputedStyle(Element elt, optional DOMString pseudoElt = "");
+
   // Mozilla extensions
   /**
    * Method for scrolling this window by a number of lines.

@@ -14,9 +14,9 @@
 
 #include "builtin/Object.h"
 #include "jit/JitFrames.h"
+#include "proxy/Proxy.h"
 #include "vm/HelperThreads.h"
 #include "vm/Interpreter.h"
-#include "vm/ProxyObject.h"
 #include "vm/Symbol.h"
 
 namespace js {
@@ -68,9 +68,11 @@ class CompartmentChecker
     }
 
     void check(JSObject* obj) {
-        MOZ_ASSERT(JS::ObjectIsNotGray(obj));
-        if (obj)
+        if (obj) {
+            MOZ_ASSERT(JS::ObjectIsNotGray(obj));
+            MOZ_ASSERT(!js::gc::IsAboutToBeFinalizedUnbarriered(&obj));
             check(obj->compartment());
+        }
     }
 
     template<typename T>

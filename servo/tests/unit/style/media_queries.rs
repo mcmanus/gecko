@@ -6,14 +6,14 @@ use cssparser::{Parser, SourcePosition};
 use euclid::size::TypedSize2D;
 use servo_url::ServoUrl;
 use std::borrow::ToOwned;
-use std::sync::Arc;
 use style::Atom;
 use style::context::QuirksMode;
 use style::error_reporting::ParseErrorReporter;
 use style::media_queries::*;
 use style::servo::media_queries::*;
 use style::shared_lock::{SharedRwLock, SharedRwLockReadGuard};
-use style::stylesheets::{Stylesheet, Origin, CssRule};
+use style::stylearc::Arc;
+use style::stylesheets::{Stylesheet, Origin, CssRule, NestedRulesResult};
 use style::values::specified;
 use style_traits::ToCss;
 
@@ -52,11 +52,16 @@ fn media_queries<F>(guard: &SharedRwLockReadGuard, rules: &[CssRule], f: &mut F)
     where F: FnMut(&MediaList),
 {
     for rule in rules {
-        rule.with_nested_rules_and_mq(guard, |rules, mq| {
-            if let Some(mq) = mq {
-                f(mq)
+        rule.with_nested_rules_mq_and_doc_rule(guard, |result| {
+            match result {
+                NestedRulesResult::Rules(rules) |
+                NestedRulesResult::RulesWithDocument(rules, _) => {
+                    media_queries(guard, rules, f)
+                },
+                NestedRulesResult::RulesWithMediaQueries(_, mq) => {
+                    f(mq)
+                }
             }
-            media_queries(guard, rules, f)
         })
     }
 }

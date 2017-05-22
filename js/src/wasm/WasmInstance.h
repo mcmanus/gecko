@@ -62,6 +62,10 @@ typedef UniquePtr<GlobalSegment> UniqueGlobalSegment;
 // instances instantiated from the same Module. However, an Instance has no
 // direct reference to its source Module which allows a Module to be destroyed
 // while it still has live Instances.
+//
+// The instance's code may be shared among multiple instances provided none of
+// those instances are being debugged. Instances that are being debugged own
+// their code.
 
 class Instance
 {
@@ -130,6 +134,13 @@ class Instance
 
     MOZ_MUST_USE bool callExport(JSContext* cx, uint32_t funcIndex, CallArgs args);
 
+    // Return the name associated with a given function index, or generate one
+    // if none was given by the module.
+
+    bool getFuncName(uint32_t funcIndex, UTF8Bytes* name) const;
+    JSAtom* getFuncAtom(JSContext* cx, uint32_t funcIndex) const;
+    void ensureProfilingLabels(bool profilingEnabled) const;
+
     // Initially, calls to imports in wasm code call out through the generic
     // callImport method. If the imported callee gets JIT compiled and the types
     // match up, callImport will patch the code to instead call through a thunk
@@ -149,6 +160,7 @@ class Instance
     void onMovingGrowTable();
 
     // Debug support:
+
     bool debugEnabled() const { return code_->metadata().debugEnabled; }
     bool enterFrameTrapsEnabled() const { return enterFrameTrapsEnabled_; }
     void ensureEnterFrameTrapsState(JSContext* cx, bool enabled);
@@ -158,6 +170,7 @@ class Instance
     void addSizeOfMisc(MallocSizeOf mallocSizeOf,
                        Metadata::SeenSet* seenMetadata,
                        ShareableBytes::SeenSet* seenBytes,
+                       Code::SeenSet* seenCode,
                        Table::SeenSet* seenTables,
                        size_t* code,
                        size_t* data) const;

@@ -62,8 +62,6 @@ namespace places {
 
 #define DESTINATIONFILEURI_ANNO \
         NS_LITERAL_CSTRING("downloads/destinationFileURI")
-#define DESTINATIONFILENAME_ANNO \
-        NS_LITERAL_CSTRING("downloads/destinationFileName")
 
 ////////////////////////////////////////////////////////////////////////////////
 //// VisitData
@@ -1307,63 +1305,6 @@ private:
   RefPtr<History> mHistory;
 };
 
-class GetPlaceInfo final : public Runnable {
-public:
-  /**
-   * Get the place info for a given place (by GUID or URI)  asynchronously.
-   */
-  static nsresult Start(mozIStorageConnection* aConnection,
-                        VisitData& aPlace,
-                        mozIVisitInfoCallback* aCallback) {
-    MOZ_ASSERT(NS_IsMainThread(), "This should be called on the main thread");
-
-    nsMainThreadPtrHandle<mozIVisitInfoCallback>
-      callback(new nsMainThreadPtrHolder<mozIVisitInfoCallback>(aCallback));
-    RefPtr<GetPlaceInfo> event = new GetPlaceInfo(aPlace, callback);
-
-    // Get the target thread, and then start the work!
-    nsCOMPtr<nsIEventTarget> target = do_GetInterface(aConnection);
-    NS_ENSURE_TRUE(target, NS_ERROR_UNEXPECTED);
-    nsresult rv = target->Dispatch(event, NS_DISPATCH_NORMAL);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    return NS_OK;
-  }
-
-  NS_IMETHOD Run() override
-  {
-    MOZ_ASSERT(!NS_IsMainThread(), "This should not be called on the main thread");
-
-    bool exists;
-    nsresult rv = mHistory->FetchPageInfo(mPlace, &exists);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    if (!exists)
-      rv = NS_ERROR_NOT_AVAILABLE;
-
-    nsCOMPtr<nsIRunnable> event =
-      new NotifyPlaceInfoCallback(mCallback, mPlace, false, rv);
-
-    rv = NS_DispatchToMainThread(event);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    return NS_OK;
-  }
-private:
-  GetPlaceInfo(VisitData& aPlace,
-               const nsMainThreadPtrHandle<mozIVisitInfoCallback>& aCallback)
-  : mPlace(aPlace)
-  , mCallback(aCallback)
-  , mHistory(History::GetService())
-  {
-    MOZ_ASSERT(NS_IsMainThread(), "This should be called on the main thread");
-  }
-
-  VisitData mPlace;
-  nsMainThreadPtrHandle<mozIVisitInfoCallback> mCallback;
-  RefPtr<History> mHistory;
-};
-
 /**
  * Sets the page title for a page in moz_places (if necessary).
  */
@@ -1519,14 +1460,6 @@ public:
     nsresult rv = aPlaceInfo->GetUri(getter_AddRefs(source));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCOMPtr<nsIFile> destinationFile;
-    rv = destinationFileURL->GetFile(getter_AddRefs(destinationFile));
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    nsAutoString destinationFileName;
-    rv = destinationFile->GetLeafName(destinationFileName);
-    NS_ENSURE_SUCCESS(rv, rv);
-
     nsAutoCString destinationURISpec;
     rv = destinationFileURL->GetSpec(destinationURISpec);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -1544,15 +1477,6 @@ public:
     );
     NS_ENSURE_SUCCESS(rv, rv);
 
-    rv = annosvc->SetPageAnnotationString(
-      source,
-      DESTINATIONFILENAME_ANNO,
-      destinationFileName,
-      0,
-      nsIAnnotationService::EXPIRE_WITH_HISTORY
-    );
-    NS_ENSURE_SUCCESS(rv, rv);
-
     nsAutoString title;
     rv = aPlaceInfo->GetTitle(title);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -1562,6 +1486,14 @@ public:
     // history title with the name of the destination file, to allow it to be
     // visible and searchable in history results.
     if (title.IsEmpty()) {
+      nsCOMPtr<nsIFile> destinationFile;
+      rv = destinationFileURL->GetFile(getter_AddRefs(destinationFile));
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      nsAutoString destinationFileName;
+      rv = destinationFile->GetLeafName(destinationFileName);
+      NS_ENSURE_SUCCESS(rv, rv);
+
       rv = mHistory->SetURITitle(source, destinationFileName);
       NS_ENSURE_SUCCESS(rv, rv);
     }
@@ -2818,75 +2750,6 @@ History::RemoveAllDownloads()
 
 ////////////////////////////////////////////////////////////////////////////////
 //// mozIAsyncHistory
-
-NS_IMETHODIMP
-History::GetPlacesInfo(JS::Handle<JS::Value> aPlaceIdentifiers,
-                       mozIVisitInfoCallback* aCallback,
-                       JSContext* aCtx)
-{
-  // Make sure nsNavHistory service is up before proceeding:
-  nsNavHistory* navHistory = nsNavHistory::GetHistoryService();
-  MOZ_ASSERT(navHistory, "Could not get nsNavHistory?!");
-  if (!navHistory) {
-    return NS_ERROR_FAILURE;
-  }
-
-  uint32_t placesIndentifiersLength;
-  JS::Rooted<JSObject*> placesIndentifiers(aCtx);
-  nsresult rv = GetJSArrayFromJSValue(aPlaceIdentifiers, aCtx,
-                                      &placesIndentifiers,
-                                      &placesIndentifiersLength);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  nsTArray<VisitData> placesInfo;
-  placesInfo.SetCapacity(placesIndentifiersLength);
-  for (uint32_t i = 0; i < placesIndentifiersLength; i++) {
-    JS::Rooted<JS::Value> placeIdentifier(aCtx);
-    bool rc = JS_GetElement(aCtx, placesIndentifiers, i, &placeIdentifier);
-    NS_ENSURE_TRUE(rc, NS_ERROR_UNEXPECTED);
-
-    // GUID
-    nsAutoString fatGUID;
-    GetJSValueAsString(aCtx, placeIdentifier, fatGUID);
-    if (!fatGUID.IsVoid()) {
-      NS_ConvertUTF16toUTF8 guid(fatGUID);
-      if (!IsValidGUID(guid))
-        return NS_ERROR_INVALID_ARG;
-
-      VisitData& placeInfo = *placesInfo.AppendElement(VisitData());
-      placeInfo.guid = guid;
-    }
-    else {
-      nsCOMPtr<nsIURI> uri = GetJSValueAsURI(aCtx, placeIdentifier);
-      if (!uri)
-        return NS_ERROR_INVALID_ARG; // neither a guid, nor a uri.
-      placesInfo.AppendElement(VisitData(uri));
-    }
-  }
-
-  mozIStorageConnection* dbConn = GetDBConn();
-  NS_ENSURE_STATE(dbConn);
-
-  for (nsTArray<VisitData>::size_type i = 0; i < placesInfo.Length(); i++) {
-    nsresult rv = GetPlaceInfo::Start(dbConn, placesInfo.ElementAt(i), aCallback);
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-
-  // Be sure to notify that all of our operations are complete.  This
-  // is dispatched to the background thread first and redirected to the
-  // main thread from there to make sure that all database notifications
-  // and all embed or canAddURI notifications have finished.
-  if (aCallback) {
-    nsMainThreadPtrHandle<mozIVisitInfoCallback>
-      callback(new nsMainThreadPtrHolder<mozIVisitInfoCallback>(aCallback));
-    nsCOMPtr<nsIEventTarget> backgroundThread = do_GetInterface(dbConn);
-    NS_ENSURE_TRUE(backgroundThread, NS_ERROR_UNEXPECTED);
-    nsCOMPtr<nsIRunnable> event = new NotifyCompletion(callback);
-    return backgroundThread->Dispatch(event, NS_DISPATCH_NORMAL);
-  }
-
-  return NS_OK;
-}
 
 NS_IMETHODIMP
 History::UpdatePlaces(JS::Handle<JS::Value> aPlaceInfos,

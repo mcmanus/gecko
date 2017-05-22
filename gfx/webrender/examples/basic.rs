@@ -17,12 +17,10 @@ use std::env;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::Arc;
-use webrender_traits::{BlobImageData, BlobImageDescriptor, BlobImageError, BlobImageRenderer};
-use webrender_traits::{BlobImageResult, ClipRegion, ColorF, Epoch, GlyphInstance};
-use webrender_traits::{DeviceIntPoint, DeviceUintSize, DeviceUintRect, LayoutPoint, LayoutRect, LayoutSize};
-use webrender_traits::{ImageData, ImageDescriptor, ImageFormat, ImageKey, ImageRendering};
-use webrender_traits::{PipelineId, RasterizedBlobImage, TransformStyle, BoxShadowClipMode};
+use webrender_traits::{ClipRegionToken, ColorF, DisplayListBuilder, Epoch, GlyphInstance};
+use webrender_traits::{DeviceIntPoint, DeviceUintSize, LayoutPoint, LayoutRect, LayoutSize};
+use webrender_traits::{ImageData, ImageDescriptor, ImageFormat};
+use webrender_traits::{PipelineId, RenderApi, TransformStyle, BoxShadowClipMode};
 
 #[derive(Debug)]
 enum Gesture {
@@ -193,6 +191,26 @@ impl webrender_traits::RenderNotifier for Notifier {
     }
 }
 
+fn push_sub_clip(api: &RenderApi, builder: &mut DisplayListBuilder, bounds: &LayoutRect)
+                 -> ClipRegionToken {
+    let mask_image = api.generate_image_key();
+    api.add_image(mask_image,
+                  ImageDescriptor::new(2, 2, ImageFormat::A8, true),
+                  ImageData::new(vec![0, 80, 180, 255]),
+                  None);
+    let mask = webrender_traits::ImageMask {
+        image: mask_image,
+        rect: LayoutRect::new(LayoutPoint::new(75.0, 75.0), LayoutSize::new(100.0, 100.0)),
+        repeat: false,
+    };
+    let complex = webrender_traits::ComplexClipRegion::new(
+        LayoutRect::new(LayoutPoint::new(50.0, 50.0), LayoutSize::new(100.0, 100.0)),
+        webrender_traits::BorderRadius::uniform(20.0));
+
+    builder.push_clip_region(bounds, vec![complex], Some(mask))
+}
+
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let res_path = if args.len() > 1 {
@@ -229,7 +247,6 @@ fn main() {
         resource_override_path: res_path,
         debug: true,
         precache_shaders: true,
-        blob_image_renderer: Some(Box::new(FakeBlobImageRenderer::new())),
         device_pixel_ratio: window.hidpi_factor(),
         .. Default::default()
     };
@@ -244,18 +261,11 @@ fn main() {
     let epoch = Epoch(0);
     let root_background_color = ColorF::new(0.3, 0.0, 0.0, 1.0);
 
-    let vector_img = api.generate_image_key();
-    api.add_image(
-        vector_img,
-        ImageDescriptor::new(100, 100, ImageFormat::RGBA8, true),
-        ImageData::new_blob_image(Vec::new()),
-        None,
-    );
-
     let pipeline_id = PipelineId(0, 0);
-    let mut builder = webrender_traits::DisplayListBuilder::new(pipeline_id);
+    let layout_size = LayoutSize::new(width as f32, height as f32);
+    let mut builder = webrender_traits::DisplayListBuilder::new(pipeline_id, layout_size);
 
-    let bounds = LayoutRect::new(LayoutPoint::zero(), LayoutSize::new(width as f32, height as f32));
+    let bounds = LayoutRect::new(LayoutPoint::zero(), layout_size);
     builder.push_stacking_context(webrender_traits::ScrollPolicy::Scrollable,
                                   bounds,
                                   None,
@@ -263,40 +273,15 @@ fn main() {
                                   None,
                                   webrender_traits::MixBlendMode::Normal,
                                   Vec::new());
-    builder.push_image(
-        LayoutRect::new(LayoutPoint::new(0.0, 0.0), LayoutSize::new(100.0, 100.0)),
-        ClipRegion::simple(&bounds),
-        LayoutSize::new(100.0, 100.0),
-        LayoutSize::new(0.0, 0.0),
-        ImageRendering::Auto,
-        vector_img,
-    );
 
-    let sub_clip = {
-        let mask_image = api.generate_image_key();
-        api.add_image(
-            mask_image,
-            ImageDescriptor::new(2, 2, ImageFormat::A8, true),
-            ImageData::new(vec![0, 80, 180, 255]),
-            None,
-        );
-        let mask = webrender_traits::ImageMask {
-            image: mask_image,
-            rect: LayoutRect::new(LayoutPoint::new(75.0, 75.0), LayoutSize::new(100.0, 100.0)),
-            repeat: false,
-        };
-        let complex = webrender_traits::ComplexClipRegion::new(
-            LayoutRect::new(LayoutPoint::new(50.0, 50.0), LayoutSize::new(100.0, 100.0)),
-            webrender_traits::BorderRadius::uniform(20.0));
-
-        builder.new_clip_region(&bounds, vec![complex], Some(mask))
-    };
-
+    let clip = push_sub_clip(&api, &mut builder, &bounds);
     builder.push_rect(LayoutRect::new(LayoutPoint::new(100.0, 100.0), LayoutSize::new(100.0, 100.0)),
-                      sub_clip,
+                      clip,
                       ColorF::new(0.0, 1.0, 0.0, 1.0));
+
+    let clip = push_sub_clip(&api, &mut builder, &bounds);
     builder.push_rect(LayoutRect::new(LayoutPoint::new(250.0, 100.0), LayoutSize::new(100.0, 100.0)),
-                      sub_clip,
+                      clip,
                       ColorF::new(0.0, 1.0, 0.0, 1.0));
     let border_side = webrender_traits::BorderSide {
         color: ColorF::new(0.0, 0.0, 1.0, 1.0),
@@ -315,8 +300,10 @@ fn main() {
         left: border_side,
         radius: webrender_traits::BorderRadius::uniform(20.0),
     });
+
+    let clip = push_sub_clip(&api, &mut builder, &bounds);
     builder.push_border(LayoutRect::new(LayoutPoint::new(100.0, 100.0), LayoutSize::new(100.0, 100.0)),
-                        sub_clip,
+                        clip,
                         border_widths,
                         border_details);
 
@@ -379,13 +366,14 @@ fn main() {
             },
         ];
 
+        let clip = builder.push_clip_region(&bounds, Vec::new(), None);
         builder.push_text(text_bounds,
-                          webrender_traits::ClipRegion::simple(&bounds),
+                          clip,
                           &glyphs,
                           font_key,
                           ColorF::new(1.0, 1.0, 0.0, 1.0),
                           Au::from_px(32),
-                          Au::from_px(0),
+                          0.0,
                           None);
     }
 
@@ -399,7 +387,7 @@ fn main() {
         let spread_radius = 0.0;
         let simple_border_radius = 8.0;
         let box_shadow_type = BoxShadowClipMode::Inset;
-        let full_screen_clip = builder.new_clip_region(&bounds, Vec::new(), None);
+        let full_screen_clip = builder.push_clip_region(&bounds, Vec::new(), None);
 
         builder.push_box_shadow(rect,
                                 full_screen_clip,
@@ -464,61 +452,5 @@ fn main() {
         renderer.update();
         renderer.render(DeviceUintSize::new(width, height));
         window.swap_buffers().ok();
-    }
-}
-
-struct FakeBlobImageRenderer {
-    images: HashMap<ImageKey, BlobImageResult>,
-}
-
-impl FakeBlobImageRenderer {
-    fn new() -> Self {
-        FakeBlobImageRenderer { images: HashMap::new() }
-    }
-}
-
-impl BlobImageRenderer for FakeBlobImageRenderer {
-    fn request_blob_image(&mut self,
-                          key: ImageKey,
-                          _: Arc<BlobImageData>,
-                          descriptor: &BlobImageDescriptor,
-                          _dirty_rect: Option<DeviceUintRect>) {
-        let mut texels = Vec::with_capacity((descriptor.width * descriptor.height * 4) as usize);
-        for y in 0..descriptor.height {
-            for x in 0..descriptor.width {
-                // render a simple checkerboard pattern
-                let a = if (x % 20 >= 10) != (y % 20 >= 10) { 255 } else { 0 };
-                match descriptor.format {
-                    ImageFormat::RGBA8 => {
-                        texels.push(a);
-                        texels.push(a);
-                        texels.push(a);
-                        texels.push(255);
-                    }
-                    ImageFormat::A8 => {
-                        texels.push(a);
-                    }
-                    _ => {
-                        self.images.insert(key,
-                            Err(BlobImageError::Other(format!(
-                                "Usupported image format {:?}",
-                                descriptor.format
-                            )))
-                        );
-                        return;
-                    }
-                }
-            }
-        }
-
-        self.images.insert(key, Ok(RasterizedBlobImage {
-            data: texels,
-            width: descriptor.width,
-            height: descriptor.height,
-        }));
-    }
-
-    fn resolve_blob_image(&mut self, key: ImageKey) -> BlobImageResult {
-        self.images.remove(&key).unwrap_or(Err(BlobImageError::InvalidKey))
     }
 }

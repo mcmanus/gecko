@@ -148,6 +148,7 @@ const Message = createClass({
           stacktrace: stacktrace,
           onViewSourceInDebugger: serviceContainer.onViewSourceInDebugger,
           onViewSourceInScratchpad: serviceContainer.onViewSourceInScratchpad,
+          sourceMapService: serviceContainer.sourceMapService,
         })
       );
     }
@@ -191,7 +192,8 @@ const Message = createClass({
       notesNodes = [];
     }
 
-    const repeat = MessageRepeat({repeat: this.props.repeat});
+    const repeat = this.props.repeat && this.props.repeat > 1 ?
+      MessageRepeat({repeat: this.props.repeat}) : null;
 
     let onFrameClick;
     if (serviceContainer && frame) {

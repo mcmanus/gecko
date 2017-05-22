@@ -222,6 +222,7 @@
 #include "mozilla/dom/WebComponentsBinding.h"
 #include "mozilla/dom/CustomElementRegistryBinding.h"
 #include "mozilla/dom/CustomElementRegistry.h"
+#include "mozilla/dom/TimeoutManager.h"
 #include "nsFrame.h"
 #include "nsDOMCaretPosition.h"
 #include "nsIDOMHTMLTextAreaElement.h"
@@ -232,7 +233,6 @@
 #include "nsIEditor.h"
 #include "nsIDOMCSSStyleRule.h"
 #include "mozilla/css/StyleRule.h"
-#include "nsIDOMLocation.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsISecurityConsoleMessage.h"
 #include "nsCharSeparatedTokenizer.h"
@@ -2025,7 +2025,7 @@ nsDocument::Init()
   mScopeObject = do_GetWeakReference(global);
   MOZ_ASSERT(mScopeObject);
 
-  mScriptLoader = new nsScriptLoader(this);
+  mScriptLoader = new dom::ScriptLoader(this);
 
   mozilla::HoldJSObjects(this);
 
@@ -2149,10 +2149,17 @@ nsDocument::ResetToURI(nsIURI *aURI, nsILoadGroup *aLoadGroup,
         mFirstChild = content->GetNextSibling();
       }
       mChildren.RemoveChildAt(i);
+      if (content == mCachedRootElement) {
+        // Immediately clear mCachedRootElement, now that it's been removed
+        // from mChildren, so that GetRootElement() will stop returning this
+        // now-stale value.
+        mCachedRootElement = nullptr;
+      }
       nsNodeUtils::ContentRemoved(this, content, i, previousSibling);
       content->UnbindFromTree();
     }
-    mCachedRootElement = nullptr;
+    MOZ_ASSERT(!mCachedRootElement,
+               "After removing all children, there should be no root elem");
   }
   mInUnlinkOrDeletion = oldVal;
 
@@ -4177,8 +4184,18 @@ nsDocument::RemoveChildAt(uint32_t aIndex, bool aNotify)
     DestroyElementMaps();
   }
 
-  doRemoveChildAt(aIndex, aNotify, oldKid, mChildren);
+  // Preemptively clear mCachedRootElement, since we may be about to remove it
+  // from our child list, and we don't want to return this maybe-obsolete value
+  // from any GetRootElement() calls that happen inside of doRemoveChildAt().
+  // (NOTE: for this to be useful, doRemoveChildAt() must NOT trigger any
+  // GetRootElement() calls until after it's removed the child from mChildren.
+  // Any call before that point would restore this soon-to-be-obsolete cached
+  // answer, and our clearing here would be fruitless.)
   mCachedRootElement = nullptr;
+  doRemoveChildAt(aIndex, aNotify, oldKid, mChildren);
+  MOZ_ASSERT(mCachedRootElement != oldKid,
+             "Stale pointer in mCachedRootElement, after we tried to clear it "
+             "(maybe somebody called GetRootElement() too early?)");
 }
 
 void
@@ -5000,7 +5017,7 @@ nsDocument::GetWindowInternal() const
   return win;
 }
 
-nsScriptLoader*
+ScriptLoader*
 nsDocument::ScriptLoader()
 {
   return mScriptLoader;
@@ -5734,12 +5751,10 @@ nsDocument::CreateElement(const nsAString& aTagName,
   if (aOptions.IsElementCreationOptions()) {
     const ElementCreationOptions& options =
       aOptions.GetAsElementCreationOptions();
-    // Throw NotFoundError if 'is' is not-null and definition is null
-    is = CheckCustomElementName(options,
-                                needsLowercase ? lcTagName : aTagName,
-                                mDefaultElementType, rv);
-    if (rv.Failed()) {
-      return nullptr;
+
+    if (CustomElementRegistry::IsCustomElementEnabled() &&
+        options.mIs.WasPassed()) {
+      is = &options.mIs.Value();
     }
 
     // Check 'pseudo' and throw an exception if it's not one allowed
@@ -5798,12 +5813,11 @@ nsDocument::CreateElementNS(const nsAString& aNamespaceURI,
   }
 
   const nsString* is = nullptr;
-  if (aOptions.IsElementCreationOptions()) {
-    // Throw NotFoundError if 'is' is not-null and definition is null
-    is = CheckCustomElementName(aOptions.GetAsElementCreationOptions(),
-                                aQualifiedName, nodeInfo->NamespaceID(), rv);
-    if (rv.Failed()) {
-      return nullptr;
+  if (CustomElementRegistry::IsCustomElementEnabled() &&
+      aOptions.IsElementCreationOptions()) {
+    const ElementCreationOptions& options = aOptions.GetAsElementCreationOptions();
+    if (options.mIs.WasPassed()) {
+      is = &options.mIs.Value();
     }
   }
 
@@ -6849,13 +6863,6 @@ nsDocument::GetDefaultView(mozIDOMWindowProxy** aDefaultView)
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsDocument::GetLocation(nsIDOMLocation **_retval)
-{
-  *_retval = nsIDocument::GetLocation().take();
-  return NS_OK;
-}
-
 already_AddRefed<Location>
 nsIDocument::GetLocation() const
 {
@@ -6866,9 +6873,7 @@ nsIDocument::GetLocation() const
   }
 
   nsGlobalWindow* window = nsGlobalWindow::Cast(w);
-  ErrorResult dummy;
-  RefPtr<Location> loc = window->GetLocation(dummy);
-  dummy.SuppressException();
+  RefPtr<Location> loc = window->GetLocation();
   return loc.forget();
 }
 
@@ -12981,6 +12986,9 @@ MarkDocumentTreeToBeInSyncOperation(nsIDocument* aDoc, void* aData)
     static_cast<nsCOMArray<nsIDocument>*>(aData);
   if (aDoc) {
     aDoc->SetIsInSyncOperation(true);
+    if (nsCOMPtr<nsPIDOMWindowInner> window = aDoc->GetInnerWindow()) {
+      window->TimeoutManager().BeginSyncOperation();
+    }
     documents->AppendObject(aDoc);
     aDoc->EnumerateSubDocuments(MarkDocumentTreeToBeInSyncOperation, aData);
   }
@@ -13004,6 +13012,9 @@ nsAutoSyncOperation::nsAutoSyncOperation(nsIDocument* aDoc)
 nsAutoSyncOperation::~nsAutoSyncOperation()
 {
   for (int32_t i = 0; i < mDocuments.Count(); ++i) {
+    if (nsCOMPtr<nsPIDOMWindowInner> window = mDocuments[i]->GetInnerWindow()) {
+      window->TimeoutManager().EndSyncOperation();
+    }
     mDocuments[i]->SetIsInSyncOperation(false);
   }
   nsContentUtils::SetMicroTaskLevel(mMicroTaskLevel);
@@ -13172,30 +13183,6 @@ nsIDocument::UpdateStyleBackendType()
 #endif
 }
 
-const nsString*
-nsDocument::CheckCustomElementName(const ElementCreationOptions& aOptions,
-                                   const nsAString& aLocalName,
-                                   uint32_t aNamespaceID,
-                                   ErrorResult& rv)
-{
-  // only check aOptions if 'is' is passed and the webcomponents preference
-  // is enabled
-  if (!aOptions.mIs.WasPassed() ||
-      !CustomElementRegistry::IsCustomElementEnabled()) {
-      return nullptr;
-  }
-
-  const nsString* is = &aOptions.mIs.Value();
-
-  // Throw NotFoundError if 'is' is not-null and definition is null
-  if (!nsContentUtils::LookupCustomElementDefinition(this, aLocalName,
-                                                     aNamespaceID, is)) {
-      rv.Throw(NS_ERROR_DOM_NOT_FOUND_ERR);
-  }
-
-  return is;
-}
-
 /**
  * Helper function for |nsDocument::PrincipalFlashClassification|
  *
@@ -13248,9 +13235,11 @@ nsDocument::PrincipalFlashClassification()
 {
   nsresult rv;
 
-  // If flash blocking is disabled, it is equivalent to all sites being
-  // on neither list.
-  if (!Preferences::GetBool("plugins.flashBlock.enabled")) {
+  bool httpOnly = Preferences::GetBool("plugins.http_https_only", true);
+  bool flashBlock = Preferences::GetBool("plugins.flashBlock.enabled", false);
+
+  // If neither pref is on, skip the null-principal and principal URI checks.
+  if (!httpOnly && !flashBlock) {
     return FlashClassification::Unknown;
   }
 
@@ -13263,6 +13252,26 @@ nsDocument::PrincipalFlashClassification()
   rv = principal->GetURI(getter_AddRefs(classificationURI));
   if (NS_FAILED(rv) || !classificationURI) {
     return FlashClassification::Denied;
+  }
+
+  if (httpOnly) {
+    // Only allow plugins for documents from an HTTP/HTTPS origin. This should
+    // allow dependent data: URIs to load plugins, but not:
+    // * chrome documents
+    // * "bare" data: loads
+    // * FTP/gopher/file
+    nsAutoCString scheme;
+    rv = classificationURI->GetScheme(scheme);
+    if (NS_WARN_IF(NS_FAILED(rv)) ||
+        !(scheme.EqualsLiteral("http") || scheme.EqualsLiteral("https"))) {
+      return FlashClassification::Denied;
+    }
+  }
+
+  // If flash blocking is disabled, it is equivalent to all sites being
+  // on neither list.
+  if (!flashBlock) {
+    return FlashClassification::Unknown;
   }
 
   nsAutoCString allowTables, allowExceptionsTables,

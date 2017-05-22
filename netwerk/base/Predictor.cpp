@@ -695,7 +695,8 @@ class PredictorLearnRunnable final : public Runnable {
 public:
   PredictorLearnRunnable(nsIURI *targetURI, nsIURI *sourceURI,
                          PredictorLearnReason reason, const OriginAttributes &oa)
-    : mTargetURI(targetURI)
+    : Runnable("PredictorLearnRunnable")
+    , mTargetURI(targetURI)
     , mSourceURI(sourceURI)
     , mReason(reason)
     , mOA(oa)
@@ -1549,7 +1550,9 @@ Predictor::LearnNative(nsIURI *targetURI, nsIURI *sourceURI,
 
     RefPtr<PredictorLearnRunnable> runnable = new PredictorLearnRunnable(
       targetURI, sourceURI, reason, originAttributes);
-    NS_DispatchToMainThread(runnable);
+    SystemGroup::Dispatch("PredictorLearnRunnable",
+                          TaskCategory::Other,
+                          runnable.forget());
 
     return NS_OK;
   }

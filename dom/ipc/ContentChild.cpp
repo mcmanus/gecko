@@ -35,7 +35,7 @@
 #include "mozilla/dom/MemoryReportRequest.h"
 #include "mozilla/dom/ProcessGlobal.h"
 #include "mozilla/dom/PushNotifier.h"
-#include "mozilla/dom/Storage.h"
+#include "mozilla/dom/LocalStorage.h"
 #include "mozilla/dom/StorageIPC.h"
 #include "mozilla/dom/TabGroup.h"
 #include "mozilla/dom/workers/ServiceWorkerManager.h"
@@ -59,6 +59,7 @@
 #include "mozilla/layers/ContentProcessController.h"
 #include "mozilla/layers/ImageBridgeChild.h"
 #include "mozilla/layout/RenderFrameChild.h"
+#include "mozilla/loader/ScriptCacheActors.h"
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/net/CaptivePortalService.h"
 #include "mozilla/Omnijar.h"
@@ -235,6 +236,7 @@ using namespace mozilla::widget;
 using namespace mozilla::system;
 #endif
 using namespace mozilla::widget;
+using mozilla::loader::PScriptCacheChild;
 
 namespace mozilla {
 
@@ -524,7 +526,7 @@ ContentChild::RecvSetXPCOMProcessAttributes(const XPCOMInitData& aXPCOMInit,
 {
   mLookAndFeelCache = aLookAndFeelIntCache;
   InitXPCOM(aXPCOMInit, aInitialData);
-  InitGraphicsDeviceData(aXPCOMInit.contentDeviceData());
+  InitGraphicsDeviceData();
 
 #ifdef NS_PRINTING
   // Force the creation of the nsPrintingProxy so that it's IPC counterpart,
@@ -549,28 +551,32 @@ ContentChild::Init(MessageLoop* aIOLoop,
   // to use, and when starting under XWayland, it may choose to start with
   // the wayland backend instead of the x11 backend.
   // The DISPLAY environment variable is normally set by the parent process.
-  const char* display_name = DetectDisplay();
-  if (display_name) {
-    int argc = 3;
-    char option_name[] = "--display";
-    char* argv[] = {
-      // argv0 is unused because g_set_prgname() was called in
-      // XRE_InitChildProcess().
-      nullptr,
-      option_name,
-      const_cast<char*>(display_name),
-      nullptr
-    };
-    char** argvp = argv;
-    gtk_init(&argc, &argvp);
-  } else {
-    gtk_init(nullptr, nullptr);
+  if (!gfxPlatform::IsHeadless()) {
+    const char* display_name = DetectDisplay();
+    if (display_name) {
+      int argc = 3;
+      char option_name[] = "--display";
+      char* argv[] = {
+        // argv0 is unused because g_set_prgname() was called in
+        // XRE_InitChildProcess().
+        nullptr,
+        option_name,
+        const_cast<char*>(display_name),
+        nullptr
+      };
+      char** argvp = argv;
+      gtk_init(&argc, &argvp);
+    } else {
+      gtk_init(nullptr, nullptr);
+    }
   }
 #endif
 
 #ifdef MOZ_X11
-  // Do this after initializing GDK, or GDK will install its own handler.
-  XRE_InstallX11ErrorHandler();
+  if (!gfxPlatform::IsHeadless()) {
+    // Do this after initializing GDK, or GDK will install its own handler.
+    XRE_InstallX11ErrorHandler();
+  }
 #endif
 
   NS_ASSERTION(!sSingleton, "only one ContentChild per child");
@@ -601,10 +607,12 @@ ContentChild::Init(MessageLoop* aIOLoop,
   GetIPCChannel()->SendBuildID();
 
 #ifdef MOZ_X11
-  // Send the parent our X socket to act as a proxy reference for our X
-  // resources.
-  int xSocketFd = ConnectionNumber(DefaultXDisplay());
-  SendBackUpXResources(FileDescriptor(xSocketFd));
+  if (!gfxPlatform::IsHeadless()) {
+    // Send the parent our X socket to act as a proxy reference for our X
+    // resources.
+    int xSocketFd = ConnectionNumber(DefaultXDisplay());
+    SendBackUpXResources(FileDescriptor(xSocketFd));
+  }
 #endif
 
 #ifdef MOZ_CRASHREPORTER
@@ -955,11 +963,11 @@ ContentChild::AppendProcessId(nsACString& aName)
 }
 
 void
-ContentChild::InitGraphicsDeviceData(const ContentDeviceData& aData)
+ContentChild::InitGraphicsDeviceData()
 {
   // Initialize the graphics platform. This may contact the parent process
   // to read device preferences.
-  gfxPlatform::InitChild(aData);
+  gfxPlatform::GetPlatform();
 }
 
 void
@@ -1192,6 +1200,20 @@ ContentChild::RecvReinitRendering(Endpoint<PCompositorBridgeChild>&& aCompositor
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult
+ContentChild::RecvReinitRenderingForDeviceReset()
+{
+  gfxPlatform::GetPlatform()->CompositorUpdated();
+
+  nsTArray<RefPtr<TabChild>> tabs = TabChild::GetAll();
+  for (const auto& tabChild : tabs) {
+    if (tabChild->LayersId()) {
+      tabChild->ReinitRenderingForDeviceReset();
+    }
+  }
+  return IPC_OK();
+}
+
 #if defined(XP_MACOSX) && defined(MOZ_CONTENT_SANDBOX)
 
 #include <stdlib.h>
@@ -1279,6 +1301,30 @@ IsDevelopmentBuild()
   return path == nullptr;
 }
 
+// This function is only used in an |#ifdef DEBUG| path.
+#ifdef DEBUG
+// Given a path to a file, return the directory which contains it.
+static nsAutoCString
+GetDirectoryPath(const char *aPath) {
+  nsCOMPtr<nsIFile> file = do_CreateInstance(NS_LOCAL_FILE_CONTRACTID);
+  if (!file ||
+      NS_FAILED(file->InitWithNativePath(nsDependentCString(aPath)))) {
+    MOZ_CRASH("Failed to create or init an nsIFile");
+  }
+  nsCOMPtr<nsIFile> directoryFile;
+  if (NS_FAILED(file->GetParent(getter_AddRefs(directoryFile))) ||
+      !directoryFile) {
+    MOZ_CRASH("Failed to get parent for an nsIFile");
+  }
+  directoryFile->Normalize();
+  nsAutoCString directoryPath;
+  if (NS_FAILED(directoryFile->GetNativePath(directoryPath))) {
+    MOZ_CRASH("Failed to get path for an nsIFile");
+  }
+  return directoryPath;
+}
+#endif // DEBUG
+
 static bool
 StartMacOSContentSandbox()
 {
@@ -1351,6 +1397,19 @@ StartMacOSContentSandbox()
   } else {
     info.hasSandboxedProfile = false;
   }
+
+#ifdef DEBUG
+  // When a content process dies intentionally (|NoteIntentionalCrash|), for
+  // tests it wants to log that it did this. Allow writing to this location
+  // that the testrunner wants.
+  char *bloatLog = PR_GetEnv("XPCOM_MEM_BLOAT_LOG");
+  if (bloatLog != nullptr) {
+    // |bloatLog| points to a specific file, but we actually write to a sibling
+    // of that path.
+    nsAutoCString bloatDirectoryPath = GetDirectoryPath(bloatLog);
+    info.debugWriteDir.assign(bloatDirectoryPath.get());
+  }
+#endif // DEBUG
 
   std::string err;
   if (!mozilla::StartMacSandbox(info, err)) {
@@ -1766,6 +1825,31 @@ ContentChild::GetCPOWManager()
 mozilla::ipc::IPCResult
 ContentChild::RecvPTestShellConstructor(PTestShellChild* actor)
 {
+  return IPC_OK();
+}
+
+PScriptCacheChild*
+ContentChild::AllocPScriptCacheChild(const FileDescOrError& cacheFile, const bool& wantCacheData)
+{
+  return new loader::ScriptCacheChild();
+}
+
+bool
+ContentChild::DeallocPScriptCacheChild(PScriptCacheChild* cache)
+{
+  delete static_cast<loader::ScriptCacheChild*>(cache);
+  return true;
+}
+
+mozilla::ipc::IPCResult
+ContentChild::RecvPScriptCacheConstructor(PScriptCacheChild* actor, const FileDescOrError& cacheFile, const bool& wantCacheData)
+{
+  Maybe<FileDescriptor> fd;
+  if (cacheFile.type() == cacheFile.TFileDescriptor) {
+    fd.emplace(cacheFile.get_FileDescriptor());
+  }
+
+  static_cast<loader::ScriptCacheChild*>(actor)->Init(fd, wantCacheData);
   return IPC_OK();
 }
 
@@ -2570,20 +2654,13 @@ ContentChild::DeallocPOfflineCacheUpdateChild(POfflineCacheUpdateChild* actor)
 mozilla::ipc::IPCResult
 ContentChild::RecvStartProfiler(const ProfilerInitParams& params)
 {
-  nsTArray<const char*> featureArray;
-  for (size_t i = 0; i < params.features().Length(); ++i) {
-    featureArray.AppendElement(params.features()[i].get());
+  nsTArray<const char*> filterArray;
+  for (size_t i = 0; i < params.filters().Length(); ++i) {
+    filterArray.AppendElement(params.filters()[i].get());
   }
 
-  nsTArray<const char*> threadNameFilterArray;
-  for (size_t i = 0; i < params.threadFilters().Length(); ++i) {
-    threadNameFilterArray.AppendElement(params.threadFilters()[i].get());
-  }
-
-  profiler_start(params.entries(), params.interval(),
-                 featureArray.Elements(), featureArray.Length(),
-                 threadNameFilterArray.Elements(),
-                 threadNameFilterArray.Length());
+  profiler_start(params.entries(), params.interval(), params.features(),
+                 filterArray.Elements(), filterArray.Length());
 
  return IPC_OK();
 }
@@ -3114,9 +3191,8 @@ ContentChild::RecvDispatchLocalStorageChange(const nsString& aDocumentURI,
                                              const IPC::Principal& aPrincipal,
                                              const bool& aIsPrivate)
 {
-  Storage::DispatchStorageEvent(Storage::LocalStorage,
-                                aDocumentURI, aKey, aOldValue, aNewValue,
-                                aPrincipal, aIsPrivate, nullptr, true);
+  LocalStorage::DispatchStorageEvent(aDocumentURI, aKey, aOldValue, aNewValue,
+                                     aPrincipal, aIsPrivate, nullptr, true);
   return IPC_OK();
 }
 

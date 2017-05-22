@@ -8,41 +8,16 @@
 
 #include "jsfriendapi.h"
 #include "mozilla/AbstractThread.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/Move.h"
 #include "nsINamed.h"
 #include "nsQueryObject.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "nsThreadUtils.h"
 
+#include "mozilla/Telemetry.h"
+
 using namespace mozilla;
-
-class SchedulerGroup::Runnable final : public mozilla::Runnable
-{
-public:
-  Runnable(already_AddRefed<nsIRunnable>&& aRunnable,
-           SchedulerGroup* aDispatcher);
-
-  NS_IMETHODIMP
-  GetName(nsACString& aName) override
-  {
-    mozilla::Runnable::GetName(aName);
-    if (aName.IsEmpty()) {
-      // Try to get a name from the underlying runnable.
-      nsCOMPtr<nsINamed> named = do_QueryInterface(mRunnable);
-      if (named) {
-        named->GetName(aName);
-      }
-    }
-    aName.AppendASCII("(labeled)");
-    return NS_OK;
-  }
-
-  NS_DECL_NSIRUNNABLE
-
-private:
-  nsCOMPtr<nsIRunnable> mRunnable;
-  RefPtr<SchedulerGroup> mDispatcher;
-};
 
 /* SchedulerEventTarget */
 
@@ -75,6 +50,90 @@ private:
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(SchedulerEventTarget, NS_DISPATCHEREVENTTARGET_IID)
+
+static Atomic<uint64_t> gEarliestUnprocessedVsync(0);
+
+class MOZ_RAII AutoCollectVsyncTelemetry final
+{
+public:
+  explicit AutoCollectVsyncTelemetry(SchedulerGroup::Runnable* aRunnable
+                                     MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    : mIsBackground(aRunnable->IsBackground())
+  {
+    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+// Telemetry collection temporarily disabled in bug 1366156.
+#if 0
+#ifdef EARLY_BETA_OR_EARLIER
+    aRunnable->GetName(mKey);
+    mStart = TimeStamp::Now();
+#endif
+#endif
+  }
+  ~AutoCollectVsyncTelemetry()
+  {
+// Telemetry collection temporarily disabled in bug 1366156.
+#if 0
+#ifdef EARLY_BETA_OR_EARLIER
+    if (Telemetry::CanRecordBase()) {
+      CollectTelemetry();
+    }
+#endif
+#endif
+  }
+
+private:
+  void CollectTelemetry();
+
+  bool mIsBackground;
+  nsCString mKey;
+  TimeStamp mStart;
+  MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
+};
+
+void
+AutoCollectVsyncTelemetry::CollectTelemetry()
+{
+  TimeStamp now = TimeStamp::Now();
+
+  mozilla::Telemetry::HistogramID eventsId =
+    mIsBackground ? Telemetry::CONTENT_JS_BACKGROUND_TICK_DELAY_EVENTS_MS
+                  : Telemetry::CONTENT_JS_FOREGROUND_TICK_DELAY_EVENTS_MS;
+  mozilla::Telemetry::HistogramID totalId =
+    mIsBackground ? Telemetry::CONTENT_JS_BACKGROUND_TICK_DELAY_TOTAL_MS
+                  : Telemetry::CONTENT_JS_FOREGROUND_TICK_DELAY_TOTAL_MS;
+
+  uint64_t lastSeenVsync = gEarliestUnprocessedVsync;
+  if (!lastSeenVsync) {
+    return;
+  }
+
+  bool inconsistent = false;
+  TimeStamp creation = TimeStamp::ProcessCreation(&inconsistent);
+  if (inconsistent) {
+    return;
+  }
+
+  TimeStamp pendingVsync =
+    creation + TimeDuration::FromMicroseconds(lastSeenVsync);
+
+  if (pendingVsync > now) {
+    return;
+  }
+
+  uint32_t duration =
+    static_cast<uint32_t>((now - pendingVsync).ToMilliseconds());
+
+  Telemetry::Accumulate(eventsId, mKey, duration);
+  Telemetry::Accumulate(totalId, duration);
+
+  if (pendingVsync > mStart) {
+    return;
+  }
+
+  Telemetry::Accumulate(Telemetry::CONTENT_JS_KNOWN_TICK_DELAY_MS, duration);
+
+  return;
+}
 
 } // namespace
 
@@ -124,6 +183,31 @@ SchedulerGroup::UnlabeledDispatch(const char* aName,
   } else {
     return NS_DispatchToMainThread(runnable.forget());
   }
+}
+
+/* static */ void
+SchedulerGroup::MarkVsyncReceived()
+{
+  if (gEarliestUnprocessedVsync) {
+    // If we've seen a vsync already, but haven't handled it, keep the
+    // older one.
+    return;
+  }
+
+  MOZ_ASSERT(!NS_IsMainThread());
+  bool inconsistent = false;
+  TimeStamp creation = TimeStamp::ProcessCreation(&inconsistent);
+  if (inconsistent) {
+    return;
+  }
+
+  gEarliestUnprocessedVsync = (TimeStamp::Now() - creation).ToMicroseconds();
+}
+
+/* static */ void
+SchedulerGroup::MarkVsyncRan()
+{
+  gEarliestUnprocessedVsync = 0;
 }
 
 SchedulerGroup* SchedulerGroup::sRunningDispatcher;
@@ -243,10 +327,28 @@ SchedulerGroup::SetValidatingAccess(ValidationType aType)
 }
 
 SchedulerGroup::Runnable::Runnable(already_AddRefed<nsIRunnable>&& aRunnable,
-                                   SchedulerGroup* aDispatcher)
+                                   SchedulerGroup* aGroup)
  : mRunnable(Move(aRunnable)),
-   mDispatcher(aDispatcher)
+   mGroup(aGroup)
 {
+}
+
+NS_IMETHODIMP
+SchedulerGroup::Runnable::GetName(nsACString& aName)
+{
+  mozilla::Runnable::GetName(aName);
+  if (aName.IsEmpty()) {
+    // Try to get a name from the underlying runnable.
+    nsCOMPtr<nsINamed> named = do_QueryInterface(mRunnable);
+    if (named) {
+      named->GetName(aName);
+    }
+    if (aName.IsEmpty()) {
+      aName.AssignLiteral("anonymous");
+    }
+  }
+  aName.AppendASCII("(labeled)");
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -254,17 +356,26 @@ SchedulerGroup::Runnable::Run()
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
-  mDispatcher->SetValidatingAccess(StartValidation);
+  mGroup->SetValidatingAccess(StartValidation);
 
-  nsresult result = mRunnable->Run();
+  nsresult result;
+
+  {
+    AutoCollectVsyncTelemetry telemetry(this);
+    result = mRunnable->Run();
+  }
 
   // The runnable's destructor can have side effects, so try to execute it in
   // the scope of the TabGroup.
   mRunnable = nullptr;
 
-  mDispatcher->SetValidatingAccess(EndValidation);
+  mGroup->SetValidatingAccess(EndValidation);
   return result;
 }
+
+NS_IMPL_ISUPPORTS_INHERITED(SchedulerGroup::Runnable,
+                            mozilla::Runnable,
+                            SchedulerGroup::Runnable)
 
 SchedulerGroup::AutoProcessEvent::AutoProcessEvent()
  : mPrevRunningDispatcher(SchedulerGroup::sRunningDispatcher)

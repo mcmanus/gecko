@@ -14,10 +14,10 @@ config = {
         'checkout-sources',
         'setup-mock',
         'build',
+        'generate-build-stats',
         'upload-files',
         'sendchange',
         'check-test',
-        'generate-build-stats',
         'update',  # decided by query_is_nightly()
     ],
     "buildbot_json_path": "buildprops.json",
@@ -57,7 +57,6 @@ config = {
          'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/adjust-sdk-beta.token',
          'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
     ],
-    'enable_ccache': True,
     'vcs_share_base': '/builds/hg-shared',
     'objdir': 'obj-firefox',
     'tooltool_script': ["/builds/tooltool.py"],
@@ -65,7 +64,6 @@ config = {
     'enable_count_ctors': True,
     'enable_talos_sendchange': False,
     'enable_unittest_sendchange': True,
-    'skip_balrog_uploads': True, # If True, rely on Funsize to update Balrog
     #########################################################################
 
 
@@ -77,7 +75,6 @@ config = {
     'publish_nightly_en_US_routes': True,
     'env': {
         'MOZBUILD_STATE_PATH': os.path.join(os.getcwd(), '.mozbuild'),
-        'MOZ_AUTOMATION': '1',
         'DISPLAY': ':2',
         'HG_SHARE_BASE_DIR': '/builds/hg-shared',
         'MOZ_OBJDIR': 'obj-firefox',

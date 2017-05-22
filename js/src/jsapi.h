@@ -3971,6 +3971,7 @@ class JS_FRIEND_API(ReadOnlyCompileOptions) : public TransitiveCompileOptions
       : TransitiveCompileOptions(),
         lineno(1),
         column(0),
+        sourceStartColumn(0),
         isRunOnce(false),
         noScriptRval(false)
     { }
@@ -3993,6 +3994,7 @@ class JS_FRIEND_API(ReadOnlyCompileOptions) : public TransitiveCompileOptions
     // POD options.
     unsigned lineno;
     unsigned column;
+    unsigned sourceStartColumn;
     // isRunOnce only applies to non-function scripts.
     bool isRunOnce;
     bool noScriptRval;
@@ -4065,7 +4067,12 @@ class JS_FRIEND_API(OwningCompileOptions) : public ReadOnlyCompileOptions
         return *this;
     }
     OwningCompileOptions& setUTF8(bool u) { utf8 = u; return *this; }
-    OwningCompileOptions& setColumn(unsigned c) { column = c; return *this; }
+    OwningCompileOptions& setColumn(unsigned c, unsigned ssc) {
+        MOZ_ASSERT(ssc <= c);
+        column = c;
+        sourceStartColumn = ssc;
+        return *this;
+    }
     OwningCompileOptions& setIsRunOnce(bool once) { isRunOnce = once; return *this; }
     OwningCompileOptions& setNoScriptRval(bool nsr) { noScriptRval = nsr; return *this; }
     OwningCompileOptions& setSelfHostingMode(bool shm) { selfHostingMode = shm; return *this; }
@@ -4161,7 +4168,12 @@ class MOZ_STACK_CLASS JS_FRIEND_API(CompileOptions) final : public ReadOnlyCompi
         return *this;
     }
     CompileOptions& setUTF8(bool u) { utf8 = u; return *this; }
-    CompileOptions& setColumn(unsigned c) { column = c; return *this; }
+    CompileOptions& setColumn(unsigned c, unsigned ssc) {
+        MOZ_ASSERT(ssc <= c);
+        column = c;
+        sourceStartColumn = ssc;
+        return *this;
+    }
     CompileOptions& setIsRunOnce(bool once) { isRunOnce = once; return *this; }
     CompileOptions& setNoScriptRval(bool nsr) { noScriptRval = nsr; return *this; }
     CompileOptions& setSelfHostingMode(bool shm) { selfHostingMode = shm; return *this; }
@@ -4278,6 +4290,11 @@ DecodeOffThreadScript(JSContext* cx, const ReadOnlyCompileOptions& options,
                       mozilla::Vector<uint8_t>& buffer /* TranscodeBuffer& */, size_t cursor,
                       OffThreadCompileCallback callback, void* callbackData);
 
+extern JS_PUBLIC_API(bool)
+DecodeOffThreadScript(JSContext* cx, const ReadOnlyCompileOptions& options,
+                      const mozilla::Range<uint8_t>& range /* TranscodeRange& */,
+                      OffThreadCompileCallback callback, void* callbackData);
+
 extern JS_PUBLIC_API(JSScript*)
 FinishOffThreadScriptDecoder(JSContext* cx, void* token);
 
@@ -4376,6 +4393,15 @@ namespace JS {
  */
 extern JS_PUBLIC_API(bool)
 CloneAndExecuteScript(JSContext* cx, JS::Handle<JSScript*> script,
+                      JS::MutableHandleValue rval);
+
+/**
+ * Like CloneAndExecuteScript above, but allows executing under a non-syntactic
+ * environment chain.
+ */
+extern JS_PUBLIC_API(bool)
+CloneAndExecuteScript(JSContext* cx, JS::AutoObjectVector& envChain,
+                      JS::Handle<JSScript*> script,
                       JS::MutableHandleValue rval);
 
 } /* namespace JS */
@@ -4568,9 +4594,14 @@ SetPromiseRejectionTrackerCallback(JSContext* cx, JSPromiseRejectionTrackerCallb
 
 /**
  * Returns a new instance of the Promise builtin class in the current
- * compartment, with the right slot layout. If a `proto` is passed, that gets
- * set as the instance's [[Prototype]] instead of the original value of
- * `Promise.prototype`.
+ * compartment, with the right slot layout.
+ *
+ * The `executor` can be a `nullptr`. In that case, the only way to resolve or
+ * reject the returned promise is via the `JS::ResolvePromise` and
+ * `JS::RejectPromise` JSAPI functions.
+ *
+ * If a `proto` is passed, that gets set as the instance's [[Prototype]]
+ * instead of the original value of `Promise.prototype`.
  */
 extern JS_PUBLIC_API(JSObject*)
 NewPromiseObject(JSContext* cx, JS::HandleObject executor, JS::HandleObject proto = nullptr);
@@ -4603,6 +4634,9 @@ enum class PromiseState {
 
 /**
  * Returns the given Promise's state as a JS::PromiseState enum value.
+ *
+ * Returns JS::PromiseState::Pending if the given object is a wrapper that
+ * can't safely be unwrapped.
  */
 extern JS_PUBLIC_API(PromiseState)
 GetPromiseState(JS::HandleObject promise);
@@ -4701,12 +4735,12 @@ AddPromiseReactions(JSContext* cx, JS::HandleObject promise,
  * Unforgeable version of the JS builtin Promise.all.
  *
  * Takes an AutoObjectVector of Promise objects and returns a promise that's
- * resolved with an array of resolution values when all those promises ahve
+ * resolved with an array of resolution values when all those promises have
  * been resolved, or rejected with the rejection value of the first rejected
  * promise.
  *
- * Asserts if the array isn't dense or one of the entries isn't an unwrapped
- * instance of Promise or a subclass.
+ * Asserts that all objects in the `promises` vector are, maybe wrapped,
+ * instances of `Promise` or a subclass of `Promise`.
  */
 extern JS_PUBLIC_API(JSObject*)
 GetWaitForAllPromise(JSContext* cx, const JS::AutoObjectVector& promises);
@@ -6151,6 +6185,7 @@ class MOZ_RAII AutoHideScriptedCaller
  */
 
 typedef mozilla::Vector<uint8_t> TranscodeBuffer;
+typedef mozilla::Range<uint8_t> TranscodeRange;
 
 enum TranscodeResult
 {
@@ -6179,6 +6214,9 @@ EncodeInterpretedFunction(JSContext* cx, TranscodeBuffer& buffer, JS::HandleObje
 extern JS_PUBLIC_API(TranscodeResult)
 DecodeScript(JSContext* cx, TranscodeBuffer& buffer, JS::MutableHandleScript scriptp,
              size_t cursorIndex = 0);
+
+extern JS_PUBLIC_API(TranscodeResult)
+DecodeScript(JSContext* cx, const TranscodeRange& range, JS::MutableHandleScript scriptp);
 
 extern JS_PUBLIC_API(TranscodeResult)
 DecodeInterpretedFunction(JSContext* cx, TranscodeBuffer& buffer, JS::MutableHandleFunction funp,

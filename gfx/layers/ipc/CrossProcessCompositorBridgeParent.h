@@ -46,11 +46,6 @@ public:
 
   // FIXME/bug 774388: work out what shutdown protocol we need.
   virtual mozilla::ipc::IPCResult RecvInitialize(const uint64_t& aRootLayerTreeId) override { return IPC_FAIL_NO_REASON(this); }
-  virtual mozilla::ipc::IPCResult RecvReset(nsTArray<LayersBackend>&& aBackendHints,
-                         const uint64_t& aSeqNo,
-                         bool* aResult,
-                         TextureFactoryIdentifier* aOutIdentifier) override
-  { return IPC_FAIL_NO_REASON(this); }
   virtual mozilla::ipc::IPCResult RecvWillClose() override { return IPC_OK(); }
   virtual mozilla::ipc::IPCResult RecvPause() override { return IPC_OK(); }
   virtual mozilla::ipc::IPCResult RecvResume() override { return IPC_OK(); }
@@ -63,7 +58,9 @@ public:
                                 const gfx::IntRect& aRect) override
   { return IPC_OK(); }
   virtual mozilla::ipc::IPCResult RecvFlushRendering() override { return IPC_OK(); }
+  virtual mozilla::ipc::IPCResult RecvFlushRenderingAsync() override { return IPC_OK(); }
   virtual mozilla::ipc::IPCResult RecvForcePresent() override { return IPC_OK(); }
+  virtual mozilla::ipc::IPCResult RecvWaitOnTransactionProcessed() override { return IPC_OK(); }
   virtual mozilla::ipc::IPCResult RecvNotifyRegionInvalidated(const nsIntRegion& aRegion) override { return IPC_OK(); }
   virtual mozilla::ipc::IPCResult RecvStartFrameTimeRecording(const int32_t& aBufferSize, uint32_t* aOutStartIndex) override { return IPC_OK(); }
   virtual mozilla::ipc::IPCResult RecvStopFrameTimeRecording(const uint32_t& aStartIndex, InfallibleTArray<float>* intervals) override  { return IPC_OK(); }
@@ -91,9 +88,7 @@ public:
 
   virtual PLayerTransactionParent*
     AllocPLayerTransactionParent(const nsTArray<LayersBackend>& aBackendHints,
-                                 const uint64_t& aId,
-                                 TextureFactoryIdentifier* aTextureFactoryIdentifier,
-                                 bool *aSuccess) override;
+                                 const uint64_t& aId) override;
 
   virtual bool DeallocPLayerTransactionParent(PLayerTransactionParent* aLayers) override;
 
@@ -118,9 +113,6 @@ public:
 
   virtual AsyncCompositionManager* GetCompositionManager(LayerTransactionParent* aParent) override;
   virtual mozilla::ipc::IPCResult RecvRemotePluginsReady()  override { return IPC_FAIL_NO_REASON(this); }
-  virtual mozilla::ipc::IPCResult RecvAcknowledgeCompositorUpdate(
-    const uint64_t& aLayersId,
-    const uint64_t& aSeqNo) override;
 
   void DidComposite(uint64_t aId,
                     TimeStamp& aCompositeStart,

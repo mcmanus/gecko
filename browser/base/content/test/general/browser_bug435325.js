@@ -19,7 +19,7 @@ function test() {
   Services.prefs.setBoolPref("browser.cache.disk.enable", false);
   Services.prefs.setBoolPref("browser.cache.memory.enable", false);
 
-  gBrowser.selectedTab = gBrowser.addTab("http://example.com/");
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser, "http://example.com/");
 
   let contentScript = `
     let listener = function () {
@@ -56,7 +56,7 @@ function checkPage(data) {
     finish();
   }, "network:offline-status-changed");
 
-  ContentTask.spawn(gBrowser.selectedBrowser, null, function* () {
+  ContentTask.spawn(gBrowser.selectedBrowser, null, async function() {
     content.document.getElementById("errorTryAgain").click();
   });
 }

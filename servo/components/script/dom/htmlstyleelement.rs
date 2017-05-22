@@ -9,7 +9,6 @@ use dom::bindings::codegen::Bindings::HTMLStyleElementBinding::HTMLStyleElementM
 use dom::bindings::codegen::Bindings::NodeBinding::NodeMethods;
 use dom::bindings::inheritance::Castable;
 use dom::bindings::js::{MutNullableJS, Root};
-use dom::bindings::str::DOMString;
 use dom::cssstylesheet::CSSStyleSheet;
 use dom::document::Document;
 use dom::element::{Element, ElementCreator};
@@ -19,13 +18,13 @@ use dom::node::{ChildrenMutation, Node, UnbindContext, document_from_node, windo
 use dom::stylesheet::StyleSheet as DOMStyleSheet;
 use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
+use html5ever::{LocalName, Prefix};
 use net_traits::ReferrerPolicy;
 use script_layout_interface::message::Msg;
 use std::cell::Cell;
-use std::sync::Arc;
 use style::media_queries::parse_media_query_list;
-use style::parser::{LengthParsingMode, ParserContext as CssParserContext};
+use style::parser::{PARSING_MODE_DEFAULT, ParserContext as CssParserContext};
+use style::stylearc::Arc;
 use style::stylesheets::{CssRuleType, Stylesheet, Origin};
 use stylesheet_loader::{StylesheetLoader, StylesheetOwner};
 
@@ -45,7 +44,7 @@ pub struct HTMLStyleElement {
 
 impl HTMLStyleElement {
     fn new_inherited(local_name: LocalName,
-                     prefix: Option<DOMString>,
+                     prefix: Option<Prefix>,
                      document: &Document,
                      creator: ElementCreator) -> HTMLStyleElement {
         HTMLStyleElement {
@@ -62,7 +61,7 @@ impl HTMLStyleElement {
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
+               prefix: Option<Prefix>,
                document: &Document,
                creator: ElementCreator) -> Root<HTMLStyleElement> {
         Node::reflect_node(box HTMLStyleElement::new_inherited(local_name, prefix, document, creator),
@@ -89,7 +88,7 @@ impl HTMLStyleElement {
         let context = CssParserContext::new_for_cssom(&url,
                                                       win.css_error_reporter(),
                                                       Some(CssRuleType::Media),
-                                                      LengthParsingMode::Default,
+                                                      PARSING_MODE_DEFAULT,
                                                       doc.quirks_mode());
         let shared_lock = node.owner_doc().style_shared_lock().clone();
         let mq = Arc::new(shared_lock.wrap(

@@ -11,6 +11,7 @@
 #include "nsHttp.h"
 #include "nsHttpHandler.h"
 #include "nsHttpRequestHead.h"
+#include "TCPFastOpen.h"
 #include "nsISocketProvider.h"
 #include "nsISocketProviderService.h"
 #include "nsISSLSocketControl.h"
@@ -613,16 +614,6 @@ TLSFilterTransaction::SetDNSWasRefreshed()
   }
 
   mTransaction->SetDNSWasRefreshed();
-}
-
-uint64_t
-TLSFilterTransaction::Available()
-{
-  if (!mTransaction) {
-    return 0;
-  }
-
-  return mTransaction->Available();
 }
 
 void
@@ -1631,6 +1622,12 @@ NS_IMETHODIMP
 SocketTransportShim::SetQoSBits(uint8_t aQoSBits)
 {
   return mWrapped->SetQoSBits(aQoSBits);
+}
+
+NS_IMETHODIMP
+SocketTransportShim::SetFastOpenCallback(TCPFastOpen *aFastOpen)
+{
+  return mWrapped->SetFastOpenCallback(aFastOpen);
 }
 
 NS_IMPL_ISUPPORTS(TLSFilterTransaction, nsITimerCallback)

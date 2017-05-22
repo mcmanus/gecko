@@ -30,23 +30,8 @@
 
 "use strict";
 
-const { HEADERS } = require("../constants");
+const { FILTER_FLAGS } = require("../constants");
 const { getFormattedIPAndPort } = require("./format-utils");
-const HEADER_FILTERS = HEADERS
-  .filter(h => h.canFilter)
-  .map(h => h.filterKey || h.name);
-
-const FILTER_FLAGS = [
-  ...HEADER_FILTERS,
-  "set-cookie-domain",
-  "set-cookie-name",
-  "set-cookie-value",
-  "mime-type",
-  "larger-than",
-  "is",
-  "has-response-header",
-  "regexp",
-];
 
 /*
   The function `parseFilters` is from:
@@ -98,6 +83,7 @@ function processFlagFilter(type, value) {
     case "size":
     case "transferred":
     case "larger-than":
+    case "transferred-larger-than":
       let multiplier = 1;
       if (value.endsWith("k")) {
         multiplier = 1024;
@@ -114,10 +100,6 @@ function processFlagFilter(type, value) {
     default:
       return value.toLowerCase();
   }
-}
-
-function getSizeOrder(size) {
-  return Math.round(Math.log10(size));
 }
 
 function isFlagFilterMatch(item, { type, value, negative }) {
@@ -160,14 +142,21 @@ function isFlagFilterMatch(item, { type, value, negative }) {
       if (item.fromCache) {
         match = false;
       } else {
-        match = getSizeOrder(value) === getSizeOrder(item.transferredSize);
+        match = isSizeMatch(value, item.transferredSize);
       }
       break;
     case "size":
-      match = getSizeOrder(value) === getSizeOrder(item.contentSize);
+      match = isSizeMatch(value, item.contentSize);
       break;
     case "larger-than":
       match = item.contentSize > value;
+      break;
+    case "transferred-larger-than":
+      if (item.fromCache) {
+        match = false;
+      } else {
+        match = item.transferredSize > value;
+      }
       break;
     case "mime-type":
       match = item.mimeType.includes(value);
@@ -214,6 +203,10 @@ function isFlagFilterMatch(item, { type, value, negative }) {
     return !match;
   }
   return match;
+}
+
+function isSizeMatch(value, size) {
+  return value >= (size - size / 10) && value < (size + size / 10);
 }
 
 function isTextFilterMatch({ url }, text) {

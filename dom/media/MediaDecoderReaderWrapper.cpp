@@ -52,10 +52,13 @@ MediaDecoderReaderWrapper::RequestAudioData()
   return InvokeAsync(mReader->OwnerThread(), mReader.get(),
                      __func__, &MediaDecoderReader::RequestAudioData)
     ->Then(mOwnerThread, __func__,
-           [startTime] (AudioData* aAudio) {
+           [startTime] (RefPtr<AudioData> aAudio) {
              aAudio->AdjustForStartTime(startTime);
+             return AudioDataPromise::CreateAndResolve(aAudio.forget(), __func__);
            },
-           [] (const MediaResult& aError) {});
+           [] (const MediaResult& aError) {
+             return AudioDataPromise::CreateAndReject(aError, __func__);
+           });
 }
 
 RefPtr<MediaDecoderReaderWrapper::VideoDataPromise>
@@ -70,15 +73,18 @@ MediaDecoderReaderWrapper::RequestVideoData(bool aSkipToNextKeyframe,
   }
 
   int64_t startTime = StartTime().ToMicroseconds();
-  return InvokeAsync<bool, media::TimeUnit&&>(
+  return InvokeAsync(
     mReader->OwnerThread(), mReader.get(), __func__,
     &MediaDecoderReader::RequestVideoData,
     aSkipToNextKeyframe, aTimeThreshold)
   ->Then(mOwnerThread, __func__,
-         [startTime] (VideoData* aVideo) {
+         [startTime] (RefPtr<VideoData> aVideo) {
            aVideo->AdjustForStartTime(startTime);
+           return VideoDataPromise::CreateAndResolve(aVideo.forget(), __func__);
          },
-         [] (const MediaResult& aError) {});
+         [] (const MediaResult& aError) {
+           return VideoDataPromise::CreateAndReject(aError, __func__);
+         });
 }
 
 RefPtr<MediaDecoderReader::SeekPromise>
@@ -87,7 +93,7 @@ MediaDecoderReaderWrapper::Seek(const SeekTarget& aTarget)
   MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
   SeekTarget adjustedTarget = aTarget;
   adjustedTarget.SetTime(adjustedTarget.GetTime() + StartTime());
-  return InvokeAsync<SeekTarget&&>(
+  return InvokeAsync(
            mReader->OwnerThread(), mReader.get(), __func__,
            &MediaDecoderReader::Seek,
            Move(adjustedTarget));
@@ -131,17 +137,25 @@ MediaDecoderReaderWrapper::Shutdown()
                      &MediaDecoderReader::Shutdown);
 }
 
-void
-MediaDecoderReaderWrapper::OnMetadataRead(MetadataHolder* aMetadata)
+RefPtr<MediaDecoderReaderWrapper::MetadataPromise>
+MediaDecoderReaderWrapper::OnMetadataRead(MetadataHolder&& aMetadata)
 {
   MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
   if (mShutdown) {
-    return;
+    return MetadataPromise::CreateAndReject(
+      NS_ERROR_DOM_MEDIA_ABORT_ERR, __func__);
   }
 
   if (mStartTime.isNothing()) {
-    mStartTime.emplace(aMetadata->mInfo.mStartTime);
+    mStartTime.emplace(aMetadata.mInfo->mStartTime);
   }
+  return MetadataPromise::CreateAndResolve(Move(aMetadata), __func__);
+}
+
+RefPtr<MediaDecoderReaderWrapper::MetadataPromise>
+MediaDecoderReaderWrapper::OnMetadataNotRead(const MediaResult& aError)
+{
+  return MetadataPromise::CreateAndReject(aError, __func__);
 }
 
 void

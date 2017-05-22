@@ -9,7 +9,6 @@ obj*/**
 # below.
 addon-sdk/**
 build/**
-caps/**
 chrome/**
 config/**
 db/**
@@ -56,6 +55,8 @@ b2g/locales/en-US/b2g-l10n.js
 browser/app/**
 browser/branding/**/firefox-branding.js
 browser/base/content/test/general/file_csp_block_all_mixedcontent.html
+# Gzipped test file.
+browser/base/content/test/general/gZipOfflineChild.html
 browser/base/content/test/urlbar/file_blank_but_not_blank.html
 browser/base/content/newtab/**
 # Test files that are really json not js, and don't need to be linted.
@@ -127,11 +128,6 @@ devtools/client/webconsole/webconsole-connection-proxy.js
 devtools/client/webconsole/webconsole.js
 devtools/client/webide/**
 !devtools/client/webide/components/webideCli.js
-devtools/server/actors/webconsole.js
-devtools/server/actors/object.js
-devtools/server/actors/script.js
-devtools/server/actors/styleeditor.js
-devtools/server/actors/stylesheets.js
 devtools/server/tests/browser/storage-*.html
 !devtools/server/tests/browser/storage-unsecured-iframe.html
 devtools/server/tests/browser/stylesheets-nested-iframes.html
@@ -261,6 +257,7 @@ js/src/devtools/**
 js/src/octane/**
 js/src/jit-test/**
 js/src/tests/**
+js/src/Y.js
 
 # mobile/android/ exclusions
 mobile/android/tests/browser/chrome/tp5/**
@@ -334,3 +331,4 @@ toolkit/webapps/**
 
 # Third party
 toolkit/modules/third_party/**
+third_party/**

@@ -321,7 +321,9 @@ public:
    * that the content appears to remain visually in the same position. i.e. if
    * the surface moves up by 10 screenpixels, the scroll position should also
    * move up by 10 pixels so that what used to be at the top of the surface is
-   * now 10 pixels down the surface.
+   * now 10 pixels down the surface. Will request that content be repainted
+   * if necessary but will not request a composite. It is assumed the dynamic
+   * toolbar animator will request the composite.
    */
   void AdjustScrollForSurfaceShift(const ScreenPoint& aShift);
 
@@ -340,6 +342,11 @@ public:
    * Returns whether this APZC has room to be panned (in any direction).
    */
   bool IsPannable() const;
+
+  /**
+   * Returns whether this APZC represents a scroll info layer.
+   */
+  bool IsScrollInfoLayer() const;
 
   /**
    * Returns true if the APZC has been flung with a velocity greater than the
@@ -395,6 +402,14 @@ public:
   // Return whether or not there is room to scroll this APZC
   // in the given direction.
   bool CanScroll(ScrollDirection aDirection) const;
+
+  /**
+   * Convert a point on the scrollbar from this APZC's ParentLayer coordinates
+   * to CSS coordinates relative to the beginning of the scroll track.
+   * Only the component in the direction of scrolling is returned.
+   */
+  CSSCoord ConvertScrollbarPoint(const ParentLayerPoint& aScrollbarPoint,
+                                 const ScrollThumbData& aThumbData) const;
 
   void NotifyMozMouseScrollEvent(const nsString& aString) const;
 
@@ -733,6 +748,20 @@ private:
 
   friend class Axis;
 
+public:
+  /**
+   * Invoke |callable|, passing |mLastContentPaintMetrics| as argument,
+   * while holding the APZC lock required to access |mLastContentPaintMetrics|.
+   * This allows code outside of an AsyncPanZoomController method implementation
+   * to access |mLastContentPaintMetrics| without having to make a copy of it.
+   * Passes through the return value of |callable|.
+   */
+  template <typename Callable>
+  auto CallWithLastContentPaintMetrics(const Callable& callable) const
+    -> decltype(callable(mLastContentPaintMetrics)) {
+    ReentrantMonitorAutoEnter lock(mMonitor);
+    return callable(mLastContentPaintMetrics);
+  }
 
   /* ===================================================================
    * The functions and members in this section are used to expose

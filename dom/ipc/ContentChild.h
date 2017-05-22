@@ -36,6 +36,8 @@ struct LookAndFeelInt;
 namespace mozilla {
 class RemoteSpellcheckEngineChild;
 
+using mozilla::loader::PScriptCacheChild;
+
 namespace ipc {
 class OptionalURIParams;
 class URIParams;
@@ -104,7 +106,7 @@ public:
   void InitXPCOM(const XPCOMInitData& aXPCOMInit,
                  const mozilla::dom::ipc::StructuredCloneData& aInitialData);
 
-  void InitGraphicsDeviceData(const ContentDeviceData& aData);
+  void InitGraphicsDeviceData();
 
   static ContentChild* GetSingleton()
   {
@@ -168,6 +170,8 @@ public:
     Endpoint<PVRManagerChild>&& aVRBridge,
     Endpoint<PVideoDecoderManagerChild>&& aVideoManager,
     nsTArray<uint32_t>&& namespaces) override;
+
+  mozilla::ipc::IPCResult RecvReinitRenderingForDeviceReset() override;
 
   virtual mozilla::ipc::IPCResult RecvSetProcessSandbox(const MaybeFileDesc& aBroker) override;
 
@@ -238,6 +242,17 @@ public:
   virtual bool DeallocPTestShellChild(PTestShellChild*) override;
 
   virtual mozilla::ipc::IPCResult RecvPTestShellConstructor(PTestShellChild*) override;
+
+  virtual PScriptCacheChild*
+  AllocPScriptCacheChild(const FileDescOrError& cacheFile,
+                         const bool& wantCacheData) override;
+
+  virtual bool DeallocPScriptCacheChild(PScriptCacheChild*) override;
+
+  virtual mozilla::ipc::IPCResult
+  RecvPScriptCacheConstructor(PScriptCacheChild*,
+                              const FileDescOrError& cacheFile,
+                              const bool& wantCacheData) override;
 
   jsipc::CPOWManager* GetCPOWManager() override;
 

@@ -38,15 +38,6 @@ Thread::GetCurrentId()
   return GetCurrentThreadId();
 }
 
-static void
-SleepMicro(int aMicroseconds)
-{
-  aMicroseconds = std::max(0, aMicroseconds);
-  int aMilliseconds = std::max(1, aMicroseconds / 1000);
-
-  ::Sleep(aMilliseconds);
-}
-
 class PlatformData
 {
 public:
@@ -157,6 +148,30 @@ SamplerThread::Stop(PSLockRef aLock)
 }
 
 void
+SamplerThread::SleepMicro(uint32_t aMicroseconds)
+{
+  // For now, keep the old behaviour of minimum Sleep(1), even for
+  // smaller-than-usual sleeps after an overshoot, unless the user has
+  // explicitly opted into a sub-millisecond profiler interval.
+  if (mIntervalMicroseconds >= 1000) {
+    ::Sleep(std::max(1u, aMicroseconds / 1000));
+  } else {
+    TimeStamp start = TimeStamp::Now();
+    TimeStamp end = start + TimeDuration::FromMicroseconds(aMicroseconds);
+
+    // First, sleep for as many whole milliseconds as possible.
+    if (aMicroseconds >= 1000) {
+      ::Sleep(aMicroseconds / 1000);
+    }
+
+    // Then, spin until enough time has passed.
+    while (TimeStamp::Now() < end) {
+      _mm_pause();
+    }
+  }
+}
+
+void
 SamplerThread::SuspendAndSampleAndResumeThread(PSLockRef aLock,
                                                TickSample& aSample)
 {
@@ -211,8 +226,6 @@ SamplerThread::SuspendAndSampleAndResumeThread(PSLockRef aLock,
   aSample.mFP = reinterpret_cast<Address>(context.Ebp);
 #endif
 
-  aSample.mContext = &context;
-
   Tick(aLock, ActivePS::Buffer(aLock), aSample);
 
   //----------------------------------------------------------------//
@@ -234,22 +247,21 @@ PlatformInit(PSLockRef aLock)
 }
 
 void
-TickSample::PopulateContext(CONTEXT* aContext)
+TickSample::PopulateContext()
 {
   MOZ_ASSERT(mIsSynchronous);
-  MOZ_ASSERT(aContext);
 
-  mContext = aContext;
-  RtlCaptureContext(aContext);
+  CONTEXT context;
+  RtlCaptureContext(&context);
 
 #if defined(GP_ARCH_amd64)
-  mPC = reinterpret_cast<Address>(aContext->Rip);
-  mSP = reinterpret_cast<Address>(aContext->Rsp);
-  mFP = reinterpret_cast<Address>(aContext->Rbp);
+  mPC = reinterpret_cast<Address>(context.Rip);
+  mSP = reinterpret_cast<Address>(context.Rsp);
+  mFP = reinterpret_cast<Address>(context.Rbp);
 #elif defined(GP_ARCH_x86)
-  mPC = reinterpret_cast<Address>(aContext->Eip);
-  mSP = reinterpret_cast<Address>(aContext->Esp);
-  mFP = reinterpret_cast<Address>(aContext->Ebp);
+  mPC = reinterpret_cast<Address>(context.Eip);
+  mSP = reinterpret_cast<Address>(context.Esp);
+  mFP = reinterpret_cast<Address>(context.Ebp);
 #endif
 }
 

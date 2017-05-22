@@ -4,6 +4,7 @@
 
 //! Computed values.
 
+use Atom;
 use context::QuirksMode;
 use euclid::size::Size2D;
 use font_metrics::FontMetricsProvider;
@@ -19,11 +20,11 @@ use super::{CSSFloat, CSSInteger, RGBA};
 use super::generics::BorderRadiusSize as GenericBorderRadiusSize;
 use super::specified;
 use super::specified::grid::{TrackBreadth as GenericTrackBreadth, TrackSize as GenericTrackSize};
+use super::specified::grid::TrackList as GenericTrackList;
 
 pub use app_units::Au;
 pub use cssparser::Color as CSSColor;
-pub use self::image::{AngleOrCorner, EndingShape as GradientShape, Gradient, GradientItem};
-pub use self::image::{GradientKind, Image, ImageRect, LengthOrKeyword, LengthOrPercentageOrKeyword};
+pub use self::image::{Gradient, GradientItem, ImageLayer, LineDirection, Image, ImageRect};
 pub use super::{Auto, Either, None_};
 #[cfg(feature = "gecko")]
 pub use super::specified::{AlignItems, AlignJustifyContent, AlignJustifySelf, JustifyItems};
@@ -100,6 +101,42 @@ impl<'a> Context<'a> {
     pub fn mutate_style(&mut self) -> &mut StyleBuilder<'a> { &mut self.style }
 }
 
+/// An iterator over a slice of computed values
+#[derive(Clone)]
+pub struct ComputedVecIter<'a, 'cx, 'cx_a: 'cx, S: ToComputedValue + 'a> {
+    cx: &'cx Context<'cx_a>,
+    values: &'a [S],
+}
+
+impl<'a, 'cx, 'cx_a: 'cx, S: ToComputedValue + 'a> ComputedVecIter<'a, 'cx, 'cx_a, S> {
+    /// Construct an iterator from a slice of specified values and a context
+    pub fn new(cx: &'cx Context<'cx_a>, values: &'a [S]) -> Self {
+        ComputedVecIter {
+            cx: cx,
+            values: values,
+        }
+    }
+}
+
+impl<'a, 'cx, 'cx_a: 'cx, S: ToComputedValue + 'a> ExactSizeIterator for ComputedVecIter<'a, 'cx, 'cx_a, S> {
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+}
+
+impl<'a, 'cx, 'cx_a: 'cx, S: ToComputedValue + 'a> Iterator for ComputedVecIter<'a, 'cx, 'cx_a, S> {
+    type Item = S::ComputedValue;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((next, rest)) = self.values.split_first() {
+            let ret = next.to_computed_value(self.cx);
+            self.values = rest;
+            Some(ret)
+        } else {
+            None
+        }
+    }
+}
+
 /// A trait to represent the conversion between computed and specified values.
 pub trait ToComputedValue {
     /// The computed value type we're going to be converted to.
@@ -116,6 +153,79 @@ pub trait ToComputedValue {
     /// This will be used for recascading during animation.
     /// Such from_computed_valued values should recompute to the same value.
     fn from_computed_value(computed: &Self::ComputedValue) -> Self;
+}
+
+impl<A, B> ToComputedValue for (A, B)
+    where A: ToComputedValue, B: ToComputedValue,
+{
+    type ComputedValue = (
+        <A as ToComputedValue>::ComputedValue,
+        <B as ToComputedValue>::ComputedValue,
+    );
+
+    #[inline]
+    fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
+        (self.0.to_computed_value(context), self.1.to_computed_value(context))
+    }
+
+    #[inline]
+    fn from_computed_value(computed: &Self::ComputedValue) -> Self {
+        (A::from_computed_value(&computed.0), B::from_computed_value(&computed.1))
+    }
+}
+
+impl<T> ToComputedValue for Option<T>
+    where T: ToComputedValue
+{
+    type ComputedValue = Option<<T as ToComputedValue>::ComputedValue>;
+
+    #[inline]
+    fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
+        self.as_ref().map(|item| item.to_computed_value(context))
+    }
+
+    #[inline]
+    fn from_computed_value(computed: &Self::ComputedValue) -> Self {
+        computed.as_ref().map(T::from_computed_value)
+    }
+}
+
+impl<T> ToComputedValue for Size2D<T>
+    where T: ToComputedValue
+{
+    type ComputedValue = Size2D<<T as ToComputedValue>::ComputedValue>;
+
+    #[inline]
+    fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
+        Size2D::new(
+            self.width.to_computed_value(context),
+            self.height.to_computed_value(context),
+        )
+    }
+
+    #[inline]
+    fn from_computed_value(computed: &Self::ComputedValue) -> Self {
+        Size2D::new(
+            T::from_computed_value(&computed.width),
+            T::from_computed_value(&computed.height),
+        )
+    }
+}
+
+impl<T> ToComputedValue for Vec<T>
+    where T: ToComputedValue
+{
+    type ComputedValue = Vec<<T as ToComputedValue>::ComputedValue>;
+
+    #[inline]
+    fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
+        self.iter().map(|item| item.to_computed_value(context)).collect()
+    }
+
+    #[inline]
+    fn from_computed_value(computed: &Self::ComputedValue) -> Self {
+        computed.iter().map(T::from_computed_value).collect()
+    }
 }
 
 /// A marker trait to represent that the specified value is also the computed
@@ -138,8 +248,11 @@ impl<T> ToComputedValue for T
     }
 }
 
+impl ComputedValueAsSpecified for Atom {}
+impl ComputedValueAsSpecified for bool {}
+
 /// A computed `<angle>` value.
-#[derive(Clone, PartialEq, PartialOrd, Copy, Debug)]
+#[derive(Clone, Copy, Debug, HasViewportPercentage, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf, Deserialize, Serialize))]
 pub enum Angle {
     /// An angle with degree unit
@@ -559,6 +672,13 @@ pub type TrackBreadth = GenericTrackBreadth<LengthOrPercentage>;
 
 /// The computed value of a grid `<track-size>`
 pub type TrackSize = GenericTrackSize<LengthOrPercentage>;
+
+/// The computed value of a grid `<track-list>`
+/// (could also be `<auto-track-list>` or `<explicit-track-list>`)
+pub type TrackList = GenericTrackList<TrackSize>;
+
+/// `<track-list> | none`
+pub type TrackListOrNone = Either<TrackList, None_>;
 
 impl ClipRectOrAuto {
     /// Return an auto (default for clip-rect and image-region) value

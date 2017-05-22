@@ -76,6 +76,7 @@
 #include "nsAttrValue.h"
 #include "nsAttrValueInlines.h"
 #include "nsBindingManager.h"
+#include "nsCanvasFrame.h"
 #include "nsCaret.h"
 #include "nsCCUncollectableMarker.h"
 #include "nsCharSeparatedTokenizer.h"
@@ -219,6 +220,8 @@
 #include "mozilla/dom/TabGroup.h"
 #include "nsIWebNavigationInfo.h"
 #include "nsPluginHost.h"
+#include "mozilla/HangAnnotations.h"
+#include "mozilla/ServoRestyleManager.h"
 
 #include "nsIBidiKeyboard.h"
 
@@ -291,7 +294,6 @@ bool nsContentUtils::sIsUserTimingLoggingEnabled = false;
 bool nsContentUtils::sIsExperimentalAutocompleteEnabled = false;
 bool nsContentUtils::sIsWebComponentsEnabled = false;
 bool nsContentUtils::sIsCustomElementsEnabled = false;
-bool nsContentUtils::sPrivacyResistFingerprinting = false;
 bool nsContentUtils::sSendPerformanceTimingNotifications = false;
 bool nsContentUtils::sUseActivityCursor = false;
 bool nsContentUtils::sAnimationsAPICoreEnabled = false;
@@ -302,6 +304,9 @@ bool nsContentUtils::sRequestIdleCallbackEnabled = false;
 
 int32_t nsContentUtils::sPrivacyMaxInnerWidth = 1000;
 int32_t nsContentUtils::sPrivacyMaxInnerHeight = 1000;
+
+nsContentUtils::UserInteractionObserver*
+nsContentUtils::sUserInteractionObserver = nullptr;
 
 uint32_t nsContentUtils::sHandlingInputTimeout = 1000;
 
@@ -322,6 +327,22 @@ bool nsContentUtils::sDoNotTrackEnabled = false;
 mozilla::LazyLogModule nsContentUtils::sDOMDumpLog("Dump");
 
 // Subset of http://www.whatwg.org/specs/web-apps/current-work/#autofill-field-name
+enum AutocompleteUnsupportedFieldName : uint8_t
+{
+  #define AUTOCOMPLETE_UNSUPPORTED_FIELD_NAME(name_, value_) \
+    eAutocompleteUnsupportedFieldName_##name_,
+  #include "AutocompleteFieldList.h"
+  #undef AUTOCOMPLETE_UNSUPPORTED_FIELD_NAME
+};
+
+enum AutocompleteUnsupportFieldContactHint : uint8_t
+{
+  #define AUTOCOMPLETE_UNSUPPORTED_FIELD_CONTACT_HINT(name_, value_) \
+    eAutocompleteUnsupportedFieldContactHint_##name_,
+  #include "AutocompleteFieldList.h"
+  #undef AUTOCOMPLETE_UNSUPPORTED_FIELD_CONTACT_HINT
+};
+
 enum AutocompleteFieldName : uint8_t
 {
   #define AUTOCOMPLETE_FIELD_NAME(name_, value_) \
@@ -355,6 +376,23 @@ enum AutocompleteCategory
   #include "AutocompleteFieldList.h"
   #undef AUTOCOMPLETE_CATEGORY
 };
+
+static const nsAttrValue::EnumTable kAutocompleteUnsupportedFieldNameTable[] = {
+  #define AUTOCOMPLETE_UNSUPPORTED_FIELD_NAME(name_, value_) \
+    { value_, eAutocompleteUnsupportedFieldName_##name_ },
+  #include "AutocompleteFieldList.h"
+  #undef AUTOCOMPLETE_UNSUPPORTED_FIELD_NAME
+  { nullptr, 0 }
+};
+
+static const nsAttrValue::EnumTable kAutocompleteUnsupportedContactFieldHintTable[] = {
+  #define AUTOCOMPLETE_UNSUPPORTED_FIELD_CONTACT_HINT(name_, value_) \
+    { value_, eAutocompleteUnsupportedFieldContactHint_##name_ },
+  #include "AutocompleteFieldList.h"
+  #undef AUTOCOMPLETE_UNSUPPORTED_FIELD_CONTACT_HINT
+  { nullptr, 0 }
+};
+
 
 static const nsAttrValue::EnumTable kAutocompleteFieldNameTable[] = {
   #define AUTOCOMPLETE_FIELD_NAME(name_, value_) \
@@ -494,6 +532,32 @@ private:
 
 } // namespace
 
+/**
+ * This class is used to determine whether or not the user is currently
+ * interacting with the browser. It listens to observer events to toggle the
+ * value of the sUserActive static.
+ *
+ * This class is an internal implementation detail.
+ * nsContentUtils::GetUserIsInteracting() should be used to access current
+ * user interaction status.
+ */
+class nsContentUtils::UserInteractionObserver final : public nsIObserver
+                                                    , public HangMonitor::Annotator
+{
+public:
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSIOBSERVER
+
+  void Init();
+  void Shutdown();
+  virtual void AnnotateHang(HangMonitor::HangAnnotations& aAnnotations) override;
+
+  static Atomic<bool> sUserActive;
+
+private:
+  ~UserInteractionObserver() {}
+};
+
 /* static */
 TimeDuration
 nsContentUtils::HandlingUserInputTimeout()
@@ -601,9 +665,6 @@ nsContentUtils::Init()
   Preferences::AddBoolVarCache(&sIsCustomElementsEnabled,
                                "dom.webcomponents.customelements.enabled", false);
 
-  Preferences::AddBoolVarCache(&sPrivacyResistFingerprinting,
-                               "privacy.resistFingerprinting", false);
-
   Preferences::AddIntVarCache(&sPrivacyMaxInnerWidth,
                               "privacy.window.maxInnerWidth",
                               1000);
@@ -656,12 +717,18 @@ nsContentUtils::Init()
 
   Element::InitCCCallbacks();
 
+  Unused << nsRFPService::GetOrCreate();
+
   nsCOMPtr<nsIUUIDGenerator> uuidGenerator =
     do_GetService("@mozilla.org/uuid-generator;1", &rv);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
   uuidGenerator.forget(&sUUIDGenerator);
+
+  RefPtr<UserInteractionObserver> uio = new UserInteractionObserver();
+  uio->Init();
+  uio.forget(&sUserInteractionObserver);
 
   sInitialized = true;
 
@@ -968,14 +1035,15 @@ nsContentUtils::SerializeAutocompleteAttribute(const nsAttrValue* aAttr,
 nsContentUtils::AutocompleteAttrState
 nsContentUtils::SerializeAutocompleteAttribute(const nsAttrValue* aAttr,
                                                mozilla::dom::AutocompleteInfo& aInfo,
-                                               AutocompleteAttrState aCachedState)
+                                               AutocompleteAttrState aCachedState,
+                                               bool aGrantAllValidValue)
 {
   if (!aAttr ||
       aCachedState == nsContentUtils::eAutocompleteAttrState_Invalid) {
     return aCachedState;
   }
 
-  return InternalSerializeAutocompleteAttribute(aAttr, aInfo);
+  return InternalSerializeAutocompleteAttribute(aAttr, aInfo, aGrantAllValidValue);
 }
 
 /**
@@ -985,7 +1053,8 @@ nsContentUtils::SerializeAutocompleteAttribute(const nsAttrValue* aAttr,
  */
 nsContentUtils::AutocompleteAttrState
 nsContentUtils::InternalSerializeAutocompleteAttribute(const nsAttrValue* aAttrVal,
-                                                       mozilla::dom::AutocompleteInfo& aInfo)
+                                                       mozilla::dom::AutocompleteInfo& aInfo,
+                                                       bool aGrantAllValidValue)
 {
   // No sandbox attribute so we are done
   if (!aAttrVal) {
@@ -1002,6 +1071,16 @@ nsContentUtils::InternalSerializeAutocompleteAttribute(const nsAttrValue* aAttrV
   AutocompleteCategory category;
   nsAttrValue enumValue;
 
+  bool unsupported = false;
+  if (!aGrantAllValidValue) {
+    unsupported = enumValue.ParseEnumValue(tokenString,
+                                           kAutocompleteUnsupportedFieldNameTable,
+                                           false);
+    if (unsupported) {
+      return eAutocompleteAttrState_Invalid;
+    }
+  }
+
   nsAutoString str;
   bool result = enumValue.ParseEnumValue(tokenString, kAutocompleteFieldNameTable, false);
   if (result) {
@@ -1017,8 +1096,9 @@ nsContentUtils::InternalSerializeAutocompleteAttribute(const nsAttrValue* aAttrV
       return eAutocompleteAttrState_Valid;
     }
 
-    // Only allow on/off if experimental @autocomplete values aren't enabled.
-    if (!sIsExperimentalAutocompleteEnabled) {
+    // Only allow on/off if experimental @autocomplete values aren't enabled
+    // and it doesn't grant all valid values.
+    if (!sIsExperimentalAutocompleteEnabled && !aGrantAllValidValue) {
       return eAutocompleteAttrState_Invalid;
     }
 
@@ -1028,8 +1108,9 @@ nsContentUtils::InternalSerializeAutocompleteAttribute(const nsAttrValue* aAttrV
     }
     category = eAutocompleteCategory_NORMAL;
   } else { // Check if the last token is of the contact category instead.
-    // Only allow on/off if experimental @autocomplete values aren't enabled.
-    if (!sIsExperimentalAutocompleteEnabled) {
+    // Only allow on/off if experimental @autocomplete values aren't enabled
+    // and it doesn't grant all valid values.
+    if (!sIsExperimentalAutocompleteEnabled && !aGrantAllValidValue) {
       return eAutocompleteAttrState_Invalid;
     }
 
@@ -1054,6 +1135,16 @@ nsContentUtils::InternalSerializeAutocompleteAttribute(const nsAttrValue* aAttrV
   tokenString = nsDependentAtomString(aAttrVal->AtomAt(index));
 
   if (category == eAutocompleteCategory_CONTACT) {
+    if (!aGrantAllValidValue) {
+      unsupported = enumValue.ParseEnumValue(tokenString,
+                                             kAutocompleteUnsupportedContactFieldHintTable,
+                                             false);
+      if (unsupported) {
+        return eAutocompleteAttrState_Invalid;
+      }
+    }
+
+
     nsAttrValue contactFieldHint;
     result = contactFieldHint.ParseEnumValue(tokenString, kAutocompleteContactFieldHintTable, false);
     if (result) {
@@ -1127,6 +1218,7 @@ nsContentUtils::ParseHTMLInteger(const nsAString& aValue,
   int sign = 1;
   if (*iter == char16_t('-')) {
     sign = -1;
+    result |= eParseHTMLInteger_Negative;
     ++iter;
   } else if (*iter == char16_t('+')) {
     result |= eParseHTMLInteger_NonStandard;
@@ -2029,6 +2121,11 @@ nsContentUtils::Shutdown()
 
   NS_IF_RELEASE(sSameOriginChecker);
 
+  if (sUserInteractionObserver) {
+    sUserInteractionObserver->Shutdown();
+    NS_RELEASE(sUserInteractionObserver);
+  }
+
   HTMLInputElement::Shutdown();
   nsMappedAttributes::Shutdown();
 }
@@ -2193,7 +2290,7 @@ nsContentUtils::IsCallerChrome()
 bool
 nsContentUtils::ShouldResistFingerprinting()
 {
-  return sPrivacyResistFingerprinting;
+  return nsRFPService::IsResistFingerprintingEnabled();
 }
 
 bool
@@ -2203,7 +2300,7 @@ nsContentUtils::ShouldResistFingerprinting(nsIDocShell* aDocShell)
     return false;
   }
   bool isChrome = nsContentUtils::IsChromeDoc(aDocShell->GetDocument());
-  return !isChrome && sPrivacyResistFingerprinting;
+  return !isChrome && nsRFPService::IsResistFingerprintingEnabled();
 }
 
 /* static */
@@ -2500,34 +2597,35 @@ nsContentUtils::GetCommonAncestor(nsIDOMNode *aNode,
   return CallQueryInterface(common, aCommonAncestor);
 }
 
-// static
-nsINode*
-nsContentUtils::GetCommonAncestor(nsINode* aNode1,
-                                  nsINode* aNode2)
+template <typename Node, typename GetParentFunc>
+static Node*
+GetCommonAncestorInternal(Node* aNode1,
+                          Node* aNode2,
+                          GetParentFunc aGetParentFunc)
 {
   if (aNode1 == aNode2) {
     return aNode1;
   }
 
   // Build the chain of parents
-  AutoTArray<nsINode*, 30> parents1, parents2;
+  AutoTArray<Node*, 30> parents1, parents2;
   do {
     parents1.AppendElement(aNode1);
-    aNode1 = aNode1->GetParentNode();
+    aNode1 = aGetParentFunc(aNode1);
   } while (aNode1);
   do {
     parents2.AppendElement(aNode2);
-    aNode2 = aNode2->GetParentNode();
+    aNode2 = aGetParentFunc(aNode2);
   } while (aNode2);
 
   // Find where the parent chain differs
   uint32_t pos1 = parents1.Length();
   uint32_t pos2 = parents2.Length();
-  nsINode* parent = nullptr;
+  Node* parent = nullptr;
   uint32_t len;
   for (len = std::min(pos1, pos2); len > 0; --len) {
-    nsINode* child1 = parents1.ElementAt(--pos1);
-    nsINode* child2 = parents2.ElementAt(--pos2);
+    Node* child1 = parents1.ElementAt(--pos1);
+    Node* child2 = parents2.ElementAt(--pos2);
     if (child1 != child2) {
       break;
     }
@@ -2535,6 +2633,25 @@ nsContentUtils::GetCommonAncestor(nsINode* aNode1,
   }
 
   return parent;
+}
+
+/* static */
+nsINode*
+nsContentUtils::GetCommonAncestor(nsINode* aNode1, nsINode* aNode2)
+{
+  return GetCommonAncestorInternal(aNode1, aNode2, [](nsINode* aNode) {
+    return aNode->GetParentNode();
+  });
+}
+
+/* static */
+nsIContent*
+nsContentUtils::GetCommonFlattenedTreeAncestor(nsIContent* aContent1,
+                                               nsIContent* aContent2)
+{
+  return GetCommonAncestorInternal(aContent1, aContent2, [](nsIContent* aContent) {
+    return aContent->GetFlattenedTreeParent();
+  });
 }
 
 /* static */
@@ -3455,7 +3572,8 @@ nsContentUtils::LoadImage(nsIURI* aURI, nsINode* aContext,
                           imgINotificationObserver* aObserver, int32_t aLoadFlags,
                           const nsAString& initiatorType,
                           imgRequestProxy** aRequest,
-                          uint32_t aContentPolicyType)
+                          uint32_t aContentPolicyType,
+                          bool aUseUrgentStartForChannel)
 {
   NS_PRECONDITION(aURI, "Must have a URI");
   NS_PRECONDITION(aContext, "Must have a context");
@@ -3494,6 +3612,7 @@ nsContentUtils::LoadImage(nsIURI* aURI, nsINode* aContext,
                               nullptr,              /* cache key */
                               aContentPolicyType,   /* content policy type */
                               initiatorType,        /* the load initiator */
+                              aUseUrgentStartForChannel, /* urgent-start flag */
                               aRequest);
 }
 
@@ -5188,6 +5307,12 @@ void
 nsContentUtils::DestroyAnonymousContent(nsCOMPtr<nsIContent>* aContent)
 {
   if (*aContent) {
+    // Don't wait until UnbindFromTree to clear ServoElementData, since
+    // leak checking at shutdown can run before the AnonymousContentDestroyer
+    // runs.
+    if ((*aContent)->IsStyledByServo() && (*aContent)->IsElement()) {
+      ServoRestyleManager::ClearServoDataFromSubtree((*aContent)->AsElement());
+    }
     AddScriptRunner(new AnonymousContentDestroyer(aContent));
   }
 }
@@ -5197,6 +5322,12 @@ void
 nsContentUtils::DestroyAnonymousContent(nsCOMPtr<Element>* aElement)
 {
   if (*aElement) {
+    // Don't wait until UnbindFromTree to clear ServoElementData, since
+    // leak checking at shutdown can run before the AnonymousContentDestroyer
+    // runs.
+    if ((*aElement)->IsStyledByServo()) {
+      ServoRestyleManager::ClearServoDataFromSubtree(*aElement);
+    }
     AddScriptRunner(new AnonymousContentDestroyer(aElement));
   }
 }
@@ -6664,9 +6795,7 @@ nsContentUtils::FlushLayoutForTree(nsPIDOMWindowOuter* aWindow)
 
 void nsContentUtils::RemoveNewlines(nsString &aString)
 {
-  // strip CR/LF and null
-  static const char badChars[] = {'\r', '\n', 0};
-  aString.StripChars(badChars);
+  aString.StripCRLF();
 }
 
 void
@@ -6764,6 +6893,34 @@ nsContentUtils::WidgetForDocument(const nsIDocument* aDoc)
         }
       }
     }
+  }
+
+  return nullptr;
+}
+
+nsIWidget*
+nsContentUtils::WidgetForContent(const nsIContent* aContent)
+{
+  nsIFrame* frame = aContent->GetPrimaryFrame();
+  if (frame) {
+    frame = nsLayoutUtils::GetDisplayRootFrame(frame);
+
+    nsView* view = frame->GetView();
+    if (view) {
+      return view->GetWidget();
+    }
+  }
+
+  return nullptr;
+}
+
+already_AddRefed<LayerManager>
+nsContentUtils::LayerManagerForContent(const nsIContent *aContent)
+{
+  nsIWidget* widget = nsContentUtils::WidgetForContent(aContent);
+  if (widget) {
+    RefPtr<LayerManager> manager = widget->GetLayerManager();
+    return manager.forget();
   }
 
   return nullptr;
@@ -7019,9 +7176,22 @@ nsContentUtils::IsFullScreenApiEnabled()
 bool
 nsContentUtils::IsRequestFullScreenAllowed(CallerType aCallerType)
 {
-  return !sTrustedFullScreenOnly ||
-         EventStateManager::IsHandlingUserInput() ||
-         aCallerType == CallerType::System;
+  // If more time has elapsed since the user input than is specified by the
+  // dom.event.handling-user-input-time-limit pref (default 1 second), this
+  // function also returns false.
+
+  if (!sTrustedFullScreenOnly || aCallerType == CallerType::System) {
+    return true;
+  }
+
+  if (EventStateManager::IsHandlingUserInput()) {
+    TimeDuration timeout = HandlingUserInputTimeout();
+    return timeout <= TimeDuration(0) ||
+      (TimeStamp::Now() -
+       EventStateManager::GetHandlingInputStart()) <= timeout;
+  }
+
+  return false;
 }
 
 /* static */
@@ -7972,17 +8142,19 @@ nsContentUtils::TransferableToIPCTransferable(nsITransferable* aTransferable,
             }
             size_t length;
             int32_t stride;
-            Shmem surfaceData;
             IShmemAllocator* allocator = aChild ? static_cast<IShmemAllocator*>(aChild)
                                                 : static_cast<IShmemAllocator*>(aParent);
-            GetSurfaceData(dataSurface, &length, &stride,
-                           allocator,
-                           &surfaceData);
+            Maybe<Shmem> surfaceData = GetSurfaceData(dataSurface, &length, &stride,
+                                                      allocator);
+
+            if (surfaceData.isNothing()) {
+              continue;
+            }
 
             IPCDataTransferItem* item = aIPCDataTransfer->items().AppendElement();
             item->flavor() = flavorStr;
             // Turn item->data() into an nsCString prior to accessing it.
-            item->data() = surfaceData;
+            item->data() = surfaceData.ref();
 
             IPCDataTransferImage& imageDetails = item->imageDetails();
             mozilla::gfx::IntSize size = dataSurface->GetSize();
@@ -8132,7 +8304,7 @@ struct GetSurfaceDataRawBuffer
 // a shared memory buffer.
 struct GetSurfaceDataShmem
 {
-  using ReturnType = Shmem;
+  using ReturnType = Maybe<Shmem>;
   using BufferType = char*;
 
   explicit GetSurfaceDataShmem(IShmemAllocator* aAllocator)
@@ -8141,17 +8313,18 @@ struct GetSurfaceDataShmem
 
   ReturnType Allocate(size_t aSize)
   {
-    Shmem returnValue;
-    mAllocator->AllocShmem(aSize,
-                           SharedMemory::TYPE_BASIC,
-                           &returnValue);
-    return returnValue;
+    Shmem shmem;
+    if (!mAllocator->AllocShmem(aSize, SharedMemory::TYPE_BASIC, &shmem)) {
+      return Nothing();
+    }
+
+    return Some(shmem);
   }
 
   static BufferType
   GetBuffer(const ReturnType& aReturnValue)
   {
-    return aReturnValue.get<char>();
+    return aReturnValue.isSome() ? aReturnValue.ref().get<char>() : nullptr;
   }
 
   static ReturnType
@@ -8219,14 +8392,13 @@ nsContentUtils::GetSurfaceData(
   return GetSurfaceDataImpl(aSurface, aLength, aStride);
 }
 
-void
+Maybe<Shmem>
 nsContentUtils::GetSurfaceData(mozilla::gfx::DataSourceSurface* aSurface,
                                size_t* aLength, int32_t* aStride,
-                               IShmemAllocator* aAllocator,
-                               Shmem *aOutShmem)
+                               IShmemAllocator* aAllocator)
 {
-  *aOutShmem = GetSurfaceDataImpl(aSurface, aLength, aStride,
-                                  GetSurfaceDataShmem(aAllocator));
+  return GetSurfaceDataImpl(aSurface, aLength, aStride,
+                            GetSurfaceDataShmem(aAllocator));
 }
 
 mozilla::Modifiers
@@ -8612,65 +8784,6 @@ nsContentUtils::GetWindowRoot(nsIDocument* aDoc)
 }
 
 /* static */
-nsContentPolicyType
-nsContentUtils::InternalContentPolicyTypeToExternal(nsContentPolicyType aType)
-{
-  switch (aType) {
-  case nsIContentPolicy::TYPE_INTERNAL_SCRIPT:
-  case nsIContentPolicy::TYPE_INTERNAL_SCRIPT_PRELOAD:
-  case nsIContentPolicy::TYPE_INTERNAL_WORKER:
-  case nsIContentPolicy::TYPE_INTERNAL_SHARED_WORKER:
-  case nsIContentPolicy::TYPE_INTERNAL_SERVICE_WORKER:
-  case nsIContentPolicy::TYPE_INTERNAL_WORKER_IMPORT_SCRIPTS:
-    return nsIContentPolicy::TYPE_SCRIPT;
-
-  case nsIContentPolicy::TYPE_INTERNAL_EMBED:
-  case nsIContentPolicy::TYPE_INTERNAL_OBJECT:
-    return nsIContentPolicy::TYPE_OBJECT;
-
-  case nsIContentPolicy::TYPE_INTERNAL_FRAME:
-  case nsIContentPolicy::TYPE_INTERNAL_IFRAME:
-    return nsIContentPolicy::TYPE_SUBDOCUMENT;
-
-  case nsIContentPolicy::TYPE_INTERNAL_AUDIO:
-  case nsIContentPolicy::TYPE_INTERNAL_VIDEO:
-  case nsIContentPolicy::TYPE_INTERNAL_TRACK:
-    return nsIContentPolicy::TYPE_MEDIA;
-
-  case nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST:
-  case nsIContentPolicy::TYPE_INTERNAL_EVENTSOURCE:
-    return nsIContentPolicy::TYPE_XMLHTTPREQUEST;
-
-  case nsIContentPolicy::TYPE_INTERNAL_IMAGE:
-  case nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD:
-  case nsIContentPolicy::TYPE_INTERNAL_IMAGE_FAVICON:
-    return nsIContentPolicy::TYPE_IMAGE;
-
-  case nsIContentPolicy::TYPE_INTERNAL_STYLESHEET:
-  case nsIContentPolicy::TYPE_INTERNAL_STYLESHEET_PRELOAD:
-    return nsIContentPolicy::TYPE_STYLESHEET;
-
-  default:
-    return aType;
-  }
-}
-
-/* static */
-nsContentPolicyType
-nsContentUtils::InternalContentPolicyTypeToExternalOrWorker(nsContentPolicyType aType)
-{
-  switch (aType) {
-  case nsIContentPolicy::TYPE_INTERNAL_WORKER:
-  case nsIContentPolicy::TYPE_INTERNAL_SHARED_WORKER:
-  case nsIContentPolicy::TYPE_INTERNAL_SERVICE_WORKER:
-    return aType;
-
-  default:
-    return InternalContentPolicyTypeToExternal(aType);
-  }
-}
-
-/* static */
 bool
 nsContentUtils::IsPreloadType(nsContentPolicyType aType)
 {
@@ -8752,6 +8865,25 @@ nsContentUtils::GetReferrerPolicyFromHeader(const nsAString& aHeader)
     }
   }
   return referrerPolicy;
+}
+
+// static
+bool
+nsContentUtils::PromiseRejectionEventsEnabled(JSContext* aCx, JSObject* aObj)
+{
+  if (NS_IsMainThread()) {
+    return Preferences::GetBool("dom.promise_rejection_events.enabled", false);
+  }
+
+  using namespace workers;
+
+  // Otherwise, check the pref via the WorkerPrivate
+  WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
+  if (!workerPrivate) {
+    return false;
+  }
+
+  return workerPrivate->PromiseRejectionEventsEnabled();
 }
 
 // static
@@ -10077,13 +10209,18 @@ nsContentUtils::AppendDocumentLevelNativeAnonymousContentTo(
 {
   MOZ_ASSERT(aDocument);
 
-  // XXXheycam This probably needs to find the nsCanvasFrame's NAC too.
   if (nsIPresShell* presShell = aDocument->GetShell()) {
     if (nsIFrame* scrollFrame = presShell->GetRootScrollFrame()) {
       nsIAnonymousContentCreator* creator = do_QueryFrame(scrollFrame);
       MOZ_ASSERT(creator,
                  "scroll frame should always implement nsIAnonymousContentCreator");
       creator->AppendAnonymousContentTo(aElements, 0);
+    }
+
+    if (nsCanvasFrame* canvasFrame = presShell->GetCanvasFrame()) {
+      if (Element* container = canvasFrame->GetCustomContentContainer()) {
+        aElements.AppendElement(container);
+      }
     }
   }
 }
@@ -10317,5 +10454,74 @@ nsContentUtils::GenerateTabId()
   uint64_t tabBits = tabId & ((uint64_t(1) << kTabIdTabBits) - 1);
 
   return (processBits << kTabIdTabBits) | tabBits;
-
 }
+
+/* static */ bool
+nsContentUtils::GetUserIsInteracting()
+{
+  return UserInteractionObserver::sUserActive;
+}
+
+static const char* kUserInteractionInactive = "user-interaction-inactive";
+static const char* kUserInteractionActive = "user-interaction-active";
+
+void
+nsContentUtils::UserInteractionObserver::Init()
+{
+  // Listen for the observer messages from EventStateManager which are telling
+  // us whether or not the user is interacting.
+  nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+  obs->AddObserver(this, kUserInteractionInactive, false);
+  obs->AddObserver(this, kUserInteractionActive, false);
+
+  // We can't register ourselves as an annotator yet, as the HangMonitor hasn't
+  // started yet. It will have started by the time we have the chance to spin
+  // the event loop.
+  RefPtr<UserInteractionObserver> self = this;
+  NS_DispatchToMainThread(NS_NewRunnableFunction([=] () {
+        HangMonitor::RegisterAnnotator(*self);
+      }));
+}
+
+void
+nsContentUtils::UserInteractionObserver::Shutdown()
+{
+  nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+  if (obs) {
+    obs->RemoveObserver(this, kUserInteractionInactive);
+    obs->RemoveObserver(this, kUserInteractionActive);
+  }
+
+  HangMonitor::UnregisterAnnotator(*this);
+}
+
+/**
+ * NB: This function is always called by the HangMonitor thread.
+ *     Plan accordingly
+ */
+void
+nsContentUtils::UserInteractionObserver::AnnotateHang(HangMonitor::HangAnnotations& aAnnotations)
+{
+  // NOTE: Only annotate the hang report if the user is known to be interacting.
+  if (sUserActive) {
+    aAnnotations.AddAnnotation(NS_LITERAL_STRING("UserInteracting"), true);
+  }
+}
+
+NS_IMETHODIMP
+nsContentUtils::UserInteractionObserver::Observe(nsISupports* aSubject,
+                                                 const char* aTopic,
+                                                 const char16_t* aData)
+{
+  if (!strcmp(aTopic, kUserInteractionInactive)) {
+    sUserActive = false;
+  } else if (!strcmp(aTopic, kUserInteractionActive)) {
+    sUserActive = true;
+  } else {
+    NS_WARNING("Unexpected observer notification");
+  }
+  return NS_OK;
+}
+
+Atomic<bool> nsContentUtils::UserInteractionObserver::sUserActive(false);
+NS_IMPL_ISUPPORTS(nsContentUtils::UserInteractionObserver, nsIObserver)

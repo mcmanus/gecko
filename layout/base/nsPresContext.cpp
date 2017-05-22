@@ -75,6 +75,7 @@
 #include "gfxTextRun.h"
 #include "nsFontFaceUtils.h"
 #include "nsLayoutStylesheetCache.h"
+#include "mozilla/ServoBindings.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/Telemetry.h"
@@ -230,11 +231,13 @@ nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
     mFocusBackgroundColor(mBackgroundColor),
     mFocusTextColor(mDefaultColor),
     mBodyTextColor(mDefaultColor),
+    mViewportScrollbarOverrideNode(nullptr),
     mViewportStyleScrollbar(NS_STYLE_OVERFLOW_AUTO, NS_STYLE_OVERFLOW_AUTO),
     mFocusRingWidth(1),
     mExistThrottledUpdates(false),
     // mImageAnimationMode is initialised below, in constructor body
     mImageAnimationModePref(imgIContainer::kNormalAnimMode),
+    mFontGroupCacheDirty(true),
     mInterruptChecksToSkip(0),
     mElementsRestyled(0),
     mFramesConstructed(0),
@@ -621,6 +624,7 @@ nsPresContext::GetUserPreferences()
   mPrefScrollbarSide = Preferences::GetInt("layout.scrollbar.side");
 
   mLangGroupFontPrefs.Reset();
+  mFontGroupCacheDirty = true;
   StaticPresData::Get()->ResetCachedFontPrefs();
 
   // * image animation
@@ -1064,6 +1068,7 @@ nsPresContext::UpdateCharSet(const nsCString& aCharSet)
       mLanguage = mLangService->GetLocaleLanguage();
     }
     mLangGroupFontPrefs.Reset();
+    mFontGroupCacheDirty = true;
   }
 
   switch (GET_BIDI_OPTION_TEXTTYPE(GetBidi())) {
@@ -1495,10 +1500,10 @@ nsPresContext::UpdateViewportScrollbarStylesOverride()
   // Start off with our default styles, and then update them as needed.
   mViewportStyleScrollbar = ScrollbarStyles(NS_STYLE_OVERFLOW_AUTO,
                                             NS_STYLE_OVERFLOW_AUTO);
-  nsIContent* propagatedFrom = nullptr;
+  mViewportScrollbarOverrideNode = nullptr;
   // Don't propagate the scrollbar state in printing or print preview.
   if (!IsPaginated()) {
-    propagatedFrom =
+    mViewportScrollbarOverrideNode =
       GetPropagatedScrollbarStylesForViewport(this, &mViewportStyleScrollbar);
   }
 
@@ -1510,13 +1515,12 @@ nsPresContext::UpdateViewportScrollbarStylesOverride()
     // the styles are from, so that the state of those elements is not
     // affected across fullscreen change.
     if (fullscreenElement != document->GetRootElement() &&
-        fullscreenElement != propagatedFrom) {
+        fullscreenElement != mViewportScrollbarOverrideNode) {
       mViewportStyleScrollbar = ScrollbarStyles(NS_STYLE_OVERFLOW_HIDDEN,
                                                 NS_STYLE_OVERFLOW_HIDDEN);
     }
   }
-
-  return propagatedFrom;
+  return mViewportScrollbarOverrideNode;
 }
 
 bool
@@ -1975,6 +1979,33 @@ void nsPresContext::StopEmulatingMedium()
 }
 
 void
+nsPresContext::ForceCacheLang(nsIAtom *aLanguage)
+{
+  // force it to be cached
+  GetDefaultFont(kPresContext_DefaultVariableFont_ID, aLanguage);
+  if (!mLanguagesUsed.Contains(aLanguage)) {
+    mLanguagesUsed.PutEntry(aLanguage);
+  }
+}
+
+void
+nsPresContext::CacheAllLangs()
+{
+  if (mFontGroupCacheDirty) {
+    nsCOMPtr<nsIAtom> thisLang = nsStyleFont::GetLanguage(this);
+    GetDefaultFont(kPresContext_DefaultVariableFont_ID, thisLang.get());
+    GetDefaultFont(kPresContext_DefaultVariableFont_ID, nsGkAtoms::x_math);
+    // https://bugzilla.mozilla.org/show_bug.cgi?id=1362599#c12
+    GetDefaultFont(kPresContext_DefaultVariableFont_ID, nsGkAtoms::Unicode);
+    for (auto iter = mLanguagesUsed.Iter(); !iter.Done(); iter.Next()) {
+
+      GetDefaultFont(kPresContext_DefaultVariableFont_ID, iter.Get()->GetKey());
+    }
+  }
+  mFontGroupCacheDirty = false;
+}
+
+void
 nsPresContext::RebuildAllStyleData(nsChangeHint aExtraHint,
                                    nsRestyleHint aRestyleHint)
 {
@@ -2209,13 +2240,23 @@ nsPresContext::UpdateIsChrome()
 }
 
 bool
-nsPresContext::HasAuthorSpecifiedRules(const nsIFrame *aFrame,
-                                       uint32_t ruleTypeMask) const
+nsPresContext::HasAuthorSpecifiedRules(const nsIFrame* aFrame,
+                                       uint32_t aRuleTypeMask) const
 {
-  return
-    nsRuleNode::HasAuthorSpecifiedRules(aFrame->StyleContext(),
-                                        ruleTypeMask,
-                                        UseDocumentColors());
+  if (mShell->StyleSet()->IsGecko()) {
+    return
+      nsRuleNode::HasAuthorSpecifiedRules(aFrame->StyleContext(),
+                                          aRuleTypeMask,
+                                          UseDocumentColors());
+  }
+  Element* elem = aFrame->GetContent()->AsElement();
+
+  MOZ_ASSERT(elem->GetPseudoElementType() ==
+             aFrame->StyleContext()->GetPseudoType());
+  MOZ_ASSERT(elem->HasServoData());
+  return Servo_HasAuthorSpecifiedRules(elem,
+                                       aRuleTypeMask,
+                                       UseDocumentColors());
 }
 
 gfxUserFontSet*
@@ -2260,6 +2301,29 @@ nsPresContext::UserFontSetUpdated(gfxUserFontEntry* aUpdatedFont)
   }
 }
 
+class CounterStyleCleaner : public nsAPostRefreshObserver
+{
+public:
+  CounterStyleCleaner(nsRefreshDriver* aRefreshDriver,
+                      CounterStyleManager* aCounterStyleManager)
+    : mRefreshDriver(aRefreshDriver)
+    , mCounterStyleManager(aCounterStyleManager)
+  {
+  }
+  virtual ~CounterStyleCleaner() {}
+
+  void DidRefresh() final
+  {
+    mRefreshDriver->RemovePostRefreshObserver(this);
+    mCounterStyleManager->CleanRetiredStyles();
+    delete this;
+  }
+
+private:
+  RefPtr<nsRefreshDriver> mRefreshDriver;
+  RefPtr<CounterStyleManager> mCounterStyleManager;
+};
+
 void
 nsPresContext::FlushCounterStyles()
 {
@@ -2277,6 +2341,8 @@ nsPresContext::FlushCounterStyles()
       PresShell()->NotifyCounterStylesAreDirty();
       PostRebuildAllStyleDataEvent(NS_STYLE_HINT_REFLOW,
                                    eRestyle_ForceDescendants);
+      RefreshDriver()->AddPostRefreshObserver(
+        new CounterStyleCleaner(RefreshDriver(), mCounterStyleManager));
     }
     mCounterStylesDirty = false;
   }

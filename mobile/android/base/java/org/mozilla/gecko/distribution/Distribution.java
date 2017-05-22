@@ -41,12 +41,14 @@ import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.GeckoAppShell;
+import org.mozilla.gecko.GeckoApplication;
 import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.annotation.JNITarget;
 import org.mozilla.gecko.util.FileUtils;
 import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.HardwareUtils;
+import org.mozilla.gecko.util.ProxySelector;
 import org.mozilla.gecko.util.ThreadUtils;
 
 import android.app.Activity;
@@ -542,19 +544,11 @@ public class Distribution {
         Log.v(LOGTAG, "Downloading referred distribution: " + uri);
 
         try {
-            final HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection();
+            final HttpURLConnection connection = (HttpURLConnection) ProxySelector.openConnectionWithProxy(uri);
 
             // If the Search Activity starts, and we handle the referrer intent, this'll return
             // null. Recover gracefully in this case.
-            final GeckoAppShell.GeckoInterface geckoInterface = GeckoAppShell.getGeckoInterface();
-            final String ua;
-            if (geckoInterface == null) {
-                // Fall back to GeckoApp's default implementation.
-                ua = HardwareUtils.isTablet() ? AppConstants.USER_AGENT_FENNEC_TABLET :
-                                                AppConstants.USER_AGENT_FENNEC_MOBILE;
-            } else {
-                ua = geckoInterface.getDefaultUAString();
-            }
+            final String ua = GeckoApplication.getDefaultUAString();
 
             connection.setRequestProperty(HTTP.USER_AGENT, ua);
             connection.setRequestProperty("Accept", EXPECTED_CONTENT_TYPE);

@@ -24,11 +24,14 @@
 #include "nsStyleContext.h"
 #include "nsStyleSet.h"
 #include "nsComputedDOMStyle.h"
+#include "nsContentUtils.h"
 #include "nsCSSParser.h"
 #include "nsCSSPseudoElements.h"
 #include "mozilla/css/Declaration.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/FloatingPoint.h"
+#include "mozilla/ServoComputedValuesWithParent.h"
+#include "mozilla/KeyframeUtils.h" // KeyframeUtils::ParseProperty
 #include "mozilla/Likely.h"
 #include "mozilla/ServoBindings.h" // RawServoDeclarationBlock
 #include "gfxMatrix.h"
@@ -3354,9 +3357,19 @@ StyleAnimationValue::Accumulate(nsCSSPropertyID aProperty,
       MOZ_ASSERT(listB);
 
       nsAutoPtr<nsCSSValueList> resultList;
-      if (listA->mValue.GetUnit() == eCSSUnit_None ||
-          listB->mValue.GetUnit() == eCSSUnit_None) {
+      if (listA->mValue.GetUnit() == eCSSUnit_None) {
+        // If |aA| is 'none' then we are calculating:
+        //
+        //    none * |aCount| + |aB|
+        //    = none + |aB|
+        //    = |aB|
+        //
+        // Hence the result should just be |aB|, even if |aB| is also 'none'.
+        // Since |result| is already initialized to |aB|, we just return that.
         break;
+      } else if (listB->mValue.GetUnit() == eCSSUnit_None) {
+        resultList = AddTransformLists(0.0, listA, aCount, listA,
+                                       eCSSKeyword_accumulatematrix);
       } else if (TransformFunctionListsMatch(listA, listB)) {
         resultList = AddTransformLists(1.0, listB, aCount, listA,
                                        eCSSKeyword_accumulatematrix);
@@ -5216,6 +5229,7 @@ StyleAnimationValue::operator==(const StyleAnimationValue& aOther) const
   return false;
 }
 
+
 // AnimationValue Implementation
 
 bool
@@ -5294,4 +5308,94 @@ AnimationValue::IsInterpolableWith(nsCSSPropertyID aProperty,
   StyleAnimationValue dummy;
   return StyleAnimationValue::Interpolate(
            aProperty, mGecko, aToValue.mGecko, 0.5, dummy);
+}
+
+double
+AnimationValue::ComputeDistance(nsCSSPropertyID aProperty,
+                                const AnimationValue& aOther,
+                                nsStyleContext* aStyleContext) const
+{
+  if (IsNull() || aOther.IsNull()) {
+    return 0.0;
+  }
+
+  MOZ_ASSERT(!mServo != mGecko.IsNull());
+  MOZ_ASSERT(mGecko.IsNull() == aOther.mGecko.IsNull() &&
+             !mServo == !aOther.mServo,
+             "Animation values should have the same style engine");
+
+  if (mServo) {
+    return Servo_AnimationValues_ComputeDistance(mServo, aOther.mServo);
+  }
+
+  double distance = 0.0;
+  return StyleAnimationValue::ComputeDistance(aProperty,
+                                              mGecko,
+                                              aOther.mGecko,
+                                              aStyleContext,
+                                              distance)
+         ? distance
+         : 0.0;
+}
+
+/* static */ AnimationValue
+AnimationValue::FromString(nsCSSPropertyID aProperty,
+                           const nsAString& aValue,
+                           Element* aElement)
+{
+  MOZ_ASSERT(aElement);
+
+  AnimationValue result;
+
+  nsCOMPtr<nsIDocument> doc = aElement->GetComposedDoc();
+  if (!doc) {
+    return result;
+  }
+
+  nsCOMPtr<nsIPresShell> shell = doc->GetShell();
+  if (!shell) {
+    return result;
+  }
+
+  // GetStyleContext() flushes style, so we shouldn't assume that any
+  // non-owning references we have are still valid.
+  RefPtr<nsStyleContext> styleContext =
+    nsComputedDOMStyle::GetStyleContext(aElement, nullptr, shell);
+
+  if (styleContext->StyleSource().IsServoComputedValues()) {
+    nsPresContext* presContext = shell->GetPresContext();
+    if (!presContext) {
+      return result;
+    }
+
+    RefPtr<RawServoDeclarationBlock> declarations =
+      KeyframeUtils::ParseProperty(aProperty, aValue, doc);
+
+    if (!declarations) {
+      return result;
+    }
+
+    // We use the current ServoComputeValues and its parent ServoComputeValues
+    // to reconstruct the Context and then compute the AnimationValue. However,
+    // nsStyleContext::GetParentAllowServo() is going away, so if possible, we
+    // should find another way to get the parent ServoComputedValues.
+    RefPtr<nsStyleContext> parentContext = styleContext->GetParentAllowServo();
+    const ServoComputedValuesWithParent styles = {
+      styleContext->StyleSource().AsServoComputedValues(),
+      parentContext ? parentContext->StyleSource().AsServoComputedValues()
+                    : nullptr
+    };
+
+    result.mServo = presContext->StyleSet()
+                               ->AsServo()
+                               ->ComputeAnimationValue(declarations, styles);
+    return result;
+  }
+
+  if (!StyleAnimationValue::ComputeValue(aProperty, aElement, styleContext,
+                                         aValue, false /* |aUseSVGMode| */,
+                                         result.mGecko)) {
+    MOZ_ASSERT(result.IsNull());
+  }
+  return result;
 }

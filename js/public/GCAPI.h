@@ -13,6 +13,7 @@
 #include "js/GCAnnotations.h"
 #include "js/HeapAPI.h"
 #include "js/UniquePtr.h"
+#include "js/Utility.h"
 
 namespace js {
 namespace gc {
@@ -318,13 +319,9 @@ class GarbageCollectionEvent
 
 enum GCProgress {
     /*
-     * During non-incremental GC, the GC is bracketed by JSGC_CYCLE_BEGIN/END
-     * callbacks. During an incremental GC, the sequence of callbacks is as
-     * follows:
-     *   JSGC_CYCLE_BEGIN, JSGC_SLICE_END  (first slice)
-     *   JSGC_SLICE_BEGIN, JSGC_SLICE_END  (second slice)
-     *   ...
-     *   JSGC_SLICE_BEGIN, JSGC_CYCLE_END  (last slice)
+     * During GC, the GC is bracketed by GC_CYCLE_BEGIN/END callbacks. Each
+     * slice between those (whether an incremental or the sole non-incremental
+     * slice) is bracketed by GC_SLICE_BEGIN/GC_SLICE_END.
      */
 
     GC_CYCLE_BEGIN,
@@ -335,18 +332,30 @@ enum GCProgress {
 
 struct JS_PUBLIC_API(GCDescription) {
     bool isZone_;
+    bool isComplete_;
     JSGCInvocationKind invocationKind_;
     gcreason::Reason reason_;
 
-    GCDescription(bool isZone, JSGCInvocationKind kind, gcreason::Reason reason)
-      : isZone_(isZone), invocationKind_(kind), reason_(reason) {}
+    GCDescription(bool isZone, bool isComplete, JSGCInvocationKind kind, gcreason::Reason reason)
+      : isZone_(isZone), isComplete_(isComplete), invocationKind_(kind), reason_(reason) {}
 
     char16_t* formatSliceMessage(JSContext* cx) const;
     char16_t* formatSummaryMessage(JSContext* cx) const;
     char16_t* formatJSON(JSContext* cx, uint64_t timestamp) const;
 
+    mozilla::TimeStamp startTime(JSContext* cx) const;
+    mozilla::TimeStamp endTime(JSContext* cx) const;
+    mozilla::TimeStamp lastSliceStart(JSContext* cx) const;
+    mozilla::TimeStamp lastSliceEnd(JSContext* cx) const;
+
+    JS::UniqueChars sliceToJSON(JSContext* cx) const;
+    JS::UniqueChars summaryToJSON(JSContext* cx) const;
+
     JS::dbg::GarbageCollectionEvent::Ptr toGCEvent(JSContext* cx) const;
 };
+
+extern JS_PUBLIC_API(UniqueChars)
+MinorGcToJSON(JSContext* cx);
 
 typedef void
 (* GCSliceCallback)(JSContext* cx, GCProgress progress, const GCDescription& desc);

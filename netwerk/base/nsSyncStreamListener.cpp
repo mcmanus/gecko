@@ -15,7 +15,7 @@ nsSyncStreamListener::Init()
 {
     return NS_NewPipe(getter_AddRefs(mPipeIn),
                       getter_AddRefs(mPipeOut),
-                      nsIOService::gDefaultSegmentSize,
+                      mozilla::net::nsIOService::gDefaultSegmentSize,
                       UINT32_MAX, // no size limit
                       false,
                       false);
@@ -26,8 +26,9 @@ nsSyncStreamListener::WaitForData()
 {
     mKeepWaiting = true;
 
-    while (mKeepWaiting)
-        NS_ENSURE_STATE(NS_ProcessNextEvent(NS_GetCurrentThread()));
+    if (!mozilla::SpinEventLoopUntil([&]() { return !mKeepWaiting; })) {
+      return NS_ERROR_FAILURE;
+    }
 
     return NS_OK;
 }

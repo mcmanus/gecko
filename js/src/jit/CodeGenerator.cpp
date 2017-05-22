@@ -23,6 +23,7 @@
 #include "jsstr.h"
 
 #include "builtin/Eval.h"
+#include "builtin/RegExp.h"
 #include "builtin/TypedObject.h"
 #include "gc/Nursery.h"
 #include "irregexp/NativeRegExpMacroAssembler.h"
@@ -158,6 +159,10 @@ typedef JSObject* (*IonBindNameICFn)(JSContext*, HandleScript, IonBindNameIC*, H
 static const VMFunction IonBindNameICInfo =
     FunctionInfo<IonBindNameICFn>(IonBindNameIC::update, "IonBindNameIC::update");
 
+typedef bool (*IonInICFn)(JSContext*, HandleScript, IonInIC*, HandleValue, HandleObject, bool*);
+static const VMFunction IonInICInfo =
+    FunctionInfo<IonInICFn>(IonInIC::update, "IonInIC::update");
+
 void
 CodeGenerator::visitOutOfLineICFallback(OutOfLineICFallback* ool)
 {
@@ -243,7 +248,24 @@ CodeGenerator::visitOutOfLineICFallback(OutOfLineICFallback* ool)
         masm.jump(ool->rejoin());
         return;
       }
-      case CacheKind::In:
+      case CacheKind::In: {
+        IonInIC* inIC = ic->asInIC();
+
+        saveLive(lir);
+
+        pushArg(inIC->object());
+        pushArg(inIC->key());
+        icInfo_[cacheInfoIndex].icOffsetForPush = pushArgWithPatch(ImmWord(-1));
+        pushArg(ImmGCPtr(gen->info().script()));
+
+        callVM(IonInICInfo, lir);
+
+        StoreRegisterTo(inIC->output()).generate(this);
+        restoreLiveIgnore(lir, StoreRegisterTo(inIC->output()).clobbered());
+
+        masm.jump(ool->rejoin());
+        return;
+      }
       case CacheKind::TypeOf:
         MOZ_CRASH("Baseline-specific for now");
       case CacheKind::HasOwn: {
@@ -8932,7 +8954,26 @@ CodeGenerator::emitArrayPopShift(LInstruction* lir, const MArrayPopShift* mir, R
         Address elementFlags(elementsTemp, ObjectElements::offsetOfFlags());
         Imm32 bit(ObjectElements::NONWRITABLE_ARRAY_LENGTH);
         masm.branchTest32(Assembler::NonZero, elementFlags, bit, ool->entry());
+    }
 
+    if (mir->mode() == MArrayPopShift::Shift) {
+        // Don't save the elementsTemp register.
+        LiveRegisterSet temps;
+        temps.add(elementsTemp);
+
+        saveVolatile(temps);
+        masm.setupUnalignedABICall(elementsTemp);
+        masm.passABIArg(obj);
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, js::ArrayShiftMoveElements));
+        restoreVolatile(temps);
+
+        if (mir->unboxedType() == JSVAL_TYPE_MAGIC) {
+            // Reload elementsTemp as ArrayShiftMoveElements may have moved it.
+            masm.loadPtr(Address(obj, NativeObject::offsetOfElements()), elementsTemp);
+        }
+    }
+
+    if (mir->unboxedType() == JSVAL_TYPE_MAGIC) {
         // Now adjust length and initializedLength.
         masm.store32(lengthTemp, Address(elementsTemp, ObjectElements::offsetOfLength()));
         masm.store32(lengthTemp, Address(elementsTemp, ObjectElements::offsetOfInitializedLength()));
@@ -8941,19 +8982,6 @@ CodeGenerator::emitArrayPopShift(LInstruction* lir, const MArrayPopShift* mir, R
         // initializedLength.
         masm.store32(lengthTemp, Address(obj, UnboxedArrayObject::offsetOfLength()));
         masm.add32(Imm32(-1), Address(obj, UnboxedArrayObject::offsetOfCapacityIndexAndInitializedLength()));
-    }
-
-    if (mir->mode() == MArrayPopShift::Shift) {
-        // Don't save the temp registers.
-        LiveRegisterSet temps;
-        temps.add(elementsTemp);
-        temps.add(lengthTemp);
-
-        saveVolatile(temps);
-        masm.setupUnalignedABICall(lengthTemp);
-        masm.passABIArg(obj);
-        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, js::ArrayShiftMoveElements));
-        restoreVolatile(temps);
     }
 
     masm.bind(&done);
@@ -11185,16 +11213,18 @@ CodeGenerator::visitClampVToUint8(LClampVToUint8* lir)
     bailoutFrom(&fails, lir->snapshot());
 }
 
-typedef bool (*OperatorInFn)(JSContext*, HandleValue, HandleObject, bool*);
-static const VMFunction OperatorInInfo = FunctionInfo<OperatorInFn>(OperatorIn, "OperatorIn");
-
 void
-CodeGenerator::visitIn(LIn* ins)
+CodeGenerator::visitInCache(LInCache* ins)
 {
-    pushArg(ToRegister(ins->rhs()));
-    pushArg(ToValue(ins, LIn::LHS));
+    LiveRegisterSet liveRegs = ins->safepoint()->liveRegs();
 
-    callVM(OperatorInInfo, ins);
+    ConstantOrRegister key = toConstantOrRegister(ins, LInCache::LHS, ins->mir()->key()->type());
+    Register object = ToRegister(ins->rhs());
+    Register output = ToRegister(ins->output());
+    Register temp = ToRegister(ins->temp());
+
+    IonInIC cache(liveRegs, key, object, output, temp);
+    addIC(ins, allocateIC(cache));
 }
 
 typedef bool (*OperatorInIFn)(JSContext*, uint32_t, HandleObject, bool*);
@@ -11407,6 +11437,11 @@ CodeGenerator::visitGetDOMProperty(LGetDOMProperty* ins)
         // It's a bit annoying to redo these slot calculations, which duplcate
         // LSlots and a few other things like that, but I'm not sure there's a
         // way to reuse those here.
+        //
+        // If this ever gets fixed to work with proxies (by not assuming that
+        // reserved slot indices, which is what domMemberSlotIndex() returns,
+        // match fixed slot indices), we can reenable MGetDOMProperty for
+        // proxies in IonBuilder.
         if (slot < NativeObject::MAX_FIXED_SLOTS) {
             masm.loadValue(Address(ObjectReg, NativeObject::getFixedSlotOffset(slot)),
                            JSReturnOperand);
@@ -11479,6 +11514,11 @@ CodeGenerator::visitGetDOMMemberV(LGetDOMMemberV* ins)
     // require us to have MGetDOMMember inherit from MLoadFixedSlot, and then
     // we'd have to duplicate a bunch of stuff we now get for free from
     // MGetDOMProperty.
+    //
+    // If this ever gets fixed to work with proxies (by not assuming that
+    // reserved slot indices, which is what domMemberSlotIndex() returns,
+    // match fixed slot indices), we can reenable MGetDOMMember for
+    // proxies in IonBuilder.
     Register object = ToRegister(ins->object());
     size_t slot = ins->mir()->domMemberSlotIndex();
     ValueOperand result = GetValueOutput(ins);
@@ -11494,6 +11534,11 @@ CodeGenerator::visitGetDOMMemberT(LGetDOMMemberT* ins)
     // require us to have MGetDOMMember inherit from MLoadFixedSlot, and then
     // we'd have to duplicate a bunch of stuff we now get for free from
     // MGetDOMProperty.
+    //
+    // If this ever gets fixed to work with proxies (by not assuming that
+    // reserved slot indices, which is what domMemberSlotIndex() returns,
+    // match fixed slot indices), we can reenable MGetDOMMember for
+    // proxies in IonBuilder.
     Register object = ToRegister(ins->object());
     size_t slot = ins->mir()->domMemberSlotIndex();
     AnyRegister result = ToAnyRegister(ins->getDef(0));

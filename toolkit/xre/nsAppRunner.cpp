@@ -224,6 +224,12 @@
 extern uint32_t gRestartMode;
 extern void InstallSignalHandlers(const char *ProgramName);
 
+// This workaround is fixed in Rust 1.19. For details, see bug 1358151.
+// Implementation in toolkit/library/rust/shared/lib.rs
+extern "C" {
+  void rust_init_please_remove_this_after_updating_rust_1_19();
+}
+
 #define FILE_COMPATIBILITY_INFO NS_LITERAL_CSTRING("compatibility.ini")
 #define FILE_INVALIDATE_CACHES NS_LITERAL_CSTRING(".purgecaches")
 
@@ -620,10 +626,7 @@ ProcessDDE(nsINativeAppSupport* aNative, bool aWait)
       // This is just a guesstimate based on testing different values.
       // If count is 8 or less windows will display an error dialog.
       int32_t count = 20;
-      while(--count >= 0) {
-        NS_ProcessNextEvent(thread);
-        PR_Sleep(PR_MillisecondsToInterval(1));
-      }
+      SpinEventLoopUntil([&]() { return --count < 0; });
     }
   }
 }
@@ -1657,6 +1660,10 @@ DumpHelp()
   printf("  --console          Start %s with a debugging console.\n", (const char*) gAppData->name);
 #endif
 
+#ifdef MOZ_WIDGET_GTK
+  printf("  --headless         Run without a GUI.\n");
+#endif
+
   // this works, but only after the components have registered.  so if you drop in a new command line handler, --help
   // won't not until the second run.
   // out of the bug, because we ship a component.reg file, it works correctly.
@@ -1823,9 +1830,7 @@ static nsresult LaunchChild(nsINativeAppSupport* aNative,
 
   SaveToEnv("MOZ_LAUNCHED_CHILD=1");
 
-#if defined(MOZ_WIDGET_ANDROID)
-  java::GeckoAppShell::ScheduleRestart();
-#else
+#if !defined(MOZ_WIDGET_ANDROID) // Android has separate restart code.
 #if defined(XP_MACOSX)
   CommandLineServiceMac::SetupMacCommandLine(gRestartArgc, gRestartArgv, true);
   LaunchChildMac(gRestartArgc, gRestartArgv);
@@ -3114,6 +3119,9 @@ XREMain::XRE_mainInit(bool* aExitFlag)
     return 1;
   *aExitFlag = false;
 
+  // This workaround is fixed in Rust 1.19. For details, see bug 1358151.
+  rust_init_please_remove_this_after_updating_rust_1_19();
+
   atexit(UnexpectedExit);
   auto expectedShutdown = mozilla::MakeScopeExit([&] {
     MozExpectedExit();
@@ -3135,8 +3143,17 @@ XREMain::XRE_mainInit(bool* aExitFlag)
     printf_stderr("*** You are running in chaos test mode. See ChaosMode.h. ***\n");
   }
 
+  if (CheckArg("headless")) {
+    PR_SetEnv("MOZ_HEADLESS=1");
+  }
+
   if (gfxPlatform::IsHeadless()) {
+#ifdef MOZ_WIDGET_GTK
     Output(false, "*** You are running in headless mode.\n");
+#else
+    Output(true, "Error: headless mode is not currently supported on this platform.\n");
+    return 1;
+#endif
   }
 
   nsresult rv;
@@ -3973,6 +3990,12 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
   }
 #endif
 
+  // Support exiting early for testing startup sequence. Bug 1360493
+  if (CheckArg("test-launch-without-hang")) {
+    *aExitFlag = true;
+    return 0;
+  }
+
 #if defined(MOZ_UPDATER) && !defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_WIDGET_GONK)
   // Check for and process any available updates
   nsCOMPtr<nsIFile> updRoot;
@@ -4769,7 +4792,9 @@ XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig)
     }
 
 #ifdef MOZ_WIDGET_GTK
-    MOZ_gdk_display_close(mGdkDisplay);
+    if (!gfxPlatform::IsHeadless()) {
+      MOZ_gdk_display_close(mGdkDisplay);
+    }
 #endif
 
     {
@@ -4913,10 +4938,20 @@ XRE_IsGPUProcess()
   return XRE_GetProcessType() == GeckoProcessType_GPU;
 }
 
+/**
+ * Returns true in the e10s parent process and in the main process when e10s
+ * is disabled.
+ */
 bool
 XRE_IsParentProcess()
 {
   return XRE_GetProcessType() == GeckoProcessType_Default;
+}
+
+bool
+XRE_IsE10sParentProcess()
+{
+  return XRE_IsParentProcess() && BrowserTabsRemoteAutostart();
 }
 
 bool
@@ -5104,13 +5139,6 @@ GetMaxWebProcessCount()
   // cohort.
   if (Preferences::HasUserValue(optInPref)) {
     return std::max(1u, optInPrefValue);
-  }
-
-  // If there are add-ons that would make the user's experience poor, don't
-  // use more than one web content process.
-  if (Preferences::GetBool("extensions.e10sMultiBlocksEnabling", false) &&
-      Preferences::GetBool("extensions.e10sMultiBlockedByAddons", false)) {
-    return 1;
   }
 
   if (Preferences::HasUserValue("dom.ipc.processCount.web")) {

@@ -20,7 +20,9 @@
                               "::cssparser::Color::CurrentColor",
                               alias=maybe_moz_logical_alias(product, side, "-moz-border-%s-color"),
                               spec=maybe_logical_spec(side, "color"),
-                              animation_value_type="IntermediateColor", logical = side[1])}
+                              animation_value_type="IntermediateColor",
+                              logical=side[1],
+                              allow_quirks=not side[1])}
 
     ${helpers.predefined_type("border-%s-style" % side[0], "BorderStyle",
                               "specified::BorderStyle::none",
@@ -60,7 +62,6 @@ ${helpers.gecko_keyword_conversion(Keyword('border-style',
                        products="gecko">
         use std::fmt;
         use style_traits::ToCss;
-        use values::HasViewportPercentage;
         use values::specified::CSSColor;
         no_viewport_percentage!(SpecifiedValue);
 
@@ -190,99 +191,20 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
                          spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-float-edge)",
                          animation_value_type="none")}
 
-<%helpers:longhand name="border-image-source" animation_value_type="none" boxed="True"
-                   spec="https://drafts.csswg.org/css-backgrounds/#border-image-source">
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::HasViewportPercentage;
-    use values::specified::Image;
-
-    no_viewport_percentage!(SpecifiedValue);
-
-    pub mod computed_value {
-        use values::computed;
-        #[derive(Debug, Clone, PartialEq)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub struct T(pub Option<computed::Image>);
-    }
-
-    #[derive(Debug, Clone, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub struct SpecifiedValue(pub Option<Image>);
-
-    impl ToCss for computed_value::T {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match self.0 {
-                Some(ref image) => image.to_css(dest),
-                None => dest.write_str("none"),
-            }
-        }
-    }
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match self.0 {
-                Some(ref image) => image.to_css(dest),
-                None => dest.write_str("none"),
-            }
-        }
-    }
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        computed_value::T(None)
-    }
-
-    #[inline]
-    pub fn get_initial_specified_value() -> SpecifiedValue {
-        SpecifiedValue(None)
-    }
-
-    impl ToComputedValue for SpecifiedValue {
-        type ComputedValue = computed_value::T;
-
-        #[inline]
-        fn to_computed_value(&self, context: &Context) -> computed_value::T {
-            match self.0 {
-                Some(ref image) => computed_value::T(Some(image.to_computed_value(context))),
-                None => computed_value::T(None),
-            }
-        }
-        #[inline]
-        fn from_computed_value(computed: &computed_value::T) -> Self {
-            match computed.0 {
-                Some(ref image) =>
-                    SpecifiedValue(Some(ToComputedValue::from_computed_value(image))),
-                None => SpecifiedValue(None),
-            }
-        }
-    }
-
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
-        if input.try(|input| input.expect_ident_matching("none")).is_ok() {
-            return Ok(SpecifiedValue(None));
-        }
-
-        Ok(SpecifiedValue(Some(try!(Image::parse(context, input)))))
-    }
-</%helpers:longhand>
+${helpers.predefined_type("border-image-source", "ImageLayer",
+    initial_value="Either::First(None_)",
+    initial_specified_value="Either::First(None_)",
+    spec="https://drafts.csswg.org/css-backgrounds/#the-background-image",
+    vector=False,
+    animation_value_type="none",
+    has_uncacheable_values=False,
+    boxed="True")}
 
 <%helpers:longhand name="border-image-outset" animation_value_type="none"
                    spec="https://drafts.csswg.org/css-backgrounds/#border-image-outset">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::specified::{LengthOrNumber, Number};
-
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            let mut viewport_percentage = false;
-            for value in self.0.iter() {
-                let vp = value.has_viewport_percentage();
-                viewport_percentage = vp || viewport_percentage;
-            }
-            viewport_percentage
-        }
-    }
 
     pub mod computed_value {
         use values::computed::LengthOrNumber;
@@ -292,7 +214,7 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
                      pub LengthOrNumber, pub LengthOrNumber);
     }
 
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub struct SpecifiedValue(pub Vec<LengthOrNumber>);
 
@@ -386,13 +308,11 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
                    spec="https://drafts.csswg.org/css-backgrounds/#border-image-repeat">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
 
     no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
         pub use super::RepeatKeyword;
-        use values::computed;
 
         #[derive(Debug, Clone, PartialEq)]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
@@ -464,22 +384,7 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
                    spec="https://drafts.csswg.org/css-backgrounds/#border-image-width">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::specified::{LengthOrPercentage, Number};
-
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            let mut viewport_percentage = false;
-            for value in self.0.clone() {
-                let vp = match value {
-                    SingleSpecifiedValue::LengthOrPercentage(len) => len.has_viewport_percentage(),
-                    _ => false,
-                };
-                viewport_percentage = vp || viewport_percentage;
-            }
-            viewport_percentage
-        }
-    }
 
     pub mod computed_value {
         use values::computed::{LengthOrPercentage, Number};
@@ -497,7 +402,7 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
         }
     }
 
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub struct SpecifiedValue(pub Vec<SingleSpecifiedValue>);
 
@@ -523,7 +428,7 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
         }
     }
 
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub enum SingleSpecifiedValue {
         LengthOrPercentage(LengthOrPercentage),
@@ -664,7 +569,6 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
                    spec="https://drafts.csswg.org/css-backgrounds/#border-image-slice">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::computed::NumberOrPercentage as ComputedNumberOrPercentage;
     use values::specified::{NumberOrPercentage, Percentage};
 
@@ -784,7 +688,7 @@ ${helpers.single_keyword("-moz-float-edge", "content-box margin-box",
 
         let mut values = vec![];
         for _ in 0..4 {
-            let value = input.try(|input| NumberOrPercentage::parse(context, input));
+            let value = input.try(|input| NumberOrPercentage::parse_non_negative(context, input));
             match value {
                 Ok(val) => values.push(val),
                 Err(_) => break,

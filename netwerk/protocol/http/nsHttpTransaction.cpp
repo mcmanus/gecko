@@ -21,13 +21,13 @@
 #include "nsIPipe.h"
 #include "nsCRT.h"
 #include "mozilla/Tokenizer.h"
+#include "TCPFastOpenLayer.h"
 
 #include "nsISeekableStream.h"
 #include "nsMultiplexInputStream.h"
 #include "nsStringStream.h"
 
 #include "nsComponentManagerUtils.h" // do_CreateInstance
-#include "nsServiceManagerUtils.h"   // do_GetService
 #include "nsIHttpActivityObserver.h"
 #include "nsSocketTransportService2.h"
 #include "nsICancelable.h"
@@ -143,6 +143,7 @@ nsHttpTransaction::nsHttpTransaction()
     , mClassOfService(0)
     , m0RTTInProgress(false)
     , mEarlyDataDisposition(EARLY_NONE)
+    , mFastOpenStatus(TFO_NOT_TRIED)
 {
     LOG(("Creating nsHttpTransaction @%p\n", this));
 
@@ -197,6 +198,7 @@ nsHttpTransaction::Init(uint32_t caps,
                         nsHttpConnectionInfo *cinfo,
                         nsHttpRequestHead *requestHead,
                         nsIInputStream *requestBody,
+                        uint64_t requestContentLength,
                         bool requestBodyHasHeaders,
                         nsIEventTarget *target,
                         nsIInterfaceRequestor *callbacks,
@@ -215,8 +217,10 @@ nsHttpTransaction::Init(uint32_t caps,
 
     mTopLevelOuterContentWindowId = topLevelOuterContentWindowId;
 
-    mActivityDistributor = do_GetService(NS_HTTPACTIVITYDISTRIBUTOR_CONTRACTID, &rv);
-    if (NS_FAILED(rv)) return rv;
+    mActivityDistributor = services::GetActivityDistributor();
+    if (!mActivityDistributor) {
+        return NS_ERROR_NOT_AVAILABLE;
+    }
 
     bool activityDistributorActive;
     rv = mActivityDistributor->GetIsActive(&activityDistributorActive);
@@ -323,14 +327,11 @@ nsHttpTransaction::Init(uint32_t caps,
     if (NS_FAILED(rv)) return rv;
 
     mHasRequestBody = !!requestBody;
-    if (mHasRequestBody) {
-        // some non standard methods set a 0 byte content-length for
-        // clarity, we can avoid doing the mulitplexed request stream for them
-        uint64_t size;
-        if (NS_SUCCEEDED(requestBody->Available(&size)) && !size) {
-            mHasRequestBody = false;
-        }
+    if (mHasRequestBody && !requestContentLength) {
+        mHasRequestBody = false;
     }
+
+    requestContentLength += mReqHeaderBuf.Length();
 
     if (mHasRequestBody) {
         // wrap the headers and request body in a multiplexed input stream.
@@ -350,9 +351,9 @@ nsHttpTransaction::Init(uint32_t caps,
         rv = NS_NewBufferedInputStream(getter_AddRefs(mRequestStream), multi,
                                        nsIOService::gDefaultSegmentSize);
         if (NS_FAILED(rv)) return rv;
-    }
-    else
+    } else {
         mRequestStream = headers;
+    }
 
     nsCOMPtr<nsIThrottledInputChannel> throttled = do_QueryInterface(mChannel);
     nsIInputChannelThrottleQueue* queue;
@@ -373,14 +374,8 @@ nsHttpTransaction::Init(uint32_t caps,
         }
     }
 
-    uint64_t size_u64;
-    rv = mRequestStream->Available(&size_u64);
-    if (NS_FAILED(rv)) {
-        return rv;
-    }
-
-    // make sure it fits within js MAX_SAFE_INTEGER
-    mRequestSize = InScriptableRange(size_u64) ? static_cast<int64_t>(size_u64) : -1;
+    // make sure request content-length fits within js MAX_SAFE_INTEGER
+    mRequestSize = InScriptableRange(requestContentLength) ? static_cast<int64_t>(requestContentLength) : -1;
 
     // create pipe for response stream
     rv = NS_NewPipe2(getter_AddRefs(mPipeIn),
@@ -546,6 +541,9 @@ nsHttpTransaction::OnTransportStatus(nsITransport* transport,
             SetConnectEnd(TimeStamp::Now(), true);
         } else if (status == NS_NET_STATUS_TLS_HANDSHAKE_ENDED) {
             SetConnectEnd(TimeStamp::Now(), false);
+        } else if (status == NS_NET_STATUS_SENDING_TO) {
+            // Set the timestamp to Now(), only if it null
+            SetRequestStart(TimeStamp::Now(), true);
         }
     }
 
@@ -654,15 +652,6 @@ nsHttpTransaction::SetDNSWasRefreshed()
     mCapsToClear |= NS_HTTP_REFRESH_DNS;
 }
 
-uint64_t
-nsHttpTransaction::Available()
-{
-    uint64_t size;
-    if (NS_FAILED(mRequestStream->Available(&size)))
-        size = 0;
-    return size;
-}
-
 nsresult
 nsHttpTransaction::ReadRequestSegment(nsIInputStream *stream,
                                       void *closure,
@@ -677,11 +666,6 @@ nsHttpTransaction::ReadRequestSegment(nsIInputStream *stream,
     nsHttpTransaction *trans = (nsHttpTransaction *) closure;
     nsresult rv = trans->mReader->OnReadSegment(buf, count, countRead);
     if (NS_FAILED(rv)) return rv;
-
-    if (trans->TimingEnabled()) {
-        // Set the timestamp to Now(), only if it null
-        trans->SetRequestStart(TimeStamp::Now(), true);
-    }
 
     trans->mSentData = true;
     return NS_OK;
@@ -1442,6 +1426,14 @@ nsHttpTransaction::HandleContentStart()
             Unused << mResponseHead->SetHeader(nsHttp::X_Firefox_Early_Data, NS_LITERAL_CSTRING("sent"));
         } // no header on NONE case
 
+        if (mFastOpenStatus == TFO_DATA_SENT) {
+            Unused << mResponseHead->SetHeader(nsHttp::X_Firefox_TCP_Fast_Open, NS_LITERAL_CSTRING("data sent"));
+        } else if (mFastOpenStatus == TFO_TRIED) {
+            Unused << mResponseHead->SetHeader(nsHttp::X_Firefox_TCP_Fast_Open, NS_LITERAL_CSTRING("tried negotiating"));
+        } else if (mFastOpenStatus == TFO_FAILED) {
+            Unused << mResponseHead->SetHeader(nsHttp::X_Firefox_TCP_Fast_Open, NS_LITERAL_CSTRING("failed"));
+        } // no header on TFO_NOT_TRIED case
+
         if (LOG3_ENABLED()) {
             LOG3(("http response [\n"));
             nsAutoCString headers;
@@ -1818,11 +1810,6 @@ nsHttpTransaction::CheckForStickyAuthScheme()
   MOZ_ASSERT(mResponseHead);
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
-  if (mClosed) {
-      LOG(("  closed, not checking"));
-      return;
-  }
-
   CheckForStickyAuthSchemeAt(nsHttp::WWW_Authenticate);
   CheckForStickyAuthSchemeAt(nsHttp::Proxy_Authenticate);
 }
@@ -2142,10 +2129,22 @@ nsHttpTransaction::GetNetworkAddresses(NetAddr &self, NetAddr &peer)
 }
 
 bool
+nsHttpTransaction::CanDo0RTT()
+{
+    if (mRequestHead->IsSafeMethod() &&
+        (!mConnection ||
+         !mConnection->IsProxyConnectInProgress())) {
+        return true;
+    }
+    return false;
+}
+
+bool
 nsHttpTransaction::Do0RTT()
 {
    if (mRequestHead->IsSafeMethod() &&
-       !mConnection->IsProxyConnectInProgress()) {
+       (!mConnection ||
+       !mConnection->IsProxyConnectInProgress())) {
      m0RTTInProgress = true;
    }
    return m0RTTInProgress;
@@ -2177,6 +2176,45 @@ nsHttpTransaction::Finish0RTT(bool aRestart, bool aAlpnChanged /* ignored */)
         mConnection->GetSecurityInfo(getter_AddRefs(mSecurityInfo));
     }
     return NS_OK;
+}
+
+nsresult
+nsHttpTransaction::RestartOnFastOpenError()
+{
+    // This will happen on connection error during Fast Open or if connect
+    // during Fast Open takes too long. So we should not have received any
+    // data!
+    MOZ_ASSERT(!mReceivedData);
+    MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+    LOG(("nsHttpTransaction::RestartOnFastOpenError - restarting transaction "
+         "%p\n", this));
+
+    // rewind streams in case we already wrote out the request
+    nsCOMPtr<nsISeekableStream> seekable = do_QueryInterface(mRequestStream);
+    if (seekable)
+        seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0);
+        // clear old connection state...
+    mSecurityInfo = nullptr;
+
+    if (!mConnInfo->GetRoutedHost().IsEmpty()) {
+        MutexAutoLock lock(*nsHttp::GetLock());
+        RefPtr<nsHttpConnectionInfo> ci;
+        mConnInfo->CloneAsDirectRoute(getter_AddRefs(ci));
+        mConnInfo = ci;
+    }
+    mEarlyDataDisposition = EARLY_NONE;
+    m0RTTInProgress = false;
+    mFastOpenStatus = TFO_FAILED;
+    return NS_OK;
+}
+
+void
+nsHttpTransaction::SetFastOpenStatus(uint8_t aStatus)
+{
+    LOG(("nsHttpTransaction::SetFastOpenStatus %d [this=%p]\n",
+         aStatus, this));
+    mFastOpenStatus = aStatus;
 }
 
 void

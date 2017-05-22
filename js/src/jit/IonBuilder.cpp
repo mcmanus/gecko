@@ -1755,6 +1755,7 @@ IonBuilder::inspectOpcode(JSOp op)
     switch (op) {
       case JSOP_NOP:
       case JSOP_NOP_DESTRUCTURING:
+      case JSOP_TRY_DESTRUCTURING_ITERCLOSE:
       case JSOP_LINENO:
       case JSOP_JUMPTARGET:
       case JSOP_LABEL:
@@ -10880,38 +10881,47 @@ IonBuilder::getPropTryCommonGetter(bool* emitted, MDefinition* obj, PropertyName
 
     if (isDOM) {
         const JSJitInfo* jitinfo = commonGetter->jitInfo();
-        MInstruction* get;
-        if (jitinfo->isAlwaysInSlot) {
-            // If our object is a singleton and we know the property is
-            // constant (which is true if and only if the get doesn't alias
-            // anything), we can just read the slot here and use that constant.
-            JSObject* singleton = objTypes->maybeSingleton();
-            if (singleton && jitinfo->aliasSet() == JSJitInfo::AliasNone) {
-                size_t slot = jitinfo->slotIndex;
-                *emitted = true;
-                pushConstant(GetReservedSlot(singleton, slot));
-                return Ok();
+        // We don't support MGetDOMProperty/MGetDOMMember on things that might
+        // be proxies when the value might be in a slot, because the
+        // CodeGenerator code for LGetDOMProperty/LGetDOMMember doesn't handle
+        // that case correctly.
+        if ((!jitinfo->isAlwaysInSlot && !jitinfo->isLazilyCachedInSlot) ||
+            !objTypes->maybeProxy(constraints())) {
+            MInstruction* get;
+            if (jitinfo->isAlwaysInSlot) {
+                // If our object is a singleton and we know the property is
+                // constant (which is true if and only if the get doesn't alias
+                // anything), we can just read the slot here and use that
+                // constant.
+                JSObject* singleton = objTypes->maybeSingleton();
+                if (singleton && jitinfo->aliasSet() == JSJitInfo::AliasNone) {
+                    size_t slot = jitinfo->slotIndex;
+                    *emitted = true;
+                    pushConstant(GetReservedSlot(singleton, slot));
+                    return Ok();
+                }
+
+                // We can't use MLoadFixedSlot here because it might not have
+                // the right aliasing behavior; we want to alias DOM setters as
+                // needed.
+                get = MGetDOMMember::New(alloc(), jitinfo, obj, guard, globalGuard);
+            } else {
+                get = MGetDOMProperty::New(alloc(), jitinfo, obj, guard, globalGuard);
             }
+            if (!get)
+                return abort(AbortReason::Alloc);
+            current->add(get);
+            current->push(get);
 
-            // We can't use MLoadFixedSlot here because it might not have the
-            // right aliasing behavior; we want to alias DOM setters as needed.
-            get = MGetDOMMember::New(alloc(), jitinfo, obj, guard, globalGuard);
-        } else {
-            get = MGetDOMProperty::New(alloc(), jitinfo, obj, guard, globalGuard);
+            if (get->isEffectful())
+                MOZ_TRY(resumeAfter(get));
+
+            MOZ_TRY(pushDOMTypeBarrier(get, types, commonGetter));
+
+            trackOptimizationOutcome(TrackedOutcome::DOM);
+            *emitted = true;
+            return Ok();
         }
-        if (!get)
-            return abort(AbortReason::Alloc);
-        current->add(get);
-        current->push(get);
-
-        if (get->isEffectful())
-            MOZ_TRY(resumeAfter(get));
-
-        MOZ_TRY(pushDOMTypeBarrier(get, types, commonGetter));
-
-        trackOptimizationOutcome(TrackedOutcome::DOM);
-        *emitted = true;
-        return Ok();
     }
 
     // Don't call the getter with a primitive value.
@@ -12600,17 +12610,19 @@ IonBuilder::jsop_in()
     MDefinition* obj = convertUnboxedObjects(current->pop());
     MDefinition* id = current->pop();
 
-    bool emitted = false;
+    if (!forceInlineCaches()) {
+        bool emitted = false;
 
-    MOZ_TRY(inTryDense(&emitted, obj, id));
-    if (emitted)
-        return Ok();
+        MOZ_TRY(inTryDense(&emitted, obj, id));
+        if (emitted)
+            return Ok();
 
-    MOZ_TRY(hasTryNotDefined(&emitted, obj, id, /* ownProperty = */ false));
-    if (emitted)
-        return Ok();
+        MOZ_TRY(hasTryNotDefined(&emitted, obj, id, /* ownProperty = */ false));
+        if (emitted)
+            return Ok();
+    }
 
-    MIn* ins = MIn::New(alloc(), id, obj);
+    MInCache* ins = MInCache::New(alloc(), id, obj);
 
     current->add(ins);
     current->push(ins);

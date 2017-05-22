@@ -7,10 +7,10 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Likely.h"
 #include "mozilla/dom/nsCSPService.h"
+#include "mozilla/dom/ScriptLoader.h"
 
 #include "nsError.h"
 #include "nsHtml5TreeOpExecutor.h"
-#include "nsScriptLoader.h"
 #include "nsIContentViewer.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsIDocShellTreeItem.h"
@@ -953,8 +953,8 @@ nsHtml5TreeOpExecutor::PreloadScript(const nsAString& aURL,
     return;
   }
   mDocument->ScriptLoader()->PreloadURI(uri, aCharset, aType, aCrossOrigin,
-                                        aIntegrity, aScriptFromHead,
-                                        mSpeculationReferrerPolicy);
+                                           aIntegrity, aScriptFromHead,
+                                           mSpeculationReferrerPolicy);
 }
 
 void
@@ -984,14 +984,10 @@ nsHtml5TreeOpExecutor::PreloadImage(const nsAString& aURL,
   if (uri && ShouldPreloadURI(uri)) {
     // use document wide referrer policy
     mozilla::net::ReferrerPolicy referrerPolicy = mSpeculationReferrerPolicy;
-    // if enabled in preferences, use the referrer attribute from the image, if provided
-    bool referrerAttributeEnabled = Preferences::GetBool("network.http.enablePerElementReferrer", true);
-    if (referrerAttributeEnabled) {
-      mozilla::net::ReferrerPolicy imageReferrerPolicy =
-        mozilla::net::AttributeReferrerPolicyFromString(aImageReferrerPolicy);
-      if (imageReferrerPolicy != mozilla::net::RP_Unset) {
-        referrerPolicy = imageReferrerPolicy;
-      }
+    mozilla::net::ReferrerPolicy imageReferrerPolicy =
+      mozilla::net::AttributeReferrerPolicyFromString(aImageReferrerPolicy);
+    if (imageReferrerPolicy != mozilla::net::RP_Unset) {
+      referrerPolicy = imageReferrerPolicy;
     }
 
     mDocument->MaybePreLoadImage(uri, aCrossOrigin, referrerPolicy);

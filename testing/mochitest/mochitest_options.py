@@ -584,6 +584,11 @@ class MochitestArguments(ArgumentContainer):
           "help": "Timeout while waiting to receive a message from the marionette server.",
           "suppress": True,
           }],
+        [["--marionette-startup-timeout"],
+         {"default": None,
+          "help": "Timeout while waiting for marionette server startup.",
+          "suppress": True,
+          }],
         [["--cleanup-crashes"],
          {"action": "store_true",
           "dest": "cleanupCrashes",
@@ -1022,7 +1027,7 @@ class AndroidArguments(ArgumentContainer):
                 if build_obj.substs.get('MOZ_BUILD_MOBILE_ANDROID_WITH_GRADLE'):
                     options.robocopApk = os.path.join(build_obj.topobjdir, 'gradle', 'build',
                                                       'mobile', 'android', 'app', 'outputs', 'apk',
-                                                      'app-automation-debug-androidTest-'
+                                                      'app-official-australis-debug-androidTest-'
                                                       'unaligned.apk')
                 else:
                     options.robocopApk = os.path.join(build_obj.topobjdir, 'mobile', 'android',

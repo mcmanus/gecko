@@ -2,11 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* Generated with cbindgen:0.1.5 */
+/* Generated with cbindgen:0.1.7 */
 
 /* DO NOT MODIFY THIS MANUALLY! This file was generated using cbindgen.
  * To generate this file, clone `https://github.com/rlhunt/cbindgen` or run `cargo install cbindgen`,
- * then run `cbindgen -c wr gfx/webrender_bindings/ gfx/webrender_bindings/webrender_ffi_generated.h` */
+ * then run `cbindgen gfx/webrender_bindings/ -o gfx/webrender_bindings/webrender_ffi_generated.h` */
+
+#include <stdint.h>
+
+extern "C" {
 
 enum class WrBorderStyle : uint32_t {
   None = 0,
@@ -27,6 +31,15 @@ enum class WrBoxShadowClipMode : uint32_t {
   None = 0,
   Outset = 1,
   Inset = 2,
+
+  Sentinel /* this must be last for serialization purposes. */
+};
+
+enum class WrExternalImageBufferType : uint32_t {
+  Texture2DHandle = 0,
+  TextureRectHandle = 1,
+  TextureExternalHandle = 2,
+  ExternalBuffer = 3,
 
   Sentinel /* this must be last for serialization purposes. */
 };
@@ -95,8 +108,8 @@ enum class WrRepeatMode : uint32_t {
 };
 
 enum class WrYuvColorSpace : uint32_t {
-  Rec601 = 1,
-  Rec709 = 2,
+  Rec601 = 0,
+  Rec709 = 1,
 
   Sentinel /* this must be last for serialization purposes. */
 };
@@ -109,7 +122,7 @@ struct WrImageKey {
 
   bool operator==(const WrImageKey& aOther) const {
     return mNamespace == aOther.mNamespace &&
-      mHandle == aOther.mHandle;
+           mHandle == aOther.mHandle;
   }
 };
 
@@ -122,10 +135,10 @@ struct WrImageDescriptor {
 
   bool operator==(const WrImageDescriptor& aOther) const {
     return format == aOther.format &&
-      width == aOther.width &&
-      height == aOther.height &&
-      stride == aOther.stride &&
-      is_opaque == aOther.is_opaque;
+           width == aOther.width &&
+           height == aOther.height &&
+           stride == aOther.stride &&
+           is_opaque == aOther.is_opaque;
   }
 };
 
@@ -135,7 +148,7 @@ struct WrByteSlice {
 
   bool operator==(const WrByteSlice& aOther) const {
     return buffer == aOther.buffer &&
-      len == aOther.len;
+           len == aOther.len;
   }
 };
 
@@ -153,7 +166,7 @@ struct WrFontKey {
 
   bool operator==(const WrFontKey& aOther) const {
     return mNamespace == aOther.mNamespace &&
-      mHandle == aOther.mHandle;
+           mHandle == aOther.mHandle;
   }
 };
 
@@ -163,11 +176,9 @@ struct WrEpoch {
   bool operator==(const WrEpoch& aOther) const {
     return mHandle == aOther.mHandle;
   }
-
   bool operator<(const WrEpoch& aOther) const {
     return mHandle < aOther.mHandle;
   }
-
   bool operator<=(const WrEpoch& aOther) const {
     return mHandle <= aOther.mHandle;
   }
@@ -179,11 +190,21 @@ struct WrPipelineId {
 
   bool operator==(const WrPipelineId& aOther) const {
     return mNamespace == aOther.mNamespace &&
-      mHandle == aOther.mHandle;
+           mHandle == aOther.mHandle;
   }
 };
 
 struct WrState;
+
+struct WrSize {
+  float width;
+  float height;
+
+  bool operator==(const WrSize& aOther) const {
+    return width == aOther.width &&
+           height == aOther.height;
+  }
+};
 
 struct WrBuiltDisplayListDescriptor {
   size_t display_list_items_size;
@@ -192,8 +213,8 @@ struct WrBuiltDisplayListDescriptor {
 
   bool operator==(const WrBuiltDisplayListDescriptor& aOther) const {
     return display_list_items_size == aOther.display_list_items_size &&
-      builder_start_time == aOther.builder_start_time &&
-      builder_finish_time == aOther.builder_finish_time;
+           builder_start_time == aOther.builder_start_time &&
+           builder_finish_time == aOther.builder_finish_time;
   }
 };
 
@@ -204,22 +225,8 @@ struct WrVecU8 {
 
   bool operator==(const WrVecU8& aOther) const {
     return data == aOther.data &&
-      length == aOther.length &&
-      capacity == aOther.capacity;
-  }
-};
-
-struct WrAuxiliaryListsDescriptor {
-  size_t gradient_stops_size;
-  size_t complex_clip_regions_size;
-  size_t filters_size;
-  size_t glyph_instances_size;
-
-  bool operator==(const WrAuxiliaryListsDescriptor& aOther) const {
-    return gradient_stops_size == aOther.gradient_stops_size &&
-      complex_clip_regions_size == aOther.complex_clip_regions_size &&
-      filters_size == aOther.filters_size &&
-      glyph_instances_size == aOther.glyph_instances_size;
+           length == aOther.length &&
+           capacity == aOther.capacity;
   }
 };
 
@@ -229,26 +236,17 @@ struct WrOpacityProperty {
 
   bool operator==(const WrOpacityProperty& aOther) const {
     return id == aOther.id &&
-      opacity == aOther.opacity;
+           opacity == aOther.opacity;
   }
 };
 
 struct WrMatrix {
   float values[16];
-
-  bool operator==(const WrMatrix& aOther) const {
-    return values == aOther.values;
-  }
 };
 
 struct WrTransformProperty {
   uint64_t id;
   WrMatrix transform;
-
-  bool operator==(const WrTransformProperty& aOther) const {
-    return id == aOther.id &&
-      transform == aOther.transform;
-  }
 };
 
 struct WrIdNamespace {
@@ -257,11 +255,9 @@ struct WrIdNamespace {
   bool operator==(const WrIdNamespace& aOther) const {
     return mHandle == aOther.mHandle;
   }
-
   bool operator<(const WrIdNamespace& aOther) const {
     return mHandle < aOther.mHandle;
   }
-
   bool operator<=(const WrIdNamespace& aOther) const {
     return mHandle <= aOther.mHandle;
   }
@@ -275,79 +271,17 @@ struct WrRect {
 
   bool operator==(const WrRect& aOther) const {
     return x == aOther.x &&
-      y == aOther.y &&
-      width == aOther.width &&
-      height == aOther.height;
+           y == aOther.y &&
+           width == aOther.width &&
+           height == aOther.height;
   }
 };
 
-struct WrItemRange {
-  size_t start;
-  size_t length;
+struct WrClipRegionToken {
+  bool _dummy;
 
-  bool operator==(const WrItemRange& aOther) const {
-    return start == aOther.start &&
-      length == aOther.length;
-  }
-};
-
-struct WrImageMask {
-  WrImageKey image;
-  WrRect rect;
-  bool repeat;
-
-  bool operator==(const WrImageMask& aOther) const {
-    return image == aOther.image &&
-      rect == aOther.rect &&
-      repeat == aOther.repeat;
-  }
-};
-
-struct WrClipRegion {
-  WrRect main;
-  WrItemRange complex;
-  WrImageMask image_mask;
-  bool has_image_mask;
-
-  bool operator==(const WrClipRegion& aOther) const {
-    return main == aOther.main &&
-      complex == aOther.complex &&
-      image_mask == aOther.image_mask &&
-      has_image_mask == aOther.has_image_mask;
-  }
-};
-
-struct WrSize {
-  float width;
-  float height;
-
-  bool operator==(const WrSize& aOther) const {
-    return width == aOther.width &&
-      height == aOther.height;
-  }
-};
-
-struct WrBorderRadius {
-  WrSize top_left;
-  WrSize top_right;
-  WrSize bottom_left;
-  WrSize bottom_right;
-
-  bool operator==(const WrBorderRadius& aOther) const {
-    return top_left == aOther.top_left &&
-      top_right == aOther.top_right &&
-      bottom_left == aOther.bottom_left &&
-      bottom_right == aOther.bottom_right;
-  }
-};
-
-struct WrComplexClipRegion {
-  WrRect rect;
-  WrBorderRadius radii;
-
-  bool operator==(const WrComplexClipRegion& aOther) const {
-    return rect == aOther.rect &&
-      radii == aOther.radii;
+  bool operator==(const WrClipRegionToken& aOther) const {
+    return _dummy == aOther._dummy;
   }
 };
 
@@ -359,9 +293,9 @@ struct WrBorderWidths {
 
   bool operator==(const WrBorderWidths& aOther) const {
     return left == aOther.left &&
-      top == aOther.top &&
-      right == aOther.right &&
-      bottom == aOther.bottom;
+           top == aOther.top &&
+           right == aOther.right &&
+           bottom == aOther.bottom;
   }
 };
 
@@ -373,9 +307,9 @@ struct WrColor {
 
   bool operator==(const WrColor& aOther) const {
     return r == aOther.r &&
-      g == aOther.g &&
-      b == aOther.b &&
-      a == aOther.a;
+           g == aOther.g &&
+           b == aOther.b &&
+           a == aOther.a;
   }
 };
 
@@ -385,7 +319,21 @@ struct WrBorderSide {
 
   bool operator==(const WrBorderSide& aOther) const {
     return color == aOther.color &&
-      style == aOther.style;
+           style == aOther.style;
+  }
+};
+
+struct WrBorderRadius {
+  WrSize top_left;
+  WrSize top_right;
+  WrSize bottom_left;
+  WrSize bottom_right;
+
+  bool operator==(const WrBorderRadius& aOther) const {
+    return top_left == aOther.top_left &&
+           top_right == aOther.top_right &&
+           bottom_left == aOther.bottom_left &&
+           bottom_right == aOther.bottom_right;
   }
 };
 
@@ -395,7 +343,7 @@ struct WrPoint {
 
   bool operator==(const WrPoint& aOther) const {
     return x == aOther.x &&
-      y == aOther.y;
+           y == aOther.y;
   }
 };
 
@@ -405,7 +353,7 @@ struct WrGradientStop {
 
   bool operator==(const WrGradientStop& aOther) const {
     return offset == aOther.offset &&
-      color == aOther.color;
+           color == aOther.color;
   }
 };
 
@@ -417,9 +365,9 @@ struct WrSideOffsets2Df32 {
 
   bool operator==(const WrSideOffsets2Df32& aOther) const {
     return top == aOther.top &&
-      right == aOther.right &&
-      bottom == aOther.bottom &&
-      left == aOther.left;
+           right == aOther.right &&
+           bottom == aOther.bottom &&
+           left == aOther.left;
   }
 };
 
@@ -431,9 +379,9 @@ struct WrSideOffsets2Du32 {
 
   bool operator==(const WrSideOffsets2Du32& aOther) const {
     return top == aOther.top &&
-      right == aOther.right &&
-      bottom == aOther.bottom &&
-      left == aOther.left;
+           right == aOther.right &&
+           bottom == aOther.bottom &&
+           left == aOther.left;
   }
 };
 
@@ -444,8 +392,30 @@ struct WrNinePatchDescriptor {
 
   bool operator==(const WrNinePatchDescriptor& aOther) const {
     return width == aOther.width &&
-      height == aOther.height &&
-      slice == aOther.slice;
+           height == aOther.height &&
+           slice == aOther.slice;
+  }
+};
+
+struct WrImageMask {
+  WrImageKey image;
+  WrRect rect;
+  bool repeat;
+
+  bool operator==(const WrImageMask& aOther) const {
+    return image == aOther.image &&
+           rect == aOther.rect &&
+           repeat == aOther.repeat;
+  }
+};
+
+struct WrComplexClipRegion {
+  WrRect rect;
+  WrBorderRadius radii;
+
+  bool operator==(const WrComplexClipRegion& aOther) const {
+    return rect == aOther.rect &&
+           radii == aOther.radii;
   }
 };
 
@@ -455,7 +425,31 @@ struct WrGlyphInstance {
 
   bool operator==(const WrGlyphInstance& aOther) const {
     return index == aOther.index &&
-      point == aOther.point;
+           point == aOther.point;
+  }
+};
+
+struct MutByteSlice {
+  uint8_t* buffer;
+  size_t len;
+
+  bool operator==(const MutByteSlice& aOther) const {
+    return buffer == aOther.buffer &&
+           len == aOther.len;
+  }
+};
+
+struct WrWindowId {
+  uint64_t mHandle;
+
+  bool operator==(const WrWindowId& aOther) const {
+    return mHandle == aOther.mHandle;
+  }
+  bool operator<(const WrWindowId& aOther) const {
+    return mHandle < aOther.mHandle;
+  }
+  bool operator<=(const WrWindowId& aOther) const {
+    return mHandle <= aOther.mHandle;
   }
 };
 
@@ -475,19 +469,19 @@ struct WrExternalImage {
 
   bool operator==(const WrExternalImage& aOther) const {
     return image_type == aOther.image_type &&
-      handle == aOther.handle &&
-      u0 == aOther.u0 &&
-      v0 == aOther.v0 &&
-      u1 == aOther.u1 &&
-      v1 == aOther.v1 &&
-      buff == aOther.buff &&
-      size == aOther.size;
+           handle == aOther.handle &&
+           u0 == aOther.u0 &&
+           v0 == aOther.v0 &&
+           u1 == aOther.u1 &&
+           v1 == aOther.v1 &&
+           buff == aOther.buff &&
+           size == aOther.size;
   }
 };
 
-typedef WrExternalImage (*LockExternalImageCallback)(void*, WrExternalImageId);
+typedef WrExternalImage (*LockExternalImageCallback)(void*, WrExternalImageId, uint8_t);
 
-typedef void (*UnlockExternalImageCallback)(void*, WrExternalImageId);
+typedef void (*UnlockExternalImageCallback)(void*, WrExternalImageId, uint8_t);
 
 struct WrExternalImageHandler {
   void* external_image_obj;
@@ -496,405 +490,424 @@ struct WrExternalImageHandler {
 
   bool operator==(const WrExternalImageHandler& aOther) const {
     return external_image_obj == aOther.external_image_obj &&
-      lock_func == aOther.lock_func &&
-      unlock_func == aOther.unlock_func;
-  }
-};
-
-struct WrWindowId {
-  uint64_t mHandle;
-
-  bool operator==(const WrWindowId& aOther) const {
-    return mHandle == aOther.mHandle;
-  }
-
-  bool operator<(const WrWindowId& aOther) const {
-    return mHandle < aOther.mHandle;
-  }
-
-  bool operator<=(const WrWindowId& aOther) const {
-    return mHandle <= aOther.mHandle;
+           lock_func == aOther.lock_func &&
+           unlock_func == aOther.unlock_func;
   }
 };
 
 /* DO NOT MODIFY THIS MANUALLY! This file was generated using cbindgen.
  * To generate this file, clone `https://github.com/rlhunt/cbindgen` or run `cargo install cbindgen`,
- * then run `cbindgen -c wr gfx/webrender_bindings/ gfx/webrender_bindings/webrender_ffi_generated.h` */
+ * then run `cbindgen gfx/webrender_bindings/ -o gfx/webrender_bindings/webrender_ffi_generated.h` */
 
-WR_INLINE void
-wr_api_add_blob_image(WrAPI* api,
-    WrImageKey image_key,
-    const WrImageDescriptor* descriptor,
-    WrByteSlice bytes)
+WR_INLINE
+void wr_api_add_blob_image(WrAPI* aApi,
+                           WrImageKey aImageKey,
+                           const WrImageDescriptor* aDescriptor,
+                           WrByteSlice aBytes)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_add_external_image_buffer(WrAPI* api,
-    WrImageKey image_key,
-    const WrImageDescriptor* descriptor,
-    WrExternalImageId external_image_id)
+WR_INLINE
+void wr_api_add_external_image(WrAPI* aApi,
+                               WrImageKey aImageKey,
+                               const WrImageDescriptor* aDescriptor,
+                               WrExternalImageId aExternalImageId,
+                               WrExternalImageBufferType aBufferType,
+                               uint8_t aChannelIndex)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_add_external_image_handle(WrAPI* api,
-    WrImageKey image_key,
-    const WrImageDescriptor* descriptor,
-    WrExternalImageId external_image_id)
+WR_INLINE
+void wr_api_add_external_image_buffer(WrAPI* aApi,
+                                      WrImageKey aImageKey,
+                                      const WrImageDescriptor* aDescriptor,
+                                      WrExternalImageId aExternalImageId)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_add_image(WrAPI* api,
-    WrImageKey image_key,
-    const WrImageDescriptor* descriptor,
-    WrByteSlice bytes)
+WR_INLINE
+void wr_api_add_image(WrAPI* aApi,
+                      WrImageKey aImageKey,
+                      const WrImageDescriptor* aDescriptor,
+                      WrByteSlice aBytes)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_add_raw_font(WrAPI* api,
-    WrFontKey key,
-    uint8_t* font_buffer,
-    size_t buffer_size,
-    uint32_t index)
+WR_INLINE
+void wr_api_add_raw_font(WrAPI* aApi,
+                         WrFontKey aKey,
+                         uint8_t* aFontBuffer,
+                         size_t aBufferSize,
+                         uint32_t aIndex)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_clear_root_display_list(WrAPI* api,
-    WrEpoch epoch,
-    WrPipelineId pipeline_id)
+WR_INLINE
+void wr_api_clear_root_display_list(WrAPI* aApi,
+                                    WrEpoch aEpoch,
+                                    WrPipelineId aPipelineId)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_delete(WrAPI* api)
+WR_INLINE
+void wr_api_delete(WrAPI* aApi)
 WR_DESTRUCTOR_SAFE_FUNC;
 
-WR_INLINE void
-wr_api_delete_font(WrAPI* api,
-    WrFontKey key)
+WR_INLINE
+void wr_api_delete_font(WrAPI* aApi,
+                        WrFontKey aKey)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_delete_image(WrAPI* api,
-    WrImageKey key)
+WR_INLINE
+void wr_api_delete_image(WrAPI* aApi,
+                         WrImageKey aKey)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_finalize_builder(WrState* state,
-    WrBuiltDisplayListDescriptor* dl_descriptor,
-    WrVecU8* dl_data,
-    WrAuxiliaryListsDescriptor* aux_descriptor,
-    WrVecU8* aux_data)
+WR_INLINE
+void wr_api_finalize_builder(WrState* aState,
+                             WrSize* aContentSize,
+                             WrBuiltDisplayListDescriptor* aDlDescriptor,
+                             WrVecU8* aDlData)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_generate_frame(WrAPI* api)
+WR_INLINE
+void wr_api_generate_frame(WrAPI* aApi)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_generate_frame_with_properties(WrAPI* api,
-    const WrOpacityProperty* opacity_array,
-    size_t opacity_count,
-    const WrTransformProperty* transform_array,
-    size_t transform_count)
+WR_INLINE
+void wr_api_generate_frame_with_properties(WrAPI* aApi,
+                                           const WrOpacityProperty* aOpacityArray,
+                                           size_t aOpacityCount,
+                                           const WrTransformProperty* aTransformArray,
+                                           size_t aTransformCount)
 WR_FUNC;
 
-WR_INLINE WrIdNamespace
-wr_api_get_namespace(WrAPI* api)
+WR_INLINE
+WrIdNamespace wr_api_get_namespace(WrAPI* aApi)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_send_external_event(WrAPI* api,
-    size_t evt)
+WR_INLINE
+void wr_api_send_external_event(WrAPI* aApi,
+                                size_t aEvt)
 WR_DESTRUCTOR_SAFE_FUNC;
 
-WR_INLINE void
-wr_api_set_root_display_list(WrAPI* api,
-    WrEpoch epoch,
-    float viewport_width,
-    float viewport_height,
-    WrPipelineId pipeline_id,
-    WrBuiltDisplayListDescriptor dl_descriptor,
-    uint8_t* dl_data,
-    size_t dl_size,
-    WrAuxiliaryListsDescriptor aux_descriptor,
-    uint8_t* aux_data,
-    size_t aux_size)
+WR_INLINE
+void wr_api_set_root_display_list(WrAPI* aApi,
+                                  WrEpoch aEpoch,
+                                  float aViewportWidth,
+                                  float aViewportHeight,
+                                  WrPipelineId aPipelineId,
+                                  WrSize aContentSize,
+                                  WrBuiltDisplayListDescriptor aDlDescriptor,
+                                  uint8_t* aDlData,
+                                  size_t aDlSize)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_set_root_pipeline(WrAPI* api,
-    WrPipelineId pipeline_id)
+WR_INLINE
+void wr_api_set_root_pipeline(WrAPI* aApi,
+                              WrPipelineId aPipelineId)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_set_window_parameters(WrAPI* api,
-    int32_t width,
-    int32_t height)
+WR_INLINE
+void wr_api_set_window_parameters(WrAPI* aApi,
+                                  int32_t aWidth,
+                                  int32_t aHeight)
 WR_FUNC;
 
-WR_INLINE void
-wr_api_update_image(WrAPI* api,
-    WrImageKey key,
-    const WrImageDescriptor* descriptor,
-    WrByteSlice bytes)
+WR_INLINE
+void wr_api_update_image(WrAPI* aApi,
+                         WrImageKey aKey,
+                         const WrImageDescriptor* aDescriptor,
+                         WrByteSlice aBytes)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_begin(WrState* state,
-    uint32_t width,
-    uint32_t height)
+WR_INLINE
+void wr_dp_begin(WrState* aState,
+                 uint32_t aWidth,
+                 uint32_t aHeight)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_end(WrState* state)
+WR_INLINE
+void wr_dp_end(WrState* aState)
 WR_FUNC;
 
-WR_INLINE WrClipRegion
-wr_dp_new_clip_region(WrState* state,
-    WrRect main,
-    const WrComplexClipRegion* complex,
-    size_t complex_count,
-    const WrImageMask* image_mask)
+WR_INLINE
+void wr_dp_pop_clip(WrState* aState)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_pop_scroll_layer(WrState* state)
+WR_INLINE
+void wr_dp_pop_scroll_layer(WrState* aState)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_pop_stacking_context(WrState* state)
+WR_INLINE
+void wr_dp_pop_stacking_context(WrState* aState)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_border(WrState* state,
-    WrRect rect,
-    WrClipRegion clip,
-    WrBorderWidths widths,
-    WrBorderSide top,
-    WrBorderSide right,
-    WrBorderSide bottom,
-    WrBorderSide left,
-    WrBorderRadius radius)
+WR_INLINE
+void wr_dp_push_border(WrState* aState,
+                       WrRect aRect,
+                       WrClipRegionToken aClip,
+                       WrBorderWidths aWidths,
+                       WrBorderSide aTop,
+                       WrBorderSide aRight,
+                       WrBorderSide aBottom,
+                       WrBorderSide aLeft,
+                       WrBorderRadius aRadius)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_border_gradient(WrState* state,
-    WrRect rect,
-    WrClipRegion clip,
-    WrBorderWidths widths,
-    WrPoint start_point,
-    WrPoint end_point,
-    const WrGradientStop* stops,
-    size_t stops_count,
-    WrGradientExtendMode extend_mode,
-    WrSideOffsets2Df32 outset)
+WR_INLINE
+void wr_dp_push_border_gradient(WrState* aState,
+                                WrRect aRect,
+                                WrClipRegionToken aClip,
+                                WrBorderWidths aWidths,
+                                WrPoint aStartPoint,
+                                WrPoint aEndPoint,
+                                const WrGradientStop* aStops,
+                                size_t aStopsCount,
+                                WrGradientExtendMode aExtendMode,
+                                WrSideOffsets2Df32 aOutset)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_border_image(WrState* state,
-    WrRect rect,
-    WrClipRegion clip,
-    WrBorderWidths widths,
-    WrImageKey image,
-    WrNinePatchDescriptor patch,
-    WrSideOffsets2Df32 outset,
-    WrRepeatMode repeat_horizontal,
-    WrRepeatMode repeat_vertical)
+WR_INLINE
+void wr_dp_push_border_image(WrState* aState,
+                             WrRect aRect,
+                             WrClipRegionToken aClip,
+                             WrBorderWidths aWidths,
+                             WrImageKey aImage,
+                             WrNinePatchDescriptor aPatch,
+                             WrSideOffsets2Df32 aOutset,
+                             WrRepeatMode aRepeatHorizontal,
+                             WrRepeatMode aRepeatVertical)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_border_radial_gradient(WrState* state,
-    WrRect rect,
-    WrClipRegion clip,
-    WrBorderWidths widths,
-    WrPoint center,
-    WrSize radius,
-    const WrGradientStop* stops,
-    size_t stops_count,
-    WrGradientExtendMode extend_mode,
-    WrSideOffsets2Df32 outset)
+WR_INLINE
+void wr_dp_push_border_radial_gradient(WrState* aState,
+                                       WrRect aRect,
+                                       WrClipRegionToken aClip,
+                                       WrBorderWidths aWidths,
+                                       WrPoint aCenter,
+                                       WrSize aRadius,
+                                       const WrGradientStop* aStops,
+                                       size_t aStopsCount,
+                                       WrGradientExtendMode aExtendMode,
+                                       WrSideOffsets2Df32 aOutset)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_box_shadow(WrState* state,
-    WrRect rect,
-    WrClipRegion clip,
-    WrRect box_bounds,
-    WrPoint offset,
-    WrColor color,
-    float blur_radius,
-    float spread_radius,
-    float border_radius,
-    WrBoxShadowClipMode clip_mode)
+WR_INLINE
+void wr_dp_push_box_shadow(WrState* aState,
+                           WrRect aRect,
+                           WrClipRegionToken aClip,
+                           WrRect aBoxBounds,
+                           WrPoint aOffset,
+                           WrColor aColor,
+                           float aBlurRadius,
+                           float aSpreadRadius,
+                           float aBorderRadius,
+                           WrBoxShadowClipMode aClipMode)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_built_display_list(WrState* state,
-    WrBuiltDisplayListDescriptor dl_descriptor,
-    WrVecU8 dl_data,
-    WrAuxiliaryListsDescriptor aux_descriptor,
-    WrVecU8 aux_data)
+WR_INLINE
+void wr_dp_push_built_display_list(WrState* aState,
+                                   WrBuiltDisplayListDescriptor aDlDescriptor,
+                                   WrVecU8 aDlData)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_iframe(WrState* state,
-    WrRect rect,
-    WrClipRegion clip,
-    WrPipelineId pipeline_id)
+WR_INLINE
+void wr_dp_push_clip(WrState* aState,
+                     WrRect aClipRect,
+                     const WrImageMask* aMask)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_image(WrState* state,
-    WrRect bounds,
-    WrClipRegion clip,
-    WrSize stretch_size,
-    WrSize tile_spacing,
-    WrImageRendering image_rendering,
-    WrImageKey key)
+WR_INLINE
+WrClipRegionToken wr_dp_push_clip_region(WrState* aState,
+                                         WrRect aMain,
+                                         const WrComplexClipRegion* aComplex,
+                                         size_t aComplexCount,
+                                         const WrImageMask* aImageMask)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_linear_gradient(WrState* state,
-    WrRect rect,
-    WrClipRegion clip,
-    WrPoint start_point,
-    WrPoint end_point,
-    const WrGradientStop* stops,
-    size_t stops_count,
-    WrGradientExtendMode extend_mode,
-    WrSize tile_size,
-    WrSize tile_spacing)
+WR_INLINE
+void wr_dp_push_iframe(WrState* aState,
+                       WrRect aRect,
+                       WrClipRegionToken aClip,
+                       WrPipelineId aPipelineId)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_radial_gradient(WrState* state,
-    WrRect rect,
-    WrClipRegion clip,
-    WrPoint center,
-    WrSize radius,
-    const WrGradientStop* stops,
-    size_t stops_count,
-    WrGradientExtendMode extend_mode,
-    WrSize tile_size,
-    WrSize tile_spacing)
+WR_INLINE
+void wr_dp_push_image(WrState* aState,
+                      WrRect aBounds,
+                      WrClipRegionToken aClip,
+                      WrSize aStretchSize,
+                      WrSize aTileSpacing,
+                      WrImageRendering aImageRendering,
+                      WrImageKey aKey)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_rect(WrState* state,
-    WrRect rect,
-    WrClipRegion clip,
-    WrColor color)
+WR_INLINE
+void wr_dp_push_linear_gradient(WrState* aState,
+                                WrRect aRect,
+                                WrClipRegionToken aClip,
+                                WrPoint aStartPoint,
+                                WrPoint aEndPoint,
+                                const WrGradientStop* aStops,
+                                size_t aStopsCount,
+                                WrGradientExtendMode aExtendMode,
+                                WrSize aTileSize,
+                                WrSize aTileSpacing)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_scroll_layer(WrState* state,
-    WrRect content_rect,
-    WrRect clip_rect,
-    const WrImageMask* mask)
+WR_INLINE
+void wr_dp_push_radial_gradient(WrState* aState,
+                                WrRect aRect,
+                                WrClipRegionToken aClip,
+                                WrPoint aCenter,
+                                WrSize aRadius,
+                                const WrGradientStop* aStops,
+                                size_t aStopsCount,
+                                WrGradientExtendMode aExtendMode,
+                                WrSize aTileSize,
+                                WrSize aTileSpacing)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_stacking_context(WrState* state,
-    WrRect bounds,
-    uint64_t animation_id,
-    const float* opacity,
-    const WrMatrix* transform,
-    WrMixBlendMode mix_blend_mode)
+WR_INLINE
+void wr_dp_push_rect(WrState* aState,
+                     WrRect aRect,
+                     WrClipRegionToken aClip,
+                     WrColor aColor)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_text(WrState* state,
-    WrRect bounds,
-    WrClipRegion clip,
-    WrColor color,
-    WrFontKey font_key,
-    const WrGlyphInstance* glyphs,
-    uint32_t glyph_count,
-    float glyph_size)
+WR_INLINE
+void wr_dp_push_scroll_layer(WrState* aState,
+                             uint64_t aScrollId,
+                             WrRect aContentRect,
+                             WrRect aClipRect)
 WR_FUNC;
 
-WR_INLINE void
-wr_dp_push_yuv_image(WrState* state,
-    WrRect bounds,
-    WrClipRegion clip,
-    const WrImageKey* image_keys,
-    uint8_t key_num,
-    WrYuvColorSpace color_space)
+WR_INLINE
+void wr_dp_push_stacking_context(WrState* aState,
+                                 WrRect aBounds,
+                                 uint64_t aAnimationId,
+                                 const float* aOpacity,
+                                 const WrMatrix* aTransform,
+                                 WrMixBlendMode aMixBlendMode)
 WR_FUNC;
 
-WR_INLINE void
-wr_rendered_epochs_delete(WrRenderedEpochs* pipeline_epochs)
+WR_INLINE
+void wr_dp_push_text(WrState* aState,
+                     WrRect aBounds,
+                     WrClipRegionToken aClip,
+                     WrColor aColor,
+                     WrFontKey aFontKey,
+                     const WrGlyphInstance* aGlyphs,
+                     uint32_t aGlyphCount,
+                     float aGlyphSize)
+WR_FUNC;
+
+WR_INLINE
+void wr_dp_push_yuv_NV12_image(WrState* aState,
+                               WrRect aBounds,
+                               WrClipRegionToken aClip,
+                               WrImageKey aImageKey0,
+                               WrImageKey aImageKey1,
+                               WrYuvColorSpace aColorSpace)
+WR_FUNC;
+
+WR_INLINE
+void wr_dp_push_yuv_interleaved_image(WrState* aState,
+                                      WrRect aBounds,
+                                      WrClipRegionToken aClip,
+                                      WrImageKey aImageKey0,
+                                      WrYuvColorSpace aColorSpace)
+WR_FUNC;
+
+WR_INLINE
+void wr_dp_push_yuv_planar_image(WrState* aState,
+                                 WrRect aBounds,
+                                 WrClipRegionToken aClip,
+                                 WrImageKey aImageKey0,
+                                 WrImageKey aImageKey1,
+                                 WrImageKey aImageKey2,
+                                 WrYuvColorSpace aColorSpace)
+WR_FUNC;
+
+WR_INLINE
+void wr_rendered_epochs_delete(WrRenderedEpochs* aPipelineEpochs)
 WR_DESTRUCTOR_SAFE_FUNC;
 
-WR_INLINE bool
-wr_rendered_epochs_next(WrRenderedEpochs* pipeline_epochs,
-    WrPipelineId* out_pipeline,
-    WrEpoch* out_epoch)
+WR_INLINE
+bool wr_rendered_epochs_next(WrRenderedEpochs* aPipelineEpochs,
+                             WrPipelineId* aOutPipeline,
+                             WrEpoch* aOutEpoch)
 WR_FUNC;
 
-WR_INLINE bool
-wr_renderer_current_epoch(WrRenderer* renderer,
-    WrPipelineId pipeline_id,
-    WrEpoch* out_epoch)
+WR_INLINE
+bool wr_renderer_current_epoch(WrRenderer* aRenderer,
+                               WrPipelineId aPipelineId,
+                               WrEpoch* aOutEpoch)
 WR_FUNC;
 
-WR_INLINE void
-wr_renderer_delete(WrRenderer* renderer)
+WR_INLINE
+void wr_renderer_delete(WrRenderer* aRenderer)
 WR_DESTRUCTOR_SAFE_FUNC;
 
-WR_INLINE WrRenderedEpochs*
-wr_renderer_flush_rendered_epochs(WrRenderer* renderer)
+WR_INLINE
+WrRenderedEpochs* wr_renderer_flush_rendered_epochs(WrRenderer* aRenderer)
 WR_FUNC;
 
-WR_INLINE void
-wr_renderer_readback(WrRenderer* renderer,
-    uint32_t width,
-    uint32_t height,
-    uint8_t* dst_buffer,
-    size_t buffer_size)
+WR_INLINE
+void wr_renderer_readback(WrRenderer* aRenderer,
+                          uint32_t aWidth,
+                          uint32_t aHeight,
+                          uint8_t* aDstBuffer,
+                          size_t aBufferSize)
 WR_FUNC;
 
-WR_INLINE void
-wr_renderer_render(WrRenderer* renderer,
-    uint32_t width,
-    uint32_t height)
+WR_INLINE
+void wr_renderer_render(WrRenderer* aRenderer,
+                        uint32_t aWidth,
+                        uint32_t aHeight)
 WR_FUNC;
 
-WR_INLINE void
-wr_renderer_set_external_image_handler(WrRenderer* renderer,
-    WrExternalImageHandler* external_image_handler)
+WR_INLINE
+void wr_renderer_set_external_image_handler(WrRenderer* aRenderer,
+                                            WrExternalImageHandler* aExternalImageHandler)
 WR_FUNC;
 
-WR_INLINE void
-wr_renderer_set_profiler_enabled(WrRenderer* renderer,
-    bool enabled)
+WR_INLINE
+void wr_renderer_set_profiler_enabled(WrRenderer* aRenderer,
+                                      bool aEnabled)
 WR_FUNC;
 
-WR_INLINE void
-wr_renderer_update(WrRenderer* renderer)
+WR_INLINE
+void wr_renderer_update(WrRenderer* aRenderer)
 WR_FUNC;
 
-WR_INLINE void
-wr_state_delete(WrState* state)
+WR_INLINE
+void wr_scroll_layer_with_id(WrAPI* aApi,
+                             WrPipelineId aPipelineId,
+                             uint64_t aScrollId,
+                             WrPoint aNewScrollOrigin)
+WR_FUNC;
+
+WR_INLINE
+void wr_state_delete(WrState* aState)
 WR_DESTRUCTOR_SAFE_FUNC;
 
-WR_INLINE WrState*
-wr_state_new(WrPipelineId pipeline_id)
+WR_INLINE
+WrState* wr_state_new(WrPipelineId aPipelineId,
+                      WrSize aContentSize)
 WR_FUNC;
 
-WR_INLINE void
-wr_vec_u8_free(WrVecU8 v)
+WR_INLINE
+void wr_vec_u8_free(WrVecU8 aV)
 WR_FUNC;
 
-WR_INLINE bool
-wr_window_new(WrWindowId window_id,
-    uint32_t window_width,
-    uint32_t window_height,
-    void* gl_context,
-    bool enable_profiler,
-    WrAPI** out_api,
-    WrRenderer** out_renderer)
+WR_INLINE
+bool wr_window_new(WrWindowId aWindowId,
+                   uint32_t aWindowWidth,
+                   uint32_t aWindowHeight,
+                   void* aGlContext,
+                   bool aEnableProfiler,
+                   WrAPI** aOutApi,
+                   WrRenderer** aOutRenderer)
 WR_FUNC;
+
+} // extern "C"
 
 /* DO NOT MODIFY THIS MANUALLY! This file was generated using cbindgen.
  * To generate this file, clone `https://github.com/rlhunt/cbindgen` or run `cargo install cbindgen`,
- * then run `cbindgen -c wr gfx/webrender_bindings/ gfx/webrender_bindings/webrender_ffi_generated.h` */
+ * then run `cbindgen gfx/webrender_bindings/ -o gfx/webrender_bindings/webrender_ffi_generated.h` */

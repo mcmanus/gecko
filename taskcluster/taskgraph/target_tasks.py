@@ -77,7 +77,7 @@ def target_tasks_try_option_syntax(full_task_graph, parameters):
             task.attributes['profile'] = False
 
         # If the developer wants test talos jobs to be rebuilt N times we add that value here
-        if options.talos_trigger_tests > 1 and 'talos_suite' in task.attributes:
+        if options.talos_trigger_tests > 1 and task.attributes.get('unittest_suite') == 'talos':
             task.attributes['task_duplicates'] = options.talos_trigger_tests
             task.attributes['profile'] = options.profile
 
@@ -151,8 +151,8 @@ def target_tasks_cedar(full_task_graph, parameters):
         if platform not in ['linux64']:
             return False
         if task.attributes.get('unittest_suite'):
-            if not (task.attributes['unittest_suite'].startswith('mochitest')
-                    or 'xpcshell' in task.attributes['unittest_suite']):
+            if not (task.attributes['unittest_suite'].startswith('mochitest') or
+                    'xpcshell' in task.attributes['unittest_suite']):
                 return False
         return True
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
@@ -236,9 +236,8 @@ def target_tasks_mozilla_beta(full_task_graph, parameters):
         if not standard_filter(task, parameters):
             return False
         platform = task.attributes.get('build_platform')
-        if platform in ('linux64-pgo', 'linux-pgo', 'win32-pgo', 'win64-pgo',
-                        'android-api-15-nightly', 'android-x86-nightly',
-                        'win32', 'win64'):
+        if platform in ('linux64-pgo', 'linux-pgo', 'android-api-15-nightly',
+                        'android-x86-nightly'):
             return False
         if platform in ('linux64', 'linux', 'macosx64'):
             if task.attributes['build_type'] == 'opt':
@@ -317,5 +316,20 @@ def target_tasks_nightly_macosx(full_task_graph, parameters):
     def filter(task):
         platform = task.attributes.get('build_platform')
         if platform in ('macosx64-nightly', ):
+            return task.attributes.get('nightly', False)
+    return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
+
+
+# nightly_win64 should be refactored to be nightly_all once
+# https://bugzilla.mozilla.org/show_bug.cgi?id=1267425 dependent bugs are
+# implemented
+@_target_task('nightly_win64')
+def target_tasks_nightly_win64(full_task_graph, parameters):
+    """Select the set of tasks required for a nightly build of win64. The
+    nightly build process involves a pipeline of builds, signing,
+    and, eventually, uploading the tasks to balrog."""
+    def filter(task):
+        platform = task.attributes.get('build_platform')
+        if platform in ('win64-nightly', ):
             return task.attributes.get('nightly', False)
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]

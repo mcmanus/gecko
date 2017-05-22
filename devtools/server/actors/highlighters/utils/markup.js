@@ -4,7 +4,7 @@
 
 "use strict";
 
-const { Cc, Ci, Cu } = require("chrome");
+const { Cc, Ci, Cu, Cr } = require("chrome");
 const { getCurrentZoom, getWindowDimensions, getViewportDimensions,
   getRootBindingParent, loadSheet } = require("devtools/shared/layout/utils");
 const { on, emit } = require("sdk/event/core");
@@ -270,7 +270,23 @@ CanvasFrameAnonymousContentHelper.prototype = {
     // at least on desktop. Therefore, removing the code that was dealing with
     // that scenario, fixes when we're adding anonymous content in a tab that
     // is not the active one (see bug 1260043 and bug 1260044)
-    this._content = doc.insertAnonymousContent(node);
+    try {
+      this._content = doc.insertAnonymousContent(node);
+    } catch (e) {
+      // If the `insertAnonymousContent` fails throwing a `NS_ERROR_UNEXPECTED`, it means
+      // we don't have access to a `CustomContentContainer` yet (see bug 1365075).
+      // At this point, it could only happen on document's interactive state, and we
+      // need to wait until the `complete` state before inserting the anonymous content
+      // again.
+      if (e.result === Cr.NS_ERROR_UNEXPECTED && doc.readyState === "interactive") {
+        // The next state change will be "complete" since the current is "interactive"
+        doc.addEventListener("readystatechange", () => {
+          this._content = doc.insertAnonymousContent(node);
+        }, { once: true });
+      } else {
+        throw e;
+      }
+    }
   },
 
   _remove() {
@@ -563,15 +579,23 @@ exports.CanvasFrameAnonymousContentHelper = CanvasFrameAnonymousContentHelper;
  *         The content bounds of the container element.
  * @param  {Window} win
  *         The window object.
+ * @param  {Object} [options={}]
+ *         Advanced options for the infobar.
+ * @param  {String} options.position
+ *         Force the infobar to be displayed either on "top" or "bottom". Any other value
+ *         will be ingnored.
+ * @param  {Boolean} options.hideIfOffscreen
+ *         If set to `true`, hides the infobar if it's offscreen, instead of automatically
+ *         reposition it.
  */
-function moveInfobar(container, bounds, win) {
+function moveInfobar(container, bounds, win, options = {}) {
   let zoom = getCurrentZoom(win);
   let viewport = getViewportDimensions(win);
 
   let { computedStyle } = container;
 
-  // To simplify, we use the same arrow's size value as margin's value for all four sides.
-  let margin = parseFloat(computedStyle
+  let margin = 2;
+  let arrowSize = parseFloat(computedStyle
                               .getPropertyValue("--highlighter-bubble-arrow-size"));
   let containerHeight = parseFloat(computedStyle.getPropertyValue("height"));
   let containerWidth = parseFloat(computedStyle.getPropertyValue("width"));
@@ -583,17 +607,16 @@ function moveInfobar(container, bounds, win) {
 
   pageYOffset *= zoom;
   pageXOffset *= zoom;
-  containerHeight += margin;
 
   // Defines the boundaries for the infobar.
   let topBoundary = margin;
-  let bottomBoundary = viewportHeight - containerHeight;
+  let bottomBoundary = viewportHeight - containerHeight - margin - 1;
   let leftBoundary = containerHalfWidth + margin;
   let rightBoundary = viewportWidth - containerHalfWidth - margin;
 
   // Set the default values.
-  let top = bounds.y - containerHeight;
-  let bottom = bounds.bottom + margin;
+  let top = bounds.y - containerHeight - arrowSize;
+  let bottom = bounds.bottom + margin + arrowSize;
   let left = bounds.x + bounds.width / 2;
   let isOverlapTheNode = false;
   let positionAttribute = "top";
@@ -608,8 +631,10 @@ function moveInfobar(container, bounds, win) {
   // It's a sort of "position: sticky" (but positioned as absolute instead of relative).
   let canBePlacedOnTop = top >= pageYOffset;
   let canBePlacedOnBottom = bottomBoundary + pageYOffset - bottom > 0;
+  let forcedOnTop = options.position === "top";
+  let forcedOnBottom = options.position === "bottom";
 
-  if (!canBePlacedOnTop && canBePlacedOnBottom) {
+  if ((!canBePlacedOnTop && canBePlacedOnBottom && !forcedOnTop) || forcedOnBottom) {
     top = bottom;
     positionAttribute = "bottom";
   }
@@ -630,7 +655,10 @@ function moveInfobar(container, bounds, win) {
     top -= pageYOffset;
   }
 
-  if (isOverlapTheNode) {
+  if (isOverlapTheNode && options.hideIfOffscreen) {
+    container.setAttribute("hidden", "true");
+    return;
+  } else if (isOverlapTheNode) {
     left = Math.min(Math.max(leftBoundary, left - pageXOffset), rightBoundary);
 
     position = "fixed";

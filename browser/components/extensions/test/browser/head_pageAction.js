@@ -3,9 +3,10 @@
 "use strict";
 
 /* exported runTests */
-/* globals getListStyleImage */
+// This file is imported into the same scope as head.js.
+/* import-globals-from head.js */
 
-function* runTests(options) {
+async function runTests(options) {
   function background(getTests) {
     let tabs;
     let tests;
@@ -108,10 +109,12 @@ function* runTests(options) {
   let testNewWindows = 1;
 
   let awaitFinish = new Promise(resolve => {
-    extension.onMessage("nextTest", (expecting, testsRemaining) => {
+    extension.onMessage("nextTest", async (expecting, testsRemaining) => {
       if (!pageActionId) {
         pageActionId = `${makeWidgetId(extension.id)}-page-action`;
       }
+
+      await promiseAnimationFrame();
 
       checkDetails(expecting);
 
@@ -136,11 +139,11 @@ function* runTests(options) {
   let reqLoc = Services.locale.getRequestedLocales();
   Services.locale.setRequestedLocales(["es-ES"]);
 
-  yield extension.startup();
+  await extension.startup();
 
-  yield awaitFinish;
+  await awaitFinish;
 
-  yield extension.unload();
+  await extension.unload();
 
   Services.locale.setRequestedLocales(reqLoc);
 
@@ -152,7 +155,6 @@ function* runTests(options) {
     node = win.document.getElementById(pageActionId);
     is(node, null, "pageAction image removed from second document");
 
-    yield BrowserTestUtils.closeWindow(win);
+    await BrowserTestUtils.closeWindow(win);
   }
 }
-

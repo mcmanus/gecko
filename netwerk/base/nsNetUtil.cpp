@@ -460,6 +460,18 @@ NS_GetDefaultPort(const char *scheme,
 {
   nsresult rv;
 
+  // Getting the default port through the protocol handler has a lot of XPCOM
+  // overhead involved.  We optimize the protocols that matter for Web pages
+  // (HTTP and HTTPS) by hardcoding their default ports here.
+  if (strncmp(scheme, "http", 4) == 0) {
+    if (scheme[4] == 's' && scheme[5] == '\0') {
+      return 443;
+    }
+    if (scheme[4] == '\0') {
+      return 80;
+    }
+  }
+
   nsCOMPtr<nsIIOService> grip;
   net_EnsureIOService(&ioService, grip);
   if (!ioService)
@@ -690,14 +702,15 @@ NS_NewInputStreamPump(nsIInputStreamPump **result,
                       int64_t              streamLen /* = int64_t(-1) */,
                       uint32_t             segsize /* = 0 */,
                       uint32_t             segcount /* = 0 */,
-                      bool                 closeWhenDone /* = false */)
+                      bool                 closeWhenDone /* = false */,
+                      nsIEventTarget      *mainThreadTarget /* = nullptr */)
 {
     nsresult rv;
     nsCOMPtr<nsIInputStreamPump> pump =
         do_CreateInstance(NS_INPUTSTREAMPUMP_CONTRACTID, &rv);
     if (NS_SUCCEEDED(rv)) {
         rv = pump->Init(stream, streamPos, streamLen,
-                        segsize, segcount, closeWhenDone);
+                        segsize, segcount, closeWhenDone, mainThreadTarget);
         if (NS_SUCCEEDED(rv)) {
             *result = nullptr;
             pump.swap(*result);
@@ -1565,16 +1578,10 @@ NS_LoadPersistentPropertiesFromURISpec(nsIPersistentProperties **outResult,
 bool
 NS_UsePrivateBrowsing(nsIChannel *channel)
 {
-    bool isPrivate = false;
-    nsCOMPtr<nsIPrivateBrowsingChannel> pbChannel = do_QueryInterface(channel);
-    if (pbChannel && NS_SUCCEEDED(pbChannel->GetIsChannelPrivate(&isPrivate))) {
-        return isPrivate;
-    }
-
-    // Some channels may not implement nsIPrivateBrowsingChannel
-    nsCOMPtr<nsILoadContext> loadContext;
-    NS_QueryNotificationCallbacks(channel, loadContext);
-    return loadContext && loadContext->UsePrivateBrowsing();
+    OriginAttributes attrs;
+    bool result = NS_GetOriginAttributes(channel, attrs);
+    NS_ENSURE_TRUE(result, result);
+    return attrs.mPrivateBrowsingId > 0;
 }
 
 bool
@@ -1587,7 +1594,19 @@ NS_GetOriginAttributes(nsIChannel *aChannel,
     }
 
     loadInfo->GetOriginAttributes(&aAttributes);
-    aAttributes.SyncAttributesWithPrivateBrowsing(NS_UsePrivateBrowsing(aChannel));
+
+    bool isPrivate = false;
+    nsCOMPtr<nsIPrivateBrowsingChannel> pbChannel = do_QueryInterface(aChannel);
+    if (pbChannel) {
+        nsresult rv = pbChannel->GetIsChannelPrivate(&isPrivate);
+        NS_ENSURE_SUCCESS(rv, false);
+    } else {
+        // Some channels may not implement nsIPrivateBrowsingChannel
+        nsCOMPtr<nsILoadContext> loadContext;
+        NS_QueryNotificationCallbacks(aChannel, loadContext);
+        isPrivate = loadContext && loadContext->UsePrivateBrowsing();
+    }
+    aAttributes.SyncAttributesWithPrivateBrowsing(isPrivate);
     return true;
 }
 
@@ -1650,9 +1669,11 @@ NS_HasBeenCrossOrigin(nsIChannel* aChannel, bool aReport)
 }
 
 bool
-NS_ShouldCheckAppCache(nsIURI *aURI, bool usePrivateBrowsing)
+NS_ShouldCheckAppCache(nsIPrincipal *aPrincipal)
 {
-    if (usePrivateBrowsing) {
+    uint32_t privateBrowsingId = 0;
+    nsresult rv = aPrincipal->GetPrivateBrowsingId(&privateBrowsingId);
+    if (NS_SUCCEEDED(rv) && (privateBrowsingId > 0)) {
         return false;
     }
 
@@ -1663,29 +1684,7 @@ NS_ShouldCheckAppCache(nsIURI *aURI, bool usePrivateBrowsing)
     }
 
     bool allowed;
-    nsresult rv = offlineService->OfflineAppAllowedForURI(aURI,
-                                                          nullptr,
-                                                          &allowed);
-    return NS_SUCCEEDED(rv) && allowed;
-}
-
-bool
-NS_ShouldCheckAppCache(nsIPrincipal *aPrincipal, bool usePrivateBrowsing)
-{
-    if (usePrivateBrowsing) {
-        return false;
-    }
-
-    nsCOMPtr<nsIOfflineCacheUpdateService> offlineService =
-        do_GetService("@mozilla.org/offlinecacheupdate-service;1");
-    if (!offlineService) {
-        return false;
-    }
-
-    bool allowed;
-    nsresult rv = offlineService->OfflineAppAllowed(aPrincipal,
-                                                    nullptr,
-                                                    &allowed);
+    rv = offlineService->OfflineAppAllowed(aPrincipal, nullptr, &allowed);
     return NS_SUCCEEDED(rv) && allowed;
 }
 
@@ -2655,10 +2654,9 @@ NS_CompareLoadInfoAndLoadContext(nsIChannel *aChannel)
     return NS_OK;
   }
 
-  // We try to skip about:newtab and about:sync-tabs.
+  // We try to skip about:newtab.
   // about:newtab will use SystemPrincipal to download thumbnails through
   // https:// and blob URLs.
-  // about:sync-tabs will fetch icons through moz-icon://.
   bool isAboutPage = false;
   nsINode* node = loadInfo->LoadingNode();
   if (node) {

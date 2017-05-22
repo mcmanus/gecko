@@ -32,12 +32,6 @@ BUILD_KINDS = set([
     'spidermonkey',
 ])
 
-# anything in this list is governed by -j, matching against the `build_platform` attribute
-JOB_KINDS_MATCHING_BUILD_PLATFORM = set([
-    'toolchain',
-    'android-stuff',
-])
-
 
 # mapping from shortcut name (usable with -u) to a boolean function identifying
 # matching test names
@@ -243,9 +237,6 @@ def parse_message(message):
     # this temporary option to be able to push jobs to tc-worker.
     parser.add_argument('-w', '--taskcluster-worker',
                         dest='taskcluster_worker', action='store_true', default=False)
-    # Similarly, an extra flag for enabling os x jobs in generic-worker
-    parser.add_argument('-g', '--generic-worker',
-                        dest='generic_worker', action='store_true', default=False)
 
     # In order to run test jobs multiple times
     parser.add_argument('--rebuild', dest='trigger_tests', type=int, default=1)
@@ -596,18 +587,11 @@ class TryOptionSyntax(object):
         job_try_name = attr('job_try_name')
         if job_try_name:
             if self.jobs is None or job_try_name in self.jobs:
-                if self.platforms is None or attr('build_platform') not in self.platforms:
+                if self.platforms is None or attr('build_platform') in self.platforms:
                     return True
-
-        if attr('kind') == 'test':
+        elif attr('kind') == 'test':
             return match_test(self.unittests, 'unittest_try_name') \
                  or match_test(self.talos, 'talos_try_name')
-        elif attr('kind') in JOB_KINDS_MATCHING_BUILD_PLATFORM:
-            # This will add 'job' tasks to the target set even if no try syntax was specified.
-            if not self.jobs:
-                return True
-            if attr('build_platform') in self.jobs:
-                return True
         elif attr('kind') in BUILD_KINDS:
             if attr('build_type') not in self.build_types:
                 return False

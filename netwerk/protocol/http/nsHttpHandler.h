@@ -168,6 +168,27 @@ public:
     bool     IsQUICEnabled() { return mQUICEnabled; }
     uint32_t QUICChunkSize() { return mQUICChunkSize; }
 
+    bool UseFastOpen()
+    {
+        return mUseFastOpen && mFastOpenSupported &&
+               mFastOpenConsecutiveFailureCounter < mFastOpenConsecutiveFailureLimit;
+    }
+    // If one of tcp connections return PR_NOT_TCP_SOCKET_ERROR while trying
+    // fast open, it means that Fast Open is turned off so we will not try again
+    // until a restart. This is only on Linux.
+    // For windows 10 we can only check whether a version of windows support
+    // Fast Open at run time, so if we get error PR_NOT_IMPLEMENTED_ERROR it
+    // means that Fast Open is not supported and we will set mFastOpenSupported
+    // to false.
+    void SetFastOpenNotSupported() { mFastOpenSupported = false; }
+
+    void IncrementFastOpenConsecutiveFailureCounter();
+
+    void ResetFastOpenConsecutiveFailureCounter()
+    {
+        mFastOpenConsecutiveFailureCounter = 0;
+    }
+
     // returns the HTTP framing check level preference, as controlled with
     // network.http.enforce-framing.http1 and network.http.enforce-framing.soft
     FrameCheckLevel GetEnforceH1Framing() { return mEnforceH1Framing; }
@@ -340,12 +361,6 @@ public:
     // returns true in between Init and Shutdown states
     bool Active() { return mHandlerActive; }
 
-    // When the disk cache is responding slowly its use is suppressed
-    // for 1 minute for most requests. Callable from main thread only.
-    TimeStamp GetCacheSkippedUntil() { return mCacheSkippedUntil; }
-    void SetCacheSkippedUntil(TimeStamp arg) { mCacheSkippedUntil = arg; }
-    void ClearCacheSkippedUntil() { mCacheSkippedUntil = TimeStamp(); }
-
     nsIRequestContextService *GetRequestContextService()
     {
         return mRequestContextService.get();
@@ -391,6 +406,9 @@ private:
 
     void     NotifyObservers(nsIHttpChannel *chan, const char *event);
 
+    void SetFastOpenOSSupport();
+
+    void EnsureUAOverridesInit();
 private:
 
     // cached services
@@ -546,10 +564,6 @@ private:
     // while those elements load.
     bool           mCriticalRequestPrioritization;
 
-    // When the disk cache is responding slowly its use is suppressed
-    // for 1 minute for most requests.
-    TimeStamp      mCacheSkippedUntil;
-
     // TCP Keepalive configuration values.
 
     // True if TCP keepalive is enabled for short-lived conns.
@@ -589,6 +603,11 @@ private:
 
     // The ratio for dispatching transactions from the focused window.
     float mFocusedWindowTransactionRatio;
+
+    Atomic<bool, Relaxed> mUseFastOpen;
+    Atomic<bool, Relaxed> mFastOpenSupported;
+    uint32_t mFastOpenConsecutiveFailureLimit;
+    uint32_t mFastOpenConsecutiveFailureCounter;
 
 private:
     // For Rate Pacing Certain Network Events. Only assign this pointer on

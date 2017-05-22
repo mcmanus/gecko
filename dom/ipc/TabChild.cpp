@@ -35,6 +35,7 @@
 #include "mozilla/layers/IAPZCTreeManager.h"
 #include "mozilla/layers/ImageBridgeChild.h"
 #include "mozilla/layers/InputAPZContext.h"
+#include "mozilla/layers/PLayerTransactionChild.h"
 #include "mozilla/layers/ShadowLayers.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/layout/RenderFrameChild.h"
@@ -181,14 +182,12 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(TabChildBase)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(TabChildBase)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mTabChildGlobal)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mGlobal)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mAnonymousGlobalScopes)
+  tmp->nsMessageManagerScriptExecutor::Unlink();
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mWebBrowserChrome)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(TabChildBase)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTabChildGlobal)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGlobal)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mWebBrowserChrome)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -241,7 +240,7 @@ TabChildBase::DispatchMessageManagerMessage(const nsAString& aMessageName,
         }
     }
 
-    nsCOMPtr<nsIXPConnectJSObjectHolder> kungFuDeathGrip(GetGlobal());
+    JS::Rooted<JSObject*> kungFuDeathGrip(cx, GetGlobal());
     // Let the BrowserElementScrolling helper (if it exists) for this
     // content manipulate the frame state.
     RefPtr<nsFrameMessageManager> mm =
@@ -421,26 +420,6 @@ TabChild::TabChild(nsIContentChild* aManager,
     MOZ_ASSERT(NestedTabChildMap().find(mUniqueId) == NestedTabChildMap().end());
     NestedTabChildMap()[mUniqueId] = this;
   }
-
-  nsCOMPtr<nsIObserverService> observerService =
-    mozilla::services::GetObserverService();
-
-  if (observerService) {
-    const nsAttrValue::EnumTable* table =
-      AudioChannelService::GetAudioChannelTable();
-
-    nsAutoCString topic;
-    for (uint32_t i = 0; table[i].tag; ++i) {
-      topic.Assign("audiochannel-activity-");
-      topic.Append(table[i].tag);
-
-      observerService->AddObserver(this, topic.get(), false);
-    }
-  }
-
-  for (uint32_t idx = 0; idx < NUMBER_OF_AUDIO_CHANNELS; idx++) {
-    mAudioChannelsActive.AppendElement(false);
-  }
 }
 
 bool
@@ -470,59 +449,6 @@ TabChild::Observe(nsISupports *aSubject,
 
         APZCCallbackHelper::InitializeRootDisplayport(shell);
       }
-    }
-  }
-
-  const nsAttrValue::EnumTable* table =
-    AudioChannelService::GetAudioChannelTable();
-
-  nsAutoCString topic;
-  int16_t audioChannel = -1;
-  for (uint32_t i = 0; table[i].tag; ++i) {
-    topic.Assign("audiochannel-activity-");
-    topic.Append(table[i].tag);
-
-    if (topic.Equals(aTopic)) {
-      audioChannel = table[i].value;
-      break;
-    }
-  }
-
-  if (audioChannel != -1 && mIPCOpen) {
-    // If the subject is not a wrapper, it is sent by the TabParent and we
-    // should ignore it.
-    nsCOMPtr<nsISupportsPRUint64> wrapper = do_QueryInterface(aSubject);
-    if (!wrapper) {
-      return NS_OK;
-    }
-
-    // We must have a window in order to compare the windowID contained into the
-    // wrapper.
-    nsCOMPtr<nsPIDOMWindowOuter> window = do_GetInterface(WebNavigation());
-    if (!window) {
-      return NS_OK;
-    }
-
-    uint64_t windowID = 0;
-    nsresult rv = wrapper->GetData(&windowID);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    // In theory a tabChild should contain just 1 top window, but let's double
-    // check it comparing the windowID.
-    if (window->WindowID() != windowID) {
-      MOZ_LOG(AudioChannelService::GetAudioChannelLog(), LogLevel::Debug,
-              ("TabChild, Observe, different windowID, owner ID = %" PRIu64 ", "
-               "ID from wrapper = %" PRIu64, window->WindowID(), windowID));
-      return NS_OK;
-    }
-
-    nsAutoString activeStr(aData);
-    bool active = activeStr.EqualsLiteral("active");
-    if (active != mAudioChannelsActive[audioChannel]) {
-      mAudioChannelsActive[audioChannel] = active;
-      Unused << SendAudioChannelActivityNotification(audioChannel, active);
     }
   }
 
@@ -1685,12 +1611,16 @@ TabChild::MaybeCoalesceWheelEvent(const WidgetWheelEvent& aEvent,
     // 1. It's eWheel (we don't coalesce eOperationStart and eWheelOperationEnd)
     // 2. It's not the first wheel event.
     // 3. It's not the last wheel event.
-    // 4. It's dispatched before the last wheel event was processed.
+    // 4. It's dispatched before the last wheel event was processed +
+    //    the processing time of the last event.
+    //    This way pages spending lots of time in wheel listeners get wheel
+    //    events coalesced more aggressively.
     // 5. It has same attributes as the coalesced wheel event which is not yet
     //    fired.
     if (!mLastWheelProcessedTimeFromParent.IsNull() &&
         *aIsNextWheelEvent &&
-        aEvent.mTimeStamp < mLastWheelProcessedTimeFromParent &&
+        aEvent.mTimeStamp < (mLastWheelProcessedTimeFromParent +
+                             mLastWheelProcessingDuration) &&
         (mCoalescedWheelData.IsEmpty() ||
          mCoalescedWheelData.CanCoalesce(aEvent, aGuid, aInputBlockId))) {
       mCoalescedWheelData.Coalesce(aEvent, aGuid, aInputBlockId);
@@ -1758,8 +1688,8 @@ TabChild::RecvMouseWheelEvent(const WidgetWheelEvent& aEvent,
     mozilla::TimeStamp beforeDispatchingTime = TimeStamp::Now();
     MaybeDispatchCoalescedWheelEvent();
     DispatchWheelEvent(aEvent, aGuid, aInputBlockId);
-    mLastWheelProcessedTimeFromParent +=
-      (TimeStamp::Now() - beforeDispatchingTime);
+    mLastWheelProcessingDuration = (TimeStamp::Now() - beforeDispatchingTime);
+    mLastWheelProcessedTimeFromParent += mLastWheelProcessingDuration;
   } else {
     // This is the last wheel event. Set mLastWheelProcessedTimeFromParent to
     // null moment to avoid coalesce the next incoming wheel event.
@@ -1875,22 +1805,27 @@ TabChild::RecvPluginEvent(const WidgetPluginEvent& aEvent)
 }
 
 void
-TabChild::RequestNativeKeyBindings(AutoCacheNativeKeyCommands* aAutoCache,
-                                   const WidgetKeyboardEvent* aEvent)
+TabChild::RequestEditCommands(nsIWidget::NativeKeyBindingsType aType,
+                              const WidgetKeyboardEvent& aEvent,
+                              nsTArray<CommandInt>& aCommands)
 {
-  MaybeNativeKeyBinding maybeBindings;
-  if (!SendRequestNativeKeyBindings(*aEvent, &maybeBindings)) {
+  MOZ_ASSERT(aCommands.IsEmpty());
+
+  if (NS_WARN_IF(aEvent.IsEditCommandsInitialized(aType))) {
+    aCommands = aEvent.EditCommandsConstRef(aType);
     return;
   }
 
-  if (maybeBindings.type() == MaybeNativeKeyBinding::TNativeKeyBinding) {
-    const NativeKeyBinding& bindings = maybeBindings;
-    aAutoCache->Cache(bindings.singleLineCommands(),
-                      bindings.multiLineCommands(),
-                      bindings.richTextCommands());
-  } else {
-    aAutoCache->CacheNoCommands();
+  switch (aType) {
+    case nsIWidget::NativeKeyBindingsForSingleLineEditor:
+    case nsIWidget::NativeKeyBindingsForMultiLineEditor:
+    case nsIWidget::NativeKeyBindingsForRichTextEditor:
+      break;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Invalid native key bindings type");
   }
+
+  SendRequestNativeKeyBindings(aType, aEvent, &aCommands);
 }
 
 mozilla::ipc::IPCResult
@@ -1941,33 +1876,25 @@ TabChild::UpdateRepeatedKeyEventEndTime(const WidgetKeyboardEvent& aEvent)
 }
 
 mozilla::ipc::IPCResult
-TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& aEvent,
-                           const MaybeNativeKeyBinding& aBindings)
+TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& aEvent)
 {
   if (SkipRepeatedKeyEvent(aEvent)) {
     return IPC_OK();
   }
 
-  AutoCacheNativeKeyCommands autoCache(mPuppetWidget);
+  MOZ_ASSERT(aEvent.mMessage != eKeyPress ||
+             aEvent.AreAllEditCommandsInitialized(),
+    "eKeyPress event should have native key binding information");
 
-  if (aEvent.mMessage == eKeyPress) {
-    // If content code called preventDefault() on a keydown event, then we don't
-    // want to process any following keypress events.
-    if (mIgnoreKeyPressEvent) {
-      return IPC_OK();
-    }
-    if (aBindings.type() == MaybeNativeKeyBinding::TNativeKeyBinding) {
-      const NativeKeyBinding& bindings = aBindings;
-      autoCache.Cache(bindings.singleLineCommands(),
-                      bindings.multiLineCommands(),
-                      bindings.richTextCommands());
-    } else {
-      autoCache.CacheNoCommands();
-    }
+  // If content code called preventDefault() on a keydown event, then we don't
+  // want to process any following keypress events.
+  if (aEvent.mMessage == eKeyPress && mIgnoreKeyPressEvent) {
+    return IPC_OK();
   }
 
   WidgetKeyboardEvent localEvent(aEvent);
   localEvent.mWidget = mPuppetWidget;
+  localEvent.mUniqueId = aEvent.mUniqueId;
   nsEventStatus status = APZCCallbackHelper::DispatchWidgetEvent(localEvent);
 
   // Update the end time of the possible repeated event so that we can skip
@@ -2230,7 +2157,7 @@ TabChild::RecvAsyncMessage(const nsString& aMessage,
     return IPC_OK();
   }
 
-  nsCOMPtr<nsIXPConnectJSObjectHolder> kungFuDeathGrip(GetGlobal());
+  JS::Rooted<JSObject*> kungFuDeathGrip(dom::RootingCx(), GetGlobal());
   StructuredCloneData data;
   UnpackClonedMessageDataForChild(aData, data);
   RefPtr<nsFrameMessageManager> mm =
@@ -2316,27 +2243,6 @@ TabChild::RecvHandleAccessKey(const WidgetKeyboardEvent& aEvent,
         SendAccessKeyNotHandled(localEvent);
       }
     }
-  }
-
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult
-TabChild::RecvAudioChannelChangeNotification(const uint32_t& aAudioChannel,
-                                             const float& aVolume,
-                                             const bool& aMuted)
-{
-  nsCOMPtr<nsPIDOMWindowOuter> window = do_GetInterface(WebNavigation());
-  if (window) {
-    RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
-    MOZ_ASSERT(service);
-
-    service->SetAudioChannelVolume(window,
-                                   static_cast<AudioChannel>(aAudioChannel),
-                                   aVolume);
-    service->SetAudioChannelMuted(window,
-                                  static_cast<AudioChannel>(aAudioChannel),
-                                  aMuted);
   }
 
   return IPC_OK();
@@ -2445,17 +2351,6 @@ TabChild::RecvDestroy()
 
   observerService->RemoveObserver(this, BEFORE_FIRST_PAINT);
 
-  const nsAttrValue::EnumTable* table =
-    AudioChannelService::GetAudioChannelTable();
-
-  nsAutoCString topic;
-  for (uint32_t i = 0; table[i].tag; ++i) {
-    topic.Assign("audiochannel-activity-");
-    topic.Append(table[i].tag);
-
-    observerService->RemoveObserver(this, topic.get());
-  }
-
   // XXX what other code in ~TabChild() should we be running here?
   DestroyWindow();
 
@@ -2500,7 +2395,8 @@ TabChild::RecvSetDocShellIsActive(const bool& aIsActive,
     MOZ_ASSERT(mPuppetWidget);
     MOZ_ASSERT(mPuppetWidget->GetLayerManager());
     MOZ_ASSERT(mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT
-            || mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_WR);
+            || mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_WR
+            || (gfxPlatform::IsHeadless() && mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_BASIC));
 
     // We send the current layer observer epoch to the compositor so that
     // TabParent knows whether a layer update notification corresponds to the
@@ -2713,11 +2609,9 @@ TabChild::InitRenderingState(const TextureFactoryIdentifier& aTextureFactoryIden
     if (lf) {
       nsTArray<LayersBackend> backends;
       backends.AppendElement(mTextureFactoryIdentifier.mParentBackend);
-      bool success;
       PLayerTransactionChild* shadowManager =
-          compositorChild->SendPLayerTransactionConstructor(backends,
-                                                            aLayersId, &mTextureFactoryIdentifier, &success);
-      if (shadowManager && success) {
+          compositorChild->SendPLayerTransactionConstructor(backends, aLayersId);
+      if (shadowManager) {
         lf->SetShadowManager(shadowManager);
         lf->IdentifyTextureHost(mTextureFactoryIdentifier);
         ImageBridgeChild::IdentifyCompositorTextureHost(mTextureFactoryIdentifier);
@@ -3019,7 +2913,8 @@ TabChild::DidComposite(uint64_t aTransactionId,
   MOZ_ASSERT(mPuppetWidget);
   MOZ_ASSERT(mPuppetWidget->GetLayerManager());
   MOZ_ASSERT(mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT
-             || mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_WR);
+             || mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_WR
+             || (gfxPlatform::IsHeadless() && mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_BASIC));
 
   mPuppetWidget->GetLayerManager()->DidComposite(aTransactionId, aCompositeStart, aCompositeEnd);
 }
@@ -3056,7 +2951,8 @@ TabChild::ClearCachedResources()
   MOZ_ASSERT(mPuppetWidget);
   MOZ_ASSERT(mPuppetWidget->GetLayerManager());
   MOZ_ASSERT(mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT
-             || mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_WR);
+             || mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_WR
+             || (gfxPlatform::IsHeadless() && mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_BASIC));
 
   mPuppetWidget->GetLayerManager()->ClearCachedResources();
 }
@@ -3067,7 +2963,8 @@ TabChild::InvalidateLayers()
   MOZ_ASSERT(mPuppetWidget);
   MOZ_ASSERT(mPuppetWidget->GetLayerManager());
   MOZ_ASSERT(mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT
-             || mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_WR);
+             || mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_WR
+             || (gfxPlatform::IsHeadless() && mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_BASIC));
 
   RefPtr<LayerManager> lm = mPuppetWidget->GetLayerManager();
   FrameLayerBuilder::InvalidateAllLayers(lm);
@@ -3100,17 +2997,17 @@ TabChild::ReinitRendering()
                                               wr::AsPipelineId(mLayersId),
                                               &mTextureFactoryIdentifier);
   } else {
-    bool success;
+    bool success = false;
     nsTArray<LayersBackend> ignored;
-    PLayerTransactionChild* shadowManager =
-      cb->SendPLayerTransactionConstructor(ignored, LayersId(), &mTextureFactoryIdentifier, &success);
+    PLayerTransactionChild* shadowManager = cb->SendPLayerTransactionConstructor(ignored, LayersId());
+    if (shadowManager &&
+        shadowManager->SendGetTextureFactoryIdentifier(&mTextureFactoryIdentifier) &&
+        mTextureFactoryIdentifier.mParentBackend != LayersBackend::LAYERS_NONE)
+    {
+      success = true;
+    }
     if (!success) {
       NS_WARNING("failed to re-allocate layer transaction");
-      return;
-    }
-
-    if (!shadowManager) {
-      NS_WARNING("failed to re-construct LayersChild");
       return;
     }
 
@@ -3119,6 +3016,9 @@ TabChild::ReinitRendering()
     lf->IdentifyTextureHost(mTextureFactoryIdentifier);
   }
 
+  ImageBridgeChild::IdentifyCompositorTextureHost(mTextureFactoryIdentifier);
+  gfx::VRManagerChild::IdentifyTextureHost(mTextureFactoryIdentifier);
+
   InitAPZState();
 
   nsCOMPtr<nsIDocument> doc(GetDocument());
@@ -3126,11 +3026,35 @@ TabChild::ReinitRendering()
 }
 
 void
+TabChild::ReinitRenderingForDeviceReset()
+{
+  InvalidateLayers();
+
+  RefPtr<LayerManager> lm = mPuppetWidget->GetLayerManager();
+  ClientLayerManager* clm = lm->AsClientLayerManager();
+  if (!clm) {
+    return;
+  }
+
+  if (ShadowLayerForwarder* fwd = clm->AsShadowForwarder()) {
+    // Force the LayerTransactionChild to synchronously shutdown. It is
+    // okay to do this early, we'll simply stop sending messages. This
+    // step is necessary since otherwise the compositor will think we
+    // are trying to attach two layer trees to the same ID.
+    fwd->SynchronouslyShutdown();
+  }
+
+  // Proceed with destroying and recreating the layer manager.
+  ReinitRendering();
+}
+
+void
 TabChild::CompositorUpdated(const TextureFactoryIdentifier& aNewIdentifier,
                             uint64_t aDeviceResetSeqNo)
 {
   MOZ_ASSERT(mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT
-             || mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_WR);
+             || mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_WR
+             || (gfxPlatform::IsHeadless() && mPuppetWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_BASIC));
 
   RefPtr<LayerManager> lm = mPuppetWidget->GetLayerManager();
 
@@ -3322,7 +3246,8 @@ TabChild::ForcePaint(uint64_t aLayerObserverEpoch)
 void
 TabChild::BeforeUnloadAdded()
 {
-  if (mBeforeUnloadListeners == 0) {
+  // Don't bother notifying the parent if we don't have an IPC link open.
+  if (mBeforeUnloadListeners == 0 && IPCOpen()) {
     SendSetHasBeforeUnload(true);
   }
 
@@ -3336,7 +3261,8 @@ TabChild::BeforeUnloadRemoved()
   mBeforeUnloadListeners--;
   MOZ_ASSERT(mBeforeUnloadListeners >= 0);
 
-  if (mBeforeUnloadListeners == 0) {
+  // Don't bother notifying the parent if we don't have an IPC link open.
+  if (mBeforeUnloadListeners == 0 && IPCOpen()) {
     SendSetHasBeforeUnload(false);
   }
 }
@@ -3549,7 +3475,5 @@ JSObject*
 TabChildGlobal::GetGlobalJSObject()
 {
   NS_ENSURE_TRUE(mTabChild, nullptr);
-  nsCOMPtr<nsIXPConnectJSObjectHolder> ref = mTabChild->GetGlobal();
-  NS_ENSURE_TRUE(ref, nullptr);
-  return ref->GetJSObject();
+  return mTabChild->GetGlobal();
 }

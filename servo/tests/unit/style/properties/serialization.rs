@@ -9,8 +9,10 @@ use style::properties::longhands::outline_color::computed_value::T as ComputedCo
 use style::properties::parse_property_declaration_list;
 use style::values::{RGBA, Auto};
 use style::values::CustomIdent;
-use style::values::specified::{BorderStyle, BorderWidth, CSSColor, Length, NoCalcLength};
-use style::values::specified::{LengthOrPercentage, LengthOrPercentageOrAuto, LengthOrPercentageOrAutoOrContent};
+use style::values::specified::{BorderStyle, BorderWidth, CSSColor, Length, LengthOrPercentage};
+use style::values::specified::{LengthOrPercentageOrAuto, LengthOrPercentageOrAutoOrContent};
+use style::values::specified::{NoCalcLength, PositionComponent};
+use style::values::specified::position::Y;
 use style::values::specified::url::SpecifiedUrl;
 use style_traits::ToCss;
 use stylesheets::block_from;
@@ -491,6 +493,7 @@ mod shorthand_serialization {
     }
 
     mod list_style {
+        use style::properties::longhands::list_style_image::SpecifiedValue as ListStyleImage;
         use style::properties::longhands::list_style_position::SpecifiedValue as ListStylePosition;
         use style::properties::longhands::list_style_type::SpecifiedValue as ListStyleType;
         use style::values::Either;
@@ -501,12 +504,17 @@ mod shorthand_serialization {
             let mut properties = Vec::new();
 
             let position = ListStylePosition::inside;
-            let image = Either::First(
-                SpecifiedUrl::new_for_testing("http://servo/test.png"));
+            let image =
+                ListStyleImage(Either::First(SpecifiedUrl::new_for_testing("http://servo/test.png")));
             let style_type = ListStyleType::disc;
 
             properties.push(PropertyDeclaration::ListStylePosition(position));
+
+            #[cfg(feature = "gecko")]
+            properties.push(PropertyDeclaration::ListStyleImage(Box::new(image)));
+            #[cfg(not(feature = "gecko"))]
             properties.push(PropertyDeclaration::ListStyleImage(image));
+
             properties.push(PropertyDeclaration::ListStyleType(style_type));
 
             let serialization = shorthand_properties_to_string(properties);
@@ -651,7 +659,8 @@ mod shorthand_serialization {
                               font-kerning: auto; \
                               font-variant-caps: normal; \
                               font-variant-position: normal; \
-                              font-language-override: normal;";
+                              font-language-override: normal; \
+                              font-feature-settings: normal;";
 
             let block = parse(|c, i| Ok(parse_property_declaration_list(c, i)), block_text).unwrap();
 
@@ -796,8 +805,8 @@ mod shorthand_serialization {
         use style::properties::longhands::mask_position_y as position_y;
         use style::properties::longhands::mask_repeat as repeat;
         use style::properties::longhands::mask_size as size;
-        use style::values::generics::position::{HorizontalPosition, Keyword, PositionValue, VerticalPosition};
-        use style::values::specified::Image;
+        use style::values::Either;
+        use style::values::generics::image::Image;
         use super::*;
 
         macro_rules! single_vec_value_typedef {
@@ -826,23 +835,21 @@ mod shorthand_serialization {
         fn mask_should_serialize_all_available_properties_when_specified() {
             let mut properties = Vec::new();
 
-            let image = single_vec_value_typedef!(image,
-                image::single_value::SpecifiedValue::Image(
-                    Image::Url(SpecifiedUrl::new_for_testing("http://servo/test.png"))));
+            let image = single_vec_value_typedef!(
+                image,
+                Either::Second(Image::Url(SpecifiedUrl::new_for_testing("http://servo/test.png")))
+            );
 
             let mode = single_vec_keyword_value!(mode, luminance);
 
             let position_x = single_vec_value_typedef!(position_x,
-                HorizontalPosition(PositionValue {
-                    keyword: None,
-                    position: Some(LengthOrPercentage::Length(NoCalcLength::from_px(7f32))),
-                })
+                PositionComponent::Length(LengthOrPercentage::Length(NoCalcLength::from_px(7f32)))
             );
             let position_y = single_vec_value_typedef!(position_y,
-                VerticalPosition(PositionValue {
-                    keyword: Some(Keyword::Bottom),
-                    position: Some(LengthOrPercentage::Length(NoCalcLength::from_px(4f32))),
-                })
+                PositionComponent::Side(
+                    Y::Bottom,
+                    Some(LengthOrPercentage::Length(NoCalcLength::from_px(4f32))),
+                )
             );
 
             let size = single_vec_variant_value!(size,
@@ -881,24 +888,19 @@ mod shorthand_serialization {
         fn mask_should_combine_origin_and_clip_properties_when_equal() {
             let mut properties = Vec::new();
 
-            let image = single_vec_value_typedef!(image,
-                image::single_value::SpecifiedValue::Image(
-                    Image::Url(SpecifiedUrl::new_for_testing("http://servo/test.png"))));
+            let image = single_vec_value_typedef!(
+                image,
+                Either::Second(Image::Url(SpecifiedUrl::new_for_testing("http://servo/test.png")))
+            );
 
             let mode = single_vec_keyword_value!(mode, luminance);
 
             let position_x = single_vec_value_typedef!(position_x,
-                HorizontalPosition(PositionValue {
-                    keyword: None,
-                    position: Some(LengthOrPercentage::Length(NoCalcLength::from_px(7f32))),
-                })
+                PositionComponent::Length(LengthOrPercentage::Length(NoCalcLength::from_px(7f32)))
             );
 
             let position_y = single_vec_value_typedef!(position_y,
-                VerticalPosition(PositionValue  {
-                    keyword: None,
-                    position: Some(LengthOrPercentage::Length(NoCalcLength::from_px(4f32))),
-                })
+                PositionComponent::Length(LengthOrPercentage::Length(NoCalcLength::from_px(4f32)))
             );
 
             let size = single_vec_variant_value!(size,
@@ -1043,19 +1045,19 @@ mod shorthand_serialization {
         #[test]
         fn transform_skew() {
             validate_serialization(
-                &SpecifiedOperation::Skew(Angle::from_degrees(42.3), None),
+                &SpecifiedOperation::Skew(Angle::from_degrees(42.3, false), None),
                 "skew(42.3deg)");
             validate_serialization(
-                &SpecifiedOperation::Skew(Angle::from_gradians(-50.0), Some(Angle::from_turns(0.73))),
+                &SpecifiedOperation::Skew(Angle::from_gradians(-50.0, false), Some(Angle::from_turns(0.73, false))),
                 "skew(-50grad, 0.73turn)");
             validate_serialization(
-                &SpecifiedOperation::SkewX(Angle::from_radians(0.31)), "skewX(0.31rad)");
+                &SpecifiedOperation::SkewX(Angle::from_radians(0.31, false)), "skewX(0.31rad)");
         }
 
         #[test]
         fn transform_rotate() {
             validate_serialization(
-                &SpecifiedOperation::Rotate(Angle::from_turns(35.0)),
+                &SpecifiedOperation::Rotate(Angle::from_turns(35.0, false)),
                 "rotate(35turn)"
             )
         }

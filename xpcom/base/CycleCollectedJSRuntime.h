@@ -236,7 +236,7 @@ public:
   void SetLargeAllocationFailure(OOMState aNewState);
 
   void AnnotateAndSetOutOfMemory(OOMState* aStatePtr, OOMState aNewState);
-  void OnGC(JSGCStatus aStatus);
+  void OnGC(JSContext* aContext, JSGCStatus aStatus);
   void OnOutOfMemory();
   void OnLargeAllocationFailure();
 
@@ -301,6 +301,10 @@ private:
 
   JS::GCSliceCallback mPrevGCSliceCallback;
   JS::GCNurseryCollectionCallback mPrevGCNurseryCollectionCallback;
+
+#ifdef MOZ_GECKO_PROFILER
+  mozilla::TimeStamp mLatestNurseryCollectionStart;
+#endif
 
   nsDataHashtable<nsPtrHashKey<void>, nsScriptObjectTracer*> mJSHolders;
 

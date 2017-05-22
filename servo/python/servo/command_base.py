@@ -277,8 +277,7 @@ class CommandBase(object):
         self.config["android"].setdefault("sdk", "")
         self.config["android"].setdefault("ndk", "")
         self.config["android"].setdefault("toolchain", "")
-        self.config["android"].setdefault("platform", "android-18")
-        self.config["android"].setdefault("target", "arm-linux-androideabi")
+        self.handle_android_target("arm-linux-androideabi")
 
         self.set_cargo_root()
         self.set_use_stable_rust(False)
@@ -538,7 +537,31 @@ class CommandBase(object):
         return path.join(self.context.topdir, "support", "android")
 
     def android_build_dir(self, dev):
-        return path.join(self.get_target_dir(), "arm-linux-androideabi", "debug" if dev else "release")
+        return path.join(self.get_target_dir(), self.config["android"]["target"], "debug" if dev else "release")
+
+    def handle_android_target(self, target):
+        if target == "arm-linux-androideabi":
+            self.config["android"]["platform"] = "android-18"
+            self.config["android"]["target"] = target
+            self.config["android"]["arch"] = "arm"
+            self.config["android"]["lib"] = "armeabi"
+            self.config["android"]["toolchain_name"] = target + "-4.9"
+            return True
+        elif target == "armv7-linux-androideabi":
+            self.config["android"]["platform"] = "android-18"
+            self.config["android"]["target"] = target
+            self.config["android"]["arch"] = "arm"
+            self.config["android"]["lib"] = "armeabi-v7a"
+            self.config["android"]["toolchain_name"] = "arm-linux-androideabi-4.9"
+            return True
+        elif target == "aarch64-linux-android":
+            self.config["android"]["platform"] = "android-21"
+            self.config["android"]["target"] = target
+            self.config["android"]["arch"] = "arm64"
+            self.config["android"]["lib"] = "arm64-v8a"
+            self.config["android"]["toolchain_name"] = target + "-4.9"
+            return True
+        return False
 
     def ensure_bootstrapped(self, target=None):
         if self.context.bootstrapped:
@@ -574,3 +597,30 @@ class CommandBase(object):
             Registrar.dispatch("bootstrap-cargo", context=self.context)
 
         self.context.bootstrapped = True
+
+    def ensure_clobbered(self, target_dir=None):
+        if target_dir is None:
+            target_dir = self.get_target_dir()
+        auto = True if os.environ.get('AUTOCLOBBER', False) else False
+        src_clobber = os.path.join(self.context.topdir, 'CLOBBER')
+        target_clobber = os.path.join(target_dir, 'CLOBBER')
+
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir)
+
+        if not os.path.exists(target_clobber):
+            # Simply touch the file.
+            with open(target_clobber, 'a'):
+                pass
+
+        if auto:
+            if os.path.getmtime(src_clobber) > os.path.getmtime(target_clobber):
+                print('Automatically clobbering target directory: {}'.format(target_dir))
+
+                try:
+                    Registrar.dispatch("clean", context=self.context, verbose=True)
+                    print('Successfully completed auto clobber.')
+                except subprocess.CalledProcessError as error:
+                    sys.exit(error)
+            else:
+                print("Clobber not needed.")

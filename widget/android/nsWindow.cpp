@@ -428,22 +428,6 @@ public:
     }
 
 public:
-    void AdjustScrollForSurfaceShift(float aX, float aY)
-    {
-        MOZ_ASSERT(AndroidBridge::IsJavaUiThread());
-
-        RefPtr<IAPZCTreeManager> controller;
-
-        if (LockedWindowPtr window{mWindow}) {
-            controller = window->mAPZC;
-        }
-
-        if (controller) {
-            controller->AdjustScrollForSurfaceShift(
-                ScreenPoint(aX, aY));
-        }
-    }
-
     void SetIsLongpressEnabled(bool aIsLongpressEnabled)
     {
         MOZ_ASSERT(AndroidBridge::IsJavaUiThread());
@@ -1280,7 +1264,7 @@ nsWindow::GeckoViewSupport::Open(const jni::Class::LocalRef& aCls,
     } else {
         url = Preferences::GetCString("toolkit.defaultChromeURI");
         if (!url) {
-            url = NS_LITERAL_CSTRING("chrome://browser/content/browser.xul");
+            url = NS_LITERAL_CSTRING("chrome://geckoview/content/geckoview.xul");
         }
     }
 
@@ -1448,8 +1432,8 @@ nsWindow::LogWindow(nsWindow *win, int index, int indent)
 #if defined(DEBUG) || defined(FORCE_ALOG)
     char spaces[] = "                    ";
     spaces[indent < 20 ? indent : 20] = 0;
-    ALOG("%s [% 2d] 0x%08x [parent 0x%08x] [% 3d,% 3dx% 3d,% 3d] vis %d type %d",
-         spaces, index, (intptr_t)win, (intptr_t)win->mParent,
+    ALOG("%s [% 2d] 0x%p [parent 0x%p] [% 3d,% 3dx% 3d,% 3d] vis %d type %d",
+         spaces, index, win, win->mParent,
          win->mBounds.x, win->mBounds.y,
          win->mBounds.width, win->mBounds.height,
          win->mIsVisible, win->mWindowType);
@@ -1936,9 +1920,14 @@ nsWindow::DispatchEvent(WidgetGUIEvent* aEvent)
 nsresult
 nsWindow::MakeFullScreen(bool aFullScreen, nsIScreen*)
 {
+    if (!mAndroidView) {
+        return NS_ERROR_NOT_AVAILABLE;
+    }
+
     mIsFullScreen = aFullScreen;
     mAwaitingFullScreen = true;
-    GeckoAppShell::SetFullScreen(aFullScreen);
+    mAndroidView->mEventDispatcher->Dispatch(aFullScreen ?
+            u"GeckoView:FullScreenEnter" : u"GeckoView:FullScreenExit");
     return NS_OK;
 }
 

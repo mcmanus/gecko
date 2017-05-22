@@ -102,6 +102,8 @@ public:
 
   explicit HTMLMediaElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
+  void ReportCanPlayTelemetry();
+
   /**
    * This is used when the browser is constructing a video element to play
    * a channel that we've already started loading. The src attribute and
@@ -138,6 +140,7 @@ public:
                              bool aNotify) override;
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
                                 const nsAttrValue* aValue,
+                                const nsAttrValue* aOldValue,
                                 bool aNotify) override;
 
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,

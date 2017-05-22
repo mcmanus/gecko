@@ -430,6 +430,12 @@ class ScriptSource
     UniqueTwoByteChars sourceMapURL_;
     bool mutedErrors_;
 
+    // The start column of the source. Offsets kept for toString and the
+    // function source in LazyScripts are absolute positions within a
+    // ScriptSource buffer. To get their positions, they need to be offset
+    // with the starting column.
+    uint32_t startColumn_;
+
     // bytecode offset in caller script that generated this code.
     // This is present for eval-ed code, as well as "new Function(...)"-introduced
     // scripts.
@@ -506,6 +512,7 @@ class ScriptSource
         displayURL_(nullptr),
         sourceMapURL_(nullptr),
         mutedErrors_(false),
+        startColumn_(0),
         introductionOffset_(0),
         parameterListEnd_(0),
         introducerFilename_(nullptr),
@@ -617,6 +624,8 @@ class ScriptSource
     }
 
     bool mutedErrors() const { return mutedErrors_; }
+
+    uint32_t startColumn() const { return startColumn_; }
 
     bool hasIntroductionOffset() const { return hasIntroductionOffset_; }
     uint32_t introductionOffset() const {
@@ -976,7 +985,7 @@ class JSScript : public js::gc::TenuredCell
     // Unique Method ID passed to the VTune profiler, or 0 if unset.
     // Allows attribution of different jitcode to the same source script.
     uint32_t        vtuneMethodId_;
-    // Extra padding to maintain JSScript as a multiple of gc::CellSize.
+    // Extra padding to maintain JSScript as a multiple of gc::CellAlignBytes.
     uint32_t        __vtune_unused_padding_;
 #endif
 
@@ -1596,6 +1605,7 @@ class JSScript : public js::gc::TenuredCell
     bool isRelazifiable() const {
         return (selfHosted() || lazyScript) && !hasInnerFunctions_ && !types_ &&
                !isStarGenerator() && !isLegacyGenerator() && !isAsync() &&
+               !isDefaultClassConstructor() &&
                !hasBaselineScript() && !hasAnyIonScript() &&
                !doNotRelazify_;
     }
@@ -2052,8 +2062,8 @@ class JSScript : public js::gc::TenuredCell
 };
 
 /* If this fails, add/remove padding within JSScript. */
-static_assert(sizeof(JSScript) % js::gc::CellSize == 0,
-              "Size of JSScript must be an integral multiple of js::gc::CellSize");
+static_assert(sizeof(JSScript) % js::gc::CellAlignBytes == 0,
+              "Size of JSScript must be an integral multiple of js::gc::CellAlignBytes");
 
 namespace js {
 
@@ -2395,8 +2405,8 @@ class LazyScript : public gc::TenuredCell
 };
 
 /* If this fails, add/remove padding within LazyScript. */
-static_assert(sizeof(LazyScript) % js::gc::CellSize == 0,
-              "Size of LazyScript must be an integral multiple of js::gc::CellSize");
+static_assert(sizeof(LazyScript) % js::gc::CellAlignBytes == 0,
+              "Size of LazyScript must be an integral multiple of js::gc::CellAlignBytes");
 
 struct ScriptAndCounts
 {

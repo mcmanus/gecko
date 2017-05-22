@@ -667,6 +667,8 @@ JsepSessionImpl::SetupBundle(Sdp* sdp) const
       if (useBundleOnly) {
         attrs.SetAttribute(
             new SdpFlagAttribute(SdpAttribute::kBundleOnlyAttribute));
+        // Set port to 0 for sections with bundle-only attribute. (mjf)
+        sdp->GetMediaSection(i).SetPort(0);
       }
 
       mids.push_back(attrs.GetMid());
@@ -2085,10 +2087,14 @@ JsepSessionImpl::ValidateAnswer(const Sdp& offer, const Sdp& answer)
             }
 
             if (offExt.entry < 4096 && (offExt.entry != ansExt.entry)) {
-              JSEP_SET_ERROR("Answer changed id for extmap attribute at level "
-                             << i << " (" << offExt.extensionname << ") from "
-                             << offExt.entry << " to " << ansExt.entry << ".");
-              return NS_ERROR_INVALID_ARG;
+              // FIXME we do not return an error here, because Cisco Spark
+              // actually does respond with different extension ID's then we
+              // offer. See bug 1361206 for details.
+              MOZ_MTLOG(ML_WARNING, "Answer changed id for extmap attribute at"
+                        " level " << i << " (" << offExt.extensionname << ") "
+                        "from " << offExt.entry << " to "
+                        << ansExt.entry << ".");
+              // return NS_ERROR_INVALID_ARG;
             }
 
             if (ansExt.entry >= 4096) {

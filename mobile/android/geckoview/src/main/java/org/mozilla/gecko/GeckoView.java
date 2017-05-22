@@ -16,6 +16,7 @@ import org.mozilla.gecko.annotation.ReflectionTarget;
 import org.mozilla.gecko.annotation.WrapForJNI;
 import org.mozilla.gecko.gfx.LayerView;
 import org.mozilla.gecko.mozglue.JNIObject;
+import org.mozilla.gecko.util.ActivityUtils;
 import org.mozilla.gecko.util.BundleEventListener;
 import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.GeckoBundle;
@@ -107,10 +108,14 @@ public class GeckoView extends LayerView
     @WrapForJNI(dispatchTo = "proxy")
     protected static final class Window extends JNIObject {
         @WrapForJNI(skip = true)
+        public final String chromeUri;
+
+        @WrapForJNI(skip = true)
         /* package */ NativeQueue mNativeQueue;
 
         @WrapForJNI(skip = true)
-        /* package */ Window(final NativeQueue queue) {
+        /* package */ Window(final String chromeUri, final NativeQueue queue) {
+            this.chromeUri = chromeUri;
             mNativeQueue = queue;
         }
 
@@ -146,7 +151,6 @@ public class GeckoView extends LayerView
             view.mNativeQueue.setState(mNativeQueue.getState());
             mNativeQueue = view.mNativeQueue;
         }
-
     }
 
     // Object to hold onto our nsWindow connection when GeckoView gets destroyed.
@@ -197,6 +201,8 @@ public class GeckoView extends LayerView
         /* package */ void registerListeners() {
             getEventDispatcher().registerUiThreadListener(this,
                 "GeckoView:DOMTitleChanged",
+                "GeckoView:FullScreenEnter",
+                "GeckoView:FullScreenExit",
                 "GeckoView:LocationChange",
                 "GeckoView:PageStart",
                 "GeckoView:PageStop",
@@ -215,6 +221,14 @@ public class GeckoView extends LayerView
             if ("GeckoView:DOMTitleChanged".equals(event)) {
                 if (mContentListener != null) {
                     mContentListener.onTitleChange(GeckoView.this, message.getString("title"));
+                }
+            } else if ("GeckoView:FullScreenEnter".equals(event)) {
+                if (mContentListener != null) {
+                    mContentListener.onFullScreen(GeckoView.this, true);
+                }
+            } else if ("GeckoView:FullScreenExit".equals(event)) {
+                if (mContentListener != null) {
+                    mContentListener.onFullScreen(GeckoView.this, false);
                 }
             } else if ("GeckoView:LocationChange".equals(event)) {
                 if (mNavigationListener == null) {
@@ -274,16 +288,30 @@ public class GeckoView extends LayerView
         init(context, newSettings);
     }
 
-    public static final void preload(Context context) {
-        final GeckoProfile profile = GeckoProfile.get(
-            context.getApplicationContext());
+    /**
+     * Preload GeckoView by starting Gecko in the background, if Gecko is not already running.
+     *
+     * @param context Activity or Application Context for starting GeckoView.
+     */
+    public static void preload(final Context context) {
+        preload(context, /* geckoArgs */ null);
+    }
 
+    /**
+     * Preload GeckoView by starting Gecko with the specified arguments in the background,
+     * if Geckois not already running.
+     *
+     * @param context Activity or Application Context for starting GeckoView.
+     * @param geckoArgs Arguments to be passed to Gecko, if Gecko is not already running
+     */
+    public static void preload(final Context context, final String geckoArgs) {
+        final Context appContext = context.getApplicationContext();
         if (GeckoAppShell.getApplicationContext() == null) {
-            GeckoAppShell.setApplicationContext(context.getApplicationContext());
+            GeckoAppShell.setApplicationContext(appContext);
         }
 
-        if (GeckoThread.initMainProcess(profile,
-                                        /* args */ null,
+        if (GeckoThread.initMainProcess(GeckoProfile.get(appContext),
+                                        geckoArgs,
                                         /* debugging */ false)) {
             GeckoThread.launch();
         }
@@ -337,10 +365,35 @@ public class GeckoView extends LayerView
         super.onRestoreInstanceState(stateBinder.superState);
     }
 
-    protected void openWindow() {
-        if (mChromeUri == null) {
-            mChromeUri = getGeckoInterface().getDefaultChromeURI();
+    /**
+     * Return the URI of the underlying chrome window opened or to be opened, or null if
+     * using the default GeckoView URI.
+     *
+     * @return Current chrome URI or null.
+     */
+    public String getChromeUri() {
+        if (mWindow != null) {
+            return mWindow.chromeUri;
         }
+        return mChromeUri;
+    }
+
+    /**
+     * Set the URI of the underlying chrome window to be opened, or null to use the
+     * default GeckoView URI. Can only be called before the chrome window is opened during
+     * {@link #onAttachedToWindow}.
+     *
+     * @param uri New chrome URI or null.
+     */
+    public void setChromeUri(final String uri) {
+        if (mWindow != null) {
+            throw new IllegalStateException("Already opened chrome window");
+        }
+        mChromeUri = uri;
+    }
+
+    protected void openWindow() {
+        mWindow = new Window(mChromeUri, mNativeQueue);
 
         if (GeckoThread.isStateAtLeast(GeckoThread.State.PROFILE_READY)) {
             Window.open(mWindow, this, getCompositor(), mEventDispatcher,
@@ -375,7 +428,6 @@ public class GeckoView extends LayerView
 
         if (mWindow == null) {
             // Open a new nsWindow if we didn't have one from before.
-            mWindow = new Window(mNativeQueue);
             openWindow();
         } else {
             reattachWindow();
@@ -1064,6 +1116,16 @@ public class GeckoView extends LayerView
         * @param title The title sent from the content.
         */
         void onTitleChange(GeckoView view, String title);
+
+        /**
+         * A page has entered or exited full screen mode. Typically, the implementation
+         * would set the Activity containing the GeckoView to full screen when the page is
+         * in full screen mode.
+         *
+         * @param view The GeckoView that initiated the callback.
+         * @param fullScreen True if the page is in full screen mode.
+         */
+        void onFullScreen(GeckoView view, boolean fullScreen);
     }
 
     public interface NavigationListener {

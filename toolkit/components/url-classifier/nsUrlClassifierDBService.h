@@ -15,6 +15,7 @@
 #include "nsIUrlClassifierHashCompleter.h"
 #include "nsIUrlListManager.h"
 #include "nsIUrlClassifierDBService.h"
+#include "nsIUrlClassifierInfo.h"
 #include "nsIURIClassifier.h"
 #include "nsToolkitCompsCID.h"
 #include "nsICryptoHMAC.h"
@@ -83,6 +84,7 @@ TablesToResponse(const nsACString& tables);
 // calls to the background thread.
 class nsUrlClassifierDBService final : public nsIUrlClassifierDBService,
                                        public nsIURIClassifier,
+                                       public nsIUrlClassifierInfo,
                                        public nsIObserver
 {
 public:
@@ -98,12 +100,13 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIURLCLASSIFIERDBSERVICE
   NS_DECL_NSIURICLASSIFIER
+  NS_DECL_NSIURLCLASSIFIERINFO
   NS_DECL_NSIOBSERVER
 
+  bool CanComplete(const nsACString &tableName);
   bool GetCompleter(const nsACString& tableName,
-                      nsIUrlClassifierHashCompleter** completer);
+                    nsIUrlClassifierHashCompleter** completer);
   nsresult CacheCompletions(mozilla::safebrowsing::CacheResultArray *results);
-  nsresult CacheMisses(mozilla::safebrowsing::PrefixArray *results);
 
   static nsIThread* BackgroundThread();
 
@@ -190,7 +193,9 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIURLCLASSIFIERDBSERVICE
 
-  nsresult Init(uint32_t aGethashNoise, nsCOMPtr<nsIFile> aCacheDir);
+  nsresult Init(uint32_t aGethashNoise,
+                nsCOMPtr<nsIFile> aCacheDir,
+                nsUrlClassifierDBService* aDBService);
 
   // Queue a lookup for the worker to perform, called in the main thread.
   // tables is a comma-separated list of tables to query
@@ -215,7 +220,6 @@ public:
   nsresult GCC_MANGLING_WORKAROUND CloseDb();
 
   nsresult CacheCompletions(CacheResultArray * aEntries);
-  nsresult CacheMisses(PrefixArray * aEntries);
 
   // Used to probe the state of the worker thread. When the update begins,
   // mUpdateObserver will be set. When the update finished, mUpdateObserver
@@ -228,6 +232,10 @@ public:
   // Should be called on the worker thread.
   void FlushAndDisableAsyncUpdate();
 
+  // A synchronous call to get cache information for the given table.
+  // This is only used by about:url-classifier now.
+  nsresult GetCacheInfo(const nsACString& aTable,
+                        nsIUrlClassifierCacheInfo** aCache);
 private:
   // No subclassing
   ~nsUrlClassifierDBServiceWorker();
@@ -268,15 +276,13 @@ private:
   // Directory where to store the SB databases.
   nsCOMPtr<nsIFile> mCacheDir;
 
+  RefPtr<nsUrlClassifierDBService> mDBService;
+
   // XXX: maybe an array of autoptrs.  Or maybe a class specifically
   // storing a series of updates.
   nsTArray<mozilla::safebrowsing::TableUpdate*> mTableUpdates;
 
   uint32_t mUpdateWaitSec;
-
-  // Entries that cannot be completed. We expect them to die at
-  // the next update
-  PrefixArray mMissCache;
 
   // Stores the last results that triggered a table update.
   nsAutoPtr<CacheResultArray> mLastResults;

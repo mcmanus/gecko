@@ -119,7 +119,7 @@ body,
   white-space: nowrap;
 }
 
-.status-bar-label::before {
+.status-bar-label:not(:first-of-type)::before {
   content: "";
   display: inline-block;
   margin-inline-end: 10px;
@@ -458,6 +458,37 @@ body,
 .requests-list-domain {
   width: 13%;
 }
+
+/* Start Time column */
+
+.requests-list-start-time {
+  width: 8%;
+}
+
+/* End Time column */
+
+.requests-list-end-time {
+  width: 8%;
+}
+
+/* Response Time column */
+
+.requests-list-response-time {
+  width: 10%;
+}
+
+/* Duration column */
+
+.requests-list-duration {
+  width: 8%;
+}
+
+/* Latency column */
+
+.requests-list-latency {
+  width: 8%;
+}
+
 
 .requests-list-domain.requests-list-column {
   text-align: start;

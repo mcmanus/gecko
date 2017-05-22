@@ -10,6 +10,7 @@
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/gfx/GPUProcessManager.h"
 #include "mozilla/layers/CompositorBridgeChild.h"
+#include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/TextureClient.h"
 #include "mozilla/layers/WebRenderBridgeChild.h"
 #include "WebRenderCanvasLayer.h"
@@ -17,6 +18,7 @@
 #include "WebRenderContainerLayer.h"
 #include "WebRenderImageLayer.h"
 #include "WebRenderPaintedLayer.h"
+#include "WebRenderPaintedLayerBlob.h"
 #include "WebRenderTextLayer.h"
 #include "WebRenderDisplayItemLayer.h"
 
@@ -74,6 +76,7 @@ WebRenderLayerManager::Destroy()
 
   LayerManager::Destroy();
   DiscardImages();
+  DiscardCompositorAnimations();
   WrBridge()->Destroy();
 
   if (mTransactionIdAllocator) {
@@ -104,7 +107,7 @@ WebRenderLayerManager::~WebRenderLayerManager()
 CompositorBridgeChild*
 WebRenderLayerManager::GetCompositorBridgeChild()
 {
-  return mWidget ? mWidget->GetRemoteRenderer() : nullptr;
+  return WrBridge()->GetCompositorBridgeChild();
 }
 
 int32_t
@@ -188,8 +191,10 @@ WebRenderLayerManager::EndTransactionInternal(DrawPaintedLayerCallback aCallback
   DiscardCompositorAnimations();
   mRoot->StartPendingAnimations(mAnimationReadyTime);
 
-  wr::DisplayListBuilder builder(WrBridge()->GetPipeline());
-  WebRenderLayer::ToWebRenderLayer(mRoot)->RenderLayer(builder);
+  StackingContextHelper sc;
+  WrSize contentSize { (float)size.width, (float)size.height };
+  wr::DisplayListBuilder builder(WrBridge()->GetPipeline(), contentSize);
+  WebRenderLayer::ToWebRenderLayer(mRoot)->RenderLayer(builder, sc);
   WrBridge()->ClearReadLocks();
 
   // We can't finish this transaction so return. This usually
@@ -201,7 +206,7 @@ WebRenderLayerManager::EndTransactionInternal(DrawPaintedLayerCallback aCallback
   }
 
   WebRenderScrollData scrollData;
-  if (mWidget->AsyncPanZoomEnabled()) {
+  if (AsyncPanZoomEnabled()) {
     if (mIsFirstPaint) {
       scrollData.SetIsFirstPaint();
       mIsFirstPaint = false;
@@ -227,6 +232,12 @@ WebRenderLayerManager::EndTransactionInternal(DrawPaintedLayerCallback aCallback
   ClearMutatedLayers();
 
   return true;
+}
+
+bool
+WebRenderLayerManager::AsyncPanZoomEnabled() const
+{
+  return mWidget->AsyncPanZoomEnabled();
 }
 
 void
@@ -300,7 +311,7 @@ WebRenderLayerManager::AddImageKeyForDiscard(wr::ImageKey key)
 void
 WebRenderLayerManager::DiscardImages()
 {
-  if (!WrBridge()->IsDestroyed()) {
+  if (WrBridge()->IPCOpen()) {
     for (auto key : mImageKeys) {
       WrBridge()->SendDeleteImage(key);
     }
@@ -311,16 +322,17 @@ WebRenderLayerManager::DiscardImages()
 void
 WebRenderLayerManager::AddCompositorAnimationsIdForDiscard(uint64_t aId)
 {
-  mDiscardedCompositorAnimationsIds.push_back(aId);
+  mDiscardedCompositorAnimationsIds.AppendElement(aId);
 }
 
 void
 WebRenderLayerManager::DiscardCompositorAnimations()
 {
-  for (auto id : mDiscardedCompositorAnimationsIds) {
-    WrBridge()->AddWebRenderParentCommand(OpRemoveCompositorAnimations(id));
+  if (WrBridge()->IPCOpen() && !mDiscardedCompositorAnimationsIds.IsEmpty()) {
+    WrBridge()->
+      SendDeleteCompositorAnimations(mDiscardedCompositorAnimationsIds);
   }
-  mDiscardedCompositorAnimationsIds.clear();
+  mDiscardedCompositorAnimationsIds.Clear();
 }
 
 void
@@ -461,6 +473,15 @@ WebRenderLayerManager::FlushRendering()
 }
 
 void
+WebRenderLayerManager::WaitOnTransactionProcessed()
+{
+  CompositorBridgeChild* bridge = GetCompositorBridgeChild();
+  if (bridge) {
+    bridge->SendWaitOnTransactionProcessed();
+  }
+}
+
+void
 WebRenderLayerManager::SendInvalidRegion(const nsIntRegion& aRegion)
 {
   // XXX Webrender does not support invalid region yet.
@@ -500,7 +521,11 @@ WebRenderLayerManager::SetRoot(Layer* aLayer)
 already_AddRefed<PaintedLayer>
 WebRenderLayerManager::CreatePaintedLayer()
 {
-  return MakeAndAddRef<WebRenderPaintedLayer>(this);
+  if (gfxPrefs::WebRenderBlobImages()) {
+    return MakeAndAddRef<WebRenderPaintedLayerBlob>(this);
+  } else {
+    return MakeAndAddRef<WebRenderPaintedLayer>(this);
+  }
 }
 
 already_AddRefed<ContainerLayer>

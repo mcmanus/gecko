@@ -2,17 +2,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use html5ever_atoms::LocalName;
+use cssparser::SourceLocation;
+use html5ever::LocalName;
 use selectors::parser::LocalName as LocalNameSelector;
 use selectors::parser::Selector;
 use servo_atoms::Atom;
-use std::sync::Arc;
 use style::properties::{PropertyDeclarationBlock, PropertyDeclaration};
 use style::properties::{longhands, Importance};
 use style::rule_tree::CascadeLevel;
 use style::selector_parser::{SelectorImpl, SelectorParser};
 use style::shared_lock::SharedRwLock;
+use style::stylearc::Arc;
 use style::stylesheets::StyleRule;
+use style::stylist;
 use style::stylist::{Rule, SelectorMap};
 use style::stylist::needs_revalidation;
 use style::thread_state;
@@ -31,22 +33,22 @@ fn get_mock_rules(css_selectors: &[&str]) -> (Vec<Vec<Rule>>, SharedRwLock) {
                     longhands::display::SpecifiedValue::block),
                 Importance::Normal
             ))),
+            source_location: SourceLocation {
+                line: 0,
+                column: 0,
+            },
         }));
 
         let guard = shared_lock.read();
         let rule = locked.read_with(&guard);
         rule.selectors.0.iter().map(|s| {
-            Rule::new(&guard,
-                      s.inner.clone(),
-                      locked.clone(),
-                      i,
-                      s.specificity)
+            Rule::new(s.clone(), locked.clone(), i)
         }).collect()
     }).collect(), shared_lock)
 }
 
-fn get_mock_map(selectors: &[&str]) -> (SelectorMap, SharedRwLock) {
-    let mut map = SelectorMap::new();
+fn get_mock_map(selectors: &[&str]) -> (SelectorMap<Rule>, SharedRwLock) {
+    let mut map = SelectorMap::<Rule>::new();
     let (selector_rules, shared_lock) = get_mock_rules(selectors);
 
     for rules in selector_rules.into_iter() {
@@ -170,22 +172,22 @@ fn test_rule_ordering_same_specificity() {
 #[test]
 fn test_get_id_name() {
     let (rules_list, _) = get_mock_rules(&[".intro", "#top"]);
-    assert_eq!(SelectorMap::get_id_name(&rules_list[0][0]), None);
-    assert_eq!(SelectorMap::get_id_name(&rules_list[1][0]), Some(Atom::from("top")));
+    assert_eq!(stylist::get_id_name(&rules_list[0][0].selector.inner), None);
+    assert_eq!(stylist::get_id_name(&rules_list[1][0].selector.inner), Some(Atom::from("top")));
 }
 
 #[test]
 fn test_get_class_name() {
     let (rules_list, _) = get_mock_rules(&[".intro.foo", "#top"]);
-    assert_eq!(SelectorMap::get_class_name(&rules_list[0][0]), Some(Atom::from("foo")));
-    assert_eq!(SelectorMap::get_class_name(&rules_list[1][0]), None);
+    assert_eq!(stylist::get_class_name(&rules_list[0][0].selector.inner), Some(Atom::from("foo")));
+    assert_eq!(stylist::get_class_name(&rules_list[1][0].selector.inner), None);
 }
 
 #[test]
 fn test_get_local_name() {
     let (rules_list, _) = get_mock_rules(&["img.foo", "#top", "IMG", "ImG"]);
     let check = |i: usize, names: Option<(&str, &str)>| {
-        assert!(SelectorMap::get_local_name(&rules_list[i][0])
+        assert!(stylist::get_local_name(&rules_list[i][0].selector.inner)
                 == names.map(|(name, lower_name)| LocalNameSelector {
                         name: LocalName::from(name),
                         lower_name: LocalName::from(lower_name) }))
@@ -210,11 +212,9 @@ fn test_insert() {
 #[test]
 fn test_get_universal_rules() {
     thread_state::initialize(thread_state::LAYOUT);
-    let (map, shared_lock) = get_mock_map(&["*|*", "#foo > *|*", ".klass", "#id"]);
+    let (map, _shared_lock) = get_mock_map(&["*|*", "#foo > *|*", "*|* > *|*", ".klass", "#id"]);
 
-    let guard = shared_lock.read();
-    let decls = map.get_universal_rules(
-        &guard, CascadeLevel::UserNormal, CascadeLevel::UserImportant);
+    let decls = map.get_universal_rules(CascadeLevel::UserNormal);
 
-    assert_eq!(decls.len(), 1);
+    assert_eq!(decls.len(), 1, "{:?}", decls);
 }

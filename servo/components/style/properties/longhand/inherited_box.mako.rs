@@ -68,7 +68,6 @@ ${helpers.single_keyword("image-rendering",
     use style_traits::ToCss;
     use values::specified::Angle;
 
-    use values::HasViewportPercentage;
     no_viewport_percentage!(SpecifiedValue);
 
     use std::f32::consts::PI;
@@ -87,13 +86,13 @@ ${helpers.single_keyword("image-rendering",
             if let Some(angle) = self.angle {
                 try!(angle.to_css(dest));
                 if self.flipped {
-                    dest.write_str(" flipped")
+                    dest.write_str(" flip")
                 } else {
                     Ok(())
                 }
             } else {
                 if self.flipped {
-                    dest.write_str("flipped")
+                    dest.write_str("flip")
                 } else {
                     dest.write_str("from-image")
                 }
@@ -168,7 +167,7 @@ ${helpers.single_keyword("image-rendering",
                 computed_value::T::AngleWithFlipped(angle, flipped) => {
                     try!(angle.to_css(dest));
                     if flipped {
-                        try!(dest.write_str(" flipped"));
+                        try!(dest.write_str(" flip"));
                     }
                     Ok(())
                 },
@@ -207,7 +206,6 @@ ${helpers.single_keyword("image-rendering",
     use std::fmt;
     use style_traits::ToCss;
     use values::computed::ComputedValueAsSpecified;
-    use values::HasViewportPercentage;
 
     no_viewport_percentage!(SpecifiedValue);
 

@@ -6,9 +6,13 @@
 
 #include "mozilla/RestyleManager.h"
 #include "mozilla/RestyleManagerInlines.h"
+
+#include "Layers.h"
+#include "LayerAnimationInfo.h" // For LayerAnimationInfo::sRecords
 #include "mozilla/StyleSetHandleInlines.h"
 #include "nsIFrame.h"
 #include "nsIPresShellInlines.h"
+
 
 namespace mozilla {
 
@@ -331,6 +335,7 @@ RestyleManager::ContentStateChangedInternal(Element* aElement,
                                             nsChangeHint* aOutChangeHint,
                                             nsRestyleHint* aOutRestyleHint)
 {
+  MOZ_ASSERT(!mInStyleRefresh);
   MOZ_ASSERT(aOutChangeHint);
   MOZ_ASSERT(aOutRestyleHint);
 
@@ -453,7 +458,7 @@ RestyleManager::ChangeHintToString(nsChangeHint aHint)
     "NeutralChange", "InvalidateRenderingObservers",
     "ReflowChangesSizeOrPosition", "UpdateComputedBSize",
     "UpdateUsesOpacity", "UpdateBackgroundPosition",
-    "AddOrRemoveTransform"
+    "AddOrRemoveTransform", "CSSOverflowChange",
   };
   static_assert(nsChangeHint_AllHints == (1 << ArrayLength(names)) - 1,
                 "Name list doesn't match change hints.");
@@ -1347,6 +1352,62 @@ RestyleManager::ProcessRestyledFrames(nsStyleChangeList& aChangeList)
   FramePropertyTable* propTable = presContext->PropertyTable();
   nsCSSFrameConstructor* frameConstructor = presContext->FrameConstructor();
 
+  // Handle nsChangeHint_CSSOverflowChange, by either updating the
+  // scrollbars on the viewport, or upgrading the change hint to frame-reconstruct.
+  for (nsStyleChangeData& data : aChangeList) {
+    if (data.mHint & nsChangeHint_CSSOverflowChange) {
+      data.mHint &= ~nsChangeHint_CSSOverflowChange;
+      bool doReconstruct = true; // assume the worst
+
+      // Only bother with this if we're html/body, since:
+      //  (a) It'd be *expensive* to reframe these particular nodes.  They're
+      //      at the root, so reframing would mean rebuilding the world.
+      //  (b) It's often *unnecessary* to reframe for "overflow" changes on
+      //      these particular nodes.  In general, the only reason we reframe
+      //      for "overflow" changes is so we can construct (or destroy) a
+      //      scrollframe & scrollbars -- and the html/body nodes often don't
+      //      need their own scrollframe/scrollbars because they coopt the ones
+      //      on the viewport (which always exist). So depending on whether
+      //      that's happening, we can skip the reframe for these nodes.
+      if (data.mContent->IsAnyOfHTMLElements(nsGkAtoms::body,
+                                             nsGkAtoms::html)) {
+        // If the restyled element provided/provides the scrollbar styles for
+        // the viewport before and/or after this restyle, AND it's not coopting
+        // that responsibility from some other element (which would need
+        // reconstruction to make its own scrollframe now), THEN: we don't need
+        // to reconstruct - we can just reflow, because no scrollframe is being
+        // added/removed.
+        nsIContent* prevOverrideNode =
+          presContext->GetViewportScrollbarStylesOverrideNode();
+        nsIContent* newOverrideNode =
+          presContext->UpdateViewportScrollbarStylesOverride();
+
+        if (data.mContent == prevOverrideNode ||
+            data.mContent == newOverrideNode) {
+          // If we get here, the restyled element provided the scrollbar styles
+          // for viewport before this restyle, OR it will provide them after.
+          if (!prevOverrideNode || !newOverrideNode ||
+              prevOverrideNode == newOverrideNode) {
+            // If we get here, the restyled element is NOT replacing (or being
+            // replaced by) some other element as the viewport's
+            // scrollbar-styles provider. (If it were, we'd potentially need to
+            // reframe to create a dedicated scrollframe for whichever element
+            // is being booted from providing viewport scrollbar styles.)
+            //
+            // Under these conditions, we're OK to assume that this "overflow"
+            // change only impacts the root viewport's scrollframe, which
+            // already exists, so we can simply reflow instead of reframing.
+            data.mHint |= nsChangeHint_AllReflowHints;
+            doReconstruct = false;
+          }
+        }
+      }
+      if (doReconstruct) {
+        data.mHint |= nsChangeHint_ReconstructFrame;
+      }
+    }
+  }
+
   // Make sure to not rebuild quote or counter lists while we're
   // processing restyles
   frameConstructor->BeginUpdate();
@@ -1711,6 +1772,62 @@ RestyleManager::IncrementAnimationGeneration()
   if ((IsGecko() && !AsGecko()->IsProcessingRestyles()) ||
       (IsServo() && !mInStyleRefresh)) {
     ++mAnimationGeneration;
+  }
+}
+
+/* static */ void
+RestyleManager::AddLayerChangesForAnimation(nsIFrame* aFrame,
+                                            nsIContent* aContent,
+                                            nsStyleChangeList&
+                                              aChangeListToProcess)
+{
+  if (!aFrame || !aContent) {
+    return;
+  }
+
+  uint64_t frameGeneration =
+    RestyleManager::GetAnimationGenerationForFrame(aFrame);
+
+  nsChangeHint hint = nsChangeHint(0);
+  for (const LayerAnimationInfo::Record& layerInfo :
+         LayerAnimationInfo::sRecords) {
+    layers::Layer* layer =
+      FrameLayerBuilder::GetDedicatedLayer(aFrame, layerInfo.mLayerType);
+    if (layer && frameGeneration != layer->GetAnimationGeneration()) {
+      // If we have a transform layer but don't have any transform style, we
+      // probably just removed the transform but haven't destroyed the layer
+      // yet. In this case we will add the appropriate change hint
+      // (nsChangeHint_UpdateContainingBlock) when we compare style contexts
+      // so we can skip adding any change hint here. (If we *were* to add
+      // nsChangeHint_UpdateTransformLayer, ApplyRenderingChangeToTree would
+      // complain that we're updating a transform layer without a transform).
+      if (layerInfo.mLayerType == nsDisplayItem::TYPE_TRANSFORM &&
+          !aFrame->StyleDisplay()->HasTransformStyle()) {
+        continue;
+      }
+      hint |= layerInfo.mChangeHint;
+    }
+
+    // We consider it's the first paint for the frame if we have an animation
+    // for the property but have no layer.
+    // Note that in case of animations which has properties preventing running
+    // on the compositor, e.g., width or height, corresponding layer is not
+    // created at all, but even in such cases, we normally set valid change
+    // hint for such animations in each tick, i.e. restyles in each tick. As
+    // a result, we usually do restyles for such animations in every tick on
+    // the main-thread.  The only animations which will be affected by this
+    // explicit change hint are animations that have opacity/transform but did
+    // not have those properies just before. e.g, setting transform by
+    // setKeyframes or changing target element from other target which prevents
+    // running on the compositor, etc.
+    if (!layer &&
+        nsLayoutUtils::HasEffectiveAnimation(aFrame, layerInfo.mProperty)) {
+      hint |= layerInfo.mChangeHint;
+    }
+  }
+
+  if (hint) {
+    aChangeListToProcess.AppendChange(aFrame, aContent, hint);
   }
 }
 

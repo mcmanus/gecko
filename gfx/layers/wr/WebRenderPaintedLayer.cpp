@@ -7,6 +7,7 @@
 
 #include "LayersLogging.h"
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/layers/ScrollingLayersHelper.h"
 #include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/WebRenderBridgeChild.h"
 #include "mozilla/layers/UpdateImageHelper.h"
@@ -50,7 +51,7 @@ WebRenderPaintedLayer::SetupExternalImages()
 bool
 WebRenderPaintedLayer::UpdateImageClient()
 {
-  MOZ_ASSERT(Manager()->GetPaintedLayerCallback());
+  MOZ_ASSERT(WrManager()->GetPaintedLayerCallback());
   LayerIntRegion visibleRegion = GetVisibleRegion();
   LayerIntRect bounds = visibleRegion.GetBounds();
   LayerIntSize size = bounds.Size();
@@ -70,10 +71,10 @@ WebRenderPaintedLayer::UpdateImageClient()
         gfxContext::CreatePreservingTransformOrNull(target);
     MOZ_ASSERT(ctx); // already checked the target above
 
-    Manager()->GetPaintedLayerCallback()(this,
-                                         ctx,
-                                         visibleRegion.ToUnknownRegion(), visibleRegion.ToUnknownRegion(),
-                                         DrawRegionClip::DRAW, nsIntRegion(), Manager()->GetPaintedLayerCallbackData());
+    WrManager()->GetPaintedLayerCallback()(this,
+                                           ctx,
+                                           visibleRegion.ToUnknownRegion(), visibleRegion.ToUnknownRegion(),
+                                           DrawRegionClip::DRAW, nsIntRegion(), WrManager()->GetPaintedLayerCallbackData());
 
     if (gfxPrefs::WebRenderHighlightPaintedLayers()) {
       target->SetTransform(Matrix());
@@ -89,28 +90,31 @@ WebRenderPaintedLayer::UpdateImageClient()
 }
 
 void
-WebRenderPaintedLayer::CreateWebRenderDisplayList(wr::DisplayListBuilder& aBuilder)
+WebRenderPaintedLayer::CreateWebRenderDisplayList(wr::DisplayListBuilder& aBuilder,
+                                                  const StackingContextHelper& aSc)
 {
-  StackingContextHelper sc(aBuilder, this);
+  ScrollingLayersHelper scroller(this, aBuilder, aSc);
+  StackingContextHelper sc(aSc, aBuilder, this);
 
   LayerRect rect = Bounds();
   DumpLayerInfo("PaintedLayer", rect);
 
   LayerRect clipRect = ClipRect().valueOr(rect);
-  Maybe<WrImageMask> mask = BuildWrMaskLayer(true);
-  WrClipRegion clip = aBuilder.BuildClipRegion(
+  Maybe<WrImageMask> mask = BuildWrMaskLayer(&sc);
+  WrClipRegionToken clip = aBuilder.PushClipRegion(
       sc.ToRelativeWrRect(clipRect),
       mask.ptrOr(nullptr));
 
   WrImageKey key = GetImageKey();
   WrBridge()->AddWebRenderParentCommand(OpAddExternalImage(mExternalImageId.value(), key));
-  Manager()->AddImageKeyForDiscard(key);
+  WrManager()->AddImageKeyForDiscard(key);
 
   aBuilder.PushImage(sc.ToRelativeWrRect(rect), clip, wr::ImageRendering::Auto, key);
 }
 
 void
-WebRenderPaintedLayer::RenderLayer(wr::DisplayListBuilder& aBuilder)
+WebRenderPaintedLayer::RenderLayer(wr::DisplayListBuilder& aBuilder,
+                                   const StackingContextHelper& aSc)
 {
   if (!SetupExternalImages()) {
     return;
@@ -128,12 +132,12 @@ WebRenderPaintedLayer::RenderLayer(wr::DisplayListBuilder& aBuilder)
 
   // We have something to paint but can't. This usually happens only in
   // empty transactions
-  if (!regionToPaint.IsEmpty() && !Manager()->GetPaintedLayerCallback()) {
-    Manager()->SetTransactionIncomplete();
+  if (!regionToPaint.IsEmpty() && !WrManager()->GetPaintedLayerCallback()) {
+    WrManager()->SetTransactionIncomplete();
     return;
   }
 
-  if (!regionToPaint.IsEmpty() && Manager()->GetPaintedLayerCallback()) {
+  if (!regionToPaint.IsEmpty() && WrManager()->GetPaintedLayerCallback()) {
     if (!UpdateImageClient()) {
       return;
     }
@@ -144,7 +148,7 @@ WebRenderPaintedLayer::RenderLayer(wr::DisplayListBuilder& aBuilder)
     MOZ_ASSERT(GetInvalidRegion().IsEmpty());
   }
 
-  CreateWebRenderDisplayList(aBuilder);
+  CreateWebRenderDisplayList(aBuilder, aSc);
 }
 
 } // namespace layers

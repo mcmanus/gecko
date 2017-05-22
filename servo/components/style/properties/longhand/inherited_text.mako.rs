@@ -10,18 +10,8 @@
                    spec="https://drafts.csswg.org/css2/visudet.html#propdef-line-height">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
 
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            match *self {
-                SpecifiedValue::LengthOrPercentage(ref length) => length.has_viewport_percentage(),
-                _ => false
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub enum SpecifiedValue {
         Normal,
@@ -75,7 +65,6 @@
     }
     pub mod computed_value {
         use app_units::Au;
-        use std::fmt;
         use values::CSSFloat;
         #[derive(PartialEq, Copy, Clone, Debug)]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
@@ -132,7 +121,8 @@
                             let calc = calc.to_computed_value(context);
                             let fr = specified::FontRelativeLength::Em(calc.percentage());
                             let fr = specified::Length::NoCalc(specified::NoCalcLength::FontRelative(fr));
-                            computed_value::T::Length(calc.length() + fr.to_computed_value(context))
+                            let length = calc.unclamped_length();
+                            computed_value::T::Length(calc.clamping_mode.clamp(length + fr.to_computed_value(context)))
                         }
                     }
                 }
@@ -211,7 +201,6 @@ ${helpers.single_keyword("word-break",
                                   gecko_enum_prefix="StyleTextJustify"
                                   animation_value_type="none"
                                   spec="https://drafts.csswg.org/css-text/#propdef-text-justify">
-    use values::HasViewportPercentage;
     no_viewport_percentage!(SpecifiedValue);
 
     impl ToComputedValue for SpecifiedValue {
@@ -255,8 +244,6 @@ ${helpers.single_keyword("text-align-last",
 // TODO make this a shorthand and implement text-align-last/text-align-all
 <%helpers:longhand name="text-align" animation_value_type="none" need_clone="True"
                    spec="https://drafts.csswg.org/css-text/#propdef-text-align">
-    use values::computed::ComputedValueAsSpecified;
-    use values::HasViewportPercentage;
     no_viewport_percentage!(SpecifiedValue);
     pub mod computed_value {
         use style_traits::ToCss;
@@ -399,6 +386,7 @@ ${helpers.single_keyword("text-align-last",
             }
         }
     % else:
+        use values::computed::ComputedValueAsSpecified;
         impl ComputedValueAsSpecified for SpecifiedValue {}
         pub use self::computed_value::T as SpecifiedValue;
         pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
@@ -411,19 +399,9 @@ ${helpers.single_keyword("text-align-last",
                    spec="https://drafts.csswg.org/css-text/#propdef-letter-spacing">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::specified::AllowQuirks;
 
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            match *self {
-                SpecifiedValue::Specified(ref length) => length.has_viewport_percentage(),
-                _ => false
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub enum SpecifiedValue {
         Normal,
@@ -441,14 +419,13 @@ ${helpers.single_keyword("text-align-last",
 
     pub mod computed_value {
         use app_units::Au;
-        use properties::animated_properties::{ComputeDistance, Interpolate};
+        use properties::animated_properties::Animatable;
 
         #[derive(Debug, Clone, PartialEq)]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
         pub struct T(pub Option<Au>);
 
-        ${helpers.impl_interpolate_for_option_tuple('Au(0)')}
-        ${helpers.impl_compute_distance_for_option_tuple('Au(0)')}
+        ${helpers.impl_animatable_for_option_tuple('Au(0)')}
     }
 
     impl ToCss for computed_value::T {
@@ -498,19 +475,9 @@ ${helpers.single_keyword("text-align-last",
                    spec="https://drafts.csswg.org/css-text/#propdef-word-spacing">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::specified::AllowQuirks;
 
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            match *self {
-                SpecifiedValue::Specified(ref length) => length.has_viewport_percentage(),
-                _ => false
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub enum SpecifiedValue {
         Normal,
@@ -527,14 +494,13 @@ ${helpers.single_keyword("text-align-last",
     }
 
     pub mod computed_value {
-        use properties::animated_properties::{ComputeDistance, Interpolate};
+        use properties::animated_properties::Animatable;
         use values::computed::LengthOrPercentage;
         #[derive(Debug, Clone, PartialEq)]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
         pub struct T(pub Option<LengthOrPercentage>);
 
-        ${helpers.impl_interpolate_for_option_tuple('LengthOrPercentage::zero()')}
-        ${helpers.impl_compute_distance_for_option_tuple('LengthOrPercentage::zero()')}
+        ${helpers.impl_animatable_for_option_tuple('LengthOrPercentage::zero()')}
     }
 
     impl ToCss for computed_value::T {
@@ -589,7 +555,6 @@ ${helpers.single_keyword("text-align-last",
     use cssparser::RGBA;
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
     use values::computed::ComputedValueAsSpecified;
 
     impl ComputedValueAsSpecified for SpecifiedValue {}
@@ -675,7 +640,6 @@ ${helpers.single_keyword("text-align-last",
                                   animation_value_type="none"
                                   spec="https://drafts.csswg.org/css-text/#propdef-white-space">
     use values::computed::ComputedValueAsSpecified;
-    use values::HasViewportPercentage;
     impl ComputedValueAsSpecified for SpecifiedValue {}
     no_viewport_percentage!(SpecifiedValue);
 
@@ -720,34 +684,30 @@ ${helpers.single_keyword("text-align-last",
     use cssparser;
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
+    use values::specified::Shadow;
 
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            let &SpecifiedValue(ref vec) = self;
-            vec.iter().any(|ref x| x .has_viewport_percentage())
-        }
-    }
-
-    #[derive(Clone, PartialEq, Debug)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub struct SpecifiedValue(Vec<SpecifiedTextShadow>);
 
-    impl HasViewportPercentage for SpecifiedTextShadow {
-        fn has_viewport_percentage(&self) -> bool {
-            self.offset_x.has_viewport_percentage() ||
-            self.offset_y.has_viewport_percentage() ||
-            self.blur_radius.has_viewport_percentage()
-        }
-    }
-
-    #[derive(Clone, PartialEq, Debug)]
+    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub struct SpecifiedTextShadow {
         pub offset_x: specified::Length,
         pub offset_y: specified::Length,
         pub blur_radius: specified::Length,
         pub color: Option<specified::CSSColor>,
+    }
+
+    impl From<Shadow> for SpecifiedTextShadow {
+        fn from(shadow: Shadow) -> SpecifiedTextShadow {
+            SpecifiedTextShadow {
+                offset_x: shadow.offset_x,
+                offset_y: shadow.offset_y,
+                blur_radius: shadow.blur_radius,
+                color: shadow.color,
+            }
+        }
     }
 
     pub mod computed_value {
@@ -772,15 +732,13 @@ ${helpers.single_keyword("text-align-last",
     impl ToCss for computed_value::T {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
             let mut iter = self.0.iter();
-            if let Some(shadow) = iter.next() {
-                try!(shadow.to_css(dest));
-            } else {
-                try!(dest.write_str("none"));
-                return Ok(())
+            match iter.next() {
+                Some(shadow) => shadow.to_css(dest)?,
+                None => return dest.write_str("none"),
             }
             for shadow in iter {
-                try!(dest.write_str(", "));
-                try!(shadow.to_css(dest));
+                dest.write_str(", ")?;
+                shadow.to_css(dest)?;
             }
             Ok(())
         }
@@ -788,29 +746,26 @@ ${helpers.single_keyword("text-align-last",
 
     impl ToCss for computed_value::TextShadow {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self.offset_x.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.offset_y.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.blur_radius.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.color.to_css(dest));
-            Ok(())
+            self.offset_x.to_css(dest)?;
+            dest.write_str(" ")?;
+            self.offset_y.to_css(dest)?;
+            dest.write_str(" ")?;
+            self.blur_radius.to_css(dest)?;
+            dest.write_str(" ")?;
+            self.color.to_css(dest)
         }
     }
 
     impl ToCss for SpecifiedValue {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
             let mut iter = self.0.iter();
-            if let Some(shadow) = iter.next() {
-                try!(shadow.to_css(dest));
-            } else {
-                try!(dest.write_str("none"));
-                return Ok(())
+            match iter.next() {
+                Some(shadow) => shadow.to_css(dest)?,
+                None => return dest.write_str("none"),
             }
             for shadow in iter {
-                try!(dest.write_str(", "));
-                try!(shadow.to_css(dest));
+                dest.write_str(", ")?;
+                shadow.to_css(dest)?;
             }
             Ok(())
         }
@@ -818,15 +773,15 @@ ${helpers.single_keyword("text-align-last",
 
     impl ToCss for SpecifiedTextShadow {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self.offset_x.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.offset_y.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.blur_radius.to_css(dest));
+            self.offset_x.to_css(dest)?;
+            dest.write_str(" ")?;
+            self.offset_y.to_css(dest)?;
+            dest.write_str(" ")?;
+            self.blur_radius.to_css(dest)?;
 
             if let Some(ref color) = self.color {
-                try!(dest.write_str(" "));
-                try!(color.to_css(dest));
+                dest.write_str(" ")?;
+                color.to_css(dest)?;
             }
             Ok(())
         }
@@ -842,59 +797,10 @@ ${helpers.single_keyword("text-align-last",
         if input.try(|input| input.expect_ident_matching("none")).is_ok() {
             Ok(SpecifiedValue(Vec::new()))
         } else {
-            input.parse_comma_separated(|i| parse_one_text_shadow(context, i)).map(SpecifiedValue)
+            input.parse_comma_separated(|i| {
+                Ok(SpecifiedTextShadow::from(Shadow::parse(context, i, true)?))
+            }).map(SpecifiedValue)
         }
-    }
-
-    fn parse_one_text_shadow(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedTextShadow,()> {
-        use app_units::Au;
-        let mut lengths = [specified::Length::zero(), specified::Length::zero(), specified::Length::zero()];
-        let mut lengths_parsed = false;
-        let mut color = None;
-
-        loop {
-            if !lengths_parsed {
-                if let Ok(value) = input.try(|i| specified::Length::parse(context, i)) {
-                    lengths[0] = value;
-                    let mut length_parsed_count = 1;
-                    while length_parsed_count < 3 {
-                        if let Ok(value) = input.try(|i| specified::Length::parse(context, i)) {
-                            lengths[length_parsed_count] = value
-                        } else {
-                            break
-                        }
-                        length_parsed_count += 1;
-                    }
-
-                    // The first two lengths must be specified.
-                    if length_parsed_count < 2 {
-                        return Err(())
-                    }
-
-                    lengths_parsed = true;
-                    continue
-                }
-            }
-            if color.is_none() {
-                if let Ok(value) = input.try(|i| specified::CSSColor::parse(context, i)) {
-                    color = Some(value);
-                    continue
-                }
-            }
-            break
-        }
-
-        // Lengths must be specified.
-        if !lengths_parsed {
-            return Err(())
-        }
-
-        Ok(SpecifiedTextShadow {
-            offset_x: lengths[0].take(),
-            offset_y: lengths[1].take(),
-            blur_radius: lengths[2].take(),
-            color: color,
-        })
     }
 
     impl ToComputedValue for SpecifiedValue {
@@ -934,7 +840,6 @@ ${helpers.single_keyword("text-align-last",
     use std::fmt;
     use style_traits::ToCss;
     use unicode_segmentation::UnicodeSegmentation;
-    use values::HasViewportPercentage;
 
     no_viewport_percentage!(SpecifiedValue);
 
@@ -1140,7 +1045,6 @@ ${helpers.single_keyword("text-align-last",
                    spec="https://drafts.csswg.org/css-text-decor/#propdef-text-emphasis-position">
     use std::fmt;
     use values::computed::ComputedValueAsSpecified;
-    use values::HasViewportPercentage;
     use style_traits::ToCss;
 
     define_css_keyword_enum!(HorizontalWritingModeValue:

@@ -62,9 +62,7 @@ CrossProcessCompositorBridgeParent::ActorDestroy(ActorDestroyReason aWhy)
 PLayerTransactionParent*
 CrossProcessCompositorBridgeParent::AllocPLayerTransactionParent(
   const nsTArray<LayersBackend>&,
-  const uint64_t& aId,
-  TextureFactoryIdentifier* aTextureFactoryIdentifier,
-  bool *aSuccess)
+  const uint64_t& aId)
 {
   MOZ_ASSERT(aId != 0);
 
@@ -85,19 +83,13 @@ CrossProcessCompositorBridgeParent::AllocPLayerTransactionParent(
   if (state && state->mLayerManager) {
     state->mCrossProcessParent = this;
     HostLayerManager* lm = state->mLayerManager;
-    *aTextureFactoryIdentifier = lm->GetCompositor()->GetTextureFactoryIdentifier();
-    *aSuccess = true;
     LayerTransactionParent* p = new LayerTransactionParent(lm, this, aId);
     p->AddIPDLReference();
     sIndirectLayerTrees[aId].mLayerTree = p;
-    if (state->mPendingCompositorUpdate) {
-      p->SetPendingCompositorUpdate(state->mPendingCompositorUpdate.value());
-    }
     return p;
   }
 
   NS_WARNING("Created child without a matching parent?");
-  *aSuccess = false;
   LayerTransactionParent* p = new LayerTransactionParent(nullptr, this, aId);
   p->AddIPDLReference();
   return p;
@@ -128,7 +120,10 @@ CrossProcessCompositorBridgeParent::AllocPAPZCTreeManagerParent(const uint64_t& 
   // to unmap our layers id, and we could get here without a parent compositor.
   // In this case return an empty APZCTM.
   if (!state.mParent) {
+    // Note: we immediately call ClearTree since otherwise the APZCTM will
+    // retain a reference to itself, through the checkerboard observer.
     RefPtr<APZCTreeManager> temp = new APZCTreeManager();
+    temp->ClearTree();
     return new APZCTreeManagerParent(aLayersId, temp);
   }
 
@@ -483,22 +478,6 @@ CrossProcessCompositorBridgeParent::GetCompositionManager(LayerTransactionParent
   return state->mParent->GetCompositionManager(aLayerTree);
 }
 
-mozilla::ipc::IPCResult
-CrossProcessCompositorBridgeParent::RecvAcknowledgeCompositorUpdate(const uint64_t& aLayersId,
-                                                                    const uint64_t& aSeqNo)
-{
-  MonitorAutoLock lock(*sIndirectLayerTreesLock);
-  CompositorBridgeParent::LayerTreeState& state = sIndirectLayerTrees[aLayersId];
-
-  if (LayerTransactionParent* ltp = state.mLayerTree) {
-    ltp->AcknowledgeCompositorUpdate(aSeqNo);
-  }
-  if (state.mPendingCompositorUpdate == Some(aSeqNo)) {
-    state.mPendingCompositorUpdate = Nothing();
-  }
-  return IPC_OK();
-}
-
 void
 CrossProcessCompositorBridgeParent::DeferredDestroy()
 {
@@ -529,7 +508,7 @@ CrossProcessCompositorBridgeParent::AllocPTextureParent(const SurfaceDescriptor&
 
   TextureFlags flags = aFlags;
 
-  if (!state || state->mPendingCompositorUpdate) {
+  if (!state) {
     // The compositor was recreated, and we're receiving layers updates for a
     // a layer manager that will soon be discarded or invalidated. We can't
     // return null because this will mess up deserialization later and we'll

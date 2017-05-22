@@ -30,11 +30,16 @@ nsresult SyncApplyUpdates(Classifier* aClassifier,
   // will be on the caller thread. If we call Classifier::AsyncApplyUpdates
   // and wait on the same thread, this function will never return.
 
-  nsresult ret;
+  nsresult ret = NS_ERROR_FAILURE;
   bool done = false;
   auto onUpdateComplete = [&done, &ret](nsresult rv) {
-    ret = rv;
-    done = true;
+    // We are on the "ApplyUpdate" thread. Post an event to main thread
+    // so that we can avoid busy waiting on the main thread.
+    nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction([&done, &ret, rv] {
+      ret = rv;
+      done = true;
+    });
+    NS_DispatchToMainThread(r);
   };
 
   nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction([&]() {
@@ -51,19 +56,13 @@ nsresult SyncApplyUpdates(Classifier* aClassifier,
   }
 
   testingThread->Dispatch(r, NS_DISPATCH_NORMAL);
-  while (!done) {
-    // NS_NewCheckSummedOutputStream in HashStore::WriteFile
-    // will synchronously init NS_CRYPTO_HASH_CONTRACTID on
-    // the main thread. As a result we have to keep processing
-    // pending event until |done| becomes true. If there's no
-    // more pending event, what we only can do is wait.
-    // Condition variable doesn't work here because instrusively
-    // notifying the from NS_NewCheckSummedOutputStream() or
-    // HashStore::WriteFile() is weird.
-    if (!NS_ProcessNextEvent(NS_GetCurrentThread(), false)) {
-      PR_Sleep(PR_MillisecondsToInterval(100));
-    }
-  }
+
+  // NS_NewCheckSummedOutputStream in HashStore::WriteFile
+  // will synchronously init NS_CRYPTO_HASH_CONTRACTID on
+  // the main thread. As a result we have to keep processing
+  // pending event until |done| becomes true. If there's no
+  // more pending event, what we only can do is wait.
+  MOZ_ALWAYS_TRUE(SpinEventLoopUntil([&]() { return done; }));
 
   return ret;
 }
@@ -134,7 +133,6 @@ PrefixArrayToAddPrefixArrayV2(const nsTArray<nsCString>& prefixArray,
     Prefix hash;
     static_assert(sizeof(hash.buf) == PREFIX_SIZE, "Prefix must be 4 bytes length");
     memcpy(hash.buf, prefixArray[i].BeginReading(), PREFIX_SIZE);
-    MOZ_ASSERT(prefixArray[i].Length() == PREFIX_SIZE);
 
     AddPrefix *add = out.AppendElement(fallible);
     if (!add) {
@@ -160,21 +158,42 @@ GeneratePrefix(const nsCString& aFragment, uint8_t aLength)
   return hash;
 }
 
-UniquePtr<LookupCacheV4>
-SetupLookupCacheV4(const _PrefixArray& prefixArray)
+static nsresult
+BuildCache(LookupCacheV2* cache, const _PrefixArray& prefixArray)
+{
+  AddPrefixArray prefixes;
+  AddCompleteArray completions;
+  nsresult rv = PrefixArrayToAddPrefixArrayV2(prefixArray, prefixes);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  EntrySort(prefixes);
+  return cache->Build(prefixes, completions);
+}
+
+static nsresult
+BuildCache(LookupCacheV4* cache, const _PrefixArray& prefixArray)
+{
+  PrefixStringMap map;
+  PrefixArrayToPrefixStringMap(prefixArray, map);
+  return cache->Build(map);
+}
+
+template<typename T>
+UniquePtr<T>
+SetupLookupCache(const _PrefixArray& prefixArray)
 {
   nsCOMPtr<nsIFile> file;
   NS_GetSpecialDirectory(NS_APP_USER_PROFILE_50_DIR, getter_AddRefs(file));
 
   file->AppendNative(GTEST_SAFEBROWSING_DIR);
 
-  UniquePtr<LookupCacheV4> cache = MakeUnique<LookupCacheV4>(GTEST_TABLE, EmptyCString(), file);
+  UniquePtr<T> cache = MakeUnique<T>(GTEST_TABLE, EmptyCString(), file);
   nsresult rv = cache->Init();
   EXPECT_EQ(rv, NS_OK);
 
-  PrefixStringMap map;
-  PrefixArrayToPrefixStringMap(prefixArray, map);
-  rv = cache->Build(map);
+  rv = BuildCache(cache.get(), prefixArray);
   EXPECT_EQ(rv, NS_OK);
 
   return Move(cache);

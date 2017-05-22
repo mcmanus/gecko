@@ -19,6 +19,7 @@
 #include "mozilla/layers/APZCTreeManagerChild.h"
 #include "mozilla/layers/LayerTransactionChild.h"
 #include "mozilla/layers/PLayerTransactionChild.h"
+#include "mozilla/layers/PTextureChild.h"
 #include "mozilla/layers/TextureClient.h"// for TextureClient
 #include "mozilla/layers/TextureClientPool.h"// for TextureClientPool
 #include "mozilla/layers/WebRenderBridgeChild.h"
@@ -191,9 +192,7 @@ CompositorBridgeChild::ShutDown()
 {
   if (sCompositorBridge) {
     sCompositorBridge->Destroy();
-    do {
-      NS_ProcessNextEvent(nullptr, true);
-    } while (sCompositorBridge);
+    SpinEventLoopUntil([&]() { return !sCompositorBridge; });
   }
 }
 
@@ -329,13 +328,21 @@ CompositorBridgeChild::CompositorIsInGPUProcess()
 }
 
 PLayerTransactionChild*
-CompositorBridgeChild::AllocPLayerTransactionChild(const nsTArray<LayersBackend>& aBackendHints,
-                                                   const uint64_t& aId,
-                                                   TextureFactoryIdentifier*,
-                                                   bool*)
+CompositorBridgeChild::AllocPLayerTransactionChild(const nsTArray<LayersBackend>& aBackendHints, const uint64_t& aId)
 {
   LayerTransactionChild* c = new LayerTransactionChild(aId);
   c->AddIPDLReference();
+
+  TabChild* tabChild = TabChild::GetFrom(c->GetId());
+
+  // Do the DOM Labeling.
+  if (tabChild) {
+    nsCOMPtr<nsIEventTarget> target =
+      tabChild->TabGroup()->EventTargetFor(TaskCategory::Other);
+    SetEventTargetForActor(c, target);
+    MOZ_ASSERT(c->GetActorEventTarget());
+  }
+
   return c;
 }
 
@@ -364,40 +371,6 @@ CompositorBridgeChild::RecvInvalidateLayers(const uint64_t& aLayersId)
     if (dom::TabChild* child = dom::TabChild::GetFrom(aLayersId)) {
       child->InvalidateLayers();
     }
-  }
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult
-CompositorBridgeChild::RecvCompositorUpdated(const uint64_t& aLayersId,
-                                             const TextureFactoryIdentifier& aNewIdentifier,
-                                             const uint64_t& aSeqNo)
-{
-  if (mLayerManager) {
-    // This case is handled directly by nsBaseWidget.
-    MOZ_ASSERT(aLayersId == 0);
-  } else if (aLayersId != 0) {
-    // Update gfxPlatform if this is the first time we're seeing this compositor
-    // update (we will get an update for each connected tab).
-    if (mDeviceResetSequenceNumber != aSeqNo) {
-      gfxPlatform::GetPlatform()->CompositorUpdated();
-      mDeviceResetSequenceNumber = aSeqNo;
-
-      // If we still get device reset here, something must wrong when creating
-      // d3d11 devices.
-      if (gfxPlatform::GetPlatform()->DidRenderingDeviceReset()) {
-        gfxCriticalError() << "Unexpected reset device processing when \
-                               updating compositor.";
-      }
-    }
-
-    if (dom::TabChild* child = dom::TabChild::GetFrom(aLayersId)) {
-      child->CompositorUpdated(aNewIdentifier, aSeqNo);
-    }
-    if (!mCanSend) {
-      return IPC_OK();
-    }
-    SendAcknowledgeCompositorUpdate(aLayersId, aSeqNo);
   }
   return IPC_OK();
 }
@@ -1051,15 +1024,24 @@ CompositorBridgeChild::GetTileLockAllocator()
   return mSectionAllocator;
 }
 
-
 PTextureChild*
 CompositorBridgeChild::CreateTexture(const SurfaceDescriptor& aSharedData,
                                      LayersBackend aLayersBackend,
                                      TextureFlags aFlags,
                                      uint64_t aSerial,
-                                     wr::MaybeExternalImageId& aExternalImageId)
+                                     wr::MaybeExternalImageId& aExternalImageId,
+                                     nsIEventTarget* aTarget)
 {
-  return PCompositorBridgeChild::SendPTextureConstructor(aSharedData, aLayersBackend, aFlags, 0 /* FIXME? */, aSerial, aExternalImageId);
+  PTextureChild* textureChild = AllocPTextureChild(
+    aSharedData, aLayersBackend, aFlags, 0 /* FIXME */, aSerial, aExternalImageId);
+
+  // Do the DOM labeling.
+  if (aTarget) {
+    SetEventTargetForActor(textureChild, aTarget);
+  }
+
+  return SendPTextureConstructor(
+    textureChild, aSharedData, aLayersBackend, aFlags, 0 /* FIXME? */, aSerial, aExternalImageId);
 }
 
 bool
@@ -1195,7 +1177,7 @@ CompositorBridgeChild::GetNextExternalImageId()
   MOZ_RELEASE_ASSERT(sNextID != UINT32_MAX);
 
   uint64_t imageId = mNamespace;
-  imageId = imageId << 32 | sNextID;
+  imageId = (imageId << 32) | sNextID;
   return Some(wr::ToExternalImageId(imageId));
 }
 

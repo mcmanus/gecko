@@ -7,10 +7,11 @@ flat varying vec4 vColor1;
 flat varying vec2 vEdgeDistance;
 flat varying float vAxisSelect;
 flat varying float vAlphaSelect;
+flat varying vec4 vClipParams;
+flat varying float vClipSelect;
 
 #ifdef WR_FEATURE_TRANSFORM
 varying vec3 vLocalPos;
-flat varying RectWithSize vLocalRect;
 #else
 varying vec2 vLocalPos;
 #endif

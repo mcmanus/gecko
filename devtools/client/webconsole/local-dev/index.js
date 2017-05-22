@@ -12,6 +12,13 @@ const { EventEmitter } = require("devtools-modules");
 const { Services: { appinfo, pref } } = require("devtools-modules");
 const { bootstrap } = require("devtools-launchpad");
 
+try {
+  const Perf = require("react-addons-perf");
+  window.Perf = Perf;
+} catch (e) {
+  // Perf addon is only available in development builds
+}
+
 EventEmitter.decorate(window);
 
 require("../../themes/new-webconsole.css");
@@ -75,6 +82,8 @@ function onConnect(connection) {
     iframeWindow: window,
     chromeWindow: window,
     hudId: "hud_0",
+    getDebuggerFrames: () => { },
+    getInspectorSelection: () => { },
     target: connection.tabConnection.tabTarget,
     _browserConsole: false,
     NewConsoleOutputWrapper,

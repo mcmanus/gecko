@@ -33,8 +33,8 @@ use gfx_traits::{combine_id_with_fragment_type, FragmentType, StackingContextId}
 use inline::{FIRST_FRAGMENT_OF_ELEMENT, InlineFlow, LAST_FRAGMENT_OF_ELEMENT};
 use ipc_channel::ipc;
 use list_item::ListItemFlow;
-use model::{self, MaybeAuto, specified};
-use msg::constellation_msg::PipelineId;
+use model::{self, MaybeAuto};
+use msg::constellation_msg::BrowsingContextId;
 use net_traits::image::base::PixelFormat;
 use net_traits::image_cache::UsePlaceholder;
 use range::Range;
@@ -57,16 +57,19 @@ use style::properties::{self, ServoComputedValues};
 use style::properties::longhands::border_image_repeat::computed_value::RepeatKeyword;
 use style::properties::style_structs;
 use style::servo::restyle_damage::REPAINT;
-use style::values::{Either, RGBA, computed};
-use style::values::computed::{AngleOrCorner, Gradient, GradientItem, GradientKind, LengthOrPercentage};
-use style::values::computed::{LengthOrPercentageOrAuto, LengthOrKeyword, LengthOrPercentageOrKeyword};
-use style::values::computed::{NumberOrPercentage, Position};
-use style::values::computed::image::{EndingShape, SizeKeyword};
-use style::values::specified::{HorizontalDirection, VerticalDirection};
+use style::values::{Either, RGBA};
+use style::values::computed::{Gradient, GradientItem, LengthOrPercentage};
+use style::values::computed::{LengthOrPercentageOrAuto, NumberOrPercentage, Position};
+use style::values::computed::image::{EndingShape, LineDirection};
+use style::values::generics::image::{Circle, Ellipse, EndingShape as GenericEndingShape};
+use style::values::generics::image::{GradientItem as GenericGradientItem, GradientKind};
+use style::values::generics::image::{Image, ShapeExtent};
+use style::values::specified::position::{X, Y};
 use style_traits::CSSPixel;
 use style_traits::cursor::Cursor;
 use table_cell::CollapsedBordersForCell;
-use webrender_traits::{ColorF, ClipId, GradientStop, RepeatMode, ScrollPolicy};
+use webrender_helpers::{ToMixBlendMode, ToTransformStyle};
+use webrender_traits::{ColorF, ClipId, GradientStop, RepeatMode, ScrollPolicy, TransformStyle};
 
 trait ResolvePercentage {
     fn resolve(&self, length: u32) -> u32;
@@ -173,7 +176,7 @@ pub struct DisplayListBuildState<'a> {
 
     /// Vector containing iframe sizes, used to inform the constellation about
     /// new iframe sizes
-    pub iframe_sizes: Vec<(PipelineId, TypedSize2D<f32, CSSPixel>)>,
+    pub iframe_sizes: Vec<(BrowsingContextId, TypedSize2D<f32, CSSPixel>)>,
 
     /// A stack of clips used to cull display list entries that are outside the
     /// rendered region.
@@ -182,6 +185,9 @@ pub struct DisplayListBuildState<'a> {
     /// A stack of clips used to cull display list entries that are outside the
     /// rendered region, but only collected at containing block boundaries.
     pub containing_block_clip_stack: Vec<Rect<Au>>,
+
+    /// The current transform style of the stacking context.
+    current_transform_style: TransformStyle,
 }
 
 impl<'a> DisplayListBuildState<'a> {
@@ -199,6 +205,7 @@ impl<'a> DisplayListBuildState<'a> {
             iframe_sizes: Vec::new(),
             clip_stack: Vec::new(),
             containing_block_clip_stack: Vec::new(),
+            current_transform_style: TransformStyle::Flat,
         }
     }
 
@@ -210,6 +217,7 @@ impl<'a> DisplayListBuildState<'a> {
     fn add_stacking_context(&mut self,
                             parent_id: StackingContextId,
                             stacking_context: StackingContext) {
+        self.current_transform_style = stacking_context.transform_style;
         let info = self.stacking_context_info
                        .entry(parent_id)
                        .or_insert(StackingContextInfo::new());
@@ -289,12 +297,12 @@ impl<'a> DisplayListBuildState<'a> {
 
         let pipeline_id = self.layout_context.id;
         if stacking_context.context_type != StackingContextType::Real {
-            list.extend(info.scroll_roots.into_iter().map(|root| root.to_push(pipeline_id)));
+            list.extend(info.scroll_roots.into_iter().map(|root| root.to_define_item(pipeline_id)));
             self.to_display_list_for_items(list, child_items, info.children);
         } else {
             let (push_item, pop_item) = stacking_context.to_display_list_items(pipeline_id);
             list.push(push_item);
-            list.extend(info.scroll_roots.into_iter().map(|root| root.to_push(pipeline_id)));
+            list.extend(info.scroll_roots.into_iter().map(|root| root.to_define_item(pipeline_id)));
             self.to_display_list_for_items(list, child_items, info.children);
             list.push(pop_item);
         }
@@ -390,7 +398,7 @@ pub trait FragmentDisplayListBuilding {
     fn convert_linear_gradient(&self,
                                bounds: &Rect<Au>,
                                stops: &[GradientItem],
-                               angle_or_corner: &AngleOrCorner,
+                               direction: &LineDirection,
                                repeating: bool,
                                style: &ServoComputedValues)
                                -> display_list::Gradient;
@@ -564,20 +572,20 @@ fn build_border_radius(abs_bounds: &Rect<Au>,
 
     handle_overlapping_radii(&abs_bounds.size, &BorderRadii {
         top_left:     model::specified_border_radius(border_style.border_top_left_radius,
-                                                     abs_bounds.size.width),
+                                                     abs_bounds.size),
         top_right:    model::specified_border_radius(border_style.border_top_right_radius,
-                                                     abs_bounds.size.width),
+                                                     abs_bounds.size),
         bottom_right: model::specified_border_radius(border_style.border_bottom_right_radius,
-                                                     abs_bounds.size.width),
+                                                     abs_bounds.size),
         bottom_left:  model::specified_border_radius(border_style.border_bottom_left_radius,
-                                                     abs_bounds.size.width),
+                                                     abs_bounds.size),
     })
 }
 
 /// Get the border radius for the rectangle inside of a rounded border. This is useful
 /// for building the clip for the content inside the border.
 fn build_border_radius_for_inner_rect(outer_rect: &Rect<Au>,
-                                      style: Arc<ServoComputedValues>)
+                                      style: &ServoComputedValues)
                                       -> BorderRadii<Au> {
     let mut radii = build_border_radius(&outer_rect, style.get_border());
     if radii.is_square() {
@@ -603,66 +611,90 @@ fn build_border_radius_for_inner_rect(outer_rect: &Rect<Au>,
 }
 
 fn convert_gradient_stops(gradient_items: &[GradientItem],
-                          length: Au,
+                          total_length: Au,
                           style: &ServoComputedValues) -> Vec<GradientStop> {
     // Determine the position of each stop per CSS-IMAGES § 3.4.
-    //
-    // FIXME(#3908, pcwalton): Make sure later stops can't be behind earlier stops.
-    let stop_items = gradient_items.iter().filter_map(|item| {
+
+    // Only keep the color stops, discard the color interpolation hints.
+    let mut stop_items = gradient_items.iter().filter_map(|item| {
         match *item {
-            GradientItem::ColorStop(ref stop) => Some(stop),
+            GenericGradientItem::ColorStop(ref stop) => Some(*stop),
             _ => None,
         }
     }).collect::<Vec<_>>();
-    let mut stops = Vec::with_capacity(stop_items.len());
+
+    assert!(stop_items.len() >= 2);
+
+    // Run the algorithm from
+    // https://drafts.csswg.org/css-images-3/#color-stop-syntax
+
+    // Step 1:
+    // If the first color stop does not have a position, set its position to 0%.
+    {
+        let first = stop_items.first_mut().unwrap();
+        if first.position.is_none() {
+            first.position = Some(LengthOrPercentage::Percentage(0.0));
+        }
+    }
+    // If the last color stop does not have a position, set its position to 100%.
+    {
+        let last = stop_items.last_mut().unwrap();
+        if last.position.is_none() {
+            last.position = Some(LengthOrPercentage::Percentage(1.0));
+        }
+    }
+
+    // Step 2: Move any stops placed before earlier stops to the
+    // same position as the preceding stop.
+    let mut last_stop_position = stop_items.first().unwrap().position.unwrap();
+    for stop in stop_items.iter_mut().skip(1) {
+        if let Some(pos) = stop.position {
+            if position_to_offset(last_stop_position, total_length)
+                    > position_to_offset(pos, total_length) {
+                stop.position = Some(last_stop_position);
+            }
+            last_stop_position = stop.position.unwrap();
+        }
+    }
+
+    // Step 3: Evenly space stops without position.
+    // Note: Remove the + 2 if fix_gradient_stops is changed.
+    let mut stops = Vec::with_capacity(stop_items.len() + 2);
     let mut stop_run = None;
     for (i, stop) in stop_items.iter().enumerate() {
         let offset = match stop.position {
             None => {
                 if stop_run.is_none() {
                     // Initialize a new stop run.
-                    let start_offset = if i == 0 {
-                        0.0
-                    } else {
-                        // `unwrap()` here should never fail because this is the beginning of
-                        // a stop run, which is always bounded by a length or percentage.
-                        position_to_offset(stop_items[i - 1].position.unwrap(), length)
-                    };
-                    let (end_index, end_offset) =
-                        match stop_items[i..]
-                                        .iter()
-                                        .enumerate()
-                                        .find(|&(_, ref stop)| stop.position.is_some()) {
-                            None => (stop_items.len() - 1, 1.0),
-                            Some((end_index, end_stop)) => {
-                                // `unwrap()` here should never fail because this is the end of
-                                // a stop run, which is always bounded by a length or
-                                // percentage.
-                                (end_index,
-                                    position_to_offset(end_stop.position.unwrap(), length))
-                            }
-                        };
+                    // `unwrap()` here should never fail because this is the beginning of
+                    // a stop run, which is always bounded by a length or percentage.
+                    let start_offset =
+                        position_to_offset(stop_items[i - 1].position.unwrap(), total_length);
+                    // `unwrap()` here should never fail because this is the end of
+                    // a stop run, which is always bounded by a length or percentage.
+                    let (end_index, end_stop) = stop_items[(i + 1)..]
+                        .iter()
+                        .enumerate()
+                        .find(|&(_, ref stop)| stop.position.is_some())
+                        .unwrap();
+                    let end_offset = position_to_offset(end_stop.position.unwrap(), total_length);
                     stop_run = Some(StopRun {
                         start_offset: start_offset,
                         end_offset: end_offset,
-                        start_index: i,
-                        stop_count: end_index - i,
+                        start_index: i - 1,
+                        stop_count: end_index,
                     })
                 }
 
                 let stop_run = stop_run.unwrap();
                 let stop_run_length = stop_run.end_offset - stop_run.start_offset;
-                if stop_run.stop_count == 0 {
-                    stop_run.end_offset
-                } else {
-                    stop_run.start_offset +
-                        stop_run_length * (i - stop_run.start_index) as f32 /
-                            (stop_run.stop_count as f32)
-                }
+                stop_run.start_offset +
+                    stop_run_length * (i - stop_run.start_index) as f32 /
+                        ((2 + stop_run.stop_count) as f32)
             }
             Some(position) => {
                 stop_run = None;
-                position_to_offset(position, length)
+                position_to_offset(position, total_length)
             }
         };
         stops.push(GradientStop {
@@ -671,6 +703,35 @@ fn convert_gradient_stops(gradient_items: &[GradientItem],
         })
     }
     stops
+}
+
+#[inline]
+/// Duplicate the first and last stops if necessary.
+///
+/// Explanation by pyfisch:
+/// If the last stop is at the same position as the previous stop the
+/// last color is ignored by webrender. This differs from the spec
+/// (I think so). The  implementations of Chrome and Firefox seem
+/// to have the same problem but work fine if the position of the last
+/// stop is smaller than 100%. (Otherwise they ignore the last stop.)
+///
+/// Similarly the first stop is duplicated if it is not placed
+/// at the start of the virtual gradient ray.
+fn fix_gradient_stops(stops: &mut Vec<GradientStop>) {
+    if stops.first().unwrap().offset > 0.0 {
+        let color = stops.first().unwrap().color;
+        stops.insert(0, GradientStop {
+            offset: 0.0,
+            color: color,
+        })
+    }
+    if stops.last().unwrap().offset < 1.0 {
+        let color = stops.last().unwrap().color;
+        stops.push(GradientStop {
+            offset: 1.0,
+            color: color,
+        })
+    }
 }
 
 /// Returns the the distance to the nearest or farthest corner depending on the comperator.
@@ -705,46 +766,46 @@ fn get_ellipse_radius<F>(size: &Size2D<Au>, center: &Point2D<Au>, cmp: F) -> Siz
 
 /// Determines the radius of a circle if it was not explictly provided.
 /// https://drafts.csswg.org/css-images-3/#typedef-size
-fn convert_circle_size_keyword(keyword: SizeKeyword,
+fn convert_circle_size_keyword(keyword: ShapeExtent,
                                size: &Size2D<Au>,
                                center: &Point2D<Au>) -> Size2D<Au> {
-    use style::values::computed::image::SizeKeyword::*;
     let radius = match keyword {
-        ClosestSide => {
+        ShapeExtent::ClosestSide | ShapeExtent::Contain => {
             let dist = get_distance_to_sides(size, center, ::std::cmp::min);
             ::std::cmp::min(dist.width, dist.height)
         }
-        FarthestSide => {
+        ShapeExtent::FarthestSide => {
             let dist = get_distance_to_sides(size, center, ::std::cmp::max);
             ::std::cmp::max(dist.width, dist.height)
         }
-        ClosestCorner => get_distance_to_corner(size, center, ::std::cmp::min),
-        FarthestCorner => get_distance_to_corner(size, center, ::std::cmp::max),
-        _ => {
-            // TODO(#16542)
-            println!("TODO: implement size keyword {:?} for circles", keyword);
-            Au::new(0)
-        }
+        ShapeExtent::ClosestCorner => {
+            get_distance_to_corner(size, center, ::std::cmp::min)
+        },
+        ShapeExtent::FarthestCorner | ShapeExtent::Cover => {
+            get_distance_to_corner(size, center, ::std::cmp::max)
+        },
     };
     Size2D::new(radius, radius)
 }
 
 /// Determines the radius of an ellipse if it was not explictly provided.
 /// https://drafts.csswg.org/css-images-3/#typedef-size
-fn convert_ellipse_size_keyword(keyword: SizeKeyword,
+fn convert_ellipse_size_keyword(keyword: ShapeExtent,
                                 size: &Size2D<Au>,
                                 center: &Point2D<Au>) -> Size2D<Au> {
-    use style::values::computed::image::SizeKeyword::*;
     match keyword {
-        ClosestSide => get_distance_to_sides(size, center, ::std::cmp::min),
-        FarthestSide => get_distance_to_sides(size, center, ::std::cmp::max),
-        ClosestCorner => get_ellipse_radius(size, center, ::std::cmp::min),
-        FarthestCorner => get_ellipse_radius(size, center, ::std::cmp::max),
-        _ => {
-            // TODO(#16542)
-            println!("TODO: implement size keyword {:?} for ellipses", keyword);
-            Size2D::new(Au::new(0), Au::new(0))
-        }
+        ShapeExtent::ClosestSide | ShapeExtent::Contain => {
+            get_distance_to_sides(size, center, ::std::cmp::min)
+        },
+        ShapeExtent::FarthestSide => {
+            get_distance_to_sides(size, center, ::std::cmp::max)
+        },
+        ShapeExtent::ClosestCorner => {
+            get_ellipse_radius(size, center, ::std::cmp::min)
+        },
+        ShapeExtent::FarthestCorner | ShapeExtent::Cover => {
+            get_ellipse_radius(size, center, ::std::cmp::max)
+        },
     }
 }
 
@@ -810,9 +871,9 @@ impl FragmentDisplayListBuilding for Fragment {
         // http://www.w3.org/TR/CSS21/colors.html#background
         let background = style.get_background();
         for (i, background_image) in background.background_image.0.iter().enumerate().rev() {
-            match background_image.0 {
-                None => {}
-                Some(computed::Image::Gradient(ref gradient)) => {
+            match *background_image {
+                Either::First(_) => {}
+                Either::Second(Image::Gradient(ref gradient)) => {
                     self.build_display_list_for_background_gradient(state,
                                                                     display_list_section,
                                                                     &absolute_bounds,
@@ -821,7 +882,7 @@ impl FragmentDisplayListBuilding for Fragment {
                                                                     gradient,
                                                                     style);
                 }
-                Some(computed::Image::Url(ref image_url)) => {
+                Either::Second(Image::Url(ref image_url)) => {
                     if let Some(url) = image_url.url() {
                         self.build_display_list_for_background_image(state,
                                                                      style,
@@ -832,10 +893,10 @@ impl FragmentDisplayListBuilding for Fragment {
                                                                      i);
                     }
                 }
-                Some(computed::Image::ImageRect(_)) => {
+                Either::Second(Image::Rect(_)) => {
                     // TODO: Implement `-moz-image-rect`
                 }
-                Some(computed::Image::Element(_)) => {
+                Either::Second(Image::Element(_)) => {
                     // TODO: Implement `-moz-element`
                 }
             }
@@ -965,10 +1026,8 @@ impl FragmentDisplayListBuilding for Fragment {
             let horiz_position = *get_cyclic(&background.background_position_x.0, index);
             let vert_position = *get_cyclic(&background.background_position_y.0, index);
             // Use `background-position` to get the offset.
-            let horizontal_position = model::specified(horiz_position.0,
-                                                       bounds.size.width - image_size.width);
-            let vertical_position = model::specified(vert_position.0,
-                                                     bounds.size.height - image_size.height);
+            let horizontal_position = horiz_position.to_used_value(bounds.size.width - image_size.width);
+            let vertical_position = vert_position.to_used_value(bounds.size.height - image_size.height);
 
             // The anchor position for this background, based on both the background-attachment
             // and background-position properties.
@@ -1054,26 +1113,26 @@ impl FragmentDisplayListBuilding for Fragment {
     fn convert_linear_gradient(&self,
                                bounds: &Rect<Au>,
                                stops: &[GradientItem],
-                               angle_or_corner: &AngleOrCorner,
+                               direction: &LineDirection,
                                repeating: bool,
                                style: &ServoComputedValues)
                                -> display_list::Gradient {
-        let angle = match *angle_or_corner {
-            AngleOrCorner::Angle(angle) => angle.radians(),
-            AngleOrCorner::Corner(horizontal, vertical) => {
+        let angle = match *direction {
+            LineDirection::Angle(angle) => angle.radians(),
+            LineDirection::Corner(horizontal, vertical) => {
                 // This the angle for one of the diagonals of the box. Our angle
                 // will either be this one, this one + PI, or one of the other
                 // two perpendicular angles.
                 let atan = (bounds.size.height.to_f32_px() /
                             bounds.size.width.to_f32_px()).atan();
                 match (horizontal, vertical) {
-                    (HorizontalDirection::Right, VerticalDirection::Bottom)
+                    (X::Right, Y::Bottom)
                         => f32::consts::PI - atan,
-                    (HorizontalDirection::Left, VerticalDirection::Bottom)
+                    (X::Left, Y::Bottom)
                         => f32::consts::PI + atan,
-                    (HorizontalDirection::Right, VerticalDirection::Top)
+                    (X::Right, Y::Top)
                         => atan,
-                    (HorizontalDirection::Left, VerticalDirection::Top)
+                    (X::Left, Y::Top)
                         => -atan,
                 }
             }
@@ -1097,7 +1156,14 @@ impl FragmentDisplayListBuilding for Fragment {
         let length = Au::from_f32_px(
             (delta.x.to_f32_px() * 2.0).hypot(delta.y.to_f32_px() * 2.0));
 
-        let stops = convert_gradient_stops(stops, length, style);
+        let mut stops = convert_gradient_stops(stops, length, style);
+
+        // Only clamped gradients need to be fixed because in repeating gradients
+        // there is no "first" or "last" stop because they repeat infinitly in
+        // both directions, so the rendering is always correct.
+        if !repeating {
+            fix_gradient_stops(&mut stops);
+        }
 
         let center = Point2D::new(bounds.size.width / 2, bounds.size.height / 2);
 
@@ -1117,22 +1183,30 @@ impl FragmentDisplayListBuilding for Fragment {
                                repeating: bool,
                                style: &ServoComputedValues)
                                -> display_list::RadialGradient {
-        let center = Point2D::new(specified(center.horizontal.0, bounds.size.width),
-                                  specified(center.vertical.0, bounds.size.height));
+        let center = Point2D::new(center.horizontal.to_used_value(bounds.size.width),
+                                  center.vertical.to_used_value(bounds.size.height));
         let radius = match *shape {
-            EndingShape::Circle(LengthOrKeyword::Length(length))
-                => Size2D::new(length, length),
-            EndingShape::Circle(LengthOrKeyword::Keyword(word))
-                => convert_circle_size_keyword(word, &bounds.size, &center),
-            EndingShape::Ellipse(LengthOrPercentageOrKeyword::LengthOrPercentage(horizontal,
-                                                                                    vertical))
-                    => Size2D::new(specified(horizontal, bounds.size.width),
-                                specified(vertical, bounds.size.height)),
-            EndingShape::Ellipse(LengthOrPercentageOrKeyword::Keyword(word))
-                => convert_ellipse_size_keyword(word, &bounds.size, &center),
+            GenericEndingShape::Circle(Circle::Radius(length)) => {
+                Size2D::new(length, length)
+            },
+            GenericEndingShape::Circle(Circle::Extent(extent)) => {
+                convert_circle_size_keyword(extent, &bounds.size, &center)
+            },
+            GenericEndingShape::Ellipse(Ellipse::Radii(x, y)) => {
+                Size2D::new(x.to_used_value(bounds.size.width), y.to_used_value(bounds.size.height))
+            },
+            GenericEndingShape::Ellipse(Ellipse::Extent(extent)) => {
+                convert_ellipse_size_keyword(extent, &bounds.size, &center)
+            },
         };
-        let length = Au::from_f32_px(radius.width.to_f32_px().hypot(radius.height.to_f32_px()));
-        let stops = convert_gradient_stops(stops, length, style);
+
+        let mut stops = convert_gradient_stops(stops, radius.width, style);
+        // Repeating gradients have no last stops that can be ignored. So
+        // fixup is not necessary but may actually break the gradient.
+        if !repeating {
+            fix_gradient_stops(&mut stops);
+        }
+
         display_list::RadialGradient {
             center: center,
             radius: radius,
@@ -1165,7 +1239,7 @@ impl FragmentDisplayListBuilding for Fragment {
                                                   style.get_cursor(Cursor::Default),
                                                   display_list_section);
 
-        let display_item = match gradient.gradient_kind {
+        let display_item = match gradient.kind {
             GradientKind::Linear(ref angle_or_corner) => {
                 let gradient = self.convert_linear_gradient(&bounds,
                                                             &gradient.items[..],
@@ -1222,7 +1296,7 @@ impl FragmentDisplayListBuilding for Fragment {
                 spread_radius: box_shadow.spread_radius,
                 border_radius: model::specified_border_radius(style.get_border()
                                                                    .border_top_left_radius,
-                                                              absolute_bounds.size.width).width,
+                                                              absolute_bounds.size).width,
                 clip_mode: if box_shadow.inset {
                     BoxShadowClipMode::Inset
                 } else {
@@ -1286,8 +1360,8 @@ impl FragmentDisplayListBuilding for Fragment {
                                                   style.get_cursor(Cursor::Default),
                                                   display_list_section);
 
-        match border_style_struct.border_image_source.0 {
-            None => {
+        match border_style_struct.border_image_source {
+            Either::First(_) => {
                 state.add_display_item(DisplayItem::Border(box BorderDisplayItem {
                     base: base,
                     border_widths: border.to_physical(style.writing_mode),
@@ -1301,8 +1375,8 @@ impl FragmentDisplayListBuilding for Fragment {
                     }),
                 }));
             }
-            Some(computed::Image::Gradient(ref gradient)) => {
-                match gradient.gradient_kind {
+            Either::Second(Image::Gradient(ref gradient)) => {
+                match gradient.kind {
                     GradientKind::Linear(angle_or_corner) => {
                         let grad = self.convert_linear_gradient(&bounds,
                                                                 &gradient.items[..],
@@ -1321,18 +1395,34 @@ impl FragmentDisplayListBuilding for Fragment {
                             }),
                         }));
                     }
-                    GradientKind::Radial(_, _) => {
-                        // TODO(#16638): Handle border-image with radial gradient.
+                    GradientKind::Radial(ref shape, ref center) => {
+                        let grad = self.convert_radial_gradient(&bounds,
+                                                                &gradient.items[..],
+                                                                shape,
+                                                                center,
+                                                                gradient.repeating,
+                                                                style);
+                        state.add_display_item(DisplayItem::Border(box BorderDisplayItem {
+                            base: base,
+                            border_widths: border.to_physical(style.writing_mode),
+                            details: BorderDetails::RadialGradient(
+                                display_list::RadialGradientBorder {
+                                    gradient: grad,
+
+                                    // TODO(gw): Support border-image-outset
+                                    outset: SideOffsets2D::zero(),
+                                }),
+                        }));
                     }
                 }
             }
-            Some(computed::Image::ImageRect(..)) => {
+            Either::Second(Image::Rect(..)) => {
                 // TODO: Handle border-image with `-moz-image-rect`.
             }
-            Some(computed::Image::Element(..)) => {
+            Either::Second(Image::Element(..)) => {
                 // TODO: Handle border-image with `-moz-element`.
             }
-            Some(computed::Image::Url(ref image_url)) => {
+            Either::Second(Image::Url(ref image_url)) => {
                 if let Some(url) = image_url.url() {
                     let webrender_image = state.layout_context
                                                .get_webrender_image_for_url(self.node,
@@ -1737,7 +1827,7 @@ impl FragmentDisplayListBuilding for Fragment {
 
                     let size = Size2D::new(item.bounds().size.width.to_f32_px(),
                                            item.bounds().size.height.to_f32_px());
-                    state.iframe_sizes.push((fragment_info.pipeline_id, TypedSize2D::from_untyped(&size)));
+                    state.iframe_sizes.push((fragment_info.browsing_context_id, TypedSize2D::from_untyped(&size)));
 
                     state.add_display_item(item);
                 }
@@ -1861,8 +1951,9 @@ impl FragmentDisplayListBuilding for Fragment {
                              &overflow,
                              self.effective_z_index(),
                              filters,
-                             self.style().get_effects().mix_blend_mode,
+                             self.style().get_effects().mix_blend_mode.to_mix_blend_mode(),
                              self.transform_matrix(&border_box),
+                             self.style().get_used_transform_style().to_transform_style(),
                              self.perspective_matrix(&border_box),
                              scroll_policy,
                              parent_scroll_id)
@@ -2067,6 +2158,7 @@ pub struct PreservedDisplayListState {
     containing_block_scroll_root_id: ClipId,
     clips_pushed: usize,
     containing_block_clips_pushed: usize,
+    transform_style: TransformStyle,
 }
 
 impl PreservedDisplayListState {
@@ -2077,6 +2169,7 @@ impl PreservedDisplayListState {
             containing_block_scroll_root_id: state.containing_block_scroll_root_id,
             clips_pushed: 0,
             containing_block_clips_pushed: 0,
+            transform_style: state.current_transform_style,
         }
     }
 
@@ -2097,6 +2190,8 @@ impl PreservedDisplayListState {
         let truncate_length = state.containing_block_clip_stack.len() -
                               self.containing_block_clips_pushed;
         state.containing_block_clip_stack.truncate(truncate_length);
+
+        state.current_transform_style = self.transform_style;
     }
 
     fn push_clip(&mut self,
@@ -2150,6 +2245,14 @@ impl BlockFlowDisplayListBuilding for BlockFlow {
             }
 
             match transform {
+                Some(transform) if transform.m13 != 0.0 ||  transform.m23 != 0.0 => {
+                    // We cannot properly handle perspective transforms, because there may be a
+                    // situation where an element is transformed from outside the clip into the
+                    // clip region. Here we don't have enough information to detect when that is
+                    // happening. For the moment we just punt on trying to optimize the display
+                    // list for those cases.
+                    max_rect()
+                }
                 Some(transform) => {
                     let clip = Rect::new(Point2D::new((clip.origin.x - origin.x).to_f32_px(),
                                                       (clip.origin.y - origin.y).to_f32_px()),
@@ -2304,7 +2407,7 @@ impl BlockFlowDisplayListBuilding for BlockFlow {
         let mut clip = ClippingRegion::from_rect(&clip_rect);
 
         let border_radii = build_border_radius_for_inner_rect(&border_box,
-                                                              self.fragment.style.clone());
+                                                              &self.fragment.style);
         if !border_radii.is_square() {
             clip.intersect_with_rounded_rect(&clip_rect, &border_radii)
         }
@@ -2326,7 +2429,7 @@ impl BlockFlowDisplayListBuilding for BlockFlow {
 
         let clip_rect = Rect::new(Point2D::zero(), content_box.size);
         let mut clip = ClippingRegion::from_rect(&clip_rect);
-        let radii = build_border_radius_for_inner_rect(&border_box, self.fragment.style.clone());
+        let radii = build_border_radius_for_inner_rect(&border_box, &self.fragment.style);
         if !radii.is_square() {
             clip.intersect_with_rounded_rect(&clip_rect, &radii)
         }
@@ -2528,14 +2631,14 @@ impl InlineFlowDisplayListBuilding for InlineFlow {
                     fragment.stacking_context_id = fragment.stacking_context_id();
 
                     let current_stacking_context_id = state.current_stacking_context_id;
-                    let current_scroll_root_id = state.current_scroll_root_id;
+                    let stacking_context = fragment.create_stacking_context(fragment.stacking_context_id,
+                                                                            &self.base,
+                                                                            ScrollPolicy::Scrollable,
+                                                                            StackingContextCreationMode::Normal,
+                                                                            state.current_scroll_root_id);
+
                     state.add_stacking_context(current_stacking_context_id,
-                                               fragment.create_stacking_context(
-                                                   fragment.stacking_context_id,
-                                                   &self.base,
-                                                   ScrollPolicy::Scrollable,
-                                                   StackingContextCreationMode::Normal,
-                                                   current_scroll_root_id));
+                                               stacking_context);
                 }
                 _ => fragment.stacking_context_id = state.current_stacking_context_id,
             }
@@ -2700,14 +2803,13 @@ struct StopRun {
     stop_count: usize,
 }
 
-fn position_to_offset(position: LengthOrPercentage, Au(total_length): Au) -> f32 {
+fn position_to_offset(position: LengthOrPercentage, total_length: Au) -> f32 {
     match position {
-        LengthOrPercentage::Length(Au(length)) => {
-            (1.0f32).min(length as f32 / total_length as f32)
-        }
+        LengthOrPercentage::Length(Au(length)) => length as f32 / total_length.0 as f32,
         LengthOrPercentage::Percentage(percentage) => percentage as f32,
-        LengthOrPercentage::Calc(calc) =>
-            (1.0f32).min(calc.percentage() + (calc.length().0 as f32) / (total_length as f32)),
+        LengthOrPercentage::Calc(calc) => {
+            calc.to_used_value(Some(total_length)).unwrap().0 as f32 / total_length.0 as f32
+        },
     }
 }
 

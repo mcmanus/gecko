@@ -113,6 +113,8 @@ using namespace js;
 using namespace js::cli;
 using namespace js::shell;
 
+using js::shell::RCFile;
+
 using mozilla::ArrayLength;
 using mozilla::Atomic;
 using mozilla::MakeScopeExit;
@@ -152,203 +154,95 @@ static const TimeDuration MAX_TIMEOUT_INTERVAL = TimeDuration::FromSeconds(1800.
 // SharedArrayBuffer and Atomics are enabled by default (tracking Firefox).
 #define SHARED_MEMORY_DEFAULT 1
 
-// Some platform hooks must be implemented for single-step profiling.
-#if defined(JS_SIMULATOR_ARM) || defined(JS_SIMULATOR_MIPS64)
-# define SINGLESTEP_PROFILING
-#endif
-
-using JobQueue = GCVector<JSObject*, 0, SystemAllocPolicy>;
-
-struct ShellAsyncTasks
+bool
+OffThreadState::startIfIdle(JSContext* cx, ScriptKind kind, ScopedJSFreePtr<char16_t>& newSource)
 {
-    explicit ShellAsyncTasks(JSContext* cx)
-      : outstanding(0),
-        finished(cx)
-    {}
+    AutoLockMonitor alm(monitor);
+    if (state != IDLE)
+        return false;
 
-    size_t outstanding;
-    Vector<JS::AsyncTask*> finished;
-};
+    MOZ_ASSERT(!token);
 
-enum class ScriptKind
+    source = newSource.forget();
+
+    scriptKind = kind;
+    state = COMPILING;
+    return true;
+}
+
+bool
+OffThreadState::startIfIdle(JSContext* cx, ScriptKind kind, JS::TranscodeBuffer&& newXdr)
 {
-    Script,
-    DecodeScript,
-    Module
-};
+    AutoLockMonitor alm(monitor);
+    if (state != IDLE)
+        return false;
 
-class OffThreadState {
-    enum State {
-        IDLE,           /* ready to work; no token, no source */
-        COMPILING,      /* working; no token, have source */
-        DONE            /* compilation done: have token and source */
-    };
+    MOZ_ASSERT(!token);
 
-  public:
-    OffThreadState()
-      : monitor(mutexid::ShellOffThreadState),
-        state(IDLE),
-        token(),
-        source(nullptr)
-    { }
+    xdr = mozilla::Move(newXdr);
 
-    bool startIfIdle(JSContext* cx, ScriptKind kind,
-                     ScopedJSFreePtr<char16_t>& newSource)
-    {
-        AutoLockMonitor alm(monitor);
-        if (state != IDLE)
-            return false;
+    scriptKind = kind;
+    state = COMPILING;
+    return true;
+}
 
-        MOZ_ASSERT(!token);
-
-        source = newSource.forget();
-
-        scriptKind = kind;
-        state = COMPILING;
-        return true;
-    }
-
-    bool startIfIdle(JSContext* cx, ScriptKind kind,
-                     JS::TranscodeBuffer&& newXdr)
-    {
-        AutoLockMonitor alm(monitor);
-        if (state != IDLE)
-            return false;
-
-        MOZ_ASSERT(!token);
-
-        xdr = mozilla::Move(newXdr);
-
-        scriptKind = kind;
-        state = COMPILING;
-        return true;
-    }
-
-    void abandon(JSContext* cx) {
-        AutoLockMonitor alm(monitor);
-        MOZ_ASSERT(state == COMPILING);
-        MOZ_ASSERT(!token);
-        MOZ_ASSERT(source || !xdr.empty());
-
-        if (source)
-            js_free(source);
-        source = nullptr;
-        xdr.clearAndFree();
-
-        state = IDLE;
-    }
-
-    void markDone(void* newToken) {
-        AutoLockMonitor alm(monitor);
-        MOZ_ASSERT(state == COMPILING);
-        MOZ_ASSERT(!token);
-        MOZ_ASSERT(source || !xdr.empty());
-        MOZ_ASSERT(newToken);
-
-        token = newToken;
-        state = DONE;
-        alm.notify();
-    }
-
-    void* waitUntilDone(JSContext* cx, ScriptKind kind) {
-        AutoLockMonitor alm(monitor);
-        if (state == IDLE || scriptKind != kind)
-            return nullptr;
-
-        if (state == COMPILING) {
-            while (state != DONE)
-                alm.wait();
-        }
-
-        MOZ_ASSERT(source || !xdr.empty());
-        if (source)
-            js_free(source);
-        source = nullptr;
-        xdr.clearAndFree();
-
-        MOZ_ASSERT(token);
-        void* holdToken = token;
-        token = nullptr;
-        state = IDLE;
-        return holdToken;
-    }
-
-    JS::TranscodeBuffer& xdrBuffer() { return xdr; }
-
-  private:
-    Monitor monitor;
-    ScriptKind scriptKind;
-    State state;
-    void* token;
-    char16_t* source;
-    JS::TranscodeBuffer xdr;
-};
-
-#ifdef SINGLESTEP_PROFILING
-typedef Vector<char16_t, 0, SystemAllocPolicy> StackChars;
-#endif
-
-class NonshrinkingGCObjectVector : public GCVector<JSObject*, 0, SystemAllocPolicy>
+void
+OffThreadState::abandon(JSContext* cx)
 {
-  public:
-    void sweep() {
-        for (uint32_t i = 0; i < this->length(); i++) {
-            if (JS::GCPolicy<JSObject*>::needsSweep(&(*this)[i]))
-                (*this)[i] = nullptr;
-        }
-    }
-};
+    AutoLockMonitor alm(monitor);
+    MOZ_ASSERT(state == COMPILING);
+    MOZ_ASSERT(!token);
+    MOZ_ASSERT(source || !xdr.empty());
 
-using MarkBitObservers = JS::WeakCache<NonshrinkingGCObjectVector>;
+    if (source)
+        js_free(source);
+    source = nullptr;
+    xdr.clearAndFree();
+
+    state = IDLE;
+}
+
+void
+OffThreadState::markDone(void* newToken)
+{
+    AutoLockMonitor alm(monitor);
+    MOZ_ASSERT(state == COMPILING);
+    MOZ_ASSERT(!token);
+    MOZ_ASSERT(source || !xdr.empty());
+    MOZ_ASSERT(newToken);
+
+    token = newToken;
+    state = DONE;
+    alm.notify();
+}
+
+void*
+OffThreadState::waitUntilDone(JSContext* cx, ScriptKind kind)
+{
+    AutoLockMonitor alm(monitor);
+    if (state == IDLE || scriptKind != kind)
+        return nullptr;
+
+    if (state == COMPILING) {
+        while (state != DONE)
+            alm.wait();
+    }
+
+    MOZ_ASSERT(source || !xdr.empty());
+    if (source)
+        js_free(source);
+    source = nullptr;
+    xdr.clearAndFree();
+
+    MOZ_ASSERT(token);
+    void* holdToken = token;
+    token = nullptr;
+    state = IDLE;
+    return holdToken;
+}
 
 struct ShellCompartmentPrivate {
     JS::Heap<JSObject*> grayRoot;
-};
-
-// Per-context shell state.
-struct ShellContext
-{
-    explicit ShellContext(JSContext* cx);
-    bool isWorker;
-    double timeoutInterval;
-    double startTime;
-    Atomic<bool> serviceInterrupt;
-    Atomic<bool> haveInterruptFunc;
-    JS::PersistentRootedValue interruptFunc;
-    bool lastWarningEnabled;
-    JS::PersistentRootedValue lastWarning;
-    JS::PersistentRootedValue promiseRejectionTrackerCallback;
-    JS::PersistentRooted<JobQueue> jobQueue;
-    ExclusiveData<ShellAsyncTasks> asyncTasks;
-    bool drainingJobQueue;
-#ifdef SINGLESTEP_PROFILING
-    Vector<StackChars, 0, SystemAllocPolicy> stacks;
-#endif
-
-    /*
-     * Watchdog thread state.
-     */
-    Mutex watchdogLock;
-    ConditionVariable watchdogWakeup;
-    Maybe<Thread> watchdogThread;
-    Maybe<TimeStamp> watchdogTimeout;
-
-    ConditionVariable sleepWakeup;
-
-    int exitCode;
-    bool quitting;
-
-    UniqueChars readLineBuf;
-    size_t readLineBufPos;
-
-    static const uint32_t GeckoProfilingMaxStackSize = 1000;
-    ProfileEntry geckoProfilingStack[GeckoProfilingMaxStackSize];
-    mozilla::Atomic<uint32_t> geckoProfilingStackSize;
-
-    OffThreadState offThreadState;
-
-    UniqueChars moduleLoadPath;
-    UniquePtr<MarkBitObservers> markObservers;
 };
 
 struct MOZ_STACK_CLASS EnvironmentPreparer : public js::ScriptEnvironmentPreparer {
@@ -488,17 +382,17 @@ ShellContext::ShellContext(JSContext* cx)
     lastWarningEnabled(false),
     lastWarning(cx, NullValue()),
     promiseRejectionTrackerCallback(cx, NullValue()),
-    asyncTasks(mutexid::ShellAsyncTasks, cx),
-    drainingJobQueue(false),
     watchdogLock(mutexid::ShellContextWatchdog),
     exitCode(0),
     quitting(false),
     readLineBufPos(0),
+    errFilePtr(nullptr),
+    outFilePtr(nullptr),
     geckoProfilingStackSize(0)
 {}
 
-static ShellContext*
-GetShellContext(JSContext* cx)
+ShellContext*
+js::shell::GetShellContext(JSContext* cx)
 {
     ShellContext* sc = static_cast<ShellContext*>(JS_GetContextPrivate(cx));
     MOZ_ASSERT(sc);
@@ -816,115 +710,13 @@ RunModule(JSContext* cx, const char* filename, FILE* file, bool compileOnly)
     return JS_CallFunction(cx, loaderObj, importFun, args, &value);
 }
 
-static JSObject*
-ShellGetIncumbentGlobalCallback(JSContext* cx)
-{
-    return JS::CurrentGlobalOrNull(cx);
-}
-
-static bool
-ShellEnqueuePromiseJobCallback(JSContext* cx, JS::HandleObject job, JS::HandleObject allocationSite,
-                               JS::HandleObject incumbentGlobal, void* data)
-{
-    ShellContext* sc = GetShellContext(cx);
-    MOZ_ASSERT(job);
-    return sc->jobQueue.append(job);
-}
-
-static bool
-ShellStartAsyncTaskCallback(JSContext* cx, JS::AsyncTask* task)
-{
-    ShellContext* sc = GetShellContext(cx);
-    task->user = sc;
-
-    ExclusiveData<ShellAsyncTasks>::Guard asyncTasks = sc->asyncTasks.lock();
-    asyncTasks->outstanding++;
-    return true;
-}
-
-static bool
-ShellFinishAsyncTaskCallback(JS::AsyncTask* task)
-{
-    ShellContext* sc = (ShellContext*)task->user;
-
-    ExclusiveData<ShellAsyncTasks>::Guard asyncTasks = sc->asyncTasks.lock();
-    MOZ_ASSERT(asyncTasks->outstanding > 0);
-    asyncTasks->outstanding--;
-    return asyncTasks->finished.append(task);
-}
-
-static void
-DrainJobQueue(JSContext* cx)
-{
-    ShellContext* sc = GetShellContext(cx);
-    if (sc->quitting || sc->drainingJobQueue)
-        return;
-
-    while (true) {
-        // Wait for any outstanding async tasks to finish so that the
-        // finishedAsyncTasks list is fixed.
-        while (true) {
-            AutoLockHelperThreadState lock;
-            if (!sc->asyncTasks.lock()->outstanding)
-                break;
-            HelperThreadState().wait(lock, GlobalHelperThreadState::CONSUMER);
-        }
-
-        // Lock the whole time while copying back the asyncTasks finished queue
-        // so that any new tasks created during finish() cannot racily join the
-        // job queue.  Call finish() only thereafter, to avoid a circular mutex
-        // dependency (see also bug 1297901).
-        Vector<JS::AsyncTask*> finished(cx);
-        {
-            ExclusiveData<ShellAsyncTasks>::Guard asyncTasks = sc->asyncTasks.lock();
-            finished = Move(asyncTasks->finished);
-            asyncTasks->finished.clear();
-        }
-
-        for (JS::AsyncTask* task : finished)
-            task->finish(cx);
-
-        // It doesn't make sense for job queue draining to be reentrant. At the
-        // same time we don't want to assert against it, because that'd make
-        // drainJobQueue unsafe for fuzzers. We do want fuzzers to test this,
-        // so we simply ignore nested calls of drainJobQueue.
-        sc->drainingJobQueue = true;
-
-        RootedObject job(cx);
-        JS::HandleValueArray args(JS::HandleValueArray::empty());
-        RootedValue rval(cx);
-
-        // Execute jobs in a loop until we've reached the end of the queue.
-        // Since executing a job can trigger enqueuing of additional jobs,
-        // it's crucial to re-check the queue length during each iteration.
-        for (size_t i = 0; i < sc->jobQueue.length(); i++) {
-            job = sc->jobQueue[i];
-            AutoCompartment ac(cx, job);
-            {
-                AutoReportException are(cx);
-                JS::Call(cx, UndefinedHandleValue, job, args, &rval);
-            }
-            sc->jobQueue[i].set(nullptr);
-        }
-        sc->jobQueue.clear();
-        sc->drainingJobQueue = false;
-
-        // It's possible a job added an async task, and it's also possible
-        // that task has already finished.
-        {
-            ExclusiveData<ShellAsyncTasks>::Guard asyncTasks = sc->asyncTasks.lock();
-            if (asyncTasks->outstanding == 0 && asyncTasks->finished.length() == 0)
-                break;
-        }
-    }
-}
-
 static bool
 DrainJobQueue(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    DrainJobQueue(cx);
+    MOZ_ASSERT(!GetShellContext(cx)->quitting);
+    js::RunJobs(cx);
 
     args.rval().setUndefined();
     return true;
@@ -1107,7 +899,8 @@ ReadEvalPrintLoop(JSContext* cx, FILE* in, bool compileOnly)
                   stderr);
         }
 
-        DrainJobQueue(cx);
+        if (!GetShellContext(cx)->quitting)
+            js::RunJobs(cx);
 
     } while (!hitEOF && !sc->quitting);
 
@@ -1508,7 +1301,7 @@ ParseCompileOptions(JSContext* cx, CompileOptions& options, HandleObject opts,
         int32_t c;
         if (!ToInt32(cx, v, &c))
             return false;
-        options.setColumn(c);
+        options.setColumn(c, c);
     }
 
     if (!JS_GetProperty(cx, opts, "sourceIsLazy", &v))
@@ -2287,6 +2080,7 @@ Quit(JSContext* cx, unsigned argc, Value* vp)
         return false;
     }
 
+    js::StopDrainingJobQueue(cx);
     sc->exitCode = code;
     sc->quitting = true;
     return false;
@@ -3586,9 +3380,7 @@ WorkerMain(void* arg)
     if (input->parentRuntime)
         sc->isWorker = true;
     JS_SetContextPrivate(cx, sc.get());
-    JS_SetGrayGCRootsTracer(cx, TraceGrayRoots, nullptr);
     SetWorkerContextOptions(cx);
-    sc->jobQueue.init(cx, JobQueue(SystemAllocPolicy()));
 
     Maybe<EnvironmentPreparer> environmentPreparer;
     if (input->parentRuntime) {
@@ -3597,12 +3389,10 @@ WorkerMain(void* arg)
         js::SetPreserveWrapperCallback(cx, DummyPreserveWrapperCallback);
         JS_InitDestroyPrincipalsCallback(cx, ShellPrincipals::destroy);
 
+        js::UseInternalJobQueues(cx);
+
         if (!JS::InitSelfHostedCode(cx))
             return;
-
-        JS::SetEnqueuePromiseJobCallback(cx, ShellEnqueuePromiseJobCallback);
-        JS::SetGetIncumbentGlobalCallback(cx, ShellGetIncumbentGlobalCallback);
-        JS::SetAsyncTaskCallbacks(cx, ShellStartAsyncTaskCallback, ShellFinishAsyncTaskCallback);
 
         environmentPreparer.emplace(cx);
     } else {
@@ -3634,13 +3424,6 @@ WorkerMain(void* arg)
         RootedValue result(cx);
         JS_ExecuteScript(cx, script, &result);
     } while (0);
-
-    if (input->parentRuntime) {
-        JS::SetGetIncumbentGlobalCallback(cx, nullptr);
-        JS::SetEnqueuePromiseJobCallback(cx, nullptr);
-    }
-
-    sc->jobQueue.reset();
 
     KillWatchdog(cx);
     JS_SetGrayGCRootsTracer(cx, nullptr, nullptr);
@@ -8290,7 +8073,8 @@ Shell(JSContext* cx, OptionParser* op, char** envp)
      * tasks before the main thread JSRuntime is torn down. Drain after
      * uncaught exceptions have been reported since draining runs callbacks.
      */
-    DrainJobQueue(cx);
+    if (!GetShellContext(cx)->quitting)
+        js::RunJobs(cx);
 
     if (sc->exitCode)
         result = sc->exitCode;
@@ -8647,13 +8431,10 @@ main(int argc, char** argv, char** envp)
 
     JS::dbg::SetDebuggerMallocSizeOf(cx, moz_malloc_size_of);
 
+    js::UseInternalJobQueues(cx);
+
     if (!JS::InitSelfHostedCode(cx))
         return 1;
-
-    sc->jobQueue.init(cx, JobQueue(SystemAllocPolicy()));
-    JS::SetEnqueuePromiseJobCallback(cx, ShellEnqueuePromiseJobCallback);
-    JS::SetGetIncumbentGlobalCallback(cx, ShellGetIncumbentGlobalCallback);
-    JS::SetAsyncTaskCallbacks(cx, ShellStartAsyncTaskCallback, ShellFinishAsyncTaskCallback);
 
     EnvironmentPreparer environmentPreparer(cx);
 
@@ -8686,13 +8467,10 @@ main(int argc, char** argv, char** envp)
         printf("OOM max count: %" PRIu64 "\n", js::oom::counter);
 #endif
 
-    JS::SetGetIncumbentGlobalCallback(cx, nullptr);
-    JS::SetEnqueuePromiseJobCallback(cx, nullptr);
     JS_SetGrayGCRootsTracer(cx, nullptr, nullptr);
 
     // Must clear out some of sc's pointer containers before JS_DestroyContext.
     sc->markObservers.reset();
-    sc->jobQueue.reset();
 
     KillWatchdog(cx);
 

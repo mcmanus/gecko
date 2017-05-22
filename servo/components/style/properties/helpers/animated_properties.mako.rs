@@ -17,6 +17,7 @@ use properties::{CSSWideKeyword, PropertyDeclaration};
 use properties::longhands;
 use properties::longhands::background_size::computed_value::T as BackgroundSizeList;
 use properties::longhands::font_weight::computed_value::T as FontWeight;
+use properties::longhands::font_stretch::computed_value::T as FontStretch;
 use properties::longhands::line_height::computed_value::T as LineHeight;
 use properties::longhands::text_shadow::computed_value::T as TextShadowList;
 use properties::longhands::text_shadow::computed_value::TextShadow;
@@ -41,7 +42,6 @@ use values::computed::{Angle, LengthOrPercentageOrAuto, LengthOrPercentageOrNone
 use values::computed::{BorderRadiusSize, ClipRect};
 use values::computed::{CalcLengthOrPercentage, Context, LengthOrPercentage};
 use values::computed::{MaxLength, MinLength};
-use values::computed::position::{HorizontalPosition, VerticalPosition};
 use values::computed::ToComputedValue;
 use values::generics::position as generic_position;
 
@@ -581,28 +581,77 @@ impl AnimationValue {
     }
 }
 
-impl Interpolate for AnimationValue {
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+impl Animatable for AnimationValue {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64)
+        -> Result<Self, ()> {
         match (self, other) {
             % for prop in data.longhands:
                 % if prop.animatable:
                     (&AnimationValue::${prop.camel_case}(ref from),
                      &AnimationValue::${prop.camel_case}(ref to)) => {
-                        // https://w3c.github.io/web-animations/#discrete-animation-type
                         % if prop.animation_value_type == "discrete":
-                            if progress < 0.5 {
+                            if self_portion > other_portion {
                                 Ok(AnimationValue::${prop.camel_case}(*from))
                             } else {
                                 Ok(AnimationValue::${prop.camel_case}(*to))
                             }
                         % else:
-                            from.interpolate(to, progress).map(AnimationValue::${prop.camel_case})
+                            from.add_weighted(to, self_portion, other_portion)
+                                .map(AnimationValue::${prop.camel_case})
                         % endif
                     }
                 % endif
             % endfor
             _ => {
-                panic!("Expected interpolation of computed values of the same \
+                panic!("Expected weighted addition of computed values of the same \
+                        property, got: {:?}, {:?}", self, other);
+            }
+        }
+    }
+
+    fn add(&self, other: &Self) -> Result<Self, ()> {
+        match (self, other) {
+            % for prop in data.longhands:
+                % if prop.animatable:
+                    % if prop.animation_value_type == "discrete":
+                        (&AnimationValue::${prop.camel_case}(_),
+                         &AnimationValue::${prop.camel_case}(_)) => {
+                            Err(())
+                        }
+                    % else:
+                        (&AnimationValue::${prop.camel_case}(ref from),
+                         &AnimationValue::${prop.camel_case}(ref to)) => {
+                            from.add(to).map(AnimationValue::${prop.camel_case})
+                        }
+                    % endif
+                % endif
+            % endfor
+            _ => {
+                panic!("Expected weighted addition of computed values of the same \
+                        property, got: {:?}, {:?}", self, other);
+            }
+        }
+    }
+
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (self, other) {
+            % for prop in data.longhands:
+                % if prop.animatable:
+                    % if prop.animation_value_type != "discrete":
+                        (&AnimationValue::${prop.camel_case}(ref from),
+                         &AnimationValue::${prop.camel_case}(ref to)) => {
+                            from.compute_distance(to)
+                        },
+                    % else:
+                        (&AnimationValue::${prop.camel_case}(ref _from),
+                         &AnimationValue::${prop.camel_case}(ref _to)) => {
+                            Err(())
+                        },
+                    % endif
+                % endif
+            % endfor
+            _ => {
+                panic!("Expected compute_distance of computed values of the same \
                         property, got: {:?}, {:?}", self, other);
             }
         }
@@ -610,254 +659,482 @@ impl Interpolate for AnimationValue {
 }
 
 
-/// A trait used to implement [interpolation][interpolated-types].
-///
-/// [interpolated-types]: https://drafts.csswg.org/css-transitions/#interpolated-types
-pub trait Interpolate: Sized {
-    /// Interpolate a value with another for a given property.
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()>;
+/// A trait used to implement various procedures used during animation.
+pub trait Animatable: Sized {
+    /// Performs a weighted sum of this value and |other|. This is used for
+    /// interpolation and addition of animation values.
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64)
+        -> Result<Self, ()>;
+
+    /// [Interpolates][interpolation] a value with another for a given property.
+    ///
+    /// [interpolation]: https://w3c.github.io/web-animations/#animation-interpolation
+    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+        self.add_weighted(other, 1.0 - progress, progress)
+    }
+
+    /// Returns the [sum][animation-addition] of this value and |other|.
+    ///
+    /// [animation-addition]: https://w3c.github.io/web-animations/#animation-addition
+    fn add(&self, other: &Self) -> Result<Self, ()> {
+        self.add_weighted(other, 1.0, 1.0)
+    }
+
+    /// Compute distance between a value and another for a given property.
+    fn compute_distance(&self, _other: &Self) -> Result<f64, ()>  { Err(()) }
+
+    /// In order to compute the Euclidean distance of a list or property value with multiple
+    /// components, we need to compute squared distance for each element, so the vector can sum it
+    /// and then get its squared root as the distance.
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.compute_distance(other).map(|d| d * d)
+    }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-repeatable-list
-pub trait RepeatableListInterpolate: Interpolate {}
+pub trait RepeatableListAnimatable: Animatable {}
 
-impl<T: RepeatableListInterpolate> Interpolate for SmallVec<[T; 1]> {
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+impl RepeatableListAnimatable for LengthOrPercentage {}
+impl RepeatableListAnimatable for Either<f32, LengthOrPercentage> {}
+
+impl<T: RepeatableListAnimatable> Animatable for SmallVec<[T; 1]> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64)
+        -> Result<Self, ()> {
         use num_integer::lcm;
         let len = lcm(self.len(), other.len());
         self.iter().cycle().zip(other.iter().cycle()).take(len).map(|(me, you)| {
-            me.interpolate(you, progress)
+            me.add_weighted(you, self_portion, other_portion)
         }).collect()
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.compute_squared_distance(other).map(|sd| sd.sqrt())
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        use num_integer::lcm;
+        let len = lcm(self.len(), other.len());
+        self.iter().cycle().zip(other.iter().cycle()).take(len).map(|(me, you)| {
+            me.compute_squared_distance(you)
+        }).collect::<Result<Vec<_>, _>>().map(|d| d.iter().sum())
     }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-number
-impl Interpolate for Au {
+impl Animatable for Au {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
-        Ok(Au((self.0 as f64 + (other.0 as f64 - self.0 as f64) * progress).round() as i32))
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        Ok(Au((self.0 as f64 * self_portion + other.0 as f64 * other_portion).round() as i32))
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.0.compute_distance(&other.0)
     }
 }
 
-impl <T> Interpolate for Option<T>
-    where T: Interpolate,
+impl <T> Animatable for Option<T>
+    where T: Animatable,
 {
     #[inline]
-    fn interpolate(&self, other: &Option<T>, progress: f64) -> Result<Option<T>, ()> {
+    fn add_weighted(&self, other: &Option<T>, self_portion: f64, other_portion: f64) -> Result<Option<T>, ()> {
         match (self, other) {
             (&Some(ref this), &Some(ref other)) => {
-                Ok(this.interpolate(other, progress).ok())
+                Ok(this.add_weighted(other, self_portion, other_portion).ok())
             }
+            _ => Err(()),
+        }
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (self, other) {
+            (&Some(ref this), &Some(ref other)) => {
+                this.compute_distance(other)
+            },
+            _ => Err(()),
+        }
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (self, other) {
+            (&Some(ref this), &Some(ref other)) => {
+                this.compute_squared_distance(other)
+            },
             _ => Err(()),
         }
     }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-number
-impl Interpolate for f32 {
+impl Animatable for f32 {
     #[inline]
-    fn interpolate(&self, other: &f32, progress: f64) -> Result<Self, ()> {
-        Ok(((*self as f64) + ((*other as f64) - (*self as f64)) * progress) as f32)
+    fn add_weighted(&self, other: &f32, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        Ok((*self as f64 * self_portion + *other as f64 * other_portion) as f32)
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        Ok((*self - *other).abs() as f64)
     }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-number
-impl Interpolate for f64 {
+impl Animatable for f64 {
     #[inline]
-    fn interpolate(&self, other: &f64, progress: f64) -> Result<Self, ()> {
-        Ok(*self + (*other - *self) * progress)
+    fn add_weighted(&self, other: &f64, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        Ok(*self * self_portion + *other * other_portion)
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        Ok((*self - *other).abs())
     }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-integer
-impl Interpolate for i32 {
+impl Animatable for i32 {
     #[inline]
-    fn interpolate(&self, other: &i32, progress: f64) -> Result<Self, ()> {
-        let a = *self as f64;
-        let b = *other as f64;
-        Ok((a + (b - a) * progress).round() as i32)
+    fn add_weighted(&self, other: &i32, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        Ok((*self as f64 * self_portion + *other as f64 * other_portion).round() as i32)
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        Ok((*self - *other).abs() as f64)
     }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-number
-impl Interpolate for Angle {
+impl Animatable for Angle {
     #[inline]
-    fn interpolate(&self, other: &Angle, progress: f64) -> Result<Self, ()> {
-        self.radians().interpolate(&other.radians(), progress).map(Angle::from_radians)
+    fn add_weighted(&self, other: &Angle, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        self.radians()
+            .add_weighted(&other.radians(), self_portion, other_portion)
+            .map(Angle::from_radians)
     }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-visibility
-impl Interpolate for Visibility {
+impl Animatable for Visibility {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         match (*self, *other) {
-            (Visibility::visible, _) | (_, Visibility::visible) => {
-                Ok(if progress >= 0.0 && progress <= 1.0 {
-                    Visibility::visible
-                } else if progress < 0.0 {
-                    *self
-                } else {
-                    *other
-                })
-            }
+            (Visibility::visible, _) => {
+                Ok(if self_portion > 0.0 { *self } else { *other })
+            },
+            (_, Visibility::visible) => {
+                Ok(if other_portion > 0.0 { *other } else { *self })
+            },
             _ => Err(()),
+        }
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        if *self == *other {
+            Ok(0.0)
+        } else {
+            Ok(1.0)
         }
     }
 }
 
-impl<T: Interpolate + Copy> Interpolate for Size2D<T> {
+impl<T: Animatable + Copy> Animatable for Size2D<T> {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
-        let width = try!(self.width.interpolate(&other.width, progress));
-        let height = try!(self.height.interpolate(&other.height, progress));
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        let width = try!(self.width.add_weighted(&other.width, self_portion, other_portion));
+        let height = try!(self.height.add_weighted(&other.height, self_portion, other_portion));
 
         Ok(Size2D::new(width, height))
     }
 }
 
-impl<T: Interpolate + Copy> Interpolate for Point2D<T> {
+impl<T: Animatable + Copy> Animatable for Point2D<T> {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
-        let x = try!(self.x.interpolate(&other.x, progress));
-        let y = try!(self.y.interpolate(&other.y, progress));
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        let x = try!(self.x.add_weighted(&other.x, self_portion, other_portion));
+        let y = try!(self.y.add_weighted(&other.y, self_portion, other_portion));
 
         Ok(Point2D::new(x, y))
     }
 }
 
-impl Interpolate for BorderRadiusSize {
+impl Animatable for BorderRadiusSize {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
-        self.0.interpolate(&other.0, progress).map(generics::BorderRadiusSize)
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        self.0.add_weighted(&other.0, self_portion, other_portion).map(generics::BorderRadiusSize)
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.compute_squared_distance(other).map(|sd| sd.sqrt())
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        Ok(try!(self.0.width.compute_squared_distance(&other.0.width)) +
+           try!(self.0.height.compute_squared_distance(&other.0.height)))
     }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-length
-impl Interpolate for VerticalAlign {
+impl Animatable for VerticalAlign {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         match (*self, *other) {
             (VerticalAlign::LengthOrPercentage(LengthOrPercentage::Length(ref this)),
              VerticalAlign::LengthOrPercentage(LengthOrPercentage::Length(ref other))) => {
-                this.interpolate(other, progress).map(|value| {
+                this.add_weighted(other, self_portion, other_portion).map(|value| {
                     VerticalAlign::LengthOrPercentage(LengthOrPercentage::Length(value))
                 })
             }
             _ => Err(()),
         }
     }
-}
 
-impl Interpolate for BackgroundSizeList {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
-        self.0.interpolate(&other.0, progress).map(BackgroundSizeList)
-    }
-}
-
-/// https://drafts.csswg.org/css-transitions/#animtype-color
-impl Interpolate for RGBA {
-    #[inline]
-    fn interpolate(&self, other: &RGBA, progress: f64) -> Result<Self, ()> {
-        fn clamp(val: f32) -> f32 {
-            val.max(0.).min(1.)
-        }
-
-        let alpha = clamp(try!(self.alpha_f32().interpolate(&other.alpha_f32(), progress)));
-        if alpha == 0. {
-            Ok(RGBA::transparent())
-        } else {
-            // NB: We rely on RGBA::from_floats clamping already.
-            let red = try!((self.red_f32() * self.alpha_f32())
-                            .interpolate(&(other.red_f32() * other.alpha_f32()), progress))
-                            * 1. / alpha;
-            let green = try!((self.green_f32() * self.alpha_f32())
-                             .interpolate(&(other.green_f32() * other.alpha_f32()), progress))
-                             * 1. / alpha;
-            let blue = try!((self.blue_f32() * self.alpha_f32())
-                             .interpolate(&(other.blue_f32() * other.alpha_f32()), progress))
-                             * 1. / alpha;
-            Ok(RGBA::from_floats(red, green, blue, alpha))
-        }
-    }
-}
-
-/// https://drafts.csswg.org/css-transitions/#animtype-color
-impl Interpolate for CSSParserColor {
-    #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
         match (*self, *other) {
-            (CSSParserColor::RGBA(ref this), CSSParserColor::RGBA(ref other)) => {
-                this.interpolate(other, progress).map(CSSParserColor::RGBA)
-            }
+            (VerticalAlign::LengthOrPercentage(ref this),
+             VerticalAlign::LengthOrPercentage(ref other)) => {
+                this.compute_distance(other)
+            },
             _ => Err(()),
         }
     }
 }
 
-/// https://drafts.csswg.org/css-transitions/#animtype-lpcalc
-impl Interpolate for CalcLengthOrPercentage {
+impl Animatable for BackgroundSizeList {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
-        fn interpolate_half<T>(this: Option<T>,
-                               other: Option<T>,
-                               progress: f64)
-                               -> Result<Option<T>, ()>
-            where T: Default + Interpolate,
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        self.0.add_weighted(&other.0, self_portion, other_portion).map(BackgroundSizeList)
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.0.compute_distance(&other.0)
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.0.compute_squared_distance(&other.0)
+    }
+}
+
+/// https://drafts.csswg.org/css-transitions/#animtype-color
+impl Animatable for RGBA {
+    #[inline]
+    fn add_weighted(&self, other: &RGBA, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        fn clamp(val: f32) -> f32 {
+            val.max(0.).min(1.)
+        }
+
+        let alpha = clamp(try!(self.alpha_f32().add_weighted(&other.alpha_f32(),
+                                                             self_portion, other_portion)));
+        if alpha == 0. {
+            Ok(RGBA::transparent())
+        } else {
+            // NB: We rely on RGBA::from_floats clamping already.
+            let red = try!((self.red_f32() * self.alpha_f32())
+                            .add_weighted(&(other.red_f32() * other.alpha_f32()),
+                                          self_portion, other_portion))
+                            * 1. / alpha;
+            let green = try!((self.green_f32() * self.alpha_f32())
+                             .add_weighted(&(other.green_f32() * other.alpha_f32()),
+                                           self_portion, other_portion))
+                             * 1. / alpha;
+            let blue = try!((self.blue_f32() * self.alpha_f32())
+                             .add_weighted(&(other.blue_f32() * other.alpha_f32()),
+                                           self_portion, other_portion))
+                             * 1. / alpha;
+            Ok(RGBA::from_floats(red, green, blue, alpha))
+        }
+    }
+
+    /// https://www.w3.org/TR/smil-animation/#animateColorElement says we should use Euclidean
+    /// RGB-cube distance.
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.compute_squared_distance(other).map(|sd| sd.sqrt())
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        fn clamp(val: f32) -> f32 {
+            val.max(0.).min(1.)
+        }
+
+        let start_a = clamp(self.alpha_f32());
+        let end_a = clamp(other.alpha_f32());
+        let start = [ start_a,
+                      self.red_f32() * start_a,
+                      self.green_f32() * start_a,
+                      self.blue_f32() * start_a ];
+        let end = [ end_a,
+                    other.red_f32() * end_a,
+                    other.green_f32() * end_a,
+                    other.blue_f32() * end_a ];
+        let diff = start.iter().zip(&end)
+                               .fold(0.0f64, |n, (&a, &b)| {
+                                   let diff = (a - b) as f64;
+                                   n + diff * diff
+                               });
+        Ok(diff)
+    }
+}
+
+/// https://drafts.csswg.org/css-transitions/#animtype-color
+impl Animatable for CSSParserColor {
+    #[inline]
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        match (*self, *other) {
+            (CSSParserColor::RGBA(ref this), CSSParserColor::RGBA(ref other)) => {
+                this.add_weighted(other, self_portion, other_portion).map(CSSParserColor::RGBA)
+            }
+            _ => Err(()),
+        }
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.compute_squared_distance(other).map(|sq| sq.sqrt())
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (*self, *other) {
+            (CSSParserColor::RGBA(ref this), CSSParserColor::RGBA(ref other)) => {
+                this.compute_squared_distance(other)
+            },
+            _ => Ok(0.0),
+        }
+    }
+}
+
+/// https://drafts.csswg.org/css-transitions/#animtype-lpcalc
+impl Animatable for CalcLengthOrPercentage {
+    #[inline]
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        fn add_weighted_half<T>(this: Option<T>,
+                                other: Option<T>,
+                                self_portion: f64,
+                                other_portion: f64)
+                                -> Result<Option<T>, ()>
+            where T: Default + Animatable,
         {
             match (this, other) {
                 (None, None) => Ok(None),
                 (this, other) => {
                     let this = this.unwrap_or(T::default());
                     let other = other.unwrap_or(T::default());
-                    this.interpolate(&other, progress).map(Some)
+                    this.add_weighted(&other, self_portion, other_portion).map(Some)
                 }
             }
         }
 
-        Ok(CalcLengthOrPercentage {
-            length: try!(self.length.interpolate(&other.length, progress)),
-            percentage: try!(interpolate_half(self.percentage, other.percentage, progress)),
-        })
+        let length = self.unclamped_length().add_weighted(&other.unclamped_length(), self_portion, other_portion)?;
+        let percentage = add_weighted_half(self.percentage, other.percentage, self_portion, other_portion)?;
+        Ok(CalcLengthOrPercentage::with_clamping_mode(length, percentage, self.clamping_mode))
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.compute_squared_distance(other).map(|sq| sq.sqrt())
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        let length_diff = (self.unclamped_length().0 - other.unclamped_length().0) as f64;
+        let percentage_diff = (self.percentage() - other.percentage()) as f64;
+        Ok(length_diff * length_diff + percentage_diff * percentage_diff)
     }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-lpcalc
-impl Interpolate for LengthOrPercentage {
+impl Animatable for LengthOrPercentage {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         match (*self, *other) {
             (LengthOrPercentage::Length(ref this),
              LengthOrPercentage::Length(ref other)) => {
-                this.interpolate(other, progress).map(LengthOrPercentage::Length)
+                this.add_weighted(other, self_portion, other_portion)
+                    .map(LengthOrPercentage::Length)
             }
             (LengthOrPercentage::Percentage(ref this),
              LengthOrPercentage::Percentage(ref other)) => {
-                this.interpolate(other, progress).map(LengthOrPercentage::Percentage)
+                this.add_weighted(other, self_portion, other_portion)
+                    .map(LengthOrPercentage::Percentage)
             }
             (this, other) => {
                 let this: CalcLengthOrPercentage = From::from(this);
                 let other: CalcLengthOrPercentage = From::from(other);
-                this.interpolate(&other, progress)
+                this.add_weighted(&other, self_portion, other_portion)
                     .map(LengthOrPercentage::Calc)
+            }
+        }
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (*self, *other) {
+            (LengthOrPercentage::Length(ref this),
+             LengthOrPercentage::Length(ref other)) => {
+                this.compute_distance(other)
+            },
+            (LengthOrPercentage::Percentage(ref this),
+             LengthOrPercentage::Percentage(ref other)) => {
+                this.compute_distance(other)
+            },
+            (this, other) => {
+                let this: CalcLengthOrPercentage = From::from(this);
+                let other: CalcLengthOrPercentage = From::from(other);
+                this.compute_distance(&other)
+            }
+        }
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (*self, *other) {
+            (LengthOrPercentage::Length(ref this),
+             LengthOrPercentage::Length(ref other)) => {
+                let diff = (this.0 - other.0) as f64;
+                Ok(diff * diff)
+            },
+            (LengthOrPercentage::Percentage(ref this),
+             LengthOrPercentage::Percentage(ref other)) => {
+                let diff = (this - other) as f64;
+                Ok(diff * diff)
+            },
+            (this, other) => {
+                let this: CalcLengthOrPercentage = From::from(this);
+                let other: CalcLengthOrPercentage = From::from(other);
+                let length_diff = (this.unclamped_length().0 - other.unclamped_length().0) as f64;
+                let percentage_diff = (this.percentage() - other.percentage()) as f64;
+                Ok(length_diff * length_diff + percentage_diff * percentage_diff)
             }
         }
     }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-lpcalc
-impl Interpolate for LengthOrPercentageOrAuto {
+impl Animatable for LengthOrPercentageOrAuto {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         match (*self, *other) {
             (LengthOrPercentageOrAuto::Length(ref this),
              LengthOrPercentageOrAuto::Length(ref other)) => {
-                this.interpolate(other, progress).map(LengthOrPercentageOrAuto::Length)
+                this.add_weighted(other, self_portion, other_portion)
+                    .map(LengthOrPercentageOrAuto::Length)
             }
             (LengthOrPercentageOrAuto::Percentage(ref this),
              LengthOrPercentageOrAuto::Percentage(ref other)) => {
-                this.interpolate(other, progress).map(LengthOrPercentageOrAuto::Percentage)
+                this.add_weighted(other, self_portion, other_portion)
+                    .map(LengthOrPercentageOrAuto::Percentage)
             }
             (LengthOrPercentageOrAuto::Auto, LengthOrPercentageOrAuto::Auto) => {
                 Ok(LengthOrPercentageOrAuto::Auto)
@@ -865,9 +1142,56 @@ impl Interpolate for LengthOrPercentageOrAuto {
             (this, other) => {
                 let this: Option<CalcLengthOrPercentage> = From::from(this);
                 let other: Option<CalcLengthOrPercentage> = From::from(other);
-                match this.interpolate(&other, progress) {
+                match this.add_weighted(&other, self_portion, other_portion) {
                     Ok(Some(result)) => Ok(LengthOrPercentageOrAuto::Calc(result)),
                     _ => Err(()),
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (*self, *other) {
+            (LengthOrPercentageOrAuto::Length(ref this),
+             LengthOrPercentageOrAuto::Length(ref other)) => {
+                this.compute_distance(other)
+            },
+            (LengthOrPercentageOrAuto::Percentage(ref this),
+             LengthOrPercentageOrAuto::Percentage(ref other)) => {
+                this.compute_distance(other)
+            },
+            (this, other) => {
+                // If one of the element is Auto, Option<> will be None, and the returned distance is Err(())
+                let this: Option<CalcLengthOrPercentage> = From::from(this);
+                let other: Option<CalcLengthOrPercentage> = From::from(other);
+                this.compute_distance(&other)
+            }
+        }
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (*self, *other) {
+            (LengthOrPercentageOrAuto::Length(ref this),
+             LengthOrPercentageOrAuto::Length(ref other)) => {
+                let diff = (this.0 - other.0) as f64;
+                Ok(diff * diff)
+            },
+            (LengthOrPercentageOrAuto::Percentage(ref this),
+             LengthOrPercentageOrAuto::Percentage(ref other)) => {
+                let diff = (this - other) as f64;
+                Ok(diff * diff)
+            },
+            (this, other) => {
+                let this: Option<CalcLengthOrPercentage> = From::from(this);
+                let other: Option<CalcLengthOrPercentage> = From::from(other);
+                if let (Some(this), Some(other)) = (this, other) {
+                    let length_diff = (this.unclamped_length().0 - other.unclamped_length().0) as f64;
+                    let percentage_diff = (this.percentage() - other.percentage()) as f64;
+                    Ok(length_diff * length_diff + percentage_diff * percentage_diff)
+                } else {
+                    Err(())
                 }
             }
         }
@@ -875,17 +1199,19 @@ impl Interpolate for LengthOrPercentageOrAuto {
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-lpcalc
-impl Interpolate for LengthOrPercentageOrNone {
+impl Animatable for LengthOrPercentageOrNone {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         match (*self, *other) {
             (LengthOrPercentageOrNone::Length(ref this),
              LengthOrPercentageOrNone::Length(ref other)) => {
-                this.interpolate(other, progress).map(LengthOrPercentageOrNone::Length)
+                this.add_weighted(other, self_portion, other_portion)
+                    .map(LengthOrPercentageOrNone::Length)
             }
             (LengthOrPercentageOrNone::Percentage(ref this),
              LengthOrPercentageOrNone::Percentage(ref other)) => {
-                this.interpolate(other, progress).map(LengthOrPercentageOrNone::Percentage)
+                this.add_weighted(other, self_portion, other_portion)
+                    .map(LengthOrPercentageOrNone::Percentage)
             }
             (LengthOrPercentageOrNone::None, LengthOrPercentageOrNone::None) => {
                 Ok(LengthOrPercentageOrNone::None)
@@ -893,31 +1219,70 @@ impl Interpolate for LengthOrPercentageOrNone {
             _ => Err(())
         }
     }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (*self, *other) {
+            (LengthOrPercentageOrNone::Length(ref this),
+             LengthOrPercentageOrNone::Length(ref other)) => {
+                this.compute_distance(other)
+            },
+            (LengthOrPercentageOrNone::Percentage(ref this),
+             LengthOrPercentageOrNone::Percentage(ref other)) => {
+                this.compute_distance(other)
+            },
+            _ => Err(())
+        }
+    }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-lpcalc
-impl Interpolate for MinLength {
+impl Animatable for MinLength {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         match (*self, *other) {
             (MinLength::LengthOrPercentage(ref this),
              MinLength::LengthOrPercentage(ref other)) => {
-                this.interpolate(other, progress).map(MinLength::LengthOrPercentage)
+                this.add_weighted(other, self_portion, other_portion)
+                    .map(MinLength::LengthOrPercentage)
             }
+            _ => Err(()),
+        }
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (*self, *other) {
+            (MinLength::LengthOrPercentage(ref this),
+             MinLength::LengthOrPercentage(ref other)) => {
+                this.compute_distance(other)
+            },
             _ => Err(()),
         }
     }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-lpcalc
-impl Interpolate for MaxLength {
+impl Animatable for MaxLength {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         match (*self, *other) {
             (MaxLength::LengthOrPercentage(ref this),
              MaxLength::LengthOrPercentage(ref other)) => {
-                this.interpolate(other, progress).map(MaxLength::LengthOrPercentage)
+                this.add_weighted(other, self_portion, other_portion)
+                    .map(MaxLength::LengthOrPercentage)
             }
+            _ => Err(()),
+        }
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (*self, *other) {
+            (MaxLength::LengthOrPercentage(ref this),
+             MaxLength::LengthOrPercentage(ref other)) => {
+                this.compute_distance(other)
+            },
             _ => Err(()),
         }
     }
@@ -925,17 +1290,17 @@ impl Interpolate for MaxLength {
 
 /// https://drafts.csswg.org/css-transitions/#animtype-number
 /// https://drafts.csswg.org/css-transitions/#animtype-length
-impl Interpolate for LineHeight {
+impl Animatable for LineHeight {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         match (*self, *other) {
             (LineHeight::Length(ref this),
              LineHeight::Length(ref other)) => {
-                this.interpolate(other, progress).map(LineHeight::Length)
+                this.add_weighted(other, self_portion, other_portion).map(LineHeight::Length)
             }
             (LineHeight::Number(ref this),
              LineHeight::Number(ref other)) => {
-                this.interpolate(other, progress).map(LineHeight::Number)
+                this.add_weighted(other, self_portion, other_portion).map(LineHeight::Number)
             }
             (LineHeight::Normal, LineHeight::Normal) => {
                 Ok(LineHeight::Normal)
@@ -943,15 +1308,30 @@ impl Interpolate for LineHeight {
             _ => Err(()),
         }
     }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (*self, *other) {
+            (LineHeight::Length(ref this),
+             LineHeight::Length(ref other)) => {
+                this.compute_distance(other)
+            },
+            (LineHeight::Number(ref this),
+             LineHeight::Number(ref other)) => {
+                this.compute_distance(other)
+            },
+            _ => Err(()),
+        }
+    }
 }
 
 /// http://dev.w3.org/csswg/css-transitions/#animtype-font-weight
-impl Interpolate for FontWeight {
+impl Animatable for FontWeight {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         let a = (*self as u32) as f64;
         let b = (*other as u32) as f64;
-        let weight = a + (b - a) * progress;
+        let weight = a * self_portion + b * other_portion;
         Ok(if weight < 150. {
             FontWeight::Weight100
         } else if weight < 250. {
@@ -972,59 +1352,122 @@ impl Interpolate for FontWeight {
             FontWeight::Weight900
         })
     }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        let a = (*self as u32) as f64;
+        let b = (*other as u32) as f64;
+        a.compute_distance(&b)
+    }
+}
+
+/// https://drafts.csswg.org/css-fonts/#font-stretch-prop
+impl Animatable for FontStretch {
+    #[inline]
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+        let from = f64::from(*self);
+        let to   = f64::from(*other);
+        let interpolated_mapped_index = ((from * self_portion + to * other_portion) + 0.5).floor();
+        Ok(interpolated_mapped_index.into())
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        let from = f64::from(*self);
+        let to   = f64::from(*other);
+        from.compute_distance(&to)
+    }
+}
+
+/// We should treat font stretch as real number in order to interpolate this property.
+/// https://drafts.csswg.org/css-fonts-3/#font-stretch-animation
+impl From<FontStretch> for f64 {
+    fn from(stretch: FontStretch) -> f64 {
+        use self::FontStretch::*;
+        match stretch {
+            ultra_condensed => 1.0,
+            extra_condensed => 2.0,
+            condensed       => 3.0,
+            semi_condensed  => 4.0,
+            normal          => 5.0,
+            semi_expanded   => 6.0,
+            expanded        => 7.0,
+            extra_expanded  => 8.0,
+            ultra_expanded  => 9.0,
+        }
+    }
+}
+
+impl Into<FontStretch> for f64 {
+    fn into(self) -> FontStretch {
+        use properties::longhands::font_stretch::computed_value::T::*;
+        debug_assert!(self >= 1.0 && self <= 9.0);
+        static FONT_STRETCH_ENUM_MAP: [FontStretch; 9] =
+            [ ultra_condensed, extra_condensed, condensed, semi_condensed, normal,
+              semi_expanded, expanded, extra_expanded, ultra_expanded ];
+        FONT_STRETCH_ENUM_MAP[(self - 1.0) as usize]
+    }
 }
 
 /// https://drafts.csswg.org/css-transitions/#animtype-simple-list
-impl<H: Interpolate, V: Interpolate> Interpolate for generic_position::Position<H, V> {
+impl<H: Animatable, V: Animatable> Animatable for generic_position::Position<H, V> {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         Ok(generic_position::Position {
-            horizontal: try!(self.horizontal.interpolate(&other.horizontal, progress)),
-            vertical: try!(self.vertical.interpolate(&other.vertical, progress)),
+            horizontal: try!(self.horizontal.add_weighted(&other.horizontal,
+                                                          self_portion, other_portion)),
+            vertical: try!(self.vertical.add_weighted(&other.vertical,
+                                                      self_portion, other_portion)),
         })
     }
-}
 
-impl<H, V> RepeatableListInterpolate for generic_position::Position<H, V>
-    where H: RepeatableListInterpolate, V: RepeatableListInterpolate {}
-
-/// https://drafts.csswg.org/css-transitions/#animtype-simple-list
-impl Interpolate for HorizontalPosition {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
-        self.0.interpolate(&other.0, progress).map(generic_position::HorizontalPosition)
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.compute_squared_distance(other).map(|sd| sd.sqrt())
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        Ok(try!(self.horizontal.compute_squared_distance(&other.horizontal)) +
+           try!(self.vertical.compute_squared_distance(&other.vertical)))
     }
 }
 
-impl RepeatableListInterpolate for HorizontalPosition {}
-
-/// https://drafts.csswg.org/css-transitions/#animtype-simple-list
-impl Interpolate for VerticalPosition {
-    #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
-        self.0.interpolate(&other.0, progress).map(generic_position::VerticalPosition)
-    }
-}
-
-impl RepeatableListInterpolate for VerticalPosition {}
+impl<H, V> RepeatableListAnimatable for generic_position::Position<H, V>
+    where H: RepeatableListAnimatable, V: RepeatableListAnimatable {}
 
 /// https://drafts.csswg.org/css-transitions/#animtype-rect
-impl Interpolate for ClipRect {
+impl Animatable for ClipRect {
     #[inline]
-    fn interpolate(&self, other: &Self, time: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64)
+        -> Result<Self, ()> {
         Ok(ClipRect {
-            top: try!(self.top.interpolate(&other.top, time)),
-            right: try!(self.right.interpolate(&other.right, time)),
-            bottom: try!(self.bottom.interpolate(&other.bottom, time)),
-            left: try!(self.left.interpolate(&other.left, time)),
+            top: try!(self.top.add_weighted(&other.top, self_portion, other_portion)),
+            right: try!(self.right.add_weighted(&other.right, self_portion, other_portion)),
+            bottom: try!(self.bottom.add_weighted(&other.bottom, self_portion, other_portion)),
+            left: try!(self.left.add_weighted(&other.left, self_portion, other_portion)),
         })
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.compute_squared_distance(other).map(|sd| sd.sqrt())
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        let list = [ try!(self.top.compute_distance(&other.top)),
+                     try!(self.right.compute_distance(&other.right)),
+                     try!(self.bottom.compute_distance(&other.bottom)),
+                     try!(self.left.compute_distance(&other.left)) ];
+        Ok(list.iter().fold(0.0f64, |sum, diff| sum + diff * diff))
     }
 }
 
-<%def name="impl_interpolate_for_shadow(item, transparent_color)">
-    impl Interpolate for ${item} {
+<%def name="impl_animatable_for_shadow(item, transparent_color)">
+    impl Animatable for ${item} {
         #[inline]
-        fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+        fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
             % if "Box" in item:
             // It can't be interpolated if inset does not match.
             if self.inset != other.inset {
@@ -1032,12 +1475,14 @@ impl Interpolate for ClipRect {
             }
             % endif
 
-            let x = try!(self.offset_x.interpolate(&other.offset_x, progress));
-            let y = try!(self.offset_y.interpolate(&other.offset_y, progress));
-            let color = try!(self.color.interpolate(&other.color, progress));
-            let blur = try!(self.blur_radius.interpolate(&other.blur_radius, progress));
+            let x = try!(self.offset_x.add_weighted(&other.offset_x, self_portion, other_portion));
+            let y = try!(self.offset_y.add_weighted(&other.offset_y, self_portion, other_portion));
+            let color = try!(self.color.add_weighted(&other.color, self_portion, other_portion));
+            let blur = try!(self.blur_radius.add_weighted(&other.blur_radius,
+                                                          self_portion, other_portion));
             % if "Box" in item:
-            let spread = try!(self.spread_radius.interpolate(&other.spread_radius, progress));
+            let spread = try!(self.spread_radius.add_weighted(&other.spread_radius,
+                                                              self_portion, other_portion));
             % endif
 
             Ok(${item} {
@@ -1051,12 +1496,35 @@ impl Interpolate for ClipRect {
                 % endif
             })
         }
+
+        #[inline]
+        fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+            self.compute_squared_distance(other).map(|sd| sd.sqrt())
+        }
+
+        #[inline]
+        fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+            % if "Box" in item:
+            if self.inset != other.inset {
+                return Err(());
+            }
+            % endif
+            let list = [ try!(self.offset_x.compute_distance(&other.offset_x)),
+                         try!(self.offset_y.compute_distance(&other.offset_y)),
+                         try!(self.blur_radius.compute_distance(&other.blur_radius)),
+                         try!(self.color.compute_distance(&other.color)),
+                         % if "Box" in item:
+                         try!(self.spread_radius.compute_distance(&other.spread_radius)),
+                         % endif
+                       ];
+            Ok(list.iter().fold(0.0f64, |sum, diff| sum + diff * diff))
+        }
     }
 
     /// https://drafts.csswg.org/css-transitions/#animtype-shadow-list
-    impl Interpolate for ${item}List {
+    impl Animatable for ${item}List {
         #[inline]
-        fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+        fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
             // The inset value must change
             % if "Box" in item:
             let mut zero = ${item} {
@@ -1084,18 +1552,18 @@ impl Interpolate for ClipRect {
             for i in 0..max_len {
                 let shadow = match (self.0.get(i), other.0.get(i)) {
                     (Some(shadow), Some(other))
-                        => try!(shadow.interpolate(other, progress)),
+                        => try!(shadow.add_weighted(other, self_portion, other_portion)),
                     (Some(shadow), None) => {
                         % if "Box" in item:
                         zero.inset = shadow.inset;
                         % endif
-                        shadow.interpolate(&zero, progress).unwrap()
+                        shadow.add_weighted(&zero, self_portion, other_portion).unwrap()
                     }
                     (None, Some(shadow)) => {
                         % if "Box" in item:
                         zero.inset = shadow.inset;
                         % endif
-                        zero.interpolate(&shadow, progress).unwrap()
+                        zero.add_weighted(&shadow, self_portion, other_portion).unwrap()
                     }
                     (None, None) => unreachable!(),
                 };
@@ -1104,11 +1572,26 @@ impl Interpolate for ClipRect {
 
             Ok(${item}List(result))
         }
+
+        fn add(&self, other: &Self) -> Result<Self, ()> {
+            let len = self.0.len() + other.0.len();
+
+            let mut result = if len > 1 {
+                SmallVec::from_vec(Vec::with_capacity(len))
+            } else {
+                SmallVec::new()
+            };
+
+            result.extend(self.0.iter().cloned());
+            result.extend(other.0.iter().cloned());
+
+            Ok(${item}List(result))
+        }
     }
 </%def>
 
-${impl_interpolate_for_shadow('BoxShadow', 'CSSParserColor::RGBA(RGBA::transparent())',)}
-${impl_interpolate_for_shadow('TextShadow', 'CSSParserColor::RGBA(RGBA::transparent())',)}
+${impl_animatable_for_shadow('BoxShadow', 'CSSParserColor::RGBA(RGBA::transparent())',)}
+${impl_animatable_for_shadow('TextShadow', 'CSSParserColor::RGBA(RGBA::transparent())',)}
 
 /// Check if it's possible to do a direct numerical interpolation
 /// between these two transform lists.
@@ -1176,11 +1659,12 @@ fn build_identity_transform_list(list: &[TransformOperation]) -> Vec<TransformOp
     result
 }
 
-/// Interpolate two transform lists.
+/// Add two transform lists.
 /// http://dev.w3.org/csswg/css-transforms/#interpolation-of-transforms
-fn interpolate_transform_list(from_list: &[TransformOperation],
-                              to_list: &[TransformOperation],
-                              progress: f64) -> TransformList {
+fn add_weighted_transform_lists(from_list: &[TransformOperation],
+                                to_list: &[TransformOperation],
+                                self_portion: f64,
+                                other_portion: f64) -> TransformList {
     let mut result = vec![];
 
     if can_interpolate_list(from_list, to_list) {
@@ -1188,33 +1672,33 @@ fn interpolate_transform_list(from_list: &[TransformOperation],
             match (from, to) {
                 (&TransformOperation::Matrix(from),
                  &TransformOperation::Matrix(_to)) => {
-                    let interpolated = from.interpolate(&_to, progress).unwrap();
-                    result.push(TransformOperation::Matrix(interpolated));
+                    let sum = from.add_weighted(&_to, self_portion, other_portion).unwrap();
+                    result.push(TransformOperation::Matrix(sum));
                 }
                 (&TransformOperation::MatrixWithPercents(_),
                  &TransformOperation::MatrixWithPercents(_)) => {
-                    // We don't interpolate `-moz-transform` matrices yet.
+                    // We don't add_weighted `-moz-transform` matrices yet.
                     // They contain percentage values.
                     {}
                 }
                 (&TransformOperation::Skew(fx, fy),
                  &TransformOperation::Skew(tx, ty)) => {
-                    let ix = fx.interpolate(&tx, progress).unwrap();
-                    let iy = fy.interpolate(&ty, progress).unwrap();
+                    let ix = fx.add_weighted(&tx, self_portion, other_portion).unwrap();
+                    let iy = fy.add_weighted(&ty, self_portion, other_portion).unwrap();
                     result.push(TransformOperation::Skew(ix, iy));
                 }
                 (&TransformOperation::Translate(fx, fy, fz),
                  &TransformOperation::Translate(tx, ty, tz)) => {
-                    let ix = fx.interpolate(&tx, progress).unwrap();
-                    let iy = fy.interpolate(&ty, progress).unwrap();
-                    let iz = fz.interpolate(&tz, progress).unwrap();
+                    let ix = fx.add_weighted(&tx, self_portion, other_portion).unwrap();
+                    let iy = fy.add_weighted(&ty, self_portion, other_portion).unwrap();
+                    let iz = fz.add_weighted(&tz, self_portion, other_portion).unwrap();
                     result.push(TransformOperation::Translate(ix, iy, iz));
                 }
                 (&TransformOperation::Scale(fx, fy, fz),
                  &TransformOperation::Scale(tx, ty, tz)) => {
-                    let ix = fx.interpolate(&tx, progress).unwrap();
-                    let iy = fy.interpolate(&ty, progress).unwrap();
-                    let iz = fz.interpolate(&tz, progress).unwrap();
+                    let ix = fx.add_weighted(&tx, self_portion, other_portion).unwrap();
+                    let iy = fy.add_weighted(&ty, self_portion, other_portion).unwrap();
+                    let iz = fz.add_weighted(&tz, self_portion, other_portion).unwrap();
                     result.push(TransformOperation::Scale(ix, iy, iz));
                 }
                 (&TransformOperation::Rotate(fx, fy, fz, fa),
@@ -1224,14 +1708,15 @@ fn interpolate_transform_list(from_list: &[TransformOperation],
                     let (fx, fy, fz) = (fx / norm_f, fy / norm_f, fz / norm_f);
                     let (tx, ty, tz) = (tx / norm_t, ty / norm_t, tz / norm_t);
                     if fx == tx && fy == ty && fz == tz {
-                        let ia = fa.interpolate(&ta, progress).unwrap();
+                        let ia = fa.add_weighted(&ta, self_portion, other_portion).unwrap();
                         result.push(TransformOperation::Rotate(fx, fy, fz, ia));
                     } else {
                         let matrix_f = rotate_to_matrix(fx, fy, fz, fa);
                         let matrix_t = rotate_to_matrix(tx, ty, tz, ta);
-                        let interpolated = matrix_f.interpolate(&matrix_t, progress).unwrap();
+                        let sum = matrix_f.add_weighted(&matrix_t, self_portion, other_portion)
+                                          .unwrap();
 
-                        result.push(TransformOperation::Matrix(interpolated));
+                        result.push(TransformOperation::Matrix(sum));
                     }
                 }
                 (&TransformOperation::Perspective(fd),
@@ -1240,8 +1725,9 @@ fn interpolate_transform_list(from_list: &[TransformOperation],
                     let mut td_matrix = ComputedMatrix::identity();
                     fd_matrix.m43 = -1. / fd.to_f32_px();
                     td_matrix.m43 = -1. / _td.to_f32_px();
-                    let interpolated = fd_matrix.interpolate(&td_matrix, progress).unwrap();
-                    result.push(TransformOperation::Matrix(interpolated));
+                    let sum = fd_matrix.add_weighted(&td_matrix, self_portion, other_portion)
+                                       .unwrap();
+                    result.push(TransformOperation::Matrix(sum));
                 }
                 _ => {
                     // This should be unreachable due to the can_interpolate_list() call.
@@ -1319,38 +1805,38 @@ pub struct MatrixDecomposed2D {
     pub matrix: InnerMatrix2D,
 }
 
-impl Interpolate for InnerMatrix2D {
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+impl Animatable for InnerMatrix2D {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         Ok(InnerMatrix2D {
-            m11: try!(self.m11.interpolate(&other.m11, progress)),
-            m12: try!(self.m12.interpolate(&other.m12, progress)),
-            m21: try!(self.m21.interpolate(&other.m21, progress)),
-            m22: try!(self.m22.interpolate(&other.m22, progress)),
+            m11: try!(self.m11.add_weighted(&other.m11, self_portion, other_portion)),
+            m12: try!(self.m12.add_weighted(&other.m12, self_portion, other_portion)),
+            m21: try!(self.m21.add_weighted(&other.m21, self_portion, other_portion)),
+            m22: try!(self.m22.add_weighted(&other.m22, self_portion, other_portion)),
         })
     }
 }
 
-impl Interpolate for Translate2D {
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+impl Animatable for Translate2D {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         Ok(Translate2D(
-            try!(self.0.interpolate(&other.0, progress)),
-            try!(self.1.interpolate(&other.1, progress))
+            try!(self.0.add_weighted(&other.0, self_portion, other_portion)),
+            try!(self.1.add_weighted(&other.1, self_portion, other_portion))
         ))
     }
 }
 
-impl Interpolate for Scale2D {
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+impl Animatable for Scale2D {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         Ok(Scale2D(
-            try!(self.0.interpolate(&other.0, progress)),
-            try!(self.1.interpolate(&other.1, progress))
+            try!(self.0.add_weighted(&other.0, self_portion, other_portion)),
+            try!(self.1.add_weighted(&other.1, self_portion, other_portion))
         ))
     }
 }
 
-impl Interpolate for MatrixDecomposed2D {
+impl Animatable for MatrixDecomposed2D {
     /// https://drafts.csswg.org/css-transforms/#interpolation-of-decomposed-2d-matrix-values
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         // If x-axis of one is flipped, and y-axis of the other,
         // convert to an unflipped rotation.
         let mut scale = self.scale;
@@ -1380,10 +1866,11 @@ impl Interpolate for MatrixDecomposed2D {
         }
 
         // Interpolate all values.
-        let translate = try!(self.translate.interpolate(&other.translate, progress));
-        let scale = try!(scale.interpolate(&other.scale, progress));
-        let angle = try!(angle.interpolate(&other_angle, progress));
-        let matrix = try!(self.matrix.interpolate(&other.matrix, progress));
+        let translate = try!(self.translate.add_weighted(&other.translate,
+                                                         self_portion, other_portion));
+        let scale = try!(scale.add_weighted(&other.scale, self_portion, other_portion));
+        let angle = try!(angle.add_weighted(&other_angle, self_portion, other_portion));
+        let matrix = try!(self.matrix.add_weighted(&other.matrix, self_portion, other_portion));
 
         Ok(MatrixDecomposed2D {
             translate: translate,
@@ -1394,26 +1881,27 @@ impl Interpolate for MatrixDecomposed2D {
     }
 }
 
-impl Interpolate for ComputedMatrix {
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+impl Animatable for ComputedMatrix {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         if self.is_3d() || other.is_3d() {
             let decomposed_from = decompose_3d_matrix(*self);
             let decomposed_to = decompose_3d_matrix(*other);
             match (decomposed_from, decomposed_to) {
                 (Ok(from), Ok(to)) => {
-                    let interpolated = try!(from.interpolate(&to, progress));
-                    Ok(ComputedMatrix::from(interpolated))
+                    let sum = try!(from.add_weighted(&to, self_portion, other_portion));
+                    Ok(ComputedMatrix::from(sum))
                 },
                 _ => {
-                    let interpolated = if progress < 0.5 {*self} else {*other};
-                    Ok(interpolated)
+                    let result = if self_portion > other_portion {*self} else {*other};
+                    Ok(result)
                 }
             }
         } else {
             let decomposed_from = MatrixDecomposed2D::from(*self);
             let decomposed_to = MatrixDecomposed2D::from(*other);
-            let interpolated = try!(decomposed_from.interpolate(&decomposed_to, progress));
-            Ok(ComputedMatrix::from(interpolated))
+            let sum = try!(decomposed_from.add_weighted(&decomposed_to,
+                                                        self_portion, other_portion));
+            Ok(ComputedMatrix::from(sum))
         }
     }
 }
@@ -1728,59 +2216,65 @@ fn cross(row1: [f32; 3], row2: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-impl Interpolate for Translate3D {
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+impl Animatable for Translate3D {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         Ok(Translate3D(
-            try!(self.0.interpolate(&other.0, progress)),
-            try!(self.1.interpolate(&other.1, progress)),
-            try!(self.2.interpolate(&other.2, progress))
+            try!(self.0.add_weighted(&other.0, self_portion, other_portion)),
+            try!(self.1.add_weighted(&other.1, self_portion, other_portion)),
+            try!(self.2.add_weighted(&other.2, self_portion, other_portion))
         ))
     }
 }
 
-impl Interpolate for Scale3D {
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+impl Animatable for Scale3D {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         Ok(Scale3D(
-            try!(self.0.interpolate(&other.0, progress)),
-            try!(self.1.interpolate(&other.1, progress)),
-            try!(self.2.interpolate(&other.2, progress))
+            try!(self.0.add_weighted(&other.0, self_portion, other_portion)),
+            try!(self.1.add_weighted(&other.1, self_portion, other_portion)),
+            try!(self.2.add_weighted(&other.2, self_portion, other_portion))
         ))
     }
 }
 
-impl Interpolate for Skew {
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+impl Animatable for Skew {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         Ok(Skew(
-            try!(self.0.interpolate(&other.0, progress)),
-            try!(self.1.interpolate(&other.1, progress)),
-            try!(self.2.interpolate(&other.2, progress))
+            try!(self.0.add_weighted(&other.0, self_portion, other_portion)),
+            try!(self.1.add_weighted(&other.1, self_portion, other_portion)),
+            try!(self.2.add_weighted(&other.2, self_portion, other_portion))
         ))
     }
 }
 
-impl Interpolate for Perspective {
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+impl Animatable for Perspective {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         Ok(Perspective(
-            try!(self.0.interpolate(&other.0, progress)),
-            try!(self.1.interpolate(&other.1, progress)),
-            try!(self.2.interpolate(&other.2, progress)),
-            try!(self.3.interpolate(&other.3, progress))
+            try!(self.0.add_weighted(&other.0, self_portion, other_portion)),
+            try!(self.1.add_weighted(&other.1, self_portion, other_portion)),
+            try!(self.2.add_weighted(&other.2, self_portion, other_portion)),
+            try!(self.3.add_weighted(&other.3, self_portion, other_portion))
         ))
     }
 }
 
-impl Interpolate for MatrixDecomposed3D {
+impl Animatable for MatrixDecomposed3D {
     /// https://drafts.csswg.org/css-transforms/#interpolation-of-decomposed-3d-matrix-values
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
-        let mut interpolated = *self;
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64)
+        -> Result<Self, ()> {
+        assert!(self_portion + other_portion == 1.0f64,
+                "add_weighted should only be used for interpolating transforms");
 
-        // Interpolate translate, scale, skew and perspective components.
-        interpolated.translate = try!(self.translate.interpolate(&other.translate, progress));
-        interpolated.scale = try!(self.scale.interpolate(&other.scale, progress));
-        interpolated.skew = try!(self.skew.interpolate(&other.skew, progress));
-        interpolated.perspective = try!(self.perspective.interpolate(&other.perspective, progress));
+        let mut sum = *self;
 
-        // Interpolate quaternions using spherical linear interpolation (Slerp).
+        // Add translate, scale, skew and perspective components.
+        sum.translate = try!(self.translate.add_weighted(&other.translate,
+                                                         self_portion, other_portion));
+        sum.scale = try!(self.scale.add_weighted(&other.scale, self_portion, other_portion));
+        sum.skew = try!(self.skew.add_weighted(&other.skew, self_portion, other_portion));
+        sum.perspective = try!(self.perspective.add_weighted(&other.perspective,
+                                                             self_portion, other_portion));
+
+        // Add quaternions using spherical linear interpolation (Slerp).
         let mut product = self.quaternion.0 * other.quaternion.0 +
                           self.quaternion.1 * other.quaternion.1 +
                           self.quaternion.2 * other.quaternion.2 +
@@ -1791,21 +2285,21 @@ impl Interpolate for MatrixDecomposed3D {
         product = product.max(-1.0);
 
         if product == 1.0 {
-            return Ok(interpolated);
+            return Ok(sum);
         }
 
         let theta = product.acos();
-        let w = (progress as f32 * theta).sin() * 1.0 / (1.0 - product * product).sqrt();
+        let w = (other_portion as f32 * theta).sin() * 1.0 / (1.0 - product * product).sqrt();
 
         let mut a = *self;
         let mut b = *other;
         % for i in range(4):
-            a.quaternion.${i} *= (progress as f32 * theta).cos() - product * w;
+            a.quaternion.${i} *= (other_portion as f32 * theta).cos() - product * w;
             b.quaternion.${i} *= w;
-            interpolated.quaternion.${i} = a.quaternion.${i} + b.quaternion.${i};
+            sum.quaternion.${i} = a.quaternion.${i} + b.quaternion.${i};
         % endfor
 
-        Ok(interpolated)
+        Ok(sum)
     }
 }
 
@@ -2007,24 +2501,24 @@ impl ComputedMatrix {
 }
 
 /// https://drafts.csswg.org/css-transforms/#interpolation-of-transforms
-impl Interpolate for TransformList {
+impl Animatable for TransformList {
     #[inline]
-    fn interpolate(&self, other: &TransformList, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &TransformList, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         // http://dev.w3.org/csswg/css-transforms/#interpolation-of-transforms
         let result = match (&self.0, &other.0) {
             (&Some(ref from_list), &Some(ref to_list)) => {
                 // Two lists of transforms
-                interpolate_transform_list(from_list, &to_list, progress)
+                add_weighted_transform_lists(from_list, &to_list, self_portion, other_portion)
             }
             (&Some(ref from_list), &None) => {
                 // http://dev.w3.org/csswg/css-transforms/#none-transform-animation
                 let to_list = build_identity_transform_list(from_list);
-                interpolate_transform_list(from_list, &to_list, progress)
+                add_weighted_transform_lists(from_list, &to_list, self_portion, other_portion)
             }
             (&None, &Some(ref to_list)) => {
                 // http://dev.w3.org/csswg/css-transforms/#none-transform-animation
                 let from_list = build_identity_transform_list(to_list);
-                interpolate_transform_list(&from_list, to_list, progress)
+                add_weighted_transform_lists(&from_list, to_list, self_portion, other_portion)
             }
             _ => {
                 // http://dev.w3.org/csswg/css-transforms/#none-none-animation
@@ -2034,24 +2528,67 @@ impl Interpolate for TransformList {
 
         Ok(result)
     }
+
+    fn add(&self, other: &Self) -> Result<Self, ()> {
+        match (&self.0, &other.0) {
+            (&Some(ref from_list), &Some(ref to_list)) => {
+                Ok(TransformList(Some([&from_list[..], &to_list[..]].concat())))
+            }
+            (&Some(_), &None) => {
+                Ok(self.clone())
+            }
+            (&None, &Some(_)) => {
+                Ok(other.clone())
+            }
+            _ => {
+                Ok(TransformList(None))
+            }
+        }
+    }
 }
 
-impl<T, U> Interpolate for Either<T, U>
-        where T: Interpolate + Copy, U: Interpolate + Copy,
+impl<T, U> Animatable for Either<T, U>
+        where T: Animatable + Copy, U: Animatable + Copy,
 {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         match (*self, *other) {
             (Either::First(ref this), Either::First(ref other)) => {
-                this.interpolate(&other, progress).map(Either::First)
+                this.add_weighted(&other, self_portion, other_portion).map(Either::First)
             },
             (Either::Second(ref this), Either::Second(ref other)) => {
-                this.interpolate(&other, progress).map(Either::Second)
+                this.add_weighted(&other, self_portion, other_portion).map(Either::Second)
             },
             _ => {
-                let interpolated = if progress < 0.5 { *self } else { *other };
-                Ok(interpolated)
+                let result = if self_portion > other_portion {*self} else {*other};
+                Ok(result)
             }
+        }
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (self, other) {
+            (&Either::First(ref this), &Either::First(ref other)) => {
+                this.compute_distance(other)
+            },
+            (&Either::Second(ref this), &Either::Second(ref other)) => {
+                this.compute_distance(other)
+            },
+            _ => Err(())
+        }
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (self, other) {
+            (&Either::First(ref this), &Either::First(ref other)) => {
+                this.compute_squared_distance(other)
+            },
+            (&Either::Second(ref this), &Either::Second(ref other)) => {
+                this.compute_squared_distance(other)
+            },
+            _ => Err(())
         }
     }
 }
@@ -2103,27 +2640,55 @@ impl IntermediateRGBA {
     }
 }
 
-/// Unlike Interpolate for RGBA we don't clamp any component values.
-impl Interpolate for IntermediateRGBA {
+/// Unlike Animatable for RGBA we don't clamp any component values.
+impl Animatable for IntermediateRGBA {
     #[inline]
-    fn interpolate(&self, other: &IntermediateRGBA, progress: f64) -> Result<Self, ()> {
-        let alpha = try!(self.alpha.interpolate(&other.alpha, progress));
-        if alpha == 0. {
+    fn add_weighted(&self, other: &IntermediateRGBA, self_portion: f64, other_portion: f64)
+        -> Result<Self, ()> {
+        let mut alpha = try!(self.alpha.add_weighted(&other.alpha, self_portion, other_portion));
+        if alpha <= 0. {
             // Ideally we should return color value that only alpha component is
             // 0, but this is what current gecko does.
             Ok(IntermediateRGBA::transparent())
         } else {
+            alpha = alpha.min(1.);
             let red = try!((self.red * self.alpha)
-                            .interpolate(&(other.red * other.alpha), progress))
+                            .add_weighted(&(other.red * other.alpha),
+                                          self_portion, other_portion))
                             * 1. / alpha;
             let green = try!((self.green * self.alpha)
-                             .interpolate(&(other.green * other.alpha), progress))
+                             .add_weighted(&(other.green * other.alpha),
+                                           self_portion, other_portion))
                              * 1. / alpha;
             let blue = try!((self.blue * self.alpha)
-                             .interpolate(&(other.blue * other.alpha), progress))
+                             .add_weighted(&(other.blue * other.alpha),
+                                           self_portion, other_portion))
                              * 1. / alpha;
             Ok(IntermediateRGBA::new(red, green, blue, alpha))
         }
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.compute_squared_distance(other).map(|sq| sq.sqrt())
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        let start = [ self.alpha,
+                      self.red * self.alpha,
+                      self.green * self.alpha,
+                      self.blue * self.alpha ];
+        let end = [ other.alpha,
+                    other.red * other.alpha,
+                    other.green * other.alpha,
+                    other.blue * other.alpha ];
+        let diff = start.iter().zip(&end)
+                               .fold(0.0f64, |n, (&a, &b)| {
+                                   let diff = (a - b) as f64;
+                                   n + diff * diff
+                               });
+        Ok(diff)
     }
 }
 
@@ -2164,635 +2729,6 @@ impl<'a> From<<&'a Either<IntermediateColor, Auto>> for Either<CSSParserColor, A
     }
 }
 
-
-/// We support ComputeDistance for an API in gecko to test the transition per property.
-impl ComputeDistance for AnimationValue {
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (self, other) {
-            % for prop in data.longhands:
-                % if prop.animatable:
-                    % if prop.animation_value_type != "discrete":
-                        (&AnimationValue::${prop.camel_case}(ref from),
-                         &AnimationValue::${prop.camel_case}(ref to)) => {
-                            from.compute_distance(to)
-                        },
-                    % else:
-                        (&AnimationValue::${prop.camel_case}(ref _from),
-                         &AnimationValue::${prop.camel_case}(ref _to)) => {
-                            Err(())
-                        },
-                    % endif
-                % endif
-            % endfor
-            _ => {
-                panic!("Expected compute_distance of computed values of the same \
-                        property, got: {:?}, {:?}", self, other);
-            }
-        }
-    }
-}
-
-/// A trait used to implement [compute_distance].
-/// In order to compute the Euclidean distance of a list, we need to compute squared distance
-/// for each element, so the vector can sum it and then get its squared root as the distance.
-pub trait ComputeDistance: Sized {
-    /// Compute distance between a value and another for a given property.
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()>;
-
-    /// Compute squared distance between a value and another for a given property.
-    /// This is used for list or if there are many components in a property value.
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_distance(other).map(|d| d * d)
-    }
-}
-
-impl<T: ComputeDistance> ComputeDistance for SmallVec<[T; 1]> {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sd| sd.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        if self.len() != other.len() {
-            return Err(());
-        }
-
-        let mut squared_dist = 0.0f64;
-        for (this, other) in self.iter().zip(other) {
-            let diff = try!(this.compute_squared_distance(other));
-            squared_dist += diff;
-        }
-        Ok(squared_dist)
-    }
-}
-
-impl ComputeDistance for Au {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.0.compute_distance(&other.0)
-    }
-}
-
-impl <T> ComputeDistance for Option<T>
-    where T: ComputeDistance,
-{
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (self, other) {
-            (&Some(ref this), &Some(ref other)) => {
-                this.compute_distance(other)
-            },
-            _ => Err(()),
-        }
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (self, other) {
-            (&Some(ref this), &Some(ref other)) => {
-                this.compute_squared_distance(other)
-            },
-            _ => Err(()),
-        }
-    }
-}
-
-impl ComputeDistance for f32 {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        Ok((*self - *other).abs() as f64)
-    }
-}
-
-impl ComputeDistance for f64 {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        Ok((*self - *other).abs())
-    }
-}
-
-impl ComputeDistance for i32 {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        Ok((*self - *other).abs() as f64)
-    }
-}
-
-impl ComputeDistance for Visibility {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        if *self == *other {
-            Ok(0.0)
-        } else {
-            Ok(1.0)
-        }
-    }
-}
-
-/// https://www.w3.org/TR/smil-animation/#animateColorElement says we should use Euclidean RGB-cube distance.
-impl ComputeDistance for RGBA {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sd| sd.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        fn clamp(val: f32) -> f32 {
-            val.max(0.).min(1.)
-        }
-
-        let start_a = clamp(self.alpha_f32());
-        let end_a = clamp(other.alpha_f32());
-        let start = [ start_a,
-                      self.red_f32() * start_a,
-                      self.green_f32() * start_a,
-                      self.blue_f32() * start_a ];
-        let end = [ end_a,
-                    other.red_f32() * end_a,
-                    other.green_f32() * end_a,
-                    other.blue_f32() * end_a ];
-        let diff = start.iter().zip(&end)
-                               .fold(0.0f64, |n, (&a, &b)| {
-                                   let diff = (a - b) as f64;
-                                   n + diff * diff
-                               });
-        Ok(diff)
-    }
-}
-
-impl ComputeDistance for CSSParserColor {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sq| sq.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (*self, *other) {
-            (CSSParserColor::RGBA(ref this), CSSParserColor::RGBA(ref other)) => {
-                this.compute_squared_distance(other)
-            },
-            _ => Ok(0.0),
-        }
-    }
-}
-
-impl ComputeDistance for IntermediateRGBA {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sq| sq.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        let start = [ self.alpha,
-                      self.red * self.alpha,
-                      self.green * self.alpha,
-                      self.blue * self.alpha ];
-        let end = [ other.alpha,
-                    other.red * other.alpha,
-                    other.green * other.alpha,
-                    other.blue * other.alpha ];
-        let diff = start.iter().zip(&end)
-                               .fold(0.0f64, |n, (&a, &b)| {
-                                   let diff = (a - b) as f64;
-                                   n + diff * diff
-                               });
-        Ok(diff)
-    }
-}
-
-impl ComputeDistance for IntermediateColor {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sq| sq.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (*self, *other) {
-            (IntermediateColor::IntermediateRGBA(ref this), IntermediateColor::IntermediateRGBA(ref other)) => {
-                this.compute_squared_distance(other)
-            },
-            _ => Ok(0.0),
-        }
-    }
-}
-
-impl ComputeDistance for CalcLengthOrPercentage {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sq| sq.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        let length_diff = (self.length().0 - other.length().0) as f64;
-        let percentage_diff = (self.percentage() - other.percentage()) as f64;
-        Ok(length_diff * length_diff + percentage_diff * percentage_diff)
-    }
-}
-
-impl ComputeDistance for LengthOrPercentage {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (*self, *other) {
-            (LengthOrPercentage::Length(ref this),
-             LengthOrPercentage::Length(ref other)) => {
-                this.compute_distance(other)
-            },
-            (LengthOrPercentage::Percentage(ref this),
-             LengthOrPercentage::Percentage(ref other)) => {
-                this.compute_distance(other)
-            },
-            (this, other) => {
-                let this: CalcLengthOrPercentage = From::from(this);
-                let other: CalcLengthOrPercentage = From::from(other);
-                this.compute_distance(&other)
-            }
-        }
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (*self, *other) {
-            (LengthOrPercentage::Length(ref this),
-             LengthOrPercentage::Length(ref other)) => {
-                let diff = (this.0 - other.0) as f64;
-                Ok(diff * diff)
-            },
-            (LengthOrPercentage::Percentage(ref this),
-             LengthOrPercentage::Percentage(ref other)) => {
-                let diff = (this - other) as f64;
-                Ok(diff * diff)
-            },
-            (this, other) => {
-                let this: CalcLengthOrPercentage = From::from(this);
-                let other: CalcLengthOrPercentage = From::from(other);
-                let length_diff = (this.length().0 - other.length().0) as f64;
-                let percentage_diff = (this.percentage() - other.percentage()) as f64;
-                Ok(length_diff * length_diff + percentage_diff * percentage_diff)
-            }
-        }
-    }
-}
-
-impl ComputeDistance for LengthOrPercentageOrAuto {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (*self, *other) {
-            (LengthOrPercentageOrAuto::Length(ref this),
-             LengthOrPercentageOrAuto::Length(ref other)) => {
-                this.compute_distance(other)
-            },
-            (LengthOrPercentageOrAuto::Percentage(ref this),
-             LengthOrPercentageOrAuto::Percentage(ref other)) => {
-                this.compute_distance(other)
-            },
-            (this, other) => {
-                // If one of the element is Auto, Option<> will be None, and the returned distance is Err(())
-                let this: Option<CalcLengthOrPercentage> = From::from(this);
-                let other: Option<CalcLengthOrPercentage> = From::from(other);
-                this.compute_distance(&other)
-            }
-        }
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (*self, *other) {
-            (LengthOrPercentageOrAuto::Length(ref this),
-             LengthOrPercentageOrAuto::Length(ref other)) => {
-                let diff = (this.0 - other.0) as f64;
-                Ok(diff * diff)
-            },
-            (LengthOrPercentageOrAuto::Percentage(ref this),
-             LengthOrPercentageOrAuto::Percentage(ref other)) => {
-                let diff = (this - other) as f64;
-                Ok(diff * diff)
-            },
-            (this, other) => {
-                let this: Option<CalcLengthOrPercentage> = From::from(this);
-                let other: Option<CalcLengthOrPercentage> = From::from(other);
-                if this.is_none() || other.is_none() {
-                    Err(())
-                } else {
-                    let length_diff = (this.unwrap().length().0 - other.unwrap().length().0) as f64;
-                    let percentage_diff = (this.unwrap().percentage() - other.unwrap().percentage()) as f64;
-                    Ok(length_diff * length_diff + percentage_diff * percentage_diff)
-                }
-            }
-        }
-    }
-}
-
-impl ComputeDistance for LengthOrPercentageOrNone {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (*self, *other) {
-            (LengthOrPercentageOrNone::Length(ref this),
-             LengthOrPercentageOrNone::Length(ref other)) => {
-                this.compute_distance(other)
-            },
-            (LengthOrPercentageOrNone::Percentage(ref this),
-             LengthOrPercentageOrNone::Percentage(ref other)) => {
-                this.compute_distance(other)
-            },
-            _ => Err(())
-        }
-    }
-}
-
-impl ComputeDistance for MinLength {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (*self, *other) {
-            (MinLength::LengthOrPercentage(ref this),
-             MinLength::LengthOrPercentage(ref other)) => {
-                this.compute_distance(other)
-            },
-            _ => Err(()),
-        }
-    }
-}
-
-impl ComputeDistance for MaxLength {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (*self, *other) {
-            (MaxLength::LengthOrPercentage(ref this),
-             MaxLength::LengthOrPercentage(ref other)) => {
-                this.compute_distance(other)
-            },
-            _ => Err(()),
-        }
-    }
-}
-
-impl ComputeDistance for VerticalAlign {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (*self, *other) {
-            (VerticalAlign::LengthOrPercentage(ref this),
-             VerticalAlign::LengthOrPercentage(ref other)) => {
-                this.compute_distance(other)
-            },
-            _ => Err(()),
-        }
-    }
-}
-
-impl ComputeDistance for BorderRadiusSize {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sd| sd.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        Ok(try!(self.0.width.compute_squared_distance(&other.0.width)) +
-           try!(self.0.height.compute_squared_distance(&other.0.height)))
-    }
-}
-
-impl ComputeDistance for BackgroundSizeList {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.0.compute_distance(&other.0)
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.0.compute_squared_distance(&other.0)
-    }
-}
-
-impl ComputeDistance for LineHeight {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (*self, *other) {
-            (LineHeight::Length(ref this),
-             LineHeight::Length(ref other)) => {
-                this.compute_distance(other)
-            },
-            (LineHeight::Number(ref this),
-             LineHeight::Number(ref other)) => {
-                this.compute_distance(other)
-            },
-            _ => Err(()),
-        }
-    }
-}
-
-impl ComputeDistance for FontWeight {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        let a = (*self as u32) as f64;
-        let b = (*other as u32) as f64;
-        a.compute_distance(&b)
-    }
-}
-
-impl<H, V> ComputeDistance for generic_position::Position<H, V>
-    where H: ComputeDistance, V: ComputeDistance
-{
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sd| sd.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        Ok(try!(self.horizontal.compute_squared_distance(&other.horizontal)) +
-           try!(self.vertical.compute_squared_distance(&other.vertical)))
-    }
-}
-
-impl ComputeDistance for HorizontalPosition {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.0.compute_distance(&other.0)
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.0.compute_squared_distance(&other.0)
-    }
-}
-
-impl ComputeDistance for VerticalPosition {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.0.compute_distance(&other.0)
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.0.compute_squared_distance(&other.0)
-    }
-}
-
-impl ComputeDistance for ClipRect {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sd| sd.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        let list = [ try!(self.top.compute_distance(&other.top)),
-                     try!(self.right.compute_distance(&other.right)),
-                     try!(self.bottom.compute_distance(&other.bottom)),
-                     try!(self.left.compute_distance(&other.left)) ];
-        Ok(list.iter().fold(0.0f64, |sum, diff| sum + diff * diff))
-    }
-}
-
-impl ComputeDistance for IntermediateTextShadow {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sd| sd.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        let list = [ try!(self.offset_x.compute_distance(&other.offset_x)),
-                     try!(self.offset_y.compute_distance(&other.offset_y)),
-                     try!(self.blur_radius.compute_distance(&other.blur_radius)),
-                     try!(self.color.compute_distance(&other.color)) ];
-        Ok(list.iter().fold(0.0f64, |sum, diff| sum + diff * diff))
-    }
-}
-
-impl ComputeDistance for IntermediateTextShadowList {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sd| sd.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        let zero = IntermediateTextShadow {
-            offset_x: Au(0),
-            offset_y: Au(0),
-            blur_radius: Au(0),
-            color: IntermediateColor::IntermediateRGBA(IntermediateRGBA::transparent()),
-        };
-
-        let max_len = cmp::max(self.0.len(), other.0.len());
-        let mut diff_squared = 0.0f64;
-        for i in 0..max_len {
-            diff_squared += match (self.0.get(i), other.0.get(i)) {
-                (Some(shadow), Some(other)) => {
-                    try!(shadow.compute_squared_distance(other))
-                },
-                (Some(shadow), None) |
-                (None, Some(shadow)) => {
-                    try!(shadow.compute_squared_distance(&zero))
-                },
-                (None, None) => unreachable!(),
-            };
-        }
-        Ok(diff_squared)
-    }
-}
-
-impl ComputeDistance for IntermediateBoxShadow {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sd| sd.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        if self.inset != other.inset {
-            return Err(());
-        }
-        let list = [ try!(self.offset_x.compute_distance(&other.offset_x)),
-                     try!(self.offset_y.compute_distance(&other.offset_y)),
-                     try!(self.color.compute_distance(&other.color)),
-                     try!(self.spread_radius.compute_distance(&other.spread_radius)),
-                     try!(self.blur_radius.compute_distance(&other.blur_radius)) ];
-        Ok(list.iter().fold(0.0f64, |sum, diff| sum + diff * diff))
-    }
-}
-
-impl ComputeDistance for IntermediateBoxShadowList {
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        self.compute_squared_distance(other).map(|sd| sd.sqrt())
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        // The inset value must change
-        let mut zero = IntermediateBoxShadow {
-            offset_x: Au(0),
-            offset_y: Au(0),
-            spread_radius: Au(0),
-            blur_radius: Au(0),
-            color: IntermediateColor::IntermediateRGBA(IntermediateRGBA::transparent()),
-            inset: false,
-        };
-
-        let max_len = cmp::max(self.0.len(), other.0.len());
-        let mut diff_squared = 0.0f64;
-        for i in 0..max_len {
-            diff_squared += match (self.0.get(i), other.0.get(i)) {
-                (Some(shadow), Some(other)) => {
-                    try!(shadow.compute_squared_distance(other))
-                },
-                (Some(shadow), None) |
-                (None, Some(shadow)) => {
-                    zero.inset = shadow.inset;
-                    try!(shadow.compute_squared_distance(&zero))
-                }
-                (None, None) => unreachable!(),
-            };
-        }
-        Ok(diff_squared)
-    }
-}
-
-impl ComputeDistance for TransformList {
-    #[inline]
-    fn compute_distance(&self, _other: &Self) -> Result<f64, ()> {
-        Err(())
-    }
-}
-
-impl<T, U> ComputeDistance for Either<T, U>
-    where T: ComputeDistance, U: ComputeDistance
-{
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (self, other) {
-            (&Either::First(ref this), &Either::First(ref other)) => {
-                this.compute_distance(other)
-            },
-            (&Either::Second(ref this), &Either::Second(ref other)) => {
-                this.compute_distance(other)
-            },
-            _ => Err(())
-        }
-    }
-
-    #[inline]
-    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
-        match (self, other) {
-            (&Either::First(ref this), &Either::First(ref other)) => {
-                this.compute_squared_distance(other)
-            },
-            (&Either::Second(ref this), &Either::Second(ref other)) => {
-                this.compute_squared_distance(other)
-            },
-            _ => Err(())
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 #[allow(missing_docs)]
@@ -2801,15 +2737,32 @@ pub enum IntermediateColor {
     IntermediateRGBA(IntermediateRGBA),
 }
 
-impl Interpolate for IntermediateColor {
+impl Animatable for IntermediateColor {
     #[inline]
-    fn interpolate(&self, other: &Self, progress: f64) -> Result<Self, ()> {
+    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
         match (*self, *other) {
-            (IntermediateColor::IntermediateRGBA(ref this), IntermediateColor::IntermediateRGBA(ref other)) => {
-                this.interpolate(other, progress).map(IntermediateColor::IntermediateRGBA)
+            (IntermediateColor::IntermediateRGBA(ref this),
+             IntermediateColor::IntermediateRGBA(ref other)) => {
+                this.add_weighted(other, self_portion, other_portion)
+                    .map(IntermediateColor::IntermediateRGBA)
             }
             // FIXME: Bug 1345709: Implement currentColor animations.
             _ => Err(()),
+        }
+    }
+
+    #[inline]
+    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
+        self.compute_squared_distance(other).map(|sq| sq.sqrt())
+    }
+
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<f64, ()> {
+        match (*self, *other) {
+            (IntermediateColor::IntermediateRGBA(ref this), IntermediateColor::IntermediateRGBA(ref other)) => {
+                this.compute_squared_distance(other)
+            },
+            _ => Ok(0.0),
         }
     }
 }
@@ -2905,8 +2858,8 @@ impl <'a> From<<&'a IntermediateColor> for CSSParserColor {
             }
         }
     }
-    ${impl_interpolate_for_shadow('Intermediate%sShadow' % type,
-                                  'IntermediateColor::IntermediateRGBA(IntermediateRGBA::transparent())')}
+    ${impl_animatable_for_shadow('Intermediate%sShadow' % type,
+                                 'IntermediateColor::IntermediateRGBA(IntermediateRGBA::transparent())')}
 </%def>
 
 ${impl_intermediate_type_for_shadow('Box')}

@@ -26,6 +26,7 @@ struct CustomElementData;
 struct ElementDefinitionOptions;
 struct LifecycleCallbacks;
 class CallbackFunction;
+class CustomElementReaction;
 class Function;
 class Promise;
 
@@ -72,7 +73,18 @@ struct CustomElementData
 {
   NS_INLINE_DECL_REFCOUNTING(CustomElementData)
 
+  // https://dom.spec.whatwg.org/#concept-element-custom-element-state
+  // CustomElementData is only created on the element which is a custom element
+  // or an upgrade candidate, so the state of an element without
+  // CustomElementData is "uncustomized".
+  enum class State {
+    eUndefined,
+    eFailed,
+    eCustom
+  };
+
   explicit CustomElementData(nsIAtom* aType);
+  CustomElementData(nsIAtom* aType, State aState);
   // Objects in this array are transient and empty after each microtask
   // checkpoint.
   nsTArray<nsAutoPtr<CustomElementCallback>> mCallbackQueue;
@@ -90,6 +102,15 @@ struct CustomElementData
   // it is used to determine if a new queue needs to be pushed onto the
   // processing stack.
   int32_t mAssociatedMicroTask;
+  // Custom element state as described in the custom element spec.
+  State mState;
+  // custom element reaction queue as described in the custom element spec.
+  // There is 1 reaction in reaction queue, when 1) it becomes disconnected,
+  // 2) it’s adopted into a new document, 3) its attributes are changed,
+  // appended, removed, or replaced.
+  // There are 3 reactions in reaction queue when doing upgrade operation,
+  // e.g., create an element, insert a node.
+  AutoTArray<nsAutoPtr<CustomElementReaction>, 3> mReactionQueue;
 
   // Empties the callback queue.
   void RunCallbackQueue();
@@ -178,7 +199,7 @@ public:
   }
 
   // nsWeakPtr is a weak pointer of Element
-  // The element reaction queues are stored in ElementReactionQueueMap.
+  // The element reaction queues are stored in CustomElementData.
   // We need to lookup ElementReactionQueueMap again to get relevant reaction queue.
   // The choice of 1 for the auto size here is based on gut feeling.
   typedef AutoTArray<nsWeakPtr, 1> ElementQueue;
@@ -202,17 +223,6 @@ public:
 
 private:
   ~CustomElementReactionsStack() {};
-
-  // There is 1 reaction in reaction queue, when 1) it becomes disconnected,
-  // 2) it’s adopted into a new document, 3) its attributes are changed,
-  // appended, removed, or replaced.
-  // There are 3 reactions in reaction queue when doing upgrade operation,
-  // e.g., create an element, insert a node.
-  typedef AutoTArray<nsAutoPtr<CustomElementReaction>, 3> ReactionQueue;
-  typedef nsClassHashtable<nsISupportsHashKey, ReactionQueue>
-    ElementReactionQueueMap;
-
-  ElementReactionQueueMap mElementReactionQueueMap;
 
   // The choice of 8 for the auto size here is based on gut feeling.
   AutoTArray<ElementQueue, 8> mReactionsStack;

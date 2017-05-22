@@ -28,7 +28,9 @@
 #include "mozilla/css/Loader.h"
 #include "mozilla/css/StyleRule.h"
 #include "mozilla/css/ImportRule.h"
+#include "mozilla/css/URLMatchingFunction.h"
 #include "nsCSSRules.h"
+#include "nsCSSCounterStyleRule.h"
 #include "nsCSSFontFaceRule.h"
 #include "mozilla/css/NameSpaceRule.h"
 #include "nsTArray.h"
@@ -263,9 +265,8 @@ public:
                                  nsIURI* aBaseURL,
                                  nsIPrincipal* aDocPrincipal);
 
-  bool ParseCounterStyleName(const nsAString& aBuffer,
-                             nsIURI* aURL,
-                             nsAString& aName);
+  already_AddRefed<nsIAtom> ParseCounterStyleName(const nsAString& aBuffer,
+                                                  nsIURI* aURL);
 
   bool ParseCounterDescriptor(nsCSSCounterDesc aDescID,
                               const nsAString& aBuffer,
@@ -707,7 +708,7 @@ protected:
                                        SupportsConditionTermOperator aOperator);
 
   bool ParseCounterStyleRule(RuleAppendFunc aAppendFunc, void* aProcessData);
-  bool ParseCounterStyleName(nsAString& aName, bool aForDefinition);
+  already_AddRefed<nsIAtom> ParseCounterStyleName(bool aForDefinition);
   bool ParseCounterStyleNameValue(nsCSSValue& aValue);
   bool ParseCounterDescriptor(nsCSSCounterStyleRule *aRule);
   bool ParseCounterDescriptorValue(nsCSSCounterDesc aDescID,
@@ -3043,21 +3044,20 @@ CSSParserImpl::ParsePropertyWithVariableReferences(
   mTempData.AssertInitialState();
 }
 
-bool
-CSSParserImpl::ParseCounterStyleName(const nsAString& aBuffer,
-                                     nsIURI* aURL,
-                                     nsAString& aName)
+already_AddRefed<nsIAtom>
+CSSParserImpl::ParseCounterStyleName(const nsAString& aBuffer, nsIURI* aURL)
 {
   nsCSSScanner scanner(aBuffer, 0);
   css::ErrorReporter reporter(scanner, mSheet, mChildLoader, aURL);
   InitScanner(scanner, reporter, aURL, aURL, nullptr);
 
-  bool success = ParseCounterStyleName(aName, true) && !GetToken(true);
+  nsCOMPtr<nsIAtom> name = ParseCounterStyleName(true);
+  bool success = name && !GetToken(true);
 
   OUTPUT_ERROR();
   ReleaseScanner();
 
-  return success;
+  return success ? name.forget() : nullptr;
 }
 
 bool
@@ -3902,13 +3902,13 @@ CSSParserImpl::ParseMozDocumentRule(RuleAppendFunc aAppendFunc, void* aData)
     css::DocumentRule::URL *cur = *next = new css::DocumentRule::URL;
     next = &cur->next;
     if (mToken.mType == eCSSToken_URL) {
-      cur->func = css::DocumentRule::eURL;
+      cur->func = URLMatchingFunction::eURL;
       CopyUTF16toUTF8(mToken.mIdent, cur->url);
     } else if (mToken.mIdent.LowerCaseEqualsLiteral("regexp")) {
       // regexp() is different from url-prefix() and domain() (but
       // probably the way they *should* have been* in that it requires a
       // string argument, and doesn't try to behave like url().
-      cur->func = css::DocumentRule::eRegExp;
+      cur->func = URLMatchingFunction::eRegExp;
       GetToken(true);
       // copy before we know it's valid (but before ExpectSymbol changes
       // mToken.mIdent)
@@ -3921,9 +3921,9 @@ CSSParserImpl::ParseMozDocumentRule(RuleAppendFunc aAppendFunc, void* aData)
       }
     } else {
       if (mToken.mIdent.LowerCaseEqualsLiteral("url-prefix")) {
-        cur->func = css::DocumentRule::eURLPrefix;
+        cur->func = URLMatchingFunction::eURLPrefix;
       } else if (mToken.mIdent.LowerCaseEqualsLiteral("domain")) {
-        cur->func = css::DocumentRule::eDomain;
+        cur->func = URLMatchingFunction::eDomain;
       }
 
       NS_ASSERTION(!mHavePushBack, "mustn't have pushback at this point");
@@ -4537,8 +4537,8 @@ CSSParserImpl::ParseSupportsRule(RuleAppendFunc aAppendFunc, void* aProcessData)
   // errors don't get reported.
   nsAutoFailingSupportsRule failing(this, conditionMet);
 
-  RefPtr<css::GroupRule> rule = new CSSSupportsRule(conditionMet, condition,
-                                                      linenum, colnum);
+  RefPtr<css::GroupRule> rule =
+    new mozilla::CSSSupportsRule(conditionMet, condition, linenum, colnum);
   return ParseGroupRule(rule, aAppendFunc, aProcessData);
 }
 
@@ -4829,10 +4829,10 @@ CSSParserImpl::ParseSupportsConditionTermsAfterOperator(
 bool
 CSSParserImpl::ParseCounterStyleRule(RuleAppendFunc aAppendFunc, void* aData)
 {
-  nsAutoString name;
+  nsCOMPtr<nsIAtom> name;
   uint32_t linenum, colnum;
   if (!GetNextTokenLocation(true, &linenum, &colnum) ||
-      !ParseCounterStyleName(name, true)) {
+      !(name = ParseCounterStyleName(true))) {
     REPORT_UNEXPECTED_TOKEN(PECounterStyleNotIdent);
     return false;
   }
@@ -4914,16 +4914,16 @@ CSSParserImpl::ParseCounterStyleRule(RuleAppendFunc aAppendFunc, void* aData)
   return true;
 }
 
-bool
-CSSParserImpl::ParseCounterStyleName(nsAString& aName, bool aForDefinition)
+already_AddRefed<nsIAtom>
+CSSParserImpl::ParseCounterStyleName(bool aForDefinition)
 {
   if (!GetToken(true)) {
-    return false;
+    return nullptr;
   }
 
   if (mToken.mType != eCSSToken_Ident) {
     UngetToken();
-    return false;
+    return nullptr;
   }
 
   static const nsCSSKeyword kReservedNames[] = {
@@ -4937,22 +4937,21 @@ CSSParserImpl::ParseCounterStyleName(nsAString& aName, bool aForDefinition)
                         aForDefinition ? kReservedNames : nullptr)) {
     REPORT_UNEXPECTED_TOKEN(PECounterStyleBadName);
     UngetToken();
-    return false;
+    return nullptr;
   }
 
-  aName = mToken.mIdent;
-  if (nsCSSProps::IsPredefinedCounterStyle(aName)) {
-    ToLowerCase(aName);
+  nsString name = mToken.mIdent;
+  if (nsCSSProps::IsPredefinedCounterStyle(name)) {
+    ToLowerCase(name);
   }
-  return true;
+  return NS_Atomize(name);
 }
 
 bool
 CSSParserImpl::ParseCounterStyleNameValue(nsCSSValue& aValue)
 {
-  nsString name;
-  if (ParseCounterStyleName(name, false)) {
-    aValue.SetStringValue(name, eCSSUnit_Ident);
+  if (nsCOMPtr<nsIAtom> name = ParseCounterStyleName(false)) {
+    aValue.SetAtomIdentValue(name.forget());
     return true;
   }
   return false;
@@ -8046,7 +8045,7 @@ CSSParserImpl::ParseCounter(nsCSSValue& aValue)
         break;
       }
     } else {
-      type.SetStringValue(NS_LITERAL_STRING("decimal"), eCSSUnit_Ident);
+      type.SetAtomIdentValue(do_AddRef(nsGkAtoms::decimal));
     }
 
     if (!ExpectSymbol(')', true)) {
@@ -15077,17 +15076,14 @@ CSSParserImpl::ParseFontRanges(nsCSSValue& aValue)
     uint32_t low = mToken.mInteger;
     uint32_t high = mToken.mInteger2;
 
-    // A range that descends, or a range that is entirely outside the
-    // current range of Unicode (U+0-10FFFF) is ignored, but does not
-    // invalidate the descriptor.  A range that straddles the high end
-    // is clipped.
-    if (low <= 0x10FFFF && low <= high) {
-      if (high > 0x10FFFF)
-        high = 0x10FFFF;
-
-      ranges.AppendElement(low);
-      ranges.AppendElement(high);
+    // A range that descends, or high end exceeds the current range of
+    // Unicode (U+0-10FFFF) invalidates the descriptor.
+    if (low > high || high > 0x10FFFF) {
+      return false;
     }
+    ranges.AppendElement(low);
+    ranges.AppendElement(high);
+
     if (!ExpectSymbol(',', true))
       break;
   }
@@ -15281,9 +15277,8 @@ CSSParserImpl::ParseListStyle()
   }
   if ((found & 4) == 0) {
     // Provide default values
-    nsString type = (found & 1) ?
-      NS_LITERAL_STRING("none") : NS_LITERAL_STRING("disc");
-    values[2].SetStringValue(type, eCSSUnit_Ident);
+    nsIAtom* type = (found & 1) ? nsGkAtoms::none : nsGkAtoms::disc;
+    values[2].SetAtomIdentValue(do_AddRef(type));
   }
   if ((found & 8) == 0) {
     values[3].SetNoneValue();
@@ -18222,13 +18217,11 @@ nsCSSParser::ParsePropertyWithVariableReferences(
                                         aLineNumber, aLineOffset);
 }
 
-bool
-nsCSSParser::ParseCounterStyleName(const nsAString& aBuffer,
-                                   nsIURI* aURL,
-                                   nsAString& aName)
+already_AddRefed<nsIAtom>
+nsCSSParser::ParseCounterStyleName(const nsAString& aBuffer, nsIURI* aURL)
 {
   return static_cast<CSSParserImpl*>(mImpl)->
-    ParseCounterStyleName(aBuffer, aURL, aName);
+    ParseCounterStyleName(aBuffer, aURL);
 }
 
 bool

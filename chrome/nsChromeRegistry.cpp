@@ -19,7 +19,6 @@
 #include "nsIConsoleService.h"
 #include "nsIDocument.h"
 #include "nsIDOMDocument.h"
-#include "nsIDOMLocation.h"
 #include "nsIDOMWindowCollection.h"
 #include "nsIDOMWindow.h"
 #include "nsIObserverService.h"
@@ -31,6 +30,7 @@
 #include "mozilla/Printf.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
+#include "mozilla/dom/Location.h"
 
 #ifdef ENABLE_INTL_API
 #include "unicode/uloc.h"
@@ -42,6 +42,7 @@ nsChromeRegistry* nsChromeRegistry::gChromeRegistry;
 // mozilla::TextRange and a TextRange in OSX headers.
 using mozilla::StyleSheet;
 using mozilla::dom::IsChromeURI;
+using mozilla::dom::Location;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -292,16 +293,6 @@ nsChromeRegistry::ConvertChromeURL(nsIURI* aChromeURI, nsIURI* *aResult)
   if (NS_FAILED(rv))
     return rv;
 
-  if (flags & PLATFORM_PACKAGE) {
-#if defined(XP_WIN)
-    path.Insert("win/", 0);
-#elif defined(XP_MACOSX)
-    path.Insert("mac/", 0);
-#else
-    path.Insert("unix/", 0);
-#endif
-  }
-
   if (!baseURI) {
     LogMessage("No chrome package registered for chrome://%s/%s/%s",
                package.get(), provider.get(), path.get());
@@ -508,7 +499,7 @@ nsChromeRegistry::ReloadChrome()
         if (NS_SUCCEEDED(rv)) {
           nsCOMPtr<nsPIDOMWindowOuter> domWindow = do_QueryInterface(protoWindow);
           if (domWindow) {
-            nsIDOMLocation* location = domWindow->GetLocation();
+            Location* location = domWindow->GetLocation();
             if (location) {
               rv = location->Reload(false);
               if (NS_FAILED(rv)) return rv;

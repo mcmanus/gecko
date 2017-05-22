@@ -4,10 +4,9 @@
 
 import urllib
 
-from marionette_driver.by import By
-from marionette_driver import errors
+from marionette_driver import By, errors
 
-from marionette_harness import MarionetteTestCase, run_if_e10s, skip
+from marionette_harness import MarionetteTestCase, run_if_e10s, skip_if_mobile
 
 
 def inline(doc):
@@ -92,7 +91,6 @@ class TestLegacyClick(MarionetteTestCase):
         button.click()
         self.assertEqual(1, self.marionette.execute_script("return window.clicks", sandbox=None))
 
-    @skip("Bug 1357634 - NoSuchElementException: Unable to locate element: username")
     def test_click_number_link(self):
         test_html = self.marionette.absolute_url("clicks.html")
         self.marionette.navigate(test_html)
@@ -107,7 +105,6 @@ class TestLegacyClick(MarionetteTestCase):
         with self.assertRaises(errors.ElementNotInteractableException):
             self.marionette.find_element(By.ID, "child").click()
 
-    @skip("Bug 1357696 - NoSuchElementException: Unable to locate element: username")
     def test_clicking_on_a_multiline_link(self):
         test_html = self.marionette.absolute_url("clicks.html")
         self.marionette.navigate(test_html)
@@ -313,6 +310,18 @@ class TestClickNavigation(MarionetteTestCase):
         self.assertNotEqual(self.marionette.get_url(), self.test_page)
         self.assertEqual(self.marionette.title, "XHTML Test Page")
 
+    @skip_if_mobile("Bug 1325738 - Modal dialogs block execution of code for Fennec")
+    def test_click_link_page_load_aborted_by_beforeunload(self):
+        page = self.marionette.absolute_url("beforeunload.html")
+        self.marionette.navigate(page)
+        self.marionette.find_element(By.TAG_NAME, "a").click()
+
+        # click returns immediately when a beforeunload handler is invoked
+        alert = self.marionette.switch_to_alert()
+        alert.dismiss()
+
+        self.assertEqual(self.marionette.get_url(), page)
+
     def test_click_link_anchor(self):
         self.marionette.find_element(By.ID, "anchor").click()
         self.assertEqual(self.marionette.get_url(), "{}#".format(self.test_page))
@@ -327,6 +336,10 @@ class TestClickNavigation(MarionetteTestCase):
     def test_click_no_link(self):
         self.marionette.find_element(By.ID, "showbutton").click()
         self.assertEqual(self.marionette.get_url(), self.test_page)
+
+    def test_click_option_navigate(self):
+        self.marionette.find_element(By.ID, "option").click()
+        self.marionette.find_element(By.ID, "delay")
 
     @run_if_e10s("Requires e10s mode enabled")
     def test_click_remoteness_change(self):

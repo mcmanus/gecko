@@ -4,7 +4,6 @@
 
 let extData = {
   manifest: {
-    "permissions": ["contextMenus"],
     "sidebar_action": {
       "default_panel": "sidebar.html",
     },
@@ -31,12 +30,6 @@ let extData = {
   },
 
   background: function() {
-    browser.contextMenus.create({
-      id: "clickme-page",
-      title: "Click me!",
-      contexts: ["all"],
-    });
-
     browser.test.onMessage.addListener(msg => {
       if (msg === "set-panel") {
         browser.sidebarAction.setPanel({panel: ""}).then(() => {
@@ -49,17 +42,17 @@ let extData = {
   },
 };
 
-add_task(function* sidebar_initial_install() {
+add_task(async function sidebar_initial_install() {
   ok(document.getElementById("sidebar-box").hidden, "sidebar box is not visible");
   let extension = ExtensionTestUtils.loadExtension(extData);
-  yield extension.startup();
+  await extension.startup();
   // Test sidebar is opened on install
-  yield extension.awaitMessage("sidebar");
+  await extension.awaitMessage("sidebar");
   ok(!document.getElementById("sidebar-box").hidden, "sidebar box is visible");
   // Test toolbar button is available
   ok(document.getElementById("sidebar-button"), "sidebar button is in UI");
 
-  yield extension.unload();
+  await extension.unload();
   // Test that the sidebar was closed on unload.
   ok(document.getElementById("sidebar-box").hidden, "sidebar box is not visible");
 
@@ -69,55 +62,41 @@ add_task(function* sidebar_initial_install() {
 });
 
 
-add_task(function* sidebar_two_sidebar_addons() {
+add_task(async function sidebar_two_sidebar_addons() {
   let extension2 = ExtensionTestUtils.loadExtension(extData);
-  yield extension2.startup();
+  await extension2.startup();
   // Test sidebar is opened on install
-  yield extension2.awaitMessage("sidebar");
+  await extension2.awaitMessage("sidebar");
   ok(!document.getElementById("sidebar-box").hidden, "sidebar box is visible");
   // Test toolbar button is NOT available after first install
   ok(!document.getElementById("sidebar-button"), "sidebar button is not in UI");
 
   // Test second sidebar install opens new sidebar
   let extension3 = ExtensionTestUtils.loadExtension(extData);
-  yield extension3.startup();
+  await extension3.startup();
   // Test sidebar is opened on install
-  yield extension3.awaitMessage("sidebar");
+  await extension3.awaitMessage("sidebar");
   ok(!document.getElementById("sidebar-box").hidden, "sidebar box is visible");
-  yield extension3.unload();
+  await extension3.unload();
 
   // We just close the sidebar on uninstall of the current sidebar.
   ok(document.getElementById("sidebar-box").hidden, "sidebar box is not visible");
 
-  yield extension2.unload();
+  await extension2.unload();
 });
 
-add_task(function* sidebar_empty_panel() {
+add_task(async function sidebar_empty_panel() {
   let extension = ExtensionTestUtils.loadExtension(extData);
-  yield extension.startup();
+  await extension.startup();
   // Test sidebar is opened on install
-  yield extension.awaitMessage("sidebar");
+  await extension.awaitMessage("sidebar");
   ok(!document.getElementById("sidebar-box").hidden, "sidebar box is visible in first window");
   extension.sendMessage("set-panel");
-  yield extension.awaitFinish();
-  yield extension.unload();
+  await extension.awaitFinish();
+  await extension.unload();
 });
 
-add_task(function* sidebar_contextmenu() {
-  let extension = ExtensionTestUtils.loadExtension(extData);
-  yield extension.startup();
-  // Test sidebar is opened on install
-  yield extension.awaitMessage("sidebar");
-
-  let contentAreaContextMenu = yield openContextMenuInSidebar();
-  let item = contentAreaContextMenu.getElementsByAttribute("label", "Click me!");
-  is(item.length, 1, "contextMenu item for page was found");
-  yield closeContextMenu(contentAreaContextMenu);
-
-  yield extension.unload();
-});
-
-add_task(function* cleanup() {
+add_task(async function cleanup() {
   // This is set on initial sidebar install.
   Services.prefs.clearUserPref("extensions.sidebar-button.shown");
 });

@@ -11,7 +11,6 @@ this.EXPORTED_SYMBOLS = [ "ReaderParent" ];
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils", "resource://gre/modules/PlacesUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode", "resource://gre/modules/ReaderMode.jsm");
@@ -20,19 +19,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "UITour", "resource:///modules/UITour.js
 const gStringBundle = Services.strings.createBundle("chrome://global/locale/aboutReader.properties");
 
 var ReaderParent = {
-  MESSAGES: [
-    "Reader:ArticleGet",
-    "Reader:FaviconRequest",
-    "Reader:UpdateReaderButton",
-  ],
-
-  init() {
-    let mm = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
-    for (let msg of this.MESSAGES) {
-      mm.addMessageListener(msg, this);
-    }
-  },
-
+  // Listeners are added in nsBrowserGlue.js
   receiveMessage(message) {
     switch (message.name) {
       case "Reader:ArticleGet":
@@ -134,8 +121,8 @@ var ReaderParent = {
    * @return {Promise}
    * @resolves JS object representing the article, or null if no article is found.
    */
-  _getArticle: Task.async(function* (url, browser) {
-    return yield ReaderMode.downloadAndParseDocument(url).catch(e => {
+  async _getArticle(url, browser) {
+    return await ReaderMode.downloadAndParseDocument(url).catch(e => {
       if (e && e.newURL) {
         // Pass up the error so we can navigate the browser in question to the new URL:
         throw e;
@@ -143,5 +130,5 @@ var ReaderParent = {
       Cu.reportError("Error downloading and parsing document: " + e);
       return null;
     });
-  })
+  }
 };

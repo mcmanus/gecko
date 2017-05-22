@@ -88,6 +88,7 @@ user_pref("extensions.installDistroAddons", false);
 // XPI extensions are required for test harnesses to load
 user_pref("extensions.defaultProviders.enabled", true);
 user_pref("xpinstall.signatures.required", false);
+user_pref("extensions.allow-non-mpc-extensions", true);
 
 user_pref("geo.wifi.uri", "http://%(server)s/tests/dom/tests/mochitest/geolocation/network_geolocation.sjs");
 user_pref("geo.wifi.timeToWaitBeforeSending", 2000);
@@ -197,9 +198,6 @@ user_pref("layout.spammy_warnings.enabled", false);
 user_pref("media.mediasource.mp4.enabled", true);
 user_pref("media.mediasource.webm.enabled", true);
 
-// Make sure the disk cache doesn't get auto disabled
-user_pref("network.http.bypass-cachelock-threshold", 200000);
-
 // Enable Gamepad
 user_pref("dom.gamepad.enabled", true);
 user_pref("dom.gamepad.non_standard_events.enabled", true);
@@ -289,9 +287,8 @@ user_pref("browser.translation.engine", "bing");
 // Make sure we don't try to load snippets from the network.
 user_pref("browser.aboutHomeSnippets.updateUrl", "nonexistent://test");
 
-// Don't fetch or send directory tiles data from real servers
+// Don't fetch directory tiles data from real servers
 user_pref("browser.newtabpage.directory.source", 'data:application/json,{"testing":1}');
-user_pref("browser.newtabpage.directory.ping", "");
 
 // Ensure UITour won't hit the network
 user_pref("browser.uitour.pinnedTabUrl", "http://%(server)s/uitour-dummy/pinnedTab");
@@ -304,8 +301,7 @@ user_pref("browser.search.countryCode", "US");
 // This will prevent HTTP requests for region defaults.
 user_pref("browser.search.geoSpecificDefaults", false);
 
-// Make sure self support doesn't hit the network.
-user_pref("browser.selfsupport.url", "https://example.com/selfsupport-dummy/");
+// Make sure Shield doesn't hit the network.
 user_pref("extensions.shield-recipe-client.api_url", "https://example.com/selfsupport-dummy/");
 
 user_pref("media.eme.enabled", true);
@@ -345,8 +341,6 @@ user_pref("browser.urlbar.userMadeSearchSuggestionsChoice", true);
 
 user_pref("browser.urlbar.usepreloadedtopurls.enabled", false);
 
-user_pref("dom.audiochannel.mutedByDefault", false);
-
 user_pref("webextensions.tests", true);
 user_pref("startup.homepage_welcome_url", "about:blank");
 user_pref("startup.homepage_welcome_url.additional", "");
@@ -366,7 +360,7 @@ user_pref("media.openUnsupportedTypeWithExternalApp", false);
 user_pref("signon.rememberSignons", false);
 
 // Enable form autofill feature testing.
-user_pref("browser.formautofill.experimental", true);
+user_pref("extensions.formautofill.experimental", true);
 
 // Disable all recommended Marionette preferences for Gecko tests.
 // The prefs recommended by Marionette are typically geared towards

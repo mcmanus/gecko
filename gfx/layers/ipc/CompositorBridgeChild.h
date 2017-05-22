@@ -104,11 +104,6 @@ public:
   RecvInvalidateLayers(const uint64_t& aLayersId) override;
 
   virtual mozilla::ipc::IPCResult
-  RecvCompositorUpdated(const uint64_t& aLayersId,
-                        const TextureFactoryIdentifier& aNewIdentifier,
-                        const uint64_t& aSeqNo) override;
-
-  virtual mozilla::ipc::IPCResult
   RecvUpdatePluginConfigurations(const LayoutDeviceIntPoint& aContentOffset,
                                  const LayoutDeviceIntRegion& aVisibleRegion,
                                  nsTArray<PluginWindowData>&& aPlugins) override;
@@ -134,7 +129,8 @@ public:
                                        LayersBackend aLayersBackend,
                                        TextureFlags aFlags,
                                        uint64_t aSerial,
-                                       wr::MaybeExternalImageId& aExternalImageId) override;
+                                       wr::MaybeExternalImageId& aExternalImageId,
+                                       nsIEventTarget* aTarget) override;
 
   virtual void HandleFatalError(const char* aName, const char* aMsg) const override;
 
@@ -248,9 +244,7 @@ private:
 
   virtual PLayerTransactionChild*
     AllocPLayerTransactionChild(const nsTArray<LayersBackend>& aBackendHints,
-                                const uint64_t& aId,
-                                TextureFactoryIdentifier* aTextureFactoryIdentifier,
-                                bool* aSuccess) override;
+                                const uint64_t& aId) override;
 
   virtual bool DeallocPLayerTransactionChild(PLayerTransactionChild *aChild) override;
 

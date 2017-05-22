@@ -37,8 +37,6 @@ Cu.importGlobalProperties(["URL"]);
 
 var contentLog = new logging.ContentLogger();
 
-var isB2G = false;
-
 var marionetteTestName;
 var winUtil = content.QueryInterface(Ci.nsIInterfaceRequestor)
     .getInterface(Ci.nsIDOMWindowUtils);
@@ -74,10 +72,6 @@ var asyncTestTimeoutId;
 var inactivityTimeoutId = null;
 
 var originalOnError;
-//timer for doc changes
-var checkTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-//timer for readystate
-var readyStateTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
 // Send move events about this often
 var EVENT_INTERVAL = 30; // milliseconds
 // last touch for each fingerId
@@ -121,7 +115,8 @@ var sandboxName = "default";
  */
 var loadListener = {
   command_id: null,
-  seenUnload: null,
+  seenBeforeUnload: false,
+  seenUnload: false,
   timeout: null,
   timerPageLoad: null,
   timerPageUnload: null,
@@ -142,10 +137,11 @@ var loadListener = {
     this.command_id = command_id;
     this.timeout = timeout;
 
+    this.seenBeforeUnload = false;
     this.seenUnload = false;
 
     this.timerPageLoad = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-    this.timerPageUnload = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+    this.timerPageUnload = null;
 
     // In case of a remoteness change, only wait the remaining time
     timeout = startTime + timeout - new Date().getTime();
@@ -159,8 +155,9 @@ var loadListener = {
       addEventListener("hashchange", this, false);
       addEventListener("pagehide", this, false);
 
-      // The event can only be received if the listener gets added to the
-      // currently selected frame.
+      // The events can only be received when the event listeners are
+      // added to the currently selected frame.
+      curContainer.frame.addEventListener("beforeunload", this, false);
       curContainer.frame.addEventListener("unload", this, false);
 
       Services.obs.addObserver(this, "outer-window-destroyed");
@@ -192,6 +189,7 @@ var loadListener = {
     // If the original content window, where the navigation was triggered,
     // doesn't exist anymore, exceptions can be silently ignored.
     try {
+      curContainer.frame.removeEventListener("beforeunload", this);
       curContainer.frame.removeEventListener("unload", this);
     } catch (e if e.name == "TypeError") {}
 
@@ -210,6 +208,10 @@ var loadListener = {
     logger.debug(`Received DOM event "${event.type}" for "${location}"`);
 
     switch (event.type) {
+      case "beforeunload":
+        this.seenBeforeUnload = true;
+        break;
+
       case "unload":
         this.seenUnload = true;
         break;
@@ -244,9 +246,11 @@ var loadListener = {
           sendError(new UnknownError("Reached error page: " +
               event.target.baseURI), this.command_id);
 
-        // Special-case about:blocked pages which should be treated as non-error
-        // pages but do not raise a pageshow event.
-        } else if (/about:blocked\?/.exec(event.target.baseURI)) {
+        // Return early with a page load strategy of eager, and also special-case
+        // about:blocked pages which should be treated as non-error pages but do
+        // not raise a pageshow event.
+        } else if (capabilities.get("pageLoadStrategy") === session.PageLoadStrategy.Eager ||
+            /about:blocked\?/.exec(event.target.baseURI)) {
           this.stop();
           sendOk(this.command_id);
         }
@@ -266,10 +270,21 @@ var loadListener = {
    */
   notify: function (timer) {
     switch (timer) {
-      // If the page unload timer is raised, ensure to properly stop the load
-      // listener, and return from the currently active command.
       case this.timerPageUnload:
-        if (!this.seenUnload) {
+        // In the case when a document has a beforeunload handler registered,
+        // the currently active command will return immediately due to the
+        // modal dialog observer in proxy.js.
+        // Otherwise the timeout waiting for the document to start navigating
+        // is increased by 5000 ms to ensure a possible load event is not missed.
+        // In the common case such an event should occur pretty soon after
+        // beforeunload, and we optimise for this.
+        if (this.seenBeforeUnload) {
+          this.seenBeforeUnload = null;
+          this.timerPageUnload.initWithCallback(this, 5000, Ci.nsITimer.TYPE_ONE_SHOT)
+
+        // If no page unload has been detected, ensure to properly stop the load
+        // listener, and return from the currently active command.
+        } else if (!this.seenUnload) {
           logger.debug("Canceled page load listener because no navigation " +
               "has been detected");
           this.stop();
@@ -336,6 +351,11 @@ var loadListener = {
    */
   navigate: function (trigger, command_id, timeout, loadEventExpected = true,
       useUnloadTimer = false) {
+
+    // Only wait if the page load strategy is not `none`
+    loadEventExpected = loadEventExpected &&
+        capabilities.get("pageLoadStrategy") !== session.PageLoadStrategy.None;
+
     if (loadEventExpected) {
       let startTime = new Date().getTime();
       this.start(command_id, timeout, startTime, true);
@@ -352,6 +372,7 @@ var loadListener = {
 
       // If requested setup a timer to detect a possible page load
       if (useUnloadTimer) {
+        this.timerPageUnload = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
         this.timerPageUnload.initWithCallback(this, 200, Ci.nsITimer.TYPE_ONE_SHOT);
       }
 
@@ -378,13 +399,9 @@ function registerSelf() {
 
   if (register[0]) {
     let {id, remotenessChange} = register[0][0];
-    capabilities = session.Capabilities.fromJSON(register[0][2]);
+    capabilities = session.Capabilities.fromJSON(register[0][1]);
     listenerId = id;
     if (typeof id != "undefined") {
-      // check if we're the main process
-      if (register[0][1]) {
-        addMessageListener("MarionetteMainListener:emitTouchEvent", emitTouchEventForIFrame);
-      }
       startListeners();
       let rv = {};
       if (remotenessChange) {
@@ -393,35 +410,6 @@ function registerSelf() {
       sendAsyncMessage("Marionette:listenersAttached", rv);
     }
   }
-}
-
-function emitTouchEventForIFrame(message) {
-  message = message.json;
-  let identifier = legacyactions.nextTouchId;
-
-  let domWindowUtils = curContainer.frame.
-    QueryInterface(Components.interfaces.nsIInterfaceRequestor).
-    getInterface(Components.interfaces.nsIDOMWindowUtils);
-  var ratio = domWindowUtils.screenPixelsPerCSSPixel;
-
-  var typeForUtils;
-  switch (message.type) {
-    case 'touchstart':
-      typeForUtils = domWindowUtils.TOUCH_CONTACT;
-      break;
-    case 'touchend':
-      typeForUtils = domWindowUtils.TOUCH_REMOVE;
-      break;
-    case 'touchcancel':
-      typeForUtils = domWindowUtils.TOUCH_CANCEL;
-      break;
-    case 'touchmove':
-      typeForUtils = domWindowUtils.TOUCH_CONTACT;
-      break;
-  }
-  domWindowUtils.sendNativeTouchPoint(identifier, typeForUtils,
-    Math.round(message.screenX * ratio), Math.round(message.screenY * ratio),
-    message.force, 90);
 }
 
 // Eventually we will not have a closure for every single command, but
@@ -556,42 +544,17 @@ function startListeners() {
 }
 
 /**
- * Used during newSession and restart, called to set up the modal dialog listener in b2g
- */
-function waitForReady() {
-  if (content.document.readyState == 'complete') {
-    readyStateTimer.cancel();
-    content.addEventListener("mozbrowsershowmodalprompt", modalHandler);
-    content.addEventListener("unload", waitForReady);
-  }
-  else {
-    readyStateTimer.initWithCallback(waitForReady, 100, Ci.nsITimer.TYPE_ONE_SHOT);
-  }
-}
-
-/**
  * Called when we start a new session. It registers the
  * current environment, and resets all values
  */
 function newSession(msg) {
   capabilities = session.Capabilities.fromJSON(msg.json);
-  isB2G = capabilities.get("platformName") === "B2G";
   resetValues();
-  if (isB2G) {
-    readyStateTimer.initWithCallback(waitForReady, 100, Ci.nsITimer.TYPE_ONE_SHOT);
-    // We have to set correct mouse event source to MOZ_SOURCE_TOUCH
-    // to offer a way for event listeners to differentiate
-    // events being the result of a physical mouse action.
-    // This is especially important for the touch event shim,
-    // in order to prevent creating touch event for these fake mouse events.
-    legacyactions.inputSource = Ci.nsIDOMMouseEvent.MOZ_SOURCE_TOUCH;
-  }
 }
 
 /**
  * Puts the current session to sleep, so all listeners are removed except
- * for the 'restart' listener. This is used to keep the content listener
- * alive for reuse in B2G instead of reloading it each time.
+ * for the 'restart' listener.
  */
 function sleepSession(msg) {
   deleteSession();
@@ -603,9 +566,6 @@ function sleepSession(msg) {
  */
 function restart(msg) {
   removeMessageListener("Marionette:restart", restart);
-  if (isB2G) {
-    readyStateTimer.initWithCallback(waitForReady, 100, Ci.nsITimer.TYPE_ONE_SHOT);
-  }
   registerSelf();
 }
 
@@ -658,9 +618,7 @@ function deleteSession(msg) {
   removeMessageListenerId("Marionette:getCookies", getCookiesFn);
   removeMessageListenerId("Marionette:deleteAllCookies", deleteAllCookiesFn);
   removeMessageListenerId("Marionette:deleteCookie", deleteCookieFn);
-  if (isB2G) {
-    content.removeEventListener("mozbrowsershowmodalprompt", modalHandler);
-  }
+
   seenEls.clear();
   // reset container frame to the top-most frame
   curContainer = { frame: content, shadowRoot: null };
@@ -780,11 +738,11 @@ function* execute(script, args, timeout, opts) {
   script = importedScripts.for("content").concat(script);
 
   let sb = sandbox.createMutable(curContainer.frame);
-  let wargs = element.fromJson(
+  let wargs = evaluate.fromJSON(
       args, seenEls, curContainer.frame, curContainer.shadowRoot);
   let res = yield evaluate.sandbox(sb, script, wargs, opts);
 
-  return element.toJson(res, seenEls);
+  return evaluate.toJSON(res, seenEls);
 }
 
 function* executeInSandbox(script, args, timeout, opts) {
@@ -797,15 +755,15 @@ function* executeInSandbox(script, args, timeout, opts) {
     sb = sandbox.augment(sb, new logging.Adapter(contentLog));
   }
 
-  let wargs = element.fromJson(
+  let wargs = evaluate.fromJSON(
       args, seenEls, curContainer.frame, curContainer.shadowRoot);
   let evaluatePromise = evaluate.sandbox(sb, script, wargs, opts);
 
   let res = yield evaluatePromise;
   sendSyncMessage(
       "Marionette:shareData",
-      {log: element.toJson(contentLog.get(), seenEls)});
-  return element.toJson(res, seenEls);
+      {log: evaluate.toJSON(contentLog.get(), seenEls)});
+  return evaluate.toJSON(res, seenEls);
 }
 
 function* executeSimpleTest(script, args, timeout, opts) {
@@ -823,15 +781,15 @@ function* executeSimpleTest(script, args, timeout, opts) {
   // TODO(ato): Not sure this is needed:
   sb = sandbox.augment(sb, new logging.Adapter(contentLog));
 
-  let wargs = element.fromJson(
+  let wargs = evaluate.fromJSON(
       args, seenEls, curContainer.frame, curContainer.shadowRoot);
   let evaluatePromise = evaluate.sandbox(sb, script, wargs, opts);
 
   let res = yield evaluatePromise;
   sendSyncMessage(
       "Marionette:shareData",
-      {log: element.toJson(contentLog.get(), seenEls)});
-  return element.toJson(res, seenEls);
+      {log: evaluate.toJSON(contentLog.get(), seenEls)});
+  return evaluate.toJSON(res, seenEls);
 }
 
 /**
@@ -875,7 +833,7 @@ function emitTouchEvent(type, touch) {
     contentLog.log(loggingInfo, "TRACE");
     sendSyncMessage(
         "Marionette:shareData",
-        {log: element.toJson(contentLog.get(), seenEls)});
+        {log: evaluate.toJSON(contentLog.get(), seenEls)});
     contentLog.clear();
     */
     let domWindowUtils = curContainer.frame.QueryInterface(Components.interfaces.nsIInterfaceRequestor).getInterface(Components.interfaces.nsIDOMWindowUtils);
@@ -1093,7 +1051,8 @@ function setDispatch(batches, touches, batchIndex=0) {
   }
 
   if (maxTime != 0) {
-    checkTimer.initWithCallback(function() {
+    let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+    timer.initWithCallback(function() {
       setDispatch(batches, touches, batchIndex);
     }, maxTime, Ci.nsITimer.TYPE_ONE_SHOT);
   } else {
@@ -1109,7 +1068,7 @@ function setDispatch(batches, touches, batchIndex=0) {
  */
 function multiAction(args, maxLen) {
   // unwrap the original nested array
-  let commandArray = element.fromJson(
+  let commandArray = evaluate.fromJSON(
       args, seenEls, curContainer.frame, curContainer.shadowRoot);
   let concurrentEvent = [];
   let temp;
@@ -1327,7 +1286,7 @@ function* findElementsContent(strategy, selector, opts = {}) {
 /** Find and return the active element on the page. */
 function getActiveElement() {
   let el = curContainer.frame.document.activeElement;
-  return element.toJson(el, seenEls);
+  return evaluate.toJSON(el, seenEls);
 }
 
 /**
@@ -1577,21 +1536,10 @@ function switchToShadowRoot(id) {
  */
 function switchToFrame(msg) {
   let command_id = msg.json.command_id;
-  function checkLoad() {
-    let errorRegex = /about:.+(error)|(blocked)\?/;
-    if (curContainer.frame.document.readyState == "complete") {
-      sendOk(command_id);
-      return;
-    } else if (curContainer.frame.document.readyState == "interactive" &&
-        errorRegex.exec(curContainer.frame.document.baseURI)) {
-      sendError(new UnknownError("Error loading page"), command_id);
-      return;
-    }
-    checkTimer.initWithCallback(checkLoad, 100, Ci.nsITimer.TYPE_ONE_SHOT);
-  }
   let foundFrame = null;
   let frames = [];
   let parWindow = null;
+
   // Check of the curContainer.frame reference is dead
   try {
     frames = curContainer.frame.frames;
@@ -1616,7 +1564,7 @@ function switchToFrame(msg) {
       curContainer.frame.focus();
     }
 
-    checkTimer.initWithCallback(checkLoad, 100, Ci.nsITimer.TYPE_ONE_SHOT);
+    sendOk(command_id);
     return;
   }
 
@@ -1666,11 +1614,12 @@ function switchToFrame(msg) {
           // context so should treat it accordingly.
           sendSyncMessage("Marionette:switchedToFrame", { frameValue: null});
           curContainer.frame = content;
+
           if(msg.json.focus == true) {
             curContainer.frame.focus();
           }
 
-          checkTimer.initWithCallback(checkLoad, 100, Ci.nsITimer.TYPE_ONE_SHOT);
+          sendOk(command_id);
           return;
         }
       } catch (e) {
@@ -1693,26 +1642,26 @@ function switchToFrame(msg) {
 
   // send a synchronous message to let the server update the currently active
   // frame element (for getActiveFrame)
-  let frameValue = element.toJson(
+  let frameValue = evaluate.toJSON(
       curContainer.frame.wrappedJSObject, seenEls)[element.Key];
   sendSyncMessage("Marionette:switchedToFrame", {frameValue: frameValue});
 
-  let rv = null;
   if (curContainer.frame.contentWindow === null) {
     // The frame we want to switch to is a remote/OOP frame;
     // notify our parent to handle the switch
     curContainer.frame = content;
-    rv = {win: parWindow, frame: foundFrame};
+    let rv = {win: parWindow, frame: foundFrame};
+    sendResponse(rv, command_id);
+
   } else {
     curContainer.frame = curContainer.frame.contentWindow;
+
     if (msg.json.focus) {
       curContainer.frame.focus();
     }
-    checkTimer.initWithCallback(checkLoad, 100, Ci.nsITimer.TYPE_ONE_SHOT);
-    return;
-  }
 
-  sendResponse(rv, command_id);
+    sendOk(command_id);
+  }
 }
 
 function addCookie(cookie) {

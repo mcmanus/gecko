@@ -67,6 +67,8 @@ class SandboxBrokerPolicyFactory;
 
 class PreallocatedProcessManagerImpl;
 
+using mozilla::loader::PScriptCacheParent;
+
 namespace embedding {
 class PrintingParent;
 }
@@ -660,6 +662,8 @@ public:
 
   nsresult TransmitPermissionsForPrincipal(nsIPrincipal* aPrincipal);
 
+  void OnCompositorDeviceReset() override;
+
 protected:
   void OnChannelConnected(int32_t pid) override;
 
@@ -909,6 +913,12 @@ private:
 
   virtual bool DeallocPTestShellParent(PTestShellParent* shell) override;
 
+  virtual PScriptCacheParent*
+  AllocPScriptCacheParent(const FileDescOrError& cacheFile,
+                          const bool& wantCacheData) override;
+
+  virtual bool DeallocPScriptCacheParent(PScriptCacheParent* shell) override;
+
   virtual bool DeallocPNeckoParent(PNeckoParent* necko) override;
 
   virtual PPSMContentDownloaderParent*
@@ -1057,13 +1067,6 @@ private:
   virtual mozilla::ipc::IPCResult RecvPrivateDocShellsExist(const bool& aExist) override;
 
   virtual mozilla::ipc::IPCResult RecvFirstIdle() override;
-
-  virtual mozilla::ipc::IPCResult RecvAudioChannelChangeDefVolChannel(const int32_t& aChannel,
-                                                                      const bool& aHidden) override;
-
-  virtual mozilla::ipc::IPCResult RecvAudioChannelServiceStatus(const bool& aTelephonyChannel,
-                                                                const bool& aContentOrNormalChannel,
-                                                                const bool& aAnyChannel) override;
 
   virtual mozilla::ipc::IPCResult RecvKeywordToURI(const nsCString& aKeyword,
                                                    nsString* aProviderName,

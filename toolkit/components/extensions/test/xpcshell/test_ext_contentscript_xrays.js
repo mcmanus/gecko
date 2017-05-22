@@ -2,6 +2,10 @@
 
 Cu.import("resource://gre/modules/Preferences.jsm");
 
+// ExtensionContent.jsm needs to know when it's running from xpcshell,
+// to use the right timeout for content scripts executed at document_idle.
+ExtensionTestUtils.mockAppInfo();
+
 const server = createHttpServer();
 server.registerDirectory("/data/", do_get_file("data"));
 
@@ -69,4 +73,3 @@ add_task(async function test_contentscript_xrays() {
   await contentPage.close();
   await extension.unload();
 });
-

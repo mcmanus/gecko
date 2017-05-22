@@ -24,10 +24,10 @@ loader.lazyRequireGetter(this, "Toolbox", "devtools/client/framework/toolbox", t
 loader.lazyRequireGetter(this, "DebuggerServer", "devtools/server/main", true);
 loader.lazyRequireGetter(this, "DebuggerClient", "devtools/shared/client/main", true);
 loader.lazyRequireGetter(this, "BrowserMenus", "devtools/client/framework/browser-menus");
-loader.lazyRequireGetter(this, "findCssSelector", "devtools/shared/inspector/css-logic", true);
 loader.lazyRequireGetter(this, "appendStyleSheet", "devtools/client/shared/stylesheet-utils", true);
 
 loader.lazyImporter(this, "CustomizableUI", "resource:///modules/CustomizableUI.jsm");
+loader.lazyImporter(this, "CustomizableWidgets", "resource:///modules/CustomizableWidgets.jsm");
 loader.lazyImporter(this, "AppConstants", "resource://gre/modules/AppConstants.jsm");
 loader.lazyImporter(this, "LightweightThemeManager", "resource://gre/modules/LightweightThemeManager.jsm");
 
@@ -123,8 +123,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     let webIDEEnabled = Services.prefs.getBoolPref("devtools.webide.enabled");
     toggleMenuItem("menu_webide", webIDEEnabled);
 
-    let showWebIDEWidget = Services.prefs.getBoolPref("devtools.webide.widget.enabled");
-    if (webIDEEnabled && showWebIDEWidget) {
+    if (webIDEEnabled) {
       gDevToolsBrowser.installWebIDEWidget();
     } else {
       gDevToolsBrowser.uninstallWebIDEWidget();
@@ -308,15 +307,8 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     }
   },
 
-  async inspectNode(tab, node) {
+  async inspectNode(tab, nodeSelectors) {
     let target = TargetFactory.forTab(tab);
-
-    // Generate a cross iframes query selector
-    let selectors = [];
-    while (node) {
-      selectors.push(findCssSelector(node));
-      node = node.ownerDocument.defaultView.frameElement;
-    }
 
     let toolbox = await gDevTools.showToolbox(target, "inspector");
     let inspector = toolbox.getCurrentPanel();
@@ -327,12 +319,12 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
 
     // Evaluate the cross iframes query selectors
     async function querySelectors(nodeFront) {
-      let selector = selectors.pop();
+      let selector = nodeSelectors.pop();
       if (!selector) {
         return nodeFront;
       }
       nodeFront = await inspector.walker.querySelector(nodeFront, selector);
-      if (selectors.length > 0) {
+      if (nodeSelectors.length > 0) {
         let { nodes } = await inspector.walker.children(nodeFront);
         // This is the NodeFront for the document node inside the iframe
         nodeFront = nodes[0];
@@ -422,7 +414,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     if (widget && widget.provider == CustomizableUI.PROVIDER_API) {
       return;
     }
-    CustomizableUI.createWidget({
+    let item = {
       id: id,
       type: "view",
       viewId: "PanelUI-developer",
@@ -451,6 +443,11 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
         clearSubview(developerItems);
         fillSubviewFromMenuItems(itemsToDisplay, developerItems);
       },
+      onInit(anchor) {
+        // Since onBeforeCreated already bails out when initialized, we can call
+        // it right away.
+        this.onBeforeCreated(anchor.ownerDocument);
+      },
       onBeforeCreated(doc) {
         // Bug 1223127, CUI should make this easier to do.
         if (doc.getElementById("PanelUI-developerItems")) {
@@ -463,7 +460,9 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
         view.appendChild(panel);
         doc.getElementById("PanelUI-multiView").appendChild(view);
       }
-    });
+    };
+    CustomizableUI.createWidget(item);
+    CustomizableWidgets.push(item);
   },
 
   /**
@@ -475,19 +474,11 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
       return;
     }
 
-    let defaultArea;
-    if (Services.prefs.getBoolPref("devtools.webide.widget.inNavbarByDefault")) {
-      defaultArea = CustomizableUI.AREA_NAVBAR;
-    } else {
-      defaultArea = CustomizableUI.AREA_PANEL;
-    }
-
     CustomizableUI.createWidget({
       id: "webide-button",
       shortcutId: "key_webide",
       label: "devtools-webide-button2.label",
       tooltiptext: "devtools-webide-button2.tooltiptext",
-      defaultArea: defaultArea,
       onCommand(event) {
         gDevToolsBrowser.openWebIDE();
       }
@@ -531,14 +522,6 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
       CustomizableUI.removeWidgetFromArea("webide-button");
     }
     CustomizableUI.destroyWidget("webide-button");
-  },
-
-  /**
-   * Move WebIDE widget to the navbar
-   */
-   // Used by webide.js
-  moveWebIDEWidgetInNavbar() {
-    CustomizableUI.addWidgetToArea("webide-button", CustomizableUI.AREA_NAVBAR);
   },
 
   /**

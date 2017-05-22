@@ -443,6 +443,9 @@ description > html|a {
 
 .fxaSyncIllustration {
   margin-top: 35px;
+  width: 231px;
+  -moz-context-properties: fill;
+  fill: #bfcbd3;
 }
 
 #syncOptions caption {
@@ -496,10 +499,6 @@ description > html|a {
 
 #verifiedManage:visited {
   color: var(--in-content-link-color);
-}
-
-.fxaSyncIllustration {
-  width: 231px;
 }
 
 #fxaLoginStatus[hasName] #fxaEmailAddress1 {
@@ -568,6 +567,23 @@ description > html|a {
   }
 }
 
+#updateDeck > hbox > label {
+  margin-inline-end: 5px ! important;
+}
+
+.update-throbber {
+  width: 16px;
+  min-height: 16px;
+  margin-inline-end: 3px;
+  list-style-image: url("chrome://global/skin/icons/loading.png");
+}
+
+@media (min-resolution: 1.1dppx) {
+  .update-throbber {
+    list-style-image: url("chrome://global/skin/icons/loading@2x.png");
+  }
+}
+
 .help-button {
   position: fixed;
   left: 0;
@@ -592,4 +608,25 @@ description > html|a {
 .help-button:visited {
   color: var(--in-content-category-text);
   text-decoration: none;
+}
+
+.search-tooltip {
+  position: absolute;
+  pointer-events: none;
+  padding: 0 10px;
+  bottom: 100%;
+  background-color: #ffe352;
+}
+
+.search-tooltip::before {
+  position: absolute;
+  content: "";
+  border: 6px solid transparent;
+  border-top-color: #ffe352;
+  top: 100%;
+  offset-inline-start: calc(50% - 6px);
+}
+
+.search-tooltip-parent {
+  position: relative;
 }

@@ -24,9 +24,10 @@ SCALAR_TYPES_MAP = {
 class ScalarType:
     """A class for representing a scalar definition."""
 
-    def __init__(self, group_name, probe_name, definition):
+    def __init__(self, group_name, probe_name, definition, strict_type_checks):
         # Validate and set the name, so we don't need to pass it to the other
         # validation functions.
+        self._strict_type_checks = strict_type_checks
         self.validate_names(group_name, probe_name)
         self._name = probe_name
         self._group_name = group_name
@@ -84,6 +85,9 @@ class ScalarType:
         :raises ParserError: if a required field is missing or unknown fields are present.
         """
 
+        if not self._strict_type_checks:
+            return
+
         # The required and optional fields in a scalar type definition.
         REQUIRED_FIELDS = {
             'bug_numbers': list,  # This contains ints. See LIST_FIELDS_CONTENT.
@@ -114,7 +118,8 @@ class ScalarType:
         # Checks that all the required fields are available.
         missing_fields = [f for f in REQUIRED_FIELDS.keys() if f not in definition]
         if len(missing_fields) > 0:
-            raise ParserError(self._name + ' - missing required fields: ' + ', '.join(missing_fields) +
+            raise ParserError(self._name + ' - missing required fields: ' +
+                              ', '.join(missing_fields) +
                               '.\nSee: {}#required-fields'.format(BASE_DOC_URL))
 
         # Do we have any unknown field?
@@ -125,7 +130,8 @@ class ScalarType:
 
         # Checks the type for all the fields.
         wrong_type_names = ['{} must be {}'.format(f, ALL_FIELDS[f].__name__)
-                            for f in definition.keys() if not isinstance(definition[f], ALL_FIELDS[f])]
+                            for f in definition.keys()
+                            if not isinstance(definition[f], ALL_FIELDS[f])]
         if len(wrong_type_names) > 0:
             raise ParserError(self._name + ' - ' + ', '.join(wrong_type_names) +
                               '.\nSee: {}#required-fields'.format(BASE_DOC_URL))
@@ -154,6 +160,9 @@ class ScalarType:
         :param definition: the dictionary containing the scalar properties.
         :raises ParserError: if a scalar definition field contains an unexpected value.
         """
+
+        if not self._strict_type_checks:
+            return
 
         # Validate the scalar kind.
         scalar_kind = definition.get('kind')
@@ -238,7 +247,9 @@ class ScalarType:
     @property
     def record_in_processes(self):
         """Get the non-empty list of processes to record data in"""
-        return self._definition['record_in_processes']
+        # Before we added content process support in bug 1278556, we only recorded in the
+        # main process.
+        return self._definition.get('record_in_processes', ["main"])
 
     @property
     def record_in_processes_enum(self):
@@ -265,7 +276,7 @@ class ScalarType:
         return self._definition.get('cpp_guard')
 
 
-def load_scalars(filename):
+def load_scalars(filename, strict_type_checks=True):
     """Parses a YAML file containing the scalar definition.
 
     :param filename: the YAML file containing the scalars definition.
@@ -299,6 +310,6 @@ def load_scalars(filename):
         for probe_name in group:
             # We found a scalar type. Go ahead and parse it.
             scalar_info = group[probe_name]
-            scalar_list.append(ScalarType(group_name, probe_name, scalar_info))
+            scalar_list.append(ScalarType(group_name, probe_name, scalar_info, strict_type_checks))
 
     return scalar_list

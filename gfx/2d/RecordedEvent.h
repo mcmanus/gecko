@@ -112,6 +112,7 @@ public:
                                                         SurfaceFormat aFormat);
   virtual DrawTarget *GetReferenceDrawTarget() = 0;
   virtual FontType GetDesiredFontType() = 0;
+  virtual void* GetFontContext() { return nullptr; }
 };
 
 struct ColorPatternStorage
@@ -702,12 +703,12 @@ public:
   virtual void OutputSimpleEventInfo(std::stringstream &aStringStream) const;
   
   virtual std::string GetName() const { return "SetTransform"; }
+
+  Matrix mTransform;
 private:
   friend class RecordedEvent;
 
    MOZ_IMPLICIT RecordedSetTransform(std::istream &aStream);
-
-  Matrix mTransform;
 };
 
 class RecordedDrawSurface : public RecordedDrawingEvent {

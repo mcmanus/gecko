@@ -27,18 +27,16 @@ public:
 protected:
   virtual ~WebRenderImageLayer();
 
-  WebRenderLayerManager* Manager()
-  {
-    return static_cast<WebRenderLayerManager*>(mManager);
-  }
-
 public:
   Layer* GetLayer() override { return this; }
-  void RenderLayer(wr::DisplayListBuilder& aBuilder) override;
+  void RenderLayer(wr::DisplayListBuilder& aBuilder,
+                   const StackingContextHelper& aSc) override;
   Maybe<WrImageMask> RenderMaskLayer(const gfx::Matrix4x4& aTransform) override;
 
 protected:
   CompositableType GetImageClientType();
+
+  void AddWRVideoImage(size_t aChannelNumber);
 
   class Holder {
   public:
@@ -51,6 +49,9 @@ protected:
   };
 
   wr::MaybeExternalImageId mExternalImageId;
+  // Some video image format contains multiple channel data.
+  nsTArray<wr::ImageKey> mVideoKeys;
+  // The regular single channel image.
   Maybe<wr::ImageKey> mKey;
   RefPtr<ImageClient> mImageClient;
   CompositableType mImageClientTypeContainer;

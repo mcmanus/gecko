@@ -746,6 +746,7 @@ nsBidiPresUtils::Resolve(nsBlockFrame* aBlockFrame)
 #ifdef DEBUG
     bpd.mCurrentBlock = block;
 #endif
+    block->RemoveStateBits(NS_BLOCK_NEEDS_BIDI_RESOLUTION);
     nsBlockInFlowLineIterator it(block, block->LinesBegin());
     bpd.mPrevFrame = nullptr;
     TraverseFrames(&it, block->PrincipalChildList().FirstChild(), &bpd);
@@ -1734,13 +1735,10 @@ nsBidiPresUtils::RepositionFrame(nsIFrame* aFrame,
 }
 
 void
-nsBidiPresUtils::InitContinuationStates(nsIFrame*              aFrame,
-                                        nsContinuationStates*  aContinuationStates)
+nsBidiPresUtils::InitContinuationStates(nsIFrame* aFrame,
+                                        nsContinuationStates* aContinuationStates)
 {
-  nsFrameContinuationState* state = aContinuationStates->PutEntry(aFrame);
-  state->mFirstVisualFrame = nullptr;
-  state->mFrameCount = 0;
-
+  aContinuationStates->PutEntry(aFrame);
   if (!IsBidiLeaf(aFrame) || RubyUtils::IsRubyBox(aFrame->Type())) {
     // Continue for child frames
     for (nsIFrame* frame : aFrame->PrincipalChildList()) {

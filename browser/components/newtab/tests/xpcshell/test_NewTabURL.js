@@ -2,7 +2,6 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-/* globals Services, NewTabURL, XPCOMUtils, aboutNewTabService */
 "use strict";
 
 const {utils: Cu} = Components;
@@ -13,7 +12,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "aboutNewTabService",
                                    "@mozilla.org/browser/aboutnewtab-service;1",
                                    "nsIAboutNewTabService");
 
-add_task(function*() {
+add_task(async function() {
   let defaultURL = aboutNewTabService.newTabURL;
   Services.prefs.setBoolPref("browser.newtabpage.activity-stream.enabled", false);
 
@@ -21,13 +20,13 @@ add_task(function*() {
   let url = "http://example.com/";
   let notificationPromise = promiseNewtabURLNotification(url);
   NewTabURL.override(url);
-  yield notificationPromise;
+  await notificationPromise;
   Assert.ok(NewTabURL.overridden, "Newtab URL should be overridden");
   Assert.equal(NewTabURL.get(), url, "Newtab URL should be the custom URL");
 
   notificationPromise = promiseNewtabURLNotification(defaultURL);
   NewTabURL.reset();
-  yield notificationPromise;
+  await notificationPromise;
   Assert.ok(!NewTabURL.overridden, "Newtab URL should not be overridden");
   Assert.equal(NewTabURL.get(), defaultURL, "Newtab URL should be the default");
 

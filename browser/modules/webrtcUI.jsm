@@ -20,8 +20,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
                                   "resource://gre/modules/PluralForm.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-                                  "resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "SitePermissions",
                                   "resource:///modules/SitePermissions.jsm");
 
@@ -35,39 +33,11 @@ this.webrtcUI = {
 
   init() {
     Services.obs.addObserver(maybeAddMenuIndicator, "browser-delayed-startup-finished");
-
-    let ppmm = Cc["@mozilla.org/parentprocessmessagemanager;1"]
-                 .getService(Ci.nsIMessageBroadcaster);
-    ppmm.addMessageListener("webrtc:UpdatingIndicators", this);
-    ppmm.addMessageListener("webrtc:UpdateGlobalIndicators", this);
-    ppmm.addMessageListener("child-process-shutdown", this);
-
-    let mm = Cc["@mozilla.org/globalmessagemanager;1"]
-               .getService(Ci.nsIMessageListenerManager);
-    mm.addMessageListener("rtcpeer:Request", this);
-    mm.addMessageListener("rtcpeer:CancelRequest", this);
-    mm.addMessageListener("webrtc:Request", this);
-    mm.addMessageListener("webrtc:StopRecording", this);
-    mm.addMessageListener("webrtc:CancelRequest", this);
-    mm.addMessageListener("webrtc:UpdateBrowserIndicators", this);
+    Services.ppmm.addMessageListener("child-process-shutdown", this);
   },
 
   uninit() {
     Services.obs.removeObserver(maybeAddMenuIndicator, "browser-delayed-startup-finished");
-
-    let ppmm = Cc["@mozilla.org/parentprocessmessagemanager;1"]
-                 .getService(Ci.nsIMessageBroadcaster);
-    ppmm.removeMessageListener("webrtc:UpdatingIndicators", this);
-    ppmm.removeMessageListener("webrtc:UpdateGlobalIndicators", this);
-
-    let mm = Cc["@mozilla.org/globalmessagemanager;1"]
-               .getService(Ci.nsIMessageListenerManager);
-    mm.removeMessageListener("rtcpeer:Request", this);
-    mm.removeMessageListener("rtcpeer:CancelRequest", this);
-    mm.removeMessageListener("webrtc:Request", this);
-    mm.removeMessageListener("webrtc:StopRecording", this);
-    mm.removeMessageListener("webrtc:CancelRequest", this);
-    mm.removeMessageListener("webrtc:UpdateBrowserIndicators", this);
 
     if (gIndicatorWindow) {
       gIndicatorWindow.close();
@@ -231,6 +201,7 @@ this.webrtcUI = {
     return this.emitter.off(...args);
   },
 
+  // Listeners and observers are registered in nsBrowserGlue.js
   receiveMessage(aMessage) {
     switch (aMessage.name) {
 
@@ -241,10 +212,10 @@ this.webrtcUI = {
 
         let blockers = Array.from(this.peerConnectionBlockers);
 
-        Task.spawn(function*() {
+        (async function() {
           for (let blocker of blockers) {
             try {
-              let result = yield blocker(params);
+              let result = await blocker(params);
               if (result == "deny") {
                 return false;
               }
@@ -253,7 +224,7 @@ this.webrtcUI = {
             }
           }
           return true;
-        }).then(decision => {
+        })().then(decision => {
           let message;
           if (decision) {
             this.emitter.emit("peer-request-allowed", params);
