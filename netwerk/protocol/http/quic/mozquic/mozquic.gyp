@@ -14,6 +14,9 @@
       {
      'target_name': 'mozquic',
      'type': 'static_library',
+     'cflags': [
+         '-g',
+        ],
      'sources': [
          'fnv.c',
          'MozQuic.cpp',
