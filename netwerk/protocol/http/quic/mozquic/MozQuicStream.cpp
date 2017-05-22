@@ -61,6 +61,7 @@ MozQuicStreamIn::Read(unsigned char *buffer, uint32_t avail, uint32_t &amt, bool
     copyLen = avail;
   }
   memcpy (buffer, src, copyLen);
+  amt = copyLen;
   mOffset += copyLen;
   if (mFinRecvd && mFinOffset == mOffset) {
     fin = true;

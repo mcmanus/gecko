@@ -252,7 +252,7 @@ MozQuic::IO()
   if (mIsClient) {
     switch (mConnectionState) {
     case CLIENT_STATE_1RTT:
-      code = ClientSend1RTT();
+      code = Client1RTT();
       if (code != MOZQUIC_OK) {
         return code;
       }
@@ -263,7 +263,10 @@ MozQuic::IO()
     }
   } else {
     if (mConnectionState == SERVER_STATE_1RTT) {
-      assert(false);
+      code = Server1RTT();
+      if (code != MOZQUIC_OK) {
+        return code;
+      }
     }
   }
   
@@ -324,7 +327,7 @@ MozQuic::HandShakeOutput(unsigned char *buf, uint32_t datalen)
 }
 
 int
-MozQuic::ClientSend1RTT() 
+MozQuic::Client1RTT() 
 {
   if (!mHandShakeInput) {
     // todo handle doing this internally
@@ -347,6 +350,35 @@ MozQuic::ClientSend1RTT()
     if (amt > 0) {
       // called to let the app know that the server hello is ready
       mHandShakeInput(mClosure, buf, amt);
+    }
+  }
+  return MOZQUIC_OK;
+}
+
+int
+MozQuic::Server1RTT() 
+{
+  if (mHandShakeInput) {
+    // todo handle app-security on server side
+    assert(false);
+    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"need handshaker");
+    return MOZQUIC_ERR_GENERAL;
+  }
+
+  Flush();
+  if (!mStream0->Empty()) {
+    // client part of handshake is available
+    unsigned char buf[kMozQuicMSS];
+    uint32_t amt = 0;
+    bool fin = false;
+    
+    uint32_t code = mStream0->Read(buf, kMozQuicMSS, amt, fin);
+    if (code != MOZQUIC_OK) {
+      return code;
+    }
+    if (amt > 0) {
+      // feed this to NSS.. todo
+      assert(false);
     }
   }
   return MOZQUIC_OK;
@@ -531,9 +563,12 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize)
 uint32_t
 MozQuic::FlushStream0()
 {
+  if (mUnWritten.empty()) {
+    return MOZQUIC_OK;
+  }
+      
   unsigned char pkt[kMozQuicMTU];
   uint32_t tmp32; // todo check range
-  assert (mConnectionState == CLIENT_STATE_1RTT);
 
   // section 5.4.1 of transport
   // long form header 17 bytes
@@ -624,12 +659,13 @@ MozQuic::Timestamp()
 uint32_t
 MozQuic::Flush()
 {
-  // obviously have to deal with more than this :)
-  assert (mConnectionState == CLIENT_STATE_1RTT);
-
-  if (mConnectionState == CLIENT_STATE_1RTT) {
+  if (mConnectionState == CLIENT_STATE_1RTT ||
+      mConnectionState == SERVER_STATE_1RTT) {
     return FlushStream0();
   }
+
+  // obviously have to deal with more than this :)
+  assert (false);
   return MOZQUIC_OK;
 }
 

@@ -97,7 +97,8 @@ private:
   uint32_t Intake();
   uint32_t Flush();
   uint32_t FlushStream0();
-  int ClientSend1RTT();
+  int Client1RTT();
+  int Server1RTT();
   void Log(char *);
   int Bind();
   bool VersionOK(uint32_t proposed);
