@@ -42,7 +42,7 @@ extern "C" {
   int mozquic_new_connection(mozquic_connection_t **outSession, struct mozquic_config_t *inConfig);
   int mozquic_destroy_connection(mozquic_connection_t *inSession);
   int mozquic_start_connection(mozquic_connection_t *inSession); // client rename todo
-  int mozquic_start_server(mozquic_connection_t *inSession, void (*handle_request)(void *));
+  int mozquic_start_server(mozquic_connection_t *inSession, int (*handle_new_connection)(void *, mozquic_connection_t *newconn));
 
   ////////////////////////////////////////////////////
   // IO handlers

@@ -15,6 +15,7 @@
 #include "fnv.h"
 #include "sys/time.h"
 #include <string.h>
+#include <fcntl.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,9 +44,9 @@ extern "C" {
     q->SetReceiver(inConfig->recv_callback);
     q->SetHandShakeInput(inConfig->handshake_input);
     q->SetErrorCB(inConfig->error_callback);
-
+    q->SetOriginPort(inConfig->originPort);
+    
 //    connPtr->originName = strdup(inConfig->originName);
-//    connPtr->originPort = inConfig->originPort;
     return MOZQUIC_OK;
   }
 
@@ -62,6 +63,13 @@ extern "C" {
     return self->StartConnection();
   }
 
+  int mozquic_start_server(mozquic_connection_t *conn,
+                           int (*handle_new_connection)(void *, mozquic_connection_t *newconn))
+  {
+    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    return self->StartServer(handle_new_connection);
+  }
+  
   int mozquic_IO(mozquic_connection_t *conn)
   {
     mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
@@ -98,17 +106,22 @@ MozQuic::MozQuic(bool handleIO)
   : mFD(-1)
   , mHandleIO(handleIO)
   , mIsClient(true)
-  , mConnectionState(CLIENT_STATE_UNINITIALIZED)
+  , mConnectionState(STATE_UNINITIALIZED)
+  , mOriginPort(-1)
   , mVersion(kMozQuicVersion1)
+  , mConnectionID(0)
+  , mNextPacketID(0)
   , mClosure(this)
   , mLogCallback(nullptr)
   , mTransmitCallback(nullptr)
   , mReceiverCallback(nullptr)
   , mHandShakeInput(nullptr)
   , mErrorCB(nullptr)
-  , mStream0(new MozQuicStreamPair(0, this))
+  , mNewConnCB(nullptr)
 {
   assert(!handleIO); // todo
+  // todo seed prng sensibly
+  srandom(time(NULL));
 }
 
 MozQuic::~MozQuic()
@@ -122,24 +135,48 @@ int
 MozQuic::StartConnection()
 {
   assert(!mHandleIO); // todo
+  mIsClient = true;
+  mStream0.reset(new MozQuicStreamPair(0, this));
 
-  if (mIsClient) {
-    mConnectionState = CLIENT_STATE_1RTT;
-    // todo seed prng sensibly
-    srandom(time(NULL));
-    for (int i=0; i < 4; i++) {
-      mConnectionID = mConnectionID << 16;
-      mConnectionID = mConnectionID | (random() & 0xffff);
-    }
-    for (int i=0; i < 2; i++) {
-      mNextPacketID = mNextPacketID << 16;
-      mNextPacketID = mNextPacketID | (random() & 0xffff);
-    }
-  } else {
-    assert(false);
-    // todo
+  mConnectionState = CLIENT_STATE_1RTT;
+  for (int i=0; i < 4; i++) {
+    mConnectionID = mConnectionID << 16;
+    mConnectionID = mConnectionID | (random() & 0xffff);
+  }
+  for (int i=0; i < 2; i++) {
+    mNextPacketID = mNextPacketID << 16;
+    mNextPacketID = mNextPacketID | (random() & 0xffff);
   }
 
+  return MOZQUIC_OK;
+}
+
+int
+MozQuic::StartServer(int (*handle_new_connection)(void *, mozquic_connection_t *))
+{
+  assert(!mHandleIO); // todo
+  mNewConnCB = handle_new_connection;
+  mIsClient = false;
+
+  mConnectionState = SERVER_STATE_LISTEN;
+  Bind();
+  return MOZQUIC_OK;
+}
+
+int
+MozQuic::Bind()
+{
+  if (mFD > 0) {
+    return MOZQUIC_OK;
+  }
+  mFD = socket(AF_INET, SOCK_DGRAM, 0); // todo v6 and non 0 addr
+  fcntl(mFD, F_SETFL, fcntl(mFD, F_GETFL, 0) | O_NONBLOCK);
+  struct sockaddr_in sin;
+  memset (&sin, 0, sizeof (sin));
+  sin.sin_family = AF_INET;
+  sin.sin_port = htons(mOriginPort);
+  bind(mFD, (const sockaddr *)&sin, sizeof (sin)); // todo err
+  listen(mFD, 1000); // todo err
   return MOZQUIC_OK;
 }
 
@@ -147,7 +184,9 @@ uint32_t
 MozQuic::Intake()
 {
   // check state
-  assert (mConnectionState == CLIENT_STATE_1RTT); // todo mvp
+  assert (mConnectionState == SERVER_STATE_LISTEN ||
+          mConnectionState == SERVER_STATE_1RTT ||
+          mConnectionState == CLIENT_STATE_1RTT); // todo mvp
 
   unsigned char pkt[kMozQuicMSS];
   do {
@@ -171,6 +210,13 @@ MozQuic::Intake()
     case 0x01: // version negotiation
       assert(false);
       // todo mvp
+      break;
+    case 0x02: // client initial packet
+      if (!ServerState()) {
+        Log((char *)"ignore client hello in client state");
+        continue;
+      }
+      ProcessClientInitial(pkt, pktSize);
       break;
     case 0x03: // Server Stateless Retry
       assert(false);
@@ -200,12 +246,13 @@ int
 MozQuic::IO()
 {
   uint32_t code;
+  Log((char *)"IO()\n");
 
   Intake();
   if (mIsClient) {
     switch (mConnectionState) {
     case CLIENT_STATE_1RTT:
-      code = Send1RTT();
+      code = ClientSend1RTT();
       if (code != MOZQUIC_OK) {
         return code;
       }
@@ -214,13 +261,12 @@ MozQuic::IO()
       assert(false);
       // todo
     }
-
   } else {
-    assert(false);
-    // todo
+    if (mConnectionState == SERVER_STATE_1RTT) {
+      assert(false);
+    }
   }
   
-  Log((char *)"todo IO()\n");
   return MOZQUIC_OK;
 }
 
@@ -269,7 +315,8 @@ MozQuic::RaiseError(uint32_t e, char *reason)
 
 // this is called by the application when the application is handling
 // the TLS stream (so that it can do more sophisticated handling
-// of certs etc like gecko PSM does)
+// of certs etc like gecko PSM does). The app is providing the
+// client hello
 void
 MozQuic::HandShakeOutput(unsigned char *buf, uint32_t datalen)
 {
@@ -277,7 +324,7 @@ MozQuic::HandShakeOutput(unsigned char *buf, uint32_t datalen)
 }
 
 int
-MozQuic::Send1RTT() 
+MozQuic::ClientSend1RTT() 
 {
   if (!mHandShakeInput) {
     // todo handle doing this internally
@@ -288,6 +335,7 @@ MozQuic::Send1RTT()
 
   Flush();
   if (!mStream0->Empty()) {
+    // Server Reply is available
     unsigned char buf[kMozQuicMSS];
     uint32_t amt = 0;
     bool fin = false;
@@ -297,6 +345,7 @@ MozQuic::Send1RTT()
       return code;
     }
     if (amt > 0) {
+      // called to let the app know that the server hello is ready
       mHandShakeInput(mClosure, buf, amt);
     }
   }
@@ -327,10 +376,18 @@ MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
   
   memcpy(&mConnectionID, pkt + 1, 8);
   // todo log change
-
   
+  return IntakeStream0(pkt, pktSize);
+}
+
+int
+MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize) 
+{
+  // used by both client and server
   unsigned char *framePtr = pkt + 17;
   unsigned char *endPtr = pkt + pktSize;
+
+  endPtr -= 8; // checksum. todo mvp verify
 
   while (framePtr < endPtr) {
     unsigned char type = framePtr[0];
@@ -373,7 +430,7 @@ MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
       }
       framePtr += 1 + lenLen;
       uint32_t streamID = 0;
-      memcpy(&streamID + (4 - idLen), framePtr, idLen);
+      memcpy(((char *)&streamID) + (4 - idLen), framePtr, idLen);
       framePtr += idLen;
       streamID = ntohl(streamID);
       if (streamID != 0) {
@@ -382,7 +439,7 @@ MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
       }
 
       uint64_t offset = 0;
-      memcpy(&offset + (8 - offsetLen), framePtr, offsetLen);
+      memcpy(((char *)&offset) + (8 - offsetLen), framePtr, offsetLen);
       framePtr += offsetLen;
       offset = ntohll(offset);
 
@@ -402,6 +459,75 @@ MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
   return MOZQUIC_OK;
 }
 
+MozQuic *
+MozQuic::Accept()
+{
+  MozQuic *child = new MozQuic(mHandleIO);
+  child->mIsClient = false;
+  child->mStream0.reset(new MozQuicStreamPair(0, this));
+  for (int i=0; i < 4; i++) {
+    child->mConnectionID = child->mConnectionID << 16;
+    child->mConnectionID = child->mConnectionID | (random() & 0xffff);
+  }
+  for (int i=0; i < 2; i++) {
+    child->mNextPacketID = child->mNextPacketID << 16;
+    child->mNextPacketID = child->mNextPacketID | (random() & 0xffff);
+  }
+
+  return child;
+}
+
+bool
+MozQuic::VersionOK(uint32_t proposed)
+{
+  if (proposed == kMozQuicVersion1 ||
+      proposed == kMozQuicIetfID3) {
+    return true;
+  }
+  return false;
+}
+
+int
+MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize)
+{
+  assert(pkt[0] & 0x80);
+  assert(pkt[0] == 0x82);
+  assert(pktSize >= 17);
+  
+  // received type 2
+  if (mConnectionState != SERVER_STATE_1RTT &&
+      mConnectionState != SERVER_STATE_LISTEN) { // todo rexmit right?
+    return MOZQUIC_OK;
+  }
+  
+  if (mConnectionState == SERVER_STATE_LISTEN) {
+    // todo mvp, we need some kind of hash to check for dups here
+    MozQuic *child = Accept();
+    child->mConnectionState = SERVER_STATE_1RTT;
+    child->ProcessClientInitial(pkt, pktSize);
+    assert(mNewConnCB); // todo handle err
+    mNewConnCB(mClosure, child);
+    return MOZQUIC_OK;
+  }
+
+  // start by checking the version.
+
+  uint32_t tmp32;
+  memcpy(&tmp32, pkt + 13, 4);
+  tmp32 = ntohl(tmp32);
+  if (!VersionOK(tmp32)) {
+    // todo real err handling and version negotiation packet
+    // todo mvp
+    Log((char *)"server version err");
+    return MOZQUIC_OK;
+  }
+
+  mVersion = tmp32;
+  // todo mvp acknowledge this packet
+  
+  return IntakeStream0(pkt, pktSize);
+}
+  
 uint32_t
 MozQuic::FlushStream0()
 {

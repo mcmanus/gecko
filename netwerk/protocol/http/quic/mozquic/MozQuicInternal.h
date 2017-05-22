@@ -38,13 +38,20 @@ static inline uint64_t ntohll(uint64_t x)
 
 enum connectionState
 {
-  CLIENT_STATE_UNINITIALIZED,
+  STATE_UNINITIALIZED,
   CLIENT_STATE_0RTT,
   CLIENT_STATE_1RTT,
   CLIENT_STATE_CONNECTED,
   CLIENT_STATE_CLOSED,  // todo more shutdown states
 
-  SERVER_STATE_UNINITIALIZED = 0,
+  CLIENT_STATE_BREAK,
+  SERVER_STATE_BREAK,
+  
+  SERVER_STATE_LISTEN,
+  SERVER_STATE_0RTT,
+  SERVER_STATE_1RTT,
+  SERVER_STATE_CONNECTED,
+  SERVER_STATE_CLOSED,
 };
 
 class MozQuicStreamPair;
@@ -53,12 +60,15 @@ class MozQuic final : public MozQuicWriter
 {
 public:
   MozQuic(bool handleIO);
+  MozQuic();
   ~MozQuic();
   
   int StartConnection();
+  int StartServer(int (*handle_new_connection)(void *, mozquic_connection_t *));
   int IO();
   void HandShakeOutput(unsigned char *, uint32_t amt);
 
+  void SetOriginPort(int port) { mOriginPort = port; }
   void SetClosure(void *closure) { mClosure = closure; }
   void SetLogger(void (*fx)(mozquic_connection_t *, char *)) { mLogCallback = fx; }
   void SetTransmiter(int(*fx)(mozquic_connection_t *,
@@ -78,21 +88,30 @@ private:
   uint32_t Transmit(unsigned char *, uint32_t len);
   uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen);
   int ProcessServerCleartext(unsigned char *, uint32_t size);
+  int ProcessClientInitial(unsigned char *, uint32_t size);
+  int IntakeStream0(unsigned char *, uint32_t size);
+
+  bool ServerState() { return mConnectionState > SERVER_STATE_BREAK; }
 
   uint64_t Timestamp();
   uint32_t Intake();
   uint32_t Flush();
   uint32_t FlushStream0();
-  int Send1RTT();
+  int ClientSend1RTT();
   void Log(char *);
+  int Bind();
+  bool VersionOK(uint32_t proposed);
+
+  MozQuic *Accept();
 
   int  mFD;
   bool mHandleIO;
   bool mIsClient;
   enum connectionState mConnectionState;
+  int mOriginPort;
  
- uint32_t mVersion;
-
+  uint32_t mVersion;
+ 
   uint64_t mConnectionID;
   uint32_t mNextPacketID;
 
@@ -102,7 +121,8 @@ private:
   int  (*mReceiverCallback)(mozquic_connection_t *, unsigned char *, uint32_t len, uint32_t *outlen);
   int  (*mHandShakeInput)(mozquic_connection_t *, unsigned char *, uint32_t len);
   int  (*mErrorCB)(mozquic_connection_t *, uint32_t, char *);
-
+  int  (*mNewConnCB)(void *, mozquic_connection_t *);
+  
   std::unique_ptr<MozQuicStreamPair> mStream0;
 
   // todo this is suboptimal

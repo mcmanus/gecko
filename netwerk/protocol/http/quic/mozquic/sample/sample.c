@@ -5,7 +5,19 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 #include "../MozQuic.h"
+
+mozquic_connection_t *only_child = NULL;
+
+static int accept_new_connection(void *closure, mozquic_connection_t *nc)
+{
+  if (only_child) {
+    return MOZQUIC_ERR_GENERAL;
+  }
+  only_child = nc;
+  return MOZQUIC_OK;
+}
 
 int main()
 {
@@ -15,8 +27,16 @@ int main()
   memset(&config, 0, sizeof(config));
   config.originName = "foo.example.com";
   config.originPort = 8443;
-  config.handleIO = 1;
+  config.handleIO = 0; // todo mvp
 
   mozquic_new_connection(&c, &config);
-//  mozquic_start_server(NULL, NULL);
+  mozquic_start_server(c, accept_new_connection);
+  do {
+    usleep (1000); // this is for handleio todo
+    mozquic_IO(c);
+    if (only_child) {
+      mozquic_IO(only_child);
+    }
+  } while (1);
+  
 }
