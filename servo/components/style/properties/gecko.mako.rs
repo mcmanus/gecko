@@ -675,7 +675,7 @@ impl Debug for ${style_struct.gecko_struct_name} {
         "LengthOrNone": impl_style_coord,
         "LengthOrNormal": impl_style_coord,
         "MaxLength": impl_style_coord,
-        "MinLength": impl_style_coord,
+        "MozLength": impl_style_coord,
         "Number": impl_simple,
         "Integer": impl_simple,
         "Opacity": impl_simple,
@@ -1198,7 +1198,7 @@ fn static_assert() {
 
     % for kind in ["rows", "columns"]:
     pub fn set_grid_auto_${kind}(&mut self, v: longhands::grid_auto_${kind}::computed_value::T) {
-        use values::specified::grid::TrackSize;
+        use values::generics::grid::TrackSize;
 
         match v {
             TrackSize::FitContent(lop) => {
@@ -1231,8 +1231,8 @@ fn static_assert() {
         use gecko_bindings::structs::{nsTArray, nsStyleGridLine_kMaxLine};
         use nsstring::{nsCString, nsStringRepr};
         use std::usize;
-        use values::specified::grid::TrackListType::Auto;
-        use values::specified::grid::{RepeatCount, TrackSize};
+        use values::generics::grid::TrackListType::Auto;
+        use values::generics::grid::{RepeatCount, TrackSize};
 
         #[inline]
         fn set_bitfield(bitfield: &mut u8, pos: u8, val: bool) {
@@ -3853,8 +3853,7 @@ fn static_assert() {
         use gecko_bindings::structs::{StyleFillRule, StyleGeometryBox, StyleShapeSource};
         use gecko::conversions::basic_shape::set_corners_from_radius;
         use gecko::values::GeckoStyleCoordConvertible;
-        use values::computed::basic_shape::BasicShape;
-        use values::generics::basic_shape::{ShapeSource, FillRule};
+        use values::generics::basic_shape::{BasicShape, FillRule, ShapeSource};
         let ref mut ${ident} = self.gecko.${gecko_ffi_name};
         // clean up existing struct
         unsafe { Gecko_DestroyShapeSource(${ident}) };
@@ -4238,8 +4237,8 @@ clip-path
         }
 
         match v {
-            T::none |
-            T::normal => {
+            T::None |
+            T::Normal => {
                 // Ensure destructors run, otherwise we could leak.
                 if !self.gecko.mContents.is_empty() {
                     unsafe {
@@ -4247,7 +4246,14 @@ clip-path
                     }
                 }
             },
-            T::Content(items) => {
+            T::MozAltContent => {
+                unsafe {
+                    Gecko_ClearAndResizeStyleContents(&mut self.gecko, 1);
+                    *self.gecko.mContents[0].mContent.mString.as_mut() = ptr::null_mut();
+                }
+                self.gecko.mContents[0].mType = eStyleContentType_AltContent;
+            },
+            T::Items(items) => {
                 unsafe {
                     Gecko_ClearAndResizeStyleContents(&mut self.gecko,
                                                       items.len() as u32);
@@ -4289,8 +4295,6 @@ clip-path
                             => self.gecko.mContents[i].mType = eStyleContentType_NoOpenQuote,
                         ContentItem::NoCloseQuote
                             => self.gecko.mContents[i].mType = eStyleContentType_NoCloseQuote,
-                        ContentItem::MozAltContent
-                            => self.gecko.mContents[i].mType = eStyleContentType_AltContent,
                         ContentItem::Counter(name, style) => {
                             unsafe {
                                 bindings::Gecko_SetContentDataArray(&mut self.gecko.mContents[i],
