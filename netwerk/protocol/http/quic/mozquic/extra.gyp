@@ -21,8 +21,7 @@
        'mozquic.gyp:mozquic',
       ],
      'libraries': [
-       '-lnss3',
-       '-lnspr4',
+       '<!@(pkg-config --libs nss)',
       ],
      },
    ],
