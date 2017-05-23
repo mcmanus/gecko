@@ -246,7 +246,6 @@ nsHttpHandler::nsHttpHandler()
     , mKeepEmptyResponseHeadersAsEmtpyString(false)
     , mDefaultHpackBuffer(4096)
     , mQUICEnabled(true)
-    , mQUICChunkSize(1300)
     , mMaxHttpResponseHeaderSize(393216)
     , mFocusedWindowTransactionRatio(0.9f)
     , mUseFastOpen(true)
@@ -1468,12 +1467,6 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
         rv = prefs->GetBoolPref(HTTP_PREF("quic.enabled"), &cVar);
         if (NS_SUCCEEDED(rv))
             mQUICEnabled = cVar;
-    }
-
-    if (PREF_CHANGED(HTTP_PREF("quic.chunk-size"))) {
-        rv = prefs->GetIntPref(HTTP_PREF("quic.chunk-size"), &val);
-        if (NS_SUCCEEDED(rv))
-            mQUICChunkSize = (uint32_t)val;
     }
 
     // The amount of idle seconds on a spdy connection before initiating a

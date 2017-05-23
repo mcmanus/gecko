@@ -1636,8 +1636,6 @@ pref("network.http.spdy.default-hpack-buffer", 65536); // 64k
 
 // QUIC
 pref("network.http.quic.enabled", true);
-pref("network.http.sdt.chunk-size", 1336); // todo unused
-pref("network.http.quic.default-port", 5300); // todo unused
 
 // alt-svc allows separation of transport routing from
 // the origin host without using a proxy.

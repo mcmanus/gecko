@@ -166,7 +166,6 @@ public:
 
     // QUIC
     bool     IsQUICEnabled() { return mQUICEnabled; }
-    uint32_t QUICChunkSize() { return mQUICChunkSize; }
 
     bool UseFastOpen()
     {
@@ -596,7 +595,6 @@ private:
 
     // QUIC
     uint32_t mQUICEnabled : 1;
-    uint32_t mQUICChunkSize;
 
     // The max size (in bytes) for received Http response header.
     uint32_t mMaxHttpResponseHeaderSize;
