@@ -3,9 +3,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef QuicSocketProvider_h__
-#define QuicSocketProvider_h__
-
 #pragma once
 #include "mozilla/Attributes.h"
 #include "nsISocketProvider.h"
@@ -26,6 +23,4 @@ private:
 };
 
 } } // namespace mozilla::net
-
-#endif /* QuicSocketProvider_h__ */
 

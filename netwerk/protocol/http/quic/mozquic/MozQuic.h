@@ -3,8 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozquic_h__
-#define mozquic_h__
+#pragma once
 
 /* This interface is straight C - the library implementation is not. */
 #include <stdint.h>
@@ -63,7 +62,5 @@ extern "C" {
 
 #ifdef __cplusplus
 }
-#endif
-
 #endif
 

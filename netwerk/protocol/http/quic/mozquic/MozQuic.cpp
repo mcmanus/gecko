@@ -16,6 +16,7 @@
 #include "sys/time.h"
 #include <string.h>
 #include <fcntl.h>
+#include "nss.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -102,6 +103,8 @@ extern "C" {
 
 namespace mozilla { namespace net {
 
+static bool mozQuicInit = false;
+
 MozQuic::MozQuic(bool handleIO)
   : mFD(-1)
   , mHandleIO(handleIO)
@@ -119,6 +122,11 @@ MozQuic::MozQuic(bool handleIO)
   , mErrorCB(nullptr)
   , mNewConnCB(nullptr)
 {
+  if (!mozQuicInit) {
+    NSS_Init("/tmp");
+    mozQuicInit = true;
+  }
+
   assert(!handleIO); // todo
   // todo seed prng sensibly
   srandom(time(NULL));

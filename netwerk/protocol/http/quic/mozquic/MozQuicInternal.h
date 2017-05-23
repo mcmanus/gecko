@@ -3,8 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozquicinternal_h__
-#define mozquicinternal_h__
+#pragma once
 
 #include <netinet/ip.h>
 #include <stdint.h>
@@ -156,6 +155,3 @@ public:
 };
 
 }} //namespace
-  
-
-#endif

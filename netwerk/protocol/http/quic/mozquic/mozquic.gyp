@@ -2,12 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-# To use the library outside of firefox
-# npm install gyp
-# gyp --depth=. --generator-output=obj
-# cd obj; make
-#
-# See the sample app in extra.gyp for an example
+# See the sample app in extra.gyp for an example outside firefox
 
 {
   'targets': [
@@ -16,7 +11,9 @@
      'type': 'static_library',
      'cflags': [
          '-g',
-        ],
+         '<!@(pkg-config --cflags nss)',
+      ],
+     'cflags_mozilla': [ '$(NSPR_CFLAGS)', '$(NSS_CFLAGS)', ],
      'sources': [
          'fnv.c',
          'MozQuic.cpp',

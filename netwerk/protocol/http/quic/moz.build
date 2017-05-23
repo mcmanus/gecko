@@ -29,6 +29,5 @@ GYP_DIRS['mozquic'].variables = gyp_vars
 # We allow warnings for third-party code that can be updated from upstream.
 GYP_DIRS['mozquic'].sandbox_vars['ALLOW_COMPILER_WARNINGS'] = True
 GYP_DIRS['mozquic'].sandbox_vars['FINAL_LIBRARY'] = 'xul'
-#GYP_DIRS['mozquic'].non_unified_sources += mozquic_non_unified_sources
 #todo
 GYP_DIRS['mozquic'].no_unified = True
