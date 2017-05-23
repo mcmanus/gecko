@@ -14,8 +14,6 @@ binary bsd advertising clause for fnv1
 
 --
 
-supply and read!
-
 retransmissions
 ack generation
 ack recpt
@@ -24,3 +22,13 @@ ack recpt
 
 .a needs to restrict exported objects
 
+--
+
+NSSHelper can be abstract class and also do app helping as
+mhandshakeinput does
+
+verify checksum
+
+server cert
+
+option to grease client version packet

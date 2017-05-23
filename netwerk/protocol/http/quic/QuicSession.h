@@ -44,6 +44,7 @@ private:
   static int32_t psmHelperRead(PRFileDesc *fd, void *buf, int32_t amount);
   static int32_t psmHelperRecv(PRFileDesc *fd, void *buf, int32_t amount, int flags,
                                PRIntervalTime timeout);
+  static PRStatus psmHelperClose(PRFileDesc *fd); // deletes self
   
   nsCOMPtr<nsIInterfaceRequestor> mCallbacks;
   nsTArray<nsCString> mALPNList;

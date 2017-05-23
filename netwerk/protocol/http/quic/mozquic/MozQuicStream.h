@@ -14,11 +14,11 @@ namespace mozilla { namespace net {
 class MozQuicStreamChunk
 {
 public:
-  MozQuicStreamChunk(uint32_t id, uint64_t offset, unsigned char *data,
+  MozQuicStreamChunk(uint32_t id, uint64_t offset, const unsigned char *data,
                      uint32_t len, bool fin);
   ~MozQuicStreamChunk();
 
-  std::unique_ptr<unsigned char []>mData;
+  std::unique_ptr<const unsigned char []>mData;
   uint32_t mLen;
   uint32_t mStreamID;
   uint64_t mOffset;
@@ -42,7 +42,7 @@ class MozQuicStreamOut
 public:
   MozQuicStreamOut(uint32_t id, MozQuicWriter *w);
   ~MozQuicStreamOut();
-  uint32_t Write(unsigned char *data, uint32_t len);
+  uint32_t Write(const unsigned char *data, uint32_t len);
 
 private:
   MozQuicWriter *mWriter;
@@ -86,7 +86,7 @@ public:
     return mIn.Empty();
   }
 
-  uint32_t Write(unsigned char *data, uint32_t len) {
+  uint32_t Write(const unsigned char *data, uint32_t len) {
     return mOut.Write(data, len);
   }
 

@@ -55,7 +55,7 @@ MozQuicStreamIn::Read(unsigned char *buffer, uint32_t avail, uint32_t &amt, bool
     return MOZQUIC_OK;
   }
   uint64_t skip = mOffset - (*i)->mOffset;
-  unsigned char *src = (*i)->mData.get() + skip;
+  const unsigned char *src = (*i)->mData.get() + skip;
   uint64_t copyLen = (*i)->mLen - skip;
   if (copyLen > avail) {
     copyLen = avail;
@@ -193,7 +193,7 @@ MozQuicStreamOut::~MozQuicStreamOut()
 }
 
 uint32_t
-MozQuicStreamOut::Write(unsigned char *data, uint32_t len)
+MozQuicStreamOut::Write(const unsigned char *data, uint32_t len)
 {
   std::unique_ptr<MozQuicStreamChunk> tmp(new MozQuicStreamChunk(mStreamID, mOffset, data, len, false));
   mOffset += len;
@@ -202,7 +202,7 @@ MozQuicStreamOut::Write(unsigned char *data, uint32_t len)
 
 // todo an interface that doesn't copy would be good
 MozQuicStreamChunk::MozQuicStreamChunk(uint32_t id, uint64_t offset,
-                                       unsigned char *data, uint32_t len,
+                                       const unsigned char *data, uint32_t len,
                                        bool fin)
   : mData(new unsigned char[len])
   , mLen(len)
@@ -212,7 +212,7 @@ MozQuicStreamChunk::MozQuicStreamChunk(uint32_t id, uint64_t offset,
   , mTransmitTime(0)
   , mRetransmitted(false)
 {
-  memcpy(mData.get(), data, len);
+  memcpy((void *)mData.get(), data, len);
 }
 
 MozQuicStreamChunk::~MozQuicStreamChunk()

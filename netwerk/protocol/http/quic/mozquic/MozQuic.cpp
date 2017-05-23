@@ -6,6 +6,7 @@
 #include "MozQuic.h"
 #include "MozQuicInternal.h"
 #include "MozQuicStream.h"
+#include "NSSHelper.h"
 
 #include "assert.h"
 #include "netinet/ip.h"
@@ -16,11 +17,12 @@
 #include "sys/time.h"
 #include <string.h>
 #include <fcntl.h>
-#include "nss.h"
+#include "prerror.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+  static bool mozQuicInit = false;
 
   int mozquic_new_connection(mozquic_connection_t **outConnection,
                              mozquic_config_t *inConfig)
@@ -96,6 +98,19 @@ extern "C" {
     self->HandShakeOutput(data, data_len);
   }
   
+  int mozquic_nss_config(char *dir) 
+  {
+    if (mozQuicInit) {
+      return MOZQUIC_ERR_GENERAL;
+    }
+    mozQuicInit = true;
+
+    if (!dir) {
+      return MOZQUIC_ERR_INVALID;
+    }
+
+    return mozilla::net::NSSHelper::Init(dir);
+  }
   
 #ifdef __cplusplus
 }
@@ -103,12 +118,11 @@ extern "C" {
 
 namespace mozilla { namespace net {
 
-static bool mozQuicInit = false;
-
 MozQuic::MozQuic(bool handleIO)
   : mFD(-1)
   , mHandleIO(handleIO)
   , mIsClient(true)
+  , mIsChild(false)
   , mConnectionState(STATE_UNINITIALIZED)
   , mOriginPort(-1)
   , mVersion(kMozQuicVersion1)
@@ -122,19 +136,15 @@ MozQuic::MozQuic(bool handleIO)
   , mErrorCB(nullptr)
   , mNewConnCB(nullptr)
 {
-  if (!mozQuicInit) {
-    NSS_Init("/tmp");
-    mozQuicInit = true;
-  }
-
   assert(!handleIO); // todo
   // todo seed prng sensibly
   srandom(time(NULL));
+  memset(&mPeer, 0, sizeof(mPeer));
 }
 
 MozQuic::~MozQuic()
 {
-  if (mFD > 0) {
+  if (!mIsChild && (mFD > 0)) {
     close(mFD);
   }
 }
@@ -168,6 +178,7 @@ MozQuic::StartServer(int (*handle_new_connection)(void *, mozquic_connection_t *
 
   mConnectionState = SERVER_STATE_LISTEN;
   Bind();
+  assert (!mHandShakeInput); // todo
   return MOZQUIC_OK;
 }
 
@@ -199,7 +210,8 @@ MozQuic::Intake()
   unsigned char pkt[kMozQuicMSS];
   do {
     uint32_t pktSize = 0;
-    int code = Recv(pkt, kMozQuicMSS, pktSize);
+    struct sockaddr_in client;
+    int code = Recv(pkt, kMozQuicMSS, pktSize, &client);
     // todo 17 assumes long form
     if (code != MOZQUIC_OK || !pktSize || pktSize < 17) {
       return code;
@@ -224,7 +236,7 @@ MozQuic::Intake()
         Log((char *)"ignore client hello in client state");
         continue;
       }
-      ProcessClientInitial(pkt, pktSize);
+      ProcessClientInitial(pkt, pktSize, &client);
       break;
     case 0x03: // Server Stateless Retry
       assert(false);
@@ -293,12 +305,16 @@ MozQuic::Log(char *msg)
 }
 
 uint32_t
-MozQuic::Recv(unsigned char *pkt, uint32_t avail, uint32_t &outLen)
+MozQuic::Recv(unsigned char *pkt, uint32_t avail, uint32_t &outLen,
+              struct sockaddr_in *peer)
 {
   if (mReceiverCallback) {
     return mReceiverCallback(mClosure, pkt, avail, &outLen);
   }
-  ssize_t amt = recv(mFD, pkt, avail, 0);
+  socklen_t sinlen = sizeof(*peer);
+  ssize_t amt =
+    recvfrom(mFD, pkt, avail, 0, (struct sockaddr *) peer, &sinlen);
+
   outLen = amt > 0 ? amt : 0;
   // todo errs
 
@@ -311,7 +327,13 @@ MozQuic::Transmit (unsigned char *pkt, uint32_t len)
   if (mTransmitCallback) {
     return mTransmitCallback(mClosure, pkt, len);
   }
-  send(mFD, pkt, len, 0); // todo errs
+  if (mIsChild) {
+    sendto(mFD, pkt, len, 0,
+           (sockaddr *)&mPeer, sizeof(mPeer));
+  } else {
+    send(mFD, pkt, len, 0); // todo errs
+  }
+  
   return MOZQUIC_OK;
 }
 
@@ -375,19 +397,7 @@ MozQuic::Server1RTT()
 
   Flush();
   if (!mStream0->Empty()) {
-    // client part of handshake is available
-    unsigned char buf[kMozQuicMSS];
-    uint32_t amt = 0;
-    bool fin = false;
-    
-    uint32_t code = mStream0->Read(buf, kMozQuicMSS, amt, fin);
-    if (code != MOZQUIC_OK) {
-      return code;
-    }
-    if (amt > 0) {
-      // feed this to NSS.. todo
-      assert(false);
-    }
+    mNSSHelper->DriveHandShake();
   }
   return MOZQUIC_OK;
 }
@@ -500,11 +510,15 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
 }
 
 MozQuic *
-MozQuic::Accept()
+MozQuic::Accept(struct sockaddr_in *clientAddr)
 {
   MozQuic *child = new MozQuic(mHandleIO);
+  child->mIsChild = true;
   child->mIsClient = false;
-  child->mStream0.reset(new MozQuicStreamPair(0, this));
+  memcpy(&child->mPeer, clientAddr, sizeof (struct sockaddr_in));
+  child->mFD = mFD;
+  
+  child->mStream0.reset(new MozQuicStreamPair(0, child));
   for (int i=0; i < 4; i++) {
     child->mConnectionID = child->mConnectionID << 16;
     child->mConnectionID = child->mConnectionID | (random() & 0xffff);
@@ -512,6 +526,11 @@ MozQuic::Accept()
   for (int i=0; i < 2; i++) {
     child->mNextPacketID = child->mNextPacketID << 16;
     child->mNextPacketID = child->mNextPacketID | (random() & 0xffff);
+  }
+
+  assert(!mHandShakeInput);
+  if (!mHandShakeInput) {
+    child->mNSSHelper.reset(new NSSHelper(child));
   }
 
   return child;
@@ -528,7 +547,8 @@ MozQuic::VersionOK(uint32_t proposed)
 }
 
 int
-MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize)
+MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
+                              struct sockaddr_in *clientAddr)
 {
   assert(pkt[0] & 0x80);
   assert(pkt[0] == 0x82);
@@ -542,9 +562,9 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize)
   
   if (mConnectionState == SERVER_STATE_LISTEN) {
     // todo mvp, we need some kind of hash to check for dups here
-    MozQuic *child = Accept();
+    MozQuic *child = Accept(clientAddr);
     child->mConnectionState = SERVER_STATE_1RTT;
-    child->ProcessClientInitial(pkt, pktSize);
+    child->ProcessClientInitial(pkt, pktSize, clientAddr);
     assert(mNewConnCB); // todo handle err
     mNewConnCB(mClosure, child);
     return MOZQUIC_OK;
@@ -576,11 +596,11 @@ MozQuic::FlushStream0()
   }
       
   unsigned char pkt[kMozQuicMTU];
-  uint32_t tmp32; // todo check range
+  uint32_t tmp32;
 
   // section 5.4.1 of transport
   // long form header 17 bytes
-  pkt[0] = 0x82;
+  pkt[0] = ServerState() ? 0x84 : 0x82;
   memcpy(pkt + 1, &mConnectionID, 8);
   tmp32 = htonl(mNextPacketID);
   memcpy(pkt + 9, &tmp32, 4);
@@ -630,18 +650,21 @@ MozQuic::FlushStream0()
   }
 
   if (framePtr != (pkt + 17)) {
-    // then padding as needed up to 1272
-    uint32_t paddingNeeded = kMozQuicMTU - 8 - (framePtr - pkt);
+    // then padding as needed up to 1272 on client
+    uint32_t finalLen = ServerState() ?
+      ((framePtr - pkt) + 8) : kMozQuicMTU;
+
+    uint32_t paddingNeeded = finalLen - 8 - (framePtr - pkt);
     memset (framePtr, 0, paddingNeeded);
     framePtr += paddingNeeded;
 
     // then 8 bytes of checksum on cleartext packets
     assert (FNV64size == 8);
-    if (FNV64block(pkt, kMozQuicMTU - 8, framePtr) != 0) {
+    if (FNV64block(pkt, finalLen - 8, framePtr) != 0) {
       RaiseError(MOZQUIC_ERR_GENERAL, (char *)"hash err");
       return MOZQUIC_ERR_GENERAL;
     }
-    uint32_t code = Transmit(pkt, kMozQuicMTU);
+    uint32_t code = Transmit(pkt, finalLen);
     if (code != MOZQUIC_OK) {
       return code;
     }
@@ -685,11 +708,50 @@ MozQuic::DoWriter(std::unique_ptr<MozQuicStreamChunk> &p)
   // transmitted after prioritization by flush()
 
   // obviously have to deal with more than this :)
-  assert (mConnectionState ==  CLIENT_STATE_1RTT);
+  assert (mConnectionState == CLIENT_STATE_1RTT ||
+          mConnectionState == SERVER_STATE_1RTT);
 
   mUnWritten.push_back(std::move(p));
 
   return MOZQUIC_OK;
+}
+
+int32_t
+MozQuic::NSSInput(void *buf, int32_t amount)
+{
+  if (mStream0->Empty()) {
+    PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
+    return -1;
+  }
+    
+  // client part of handshake is available in stream 0,
+  // feed it to nss via the return code of this fx
+  uint32_t amt = 0;
+  bool fin = false;
+    
+  uint32_t code = mStream0->Read((unsigned char *)buf,
+                                 amount, amt, fin);
+  if (code != MOZQUIC_OK) {
+    PR_SetError(PR_IO_ERROR, 0);
+    return -1;
+  }
+  if (amt > 0) {
+    return amt;
+  }
+  if (fin) {
+    return 0;
+  }
+  PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
+  return -1;
+}
+
+int32_t
+MozQuic::NSSOutput(const void *buf, int32_t amount)
+{
+  // nss has produced some server output e.g. server hello
+  // we need to put it into stream 0 so that it can be
+  // written on the network
+  return mStream0->Write((const unsigned char *)buf, amount);
 }
 
 }}

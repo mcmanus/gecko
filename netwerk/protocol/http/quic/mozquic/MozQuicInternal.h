@@ -11,6 +11,7 @@
 #include <forward_list>
 #include <memory>
 #include "MozQuicStream.h"
+#include "NSSHelper.h"
 
 namespace mozilla { namespace net {
 
@@ -85,9 +86,9 @@ private:
   void RaiseError(uint32_t err, char *reason);
 
   uint32_t Transmit(unsigned char *, uint32_t len);
-  uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen);
+  uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen, struct sockaddr_in *peer);
   int ProcessServerCleartext(unsigned char *, uint32_t size);
-  int ProcessClientInitial(unsigned char *, uint32_t size);
+  int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer);
   int IntakeStream0(unsigned char *, uint32_t size);
 
   bool ServerState() { return mConnectionState > SERVER_STATE_BREAK; }
@@ -101,15 +102,16 @@ private:
   void Log(char *);
   int Bind();
   bool VersionOK(uint32_t proposed);
-
-  MozQuic *Accept();
+  MozQuic *Accept(struct sockaddr_in *peer);
 
   int  mFD;
   bool mHandleIO;
   bool mIsClient;
+  bool mIsChild;
   enum connectionState mConnectionState;
   int mOriginPort;
- 
+  struct sockaddr_in mPeer; // todo not a v4 world
+
   uint32_t mVersion;
  
   uint64_t mConnectionID;
@@ -124,10 +126,15 @@ private:
   int  (*mNewConnCB)(void *, mozquic_connection_t *);
   
   std::unique_ptr<MozQuicStreamPair> mStream0;
+  std::unique_ptr<NSSHelper>         mNSSHelper;
 
   // todo this is suboptimal
   std::list<std::unique_ptr<MozQuicStreamChunk>> mUnWritten;
   std::list<std::unique_ptr<MozQuicStreamChunk>> mUnAcked;
+
+public: // callbacks from nsshelper
+  int32_t NSSInput(void *buf, int32_t amount);
+  int32_t NSSOutput(const void *buf, int32_t amount);
 
 public:
   enum FrameType {

@@ -6,6 +6,9 @@
 #pragma once
 
 /* This interface is straight C - the library implementation is not. */
+/* Eventually this will form an ABI - but right now its a construction zone
+   so buyer beware
+*/
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -18,7 +21,6 @@ extern "C" {
     MOZQUIC_ERR_INVALID = 2,
     MOZQUIC_ERR_MEMORY  = 3
   };
-
 
   typedef void mozquic_connection_t;
 
@@ -37,6 +39,10 @@ extern "C" {
     // TLS API
     int (*handshake_input)(void *, unsigned char *data, uint32_t len);
   };
+
+  // this is a hack. it will be come a 'crypto config' and allow server key/cert and
+  // some kind of client ca root
+  int mozquic_nss_config(char *dir);
 
   int mozquic_new_connection(mozquic_connection_t **outSession, struct mozquic_config_t *inConfig);
   int mozquic_destroy_connection(mozquic_connection_t *inSession);

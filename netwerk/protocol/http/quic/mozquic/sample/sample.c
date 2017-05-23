@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include "../MozQuic.h"
 
 mozquic_connection_t *only_child = NULL;
@@ -24,6 +25,12 @@ int main()
   struct mozquic_config_t config;
   mozquic_connection_t *c;
 
+  char *cdir = getenv ("MOZQUIC_NSS_CONFIG");
+  if (mozquic_nss_config(cdir) != MOZQUIC_OK) {
+    fprintf(stderr,"MOZQUIC_NSS_CONFIG FAILURE [%s]\n", cdir ? cdir : "");
+    exit (-1);
+  }
+  
   memset(&config, 0, sizeof(config));
   config.originName = "foo.example.com";
   config.originPort = 8443;

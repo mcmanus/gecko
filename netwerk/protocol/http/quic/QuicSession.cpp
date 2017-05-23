@@ -105,7 +105,11 @@ QuicSession::DriveHandshake()
   if (!mPSMSSLSocketControl) {
     return NS_ERROR_UNEXPECTED;
   }
-  mPSMSSLSocketControl->DriveHandshake();
+  nsresult rv = mPSMSSLSocketControl->DriveHandshake();
+  if (NS_FAILED(rv) && rv != NS_BASE_STREAM_WOULD_BLOCK) {
+    fprintf(stderr,"drivehandshake failed\n");
+    return rv;
+  }
   return (mozquic_IO(mSession) == MOZQUIC_OK) ? NS_OK : NS_ERROR_FAILURE;
 }
 
@@ -180,7 +184,7 @@ QuicSession::SetMethods(PRIOMethods *quicMethods, PRIOMethods *psmHelperMethods)
     psmHelperMethods->send = psmHelperSend;
     psmHelperMethods->recv = psmHelperRecv;
     psmHelperMethods->read = psmHelperRead;
-//    psmHelperMethods->close = FilterClose;
+    psmHelperMethods->close = psmHelperClose;
   }
 }
 
@@ -249,7 +253,16 @@ QuicSession::NSPRConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime t
   return PR_SUCCESS;
 }
 
+PRStatus
+QuicSession::psmHelperClose(PRFileDesc *fd)
+{
+  QuicSession *self = reinterpret_cast<QuicSession *>(fd->secret);
+  delete self;
+  return PR_SUCCESS;
+}
+
 // nsISSLSocketControl
+// todo most of these just get forwarded
 
 /* attribute nsIInterfaceRequestor notificationCallbacks; */
 NS_IMETHODIMP QuicSession::GetNotificationCallbacks(nsIInterfaceRequestor * *aNotificationCallbacks)

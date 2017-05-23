@@ -9,15 +9,13 @@
       {
      'target_name': 'mozquic',
      'type': 'static_library',
-     'cflags': [
-         '-g',
-         '<!@(pkg-config --cflags nss)',
-      ],
+     'cflags': [ '-g', '<!@(pkg-config --cflags nss)', ],
      'cflags_mozilla': [ '$(NSPR_CFLAGS)', '$(NSS_CFLAGS)', ],
      'sources': [
          'fnv.c',
          'MozQuic.cpp',
          'MozQuicStream.cpp',
+         'NSSHelper.cpp',
         ],
      },
    ],
