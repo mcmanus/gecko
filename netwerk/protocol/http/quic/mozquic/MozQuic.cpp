@@ -136,8 +136,8 @@ MozQuic::MozQuic(bool handleIO)
   , mNewConnCB(nullptr)
 {
   assert(!handleIO); // todo
-  // todo seed prng sensibly
-  srandom(time(NULL));
+  // todo seed prng sensibly from nss
+  srandom(Timestamp() & 0xffffffff);
   memset(&mPeer, 0, sizeof(mPeer));
 }
 
@@ -628,7 +628,7 @@ MozQuic::FlushStream0()
       // 4 bytes of offset. That's type 0xd8
       framePtr[0] = 0xd8;
       uint16_t tmp16 = (*iter)->mLen;
-      // todo check range
+      // todo check range.. that's really wrong as its 32
       tmp16 = htons(tmp16);
       memcpy(framePtr + 1, &tmp16, 2);
       framePtr[3] = 0; // stream 0
@@ -703,7 +703,7 @@ MozQuic::FlushStream0()
   }
 
   if (iter != mUnWritten.end()) {
-    return FlushStream0();
+    return FlushStream0(); // todo mvp this is broken with non stream 0 pkts
   }
   return MOZQUIC_OK;
 }
