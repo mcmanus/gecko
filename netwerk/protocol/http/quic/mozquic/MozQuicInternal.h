@@ -69,6 +69,7 @@ public:
   void HandShakeOutput(unsigned char *, uint32_t amt);
 
   void SetOriginPort(int port) { mOriginPort = port; }
+  void SetOriginName(const char *name);
   void SetClosure(void *closure) { mClosure = closure; }
   void SetLogger(void (*fx)(mozquic_connection_t *, char *)) { mLogCallback = fx; }
   void SetTransmiter(int(*fx)(mozquic_connection_t *,
@@ -110,6 +111,7 @@ private:
   bool mIsChild;
   enum connectionState mConnectionState;
   int mOriginPort;
+  std::unique_ptr<char []> mOriginName;
   struct sockaddr_in mPeer; // todo not a v4 world
 
   uint32_t mVersion;

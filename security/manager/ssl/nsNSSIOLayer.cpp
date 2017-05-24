@@ -44,6 +44,7 @@
 #include "ssl.h"
 #include "sslerr.h"
 #include "sslproto.h"
+#include "QuicSessionUtil.h"
 
 using namespace mozilla;
 using namespace mozilla::psm;
@@ -2424,6 +2425,11 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
   SSLVersionRange range;
   if (SSL_VersionRangeGet(fd, &range) != SECSuccess) {
     return NS_ERROR_FAILURE;
+  }
+
+  if (net::QuicSessionUtil::IsQuicSession(fd)) {
+    range.max = SSL_LIBRARY_VERSION_TLS_1_3;
+    range.min = SSL_LIBRARY_VERSION_TLS_1_3;
   }
 
   if ((infoObject->GetProviderFlags() & nsISocketProvider::BE_CONSERVATIVE) &&

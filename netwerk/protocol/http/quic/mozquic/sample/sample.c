@@ -11,6 +11,12 @@
 
 mozquic_connection_t *only_child = NULL;
 
+#if 0
+The sample/nss-config directory is a sample that can be passed
+to mozquic_nss_config(). It contains a NSS database with a cert
+and key for foo.example.com that is signed by a CA defined by CA.cert.der.
+#endif
+
 static int accept_new_connection(void *closure, mozquic_connection_t *nc)
 {
   if (only_child) {
@@ -32,7 +38,7 @@ int main()
   }
   
   memset(&config, 0, sizeof(config));
-  config.originName = "foo.example.com";
+  config.originName = "foo.example.com"; // really the nickname in the nss db
   config.originPort = 8443;
   config.handleIO = 0; // todo mvp
 

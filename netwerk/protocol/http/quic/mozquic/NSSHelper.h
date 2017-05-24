@@ -15,9 +15,9 @@ class NSSHelper final
 {
 public:
   static int Init(char *dir);
-  NSSHelper(MozQuic *quicSession);
+  NSSHelper(MozQuic *quicSession, const char *originKey);
   ~NSSHelper() {}
-  void DriveHandShake();
+  uint32_t DriveHandShake();
 
 private:
   static PRStatus NSPRGetPeerName(PRFileDesc *aFD, PRNetAddr*addr);
@@ -31,6 +31,7 @@ private:
                                PRIntervalTime timeout);
   MozQuic             *mQuicSession;
   PRFileDesc          *mFD;
+  bool                 mReady;
 };
 
 }} //namespace

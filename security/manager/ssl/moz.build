@@ -168,6 +168,7 @@ FINAL_LIBRARY = 'xul'
 LOCAL_INCLUDES += [
     '/dom/base',
     '/dom/crypto',
+    '/netwerk/protocol/http/quic',
     '/security/certverifier',
     '/security/pkix/include',
 ]

@@ -49,7 +49,7 @@ MozQuicStreamIn::Read(unsigned char *buffer, uint32_t avail, uint32_t &amt, bool
     return MOZQUIC_OK;
   }
 
-  std::list<std::unique_ptr<MozQuicStreamChunk>>::iterator i = mAvailable.begin();
+  auto i = mAvailable.begin();
   if ((*i)->mOffset > mOffset) {
     // no data yet
     return MOZQUIC_OK;
@@ -92,8 +92,8 @@ MozQuicStreamIn::Supply(std::unique_ptr<MozQuicStreamChunk> &d)
 
   // not these are reverse iterators so iter++ moves to the left (earlier seqno)
   // and insert puts new node to the right (later seqno)
-  std::list<std::unique_ptr<MozQuicStreamChunk>>::reverse_iterator i = mAvailable.rbegin();
-  std::list<std::unique_ptr<MozQuicStreamChunk>>::reverse_iterator end = mAvailable.rend();
+  auto i = mAvailable.rbegin();
+  auto end = mAvailable.rend();
 
   while (i != end) {
     // we don't need empty chunks
@@ -173,7 +173,7 @@ MozQuicStreamIn::Empty()
     return true;
   }
 
-  std::list<std::unique_ptr<MozQuicStreamChunk>>::iterator i = mAvailable.begin();
+  auto i = mAvailable.begin();
   if ((*i)->mOffset > mOffset) {
     return true;
   }

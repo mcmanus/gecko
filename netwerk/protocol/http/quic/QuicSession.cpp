@@ -15,6 +15,7 @@
 #include "nsIAsyncInputStream.h"
 #include "nsIAsyncOutputStream.h"
 #include "mozilla/Unused.h"
+#include "QuicSessionUtil.h"
 
 namespace mozilla { namespace net {
 
@@ -395,7 +396,22 @@ NS_IMETHODIMP QuicSession::GetFailedVerification(bool *aFailedVerification)
 }
 
 NS_IMPL_ISUPPORTS(QuicSession, nsISSLSocketControl)
-  
+
+bool
+QuicSessionUtil::IsQuicSession(PRFileDesc *fd)
+{
+  if (!psmHelperIdentity) {
+    return false;
+  }
+  if (fd->identity == psmHelperIdentity) {
+    return true;
+  }
+  if (fd->lower) {
+    return IsQuicSession(fd->lower);
+  }
+  return false;
+}
+
 } } // namespace mozilla::net
 
 

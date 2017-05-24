@@ -48,8 +48,7 @@ extern "C" {
     q->SetHandShakeInput(inConfig->handshake_input);
     q->SetErrorCB(inConfig->error_callback);
     q->SetOriginPort(inConfig->originPort);
-    
-//    connPtr->originName = strdup(inConfig->originName);
+    q->SetOriginName(inConfig->originName);
     return MOZQUIC_OK;
   }
 
@@ -177,9 +176,15 @@ MozQuic::StartServer(int (*handle_new_connection)(void *, mozquic_connection_t *
   mIsClient = false;
 
   mConnectionState = SERVER_STATE_LISTEN;
-  Bind();
   assert (!mHandShakeInput); // todo
-  return MOZQUIC_OK;
+  return Bind();
+}
+
+void
+MozQuic::SetOriginName(const char *name) 
+{
+  mOriginName.reset(new char[strlen(name) + 1]);
+  strcpy (mOriginName.get(), name);
 }
 
 int
@@ -530,7 +535,7 @@ MozQuic::Accept(struct sockaddr_in *clientAddr)
 
   assert(!mHandShakeInput);
   if (!mHandShakeInput) {
-    child->mNSSHelper.reset(new NSSHelper(child));
+    child->mNSSHelper.reset(new NSSHelper(child, mOriginName.get()));
   }
 
   return child;
@@ -596,6 +601,7 @@ MozQuic::FlushStream0()
   }
       
   unsigned char pkt[kMozQuicMTU];
+  unsigned char *endpkt = pkt + kMozQuicMTU;
   uint32_t tmp32;
 
   // section 5.4.1 of transport
@@ -607,15 +613,14 @@ MozQuic::FlushStream0()
   tmp32 = htonl(mVersion);
   memcpy(pkt + 13, &tmp32, 4);
 
-  uint32_t room = kMozQuicMTU - 17 - 8; // long form + csum
   unsigned char *framePtr = pkt + 17;
-  
-  std::list<std::unique_ptr<MozQuicStreamChunk>>::iterator iter;
-  iter = mUnWritten.begin();
+
+  auto iter = mUnWritten.begin();
   while (iter != mUnWritten.end()) {
     if ((*iter)->mStreamID == 0) {
-      if (room < (*iter)->mLen + 8) {
-        break;
+      uint32_t room = endpkt - framePtr - 8; // the last 8 are for checksum
+      if (room < 9) {
+        break; // 8 header bytes and 1 data byte
       }
 
       // stream header is 8 bytes long
@@ -633,8 +638,33 @@ MozQuic::FlushStream0()
       tmp32 = (*iter)->mOffset;
       tmp32 = htonl(tmp32);
       memcpy(framePtr + 4, &tmp32, 4);
-      memcpy(framePtr + 8, (*iter)->mData.get(), (*iter)->mLen);
-      framePtr += 8 + (*iter)->mLen;
+      framePtr += 8;
+
+      room -= 8;
+      if (room < (*iter)->mLen) {
+        // we need to split this chunk. its too big
+        // todo iterate on them all instead of doing this n^2
+        // as there is a copy involved
+        std::unique_ptr<MozQuicStreamChunk>
+          tmp(new MozQuicStreamChunk((*iter)->mStreamID,
+                                     (*iter)->mOffset + room,
+                                     (*iter)->mData.get() + room,
+                                     (*iter)->mLen - room,
+                                     (*iter)->mFin));
+        (*iter)->mLen = room;
+        (*iter)->mFin = false;
+        tmp16 = (*iter)->mLen;
+        tmp16 = htons(tmp16);
+        memcpy(framePtr - 7, &tmp16, 2);
+        auto iterReg = iter++;
+        mUnWritten.insert(iter, std::move(tmp));
+        iter = iterReg;
+      }
+      assert(room >= (*iter)->mLen);
+
+      memcpy(framePtr, (*iter)->mData.get(), (*iter)->mLen);
+      fprintf(stderr,"quic stream output of len %d\n", (*iter)->mLen);
+      framePtr += (*iter)->mLen;
 
       (*iter)->mPacketNum = mNextPacketID;
       (*iter)->mTransmitTime = Timestamp();

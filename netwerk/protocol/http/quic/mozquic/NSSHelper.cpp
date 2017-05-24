@@ -9,6 +9,10 @@
 #include "nss.h"
 #include "ssl.h"
 #include "sslproto.h"
+#include "cert.h"
+#include "certdb.h"
+#include "pk11pub.h"
+#include "assert.h"
 
 namespace mozilla { namespace net {
         
@@ -37,8 +41,9 @@ NSSHelper::Init(char *dir)
   return (NSS_Init(dir) == SECSuccess) ? MOZQUIC_OK : MOZQUIC_ERR_GENERAL;
 }
   
-NSSHelper::NSSHelper(MozQuic *quicSession)
+NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
   : mQuicSession(quicSession)
+  , mReady(false)
 {
   PRNetAddr addr;
   memset(&addr,0,sizeof(addr));
@@ -59,6 +64,18 @@ NSSHelper::NSSHelper(MozQuic *quicSession)
   SSLVersionRange range = {SSL_LIBRARY_VERSION_TLS_1_3,
                            SSL_LIBRARY_VERSION_TLS_1_3};
   SSL_VersionRangeSet(mFD, &range);
+
+  CERTCertificate *cert =
+    CERT_FindCertByNickname(CERT_GetDefaultCertDB(), originKey);
+  if (cert) {
+    SECKEYPrivateKey *key = PK11_FindKeyByAnyCert(cert, nullptr);
+    if (key) {
+      SECStatus rv = SSL_ConfigServerCert(mFD, cert, key, nullptr, 0);
+      if (rv == SECSuccess) {
+        mReady = true;
+      }
+    }
+  }
     
   PR_Connect(mFD, &addr, 0);
   // if you Read() from the helper, it pulls through the tls layer from the mozquic::stream0 buffer where
@@ -125,12 +142,17 @@ NSSHelper::nssHelperConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTim
   return PR_SUCCESS;
 }
 
-void
+uint32_t
 NSSHelper::DriveHandShake()
 {
+  assert(mReady);// todo
+  if (!mReady) {
+    return MOZQUIC_ERR_GENERAL;
+  }
   char data[1024];
 
   PR_Read(mFD, data, 1024);
+  return MOZQUIC_OK;
 }
 
 }}
