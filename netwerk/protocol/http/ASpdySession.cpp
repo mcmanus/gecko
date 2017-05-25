@@ -18,14 +18,14 @@
 #include "PSpdyPush.h"
 #include "Http2Push.h"
 #include "Http2Session.h"
-
+#include "MozQuic.h"
 #include "mozilla/Telemetry.h"
 
 namespace mozilla {
 namespace net {
 
 const char *ASpdySession::kH2Alpn = "h2";
-const char *ASpdySession::kHQAlpn = "hq";
+const char *ASpdySession::kHQAlpn = mozquic_alpn;
 
 ASpdySession::ASpdySession()
 {

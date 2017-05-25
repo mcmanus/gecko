@@ -32,6 +32,7 @@ private:
 
   static PRStatus NSPRGetPeerName(PRFileDesc *aFD, PRNetAddr*addr);
   static PRStatus NSPRGetSocketOption(PRFileDesc *aFD, PRSocketOptionData *aOpt);
+  static PRStatus NSPRSetSocketOption(PRFileDesc *fd, const PRSocketOptionData *data);
   static PRStatus NSPRConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime to);
   static PRStatus NSPRClose(PRFileDesc *fd);
   static void SetMethods(PRIOMethods *quitMethods, PRIOMethods *psmHelperMethods);
@@ -59,6 +60,7 @@ private:
   nsCOMPtr<nsISSLSocketControl> mPSMSSLSocketControl;
   nsCOMPtr<nsIAsyncInputStream> mPSMBufferInput;
   nsCOMPtr<nsIAsyncOutputStream> mPSMBufferOutput;
+  uint32_t mHandshakeCompleteCode;
 };
 
 } } // namespace mozilla::net

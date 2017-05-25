@@ -45,7 +45,7 @@ extern "C" {
     q->SetLogger(inConfig->logging_callback);
     q->SetTransmiter(inConfig->send_callback);
     q->SetReceiver(inConfig->recv_callback);
-    q->SetHandShakeInput(inConfig->handshake_input);
+    q->SetHandshakeInput(inConfig->handshake_input);
     q->SetErrorCB(inConfig->error_callback);
     q->SetOriginPort(inConfig->originPort);
     q->SetOriginName(inConfig->originName);
@@ -94,16 +94,21 @@ extern "C" {
                                 unsigned char *data, uint32_t data_len)
   {
     mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
-    self->HandShakeOutput(data, data_len);
+    self->HandshakeOutput(data, data_len);
   }
-  
+
+  void mozquic_handshake_complete(mozquic_connection_t *conn, uint32_t errCode)
+  {
+    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    self->HandshakeComplete(errCode);
+  }
+
   int mozquic_nss_config(char *dir) 
   {
     if (mozQuicInit) {
       return MOZQUIC_ERR_GENERAL;
     }
     mozQuicInit = true;
-
     if (!dir) {
       return MOZQUIC_ERR_INVALID;
     }
@@ -132,7 +137,7 @@ MozQuic::MozQuic(bool handleIO)
   , mLogCallback(nullptr)
   , mTransmitCallback(nullptr)
   , mReceiverCallback(nullptr)
-  , mHandShakeInput(nullptr)
+  , mHandshakeInput(nullptr)
   , mErrorCB(nullptr)
   , mNewConnCB(nullptr)
 {
@@ -177,7 +182,7 @@ MozQuic::StartServer(int (*handle_new_connection)(void *, mozquic_connection_t *
   mIsClient = false;
 
   mConnectionState = SERVER_STATE_LISTEN;
-  assert (!mHandShakeInput); // todo
+  assert (!mHandshakeInput); // todo
   return Bind();
 }
 
@@ -242,6 +247,7 @@ MozQuic::Intake()
   // check state
   assert (mConnectionState == SERVER_STATE_LISTEN ||
           mConnectionState == SERVER_STATE_1RTT ||
+          mConnectionState == CLIENT_STATE_CONNECTED ||
           mConnectionState == CLIENT_STATE_1RTT); // todo mvp
   uint32_t rv = MOZQUIC_OK;
   
@@ -311,6 +317,8 @@ MozQuic::IO()
   Log((char *)"IO()\n");
 
   Intake();
+  Flush();
+
   if (mIsClient) {
     switch (mConnectionState) {
     case CLIENT_STATE_1RTT:
@@ -318,6 +326,9 @@ MozQuic::IO()
       if (code != MOZQUIC_OK) {
         return code;
       }
+      break;
+    case CLIENT_STATE_CONNECTED:
+      // todo mvp
       break;
     default:
       assert(false);
@@ -393,22 +404,39 @@ MozQuic::RaiseError(uint32_t e, char *reason)
 // of certs etc like gecko PSM does). The app is providing the
 // client hello
 void
-MozQuic::HandShakeOutput(unsigned char *buf, uint32_t datalen)
+MozQuic::HandshakeOutput(unsigned char *buf, uint32_t datalen)
 {
   mStream0->Write(buf, datalen);
+}
+
+// this is called by the application when the application is handling
+// the TLS stream (so that it can do more sophisticated handling
+// of certs etc like gecko PSM does). The app is providing the
+// client hello
+void
+MozQuic::HandshakeComplete(uint32_t code)
+{
+  if (!mHandshakeInput) {
+    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"not using handshaker api");
+    return;
+  }
+  if (mConnectionState != CLIENT_STATE_1RTT) {
+    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"Handshake complete in wrong state");
+    return;
+  }
+  mConnectionState = CLIENT_STATE_CONNECTED;
 }
 
 int
 MozQuic::Client1RTT() 
 {
-  if (!mHandShakeInput) {
+  if (!mHandshakeInput) {
     // todo handle doing this internally
     assert(false);
     RaiseError(MOZQUIC_ERR_GENERAL, (char *)"need handshaker");
     return MOZQUIC_ERR_GENERAL;
   }
 
-  Flush();
   if (!mStream0->Empty()) {
     // Server Reply is available
     unsigned char buf[kMozQuicMSS];
@@ -421,7 +449,7 @@ MozQuic::Client1RTT()
     }
     if (amt > 0) {
       // called to let the app know that the server hello is ready
-      mHandShakeInput(mClosure, buf, amt);
+      mHandshakeInput(mClosure, buf, amt);
     }
   }
   return MOZQUIC_OK;
@@ -430,16 +458,22 @@ MozQuic::Client1RTT()
 int
 MozQuic::Server1RTT() 
 {
-  if (mHandShakeInput) {
+  if (mHandshakeInput) {
     // todo handle app-security on server side
     assert(false);
     RaiseError(MOZQUIC_ERR_GENERAL, (char *)"need handshaker");
     return MOZQUIC_ERR_GENERAL;
   }
 
-  Flush();
   if (!mStream0->Empty()) {
-    mNSSHelper->DriveHandShake();
+    uint32_t code = mNSSHelper->DriveHandshake();
+    if (code != MOZQUIC_OK) {
+      RaiseError(code, (char *) "server 1rtt handshake failed");
+      return code;
+    }
+    if (mNSSHelper->IsHandshakeComplete()) {
+      mConnectionState = SERVER_STATE_CONNECTED;
+    }
   }
   return MOZQUIC_OK;
 }
@@ -575,8 +609,8 @@ MozQuic::Accept(struct sockaddr_in *clientAddr)
     child->mNextPacketID = child->mNextPacketID | (random() & 0xffff);
   }
 
-  assert(!mHandShakeInput);
-  if (!mHandShakeInput) {
+  assert(!mHandshakeInput);
+  if (!mHandshakeInput) {
     child->mNSSHelper.reset(new NSSHelper(child, mOriginName.get()));
   }
   child->mVersion = mVersion;
@@ -793,14 +827,8 @@ MozQuic::Timestamp()
 uint32_t
 MozQuic::Flush()
 {
-  if (mConnectionState == CLIENT_STATE_1RTT ||
-      mConnectionState == SERVER_STATE_1RTT) {
-    return FlushStream0();
-  }
-
-  // obviously have to deal with more than this :)
-  assert (false);
-  return MOZQUIC_OK;
+  // todo mvp obviously have to deal with more than this :)
+  return FlushStream0();
 }
 
 uint32_t

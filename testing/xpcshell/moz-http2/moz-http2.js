@@ -5,6 +5,9 @@
 // This module is the stateful server side of test_http2.js and is meant
 // to have node be restarted in between each invocation
 
+// ATTN: sync with netwerk/test/unit/test_quic.js and MozQuic.h
+var hqAlpnID = "hq-03";
+
 var node_http2_root = '../node-http2';
 if (process.env.NODE_HTTP2_ROOT) {
   node_http2_root = process.env.NODE_HTTP2_ROOT;
@@ -800,7 +803,7 @@ function handleRequest(req, res) {
   }
   else if (u.pathname.substring(0,7) === "/quic-b") { // test_quic.js h2 components
     res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Alt-Svc', 'hq=' + req.headers['x-altsvc']);
+    res.setHeader('Alt-Svc', hqAlpnID + '=' + req.headers['x-altsvc']);
   }  
   else if (u.pathname === "/statusphrase") {
     // Fortunately, the node-http2 API is dumb enough to allow this right on

@@ -63,11 +63,12 @@ public:
   MozQuic(bool handleIO);
   MozQuic();
   ~MozQuic();
-  
+
   int StartConnection();
   int StartServer(int (*handle_new_connection)(void *, mozquic_connection_t *));
   int IO();
-  void HandShakeOutput(unsigned char *, uint32_t amt);
+  void HandshakeOutput(unsigned char *, uint32_t amt);
+  void HandshakeComplete(uint32_t errCode);
 
   void SetOriginPort(int port) { mOriginPort = port; }
   void SetOriginName(const char *name);
@@ -77,8 +78,8 @@ public:
                               unsigned char *, uint32_t)) { mTransmitCallback = fx; }
   void SetReceiver(int(*fx)(mozquic_connection_t *,
                             unsigned char *, uint32_t, uint32_t *)) { mReceiverCallback = fx; }
-  void SetHandShakeInput(int (*fx)(mozquic_connection_t *,
-                                   unsigned char *data, uint32_t len)) { mHandShakeInput = fx; }
+  void SetHandshakeInput(int (*fx)(mozquic_connection_t *,
+                                   unsigned char *data, uint32_t len)) { mHandshakeInput = fx; }
   void SetErrorCB(int (*fx)(mozquic_connection_t *, uint32_t err, char *)) { mErrorCB = fx; }
   void SetFD(int fd) { mFD = fd; }
   int  GetFD() { return mFD; }
@@ -130,7 +131,7 @@ private:
   void (*mLogCallback)(mozquic_connection_t *, char *); // todo va arg
   int  (*mTransmitCallback)(mozquic_connection_t *, unsigned char *, uint32_t len);
   int  (*mReceiverCallback)(mozquic_connection_t *, unsigned char *, uint32_t len, uint32_t *outlen);
-  int  (*mHandShakeInput)(mozquic_connection_t *, unsigned char *, uint32_t len);
+  int  (*mHandshakeInput)(mozquic_connection_t *, unsigned char *, uint32_t len);
   int  (*mErrorCB)(mozquic_connection_t *, uint32_t, char *);
   int  (*mNewConnCB)(void *, mozquic_connection_t *);
   

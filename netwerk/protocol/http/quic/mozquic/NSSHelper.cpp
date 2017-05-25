@@ -41,15 +41,22 @@ NSSHelper::Init(char *dir)
   return (NSS_Init(dir) == SECSuccess) ? MOZQUIC_OK : MOZQUIC_ERR_GENERAL;
 }
 
-void HandshakeCallback(PRFileDesc *fd, void *client_data)
+void
+NSSHelper::HandshakeCallback(PRFileDesc *fd, void *client_data)
 {
   fprintf(stderr,"handshakecallback\n");
-  // todo log or state..
+  while (fd && (fd->identity != nssHelperIdentity)) {
+    fd = fd->lower;
+  }
+  assert(fd);
+  NSSHelper *self = reinterpret_cast<NSSHelper *>(fd->secret);
+  self->mHandshakeComplete = true;
 }
 
 NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
   : mQuicSession(quicSession)
-  , mReady(false)
+  , mServerReady(false)
+  , mHandshakeComplete(false)
 {
   PRNetAddr addr;
   memset(&addr,0,sizeof(addr));
@@ -67,10 +74,24 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
   SSL_OptionSet(mFD, SSL_REQUEST_CERTIFICATE, false);
   SSL_OptionSet(mFD, SSL_REQUIRE_CERTIFICATE, SSL_REQUIRE_NEVER);
 
+  SSL_OptionSet(mFD, SSL_ENABLE_NPN, false);
+  SSL_OptionSet(mFD, SSL_ENABLE_ALPN, true);
+
   SSLVersionRange range = {SSL_LIBRARY_VERSION_TLS_1_3,
                            SSL_LIBRARY_VERSION_TLS_1_3};
   SSL_VersionRangeSet(mFD, &range);
-  SSL_HandshakeCallback(mFD, HandshakeCallback, this);
+  SSL_HandshakeCallback(mFD, HandshakeCallback, nullptr);
+
+  mServerReady = true;
+  
+  unsigned char buffer[256];
+  assert(strlen(mozquic_alpn) < 256);
+  buffer[0] = strlen(mozquic_alpn);
+  memcpy(buffer + 1, mozquic_alpn, strlen(mozquic_alpn));
+  if (SSL_SetNextProtoNego(mFD,
+                           buffer, strlen(mozquic_alpn) + 1) != SECSuccess) {
+    mServerReady = false;
+  }
 
   CERTCertificate *cert =
     CERT_FindCertByNickname(CERT_GetDefaultCertDB(), originKey);
@@ -78,8 +99,8 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
     SECKEYPrivateKey *key = PK11_FindKeyByAnyCert(cert, nullptr);
     if (key) {
       SECStatus rv = SSL_ConfigServerCert(mFD, cert, key, nullptr, 0);
-      if (rv == SECSuccess) {
-        mReady = true;
+      if (mServerReady && rv == SECSuccess) {
+        mServerReady = true;
       }
     }
   }
@@ -150,16 +171,29 @@ NSSHelper::nssHelperConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTim
 }
 
 uint32_t
-NSSHelper::DriveHandShake()
+NSSHelper::DriveHandshake()
 {
-  assert(mReady);// todo
-  if (!mReady) {
+  if (mHandshakeComplete) {
+    return MOZQUIC_OK;
+  }
+  assert(mServerReady);// todo
+  if (!mServerReady) {
     return MOZQUIC_ERR_GENERAL;
   }
-  char data[1024];
+  char data[4096];
 
-  PR_Read(mFD, data, 1024);
-  return MOZQUIC_OK;
+  int32_t rd = PR_Read(mFD, data, 4096);
+  if (mHandshakeComplete || (rd > 0)) {
+    return MOZQUIC_OK;
+  }
+  if (rd == 0) {
+    fprintf(stderr,"eof on pipe?\n");
+    return MOZQUIC_ERR_IO;
+  }
+  if (PR_GetError() == PR_WOULD_BLOCK_ERROR) {
+    return MOZQUIC_OK;
+  }
+  return MOZQUIC_ERR_GENERAL;
 }
 
 }}

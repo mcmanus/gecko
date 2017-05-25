@@ -494,13 +494,13 @@ private:
     RefPtr<nsHttpConnection> concreteConn(mConnection->HttpConnection());
     if (concreteConn->GetSpdyVersion() == HTTP_VERSION_2) {
       if (!alpn.Equals(nsCString(ASpdySession::kH2Alpn))) {
-        LOG(("AltSvcTransaction::MaybeValidate % failed "
+        LOG(("AltSvcTransaction::MaybeValidate %p failed "
              "unexpectedly received h2", this));
         return;
       }
     } else if (concreteConn->GetSpdyVersion() == QUIC_EXPERIMENT_0) {
       if (!alpn.Equals(nsCString(ASpdySession::kHQAlpn))) {
-        LOG(("AltSvcTransaction::MaybeValidate % failed "
+        LOG(("AltSvcTransaction::MaybeValidate %p failed "
              "unexpectedly received hq", this));
         return;
       }

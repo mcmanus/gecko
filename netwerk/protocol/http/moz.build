@@ -121,6 +121,7 @@ LOCAL_INCLUDES += [
     '/dom/base',
     '/netwerk/base',
     '/netwerk/socket',
+    'quic/mozquic',
 ]
 
 EXTRA_COMPONENTS += [

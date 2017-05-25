@@ -15,11 +15,15 @@
 extern "C" {
 #endif
 
+  const char mozquic_alpn[] = "hq-03";
+
   enum {
     MOZQUIC_OK = 0,
     MOZQUIC_ERR_GENERAL = 1,
     MOZQUIC_ERR_INVALID = 2,
-    MOZQUIC_ERR_MEMORY  = 3
+    MOZQUIC_ERR_MEMORY  = 3,
+    MOZQUIC_ERR_IO      = 4,
+    MOZQUIC_ERR_CRYPTO  = 5,
   };
 
   typedef void mozquic_connection_t;
@@ -64,7 +68,7 @@ extern "C" {
   // mozquic_handshake_complete(ERRORCODE)
   void mozquic_handshake_output(mozquic_connection_t *session,
                                 unsigned char *data, uint32_t data_len);
-  void mozquic_handshake_complete(mozquic_connection_t *session, int err);
+  void mozquic_handshake_complete(mozquic_connection_t *session, uint32_t err);
 
 #ifdef __cplusplus
 }

@@ -26,6 +26,7 @@ static PRIOMethods quicMethods, psmHelperMethods;
 QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   : mClosed(false)
   , mDestroyOnClose(true)
+  , mHandshakeCompleteCode(MOZQUIC_ERR_GENERAL)
 {
   if (!quicInit) {
     quicInit = true;
@@ -101,17 +102,25 @@ NS_IMETHODIMP
 QuicSession::DriveHandshake()
 {
   fprintf(stderr,"drivehandshake\n");
-  // TODO - feed mozquic via mozquic_handshake_output() tls to send to server
-  // in drivehandshake()
   if (!mPSMSSLSocketControl) {
     return NS_ERROR_UNEXPECTED;
   }
   nsresult rv = mPSMSSLSocketControl->DriveHandshake();
   if (NS_FAILED(rv) && rv != NS_BASE_STREAM_WOULD_BLOCK) {
     fprintf(stderr,"drivehandshake failed\n");
-    return rv;
+    mozquic_handshake_complete(mSession, MOZQUIC_ERR_CRYPTO);
+    mHandshakeCompleteCode = MOZQUIC_ERR_CRYPTO;
   }
-  return (mozquic_IO(mSession) == MOZQUIC_OK) ? NS_OK : NS_ERROR_FAILURE;
+  if (NS_SUCCEEDED(rv)) {
+    mozquic_handshake_complete(mSession, MOZQUIC_OK);
+    mHandshakeCompleteCode = MOZQUIC_OK;
+  }
+
+  uint32_t code = mozquic_IO(mSession);
+  if (NS_SUCCEEDED(rv) && (code != MOZQUIC_OK)) {
+    rv = NS_ERROR_FAILURE;
+  }
+  return rv;
 }
 
 int
@@ -169,6 +178,12 @@ QuicSession::NSPRGetSocketOption(PRFileDesc *aFD, PRSocketOptionData *aOpt)
   return PR_FAILURE;
 }
 
+PRStatus
+QuicSession::NSPRSetSocketOption(PRFileDesc *fd, const PRSocketOptionData *data)
+{
+  return PR_FAILURE;
+}
+
 void
 QuicSession::SetMethods(PRIOMethods *quicMethods, PRIOMethods *psmHelperMethods)
 {
@@ -180,6 +195,7 @@ QuicSession::SetMethods(PRIOMethods *quicMethods, PRIOMethods *psmHelperMethods)
     // ssl stack triggers getpeername and default impl asserts(false)
     psmHelperMethods->getpeername = NSPRGetPeerName;
     psmHelperMethods->getsocketoption = NSPRGetSocketOption;
+    psmHelperMethods->setsocketoption = NSPRSetSocketOption;
     psmHelperMethods->connect = psmHelperConnect;
     psmHelperMethods->write = psmHelperWrite;
     psmHelperMethods->send = psmHelperSend;
@@ -192,7 +208,8 @@ QuicSession::SetMethods(PRIOMethods *quicMethods, PRIOMethods *psmHelperMethods)
 int
 QuicSession::psmHelperWrite(PRFileDesc *fd, const void *aBuf, int32_t aAmount)
 {
-  // data has come from psm and needs to be written into mozquic library
+  // client handshake data has come from psm and needs to be written into mozquic library
+  // to be placed onto the wire as quic stream 0
   QuicSession *self = reinterpret_cast<QuicSession *>(fd->secret);
   mozquic_handshake_output(self->mSession, (unsigned char *)aBuf, aAmount);
   return aAmount;
@@ -278,6 +295,78 @@ NS_IMETHODIMP QuicSession::SetNotificationCallbacks(nsIInterfaceRequestor *aNoti
   return NS_OK;
 }
 
+NS_IMETHODIMP QuicSession::SetNPNList(nsTArray<nsCString> & aList)
+{
+  if (!mPSMSSLSocketControl) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  return mPSMSSLSocketControl->SetNPNList(aList);
+}
+
+/* readonly attribute ACString negotiatedNPN; */
+NS_IMETHODIMP QuicSession::GetNegotiatedNPN(nsACString & aNegotiatedNPN)
+{
+  if (!mPSMSSLSocketControl) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  nsresult rv = mPSMSSLSocketControl->GetNegotiatedNPN(aNegotiatedNPN);
+  if (NS_SUCCEEDED(rv) && mHandshakeCompleteCode != MOZQUIC_OK){
+    // todo mvp - this means we need 2 rtt
+    // temporarily here to avoid dtor of session too early
+    rv = NS_ERROR_NOT_CONNECTED;
+  }
+  return rv;
+}
+
+/* [infallible] readonly attribute short SSLVersionUsed; */
+NS_IMETHODIMP QuicSession::GetSSLVersionUsed(int16_t *aSSLVersionUsed)
+{
+  if (mHandshakeCompleteCode == MOZQUIC_OK) {
+    *aSSLVersionUsed = nsISSLSocketControl::TLS_VERSION_1_3;
+  } else {
+    *aSSLVersionUsed = nsISSLSocketControl::SSL_VERSION_UNKNOWN;
+  }
+  return NS_OK;
+}
+
+/* [infallible] readonly attribute short KEAUsed; */
+NS_IMETHODIMP QuicSession::GetKEAUsed(int16_t *aKEAUsed)
+{
+  if (!mPSMSSLSocketControl) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  return mPSMSSLSocketControl->GetKEAUsed(aKEAUsed);
+}
+
+/* [infallible] readonly attribute unsigned long KEAKeyBits; */
+NS_IMETHODIMP QuicSession::GetKEAKeyBits(uint32_t *aKEAKeyBits)
+{
+  if (!mPSMSSLSocketControl) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  return mPSMSSLSocketControl->GetKEAKeyBits(aKEAKeyBits);
+}
+
+/* [infallible] readonly attribute boolean bypassAuthentication; */
+NS_IMETHODIMP QuicSession::GetBypassAuthentication(bool *aBypassAuthentication)
+{
+  if (!mPSMSSLSocketControl) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  nsresult rv = mPSMSSLSocketControl->GetBypassAuthentication(aBypassAuthentication);
+  MOZ_ASSERT(NS_FAILED(rv) || !(*aBypassAuthentication));
+  return rv;
+}
+
+/* [infallible] readonly attribute boolean failedVerification; */
+NS_IMETHODIMP QuicSession::GetFailedVerification(bool *aFailedVerification)
+{
+  if (!mPSMSSLSocketControl) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  return mPSMSSLSocketControl->GetFailedVerification(aFailedVerification);
+}
+
 /* void proxyStartSSL (); */
 NS_IMETHODIMP QuicSession::ProxyStartSSL()
 {
@@ -288,19 +377,6 @@ NS_IMETHODIMP QuicSession::ProxyStartSSL()
 NS_IMETHODIMP QuicSession::StartTLS()
 {
     /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP QuicSession::SetNPNList(nsTArray<nsCString> & aList)
-{
-  // this is baked into quic in a way it is not for generic tls
-  return NS_OK;
-}
-
-/* readonly attribute ACString negotiatedNPN; */
-NS_IMETHODIMP QuicSession::GetNegotiatedNPN(nsACString & aNegotiatedNPN)
-{
-  // todo
-  return NS_ERROR_NOT_CONNECTED;
 }
 
 /* ACString getAlpnEarlySelection (); */
@@ -317,6 +393,35 @@ NS_IMETHODIMP QuicSession::GetEarlyDataAccepted(bool *aEarlyDataAccepted)
   // todo
   *aEarlyDataAccepted = false;
   return NS_OK;
+}
+
+/* [infallible] readonly attribute short SSLVersionOffered; */
+NS_IMETHODIMP QuicSession::GetSSLVersionOffered(int16_t *aSSLVersionOffered)
+{
+  if (!mPSMSSLSocketControl) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  return mPSMSSLSocketControl->GetSSLVersionOffered(aSSLVersionOffered);
+}
+
+/* [infallible] readonly attribute short MACAlgorithmUsed; */
+NS_IMETHODIMP QuicSession::GetMACAlgorithmUsed(int16_t *aMACAlgorithmUsed)
+{
+  if (!mPSMSSLSocketControl) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  return mPSMSSLSocketControl->GetMACAlgorithmUsed(aMACAlgorithmUsed);
+}
+
+/* attribute nsIX509Cert clientCert; */
+NS_IMETHODIMP QuicSession::GetClientCert(nsIX509Cert * *aClientCert)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP QuicSession::SetClientCert(nsIX509Cert *aClientCert)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 /* boolean joinConnection (in ACString npnProtocol, in ACString hostname, in long port); */
@@ -337,60 +442,8 @@ NS_IMETHODIMP QuicSession::IsAcceptableForHost(const nsACString & hostname, bool
     /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
 }
 
-/* [infallible] readonly attribute short KEAUsed; */
-NS_IMETHODIMP QuicSession::GetKEAUsed(int16_t *aKEAUsed)
-{
-    /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-/* [infallible] readonly attribute unsigned long KEAKeyBits; */
-NS_IMETHODIMP QuicSession::GetKEAKeyBits(uint32_t *aKEAKeyBits)
-{
-    /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
-}
-
 /* readonly attribute uint32_t providerFlags; */
 NS_IMETHODIMP QuicSession::GetProviderFlags(uint32_t *aProviderFlags)
-{
-    /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-/* [infallible] readonly attribute short SSLVersionUsed; */
-NS_IMETHODIMP QuicSession::GetSSLVersionUsed(int16_t *aSSLVersionUsed)
-{
-    /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-/* [infallible] readonly attribute short SSLVersionOffered; */
-NS_IMETHODIMP QuicSession::GetSSLVersionOffered(int16_t *aSSLVersionOffered)
-{
-    /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-/* [infallible] readonly attribute short MACAlgorithmUsed; */
-NS_IMETHODIMP QuicSession::GetMACAlgorithmUsed(int16_t *aMACAlgorithmUsed)
-{
-    /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-/* attribute nsIX509Cert clientCert; */
-NS_IMETHODIMP QuicSession::GetClientCert(nsIX509Cert * *aClientCert)
-{
-    /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
-}
-NS_IMETHODIMP QuicSession::SetClientCert(nsIX509Cert *aClientCert)
-{
-    /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-/* [infallible] readonly attribute boolean bypassAuthentication; */
-NS_IMETHODIMP QuicSession::GetBypassAuthentication(bool *aBypassAuthentication)
-{
-    /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-/* [infallible] readonly attribute boolean failedVerification; */
-NS_IMETHODIMP QuicSession::GetFailedVerification(bool *aFailedVerification)
 {
     /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
 }

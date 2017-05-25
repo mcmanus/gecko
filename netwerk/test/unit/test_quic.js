@@ -7,6 +7,9 @@ Cu.import("resource://gre/modules/NetUtil.jsm");
 // test2 uses a proxy configuration to route all requests to a specific proxy
 // (again hardcoded on 8443 todo) over quic
 
+// ATTN: sync with testing/xpcshell/moz-http2/moz-http2.js and MozQuic.h
+var alpnID = "hq-03";
+
 var h2Port;
 var quicPort = ":8443"; // todo
 var prefs;
@@ -96,8 +99,8 @@ Listener.prototype = {
 
   onStopRequest: function testOnStopRequest(request, ctx, status) {
     do_check_true(Components.isSuccessCode(status));
-    if (request.getResponseHeader("X-Firefox-Spdy") == "hq") {
-      do_check_eq(request.getResponseHeader("X-Firefox-Spdy"), "hq");
+    if (request.getResponseHeader("X-Firefox-Spdy") == alpnID) {
+      do_check_eq(request.getResponseHeader("X-Firefox-Spdy"), alpnID);
       nextTest();
       do_test_finished();
     } else {

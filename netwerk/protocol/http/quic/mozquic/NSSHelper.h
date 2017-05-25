@@ -6,6 +6,7 @@
 #pragma once
 
 #include "prio.h"
+#include "ssl.h"
 
 namespace mozilla { namespace net {
 
@@ -17,8 +18,9 @@ public:
   static int Init(char *dir);
   NSSHelper(MozQuic *quicSession, const char *originKey);
   ~NSSHelper() {}
-  uint32_t DriveHandShake();
-
+  uint32_t DriveHandshake();
+  bool IsHandshakeComplete() { return mHandshakeComplete; }
+    
 private:
   static PRStatus NSPRGetPeerName(PRFileDesc *aFD, PRNetAddr*addr);
   static PRStatus NSPRGetSocketOption(PRFileDesc *aFD, PRSocketOptionData *aOpt);
@@ -29,9 +31,13 @@ private:
   static int32_t nssHelperRead(PRFileDesc *fd, void *buf, int32_t amount);
   static int32_t nssHelperRecv(PRFileDesc *fd, void *buf, int32_t amount, int flags,
                                PRIntervalTime timeout);
+
+  static void HandshakeCallback(PRFileDesc *fd, void *client_data);
+
   MozQuic             *mQuicSession;
   PRFileDesc          *mFD;
-  bool                 mReady;
+  bool                 mServerReady;
+  bool                 mHandshakeComplete;
 };
 
 }} //namespace
