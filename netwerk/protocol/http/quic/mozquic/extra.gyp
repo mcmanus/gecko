@@ -14,7 +14,8 @@
       {
      'target_name': 'sample',
      'type': 'executable',
-     'sources': [
+      'cflags': [ '-g', ],
+      'sources': [
        'sample/sample.c',
       ],
      'dependencies': [

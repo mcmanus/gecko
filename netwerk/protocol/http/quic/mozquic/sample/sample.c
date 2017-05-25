@@ -48,7 +48,7 @@ int main()
     usleep (1000); // this is for handleio todo
     mozquic_IO(c);
     if (only_child) {
-      mozquic_IO(only_child);
+      mozquic_IO(only_child); // todo mvp do we need this?
     }
   } while (1);
   

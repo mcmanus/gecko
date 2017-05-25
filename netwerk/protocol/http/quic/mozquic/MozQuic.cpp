@@ -122,6 +122,7 @@ MozQuic::MozQuic(bool handleIO)
   , mHandleIO(handleIO)
   , mIsClient(true)
   , mIsChild(false)
+  , mReceivedServerClearText(false)
   , mConnectionState(STATE_UNINITIALIZED)
   , mOriginPort(-1)
   , mVersion(kMozQuicVersion1)
@@ -199,29 +200,61 @@ MozQuic::Bind()
   memset (&sin, 0, sizeof (sin));
   sin.sin_family = AF_INET;
   sin.sin_port = htons(mOriginPort);
-  bind(mFD, (const sockaddr *)&sin, sizeof (sin)); // todo err
+  bind(mFD, (const sockaddr *)&sin, sizeof (sin)); // todo err check
   listen(mFD, 1000); // todo err
   return MOZQUIC_OK;
+}
+
+MozQuic *
+MozQuic::FindSession(const unsigned char *pkt, uint32_t pktSize)
+{
+  assert (!mIsChild);
+  assert (!mIsClient);
+  assert(pktSize >= 17);
+  assert(pkt[0] & 0x80); // todo, this needs to work with short headers
+
+  uint32_t version;
+  memcpy(&version, pkt + 13, 4);
+  version = ntohl(version);
+  if (!VersionOK(version)) {
+    Log((char *)"find session failed due to verison");
+    return nullptr;
+  }
+
+  uint64_t connID;
+  memcpy(&connID, pkt + 1, 8);
+  connID = ntohll(connID);
+  auto i = mConnectionHash.find(connID);
+  if (i == mConnectionHash.end()) {
+    Log((char *)"find session could not find id in hash");
+    return nullptr;
+  }
+  return (*i).second;
 }
 
 uint32_t
 MozQuic::Intake()
 {
+  if (mIsChild) {
+    // parent does all fd reading
+    return MOZQUIC_OK;
+  }
   // check state
   assert (mConnectionState == SERVER_STATE_LISTEN ||
           mConnectionState == SERVER_STATE_1RTT ||
           mConnectionState == CLIENT_STATE_1RTT); // todo mvp
-
+  uint32_t rv = MOZQUIC_OK;
+  
   unsigned char pkt[kMozQuicMSS];
   do {
     uint32_t pktSize = 0;
     struct sockaddr_in client;
-    int code = Recv(pkt, kMozQuicMSS, pktSize, &client);
+    rv = Recv(pkt, kMozQuicMSS, pktSize, &client);
     // todo 17 assumes long form
-    if (code != MOZQUIC_OK || !pktSize || pktSize < 17) {
-      return code;
+    if (rv != MOZQUIC_OK || !pktSize || pktSize < 17) {
+      return rv;
     }
-    Log((char *)"intake found");
+    Log((char *)"intake found data");
 
     if (!(pkt[0] & 0x80)) {
       // short form header when we only expect long form
@@ -230,41 +263,45 @@ MozQuic::Intake()
       continue;
     }
 
+    // dispatch to the right MozQuic class. this is used
+    // for emphasis
     uint8_t type = pkt[0] & 0x7f;
     switch (type) {
-    case 0x01: // version negotiation
+    case TYPE_VERSION_NEGOTIATION: // version negotiation
       assert(false);
       // todo mvp
       break;
-    case 0x02: // client initial packet
-      if (!ServerState()) {
-        Log((char *)"ignore client hello in client state");
-        continue;
+    case TYPE_CLIENT_INITIAL:
+      rv = this->ProcessClientInitial(pkt, pktSize, &client);
+      break;
+    case TYPE_SERVER_STATELESS_RETRY:
+      assert(false);
+      // todo mvp
+      break;
+    case TYPE_SERVER_CLEARTEXT:
+      rv = this->ProcessServerCleartext(pkt, pktSize);
+      break;
+    case TYPE_CLIENT_CLEARTEXT:
+    {
+      MozQuic *childSession = FindSession(pkt, pktSize);
+      if (!childSession) {
+        rv = MOZQUIC_ERR_GENERAL;
+      } else {
+        rv = childSession->ProcessClientCleartext(pkt, pktSize);
       }
-      ProcessClientInitial(pkt, pktSize, &client);
-      break;
-    case 0x03: // Server Stateless Retry
-      assert(false);
-      // todo mvp
-      break;
-    case 0x04: // Server cleartext
-      ProcessServerCleartext(pkt, pktSize);
-      break;
-    case 0x05: // Client cleartext
-      assert(false);
-      // todo mvp
-      break;
+    }
+    break;
 
     default:
-      // reject anything that is nto a cleartext packet (not right, but later)
+      // reject anything that is not a cleartext packet (not right, but later)
       Log((char *)"recv1rtt unexpected type");
-      // todo this could actually be protected packet
+      // todo this could actually be out of order protected packet even in handshake
       // and ideally would be queued. for now we rely on retrans
       break;
     }
-  } while (1);
+  } while (rv == MOZQUIC_OK);
 
-  return MOZQUIC_OK;
+  return rv;
 }
 
 int
@@ -410,10 +447,9 @@ MozQuic::Server1RTT()
 int
 MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
 {
-  // received a 0x84 packet
   // cleartext is always in long form
   assert(pkt[0] & 0x80);
-  assert(pkt[0] == 0x84);
+  assert((pkt[0] & 0x7f) == TYPE_SERVER_CLEARTEXT);
   assert(pktSize >= 17);
 
   uint32_t pktNum;
@@ -428,8 +464,10 @@ MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
     // this should not abort session as its
     // not authenticated
   }
-  
+
+  mReceivedServerClearText = true;
   memcpy(&mConnectionID, pkt + 1, 8);
+  mConnectionID = ntohll(mConnectionID);
   // todo log change
   
   return IntakeStream0(pkt, pktSize);
@@ -438,6 +476,7 @@ MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
 int
 MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize) 
 {
+  // todo this assumes long header
   // used by both client and server
   unsigned char *framePtr = pkt + 17;
   unsigned char *endPtr = pkt + pktSize;
@@ -502,7 +541,7 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
         tmp(new MozQuicStreamChunk(streamID, offset, framePtr, dataLen, finBit));
       mStream0->Supply(tmp);
       framePtr += dataLen;
-      // todo mvp generate ACK
+      // todo mvp generate ACK (not here tho. we ack packets not data frames)
     } else if ((type & FRAME_MASK_ACK) == FRAME_MASK_ACK_RESULT) {
       assert(false);
       // todo mvp process ack
@@ -524,10 +563,13 @@ MozQuic::Accept(struct sockaddr_in *clientAddr)
   child->mFD = mFD;
   
   child->mStream0.reset(new MozQuicStreamPair(0, child));
-  for (int i=0; i < 4; i++) {
-    child->mConnectionID = child->mConnectionID << 16;
-    child->mConnectionID = child->mConnectionID | (random() & 0xffff);
-  }
+  do {
+    for (int i=0; i < 4; i++) {
+      child->mConnectionID = child->mConnectionID << 16;
+      child->mConnectionID = child->mConnectionID | (random() & 0xffff);
+    }
+  } while (mConnectionHash.count(child->mConnectionID) != 0);
+      
   for (int i=0; i < 2; i++) {
     child->mNextPacketID = child->mNextPacketID << 16;
     child->mNextPacketID = child->mNextPacketID | (random() & 0xffff);
@@ -537,7 +579,9 @@ MozQuic::Accept(struct sockaddr_in *clientAddr)
   if (!mHandShakeInput) {
     child->mNSSHelper.reset(new NSSHelper(child, mOriginName.get()));
   }
-
+  child->mVersion = mVersion;
+  
+  mConnectionHash.insert( { child->mConnectionID, child });
   return child;
 }
 
@@ -556,26 +600,18 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
                               struct sockaddr_in *clientAddr)
 {
   assert(pkt[0] & 0x80);
-  assert(pkt[0] == 0x82);
+  assert((pkt[0] & 0x7f) == TYPE_CLIENT_INITIAL);
   assert(pktSize >= 17);
-  
-  // received type 2
-  if (mConnectionState != SERVER_STATE_1RTT &&
-      mConnectionState != SERVER_STATE_LISTEN) { // todo rexmit right?
+  assert(!mIsChild);
+
+  if (mConnectionState != SERVER_STATE_LISTEN) { // todo rexmit right?
     return MOZQUIC_OK;
   }
-  
-  if (mConnectionState == SERVER_STATE_LISTEN) {
-    // todo mvp, we need some kind of hash to check for dups here
-    MozQuic *child = Accept(clientAddr);
-    child->mConnectionState = SERVER_STATE_1RTT;
-    child->ProcessClientInitial(pkt, pktSize, clientAddr);
-    assert(mNewConnCB); // todo handle err
-    mNewConnCB(mClosure, child);
-    return MOZQUIC_OK;
+  if (mIsClient) {
+    return MOZQUIC_ERR_GENERAL;
   }
 
-  // start by checking the version.
+  // todo mvp acknowledge this packet
 
   uint32_t tmp32;
   memcpy(&tmp32, pkt + 13, 4);
@@ -586,13 +622,41 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
     Log((char *)"server version err");
     return MOZQUIC_OK;
   }
-
   mVersion = tmp32;
-  // todo mvp acknowledge this packet
+
+  MozQuic *child = Accept(clientAddr);
+  child->mConnectionState = SERVER_STATE_1RTT;
+  child->IntakeStream0(pkt, pktSize);
+  assert(mNewConnCB); // todo handle err
+  mNewConnCB(mClosure, child);
+  return MOZQUIC_OK;
+}
+
+int
+MozQuic::ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize)
+{
+  assert(pkt[0] & 0x80);
+  assert((pkt[0] & 0x7f) == TYPE_CLIENT_CLEARTEXT);
+  assert(pktSize >= 17);
+  assert(mIsChild);
+
+  if (mConnectionState != SERVER_STATE_1RTT) { // todo rexmit right?
+    return MOZQUIC_ERR_GENERAL;
+  }
+  assert(!mIsClient);
+  assert(mStream0);
+
+  uint32_t tmp32;
+  memcpy(&tmp32, pkt + 13, 4);
+  tmp32 = ntohl(tmp32);
+  if (tmp32 != mVersion) {
+    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"version mismatch");
+    return MOZQUIC_ERR_GENERAL;
+  }
   
   return IntakeStream0(pkt, pktSize);
 }
-  
+
 uint32_t
 MozQuic::FlushStream0()
 {
@@ -606,8 +670,17 @@ MozQuic::FlushStream0()
 
   // section 5.4.1 of transport
   // long form header 17 bytes
-  pkt[0] = ServerState() ? 0x84 : 0x82;
-  memcpy(pkt + 1, &mConnectionID, 8);
+  pkt[0] = 0x80;
+  if (ServerState()) {
+    pkt[0] |= TYPE_SERVER_CLEARTEXT;
+  } else {
+    pkt[0] |= mReceivedServerClearText ? TYPE_CLIENT_CLEARTEXT : TYPE_CLIENT_INITIAL;
+  }
+
+  // todo store a big endian version of this
+  uint64_t connID = htonll(mConnectionID);
+  memcpy(pkt + 1, &connID, 8);
+  
   tmp32 = htonl(mNextPacketID);
   memcpy(pkt + 9, &tmp32, 4);
   tmp32 = htonl(mVersion);
@@ -680,9 +753,9 @@ MozQuic::FlushStream0()
   }
 
   if (framePtr != (pkt + 17)) {
-    // then padding as needed up to 1272 on client
-    uint32_t finalLen = ServerState() ?
-      ((framePtr - pkt) + 8) : kMozQuicMTU;
+    // then padding as needed up to 1272 on client_initial
+    uint32_t finalLen =
+      ((pkt[0] & 0x7f) == TYPE_CLIENT_INITIAL) ? kMozQuicMTU : ((framePtr - pkt) + 8);
 
     uint32_t paddingNeeded = finalLen - 8 - (framePtr - pkt);
     memset (framePtr, 0, paddingNeeded);

@@ -40,7 +40,13 @@ NSSHelper::Init(char *dir)
 
   return (NSS_Init(dir) == SECSuccess) ? MOZQUIC_OK : MOZQUIC_ERR_GENERAL;
 }
-  
+
+void HandshakeCallback(PRFileDesc *fd, void *client_data)
+{
+  fprintf(stderr,"handshakecallback\n");
+  // todo log or state..
+}
+
 NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
   : mQuicSession(quicSession)
   , mReady(false)
@@ -64,6 +70,7 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
   SSLVersionRange range = {SSL_LIBRARY_VERSION_TLS_1_3,
                            SSL_LIBRARY_VERSION_TLS_1_3};
   SSL_VersionRangeSet(mFD, &range);
+  SSL_HandshakeCallback(mFD, HandshakeCallback, this);
 
   CERTCertificate *cert =
     CERT_FindCertByNickname(CERT_GetDefaultCertDB(), originKey);

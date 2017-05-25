@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <forward_list>
+#include <unordered_map>
 #include <memory>
 #include "MozQuicStream.h"
 #include "NSSHelper.h"
@@ -90,10 +91,12 @@ private:
   uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen, struct sockaddr_in *peer);
   int ProcessServerCleartext(unsigned char *, uint32_t size);
   int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer);
+  int ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize);
   int IntakeStream0(unsigned char *, uint32_t size);
 
   bool ServerState() { return mConnectionState > SERVER_STATE_BREAK; }
-
+  MozQuic *FindSession(const unsigned char *pkt, uint32_t pktSize);
+  
   uint64_t Timestamp();
   uint32_t Intake();
   uint32_t Flush();
@@ -109,13 +112,17 @@ private:
   bool mHandleIO;
   bool mIsClient;
   bool mIsChild;
+  bool mReceivedServerClearText;
   enum connectionState mConnectionState;
   int mOriginPort;
   std::unique_ptr<char []> mOriginName;
   struct sockaddr_in mPeer; // todo not a v4 world
 
   uint32_t mVersion;
- 
+
+  // todo mvp lifecycle.. stuff never comes out of here
+  std::unordered_map<uint64_t, MozQuic *> mConnectionHash;
+
   uint64_t mConnectionID;
   uint32_t mNextPacketID;
 
@@ -158,9 +165,19 @@ public:
     // STREAM                    = 0xc0 - 0xff
     FRAME_MASK_STREAM            = 0xc0,
     FRAME_MASK_STREAM_RESULT     = 0xc0,
-    
   };
 
+  enum LongHeaderType {
+    TYPE_VERSION_NEGOTIATION    = 1,
+    TYPE_CLIENT_INITIAL         = 2,
+    TYPE_SERVER_STATELESS_RETRY = 3,
+    TYPE_SERVER_CLEARTEXT       = 4,
+    TYPE_CLIENT_CLEARTEXT       = 5,
+    TYPE_0RTT_PROTECTED         = 6,
+    TYPE_1RTT_PROTECTED_KP0     = 7,
+    TYPE_1RTT_PROTECTED_KP1     = 8,
+    TYPE_PUBLIC_RESET           = 9,
+  };
 };
 
 }} //namespace
