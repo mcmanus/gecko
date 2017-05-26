@@ -62,7 +62,6 @@
 #include "nsIXULRuntime.h"
 #include "nsICacheInfoChannel.h"
 #include "nsIDOMWindowUtils.h"
-#include "nsIThrottlingService.h"
 
 #include <algorithm>
 #include "HttpBaseChannel.h"
@@ -3004,13 +3003,6 @@ void
 HttpBaseChannel::ReleaseListeners()
 {
   MOZ_ASSERT(NS_IsMainThread(), "Should only be called on the main thread.");
-
-  if (mClassOfService & nsIClassOfService::Throttleable) {
-    nsIThrottlingService *throttler = gHttpHandler->GetThrottlingService();
-    if (throttler) {
-      throttler->RemoveChannel(this);
-    }
-  }
 
   mListener = nullptr;
   mListenerContext = nullptr;

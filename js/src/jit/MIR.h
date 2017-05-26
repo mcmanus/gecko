@@ -7329,6 +7329,11 @@ class MConcat
 
         setMovable();
         setResultType(MIRType::String);
+
+        // StringConcat throws a catchable exception. Even though we bail to
+        // baseline in that case, we must set Guard to ensure the bailout
+        // happens.
+        setGuard();
     }
 
   public:
@@ -11635,6 +11640,9 @@ class MNewLexicalEnvironmentObject
     bool appendRoots(MRootList& roots) const override {
         return roots.append(scope_);
     }
+    AliasSet getAliasSet() const override {
+        return AliasSet::None();
+    }
 };
 
 // Allocate a new LexicalEnvironmentObject from existing one
@@ -11661,6 +11669,11 @@ class MCopyLexicalEnvironmentObject
     }
     bool possiblyCalls() const override {
         return true;
+    }
+    AliasSet getAliasSet() const override {
+        return AliasSet::Load(AliasSet::ObjectFields |
+                              AliasSet::FixedSlot |
+                              AliasSet::DynamicSlot);
     }
 };
 

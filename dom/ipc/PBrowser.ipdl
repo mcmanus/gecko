@@ -5,7 +5,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-include protocol PBlob;
 include protocol PColorPicker;
 include protocol PContent;
 include protocol PContentBridge;
@@ -378,11 +377,6 @@ parent:
     sync GetWidgetRounding() returns (int32_t value);
 
     /**
-     * Gets maximum of touch points at current device.
-     */
-    sync GetMaxTouchPoints() returns (uint32_t value);
-
-    /**
      * Set the native cursor.
      * @param value
      *   The widget cursor to set.
@@ -466,7 +460,8 @@ parent:
       returns (bool windowOpened,
                TextureFactoryIdentifier textureFactoryIdentifier,
                uint64_t layersId,
-               CompositorOptions compositorOptions);
+               CompositorOptions compositorOptions,
+               uint32_t maxTouchPoints);
 
     /**
      * Tells the containing widget whether the given input block results in a
