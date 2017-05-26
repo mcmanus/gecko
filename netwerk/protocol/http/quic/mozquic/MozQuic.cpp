@@ -645,6 +645,16 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
     return MOZQUIC_ERR_GENERAL;
   }
 
+  // note its possible only the first client initial packet will be subject
+  // to the at least 1280 rule, in which case this will need to be updated
+  if (pktSize < kMozQuicMTU) {
+    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"client initial packet too small");
+    return MOZQUIC_ERR_GENERAL;
+  }
+  
+  // todo - we can get more than one of these if the client hello is very large
+  // the >0 packet should not do accept, it should find the session
+  
   // todo mvp acknowledge this packet
 
   uint32_t tmp32;
