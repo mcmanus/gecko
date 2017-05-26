@@ -16,6 +16,7 @@ var prefs;
 var spdypref;
 var http2pref;
 var quicpref;
+var origin;
 
 function run_test() {
   var env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment);
