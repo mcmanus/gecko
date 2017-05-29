@@ -142,8 +142,13 @@ MozQuic::MozQuic(bool handleIO)
   , mNewConnCB(nullptr)
 {
   assert(!handleIO); // todo
-  // todo seed prng sensibly from nss
-  srandom(Timestamp() & 0xffffffff);
+  unsigned char seed[4];
+  if (SECSuccess != PK11_GenerateRandom(seed, sizeof(seed))) {
+    // major badness!
+    srandom(Timestamp() & 0xffffffff);
+  } else {
+    srandom(seed[0] << 24 | seed[1] << 16 | seed[2] << 8 | seed[3]);
+  }
   memset(&mPeer, 0, sizeof(mPeer));
 }
 

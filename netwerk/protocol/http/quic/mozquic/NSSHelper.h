@@ -7,6 +7,7 @@
 
 #include "prio.h"
 #include "ssl.h"
+#include "pk11pub.h"
 
 namespace mozilla { namespace net {
 
