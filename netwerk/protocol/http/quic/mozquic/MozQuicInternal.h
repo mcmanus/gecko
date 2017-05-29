@@ -90,6 +90,7 @@ private:
 
   uint32_t Transmit(unsigned char *, uint32_t len);
   uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen, struct sockaddr_in *peer);
+  void Consumed(int bytes);
   int ProcessServerCleartext(unsigned char *, uint32_t size);
   int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer);
   int ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize);
@@ -108,6 +109,9 @@ private:
   int Bind();
   bool VersionOK(uint32_t proposed);
   MozQuic *Accept(struct sockaddr_in *peer);
+
+  unsigned char mPkt[kMozQuicMSS]; // receive buffer
+  int mPktUsed;                    // bytes in in use
 
   int  mFD;
   bool mHandleIO;

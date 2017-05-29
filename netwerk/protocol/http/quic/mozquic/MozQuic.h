@@ -28,7 +28,7 @@ extern "C" {
 
   typedef void mozquic_connection_t;
 
-  struct mozquic_config_t 
+  struct mozquic_config_t
   {
     const char *originName;
     int originPort;
