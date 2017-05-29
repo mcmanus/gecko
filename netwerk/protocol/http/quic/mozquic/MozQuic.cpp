@@ -71,7 +71,7 @@ extern "C" {
     mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
     return self->StartServer(handle_new_connection);
   }
-  
+
   int mozquic_IO(mozquic_connection_t *conn)
   {
     mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
@@ -103,7 +103,7 @@ extern "C" {
     self->HandshakeComplete(errCode);
   }
 
-  int mozquic_nss_config(char *dir) 
+  int mozquic_nss_config(char *dir)
   {
     if (mozQuicInit) {
       return MOZQUIC_ERR_GENERAL;
@@ -115,7 +115,7 @@ extern "C" {
 
     return mozilla::net::NSSHelper::Init(dir);
   }
-  
+
 #ifdef __cplusplus
 }
 #endif
@@ -153,7 +153,7 @@ MozQuic::~MozQuic()
     close(mFD);
   }
 }
-  
+
 int
 MozQuic::StartConnection()
 {
@@ -187,7 +187,7 @@ MozQuic::StartServer(int (*handle_new_connection)(void *, mozquic_connection_t *
 }
 
 void
-MozQuic::SetOriginName(const char *name) 
+MozQuic::SetOriginName(const char *name)
 {
   mOriginName.reset(new char[strlen(name) + 1]);
   strcpy (mOriginName.get(), name);
@@ -250,19 +250,22 @@ MozQuic::Intake()
           mConnectionState == CLIENT_STATE_CONNECTED ||
           mConnectionState == CLIENT_STATE_1RTT); // todo mvp
   uint32_t rv = MOZQUIC_OK;
-  
-  unsigned char pkt[kMozQuicMSS];
+
   do {
     uint32_t pktSize = 0;
     struct sockaddr_in client;
-    rv = Recv(pkt, kMozQuicMSS, pktSize, &client);
+    rv = Recv(&mPkt[mPktUsed], kMozQuicMSS - mPktUsed, pktSize, &client);
+    if (rv == MOZQUIC_OK) {
+      mPktUsed += pktSize;
+    }
     // todo 17 assumes long form
-    if (rv != MOZQUIC_OK || !pktSize || pktSize < 17) {
-      return rv;
+    if (mPktUsed < 17) {
+      // wait for more data
+      return MOZQUIC_OK;
     }
     Log((char *)"intake found data");
 
-    if (!(pkt[0] & 0x80)) {
+    if (!(mPkt[0] & 0x80)) {
       // short form header when we only expect long form
       // cleartext
       Log((char *)"short form header at wrong time");
@@ -271,29 +274,29 @@ MozQuic::Intake()
 
     // dispatch to the right MozQuic class. this is used
     // for emphasis
-    uint8_t type = pkt[0] & 0x7f;
+    uint8_t type = mPkt[0] & 0x7f;
     switch (type) {
     case TYPE_VERSION_NEGOTIATION: // version negotiation
       assert(false);
       // todo mvp
       break;
     case TYPE_CLIENT_INITIAL:
-      rv = this->ProcessClientInitial(pkt, pktSize, &client);
+      rv = this->ProcessClientInitial(mPkt, pktSize, &client);
       break;
     case TYPE_SERVER_STATELESS_RETRY:
       assert(false);
       // todo mvp
       break;
     case TYPE_SERVER_CLEARTEXT:
-      rv = this->ProcessServerCleartext(pkt, pktSize);
+      rv = this->ProcessServerCleartext(mPkt, pktSize);
       break;
     case TYPE_CLIENT_CLEARTEXT:
     {
-      MozQuic *childSession = FindSession(pkt, pktSize);
+      MozQuic *childSession = FindSession(mPkt, pktSize);
       if (!childSession) {
         rv = MOZQUIC_ERR_GENERAL;
       } else {
-        rv = childSession->ProcessClientCleartext(pkt, pktSize);
+        rv = childSession->ProcessClientCleartext(mPkt, pktSize);
       }
     }
     break;
@@ -305,6 +308,9 @@ MozQuic::Intake()
       // and ideally would be queued. for now we rely on retrans
       break;
     }
+
+    // TODO: make sure this consumes the correct amount of data here!
+    Consumed(pktSize);
   } while (rv == MOZQUIC_OK);
 
   return rv;
@@ -342,12 +348,12 @@ MozQuic::IO()
       }
     }
   }
-  
+
   return MOZQUIC_OK;
 }
 
 void
-MozQuic::Log(char *msg) 
+MozQuic::Log(char *msg)
 {
   // todo default mLogCallback can be dev/null
   if (mLogCallback) {
@@ -374,6 +380,18 @@ MozQuic::Recv(unsigned char *pkt, uint32_t avail, uint32_t &outLen,
   return MOZQUIC_OK;
 }
 
+ // we have consumed this amount of bytes from the receive buffer
+void
+MozQuic::Consumed(int bytes)
+{
+  assert(bytes <= mPktUsed);
+  if (mPktUsed > bytes) {
+    // move the trailer to the beginning
+    memmove(&mPkt[0], &mPkt[mPktUsed], mPktUsed - bytes);
+  }
+  mPktUsed -= bytes;
+}
+
 uint32_t
 MozQuic::Transmit (unsigned char *pkt, uint32_t len)
 {
@@ -386,7 +404,7 @@ MozQuic::Transmit (unsigned char *pkt, uint32_t len)
   } else {
     send(mFD, pkt, len, 0); // todo errs
   }
-  
+
   return MOZQUIC_OK;
 }
 
@@ -428,7 +446,7 @@ MozQuic::HandshakeComplete(uint32_t code)
 }
 
 int
-MozQuic::Client1RTT() 
+MozQuic::Client1RTT()
 {
   if (!mHandshakeInput) {
     // todo handle doing this internally
@@ -442,7 +460,7 @@ MozQuic::Client1RTT()
     unsigned char buf[kMozQuicMSS];
     uint32_t amt = 0;
     bool fin = false;
-    
+
     uint32_t code = mStream0->Read(buf, kMozQuicMSS, amt, fin);
     if (code != MOZQUIC_OK) {
       return code;
@@ -456,7 +474,7 @@ MozQuic::Client1RTT()
 }
 
 int
-MozQuic::Server1RTT() 
+MozQuic::Server1RTT()
 {
   if (mHandshakeInput) {
     // todo handle app-security on server side
@@ -503,12 +521,12 @@ MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize)
   memcpy(&mConnectionID, pkt + 1, 8);
   mConnectionID = ntohll(mConnectionID);
   // todo log change
-  
+
   return IntakeStream0(pkt, pktSize);
 }
 
 int
-MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize) 
+MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
 {
   // todo this assumes long header
   // used by both client and server
@@ -549,7 +567,7 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
       } else {
         dataLen = endPtr - (framePtr + bytesNeeded);
       }
-      
+
       // todo log frame len
       bytesNeeded += dataLen;
       if (framePtr + bytesNeeded > endPtr) {
@@ -595,7 +613,7 @@ MozQuic::Accept(struct sockaddr_in *clientAddr)
   child->mIsClient = false;
   memcpy(&child->mPeer, clientAddr, sizeof (struct sockaddr_in));
   child->mFD = mFD;
-  
+
   child->mStream0.reset(new MozQuicStreamPair(0, child));
   do {
     for (int i=0; i < 4; i++) {
@@ -603,7 +621,7 @@ MozQuic::Accept(struct sockaddr_in *clientAddr)
       child->mConnectionID = child->mConnectionID | (random() & 0xffff);
     }
   } while (mConnectionHash.count(child->mConnectionID) != 0);
-      
+
   for (int i=0; i < 2; i++) {
     child->mNextPacketID = child->mNextPacketID << 16;
     child->mNextPacketID = child->mNextPacketID | (random() & 0xffff);
@@ -614,7 +632,7 @@ MozQuic::Accept(struct sockaddr_in *clientAddr)
     child->mNSSHelper.reset(new NSSHelper(child, mOriginName.get()));
   }
   child->mVersion = mVersion;
-  
+
   mConnectionHash.insert( { child->mConnectionID, child });
   return child;
 }
@@ -651,10 +669,10 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
     RaiseError(MOZQUIC_ERR_GENERAL, (char *)"client initial packet too small");
     return MOZQUIC_ERR_GENERAL;
   }
-  
+
   // todo - we can get more than one of these if the client hello is very large
   // the >0 packet should not do accept, it should find the session
-  
+
   // todo mvp acknowledge this packet
 
   uint32_t tmp32;
@@ -697,7 +715,7 @@ MozQuic::ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize)
     RaiseError(MOZQUIC_ERR_GENERAL, (char *)"version mismatch");
     return MOZQUIC_ERR_GENERAL;
   }
-  
+
   return IntakeStream0(pkt, pktSize);
 }
 
@@ -707,7 +725,7 @@ MozQuic::FlushStream0()
   if (mUnWritten.empty()) {
     return MOZQUIC_OK;
   }
-      
+
   unsigned char pkt[kMozQuicMTU];
   unsigned char *endpkt = pkt + kMozQuicMTU;
   uint32_t tmp32;
@@ -724,7 +742,7 @@ MozQuic::FlushStream0()
   // todo store a big endian version of this
   uint64_t connID = htonll(mConnectionID);
   memcpy(pkt + 1, &connID, 8);
-  
+
   tmp32 = htonl(mNextPacketID);
   memcpy(pkt + 9, &tmp32, 4);
   tmp32 = htonl(mVersion);
@@ -816,7 +834,7 @@ MozQuic::FlushStream0()
       return code;
     }
     mNextPacketID++;
-    // each member of the list needs to 
+    // each member of the list needs to
   }
 
   if (iter != mUnWritten.end()) {
@@ -864,12 +882,12 @@ MozQuic::NSSInput(void *buf, int32_t amount)
     PR_SetError(PR_WOULD_BLOCK_ERROR, 0);
     return -1;
   }
-    
+
   // client part of handshake is available in stream 0,
   // feed it to nss via the return code of this fx
   uint32_t amt = 0;
   bool fin = false;
-    
+
   uint32_t code = mStream0->Read((unsigned char *)buf,
                                  amount, amt, fin);
   if (code != MOZQUIC_OK) {
