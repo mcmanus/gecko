@@ -81,7 +81,7 @@ public:
   void SetHandshakeInput(int (*fx)(mozquic_connection_t *,
                                    unsigned char *data, uint32_t len)) { mHandshakeInput = fx; }
   void SetErrorCB(int (*fx)(mozquic_connection_t *, uint32_t err, char *)) { mErrorCB = fx; }
-  void SetFD(int fd) { mFD = fd; }
+  void SetFD(mozquic_socket_t fd) { mFD = fd; }
   int  GetFD() { return mFD; }
 
   uint32_t DoWriter(std::unique_ptr<MozQuicStreamChunk> &p) override;
@@ -109,7 +109,7 @@ private:
   bool VersionOK(uint32_t proposed);
   MozQuic *Accept(struct sockaddr_in *peer);
 
-  int  mFD;
+  mozquic_socket_t mFD;
   bool mHandleIO;
   bool mIsClient;
   bool mIsChild;

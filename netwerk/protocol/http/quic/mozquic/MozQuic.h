@@ -11,6 +11,18 @@
 */
 #include <stdint.h>
 
+#ifndef mozquic_socket_typedef
+/* socket typedef */
+#ifdef WIN32
+typedef SOCKET mozquic_socket_t;
+#define MOZQUIC_SOCKET_BAD INVALID_SOCKET
+#else
+typedef int mozquic_socket_t;
+#define MOZQUIC_SOCKET_BAD -1
+#endif
+#define mozquic_socket_typedef
+#endif /* mozquic_socket_typedef */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -60,8 +72,8 @@ extern "C" {
   int mozquic_IO(mozquic_connection_t *inSession);
   // todo need one to get the pollset
 
-  int  mozquic_osfd(mozquic_connection_t *inSession);
-  void mozquic_setosfd(mozquic_connection_t *inSession, int fd);
+  mozquic_socket_t mozquic_osfd(mozquic_connection_t *inSession);
+  void mozquic_setosfd(mozquic_connection_t *inSession, mozquic_socket_t fd);
 
   // the mozquic application may either delegate TLS handling to the lib
   // or may imlement the TLS API : mozquic_handshake_input/output and then
