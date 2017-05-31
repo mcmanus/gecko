@@ -94,6 +94,7 @@ private:
   int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer);
   int ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize);
   int IntakeStream0(unsigned char *, uint32_t size);
+  bool IntegrityCheck(unsigned char *, uint32_t size);
 
   bool ServerState() { return mConnectionState > SERVER_STATE_BREAK; }
   MozQuic *FindSession(const unsigned char *pkt, uint32_t pktSize);

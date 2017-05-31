@@ -242,6 +242,30 @@ MozQuic::FindSession(const unsigned char *pkt, uint32_t pktSize)
   return (*i).second;
 }
 
+bool
+MozQuic::IntegrityCheck(unsigned char *pkt, uint32_t pktSize) 
+{
+  assert (pkt[0] & 0x80);
+  assert (((pkt[0] & 0x7f) == TYPE_CLIENT_INITIAL) ||
+          ((pkt[0] & 0x7f) == TYPE_SERVER_STATELESS_RETRY) ||
+          ((pkt[0] & 0x7f) == TYPE_SERVER_CLEARTEXT) ||
+          ((pkt[0] & 0x7f) == TYPE_CLIENT_CLEARTEXT));
+  if (pktSize < (FNV64size + 17)) {
+    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"hash err");
+    return false;
+  }
+  unsigned char calculatedSum[FNV64size];
+  if (FNV64block(pkt, pktSize - FNV64size, calculatedSum) != 0) {
+    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"hash err");
+    return false;
+  }
+  bool rv = !memcmp(calculatedSum, pkt + pktSize - FNV64size, FNV64size);
+  if (!rv) {
+    Log((char *)"integrity error");
+  }
+  return rv;
+}
+
 uint32_t
 MozQuic::Intake()
 {
@@ -283,17 +307,33 @@ MozQuic::Intake()
       // todo mvp
       break;
     case TYPE_CLIENT_INITIAL:
+      if (!this->IntegrityCheck(pkt, pktSize)) {
+        rv = MOZQUIC_ERR_GENERAL;
+        break;
+      }
       rv = this->ProcessClientInitial(pkt, pktSize, &client);
       break;
     case TYPE_SERVER_STATELESS_RETRY:
+      if (!this->IntegrityCheck(pkt, pktSize)) {
+        rv = MOZQUIC_ERR_GENERAL;
+        break;
+      }
       assert(false);
       // todo mvp
       break;
     case TYPE_SERVER_CLEARTEXT:
+      if (!this->IntegrityCheck(pkt, pktSize)) {
+        rv = MOZQUIC_ERR_GENERAL;
+        break;
+      }
       rv = this->ProcessServerCleartext(pkt, pktSize);
       break;
     case TYPE_CLIENT_CLEARTEXT:
     {
+      if (!this->IntegrityCheck(pkt, pktSize)) {
+        rv = MOZQUIC_ERR_GENERAL;
+        break;
+      }
       MozQuic *childSession = FindSession(pkt, pktSize);
       if (!childSession) {
         rv = MOZQUIC_ERR_GENERAL;
@@ -385,11 +425,15 @@ MozQuic::Transmit (unsigned char *pkt, uint32_t len)
   if (mTransmitCallback) {
     return mTransmitCallback(mClosure, pkt, len);
   }
+  int rv;
   if (mIsChild) {
-    sendto(mFD, pkt, len, 0,
-           (sockaddr *)&mPeer, sizeof(mPeer));
+    rv = sendto(mFD, pkt, len, 0,
+                    (sockaddr *)&mPeer, sizeof(mPeer));
   } else {
-    send(mFD, pkt, len, 0); // todo errs
+    rv = send(mFD, pkt, len, 0); // todo errs
+  }
+  if (rv == -1) {
+    Log((char *)"Sending error in transmit");
   }
   
   return MOZQUIC_OK;
@@ -1034,7 +1078,7 @@ MozQuic::FlushStream0()
 
     // then 8 bytes of checksum on cleartext packets
     assert (FNV64size == 8);
-    if (FNV64block(pkt, finalLen - 8, framePtr) != 0) {
+    if (FNV64block(pkt, finalLen - FNV64size, framePtr) != 0) {
       RaiseError(MOZQUIC_ERR_GENERAL, (char *)"hash err");
       return MOZQUIC_ERR_GENERAL;
     }
