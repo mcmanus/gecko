@@ -480,7 +480,6 @@ MozQuic::ParseFrameHeader(unsigned char *pkt, uint32_t pktSize,
 {
   unsigned char type = pkt[0];
   unsigned char *framePtr = pkt + 1;
-fprintf(stderr, "DDD %x\n", type);
   if ((type & FRAME_MASK_STREAM) == FRAME_MASK_STREAM_RESULT) {
     result.mType = FRAME_MASK_STREAM;
 
@@ -498,7 +497,6 @@ fprintf(stderr, "DDD %x\n", type);
     }
 
     uint32_t idLen = (type & 0x03) + 1;
-    fprintf(stderr, "%d %d %d %d\n", lenLen, idLen, offsetLen, type);
     uint32_t bytesNeeded = 1 + lenLen + idLen + offsetLen;
     if (bytesNeeded > pktSize) {
       RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame header short");
@@ -512,7 +510,6 @@ fprintf(stderr, "DDD %x\n", type);
     } else {
       result.mStream.mDataLen = pktSize - bytesNeeded;
     }
-   fprintf(stderr, "%d %d \n", result.mStream.mDataLen, bytesNeeded);
     // todo log frame len
     if (bytesNeeded + result.mStream.mDataLen > pktSize) {
       RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame data short");
@@ -526,8 +523,6 @@ fprintf(stderr, "DDD %x\n", type);
     memcpy(((char *)&result.mStream.mOffset) + (8 - offsetLen), framePtr, offsetLen);
     framePtr += offsetLen;
     result.mStream.mOffset = ntohll(result.mStream.mOffset);
-    fprintf(stderr, "%d %d %d %x\n", bytesNeeded, result.mStream.mStreamID,
-result.mStream.mOffset, pkt[bytesNeeded]);
     return bytesNeeded;
   } else if ((type & FRAME_MASK_ACK) == FRAME_MASK_ACK_RESULT) {
     result.mType = FRAME_MASK_ACK;
@@ -813,8 +808,6 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
         RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream 0 expected");
         return MOZQUIC_ERR_GENERAL;
       }
-   fprintf(stderr, "%d %d %x %d %d\n", result.mStream.mStreamID,
-result.mStream.mOffset, pkt[ptr], result.mStream.mDataLen, result.mStream.mFinBit);
       std::unique_ptr<MozQuicStreamChunk>
         tmp(new MozQuicStreamChunk(result.mStream.mStreamID,
                                    result.mStream.mOffset,
@@ -1028,7 +1021,6 @@ MozQuic::FlushStream0()
       assert(room >= (*iter)->mLen);
 
       memcpy(framePtr, (*iter)->mData.get(), (*iter)->mLen);
-      fprintf(stderr,"quic stream output of len %d\n", (*iter)->mLen);
       framePtr += (*iter)->mLen;
 
       (*iter)->mPacketNum = mNextPacketID;
