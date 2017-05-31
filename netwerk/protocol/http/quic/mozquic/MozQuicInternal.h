@@ -97,6 +97,9 @@ private:
 
   bool ServerState() { return mConnectionState > SERVER_STATE_BREAK; }
   MozQuic *FindSession(const unsigned char *pkt, uint32_t pktSize);
+
+  class FrameHeaderData;
+  int ParseFrameHeader(unsigned char *, uint32_t size, FrameHeaderData &);
   
   uint64_t Timestamp();
   uint32_t Intake();
@@ -178,6 +181,57 @@ public:
     TYPE_1RTT_PROTECTED_KP0     = 7,
     TYPE_1RTT_PROTECTED_KP1     = 8,
     TYPE_PUBLIC_RESET           = 9,
+  };
+
+private:
+  class FrameHeaderData
+  {
+  public:
+    FrameType mType;
+    union {
+      struct {
+        bool mFinBit;
+        uint16_t mDataLen;
+        uint32_t mStreamID;
+        uint64_t mOffset;
+      } mStream;
+      struct {
+        uint8_t mAckBlockLengthLen;
+        uint8_t mNumBlocks;
+        uint8_t mNumTS;
+        uint64_t mLargestAcked;
+        uint16_t mAckDelay;
+      } mAck;
+      struct {
+        uint32_t mErrorCode;
+        uint32_t mStreamID;
+        uint64_t mFinalOffset;
+      } mRstStream;
+      struct {
+        uint32_t mErrorCode;
+      } mClose;
+      struct {
+        uint32_t mClientStreamID;
+        uint32_t mServerStreamID;
+      } mGoaway;
+      struct {
+        uint64_t mMaximumData;
+      } mMaxData;
+      struct {
+        uint32_t mStreamID;
+        uint64_t mMaximumStreamData;
+      } mMaxStreamData;
+      struct {
+        uint32_t mMaximumStreamID;
+      } mMaxStreamID;
+      struct {
+        uint32_t mStreamID;
+      } mStreamBlocked;
+      struct {
+        uint16_t mSequence;
+        uint64_t mConnectionID;
+      } mNewConnectionID;
+    };
   };
 };
 

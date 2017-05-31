@@ -122,6 +122,19 @@ extern "C" {
 
 namespace mozilla { namespace net {
 
+#define FRAME_TYPE_PADDING_LENGTH           1
+#define FRAME_TYPE_RST_STREAM_LENGTH        17
+#define FRAME_TYPE_CLOSE_LENGTH             7
+#define FRAME_TYPE_GOAWAY_LENGTH            9
+#define FRAME_TYPE_MAX_DATA_LENGTH          9
+#define FRAME_TYPE_MAX_STREAM_DATA_LENGTH   13
+#define FRAME_TYPE_MAX_STREAM_ID_LENGTH     5
+#define FRAME_TYPE_PING_LENGTH              1
+#define FRAME_TYPE_BLOCKED_LENGTH           1
+#define FRAME_TYPE_STREAM_BLOCKED_LENGTH    5
+#define FRAME_TYPE_STREAM_ID_NEEDED_LENGTH  1
+#define FRAME_TYPE_NEW_CONNECTION_ID_LENGTH 11
+
 MozQuic::MozQuic(bool handleIO)
   : mFD(-1)
   , mHandleIO(handleIO)
@@ -399,6 +412,7 @@ void
 MozQuic::RaiseError(uint32_t e, char *reason)
 {
   Log(reason);
+  fprintf(stderr,"MozQuic Logger :%u:\n", e);
   if (mErrorCB) {
     mErrorCB(mClosure, e, reason);
   }
@@ -461,6 +475,270 @@ MozQuic::Client1RTT()
 }
 
 int
+MozQuic::ParseFrameHeader(unsigned char *pkt, uint32_t pktSize,
+                          FrameHeaderData &result)
+{
+  unsigned char type = pkt[0];
+  unsigned char *framePtr = pkt + 1;
+fprintf(stderr, "DDD %x\n", type);
+  if ((type & FRAME_MASK_STREAM) == FRAME_MASK_STREAM_RESULT) {
+    result.mType = FRAME_MASK_STREAM;
+
+    result.mStream.mFinBit = (type & 0x20);
+
+    bool lenBit = (type & 0x10);
+    uint32_t lenLen = lenBit ? 2 : 0;
+    uint32_t offsetLen = (type & 0x0c) >> 2;
+    if (offsetLen == 1) {
+      offsetLen = 2;
+    } else if (offsetLen == 2) {
+      offsetLen = 4;
+    } else if (offsetLen == 3) {
+      offsetLen = 8;
+    }
+
+    uint32_t idLen = (type & 0x03) + 1;
+    fprintf(stderr, "%d %d %d %d\n", lenLen, idLen, offsetLen, type);
+    uint32_t bytesNeeded = 1 + lenLen + idLen + offsetLen;
+    if (bytesNeeded > pktSize) {
+      RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame header short");
+      return MOZQUIC_ERR_GENERAL;
+    }
+
+    if (lenBit) {
+      memcpy (&result.mStream.mDataLen, framePtr, 2);
+      framePtr += 2;
+      result.mStream.mDataLen = ntohs(result.mStream.mDataLen);
+    } else {
+      result.mStream.mDataLen = pktSize - bytesNeeded;
+    }
+   fprintf(stderr, "%d %d \n", result.mStream.mDataLen, bytesNeeded);
+    // todo log frame len
+    if (bytesNeeded + result.mStream.mDataLen > pktSize) {
+      RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame data short");
+      return MOZQUIC_ERR_GENERAL;
+    }
+
+    memcpy(((char *)&result.mStream.mStreamID) + (4 - idLen), framePtr, idLen);
+    framePtr += idLen;
+    result.mStream.mStreamID = ntohl(result.mStream.mStreamID);
+
+    memcpy(((char *)&result.mStream.mOffset) + (8 - offsetLen), framePtr, offsetLen);
+    framePtr += offsetLen;
+    result.mStream.mOffset = ntohll(result.mStream.mOffset);
+    fprintf(stderr, "%d %d %d %x\n", bytesNeeded, result.mStream.mStreamID,
+result.mStream.mOffset, pkt[bytesNeeded]);
+    return bytesNeeded;
+  } else if ((type & FRAME_MASK_ACK) == FRAME_MASK_ACK_RESULT) {
+    result.mType = FRAME_MASK_ACK;
+    bool numBlocks = (type & 0x10);
+    uint32_t ackedLen = (type & 0x0c);
+    if (ackedLen == 3) {
+      ackedLen = 4;
+    } else if (ackedLen == 4) {
+      ackedLen = 6;
+    }
+    result.mAck.mAckBlockLengthLen = (type & 0x03);
+    if (result.mAck.mAckBlockLengthLen == 3) {
+      result.mAck.mAckBlockLengthLen = 4;
+    } else if (result.mAck.mAckBlockLengthLen == 4) {
+      result.mAck.mAckBlockLengthLen = 6;
+    }
+    uint16_t bytesNeeded = 1 + numBlocks + 1 + ackedLen + 2;
+    if (bytesNeeded > pktSize) {
+      RaiseError(MOZQUIC_ERR_GENERAL, (char *) "ack frame header short");
+      return MOZQUIC_ERR_GENERAL;
+    }
+
+    if (numBlocks) {
+      result.mAck.mNumBlocks = framePtr[0];
+      framePtr++;
+    } else {
+      result.mAck.mNumBlocks = 0;
+    }
+    result.mAck.mNumTS = framePtr[0];
+    framePtr++;
+    memcpy(((char *)&result.mAck.mLargestAcked) + (8 - ackedLen), framePtr, ackedLen);
+    framePtr += ackedLen;
+    result.mAck.mLargestAcked = ntohll(result.mAck.mLargestAcked);
+
+    memcpy(&result.mAck.mAckDelay, framePtr, 2);
+    framePtr += 2;
+    result.mAck.mAckDelay = ntohs(result.mAck.mAckDelay);
+    bytesNeeded += result.mAck.mAckBlockLengthLen + // required First ACK Block
+                   result.mAck.mNumBlocks * (1 + result.mAck.mAckBlockLengthLen); // additional ACK Blocks
+    if (result.mAck.mNumTS) {
+      bytesNeeded += result.mAck.mNumTS * (1 + 2) + 2;
+    }
+    if (bytesNeeded > pktSize) {
+      RaiseError(MOZQUIC_ERR_GENERAL, (char *) "ack frame header short");
+      return MOZQUIC_ERR_GENERAL;
+    }
+    return framePtr - pkt;
+  } else {
+    switch(type) {
+
+    case FRAME_TYPE_PADDING:
+      result.mType = FRAME_TYPE_PADDING;
+      return FRAME_TYPE_PADDING_LENGTH;
+
+    case FRAME_TYPE_RST_STREAM:
+      if (pktSize < FRAME_TYPE_RST_STREAM_LENGTH) {
+        RaiseError(MOZQUIC_ERR_GENERAL,
+                   (char *) "RST_STREAM frame length expected");
+        return MOZQUIC_ERR_GENERAL;
+      }
+
+      result.mType = FRAME_TYPE_RST_STREAM;
+
+      memcpy(&result.mRstStream.mErrorCode, framePtr, 4);
+      result.mRstStream.mErrorCode = ntohl(result.mRstStream.mErrorCode);
+      framePtr += 4;
+      memcpy(&result.mRstStream.mStreamID, framePtr, 4);
+      result.mRstStream.mStreamID = ntohl(result.mRstStream.mStreamID);
+      framePtr += 4;
+      memcpy(&result.mRstStream.mFinalOffset, framePtr, 8);
+      result.mRstStream.mFinalOffset = ntohll(result.mRstStream.mFinalOffset);
+      return FRAME_TYPE_RST_STREAM_LENGTH;
+
+    case FRAME_TYPE_CLOSE:
+      if (pktSize < FRAME_TYPE_CLOSE_LENGTH) {
+        RaiseError(MOZQUIC_ERR_GENERAL,
+                   (char *) "CONNECTION_CLOSE frame length expected");
+        return MOZQUIC_ERR_GENERAL;
+      }
+
+      result.mType = FRAME_TYPE_CLOSE;
+
+      memcpy(&result.mClose.mErrorCode, framePtr, 4);
+      result.mClose.mErrorCode = ntohl(result.mClose.mErrorCode);
+      framePtr += 4;
+      uint16_t len;
+      memcpy(&len, framePtr, 2);
+      len = ntohs(len);
+      framePtr += 2;
+      if (len) {
+        if (pktSize < ((uint32_t)FRAME_TYPE_CLOSE_LENGTH + len)) {
+          RaiseError(MOZQUIC_ERR_GENERAL,
+                     (char *) "CONNECTION_CLOSE frame length expected");
+          return MOZQUIC_ERR_GENERAL;
+        }
+        // Log error!
+        framePtr[len-1] = '\0';// Make sure it is 0-ended TODO:
+        Log((char *)framePtr);
+      }
+      return FRAME_TYPE_CLOSE_LENGTH + len;
+
+    case FRAME_TYPE_GOAWAY:
+      if (pktSize < FRAME_TYPE_GOAWAY_LENGTH) {
+        RaiseError(MOZQUIC_ERR_GENERAL,
+                   (char *) "GOAWAY frame length expected");
+        return MOZQUIC_ERR_GENERAL;
+      }
+
+      result.mType = FRAME_TYPE_GOAWAY;
+
+      memcpy(&result.mGoaway.mClientStreamID, framePtr, 4);
+      result.mGoaway.mClientStreamID = ntohl(result.mGoaway.mClientStreamID);
+      framePtr += 4;
+      memcpy(&result.mGoaway.mServerStreamID, framePtr, 4);
+      result.mGoaway.mServerStreamID = ntohl(result.mGoaway.mServerStreamID);
+      framePtr += 4;
+      return FRAME_TYPE_GOAWAY_LENGTH;
+
+    case FRAME_TYPE_MAX_DATA:
+      if (pktSize < FRAME_TYPE_MAX_DATA_LENGTH) {
+        RaiseError(MOZQUIC_ERR_GENERAL,
+                   (char *) "MAX_DATA frame length expected");
+        return MOZQUIC_ERR_GENERAL;
+      }
+
+      result.mType = FRAME_TYPE_MAX_DATA;
+
+      memcpy(&result.mMaxData.mMaximumData, framePtr, 8);
+      result.mMaxData.mMaximumData = ntohll(result.mMaxData.mMaximumData);
+      return FRAME_TYPE_MAX_DATA_LENGTH;
+
+    case FRAME_TYPE_MAX_STREAM_DATA:
+      if (pktSize < FRAME_TYPE_MAX_STREAM_DATA_LENGTH) {
+        RaiseError(MOZQUIC_ERR_GENERAL,
+                   (char *) "MAX_STREAM_DATA frame length expected");
+        return MOZQUIC_ERR_GENERAL;
+      }
+
+      result.mType = FRAME_TYPE_MAX_STREAM_DATA;
+
+      memcpy(&result.mMaxStreamData.mStreamID, framePtr, 4);
+      result.mMaxStreamData.mStreamID = ntohl(result.mMaxStreamData.mStreamID);
+      framePtr += 4;
+      memcpy(&result.mMaxStreamData.mMaximumStreamData, framePtr, 8);
+      result.mMaxStreamData.mMaximumStreamData =
+        ntohll(result.mMaxStreamData.mMaximumStreamData);
+      return FRAME_TYPE_MAX_STREAM_DATA_LENGTH;
+
+    case FRAME_TYPE_MAX_STREAM_ID:
+      if (pktSize < FRAME_TYPE_MAX_STREAM_ID_LENGTH) {
+        RaiseError(MOZQUIC_ERR_GENERAL,
+                   (char *) "MAX_STREAM_ID frame length expected");
+        return MOZQUIC_ERR_GENERAL;
+      }
+
+      result.mType = FRAME_TYPE_MAX_STREAM_ID;
+
+      memcpy(&result.mMaxStreamID.mMaximumStreamID, framePtr, 4);
+      result.mMaxStreamID.mMaximumStreamID =
+        ntohl(result.mMaxStreamID.mMaximumStreamID);
+      return FRAME_TYPE_MAX_STREAM_ID_LENGTH;
+
+    case FRAME_TYPE_PING:
+      result.mType = FRAME_TYPE_PING;
+      return FRAME_TYPE_PING_LENGTH;
+
+    case FRAME_TYPE_BLOCKED:
+      result.mType = FRAME_TYPE_BLOCKED;
+      return FRAME_TYPE_BLOCKED_LENGTH;
+
+    case FRAME_TYPE_STREAM_BLOCKED:
+      if (pktSize < FRAME_TYPE_STREAM_BLOCKED_LENGTH) {
+        RaiseError(MOZQUIC_ERR_GENERAL,
+                   (char *) "STREAM_BLOCKED frame length expected");
+        return MOZQUIC_ERR_GENERAL;
+      }
+
+      result.mType = FRAME_TYPE_STREAM_BLOCKED;
+
+      memcpy(&result.mStreamBlocked.mStreamID, framePtr, 4);
+      result.mStreamBlocked.mStreamID = ntohl(result.mStreamBlocked.mStreamID);
+      return FRAME_TYPE_STREAM_BLOCKED_LENGTH;
+
+    case FRAME_TYPE_STREAM_ID_NEEDED:
+      result.mType = FRAME_TYPE_STREAM_ID_NEEDED;
+      return FRAME_TYPE_STREAM_ID_NEEDED_LENGTH;
+
+    case FRAME_TYPE_NEW_CONNECTION_ID:
+      if (pktSize < FRAME_TYPE_NEW_CONNECTION_ID_LENGTH) {
+        RaiseError(MOZQUIC_ERR_GENERAL,
+                   (char *) "NEW_CONNECTION_ID frame length expected");
+        return MOZQUIC_ERR_GENERAL;
+      }
+
+      result.mType = FRAME_TYPE_NEW_CONNECTION_ID;
+
+      memcpy(&result.mNewConnectionID.mSequence, framePtr, 2);
+      result.mNewConnectionID.mSequence = ntohs(result.mNewConnectionID.mSequence);
+      framePtr += 2;
+      memcpy(&result.mNewConnectionID.mConnectionID, framePtr, 8);
+      result.mNewConnectionID.mConnectionID =
+        ntohll(result.mNewConnectionID.mConnectionID);
+      return FRAME_TYPE_NEW_CONNECTION_ID_LENGTH;
+
+    default:
+      assert(false);
+    }
+  }
+}
+
+int
 MozQuic::Server1RTT() 
 {
   if (mHandshakeInput) {
@@ -517,71 +795,36 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
 {
   // todo this assumes long header
   // used by both client and server
-  unsigned char *framePtr = pkt + 17;
-  unsigned char *endPtr = pkt + pktSize;
+  uint32_t ptr = 17;
 
-  endPtr -= 8; // checksum. todo mvp verify
+  pktSize -= 8; // checksum. todo mvp verify
 
-  while (framePtr < endPtr) {
-    unsigned char type = framePtr[0];
-    if (type == FRAME_TYPE_PADDING) {
-      framePtr++;
+  FrameHeaderData result;
+  while (ptr < pktSize) {
+    int rv = ParseFrameHeader(pkt + ptr, pktSize - ptr, result);
+    if (rv < 0) {
+      return rv;
+    }
+    ptr += rv;
+    if (result.mType == FRAME_TYPE_PADDING) {
       continue;
-    } else if ((type & FRAME_MASK_STREAM) == FRAME_MASK_STREAM_RESULT) {
-      bool finBit = (type & 0x20);
-      bool lenBit = (type & 0x10);
-
-      uint32_t lenLen = lenBit ? 2 : 0;
-      uint32_t offsetLen = (type & 0x0c) >> 2;
-      if (offsetLen == 1) {
-        offsetLen = 2;
-      } else if (offsetLen == 2) {
-        offsetLen = 4;
-      } else if (offsetLen == 3) {
-        offsetLen = 8;
-      }
-
-      uint32_t idLen = (type & 0x03) + 1;
-      uint32_t bytesNeeded = 1 + lenLen + idLen + offsetLen;
-      if (framePtr + bytesNeeded > endPtr) {
-        RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame header short");
-        return MOZQUIC_ERR_GENERAL;
-      }
-      uint16_t dataLen;
-      if (lenBit) {
-        memcpy (&dataLen, framePtr + 1, 2);
-        dataLen = ntohs(dataLen);
-      } else {
-        dataLen = endPtr - (framePtr + bytesNeeded);
-      }
-      
-      // todo log frame len
-      bytesNeeded += dataLen;
-      if (framePtr + bytesNeeded > endPtr) {
-        RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame data short");
-        return MOZQUIC_ERR_GENERAL;
-      }
-      framePtr += 1 + lenLen;
-      uint32_t streamID = 0;
-      memcpy(((char *)&streamID) + (4 - idLen), framePtr, idLen);
-      framePtr += idLen;
-      streamID = ntohl(streamID);
-      if (streamID != 0) {
+    } else if (result.mType == FRAME_MASK_STREAM_RESULT) {
+      if (result.mStream.mStreamID != 0) {
         RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream 0 expected");
         return MOZQUIC_ERR_GENERAL;
       }
-
-      uint64_t offset = 0;
-      memcpy(((char *)&offset) + (8 - offsetLen), framePtr, offsetLen);
-      framePtr += offsetLen;
-      offset = ntohll(offset);
-
+   fprintf(stderr, "%d %d %x %d %d\n", result.mStream.mStreamID,
+result.mStream.mOffset, pkt[ptr], result.mStream.mDataLen, result.mStream.mFinBit);
       std::unique_ptr<MozQuicStreamChunk>
-        tmp(new MozQuicStreamChunk(streamID, offset, framePtr, dataLen, finBit));
+        tmp(new MozQuicStreamChunk(result.mStream.mStreamID,
+                                   result.mStream.mOffset,
+                                   pkt + ptr,
+                                   result.mStream.mDataLen,
+                                   result.mStream.mFinBit));
       mStream0->Supply(tmp);
-      framePtr += dataLen;
+      ptr += result.mStream.mDataLen;
       // todo mvp generate ACK (not here tho. we ack packets not data frames)
-    } else if ((type & FRAME_MASK_ACK) == FRAME_MASK_ACK_RESULT) {
+    } else if (result.mType == FRAME_MASK_ACK_RESULT) {
       assert(false);
       // todo mvp process ack
     } else {
