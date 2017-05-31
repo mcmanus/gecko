@@ -1046,7 +1046,8 @@ nsThread::HasPendingEvents(bool* aResult)
 
   {
     MutexAutoLock lock(mLock);
-    *aResult = mEvents->HasPendingEvent(lock);
+    *aResult = mEvents->HasPendingEvent(lock) ||
+               mIdleEvents.HasPendingEvent(lock);
   }
   return NS_OK;
 }
@@ -1153,8 +1154,20 @@ nsThread::GetIdleEvent(nsIRunnable** aEvent, MutexAutoLock& aProofOfLock)
   MOZ_ASSERT(PR_GetCurrentThread() == mThread);
   MOZ_ASSERT(aEvent);
 
+  if (!mIdleEvents.HasPendingEvent(aProofOfLock)) {
+    aEvent = nullptr;
+    return;
+  }
+
   TimeStamp idleDeadline;
-  mIdlePeriod->GetIdlePeriodHint(&idleDeadline);
+  {
+    // Releasing the lock temporarily since getting the idle period
+    // might need to lock the timer thread. Unlocking here might make
+    // us receive an event on the main queue, but we've committed to
+    // run an idle event anyhow.
+    MutexAutoUnlock unlock(mLock);
+    mIdlePeriod->GetIdlePeriodHint(&idleDeadline);
+  }
 
   if (!idleDeadline || idleDeadline < TimeStamp::Now()) {
     aEvent = nullptr;

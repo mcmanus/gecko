@@ -20,6 +20,7 @@
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/dom/indexedDB/PIndexedDBPermissionRequestChild.h"
+#include "mozilla/dom/PaymentRequestChild.h"
 #include "mozilla/dom/TelemetryScrollProbe.h"
 #include "mozilla/IMEStateManager.h"
 #include "mozilla/ipc/DocumentRendererChild.h"
@@ -747,7 +748,9 @@ TabChild::RemoteSizeShellTo(int32_t aWidth, int32_t aHeight,
 }
 
 NS_IMETHODIMP
-TabChild::RemoteDropLinks(uint32_t aLinksCount, nsIDroppedLinkItem** aLinks)
+TabChild::RemoteDropLinks(uint32_t aLinksCount,
+                          nsIDroppedLinkItem** aLinks,
+                          nsIPrincipal* aTriggeringPrincipal)
 {
   nsTArray<nsString> linksArray;
   nsresult rv = NS_OK;
@@ -772,7 +775,9 @@ TabChild::RemoteDropLinks(uint32_t aLinksCount, nsIDroppedLinkItem** aLinks)
     linksArray.AppendElement(tmp);
   }
 
-  bool sent = SendDropLinks(linksArray);
+  PrincipalInfo triggeringPrincipalInfo;
+  PrincipalToPrincipalInfo(aTriggeringPrincipal, &triggeringPrincipalInfo);
+  bool sent = SendDropLinks(linksArray, triggeringPrincipalInfo);
 
   return sent ? NS_OK : NS_ERROR_FAILURE;
 }
@@ -3207,6 +3212,19 @@ TabChild::CreatePluginWidget(nsIWidget* aParent, nsIWidget** aOut)
   return rv;
 }
 #endif // XP_WIN
+
+PPaymentRequestChild*
+TabChild::AllocPPaymentRequestChild()
+{
+  MOZ_CRASH("We should never be manually allocating PPaymentRequestChild actors");
+  return nullptr;
+}
+
+bool
+TabChild::DeallocPPaymentRequestChild(PPaymentRequestChild* actor)
+{
+  return true;
+}
 
 ScreenIntSize
 TabChild::GetInnerSize()

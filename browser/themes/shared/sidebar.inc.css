@@ -89,6 +89,10 @@
   min-width: 190px;
 }
 
+#sidebar-extensions:empty + toolbarseparator {
+  display: none;
+}
+
 %ifndef XP_MACOSX
 /* Allow room for the checkbox drawn as a background image at the start of the toolbarbutton */
 #sidebarMenu-popup .subviewbutton-iconic > .toolbarbutton-icon {
@@ -104,19 +108,19 @@
 #sidebar-box #sidebar-icon {
   -moz-context-properties: fill;
   fill: var(--icon-fill);
-  list-style-image: url(chrome://browser/skin/sidebar/bookmark-filled.svg);
+  list-style-image: url(chrome://browser/skin/bookmark.svg);
 }
 
 #sidebar-switcher-history > .toolbarbutton-icon,
 #sidebar-box[sidebarcommand="viewHistorySidebar"] #sidebar-icon {
   -moz-context-properties: fill;
   fill: var(--icon-fill);
-  list-style-image: url(chrome://browser/skin/sidebar/history.svg);
+  list-style-image: url(chrome://browser/skin/history.svg);
 }
 
 #sidebar-switcher-tabs > .toolbarbutton-icon,
 #sidebar-box[sidebarcommand="viewTabsSidebar"] #sidebar-icon {
   -moz-context-properties: fill;
   fill: var(--icon-fill);
-  list-style-image: url(chrome://browser/skin/sidebar/sync.svg);
+  list-style-image: url(chrome://browser/skin/sync.svg);
 }

@@ -15,9 +15,7 @@ const {
   getAllMessages,
   getAllMessagesUiById,
   getAllMessagesTableDataById,
-  getAllGroupsById,
 } = require("devtools/client/webconsole/new-console-output/selectors/messages");
-const { getScrollSetting } = require("devtools/client/webconsole/new-console-output/selectors/ui");
 const MessageContainer = createFactory(require("devtools/client/webconsole/new-console-output/components/message-container").MessageContainer);
 
 const ConsoleOutput = createClass({
@@ -32,10 +30,8 @@ const ConsoleOutput = createClass({
       openContextMenu: PropTypes.func.isRequired,
       sourceMapService: PropTypes.object,
     }),
-    autoscroll: PropTypes.bool.isRequired,
     dispatch: PropTypes.func.isRequired,
     timestampsVisible: PropTypes.bool,
-    groups: PropTypes.object.isRequired,
     messagesTableData: PropTypes.object.isRequired,
   },
 
@@ -49,17 +45,16 @@ const ConsoleOutput = createClass({
   },
 
   componentWillUpdate(nextProps, nextState) {
-    if (!this.outputNode) {
+    const outputNode = this.outputNode;
+    if (!outputNode || !outputNode.lastChild) {
       return;
     }
 
-    const outputNode = this.outputNode;
-
     // Figure out if we are at the bottom. If so, then any new message should be scrolled
     // into view.
-    if (this.props.autoscroll && outputNode.lastChild) {
-      this.shouldScrollBottom = isScrolledToBottom(outputNode.lastChild, outputNode);
-    }
+    const lastChild = outputNode.lastChild;
+    const delta = nextProps.messages.size - this.props.messages.size;
+    this.shouldScrollBottom = delta > 0 && isScrolledToBottom(lastChild, outputNode);
   },
 
   componentDidUpdate() {
@@ -77,21 +72,14 @@ const ConsoleOutput = createClass({
   render() {
     let {
       dispatch,
-      autoscroll,
       messages,
       messagesUi,
       messagesTableData,
       serviceContainer,
-      groups,
       timestampsVisible,
     } = this.props;
 
     let messageNodes = messages.map((message) => {
-      const parentGroups = message.groupId ? (
-        (groups.get(message.groupId) || [])
-          .concat([message.groupId])
-      ) : [];
-
       return (
         MessageContainer({
           dispatch,
@@ -100,8 +88,7 @@ const ConsoleOutput = createClass({
           serviceContainer,
           open: messagesUi.includes(message.id),
           tableData: messagesTableData.get(message.id),
-          autoscroll,
-          indent: parentGroups.length,
+          indent: message.indent,
           timestampsVisible,
         })
       );
@@ -136,8 +123,6 @@ function mapStateToProps(state, props) {
     messages: getAllMessages(state),
     messagesUi: getAllMessagesUiById(state),
     messagesTableData: getAllMessagesTableDataById(state),
-    autoscroll: getScrollSetting(state),
-    groups: getAllGroupsById(state),
     timestampsVisible: state.ui.timestampsVisible,
   };
 }

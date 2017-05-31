@@ -135,8 +135,8 @@ NS_NewImageFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsImageFrame)
 
-nsImageFrame::nsImageFrame(nsStyleContext* aContext, LayoutFrameType aType)
-  : nsAtomicContainerFrame(aContext, aType)
+nsImageFrame::nsImageFrame(nsStyleContext* aContext, ClassID aID)
+  : nsAtomicContainerFrame(aContext, aID)
   , mComputedSize(0, 0)
   , mIntrinsicRatio(0, 0)
   , mDisplayingIcon(false)
@@ -1629,6 +1629,12 @@ nsDisplayImage::GetLayerState(nsDisplayListBuilder* aBuilder,
                  : imgIContainer::FLAG_NONE;
 
   if (!mImage->IsImageContainerAvailable(aManager, flags)) {
+    return LAYER_NONE;
+  }
+
+  // Image layer doesn't support draw focus ring for image map.
+  nsImageFrame* f = static_cast<nsImageFrame*>(mFrame);
+  if (f->HasImageMap()) {
     return LAYER_NONE;
   }
 

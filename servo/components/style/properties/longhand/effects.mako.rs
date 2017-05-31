@@ -17,6 +17,7 @@ ${helpers.predefined_type("opacity",
 <%helpers:vector_longhand name="box-shadow" allow_empty="True"
                           animation_value_type="IntermediateBoxShadowList"
                           extra_prefixes="webkit"
+                          ignored_when_colors_disabled="True"
                           spec="https://drafts.csswg.org/css-backgrounds/#box-shadow">
     use std::fmt;
     use style_traits::ToCss;
@@ -522,6 +523,6 @@ ${helpers.single_keyword("mix-blend-mode",
                          """normal multiply screen overlay darken lighten color-dodge
                             color-burn hard-light soft-light difference exclusion hue
                             saturation color luminosity""", gecko_constant_prefix="NS_STYLE_BLEND",
-                         animation_value_type="none",
+                         animation_value_type="discrete",
                          flags="CREATES_STACKING_CONTEXT",
                          spec="https://drafts.fxtf.org/compositing/#propdef-mix-blend-mode")}

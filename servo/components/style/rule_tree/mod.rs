@@ -61,6 +61,12 @@ pub enum StyleSource {
     Declarations(Arc<Locked<PropertyDeclarationBlock>>),
 }
 
+impl PartialEq for StyleSource {
+    fn eq(&self, other: &Self) -> bool {
+        self.ptr_equals(other)
+    }
+}
+
 impl StyleSource {
     #[inline]
     fn ptr_equals(&self, other: &Self) -> bool {
@@ -369,7 +375,7 @@ impl RuleTree {
         let mut last = path;
         let mut children = vec![];
         for node in iter {
-            if node.cascade_level().is_animation() {
+            if !node.cascade_level().is_animation() {
                 children.push((node.get().source.clone().unwrap(), node.cascade_level()));
             }
             last = node;

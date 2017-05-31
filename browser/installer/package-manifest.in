@@ -213,6 +213,7 @@
 @RESPATH@/components/dom_html.xpt
 @RESPATH@/components/dom_offline.xpt
 @RESPATH@/components/dom_json.xpt
+@RESPATH@/components/dom_payments.xpt
 @RESPATH@/components/dom_power.xpt
 @RESPATH@/components/dom_push.xpt
 @RESPATH@/components/dom_quota.xpt
@@ -258,7 +259,6 @@
 @RESPATH@/components/layout_xul_tree.xpt
 @RESPATH@/components/layout_xul.xpt
 @RESPATH@/components/locale.xpt
-@RESPATH@/components/lwbrk.xpt
 #ifdef MOZ_GECKO_PROFILER
 @RESPATH@/components/memory_profiler.xpt
 #endif
@@ -381,6 +381,8 @@
 @RESPATH@/browser/components/nsSetDefaultBrowser.js
 @RESPATH@/browser/components/devtools-startup.manifest
 @RESPATH@/browser/components/devtools-startup.js
+@RESPATH@/browser/components/aboutdebugging-registration.js
+@RESPATH@/browser/components/aboutdebugging.manifest
 @RESPATH@/browser/components/webideCli.js
 @RESPATH@/browser/components/webideComponents.manifest
 @RESPATH@/browser/components/Experiments.manifest

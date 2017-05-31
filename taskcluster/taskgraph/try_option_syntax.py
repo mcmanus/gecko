@@ -120,9 +120,9 @@ UNITTEST_PLATFORM_PRETTY_NAMES = {
     'Ubuntu': ['linux32', 'linux64', 'linux64-asan'],
     'x64': ['linux64', 'linux64-asan'],
     'Android 4.3': ['android-4.3-arm7-api-15'],
+    '10.10': ['macosx64'],
     # other commonly-used substrings for platforms not yet supported with
     # in-tree taskgraphs:
-    # '10.10': [..TODO..],
     # '10.10.5': [..TODO..],
     # '10.6': [..TODO..],
     # '10.8': [..TODO..],
@@ -586,9 +586,16 @@ class TryOptionSyntax(object):
 
         job_try_name = attr('job_try_name')
         if job_try_name:
-            if self.jobs is None or job_try_name in self.jobs:
+            # Beware the subtle distinction between [] and None for self.jobs and self.platforms.
+            # They will be [] if there was no try syntax, and None if try syntax was detected but
+            # they remained unspecified.
+            if self.jobs and job_try_name not in self.jobs:
+                return False
+            elif not self.jobs and attr('build_platform'):
                 if self.platforms is None or attr('build_platform') in self.platforms:
                     return True
+                return False
+            return True
         elif attr('kind') == 'test':
             return match_test(self.unittests, 'unittest_try_name') \
                  or match_test(self.talos, 'talos_try_name')

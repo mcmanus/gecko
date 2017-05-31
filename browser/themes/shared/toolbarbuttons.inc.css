@@ -38,13 +38,12 @@ toolbar:-moz-lwtheme {
 %ifndef MOZ_PHOTON_THEME
   --toolbarbutton-hover-background: rgba(255,255,255,.25);
   --toolbarbutton-active-background: rgba(70%,70%,70%,.25);
-%endif
 
   --toolbarbutton-hover-bordercolor: rgba(0,0,0,.2);
 
   --toolbarbutton-active-bordercolor: rgba(0,0,0,.3);
   --toolbarbutton-active-boxshadow: 0 0 2px rgba(0,0,0,.6) inset;
-
+%endif
   --toolbarbutton-checkedhover-backgroundcolor: rgba(85%,85%,85%,.25);
 }
 
@@ -459,7 +458,10 @@ toolbarbutton.bookmark-item:not(.subviewbutton) {
   display: -moz-box !important;
 }
 
-.bookmark-item > .toolbarbutton-icon[label]:not([label=""]),
-.bookmark-item > .toolbarbutton-icon[type="menu"] {
+.bookmark-item > .toolbarbutton-icon[label]:not([label=""]) {
   margin-inline-end: 5px;
+}
+
+.bookmark-item > .toolbarbutton-menu-dropmarker {
+  display: none;
 }

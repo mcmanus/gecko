@@ -132,6 +132,9 @@ var validGradientAndElementValues = [
   "linear-gradient(to right bottom, red, 50%, green 50%, 50%, blue)",
   "linear-gradient(to right bottom, red, 0%, green 50%, 100%, blue)",
 
+  /* Unitless 0 is valid as an <angle> */
+  "linear-gradient(0, red, blue)",
+
   "radial-gradient(red, blue)",
   "radial-gradient(red, yellow, blue)",
   "radial-gradient(red 1px, yellow 20%, blue 24em, green)",
@@ -238,8 +241,8 @@ var invalidGradientAndElementValues = [
   "radial-gradient(at 10% bottom, ffffff, black) scroll no-repeat",
   /* no quirks mode lengths */
   "linear-gradient(red -99, yellow, green, blue 120%)",
-  /* Unitless 0 is invalid as an <angle> */
-  "linear-gradient(0, red, blue)",
+  /* Unitless nonzero numbers are valid as an <angle> */
+  "linear-gradient(30, red, blue)",
   /* There must be a comma between gradient-line (e.g. <angle>) and colors */
   "linear-gradient(30deg red, blue)",
   "linear-gradient(to top left red, blue)",
@@ -4369,7 +4372,7 @@ var gCSSProperties = {
     inherited: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "none", "context-value" ],
-    other_values: [ "5px,3px,2px", "5px 3px 2px", "  5px ,3px\t, 2px ", "1px", "5%", "3em" ],
+    other_values: [ "5px,3px,2px", "5px 3px 2px", "  5px ,3px\t, 2px ", "1px", "5%", "3em", "0.0002" ],
     invalid_values: [ "-5px,3px,2px", "5px,3px,-2px" ]
   },
   "stroke-dashoffset": {
@@ -4377,7 +4380,7 @@ var gCSSProperties = {
     inherited: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "0", "-0px", "0em", "context-value" ],
-    other_values: [ "3px", "3%", "1em" ],
+    other_values: [ "3px", "3%", "1em", "0.0002" ],
     invalid_values: []
   },
   "stroke-linecap": {
@@ -4417,7 +4420,7 @@ var gCSSProperties = {
     inherited: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "1px", "context-value" ],
-    other_values: [ "0", "0px", "-0em", "17px", "0.2em" ],
+    other_values: [ "0", "0px", "-0em", "17px", "0.2em", "0.0002" ],
     invalid_values: [ "-0.1px", "-3px" ]
   },
   "text-anchor": {

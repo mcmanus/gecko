@@ -1468,10 +1468,15 @@ HttpChannelChild::RecvRedirect1Begin(const uint32_t& registrarId,
                                      const uint32_t& redirectFlags,
                                      const nsHttpResponseHead& responseHead,
                                      const nsCString& securityInfoSerialization,
-                                     const uint64_t& channelId)
+                                     const uint64_t& channelId,
+                                     const NetAddr& oldPeerAddr)
 {
   // TODO: handle security info
   LOG(("HttpChannelChild::RecvRedirect1Begin [this=%p]\n", this));
+  // We set peer address of child to the old peer,
+  // Then it will be updated to new peer in OnStartRequest
+  mPeerAddr = oldPeerAddr;
+
   mEventQ->RunOrEnqueue(new Redirect1Event(this, registrarId, newUri,
                                            redirectFlags, responseHead,
                                            securityInfoSerialization,
@@ -1774,7 +1779,12 @@ HttpChannelChild::CleanupRedirectingChannel(nsresult rv)
 
   if (NS_SUCCEEDED(rv)) {
     if (mLoadInfo) {
-      mLoadInfo->AppendRedirectedPrincipal(GetURIPrincipal(), false);
+      nsCString remoteAddress;
+      Unused << GetRemoteAddress(remoteAddress);
+      nsCOMPtr<nsIRedirectHistoryEntry> entry =
+        new nsRedirectHistoryEntry(GetURIPrincipal(), mReferrer, remoteAddress);
+
+      mLoadInfo->AppendRedirectHistoryEntry(entry, false);
     }
   }
   else {
@@ -1810,6 +1820,11 @@ HttpChannelChild::ConnectParent(uint32_t registrarId)
   }
 
   if (tabChild && !tabChild->IPCOpen()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  ContentChild* cc = static_cast<ContentChild*>(gNeckoChild->Manager());
+  if (cc->IsShuttingDown()) {
     return NS_ERROR_FAILURE;
   }
 
@@ -2655,6 +2670,9 @@ HttpChannelChild::OpenAlternativeOutputStream(const nsACString & aType, nsIOutpu
   if (!mIPCOpen) {
     return NS_ERROR_NOT_AVAILABLE;
   }
+  if (static_cast<ContentChild*>(gNeckoChild->Manager())->IsShuttingDown()) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   RefPtr<AltDataOutputStreamChild> stream =
     static_cast<AltDataOutputStreamChild*>(gNeckoChild->SendPAltDataOutputStreamConstructor(nsCString(aType), this));
@@ -2985,6 +3003,9 @@ HttpChannelChild::DivertToParent(ChannelDiverterChild **aChild)
   rv = Suspend();
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
+  }
+  if (static_cast<ContentChild*>(gNeckoChild->Manager())->IsShuttingDown()) {
+    return NS_ERROR_FAILURE;
   }
 
   HttpChannelDiverterArgs args;
