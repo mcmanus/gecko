@@ -240,10 +240,10 @@ bool
 MozQuic::IntegrityCheck(unsigned char *pkt, uint32_t pktSize) 
 {
   assert (pkt[0] & 0x80);
-  assert (((pkt[0] & 0x7f) == TYPE_CLIENT_INITIAL) ||
-          ((pkt[0] & 0x7f) == TYPE_SERVER_STATELESS_RETRY) ||
-          ((pkt[0] & 0x7f) == TYPE_SERVER_CLEARTEXT) ||
-          ((pkt[0] & 0x7f) == TYPE_CLIENT_CLEARTEXT));
+  assert (((pkt[0] & 0x7f) == PACKET_TYPE_CLIENT_INITIAL) ||
+          ((pkt[0] & 0x7f) == PACKET_TYPE_SERVER_STATELESS_RETRY) ||
+          ((pkt[0] & 0x7f) == PACKET_TYPE_SERVER_CLEARTEXT) ||
+          ((pkt[0] & 0x7f) == PACKET_TYPE_CLIENT_CLEARTEXT));
   if (pktSize < (FNV64size + 17)) {
     RaiseError(MOZQUIC_ERR_GENERAL, (char *)"hash err");
     return false;
@@ -298,18 +298,18 @@ MozQuic::Intake()
     Acknowledge(pkt, pktSize, header);
 
     switch (header.mType) {
-    case TYPE_VERSION_NEGOTIATION: // version negotiation
+    case PACKET_TYPE_VERSION_NEGOTIATION: // version negotiation
       assert(false);
       // todo mvp
       break;
-    case TYPE_CLIENT_INITIAL:
+    case PACKET_TYPE_CLIENT_INITIAL:
       if (!this->IntegrityCheck(pkt, pktSize)) {
         rv = MOZQUIC_ERR_GENERAL;
         break;
       }
       rv = this->ProcessClientInitial(pkt, pktSize, &client, header);
       break;
-    case TYPE_SERVER_STATELESS_RETRY:
+    case PACKET_TYPE_SERVER_STATELESS_RETRY:
       if (!this->IntegrityCheck(pkt, pktSize)) {
         rv = MOZQUIC_ERR_GENERAL;
         break;
@@ -317,14 +317,14 @@ MozQuic::Intake()
       assert(false);
       // todo mvp
       break;
-    case TYPE_SERVER_CLEARTEXT:
+    case PACKET_TYPE_SERVER_CLEARTEXT:
       if (!this->IntegrityCheck(pkt, pktSize)) {
         rv = MOZQUIC_ERR_GENERAL;
         break;
       }
       rv = this->ProcessServerCleartext(pkt, pktSize, header);
       break;
-    case TYPE_CLIENT_CLEARTEXT:
+    case PACKET_TYPE_CLIENT_CLEARTEXT:
     {
       if (!this->IntegrityCheck(pkt, pktSize)) {
         rv = MOZQUIC_ERR_GENERAL;
@@ -545,7 +545,7 @@ MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize, LongHeader
 {
   // cleartext is always in long form
   assert(pkt[0] & 0x80);
-  assert((pkt[0] & 0x7f) == TYPE_SERVER_CLEARTEXT);
+  assert((pkt[0] & 0x7f) == PACKET_TYPE_SERVER_CLEARTEXT);
   assert(pktSize >= 17);
 
   if (header.mVersion != mVersion) {
@@ -652,7 +652,7 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
 {
   // this is always in long header form
   assert(pkt[0] & 0x80);
-  assert((pkt[0] & 0x7f) == TYPE_CLIENT_INITIAL);
+  assert((pkt[0] & 0x7f) == PACKET_TYPE_CLIENT_INITIAL);
   assert(pktSize >= 17);
   assert(!mIsChild);
 
@@ -694,7 +694,7 @@ MozQuic::ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize, LongHeader
 {
   // this is always with a long header
   assert(pkt[0] & 0x80);
-  assert((pkt[0] & 0x7f) == TYPE_CLIENT_CLEARTEXT);
+  assert((pkt[0] & 0x7f) == PACKET_TYPE_CLIENT_CLEARTEXT);
   assert(pktSize >= 17);
   assert(mIsChild);
 
@@ -727,9 +727,9 @@ MozQuic::FlushStream0()
   // long form header 17 bytes
   pkt[0] = 0x80;
   if (ServerState()) {
-    pkt[0] |= TYPE_SERVER_CLEARTEXT;
+    pkt[0] |= PACKET_TYPE_SERVER_CLEARTEXT;
   } else {
-    pkt[0] |= mReceivedServerClearText ? TYPE_CLIENT_CLEARTEXT : TYPE_CLIENT_INITIAL;
+    pkt[0] |= mReceivedServerClearText ? PACKET_TYPE_CLIENT_CLEARTEXT : PACKET_TYPE_CLIENT_INITIAL;
   }
 
   // todo store a big endian version of this
@@ -810,7 +810,7 @@ MozQuic::FlushStream0()
   if (framePtr != (pkt + 17)) {
     // then padding as needed up to 1272 on client_initial
     uint32_t finalLen =
-      ((pkt[0] & 0x7f) == TYPE_CLIENT_INITIAL) ? kMozQuicMTU : ((framePtr - pkt) + 8);
+      ((pkt[0] & 0x7f) == PACKET_TYPE_CLIENT_INITIAL) ? kMozQuicMTU : ((framePtr - pkt) + 8);
 
     uint32_t paddingNeeded = finalLen - 8 - (framePtr - pkt);
     memset (framePtr, 0, paddingNeeded);
@@ -1203,8 +1203,8 @@ MozQuic::LongHeaderData::LongHeaderData(unsigned char *pkt, uint32_t pktSize)
   unsigned char type = pkt[0];
   assert(type & 0x80);
   type &= ~0x80;
-  if ((type < TYPE_VERSION_NEGOTIATION) ||
-      (type > TYPE_PUBLIC_RESET)) {
+  if ((type < PACKET_TYPE_VERSION_NEGOTIATION) ||
+      (type > PACKET_TYPE_PUBLIC_RESET)) {
     return;
   }
   mType = type;
