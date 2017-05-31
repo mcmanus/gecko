@@ -202,6 +202,7 @@ private:
   class FrameHeaderData
   {
   public:
+    FrameHeaderData();
     FrameType mType;
     union {
       struct {
@@ -246,7 +247,7 @@ private:
         uint16_t mSequence;
         uint64_t mConnectionID;
       } mNewConnectionID;
-    };
+    } u;
   };
 };
 
