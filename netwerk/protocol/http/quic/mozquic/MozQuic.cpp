@@ -78,13 +78,13 @@ extern "C" {
     return self->IO();
   }
 
-  int mozquic_osfd(mozquic_connection_t *conn)
+  mozquic_socket_t mozquic_osfd(mozquic_connection_t *conn)
   {
     mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
     return self->GetFD();
   }
 
-  void mozquic_setosfd(mozquic_connection_t *conn, int fd)
+  void mozquic_setosfd(mozquic_connection_t *conn, mozquic_socket_t fd)
   {
     mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
     self->SetFD(fd);
@@ -136,7 +136,7 @@ namespace mozilla { namespace net {
 #define FRAME_TYPE_NEW_CONNECTION_ID_LENGTH 11
 
 MozQuic::MozQuic(bool handleIO)
-  : mFD(-1)
+  : mFD(MOZQUIC_SOCKET_BAD)
   , mHandleIO(handleIO)
   , mIsClient(true)
   , mIsChild(false)
@@ -167,7 +167,7 @@ MozQuic::MozQuic(bool handleIO)
 
 MozQuic::~MozQuic()
 {
-  if (!mIsChild && (mFD > 0)) {
+  if (!mIsChild && (mFD != MOZQUIC_SOCKET_BAD)) {
     close(mFD);
   }
 }
@@ -214,7 +214,7 @@ MozQuic::SetOriginName(const char *name)
 int
 MozQuic::Bind()
 {
-  if (mFD > 0) {
+  if (mFD != MOZQUIC_SOCKET_BAD) {
     return MOZQUIC_OK;
   }
   mFD = socket(AF_INET, SOCK_DGRAM, 0); // todo v6 and non 0 addr
