@@ -90,7 +90,7 @@ private:
   void RaiseError(uint32_t err, char *reason);
 
   uint32_t Transmit(unsigned char *, uint32_t len);
-  void Acknowledge(unsigned char *, uint32_t len);
+  void Acknowledge(unsigned char *, uint32_t len, LongHeaderData &);
   uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen, struct sockaddr_in *peer);
   int ProcessServerCleartext(unsigned char *, uint32_t size, LongHeaderData &);
   int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer, LongHeaderData &);

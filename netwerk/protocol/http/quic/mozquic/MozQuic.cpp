@@ -295,6 +295,7 @@ MozQuic::Intake()
     // dispatch to the right MozQuic class. this is used
     // for emphasis
     LongHeaderData header(pkt, pktSize);
+    Acknowledge(pkt, pktSize, header);
 
     switch (header.mType) {
     case TYPE_VERSION_NEGOTIATION: // version negotiation
@@ -398,7 +399,7 @@ MozQuic::Log(char *msg)
 }
 
 void
-MozQuic::Acknowledge(unsigned char *pkt, uint32_t pktLen)
+MozQuic::Acknowledge(unsigned char *pkt, uint32_t pktLen, LongHeaderData &header)
 {
   // todo assumes long header
   if (pktLen < 17) {
@@ -427,7 +428,6 @@ MozQuic::Recv(unsigned char *pkt, uint32_t avail, uint32_t &outLen,
     return code;
   }
 
-  Acknowledge(pkt, outLen);
   return MOZQUIC_OK;
 }
 
