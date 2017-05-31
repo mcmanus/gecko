@@ -86,22 +86,21 @@ public:
 
   uint32_t DoWriter(std::unique_ptr<MozQuicStreamChunk> &p) override;
 private:
+  class LongHeaderData;
   void RaiseError(uint32_t err, char *reason);
 
   uint32_t Transmit(unsigned char *, uint32_t len);
+  void Acknowledge(unsigned char *, uint32_t len);
   uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen, struct sockaddr_in *peer);
-  int ProcessServerCleartext(unsigned char *, uint32_t size);
-  int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer);
-  int ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize);
+  int ProcessServerCleartext(unsigned char *, uint32_t size, LongHeaderData &);
+  int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer, LongHeaderData &);
+  int ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize, LongHeaderData &);
   int IntakeStream0(unsigned char *, uint32_t size);
   bool IntegrityCheck(unsigned char *, uint32_t size);
 
   bool ServerState() { return mConnectionState > SERVER_STATE_BREAK; }
-  MozQuic *FindSession(const unsigned char *pkt, uint32_t pktSize);
+  MozQuic *FindSession(const unsigned char *pkt, uint32_t pktSize, LongHeaderData &header);
 
-  class FrameHeaderData;
-  int ParseFrameHeader(unsigned char *, uint32_t size, FrameHeaderData &);
-  
   uint64_t Timestamp();
   uint32_t Intake();
   uint32_t Flush();
@@ -129,7 +128,7 @@ private:
   std::unordered_map<uint64_t, MozQuic *> mConnectionHash;
 
   uint64_t mConnectionID;
-  uint32_t mNextPacketID;
+  uint32_t mNextPacketNumber;
 
   void *mClosure;
   void (*mLogCallback)(mozquic_connection_t *, char *); // todo va arg
@@ -166,10 +165,10 @@ public:
     FRAME_TYPE_NEW_CONNECTION_ID = 0xB,
     // ACK                       = 0xa0 - 0xbf
     FRAME_MASK_ACK               = 0xe0,
-    FRAME_MASK_ACK_RESULT        = 0xa0,
+    FRAME_TYPE_ACK               = 0xa0, // 101. ....
     // STREAM                    = 0xc0 - 0xff
     FRAME_MASK_STREAM            = 0xc0,
-    FRAME_MASK_STREAM_RESULT     = 0xc0,
+    FRAME_TYPE_STREAM            = 0xc0, // 11.. ....
   };
   
   enum FrameTypeLengths {
@@ -200,11 +199,23 @@ public:
   };
 
 private:
+  class LongHeaderData
+  {
+  public:
+    LongHeaderData(unsigned char *, uint32_t);
+    uint8_t mType;
+    uint64_t mConnectionID;
+    uint32_t mPacketNumber;
+    uint32_t mVersion;
+  };
+  
   class FrameHeaderData
   {
   public:
-    FrameHeaderData();
+    FrameHeaderData(unsigned char *, uint32_t, MozQuic *);
     FrameType mType;
+    uint32_t  mValid;
+    uint32_t  mFrameLen;
     union {
       struct {
         bool mFinBit;

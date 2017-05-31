@@ -211,6 +211,7 @@ MozQuicStreamChunk::MozQuicStreamChunk(uint32_t id, uint64_t offset,
   , mFin(fin)
   , mTransmitTime(0)
   , mRetransmitted(false)
+  , mTransmitKeyPhase(QuicKeyPhaseUnknown)
 {
   memcpy((void *)mData.get(), data, len);
 }

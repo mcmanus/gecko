@@ -9,7 +9,16 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <memory>
+
 namespace mozilla { namespace net {
+
+enum mozquicKeyPhase {
+  QuicKeyPhaseUnknown,
+  QuicKeyPhaseUnprotected,
+  QuicKeyPhase0Rtt,
+  QuicKeyPhase1Rtt,
+  QuicKeyPhaseFull,
+};
 
 class MozQuicStreamChunk
 {
@@ -25,9 +34,10 @@ public:
   bool     mFin;
 
   // when unacked these are set
-  uint64_t mPacketNum;
+  uint64_t mPacketNumber;
   uint64_t mTransmitTime;
   bool     mRetransmitted; // no data after retransmitted
+  enum mozquicKeyPhase mTransmitKeyPhase;
 };
 
 class MozQuicWriter 
