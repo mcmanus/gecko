@@ -122,19 +122,6 @@ extern "C" {
 
 namespace mozilla { namespace net {
 
-#define FRAME_TYPE_PADDING_LENGTH           1
-#define FRAME_TYPE_RST_STREAM_LENGTH        17
-#define FRAME_TYPE_CLOSE_LENGTH             7
-#define FRAME_TYPE_GOAWAY_LENGTH            9
-#define FRAME_TYPE_MAX_DATA_LENGTH          9
-#define FRAME_TYPE_MAX_STREAM_DATA_LENGTH   13
-#define FRAME_TYPE_MAX_STREAM_ID_LENGTH     5
-#define FRAME_TYPE_PING_LENGTH              1
-#define FRAME_TYPE_BLOCKED_LENGTH           1
-#define FRAME_TYPE_STREAM_BLOCKED_LENGTH    5
-#define FRAME_TYPE_STREAM_ID_NEEDED_LENGTH  1
-#define FRAME_TYPE_NEW_CONNECTION_ID_LENGTH 11
-
 MozQuic::MozQuic(bool handleIO)
   : mFD(MOZQUIC_SOCKET_BAD)
   , mHandleIO(handleIO)

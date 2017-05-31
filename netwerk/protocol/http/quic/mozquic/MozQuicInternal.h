@@ -170,6 +170,21 @@ public:
     FRAME_MASK_STREAM            = 0xc0,
     FRAME_MASK_STREAM_RESULT     = 0xc0,
   };
+  
+  enum FrameTypeLengths {
+    FRAME_TYPE_PADDING_LENGTH           = 1,
+    FRAME_TYPE_RST_STREAM_LENGTH        = 17,
+    FRAME_TYPE_CLOSE_LENGTH             = 7,
+    FRAME_TYPE_GOAWAY_LENGTH            = 9,
+    FRAME_TYPE_MAX_DATA_LENGTH          = 9,
+    FRAME_TYPE_MAX_STREAM_DATA_LENGTH   = 13,
+    FRAME_TYPE_MAX_STREAM_ID_LENGTH     = 5,
+    FRAME_TYPE_PING_LENGTH              = 1,
+    FRAME_TYPE_BLOCKED_LENGTH           = 1,
+    FRAME_TYPE_STREAM_BLOCKED_LENGTH    = 5,
+    FRAME_TYPE_STREAM_ID_NEEDED_LENGTH  = 1,
+    FRAME_TYPE_NEW_CONNECTION_ID_LENGTH = 11
+  };
 
   enum LongHeaderType {
     TYPE_VERSION_NEGOTIATION    = 1,
