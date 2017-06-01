@@ -18,6 +18,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include "prerror.h"
+#include "ufloat16.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -133,6 +134,7 @@ MozQuic::MozQuic(bool handleIO)
   , mVersion(kMozQuicVersion1)
   , mConnectionID(0)
   , mNextPacketNumber(0)
+  , mOriginalPacketNumber(0)
   , mClosure(this)
   , mLogCallback(nullptr)
   , mTransmitCallback(nullptr)
@@ -175,6 +177,8 @@ MozQuic::StartConnection()
     mNextPacketNumber = mNextPacketNumber << 16;
     mNextPacketNumber = mNextPacketNumber | (random() & 0xffff);
   }
+  mNextPacketNumber &= 0x7fffffff; // 31 bits
+  mOriginalPacketNumber = mNextPacketNumber;
 
   return MOZQUIC_OK;
 }
@@ -295,6 +299,7 @@ MozQuic::Intake()
     // dispatch to the right MozQuic class. this is used
     // for emphasis
     LongHeaderData header(pkt, pktSize);
+    fprintf(stderr,"PACKET RECVD %lX\n", header.mPacketNumber);
     Acknowledge(pkt, pktSize, header);
 
     switch (header.mType) {
@@ -399,13 +404,120 @@ MozQuic::Log(char *msg)
 }
 
 void
+MozQuic::AckScoreboard(uint64_t packetNumber)
+{
+  // scoreboard is ordered like this.. (with gap @4 @3)
+  // 7/2, 2/1
+  // todo out of order packets should be coalesced
+
+  // todo if this list is too long, we can stop doing this according to
+  // the spec
+
+  if (mAckScoreboard.empty()) {
+    mAckScoreboard.emplace_front(packetNumber, Timestamp());
+    return;
+  }
+
+  auto iter=mAckScoreboard.begin();
+  for (; iter != mAckScoreboard.end(); ++iter) {
+    if ((iter->mPacketNumber + 1) == packetNumber) {
+      // the common case is to just adjust this counter
+      // in the first element
+      iter->mPacketNumber++;
+      iter->mExtra++;
+      return;
+    }
+    if (iter->mPacketNumber >= packetNumber &&
+        packetNumber >= (iter->mPacketNumber - iter->mExtra)) {
+      return; // dup
+    }
+    if (iter->mPacketNumber < packetNumber) {
+      break;
+    }
+  }
+  mAckScoreboard.emplace(iter, packetNumber, Timestamp());
+}
+
+void
+MozQuic::MaybeSendAck()
+{
+  if (mAckScoreboard.empty()) {
+    return;
+  }
+
+  // if we aren't in connected we will only piggyback
+  if (mConnectionState != CLIENT_STATE_CONNECTED &&
+      mConnectionState != SERVER_STATE_CONNECTED) {
+    return;
+  }
+  // todo for doing some kind of delack
+  // todo generally
+  assert(false);
+}
+
+uint32_t
+MozQuic::AckPiggyBack(unsigned char *pkt, uint32_t avail,
+                      enum mozquicKeyPhase keyPhase, uint32_t &used)
+{
+  used = 0;
+
+  // build as many ack frames as will fit
+  if (keyPhase == QuicKeyPhaseUnprotected) {
+    // always use 32 bits and no timestamps and never
+    // put more than 1 block in a frame. keep it simple.
+
+    while (!mAckScoreboard.empty()) {
+      if (avail < 10) {
+        return MOZQUIC_OK;
+      }
+      pkt[0] = 0xa9; // ack with 32 bit num and 16 bit extra no ts
+      pkt[1] = 0;
+
+      auto iter = mAckScoreboard.rbegin();
+      
+      if (iter->mPacketNumber > 0xffffffff) {
+        // > 32bit
+        mAckScoreboard.pop_back();
+        RaiseError(MOZQUIC_ERR_GENERAL, (char *)"unexpected packet number");
+        return MOZQUIC_ERR_GENERAL;
+      }
+
+      uint32_t packet32 = iter->mPacketNumber;
+      packet32 = htonl(packet32);
+      memcpy(pkt + 2, &packet32, 4);
+      // timestamp is microseconds (10^-6) as 16 bit fixed point #
+      uint64_t delay64 = (Timestamp() - iter->mReceiveTime) * 1000;
+      uint16_t delay = htons(ufloat16_encode(delay64));
+      memcpy(pkt + 6, &delay, 2);
+      uint16_t extra = htons(iter->mExtra);
+      memcpy(pkt + 8, &extra, 2);
+      pkt += 10;
+      used += 10;
+      avail -= 10;
+      mAckScoreboard.pop_back();
+    };
+    return MOZQUIC_OK;
+  }
+  assert(false); // todo non handshake cases
+  return MOZQUIC_OK;
+}
+
+void
 MozQuic::Acknowledge(unsigned char *pkt, uint32_t pktLen, LongHeaderData &header)
 {
   // todo assumes long header
   if (pktLen < 17) {
     return;
   }
-  
+  if ((header.mType == PACKET_TYPE_VERSION_NEGOTIATION) ||
+      (header.mType == PACKET_TYPE_SERVER_STATELESS_RETRY) ||
+      (header.mType == PACKET_TYPE_PUBLIC_RESET)) {
+    return;
+  }
+  fprintf(stderr,"GEN ACK FOR %lX\n", header.mPacketNumber);
+
+  // put this packetnumber on the scoreboard along with timestamp
+  AckScoreboard(header.mPacketNumber);
 }
 
 uint32_t
@@ -562,14 +674,77 @@ MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize, LongHeader
   return IntakeStream0(pkt, pktSize);
 }
 
+void
+MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
+{
+  // frameptr points to the beginning of the ackblock section
+  // we have already runtime tested that there is enough data there
+  // to read the ackblocks and the tsblocks
+  assert (result.mType == FRAME_TYPE_ACK);
+  uint8_t iters = 0;
+
+  std::array<std::pair<uint64_t, uint64_t>, 257> ackStack;
+
+  uint64_t largestAcked = result.u.mAck.mLargestAcked;
+  do {
+    uint64_t extra = 0;
+    const uint8_t blockLengthLen = result.u.mAck.mAckBlockLengthLen;
+    memcpy(((char *)&extra) + (8 - blockLengthLen), framePtr, blockLengthLen);
+    extra = ntohll(extra);
+    framePtr += blockLengthLen;
+
+    fprintf(stderr,"ACK RECVD FOR %lX -> %lX\n",
+            largestAcked - extra, largestAcked);
+    // form a stack here so we can process them starting at the
+    // lowest packet number, which is how mUnAcked is ordered and
+    // do it all in one pass
+    assert(iters < 257);
+    ackStack[iters] =
+      std::pair<uint64_t, uint64_t>(largestAcked - extra, extra + 1);
+
+    largestAcked--;
+    largestAcked -= extra;
+    if (iters++ == result.u.mAck.mNumBlocks) {
+      break;
+    }
+    uint8_t gap = *framePtr;
+    largestAcked -= gap;
+    framePtr++;
+  } while (1);
+
+  auto i = mUnAcked.begin();
+  for (; iters > 0; --iters) {
+    uint64_t seeking = ackStack[iters - 1].first;
+    uint64_t stopSeeking = seeking + ackStack[iters - 1].second;
+    for (; seeking < stopSeeking; seeking++) {
+
+      // skip over stuff that is too low
+      for (; (i != mUnAcked.end()) && ((*i)->mPacketNumber < seeking); i++);
+
+      if ((i == mUnAcked.end()) || ((*i)->mPacketNumber > seeking)) {
+        fprintf(stderr,"ACK'd packet not found for %lX\n", seeking);
+      } else {
+        assert ((*i)->mPacketNumber == seeking);
+        fprintf(stderr,"ACK'd packet found for %lX\n", seeking);
+        i = mUnAcked.erase(i);
+      }
+    }
+  }
+  
+  // todo read the timestamps
+  // and obviously todo feed the times into congestion control
+}
+
 int
 MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize) 
 {
   // todo this assumes long header
   // used by both client and server
+  unsigned char *endpkt = pkt + pktSize;
   uint32_t ptr = 17;
 
   pktSize -= 8; // checksum. todo mvp verify
+  bool sendAck = false;
 
   while (ptr < pktSize) {
     FrameHeaderData result(pkt + ptr, pktSize - ptr, this);
@@ -580,10 +755,13 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
     if (result.mType == FRAME_TYPE_PADDING) {
       continue;
     } else if (result.mType == FRAME_TYPE_STREAM) {
+      sendAck = true;
       if (result.u.mStream.mStreamID != 0) {
         RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream 0 expected");
         return MOZQUIC_ERR_GENERAL;
       }
+      // parser checked for this, but jic
+      assert(pkt + ptr + result.u.mStream.mDataLen <= endpkt);
       std::unique_ptr<MozQuicStreamChunk>
         tmp(new MozQuicStreamChunk(result.u.mStream.mStreamID,
                                    result.u.mStream.mOffset,
@@ -593,12 +771,28 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
       mStream0->Supply(tmp);
       ptr += result.u.mStream.mDataLen;
     } else if (result.mType == FRAME_TYPE_ACK) {
-      assert(false);
-      // todo mvp process ack
+      // ptr now points at ack block section
+      uint32_t ackBlockSectionLen =
+        result.u.mAck.mAckBlockLengthLen +
+        (result.u.mAck.mNumBlocks * (result.u.mAck.mAckBlockLengthLen + 1));
+      uint32_t timestampSectionLen = result.u.mAck.mNumTS * 3;
+      if (timestampSectionLen) {
+        timestampSectionLen += 2; // the first one is longer
+      }
+      assert(pkt + ptr + ackBlockSectionLen + timestampSectionLen <= endpkt);
+      ProcessAck(result, pkt + ptr);
+      ptr += ackBlockSectionLen;
+      ptr += timestampSectionLen;
     } else {
+      sendAck = true;
       RaiseError(MOZQUIC_ERR_GENERAL, (char *) "unexpected frame type");
       return MOZQUIC_ERR_GENERAL;
     }
+    assert(pkt + ptr <= endpkt);
+  }
+
+  if (sendAck) {
+    MaybeSendAck();
   }
   return MOZQUIC_OK;
 }
@@ -624,6 +818,8 @@ MozQuic::Accept(struct sockaddr_in *clientAddr)
     child->mNextPacketNumber = child->mNextPacketNumber << 16;
     child->mNextPacketNumber = child->mNextPacketNumber | (random() & 0xffff);
   }
+  child->mNextPacketNumber &= 0x7fffffff; // 31 bits
+  child->mOriginalPacketNumber = child->mNextPacketNumber;
 
   assert(!mHandshakeInput);
   if (!mHandshakeInput) {
@@ -809,8 +1005,18 @@ MozQuic::FlushStream0()
 
   if (framePtr != (pkt + 17)) {
     // then padding as needed up to 1272 on client_initial
-    uint32_t finalLen =
-      ((pkt[0] & 0x7f) == PACKET_TYPE_CLIENT_INITIAL) ? kMozQuicMTU : ((framePtr - pkt) + 8);
+    uint32_t finalLen;
+
+    if ((pkt[0] & 0x7f) == PACKET_TYPE_CLIENT_INITIAL) {
+      finalLen = kMozQuicMTU;
+    } else {
+      uint32_t room = endpkt - framePtr - 8; // the last 8 are for checksum
+      uint32_t used;
+      if (AckPiggyBack(framePtr, room, QuicKeyPhaseUnprotected, used) == MOZQUIC_OK) {
+        framePtr += used;
+      }
+      finalLen = ((framePtr - pkt) + 8);
+    }
 
     uint32_t paddingNeeded = finalLen - 8 - (framePtr - pkt);
     memset (framePtr, 0, paddingNeeded);
@@ -961,19 +1167,29 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
     return;
   } else if ((type & FRAME_MASK_ACK) == FRAME_TYPE_ACK) {
     mType = FRAME_TYPE_ACK;
-    bool numBlocks = (type & 0x10);
-    uint32_t ackedLen = (type & 0x0c);
-    if (ackedLen == 3) {
+    uint8_t numBlocks = (type & 0x10) ? 1 : 0; // N bit
+    uint32_t ackedLen = (type & 0x0c) >> 2; // LL bits
+    if (ackedLen == 0) {
+      ackedLen = 1;
+    } else if (ackedLen == 1) {
+      ackedLen = 2;
+    } else if (ackedLen == 2) {
       ackedLen = 4;
-    } else if (ackedLen == 4) {
+    } else { // (ackedLen == 3)
       ackedLen = 6;
     }
-    u.mAck.mAckBlockLengthLen = (type & 0x03);
-    if (u.mAck.mAckBlockLengthLen == 3) {
+
+    u.mAck.mAckBlockLengthLen = (type & 0x03); // MM bits
+    if (u.mAck.mAckBlockLengthLen == 0) {
+      u.mAck.mAckBlockLengthLen = 1;
+    } else if (u.mAck.mAckBlockLengthLen == 1) {
+      u.mAck.mAckBlockLengthLen = 2;
+    } else if (u.mAck.mAckBlockLengthLen == 2) {
       u.mAck.mAckBlockLengthLen = 4;
-    } else if (u.mAck.mAckBlockLengthLen == 4) {
+    } else { // u.mAck.mAckBlockLengthLen == 3
       u.mAck.mAckBlockLengthLen = 6;
     }
+
     uint16_t bytesNeeded = 1 + numBlocks + 1 + ackedLen + 2;
     if (bytesNeeded > pktSize) {
       logger->RaiseError(MOZQUIC_ERR_GENERAL, (char *) "ack frame header short");
@@ -990,7 +1206,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
     framePtr++;
     memcpy(((char *)&u.mAck.mLargestAcked) + (8 - ackedLen), framePtr, ackedLen);
     framePtr += ackedLen;
-    u.mAck.mLargestAcked = ntohll(u.mAck.mLargestAcked);
+    u.mAck.mLargestAcked = ntohll(u.mAck.mLargestAcked); // todo mvp these are only the low bits
 
     memcpy(&u.mAck.mAckDelay, framePtr, 2);
     framePtr += 2;

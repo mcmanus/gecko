@@ -90,7 +90,7 @@ MozQuicStreamIn::Supply(std::unique_ptr<MozQuicStreamChunk> &d)
     return MOZQUIC_OK;
   }
 
-  // not these are reverse iterators so iter++ moves to the left (earlier seqno)
+  // note these are reverse iterators so iter++ moves to the left (earlier seqno)
   // and insert puts new node to the right (later seqno)
   auto i = mAvailable.rbegin();
   auto end = mAvailable.rend();

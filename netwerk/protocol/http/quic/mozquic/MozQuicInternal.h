@@ -87,16 +87,24 @@ public:
   uint32_t DoWriter(std::unique_ptr<MozQuicStreamChunk> &p) override;
 private:
   class LongHeaderData;
+  class FrameHeaderData;
+
   void RaiseError(uint32_t err, char *reason);
+
+  void AckScoreboard(uint64_t num);
+  void MaybeSendAck();
 
   uint32_t Transmit(unsigned char *, uint32_t len);
   void Acknowledge(unsigned char *, uint32_t len, LongHeaderData &);
+  uint32_t AckPiggyBack(unsigned char *pkt, uint32_t avail,
+                        enum mozquicKeyPhase keyPhase, uint32_t &used);
   uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen, struct sockaddr_in *peer);
   int ProcessServerCleartext(unsigned char *, uint32_t size, LongHeaderData &);
   int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer, LongHeaderData &);
   int ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize, LongHeaderData &);
   int IntakeStream0(unsigned char *, uint32_t size);
   bool IntegrityCheck(unsigned char *, uint32_t size);
+  void ProcessAck(class FrameHeaderData &result, unsigned char *framePtr);
 
   bool ServerState() { return mConnectionState > SERVER_STATE_BREAK; }
   MozQuic *FindSession(const unsigned char *pkt, uint32_t pktSize, LongHeaderData &header);
@@ -128,7 +136,8 @@ private:
   std::unordered_map<uint64_t, MozQuic *> mConnectionHash;
 
   uint64_t mConnectionID;
-  uint32_t mNextPacketNumber;
+  uint64_t mNextPacketNumber;
+  uint64_t mOriginalPacketNumber;
 
   void *mClosure;
   void (*mLogCallback)(mozquic_connection_t *, char *); // todo va arg
@@ -144,6 +153,7 @@ private:
   // todo this is suboptimal
   std::list<std::unique_ptr<MozQuicStreamChunk>> mUnWritten;
   std::list<std::unique_ptr<MozQuicStreamChunk>> mUnAcked;
+  std::list<MozQuicStreamAck>                    mAckScoreboard;
 
 public: // callbacks from nsshelper
   int32_t NSSInput(void *buf, int32_t amount);
@@ -205,7 +215,7 @@ private:
     LongHeaderData(unsigned char *, uint32_t);
     uint8_t mType;
     uint64_t mConnectionID;
-    uint32_t mPacketNumber;
+    uint64_t mPacketNumber;
     uint32_t mVersion;
   };
   
