@@ -382,9 +382,10 @@ int
 MozQuic::IO()
 {
   uint32_t code;
-  Log((char *)"IO()\n");
+  fprintf(stderr,"."); fflush(stderr);
 
   Intake();
+  RetransmitTimer();
   Flush();
 
   if (mIsClient) {
@@ -783,6 +784,9 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
         RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream 0 expected");
         return MOZQUIC_ERR_GENERAL;
       }
+      // todo, ultimately the stream chunk could hold references to
+      // the packet buffer and ptr into it for zero copy
+      
       // parser checked for this, but jic
       assert(pkt + ptr + result.u.mStream.mDataLen <= endpkt);
       std::unique_ptr<MozQuicStreamChunk>
@@ -1058,6 +1062,7 @@ MozQuic::FlushStream0()
     if (code != MOZQUIC_OK) {
       return code;
     }
+    fprintf(stderr,"TRANSMIT %lX\n", mNextPacketNumber);
     mNextPacketNumber++;
     // each member of the list needs to 
   }
@@ -1092,8 +1097,7 @@ MozQuic::DoWriter(std::unique_ptr<MozQuicStreamChunk> &p)
   // transmitted after prioritization by flush()
 
   // obviously have to deal with more than this :)
-  assert (mConnectionState == CLIENT_STATE_1RTT ||
-          mConnectionState == SERVER_STATE_1RTT);
+  assert (p->mTransmitKeyPhase == QuicKeyPhaseUnprotected);
 
   mUnWritten.push_back(std::move(p));
 
@@ -1136,6 +1140,48 @@ MozQuic::NSSOutput(const void *buf, int32_t amount)
   // we need to put it into stream 0 so that it can be
   // written on the network
   return mStream0->Write((const unsigned char *)buf, amount);
+}
+
+uint32_t
+MozQuic::RetransmitTimer()
+{
+  if (mUnAcked.empty()) {
+    return MOZQUIC_OK;
+  }
+
+  // this is a crude stand in for reliability until we get a real loss
+  // recovery system built
+  uint64_t now = Timestamp();
+  uint64_t discardEpoch = now - kForgetUnAckedThresh;
+
+  for (auto i = mUnAcked.begin(); i != mUnAcked.end(); i++){
+
+    // just a linear backoff for now
+    uint64_t retransEpoch =
+      now - (kRetransmitThresh * (*i)->mTransmitCount);
+
+    if ((*i)->mTransmitTime > retransEpoch) {
+      break;
+    }
+    if (((*i)->mTransmitTime <= discardEpoch) &&
+        ((*i)->mRetransmitted || ((*i)->mTransmitCount >= 2))) {
+      fprintf(stderr,"old unacked packet forgotten %lX\n",
+              (*i)->mPacketNumber);
+      i = mUnAcked.erase(i);
+    } else if (!(*i)->mRetransmitted) {
+      assert((*i)->mData);
+      fprintf(stderr,"data for packet %lX retransmitted\n",
+              (*i)->mPacketNumber);
+      (*i)->mRetransmitted = true;
+
+      // the ctor steals the data pointer
+      std::unique_ptr<MozQuicStreamChunk> tmp(new MozQuicStreamChunk(*(*i)));
+      assert(!(*i)->mData);
+      DoWriter(tmp);
+    }
+  }
+
+  return MOZQUIC_OK;
 }
 
 MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, MozQuic *logger)

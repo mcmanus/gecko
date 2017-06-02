@@ -200,7 +200,6 @@ MozQuicStreamOut::Write(const unsigned char *data, uint32_t len)
   return mWriter->DoWriter(tmp);
 }
 
-// todo an interface that doesn't copy would be good
 MozQuicStreamChunk::MozQuicStreamChunk(uint32_t id, uint64_t offset,
                                        const unsigned char *data, uint32_t len,
                                        bool fin)
@@ -210,11 +209,28 @@ MozQuicStreamChunk::MozQuicStreamChunk(uint32_t id, uint64_t offset,
   , mOffset(offset)
   , mFin(fin)
   , mTransmitTime(0)
+  , mTransmitCount(1)
   , mRetransmitted(false)
   , mTransmitKeyPhase(QuicKeyPhaseUnknown)
 {
+  mTransmitKeyPhase = QuicKeyPhaseUnprotected; // todo mvp
   memcpy((void *)mData.get(), data, len);
 }
+
+MozQuicStreamChunk::MozQuicStreamChunk(MozQuicStreamChunk &orig)
+  : mLen(orig.mLen)
+  , mStreamID(orig.mStreamID)
+  , mOffset(orig.mOffset)
+  , mFin(orig.mFin)
+  , mTransmitTime(0)
+  , mTransmitCount(orig.mTransmitCount + 1)
+  , mRetransmitted(false)
+  , mTransmitKeyPhase(QuicKeyPhaseUnknown)
+{
+  mTransmitKeyPhase = QuicKeyPhaseUnprotected; // todo mvp
+  mData = std::move(orig.mData);
+}
+
 
 MozQuicStreamChunk::~MozQuicStreamChunk()
 {

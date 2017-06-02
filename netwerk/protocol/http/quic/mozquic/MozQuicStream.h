@@ -25,6 +25,10 @@ class MozQuicStreamChunk
 public:
   MozQuicStreamChunk(uint32_t id, uint64_t offset, const unsigned char *data,
                      uint32_t len, bool fin);
+
+  // This form of ctor steals the data pointer. used for retransmit
+  MozQuicStreamChunk(MozQuicStreamChunk &);
+
   ~MozQuicStreamChunk();
 
   std::unique_ptr<const unsigned char []>mData;
@@ -36,6 +40,7 @@ public:
   // when unacked these are set
   uint64_t mPacketNumber;
   uint64_t mTransmitTime;
+  uint16_t mTransmitCount;
   bool     mRetransmitted; // no data after retransmitted
   enum mozquicKeyPhase mTransmitKeyPhase;
 };

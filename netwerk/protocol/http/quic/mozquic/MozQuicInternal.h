@@ -16,13 +16,6 @@
 
 namespace mozilla { namespace net {
 
-// todo handle more than 1
-static const uint32_t kMozQuicVersion1 = 0xf123f0c5;
-static const uint32_t kMozQuicIetfID3 = 0xff000003;
-
-static const uint32_t kMozQuicMTU = 1280; // todo pmtud
-static const uint32_t kMozQuicMSS = 16384;
-
 static inline uint64_t htonll(uint64_t x)
 {
   uint32_t test = 0x12345678;
@@ -60,6 +53,16 @@ class MozQuicStreamPair;
 class MozQuic final : public MozQuicWriter
 {
 public:
+  // todo handle more than 1
+  static const uint32_t kMozQuicVersion1 = 0xf123f0c5;
+  static const uint32_t kMozQuicIetfID3 = 0xff000003;
+
+  static const uint32_t kMozQuicMTU = 1280; // todo pmtud
+  static const uint32_t kMozQuicMSS = 16384;
+
+  static const uint32_t kRetransmitThresh = 50; // ms
+  static const uint32_t kForgetUnAckedThresh = 4000; // ms
+  
   MozQuic(bool handleIO);
   MozQuic();
   ~MozQuic();
@@ -95,6 +98,7 @@ private:
   void MaybeSendAck();
 
   uint32_t Transmit(unsigned char *, uint32_t len);
+  uint32_t RetransmitTimer();
   void Acknowledge(unsigned char *, uint32_t len, LongHeaderData &);
   uint32_t AckPiggyBack(unsigned char *pkt, uint32_t avail,
                         enum mozquicKeyPhase keyPhase, uint32_t &used);
