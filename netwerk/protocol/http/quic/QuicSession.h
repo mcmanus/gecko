@@ -35,6 +35,9 @@ private:
   static PRStatus NSPRSetSocketOption(PRFileDesc *fd, const PRSocketOptionData *data);
   static PRStatus NSPRConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime to);
   static PRStatus NSPRClose(PRFileDesc *fd);
+  static int NSPRWrite(PRFileDesc *aFD, const void *aBuf, int32_t aAmount);
+  static int NSPRSend(PRFileDesc *aFD, const void *aBuf, int32_t aAmount,
+                      int , PRIntervalTime);
   static void SetMethods(PRIOMethods *quitMethods, PRIOMethods *psmHelperMethods);
   static int MozQuicHandshakeCallback(mozquic_connection_t *session,
                                       unsigned char *data, uint32_t len);

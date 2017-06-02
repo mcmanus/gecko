@@ -144,6 +144,26 @@ QuicSession::MozQuicHandshakeCallback(void *closure,
   return MOZQUIC_OK;
 }
 
+int
+QuicSession::NSPRWrite(PRFileDesc *fd, const void *aBuf, int32_t aAmount)
+{
+  // someone has written to this FD. this should just assert and return a failure
+  // todo
+  // to fix we need a nsAHttpTransaction object (probably this object!) that
+  // acts as a session layer instead of http2session which is what is goig on now
+  //
+  // ffor the time being, just drop the data and pretend we wrote it
+  fprintf(stderr,"WARNING H2 Data written directly to QUIC Session FD\n");
+  return aAmount;
+}
+
+int
+QuicSession::NSPRSend(PRFileDesc *aFD, const void *aBuf, int32_t aAmount,
+                      int , PRIntervalTime)
+{
+  return NSPRWrite(aFD, aBuf, aAmount);
+}
+
 PRStatus
 QuicSession::NSPRClose(PRFileDesc *fd)
 {
@@ -190,6 +210,8 @@ QuicSession::SetMethods(PRIOMethods *quicMethods, PRIOMethods *psmHelperMethods)
   if (quicMethods) {
     quicMethods->connect = NSPRConnect;
     quicMethods->close =   NSPRClose;
+    quicMethods->send =    NSPRSend;
+    quicMethods->write =   NSPRWrite;
   }
   if (psmHelperMethods) {
     // ssl stack triggers getpeername and default impl asserts(false)
