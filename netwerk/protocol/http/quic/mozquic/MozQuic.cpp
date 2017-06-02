@@ -300,55 +300,77 @@ MozQuic::Intake()
     // for emphasis
     LongHeaderData header(pkt, pktSize);
     fprintf(stderr,"PACKET RECVD %lX\n", header.mPacketNumber);
-    Acknowledge(pkt, pktSize, header);
 
+    MozQuic *session = this; // default
+          
     switch (header.mType) {
     case PACKET_TYPE_VERSION_NEGOTIATION: // version negotiation
-      assert(false);
-      // todo mvp
+      assert(false); // todo mvp
       break;
     case PACKET_TYPE_CLIENT_INITIAL:
-      if (!this->IntegrityCheck(pkt, pktSize)) {
+    case PACKET_TYPE_SERVER_CLEARTEXT:
+      if (!IntegrityCheck(pkt, pktSize)) {
         rv = MOZQUIC_ERR_GENERAL;
-        break;
       }
-      rv = this->ProcessClientInitial(pkt, pktSize, &client, header);
       break;
     case PACKET_TYPE_SERVER_STATELESS_RETRY:
-      if (!this->IntegrityCheck(pkt, pktSize)) {
+      if (!IntegrityCheck(pkt, pktSize)) {
         rv = MOZQUIC_ERR_GENERAL;
-        break;
       }
-      assert(false);
-      // todo mvp
-      break;
-    case PACKET_TYPE_SERVER_CLEARTEXT:
-      if (!this->IntegrityCheck(pkt, pktSize)) {
-        rv = MOZQUIC_ERR_GENERAL;
-        break;
-      }
-      rv = this->ProcessServerCleartext(pkt, pktSize, header);
+      assert(false); // todo mvp
       break;
     case PACKET_TYPE_CLIENT_CLEARTEXT:
-    {
-      if (!this->IntegrityCheck(pkt, pktSize)) {
+      if (!IntegrityCheck(pkt, pktSize)) {
         rv = MOZQUIC_ERR_GENERAL;
         break;
       }
-      MozQuic *childSession = FindSession(pkt, pktSize, header);
-      if (!childSession) {
+      session = FindSession(pkt, pktSize, header);
+      if (!session) {
         rv = MOZQUIC_ERR_GENERAL;
-      } else {
-        rv = childSession->ProcessClientCleartext(pkt, pktSize, header);
       }
-    }
-    break;
+      break;
 
     default:
       // reject anything that is not a cleartext packet (not right, but later)
       Log((char *)"recv1rtt unexpected type");
       // todo this could actually be out of order protected packet even in handshake
       // and ideally would be queued. for now we rely on retrans
+      // todo
+      rv = MOZQUIC_ERR_GENERAL;
+      break;
+    }
+
+    if (!session || rv != MOZQUIC_OK) {
+      continue;
+    }
+
+    switch (header.mType) {
+    case PACKET_TYPE_VERSION_NEGOTIATION: // version negotiation
+      // do not ack
+      // todo mvp
+      break;
+    case PACKET_TYPE_CLIENT_INITIAL:
+      rv = session->ProcessClientInitial(pkt, pktSize, &client, header, &session);
+      // ack after processing - find new session
+      if (rv == MOZQUIC_OK) {
+        session->Acknowledge(pkt, pktSize, header);
+      }
+      break;
+    case PACKET_TYPE_SERVER_STATELESS_RETRY:
+      // do not ack
+      // todo mvp
+      break;
+    case PACKET_TYPE_SERVER_CLEARTEXT:
+      session->Acknowledge(pkt, pktSize, header);
+      rv = session->ProcessServerCleartext(pkt, pktSize, header);
+      break;
+    case PACKET_TYPE_CLIENT_CLEARTEXT:
+      session->Acknowledge(pkt, pktSize, header);
+      rv = session->ProcessClientCleartext(pkt, pktSize, header);
+      break;
+
+    default:
+      assert(false);
       break;
     }
   } while (rv == MOZQUIC_OK);
@@ -505,6 +527,7 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint32_t avail,
 void
 MozQuic::Acknowledge(unsigned char *pkt, uint32_t pktLen, LongHeaderData &header)
 {
+  assert(mIsChild || mIsClient);
   // todo assumes long header
   if (pktLen < 17) {
     return;
@@ -514,7 +537,7 @@ MozQuic::Acknowledge(unsigned char *pkt, uint32_t pktLen, LongHeaderData &header
       (header.mType == PACKET_TYPE_PUBLIC_RESET)) {
     return;
   }
-  fprintf(stderr,"GEN ACK FOR %lX\n", header.mPacketNumber);
+  fprintf(stderr,"%p GEN ACK FOR %lX\n", this, header.mPacketNumber);
 
   // put this packetnumber on the scoreboard along with timestamp
   AckScoreboard(header.mPacketNumber);
@@ -681,7 +704,7 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
   // we have already runtime tested that there is enough data there
   // to read the ackblocks and the tsblocks
   assert (result.mType == FRAME_TYPE_ACK);
-  uint8_t iters = 0;
+  uint16_t iters = 0;
 
   std::array<std::pair<uint64_t, uint64_t>, 257> ackStack;
 
@@ -844,7 +867,8 @@ MozQuic::VersionOK(uint32_t proposed)
 int
 MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
                               struct sockaddr_in *clientAddr,
-                              LongHeaderData &header)
+                              LongHeaderData &header,
+                              MozQuic **childSession)
 {
   // this is always in long header form
   assert(pkt[0] & 0x80);
@@ -852,6 +876,7 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
   assert(pktSize >= 17);
   assert(!mIsChild);
 
+  *childSession = nullptr;
   if (mConnectionState != SERVER_STATE_LISTEN) { // todo rexmit right?
     return MOZQUIC_OK;
   }
@@ -882,6 +907,7 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
   child->IntakeStream0(pkt, pktSize);
   assert(mNewConnCB); // todo handle err
   mNewConnCB(mClosure, child);
+  *childSession = child;
   return MOZQUIC_OK;
 }
 
@@ -1413,7 +1439,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
 MozQuic::LongHeaderData::LongHeaderData(unsigned char *pkt, uint32_t pktSize)
 {
-  mType = 0;
+  mType = static_cast<enum LongHeaderType>(0);
 
   assert(pktSize >= 17);
   unsigned char type = pkt[0];
@@ -1423,7 +1449,7 @@ MozQuic::LongHeaderData::LongHeaderData(unsigned char *pkt, uint32_t pktSize)
       (type > PACKET_TYPE_PUBLIC_RESET)) {
     return;
   }
-  mType = type;
+  mType = static_cast<enum LongHeaderType>(type);
   memcpy(&mConnectionID, pkt + 1, 8);
   mConnectionID = ntohll(mConnectionID);
   memcpy(&mPacketNumber, pkt + 9, 4);

@@ -100,7 +100,8 @@ private:
                         enum mozquicKeyPhase keyPhase, uint32_t &used);
   uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen, struct sockaddr_in *peer);
   int ProcessServerCleartext(unsigned char *, uint32_t size, LongHeaderData &);
-  int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer, LongHeaderData &);
+  int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer,
+                           LongHeaderData &, MozQuic **outSession);
   int ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize, LongHeaderData &);
   int IntakeStream0(unsigned char *, uint32_t size);
   bool IntegrityCheck(unsigned char *, uint32_t size);
@@ -213,7 +214,7 @@ private:
   {
   public:
     LongHeaderData(unsigned char *, uint32_t);
-    uint8_t mType;
+    enum LongHeaderType mType;
     uint64_t mConnectionID;
     uint64_t mPacketNumber;
     uint32_t mVersion;
