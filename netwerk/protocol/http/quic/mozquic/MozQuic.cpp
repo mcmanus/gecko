@@ -1163,10 +1163,11 @@ MozQuic::RetransmitTimer()
     if ((*i)->mTransmitTime > retransEpoch) {
       break;
     }
-    if (((*i)->mTransmitTime <= discardEpoch) &&
-        ((*i)->mRetransmitted || ((*i)->mTransmitCount >= 2))) {
+    if (((*i)->mTransmitTime <= discardEpoch) && (*i)->mRetransmitted) {
+      // this is only on packets that we are keeping around for timestamp purposes
       fprintf(stderr,"old unacked packet forgotten %lX\n",
               (*i)->mPacketNumber);
+      assert(!(*i)->mData);
       i = mUnAcked.erase(i);
     } else if (!(*i)->mRetransmitted) {
       assert((*i)->mData);
