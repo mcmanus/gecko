@@ -45,6 +45,8 @@ QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   config.closure = this;
   config.handshake_input = MozQuicHandshakeCallback;
 
+  // config.greaseVersionNegotiation = true;
+
   // todo deal with failures
   mozquic_new_connection(&mSession, &config);
  

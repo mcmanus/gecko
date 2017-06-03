@@ -50,6 +50,9 @@ extern "C" {
     q->SetErrorCB(inConfig->error_callback);
     q->SetOriginPort(inConfig->originPort);
     q->SetOriginName(inConfig->originName);
+    if (inConfig->greaseVersionNegotiation) {
+      q->GreaseVersionNegotiation();
+    }
     return MOZQUIC_OK;
   }
 
@@ -123,6 +126,13 @@ extern "C" {
 
 namespace mozilla { namespace net {
 
+// when this set is updated, look at versionOK() and
+// GenerateVersionNegotiation()
+static const uint32_t kMozQuicVersion1 = 0xf123f0c5;
+static const uint32_t kMozQuicIetfID3 = 0xff000003;
+static const uint32_t kMozQuicVersionGreaseC = 0xfa1a7a3a;
+static const uint32_t kMozQuicVersionGreaseS = 0xea0a6a2a;
+
 MozQuic::MozQuic(bool handleIO)
   : mFD(MOZQUIC_SOCKET_BAD)
   , mHandleIO(handleIO)
@@ -160,7 +170,14 @@ MozQuic::~MozQuic()
     close(mFD);
   }
 }
-  
+
+void
+MozQuic::GreaseVersionNegotiation()
+{
+  assert(mConnectionState == STATE_UNINITIALIZED);
+  mVersion = kMozQuicVersionGreaseC;
+}
+
 int
 MozQuic::StartConnection()
 {
@@ -224,13 +241,9 @@ MozQuic::FindSession(const unsigned char *pkt, uint32_t pktSize, LongHeaderData 
 {
   assert (!mIsChild);
   assert (!mIsClient);
+  assert (VersionOK(header.mVersion));
   // todo, this needs to work with short headers
   // probly means an abstract headerdata..
-
-  if (!VersionOK(header.mVersion)) {
-    Log((char *)"find session failed due to verison");
-    return nullptr;
-  }
 
   auto i = mConnectionHash.find(header.mConnectionID);
   if (i == mConnectionHash.end()) {
@@ -296,16 +309,21 @@ MozQuic::Intake()
       continue;
     }
 
-    // dispatch to the right MozQuic class. this is used
-    // for emphasis
-    LongHeaderData header(pkt, pktSize);
-    fprintf(stderr,"PACKET RECVD %lX\n", header.mPacketNumber);
-
+    // dispatch to the right MozQuic class.
     MozQuic *session = this; // default
-          
+
+    LongHeaderData header(pkt, pktSize);
+    fprintf(stderr,"PACKET RECVD %lX %X len=%d\n", header.mPacketNumber, header.mVersion, pktSize);
+    if (!(VersionOK(header.mVersion) ||
+          (mIsClient && header.mType == PACKET_TYPE_VERSION_NEGOTIATION && header.mVersion == mVersion))) {
+      // todo this could really be an amplifier
+      session->GenerateVersionNegotiation(header, &client);
+      continue;
+    }
+
     switch (header.mType) {
-    case PACKET_TYPE_VERSION_NEGOTIATION: // version negotiation
-      assert(false); // todo mvp
+    case PACKET_TYPE_VERSION_NEGOTIATION:
+      // do not do integrity check (nop)
       break;
     case PACKET_TYPE_CLIENT_INITIAL:
     case PACKET_TYPE_SERVER_CLEARTEXT:
@@ -346,8 +364,8 @@ MozQuic::Intake()
 
     switch (header.mType) {
     case PACKET_TYPE_VERSION_NEGOTIATION: // version negotiation
+      rv = session->ProcessVersionNegotiation(pkt, pktSize, header);
       // do not ack
-      // todo mvp
       break;
     case PACKET_TYPE_CLIENT_INITIAL:
       rv = session->ProcessClientInitial(pkt, pktSize, &client, header, &session);
@@ -568,18 +586,20 @@ MozQuic::Recv(unsigned char *pkt, uint32_t avail, uint32_t &outLen,
 }
 
 uint32_t
-MozQuic::Transmit (unsigned char *pkt, uint32_t len)
+MozQuic::Transmit(unsigned char *pkt, uint32_t len, struct sockaddr_in *explicitPeer)
 {
   if (mTransmitCallback) {
-    return mTransmitCallback(mClosure, pkt, len);
+    return mTransmitCallback(mClosure, pkt, len); // todo take peer arg
   }
   int rv;
-  if (mIsChild) {
+  struct sockaddr_in *peer = explicitPeer ? explicitPeer : &mPeer;
+  if (mIsChild || explicitPeer) {
     rv = sendto(mFD, pkt, len, 0,
-                    (sockaddr *)&mPeer, sizeof(mPeer));
+                (struct sockaddr *)peer, sizeof(struct sockaddr_in));
   } else {
-    rv = send(mFD, pkt, len, 0); // todo errs
+    rv = send(mFD, pkt, len, 0);
   }
+
   if (rv == -1) {
     Log((char *)"Sending error in transmit");
   }
@@ -674,6 +694,61 @@ MozQuic::Server1RTT()
     }
   }
   return MOZQUIC_OK;
+}
+
+uint32_t
+MozQuic::ProcessVersionNegotiation(unsigned char *pkt, uint32_t pktSize, LongHeaderData &header)
+{
+  // check packet num and version
+  assert(pkt[0] & 0x80);
+  assert((pkt[0] & ~0x80) == PACKET_TYPE_VERSION_NEGOTIATION);
+  assert(pktSize >= 17);
+  assert(mIsClient);
+  unsigned char *framePtr = pkt + 17;
+
+  if (mConnectionState != CLIENT_STATE_1RTT) {
+    // todo this isn't really strong enough (mvp)
+    // any packet recvd on this conn would invalidate
+    return MOZQUIC_ERR_VERSION;
+  }
+      
+  if (header.mVersion != mVersion) {
+    // this was supposedly copied from client - so this isn't a match
+    return MOZQUIC_ERR_VERSION;
+  }
+  
+  // essentially this is an ack of client_initial using the packet #
+  // in the header as the ack, so need to find that on the unacked list
+  std::unique_ptr<MozQuicStreamChunk> tmp(nullptr);
+  for (auto i = mUnAcked.begin(); i != mUnAcked.end(); i++) {
+    if ((*i)->mPacketNumber == header.mPacketNumber) {
+      tmp = std::unique_ptr<MozQuicStreamChunk>(new MozQuicStreamChunk(*(*i)));
+      mUnAcked.clear();
+      break;
+    }
+  }
+  if (!tmp) {
+    // packet num was supposedly copied from client - so no match
+    return MOZQUIC_ERR_VERSION;
+  }
+
+  uint16_t numVersions = ((pktSize) - 17) / 4;
+  for (uint16_t i = 0; i < numVersions; i++) {
+    uint32_t possibleVersion;
+    memcpy((unsigned char *)&possibleVersion, framePtr, 4);
+    framePtr += 4;
+    possibleVersion = ntohl(possibleVersion);
+    // todo this does not give client any preference
+    if (VersionOK(possibleVersion)) {
+      mVersion = possibleVersion;
+      mConnectionID = header.mConnectionID;
+      fprintf(stderr, "negotiated version %X\n", mVersion);
+      DoWriter(tmp);
+      return MOZQUIC_OK;
+    }
+  }
+  RaiseError(MOZQUIC_ERR_VERSION, (char *)"unable to negotiate version");
+  return MOZQUIC_ERR_VERSION;
 }
 
 int
@@ -868,6 +943,48 @@ MozQuic::VersionOK(uint32_t proposed)
   return false;
 }
 
+uint32_t
+MozQuic::GenerateVersionNegotiation(LongHeaderData &clientHeader, struct sockaddr_in *peer)
+{
+  assert(!mIsChild);
+  assert(!mIsClient);
+  unsigned char pkt[kMozQuicMTU];
+  uint32_t tmp32;
+  uint64_t tmp64;
+
+  pkt[0] = 0x80 | PACKET_TYPE_VERSION_NEGOTIATION;
+  // lets use the client connID for now, we can change it in server_cleartext
+  tmp64 = htonll(clientHeader.mConnectionID);
+  memcpy(pkt + 1, &tmp64, 8);
+
+  // 32 packet number echo'd from client
+  tmp32 = htonl(clientHeader.mPacketNumber);
+  memcpy(pkt + 9, &tmp32, 4);
+  
+  // 32 version echo'd from client
+  tmp32 = htonl(clientHeader.mVersion);
+  memcpy(pkt + 13, &tmp32, 4);
+  
+  // list of versions
+  unsigned char *framePtr = pkt + 17;
+  assert(((framePtr + 4) - pkt) <= kMozQuicMTU);
+  tmp32 = htonl(kMozQuicVersionGreaseS);
+  memcpy (framePtr, &tmp32, 4);
+  framePtr += 4;
+  assert(((framePtr + 4) - pkt) <= kMozQuicMTU);
+  tmp32 = htonl(kMozQuicIetfID3);
+  memcpy (framePtr, &tmp32, 4);
+  framePtr += 4;
+  assert(((framePtr + 4) - pkt) <= kMozQuicMTU);
+  tmp32 = htonl(kMozQuicVersion1);
+  memcpy (framePtr, &tmp32, 4);
+  framePtr += 4;
+
+  // no checksum
+  fprintf(stderr,"TRANSMIT VERSION NEGOTITATION\n");
+  return Transmit(pkt, framePtr - pkt, peer);
+}
+
 int
 MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
                               struct sockaddr_in *clientAddr,
@@ -888,8 +1005,6 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
     return MOZQUIC_ERR_GENERAL;
   }
 
-  // note its possible only the first client initial packet will be subject
-  // to the at least 1280 rule, in which case this will need to be updated
   if (pktSize < kMozQuicMTU) {
     RaiseError(MOZQUIC_ERR_GENERAL, (char *)"client initial packet too small");
     return MOZQUIC_ERR_GENERAL;
@@ -897,13 +1012,7 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
   
   // todo - its not legal to send this across two packets, but it could
   // be dup'd or retrans'd..  should not do accept, it should find the session
-  
-  if (!VersionOK(header.mVersion)) {
-    // todo real err handling and version negotiation packet
-    // todo mvp
-    Log((char *)"server version err");
-    return MOZQUIC_OK;
-  }
+
   mVersion = header.mVersion;
 
   MozQuic *child = Accept(clientAddr);
@@ -1058,7 +1167,7 @@ MozQuic::FlushStream0()
       RaiseError(MOZQUIC_ERR_GENERAL, (char *)"hash err");
       return MOZQUIC_ERR_GENERAL;
     }
-    uint32_t code = Transmit(pkt, finalLen);
+    uint32_t code = Transmit(pkt, finalLen, nullptr);
     if (code != MOZQUIC_OK) {
       return code;
     }
@@ -1154,7 +1263,7 @@ MozQuic::RetransmitTimer()
   uint64_t now = Timestamp();
   uint64_t discardEpoch = now - kForgetUnAckedThresh;
 
-  for (auto i = mUnAcked.begin(); i != mUnAcked.end(); i++){
+  for (auto i = mUnAcked.begin(); i != mUnAcked.end(); i++) {
 
     // just a linear backoff for now
     uint64_t retransEpoch =
@@ -1486,17 +1595,11 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
 MozQuic::LongHeaderData::LongHeaderData(unsigned char *pkt, uint32_t pktSize)
 {
-  mType = static_cast<enum LongHeaderType>(0);
-
+  // these fields are all version independent - though the interpretation
+  // of type is not.
   assert(pktSize >= 17);
-  unsigned char type = pkt[0];
-  assert(type & 0x80);
-  type &= ~0x80;
-  if ((type < PACKET_TYPE_VERSION_NEGOTIATION) ||
-      (type > PACKET_TYPE_PUBLIC_RESET)) {
-    return;
-  }
-  mType = static_cast<enum LongHeaderType>(type);
+  assert(pkt[0] & 0x80);
+  mType = static_cast<enum LongHeaderType>(pkt[0] & ~0x80);
   memcpy(&mConnectionID, pkt + 1, 8);
   mConnectionID = ntohll(mConnectionID);
   memcpy(&mPacketNumber, pkt + 9, 4);
