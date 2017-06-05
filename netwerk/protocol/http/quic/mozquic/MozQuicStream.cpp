@@ -56,6 +56,7 @@ MozQuicStreamIn::Read(unsigned char *buffer, uint32_t avail, uint32_t &amt, bool
   }
   uint64_t skip = mOffset - (*i)->mOffset;
   const unsigned char *src = (*i)->mData.get() + skip;
+  assert((*i)->mLen > skip);
   uint64_t copyLen = (*i)->mLen - skip;
   if (copyLen > avail) {
     copyLen = avail;
@@ -66,6 +67,7 @@ MozQuicStreamIn::Read(unsigned char *buffer, uint32_t avail, uint32_t &amt, bool
   if (mFinRecvd && mFinOffset == mOffset) {
     fin = true;
   }
+  assert(mOffset <= (*i)->mOffset + (*i)->mLen);
   if (mOffset == (*i)->mOffset + (*i)->mLen) {
     // we dont need this buffer anymore
     mAvailable.erase(i);
@@ -79,11 +81,18 @@ MozQuicStreamIn::Supply(std::unique_ptr<MozQuicStreamChunk> &d)
   // new frame segment goes into a linked list ordered by seqno
   // any overlapping data is dropped
 
-  if (d->mFin) {
+  if (d->mFin && !mFinRecvd) {
     mFinRecvd = true;
     mFinOffset = d->mOffset + d->mLen;
   }
 
+  uint64_t endData = d->mOffset + d->mLen;
+  if (endData <= mOffset) {
+    // this is 100% old data. we can drop it
+    d.reset();
+    return MOZQUIC_OK;
+  }
+  
   // if the list is empty, add it to the list!
   if (mAvailable.empty()) {
     mAvailable.push_front(std::move(d));
@@ -213,6 +222,11 @@ MozQuicStreamChunk::MozQuicStreamChunk(uint32_t id, uint64_t offset,
   , mRetransmitted(false)
   , mTransmitKeyPhase(QuicKeyPhaseUnknown)
 {
+  if ((0xfffffffffffffffe - offset) < len) {
+    // todo should not silently truncate like this
+    len = 0xfffffffffffffffe - offset;
+  }
+  
   mTransmitKeyPhase = QuicKeyPhaseUnprotected; // todo mvp
   memcpy((void *)mData.get(), data, len);
 }

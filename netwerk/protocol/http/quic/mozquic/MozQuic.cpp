@@ -588,6 +588,9 @@ MozQuic::Recv(unsigned char *pkt, uint32_t avail, uint32_t &outLen,
 uint32_t
 MozQuic::Transmit(unsigned char *pkt, uint32_t len, struct sockaddr_in *explicitPeer)
 {
+  // this would be a reasonable place to insert a queuing layer that
+  // thought about cong control, flow control, priority, and pacing
+  
   if (mTransmitCallback) {
     return mTransmitCallback(mClosure, pkt, len); // todo take peer arg
   }
