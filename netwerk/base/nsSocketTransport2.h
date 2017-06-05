@@ -295,20 +295,20 @@ private:
     //-------------------------------------------------------------------------
 
     // socket type info:
-    char                 **mTypes;
-    uint32_t               mTypeCount;
-    nsCString              mHost;
-    nsCString              mProxyHost;
-    nsCString              mOriginHost;
-    uint16_t               mPort;
+    char       **mTypes;
+    uint32_t     mTypeCount;
+    nsCString    mHost;
+    nsCString    mProxyHost;
+    nsCString    mOriginHost;
+    uint16_t     mPort;
     nsCOMPtr<nsIProxyInfo> mProxyInfo;
-    uint16_t               mProxyPort;
-    uint16_t               mOriginPort;
-    bool                   mProxyTransparent;
-    bool                   mProxyTransparentResolvesHost;
-    bool                   mHttpsProxy;
-    uint32_t               mConnectionFlags;
-    bool                   mReuseAddrPort;
+    uint16_t     mProxyPort;
+    uint16_t     mOriginPort;
+    bool mProxyTransparent;
+    bool mProxyTransparentResolvesHost;
+    bool mHttpsProxy;
+    uint32_t     mConnectionFlags;
+    bool mReuseAddrPort;
 
     // The origin attributes are used to create sockets.  The first party domain
     // will eventually be used to isolate OCSP cache and is only non-empty when
