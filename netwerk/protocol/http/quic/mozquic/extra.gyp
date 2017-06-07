@@ -12,11 +12,25 @@
 {
   'targets': [
       {
-     'target_name': 'sample',
+     'target_name': 'server',
      'type': 'executable',
       'cflags': [ '-g', ],
       'sources': [
-       'sample/sample.c',
+       'sample/server.c',
+      ],
+     'dependencies': [
+       'mozquic.gyp:mozquic',
+      ],
+     'libraries': [
+       '<!@(pkg-config --libs nss)',
+      ],
+     },
+      {
+     'target_name': 'client',
+     'type': 'executable',
+      'cflags': [ '-g', ],
+      'sources': [
+       'sample/client.c',
       ],
      'dependencies': [
        'mozquic.gyp:mozquic',
