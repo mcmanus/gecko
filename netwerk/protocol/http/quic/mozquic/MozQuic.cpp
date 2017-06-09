@@ -36,7 +36,7 @@ extern "C" {
       return MOZQUIC_ERR_INVALID;
     }
 
-    mozilla::net::MozQuic *q = new mozilla::net::MozQuic(inConfig->handleIO);
+    mozquic::MozQuic *q = new mozquic::MozQuic(inConfig->handleIO);
     if (!q) {
       return MOZQUIC_ERR_GENERAL;
     }
@@ -58,52 +58,52 @@ extern "C" {
 
   int mozquic_destroy_connection(mozquic_connection_t *conn)
   {
-    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
     delete self;
     return MOZQUIC_OK;
   }
 
   int mozquic_start_connection(mozquic_connection_t *conn)
   {
-    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
     return self->StartConnection();
   }
 
   int mozquic_start_server(mozquic_connection_t *conn,
                            int (*handle_new_connection)(void *, mozquic_connection_t *newconn))
   {
-    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
     return self->StartServer(handle_new_connection);
   }
   
   int mozquic_IO(mozquic_connection_t *conn)
   {
-    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
     return self->IO();
   }
 
   mozquic_socket_t mozquic_osfd(mozquic_connection_t *conn)
   {
-    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
     return self->GetFD();
   }
 
   void mozquic_setosfd(mozquic_connection_t *conn, mozquic_socket_t fd)
   {
-    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
     self->SetFD(fd);
   }
 
   void mozquic_handshake_output(mozquic_connection_t *conn,
                                 unsigned char *data, uint32_t data_len)
   {
-    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
     self->HandshakeOutput(data, data_len);
   }
 
   void mozquic_handshake_complete(mozquic_connection_t *conn, uint32_t errCode)
   {
-    mozilla::net::MozQuic *self(reinterpret_cast<mozilla::net::MozQuic *>(conn));
+    mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
     self->HandshakeComplete(errCode);
   }
 
@@ -117,14 +117,14 @@ extern "C" {
       return MOZQUIC_ERR_INVALID;
     }
 
-    return mozilla::net::NSSHelper::Init(dir);
+    return mozquic::NSSHelper::Init(dir);
   }
   
 #ifdef __cplusplus
 }
 #endif
 
-namespace mozilla { namespace net {
+namespace mozquic  {
 
 // when this set is updated, look at versionOK() and
 // GenerateVersionNegotiation()
@@ -1611,5 +1611,5 @@ MozQuic::LongHeaderData::LongHeaderData(unsigned char *pkt, uint32_t pktSize)
   mVersion = ntohl(mVersion);
 }
 
-} }
+}
 

@@ -14,7 +14,14 @@
 #include "MozQuicStream.h"
 #include "NSSHelper.h"
 
-namespace mozilla { namespace net {
+namespace mozquic {
+
+/* socket typedef */
+#ifdef WIN32
+#define MOZQUIC_SOCKET_BAD INVALID_SOCKET
+#else
+#define MOZQUIC_SOCKET_BAD -1
+#endif
 
 static inline uint64_t htonll(uint64_t x)
 {
@@ -278,4 +285,4 @@ private:
   };
 };
 
-}} //namespace
+} //namespace

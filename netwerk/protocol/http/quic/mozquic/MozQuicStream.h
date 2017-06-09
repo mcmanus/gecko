@@ -10,7 +10,7 @@
 #include <unistd.h>
 #include <memory>
 
-namespace mozilla { namespace net {
+namespace mozquic {
 
 enum mozquicKeyPhase {
   QuicKeyPhaseUnknown,
@@ -122,4 +122,4 @@ public:
   MozQuicStreamIn  mIn;
 };
 
-}} //namespace
+} //namespace

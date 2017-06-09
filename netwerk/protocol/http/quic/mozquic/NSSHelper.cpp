@@ -14,7 +14,7 @@
 #include "pk11pub.h"
 #include "assert.h"
 
-namespace mozilla { namespace net {
+namespace mozquic {
         
 static bool mozQuicInit = false;
 static PRDescIdentity nssHelperIdentity;
@@ -196,4 +196,4 @@ NSSHelper::DriveHandshake()
   return MOZQUIC_ERR_GENERAL;
 }
 
-}}
+}

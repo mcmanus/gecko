@@ -12,7 +12,7 @@
 #include <unistd.h>
 #include <string.h>
 
-namespace mozilla { namespace net {
+namespace mozquic {
 
 MozQuicStreamPair::MozQuicStreamPair(uint32_t id, MozQuicWriter *w)
   : mOut(id, w)
@@ -250,4 +250,4 @@ MozQuicStreamChunk::~MozQuicStreamChunk()
 {
 }
 
-}} // namespace
+} // namespace

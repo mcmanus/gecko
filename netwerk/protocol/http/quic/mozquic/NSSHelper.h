@@ -9,7 +9,7 @@
 #include "ssl.h"
 #include "pk11pub.h"
 
-namespace mozilla { namespace net {
+namespace mozquic {
 
 class MozQuic;
 
@@ -41,4 +41,4 @@ private:
   bool                 mHandshakeComplete;
 };
 
-}} //namespace
+} //namespace
