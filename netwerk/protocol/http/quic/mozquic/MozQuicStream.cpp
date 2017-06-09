@@ -220,14 +220,14 @@ MozQuicStreamChunk::MozQuicStreamChunk(uint32_t id, uint64_t offset,
   , mTransmitTime(0)
   , mTransmitCount(1)
   , mRetransmitted(false)
-  , mTransmitKeyPhase(QuicKeyPhaseUnknown)
+  , mTransmitKeyPhase(keyPhaseUnknown)
 {
   if ((0xfffffffffffffffe - offset) < len) {
     // todo should not silently truncate like this
     len = 0xfffffffffffffffe - offset;
   }
   
-  mTransmitKeyPhase = QuicKeyPhaseUnprotected; // todo mvp
+  mTransmitKeyPhase = keyPhaseUnprotected; // todo mvp
   memcpy((void *)mData.get(), data, len);
 }
 
@@ -239,9 +239,9 @@ MozQuicStreamChunk::MozQuicStreamChunk(MozQuicStreamChunk &orig)
   , mTransmitTime(0)
   , mTransmitCount(orig.mTransmitCount + 1)
   , mRetransmitted(false)
-  , mTransmitKeyPhase(QuicKeyPhaseUnknown)
+  , mTransmitKeyPhase(keyPhaseUnknown)
 {
-  mTransmitKeyPhase = QuicKeyPhaseUnprotected; // todo mvp
+  mTransmitKeyPhase = keyPhaseUnprotected; // todo mvp
   mData = std::move(orig.mData);
 }
 

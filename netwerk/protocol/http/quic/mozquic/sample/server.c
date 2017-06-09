@@ -44,8 +44,13 @@ int main()
 
   mozquic_new_connection(&c, &config);
   mozquic_start_server(c, accept_new_connection);
+  uint32_t i=0;
   do {
     usleep (1000); // this is for handleio todo
+    if (!(i++ & 0xf)) {
+      fprintf(stderr,".");
+      fflush(stderr);
+    }
     mozquic_IO(c);
     if (only_child) {
       mozquic_IO(only_child); // todo mvp do we need this?

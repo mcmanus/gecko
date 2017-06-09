@@ -16,6 +16,8 @@
 
 namespace mozquic {
 
+const char mozquic_alpn[] = "hq-03";
+
 /* socket typedef */
 #ifdef WIN32
 #define MOZQUIC_SOCKET_BAD INVALID_SOCKET
@@ -90,6 +92,8 @@ public:
   void SetFD(mozquic_socket_t fd) { mFD = fd; }
   int  GetFD() { return mFD; }
   void GreaseVersionNegotiation();
+  void SetIgnorePKI() { mIgnorePKI = true; }
+  bool IgnorePKI();
 
   uint32_t DoWriter(std::unique_ptr<MozQuicStreamChunk> &p) override;
 private:
@@ -97,15 +101,14 @@ private:
   class FrameHeaderData;
 
   void RaiseError(uint32_t err, char *reason);
-
-  void AckScoreboard(uint64_t num);
+  
+  void AckScoreboard(uint64_t num, enum keyPhase kp);
   void MaybeSendAck();
 
   uint32_t Transmit(unsigned char *, uint32_t len, struct sockaddr_in *peer);
   uint32_t RetransmitTimer();
   void Acknowledge(unsigned char *, uint32_t len, LongHeaderData &);
-  uint32_t AckPiggyBack(unsigned char *pkt, uint32_t avail,
-                        enum mozquicKeyPhase keyPhase, uint32_t &used);
+  uint32_t AckPiggyBack(unsigned char *pkt, uint32_t avail, keyPhase kp, uint32_t &used);
   uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen, struct sockaddr_in *peer);
   int ProcessServerCleartext(unsigned char *, uint32_t size, LongHeaderData &);
   int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer,
@@ -121,7 +124,7 @@ private:
   uint64_t Timestamp();
   uint32_t Intake();
   uint32_t Flush();
-  uint32_t FlushStream0();
+  uint32_t FlushStream0(bool forceAck);
   int Client1RTT();
   int Server1RTT();
   void Log(char *);
@@ -137,6 +140,8 @@ private:
   bool mIsClient;
   bool mIsChild;
   bool mReceivedServerClearText;
+  bool mIgnorePKI;
+  bool mIsLoopback;
   enum connectionState mConnectionState;
   int mOriginPort;
   std::unique_ptr<char []> mOriginName;
@@ -283,6 +288,8 @@ private:
       } mNewConnectionID;
     } u;
   };
+  bool Unprotected(MozQuic::LongHeaderType type);
+
 };
 
 } //namespace

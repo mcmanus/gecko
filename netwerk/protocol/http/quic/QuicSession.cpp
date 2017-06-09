@@ -287,6 +287,8 @@ QuicSession::NSPRConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime t
     return connResult;
   }
 
+  // todo - I don't think this is necessary, I think the send/recv
+  // callbacks can be used instead
   mozquic_setosfd(self->mSession, PR_FileDesc2NativeHandle(fd));
   if (mozquic_start_connection(self->mSession) != MOZQUIC_OK) {
     return PR_FAILURE;

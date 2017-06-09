@@ -18,6 +18,7 @@ class NSSHelper final
 public:
   static int Init(char *dir);
   NSSHelper(MozQuic *quicSession, const char *originKey);
+  NSSHelper(MozQuic *quicSession, const char *originKey, bool clientindicator); // todo, subclass
   ~NSSHelper() {}
   uint32_t DriveHandshake();
   bool IsHandshakeComplete() { return mHandshakeComplete; }
@@ -34,11 +35,13 @@ private:
                                PRIntervalTime timeout);
 
   static void HandshakeCallback(PRFileDesc *fd, void *client_data);
+  static SECStatus BadCertificate(void *client_data, PRFileDesc *fd);
 
   MozQuic             *mQuicSession;
   PRFileDesc          *mFD;
-  bool                 mServerReady;
+  bool                 mNSSReady;
   bool                 mHandshakeComplete;
+  bool                 mHandshakeFailed; // complete but bad above nss
 };
 
 } //namespace

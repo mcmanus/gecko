@@ -53,6 +53,9 @@ extern "C" {
     if (inConfig->greaseVersionNegotiation) {
       q->GreaseVersionNegotiation();
     }
+    if (inConfig->ignorePKI) {
+      q->SetIgnorePKI();
+    }
     return MOZQUIC_OK;
   }
 
@@ -139,6 +142,8 @@ MozQuic::MozQuic(bool handleIO)
   , mIsClient(true)
   , mIsChild(false)
   , mReceivedServerClearText(false)
+  , mIgnorePKI(false)
+  , mIsLoopback(false)
   , mConnectionState(STATE_UNINITIALIZED)
   , mOriginPort(-1)
   , mVersion(kMozQuicVersion1)
@@ -178,11 +183,18 @@ MozQuic::GreaseVersionNegotiation()
   mVersion = kMozQuicVersionGreaseC;
 }
 
+bool
+MozQuic::IgnorePKI()
+{
+  return mIgnorePKI || mIsLoopback;
+}
+
 int
 MozQuic::StartConnection()
 {
   assert(!mHandleIO); // todo
   mIsClient = true;
+  mNSSHelper.reset(new NSSHelper(this, mOriginName.get(), true));
   mStream0.reset(new MozQuicStreamPair(0, this));
 
   mConnectionState = CLIENT_STATE_1RTT;
@@ -196,6 +208,33 @@ MozQuic::StartConnection()
   }
   mNextPacketNumber &= 0x7fffffff; // 31 bits
   mOriginalPacketNumber = mNextPacketNumber;
+
+  if (mFD == MOZQUIC_SOCKET_BAD) {
+    // the application did not pass in its own fd
+    mFD = socket(AF_INET, SOCK_DGRAM, 0); // todo blocking getaddrinfo
+    fcntl(mFD, F_SETFL, fcntl(mFD, F_GETFL, 0) | O_NONBLOCK);
+    struct addrinfo *outAddr;
+    if (getaddrinfo(mOriginName.get(), nullptr, nullptr, &outAddr) != 0) {
+      return MOZQUIC_ERR_GENERAL;
+    }
+
+    if (outAddr->ai_family == AF_INET) {
+      ((struct sockaddr_in *) outAddr->ai_addr)->sin_port = htons(mOriginPort);
+      if ((ntohl(((struct sockaddr_in *) outAddr->ai_addr)->sin_addr.s_addr) & 0xff000000) == 0x7f000000) {
+        mIsLoopback = true;
+      }
+    } else if (outAddr->ai_family == AF_INET6) {
+      ((struct sockaddr_in6 *) outAddr->ai_addr)->sin6_port = htons(mOriginPort);
+      const void *ptr1 = &in6addr_loopback.s6_addr;
+      const void *ptr2 = &((struct sockaddr_in6 *) outAddr->ai_addr)->sin6_addr.s6_addr;
+      if (!memcmp(ptr1, ptr2, 16)) {
+        mIsLoopback = true;
+      }
+    }
+    
+    connect(mFD, outAddr->ai_addr, outAddr->ai_addrlen);
+    freeaddrinfo(outAddr);
+  }
 
   return MOZQUIC_OK;
 }
@@ -400,7 +439,6 @@ int
 MozQuic::IO()
 {
   uint32_t code;
-  fprintf(stderr,"."); fflush(stderr);
 
   Intake();
   RetransmitTimer();
@@ -445,7 +483,7 @@ MozQuic::Log(char *msg)
 }
 
 void
-MozQuic::AckScoreboard(uint64_t packetNumber)
+MozQuic::AckScoreboard(uint64_t packetNumber, enum keyPhase kp)
 {
   // scoreboard is ordered like this.. (with gap @4 @3)
   // 7/2, 2/1
@@ -455,7 +493,7 @@ MozQuic::AckScoreboard(uint64_t packetNumber)
   // the spec
 
   if (mAckScoreboard.empty()) {
-    mAckScoreboard.emplace_front(packetNumber, Timestamp());
+    mAckScoreboard.emplace_front(packetNumber, Timestamp(), kp);
     return;
   }
 
@@ -476,7 +514,7 @@ MozQuic::AckScoreboard(uint64_t packetNumber)
       break;
     }
   }
-  mAckScoreboard.emplace(iter, packetNumber, Timestamp());
+  mAckScoreboard.emplace(iter, packetNumber, Timestamp(), kp);
 }
 
 void
@@ -492,18 +530,33 @@ MozQuic::MaybeSendAck()
     return;
   }
   // todo for doing some kind of delack
-  // todo generally
-  assert(false);
+  // todo protected packets
+
+  bool ackedUnprotected = false;
+  auto iter = mAckScoreboard.begin();
+  for (; iter != mAckScoreboard.end(); ++iter) {
+    fprintf(stderr,"ASKED TO SEND ACK FOR %lx %d\n",
+            iter->mPacketNumber, iter->mPhase);
+    if (iter->mPhase == keyPhaseUnprotected) {
+      assert(!ackedUnprotected);
+      ackedUnprotected = true;
+      FlushStream0(true);
+      iter = mAckScoreboard.begin(); // re-entrant concerns
+    } else {
+      assert(false); // todo
+    }
+  }
 }
 
-uint32_t
-MozQuic::AckPiggyBack(unsigned char *pkt, uint32_t avail,
-                      enum mozquicKeyPhase keyPhase, uint32_t &used)
+// todo after handshake we need to do a little more than piggyback
+// i.e. sometimes ack needs to fly solo
+ uint32_t
+MozQuic::AckPiggyBack(unsigned char *pkt, uint32_t avail, keyPhase kp, uint32_t &used)
 {
   used = 0;
 
   // build as many ack frames as will fit
-  if (keyPhase == QuicKeyPhaseUnprotected) {
+  if (kp == keyPhaseUnprotected) {
     // always use 32 bits and no timestamps and never
     // put more than 1 block in a frame. keep it simple.
 
@@ -543,6 +596,12 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint32_t avail,
   return MOZQUIC_OK;
 }
 
+bool
+MozQuic::Unprotected(MozQuic::LongHeaderType type)
+{
+  return type <= PACKET_TYPE_CLIENT_CLEARTEXT;
+}
+
 void
 MozQuic::Acknowledge(unsigned char *pkt, uint32_t pktLen, LongHeaderData &header)
 {
@@ -559,7 +618,8 @@ MozQuic::Acknowledge(unsigned char *pkt, uint32_t pktLen, LongHeaderData &header
   fprintf(stderr,"%p GEN ACK FOR %lX\n", this, header.mPacketNumber);
 
   // put this packetnumber on the scoreboard along with timestamp
-  AckScoreboard(header.mPacketNumber);
+  assert(Unprotected(header.mType));
+  AckScoreboard(header.mPacketNumber, keyPhaseUnprotected);
 }
 
 uint32_t
@@ -651,28 +711,35 @@ MozQuic::HandshakeComplete(uint32_t code)
 int
 MozQuic::Client1RTT() 
 {
-  if (!mHandshakeInput) {
-    // todo handle doing this internally
-    assert(false);
-    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"need handshaker");
-    return MOZQUIC_ERR_GENERAL;
-  }
-
-  if (!mStream0->Empty()) {
-    // Server Reply is available
+  if (mHandshakeInput) {
+    if (mStream0->Empty()) {
+      return MOZQUIC_OK;
+    }
+    // Server Reply is available and needs to be passed to app for processing
     unsigned char buf[kMozQuicMSS];
     uint32_t amt = 0;
     bool fin = false;
-    
+
     uint32_t code = mStream0->Read(buf, kMozQuicMSS, amt, fin);
     if (code != MOZQUIC_OK) {
       return code;
     }
     if (amt > 0) {
-      // called to let the app know that the server hello is ready
+      // called to let the app know that the server side TLS data is ready
       mHandshakeInput(mClosure, buf, amt);
     }
+  } else {
+    // handle server reply internally
+    uint32_t code = mNSSHelper->DriveHandshake();
+    if (code != MOZQUIC_OK) {
+      RaiseError(code, (char *) "client 1rtt handshake failed");
+      return code;
+    }
+    if (mNSSHelper->IsHandshakeComplete()) {
+      mConnectionState = CLIENT_STATE_CONNECTED;
+    }
   }
+
   return MOZQUIC_OK;
 }
 
@@ -1036,9 +1103,6 @@ MozQuic::ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize, LongHeader
   assert(pktSize >= 17);
   assert(mIsChild);
 
-  if (mConnectionState != SERVER_STATE_1RTT) { // todo rexmit right?
-    return MOZQUIC_ERR_GENERAL;
-  }
   assert(!mIsClient);
   assert(mStream0);
 
@@ -1051,9 +1115,9 @@ MozQuic::ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize, LongHeader
 }
 
 uint32_t
-MozQuic::FlushStream0()
+MozQuic::FlushStream0(bool forceAck)
 {
-  if (mUnWritten.empty()) {
+  if (mUnWritten.empty() && !forceAck) {
     return MOZQUIC_OK;
   }
       
@@ -1070,7 +1134,7 @@ MozQuic::FlushStream0()
     pkt[0] |= mReceivedServerClearText ? PACKET_TYPE_CLIENT_CLEARTEXT : PACKET_TYPE_CLIENT_INITIAL;
   }
 
-  // todo store a big endian version of this
+  // todo store a network order version of this
   uint64_t connID = htonll(mConnectionID);
   memcpy(pkt + 1, &connID, 8);
   
@@ -1133,7 +1197,7 @@ MozQuic::FlushStream0()
 
       (*iter)->mPacketNumber = mNextPacketNumber;
       (*iter)->mTransmitTime = Timestamp();
-      (*iter)->mTransmitKeyPhase = QuicKeyPhaseUnprotected; // only for stream 0 todo
+      (*iter)->mTransmitKeyPhase = keyPhaseUnprotected; // only for stream 0 todo
       (*iter)->mRetransmitted = false;
       
       // move it to the unacked list
@@ -1145,21 +1209,21 @@ MozQuic::FlushStream0()
     }
   }
 
-  if (framePtr != (pkt + 17)) {
-    // then padding as needed up to 1272 on client_initial
-    uint32_t finalLen;
+  // then padding as needed up to 1272 on client_initial
+  uint32_t finalLen;
 
-    if ((pkt[0] & 0x7f) == PACKET_TYPE_CLIENT_INITIAL) {
-      finalLen = kMozQuicMTU;
-    } else {
-      uint32_t room = endpkt - framePtr - 8; // the last 8 are for checksum
-      uint32_t used;
-      if (AckPiggyBack(framePtr, room, QuicKeyPhaseUnprotected, used) == MOZQUIC_OK) {
-        framePtr += used;
-      }
-      finalLen = ((framePtr - pkt) + 8);
+  if ((pkt[0] & 0x7f) == PACKET_TYPE_CLIENT_INITIAL) {
+    finalLen = kMozQuicMTU;
+  } else {
+    uint32_t room = endpkt - framePtr - 8; // the last 8 are for checksum
+    uint32_t used;
+    if (AckPiggyBack(framePtr, room, keyPhaseUnprotected, used) == MOZQUIC_OK) {
+      framePtr += used;
     }
+    finalLen = ((framePtr - pkt) + 8);
+  }
 
+  if (framePtr != (pkt + 17)) {
     uint32_t paddingNeeded = finalLen - 8 - (framePtr - pkt);
     memset (framePtr, 0, paddingNeeded);
     framePtr += paddingNeeded;
@@ -1180,7 +1244,7 @@ MozQuic::FlushStream0()
   }
 
   if (iter != mUnWritten.end()) {
-    return FlushStream0(); // todo mvp this is broken with non stream 0 pkts
+    return FlushStream0(false); // todo mvp this is broken with non stream 0 pkts
   }
   return MOZQUIC_OK;
 }
@@ -1198,7 +1262,7 @@ uint32_t
 MozQuic::Flush()
 {
   // todo mvp obviously have to deal with more than this :)
-  return FlushStream0();
+  return FlushStream0(false);
 }
 
 uint32_t
@@ -1209,7 +1273,7 @@ MozQuic::DoWriter(std::unique_ptr<MozQuicStreamChunk> &p)
   // transmitted after prioritization by flush()
 
   // obviously have to deal with more than this :)
-  assert (p->mTransmitKeyPhase == QuicKeyPhaseUnprotected);
+  assert (p->mTransmitKeyPhase == keyPhaseUnprotected);
 
   mUnWritten.push_back(std::move(p));
 

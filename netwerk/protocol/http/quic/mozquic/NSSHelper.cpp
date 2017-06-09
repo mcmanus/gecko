@@ -12,6 +12,7 @@
 #include "cert.h"
 #include "certdb.h"
 #include "pk11pub.h"
+#include "secmod.h"
 #include "assert.h"
 
 namespace mozquic {
@@ -45,18 +46,46 @@ void
 NSSHelper::HandshakeCallback(PRFileDesc *fd, void *client_data)
 {
   fprintf(stderr,"handshakecallback\n");
+  unsigned int bufLen = 0;
+  unsigned char buf[256];
+  SSLNextProtoState state;
+  bool didHandshakeFail = false;
+
+  if (SSL_GetNextProto(fd, &state, buf, &bufLen, 256) != SECSuccess ||
+      bufLen != strlen(mozquic_alpn) ||
+      memcmp(mozquic_alpn, buf, bufLen)) {
+    didHandshakeFail = true;
+  }
+
   while (fd && (fd->identity != nssHelperIdentity)) {
     fd = fd->lower;
   }
   assert(fd);
   NSSHelper *self = reinterpret_cast<NSSHelper *>(fd->secret);
   self->mHandshakeComplete = true;
+  if (didHandshakeFail) {
+    self->mHandshakeFailed = true;
+  }
 }
 
+SECStatus
+NSSHelper::BadCertificate(void *client_data, PRFileDesc *fd)
+{
+  fprintf(stderr,"badcertificate\n");
+  while (fd && (fd->identity != nssHelperIdentity)) {
+    fd = fd->lower;
+  }
+  assert(fd);
+  NSSHelper *self = reinterpret_cast<NSSHelper *>(fd->secret);
+  return self->mQuicSession->IgnorePKI() ? SECSuccess : SECFailure;
+}
+
+// server version
 NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
   : mQuicSession(quicSession)
-  , mServerReady(false)
+  , mNSSReady(false)
   , mHandshakeComplete(false)
+  , mHandshakeFailed(false)
 {
   PRNetAddr addr;
   memset(&addr,0,sizeof(addr));
@@ -82,7 +111,7 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
   SSL_VersionRangeSet(mFD, &range);
   SSL_HandshakeCallback(mFD, HandshakeCallback, nullptr);
 
-  mServerReady = true;
+  mNSSReady = true;
   
   unsigned char buffer[256];
   assert(strlen(mozquic_alpn) < 256);
@@ -90,7 +119,7 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
   memcpy(buffer + 1, mozquic_alpn, strlen(mozquic_alpn));
   if (SSL_SetNextProtoNego(mFD,
                            buffer, strlen(mozquic_alpn) + 1) != SECSuccess) {
-    mServerReady = false;
+    mNSSReady = false;
   }
 
   CERTCertificate *cert =
@@ -99,8 +128,8 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
     SECKEYPrivateKey *key = PK11_FindKeyByAnyCert(cert, nullptr);
     if (key) {
       SECStatus rv = SSL_ConfigServerCert(mFD, cert, key, nullptr, 0);
-      if (mServerReady && rv == SECSuccess) {
-        mServerReady = true;
+      if (mNSSReady && rv == SECSuccess) {
+        mNSSReady = true;
       }
     }
   }
@@ -112,6 +141,57 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
 
 }
 
+// client version
+NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey, bool unused)
+  : mQuicSession(quicSession)
+  , mNSSReady(false)
+  , mHandshakeComplete(false)
+  , mHandshakeFailed(false)
+{
+  // todo most of this can be put in an init routine shared between c/s
+
+  mFD = PR_CreateIOLayerStub(nssHelperIdentity, &nssHelperMethods);
+  mFD->secret = (struct PRFilePrivate *)this;
+  mFD = SSL_ImportFD(nullptr, mFD);
+  SSL_OptionSet(mFD, SSL_SECURITY, true);
+  SSL_OptionSet(mFD, SSL_HANDSHAKE_AS_CLIENT, true);
+  SSL_OptionSet(mFD, SSL_HANDSHAKE_AS_SERVER, false);
+  SSL_OptionSet(mFD, SSL_ENABLE_RENEGOTIATION, SSL_RENEGOTIATE_NEVER);
+  SSL_OptionSet(mFD, SSL_NO_CACHE, true); // todo why does this cause fails?
+  SSL_OptionSet(mFD, SSL_ENABLE_SESSION_TICKETS, true);
+  SSL_OptionSet(mFD, SSL_REQUEST_CERTIFICATE, false);
+  SSL_OptionSet(mFD, SSL_REQUIRE_CERTIFICATE, SSL_REQUIRE_NEVER);
+
+  SSL_OptionSet(mFD, SSL_ENABLE_NPN, false);
+  SSL_OptionSet(mFD, SSL_ENABLE_ALPN, true);
+
+  SSLVersionRange range = {SSL_LIBRARY_VERSION_TLS_1_3,
+                           SSL_LIBRARY_VERSION_TLS_1_3};
+  SSL_VersionRangeSet(mFD, &range);
+  SSL_HandshakeCallback(mFD, HandshakeCallback, nullptr);
+  SSL_BadCertHook(mFD, BadCertificate, nullptr);
+
+  char module_name[] = "library=libnssckbi.so name=\"Root Certs\"";
+  SECMODModule *module = SECMOD_LoadUserModule(module_name, NULL, PR_FALSE);
+
+  mNSSReady = true;
+  
+  unsigned char buffer[256];
+  assert(strlen(mozquic_alpn) < 256);
+  buffer[0] = strlen(mozquic_alpn);
+  memcpy(buffer + 1, mozquic_alpn, strlen(mozquic_alpn));
+  if (SSL_SetNextProtoNego(mFD,
+                           buffer, strlen(mozquic_alpn) + 1) != SECSuccess) {
+    mNSSReady = false;
+  }
+
+  SSL_SetURL(mFD, originKey);
+    
+  PRNetAddr addr;
+  memset(&addr,0,sizeof(addr));
+  addr.raw.family = PR_AF_INET;
+  PR_Connect(mFD, &addr, 0);
+}
 
 int
 NSSHelper::nssHelperWrite(PRFileDesc *fd, const void *aBuf, int32_t aAmount)
@@ -173,15 +253,19 @@ NSSHelper::nssHelperConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTim
 uint32_t
 NSSHelper::DriveHandshake()
 {
+  if (mHandshakeFailed) {
+    return MOZQUIC_ERR_CRYPTO;
+  }
   if (mHandshakeComplete) {
     return MOZQUIC_OK;
   }
-  assert(mServerReady);// todo
-  if (!mServerReady) {
+  assert(mNSSReady);// todo
+  if (!mNSSReady) {
     return MOZQUIC_ERR_GENERAL;
   }
   char data[4096];
 
+  SSL_ForceHandshake(mFD);
   int32_t rd = PR_Read(mFD, data, 4096);
   if (mHandshakeComplete || (rd > 0)) {
     return MOZQUIC_OK;
@@ -193,6 +277,7 @@ NSSHelper::DriveHandshake()
   if (PR_GetError() == PR_WOULD_BLOCK_ERROR) {
     return MOZQUIC_OK;
   }
+
   return MOZQUIC_ERR_GENERAL;
 }
 

@@ -17,15 +17,6 @@ to mozquic_nss_config(). It contains a NSS database with a cert
 and key for foo.example.com that is signed by a CA defined by CA.cert.der.
 #endif
 
-static int accept_new_connection(void *closure, mozquic_connection_t *nc)
-{
-  if (only_child) {
-    return MOZQUIC_ERR_GENERAL;
-  }
-  only_child = nc;
-  return MOZQUIC_OK;
-}
-
 int main()
 {
   struct mozquic_config_t config;
@@ -42,14 +33,25 @@ int main()
   config.originPort = 8443;
   config.handleIO = 0; // todo mvp
 
+  config.ignorePKI = 0; 
+  config.greaseVersionNegotiation = 1;
+
   mozquic_new_connection(&c, &config);
-  mozquic_start_server(c, accept_new_connection);
+  mozquic_start_connection(c);
+
+  uint32_t i=0;
   do {
+    if (!(i++ & 0xf)) {
+      fprintf(stderr,".");
+      fflush(stderr);
+    }
     usleep (1000); // this is for handleio todo
-    mozquic_IO(c);
-    if (only_child) {
-      mozquic_IO(only_child); // todo mvp do we need this?
+    uint32_t code = mozquic_IO(c);
+    if (code != MOZQUIC_OK) {
+      fprintf(stderr,"IO reported failure\n");
+      break;
     }
   } while (1);
-  
+  mozquic_destroy_connection(c);
+  return 0;
 }

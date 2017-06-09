@@ -11,23 +11,9 @@
 */
 #include <stdint.h>
 
-#ifndef mozquic_socket_typedef
-/* socket typedef */
-#ifdef WIN32
-typedef SOCKET mozquic_socket_t;
-#define MOZQUIC_SOCKET_BAD INVALID_SOCKET
-#else
-typedef int mozquic_socket_t;
-#define MOZQUIC_SOCKET_BAD -1
-#endif
-#define mozquic_socket_typedef
-#endif /* mozquic_socket_typedef */
-
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-  const char mozquic_alpn[] = "hq-03";
 
   enum {
     MOZQUIC_OK           = 0,
@@ -49,6 +35,7 @@ extern "C" {
     void *closure;
 
     unsigned int greaseVersionNegotiation; // flag
+    unsigned int ignorePKI; // flag
 
     void (*logging_callback)(void *, char *); // todo va arg
     int  (*send_callback)(void *, unsigned char *, uint32_t len);
@@ -75,6 +62,13 @@ extern "C" {
   int mozquic_IO(mozquic_connection_t *inSession);
   // todo need one to get the pollset
 
+  /* socket typedef */
+#ifdef WIN32
+  typedef SOCKET mozquic_socket_t;
+#else
+  typedef int mozquic_socket_t;
+#endif
+  
   mozquic_socket_t mozquic_osfd(mozquic_connection_t *inSession);
   void mozquic_setosfd(mozquic_connection_t *inSession, mozquic_socket_t fd);
 

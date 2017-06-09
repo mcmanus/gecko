@@ -12,12 +12,12 @@
 
 namespace mozquic {
 
-enum mozquicKeyPhase {
-  QuicKeyPhaseUnknown,
-  QuicKeyPhaseUnprotected,
-  QuicKeyPhase0Rtt,
-  QuicKeyPhase1Rtt,
-  QuicKeyPhaseFull,
+enum keyPhase {
+  keyPhaseUnknown,
+  keyPhaseUnprotected,
+  keyPhase0Rtt,
+  keyPhase1Rtt,
+  keyPhaseFull,
 };
 
 class MozQuicStreamChunk
@@ -42,20 +42,21 @@ public:
   uint64_t mTransmitTime;
   uint16_t mTransmitCount;
   bool     mRetransmitted; // no data after retransmitted
-  enum mozquicKeyPhase mTransmitKeyPhase;
+  enum keyPhase mTransmitKeyPhase;
 };
 
 class MozQuicStreamAck
 {
 public:
-  MozQuicStreamAck(uint64_t num, uint64_t rtime)
-    : mPacketNumber(num), mExtra(0), mReceiveTime(rtime) {}
+MozQuicStreamAck(uint64_t num, uint64_t rtime, enum keyPhase kp)
+  : mPacketNumber(num), mExtra(0), mReceiveTime(rtime), mPhase (kp) {}
 
   // num=10, mExtra=3 means we are acking 10, 9, 8, 7
   // and ReceiveTime applies to 10
   uint64_t mPacketNumber;
   uint64_t mExtra;
   uint64_t mReceiveTime;
+  enum keyPhase mPhase;
 };
 
 class MozQuicWriter 
