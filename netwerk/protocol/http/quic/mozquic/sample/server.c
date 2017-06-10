@@ -20,7 +20,7 @@ and key for foo.example.com that is signed by a CA defined by CA.cert.der.
 static int accept_new_connection(void *closure, mozquic_connection_t *nc)
 {
   if (only_child) {
-    return MOZQUIC_ERR_GENERAL;
+    mozquic_destroy_connection(only_child);
   }
   only_child = nc;
   return MOZQUIC_OK;
