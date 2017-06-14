@@ -53,11 +53,12 @@ MozQuicStreamAck(uint64_t num, uint64_t rtime, enum keyPhase kp)
 
   // num=10, mExtra=3 means we are acking 10, 9, 8, 7
   // and ReceiveTime applies to 10
-  uint64_t mPacketNumber;
+  uint64_t mPacketNumber; // being ACKd
   uint64_t mExtra;
   uint64_t mReceiveTime;
   uint64_t mTransmitTime;
   enum keyPhase mPhase;
+  uint64_t mPacketNumberOfAck; // of ACK itself
 };
 
 class MozQuicWriter 

@@ -548,27 +548,37 @@ MozQuic::MaybeSendAck()
 
 // todo after handshake we need to do a little more than piggyback
 // i.e. sometimes ack needs to fly solo
- uint32_t
-MozQuic::AckPiggyBack(unsigned char *pkt, uint32_t avail, keyPhase kp, uint32_t &used)
+// todo this will work generically other than
+// a] assuming 32 bit largest and
+// b] always chosing 16 bit run len (though we can live with that)
+//
+// To clarify.. an ack frame for 15,14,13,11,10,8,2,1
+// numblocks=3
+// largest=15, first ack block length = 2 // 15, 14, 13
+// ack block 1 = {1, 2} // 11, 10
+// ack block 2 = {1, 1} // 8
+// ack block 3 = {5, 2} / 2, 1
+
+uint32_t
+MozQuic::AckPiggyBack(unsigned char *pkt, uint64_t pktNumOfAck, uint32_t avail, keyPhase kp, uint32_t &used)
 {
   used = 0;
 
   // build as many ack frames as will fit
   if (kp == keyPhaseUnprotected) {
-    // always use 32 bits and no timestamps and never
-    // put more than 1 block in a frame. keep it simple.
+    // use 32bit pkt no, 16bit run length
+    // for protected, probably need to be more clever
 
+    bool newFrame = true;
+    uint8_t *numBlocks = nullptr;
+    uint64_t lowAcked;
     while (!mUnWrittenAcks.empty()) {
       // list  ordered as 7/2, 2/1.. (with gap @4 @3)
       // i.e. highest num first
-      if (avail < 10) {
+      if (avail < (newFrame ? 11 : 3)) {
         return MOZQUIC_OK;
       }
-      pkt[0] = 0xa9; // ack with 32 bit num and 16 bit extra no ts
-      pkt[1] = 0;
-
       auto iter = mUnWrittenAcks.rbegin();
-      
       if (iter->mPacketNumber > 0xffffffff) {
         // > 32bit restriction spcific to handshake packets as initial is 31bit rand
         mUnWrittenAcks.pop_back();
@@ -576,22 +586,56 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint32_t avail, keyPhase kp, uint32_t 
         RaiseError(MOZQUIC_ERR_GENERAL, (char *)"unexpected packet number");
         return MOZQUIC_ERR_GENERAL;
       }
-
-      uint32_t packet32 = iter->mPacketNumber;
-      packet32 = htonl(packet32);
-      memcpy(pkt + 2, &packet32, 4);
-      // timestamp is microseconds (10^-6) as 16 bit fixed point #
-      uint64_t delay64 = (Timestamp() - iter->mReceiveTime) * 1000;
-      uint16_t delay = htons(ufloat16_encode(delay64));
-      memcpy(pkt + 6, &delay, 2);
-      uint16_t extra = htons(iter->mExtra);
-      memcpy(pkt + 8, &extra, 2);
-      pkt += 10;
-      used += 10;
-      avail -= 10;
+      if (newFrame) {
+        pkt[0] = 0xb9; // ack with 32 bit num and 16 bit run encoding and numblocks
+        numBlocks = pkt + 1;
+        *numBlocks = 0;
+        pkt[2] = 0; // no TS
+        uint32_t packet32 = iter->mPacketNumber;
+        packet32 = htonl(packet32);
+        memcpy(pkt + 3, &packet32, 4);
+        // timestamp is microseconds (10^-6) as 16 bit fixed point #
+        uint64_t delay64 = (Timestamp() - iter->mReceiveTime) * 1000;
+        uint16_t delay = htons(ufloat16_encode(delay64));
+        memcpy(pkt + 7, &delay, 2);
+        uint16_t extra = htons(iter->mExtra);
+        memcpy(pkt + 9, &extra, 2); // first ack block len
+        lowAcked = iter->mPacketNumber - iter->mExtra;
+        pkt += 11;
+        used += 11;
+        avail -= 11;
+      } else {
+        assert(lowAcked > iter->mPacketNumber);
+        uint64_t gap = lowAcked - iter->mPacketNumber - 1;
+        uint64_t needed = (gap + 254) / 255 * 3;
+        if (needed < avail) {
+          break; // dont end frame with 0s
+        }
+        *numBlocks++;
+        if (needed > 3) {
+          pkt[0] = 255; // empty block
+          pkt[1] = 0;
+          pkt[2] = 0;
+          lowAcked -= 255;
+        } else {
+          assert(gap <= 255);
+          pkt[0] = gap;
+          uint16_t ackBlockLen = htons(iter->mExtra + 1);
+          memcpy(pkt, &ackBlockLen, 2);
+          lowAcked -= (gap + iter->mExtra + 1);
+        }
+        pkt += 3;
+        used += 3;
+        avail -= 3;
+      }
+      
       iter->mTransmitTime = Timestamp();
-      mUnAckedAcks.insert(mUnAckedAcks.begin(), *iter);
+      iter->mPacketNumberOfAck = pktNumOfAck;
+      mUnAckedAcks.insert(mUnAckedAcks.end(), *iter);
       mUnWrittenAcks.pop_back();
+      if (*numBlocks == 0xff) {
+        break;
+      }
     };
     return MOZQUIC_OK;
   }
@@ -1220,7 +1264,7 @@ MozQuic::FlushStream0(bool forceAck)
   } else {
     uint32_t room = endpkt - framePtr - 8; // the last 8 are for checksum
     uint32_t used;
-    if (AckPiggyBack(framePtr, room, keyPhaseUnprotected, used) == MOZQUIC_OK) {
+    if (AckPiggyBack(framePtr, mNextPacketNumber, room, keyPhaseUnprotected, used) == MOZQUIC_OK) {
       framePtr += used;
     }
     finalLen = ((framePtr - pkt) + 8);

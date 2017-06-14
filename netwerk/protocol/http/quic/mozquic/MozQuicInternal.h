@@ -108,7 +108,7 @@ private:
   uint32_t Transmit(unsigned char *, uint32_t len, struct sockaddr_in *peer);
   uint32_t RetransmitTimer();
   void Acknowledge(unsigned char *, uint32_t len, LongHeaderData &);
-  uint32_t AckPiggyBack(unsigned char *pkt, uint32_t avail, keyPhase kp, uint32_t &used);
+  uint32_t AckPiggyBack(unsigned char *pkt, uint64_t pktNumber, uint32_t avail, keyPhase kp, uint32_t &used);
   uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen, struct sockaddr_in *peer);
   int ProcessServerCleartext(unsigned char *, uint32_t size, LongHeaderData &);
   int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer,
@@ -170,10 +170,10 @@ private:
   std::list<std::unique_ptr<MozQuicStreamChunk>> mUnWrittenData;
   std::list<std::unique_ptr<MozQuicStreamChunk>> mUnAckedData;
 
-  // ack lists e.g. ordered as 7/2, 2/1.. (with gap @4 @3)
-  // i.e. highest num first
+  // unwritten acks ordered {1,2,5,6,7} as 7/2, 2/1 (biggest at head)
   // todo these should be pts to make copying them cheaper
   std::list<MozQuicStreamAck>                    mUnWrittenAcks;
+  // unacked ordered by packet no they were sent on (lowest at head)
   std::list<MozQuicStreamAck>                    mUnAckedAcks;
 
   // need other frame 2 list
