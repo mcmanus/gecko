@@ -172,6 +172,7 @@ private:
 
   // ack lists e.g. ordered as 7/2, 2/1.. (with gap @4 @3)
   // i.e. highest num first
+  // todo these should be pts to make copying them cheaper
   std::list<MozQuicStreamAck>                    mUnWrittenAcks;
   std::list<MozQuicStreamAck>                    mUnAckedAcks;
 

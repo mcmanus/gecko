@@ -39,7 +39,7 @@ public:
 
   // when unacked these are set
   uint64_t mPacketNumber;
-  uint64_t mTransmitTime;
+  uint64_t mTransmitTime; // todo.. hmm if this gets queued for any cc/fc reason (same for ack)
   uint16_t mTransmitCount;
   bool     mRetransmitted; // no data after retransmitted
   enum keyPhase mTransmitKeyPhase;
@@ -49,13 +49,14 @@ class MozQuicStreamAck
 {
 public:
 MozQuicStreamAck(uint64_t num, uint64_t rtime, enum keyPhase kp)
-  : mPacketNumber(num), mExtra(0), mReceiveTime(rtime), mPhase (kp) {}
+  : mPacketNumber(num), mExtra(0), mReceiveTime(rtime), mTransmitTime(0), mPhase (kp) {}
 
   // num=10, mExtra=3 means we are acking 10, 9, 8, 7
   // and ReceiveTime applies to 10
   uint64_t mPacketNumber;
   uint64_t mExtra;
   uint64_t mReceiveTime;
+  uint64_t mTransmitTime;
   enum keyPhase mPhase;
 };
 

@@ -559,6 +559,8 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint32_t avail, keyPhase kp, uint32_t 
     // put more than 1 block in a frame. keep it simple.
 
     while (!mUnWrittenAcks.empty()) {
+      // list  ordered as 7/2, 2/1.. (with gap @4 @3)
+      // i.e. highest num first
       if (avail < 10) {
         return MOZQUIC_OK;
       }
@@ -587,9 +589,9 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint32_t avail, keyPhase kp, uint32_t 
       pkt += 10;
       used += 10;
       avail -= 10;
+      iter->mTransmitTime = Timestamp();
+      mUnAckedAcks.insert(mUnAckedAcks.begin(), *iter);
       mUnWrittenAcks.pop_back();
-      // todo switch to erase
-      // todo prm this needs to move to unacked or equiv [1] munackedacks
     };
     return MOZQUIC_OK;
   }
