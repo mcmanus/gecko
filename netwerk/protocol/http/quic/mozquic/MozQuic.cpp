@@ -485,20 +485,18 @@ MozQuic::Log(char *msg)
 void
 MozQuic::AckScoreboard(uint64_t packetNumber, enum keyPhase kp)
 {
-  // scoreboard is ordered like this.. (with gap @4 @3)
-  // 7/2, 2/1
   // todo out of order packets should be coalesced
 
   // todo if this list is too long, we can stop doing this according to
   // the spec
 
-  if (mAckScoreboard.empty()) {
-    mAckScoreboard.emplace_front(packetNumber, Timestamp(), kp);
+  if (mUnWrittenAcks.empty()) {
+    mUnWrittenAcks.emplace_front(packetNumber, Timestamp(), kp);
     return;
   }
 
-  auto iter=mAckScoreboard.begin();
-  for (; iter != mAckScoreboard.end(); ++iter) {
+  auto iter=mUnWrittenAcks.begin();
+  for (; iter != mUnWrittenAcks.end(); ++iter) {
     if ((iter->mPacketNumber + 1) == packetNumber) {
       // the common case is to just adjust this counter
       // in the first element
@@ -514,13 +512,13 @@ MozQuic::AckScoreboard(uint64_t packetNumber, enum keyPhase kp)
       break;
     }
   }
-  mAckScoreboard.emplace(iter, packetNumber, Timestamp(), kp);
+  mUnWrittenAcks.emplace(iter, packetNumber, Timestamp(), kp);
 }
 
 void
 MozQuic::MaybeSendAck()
 {
-  if (mAckScoreboard.empty()) {
+  if (mUnWrittenAcks.empty()) {
     return;
   }
 
@@ -533,15 +531,15 @@ MozQuic::MaybeSendAck()
   // todo protected packets
 
   bool ackedUnprotected = false;
-  auto iter = mAckScoreboard.begin();
-  for (; iter != mAckScoreboard.end(); ++iter) {
+  auto iter = mUnWrittenAcks.begin();
+  for (; iter != mUnWrittenAcks.end(); ++iter) {
     fprintf(stderr,"ASKED TO SEND ACK FOR %lx %d\n",
             iter->mPacketNumber, iter->mPhase);
     if (iter->mPhase == keyPhaseUnprotected) {
       assert(!ackedUnprotected);
       ackedUnprotected = true;
       FlushStream0(true);
-      iter = mAckScoreboard.begin(); // re-entrant concerns
+      iter = mUnWrittenAcks.begin(); // re-entrant concerns
     } else {
       assert(false); // todo
     }
@@ -560,18 +558,19 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint32_t avail, keyPhase kp, uint32_t 
     // always use 32 bits and no timestamps and never
     // put more than 1 block in a frame. keep it simple.
 
-    while (!mAckScoreboard.empty()) {
+    while (!mUnWrittenAcks.empty()) {
       if (avail < 10) {
         return MOZQUIC_OK;
       }
       pkt[0] = 0xa9; // ack with 32 bit num and 16 bit extra no ts
       pkt[1] = 0;
 
-      auto iter = mAckScoreboard.rbegin();
+      auto iter = mUnWrittenAcks.rbegin();
       
       if (iter->mPacketNumber > 0xffffffff) {
-        // > 32bit
-        mAckScoreboard.pop_back();
+        // > 32bit restriction spcific to handshake packets as initial is 31bit rand
+        mUnWrittenAcks.pop_back();
+        assert(false);
         RaiseError(MOZQUIC_ERR_GENERAL, (char *)"unexpected packet number");
         return MOZQUIC_ERR_GENERAL;
       }
@@ -588,7 +587,9 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint32_t avail, keyPhase kp, uint32_t 
       pkt += 10;
       used += 10;
       avail -= 10;
-      mAckScoreboard.pop_back();
+      mUnWrittenAcks.pop_back();
+      // todo switch to erase
+      // todo prm this needs to move to unacked or equiv [1] munackedacks
     };
     return MOZQUIC_OK;
   }
@@ -790,10 +791,10 @@ MozQuic::ProcessVersionNegotiation(unsigned char *pkt, uint32_t pktSize, LongHea
   // essentially this is an ack of client_initial using the packet #
   // in the header as the ack, so need to find that on the unacked list
   std::unique_ptr<MozQuicStreamChunk> tmp(nullptr);
-  for (auto i = mUnAcked.begin(); i != mUnAcked.end(); i++) {
+  for (auto i = mUnAckedData.begin(); i != mUnAckedData.end(); i++) {
     if ((*i)->mPacketNumber == header.mPacketNumber) {
       tmp = std::unique_ptr<MozQuicStreamChunk>(new MozQuicStreamChunk(*(*i)));
-      mUnAcked.clear();
+      mUnAckedData.clear();
       break;
     }
   }
@@ -865,7 +866,7 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
     fprintf(stderr,"ACK RECVD FOR %lX -> %lX\n",
             largestAcked - extra, largestAcked);
     // form a stack here so we can process them starting at the
-    // lowest packet number, which is how mUnAcked is ordered and
+    // lowest packet number, which is how mUnAckedData is ordered and
     // do it all in one pass
     assert(iters < 257);
     ackStack[iters] =
@@ -881,21 +882,21 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
     framePtr++;
   } while (1);
 
-  auto i = mUnAcked.begin();
+  auto i = mUnAckedData.begin();
   for (; iters > 0; --iters) {
     uint64_t seeking = ackStack[iters - 1].first;
     uint64_t stopSeeking = seeking + ackStack[iters - 1].second;
     for (; seeking < stopSeeking; seeking++) {
 
       // skip over stuff that is too low
-      for (; (i != mUnAcked.end()) && ((*i)->mPacketNumber < seeking); i++);
+      for (; (i != mUnAckedData.end()) && ((*i)->mPacketNumber < seeking); i++);
 
-      if ((i == mUnAcked.end()) || ((*i)->mPacketNumber > seeking)) {
+      if ((i == mUnAckedData.end()) || ((*i)->mPacketNumber > seeking)) {
         fprintf(stderr,"ACK'd packet not found for %lX\n", seeking);
       } else {
         assert ((*i)->mPacketNumber == seeking);
         fprintf(stderr,"ACK'd packet found for %lX\n", seeking);
-        i = mUnAcked.erase(i);
+        i = mUnAckedData.erase(i);
       }
     }
   }
@@ -1117,7 +1118,7 @@ MozQuic::ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize, LongHeader
 uint32_t
 MozQuic::FlushStream0(bool forceAck)
 {
-  if (mUnWritten.empty() && !forceAck) {
+  if (mUnWrittenData.empty() && !forceAck) {
     return MOZQUIC_OK;
   }
       
@@ -1145,8 +1146,8 @@ MozQuic::FlushStream0(bool forceAck)
 
   unsigned char *framePtr = pkt + 17;
 
-  auto iter = mUnWritten.begin();
-  while (iter != mUnWritten.end()) {
+  auto iter = mUnWrittenData.begin();
+  while (iter != mUnWrittenData.end()) {
     if ((*iter)->mStreamID == 0) {
       uint32_t room = endpkt - framePtr - 8; // the last 8 are for checksum
       if (room < 9) {
@@ -1187,7 +1188,7 @@ MozQuic::FlushStream0(bool forceAck)
         tmp16 = htons(tmp16);
         memcpy(framePtr - 7, &tmp16, 2);
         auto iterReg = iter++;
-        mUnWritten.insert(iter, std::move(tmp));
+        mUnWrittenData.insert(iter, std::move(tmp));
         iter = iterReg;
       }
       assert(room >= (*iter)->mLen);
@@ -1202,8 +1203,8 @@ MozQuic::FlushStream0(bool forceAck)
       
       // move it to the unacked list
       std::unique_ptr<MozQuicStreamChunk> x(std::move(*iter));
-      mUnAcked.push_back(std::move(x));
-      iter = mUnWritten.erase(iter);
+      mUnAckedData.push_back(std::move(x));
+      iter = mUnWrittenData.erase(iter);
     } else {
       iter++;
     }
@@ -1243,7 +1244,7 @@ MozQuic::FlushStream0(bool forceAck)
     // each member of the list needs to 
   }
 
-  if (iter != mUnWritten.end()) {
+  if (iter != mUnWrittenData.end()) {
     return FlushStream0(false); // todo mvp this is broken with non stream 0 pkts
   }
   return MOZQUIC_OK;
@@ -1275,7 +1276,7 @@ MozQuic::DoWriter(std::unique_ptr<MozQuicStreamChunk> &p)
   // obviously have to deal with more than this :)
   assert (p->mTransmitKeyPhase == keyPhaseUnprotected);
 
-  mUnWritten.push_back(std::move(p));
+  mUnWrittenData.push_back(std::move(p));
 
   return MOZQUIC_OK;
 }
@@ -1321,7 +1322,7 @@ MozQuic::NSSOutput(const void *buf, int32_t amount)
 uint32_t
 MozQuic::RetransmitTimer()
 {
-  if (mUnAcked.empty()) {
+  if (mUnAckedData.empty()) {
     return MOZQUIC_OK;
   }
 
@@ -1330,7 +1331,7 @@ MozQuic::RetransmitTimer()
   uint64_t now = Timestamp();
   uint64_t discardEpoch = now - kForgetUnAckedThresh;
 
-  for (auto i = mUnAcked.begin(); i != mUnAcked.end(); i++) {
+  for (auto i = mUnAckedData.begin(); i != mUnAckedData.end(); i++) {
 
     // just a linear backoff for now
     uint64_t retransEpoch =
@@ -1344,7 +1345,7 @@ MozQuic::RetransmitTimer()
       fprintf(stderr,"old unacked packet forgotten %lX\n",
               (*i)->mPacketNumber);
       assert(!(*i)->mData);
-      i = mUnAcked.erase(i);
+      i = mUnAckedData.erase(i);
     } else if (!(*i)->mRetransmitted) {
       assert((*i)->mData);
       fprintf(stderr,"data for packet %lX retransmitted\n",

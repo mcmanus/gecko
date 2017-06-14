@@ -49,7 +49,7 @@ enum connectionState
 
   CLIENT_STATE_BREAK,
   SERVER_STATE_BREAK,
-  
+ 
   SERVER_STATE_LISTEN,
   SERVER_STATE_0RTT,
   SERVER_STATE_1RTT,
@@ -67,7 +67,7 @@ public:
 
   static const uint32_t kRetransmitThresh = 300;
   static const uint32_t kForgetUnAckedThresh = 4000; // ms
-  
+ 
   MozQuic(bool handleIO);
   MozQuic();
   ~MozQuic();
@@ -101,7 +101,7 @@ private:
   class FrameHeaderData;
 
   void RaiseError(uint32_t err, char *reason);
-  
+
   void AckScoreboard(uint64_t num, enum keyPhase kp);
   void MaybeSendAck();
 
@@ -163,15 +163,19 @@ private:
   int  (*mHandshakeInput)(mozquic_connection_t *, unsigned char *, uint32_t len);
   int  (*mErrorCB)(mozquic_connection_t *, uint32_t, char *);
   int  (*mNewConnCB)(void *, mozquic_connection_t *);
-  
+ 
   std::unique_ptr<MozQuicStreamPair> mStream0;
   std::unique_ptr<NSSHelper>         mNSSHelper;
 
-  // todo this is suboptimal
-  std::list<std::unique_ptr<MozQuicStreamChunk>> mUnWritten;
-  std::list<std::unique_ptr<MozQuicStreamChunk>> mUnAcked;
-  std::list<MozQuicStreamAck>                    mAckScoreboard;
+  std::list<std::unique_ptr<MozQuicStreamChunk>> mUnWrittenData;
+  std::list<std::unique_ptr<MozQuicStreamChunk>> mUnAckedData;
 
+  // ack lists e.g. ordered as 7/2, 2/1.. (with gap @4 @3)
+  // i.e. highest num first
+  std::list<MozQuicStreamAck>                    mUnWrittenAcks;
+  std::list<MozQuicStreamAck>                    mUnAckedAcks;
+
+  // need other frame 2 list
 public: // callbacks from nsshelper
   int32_t NSSInput(void *buf, int32_t amount);
   int32_t NSSOutput(const void *buf, int32_t amount);
@@ -197,7 +201,7 @@ public:
     FRAME_MASK_STREAM            = 0xc0,
     FRAME_TYPE_STREAM            = 0xc0, // 11.. ....
   };
-  
+ 
   enum FrameTypeLengths {
     FRAME_TYPE_PADDING_LENGTH           = 1,
     FRAME_TYPE_RST_STREAM_LENGTH        = 17,
@@ -235,7 +239,7 @@ private:
     uint64_t mPacketNumber;
     uint32_t mVersion;
   };
-  
+
   class FrameHeaderData
   {
   public:
