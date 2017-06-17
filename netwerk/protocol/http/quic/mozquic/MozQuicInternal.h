@@ -16,8 +16,6 @@
 
 namespace mozquic {
 
-const char mozquic_alpn[] = "hq-03";
-
 /* socket typedef */
 #ifdef WIN32
 #define MOZQUIC_SOCKET_BAD INVALID_SOCKET

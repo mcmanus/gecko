@@ -15,6 +15,8 @@
 extern "C" {
 #endif
 
+  const char mozquic_alpn[] = "hq-03";
+
   enum {
     MOZQUIC_OK           = 0,
     MOZQUIC_ERR_GENERAL  = 1,
