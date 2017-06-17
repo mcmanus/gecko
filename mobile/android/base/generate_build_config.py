@@ -46,13 +46,13 @@ def _defines():
                 'MOZ_ANDROID_GCM',
                 'MOZ_ANDROID_MLS_STUMBLER',
                 'MOZ_ANDROID_MMA',
+                'MOZ_ANDROID_MOZILLA_ONLINE',
                 'MOZ_LEANPLUM_SDK_KEY',
                 'MOZ_LEANPLUM_SDK_CLIENTID',
                 'MOZ_ANDROID_SEARCH_ACTIVITY',
                 'MOZ_CRASHREPORTER',
                 'MOZ_DEBUG',
                 'MOZ_INSTALL_TRACKING',
-                'MOZ_LOCALE_SWITCHER',
                 'MOZ_NATIVE_DEVICES',
                 'MOZ_SWITCHBOARD'):
         if CONFIG[var]:

@@ -63,7 +63,7 @@
 /******/ 	__webpack_require__.p = "";
 /******/
 /******/ 	// Load entry module and return exports
-/******/ 	return __webpack_require__(__webpack_require__.s = 15);
+/******/ 	return __webpack_require__(__webpack_require__.s = 17);
 /******/ })
 /************************************************************************/
 /******/ ([
@@ -97,7 +97,7 @@ const globalImportContext = typeof Window === "undefined" ? BACKGROUND_PROCESS :
 // Export for tests
 
 
-const actionTypes = ["BLOCK_URL", "BOOKMARK_URL", "DELETE_BOOKMARK_BY_ID", "DELETE_HISTORY_URL", "INIT", "LOCALE_UPDATED", "NEW_TAB_INITIAL_STATE", "NEW_TAB_LOAD", "NEW_TAB_UNLOAD", "NEW_TAB_VISIBLE", "OPEN_NEW_WINDOW", "OPEN_PRIVATE_WINDOW", "PERFORM_SEARCH", "PLACES_BOOKMARK_ADDED", "PLACES_BOOKMARK_CHANGED", "PLACES_BOOKMARK_REMOVED", "PLACES_HISTORY_CLEARED", "PLACES_LINK_BLOCKED", "PLACES_LINK_DELETED", "SCREENSHOT_UPDATED", "SEARCH_STATE_UPDATED", "TELEMETRY_PERFORMANCE_EVENT", "TELEMETRY_UNDESIRED_EVENT", "TELEMETRY_USER_EVENT", "TOP_SITES_UPDATED", "UNINIT"
+const actionTypes = ["BLOCK_URL", "BOOKMARK_URL", "DELETE_BOOKMARK_BY_ID", "DELETE_HISTORY_URL", "INIT", "LOCALE_UPDATED", "NEW_TAB_INITIAL_STATE", "NEW_TAB_LOAD", "NEW_TAB_UNLOAD", "NEW_TAB_VISIBLE", "OPEN_NEW_WINDOW", "OPEN_PRIVATE_WINDOW", "PLACES_BOOKMARK_ADDED", "PLACES_BOOKMARK_CHANGED", "PLACES_BOOKMARK_REMOVED", "PLACES_HISTORY_CLEARED", "PLACES_LINK_BLOCKED", "PLACES_LINK_DELETED", "PREFS_INITIAL_VALUES", "PREF_CHANGED", "SCREENSHOT_UPDATED", "SET_PREF", "TELEMETRY_PERFORMANCE_EVENT", "TELEMETRY_UNDESIRED_EVENT", "TELEMETRY_USER_EVENT", "TOP_SITES_UPDATED", "UNINIT"
 // The line below creates an object like this:
 // {
 //   INIT: "INIT",
@@ -222,13 +222,21 @@ function PerfEvent(data) {
   return importContext === UI_CODE ? SendToMain(action) : action;
 }
 
+function SetPref(name, value) {
+  let importContext = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : globalImportContext;
+
+  const action = { type: actionTypes.SET_PREF, data: { name, value } };
+  return importContext === UI_CODE ? SendToMain(action) : action;
+}
+
 var actionCreators = {
   BroadcastToContent,
   UserEvent,
   UndesiredEvent,
   PerfEvent,
   SendToContent,
-  SendToMain
+  SendToMain,
+  SetPref
 };
 
 // These are helpers to test for certain kinds of actions
@@ -304,8 +312,9 @@ var _require2 = __webpack_require__(3);
 const addLocaleData = _require2.addLocaleData,
       IntlProvider = _require2.IntlProvider;
 
-const TopSites = __webpack_require__(12);
-const Search = __webpack_require__(11);
+const TopSites = __webpack_require__(13);
+const Search = __webpack_require__(12);
+const PreferencesPane = __webpack_require__(11);
 
 // Locales that should be displayed RTL
 const RTL_LIST = ["ar", "he", "fa", "ur"];
@@ -342,10 +351,13 @@ class Base extends React.Component {
   }
 
   render() {
-    var _props$App = this.props.App;
-    let locale = _props$App.locale,
-        strings = _props$App.strings,
-        initialized = _props$App.initialized;
+    const props = this.props;
+    var _props$App = props.App;
+    const locale = _props$App.locale,
+          strings = _props$App.strings,
+          initialized = _props$App.initialized;
+
+    const prefs = props.Prefs.values;
 
     if (!initialized) {
       return null;
@@ -360,15 +372,16 @@ class Base extends React.Component {
         React.createElement(
           "main",
           null,
-          React.createElement(Search, null),
-          React.createElement(TopSites, null)
-        )
+          prefs.showSearch && React.createElement(Search, null),
+          prefs.showTopSites && React.createElement(TopSites, null)
+        ),
+        React.createElement(PreferencesPane, null)
       )
     );
   }
 }
 
-module.exports = connect(state => ({ App: state.App }))(Base);
+module.exports = connect(state => ({ App: state.App, Prefs: state.Prefs }))(Base);
 
 /***/ }),
 /* 5 */
@@ -440,9 +453,9 @@ module.exports = class DetectUserSessionStart {
 "use strict";
 
 
-/* globals sendAsyncMessage, addMessageListener */
+/* eslint-env mozilla/frame-script */
 
-var _require = __webpack_require__(14);
+var _require = __webpack_require__(16);
 
 const createStore = _require.createStore,
       combineReducers = _require.combineReducers,
@@ -545,14 +558,9 @@ const INITIAL_STATE = {
     // The history (and possibly default) links
     rows: []
   },
-  Search: {
-    // The search engine currently set by the browser
-    currentEngine: {
-      name: "",
-      icon: ""
-    },
-    // All possible search engines
-    engines: []
+  Prefs: {
+    initialized: false,
+    values: {}
   }
 };
 
@@ -637,30 +645,24 @@ function TopSites() {
   }
 }
 
-function Search() {
-  let prevState = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : INITIAL_STATE.Search;
+function Prefs() {
+  let prevState = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : INITIAL_STATE.Prefs;
   let action = arguments[1];
 
+  let newValues;
   switch (action.type) {
-    case at.SEARCH_STATE_UPDATED:
-      {
-        if (!action.data) {
-          return prevState;
-        }
-        var _action$data3 = action.data;
-        let currentEngine = _action$data3.currentEngine,
-            engines = _action$data3.engines;
-
-        return Object.assign({}, prevState, {
-          currentEngine,
-          engines
-        });
-      }
+    case at.PREFS_INITIAL_VALUES:
+      return Object.assign({}, prevState, { initialized: true, values: action.data });
+    case at.PREF_CHANGED:
+      newValues = Object.assign({}, prevState.values);
+      newValues[action.data.name] = action.data.value;
+      return Object.assign({}, prevState, { values: newValues });
     default:
       return prevState;
   }
 }
-var reducers = { TopSites, App, Search };
+
+var reducers = { TopSites, App, Prefs };
 module.exports = {
   reducers,
   INITIAL_STATE
@@ -773,7 +775,7 @@ const ContextMenu = __webpack_require__(9);
 var _require2 = __webpack_require__(1);
 
 const actionTypes = _require2.actionTypes,
-      actionCreators = _require2.actionCreators;
+      ac = _require2.actionCreators;
 
 
 class LinkMenu extends React.Component {
@@ -782,12 +784,14 @@ class LinkMenu extends React.Component {
       id: "menu_action_remove_bookmark",
       icon: "bookmark-remove",
       action: "DELETE_BOOKMARK_BY_ID",
-      data: site.bookmarkGuid
+      data: site.bookmarkGuid,
+      userEvent: "BOOKMARK_DELETE"
     } : {
       id: "menu_action_bookmark",
       icon: "bookmark",
       action: "BOOKMARK_URL",
-      data: site.url
+      data: site.url,
+      userEvent: "BOOKMARK_ADD"
     };
   }
   getDefaultContextMenu(site) {
@@ -795,18 +799,22 @@ class LinkMenu extends React.Component {
       id: "menu_action_open_new_window",
       icon: "new-window",
       action: "OPEN_NEW_WINDOW",
-      data: { url: site.url }
+      data: { url: site.url },
+      userEvent: "OPEN_NEW_WINDOW"
     }, {
       id: "menu_action_open_private_window",
       icon: "new-window-private",
       action: "OPEN_PRIVATE_WINDOW",
-      data: { url: site.url }
+      data: { url: site.url },
+      userEvent: "OPEN_PRIVATE_WINDOW"
     }];
   }
   getOptions() {
     var _props = this.props;
     const dispatch = _props.dispatch,
-          site = _props.site;
+          site = _props.site,
+          index = _props.index,
+          source = _props.source;
 
     // default top sites have a limited set of context menu options
 
@@ -818,24 +826,34 @@ class LinkMenu extends React.Component {
         id: "menu_action_dismiss",
         icon: "dismiss",
         action: "BLOCK_URL",
-        data: site.url
+        data: site.url,
+        userEvent: "BLOCK"
       }, {
         id: "menu_action_delete",
         icon: "delete",
         action: "DELETE_HISTORY_URL",
-        data: site.url
+        data: site.url,
+        userEvent: "DELETE"
       }];
     }
     options.forEach(option => {
-      let action = option.action,
-          data = option.data,
-          id = option.id,
-          type = option.type;
+      const action = option.action,
+            data = option.data,
+            id = option.id,
+            type = option.type,
+            userEvent = option.userEvent;
       // Convert message ids to localized labels and add onClick function
 
       if (!type && id) {
         option.label = this.props.intl.formatMessage(option);
-        option.onClick = () => dispatch(actionCreators.SendToMain({ type: actionTypes[action], data }));
+        option.onClick = () => {
+          dispatch(ac.SendToMain({ type: actionTypes[action], data }));
+          dispatch(ac.UserEvent({
+            event: userEvent,
+            source,
+            action_position: index
+          }));
+        };
       }
     });
 
@@ -871,46 +889,169 @@ const connect = _require.connect;
 
 var _require2 = __webpack_require__(3);
 
+const injectIntl = _require2.injectIntl,
+      FormattedMessage = _require2.FormattedMessage;
+
+const classNames = __webpack_require__(15);
+
+var _require3 = __webpack_require__(1);
+
+const ac = _require3.actionCreators;
+
+
+const PreferencesInput = props => React.createElement(
+  "section",
+  null,
+  React.createElement("input", { type: "checkbox", id: props.prefName, name: props.prefName, checked: props.value, onChange: props.onChange, className: props.className }),
+  React.createElement(
+    "label",
+    { htmlFor: props.prefName },
+    React.createElement(FormattedMessage, { id: props.titleStringId })
+  ),
+  props.descStringId && React.createElement(
+    "p",
+    { className: "prefs-input-description" },
+    React.createElement(FormattedMessage, { id: props.descStringId })
+  )
+);
+
+class PreferencesPane extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { visible: false };
+    this.handleClickOutside = this.handleClickOutside.bind(this);
+    this.handleChange = this.handleChange.bind(this);
+    this.togglePane = this.togglePane.bind(this);
+  }
+  componentDidMount() {
+    document.addEventListener("click", this.handleClickOutside);
+  }
+  componentWillUnmount() {
+    document.removeEventListener("click", this.handleClickOutside);
+  }
+  handleClickOutside(event) {
+    // if we are showing the sidebar and there is a click outside, close it.
+    if (this.state.visible && !this.refs.wrapper.contains(event.target)) {
+      this.togglePane();
+    }
+  }
+  handleChange(event) {
+    const target = event.target;
+    this.props.dispatch(ac.SetPref(target.name, target.checked));
+  }
+  togglePane() {
+    this.setState({ visible: !this.state.visible });
+    const event = this.state.visible ? "CLOSE_NEWTAB_PREFS" : "OPEN_NEWTAB_PREFS";
+    this.props.dispatch(ac.UserEvent({ event }));
+  }
+  render() {
+    const props = this.props;
+    const prefs = props.Prefs.values;
+    const isVisible = this.state.visible;
+    return React.createElement(
+      "div",
+      { className: "prefs-pane-wrapper", ref: "wrapper" },
+      React.createElement(
+        "div",
+        { className: "prefs-pane-button" },
+        React.createElement("button", {
+          className: classNames("prefs-button icon", isVisible ? "icon-dismiss" : "icon-settings"),
+          title: props.intl.formatMessage({ id: isVisible ? "settings_pane_done_button" : "settings_pane_button_label" }),
+          onClick: this.togglePane })
+      ),
+      React.createElement(
+        "div",
+        { className: "prefs-pane" },
+        React.createElement(
+          "div",
+          { className: classNames("sidebar", { hidden: !isVisible }) },
+          React.createElement(
+            "div",
+            { className: "prefs-modal-inner-wrapper" },
+            React.createElement(
+              "h1",
+              null,
+              React.createElement(FormattedMessage, { id: "settings_pane_header" })
+            ),
+            React.createElement(
+              "p",
+              null,
+              React.createElement(FormattedMessage, { id: "settings_pane_body" })
+            ),
+            React.createElement(PreferencesInput, { className: "showSearch", prefName: "showSearch", value: prefs.showSearch, onChange: this.handleChange,
+              titleStringId: "settings_pane_search_header", descStringId: "settings_pane_search_body" }),
+            React.createElement(PreferencesInput, { className: "showTopSites", prefName: "showTopSites", value: prefs.showTopSites, onChange: this.handleChange,
+              titleStringId: "settings_pane_topsites_header", descStringId: "settings_pane_topsites_body" })
+          ),
+          React.createElement(
+            "section",
+            { className: "actions" },
+            React.createElement(
+              "button",
+              { className: "done", onClick: this.togglePane },
+              React.createElement(FormattedMessage, { id: "settings_pane_done_button" })
+            )
+          )
+        )
+      )
+    );
+  }
+}
+
+module.exports = connect(state => ({ Prefs: state.Prefs }))(injectIntl(PreferencesPane));
+module.exports.PreferencesPane = PreferencesPane;
+module.exports.PreferencesInput = PreferencesInput;
+
+/***/ }),
+/* 12 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+/* globals ContentSearchUIController */
+
+
+const React = __webpack_require__(0);
+
+var _require = __webpack_require__(2);
+
+const connect = _require.connect;
+
+var _require2 = __webpack_require__(3);
+
 const FormattedMessage = _require2.FormattedMessage,
       injectIntl = _require2.injectIntl;
 
 var _require3 = __webpack_require__(1);
 
-const actionTypes = _require3.actionTypes,
-      actionCreators = _require3.actionCreators;
+const ac = _require3.actionCreators;
 
 
 class Search extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { searchString: "" };
     this.onClick = this.onClick.bind(this);
-    this.onChange = this.onChange.bind(this);
+    this.onInputMount = this.onInputMount.bind(this);
   }
 
-  componentWillMount() {
-    // Trigger initialization of ContentSearch in case it hasn't happened yet
-    dispatchEvent(new CustomEvent("ContentSearchClient", { detail: {} }));
-  }
-
-  performSearch(options) {
-    let searchData = {
-      engineName: options.engineName,
-      searchString: options.searchString,
-      searchPurpose: "newtab",
-      healthReportKey: "newtab"
-    };
-    this.props.dispatch(actionCreators.SendToMain({ type: actionTypes.PERFORM_SEARCH, data: searchData }));
+  handleEvent(event) {
+    // Also track search events with our own telemetry
+    if (event.detail.type === "Search") {
+      this.props.dispatch(ac.UserEvent({ event: "SEARCH" }));
+    }
   }
   onClick(event) {
-    const currentEngine = this.props.Search.currentEngine;
+    this.controller.search(event);
+  }
+  onInputMount(input) {
+    if (input) {
+      this.controller = new ContentSearchUIController(input, input.parentNode, "activity", "newtab");
+      addEventListener("ContentSearchClient", this);
+    } else {
+      this.controller = null;
+      removeEventListener("ContentSearchClient", this);
+    }
+  }
 
-    event.preventDefault();
-    this.performSearch({ engineName: currentEngine.name, searchString: this.state.searchString });
-  }
-  onChange(event) {
-    this.setState({ searchString: event.target.value });
-  }
   render() {
     return React.createElement(
       "form",
@@ -927,11 +1068,10 @@ class Search extends React.Component {
       React.createElement("input", {
         id: "search-input",
         maxLength: "256",
-        onChange: this.onChange,
         placeholder: this.props.intl.formatMessage({ id: "search_web_placeholder" }),
+        ref: this.onInputMount,
         title: this.props.intl.formatMessage({ id: "search_web_placeholder" }),
-        type: "search",
-        value: this.state.searchString }),
+        type: "search" }),
       React.createElement(
         "button",
         {
@@ -948,11 +1088,11 @@ class Search extends React.Component {
   }
 }
 
-module.exports = connect(state => ({ Search: state.Search }))(injectIntl(Search));
+module.exports = connect()(injectIntl(Search));
 module.exports._unconnected = Search;
 
 /***/ }),
-/* 12 */
+/* 13 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -968,8 +1108,14 @@ var _require2 = __webpack_require__(3);
 
 const FormattedMessage = _require2.FormattedMessage;
 
-const shortURL = __webpack_require__(13);
+const shortURL = __webpack_require__(14);
 const LinkMenu = __webpack_require__(10);
+
+var _require3 = __webpack_require__(1);
+
+const ac = _require3.actionCreators;
+
+const TOP_SITES_SOURCE = "TOP_SITES";
 
 class TopSite extends React.Component {
   constructor(props) {
@@ -978,6 +1124,13 @@ class TopSite extends React.Component {
   }
   toggleContextMenu(event, index) {
     this.setState({ showContextMenu: true, activeTile: index });
+  }
+  trackClick() {
+    this.props.dispatch(ac.UserEvent({
+      event: "CLICK",
+      source: TOP_SITES_SOURCE,
+      action_position: this.props.index
+    }));
   }
   render() {
     var _props = this.props;
@@ -995,7 +1148,7 @@ class TopSite extends React.Component {
       { className: topSiteOuterClassName, key: link.url },
       React.createElement(
         "a",
-        { href: link.url },
+        { onClick: () => this.trackClick(), href: link.url },
         React.createElement(
           "div",
           { className: "tile", "aria-hidden": true },
@@ -1030,7 +1183,8 @@ class TopSite extends React.Component {
         visible: isContextMenuOpen,
         onUpdate: val => this.setState({ showContextMenu: val }),
         site: link,
-        index: index })
+        index: index,
+        source: TOP_SITES_SOURCE })
     );
   }
 }
@@ -1046,7 +1200,11 @@ const TopSites = props => React.createElement(
   React.createElement(
     "ul",
     { className: "top-sites-list" },
-    props.TopSites.rows.map((link, index) => React.createElement(TopSite, { dispatch: props.dispatch, key: link.url, link: link, index: index }))
+    props.TopSites.rows.map((link, index) => React.createElement(TopSite, {
+      key: link.url,
+      dispatch: props.dispatch,
+      link: link,
+      index: index }))
   )
 );
 
@@ -1055,7 +1213,7 @@ module.exports._unconnected = TopSites;
 module.exports.TopSite = TopSite;
 
 /***/ }),
-/* 13 */
+/* 14 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -1090,13 +1248,68 @@ module.exports = function shortURL(link) {
 };
 
 /***/ }),
-/* 14 */
+/* 15 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_DEFINE_RESULT__;/*!
+  Copyright (c) 2016 Jed Watson.
+  Licensed under the MIT License (MIT), see
+  http://jedwatson.github.io/classnames
+*/
+/* global define */
+
+(function () {
+	'use strict';
+
+	var hasOwn = {}.hasOwnProperty;
+
+	function classNames () {
+		var classes = [];
+
+		for (var i = 0; i < arguments.length; i++) {
+			var arg = arguments[i];
+			if (!arg) continue;
+
+			var argType = typeof arg;
+
+			if (argType === 'string' || argType === 'number') {
+				classes.push(arg);
+			} else if (Array.isArray(arg)) {
+				classes.push(classNames.apply(null, arg));
+			} else if (argType === 'object') {
+				for (var key in arg) {
+					if (hasOwn.call(arg, key) && arg[key]) {
+						classes.push(key);
+					}
+				}
+			}
+		}
+
+		return classes.join(' ');
+	}
+
+	if (typeof module !== 'undefined' && module.exports) {
+		module.exports = classNames;
+	} else if (true) {
+		// register as 'classnames', consistent with npm package name
+		!(__WEBPACK_AMD_DEFINE_ARRAY__ = [], __WEBPACK_AMD_DEFINE_RESULT__ = function () {
+			return classNames;
+		}.apply(exports, __WEBPACK_AMD_DEFINE_ARRAY__),
+				__WEBPACK_AMD_DEFINE_RESULT__ !== undefined && (module.exports = __WEBPACK_AMD_DEFINE_RESULT__));
+	} else {
+		window.classNames = classNames;
+	}
+}());
+
+
+/***/ }),
+/* 16 */
 /***/ (function(module, exports) {
 
 module.exports = Redux;
 
 /***/ }),
-/* 15 */
+/* 17 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";

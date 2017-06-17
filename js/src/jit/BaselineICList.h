@@ -24,6 +24,7 @@ namespace jit {
     _(TypeUpdate_SingleObject)                   \
     _(TypeUpdate_ObjectGroup)                    \
     _(TypeUpdate_PrimitiveSet)                   \
+    _(TypeUpdate_AnyValue)                       \
                                                  \
     _(NewArray_Fallback)                         \
     _(NewObject_Fallback)                        \
@@ -46,7 +47,7 @@ namespace jit {
     _(Call_ScriptedApplyArray)                   \
     _(Call_ScriptedApplyArguments)               \
     _(Call_ScriptedFunCall)                      \
-    _(Call_StringSplit)                          \
+    _(Call_ConstStringSplit)                     \
     _(Call_IsSuspendedStarGenerator)             \
                                                  \
     _(GetElem_Fallback)                          \

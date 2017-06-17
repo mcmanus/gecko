@@ -1425,7 +1425,6 @@ PuppetWidget::HasPendingInputEvent()
           == mozilla::dom::PBrowser::PBrowserStart) {
         switch (aMsg.type()) {
           case mozilla::dom::PBrowser::Msg_RealMouseMoveEvent__ID:
-          case mozilla::dom::PBrowser::Msg_SynthMouseMoveEvent__ID:
           case mozilla::dom::PBrowser::Msg_RealMouseButtonEvent__ID:
           case mozilla::dom::PBrowser::Msg_RealKeyEvent__ID:
           case mozilla::dom::PBrowser::Msg_MouseWheelEvent__ID:
@@ -1435,6 +1434,7 @@ PuppetWidget::HasPendingInputEvent()
           case mozilla::dom::PBrowser::Msg_UpdateDimensions__ID:
           case mozilla::dom::PBrowser::Msg_MouseEvent__ID:
           case mozilla::dom::PBrowser::Msg_KeyEvent__ID:
+          case mozilla::dom::PBrowser::Msg_SetDocShellIsActive__ID:
             ret = true;
             return false;  // Stop peeking.
         }

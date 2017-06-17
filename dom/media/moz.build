@@ -50,11 +50,11 @@ DIRS += [
     'webvtt',
 ]
 
-if CONFIG['MOZ_DIRECTSHOW']:
-    DIRS += ['directshow']
-
 if CONFIG['MOZ_ANDROID_OMX']:
     DIRS += ['android']
+
+if CONFIG['MOZ_ANDROID_HLS_SUPPORT']:
+    DIRS += ['hls']
 
 if CONFIG['MOZ_FMP4']:
     DIRS += ['fmp4']
@@ -135,6 +135,7 @@ EXPORTS += [
     'MediaTimer.h',
     'MediaTrack.h',
     'MediaTrackList.h',
+    'MemoryBlockCache.h',
     'MP3Decoder.h',
     'MP3Demuxer.h',
     'MP3FrameParser.h',
@@ -242,6 +243,7 @@ UNIFIED_SOURCES += [
     'MediaTimer.cpp',
     'MediaTrack.cpp',
     'MediaTrackList.cpp',
+    'MemoryBlockCache.cpp',
     'MP3Decoder.cpp',
     'MP3Demuxer.cpp',
     'MP3FrameParser.cpp',
@@ -297,11 +299,6 @@ LOCAL_INCLUDES += [
     '/netwerk/base',
 ]
 
-if CONFIG['MOZ_DIRECTSHOW']:
-    LOCAL_INCLUDES += [
-        '/media/webrtc/trunk/webrtc/modules/video_capture/windows',
-    ]
-
 if CONFIG['MOZ_WEBRTC']:
     LOCAL_INCLUDES += [
         '/media/webrtc/signaling/src/common',
@@ -320,6 +317,9 @@ if CONFIG['ANDROID_VERSION'] > '15':
 
 if CONFIG['MOZ_GONK_MEDIACODEC']:
     DEFINES['MOZ_GONK_MEDIACODEC'] = True
+
+if CONFIG['MOZ_ANDROID_HLS_SUPPORT']:
+    DEFINES['MOZ_ANDROID_HLS_SUPPORT'] = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 

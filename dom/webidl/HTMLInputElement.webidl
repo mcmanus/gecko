@@ -19,7 +19,7 @@ enum SelectionMode {
   "preserve",
 };
 
-interface nsIControllers;
+interface XULControllers;
 
 [HTMLConstructor]
 interface HTMLInputElement : HTMLElement {
@@ -112,7 +112,7 @@ interface HTMLInputElement : HTMLElement {
   boolean reportValidity();
   void setCustomValidity(DOMString error);
 
-  // Bug 850365 readonly attribute NodeList labels;
+  readonly attribute NodeList? labels;
 
   void select();
 
@@ -144,7 +144,7 @@ partial interface HTMLInputElement {
 
 partial interface HTMLInputElement {
   [GetterThrows, ChromeOnly]
-  readonly attribute nsIControllers        controllers;
+  readonly attribute XULControllers        controllers;
   // Binaryname because we have a FragmentOrElement function named "TextLength()".
   [NeedsCallerType, BinaryName="inputTextLength"]
   readonly attribute long                  textLength;

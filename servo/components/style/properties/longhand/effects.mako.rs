@@ -15,35 +15,11 @@ ${helpers.predefined_type("opacity",
                           spec="https://drafts.csswg.org/css-color/#opacity")}
 
 <%helpers:vector_longhand name="box-shadow" allow_empty="True"
-                          animation_value_type="IntermediateBoxShadowList"
+                          animation_value_type="IntermediateShadowList"
                           extra_prefixes="webkit"
                           ignored_when_colors_disabled="True"
                           spec="https://drafts.csswg.org/css-backgrounds/#box-shadow">
-    use std::fmt;
-    use style_traits::ToCss;
-
     pub type SpecifiedValue = specified::Shadow;
-
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            if self.inset {
-                try!(dest.write_str("inset "));
-            }
-            try!(self.offset_x.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.offset_y.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.blur_radius.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.spread_radius.to_css(dest));
-
-            if let Some(ref color) = self.color {
-                try!(dest.write_str(" "));
-                try!(color.to_css(dest));
-            }
-            Ok(())
-        }
-    }
 
     pub mod computed_value {
         use values::computed::Shadow;
@@ -51,25 +27,8 @@ ${helpers.predefined_type("opacity",
         pub type T = Shadow;
     }
 
-    impl ToCss for computed_value::T {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            if self.inset {
-                try!(dest.write_str("inset "));
-            }
-            try!(self.blur_radius.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.spread_radius.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.offset_x.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.offset_y.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.color.to_css(dest));
-            Ok(())
-        }
-    }
-
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<specified::Shadow, ()> {
+    pub fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                         -> Result<specified::Shadow, ParseError<'i>> {
         specified::Shadow::parse(context, input, false)
     }
 </%helpers:vector_longhand>
@@ -252,15 +211,9 @@ ${helpers.predefined_type("clip",
                 computed_value::Filter::Sepia(value) => try!(write!(dest, "sepia({})", value)),
                 % if product == "gecko":
                 computed_value::Filter::DropShadow(shadow) => {
-                    try!(dest.write_str("drop-shadow("));
-                    try!(shadow.offset_x.to_css(dest));
-                    try!(dest.write_str(" "));
-                    try!(shadow.offset_y.to_css(dest));
-                    try!(dest.write_str(" "));
-                    try!(shadow.blur_radius.to_css(dest));
-                    try!(dest.write_str(" "));
-                    try!(shadow.color.to_css(dest));
-                    try!(dest.write_str(")"));
+                    dest.write_str("drop-shadow(")?;
+                    shadow.to_css(dest)?;
+                    dest.write_str(")")?;
                 }
                 computed_value::Filter::Url(ref url) => {
                     url.to_css(dest)?;
@@ -293,17 +246,9 @@ ${helpers.predefined_type("clip",
                 SpecifiedFilter::Sepia(value) => try!(write!(dest, "sepia({})", value)),
                 % if product == "gecko":
                 SpecifiedFilter::DropShadow(ref shadow) => {
-                    try!(dest.write_str("drop-shadow("));
-                    try!(shadow.offset_x.to_css(dest));
-                    try!(dest.write_str(" "));
-                    try!(shadow.offset_y.to_css(dest));
-                    try!(dest.write_str(" "));
-                    try!(shadow.blur_radius.to_css(dest));
-                    if let Some(ref color) = shadow.color {
-                        try!(dest.write_str(" "));
-                        try!(color.to_css(dest));
-                    }
-                    try!(dest.write_str(")"));
+                    dest.write_str("drop-shadow(")?;
+                    shadow.to_css(dest)?;
+                    dest.write_str(")")?;
                 }
                 SpecifiedFilter::Url(ref url) => {
                     url.to_css(dest)?;
@@ -319,7 +264,8 @@ ${helpers.predefined_type("clip",
         computed_value::T::new(Vec::new())
     }
 
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+    pub fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                         -> Result<SpecifiedValue, ParseError<'i>> {
         let mut filters = Vec::new();
         if input.try(|input| input.expect_ident_matching("none")).is_ok() {
             return Ok(SpecifiedValue(filters))
@@ -346,23 +292,24 @@ ${helpers.predefined_type("clip",
                         "drop-shadow" => specified::Shadow::parse(context, input, true)
                                              .map(SpecifiedFilter::DropShadow),
                         % endif
-                        _ => Err(())
+                        _ => Err(StyleParseError::UnexpectedFunction(function_name.clone()).into())
                     }
                 })));
             } else if filters.is_empty() {
-                return Err(())
+                return Err(StyleParseError::UnspecifiedError.into())
             } else {
                 return Ok(SpecifiedValue(filters))
             }
         }
     }
 
-    fn parse_factor(input: &mut Parser) -> Result<::values::CSSFloat, ()> {
+    fn parse_factor<'i, 't>(input: &mut Parser<'i, 't>) -> Result<::values::CSSFloat, ParseError<'i>> {
         use cssparser::Token;
         match input.next() {
-            Ok(Token::Number(value)) if value.value.is_sign_positive() => Ok(value.value),
-            Ok(Token::Percentage(value)) if value.unit_value.is_sign_positive() => Ok(value.unit_value),
-            _ => Err(())
+            Ok(Token::Number { value, .. }) if value.is_sign_positive() => Ok(value),
+            Ok(Token::Percentage { unit_value, .. }) if unit_value.is_sign_positive() => Ok(unit_value),
+            Ok(t) => Err(BasicParseError::UnexpectedToken(t).into()),
+            Err(e) => Err(e.into())
         }
     }
 
@@ -428,96 +375,6 @@ ${helpers.predefined_type("clip",
         }
     }
 </%helpers:longhand>
-
-pub struct OriginParseResult {
-    pub horizontal: Option<specified::LengthOrPercentage>,
-    pub vertical: Option<specified::LengthOrPercentage>,
-    pub depth: Option<specified::NoCalcLength>
-}
-
-pub fn parse_origin(context: &ParserContext, input: &mut Parser) -> Result<OriginParseResult,()> {
-    use values::specified::{LengthOrPercentage, Percentage};
-    let (mut horizontal, mut vertical, mut depth, mut horizontal_is_center) = (None, None, None, false);
-    loop {
-        if let Err(_) = input.try(|input| {
-            let token = try!(input.expect_ident());
-            match_ignore_ascii_case! {
-                &token,
-                "left" => {
-                    if horizontal.is_none() {
-                        horizontal = Some(LengthOrPercentage::Percentage(Percentage(0.0)))
-                    } else if horizontal_is_center && vertical.is_none() {
-                        vertical = Some(LengthOrPercentage::Percentage(Percentage(0.5)));
-                        horizontal = Some(LengthOrPercentage::Percentage(Percentage(0.0)));
-                    } else {
-                        return Err(())
-                    }
-                },
-                "center" => {
-                    if horizontal.is_none() {
-                        horizontal_is_center = true;
-                        horizontal = Some(LengthOrPercentage::Percentage(Percentage(0.5)))
-                    } else if vertical.is_none() {
-                        vertical = Some(LengthOrPercentage::Percentage(Percentage(0.5)))
-                    } else {
-                        return Err(())
-                    }
-                },
-                "right" => {
-                    if horizontal.is_none() {
-                        horizontal = Some(LengthOrPercentage::Percentage(Percentage(1.0)))
-                    } else if horizontal_is_center && vertical.is_none() {
-                        vertical = Some(LengthOrPercentage::Percentage(Percentage(0.5)));
-                        horizontal = Some(LengthOrPercentage::Percentage(Percentage(1.0)));
-                    } else {
-                        return Err(())
-                    }
-                },
-                "top" => {
-                    if vertical.is_none() {
-                        vertical = Some(LengthOrPercentage::Percentage(Percentage(0.0)))
-                    } else {
-                        return Err(())
-                    }
-                },
-                "bottom" => {
-                    if vertical.is_none() {
-                        vertical = Some(LengthOrPercentage::Percentage(Percentage(1.0)))
-                    } else {
-                        return Err(())
-                    }
-                },
-                _ => return Err(())
-            }
-            Ok(())
-        }) {
-            match input.try(|input| LengthOrPercentage::parse(context, input)) {
-                Ok(value) => {
-                    if horizontal.is_none() {
-                        horizontal = Some(value);
-                    } else if vertical.is_none() {
-                        vertical = Some(value);
-                    } else if let LengthOrPercentage::Length(length) = value {
-                        depth = Some(length);
-                    } else {
-                        break;
-                    }
-                }
-                _ => break,
-            }
-        }
-    }
-
-    if horizontal.is_some() || vertical.is_some() {
-        Ok(OriginParseResult {
-            horizontal: horizontal,
-            vertical: vertical,
-            depth: depth,
-        })
-    } else {
-        Err(())
-    }
-}
 
 ${helpers.single_keyword("mix-blend-mode",
                          """normal multiply screen overlay darken lighten color-dodge

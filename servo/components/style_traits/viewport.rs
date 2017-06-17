@@ -4,12 +4,11 @@
 
 //! Helper types for the `@viewport` rule.
 
-use {CSSPixel, PinchZoomFactor};
-use cssparser::{Parser, ToCss};
-use euclid::size::TypedSize2D;
+use {CSSPixel, PinchZoomFactor, ParseError};
+use cssparser::{Parser, ToCss, ParseError as CssParseError, BasicParseError};
+use euclid::TypedSize2D;
 use std::ascii::AsciiExt;
 use std::fmt;
-use values::specified::AllowedLengthType;
 
 define_css_keyword_enum!(UserZoom:
                          "zoom" => Zoom,
@@ -140,17 +139,26 @@ impl Zoom {
     /// Parse a zoom value per:
     ///
     /// https://drafts.csswg.org/css-device-adapt/#descdef-viewport-zoom
-    pub fn parse(input: &mut Parser) -> Result<Zoom, ()> {
+    pub fn parse<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Zoom, ParseError<'i>> {
+        use PARSING_MODE_DEFAULT;
         use cssparser::Token;
+        use values::specified::AllowedLengthType::NonNegative;
 
         match try!(input.next()) {
-            Token::Percentage(ref value) if AllowedLengthType::NonNegative.is_ok(value.unit_value) =>
-                Ok(Zoom::Percentage(value.unit_value)),
-            Token::Number(ref value) if AllowedLengthType::NonNegative.is_ok(value.value) =>
-                Ok(Zoom::Number(value.value)),
-            Token::Ident(ref value) if value.eq_ignore_ascii_case("auto") =>
-                Ok(Zoom::Auto),
-            _ => Err(())
+            // TODO: This parse() method should take ParserContext as an
+            // argument, and pass ParsingMode owned by the ParserContext to
+            // is_ok() instead of using PARSING_MODE_DEFAULT directly.
+            // In order to do so, we might want to move these stuff into style::stylesheets::viewport_rule.
+            Token::Percentage { unit_value, .. } if NonNegative.is_ok(PARSING_MODE_DEFAULT, unit_value) => {
+                Ok(Zoom::Percentage(unit_value))
+            }
+            Token::Number { value, .. } if NonNegative.is_ok(PARSING_MODE_DEFAULT, value) => {
+                Ok(Zoom::Number(value))
+            }
+            Token::Ident(ref value) if value.eq_ignore_ascii_case("auto") => {
+                Ok(Zoom::Auto)
+            }
+            t => Err(CssParseError::Basic(BasicParseError::UnexpectedToken(t)))
         }
     }
 

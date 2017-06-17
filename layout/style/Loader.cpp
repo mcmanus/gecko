@@ -702,11 +702,7 @@ SheetLoadData::OnDetermineCharset(nsIUnicharStreamLoader* aLoader,
                          aSegment.Length(),
                          specified)) {
     if (EncodingUtils::FindEncodingForLabel(specified, aCharset)) {
-      // FindEncodingForLabel currently never returns UTF-16LE but will
-      // probably change to never return UTF-16 instead, so check both here
-      // to avoid relying on the exact behavior.
-      if (aCharset.EqualsLiteral("UTF-16") ||
-          aCharset.EqualsLiteral("UTF-16BE") ||
+      if (aCharset.EqualsLiteral("UTF-16BE") ||
           aCharset.EqualsLiteral("UTF-16LE")) {
         // Be consistent with HTML <meta> handling in face of impossibility.
         // When the @charset rule itself evidently was not UTF-16-encoded,
@@ -1410,12 +1406,12 @@ Loader::InsertChildSheet(StyleSheet* aSheet,
   LOG(("css::Loader::InsertChildSheet"));
   MOZ_ASSERT(aSheet, "Nothing to insert");
   MOZ_ASSERT(aParentSheet, "Need a parent to insert into");
-  MOZ_ASSERT_IF(aSheet->IsGecko(), aGeckoParentRule && !aServoChildSheet);
-  MOZ_ASSERT_IF(aSheet->IsServo(), aServoChildSheet && !aGeckoParentRule);
+  MOZ_ASSERT(!aSheet->IsGecko() || (aGeckoParentRule && !aServoChildSheet));
+  MOZ_ASSERT(!aSheet->IsServo() || (aServoChildSheet && !aGeckoParentRule));
+  // child sheets should always start out enabled, even if they got
+  // cloned off of top-level sheets which were disabled
+  aSheet->SetEnabled(true);
   if (aSheet->IsGecko()) {
-    // child sheets should always start out enabled, even if they got
-    // cloned off of top-level sheets which were disabled
-    aSheet->AsGecko()->SetEnabled(true);
     aGeckoParentRule->SetSheet(aSheet->AsGecko()); // This sets the ownerRule on the sheet
   } else {
     if (!aSheet->AsServo()->RawSheet()) {
@@ -1900,8 +1896,7 @@ Loader::DoSheetComplete(SheetLoadData* aLoadData, nsresult aStatus,
       // If mSheetAlreadyComplete, then the sheet could well be modified between
       // when we posted the async call to SheetComplete and now, since the sheet
       // was page-accessible during that whole time.
-      MOZ_ASSERT(!(data->mSheet->IsGecko() &&
-                   data->mSheet->AsGecko()->IsModified()),
+      MOZ_ASSERT(!data->mSheet->IsModified(),
                  "should not get marked modified during parsing");
       data->mSheet->SetComplete();
       data->ScheduleLoadEventIfNeeded(aStatus);
@@ -2206,10 +2201,8 @@ Loader::LoadChildSheet(StyleSheet* aParentSheet,
   NS_PRECONDITION(aURL, "Must have a URI to load");
   NS_PRECONDITION(aParentSheet, "Must have a parent sheet");
 
-  // Servo doesn't support reusable sheets.
-  MOZ_ASSERT_IF(aReusableSheets, aParentSheet->IsGecko());
-  MOZ_ASSERT_IF(aParentSheet->IsGecko(), aGeckoParentRule && !aServoChildSheet);
-  MOZ_ASSERT_IF(aParentSheet->IsServo(), aServoChildSheet && !aGeckoParentRule);
+  MOZ_ASSERT(!aParentSheet->IsGecko() || (aGeckoParentRule && !aServoChildSheet));
+  MOZ_ASSERT(!aParentSheet->IsServo() || (aServoChildSheet && !aGeckoParentRule));
 
   if (!mEnabled) {
     LOG_WARN(("  Not enabled"));
@@ -2653,10 +2646,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Loader)
          !iter.Done();
          iter.Next()) {
       NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "Sheet cache nsCSSLoader");
-      if (iter.UserData()->IsGecko()) {
-        CSSStyleSheet* sheet = iter.UserData()->AsGecko();
-        cb.NoteXPCOMChild(NS_ISUPPORTS_CAST(nsIDOMCSSStyleSheet*, sheet));
-      }
+      cb.NoteXPCOMChild(NS_ISUPPORTS_CAST(nsIDOMCSSStyleSheet*, iter.UserData()));
     }
   }
   nsTObserverArray<nsCOMPtr<nsICSSLoaderObserver>>::ForwardIterator

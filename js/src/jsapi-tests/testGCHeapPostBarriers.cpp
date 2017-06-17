@@ -28,7 +28,9 @@ struct TestStruct<js::GCPtr<T>>
 {
     js::GCPtr<T> wrapper;
 
-    JS::Zone* zone() const { return wrapper->zone(); }
+    void trace(JSTracer* trc) {
+        TraceNullableEdge(trc, &wrapper, "TestStruct::wrapper");
+    }
 };
 
 // Give the GCPtr version GCManagedDeletePolicy as required.
@@ -150,6 +152,10 @@ TestHeapPostBarrierUpdate()
     CHECK(!js::gc::IsInsideNursery(wrapper.get()));
     CHECK(CanAccessObject(wrapper.get()));
 
+    JS::DeletePolicy<TestStruct<W>>()(ptr);
+
+    cx->minorGC(JS::gcreason::API);
+
     return true;
 }
 
@@ -172,6 +178,8 @@ TestHeapPostBarrierInitFailure()
         CHECK(wrapper.get() == nullptr);
         wrapper = initialObj;
         CHECK(wrapper == initialObj);
+
+        // testStruct deleted here, as if we left this block due to an error.
     }
 
     cx->minorGC(JS::gcreason::API);
@@ -183,6 +191,10 @@ END_TEST(testGCHeapPostBarriers)
 
 BEGIN_TEST(testUnbarrieredEquality)
 {
+#ifdef JS_GC_ZEAL
+    AutoLeaveZeal nozeal(cx);
+#endif /* JS_GC_ZEAL */
+
     // Use ArrayBuffers because they have finalizers, which allows using them
     // in ObjectPtr without awkward conversations about nursery allocatability.
     JS::RootedObject robj(cx, JS_NewArrayBuffer(cx, 20));

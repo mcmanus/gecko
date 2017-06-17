@@ -8,10 +8,8 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <errno.h>
-#ifndef MOZ_WIDGET_GONK
 #include <ifaddrs.h>
 #include <net/if.h>
-#endif
 
 #include "nsThreadUtils.h"
 #include "nsIObserverService.h"
@@ -27,10 +25,6 @@
 #include "mozilla/SHA1.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/Telemetry.h"
-
-#ifdef MOZ_WIDGET_GONK
-#include <cutils/properties.h>
-#endif
 
 /* a shorter name that better explains what it does */
 #define EINTR_RETRY(x) MOZ_TEMP_FAILURE_RETRY(x)
@@ -210,9 +204,6 @@ void nsNotifyAddrListener::calculateNetworkId(void)
 //
 void nsNotifyAddrListener::checkLink(void)
 {
-#ifdef MOZ_WIDGET_GONK
-    // b2g instead has NetworkManager.js which handles UP/DOWN
-#else
     struct ifaddrs *list;
     struct ifaddrs *ifa;
     bool link = false;
@@ -224,9 +215,9 @@ void nsNotifyAddrListener::checkLink(void)
     // Walk through the linked list, maintaining head pointer so we can free
     // list later
 
-    for (ifa = list; ifa != NULL; ifa = ifa->ifa_next) {
+    for (ifa = list; ifa != nullptr; ifa = ifa->ifa_next) {
         int family;
-        if (ifa->ifa_addr == NULL)
+        if (ifa->ifa_addr == nullptr)
             continue;
 
         family = ifa->ifa_addr->sa_family;
@@ -247,7 +238,6 @@ void nsNotifyAddrListener::checkLink(void)
         SendEvent(mLinkUp ?
                   NS_NETWORK_LINK_DATA_UP : NS_NETWORK_LINK_DATA_DOWN);
     }
-#endif
 }
 
 void nsNotifyAddrListener::OnNetlinkMessage(int aNetlinkSocket)

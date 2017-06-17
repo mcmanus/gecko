@@ -2,6 +2,12 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
+/* exported browserActionFor, sidebarActionFor, pageActionFor */
+/* global browserActionFor:false, sidebarActionFor:false, pageActionFor:false */
+
+// The ext-* files are imported into the same scopes.
+/* import-globals-from ext-utils.js */
+
 XPCOMUtils.defineLazyModuleGetter(this, "CustomizableUI",
                                   "resource:///modules/CustomizableUI.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "clearTimeout",
@@ -17,10 +23,17 @@ XPCOMUtils.defineLazyServiceGetter(this, "DOMUtils",
 
 Cu.import("resource://gre/modules/EventEmitter.jsm");
 
+XPCOMUtils.defineLazyPreferenceGetter(this, "gPhotonStructure", "browser.photon.structure.enabled");
+
 var {
   DefaultWeakMap,
-  IconDetails,
 } = ExtensionUtils;
+
+Cu.import("resource://gre/modules/ExtensionParent.jsm");
+
+var {
+  IconDetails,
+} = ExtensionParent;
 
 const POPUP_PRELOAD_TIMEOUT_MS = 200;
 
@@ -41,7 +54,7 @@ const browserActionMap = new WeakMap();
 XPCOMUtils.defineLazyGetter(this, "browserAreas", () => {
   return {
     "navbar": CustomizableUI.AREA_NAVBAR,
-    "menupanel": CustomizableUI.AREA_PANEL,
+    "menupanel": gPhotonStructure ? CustomizableUI.AREA_FIXED_OVERFLOW_PANEL : CustomizableUI.AREA_PANEL,
     "tabstrip": CustomizableUI.AREA_TABSTRIP,
     "personaltoolbar": CustomizableUI.AREA_BOOKMARKS,
   };
@@ -117,6 +130,7 @@ this.browserAction = class extends ExtensionAPI {
         let view = document.createElementNS(XUL_NS, "panelview");
         view.id = this.viewId;
         view.setAttribute("flex", "1");
+        view.setAttribute("extension", true);
 
         document.getElementById("PanelUI-multiView").appendChild(view);
         document.addEventListener("popupshowing", this);
@@ -158,6 +172,10 @@ this.browserAction = class extends ExtensionAPI {
         // Google Chrome onClicked extension API.
         if (popupURL) {
           try {
+            // FIXME: The line below needs to change eventually, but for now:
+            // ensure the view is _always_ visible _before_ `popup.attach()` is
+            // called. PanelMultiView.jsm dictates different behavior.
+            event.target.setAttribute("current", true);
             let popup = this.getPopup(document.defaultView, popupURL);
             event.detail.addBlocker(popup.attach(event.target));
           } catch (e) {
@@ -207,7 +225,11 @@ this.browserAction = class extends ExtensionAPI {
     // Google Chrome onClicked extension API.
     if (this.getProperty(tab, "popup")) {
       if (this.widget.areaType == CustomizableUI.TYPE_MENU_PANEL) {
-        await window.PanelUI.show();
+        if (gPhotonStructure) {
+          await window.document.getElementById("nav-bar").overflowable.show();
+        } else {
+          await window.PanelUI.show();
+        }
       }
 
       let event = new window.CustomEvent("command", {bubbles: true, cancelable: true});

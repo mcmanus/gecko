@@ -180,6 +180,7 @@ const UnsolicitedNotifications = {
   "evaluationResult": "evaluationResult",
   "newSource": "newSource",
   "updatedSource": "updatedSource",
+  "inspectObject": "inspectObject"
 };
 
 /**
@@ -2167,6 +2168,15 @@ ThreadClient.prototype = {
   get moreFrames() {
     return this.paused && (!this._frameCache || this._frameCache.length == 0
           || !this._frameCache[this._frameCache.length - 1].oldest);
+  },
+
+  /**
+   * Request the frame environment.
+   *
+   * @param frameId string
+   */
+  getEnvironment: function (frameId) {
+    return this.request({ to: frameId, type: "getEnvironment" });
   },
 
   /**

@@ -397,6 +397,9 @@ const SNAPSHOT_SCHEMA = {
         forceDisabled: {
           type: "number",
         },
+        handlerUsed: {
+          type: "boolean",
+        },
       },
     },
     libraryVersions: {
@@ -517,6 +520,10 @@ const SNAPSHOT_SCHEMA = {
           type: "boolean"
         },
         contentSandboxLevel: {
+          required: AppConstants.MOZ_CONTENT_SANDBOX,
+          type: "number"
+        },
+        effectiveContentSandboxLevel: {
           required: AppConstants.MOZ_CONTENT_SANDBOX,
           type: "number"
         },

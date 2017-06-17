@@ -60,6 +60,16 @@ ExtensionPreferencesManager.addSetting("network.networkPredictionEnabled", {
   },
 });
 
+ExtensionPreferencesManager.addSetting("network.peerConnectionEnabled", {
+  prefNames: [
+    "media.peerconnection.enabled",
+  ],
+
+  setCallback(value) {
+    return {[this.prefNames[0]]: value};
+  },
+});
+
 ExtensionPreferencesManager.addSetting("network.webRTCIPHandlingPolicy", {
   prefNames: [
     "media.peerconnection.ice.default_address_only",
@@ -105,6 +115,19 @@ ExtensionPreferencesManager.addSetting("websites.hyperlinkAuditingEnabled", {
   },
 });
 
+ExtensionPreferencesManager.addSetting("websites.referrersEnabled", {
+  prefNames: [
+    "network.http.sendRefererHeader",
+  ],
+
+  // Values for network.http.sendRefererHeader:
+  // 0=don't send any, 1=send only on clicks, 2=send on image requests as well
+  // http://searchfox.org/mozilla-central/rev/61054508641ee76f9c49bcf7303ef3cfb6b410d2/modules/libpref/init/all.js#1585
+  setCallback(value) {
+    return {[this.prefNames[0]]: value ? 2 : 0};
+  },
+});
+
 this.privacy = class extends ExtensionAPI {
   getAPI(context) {
     let {extension} = context;
@@ -118,6 +141,11 @@ this.privacy = class extends ExtensionAPI {
                 Preferences.get("network.prefetch-next") &&
                 Preferences.get("network.http.speculative-parallel-limit") > 0 &&
                 !Preferences.get("network.dns.disablePrefetch");
+            }),
+          peerConnectionEnabled: getAPI(extension,
+            "network.peerConnectionEnabled",
+            () => {
+              return Preferences.get("media.peerconnection.enabled");
             }),
           webRTCIPHandlingPolicy: getAPI(extension,
             "network.webRTCIPHandlingPolicy",
@@ -143,6 +171,11 @@ this.privacy = class extends ExtensionAPI {
             "websites.hyperlinkAuditingEnabled",
             () => {
               return Preferences.get("browser.send_pings");
+            }),
+          referrersEnabled: getAPI(extension,
+            "websites.referrersEnabled",
+            () => {
+              return Preferences.get("network.http.sendRefererHeader") !== 0;
             }),
         },
       },

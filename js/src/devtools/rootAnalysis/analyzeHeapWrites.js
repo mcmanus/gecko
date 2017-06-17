@@ -182,6 +182,7 @@ function treatAsSafeArgument(entry, varName, csuName)
         ["Gecko_EnsureTArrayCapacity", "aArray", null],
         ["Gecko_ClearPODTArray", "aArray", null],
         ["Gecko_SetStyleGridTemplateArrayLengths", "aValue", null],
+        ["Gecko_SetGridTemplateLineNamesLength", "aValue", null],
         ["Gecko_ResizeTArrayForStrings", "aArray", null],
         ["Gecko_ClearAndResizeStyleContents", "aContent", null],
         [/Gecko_ClearAndResizeCounter/, "aContent", null],
@@ -217,6 +218,8 @@ function treatAsSafeArgument(entry, varName, csuName)
         ["Gecko_AddPropertyToSet", "aPropertySet", null],
         ["Gecko_CalcStyleDifference", "aAnyStyleChanged", null],
         ["Gecko_nsStyleSVG_CopyContextProperties", "aDst", null],
+        ["Gecko_nsStyleFont_PrefillDefaultForGeneric", "aFont", null],
+        ["Gecko_nsStyleSVG_SetContextPropertiesLength", "aSvg", null],
     ];
     for (var [entryMatch, varMatch, csuMatch] of whitelist) {
         assert(entryMatch || varMatch || csuMatch);
@@ -243,7 +246,7 @@ function checkFieldWrite(entry, location, fields)
             return;
         if (/nsCOMPtr<.*?>.mRawPtr/.test(field))
             return;
-}
+    }
 
     var str = "";
     for (var field of fields)
@@ -320,6 +323,14 @@ function ignoreCallEdge(entry, callee)
         return true;
     }
 
+    // AllChildrenIterator asks AppendOwnedAnonBoxes to append into an nsTArray
+    // local variable.
+    if (/nsIFrame::AppendOwnedAnonBoxes/.test(callee) &&
+        /AllChildrenIterator::AppendNativeAnonymousChildren/.test(name))
+    {
+        return true;
+    }
+
     // Runnables are created and named on one thread, then dispatched
     // (possibly to another). Writes on the origin thread are ok.
     if (/::SetName/.test(callee) &&
@@ -331,8 +342,8 @@ function ignoreCallEdge(entry, callee)
     // We manually lock here
     if (name == "Gecko_nsFont_InitSystem" ||
         name == "Gecko_GetFontMetrics" ||
-        name == "Gecko_nsStyleFont_FixupNoneGeneric" ||
-        name == "Gecko_nsStyleFont_FixupMinFontSize")
+        name == "Gecko_nsStyleFont_FixupMinFontSize" ||
+        /ThreadSafeGetDefaultFontHelper/.test(name))
     {
         return true;
     }
@@ -390,6 +401,7 @@ function ignoreContents(entry)
         /CSSValueSerializeCalcOps::Append/,
         "Gecko_CSSValue_SetFunction",
         "Gecko_CSSValue_SetArray",
+        "Gecko_CSSValue_InitSharedList",
         "Gecko_EnsureMozBorderColors",
         "Gecko_ClearMozBorderColors",
         "Gecko_AppendMozBorderColors",

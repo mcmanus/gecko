@@ -112,8 +112,8 @@ public:
                                   nsDisplayListBuilder* aBuilder,
                                   const nsDisplayListSet& aLists);
 
-  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
-  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
+  virtual nscoord GetMinISize(gfxContext *aRenderingContext) override;
+  virtual nscoord GetPrefISize(gfxContext *aRenderingContext) override;
   virtual IntrinsicISizeOffsetData IntrinsicISizeOffsets() override;
 
   virtual void Reflow(nsPresContext*      aPresContext,
@@ -158,11 +158,8 @@ public:
 
   // there is no set row index because row index depends on the cell's parent row only
 
-  // Update the style on the block wrappers around our kids.
-  virtual void DoUpdateStyleOfOwnedAnonBoxes(
-    mozilla::ServoStyleSet& aStyleSet,
-    nsStyleChangeList& aChangeList,
-    nsChangeHint aHintForThisFrame) override;
+  // Return our cell content frame.
+  void AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult) override;
 
   /*---------------- nsITableCellLayout methods ------------------------*/
 
@@ -210,7 +207,7 @@ public:
 
   virtual LogicalMargin GetBorderWidth(WritingMode aWM) const;
 
-  virtual DrawResult PaintBackground(nsRenderingContext& aRenderingContext,
+  virtual DrawResult PaintBackground(gfxContext&          aRenderingContext,
                                      const nsRect&        aDirtyRect,
                                      nsPoint              aPt,
                                      uint32_t             aFlags);
@@ -328,7 +325,7 @@ public:
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
 
-  virtual DrawResult PaintBackground(nsRenderingContext& aRenderingContext,
+  virtual DrawResult PaintBackground(gfxContext&          aRenderingContext,
                                      const nsRect&        aDirtyRect,
                                      nsPoint              aPt,
                                      uint32_t             aFlags) override;

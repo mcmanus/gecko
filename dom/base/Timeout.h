@@ -11,12 +11,11 @@
 #include "mozilla/TimeStamp.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
+#include "nsGlobalWindow.h"
+#include "nsITimeoutHandler.h"
 
-class nsGlobalWindow;
 class nsIEventTarget;
 class nsIPrincipal;
-class nsITimeoutHandler;
-class nsITimer;
 class nsIEventTarget;
 
 namespace mozilla {
@@ -28,7 +27,7 @@ namespace dom {
  * abstracts the language specific cruft.
  */
 class Timeout final
-  : public LinkedListElement<Timeout>
+  : public LinkedListElement<RefPtr<Timeout>>
 {
 public:
   Timeout();
@@ -36,25 +35,14 @@ public:
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(Timeout)
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(Timeout)
 
-  // The target may be specified to use a particular event queue for the
-  // resulting timer runnable.  A nullptr target will result in the
-  // default main thread being used.
-  nsresult InitTimer(nsIEventTarget* aTarget, uint32_t aDelay);
-
   enum class Reason
   {
     eTimeoutOrInterval,
     eIdleCallbackTimeout,
   };
 
-#ifdef DEBUG
-  bool HasRefCnt(uint32_t aCount) const;
-#endif // DEBUG
-
   void SetWhenOrTimeRemaining(const TimeStamp& aBaseTime,
                               const TimeDuration& aDelay);
-
-  void SetDummyWhen(const TimeStamp& aWhen);
 
   // Can only be called when not frozen.
   const TimeStamp& When() const;
@@ -64,9 +52,6 @@ public:
 
   // Window for which this timeout fires
   RefPtr<nsGlobalWindow> mWindow;
-
-  // The actual timer object
-  nsCOMPtr<nsITimer> mTimer;
 
   // True if the timeout was cleared
   bool mCleared;
@@ -87,8 +72,8 @@ public:
   // Returned as value of setTimeout()
   uint32_t mTimeoutId;
 
-  // Interval in milliseconds
-  uint32_t mInterval;
+  // Interval
+  TimeDuration mInterval;
 
   // Identifies which firing level this Timeout is being processed in
   // when sync loops trigger nested firing.
@@ -109,10 +94,11 @@ private:
   // Nominal time to run this timeout.  Use only when timeouts are not
   // frozen.
   TimeStamp mWhen;
+
   // Remaining time to wait.  Used only when timeouts are frozen.
   TimeDuration mTimeRemaining;
 
-  ~Timeout();
+  ~Timeout() = default;
 };
 
 } // namespace dom

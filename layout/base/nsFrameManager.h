@@ -51,9 +51,7 @@ struct UndisplayedNode : public LinkedListElement<UndisplayedNode>
 } // namespace mozilla
 
 /**
- * Frame manager interface. The frame manager serves two purposes:
- * <li>provides a service for mapping from content to frame and from
- * out-of-flow frame to placeholder frame.
+ * Frame manager interface. The frame manager serves one purpose:
  * <li>handles structural modifications to the frame model. If the frame model
  * lock can be acquired, then the changes are processed immediately; otherwise,
  * they're queued and processed later.
@@ -80,13 +78,6 @@ public:
    */
   void Destroy();
 
-  // Placeholder frame functions
-  nsPlaceholderFrame* GetPlaceholderFrameFor(const nsIFrame* aFrame);
-  void RegisterPlaceholderFrame(nsPlaceholderFrame* aPlaceholderFrame);
-  void UnregisterPlaceholderFrame(nsPlaceholderFrame* aPlaceholderFrame);
-
-  void ClearPlaceholderFrameMap();
-
   // Mapping undisplayed content
   nsStyleContext* GetUndisplayedContent(const nsIContent* aContent)
   {
@@ -107,7 +98,6 @@ public:
 
   void ClearUndisplayedContentIn(nsIContent* aContent,
                                  nsIContent* aParentContent);
-  void ClearAllUndisplayedContentIn(nsIContent* aParentContent);
 
   // display:contents related methods:
   /**
@@ -158,7 +148,6 @@ public:
    * style contexts for its descendants.
    */
   void ClearDisplayContentsIn(nsIContent* aContent, nsIContent* aParentContent);
-  void ClearAllDisplayContentsIn(nsIContent* aParentContent);
 
   // Functions for manipulating the frame model
   void AppendFrames(nsContainerFrame* aParentFrame,
@@ -199,6 +188,8 @@ public:
   void RestoreFrameStateFor(nsIFrame* aFrame, nsILayoutHistoryState* aState);
 
 protected:
+  void ClearAllMapsFor(nsIContent* aParentContent);
+
   static nsStyleContext* GetStyleContextInMap(UndisplayedMap* aMap,
                                               const nsIContent* aContent);
   static mozilla::UndisplayedNode*

@@ -86,6 +86,13 @@ private:
 
   // This is where DECL_MEDIA_PREF for each of the preferences should go.
 
+  // Cache sizes.
+  DECL_MEDIA_PREF("media.memory_cache_max_size",              MediaMemoryCacheMaxSize, uint32_t, 8192);
+  DECL_MEDIA_PREF("media.memory_caches_combined_limit_kb",    MediaMemoryCachesCombinedLimitKb, uint32_t, 524288);
+  DECL_MEDIA_PREF("media.memory_caches_combined_limit_pc_sysmem",
+                                                              MediaMemoryCachesCombinedLimitPcSysmem, uint32_t, 5);
+  DECL_MEDIA_PREF("media.cache.resource-index",               MediaResourceIndexCache, uint32_t, 8192);
+
   // AudioSink
   DECL_MEDIA_PREF("accessibility.monoaudio.enable",           MonoAudio, bool, false);
   DECL_MEDIA_PREF("media.resampling.enabled",                 AudioSinkResampling, bool, false);
@@ -179,6 +186,9 @@ private:
   // Flac
   DECL_MEDIA_PREF("media.ogg.flac.enabled",                   FlacInOgg, bool, false);
   DECL_MEDIA_PREF("media.flac.enabled",                       FlacEnabled, bool, true);
+
+  // Hls
+  DECL_MEDIA_PREF("media.hls.enabled",                        HLSEnabled, bool, false);
 
 #if !defined(RELEASE_OR_BETA)
   DECL_MEDIA_PREF("media.rust.test_mode",                     RustTestMode, bool, false);

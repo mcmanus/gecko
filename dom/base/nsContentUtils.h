@@ -83,6 +83,7 @@ class nsNameSpaceManager;
 class nsIObserver;
 class nsIParser;
 class nsIParserService;
+class nsIPluginTag;
 class nsIPresShell;
 class nsIPrincipal;
 class nsIRequest;
@@ -269,6 +270,7 @@ public:
                                   JS::MutableHandle<JS::PropertyDescriptor> aDesc);
 
   // Check whether we should avoid leaking distinguishing information to JS/CSS.
+  // This function can be called both in the main thread and worker threads.
   static bool ShouldResistFingerprinting();
   static bool ShouldResistFingerprinting(nsIDocShell* aDocShell);
 
@@ -619,16 +621,30 @@ public:
   /**
    * Convert aInput (in encoding aEncoding) to UTF16 in aOutput.
    *
+   * @deprecated Use mozilla::Encoding::DecodeWithBOMRemoval() in new code.
+   * https://bugzilla.mozilla.org/show_bug.cgi?id=1369020
+   *
    * @param aEncoding the Gecko-canonical name of the encoding or the empty
    *                  string (meaning UTF-8)
    */
   static nsresult ConvertStringFromEncoding(const nsACString& aEncoding,
-                                            const nsACString& aInput,
+                                            const char* aInput,
+                                            uint32_t aInputLen,
                                             nsAString& aOutput);
+
+  static nsresult ConvertStringFromEncoding(const nsACString& aEncoding,
+                                            const nsACString& aInput,
+                                            nsAString& aOutput) {
+    return ConvertStringFromEncoding(
+        aEncoding, aInput.BeginReading(), aInput.Length(), aOutput);
+  }
 
   /**
    * Determine whether a buffer begins with a BOM for UTF-8, UTF-16LE,
    * UTF-16BE
+   *
+   * @deprecated Use mozilla::Encoding::ForBOM() in new code.
+   * https://bugzilla.mozilla.org/show_bug.cgi?id=1369022
    *
    * @param aBuffer the buffer to check
    * @param aLength the length of the buffer
@@ -2187,7 +2203,7 @@ public:
   static bool ResistFingerprinting(mozilla::dom::CallerType aCallerType)
   {
     return aCallerType != mozilla::dom::CallerType::System &&
-           mozilla::nsRFPService::IsResistFingerprintingEnabled();
+           ShouldResistFingerprinting();
   }
 
   /**
@@ -2228,6 +2244,21 @@ public:
   static bool RequestIdleCallbackEnabled()
   {
     return sRequestIdleCallbackEnabled;
+  }
+
+  /**
+   * Returns true if CSSOM origin check should be skipped for WebDriver
+   * based crawl to be able to collect data from cross-origin CSS style
+   * sheets. This can be enabled by setting environment variable
+   * MOZ_BYPASS_CSSOM_ORIGIN_CHECK.
+   */
+  static bool BypassCSSOMOriginCheck()
+  {
+#ifdef RELEASE_OR_BETA
+    return false;
+#else
+    return sBypassCSSOMOriginCheck;
+#endif
   }
 
   /**
@@ -2905,6 +2936,16 @@ public:
   static Element* GetClosestNonNativeAnonymousAncestor(Element* aElement);
 
   /**
+   * Returns the nsIPluginTag for the plugin we should try to use for a given
+   * MIME type.
+   *
+   * @param aMIMEType  The MIME type of the document being loaded.
+   * @param aNoFakePlugin  If false then this method should consider JS plugins.
+   */
+  static already_AddRefed<nsIPluginTag>
+    PluginTagForType(const nsCString& aMIMEType, bool aNoFakePlugin);
+
+  /**
    * Returns one of the nsIObjectLoadingContent::TYPE_ values describing the
    * content type which will be used for the given MIME type when loaded within
    * an nsObjectLoadingContent.
@@ -2913,12 +2954,14 @@ public:
    * take that into account.
    *
    * @param aMIMEType  The MIME type of the document being loaded.
+   * @param aNoFakePlugin  If false then this method should consider JS plugins.
    * @param aContent The nsIContent object which is performing the load. May be
    *                 nullptr in which case the docshell's plugin permissions
    *                 will not be checked.
    */
   static uint32_t
   HtmlObjectContentTypeForMIMEType(const nsCString& aMIMEType,
+                                   bool aNoFakePlugin,
                                    nsIContent* aContent);
 
   static already_AddRefed<nsIEventTarget>
@@ -2956,6 +2999,25 @@ public:
   // Check pref "privacy.trackingprotection.lower_network_priority" to see
   // if we want to lower the priority of the channel.
   static bool IsLowerNetworkPriority() { return sLowerNetworkPriority; }
+
+  // Check pref "dom.script_loader.bytecode_cache.enabled" to see
+  // if we want to cache JS bytecode on the cache entry.
+  static bool IsBytecodeCacheEnabled() { return sIsBytecodeCacheEnabled; }
+
+  // Check pref "dom.script_loader.bytecode_cache.strategy" to see which
+  // heuristic strategy should be used to trigger the caching of the bytecode.
+  static int32_t BytecodeCacheStrategy() { return sBytecodeCacheStrategy; }
+
+  // Alternate data MIME type used by the ScriptLoader to register and read
+  // bytecode out of the nsCacheInfoChannel.
+  static nsCString& JSBytecodeMimeType() { return *sJSBytecodeMimeType; }
+
+  /**
+   * Checks if the passed-in name should override an existing name on the
+   * window. Values which should not override include: "", "_blank", "_top",
+   * "_parent" and "_self".
+   */
+  static bool IsOverridingWindowName(const nsAString& aName);
 
 private:
   static bool InitializeEventTable();
@@ -3084,6 +3146,11 @@ private:
   static bool sSkipCursorMoveForSameValueSet;
   static bool sRequestIdleCallbackEnabled;
   static bool sLowerNetworkPriority;
+#ifndef RELEASE_OR_BETA
+  static bool sBypassCSSOMOriginCheck;
+#endif
+  static bool sIsBytecodeCacheEnabled;
+  static int32_t sBytecodeCacheStrategy;
   static uint32_t sCookiesLifetimePolicy;
   static uint32_t sCookiesBehavior;
 
@@ -3108,6 +3175,10 @@ private:
   static nsString* sOSText;
   static nsString* sAltText;
   static nsString* sModifierSeparator;
+
+  // Alternate data mime type, used by the ScriptLoader to register and read the
+  // bytecode out of the nsCacheInfoChannel.
+  static nsCString* sJSBytecodeMimeType;
 
 #if !(defined(DEBUG) || defined(MOZ_ENABLE_JS_DUMP))
   static bool sDOMWindowDumpEnabled;

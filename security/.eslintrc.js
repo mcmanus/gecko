@@ -51,9 +51,6 @@ module.exports = {
     // Disallow constant expressions in conditions (except for loops).
     "no-constant-condition": ["error", { "checkLoops": false }],
 
-    // Disallow control characters in regular expressions.
-    "no-control-regex": "error",
-
     // Disallow duplicate class members.
     "no-dupe-class-members": "error",
 
@@ -92,9 +89,6 @@ module.exports = {
 
     // Disallow unmodified loop conditions.
     "no-unmodified-loop-condition": "error",
-
-    // Disallow ternary operators when simpler alternatives exist.
-    "no-unneeded-ternary": "error",
 
     // No expressions where a statement is expected
     "no-unused-expressions": "error",

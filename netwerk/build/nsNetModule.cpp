@@ -271,6 +271,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsFtpProtocolHandler, Init)
 #include "nsHttpNTLMAuth.h"
 #include "nsHttpActivityDistributor.h"
 #include "ThrottleQueue.h"
+#include "BackgroundChannelRegistrar.h"
 #undef LOG
 #undef LOG_ENABLED
 namespace mozilla {
@@ -284,6 +285,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsHttpActivityDistributor)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHttpBasicAuth)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHttpDigestAuth)
 NS_GENERIC_FACTORY_CONSTRUCTOR(ThrottleQueue)
+NS_GENERIC_FACTORY_CONSTRUCTOR(BackgroundChannelRegistrar)
 } // namespace net
 } // namespace mozilla
 #endif // !NECKO_PROTOCOL_http
@@ -809,6 +811,7 @@ NS_DEFINE_NAMED_CID(NS_HTTPAUTHMANAGER_CID);
 NS_DEFINE_NAMED_CID(NS_HTTPCHANNELAUTHPROVIDER_CID);
 NS_DEFINE_NAMED_CID(NS_HTTPACTIVITYDISTRIBUTOR_CID);
 NS_DEFINE_NAMED_CID(NS_THROTTLEQUEUE_CID);
+NS_DEFINE_NAMED_CID(NS_BACKGROUNDCHANNELREGISTRAR_CID);
 #endif // !NECKO_PROTOCOL_http
 #ifdef NECKO_PROTOCOL_ftp
 NS_DEFINE_NAMED_CID(NS_FTPPROTOCOLHANDLER_CID);
@@ -961,6 +964,7 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_HTTPCHANNELAUTHPROVIDER_CID, false, nullptr, mozilla::net::nsHttpChannelAuthProviderConstructor },
     { &kNS_HTTPACTIVITYDISTRIBUTOR_CID, false, nullptr, mozilla::net::nsHttpActivityDistributorConstructor },
     { &kNS_THROTTLEQUEUE_CID, false, nullptr, mozilla::net::ThrottleQueueConstructor },
+    { &kNS_BACKGROUNDCHANNELREGISTRAR_CID, false, nullptr, mozilla::net::BackgroundChannelRegistrarConstructor },
 #endif // !NECKO_PROTOCOL_http
 #ifdef NECKO_PROTOCOL_ftp
     { &kNS_FTPPROTOCOLHANDLER_CID, false, nullptr, nsFtpProtocolHandlerConstructor },
@@ -1123,6 +1127,7 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { NS_HTTPCHANNELAUTHPROVIDER_CONTRACTID, &kNS_HTTPCHANNELAUTHPROVIDER_CID },
     { NS_HTTPACTIVITYDISTRIBUTOR_CONTRACTID, &kNS_HTTPACTIVITYDISTRIBUTOR_CID },
     { NS_THROTTLEQUEUE_CONTRACTID, &kNS_THROTTLEQUEUE_CID },
+    { NS_BACKGROUNDCHANNELREGISTRAR_CONTRACTID, &kNS_BACKGROUNDCHANNELREGISTRAR_CID },
 #endif // !NECKO_PROTOCOL_http
 #ifdef NECKO_PROTOCOL_ftp
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "ftp", &kNS_FTPPROTOCOLHANDLER_CID },

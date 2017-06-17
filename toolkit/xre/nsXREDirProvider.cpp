@@ -63,9 +63,12 @@
 #include "UIKitDirProvider.h"
 #endif
 
-#if (defined(XP_WIN) || defined(XP_MACOSX)) && defined(MOZ_CONTENT_SANDBOX)
+#if defined(MOZ_CONTENT_SANDBOX)
+#include "mozilla/SandboxSettings.h"
+#if (defined(XP_WIN) || defined(XP_MACOSX))
 #include "nsIUUIDGenerator.h"
 #include "mozilla/Unused.h"
+#endif
 #endif
 
 #if defined(XP_MACOSX)
@@ -686,14 +689,7 @@ nsXREDirProvider::LoadContentProcessTempDir()
 static bool
 IsContentSandboxDisabled()
 {
-  if (!BrowserTabsRemoteAutostart()) {
-    return false;
-  }
-#if defined(XP_WIN) || defined(XP_MACOSX)
-  const bool isSandboxDisabled =
-    Preferences::GetInt("security.sandbox.content.level") < 1;
-#endif
-  return isSandboxDisabled;
+  return !BrowserTabsRemoteAutostart() || (GetEffectiveContentSandboxLevel() < 1);
 }
 
 //
@@ -777,7 +773,10 @@ CreateContentProcessSandboxTempDir()
     nsCOMPtr<nsIPrefService> prefsvc = Preferences::GetService();
     if (!prefsvc || NS_FAILED((rv = prefsvc->SavePrefFile(nullptr)))) {
       // Again, if we fail to save the pref file we might not be able to clean
-      // up the temp directory, so don't create one.
+      // up the temp directory, so don't create one.  Note that in the case
+      // the preference values allows an off main thread save, the successful
+      // return from the call doesn't mean we actually saved the file.  See
+      // bug 1364496 for details.
       NS_WARNING("Failed to save pref file, cannot create temp dir.");
       return nullptr;
     }
@@ -1126,29 +1125,16 @@ nsXREDirProvider::DoShutdown()
 static nsresult
 GetShellFolderPath(KNOWNFOLDERID folder, nsAString& _retval)
 {
-  wchar_t* buf;
-  uint32_t bufLength = _retval.GetMutableData(&buf, MAXPATHLEN + 3);
-  NS_ENSURE_TRUE(bufLength >= (MAXPATHLEN + 3), NS_ERROR_OUT_OF_MEMORY);
-
-  nsresult rv = NS_OK;
-
-  LPITEMIDLIST pItemIDList = nullptr;
-
   DWORD flags = KF_FLAG_SIMPLE_IDLIST | KF_FLAG_DONT_VERIFY | KF_FLAG_NO_ALIAS;
-  if (SUCCEEDED(SHGetKnownFolderIDList(folder, flags, NULL, &pItemIDList)) &&
-      SHGetPathFromIDListW(pItemIDList, buf)) {
-    // We're going to use wcslen (wcsnlen not available in msvc7.1) so make
-    // sure to null terminate.
-    buf[bufLength - 1] = L'\0';
-    _retval.SetLength(wcslen(buf));
-  } else {
-    _retval.SetLength(0);
-    rv = NS_ERROR_NOT_AVAILABLE;
+  PWSTR path = nullptr;
+
+  if (!SUCCEEDED(SHGetKnownFolderPath(folder, flags, NULL, &path))) {
+    return NS_ERROR_NOT_AVAILABLE;
   }
 
-  CoTaskMemFree(pItemIDList);
-
-  return rv;
+  _retval = nsDependentString(path);
+  CoTaskMemFree(path);
+  return NS_OK;
 }
 
 /**
@@ -1661,7 +1647,7 @@ nsXREDirProvider::AppendProfilePath(nsIFile* aFile,
                                     bool aLocal)
 {
   NS_ASSERTION(aFile, "Null pointer!");
-  
+
   if (!gAppData) {
     return NS_ERROR_FAILURE;
   }

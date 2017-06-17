@@ -113,6 +113,7 @@ panelview:not([mainview]):not([current]) {
   visibility: collapse;
 }
 
+panelview[mainview] > .panel-header,
 panelview:not([title]) > .panel-header {
   display: none;
 }
@@ -135,16 +136,6 @@ tabbrowser {
 
 #tabbrowser-tabs:not([overflow="true"])[using-closing-tabs-spacer] ~ #alltabs-button {
   visibility: hidden; /* temporary space to keep a tab's close button under the cursor */
-}
-
-.tabs-newtab-button > .toolbarbutton-menu-dropmarker,
-#new-tab-button > .toolbarbutton-menu-dropmarker {
-  display: none;
-}
-
-/* override drop marker image padding */
-.tabs-newtab-button > .toolbarbutton-icon {
-  margin-inline-end: 0;
 }
 
 .tabbrowser-tab {
@@ -1334,9 +1325,9 @@ toolbarpaletteitem[place="palette"][hidden] {
 }
 
 /* Page action menu */
-#page-action-sendToDeviceView-body[signedin] > #page-action-sendToDevice-fxa-button,
-#page-action-sendToDeviceView-body:not([signedin]) > #page-action-no-devices-button,
-#page-action-sendToDeviceView-body[hasdevices] > #page-action-no-devices-button {
+#page-action-sendToDeviceView-body:not([state="notsignedin"]) > #page-action-sendToDevice-fxa-button,
+#page-action-sendToDeviceView-body:not([state="nodevice"]) > #page-action-no-devices-button,
+#page-action-sendToDeviceView-body:not([state="notready"]) > #page-action-sync-not-ready-button {
   display: none;
 }
 

@@ -14,6 +14,8 @@
 #include "mozilla/css/GroupRule.h"
 #include "mozilla/dom/CSSRuleList.h"
 #include "mozilla/dom/MediaList.h"
+#include "nsIStyleSheetLinkingElement.h"
+#include "Loader.h"
 
 
 #include "mozAutoDocUpdate.h"
@@ -84,9 +86,21 @@ ServoStyleSheet::ServoStyleSheet(const ServoStyleSheet& aCopy,
                                  dom::CSSImportRule* aOwnerRuleToUse,
                                  nsIDocument* aDocumentToUse,
                                  nsINode* aOwningNodeToUse)
-  : StyleSheet(aCopy, aOwnerRuleToUse, aDocumentToUse, aOwningNodeToUse)
+  : StyleSheet(aCopy,
+               aParentToUse,
+               aOwnerRuleToUse,
+               aDocumentToUse,
+               aOwningNodeToUse)
 {
-  mParent = aParentToUse;
+  if (mDirty) { // CSSOM's been there, force full copy now
+    NS_ASSERTION(mInner->mComplete,
+                 "Why have rules been accessed on an incomplete sheet?");
+    // FIXME: handle failure?
+    //
+    // NOTE: It's important to call this from the subclass, since this could
+    // access uninitialized members otherwise.
+    EnsureUniqueInner();
+  }
 }
 
 ServoStyleSheet::~ServoStyleSheet()
@@ -129,9 +143,10 @@ ServoStyleSheet::ParseSheet(css::Loader* aLoader,
                             nsIURI* aBaseURI,
                             nsIPrincipal* aSheetPrincipal,
                             uint32_t aLineNumber,
-                            nsCompatibility aCompatMode)
+                            nsCompatibility aCompatMode,
+                            css::LoaderReusableStyleSheets* aReusableSheets)
 {
-  MOZ_ASSERT_IF(mMedia, mMedia->IsServo());
+  MOZ_ASSERT(!mMedia || mMedia->IsServo());
   RefPtr<URLExtraData> extraData =
     new URLExtraData(aBaseURI, aSheetURI, aSheetPrincipal);
 
@@ -150,7 +165,8 @@ ServoStyleSheet::ParseSheet(css::Loader* aLoader,
     // now) we should update the mediaList here too, though it's slightly
     // tricky.
     Servo_StyleSheet_ClearAndUpdate(Inner()->mSheet, aLoader,
-                                    this, &input, extraData, aLineNumber);
+                                    this, &input, extraData, aLineNumber,
+                                    aReusableSheets);
   }
 
   Inner()->mURLData = extraData.forget();
@@ -160,8 +176,65 @@ ServoStyleSheet::ParseSheet(css::Loader* aLoader,
 void
 ServoStyleSheet::LoadFailed()
 {
-  Inner()->mSheet = Servo_StyleSheet_Empty(mParsingMode).Consume();
+  if (!Inner()->mSheet) {
+    // Only create empty stylesheet if this is a top level stylesheet.
+    // The raw sheet for stylesheet of @import rule is already set in
+    // loader, and we should not touch it.
+    Inner()->mSheet = Servo_StyleSheet_Empty(mParsingMode).Consume();
+  }
   Inner()->mURLData = URLExtraData::Dummy();
+}
+
+nsresult
+ServoStyleSheet::ReparseSheet(const nsAString& aInput)
+{
+  // TODO(kuoe0): Bug 1367996 - Need to call document notification
+  // (StyleRuleAdded() and StyleRuleRemoved()) like what we do in
+  // CSSStyleSheet::ReparseSheet().
+
+  if (!mInner->mComplete) {
+    return NS_ERROR_DOM_INVALID_ACCESS_ERR;
+  }
+
+  RefPtr<css::Loader> loader;
+  if (mDocument) {
+    loader = mDocument->CSSLoader();
+    NS_ASSERTION(loader, "Document with no CSS loader!");
+  } else {
+    loader = new css::Loader(StyleBackendType::Servo, nullptr);
+  }
+
+  // cache child sheets to reuse
+  css::LoaderReusableStyleSheets reusableSheets;
+  for (StyleSheet* child = GetFirstChild(); child; child = child->mNext) {
+    if (child->GetOriginalURI()) {
+      reusableSheets.AddReusableSheet(child);
+    }
+  }
+
+  // clean up child sheets list
+  for (StyleSheet* child = GetFirstChild(); child; ) {
+    StyleSheet* next = child->mNext;
+    child->mParent = nullptr;
+    child->SetAssociatedDocument(nullptr, NotOwnedByDocument);
+    child->mNext = nullptr;
+    child = next;
+  }
+  Inner()->mFirstChild = nullptr;
+
+  uint32_t lineNumber = 1;
+  if (mOwningNode) {
+    nsCOMPtr<nsIStyleSheetLinkingElement> link = do_QueryInterface(mOwningNode);
+    if (link) {
+      lineNumber = link->GetLineNumber();
+    }
+  }
+
+  nsresult rv = ParseSheet(loader, aInput, mInner->mSheetURI, mInner->mBaseURI,
+                           mInner->mPrincipal, lineNumber,
+                           eCompatibility_FullStandards, &reusableSheets);
+  NS_ENSURE_SUCCESS(rv, rv);
+  return NS_OK;
 }
 
 // nsICSSLoaderObserver implementation

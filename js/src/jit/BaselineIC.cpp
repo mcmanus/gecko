@@ -277,61 +277,58 @@ DoTypeUpdateFallback(JSContext* cx, BaselineFrame* frame, ICUpdatedStub* stub, H
     FallbackICSpew(cx, stub->getChainFallback(), "TypeUpdate(%s)",
                    ICStub::KindString(stub->kind()));
 
+    MOZ_ASSERT(stub->isCacheIR_Updated());
+
     RootedScript script(cx, frame->script());
     RootedObject obj(cx, &objval.toObject());
-    RootedId id(cx);
 
-    switch (stub->kind()) {
-      case ICStub::CacheIR_Updated: {
-        id = stub->toCacheIR_Updated()->updateStubId();
-        MOZ_ASSERT(id != JSID_EMPTY);
+    RootedId id(cx, stub->toCacheIR_Updated()->updateStubId());
+    MOZ_ASSERT(id != JSID_EMPTY);
 
-        // The group should match the object's group, except when the object is
-        // an unboxed expando object: in that case, the group is the group of
-        // the unboxed object.
-        RootedObjectGroup group(cx, stub->toCacheIR_Updated()->updateStubGroup());
+    // The group should match the object's group, except when the object is
+    // an unboxed expando object: in that case, the group is the group of
+    // the unboxed object.
+    RootedObjectGroup group(cx, stub->toCacheIR_Updated()->updateStubGroup());
 #ifdef DEBUG
-        if (obj->is<UnboxedExpandoObject>())
-            MOZ_ASSERT(group->clasp() == &UnboxedPlainObject::class_);
-        else
-            MOZ_ASSERT(obj->group() == group);
+    if (obj->is<UnboxedExpandoObject>())
+        MOZ_ASSERT(group->clasp() == &UnboxedPlainObject::class_);
+    else
+        MOZ_ASSERT(obj->group() == group);
 #endif
 
-        // If we're storing null/undefined to a typed object property, check if
-        // we want to include it in this property's type information.
-        if (MOZ_UNLIKELY(obj->is<TypedObject>()) && value.isNullOrUndefined()) {
-            StructTypeDescr* structDescr = &obj->as<TypedObject>().typeDescr().as<StructTypeDescr>();
-            size_t fieldIndex;
-            MOZ_ALWAYS_TRUE(structDescr->fieldIndex(id, &fieldIndex));
+    // If we're storing null/undefined to a typed object property, check if
+    // we want to include it in this property's type information.
+    bool addType = true;
+    if (MOZ_UNLIKELY(obj->is<TypedObject>()) && value.isNullOrUndefined()) {
+        StructTypeDescr* structDescr = &obj->as<TypedObject>().typeDescr().as<StructTypeDescr>();
+        size_t fieldIndex;
+        MOZ_ALWAYS_TRUE(structDescr->fieldIndex(id, &fieldIndex));
 
-            TypeDescr* fieldDescr = &structDescr->fieldDescr(fieldIndex);
-            ReferenceTypeDescr::Type type = fieldDescr->as<ReferenceTypeDescr>().type();
-            if (type == ReferenceTypeDescr::TYPE_ANY) {
-                // Ignore undefined values, which are included implicitly in type
-                // information for this property.
-                if (value.isUndefined())
-                    break;
-            } else {
-                MOZ_ASSERT(type == ReferenceTypeDescr::TYPE_OBJECT);
+        TypeDescr* fieldDescr = &structDescr->fieldDescr(fieldIndex);
+        ReferenceTypeDescr::Type type = fieldDescr->as<ReferenceTypeDescr>().type();
+        if (type == ReferenceTypeDescr::TYPE_ANY) {
+            // Ignore undefined values, which are included implicitly in type
+            // information for this property.
+            if (value.isUndefined())
+                addType = false;
+        } else {
+            MOZ_ASSERT(type == ReferenceTypeDescr::TYPE_OBJECT);
 
-                // Ignore null values being written here. Null is included
-                // implicitly in type information for this property. Note that
-                // non-object, non-null values are not possible here, these
-                // should have been filtered out by the IR emitter.
-                if (value.isNull())
-                    break;
-            }
+            // Ignore null values being written here. Null is included
+            // implicitly in type information for this property. Note that
+            // non-object, non-null values are not possible here, these
+            // should have been filtered out by the IR emitter.
+            if (value.isNull())
+                addType = false;
         }
-
-        JSObject* maybeSingleton = obj->isSingleton() ? obj.get() : nullptr;
-        AddTypePropertyId(cx, group, maybeSingleton, id, value);
-        break;
-      }
-      default:
-        MOZ_CRASH("Invalid stub");
     }
 
-    if (!stub->addUpdateStubForValue(cx, script /* = outerScript */, obj, id, value)) {
+    if (MOZ_LIKELY(addType)) {
+        JSObject* maybeSingleton = obj->isSingleton() ? obj.get() : nullptr;
+        AddTypePropertyId(cx, group, maybeSingleton, id, value);
+    }
+
+    if (MOZ_UNLIKELY(!stub->addUpdateStubForValue(cx, script, obj, id, value))) {
         // The calling JIT code assumes this function is infallible (for
         // instance we may reallocate dynamic slots before calling this),
         // so ignore OOMs if we failed to attach a stub.
@@ -381,16 +378,8 @@ ICTypeUpdate_PrimitiveSet::Compiler::generateStubCode(MacroAssembler& masm)
     if (flags_ & TypeToFlag(JSVAL_TYPE_SYMBOL))
         masm.branchTestSymbol(Assembler::Equal, R0, &success);
 
-    // Currently, we will never generate primitive stub checks for object.  However,
-    // when we do get to the point where we want to collapse our monitor chains of
-    // objects and singletons down (when they get too long) to a generic "any object"
-    // in coordination with the typeset doing the same thing, this will need to
-    // be re-enabled.
-    /*
     if (flags_ & TypeToFlag(JSVAL_TYPE_OBJECT))
         masm.branchTestObject(Assembler::Equal, R0, &success);
-    */
-    MOZ_ASSERT(!(flags_ & TypeToFlag(JSVAL_TYPE_OBJECT)));
 
     if (flags_ & TypeToFlag(JSVAL_TYPE_NULL))
         masm.branchTestNull(Assembler::Equal, R0, &success);
@@ -448,6 +437,15 @@ ICTypeUpdate_ObjectGroup::Compiler::generateStubCode(MacroAssembler& masm)
 
     masm.bind(&failure);
     EmitStubGuardFailure(masm);
+    return true;
+}
+
+bool
+ICTypeUpdate_AnyValue::Compiler::generateStubCode(MacroAssembler& masm)
+{
+    // AnyValue always matches so return true.
+    masm.mov(ImmWord(1), R1.scratchReg());
+    EmitReturnFromIC(masm);
     return true;
 }
 
@@ -2049,7 +2047,7 @@ GetTemplateObjectForClassHook(JSContext* cx, JSNative hook, CallArgs& args,
 }
 
 static bool
-IsOptimizableCallStringSplit(const Value& callee, int argc, Value* args)
+IsOptimizableConstStringSplit(const Value& callee, int argc, Value* args)
 {
     if (argc != 2 || !args[0].isString() || !args[1].isString())
         return false;
@@ -2087,13 +2085,11 @@ TryAttachCallStub(JSContext* cx, ICCall_Fallback* stub, HandleScript script, jsb
     RootedValue thisv(cx, vp[1]);
 
     // Don't attach an optimized call stub if we could potentially attach an
-    // optimized StringSplit stub.
-    if (stub->numOptimizedStubs() == 0 && IsOptimizableCallStringSplit(callee, argc, vp + 2))
+    // optimized ConstStringSplit stub.
+    if (stub->numOptimizedStubs() == 0 && IsOptimizableConstStringSplit(callee, argc, vp + 2))
         return true;
 
-    MOZ_ASSERT_IF(stub->hasStub(ICStub::Call_StringSplit), stub->numOptimizedStubs() == 1);
-
-    stub->unlinkStubsWithKind(cx, ICStub::Call_StringSplit);
+    stub->unlinkStubsWithKind(cx, ICStub::Call_ConstStringSplit);
 
     if (!callee.isObject())
         return true;
@@ -2335,9 +2331,9 @@ CopyArray(JSContext* cx, HandleObject obj, MutableHandleValue result)
 }
 
 static bool
-TryAttachStringSplit(JSContext* cx, ICCall_Fallback* stub, HandleScript script,
-                     uint32_t argc, HandleValue callee, Value* vp, jsbytecode* pc,
-                     HandleValue res, bool* attached)
+TryAttachConstStringSplit(JSContext* cx, ICCall_Fallback* stub, HandleScript script,
+                          uint32_t argc, HandleValue callee, Value* vp, jsbytecode* pc,
+                          HandleValue res, bool* attached)
 {
     if (stub->numOptimizedStubs() != 0)
         return true;
@@ -2348,7 +2344,7 @@ TryAttachStringSplit(JSContext* cx, ICCall_Fallback* stub, HandleScript script,
     if (JSOp(*pc) == JSOP_NEW)
         return true;
 
-    if (!IsOptimizableCallStringSplit(callee, argc, args))
+    if (!IsOptimizableConstStringSplit(callee, argc, args))
         return true;
 
     MOZ_ASSERT(callee.isObject());
@@ -2377,9 +2373,8 @@ TryAttachStringSplit(JSContext* cx, ICCall_Fallback* stub, HandleScript script,
         }
     }
 
-    ICCall_StringSplit::Compiler compiler(cx, stub->fallbackMonitorStub()->firstMonitorStub(),
-                                          script->pcToOffset(pc), str, sep,
-                                          arr);
+    ICCall_ConstStringSplit::Compiler compiler(cx, stub->fallbackMonitorStub()->firstMonitorStub(),
+                                               script->pcToOffset(pc), str, sep, arr);
     ICStub* newStub = compiler.getStub(compiler.getStubSpace(script));
     if (!newStub)
         return false;
@@ -2402,7 +2397,7 @@ DoCallFallback(JSContext* cx, BaselineFrame* frame, ICCall_Fallback* stub_, uint
     FallbackICSpew(cx, stub, "Call(%s)", CodeName[op]);
 
     MOZ_ASSERT(argc == GET_ARGC(pc));
-    bool constructing = (op == JSOP_NEW);
+    bool constructing = (op == JSOP_NEW || op == JSOP_SUPERCALL);
     bool ignoresReturnValue = (op == JSOP_CALL_IGNORES_RV);
 
     // Ensure vp array is rooted - we may GC in here.
@@ -2419,17 +2414,25 @@ DoCallFallback(JSContext* cx, BaselineFrame* frame, ICCall_Fallback* stub_, uint
             return false;
     }
 
-    bool createSingleton = ObjectGroup::useSingletonForNewObject(cx, script, pc);
+    CallIRGenerator gen(cx, script, pc, stub->state().mode(), argc,
+                        callee, callArgs.thisv(),
+                        HandleValueArray::fromMarkedLocation(argc, vp+2));
+    bool optimizeAfterCall = false;
+    CallIRGenerator::OptStrategy optStrategy = gen.getOptStrategy(&optimizeAfterCall);
 
-    // Try attaching a call stub.
+    // Try attaching a call stub, if the CallIRGenerator has determined that this
+    // operation cannot be optimized after the call.
     bool handled = false;
-    if (!TryAttachCallStub(cx, stub, script, pc, op, argc, vp, constructing, false,
-                           createSingleton, &handled))
-    {
-        return false;
+    if (!optimizeAfterCall) {
+        bool createSingleton = ObjectGroup::useSingletonForNewObject(cx, script, pc);
+        if (!TryAttachCallStub(cx, stub, script, pc, op, argc, vp, constructing, false,
+                               createSingleton, &handled))
+        {
+            return false;
+        }
     }
 
-    if (op == JSOP_NEW) {
+    if (constructing) {
         if (!ConstructFromStack(cx, callArgs))
             return false;
         res.set(callArgs.rval());
@@ -2469,11 +2472,24 @@ DoCallFallback(JSContext* cx, BaselineFrame* frame, ICCall_Fallback* stub_, uint
     if (!stub->addMonitorStubForValue(cx, frame, types, res))
         return false;
 
-    // If 'callee' is a potential Call_StringSplit, try to attach an
-    // optimized StringSplit stub. Note that vp[0] now holds the return value
-    // instead of the callee, so we pass the callee as well.
-    if (!TryAttachStringSplit(cx, stub, script, argc, callee, vp, pc, res, &handled))
-        return false;
+    if (optimizeAfterCall && !handled && optStrategy != CallIRGenerator::OptStrategy::None) {
+        if (gen.tryAttachStub()) {
+            ICStub* newStub = AttachBaselineCacheIRStub(cx, gen.writerRef(), gen.cacheKind(),
+                                                        ICStubEngine::Baseline, script, stub,
+                                                        &handled);
+            if (newStub) {
+                JitSpew(JitSpew_BaselineIC, "  Attached CacheIR stub");
+            }
+        }
+    }
+
+    if (!handled) {
+        // If 'callee' is a potential Call_ConstStringSplit, try to attach an
+        // optimized ConstStringSplit stub. Note that vp[0] now holds the return value
+        // instead of the callee, so we pass the callee as well.
+        if (!TryAttachConstStringSplit(cx, stub, script, argc, callee, vp, pc, res, &handled))
+            return false;
+    }
 
     if (!handled)
         stub->noteUnoptimizableCall();
@@ -2490,7 +2506,7 @@ DoSpreadCallFallback(JSContext* cx, BaselineFrame* frame, ICCall_Fallback* stub_
     RootedScript script(cx, frame->script());
     jsbytecode* pc = stub->icEntry()->pc(script);
     JSOp op = JSOp(*pc);
-    bool constructing = (op == JSOP_SPREADNEW);
+    bool constructing = (op == JSOP_SPREADNEW || op == JSOP_SPREADSUPERCALL);
     FallbackICSpew(cx, stub, "SpreadCall(%s)", CodeName[op]);
 
     // Ensure vp array is rooted - we may GC in here.
@@ -3253,7 +3269,7 @@ typedef bool (*CopyArrayFn)(JSContext*, HandleObject, MutableHandleValue);
 static const VMFunction CopyArrayInfo = FunctionInfo<CopyArrayFn>(CopyArray, "CopyArray");
 
 bool
-ICCall_StringSplit::Compiler::generateStubCode(MacroAssembler& masm)
+ICCall_ConstStringSplit::Compiler::generateStubCode(MacroAssembler& masm)
 {
     MOZ_ASSERT(engine_ == Engine::Baseline);
 
@@ -3462,7 +3478,7 @@ ICCall_Native::Compiler::generateStubCode(MacroAssembler& masm)
     masm.push(scratch);
     masm.push(ICTailCallReg);
     masm.loadJSContext(scratch);
-    masm.enterFakeExitFrameForNative(scratch, isConstructing_);
+    masm.enterFakeExitFrameForNative(scratch, scratch, isConstructing_);
 
     // Execute call.
     masm.setupUnalignedABICall(scratch);
@@ -3560,7 +3576,7 @@ ICCall_ClassHook::Compiler::generateStubCode(MacroAssembler& masm)
     masm.push(scratch);
     masm.push(ICTailCallReg);
     masm.loadJSContext(scratch);
-    masm.enterFakeExitFrameForNative(scratch, isConstructing_);
+    masm.enterFakeExitFrameForNative(scratch, scratch, isConstructing_);
 
     // Execute call.
     masm.setupUnalignedABICall(scratch);

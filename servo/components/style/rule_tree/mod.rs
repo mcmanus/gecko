@@ -6,17 +6,18 @@
 
 //! The rule tree.
 
+use applicable_declarations::ApplicableDeclarationList;
 #[cfg(feature = "servo")]
 use heapsize::HeapSizeOf;
 use properties::{AnimationRules, Importance, LonghandIdSet, PropertyDeclarationBlock};
 use shared_lock::{Locked, StylesheetGuards, SharedRwLockReadGuard};
 use smallvec::SmallVec;
 use std::io::{self, Write};
+use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use stylearc::Arc;
+use stylearc::{Arc, NonZeroPtrMut};
 use stylesheets::StyleRule;
-use stylist::ApplicableDeclarationList;
 use thread_state;
 
 /// The rule tree, the structure servo uses to preserve the results of selector
@@ -229,7 +230,7 @@ impl RuleTree {
                              guards: &StylesheetGuards)
                              -> StrongRuleNode
     {
-        let rules = applicable_declarations.drain().map(|d| (d.source, d.level));
+        let rules = applicable_declarations.drain().map(|d| d.order_and_level());
         let rule_node = self.insert_ordered_rules_with_important(rules, guards);
         rule_node
     }
@@ -406,6 +407,8 @@ pub enum CascadeLevel {
     PresHints,
     /// User normal rules.
     UserNormal,
+    /// XBL <stylesheet> rules.
+    XBL,
     /// Author normal rules.
     AuthorNormal,
     /// Style attribute normal rules.
@@ -423,10 +426,18 @@ pub enum CascadeLevel {
     /// User-agent important rules.
     UAImportant,
     /// Transitions
+    ///
+    /// NB: If this changes from being last, change from_byte below.
     Transitions,
 }
 
 impl CascadeLevel {
+    /// Converts a raw byte to a CascadeLevel.
+    pub unsafe fn from_byte(byte: u8) -> Self {
+        debug_assert!(byte <= CascadeLevel::Transitions as u8);
+        mem::transmute(byte)
+    }
+
     /// Select a lock guard for this level
     pub fn guard<'a>(&self, guards: &'a StylesheetGuards<'a>) -> &'a SharedRwLockReadGuard<'a> {
         match *self {
@@ -561,6 +572,17 @@ impl RuleNode {
         self.parent.is_none()
     }
 
+    fn next_sibling(&self) -> Option<WeakRuleNode> {
+        // We use acquire semantics here to ensure proper synchronization while
+        // inserting in the child list.
+        let ptr = self.next_sibling.load(Ordering::Acquire);
+        if ptr.is_null() {
+            None
+        } else {
+            Some(WeakRuleNode::from_ptr(ptr))
+        }
+    }
+
     /// Remove this rule node from the child list.
     ///
     /// This method doesn't use proper synchronization, and it's expected to be
@@ -626,7 +648,7 @@ impl RuleNode {
 
         let _ = write!(writer, "\n");
         for child in self.iter_children() {
-            child.get().dump(guards, writer, indent + INDENT_INCREMENT);
+            child.upgrade().get().dump(guards, writer, indent + INDENT_INCREMENT);
         }
     }
 
@@ -637,7 +659,7 @@ impl RuleNode {
             current: if first_child.is_null() {
                 None
             } else {
-                Some(WeakRuleNode { ptr: first_child })
+                Some(WeakRuleNode::from_ptr(first_child))
             }
         }
     }
@@ -645,15 +667,13 @@ impl RuleNode {
 
 #[derive(Clone)]
 struct WeakRuleNode {
-    ptr: *mut RuleNode,
+    p: NonZeroPtrMut<RuleNode>,
 }
 
 /// A strong reference to a rule node.
 #[derive(Debug, PartialEq)]
 pub struct StrongRuleNode {
-    // TODO: Mark this as NonZero once stable to save space inside Option.
-    // https://github.com/rust-lang/rust/issues/27730
-    ptr: *mut RuleNode,
+    p: NonZeroPtrMut<RuleNode>,
 }
 
 #[cfg(feature = "servo")]
@@ -670,44 +690,43 @@ impl StrongRuleNode {
 
         debug!("Creating rule node: {:p}", ptr);
 
+        StrongRuleNode::from_ptr(ptr)
+    }
+
+    fn from_ptr(ptr: *mut RuleNode) -> Self {
         StrongRuleNode {
-            ptr: ptr,
+            p: NonZeroPtrMut::new(ptr)
         }
     }
 
     fn downgrade(&self) -> WeakRuleNode {
-        WeakRuleNode {
-            ptr: self.ptr,
-        }
-    }
-
-    fn next_sibling(&self) -> Option<WeakRuleNode> {
-        // We use acquire semantics here to ensure proper synchronization while
-        // inserting in the child list.
-        let ptr = self.get().next_sibling.load(Ordering::Acquire);
-        if ptr.is_null() {
-            None
-        } else {
-            Some(WeakRuleNode {
-                ptr: ptr
-            })
-        }
+        WeakRuleNode::from_ptr(self.ptr())
     }
 
     fn parent(&self) -> Option<&StrongRuleNode> {
         self.get().parent.as_ref()
     }
 
-    fn ensure_child(&self,
-                    root: WeakRuleNode,
-                    source: StyleSource,
-                    level: CascadeLevel) -> StrongRuleNode {
+    fn ensure_child(
+        &self,
+        root: WeakRuleNode,
+        source: StyleSource,
+        level: CascadeLevel
+    ) -> StrongRuleNode {
         let mut last = None;
-        // TODO(emilio): We could avoid all the refcount churn here.
+
+        // NB: This is an iterator over _weak_ nodes.
+        //
+        // It's fine though, because nothing can make us GC while this happens,
+        // and this happens to be hot.
+        //
+        // TODO(emilio): We could actually make this even less hot returning a
+        // WeakRuleNode, and implementing this on WeakRuleNode itself...
         for child in self.get().iter_children() {
-            if child.get().level == level &&
-                child.get().source.as_ref().unwrap().ptr_equals(&source) {
-                return child;
+            let child_node = unsafe { &*child.ptr() };
+            if child_node.level == level &&
+                child_node.source.as_ref().unwrap().ptr_equals(&source) {
+                return child.upgrade();
             }
             last = Some(child);
         }
@@ -719,11 +738,12 @@ impl StrongRuleNode {
         let new_ptr: *mut RuleNode = &mut *node;
 
         loop {
-            let strong;
+            let next;
 
             {
-                let next_sibling_ptr = match last {
-                    Some(ref l) => &l.get().next_sibling,
+                let last_node = last.as_ref().map(|l| unsafe { &*l.ptr() });
+                let next_sibling_ptr = match last_node {
+                    Some(ref l) => &l.next_sibling,
                     None => &self.get().first_child,
                 };
 
@@ -748,31 +768,31 @@ impl StrongRuleNode {
 
                 // Existing is not null: some thread inserted a child node since
                 // we accessed `last`.
-                strong = WeakRuleNode { ptr: existing }.upgrade();
+                next = WeakRuleNode::from_ptr(existing);
 
-                if strong.get().source.as_ref().unwrap().ptr_equals(&source) {
+                if unsafe { &*next.ptr() }.source.as_ref().unwrap().ptr_equals(&source) {
                     // That node happens to be for the same style source, use
                     // that, and let node fall out of scope.
-                    return strong;
+                    return next.upgrade();
                 }
             }
 
             // Try again inserting after the new last child.
-            last = Some(strong);
+            last = Some(next);
         }
     }
 
     /// Raw pointer to the RuleNode
     pub fn ptr(&self) -> *mut RuleNode {
-        self.ptr
+        self.p.ptr()
     }
 
     fn get(&self) -> &RuleNode {
         if cfg!(debug_assertions) {
-            let node = unsafe { &*self.ptr };
+            let node = unsafe { &*self.ptr() };
             assert!(node.refcount.load(Ordering::Relaxed) > 0);
         }
-        unsafe { &*self.ptr }
+        unsafe { &*self.ptr() }
     }
 
     /// Get the style source corresponding to this rule node. May return `None`
@@ -808,7 +828,7 @@ impl StrongRuleNode {
     unsafe fn pop_from_free_list(&self) -> Option<WeakRuleNode> {
         // NB: This can run from the root node destructor, so we can't use
         // `get()`, since it asserts the refcount is bigger than zero.
-        let me = &*self.ptr;
+        let me = &*self.ptr();
 
         debug_assert!(me.is_root());
 
@@ -831,7 +851,7 @@ impl StrongRuleNode {
         debug_assert!(!current.is_null(),
                       "Multiple threads are operating on the free list at the \
                        same time?");
-        debug_assert!(current != self.ptr,
+        debug_assert!(current != self.ptr(),
                       "How did the root end up in the free list?");
 
         let next = (*current).next_free.swap(ptr::null_mut(), Ordering::Relaxed);
@@ -843,17 +863,17 @@ impl StrongRuleNode {
 
         debug!("Popping from free list: cur: {:?}, next: {:?}", current, next);
 
-        Some(WeakRuleNode { ptr: current })
+        Some(WeakRuleNode::from_ptr(current))
     }
 
     unsafe fn assert_free_list_has_no_duplicates_or_null(&self) {
         assert!(cfg!(debug_assertions), "This is an expensive check!");
         use std::collections::HashSet;
 
-        let me = &*self.ptr;
+        let me = &*self.ptr();
         assert!(me.is_root());
 
-        let mut current = self.ptr;
+        let mut current = self.ptr();
         let mut seen = HashSet::new();
         while current != FREE_LIST_SENTINEL {
             let next = (*current).next_free.load(Ordering::Relaxed);
@@ -872,7 +892,7 @@ impl StrongRuleNode {
 
         // NB: This can run from the root node destructor, so we can't use
         // `get()`, since it asserts the refcount is bigger than zero.
-        let me = &*self.ptr;
+        let me = &*self.ptr();
 
         debug_assert!(me.is_root(), "Can't call GC on a non-root node!");
 
@@ -914,7 +934,6 @@ impl StrongRuleNode {
         -> bool
         where E: ::dom::TElement
     {
-        use cssparser::RGBA;
         use gecko_bindings::structs::{NS_AUTHOR_SPECIFIED_BACKGROUND, NS_AUTHOR_SPECIFIED_BORDER};
         use gecko_bindings::structs::{NS_AUTHOR_SPECIFIED_PADDING, NS_AUTHOR_SPECIFIED_TEXT_SHADOW};
         use properties::{CSSWideKeyword, LonghandId, LonghandIdSet};
@@ -1051,7 +1070,8 @@ impl StrongRuleNode {
                     CascadeLevel::UANormal |
                     CascadeLevel::UAImportant |
                     CascadeLevel::UserNormal |
-                    CascadeLevel::UserImportant => {
+                    CascadeLevel::UserImportant |
+                    CascadeLevel::XBL => {
                         for (id, declaration) in longhands {
                             if properties.contains(id) {
                                 // This property was set by a non-author rule.
@@ -1085,7 +1105,7 @@ impl StrongRuleNode {
                             if properties.contains(id) {
                                 if !author_colors_allowed {
                                     if let PropertyDeclaration::BackgroundColor(ref color) = *declaration {
-                                        return color.parsed == Color::RGBA(RGBA::transparent())
+                                        return *color == Color::transparent()
                                     }
                                 }
                                 return true
@@ -1237,19 +1257,17 @@ impl Clone for StrongRuleNode {
         debug!("{:?}: {:?}+", self.ptr(), self.get().refcount.load(Ordering::Relaxed));
         debug_assert!(self.get().refcount.load(Ordering::Relaxed) > 0);
         self.get().refcount.fetch_add(1, Ordering::Relaxed);
-        StrongRuleNode {
-            ptr: self.ptr,
-        }
+        StrongRuleNode::from_ptr(self.ptr())
     }
 }
 
 impl Drop for StrongRuleNode {
     fn drop(&mut self) {
-        let node = unsafe { &*self.ptr };
+        let node = unsafe { &*self.ptr() };
 
         debug!("{:?}: {:?}-", self.ptr(), node.refcount.load(Ordering::Relaxed));
         debug!("Dropping node: {:?}, root: {:?}, parent: {:?}",
-               self.ptr,
+               self.ptr(),
                node.root.as_ref().map(|r| r.ptr()),
                node.parent.as_ref().map(|p| p.ptr()));
         let should_drop = {
@@ -1330,9 +1348,7 @@ impl Drop for StrongRuleNode {
 
 impl<'a> From<&'a StrongRuleNode> for WeakRuleNode {
     fn from(node: &'a StrongRuleNode) -> Self {
-        WeakRuleNode {
-            ptr: node.ptr(),
-        }
+        WeakRuleNode::from_ptr(node.ptr())
     }
 }
 
@@ -1340,15 +1356,19 @@ impl WeakRuleNode {
     fn upgrade(&self) -> StrongRuleNode {
         debug!("Upgrading weak node: {:p}", self.ptr());
 
-        let node = unsafe { &*self.ptr };
+        let node = unsafe { &*self.ptr() };
         node.refcount.fetch_add(1, Ordering::Relaxed);
-        StrongRuleNode {
-            ptr: self.ptr,
+        StrongRuleNode::from_ptr(self.ptr())
+    }
+
+    fn from_ptr(ptr: *mut RuleNode) -> Self {
+        WeakRuleNode {
+            p: NonZeroPtrMut::new(ptr)
         }
     }
 
     fn ptr(&self) -> *mut RuleNode {
-        self.ptr
+        self.p.ptr()
     }
 }
 
@@ -1357,12 +1377,11 @@ struct RuleChildrenListIter {
 }
 
 impl Iterator for RuleChildrenListIter {
-    type Item = StrongRuleNode;
+    type Item = WeakRuleNode;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.current.take().map(|current| {
-            let current = current.upgrade();
-            self.current = current.next_sibling();
+            self.current = unsafe { &*current.ptr() }.next_sibling();
             current
         })
     }

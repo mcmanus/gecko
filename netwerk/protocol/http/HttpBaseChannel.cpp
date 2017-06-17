@@ -62,6 +62,7 @@
 #include "nsIXULRuntime.h"
 #include "nsICacheInfoChannel.h"
 #include "nsIDOMWindowUtils.h"
+#include "nsHttpChannel.h"
 #include "nsRedirectHistoryEntry.h"
 
 #include <algorithm>
@@ -208,6 +209,7 @@ HttpBaseChannel::HttpBaseChannel()
   , mAltDataLength(0)
   , mForceMainDocumentChannel(false)
   , mIsTrackingResource(false)
+  , mLastRedirectFlags(0)
 {
   LOG(("Creating HttpBaseChannel @%p\n", this));
 
@@ -2207,6 +2209,33 @@ HttpBaseChannel::GetProtocolVersion(nsACString& aProtocolVersion)
 //-----------------------------------------------------------------------------
 
 NS_IMETHODIMP
+HttpBaseChannel::SetTopWindowURIIfUnknown(nsIURI *aTopWindowURI)
+{
+  if (!aTopWindowURI) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  if (mTopWindowURI) {
+    LOG(("HttpChannelBase::SetTopWindowURIIfUnknown [this=%p] "
+         "mTopWindowURI is already set.\n", this));
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsIURI> topWindowURI;
+  Unused << GetTopWindowURI(getter_AddRefs(topWindowURI));
+
+  // Don't modify |mTopWindowURI| if we can get one from GetTopWindowURI().
+  if (topWindowURI) {
+    LOG(("HttpChannelBase::SetTopWindowURIIfUnknown [this=%p] "
+         "Return an error since we got a top window uri.\n", this));
+    return NS_ERROR_FAILURE;
+  }
+
+  mTopWindowURI = aTopWindowURI;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 HttpBaseChannel::GetTopWindowURI(nsIURI **aTopWindowURI)
 {
   nsresult rv = NS_OK;
@@ -2934,7 +2963,26 @@ HttpBaseChannel::ShouldIntercept(nsIURI* aURI)
   nsCOMPtr<nsINetworkInterceptController> controller;
   GetCallback(controller);
   bool shouldIntercept = false;
-  if (controller && !BypassServiceWorker() && mLoadInfo) {
+
+  // We should never intercept internal redirects.  The ServiceWorker code
+  // can trigger interntal redirects as the result of a FetchEvent.  If
+  // we re-intercept then an infinite loop can occur.
+  //
+  // Its also important that we do not set the LOAD_BYPASS_SERVICE_WORKER
+  // flag because an internal redirect occurs.  Its possible that another
+  // interception should occur after the internal redirect.  For example,
+  // if the ServiceWorker chooses not to call respondWith() the channel
+  // will be reset with an internal redirect.  If the request is a navigation
+  // and the network then triggers a redirect its possible the new URL
+  // should be intercepted again.
+  //
+  // Note, HSTS upgrade redirects are often treated the same as internal
+  // redirects.  In this case, however, we intentionally allow interception
+  // of HSTS upgrade redirects.  This matches the expected spec behavior and
+  // does not run the risk of infinite loops as described above.
+  bool internalRedirect = mLastRedirectFlags & nsIChannelEventSink::REDIRECT_INTERNAL;
+
+  if (controller && mLoadInfo && !BypassServiceWorker() && !internalRedirect) {
     nsresult rv = controller->ShouldPrepareForIntercept(aURI ? aURI : mURI.get(),
                                                         nsContentUtils::IsNonSubresourceRequest(this),
                                                         &shouldIntercept);
@@ -3145,6 +3193,11 @@ HttpBaseChannel::SetupReplacementChannel(nsIURI       *newURI,
   newChannel->SetNotificationCallbacks(mCallbacks);
   newChannel->SetLoadFlags(newLoadFlags);
 
+  nsCOMPtr<nsIClassOfService> cos(do_QueryInterface(newChannel));
+  if (cos) {
+    cos->SetClassFlags(mClassOfService);
+  }
+
   // Try to preserve the privacy bit if it has been overridden
   if (mPrivateBrowsingOverriden) {
     nsCOMPtr<nsIPrivateBrowsingChannel> newPBChannel =
@@ -3216,8 +3269,12 @@ HttpBaseChannel::SetupReplacementChannel(nsIURI       *newURI,
 
   // Preserve the CORS preflight information.
   nsCOMPtr<nsIHttpChannelInternal> httpInternal = do_QueryInterface(newChannel);
-  if (mRequireCORSPreflight && httpInternal) {
-    httpInternal->SetCorsPreflightParameters(mUnsafeHeaders);
+  if (httpInternal) {
+    httpInternal->SetLastRedirectFlags(redirectFlags);
+
+    if (mRequireCORSPreflight) {
+      httpInternal->SetCorsPreflightParameters(mUnsafeHeaders);
+    }
   }
 
   if (preserveMethod) {
@@ -3311,6 +3368,11 @@ HttpBaseChannel::SetupReplacementChannel(nsIURI       *newURI,
 
   // share the request context - see bug 1236650
   rv = httpChannel->SetRequestContextID(mRequestContextID);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+  // When on the parent process, the channel can't attempt to get it itself.
+  // When on the child process, it would be waste to query it again.
+  rv = httpChannel->SetTopLevelOuterContentWindowId(mTopLevelOuterContentWindowId);
   MOZ_ASSERT(NS_SUCCEEDED(rv));
 
   // Preserve the loading order
@@ -4022,6 +4084,21 @@ HttpBaseChannel::GetConnectionInfoHashKey(nsACString& aConnectionInfoHashKey)
     return NS_ERROR_FAILURE;
   }
   aConnectionInfoHashKey.Assign(mConnectionInfo->HashKey());
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::GetLastRedirectFlags(uint32_t *aValue)
+{
+  NS_ENSURE_ARG(aValue);
+  *aValue = mLastRedirectFlags;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::SetLastRedirectFlags(uint32_t aValue)
+{
+  mLastRedirectFlags = aValue;
   return NS_OK;
 }
 

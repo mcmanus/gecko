@@ -273,6 +273,12 @@ partial interface Navigator {
   // TODO: Use FrozenArray once available. (Bug 1236777)
   [Frozen, Cached, Pure, Pref="dom.vr.enabled"]
   readonly attribute sequence<VRDisplay> activeVRDisplays;
+  [ChromeOnly, Pref="dom.vr.enabled"]
+  readonly attribute boolean isWebVRContentDetected;
+  [ChromeOnly, Pref="dom.vr.enabled"]
+  readonly attribute boolean isWebVRContentPresenting;
+  [ChromeOnly, Pref="dom.vr.enabled"]
+  void requestVRPresentation(VRDisplay display);
 };
 partial interface Navigator {
   [Pref="dom.vr.test.enabled"]
@@ -365,5 +371,5 @@ interface NavigatorConcurrentHardware {
 
 partial interface Navigator {
   [Pref="security.webauth.webauthn", SameObject]
-  readonly attribute WebAuthentication authentication;
+  readonly attribute CredentialsContainer credentials;
 };

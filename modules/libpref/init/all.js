@@ -20,6 +20,8 @@
  *  - Computed values (e.g. 50 * 1024) don't work.
  */
 
+pref("preferences.allow.omt-write", true);
+
 pref("keyword.enabled", false);
 pref("general.useragent.locale", "chrome://global/locale/intl.properties");
 pref("general.useragent.compatMode.firefox", false);
@@ -217,7 +219,20 @@ pref("dom.script_loader.bytecode_cache.enabled", false); // Not tuned yet.
 
 // Ignore the heuristics of the bytecode cache, and always record on the first
 // visit. (used for testing purposes).
-pref("dom.script_loader.bytecode_cache.eager", false);
+
+// Choose one strategy to use to decide when the bytecode should be encoded and
+// saved. The following strategies are available right now:
+//   * -2 : (reader mode) The bytecode cache would be read, but it would never
+//          be saved.
+//   * -1 : (eager mode) The bytecode would be saved as soon as the script is
+//          seen for the first time, independently of the size or last access
+//          time.
+//   *  0 : (default) The bytecode would be saved in order to minimize the
+//          page-load time.
+//
+// Other values might lead to experimental strategies. For more details, have a
+// look at: ScriptLoader::ShouldCacheBytecode function.
+pref("dom.script_loader.bytecode_cache.strategy", 0);
 
 // Fastback caching - if this pref is negative, then we calculate the number
 // of content viewers to cache based on the amount of available memory.
@@ -302,7 +317,7 @@ pref("mathml.scale_stretchy_operators.enabled", true);
 
 pref("media.dormant-on-pause-timeout-ms", 5000);
 
-// Media cache size in kilobytes
+// File-backed MediaCache size in kilobytes
 pref("media.cache_size", 512000);
 // When a network connection is suspended, don't resume it until the
 // amount of buffered data falls below this threshold (in seconds).
@@ -311,6 +326,18 @@ pref("media.cache_resume_threshold", 30);
 // of the current playback position. This limit can stop us from using arbitrary
 // amounts of network bandwidth prefetching huge videos.
 pref("media.cache_readahead_limit", 60);
+// If a resource is known to be smaller than this size (in kilobytes), a
+// memory-backed MediaCache may be used; otherwise the (single shared
+// global) file-backed MediaCache is used.
+pref("media.memory_cache_max_size", 8192);
+// Don't create more memory-backed MediaCaches if their combined size would go
+// above the lowest limit (in kilobytes or in percent of physical memory size).
+pref("media.memory_caches_combined_limit_kb", 524288);
+pref("media.memory_caches_combined_limit_pc_sysmem", 5);
+
+// Cache size hint (in bytes) for each MediaResourceIndex.
+// 0 -> no cache. Will use next power of 2, clamped to 32B-128KB.
+pref("media.cache.resource-index", 8192);
 
 // We'll throttle the download if the download rate is throttle-factor times
 // the estimated playback rate, AND we satisfy the cache readahead_limit
@@ -337,9 +364,6 @@ pref("media.play-stand-alone", true);
 pref("media.hardware-video-decoding.enabled", true);
 pref("media.hardware-video-decoding.force-enabled", false);
 
-#ifdef MOZ_DIRECTSHOW
-pref("media.directshow.enabled", true);
-#endif
 #ifdef MOZ_FMP4
 pref("media.mp4.enabled", true);
 // Specifies whether the PDMFactory can create a test decoder that
@@ -353,10 +377,11 @@ pref("media.wmf.decoder.thread-count", -1);
 pref("media.wmf.low-latency.enabled", false);
 pref("media.wmf.skip-blacklist", false);
 #ifdef NIGHTLY_BUILD
-pref("media.wmf.vp9.enabled", true);
+pref("media.wmf.vp9.force.enabled", true);
 #else
-pref("media.wmf.vp9.enabled", false);
+pref("media.wmf.vp9.force.enabled", false);
 #endif
+pref("media.wmf.vp9.enabled", true);
 pref("media.wmf.allow-unsupported-resolutions", false);
 pref("media.windows-media-foundation.allow-d3d11-dxva", true);
 pref("media.wmf.disable-d3d11-for-dlls", "igd11dxva64.dll: 20.19.15.4463, 20.19.15.4454, 20.19.15.4444, 20.19.15.4416, 20.19.15.4404, 20.19.15.4390, 20.19.15.4380, 20.19.15.4377, 20.19.15.4364, 20.19.15.4360, 20.19.15.4352, 20.19.15.4331, 20.19.15.4326, 20.19.15.4300; igd10iumd32.dll: 20.19.15.4444, 20.19.15.4424, 20.19.15.4409, 20.19.15.4390, 20.19.15.4380, 20.19.15.4360, 10.18.10.4358, 20.19.15.4331, 20.19.15.4312, 20.19.15.4300, 10.18.15.4281, 10.18.15.4279, 10.18.10.4276, 10.18.15.4268, 10.18.15.4256, 10.18.10.4252, 10.18.15.4248, 10.18.14.4112, 10.18.10.3958, 10.18.10.3496, 10.18.10.3431, 10.18.10.3412, 10.18.10.3355, 9.18.10.3234, 9.18.10.3071, 9.18.10.3055, 9.18.10.3006; igd10umd32.dll: 9.17.10.4229, 9.17.10.3040, 9.17.10.2857, 8.15.10.2274, 8.15.10.2272, 8.15.10.2246, 8.15.10.1840, 8.15.10.1808; igd10umd64.dll: 9.17.10.4229, 9.17.10.2857, 10.18.10.3496; isonyvideoprocessor.dll: 4.1.2247.8090, 4.1.2153.6200; tosqep.dll: 1.2.15.526, 1.1.12.201, 1.0.11.318, 1.0.11.215, 1.0.10.1224; tosqep64.dll: 1.1.12.201, 1.0.11.215; nvwgf2um.dll: 10.18.13.6510, 10.18.13.5891, 10.18.13.5887, 10.18.13.5582, 10.18.13.5382, 9.18.13.4195, 9.18.13.3165; atidxx32.dll: 21.19.151.3, 21.19.142.257, 21.19.137.514, 21.19.137.1, 21.19.134.1, 21.19.128.7, 21.19.128.4, 20.19.0.32837, 20.19.0.32832, 8.17.10.682, 8.17.10.671, 8.17.10.661, 8.17.10.648, 8.17.10.644, 8.17.10.625, 8.17.10.605, 8.17.10.581, 8.17.10.569, 8.17.10.560, 8.17.10.545, 8.17.10.539, 8.17.10.531, 8.17.10.525, 8.17.10.520, 8.17.10.519, 8.17.10.514, 8.17.10.511, 8.17.10.494, 8.17.10.489, 8.17.10.483, 8.17.10.453, 8.17.10.451, 8.17.10.441, 8.17.10.436, 8.17.10.432, 8.17.10.425, 8.17.10.418, 8.17.10.414, 8.17.10.401, 8.17.10.395, 8.17.10.385, 8.17.10.378, 8.17.10.362, 8.17.10.355, 8.17.10.342, 8.17.10.331, 8.17.10.318, 8.17.10.310, 8.17.10.286, 8.17.10.269, 8.17.10.261, 8.17.10.247, 8.17.10.240, 8.15.10.212; atidxx64.dll: 21.19.151.3, 21.19.142.257, 21.19.137.514, 21.19.137.1, 21.19.134.1, 21.19.128.7, 21.19.128.4, 20.19.0.32832, 8.17.10.682, 8.17.10.661, 8.17.10.644, 8.17.10.625; nvumdshim.dll: 10.18.13.6822");
@@ -422,11 +447,7 @@ pref("media.decoder-doctor.wmf-disabled-is-failure", false);
 pref("media.decoder-doctor.new-issue-endpoint", "https://webcompat.com/issues/new");
 
 // Whether to suspend decoding of videos in background tabs.
-#ifdef NIGHTLY_BUILD
 pref("media.suspend-bkgnd-video.enabled", true);
-#else
-pref("media.suspend-bkgnd-video.enabled", false);
-#endif
 // Delay, in ms, from time window goes to background to suspending
 // video decoders. Defaults to 10 seconds.
 pref("media.suspend-bkgnd-video.delay-ms", 10000);
@@ -455,20 +476,6 @@ pref("media.webrtc.debug.aec_log_dir", "");
 pref("media.webrtc.debug.log_file", "");
 pref("media.webrtc.debug.aec_dump_max_size", 4194304); // 4MB
 
-#ifdef MOZ_WIDGET_GONK
-pref("media.navigator.video.default_width", 320);
-pref("media.navigator.video.default_height", 240);
-pref("media.peerconnection.enabled", true);
-pref("media.peerconnection.video.enabled", true);
-pref("media.navigator.video.max_fs", 1200); // 640x480 == 1200mb
-pref("media.navigator.video.max_fr", 30);
-pref("media.navigator.video.h264.level", 12); // 0x42E00C - level 1.2
-pref("media.navigator.video.h264.max_br", 700); // 8x10
-pref("media.navigator.video.h264.max_mbps", 11880); // CIF@30fps
-pref("media.peerconnection.video.h264_enabled", false);
-pref("media.peerconnection.video.vp9_enabled", false);
-pref("media.getusermedia.aec", 4);
-#else
 pref("media.navigator.video.default_width",0);  // adaptive default
 pref("media.navigator.video.default_height",0); // adaptive default
 pref("media.peerconnection.enabled", true);
@@ -482,15 +489,13 @@ pref("media.peerconnection.video.h264_enabled", false);
 pref("media.peerconnection.video.vp9_enabled", true);
 pref("media.getusermedia.aec", 1);
 pref("media.getusermedia.browser.enabled", false);
-#endif
-// Gonk typically captures at QVGA, and so min resolution is QQVGA or
-// 160x120; 100Kbps is plenty for that.
 // Desktop is typically VGA capture or more; and qm_select will not drop resolution
 // below 1/2 in each dimension (or so), so QVGA (320x200) is the lowest here usually.
 pref("media.peerconnection.video.min_bitrate", 0);
 pref("media.peerconnection.video.start_bitrate", 0);
 pref("media.peerconnection.video.max_bitrate", 0);
 pref("media.peerconnection.video.min_bitrate_estimate", 0);
+pref("media.peerconnection.video.denoising", false);
 pref("media.navigator.audio.fake_frequency", 1000);
 pref("media.navigator.permission.disabled", false);
 pref("media.peerconnection.simulcast", true);
@@ -667,13 +672,8 @@ pref("apz.axis_lock.breakout_threshold", "0.03125");  // 1/32 inches
 pref("apz.axis_lock.breakout_angle", "0.3926991");    // PI / 8 (22.5 degrees)
 pref("apz.axis_lock.direct_pan_angle", "1.047197");   // PI / 3 (60 degrees)
 pref("apz.content_response_timeout", 400);
-#ifdef NIGHTLY_BUILD
 pref("apz.drag.enabled", true);
 pref("apz.drag.initial.enabled", true);
-#else
-pref("apz.drag.enabled", false);
-pref("apz.drag.initial.enabled", false);
-#endif
 pref("apz.danger_zone_x", 50);
 pref("apz.danger_zone_y", 100);
 pref("apz.disable_for_scroll_linked_effects", false);
@@ -865,6 +865,11 @@ pref("gfx.webrender.enabled", false);
 #ifdef XP_WIN
 pref("gfx.webrender.force-angle", true);
 #endif
+
+pref("gfx.webrender.profiler.enabled", false);
+
+// Whether webrender should be used as much as possible.
+pref("gfx.webrendest.enabled", false);
 
 pref("accessibility.browsewithcaret", false);
 pref("accessibility.warn_on_browsewithcaret", true);
@@ -1252,8 +1257,12 @@ pref("dom.forms.number", true);
 // platforms which don't have a color picker implemented yet.
 pref("dom.forms.color", true);
 
-// Support for input type=date and type=time. By default, disabled.
+// Support for input type=date and type=time. Enabled by default on Nightly.
+#ifdef NIGHTLY_BUILD
+pref("dom.forms.datetime", true);
+#else
 pref("dom.forms.datetime", false);
+#endif
 
 // Support for input type=month, type=week and type=datetime-local. By default,
 // disabled.
@@ -1379,7 +1388,7 @@ pref("javascript.options.mem.high_water_mark", 128);
 pref("javascript.options.mem.max", -1);
 pref("javascript.options.mem.gc_per_zone", true);
 pref("javascript.options.mem.gc_incremental", true);
-pref("javascript.options.mem.gc_incremental_slice_ms", 10);
+pref("javascript.options.mem.gc_incremental_slice_ms", 5);
 pref("javascript.options.mem.gc_compacting", true);
 pref("javascript.options.mem.log", false);
 pref("javascript.options.mem.notify", false);
@@ -2086,11 +2095,15 @@ pref("network.auth.subresource-img-cross-origin-http-auth-allow", true);
 // in that case default credentials will always be used.
 pref("network.auth.private-browsing-sso", false);
 
-// Control how the throttling service works - number of ms that each
+// Control how throttling of http responses works - number of ms that each
 // suspend and resume period lasts (prefs named appropriately)
-pref("network.throttle.suspend-for", 3000);
-pref("network.throttle.resume-for", 200);
-pref("network.throttle.enable", true);
+pref("network.http.throttle.enable", true);
+pref("network.http.throttle.suspend-for", 900);
+pref("network.http.throttle.resume-for", 100);
+// Delay we resume throttled background responses after the last unthrottled
+// response has finished.  Prevents resuming too soon during an active page load
+// at which sub-resource reqeusts quickly come and go.
+pref("network.http.throttle.resume-background-in", 1000);
 
 pref("permissions.default.image",           1); // 1-Accept, 2-Deny, 3-dontAcceptForeign
 
@@ -2871,9 +2884,6 @@ pref("layout.css.grid-template-subgrid-value.enabled", false);
 // Is support for CSS contain enabled?
 pref("layout.css.contain.enabled", false);
 
-// Is support for CSS display:flow-root enabled?
-pref("layout.css.display-flow-root.enabled", true);
-
 // Is support for CSS box-decoration-break enabled?
 pref("layout.css.box-decoration-break.enabled", true);
 
@@ -2922,11 +2932,7 @@ pref("layout.css.control-characters.visible", true);
 pref("layout.css.column-span.enabled", false);
 
 // Is effect of xml:base disabled for style attribute?
-#ifdef RELEASE_OR_BETA
-pref("layout.css.style-attr-with-xml-base.disabled", false);
-#else
 pref("layout.css.style-attr-with-xml-base.disabled", true);
-#endif
 
 // pref for which side vertical scrollbars should be on
 // 0 = end-side in UI direction
@@ -3134,7 +3140,9 @@ pref("dom.ipc.plugins.asyncdrawing.enabled", true);
 // Force the accelerated direct path for a subset of Flash wmode values
 pref("dom.ipc.plugins.forcedirect.enabled", true);
 
-#ifdef RELEASE_OR_BETA
+// Enable multi by default for Nightly and DevEdition only.
+// For Beta and Release builds, multi is controlled by the e10srollout addon.
+#if defined(RELEASE_OR_BETA) && !defined(MOZ_DEV_EDITION)
 pref("dom.ipc.processCount", 1);
 #else
 pref("dom.ipc.processCount", 4);
@@ -3157,11 +3165,7 @@ pref("dom.largeAllocationHeader.enabled", true);
 
 // Pref to control whether we use separate content processes for top-level load
 // of file:// URIs.
-#if defined(NIGHTLY_BUILD)
 pref("browser.tabs.remote.separateFileUriProcess", true);
-#else
-pref("browser.tabs.remote.separateFileUriProcess", false);
-#endif
 
 // Pref that enables top level web content pages that are opened from file://
 // URI pages to run in the file content process.
@@ -3706,6 +3710,11 @@ pref("intl.tsf.enable", true);
 // Support IMEs implemented with IMM in TSF mode.
 pref("intl.tsf.support_imm", true);
 
+// This is referred only when both "intl.tsf.enable" and "intl.tsf.support_imm"
+// are true.  When this is true, default IMC is associated with focused window
+// only when active keyboard layout is a legacy IMM-IME.
+pref("intl.tsf.associate_imc_only_when_imm_ime_is_active", false);
+
 // Enables/Disables hack for specific TIP.
 
 // Whether creates native caret for ATOK or not.
@@ -3725,12 +3734,15 @@ pref("intl.tsf.hack.free_chang_jie.do_not_return_no_layout_error", true);
 pref("intl.tsf.hack.ms_simplified_chinese.do_not_return_no_layout_error", true);
 // For Microsoft ChangJie and Microsoft Quick
 pref("intl.tsf.hack.ms_traditional_chinese.do_not_return_no_layout_error", true);
-// For Easy Changjei
-pref("intl.tsf.hack.easy_changjei.do_not_return_no_layout_error", true);
 // Whether use previous character rect for the result of
 // ITfContextView::GetTextExt() if the specified range is the first character
 // of selected clause of composition string.
 pref("intl.tsf.hack.ms_japanese_ime.do_not_return_no_layout_error_at_first_char", true);
+// Whether default IMC should be associated with focused window when MS-IME
+// for Japanese on Win10 is active.  MS-IME for Japanese on Win10 has a crash
+// bug.  While restoring default IMC when MS-IME for Japanese is active,
+// it sometimes crashes after Creators Update.  This pref avoid the crash.
+pref("intl.tsf.hack.ms_japanese_ime.do_not_associate_imc_on_win10", true);
 // Whether use previous character rect for the result of
 // ITfContextView::GetTextExt() if the specified range is the caret of
 // composition string.
@@ -4657,7 +4669,7 @@ pref("network.tcp.keepalive.retry_interval", 1); // seconds
 pref("network.tcp.keepalive.probe_count", 4);
 #endif
 
-pref("network.tcp.tcp_fastopen_enable", false); // quic cant handle this atm todo
+pref("network.tcp.tcp_fastopen_enable", false);
 pref("network.tcp.tcp_fastopen_consecutive_failure_limit", 5);
 
 // Whether to disable acceleration for all widgets.
@@ -4668,10 +4680,10 @@ pref("layers.bench.enabled", false);
 
 #if defined(XP_WIN)
 pref("layers.gpu-process.enabled", true);
-pref("layers.gpu-process.max_restarts", 3);
 pref("media.gpu-process-decoder", true);
 #ifdef NIGHTLY_BUILD
 pref("layers.gpu-process.allow-software", true);
+pref("layers.gpu-process.max_restarts", 3);
 #endif
 #endif
 
@@ -4850,7 +4862,7 @@ pref("layers.popups.compositing.enabled", false);
 
 // Report Site Issue button
 pref("extensions.webcompat-reporter.newIssueEndpoint", "https://webcompat.com/issues/new");
-#ifndef RELEASE_OR_BETA
+#if defined(MOZ_DEV_EDITION) || defined(NIGHTLY_BUILD)
 pref("extensions.webcompat-reporter.enabled", true);
 #else
 pref("extensions.webcompat-reporter.enabled", false);
@@ -5145,40 +5157,6 @@ pref("dom.vr.puppet.enabled", false);
 pref("dom.vr.puppet.submitframe", 0);
 // VR test system.
 pref("dom.vr.test.enabled", false);
-// MMS UA Profile settings
-pref("wap.UAProf.url", "");
-pref("wap.UAProf.tagname", "x-wap-profile");
-
-// MMS version 1.1 = 0x11 (or decimal 17)
-// MMS version 1.3 = 0x13 (or decimal 19)
-// @see OMA-TS-MMS_ENC-V1_3-20110913-A clause 7.3.34
-pref("dom.mms.version", 19);
-
-pref("dom.mms.requestStatusReport", true);
-
-// Retrieval mode for MMS
-// manual: Manual retrieval mode.
-// automatic: Automatic retrieval mode even in roaming.
-// automatic-home: Automatic retrieval mode in home network.
-// never: Never retrieval mode.
-pref("dom.mms.retrieval_mode", "manual");
-
-pref("dom.mms.sendRetryCount", 3);
-pref("dom.mms.sendRetryInterval", "10000,60000,180000");
-
-pref("dom.mms.retrievalRetryCount", 4);
-pref("dom.mms.retrievalRetryIntervals", "60000,300000,600000,1800000");
-// Numeric default service id for MMS API calls with |serviceId| parameter
-// omitted.
-pref("dom.mms.defaultServiceId", 0);
-// Debug enabler for MMS.
-pref("mms.debugging.enabled", false);
-
-// Request read report while sending MMS.
-pref("dom.mms.requestReadReport", true);
-
-// Number of RadioInterface instances to create.
-pref("ril.numRadioInterfaces", 0);
 
 // If the user puts a finger down on an element and we think the user
 // might be executing a pan gesture, how long do we wait before
@@ -5240,7 +5218,7 @@ pref("urlclassifier.downloadAllowTable", "goog-downloadwhite-digest256");
 pref("urlclassifier.downloadBlockTable", "goog-badbinurl-shavar");
 #endif // NIGHTLY_BUILD
 
-pref("urlclassifier.disallow_completions", "test-malware-simple,test-phish-simple,test-unwanted-simple,test-track-simple,test-trackwhite-simple,test-block-simple,test-flashallow-simple,testexcept-flashallow-simple,test-flash-simple,testexcept-flash-simple,test-flashsubdoc-simple,testexcept-flashsubdoc-simple,goog-downloadwhite-digest256,base-track-digest256,mozstd-trackwhite-digest256,content-track-digest256,mozplugin-block-digest256,mozplugin2-block-digest256,block-flash-digest256,except-flash-digest256,allow-flashallow-digest256,except-flashallow-digest256,block-flashsubdoc-digest256,except-flashsubdoc-digest256");
+pref("urlclassifier.disallow_completions", "test-malware-simple,test-phish-simple,test-unwanted-simple,test-track-simple,test-trackwhite-simple,test-block-simple,test-flashallow-simple,testexcept-flashallow-simple,test-flash-simple,testexcept-flash-simple,test-flashsubdoc-simple,testexcept-flashsubdoc-simple,goog-downloadwhite-digest256,base-track-digest256,mozstd-trackwhite-digest256,content-track-digest256,mozplugin-block-digest256,mozplugin2-block-digest256,block-flash-digest256,except-flash-digest256,allow-flashallow-digest256,except-flashallow-digest256,block-flashsubdoc-digest256,except-flashsubdoc-digest256,except-flashinfobar-digest256");
 
 // The table and update/gethash URLs for Safebrowsing phishing and malware
 // checks.
@@ -5308,7 +5286,7 @@ pref("urlclassifier.blockedTable", "test-block-simple,mozplugin-block-digest256"
 
 // The protocol version we communicate with mozilla server.
 pref("browser.safebrowsing.provider.mozilla.pver", "2.2");
-pref("browser.safebrowsing.provider.mozilla.lists", "base-track-digest256,mozstd-trackwhite-digest256,content-track-digest256,mozplugin-block-digest256,mozplugin2-block-digest256,block-flash-digest256,except-flash-digest256,allow-flashallow-digest256,except-flashallow-digest256,block-flashsubdoc-digest256,except-flashsubdoc-digest256");
+pref("browser.safebrowsing.provider.mozilla.lists", "base-track-digest256,mozstd-trackwhite-digest256,content-track-digest256,mozplugin-block-digest256,mozplugin2-block-digest256,block-flash-digest256,except-flash-digest256,allow-flashallow-digest256,except-flashallow-digest256,block-flashsubdoc-digest256,except-flashsubdoc-digest256,except-flashinfobar-digest256");
 pref("browser.safebrowsing.provider.mozilla.updateURL", "https://shavar.services.mozilla.com/downloads?client=SAFEBROWSING_ID&appver=%MAJOR_VERSION%&pver=2.2");
 pref("browser.safebrowsing.provider.mozilla.gethashURL", "https://shavar.services.mozilla.com/gethash?client=SAFEBROWSING_ID&appver=%MAJOR_VERSION%&pver=2.2");
 // Set to a date in the past to force immediate download in new profiles.
@@ -5326,6 +5304,7 @@ pref("urlclassifier.flashTable", "test-flash-simple,block-flash-digest256");
 pref("urlclassifier.flashExceptTable", "testexcept-flash-simple,except-flash-digest256");
 pref("urlclassifier.flashSubDocTable", "test-flashsubdoc-simple,block-flashsubdoc-digest256");
 pref("urlclassifier.flashSubDocExceptTable", "testexcept-flashsubdoc-simple,except-flashsubdoc-digest256");
+pref("urlclassifier.flashInfobarTable", "except-flashinfobar-digest256");
 
 pref("plugins.http_https_only", true);
 pref("plugins.flashBlock.enabled", false);
@@ -5760,9 +5739,10 @@ pref("layers.advanced.outline-layers", 2);
 pref("layers.advanced.solid-color", 2);
 pref("layers.advanced.table", 2);
 pref("layers.advanced.text-layers", 2);
-
-// Whether webrender should be used as much as possible.
-pref("gfx.webrendest.enabled", false);
+pref("layers.advanced.filter-layers", 2);
 
 // Enable lowercased response header name
-pref("dom.xhr.lowercase_header.enabled", true);
+pref("dom.xhr.lowercase_header.enabled", false);
+
+// Open noopener links in a new process
+pref("dom.noopener.newprocess.enabled", true);

@@ -735,6 +735,8 @@ public:
 
   // XPCOM GetCustomVisibility() is OK
 
+  already_AddRefed<nsINodeList> GetLabels();
+
   // XPCOM Select() is OK
 
   Nullable<uint32_t> GetSelectionStart(ErrorResult& aRv);
@@ -1613,7 +1615,8 @@ private:
     return IsSingleLineTextControl(false, aType) ||
            aType == NS_FORM_INPUT_RANGE ||
            aType == NS_FORM_INPUT_NUMBER ||
-           aType == NS_FORM_INPUT_TIME;
+           aType == NS_FORM_INPUT_TIME ||
+           aType == NS_FORM_INPUT_DATE;
   }
 
   /**

@@ -5,7 +5,7 @@
 use app_units::Au;
 use euclid::SideOffsets2D;
 use {ColorF, FontKey, ImageKey, ItemRange, PipelineId, WebGLContextId};
-use {LayoutPoint, LayoutRect, LayoutSize, LayoutTransform};
+use {LayoutPoint, LayoutRect, LayoutSize, LayoutTransform, LayoutVector2D};
 use {PropertyBinding};
 
 // NOTE: some of these structs have an "IMPLICIT" comment.
@@ -207,7 +207,7 @@ pub enum BoxShadowClipMode {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct BoxShadowDisplayItem {
     pub box_bounds: LayoutRect,
-    pub offset: LayoutPoint,
+    pub offset: LayoutVector2D,
     pub color: ColorF,
     pub blur_radius: f32,
     pub spread_radius: f32,
@@ -325,6 +325,23 @@ pub enum FilterOp {
     Sepia(f32),
 }
 
+impl FilterOp {
+    pub fn is_noop(&self) -> bool {
+        match *self {
+            FilterOp::Blur(length) if length == Au(0) => true,
+            FilterOp::Brightness(amount) if amount == 1.0 => true,
+            FilterOp::Contrast(amount) if amount == 1.0 => true,
+            FilterOp::Grayscale(amount) if amount == 0.0 => true,
+            FilterOp::HueRotate(amount) if amount == 0.0 => true,
+            FilterOp::Invert(amount) if amount == 0.0 => true,
+            FilterOp::Opacity(amount) if amount == PropertyBinding::Value(1.0) => true,
+            FilterOp::Saturate(amount) if amount == 1.0 => true,
+            FilterOp::Sepia(amount) if amount == 0.0 => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct IframeDisplayItem {
     pub pipeline_id: PipelineId,
@@ -350,6 +367,7 @@ pub enum ImageRendering {
 pub struct YuvImageDisplayItem {
     pub yuv_data: YuvData,
     pub color_space: YuvColorSpace,
+    pub image_rendering: ImageRendering
 }
 
 #[repr(u32)]
@@ -427,7 +445,7 @@ pub struct ClipRegion {
     pub complex_clips: ItemRange<ComplexClipRegion>,
     #[serde(default, skip_serializing, skip_deserializing)]
     pub complex_clip_count: usize,
-} 
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ComplexClipRegion {
@@ -565,7 +583,7 @@ impl ComplexClipRegion {
 pub enum ClipId {
     Clip(u64, PipelineId),
     ClipExternalId(u64, PipelineId),
-    ReferenceFrame(u64, PipelineId),
+    DynamicallyAddedNode(u64, PipelineId),
 }
 
 impl ClipId {
@@ -574,7 +592,7 @@ impl ClipId {
     }
 
     pub fn root_reference_frame(pipeline_id: PipelineId) -> ClipId {
-        ClipId::ReferenceFrame(0, pipeline_id)
+        ClipId::DynamicallyAddedNode(0, pipeline_id)
     }
 
     pub fn new(id: u64, pipeline_id: PipelineId) -> ClipId {
@@ -591,14 +609,7 @@ impl ClipId {
         match *self {
             ClipId::Clip(_, pipeline_id) |
             ClipId::ClipExternalId(_, pipeline_id) |
-            ClipId::ReferenceFrame(_, pipeline_id) => pipeline_id,
-        }
-    }
-
-    pub fn is_reference_frame(&self) -> bool {
-        match *self {
-            ClipId::ReferenceFrame(..) => true,
-            _ => false,
+            ClipId::DynamicallyAddedNode(_, pipeline_id) => pipeline_id,
         }
     }
 

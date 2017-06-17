@@ -104,7 +104,6 @@
 #include "nsIDocShell.h"
 #include "nsIDocCharset.h"
 #include "nsIDocument.h"
-#include "nsIDocumentInlines.h"
 #include "Crypto.h"
 #include "nsIDOMDocument.h"
 #include "nsIDOMElement.h"
@@ -203,6 +202,7 @@
 #include "mozilla/dom/Gamepad.h"
 #include "mozilla/dom/GamepadManager.h"
 
+#include "gfxVR.h"
 #include "mozilla/dom/VRDisplay.h"
 #include "mozilla/dom/VRDisplayEvent.h"
 #include "mozilla/dom/VRDisplayEventBinding.h"
@@ -999,7 +999,6 @@ nsPIDOMWindow<T>::nsPIDOMWindow(nsPIDOMWindowOuter *aOuterWindow)
   mIsHandlingResizeEvent(false), mIsInnerWindow(aOuterWindow != nullptr),
   mMayHavePaintEventListener(false), mMayHaveTouchEventListener(false),
   mMayHaveMouseEnterLeaveEventListener(false),
-  mMayHaveMouseMoveEventListener(false),
   mMayHavePointerEnterLeaveEventListener(false),
   mInnerObjectsFreed(false),
   mIsModalContentWindow(false),
@@ -1399,9 +1398,21 @@ bool
 nsOuterWindowProxy::getOwnEnumerablePropertyKeys(JSContext *cx, JS::Handle<JSObject*> proxy,
                                                  JS::AutoIdVector &props) const
 {
-  // BaseProxyHandler::keys seems to do what we want here: call
-  // ownPropertyKeys and then filter out the non-enumerable properties.
-  return js::BaseProxyHandler::getOwnEnumerablePropertyKeys(cx, proxy, props);
+  // Like ownPropertyKeys, our indexed stuff followed by our "normal" enumerable
+  // own property names.
+  //
+  // Note that this does not match current spec per
+  // https://github.com/whatwg/html/issues/2753 but as that issue says I believe
+  // the spec is wrong.
+  if (!AppendIndexedPropertyNames(cx, proxy, props)) {
+    return false;
+  }
+
+  JS::AutoIdVector innerProps(cx);
+  if (!js::Wrapper::getOwnEnumerablePropertyKeys(cx, proxy, innerProps)) {
+    return false;
+  }
+  return js::AppendUnique(cx, props, innerProps);
 }
 
 bool
@@ -1572,6 +1583,7 @@ nsGlobalWindow::nsGlobalWindow(nsGlobalWindow *aOuterWindow)
     mFocusByKeyOccurred(false),
     mHasGamepad(false),
     mHasVREvents(false),
+    mHasVRDisplayActivateEvents(false),
     mHasSeenGamepadInput(false),
     mNotifiedIDDestroyed(false),
     mAllowScriptsToClose(false),
@@ -2001,6 +2013,7 @@ nsGlobalWindow::CleanUp()
     mHasGamepad = false;
     DisableVRUpdates();
     mHasVREvents = false;
+    mHasVRDisplayActivateEvents = false;
 #ifdef MOZ_B2G
     DisableTimeChangeNotifications();
 #endif
@@ -2008,6 +2021,7 @@ nsGlobalWindow::CleanUp()
   } else {
     MOZ_ASSERT(!mHasGamepad);
     MOZ_ASSERT(!mHasVREvents);
+    MOZ_ASSERT(!mHasVRDisplayActivateEvents);
   }
 
   if (mCleanMessageManager) {
@@ -2065,23 +2079,6 @@ void
 nsGlobalWindow::FreeInnerObjects()
 {
   NS_ASSERTION(IsInnerWindow(), "Don't free inner objects on an outer window");
-
-  if (mDoc && !nsContentUtils::IsSystemPrincipal(mDoc->NodePrincipal())) {
-    EventTarget* win = this;
-    EventTarget* html = mDoc->GetHtmlElement();
-    EventTarget* body = mDoc->GetBodyElement();
-
-    bool mouseAware = AsInner()->HasMouseMoveEventListeners();
-    bool keyboardAware = win->MayHaveAPZAwareKeyEventListener() ||
-                         mDoc->MayHaveAPZAwareKeyEventListener() ||
-                         (html && html->MayHaveAPZAwareKeyEventListener()) ||
-                         (body && body->MayHaveAPZAwareKeyEventListener());
-
-    Telemetry::Accumulate(Telemetry::APZ_AWARE_MOUSEMOVE_LISTENERS,
-                          mouseAware ? 1 : 0);
-    Telemetry::Accumulate(Telemetry::APZ_AWARE_KEY_LISTENERS,
-                          keyboardAware ? 1 : 0);
-  }
 
   // Make sure that this is called before we null out the document and
   // other members that the window destroyed observers could
@@ -2170,6 +2167,7 @@ nsGlobalWindow::FreeInnerObjects()
   mGamepads.Clear();
   DisableVRUpdates();
   mHasVREvents = false;
+  mHasVRDisplayActivateEvents = false;
   mVRDisplays.Clear();
 
   if (mTabChild) {
@@ -3529,7 +3527,7 @@ nsGlobalWindow::SetDocShell(nsIDocShell* aDocShell)
 
   bool docShellActive;
   mDocShell->GetIsActive(&docShellActive);
-  mIsBackground = !docShellActive;
+  SetIsBackgroundInternal(!docShellActive);
 }
 
 void
@@ -5110,9 +5108,10 @@ nsGlobalWindow::MayResolve(jsid aId)
     return true;
   }
 
-  if (aId == XPCJSRuntime::Get()->GetStringID(XPCJSContext::IDX_CONTROLLERS)) {
-    // We only resolve .controllers in release builds and on non-chrome windows,
-    // but let's not worry about any of that stuff.
+  if (aId == XPCJSRuntime::Get()->GetStringID(XPCJSContext::IDX_CONTROLLERS) ||
+      aId == XPCJSRuntime::Get()->GetStringID(XPCJSContext::IDX_CONTROLLERS_CLASS)) {
+    // We only resolve .controllers/.Controllers in release builds and on non-chrome
+    // windows, but let's not worry about any of that stuff.
     return true;
   }
 
@@ -5133,9 +5132,23 @@ nsGlobalWindow::MayResolve(jsid aId)
 }
 
 void
-nsGlobalWindow::GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
-                                    ErrorResult& aRv)
+nsGlobalWindow::GetOwnPropertyNames(JSContext* aCx, JS::AutoIdVector& aNames,
+                                    bool aEnumerableOnly, ErrorResult& aRv)
 {
+  if (aEnumerableOnly) {
+    // The names we would return from here get defined on the window via one of
+    // two codepaths.  The ones coming from the WebIDLGlobalNameHash will end up
+    // in the DefineConstructor function in BindingUtils, which always defines
+    // things as non-enumerable.  The ones coming from the script namespace
+    // manager get defined by nsDOMClassInfo::PostCreatePrototype calling
+    // ResolvePrototype and using the resulting descriptot to define the
+    // property.  ResolvePrototype always passes 0 to the FillPropertyDescriptor
+    // for the property attributes, so all those are non-enumerable as well.
+    //
+    // So in the aEnumerableOnly case we have nothing to do.
+    return;
+  }
+
   MOZ_ASSERT(IsInnerWindow());
   // "Components" is marked as enumerable but only resolved on demand :-/.
   //aNames.AppendElement(NS_LITERAL_STRING("Components"));
@@ -5144,13 +5157,37 @@ nsGlobalWindow::GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
   if (nameSpaceManager) {
     JS::Rooted<JSObject*> wrapper(aCx, GetWrapper());
 
-    WebIDLGlobalNameHash::GetNames(aCx, wrapper, aNames);
+    // There are actually two ways we can get called here: For normal
+    // enumeration or for Xray enumeration.  In the latter case, we want to
+    // return all possible WebIDL names, because we don't really support
+    // deleting these names off our Xray; trying to resolve them will just make
+    // them come back.  In the former case, we want to avoid returning deleted
+    // names.  But the JS engine already knows about the non-deleted
+    // already-resolved names, so we can just return the so-far-unresolved ones.
+    //
+    // We can tell which case we're in by whether aCx is in our wrapper's
+    // compartment.  If not, we're in the Xray case.
+    WebIDLGlobalNameHash::NameType nameType =
+      js::IsObjectInContextCompartment(wrapper, aCx) ?
+        WebIDLGlobalNameHash::UnresolvedNamesOnly :
+        WebIDLGlobalNameHash::AllNames;
+    if (!WebIDLGlobalNameHash::GetNames(aCx, wrapper, nameType, aNames)) {
+      aRv.NoteJSContextException(aCx);
+    }
 
     for (auto i = nameSpaceManager->GlobalNameIter(); !i.Done(); i.Next()) {
       const GlobalNameMapEntry* entry = i.Get();
       if (nsWindowSH::NameStructEnabled(aCx, this, entry->mKey,
                                         entry->mGlobalName)) {
-        aNames.AppendElement(entry->mKey);
+        // Just append all of these; even if they get deleted our resolve hook
+        // just goes ahead and recreates them.
+        JSString* str = JS_AtomizeUCStringN(aCx,
+                                            entry->mKey.BeginReading(),
+                                            entry->mKey.Length());
+        if (!str || !aNames.append(NON_INTEGER_ATOM_TO_JSID(str))) {
+          aRv.NoteJSContextException(aCx);
+          return;
+        }
       }
     }
   }
@@ -9599,15 +9636,23 @@ struct BrowserCompartmentMatcher : public js::CompartmentFilter {
 };
 
 
-class WindowDestroyedEvent : public Runnable
+class WindowDestroyedEvent final : public Runnable
 {
 public:
   WindowDestroyedEvent(nsIDOMWindow* aWindow, uint64_t aID,
                        const char* aTopic) :
-    mID(aID), mTopic(aTopic)
+    mID(aID),
+    mPhase(Phase::Destroying),
+    mTopic(aTopic)
   {
     mWindow = do_GetWeakReference(aWindow);
   }
+
+  enum class Phase
+  {
+    Destroying,
+    Nuking
+  };
 
   NS_IMETHOD Run() override
   {
@@ -9616,51 +9661,81 @@ public:
 
     nsCOMPtr<nsIObserverService> observerService =
       services::GetObserverService();
-    if (observerService) {
-      nsCOMPtr<nsISupportsPRUint64> wrapper =
-        do_CreateInstance(NS_SUPPORTS_PRUINT64_CONTRACTID);
-      if (wrapper) {
-        wrapper->SetData(mID);
-        observerService->NotifyObservers(wrapper, mTopic.get(), nullptr);
-      }
+    if (!observerService) {
+      return NS_OK;
     }
 
-    bool skipNukeCrossCompartment = false;
+    nsCOMPtr<nsISupportsPRUint64> wrapper =
+      do_CreateInstance(NS_SUPPORTS_PRUINT64_CONTRACTID);
+    if (wrapper) {
+      wrapper->SetData(mID);
+      observerService->NotifyObservers(wrapper, mTopic.get(), nullptr);
+    }
+
+    switch (mPhase) {
+      case Phase::Destroying:
+      {
+        bool skipNukeCrossCompartment = false;
 #ifndef DEBUG
-    nsCOMPtr<nsIAppStartup> appStartup =
-      do_GetService(NS_APPSTARTUP_CONTRACTID);
+        nsCOMPtr<nsIAppStartup> appStartup =
+          do_GetService(NS_APPSTARTUP_CONTRACTID);
 
-    if (appStartup) {
-      appStartup->GetShuttingDown(&skipNukeCrossCompartment);
-    }
+        if (appStartup) {
+          appStartup->GetShuttingDown(&skipNukeCrossCompartment);
+        }
 #endif
 
-    nsCOMPtr<nsISupports> window = do_QueryReferent(mWindow);
-    if (!skipNukeCrossCompartment && window) {
-      nsGlobalWindow* win = nsGlobalWindow::FromSupports(window);
-      nsGlobalWindow* currentInner = win->IsInnerWindow() ? win : win->GetCurrentInnerWindowInternal();
-      NS_ENSURE_TRUE(currentInner, NS_OK);
+        if (!skipNukeCrossCompartment) {
+          // The compartment nuking phase might be too expensive, so do that
+          // part off of idle dispatch.
 
-      AutoSafeJSContext cx;
-      JS::Rooted<JSObject*> obj(cx, currentInner->FastGetGlobalJSObject());
-      if (obj && !js::IsSystemCompartment(js::GetObjectCompartment(obj))) {
-        JSCompartment* cpt = js::GetObjectCompartment(obj);
-        nsCOMPtr<nsIPrincipal> pc = nsJSPrincipals::get(JS_GetCompartmentPrincipals(cpt));
+          // For the compartment nuking phase, we dispatch either an
+          // inner-window-nuked or an outer-window-nuked notification.
+          // This will allow tests to wait for compartment nuking to happen.
+          if (mTopic.EqualsLiteral("inner-window-destroyed")) {
+            mTopic.AssignLiteral("inner-window-nuked");
+          } else if (mTopic.EqualsLiteral("outer-window-destroyed")) {
+            mTopic.AssignLiteral("outer-window-nuked");
+          }
+          mPhase = Phase::Nuking;
 
-        nsAutoString addonId;
-        if (NS_SUCCEEDED(pc->GetAddonId(addonId)) && !addonId.IsEmpty()) {
-          // We want to nuke all references to the add-on compartment.
-          xpc::NukeAllWrappersForCompartment(cx, cpt,
-                                             win->IsInnerWindow() ? js::DontNukeWindowReferences
-                                                                  : js::NukeWindowReferences);
-        } else {
-          // We only want to nuke wrappers for the chrome->content case
-          js::NukeCrossCompartmentWrappers(cx, BrowserCompartmentMatcher(), cpt,
-                                           win->IsInnerWindow() ? js::DontNukeWindowReferences
-                                                                : js::NukeWindowReferences,
-                                           js::NukeIncomingReferences);
+          nsCOMPtr<nsIRunnable> copy(this);
+          NS_IdleDispatchToCurrentThread(copy.forget(), 1000);
         }
       }
+      break;
+
+      case Phase::Nuking:
+      {
+        nsCOMPtr<nsISupports> window = do_QueryReferent(mWindow);
+        if (window) {
+          nsGlobalWindow* win = nsGlobalWindow::FromSupports(window);
+          nsGlobalWindow* currentInner = win->IsInnerWindow() ? win : win->GetCurrentInnerWindowInternal();
+          NS_ENSURE_TRUE(currentInner, NS_OK);
+
+          AutoSafeJSContext cx;
+          JS::Rooted<JSObject*> obj(cx, currentInner->FastGetGlobalJSObject());
+          if (obj && !js::IsSystemCompartment(js::GetObjectCompartment(obj))) {
+            JSCompartment* cpt = js::GetObjectCompartment(obj);
+            nsCOMPtr<nsIPrincipal> pc = nsJSPrincipals::get(JS_GetCompartmentPrincipals(cpt));
+
+            nsAutoString addonId;
+            if (NS_SUCCEEDED(pc->GetAddonId(addonId)) && !addonId.IsEmpty()) {
+              // We want to nuke all references to the add-on compartment.
+              xpc::NukeAllWrappersForCompartment(cx, cpt,
+                                                 win->IsInnerWindow() ? js::DontNukeWindowReferences
+                                                                      : js::NukeWindowReferences);
+            } else {
+              // We only want to nuke wrappers for the chrome->content case
+              js::NukeCrossCompartmentWrappers(cx, BrowserCompartmentMatcher(), cpt,
+                                               win->IsInnerWindow() ? js::DontNukeWindowReferences
+                                                                    : js::NukeWindowReferences,
+                                               js::NukeIncomingReferences);
+            }
+          }
+        }
+      }
+      break;
     }
 
     return NS_OK;
@@ -9668,6 +9743,7 @@ public:
 
 private:
   uint64_t mID;
+  Phase mPhase;
   nsCString mTopic;
   nsWeakPtr mWindow;
 };
@@ -10576,13 +10652,16 @@ void nsGlobalWindow::SetIsBackground(bool aIsBackground)
 {
   MOZ_ASSERT(IsOuterWindow());
 
-  bool resetTimers = (!aIsBackground && AsOuter()->IsBackground());
-  nsPIDOMWindow::SetIsBackground(aIsBackground);
+  bool changed = aIsBackground != AsOuter()->IsBackground();
+  SetIsBackgroundInternal(aIsBackground);
 
   nsGlobalWindow* inner = GetCurrentInnerWindowInternal();
 
+  if (inner && changed) {
+    inner->mTimeoutManager->UpdateBackgroundState();
+  }
+
   if (aIsBackground) {
-    MOZ_ASSERT(!resetTimers);
     // Notify gamepadManager we are at the background window,
     // we need to stop vibrate.
     if (inner) {
@@ -10590,11 +10669,17 @@ void nsGlobalWindow::SetIsBackground(bool aIsBackground)
     }
     return;
   } else if (inner) {
-    if (resetTimers) {
-      inner->mTimeoutManager->ResetTimersForThrottleReduction();
-    }
     inner->SyncGamepadState();
   }
+}
+
+void
+nsGlobalWindow::SetIsBackgroundInternal(bool aIsBackground)
+{
+  if (mIsBackground != aIsBackground) {
+    TabGroup()->WindowChangedBackgroundStatus(aIsBackground);
+  }
+  mIsBackground = aIsBackground;
 }
 
 void nsGlobalWindow::MaybeUpdateTouchState()
@@ -13523,6 +13608,10 @@ nsGlobalWindow::EventListenerAdded(nsIAtom* aType)
     NotifyVREventListenerAdded();
   }
 
+  if (aType == nsGkAtoms::onvrdisplayactivate) {
+    mHasVRDisplayActivateEvents = true;
+  }
+
   if (aType == nsGkAtoms::onbeforeunload &&
       mTabChild &&
       (!mDoc || !(mDoc->GetSandboxFlags() & SANDBOXED_MODALS))) {
@@ -13566,7 +13655,30 @@ nsGlobalWindow::HasUsedVR() const
 {
   MOZ_ASSERT(IsInnerWindow());
 
+  // Returns true only if any WebVR API call or related event
+  // has been used
   return mHasVREvents;
+}
+
+bool
+nsGlobalWindow::IsVRContentDetected() const
+{
+  MOZ_ASSERT(IsInnerWindow());
+
+  // Returns true only if the content will respond to
+  // the VRDisplayActivate event.
+  return mHasVRDisplayActivateEvents;
+}
+
+bool
+nsGlobalWindow::IsVRContentPresenting() const
+{
+  for (auto display : mVRDisplays) {
+    if (display->IsAnyPresenting(gfx::kVRGroupAll)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void
@@ -13763,7 +13875,7 @@ nsGlobalWindow::DispatchVRDisplayActivate(uint32_t aDisplayID,
   for (auto display : mVRDisplays) {
     if (display->DisplayId() == aDisplayID) {
       if (aReason != VRDisplayEventReason::Navigation &&
-          display->IsAnyPresenting()) {
+          display->IsAnyPresenting(gfx::kVRGroupContent)) {
         // We only want to trigger this event if nobody is presenting to the
         // display already or when a page is loaded by navigating away
         // from a page with an active VR Presentation.
@@ -14393,18 +14505,15 @@ nsGlobalWindow::GetGroupMessageManager(const nsAString& aGroup,
 
   nsGlobalChromeWindow* myself = static_cast<nsGlobalChromeWindow*>(this);
   nsCOMPtr<nsIMessageBroadcaster> messageManager =
-    myself->mGroupMessageManagers.Get(aGroup);
+    myself->mGroupMessageManagers.LookupForAdd(aGroup).OrInsert(
+      [this, &aError] () {
+        nsFrameMessageManager* parent =
+          static_cast<nsFrameMessageManager*>(GetMessageManager(aError));
 
-  if (!messageManager) {
-    nsFrameMessageManager* parent =
-      static_cast<nsFrameMessageManager*>(GetMessageManager(aError));
-
-    messageManager = new nsFrameMessageManager(nullptr,
-                                               parent,
-                                               MM_CHROME | MM_BROADCASTER);
-    myself->mGroupMessageManagers.Put(aGroup, messageManager);
-  }
-
+        return new nsFrameMessageManager(nullptr,
+                                         parent,
+                                         MM_CHROME | MM_BROADCASTER);
+      });
   return messageManager;
 }
 
@@ -15208,7 +15317,7 @@ nsGlobalWindow::Dispatch(const char* aName,
   return DispatcherTrait::Dispatch(aName, aCategory, Move(aRunnable));
 }
 
-nsIEventTarget*
+nsISerialEventTarget*
 nsGlobalWindow::EventTargetFor(TaskCategory aCategory) const
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());

@@ -8,13 +8,13 @@
 
 #include "gfxPlatformFontList.h"
 #include "mozilla/DocumentStyleRootIterator.h"
+#include "mozilla/ServoBindings.h"
 #include "mozilla/ServoRestyleManager.h"
 #include "mozilla/dom/AnonymousContent.h"
 #include "mozilla/dom/ChildIterator.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ElementInlines.h"
 #include "mozilla/RestyleManagerInlines.h"
-#include "mozilla/ServoComputedValuesWithParent.h"
 #include "nsCSSAnonBoxes.h"
 #include "nsCSSPseudoElements.h"
 #include "nsCSSRuleProcessor.h"
@@ -132,6 +132,12 @@ ServoStyleSet::InvalidateStyleForCSSRuleChanges()
 {
   MOZ_ASSERT(StylistNeedsUpdate());
   mPresContext->RestyleManager()->AsServo()->PostRestyleEventForCSSRuleChanges();
+}
+
+bool
+ServoStyleSet::MediumFeaturesChanged() const
+{
+  return Servo_StyleSet_MediumFeaturesChanged(mRawSet.get());
 }
 
 size_t
@@ -369,9 +375,14 @@ ServoStyleSet::PrepareAndTraverseSubtree(
     aRestyleBehavior == TraversalRestyleBehavior::ForReconstruct;
   bool forAnimationOnly =
     aRestyleBehavior == TraversalRestyleBehavior::ForAnimationOnly;
+#ifdef DEBUG
+  bool forNewlyBoundElement =
+    aRestyleBehavior == TraversalRestyleBehavior::ForNewlyBoundElement;
+#endif
   bool postTraversalRequired = Servo_TraverseSubtree(
     aRoot, mRawSet.get(), &snapshots, aRootBehavior, aRestyleBehavior);
-  MOZ_ASSERT_IF(isInitial || forReconstruct, !postTraversalRequired);
+  MOZ_ASSERT(!(isInitial || forReconstruct || forNewlyBoundElement) ||
+             !postTraversalRequired);
 
   // Don't need to trigger a second traversal if this restyle only needs
   // animation-only restyle.
@@ -430,7 +441,7 @@ ServoStyleSet::ResolveStyleForText(nsIContent* aTextNode,
   // enough to do on the main thread, which means that the parallel style system
   // can avoid worrying about text nodes.
   const ServoComputedValues* parentComputedValues =
-    aParentContext->StyleSource().AsServoComputedValues();
+    aParentContext->ComputedValues();
   RefPtr<ServoComputedValues> computedValues =
     Servo_ComputedValues_Inherit(mRawSet.get(),
                                  parentComputedValues,
@@ -446,7 +457,7 @@ already_AddRefed<nsStyleContext>
 ServoStyleSet::ResolveStyleForFirstLetterContinuation(nsStyleContext* aParentContext)
 {
   const ServoComputedValues* parent =
-    aParentContext->StyleSource().AsServoComputedValues();
+    aParentContext->ComputedValues();
   RefPtr<ServoComputedValues> computedValues =
     Servo_ComputedValues_Inherit(mRawSet.get(),
                                  parent,
@@ -560,7 +571,7 @@ ServoStyleSet::ResolveInheritingAnonymousBoxStyle(nsIAtom* aPseudoTag,
     nsCSSAnonBoxes::AnonBoxSkipsParentDisplayBasedStyleFixup(aPseudoTag);
 
   const ServoComputedValues* parentStyle =
-    aParentContext ? aParentContext->StyleSource().AsServoComputedValues()
+    aParentContext ? aParentContext->ComputedValues()
                    : nullptr;
   RefPtr<ServoComputedValues> computedValues =
     Servo_ComputedValues_GetForAnonymousBox(parentStyle, aPseudoTag, skipFixup,
@@ -951,6 +962,34 @@ ServoStyleSet::StyleNewChildren(Element* aParent)
 }
 
 void
+ServoStyleSet::StyleNewlyBoundElement(Element* aElement)
+{
+  PreTraverse();
+
+  // In general the element is always styled by the time we're applying XBL
+  // bindings, because we need to style the element to know what the binding
+  // URI is. However, programmatic consumers of the XBL service (like the
+  // XML pretty printer) _can_ apply bindings without having styled the bound
+  // element. We could assert against this and require the callers manually
+  // resolve the style first, but it's easy enough to just handle here.
+  //
+  // Also, when applying XBL bindings to elements within a display:none or
+  // unstyled subtree (for example, when <object> elements are wrapped to be
+  // exposed to JS), we need to tell the traversal that it is OK to
+  // skip restyling, rather than panic when trying to unwrap the styles
+  // it expects to have just computed.
+
+  TraversalRootBehavior rootBehavior =
+    MOZ_UNLIKELY(!aElement->HasServoData())
+      ? TraversalRootBehavior::Normal
+      : TraversalRootBehavior::UnstyledChildrenOnly;
+
+  PrepareAndTraverseSubtree(aElement,
+                            rootBehavior,
+                            TraversalRestyleBehavior::ForNewlyBoundElement);
+}
+
+void
 ServoStyleSet::StyleSubtreeForReconstruct(Element* aRoot)
 {
   PreTraverse(aRoot);
@@ -1020,8 +1059,8 @@ ServoStyleSet::GetKeyframesForName(const nsString& aName,
 nsTArray<ComputedKeyframeValues>
 ServoStyleSet::GetComputedKeyframeValuesFor(
   const nsTArray<Keyframe>& aKeyframes,
-  dom::Element* aElement,
-  const ServoComputedValuesWithParent& aServoValues)
+  Element* aElement,
+  ServoComputedValuesBorrowed aComputedValues)
 {
   nsTArray<ComputedKeyframeValues> result(aKeyframes.Length());
 
@@ -1029,11 +1068,25 @@ ServoStyleSet::GetComputedKeyframeValuesFor(
   result.AppendElements(aKeyframes.Length());
 
   Servo_GetComputedKeyframeValues(&aKeyframes,
-                                  aServoValues.mCurrentStyle,
-                                  aServoValues.mParentStyle,
+                                  aElement,
+                                  aComputedValues,
                                   mRawSet.get(),
                                   &result);
   return result;
+}
+
+void
+ServoStyleSet::GetAnimationValues(
+  RawServoDeclarationBlock* aDeclarations,
+  Element* aElement,
+  ServoComputedValuesBorrowed aComputedValues,
+  nsTArray<RefPtr<RawServoAnimationValue>>& aAnimationValues)
+{
+  Servo_GetAnimationValues(aDeclarations,
+                           aElement,
+                           aComputedValues,
+                           mRawSet.get(),
+                           &aAnimationValues);
 }
 
 already_AddRefed<ServoComputedValues>
@@ -1048,12 +1101,13 @@ ServoStyleSet::GetBaseComputedValuesForElement(Element* aElement,
 
 already_AddRefed<RawServoAnimationValue>
 ServoStyleSet::ComputeAnimationValue(
+  Element* aElement,
   RawServoDeclarationBlock* aDeclarations,
-  const ServoComputedValuesWithParent& aComputedValues)
+  ServoComputedValuesBorrowed aComputedValues)
 {
-  return Servo_AnimationValue_Compute(aDeclarations,
-                                      aComputedValues.mCurrentStyle,
-                                      aComputedValues.mParentStyle,
+  return Servo_AnimationValue_Compute(aElement,
+                                      aDeclarations,
+                                      aComputedValues,
                                       mRawSet.get()).Consume();
 }
 
@@ -1101,6 +1155,12 @@ ServoStyleSet::ClearDataAndMarkDeviceDirty()
   ClearNonInheritingStyleContexts();
   Servo_StyleSet_Clear(mRawSet.get());
   mStylistState |= StylistState::FullyDirty;
+}
+
+void
+ServoStyleSet::CompatibilityModeChanged()
+{
+  Servo_StyleSet_CompatModeChanged(mRawSet.get());
 }
 
 already_AddRefed<ServoComputedValues>

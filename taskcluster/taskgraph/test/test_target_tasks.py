@@ -25,8 +25,8 @@ class FakeTryOptionSyntax(object):
         self.tag = None
         self.no_retry = False
 
-    def task_matches(self, attributes):
-        return 'at-at' in attributes
+    def task_matches(self, task):
+        return 'at-at' in task.attributes
 
 
 class TestTargetTasks(unittest.TestCase):
@@ -82,6 +82,7 @@ class TestTargetTasks(unittest.TestCase):
             self.assertEqual(method(tg, params), ['b'])
         finally:
             try_option_syntax.TryOptionSyntax = orig_TryOptionSyntax
+
 
 if __name__ == '__main__':
     main()

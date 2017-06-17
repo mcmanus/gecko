@@ -54,7 +54,6 @@
 #include "mozilla/dom/URLClassifierChild.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "nsProxyRelease.h"
-#include "SBTelemetryUtils.h"
 
 namespace mozilla {
 namespace safebrowsing {
@@ -669,6 +668,20 @@ nsUrlClassifierDBServiceWorker::NotifyUpdateObserver(nsresult aUpdateStatus)
                           NS_ERROR_GET_CODE(updateStatus));
   }
 
+  if (!mUpdateObserver) {
+    // In the normal shutdown process, CancelUpdate() would NOT be
+    // called prior to NotifyUpdateObserver(). However, CancelUpdate()
+    // is a public API which can be called in the test case at any point.
+    // If the call sequence is FinishUpdate() then CancelUpdate(), the later
+    // might be executed before NotifyUpdateObserver() which is triggered
+    // by the update thread. In this case, we will get null mUpdateObserver.
+    NS_WARNING("CancelUpdate() is called before we asynchronously call "
+               "NotifyUpdateObserver() in FinishUpdate().");
+
+    // The DB cleanup will be done in CancelUpdate() so we can just return.
+    return NS_OK;
+  }
+
   // Null out mUpdateObserver before notifying so that BeginUpdate()
   // becomes available prior to callback.
   nsCOMPtr<nsIUrlClassifierUpdateObserver> updateObserver = nullptr;
@@ -1257,8 +1270,6 @@ nsUrlClassifierLookupCallback::HandleResults()
   nsCOMPtr<nsIUrlClassifierClassifyCallback> classifyCallback =
     do_QueryInterface(mCallback);
 
-  MatchResult matchResult = MatchResult::eTelemetryDisabled;
-
   nsTArray<nsCString> tables;
   // Build a stringified list of result tables.
   for (uint32_t i = 0; i < mResults->Length(); i++) {
@@ -1273,22 +1284,7 @@ nsUrlClassifierLookupCallback::HandleResults()
       continue;
     }
 
-    bool confirmed = result.Confirmed();
-
-    // If mMatchResult is set to eTelemetryDisabled, then we don't need to
-    // set |matchResult| for this lookup.
-    if (result.mMatchResult != MatchResult::eTelemetryDisabled) {
-      matchResult &= ~(MatchResult::eTelemetryDisabled);
-      if (result.mProtocolV2) {
-        matchResult |=
-          confirmed ? MatchResult::eV2PreAndCom : MatchResult::eV2Prefix;
-      } else {
-        matchResult |=
-          confirmed ? MatchResult::eV4PreAndCom : MatchResult::eV4Prefix;
-      }
-    }
-
-    if (!confirmed) {
+    if (!result.Confirmed()) {
       LOG(("Skipping result %s from table %s (not confirmed)",
            result.PartialHashHex().get(), result.mTableName.get()));
       continue;
@@ -1314,57 +1310,6 @@ nsUrlClassifierLookupCallback::HandleResults()
       result.hash.fixedLengthPrefix.ToString(prefixString);
       classifyCallback->HandleResult(result.mTableName, prefixString);
     }
-  }
-
-  // Only record threat type telemetry when completion is found in V2 & V4.
-  if (matchResult == MatchResult::eAll && mCacheResults) {
-    MatchThreatType types = MatchThreatType::eIdentical;
-
-    // Check all the results because there may be multiple matches being returned.
-    bool foundV2Result = false, foundV4Result = false;
-    for (uint32_t i = 0; i < mCacheResults->Length(); i++) {
-      CacheResult* c = mCacheResults->ElementAt(i).get();
-      bool isV2 = CacheResult::V2 == c->Ver();
-      if (isV2) {
-        foundV2Result = true;
-      } else {
-        foundV4Result = true;
-      }
-      for (LookupResult& l : *(mResults.get())) {
-        if (l.mProtocolV2 != isV2 || l.hash.fixedLengthPrefix != c->prefix) {
-          continue;
-        }
-
-        // Ignore unconfirmed results.
-        if (l.Confirmed()) {
-          types |= TableNameToThreatType(CacheResult::V2 == c->Ver(), c->table);
-        }
-        break;
-      }
-    }
-
-    // We don't want to record telemetry when one of the results is from cache
-    // because finding an unexpired cache entry will prevent us from doing gethash
-    // requests that would otherwise be required.
-    if (foundV2Result && foundV4Result) {
-      auto fnIsMatchSameThreatType = [&](const MatchThreatType& aTypeMask) {
-        uint8_t val = static_cast<uint8_t>(types & aTypeMask);
-        return val == 0 || val == static_cast<uint8_t>(aTypeMask);
-      };
-      if (fnIsMatchSameThreatType(MatchThreatType::ePhishingMask) &&
-          fnIsMatchSameThreatType(MatchThreatType::eMalwareMask) &&
-          fnIsMatchSameThreatType(MatchThreatType::eUnwantedMask)) {
-        types = MatchThreatType::eIdentical;
-      }
-
-      Telemetry::Accumulate(Telemetry::URLCLASSIFIER_MATCH_THREAT_TYPE_RESULT,
-                            static_cast<uint8_t>(types));
-    }
-  }
-
-  if (matchResult != MatchResult::eTelemetryDisabled) {
-    Telemetry::Accumulate(Telemetry::URLCLASSIFIER_MATCH_RESULT,
-                          MatchResultToUint(matchResult));
   }
 
   // Some parts of this gethash request generated no hits at all.

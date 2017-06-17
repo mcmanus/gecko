@@ -32,7 +32,6 @@ class CSSStyleSheet;
 class ServoRestyleManager;
 class ServoStyleSheet;
 struct Keyframe;
-struct ServoComputedValuesWithParent;
 class ServoElementSnapshotTable;
 } // namespace mozilla
 class nsCSSCounterStyleRule;
@@ -138,10 +137,14 @@ public:
     return StylistNeedsUpdate();
   }
 
+  bool MediumFeaturesChanged() const;
+
   void InvalidateStyleForCSSRuleChanges();
 
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
-  const RawServoStyleSet& RawSet() const { return *mRawSet; }
+  const RawServoStyleSet* RawSet() const {
+    return mRawSet.get();
+  }
 
   bool GetAuthorStyleDisabled() const;
   nsresult SetAuthorStyleDisabled(bool aStyleDisabled);
@@ -303,6 +306,14 @@ public:
   void StyleNewChildren(dom::Element* aParent);
 
   /**
+   * Eagerly styles the children of an element that has just had an XBL
+   * binding applied to it.  Some XBL consumers attach bindings to elements
+   * that have not been styled yet, and in such cases, this will do the
+   * equivalent of StyleNewSubtree instead.
+   */
+  void StyleNewlyBoundElement(dom::Element* aElement);
+
+  /**
    * Like StyleNewSubtree, but in response to a request to reconstruct frames
    * for the given subtree, and so works on elements that already have
    * styles.  This will leave the subtree in a state just like after an initial
@@ -344,6 +355,11 @@ public:
   void ClearDataAndMarkDeviceDirty();
 
   /**
+   * Notifies the Servo stylesheet that the document's compatibility mode has changed.
+   */
+  void CompatibilityModeChanged();
+
+  /**
    * Resolve style for the given element, and return it as a
    * ServoComputedValues, not an nsStyleContext.
    */
@@ -357,8 +373,13 @@ public:
   nsTArray<ComputedKeyframeValues>
   GetComputedKeyframeValuesFor(const nsTArray<Keyframe>& aKeyframes,
                                dom::Element* aElement,
-                               const ServoComputedValuesWithParent&
-                                 aServoValues);
+                               ServoComputedValuesBorrowed aComputedValues);
+
+  void
+  GetAnimationValues(RawServoDeclarationBlock* aDeclarations,
+                     dom::Element* aElement,
+                     ServoComputedValuesBorrowed aComputedValues,
+                     nsTArray<RefPtr<RawServoAnimationValue>>& aAnimationValues);
 
   bool AppendFontFaceRules(nsTArray<nsFontFaceRuleContainer>& aArray);
 
@@ -378,8 +399,9 @@ public:
                          RawServoDeclarationBlockBorrowed aDeclarations);
 
   already_AddRefed<RawServoAnimationValue>
-  ComputeAnimationValue(RawServoDeclarationBlock* aDeclaration,
-                        const ServoComputedValuesWithParent& aComputedValues);
+  ComputeAnimationValue(dom::Element* aElement,
+                        RawServoDeclarationBlock* aDeclaration,
+                        ServoComputedValuesBorrowed aComputedValues);
 
   void AppendTask(PostTraversalTask aTask)
   {

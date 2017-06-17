@@ -35,7 +35,7 @@ use dom::values::UNSIGNED_LONG_MAX;
 use dom::virtualmethods::VirtualMethods;
 use dom::window::Window;
 use dom_struct::dom_struct;
-use euclid::point::Point2D;
+use euclid::Point2D;
 use html5ever::{LocalName, Prefix};
 use ipc_channel::ipc;
 use ipc_channel::router::ROUTER;
@@ -493,6 +493,7 @@ impl HTMLImageElement {
         request.image = None;
         request.metadata = None;
         let document = document_from_node(self);
+        LoadBlocker::terminate(&mut request.blocker);
         request.blocker = Some(LoadBlocker::new(&*document, LoadType::Image(url.clone())));
     }
 
@@ -524,22 +525,20 @@ impl HTMLImageElement {
                         }
                         self.image_request.set(ImageRequestPhase::Pending);
                         self.init_image_request(&mut pending_request, &url, &src);
-                        self.fetch_image(&url);
                     },
                     (_, State::Broken) | (_, State::Unavailable) => {
                         // Step 12.5
                         self.init_image_request(&mut current_request, &url, &src);
-                        self.fetch_image(&url);
                     },
                     (_, _) => {
                         // step 12.6
                         self.image_request.set(ImageRequestPhase::Pending);
                         self.init_image_request(&mut pending_request, &url, &src);
-                        self.fetch_image(&url);
                     },
                 }
             }
         }
+        self.fetch_image(&url);
     }
 
     /// Step 8-12 of html.spec.whatwg.org/multipage/#update-the-image-data

@@ -51,6 +51,7 @@
 #include "nsWrapperCacheInlines.h"
 #include "mozilla/AppUnits.h"
 #include <algorithm>
+#include "nsStyleContextInlines.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -563,7 +564,7 @@ MustReresolveStyle(const nsStyleContext* aContext)
 
   if (aContext->HasPseudoElementData()) {
     if (!aContext->GetPseudo() ||
-        aContext->StyleSource().IsServoComputedValues()) {
+        aContext->IsServo()) {
       // TODO(emilio): When ::first-line is supported in Servo, we may want to
       // fix this to avoid re-resolving pseudo-element styles.
       return true;
@@ -598,6 +599,15 @@ nsComputedDOMStyle::DoGetStyleContextNoFlush(Element* aElement,
       return nullptr;
   }
 
+  auto pseudoType = CSSPseudoElementType::NotPseudo;
+  if (aPseudo) {
+    pseudoType = nsCSSPseudoElements::
+      GetPseudoType(aPseudo, CSSEnabledState::eIgnoreEnabledState);
+    if (pseudoType >= CSSPseudoElementType::Count) {
+      return nullptr;
+    }
+  }
+
   // XXX the !aElement->IsHTMLElement(nsGkAtoms::area)
   // check is needed due to bug 135040 (to avoid using
   // mPrimaryFrame). Remove it once that's fixed.
@@ -628,9 +638,11 @@ nsComputedDOMStyle::DoGetStyleContextNoFlush(Element* aElement,
             return styleSet->ResolveStyleByRemovingAnimation(
                      aElement, result, eRestyle_AllHintsWithAnimations);
           } else {
-            NS_WARNING("stylo: Getting the unanimated style context is not yet"
-                       " supported for Servo");
-            return nullptr;
+            RefPtr<ServoComputedValues> baseComputedValues =
+              presContext->StyleSet()->AsServo()->
+                GetBaseComputedValuesForElement(aElement, pseudoType);
+            return NS_NewStyleContext(nullptr, presContext, aPseudo,
+                                      pseudoType, baseComputedValues.forget());
           }
         }
 
@@ -650,22 +662,22 @@ nsComputedDOMStyle::DoGetStyleContextNoFlush(Element* aElement,
 
   StyleSetHandle styleSet = presShell->StyleSet();
 
-  auto type = CSSPseudoElementType::NotPseudo;
-  if (aPseudo) {
-    type = nsCSSPseudoElements::
-      GetPseudoType(aPseudo, CSSEnabledState::eIgnoreEnabledState);
-    if (type >= CSSPseudoElementType::Count) {
-      return nullptr;
-    }
-  }
-
   // For Servo, compute the result directly without recursively building up
   // a throwaway style context chain.
   if (ServoStyleSet* servoSet = styleSet->GetAsServo()) {
     StyleRuleInclusion rules = aStyleType == eDefaultOnly
                                ? StyleRuleInclusion::DefaultOnly
                                : StyleRuleInclusion::All;
-    return servoSet->ResolveTransientStyle(aElement, aPseudo, type, rules);
+    RefPtr<nsStyleContext> result =
+       servoSet->ResolveTransientStyle(aElement, aPseudo, pseudoType, rules);
+    if (aAnimationFlag == eWithAnimation) {
+      return result.forget();
+    }
+
+    RefPtr<ServoComputedValues> baseComputedValues =
+      servoSet->GetBaseComputedValuesForElement(aElement, pseudoType);
+    return NS_NewStyleContext(nullptr, presContext, aPseudo,
+                              pseudoType, baseComputedValues.forget());
   }
 
   RefPtr<nsStyleContext> parentContext;
@@ -680,14 +692,14 @@ nsComputedDOMStyle::DoGetStyleContextNoFlush(Element* aElement,
 
   if (aAnimationFlag == eWithAnimation) {
     return styleResolver.ResolveWithAnimation(styleSet,
-                                              aElement, type,
+                                              aElement, pseudoType,
                                               parentContext,
                                               aStyleType,
                                               inDocWithShell);
   }
 
   return styleResolver.ResolveWithoutAnimation(styleSet,
-                                               aElement, type,
+                                               aElement, pseudoType,
                                                parentContext,
                                                inDocWithShell);
 }
@@ -859,7 +871,7 @@ nsComputedDOMStyle::UpdateCurrentStyleSources(bool aNeedsLayoutFlush)
 
   if (!mStyleContext || MustReresolveStyle(mStyleContext)) {
 #ifdef DEBUG
-    if (mStyleContext && mStyleContext->StyleSource().IsGeckoRuleNodeOrNull()) {
+    if (mStyleContext && mStyleContext->IsGecko()) {
       // We want to check that going through this path because of
       // HasPseudoElementData is rare, because it slows us down a good
       // bit.  So check that we're really inside something associated
@@ -2465,19 +2477,19 @@ nsComputedDOMStyle::DoGetImageLayerRepeat(const nsStyleImageLayers& aLayers)
     RefPtr<nsDOMCSSValueList> itemList = GetROCSSValueList(false);
     RefPtr<nsROCSSPrimitiveValue> valX = new nsROCSSPrimitiveValue;
 
-    const uint8_t& xRepeat = aLayers.mLayers[i].mRepeat.mXRepeat;
-    const uint8_t& yRepeat = aLayers.mLayers[i].mRepeat.mYRepeat;
+    const StyleImageLayerRepeat xRepeat = aLayers.mLayers[i].mRepeat.mXRepeat;
+    const StyleImageLayerRepeat yRepeat = aLayers.mLayers[i].mRepeat.mYRepeat;
 
     bool hasContraction = true;
     unsigned contraction;
     if (xRepeat == yRepeat) {
-      contraction = xRepeat;
-    } else if (xRepeat == NS_STYLE_IMAGELAYER_REPEAT_REPEAT &&
-               yRepeat == NS_STYLE_IMAGELAYER_REPEAT_NO_REPEAT) {
-      contraction = NS_STYLE_IMAGELAYER_REPEAT_REPEAT_X;
-    } else if (xRepeat == NS_STYLE_IMAGELAYER_REPEAT_NO_REPEAT &&
-               yRepeat == NS_STYLE_IMAGELAYER_REPEAT_REPEAT) {
-      contraction = NS_STYLE_IMAGELAYER_REPEAT_REPEAT_Y;
+      contraction = uint8_t(xRepeat);
+    } else if (xRepeat == StyleImageLayerRepeat::Repeat &&
+               yRepeat == StyleImageLayerRepeat::NoRepeat) {
+      contraction = uint8_t(StyleImageLayerRepeat::RepeatX);
+    } else if (xRepeat == StyleImageLayerRepeat::NoRepeat &&
+               yRepeat == StyleImageLayerRepeat::Repeat) {
+      contraction = uint8_t(StyleImageLayerRepeat::RepeatY);
     } else {
       hasContraction = false;
     }

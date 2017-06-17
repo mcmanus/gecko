@@ -357,12 +357,19 @@ nsHTMLDocument::TryCacheCharset(nsICachingChannel* aCachingChannel,
 
   nsCString cachedCharset;
   rv = aCachingChannel->GetCacheTokenCachedCharset(cachedCharset);
+  if (NS_FAILED(rv) || cachedCharset.IsEmpty()) {
+    return;
+  }
+  // The canonical names changed, so the cache may have an old name.
+  if (!cachedCharset.EqualsLiteral("replacement")) {
+    if (!EncodingUtils::FindEncodingForLabel(cachedCharset, cachedCharset)) {
+      return;
+    }
+  }
   // Check EncodingUtils::IsAsciiCompatible() even in the cache case, because the value
   // might be stale and in the case of a stale charset that is not a rough
   // ASCII superset, the parser has no way to recover.
-  if (NS_SUCCEEDED(rv) &&
-      !cachedCharset.IsEmpty() &&
-      EncodingUtils::IsAsciiCompatible(cachedCharset))
+  if (EncodingUtils::IsAsciiCompatible(cachedCharset))
   {
     aCharset = cachedCharset;
     aCharsetSource = kCharsetFromCache;
@@ -531,8 +538,7 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
               !strcmp(aCommand, "external-resource");
   bool viewSource = !strcmp(aCommand, "view-source");
   bool asData = !strcmp(aCommand, kLoadAsData);
-  bool import = !strcmp(aCommand, "import");
-  if (!(view || viewSource || asData || import)) {
+  if (!(view || viewSource || asData)) {
     MOZ_ASSERT(false, "Bad parser command");
     return NS_ERROR_INVALID_ARG;
   }
@@ -719,7 +725,7 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
 
     if (wyciwygChannel) {
       // We know for sure that the parser needs to be using UTF16.
-      parserCharset = "UTF-16";
+      parserCharset = "UTF-16LE";
       parserCharsetSource = charsetSource < kCharsetFromChannel ?
         kCharsetFromChannel : charsetSource;
 
@@ -1476,7 +1482,7 @@ nsHTMLDocument::Open(JSContext* cx,
 
   NS_ASSERTION(nsContentUtils::CanCallerAccess(static_cast<nsIDOMHTMLDocument*>(this)),
                "XOW should have caught this!");
-  if (!IsHTMLDocument() || mDisableDocWrite || !IsMasterDocument()) {
+  if (!IsHTMLDocument() || mDisableDocWrite) {
     // No calling document.open() on XHTML
     rv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return nullptr;
@@ -1894,7 +1900,7 @@ nsHTMLDocument::WriteCommon(JSContext *cx,
     (mWriteLevel > NS_MAX_DOCUMENT_WRITE_DEPTH || mTooDeepWriteRecursion);
   NS_ENSURE_STATE(!mTooDeepWriteRecursion);
 
-  if (!IsHTMLDocument() || mDisableDocWrite || !IsMasterDocument()) {
+  if (!IsHTMLDocument() || mDisableDocWrite) {
     // No calling document.write*() on XHTML!
 
     return NS_ERROR_DOM_INVALID_STATE_ERR;

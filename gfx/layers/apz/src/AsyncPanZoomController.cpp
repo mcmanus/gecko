@@ -33,6 +33,7 @@
 #include "mozilla/ClearOnShutdown.h"    // for ClearOnShutdown
 #include "mozilla/ComputedTimingFunction.h" // for ComputedTimingFunction
 #include "mozilla/EventForwards.h"      // for nsEventStatus_*
+#include "mozilla/EventStateManager.h"  // for EventStateManager
 #include "mozilla/MouseEvents.h"        // for WidgetWheelEvent
 #include "mozilla/Preferences.h"        // for Preferences
 #include "mozilla/ReentrantMonitor.h"   // for ReentrantMonitorAutoEnter, etc
@@ -876,7 +877,9 @@ nsEventStatus AsyncPanZoomController::HandleDragEvent(const MouseInput& aEvent,
     ParentLayerCoord distance = GetAxisStart(otherDirection,
         thumbRect.DistanceTo(aEvent.mLocalOrigin));
     ParentLayerCoord thumbWidth = GetAxisLength(otherDirection, thumbRect);
-    if (thumbWidth * snapMultiplier < distance) {
+    // Avoid triggering this condition spuriously when the thumb is
+    // offscreen and its visible region is therefore empty.
+    if (thumbWidth > 0 && thumbWidth * snapMultiplier < distance) {
       isMouseAwayFromThumb = true;
     }
   }

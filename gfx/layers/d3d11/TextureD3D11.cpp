@@ -767,6 +767,14 @@ DXGITextureHostD3D11::SetTextureSourceProvider(TextureSourceProvider* aProvider)
     return;
   }
 
+  if (mDevice && (aProvider->GetD3D11Device() != mDevice)) {
+    if (mTextureSource) {
+      mTextureSource->Reset();
+    }
+    mTextureSource = nullptr;
+    return;
+  }
+
   mProvider = aProvider;
   mDevice = aProvider->GetD3D11Device();
 
@@ -856,11 +864,28 @@ DXGITextureHostD3D11::BindTextureSource(CompositableTextureSourceRef& aTexture)
 }
 
 void
+DXGITextureHostD3D11::GetWRImageKeys(nsTArray<wr::ImageKey>& aImageKeys,
+                                     const std::function<wr::ImageKey()>& aImageKeyAllocator)
+{
+  MOZ_ASSERT_UNREACHABLE("No GetWRImageKeys() implementation for this DXGITextureHostD3D11 type.");
+}
+
+void
 DXGITextureHostD3D11::AddWRImage(wr::WebRenderAPI* aAPI,
                                  Range<const wr::ImageKey>& aImageKeys,
                                  const wr::ExternalImageId& aExtID)
 {
   MOZ_ASSERT_UNREACHABLE("No AddWRImage() implementation for this DXGITextureHostD3D11 type.");
+}
+
+void
+DXGITextureHostD3D11::PushExternalImage(wr::DisplayListBuilder& aBuilder,
+                                        const WrRect& aBounds,
+                                        const WrClipRegionToken aClip,
+                                        wr::ImageRendering aFilter,
+                                        Range<const wr::ImageKey>& aImageKeys)
+{
+  MOZ_ASSERT_UNREACHABLE("No PushExternalImage() implementation for this DXGITextureHostD3D11 type.");
 }
 
 DXGIYCbCrTextureHostD3D11::DXGIYCbCrTextureHostD3D11(TextureFlags aFlags,
@@ -997,11 +1022,28 @@ DXGIYCbCrTextureHostD3D11::BindTextureSource(CompositableTextureSourceRef& aText
 }
 
 void
+DXGIYCbCrTextureHostD3D11::GetWRImageKeys(nsTArray<wr::ImageKey>& aImageKeys,
+                                          const std::function<wr::ImageKey()>& aImageKeyAllocator)
+{
+  MOZ_ASSERT_UNREACHABLE("No GetWRImageKeys() implementation for this DXGIYCbCrTextureHostD3D11 type.");
+}
+
+void
 DXGIYCbCrTextureHostD3D11::AddWRImage(wr::WebRenderAPI* aAPI,
                                       Range<const wr::ImageKey>& aImageKeys,
                                       const wr::ExternalImageId& aExtID)
 {
   MOZ_ASSERT_UNREACHABLE("No AddWRImage() implementation for this DXGIYCbCrTextureHostD3D11 type.");
+}
+
+void
+DXGIYCbCrTextureHostD3D11::PushExternalImage(wr::DisplayListBuilder& aBuilder,
+                                             const WrRect& aBounds,
+                                             const WrClipRegionToken aClip,
+                                             wr::ImageRendering aFilter,
+                                             Range<const wr::ImageKey>& aImageKeys)
+{
+  MOZ_ASSERT_UNREACHABLE("No PushExternalImage() implementation for this DXGIYCbCrTextureHostD3D11 type.");
 }
 
 bool
@@ -1179,23 +1221,6 @@ DataTextureSourceD3D11::GetTileRect()
 {
   IntRect rect = GetTileRect(mCurrentTile);
   return IntRect(rect.x, rect.y, rect.width, rect.height);
-}
-
-void
-DataTextureSourceD3D11::SetTextureSourceProvider(TextureSourceProvider* aProvider)
-{
-  ID3D11Device* newDevice = aProvider ? aProvider->GetD3D11Device() : nullptr;
-  if (!mDevice) {
-    mDevice = newDevice;
-  } else if (mDevice != newDevice) {
-    // We do not support switching devices.
-    Reset();
-    mDevice = nullptr;
-  }
-
-  if (mNextSibling) {
-    mNextSibling->SetTextureSourceProvider(aProvider);
-  }
 }
 
 CompositingRenderTargetD3D11::CompositingRenderTargetD3D11(ID3D11Texture2D* aTexture,

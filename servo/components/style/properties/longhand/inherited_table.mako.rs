@@ -31,8 +31,8 @@ ${helpers.single_keyword("caption-side", "top bottom",
         use app_units::Au;
         use properties::animated_properties::Animatable;
 
-        #[derive(Clone, Copy, Debug, PartialEq)]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+        #[derive(Clone, Copy, Debug, PartialEq, ToCss)]
         pub struct T {
             pub horizontal: Au,
             pub vertical: Au,
@@ -92,14 +92,6 @@ ${helpers.single_keyword("caption-side", "top bottom",
         }
     }
 
-    impl ToCss for computed_value::T {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self.horizontal.to_css(dest));
-            try!(dest.write_str(" "));
-            self.vertical.to_css(dest)
-        }
-    }
-
     impl ToComputedValue for SpecifiedValue {
         type ComputedValue = computed_value::T;
 
@@ -121,11 +113,12 @@ ${helpers.single_keyword("caption-side", "top bottom",
         }
     }
 
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
+    pub fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                         -> Result<SpecifiedValue,ParseError<'i>> {
         let mut first = None;
         let mut second = None;
         match Length::parse_non_negative_quirky(context, input, AllowQuirks::Yes) {
-            Err(()) => (),
+            Err(_) => (),
             Ok(length) => {
                 first = Some(length);
                 if let Ok(len) = input.try(|i| Length::parse_non_negative_quirky(context, i, AllowQuirks::Yes)) {
@@ -134,7 +127,7 @@ ${helpers.single_keyword("caption-side", "top bottom",
             }
         }
         match (first, second) {
-            (None, None) => Err(()),
+            (None, None) => Err(StyleParseError::UnspecifiedError.into()),
             (Some(length), None) => {
                 Ok(SpecifiedValue {
                     horizontal: length,

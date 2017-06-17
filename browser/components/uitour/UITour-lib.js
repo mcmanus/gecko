@@ -107,9 +107,10 @@ if (typeof Mozilla == "undefined") {
    * <li>controlCenter-trackingBlock
    * <li>customize
    * <li>devtools
+   * <li>forget
    * <li>help
    * <li>home
-   * <li>forget
+   * <li>library
    * <li>pocket
    * <li>privateWindow
    * <li>quit
@@ -179,48 +180,6 @@ if (typeof Mozilla == "undefined") {
     _sendEvent("registerPageID", {
       pageID
     });
-  };
-
-  /**
-   * Show a global notification bar with a prompt and optional buttons.
-   *
-   * Only intended for use by Self Support.
-   *
-   * @deprecated Use Heartbeat from
-   * {@link https://wiki.mozilla.org/Firefox/Shield/Heartbeat|Shield} instead.
-   *
-   * @param {String} message - Text to show in the notification bar before an action is taken.
-   * @param {String} thankyouMessage - Text to show in the notification bar after a vote.
-   * @param {String} flowId - An identifier for this rating flow. Please note that this is only used
-   *                          to identify the notification box.
-   * @param {String} engagementURL - URL to open in a new tab once the user has engaged.
-   * @param {String} learnMoreLabel - The label of the learn more link. No link will be shown if
-   *                                  this is null.
-   * @param {String} learnMoreURL - URL to open when clicking on the learn more link. No link will be
-   *                                shown if this is an invalid URL.
-   * @param {Object} options - Options to control behavior.
-   */
-  Mozilla.UITour.showHeartbeat = function(message, thankyouMessage, flowId, engagementURL,
-					  learnMoreLabel, learnMoreURL, options) {
-    var args = {
-      message,
-      thankyouMessage,
-      flowId,
-      engagementURL,
-      learnMoreLabel,
-      learnMoreURL,
-    };
-
-    if (options) {
-      for (var option in options) {
-	if (!options.hasOwnProperty(option)) {
-	  continue;
-	}
-	args[option] = options[option];
-      }
-    }
-
-    _sendEvent("showHeartbeat", args);
   };
 
   /**
@@ -597,6 +556,8 @@ if (typeof Mozilla == "undefined") {
    * is a string, begins with "utm_" and contains only only alphanumeric
    * characters, dashes or underscores. The values may be any string and will
    * automatically be encoded.
+   * @param {String} email - A string containing the default email account
+   * for the URL opened by the browser.
    * @since 31, 47 for `extraURLCampaignParams`
    * @example
    * // Will open about:accounts?action=signup&entrypoint=uitour
@@ -608,10 +569,15 @@ if (typeof Mozilla == "undefined") {
    *   'utm_foo': 'bar',
    *   'utm_bar': 'baz'
    * });
+   * @example
+   * // Will open:
+   * // about:accounts?action=signup&entrypoint=uitour&email=foo%40bar.com
+   * Mozilla.UITour.showFirefoxAccounts(null, "foo@bar.com");
    */
-  Mozilla.UITour.showFirefoxAccounts = function(extraURLCampaignParams) {
+  Mozilla.UITour.showFirefoxAccounts = function(extraURLCampaignParams, email) {
     _sendEvent("showFirefoxAccounts", {
       extraURLCampaignParams: JSON.stringify(extraURLCampaignParams),
+      email
     });
   };
 

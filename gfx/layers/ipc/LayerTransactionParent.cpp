@@ -149,7 +149,7 @@ LayerTransactionParent::RecvInitReadLocks(ReadLockArray&& aReadLocks)
 mozilla::ipc::IPCResult
 LayerTransactionParent::RecvUpdate(const TransactionInfo& aInfo)
 {
-  GeckoProfilerTracingRAII tracer("Paint", "LayerTransaction");
+  AutoProfilerTracing tracing("Paint", "LayerTransaction");
   PROFILER_LABEL("LayerTransactionParent", "RecvUpdate",
     js::ProfileEntry::Category::GRAPHICS);
 
@@ -849,7 +849,7 @@ LayerTransactionParent::RecvFlushApzRepaints()
 mozilla::ipc::IPCResult
 LayerTransactionParent::RecvGetAPZTestData(APZTestData* aOutData)
 {
-  mCompositorBridge->GetAPZTestData(this, aOutData);
+  mCompositorBridge->GetAPZTestData(GetId(), aOutData);
   return IPC_OK();
 }
 

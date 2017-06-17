@@ -329,20 +329,17 @@ services_jar.javac_flags += ['-Xlint:all,-deprecation']
 
 if CONFIG['MOZ_WEBRTC']:
     base_root = TOPSRCDIR + '/media/webrtc/trunk/webrtc/base/java/src/org/webrtc/'
-    video_render_root = TOPSRCDIR + '/media/webrtc/trunk/webrtc/modules/video_render/android/java/src/org/webrtc/videoengine/'
     video_capture_root = TOPSRCDIR + '/media/webrtc/trunk/webrtc/modules/video_capture/android/java/src/org/webrtc/videoengine/'
     audio_root = TOPSRCDIR + '/media/webrtc/trunk/webrtc/modules/audio_device/android/java/src/org/webrtc/voiceengine/'
     wrjar = add_java_jar('webrtc')
     wrjar.sources += [
         base_root + 'Logging.java',
+        base_root + 'ThreadUtils.java',
     ]
     wrjar.sources += [
         video_capture_root + 'CaptureCapabilityAndroid.java',
         video_capture_root + 'VideoCaptureAndroid.java',
         video_capture_root + 'VideoCaptureDeviceInfoAndroid.java',
-        video_render_root + 'ViEAndroidGLES20.java',
-        video_render_root + 'ViERenderer.java',
-        video_render_root + 'ViESurfaceRenderer.java',
     ]
     wrjar.sources += [
         audio_root + 'BuildInfo.java',
@@ -368,7 +365,6 @@ gvjar.sources += [geckoview_source_dir + 'java/org/mozilla/gecko/' + x
                   for x in [
     'AndroidGamepadManager.java',
     'Clipboard.java',
-    'ContextGetter.java',
     'CrashHandler.java',
     'EventDispatcher.java',
     'GeckoAccessibility.java',
@@ -419,12 +415,19 @@ gvjar.sources += [geckoview_source_dir + 'java/org/mozilla/gecko/' + x
     'InputMethods.java',
     'media/AsyncCodec.java',
     'media/AsyncCodecFactory.java',
+    'media/BaseHlsPlayer.java',
     'media/Codec.java',
     'media/CodecProxy.java',
     'media/FormatParam.java',
+    'media/GeckoAudioInfo.java',
+    'media/GeckoHLSDemuxerWrapper.java',
+    'media/GeckoHLSResourceWrapper.java',
+    'media/GeckoHLSSample.java',
     'media/GeckoMediaDrm.java',
     'media/GeckoMediaDrmBridgeV21.java',
     'media/GeckoMediaDrmBridgeV23.java',
+    'media/GeckoPlayerFactory.java',
+    'media/GeckoVideoInfo.java',
     'media/JellyBeanAsyncCodec.java',
     'media/LollipopAsyncCodec.java',
     'media/MediaDrmProxy.java',
@@ -463,14 +466,10 @@ gvjar.sources += [geckoview_thirdparty_source_dir + f for f in [
 
 if CONFIG['MOZ_ANDROID_HLS_SUPPORT']:
     gvjar.sources += [geckoview_source_dir + 'java/org/mozilla/gecko/' + x for x in [
-        'media/GeckoAudioInfo.java',
         'media/GeckoHlsAudioRenderer.java',
-        'media/GeckoHlsDemuxerWrapper.java',
         'media/GeckoHlsPlayer.java',
         'media/GeckoHlsRendererBase.java',
-        'media/GeckoHlsSample.java',
         'media/GeckoHlsVideoRenderer.java',
-        'media/GeckoVideoInfo.java',
         'media/Utils.java',
     ]]
 
@@ -898,14 +897,21 @@ gbjar.sources += ['java/org/mozilla/gecko/' + x for x in [
     'telemetry/measurements/SearchCountMeasurements.java',
     'telemetry/measurements/SessionMeasurements.java',
     'telemetry/pingbuilders/TelemetryCorePingBuilder.java',
+    'telemetry/pingbuilders/TelemetryLocalPingBuilder.java',
     'telemetry/pingbuilders/TelemetryPingBuilder.java',
+    'telemetry/pingbuilders/TelemetrySyncEventPingBuilder.java',
+    'telemetry/pingbuilders/TelemetrySyncPingBuilder.java',
+    'telemetry/pingbuilders/TelemetrySyncPingBundleBuilder.java',
     'telemetry/schedulers/TelemetryUploadAllPingsImmediatelyScheduler.java',
     'telemetry/schedulers/TelemetryUploadScheduler.java',
     'telemetry/stores/TelemetryJSONFilePingStore.java',
     'telemetry/stores/TelemetryPingStore.java',
+    'telemetry/TelemetryBackgroundReceiver.java',
     'telemetry/TelemetryConstants.java',
     'telemetry/TelemetryCorePingDelegate.java',
     'telemetry/TelemetryDispatcher.java',
+    'telemetry/TelemetryLocalPing.java',
+    'telemetry/TelemetryOutgoingPing.java',
     'telemetry/TelemetryPing.java',
     'telemetry/TelemetryPreferences.java',
     'telemetry/TelemetryUploadService.java',

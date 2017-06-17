@@ -1,10 +1,6 @@
 "use strict";
 
 module.exports = {
-  "globals": {
-    "Iterator": true
-  },
-
   "rules": {
     "mozilla/no-aArgs": "warn",
     "mozilla/reject-importGlobalProperties": "warn",
@@ -23,7 +19,6 @@ module.exports = {
     "max-nested-callbacks": ["error", 3],
     "new-cap": ["error", {"capIsNew": false}],
     "new-parens": "error",
-    "no-control-regex": "error",
     "no-extend-native": "error",
     "no-fallthrough": "error",
     "no-inline-comments": "warn",
@@ -35,7 +30,6 @@ module.exports = {
     "no-sequences": "error",
     "no-shadow": "warn",
     "no-throw-literal": "error",
-    "no-unneeded-ternary": "error",
     "no-unused-vars": "error",
     "padded-blocks": ["warn", "never"],
     "quotes": ["warn", "double", "avoid-escape"],

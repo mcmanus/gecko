@@ -246,8 +246,6 @@ public:
 
   virtual gfx::SurfaceFormat GetFormat() const override { return mFormat; }
 
-  virtual void SetTextureSourceProvider(TextureSourceProvider* aProvider) override;
-
   // BigImageIterator
 
   virtual BigImageIterator* AsBigImageIterator() override { return mIsTiled ? this : nullptr; }
@@ -266,10 +264,9 @@ public:
     mCurrentTile = 0;
   }
 
+  void Reset();
 protected:
   gfx::IntRect GetTileRect(uint32_t aIndex) const;
-
-  void Reset();
 
   std::vector< RefPtr<ID3D11Texture2D> > mTileTextures;
   std::vector< RefPtr<ID3D11ShaderResourceView> > mTileSRVs;
@@ -325,9 +322,18 @@ public:
     return nullptr;
   }
 
+  virtual void GetWRImageKeys(nsTArray<wr::ImageKey>& aImageKeys,
+                              const std::function<wr::ImageKey()>& aImageKeyAllocator) override;
+
   virtual void AddWRImage(wr::WebRenderAPI* aAPI,
                           Range<const wr::ImageKey>& aImageKeys,
                           const wr::ExternalImageId& aExtID) override;
+
+  virtual void PushExternalImage(wr::DisplayListBuilder& aBuilder,
+                                 const WrRect& aBounds,
+                                 const WrClipRegionToken aClip,
+                                 wr::ImageRendering aFilter,
+                                 Range<const wr::ImageKey>& aImageKeys) override;
 
 protected:
   bool LockInternal();
@@ -374,9 +380,18 @@ public:
     return nullptr;
   }
 
+  virtual void GetWRImageKeys(nsTArray<wr::ImageKey>& aImageKeys,
+                              const std::function<wr::ImageKey()>& aImageKeyAllocator) override;
+
   virtual void AddWRImage(wr::WebRenderAPI* aAPI,
                           Range<const wr::ImageKey>& aImageKeys,
                           const wr::ExternalImageId& aExtID) override;
+
+  virtual void PushExternalImage(wr::DisplayListBuilder& aBuilder,
+                                 const WrRect& aBounds,
+                                 const WrClipRegionToken aClip,
+                                 wr::ImageRendering aFilter,
+                                 Range<const wr::ImageKey>& aImageKeys) override;
 
 protected:
   RefPtr<ID3D11Device> GetDevice();

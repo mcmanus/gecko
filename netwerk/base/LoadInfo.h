@@ -74,6 +74,14 @@ public:
   // when a separate request is made with the same security properties.
   already_AddRefed<nsILoadInfo> CloneForNewRequest() const;
 
+  // The service worker and fetch specifications require returning the
+  // exact tainting level of the Response passed to FetchEvent.respondWith().
+  // This method allows us to override the tainting level in that case.
+  //
+  // NOTE: This should not be used outside of service worker code! Use
+  //       nsILoadInfo::MaybeIncreaseTainting() instead.
+  void SynthesizeServiceWorkerTainting(LoadTainting aTainting);
+
   void SetIsPreflight();
   void SetUpgradeInsecureRequests();
 
@@ -107,7 +115,9 @@ private:
            bool aForcePreflight,
            bool aIsPreflight,
            bool aForceHSTSPriming,
-           bool aMixedContentWouldBlock);
+           bool aMixedContentWouldBlock,
+           bool aIsHSTSPriming,
+           bool aIsHSTSPrimingUpgrade);
   LoadInfo(const LoadInfo& rhs);
 
   NS_IMETHOD GetRedirects(JSContext* aCx, JS::MutableHandle<JS::Value> aRedirects,
@@ -157,6 +167,8 @@ private:
 
   bool                             mForceHSTSPriming : 1;
   bool                             mMixedContentWouldBlock : 1;
+  bool                             mIsHSTSPriming: 1;
+  bool                             mIsHSTSPrimingUpgrade: 1;
 };
 
 } // namespace net

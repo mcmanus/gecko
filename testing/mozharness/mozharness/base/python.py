@@ -378,7 +378,7 @@ class VirtualenvMixin(object):
         if self.topsrcdir:
             virtualenv = [
                 sys.executable,
-                os.path.join(self.topsrcdir, 'python', 'virtualenv', 'virtualenv.py')
+                os.path.join(self.topsrcdir, 'third_party', 'python', 'virtualenv', 'virtualenv.py')
             ]
             virtualenv_options = c.get('virtualenv_options', [])
             # Don't create symlinks. If we don't do this, permissions issues may
@@ -427,6 +427,7 @@ class VirtualenvMixin(object):
             self.run_command(virtualenv + virtualenv_options + [venv_path],
                              cwd=dirs['abs_work_dir'],
                              error_list=VirtualenvErrorList,
+                             partial_env={'VIRTUALENV_NO_DOWNLOAD': "1"},
                              halt_on_failure=True)
 
         # Resolve the pip version so we can conditionally do things if we have

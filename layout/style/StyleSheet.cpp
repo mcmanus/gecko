@@ -34,10 +34,11 @@ StyleSheet::StyleSheet(StyleBackendType aType, css::SheetParsingMode aParsingMod
 }
 
 StyleSheet::StyleSheet(const StyleSheet& aCopy,
+                       StyleSheet* aParentToUse,
                        dom::CSSImportRule* aOwnerRuleToUse,
                        nsIDocument* aDocumentToUse,
                        nsINode* aOwningNodeToUse)
-  : mParent(nullptr)
+  : mParent(aParentToUse)
   , mTitle(aCopy.mTitle)
   , mDocument(aDocumentToUse)
   , mOwningNode(aOwningNodeToUse)
@@ -45,20 +46,14 @@ StyleSheet::StyleSheet(const StyleSheet& aCopy,
   , mParsingMode(aCopy.mParsingMode)
   , mType(aCopy.mType)
   , mDisabled(aCopy.mDisabled)
-    // We only use this constructor during cloning.  It's the cloner's
-    // responsibility to notify us if we end up being owned by a document.
+  // We only use this constructor during cloning.  It's the cloner's
+  // responsibility to notify us if we end up being owned by a document.
   , mDocumentAssociationMode(NotOwnedByDocument)
   , mInner(aCopy.mInner) // Shallow copy, but concrete subclasses will fix up.
   , mDirty(aCopy.mDirty)
 {
   MOZ_ASSERT(mInner, "Should only copy StyleSheets with an mInner.");
   mInner->AddSheet(this);
-
-  if (mDirty) { // CSSOM's been there, force full copy now
-    NS_ASSERTION(mInner->mComplete, "Why have rules been accessed on an incomplete sheet?");
-    // FIXME: handle failure?
-    EnsureUniqueInner();
-  }
 
   if (aCopy.mMedia) {
     // XXX This is wrong; we should be keeping @import rules and
@@ -614,8 +609,10 @@ StyleSheet::SubjectSubsumesInnerPrincipal(nsIPrincipal& aSubjectPrincipal,
     return;
   }
 
-  // Allow access only if CORS mode is not NONE
-  if (GetCORSMode() == CORS_NONE) {
+  // Allow access only if CORS mode is not NONE and the security flag
+  // is not turned off.
+  if (GetCORSMode() == CORS_NONE &&
+      !nsContentUtils::BypassCSSOMOriginCheck()) {
     aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
     return;
   }
@@ -671,7 +668,7 @@ void
 StyleSheet::SetAssociatedDocument(nsIDocument* aDocument,
                                   DocumentAssociationMode aAssociationMode)
 {
-  MOZ_ASSERT_IF(!aDocument, aAssociationMode == NotOwnedByDocument);
+  MOZ_ASSERT(aDocument || aAssociationMode == NotOwnedByDocument);
 
   // not ref counted
   mDocument = aDocument;

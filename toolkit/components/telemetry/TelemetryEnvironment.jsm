@@ -227,7 +227,6 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["privacy.donottrackheader.enabled", {what: RECORD_PREF_VALUE}],
   ["security.mixed_content.block_active_content", {what: RECORD_PREF_VALUE}],
   ["security.mixed_content.block_display_content", {what: RECORD_PREF_VALUE}],
-  ["security.sandbox.content.level", {what: RECORD_PREF_VALUE}],
   ["xpinstall.signatures.required", {what: RECORD_PREF_VALUE}],
 ]);
 
@@ -783,6 +782,9 @@ function EnvironmentCache() {
   // Don't allow querying the search service too early to prevent
   // impacting the startup performance.
   this._canQuerySearch = false;
+  // To guard against slowing down startup, defer gathering heavy environment
+  // entries until the session is restored.
+  this._sessionWasRestored = false;
 
   // A map of listeners that will be called on environment changes.
   this._changeListeners = new Map();
@@ -1070,9 +1072,13 @@ EnvironmentCache.prototype = {
         Services.obs.removeObserver(this, aTopic);
         break;
       case SESSIONSTORE_WINDOWS_RESTORED_TOPIC:
+        this._sessionWasRestored = true;
         // Make sure to initialize the search service once we've done restoring
         // the windows, so that we don't risk loosing search data.
         Services.search.init();
+        // The default browser check could take some time, so just call it after
+        // the session was restored.
+        this._updateDefaultBrowser();
         break;
     }
   },
@@ -1238,11 +1244,21 @@ EnvironmentCache.prototype = {
 
     try {
       // This uses the same set of flags used by the pref pane.
-      return shellService.isDefaultBrowser(false, true) ? true : false;
+      return !!shellService.isDefaultBrowser(false, true);
     } catch (ex) {
       this._log.error("_isDefaultBrowser - Could not determine if default browser", ex);
       return null;
     }
+  },
+
+  _updateDefaultBrowser() {
+    if (AppConstants.platform === "android") {
+      return;
+    }
+    // Make sure to have a settings section.
+    this._currentEnvironment.settings = this._currentEnvironment.settings || {};
+    this._currentEnvironment.settings.isDefaultBrowser =
+      this._sessionWasRestored ? this._isDefaultBrowser() : null;
   },
 
   /**
@@ -1267,17 +1283,27 @@ EnvironmentCache.prototype = {
         autoDownload: Preferences.get(PREF_UPDATE_AUTODOWNLOAD, true),
       },
       userPrefs: this._getPrefData(),
+      sandbox: this._getSandboxData(),
     };
 
     this._currentEnvironment.settings.addonCompatibilityCheckEnabled =
       AddonManager.checkCompatibility;
 
-    if (AppConstants.platform !== "android") {
-      this._currentEnvironment.settings.isDefaultBrowser =
-        this._isDefaultBrowser();
-    }
-
+    this._updateDefaultBrowser();
     this._updateSearchEngine();
+  },
+
+  _getSandboxData() {
+    let effectiveContentProcessLevel = null;
+    try {
+      let sandboxSettings = Cc["@mozilla.org/sandbox/sandbox-settings;1"].
+                            getService(Ci.mozISandboxSettings);
+      effectiveContentProcessLevel =
+        sandboxSettings.effectiveContentSandboxLevel;
+    } catch (e) {}
+    return {
+      effectiveContentProcessLevel,
+    };
   },
 
   /**

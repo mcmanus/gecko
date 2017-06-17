@@ -121,7 +121,14 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
           cxmenu.insertBefore(pasteAndGo, insertLocation.nextSibling);
         }
 
-        this._enableOrDisableOneOffSearches();
+        this.popup.addEventListener("popupshowing", () => {
+          this._enableOrDisableOneOffSearches();
+        }, {capturing: true, once: true});
+
+        // The autocomplete controller uses heuristic on some internal caches
+        // to handle cases like backspace, autofill or repeated searches.
+        // Ensure to clear those internal caches when switching tabs.
+        gBrowser.tabContainer.addEventListener("TabSelect", this);
       ]]></constructor>
 
       <destructor><![CDATA[
@@ -666,6 +673,13 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
       <property name="oneOffSearchQuery">
         <getter><![CDATA[
+          // If the user has selected a search suggestion, chances are they
+          // want to use the one off search engine to search for that suggestion,
+          // not the string that they manually entered into the location bar.
+          let action = this._parseActionUrl(this.value);
+          if (action && action.type == "searchengine") {
+            return action.params.input;
+          }
           // this.textValue may be an autofilled string.  Search only with the
           // portion that the user typed, if any, by preferring the autocomplete
           // controller's searchString (including handleEnterInstance.searchString).
@@ -1063,6 +1077,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
                 this._formattingEnabled = this._prefs.getBoolPref(aData);
                 break;
               case "suggest.searches":
+              case "userMadeSearchSuggestionsChoice":
                 // Mirror the value for future use, see the comment in the
                 // binding's constructor.
                 this._prefs.setBoolPref("searchSuggestionsChoice",
@@ -1146,6 +1161,9 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
             case "underflow":
               this.removeAttribute("textoverflow");
               this._hideURLTooltip();
+              break;
+            case "TabSelect":
+              this.controller.resetInternalState();
               break;
           }
         ]]></body>
@@ -1845,7 +1863,14 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
           try {
             let whichNotification = aInput.whichSearchSuggestionsNotification;
             if (whichNotification != "none") {
-              aInput.updateSearchSuggestionsNotificationImpressions(whichNotification);
+              // Update the impressions count on real popupshown, since there's
+              // no guarantee openPopup will be respected by the platform.
+              // Though, we must ensure the handled event is the expected one.
+              let impressionId = this._searchSuggestionsImpressionId = {};
+              this.addEventListener("popupshown", () => {
+                if (this._searchSuggestionsImpressionId == impressionId)
+                  aInput.updateSearchSuggestionsNotificationImpressions(whichNotification);
+              }, {once: true});
               this._showSearchSuggestionsNotification(whichNotification, popupDirection);
             } else if (this.classList.contains("showSearchSuggestionsNotification")) {
               this._hideSearchSuggestionsNotification();
@@ -2746,7 +2771,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
             };
             switch (action.blocklistState) {
             case Ci.nsIBlocklistService.STATE_NOT_BLOCKED:
-              label = "pluginActivateNew.message";
+              label = "pluginActivate2.message";
               linkLabel = "pluginActivate.learnMore";
               button2.default = true;
               break;

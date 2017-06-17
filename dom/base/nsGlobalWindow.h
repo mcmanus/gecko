@@ -457,6 +457,8 @@ public:
   virtual void SetHasGamepadEventListener(bool aHasGamepad = true) override;
   void NotifyVREventListenerAdded();
   bool HasUsedVR() const;
+  bool IsVRContentDetected() const;
+  bool IsVRContentPresenting() const;
 
   using EventTarget::EventListenerAdded;
   virtual void EventListenerAdded(nsIAtom* aType) override;
@@ -484,8 +486,8 @@ public:
   // If in doubt, return true.
   static bool MayResolve(jsid aId);
 
-  void GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
-                           mozilla::ErrorResult& aRv);
+  void GetOwnPropertyNames(JSContext* aCx, JS::AutoIdVector& aNames,
+                           bool aEnumerableOnly, mozilla::ErrorResult& aRv);
 
   // Object Management
   static already_AddRefed<nsGlobalWindow> Create(nsGlobalWindow *aOuterWindow);
@@ -1818,13 +1820,15 @@ private:
 
   bool IsBackgroundInternal() const;
 
+  void SetIsBackgroundInternal(bool aIsBackground);
+
 public:
   // Dispatch a runnable related to the global.
   virtual nsresult Dispatch(const char* aName,
                             mozilla::TaskCategory aCategory,
                             already_AddRefed<nsIRunnable>&& aRunnable) override;
 
-  virtual nsIEventTarget*
+  virtual nsISerialEventTarget*
   EventTargetFor(mozilla::TaskCategory aCategory) const override;
 
   virtual mozilla::AbstractThread*
@@ -1907,6 +1911,10 @@ protected:
   // Inner windows only.
   // Indicates whether this window wants VR events
   bool                   mHasVREvents : 1;
+
+  // Inner windows only.
+  // Indicates whether this window wants VRDisplayActivate events
+  bool                   mHasVRDisplayActivateEvents : 1;
   nsCheapSet<nsUint32HashKey> mGamepadIndexSet;
   nsRefPtrHashtable<nsUint32HashKey, mozilla::dom::Gamepad> mGamepads;
   bool mHasSeenGamepadInput;

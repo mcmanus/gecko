@@ -16,13 +16,13 @@
 #include <algorithm>
 #include <limits>
 
+#include "gfxContext.h"
 #include "gfxUtils.h"
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/KeyframeEffectReadOnly.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/layers/PLayerTransaction.h"
 #include "nsCSSRendering.h"
-#include "nsRenderingContext.h"
 #include "nsISelectionController.h"
 #include "nsIPresShell.h"
 #include "nsRegion.h"
@@ -670,7 +670,7 @@ AddAnimationsForProperty(nsIFrame* aFrame, nsCSSPropertyID aProperty,
 }
 
 static bool
-GenerateAndPushTextMask(nsIFrame* aFrame, nsRenderingContext* aContext,
+GenerateAndPushTextMask(nsIFrame* aFrame, gfxContext* aContext,
                         const nsRect& aFillRect, nsDisplayListBuilder* aBuilder)
 {
   if (aBuilder->IsForGenerateGlyphMask() ||
@@ -689,7 +689,7 @@ GenerateAndPushTextMask(nsIFrame* aFrame, nsRenderingContext* aContext,
   // to reuse the same display list and paint that one twice, one for selection
   // background, one for generating text mask.
 
-  gfxContext* sourceCtx = aContext->ThebesContext();
+  gfxContext* sourceCtx = aContext;
   gfxRect bounds =
     nsLayoutUtils::RectToGfxRect(aFillRect,
                                  aFrame->PresContext()->AppUnitsPerDevPixel());
@@ -731,8 +731,7 @@ GenerateAndPushTextMask(nsIFrame* aFrame, nsRenderingContext* aContext,
                      gfxMatrix::Translation(-drawRect.TopLeft()));
 
   // Shade text shape into mask A8 surface.
-  nsRenderingContext rc(maskCtx);
-  nsLayoutUtils::PaintFrame(&rc, aFrame,
+  nsLayoutUtils::PaintFrame(maskCtx, aFrame,
                             nsRect(nsPoint(0, 0), aFrame->GetSize()),
                             NS_RGB(255, 255, 255),
                             nsDisplayListBuilderMode::GENERATE_GLYPH);
@@ -1720,12 +1719,15 @@ nsDisplayListBuilder::AddToWillChangeBudget(nsIFrame* aFrame,
   }
 
   nsPresContext* key = aFrame->PresContext();
-  if (!mWillChangeBudget.Contains(key)) {
-    mWillChangeBudget.Put(key, DocumentWillChangeBudget());
-  }
-
   DocumentWillChangeBudget budget;
-  mWillChangeBudget.Get(key, &budget);
+  auto willChangeBudgetEntry = mWillChangeBudget.LookupForAdd(key);
+  if (willChangeBudgetEntry) {
+    // We have an existing entry.
+    budget = willChangeBudgetEntry.Data();
+  } else {
+    budget = DocumentWillChangeBudget();
+    willChangeBudgetEntry.OrInsert([&budget] () { return budget; });
+  }
 
   nsRect area = aFrame->PresContext()->GetVisibleArea();
   uint32_t budgetLimit = nsPresContext::AppUnitsToIntCSSPixels(area.width) *
@@ -1737,7 +1739,7 @@ nsDisplayListBuilder::AddToWillChangeBudget(nsIFrame* aFrame,
 
   if (onBudget) {
     budget.mBudget += cost;
-    mWillChangeBudget.Put(key, budget);
+    willChangeBudgetEntry.Data() = budget;
     mWillChangeBudgetSet.PutEntry(aFrame);
   }
 
@@ -2062,7 +2064,7 @@ nsDisplayListBuilder::GetWidgetLayerManager(nsView** aView)
  * root of the layer manager, drawing into the PaintedLayers.
  */
 already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aBuilder,
-                                                        nsRenderingContext* aCtx,
+                                                        gfxContext* aCtx,
                                                         uint32_t aFlags) {
   PROFILER_LABEL("nsDisplayList", "PaintRoot",
     js::ProfileEntry::Category::GRAPHICS);
@@ -2108,11 +2110,11 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
   }
 
   {
-    GeckoProfilerTracingRAII tracer("Paint", "LayerBuilding");
+    AutoProfilerTracing tracing("Paint", "LayerBuilding");
 
     if (doBeginTransaction) {
       if (aCtx) {
-        if (!layerManager->BeginTransactionWithTarget(aCtx->ThebesContext())) {
+        if (!layerManager->BeginTransactionWithTarget(aCtx)) {
           return nullptr;
         }
       } else {
@@ -2843,7 +2845,7 @@ nsDisplaySolidColor::BuildLayer(nsDisplayListBuilder* aBuilder,
 
 void
 nsDisplaySolidColor::Paint(nsDisplayListBuilder* aBuilder,
-                           nsRenderingContext* aCtx)
+                           gfxContext* aCtx)
 {
   int32_t appUnitsPerDevPixel = mFrame->PresContext()->AppUnitsPerDevPixel();
   DrawTarget* drawTarget = aCtx->GetDrawTarget();
@@ -2871,7 +2873,7 @@ nsDisplaySolidColorRegion::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap
 
 void
 nsDisplaySolidColorRegion::Paint(nsDisplayListBuilder* aBuilder,
-                                 nsRenderingContext* aCtx)
+                                 gfxContext* aCtx)
 {
   int32_t appUnitsPerDevPixel = mFrame->PresContext()->AppUnitsPerDevPixel();
   DrawTarget* drawTarget = aCtx->GetDrawTarget();
@@ -3603,8 +3605,8 @@ nsDisplayBackgroundImage::GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
       (!mFrame->GetPrevContinuation() && !mFrame->GetNextContinuation())) {
     const nsStyleImageLayers::Layer& layer = mBackgroundStyle->mImage.mLayers[mLayer];
     if (layer.mImage.IsOpaque() && layer.mBlendMode == NS_STYLE_BLEND_NORMAL &&
-        layer.mRepeat.mXRepeat != NS_STYLE_IMAGELAYER_REPEAT_SPACE &&
-        layer.mRepeat.mYRepeat != NS_STYLE_IMAGELAYER_REPEAT_SPACE &&
+        layer.mRepeat.mXRepeat != StyleImageLayerRepeat::Space &&
+        layer.mRepeat.mYRepeat != StyleImageLayerRepeat::Space &&
         layer.mClip != StyleGeometryBox::Text) {
       result = GetInsideClipRegion(this, layer.mClip, mBounds, mBackgroundRect);
     }
@@ -3659,15 +3661,15 @@ nsDisplayBackgroundImage::RenderingMightDependOnPositioningAreaSizeChange()
 
 void
 nsDisplayBackgroundImage::Paint(nsDisplayListBuilder* aBuilder,
-                                nsRenderingContext* aCtx) {
+                                gfxContext* aCtx) {
   PaintInternal(aBuilder, aCtx, mVisibleRect, &mBounds);
 }
 
 void
 nsDisplayBackgroundImage::PaintInternal(nsDisplayListBuilder* aBuilder,
-                                        nsRenderingContext* aCtx, const nsRect& aBounds,
+                                        gfxContext* aCtx, const nsRect& aBounds,
                                         nsRect* aClipRect) {
-  gfxContext* ctx = aCtx->ThebesContext();
+  gfxContext* ctx = aCtx;
   StyleGeometryBox clip = mBackgroundStyle->mImage.mLayers[mLayer].mClip;
 
   if (clip == StyleGeometryBox::Text) {
@@ -3879,7 +3881,7 @@ nsDisplayThemedBackground::GetPositioningArea()
 
 void
 nsDisplayThemedBackground::Paint(nsDisplayListBuilder* aBuilder,
-                                 nsRenderingContext* aCtx)
+                                 gfxContext* aCtx)
 {
   PaintInternal(aBuilder, aCtx, mVisibleRect, nullptr);
 }
@@ -3887,7 +3889,7 @@ nsDisplayThemedBackground::Paint(nsDisplayListBuilder* aBuilder,
 
 void
 nsDisplayThemedBackground::PaintInternal(nsDisplayListBuilder* aBuilder,
-                                         nsRenderingContext* aCtx, const nsRect& aBounds,
+                                         gfxContext* aCtx, const nsRect& aBounds,
                                          nsRect* aClipRect)
 {
   // XXXzw this ignores aClipRect.
@@ -3988,8 +3990,8 @@ nsDisplayImageContainer::ConfigureLayer(ImageLayer* aLayer,
                         : IntSize(imageWidth, imageHeight);
 
   const int32_t factor = mFrame->PresContext()->AppUnitsPerDevPixel();
-  const LayoutDeviceRect destRect =
-    LayoutDeviceRect::FromAppUnits(GetDestRect(), factor);
+  const LayoutDeviceRect destRect(
+    LayoutDeviceIntRect::FromAppUnitsToNearest(GetDestRect(), factor));
 
   const LayoutDevicePoint p = destRect.TopLeft();
   Matrix transform = Matrix::Translation(p.x, p.y);
@@ -4045,8 +4047,8 @@ nsDisplayImageContainer::CanOptimizeToImageLayer(LayerManager* aManager,
   }
 
   const int32_t factor = mFrame->PresContext()->AppUnitsPerDevPixel();
-  const LayoutDeviceRect destRect =
-    LayoutDeviceRect::FromAppUnits(GetDestRect(), factor);
+  const LayoutDeviceRect destRect(
+    LayoutDeviceIntRect::FromAppUnitsToNearest(GetDestRect(), factor));
 
   // Calculate the scaling factor for the frame.
   const gfxSize scale = gfxSize(destRect.width / imageWidth,
@@ -4126,7 +4128,7 @@ nsDisplayBackgroundColor::BuildLayer(nsDisplayListBuilder* aBuilder,
 
 void
 nsDisplayBackgroundColor::Paint(nsDisplayListBuilder* aBuilder,
-                                nsRenderingContext* aCtx)
+                                gfxContext* aCtx)
 {
   if (mColor == Color()) {
     return;
@@ -4151,7 +4153,7 @@ nsDisplayBackgroundColor::Paint(nsDisplayListBuilder* aBuilder,
   ColorPattern color(ToDeviceColor(mColor));
   aDrawTarget.FillRect(rect, color);
 #else
-  gfxContext* ctx = aCtx->ThebesContext();
+  gfxContext* ctx = aCtx;
   gfxRect bounds =
     nsLayoutUtils::RectToGfxRect(mBackgroundRect,
                                  mFrame->PresContext()->AppUnitsPerDevPixel());
@@ -4258,7 +4260,7 @@ nsDisplayOutline::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) {
 
 void
 nsDisplayOutline::Paint(nsDisplayListBuilder* aBuilder,
-                        nsRenderingContext* aCtx) {
+                        gfxContext* aCtx) {
   // TODO join outlines together
   MOZ_ASSERT(mFrame->StyleOutline()->ShouldPaintOutline(),
              "Should have not created a nsDisplayOutline!");
@@ -4422,6 +4424,10 @@ nsDisplayLayerEventRegions::AddFrame(nsDisplayListBuilder* aBuilder,
   if (borderBoxHasRoundedCorners ||
       (aFrame->GetStateBits() & NS_FRAME_SVG_LAYOUT)) {
     mMaybeHitRegion.Or(mMaybeHitRegion, borderBox);
+
+    // Avoid quadratic performance as a result of the region growing to include
+    // an arbitrarily large number of rects, which can happen on some pages.
+    mMaybeHitRegion.SimplifyOutward(8);
   } else {
     mHitRegion.Or(mHitRegion, borderBox);
   }
@@ -4573,7 +4579,7 @@ nsDisplayCaret::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
 
 void
 nsDisplayCaret::Paint(nsDisplayListBuilder* aBuilder,
-                      nsRenderingContext* aCtx) {
+                      gfxContext* aCtx) {
   // Note: Because we exist, we know that the caret is visible, so we don't
   // need to check for the caret's visibility.
   mCaret->PaintCaret(*aCtx->GetDrawTarget(), mFrame, ToReferenceFrame());
@@ -4960,7 +4966,7 @@ nsDisplayBorder::CreateWebRenderCommands(wr::DisplayListBuilder& aBuilder,
 
 void
 nsDisplayBorder::Paint(nsDisplayListBuilder* aBuilder,
-                       nsRenderingContext* aCtx) {
+                       gfxContext* aCtx) {
   nsPoint offset = ToReferenceFrame();
 
   PaintBorderFlags flags = aBuilder->ShouldSyncDecodeImages()
@@ -5066,7 +5072,7 @@ ComputeDisjointRectangles(const nsRegion& aRegion,
 
 void
 nsDisplayBoxShadowOuter::Paint(nsDisplayListBuilder* aBuilder,
-                               nsRenderingContext* aCtx) {
+                               gfxContext* aCtx) {
   nsPoint offset = ToReferenceFrame();
   nsRect borderRect = mFrame->VisualBorderRectRelativeToSelf() + offset;
   nsPresContext* presContext = mFrame->PresContext();
@@ -5186,14 +5192,6 @@ nsDisplayBoxShadowOuter::CanBuildWebRenderDisplayItems()
     }
   }
 
-  for (uint32_t j = shadows->Length(); j  > 0; j--) {
-    nsCSSShadowItem* shadow = shadows->ShadowAt(j - 1);
-    // Need WR support for clip out.
-    if (shadow->mRadius <= 0) {
-      return false;
-    }
-  }
-
   return true;
 }
 
@@ -5263,38 +5261,15 @@ nsDisplayBoxShadowOuter::CreateWebRenderCommands(wr::DisplayListBuilder& aBuilde
                                            : 0.0;
       float spreadRadius = float(shadow->mSpread) / float(appUnitsPerDevPixel);
 
-      if (blurRadius <= 0) {
-        MOZ_ASSERT(false, "WR needs clip out first");
-        // TODO: See nsContextBoxBlur::BlurRectangle. Just need to fill
-        // a rect here with the proper clip in/out, but WR doesn't support
-        // clip out yet
-        if (hasBorderRadius) {
-          LayerSize borderRadiusSize(borderRadius, borderRadius);
-          WrComplexClipRegion roundedRect =
-                                  wr::ToWrComplexClipRegion(deviceBoxRect,
-                                                            borderRadiusSize);
-          nsTArray<WrComplexClipRegion> clips;
-          clips.AppendElement(roundedRect);
-          aBuilder.PushRect(deviceBoxRect,
-                            aBuilder.PushClipRegion(deviceClipRect,
-                                                     clips),
-                            wr::ToWrColor(shadowColor));
-        } else {
-          aBuilder.PushRect(deviceBoxRect,
-                            aBuilder.PushClipRegion(deviceClipRect),
-                            wr::ToWrColor(shadowColor));
-        }
-      } else {
-        aBuilder.PushBoxShadow(deviceBoxRect,
-                              aBuilder.PushClipRegion(deviceClipRect),
-                              deviceBoxRect,
-                              wr::ToWrPoint(shadowOffset),
-                              wr::ToWrColor(shadowColor),
-                              blurRadius,
-                              spreadRadius,
-                              borderRadius,
-                              WrBoxShadowClipMode::Outset);
-      }
+      aBuilder.PushBoxShadow(deviceBoxRect,
+                             aBuilder.PushClipRegion(deviceClipRect),
+                             deviceBoxRect,
+                             wr::ToWrPoint(shadowOffset),
+                             wr::ToWrColor(shadowColor),
+                             blurRadius,
+                             spreadRadius,
+                             borderRadius,
+                             WrBoxShadowClipMode::Outset);
     }
   }
 }
@@ -5329,7 +5304,7 @@ nsDisplayBoxShadowOuter::ComputeInvalidationRegion(nsDisplayListBuilder* aBuilde
 
 void
 nsDisplayBoxShadowInner::Paint(nsDisplayListBuilder* aBuilder,
-                               nsRenderingContext* aCtx) {
+                               gfxContext* aCtx) {
   nsPoint offset = ToReferenceFrame();
   nsRect borderRect = nsRect(offset, mFrame->GetSize());
   nsPresContext* presContext = mFrame->PresContext();
@@ -5340,7 +5315,7 @@ nsDisplayBoxShadowInner::Paint(nsDisplayListBuilder* aBuilder,
     js::ProfileEntry::Category::GRAPHICS);
 
   DrawTarget* drawTarget = aCtx->GetDrawTarget();
-  gfxContext* gfx = aCtx->ThebesContext();
+  gfxContext* gfx = aCtx;
   int32_t appUnitsPerDevPixel = mFrame->PresContext()->AppUnitsPerDevPixel();
 
   for (uint32_t i = 0; i < rects.Length(); ++i) {
@@ -5611,7 +5586,7 @@ nsDisplayWrapList::IsUniform(nsDisplayListBuilder* aBuilder) {
 }
 
 void nsDisplayWrapList::Paint(nsDisplayListBuilder* aBuilder,
-                              nsRenderingContext* aCtx) {
+                              gfxContext* aCtx) {
   NS_ERROR("nsDisplayWrapList should have been flattened away for painting");
 }
 
@@ -6137,6 +6112,14 @@ nsDisplayOwnLayer::nsDisplayOwnLayer(nsDisplayListBuilder* aBuilder,
     , mForceActive(aForceActive)
 {
   MOZ_COUNT_CTOR(nsDisplayOwnLayer);
+
+  // For scroll thumb layers, override the AGR to be the thumb's AGR rather
+  // than the AGR for mFrame (which is the slider frame).
+  if (IsScrollThumbLayer()) {
+    if (nsIFrame* thumbFrame = nsBox::GetChildXULBox(mFrame)) {
+      mAnimatedGeometryRoot = aBuilder->FindAnimatedGeometryRootFor(thumbFrame);
+    }
+  }
 }
 
 #ifdef NS_BUILD_REFCNT_LOGGING
@@ -6155,6 +6138,20 @@ nsDisplayOwnLayer::GetLayerState(nsDisplayListBuilder* aBuilder,
   }
 
   return RequiredLayerStateForChildren(aBuilder, aManager, aParameters, mList, mAnimatedGeometryRoot);
+}
+
+bool
+nsDisplayOwnLayer::IsScrollThumbLayer() const
+{
+  return (mFlags & VERTICAL_SCROLLBAR) || (mFlags & HORIZONTAL_SCROLLBAR);
+}
+
+bool
+nsDisplayOwnLayer::ShouldBuildLayerEvenIfInvisible(nsDisplayListBuilder* aBuilder)
+{
+  // Render scroll thumb layers even if they are invisible, because async
+  // scrolling might bring them into view.
+  return IsScrollThumbLayer();
 }
 
 // nsDisplayOpacity uses layers for rendering
@@ -6190,6 +6187,13 @@ nsDisplaySubDocument::nsDisplaySubDocument(nsDisplayListBuilder* aBuilder,
   mForceDispatchToContentRegion =
     aBuilder->IsBuildingLayerEventRegions() &&
     nsLayoutUtils::HasDocumentLevelListenersForApzAwareEvents(aFrame->PresContext()->PresShell());
+
+  // The SubDocument display item is conceptually outside the viewport frame,
+  // so in cases where the viewport frame is an AGR, the SubDocument's AGR
+  // should be not the viewport frame itself, but its parent AGR.
+  if (*mAnimatedGeometryRoot == mFrame && mAnimatedGeometryRoot->mParentAGR) {
+    mAnimatedGeometryRoot = mAnimatedGeometryRoot->mParentAGR;
+  }
 }
 
 #ifdef NS_BUILD_REFCNT_LOGGING
@@ -7361,9 +7365,11 @@ nsDisplayTransform::ShouldPrerenderTransformedContent(nsDisplayListBuilder* aBui
                        aFrame->PresContext()->DevPixelsToAppUnits(absoluteLimitY));
   nsSize maxSize = Min(relativeLimit, absoluteLimit);
   gfxSize scale = nsLayoutUtils::GetTransformToAncestorScale(aFrame);
-  nsSize frameSize = nsSize(overflow.Size().width * scale.width,
-                            overflow.Size().height * scale.height);
-  if (frameSize <= maxSize) {
+  nsSize frameSize(overflow.Size().width * scale.width,
+                   overflow.Size().height * scale.height);
+  uint64_t maxLimitArea = uint64_t(maxSize.width) * maxSize.height;
+  uint64_t frameArea = uint64_t(frameSize.width) * frameSize.height;
+  if (frameArea <= maxLimitArea && frameSize <= absoluteLimit) {
     *aDirtyRect = overflow;
     return FullPrerender;
   } else if (gfxPrefs::PartiallyPrerenderAnimatedContent()) {
@@ -7371,18 +7377,31 @@ nsDisplayTransform::ShouldPrerenderTransformedContent(nsDisplayListBuilder* aBui
     return PartialPrerender;
   }
 
-  EffectCompositor::SetPerformanceWarning(
-    aFrame, eCSSProperty_transform,
-    AnimationPerformanceWarning(
-      AnimationPerformanceWarning::Type::ContentTooLarge,
-      {
-        nsPresContext::AppUnitsToIntCSSPixels(frameSize.width),
-        nsPresContext::AppUnitsToIntCSSPixels(frameSize.height),
-        nsPresContext::AppUnitsToIntCSSPixels(relativeLimit.width),
-        nsPresContext::AppUnitsToIntCSSPixels(relativeLimit.height),
-        nsPresContext::AppUnitsToIntCSSPixels(absoluteLimit.width),
-        nsPresContext::AppUnitsToIntCSSPixels(absoluteLimit.height),
-      }));
+  if (frameArea > maxLimitArea) {
+    uint64_t appUnitsPerPixel = nsPresContext::AppUnitsPerCSSPixel();
+    EffectCompositor::SetPerformanceWarning(
+      aFrame, eCSSProperty_transform,
+      AnimationPerformanceWarning(
+        AnimationPerformanceWarning::Type::ContentTooLargeArea,
+        {
+          int(frameArea / (appUnitsPerPixel * appUnitsPerPixel)),
+          int(maxLimitArea / (appUnitsPerPixel * appUnitsPerPixel)),
+        }));
+  } else {
+    EffectCompositor::SetPerformanceWarning(
+      aFrame, eCSSProperty_transform,
+      AnimationPerformanceWarning(
+        AnimationPerformanceWarning::Type::ContentTooLarge,
+        {
+          nsPresContext::AppUnitsToIntCSSPixels(frameSize.width),
+          nsPresContext::AppUnitsToIntCSSPixels(frameSize.height),
+          nsPresContext::AppUnitsToIntCSSPixels(relativeLimit.width),
+          nsPresContext::AppUnitsToIntCSSPixels(relativeLimit.height),
+          nsPresContext::AppUnitsToIntCSSPixels(absoluteLimit.width),
+          nsPresContext::AppUnitsToIntCSSPixels(absoluteLimit.height),
+        }));
+  }
+
   return NoPrerender;
 }
 
@@ -8390,7 +8409,7 @@ nsDisplayMask::BuildLayer(nsDisplayListBuilder* aBuilder,
   return container.forget();
 }
 
-void
+bool
 nsDisplayMask::PaintMask(nsDisplayListBuilder* aBuilder,
                          gfxContext* aMaskContext)
 {
@@ -8409,6 +8428,8 @@ nsDisplayMask::PaintMask(nsDisplayListBuilder* aBuilder,
   nsSVGIntegrationUtils::PaintMask(params);
 
   nsDisplayMaskGeometry::UpdateDrawResult(this, imgParmas.result);
+
+  return imgParmas.result == mozilla::image::DrawResult::SUCCESS;
 }
 
 LayerState
@@ -8501,14 +8522,14 @@ nsDisplayMask::ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
 
 void
 nsDisplayMask::PaintAsLayer(nsDisplayListBuilder* aBuilder,
-                            nsRenderingContext* aCtx,
+                            gfxContext* aCtx,
                             LayerManager* aManager)
 {
   MOZ_ASSERT(!ShouldPaintOnMaskLayer(aManager));
 
   // Clip the drawing target by mVisibleRect, which contains the visible
   // region of the target frame and its out-of-flow and inflow descendants.
-  gfxContext* context = aCtx->ThebesContext();
+  gfxContext* context = aCtx;
 
   Rect bounds =
     NSRectToRect(mVisibleRect, mFrame->PresContext()->AppUnitsPerDevPixel());
@@ -8519,7 +8540,7 @@ nsDisplayMask::PaintAsLayer(nsDisplayListBuilder* aBuilder,
                              ? imgIContainer::FLAG_SYNC_DECODE
                              : imgIContainer::FLAG_SYNC_DECODE_IF_FAST);
   nsRect borderArea = nsRect(ToReferenceFrame(), mFrame->GetSize());
-  nsSVGIntegrationUtils::PaintFramesParams params(*aCtx->ThebesContext(),
+  nsSVGIntegrationUtils::PaintFramesParams params(*aCtx,
                                                   mFrame,  mVisibleRect,
                                                   borderArea, aBuilder,
                                                   aManager,
@@ -8623,6 +8644,17 @@ nsDisplayFilter::BuildLayer(nsDisplayListBuilder* aBuilder,
     BuildContainerLayerFor(aBuilder, aManager, mFrame, this, &mList,
                            newContainerParameters, nullptr);
 
+  LayerState state = this->GetLayerState(aBuilder, aManager, newContainerParameters);
+  if (container && state != LAYER_SVG_EFFECTS) {
+    const nsTArray<nsStyleFilter>& filters = mFrame->StyleEffects()->mFilters;
+    nsTArray<layers::CSSFilter> cssFilters = nsTArray<layers::CSSFilter>(filters.Length());
+    for (const nsStyleFilter& filter : filters) {
+      cssFilters.AppendElement(ToCSSFilter(filter));
+    }
+
+    container->SetFilterChain(Move(cssFilters));
+  }
+
   return container.forget();
 }
 
@@ -8655,7 +8687,32 @@ nsDisplayFilter::GetLayerState(nsDisplayListBuilder* aBuilder,
                                LayerManager* aManager,
                                const ContainerLayerParameters& aParameters)
 {
-  return LAYER_SVG_EFFECTS;
+  if (mFrame->IsFrameOfType(nsIFrame::eSVG)) {
+    return LAYER_SVG_EFFECTS;
+  }
+
+  if (!ShouldUseAdvancedLayer(aManager, gfxPrefs::LayersAllowFilterLayers)) {
+    return LAYER_SVG_EFFECTS;
+  }
+
+  if (mFrame->StyleEffects()->mOpacity != 1.0f) {
+    return LAYER_SVG_EFFECTS;
+  }
+
+  // Due to differences in the way that WebRender filters operate
+  // only the brightness and contrast filters use that path. We
+  // can gradually enable more filters as WebRender bugs are fixed.
+  for (const nsStyleFilter& filter : mFrame->StyleEffects()->mFilters) {
+    if (filter.GetType() != NS_STYLE_FILTER_BRIGHTNESS &&
+        filter.GetType() != NS_STYLE_FILTER_CONTRAST &&
+        filter.GetType() != NS_STYLE_FILTER_GRAYSCALE &&
+        filter.GetType() != NS_STYLE_FILTER_INVERT &&
+        filter.GetType() != NS_STYLE_FILTER_SEPIA) {
+      return LAYER_SVG_EFFECTS;
+    }
+  }
+
+  return LAYER_ACTIVE;
 }
 
 bool nsDisplayFilter::ComputeVisibility(nsDisplayListBuilder* aBuilder,
@@ -8697,14 +8754,14 @@ nsDisplayFilter::ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
 
 void
 nsDisplayFilter::PaintAsLayer(nsDisplayListBuilder* aBuilder,
-                              nsRenderingContext* aCtx,
+                              gfxContext* aCtx,
                               LayerManager* aManager)
 {
   imgDrawingParams imgParams(aBuilder->ShouldSyncDecodeImages()
                              ? imgIContainer::FLAG_SYNC_DECODE
                              : imgIContainer::FLAG_SYNC_DECODE_IF_FAST);
   nsRect borderArea = nsRect(ToReferenceFrame(), mFrame->GetSize());
-  nsSVGIntegrationUtils::PaintFramesParams params(*aCtx->ThebesContext(),
+  nsSVGIntegrationUtils::PaintFramesParams params(*aCtx,
                                                   mFrame,  mVisibleRect,
                                                   borderArea, aBuilder,
                                                   aManager,

@@ -56,9 +56,7 @@ use dom::text::Text;
 use dom::virtualmethods::{VirtualMethods, vtable_for};
 use dom::window::Window;
 use dom_struct::dom_struct;
-use euclid::point::Point2D;
-use euclid::rect::Rect;
-use euclid::size::Size2D;
+use euclid::{Point2D, Vector2D, Rect, Size2D};
 use heapsize::{HeapSizeOf, heap_size_of};
 use html5ever::{Prefix, Namespace, QualName};
 use js::jsapi::{JSContext, JSObject, JSRuntime};
@@ -345,13 +343,13 @@ impl<'a> Iterator for QuerySelectorIterator {
     type Item = Root<Node>;
 
     fn next(&mut self) -> Option<Root<Node>> {
-        let selectors = &self.selectors.0;
-
-        // TODO(cgaebel): Is it worth it to build a bloom filter here
-        // (instead of passing `None`)? Probably.
-        let mut ctx = MatchingContext::new(MatchingMode::Normal, None);
+        let selectors = &self.selectors;
 
         self.iterator.by_ref().filter_map(|node| {
+            // TODO(cgaebel): Is it worth it to build a bloom filter here
+            // (instead of passing `None`)? Probably.
+            let mut ctx = MatchingContext::new(MatchingMode::Normal, None,
+                node.owner_doc().quirks_mode());
             if let Some(element) = Root::downcast(node) {
                 if matches_selector_list(selectors, &element, &mut ctx) {
                     return Some(Root::upcast(element));
@@ -612,7 +610,7 @@ impl Node {
         }
     }
 
-    pub fn scroll_offset(&self) -> Point2D<f32> {
+    pub fn scroll_offset(&self) -> Vector2D<f32> {
         let document = self.owner_doc();
         let window = document.window();
         window.scroll_offset_query(self)
@@ -717,12 +715,13 @@ impl Node {
         // Step 1.
         match SelectorParser::parse_author_origin_no_namespace(&selectors) {
             // Step 2.
-            Err(()) => Err(Error::Syntax),
+            Err(_) => Err(Error::Syntax),
             // Step 3.
             Ok(selectors) => {
-                let mut ctx = MatchingContext::new(MatchingMode::Normal, None);
+                let mut ctx = MatchingContext::new(MatchingMode::Normal, None,
+                                                   self.owner_doc().quirks_mode());
                 Ok(self.traverse_preorder().filter_map(Root::downcast).find(|element| {
-                    matches_selector_list(&selectors.0, element, &mut ctx)
+                    matches_selector_list(&selectors, element, &mut ctx)
                 }))
             }
         }
@@ -737,7 +736,7 @@ impl Node {
         // Step 1.
         match SelectorParser::parse_author_origin_no_namespace(&selectors) {
             // Step 2.
-            Err(()) => Err(Error::Syntax),
+            Err(_) => Err(Error::Syntax),
             // Step 3.
             Ok(selectors) => {
                 let mut descendants = self.traverse_preorder();

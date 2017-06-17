@@ -1358,7 +1358,7 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
   }
 }
 
-void nsBaseWidget::NotifyRemoteCompositorSessionLost(CompositorSession* aSession)
+void nsBaseWidget::NotifyCompositorSessionLost(CompositorSession* aSession)
 {
   MOZ_ASSERT(aSession == mCompositorSession);
   DestroyLayerManager();
@@ -1878,7 +1878,7 @@ nsBaseWidget::StartAsyncScrollbarDrag(const AsyncDragMetrics& aDragMetrics)
 
   MOZ_ASSERT(XRE_IsParentProcess() && mCompositorSession);
 
-  int layersId = mCompositorSession->RootLayerTreeId();;
+  uint64_t layersId = mCompositorSession->RootLayerTreeId();
   ScrollableLayerGuid guid(layersId, aDragMetrics.mPresShellId, aDragMetrics.mViewId);
 
   APZThreadUtils::RunOnControllerThread(NewRunnableMethod

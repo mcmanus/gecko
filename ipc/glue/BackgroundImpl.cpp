@@ -213,6 +213,10 @@ private:
   GetRawContentParentForComparison(PBackgroundParent* aBackgroundActor);
 
   // Forwarded from BackgroundParent.
+  static uint64_t
+  GetChildID(PBackgroundParent* aBackgroundActor);
+
+  // Forwarded from BackgroundParent.
   static bool
   Alloc(ContentParent* aContent,
         Endpoint<PBackgroundParent>&& aEndpoint);
@@ -329,7 +333,7 @@ class ChildImpl final : public BackgroundChildImpl
   static bool sShutdownHasStarted;
 
 #if defined(DEBUG) || !defined(RELEASE_OR_BETA)
-  nsIThread* mBoundThread;
+  nsISerialEventTarget* mBoundEventTarget;
 #endif
 
 #ifdef DEBUG
@@ -346,7 +350,7 @@ public:
   void
   AssertIsOnBoundThread()
   {
-    THREADSAFETY_ASSERT(mBoundThread);
+    THREADSAFETY_ASSERT(mBoundEventTarget);
 
 #ifdef RELEASE_OR_BETA
     DebugOnly<bool> current;
@@ -354,7 +358,7 @@ public:
     bool current;
 #endif
     THREADSAFETY_ASSERT(
-      NS_SUCCEEDED(mBoundThread->IsOnCurrentThread(&current)));
+      NS_SUCCEEDED(mBoundEventTarget->IsOnCurrentThread(&current)));
     THREADSAFETY_ASSERT(current);
   }
 
@@ -366,7 +370,7 @@ public:
 
   ChildImpl()
 #if defined(DEBUG) || !defined(RELEASE_OR_BETA)
-  : mBoundThread(nullptr)
+  : mBoundEventTarget(nullptr)
 #endif
 #ifdef DEBUG
   , mActorDestroyed(false)
@@ -443,13 +447,13 @@ private:
   void
   SetBoundThread()
   {
-    THREADSAFETY_ASSERT(!mBoundThread);
+    THREADSAFETY_ASSERT(!mBoundEventTarget);
 
 #if defined(DEBUG) || !defined(RELEASE_OR_BETA)
-    mBoundThread = NS_GetCurrentThread();
+    mBoundEventTarget = GetCurrentThreadSerialEventTarget();
 #endif
 
-    THREADSAFETY_ASSERT(mBoundThread);
+    THREADSAFETY_ASSERT(mBoundEventTarget);
   }
 
   // Only called by IPDL.
@@ -817,6 +821,13 @@ BackgroundParent::GetRawContentParentForComparison(
 }
 
 // static
+uint64_t
+BackgroundParent::GetChildID(PBackgroundParent* aBackgroundActor)
+{
+  return ParentImpl::GetChildID(aBackgroundActor);
+}
+
+// static
 bool
 BackgroundParent::Alloc(ContentParent* aContent,
                         Endpoint<PBackgroundParent>&& aEndpoint)
@@ -966,6 +977,26 @@ ParentImpl::GetRawContentParentForComparison(
   }
 
   return intptr_t(static_cast<nsIContentParent*>(actor->mContent.get()));
+}
+
+// static
+uint64_t
+ParentImpl::GetChildID(PBackgroundParent* aBackgroundActor)
+{
+  AssertIsOnBackgroundThread();
+  MOZ_ASSERT(aBackgroundActor);
+
+  auto actor = static_cast<ParentImpl*>(aBackgroundActor);
+  if (actor->mActorDestroyed) {
+    MOZ_ASSERT(false, "GetContentParent called after ActorDestroy was called!");
+    return 0;
+  }
+
+  if (actor->mContent) {
+    return actor->mContent->ChildID();
+  }
+
+  return 0;
 }
 
 // static

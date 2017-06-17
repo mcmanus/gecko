@@ -317,7 +317,7 @@ protected:
 
     LOG("[%p] ticking drivers...", this);
     // RD is short for RefreshDriver
-    GeckoProfilerTracingRAII tracer("Paint", "RefreshDriverTick");
+    AutoProfilerTracing tracing("Paint", "RefreshDriverTick");
 
     TickRefreshDrivers(jsnow, now, mContentRefreshDrivers);
     TickRefreshDrivers(jsnow, now, mRootRefreshDrivers);
@@ -1676,7 +1676,7 @@ nsRefreshDriver::RunFrameRequestCallbacks(TimeStamp aNowTime)
   mFrameRequestCallbackDocs.Clear();
 
   if (!frameRequestCallbacks.IsEmpty()) {
-    GeckoProfilerTracingRAII tracer("Paint", "Scripts");
+    AutoProfilerTracing tracing("Paint", "Scripts");
     for (const DocumentFrameCallbacks& docCallbacks : frameRequestCallbacks) {
       // XXXbz Bug 863140: GetInnerWindow can return the outer
       // window in some cases.
@@ -1694,6 +1694,46 @@ nsRefreshDriver::RunFrameRequestCallbacks(TimeStamp aNowTime)
         callback->Call(timeStamp);
       }
     }
+  }
+}
+
+struct RunnableWithDelay
+{
+  nsCOMPtr<nsIRunnable> mRunnable;
+  uint32_t mDelay;
+};
+
+static AutoTArray<RunnableWithDelay, 8>* sPendingIdleRunnables = nullptr;
+
+void
+nsRefreshDriver::DispatchIdleRunnableAfterTick(nsIRunnable* aRunnable,
+                                               uint32_t aDelay)
+{
+  if (!sPendingIdleRunnables) {
+    sPendingIdleRunnables = new AutoTArray<RunnableWithDelay, 8>();
+  }
+
+  RunnableWithDelay rwd = {aRunnable, aDelay};
+  sPendingIdleRunnables->AppendElement(rwd);
+}
+
+void
+nsRefreshDriver::CancelIdleRunnable(nsIRunnable* aRunnable)
+{
+  if (!sPendingIdleRunnables) {
+    return;
+  }
+
+  for (uint32_t i = 0; i < sPendingIdleRunnables->Length(); ++i) {
+    if ((*sPendingIdleRunnables)[i].mRunnable == aRunnable) {
+      sPendingIdleRunnables->RemoveElementAt(i);
+      break;
+    }
+  }
+
+  if (sPendingIdleRunnables->IsEmpty()) {
+    delete sPendingIdleRunnables;
+    sPendingIdleRunnables = nullptr;
   }
 }
 
@@ -1804,7 +1844,7 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
       RunFrameRequestCallbacks(aNowTime);
 
       if (mPresContext && mPresContext->GetPresShell()) {
-        Maybe<GeckoProfilerTracingRAII> tracingStyleFlush;
+        Maybe<AutoProfilerTracing> tracingStyleFlush;
         AutoTArray<nsIPresShell*, 16> observers;
         observers.AppendElements(mStyleFlushObservers);
         for (uint32_t j = observers.Length();
@@ -1835,7 +1875,7 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
       }
     } else if  (i == 1) {
       // This is the FlushType::Layout case.
-      Maybe<GeckoProfilerTracingRAII> tracingLayoutFlush;
+      Maybe<AutoProfilerTracing> tracingLayoutFlush;
       AutoTArray<nsIPresShell*, 16> observers;
       observers.AppendElements(mLayoutFlushObservers);
       for (uint32_t j = observers.Length();
@@ -1959,7 +1999,7 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
     }
   }
 
-  bool notifyGC = false;
+  bool dispatchRunnablesAfterTick = false;
   if (mViewManagerFlushIsPending) {
     RefPtr<TimelineConsumers> timelines = TimelineConsumers::Get();
 
@@ -1998,7 +2038,7 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
       timelines->AddMarkerForDocShell(docShell, "Paint",  MarkerTracingType::END);
     }
 
-    notifyGC = true;
+    dispatchRunnablesAfterTick = true;
   }
 
 #ifndef ANDROID  /* bug 1142079 */
@@ -2017,10 +2057,14 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
     ScheduleViewManagerFlush();
   }
 
-  if (notifyGC && nsContentUtils::XPConnect()) {
-    GeckoProfilerTracingRAII tracer("Paint", "NotifyDidPaint");
-    nsContentUtils::XPConnect()->NotifyDidPaint();
-    nsJSContext::NotifyDidPaint();
+  if (dispatchRunnablesAfterTick && sPendingIdleRunnables) {
+    AutoTArray<RunnableWithDelay, 8>* runnables = sPendingIdleRunnables;
+    sPendingIdleRunnables = nullptr;
+    for (uint32_t i = 0; i < runnables->Length(); ++i) {
+      NS_IdleDispatchToCurrentThread((*runnables)[i].mRunnable.forget(),
+                                     (*runnables)[i].mDelay);
+    }
+    delete runnables;
   }
 }
 
@@ -2086,7 +2130,7 @@ nsRefreshDriver::FinishedWaitingForTransaction()
   if (mSkippedPaints &&
       !IsInRefresh() &&
       (ObserverCount() || ImageRequestCount())) {
-    GeckoProfilerTracingRAII tracer("Paint", "RefreshDriverTick");
+    AutoProfilerTracing tracing("Paint", "RefreshDriverTick");
     DoRefresh();
   }
   mSkippedPaints = false;
