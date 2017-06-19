@@ -516,6 +516,22 @@ MozQuic::AckScoreboard(uint64_t packetNumber, enum keyPhase kp)
 }
 
 void
+MozQuic::AckScoreboard(MozQuicStreamAck ack)
+{
+  // unwritten acks ordered {1,2,5,6,7} as 7/2, 2/1 (biggest at head)
+  // todo out of order packets should be coalesced
+
+  auto iter = mUnWrittenAcks.begin();
+  for (; (iter != mUnWrittenAcks.end()) && (iter->mPacketNumber > ack.mPacketNumber);
+       ++iter) {
+    if (iter->mPacketNumber < ack.mPacketNumber) {
+      break;
+    }
+  }
+  mUnWrittenAcks.insert(iter, ack);
+}
+
+void
 MozQuic::MaybeSendAck()
 {
   if (mUnWrittenAcks.empty()) {
@@ -928,27 +944,48 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
     framePtr++;
   } while (1);
 
-  auto i = mUnAckedData.begin();
+  auto dataIter = mUnAckedData.begin();
   for (; iters > 0; --iters) {
     uint64_t seeking = ackStack[iters - 1].first;
     uint64_t stopSeeking = seeking + ackStack[iters - 1].second;
     for (; seeking < stopSeeking; seeking++) {
 
       // skip over stuff that is too low
-      for (; (i != mUnAckedData.end()) && ((*i)->mPacketNumber < seeking); i++);
+      for (; (dataIter != mUnAckedData.end()) && ((*dataIter)->mPacketNumber < seeking); dataIter++);
 
-      if ((i == mUnAckedData.end()) || ((*i)->mPacketNumber > seeking)) {
-        fprintf(stderr,"ACK'd packet not found for %lX\n", seeking);
+      if ((dataIter == mUnAckedData.end()) || ((*dataIter)->mPacketNumber > seeking)) {
+        fprintf(stderr,"ACK'd data not found for %lX ack\n", seeking);
       } else {
-        assert ((*i)->mPacketNumber == seeking);
-        fprintf(stderr,"ACK'd packet found for %lX\n", seeking);
-        i = mUnAckedData.erase(i);
+        assert ((*dataIter)->mPacketNumber == seeking);
+        fprintf(stderr,"ACK'd data found for %lX\n", seeking);
+        dataIter = mUnAckedData.erase(dataIter);
       }
     }
   }
   
   // todo read the timestamps
   // and obviously todo feed the times into congestion control
+
+  // obv unacked lists should be combined (data, other frames, acks)
+  auto ackIter = mUnAckedAcks.begin();
+  for (; iters > 0; --iters) {
+    uint64_t seeking = ackStack[iters - 1].first;
+    uint64_t stopSeeking = seeking + ackStack[iters - 1].second;
+    for (; seeking < stopSeeking; seeking++) {
+
+      // skip over stuff that is too low
+      for (; (ackIter != mUnAckedAcks.end()) && (ackIter->mPacketNumber < seeking); ackIter++);
+
+      if ((ackIter == mUnAckedAcks.end()) || (ackIter->mPacketNumber > seeking)) {
+        fprintf(stderr,"ACK'd ack not found for %lX ack\n", seeking);
+      } else {
+        assert (ackIter->mPacketNumber == seeking);
+        fprintf(stderr,"ACK'd ack found for %lX\n", seeking);
+        ackIter = mUnAckedAcks.erase(ackIter);
+      }
+    }
+  }
+  
 }
 
 int
@@ -1377,7 +1414,7 @@ MozQuic::RetransmitTimer()
   uint64_t now = Timestamp();
   uint64_t discardEpoch = now - kForgetUnAckedThresh;
 
-  for (auto i = mUnAckedData.begin(); i != mUnAckedData.end(); i++) {
+  for (auto i = mUnAckedData.begin(); i != mUnAckedData.end(); ) {
 
     // just a linear backoff for now
     uint64_t retransEpoch =
@@ -1394,7 +1431,7 @@ MozQuic::RetransmitTimer()
       i = mUnAckedData.erase(i);
     } else if (!(*i)->mRetransmitted) {
       assert((*i)->mData);
-      fprintf(stderr,"data for packet %lX retransmitted\n",
+      fprintf(stderr,"data associated with packet %lX retransmitted\n",
               (*i)->mPacketNumber);
       (*i)->mRetransmitted = true;
 
@@ -1402,9 +1439,24 @@ MozQuic::RetransmitTimer()
       std::unique_ptr<MozQuicStreamChunk> tmp(new MozQuicStreamChunk(*(*i)));
       assert(!(*i)->mData);
       DoWriter(tmp);
+      i++;
+    } else {
+      i++;
     }
   }
 
+  // obv todo join unacked lists
+  uint64_t retransEpoch = now - kRetransmitThresh;
+  for (auto i = mUnAckedAcks.begin();
+       (i != mUnAckedAcks.end()) && (i->mTransmitTime <= retransEpoch); ) {
+
+    fprintf(stderr,"ack associated with packet %lX retransmitted\n",
+            i->mPacketNumber);
+    i->mTransmitTime = now;
+    AckScoreboard(*i);
+    i = mUnAckedAcks.erase(i);
+    assert (i == mUnAckedAcks.begin());
+  }
   return MOZQUIC_OK;
 }
 
