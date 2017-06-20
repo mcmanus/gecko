@@ -33,8 +33,10 @@ int main()
   config.originPort = 8443;
   config.handleIO = 0; // todo mvp
 
+  // ingorePKI will allow invalid certs
+  // normally they must either be linked to the root store OR on localhost
   config.ignorePKI = 0; 
-  config.greaseVersionNegotiation = 1;
+  config.greaseVersionNegotiation = 0;
 
   mozquic_new_connection(&c, &config);
   mozquic_start_connection(c);
