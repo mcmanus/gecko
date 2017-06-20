@@ -180,6 +180,7 @@ void
 MozQuic::GreaseVersionNegotiation()
 {
   assert(mConnectionState == STATE_UNINITIALIZED);
+  fprintf(stderr,"applying version grease\n");
   mVersion = kMozQuicVersionGreaseC;
 }
 
@@ -1302,6 +1303,9 @@ MozQuic::FlushStream0(bool forceAck)
     uint32_t room = endpkt - framePtr - 8; // the last 8 are for checksum
     uint32_t used;
     if (AckPiggyBack(framePtr, mNextPacketNumber, room, keyPhaseUnprotected, used) == MOZQUIC_OK) {
+      if (used) {
+        fprintf(stderr,"will include optimistic acks on packet %lX for xmit\n", mNextPacketNumber);
+      }
       framePtr += used;
     }
     finalLen = ((framePtr - pkt) + 8);
@@ -1322,7 +1326,7 @@ MozQuic::FlushStream0(bool forceAck)
     if (code != MOZQUIC_OK) {
       return code;
     }
-    fprintf(stderr,"TRANSMIT %lX\n", mNextPacketNumber);
+    fprintf(stderr,"TRANSMIT %lX len=%d\n", mNextPacketNumber, finalLen);
     mNextPacketNumber++;
     // each member of the list needs to 
   }
@@ -1414,11 +1418,22 @@ MozQuic::RetransmitTimer()
   uint64_t now = Timestamp();
   uint64_t discardEpoch = now - kForgetUnAckedThresh;
 
-  for (auto i = mUnAckedData.begin(); i != mUnAckedData.end(); ) {
+  // obv todo join unacked lists
+  uint64_t retransEpoch = now - kRetransmitThresh;
+  for (auto i = mUnAckedAcks.begin();
+       (i != mUnAckedAcks.end()) && (i->mTransmitTime <= retransEpoch); ) {
 
+    fprintf(stderr,"ack of packet %lX retransmitted\n",
+            i->mPacketNumber);
+    i->mTransmitTime = now;
+    AckScoreboard(*i);
+    i = mUnAckedAcks.erase(i);
+    assert (i == mUnAckedAcks.begin());
+  }
+
+  for (auto i = mUnAckedData.begin(); i != mUnAckedData.end(); ) {
     // just a linear backoff for now
-    uint64_t retransEpoch =
-      now - (kRetransmitThresh * (*i)->mTransmitCount);
+     retransEpoch = now - (kRetransmitThresh * (*i)->mTransmitCount);
 
     if ((*i)->mTransmitTime > retransEpoch) {
       break;
@@ -1445,18 +1460,6 @@ MozQuic::RetransmitTimer()
     }
   }
 
-  // obv todo join unacked lists
-  uint64_t retransEpoch = now - kRetransmitThresh;
-  for (auto i = mUnAckedAcks.begin();
-       (i != mUnAckedAcks.end()) && (i->mTransmitTime <= retransEpoch); ) {
-
-    fprintf(stderr,"ack associated with packet %lX retransmitted\n",
-            i->mPacketNumber);
-    i->mTransmitTime = now;
-    AckScoreboard(*i);
-    i = mUnAckedAcks.erase(i);
-    assert (i == mUnAckedAcks.begin());
-  }
   return MOZQUIC_OK;
 }
 
