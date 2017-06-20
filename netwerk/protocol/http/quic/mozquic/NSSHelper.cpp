@@ -71,12 +71,13 @@ NSSHelper::HandshakeCallback(PRFileDesc *fd, void *client_data)
 SECStatus
 NSSHelper::BadCertificate(void *client_data, PRFileDesc *fd)
 {
-  fprintf(stderr,"badcertificate\n");
   while (fd && (fd->identity != nssHelperIdentity)) {
     fd = fd->lower;
   }
   assert(fd);
   NSSHelper *self = reinterpret_cast<NSSHelper *>(fd->secret);
+  fprintf(stderr,"badcertificate override=%d\n",
+          self->mQuicSession->IgnorePKI());
   return self->mQuicSession->IgnorePKI() ? SECSuccess : SECFailure;
 }
 
