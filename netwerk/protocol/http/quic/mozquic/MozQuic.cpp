@@ -483,24 +483,26 @@ MozQuic::Log(char *msg)
   }
 }
 
+// a request to acknowledge a packetnumber
 void
 MozQuic::AckScoreboard(uint64_t packetNumber, enum keyPhase kp)
 {
   // todo out of order packets should be coalesced
 
-  // todo if this list is too long, we can stop doing this according to
-  // the spec
-
-  if (mUnWrittenAcks.empty()) {
-    mUnWrittenAcks.emplace_front(packetNumber, Timestamp(), kp);
+  if (mAckList.empty()) {
+    mAckList.emplace_front(packetNumber, Timestamp(), kp);
     return;
   }
 
-  auto iter=mUnWrittenAcks.begin();
-  for (; iter != mUnWrittenAcks.end(); ++iter) {
+  auto iter=mAckList.begin();
+  for (; iter != mAckList.end(); ++iter) {
     if ((iter->mPacketNumber + 1) == packetNumber) {
       // the common case is to just adjust this counter
-      // in the first element
+      // in the first element.. but you can't do that if it has
+      // already been transmitted. that needs a new node
+      if (iter->Transmitted()) {
+        break;
+      }
       iter->mPacketNumber++;
       iter->mExtra++;
       return;
@@ -513,29 +515,13 @@ MozQuic::AckScoreboard(uint64_t packetNumber, enum keyPhase kp)
       break;
     }
   }
-  mUnWrittenAcks.emplace(iter, packetNumber, Timestamp(), kp);
-}
-
-void
-MozQuic::AckScoreboard(MozQuicStreamAck ack)
-{
-  // unwritten acks ordered {1,2,5,6,7} as 7/2, 2/1 (biggest at head)
-  // todo out of order packets should be coalesced
-
-  auto iter = mUnWrittenAcks.begin();
-  for (; (iter != mUnWrittenAcks.end()) && (iter->mPacketNumber > ack.mPacketNumber);
-       ++iter) {
-    if (iter->mPacketNumber < ack.mPacketNumber) {
-      break;
-    }
-  }
-  mUnWrittenAcks.insert(iter, ack);
+  mAckList.emplace(iter, packetNumber, Timestamp(), kp);
 }
 
 void
 MozQuic::MaybeSendAck()
 {
-  if (mUnWrittenAcks.empty()) {
+  if (mAckList.empty()) {
     return;
   }
 
@@ -548,23 +534,24 @@ MozQuic::MaybeSendAck()
   // todo protected packets
 
   bool ackedUnprotected = false;
-  auto iter = mUnWrittenAcks.begin();
-  for (; iter != mUnWrittenAcks.end(); ++iter) {
+  auto iter = mAckList.begin();
+  for (; iter != mAckList.end(); ++iter) {
+    if (iter->Transmitted()) {
+      continue;
+    }
     fprintf(stderr,"ASKED TO SEND ACK FOR %lx %d\n",
             iter->mPacketNumber, iter->mPhase);
     if (iter->mPhase == keyPhaseUnprotected) {
       assert(!ackedUnprotected);
       ackedUnprotected = true;
       FlushStream0(true);
-      iter = mUnWrittenAcks.begin(); // re-entrant concerns
+      iter = mAckList.begin(); // re-entrant concerns
     } else {
       assert(false); // todo
     }
   }
 }
 
-// todo after handshake we need to do a little more than piggyback
-// i.e. sometimes ack needs to fly solo
 // todo this will work generically other than
 // a] assuming 32 bit largest and
 // b] always chosing 16 bit run len (though we can live with that)
@@ -589,21 +576,23 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint64_t pktNumOfAck, uint32_t avail, 
     bool newFrame = true;
     uint8_t *numBlocks = nullptr;
     uint64_t lowAcked;
-    while (!mUnWrittenAcks.empty()) {
+    for (auto iter = mAckList.begin(); iter != mAckList.end(); ) {
       // list  ordered as 7/2, 2/1.. (with gap @4 @3)
       // i.e. highest num first
       if (avail < (newFrame ? 11 : 3)) {
         return MOZQUIC_OK;
       }
-      auto iter = mUnWrittenAcks.rbegin();
       if (iter->mPacketNumber > 0xffffffff) {
         // > 32bit restriction spcific to handshake packets as initial is 31bit rand
-        mUnWrittenAcks.pop_back();
+        // todo
+        mAckList.pop_back();
+        iter = mAckList.erase(iter);
         assert(false);
         RaiseError(MOZQUIC_ERR_GENERAL, (char *)"unexpected packet number");
         return MOZQUIC_ERR_GENERAL;
       }
       if (newFrame) {
+        newFrame = false;
         pkt[0] = 0xb9; // ack with 32 bit num and 16 bit run encoding and numblocks
         numBlocks = pkt + 1;
         *numBlocks = 0;
@@ -648,8 +637,7 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint64_t pktNumOfAck, uint32_t avail, 
       
       iter->mTransmitTime = Timestamp();
       iter->mPacketNumberOfAck = pktNumOfAck;
-      mUnAckedAcks.insert(mUnAckedAcks.end(), *iter);
-      mUnWrittenAcks.pop_back();
+      ++iter;
       if (*numBlocks == 0xff) {
         break;
       }
@@ -769,7 +757,9 @@ MozQuic::HandshakeComplete(uint32_t code)
     RaiseError(MOZQUIC_ERR_GENERAL, (char *)"Handshake complete in wrong state");
     return;
   }
+  fprintf(stderr,"CLIENT_STATE_CONNECTED 2\n");
   mConnectionState = CLIENT_STATE_CONNECTED;
+  MaybeSendAck();
 }
 
 int
@@ -800,7 +790,9 @@ MozQuic::Client1RTT()
       return code;
     }
     if (mNSSHelper->IsHandshakeComplete()) {
+      fprintf(stderr,"CLIENT_STATE_CONNECTED 1\n");
       mConnectionState = CLIENT_STATE_CONNECTED;
+      MaybeSendAck();
     }
   }
 
@@ -824,7 +816,9 @@ MozQuic::Server1RTT()
       return code;
     }
     if (mNSSHelper->IsHandshakeComplete()) {
+      fprintf(stderr,"SERVER_STATE_CONNECTED 2\n");
       mConnectionState = SERVER_STATE_CONNECTED;
+      MaybeSendAck();
     }
   }
   return MOZQUIC_OK;
@@ -914,7 +908,7 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
   // we have already runtime tested that there is enough data there
   // to read the ackblocks and the tsblocks
   assert (result.mType == FRAME_TYPE_ACK);
-  uint16_t iters = 0;
+  uint16_t numRanges = 0;
 
   std::array<std::pair<uint64_t, uint64_t>, 257> ackStack;
 
@@ -931,34 +925,34 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
     // form a stack here so we can process them starting at the
     // lowest packet number, which is how mUnAckedData is ordered and
     // do it all in one pass
-    assert(iters < 257);
-    ackStack[iters] =
+    assert(numRanges < 257);
+    ackStack[numRanges] =
       std::pair<uint64_t, uint64_t>(largestAcked - extra, extra + 1);
 
     largestAcked--;
     largestAcked -= extra;
-    if (iters++ == result.u.mAck.mNumBlocks) {
+    if (numRanges++ == result.u.mAck.mNumBlocks) {
       break;
     }
     uint8_t gap = *framePtr;
     largestAcked -= gap;
     framePtr++;
   } while (1);
-
+  
   auto dataIter = mUnAckedData.begin();
-  for (; iters > 0; --iters) {
-    uint64_t seeking = ackStack[iters - 1].first;
-    uint64_t stopSeeking = seeking + ackStack[iters - 1].second;
-    for (; seeking < stopSeeking; seeking++) {
+  for (auto iters = numRanges; iters > 0; --iters) {
+    uint64_t haveAckFor = ackStack[iters - 1].first;
+    uint64_t haveAckForEnd = haveAckFor + ackStack[iters - 1].second;
+    for (; haveAckFor < haveAckForEnd; haveAckFor++) {
 
       // skip over stuff that is too low
-      for (; (dataIter != mUnAckedData.end()) && ((*dataIter)->mPacketNumber < seeking); dataIter++);
+      for (; (dataIter != mUnAckedData.end()) && ((*dataIter)->mPacketNumber < haveAckFor); dataIter++);
 
-      if ((dataIter == mUnAckedData.end()) || ((*dataIter)->mPacketNumber > seeking)) {
-        fprintf(stderr,"ACK'd data not found for %lX ack\n", seeking);
+      if ((dataIter == mUnAckedData.end()) || ((*dataIter)->mPacketNumber > haveAckFor)) {
+        fprintf(stderr,"ACK'd data not found for %lX ack\n", haveAckFor);
       } else {
-        assert ((*dataIter)->mPacketNumber == seeking);
-        fprintf(stderr,"ACK'd data found for %lX\n", seeking);
+        assert ((*dataIter)->mPacketNumber == haveAckFor);
+        fprintf(stderr,"ACK'd data found for %lX\n", haveAckFor);
         dataIter = mUnAckedData.erase(dataIter);
       }
     }
@@ -968,21 +962,22 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
   // and obviously todo feed the times into congestion control
 
   // obv unacked lists should be combined (data, other frames, acks)
-  auto ackIter = mUnAckedAcks.begin();
-  for (; iters > 0; --iters) {
-    uint64_t seeking = ackStack[iters - 1].first;
-    uint64_t stopSeeking = seeking + ackStack[iters - 1].second;
-    for (; seeking < stopSeeking; seeking++) {
+  auto unackedIter = mAckList.begin();
+  for (auto iters = numRanges; iters > 0; --iters) {
+    uint64_t haveAckFor = ackStack[iters - 1].first;
+    uint64_t haveAckForEnd = haveAckFor + ackStack[iters - 1].second;
+    for (; haveAckFor < haveAckForEnd; haveAckFor++) {
 
-      // skip over stuff that is too low
-      for (; (ackIter != mUnAckedAcks.end()) && (ackIter->mPacketNumber < seeking); ackIter++);
+      for (; (unackedIter != mAckList.end()) &&
+             ((!unackedIter->Transmitted()) || (unackedIter->mPacketNumberOfAck < haveAckFor));
+           unackedIter++);
 
-      if ((ackIter == mUnAckedAcks.end()) || (ackIter->mPacketNumber > seeking)) {
-        fprintf(stderr,"ACK'd ack not found for %lX ack\n", seeking);
+      if ((unackedIter == mAckList.end()) || (unackedIter->mPacketNumberOfAck > haveAckFor)) {
+        fprintf(stderr,"ACK'd ack not found for %lX ack\n", haveAckFor);
       } else {
-        assert (ackIter->mPacketNumber == seeking);
-        fprintf(stderr,"ACK'd ack found for %lX\n", seeking);
-        ackIter = mUnAckedAcks.erase(ackIter);
+        assert (unackedIter->mPacketNumberOfAck == haveAckFor);
+        fprintf(stderr,"ACK'd ack found for %lX trasmitted=%d\n", haveAckFor, unackedIter->Transmitted());
+        unackedIter = mAckList.erase(unackedIter);
       }
     }
   }
@@ -1027,6 +1022,8 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
                                    result.u.mStream.mFinBit));
       mStream0->Supply(tmp);
       ptr += result.u.mStream.mDataLen;
+      fprintf(stderr,"process stream 0 %d\n",
+              result.u.mStream.mDataLen);
     } else if (result.mType == FRAME_TYPE_ACK) {
       // ptr now points at ack block section
       uint32_t ackBlockSectionLen =
@@ -1278,6 +1275,8 @@ MozQuic::FlushStream0(bool forceAck)
       assert(room >= (*iter)->mLen);
 
       memcpy(framePtr, (*iter)->mData.get(), (*iter)->mLen);
+      fprintf(stderr,"writing a stream frame %d in packet %lX\n",
+              (*iter)->mLen, mNextPacketNumber);
       framePtr += (*iter)->mLen;
 
       (*iter)->mPacketNumber = mNextPacketNumber;
@@ -1418,22 +1417,9 @@ MozQuic::RetransmitTimer()
   uint64_t now = Timestamp();
   uint64_t discardEpoch = now - kForgetUnAckedThresh;
 
-  // obv todo join unacked lists
-  uint64_t retransEpoch = now - kRetransmitThresh;
-  for (auto i = mUnAckedAcks.begin();
-       (i != mUnAckedAcks.end()) && (i->mTransmitTime <= retransEpoch); ) {
-
-    fprintf(stderr,"ack of packet %lX retransmitted\n",
-            i->mPacketNumber);
-    i->mTransmitTime = now;
-    AckScoreboard(*i);
-    i = mUnAckedAcks.erase(i);
-    assert (i == mUnAckedAcks.begin());
-  }
-
   for (auto i = mUnAckedData.begin(); i != mUnAckedData.end(); ) {
     // just a linear backoff for now
-     retransEpoch = now - (kRetransmitThresh * (*i)->mTransmitCount);
+    uint64_t retransEpoch = now - (kRetransmitThresh * (*i)->mTransmitCount);
 
     if ((*i)->mTransmitTime > retransEpoch) {
       break;

@@ -58,7 +58,9 @@ MozQuicStreamAck(uint64_t num, uint64_t rtime, enum keyPhase kp)
   uint64_t mReceiveTime;
   uint64_t mTransmitTime;
   enum keyPhase mPhase;
-  uint64_t mPacketNumberOfAck; // of ACK itself
+  uint64_t mPacketNumberOfAck; // of ACK itself when transmitted
+
+  bool Transmitted() { return mTransmitTime != 0; }
 };
 
 class MozQuicWriter 

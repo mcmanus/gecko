@@ -101,7 +101,6 @@ private:
   void RaiseError(uint32_t err, char *reason);
 
   void AckScoreboard(uint64_t num, enum keyPhase kp);
-  void AckScoreboard(MozQuicStreamAck ack);
   void MaybeSendAck();
 
   uint32_t Transmit(unsigned char *, uint32_t len, struct sockaddr_in *peer);
@@ -167,15 +166,16 @@ private:
   std::unique_ptr<NSSHelper>         mNSSHelper;
 
   // todo coalesce all unacked
-
   std::list<std::unique_ptr<MozQuicStreamChunk>> mUnWrittenData;
   std::list<std::unique_ptr<MozQuicStreamChunk>> mUnAckedData;
 
-  // unwritten acks ordered {1,2,5,6,7} as 7/2, 2/1 (biggest at head)
-  // todo these should be pts to make copying them cheaper
-  std::list<MozQuicStreamAck>                    mUnWrittenAcks;
-  // unacked ordered by packet no they were sent on (lowest at head)
-  std::list<MozQuicStreamAck>                    mUnAckedAcks;
+  // acks ordered {1,2,5,6,7} as 7/2, 2/1 (biggest at head)
+  // You can be on mAckList if either
+  // a] the stack needs to send out an ack for the associated data
+  // b] an ack has been sent out for the associated data, but recpt
+  //    of that ack hasn't been ack'd by peer
+  //   ->Transmitted() is true in (b)
+  std::list<MozQuicStreamAck>                    mAckList;
 
   // need other frame 2 list
 public: // callbacks from nsshelper
