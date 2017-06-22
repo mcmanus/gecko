@@ -1179,7 +1179,12 @@ class ChoiceType extends Type {
     let n = choices.length - 1;
     choices[n] = `or ${choices[n]}`;
 
-    let message = `Value must either: ${choices.join(", ")}`;
+    let message;
+    if (typeof value === "object") {
+      message = `Value must either: ${choices.join(", ")}`;
+    } else {
+      message = `Value ${JSON.stringify(value)} must either: ${choices.join(", ")}`;
+    }
 
     return context.error(message, null);
   }
@@ -1353,6 +1358,7 @@ class StringType extends Type {
 }
 
 let FunctionEntry;
+let Event;
 let SubModuleType;
 
 class ObjectType extends Type {
@@ -1616,12 +1622,20 @@ SubModuleType = class SubModuleType extends Type {
     let functions = schema.functions.filter(fun => !fun.unsupported)
                           .map(fun => FunctionEntry.parseSchema(fun, path));
 
-    return new this(functions);
+    let events = [];
+
+    if (schema.events) {
+      events = schema.events.filter(event => !event.unsupported)
+                     .map(event => Event.parseSchema(event, path));
+    }
+
+    return new this(functions, events);
   }
 
-  constructor(functions) {
+  constructor(functions, events) {
     super();
     this.functions = functions;
+    this.events = events;
   }
 };
 
@@ -1710,7 +1724,7 @@ class ArrayType extends Type {
   static parseSchema(schema, path, extraProperties = []) {
     this.checkSchemaProperties(schema, path, extraProperties);
 
-    let items = Schemas.parseSchema(schema.items, path);
+    let items = Schemas.parseSchema(schema.items, path, ["onError"]);
 
     return new this(schema, items, schema.minItems || 0, schema.maxItems || Infinity);
   }
@@ -1720,6 +1734,7 @@ class ArrayType extends Type {
     this.itemType = itemType;
     this.minItems = minItems;
     this.maxItems = maxItems;
+    this.onError = schema.items.onError || null;
   }
 
   normalize(value, context) {
@@ -1733,7 +1748,12 @@ class ArrayType extends Type {
     for (let [i, element] of value.entries()) {
       element = context.withPath(String(i), () => this.itemType.normalize(element, context));
       if (element.error) {
-        return element;
+        if (this.onError == "warn") {
+          context.logError(element.error);
+        } else if (this.onError != "ignore") {
+          return element;
+        }
+        continue;
       }
       result.push(element.value);
     }
@@ -1944,6 +1964,11 @@ class SubModuleProperty extends Entry {
       context.injectInto(fun, obj, fun.name, subpath, ns);
     }
 
+    let events = type.events;
+    for (let event of events) {
+      context.injectInto(event, obj, event.name, subpath, ns);
+    }
+
     // TODO: Inject this.properties.
 
     return {
@@ -2121,7 +2146,10 @@ FunctionEntry = class FunctionEntry extends CallEntry {
 };
 
 // Represents an "event" defined in a schema namespace.
-class Event extends CallEntry {
+//
+// TODO(rpl): we should be able to remove the eslint-disable-line that follows
+// once Bug 1369722 has been fixed.
+Event = class Event extends CallEntry { // eslint-disable-line no-native-reassign
   static parseSchema(event, path) {
     let extraParameters = Array.from(event.extraParameters || [], param => ({
       type: Schemas.parseSchema(param, path, ["name", "optional", "default"]),
@@ -2194,7 +2222,7 @@ class Event extends CallEntry {
       },
     };
   }
-}
+};
 
 const TYPES = Object.freeze(Object.assign(Object.create(null), {
   any: AnyType,

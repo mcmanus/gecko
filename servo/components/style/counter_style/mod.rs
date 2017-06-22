@@ -19,7 +19,7 @@ use std::ascii::AsciiExt;
 use std::borrow::Cow;
 use std::fmt;
 use std::ops::Range;
-use style_traits::{ToCss, OneOrMoreCommaSeparated, ParseError, StyleParseError};
+use style_traits::{ToCss, OneOrMoreSeparated, CommaSeparator, ParseError, StyleParseError};
 use values::CustomIdent;
 
 /// Parse the prelude of an @counter-style rule
@@ -469,7 +469,7 @@ fn bound_to_css<W>(range: Option<i32>, dest: &mut W) -> fmt::Result where W: fmt
 }
 
 /// https://drafts.csswg.org/css-counter-styles/#counter-style-pad
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, ToCss)]
 pub struct Pad(pub u32, pub Symbol);
 
 impl Parse for Pad {
@@ -484,26 +484,13 @@ impl Parse for Pad {
     }
 }
 
-impl ToCss for Pad {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        write!(dest, "{} ", self.0)?;
-        self.1.to_css(dest)
-    }
-}
-
 /// https://drafts.csswg.org/css-counter-styles/#counter-style-fallback
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, ToCss)]
 pub struct Fallback(pub CustomIdent);
 
 impl Parse for Fallback {
     fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
         parse_counter_style_name(input).map(Fallback)
-    }
-}
-
-impl ToCss for Fallback {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        self.0.to_css(dest)
     }
 }
 
@@ -542,7 +529,7 @@ impl ToCss for Symbols {
 }
 
 /// https://drafts.csswg.org/css-counter-styles/#descdef-counter-style-additive-symbols
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, ToCss)]
 pub struct AdditiveSymbols(pub Vec<AdditiveTuple>);
 
 impl Parse for AdditiveSymbols {
@@ -556,14 +543,8 @@ impl Parse for AdditiveSymbols {
     }
 }
 
-impl ToCss for AdditiveSymbols {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        self.0.to_css(dest)
-    }
-}
-
 /// <integer> && <symbol>
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, ToCss)]
 pub struct AdditiveTuple {
     /// <integer>
     pub weight: u32,
@@ -571,7 +552,9 @@ pub struct AdditiveTuple {
     pub symbol: Symbol,
 }
 
-impl OneOrMoreCommaSeparated for AdditiveTuple {}
+impl OneOrMoreSeparated for AdditiveTuple {
+    type S = CommaSeparator;
+}
 
 impl Parse for AdditiveTuple {
     fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
@@ -588,15 +571,8 @@ impl Parse for AdditiveTuple {
     }
 }
 
-impl ToCss for AdditiveTuple {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        write!(dest, "{} ", self.weight)?;
-        self.symbol.to_css(dest)
-    }
-}
-
 /// https://drafts.csswg.org/css-counter-styles/#counter-style-speak-as
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, ToCss)]
 pub enum SpeakAs {
     /// auto
     Auto,
@@ -637,17 +613,5 @@ impl Parse for SpeakAs {
         result.or_else(|_| {
             Ok(SpeakAs::Other(parse_counter_style_name(input)?))
         })
-    }
-}
-
-impl ToCss for SpeakAs {
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        match *self {
-            SpeakAs::Auto => dest.write_str("auto"),
-            SpeakAs::Bullets => dest.write_str("bullets"),
-            SpeakAs::Numbers => dest.write_str("numbers"),
-            SpeakAs::Words => dest.write_str("words"),
-            SpeakAs::Other(ref other) => other.to_css(dest),
-        }
     }
 }

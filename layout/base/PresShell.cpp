@@ -4607,19 +4607,19 @@ PresShell::StyleSheetApplicableStateChanged(StyleSheet* aStyleSheet)
 }
 
 void
-PresShell::StyleRuleChanged(StyleSheet* aStyleSheet)
+PresShell::StyleRuleChanged(StyleSheet* aStyleSheet, css::Rule* aStyleRule)
 {
   RecordStyleSheetChange(aStyleSheet, StyleSheet::ChangeType::RuleChanged);
 }
 
 void
-PresShell::StyleRuleAdded(StyleSheet* aStyleSheet)
+PresShell::StyleRuleAdded(StyleSheet* aStyleSheet, css::Rule* aStyleRule)
 {
   RecordStyleSheetChange(aStyleSheet, StyleSheet::ChangeType::RuleAdded);
 }
 
 void
-PresShell::StyleRuleRemoved(StyleSheet* aStyleSheet)
+PresShell::StyleRuleRemoved(StyleSheet* aStyleSheet, css::Rule* aStyleRule)
 {
   RecordStyleSheetChange(aStyleSheet, StyleSheet::ChangeType::RuleRemoved);
 }
@@ -5768,10 +5768,8 @@ PresShell::MarkFramesInListApproximatelyVisible(const nsDisplayList& aList,
 
     // Use the presshell containing the frame.
     auto* presShell = static_cast<PresShell*>(frame->PresContext()->PresShell());
-    uint32_t count = presShell->mApproximatelyVisibleFrames.Count();
     MOZ_ASSERT(!presShell->AssumeAllFramesVisible());
-    presShell->mApproximatelyVisibleFrames.PutEntry(frame);
-    if (presShell->mApproximatelyVisibleFrames.Count() > count) {
+    if (presShell->mApproximatelyVisibleFrames.EnsureInserted(frame)) {
       // The frame was added to mApproximatelyVisibleFrames, so increment its visible count.
       frame->IncApproximateVisibleCount();
     }
@@ -5909,9 +5907,7 @@ PresShell::MarkFramesInSubtreeApproximatelyVisible(nsIFrame* aFrame,
       aFrame->StyleVisibility()->IsVisible() &&
       (!aRemoveOnly || aFrame->GetVisibility() == Visibility::APPROXIMATELY_VISIBLE)) {
     MOZ_ASSERT(!AssumeAllFramesVisible());
-    uint32_t count = mApproximatelyVisibleFrames.Count();
-    mApproximatelyVisibleFrames.PutEntry(aFrame);
-    if (mApproximatelyVisibleFrames.Count() > count) {
+    if (mApproximatelyVisibleFrames.EnsureInserted(aFrame)) {
       // The frame was added to mApproximatelyVisibleFrames, so increment its visible count.
       aFrame->IncApproximateVisibleCount();
     }
@@ -6233,9 +6229,8 @@ PresShell::EnsureFrameInApproximatelyVisibleList(nsIFrame* aFrame)
   }
 #endif
 
-  if (!mApproximatelyVisibleFrames.Contains(aFrame)) {
-    MOZ_ASSERT(!AssumeAllFramesVisible());
-    mApproximatelyVisibleFrames.PutEntry(aFrame);
+  if (mApproximatelyVisibleFrames.EnsureInserted(aFrame)) {
+    // We inserted a new entry.
     aFrame->IncApproximateVisibleCount();
   }
 }
@@ -6258,11 +6253,8 @@ PresShell::RemoveFrameFromApproximatelyVisibleList(nsIFrame* aFrame)
     return;
   }
 
-  uint32_t count = mApproximatelyVisibleFrames.Count();
-  mApproximatelyVisibleFrames.RemoveEntry(aFrame);
-
-  if (aFrame->TrackingVisibility() &&
-      mApproximatelyVisibleFrames.Count() < count) {
+  if (mApproximatelyVisibleFrames.EnsureRemoved(aFrame) &&
+      aFrame->TrackingVisibility()) {
     // aFrame was in the hashtable, and we're still tracking its visibility,
     // so we need to decrement its visible count.
     aFrame->DecApproximateVisibleCount();
@@ -6385,7 +6377,7 @@ PresShell::Paint(nsView*         aViewToPaint,
         props = Move(LayerProperties::CloneFrom(layerManager->GetRoot()));
       }
 
-      MaybeSetupTransactionIdAllocator(layerManager, aViewToPaint);
+      MaybeSetupTransactionIdAllocator(layerManager, presContext);
 
       if (layerManager->EndEmptyTransaction((aFlags & PAINT_COMPOSITE) ?
             LayerManager::END_DEFAULT : LayerManager::END_NO_COMPOSITE)) {
@@ -6452,7 +6444,7 @@ PresShell::Paint(nsView*         aViewToPaint,
     root->SetVisibleRegion(LayerIntRegion::FromUnknownRegion(bounds));
     layerManager->SetRoot(root);
   }
-  MaybeSetupTransactionIdAllocator(layerManager, aViewToPaint);
+  MaybeSetupTransactionIdAllocator(layerManager, presContext);
   layerManager->EndTransaction(nullptr, nullptr, (aFlags & PAINT_COMPOSITE) ?
     LayerManager::END_DEFAULT : LayerManager::END_NO_COMPOSITE);
 }

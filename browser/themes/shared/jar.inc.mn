@@ -170,7 +170,6 @@
   skin/classic/browser/badge-add-engine@2x.png                 (../shared/search/badge-add-engine@2x.png)
   skin/classic/browser/search-indicator-badge-add.png          (../shared/search/search-indicator-badge-add.png)
   skin/classic/browser/search-indicator-badge-add@2x.png       (../shared/search/search-indicator-badge-add@2x.png)
-  skin/classic/browser/search-history-icon.svg                 (../shared/search/history-icon.svg)
   skin/classic/browser/search-indicator-magnifying-glass.svg   (../shared/search/search-indicator-magnifying-glass.svg)
   skin/classic/browser/search-arrow-go.svg                     (../shared/search/search-arrow-go.svg)
   skin/classic/browser/gear.svg                                (../shared/search/gear.svg)
@@ -218,5 +217,4 @@
   skin/classic/browser/compacttheme/loading-inverted.png (../shared/compacttheme/loading-inverted.png)
   skin/classic/browser/compacttheme/loading-inverted@2x.png (../shared/compacttheme/loading-inverted@2x.png)
   skin/classic/browser/compacttheme/urlbar-history-dropmarker.svg (../shared/compacttheme/urlbar-history-dropmarker.svg)
-  skin/classic/browser/urlbar-star.svg                         (../shared/urlbar-star.svg)
   skin/classic/browser/urlbar-tab.svg                          (../shared/urlbar-tab.svg)

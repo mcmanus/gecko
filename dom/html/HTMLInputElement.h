@@ -838,6 +838,12 @@ public:
    */
   void SetFocusState(bool aIsFocused);
 
+  /*
+   * Called from datetime input box binding when the the user entered value
+   * becomes valid/invalid.
+   */
+  void UpdateValidityState();
+
   HTMLInputElement* GetOwnerNumberControl();
 
   void StartNumberControlSpinnerSpin();
@@ -942,9 +948,19 @@ protected:
    * Setting the value.
    *
    * @param aValue      String to set.
+   * @param aOldValue   Previous value before setting aValue.
+                        If previous value is unknown, aOldValue can be nullptr.
    * @param aFlags      See nsTextEditorState::SetValueFlags.
    */
-  nsresult SetValueInternal(const nsAString& aValue, uint32_t aFlags);
+  nsresult SetValueInternal(const nsAString& aValue,
+                            const nsAString* aOldValue,
+                            uint32_t aFlags);
+
+  nsresult SetValueInternal(const nsAString& aValue,
+                            uint32_t aFlags)
+  {
+    return SetValueInternal(aValue, nullptr, aFlags);
+  }
 
   // Generic getter for the value that doesn't do experimental control type
   // sanitization.
@@ -1129,7 +1145,7 @@ protected:
    */
   nsresult SetDefaultValueAsValue();
 
-  virtual void SetDirectionIfAuto(bool aAuto, bool aNotify);
+  void SetDirectionFromValue(bool aNotify);
 
   /**
    * Return if an element should have a specific validity UI

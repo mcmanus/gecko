@@ -31,8 +31,9 @@ NS_IMPL_ISUPPORTS(HSTSPrimingListener, nsIStreamListener,
                   nsIRequestObserver, nsIInterfaceRequestor,
                   nsITimerCallback)
 
-// default to 3000ms, same as the preference
-uint32_t HSTSPrimingListener::sHSTSPrimingTimeout = 3000;
+// default to 2000ms, same as the preference
+// security.mixed_content.hsts_priming_request_timeout
+uint32_t HSTSPrimingListener::sHSTSPrimingTimeout = 2000;
 
 
 HSTSPrimingListener::HSTSPrimingListener(nsIHstsPrimingCallback* aCallback)
@@ -158,7 +159,7 @@ HSTSPrimingListener::CheckHSTSPrimingRequestStatus(nsIRequest* aRequest)
 
   bool hsts;
   rv = sss->IsSecureURI(nsISiteSecurityService::HEADER_HSTS, uri, 0,
-                        originAttributes, nullptr, &hsts);
+                        originAttributes, nullptr, nullptr, &hsts);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (hsts) {
@@ -227,7 +228,7 @@ HSTSPrimingListener::StartHSTSPriming(nsIChannel* aRequestChannel,
 
   // check the HSTS cache
   bool hsts;
-  bool cached;
+  bool hstsCached;
   nsCOMPtr<nsISiteSecurityService> sss = do_GetService(NS_SSSERVICE_CONTRACTID, &rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -235,7 +236,7 @@ HSTSPrimingListener::StartHSTSPriming(nsIChannel* aRequestChannel,
   NS_GetOriginAttributes(aRequestChannel, originAttributes);
 
   rv = sss->IsSecureURI(nsISiteSecurityService::HEADER_HSTS, uri, 0,
-                        originAttributes, &cached, &hsts);
+                        originAttributes, &hstsCached, nullptr, &hsts);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (hsts) {
@@ -245,7 +246,7 @@ HSTSPrimingListener::StartHSTSPriming(nsIChannel* aRequestChannel,
     return aCallback->OnHSTSPrimingSucceeded(true);
   }
 
-  if (cached) {
+  if (hstsCached) {
     // there is a non-expired entry in the cache that doesn't allow us to
     // upgrade, so go ahead and fail early.
     Telemetry::Accumulate(Telemetry::MIXED_CONTENT_HSTS_PRIMING_REQUESTS,

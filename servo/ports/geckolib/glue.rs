@@ -300,7 +300,19 @@ pub extern "C" fn Servo_TraverseSubtree(root: RawGeckoElementBorrowed,
         return false;
     }
 
-    element.has_dirty_descendants() || element.borrow_data().unwrap().restyle.contains_restyle_data()
+    element.has_dirty_descendants() ||
+    element.has_animation_only_dirty_descendants() ||
+    element.borrow_data().unwrap().restyle.contains_restyle_data()
+}
+
+/// Checks whether the rule tree has crossed its threshold for unused nodes, and
+/// if so, frees them.
+#[no_mangle]
+pub extern "C" fn Servo_MaybeGCRuleTree(raw_data: RawServoStyleSetBorrowed) {
+    let per_doc_data = PerDocumentStyleData::from_ffi(raw_data).borrow_mut();
+    unsafe {
+        per_doc_data.stylist.rule_tree().maybe_gc();
+    }
 }
 
 #[no_mangle]
@@ -895,6 +907,17 @@ pub extern "C" fn Servo_StyleSet_InsertStyleSheetBefore(raw_data: RawServoStyleS
         before_unique_id,
         &guard);
     data.clear_stylist();
+}
+
+#[no_mangle]
+pub extern "C" fn Servo_StyleSet_UpdateStyleSheet(raw_data: RawServoStyleSetBorrowed,
+                                                  raw_sheet: RawServoStyleSheetBorrowed,
+                                                  unique_id: u64) {
+    let mut data = PerDocumentStyleData::from_ffi(raw_data).borrow_mut();
+    let sheet = HasArcFFI::as_arc(&raw_sheet);
+    data.stylesheets.update_stylesheet(
+        sheet,
+        unique_id);
 }
 
 #[no_mangle]
@@ -2480,7 +2503,7 @@ pub extern "C" fn Servo_Element_GetStyleRuleList(element: RawGeckoElementBorrowe
     };
     let mut result = vec![];
     for rule_node in computed.rules.self_and_ancestors() {
-        if let Some(&StyleSource::Style(ref rule)) = rule_node.style_source() {
+        if let &StyleSource::Style(ref rule) = rule_node.style_source() {
             result.push(Locked::<StyleRule>::arc_as_borrowed(&rule));
         }
     }
@@ -2791,7 +2814,9 @@ pub extern "C" fn Servo_AssertTreeIsClean(root: RawGeckoElementBorrowed) {
 
     let root = GeckoElement(root);
     fn assert_subtree_is_clean<'le>(el: GeckoElement<'le>) {
-        debug_assert!(!el.has_dirty_descendants() && !el.has_animation_only_dirty_descendants());
+        debug_assert!(!el.has_dirty_descendants() && !el.has_animation_only_dirty_descendants(),
+                      "{:?} has still dirty bit {:?} or animation-only dirty bit {:?}",
+                      el, el.has_dirty_descendants(), el.has_animation_only_dirty_descendants());
         for child in el.as_node().traversal_children() {
             if let Some(child) = child.as_element() {
                 assert_subtree_is_clean(child);
@@ -3056,5 +3081,5 @@ pub extern "C" fn Servo_StyleSet_MightHaveAttributeDependency(raw_data: RawServo
 pub extern "C" fn Servo_StyleSet_HasStateDependency(raw_data: RawServoStyleSetBorrowed,
                                                     state: u64) -> bool {
     let data = PerDocumentStyleData::from_ffi(raw_data).borrow();
-    data.stylist.has_state_dependency(ElementState::from_bits_truncate(state))
+    data.stylist.might_have_state_dependency(ElementState::from_bits_truncate(state))
 }

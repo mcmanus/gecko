@@ -129,6 +129,24 @@
     "bug_numbers": [1172689],
     "description": "Recorded when application reputation remote lookup is performed, `true` is recorded if the lookup times out."
   },
+  "APPLICATION_REPUTATION_BLOCKLIST_MATCH": {
+    "record_in_processes": ["main", "content"],
+    "alert_emails": ["safebrowsing-telemetry@mozilla.org"],
+    "expires_in_version": "60",
+    "kind": "enumerated",
+    "n_values": 4,
+    "bug_numbers": [1331139],
+    "description": "For each Application Reputation lookup against both the V2 and V4 Google lists, note which version of block list returned a match (0 = no match, 1 = match only V2, 2 = match only V4, 3 = match both V2 and V4)"
+  },
+  "APPLICATION_REPUTATION_ALLOWLIST_MATCH": {
+    "record_in_processes": ["main", "content"],
+    "alert_emails": ["safebrowsing-telemetry@mozilla.org"],
+    "expires_in_version": "60",
+    "kind": "enumerated",
+    "n_values": 4,
+    "bug_numbers": [1331139],
+    "description": "For each Application Reputation lookup against both the V2 and V4 Google lists, note which version of the allow list returned a match (0 = no match, 1 = match only V2, 2 = match only V4, 3 = match both V2 and V4)"
+  },
   "ASYNC_ANIMATION_CONTENT_TOO_LARGE_FRAME_SIZE": {
     "record_in_processes": ["main", "content"],
     "alert_emails": ["bbirtles@mozilla.com"],
@@ -5983,7 +6001,7 @@
   },
   "FX_TAB_SWITCH_SPINNER_VISIBLE_MS": {
     "record_in_processes": ["main", "content"],
-    "expires_in_version": "56",
+    "expires_in_version": "63",
     "kind": "exponential",
     "high": 1000,
     "n_buckets": 20,
@@ -5992,7 +6010,7 @@
   },
   "FX_TAB_SWITCH_SPINNER_VISIBLE_LONG_MS": {
     "record_in_processes": ["main", "content"],
-    "expires_in_version": "56",
+    "expires_in_version": "63",
     "kind": "exponential",
     "low": 1000,
     "high": 64000,
@@ -6433,7 +6451,7 @@
     "alert_emails": ["jaws@mozilla.com"],
     "expires_in_version": "59",
     "kind": "categorical",
-    "labels": ["aboutHome", "aboutTelemetry", "browserMedia", "commandLine", "commandLineLegacy", "ContainersCommand", "contentSearch", "dataReporting", "doorhanger", "devDisconnectedAlert", "experimentsOpenPref", "fxa", "fxaSignedin", "fxaError", "offlineApps", "prefserviceDefaults", "preferencesButton", "paneSync", "storagePressure", "translationInfobar", "UITour", "menubar", "notifOpenSettings", "other"],
+    "labels": ["aboutHome", "aboutTelemetry", "browserMedia", "commandLine", "commandLineLegacy", "ContainersCommand", "contentSearch", "dataReporting", "doorhanger", "devDisconnectedAlert", "experimentsOpenPref", "fxa", "fxaSignedin", "fxaError", "offlineApps", "prefserviceDefaults", "preferencesButton", "paneSync", "storagePressure", "translationInfobar", "UITour", "menubar", "notifOpenSettings", "other", "autofillFooter"],
     "releaseChannelCollection": "opt-out",
     "description":"Count how the Preferences are opened."
   },
@@ -10079,6 +10097,17 @@
     "kind": "count",
     "description": "Reports the command name used in GCLI e.g. 'screenshot'"
   },
+  "DEVTOOLS_NUMBER_OF_CSS_GRIDS_IN_A_PAGE": {
+    "record_in_processes": ["main", "content"],
+    "alert_emails": ["dev-developer-tools@lists.mozilla.org"],
+    "expires_in_version": "never",
+    "kind": "linear",
+    "high": 30,
+    "n_buckets": 29,
+    "bug_numbers": [1373483],
+    "description": "On page load, record the number of CSS Grid elements present on a page when the DevTools is open",
+    "releaseChannelCollection": "opt-out"
+  },
   "VIEW_SOURCE_IN_BROWSER_OPENED_BOOLEAN": {
     "record_in_processes": ["main", "content"],
     "alert_emails": ["mozilla-dev-developer-tools@lists.mozilla.org", "jryans@mozilla.com"],
@@ -10211,6 +10240,15 @@
     "n_buckets": 100,
     "keyed": true,
     "description": "The amount of time required for HSTS priming requests (ms), keyed by success or failure of the priming request. (success, failure)"
+  },
+  "HSTS_UPGRADE_SOURCE": {
+    "record_in_processes": [ "main" ],
+    "alert_emails": ["seceng-telemetry@mozilla.com"],
+    "bug_numbers": [1363546],
+    "expires_in_version": "62",
+    "kind": "enumerated",
+    "n_values": 8,
+    "description": "When we record an upgrade due to HSTS, record the source of that HSTS entry. (0: HSTS preload list, 1: HSTS Header seen naturally, 2: HSTS priming)"
   },
   "MIXED_CONTENT_OBJECT_SUBREQUEST": {
     "record_in_processes": ["main", "content"],
@@ -12398,6 +12436,149 @@
     "bug_numbers": [1344152],
     "description": "Note the encoding (e.g. 'UTF-8', 'windows-1252', 'ASCII') of each external <script> element that is successfully loaded and decoded."
   },
+  "DOM_SCRIPT_LOADING_SOURCE": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "categorical",
+    "bug_numbers": [1362114],
+    "labels": ["Inline", "SourceFallback", "Source", "AltData"],
+    "description": "Record the input from which the bytes are coming from, for each script in a document."
+  },
+  "DOM_SCRIPT_INLINE_SIZE": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "exponential",
+    "low": 64,
+    "high": 16000000,
+    "n_buckets": 50,
+    "bug_numbers": [1362114],
+    "description": "Size (in number of characters) of each script which is inlined in a document."
+  },
+  "DOM_SCRIPT_SOURCE_SIZE": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "exponential",
+    "low": 64,
+    "high": 16000000,
+    "n_buckets": 50,
+    "bug_numbers": [1362114],
+    "description": "Size (in number of characters) of each script which is streamed in plain-text in a document."
+  },
+  "DOM_SCRIPT_BYTECODE_SIZE": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "exponential",
+    "low": 64,
+    "high": 16000000,
+    "n_buckets": 50,
+    "bug_numbers": [1362114],
+    "description": "Size (in number of bytes) of each script which is streamed in encoded-format in a document."
+  },
+  "DOM_SCRIPT_FETCH_COUNT": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "linear",
+    "low": 1,
+    "high": 100,
+    "n_buckets": 99,
+    "bug_numbers": [1362114],
+    "description": "For each script in a document, record the number of times it was requested since it got saved in the cache."
+  },
+  "DOM_SCRIPT_MAIN_THREAD_PARSE_EXEC_MS": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "exponential",
+    "high": 50000,
+    "n_buckets": 100,
+    "bug_numbers": [1362114],
+    "description": "Time, in milliseconds, needed to parse and execute a script (which might be encoded later) on the main thread."
+  },
+  "DOM_SCRIPT_MAIN_THREAD_PARSE_ENCODE_EXEC_MS": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "exponential",
+    "high": 50000,
+    "n_buckets": 100,
+    "bug_numbers": [1362114],
+    "description": "Time, in milliseconds, needed to parse, encode and execute a script on the main thread."
+  },
+  "DOM_SCRIPT_MAIN_THREAD_DECODE_EXEC_MS": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "exponential",
+    "high": 50000,
+    "n_buckets": 100,
+    "bug_numbers": [1362114],
+    "description": "Time, in milliseconds, needed to decode and execute a script on the main thread."
+  },
+  "DOM_SCRIPT_OFF_THREAD_PARSE_EXEC_MS": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "exponential",
+    "high": 50000,
+    "n_buckets": 100,
+    "bug_numbers": [1362114],
+    "description": "Time, in milliseconds, needed to parse off-main-thread and execute a script (which might be encoded later) on the main thread."
+  },
+  "DOM_SCRIPT_OFF_THREAD_PARSE_ENCODE_EXEC_MS": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "exponential",
+    "high": 50000,
+    "n_buckets": 100,
+    "bug_numbers": [1362114],
+    "description": "Time, in milliseconds, needed to parse off-main-thread, encode and execute a script on the main thread."
+  },
+  "DOM_SCRIPT_OFF_THREAD_DECODE_EXEC_MS": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "exponential",
+    "high": 50000,
+    "n_buckets": 100,
+    "bug_numbers": [1362114],
+    "description": "Time, in milliseconds, needed to decode off-main-thread and execute a script on the main thread."
+  },
+  "DOM_SCRIPT_ENCODING_MS_PER_DOCUMENT": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "linear",
+    "high": 64,
+    "n_buckets": 32,
+    "bug_numbers": [1362114],
+    "description": "Time, in milliseconds, needed to encode all scripts in a document."
+  },
+  "DOM_SCRIPT_ENCODING_STATUS": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "categorical",
+    "bug_numbers": [1362114],
+    "labels": ["EncodingFailure", "BufferTooLarge", "OpenFailure", "WriteFailure", "CloseFailure", "EncodingSuccess"],
+    "description": "Record the failure reasons of the JavaScript Start-up Bytecode Cache encoder."
+  },
+  "DOM_SCRIPT_EVAL_PER_DOCUMENT": {
+    "record_in_processes": ["content"],
+    "alert_emails": ["nicolas.b.pierron@mozilla.com"],
+    "expires_in_version": "58",
+    "kind": "linear",
+    "low": 1,
+    "high": 200,
+    "n_buckets": 50,
+    "bug_numbers": [1362114],
+    "description": "Number of script tags evaluated per document."
+  },
   "VIDEO_FASTSEEK_USED": {
     "record_in_processes": ["main", "content"],
     "alert_emails": ["cpearce@mozilla.com", "tkuo@mozilla.com"],
@@ -13385,6 +13566,38 @@
     "n_buckets": 100,
     "description": "The amount of time it takes to load a WebExtensions background page, from when the build function is called to when the page has finished processing the onload event."
   },
+  "WEBEXT_BROWSERACTION_POPUP_OPEN_MS": {
+    "record_in_processes": ["main"],
+    "alert_emails": ["addons-dev-internal@mozilla.com"],
+    "bug_numbers": [1297167],
+    "expires_in_version": "60",
+    "kind": "exponential",
+    "releaseChannelCollection": "opt-out",
+    "high": 50000,
+    "n_buckets": 100,
+    "description": "The amount of time it takes for a BrowserAction popup to open."
+  },
+  "WEBEXT_BROWSERACTION_POPUP_PRELOAD_RESULT_COUNT": {
+    "record_in_processes": ["main"],
+    "alert_emails": ["addons-dev-internal@mozilla.com"],
+    "bug_numbers": [1297167],
+    "expires_in_version": "60",
+    "kind": "categorical",
+    "labels": ["popupShown", "clearAfterHover", "clearAfterMousedown"],
+    "releaseChannelCollection": "opt-out",
+    "description": "The number of times a browserAction popup is preloaded and results in one of the categories."
+  },
+  "WEBEXT_CONTENT_SCRIPT_INJECTION_MS": {
+    "record_in_processes": ["main", "content"],
+    "alert_emails": ["addons-dev-internal@mozilla.com"],
+    "bug_numbers": [1356323],
+    "expires_in_version": "60",
+    "kind": "exponential",
+    "releaseChannelCollection": "opt-out",
+    "high": 50000,
+    "n_buckets": 100,
+    "description": "The amount of time it takes for content scripts from a WebExtension to be injected into a window."
+  },
   "WEBEXT_EXTENSION_STARTUP_MS": {
     "record_in_processes": ["main"],
     "alert_emails": ["addons-dev-internal@mozilla.com"],
@@ -13395,6 +13608,17 @@
     "high": 50000,
     "n_buckets": 100,
     "description": "The amount of time it takes for a WebExtension to start up, from when the startup function is called to when the startup promise resolves."
+  },
+  "WEBEXT_PAGEACTION_POPUP_OPEN_MS": {
+    "record_in_processes": ["main"],
+    "alert_emails": ["addons-dev-internal@mozilla.com"],
+    "bug_numbers": [1297167],
+    "expires_in_version": "60",
+    "kind": "exponential",
+    "releaseChannelCollection": "opt-out",
+    "high": 50000,
+    "n_buckets": 100,
+    "description": "The amount of time it takes for a PageAction popup to open."
   },
   "NOTIFY_OBSERVERS_LATENCY_MS": {
     "record_in_processes": ["main", "content", "gpu"],

@@ -282,6 +282,12 @@ var UninstallObserver = {
       if (storage) {
         storage.clear();
       }
+
+      // Remove any permissions related to the unlimitedStorage permission
+      // if we are also removing all the data stored by the extension.
+      Services.perms.removeFromPrincipal(principal, "WebExtensions-unlimitedStorage");
+      Services.perms.removeFromPrincipal(principal, "indexedDB");
+      Services.perms.removeFromPrincipal(principal, "persistent-storage");
     }
 
     if (!this.leaveUuid) {
@@ -748,6 +754,7 @@ this.Extension = class extends ExtensionData {
     this.parentMessageManager = null;
 
     this.id = addonData.id;
+    this.version = addonData.version;
     this.baseURI = NetUtil.newURI(this.getURL("")).QueryInterface(Ci.nsIURL);
     this.principal = this.createPrincipal();
 
@@ -855,7 +862,7 @@ this.Extension = class extends ExtensionData {
   }
 
   readLocaleFile(locale) {
-    return StartupCache.locales.get([this.id, locale],
+    return StartupCache.locales.get([this.id, this.version, locale],
                                     () => super.readLocaleFile(locale))
       .then(result => {
         this.localeData.messages.set(locale, result);
@@ -863,7 +870,7 @@ this.Extension = class extends ExtensionData {
   }
 
   parseManifest() {
-    return StartupCache.manifests.get([this.id, Locale.getLocale()],
+    return StartupCache.manifests.get([this.id, this.version, Locale.getLocale()],
                                       () => super.parseManifest());
   }
 
@@ -995,6 +1002,31 @@ this.Extension = class extends ExtensionData {
     return super.initLocale(locale);
   }
 
+  initUnlimitedStoragePermission() {
+    const principal = this.principal;
+
+    // Check if the site permission has already been set for the extension by the WebExtensions
+    // internals (instead of being manually allowed by the user).
+    const hasSitePermission = Services.perms.testPermissionFromPrincipal(
+      principal, "WebExtensions-unlimitedStorage"
+    );
+
+    if (this.hasPermission("unlimitedStorage")) {
+      // Set the indexedDB permission and a custom "WebExtensions-unlimitedStorage" to remember
+      // that the permission hasn't been selected manually by the user.
+      Services.perms.addFromPrincipal(principal, "WebExtensions-unlimitedStorage",
+                                      Services.perms.ALLOW_ACTION);
+      Services.perms.addFromPrincipal(principal, "indexedDB", Services.perms.ALLOW_ACTION);
+      Services.perms.addFromPrincipal(principal, "persistent-storage", Services.perms.ALLOW_ACTION);
+    } else if (hasSitePermission) {
+      // Remove the indexedDB permission if it has been enabled using the
+      // unlimitedStorage WebExtensions permissions.
+      Services.perms.removeFromPrincipal(principal, "WebExtensions-unlimitedStorage");
+      Services.perms.removeFromPrincipal(principal, "indexedDB");
+      Services.perms.removeFromPrincipal(principal, "persistent-storage");
+    }
+  }
+
   startup() {
     this.startupPromise = this._startup();
     return this.startupPromise;
@@ -1056,6 +1088,8 @@ this.Extension = class extends ExtensionData {
 
       this.policy.active = false;
       this.policy = processScript.initExtension(this.serialize(), this);
+
+      this.initUnlimitedStoragePermission();
 
       // The "startup" Management event sent on the extension instance itself
       // is emitted just before the Management "startup" event,

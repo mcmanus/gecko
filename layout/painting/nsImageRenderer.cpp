@@ -19,6 +19,7 @@
 #include "nsCSSRenderingGradients.h"
 #include "nsIFrame.h"
 #include "nsStyleStructInlines.h"
+#include "nsSVGDisplayableFrame.h"
 #include "nsSVGEffects.h"
 #include "nsSVGIntegrationUtils.h"
 
@@ -192,11 +193,17 @@ nsImageRenderer::PrepareImage()
       mImageElementSurface =
         nsLayoutUtils::SurfaceFromElement(property->GetReferencedElement());
       if (!mImageElementSurface.GetSourceSurface()) {
-        mPaintServerFrame = property->GetReferencedFrame();
-        if (!mPaintServerFrame) {
+        nsIFrame* paintServerFrame = property->GetReferencedFrame();
+        // If there's no referenced frame, or the referenced frame is
+        // non-displayable SVG, then we have nothing valid to paint.
+        if (!paintServerFrame ||
+            (paintServerFrame->IsFrameOfType(nsIFrame::eSVG) &&
+             !paintServerFrame->IsFrameOfType(nsIFrame::eSVGPaintServer) &&
+             !static_cast<nsSVGDisplayableFrame*>(do_QueryFrame(paintServerFrame)))) {
           mPrepareResult = DrawResult::BAD_IMAGE;
           return false;
         }
+        mPaintServerFrame = paintServerFrame;
       }
 
       mPrepareResult = DrawResult::SUCCESS;
@@ -541,7 +548,7 @@ nsImageRenderer::Draw(nsPresContext*       aPresContext,
 
       nsCOMPtr<imgIContainer> image(ImageOps::CreateFromDrawable(drawable));
       result =
-        nsLayoutUtils::DrawImage(*ctx,
+        nsLayoutUtils::DrawImage(*ctx, mForFrame->StyleContext(),
                                  aPresContext, image,
                                  samplingFilter, aDest, aFill, aAnchor, aDirtyRect,
                                  ConvertImageRendererToDrawFlags(mFlags),

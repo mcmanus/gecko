@@ -76,7 +76,7 @@ DevToolsStartup.prototype = {
       let { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
       let hudservice = require("devtools/client/webconsole/hudservice");
       let { console } = Cu.import("resource://gre/modules/Console.jsm", {});
-      hudservice.toggleBrowserConsole().then(null, console.error);
+      hudservice.toggleBrowserConsole().catch(console.error);
     } else {
       // the Browser Console was already open
       window.focus();
@@ -139,10 +139,10 @@ DevToolsStartup.prototype = {
 
     if (pauseOnStartup) {
       // Spin the event loop until the debugger connects.
-      let thread = Cc["@mozilla.org/thread-manager;1"].getService().currentThread;
-      while (!devtoolsThreadResumed) {
-        thread.processNextEvent(true);
-      }
+      let tm = Cc["@mozilla.org/thread-manager;1"].getService();
+      tm.spinEventLoopUntil(() => {
+        return devtoolsThreadResumed;
+      });
     }
 
     if (cmdLine.state == Ci.nsICommandLine.STATE_REMOTE_AUTO) {

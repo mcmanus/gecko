@@ -1561,7 +1561,7 @@ pref("extensions.allow-non-mpc-extensions", false);
 #endif
 
 // Enable blocking of e10s and e10s-multi for add-on users on beta/release.
-#ifdef RELEASE_OR_BETA
+#if defined(RELEASE_OR_BETA) && !defined(MOZ_DEV_EDITION)
 pref("extensions.e10sBlocksEnabling", true);
 pref("extensions.e10sMultiBlocksEnabling", true);
 #endif
@@ -1690,10 +1690,8 @@ pref("extensions.formautofill.loglevel", "Warn");
 pref("browser.sessionstore.restore_tabs_lazily", true);
 
 // Enable safebrowsing v4 tables (suffixed by "-proto") update.
-#ifdef NIGHTLY_BUILD
-pref("urlclassifier.malwareTable", "goog-malware-shavar,goog-unwanted-shavar,goog-malware-proto,goog-unwanted-proto,test-malware-simple,test-unwanted-simple");
-pref("urlclassifier.phishTable", "goog-phish-shavar,goog-phish-proto,test-phish-simple");
-#endif
+pref("urlclassifier.malwareTable", "goog-malware-proto,goog-unwanted-proto,test-malware-simple,test-unwanted-simple");
+pref("urlclassifier.phishTable", "goog-phish-proto,test-phish-simple");
 
 pref("browser.suppress_first_window_animation", true);
 

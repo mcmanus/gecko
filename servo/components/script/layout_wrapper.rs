@@ -52,6 +52,7 @@ use script_layout_interface::wrapper_traits::{PseudoElementType, ThreadSafeLayou
 use selectors::attr::{AttrSelectorOperation, NamespaceConstraint, CaseSensitivity};
 use selectors::matching::{ElementSelectorFlags, LocalMatchingContext, MatchingContext, RelevantLinkStatus};
 use selectors::matching::VisitedHandlingMode;
+use selectors::sink::Push;
 use servo_atoms::Atom;
 use servo_url::ServoUrl;
 use std::fmt;
@@ -75,7 +76,6 @@ use style::properties::{ComputedValues, PropertyDeclarationBlock};
 use style::selector_parser::{AttrValue as SelectorAttrValue, NonTSPseudoClass, PseudoClassStringArg};
 use style::selector_parser::{PseudoElement, SelectorImpl, extended_filtering};
 use style::shared_lock::{SharedRwLock as StyleSharedRwLock, Locked as StyleLocked};
-use style::sink::Push;
 use style::str::is_whitespace;
 use style::stylearc::Arc;
 
@@ -371,9 +371,9 @@ pub struct ServoLayoutElement<'le> {
 
 impl<'le> fmt::Debug for ServoLayoutElement<'le> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(f, "<{}", self.element.local_name()));
+        write!(f, "<{}", self.element.local_name())?;
         if let &Some(ref id) = unsafe { &*self.element.id_attribute() } {
-            try!(write!(f, " id={}", id));
+            write!(f, " id={}", id)?;
         }
         write!(f, "> ({:#x})", self.as_node().opaque().0)
     }
