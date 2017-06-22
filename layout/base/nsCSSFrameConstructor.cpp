@@ -157,6 +157,8 @@ NS_NewSVGAFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 nsIFrame*
 NS_NewSVGSwitchFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 nsIFrame*
+NS_NewSVGSymbolFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+nsIFrame*
 NS_NewSVGTextFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 nsIFrame*
 NS_NewSVGContainerFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
@@ -2759,6 +2761,8 @@ nsCSSFrameConstructor::ConstructRootFrame()
   // What would that break?
   viewportFrame->Init(nullptr, nullptr, nullptr);
 
+  viewportFrame->AddStateBits(NS_FRAME_OWNS_ANON_BOXES);
+
   // Bind the viewport frame to the root view
   nsView* rootView = mPresShell->GetViewManager()->GetRootView();
   viewportFrame->SetView(rootView);
@@ -2874,6 +2878,7 @@ nsCSSFrameConstructor::SetUpDocElementContainingBlock(nsIContent* aDocElement)
     rootFrame = NS_NewSimplePageSequenceFrame(mPresShell, viewportPseudoStyle);
     mPageSequenceFrame = rootFrame;
     rootPseudo = nsCSSAnonBoxes::pageSequence;
+    rootFrame->AddStateBits(NS_FRAME_OWNS_ANON_BOXES);
   }
 
 
@@ -2967,6 +2972,7 @@ nsCSSFrameConstructor::SetUpDocElementContainingBlock(nsIContent* aDocElement)
     nsContainerFrame* canvasFrame;
     nsContainerFrame* pageFrame =
       ConstructPageFrame(mPresShell, rootFrame, nullptr, canvasFrame);
+    pageFrame->AddStateBits(NS_FRAME_OWNS_ANON_BOXES);
     SetInitialSingleChild(rootFrame, pageFrame);
 
     // The eventual parent of the document element frame.
@@ -3041,6 +3047,9 @@ nsCSSFrameConstructor::ConstructPageFrame(nsIPresShell*  aPresShell,
     NS_ASSERTION(prevPageContentFrame, "missing page content frame");
   }
   pageContentFrame->Init(nullptr, pageFrame, prevPageContentFrame);
+  if (!prevPageContentFrame) {
+    pageContentFrame->AddStateBits(NS_FRAME_OWNS_ANON_BOXES);
+  }
   SetInitialSingleChild(pageFrame, pageContentFrame);
   // Make it an absolute container for fixed-pos elements
   pageContentFrame->AddStateBits(NS_FRAME_CAN_HAVE_ABSPOS_CHILDREN);
@@ -5578,6 +5587,7 @@ nsCSSFrameConstructor::FindSVGData(Element* aElement,
     SIMPLE_SVG_CREATE(svg, NS_NewSVGInnerSVGFrame),
     SIMPLE_SVG_CREATE(g, NS_NewSVGGFrame),
     SIMPLE_SVG_CREATE(svgSwitch, NS_NewSVGSwitchFrame),
+    SIMPLE_SVG_CREATE(symbol, NS_NewSVGSymbolFrame),
     SIMPLE_SVG_CREATE(polygon, NS_NewSVGGeometryFrame),
     SIMPLE_SVG_CREATE(polyline, NS_NewSVGGeometryFrame),
     SIMPLE_SVG_CREATE(circle, NS_NewSVGGeometryFrame),

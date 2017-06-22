@@ -837,6 +837,11 @@ class nsIWidget : public nsISupports
     virtual nsSizeMode SizeMode() = 0;
 
     /**
+     * Ask wether the widget is fully occluded
+     */
+    virtual bool IsFullyOccluded() const = 0;
+
+    /**
      * Enable or disable this Widget
      *
      * @param aState true to enable the Widget, false to disable it.
@@ -1104,6 +1109,22 @@ class nsIWidget : public nsISupports
      * Ignored on child widgets and on non-Mac platforms.
      */
     virtual void SetWindowShadowStyle(int32_t aStyle) = 0;
+
+    /**
+     * Set the opacity of the window.
+     * Values need to be between 0.0f (invisible) and 1.0f (fully opaque).
+     *
+     * Ignored on child widgets and on non-Mac platforms.
+     */
+    virtual void SetWindowOpacity(float aOpacity) {}
+
+    /**
+     * Set the transform of the window. Values are in device pixels,
+     * the origin is the top left corner of the window.
+     *
+     * Ignored on child widgets and on non-Mac platforms.
+     */
+    virtual void SetWindowTransform(const mozilla::gfx::Matrix& aTransform) {}
 
     /*
      * On Mac OS X, this method shows or hides the pill button in the titlebar

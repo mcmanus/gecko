@@ -3560,7 +3560,7 @@ ContentParent::RecvIsSecureURI(const uint32_t& aType,
     return IPC_FAIL_NO_REASON(this);
   }
   nsresult rv = sss->IsSecureURI(aType, ourURI, aFlags, aOriginAttributes, nullptr,
-                                 aIsSecureURI);
+                                 nullptr, aIsSecureURI);
   if (NS_FAILED(rv)) {
     return IPC_FAIL_NO_REASON(this);
   }
@@ -5195,6 +5195,15 @@ mozilla::ipc::IPCResult
 ContentParent::RecvRecordChildEvents(nsTArray<mozilla::Telemetry::ChildEventData>&& aEvents)
 {
   TelemetryIPC::RecordChildEvents(GetTelemetryProcessID(mRemoteType), aEvents);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+ContentParent::RecvRecordDiscardedData(
+                const mozilla::Telemetry::DiscardedData& aDiscardedData)
+{
+  TelemetryIPC::RecordDiscardedData(GetTelemetryProcessID(mRemoteType),
+                                    aDiscardedData);
   return IPC_OK();
 }
 

@@ -33,6 +33,7 @@ class ServoRestyleManager;
 class ServoStyleSheet;
 struct Keyframe;
 class ServoElementSnapshotTable;
+class ServoStyleRuleMap;
 } // namespace mozilla
 class nsCSSCounterStyleRule;
 class nsIContent;
@@ -245,8 +246,20 @@ public:
                                   ServoStyleSheet* aNewSheet,
                                   ServoStyleSheet* aReferenceSheet);
 
+  // Notify servo that the underlying raw sheet has changed, through cloning.
+  // This should only be called on a just-cloned sheet, because it does not
+  // mark the stylesheets as dirty either here or in servo.
+  void UpdateStyleSheet(ServoStyleSheet* aSheet);
+
   int32_t SheetCount(SheetType aType) const;
   ServoStyleSheet* StyleSheetAt(SheetType aType, int32_t aIndex) const;
+
+  template<typename Func>
+  void EnumerateStyleSheetArrays(Func aCallback) const {
+    for (const auto& sheetArray : mSheets) {
+      aCallback(sheetArray);
+    }
+  }
 
   nsresult RemoveDocStyleSheet(ServoStyleSheet* aSheet);
   nsresult AddDocStyleSheet(ServoStyleSheet* aSheet, nsIDocument* aDocument);
@@ -341,6 +354,12 @@ public:
     }
   }
 
+  /**
+   * Checks whether the rule tree has crossed its threshold for unused nodes,
+   * and if so, frees them.
+   */
+  void MaybeGCRuleTree();
+
 #ifdef DEBUG
   void AssertTreeIsClean();
 #else
@@ -425,6 +444,29 @@ public:
   void SetNeedsRestyleAfterEnsureUniqueInner() {
     mNeedsRestyleAfterEnsureUniqueInner = true;
   }
+
+  // Returns the style rule map.
+  ServoStyleRuleMap* StyleRuleMap();
+
+  /**
+   * Returns true if a modification to an an attribute with the specified
+   * local name might require us to restyle the element.
+   *
+   * This function allows us to skip taking a an attribute snapshot when
+   * the modified attribute doesn't appear in an attribute selector in
+   * a style sheet.
+   */
+  bool MightHaveAttributeDependency(nsIAtom* aAttribute);
+
+  /**
+   * Returns true if a change in event state on an element might require
+   * us to restyle the element.
+   *
+   * This function allows us to skip taking a state snapshot when
+   * the changed state isn't depended upon by any pseudo-class selectors
+   * in a style sheet.
+   */
+  bool HasStateDependency(EventStates aState);
 
 private:
   // On construction, sets sInServoTraversal to the given ServoStyleSet.
@@ -576,6 +618,10 @@ private:
   // These are similar to Servo's SequentialTasks, except that they are
   // posted by C++ code running on style worker threads.
   nsTArray<PostTraversalTask> mPostTraversalTasks;
+
+  // Map from raw Servo style rule to Gecko's wrapper object.
+  // Constructed lazily when requested by devtools.
+  RefPtr<ServoStyleRuleMap> mStyleRuleMap;
 
   static ServoStyleSet* sInServoTraversal;
 };

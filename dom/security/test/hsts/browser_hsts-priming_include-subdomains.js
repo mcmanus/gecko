@@ -14,6 +14,7 @@ var expected_telemetry = {
   "histograms": {
     "MIXED_CONTENT_HSTS_PRIMING_RESULT": 2,
     "MIXED_CONTENT_HSTS_PRIMING_REQUESTS": 4,
+    "HSTS_UPGRADE_SOURCE": [ 0,0,2,0,0,0,0,0,0 ]
   },
   "keyed-histograms": {
     "HSTS_PRIMING_REQUEST_DURATION": {
@@ -23,7 +24,7 @@ var expected_telemetry = {
 };
 
 //jscs:disable
-add_task(function*() {
+add_task(async function() {
   //jscs:enable
   Observer.add_observers(Services);
   registerCleanupFunction(do_cleanup);
@@ -41,9 +42,9 @@ add_task(function*() {
   SetupPrefTestEnvironment(which);
   clear_hists(expected_telemetry);
 
-  yield execute_test("top-level", test_settings[which].mimetype);
+  await execute_test("top-level", test_settings[which].mimetype);
 
-  yield execute_test("prime-hsts", test_settings[which].mimetype);
+  await execute_test("prime-hsts", test_settings[which].mimetype);
 
   ok("prime-hsts" in test_settings[which].priming,
      "HSTS priming on a subdomain when top-level does not includeSubDomains");

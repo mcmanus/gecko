@@ -4,25 +4,26 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "MediaFormatReader.h"
+
 #include "AutoTaskQueue.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "Layers.h"
 #include "MediaData.h"
 #include "MediaInfo.h"
-#include "MediaFormatReader.h"
 #include "MediaResource.h"
-#include "VideoUtils.h"
 #include "VideoFrameContainer.h"
-#include "mozilla/dom/HTMLMediaElement.h"
-#include "mozilla/layers/ShadowLayers.h"
+#include "VideoUtils.h"
 #include "mozilla/AbstractThread.h"
 #include "mozilla/CDMProxy.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/Telemetry.h"
 #include "mozilla/SharedThreadPool.h"
+#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/SyncRunnable.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/Unused.h"
+#include "mozilla/dom/HTMLMediaElement.h"
+#include "mozilla/layers/ShadowLayers.h"
 #include "nsContentUtils.h"
 #include "nsPrintfCString.h"
 #include "nsSize.h"
@@ -1539,14 +1540,20 @@ MediaFormatReader::GetDecoderData(TrackType aTrack)
 }
 
 bool
-MediaFormatReader::ShouldSkip(bool aSkipToNextKeyframe,
-                              TimeUnit aTimeThreshold)
+MediaFormatReader::ShouldSkip(TimeUnit aTimeThreshold)
 {
   MOZ_ASSERT(HasVideo());
+
+  if (!MediaPrefs::MFRSkipToNextKeyFrameEnabled()) {
+    return false;
+  }
+
   TimeUnit nextKeyframe;
   nsresult rv = mVideo.mTrackDemuxer->GetNextRandomAccessPoint(&nextKeyframe);
   if (NS_FAILED(rv)) {
-    return aSkipToNextKeyframe;
+    // Only OggTrackDemuxer with video type gets into here.
+    // We don't support skip-to-next-frame for this case.
+    return false;
   }
   return (nextKeyframe < aTimeThreshold
           || (mVideo.mTimeThreshold
@@ -1556,8 +1563,7 @@ MediaFormatReader::ShouldSkip(bool aSkipToNextKeyframe,
 }
 
 RefPtr<MediaDecoderReader::VideoDataPromise>
-MediaFormatReader::RequestVideoData(bool aSkipToNextKeyframe,
-                                    const TimeUnit& aTimeThreshold)
+MediaFormatReader::RequestVideoData(const TimeUnit& aTimeThreshold)
 {
   MOZ_ASSERT(OnTaskQueue());
   MOZ_DIAGNOSTIC_ASSERT(mSeekPromise.IsEmpty(),
@@ -1566,8 +1572,7 @@ MediaFormatReader::RequestVideoData(bool aSkipToNextKeyframe,
   MOZ_DIAGNOSTIC_ASSERT(!mVideo.mSeekRequest.Exists()
                         || mVideo.mTimeThreshold.isSome());
   MOZ_DIAGNOSTIC_ASSERT(!IsSeeking(), "called mid-seek");
-  LOGV("RequestVideoData(%d, %" PRId64 ")",
-       aSkipToNextKeyframe, aTimeThreshold.ToMicroseconds());
+  LOGV("RequestVideoData(%" PRId64 ")", aTimeThreshold.ToMicroseconds());
 
   if (!HasVideo()) {
     LOG("called with no video track");
@@ -1589,8 +1594,7 @@ MediaFormatReader::RequestVideoData(bool aSkipToNextKeyframe,
 
   // Ensure we have no pending seek going as ShouldSkip could return out of date
   // information.
-  if (!mVideo.HasInternalSeekPending()
-      && ShouldSkip(aSkipToNextKeyframe, aTimeThreshold)) {
+  if (!mVideo.HasInternalSeekPending() && ShouldSkip(aTimeThreshold)) {
     RefPtr<VideoDataPromise> p = mVideo.EnsurePromise(__func__);
     SkipVideoDemuxToNextKeyFrame(aTimeThreshold);
     return p;
@@ -2278,6 +2282,15 @@ MediaFormatReader::Update(TrackType aTrack)
         nsCString error;
         mVideo.mIsHardwareAccelerated =
           mVideo.mDecoder && mVideo.mDecoder->IsHardwareAccelerated(error);
+#ifdef XP_WIN
+        // D3D11_YCBCR_IMAGE images are GPU based, we try to limit the amount
+        // of GPU RAM used.
+        VideoData* videoData = static_cast<VideoData*>(output.get());
+        mVideo.mIsHardwareAccelerated =
+          mVideo.mIsHardwareAccelerated ||
+          (videoData->mImage &&
+           videoData->mImage->GetFormat() == ImageFormat::D3D11_YCBCR_IMAGE);
+#endif
       }
     } else if (decoder.HasFatalError()) {
       LOG("Rejecting %s promise: DECODE_ERROR", TrackTypeToStr(aTrack));

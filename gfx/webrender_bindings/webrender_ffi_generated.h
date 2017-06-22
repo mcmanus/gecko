@@ -76,7 +76,7 @@ enum class WrImageFormat : uint32_t {
   Invalid = 0,
   A8 = 1,
   RGB8 = 2,
-  RGBA8 = 3,
+  BGRA8 = 3,
   RGBAF32 = 4,
   RG8 = 5,
 
@@ -227,13 +227,11 @@ struct WrSize {
 };
 
 struct WrBuiltDisplayListDescriptor {
-  size_t display_list_items_size;
   uint64_t builder_start_time;
   uint64_t builder_finish_time;
 
   bool operator==(const WrBuiltDisplayListDescriptor& aOther) const {
-    return display_list_items_size == aOther.display_list_items_size &&
-           builder_start_time == aOther.builder_start_time &&
+    return builder_start_time == aOther.builder_start_time &&
            builder_finish_time == aOther.builder_finish_time;
   }
 };
@@ -734,7 +732,7 @@ WR_FUNC;
 WR_INLINE
 void wr_dp_push_built_display_list(WrState *aState,
                                    WrBuiltDisplayListDescriptor aDlDescriptor,
-                                   WrVecU8 aDlData)
+                                   WrVecU8 *aDlData)
 WR_FUNC;
 
 WR_INLINE

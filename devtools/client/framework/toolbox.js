@@ -219,7 +219,9 @@ Toolbox.prototype = {
 
   set visibleAdditionalTools(tools) {
     this._visibleAdditionalTools = tools;
-    this._combineAndSortPanelDefinitions();
+    if (this.isReady) {
+      this._combineAndSortPanelDefinitions();
+    }
   },
 
   /**
@@ -510,7 +512,7 @@ Toolbox.prototype = {
 
       this.emit("ready");
       this._isOpenDeferred.resolve();
-    }.bind(this)).then(null, console.error.bind(console));
+    }.bind(this)).catch(console.error.bind(console));
   },
 
   /**
@@ -1384,11 +1386,17 @@ Toolbox.prototype = {
       throw new Error("Tool definition already registered: " +
                       definition.id);
     }
+
     this.additionalToolDefinitions.set(definition.id, definition);
     this.visibleAdditionalTools = [...this.visibleAdditionalTools, definition.id];
 
-    this._combineAndSortPanelDefinitions();
-    this._buildPanelForTool(definition);
+    const buildPanel = () => this._buildPanelForTool(definition);
+
+    if (this.isReady) {
+      buildPanel();
+    } else {
+      this.once("ready", buildPanel);
+    }
   },
 
   /**
@@ -2479,7 +2487,7 @@ Toolbox.prototype = {
               .getInterface(Ci.nsIDOMWindowUtils)
               .garbageCollect();
           }
-        }).then(null, console.error));
+        }).catch(console.error));
 
     let leakCheckObserver = ({wrappedJSObject: barrier}) => {
       // Make the leak detector wait until this toolbox is properly destroyed.

@@ -76,6 +76,10 @@ SERVO_BINDING_FUNC(Servo_StyleSet_InsertStyleSheetBefore, void,
                    RawServoStyleSheetBorrowed sheet,
                    uint64_t unique_id,
                    uint64_t before_unique_id)
+SERVO_BINDING_FUNC(Servo_StyleSet_UpdateStyleSheet, void,
+                   RawServoStyleSetBorrowed set,
+                   RawServoStyleSheetBorrowed sheet,
+                   uint64_t unique_id)
 SERVO_BINDING_FUNC(Servo_StyleSet_FlushStyleSheets, void, RawServoStyleSetBorrowed set,
                    RawGeckoElementBorrowedOrNull doc_elem)
 SERVO_BINDING_FUNC(Servo_StyleSet_NoteStyleSheetsChanged, void,
@@ -96,6 +100,12 @@ SERVO_BINDING_FUNC(Servo_StyleSet_ResolveForDeclarations,
                    RawServoStyleSetBorrowed set,
                    ServoComputedValuesBorrowedOrNull parent_style,
                    RawServoDeclarationBlockBorrowed declarations)
+SERVO_BINDING_FUNC(Servo_StyleSet_MightHaveAttributeDependency, bool,
+                   RawServoStyleSetBorrowed set,
+                   nsIAtom* local_name)
+SERVO_BINDING_FUNC(Servo_StyleSet_HasStateDependency, bool,
+                   RawServoStyleSetBorrowed set,
+                   uint64_t state)
 
 // CSSRuleList
 SERVO_BINDING_FUNC(Servo_CssRules_ListTypes, void,
@@ -517,6 +527,10 @@ SERVO_BINDING_FUNC(Servo_TraverseSubtree,
 
 // Assert that the tree has no pending or unconsumed restyles.
 SERVO_BINDING_FUNC(Servo_AssertTreeIsClean, void, RawGeckoElementBorrowed root)
+
+// Checks whether the rule tree has crossed its threshold for unused rule nodes,
+// and if so, frees them.
+SERVO_BINDING_FUNC(Servo_MaybeGCRuleTree, void, RawServoStyleSetBorrowed set)
 
 // Returns computed values for the given element without any animations rules.
 SERVO_BINDING_FUNC(Servo_StyleSet_GetBaseComputedValuesForElement,

@@ -1454,7 +1454,7 @@ impl Document {
             for node in nodes {
                 match node {
                     NodeOrString::Node(node) => {
-                        try!(fragment.AppendChild(&node));
+                        fragment.AppendChild(&node)?;
                     },
                     NodeOrString::String(string) => {
                         let node = Root::upcast::<Node>(self.CreateTextNode(string));
@@ -1538,28 +1538,29 @@ impl Document {
         self.animation_frame_ident.set(ident);
         self.animation_frame_list.borrow_mut().push((ident, Some(callback)));
 
-        // No need to send a `ChangeRunningAnimationsState` if we're running animation callbacks:
-        // we're guaranteed to already be in the "animation callbacks present" state.
-        //
-        // This reduces CPU usage by avoiding needless thread wakeups in the common case of
-        // repeated rAF.
-        //
         // TODO: Should tick animation only when document is visible
-        if !self.running_animation_callbacks.get() {
-            if !self.is_faking_animation_frames() {
-                let global_scope = self.window.upcast::<GlobalScope>();
-                let event = ConstellationMsg::ChangeRunningAnimationsState(
-                    global_scope.pipeline_id(),
-                    AnimationState::AnimationCallbacksPresent);
-                global_scope.constellation_chan().send(event).unwrap();
-            } else {
-                let callback = FakeRequestAnimationFrameCallback {
-                    document: Trusted::new(self),
-                };
-                self.global()
-                    .schedule_callback(OneshotTimerCallback::FakeRequestAnimationFrame(callback),
-                                       MsDuration::new(FAKE_REQUEST_ANIMATION_FRAME_DELAY));
-            }
+
+        // If we are running 'fake' animation frames, we unconditionally
+        // set up a one-shot timer for script to execute the rAF callbacks.
+        if self.is_faking_animation_frames() {
+            let callback = FakeRequestAnimationFrameCallback {
+                document: Trusted::new(self),
+            };
+            self.global()
+                .schedule_callback(OneshotTimerCallback::FakeRequestAnimationFrame(callback),
+                                   MsDuration::new(FAKE_REQUEST_ANIMATION_FRAME_DELAY));
+        } else if !self.running_animation_callbacks.get() {
+            // No need to send a `ChangeRunningAnimationsState` if we're running animation callbacks:
+            // we're guaranteed to already be in the "animation callbacks present" state.
+            //
+            // This reduces CPU usage by avoiding needless thread wakeups in the common case of
+            // repeated rAF.
+
+            let global_scope = self.window.upcast::<GlobalScope>();
+            let event = ConstellationMsg::ChangeRunningAnimationsState(
+                global_scope.pipeline_id(),
+                AnimationState::AnimationCallbacksPresent);
+            global_scope.constellation_chan().send(event).unwrap();
         }
 
         ident
@@ -1595,6 +1596,22 @@ impl Document {
         let spurious = !self.window.reflow(ReflowGoal::ForDisplay,
                                            ReflowQueryType::NoQuery,
                                            ReflowReason::RequestAnimationFrame);
+
+        if spurious && !was_faking_animation_frames {
+            // If the rAF callbacks did not mutate the DOM, then the
+            // reflow call above means that layout will not be invoked,
+            // and therefore no new frame will be sent to the compositor.
+            // If this happens, the compositor will not tick the animation
+            // and the next rAF will never be called! When this happens
+            // for several frames, then the spurious rAF detection below
+            // will kick in and use a timer to tick the callbacks. However,
+            // for the interim frames where we are deciding whether this rAF
+            // is considered spurious, we need to ensure that the layout
+            // and compositor *do* tick the animation.
+            self.window.force_reflow(ReflowGoal::ForDisplay,
+                                     ReflowQueryType::NoQuery,
+                                     ReflowReason::RequestAnimationFrame);
+        }
 
         // Only send the animation change state message after running any callbacks.
         // This means that if the animation callback adds a new callback for
@@ -2819,8 +2836,8 @@ impl DocumentMethods for Document {
                        namespace: Option<DOMString>,
                        qualified_name: DOMString)
                        -> Fallible<Root<Element>> {
-        let (namespace, prefix, local_name) = try!(validate_and_extract(namespace,
-                                                                        &qualified_name));
+        let (namespace, prefix, local_name) = validate_and_extract(namespace,
+                                                                        &qualified_name)?;
         let name = QualName::new(prefix, namespace, local_name);
         Ok(Element::create(name, self, ElementCreator::ScriptCreated))
     }
@@ -2845,8 +2862,8 @@ impl DocumentMethods for Document {
                          namespace: Option<DOMString>,
                          qualified_name: DOMString)
                          -> Fallible<Root<Attr>> {
-        let (namespace, prefix, local_name) = try!(validate_and_extract(namespace,
-                                                                        &qualified_name));
+        let (namespace, prefix, local_name) = validate_and_extract(namespace,
+                                                                        &qualified_name)?;
         let value = AttrValue::String("".to_owned());
         let qualified_name = LocalName::from(qualified_name);
         Ok(Attr::new(&self.window,

@@ -85,7 +85,7 @@ module.exports = {
     "comma-spacing": ["error", {"after": true, "before": false}],
 
     // Commas at the end of the line not the start
-    // "comma-style": "error",
+    "comma-style": "error",
 
     // Warn about cyclomatic complexity in functions.
     // XXX Get this down to 20?
@@ -150,8 +150,14 @@ module.exports = {
     // Use [] instead of Array()
     "no-array-constructor": "error",
 
+    // Disallow modifying variables of class declarations.
+    "no-class-assign": "error",
+
     // Disallow assignment operators in conditional statements
     "no-cond-assign": "error",
+
+    // Disallow modifying variables that are declared using const.
+    "no-const-assign": "error",
 
     // Disallow control characters in regular expressions.
     "no-control-regex": "error",
@@ -164,6 +170,9 @@ module.exports = {
 
     // No duplicate arguments in function declarations
     "no-dupe-args": "error",
+
+    // Disallow duplicate class members.
+    "no-dupe-class-members": "error",
 
     // No duplicate keys in object declarations
     "no-dupe-keys": "error",

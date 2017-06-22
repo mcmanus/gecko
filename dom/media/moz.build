@@ -4,6 +4,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+FILES_PER_UNIFIED_FILE = 6
+
 with Files('*'):
     BUG_COMPONENT = ('Core', 'Audio/Video')
 
@@ -39,6 +41,7 @@ DIRS += [
     'ipc',
     'mediasink',
     'mediasource',
+    'mp3',
     'ogg',
     'platforms',
     'systemservices',
@@ -98,6 +101,7 @@ EXPORTS += [
     'AudioStream.h',
     'Benchmark.h',
     'BufferMediaResource.h',
+    'ChannelMediaDecoder.h',
     'CubebUtils.h',
     'DecoderDoctorDiagnostics.h',
     'DecoderTraits.h',
@@ -131,14 +135,12 @@ EXPORTS += [
     'MediaStatistics.h',
     'MediaStreamGraph.h',
     'MediaStreamListener.h',
+    'MediaStreamTypes.h',
     'MediaStreamVideoSink.h',
     'MediaTimer.h',
     'MediaTrack.h',
     'MediaTrackList.h',
     'MemoryBlockCache.h',
-    'MP3Decoder.h',
-    'MP3Demuxer.h',
-    'MP3FrameParser.h',
     'nsIDocumentActivity.h',
     'PrincipalChangeObserver.h',
     'QueueObject.h',
@@ -210,6 +212,7 @@ UNIFIED_SOURCES += [
     'AudioTrackList.cpp',
     'Benchmark.cpp',
     'CanvasCaptureMediaStream.cpp',
+    'ChannelMediaDecoder.cpp',
     'CubebUtils.cpp',
     'DecoderDoctorDiagnostics.cpp',
     'DOMMediaStream.cpp',
@@ -244,9 +247,6 @@ UNIFIED_SOURCES += [
     'MediaTrack.cpp',
     'MediaTrackList.cpp',
     'MemoryBlockCache.cpp',
-    'MP3Decoder.cpp',
-    'MP3Demuxer.cpp',
-    'MP3FrameParser.cpp',
     'QueueObject.cpp',
     'SeekJob.cpp',
     'StreamTracks.cpp',

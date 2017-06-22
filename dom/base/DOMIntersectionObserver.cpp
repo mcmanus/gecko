@@ -150,12 +150,11 @@ DOMIntersectionObserver::GetThresholds(nsTArray<double>& aRetVal)
 void
 DOMIntersectionObserver::Observe(Element& aTarget)
 {
-  if (mObservationTargets.Contains(&aTarget)) {
-    return;
+  if (mObservationTargets.EnsureInserted(&aTarget)) {
+    // A new entry was created.
+    aTarget.RegisterIntersectionObserver(this);
+    Connect();
   }
-  aTarget.RegisterIntersectionObserver(this);
-  mObservationTargets.PutEntry(&aTarget);
-  Connect();
 }
 
 void
@@ -173,14 +172,11 @@ DOMIntersectionObserver::Unobserve(Element& aTarget)
 void
 DOMIntersectionObserver::UnlinkTarget(Element& aTarget)
 {
-    if (!mObservationTargets.Contains(&aTarget)) {
-        return;
-    }
-
-    mObservationTargets.RemoveEntry(&aTarget);
-    if (mObservationTargets.Count() == 0) {
-        Disconnect();
-    }
+  if (mObservationTargets.EnsureRemoved(&aTarget) &&
+      mObservationTargets.Count() == 0) {
+    // We removed the last entry.
+    Disconnect();
+  }
 }
 
 void
@@ -272,17 +268,21 @@ DOMIntersectionObserver::Update(nsIDocument* aDocument, DOMHighResTimeStamp time
     root = mRoot;
     rootFrame = root->GetPrimaryFrame();
     if (rootFrame) {
+      nsRect rootRectRelativeToRootFrame;
       if (rootFrame->IsScrollFrame()) {
+        // rootRectRelativeToRootFrame should be the content rect of rootFrame, not including the scrollbars.
         nsIScrollableFrame* scrollFrame = do_QueryFrame(rootFrame);
-        rootRect = nsLayoutUtils::TransformFrameRectToAncestor(
-          rootFrame,
-          rootFrame->GetContentRectRelativeToSelf(),
-          scrollFrame->GetScrolledFrame());
+        rootRectRelativeToRootFrame = scrollFrame->GetScrollPortRect();
       } else {
-        rootRect = nsLayoutUtils::GetAllInFlowRectsUnion(rootFrame,
-          nsLayoutUtils::GetContainingBlockForClientRect(rootFrame),
-          nsLayoutUtils::RECTS_ACCOUNT_FOR_TRANSFORMS);
+        // rootRectRelativeToRootFrame should be the border rect of rootFrame.
+        rootRectRelativeToRootFrame = rootFrame->GetRectRelativeToSelf();
       }
+      nsIFrame* containingBlock =
+        nsLayoutUtils::GetContainingBlockForClientRect(rootFrame);
+      rootRect =
+        nsLayoutUtils::TransformFrameRectToAncestor(rootFrame,
+                                                    rootRectRelativeToRootFrame,
+                                                    containingBlock);
     }
   } else {
     nsCOMPtr<nsIPresShell> presShell = aDocument->GetShell();
@@ -356,7 +356,7 @@ DOMIntersectionObserver::Update(nsIDocument* aDocument, DOMHighResTimeStamp time
         nsLayoutUtils::GetContainingBlockForClientRect(targetFrame),
         nsLayoutUtils::RECTS_ACCOUNT_FOR_TRANSFORMS
       );
-      intersectionRect = Some(targetFrame->GetVisualOverflowRect());
+      intersectionRect = Some(targetFrame->GetRectRelativeToSelf());
 
       nsIFrame* containerFrame = nsLayoutUtils::GetCrossDocParentFrame(targetFrame);
       while (containerFrame && containerFrame != rootFrame) {

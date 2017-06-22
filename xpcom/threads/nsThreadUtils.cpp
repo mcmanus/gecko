@@ -176,20 +176,6 @@ NS_GetMainThread(nsIThread** aResult)
 #endif
 }
 
-#ifndef MOZILLA_INTERNAL_API
-bool
-NS_IsMainThread()
-{
-  bool result = false;
-  nsCOMPtr<nsIThreadManager> mgr =
-    do_GetService(NS_THREADMANAGER_CONTRACTID);
-  if (mgr) {
-    mgr->GetIsMainThread(&result);
-  }
-  return bool(result);
-}
-#endif
-
 nsresult
 NS_DispatchToCurrentThread(already_AddRefed<nsIRunnable>&& aEvent)
 {
@@ -370,6 +356,13 @@ NS_IdleDispatchToCurrentThread(already_AddRefed<nsIRunnable>&& aEvent,
 {
   nsCOMPtr<nsIRunnable> event(Move(aEvent));
   NS_ENSURE_TRUE(event, NS_ERROR_INVALID_ARG);
+
+  //XXX Using current thread for now as the nsIEventTarget.
+  nsIEventTarget* target = mozilla::GetCurrentThreadEventTarget();
+  if (!target) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
   nsCOMPtr<nsIIdleRunnable> idleEvent = do_QueryInterface(event);
 
   if (!idleEvent) {
@@ -377,9 +370,7 @@ NS_IdleDispatchToCurrentThread(already_AddRefed<nsIRunnable>&& aEvent,
     event = do_QueryInterface(idleEvent);
     MOZ_DIAGNOSTIC_ASSERT(event);
   }
-
-  //XXX Using current thread for now as the nsIEventTarget.
-  idleEvent->SetTimer(aTimeout, NS_GetCurrentThread());
+  idleEvent->SetTimer(aTimeout, target);
 
   return NS_IdleDispatchToCurrentThread(event.forget());
 }

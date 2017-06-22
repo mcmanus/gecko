@@ -4,12 +4,12 @@
 
 //! Common handling for the specified value CSS url() values.
 
-use cssparser::CssStringWriter;
 use gecko_bindings::structs::{ServoBundledURI, URLExtraData};
+use gecko_bindings::structs::mozilla::css::URLValueData;
 use gecko_bindings::structs::root::mozilla::css::ImageValue;
 use gecko_bindings::sugar::refptr::RefPtr;
 use parser::ParserContext;
-use std::fmt::{self, Write};
+use std::fmt;
 use style_traits::{ToCss, ParseError};
 use stylearc::Arc;
 
@@ -50,6 +50,16 @@ impl SpecifiedUrl {
     /// use its |resolved| status.
     pub fn is_invalid(&self) -> bool {
         false
+    }
+
+    /// Convert from URLValueData to SpecifiedUrl.
+    pub unsafe fn from_url_value_data(url: &URLValueData)
+                                       -> Result<SpecifiedUrl, ()> {
+        Ok(SpecifiedUrl {
+            serialization: Arc::new(url.mString.to_string()),
+            extra_data: url.mExtraData.to_safe(),
+            image_value: None,
+        })
     }
 
     /// Returns true if this URL looks like a fragment.
@@ -100,8 +110,8 @@ impl SpecifiedUrl {
 
 impl ToCss for SpecifiedUrl {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-        try!(dest.write_str("url(\""));
-        try!(CssStringWriter::new(dest).write_str(&*self.serialization));
-        dest.write_str("\")")
+        dest.write_str("url(")?;
+        self.serialization.to_css(dest)?;
+        dest.write_str(")")
     }
 }

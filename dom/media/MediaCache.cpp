@@ -4,25 +4,25 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/ReentrantMonitor.h"
-
 #include "MediaCache.h"
-#include "prio.h"
-#include "nsContentUtils.h"
-#include "nsThreadUtils.h"
-#include "MediaResource.h"
-#include "mozilla/Logging.h"
-#include "mozilla/Preferences.h"
+
 #include "FileBlockCache.h"
 #include "MediaBlockCacheBase.h"
+#include "MediaResource.h"
 #include "MemoryBlockCache.h"
-#include "nsIObserverService.h"
-#include "nsISeekableStream.h"
-#include "nsIPrincipal.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/Logging.h"
+#include "mozilla/Preferences.h"
+#include "mozilla/ReentrantMonitor.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/Telemetry.h"
+#include "nsContentUtils.h"
+#include "nsIObserverService.h"
+#include "nsIPrincipal.h"
+#include "nsISeekableStream.h"
+#include "nsThreadUtils.h"
+#include "prio.h"
 #include <algorithm>
 
 namespace mozilla {
@@ -2243,36 +2243,20 @@ MediaCacheStream::SetPlaybackRate(uint32_t aBytesPerSecond)
 }
 
 nsresult
-MediaCacheStream::Seek(int32_t aWhence, int64_t aOffset)
+MediaCacheStream::SeekInternal(int64_t aOffset)
 {
-  NS_ASSERTION(!NS_IsMainThread(), "Don't call on main thread");
-
-  ReentrantMonitorAutoEnter mon(mMediaCache->GetReentrantMonitor());
-  if (mClosed)
-    return NS_ERROR_FAILURE;
-
-  int64_t oldOffset = mStreamOffset;
-  int64_t newOffset = mStreamOffset;
-  switch (aWhence) {
-  case PR_SEEK_END:
-    if (mStreamLength < 0)
-      return NS_ERROR_FAILURE;
-    newOffset = mStreamLength + aOffset;
-    break;
-  case PR_SEEK_CUR:
-    newOffset += aOffset;
-    break;
-  case PR_SEEK_SET:
-    newOffset = aOffset;
-    break;
-  default:
-    NS_ERROR("Unknown whence");
+  if (aOffset < 0) {
     return NS_ERROR_FAILURE;
   }
 
-  if (newOffset < 0)
+  mMediaCache->GetReentrantMonitor().AssertCurrentThreadIn();
+
+  if (mClosed) {
     return NS_ERROR_FAILURE;
-  mStreamOffset = newOffset;
+  }
+
+  int64_t oldOffset = mStreamOffset;
+  mStreamOffset = aOffset;
 
   LOG("Stream %p Seek to %" PRId64, this, mStreamOffset);
   mMediaCache->NoteSeek(this, oldOffset);
@@ -2301,11 +2285,10 @@ MediaCacheStream::Tell()
 }
 
 nsresult
-MediaCacheStream::Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
+MediaCacheStream::ReadInternal(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
 {
-  NS_ASSERTION(!NS_IsMainThread(), "Don't call on main thread");
+  mMediaCache->GetReentrantMonitor().AssertCurrentThreadIn();
 
-  ReentrantMonitorAutoEnter mon(mMediaCache->GetReentrantMonitor());
   if (mClosed)
     return NS_ERROR_FAILURE;
 
@@ -2374,7 +2357,7 @@ MediaCacheStream::Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
       }
 
       // No data has been read yet, so block
-      mon.Wait();
+      mMediaCache->GetReentrantMonitor().Wait();
       if (mClosed) {
         // We may have successfully read some data, but let's just throw
         // that out.
@@ -2419,9 +2402,9 @@ MediaCacheStream::ReadAt(int64_t aOffset, char* aBuffer,
   NS_ASSERTION(!NS_IsMainThread(), "Don't call on main thread");
 
   ReentrantMonitorAutoEnter mon(mMediaCache->GetReentrantMonitor());
-  nsresult rv = Seek(nsISeekableStream::NS_SEEK_SET, aOffset);
+  nsresult rv = SeekInternal(aOffset);
   if (NS_FAILED(rv)) return rv;
-  return Read(aBuffer, aCount, aBytes);
+  return ReadInternal(aBuffer, aCount, aBytes);
 }
 
 nsresult

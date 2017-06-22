@@ -367,7 +367,10 @@ BrowserGlue.prototype = {
         this._onDeviceConnected(data);
         break;
       case "fxaccounts:device_disconnected":
-        this._onDeviceDisconnected();
+        data = JSON.parse(data);
+        if (data.isLocalDevice) {
+          this._onDeviceDisconnected();
+        }
         break;
       case "weave:engine:clients:display-uris":
         this._onDisplaySyncURIs(subject);
@@ -1213,7 +1216,7 @@ BrowserGlue.prototype = {
         let newProfilePath = newProfile.rootDir.path;
         OS.File.removeDir(newProfilePath).then(() => {
           return OS.File.makeDir(newProfilePath);
-        }).then(null, e => {
+        }).catch(e => {
           Cu.reportError("Could not empty profile 'default': " + e);
         });
       }
@@ -1713,7 +1716,7 @@ BrowserGlue.prototype = {
 
   // eslint-disable-next-line complexity
   _migrateUI: function BG__migrateUI() {
-    const UI_VERSION = 47;
+    const UI_VERSION = 48;
     const BROWSER_DOCURL = "chrome://browser/content/browser.xul";
 
     let currentUIVersion;
@@ -2041,6 +2044,14 @@ BrowserGlue.prototype = {
       } catch (ex) {
         // A missing pref is not a fatal error.
       }
+    }
+
+    if (currentUIVersion < 48) {
+      // Bug 1372954 - the checked value was persisted but the attribute removal wouldn't
+      // be persisted (Bug 15232). Turns out we can just not persist the value in this case.
+      // The situation was only happening for a few nightlies in 56, so this migration can
+      // be removed in version 58.
+      xulStore.removeValue(BROWSER_DOCURL, "sidebar-box", "checked");
     }
 
     // Update the migration version.
