@@ -15,6 +15,11 @@
 #include "secmod.h"
 #include "assert.h"
 
+#if NSS_VMAJOR < 3 || (NSS_VMINOR < 32 && NSS_VMAJOR == 3)
+fail complie;
+#endif
+// todo runtime enforce too
+
 namespace mozquic {
         
 static bool mozQuicInit = false;
