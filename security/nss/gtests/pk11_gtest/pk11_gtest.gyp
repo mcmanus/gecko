@@ -20,7 +20,6 @@
         'pk11_prf_unittest.cc',
         'pk11_prng_unittest.cc',
         'pk11_rsapss_unittest.cc',
-        'pk11_der_private_key_import_unittest.cc',
         '<(DEPTH)/gtests/common/gtests.cc'
       ],
       'dependencies': [

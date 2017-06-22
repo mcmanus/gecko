@@ -578,7 +578,6 @@ void TlsAgent::ExpectResumption() { expect_resumption_ = true; }
 void TlsAgent::EnableAlpn(const uint8_t* val, size_t len) {
   EXPECT_TRUE(EnsureTlsSetup());
 
-  EXPECT_EQ(SECSuccess, SSL_OptionSet(ssl_fd(), SSL_ENABLE_ALPN, PR_FALSE));
   EXPECT_EQ(SECSuccess, SSL_OptionSet(ssl_fd(), SSL_ENABLE_ALPN, PR_TRUE));
   EXPECT_EQ(SECSuccess, SSL_SetNextProtoNego(ssl_fd(), val, len));
 }
@@ -623,12 +622,8 @@ void TlsAgent::CheckErrorCode(int32_t expected) const {
 }
 
 static uint8_t GetExpectedAlertLevel(uint8_t alert) {
-  switch (alert) {
-    case kTlsAlertCloseNotify:
-    case kTlsAlertEndOfEarlyData:
-      return kTlsAlertWarning;
-    default:
-      break;
+  if (alert == kTlsAlertCloseNotify) {
+    return kTlsAlertWarning;
   }
   return kTlsAlertFatal;
 }
@@ -756,10 +751,13 @@ void TlsAgent::Connected() {
 
   if (expected_version_ >= SSL_LIBRARY_VERSION_TLS_1_3) {
     PRInt32 cipherSuites = SSLInt_CountTls13CipherSpecs(ssl_fd());
-    // We use one ciphersuite in each direction, plus one that's kept around
-    // by DTLS for retransmission.
-    PRInt32 expected =
-        ((variant_ == ssl_variant_datagram) && (role_ == CLIENT)) ? 3 : 2;
+    // We use one ciphersuite in each direction.
+    PRInt32 expected = 2;
+    // For DTLS, the client retains the cipher spec for early data and the
+    // handshake so that it can retransmit EndOfEarlyData and its final flight.
+    if (variant_ == ssl_variant_datagram && role_ == CLIENT) {
+      expected = info_.earlyDataAccepted ? 4 : 3;
+    }
     EXPECT_EQ(expected, cipherSuites);
     if (expected != cipherSuites) {
       SSLInt_PrintTls13CipherSpecs(ssl_fd());
@@ -919,10 +917,10 @@ void TlsAgent::SendBuffer(const DataBuffer& buf) {
   }
 }
 
-void TlsAgent::ReadBytes(size_t amount) {
-  uint8_t block[16384];
+void TlsAgent::ReadBytes(size_t max) {
+  uint8_t block[max];
 
-  int32_t rv = PR_Read(ssl_fd(), block, (std::min)(amount, sizeof(block)));
+  int32_t rv = PR_Read(ssl_fd(), block, sizeof(block));
   LOGV("ReadBytes " << rv);
   int32_t err;
 

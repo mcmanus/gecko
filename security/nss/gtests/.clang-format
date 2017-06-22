@@ -1,5 +1,4 @@
 ---
 Language: Cpp
 BasedOnStyle: Google
-SortIncludes: false
 ...

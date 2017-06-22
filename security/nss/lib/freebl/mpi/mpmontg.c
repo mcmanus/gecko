@@ -205,11 +205,7 @@ mp_exptmod_f(const mp_int *montBase,
     dTmpSize = 2 * oddPowSize;
     dSize = sizeof(double) * (nLen * 4 + 1 +
                               ((odd_ints + 1) * oddPowSize) + dTmpSize);
-    dBuf = malloc(dSize);
-    if (!dBuf) {
-        res = MP_MEM;
-        goto CLEANUP;
-    }
+    dBuf = (double *)malloc(dSize);
     dm1 = dBuf;           /* array of d32 */
     dn = dBuf + nLen;     /* array of d32 */
     dSqr = dn + nLen;     /* array of d32 */
