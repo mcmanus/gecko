@@ -861,20 +861,34 @@ MozQuic::ProcessVersionNegotiation(unsigned char *pkt, uint32_t pktSize, LongHea
   }
 
   uint16_t numVersions = ((pktSize) - 17) / 4;
+  if ((numVersions << 2) != (pktSize - 17)) {
+    RaiseError(MOZQUIC_ERR_VERSION, (char *)"negotiate version packet format incorrect");
+    return MOZQUIC_ERR_VERSION;
+  }
+
+  uint32_t newVersion = 0;
   for (uint16_t i = 0; i < numVersions; i++) {
     uint32_t possibleVersion;
     memcpy((unsigned char *)&possibleVersion, framePtr, 4);
     framePtr += 4;
     possibleVersion = ntohl(possibleVersion);
     // todo this does not give client any preference
-    if (VersionOK(possibleVersion)) {
-      mVersion = possibleVersion;
-      mConnectionID = header.mConnectionID;
-      fprintf(stderr, "negotiated version %X\n", mVersion);
-      DoWriter(tmp);
+    if (mVersion == possibleVersion) {
+       fprintf(stderr, "Ignore version negotiation packet that offers version "
+               "a client selected.\n");
       return MOZQUIC_OK;
+    } else if (!newVersion && VersionOK(possibleVersion)) {
+      newVersion = possibleVersion;
     }
   }
+
+  if (newVersion) {
+    mConnectionID = header.mConnectionID;
+    fprintf(stderr, "negotiated version %X\n", mVersion);
+    DoWriter(tmp);
+    return MOZQUIC_OK;
+  }
+
   RaiseError(MOZQUIC_ERR_VERSION, (char *)"unable to negotiate version");
   return MOZQUIC_ERR_VERSION;
 }
