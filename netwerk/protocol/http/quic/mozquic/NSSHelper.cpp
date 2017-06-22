@@ -18,6 +18,16 @@
 #if NSS_VMAJOR < 3 || (NSS_VMINOR < 32 && NSS_VMAJOR == 3)
 fail complie;
 #endif
+
+// the above version is not sufficient - the -20 xbranch hasn't been
+// give a new vminor
+/*
+    nss -20 branch
+    https://github.com/nss-dev/nss/tree/NSS_TLS13_DRAFT19_BRANCH
+    
+    known cset d48b10106e9e77a7ec9a8fffe64a681d775a0563
+*/
+
 // todo runtime enforce too
 
 namespace mozquic {

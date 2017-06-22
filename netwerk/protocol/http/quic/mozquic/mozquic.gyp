@@ -4,12 +4,20 @@
 
 # See the sample app in extra.gyp for an example outside firefox
 
+# Make sure to set your NSS information in env.gypi if you
+# are not using a pkg-config version (which currently does not exist
+# as tls 1.3 -20 is required is currently on an unreleased DRAFT-19 branch
+
 {
+  'includes': [
+     'env.gypi',
+  ],
+
   'targets': [
       {
      'target_name': 'mozquic',
      'type': 'static_library',
-     'cflags': [ '-g', '<!@(pkg-config --cflags nss)', ],
+     'cflags': [ '-g', '<(nss_include)', ],
      'cflags_mozilla': [ '$(NSPR_CFLAGS)', '$(NSS_CFLAGS)', ],
      'sources': [
          'fnv.c',

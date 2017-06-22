@@ -9,9 +9,18 @@
 # gyp --depth=. --generator-output=obj
 # cd obj; make
 
+# Make sure to set your NSS information in env.gypi if you
+# are not using a pkg-config version (which currently does not exist
+# as tls 1.3 -20 is required is currently on an unreleased DRAFT-19
+# branch
+
 {
+  'includes': [
+     'env.gypi',
+  ],
+
   'targets': [
-      {
+    {
      'target_name': 'server',
      'type': 'executable',
       'cflags': [ '-g', ],
@@ -22,7 +31,7 @@
        'mozquic.gyp:mozquic',
       ],
      'libraries': [
-       '<!@(pkg-config --libs nss)',
+       '<(nss_link)', 
       ],
      },
       {
@@ -36,7 +45,7 @@
        'mozquic.gyp:mozquic',
       ],
      'libraries': [
-       '<!@(pkg-config --libs nss)',
+       '<(nss_link)', 
       ],
      },
    ],
