@@ -141,7 +141,7 @@ namespace mozquic  {
 
 // when this set is updated, look at versionOK() and
 // GenerateVersionNegotiation()
-static const uint32_t kMozQuicVersion1 = 0xf123f0c5;
+static const uint32_t kMozQuicVersion1 = 0xf123f0c5; // 0xf123f0c* reserved for mozquic
 static const uint32_t kMozQuicIetfID4 = 0xff000004;
 
 static const uint32_t kMozQuicVersionGreaseC = 0xfa1a7a3a;
@@ -861,7 +861,8 @@ MozQuic::ProcessVersionNegotiation(unsigned char *pkt, uint32_t pktSize, LongHea
     return MOZQUIC_ERR_VERSION;
   }
       
-  if (header.mVersion != mVersion) {
+  if ((header.mVersion != mVersion) ||
+      (header.mConnectionID != mConnectionID)) {
     // this was supposedly copied from client - so this isn't a match
     return MOZQUIC_ERR_VERSION;
   }
@@ -904,7 +905,6 @@ MozQuic::ProcessVersionNegotiation(unsigned char *pkt, uint32_t pktSize, LongHea
   }
 
   if (newVersion) {
-    mConnectionID = header.mConnectionID;
     fprintf(stderr, "negotiated version %X\n", mVersion);
     DoWriter(tmp);
     return MOZQUIC_OK;
@@ -1144,7 +1144,7 @@ MozQuic::GenerateVersionNegotiation(LongHeaderData &clientHeader, struct sockadd
   uint64_t tmp64;
 
   pkt[0] = 0x80 | PACKET_TYPE_VERSION_NEGOTIATION;
-  // lets use the client connID for now, we can change it in server_cleartext
+  // client connID echo'd from client
   tmp64 = htonll(clientHeader.mConnectionID);
   memcpy(pkt + 1, &tmp64, 8);
 
