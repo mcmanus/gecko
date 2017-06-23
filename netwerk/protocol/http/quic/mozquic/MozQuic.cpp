@@ -139,7 +139,8 @@ namespace mozquic  {
 // when this set is updated, look at versionOK() and
 // GenerateVersionNegotiation()
 static const uint32_t kMozQuicVersion1 = 0xf123f0c5;
-static const uint32_t kMozQuicIetfID3 = 0xff000003;
+static const uint32_t kMozQuicIetfID4 = 0xff000004;
+
 static const uint32_t kMozQuicVersionGreaseC = 0xfa1a7a3a;
 static const uint32_t kMozQuicVersionGreaseS = 0xea0a6a2a;
 
@@ -1115,7 +1116,7 @@ bool
 MozQuic::VersionOK(uint32_t proposed)
 {
   if (proposed == kMozQuicVersion1 ||
-      proposed == kMozQuicIetfID3) {
+      proposed == kMozQuicIetfID4) {
     return true;
   }
   return false;
@@ -1150,7 +1151,7 @@ MozQuic::GenerateVersionNegotiation(LongHeaderData &clientHeader, struct sockadd
   memcpy (framePtr, &tmp32, 4);
   framePtr += 4;
   assert(((framePtr + 4) - pkt) <= kMozQuicMTU);
-  tmp32 = htonl(kMozQuicIetfID3);
+  tmp32 = htonl(kMozQuicIetfID4);
   memcpy (framePtr, &tmp32, 4);
   framePtr += 4;
   assert(((framePtr + 4) - pkt) <= kMozQuicMTU);
