@@ -17,7 +17,6 @@ enum keyPhase {
   keyPhaseUnprotected,
   keyPhase0Rtt,
   keyPhase1Rtt,
-  keyPhaseFull,
 };
 
 class MozQuicStreamChunk

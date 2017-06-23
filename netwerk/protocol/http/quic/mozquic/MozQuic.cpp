@@ -72,6 +72,7 @@ extern "C" {
   int mozquic_destroy_connection(mozquic_connection_t *conn)
   {
     mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
+    self->Shutdown(0, "");
     delete self;
     return MOZQUIC_OK;
   }
@@ -160,8 +161,9 @@ MozQuic::MozQuic(bool handleIO)
   , mOriginPort(-1)
   , mVersion(kMozQuicVersion1)
   , mConnectionID(0)
-  , mNextPacketNumber(0)
-  , mOriginalPacketNumber(0)
+  , mNextTransmitPacketNumber(0)
+  , mOriginalTransmitPacketNumber(0)
+  , mNextRecvPacketNumber(0)
   , mClosure(this)
   , mLogCallback(nullptr)
   , mTransmitCallback(nullptr)
@@ -186,6 +188,60 @@ MozQuic::~MozQuic()
   if (!mIsChild && (mFD != MOZQUIC_SOCKET_BAD)) {
     close(mFD);
   }
+}
+
+void
+MozQuic::Shutdown(uint32_t code, const char *reason)
+{
+  if ((mConnectionState != CLIENT_STATE_CONNECTED) &&
+      (mConnectionState != SERVER_STATE_CONNECTED)) {
+    mConnectionState = mIsClient ? CLIENT_STATE_CLOSED : SERVER_STATE_CLOSED;
+    return;
+  }
+  fprintf(stderr, "sending shutdown as %lx\n", mNextTransmitPacketNumber);
+
+  unsigned char plainPkt[kMozQuicMTU];
+  unsigned char cipherPkt[kMozQuicMTU];
+  uint16_t tmp16;
+  uint32_t tmp32;
+  uint64_t tmp64;
+
+  // todo before merge - this can't be inlined here
+  // what if not kp 0 TODO
+  // todo when transport params allow truncate id, the connid might go
+  // short header with connid kp = 0, 4 bytes of packetnumber
+  plainPkt[0] = 0x43;
+  
+  tmp64 = PR_htonll(mConnectionID);
+  memcpy(plainPkt + 1, &tmp64, 8);
+
+  tmp32 = htonl(mNextTransmitPacketNumber & 0xffffffff);
+  memcpy(plainPkt + 9, &tmp32, 4);
+
+  plainPkt[13] = FRAME_TYPE_CLOSE;
+  tmp32 = htonl(code);
+  memcpy(plainPkt + 14, &tmp32, 4);
+
+  size_t reasonLen = strlen(reason);
+  if (reasonLen > (kMozQuicMTU - 20 - 16)) {
+    reasonLen = kMozQuicMTU - 20 - 16;
+  }
+  tmp16 = htons(reasonLen);
+  memcpy(plainPkt + 18, &tmp16, 2);
+  if (reasonLen) {
+    memcpy(plainPkt + 20, reason, reasonLen);
+  }
+
+  // 13 bytes of aead, 7 + reasonLen of data. result is 16 longer for aead tag
+  uint32_t written = 0;
+  memcpy(cipherPkt, plainPkt, 13);
+  uint32_t rv = mNSSHelper->EncryptBlock(plainPkt, 13, plainPkt + 13, 7 + reasonLen,
+                                         mNextTransmitPacketNumber, cipherPkt + 13, kMozQuicMTU - 13, written);
+  fprintf(stderr,"encrypt %d returned %d plus 13\n", rv, written);
+  mNextTransmitPacketNumber++;
+  Transmit(cipherPkt, written + 13, nullptr);
+
+  mConnectionState = mIsClient ? CLIENT_STATE_CLOSED : SERVER_STATE_CLOSED;
 }
 
 void
@@ -223,11 +279,11 @@ MozQuic::StartConnection()
     mConnectionID = mConnectionID | (random() & 0xffff);
   }
   for (int i=0; i < 2; i++) {
-    mNextPacketNumber = mNextPacketNumber << 16;
-    mNextPacketNumber = mNextPacketNumber | (random() & 0xffff);
+    mNextTransmitPacketNumber = mNextTransmitPacketNumber << 16;
+    mNextTransmitPacketNumber = mNextTransmitPacketNumber | (random() & 0xffff);
   }
-  mNextPacketNumber &= 0x7fffffff; // 31 bits
-  mOriginalPacketNumber = mNextPacketNumber;
+  mNextTransmitPacketNumber &= 0x7fffffff; // 31 bits
+  mOriginalTransmitPacketNumber = mNextTransmitPacketNumber;
 
   if (mFD == MOZQUIC_SOCKET_BAD) {
     // the application did not pass in its own fd
@@ -296,15 +352,14 @@ MozQuic::Bind()
 }
 
 MozQuic *
-MozQuic::FindSession(const unsigned char *pkt, uint32_t pktSize, LongHeaderData &header)
+MozQuic::FindSession(uint64_t cid)
 {
   assert (!mIsChild);
-  assert (!mIsClient);
-  assert (VersionOK(header.mVersion));
-  // todo, this needs to work with short headers
-  // probly means an abstract headerdata..
+  if (mIsClient) {
+    return mConnectionID == cid ? this : nullptr;
+  }
 
-  auto i = mConnectionHash.find(header.mConnectionID);
+  auto i = mConnectionHash.find(cid);
   if (i == mConnectionHash.end()) {
     Log((char *)"find session could not find id in hash");
     return nullptr;
@@ -366,102 +421,124 @@ MozQuic::Intake()
     uint32_t pktSize = 0;
     struct sockaddr_in client;
     rv = Recv(pkt, kMozQuicMSS, pktSize, &client);
-    // todo 17 assumes long form
-    if (rv != MOZQUIC_OK || !pktSize || pktSize < 17) {
+    if (rv != MOZQUIC_OK || !pktSize) {
       return rv;
-    }
-    Log((char *)"intake found data");
-
-    if (!(pkt[0] & 0x80)) {
-      // short form header when we only expect long form
-      // cleartext
-      Log((char *)"short form header at wrong time");
-      continue;
     }
 
     // dispatch to the right MozQuic class.
     MozQuic *session = this; // default
 
-    LongHeaderData header(pkt, pktSize);
-    fprintf(stderr,"PACKET RECVD pktnum=%lX version=%X len=%d id=%lx\n",
-            header.mPacketNumber, header.mVersion, pktSize, header.mConnectionID);
-
-    if (!(VersionOK(header.mVersion) ||
-          (mIsClient && header.mType == PACKET_TYPE_VERSION_NEGOTIATION && header.mVersion == mVersion))) {
-      // todo this could really be an amplifier
-      session->GenerateVersionNegotiation(header, &client);
-      continue;
-    }
-
-    switch (header.mType) {
-    case PACKET_TYPE_VERSION_NEGOTIATION:
-      // do not do integrity check (nop)
-      break;
-    case PACKET_TYPE_CLIENT_INITIAL:
-    case PACKET_TYPE_SERVER_CLEARTEXT:
-      if (!IntegrityCheck(pkt, pktSize)) {
-        rv = MOZQUIC_ERR_GENERAL;
+    if (!(pkt[0] & 0x80)) {
+      ShortHeaderData tmpShortHeader(pkt, pktSize, 0);
+      if (pktSize < tmpShortHeader.mHeaderSize) {
+        return rv;
       }
-      break;
-    case PACKET_TYPE_SERVER_STATELESS_RETRY:
-      if (!IntegrityCheck(pkt, pktSize)) {
-        rv = MOZQUIC_ERR_GENERAL;
-      }
-      assert(false); // todo mvp
-      break;
-    case PACKET_TYPE_CLIENT_CLEARTEXT:
-      if (!IntegrityCheck(pkt, pktSize)) {
-        rv = MOZQUIC_ERR_GENERAL;
-        break;
-      }
-      session = FindSession(pkt, pktSize, header);
+      session = FindSession(tmpShortHeader.mConnectionID);
       if (!session) {
         rv = MOZQUIC_ERR_GENERAL;
       }
-      break;
-
-    default:
-      // reject anything that is not a cleartext packet (not right, but later)
-      Log((char *)"recv1rtt unexpected type");
-      // todo this could actually be out of order protected packet even in handshake
-      // and ideally would be queued. for now we rely on retrans
-      // todo
-      rv = MOZQUIC_ERR_GENERAL;
-      break;
-    }
-
-    if (!session || rv != MOZQUIC_OK) {
-      continue;
-    }
-
-    switch (header.mType) {
-    case PACKET_TYPE_VERSION_NEGOTIATION: // version negotiation
-      rv = session->ProcessVersionNegotiation(pkt, pktSize, header);
-      // do not ack
-      break;
-    case PACKET_TYPE_CLIENT_INITIAL:
-      rv = session->ProcessClientInitial(pkt, pktSize, &client, header, &session);
-      // ack after processing - find new session
-      if (rv == MOZQUIC_OK) {
-        session->Acknowledge(pkt, pktSize, header);
+      ShortHeaderData shortHeader(pkt, pktSize, session->mNextRecvPacketNumber);
+      session->Acknowledge(shortHeader.mPacketNumber, keyPhase1Rtt);
+      rv = session->ProcessGeneral(pkt, pktSize,
+                                   shortHeader.mHeaderSize, shortHeader.mPacketNumber);
+        
+    } else {
+      if (pktSize < 17) {
+        return rv;
       }
-      break;
-    case PACKET_TYPE_SERVER_STATELESS_RETRY:
-      // do not ack
-      // todo mvp
-      break;
-    case PACKET_TYPE_SERVER_CLEARTEXT:
-      session->Acknowledge(pkt, pktSize, header);
-      rv = session->ProcessServerCleartext(pkt, pktSize, header);
-      break;
-    case PACKET_TYPE_CLIENT_CLEARTEXT:
-      session->Acknowledge(pkt, pktSize, header);
-      rv = session->ProcessClientCleartext(pkt, pktSize, header);
-      break;
+      LongHeaderData longHeader(pkt, pktSize);
 
-    default:
-      assert(false);
-      break;
+      fprintf(stderr,"PACKET RECVD pktnum=%lX version=%X len=%d id=%lx\n",
+              longHeader.mPacketNumber, longHeader.mVersion, pktSize, longHeader.mConnectionID);
+
+      if (!(VersionOK(longHeader.mVersion) ||
+            (mIsClient && longHeader.mType == PACKET_TYPE_VERSION_NEGOTIATION && longHeader.mVersion == mVersion))) {
+        // todo this could really be an amplifier
+        session->GenerateVersionNegotiation(longHeader, &client);
+        continue;
+      }
+
+      switch (longHeader.mType) {
+      case PACKET_TYPE_VERSION_NEGOTIATION:
+        // do not do integrity check (nop)
+        break;
+      case PACKET_TYPE_CLIENT_INITIAL:
+      case PACKET_TYPE_SERVER_CLEARTEXT:
+        if (!IntegrityCheck(pkt, pktSize)) {
+          rv = MOZQUIC_ERR_GENERAL;
+        }
+        break;
+      case PACKET_TYPE_SERVER_STATELESS_RETRY:
+        if (!IntegrityCheck(pkt, pktSize)) {
+          rv = MOZQUIC_ERR_GENERAL;
+        }
+        assert(false); // todo mvp
+        break;
+      case PACKET_TYPE_CLIENT_CLEARTEXT:
+        if (!IntegrityCheck(pkt, pktSize)) {
+          rv = MOZQUIC_ERR_GENERAL;
+          break;
+        }
+        session = FindSession(longHeader.mConnectionID);
+        if (!session) {
+          rv = MOZQUIC_ERR_GENERAL;
+        }
+        break;
+
+      case PACKET_TYPE_1RTT_PROTECTED_KP0:
+        session = FindSession(longHeader.mConnectionID);
+        if (!session) {
+          rv = MOZQUIC_ERR_GENERAL;
+        }
+        break;
+        
+      default:
+        // reject anything that is not a cleartext packet (not right, but later)
+        Log((char *)"recv1rtt unexpected type");
+        // todo this could actually be out of order protected packet even in handshake
+        // and ideally would be queued. for now we rely on retrans
+        // todo
+        rv = MOZQUIC_ERR_GENERAL;
+        break;
+      }
+
+      if (!session || rv != MOZQUIC_OK) {
+        continue;
+      }
+
+      switch (longHeader.mType) {
+      case PACKET_TYPE_VERSION_NEGOTIATION: // version negotiation
+        rv = session->ProcessVersionNegotiation(pkt, pktSize, longHeader);
+        // do not ack
+        break;
+      case PACKET_TYPE_CLIENT_INITIAL:
+        rv = session->ProcessClientInitial(pkt, pktSize, &client, longHeader, &session);
+        // ack after processing - find new session
+        if (rv == MOZQUIC_OK) {
+          session->Acknowledge(longHeader.mPacketNumber, keyPhaseUnprotected);
+        }
+        break;
+      case PACKET_TYPE_SERVER_STATELESS_RETRY:
+        // do not ack
+        // todo mvp
+        break;
+      case PACKET_TYPE_SERVER_CLEARTEXT:
+        session->Acknowledge(longHeader.mPacketNumber, keyPhaseUnprotected);
+        rv = session->ProcessServerCleartext(pkt, pktSize, longHeader);
+        break;
+      case PACKET_TYPE_CLIENT_CLEARTEXT:
+        session->Acknowledge(longHeader.mPacketNumber, keyPhaseUnprotected);
+        rv = session->ProcessClientCleartext(pkt, pktSize, longHeader);
+        break;
+      case PACKET_TYPE_1RTT_PROTECTED_KP0:
+        session->Acknowledge(longHeader.mPacketNumber, keyPhase1Rtt);
+        rv = session->ProcessGeneral(pkt, pktSize, 17, longHeader.mPacketNumber);
+        break;        
+
+      default:
+        assert(false);
+        break;
+      }
     }
   } while (rv == MOZQUIC_OK);
 
@@ -688,23 +765,18 @@ MozQuic::Unprotected(MozQuic::LongHeaderType type)
 }
 
 void
-MozQuic::Acknowledge(unsigned char *pkt, uint32_t pktLen, LongHeaderData &header)
+MozQuic::Acknowledge(uint64_t packetNum, keyPhase kp)
 {
   assert(mIsChild || mIsClient);
-  // todo assumes long header
-  if (pktLen < 17) {
-    return;
+
+  if (packetNum >= mNextRecvPacketNumber) {
+    mNextRecvPacketNumber = packetNum + 1;
   }
-  if ((header.mType == PACKET_TYPE_VERSION_NEGOTIATION) ||
-      (header.mType == PACKET_TYPE_SERVER_STATELESS_RETRY) ||
-      (header.mType == PACKET_TYPE_PUBLIC_RESET)) {
-    return;
-  }
-  fprintf(stderr,"%p GEN ACK FOR %lX\n", this, header.mPacketNumber);
+
+  fprintf(stderr,"%p GEN ACK FOR %lX\n", this, packetNum);
 
   // put this packetnumber on the scoreboard along with timestamp
-  assert(Unprotected(header.mType));
-  AckScoreboard(header.mPacketNumber, keyPhaseUnprotected);
+  AckScoreboard(packetNum, kp);
 }
 
 uint32_t
@@ -778,7 +850,7 @@ MozQuic::HandshakeOutput(unsigned char *buf, uint32_t datalen)
 // this is called by the application when the application is handling
 // the TLS stream (so that it can do more sophisticated handling
 // of certs etc like gecko PSM does). The app is providing the
-// client hello
+// client hello and interpreting the server hello
 void
 MozQuic::HandshakeComplete(uint32_t code)
 {
@@ -790,7 +862,13 @@ MozQuic::HandshakeComplete(uint32_t code)
     RaiseError(MOZQUIC_ERR_GENERAL, (char *)"Handshake complete in wrong state");
     return;
   }
+  if (code != MOZQUIC_OK) {
+    RaiseError(MOZQUIC_ERR_CRYPTO, (char *)"Handshake complete err");
+    return;
+  }
+  
   fprintf(stderr,"CLIENT_STATE_CONNECTED 2\n");
+  // todo prm client km 1 .. need to also provide key material
   mConnectionState = CLIENT_STATE_CONNECTED;
   MaybeSendAck();
 }
@@ -946,7 +1024,7 @@ MozQuic::ProcessServerCleartext(unsigned char *pkt, uint32_t pktSize, LongHeader
   mConnectionID = header.mConnectionID;
   // todo log change
   
-  return IntakeStream0(pkt, pktSize);
+  return ProcessGeneralDecoded(pkt + 17, pktSize - 17 - 8);
 }
 
 void
@@ -1029,18 +1107,34 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
       }
     }
   }
-  
 }
 
-int
-MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize) 
+uint32_t
+MozQuic::ProcessGeneral(unsigned char *pkt, uint32_t pktSize, uint32_t headerSize, uint64_t packetNum)
 {
-  // todo this assumes long header
+  assert(pktSize >= headerSize);
+  assert(pktSize <= kMozQuicMSS);
+  unsigned char out[kMozQuicMSS];
+
+  uint32_t written;
+  uint32_t rv = mNSSHelper->DecryptBlock(pkt, headerSize, pkt + headerSize,
+                                         pktSize - headerSize, packetNum, out,
+                                         kMozQuicMSS, written);
+  fprintf(stderr,"decrypt %d returned %d\n", rv, written);
+  if (rv != MOZQUIC_OK) {
+    return rv;
+  }
+  return ProcessGeneralDecoded(out, written);
+}
+
+uint32_t
+MozQuic::ProcessGeneralDecoded(unsigned char *pkt, uint32_t pktSize) 
+{
   // used by both client and server
   unsigned char *endpkt = pkt + pktSize;
-  uint32_t ptr = 17;
+  uint32_t ptr = 0;
 
-  pktSize -= 8; // checksum
+  assert(pktSize <= kMozQuicMSS);
   bool sendAck = false;
 
   while (ptr < pktSize) {
@@ -1054,6 +1148,7 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
     } else if (result.mType == FRAME_TYPE_STREAM) {
       sendAck = true;
       if (result.u.mStream.mStreamID != 0) {
+        // todo obviously
         RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream 0 expected");
         return MOZQUIC_ERR_GENERAL;
       }
@@ -1085,6 +1180,10 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
       ProcessAck(result, pkt + ptr);
       ptr += ackBlockSectionLen;
       ptr += timestampSectionLen;
+    } else if (result.mType == FRAME_TYPE_CLOSE) {
+      fprintf(stderr,"RECVD CLOSE\n");
+      sendAck = true;
+      mConnectionState = mIsClient ? CLIENT_STATE_CLOSED : SERVER_STATE_CLOSED;
     } else {
       sendAck = true;
       RaiseError(MOZQUIC_ERR_GENERAL, (char *) "unexpected frame type");
@@ -1117,11 +1216,11 @@ MozQuic::Accept(struct sockaddr_in *clientAddr, uint64_t aConnectionID)
   } while (mConnectionHash.count(child->mConnectionID) != 0);
       
   for (int i=0; i < 2; i++) {
-    child->mNextPacketNumber = child->mNextPacketNumber << 16;
-    child->mNextPacketNumber = child->mNextPacketNumber | (random() & 0xffff);
+    child->mNextTransmitPacketNumber = child->mNextTransmitPacketNumber << 16;
+    child->mNextTransmitPacketNumber = child->mNextTransmitPacketNumber | (random() & 0xffff);
   }
-  child->mNextPacketNumber &= 0x7fffffff; // 31 bits
-  child->mOriginalPacketNumber = child->mNextPacketNumber;
+  child->mNextTransmitPacketNumber &= 0x7fffffff; // 31 bits
+  child->mOriginalTransmitPacketNumber = child->mNextTransmitPacketNumber;
 
   assert(!mHandshakeInput);
   if (!mHandshakeInput) {
@@ -1242,7 +1341,7 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
   }
   MozQuic *child = Accept(clientAddr, header.mConnectionID);
   child->mConnectionState = SERVER_STATE_1RTT;
-  child->IntakeStream0(pkt, pktSize);
+  child->ProcessGeneralDecoded(pkt + 17, pktSize - 17 - 8);
   assert(mNewConnCB); // todo handle err
   mNewConnCB(mClosure, child);
   *childSession = child;
@@ -1266,7 +1365,7 @@ MozQuic::ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize, LongHeader
     return MOZQUIC_ERR_GENERAL;
   }
   
-  return IntakeStream0(pkt, pktSize);
+  return ProcessGeneralDecoded(pkt + 17, pktSize - 17 - 8);
 }
 
 uint32_t
@@ -1293,7 +1392,7 @@ MozQuic::FlushStream0(bool forceAck)
   uint64_t connID = PR_htonll(mConnectionID);
   memcpy(pkt + 1, &connID, 8);
   
-  tmp32 = htonl(mNextPacketNumber);
+  tmp32 = htonl(mNextTransmitPacketNumber);
   memcpy(pkt + 9, &tmp32, 4);
   tmp32 = htonl(mVersion);
   memcpy(pkt + 13, &tmp32, 4);
@@ -1352,10 +1451,10 @@ MozQuic::FlushStream0(bool forceAck)
 
       memcpy(framePtr, (*iter)->mData.get(), (*iter)->mLen);
       fprintf(stderr,"writing a stream frame %d in packet %lX\n",
-              (*iter)->mLen, mNextPacketNumber);
+              (*iter)->mLen, mNextTransmitPacketNumber);
       framePtr += (*iter)->mLen;
 
-      (*iter)->mPacketNumber = mNextPacketNumber;
+      (*iter)->mPacketNumber = mNextTransmitPacketNumber;
       (*iter)->mTransmitTime = Timestamp();
       (*iter)->mTransmitKeyPhase = keyPhaseUnprotected; // only for stream 0 todo
       (*iter)->mRetransmitted = false;
@@ -1377,9 +1476,9 @@ MozQuic::FlushStream0(bool forceAck)
   } else {
     uint32_t room = endpkt - framePtr - 8; // the last 8 are for checksum
     uint32_t used;
-    if (AckPiggyBack(framePtr, mNextPacketNumber, room, keyPhaseUnprotected, used) == MOZQUIC_OK) {
+    if (AckPiggyBack(framePtr, mNextTransmitPacketNumber, room, keyPhaseUnprotected, used) == MOZQUIC_OK) {
       if (used) {
-        fprintf(stderr,"will include optimistic acks on packet %lX for xmit\n", mNextPacketNumber);
+        fprintf(stderr,"will include optimistic acks on packet %lX for xmit\n", mNextTransmitPacketNumber);
       }
       framePtr += used;
     }
@@ -1400,8 +1499,8 @@ MozQuic::FlushStream0(bool forceAck)
     if (code != MOZQUIC_OK) {
       return code;
     }
-    fprintf(stderr,"TRANSMIT %lX len=%d\n", mNextPacketNumber, finalLen);
-    mNextPacketNumber++;
+    fprintf(stderr,"TRANSMIT %lX len=%d\n", mNextTransmitPacketNumber, finalLen);
+    mNextTransmitPacketNumber++;
     // each member of the list needs to 
   }
 
@@ -1865,6 +1964,56 @@ MozQuic::LongHeaderData::LongHeaderData(unsigned char *pkt, uint32_t pktSize)
   mPacketNumber = ntohl(mPacketNumber);
   memcpy(&mVersion, pkt + 13, 4);
   mVersion = ntohl(mVersion);
+}
+
+MozQuic::ShortHeaderData::ShortHeaderData(unsigned char *pkt, uint32_t pktSize, uint64_t next)
+{
+  mHeaderSize = 0xffffffff;
+  mConnectionID = 0;
+  mPacketNumber = 0;
+  assert(pktSize >= 1);
+  assert(!(pkt[0] & 0x80));
+  uint32_t pnSize = pkt[0] & 0x1f;
+  if (pnSize == 1) {
+    pnSize = 1;
+  } else if (pnSize == 2) {
+    pnSize = 2;
+  } else if (pnSize == 3) {
+    pnSize = 4;
+  } else {
+    return;
+  }
+  if ((!(pkt[0] & 0x40)) || (pktSize < (9 + pnSize))) {
+    // missing connection id. without the truncate transport option this cannot happen
+    return;
+  }
+  
+  memcpy(&mConnectionID, pkt + 1, 8);
+  mConnectionID = PR_ntohll(mConnectionID);
+
+  uint64_t candidate1, candidate2;
+  if (pnSize == 1) {
+    candidate1 = (next & ~0xFFUL) | pkt[9];
+    candidate2 = candidate1 + 0x100UL;
+  } else if (pnSize == 2) {
+    uint16_t tmp16;
+    memcpy(&tmp16, pkt + 9, 2);
+    tmp16 = ntohs(tmp16);
+    candidate1 = (next & ~0xFFFFUL) | tmp16;
+    candidate2 = candidate1 + 0x10000UL;
+  } else {
+    assert (pnSize == 4);
+    uint32_t tmp32;
+    memcpy(&tmp32, pkt + 9, 4);
+    tmp32 = ntohl(tmp32);
+    candidate1 = (next & ~0xFFFFFFFFUL) | tmp32;
+    candidate2 = candidate1 + 0x100000000UL;
+  }
+  
+  uint64_t distance1 = (next >= candidate1) ? (next - candidate1) : (candidate1 - next);
+  uint64_t distance2 = (next >= candidate2) ? (next - candidate2) : (candidate2 - next);
+  mPacketNumber = (distance1 < distance2) ? candidate1 : candidate2;
+  mHeaderSize = 9 + pnSize;
 }
 
 }

@@ -7,6 +7,7 @@ NSPR_INCLUDE = /usr/include/nspr/
 LDFLAGS += -L$(MOZQUIC_NSS_ROOT)dist/$(MOZQUIC_NSS_PLATFORM)/lib -lnss3 -lnssutil3 -lsmime3 -lssl3 -lplds4 -lplc4 -lnspr4
 CXXFLAGS +=  -std=c++0x  -I$(MOZQUIC_NSS_ROOT) -I$(MOZQUIC_NSS_ROOT)dist/$(MOZQUIC_NSS_PLATFORM)/include/ -I$(MOZQUIC_NSS_ROOT)dist/public/nss -Wno-format
 CXXFLAGS += -I$(NSPR_INCLUDE)
+CXXFLAGS += -g
 
 # For .h dependency management
 CXXFLAGS += -MP -MD 

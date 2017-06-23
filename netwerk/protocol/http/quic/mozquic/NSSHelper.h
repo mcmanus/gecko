@@ -19,10 +19,20 @@ public:
   static int Init(char *dir);
   NSSHelper(MozQuic *quicSession, const char *originKey);
   NSSHelper(MozQuic *quicSession, const char *originKey, bool clientindicator); // todo, subclass
-  ~NSSHelper() {}
+  ~NSSHelper();
   uint32_t DriveHandshake();
   bool IsHandshakeComplete() { return mHandshakeComplete; }
-    
+
+  uint32_t EncryptBlock(unsigned char *aeadData, uint32_t aeadLen,
+                        unsigned char *plaintext, uint32_t plaintextLen,
+                        uint64_t packetNumber, unsigned char *out, uint32_t outAvail,
+                        uint32_t &written);
+
+  uint32_t DecryptBlock(unsigned char *aeadData, uint32_t aeadLen,
+                        unsigned char *ciphertext, uint32_t ciphertextLen,
+                        uint64_t packetNumber, unsigned char *out, uint32_t outAvail,
+                        uint32_t &written);
+
 private:
   static PRStatus NSPRGetPeerName(PRFileDesc *aFD, PRNetAddr*addr);
   static PRStatus NSPRGetSocketOption(PRFileDesc *aFD, PRSocketOptionData *aOpt);
@@ -37,11 +47,27 @@ private:
   static void HandshakeCallback(PRFileDesc *fd, void *client_data);
   static SECStatus BadCertificate(void *client_data, PRFileDesc *fd);
 
+  uint32_t BlockOperation(bool encrypt, unsigned char *aeadData, uint32_t aeadLen,
+                          unsigned char *plaintext, uint32_t plaintextLen,
+                          uint64_t packetNumber, unsigned char *out, uint32_t outAvail,
+                          uint32_t &written);
+  uint32_t MakeKey(PRFileDesc *fd, const char *label,
+                   unsigned int secretSize, SSLHashType hashType,
+                   CK_MECHANISM_TYPE importMechanism1, CK_MECHANISM_TYPE importMechanism2,
+                   unsigned char *outIV, PK11SymKey **outKey);
+
   MozQuic             *mQuicSession;
   PRFileDesc          *mFD;
   bool                 mNSSReady;
   bool                 mHandshakeComplete;
   bool                 mHandshakeFailed; // complete but bad above nss
+  bool                 mIsClient;
+
+  CK_MECHANISM_TYPE   mPacketProtectionMech;
+  PK11SymKey         *mPacketProtectionSenderKey0;
+  unsigned char       mPacketProtectionSenderIV0[12];
+  PK11SymKey         *mPacketProtectionReceiverKey0;
+  unsigned char       mPacketProtectionReceiverIV0[12];
 };
 
 } //namespace
