@@ -905,6 +905,7 @@ MozQuic::ProcessVersionNegotiation(unsigned char *pkt, uint32_t pktSize, LongHea
   }
 
   if (newVersion) {
+    mVersion = newVersion;
     fprintf(stderr, "negotiated version %X\n", mVersion);
     DoWriter(tmp);
     return MOZQUIC_OK;
