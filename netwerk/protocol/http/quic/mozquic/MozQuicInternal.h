@@ -91,6 +91,7 @@ public:
   void SetFD(mozquic_socket_t fd) { mFD = fd; }
   int  GetFD() { return mFD; }
   void GreaseVersionNegotiation();
+  void PreferMilestoneVersion();
   void SetIgnorePKI() { mIgnorePKI = true; }
   bool IgnorePKI();
 

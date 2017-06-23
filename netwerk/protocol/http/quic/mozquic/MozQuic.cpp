@@ -60,6 +60,9 @@ extern "C" {
     if (inConfig->greaseVersionNegotiation) {
       q->GreaseVersionNegotiation();
     }
+    if (inConfig->preferMilestoneVersion) {
+      q->PreferMilestoneVersion();
+    }
     if (inConfig->ignorePKI) {
       q->SetIgnorePKI();
     }
@@ -190,6 +193,13 @@ MozQuic::GreaseVersionNegotiation()
   assert(mConnectionState == STATE_UNINITIALIZED);
   fprintf(stderr,"applying version grease\n");
   mVersion = kMozQuicVersionGreaseC;
+}
+
+void
+MozQuic::PreferMilestoneVersion()
+{
+  assert(mConnectionState == STATE_UNINITIALIZED);
+  mVersion = kMozQuicIetfID4;
 }
 
 bool
@@ -361,7 +371,9 @@ MozQuic::Intake()
     MozQuic *session = this; // default
 
     LongHeaderData header(pkt, pktSize);
-    fprintf(stderr,"PACKET RECVD %lX %X len=%d\n", header.mPacketNumber, header.mVersion, pktSize);
+    fprintf(stderr,"PACKET RECVD pktnum=%lX version=%X len=%d id=%lx\n",
+            header.mPacketNumber, header.mVersion, pktSize, header.mConnectionID);
+
     if (!(VersionOK(header.mVersion) ||
           (mIsClient && header.mType == PACKET_TYPE_VERSION_NEGOTIATION && header.mVersion == mVersion))) {
       // todo this could really be an amplifier
@@ -1521,7 +1533,7 @@ MozQuic::ClearOldInitialConnetIdsTimer()
   return MOZQUIC_OK;
 }
 
-MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, MozQuic *logger)
+MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, MozQuic *session)
 {
   memset(&u, 0, sizeof (u));
   mValid = MOZQUIC_ERR_GENERAL;
@@ -1555,7 +1567,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
     uint32_t bytesNeeded = 1 + lenLen + idLen + offsetLen;
     if (bytesNeeded > pktSize) {
-      logger->RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame header short");
+      session->RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame header short");
       return;
     }
 
@@ -1577,7 +1589,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
     // todo log frame len
     if (bytesNeeded + u.mStream.mDataLen > pktSize) {
-      logger->RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame data short");
+      session->RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame data short");
       return;
     }
 
@@ -1588,30 +1600,28 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
     mType = FRAME_TYPE_ACK;
     uint8_t numBlocks = (type & 0x10) ? 1 : 0; // N bit
     uint32_t ackedLen = (type & 0x0c) >> 2; // LL bits
-    if (ackedLen == 0) {
-      ackedLen = 1;
-    } else if (ackedLen == 1) {
-      ackedLen = 2;
-    } else if (ackedLen == 2) {
-      ackedLen = 4;
-    } else { // (ackedLen == 3)
-      ackedLen = 6;
+    if (session->mVersion == kMozQuicIetfID4) {
+      ackedLen = 1 << ackedLen;
+      if (ackedLen == 8) {
+        ackedLen = 6;
+      }
+    } else {
+      ackedLen = 1 << ackedLen;
     }
 
-    u.mAck.mAckBlockLengthLen = (type & 0x03); // MM bits
-    if (u.mAck.mAckBlockLengthLen == 0) {
-      u.mAck.mAckBlockLengthLen = 1;
-    } else if (u.mAck.mAckBlockLengthLen == 1) {
-      u.mAck.mAckBlockLengthLen = 2;
-    } else if (u.mAck.mAckBlockLengthLen == 2) {
-      u.mAck.mAckBlockLengthLen = 4;
-    } else { // u.mAck.mAckBlockLengthLen == 3
-      u.mAck.mAckBlockLengthLen = 6;
+    // MM bits are type & 0x03
+    if (session->mVersion == kMozQuicIetfID4) {
+      u.mAck.mAckBlockLengthLen = 1 << (type & 0x03);
+      if (u.mAck.mAckBlockLengthLen == 8) {
+        u.mAck.mAckBlockLengthLen = 6;
+      }
+    } else {
+      u.mAck.mAckBlockLengthLen = 1 << (type & 0x03);
     }
 
     uint16_t bytesNeeded = 1 + numBlocks + 1 + ackedLen + 2;
     if (bytesNeeded > pktSize) {
-      logger->RaiseError(MOZQUIC_ERR_GENERAL, (char *) "ack frame header short");
+      session->RaiseError(MOZQUIC_ERR_GENERAL, (char *) "ack frame header short");
       return;
     }
 
@@ -1636,7 +1646,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
       bytesNeeded += u.mAck.mNumTS * (1 + 2) + 2;
     }
     if (bytesNeeded > pktSize) {
-      logger->RaiseError(MOZQUIC_ERR_GENERAL, (char *) "ack frame header short");
+      session->RaiseError(MOZQUIC_ERR_GENERAL, (char *) "ack frame header short");
       return;
     }
     mValid = MOZQUIC_OK;
@@ -1653,7 +1663,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
     case FRAME_TYPE_RST_STREAM:
       if (pktSize < FRAME_TYPE_RST_STREAM_LENGTH) {
-        logger->RaiseError(MOZQUIC_ERR_GENERAL,
+        session->RaiseError(MOZQUIC_ERR_GENERAL,
                    (char *) "RST_STREAM frame length expected");
         return;
       }
@@ -1674,7 +1684,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
     case FRAME_TYPE_CLOSE:
       if (pktSize < FRAME_TYPE_CLOSE_LENGTH) {
-        logger->RaiseError(MOZQUIC_ERR_GENERAL,
+        session->RaiseError(MOZQUIC_ERR_GENERAL,
                    (char *) "CONNECTION_CLOSE frame length expected");
         return;
       }
@@ -1690,13 +1700,13 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
       framePtr += 2;
       if (len) {
         if (pktSize < ((uint32_t)FRAME_TYPE_CLOSE_LENGTH + len)) {
-          logger->RaiseError(MOZQUIC_ERR_GENERAL,
+          session->RaiseError(MOZQUIC_ERR_GENERAL,
                      (char *) "CONNECTION_CLOSE frame length expected");
           return;
         }
         // Log error!
         framePtr[len-1] = '\0';// Make sure it is 0-ended TODO:
-        logger->Log((char *)framePtr);
+        session->Log((char *)framePtr);
       }
       mValid = MOZQUIC_OK;
       mFrameLen = FRAME_TYPE_CLOSE_LENGTH + len;
@@ -1704,7 +1714,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
     case FRAME_TYPE_GOAWAY:
       if (pktSize < FRAME_TYPE_GOAWAY_LENGTH) {
-        logger->RaiseError(MOZQUIC_ERR_GENERAL,
+        session->RaiseError(MOZQUIC_ERR_GENERAL,
                    (char *) "GOAWAY frame length expected");
         return;
       }
@@ -1723,7 +1733,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
     case FRAME_TYPE_MAX_DATA:
       if (pktSize < FRAME_TYPE_MAX_DATA_LENGTH) {
-        logger->RaiseError(MOZQUIC_ERR_GENERAL,
+        session->RaiseError(MOZQUIC_ERR_GENERAL,
                    (char *) "MAX_DATA frame length expected");
         return;
       }
@@ -1738,7 +1748,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
     case FRAME_TYPE_MAX_STREAM_DATA:
       if (pktSize < FRAME_TYPE_MAX_STREAM_DATA_LENGTH) {
-        logger->RaiseError(MOZQUIC_ERR_GENERAL,
+        session->RaiseError(MOZQUIC_ERR_GENERAL,
                    (char *) "MAX_STREAM_DATA frame length expected");
         return;
       }
@@ -1757,7 +1767,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
     case FRAME_TYPE_MAX_STREAM_ID:
       if (pktSize < FRAME_TYPE_MAX_STREAM_ID_LENGTH) {
-        logger->RaiseError(MOZQUIC_ERR_GENERAL,
+        session->RaiseError(MOZQUIC_ERR_GENERAL,
                    (char *) "MAX_STREAM_ID frame length expected");
         return;
       }
@@ -1785,7 +1795,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
     case FRAME_TYPE_STREAM_BLOCKED:
       if (pktSize < FRAME_TYPE_STREAM_BLOCKED_LENGTH) {
-        logger->RaiseError(MOZQUIC_ERR_GENERAL,
+        session->RaiseError(MOZQUIC_ERR_GENERAL,
                    (char *) "STREAM_BLOCKED frame length expected");
         return;
       }
@@ -1806,7 +1816,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
     case FRAME_TYPE_NEW_CONNECTION_ID:
       if (pktSize < FRAME_TYPE_NEW_CONNECTION_ID_LENGTH) {
-        logger->RaiseError(MOZQUIC_ERR_GENERAL,
+        session->RaiseError(MOZQUIC_ERR_GENERAL,
                    (char *) "NEW_CONNECTION_ID frame length expected");
         return;
       }

@@ -37,6 +37,7 @@ int main()
   // normally they must either be linked to the root store OR on localhost
   config.ignorePKI = 0; 
   config.greaseVersionNegotiation = 0;
+  config.preferMilestoneVersion = 1;
 
   mozquic_new_connection(&c, &config);
   mozquic_start_connection(c);

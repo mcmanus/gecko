@@ -16,6 +16,7 @@ extern "C" {
 #endif
 
   const char mozquic_alpn[] = "hq-03";
+  const uint32_t mozquic_library_version = 1;
 
   enum {
     MOZQUIC_OK           = 0,
@@ -37,6 +38,7 @@ extern "C" {
     void *closure;
 
     unsigned int greaseVersionNegotiation; // flag
+    unsigned int preferMilestoneVersion; // flag
     unsigned int ignorePKI; // flag
 
     void (*logging_callback)(void *, char *); // todo va arg
