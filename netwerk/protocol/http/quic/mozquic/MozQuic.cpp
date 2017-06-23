@@ -1014,7 +1014,7 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
   unsigned char *endpkt = pkt + pktSize;
   uint32_t ptr = 17;
 
-  pktSize -= 8; // checksum. todo mvp verify
+  pktSize -= 8; // checksum
   bool sendAck = false;
 
   while (ptr < pktSize) {
@@ -1249,7 +1249,7 @@ MozQuic::FlushStream0(bool forceAck)
   if (mUnWrittenData.empty() && !forceAck) {
     return MOZQUIC_OK;
   }
-      
+
   unsigned char pkt[kMozQuicMTU];
   unsigned char *endpkt = pkt + kMozQuicMTU;
   uint32_t tmp32;
@@ -1283,21 +1283,24 @@ MozQuic::FlushStream0(bool forceAck)
       }
 
       // stream header is 8 bytes long
-      // 1 type + 2 bytes of len, 1 stream id,
-      // 4 bytes of offset. That's type 0xd8
-      framePtr[0] = 0xd8;
-      uint16_t tmp16 = (*iter)->mLen;
-      // todo check range.. that's really wrong as its 32
-      tmp16 = htons(tmp16);
-      memcpy(framePtr + 1, &tmp16, 2);
-      framePtr[3] = 0; // stream 0
+      // 1 type + 1 id + 4 offset + 2 len
+      // 11fssood -> 11000101 -> 0xC5
+
+      framePtr[0] = 0xc5;
+      framePtr[1] = 0; // stream 0
+      framePtr += 2;
 
       // 4 bytes of offset is normally a waste, but it just comes
       // out of padding
-      tmp32 = (*iter)->mOffset;
-      tmp32 = htonl(tmp32);
-      memcpy(framePtr + 4, &tmp32, 4);
-      framePtr += 8;
+      tmp32 = htonl((*iter)->mOffset);
+      memcpy(framePtr, &tmp32, 4);
+      framePtr += 4;
+      
+      uint16_t tmp16 = (*iter)->mLen;
+      // todo check range.. that's really wrong as its 32
+      tmp16 = htons(tmp16);
+      memcpy(framePtr, &tmp16, 2);
+      framePtr += 2;
 
       room -= 8;
       if (room < (*iter)->mLen) {
@@ -1314,7 +1317,7 @@ MozQuic::FlushStream0(bool forceAck)
         (*iter)->mFin = false;
         tmp16 = (*iter)->mLen;
         tmp16 = htons(tmp16);
-        memcpy(framePtr - 7, &tmp16, 2);
+        memcpy(framePtr - 2, &tmp16, 2);
         auto iterReg = iter++;
         mUnWrittenData.insert(iter, std::move(tmp));
         iter = iterReg;
@@ -1529,34 +1532,29 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
     u.mStream.mFinBit = (type & 0x20);
 
-    bool lenBit = (type & 0x10);
-    uint32_t lenLen = lenBit ? 2 : 0;
-    uint32_t offsetLen = (type & 0x0c) >> 2;
-    if (offsetLen == 1) {
+    uint8_t ssBit = (type & 0x18) >> 3;
+    uint8_t ooBit = (type & 0x06) >> 1;
+    uint8_t dBit = (type & 0x01);
+    
+    uint32_t lenLen = dBit ? 2 : 0;
+    uint32_t offsetLen = 0;
+    assert(!(ooBit & 0xFC));
+    if (ooBit == 0) {
+      offsetLen = 0;
+    } else if (ooBit == 1) {
       offsetLen = 2;
-    } else if (offsetLen == 2) {
+    } else if (ooBit == 2) {
       offsetLen = 4;
-    } else if (offsetLen == 3) {
+    } else if (ooBit == 3) {
       offsetLen = 8;
     }
 
-    uint32_t idLen = (type & 0x03) + 1;
+    assert(!(ssBit & 0xFC));
+    uint32_t idLen = ssBit + 1;
+
     uint32_t bytesNeeded = 1 + lenLen + idLen + offsetLen;
     if (bytesNeeded > pktSize) {
       logger->RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame header short");
-      return;
-    }
-
-    if (lenBit) {
-      memcpy (&u.mStream.mDataLen, framePtr, 2);
-      framePtr += 2;
-      u.mStream.mDataLen = ntohs(u.mStream.mDataLen);
-    } else {
-      u.mStream.mDataLen = pktSize - bytesNeeded;
-    }
-    // todo log frame len
-    if (bytesNeeded + u.mStream.mDataLen > pktSize) {
-      logger->RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame data short");
       return;
     }
 
@@ -1567,6 +1565,21 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
     memcpy(((char *)&u.mStream.mOffset) + (8 - offsetLen), framePtr, offsetLen);
     framePtr += offsetLen;
     u.mStream.mOffset = ntohll(u.mStream.mOffset);
+
+    if (dBit) {
+      memcpy (&u.mStream.mDataLen, framePtr, 2);
+      framePtr += 2;
+      u.mStream.mDataLen = ntohs(u.mStream.mDataLen);
+    } else {
+      u.mStream.mDataLen = pktSize - bytesNeeded;
+    }
+
+    // todo log frame len
+    if (bytesNeeded + u.mStream.mDataLen > pktSize) {
+      logger->RaiseError(MOZQUIC_ERR_GENERAL, (char *) "stream frame data short");
+      return;
+    }
+
     mValid = MOZQUIC_OK;
     mFrameLen = bytesNeeded;
     return;
