@@ -28,6 +28,13 @@ extern "C" {
   int mozquic_new_connection(mozquic_connection_t **outConnection,
                              mozquic_config_t *inConfig)
   {
+    if (!mozQuicInit) {
+      int rv = mozquic::NSSHelper::Init(nullptr);
+      if (rv != MOZQUIC_OK) {
+        return rv;
+      }
+    }
+
     if (!outConnection || !inConfig) {
       return MOZQUIC_ERR_INVALID;
     }
