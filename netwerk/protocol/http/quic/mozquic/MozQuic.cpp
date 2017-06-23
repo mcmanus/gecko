@@ -443,6 +443,7 @@ MozQuic::IO()
 
   Intake();
   RetransmitTimer();
+  ClearOldInitialConnetIdsTimer();
   Flush();
 
   if (mIsClient) {
@@ -718,7 +719,7 @@ MozQuic::Transmit(unsigned char *pkt, uint32_t len, struct sockaddr_in *explicit
   if (rv == -1) {
     Log((char *)"Sending error in transmit");
   }
-  
+
   return MOZQUIC_OK;
 }
 
@@ -1066,7 +1067,7 @@ MozQuic::IntakeStream0(unsigned char *pkt, uint32_t pktSize)
 }
 
 MozQuic *
-MozQuic::Accept(struct sockaddr_in *clientAddr)
+MozQuic::Accept(struct sockaddr_in *clientAddr, uint64_t aConnectionID)
 {
   MozQuic *child = new MozQuic(mHandleIO);
   child->mIsChild = true;
@@ -1094,8 +1095,12 @@ MozQuic::Accept(struct sockaddr_in *clientAddr)
     child->mNSSHelper.reset(new NSSHelper(child, mOriginName.get()));
   }
   child->mVersion = mVersion;
-  
+
   mConnectionHash.insert( { child->mConnectionID, child });
+  mConnectionHashOriginalNew.insert( { aConnectionID,
+                                       { child->mConnectionID, Timestamp() }
+                                     } );
+
   return child;
 }
 
@@ -1181,7 +1186,28 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
 
   mVersion = header.mVersion;
 
-  MozQuic *child = Accept(clientAddr);
+  // Check whether this is an dup.
+  auto i = mConnectionHashOriginalNew.find(header.mConnectionID);
+  if (i != mConnectionHashOriginalNew.end()) {
+    if ((*i).second.mTimestamp < (Timestamp() - kForgetInitialConnectionIDsThresh)) {
+      // This connectionId is too old, just remove it.
+      mConnectionHashOriginalNew.erase(i);
+    } else {
+      auto j = mConnectionHash.find((*i).second.mServerConnectionID);
+      if (j != mConnectionHash.end()) {
+        *childSession = (*j).second;
+        // It is a dup and we will ignore it.
+        // TODO: maybe send hrr.
+        return MOZQUIC_OK;
+      } else {
+        // TODO maybe do not accept this: we received a dup of connectionId
+        // during kForgetInitialConnectionIDsThresh but we do not have a
+        // session, i.e. session is terminated.
+        mConnectionHashOriginalNew.erase(i);
+      }
+    }
+  }
+  MozQuic *child = Accept(clientAddr, header.mConnectionID);
   child->mConnectionState = SERVER_STATE_1RTT;
   child->IntakeStream0(pkt, pktSize);
   assert(mNewConnCB); // todo handle err
@@ -1460,6 +1486,27 @@ MozQuic::RetransmitTimer()
     }
   }
 
+  return MOZQUIC_OK;
+}
+
+uint32_t
+MozQuic::ClearOldInitialConnetIdsTimer()
+{
+  if (mUnAckedData.empty()) {
+    return MOZQUIC_OK;
+  }
+  uint64_t now = Timestamp();
+  uint64_t discardEpoch = now - kForgetInitialConnectionIDsThresh;
+
+  for (auto i = mConnectionHashOriginalNew.begin(); i != mConnectionHashOriginalNew.end(); ) {
+    if ((*i).second.mTimestamp < discardEpoch) {
+      fprintf(stderr,"Forget an old client initial connectionID: %lX\n",
+                    (*i).first);
+      mConnectionHashOriginalNew.erase(i);
+    } else {
+      i++;
+    }
+  }
   return MOZQUIC_OK;
 }
 

@@ -65,6 +65,7 @@ public:
 
   static const uint32_t kRetransmitThresh = 300;
   static const uint32_t kForgetUnAckedThresh = 4000; // ms
+  static const uint32_t kForgetInitialConnectionIDsThresh = 4000; // ms
  
   MozQuic(bool handleIO);
   MozQuic();
@@ -105,6 +106,7 @@ private:
 
   uint32_t Transmit(unsigned char *, uint32_t len, struct sockaddr_in *peer);
   uint32_t RetransmitTimer();
+  uint32_t ClearOldInitialConnetIdsTimer();
   void Acknowledge(unsigned char *, uint32_t len, LongHeaderData &);
   uint32_t AckPiggyBack(unsigned char *pkt, uint64_t pktNumber, uint32_t avail, keyPhase kp, uint32_t &used);
   uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen, struct sockaddr_in *peer);
@@ -131,7 +133,7 @@ private:
   uint32_t GenerateVersionNegotiation(LongHeaderData &clientHeader, struct sockaddr_in *peer);
   uint32_t ProcessVersionNegotiation(unsigned char *pkt, uint32_t pktSize, LongHeaderData &header);
 
-  MozQuic *Accept(struct sockaddr_in *peer);
+  MozQuic *Accept(struct sockaddr_in *peer, uint64_t aConnectionID);
 
   mozquic_socket_t mFD;
   bool mHandleIO;
@@ -149,6 +151,14 @@ private:
 
   // todo mvp lifecycle.. stuff never comes out of here
   std::unordered_map<uint64_t, MozQuic *> mConnectionHash;
+  // This maps connectionId sent by a client and connectionId chosen by the
+  // server. This is used to detect dup client initial packets.
+  // The elemets are going to be removed using a timer.
+  struct InitialClientPacketInfo {
+    uint64_t mServerConnectionID;
+    uint64_t mTimestamp;
+  };
+  std::unordered_map<uint64_t, struct InitialClientPacketInfo> mConnectionHashOriginalNew;
 
   uint64_t mConnectionID;
   uint64_t mNextPacketNumber;
