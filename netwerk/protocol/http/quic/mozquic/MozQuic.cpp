@@ -13,7 +13,6 @@
 #include "stdlib.h"
 #include "unistd.h"
 #include "time.h"
-#include "fnv.h"
 #include "sys/time.h"
 #include <string.h>
 #include <fcntl.h>
@@ -146,6 +145,7 @@ static const uint32_t kMozQuicIetfID4 = 0xff000004;
 
 static const uint32_t kMozQuicVersionGreaseC = 0xfa1a7a3a;
 static const uint32_t kMozQuicVersionGreaseS = 0xea0a6a2a;
+static const uint32_t kFNV64Size = 8;
 
 MozQuic::MozQuic(bool handleIO)
   : mFD(MOZQUIC_SOCKET_BAD)
@@ -311,6 +311,18 @@ MozQuic::FindSession(const unsigned char *pkt, uint32_t pktSize, LongHeaderData 
   return (*i).second;
 }
 
+static uint64_t
+fnv1a(unsigned char *p, uint32_t len) 
+{
+  const uint64_t prime = 1099511628211UL;
+  uint64_t hash = 14695981039346656037UL;
+  for (uint32_t i = 0; i < len; ++i) {
+    hash ^= p[i];
+    hash *= prime;
+  }
+  return hash;
+}
+
 bool
 MozQuic::IntegrityCheck(unsigned char *pkt, uint32_t pktSize) 
 {
@@ -319,16 +331,15 @@ MozQuic::IntegrityCheck(unsigned char *pkt, uint32_t pktSize)
           ((pkt[0] & 0x7f) == PACKET_TYPE_SERVER_STATELESS_RETRY) ||
           ((pkt[0] & 0x7f) == PACKET_TYPE_SERVER_CLEARTEXT) ||
           ((pkt[0] & 0x7f) == PACKET_TYPE_CLIENT_CLEARTEXT));
-  if (pktSize < (FNV64size + 17)) {
+  if (pktSize < (kFNV64Size + 17)) {
     RaiseError(MOZQUIC_ERR_GENERAL, (char *)"hash err");
     return false;
   }
-  unsigned char calculatedSum[FNV64size];
-  if (FNV64block(pkt, pktSize - FNV64size, calculatedSum) != 0) {
-    RaiseError(MOZQUIC_ERR_GENERAL, (char *)"hash err");
-    return false;
-  }
-  bool rv = !memcmp(calculatedSum, pkt + pktSize - FNV64size, FNV64size);
+  uint64_t hash = fnv1a(pkt, pktSize - kFNV64Size);
+  uint64_t recvdHash;
+  memcpy(&recvdHash, pkt + pktSize - kFNV64Size, kFNV64Size);
+  recvdHash = ntohll(recvdHash);
+  bool rv = recvdHash == hash;
   if (!rv) {
     Log((char *)"integrity error");
   }
@@ -1380,11 +1391,10 @@ MozQuic::FlushStream0(bool forceAck)
     framePtr += paddingNeeded;
 
     // then 8 bytes of checksum on cleartext packets
-    assert (FNV64size == 8);
-    if (FNV64block(pkt, finalLen - FNV64size, framePtr) != 0) {
-      RaiseError(MOZQUIC_ERR_GENERAL, (char *)"hash err");
-      return MOZQUIC_ERR_GENERAL;
-    }
+    assert (kFNV64Size == 8);
+    uint64_t hash = fnv1a(pkt, finalLen - kFNV64Size);
+    hash = htonll(hash);
+    memcpy(framePtr, &hash, kFNV64Size);
     uint32_t code = Transmit(pkt, finalLen, nullptr);
     if (code != MOZQUIC_OK) {
       return code;
@@ -1472,6 +1482,7 @@ MozQuic::NSSOutput(const void *buf, int32_t amount)
 uint32_t
 MozQuic::RetransmitTimer()
 {
+    return MOZQUIC_OK;
   if (mUnAckedData.empty()) {
     return MOZQUIC_OK;
   }

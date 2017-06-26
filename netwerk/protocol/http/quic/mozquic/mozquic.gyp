@@ -20,7 +20,6 @@
      'cflags': [ '-g', '<(nss_include)', ],
      'cflags_mozilla': [ '$(NSPR_CFLAGS)', '$(NSS_CFLAGS)', ],
      'sources': [
-         'fnv.c',
          'MozQuic.cpp',
          'MozQuicStream.cpp',
          'NSSHelper.cpp',
