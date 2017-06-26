@@ -1482,7 +1482,6 @@ MozQuic::NSSOutput(const void *buf, int32_t amount)
 uint32_t
 MozQuic::RetransmitTimer()
 {
-    return MOZQUIC_OK;
   if (mUnAckedData.empty()) {
     return MOZQUIC_OK;
   }
