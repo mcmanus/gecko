@@ -60,7 +60,7 @@ class MozQuicStreamPair;
 class MozQuic final : public MozQuicWriter
 {
 public:
-  static const uint32_t kMozQuicMTU = 1280; // todo pmtud
+  static const uint32_t kMozQuicMTU = 1252; // todo pmtud and assumes v4
   static const uint32_t kMozQuicMSS = 16384;
 
   static const uint32_t kRetransmitThresh = 300;
