@@ -13,6 +13,7 @@
 #include <memory>
 #include "MozQuicStream.h"
 #include "NSSHelper.h"
+#include "prnetdb.h"
 
 namespace mozquic {
 
@@ -22,20 +23,6 @@ namespace mozquic {
 #else
 #define MOZQUIC_SOCKET_BAD -1
 #endif
-
-static inline uint64_t htonll(uint64_t x)
-{
-  uint32_t test = 0x12345678;
-  if (test == htonl(test)) {
-    return x; // host and network order are the same
-  }
-  return ((((uint64_t)htonl(x)) << 32) + htonl((x) >> 32));
-}
-
-static inline uint64_t ntohll(uint64_t x)
-{
-  return htonll(x);
-}
 
 enum connectionState
 {

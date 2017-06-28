@@ -340,7 +340,7 @@ MozQuic::IntegrityCheck(unsigned char *pkt, uint32_t pktSize)
   uint64_t hash = fnv1a(pkt, pktSize - kFNV64Size);
   uint64_t recvdHash;
   memcpy(&recvdHash, pkt + pktSize - kFNV64Size, kFNV64Size);
-  recvdHash = ntohll(recvdHash);
+  recvdHash = PR_ntohll(recvdHash);
   bool rv = recvdHash == hash;
   if (!rv) {
     Log((char *)"integrity error");
@@ -966,7 +966,7 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
     uint64_t extra = 0;
     const uint8_t blockLengthLen = result.u.mAck.mAckBlockLengthLen;
     memcpy(((char *)&extra) + (8 - blockLengthLen), framePtr, blockLengthLen);
-    extra = ntohll(extra);
+    extra = PR_ntohll(extra);
     framePtr += blockLengthLen;
 
     fprintf(stderr,"ACK RECVD FOR %lX -> %lX\n",
@@ -1160,7 +1160,7 @@ MozQuic::GenerateVersionNegotiation(LongHeaderData &clientHeader, struct sockadd
 
   pkt[0] = 0x80 | PACKET_TYPE_VERSION_NEGOTIATION;
   // client connID echo'd from client
-  tmp64 = htonll(clientHeader.mConnectionID);
+  tmp64 = PR_htonll(clientHeader.mConnectionID);
   memcpy(pkt + 1, &tmp64, 8);
 
   // 32 packet number echo'd from client
@@ -1292,7 +1292,7 @@ MozQuic::FlushStream0(bool forceAck)
   }
 
   // todo store a network order version of this
-  uint64_t connID = htonll(mConnectionID);
+  uint64_t connID = PR_htonll(mConnectionID);
   memcpy(pkt + 1, &connID, 8);
   
   tmp32 = htonl(mNextPacketNumber);
@@ -1396,7 +1396,7 @@ MozQuic::FlushStream0(bool forceAck)
     // then 8 bytes of checksum on cleartext packets
     assert (kFNV64Size == 8);
     uint64_t hash = fnv1a(pkt, finalLen - kFNV64Size);
-    hash = htonll(hash);
+    hash = PR_htonll(hash);
     memcpy(framePtr, &hash, kFNV64Size);
     uint32_t code = Transmit(pkt, finalLen, nullptr);
     if (code != MOZQUIC_OK) {
@@ -1591,7 +1591,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
 
     memcpy(((char *)&u.mStream.mOffset) + (8 - offsetLen), framePtr, offsetLen);
     framePtr += offsetLen;
-    u.mStream.mOffset = ntohll(u.mStream.mOffset);
+    u.mStream.mOffset = PR_ntohll(u.mStream.mOffset);
 
     if (dBit) {
       memcpy (&u.mStream.mDataLen, framePtr, 2);
@@ -1649,7 +1649,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
     framePtr++;
     memcpy(((char *)&u.mAck.mLargestAcked) + (8 - ackedLen), framePtr, ackedLen);
     framePtr += ackedLen;
-    u.mAck.mLargestAcked = ntohll(u.mAck.mLargestAcked); // todo mvp these are only the low bits
+    u.mAck.mLargestAcked = PR_ntohll(u.mAck.mLargestAcked); // todo mvp these are only the low bits
 
     memcpy(&u.mAck.mAckDelay, framePtr, 2);
     framePtr += 2;
@@ -1691,7 +1691,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
       u.mRstStream.mStreamID = ntohl(u.mRstStream.mStreamID);
       framePtr += 4;
       memcpy(&u.mRstStream.mFinalOffset, framePtr, 8);
-      u.mRstStream.mFinalOffset = ntohll(u.mRstStream.mFinalOffset);
+      u.mRstStream.mFinalOffset = PR_ntohll(u.mRstStream.mFinalOffset);
       mValid = MOZQUIC_OK;
       mFrameLen = FRAME_TYPE_RST_STREAM_LENGTH;
       return;
@@ -1755,7 +1755,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
       mType = FRAME_TYPE_MAX_DATA;
 
       memcpy(&u.mMaxData.mMaximumData, framePtr, 8);
-      u.mMaxData.mMaximumData = ntohll(u.mMaxData.mMaximumData);
+      u.mMaxData.mMaximumData = PR_ntohll(u.mMaxData.mMaximumData);
       mValid = MOZQUIC_OK;
       mFrameLen =  FRAME_TYPE_MAX_DATA_LENGTH;
       return;
@@ -1774,7 +1774,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
       framePtr += 4;
       memcpy(&u.mMaxStreamData.mMaximumStreamData, framePtr, 8);
       u.mMaxStreamData.mMaximumStreamData =
-        ntohll(u.mMaxStreamData.mMaximumStreamData);
+        PR_ntohll(u.mMaxStreamData.mMaximumStreamData);
       mValid = MOZQUIC_OK;
       mFrameLen = FRAME_TYPE_MAX_STREAM_DATA_LENGTH;
       return;
@@ -1842,7 +1842,7 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
       framePtr += 2;
       memcpy(&u.mNewConnectionID.mConnectionID, framePtr, 8);
       u.mNewConnectionID.mConnectionID =
-        ntohll(u.mNewConnectionID.mConnectionID);
+        PR_ntohll(u.mNewConnectionID.mConnectionID);
       mValid = MOZQUIC_OK;
       mFrameLen = FRAME_TYPE_NEW_CONNECTION_ID_LENGTH;
       return;
@@ -1862,7 +1862,7 @@ MozQuic::LongHeaderData::LongHeaderData(unsigned char *pkt, uint32_t pktSize)
   assert(pkt[0] & 0x80);
   mType = static_cast<enum LongHeaderType>(pkt[0] & ~0x80);
   memcpy(&mConnectionID, pkt + 1, 8);
-  mConnectionID = ntohll(mConnectionID);
+  mConnectionID = PR_ntohll(mConnectionID);
   memcpy(&mPacketNumber, pkt + 9, 4);
   mPacketNumber = ntohl(mPacketNumber);
   memcpy(&mVersion, pkt + 13, 4);

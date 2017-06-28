@@ -10,10 +10,10 @@ OBJS += NSSHelper.o
 all: client server
 
 client: $(OBJS) sample/client.o
-	g++ -o client $(OBJS) sample/client.o $(LDFLAGS)
+	clang++ -o client $(OBJS) sample/client.o $(LDFLAGS)
 
 server: $(OBJS) sample/server.o
-	g++ -o server $(OBJS) sample/server.o $(LDFLAGS)
+	clang++ -o server $(OBJS) sample/server.o $(LDFLAGS)
 
 .PHONY: clean
 clean:
