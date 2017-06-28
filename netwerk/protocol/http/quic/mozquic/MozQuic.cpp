@@ -227,8 +227,6 @@ MozQuic::StartConnection()
     mNextPacketNumber = mNextPacketNumber | (random() & 0xffff);
   }
   mNextPacketNumber &= 0x7fffffff; // 31 bits
-  mNextPacketNumber = 0;
-  
   mOriginalPacketNumber = mNextPacketNumber;
 
   if (mFD == MOZQUIC_SOCKET_BAD) {
@@ -1123,7 +1121,6 @@ MozQuic::Accept(struct sockaddr_in *clientAddr, uint64_t aConnectionID)
     child->mNextPacketNumber = child->mNextPacketNumber | (random() & 0xffff);
   }
   child->mNextPacketNumber &= 0x7fffffff; // 31 bits
-  child->mNextPacketNumber = 0;
   child->mOriginalPacketNumber = child->mNextPacketNumber;
 
   assert(!mHandshakeInput);
