@@ -226,6 +226,8 @@ MozQuic::StartConnection()
     mNextPacketNumber = mNextPacketNumber | (random() & 0xffff);
   }
   mNextPacketNumber &= 0x7fffffff; // 31 bits
+  mNextPacketNumber = 0;
+  
   mOriginalPacketNumber = mNextPacketNumber;
 
   if (mFD == MOZQUIC_SOCKET_BAD) {
@@ -1120,6 +1122,7 @@ MozQuic::Accept(struct sockaddr_in *clientAddr, uint64_t aConnectionID)
     child->mNextPacketNumber = child->mNextPacketNumber | (random() & 0xffff);
   }
   child->mNextPacketNumber &= 0x7fffffff; // 31 bits
+  child->mNextPacketNumber = 0;
   child->mOriginalPacketNumber = child->mNextPacketNumber;
 
   assert(!mHandshakeInput);
@@ -1208,7 +1211,7 @@ MozQuic::ProcessClientInitial(unsigned char *pkt, uint32_t pktSize,
     return MOZQUIC_ERR_GENERAL;
   }
 
-  if (pktSize < kMozQuicMTU) {
+  if (pktSize < kMinClientInitial) {
     RaiseError(MOZQUIC_ERR_GENERAL, (char *)"client initial packet too small");
     return MOZQUIC_ERR_GENERAL;
   }
