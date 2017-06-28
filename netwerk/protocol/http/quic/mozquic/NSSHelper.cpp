@@ -24,18 +24,18 @@ fail complie;
 /*
     nss -20 branch
     https://github.com/nss-dev/nss/tree/NSS_TLS13_DRAFT19_BRANCH
-    
+
     known cset d48b10106e9e77a7ec9a8fffe64a681d775a0563
 */
 
 // todo runtime enforce too
 
 namespace mozquic {
-        
+
 static bool mozQuicInit = false;
 static PRDescIdentity nssHelperIdentity;
 static PRIOMethods nssHelperMethods;
-  
+
 int
 NSSHelper::Init(char *dir)
 {
@@ -115,7 +115,7 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
   SSL_OptionSet(mFD, SSL_HANDSHAKE_AS_SERVER, true);
   SSL_OptionSet(mFD, SSL_ENABLE_RENEGOTIATION, SSL_RENEGOTIATE_NEVER);
   SSL_OptionSet(mFD, SSL_NO_CACHE, true);
-  SSL_OptionSet(mFD, SSL_ENABLE_SESSION_TICKETS, true);
+  SSL_OptionSet(mFD, SSL_ENABLE_SESSION_TICKETS, false);
   SSL_OptionSet(mFD, SSL_REQUEST_CERTIFICATE, false);
   SSL_OptionSet(mFD, SSL_REQUIRE_CERTIFICATE, SSL_REQUIRE_NEVER);
 
@@ -128,7 +128,7 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
   SSL_HandshakeCallback(mFD, HandshakeCallback, nullptr);
 
   mNSSReady = true;
-  
+
   unsigned char buffer[256];
   assert(strlen(mozquic_alpn) < 256);
   buffer[0] = strlen(mozquic_alpn);
@@ -149,7 +149,7 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
       }
     }
   }
-    
+
   PR_Connect(mFD, &addr, 0);
   // if you Read() from the helper, it pulls through the tls layer from the mozquic::stream0 buffer where
   // peer data lke the client hello is stored.. if you Write() to the helper something
@@ -191,7 +191,7 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey, bool unused)
   SECMODModule *module = SECMOD_LoadUserModule(module_name, NULL, PR_FALSE);
 
   mNSSReady = true;
-  
+
   unsigned char buffer[256];
   assert(strlen(mozquic_alpn) < 256);
   buffer[0] = strlen(mozquic_alpn);
@@ -202,7 +202,7 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey, bool unused)
   }
 
   SSL_SetURL(mFD, originKey);
-    
+
   PRNetAddr addr;
   memset(&addr,0,sizeof(addr));
   addr.raw.family = PR_AF_INET;
