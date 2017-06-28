@@ -1,6 +1,6 @@
 
-
 LDFLAGS += -lnss3 -lnssutil3 -lsmime3 -lssl3 -lplds4 -lplc4 -lnspr4
+CXXFLAGS +=  -std=c++0x -Wno-format
 CXXFLAGS += -I/home/mcmanus/src/mozilla2/wd/dist/public/nss/ -I/usr/include/nspr
 
 OBJS += MozQuic.o

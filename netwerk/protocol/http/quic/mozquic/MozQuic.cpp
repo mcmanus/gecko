@@ -651,7 +651,7 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint64_t pktNumOfAck, uint32_t avail, 
         if (needed < avail) {
           break; // dont end frame with 0s
         }
-        *numBlocks++;
+        *numBlocks = *numBlocks + 1;
         if (needed > 3) {
           pkt[0] = 255; // empty block
           pkt[1] = 0;
