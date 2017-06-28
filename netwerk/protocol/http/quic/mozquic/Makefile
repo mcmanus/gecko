@@ -8,11 +8,16 @@ LDFLAGS += -L$(MOZQUIC_NSS_ROOT)dist/$(MOZQUIC_NSS_PLATFORM)/lib -lnss3 -lnssuti
 CXXFLAGS +=  -std=c++0x  -I$(MOZQUIC_NSS_ROOT) -I$(MOZQUIC_NSS_ROOT)dist/$(MOZQUIC_NSS_PLATFORM)/include/ -I$(MOZQUIC_NSS_ROOT)dist/public/nss -Wno-format
 CXXFLAGS += -I$(NSPR_INCLUDE)
 
+# For .h dependency management
+CXXFLAGS += -MP -MD 
+
 OBJS += MozQuic.o
 OBJS += MozQuicStream.o
 OBJS += NSSHelper.o
 
 all: client server
+
+-include $(OBJS:.o=.d)
 
 client: $(OBJS) sample/client.o
 	clang++ -o client $(OBJS) sample/client.o $(LDFLAGS)
@@ -22,5 +27,5 @@ server: $(OBJS) sample/server.o
 
 .PHONY: clean
 clean:
-	rm -f $(OBJS) client server sample/client.o sample/server.o
+	rm -f $(OBJS) client server sample/client.o sample/server.o *.d
 
