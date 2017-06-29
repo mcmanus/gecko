@@ -872,7 +872,7 @@ MozQuic::HandshakeComplete(uint32_t code)
   }
   
   fprintf(stderr,"CLIENT_STATE_CONNECTED 2\n");
-  // todo prm client km 1 .. need to also provide key material
+  // todo prm client km 1 .. need to also provide key material issue 49
   mConnectionState = CLIENT_STATE_CONNECTED;
   MaybeSendAck();
 }
