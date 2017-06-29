@@ -40,6 +40,7 @@ int main()
   memset(&config, 0, sizeof(config));
   config.originName = "foo.example.com"; // really the nickname in the nss db
   config.originPort = 4433;
+  config.tolerateBadALPN = 1;
   config.handleIO = 0; // todo mvp
 
   mozquic_new_connection(&c, &config);

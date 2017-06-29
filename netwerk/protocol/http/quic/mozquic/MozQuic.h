@@ -40,6 +40,7 @@ extern "C" {
     unsigned int greaseVersionNegotiation; // flag
     unsigned int preferMilestoneVersion; // flag
     unsigned int ignorePKI; // flag
+    unsigned int tolerateBadALPN; // flag
 
     void (*logging_callback)(void *, char *); // todo va arg
     int  (*send_callback)(void *, unsigned char *, uint32_t len);

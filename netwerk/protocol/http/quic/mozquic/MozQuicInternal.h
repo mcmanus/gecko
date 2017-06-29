@@ -81,6 +81,7 @@ public:
   void GreaseVersionNegotiation();
   void PreferMilestoneVersion();
   void SetIgnorePKI() { mIgnorePKI = true; }
+  void SetTolerateBadALPN() { mTolerateBadALPN = true; }
   bool IgnorePKI();
   void Shutdown(uint32_t, const char *);
 
@@ -132,6 +133,7 @@ private:
   bool mIsChild;
   bool mReceivedServerClearText;
   bool mIgnorePKI;
+  bool mTolerateBadALPN;
   bool mIsLoopback;
   enum connectionState mConnectionState;
   int mOriginPort;

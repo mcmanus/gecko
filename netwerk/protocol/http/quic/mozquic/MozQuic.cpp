@@ -60,6 +60,9 @@ extern "C" {
     if (inConfig->greaseVersionNegotiation) {
       q->GreaseVersionNegotiation();
     }
+    if (inConfig->tolerateBadALPN) {
+      q->SetTolerateBadALPN();
+    }
     if (inConfig->preferMilestoneVersion) {
       q->PreferMilestoneVersion();
     }
@@ -156,6 +159,7 @@ MozQuic::MozQuic(bool handleIO)
   , mIsChild(false)
   , mReceivedServerClearText(false)
   , mIgnorePKI(false)
+  , mTolerateBadALPN(false)
   , mIsLoopback(false)
   , mConnectionState(STATE_UNINITIALIZED)
   , mOriginPort(-1)
@@ -270,7 +274,7 @@ MozQuic::StartConnection()
 {
   assert(!mHandleIO); // todo
   mIsClient = true;
-  mNSSHelper.reset(new NSSHelper(this, mOriginName.get(), true));
+  mNSSHelper.reset(new NSSHelper(this, mTolerateBadALPN, mOriginName.get(), true));
   mStream0.reset(new MozQuicStreamPair(0, this));
 
   mConnectionState = CLIENT_STATE_1RTT;
@@ -1122,6 +1126,7 @@ MozQuic::ProcessGeneral(unsigned char *pkt, uint32_t pktSize, uint32_t headerSiz
                                          kMozQuicMSS, written);
   fprintf(stderr,"decrypt %d returned %d\n", rv, written);
   if (rv != MOZQUIC_OK) {
+    fprintf(stderr, "decrypt failed\n");
     return rv;
   }
   return ProcessGeneralDecoded(out, written);
@@ -1224,7 +1229,7 @@ MozQuic::Accept(struct sockaddr_in *clientAddr, uint64_t aConnectionID)
 
   assert(!mHandshakeInput);
   if (!mHandshakeInput) {
-    child->mNSSHelper.reset(new NSSHelper(child, mOriginName.get()));
+    child->mNSSHelper.reset(new NSSHelper(child, mTolerateBadALPN, mOriginName.get()));
   }
   child->mVersion = mVersion;
 

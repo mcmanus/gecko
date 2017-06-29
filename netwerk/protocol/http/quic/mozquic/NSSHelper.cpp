@@ -311,9 +311,11 @@ NSSHelper::HandshakeCallback(PRFileDesc *fd, void *client_data)
   unsigned int secretSize;
   CK_MECHANISM_TYPE importMechanism1, importMechanism2;
 
-  if (SSL_GetNextProto(fd, &state, buf, &bufLen, 256) != SECSuccess ||
-      bufLen != strlen(mozquic_alpn) ||
-      memcmp(mozquic_alpn, buf, bufLen)) {
+  if (!self->mTolerateBadALPN &&
+      (SSL_GetNextProto(fd, &state, buf, &bufLen, 256) != SECSuccess ||
+       bufLen != strlen(mozquic_alpn) ||
+       memcmp(mozquic_alpn, buf, bufLen))) {
+    fprintf(stderr,"alpn fail\n");
     goto failure;
   } else {
     SSLChannelInfo info;
@@ -482,12 +484,13 @@ NSSHelper::BadCertificate(void *client_data, PRFileDesc *fd)
 }
 
 // server version
-NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
+NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *originKey)
   : mQuicSession(quicSession)
   , mNSSReady(false)
   , mHandshakeComplete(false)
   , mHandshakeFailed(false)
   , mIsClient(false)
+  , mTolerateBadALPN(tolerateBadALPN)
   , mPacketProtectionSenderKey0(nullptr)
   , mPacketProtectionReceiverKey0(nullptr)
 {
@@ -546,12 +549,13 @@ NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey)
 }
 
 // client version
-NSSHelper::NSSHelper(MozQuic *quicSession, const char *originKey, bool unused)
+NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *originKey, bool unused)
   : mQuicSession(quicSession)
   , mNSSReady(false)
   , mHandshakeComplete(false)
   , mHandshakeFailed(false)
   , mIsClient(true)
+  , mTolerateBadALPN(tolerateBadALPN)
   , mPacketProtectionSenderKey0(nullptr)
   , mPacketProtectionReceiverKey0(nullptr)
 {

@@ -30,8 +30,7 @@ int main()
   
   memset(&config, 0, sizeof(config));
   config.originName = "foo.example.com"; // really the nickname in the nss db
-//  config.originPort = 8443;
-    config.originPort = 4433;
+  config.originPort = 4433;
   config.handleIO = 0; // todo mvp
 
   // ingorePKI will allow invalid certs

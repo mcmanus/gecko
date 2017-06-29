@@ -17,8 +17,8 @@ class NSSHelper final
 {
 public:
   static int Init(char *dir);
-  NSSHelper(MozQuic *quicSession, const char *originKey);
-  NSSHelper(MozQuic *quicSession, const char *originKey, bool clientindicator); // todo, subclass
+  NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *originKey);
+  NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *originKey, bool clientindicator); // todo, subclass
   ~NSSHelper();
   uint32_t DriveHandshake();
   bool IsHandshakeComplete() { return mHandshakeComplete; }
@@ -62,6 +62,7 @@ private:
   bool                 mHandshakeComplete;
   bool                 mHandshakeFailed; // complete but bad above nss
   bool                 mIsClient;
+  bool                 mTolerateBadALPN;
 
   CK_MECHANISM_TYPE   mPacketProtectionMech;
   PK11SymKey         *mPacketProtectionSenderKey0;
