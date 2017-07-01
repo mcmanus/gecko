@@ -10,6 +10,7 @@
    so buyer beware
 */
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -80,9 +81,18 @@ extern "C" {
   // the mozquic application may either delegate TLS handling to the lib
   // or may imlement the TLS API : mozquic_handshake_input/output and then
   // mozquic_handshake_complete(ERRORCODE)
+  struct mozquic_handshake_info 
+  {
+    // this is going to form an ABI, so revisit this before v1 release
+    unsigned int ciphersuite;
+    unsigned char *secret;
+    size_t secretLen;
+  };
+    
   void mozquic_handshake_output(mozquic_connection_t *session,
                                 unsigned char *data, uint32_t data_len);
-  void mozquic_handshake_complete(mozquic_connection_t *session, uint32_t err);
+  void mozquic_handshake_complete(mozquic_connection_t *session, uint32_t err,
+                                  struct mozquic_handshake_info *keyInfo);
 
 #ifdef __cplusplus
 }

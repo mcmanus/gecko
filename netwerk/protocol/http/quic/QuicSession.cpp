@@ -16,6 +16,8 @@
 #include "nsIAsyncOutputStream.h"
 #include "mozilla/Unused.h"
 #include "QuicSessionUtil.h"
+#include "nsISSLStatusProvider.h"
+#include "nsISSLStatus.h"
 
 namespace mozilla { namespace net {
 
@@ -110,11 +112,22 @@ QuicSession::DriveHandshake()
   nsresult rv = mPSMSSLSocketControl->DriveHandshake();
   if (NS_FAILED(rv) && rv != NS_BASE_STREAM_WOULD_BLOCK) {
     fprintf(stderr,"drivehandshake failed\n");
-    mozquic_handshake_complete(mSession, MOZQUIC_ERR_CRYPTO);
+    mozquic_handshake_complete(mSession, MOZQUIC_ERR_CRYPTO, nullptr);
     mHandshakeCompleteCode = MOZQUIC_ERR_CRYPTO;
   }
+
+  nsCOMPtr<nsISSLStatusProvider> sslprov = do_QueryInterface(mPSMHelperSecInfo);
+  nsCOMPtr<nsISSLStatus> sslStatus;
+  if (sslprov) {
+    sslprov->GetSSLStatus(getter_AddRefs(sslStatus));
+  }
+  nsAutoCString cipher;
+  sslStatus->GetCipherName(cipher);
+  fprintf(stderr, "GECKO CALLING MOZQUIC_HANDSHAKE_COMPLETE %s\n",
+          cipher.get());
+  struct mozquic_handshake_info TODO;
   if (NS_SUCCEEDED(rv)) {
-    mozquic_handshake_complete(mSession, MOZQUIC_OK);
+    mozquic_handshake_complete(mSession, MOZQUIC_OK, &TODO);
     mHandshakeCompleteCode = MOZQUIC_OK;
   }
 

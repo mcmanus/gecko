@@ -118,8 +118,10 @@ extern "C" {
     self->HandshakeOutput(data, data_len);
   }
 
-  void mozquic_handshake_complete(mozquic_connection_t *conn, uint32_t errCode)
+  void mozquic_handshake_complete(mozquic_connection_t *conn, uint32_t errCode,
+                                  struct mozquic_handshake_info *keyInfo)
   {
+    assert(false);
     mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
     self->HandshakeComplete(errCode);
   }
