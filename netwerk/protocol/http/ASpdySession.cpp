@@ -66,7 +66,7 @@ SpdyInformation::SpdyInformation()
   Version[0] = HTTP_VERSION_2;
   VersionString[0] = nsCString(ASpdySession::kH2Alpn);
   ALPNCallbacks[0] = Http2Session::ALPNCallback;
-  IsQUIC[1] = false;
+  IsQUIC[0] = false;
 
   Version[1] = QUIC_EXPERIMENT_0;
   VersionString[1] = nsCString(ASpdySession::kHQAlpn);
