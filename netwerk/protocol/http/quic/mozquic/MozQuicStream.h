@@ -74,12 +74,14 @@ class MozQuicStreamOut
 public:
   MozQuicStreamOut(uint32_t id, MozQuicWriter *w);
   ~MozQuicStreamOut();
-  uint32_t Write(const unsigned char *data, uint32_t len);
+  uint32_t Write(const unsigned char *data, uint32_t len, bool fin);
+  int EndStream();
 
 private:
   MozQuicWriter *mWriter;
   uint32_t mStreamID;
   uint64_t mOffset;
+  bool mFin;
 };
 
 class MozQuicStreamIn
@@ -118,8 +120,12 @@ public:
     return mIn.Empty();
   }
 
-  uint32_t Write(const unsigned char *data, uint32_t len) {
-    return mOut.Write(data, len);
+  uint32_t Write(const unsigned char *data, uint32_t len, bool fin) {
+    return mOut.Write(data, len, fin);
+  }
+
+  int EndStream() {
+    return mOut.EndStream();
   }
 
   MozQuicStreamOut mOut;

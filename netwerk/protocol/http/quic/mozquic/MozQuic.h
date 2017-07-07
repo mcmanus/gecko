@@ -20,16 +20,23 @@ extern "C" {
   const uint32_t mozquic_library_version = 1;
 
   enum {
-    MOZQUIC_OK           = 0,
-    MOZQUIC_ERR_GENERAL  = 1,
-    MOZQUIC_ERR_INVALID  = 2,
-    MOZQUIC_ERR_MEMORY   = 3,
-    MOZQUIC_ERR_IO       = 4,
-    MOZQUIC_ERR_CRYPTO   = 5,
-    MOZQUIC_ERR_VERSION  = 6,
+    MOZQUIC_OK                   = 0,
+    MOZQUIC_ERR_GENERAL          = 1,
+    MOZQUIC_ERR_INVALID          = 2,
+    MOZQUIC_ERR_MEMORY           = 3,
+    MOZQUIC_ERR_IO               = 4,
+    MOZQUIC_ERR_CRYPTO           = 5,
+    MOZQUIC_ERR_VERSION          = 6,
+    MOZQUIC_ERR_ALREADY_FINISHED = 7,
+  };
+
+  enum {
+    MOZQUIC_EVENT_NEW_STREAM_DATA = 0,
+    MOZQUIC_EVENT_STREAM_RESET    = 1,
   };
 
   typedef void mozquic_connection_t;
+  typedef void mozquic_stream_t;
 
   struct mozquic_config_t 
   {
@@ -48,6 +55,8 @@ extern "C" {
     int  (*recv_callback)(void *, unsigned char *, uint32_t len, uint32_t *outLen);
     int  (*error_callback)(void *, uint32_t err, char *);
 
+    int  (*connection_event_callback)(void *, uint32_t event, void *aParam);
+
     // TLS API
     int (*handshake_input)(void *, unsigned char *data, uint32_t len);
   };
@@ -60,6 +69,11 @@ extern "C" {
   int mozquic_destroy_connection(mozquic_connection_t *inSession);
   int mozquic_start_connection(mozquic_connection_t *inSession); // client rename todo
   int mozquic_start_server(mozquic_connection_t *inSession, int (*handle_new_connection)(void *, mozquic_connection_t *newconn));
+  int mozquic_start_new_stream(mozquic_stream_t **outStream, mozquic_connection_t *conn, void *data, uint32_t amount, int fin);
+  int mozquic_send(mozquic_stream_t *stream, void *data, uint32_t amount, int fin);
+  int mozquic_end_stream(mozquic_stream_t *stream);
+  int mozquic_recv(mozquic_stream_t *stream, void *data, uint32_t aval, uint32_t *amount, int *fin);
+  int mozquic_set_event_callback(mozquic_connection_t *conn, int (*fx)(mozquic_connection_t *, uint32_t event, void * param));
 
   ////////////////////////////////////////////////////
   // IO handlers

@@ -92,7 +92,7 @@ MozQuicStreamIn::Supply(std::unique_ptr<MozQuicStreamChunk> &d)
     d.reset();
     return MOZQUIC_OK;
   }
-  
+
   // if the list is empty, add it to the list!
   if (mAvailable.empty()) {
     mAvailable.push_front(std::move(d));
@@ -194,6 +194,7 @@ MozQuicStreamOut::MozQuicStreamOut(uint32_t id, MozQuicWriter *w)
   : mWriter(w)
   , mStreamID(id)
   , mOffset(0)
+  , mFin(false)
 {
 }
 
@@ -202,10 +203,22 @@ MozQuicStreamOut::~MozQuicStreamOut()
 }
 
 uint32_t
-MozQuicStreamOut::Write(const unsigned char *data, uint32_t len)
+MozQuicStreamOut::Write(const unsigned char *data, uint32_t len, bool fin)
 {
-  std::unique_ptr<MozQuicStreamChunk> tmp(new MozQuicStreamChunk(mStreamID, mOffset, data, len, false));
+  std::unique_ptr<MozQuicStreamChunk> tmp(new MozQuicStreamChunk(mStreamID, mOffset, data, len, fin));
   mOffset += len;
+  return mWriter->DoWriter(tmp);
+}
+
+int
+MozQuicStreamOut::EndStream()
+{
+  if (mFin) {
+    return MOZQUIC_ERR_ALREADY_FINISHED;
+  }
+  mFin = true;
+
+  std::unique_ptr<MozQuicStreamChunk> tmp(new MozQuicStreamChunk(mStreamID, mOffset, nullptr, 0, true));
   return mWriter->DoWriter(tmp);
 }
 
@@ -226,8 +239,7 @@ MozQuicStreamChunk::MozQuicStreamChunk(uint32_t id, uint64_t offset,
     // todo should not silently truncate like this
     len = 0xfffffffffffffffe - offset;
   }
-  
-  mTransmitKeyPhase = keyPhaseUnprotected; // todo mvp
+
   memcpy((void *)mData.get(), data, len);
 }
 
@@ -241,7 +253,6 @@ MozQuicStreamChunk::MozQuicStreamChunk(MozQuicStreamChunk &orig)
   , mRetransmitted(false)
   , mTransmitKeyPhase(keyPhaseUnknown)
 {
-  mTransmitKeyPhase = keyPhaseUnprotected; // todo mvp
   mData = std::move(orig.mData);
 }
 
