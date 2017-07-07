@@ -17,12 +17,61 @@ to mozquic_nss_config(). It contains a NSS database with a cert
 and key for foo.example.com that is signed by a CA defined by CA.cert.der.
 #endif
 
+static int connEventCB(void *closure, uint32_t event, void *param)
+{
+  switch (event) {
+  case MOZQUIC_EVENT_NEW_STREAM_DATA:
+  {
+    mozquic_stream_t *stream = param;
+    char buf[100];
+    int finStream = 0;
+    int read = 0;
+    int fin = 0;
+    int line = 0;
+    do {
+      uint32_t code = mozquic_recv(stream, buf, 100, &read, &fin);
+      if (code != MOZQUIC_OK) {
+        fprintf(stderr,"Read stream error %d\n", code);
+        return MOZQUIC_OK;
+      } else if (read > 0) {
+        if (!line) {
+          fprintf(stderr,"Data:\n");
+        }
+        line++;
+        buf[read] = '\0';
+        if (strcmp(buf, "FIN") == 0) {
+          finStream = 1;
+        }
+        fprintf(stderr,"%s\n", buf);
+      }
+    } while (read > 0);
+    if (finStream) {
+      char msg[] = "Server sending data.";
+      mozquic_send(stream, msg, strlen(msg), 1);
+    }
+    return MOZQUIC_OK;
+  }
+  case MOZQUIC_EVENT_STREAM_RESET:
+  {
+    // todo not implemented yet.
+    mozquic_stream_t *stream = param;
+    fprintf(stderr,"Stream was reset\n");
+    return MOZQUIC_OK;
+  }
+  default:
+    fprintf(stderr,"Wrong event\n");
+    return MOZQUIC_ERR_GENERAL;
+  }
+  return MOZQUIC_OK;
+}
+
 static int accept_new_connection(void *closure, mozquic_connection_t *nc)
 {
   if (only_child) {
     mozquic_destroy_connection(only_child);
   }
   only_child = nc;
+  mozquic_set_event_callback( only_child, connEventCB);
   return MOZQUIC_OK;
 }
 

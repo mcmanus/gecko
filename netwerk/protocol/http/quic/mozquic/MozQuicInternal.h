@@ -61,6 +61,7 @@ public:
 
   int StartConnection();
   int StartServer(int (*handle_new_connection)(void *, mozquic_connection_t *));
+  int StartNewStream(MozQuicStreamPair **outStream, const void *data, uint32_t amount, bool fin);
   int IO();
   void HandshakeOutput(unsigned char *, uint32_t amt);
   void HandshakeComplete(uint32_t errCode);
@@ -76,6 +77,8 @@ public:
   void SetHandshakeInput(int (*fx)(mozquic_connection_t *,
                                    unsigned char *data, uint32_t len)) { mHandshakeInput = fx; }
   void SetErrorCB(int (*fx)(mozquic_connection_t *, uint32_t err, char *)) { mErrorCB = fx; }
+  void SetConnEventCB(int (*fx)(mozquic_connection_t *,
+                      uint32_t event, void * param)) { mConnEventCB = fx; }
   void SetFD(mozquic_socket_t fd) { mFD = fd; }
   int  GetFD() { return mFD; }
   void GreaseVersionNegotiation();
@@ -93,7 +96,7 @@ private:
   void RaiseError(uint32_t err, char *reason);
 
   void AckScoreboard(uint64_t num, enum keyPhase kp);
-  void MaybeSendAck();
+  int MaybeSendAck();
 
   uint32_t Transmit(unsigned char *, uint32_t len, struct sockaddr_in *peer);
   uint32_t RetransmitTimer();
@@ -101,12 +104,12 @@ private:
   void Acknowledge(uint64_t packetNum, keyPhase kp);
   uint32_t AckPiggyBack(unsigned char *pkt, uint64_t pktNumber, uint32_t avail, keyPhase kp, uint32_t &used);
   uint32_t Recv(unsigned char *, uint32_t len, uint32_t &outLen, struct sockaddr_in *peer);
-  int ProcessServerCleartext(unsigned char *, uint32_t size, LongHeaderData &);
+  int ProcessServerCleartext(unsigned char *, uint32_t size, LongHeaderData &, bool &);
   int ProcessClientInitial(unsigned char *, uint32_t size, struct sockaddr_in *peer,
-                           LongHeaderData &, MozQuic **outSession);
-  int ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize, LongHeaderData &);
-  uint32_t ProcessGeneralDecoded(unsigned char *, uint32_t size);
-  uint32_t ProcessGeneral(unsigned char *, uint32_t size, uint32_t headerSize, uint64_t packetNumber);
+                           LongHeaderData &, MozQuic **outSession, bool &);
+  int ProcessClientCleartext(unsigned char *pkt, uint32_t pktSize, LongHeaderData &, bool&);
+  uint32_t ProcessGeneralDecoded(unsigned char *, uint32_t size, bool &);
+  uint32_t ProcessGeneral(unsigned char *, uint32_t size, uint32_t headerSize, uint64_t packetNumber, bool &);
   bool IntegrityCheck(unsigned char *, uint32_t size);
   void ProcessAck(class FrameHeaderData &result, unsigned char *framePtr);
 
@@ -117,6 +120,7 @@ private:
   uint32_t Intake();
   uint32_t Flush();
   uint32_t FlushStream0(bool forceAck);
+  uint32_t FlushStream(bool forceAck);
   int Client1RTT();
   int Server1RTT();
   void Log(char *);
@@ -124,8 +128,11 @@ private:
   bool VersionOK(uint32_t proposed);
   uint32_t GenerateVersionNegotiation(LongHeaderData &clientHeader, struct sockaddr_in *peer);
   uint32_t ProcessVersionNegotiation(unsigned char *pkt, uint32_t pktSize, LongHeaderData &header);
+  int CreateShortPacketHeader(unsigned char *pkt, uint32_t pktSize, uint32_t &used);
 
   MozQuic *Accept(struct sockaddr_in *peer, uint64_t aConnectionID);
+
+  int FindStream(uint32_t streamID, std::unique_ptr<MozQuicStreamChunk> &d);
 
   mozquic_socket_t mFD;
   bool mHandleIO;
@@ -165,9 +172,14 @@ private:
   int  (*mHandshakeInput)(mozquic_connection_t *, unsigned char *, uint32_t len);
   int  (*mErrorCB)(mozquic_connection_t *, uint32_t, char *);
   int  (*mNewConnCB)(void *, mozquic_connection_t *);
+  int  (*mConnEventCB)(void *, uint32_t, void *);
  
   std::unique_ptr<MozQuicStreamPair> mStream0;
   std::unique_ptr<NSSHelper>         mNSSHelper;
+
+  uint32_t mNextStreamId;
+  uint32_t mNextRecvStreamId;
+  std::unordered_map<uint32_t, MozQuicStreamPair *> mStreams;
 
   // todo coalesce all unacked
   std::list<std::unique_ptr<MozQuicStreamChunk>> mUnWrittenData;
