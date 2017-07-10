@@ -993,7 +993,7 @@ MozQuic::HandshakeComplete(uint32_t code)
   }
   
   fprintf(stderr,"CLIENT_STATE_CONNECTED 2\n");
-  // todo prm client km 1 .. need to also provide key material
+  // todo prm client km 1 .. need to also provide key material issue 49
   mConnectionState = CLIENT_STATE_CONNECTED;
   MaybeSendAck();
 }
@@ -2173,8 +2173,12 @@ MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, 
           return;
         }
         // Log error!
-        framePtr[len-1] = '\0';// Make sure it is 0-ended TODO:
-        session->Log((char *)framePtr);
+        char reason[kMozQuicMSS];
+        if (len < kMozQuicMSS) {
+          memcpy(reason, framePtr, len);
+          reason[len] = '\0';
+          session->Log((char *)reason);
+        }
       }
       mValid = MOZQUIC_OK;
       mFrameLen = FRAME_TYPE_CLOSE_LENGTH + len;
