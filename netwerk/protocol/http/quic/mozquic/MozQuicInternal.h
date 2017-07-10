@@ -193,6 +193,9 @@ private:
   //   ->Transmitted() is true in (b)
   std::list<MozQuicStreamAck>                    mAckList;
 
+  // The beginning of a connection.
+  uint64_t mTimestampConnBegin;
+
   // need other frame 2 list
 public: // callbacks from nsshelper
   int32_t NSSInput(void *buf, int32_t amount);

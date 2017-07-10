@@ -365,6 +365,7 @@ MozQuic::StartConnection()
     connect(mFD, outAddr->ai_addr, outAddr->ai_addrlen);
     freeaddrinfo(outAddr);
   }
+  mTimestampConnBegin = Timestamp();
 
   return MOZQUIC_OK;
 }
@@ -692,6 +693,7 @@ MozQuic::AckScoreboard(uint64_t packetNumber, enum keyPhase kp)
       }
       iter->mPacketNumber++;
       iter->mExtra++;
+      iter->mReceiveTime.push_front(Timestamp());
       return;
     }
     if (iter->mPacketNumber >= packetNumber &&
@@ -753,6 +755,8 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint64_t pktNumOfAck, uint32_t avail, 
   // for protected, probably need to be more clever
   bool newFrame = true;
   uint8_t *numBlocks = nullptr;
+  uint8_t *numTS = nullptr;
+  uint64_t largestAcked;
   uint64_t lowAcked;
   for (auto iter = mAckList.begin(); iter != mAckList.end(); ) {
     // list  ordered as 7/2, 2/1.. (with gap @4 @3)
@@ -774,12 +778,15 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint64_t pktNumOfAck, uint32_t avail, 
       pkt[0] = 0xb9; // ack with 32 bit num and 16 bit run encoding and numblocks
       numBlocks = pkt + 1;
       *numBlocks = 0;
-      pkt[2] = 0; // no TS
-      uint32_t packet32 = iter->mPacketNumber;
+      numTS = pkt + 2;
+      *numTS = 0;
+      largestAcked = iter->mPacketNumber;
+      uint32_t packet32 = largestAcked;
       packet32 = htonl(packet32);
       memcpy(pkt + 3, &packet32, 4);
       // timestamp is microseconds (10^-6) as 16 bit fixed point #
-      uint64_t delay64 = (Timestamp() - iter->mReceiveTime) * 1000;
+      assert(iter->mReceiveTime.size());
+      uint64_t delay64 = (Timestamp() - *(iter->mReceiveTime.begin())) * 1000;
       uint16_t delay = htons(ufloat16_encode(delay64));
       memcpy(pkt + 7, &delay, 2);
       uint16_t extra = htons(iter->mExtra);
@@ -821,6 +828,58 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint64_t pktNumOfAck, uint32_t avail, 
     }
   }
 
+  newFrame = true;
+  uint64_t previousTS;
+  uint32_t previousPktID;
+  if (kp != keyPhaseUnprotected) {
+    for (auto iter = mAckList.begin(); iter != mAckList.end(); iter++) {
+      if (iter->mTimestampTransmitted) {
+        continue;
+      }
+      iter->mTimestampTransmitted = true;
+      int i = 0;
+      for (auto pIter = iter->mReceiveTime.begin();
+           pIter != iter->mReceiveTime.end(); pIter++) {
+        if (avail < (newFrame ? 5 : 3)) {
+          return MOZQUIC_OK;
+        }
+
+        if (newFrame) {
+          newFrame = false;
+          uint64_t gap = largestAcked - iter->mPacketNumber;
+          if (gap > 255) {
+            break;
+          }
+          pkt[0] = gap;
+          uint32_t delta = *pIter - mTimestampConnBegin;
+          delta = htonl(delta);
+          memcpy(pkt + 1, &delta, 4);
+          previousPktID = iter->mPacketNumber;
+          previousTS = *pIter;
+          pkt += 5;
+          used += 5;
+          avail -= 5;
+        } else {
+          uint64_t gap = previousPktID - (iter->mPacketNumber - i);
+          if (gap > 255) {
+            break;
+          }
+          pkt[0] = gap;
+          uint64_t delay64 = (previousTS - *pIter) * 1000;
+          uint16_t delay = htons(ufloat16_encode(delay64));
+          memcpy(pkt + 1, &delay, 2);
+          pkt += 3;
+          used += 3;
+          avail -= 3;
+        }
+        *numTS = *numTS + 1;
+        if (*numTS == 0xff) {
+          break;
+        }
+        i++;
+      }
+    }
+  }
   return MOZQUIC_OK;
 }
 
@@ -1173,6 +1232,25 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
       }
     }
   }
+
+  uint32_t pktID = result.u.mAck.mLargestAcked;
+  uint64_t timestamp;
+  for(int i = 0; i < result.u.mAck.mNumTS; i++) {
+    assert(pktID > framePtr[0]);
+    pktID = pktID - framePtr[0];
+    if (!i) {
+      memcpy(&timestamp, framePtr + 1, 4);
+      timestamp = ntohl(timestamp);
+      framePtr += 5;
+    } else {
+      uint16_t tmp16;
+      memcpy(&tmp16, framePtr + 1, 2);
+      tmp16 = ntohs(tmp16);
+      timestamp = timestamp - (ufloat16_decode(tmp16) / 1000);
+      framePtr += 3;
+    }
+    fprintf(stderr, "Timestamp for packet %lX is %lu\n", pktID, timestamp);
+  }
 }
 
 uint32_t
@@ -1321,6 +1399,7 @@ MozQuic::Accept(struct sockaddr_in *clientAddr, uint64_t aConnectionID)
     child->mNSSHelper.reset(new NSSHelper(child, mTolerateBadALPN, mOriginName.get()));
   }
   child->mVersion = mVersion;
+  child->mTimestampConnBegin = Timestamp();
 
   mConnectionHash.insert( { child->mConnectionID, child });
   mConnectionHashOriginalNew.insert( { aConnectionID,
@@ -1735,7 +1814,7 @@ MozQuic::FlushStream(bool forceAck)
 
   uint32_t room = endpkt - framePtr;
   uint32_t used;
-  if (AckPiggyBack(framePtr, mNextTransmitPacketNumber, room, keyPhaseUnprotected, used) == MOZQUIC_OK) {
+  if (AckPiggyBack(framePtr, mNextTransmitPacketNumber, room, keyPhase1Rtt, used) == MOZQUIC_OK) {
     if (used) {
       fprintf(stderr,"will include optimistic acks on packet %lX for xmit\n", mNextTransmitPacketNumber);
     }
