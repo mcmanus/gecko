@@ -4338,6 +4338,11 @@ nsHalfOpenSocket::SetupConn(nsIAsyncOutputStream *out,
     LOG(("nsHalfOpenSocket::SetupConn "
          "Created new nshttpconnection %p\n", conn.get()));
 
+    NullHttpTransaction *nullTrans = mTransaction->QueryNullTransaction();
+    if (nullTrans) {
+        conn->BootstrapTimings(nullTrans->Timings());
+    }
+    
     // Some capabilities are needed before a transaciton actually gets
     // scheduled (e.g. how to negotiate false start)
     conn->SetTransactionCaps(mTransaction->Caps());
@@ -4550,7 +4555,7 @@ nsHttpConnectionMgr::nsHalfOpenSocket::OnTransportStatus(nsITransport *trans,
         if ((trans == mSocketTransport) ||
             ((trans == mBackupTransport) && (status == NS_NET_STATUS_CONNECTED_TO) &&
             info)) {
-            // Send this status event only if the transaction is still panding,
+            // Send this status event only if the transaction is still pending,
             // i.e. it has not found a free already connected socket.
             // Sockets in halfOpen state can only get following events:
             // NS_NET_STATUS_RESOLVING_HOST, NS_NET_STATUS_RESOLVED_HOST,
