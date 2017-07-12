@@ -227,7 +227,6 @@ NSSHelper::MakeKeyFromRaw(unsigned char *initialSecret,
 {
   PK11SymKey *finalKey = nullptr;
   PK11SymKey *secretSKey = nullptr;
-  unsigned char packetProtectionIV[12];
   unsigned char ppKey[16]; // all currently defined aead algorithms have key length of 16
   assert (secretSize <= 48);
 

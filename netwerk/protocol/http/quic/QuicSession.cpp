@@ -19,6 +19,9 @@
 #include "nsISSLStatusProvider.h"
 #include "nsISSLStatus.h"
 
+#include "ssl.h"
+#include "sslproto.h"
+
 namespace mozilla { namespace net {
 
 static bool quicInit = false;
@@ -124,14 +127,24 @@ QuicSession::DriveHandshake()
     }
     nsAutoCString cipher;
     sslStatus->GetCipherName(cipher);
-    fprintf(stderr, "GECKO CALLING MOZQUIC_HANDSHAKE_COMPLETE %s\n",
-            cipher.get());
+    fprintf(stderr, "GECKO CALLING MOZQUIC_HANDSHAKE_COMPLETE %s\n", cipher.get());
 
+    struct mozquic_handshake_info TODO;
     PRFileDesc *fd;
     mPSMSSLSocketControl->GetNssFD(&fd);
-    
-    
-    struct mozquic_handshake_info TODO;
+
+    unsigned int secretSize = 32;
+
+    if (SSL_ExportKeyingMaterial(fd, "EXPORTER-QUIC client 1-RTT Secret", strlen("EXPORTER-QUIC client 1-RTT Secret"),
+                                 false, (const unsigned char *)"", 0, TODO.sendSecret, secretSize) != SECSuccess) {
+      return NS_ERROR_FAILURE;
+    }
+
+    if (SSL_ExportKeyingMaterial(fd, "EXPORTER-QUIC server 1-RTT Secret", strlen("EXPORTER-QUIC server 1-RTT Secret"),
+                                 false, (const unsigned char *)"", 0, TODO.recvSecret, secretSize) != SECSuccess) {
+      return NS_ERROR_FAILURE;
+    }
+
     mozquic_handshake_complete(mSession, MOZQUIC_OK, &TODO);
     mHandshakeCompleteCode = MOZQUIC_OK;
   }
