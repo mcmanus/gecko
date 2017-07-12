@@ -116,17 +116,22 @@ QuicSession::DriveHandshake()
     mHandshakeCompleteCode = MOZQUIC_ERR_CRYPTO;
   }
 
-  nsCOMPtr<nsISSLStatusProvider> sslprov = do_QueryInterface(mPSMHelperSecInfo);
-  nsCOMPtr<nsISSLStatus> sslStatus;
-  if (sslprov) {
-    sslprov->GetSSLStatus(getter_AddRefs(sslStatus));
-  }
-  nsAutoCString cipher;
-  sslStatus->GetCipherName(cipher);
-  fprintf(stderr, "GECKO CALLING MOZQUIC_HANDSHAKE_COMPLETE %s\n",
-          cipher.get());
-  struct mozquic_handshake_info TODO;
-  if (NS_SUCCEEDED(rv)) {
+  if (NS_SUCCEEDED(rv) && mHandshakeCompleteCode != MOZQUIC_OK) {
+    nsCOMPtr<nsISSLStatusProvider> sslprov = do_QueryInterface(mPSMHelperSecInfo);
+    nsCOMPtr<nsISSLStatus> sslStatus;
+    if (sslprov) {
+      sslprov->GetSSLStatus(getter_AddRefs(sslStatus));
+    }
+    nsAutoCString cipher;
+    sslStatus->GetCipherName(cipher);
+    fprintf(stderr, "GECKO CALLING MOZQUIC_HANDSHAKE_COMPLETE %s\n",
+            cipher.get());
+
+    PRFileDesc *fd;
+    mPSMSSLSocketControl->GetNssFD(&fd);
+    
+    
+    struct mozquic_handshake_info TODO;
     mozquic_handshake_complete(mSession, MOZQUIC_OK, &TODO);
     mHandshakeCompleteCode = MOZQUIC_OK;
   }
@@ -340,6 +345,15 @@ NS_IMETHODIMP QuicSession::SetNPNList(nsTArray<nsCString> & aList)
     return NS_ERROR_UNEXPECTED;
   }
   return mPSMSSLSocketControl->SetNPNList(aList);
+}
+
+NS_IMETHODIMP
+QuicSession::GetNssFD(PRFileDesc **outFD)
+{
+  if (!mPSMSSLSocketControl) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  return mPSMSSLSocketControl->GetNssFD(outFD);
 }
 
 /* readonly attribute ACString negotiatedNPN; */

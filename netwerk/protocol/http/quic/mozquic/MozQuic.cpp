@@ -169,7 +169,7 @@ extern "C" {
   {
     assert(false);
     mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
-    self->HandshakeComplete(errCode);
+    self->HandshakeComplete(errCode, keyInfo);
   }
 
   int mozquic_nss_config(char *dir) 
@@ -920,7 +920,8 @@ MozQuic::HandshakeOutput(unsigned char *buf, uint32_t datalen)
 // of certs etc like gecko PSM does). The app is providing the
 // client hello and interpreting the server hello
 void
-MozQuic::HandshakeComplete(uint32_t code)
+MozQuic::HandshakeComplete(uint32_t code,
+                           struct mozquic_handshake_info *keyInfo)
 {
   if (!mHandshakeInput) {
     RaiseError(MOZQUIC_ERR_GENERAL, (char *)"not using handshaker api");
@@ -934,7 +935,10 @@ MozQuic::HandshakeComplete(uint32_t code)
     RaiseError(MOZQUIC_ERR_CRYPTO, (char *)"Handshake complete err");
     return;
   }
-  
+
+  mNSSHelper->HandshakeSecret(keyInfo->ciphersuite,
+                              keyInfo->sendSecret, keyInfo->recvSecret);
+
   fprintf(stderr,"CLIENT_STATE_CONNECTED 2\n");
   // todo prm client km 1 .. need to also provide key material issue 49
   mConnectionState = CLIENT_STATE_CONNECTED;

@@ -22,6 +22,7 @@ public:
   ~NSSHelper();
   uint32_t DriveHandshake();
   bool IsHandshakeComplete() { return mHandshakeComplete; }
+  uint32_t HandshakeSecret(unsigned int ciphersuite, unsigned char *sendSecret, unsigned char *recvSecret);
 
   uint32_t EncryptBlock(unsigned char *aeadData, uint32_t aeadLen,
                         unsigned char *plaintext, uint32_t plaintextLen,
@@ -51,11 +52,21 @@ private:
                           unsigned char *plaintext, uint32_t plaintextLen,
                           uint64_t packetNumber, unsigned char *out, uint32_t outAvail,
                           uint32_t &written);
-  uint32_t MakeKey(PRFileDesc *fd, const char *label,
-                   unsigned int secretSize, SSLHashType hashType,
-                   CK_MECHANISM_TYPE importMechanism1, CK_MECHANISM_TYPE importMechanism2,
-                   unsigned char *outIV, PK11SymKey **outKey);
-
+  uint32_t MakeKeyFromNSS(PRFileDesc *fd, const char *label,
+                          unsigned int secretSize, SSLHashType hashType,
+                          CK_MECHANISM_TYPE importMechanism1, CK_MECHANISM_TYPE importMechanism2,
+                          unsigned char *outIV, PK11SymKey **outKey);
+  uint32_t MakeKeyFromRaw(unsigned char *initialSecret,
+                          unsigned int secretSize, SSLHashType hashType,
+                          CK_MECHANISM_TYPE importMechanism1, CK_MECHANISM_TYPE importMechanism2,
+                          unsigned char *outIV, PK11SymKey **outKey);
+  static void GetKeyParamsFromCipherSuite(uint16_t cipherSuite,
+                                          unsigned int &secretSize,
+                                          SSLHashType &hashType,
+                                          CK_MECHANISM_TYPE &packetMechanism,
+                                          CK_MECHANISM_TYPE &importMechanism1,
+                                          CK_MECHANISM_TYPE &importMechanism2);
+  
   MozQuic             *mQuicSession;
   PRFileDesc          *mFD;
   bool                 mNSSReady;
@@ -63,6 +74,10 @@ private:
   bool                 mHandshakeFailed; // complete but bad above nss
   bool                 mIsClient;
   bool                 mTolerateBadALPN;
+
+  unsigned char       mExternalSendSecret[48];
+  unsigned char       mExternalRecvSecret[48];
+  unsigned int        mExternalCipherSuite;
 
   CK_MECHANISM_TYPE   mPacketProtectionMech;
   PK11SymKey         *mPacketProtectionSenderKey0;

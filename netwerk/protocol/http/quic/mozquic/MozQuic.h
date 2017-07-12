@@ -35,6 +35,12 @@ extern "C" {
     MOZQUIC_EVENT_STREAM_RESET    = 1,
   };
 
+  enum {
+    MOZQUIC_AES_128_GCM_SHA256 = 1,
+    MOZQUIC_AES_256_GCM_SHA384 = 2,
+    MOZQUIC_CHACHA20_POLY1305_SHA256 = 3,
+  };
+  
   typedef void mozquic_connection_t;
   typedef void mozquic_stream_t;
 
@@ -99,9 +105,13 @@ extern "C" {
   {
     // this is going to form an ABI, so revisit this before v1 release
     // it should probably take the form of having the lib caller do hkdf
+
+    // ciphersuite one of MOZQUIC_AES_128_GCM_SHA256, MOZQUIC_AES_256_GCM_SHA384,
+    // MOZQUIC_CHACHA20_POLY1305_SHA256
+        
     unsigned int ciphersuite;
-    unsigned char *secret;
-    size_t secretLen;
+    unsigned char sendSecret[48];
+    unsigned char recvSecret[48];
   };
     
   void mozquic_handshake_output(mozquic_connection_t *session,

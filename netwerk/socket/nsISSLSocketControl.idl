@@ -14,6 +14,7 @@ interface nsIX509Cert;
 class nsCString;
 %}
 [ref] native nsCStringTArrayRef(nsTArray<nsCString>);
+[ptr] native PRFileDescStar(struct PRFileDesc);
 
 [scriptable, builtinclass, uuid(418265c8-654e-4fbb-ba62-4eed27de1f03)]
 interface nsISSLSocketControl : nsISupports {
@@ -21,6 +22,12 @@ interface nsISSLSocketControl : nsISupports {
 
     void proxyStartSSL();
     void StartTLS();
+
+    /* TODO - we need an interface to do key export,
+       but in order to keep bitrot to a minimum right now
+       we will export the fd and do the secret export in
+       quic code. Must fix. */
+    [noscript] readonly attribute PRFileDescStar nssFD;
 
     /* NPN (Next Protocol Negotiation) is a mechanism for
        negotiating the protocol to be spoken inside the SSL
