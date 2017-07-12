@@ -98,6 +98,7 @@ extern "C" {
   struct mozquic_handshake_info 
   {
     // this is going to form an ABI, so revisit this before v1 release
+    // it should probably take the form of having the lib caller do hkdf
     unsigned int ciphersuite;
     unsigned char *secret;
     size_t secretLen;
