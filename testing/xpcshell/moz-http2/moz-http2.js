@@ -6,7 +6,7 @@
 // to have node be restarted in between each invocation
 
 // ATTN: sync with netwerk/test/unit/test_quic.js and MozQuic.h
-var hqAlpnID = "hq-03";
+var hqAlpnID = "hq-04";
 
 var node_http2_root = '../node-http2';
 if (process.env.NODE_HTTP2_ROOT) {
