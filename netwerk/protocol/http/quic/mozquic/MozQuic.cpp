@@ -731,6 +731,7 @@ MozQuic::MaybeSendAck()
             iter->mPacketNumber, iter->mPhase);
     FlushStream(true);
   }
+  return MOZQUIC_OK;
 }
 
 // todo this will work generically other than

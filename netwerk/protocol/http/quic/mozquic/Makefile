@@ -8,6 +8,7 @@ LDFLAGS += -L$(MOZQUIC_NSS_ROOT)dist/$(MOZQUIC_NSS_PLATFORM)/lib -lnss3 -lnssuti
 CXXFLAGS +=  -std=c++0x  -I$(MOZQUIC_NSS_ROOT) -I$(MOZQUIC_NSS_ROOT)dist/$(MOZQUIC_NSS_PLATFORM)/include/ -I$(MOZQUIC_NSS_ROOT)dist/public/nss -Wno-format
 CXXFLAGS += -I$(NSPR_INCLUDE)
 CXXFLAGS += -g
+CFLAGS += -g
 
 # For .h dependency management
 CXXFLAGS += -MP -MD 
