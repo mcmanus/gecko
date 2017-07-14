@@ -10,8 +10,11 @@
 
 Basic client connects to server, does a handshake and exits after 2 seconds
 
-  --send-close option will send a close before exiting
-
+  -send-close option will send a close before exiting
+  
+  -streamtest1 will send 3 messages to the server including the keywords PREAMBLE and FIN
+               the server will reply with 1 message and close the bidi stream
+               after recpt of stream-close client will wait 2 seconds
 
 About Certificate Verifcation::
 The sample/nss-config directory is a sample that can be passed
@@ -74,6 +77,41 @@ has_arg(int argc, char **argv, char *test)
   return 0;
 }
 
+void streamtest1(mozquic_connection_t *c)
+{
+  fprintf(stderr,"Start sending data.\n");
+  char msg[] = "Client is sending some data to a server. This is one message.";
+  mozquic_stream_t *stream;
+  mozquic_start_new_stream(&stream, c, "PREAMBLE", 8, 0);
+  mozquic_send(stream, msg, strlen(msg), 0);
+  mozquic_send(stream, "FIN", 3, 0);
+  int i = 0;
+  do {
+    if (!(i++ & 0xf)) {
+      fprintf(stderr,".");
+      fflush(stderr);
+    }
+    usleep (1000); // this is for handleio todo
+    uint32_t code = mozquic_IO(c);
+    if (code != MOZQUIC_OK) {
+      fprintf(stderr,"IO reported failure\n");
+      break;
+    }
+  } while (!recvFin);
+  recvFin = 0;
+  do {
+    if (!(i++ & 0xf)) {
+      fprintf(stderr,".");
+      fflush(stderr);
+    }
+    usleep (1000); // this is for handleio todo
+    uint32_t code = mozquic_IO(c);
+    if (code != MOZQUIC_OK) {
+      fprintf(stderr,"IO reported failure\n");
+      break;
+    }
+  } while (i < 2000);
+}
 
 int main(int argc, char **argv)
 {
@@ -115,42 +153,11 @@ int main(int argc, char **argv)
     }
   } while (i < 2000);
 
+  if (has_arg(argc, argv, "-streamtest1")) {
+    streamtest1(c);
+  }
   if (has_arg(argc, argv, "-send-close")) {
     mozquic_destroy_connection(c);
   }
-  exit(0);
-  
-  fprintf(stderr,"Start sending data.\n");
-  char msg[] = "Client is sending some data to a server. This is one message.";
-  mozquic_stream_t *stream;
-  mozquic_start_new_stream(&stream, c, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, "FIN", 3, 0);
-  i = 0;
-  do {
-    if (!(i++ & 0xf)) {
-      fprintf(stderr,".");
-      fflush(stderr);
-    }
-    usleep (1000); // this is for handleio todo
-    uint32_t code = mozquic_IO(c);
-    if (code != MOZQUIC_OK) {
-      fprintf(stderr,"IO reported failure\n");
-      break;
-    }
-  } while (!recvFin);
-  do {
-    if (!(i++ & 0xf)) {
-      fprintf(stderr,".");
-      fflush(stderr);
-    }
-    usleep (1000); // this is for handleio todo
-    uint32_t code = mozquic_IO(c);
-    if (code != MOZQUIC_OK) {
-      fprintf(stderr,"IO reported failure\n");
-      break;
-    }
-  } while (i < 2000);
-  mozquic_destroy_connection(c);
   return 0;
 }
