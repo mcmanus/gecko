@@ -57,6 +57,7 @@ extern "C" {
     unsigned int ignorePKI; // flag
     unsigned int tolerateBadALPN; // flag
 
+    // all these callbacks should be events
     void (*logging_callback)(void *, char *); // todo va arg
     int  (*send_callback)(void *, unsigned char *, uint32_t len);
     int  (*recv_callback)(void *, unsigned char *, uint32_t len, uint32_t *outLen);

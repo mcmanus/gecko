@@ -484,8 +484,10 @@ MozQuic::Intake()
   // check state
   assert (mConnectionState == SERVER_STATE_LISTEN ||
           mConnectionState == SERVER_STATE_1RTT ||
+          mConnectionState == SERVER_STATE_CLOSED ||
           mConnectionState == CLIENT_STATE_CONNECTED ||
-          mConnectionState == CLIENT_STATE_1RTT); // todo mvp
+          mConnectionState == CLIENT_STATE_1RTT ||
+          mConnectionState == CLIENT_STATE_CLOSED);
   uint32_t rv = MOZQUIC_OK;
   
   unsigned char pkt[kMozQuicMSS];
@@ -650,7 +652,8 @@ MozQuic::IO()
       }
       break;
     case CLIENT_STATE_CONNECTED:
-      // todo mvp
+    case CLIENT_STATE_CLOSED:
+    case SERVER_STATE_CLOSED:
       break;
     default:
       assert(false);
