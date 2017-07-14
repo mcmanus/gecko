@@ -1,36 +1,7 @@
+This is really to test the spec process, its a long way from usable
+code and the interface is the least thought out bit (MozQuic.h). It
+will set your machine afire.
 
-for handle io
-* thread to poll for its own events .. look at config handle-socket
-* socket() and connect()
-* cert verification
+See https://github.com/quicwg/base-drafts/wiki/First-Implementation-Draft
 
----
-
-https://github.com/quicwg/base-drafts/wiki/First-Implementation-Draft
-
---
-
-binary bsd advertising clause for fnv1
-
---
-
-retransmissions
-ack generation
-ack recpt
-
---
-
-.a needs to restrict exported objects
-
---
-
-NSSHelper can be abstract class and also do app helping as
-mhandshakeinput does
-
-verify checksum
-
-server cert
-
-option to grease client version packet
-
-generic header parser
+See Makefile and sample/*

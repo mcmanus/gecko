@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-# See the sample app in extra.gyp for an example outside firefox
+# See the sample app in makefile for an example outside firefox
 
 # Choose one of the nss_include versions below, setting
 # MOZQUIC_INCLUDE if you have a version of NSS that is not found by
