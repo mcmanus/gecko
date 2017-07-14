@@ -292,7 +292,8 @@ MozQuic::Shutdown(uint32_t code, const char *reason)
   memcpy(cipherPkt, plainPkt, 13);
   uint32_t rv = mNSSHelper->EncryptBlock(plainPkt, 13, plainPkt + 13, 7 + reasonLen,
                                          mNextTransmitPacketNumber, cipherPkt + 13, kMozQuicMTU - 13, written);
-  fprintf(stderr,"encrypt %d returned %d plus 13\n", rv, written);
+  fprintf(stderr,"encrypt rv=%d inputlen=%d (+ %d of aead) outputlen=%d pktheaderLen =%d\n",
+          rv, 7 + reasonLen, 13, written, 13);
   mNextTransmitPacketNumber++;
   Transmit(cipherPkt, written + 13, nullptr);
 
@@ -521,7 +522,7 @@ MozQuic::Intake()
       }
       LongHeaderData longHeader(pkt, pktSize);
 
-      fprintf(stderr,"PACKET RECVD pktnum=%lX version=%X len=%d id=%lx\n",
+      fprintf(stderr,"PACKET RECVD pktnum=%lX version=%X len=%d connid=%lx\n",
               longHeader.mPacketNumber, longHeader.mVersion, pktSize, longHeader.mConnectionID);
 
       if (!(VersionOK(longHeader.mVersion) ||
@@ -731,7 +732,9 @@ MozQuic::MaybeSendAck()
     }
     fprintf(stderr,"ASKED TO SEND ACK FOR %lx %d\n",
             iter->mPacketNumber, iter->mPhase);
+    FlushStream0(true);
     FlushStream(true);
+    break;
   }
   return MOZQUIC_OK;
 }
@@ -765,14 +768,9 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint64_t pktNumOfAck, uint32_t avail, 
     if (avail < (newFrame ? 11 : 3)) {
       return MOZQUIC_OK;
     }
-    if (iter->mPacketNumber > 0xffffffff) {
-      // > 32bit restriction specific to handshake packets as initial is 31bit rand
-      // todo
-      mAckList.pop_back();
-      iter = mAckList.erase(iter);
-      assert(false);
-      RaiseError(MOZQUIC_ERR_GENERAL, (char *)"unexpected packet number");
-      return MOZQUIC_ERR_GENERAL;
+    if (iter->mPhase != kp) {
+      ++iter;
+      continue;
     }
     if (newFrame) {
       newFrame = false;
@@ -780,7 +778,7 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint64_t pktNumOfAck, uint32_t avail, 
       numBlocks = pkt + 1;
       *numBlocks = 0;
       pkt[2] = 0; // no TS
-      uint32_t packet32 = iter->mPacketNumber;
+      uint32_t packet32 = iter->mPacketNumber & 0xffffffff;
       packet32 = htonl(packet32);
       memcpy(pkt + 3, &packet32, 4);
       // timestamp is microseconds (10^-6) as 16 bit fixed point #
@@ -943,9 +941,11 @@ MozQuic::HandshakeComplete(uint32_t code,
                               keyInfo->sendSecret, keyInfo->recvSecret);
 
   fprintf(stderr,"CLIENT_STATE_CONNECTED 2\n");
-  // todo prm client km 1 .. need to also provide key material issue 49
   mConnectionState = CLIENT_STATE_CONNECTED;
   MaybeSendAck();
+  if (mConnEventCB) {
+    mConnEventCB(mClosure, MOZQUIC_EVENT_CONNECTED, nullptr);
+  }
 }
 
 int
@@ -978,6 +978,9 @@ MozQuic::Client1RTT()
     if (mNSSHelper->IsHandshakeComplete()) {
       fprintf(stderr,"CLIENT_STATE_CONNECTED 1\n");
       mConnectionState = CLIENT_STATE_CONNECTED;
+      if (mConnEventCB) {
+        mConnEventCB(mClosure, MOZQUIC_EVENT_CONNECTED, nullptr);
+      }
       return MaybeSendAck();
     }
   }
@@ -1003,6 +1006,9 @@ MozQuic::Server1RTT()
     }
     if (mNSSHelper->IsHandshakeComplete()) {
       fprintf(stderr,"SERVER_STATE_CONNECTED 2\n");
+      if (mConnEventCB) {
+        mConnEventCB(mClosure, MOZQUIC_EVENT_CONNECTED, nullptr);
+      }
       mConnectionState = SERVER_STATE_CONNECTED;
       return MaybeSendAck();
     }
@@ -1177,7 +1183,7 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
         fprintf(stderr,"ACK'd ack not found for %lX ack\n", haveAckFor);
       } else {
         assert (unackedIter->mPacketNumberOfAck == haveAckFor);
-        fprintf(stderr,"ACK'd ack found for %lX trasmitted=%d\n", haveAckFor, unackedIter->Transmitted());
+        fprintf(stderr,"ACK'd ack found for %lX transmitted=%d\n", haveAckFor, unackedIter->Transmitted());
         unackedIter = mAckList.erase(unackedIter);
       }
     }
@@ -1195,7 +1201,7 @@ MozQuic::ProcessGeneral(unsigned char *pkt, uint32_t pktSize, uint32_t headerSiz
   uint32_t rv = mNSSHelper->DecryptBlock(pkt, headerSize, pkt + headerSize,
                                          pktSize - headerSize, packetNum, out,
                                          kMozQuicMSS, written);
-  fprintf(stderr,"decrypt %d returned %d\n", rv, written);
+  fprintf(stderr,"decrypt (pktnum=%lx) rv=%d sz=%d\n", packetNum, rv, written);
   if (rv != MOZQUIC_OK) {
     fprintf(stderr, "decrypt failed\n");
     return rv;
@@ -1271,7 +1277,7 @@ MozQuic::ProcessGeneralDecoded(unsigned char *pkt, uint32_t pktSize,
         }
       }
       ptr += result.u.mStream.mDataLen;
-      fprintf(stderr,"process stream %d %d\n",
+      fprintf(stderr,"process stream %d len=%d\n",
               result.u.mStream.mStreamID,
               result.u.mStream.mDataLen);
     } else if (result.mType == FRAME_TYPE_ACK) {
@@ -1554,7 +1560,7 @@ MozQuic::FlushStream0(bool forceAck)
       assert(room >= (*iter)->mLen);
 
       memcpy(framePtr, (*iter)->mData.get(), (*iter)->mLen);
-      fprintf(stderr,"writing a stream frame %d in packet %lX\n",
+      fprintf(stderr,"creating a stream0 frame len=%d in packet %lX\n",
               (*iter)->mLen, mNextTransmitPacketNumber);
       framePtr += (*iter)->mLen;
 
@@ -1588,7 +1594,7 @@ MozQuic::FlushStream0(bool forceAck)
     uint32_t used;
     if (AckPiggyBack(framePtr, mNextTransmitPacketNumber, room, keyPhaseUnprotected, used) == MOZQUIC_OK) {
       if (used) {
-        fprintf(stderr,"will include optimistic acks on packet %lX for xmit\n", mNextTransmitPacketNumber);
+        fprintf(stderr,"Handy-Ack FlushStream0 packet %lX frame-len=%d\n", mNextTransmitPacketNumber, used);
       }
       framePtr += used;
     }
@@ -1609,7 +1615,7 @@ MozQuic::FlushStream0(bool forceAck)
     if (code != MOZQUIC_OK) {
       return code;
     }
-    fprintf(stderr,"TRANSMIT %lX len=%d\n", mNextTransmitPacketNumber, finalLen);
+    fprintf(stderr,"TRANSMIT0 %lX len=%d\n", mNextTransmitPacketNumber, finalLen);
     mNextTransmitPacketNumber++;
     // each member of the list needs to 
   }
@@ -1630,11 +1636,11 @@ MozQuic::FlushStream(bool forceAck)
   unsigned char plainPkt[kMozQuicMTU];
   unsigned char cipherPkt[kMozQuicMTU];
   unsigned char *endpkt = plainPkt + kMozQuicMTU;
-  uint32_t pktHeader;
+  uint32_t pktHeaderLen;
 
-  CreateShortPacketHeader(plainPkt, kMozQuicMTU, pktHeader);
+  CreateShortPacketHeader(plainPkt, kMozQuicMTU, pktHeaderLen);
 
-  unsigned char *framePtr = plainPkt + pktHeader;
+  unsigned char *framePtr = plainPkt + pktHeaderLen;
 
   auto iter = mUnWrittenData.begin();
   while (iter != mUnWrittenData.end()) {
@@ -1744,31 +1750,37 @@ MozQuic::FlushStream(bool forceAck)
 
   uint32_t room = endpkt - framePtr;
   uint32_t used;
-  if (AckPiggyBack(framePtr, mNextTransmitPacketNumber, room, keyPhaseUnprotected, used) == MOZQUIC_OK) {
+  if (AckPiggyBack(framePtr, mNextTransmitPacketNumber, room, keyPhase1Rtt, used) == MOZQUIC_OK) {
     if (used) {
-      fprintf(stderr,"will include optimistic acks on packet %lX for xmit\n", mNextTransmitPacketNumber);
+      fprintf(stderr,"Handy-Ack FlushStream packet %lX frame-len=%d\n", mNextTransmitPacketNumber, used);
     }
     framePtr += used;
   }
   uint32_t finalLen = framePtr - plainPkt;
 
+  if (framePtr == (plainPkt + pktHeaderLen)) {
+    fprintf(stderr,"nothing to write\n");
+    return MOZQUIC_OK;
+  }
+  
   uint32_t written = 0;
-  memcpy(cipherPkt, plainPkt, pktHeader);
-  uint32_t rv = mNSSHelper->EncryptBlock(plainPkt, pktHeader, plainPkt + pktHeader,
-                                         finalLen - pktHeader, mNextTransmitPacketNumber,
-                                         cipherPkt + pktHeader, kMozQuicMTU - pktHeader, written);
-  fprintf(stderr,"encrypt %d returned %d plus %d\n", rv, written, pktHeader);
+  memcpy(cipherPkt, plainPkt, pktHeaderLen);
+  uint32_t rv = mNSSHelper->EncryptBlock(plainPkt, pktHeaderLen, plainPkt + pktHeaderLen,
+                                         finalLen - pktHeaderLen, mNextTransmitPacketNumber,
+                                         cipherPkt + pktHeaderLen, kMozQuicMTU - pktHeaderLen, written);
+  fprintf(stderr,"encrypt rv=%d inputlen=%d (+%d of aead) outputlen=%d pktheaderLen =%d\n",
+          rv, finalLen - pktHeaderLen, pktHeaderLen, written, pktHeaderLen);
 
-  uint32_t code = Transmit(cipherPkt, written + 13, nullptr);
+  uint32_t code = Transmit(cipherPkt, written + pktHeaderLen, nullptr);
   if (code != MOZQUIC_OK) {
     return code;
   }
 
-  fprintf(stderr,"TRANSMIT %lX len=%d\n", mNextTransmitPacketNumber, finalLen);
+  fprintf(stderr,"TRANSMIT %lX len=%d\n", mNextTransmitPacketNumber, written + pktHeaderLen);
   mNextTransmitPacketNumber++;
 
   if (iter != mUnWrittenData.end()) {
-    return FlushStream(false); // todo mvp this is broken with non stream 0 pkts
+    return FlushStream(false);
   }
   return MOZQUIC_OK;
 }

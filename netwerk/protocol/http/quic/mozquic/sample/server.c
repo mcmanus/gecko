@@ -42,7 +42,7 @@ static int connEventCB(void *closure, uint32_t event, void *param)
         if (strcmp(buf, "FIN") == 0) {
           finStream = 1;
         }
-        fprintf(stderr,"%s\n", buf);
+        fprintf(stderr,"[%s] fin=%d\n", buf, fin);
       }
     } while (read > 0);
     if (finStream) {
@@ -59,8 +59,7 @@ static int connEventCB(void *closure, uint32_t event, void *param)
     return MOZQUIC_OK;
   }
   default:
-    fprintf(stderr,"Wrong event\n");
-    return MOZQUIC_ERR_GENERAL;
+    fprintf(stderr,"unhandled event %X\n", event);
   }
   return MOZQUIC_OK;
 }

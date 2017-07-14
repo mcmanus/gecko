@@ -638,7 +638,7 @@ NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *ori
   SSL_OptionSet(mFD, SSL_HANDSHAKE_AS_SERVER, false);
   SSL_OptionSet(mFD, SSL_ENABLE_RENEGOTIATION, SSL_RENEGOTIATE_NEVER);
   SSL_OptionSet(mFD, SSL_NO_CACHE, true); // todo why does this cause fails?
-  SSL_OptionSet(mFD, SSL_ENABLE_SESSION_TICKETS, true);
+  SSL_OptionSet(mFD, SSL_ENABLE_SESSION_TICKETS, false);
   SSL_OptionSet(mFD, SSL_REQUEST_CERTIFICATE, false);
   SSL_OptionSet(mFD, SSL_REQUIRE_CERTIFICATE, SSL_REQUIRE_NEVER);
 

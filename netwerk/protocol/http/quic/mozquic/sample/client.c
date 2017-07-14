@@ -38,7 +38,7 @@ static int connEventCB(void *closure, uint32_t event, void *param)
         }
         line++;
         buf[read] = '\0';
-        fprintf(stderr,"%s\n", buf);
+        fprintf(stderr,"[%s] fin=%d\n", buf, fin);
         if (fin) {
           recvFin = 1;
         }
@@ -48,6 +48,7 @@ static int connEventCB(void *closure, uint32_t event, void *param)
     mozquic_end_stream(stream);
     return MOZQUIC_OK;
   }
+  fprintf(stderr,"unhandled event %X\n", event);
   return MOZQUIC_OK;
 }
 
@@ -91,31 +92,13 @@ int main()
     }
   } while (i < 2000);
 
+  exit(0);
+  
   fprintf(stderr,"Start sending data.\n");
   char msg[] = "Client is sending some data to a server. This is one message.";
   mozquic_stream_t *stream;
   mozquic_start_new_stream(&stream, c, msg, strlen(msg), 0);
   mozquic_send(stream, msg, strlen(msg), 0);
-/*  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0); */
   mozquic_send(stream, "FIN", 3, 0);
   i = 0;
   do {

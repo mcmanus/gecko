@@ -33,6 +33,7 @@ extern "C" {
   enum {
     MOZQUIC_EVENT_NEW_STREAM_DATA = 0,
     MOZQUIC_EVENT_STREAM_RESET    = 1,
+    MOZQUIC_EVENT_CONNECTED = 2,
   };
 
   enum {
