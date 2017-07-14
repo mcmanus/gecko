@@ -137,6 +137,7 @@ extern "C" {
   {
     mozquic::MozQuic *self(reinterpret_cast<mozquic::MozQuic *>(conn));
     self->SetConnEventCB(fx);
+    return MOZQUIC_OK;
   }
 
   int mozquic_IO(mozquic_connection_t *conn)
@@ -392,6 +393,7 @@ MozQuic::StartNewStream(MozQuicStreamPair **outStream, const void *data, uint32_
   mStreams.insert( { mNextStreamId, *outStream } );
   mNextStreamId += 2;
   (*outStream)->Write((const unsigned char *)data, amount, fin);
+  return MOZQUIC_OK;
 }
 
 void
@@ -1927,6 +1929,7 @@ MozQuic::CreateShortPacketHeader(unsigned char *pkt, uint32_t pktSize,
   memcpy(pkt + 9, &tmp32, 4);
 
   used = 13;
+  return MOZQUIC_OK;
 }
 
 MozQuic::FrameHeaderData::FrameHeaderData(unsigned char *pkt, uint32_t pktSize, MozQuic *session)
