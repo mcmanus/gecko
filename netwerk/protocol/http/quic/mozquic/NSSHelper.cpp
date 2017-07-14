@@ -220,25 +220,17 @@ NSSHelper::Init(char *dir)
 }
 
 uint32_t
-NSSHelper::MakeKey(PRFileDesc *fd, const char *label,
-                   unsigned int secretSize, SSLHashType hashType,
-                   CK_MECHANISM_TYPE importMechanism1, CK_MECHANISM_TYPE importMechanism2,
-                   unsigned char *outIV, PK11SymKey **outKey)
+NSSHelper::MakeKeyFromRaw(unsigned char *initialSecret,
+                          unsigned int secretSize, SSLHashType hashType,
+                          CK_MECHANISM_TYPE importMechanism1, CK_MECHANISM_TYPE importMechanism2,
+                          unsigned char *outIV, PK11SymKey **outKey)
 {
   PK11SymKey *finalKey = nullptr;
   PK11SymKey *secretSKey = nullptr;
-  unsigned char initialSecret[48];
-  unsigned char packetProtectionIV[12];
   unsigned char ppKey[16]; // all currently defined aead algorithms have key length of 16
   assert (secretSize <= 48);
 
   PK11SlotInfo *slot = PK11_GetInternalSlot();
-  if (!slot ||
-      SSL_ExportKeyingMaterial(fd, label, strlen (label),
-                               false, (const unsigned char *)"", 0, initialSecret, secretSize) != SECSuccess) {
-    goto failure;
-  }
-
   {
     SECItem secret_item = {siBuffer, initialSecret, secretSize};
     secretSKey = PK11_ImportSymKey(slot, importMechanism1, PK11_OriginUnwrap,
@@ -291,6 +283,97 @@ failure:
   return MOZQUIC_ERR_CRYPTO;
 }
 
+uint32_t
+NSSHelper::MakeKeyFromNSS(PRFileDesc *fd, const char *label,
+                          unsigned int secretSize, SSLHashType hashType,
+                          CK_MECHANISM_TYPE importMechanism1, CK_MECHANISM_TYPE importMechanism2,
+                          unsigned char *outIV, PK11SymKey **outKey)
+{
+  unsigned char initialSecret[48];
+  assert (secretSize <= 48);
+
+  if (SSL_ExportKeyingMaterial(fd, label, strlen (label),
+                               false, (const unsigned char *)"", 0, initialSecret, secretSize) != SECSuccess) {
+    return MOZQUIC_ERR_CRYPTO;
+  }
+  
+  return MakeKeyFromRaw(initialSecret, secretSize, hashType, importMechanism1,
+                        importMechanism2, outIV, outKey);
+}
+
+uint32_t
+NSSHelper::HandshakeSecret(unsigned int ciphersuite,
+                           unsigned char *sendSecret, unsigned char *recvSecret)
+{
+  mExternalCipherSuite = ciphersuite;
+  memcpy (mExternalSendSecret, sendSecret, 48);
+  memcpy (mExternalRecvSecret, recvSecret, 48);
+  mHandshakeComplete = true;
+
+  uint16_t nssSuite;
+  if (ciphersuite == MOZQUIC_AES_128_GCM_SHA256) {
+    nssSuite = TLS_AES_128_GCM_SHA256;
+  } else if (ciphersuite == MOZQUIC_AES_256_GCM_SHA384) {
+    nssSuite = TLS_AES_256_GCM_SHA384;
+  } else if (ciphersuite == MOZQUIC_CHACHA20_POLY1305_SHA256) {
+    nssSuite = TLS_CHACHA20_POLY1305_SHA256;
+  } else {
+    return MOZQUIC_ERR_CRYPTO;
+  }
+
+  unsigned int secretSize;
+  SSLHashType hashType;
+  CK_MECHANISM_TYPE importMechanism1, importMechanism2;
+
+  GetKeyParamsFromCipherSuite(nssSuite, secretSize, hashType, mPacketProtectionMech,
+                              importMechanism1, importMechanism2);
+      
+  bool didHandshakeFail = 
+    MakeKeyFromRaw(mExternalSendSecret, secretSize, hashType, importMechanism1,
+                   importMechanism2, mPacketProtectionSenderIV0, &mPacketProtectionSenderKey0) != MOZQUIC_OK;
+  memset(mExternalSendSecret, 0, sizeof(mExternalSendSecret));
+
+
+  didHandshakeFail = didHandshakeFail ||
+    MakeKeyFromRaw(mExternalRecvSecret, secretSize, hashType, importMechanism1,
+                   importMechanism2, mPacketProtectionReceiverIV0, &mPacketProtectionReceiverKey0) != MOZQUIC_OK;
+  memset(mExternalSendSecret, 0, sizeof(mExternalRecvSecret));
+  
+  mHandshakeComplete = true;
+  if (didHandshakeFail) {
+    mHandshakeFailed = true;
+  }
+  return didHandshakeFail ? MOZQUIC_ERR_CRYPTO : MOZQUIC_OK;
+}
+
+void
+NSSHelper::GetKeyParamsFromCipherSuite(uint16_t cipherSuite,
+                                       unsigned int &secretSize,
+                                       SSLHashType &hashType,
+                                       CK_MECHANISM_TYPE &packetProtectionMech,
+                                       CK_MECHANISM_TYPE &importMechanism1,
+                                       CK_MECHANISM_TYPE &importMechanism2)
+{
+  hashType = (cipherSuite == TLS_AES_256_GCM_SHA384) ? ssl_hash_sha384 : ssl_hash_sha256;
+  if (cipherSuite == TLS_AES_128_GCM_SHA256) {
+    secretSize = 32;
+    packetProtectionMech = CKM_AES_GCM;
+    importMechanism1 = CKM_NSS_HKDF_SHA256;
+    importMechanism2 = CKM_AES_KEY_GEN;
+  } else if (cipherSuite == TLS_AES_256_GCM_SHA384) {
+    secretSize = 48;
+    packetProtectionMech = CKM_AES_GCM;
+    importMechanism1 = CKM_NSS_HKDF_SHA384;
+    importMechanism2 = CKM_AES_KEY_GEN;
+  } else if (cipherSuite == TLS_CHACHA20_POLY1305_SHA256) {
+    secretSize = 32;
+    packetProtectionMech = CKM_NSS_CHACHA20_POLY1305;
+    importMechanism1 = CKM_NSS_HKDF_SHA256;
+    importMechanism2 = CKK_NSS_CHACHA20;
+  } else {
+    assert(false);
+  }
+}
 
 void
 NSSHelper::HandshakeCallback(PRFileDesc *fd, void *client_data)
@@ -323,49 +406,32 @@ NSSHelper::HandshakeCallback(PRFileDesc *fd, void *client_data)
     if (SSL_GetChannelInfo(fd, &info, sizeof(info)) != SECSuccess) {
       goto failure;
     } else {
-      hashType = (info.cipherSuite == TLS_AES_256_GCM_SHA384) ? ssl_hash_sha384 : ssl_hash_sha256;
-      if (info.cipherSuite == TLS_AES_128_GCM_SHA256) {
-        secretSize = 32;
-        self->mPacketProtectionMech = CKM_AES_GCM;
-        importMechanism1 = CKM_NSS_HKDF_SHA256;
-        importMechanism2 = CKM_AES_KEY_GEN;
-      } else if (info.cipherSuite == TLS_AES_256_GCM_SHA384) {
-        secretSize = 48;
-        self->mPacketProtectionMech = CKM_AES_GCM;
-        importMechanism1 = CKM_NSS_HKDF_SHA384;
-        importMechanism2 = CKM_AES_KEY_GEN;
-      } else if (info.cipherSuite == TLS_CHACHA20_POLY1305_SHA256) {
-        secretSize = 32;
-        self->mPacketProtectionMech = CKM_NSS_CHACHA20_POLY1305;
-        importMechanism1 = CKM_NSS_HKDF_SHA256;
-        importMechanism2 = CKK_NSS_CHACHA20;
-      } else {
-        assert(false);
-        goto failure;
-      }
+      GetKeyParamsFromCipherSuite(info.cipherSuite,
+                                  secretSize, hashType, self->mPacketProtectionMech,
+                                  importMechanism1, importMechanism2);
     }
   }
 
   if (self->mIsClient) {
-    if (self->MakeKey(fd, "EXPORTER-QUIC client 1-RTT Secret",
-                      secretSize, hashType, importMechanism1, importMechanism2,
-                      self->mPacketProtectionSenderIV0, &self->mPacketProtectionSenderKey0) != MOZQUIC_OK) {
+    if (self->MakeKeyFromNSS(fd, "EXPORTER-QUIC client 1-RTT Secret",
+                             secretSize, hashType, importMechanism1, importMechanism2,
+                             self->mPacketProtectionSenderIV0, &self->mPacketProtectionSenderKey0) != MOZQUIC_OK) {
       didHandshakeFail = true;
     }
-    if (self->MakeKey(fd, "EXPORTER-QUIC server 1-RTT Secret",
-                      secretSize, hashType, importMechanism1, importMechanism2,
-                      self->mPacketProtectionReceiverIV0, &self->mPacketProtectionReceiverKey0) != MOZQUIC_OK) {
+    if (self->MakeKeyFromNSS(fd, "EXPORTER-QUIC server 1-RTT Secret",
+                             secretSize, hashType, importMechanism1, importMechanism2,
+                             self->mPacketProtectionReceiverIV0, &self->mPacketProtectionReceiverKey0) != MOZQUIC_OK) {
       didHandshakeFail = true;
     }
   } else {
-    if (self->MakeKey(fd, "EXPORTER-QUIC server 1-RTT Secret",
-                      secretSize, hashType, importMechanism1, importMechanism2,
-                      self->mPacketProtectionSenderIV0, &self->mPacketProtectionSenderKey0) != MOZQUIC_OK) {
+    if (self->MakeKeyFromNSS(fd, "EXPORTER-QUIC server 1-RTT Secret",
+                             secretSize, hashType, importMechanism1, importMechanism2,
+                             self->mPacketProtectionSenderIV0, &self->mPacketProtectionSenderKey0) != MOZQUIC_OK) {
       didHandshakeFail = true;
     }
-    if (self->MakeKey(fd, "EXPORTER-QUIC client 1-RTT Secret",
-                      secretSize, hashType, importMechanism1, importMechanism2,
-                      self->mPacketProtectionReceiverIV0, &self->mPacketProtectionReceiverKey0) != MOZQUIC_OK) {
+    if (self->MakeKeyFromNSS(fd, "EXPORTER-QUIC client 1-RTT Secret",
+                             secretSize, hashType, importMechanism1, importMechanism2,
+                             self->mPacketProtectionReceiverIV0, &self->mPacketProtectionReceiverKey0) != MOZQUIC_OK) {
       didHandshakeFail = true;
     }
   }
@@ -491,12 +557,15 @@ NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *ori
   , mHandshakeFailed(false)
   , mIsClient(false)
   , mTolerateBadALPN(tolerateBadALPN)
+  , mExternalCipherSuite(0)
   , mPacketProtectionSenderKey0(nullptr)
   , mPacketProtectionReceiverKey0(nullptr)
 {
   PRNetAddr addr;
   memset(&addr,0,sizeof(addr));
   addr.raw.family = PR_AF_INET;
+  memset(mExternalSendSecret, 0, sizeof(mExternalSendSecret));
+  memset(mExternalRecvSecret, 0, sizeof(mExternalRecvSecret));
 
   mFD = PR_CreateIOLayerStub(nssHelperIdentity, &nssHelperMethods);
   mFD->secret = (struct PRFilePrivate *)this;
@@ -569,7 +638,7 @@ NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *ori
   SSL_OptionSet(mFD, SSL_HANDSHAKE_AS_SERVER, false);
   SSL_OptionSet(mFD, SSL_ENABLE_RENEGOTIATION, SSL_RENEGOTIATE_NEVER);
   SSL_OptionSet(mFD, SSL_NO_CACHE, true); // todo why does this cause fails?
-  SSL_OptionSet(mFD, SSL_ENABLE_SESSION_TICKETS, true);
+  SSL_OptionSet(mFD, SSL_ENABLE_SESSION_TICKETS, false);
   SSL_OptionSet(mFD, SSL_REQUEST_CERTIFICATE, false);
   SSL_OptionSet(mFD, SSL_REQUIRE_CERTIFICATE, SSL_REQUIRE_NEVER);
 

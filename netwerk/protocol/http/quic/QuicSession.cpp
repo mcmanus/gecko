@@ -16,6 +16,11 @@
 #include "nsIAsyncOutputStream.h"
 #include "mozilla/Unused.h"
 #include "QuicSessionUtil.h"
+#include "nsISSLStatusProvider.h"
+#include "nsISSLStatus.h"
+
+#include "ssl.h"
+#include "sslproto.h"
 
 namespace mozilla { namespace net {
 
@@ -110,11 +115,37 @@ QuicSession::DriveHandshake()
   nsresult rv = mPSMSSLSocketControl->DriveHandshake();
   if (NS_FAILED(rv) && rv != NS_BASE_STREAM_WOULD_BLOCK) {
     fprintf(stderr,"drivehandshake failed\n");
-    mozquic_handshake_complete(mSession, MOZQUIC_ERR_CRYPTO);
+    mozquic_handshake_complete(mSession, MOZQUIC_ERR_CRYPTO, nullptr);
     mHandshakeCompleteCode = MOZQUIC_ERR_CRYPTO;
   }
-  if (NS_SUCCEEDED(rv)) {
-    mozquic_handshake_complete(mSession, MOZQUIC_OK);
+
+  if (NS_SUCCEEDED(rv) && mHandshakeCompleteCode != MOZQUIC_OK) {
+    nsCOMPtr<nsISSLStatusProvider> sslprov = do_QueryInterface(mPSMHelperSecInfo);
+    nsCOMPtr<nsISSLStatus> sslStatus;
+    if (sslprov) {
+      sslprov->GetSSLStatus(getter_AddRefs(sslStatus));
+    }
+    nsAutoCString cipher;
+    sslStatus->GetCipherName(cipher);
+    fprintf(stderr, "GECKO CALLING MOZQUIC_HANDSHAKE_COMPLETE %s\n", cipher.get());
+
+    struct mozquic_handshake_info TODO;
+    PRFileDesc *fd;
+    mPSMSSLSocketControl->GetNssFD(&fd);
+
+    unsigned int secretSize = 32;
+
+    if (SSL_ExportKeyingMaterial(fd, "EXPORTER-QUIC client 1-RTT Secret", strlen("EXPORTER-QUIC client 1-RTT Secret"),
+                                 false, (const unsigned char *)"", 0, TODO.sendSecret, secretSize) != SECSuccess) {
+      return NS_ERROR_FAILURE;
+    }
+
+    if (SSL_ExportKeyingMaterial(fd, "EXPORTER-QUIC server 1-RTT Secret", strlen("EXPORTER-QUIC server 1-RTT Secret"),
+                                 false, (const unsigned char *)"", 0, TODO.recvSecret, secretSize) != SECSuccess) {
+      return NS_ERROR_FAILURE;
+    }
+
+    mozquic_handshake_complete(mSession, MOZQUIC_OK, &TODO);
     mHandshakeCompleteCode = MOZQUIC_OK;
   }
 
@@ -327,6 +358,15 @@ NS_IMETHODIMP QuicSession::SetNPNList(nsTArray<nsCString> & aList)
     return NS_ERROR_UNEXPECTED;
   }
   return mPSMSSLSocketControl->SetNPNList(aList);
+}
+
+NS_IMETHODIMP
+QuicSession::GetNssFD(PRFileDesc **outFD)
+{
+  if (!mPSMSSLSocketControl) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  return mPSMSSLSocketControl->GetNssFD(outFD);
 }
 
 /* readonly attribute ACString negotiatedNPN; */

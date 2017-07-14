@@ -3,6 +3,25 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#define SERVER_NAME "foo.example.com"
+#define SERVER_PORT 4433
+
+#if 0
+
+Basic client connects to server, does a handshake and exits after 2 seconds
+
+  -send-close option will send a close before exiting
+  
+  -streamtest1 will send 3 messages to the server including the keywords PREAMBLE and FIN
+               the server will reply with 1 message and close the bidi stream
+               after recpt of stream-close client will wait 2 seconds
+
+About Certificate Verifcation::
+The sample/nss-config directory is a sample that can be passed
+to mozquic_nss_config(). It contains a NSS database with a cert
+and key for foo.example.com that is signed by a CA defined by CA.cert.der.
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -10,12 +29,6 @@
 #include "../MozQuic.h"
 
 mozquic_connection_t *only_child = NULL;
-
-#if 0
-The sample/nss-config directory is a sample that can be passed
-to mozquic_nss_config(). It contains a NSS database with a cert
-and key for foo.example.com that is signed by a CA defined by CA.cert.der.
-#endif
 
 static uint8_t recvFin = 0;
 
@@ -38,7 +51,7 @@ static int connEventCB(void *closure, uint32_t event, void *param)
         }
         line++;
         buf[read] = '\0';
-        fprintf(stderr,"%s\n", buf);
+        fprintf(stderr,"[%s] fin=%d\n", buf, fin);
         if (fin) {
           recvFin = 1;
         }
@@ -48,10 +61,59 @@ static int connEventCB(void *closure, uint32_t event, void *param)
     mozquic_end_stream(stream);
     return MOZQUIC_OK;
   }
+  fprintf(stderr,"unhandled event %X\n", event);
   return MOZQUIC_OK;
 }
 
-int main()
+int
+has_arg(int argc, char **argv, char *test)
+{
+  int i;
+  for (i=0; i < argc; i++) {
+    if (!strcasecmp(argv[i], test)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+void streamtest1(mozquic_connection_t *c)
+{
+  fprintf(stderr,"Start sending data.\n");
+  char msg[] = "Client is sending some data to a server. This is one message.";
+  mozquic_stream_t *stream;
+  mozquic_start_new_stream(&stream, c, "PREAMBLE", 8, 0);
+  mozquic_send(stream, msg, strlen(msg), 0);
+  mozquic_send(stream, "FIN", 3, 0);
+  int i = 0;
+  do {
+    if (!(i++ & 0xf)) {
+      fprintf(stderr,".");
+      fflush(stderr);
+    }
+    usleep (1000); // this is for handleio todo
+    uint32_t code = mozquic_IO(c);
+    if (code != MOZQUIC_OK) {
+      fprintf(stderr,"IO reported failure\n");
+      break;
+    }
+  } while (!recvFin);
+  recvFin = 0;
+  do {
+    if (!(i++ & 0xf)) {
+      fprintf(stderr,".");
+      fflush(stderr);
+    }
+    usleep (1000); // this is for handleio todo
+    uint32_t code = mozquic_IO(c);
+    if (code != MOZQUIC_OK) {
+      fprintf(stderr,"IO reported failure\n");
+      break;
+    }
+  } while (i < 2000);
+}
+
+int main(int argc, char **argv)
 {
   struct mozquic_config_t config;
   mozquic_connection_t *c;
@@ -63,8 +125,8 @@ int main()
   }
   
   memset(&config, 0, sizeof(config));
-  config.originName = "foo.example.com"; // really the nickname in the nss db
-  config.originPort = 4433;
+  config.originName = SERVER_NAME;
+  config.originPort = SERVER_PORT;
   config.handleIO = 0; // todo mvp
   config.connection_event_callback = connEventCB;
 
@@ -91,57 +153,11 @@ int main()
     }
   } while (i < 2000);
 
-  fprintf(stderr,"Start sending data.\n");
-  char msg[] = "Client is sending some data to a server. This is one message.";
-  mozquic_stream_t *stream;
-  mozquic_start_new_stream(&stream, c, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-/*  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0);
-  mozquic_send(stream, msg, strlen(msg), 0); */
-  mozquic_send(stream, "FIN", 3, 0);
-  i = 0;
-  do {
-    if (!(i++ & 0xf)) {
-      fprintf(stderr,".");
-      fflush(stderr);
-    }
-    usleep (1000); // this is for handleio todo
-    uint32_t code = mozquic_IO(c);
-    if (code != MOZQUIC_OK) {
-      fprintf(stderr,"IO reported failure\n");
-      break;
-    }
-  } while (!recvFin);
-  do {
-    if (!(i++ & 0xf)) {
-      fprintf(stderr,".");
-      fflush(stderr);
-    }
-    usleep (1000); // this is for handleio todo
-    uint32_t code = mozquic_IO(c);
-    if (code != MOZQUIC_OK) {
-      fprintf(stderr,"IO reported failure\n");
-      break;
-    }
-  } while (i < 2000);
-  mozquic_destroy_connection(c);
+  if (has_arg(argc, argv, "-streamtest1")) {
+    streamtest1(c);
+  }
+  if (has_arg(argc, argv, "-send-close")) {
+    mozquic_destroy_connection(c);
+  }
   return 0;
 }

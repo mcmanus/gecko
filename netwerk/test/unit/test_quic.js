@@ -2,16 +2,16 @@ Cu.import("resource://testing-common/httpd.js");
 Cu.import("resource://gre/modules/NetUtil.jsm");
 
 // test1 uses alt-svc to bootstrap quic from h2, fetch same resource in a
-// loop until the quic server (hardcoded on 8443 todo) responds
+// loop until the quic server (hardcoded on 4433 todo) responds
 
 // test2 uses a proxy configuration to route all requests to a specific proxy
-// (again hardcoded on 8443 todo) over quic
+// (again hardcoded on 4433 todo) over quic
 
 // ATTN: sync with testing/xpcshell/moz-http2/moz-http2.js and MozQuic.h
-var alpnID = "hq-03";
+var alpnID = "hq-04";
 
 var h2Port;
-var quicPort = ":8443"; // todo
+var quicPort = ":4433"; // todo
 var prefs;
 var spdypref;
 var http2pref;
@@ -169,7 +169,7 @@ function doTest1()
 function doTest2()
 {
   dump("doTest2()\n");
-  var pac = 'data:text/plain, function FindProxyForURL(url, host) {return "QUIC localhost:8443";}';
+  var pac = 'data:text/plain, function FindProxyForURL(url, host) {return "QUIC localhost:4443";}';
   origin = "https://foo.example.com:" + h2Port + "/quic-2";
   prefs.setIntPref("network.proxy.type", 2);
   prefs.setCharPref("network.proxy.autoconfig_url", pac);

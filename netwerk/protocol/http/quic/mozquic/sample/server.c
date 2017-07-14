@@ -9,14 +9,28 @@
 #include <stdlib.h>
 #include "../MozQuic.h"
 
-mozquic_connection_t *only_child = NULL;
+#define SERVER_NAME "foo.example.com"
+#define SERVER_PORT 4433
 
 #if 0
+
+Basic server, does a handshake and waits forever.. it can only handle 1
+  session at a time right now.. it will ignore stream data it recvs
+  except if it contains a msg of FIN, in which case it will respond
+  with a single message and close the stream
+
+  -send-close option will send a close before exiting at 1.5sec
+  
+About Certificate Verifcation::
 The sample/nss-config directory is a sample that can be passed
 to mozquic_nss_config(). It contains a NSS database with a cert
 and key for foo.example.com that is signed by a CA defined by CA.cert.der.
+
 #endif
 
+mozquic_connection_t *only_child = NULL;
+
+uint32_t i=0;
 static int connEventCB(void *closure, uint32_t event, void *param)
 {
   switch (event) {
@@ -42,7 +56,7 @@ static int connEventCB(void *closure, uint32_t event, void *param)
         if (strcmp(buf, "FIN") == 0) {
           finStream = 1;
         }
-        fprintf(stderr,"%s\n", buf);
+        fprintf(stderr,"[%s] fin=%d\n", buf, fin);
       }
     } while (read > 0);
     if (finStream) {
@@ -59,8 +73,7 @@ static int connEventCB(void *closure, uint32_t event, void *param)
     return MOZQUIC_OK;
   }
   default:
-    fprintf(stderr,"Wrong event\n");
-    return MOZQUIC_ERR_GENERAL;
+    fprintf(stderr,"unhandled event %X\n", event);
   }
   return MOZQUIC_OK;
 }
@@ -72,10 +85,23 @@ static int accept_new_connection(void *closure, mozquic_connection_t *nc)
   }
   only_child = nc;
   mozquic_set_event_callback( only_child, connEventCB);
+  i = 0;
   return MOZQUIC_OK;
 }
 
-int main()
+int
+has_arg(int argc, char **argv, char *test)
+{
+  int i;
+  for (i=0; i < argc; i++) {
+    if (!strcasecmp(argv[i], test)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+int main(int argc, char **argv)
 {
   struct mozquic_config_t config;
   mozquic_connection_t *c;
@@ -87,14 +113,14 @@ int main()
   }
   
   memset(&config, 0, sizeof(config));
-  config.originName = "foo.example.com"; // really the nickname in the nss db
-  config.originPort = 4433;
+  config.originName = SERVER_NAME;
+  config.originPort = SERVER_PORT;
   config.tolerateBadALPN = 1;
   config.handleIO = 0; // todo mvp
 
   mozquic_new_connection(&c, &config);
   mozquic_start_server(c, accept_new_connection);
-  uint32_t i=0;
+
   do {
     usleep (1000); // this is for handleio todo
     if (!(i++ & 0xf)) {
@@ -104,6 +130,10 @@ int main()
     mozquic_IO(c);
     if (only_child) {
       mozquic_IO(only_child); // todo mvp do we need this?
+      if ((i == 1500) && has_arg(argc, argv, "-send-close")) {
+        mozquic_destroy_connection(only_child);
+        only_child = NULL;
+      }
     }
   } while (1);
   

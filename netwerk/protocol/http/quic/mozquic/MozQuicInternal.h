@@ -64,7 +64,7 @@ public:
   int StartNewStream(MozQuicStreamPair **outStream, const void *data, uint32_t amount, bool fin);
   int IO();
   void HandshakeOutput(unsigned char *, uint32_t amt);
-  void HandshakeComplete(uint32_t errCode);
+  void HandshakeComplete(uint32_t errCode, struct mozquic_handshake_info *keyInfo);
 
   void SetOriginPort(int port) { mOriginPort = port; }
   void SetOriginName(const char *name);

@@ -307,6 +307,12 @@ nsNSSSocketInfo::GetNegotiatedNPN(nsACString& aNegotiatedNPN)
 }
 
 NS_IMETHODIMP
+nsNSSSocketInfo::GetNssFD(PRFileDesc **outFD)
+{
+  return GetFileDescPtr(outFD);
+}
+
+NS_IMETHODIMP
 nsNSSSocketInfo::GetAlpnEarlySelection(nsACString& aAlpnSelected)
 {
   aAlpnSelected.Truncate();
