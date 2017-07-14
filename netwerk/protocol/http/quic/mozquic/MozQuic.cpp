@@ -393,7 +393,9 @@ MozQuic::StartNewStream(MozQuicStreamPair **outStream, const void *data, uint32_
   *outStream = new MozQuicStreamPair(mNextStreamId, this);
   mStreams.insert( { mNextStreamId, *outStream } );
   mNextStreamId += 2;
-  (*outStream)->Write((const unsigned char *)data, amount, fin);
+  if ( amount || fin) {
+    return (*outStream)->Write((const unsigned char *)data, amount, fin);
+  }
   return MOZQUIC_OK;
 }
 
@@ -505,6 +507,7 @@ MozQuic::Intake()
       if (pktSize < tmpShortHeader.mHeaderSize) {
         return rv;
       }
+      fprintf(stderr,"SHORTFORM PACKET RECVD id=%lx size=%d\n", tmpShortHeader.mConnectionID, pktSize);
       session = FindSession(tmpShortHeader.mConnectionID);
       if (!session) {
         rv = MOZQUIC_ERR_GENERAL;
@@ -522,7 +525,7 @@ MozQuic::Intake()
       }
       LongHeaderData longHeader(pkt, pktSize);
 
-      fprintf(stderr,"PACKET RECVD pktnum=%lX version=%X len=%d connid=%lx\n",
+      fprintf(stderr,"LONG PACKET RECVD pktnum=%lX version=%X len=%d connid=%lx\n",
               longHeader.mPacketNumber, longHeader.mVersion, pktSize, longHeader.mConnectionID);
 
       if (!(VersionOK(longHeader.mVersion) ||
@@ -621,7 +624,7 @@ MozQuic::Intake()
       }
     }
     if ((rv == MOZQUIC_OK) && sendAck) {
-      rv = MaybeSendAck();
+      rv = session->MaybeSendAck();
     }
   } while (rv == MOZQUIC_OK);
 
@@ -688,10 +691,11 @@ MozQuic::AckScoreboard(uint64_t packetNumber, enum keyPhase kp)
 
   auto iter=mAckList.begin();
   for (; iter != mAckList.end(); ++iter) {
-    if ((iter->mPacketNumber + 1) == packetNumber) {
+    if ((iter->mPhase == kp) &&
+        ((iter->mPacketNumber + 1) == packetNumber)) {
       // the common case is to just adjust this counter
       // in the first element.. but you can't do that if it has
-      // already been transmitted. that needs a new node
+      // already been transmitted. (that needs a new node)
       if (iter->Transmitted()) {
         break;
       }
@@ -770,8 +774,10 @@ MozQuic::AckPiggyBack(unsigned char *pkt, uint64_t pktNumOfAck, uint32_t avail, 
     }
     if (iter->mPhase != kp) {
       ++iter;
+      fprintf(stderr,"skip ack generation of %lx kp\n", iter->mPacketNumber);
       continue;
     }
+    fprintf(stderr,"ack generation of %lx %d extra\n", iter->mPacketNumber, iter->mExtra);
     if (newFrame) {
       newFrame = false;
       pkt[0] = 0xb9; // ack with 32 bit num and 16 bit run encoding and numblocks
@@ -842,7 +848,7 @@ MozQuic::Acknowledge(uint64_t packetNum, keyPhase kp)
     mNextRecvPacketNumber = packetNum + 1;
   }
 
-  fprintf(stderr,"%p GEN ACK FOR %lX\n", this, packetNum);
+  fprintf(stderr,"%p GEN ACK FOR %lX kp=%d\n", this, packetNum, kp);
 
   // put this packetnumber on the scoreboard along with timestamp
   AckScoreboard(packetNum, kp);
@@ -1158,9 +1164,12 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
       if ((dataIter == mUnAckedData.end()) || ((*dataIter)->mPacketNumber > haveAckFor)) {
         fprintf(stderr,"ACK'd data not found for %lX ack\n", haveAckFor);
       } else {
-        assert ((*dataIter)->mPacketNumber == haveAckFor);
-        fprintf(stderr,"ACK'd data found for %lX\n", haveAckFor);
-        dataIter = mUnAckedData.erase(dataIter);
+        do {
+          assert ((*dataIter)->mPacketNumber == haveAckFor);
+          fprintf(stderr,"ACK'd data found for %lX\n", haveAckFor);
+          dataIter = mUnAckedData.erase(dataIter);
+        } while ((dataIter != mUnAckedData.end()) &&
+                 (*dataIter)->mPacketNumber == haveAckFor);
       }
     }
   }
@@ -1182,9 +1191,12 @@ MozQuic::ProcessAck(FrameHeaderData &result, unsigned char *framePtr)
       if ((unackedIter == mAckList.end()) || (unackedIter->mPacketNumberOfAck > haveAckFor)) {
         fprintf(stderr,"ACK'd ack not found for %lX ack\n", haveAckFor);
       } else {
-        assert (unackedIter->mPacketNumberOfAck == haveAckFor);
-        fprintf(stderr,"ACK'd ack found for %lX transmitted=%d\n", haveAckFor, unackedIter->Transmitted());
-        unackedIter = mAckList.erase(unackedIter);
+        do {
+          assert (unackedIter->mPacketNumberOfAck == haveAckFor);
+          fprintf(stderr,"ACK'd ack found for %lX transmitted=%d\n", haveAckFor, unackedIter->Transmitted());
+          unackedIter = mAckList.erase(unackedIter);
+        } while ((unackedIter != mAckList.end()) &&
+                 (unackedIter->mPacketNumberOfAck == haveAckFor));
       }
     }
   }
@@ -1730,8 +1742,8 @@ MozQuic::FlushStream(bool forceAck)
       framePtr += 2;
 
       memcpy(framePtr, (*iter)->mData.get(), (*iter)->mLen);
-      fprintf(stderr,"writing a stream %d frame %d in packet %lX\n",
-              (*iter)->mStreamID, (*iter)->mLen, mNextTransmitPacketNumber);
+      fprintf(stderr,"writing a stream %d frame %d [fin=%d] in packet %lX\n",
+              (*iter)->mStreamID, (*iter)->mLen, (*iter)->mFin, mNextTransmitPacketNumber);
       framePtr += (*iter)->mLen;
 
       (*iter)->mPacketNumber = mNextTransmitPacketNumber;
