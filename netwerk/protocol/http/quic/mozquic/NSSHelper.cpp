@@ -3,35 +3,59 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "Logging.h"
 #include "MozQuic.h"
 #include "MozQuicInternal.h"
 #include "NSSHelper.h"
 #include "nss.h"
 #include "ssl.h"
+#include "sslexp.h"
 #include "sslproto.h"
 #include "cert.h"
 #include "certdb.h"
 #include "pk11pub.h"
 #include "secmod.h"
 #include "assert.h"
-
+#include "sechash.h"
 
 #if NSS_VMAJOR < 3 || (NSS_VMINOR < 32 && NSS_VMAJOR == 3)
 fail complie;
 #endif
 
-// the above version is not sufficient - the -20 branch hasn't been
+// the above version is not sufficient - the -21 branch hasn't been
 // give a new vminor
 /*
-    nss -20 branch
+    nss -21 branch
     https://github.com/nss-dev/nss/tree/NSS_TLS13_DRAFT19_BRANCH
 
-    known cset d48b10106e9e77a7ec9a8fffe64a681d775a0563
+    known cset 5e6ccfb82ff48e83ae1555fe3c16a27cdee0892a
 */
 
-// todo runtime enforce too
+// todo runtime enforce too.. maybe an exp is enough to enforce
 
-extern "C" 
+#define sTlsLog1(...) Log::sDoLog(Log::TLS, 1, self->mMozQuic, __VA_ARGS__);
+#define sTlsLog2(...) Log::sDoLog(Log::TLS, 2, self->mMozQuic, __VA_ARGS__);
+#define sTlsLog3(...) Log::sDoLog(Log::TLS, 3, self->mMozQuic, __VA_ARGS__);
+#define sTlsLog4(...) Log::sDoLog(Log::TLS, 4, self->mMozQuic, __VA_ARGS__);
+#define sTlsLog5(...) Log::sDoLog(Log::TLS, 5, self->mMozQuic, __VA_ARGS__);
+#define sTlsLog6(...) Log::sDoLog(Log::TLS, 6, self->mMozQuic, __VA_ARGS__);
+#define sTlsLog7(...) Log::sDoLog(Log::TLS, 7, self->mMozQuic, __VA_ARGS__);
+#define sTlsLog8(...) Log::sDoLog(Log::TLS, 8, self->mMozQuic, __VA_ARGS__);
+#define sTlsLog9(...) Log::sDoLog(Log::TLS, 9, self->mMozQuic, __VA_ARGS__);
+#define sTlsLog10(...) Log::sDoLog(Log::TLS, 10, self->mMozQuic, __VA_ARGS__);
+
+#define TlsLog1(...) Log::sDoLog(Log::TLS, 1, mMozQuic, __VA_ARGS__);
+#define TlsLog2(...) Log::sDoLog(Log::TLS, 2, mMozQuic, __VA_ARGS__);
+#define TlsLog3(...) Log::sDoLog(Log::TLS, 3, mMozQuic, __VA_ARGS__);
+#define TlsLog4(...) Log::sDoLog(Log::TLS, 4, mMozQuic, __VA_ARGS__);
+#define TlsLog5(...) Log::sDoLog(Log::TLS, 5, mMozQuic, __VA_ARGS__);
+#define TlsLog6(...) Log::sDoLog(Log::TLS, 6, mMozQuic, __VA_ARGS__);
+#define TlsLog7(...) Log::sDoLog(Log::TLS, 7, mMozQuic, __VA_ARGS__);
+#define TlsLog8(...) Log::sDoLog(Log::TLS, 8, mMozQuic, __VA_ARGS__);
+#define TlsLog9(...) Log::sDoLog(Log::TLS, 9, mMozQuic, __VA_ARGS__);
+#define TlsLog10(...) Log::sDoLog(Log::TLS, 10, mMozQuic, __VA_ARGS__);
+
+extern "C"
 {
 // All of this hkdf code is copied from NSS
 
@@ -61,10 +85,9 @@ ssl_EncodeUintX(PRUint64 value, unsigned int bytes, PRUint8 *to)
   memcpy(to, ((unsigned char *)(&encoded)) + (sizeof(encoded) - bytes), bytes);
   return to + bytes;
 }
-  
+
 static SECStatus
 tls13_HkdfExpandLabel(PK11SymKey *prk, SSLHashType baseHash,
-                      const PRUint8 *handshakeHash, unsigned int handshakeHashLen,
                       const char *label, unsigned int labelLen,
                       CK_MECHANISM_TYPE algorithm, unsigned int keySize,
                       PK11SymKey **keyp)
@@ -80,15 +103,6 @@ tls13_HkdfExpandLabel(PK11SymKey *prk, SSLHashType baseHash,
   PK11SymKey *derived;
   const char *kLabelPrefix = "tls13 ";
   const unsigned int kLabelPrefixLen = strlen(kLabelPrefix);
-
-  if (handshakeHash) {
-    if (handshakeHashLen > 255) {
-      PORT_Assert(0);
-      return SECFailure;
-    }
-  } else {
-    PORT_Assert(!handshakeHashLen);
-  }
 
   /*
    *  [draft-ietf-tls-tls13-11] Section 7.1:
@@ -107,10 +121,10 @@ tls13_HkdfExpandLabel(PK11SymKey *prk, SSLHashType baseHash,
    *  Where:
    *  - HkdfLabel.length is Length
    *  - HkdfLabel.hash_value is HashValue.
-   *  - HkdfLabel.label is "TLS 1.3, " + Label
+   *  - HkdfLabel.label is "tls13 " + Label
    *
    */
-  infoLen = 2 + 1 + kLabelPrefixLen + labelLen + 1 + handshakeHashLen;
+  infoLen = 2 + 1 + kLabelPrefixLen + labelLen + 1;
   if (infoLen > sizeof(info)) {
     PORT_Assert(0);
     goto abort;
@@ -122,11 +136,7 @@ tls13_HkdfExpandLabel(PK11SymKey *prk, SSLHashType baseHash,
   ptr += kLabelPrefixLen;
   PORT_Memcpy(ptr, label, labelLen);
   ptr += labelLen;
-  ptr = ssl_EncodeUintX(handshakeHashLen, 1, ptr);
-  if (handshakeHash) {
-    PORT_Memcpy(ptr, handshakeHash, handshakeHashLen);
-    ptr += handshakeHashLen;
-  }
+  ptr = ssl_EncodeUintX(0, 1, ptr); // Hash is always empty for QUIC.
   PORT_Assert((ptr - info) == infoLen);
 
   params.bExtract = CK_FALSE;
@@ -149,10 +159,9 @@ tls13_HkdfExpandLabel(PK11SymKey *prk, SSLHashType baseHash,
 abort:
     return SECFailure;
 }
-  
+
 static SECStatus
 tls13_HkdfExpandLabelRaw(PK11SymKey *prk, SSLHashType baseHash,
-                         const PRUint8 *handshakeHash, unsigned int handshakeHashLen,
                          const char *label, unsigned int labelLen,
                          unsigned char *output, unsigned int outputLen)
 {
@@ -160,8 +169,7 @@ tls13_HkdfExpandLabelRaw(PK11SymKey *prk, SSLHashType baseHash,
   SECItem *rawkey;
   SECStatus rv;
 
-  rv = tls13_HkdfExpandLabel(prk, baseHash, handshakeHash, handshakeHashLen,
-                             label, labelLen,
+  rv = tls13_HkdfExpandLabel(prk, baseHash, label, labelLen,
                              kTlsHkdfInfo[baseHash].pkcs11Mech, outputLen,
                              &derived);
   if (rv != SECSuccess || !derived) {
@@ -221,14 +229,15 @@ NSSHelper::Init(char *dir)
 
 uint32_t
 NSSHelper::MakeKeyFromRaw(unsigned char *initialSecret,
-                          unsigned int secretSize, SSLHashType hashType,
+                          unsigned int secretSize, unsigned int keySize, SSLHashType hashType,
                           CK_MECHANISM_TYPE importMechanism1, CK_MECHANISM_TYPE importMechanism2,
                           unsigned char *outIV, PK11SymKey **outKey)
 {
   PK11SymKey *finalKey = nullptr;
   PK11SymKey *secretSKey = nullptr;
-  unsigned char ppKey[16]; // all currently defined aead algorithms have key length of 16
+  unsigned char ppKey[32];
   assert (secretSize <= 48);
+  assert (keySize <= sizeof(ppKey));
 
   PK11SlotInfo *slot = PK11_GetInternalSlot();
   {
@@ -243,14 +252,13 @@ NSSHelper::MakeKeyFromRaw(unsigned char *initialSecret,
   }
 
   if (tls13_HkdfExpandLabelRaw(secretSKey, hashType,
-                               (const unsigned char *)"", 0, "key", 3,
-                               ppKey, sizeof(ppKey)) != SECSuccess) {
+                               "key", 3, ppKey, keySize) != SECSuccess) {
     goto failure;
   }
 
   // iv length is max(8, n_min) - n_min is aead specific, but is 12 for everything currently known
   if (tls13_HkdfExpandLabelRaw(secretSKey, hashType,
-                               (const unsigned char *)"", 0, "iv", 2, outIV, 12) != SECSuccess) {                                 
+                               "iv", 2, outIV, 12) != SECSuccess) {
     goto failure;
   }
 
@@ -259,7 +267,7 @@ NSSHelper::MakeKeyFromRaw(unsigned char *initialSecret,
   }
 
   {
-    SECItem ppKey_item = {siBuffer, ppKey, sizeof(ppKey)};
+    SECItem ppKey_item = {siBuffer, ppKey, keySize};
     finalKey = PK11_ImportSymKey(slot, importMechanism2, PK11_OriginUnwrap,
                                  CKA_DERIVE, &ppKey_item, NULL);
   }
@@ -285,7 +293,7 @@ failure:
 
 uint32_t
 NSSHelper::MakeKeyFromNSS(PRFileDesc *fd, const char *label,
-                          unsigned int secretSize, SSLHashType hashType,
+                          unsigned int secretSize, unsigned int keySize, SSLHashType hashType,
                           CK_MECHANISM_TYPE importMechanism1, CK_MECHANISM_TYPE importMechanism2,
                           unsigned char *outIV, PK11SymKey **outKey)
 {
@@ -296,8 +304,9 @@ NSSHelper::MakeKeyFromNSS(PRFileDesc *fd, const char *label,
                                false, (const unsigned char *)"", 0, initialSecret, secretSize) != SECSuccess) {
     return MOZQUIC_ERR_CRYPTO;
   }
-  
-  return MakeKeyFromRaw(initialSecret, secretSize, hashType, importMechanism1,
+
+
+  return MakeKeyFromRaw(initialSecret, secretSize, keySize, hashType, importMechanism1,
                         importMechanism2, outIV, outKey);
 }
 
@@ -322,23 +331,24 @@ NSSHelper::HandshakeSecret(unsigned int ciphersuite,
   }
 
   unsigned int secretSize;
+  unsigned int keySize;
   SSLHashType hashType;
   CK_MECHANISM_TYPE importMechanism1, importMechanism2;
 
-  GetKeyParamsFromCipherSuite(nssSuite, secretSize, hashType, mPacketProtectionMech,
+  GetKeyParamsFromCipherSuite(nssSuite, secretSize, keySize, hashType, mPacketProtectionMech,
                               importMechanism1, importMechanism2);
-      
-  bool didHandshakeFail = 
-    MakeKeyFromRaw(mExternalSendSecret, secretSize, hashType, importMechanism1,
+
+  bool didHandshakeFail =
+    MakeKeyFromRaw(mExternalSendSecret, secretSize, keySize, hashType, importMechanism1,
                    importMechanism2, mPacketProtectionSenderIV0, &mPacketProtectionSenderKey0) != MOZQUIC_OK;
   memset(mExternalSendSecret, 0, sizeof(mExternalSendSecret));
 
 
   didHandshakeFail = didHandshakeFail ||
-    MakeKeyFromRaw(mExternalRecvSecret, secretSize, hashType, importMechanism1,
+    MakeKeyFromRaw(mExternalRecvSecret, secretSize, keySize, hashType, importMechanism1,
                    importMechanism2, mPacketProtectionReceiverIV0, &mPacketProtectionReceiverKey0) != MOZQUIC_OK;
   memset(mExternalSendSecret, 0, sizeof(mExternalRecvSecret));
-  
+
   mHandshakeComplete = true;
   if (didHandshakeFail) {
     mHandshakeFailed = true;
@@ -349,6 +359,7 @@ NSSHelper::HandshakeSecret(unsigned int ciphersuite,
 void
 NSSHelper::GetKeyParamsFromCipherSuite(uint16_t cipherSuite,
                                        unsigned int &secretSize,
+                                       unsigned int &keySize,
                                        SSLHashType &hashType,
                                        CK_MECHANISM_TYPE &packetProtectionMech,
                                        CK_MECHANISM_TYPE &importMechanism1,
@@ -357,28 +368,94 @@ NSSHelper::GetKeyParamsFromCipherSuite(uint16_t cipherSuite,
   hashType = (cipherSuite == TLS_AES_256_GCM_SHA384) ? ssl_hash_sha384 : ssl_hash_sha256;
   if (cipherSuite == TLS_AES_128_GCM_SHA256) {
     secretSize = 32;
+    keySize = 16;
     packetProtectionMech = CKM_AES_GCM;
     importMechanism1 = CKM_NSS_HKDF_SHA256;
     importMechanism2 = CKM_AES_KEY_GEN;
   } else if (cipherSuite == TLS_AES_256_GCM_SHA384) {
     secretSize = 48;
+    keySize = 32;
     packetProtectionMech = CKM_AES_GCM;
     importMechanism1 = CKM_NSS_HKDF_SHA384;
     importMechanism2 = CKM_AES_KEY_GEN;
   } else if (cipherSuite == TLS_CHACHA20_POLY1305_SHA256) {
     secretSize = 32;
+    keySize = 32;
     packetProtectionMech = CKM_NSS_CHACHA20_POLY1305;
     importMechanism1 = CKM_NSS_HKDF_SHA256;
-    importMechanism2 = CKK_NSS_CHACHA20;
+    importMechanism2 = CKM_NSS_CHACHA20_KEY_GEN;
   } else {
     assert(false);
   }
 }
 
+SSLHelloRetryRequestAction
+NSSHelper::HRRCallback(PRBool firstHello, const unsigned char *clientToken,
+                       unsigned int clientTokenLen, unsigned char *retryToken,
+                       unsigned int *retryTokenLen, unsigned int retryTokMax,
+                       void *arg)
+{
+  unsigned char digest[SHA256_LENGTH];
+  assert(retryTokMax >= sizeof(digest));
+  if (retryTokMax < sizeof(digest)) {
+    return ssl_hello_retry_accept;
+  }
+
+  NSSHelper *self = reinterpret_cast<NSSHelper *>(arg);
+
+  unsigned char sourceAddressInfo[128];
+  uint32_t sourceAddressLen = sizeof(sourceAddressInfo);
+  self->mMozQuic->GetRemotePeerAddressHash(sourceAddressInfo, &sourceAddressLen);
+
+  HASHContext *hcontext = HASH_Create(HASH_AlgSHA256);
+  HASH_Begin(hcontext);
+  HASH_Update(hcontext, sourceAddressInfo, sourceAddressLen);
+  unsigned int digestLen;
+  HASH_End(hcontext, digest, &digestLen, sizeof(digest));
+  assert(digestLen == sizeof(digest));
+
+  sTlsLog5("HRRCallback first=%d tokenlen=%d max=%d\n", firstHello, clientTokenLen, retryTokMax);
+  sTlsLog6("Input : ");
+  for (int i = 0 ; i < sourceAddressLen; i++) {
+    sTlsLog6("%02X ", sourceAddressInfo[i]);
+  }
+  sTlsLog6("\nDigest: ");
+  for (int i = 0 ; i < digestLen; i++) {
+    sTlsLog6("%02X ", digest[i]);
+  }
+  if (!firstHello) {
+    sTlsLog6("\nCookie: ");
+    for (int i = 0 ; i < clientTokenLen; i++) {
+      sTlsLog6("%02X ", clientToken[i]);
+    }
+  }
+  sTlsLog6("\n");
+  sTlsLog5("HRRCallback %d bytes of SourceAddress into %d bytes of hash\n",
+           sourceAddressLen, digestLen);
+
+  if (!firstHello) { // verify!
+    if (clientTokenLen != sizeof(digest)) {
+      sTlsLog1("HRRCallback clientToken wrong size\n");
+      return ssl_hello_retry_fail;
+    }
+    if (memcmp(clientToken, digest, sizeof(digest))) {
+      sTlsLog1("HRRCallback clientToken wrong\n");
+      return ssl_hello_retry_fail;
+    }
+    sTlsLog1("HRRCallback clientToken verified!\n");
+    return ssl_hello_retry_accept;
+  }
+
+  assert(!self->mDoHRR);
+  self->mDoHRR = true;
+  memcpy(retryToken, digest, digestLen);
+  *retryTokenLen = digestLen;
+  return ssl_hello_retry_request;
+}
+
 void
 NSSHelper::HandshakeCallback(PRFileDesc *fd, void *client_data)
 {
-  fprintf(stderr,"handshakecallback\n");
   unsigned int bufLen = 0;
   unsigned char buf[256];
   SSLNextProtoState state;
@@ -390,15 +467,17 @@ NSSHelper::HandshakeCallback(PRFileDesc *fd, void *client_data)
   }
   assert(tmpFD);
   NSSHelper *self = reinterpret_cast<NSSHelper *>(tmpFD->secret);
+  sTlsLog5("handshakecallback\n");
   SSLHashType hashType;
   unsigned int secretSize;
+  unsigned int keySize;
   CK_MECHANISM_TYPE importMechanism1, importMechanism2;
 
   if (!self->mTolerateBadALPN &&
       (SSL_GetNextProto(fd, &state, buf, &bufLen, 256) != SECSuccess ||
-       bufLen != strlen(mozquic_alpn) ||
-       memcmp(mozquic_alpn, buf, bufLen))) {
-    fprintf(stderr,"alpn fail\n");
+       bufLen != strlen(MozQuic::kAlpn) ||
+       memcmp(MozQuic::kAlpn, buf, bufLen))) {
+    sTlsLog1("alpn fail\n");
     goto failure;
   } else {
     SSLChannelInfo info;
@@ -407,35 +486,35 @@ NSSHelper::HandshakeCallback(PRFileDesc *fd, void *client_data)
       goto failure;
     } else {
       GetKeyParamsFromCipherSuite(info.cipherSuite,
-                                  secretSize, hashType, self->mPacketProtectionMech,
+                                  secretSize, keySize, hashType, self->mPacketProtectionMech,
                                   importMechanism1, importMechanism2);
     }
   }
 
   if (self->mIsClient) {
     if (self->MakeKeyFromNSS(fd, "EXPORTER-QUIC client 1-RTT Secret",
-                             secretSize, hashType, importMechanism1, importMechanism2,
+                             secretSize, keySize, hashType, importMechanism1, importMechanism2,
                              self->mPacketProtectionSenderIV0, &self->mPacketProtectionSenderKey0) != MOZQUIC_OK) {
       didHandshakeFail = true;
     }
     if (self->MakeKeyFromNSS(fd, "EXPORTER-QUIC server 1-RTT Secret",
-                             secretSize, hashType, importMechanism1, importMechanism2,
+                             secretSize, keySize, hashType, importMechanism1, importMechanism2,
                              self->mPacketProtectionReceiverIV0, &self->mPacketProtectionReceiverKey0) != MOZQUIC_OK) {
       didHandshakeFail = true;
     }
   } else {
     if (self->MakeKeyFromNSS(fd, "EXPORTER-QUIC server 1-RTT Secret",
-                             secretSize, hashType, importMechanism1, importMechanism2,
+                             secretSize, keySize, hashType, importMechanism1, importMechanism2,
                              self->mPacketProtectionSenderIV0, &self->mPacketProtectionSenderKey0) != MOZQUIC_OK) {
       didHandshakeFail = true;
     }
     if (self->MakeKeyFromNSS(fd, "EXPORTER-QUIC client 1-RTT Secret",
-                             secretSize, hashType, importMechanism1, importMechanism2,
+                             secretSize, keySize, hashType, importMechanism1, importMechanism2,
                              self->mPacketProtectionReceiverIV0, &self->mPacketProtectionReceiverKey0) != MOZQUIC_OK) {
       didHandshakeFail = true;
     }
   }
-  
+
   self->mHandshakeComplete = true;
   if (didHandshakeFail) {
     self->mHandshakeFailed = true;
@@ -447,17 +526,16 @@ failure:
   self->mHandshakeFailed = true;
 }
 
-// todo - if nss helper didn't drive tls, need an api to push secrets into this class
-// e.g. firefox
 uint32_t
 NSSHelper::BlockOperation(bool encrypt,
-                          unsigned char *aeadData, uint32_t aeadLen,
-                          unsigned char *data, uint32_t dataLen,
+                          const unsigned char *aadData, uint32_t aadLen,
+                          const unsigned char *data, uint32_t dataLen,
                           uint64_t packetNumber,
                           unsigned char *out, uint32_t outAvail, uint32_t &written)
-  // for encrypt out should be at least dataLen + 16 (for tag), for decrypt out should be at
-  // least dataLen - 16 (for tag removal)
+// for encrypt outAvail should be at least dataLen + 16 (for tag), for decrypt out should be at
+// least dataLen - 16 (for tag removal)
 {
+  assert(outAvail >= (dataLen + 16));
   if (!mNSSReady || !mHandshakeComplete || mHandshakeFailed ||
       !mPacketProtectionSenderKey0 || !mPacketProtectionReceiverKey0) {
     return MOZQUIC_ERR_GENERAL;
@@ -475,14 +553,15 @@ NSSHelper::BlockOperation(bool encrypt,
     nonce[i + 4] ^= tmp[i];
   }
 
+
   if (mPacketProtectionMech == CKM_AES_GCM) {
     params = (unsigned char *) &gcmParams;
     paramsLength = sizeof(gcmParams);
     memset(&gcmParams, 0, sizeof(gcmParams));
     gcmParams.pIv = nonce;
     gcmParams.ulIvLen = sizeof(nonce);
-    gcmParams.pAAD = aeadData;
-    gcmParams.ulAADLen = aeadLen;
+    gcmParams.pAAD = (unsigned char *)aadData;
+    gcmParams.ulAADLen = aadLen;
     gcmParams.ulTagBits = 128;
   } else {
     assert (mPacketProtectionMech == CKM_NSS_CHACHA20_POLY1305);
@@ -491,8 +570,8 @@ NSSHelper::BlockOperation(bool encrypt,
     memset(&polyParams, 0, sizeof(polyParams));
     polyParams.pNonce = nonce;
     polyParams.ulNonceLen = sizeof(nonce);
-    polyParams.pAAD = aeadData;
-    polyParams.ulAADLen = aeadLen;
+    polyParams.pAAD = (unsigned char *)aadData;
+    polyParams.ulAADLen = aadLen;
     polyParams.ulTagLen = 16;
   }
 
@@ -512,27 +591,23 @@ NSSHelper::BlockOperation(bool encrypt,
   return rv;
 }
 
-// todo - if nss helper didn't drive tls, need an api to push secrets into this class
-// e.g. firefox
 uint32_t
-NSSHelper::EncryptBlock(unsigned char *aeadData, uint32_t aeadLen,
-                        unsigned char *plaintext, uint32_t plaintextLen,
+NSSHelper::EncryptBlock(const unsigned char *aadData, uint32_t aadLen,
+                        const unsigned char *plaintext, uint32_t plaintextLen,
                         uint64_t packetNumber, unsigned char *out,
                         uint32_t outAvail, uint32_t &written)
 {
-  return BlockOperation(true, aeadData, aeadLen, plaintext, plaintextLen,
+  return BlockOperation(true, aadData, aadLen, plaintext, plaintextLen,
                         packetNumber, out, outAvail, written);
 }
 
-// todo - if nss helper didn't drive tls, need an api to push secrets into this class
-// e.g. firefox
 uint32_t
-NSSHelper::DecryptBlock(unsigned char *aeadData, uint32_t aeadLen,
-                        unsigned char *ciphertext, uint32_t ciphertextLen,
+NSSHelper::DecryptBlock(const unsigned char *aadData, uint32_t aadLen,
+                        const unsigned char *ciphertext, uint32_t ciphertextLen,
                         uint64_t packetNumber, unsigned char *out, uint32_t outAvail,
                         uint32_t &written)
 {
-  return BlockOperation(false, aeadData, aeadLen, ciphertext, ciphertextLen,
+  return BlockOperation(false, aadData, aadLen, ciphertext, ciphertextLen,
                         packetNumber, out, outAvail, written);
 }
 
@@ -544,20 +619,23 @@ NSSHelper::BadCertificate(void *client_data, PRFileDesc *fd)
   }
   assert(fd);
   NSSHelper *self = reinterpret_cast<NSSHelper *>(fd->secret);
-  fprintf(stderr,"badcertificate override=%d\n",
-          self->mQuicSession->IgnorePKI());
-  return self->mQuicSession->IgnorePKI() ? SECSuccess : SECFailure;
+  sTlsLog2("badcertificate override=%d\n",
+           self->mMozQuic->IgnorePKI());
+  return self->mMozQuic->IgnorePKI() ? SECSuccess : SECFailure;
 }
 
 // server version
 NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *originKey)
-  : mQuicSession(quicSession)
+  : mMozQuic(quicSession)
   , mNSSReady(false)
   , mHandshakeComplete(false)
   , mHandshakeFailed(false)
   , mIsClient(false)
   , mTolerateBadALPN(tolerateBadALPN)
+  , mDoHRR(false)
   , mExternalCipherSuite(0)
+  , mLocalTransportExtensionLen(0)
+  , mRemoteTransportExtensionLen(0)
   , mPacketProtectionSenderKey0(nullptr)
   , mPacketProtectionReceiverKey0(nullptr)
 {
@@ -570,6 +648,12 @@ NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *ori
   mFD = PR_CreateIOLayerStub(nssHelperIdentity, &nssHelperMethods);
   mFD->secret = (struct PRFilePrivate *)this;
   mFD = SSL_ImportFD(nullptr, mFD);
+
+  // To disable any of the usual cipher suites..
+  // SSL_CipherPrefSet(mFD, TLS_AES_128_GCM_SHA256, 0);
+  // SSL_CipherPrefSet(mFD, TLS_AES_256_GCM_SHA384, 0);
+  // SSL_CipherPrefSet(mFD, TLS_CHACHA20_POLY1305_SHA256, 0);
+
   SSL_OptionSet(mFD, SSL_SECURITY, true);
   SSL_OptionSet(mFD, SSL_HANDSHAKE_AS_CLIENT, false);
   SSL_OptionSet(mFD, SSL_HANDSHAKE_AS_SERVER, true);
@@ -587,14 +671,18 @@ NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *ori
   SSL_VersionRangeSet(mFD, &range);
   SSL_HandshakeCallback(mFD, HandshakeCallback, nullptr);
 
+  if (mMozQuic->GetForceAddressValidation()) {
+    SSL_HelloRetryRequestCallback(mFD, HRRCallback, this);
+  }
+
   mNSSReady = true;
 
   unsigned char buffer[256];
-  assert(strlen(mozquic_alpn) < 256);
-  buffer[0] = strlen(mozquic_alpn);
-  memcpy(buffer + 1, mozquic_alpn, strlen(mozquic_alpn));
+  assert(strlen(MozQuic::kAlpn) < 256);
+  buffer[0] = strlen(MozQuic::kAlpn);
+  memcpy(buffer + 1, MozQuic::kAlpn, strlen(MozQuic::kAlpn));
   if (SSL_SetNextProtoNego(mFD,
-                           buffer, strlen(mozquic_alpn) + 1) != SECSuccess) {
+                           buffer, strlen(MozQuic::kAlpn) + 1) != SECSuccess) {
     mNSSReady = false;
   }
 
@@ -610,6 +698,20 @@ NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *ori
     }
   }
 
+  SSLExtensionSupport supportTransportParameters;
+  if (SSL_GetExtensionSupport(kTransportParametersID, &supportTransportParameters) == SECSuccess &&
+      supportTransportParameters != ssl_ext_native_only &&
+      SSL_InstallExtensionHooks(mFD, kTransportParametersID,
+                                TransportExtensionWriter, this,
+                                TransportExtensionHandler, this) == SECSuccess) {
+    PRNetAddr addr;
+    memset(&addr,0,sizeof(addr));
+    addr.raw.family = PR_AF_INET;
+    PR_Connect(mFD, &addr, 0);
+  } else {
+    TlsLog1("Transport ExtensionSupport not possible. not connecting\n");
+  }
+    
   PR_Connect(mFD, &addr, 0);
   // if you Read() from the helper, it pulls through the tls layer from the mozquic::stream0 buffer where
   // peer data lke the client hello is stored.. if you Write() to the helper something
@@ -619,12 +721,15 @@ NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *ori
 
 // client version
 NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *originKey, bool unused)
-  : mQuicSession(quicSession)
+  : mMozQuic(quicSession)
   , mNSSReady(false)
   , mHandshakeComplete(false)
   , mHandshakeFailed(false)
   , mIsClient(true)
   , mTolerateBadALPN(tolerateBadALPN)
+  , mExternalCipherSuite(0)
+  , mLocalTransportExtensionLen(0)
+  , mRemoteTransportExtensionLen(0)
   , mPacketProtectionSenderKey0(nullptr)
   , mPacketProtectionReceiverKey0(nullptr)
 {
@@ -633,6 +738,12 @@ NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *ori
   mFD = PR_CreateIOLayerStub(nssHelperIdentity, &nssHelperMethods);
   mFD->secret = (struct PRFilePrivate *)this;
   mFD = SSL_ImportFD(nullptr, mFD);
+
+  // To disable any of the usual cipher suites..
+  // SSL_CipherPrefSet(mFD, TLS_AES_128_GCM_SHA256, 0);
+  // SSL_CipherPrefSet(mFD, TLS_AES_256_GCM_SHA384, 0);
+  // SSL_CipherPrefSet(mFD, TLS_CHACHA20_POLY1305_SHA256, 0);
+
   SSL_OptionSet(mFD, SSL_SECURITY, true);
   SSL_OptionSet(mFD, SSL_HANDSHAKE_AS_CLIENT, true);
   SSL_OptionSet(mFD, SSL_HANDSHAKE_AS_SERVER, false);
@@ -644,6 +755,13 @@ NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *ori
 
   SSL_OptionSet(mFD, SSL_ENABLE_NPN, false);
   SSL_OptionSet(mFD, SSL_ENABLE_ALPN, true);
+  // todo - re-enable when NSS and HRR are ok with this https://nss-review.dev.mozaws.net/D423 issue #44
+  //  SSL_SendAdditionalKeyShares(mFD, 2);
+  SSLNamedGroup groups[] = {  ssl_grp_ec_secp256r1,
+                              ssl_grp_ec_curve25519,
+                              ssl_grp_ec_secp384r1
+  };
+  SSL_NamedGroupConfig(mFD, groups, PR_ARRAY_SIZE(groups));
 
   SSLVersionRange range = {SSL_LIBRARY_VERSION_TLS_1_3,
                            SSL_LIBRARY_VERSION_TLS_1_3};
@@ -652,25 +770,34 @@ NSSHelper::NSSHelper(MozQuic *quicSession, bool tolerateBadALPN, const char *ori
   SSL_BadCertHook(mFD, BadCertificate, nullptr);
 
   char module_name[] = "library=libnssckbi.so name=\"Root Certs\"";
-  SECMODModule *module = SECMOD_LoadUserModule(module_name, NULL, PR_FALSE);
+  SECMOD_LoadUserModule(module_name, NULL, PR_FALSE);
 
   mNSSReady = true;
 
   unsigned char buffer[256];
-  assert(strlen(mozquic_alpn) < 256);
-  buffer[0] = strlen(mozquic_alpn);
-  memcpy(buffer + 1, mozquic_alpn, strlen(mozquic_alpn));
+  assert(strlen(MozQuic::kAlpn) < 256);
+  buffer[0] = strlen(MozQuic::kAlpn);
+  memcpy(buffer + 1, MozQuic::kAlpn, strlen(MozQuic::kAlpn));
   if (SSL_SetNextProtoNego(mFD,
-                           buffer, strlen(mozquic_alpn) + 1) != SECSuccess) {
+                           buffer, strlen(MozQuic::kAlpn) + 1) != SECSuccess) {
     mNSSReady = false;
   }
 
   SSL_SetURL(mFD, originKey);
 
-  PRNetAddr addr;
-  memset(&addr,0,sizeof(addr));
-  addr.raw.family = PR_AF_INET;
-  PR_Connect(mFD, &addr, 0);
+  SSLExtensionSupport supportTransportParameters;
+  if (SSL_GetExtensionSupport(kTransportParametersID, &supportTransportParameters) == SECSuccess &&
+      supportTransportParameters != ssl_ext_native_only &&
+      SSL_InstallExtensionHooks(mFD, kTransportParametersID,
+                                TransportExtensionWriter, this,
+                                TransportExtensionHandler, this) == SECSuccess) {
+    PRNetAddr addr;
+    memset(&addr,0,sizeof(addr));
+    addr.raw.family = PR_AF_INET;
+    PR_Connect(mFD, &addr, 0);
+  } else {
+    TlsLog1("Transport ExtensionSupport not possible. not connecting\n");
+  }
 }
 
 int
@@ -679,7 +806,7 @@ NSSHelper::nssHelperWrite(PRFileDesc *fd, const void *aBuf, int32_t aAmount)
   // data (e.g. server hello) has come from nss and needs to be written into MozQuic
   // to be written out to the network in stream 0
   NSSHelper *self = reinterpret_cast<NSSHelper *>(fd->secret);
-  self->mQuicSession->NSSOutput(aBuf, aAmount);
+  self->mMozQuic->NSSOutput(aBuf, aAmount);
   return aAmount;
 }
 
@@ -696,7 +823,7 @@ NSSHelper::nssHelperRead(PRFileDesc *fd, void *buf, int32_t amount)
   // nss is asking for input, i.e. a client hello from stream 0 after
   // stream reassembly
   NSSHelper *self = reinterpret_cast<NSSHelper *>(fd->secret);
-  return self->mQuicSession->NSSInput(buf, amount);
+  return self->mMozQuic->NSSInput(buf, amount);
 }
 
 int32_t
@@ -739,26 +866,87 @@ NSSHelper::DriveHandshake()
   if (mHandshakeComplete) {
     return MOZQUIC_OK;
   }
-  assert(mNSSReady);// todo
+
   if (!mNSSReady) {
     return MOZQUIC_ERR_GENERAL;
   }
-  char data[4096];
 
-  SSL_ForceHandshake(mFD);
-  int32_t rd = PR_Read(mFD, data, 4096);
-  if (mHandshakeComplete || (rd > 0)) {
-    return MOZQUIC_OK;
-  }
-  if (rd == 0) {
-    fprintf(stderr,"eof on pipe?\n");
-    return MOZQUIC_ERR_IO;
+
+  if (SSL_ForceHandshake(mFD) == SECSuccess) {
+    char data[256];
+    int32_t rd = PR_Read(mFD, data, 256);
+    if (mHandshakeComplete || (rd > 0)) {
+      return MOZQUIC_OK;
+    }
+    if (rd == 0) {
+      TlsLog1("eof on pipe?\n");
+      return MOZQUIC_ERR_IO;
+    }
   }
   if (PR_GetError() == PR_WOULD_BLOCK_ERROR) {
     return MOZQUIC_OK;
   }
-
+  TlsLog1("handshake err: %s\n", PR_ErrorToName(PR_GetError()));
   return MOZQUIC_ERR_GENERAL;
+}
+
+PRBool
+NSSHelper::TransportExtensionWriter(PRFileDesc *fd, SSLHandshakeType m,
+                                    PRUint8 *data, unsigned int *len, unsigned int maxlen, void *arg)
+{
+  NSSHelper *self = reinterpret_cast<NSSHelper *>(arg);
+  if (m != ssl_hs_client_hello && m != ssl_hs_encrypted_extensions) {
+    return PR_FALSE;
+  }
+  if (maxlen < self->mLocalTransportExtensionLen) {
+    return PR_FALSE;
+  }
+  
+  sTlsLog6("transport extension sent %d bytes long.\n", self->mLocalTransportExtensionLen);
+  memcpy(data, self->mLocalTransportExtensionInfo, self->mLocalTransportExtensionLen);
+  *len = self->mLocalTransportExtensionLen;
+  return PR_TRUE;
+}
+
+SECStatus
+NSSHelper::TransportExtensionHandler(PRFileDesc *fd, SSLHandshakeType m, const PRUint8 *data,
+                                     unsigned int len, SSLAlertDescription *alert, void *arg)
+{
+  NSSHelper *self = reinterpret_cast<NSSHelper *>(arg);
+  if (!self->mIsClient && m != ssl_hs_client_hello) {
+    return SECSuccess;
+  }
+  if (self->mIsClient && m != ssl_hs_encrypted_extensions) {
+    return SECSuccess;
+  }
+  
+  sTlsLog6("transport extension read %d bytes long.\n", len);
+  self->SetRemoteTransportExtensionInfo(data, len);
+  return SECSuccess;
+}
+
+bool
+NSSHelper::SetLocalTransportExtensionInfo(const unsigned char *data, uint16_t datalen)
+{
+  if (datalen > sizeof(mLocalTransportExtensionInfo)) {
+    return false;
+  }
+
+  memcpy(mLocalTransportExtensionInfo, data, datalen);
+  mLocalTransportExtensionLen = datalen;
+  return true;
+}
+
+bool
+NSSHelper::SetRemoteTransportExtensionInfo(const unsigned char *data, uint16_t datalen)
+{
+  if (datalen > sizeof(mRemoteTransportExtensionInfo)) {
+    return false;
+  }
+
+  memcpy(mRemoteTransportExtensionInfo, data, datalen);
+  mRemoteTransportExtensionLen = datalen;
+  return true;
 }
 
 NSSHelper::~NSSHelper()
