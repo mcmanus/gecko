@@ -333,6 +333,20 @@ dtls_HandleHandshake(sslSocket *ss, sslBuffer *origBuf)
             break;
         }
 
+        /* If we're a server and we receive what appears to be a retried
+         * ClientHello, and we are expecting a ClientHello, move the receive
+         * sequence number forward.  This allows for a retried ClientHello if we
+         * send a stateless HelloRetryRequest. */
+        if (message_seq > ss->ssl3.hs.recvMessageSeq &&
+            message_seq == 1 &&
+            fragment_offset == 0 &&
+            ss->ssl3.hs.ws == wait_client_hello &&
+            (SSLHandshakeType)type == ssl_hs_client_hello) {
+            SSL_TRC(5, ("%d: DTLS[%d]: Received apparent 2nd ClientHello",
+                        SSL_GETPID(), ss->fd));
+            ss->ssl3.hs.recvMessageSeq = 1;
+        }
+
         /* There are three ways we could not be ready for this packet.
          *
          * 1. It's a partial next message.
@@ -346,7 +360,7 @@ dtls_HandleHandshake(sslSocket *ss, sslBuffer *origBuf)
             (fragment_offset == 0) &&
             (fragment_length == message_length)) {
             /* Complete next message. Process immediately */
-            ss->ssl3.hs.msg_type = (SSL3HandshakeType)type;
+            ss->ssl3.hs.msg_type = (SSLHandshakeType)type;
             ss->ssl3.hs.msg_len = message_length;
 
             rv = dtls_HandleHandshakeMessage(ss, buf.buf,
@@ -391,7 +405,7 @@ dtls_HandleHandshake(sslSocket *ss, sslBuffer *origBuf)
                     ss->ssl3.hs.recvdHighWater = 0;
                     PORT_Memset(ss->ssl3.hs.recvdFragments.buf, 0,
                                 ss->ssl3.hs.recvdFragments.space);
-                    ss->ssl3.hs.msg_type = (SSL3HandshakeType)type;
+                    ss->ssl3.hs.msg_type = (SSLHandshakeType)type;
                     ss->ssl3.hs.msg_len = message_length;
                 }
 

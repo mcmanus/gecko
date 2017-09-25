@@ -11,6 +11,7 @@
       'target_name': 'ssl_gtest',
       'type': 'executable',
       'sources': [
+        'bloomfilter_unittest.cc',
         'libssl_internals.c',
         'selfencrypt_unittest.cc',
         'ssl_0rtt_unittest.cc',
@@ -18,6 +19,7 @@
         'ssl_auth_unittest.cc',
         'ssl_cert_ext_unittest.cc',
         'ssl_ciphersuite_unittest.cc',
+        'ssl_custext_unittest.cc',
         'ssl_damage_unittest.cc',
         'ssl_dhe_unittest.cc',
         'ssl_drop_unittest.cc',
@@ -31,6 +33,7 @@
         'ssl_gtest.cc',
         'ssl_hrr_unittest.cc',
         'ssl_loopback_unittest.cc',
+        'ssl_misc_unittest.cc',
         'ssl_record_unittest.cc',
         'ssl_resumption_unittest.cc',
         'ssl_skip_unittest.cc',
@@ -62,6 +65,7 @@
         '<(DEPTH)/lib/base/base.gyp:nssb',
         '<(DEPTH)/lib/zlib/zlib.gyp:nss_zlib',
         '<(DEPTH)/cpputil/cpputil.gyp:cpputil',
+        '<(DEPTH)/lib/libpkix/libpkix.gyp:libpkix',
       ],
       'conditions': [
         [ 'test_build==1', {
@@ -79,21 +83,6 @@
         [ 'disable_dbm==0', {
           'dependencies': [
             '<(DEPTH)/lib/dbm/src/src.gyp:dbm',
-          ],
-        }],
-        [ 'disable_libpkix==0', {
-          'dependencies': [
-            '<(DEPTH)/lib/libpkix/pkix/certsel/certsel.gyp:pkixcertsel',
-            '<(DEPTH)/lib/libpkix/pkix/checker/checker.gyp:pkixchecker',
-            '<(DEPTH)/lib/libpkix/pkix/crlsel/crlsel.gyp:pkixcrlsel',
-            '<(DEPTH)/lib/libpkix/pkix/params/params.gyp:pkixparams',
-            '<(DEPTH)/lib/libpkix/pkix/results/results.gyp:pkixresults',
-            '<(DEPTH)/lib/libpkix/pkix/store/store.gyp:pkixstore',
-            '<(DEPTH)/lib/libpkix/pkix/top/top.gyp:pkixtop',
-            '<(DEPTH)/lib/libpkix/pkix/util/util.gyp:pkixutil',
-            '<(DEPTH)/lib/libpkix/pkix_pl_nss/system/system.gyp:pkixsystem',
-            '<(DEPTH)/lib/libpkix/pkix_pl_nss/module/module.gyp:pkixmodule',
-            '<(DEPTH)/lib/libpkix/pkix_pl_nss/pki/pki.gyp:pkixpki',
           ],
         }],
       ],

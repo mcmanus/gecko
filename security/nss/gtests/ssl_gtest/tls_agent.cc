@@ -10,6 +10,7 @@
 #include "pk11func.h"
 #include "ssl.h"
 #include "sslerr.h"
+#include "sslexp.h"
 #include "sslproto.h"
 #include "tls_parser.h"
 
@@ -73,7 +74,6 @@ TlsAgent::TlsAgent(const std::string& name, Role role,
       handshake_callback_(),
       auth_certificate_callback_(),
       sni_callback_(),
-      expect_short_headers_(false),
       skip_version_checks_(false) {
   memset(&info_, 0, sizeof(info_));
   memset(&csinfo_, 0, sizeof(csinfo_));
@@ -93,11 +93,11 @@ TlsAgent::~TlsAgent() {
   // Add failures manually, if any, so we don't throw in a destructor.
   if (expected_received_alert_ != kTlsAlertCloseNotify ||
       expected_received_alert_level_ != kTlsAlertWarning) {
-    ADD_FAILURE() << "Wrong expected_received_alert status";
+    ADD_FAILURE() << "Wrong expected_received_alert status: " << role_str();
   }
   if (expected_sent_alert_ != kTlsAlertCloseNotify ||
       expected_sent_alert_level_ != kTlsAlertWarning) {
-    ADD_FAILURE() << "Wrong expected_sent_alert status";
+    ADD_FAILURE() << "Wrong expected_sent_alert status: " << role_str();
   }
 }
 
@@ -407,10 +407,10 @@ void TlsAgent::SetFallbackSCSVEnabled(bool en) {
   EXPECT_EQ(SECSuccess, rv);
 }
 
-void TlsAgent::SetShortHeadersEnabled() {
+void TlsAgent::SetAltHandshakeTypeEnabled() {
   EXPECT_TRUE(EnsureTlsSetup());
 
-  SECStatus rv = SSLInt_EnableShortHeaders(ssl_fd());
+  SECStatus rv = SSL_UseAltServerHelloType(ssl_fd(), true);
   EXPECT_EQ(SECSuccess, rv);
 }
 
@@ -436,8 +436,6 @@ void TlsAgent::SetExpectedVersion(uint16_t version) {
 void TlsAgent::SetServerKeyBits(uint16_t bits) { server_key_bits_ = bits; }
 
 void TlsAgent::ExpectReadWriteError() { expect_readwrite_error_ = true; }
-
-void TlsAgent::ExpectShortHeaders() { expect_short_headers_ = true; }
 
 void TlsAgent::SkipVersionChecks() { skip_version_checks_ = true; }
 
@@ -764,10 +762,6 @@ void TlsAgent::Connected() {
     }
   }
 
-  PRBool short_headers;
-  rv = SSLInt_UsingShortHeaders(ssl_fd(), &short_headers);
-  EXPECT_EQ(SECSuccess, rv);
-  EXPECT_EQ((PRBool)expect_short_headers_, short_headers);
   SetState(STATE_CONNECTED);
 }
 
@@ -917,10 +911,10 @@ void TlsAgent::SendBuffer(const DataBuffer& buf) {
   }
 }
 
-void TlsAgent::ReadBytes(size_t max) {
-  uint8_t block[max];
+void TlsAgent::ReadBytes(size_t amount) {
+  uint8_t block[16384];
 
-  int32_t rv = PR_Read(ssl_fd(), block, sizeof(block));
+  int32_t rv = PR_Read(ssl_fd(), block, (std::min)(amount, sizeof(block)));
   LOGV("ReadBytes " << rv);
   int32_t err;
 

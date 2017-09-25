@@ -38,7 +38,7 @@ def main():
         print('-DNSS_NO_GCC48')
         return
 
-    print('-Werror')
+    #print('-Werror')
     print('-Wall')
 
     def set_warning(warning, contra=''):

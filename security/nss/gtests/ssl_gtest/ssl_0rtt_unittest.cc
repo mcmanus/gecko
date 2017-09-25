@@ -7,6 +7,7 @@
 #include "secerr.h"
 #include "ssl.h"
 #include "sslerr.h"
+#include "sslexp.h"
 #include "sslproto.h"
 
 extern "C" {
@@ -43,6 +44,94 @@ TEST_P(TlsConnectTls13, ZeroRttServerRejectByOption) {
   CheckConnected();
   SendReceive();
 }
+
+TEST_P(TlsConnectTls13, ZeroRttApparentReplayAfterRestart) {
+  // The test fixtures call SSL_SetupAntiReplay() in SetUp().  This results in
+  // 0-RTT being rejected until at least one window passes.  SetupFor0Rtt()
+  // forces a rollover of the anti-replay filters, which clears this state.
+  // Here, we do the setup manually here without that forced rollover.
+
+  ConfigureSessionCache(RESUME_BOTH, RESUME_TICKET);
+  ConfigureVersion(SSL_LIBRARY_VERSION_TLS_1_3);
+  server_->Set0RttEnabled(true);  // So we signal that we allow 0-RTT.
+  Connect();
+  SendReceive();  // Need to read so that we absorb the session ticket.
+  CheckKeys();
+
+  Reset();
+  server_->StartConnect();
+  client_->StartConnect();
+  client_->Set0RttEnabled(true);
+  server_->Set0RttEnabled(true);
+  ExpectResumption(RESUME_TICKET);
+  ZeroRttSendReceive(true, false);
+  Handshake();
+  CheckConnected();
+  SendReceive();
+}
+
+class TlsZeroRttReplayTest : public TlsConnectTls13 {
+ private:
+  class SaveFirstPacket : public PacketFilter {
+   public:
+    PacketFilter::Action Filter(const DataBuffer& input,
+                                DataBuffer* output) override {
+      if (!packet_.len() && input.len()) {
+        packet_ = input;
+      }
+      return KEEP;
+    }
+
+    const DataBuffer& packet() const { return packet_; }
+
+   private:
+    DataBuffer packet_;
+  };
+
+ protected:
+  void RunTest(bool rollover) {
+    // Run the initial handshake
+    SetupForZeroRtt();
+
+    // Now run a true 0-RTT handshake, but capture the first packet.
+    auto first_packet = std::make_shared<SaveFirstPacket>();
+    client_->SetPacketFilter(first_packet);
+    client_->Set0RttEnabled(true);
+    server_->Set0RttEnabled(true);
+    ExpectResumption(RESUME_TICKET);
+    ZeroRttSendReceive(true, true);
+    Handshake();
+    EXPECT_LT(0U, first_packet->packet().len());
+    ExpectEarlyDataAccepted(true);
+    CheckConnected();
+    SendReceive();
+
+    if (rollover) {
+      SSLInt_RolloverAntiReplay();
+    }
+
+    // Now replay that packet against the server.
+    Reset();
+    server_->StartConnect();
+    server_->Set0RttEnabled(true);
+
+    // Capture the early_data extension, which should not appear.
+    auto early_data_ext =
+        std::make_shared<TlsExtensionCapture>(ssl_tls13_early_data_xtn);
+    server_->SetPacketFilter(early_data_ext);
+
+    // Finally, replay the ClientHello and force the server to consume it.  Stop
+    // after the server sends its first flight; the client will not be able to
+    // complete this handshake.
+    server_->adapter()->PacketReceived(first_packet->packet());
+    server_->Handshake();
+    EXPECT_FALSE(early_data_ext->captured());
+  }
+};
+
+TEST_P(TlsZeroRttReplayTest, ZeroRttReplay) { RunTest(false); }
+
+TEST_P(TlsZeroRttReplayTest, ZeroRttReplayAfterRollover) { RunTest(true); }
 
 // Test that we don't try to send 0-RTT data when the server sent
 // us a ticket without the 0-RTT flags.
@@ -99,6 +188,64 @@ TEST_P(TlsConnectTls13, ZeroRttServerOnly) {
   CheckKeys();
 }
 
+// A small sleep after sending the ClientHello means that the ticket age that
+// arrives at the server is too low.  With a small tolerance for variation in
+// ticket age (which is determined by the |window| parameter that is passed to
+// SSL_SetupAntiReplay()), the server then rejects early data.
+TEST_P(TlsConnectTls13, ZeroRttRejectOldTicket) {
+  SetupForZeroRtt();
+  client_->Set0RttEnabled(true);
+  server_->Set0RttEnabled(true);
+  EXPECT_EQ(SECSuccess, SSL_SetupAntiReplay(1, 1, 3));
+  SSLInt_RolloverAntiReplay();  // Make sure to flush replay state.
+  SSLInt_RolloverAntiReplay();
+  ExpectResumption(RESUME_TICKET);
+  ZeroRttSendReceive(true, false, []() {
+    PR_Sleep(PR_MillisecondsToInterval(10));
+    return true;
+  });
+  Handshake();
+  ExpectEarlyDataAccepted(false);
+  CheckConnected();
+  SendReceive();
+}
+
+// In this test, we falsely inflate the estimate of the RTT by delaying the
+// ServerHello on the first handshake.  This results in the server estimating a
+// higher value of the ticket age than the client ultimately provides.  Add a
+// small tolerance for variation in ticket age and the ticket will appear to
+// arrive prematurely, causing the server to reject early data.
+TEST_P(TlsConnectTls13, ZeroRttRejectPrematureTicket) {
+  ConfigureSessionCache(RESUME_BOTH, RESUME_TICKET);
+  ConfigureVersion(SSL_LIBRARY_VERSION_TLS_1_3);
+  server_->Set0RttEnabled(true);
+  client_->StartConnect();
+  server_->StartConnect();
+  client_->Handshake();  // ClientHello
+  server_->Handshake();  // ServerHello
+  PR_Sleep(PR_MillisecondsToInterval(10));
+  Handshake();  // Remainder of handshake
+  CheckConnected();
+  SendReceive();
+  CheckKeys();
+
+  Reset();
+  client_->Set0RttEnabled(true);
+  server_->Set0RttEnabled(true);
+  EXPECT_EQ(SECSuccess, SSL_SetupAntiReplay(1, 1, 3));
+  SSLInt_RolloverAntiReplay();  // Make sure to flush replay state.
+  SSLInt_RolloverAntiReplay();
+  ExpectResumption(RESUME_TICKET);
+  ExpectEarlyDataAccepted(false);
+
+  server_->StartConnect();
+  client_->StartConnect();
+  ZeroRttSendReceive(true, false);
+  Handshake();
+  CheckConnected();
+  SendReceive();
+}
+
 TEST_P(TlsConnectTls13, TestTls13ZeroRttAlpn) {
   EnableAlpn();
   SetupForZeroRtt();
@@ -117,6 +264,14 @@ TEST_P(TlsConnectTls13, TestTls13ZeroRttAlpn) {
   CheckAlpn("a");
 }
 
+// NOTE: In this test and those below, the client always sends
+// post-ServerHello alerts with the handshake keys, even if the server
+// has accepted 0-RTT.  In some cases, as with errors in
+// EncryptedExtensions, the client can't know the server's behavior,
+// and in others it's just simpler.  What the server is expecting
+// depends on whether it accepted 0-RTT or not. Eventually, we may
+// make the server trial decrypt.
+//
 // Have the server negotiate a different ALPN value, and therefore
 // reject 0-RTT.
 TEST_P(TlsConnectTls13, TestTls13ZeroRttAlpnChangeServer) {
@@ -155,12 +310,17 @@ TEST_P(TlsConnectTls13, TestTls13ZeroRttNoAlpnServer) {
     client_->CheckAlpn(SSL_NEXT_PROTO_EARLY_VALUE, "a");
     EXPECT_EQ(SECSuccess, SSLInt_Set0RttAlpn(client_->ssl_fd(), b, sizeof(b)));
     client_->CheckAlpn(SSL_NEXT_PROTO_EARLY_VALUE, "b");
-    ExpectAlert(client_, kTlsAlertIllegalParameter);
+    client_->ExpectSendAlert(kTlsAlertIllegalParameter);
     return true;
   });
-  Handshake();
+  if (variant_ == ssl_variant_stream) {
+    server_->ExpectSendAlert(kTlsAlertBadRecordMac);
+    Handshake();
+    server_->CheckErrorCode(SSL_ERROR_BAD_MAC_READ);
+  } else {
+    client_->Handshake();
+  }
   client_->CheckErrorCode(SSL_ERROR_NEXT_PROTOCOL_DATA_INVALID);
-  server_->CheckErrorCode(SSL_ERROR_ILLEGAL_PARAMETER_ALERT);
 }
 
 // Set up with no ALPN and then set the client so it thinks it has ALPN.
@@ -175,12 +335,17 @@ TEST_P(TlsConnectTls13, TestTls13ZeroRttNoAlpnClient) {
     PRUint8 b[] = {'b'};
     EXPECT_EQ(SECSuccess, SSLInt_Set0RttAlpn(client_->ssl_fd(), b, 1));
     client_->CheckAlpn(SSL_NEXT_PROTO_EARLY_VALUE, "b");
-    ExpectAlert(client_, kTlsAlertIllegalParameter);
+    client_->ExpectSendAlert(kTlsAlertIllegalParameter);
     return true;
   });
-  Handshake();
+  if (variant_ == ssl_variant_stream) {
+    server_->ExpectSendAlert(kTlsAlertBadRecordMac);
+    Handshake();
+    server_->CheckErrorCode(SSL_ERROR_BAD_MAC_READ);
+  } else {
+    client_->Handshake();
+  }
   client_->CheckErrorCode(SSL_ERROR_NEXT_PROTOCOL_DATA_INVALID);
-  server_->CheckErrorCode(SSL_ERROR_ILLEGAL_PARAMETER_ALERT);
 }
 
 // Remove the old ALPN value and so the client will not offer early data.

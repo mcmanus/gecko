@@ -53,7 +53,7 @@ class TlsRecordHeader : public TlsVersioned {
   size_t header_length() const { return is_dtls() ? 11 : 3; }
 
   // Parse the header; return true if successful; body in an outparam if OK.
-  bool Parse(TlsParser* parser, DataBuffer* body);
+  bool Parse(uint64_t sequence_number, TlsParser* parser, DataBuffer* body);
   // Write the header and body to a buffer at the given offset.
   // Return the offset of the end of the write.
   size_t Write(DataBuffer* buffer, size_t offset, const DataBuffer& body) const;
@@ -66,7 +66,13 @@ class TlsRecordHeader : public TlsVersioned {
 // Abstract filter that operates on entire (D)TLS records.
 class TlsRecordFilter : public PacketFilter {
  public:
-  TlsRecordFilter() : agent_(nullptr), count_(0), cipher_spec_() {}
+  TlsRecordFilter()
+      : agent_(nullptr),
+        count_(0),
+        cipher_spec_(),
+        dropped_record_(false),
+        in_sequence_number_(0),
+        out_sequence_number_(0) {}
 
   void SetAgent(const TlsAgent* agent) { agent_ = agent; }
   const TlsAgent* agent() const { return agent_; }
@@ -115,6 +121,12 @@ class TlsRecordFilter : public PacketFilter {
   const TlsAgent* agent_;
   size_t count_;
   std::unique_ptr<TlsCipherSpec> cipher_spec_;
+  // Whether we dropped a record since the cipher spec changed.
+  bool dropped_record_;
+  // The sequence number we use for reading records as they are written.
+  uint64_t in_sequence_number_;
+  // The sequence number we use for writing modified records.
+  uint64_t out_sequence_number_;
 };
 
 inline std::ostream& operator<<(std::ostream& stream, TlsVersioned v) {
@@ -133,6 +145,7 @@ inline std::ostream& operator<<(std::ostream& stream, TlsRecordHeader& hdr) {
       stream << "Alert";
       break;
     case kTlsHandshakeType:
+    case kTlsAltHandshakeType:
       stream << "Handshake";
       break;
     case kTlsApplicationDataType:
@@ -197,6 +210,8 @@ class TlsInspectorRecordHandshakeMessage : public TlsHandshakeFilter {
                                                const DataBuffer& input,
                                                DataBuffer* output);
 
+  void Reset() { buffer_.Truncate(0); }
+
   const DataBuffer& buffer() const { return buffer_; }
 
  private:
@@ -230,7 +245,19 @@ class TlsConversationRecorder : public TlsRecordFilter {
                                             DataBuffer* output);
 
  private:
-  DataBuffer& buffer_;
+  DataBuffer buffer_;
+};
+
+// Make a copy of the records
+class TlsHeaderRecorder : public TlsRecordFilter {
+ public:
+  virtual PacketFilter::Action FilterRecord(const TlsRecordHeader& header,
+                                            const DataBuffer& input,
+                                            DataBuffer* output);
+  const TlsRecordHeader* header(size_t index);
+
+ private:
+  std::vector<TlsRecordHeader> headers_;
 };
 
 // Runs multiple packet filters in series.
@@ -259,10 +286,15 @@ class TlsExtensionFilter : public TlsHandshakeFilter {
   TlsExtensionFilter() : handshake_types_() {
     handshake_types_.insert(kTlsHandshakeClientHello);
     handshake_types_.insert(kTlsHandshakeServerHello);
+    handshake_types_.insert(kTlsHandshakeEncryptedExtensions);
   }
 
   TlsExtensionFilter(const std::set<uint8_t>& types)
       : handshake_types_(types) {}
+
+  void SetHandshakeTypes(const std::set<uint8_t>& types) {
+    handshake_types_ = types;
+  }
 
   static bool FindExtensions(TlsParser* parser, const HandshakeHeader& header);
 
@@ -324,6 +356,21 @@ class TlsExtensionDropper : public TlsExtensionFilter {
 
  private:
   uint16_t extension_;
+};
+
+class TlsExtensionInjector : public TlsHandshakeFilter {
+ public:
+  TlsExtensionInjector(uint16_t ext, const DataBuffer& data)
+      : extension_(ext), data_(data) {}
+
+ protected:
+  PacketFilter::Action FilterHandshake(const HandshakeHeader& header,
+                                       const DataBuffer& input,
+                                       DataBuffer* output) override;
+
+ private:
+  const uint16_t extension_;
+  const DataBuffer data_;
 };
 
 class TlsAgent;

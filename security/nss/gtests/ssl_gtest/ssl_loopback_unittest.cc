@@ -6,10 +6,12 @@
 
 #include <functional>
 #include <memory>
+#include <vector>
 #include "secerr.h"
 #include "ssl.h"
 #include "sslerr.h"
 #include "sslproto.h"
+#include "ssl3prot.h"
 
 extern "C" {
 // This is not something that should make you happy.
@@ -189,6 +191,105 @@ TEST_P(TlsConnectGeneric, ConnectSendReceive) {
   SendReceive();
 }
 
+class SaveTlsRecord : public TlsRecordFilter {
+ public:
+  SaveTlsRecord(size_t index) : index_(index), count_(0), contents_() {}
+
+  const DataBuffer& contents() const { return contents_; }
+
+ protected:
+  PacketFilter::Action FilterRecord(const TlsRecordHeader& header,
+                                    const DataBuffer& data,
+                                    DataBuffer* changed) override {
+    if (count_++ == index_) {
+      contents_ = data;
+    }
+    return KEEP;
+  }
+
+ private:
+  const size_t index_;
+  size_t count_;
+  DataBuffer contents_;
+};
+
+// Check that decrypting filters work and can read any record.
+// This test (currently) only works in TLS 1.3 where we can decrypt.
+TEST_F(TlsConnectStreamTls13, DecryptRecordClient) {
+  EnsureTlsSetup();
+  // 0 = ClientHello, 1 = Finished, 2 = SendReceive, 3 = SendBuffer
+  auto saved = std::make_shared<SaveTlsRecord>(3);
+  client_->SetTlsRecordFilter(saved);
+  Connect();
+  SendReceive();
+
+  static const uint8_t data[] = {0xde, 0xad, 0xdc};
+  DataBuffer buf(data, sizeof(data));
+  client_->SendBuffer(buf);
+  EXPECT_EQ(buf, saved->contents());
+}
+
+TEST_F(TlsConnectStreamTls13, DecryptRecordServer) {
+  EnsureTlsSetup();
+  // Disable tickets so that we are sure to not get NewSessionTicket.
+  EXPECT_EQ(SECSuccess, SSL_OptionSet(server_->ssl_fd(),
+                                      SSL_ENABLE_SESSION_TICKETS, PR_FALSE));
+  // 0 = ServerHello, 1 = other handshake, 2 = SendReceive, 3 = SendBuffer
+  auto saved = std::make_shared<SaveTlsRecord>(3);
+  server_->SetTlsRecordFilter(saved);
+  Connect();
+  SendReceive();
+
+  static const uint8_t data[] = {0xde, 0xad, 0xd5};
+  DataBuffer buf(data, sizeof(data));
+  server_->SendBuffer(buf);
+  EXPECT_EQ(buf, saved->contents());
+}
+
+class DropTlsRecord : public TlsRecordFilter {
+ public:
+  DropTlsRecord(size_t index) : index_(index), count_(0) {}
+
+ protected:
+  PacketFilter::Action FilterRecord(const TlsRecordHeader& header,
+                                    const DataBuffer& data,
+                                    DataBuffer* changed) override {
+    if (count_++ == index_) {
+      return DROP;
+    }
+    return KEEP;
+  }
+
+ private:
+  const size_t index_;
+  size_t count_;
+};
+
+// Test that decrypting filters work correctly and are able to drop records.
+TEST_F(TlsConnectStreamTls13, DropRecordServer) {
+  EnsureTlsSetup();
+  // Disable session tickets so that the server doesn't send an extra record.
+  EXPECT_EQ(SECSuccess, SSL_OptionSet(server_->ssl_fd(),
+                                      SSL_ENABLE_SESSION_TICKETS, PR_FALSE));
+
+  // 0 = ServerHello, 1 = other handshake, 2 = first write
+  server_->SetTlsRecordFilter(std::make_shared<DropTlsRecord>(2));
+  Connect();
+  server_->SendData(23, 23);  // This should be dropped, so it won't be counted.
+  server_->ResetSentBytes();
+  SendReceive();
+}
+
+TEST_F(TlsConnectStreamTls13, DropRecordClient) {
+  EnsureTlsSetup();
+  // 0 = ClientHello, 1 = Finished, 2 = first write
+  client_->SetTlsRecordFilter(std::make_shared<DropTlsRecord>(2));
+  Connect();
+  client_->SendData(26, 26);  // This should be dropped, so it won't be counted.
+  client_->ResetSentBytes();
+  SendReceive();
+}
+
 // The next two tests takes advantage of the fact that we
 // automatically read the first 1024 bytes, so if
 // we provide 1200 bytes, they overrun the read buffer
@@ -315,12 +416,56 @@ TEST_F(TlsConnectStreamTls13, Tls13FailedWriteSecondFlight) {
   client_->CheckErrorCode(SSL_ERROR_SOCKET_WRITE_FAILURE);
 }
 
-TEST_F(TlsConnectStreamTls13, NegotiateShortHeaders) {
-  client_->SetShortHeadersEnabled();
-  server_->SetShortHeadersEnabled();
-  client_->ExpectShortHeaders();
-  server_->ExpectShortHeaders();
+TEST_F(TlsConnectTest, ConnectSSLv3) {
+  ConfigureVersion(SSL_LIBRARY_VERSION_3_0);
+  EnableOnlyStaticRsaCiphers();
   Connect();
+  CheckKeys(ssl_kea_rsa, ssl_grp_none, ssl_auth_rsa_decrypt, ssl_sig_none);
+}
+
+TEST_F(TlsConnectTest, ConnectSSLv3ClientAuth) {
+  ConfigureVersion(SSL_LIBRARY_VERSION_3_0);
+  EnableOnlyStaticRsaCiphers();
+  client_->SetupClientAuth();
+  server_->RequestClientAuth(true);
+  Connect();
+  CheckKeys(ssl_kea_rsa, ssl_grp_none, ssl_auth_rsa_decrypt, ssl_sig_none);
+}
+
+TEST_F(TlsConnectStreamTls13, ClientAltHandshakeType) {
+  client_->SetAltHandshakeTypeEnabled();
+  auto filter = std::make_shared<TlsHeaderRecorder>();
+  server_->SetPacketFilter(filter);
+  Connect();
+  ASSERT_EQ(kTlsHandshakeType, filter->header(0)->content_type());
+}
+
+TEST_F(TlsConnectStreamTls13, ServerAltHandshakeType) {
+  server_->SetAltHandshakeTypeEnabled();
+  auto filter = std::make_shared<TlsHeaderRecorder>();
+  server_->SetPacketFilter(filter);
+  Connect();
+  ASSERT_EQ(kTlsHandshakeType, filter->header(0)->content_type());
+}
+
+TEST_F(TlsConnectStreamTls13, BothAltHandshakeType) {
+  client_->SetAltHandshakeTypeEnabled();
+  server_->SetAltHandshakeTypeEnabled();
+  auto header_filter = std::make_shared<TlsHeaderRecorder>();
+  auto sh_filter = std::make_shared<TlsInspectorRecordHandshakeMessage>(
+      kTlsHandshakeServerHello);
+  std::vector<std::shared_ptr<PacketFilter>> filters = {header_filter,
+                                                        sh_filter};
+  auto chained = std::make_shared<ChainedPacketFilter>(filters);
+  server_->SetPacketFilter(chained);
+  header_filter->SetAgent(server_.get());
+  header_filter->EnableDecryption();
+  Connect();
+  ASSERT_EQ(kTlsAltHandshakeType, header_filter->header(0)->content_type());
+  ASSERT_EQ(kTlsHandshakeType, header_filter->header(1)->content_type());
+  uint32_t ver;
+  ASSERT_TRUE(sh_filter->buffer().Read(0, 2, &ver));
+  ASSERT_EQ((uint32_t)(0x7a00 | TLS_1_3_DRAFT_VERSION), ver);
 }
 
 INSTANTIATE_TEST_CASE_P(

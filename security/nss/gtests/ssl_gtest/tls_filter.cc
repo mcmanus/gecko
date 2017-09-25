@@ -57,12 +57,17 @@ void TlsRecordFilter::CipherSpecChanged(void* arg, PRBool sending,
   PRBool isServer = self->agent()->role() == TlsAgent::SERVER;
 
   if (g_ssl_gtest_verbose) {
-    std::cerr << "Cipher spec changed. Role="
-              << (isServer ? "server" : "client")
-              << " direction=" << (sending ? "send" : "receive") << std::endl;
+    std::cerr << (isServer ? "server" : "client") << ": "
+              << (sending ? "send" : "receive")
+              << " cipher spec changed:  " << newSpec->phase << std::endl;
   }
-  if (!sending) return;
+  if (!sending) {
+    return;
+  }
 
+  self->in_sequence_number_ = 0;
+  self->out_sequence_number_ = 0;
+  self->dropped_record_ = false;
   self->cipher_spec_.reset(new TlsCipherSpec());
   bool ret =
       self->cipher_spec_->Init(SSLInt_CipherSpecToAlgorithm(isServer, newSpec),
@@ -83,9 +88,21 @@ PacketFilter::Action TlsRecordFilter::Filter(const DataBuffer& input,
     TlsRecordHeader header;
     DataBuffer record;
 
-    if (!header.Parse(&parser, &record)) {
+    if (!header.Parse(in_sequence_number_, &parser, &record)) {
       ADD_FAILURE() << "not a valid record";
       return KEEP;
+    }
+
+    // Track the sequence number, which is necessary for stream mode (the
+    // sequence number is in the header for datagram).
+    //
+    // This isn't perfectly robust.  If there is a change from an active cipher
+    // spec to another active cipher spec (KeyUpdate for instance) AND writes
+    // are consolidated across that change AND packets were dropped from the
+    // older epoch, we will not correctly re-encrypt records in the old epoch to
+    // update their sequence numbers.
+    if (cipher_spec_ && header.content_type() == kTlsApplicationDataType) {
+      ++in_sequence_number_;
     }
 
     if (FilterRecord(header, record, &offset, output) != KEEP) {
@@ -120,30 +137,49 @@ PacketFilter::Action TlsRecordFilter::FilterRecord(
                                  header.sequence_number()};
 
   PacketFilter::Action action = FilterRecord(real_header, plaintext, &filtered);
+  // In stream mode, even if something doesn't change we need to re-encrypt if
+  // previous packets were dropped.
   if (action == KEEP) {
-    return KEEP;
+    if (header.is_dtls() || !dropped_record_) {
+      return KEEP;
+    }
+    filtered = plaintext;
   }
 
   if (action == DROP) {
     std::cerr << "record drop: " << record << std::endl;
+    dropped_record_ = true;
     return DROP;
   }
 
   EXPECT_GT(0x10000U, filtered.len());
-  std::cerr << "record old: " << plaintext << std::endl;
-  std::cerr << "record new: " << filtered << std::endl;
+  if (action != KEEP) {
+    std::cerr << "record old: " << plaintext << std::endl;
+    std::cerr << "record new: " << filtered << std::endl;
+  }
+
+  uint64_t seq_num;
+  if (header.is_dtls() || !cipher_spec_ ||
+      header.content_type() != kTlsApplicationDataType) {
+    seq_num = header.sequence_number();
+  } else {
+    seq_num = out_sequence_number_++;
+  }
+  TlsRecordHeader out_header = {header.version(), header.content_type(),
+                                seq_num};
 
   DataBuffer ciphertext;
-  bool rv = Protect(header, inner_content_type, filtered, &ciphertext);
+  bool rv = Protect(out_header, inner_content_type, filtered, &ciphertext);
   EXPECT_TRUE(rv);
   if (!rv) {
     return KEEP;
   }
-  *offset = header.Write(output, *offset, ciphertext);
+  *offset = out_header.Write(output, *offset, ciphertext);
   return CHANGE;
 }
 
-bool TlsRecordHeader::Parse(TlsParser* parser, DataBuffer* body) {
+bool TlsRecordHeader::Parse(uint64_t sequence_number, TlsParser* parser,
+                            DataBuffer* body) {
   if (!parser->Read(&content_type_)) {
     return false;
   }
@@ -154,7 +190,7 @@ bool TlsRecordHeader::Parse(TlsParser* parser, DataBuffer* body) {
   }
   version_ = version;
 
-  sequence_number_ = 0;
+  // If this is DTLS, overwrite the sequence number.
   if (IsDtls(version)) {
     uint32_t tmp;
     if (!parser->Read(&tmp, 4)) {
@@ -165,6 +201,8 @@ bool TlsRecordHeader::Parse(TlsParser* parser, DataBuffer* body) {
       return false;
     }
     sequence_number_ |= static_cast<uint64_t>(tmp);
+  } else {
+    sequence_number_ = sequence_number;
   }
   return parser->ReadVariable(body, 2);
 }
@@ -193,6 +231,9 @@ bool TlsRecordFilter::Unprotect(const TlsRecordHeader& header,
     return true;
   }
 
+  if (g_ssl_gtest_verbose) {
+    std::cerr << "unprotect: " << header.sequence_number() << std::endl;
+  }
   if (!cipher_spec_->Unprotect(header, ciphertext, plaintext)) return false;
 
   size_t len = plaintext->len();
@@ -218,6 +259,9 @@ bool TlsRecordFilter::Protect(const TlsRecordHeader& header,
     *ciphertext = plaintext;
     return true;
   }
+  if (g_ssl_gtest_verbose) {
+    std::cerr << "protect: " << header.sequence_number() << std::endl;
+  }
   DataBuffer padded = plaintext;
   padded.Write(padded.len(), inner_content_type, 1);
   return cipher_spec_->Protect(header, padded, ciphertext);
@@ -227,7 +271,8 @@ PacketFilter::Action TlsHandshakeFilter::FilterRecord(
     const TlsRecordHeader& record_header, const DataBuffer& input,
     DataBuffer* output) {
   // Check that the first byte is as requested.
-  if (record_header.content_type() != kTlsHandshakeType) {
+  if ((record_header.content_type() != kTlsHandshakeType) &&
+      (record_header.content_type() != kTlsAltHandshakeType)) {
     return KEEP;
   }
 
@@ -369,6 +414,20 @@ PacketFilter::Action TlsConversationRecorder::FilterRecord(
   return KEEP;
 }
 
+PacketFilter::Action TlsHeaderRecorder::FilterRecord(
+    const TlsRecordHeader& header, const DataBuffer& input,
+    DataBuffer* output) {
+  headers_.push_back(header);
+  return KEEP;
+}
+
+const TlsRecordHeader* TlsHeaderRecorder::header(size_t index) {
+  if (index > headers_.size() + 1) {
+    return nullptr;
+  }
+  return &headers_[index];
+}
+
 PacketFilter::Action ChainedPacketFilter::Filter(const DataBuffer& input,
                                                  DataBuffer* output) {
   DataBuffer in(input);
@@ -378,6 +437,7 @@ PacketFilter::Action ChainedPacketFilter::Filter(const DataBuffer& input,
     if (action == DROP) {
       return DROP;
     }
+
     if (action == CHANGE) {
       in = *output;
       changed = true;
@@ -468,6 +528,9 @@ static bool FindCertificateExtensions(TlsParser* parser,
 static bool FindNewSessionTicketExtensions(TlsParser* parser,
                                            const TlsVersioned& header) {
   if (!parser->Skip(8)) {  // lifetime, age add
+    return false;
+  }
+  if (!parser->SkipVariable(1)) {  // ticket_nonce
     return false;
   }
   if (!parser->SkipVariable(2)) {  // ticket
@@ -600,6 +663,38 @@ PacketFilter::Action TlsExtensionDropper::FilterExtension(
     return DROP;
   }
   return KEEP;
+}
+
+PacketFilter::Action TlsExtensionInjector::FilterHandshake(
+    const HandshakeHeader& header, const DataBuffer& input,
+    DataBuffer* output) {
+  TlsParser parser(input);
+  if (!TlsExtensionFilter::FindExtensions(&parser, header)) {
+    return KEEP;
+  }
+  size_t offset = parser.consumed();
+
+  *output = input;
+
+  // Increase the size of the extensions.
+  uint16_t ext_len;
+  memcpy(&ext_len, output->data() + offset, sizeof(ext_len));
+  ext_len = htons(ntohs(ext_len) + data_.len() + 4);
+  memcpy(output->data() + offset, &ext_len, sizeof(ext_len));
+
+  // Insert the extension type and length.
+  DataBuffer type_length;
+  type_length.Allocate(4);
+  type_length.Write(0, extension_, 2);
+  type_length.Write(2, data_.len(), 2);
+  output->Splice(type_length, offset + 2);
+
+  // Insert the payload.
+  if (data_.len() > 0) {
+    output->Splice(data_, offset + 6);
+  }
+
+  return CHANGE;
 }
 
 PacketFilter::Action AfterRecordN::FilterRecord(const TlsRecordHeader& header,

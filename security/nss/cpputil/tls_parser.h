@@ -24,6 +24,7 @@ const uint8_t kTlsChangeCipherSpecType = 20;
 const uint8_t kTlsAlertType = 21;
 const uint8_t kTlsHandshakeType = 22;
 const uint8_t kTlsApplicationDataType = 23;
+const uint8_t kTlsAltHandshakeType = 24;
 
 const uint8_t kTlsHandshakeClientHello = 1;
 const uint8_t kTlsHandshakeServerHello = 2;
@@ -49,6 +50,7 @@ const uint8_t kTlsAlertIllegalParameter = 47;
 const uint8_t kTlsAlertDecodeError = 50;
 const uint8_t kTlsAlertDecryptError = 51;
 const uint8_t kTlsAlertProtocolVersion = 70;
+const uint8_t kTlsAlertInternalError = 80;
 const uint8_t kTlsAlertInappropriateFallback = 86;
 const uint8_t kTlsAlertMissingExtension = 109;
 const uint8_t kTlsAlertUnsupportedExtension = 110;

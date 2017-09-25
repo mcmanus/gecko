@@ -136,7 +136,6 @@ PRBool SSLInt_CheckSecretsDestroyed(PRFileDesc *fd) {
   }
 
   CHECK_SECRET(currentSecret);
-  CHECK_SECRET(resumptionMasterSecret);
   CHECK_SECRET(dheSecret);
   CHECK_SECRET(clientEarlyTrafficSecret);
   CHECK_SECRET(clientHsTrafficSecret);
@@ -224,26 +223,6 @@ PRBool SSLInt_SendAlert(PRFileDesc *fd, uint8_t level, uint8_t type) {
   if (rv != SECSuccess) return PR_FALSE;
 
   return PR_TRUE;
-}
-
-PRBool SSLInt_SendNewSessionTicket(PRFileDesc *fd) {
-  sslSocket *ss = ssl_FindSocket(fd);
-  if (!ss) {
-    return PR_FALSE;
-  }
-
-  ssl_GetSSL3HandshakeLock(ss);
-  ssl_GetXmitBufLock(ss);
-
-  SECStatus rv = tls13_SendNewSessionTicket(ss);
-  if (rv == SECSuccess) {
-    rv = ssl3_FlushHandshake(ss, 0);
-  }
-
-  ssl_ReleaseXmitBufLock(ss);
-  ssl_ReleaseSSL3HandshakeLock(ss);
-
-  return rv == SECSuccess;
 }
 
 SECStatus SSLInt_AdvanceReadSeqNum(PRFileDesc *fd, PRUint64 to) {
@@ -351,30 +330,6 @@ unsigned char *SSLInt_CipherSpecToIv(PRBool isServer, ssl3CipherSpec *spec) {
   return GetKeyingMaterial(isServer, spec)->write_iv;
 }
 
-SECStatus SSLInt_EnableShortHeaders(PRFileDesc *fd) {
-  sslSocket *ss;
-
-  ss = ssl_FindSocket(fd);
-  if (!ss) {
-    return SECFailure;
-  }
-
-  ss->opt.enableShortHeaders = PR_TRUE;
-  return SECSuccess;
-}
-
-SECStatus SSLInt_UsingShortHeaders(PRFileDesc *fd, PRBool *result) {
-  sslSocket *ss;
-
-  ss = ssl_FindSocket(fd);
-  if (!ss) {
-    return SECFailure;
-  }
-
-  *result = ss->ssl3.hs.shortHeaders;
-  return SECSuccess;
-}
-
 void SSLInt_SetTicketLifetime(uint32_t lifetime) {
   ssl_ticket_lifetime = lifetime;
 }
@@ -404,4 +359,8 @@ SECStatus SSLInt_SetSocketMaxEarlyDataSize(PRFileDesc *fd, uint32_t size) {
   ssl_ReleaseSpecWriteLock(ss);
 
   return SECSuccess;
+}
+
+void SSLInt_RolloverAntiReplay(void) {
+  tls13_AntiReplayRollover(ssl_TimeUsec());
 }

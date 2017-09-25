@@ -35,7 +35,6 @@ PRBool SSLInt_DamageEarlyTrafficSecret(PRFileDesc *fd);
 SECStatus SSLInt_Set0RttAlpn(PRFileDesc *fd, PRUint8 *data, unsigned int len);
 PRBool SSLInt_HasCertWithAuthType(PRFileDesc *fd, SSLAuthType authType);
 PRBool SSLInt_SendAlert(PRFileDesc *fd, uint8_t level, uint8_t type);
-PRBool SSLInt_SendNewSessionTicket(PRFileDesc *fd);
 SECStatus SSLInt_AdvanceWriteSeqNum(PRFileDesc *fd, PRUint64 to);
 SECStatus SSLInt_AdvanceReadSeqNum(PRFileDesc *fd, PRUint64 to);
 SECStatus SSLInt_AdvanceWriteSeqByAWindow(PRFileDesc *fd, PRInt32 extra);
@@ -48,10 +47,9 @@ PK11SymKey *SSLInt_CipherSpecToKey(PRBool isServer, ssl3CipherSpec *spec);
 SSLCipherAlgorithm SSLInt_CipherSpecToAlgorithm(PRBool isServer,
                                                 ssl3CipherSpec *spec);
 unsigned char *SSLInt_CipherSpecToIv(PRBool isServer, ssl3CipherSpec *spec);
-SECStatus SSLInt_EnableShortHeaders(PRFileDesc *fd);
-SECStatus SSLInt_UsingShortHeaders(PRFileDesc *fd, PRBool *result);
 void SSLInt_SetTicketLifetime(uint32_t lifetime);
 void SSLInt_SetMaxEarlyDataSize(uint32_t size);
 SECStatus SSLInt_SetSocketMaxEarlyDataSize(PRFileDesc *fd, uint32_t size);
+void SSLInt_RolloverAntiReplay(void);
 
 #endif  // ndef libssl_internals_h_
