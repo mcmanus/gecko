@@ -48,8 +48,8 @@ QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   config.originPort = port;
   config.handleIO = 0;
   config.closure = this;
-  config.handshake_input = MozQuicHandshakeCallback;
-
+  config.appHandlesSendRecv = 1; // flag to control TRANSMIT/RECV/TLSINPUT events
+    
   // config.greaseVersionNegotiation = true;
 
   // todo deal with failures
@@ -126,8 +126,9 @@ QuicSession::DriveHandshake()
       sslprov->GetSSLStatus(getter_AddRefs(sslStatus));
     }
     nsAutoCString cipher;
-    sslStatus->GetCipherName(cipher);
-    fprintf(stderr, "GECKO CALLING MOZQUIC_HANDSHAKE_COMPLETE %s\n", cipher.get());
+    if (NS_SUCCEEDED(sslStatus->GetCipherName(cipher))) {
+      fprintf(stderr, "GECKO CALLING MOZQUIC_HANDSHAKE_COMPLETE %s\n", cipher.get());
+    }
 
     struct mozquic_handshake_info TODO;
     PRFileDesc *fd;
@@ -321,7 +322,7 @@ QuicSession::NSPRConnect(PRFileDesc *fd, const PRNetAddr *addr, PRIntervalTime t
   // todo - I don't think this is necessary, I think the send/recv
   // callbacks can be used instead
   mozquic_setosfd(self->mSession, PR_FileDesc2NativeHandle(fd));
-  if (mozquic_start_connection(self->mSession) != MOZQUIC_OK) {
+  if (mozquic_start_client(self->mSession) != MOZQUIC_OK) {
     return PR_FAILURE;
   }
 

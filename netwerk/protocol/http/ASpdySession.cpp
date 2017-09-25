@@ -25,7 +25,7 @@ namespace mozilla {
 namespace net {
 
 const char *ASpdySession::kH2Alpn = "h2";
-const char *ASpdySession::kHQAlpn = mozquic_alpn;
+const char *ASpdySession::kHQAlpn = MOZQUIC_ALPN;
 
 ASpdySession::ASpdySession()
 {

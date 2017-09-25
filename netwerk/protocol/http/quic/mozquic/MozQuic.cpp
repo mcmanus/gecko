@@ -23,7 +23,8 @@
 
 namespace mozquic  {
 
-const char *MozQuic::kAlpn = "hq-05";
+const char *MozQuic::kAlpn = MOZQUIC_ALPN;
+  
 static const uint16_t kIdleTimeoutDefault = 600;
 
 MozQuic::MozQuic(bool handleIO)
