@@ -1,0 +1,59 @@
+{
+    "Cases" : [
+        {
+            "Name" : "test0",
+            "ClientArgs": ["-qdrive-test0"],
+            "ServerArgs": ["-qdrive-test0"]
+        },
+        {
+            "Name" : "test1",
+            "ClientArgs": ["-qdrive-test1"],
+            "ServerArgs": ["-qdrive-test1"]
+        },
+        {
+            "Name" : "rstStream",
+            "ClientArgs": ["-qdrive-test2"],
+            "ServerArgs": ["-qdrive-test2"]
+        },
+	{
+            "Name" : "invalidTransportParameter",
+            "ClientArgs": ["-qdrive-test3"],
+            "ServerArgs": ["-qdrive-test3"]
+        },
+	{
+            "Name" : "clientGrease",
+            "ClientArgs": ["-qdrive-test4"],
+            "ServerArgs": ["-qdrive-test4"]
+        },
+	{
+            "Name" : "addrValidationOK",
+            "ClientArgs": ["-qdrive-test5"],
+            "ServerArgs": ["-qdrive-test5"]
+        },
+	{
+            "Name" : "statelessReset",
+            "ClientArgs": ["-qdrive-test6"],
+            "ServerArgs": ["-qdrive-test6"]
+        },
+	{
+            "Name" : "flowControl",
+            "ClientArgs": ["-qdrive-test7"],
+            "ServerArgs": ["-qdrive-test7"]
+        },
+	{
+            "Name" : "reliable1",
+            "ClientArgs": ["-qdrive-test8"],
+            "ServerArgs": ["-qdrive-test8"]
+        },
+	{
+            "Name" : "finonreq",
+            "ClientArgs": ["-qdrive-test9"],
+            "ServerArgs": ["-qdrive-test9"]
+        },
+	{
+            "Name" : "overflowFlowControl",
+            "ClientArgs": ["-qdrive-test10"],
+            "ServerArgs": ["-qdrive-test10"]
+        }
+    ]
+}

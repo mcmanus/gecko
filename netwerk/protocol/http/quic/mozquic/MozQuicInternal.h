@@ -32,9 +32,10 @@ namespace mozquic {
 // sync with versionOK() and GenerateVersionNegotiation()
 static const uint32_t kMozQuicVersion1 = 0xf123f0c5; // 0xf123f0c* reserved for mozquic
 static const uint32_t kMozQuicIetfID5 = 0xff000005;
+static const uint32_t kMozQuicIetfID6 = 0xff000006;
 static const uint32_t kMozQuicVersionGreaseS = 0xea0a6a2a;
 static const uint32_t VersionNegotiationList[] = {
-  kMozQuicVersionGreaseS, kMozQuicIetfID5, kMozQuicVersion1,
+  kMozQuicVersionGreaseS, kMozQuicIetfID6, kMozQuicIetfID5, kMozQuicVersion1,
 };
 
 enum connectionState
@@ -105,8 +106,9 @@ public:
   uint32_t StartNewStream(StreamPair **outStream, const void *data, uint32_t amount, bool fin);
   void MaybeDeleteStream(StreamPair *sp);
   int IO();
-  void HandshakeOutput(unsigned char *, uint32_t amt);
-  void HandshakeComplete(uint32_t errCode, struct mozquic_handshake_info *keyInfo);
+  void HandshakeOutput(const unsigned char *, uint32_t amt);
+  void HandshakeTParamOutput(const unsigned char *, uint32_t amt);
+  uint32_t HandshakeComplete(uint32_t errCode, struct mozquic_handshake_info *keyInfo);
 
   void SetOriginPort(int port) { mOriginPort = port; }
   void SetOriginName(const char *name);
@@ -210,7 +212,8 @@ private:
   static uint32_t StatelessResetCalculateToken(const unsigned char *key128,
                                                uint64_t connID, unsigned char *out);
   uint32_t StatelessResetEnsureKey();
-    
+  void EnsureSetupClientTransportParameters();
+
   mozquic_socket_t mFD;
 
   bool mHandleIO;
@@ -288,7 +291,10 @@ private:
 
   uint64_t mAdvertiseStreamWindow;
   uint64_t mAdvertiseConnectionWindowKB;
-      
+
+  std::unique_ptr<unsigned char []> mRemoteTransportExtensionInfo;
+  uint32_t mRemoteTransportExtensionInfoLen;
+
 public: // callbacks from nsshelper
   int32_t NSSInput(void *buf, int32_t amount);
   int32_t NSSOutput(const void *buf, int32_t amount);
