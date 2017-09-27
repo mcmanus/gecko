@@ -31,6 +31,8 @@ static PRIOMethods quicMethods, psmHelperMethods;
 QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   : mClosed(false)
   , mDestroyOnClose(true)
+  , mQuicConnected(false)
+  , mTransportParamsToWriteLen(0)
   , mHandshakeCompleteCode(MOZQUIC_ERR_GENERAL)
 {
   if (!quicInit) {
@@ -47,13 +49,12 @@ QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   config.originName = host;
   config.originPort = port;
   config.handleIO = 0;
-  config.closure = this;
   config.appHandlesSendRecv = 1; // flag to control TRANSMIT/RECV/TLSINPUT events
-    
-  // config.greaseVersionNegotiation = true;
 
-  // todo deal with failures
+// todo deal with failures
   mozquic_new_connection(&mSession, &config);
+  mozquic_set_event_callback_closure(mSession, this);
+  mozquic_set_event_callback(mSession, MozQuicEventCallback);
  
   mFD =
     PR_OpenUDPSocket(v4 ? PR_AF_INET : PR_AF_INET6);
@@ -80,7 +81,21 @@ QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   PRNetAddr addr;
   memset(&addr,0,sizeof(addr));
   addr.raw.family = PR_AF_INET;
-  PR_Connect(mPSMHelper, &addr, 0);
+
+  
+  PRFileDesc *nss;
+  mPSMSSLSocketControl->GetNssFD(&nss);
+  static const uint32_t kTransportParametersID = 26; // todo
+  SSLExtensionSupport supportTransportParameters;
+  if (SSL_GetExtensionSupport(kTransportParametersID, &supportTransportParameters) == SECSuccess &&  
+      supportTransportParameters != ssl_ext_native_only &&
+      SSL_InstallExtensionHooks(nss, kTransportParametersID,
+                                TransportExtensionWriter, this,
+                                TransportExtensionHandler, this) == SECSuccess) {
+    PR_Connect(mPSMHelper, &addr, 0);
+  } else {
+    MOZ_ASSERT(false);
+  }
 
   Unused << NS_NewPipe2(getter_AddRefs(mPSMBufferInput),
                         getter_AddRefs(mPSMBufferOutput),
@@ -108,6 +123,9 @@ QuicSession::~QuicSession()
 NS_IMETHODIMP
 QuicSession::DriveHandshake()
 {
+  if (mQuicConnected) {
+    return NS_OK;
+  }
   fprintf(stderr,"drivehandshake\n");
   if (!mPSMSSLSocketControl) {
     return NS_ERROR_UNEXPECTED;
@@ -130,23 +148,36 @@ QuicSession::DriveHandshake()
       fprintf(stderr, "GECKO CALLING MOZQUIC_HANDSHAKE_COMPLETE %s\n", cipher.get());
     }
 
-    struct mozquic_handshake_info TODO;
+    struct mozquic_handshake_info handshakeinfo;
     PRFileDesc *fd;
     mPSMSSLSocketControl->GetNssFD(&fd);
 
-    unsigned int secretSize = 32;
+    uint32_t secretSize;
+    if (!strcmp("TLS_AES_128_GCM_SHA256", cipher.get())) {
+      secretSize = 32;
+      handshakeinfo.ciphersuite = MOZQUIC_AES_128_GCM_SHA256;
+    } else if (!strcmp("TLS_AES_256_GCM_SHA384", cipher.get())) {
+      secretSize = 48;
+      handshakeinfo.ciphersuite = MOZQUIC_AES_256_GCM_SHA384;
+    } else if (!strcmp("TLS_CHACHA20_POLY1305_SHA256", cipher.get())) {
+      secretSize = 32;
+      handshakeinfo.ciphersuite = MOZQUIC_CHACHA20_POLY1305_SHA256;
+    } else {
+      return NS_ERROR_FAILURE;
+    }
 
     if (SSL_ExportKeyingMaterial(fd, "EXPORTER-QUIC client 1-RTT Secret", strlen("EXPORTER-QUIC client 1-RTT Secret"),
-                                 false, (const unsigned char *)"", 0, TODO.sendSecret, secretSize) != SECSuccess) {
+                                 false, (const unsigned char *)"", 0, handshakeinfo.sendSecret, secretSize) != SECSuccess) {
       return NS_ERROR_FAILURE;
     }
 
     if (SSL_ExportKeyingMaterial(fd, "EXPORTER-QUIC server 1-RTT Secret", strlen("EXPORTER-QUIC server 1-RTT Secret"),
-                                 false, (const unsigned char *)"", 0, TODO.recvSecret, secretSize) != SECSuccess) {
+                                 false, (const unsigned char *)"", 0, handshakeinfo.recvSecret, secretSize) != SECSuccess) {
       return NS_ERROR_FAILURE;
     }
 
-    mozquic_handshake_complete(mSession, MOZQUIC_OK, &TODO);
+    uint32_t code = mozquic_handshake_complete(mSession, MOZQUIC_OK, &handshakeinfo);
+    MOZ_ASSERT(code == MOZQUIC_OK);
     mHandshakeCompleteCode = MOZQUIC_OK;
   }
 
@@ -158,17 +189,68 @@ QuicSession::DriveHandshake()
 }
 
 int
-QuicSession::MozQuicHandshakeCallback(void *closure,
-                                      unsigned char *data, uint32_t len)
+QuicSession::MozQuicEventCallback(void *closure, uint32_t event, void *param)
 {
   QuicSession *self = reinterpret_cast<QuicSession *>(closure);
+  switch (event) {
+  case MOZQUIC_EVENT_TLSINPUT:
+  {
+    struct mozquic_eventdata_tlsinput *input =
+      reinterpret_cast<struct mozquic_eventdata_tlsinput *>(param);
+    return self->MozQuicHandshakeCallback(input->data, input->len);
+  }
+  case MOZQUIC_EVENT_TLS_CLIENT_TPARAMS:
+  {
+    struct mozquic_eventdata_tlsinput *input =
+      reinterpret_cast<struct mozquic_eventdata_tlsinput *>(param);
+    self->mTransportParamsToWrite = MakeUnique<unsigned char[]>(input->len);
+    self->mTransportParamsToWriteLen = input->len;
+    memcpy(self->mTransportParamsToWrite.get(), input->data, input->len);
+    return MOZQUIC_OK;
+  }
+  case MOZQUIC_EVENT_TRANSMIT:
+  {
+    struct mozquic_eventdata_transmit *input =
+      reinterpret_cast<struct mozquic_eventdata_transmit *>(param);
+    PR_Write(self->mFD->lower, input->pkt, input->len);
+    return MOZQUIC_OK;
+  }
+  case MOZQUIC_EVENT_RECV:
+  {
+    struct mozquic_eventdata_recv *input =
+      reinterpret_cast<struct mozquic_eventdata_recv *>(param);
+    int consumed = PR_Read(self->mFD->lower, input->pkt, input->avail);
+    if (consumed >= 0) {
+      *input->written = consumed;
+      return MOZQUIC_OK;
+    } else {
+      return MOZQUIC_ERR_IO;
+    }
+  }
+    break;
+  case MOZQUIC_EVENT_CONNECTED:
+    self->mQuicConnected = true;
+    break;
+  case MOZQUIC_EVENT_IO:
+  case MOZQUIC_EVENT_LOG:
+    break;
+  default:
+    MOZ_ASSERT(false);
+  }
+  
+  return MOZQUIC_OK;
+}
+
+int
+QuicSession::MozQuicHandshakeCallback(unsigned char *data, uint32_t len)
+{
   // feed this data to PSM as it is the server reply
   // that has to be pulled via recv(mPSMHelper)
   // do so by storing in the pipe/buffer and waiting for recv
   uint32_t amt = 0;
 
   while (len > 0) {
-    if (NS_FAILED(self->mPSMBufferOutput->Write((const char *)data, len, &amt))) {
+    if (NS_FAILED(mPSMBufferOutput->Write((const char *)data, len, &amt))) {
       return MOZQUIC_ERR_GENERAL;
     }
     len -= amt;
@@ -176,6 +258,38 @@ QuicSession::MozQuicHandshakeCallback(void *closure,
   }
 
   return MOZQUIC_OK;
+}
+
+PRBool
+QuicSession::TransportExtensionWriter(PRFileDesc *fd, SSLHandshakeType m,
+                                      PRUint8 *data, unsigned int *len, unsigned int maxlen, void *arg)
+{
+  QuicSession *self = reinterpret_cast<QuicSession *>(arg);
+  if (m != ssl_hs_client_hello && m != ssl_hs_encrypted_extensions) {
+    return PR_FALSE;
+  }
+  if (maxlen < self->mTransportParamsToWriteLen) {
+    return PR_FALSE;
+  }
+
+  memcpy(data, self->mTransportParamsToWrite.get(), self->mTransportParamsToWriteLen);
+  *len = self->mTransportParamsToWriteLen;
+  self->mTransportParamsToWrite = nullptr;
+  self->mTransportParamsToWriteLen = 0;
+  return PR_TRUE;
+}
+
+SECStatus
+QuicSession::TransportExtensionHandler(PRFileDesc *fd, SSLHandshakeType m, const PRUint8 *data,
+                                       unsigned int len, SSLAlertDescription *alert, void *arg)
+{
+  QuicSession *self = reinterpret_cast<QuicSession *>(arg);
+  if (m != ssl_hs_encrypted_extensions) {
+    return SECSuccess;
+  }
+
+  mozquic_tls_tparam_output(self->mSession, data, len);
+  return SECSuccess;
 }
 
 int

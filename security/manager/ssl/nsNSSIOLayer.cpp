@@ -379,7 +379,7 @@ nsNSSSocketInfo::DriveHandshake()
   if (rv != SECSuccess) {
     errorCode = PR_GetError();
     if (errorCode == PR_WOULD_BLOCK_ERROR) {
-      return NS_BASE_STREAM_WOULD_BLOCK;
+      return mHandshakeCompleted ? NS_OK : NS_BASE_STREAM_WOULD_BLOCK;
     }
 
     SetCanceled(errorCode, SSLErrorMessageType::Plain);

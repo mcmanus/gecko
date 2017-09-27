@@ -8,7 +8,7 @@ Cu.import("resource://gre/modules/NetUtil.jsm");
 // (again hardcoded on 4433 todo) over quic
 
 // ATTN: sync with testing/xpcshell/moz-http2/moz-http2.js and MozQuic.h
-var alpnID = "hq-04";
+var alpnID = "hq-05";
 
 var h2Port;
 var quicPort = ":4433"; // todo
@@ -130,8 +130,8 @@ FailListener.prototype = {
 function testsDone()
 {
   dump("testsDone\n");
-   resetPrefs();
-   do_test_finished();
+  resetPrefs();
+  do_test_finished();
 }
 
 function doTest()

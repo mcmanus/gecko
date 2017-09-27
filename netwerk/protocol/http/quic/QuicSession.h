@@ -12,6 +12,9 @@
 #include "nsCOMPtr.h"
 #include "nsString.h"
 #include "nsTArray.h"
+#include "mozilla/UniquePtr.h"
+#include "ssl.h"
+#include "sslexp.h"
 
 class nsIInterfaceRequestor;
 
@@ -39,8 +42,7 @@ private:
   static int NSPRSend(PRFileDesc *aFD, const void *aBuf, int32_t aAmount,
                       int , PRIntervalTime);
   static void SetMethods(PRIOMethods *quitMethods, PRIOMethods *psmHelperMethods);
-  static int MozQuicHandshakeCallback(mozquic_connection_t *session,
-                                      unsigned char *data, uint32_t len);
+  int MozQuicHandshakeCallback(unsigned char *data, uint32_t len);
   static int psmHelperWrite(PRFileDesc *aFD, const void *aBuf, int32_t aAmount);
   static int psmHelperSend(PRFileDesc *aFD, const void *aBuf, int32_t aAmount,
                            int , PRIntervalTime);
@@ -49,7 +51,13 @@ private:
   static int32_t psmHelperRecv(PRFileDesc *fd, void *buf, int32_t amount, int flags,
                                PRIntervalTime timeout);
   static PRStatus psmHelperClose(PRFileDesc *fd); // deletes self
-  
+  static int MozQuicEventCallback(void *closure, uint32_t event, void *param);
+
+  static PRBool TransportExtensionWriter(PRFileDesc *fd, SSLHandshakeType m, PRUint8 *data,
+                                         unsigned int *len, unsigned int maxlen, void *arg);
+  static SECStatus TransportExtensionHandler(PRFileDesc *fd, SSLHandshakeType m, const PRUint8 *data,
+                                             unsigned int len, SSLAlertDescription *alert, void *arg);
+
   nsCOMPtr<nsIInterfaceRequestor> mCallbacks;
   nsTArray<nsCString> mALPNList;
 
@@ -57,7 +65,10 @@ private:
   bool         mDestroyOnClose;
   PRFileDesc  *mFD;
   mozquic_connection_t *mSession;
+  bool         mQuicConnected;
 
+  UniquePtr<unsigned char[]> mTransportParamsToWrite;
+  uint32_t                   mTransportParamsToWriteLen;
   PRFileDesc           *mPSMHelper;
   nsCOMPtr<nsISupports> mPSMHelperSecInfo;
   nsCOMPtr<nsISSLSocketControl> mPSMSSLSocketControl;
