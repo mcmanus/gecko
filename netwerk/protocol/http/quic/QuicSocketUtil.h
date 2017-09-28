@@ -8,10 +8,10 @@
 
 namespace mozilla { namespace net {
 
-class QuicSessionUtil final
+class QuicSocketUtil final
 {
 public:
-  static bool IsQuicSession(PRFileDesc *fd);
+  static bool IsQuicSocket(PRFileDesc *fd);
 };
 
 } } // namespace mozilla::net

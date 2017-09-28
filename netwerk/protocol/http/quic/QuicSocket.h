@@ -20,18 +20,18 @@ class nsIInterfaceRequestor;
 
 namespace mozilla { namespace net {
 
-class QuicSession final :
+class QuicSocket final :
   public nsISSLSocketControl      
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSISSLSOCKETCONTROL
 
-  QuicSession(const char *host, int32_t port, bool v4);
+  QuicSocket(const char *host, int32_t port, bool v4);
 
   PRFileDesc *GetFD() { return mFD; }
 private:
-  ~QuicSession();
+  ~QuicSocket();
 
   static PRStatus NSPRGetPeerName(PRFileDesc *aFD, PRNetAddr*addr);
   static PRStatus NSPRGetSocketOption(PRFileDesc *aFD, PRSocketOptionData *aOpt);

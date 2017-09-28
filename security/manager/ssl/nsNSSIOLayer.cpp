@@ -44,7 +44,7 @@
 #include "ssl.h"
 #include "sslerr.h"
 #include "sslproto.h"
-#include "QuicSessionUtil.h"
+#include "QuicSocketUtil.h"
 #include "sslexp.h"
 
 using namespace mozilla;
@@ -2574,7 +2574,7 @@ nsSSLIOLayerSetOptions(PRFileDesc* fd, bool forSTARTTLS,
     return NS_ERROR_FAILURE;
   }
 
-  if (net::QuicSessionUtil::IsQuicSession(fd)) {
+  if (net::QuicSocketUtil::IsQuicSocket(fd)) {
     range.max = SSL_LIBRARY_VERSION_TLS_1_3;
     range.min = SSL_LIBRARY_VERSION_TLS_1_3;
   } else {

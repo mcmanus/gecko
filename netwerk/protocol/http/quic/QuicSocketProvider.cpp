@@ -13,7 +13,7 @@
 #include "nsISocketProviderService.h"
 #include "nsNetCID.h"
 #include "QuicLog.h"
-#include "QuicSession.h"
+#include "QuicSocket.h"
 #include "MozQuic.h"
 
 // a quic socket mostly holds some configuration data
@@ -45,7 +45,7 @@ QuicSocketProvider::NewSocket(int32_t family,
   // todo securityinfo - nsISSLSocketControl
   LOG(("QuicSocketProvider::NewSocket %p\n", this));
 
-  QuicSession *qSession = new QuicSession(host, port, family == AF_INET);
+  QuicSocket *qSession = new QuicSocket(host, port, family == AF_INET);
   
   LOG(("QuicSocketProvider::NewSocket ok %p\n", this));
   *result = qSession->GetFD();

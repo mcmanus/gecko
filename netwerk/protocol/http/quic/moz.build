@@ -9,7 +9,7 @@ with Files('**'):
 
 # todo make part of unified - but its faster right now as singletons
 SOURCES += [
-    'QuicSession.cpp',
+    'QuicSocket.cpp',
     'QuicSocketProvider.cpp',
 ]
 
