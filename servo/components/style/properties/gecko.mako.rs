@@ -124,7 +124,7 @@ impl ComputedValues {
     pub fn pseudo(&self) -> Option<PseudoElement> {
         use string_cache::Atom;
 
-        let atom = (self.0)._base.mPseudoTag.raw::<structs::nsIAtom>();
+        let atom = (self.0)._base.mPseudoTag.mRawPtr;
         if atom.is_null() {
             return None;
         }
@@ -3235,11 +3235,10 @@ fn static_assert() {
         use gecko_bindings::structs::nsCSSPropertyID::eCSSPropertyExtra_no_properties;
         use gecko_bindings::structs::nsCSSPropertyID::eCSSPropertyExtra_variable;
         use gecko_bindings::structs::nsCSSPropertyID::eCSSProperty_UNKNOWN;
-        use gecko_bindings::structs::nsIAtom;
 
         let property = self.gecko.mTransitions[index].mProperty;
         if property == eCSSProperty_UNKNOWN || property == eCSSPropertyExtra_variable {
-            let atom = self.gecko.mTransitions[index].mUnknownProperty.raw::<nsIAtom>();
+            let atom = self.gecko.mTransitions[index].mUnknownProperty.mRawPtr;
             debug_assert!(!atom.is_null());
             TransitionProperty::Unsupported(CustomIdent(atom.into()))
         } else if property == eCSSPropertyExtra_no_properties {
@@ -3258,7 +3257,6 @@ fn static_assert() {
     pub fn copy_transition_property_from(&mut self, other: &Self) {
         use gecko_bindings::structs::nsCSSPropertyID::eCSSPropertyExtra_variable;
         use gecko_bindings::structs::nsCSSPropertyID::eCSSProperty_UNKNOWN;
-        use gecko_bindings::structs::nsIAtom;
         unsafe { self.gecko.mTransitions.ensure_len(other.gecko.mTransitions.len()) };
 
         let count = other.gecko.mTransitionPropertyCount;
@@ -3268,7 +3266,7 @@ fn static_assert() {
             transition.mProperty = other.gecko.mTransitions[index].mProperty;
             if transition.mProperty == eCSSProperty_UNKNOWN ||
                transition.mProperty == eCSSPropertyExtra_variable {
-                let atom = other.gecko.mTransitions[index].mUnknownProperty.raw::<nsIAtom>();
+                let atom = other.gecko.mTransitions[index].mUnknownProperty.mRawPtr;
                 debug_assert!(!atom.is_null());
                 unsafe { Gecko_StyleTransition_SetUnsupportedProperty(transition, atom) };
             }
@@ -3533,12 +3531,12 @@ fn static_assert() {
         use gecko_bindings::structs::nsIAtom;
         use values::CustomIdent;
 
-        if self.gecko.mWillChange.mBuffer.len() == 0 {
+        if self.gecko.mWillChange.len() == 0 {
             T::Auto
         } else {
             T::AnimateableFeatures(
-                self.gecko.mWillChange.mBuffer.iter().map(|gecko_atom| {
-                    CustomIdent((*gecko_atom as *mut nsIAtom).into())
+                self.gecko.mWillChange.iter().map(|gecko_atom| {
+                    CustomIdent((gecko_atom.mRawPtr as *mut nsIAtom).into())
                 }).collect()
             )
         }
@@ -4086,13 +4084,13 @@ fn static_assert() {
 
     pub fn set_list_style_type(&mut self, v: longhands::list_style_type::computed_value::T, device: &Device) {
         use gecko_bindings::bindings::Gecko_SetCounterStyleToString;
-        use nsstring::{nsACString, nsCString};
+        use nsstring::{nsACString, nsCStr};
         use self::longhands::list_style_type::computed_value::T;
         match v {
             T::CounterStyle(s) => s.to_gecko_value(&mut self.gecko.mCounterStyle, device),
             T::String(s) => unsafe {
                 Gecko_SetCounterStyleToString(&mut self.gecko.mCounterStyle,
-                                              &nsCString::from(s) as &nsACString)
+                                              &nsCStr::from(&s) as &nsACString)
             }
         }
     }
@@ -4679,9 +4677,8 @@ fn static_assert() {
     <%call expr="impl_coord_copy('word_spacing', 'mWordSpacing')"></%call>
 
     fn clear_text_emphasis_style_if_string(&mut self) {
-        use nsstring::nsString;
         if self.gecko.mTextEmphasisStyle == structs::NS_STYLE_TEXT_EMPHASIS_STYLE_STRING as u8 {
-            self.gecko.mTextEmphasisStyleString.assign(&nsString::new());
+            self.gecko.mTextEmphasisStyleString.truncate();
             self.gecko.mTextEmphasisStyle = structs::NS_STYLE_TEXT_EMPHASIS_STYLE_NONE as u8;
         }
     }
@@ -4797,10 +4794,9 @@ fn static_assert() {
 
     fn clear_overflow_sides_if_string(&mut self) {
         use gecko_bindings::structs::nsStyleTextOverflowSide;
-        use nsstring::nsString;
         fn clear_if_string(side: &mut nsStyleTextOverflowSide) {
             if side.mType == structs::NS_STYLE_TEXT_OVERFLOW_STRING as u8 {
-                side.mString.assign(&nsString::new());
+                side.mString.truncate();
                 side.mType = structs::NS_STYLE_TEXT_OVERFLOW_CLIP as u8;
             }
         }
@@ -5060,51 +5056,14 @@ clip-path
 <%self:impl_trait style_struct_name="InheritedSVG"
                   skip_longhands="paint-order stroke-dasharray -moz-context-properties">
     pub fn set_paint_order(&mut self, v: longhands::paint_order::computed_value::T) {
-        use self::longhands::paint_order;
-
-        if v.0 == 0 {
-            self.gecko.mPaintOrder = structs::NS_STYLE_PAINT_ORDER_NORMAL as u8;
-        } else {
-            let mut order = 0;
-
-            for pos in 0..3 {
-                let geckoval = match v.bits_at(pos) {
-                    paint_order::FILL => structs::NS_STYLE_PAINT_ORDER_FILL as u8,
-                    paint_order::STROKE => structs::NS_STYLE_PAINT_ORDER_STROKE as u8,
-                    paint_order::MARKERS => structs::NS_STYLE_PAINT_ORDER_MARKERS as u8,
-                    _ => unreachable!(),
-                };
-                order |= geckoval << (pos * structs::NS_STYLE_PAINT_ORDER_BITWIDTH as u8);
-            }
-
-            self.gecko.mPaintOrder = order;
-        }
+        self.gecko.mPaintOrder = v.0;
     }
 
     ${impl_simple_copy('paint_order', 'mPaintOrder')}
 
     pub fn clone_paint_order(&self) -> longhands::paint_order::computed_value::T {
-        use self::longhands::paint_order::{COUNT, FILL, MARKERS, NORMAL, SHIFT, STROKE};
-        use self::longhands::paint_order::computed_value::T;
-
-        if self.gecko.mPaintOrder == structs::NS_STYLE_PAINT_ORDER_NORMAL as u8 {
-            return T(NORMAL);
-        }
-
-        const PAINT_ORDER_BITWIDTH: u8 = structs::NS_STYLE_PAINT_ORDER_BITWIDTH as u8;
-        let mask = (1 << PAINT_ORDER_BITWIDTH) - 1;
-        let mut order = 0;
-        for pos in 0..COUNT {
-            let value =
-                match (self.gecko.mPaintOrder >> pos * PAINT_ORDER_BITWIDTH & mask) as u32 {
-                    structs::NS_STYLE_PAINT_ORDER_FILL => FILL,
-                    structs::NS_STYLE_PAINT_ORDER_STROKE => STROKE,
-                    structs::NS_STYLE_PAINT_ORDER_MARKERS => MARKERS,
-                    _ => unreachable!(),
-                };
-            order |= value << (pos * SHIFT);
-        };
-        T(order)
+        use properties::longhands::paint_order::computed_value::T;
+        T(self.gecko.mPaintOrder)
     }
 
     pub fn set_stroke_dasharray(&mut self, v: longhands::stroke_dasharray::computed_value::T) {
@@ -5200,7 +5159,7 @@ clip-path
             } else if servo.0 == atom!("stroke-opacity") {
                 self.gecko.mContextPropsBits |= structs::NS_STYLE_CONTEXT_PROPERTY_STROKE_OPACITY as u8;
             }
-            unsafe { gecko.set_raw_from_addrefed::<structs::nsIAtom>(servo.0.into_addrefed()) }
+            unsafe { gecko.mRawPtr = servo.0.into_addrefed() }
         }
     }
 

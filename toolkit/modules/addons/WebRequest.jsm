@@ -188,7 +188,7 @@ const MAYBE_CACHED_EVENTS = new Set([
 
 const OPTIONAL_PROPERTIES = [
   "requestHeaders", "responseHeaders", "statusCode", "statusLine", "error", "redirectUrl",
-  "requestBody", "scheme", "realm", "isProxy", "challenger", "proxyInfo", "ip",
+  "requestBody", "scheme", "realm", "isProxy", "challenger", "proxyInfo", "ip", "frameAncestors",
 ];
 
 function serializeRequestData(eventName) {
@@ -737,6 +737,13 @@ HttpObserverManager = {
       serialize: serializeRequestData,
     };
 
+    try {
+      let {frameAncestors} = channel;
+      if (frameAncestors !== null) {
+        data.frameAncestors = frameAncestors;
+      }
+    } catch (e) {}
+
     // force the protocol to be ws again.
     if (data.type == "websocket" && data.url.startsWith("http")) {
       data.url = `ws${data.url.substring(4)}`;
@@ -833,7 +840,9 @@ HttpObserverManager = {
         try {
           let result = callback(data);
 
-          if (channel.canModify && result && typeof result === "object" && opts.blocking) {
+          // isProxy is set during onAuth if the auth request is for a proxy.
+          // We allow handling proxy auth regardless of canModify.
+          if ((channel.canModify || data.isProxy) && typeof result === "object" && opts.blocking) {
             handlerResults.push({opts, result});
           }
         } catch (e) {
@@ -865,6 +874,16 @@ HttpObserverManager = {
           }
         }
 
+        if (kind === "authRequired" && result.authCredentials && channel.authPromptCallback) {
+          channel.authPromptCallback(result.authCredentials);
+        }
+
+        // We allow proxy auth to cancel or handle authCredentials regardless of
+        // canModify, but ensure we do nothing else.
+        if (!channel.canModify) {
+          continue;
+        }
+
         if (result.cancel) {
           channel.suspended = false;
           channel.cancel(Cr.NS_ERROR_ABORT);
@@ -890,11 +909,8 @@ HttpObserverManager = {
         if (opts.responseHeaders && result.responseHeaders && responseHeaders) {
           responseHeaders.applyChanges(result.responseHeaders);
         }
-
-        if (kind === "authRequired" && result.authCredentials && channel.authPromptCallback) {
-          channel.authPromptCallback(result.authCredentials);
-        }
       }
+
       // If a listener did not cancel the request or provide credentials, we
       // forward the auth request to the base handler.
       if (kind === "authRequired" && channel.authPromptForward) {
