@@ -8,14 +8,13 @@
 #include "nsXULAppAPI.h"
 
 #include "nsPrefBranch.h"
-#include "nsILocalFile.h" // nsILocalFile used for backwards compatibility
+#include "nsIFile.h"
 #include "nsIObserverService.h"
 #include "nsXPCOM.h"
 #include "nsISupportsPrimitives.h"
 #include "nsIDirectoryService.h"
 #include "nsString.h"
 #include "nsReadableUtils.h"
-#include "nsXPIDLString.h"
 #include "nsPrintfCString.h"
 #include "nsIStringBundle.h"
 #include "prefapi.h"
@@ -103,8 +102,6 @@ NS_IMPL_RELEASE(nsPrefBranch)
 NS_INTERFACE_MAP_BEGIN(nsPrefBranch)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIPrefBranch)
   NS_INTERFACE_MAP_ENTRY(nsIPrefBranch)
-  NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIPrefBranch2, !mIsDefault)
-  NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIPrefBranchInternal, !mIsDefault)
   NS_INTERFACE_MAP_ENTRY(nsIObserver)
   NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
 NS_INTERFACE_MAP_END
@@ -244,7 +241,7 @@ NS_IMETHODIMP nsPrefBranch::GetStringPref(const char *aPrefName,
                                           uint8_t _argc,
                                           nsACString& _retval)
 {
-  nsXPIDLCString utf8String;
+  nsCString utf8String;
   nsresult rv = GetCharPref(aPrefName, getter_Copies(utf8String));
   if (NS_SUCCEEDED(rv)) {
     _retval = utf8String;
@@ -302,8 +299,8 @@ NS_IMETHODIMP nsPrefBranch::GetComplexValue(const char *aPrefName, const nsIID &
 {
   NS_ENSURE_ARG(aPrefName);
 
-  nsresult       rv;
-  nsXPIDLCString utf8String;
+  nsresult rv;
+  nsCString utf8String;
 
   // we have to do this one first because it's different than all the rest
   if (aType.Equals(NS_GET_IID(nsIPrefLocalizedString))) {
@@ -325,8 +322,8 @@ NS_IMETHODIMP nsPrefBranch::GetComplexValue(const char *aPrefName, const nsIID &
     // if we need to fetch the default value, do that instead, otherwise use the
     // value we pulled in at the top of this function
     if (bNeedDefault) {
-      nsXPIDLString utf16String;
-      rv = GetDefaultFromPropertiesFile(pref.get(), getter_Copies(utf16String));
+      nsAutoString utf16String;
+      rv = GetDefaultFromPropertiesFile(pref.get(), utf16String);
       if (NS_SUCCEEDED(rv)) {
         theString->SetData(utf16String.get());
       }
@@ -350,8 +347,7 @@ NS_IMETHODIMP nsPrefBranch::GetComplexValue(const char *aPrefName, const nsIID &
     return rv;
   }
 
-  // also check nsILocalFile, for backwards compatibility
-  if (aType.Equals(NS_GET_IID(nsIFile)) || aType.Equals(NS_GET_IID(nsILocalFile))) {
+  if (aType.Equals(NS_GET_IID(nsIFile))) {
     if (GetContentChild()) {
       NS_ERROR("cannot get nsIFile pref from content process");
       return NS_ERROR_NOT_AVAILABLE;
@@ -377,16 +373,16 @@ NS_IMETHODIMP nsPrefBranch::GetComplexValue(const char *aPrefName, const nsIID &
 
     nsACString::const_iterator keyBegin, strEnd;
     utf8String.BeginReading(keyBegin);
-    utf8String.EndReading(strEnd);    
+    utf8String.EndReading(strEnd);
 
     // The pref has the format: [fromKey]a/b/c
-    if (*keyBegin++ != '[')        
+    if (*keyBegin++ != '[')
       return NS_ERROR_FAILURE;
     nsACString::const_iterator keyEnd(keyBegin);
     if (!FindCharInReadable(']', keyEnd, strEnd))
       return NS_ERROR_FAILURE;
     nsAutoCString key(Substring(keyBegin, keyEnd));
-    
+
     nsCOMPtr<nsIFile> fromFile;
     nsCOMPtr<nsIProperties> directoryService(do_GetService(NS_DIRECTORY_SERVICE_CONTRACTID, &rv));
     if (NS_FAILED(rv))
@@ -394,7 +390,7 @@ NS_IMETHODIMP nsPrefBranch::GetComplexValue(const char *aPrefName, const nsIID &
     rv = directoryService->Get(key.get(), NS_GET_IID(nsIFile), getter_AddRefs(fromFile));
     if (NS_FAILED(rv))
       return rv;
-    
+
     nsCOMPtr<nsIFile> theFile;
     rv = NS_NewNativeLocalFile(EmptyCString(), true, getter_AddRefs(theFile));
     if (NS_FAILED(rv))
@@ -500,8 +496,7 @@ NS_IMETHODIMP nsPrefBranch::SetComplexValue(const char *aPrefName, const nsIID &
 
   nsresult   rv = NS_NOINTERFACE;
 
-  // also check nsILocalFile, for backwards compatibility
-  if (aType.Equals(NS_GET_IID(nsIFile)) || aType.Equals(NS_GET_IID(nsILocalFile))) {
+  if (aType.Equals(NS_GET_IID(nsIFile))) {
     nsCOMPtr<nsIFile> file = do_QueryInterface(aValue);
     if (!file)
       return NS_NOINTERFACE;
@@ -570,8 +565,7 @@ NS_IMETHODIMP nsPrefBranch::SetComplexValue(const char *aPrefName, const nsIID &
     nsCOMPtr<nsIPrefLocalizedString> theString = do_QueryInterface(aValue);
 
     if (theString) {
-      nsXPIDLString wideString;
-
+      nsString wideString;
       rv = theString->GetData(getter_Copies(wideString));
       if (NS_SUCCEEDED(rv)) {
         // Check sanity of string length before any lengthy conversion
@@ -764,7 +758,7 @@ NS_IMETHODIMP nsPrefBranch::RemoveObserver(const char *aDomain, nsIObserver *aOb
   // pointer go out of scope and destroy the callback.
   PrefCallback key(aDomain, aObserver, this);
   nsAutoPtr<PrefCallback> pCallback;
-  mObservers.RemoveAndForget(&key, pCallback);
+  mObservers.Remove(&key, &pCallback);
   if (pCallback) {
     // aDomain == nullptr is the only possible failure, trapped above
     const PrefName& pref = getPrefName(aDomain);
@@ -838,13 +832,15 @@ nsPrefBranch::RemoveExpiredCallback(PrefCallback *aCallback)
   mObservers.Remove(aCallback);
 }
 
-nsresult nsPrefBranch::GetDefaultFromPropertiesFile(const char *aPrefName, char16_t **return_buf)
+nsresult
+nsPrefBranch::GetDefaultFromPropertiesFile(const char *aPrefName,
+                                           nsAString& aReturn)
 {
   nsresult rv;
 
   // the default value contains a URL to a .properties file
-    
-  nsXPIDLCString propertyFileURL;
+
+  nsCString propertyFileURL;
   rv = PREF_CopyCharPref(aPrefName, getter_Copies(propertyFileURL), true);
   if (NS_FAILED(rv))
     return rv;
@@ -855,16 +851,12 @@ nsresult nsPrefBranch::GetDefaultFromPropertiesFile(const char *aPrefName, char1
     return NS_ERROR_FAILURE;
 
   nsCOMPtr<nsIStringBundle> bundle;
-  rv = bundleService->CreateBundle(propertyFileURL,
+  rv = bundleService->CreateBundle(propertyFileURL.get(),
                                    getter_AddRefs(bundle));
   if (NS_FAILED(rv))
     return rv;
 
-  // string names are in unicode
-  nsAutoString stringId;
-  stringId.AssignASCII(aPrefName);
-
-  return bundle->GetStringFromName(stringId.get(), return_buf);
+  return bundle->GetStringFromName(aPrefName, aReturn);
 }
 
 nsPrefBranch::PrefName
@@ -921,7 +913,7 @@ nsPrefLocalizedString::GetData(char16_t **_retval)
   nsresult rv = GetData(data);
   if (NS_FAILED(rv))
     return rv;
-  
+
   *_retval = ToNewUnicode(data);
   if (!*_retval)
     return NS_ERROR_OUT_OF_MEMORY;

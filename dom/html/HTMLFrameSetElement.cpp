@@ -26,44 +26,9 @@ HTMLFrameSetElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
   return HTMLFrameSetElementBinding::Wrap(aCx, this, aGivenProto);
 }
 
-NS_IMPL_ISUPPORTS_INHERITED(HTMLFrameSetElement, nsGenericHTMLElement,
-                            nsIDOMHTMLFrameSetElement)
+NS_IMPL_ISUPPORTS_INHERITED0(HTMLFrameSetElement, nsGenericHTMLElement)
 
 NS_IMPL_ELEMENT_CLONE(HTMLFrameSetElement)
-
-NS_IMETHODIMP 
-HTMLFrameSetElement::SetCols(const nsAString& aCols)
-{
-  ErrorResult rv;
-  SetCols(aCols, rv);
-  return rv.StealNSResult();
-}
-
-NS_IMETHODIMP
-HTMLFrameSetElement::GetCols(nsAString& aCols)
-{
-  DOMString cols;
-  GetCols(cols);
-  cols.ToString(aCols);
-  return NS_OK;
-}
-
-NS_IMETHODIMP 
-HTMLFrameSetElement::SetRows(const nsAString& aRows)
-{
-  ErrorResult rv;
-  SetRows(aRows, rv);
-  return rv.StealNSResult();
-}
-
-NS_IMETHODIMP
-HTMLFrameSetElement::GetRows(nsAString& aRows)
-{
-  DOMString rows;
-  GetRows(rows);
-  rows.ToString(aRows);
-  return NS_OK;
-}
 
 nsresult
 HTMLFrameSetElement::BeforeSetAttr(int32_t aNamespaceID, nsIAtom* aName,
@@ -115,7 +80,7 @@ HTMLFrameSetElement::GetRowSpec(int32_t *aNumValues,
   NS_PRECONDITION(aSpecs, "Must have a pointer to an array of nsFramesetSpecs");
   *aNumValues = 0;
   *aSpecs = nullptr;
-  
+
   if (!mRowSpecs) {
     const nsAttrValue* value = GetParsedAttr(nsGkAtoms::rows);
     if (value && value->Type() == nsAttrValue::eString) {
@@ -185,7 +150,7 @@ HTMLFrameSetElement::ParseAttribute(int32_t aNamespaceID,
       return aResult.ParseIntWithBounds(aValue, 0, 100);
     }
   }
-  
+
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
                                               aResult);
 }
@@ -226,7 +191,7 @@ HTMLFrameSetElement::ParseRowCol(const nsAString & aValue,
   // also remove leading/trailing commas (bug 31482)
   spec.StripChars(" \n\r\t\"\'");
   spec.Trim(",");
-  
+
   // Count the commas. Don't count more than X commas (bug 576447).
   static_assert(NS_MAX_FRAMESET_SPEC_COUNT * sizeof(nsFramesetSpec) < (1 << 30),
                 "Too many frameset specs allowed to allocate");
@@ -246,7 +211,7 @@ HTMLFrameSetElement::ParseRowCol(const nsAString & aValue,
 
   // Pre-grab the compat mode; we may need it later in the loop.
   bool isInQuirks = InNavQuirksMode(OwnerDoc());
-      
+
   // Parse each comma separated token
 
   int32_t start = 0;
@@ -308,7 +273,7 @@ HTMLFrameSetElement::ParseRowCol(const nsAString & aValue,
           specs[i].mValue = 1;
         }
       }
-        
+
       // Catch zero and negative frame sizes for Nav compatibility
       // Nav resized absolute and relative frames to "1" and
       // percent frames to an even percentage of the width
@@ -337,7 +302,7 @@ HTMLFrameSetElement::ParseRowCol(const nsAString & aValue,
 }
 
 bool
-HTMLFrameSetElement::IsEventAttributeName(nsIAtom *aName)
+HTMLFrameSetElement::IsEventAttributeNameInternal(nsIAtom *aName)
 {
   return nsContentUtils::IsEventAttributeName(aName,
                                               EventNameType_HTML |

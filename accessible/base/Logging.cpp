@@ -686,7 +686,7 @@ logging::Tree(const char* aTitle, const char* aMsgText,
     printf("%s", NS_ConvertUTF16toUTF8(level).get());
     logging::AccessibleInfo(prefix, root);
     if (root->FirstChild() && !root->FirstChild()->IsDoc()) {
-      level.Append(NS_LITERAL_STRING("  "));
+      level.AppendLiteral(u"  ");
       root = root->FirstChild();
       continue;
     }
@@ -724,7 +724,7 @@ logging::DOMTree(const char* aTitle, const char* aMsgText,
     printf("%s", NS_ConvertUTF16toUTF8(level).get());
     logging::Node("", root);
     if (root->GetFirstChild()) {
-      level.Append(NS_LITERAL_STRING("  "));
+      level.AppendLiteral(u"  ");
       root = root->GetFirstChild();
       continue;
     }
@@ -1026,7 +1026,7 @@ logging::IsEnabled(const nsAString& aModuleStr)
 }
 
 void
-logging::Enable(const nsAFlatCString& aModules)
+logging::Enable(const nsCString& aModules)
 {
   EnableLogging(aModules.get());
 }

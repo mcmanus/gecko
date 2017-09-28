@@ -22,7 +22,8 @@ Cu.import("resource://services-common/utils.js");
 XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
                           "resource://gre/modules/LightweightThemeManager.jsm");
 
-const PREFS_GUID = CommonUtils.encodeBase64URL(Services.appinfo.ID);
+XPCOMUtils.defineLazyGetter(this, "PREFS_GUID",
+                            () => CommonUtils.encodeBase64URL(Services.appinfo.ID));
 
 this.PrefRec = function PrefRec(collection, id) {
   CryptoWrapper.call(this, collection, id);
@@ -48,7 +49,7 @@ PrefsEngine.prototype = {
   syncPriority: 1,
   allowSkippedRecord: false,
 
-  getChangedIDs() {
+  async getChangedIDs() {
     // No need for a proper timestamp (no conflict resolution needed).
     let changedIDs = {};
     if (this._tracker.modified)
@@ -56,12 +57,12 @@ PrefsEngine.prototype = {
     return changedIDs;
   },
 
-  _wipeClient() {
-    SyncEngine.prototype._wipeClient.call(this);
+  async _wipeClient() {
+    await SyncEngine.prototype._wipeClient.call(this);
     this.justWiped = true;
   },
 
-  _reconcile(item) {
+  async _reconcile(item) {
     // Apply the incoming item if we don't care about the local data
     if (this.justWiped) {
       this.justWiped = false;
@@ -153,7 +154,7 @@ PrefStore.prototype = {
             try {
               this._prefs.set(pref, value);
             } catch (ex) {
-              this._log.trace("Failed to set pref: " + pref + ": " + ex);
+              this._log.trace(`Failed to set pref: ${pref}`, ex);
             }
           }
       }
@@ -165,22 +166,22 @@ PrefStore.prototype = {
     }
   },
 
-  getAllIDs() {
+  async getAllIDs() {
     /* We store all prefs in just one WBO, with just one GUID */
     let allprefs = {};
     allprefs[PREFS_GUID] = true;
     return allprefs;
   },
 
-  changeItemID(oldID, newID) {
+  async changeItemID(oldID, newID) {
     this._log.trace("PrefStore GUID is constant!");
   },
 
-  itemExists(id) {
+  async itemExists(id) {
     return (id === PREFS_GUID);
   },
 
-  createRecord(id, collection) {
+  async createRecord(id, collection) {
     let record = new PrefRec(collection, id);
 
     if (id == PREFS_GUID) {
@@ -192,15 +193,15 @@ PrefStore.prototype = {
     return record;
   },
 
-  create(record) {
+  async create(record) {
     this._log.trace("Ignoring create request");
   },
 
-  remove(record) {
+  async remove(record) {
     this._log.trace("Ignoring remove request");
   },
 
-  update(record) {
+  async update(record) {
     // Silently ignore pref updates that are for other apps.
     if (record.id != PREFS_GUID)
       return;
@@ -209,7 +210,7 @@ PrefStore.prototype = {
     this._setAllPrefs(record.value);
   },
 
-  wipe() {
+  async wipe() {
     this._log.trace("Ignoring wipe request");
   }
 };

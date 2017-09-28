@@ -62,7 +62,7 @@ pub fn fetch_image_for_layout(url: ServoUrl,
     let listener = NetworkListener {
         context: context,
         task_source: window.networking_task_source(),
-        wrapper: Some(window.get_runnable_wrapper()),
+        canceller: Some(window.task_canceller()),
     };
     ROUTER.add_route(action_receiver.to_opaque(), box move |message| {
         listener.notify_fetch(message.to().unwrap());
@@ -70,7 +70,7 @@ pub fn fetch_image_for_layout(url: ServoUrl,
 
     let request = FetchRequestInit {
         url: url,
-        origin: document.url().clone(),
+        origin: document.origin().immutable().clone(),
         type_: RequestType::Image,
         pipeline_id: Some(document.global().pipeline_id()),
         .. FetchRequestInit::default()

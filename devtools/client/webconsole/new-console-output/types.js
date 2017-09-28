@@ -31,6 +31,7 @@ exports.ConsoleMessage = function (props) {
     source: null,
     timeStamp: null,
     type: null,
+    helperType: null,
     level: null,
     messageText: null,
     parameters: null,
@@ -59,5 +60,10 @@ exports.NetworkEventMessage = function (props) {
     timeStamp: null,
     totalTime: null,
     indent: 0,
+    updates: null,
+    openedOnce: false,
+    securityState: null,
+    securityInfo: null,
+    requestHeadersFromUploadStream: null,
   }, props);
 };

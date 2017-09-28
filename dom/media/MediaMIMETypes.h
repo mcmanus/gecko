@@ -56,7 +56,7 @@ public:
   }
 
   // MIME "type/subtype", always lowercase.
-  const nsACString& AsString() const { return mMIMEType; }
+  const nsCString& AsString() const { return mMIMEType; }
 
   // Comparison with DependentMediaMIMEType.
   // Useful to compare to MEDIAMIMETYPE literals.
@@ -103,7 +103,7 @@ Maybe<MediaMIMEType> MakeMediaMIMEType(const nsACString& aType);
 Maybe<MediaMIMEType> MakeMediaMIMEType(const char* aType);
 
 
-// A list of codecs attached to a MediaExtendedMIMEType.
+// A list of case-sensitive codecs attached to a MediaExtendedMIMEType.
 class MediaCodecs
 {
 public:
@@ -118,7 +118,7 @@ public:
   }
 
   bool IsEmpty() const { return mCodecs.IsEmpty(); }
-  const nsAString& AsString() const { return mCodecs; }
+  const nsString& AsString() const { return mCodecs; }
 
   using RangeType =
     const StringListRange<nsString, StringListRangeEmptyItems::ProcessEmptyItems>;
@@ -132,8 +132,13 @@ public:
     return RangeType(mCodecs);
   };
 
+  // Does this list of codecs contain the given aCodec?
   bool Contains(const nsAString& aCodec) const;
+  // Does this list of codecs contain *all* the codecs in the given list?
   bool ContainsAll(const MediaCodecs& aCodecs) const;
+
+  // Does this list of codecs contain a codec starting with the given prefix?
+  bool ContainsPrefix(const nsAString& aCodecPrefix) const;
 
   template <size_t N>
   bool operator==(const char (&aType)[N]) const
@@ -175,7 +180,7 @@ public:
 
   // Original string. Note that "type/subtype" may not be lowercase,
   // use Type().AsString() instead to get the normalized "type/subtype".
-  const nsACString& OriginalString() const { return mOriginalString; }
+  const nsCString& OriginalString() const { return mOriginalString; }
 
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 

@@ -3,6 +3,7 @@
 This script patches tooltool manifests in the firefox source
 tree to update them to a new set of rust packages.
 '''
+from __future__ import absolute_import, print_function
 
 import json
 import os.path
@@ -60,17 +61,16 @@ def update_manifest(source_manifest, target, target_filename):
 TARGETS = {
         'x86_64-unknown-linux-gnu-repack': [
             'browser/config/tooltool-manifests/linux32/releng.manifest',
-            'browser/config/tooltool-manifests/linux64/asan.manifest',
-            'browser/config/tooltool-manifests/linux64/clang.manifest',
-            'browser/config/tooltool-manifests/linux64/clang.manifest.centos6',
             'browser/config/tooltool-manifests/linux64/hazard.manifest',
-            'browser/config/tooltool-manifests/linux64/msan.manifest',
             'browser/config/tooltool-manifests/linux64/releng.manifest',
             ],
         'x86_64-unknown-linux-gnu-android-cross-repack': [
             'mobile/android/config/tooltool-manifests/android/releng.manifest',
             'mobile/android/config/tooltool-manifests/android-x86/releng.manifest',
             'mobile/android/config/tooltool-manifests/android-gradle-dependencies/releng.manifest',
+            ],
+        'x86_64-unknown-linux-gnu-mingw32-cross-repack': [
+            'browser/config/tooltool-manifests/mingw32/releng.manifest',
             ],
         'x86_64-unknown-linux-gnu-mac-cross-repack': [
             'browser/config/tooltool-manifests/macosx64/cross-releng.manifest',
@@ -80,12 +80,9 @@ TARGETS = {
             'browser/config/tooltool-manifests/macosx64/releng.manifest',
             ],
         'x86_64-pc-windows-msvc-repack': [
-            'browser/config/tooltool-manifests/win64/clang.manifest',
             'browser/config/tooltool-manifests/win64/releng.manifest',
             ],
         'i686-pc-windows-msvc-repack': [
-            'browser/config/tooltool-manifests/win32/build-clang-cl.manifest',
-            'browser/config/tooltool-manifests/win32/clang.manifest',
             'browser/config/tooltool-manifests/win32/releng.manifest',
             ],
 }

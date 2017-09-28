@@ -3,6 +3,8 @@
 
 #include <jni.h>
 
+#include "nsIRunnable.h"
+
 #include "mozilla/UniquePtr.h"
 
 #if defined(DEBUG) || !defined(RELEASE_OR_BETA)
@@ -10,7 +12,7 @@
 #endif
 
 #ifdef MOZ_CHECK_JNI
-#include <pthread.h>
+#include <unistd.h>
 #include "mozilla/Assertions.h"
 #include "APKOpen.h"
 #include "MainThreadUtils.h"
@@ -87,8 +89,7 @@ JNIEnv* GetEnvForThread();
         if ((thread) == mozilla::jni::CallingThread::GECKO) { \
             MOZ_RELEASE_ASSERT(::NS_IsMainThread()); \
         } else if ((thread) == mozilla::jni::CallingThread::UI) { \
-            const bool isOnUiThread = ::pthread_equal(::pthread_self(), \
-                                                      ::getJavaUiThread()); \
+            const bool isOnUiThread = (GetUIThreadId() == ::gettid()); \
             MOZ_RELEASE_ASSERT(isOnUiThread); \
         } \
     } while (0)
@@ -132,13 +133,7 @@ void SetNativeHandle(JNIEnv* env, jobject instance, uintptr_t handle);
 
 jclass GetClassRef(JNIEnv* aEnv, const char* aClassName);
 
-struct AbstractCall
-{
-    virtual ~AbstractCall() {}
-    virtual void operator()() = 0;
-};
-
-void DispatchToGeckoPriorityQueue(UniquePtr<AbstractCall>&& aCall);
+void DispatchToGeckoPriorityQueue(already_AddRefed<nsIRunnable> aCall);
 
 /**
  * Returns whether Gecko is running in a Fennec environment, as determined by
@@ -147,6 +142,8 @@ void DispatchToGeckoPriorityQueue(UniquePtr<AbstractCall>&& aCall);
 bool IsFennec();
 
 int GetAPIVersion();
+
+pid_t GetUIThreadId();
 
 } // jni
 } // mozilla

@@ -56,6 +56,14 @@ InputQueue::ReceiveInputEvent(const RefPtr<AsyncPanZoomController>& aTarget,
       return ReceiveMouseInput(aTarget, aTargetConfirmed, event, aOutInputBlockId);
     }
 
+    case KEYBOARD_INPUT: {
+      // Every keyboard input must have a confirmed target
+      MOZ_ASSERT(aTarget && aTargetConfirmed);
+
+      const KeyboardInput& event = aEvent.AsKeyboardInput();
+      return ReceiveKeyboardInput(aTarget, event, aOutInputBlockId);
+    }
+
     default:
       // The return value for non-touch input is only used by tests, so just pass
       // through the return value for now. This can be changed later if needed.
@@ -268,6 +276,42 @@ InputQueue::ReceiveScrollWheelInput(const RefPtr<AsyncPanZoomController>& aTarge
   return nsEventStatus_eConsumeDoDefault;
 }
 
+nsEventStatus
+InputQueue::ReceiveKeyboardInput(const RefPtr<AsyncPanZoomController>& aTarget,
+                                 const KeyboardInput& aEvent,
+                                 uint64_t* aOutInputBlockId) {
+  KeyboardBlockState* block = mActiveKeyboardBlock.get();
+
+  // If the block is targeting a different Apzc than this keyboard event then
+  // we'll create a new input block
+  if (block && block->GetTargetApzc() != aTarget) {
+    block = nullptr;
+  }
+
+  if (!block) {
+    block = new KeyboardBlockState(aTarget);
+    INPQ_LOG("started new keyboard block %p id %" PRIu64 " for target %p\n",
+        block, block->GetBlockId(), aTarget.get());
+
+    mActiveKeyboardBlock = block;
+  } else {
+    INPQ_LOG("received new event in block %p\n", block);
+  }
+
+  if (aOutInputBlockId) {
+    *aOutInputBlockId = block->GetBlockId();
+  }
+
+  mQueuedInputs.AppendElement(MakeUnique<QueuedInput>(aEvent, *block));
+
+  ProcessQueue();
+
+  // If APZ is allowing passive listeners then we must dispatch the event to
+  // content, otherwise we can consume the event.
+  return gfxPrefs::APZKeyboardPassiveListeners() ? nsEventStatus_eConsumeDoDefault
+                                                 : nsEventStatus_eConsumeNoDefault;
+}
+
 static bool
 CanScrollTargetHorizontally(const PanGestureInput& aInitialEvent,
                             PanGestureBlockState* aBlock)
@@ -461,6 +505,13 @@ InputQueue::GetCurrentPanGestureBlock() const
   return block ? block->AsPanGestureBlock() : mActivePanGestureBlock.get();
 }
 
+KeyboardBlockState*
+InputQueue::GetCurrentKeyboardBlock() const
+{
+  InputBlockState* block = GetCurrentBlock();
+  return block ? block->AsKeyboardBlock() : mActiveKeyboardBlock.get();
+}
+
 WheelBlockState*
 InputQueue::GetActiveWheelTransaction() const
 {
@@ -488,6 +539,9 @@ InputQueue::AllowScrollHandoff() const
   if (GetCurrentPanGestureBlock()) {
     return GetCurrentPanGestureBlock()->AllowScrollHandoff();
   }
+  if (GetCurrentKeyboardBlock()) {
+    return GetCurrentKeyboardBlock()->AllowScrollHandoff();
+  }
   return true;
 }
 
@@ -509,10 +563,12 @@ InputQueue::ScheduleMainThreadTimeout(const RefPtr<AsyncPanZoomController>& aTar
                                       CancelableBlockState* aBlock) {
   INPQ_LOG("scheduling main thread timeout for target %p\n", aTarget.get());
   aBlock->StartContentResponseTimer();
-  aTarget->PostDelayedTask(NewRunnableMethod<uint64_t>(this,
-                                                       &InputQueue::MainThreadTimeout,
-                                                       aBlock->GetBlockId()),
-                           gfxPrefs::APZContentResponseTimeout());
+  aTarget->PostDelayedTask(
+    NewRunnableMethod<uint64_t>("layers::InputQueue::MainThreadTimeout",
+                                this,
+                                &InputQueue::MainThreadTimeout,
+                                aBlock->GetBlockId()),
+    gfxPrefs::APZContentResponseTimeout());
 }
 
 InputBlockState*
@@ -528,7 +584,7 @@ InputQueue::FindBlockForId(uint64_t aInputBlockId,
     }
   }
 
-  CancelableBlockState* block = nullptr;
+  InputBlockState* block = nullptr;
   if (mActiveTouchBlock && mActiveTouchBlock->GetBlockId() == aInputBlockId) {
     block = mActiveTouchBlock.get();
   } else if (mActiveWheelBlock && mActiveWheelBlock->GetBlockId() == aInputBlockId) {
@@ -537,6 +593,8 @@ InputQueue::FindBlockForId(uint64_t aInputBlockId,
     block = mActiveDragBlock.get();
   } else if (mActivePanGestureBlock && mActivePanGestureBlock->GetBlockId() == aInputBlockId) {
     block = mActivePanGestureBlock.get();
+  } else if (mActiveKeyboardBlock && mActiveKeyboardBlock->GetBlockId() == aInputBlockId) {
+    block = mActiveKeyboardBlock.get();
   }
   // Since we didn't encounter this block while iterating through mQueuedInputs,
   // it must have no events associated with it at the moment.
@@ -699,6 +757,9 @@ InputQueue::ProcessQueue() {
   if (CanDiscardBlock(mActivePanGestureBlock)) {
     mActivePanGestureBlock = nullptr;
   }
+  if (CanDiscardBlock(mActiveKeyboardBlock)) {
+    mActiveKeyboardBlock = nullptr;
+  }
 }
 
 bool
@@ -738,6 +799,7 @@ InputQueue::Clear()
   mActiveWheelBlock = nullptr;
   mActiveDragBlock = nullptr;
   mActivePanGestureBlock = nullptr;
+  mActiveKeyboardBlock = nullptr;
   mLastActiveApzc = nullptr;
 }
 

@@ -7,11 +7,13 @@
 #define mozilla_EditorBase_h
 
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc.
+#include "mozilla/Maybe.h"              // for Maybe
 #include "mozilla/OwningNonNull.h"      // for OwningNonNull
+#include "mozilla/PresShell.h"          // for PresShell
 #include "mozilla/SelectionState.h"     // for RangeUpdater, etc.
 #include "mozilla/StyleSheet.h"         // for StyleSheet
-#include "mozilla/UniquePtr.h"
 #include "mozilla/WeakPtr.h"            // for WeakPtr
+#include "mozilla/dom/Selection.h"
 #include "mozilla/dom/Text.h"
 #include "nsCOMPtr.h"                   // for already_AddRefed, nsCOMPtr
 #include "nsCycleCollectionParticipant.h"
@@ -46,7 +48,6 @@ class nsISupports;
 class nsITransaction;
 class nsIWidget;
 class nsRange;
-class nsString;
 class nsTransactionManager;
 
 // This is int32_t instead of int16_t because nsIInlineSpellChecker.idl's
@@ -119,7 +120,6 @@ class InsertTextTransaction;
 class JoinNodeTransaction;
 class PlaceholderTransaction;
 class RemoveStyleSheetTransaction;
-class SetTextTransaction;
 class SplitNodeTransaction;
 class TextComposition;
 class TextEditor;
@@ -129,7 +129,6 @@ namespace dom {
 class DataTransfer;
 class Element;
 class EventTarget;
-class Selection;
 class Text;
 } // namespace dom
 
@@ -141,32 +140,50 @@ struct IMEState;
  * CachedWeakPtr stores a pointer to a class which inherits nsIWeakReference.
  * If the instance of the class has already been destroyed, this returns
  * nullptr.  Otherwise, returns cached pointer.
+ * If class T inherits nsISupports a lot, specify Base explicitly for avoiding
+ * ambiguous conversion to nsISupports.
  */
-template<class T>
+template<class T, class Base = nsISupports>
 class CachedWeakPtr final
 {
 public:
-  CachedWeakPtr<T>()
+  CachedWeakPtr<T, Base>()
     : mCache(nullptr)
   {
   }
-
-  CachedWeakPtr<T>& operator=(T* aObject)
+  explicit CachedWeakPtr<T, Base>(T* aObject)
   {
-    mWeakPtr = do_GetWeakReference(aObject);
+    mWeakPtr = do_GetWeakReference(static_cast<Base*>(aObject));
+    mCache = aObject;
+  }
+  explicit CachedWeakPtr<T, Base>(const nsCOMPtr<T>& aOther)
+  {
+    mWeakPtr = do_GetWeakReference(static_cast<Base*>(aOther.get()));
+    mCache = aOther;
+  }
+  explicit CachedWeakPtr<T, Base>(already_AddRefed<T>& aOther)
+  {
+    RefPtr<T> other = aOther;
+    mWeakPtr = do_GetWeakReference(static_cast<Base*>(other.get()));
+    mCache = other;
+  }
+
+  CachedWeakPtr<T, Base>& operator=(T* aObject)
+  {
+    mWeakPtr = do_GetWeakReference(static_cast<Base*>(aObject));
     mCache = aObject;
     return *this;
   }
-  CachedWeakPtr<T>& operator=(const nsCOMPtr<T>& aOther)
+  CachedWeakPtr<T, Base>& operator=(const nsCOMPtr<T>& aOther)
   {
-    mWeakPtr = do_GetWeakReference(aOther);
+    mWeakPtr = do_GetWeakReference(static_cast<Base*>(aOther.get()));
     mCache = aOther;
     return *this;
   }
-  CachedWeakPtr<T>& operator=(already_AddRefed<T>& aOther)
+  CachedWeakPtr<T, Base>& operator=(already_AddRefed<T>& aOther)
   {
-    nsCOMPtr<T> other = aOther;
-    mWeakPtr = do_GetWeakReference(other);
+    RefPtr<T> other = aOther;
+    mWeakPtr = do_GetWeakReference(static_cast<Base*>(other.get()));
     mCache = other;
     return *this;
   }
@@ -178,7 +195,7 @@ public:
   T* get() const
   {
     if (mCache && !mWeakPtr->IsAlive()) {
-      const_cast<CachedWeakPtr<T>*>(this)->mCache = nullptr;
+      const_cast<CachedWeakPtr<T, Base>*>(this)->mCache = nullptr;
     }
     return mCache;
   }
@@ -218,11 +235,6 @@ public:
    */
   EditorBase();
 
-  virtual TextEditor* AsTextEditor() = 0;
-  virtual const TextEditor* AsTextEditor() const = 0;
-  virtual HTMLEditor* AsHTMLEditor() = 0;
-  virtual const HTMLEditor* AsHTMLEditor() const = 0;
-
 protected:
   /**
    * The default destructor. This should suffice. Should this be pure virtual
@@ -234,11 +246,31 @@ public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(EditorBase, nsIEditor)
 
-  bool IsInitialized() const { return !!mDocumentWeak; }
+  bool IsInitialized() const { return !!mDocument; }
   already_AddRefed<nsIDOMDocument> GetDOMDocument();
   already_AddRefed<nsIDocument> GetDocument();
   already_AddRefed<nsIPresShell> GetPresShell();
+  nsPresContext* GetPresContext()
+  {
+    RefPtr<nsIPresShell> presShell = GetPresShell();
+    return presShell ? presShell->GetPresContext() : nullptr;
+  }
   already_AddRefed<nsIWidget> GetWidget();
+  nsISelectionController* GetSelectionController() const
+  {
+    if (mSelectionController) {
+      return mSelectionController;
+    }
+    if (!mDocument) {
+      return nullptr;
+    }
+    nsIPresShell* presShell = mDocument->GetShell();
+    if (!presShell) {
+      return nullptr;
+    }
+    nsISelectionController* sc = static_cast<PresShell*>(presShell);
+    return sc;
+  }
   enum NotificationForEditorObservers
   {
     eNotifyEditorObserversOfEnd,
@@ -261,7 +293,8 @@ public:
                                       Text& aTextNode, int32_t aOffset,
                                       bool aSuppressIME = false);
 
-  nsresult SetTextImpl(const nsAString& aString,
+  nsresult SetTextImpl(Selection& aSelection,
+                       const nsAString& aString,
                        Text& aTextNode);
 
   NS_IMETHOD DeleteSelectionImpl(EDirection aAction,
@@ -315,12 +348,27 @@ public:
   already_AddRefed<Element> CreateHTMLContent(nsIAtom* aTag);
 
   /**
+   * Creates text node which is marked as "maybe modified frequently".
+   */
+  static already_AddRefed<nsTextNode> CreateTextNode(nsIDocument& aDocument,
+                                                     const nsAString& aData);
+
+  /**
    * IME event handlers.
    */
   virtual nsresult BeginIMEComposition(WidgetCompositionEvent* aEvent);
   virtual nsresult UpdateIMEComposition(
                      WidgetCompositionEvent* aCompositionChangeEvet) = 0;
   void EndIMEComposition();
+
+  /**
+   * Commit composition if there is.
+   * Note that when there is a composition, this requests to commit composition
+   * to native IME.  Therefore, when there is composition, this can do anything.
+   * For example, the editor instance, the widget or the process itself may
+   * be destroyed.
+   */
+  nsresult CommitComposition();
 
   void SwitchTextDirectionTo(uint32_t aDirection);
 
@@ -414,9 +462,6 @@ protected:
     CreateTxnForInsertText(const nsAString& aStringToInsert, Text& aTextNode,
                            int32_t aOffset);
 
-  already_AddRefed<SetTextTransaction>
-    CreateTxnForSetText(const nsAString& aString, Text& aTextNode);
-
   /**
    * Never returns null.
    */
@@ -476,6 +521,10 @@ protected:
    * Called after a transaction is redone successfully.
    */
   void DoAfterRedoTransaction();
+
+  // Note that aSelection is optional and can be nullptr.
+  nsresult DoTransaction(Selection* aSelection,
+                         nsITransaction* aTxn);
 
   enum TDocumentListenerNotification
   {
@@ -547,9 +596,20 @@ protected:
    */
   bool EnsureComposition(WidgetCompositionEvent* aCompositionEvent);
 
-  already_AddRefed<nsISelectionController> GetSelectionController();
   nsresult GetSelection(SelectionType aSelectionType,
                         nsISelection** aSelection);
+
+  /**
+   * (Begin|End)PlaceholderTransaction() are called by AutoPlaceholderBatch.
+   * This set of methods are similar to the (Begin|End)Transaction(), but do
+   * not use the transaction managers batching feature.  Instead we use a
+   * placeholder transaction to wrap up any further transaction while the
+   * batch is open.  The advantage of this is that placeholder transactions
+   * can later merge, if needed.  Merging is unavailable between transaction
+   * manager batches.
+   */
+  void BeginPlaceholderTransaction(nsIAtom* aTransactionName);
+  void EndPlaceholderTransaction();
 
 public:
   /**
@@ -603,9 +663,14 @@ public:
   /**
    * Return the offset of aChild in aParent.  Asserts fatally if parent or
    * child is null, or parent is not child's parent.
+   * FYI: aChild must not be being removed from aParent.  In such case, these
+   *      methods may return wrong index if aChild doesn't have previous
+   *      sibling or next sibling.
    */
   static int32_t GetChildOffset(nsIDOMNode* aChild,
                                 nsIDOMNode* aParent);
+  static int32_t GetChildOffset(nsINode* aChild,
+                                nsINode* aParent);
 
   /**
    * Set outOffset to the offset of aChild in the parent.
@@ -729,12 +794,46 @@ public:
    * returns true if aNode is an editable node.
    */
   bool IsEditable(nsIDOMNode* aNode);
-  virtual bool IsEditable(nsINode* aNode);
+  bool IsEditable(nsINode* aNode)
+  {
+    NS_ENSURE_TRUE(aNode, false);
+
+    if (!aNode->IsNodeOfType(nsINode::eCONTENT) || IsMozEditorBogusNode(aNode) ||
+        !IsModifiableNode(aNode)) {
+      return false;
+    }
+
+    switch (aNode->NodeType()) {
+      case nsIDOMNode::ELEMENT_NODE:
+        // In HTML editors, if we're dealing with an element, then ask it
+        // whether it's editable.
+        return mIsHTMLEditorClass ? aNode->IsEditable() : true;
+      case nsIDOMNode::TEXT_NODE:
+        // Text nodes are considered to be editable by both typed of editors.
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Returns true if selection is in an editable element and both the range
+   * start and the range end are editable.  E.g., even if the selection range
+   * includes non-editable elements, returns true when one of common ancestors
+   * of the range start and the range end is editable.  Otherwise, false.
+   */
+  bool IsSelectionEditable();
 
   /**
    * Returns true if aNode is a MozEditorBogus node.
    */
-  bool IsMozEditorBogusNode(nsINode* aNode);
+  bool IsMozEditorBogusNode(nsINode* aNode)
+  {
+    return aNode && aNode->IsElement() &&
+           aNode->AsElement()->AttrValueIs(kNameSpaceID_None,
+               kMOZEditorBogusNodeAttrAtom, kMOZEditorBogusNodeValue,
+               eCaseMatters);
+  }
 
   /**
    * Counts number of editable child nodes.
@@ -762,6 +861,13 @@ public:
   bool ShouldHandleIMEComposition() const;
 
   /**
+   * Returns number of undo or redo items.  If TransactionManager returns
+   * unexpected error, returns -1.
+   */
+  int32_t NumberOfUndoItems() const;
+  int32_t NumberOfRedoItems() const;
+
+  /**
    * From html rules code - migration in progress.
    */
   static nsresult GetTagString(nsIDOMNode* aNode, nsAString& outString);
@@ -771,36 +877,52 @@ public:
   virtual bool AreNodesSameType(nsIContent* aNode1, nsIContent* aNode2);
 
   static bool IsTextNode(nsIDOMNode* aNode);
-  static bool IsTextNode(nsINode* aNode);
+  static bool IsTextNode(nsINode* aNode)
+  {
+    return aNode->NodeType() == nsIDOMNode::TEXT_NODE;
+  }
 
   static nsCOMPtr<nsIDOMNode> GetChildAt(nsIDOMNode* aParent, int32_t aOffset);
-  static nsIContent* GetNodeAtRangeOffsetPoint(nsIDOMNode* aParentOrNode,
+  static nsIContent* GetNodeAtRangeOffsetPoint(nsINode* aParentOrNode,
                                                int32_t aOffset);
 
   static nsresult GetStartNodeAndOffset(Selection* aSelection,
                                         nsIDOMNode** outStartNode,
                                         int32_t* outStartOffset);
   static nsresult GetStartNodeAndOffset(Selection* aSelection,
-                                        nsINode** aStartNode,
+                                        nsINode** aStartContainer,
                                         int32_t* aStartOffset);
   static nsresult GetEndNodeAndOffset(Selection* aSelection,
                                       nsIDOMNode** outEndNode,
                                       int32_t* outEndOffset);
   static nsresult GetEndNodeAndOffset(Selection* aSelection,
-                                      nsINode** aEndNode,
+                                      nsINode** aEndContainer,
                                       int32_t* aEndOffset);
 #if DEBUG_JOE
   static void DumpNode(nsIDOMNode* aNode, int32_t indent = 0);
 #endif
   Selection* GetSelection(SelectionType aSelectionType =
-                                          SelectionType::eNormal);
+                                          SelectionType::eNormal)
+  {
+    nsISelectionController* sc = GetSelectionController();
+    if (!sc) {
+      return nullptr;
+    }
+    Selection* selection = sc->GetDOMSelection(ToRawSelectionType(aSelectionType));
+    return selection;
+  }
+
+  /**
+   * CollapseSelectionToEnd() collapses the selection to the end of the editor.
+   */
+  nsresult CollapseSelectionToEnd(Selection* aSelection);
 
   /**
    * Helpers to add a node to the selection.
    * Used by table cell selection methods.
    */
-  nsresult CreateRange(nsIDOMNode* aStartParent, int32_t aStartOffset,
-                       nsIDOMNode* aEndParent, int32_t aEndOffset,
+  nsresult CreateRange(nsIDOMNode* aStartContainer, int32_t aStartOffset,
+                       nsIDOMNode* aEndContainer, int32_t aEndOffset,
                        nsRange** aRange);
 
   /**
@@ -840,9 +962,9 @@ public:
                                   Selection* aSelection,
                                   nsIDOMNode* previousSelectedNode,
                                   int32_t previousSelectedOffset,
-                                  nsIDOMNode* aStartNode,
+                                  nsIDOMNode* aStartContainer,
                                   int32_t aStartOffset,
-                                  nsIDOMNode* aEndNode,
+                                  nsIDOMNode* aEndContainer,
                                   int32_t aEndOffset);
 
   virtual already_AddRefed<dom::EventTarget> GetDOMEventTarget() = 0;
@@ -850,7 +972,7 @@ public:
   /**
    * Fast non-refcounting editor root element accessor
    */
-  Element* GetRoot();
+  Element* GetRoot() const { return mRootElement; }
 
   /**
    * Likewise, but gets the editor's root instead, which is different for HTML
@@ -867,6 +989,38 @@ public:
   /**
    * Accessor methods to flags.
    */
+  uint32_t Flags() const { return mFlags; }
+
+  nsresult AddFlags(uint32_t aFlags)
+  {
+    const uint32_t kOldFlags = Flags();
+    const uint32_t kNewFlags = (kOldFlags | aFlags);
+    if (kNewFlags == kOldFlags) {
+      return NS_OK;
+    }
+    return SetFlags(kNewFlags); // virtual call and may be expensive.
+  }
+  nsresult RemoveFlags(uint32_t aFlags)
+  {
+    const uint32_t kOldFlags = Flags();
+    const uint32_t kNewFlags = (kOldFlags & ~aFlags);
+    if (kNewFlags == kOldFlags) {
+      return NS_OK;
+    }
+    return SetFlags(kNewFlags); // virtual call and may be expensive.
+  }
+  nsresult AddAndRemoveFlags(uint32_t aAddingFlags, uint32_t aRemovingFlags)
+  {
+    MOZ_ASSERT(!(aAddingFlags & aRemovingFlags),
+               "Same flags are specified both adding and removing");
+    const uint32_t kOldFlags = Flags();
+    const uint32_t kNewFlags = ((kOldFlags | aAddingFlags) & ~aRemovingFlags);
+    if (kNewFlags == kOldFlags) {
+      return NS_OK;
+    }
+    return SetFlags(kNewFlags); // virtual call and may be expensive.
+  }
+
   bool IsPlaintextEditor() const
   {
     return (mFlags & nsIPlaintextEditor::eEditorPlaintextMask) != 0;
@@ -880,6 +1034,17 @@ public:
   bool IsPasswordEditor() const
   {
     return (mFlags & nsIPlaintextEditor::eEditorPasswordMask) != 0;
+  }
+
+  // FYI: Both IsRightToLeft() and IsLeftToRight() may return false if
+  //      the editor inherits the content node's direction.
+  bool IsRightToLeft() const
+  {
+    return (mFlags & nsIPlaintextEditor::eEditorRightToLeft) != 0;
+  }
+  bool IsLeftToRight() const
+  {
+    return (mFlags & nsIPlaintextEditor::eEditorLeftToRight) != 0;
   }
 
   bool IsReadonly() const
@@ -940,13 +1105,39 @@ public:
 
   bool HasIndependentSelection() const
   {
-    return !!mSelectionControllerWeak;
+    return !!mSelectionController;
   }
 
   bool IsModifiable() const
   {
     return !IsReadonly();
   }
+
+  /**
+   * IsInEditAction() return true while the instance is handling an edit action.
+   * Otherwise, false.
+   */
+  bool IsInEditAction() const { return mIsInEditAction; }
+
+  /**
+   * IsSuppressingDispatchingInputEvent() returns true if the editor stops
+   * dispatching input event.  Otherwise, false.
+   */
+  bool IsSuppressingDispatchingInputEvent() const
+  {
+    return !mDispatchInputEvent;
+  }
+
+  bool Destroyed() const
+  {
+    return mDidPreDestroy;
+  }
+
+  /**
+   * GetTransactionManager() returns transaction manager associated with the
+   * editor.  This may return nullptr if undo/redo hasn't been enabled.
+   */
+  already_AddRefed<nsITransactionManager> GetTransactionManager() const;
 
   /**
    * Get the input event target. This might return null.
@@ -1039,12 +1230,8 @@ public:
   void HideCaret(bool aHide);
 
 private:
-  // Weak reference to the nsISelectionController.
-  // Use GetSelectionController() to retrieve actual pointer.
-  CachedWeakPtr<nsISelectionController> mSelectionControllerWeak;
-  // Weak reference to the nsIDocument.
-  // Use GetDocument() to retrieve actual pointer.
-  CachedWeakPtr<nsIDocument> mDocumentWeak;
+  nsCOMPtr<nsISelectionController> mSelectionController;
+  nsCOMPtr<nsIDocument> mDocument;
 
 protected:
   enum Tristate
@@ -1067,12 +1254,12 @@ protected:
   // The form field as an event receiver.
   nsCOMPtr<dom::EventTarget> mEventTarget;
   nsCOMPtr<nsIDOMEventListener> mEventListener;
-  // Weak reference to placeholder for begin/end batch purposes.
-  WeakPtr<PlaceholderTransaction> mPlaceholderTransactionWeak;
+  // Strong reference to placeholder for begin/end batch purposes.
+  RefPtr<PlaceholderTransaction> mPlaceholderTransaction;
   // Name of placeholder transaction.
   nsIAtom* mPlaceholderName;
   // Saved selection state for placeholder transaction batching.
-  mozilla::UniquePtr<SelectionState> mSelState;
+  mozilla::Maybe<SelectionState> mSelState;
   // IME composition this is not null between compositionstart and
   // compositionend.
   RefPtr<TextComposition> mComposition;
@@ -1133,14 +1320,30 @@ protected:
   bool mHidingCaret;
   // Whether spellchecker dictionary is initialized after focused.
   bool mSpellCheckerDictionaryUpdated;
+  // Whether we are an HTML editor class.
+  bool mIsHTMLEditorClass;
 
   friend bool NSCanUnload(nsISupports* serviceMgr);
+  friend class AutoPlaceholderBatch;
   friend class AutoRules;
   friend class AutoSelectionRestorer;
   friend class AutoTransactionsConserveSelection;
   friend class RangeUpdater;
+  friend class nsIEditor;
 };
 
 } // namespace mozilla
+
+mozilla::EditorBase*
+nsIEditor::AsEditorBase()
+{
+  return static_cast<mozilla::EditorBase*>(this);
+}
+
+const mozilla::EditorBase*
+nsIEditor::AsEditorBase() const
+{
+  return static_cast<const mozilla::EditorBase*>(this);
+}
 
 #endif // #ifndef mozilla_EditorBase_h

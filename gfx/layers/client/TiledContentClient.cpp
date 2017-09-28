@@ -7,7 +7,7 @@
 #include <math.h>                       // for ceil, ceilf, floor
 #include <algorithm>
 #include "ClientTiledPaintedLayer.h"     // for ClientTiledPaintedLayer
-#include "GeckoProfiler.h"              // for PROFILER_LABEL
+#include "GeckoProfiler.h"              // for AUTO_PROFILER_LABEL
 #include "ClientLayerManager.h"         // for ClientLayerManager
 #include "gfxContext.h"                 // for gfxContext, etc
 #include "gfxPlatform.h"                // for gfxPlatform
@@ -206,8 +206,8 @@ SharedFrameMetricsHelper::UpdateFromCompositorFrameMetrics(
       fabsf(contentMetrics.GetScrollOffset().y - compositorMetrics.GetScrollOffset().y) <= 2 &&
       fabsf(contentMetrics.GetDisplayPort().x - compositorMetrics.GetDisplayPort().x) <= 2 &&
       fabsf(contentMetrics.GetDisplayPort().y - compositorMetrics.GetDisplayPort().y) <= 2 &&
-      fabsf(contentMetrics.GetDisplayPort().width - compositorMetrics.GetDisplayPort().width) <= 2 &&
-      fabsf(contentMetrics.GetDisplayPort().height - compositorMetrics.GetDisplayPort().height) <= 2) {
+      fabsf(contentMetrics.GetDisplayPort().Width() - compositorMetrics.GetDisplayPort().Width()) <= 2 &&
+      fabsf(contentMetrics.GetDisplayPort().Height() - compositorMetrics.GetDisplayPort().Height()) <= 2) {
     return false;
   }
 
@@ -522,7 +522,7 @@ TileClient::ValidateBackBufferFromFront(const nsIntRegion& aDirtyRegion,
       // is unlikely that we'd save much by copying each individual rect of the
       // region, but we can reevaluate this if it becomes an issue.
       const IntRect rectToCopy = regionToCopy.GetBounds();
-      gfx::IntRect gfxRectToCopy(rectToCopy.x, rectToCopy.y, rectToCopy.width, rectToCopy.height);
+      gfx::IntRect gfxRectToCopy(rectToCopy.x, rectToCopy.y, rectToCopy.Width(), rectToCopy.Height());
       CopyFrontToBack(mFrontBuffer, mBackBuffer, gfxRectToCopy);
 
       if (mBackBufferOnWhite) {
@@ -795,8 +795,7 @@ ClientMultiTiledLayerBuffer::PaintThebes(const nsIntRegion& aNewValidRegion,
   start = PR_IntervalNow();
 #endif
 
-  PROFILER_LABEL("ClientMultiTiledLayerBuffer", "PaintThebesUpdate",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("ClientMultiTiledLayerBuffer::PaintThebes", GRAPHICS);
 
   mNewValidRegion = aNewValidRegion;
   Update(aNewValidRegion, aPaintRegion, aDirtyRegion);
@@ -924,9 +923,9 @@ void ClientMultiTiledLayerBuffer::Update(const nsIntRegion& newValidRegion,
   const TilesPlacement newTiles(floor_div(newBounds.x, scaledTileSize.width),
                           floor_div(newBounds.y, scaledTileSize.height),
                           floor_div(GetTileStart(newBounds.x, scaledTileSize.width)
-                                    + newBounds.width, scaledTileSize.width) + 1,
+                                    + newBounds.Width(), scaledTileSize.width) + 1,
                           floor_div(GetTileStart(newBounds.y, scaledTileSize.height)
-                                    + newBounds.height, scaledTileSize.height) + 1);
+                                    + newBounds.Height(), scaledTileSize.height) + 1);
 
   const size_t oldTileCount = mRetainedTiles.Length();
   const size_t newTileCount = newTiles.mSize.width * newTiles.mSize.height;
@@ -969,7 +968,7 @@ void ClientMultiTiledLayerBuffer::Update(const nsIntRegion& newValidRegion,
       }
     }
 
-    if (mMoz2DTiles.size() > 0) {
+    if (!mMoz2DTiles.empty()) {
       gfx::TileSet tileset;
       for (size_t i = 0; i < mMoz2DTiles.size(); ++i) {
         mMoz2DTiles[i].mTileOrigin -= mTilingOrigin;
@@ -986,7 +985,7 @@ void ClientMultiTiledLayerBuffer::Update(const nsIntRegion& newValidRegion,
       RefPtr<gfxContext> ctx = gfxContext::CreateOrNull(drawTarget);
       MOZ_ASSERT(ctx); // already checked the draw target above
       ctx->SetMatrix(
-        ctx->CurrentMatrix().Scale(mResolution, mResolution).Translate(ThebesPoint(-mTilingOrigin)));
+        ctx->CurrentMatrix().PreScale(mResolution, mResolution).PreTranslate(ThebesPoint(-mTilingOrigin)));
 
       mCallback(&mPaintedLayer, ctx, aPaintRegion, aDirtyRegion,
                 DrawRegionClip::DRAW, nsIntRegion(), mCallbackData);
@@ -1043,8 +1042,7 @@ ClientMultiTiledLayerBuffer::ValidateTile(TileClient& aTile,
                                           const nsIntPoint& aTileOrigin,
                                           const nsIntRegion& aDirtyRegion)
 {
-  PROFILER_LABEL("ClientMultiTiledLayerBuffer", "ValidateTile",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("ClientMultiTiledLayerBuffer::ValidateTile", GRAPHICS);
 
 #ifdef GFX_TILEDLAYER_PREF_WARNINGS
   if (aDirtyRegion.IsComplex()) {
@@ -1108,8 +1106,8 @@ ClientMultiTiledLayerBuffer::ValidateTile(TileClient& aTile,
     const IntRect& dirtyRect = iter.Get();
     gfx::Rect drawRect(dirtyRect.x - aTileOrigin.x,
                        dirtyRect.y - aTileOrigin.y,
-                       dirtyRect.width,
-                       dirtyRect.height);
+                       dirtyRect.Width(),
+                       dirtyRect.Height());
     drawRect.Scale(mResolution);
 
     // Mark the newly updated area as invalid in the front buffer
@@ -1206,8 +1204,9 @@ ClientMultiTiledLayerBuffer::ComputeProgressiveUpdateRegion(const nsIntRegion& a
     // non-low-precision paint, as in that situation, we're about to override
     // front-end's page/viewport metrics.
     if (!aPaintData->mFirstPaint || drawingLowPrecision) {
-      PROFILER_LABEL("ClientMultiTiledLayerBuffer", "ComputeProgressiveUpdateRegion",
-        js::ProfileEntry::Category::GRAPHICS);
+      AUTO_PROFILER_LABEL(
+        "ClientMultiTiledLayerBuffer::ComputeProgressiveUpdateRegion",
+        GRAPHICS);
 
       aRegionToPaint.SetEmpty();
       return aIsRepeated;

@@ -12,10 +12,12 @@
 #include "jsstr.h"
 
 #include "builtin/Eval.h"
+#include "builtin/SelfHostingDefines.h"
 #include "frontend/BytecodeCompiler.h"
 #include "jit/InlinableNatives.h"
 #include "js/UniquePtr.h"
 #include "vm/AsyncFunction.h"
+#include "vm/RegExpObject.h"
 #include "vm/StringBuffer.h"
 
 #include "jsobjinlines.h"
@@ -432,6 +434,109 @@ js::ObjectToSource(JSContext* cx, HandleObject obj)
 }
 #endif /* JS_HAS_TOSOURCE */
 
+static bool
+GetBuiltinTagSlow(JSContext* cx, HandleObject obj, MutableHandleString builtinTag)
+{
+    // Step 4.
+    bool isArray;
+    if (!IsArray(cx, obj, &isArray))
+        return false;
+
+    // Step 5.
+    if (isArray) {
+        builtinTag.set(cx->names().objectArray);
+        return true;
+    }
+
+    // Steps 6-13.
+    ESClass cls;
+    if (!GetBuiltinClass(cx, obj, &cls))
+        return false;
+
+    switch (cls) {
+      case ESClass::String:
+        builtinTag.set(cx->names().objectString);
+        return true;
+      case ESClass::Arguments:
+        builtinTag.set(cx->names().objectArguments);
+        return true;
+      case ESClass::Error:
+        builtinTag.set(cx->names().objectError);
+        return true;
+      case ESClass::Boolean:
+        builtinTag.set(cx->names().objectBoolean);
+        return true;
+      case ESClass::Number:
+        builtinTag.set(cx->names().objectNumber);
+        return true;
+      case ESClass::Date:
+        builtinTag.set(cx->names().objectDate);
+        return true;
+      case ESClass::RegExp:
+        builtinTag.set(cx->names().objectRegExp);
+        return true;
+      default:
+        if (obj->isCallable()) {
+            // Non-standard: Prevent <object> from showing up as Function.
+            RootedObject unwrapped(cx, CheckedUnwrap(obj));
+            if (!unwrapped || !unwrapped->getClass()->isDOMClass()) {
+                builtinTag.set(cx->names().objectFunction);
+                return true;
+            }
+        }
+        builtinTag.set(nullptr);
+        return true;
+    }
+}
+
+static MOZ_ALWAYS_INLINE JSString*
+GetBuiltinTagFast(JSObject* obj, const Class* clasp, JSContext* cx)
+{
+    MOZ_ASSERT(clasp == obj->getClass());
+    MOZ_ASSERT(!clasp->isProxy());
+
+    // Optimize the non-proxy case to bypass GetBuiltinClass.
+    if (clasp == &PlainObject::class_ || clasp == &UnboxedPlainObject::class_) {
+        // This is not handled by GetBuiltinTagSlow, but this case is by far
+        // the most common so we optimize it here.
+        return cx->names().objectObject;
+    }
+
+    if (clasp == &ArrayObject::class_ || clasp == &UnboxedArrayObject::class_)
+        return cx->names().objectArray;
+
+    if (clasp == &JSFunction::class_)
+        return cx->names().objectFunction;
+
+    if (clasp == &StringObject::class_)
+        return cx->names().objectString;
+
+    if (clasp == &NumberObject::class_)
+        return cx->names().objectNumber;
+
+    if (clasp == &BooleanObject::class_)
+        return cx->names().objectBoolean;
+
+    if (clasp == &DateObject::class_)
+        return cx->names().objectDate;
+
+    if (clasp == &RegExpObject::class_)
+        return cx->names().objectRegExp;
+
+    if (obj->is<ArgumentsObject>())
+        return cx->names().objectArguments;
+
+    if (obj->is<ErrorObject>())
+        return cx->names().objectError;
+
+    if (obj->isCallable() && !obj->getClass()->isDOMClass()) {
+        // Non-standard: Prevent <object> from showing up as Function.
+        return cx->names().objectFunction;
+    }
+
+    return nullptr;
+}
+
 // ES6 19.1.3.6
 bool
 js::obj_toString(JSContext* cx, unsigned argc, Value* vp)
@@ -455,53 +560,27 @@ js::obj_toString(JSContext* cx, unsigned argc, Value* vp)
     if (!obj)
         return false;
 
-    // Step 4.
-    bool isArray;
-    if (!IsArray(cx, obj, &isArray))
-        return false;
-
-    // Step 5.
     RootedString builtinTag(cx);
-    if (isArray) {
-        builtinTag = cx->names().objectArray;
-    } else {
-        // Steps 6-13.
-        ESClass cls;
-        if (!GetBuiltinClass(cx, obj, &cls))
+    const Class* clasp = obj->getClass();
+    if (MOZ_UNLIKELY(clasp->isProxy())) {
+        if (!GetBuiltinTagSlow(cx, obj, &builtinTag))
             return false;
-
-        switch (cls) {
-          case ESClass::String:
-            builtinTag = cx->names().objectString;
-            break;
-          case ESClass::Arguments:
-            builtinTag = cx->names().objectArguments;
-            break;
-          case ESClass::Error:
-            builtinTag = cx->names().objectError;
-            break;
-          case ESClass::Boolean:
-            builtinTag = cx->names().objectBoolean;
-            break;
-          case ESClass::Number:
-            builtinTag = cx->names().objectNumber;
-            break;
-          case ESClass::Date:
-            builtinTag = cx->names().objectDate;
-            break;
-          case ESClass::RegExp:
-            builtinTag = cx->names().objectRegExp;
-            break;
-          default:
-            if (obj->isCallable()) {
-                // Non-standard: Prevent <object> from showing up as Function.
-                RootedObject unwrapped(cx, CheckedUnwrap(obj));
-                if (!unwrapped || !unwrapped->getClass()->isDOMClass())
-                    builtinTag = cx->names().objectFunction;
-            }
-            break;
-        }
+    } else {
+        builtinTag = GetBuiltinTagFast(obj, clasp, cx);
+#ifdef DEBUG
+        // Assert this fast path is correct and matches BuiltinTagSlow. The
+        // only exception is the PlainObject case: we special-case it here
+        // because it's so common, but BuiltinTagSlow doesn't handle this.
+        RootedString builtinTagSlow(cx);
+        if (!GetBuiltinTagSlow(cx, obj, &builtinTagSlow))
+            return false;
+        if (clasp == &PlainObject::class_ || clasp == &UnboxedPlainObject::class_)
+            MOZ_ASSERT(!builtinTagSlow);
+        else
+            MOZ_ASSERT(builtinTagSlow == builtinTag);
+#endif
     }
+
     // Step 14.
     // Currently omitted for non-standard fallback.
 
@@ -515,22 +594,16 @@ js::obj_toString(JSContext* cx, unsigned argc, Value* vp)
         // Non-standard (bug 1277801): Use ClassName as a fallback in the interim
         if (!builtinTag) {
             const char* className = GetObjectClassName(cx, obj);
-            // "[object Object]" is by far the most common case at this point,
-            // so we optimize it here.
-            if (strcmp(className, "Object") == 0) {
-                builtinTag = cx->names().objectObject;
-            } else {
-                StringBuffer sb(cx);
-                if (!sb.append("[object ") || !sb.append(className, strlen(className)) ||
-                    !sb.append("]"))
-                {
-                    return false;
-                }
-
-                builtinTag = sb.finishAtom();
-                if (!builtinTag)
-                    return false;
+            StringBuffer sb(cx);
+            if (!sb.append("[object ") || !sb.append(className, strlen(className)) ||
+                !sb.append(']'))
+            {
+                return false;
             }
+
+            builtinTag = sb.finishAtom();
+            if (!builtinTag)
+                return false;
         }
 
         args.rval().setString(builtinTag);
@@ -539,7 +612,7 @@ js::obj_toString(JSContext* cx, unsigned argc, Value* vp)
 
     // Step 17.
     StringBuffer sb(cx);
-    if (!sb.append("[object ") || !sb.append(tag.toString()) || !sb.append("]"))
+    if (!sb.append("[object ") || !sb.append(tag.toString()) || !sb.append(']'))
         return false;
 
     JSString* str = sb.finishAtom();
@@ -548,6 +621,26 @@ js::obj_toString(JSContext* cx, unsigned argc, Value* vp)
 
     args.rval().setString(str);
     return true;
+}
+
+JSString*
+js::ObjectClassToString(JSContext* cx, HandleObject obj)
+{
+    const Class* clasp = obj->getClass();
+
+    if (JSString* tag = GetBuiltinTagFast(obj, clasp, cx))
+        return tag;
+
+    const char* className = clasp->name;
+    StringBuffer sb(cx);
+    if (!sb.append("[object ") ||
+        !sb.append(className, strlen(className)) ||
+        !sb.append(']'))
+    {
+        return nullptr;
+    }
+
+    return sb.finishAtom();
 }
 
 static bool
@@ -593,6 +686,187 @@ obj_setPrototypeOf(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
+static bool
+PropertyIsEnumerable(JSContext* cx, HandleObject obj, HandleId id, bool* enumerable)
+{
+    PropertyResult prop;
+    if (obj->isNative() &&
+        NativeLookupOwnProperty<NoGC>(cx, &obj->as<NativeObject>(), id, &prop))
+    {
+        if (!prop) {
+            *enumerable = false;
+            return true;
+        }
+
+        unsigned attrs = GetPropertyAttributes(obj, prop);
+        *enumerable = (attrs & JSPROP_ENUMERATE) != 0;
+        return true;
+    }
+
+    Rooted<PropertyDescriptor> desc(cx);
+    if (!GetOwnPropertyDescriptor(cx, obj, id, &desc))
+        return false;
+
+    *enumerable = desc.object() && desc.enumerable();
+    return true;
+}
+
+static bool
+TryAssignNative(JSContext* cx, HandleObject to, HandleObject from, bool* optimized)
+{
+    *optimized = false;
+
+    if (!from->isNative() || !to->isNative())
+        return true;
+
+    // Don't use the fast path if |from| may have extra indexed or lazy
+    // properties.
+    NativeObject* fromNative = &from->as<NativeObject>();
+    if (fromNative->getDenseInitializedLength() > 0 ||
+        fromNative->isIndexed() ||
+        fromNative->is<TypedArrayObject>() ||
+        fromNative->getClass()->getNewEnumerate() ||
+        fromNative->getClass()->getEnumerate())
+    {
+        return true;
+    }
+
+    // Get a list of |from| shapes. As long as from->lastProperty() == fromShape
+    // we can use this to speed up both the enumerability check and the GetProp.
+
+    using ShapeVector = GCVector<Shape*, 8>;
+    Rooted<ShapeVector> shapes(cx, ShapeVector(cx));
+
+    RootedShape fromShape(cx, fromNative->lastProperty());
+    for (Shape::Range<NoGC> r(fromShape); !r.empty(); r.popFront()) {
+        // Symbol properties need to be assigned last. For now fall back to the
+        // slow path if we see a symbol property.
+        if (MOZ_UNLIKELY(JSID_IS_SYMBOL(r.front().propidRaw())))
+            return true;
+        if (MOZ_UNLIKELY(!shapes.append(&r.front())))
+            return false;
+    }
+
+    *optimized = true;
+
+    RootedShape shape(cx);
+    RootedValue propValue(cx);
+    RootedId nextKey(cx);
+    RootedValue toReceiver(cx, ObjectValue(*to));
+
+    for (size_t i = shapes.length(); i > 0; i--) {
+        shape = shapes[i - 1];
+        nextKey = shape->propid();
+
+        // Ensure |from| is still native: a getter/setter might have turned
+        // |from| or |to| into an unboxed object or it could have been swapped
+        // with a non-native object.
+        if (MOZ_LIKELY(from->isNative() &&
+                       from->as<NativeObject>().lastProperty() == fromShape &&
+                       shape->hasDefaultGetter() &&
+                       shape->hasSlot()))
+        {
+            if (!shape->enumerable())
+                continue;
+            propValue = from->as<NativeObject>().getSlot(shape->slot());
+        } else {
+            // |from| changed shape or the property is not a data property, so
+            // we have to do the slower enumerability check and GetProp.
+            bool enumerable;
+            if (!PropertyIsEnumerable(cx, from, nextKey, &enumerable))
+                return false;
+            if (!enumerable)
+                continue;
+            if (!GetProperty(cx, from, from, nextKey, &propValue))
+                return false;
+        }
+
+        ObjectOpResult result;
+        if (MOZ_UNLIKELY(!SetProperty(cx, to, nextKey, propValue, toReceiver, result)))
+            return false;
+        if (MOZ_UNLIKELY(!result.checkStrict(cx, to, nextKey)))
+            return false;
+    }
+
+    return true;
+}
+
+static bool
+AssignSlow(JSContext* cx, HandleObject to, HandleObject from)
+{
+    // Step 4.b.ii.
+    AutoIdVector keys(cx);
+    if (!GetPropertyKeys(cx, from, JSITER_OWNONLY | JSITER_HIDDEN | JSITER_SYMBOLS, &keys))
+        return false;
+
+    // Step 4.c.
+    RootedId nextKey(cx);
+    RootedValue propValue(cx);
+    for (size_t i = 0, len = keys.length(); i < len; i++) {
+        nextKey = keys[i];
+
+        // Step 4.c.i.
+        bool enumerable;
+        if (MOZ_UNLIKELY(!PropertyIsEnumerable(cx, from, nextKey, &enumerable)))
+            return false;
+        if (!enumerable)
+            continue;
+
+        // Step 4.c.ii.1.
+        if (MOZ_UNLIKELY(!GetProperty(cx, from, from, nextKey, &propValue)))
+            return false;
+
+        // Step 4.c.ii.2.
+        if (MOZ_UNLIKELY(!SetProperty(cx, to, nextKey, propValue)))
+            return false;
+    }
+
+    return true;
+}
+
+// ES2018 draft rev 48ad2688d8f964da3ea8c11163ef20eb126fb8a4
+// 19.1.2.1 Object.assign(target, ...sources)
+static bool
+obj_assign(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    // Step 1.
+    RootedObject to(cx, ToObject(cx, args.get(0)));
+    if (!to)
+        return false;
+
+    // Note: step 2 is implicit. If there are 0 arguments, ToObject throws. If
+    // there's 1 argument, the loop below is a no-op.
+
+    // Step 4.
+    RootedObject from(cx);
+    for (size_t i = 1; i < args.length(); i++) {
+        // Step 4.a.
+        if (args[i].isNullOrUndefined())
+            continue;
+
+        // Step 4.b.i.
+        from = ToObject(cx, args[i]);
+        if (!from)
+            return false;
+
+        // Steps 4.b.ii, 4.c.
+        bool optimized;
+        if (!TryAssignNative(cx, to, from, &optimized))
+            return false;
+        if (optimized)
+            continue;
+
+        if (!AssignSlow(cx, to, from))
+            return false;
+    }
+
+    // Step 5.
+    args.rval().setObject(*to);
+    return true;
+}
+
 #if JS_HAS_OBJ_WATCHPOINT
 
 bool
@@ -632,8 +906,14 @@ obj_watch(JSContext* cx, unsigned argc, Value* vp)
     if (!obj)
         return false;
 
-    if (!GlobalObject::warnOnceAboutWatch(cx, obj))
-        return false;
+    if (!cx->compartment()->warnedAboutObjectWatch) {
+        if (!JS_ReportErrorFlagsAndNumberASCII(cx, JSREPORT_WARNING, GetErrorMessage, nullptr,
+                                               JSMSG_OBJECT_WATCH_DEPRECATED))
+        {
+            return false;
+        }
+        cx->compartment()->warnedAboutObjectWatch = true;
+    }
 
     if (args.length() <= 1) {
         ReportMissingArg(cx, args.calleev(), 1);
@@ -664,8 +944,14 @@ obj_unwatch(JSContext* cx, unsigned argc, Value* vp)
     if (!obj)
         return false;
 
-    if (!GlobalObject::warnOnceAboutWatch(cx, obj))
-        return false;
+    if (!cx->compartment()->warnedAboutObjectWatch) {
+        if (!JS_ReportErrorFlagsAndNumberASCII(cx, JSREPORT_WARNING, GetErrorMessage, nullptr,
+                                               JSMSG_OBJECT_WATCH_DEPRECATED))
+        {
+            return false;
+        }
+        cx->compartment()->warnedAboutObjectWatch = true;
+    }
 
     RootedId id(cx);
     if (args.length() != 0) {
@@ -838,26 +1124,96 @@ js::obj_create(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
-// ES6 draft rev27 (2014/08/24) 19.1.2.6 Object.getOwnPropertyDescriptor(O, P)
+// ES2017 draft rev 6859bb9ccaea9c6ede81d71e5320e3833b92cb3e
+// 6.2.4.4 FromPropertyDescriptor ( Desc )
+static bool
+FromPropertyDescriptorToArray(JSContext* cx, Handle<PropertyDescriptor> desc, MutableHandleValue vp)
+{
+    // Step 1.
+    if (!desc.object()) {
+        vp.setUndefined();
+        return true;
+    }
+
+    // Steps 2-11.
+    // Retrieve all property descriptor fields and place them into the result
+    // array. The actual return object is created in self-hosted code for
+    // performance reasons.
+
+    int32_t attrsAndKind = 0;
+    if (desc.enumerable())
+        attrsAndKind |= ATTR_ENUMERABLE;
+    if (desc.configurable())
+        attrsAndKind |= ATTR_CONFIGURABLE;
+    if (!desc.isAccessorDescriptor()) {
+        if (desc.writable())
+            attrsAndKind |= ATTR_WRITABLE;
+        attrsAndKind |= DATA_DESCRIPTOR_KIND;
+    } else {
+        attrsAndKind |= ACCESSOR_DESCRIPTOR_KIND;
+    }
+
+    RootedArrayObject result(cx);
+    if (!desc.isAccessorDescriptor()) {
+        result = NewDenseFullyAllocatedArray(cx, 2);
+        if (!result)
+            return false;
+        result->setDenseInitializedLength(2);
+
+        result->initDenseElement(PROP_DESC_ATTRS_AND_KIND_INDEX, Int32Value(attrsAndKind));
+        result->initDenseElement(PROP_DESC_VALUE_INDEX, desc.value());
+    } else {
+        result = NewDenseFullyAllocatedArray(cx, 3);
+        if (!result)
+            return false;
+        result->setDenseInitializedLength(3);
+
+        result->initDenseElement(PROP_DESC_ATTRS_AND_KIND_INDEX, Int32Value(attrsAndKind));
+
+        if (JSObject* get = desc.getterObject())
+            result->initDenseElement(PROP_DESC_GETTER_INDEX, ObjectValue(*get));
+        else
+            result->initDenseElement(PROP_DESC_GETTER_INDEX, UndefinedValue());
+
+        if (JSObject* set = desc.setterObject())
+            result->initDenseElement(PROP_DESC_SETTER_INDEX, ObjectValue(*set));
+        else
+            result->initDenseElement(PROP_DESC_SETTER_INDEX, UndefinedValue());
+    }
+
+    vp.setObject(*result);
+    return true;
+}
+
+// ES2017 draft rev 6859bb9ccaea9c6ede81d71e5320e3833b92cb3e
+// 19.1.2.6 Object.getOwnPropertyDescriptor ( O, P )
 bool
-js::obj_getOwnPropertyDescriptor(JSContext* cx, unsigned argc, Value* vp)
+js::GetOwnPropertyDescriptorToArray(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 2);
 
-    // Steps 1-2.
-    RootedObject obj(cx, ToObject(cx, args.get(0)));
+    // Step 1.
+    RootedObject obj(cx, ToObject(cx, args[0]));
     if (!obj)
         return false;
 
-    // Steps 3-4.
+    // Step 2.
     RootedId id(cx);
-    if (!ToPropertyKey(cx, args.get(1), &id))
+    if (!ToPropertyKey(cx, args[1], &id))
         return false;
 
-    // Steps 5-7.
+    // Step 3.
     Rooted<PropertyDescriptor> desc(cx);
-    return GetOwnPropertyDescriptor(cx, obj, id, &desc) &&
-           JS::FromPropertyDescriptor(cx, desc, args.rval());
+    if (!GetOwnPropertyDescriptor(cx, obj, id, &desc))
+        return false;
+
+    // [[GetOwnProperty]] is spec'ed to always return a complete property
+    // descriptor record (ES2017, 6.1.7.3, invariants of [[GetOwnProperty]]).
+    desc.assertCompleteIfFound();
+
+    // Step 4.
+    return FromPropertyDescriptorToArray(cx, desc, args.rval());
 }
 
 enum EnumerableOwnPropertiesKind {
@@ -1268,7 +1624,7 @@ static const JSFunctionSpec object_methods[] = {
 #if JS_HAS_TOSOURCE
     JS_FN(js_toSource_str,             obj_toSource,                0,0),
 #endif
-    JS_FN(js_toString_str,             obj_toString,                0,0),
+    JS_INLINABLE_FN(js_toString_str,   obj_toString,                0,0, ObjectToString),
     JS_SELF_HOSTED_FN(js_toLocaleString_str, "Object_toLocaleString", 0, 0),
     JS_SELF_HOSTED_FN(js_valueOf_str,  "Object_valueOf",            0,0),
 #if JS_HAS_OBJ_WATCHPOINT
@@ -1295,16 +1651,16 @@ static const JSPropertySpec object_properties[] = {
 };
 
 static const JSFunctionSpec object_static_methods[] = {
-    JS_SELF_HOSTED_FN("assign",        "ObjectStaticAssign",        2, 0),
+    JS_FN("assign",                    obj_assign,                  2, 0),
     JS_SELF_HOSTED_FN("getPrototypeOf", "ObjectGetPrototypeOf",     1, 0),
     JS_FN("setPrototypeOf",            obj_setPrototypeOf,          2, 0),
-    JS_FN("getOwnPropertyDescriptor",  obj_getOwnPropertyDescriptor,2, 0),
+    JS_SELF_HOSTED_FN("getOwnPropertyDescriptor", "ObjectGetOwnPropertyDescriptor", 2, 0),
     JS_SELF_HOSTED_FN("getOwnPropertyDescriptors", "ObjectGetOwnPropertyDescriptors", 1, 0),
     JS_FN("keys",                      obj_keys,                    1, 0),
     JS_FN("values",                    obj_values,                  1, 0),
     JS_FN("entries",                   obj_entries,                 1, 0),
     JS_FN("is",                        obj_is,                      2, 0),
-    JS_FN("defineProperty",            obj_defineProperty,          3, 0),
+    JS_SELF_HOSTED_FN("defineProperty", "ObjectDefineProperty",     3, 0),
     JS_FN("defineProperties",          obj_defineProperties,        2, 0),
     JS_INLINABLE_FN("create",          obj_create,                  2, 0, ObjectCreate),
     JS_FN("getOwnPropertyNames",       obj_getOwnPropertyNames,     1, 0),
@@ -1326,8 +1682,14 @@ CreateObjectConstructor(JSContext* cx, JSProtoKey key)
         return nullptr;
 
     /* Create the Object function now that we have a [[Prototype]] for it. */
-    return NewNativeConstructor(cx, obj_construct, 1, HandlePropertyName(cx->names().Object),
-                                gc::AllocKind::FUNCTION, SingletonObject);
+    JSFunction *fun = NewNativeConstructor(cx, obj_construct, 1,
+                                           HandlePropertyName(cx->names().Object),
+                                           gc::AllocKind::FUNCTION, SingletonObject);
+    if (!fun)
+        return nullptr;
+
+    fun->setJitInfo(&jit::JitInfo_Object);
+    return fun;
 }
 
 static JSObject*
@@ -1370,8 +1732,7 @@ FinishObjectClassInit(JSContext* cx, JS::HandleObject ctor, JS::HandleObject pro
 
     /* ES5 15.1.2.1. */
     RootedId evalId(cx, NameToId(cx->names().eval));
-    JSObject* evalobj = DefineFunction(cx, global, evalId, IndirectEval, 1,
-                                       JSFUN_STUB_GSOPS | JSPROP_RESOLVING);
+    JSObject* evalobj = DefineFunction(cx, global, evalId, IndirectEval, 1, JSPROP_RESOLVING);
     if (!evalobj)
         return false;
     global->setOriginalEval(evalobj);

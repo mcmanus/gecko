@@ -105,7 +105,6 @@ public:
   virtual bool NeedsToObserve(const ReflowInput& aReflowInput) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual nsresult ProcessBorders(nsTableFrame* aFrame,
@@ -197,7 +196,7 @@ public:
   /** set the desired size returned by this frame during its last reflow */
   inline void SetDesiredSize(const ReflowOutput & aDesiredSize);
 
-  bool GetContentEmpty();
+  bool GetContentEmpty() const;
   void SetContentEmpty(bool aContentEmpty);
 
   bool HasPctOverBSize();
@@ -220,10 +219,14 @@ public:
   {
     return nsContainerFrame::IsFrameOfType(aFlags & ~(nsIFrame::eTablePart));
   }
-  
+
   virtual void InvalidateFrame(uint32_t aDisplayItemKey = 0) override;
   virtual void InvalidateFrameWithRect(const nsRect& aRect, uint32_t aDisplayItemKey = 0) override;
   virtual void InvalidateFrameForRemoval() override { InvalidateFrameSubtree(); }
+
+  bool ShouldPaintBordersAndBackgrounds() const;
+
+  bool ShouldPaintBackground(nsDisplayListBuilder* aBuilder);
 
 protected:
   nsTableCellFrame(nsStyleContext* aContext, nsTableFrame* aTableFrame,
@@ -265,7 +268,7 @@ inline void nsTableCellFrame::SetDesiredSize(const ReflowOutput & aDesiredSize)
   mDesiredSize = aDesiredSize.Size(wm).ConvertTo(GetWritingMode(), wm);
 }
 
-inline bool nsTableCellFrame::GetContentEmpty()
+inline bool nsTableCellFrame::GetContentEmpty() const
 {
   return HasAnyStateBits(NS_TABLE_CELL_CONTENT_EMPTY);
 }
@@ -305,10 +308,6 @@ public:
   ~nsBCTableCellFrame();
 
   virtual nsMargin GetUsedBorder() const override;
-  virtual bool GetBorderRadii(const nsSize& aFrameSize,
-                              const nsSize& aBorderArea,
-                              Sides aSkipSides,
-                              nscoord aRadii[8]) const override;
 
   // Get the *inner half of the border only*, in twips.
   virtual LogicalMargin GetBorderWidth(WritingMode aWM) const override;

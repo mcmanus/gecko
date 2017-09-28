@@ -11,9 +11,11 @@ const {DevToolsShim} = Cu.import("chrome://devtools-shim/content/DevToolsShim.js
 
 // Load gDevToolsBrowser toolbox lazily as they need gDevTools to be fully initialized
 loader.lazyRequireGetter(this, "TargetFactory", "devtools/client/framework/target", true);
+loader.lazyRequireGetter(this, "TabTarget", "devtools/client/framework/target", true);
 loader.lazyRequireGetter(this, "Toolbox", "devtools/client/framework/toolbox", true);
 loader.lazyRequireGetter(this, "ToolboxHostManager", "devtools/client/framework/toolbox-host-manager", true);
 loader.lazyRequireGetter(this, "gDevToolsBrowser", "devtools/client/framework/devtools-browser", true);
+loader.lazyRequireGetter(this, "HUDService", "devtools/client/webconsole/hudservice", true);
 loader.lazyImporter(this, "ScratchpadManager", "resource://devtools/client/scratchpad/scratchpad-manager.jsm");
 
 // Dependencies required for addon sdk compatibility layer.
@@ -21,10 +23,12 @@ loader.lazyRequireGetter(this, "DebuggerServer", "devtools/server/main", true);
 loader.lazyRequireGetter(this, "DebuggerClient", "devtools/shared/client/main", true);
 loader.lazyImporter(this, "BrowserToolboxProcess", "resource://devtools/client/framework/ToolboxProcess.jsm");
 
+loader.lazyRequireGetter(this, "WebExtensionInspectedWindowFront",
+      "devtools/shared/fronts/webextension-inspected-window", true);
+
 const {defaultTools: DefaultTools, defaultThemes: DefaultThemes} =
   require("devtools/client/definitions");
-const EventEmitter = require("devtools/shared/event-emitter");
-const {JsonView} = require("devtools/client/jsonview/main");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 const AboutDevTools = require("devtools/client/framework/about-devtools-toolbox");
 const {Task} = require("devtools/shared/task");
 const {getTheme, setTheme, addThemeObserver, removeThemeObserver} =
@@ -43,9 +47,6 @@ function DevTools() {
   this._toolboxes = new Map(); // Map<target, toolbox>
   // List of toolboxes that are still in process of creation
   this._creatingToolboxes = new Map(); // Map<target, toolbox Promise>
-
-  // JSON Viewer for 'application/json' documents.
-  JsonView.initialize();
 
   AboutDevTools.register();
 
@@ -401,24 +402,32 @@ DevTools.prototype = {
   },
 
   /**
-   * Get the array of currently opened scratchpad windows.
+   * Called from SessionStore.jsm in mozilla-central when saving the current state.
    *
-   * @return {Array} array of currently opened scratchpad windows.
-   *         Empty array if the scratchpad manager is not loaded.
+   * @param {Object} state
+   *                 A SessionStore state object that gets modified by reference
    */
-  getOpenedScratchpads: function () {
+  saveDevToolsSession: function (state) {
+    state.browserConsole = HUDService.getBrowserConsoleSessionState();
+
     // Check if the module is loaded to avoid loading ScratchpadManager for no reason.
-    if (!Cu.isModuleLoaded("resource://devtools/client/scratchpad/scratchpad-manager.jsm")) {
-      return [];
+    state.scratchpads = [];
+    if (Cu.isModuleLoaded("resource://devtools/client/scratchpad/scratchpad-manager.jsm")) {
+      state.scratchpads = ScratchpadManager.getSessionState();
     }
-    return ScratchpadManager.getSessionState();
   },
 
   /**
-   * Restore the provided array of scratchpad window states.
+   * Restore the devtools session state as provided by SessionStore.
    */
-  restoreScratchpadSession: function (scratchpads) {
-    ScratchpadManager.restoreSession(scratchpads);
+  restoreDevToolsSession: function ({scratchpads, browserConsole}) {
+    if (scratchpads) {
+      ScratchpadManager.restoreSession(scratchpads);
+    }
+
+    if (browserConsole && !HUDService.getBrowserConsole()) {
+      HUDService.toggleBrowserConsole();
+    }
   },
 
   /**
@@ -575,6 +584,81 @@ DevTools.prototype = {
   },
 
   /**
+   * Compatibility layer for web-extensions. Used by DevToolsShim for
+   * browser/components/extensions/ext-devtools.js
+   *
+   * web-extensions need to use dedicated instances of TabTarget and cannot reuse the
+   * cached instances managed by DevTools target factory.
+   */
+  createTargetForTab: function (tab) {
+    return new TabTarget(tab);
+  },
+
+  /**
+   * Compatibility layer for web-extensions. Used by DevToolsShim for
+   * browser/components/extensions/ext-devtools-inspectedWindow.js
+   */
+  createWebExtensionInspectedWindowFront: function (tabTarget) {
+    return new WebExtensionInspectedWindowFront(tabTarget.client, tabTarget.form);
+  },
+
+  /**
+   * Compatibility layer for web-extensions. Used by DevToolsShim for
+   * toolkit/components/extensions/ext-c-toolkit.js
+   */
+  openBrowserConsole: function () {
+    let {HUDService} = require("devtools/client/webconsole/hudservice");
+    HUDService.openBrowserConsoleOrFocus();
+  },
+
+  /**
+   * Called from the DevToolsShim, used by nsContextMenu.js.
+   *
+   * @param {XULTab} tab
+   *        The browser tab on which inspect node was used.
+   * @param {Array} selectors
+   *        An array of CSS selectors to find the target node. Several selectors can be
+   *        needed if the element is nested in frames and not directly in the root
+   *        document.
+   * @return {Promise} a promise that resolves when the node is selected in the inspector
+   *         markup view.
+   */
+  async inspectNode(tab, nodeSelectors) {
+    let target = TargetFactory.forTab(tab);
+
+    let toolbox = await gDevTools.showToolbox(target, "inspector");
+    let inspector = toolbox.getCurrentPanel();
+
+    // new-node-front tells us when the node has been selected, whether the
+    // browser is remote or not.
+    let onNewNode = inspector.selection.once("new-node-front");
+
+    // Evaluate the cross iframes query selectors
+    async function querySelectors(nodeFront) {
+      let selector = nodeSelectors.pop();
+      if (!selector) {
+        return nodeFront;
+      }
+      nodeFront = await inspector.walker.querySelector(nodeFront, selector);
+      if (nodeSelectors.length > 0) {
+        let { nodes } = await inspector.walker.children(nodeFront);
+        // This is the NodeFront for the document node inside the iframe
+        nodeFront = nodes[0];
+      }
+      return querySelectors(nodeFront);
+    }
+    let nodeFront = await inspector.walker.getRootNode();
+    nodeFront = await querySelectors(nodeFront);
+    // Select the final node
+    inspector.selection.setNodeFront(nodeFront, "browser-context-menu");
+
+    await onNewNode;
+    // Now that the node has been selected, wait until the inspector is
+    // fully updated.
+    await inspector.once("inspector-updated");
+  },
+
+  /**
    * Either the SDK Loader has been destroyed by the add-on contribution
    * workflow, or firefox is shutting down.
 
@@ -596,8 +680,6 @@ DevTools.prototype = {
     for (let [key, ] of this.getToolDefinitionMap()) {
       this.unregisterTool(key, true);
     }
-
-    JsonView.destroy();
 
     gDevTools.unregisterDefaults();
 

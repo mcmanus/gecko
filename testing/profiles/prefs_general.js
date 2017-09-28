@@ -7,6 +7,7 @@ user_pref("browser.firstrun.show.uidiscovery", false);
 user_pref("browser.startup.page", 0); // use about:blank, not browser.startup.homepage
 user_pref("browser.search.suggest.timeout", 10000); // use a 10s suggestion timeout in tests
 user_pref("browser.ui.layout.tablet", 0); // force tablet UI off
+user_pref("browser.urlbar.speculativeConnect.enabled", false);
 user_pref("dom.allow_scripts_to_close_windows", true);
 user_pref("dom.disable_open_during_load", false);
 user_pref("dom.experimental_forms", true); // on for testing
@@ -32,6 +33,9 @@ user_pref("javascript.options.showInConsole", true);
 user_pref("devtools.browsertoolbox.panel", "jsdebugger");
 user_pref("devtools.debugger.remote-port", 6023);
 user_pref("devtools.devedition.promo.enabled", false);
+user_pref("devtools.chrome.enabled", false);
+user_pref("devtools.debugger.remote-enabled", false);
+user_pref("devtools.debugger.prompt-connection", true);
 user_pref("browser.EULA.override", true);
 user_pref("gfx.color_management.force_srgb", true);
 user_pref("gfx.logging.level", 1);
@@ -58,6 +62,7 @@ user_pref("app.update.url.android", "");
 // Make sure GMPInstallManager won't hit the network.
 user_pref("media.gmp-manager.url.override", "http://%(server)s/dummy-gmp-manager.xml");
 user_pref("media.gmp-manager.updateEnabled", false);
+user_pref("media.hls.server.url", "http://%(server)s/tests/dom/media/test/hls");
 user_pref("dom.w3c_touch_events.enabled", 1);
 user_pref("layout.accessiblecaret.enabled_on_touch", false);
 user_pref("dom.webcomponents.enabled", true);
@@ -90,6 +95,7 @@ user_pref("extensions.installDistroAddons", false);
 user_pref("extensions.defaultProviders.enabled", true);
 user_pref("xpinstall.signatures.required", false);
 user_pref("extensions.allow-non-mpc-extensions", true);
+user_pref("extensions.legacy.enabled", true);
 
 user_pref("geo.wifi.uri", "http://%(server)s/tests/dom/tests/mochitest/geolocation/network_geolocation.sjs");
 user_pref("geo.wifi.timeToWaitBeforeSending", 2000);
@@ -99,8 +105,6 @@ user_pref("geo.wifi.logging.enabled", true);
 // Prevent connection to the push server for tests.
 user_pref("dom.push.connection.enabled", false);
 
-// Make url-classifier updates so rare that they won't affect tests
-user_pref("urlclassifier.updateinterval", 172800);
 // Point the url-classifier to the local testing server for fast failures
 user_pref("browser.safebrowsing.downloads.remote.url", "http://%(server)s/safebrowsing-dummy/update");
 user_pref("browser.safebrowsing.provider.google.gethashURL", "http://%(server)s/safebrowsing-dummy/gethash");
@@ -189,9 +193,6 @@ user_pref("layout.css.prefixes.device-pixel-ratio-webkit", true);
 // Enable CSS shape-outside for testing
 user_pref("layout.css.shape-outside.enabled", true);
 
-// Enable CSS text-justify for testing
-user_pref("layout.css.text-justify.enabled", true);
-
 // Disable spammy layout warnings because they pollute test logs
 user_pref("layout.spammy_warnings.enabled", false);
 
@@ -247,9 +248,21 @@ user_pref("browser.contentHandlers.types.5.uri", "http://test1.example.org/rss?u
 
 // We want to collect telemetry, but we don't want to send in the results.
 user_pref("toolkit.telemetry.server", "https://%(server)s/telemetry-dummy/");
-// Don't new-profile' ping on new profiles during tests, otherwise the testing framework
+// Don't send 'new-profile' ping on new profiles during tests, otherwise the testing framework
 // might wait on the pingsender to finish and slow down tests.
 user_pref("toolkit.telemetry.newProfilePing.enabled", false);
+// Don't send 'bhr' ping during tests, otherwise the testing framework might
+// wait on the pingsender to finish and slow down tests.
+user_pref("toolkit.telemetry.bhrPing.enabled", false);
+// Don't send the 'shutdown' ping using the pingsender on the first session using
+// the 'pingsender' process. Valgrind marks the process as leaky (e.g. see bug 1364068
+// for the 'new-profile' ping) but does not provide enough information
+// to suppress the leak. Running locally does not reproduce the issue,
+// so disable this until we rewrite the pingsender in Rust (bug 1339035).
+user_pref("toolkit.telemetry.shutdownPingSender.enabledFirstSession", false);
+// Don't send the 'first-shutdown' during tests, otherwise tests expecting
+// main and subsession pings will fail.
+user_pref("toolkit.telemetry.firstShutdownPing.enabled", false);
 
 // A couple of preferences with default values to test that telemetry preference
 // watching is working.
@@ -291,6 +304,12 @@ user_pref("browser.translation.engine", "bing");
 // Make sure we don't try to load snippets from the network.
 user_pref("browser.aboutHomeSnippets.updateUrl", "nonexistent://test");
 
+// Use an empty list of sites to avoid fetching
+user_pref("browser.newtabpage.activity-stream.default.sites", "");
+user_pref("browser.newtabpage.activity-stream.telemetry", false);
+user_pref("browser.newtabpage.activity-stream.feeds.section.topstories", false);
+user_pref("browser.newtabpage.activity-stream.feeds.snippets", false);
+
 // Don't fetch directory tiles data from real servers
 user_pref("browser.newtabpage.directory.source", 'data:application/json,{"testing":1}');
 
@@ -306,7 +325,7 @@ user_pref("browser.search.countryCode", "US");
 user_pref("browser.search.geoSpecificDefaults", false);
 
 // Make sure Shield doesn't hit the network.
-user_pref("extensions.shield-recipe-client.api_url", "https://example.com/selfsupport-dummy/");
+user_pref("extensions.shield-recipe-client.api_url", "");
 
 user_pref("media.eme.enabled", true);
 
@@ -364,7 +383,7 @@ user_pref("media.openUnsupportedTypeWithExternalApp", false);
 user_pref("signon.rememberSignons", false);
 
 // Enable form autofill feature testing.
-user_pref("extensions.formautofill.experimental", true);
+user_pref("extensions.formautofill.available", "on");
 
 // Disable all recommended Marionette preferences for Gecko tests.
 // The prefs recommended by Marionette are typically geared towards
@@ -373,3 +392,8 @@ user_pref("marionette.prefs.recommended", false);
 
 // Disable Screenshots by default for now
 user_pref("extensions.screenshots.system-disabled", true);
+
+// Set places maintenance far in the future to avoid it kicking in during tests.
+// The maintenance can take a relatively long time which may cause unnecessary
+// intermittents and slow down tests.
+user_pref("places.database.lastMaintenance", 7258114800);

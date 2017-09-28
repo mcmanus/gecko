@@ -12,6 +12,7 @@
 #include "nsISupportsImpl.h"
 #include "nsITextServicesDocument.h"
 #include "nsIWeakReferenceUtils.h"
+#include "nsStringFwd.h"
 #include "nsTArray.h"
 #include "nscore.h"
 
@@ -27,7 +28,6 @@ class nsIEditor;
 class nsISelection;
 class nsISelectionController;
 class nsITextServicesFilter;
-class nsString;
 
 /** implementation of a text services object.
  *
@@ -160,11 +160,13 @@ public:
   NS_IMETHOD DidDeleteSelection(nsISelection *aSelection) override;
 
   /* Helper functions */
-  static nsresult GetRangeEndPoints(nsRange* aRange, nsIDOMNode** aParent1,
-                                    int32_t* aOffset1, nsIDOMNode** aParent2,
-                                    int32_t* aOffset2);
-  static nsresult CreateRange(nsIDOMNode* aStartParent, int32_t aStartOffset,
-                              nsIDOMNode* aEndParent, int32_t aEndOffset,
+  static nsresult GetRangeEndPoints(nsRange* aRange,
+                                    nsIDOMNode** aStartContainer,
+                                    int32_t* aStartOffset,
+                                    nsIDOMNode** aEndContainer,
+                                    int32_t* aEndOffset);
+  static nsresult CreateRange(nsIDOMNode* aStartContainer, int32_t aStartOffset,
+                              nsIDOMNode* aEndContainer, int32_t aEndOffset,
                               nsRange** aRange);
 
 private:
@@ -176,7 +178,7 @@ private:
   nsresult GetDocumentContentRootNode(nsIDOMNode **aNode);
   nsresult CreateDocumentContentRange(nsRange** aRange);
   nsresult CreateDocumentContentRootToNodeOffsetRange(nsIDOMNode* aParent,
-                                                      int32_t aOffset,
+                                                      uint32_t aOffset,
                                                       bool aToStart,
                                                       nsRange** aRange);
   nsresult CreateDocumentContentIterator(nsIContentIterator **aIterator);

@@ -17,8 +17,8 @@
 
 class nsIGlobalObject;
 class nsStyleContext;
+class ServoComputedData;
 struct nsStyleDisplay;
-struct ServoComputedValues;
 
 namespace mozilla {
 namespace css {
@@ -29,6 +29,8 @@ class KeyframeEffectReadOnly;
 class Promise;
 } /* namespace dom */
 
+class GeckoStyleContext;
+class ServoStyleContext;
 enum class CSSPseudoElementType : uint8_t;
 struct NonOwningAnimationTarget;
 
@@ -41,7 +43,7 @@ struct AnimationEventInfo {
   AnimationEventInfo(dom::Element* aElement,
                      CSSPseudoElementType aPseudoType,
                      EventMessage aMessage,
-                     const nsSubstring& aAnimationName,
+                     const nsAString& aAnimationName,
                      const StickyTimeDuration& aElapsedTime,
                      const TimeStamp& aTimeStamp,
                      dom::Animation* aAnimation)
@@ -76,7 +78,7 @@ class CSSAnimation final : public Animation
 {
 public:
  explicit CSSAnimation(nsIGlobalObject* aGlobal,
-                       const nsSubstring& aAnimationName)
+                       const nsAString& aAnimationName)
     : dom::Animation(aGlobal)
     , mAnimationName(aAnimationName)
     , mIsStylePaused(false)
@@ -109,6 +111,14 @@ public:
   virtual void Play(ErrorResult& aRv, LimitBehavior aLimitBehavior) override;
   virtual void Pause(ErrorResult& aRv) override;
 
+  // NOTE: tabbrowser.xml currently relies on the fact that reading the
+  // currentTime of a CSSAnimation does *not* flush style (whereas reading the
+  // playState does). If CSS Animations 2 specifies that reading currentTime
+  // also flushes style we will need to find another way to detect canceled
+  // animations in tabbrowser.xml. On the other hand, if CSS Animations 2
+  // specifies that reading playState does *not* flush style (and we drop the
+  // following override), then we should update tabbrowser.xml to check
+  // the playState instead.
   virtual AnimationPlayState PlayStateFromJS() const override;
   virtual void PlayFromJS(ErrorResult& aRv) override;
 
@@ -323,7 +333,7 @@ public:
    * aStyleContext may be a style context for aElement or for its
    * :before or :after pseudo-element.
    */
-  void UpdateAnimations(nsStyleContext* aStyleContext,
+  void UpdateAnimations(mozilla::GeckoStyleContext* aStyleContext,
                         mozilla::dom::Element* aElement);
 
   /**
@@ -333,7 +343,7 @@ public:
   void UpdateAnimations(
     mozilla::dom::Element* aElement,
     mozilla::CSSPseudoElementType aPseudoType,
-    const ServoComputedValues* aComputedValues);
+    const mozilla::ServoStyleContext* aComputedValues);
 
   /**
    * Add a pending event.

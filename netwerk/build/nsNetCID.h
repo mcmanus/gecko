@@ -50,7 +50,7 @@
 
 // service implementing nsIProxyAutoConfig.
 #define NS_PROXYAUTOCONFIG_CONTRACTID \
-    "@mozilla.org/network/proxy-auto-config;1" 
+    "@mozilla.org/network/proxy-auto-config;1"
 #define NS_PROXYAUTOCONFIG_CID                       \
 { /* 63ac8c66-1dd2-11b2-b070-84d00d3eaece */         \
     0x63ac8c66,                                      \
@@ -769,18 +769,6 @@
 }
 
 /******************************************************************************
- * netwerk/protocol/rtsp / classes
- */
-
-#define NS_RTSPPROTOCOLHANDLER_CID                   \
-{ /* {5bb4b980-7b10-11e2-b92a-0800200c9a66} */       \
-  0x5bb4b980,                                        \
-  0x7b10,                                            \
-  0x11e2,                                            \
-  {0xb9, 0x2a, 0x08, 0x00, 0x20, 0x0c, 0x9a, 0x66}   \
-}
-
-/******************************************************************************
  * netwerk/protocol/about/ classes
  */
 
@@ -840,7 +828,7 @@
  * netwerk/mime classes
  */
 
-// {1F4DBCF7-245C-4c8c-943D-8A1DA0495E8A} 
+// {1F4DBCF7-245C-4c8c-943D-8A1DA0495E8A}
 #define NS_MIMEHEADERPARAM_CID                         \
 {   0x1f4dbcf7,                                        \
     0x245c,                                            \

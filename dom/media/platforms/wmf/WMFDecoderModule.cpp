@@ -15,6 +15,7 @@
 #include "WMFAudioMFTManager.h"
 #include "WMFMediaDataDecoder.h"
 #include "WMFVideoMFTManager.h"
+#include "gfxPrefs.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/Services.h"
@@ -29,6 +30,10 @@
 #include "nsWindowsHelpers.h"
 #include "prsystem.h"
 #include "nsIXULRuntime.h"
+#include "mozilla/mscom/EnsureMTA.h"
+
+extern const GUID CLSID_WebmMfVpxDec;
+extern const GUID CLSID_AMDWebmMfVp9Dec;
 
 namespace mozilla {
 
@@ -103,9 +108,14 @@ WMFDecoderModule::CreateVideoDecoder(const CreateDecoderParams& aParams)
     new WMFVideoMFTManager(aParams.VideoConfig(),
                            aParams.mKnowsCompositor,
                            aParams.mImageContainer,
+                           aParams.mRate.mValue,
                            sDXVAEnabled));
 
-  if (!manager->Init()) {
+  MediaResult result = manager->Init();
+  if (NS_FAILED(result)) {
+    if (aParams.mError) {
+      *aParams.mError = result;
+    }
     return nullptr;
   }
 
@@ -133,16 +143,22 @@ WMFDecoderModule::CreateAudioDecoder(const CreateDecoderParams& aParams)
 static bool
 CanCreateMFTDecoder(const GUID& aGuid)
 {
-  if (FAILED(wmf::MFStartup())) {
-    return false;
-  }
-  bool hasdecoder = false;
-  {
+  // The IMFTransform interface used by MFTDecoder is documented to require to
+  // run on an MTA thread.
+  // https://msdn.microsoft.com/en-us/library/windows/desktop/ee892371(v=vs.85).aspx#components
+  // Note: our normal SharedThreadPool task queues are initialized to MTA, but
+  // the main thread (which calls in here from our CanPlayType implementation)
+  // is not.
+  bool canCreateDecoder = false;
+  mozilla::mscom::EnsureMTA([&]() -> void {
+    if (FAILED(wmf::MFStartup())) {
+      return;
+    }
     RefPtr<MFTDecoder> decoder(new MFTDecoder());
-    hasdecoder = SUCCEEDED(decoder->Create(aGuid));
-  }
-  wmf::MFShutdown();
-  return hasdecoder;
+    canCreateDecoder = SUCCEEDED(decoder->Create(aGuid));
+    wmf::MFShutdown();
+  });
+  return canCreateDecoder;
 }
 
 template<const GUID& aGuid>
@@ -158,45 +174,9 @@ CanCreateWMFDecoder()
   return result.value();
 }
 
-static bool
-IsH264DecoderBlacklisted()
-{
-#ifdef BLACKLIST_CRASHY_H264_DECODERS
-  WCHAR systemPath[MAX_PATH + 1];
-  if (!ConstructSystem32Path(L"msmpeg2vdec.dll", systemPath, MAX_PATH + 1)) {
-    // Cannot build path -> Assume it's not the blacklisted DLL.
-    return false;
-  }
-
-  DWORD zero;
-  DWORD infoSize = GetFileVersionInfoSizeW(systemPath, &zero);
-  if (infoSize == 0) {
-    // Can't get file info -> Assume we don't have the blacklisted DLL.
-    return false;
-  }
-  auto infoData = MakeUnique<unsigned char[]>(infoSize);
-  VS_FIXEDFILEINFO *vInfo;
-  UINT vInfoLen;
-  if (GetFileVersionInfoW(systemPath, 0, infoSize, infoData.get()) &&
-    VerQueryValueW(infoData.get(), L"\\", (LPVOID*)&vInfo, &vInfoLen))
-  {
-    if ((vInfo->dwFileVersionMS == ((12u << 16) | 0u))
-        && ((vInfo->dwFileVersionLS == ((9200u << 16) | 16426u))
-            || (vInfo->dwFileVersionLS == ((9200u << 16) | 17037u)))) {
-      // 12.0.9200.16426 & .17037 are blacklisted on Win64, see bug 1242343.
-      return true;
-    }
-  }
-#endif // BLACKLIST_CRASHY_H264_DECODERS
-  return false;
-}
-
 /* static */ bool
 WMFDecoderModule::HasH264()
 {
-  if (IsH264DecoderBlacklisted()) {
-    return false;
-  }
   return CanCreateWMFDecoder<CLSID_CMSH264DecoderMFT>();
 }
 
@@ -227,27 +207,7 @@ WMFDecoderModule::Supports(const TrackInfo& aTrackInfo,
        WMFDecoderModule::HasAAC()) {
     return true;
   }
-  if (MP4Decoder::IsH264(aTrackInfo.mMimeType)
-      && WMFDecoderModule::HasH264()) {
-    if (!MediaPrefs::PDMWMFAllowUnsupportedResolutions()) {
-      const VideoInfo* videoInfo = aTrackInfo.GetAsVideoInfo();
-      MOZ_ASSERT(videoInfo);
-      // Check Windows format constraints, based on:
-      // https://msdn.microsoft.com/en-us/library/windows/desktop/dd797815(v=vs.85).aspx
-      if (IsWin8OrLater()) {
-        // Windows >7 supports at most 4096x2304.
-        if (videoInfo->mImage.width > 4096
-            || videoInfo->mImage.height > 2304) {
-          return false;
-        }
-      } else {
-        // Windows <=7 supports at most 1920x1088.
-        if (videoInfo->mImage.width > 1920
-            || videoInfo->mImage.height > 1088) {
-          return false;
-        }
-      }
-    }
+  if (MP4Decoder::IsH264(aTrackInfo.mMimeType) && WMFDecoderModule::HasH264()) {
     return true;
   }
   if (aTrackInfo.mMimeType.EqualsLiteral("audio/mpeg") &&
@@ -255,9 +215,11 @@ WMFDecoderModule::Supports(const TrackInfo& aTrackInfo,
     return true;
   }
   if (MediaPrefs::PDMWMFVP9DecoderEnabled()) {
-    if ((VPXDecoder::IsVP8(aTrackInfo.mMimeType)
-         || VPXDecoder::IsVP9(aTrackInfo.mMimeType))
-        && CanCreateWMFDecoder<CLSID_WebmMfVpxDec>()) {
+    if ((VPXDecoder::IsVP8(aTrackInfo.mMimeType) ||
+         VPXDecoder::IsVP9(aTrackInfo.mMimeType)) &&
+        ((gfxPrefs::PDMWMFAMDVP9DecoderEnabled() &&
+          CanCreateWMFDecoder<CLSID_AMDWebmMfVp9Dec>()) ||
+         CanCreateWMFDecoder<CLSID_WebmMfVpxDec>())) {
       return true;
     }
   }

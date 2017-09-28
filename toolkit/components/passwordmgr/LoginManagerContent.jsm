@@ -15,8 +15,7 @@ const AUTOCOMPLETE_AFTER_RIGHT_CLICK_THRESHOLD_MS = 400;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
-Cu.import("resource://gre/modules/Promise.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
+Cu.import("resource://gre/modules/PromiseUtils.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "DeferredTask", "resource://gre/modules/DeferredTask.jsm");
@@ -36,6 +35,10 @@ XPCOMUtils.defineLazyServiceGetter(this, "gNetUtil",
 XPCOMUtils.defineLazyGetter(this, "log", () => {
   let logger = LoginHelper.createLogger("LoginManagerContent");
   return logger.log.bind(logger);
+});
+
+Services.cpmm.addMessageListener("clearRecipeCache", () => {
+  LoginRecipesContent._clearRecipeCache();
 });
 
 // These mirror signon.* prefs.
@@ -246,7 +249,7 @@ var LoginManagerContent = {
 
     messageManager.sendAsyncMessage(name, messageData);
 
-    let deferred = Promise.defer();
+    let deferred = PromiseUtils.defer();
     requestData.promise = deferred;
     this._requests.set(requestId, requestData);
     return deferred.promise;
@@ -407,7 +410,7 @@ var LoginManagerContent = {
         log("Running deferred processing of onDOMInputPasswordAdded", formLike2);
         this._deferredPasswordAddedTasksByRootElement.delete(formLike2.rootElement);
         this._fetchLoginsFromParentAndFillForm(formLike2, window);
-      }, PASSWORD_INPUT_ADDED_COALESCING_THRESHOLD_MS);
+      }, PASSWORD_INPUT_ADDED_COALESCING_THRESHOLD_MS, 0);
 
       this._deferredPasswordAddedTasksByRootElement.set(formLike.rootElement, deferredTask);
     }
@@ -561,6 +564,9 @@ var LoginManagerContent = {
     let doc = form.ownerDocument;
     let autofillForm = gAutofillForms && !PrivateBrowsingUtils.isContentWindowPrivate(doc.defaultView);
 
+    let formOrigin = LoginUtils._getPasswordOrigin(doc.documentURI);
+    LoginRecipesContent.cacheRecipes(formOrigin, doc.defaultView, recipes);
+
     this._fillForm(form, loginsFound, recipes, {autofillForm});
   },
 
@@ -632,10 +638,8 @@ var LoginManagerContent = {
     log("onUsernameInput from", event.type);
 
     let doc = acForm.ownerDocument;
-    let messageManager = messageManagerFromWindow(doc.defaultView);
-    let recipes = messageManager.sendSyncMessage("RemoteLogins:findRecipes", {
-      formOrigin: LoginUtils._getPasswordOrigin(doc.documentURI),
-    })[0];
+    let formOrigin = LoginUtils._getPasswordOrigin(doc.documentURI);
+    let recipes = LoginRecipesContent.getRecipes(formOrigin, doc.defaultView);
 
     // Make sure the username field fillForm will use is the
     // same field as the autocomplete was activated on.
@@ -929,9 +933,7 @@ var LoginManagerContent = {
     let formSubmitURL = LoginUtils._getActionOrigin(form);
     let messageManager = messageManagerFromWindow(win);
 
-    let recipes = messageManager.sendSyncMessage("RemoteLogins:findRecipes", {
-      formOrigin: hostname,
-    })[0];
+    let recipes = LoginRecipesContent.getRecipes(hostname, win);
 
     // Get the appropriate fields from the form.
     var [usernameField, newPasswordField, oldPasswordField] =
@@ -1346,10 +1348,8 @@ var LoginManagerContent = {
     let form = LoginFormFactory.createFromField(aField);
 
     let doc = aField.ownerDocument;
-    let messageManager = messageManagerFromWindow(doc.defaultView);
-    let recipes = messageManager.sendSyncMessage("RemoteLogins:findRecipes", {
-      formOrigin: LoginUtils._getPasswordOrigin(doc.documentURI),
-    })[0];
+    let formOrigin = LoginUtils._getPasswordOrigin(doc.documentURI);
+    let recipes = LoginRecipesContent.getRecipes(formOrigin, doc.defaultView);
 
     let [usernameField, newPasswordField] =
           this._getFormFields(form, false, recipes);

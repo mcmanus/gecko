@@ -9,8 +9,8 @@
 
 #include "nsCOMPtr.h"
 #include "nsProxyRelease.h"
+#include "nsStringFwd.h"
 
-class nsCString;
 class nsIRequest;
 
 namespace mozilla {
@@ -51,9 +51,10 @@ public:
    * the usual image loading mechanism.
    *
    * @param aMimeType      The mimetype of the image.
+   * @param aSizeHint      The length of the source data for the image.
    */
   static already_AddRefed<Image>
-  CreateAnonymousImage(const nsCString& aMimeType);
+  CreateAnonymousImage(const nsCString& aMimeType, uint32_t aSizeHint = 0);
 
   /**
    * Creates a new multipart/x-mixed-replace image wrapper, and initializes it

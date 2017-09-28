@@ -6,11 +6,16 @@
 
 #include "mozilla/mscom/MainThreadRuntime.h"
 
+#if defined(ACCESSIBILITY)
+#include "mozilla/a11y/Compatibility.h"
+#endif
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/UniquePtr.h"
-#include "nsDebug.h"
+#if defined(ACCESSIBILITY) && defined(MOZ_CRASHREPORTER)
+#include "nsExceptionHandler.h"
+#endif // defined(ACCESSIBILITY) && defined(MOZ_CRASHREPORTER)
 #include "nsWindowsHelpers.h"
 #include "nsXULAppAPI.h"
 
@@ -41,7 +46,27 @@ MainThreadRuntime* MainThreadRuntime::sInstance = nullptr;
 
 MainThreadRuntime::MainThreadRuntime()
   : mInitResult(E_UNEXPECTED)
+#if defined(ACCESSIBILITY)
+  , mActCtxRgn(a11y::Compatibility::GetActCtxResourceId())
+#endif // defined(ACCESSIBILITY)
 {
+#if defined(ACCESSIBILITY) && defined(MOZ_CRASHREPORTER)
+  GeckoProcessType procType = XRE_GetProcessType();
+  if (procType == GeckoProcessType_Default ||
+      procType == GeckoProcessType_Content) {
+    auto actctx = ActivationContext::GetCurrent();
+    nsAutoCString strActCtx;
+    if (actctx.isOk()) {
+      strActCtx.AppendPrintf("0x%p", actctx.unwrap());
+    } else {
+      strActCtx.AppendPrintf("HRESULT 0x%08X", actctx.unwrapErr());
+    }
+
+    CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("AssemblyManifestCtx"),
+                                       strActCtx);
+  }
+#endif // defined(ACCESSIBILITY) && defined(MOZ_CRASHREPORTER)
+
   // We must be the outermost COM initialization on this thread. The COM runtime
   // cannot be configured once we start manipulating objects
   MOZ_ASSERT(mStaRegion.IsValidOutermost());

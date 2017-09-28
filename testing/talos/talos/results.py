@@ -8,11 +8,13 @@
 objects and methods for parsing and serializing Talos results
 see https://wiki.mozilla.org/Buildbot/Talos/DataFormat
 """
+from __future__ import absolute_import, print_function
 
+import csv
 import json
 import os
 import re
-import csv
+
 from talos import output, utils, filter
 
 
@@ -34,16 +36,13 @@ class TalosResults(object):
         output all results to appropriate URLs
         - output_formats: a dict mapping formats to a list of URLs
         """
-
-        tbpl_output = {}
         try:
 
             for key, urls in output_formats.items():
-                _output = output.Output(self)
+                _output = output.Output(self, Results)
                 results = _output()
                 for url in urls:
-                    _output.output(results, url, tbpl_output)
-
+                    _output.output(results, url)
         except utils.TalosError as e:
             # print to results.out
             try:
@@ -57,9 +56,6 @@ class TalosResults(object):
                 pass
             print('\nFAIL: %s' % str(e).replace('\n', '\nRETURN:'))
             raise e
-
-        if tbpl_output:
-            print("TinderboxPrint: TalosResult: %s" % json.dumps(tbpl_output))
 
 
 class TestResults(object):
@@ -174,22 +170,33 @@ class TsResults(Results):
         self.results = []
         index = 0
 
-        # Handle the case where we support a pagename in the results
-        # (new format)
-        for line in lines:
-            result = {}
-            r = line.strip().split(',')
-            r = [i for i in r if i]
-            if len(r) <= 1:
-                continue
+        # Case where one test iteration may report multiple event values i.e. ts_paint
+        if string.startswith('{'):
+            jsonResult = json.loads(string)
+            result = {'runs': {}}
             result['index'] = index
-            result['page'] = r[0]
-            # note: if we have len(r) >1, then we have pagename,raw_results
-            result['runs'] = [float(i) for i in r[1:]]
-            self.results.append(result)
-            index += 1
+            result['page'] = 'NULL'
 
-        # The original case where we just have numbers and no pagename
+            for event_label in jsonResult:
+                result['runs'][str(event_label)] = [jsonResult[event_label]]
+            self.results.append(result)
+
+        # Case where we support a pagename in the results
+        if not self.results:
+            for line in lines:
+                result = {}
+                r = line.strip().split(',')
+                r = [i for i in r if i]
+                if len(r) <= 1:
+                    continue
+                result['index'] = index
+                result['page'] = r[0]
+                # note: if we have len(r) >1, then we have pagename,raw_results
+                result['runs'] = [float(i) for i in r[1:]]
+                self.results.append(result)
+                index += 1
+
+        # Original case where we just have numbers and no pagename
         if not self.results:
             result = {}
             result['index'] = index
@@ -246,7 +253,12 @@ class PageloaderResults(Results):
         """
         page = page.rstrip('/')
         if '/' in page:
-            page = page.split('/')[0]
+            if 'base_page' in page or 'ref_page' in page:
+                # for base vs ref type test, the page name is different format, i.e.
+                # base_page_1_http://localhost:53309/tests/perf-reftest/bloom-basic.html
+                page = page.split('/')[-1]
+            else:
+                page = page.split('/')[0]
         return page
 
 

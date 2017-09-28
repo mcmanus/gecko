@@ -12,7 +12,7 @@
 #include "mozilla/EndianUtils.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/SyncRunnable.h"
-#include "mozilla/SizePrintfMacros.h"
+#include "VideoUtils.h"
 
 #include <inttypes.h>  // For PRId64
 
@@ -69,14 +69,20 @@ OpusDataDecoder::Init()
   uint8_t *p = mInfo.mCodecSpecificConfig->Elements();
   if (length < sizeof(uint64_t)) {
     OPUS_DEBUG("CodecSpecificConfig too short to read codecDelay!");
-    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+    return InitPromise::CreateAndReject(
+      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                  RESULT_DETAIL("CodecSpecificConfig too short to read codecDelay!")),
+      __func__);
   }
   int64_t codecDelay = BigEndian::readUint64(p);
   length -= sizeof(uint64_t);
   p += sizeof(uint64_t);
   if (NS_FAILED(DecodeHeader(p, length))) {
     OPUS_DEBUG("Error decoding header!");
-    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+    return InitPromise::CreateAndReject(
+      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                  RESULT_DETAIL("Error decoding header!")),
+      __func__);
   }
 
   int r;
@@ -103,7 +109,10 @@ OpusDataDecoder::Init()
   }
 
   return r == OPUS_OK ? InitPromise::CreateAndResolve(TrackInfo::kAudioTrack, __func__)
-                      : InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+                      : InitPromise::CreateAndReject(
+                          MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                          RESULT_DETAIL("could not create opus multistream decoder!")),
+                          __func__);
 }
 
 nsresult
@@ -178,7 +187,7 @@ OpusDataDecoder::ProcessDecode(MediaRawData* aSample)
   int frames_number =
     opus_packet_get_nb_frames(aSample->Data(), aSample->Size());
   if (frames_number <= 0) {
-    OPUS_DEBUG("Invalid packet header: r=%d length=%" PRIuSIZE, frames_number,
+    OPUS_DEBUG("Invalid packet header: r=%d length=%zu", frames_number,
                aSample->Size());
     return DecodePromise::CreateAndReject(
       MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,

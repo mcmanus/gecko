@@ -164,6 +164,7 @@ public:
   DOMHighResTimeStamp DomainLookupStartHighRes();
   DOMHighResTimeStamp DomainLookupEndHighRes();
   DOMHighResTimeStamp ConnectStartHighRes();
+  DOMHighResTimeStamp SecureConnectionStartHighRes();
   DOMHighResTimeStamp ConnectEndHighRes();
   DOMHighResTimeStamp RequestStartHighRes();
   DOMHighResTimeStamp ResponseStartHighRes();
@@ -176,6 +177,7 @@ public:
   DOMTimeMilliSec DomainLookupStart();
   DOMTimeMilliSec DomainLookupEnd();
   DOMTimeMilliSec ConnectStart();
+  DOMTimeMilliSec SecureConnectionStart();
   DOMTimeMilliSec ConnectEnd();
   DOMTimeMilliSec RequestStart();
   DOMTimeMilliSec ResponseStart();
@@ -244,6 +246,15 @@ public:
     return GetDOMTiming()->GetLoadEventEnd();
   }
 
+  DOMTimeMilliSec TimeToNonBlankPaint() const
+  {
+    if (!nsContentUtils::IsPerformanceTimingEnabled() ||
+        nsContentUtils::ShouldResistFingerprinting()) {
+      return 0;
+    }
+    return GetDOMTiming()->GetTimeToNonBlankPaint();
+  }
+
 private:
   ~PerformanceTiming();
 
@@ -267,6 +278,7 @@ private:
   TimeStamp mDomainLookupStart;
   TimeStamp mDomainLookupEnd;
   TimeStamp mConnectStart;
+  TimeStamp mSecureConnectionStart;
   TimeStamp mConnectEnd;
   TimeStamp mRequestStart;
   TimeStamp mResponseStart;

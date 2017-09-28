@@ -34,6 +34,7 @@
 #include "GeckoProfiler.h"
 #include "ScreenHelperCocoa.h"
 #include "mozilla/widget/ScreenManager.h"
+#include "HeadlessScreenHelper.h"
 #include "pratom.h"
 #if !defined(RELEASE_OR_BETA) || defined(DEBUG)
 #include "nsSandboxViolationSink.h"
@@ -44,6 +45,9 @@
 #include "nsIPowerManagerService.h"
 
 using namespace mozilla::widget;
+
+#define WAKE_LOCK_LOG(...) MOZ_LOG(gMacWakeLockLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
+static mozilla::LazyLogModule gMacWakeLockLog("MacWakeLock");
 
 // A wake lock listener that disables screen saver when requested by
 // Gecko. For example when we're playing video in a foreground tab we
@@ -56,15 +60,37 @@ public:
 private:
   ~MacWakeLockListener() {}
 
-  IOPMAssertionID mAssertionID = kIOPMNullAssertionID;
+  IOPMAssertionID mAssertionNoDisplaySleepID = kIOPMNullAssertionID;
+  IOPMAssertionID mAssertionNoIdleSleepID = kIOPMNullAssertionID;
 
   NS_IMETHOD Callback(const nsAString& aTopic, const nsAString& aState) override {
-    if (!aTopic.EqualsASCII("screen")) {
+    if (!aTopic.EqualsASCII("screen") &&
+        !aTopic.EqualsASCII("audio-playing") &&
+        !aTopic.EqualsASCII("video-playing")) {
       return NS_OK;
     }
+
+    // we should still hold the lock for background audio.
+    if (aTopic.EqualsASCII("audio-playing") &&
+        aState.EqualsASCII("locked-background")) {
+      WAKE_LOCK_LOG("keep audio playing even in background");
+      return NS_OK;
+    }
+
+    bool shouldKeepDisplayOn = aTopic.EqualsASCII("screen") ||
+                               aTopic.EqualsASCII("video-playing");
+    CFStringRef assertionType = shouldKeepDisplayOn ?
+      kIOPMAssertionTypeNoDisplaySleep : kIOPMAssertionTypeNoIdleSleep;
+    IOPMAssertionID& assertionId = shouldKeepDisplayOn ?
+      mAssertionNoDisplaySleepID : mAssertionNoIdleSleepID;
+
     // Note the wake lock code ensures that we're not sent duplicate
     // "locked-foreground" notifications when multiple wake locks are held.
     if (aState.EqualsASCII("locked-foreground")) {
+      if (assertionId != kIOPMNullAssertionID) {
+        WAKE_LOCK_LOG("already has a lock");
+        return NS_OK;
+      }
       // Prevent screen saver.
       CFStringRef cf_topic =
         ::CFStringCreateWithCharacters(kCFAllocatorDefault,
@@ -72,22 +98,24 @@ private:
                                          (aTopic.Data()),
                                        aTopic.Length());
       IOReturn success =
-        ::IOPMAssertionCreateWithName(kIOPMAssertionTypeNoDisplaySleep,
+        ::IOPMAssertionCreateWithName(assertionType,
                                       kIOPMAssertionLevelOn,
                                       cf_topic,
-                                      &mAssertionID);
+                                      &assertionId);
       CFRelease(cf_topic);
       if (success != kIOReturnSuccess) {
-        NS_WARNING("failed to disable screensaver");
+        WAKE_LOCK_LOG("failed to disable screensaver");
       }
+      WAKE_LOCK_LOG("create screensaver");
     } else {
       // Re-enable screen saver.
-      NS_WARNING("Releasing screensaver");
-      if (mAssertionID != kIOPMNullAssertionID) {
-        IOReturn result = ::IOPMAssertionRelease(mAssertionID);
+      if (assertionId != kIOPMNullAssertionID) {
+        IOReturn result = ::IOPMAssertionRelease(assertionId);
         if (result != kIOReturnSuccess) {
-          NS_WARNING("failed to release screensaver");
+          WAKE_LOCK_LOG("failed to release screensaver");
         }
+        WAKE_LOCK_LOG("Release screensaver");
+        assertionId = kIOPMNullAssertionID;
       }
     }
     return NS_OK;
@@ -302,7 +330,7 @@ nsAppShell::Init()
   // context.version = 0;
   context.info = this;
   context.perform = ProcessGeckoEvents;
-  
+
   mCFRunLoopSource = ::CFRunLoopSourceCreate(kCFAllocatorDefault, 0, &context);
   NS_ENSURE_STATE(mCFRunLoopSource);
 
@@ -310,7 +338,12 @@ nsAppShell::Init()
 
   if (XRE_IsParentProcess()) {
     ScreenManager& screenManager = ScreenManager::GetSingleton();
-    screenManager.SetHelper(mozilla::MakeUnique<ScreenHelperCocoa>());
+
+    if (gfxPlatform::IsHeadless()) {
+      screenManager.SetHelper(mozilla::MakeUnique<HeadlessScreenHelper>());
+    } else {
+      screenManager.SetHelper(mozilla::MakeUnique<ScreenHelperCocoa>());
+    }
   }
 
   rv = nsBaseAppShell::Init();
@@ -325,7 +358,12 @@ nsAppShell::Init()
     gAppShellMethodsSwizzled = true;
   }
 
-  if (nsCocoaFeatures::OnYosemiteOrLater()) {
+  // The bug that this works around was introduced in OS X 10.10.0
+  // and fixed in OS X 10.10.2. Order these version checks so as
+  // few as possible will actually end up running.
+  if (nsCocoaFeatures::OSXVersionMinor() == 10 &&
+      nsCocoaFeatures::OSXVersionBugFix() < 2 &&
+      nsCocoaFeatures::OSXVersionMajor() == 10) {
     // Explicitly turn off CGEvent logging.  This works around bug 1092855.
     // If there are already CGEvents in the log, turning off logging also
     // causes those events to be written to disk.  But at this point no
@@ -362,8 +400,7 @@ void
 nsAppShell::ProcessGeckoEvents(void* aInfo)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
-  PROFILER_LABEL("Events", "ProcessGeckoEvents",
-    js::ProfileEntry::Category::EVENTS);
+  AUTO_PROFILER_LABEL("nsAppShell::ProcessGeckoEvents", EVENTS);
 
   nsAppShell* self = static_cast<nsAppShell*> (aInfo);
 
@@ -668,13 +705,23 @@ nsAppShell::Run(void)
 
   mStarted = true;
 
-  AddScreenWakeLockListener();
+  if (XRE_IsParentProcess()) {
+    AddScreenWakeLockListener();
+  }
 
-  NS_OBJC_TRY_ABORT([NSApp run]);
+  // We use the native Gecko event loop in content processes.
+  nsresult rv = NS_OK;
+  if (XRE_UseNativeEventProcessing()) {
+    NS_OBJC_TRY_ABORT([NSApp run]);
+  } else {
+    rv = nsBaseAppShell::Run();
+  }
 
-  RemoveScreenWakeLockListener();
+  if (XRE_IsParentProcess()) {
+    RemoveScreenWakeLockListener();
+  }
 
-  return NS_OK;
+  return rv;
 }
 
 NS_IMETHODIMP

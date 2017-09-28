@@ -24,11 +24,10 @@ public:
 
   virtual void Reflow(nsPresContext*      aPresContext,
                       ReflowOutput& aDesiredSize,
-                      const ReflowInput& aMaxSize,
+                      const ReflowInput& aReflowInput,
                       nsReflowStatus&      aStatus) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
 #ifdef DEBUG_FRAME_DUMP
@@ -67,7 +66,7 @@ protected:
 
   nscoord GetXPosition(gfxContext&          aRenderingContext,
                        nsFontMetrics&       aFontMetrics,
-                       const nsRect&        aRect, 
+                       const nsRect&        aRect,
                        int32_t              aJust,
                        const nsString&      aStr);
 
@@ -101,7 +100,7 @@ protected:
 };
 
 
-class nsPageBreakFrame : public nsLeafFrame
+class nsPageBreakFrame final : public nsLeafFrame
 {
   NS_DECL_FRAMEARENA_HELPERS(nsPageBreakFrame)
 

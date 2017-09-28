@@ -183,7 +183,7 @@ XPCWrappedNative::WrapNewGlobal(xpcObjectHelper& nativeHelper,
     RootedObject global(cx, xpc::CreateGlobalObject(cx, clasp, principal, aOptions));
     if (!global)
         return NS_ERROR_FAILURE;
-    XPCWrappedNativeScope* scope = CompartmentPrivate::Get(global)->scope;
+    XPCWrappedNativeScope* scope = RealmPrivate::Get(global)->scope;
 
     // Immediately enter the global's compartment, so that everything else we
     // create ends up there.
@@ -2238,20 +2238,8 @@ XPCJSObjectHolder::GetJSObject()
     return mJSObj;
 }
 
-XPCJSObjectHolder::XPCJSObjectHolder(JSObject* obj)
-    : mJSObj(obj)
+XPCJSObjectHolder::XPCJSObjectHolder(JSContext* cx, JSObject* obj)
+  : mJSObj(cx, obj)
 {
     MOZ_ASSERT(obj);
-    XPCJSRuntime::Get()->AddObjectHolderRoot(this);
-}
-
-XPCJSObjectHolder::~XPCJSObjectHolder()
-{
-    RemoveFromRootSet();
-}
-
-void
-XPCJSObjectHolder::TraceJS(JSTracer* trc)
-{
-    JS::TraceEdge(trc, &mJSObj, "XPCJSObjectHolder::mJSObj");
 }

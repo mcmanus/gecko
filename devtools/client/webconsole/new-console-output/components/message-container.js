@@ -30,6 +30,7 @@ const MessageContainer = createClass({
   displayName: "MessageContainer",
 
   propTypes: {
+    messageId: PropTypes.string.isRequired,
     open: PropTypes.bool.isRequired,
     serviceContainer: PropTypes.object.isRequired,
     tableData: PropTypes.object,
@@ -65,11 +66,15 @@ const MessageContainer = createClass({
     const message = this.props.getMessage();
 
     let MessageComponent = getMessageComponent(message);
-    return MessageComponent(Object.assign({message, indent: message.indent}, this.props));
+    return MessageComponent(Object.assign({message}, this.props));
   }
 });
 
 function getMessageComponent(message) {
+  if (!message) {
+    return componentMap.get("DefaultRenderer");
+  }
+
   switch (message.source) {
     case MESSAGE_SOURCE.CONSOLE_API:
       return componentMap.get("ConsoleApiCall");

@@ -9,7 +9,7 @@ use dom::bindings::codegen::Bindings::VRDisplayBinding::VRDisplayMethods;
 use dom::bindings::error::Error;
 use dom::bindings::inheritance::Castable;
 use dom::bindings::js::{JS, Root};
-use dom::bindings::reflector::{DomObject, reflect_dom_object};
+use dom::bindings::reflector::{DomObject, Reflector, reflect_dom_object};
 use dom::event::Event;
 use dom::eventtarget::EventTarget;
 use dom::gamepad::Gamepad;
@@ -27,7 +27,7 @@ use webvr_traits::{WebVRGamepadData, WebVRGamepadEvent, WebVRGamepadState};
 
 #[dom_struct]
 pub struct VR {
-    eventtarget: EventTarget,
+    reflector_: Reflector,
     displays: DOMRefCell<Vec<JS<VRDisplay>>>,
     gamepads: DOMRefCell<Vec<JS<Gamepad>>>
 }
@@ -35,7 +35,7 @@ pub struct VR {
 impl VR {
     fn new_inherited() -> VR {
         VR {
-            eventtarget: EventTarget::new_inherited(),
+            reflector_: Reflector::new(),
             displays: DOMRefCell::new(Vec::new()),
             gamepads: DOMRefCell::new(Vec::new()),
         }
@@ -73,13 +73,13 @@ impl VRMethods for VR {
                     }
                 },
                 Err(e) => {
-                    promise.reject_native(promise.global().get_cx(), &e);
+                    promise.reject_native(&e);
                     return promise;
                 }
             }
         } else {
             // WebVR spec: The Promise MUST be rejected if WebVR is not enabled/supported.
-            promise.reject_error(promise.global().get_cx(), Error::Security);
+            promise.reject_error(Error::Security);
             return promise;
         }
 
@@ -87,7 +87,7 @@ impl VRMethods for VR {
         let displays: Vec<Root<VRDisplay>> = self.displays.borrow().iter()
                                                           .map(|d| Root::from_ref(&**d))
                                                           .collect();
-        promise.resolve_native(promise.global().get_cx(), &displays);
+        promise.resolve_native(&displays);
 
         promise
     }
@@ -200,7 +200,7 @@ impl VR {
 
     fn notify_display_event(&self, display: &VRDisplay, event: &WebVRDisplayEvent) {
         let event = VRDisplayEvent::new_from_webvr(&self.global(), &display, &event);
-        event.upcast::<Event>().fire(self.upcast());
+        event.upcast::<Event>().fire(self.global().upcast::<EventTarget>());
     }
 }
 

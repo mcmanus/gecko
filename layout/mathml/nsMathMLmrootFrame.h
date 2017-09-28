@@ -21,7 +21,7 @@ public:
   friend nsIFrame* NS_NewMathMLmrootFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
   virtual void
-  SetAdditionalStyleContext(int32_t          aIndex, 
+  SetAdditionalStyleContext(int32_t          aIndex,
                             nsStyleContext*  aStyleContext) override;
   virtual nsStyleContext*
   GetAdditionalStyleContext(int32_t aIndex) const override;
@@ -51,7 +51,6 @@ public:
                            ReflowOutput& aDesiredSize) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   uint8_t
@@ -63,7 +62,7 @@ public:
 protected:
   explicit nsMathMLmrootFrame(nsStyleContext* aContext);
   virtual ~nsMathMLmrootFrame();
-  
+
   nsMathMLChar mSqrChar;
   nsRect       mBarRect;
 };

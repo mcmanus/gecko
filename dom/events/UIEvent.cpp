@@ -44,7 +44,7 @@ UIEvent::UIEvent(EventTarget* aOwner,
     mEventIsInternal = true;
     mEvent->mTime = PR_Now();
   }
-  
+
   // Fill mDetail and mView according to the mEvent (widget-generated
   // event) we've got
   switch(mEvent->mClass) {
@@ -100,7 +100,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(UIEvent, Event,
 NS_IMPL_ADDREF_INHERITED(UIEvent, Event)
 NS_IMPL_RELEASE_INHERITED(UIEvent, Event)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(UIEvent)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(UIEvent)
   NS_INTERFACE_MAP_ENTRY(nsIDOMUIEvent)
 NS_INTERFACE_MAP_END_INHERITING(Event)
 
@@ -244,7 +244,11 @@ UIEvent::GetRangeParent()
   nsIFrame* targetFrame = nullptr;
 
   if (mPresContext) {
-    targetFrame = mPresContext->EventStateManager()->GetEventTarget();
+    nsCOMPtr<nsIPresShell> shell = mPresContext->GetPresShell();
+    if (shell) {
+      shell->FlushPendingNotifications(FlushType::Layout);
+      targetFrame = mPresContext->EventStateManager()->GetEventTarget();
+    }
   }
 
   if (targetFrame) {
@@ -289,6 +293,13 @@ UIEvent::RangeOffset() const
   if (!mPresContext) {
     return 0;
   }
+
+  nsCOMPtr<nsIPresShell> shell = mPresContext->GetPresShell();
+  if (!shell) {
+    return 0;
+  }
+
+  shell->FlushPendingNotifications(FlushType::Layout);
 
   nsIFrame* targetFrame = mPresContext->EventStateManager()->GetEventTarget();
   if (!targetFrame) {
@@ -507,7 +518,7 @@ using namespace mozilla::dom;
 already_AddRefed<UIEvent>
 NS_NewDOMUIEvent(EventTarget* aOwner,
                  nsPresContext* aPresContext,
-                 WidgetGUIEvent* aEvent) 
+                 WidgetGUIEvent* aEvent)
 {
   RefPtr<UIEvent> it = new UIEvent(aOwner, aPresContext, aEvent);
   return it.forget();

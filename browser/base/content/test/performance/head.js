@@ -1,61 +1,53 @@
+"use strict";
+
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
+  "resource://testing-common/PlacesTestUtils.jsm");
+
 /**
  * Async utility function for ensuring that no unexpected uninterruptible
  * reflows occur during some period of time in a window.
  *
- * The helper works by running a JS function before each event is
- * dispatched that attempts to dirty the layout tree - the idea being
- * that this puts us in the "worst case scenario" so that any JS
- * that attempts to query for layout or style information will cause
- * a reflow to fire. We also dirty the layout tree after each reflow
- * occurs, for good measure.
- *
- * This sounds good in theory, but it's trickier in practice due to
- * various optimizations in our Layout engine. The default function
- * for dirtying the layout tree adds a margin to the first element
- * child it finds in the window to a maximum of 3px, and then goes
- * back to 0px again and loops.
- *
- * This is not sufficient for reflows that we expect to happen within
- * scrollable frames, as Gecko is able to side-step reflowing the
- * contents of a scrollable frame if outer frames are dirtied. Because
- * of this, it's currently possible to override the default node to
- * dirty with one more appropriate for the test.
- *
- * It is also theoretically possible for enough events to fire between
- * reflows such that the before and after state of the layout tree is
- * exactly the same, meaning that no reflow is required, which opens
- * us up to missing expected reflows. This seems to be possible in
- * theory, but hasn't yet shown up in practice - it's just something
- * to be aware of.
- *
- * Bug 1363361 has been filed for a more reliable way of dirtying layout.
- *
  * @param testFn (async function)
  *        The async function that will exercise the browser activity that is
  *        being tested for reflows.
- * @param expectedStacks (Array, optional)
- *        An Array of Arrays representing stacks.
+ *
+ *        The testFn will be passed a single argument, which is a frame dirtying
+ *        function that can be called if the test needs to trigger frame
+ *        dirtying outside of the normal mechanism.
+ * @param expectedReflows (Array, optional)
+ *        An Array of Objects representing reflows.
  *
  *        Example:
  *
  *        [
- *          // This reflow is caused by lorem ipsum
- *          [
- *            "select@chrome://global/content/bindings/textbox.xml",
- *            "focusAndSelectUrlBar@chrome://browser/content/browser.js",
- *            "openLinkIn@chrome://browser/content/utilityOverlay.js",
- *            "openUILinkIn@chrome://browser/content/utilityOverlay.js",
- *            "BrowserOpenTab@chrome://browser/content/browser.js",
- *          ],
+ *          {
+ *            // This reflow is caused by lorem ipsum.
+ *            // Sometimes, due to unpredictable timings, the reflow may be hit
+ *            // less times, or not hit at all; in such a case a minTimes
+ *            // property can be provided to avoid intermittent failures.
+ *            stack: [
+ *              "select@chrome://global/content/bindings/textbox.xml",
+ *              "focusAndSelectUrlBar@chrome://browser/content/browser.js",
+ *              "openLinkIn@chrome://browser/content/utilityOverlay.js",
+ *              "openUILinkIn@chrome://browser/content/utilityOverlay.js",
+ *              "BrowserOpenTab@chrome://browser/content/browser.js",
+ *            ],
+ *            // We expect this particular reflow to happen 2 times
+ *            times: 2,
+ *            // Sometimes this is not hit.
+ *            minTimes: 0
+ *          },
  *
- *          // This reflow is caused by lorem ipsum
- *          [
- *            "get_scrollPosition@chrome://global/content/bindings/scrollbox.xml",
- *            "_fillTrailingGap@chrome://browser/content/tabbrowser.xml",
- *            "_handleNewTab@chrome://browser/content/tabbrowser.xml",
- *            "onxbltransitionend@chrome://browser/content/tabbrowser.xml",
- *          ],
- *
+ *          {
+ *            // This reflow is caused by lorem ipsum. We expect this reflow
+ *            // to only happen once, so we can omit the "times" property.
+ *            stack: [
+ *              "get_scrollPosition@chrome://global/content/bindings/scrollbox.xml",
+ *              "_fillTrailingGap@chrome://browser/content/tabbrowser.xml",
+ *              "_handleNewTab@chrome://browser/content/tabbrowser.xml",
+ *              "onxbltransitionend@chrome://browser/content/tabbrowser.xml",
+ *            ],
+ *          }
  *        ]
  *
  *        Note that line numbers are not included in the stacks.
@@ -65,28 +57,30 @@
  *        it defaults to the empty Array, meaning no reflows are expected.
  * @param window (browser window, optional)
  *        The browser window to monitor. Defaults to the current window.
- * @param elemToDirty (DOM node, optional)
- *        Callers can provide a custom DOM node to change some layout style
- *        on in the event that the action being tested is occurring within
- *        a scrollable frame. Otherwise, withReflowObserver defaults to dirtying
- *        the first element child of the window.
  */
-async function withReflowObserver(testFn, expectedStacks = [], win = window, elemToDirty) {
-  if (!elemToDirty) {
-    elemToDirty = win.document.firstElementChild;
-  }
-
-  let i = 0;
-  let dirtyFrameFn = (e) => {
-    elemToDirty.style.margin = (++i % 4) + "px";
+async function withReflowObserver(testFn, expectedReflows = [], win = window) {
+  let dwu = win.QueryInterface(Ci.nsIInterfaceRequestor)
+               .getInterface(Ci.nsIDOMWindowUtils);
+  let dirtyFrameFn = () => {
+    try {
+      dwu.ensureDirtyRootFrame();
+    } catch (e) {
+      // If this fails, we should probably make note of it, but it's not fatal.
+      info("Note: ensureDirtyRootFrame threw an exception.");
+    }
   };
 
   let els = Cc["@mozilla.org/eventlistenerservice;1"]
               .getService(Ci.nsIEventListenerService);
 
-  // We're going to remove the stacks one by one as we see them so that
+  // We're going to remove the reflows one by one as we see them so that
   // we can check for expected, unseen reflows, so let's clone the array.
-  expectedStacks = expectedStacks.slice(0);
+  // While we're at it, for reflows that omit the "times" property, default
+  // it to 1.
+  expectedReflows = expectedReflows.slice(0);
+  expectedReflows.forEach(r => {
+    r.times = r.times || 1;
+  });
 
   let observer = {
     reflow(start, end) {
@@ -107,12 +101,23 @@ async function withReflowObserver(testFn, expectedStacks = [], win = window, ele
         return;
       }
 
-      let index = expectedStacks.findIndex(stack => path.startsWith(stack.join("|")));
+      // synthesizeKey from EventUtils.js causes us to reflow. That's the test
+      // harness and we don't care about that, so we'll filter that out.
+      if (path.startsWith("synthesizeKey@chrome://mochikit/content/tests/SimpleTest/EventUtils.js")) {
+        return;
+      }
+
+      let index = expectedReflows.findIndex(reflow => path.startsWith(reflow.stack.join("|")));
 
       if (index != -1) {
         Assert.ok(true, "expected uninterruptible reflow: '" +
                   JSON.stringify(pathWithLineNumbers, null, "\t") + "'");
-        expectedStacks.splice(index, 1);
+        if (expectedReflows[index].minTimes) {
+          expectedReflows[index].minTimes--;
+        }
+        if (--expectedReflows[index].times == 0) {
+          expectedReflows.splice(index, 1);
+        }
       } else {
         Assert.ok(false, "unexpected uninterruptible reflow \n" +
                          JSON.stringify(pathWithLineNumbers, null, "\t") + "\n");
@@ -120,7 +125,9 @@ async function withReflowObserver(testFn, expectedStacks = [], win = window, ele
     },
 
     reflowInterruptible(start, end) {
-      // We're not interested in interruptible reflows.
+      // We're not interested in interruptible reflows, but might as well take the
+      // opportuntiy to dirty the root frame.
+      dirtyFrameFn();
     },
 
     QueryInterface: XPCOMUtils.generateQI([Ci.nsIReflowObserver,
@@ -136,20 +143,20 @@ async function withReflowObserver(testFn, expectedStacks = [], win = window, ele
 
   try {
     dirtyFrameFn();
-    await testFn();
+    await testFn(dirtyFrameFn);
   } finally {
-    for (let remainder of expectedStacks) {
-      Assert.ok(false,
-                `Unused expected reflow: ${JSON.stringify(remainder, null, "\t")}.\n` +
-                "This is probably a good thing - just remove it from the " +
-                "expected list.");
+    for (let remainder of expectedReflows) {
+      if (!Number.isInteger(remainder.minTimes) || remainder.minTimes > 0) {
+        Assert.ok(false,
+                  `Unused expected reflow: ${JSON.stringify(remainder.stack, null, "\t")}\n` +
+                  `This reflow was supposed to be hit ${remainder.minTimes || remainder.times} more time(s).\n` +
+                  "This is probably a good thing - just remove it from the " +
+                  "expected list.");
+      }
     }
-
 
     els.removeListenerForAllEvents(win, dirtyFrameFn, true);
     docShell.removeWeakReflowObserver(observer);
-
-    elemToDirty.style.margin = "";
   }
 }
 
@@ -189,7 +196,7 @@ function computeMaxTabCount() {
   let currentTabCount = gBrowser.tabs.length;
   let newTabButton =
     document.getAnonymousElementByAttribute(gBrowser.tabContainer,
-                                            "class", "tabs-newtab-button");
+                                            "anonid", "tabs-newtab-button");
   let newTabRect = newTabButton.getBoundingClientRect();
   let tabStripRect = gBrowser.tabContainer.mTabstrip.getBoundingClientRect();
   let availableTabStripWidth = tabStripRect.width - newTabRect.width;
@@ -236,4 +243,27 @@ async function removeAllButFirstTab() {
   gBrowser.removeAllTabsBut(gBrowser.tabs[0]);
   await BrowserTestUtils.waitForCondition(() => gBrowser.tabs.length == 1);
   await SpecialPowers.popPrefEnv();
+}
+
+/**
+ * Adds some entries to the Places database so that we can
+ * do semi-realistic look-ups in the URL bar.
+ */
+async function addDummyHistoryEntries() {
+  await PlacesTestUtils.clearHistory();
+  const NUM_VISITS = 10;
+  let visits = [];
+
+  for (let i = 0; i < NUM_VISITS; ++i) {
+    visits.push({
+      uri: `http://example.com/urlbar-reflows-${i}`,
+      title: `Reflow test for URL bar entry #${i}`,
+    });
+  }
+
+  await PlacesTestUtils.addVisits(visits);
+
+  registerCleanupFunction(async function() {
+    await PlacesTestUtils.clearHistory();
+  });
 }

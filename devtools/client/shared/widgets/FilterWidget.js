@@ -9,7 +9,7 @@
   * for Rule View's filter swatches
   */
 
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 const { Cc, Ci } = require("chrome");
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 
@@ -162,6 +162,7 @@ CSSFilterEditorWidget.prototype = {
     let newPresetPlaceholder = L10N.getStr("newPresetPlaceholder");
     let savePresetButton = L10N.getStr("savePresetButton");
 
+    // eslint-disable-next-line no-unsanitized/property
     this.el.innerHTML = `
       <div class="filters-list">
         <div id="filters"></div>
@@ -216,6 +217,7 @@ CSSFilterEditorWidget.prototype = {
     let select = this.filterSelect;
     filterList.forEach(filter => {
       let option = this.doc.createElementNS(XHTML_NS, "option");
+      // eslint-disable-next-line no-unsanitized/property
       option.innerHTML = option.value = filter.name;
       select.appendChild(option);
     });
@@ -573,7 +575,7 @@ CSSFilterEditorWidget.prototype = {
         // If the click happened on the remove button.
         presets.splice(id, 1);
         this.setPresets(presets).then(this.renderPresets,
-                                      ex => console.error(ex));
+                                      console.error);
       } else {
         // Or if the click happened on a preset.
         let p = presets[id];
@@ -581,7 +583,7 @@ CSSFilterEditorWidget.prototype = {
         this.setCssValue(p.value);
         this.addPresetInput.value = p.name;
       }
-    }, ex => console.error(ex));
+    }, console.error);
   },
 
   _togglePresets: function () {
@@ -610,8 +612,8 @@ CSSFilterEditorWidget.prototype = {
       }
 
       this.setPresets(presets).then(this.renderPresets,
-                                    ex => console.error(ex));
-    }, ex => console.error(ex));
+                                    console.error);
+    }, console.error);
   },
 
   /**
@@ -628,6 +630,7 @@ CSSFilterEditorWidget.prototype = {
    */
   render: function () {
     if (!this.filters.length) {
+  // eslint-disable-next-line no-unsanitized/property
       this.filtersList.innerHTML = `<p> ${L10N.getStr("emptyFilterList")} <br />
                                  ${L10N.getStr("addUsingList")} </p>`;
       this.emit("render");
@@ -709,6 +712,7 @@ CSSFilterEditorWidget.prototype = {
       }
 
       if (!presets || !presets.length) {
+      // eslint-disable-next-line no-unsanitized/property
         this.presetsList.innerHTML = `<p>${L10N.getStr("emptyPresetList")}</p>`;
         this.emit("render");
         return;
@@ -948,12 +952,12 @@ CSSFilterEditorWidget.prototype = {
       }
 
       return presets;
-    }, e => console.error(e));
+    }, console.error);
   },
 
   setPresets: function (presets) {
     return asyncStorage.setItem("cssFilterPresets", presets)
-      .catch(e => console.error(e));
+      .catch(console.error);
   }
 };
 

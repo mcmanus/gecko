@@ -109,6 +109,18 @@ WeakReferenceSupport::~WeakReferenceSupport()
   ::DeleteCriticalSection(&mCSForQI);
 }
 
+void
+WeakReferenceSupport::Lock()
+{
+  ::EnterCriticalSection(&mCSForQI);
+}
+
+void
+WeakReferenceSupport::Unlock()
+{
+  ::LeaveCriticalSection(&mCSForQI);
+}
+
 HRESULT
 WeakReferenceSupport::QueryInterface(REFIID riid, void** ppv)
 {
@@ -168,7 +180,7 @@ WeakReferenceSupport::Release()
       // main thread right now, so we send a reference to ourselves to the main
       // thread to be re-released there.
       RefPtr<WeakReferenceSupport> self = this;
-      NS_ReleaseOnMainThread(
+      NS_ReleaseOnMainThreadSystemGroup(
         "WeakReferenceSupport", self.forget());
     }
   }

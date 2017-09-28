@@ -20,7 +20,6 @@
 #include "nsGkAtoms.h"
 #include "nsIComboboxControlFrame.h"
 #include "nsIDocument.h"
-#include "nsIDOMHTMLOptGroupElement.h"
 #include "nsIFormControlFrame.h"
 #include "nsIForm.h"
 #include "nsIFormProcessor.h"
@@ -70,7 +69,7 @@ HTMLOptionsCollection::GetOptionIndex(Element* aOption,
     if (index == -1) {
       return NS_ERROR_FAILURE;
     }
-    
+
     *aIndex = index;
     return NS_OK;
   }
@@ -162,7 +161,7 @@ HTMLOptionsCollection::IndexedSetter(uint32_t aIndex,
   }
 
   NS_ASSERTION(aIndex <= mElements.Length(), "SetLength lied");
-  
+
   if (aIndex == mElements.Length()) {
     mSelect->AppendChild(*aOption, aError);
     return;

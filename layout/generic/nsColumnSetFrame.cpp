@@ -31,7 +31,7 @@ public:
    * Returns the frame's visual overflow rect instead of the frame's bounds.
    */
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
-                           bool* aSnap) override
+                           bool* aSnap) const override
   {
     *aSnap = false;
     return static_cast<nsColumnSetFrame*>(mFrame)->CalculateBounds(ToReferenceFrame());
@@ -43,14 +43,15 @@ public:
   virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
                                              LayerManager* aManager,
                                              const ContainerLayerParameters& aContainerParameters) override;
-  virtual void CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
+  virtual bool CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
+                                       mozilla::wr::IpcResourceUpdateQueue& aResources,
                                        const StackingContextHelper& aSc,
-                                       nsTArray<WebRenderParentCommand>& aParentCommands,
-                                       mozilla::layers::WebRenderDisplayItemLayer* aLayer) override;
+                                       mozilla::layers::WebRenderLayerManager* aManager,
+                                       nsDisplayListBuilder* aDisplayListBuilder) override;
   virtual void Paint(nsDisplayListBuilder* aBuilder,
                      gfxContext* aCtx) override;
 
-  NS_DISPLAY_DECL_NAME("ColumnRule", nsDisplayItem::TYPE_COLUMN_RULE);
+  NS_DISPLAY_DECL_NAME("ColumnRule", TYPE_COLUMN_RULE);
 
 private:
   nsTArray<nsCSSBorderRenderer> mBorderRenderers;
@@ -75,9 +76,8 @@ nsDisplayColumnRule::GetLayerState(nsDisplayListBuilder* aBuilder,
   if (!gfxPrefs::LayersAllowColumnRuleLayers()) {
     return LAYER_NONE;
   }
-
-  RefPtr<gfxContext> screenRefCtx =
-    gfxContext::CreateOrNull(gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget());
+  RefPtr<gfxContext> screenRefCtx = gfxContext::CreateOrNull(
+    gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget().get());
 
   static_cast<nsColumnSetFrame*>(mFrame)->
     CreateBorderRenderers(mBorderRenderers, screenRefCtx, mVisibleRect, ToReferenceFrame());
@@ -103,16 +103,36 @@ nsDisplayColumnRule::BuildLayer(nsDisplayListBuilder* aBuilder,
   return BuildDisplayItemLayer(aBuilder, aManager, aContainerParameters);
 }
 
-void
-nsDisplayColumnRule::CreateWebRenderCommands(wr::DisplayListBuilder& aBuilder,
+bool
+nsDisplayColumnRule::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
+                                             mozilla::wr::IpcResourceUpdateQueue& aResources,
                                              const StackingContextHelper& aSc,
-                                             nsTArray<WebRenderParentCommand>& aParentCommands,
-                                             WebRenderDisplayItemLayer* aLayer)
+                                             mozilla::layers::WebRenderLayerManager* aManager,
+                                             nsDisplayListBuilder* aDisplayListBuilder)
 {
-  MOZ_ASSERT(!mBorderRenderers.IsEmpty());
-  for (auto iter = mBorderRenderers.begin(); iter != mBorderRenderers.end(); iter++) {
-      iter->CreateWebRenderCommands(aBuilder, aSc, aLayer);
+  if (aManager->IsLayersFreeTransaction()) {
+    RefPtr<gfxContext> screenRefCtx = gfxContext::CreateOrNull(
+      gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget().get());
+
+    static_cast<nsColumnSetFrame*>(mFrame)->
+      CreateBorderRenderers(mBorderRenderers, screenRefCtx, mVisibleRect, ToReferenceFrame());
+
+    if (mBorderRenderers.IsEmpty()) {
+      return false;
+    }
+
+    for (auto iter = mBorderRenderers.begin(); iter != mBorderRenderers.end(); iter++) {
+      if (!iter->CanCreateWebRenderCommands()) {
+        return false;
+      }
+    }
   }
+
+  for (auto iter = mBorderRenderers.begin(); iter != mBorderRenderers.end(); iter++) {
+    iter->CreateWebRenderCommands(aBuilder, aResources, aSc);
+  }
+
+  return true;
 }
 
 /**
@@ -464,6 +484,14 @@ nsColumnSetFrame::ChooseColumnStrategy(const ReflowInput& aReflowInput,
   return config;
 }
 
+static void
+MarkPrincipalChildrenDirty(nsIFrame* aFrame)
+{
+  for (nsIFrame* childFrame : aFrame->PrincipalChildList()) {
+    childFrame->AddStateBits(NS_FRAME_IS_DIRTY);
+  }
+}
+
 bool
 nsColumnSetFrame::ReflowColumns(ReflowOutput& aDesiredSize,
                                 const ReflowInput& aReflowInput,
@@ -584,8 +612,8 @@ nsColumnSetFrame::ReflowChildren(ReflowOutput&     aDesiredSize,
   bool allFit = true;
   WritingMode wm = GetWritingMode();
   bool isRTL = !wm.IsBidiLTR();
-  bool shrinkingBSizeOnly = !NS_SUBTREE_DIRTY(this) &&
-    mLastBalanceBSize > aConfig.mColMaxBSize;
+  bool shrinkingBSize = mLastBalanceBSize > aConfig.mColMaxBSize;
+  bool changingBSize = mLastBalanceBSize != aConfig.mColMaxBSize;
 
 #ifdef DEBUG_roc
   printf("*** Doing column reflow pass: mLastBalanceBSize=%d, mColMaxBSize=%d, RTL=%d\n"
@@ -666,6 +694,12 @@ nsColumnSetFrame::ReflowChildren(ReflowOutput&     aDesiredSize,
       && child->GetNextSibling()
       && !(aUnboundedLastColumn && columnCount == aConfig.mBalanceColCount - 1)
       && !NS_SUBTREE_DIRTY(child->GetNextSibling());
+    // If column-fill is auto (not the default), then we might need to
+    // move content between columns for any change in column block-size.
+    if (skipIncremental && changingBSize &&
+        StyleColumn()->mColumnFill == NS_STYLE_COLUMN_FILL_AUTO) {
+      skipIncremental = false;
+    }
     // If we need to pull up content from the prev-in-flow then this is not just
     // a height shrink. The prev in flow will have set the dirty bit.
     // Check the overflow rect YMost instead of just the child's content height. The child
@@ -674,22 +708,22 @@ nsColumnSetFrame::ReflowChildren(ReflowOutput&     aDesiredSize,
     // boundary, but if so, too bad, this optimization is defeated.)
     // We want scrollable overflow here since this is a calculation that
     // affects layout.
-    bool skipResizeBSizeShrink = false;
-    if (shrinkingBSizeOnly) {
+    if (skipIncremental && shrinkingBSize) {
       switch (wm.GetBlockDir()) {
       case WritingMode::eBlockTB:
-        if (child->GetScrollableOverflowRect().YMost() <= aConfig.mColMaxBSize) {
-          skipResizeBSizeShrink = true;
+        if (child->GetScrollableOverflowRect().YMost() > aConfig.mColMaxBSize) {
+          skipIncremental = false;
         }
         break;
       case WritingMode::eBlockLR:
-        if (child->GetScrollableOverflowRect().XMost() <= aConfig.mColMaxBSize) {
-          skipResizeBSizeShrink = true;
+        if (child->GetScrollableOverflowRect().XMost() > aConfig.mColMaxBSize) {
+          skipIncremental = false;
         }
         break;
       case WritingMode::eBlockRL:
         // XXX not sure how to handle this, so for now just don't attempt
         // the optimization
+        skipIncremental = false;
         break;
       default:
         NS_NOTREACHED("unknown block direction");
@@ -698,7 +732,7 @@ nsColumnSetFrame::ReflowChildren(ReflowOutput&     aDesiredSize,
     }
 
     nscoord childContentBEnd = 0;
-    if (!reflowNext && (skipIncremental || skipResizeBSizeShrink)) {
+    if (!reflowNext && skipIncremental) {
       // This child does not need to be reflowed, but we may need to move it
       MoveChildTo(child, childOrigin, wm, containerSize);
 
@@ -716,8 +750,8 @@ nsColumnSetFrame::ReflowChildren(ReflowOutput&     aDesiredSize,
       }
       childContentBEnd = nsLayoutUtils::CalculateContentBEnd(wm, child);
 #ifdef DEBUG_roc
-      printf("*** Skipping child #%d %p (incremental %d, resize block-size shrink %d): status = %d\n",
-             columnCount, (void*)child, skipIncremental, skipResizeBSizeShrink, aStatus);
+      printf("*** Skipping child #%d %p (incremental %d): status = %d\n",
+             columnCount, (void*)child, skipIncremental, aStatus);
 #endif
     } else {
       LogicalSize availSize(wm, aConfig.mColISize, aConfig.mColMaxBSize);
@@ -769,6 +803,7 @@ nsColumnSetFrame::ReflowChildren(ReflowOutput&     aDesiredSize,
                           kidReflowInput.ComputedLogicalMargin().IStart(wm),
                           childOrigin.B(wm) +
                           kidReflowInput.ComputedLogicalMargin().BStart(wm));
+      aStatus.Reset();
       ReflowChild(child, PresContext(), kidDesiredSize, kidReflowInput,
                   wm, origin, containerSize, 0, aStatus);
 
@@ -974,7 +1009,7 @@ nsColumnSetFrame::DrainOverflowColumns()
       mFrames.InsertFrames(this, nullptr, *overflows);
     }
   }
-  
+
   // Now pull back our own overflows and append them to our children.
   // We don't need to reparent them since we're already their parent.
   AutoFrameListPtr overflows(presContext, StealOverflowFrames());
@@ -1104,7 +1139,7 @@ nsColumnSetFrame::FindBestBalanceBSize(const ReflowInput& aReflowInput,
     aConfig.mColMaxBSize = nextGuess;
 
     aUnboundedLastColumn = false;
-    AddStateBits(NS_FRAME_IS_DIRTY);
+    MarkPrincipalChildrenDirty(this);
     feasible = ReflowColumns(aDesiredSize, aReflowInput, aStatus, aConfig, false,
                              &aOutMargin, aColData);
 
@@ -1133,7 +1168,7 @@ nsColumnSetFrame::FindBestBalanceBSize(const ReflowInput& aReflowInput,
       // allowed to have arbitrary height here, even though we were balancing.
       // Otherwise we'd have to split, and it's not clear what we'd do with
       // that.
-      AddStateBits(NS_FRAME_IS_DIRTY);
+      MarkPrincipalChildrenDirty(this);
       feasible = ReflowColumns(aDesiredSize, aReflowInput, aStatus, aConfig,
                                availableContentBSize == NS_UNCONSTRAINEDSIZE,
                                &aOutMargin, aColData);
@@ -1155,9 +1190,7 @@ nsColumnSetFrame::Reflow(nsPresContext*           aPresContext,
 
   DO_GLOBAL_REFLOW_COUNT("nsColumnSetFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
-
-  // Initialize OUT parameter
-  aStatus.Reset();
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
   // Our children depend on our block-size if we have a fixed block-size.
   if (aReflowInput.ComputedBSize() != NS_AUTOHEIGHT) {
@@ -1243,19 +1276,18 @@ nsColumnSetFrame::Reflow(nsPresContext*           aPresContext,
 
 void
 nsColumnSetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                   const nsRect&           aDirtyRect,
                                    const nsDisplayListSet& aLists)
 {
   DisplayBorderBackgroundOutline(aBuilder, aLists);
 
   if (IsVisibleForPainting(aBuilder)) {
     aLists.BorderBackground()->
-      AppendNewToTop(new (aBuilder)nsDisplayColumnRule(aBuilder, this));
+      AppendNewToTop(new (aBuilder) nsDisplayColumnRule(aBuilder, this));
   }
 
   // Our children won't have backgrounds so it doesn't matter where we put them.
   for (nsFrameList::Enumerator e(mFrames); !e.AtEnd(); e.Next()) {
-    BuildDisplayListForChild(aBuilder, e.get(), aDirtyRect, aLists);
+    BuildDisplayListForChild(aBuilder, e.get(), aLists);
   }
 }
 

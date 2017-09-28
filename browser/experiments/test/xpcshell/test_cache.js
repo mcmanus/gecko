@@ -19,10 +19,6 @@ var gPolicy              = null;
 var gManifestObject      = null;
 var gManifestHandlerURI  = null;
 
-function run_test() {
-  run_next_test();
-}
-
 add_task(async function test_setup() {
   loadAddonManager();
   await removeCacheFile();
@@ -130,7 +126,7 @@ add_task(async function test_cache() {
   for (let i = 0; i < gManifestObject.experiments.length; ++i) {
     let experiment = gManifestObject.experiments[i];
     startDates.push(futureDate(baseDate, (50 + (150 * i)) * MS_IN_ONE_DAY));
-    endDates .push(futureDate(startDates[i], 50 * MS_IN_ONE_DAY));
+    endDates.push(futureDate(startDates[i], 50 * MS_IN_ONE_DAY));
     experiment.startTime = dateToSeconds(startDates[i]);
     experiment.endTime   = dateToSeconds(endDates[i]);
   }
@@ -311,7 +307,7 @@ add_task(async function test_expiration() {
     // Spread out experiments in time so that one experiment can end and expire while
     // the next is still running.
     startDates.push(futureDate(baseDate, (50 + (200 * i)) * MS_IN_ONE_DAY));
-    endDates .push(futureDate(startDates[i], 50 * MS_IN_ONE_DAY));
+    endDates.push(futureDate(startDates[i], 50 * MS_IN_ONE_DAY));
     experiment.startTime = dateToSeconds(startDates[i]);
     experiment.endTime   = dateToSeconds(endDates[i]);
   }
@@ -388,7 +384,7 @@ add_task(async function test_expiration() {
 
   // Test that experiments that are cached locally but never ran are removed from cache
   // when they are removed from the manifest (this is cached data, not really history).
-  gManifestObject["experiments"] = gManifestObject["experiments"].slice(1, 1);
+  gManifestObject.experiments = gManifestObject.experiments.slice(1, 1);
   await experiments.updateManifest();
   validateCache([...experiments._experiments.keys()], [EXPERIMENT2_ID]);
 

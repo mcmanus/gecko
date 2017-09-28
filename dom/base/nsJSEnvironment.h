@@ -21,6 +21,7 @@
 
 class nsICycleCollectorListener;
 class nsScriptNameSpaceManager;
+class nsIDocShell;
 
 namespace JS {
 class AutoValueVector;
@@ -86,10 +87,7 @@ public:
                                 IsShrinking aShrinking = NonShrinkingGC,
                                 int64_t aSliceMillis = 0);
 
-  // If aExtraForgetSkippableCalls is -1, forgetSkippable won't be
-  // called even if the previous collection was GC.
-  static void CycleCollectNow(nsICycleCollectorListener *aListener = nullptr,
-                              int32_t aExtraForgetSkippableCalls = 0);
+  static void CycleCollectNow(nsICycleCollectorListener *aListener = nullptr);
 
   // Run a cycle collector slice, using a heuristic to decide how long to run it.
   static void RunCycleCollectorSlice(mozilla::TimeStamp aDeadline);
@@ -104,7 +102,14 @@ public:
   static uint32_t GetMaxCCSliceTimeSinceClear();
   static void ClearMaxCCSliceTime();
 
-  static void RunNextCollectorTimer();
+  // If there is some pending CC or GC timer/runner, this will run it.
+  static void RunNextCollectorTimer(JS::gcreason::Reason aReason,
+                                    mozilla::TimeStamp aDeadline = mozilla::TimeStamp());
+  // If user has been idle and aDocShell is for an iframe being loaded in an
+  // already loaded top level docshell, this will run a CC or GC
+  // timer/runner if there is such pending.
+  static void MaybeRunNextCollectorSlice(nsIDocShell* aDocShell,
+                                         JS::gcreason::Reason aReason);
 
   // The GC should probably run soon, in the zone of object aObj (if given).
   static void PokeGC(JS::gcreason::Reason aReason, JSObject* aObj, int aDelay = 0);
@@ -179,7 +184,8 @@ class AsyncErrorReporter final : public mozilla::Runnable
 public:
   // aWindow may be null if this error report is not associated with a window
   explicit AsyncErrorReporter(xpc::ErrorReport* aReport)
-    : mReport(aReport)
+    : Runnable("dom::AsyncErrorReporter")
+    , mReport(aReport)
   {}
 
   NS_IMETHOD Run() override

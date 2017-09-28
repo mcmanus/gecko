@@ -4,11 +4,14 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import, print_function, unicode_literals
+
 import unittest
 from taskgraph.util.attributes import (
     attrmatch,
     match_run_on_projects,
 )
+from mozunit import main
 
 
 class Attrmatch(unittest.TestCase):
@@ -89,3 +92,7 @@ class MatchRunOnProjects(unittest.TestCase):
         self.assertTrue(match_run_on_projects('mozilla-central', ['release', 'try', 'date']))
         self.assertTrue(match_run_on_projects('mozilla-beta', ['release', 'try', 'date']))
         self.assertTrue(match_run_on_projects('mozilla-release', ['release', 'try', 'date']))
+
+
+if __name__ == '__main__':
+    main()

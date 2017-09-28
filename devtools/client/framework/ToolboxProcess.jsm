@@ -11,6 +11,7 @@ const { interfaces: Ci, utils: Cu, results: Cr } = Components;
 const DBG_XUL = "chrome://devtools/content/framework/toolbox-process-window.xul";
 const CHROME_DEBUGGER_PROFILE_NAME = "chrome_debugger_profile";
 
+const { console } = Cu.import("resource://gre/modules/Console.jsm", {});
 const { require, DevToolsLoader } = Cu.import("resource://devtools/shared/Loader.jsm", {});
 const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
 
@@ -19,7 +20,10 @@ XPCOMUtils.defineLazyGetter(this, "Telemetry", function () {
   return require("devtools/client/shared/telemetry");
 });
 XPCOMUtils.defineLazyGetter(this, "EventEmitter", function () {
-  return require("devtools/shared/event-emitter");
+  return require("devtools/shared/old-event-emitter");
+});
+XPCOMUtils.defineLazyGetter(this, "system", function () {
+  return require("devtools/shared/system");
 });
 const promise = require("promise");
 const Services = require("Services");
@@ -70,6 +74,8 @@ this.BrowserToolboxProcess = function BrowserToolboxProcess(onClose, onRun, opti
   }
 
   this._telemetry = new Telemetry();
+
+  this._onConnectionChange = this._onConnectionChange.bind(this);
 
   this.close = this.close.bind(this);
   Services.obs.addObserver(this.close, "quit-application");
@@ -133,7 +139,7 @@ BrowserToolboxProcess.prototype = {
     dumpn("Created a separate loader instance for the DebuggerServer.");
 
     // Forward interesting events.
-    this.debuggerServer.on("connectionchange", this.emit);
+    this.debuggerServer.on("connectionchange", this._onConnectionChange);
 
     this.debuggerServer.init();
     // We mainly need a root actor and tab actors for opening a toolbox, even
@@ -143,17 +149,20 @@ BrowserToolboxProcess.prototype = {
     this.debuggerServer.allowChromeProcess = true;
     dumpn("initialized and added the browser actors for the DebuggerServer.");
 
-    let chromeDebuggingPort =
-      Services.prefs.getIntPref("devtools.debugger.chrome-debugging-port");
     let chromeDebuggingWebSocket =
       Services.prefs.getBoolPref("devtools.debugger.chrome-debugging-websocket");
     let listener = this.debuggerServer.createListener();
-    listener.portOrPath = chromeDebuggingPort;
+    listener.portOrPath = -1;
     listener.webSocket = chromeDebuggingWebSocket;
     listener.open();
+    this.port = listener.port;
+
+    if (!this.port) {
+      throw new Error("No debugger server port");
+    }
 
     dumpn("Finished initializing the chrome toolbox server.");
-    dumpn("Started listening on port: " + chromeDebuggingPort);
+    dump(`Debugger Server for Browser Toolbox listening on port: ${this.port}\n`);
   },
 
   /**
@@ -205,6 +214,12 @@ BrowserToolboxProcess.prototype = {
    */
   _migrateProfileDir() {
     let oldDebuggingProfileDir = Services.dirsvc.get("ProfLD", Ci.nsIFile);
+    let newDebuggingProfileDir = Services.dirsvc.get("ProfD", Ci.nsIFile);
+    if (oldDebuggingProfileDir.path == newDebuggingProfileDir.path) {
+      // It's possible for these locations to be the same, such as running from
+      // a custom profile directory specified via CLI.
+      return;
+    }
     oldDebuggingProfileDir.append(CHROME_DEBUGGER_PROFILE_NAME);
     if (!oldDebuggingProfileDir.exists()) {
       return;
@@ -212,7 +227,6 @@ BrowserToolboxProcess.prototype = {
     dumpn(`Old debugging profile exists: ${oldDebuggingProfileDir.path}`);
     try {
       // Remove the directory from the target location, if it exists
-      let newDebuggingProfileDir = Services.dirsvc.get("ProfD", Ci.nsIFile);
       newDebuggingProfileDir.append(CHROME_DEBUGGER_PROFILE_NAME);
       if (newDebuggingProfileDir.exists()) {
         dumpn(`Removing folder at destination: ${newDebuggingProfileDir.path}`);
@@ -235,19 +249,22 @@ BrowserToolboxProcess.prototype = {
 
     let command = Services.dirsvc.get("XREExeF", Ci.nsIFile).path;
 
-    let xulURI = DBG_XUL;
-
-    if (this._options.addonID) {
-      xulURI += "?addonID=" + this._options.addonID;
-    }
-
     dumpn("Running chrome debugging process.");
     let args = [
       "-no-remote",
       "-foreground",
       "-profile", this._dbgProfilePath,
-      "-chrome", xulURI
+      "-chrome", DBG_XUL
     ];
+    let environment = {
+      // Disable safe mode for the new process in case this was opened via the
+      // keyboard shortcut.
+      MOZ_DISABLE_SAFE_MODE_KEY: "1",
+      MOZ_BROWSER_TOOLBOX_PORT: String(this.port),
+    };
+    if (this._options.addonID) {
+      environment.MOZ_BROWSER_TOOLBOX_ADDONID = String(this._options.addonID);
+    }
 
     // During local development, incremental builds can trigger the main process
     // to clear its startup cache with the "flag file" .purgecaches, but this
@@ -256,7 +273,7 @@ BrowserToolboxProcess.prototype = {
     // well.
     //
     // As an approximation of "isLocalBuild", check for an unofficial build.
-    if (!Services.appinfo.isOfficial) {
+    if (!system.constants.MOZILLA_OFFICIAL) {
       args.push("-purgecaches");
     }
 
@@ -264,11 +281,8 @@ BrowserToolboxProcess.prototype = {
       command,
       arguments: args,
       environmentAppend: true,
-      environment: {
-        // Disable safe mode for the new process in case this was opened via the
-        // keyboard shortcut.
-        MOZ_DISABLE_SAFE_MODE_KEY: "1",
-      },
+      stderr: "stdout",
+      environment,
     }).then(proc => {
       this._dbgProcess = proc;
 
@@ -278,9 +292,34 @@ BrowserToolboxProcess.prototype = {
       this.emit("run", this);
 
       proc.stdin.close();
+      let dumpPipe = async pipe => {
+        let data = await pipe.readString();
+        while (data) {
+          dump(data);
+          data = await pipe.readString();
+        }
+      };
+      dumpPipe(proc.stdout);
+
       proc.wait().then(() => this.close());
+
       return proc;
+    }, err => {
+      console.log(`Error loading Browser Toolbox: ${command} ${args.join(" ")}`, err);
     });
+  },
+
+  /**
+   * Called upon receiving the connectionchange event from a debuggerServer.
+   *
+   * @param {String} what
+   *        Type of connection change (can be either 'opened' or 'closed').
+   * @param {DebuggerServerConnection} connection
+   *        The connection that was opened or closed.
+   */
+  _onConnectionChange: function (evt, what, connection) {
+    let wrappedJSObject = { what, connection };
+    Services.obs.notifyObservers({ wrappedJSObject }, "toolbox-connection-change");
   },
 
   /**
@@ -299,7 +338,7 @@ BrowserToolboxProcess.prototype = {
 
     this._telemetry.toolClosed("jsbrowserdebugger");
     if (this.debuggerServer) {
-      this.debuggerServer.off("connectionchange", this.emit);
+      this.debuggerServer.off("connectionchange", this._onConnectionChange);
       this.debuggerServer.destroy();
       this.debuggerServer = null;
     }
@@ -337,4 +376,9 @@ Services.prefs.addObserver("devtools.debugger.log", {
   }
 });
 
-Services.obs.notifyObservers(null, "ToolboxProcessLoaded");
+Services.prefs.addObserver("toolbox-update-addon-options", {
+  observe: (subject) => {
+    let {id, options} = subject.wrappedJSObject;
+    BrowserToolboxProcess.setAddonOptions(id, options);
+  }
+});

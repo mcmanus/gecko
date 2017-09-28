@@ -5,12 +5,9 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 SOURCES += [
-    'nsWin32Locale.cpp',
     'nsWinCharset.cpp',
+    'OSPreferences_win.cpp'
 ]
-
-if CONFIG['ENABLE_INTL_API']:
-    SOURCES += ['OSPreferences_win.cpp']
 
 FINAL_LIBRARY = 'xul'
 

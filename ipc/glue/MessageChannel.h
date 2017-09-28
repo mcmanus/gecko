@@ -21,11 +21,8 @@
 #include "mozilla/ipc/Neutering.h"
 #endif // defined(OS_WIN)
 #include "mozilla/ipc/Transport.h"
-#if defined(MOZ_CRASHREPORTER) && defined(OS_WIN)
-#include "mozilla/mozalloc_oom.h"
-#include "nsExceptionHandler.h"
-#endif
 #include "MessageLink.h"
+#include "nsILabelableRunnable.h"
 #include "nsThreadUtils.h"
 
 #include <deque>
@@ -34,6 +31,8 @@
 #include <math.h>
 #include <stack>
 #include <vector>
+
+class nsIEventTarget;
 
 namespace mozilla {
 namespace ipc {
@@ -146,7 +145,7 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     // For more details on the process of opening a channel between
     // threads, see the extended comment on this function
     // in MessageChannel.cpp.
-    bool Open(MessageChannel *aTargetChan, MessageLoop *aTargetLoop, Side aSide);
+    bool Open(MessageChannel *aTargetChan, nsIEventTarget *aEventTarget, Side aSide);
 
     // Close the underlying transport channel.
     void Close();
@@ -546,7 +545,8 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     class MessageTask :
         public CancelableRunnable,
         public LinkedListElement<RefPtr<MessageTask>>,
-        public nsIRunnablePriority
+        public nsIRunnablePriority,
+        public nsILabelableRunnable
     {
     public:
         explicit MessageTask(MessageChannel* aChannel, Message&& aMessage);
@@ -563,6 +563,8 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
 
         Message& Msg() { return mMessage; }
         const Message& Msg() const { return mMessage; }
+
+        bool GetAffectedSchedulerGroups(nsTArray<RefPtr<SchedulerGroup>>& aGroups) override;
 
     private:
         MessageTask() = delete;

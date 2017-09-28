@@ -13,7 +13,7 @@ const Services = require("Services");
 const {AppProjects} = require("devtools/client/webide/modules/app-projects");
 const {Connection} = require("devtools/shared/client/connection-manager");
 const {AppManager} = require("devtools/client/webide/modules/app-manager");
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 const promise = require("promise");
 const {GetAvailableAddons} = require("devtools/client/webide/modules/addons");
 const {getJSON} = require("devtools/client/shared/getjson");
@@ -87,22 +87,16 @@ var UI = {
       this.reportError("error_appProjectsLoadFailed");
     });
 
-    // Auto install the ADB Addon Helper and Tools Adapters. Only once.
+    // Auto install the ADB Addon Helper. Only once.
     // If the user decides to uninstall any of this addon, we won't install it again.
     let autoinstallADBHelper = Services.prefs.getBoolPref("devtools.webide.autoinstallADBHelper");
-    let autoinstallFxdtAdapters = Services.prefs.getBoolPref("devtools.webide.autoinstallFxdtAdapters");
     if (autoinstallADBHelper) {
       GetAvailableAddons().then(addons => {
         addons.adb.install();
       }, console.error);
     }
-    if (autoinstallFxdtAdapters) {
-      GetAvailableAddons().then(addons => {
-        addons.adapters.install();
-      }, console.error);
-    }
+
     Services.prefs.setBoolPref("devtools.webide.autoinstallADBHelper", false);
-    Services.prefs.setBoolPref("devtools.webide.autoinstallFxdtAdapters", false);
 
     this.setupDeck();
 
@@ -200,9 +194,6 @@ var UI = {
         break;
       case "runtime-targets":
         this.autoSelectProject();
-        break;
-      case "pre-package":
-        this.prePackageLog(details);
         break;
     }
     this._updatePromise = promise.resolve();
@@ -881,12 +872,6 @@ var UI = {
 
     return gDevTools.showToolbox(target, null, host, options);
   },
-
-  prePackageLog: function (msg) {
-    if (msg == "start") {
-      UI.selectDeckPanel("logs");
-    }
-  }
 };
 
 EventEmitter.decorate(UI);

@@ -5,8 +5,14 @@
 "use strict";
 
 let formFillChromeScript;
+let expectingPopup = null;
 
-function setInput(selector, value) {
+async function sleep(ms = 500, reason = "Intentionally wait for UI ready") {
+  SimpleTest.requestFlakyTimeout(reason);
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function setInput(selector, value) {
   let input = document.querySelector("input" + selector);
   input.value = value;
   input.focus();
@@ -14,13 +20,11 @@ function setInput(selector, value) {
   // "identifyAutofillFields" is invoked asynchronously in "focusin" event. We
   // should make sure fields are ready for popup before doing tests.
   //
-  // TODO: "setTimeout" is used here temporarily because there's no event to
+  // TODO: "sleep" is used here temporarily because there's no event to
   //       notify us of the state of "identifyAutofillFields" for now. We should
   //       figure out a better way after the heuristics land.
-  SimpleTest.requestFlakyTimeout("Guarantee asynchronous identifyAutofillFields is invoked");
-  return new Promise(resolve => setTimeout(() => {
-    resolve(input);
-  }, 500));
+  await sleep(500, "Guarantee asynchronous identifyAutofillFields is invoked");
+  return input;
 }
 
 function clickOnElement(selector) {
@@ -60,7 +64,8 @@ async function addAddress(address) {
     formFillChromeScript.addMessageListener("FormAutofillTest:AddressAdded", function onAdded(data) {
       formFillChromeScript.removeMessageListener("FormAutofillTest:AddressAdded", onAdded);
 
-      resolve();
+      SimpleTest.requestFlakyTimeout("Ensure ProfileAutocomplete is registered");
+      setTimeout(resolve, 500);
     });
   });
 }
@@ -98,6 +103,39 @@ async function checkAddresses(expectedAddresses) {
   });
 }
 
+async function cleanUpAddress() {
+  return new Promise(resolve => {
+    formFillChromeScript.sendAsyncMessage("FormAutofillTest:CleanUpAddress", {});
+    formFillChromeScript.addMessageListener("FormAutofillTest:AddressCleanedUp", function onCleanedUp(data) {
+      formFillChromeScript.removeMessageListener("FormAutofillTest:AddressCleanedUp", onCleanedUp);
+
+      resolve(data);
+    });
+  });
+}
+
+// Utils for registerPopupShownListener(in satchel_common.js) that handles dropdown popup
+// Please call "initPopupListener()" in your test and "await expectPopup()"
+// if you want to wait for dropdown menu displayed.
+function expectPopup() {
+  info("expecting a popup");
+  return new Promise(resolve => {
+    expectingPopup = resolve;
+  });
+}
+
+function popupShownListener() {
+  info("popup shown for test ");
+  if (expectingPopup) {
+    expectingPopup();
+    expectingPopup = null;
+  }
+}
+
+function initPopupListener() {
+  registerPopupShownListener(popupShownListener);
+}
+
 function formAutoFillCommonSetup() {
   let chromeURL = SimpleTest.getTestFileURL("formautofill_parent_utils.js");
   formFillChromeScript = SpecialPowers.loadChromeScript(chromeURL);
@@ -111,6 +149,7 @@ function formAutoFillCommonSetup() {
   SimpleTest.registerCleanupFunction(() => {
     formFillChromeScript.sendAsyncMessage("cleanup");
     formFillChromeScript.destroy();
+    expectingPopup = null;
   });
 }
 

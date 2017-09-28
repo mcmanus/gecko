@@ -20,7 +20,7 @@
 #include "nsTemplateRule.h"
 #include "nsTemplateMap.h"
 #include "nsTArray.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "nsGkAtoms.h"
 #include "nsXULContentUtils.h"
 #include "nsXULElement.h"
@@ -600,8 +600,7 @@ nsXULContentBuilder::BuildContentFromTemplate(nsIContent *aTemplateNode,
             // given node.
             // SynchronizeUsingTemplate contains code used to update textnodes,
             // so make sure to modify both when changing this
-            char16_t attrbuf[128];
-            nsFixedString attrValue(attrbuf, ArrayLength(attrbuf), 0);
+            nsAutoString attrValue;
             tmplKid->GetAttr(kNameSpaceID_None, nsGkAtoms::value, attrValue);
             if (!attrValue.IsEmpty()) {
                 nsAutoString value;
@@ -737,11 +736,7 @@ nsXULContentBuilder::CopyAttributesToElement(nsIContent* aTemplateNode,
 
         // XXXndeakin ignore namespaces until bug 321182 is fixed
         if (attribName != nsGkAtoms::id && attribName != nsGkAtoms::uri) {
-            // Create a buffer here, because there's a chance that an
-            // attribute in the template is going to be an RDF URI, which is
-            // usually longish.
-            char16_t attrbuf[128];
-            nsFixedString attribValue(attrbuf, ArrayLength(attrbuf), 0);
+            nsAutoString attribValue;
             aTemplateNode->GetAttr(attribNameSpaceID, attribName, attribValue);
             if (!attribValue.IsEmpty()) {
                 nsAutoString value;
@@ -878,8 +873,7 @@ nsXULContentBuilder::SynchronizeUsingTemplate(nsIContent* aTemplateNode,
         // This code is similar to that in BuildContentFromTemplate
         if (tmplKid->NodeInfo()->Equals(nsGkAtoms::textnode,
                                         kNameSpaceID_XUL)) {
-            char16_t attrbuf[128];
-            nsFixedString attrValue(attrbuf, ArrayLength(attrbuf), 0);
+            nsAutoString attrValue;
             tmplKid->GetAttr(kNameSpaceID_None, nsGkAtoms::value, attrValue);
             if (!attrValue.IsEmpty()) {
                 nsAutoString value;
@@ -1128,7 +1122,7 @@ nsXULContentBuilder::CreateContainerContentsForQuerySet(nsIContent* aElement,
                 if (priority > aQuerySet->Priority())
                     break;
 
-                // skip over non-matching containers 
+                // skip over non-matching containers
                 if (existingmatch->GetContainer() == aElement) {
                     // if the same priority is already found, replace it. This can happen
                     // when a container is removed and readded
@@ -1758,7 +1752,7 @@ nsXULContentBuilder::CompareResultToNode(nsIXULTemplateResult* aResult,
                                          int32_t* aSortOrder)
 {
     NS_ASSERTION(aSortOrder, "CompareResultToNode: null out param aSortOrder");
-  
+
     *aSortOrder = 0;
 
     nsTemplateMatch *match = nullptr;
@@ -1864,7 +1858,7 @@ nsXULContentBuilder::InsertSortedNode(nsIContent* aContainer,
             for (nsIContent* child = aContainer->GetFirstChild();
                  child;
                  child = child->GetNextSibling()) {
-                 
+
                 if (nsContentUtils::HasNonEmptyAttr(child, kNameSpaceID_None,
                                                     nsGkAtoms::_template))
                     break;

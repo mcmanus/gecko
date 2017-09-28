@@ -108,7 +108,7 @@ add_test(function test_logOnSuccess_true() {
     // Exactly one log file was written.
     let entries = logsdir.directoryEntries;
     do_check_true(entries.hasMoreElements());
-    let logfile = entries.getNext().QueryInterface(Ci.nsILocalFile);
+    let logfile = entries.getNext().QueryInterface(Ci.nsIFile);
     do_check_eq(logfile.leafName.slice(-4), ".txt");
     do_check_true(logfile.leafName.startsWith("success-sync-"), logfile.leafName);
     do_check_false(entries.hasMoreElements());
@@ -122,7 +122,7 @@ add_test(function test_logOnSuccess_true() {
       try {
         logfile.remove(false);
       } catch (ex) {
-        dump("Couldn't delete file: " + ex + "\n");
+        dump("Couldn't delete file: " + ex.message + "\n");
         // Stupid Windows box.
       }
 
@@ -175,7 +175,7 @@ add_test(function test_sync_error_logOnError_true() {
     // Exactly one log file was written.
     let entries = logsdir.directoryEntries;
     do_check_true(entries.hasMoreElements());
-    let logfile = entries.getNext().QueryInterface(Ci.nsILocalFile);
+    let logfile = entries.getNext().QueryInterface(Ci.nsIFile);
     do_check_eq(logfile.leafName.slice(-4), ".txt");
     do_check_true(logfile.leafName.startsWith("error-sync-"), logfile.leafName);
     do_check_false(entries.hasMoreElements());
@@ -189,7 +189,7 @@ add_test(function test_sync_error_logOnError_true() {
       try {
         logfile.remove(false);
       } catch (ex) {
-        dump("Couldn't delete file: " + ex + "\n");
+        dump("Couldn't delete file: " + ex.message + "\n");
         // Stupid Windows box.
       }
 
@@ -242,7 +242,7 @@ add_test(function test_login_error_logOnError_true() {
     // Exactly one log file was written.
     let entries = logsdir.directoryEntries;
     do_check_true(entries.hasMoreElements());
-    let logfile = entries.getNext().QueryInterface(Ci.nsILocalFile);
+    let logfile = entries.getNext().QueryInterface(Ci.nsIFile);
     do_check_eq(logfile.leafName.slice(-4), ".txt");
     do_check_true(logfile.leafName.startsWith("error-sync-"), logfile.leafName);
     do_check_false(entries.hasMoreElements());
@@ -256,7 +256,7 @@ add_test(function test_login_error_logOnError_true() {
       try {
         logfile.remove(false);
       } catch (ex) {
-        dump("Couldn't delete file: " + ex + "\n");
+        dump("Couldn't delete file: " + ex.message + "\n");
         // Stupid Windows box.
       }
 
@@ -314,7 +314,7 @@ add_test(function test_newFailed_errorLog() {
     // Exactly one log file was written.
     let entries = logsdir.directoryEntries;
     do_check_true(entries.hasMoreElements());
-    let logfile = entries.getNext().QueryInterface(Ci.nsILocalFile);
+    let logfile = entries.getNext().QueryInterface(Ci.nsIFile);
     do_check_eq(logfile.leafName.slice(-4), ".txt");
     do_check_true(logfile.leafName.startsWith("error-sync-"), logfile.leafName);
     do_check_false(entries.hasMoreElements());
@@ -328,7 +328,7 @@ add_test(function test_newFailed_errorLog() {
       try {
         logfile.remove(false);
       } catch (ex) {
-        dump("Couldn't delete file: " + ex + "\n");
+        dump("Couldn't delete file: " + ex.message + "\n");
         // Stupid Windows box.
       }
 
@@ -364,7 +364,7 @@ add_test(function test_errorLog_dumpAddons() {
 
     let entries = logsdir.directoryEntries;
     do_check_true(entries.hasMoreElements());
-    let logfile = entries.getNext().QueryInterface(Ci.nsILocalFile);
+    let logfile = entries.getNext().QueryInterface(Ci.nsIFile);
     do_check_eq(logfile.leafName.slice(-4), ".txt");
     do_check_true(logfile.leafName.startsWith("error-sync-"), logfile.leafName);
     do_check_false(entries.hasMoreElements());
@@ -378,7 +378,7 @@ add_test(function test_errorLog_dumpAddons() {
       try {
         logfile.remove(false);
       } catch (ex) {
-        dump("Couldn't delete file: " + ex + "\n");
+        dump("Couldn't delete file: " + ex.message + "\n");
         // Stupid Windows box.
       }
 
@@ -420,7 +420,7 @@ add_test(function test_logErrorCleanup_age() {
     // Only the newest created log file remains.
     let entries = logsdir.directoryEntries;
     do_check_true(entries.hasMoreElements());
-    let logfile = entries.getNext().QueryInterface(Ci.nsILocalFile);
+    let logfile = entries.getNext().QueryInterface(Ci.nsIFile);
     do_check_true(oldLogs.every(function(e) {
       return e != logfile.leafName;
     }));
@@ -430,7 +430,7 @@ add_test(function test_logErrorCleanup_age() {
     try {
       logfile.remove(false);
     } catch (ex) {
-      dump("Couldn't delete file: " + ex + "\n");
+      dump("Couldn't delete file: " + ex.message + "\n");
       // Stupid Windows box.
     }
 

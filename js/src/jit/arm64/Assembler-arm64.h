@@ -189,7 +189,13 @@ class Assembler : public vixl::Assembler
     typedef vixl::Condition Condition;
 
     void finish();
-    bool asmMergeWith(const Assembler& other) {
+    bool appendRawCode(const uint8_t* code, size_t numBytes) {
+        MOZ_CRASH("NYI");
+    }
+    bool reserve(size_t size) {
+        MOZ_CRASH("NYI");
+    }
+    bool swapBuffer(wasm::Bytes& bytes) {
         MOZ_CRASH("NYI");
     }
     void trace(JSTracer* trc);
@@ -221,12 +227,6 @@ class Assembler : public vixl::Assembler
             dataRelocations_.oom();
     }
 
-    void disableProtection() {}
-    void enableProtection() {}
-    void setLowerBoundForProtection(size_t) {}
-    void unprotectRegion(unsigned char*, size_t) {}
-    void reprotectRegion(unsigned char*, size_t) {}
-
     void copyJumpRelocationTable(uint8_t* dest) const {
         if (jumpRelocations_.length())
             memcpy(dest, jumpRelocations_.buffer(), jumpRelocations_.length());
@@ -251,12 +251,12 @@ class Assembler : public vixl::Assembler
     void processCodeLabels(uint8_t* rawCode) {
         for (size_t i = 0; i < codeLabels_.length(); i++) {
             CodeLabel label = codeLabels_[i];
-            Bind(rawCode, label.patchAt(), rawCode + label.target()->offset());
+            Bind(rawCode, *label.patchAt(), *label.target());
         }
     }
 
-    void Bind(uint8_t* rawCode, CodeOffset* label, const void* address) {
-        *reinterpret_cast<const void**>(rawCode + label->offset()) = address;
+    static void Bind(uint8_t* rawCode, CodeOffset label, CodeOffset address) {
+        *reinterpret_cast<const void**>(rawCode + label.offset()) = rawCode + address.offset();
     }
 
     void retarget(Label* cur, Label* next);
@@ -275,9 +275,6 @@ class Assembler : public vixl::Assembler
     int actualIndex(int curOffset) {
         ARMBuffer::PoolEntry pe(curOffset);
         return armbuffer_.poolEntryOffset(pe);
-    }
-    size_t labelToPatchOffset(CodeOffset label) {
-        return label.offset();
     }
     static uint8_t* PatchableJumpAddress(JitCode* code, uint32_t index) {
         return code->raw() + index;
@@ -350,8 +347,6 @@ class Assembler : public vixl::Assembler
     static void TraceJumpRelocations(JSTracer* trc, JitCode* code, CompactBufferReader& reader);
     static void TraceDataRelocations(JSTracer* trc, JitCode* code, CompactBufferReader& reader);
 
-    static void PatchInstructionImmediate(uint8_t* code, PatchedImmPtr imm);
-
     static void FixupNurseryObjects(JSContext* cx, JitCode* code, CompactBufferReader& reader,
                                     const ObjectVector& nurseryObjects);
 
@@ -374,19 +369,12 @@ class Assembler : public vixl::Assembler
     static const size_t OffsetOfJumpTableEntryPointer = 8;
 
   public:
-    void writeCodePointer(AbsoluteLabel* absoluteLabel) {
-        MOZ_ASSERT(!absoluteLabel->bound());
-        uintptr_t x = LabelBase::INVALID_OFFSET;
+    void writeCodePointer(CodeOffset* label) {
+        uintptr_t x = uintptr_t(-1);
         BufferOffset off = EmitData(&x, sizeof(uintptr_t));
-
-        // The x86/x64 makes general use of AbsoluteLabel and weaves a linked list
-        // of uses of an AbsoluteLabel through the assembly. ARM only uses labels
-        // for the case statements of switch jump tables. Thus, for simplicity, we
-        // simply treat the AbsoluteLabel as a label and bind it to the offset of
-        // the jump table entry that needs to be patched.
-        LabelBase* label = absoluteLabel;
         label->bind(off.getOffset());
     }
+
 
     void verifyHeapAccessDisassembly(uint32_t begin, uint32_t end,
                                      const Disassembler::HeapAccess& heapAccess)

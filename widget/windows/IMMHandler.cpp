@@ -117,14 +117,14 @@ public:
   explicit GetWritingModeName(const WritingMode& aWritingMode)
   {
     if (!aWritingMode.IsVertical()) {
-      Assign("Horizontal");
+      AssignLiteral("Horizontal");
       return;
     }
     if (aWritingMode.IsVerticalLR()) {
-      Assign("Vertical (LR)");
+      AssignLiteral("Vertical (LR)");
       return;
     }
-    Assign("Vertical (RL)");
+    AssignLiteral("Vertical (RL)");
   }
   virtual ~GetWritingModeName() {}
 };
@@ -302,8 +302,8 @@ IMMHandler::IsGoogleJapaneseInputActive()
 {
   // NOTE: Even on Windows for en-US, the name of Google Japanese Input is
   //       written in Japanese.
-  return sIMEName.Equals(L"Google \x65E5\x672C\x8A9E\x5165\x529B "
-                         L"IMM32 \x30E2\x30B8\x30E5\x30FC\x30EB");
+  return sIMEName.Equals(u"Google \x65E5\x672C\x8A9E\x5165\x529B "
+                         u"IMM32 \x30E2\x30B8\x30E5\x30FC\x30EB");
 }
 
 // static
@@ -363,8 +363,8 @@ IMMHandler::InitKeyboardLayout(nsWindow* aWindow,
   // For hacking some bugs of some TIP, we should set an IME name from the
   // pref.
   if (sCodePage == 932 && sIMEName.IsEmpty()) {
-    sIMEName =
-      Preferences::GetString("intl.imm.japanese.assume_active_tip_name_as");
+    Preferences::GetString("intl.imm.japanese.assume_active_tip_name_as",
+                           sIMEName);
   }
 
   // Whether the IME supports vertical writing mode might be changed or
@@ -2143,7 +2143,7 @@ IMMHandler::GetTargetClauseRange(uint32_t* aOffset,
 }
 
 bool
-IMMHandler::ConvertToANSIString(const nsAFlatString& aStr,
+IMMHandler::ConvertToANSIString(const nsString& aStr,
                                 UINT aCodePage,
                                 nsACString& aANSIStr)
 {
@@ -2538,8 +2538,12 @@ IMMHandler::AdjustCompositionFont(nsWindow* aWindow,
   // Therefore, we need to store the information which are set to the IM
   // context to static variables since IM context is never recreated.
   static bool sCompositionFontsInitialized = false;
-  static nsString sCompositionFont =
-    Preferences::GetString("intl.imm.composition_font");
+  static nsString sCompositionFont;
+  static bool sCompositionFontPrefDone = false;
+  if (!sCompositionFontPrefDone) {
+    sCompositionFontPrefDone = true;
+    Preferences::GetString("intl.imm.composition_font", sCompositionFont);
+  }
 
   // If composition font is customized by pref, we need to modify the
   // composition font of the IME context at first time even if the writing mode
@@ -2588,8 +2592,8 @@ IMMHandler::AdjustCompositionFont(nsWindow* aWindow,
   if (IsJapanist2003Active() && sCompositionFontForJapanist2003.IsEmpty()) {
     const char* kCompositionFontForJapanist2003 =
       "intl.imm.composition_font.japanist_2003";
-    sCompositionFontForJapanist2003 =
-      Preferences::GetString(kCompositionFontForJapanist2003);
+    Preferences::GetString(kCompositionFontForJapanist2003,
+                           sCompositionFontForJapanist2003);
     // If the font name is not specified properly, let's use
     // "MS PGothic" instead.
     if (sCompositionFontForJapanist2003.IsEmpty() ||

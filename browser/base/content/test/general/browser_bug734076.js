@@ -2,6 +2,13 @@
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 add_task(async function() {
+
+  // allow top level data: URI navigations, otherwise loading data: URIs
+  // in toplevel windows fail.
+  await SpecialPowers.pushPrefEnv({
+    "set": [["security.data_uri.block_toplevel_data_uri_navigations", false]]
+  });
+
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, null, false);
 
   let browser = tab.linkedBrowser;
@@ -95,7 +102,6 @@ add_task(async function() {
           { type: "contextmenu", button: 2 }, gBrowser.selectedBrowser);
     await popupShownPromise;
     info("onImage: " + gContextMenu.onImage);
-    info("target: " + gContextMenu.target.tagName);
 
     let loadedAfterCommandPromise = BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
     document.getElementById(commandToRun).click();

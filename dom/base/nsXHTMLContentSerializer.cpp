@@ -15,10 +15,10 @@
 #include "nsIDOMElement.h"
 #include "nsIContent.h"
 #include "nsIDocument.h"
+#include "nsElementTable.h"
 #include "nsNameSpaceManager.h"
 #include "nsString.h"
 #include "nsUnicharUtils.h"
-#include "nsXPIDLString.h"
 #include "nsIServiceManager.h"
 #include "nsIDocumentEncoder.h"
 #include "nsGkAtoms.h"
@@ -26,7 +26,6 @@
 #include "nsNetUtil.h"
 #include "nsEscape.h"
 #include "nsCRT.h"
-#include "nsIParserService.h"
 #include "nsContentUtils.h"
 #include "nsLWBrkCIID.h"
 #include "nsIScriptElement.h"
@@ -86,10 +85,6 @@ nsXHTMLContentSerializer::Init(uint32_t aFlags,
   mBodyOnly = (mFlags & nsIDocumentEncoder::OutputBodyOnly) ? true
                                                             : false;
 
-  // set up entity converter if we are going to need it
-  if (mFlags & nsIDocumentEncoder::OutputEncodeW3CEntities) {
-    mEntityConverter = do_CreateInstance(NS_ENTITYCONVERTER_CONTRACTID);
-  }
   return NS_OK;
 }
 
@@ -299,7 +294,7 @@ nsXHTMLContentSerializer::SerializeAttributes(nsIContent* aContent,
           (attrName == nsGkAtoms::src))) {
         // Make all links absolute when converting only the selection:
         if (mFlags & nsIDocumentEncoder::OutputAbsoluteLinks) {
-          // Would be nice to handle OBJECT and APPLET tags,
+          // Would be nice to handle OBJECT tags,
           // but that gets more complicated since we have to
           // search the tag list for CODEBASE as well.
           // For now, just leave them relative.
@@ -600,18 +595,8 @@ nsXHTMLContentSerializer::LineBreakBeforeOpen(int32_t aNamespaceID, nsIAtom* aNa
       aName == nsGkAtoms::html) {
     return true;
   }
-  else {
-    nsIParserService* parserService = nsContentUtils::GetParserService();
 
-    if (parserService) {
-      bool res;
-      parserService->
-        IsBlock(parserService->HTMLCaseSensitiveAtomTagToId(aName), res);
-      return res;
-    }
-  }
-
-  return mAddSpace;
+  return nsHTMLElement::IsBlock(nsHTMLTags::CaseSensitiveAtomTagToId(aName));
 }
 
 bool
@@ -681,31 +666,16 @@ nsXHTMLContentSerializer::LineBreakAfterClose(int32_t aNamespaceID, nsIAtom* aNa
       (aName == nsGkAtoms::tr) ||
       (aName == nsGkAtoms::th) ||
       (aName == nsGkAtoms::td) ||
-      (aName == nsGkAtoms::pre) ||
       (aName == nsGkAtoms::title) ||
-      (aName == nsGkAtoms::li) ||
       (aName == nsGkAtoms::dt) ||
       (aName == nsGkAtoms::dd) ||
-      (aName == nsGkAtoms::blockquote) ||
       (aName == nsGkAtoms::select) ||
       (aName == nsGkAtoms::option) ||
-      (aName == nsGkAtoms::p) ||
-      (aName == nsGkAtoms::map) ||
-      (aName == nsGkAtoms::div)) {
+      (aName == nsGkAtoms::map)) {
     return true;
   }
-  else {
-    nsIParserService* parserService = nsContentUtils::GetParserService();
 
-    if (parserService) {
-      bool res;
-      parserService->
-        IsBlock(parserService->HTMLCaseSensitiveAtomTagToId(aName), res);
-      return res;
-    }
-  }
-
-  return false;
+  return nsHTMLElement::IsBlock(nsHTMLTags::CaseSensitiveAtomTagToId(aName));
 }
 
 

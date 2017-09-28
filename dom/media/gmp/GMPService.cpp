@@ -40,6 +40,7 @@
 #include "mozilla/dom/PluginCrashedEvent.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/SystemGroup.h"
 
 namespace mozilla {
 
@@ -178,7 +179,7 @@ GeckoMediaPluginService::RunPluginCrashCallbacks(uint32_t aPluginId,
   nsAutoPtr<nsTArray<RefPtr<GMPCrashHelper>>> helpers;
   {
     MutexAutoLock lock(mMutex);
-    mPluginCrashHelpers.RemoveAndForget(aPluginId, helpers);
+    mPluginCrashHelpers.Remove(aPluginId, &helpers);
   }
   if (!helpers) {
     LOGD(("%s::%s(%i) No crash helpers, not handling crash.", __CLASS__, __FUNCTION__, aPluginId));
@@ -302,7 +303,7 @@ GeckoMediaPluginService::GMPDispatch(already_AddRefed<nsIRunnable> event,
   nsCOMPtr<nsIRunnable> r(event);
   nsCOMPtr<nsIThread> thread;
   nsresult rv = GetThread(getter_AddRefs(thread));
-  if (NS_FAILED(rv)) {
+  if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
   return thread->Dispatch(r, flags);
@@ -324,7 +325,7 @@ GeckoMediaPluginService::GetThread(nsIThread** aThread)
     }
 
     nsresult rv = NS_NewNamedThread("GMPThread", getter_AddRefs(mGMPThread));
-    if (NS_FAILED(rv)) {
+    if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
 

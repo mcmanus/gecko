@@ -5,18 +5,12 @@
 // Test startup and restart when no add-ons are installed
 // bug 944006
 
-Components.utils.import("resource://gre/modules/Promise.jsm");
 
 // Load XPI Provider to get schema version ID
 var XPIScope = Components.utils.import("resource://gre/modules/addons/XPIProvider.jsm", {});
 const DB_SCHEMA = XPIScope.DB_SCHEMA;
 
 createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "1.9.2");
-
-function run_test() {
-  // Kick off the task-based tests...
-  run_next_test();
-}
 
 // Test for a preference to either exist with a specified value, or not exist at all
 function checkPending() {

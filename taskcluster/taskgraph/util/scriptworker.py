@@ -99,6 +99,9 @@ BEETMOVER_SCOPE_ALIAS_TO_TARGET_TASK = [[
         'nightly_fennec',
         'nightly_linux',
         'nightly_macosx',
+        'nightly_win32',
+        'nightly_win64',
+        'nightly_desktop',
         'mozilla_beta_tasks',
         'mozilla_release_tasks',
     ])
@@ -417,3 +420,16 @@ def get_release_config(config):
             version = fh.readline().rstrip()
         release_config['version'] = version
     return release_config
+
+
+def get_signing_cert_scope_per_platform(build_platform, is_nightly, config):
+    if build_platform in (
+        'linux-devedition-nightly', 'linux64-devedition-nightly',
+        'macosx64-devedition-nightly',
+        'win32-devedition-nightly', 'win64-devedition-nightly',
+    ):
+        return get_devedition_signing_cert_scope(config)
+    elif is_nightly:
+        return get_signing_cert_scope(config)
+    else:
+        return 'project:releng:signing:cert:dep-signing'

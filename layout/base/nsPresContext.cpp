@@ -7,6 +7,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/Encoding.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventStateManager.h"
 
@@ -29,6 +30,7 @@
 #include "mozilla/LookAndFeel.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIDOMHTMLDocument.h"
+#include "nsHTMLDocument.h"
 #include "nsIDOMHTMLElement.h"
 #include "nsIWeakReferenceUtils.h"
 #include "nsThreadUtils.h"
@@ -96,6 +98,7 @@
 
 using namespace mozilla;
 using namespace mozilla::dom;
+using namespace mozilla::gfx;
 using namespace mozilla::layers;
 
 uint8_t gNotifySubDocInvalidationData;
@@ -120,7 +123,7 @@ class CharSetChangingRunnable : public Runnable
 {
 public:
   CharSetChangingRunnable(nsPresContext* aPresContext,
-                          const nsCString& aCharSet)
+                          NotNull<const Encoding*> aCharSet)
     : Runnable("CharSetChangingRunnable"),
       mPresContext(aPresContext),
       mCharSet(aCharSet)
@@ -135,7 +138,7 @@ public:
 
 private:
   RefPtr<nsPresContext> mPresContext;
-  nsCString mCharSet;
+  NotNull<const Encoding*> mCharSet;
 };
 
 } // namespace
@@ -196,15 +199,9 @@ nsPresContext::PrefChangedUpdateTimerCallback(nsITimer *aTimer, void *aClosure)
 }
 
 static bool
-IsVisualCharset(const nsCString& aCharset)
+IsVisualCharset(NotNull<const Encoding*> aCharset)
 {
-  if (aCharset.LowerCaseEqualsLiteral("ibm862")             // Hebrew
-      || aCharset.LowerCaseEqualsLiteral("iso-8859-8") ) {  // Hebrew
-    return true; // visual text type
-  }
-  else {
-    return false; // logical text type
-  }
+  return aCharset == ISO_8859_8_ENCODING;
 }
 
 nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
@@ -235,7 +232,7 @@ nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
     mFocusBackgroundColor(mBackgroundColor),
     mFocusTextColor(mDefaultColor),
     mBodyTextColor(mDefaultColor),
-    mViewportScrollbarOverrideNode(nullptr),
+    mViewportScrollbarOverrideElement(nullptr),
     mViewportStyleScrollbar(NS_STYLE_OVERFLOW_AUTO, NS_STYLE_OVERFLOW_AUTO),
     mFocusRingWidth(1),
     mExistThrottledUpdates(false),
@@ -279,10 +276,11 @@ nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
     mIsGlyph(false),
     mUsesRootEMUnits(false),
     mUsesExChUnits(false),
-    mUsesViewportUnits(false),
     mPendingViewportChange(false),
     mCounterStylesDirty(true),
     mPostedFlushCounterStyles(false),
+    mFontFeatureValuesDirty(true),
+    mPostedFlushFontFeatureValues(false),
     mSuppressResizeReflow(false),
     mIsVisual(false),
     mFireAfterPaintEvents(false),
@@ -402,7 +400,6 @@ nsPresContext::~nsPresContext()
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsPresContext)
    NS_INTERFACE_MAP_ENTRY(nsISupports)
-   NS_INTERFACE_MAP_ENTRY(nsIObserver)
 NS_INTERFACE_MAP_END
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(nsPresContext)
@@ -522,15 +519,14 @@ nsPresContext::GetDocumentColorPreferences()
     mBackgroundColor = LookAndFeel::GetColorUsingStandins(
         LookAndFeel::eColorID_window, NS_RGB(0xff, 0xff, 0xff));
   } else if (usePrefColors) {
-    nsAdoptingString colorStr =
-      Preferences::GetString("browser.display.foreground_color");
-
+    nsAutoString colorStr;
+    Preferences::GetString("browser.display.foreground_color", colorStr);
     if (!colorStr.IsEmpty()) {
       mDefaultColor = MakeColorPref(colorStr);
     }
 
-    colorStr = Preferences::GetString("browser.display.background_color");
-
+    colorStr.Truncate();
+    Preferences::GetString("browser.display.background_color", colorStr);
     if (!colorStr.IsEmpty()) {
       mBackgroundColor = MakeColorPref(colorStr);
     }
@@ -589,20 +585,20 @@ nsPresContext::GetUserPreferences()
   mUnderlineLinks =
     Preferences::GetBool("browser.underline_anchors", mUnderlineLinks);
 
-  nsAdoptingString colorStr = Preferences::GetString("browser.anchor_color");
-
+  nsAutoString colorStr;
+  Preferences::GetString("browser.anchor_color", colorStr);
   if (!colorStr.IsEmpty()) {
     mLinkColor = MakeColorPref(colorStr);
   }
 
-  colorStr = Preferences::GetString("browser.active_color");
-
+  colorStr.Truncate();
+  Preferences::GetString("browser.active_color", colorStr);
   if (!colorStr.IsEmpty()) {
     mActiveLinkColor = MakeColorPref(colorStr);
   }
 
-  colorStr = Preferences::GetString("browser.visited_color");
-
+  colorStr.Truncate();
+  Preferences::GetString("browser.visited_color", colorStr);
   if (!colorStr.IsEmpty()) {
     mVisitedLinkColor = MakeColorPref(colorStr);
   }
@@ -613,14 +609,14 @@ nsPresContext::GetUserPreferences()
   mFocusTextColor = mDefaultColor;
   mFocusBackgroundColor = mBackgroundColor;
 
-  colorStr = Preferences::GetString("browser.display.focus_text_color");
-
+  colorStr.Truncate();
+  Preferences::GetString("browser.display.focus_text_color", colorStr);
   if (!colorStr.IsEmpty()) {
     mFocusTextColor = MakeColorPref(colorStr);
   }
 
-  colorStr = Preferences::GetString("browser.display.focus_background_color");
-
+  colorStr.Truncate();
+  Preferences::GetString("browser.display.focus_background_color", colorStr);
   if (!colorStr.IsEmpty()) {
     mFocusBackgroundColor = MakeColorPref(colorStr);
   }
@@ -648,8 +644,8 @@ nsPresContext::GetUserPreferences()
   StaticPresData::Get()->ResetCachedFontPrefs();
 
   // * image animation
-  const nsAdoptingCString& animatePref =
-    Preferences::GetCString("image.animation_mode");
+  nsAutoCString animatePref;
+  Preferences::GetCString("image.animation_mode", animatePref);
   if (animatePref.EqualsLiteral("normal"))
     mImageAnimationModePref = imgIContainer::kNormalAnimMode;
   else if (animatePref.EqualsLiteral("none"))
@@ -680,7 +676,7 @@ nsPresContext::GetUserPreferences()
   // We don't need to force reflow: either we are initializing a new
   // prescontext or we are being called from UpdateAfterPreferencesChanged()
   // which triggers a reflow anyway.
-  SetBidi(bidiOptions, false);
+  SetBidi(bidiOptions);
 }
 
 void
@@ -847,6 +843,19 @@ nsPresContext::Init(nsDeviceContext* aDeviceContext)
 
   mDeviceContext = aDeviceContext;
 
+  // In certain rare cases (such as changing page mode), we tear down layout
+  // state and re-initialize a new prescontext for a document. Given that we
+  // hang style state off the DOM, we detect that re-initialization case and
+  // lazily drop the servo data. We don't do this eagerly during layout teardown
+  // because that would incur an extra whole-tree traversal that's unnecessary
+  // most of the time.
+  if (mDocument->IsStyledByServo()) {
+    Element* root = mDocument->GetRootElement();
+    if (root && root->HasServoData()) {
+      ServoRestyleManager::ClearServoDataFromSubtree(root);
+    }
+  }
+
   if (mDeviceContext->SetFullZoom(mFullZoom))
     mDeviceContext->FlushFontCache();
   mCurAppUnitsPerDevPixel = AppUnitsPerDevPixel();
@@ -1008,7 +1017,6 @@ nsPresContext::AttachShell(nsIPresShell* aShell, StyleBackendType aBackendType)
         mImageAnimationMode = imgIContainer::kNormalAnimMode;
     }
 
-    doc->AddCharSetObserver(this);
     UpdateCharSet(doc->GetDocumentCharacterSet());
   }
 }
@@ -1016,13 +1024,6 @@ nsPresContext::AttachShell(nsIPresShell* aShell, StyleBackendType aBackendType)
 void
 nsPresContext::DetachShell()
 {
-  // Remove ourselves as the charset observer from the shell's doc, because
-  // this shell may be going away for good.
-  nsIDocument *doc = mShell ? mShell->GetDocument() : nullptr;
-  if (doc) {
-    doc->RemoveCharSetObserver(this);
-  }
-
   // The counter style manager's destructor needs to deallocate with the
   // presshell arena. Disconnect it before nulling out the shell.
   //
@@ -1070,15 +1071,20 @@ nsPresContext::DetachShell()
 }
 
 void
-nsPresContext::DoChangeCharSet(const nsCString& aCharSet)
+nsPresContext::DoChangeCharSet(NotNull<const Encoding*> aCharSet)
 {
   UpdateCharSet(aCharSet);
   mDeviceContext->FlushFontCache();
-  RebuildAllStyleData(NS_STYLE_HINT_REFLOW, nsRestyleHint(0));
+  // In Stylo, if a document contains one or more <script> elements, frame
+  // construction might happen earlier than the UpdateCharSet(), so we need to
+  // restyle descendants to make their style data up-to-date.
+  RebuildAllStyleData(NS_STYLE_HINT_REFLOW,
+                      mDocument->IsStyledByServo()
+                      ? eRestyle_ForceDescendants : nsRestyleHint(0));
 }
 
 void
-nsPresContext::UpdateCharSet(const nsCString& aCharSet)
+nsPresContext::UpdateCharSet(NotNull<const Encoding*> aCharSet)
 {
   mLanguage = mLangService->LookupCharSet(aCharSet);
   // this will be a language group (or script) code rather than a true language code
@@ -1106,21 +1112,12 @@ nsPresContext::UpdateCharSet(const nsCString& aCharSet)
   }
 }
 
-NS_IMETHODIMP
-nsPresContext::Observe(nsISupports* aSubject,
-                        const char* aTopic,
-                        const char16_t* aData)
+void
+nsPresContext::DispatchCharSetChange(NotNull<const Encoding*> aEncoding)
 {
-  if (!nsCRT::strcmp(aTopic, "charset")) {
-    RefPtr<CharSetChangingRunnable> runnable =
-      new CharSetChangingRunnable(this, NS_LossyConvertUTF16toASCII(aData));
-    return Document()->Dispatch("CharSetChangingRunnable",
-                                TaskCategory::Other,
-                                runnable.forget());
-  }
-
-  NS_WARNING("unrecognized topic in nsPresContext::Observe");
-  return NS_ERROR_FAILURE;
+  RefPtr<CharSetChangingRunnable> runnable =
+    new CharSetChangingRunnable(this, aEncoding);
+  Document()->Dispatch(TaskCategory::Other, runnable.forget());
 }
 
 nsPresContext*
@@ -1298,7 +1295,7 @@ nsPresContext::SetSMILAnimations(nsIDocument *aDoc, uint16_t aNewMode,
 }
 
 void
-nsPresContext::SetImageAnimationModeInternal(uint16_t aMode)
+nsPresContext::SetImageAnimationMode(uint16_t aMode)
 {
   NS_ASSERTION(aMode == imgIContainer::kNormalAnimMode ||
                aMode == imgIContainer::kDontAnimMode ||
@@ -1324,12 +1321,6 @@ nsPresContext::SetImageAnimationModeInternal(uint16_t aMode)
   }
 
   mImageAnimationMode = aMode;
-}
-
-void
-nsPresContext::SetImageAnimationModeExternal(uint16_t aMode)
-{
-  SetImageAnimationModeInternal(aMode);
 }
 
 already_AddRefed<nsIAtom>
@@ -1404,10 +1395,15 @@ nsPresContext::SetFullZoom(float aZoom)
 void
 nsPresContext::SetOverrideDPPX(float aDPPX)
 {
-  mOverrideDPPX = aDPPX;
+  // SetOverrideDPPX is called during navigations, including history
+  // traversals.  In that case, it's typically called with our current value,
+  // and we don't need to actually do anything.
+  if (aDPPX != mOverrideDPPX) {
+    mOverrideDPPX = aDPPX;
 
-  if (HasCachedStyleData()) {
-    MediaFeatureValuesChanged(nsRestyleHint(0), nsChangeHint(0));
+    if (HasCachedStyleData()) {
+      MediaFeatureValuesChanged(nsRestyleHint(0), nsChangeHint(0));
+    }
   }
 }
 
@@ -1462,7 +1458,7 @@ CheckOverflow(const nsStyleDisplay* aDisplay, ScrollbarStyles* aStyles)
   return true;
 }
 
-static nsIContent*
+static Element*
 GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
                                         ScrollbarStyles *aStyles)
 {
@@ -1476,28 +1472,25 @@ GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
 
   // Check the style on the document root element
   StyleSetHandle styleSet = aPresContext->StyleSet();
-  RefPtr<nsStyleContext> rootStyle;
-  rootStyle = styleSet->ResolveStyleFor(docElement, nullptr,
-                                        LazyComputeBehavior::Allow);
+  RefPtr<nsStyleContext> rootStyle =
+    styleSet->ResolveStyleFor(docElement, nullptr, LazyComputeBehavior::Allow);
   if (CheckOverflow(rootStyle->StyleDisplay(), aStyles)) {
     // tell caller we stole the overflow style from the root element
     return docElement;
   }
 
   // Don't look in the BODY for non-HTML documents or HTML documents
-  // with non-HTML roots
+  // with non-HTML roots.
   // XXX this should be earlier; we shouldn't even look at the document root
   // for non-HTML documents. Fix this once we support explicit CSS styling
   // of the viewport
   // XXX what about XHTML?
-  nsCOMPtr<nsIDOMHTMLDocument> htmlDoc(do_QueryInterface(document));
+  nsHTMLDocument* htmlDoc = document->AsHTMLDocument();
   if (!htmlDoc || !docElement->IsHTMLElement()) {
     return nullptr;
   }
 
-  nsCOMPtr<nsIDOMHTMLElement> body;
-  htmlDoc->GetBody(getter_AddRefs(body));
-  nsCOMPtr<nsIContent> bodyElement = do_QueryInterface(body);
+  Element* bodyElement = htmlDoc->GetBody();
 
   if (!bodyElement ||
       !bodyElement->NodeInfo()->Equals(nsGkAtoms::body)) {
@@ -1505,9 +1498,9 @@ GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
     return nullptr;
   }
 
-  RefPtr<nsStyleContext> bodyStyle;
-  bodyStyle = styleSet->ResolveStyleFor(bodyElement->AsElement(), rootStyle,
-                                        LazyComputeBehavior::Allow);
+  RefPtr<nsStyleContext> bodyStyle =
+    styleSet->ResolveStyleFor(bodyElement, rootStyle,
+                              LazyComputeBehavior::Allow);
 
   if (CheckOverflow(bodyStyle->StyleDisplay(), aStyles)) {
     // tell caller we stole the overflow style from the body element
@@ -1517,16 +1510,16 @@ GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
   return nullptr;
 }
 
-nsIContent*
+Element*
 nsPresContext::UpdateViewportScrollbarStylesOverride()
 {
   // Start off with our default styles, and then update them as needed.
   mViewportStyleScrollbar = ScrollbarStyles(NS_STYLE_OVERFLOW_AUTO,
                                             NS_STYLE_OVERFLOW_AUTO);
-  mViewportScrollbarOverrideNode = nullptr;
+  mViewportScrollbarOverrideElement = nullptr;
   // Don't propagate the scrollbar state in printing or print preview.
   if (!IsPaginated()) {
-    mViewportScrollbarOverrideNode =
+    mViewportScrollbarOverrideElement =
       GetPropagatedScrollbarStylesForViewport(this, &mViewportStyleScrollbar);
   }
 
@@ -1538,12 +1531,12 @@ nsPresContext::UpdateViewportScrollbarStylesOverride()
     // the styles are from, so that the state of those elements is not
     // affected across fullscreen change.
     if (fullscreenElement != document->GetRootElement() &&
-        fullscreenElement != mViewportScrollbarOverrideNode) {
+        fullscreenElement != mViewportScrollbarOverrideElement) {
       mViewportStyleScrollbar = ScrollbarStyles(NS_STYLE_OVERFLOW_HIDDEN,
                                                 NS_STYLE_OVERFLOW_HIDDEN);
     }
   }
-  return mViewportScrollbarOverrideNode;
+  return mViewportScrollbarOverrideElement;
 }
 
 bool
@@ -1588,15 +1581,9 @@ nsPresContext::SetContainer(nsIDocShell* aDocShell)
 }
 
 nsISupports*
-nsPresContext::GetContainerWeakInternal() const
+nsPresContext::GetContainerWeak() const
 {
   return static_cast<nsIDocShell*>(mContainer);
-}
-
-nsISupports*
-nsPresContext::GetContainerWeakExternal() const
-{
-  return GetContainerWeakInternal();
 }
 
 nsIDocShell*
@@ -1613,13 +1600,7 @@ nsPresContext::Detach()
 }
 
 bool
-nsPresContext::BidiEnabledExternal() const
-{
-  return BidiEnabledInternal();
-}
-
-bool
-nsPresContext::BidiEnabledInternal() const
+nsPresContext::BidiEnabled() const
 {
   return Document()->GetBidiEnabled();
 }
@@ -1636,15 +1617,12 @@ nsPresContext::SetBidiEnabled() const
 }
 
 void
-nsPresContext::SetBidi(uint32_t aSource, bool aForceRestyle)
+nsPresContext::SetBidi(uint32_t aSource)
 {
   // Don't do all this stuff unless the options have changed.
   if (aSource == GetBidi()) {
     return;
   }
-
-  NS_ASSERTION(!(aForceRestyle && (GetBidi() == 0)),
-               "ForceReflow on new prescontext");
 
   Document()->SetBidiOptions(aSource);
   if (IBMBIDI_TEXTDIRECTION_RTL == GET_BIDI_OPTION_DIRECTION(aSource)
@@ -1662,12 +1640,6 @@ nsPresContext::SetBidi(uint32_t aSource, bool aForceRestyle)
     if (doc) {
       SetVisualMode(IsVisualCharset(doc->GetDocumentCharacterSet()));
     }
-  }
-  if (aForceRestyle && mShell) {
-    // Reconstruct the root document element's frame and its children,
-    // because we need to trigger frame reconstruction for direction change.
-    mDocument->RebuildUserFontSet();
-    mShell->ReconstructFrames();
   }
 }
 
@@ -1798,9 +1770,10 @@ nsPresContext::ThemeChanged()
     sThemeChanged = true;
 
     nsCOMPtr<nsIRunnable> ev =
-      NewRunnableMethod(this, &nsPresContext::ThemeChangedInternal);
-    nsresult rv = Document()->Dispatch("nsPresContext::ThemeChangedInternal",
-                                       TaskCategory::Other,
+      NewRunnableMethod("nsPresContext::ThemeChangedInternal",
+                        this,
+                        &nsPresContext::ThemeChangedInternal);
+    nsresult rv = Document()->Dispatch(TaskCategory::Other,
                                        ev.forget());
     if (NS_SUCCEEDED(rv)) {
       mPendingThemeChanged = true;
@@ -1838,16 +1811,7 @@ nsPresContext::ThemeChangedInternal()
     image::SurfaceCacheUtils::DiscardAll();
   }
 
-  // This will force the system metrics to be generated the next time they're used
-  nsCSSRuleProcessor::FreeSystemMetrics();
-
-  // Changes to system metrics can change media queries on them, or
-  // :-moz-system-metric selectors (which requires eRestyle_Subtree).
-  // Changes in theme can change system colors (whose changes are
-  // properly reflected in computed style data), system fonts (whose
-  // changes are not), and -moz-appearance (whose changes likewise are
-  // not), so we need to reflow.
-  MediaFeatureValuesChanged(eRestyle_Subtree, NS_STYLE_HINT_REFLOW);
+  RefreshSystemMetrics();
 
   // Recursively notify all remote leaf descendants that the
   // system theme has changed.
@@ -1861,9 +1825,10 @@ nsPresContext::SysColorChanged()
   if (!mPendingSysColorChanged) {
     sLookAndFeelChanged = true;
     nsCOMPtr<nsIRunnable> ev =
-      NewRunnableMethod(this, &nsPresContext::SysColorChangedInternal);
-    nsresult rv = Document()->Dispatch("nsPresContext::SysColorChangedInternal",
-                                       TaskCategory::Other,
+      NewRunnableMethod("nsPresContext::SysColorChangedInternal",
+                        this,
+                        &nsPresContext::SysColorChangedInternal);
+    nsresult rv = Document()->Dispatch(TaskCategory::Other,
                                        ev.forget());
     if (NS_SUCCEEDED(rv)) {
       mPendingSysColorChanged = true;
@@ -1882,6 +1847,9 @@ nsPresContext::SysColorChangedInternal()
     sLookAndFeelChanged = false;
   }
 
+  // Invalidate cached '-moz-windows-accent-color-applies' media query:
+  RefreshSystemMetrics();
+
   // Reset default background and foreground colors for the document since
   // they may be using system colors
   GetDocumentColorPreferences();
@@ -1892,15 +1860,30 @@ nsPresContext::SysColorChangedInternal()
 }
 
 void
+nsPresContext::RefreshSystemMetrics()
+{
+  // This will force the system metrics to be generated the next time they're used
+  nsCSSRuleProcessor::FreeSystemMetrics();
+
+  // Changes to system metrics can change media queries on them, or
+  // :-moz-system-metric selectors (which requires eRestyle_Subtree).
+  // Changes in theme can change system colors (whose changes are
+  // properly reflected in computed style data), system fonts (whose
+  // changes are not), and -moz-appearance (whose changes likewise are
+  // not), so we need to reflow.
+  MediaFeatureValuesChanged(eRestyle_Subtree, NS_STYLE_HINT_REFLOW);
+}
+
+void
 nsPresContext::UIResolutionChanged()
 {
   if (!mPendingUIResolutionChanged) {
     nsCOMPtr<nsIRunnable> ev =
-      NewRunnableMethod(this, &nsPresContext::UIResolutionChangedInternal);
+      NewRunnableMethod("nsPresContext::UIResolutionChangedInternal",
+                        this,
+                        &nsPresContext::UIResolutionChangedInternal);
     nsresult rv =
-      Document()->Dispatch("nsPresContext::UIResolutionChangedInternal",
-                           TaskCategory::Other,
-                           ev.forget());
+      Document()->Dispatch(TaskCategory::Other, ev.forget());
     if (NS_SUCCEEDED(rv)) {
       mPendingUIResolutionChanged = true;
     }
@@ -2037,9 +2020,12 @@ nsPresContext::RebuildAllStyleData(nsChangeHint aExtraHint,
 
   mUsesRootEMUnits = false;
   mUsesExChUnits = false;
-  mUsesViewportUnits = false;
+  if (nsStyleSet* styleSet = mShell->StyleSet()->GetAsGecko()) {
+    styleSet->SetUsesViewportUnits(false);
+  }
   mDocument->RebuildUserFontSet();
   RebuildCounterStyles();
+  RebuildFontFeatureValues();
 
   RestyleManager()->RebuildAllStyleData(aExtraHint, aRestyleHint);
 }
@@ -2095,20 +2081,9 @@ nsPresContext::MediaFeatureValuesChanged(nsRestyleHint aRestyleHint,
   mPendingMediaFeatureValuesChanged = false;
 
   // MediumFeaturesChanged updates the applied rules, so it always gets called.
-  if (mShell && mShell->StyleSet()->MediumFeaturesChanged()) {
-    aRestyleHint |= eRestyle_Subtree;
-  }
-
-  if (mPendingViewportChange &&
-      (mUsesViewportUnits || mDocument->IsStyledByServo())) {
-    // Rebuild all style data without rerunning selector matching.
-    //
-    // FIXME(emilio, bug 1328652): We don't set mUsesViewportUnits in stylo yet,
-    // so assume the worst.
-    //
-    // Also, in this case we don't need to do a rebuild of the style data, only
-    // post a restyle.
-    aRestyleHint |= eRestyle_ForceDescendants;
+  if (mShell) {
+    aRestyleHint |= mShell->
+      StyleSet()->MediumFeaturesChanged(mPendingViewportChange);
   }
 
   if (aRestyleHint || aChangeHint) {
@@ -2154,9 +2129,7 @@ nsPresContext::PostMediaFeatureValuesChangedEvent()
       NewRunnableMethod("nsPresContext::HandleMediaFeatureValuesChangedEvent",
                         this, &nsPresContext::HandleMediaFeatureValuesChangedEvent);
     nsresult rv =
-      Document()->Dispatch("nsPresContext::HandleMediaFeatureValuesChangedEvent",
-                           TaskCategory::Other,
-                           ev.forget());
+      Document()->Dispatch(TaskCategory::Other, ev.forget());
     if (NS_SUCCEEDED(rv)) {
       mPendingMediaFeatureValuesChanged = true;
       mShell->SetNeedStyleFlush();
@@ -2257,9 +2230,9 @@ bool
 nsPresContext::HasAuthorSpecifiedRules(const nsIFrame* aFrame,
                                        uint32_t aRuleTypeMask) const
 {
-  if (mShell->StyleSet()->IsGecko()) {
+  if (auto* geckoStyleContext = aFrame->StyleContext()->GetAsGecko()) {
     return
-      nsRuleNode::HasAuthorSpecifiedRules(aFrame->StyleContext(),
+      nsRuleNode::HasAuthorSpecifiedRules(geckoStyleContext,
                                           aRuleTypeMask,
                                           UseDocumentColors());
   }
@@ -2267,10 +2240,14 @@ nsPresContext::HasAuthorSpecifiedRules(const nsIFrame* aFrame,
 
   MOZ_ASSERT(elem->GetPseudoElementType() ==
              aFrame->StyleContext()->GetPseudoType());
-  MOZ_ASSERT(elem->HasServoData());
-  return Servo_HasAuthorSpecifiedRules(elem,
-                                       aRuleTypeMask,
-                                       UseDocumentColors());
+  if (elem->HasServoData()) {
+    return Servo_HasAuthorSpecifiedRules(elem,
+                                         aRuleTypeMask,
+                                         UseDocumentColors());
+  } else {
+    // Probably shouldn't happen, but does. See bug 1387953
+    return false;
+  }
 }
 
 gfxUserFontSet*
@@ -2379,9 +2356,7 @@ nsPresContext::RebuildCounterStyles()
       NewRunnableMethod("nsPresContext::HandleRebuildCounterStyles",
                         this, &nsPresContext::HandleRebuildCounterStyles);
     nsresult rv =
-      Document()->Dispatch("nsPresContext::HandleRebuildCounterStyles",
-                           TaskCategory::Other,
-                           ev.forget());
+      Document()->Dispatch(TaskCategory::Other, ev.forget());
     if (NS_SUCCEEDED(rv)) {
       mPostedFlushCounterStyles = true;
     }
@@ -2601,7 +2576,7 @@ nsPresContext::NotifyInvalidation(uint64_t aTransactionId, const nsRect& aRect)
 
 /* static */ void
 nsPresContext::NotifySubDocInvalidation(ContainerLayer* aContainer,
-                                        const nsIntRegion& aRegion)
+                                        const nsIntRegion* aRegion)
 {
   ContainerLayerPresContext *data =
     static_cast<ContainerLayerPresContext*>(
@@ -2610,15 +2585,23 @@ nsPresContext::NotifySubDocInvalidation(ContainerLayer* aContainer,
     return;
   }
 
-  nsIntPoint topLeft = aContainer->GetVisibleRegion().ToUnknownRegion().GetBounds().TopLeft();
+  uint64_t transactionId = aContainer->Manager()->GetLastTransactionId();
+  IntRect visibleBounds = aContainer->GetVisibleRegion().GetBounds().ToUnknownRect();
 
-  for (auto iter = aRegion.RectIter(); !iter.Done(); iter.Next()) {
+  if (!aRegion) {
+    IntRect rect(IntPoint(0, 0), visibleBounds.Size());
+    data->mPresContext->NotifyInvalidation(transactionId, rect);
+    return;
+  }
+
+  nsIntPoint topLeft = visibleBounds.TopLeft();
+  for (auto iter = aRegion->RectIter(); !iter.Done(); iter.Next()) {
     nsIntRect rect(iter.Get());
     //PresContext coordinate space is relative to the start of our visible
     // region. Is this really true? This feels like the wrong way to get the right
     // answer.
     rect.MoveBy(-topLeft);
-    data->mPresContext->NotifyInvalidation(aContainer->Manager()->GetLastTransactionId(), rect);
+    data->mPresContext->NotifyInvalidation(transactionId, rect);
   }
 }
 
@@ -2662,11 +2645,13 @@ nsPresContext::NotifyDidPaintSubdocumentCallback(nsIDocument* aDocument, void* a
 
 class DelayedFireDOMPaintEvent : public Runnable {
 public:
-  DelayedFireDOMPaintEvent(nsPresContext* aPresContext,
-                           nsTArray<nsRect>* aList,
-                           uint64_t aTransactionId,
-                           const mozilla::TimeStamp& aTimeStamp = mozilla::TimeStamp())
-    : mPresContext(aPresContext)
+  DelayedFireDOMPaintEvent(
+    nsPresContext* aPresContext,
+    nsTArray<nsRect>* aList,
+    uint64_t aTransactionId,
+    const mozilla::TimeStamp& aTimeStamp = mozilla::TimeStamp())
+    : mozilla::Runnable("DelayedFireDOMPaintEvent")
+    , mPresContext(aPresContext)
     , mTransactionId(aTransactionId)
     , mTimeStamp(aTimeStamp)
   {
@@ -3078,6 +3063,15 @@ nsPresContext::GetRestyleGeneration() const
   return mRestyleManager->GetRestyleGeneration();
 }
 
+uint64_t
+nsPresContext::GetUndisplayedRestyleGeneration() const
+{
+  if (!mRestyleManager) {
+    return 0;
+  }
+  return mRestyleManager->GetUndisplayedRestyleGeneration();
+}
+
 nsBidi&
 nsPresContext::GetBidiEngine()
 {
@@ -3087,6 +3081,42 @@ nsPresContext::GetBidiEngine()
     mBidiEngine.reset(new nsBidi());
   }
   return *mBidiEngine;
+}
+
+void
+nsPresContext::FlushFontFeatureValues()
+{
+  if (!mShell) {
+    return; // we've been torn down
+  }
+
+  if (mFontFeatureValuesDirty) {
+    StyleSetHandle styleSet = mShell->StyleSet();
+    mFontFeatureValuesLookup = styleSet->BuildFontFeatureValueSet();
+    mFontFeatureValuesDirty = false;
+  }
+}
+
+void
+nsPresContext::RebuildFontFeatureValues()
+{
+  if (!mShell) {
+    return; // we've been torn down
+  }
+
+  mFontFeatureValuesDirty = true;
+  mShell->SetNeedStyleFlush();
+
+  if (!mPostedFlushFontFeatureValues) {
+    nsCOMPtr<nsIRunnable> ev =
+      NewRunnableMethod("nsPresContext::HandleRebuildFontFeatureValues",
+                        this, &nsPresContext::HandleRebuildFontFeatureValues);
+    nsresult rv =
+      Document()->Dispatch(TaskCategory::Other, ev.forget());
+    if (NS_SUCCEEDED(rv)) {
+      mPostedFlushFontFeatureValues = true;
+    }
+  }
 }
 
 nsRootPresContext::nsRootPresContext(nsIDocument* aDocument,
@@ -3154,8 +3184,7 @@ nsRootPresContext::ComputePluginGeometryUpdates(nsIFrame* aFrame,
     nsIFrame* rootFrame = FrameManager()->GetRootFrame();
 
     if (rootFrame && aBuilder->ContainsPluginItem()) {
-      aBuilder->SetForPluginGeometry();
-      aBuilder->SetAccurateVisibleRegions();
+      aBuilder->SetForPluginGeometry(true);
       // Merging and flattening has already been done and we should not do it
       // again. nsDisplayScroll(Info)Layer doesn't support trying to flatten
       // again.
@@ -3164,6 +3193,7 @@ nsRootPresContext::ComputePluginGeometryUpdates(nsIFrame* aFrame,
       // nsDisplayPlugin::ComputeVisibility will automatically set a non-hidden
       // widget configuration for the plugin, if it's visible.
       aList->ComputeVisibilityForRoot(aBuilder, &region);
+      aBuilder->SetForPluginGeometry(false);
     }
   }
 
@@ -3417,8 +3447,7 @@ nsRootPresContext::AddWillPaintObserver(nsIRunnable* aRunnable)
 {
   if (!mWillPaintFallbackEvent.IsPending()) {
     mWillPaintFallbackEvent = new RunWillPaintObservers(this);
-    Document()->Dispatch("RunWillPaintObservers",
-                         TaskCategory::Other,
+    Document()->Dispatch(TaskCategory::Other,
                          do_AddRef(mWillPaintFallbackEvent.get()));
   }
   mWillPaintObservers.AppendElement(aRunnable);

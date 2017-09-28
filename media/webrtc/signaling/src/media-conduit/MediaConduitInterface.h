@@ -106,21 +106,6 @@ public:
 };
 
 /**
- * This class wraps image object for VideoRenderer::RenderVideoFrame()
- * callback implementation to use for rendering.
- */
-class ImageHandle
-{
-public:
-  explicit ImageHandle(layers::Image* image) : mImage(image) {}
-
-  const RefPtr<layers::Image>& GetImage() const { return mImage; }
-
-private:
-  RefPtr<layers::Image> mImage;
-};
-
-/**
  * 1. Abstract renderer for video data
  * 2. This class acts as abstract interface between the video-engine and
  *    video-engine agnostic renderer implementation.
@@ -145,35 +130,21 @@ public:
                                unsigned int number_of_streams) = 0;
 
   /**
-   * Callback Function reporting decoded I420 frame for processing.
-   * @param buffer: pointer to decoded video frame
+   * Callback Function reporting decoded frame for processing.
+   * @param buffer: reference to decoded video frame
    * @param buffer_size: size of the decoded frame
    * @param time_stamp: Decoder timestamp, typically 90KHz as per RTP
    * @render_time: Wall-clock time at the decoder for synchronization
    *                purposes in milliseconds
-   * @handle: opaque handle for image object of decoded video frame.
    * NOTE: If decoded video frame is passed through buffer , it is the
    * responsibility of the concrete implementations of this class to own copy
    * of the frame if needed for time longer than scope of this callback.
    * Such implementations should be quick in processing the frames and return
    * immediately.
-   * On the other hand, if decoded video frame is passed through handle, the
-   * implementations should keep a reference to the (ref-counted) image object
-   * inside until it's no longer needed.
    */
   virtual void RenderVideoFrame(const webrtc::VideoFrameBuffer& buffer,
                                 uint32_t time_stamp,
-                                int64_t render_time,
-                                const ImageHandle& handle) = 0;
-  virtual void RenderVideoFrame(const uint8_t* buffer_y,
-                                uint32_t y_stride,
-                                const uint8_t* buffer_u,
-                                uint32_t u_stride,
-                                const uint8_t* buffer_v,
-                                uint32_t v_stride,
-                                uint32_t time_stamp,
-                                int64_t render_time,
-                                const ImageHandle& handle) = 0;
+                                int64_t render_time) = 0;
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VideoRenderer)
 };
@@ -278,7 +249,8 @@ public:
                                     double* framerateStdDev,
                                     double* bitrateMean,
                                     double* bitrateStdDev,
-                                    uint32_t* discardedPackets) = 0;
+                                    uint32_t* discardedPackets,
+                                    uint32_t* framesDecoded) = 0;
   virtual bool GetAVStats(int32_t* jitterBufferDelayMs,
                           int32_t* playoutBufferDelayMs,
                           int32_t* avSyncOffsetMs) = 0;
@@ -422,14 +394,6 @@ public:
   virtual MediaConduitErrorCode ConfigureRecvMediaCodecs(
       const std::vector<VideoCodecConfig* >& recvCodecConfigList) = 0;
 
-  /**
-   * These methods allow unit tests to double-check that the
-   * max-fs and max-fr related settings are as expected.
-   */
-  virtual unsigned short SendingWidth() = 0;
-
-  virtual unsigned short SendingHeight() = 0;
-
   virtual unsigned int SendingMaxFs() = 0;
 
   virtual unsigned int SendingMaxFr() = 0;
@@ -502,9 +466,10 @@ public:
    *
    */
   virtual MediaConduitErrorCode SendAudioFrame(const int16_t audioData[],
-                                                int32_t lengthSamples,
-                                                int32_t samplingFreqHz,
-                                                int32_t capture_delay) = 0;
+                                               int32_t lengthSamples,
+                                               int32_t samplingFreqHz,
+                                               uint32_t channels,
+                                               int32_t capture_delay) = 0;
 
   /**
    * Function to grab a decoded audio-sample from the media engine for rendering

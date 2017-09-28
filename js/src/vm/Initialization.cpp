@@ -98,7 +98,7 @@ JS::detail::InitWithFailureDiagnostic(bool isDebugBuild)
 
 #if defined(DEBUG) || defined(JS_OOM_BREAKPOINT)
     RETURN_IF_FAIL(js::oom::InitThreadType());
-    js::oom::SetThreadType(js::oom::THREAD_TYPE_COOPERATING);
+    js::oom::SetThreadType(js::THREAD_TYPE_COOPERATING);
 #endif
 
     RETURN_IF_FAIL(js::Mutex::Init());
@@ -106,7 +106,6 @@ JS::detail::InitWithFailureDiagnostic(bool isDebugBuild)
     RETURN_IF_FAIL(js::wasm::InitInstanceStaticData());
 
     js::gc::InitMemorySubsystem(); // Ensure gc::SystemPageSize() works.
-    RETURN_IF_FAIL(js::gc::InitializeStaticData());
 
     RETURN_IF_FAIL(js::jit::InitProcessExecutableMemory());
 

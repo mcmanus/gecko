@@ -11,13 +11,13 @@
 #include "npapi.h"
 #include "npfunctions.h"
 #include "nscore.h"
+#include "nsStringFwd.h"
 #include "nsTArray.h"
 #include "nsError.h"
 #include "mozilla/EventForwards.h"
 #include "nsSize.h"
 #include "nsRect.h"
 
-class nsCString;
 class nsNPAPIPlugin;
 
 namespace mozilla {
@@ -57,7 +57,7 @@ public:
 
   virtual bool HasRequiredFunctions() = 0;
 
-#if defined(XP_UNIX) && !defined(XP_MACOSX) && !defined(MOZ_WIDGET_GONK)
+#if defined(XP_UNIX) && !defined(XP_MACOSX)
   virtual nsresult NP_Initialize(NPNetscapeFuncs* bFuncs, NPPluginFuncs* pFuncs, NPError* error) = 0;
 #else
   virtual nsresult NP_Initialize(NPNetscapeFuncs* bFuncs, NPError* error) = 0;

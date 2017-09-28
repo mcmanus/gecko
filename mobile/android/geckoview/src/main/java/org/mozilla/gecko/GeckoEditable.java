@@ -122,8 +122,16 @@ final class GeckoEditable extends IGeckoEditableParent.Stub
         final int keyPressMetaState = (unicodeChar >= ' ' &&
                 unicodeChar != unmodifiedUnicodeChar) ? unmodifiedMetaState : metaState;
 
+        // For synthesized keys, ignore modifier metastates from the synthesized event,
+        // because the synthesized modifier metastates don't reflect the actual state of
+        // the meta keys (bug 1387889). For example, the Latin sharp S (U+00DF) is
+        // synthesized as Alt+S, but we don't want the Alt metastate because the Alt key
+        // is not actually pressed in this case.
+        final int keyUpDownMetaState =
+                isSynthesizedImeKey ? (unmodifiedMetaState | savedMetaState) : metaState;
+
         child.onKeyEvent(action, event.getKeyCode(), event.getScanCode(),
-                   metaState, keyPressMetaState, event.getEventTime(),
+                   keyUpDownMetaState, keyPressMetaState, event.getEventTime(),
                    domPrintableKeyValue, event.getRepeatCount(), event.getFlags(),
                    isSynthesizedImeKey, event);
     }
@@ -293,11 +301,21 @@ final class GeckoEditable extends IGeckoEditableParent.Stub
             final int shadowEnd = mShadowNewEnd + Math.max(0, mCurrentOldEnd - mShadowOldEnd);
             final int currentEnd = mCurrentNewEnd + Math.max(0, mShadowOldEnd - mCurrentOldEnd);
 
-            // Perform replacement in two steps (delete and insert) so that old spans are
-            // properly deleted before identical new spans are inserted. Otherwise the new
-            // spans won't be inserted due to the text already having the old spans.
-            mShadowText.delete(start, shadowEnd);
-            mShadowText.insert(start, mCurrentText, start, currentEnd);
+            // Remove identical spans that are in the new text from the old text.
+            // Otherwise the new spans won't be inserted due to the text already having
+            // the old spans.
+            Object[] spans = mCurrentText.getSpans(start, currentEnd, Object.class);
+            for (final Object span : spans) {
+                mShadowText.removeSpan(span);
+            }
+
+            // Also remove existing spans that are no longer in the new text.
+            spans = mShadowText.getSpans(start, shadowEnd, Object.class);
+            for (final Object span : spans) {
+                mShadowText.removeSpan(span);
+            }
+
+            mShadowText.replace(start, shadowEnd, mCurrentText, start, currentEnd);
 
             // SpannableStringBuilder has some internal logic to fix up selections, but we
             // don't want that, so we always fix up the selection a second time.
@@ -1117,12 +1135,15 @@ final class GeckoEditable extends IGeckoEditableParent.Stub
 
     @Override // IGeckoEditableParent
     public void notifyIMEContext(final int state, final String typeHint,
-                                 final String modeHint, final String actionHint) {
+                                 final String modeHint, final String actionHint,
+                                 final boolean inPrivateBrowsing,
+                                 final boolean isUserAction) {
         // On Gecko or binder thread.
         if (DEBUG) {
             Log.d(LOGTAG, "notifyIMEContext(" +
                           getConstantName(GeckoEditableListener.class, "IME_STATE_", state) +
-                          ", \"" + typeHint + "\", \"" + modeHint + "\", \"" + actionHint + "\")");
+                          ", \"" + typeHint + "\", \"" + modeHint + "\", \"" + actionHint + "\", " +
+                          "inPrivateBrowsing=" + inPrivateBrowsing + ")");
         }
 
         // Don't check token for notifyIMEContext, because the calls all come
@@ -1135,7 +1156,7 @@ final class GeckoEditable extends IGeckoEditableParent.Stub
                 if (mListener == null) {
                     return;
                 }
-                mListener.notifyIMEContext(state, typeHint, modeHint, actionHint);
+                mListener.notifyIMEContext(state, typeHint, modeHint, actionHint, inPrivateBrowsing, isUserAction);
             }
         });
     }

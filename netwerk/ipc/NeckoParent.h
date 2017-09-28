@@ -182,24 +182,19 @@ protected:
   virtual mozilla::ipc::IPCResult RecvPDataChannelConstructor(PDataChannelParent* aActor,
                                                               const uint32_t& channelId) override;
 
+  virtual PSimpleChannelParent*
+    AllocPSimpleChannelParent(const uint32_t& channelId) override;
+  virtual bool DeallocPSimpleChannelParent(PSimpleChannelParent* parent) override;
+
+  virtual mozilla::ipc::IPCResult RecvPSimpleChannelConstructor(PSimpleChannelParent* aActor,
+                                                              const uint32_t& channelId) override;
+
   virtual PFileChannelParent*
     AllocPFileChannelParent(const uint32_t& channelId) override;
   virtual bool DeallocPFileChannelParent(PFileChannelParent* parent) override;
 
   virtual mozilla::ipc::IPCResult RecvPFileChannelConstructor(PFileChannelParent* aActor,
                                                               const uint32_t& channelId) override;
-
-  virtual PRtspControllerParent* AllocPRtspControllerParent() override;
-  virtual bool DeallocPRtspControllerParent(PRtspControllerParent*) override;
-
-  virtual PRtspChannelParent*
-    AllocPRtspChannelParent(const RtspChannelConnectArgs& aArgs)
-                            override;
-  virtual mozilla::ipc::IPCResult
-    RecvPRtspChannelConstructor(PRtspChannelParent* aActor,
-                                const RtspChannelConnectArgs& aArgs)
-                                override;
-  virtual bool DeallocPRtspChannelParent(PRtspChannelParent*) override;
 
   virtual PChannelDiverterParent*
   AllocPChannelDiverterParent(const ChannelDiverterArgs& channel) override;
@@ -233,9 +228,18 @@ protected:
                                                 const OriginAttributes& aOriginAttributes) override;
   virtual mozilla::ipc::IPCResult RecvPredReset() override;
 
+  virtual mozilla::ipc::IPCResult RecvRequestContextLoadBegin(const uint64_t& rcid) override;
+  virtual mozilla::ipc::IPCResult RecvRequestContextAfterDOMContentLoaded(const uint64_t& rcid) override;
   virtual mozilla::ipc::IPCResult RecvRemoveRequestContext(const uint64_t& rcid) override;
 
-  virtual mozilla::ipc::IPCResult RecvNotifyCurrentTopLevelOuterContentWindowId(const uint64_t& aWindowId) override;
+  /* WebExtensions */
+  virtual mozilla::ipc::IPCResult
+    RecvGetExtensionStream(const URIParams& aURI,
+                           GetExtensionStreamResolver&& aResolve) override;
+
+  virtual mozilla::ipc::IPCResult
+    RecvGetExtensionFD(const URIParams& aURI,
+                       GetExtensionFDResolver&& aResolve) override;
 };
 
 } // namespace net

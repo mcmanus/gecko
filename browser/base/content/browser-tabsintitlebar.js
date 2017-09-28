@@ -148,13 +148,21 @@ var TabsInTitlebar = {
       document.documentElement.setAttribute("tabsintitlebar", "true");
       updateTitlebarDisplay();
 
+      // Reset the custom titlebar height if the menubar is shown,
+      // because we will want to calculate its original height.
+      if (AppConstants.isPlatformAndVersionAtLeast("win", "10.0") &&
+          (menubar.getAttribute("inactive") != "true" ||
+          menubar.getAttribute("autohide") != "true")) {
+        $("titlebar-buttonbox").style.removeProperty("height");
+      }
+
       // Try to avoid reflows in this code by calculating dimensions first and
       // then later set the properties affecting layout together in a batch.
 
-      // Get the full height of the tabs toolbar:
+      // Get the height of the tabs toolbar:
       let tabsToolbar = $("TabsToolbar");
       let tabsStyles = window.getComputedStyle(tabsToolbar);
-      let fullTabsHeight = rect(tabsToolbar).height + verticalMargins(tabsStyles);
+      let fullTabsHeight = rect($("TabsToolbar")).height + verticalMargins(tabsStyles);
       // Buttons first:
       let captionButtonsBoxWidth = rect($("titlebar-buttonbox-container")).width;
 
@@ -176,13 +184,13 @@ var TabsInTitlebar = {
 
       // Begin setting CSS properties which will cause a reflow
 
-      if (AppConstants.MOZ_PHOTON_THEME &&
-          AppConstants.isPlatformAndVersionAtLeast("win", "10.0")) {
+      // On Windows 10, adjust the window controls to span the entire
+      // tab strip height if we're not showing a menu bar.
+      if (AppConstants.isPlatformAndVersionAtLeast("win", "10.0")) {
         if (!menuHeight) {
-          titlebarContentHeight = Math.max(titlebarContentHeight, fullTabsHeight);
+          // Add a pixel to slightly overlap the navbar border.
+          titlebarContentHeight = fullTabsHeight + 1;
           $("titlebar-buttonbox").style.height = titlebarContentHeight + "px";
-        } else {
-          $("titlebar-buttonbox").style.removeProperty("height");
         }
       }
 
@@ -259,7 +267,7 @@ var TabsInTitlebar = {
 
     ToolbarIconColor.inferFromText("tabsintitlebar", TabsInTitlebar.enabled);
 
-    if (CustomizationHandler.isCustomizing()) {
+    if (document.documentElement.hasAttribute("customizing")) {
       gCustomizeMode.updateLWTStyling();
     }
   },

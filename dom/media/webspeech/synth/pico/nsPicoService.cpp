@@ -52,8 +52,8 @@
 // Pico's sample rate is always 16000
 #define PICO_SAMPLE_RATE 16000
 
-// The path to the language files in Gonk
-#define GONK_PICO_LANG_PATH "/system/tts/lang_pico"
+// The path to the language files in Android
+#define PICO_LANG_PATH "/system/tts/lang_pico"
 
 namespace mozilla {
 namespace dom {
@@ -469,7 +469,7 @@ nsPicoService::Observe(nsISupports* aSubject, const char* aTopic,
   DebugOnly<nsresult> rv = NS_NewNamedThread("Pico Worker", getter_AddRefs(mThread));
   MOZ_ASSERT(NS_SUCCEEDED(rv));
   return mThread->Dispatch(
-    NewRunnableMethod(this, &nsPicoService::Init), NS_DISPATCH_NORMAL);
+    NewRunnableMethod("nsPicoService::Init", this, &nsPicoService::Init), NS_DISPATCH_NORMAL);
 }
 // nsISpeechService
 
@@ -514,11 +514,11 @@ nsPicoService::Init()
     return;
   }
 
-  // Use environment variable, or default android/b2g path
+  // Use environment variable, or default android path
   nsAutoCString langPath(PR_GetEnv("PICO_LANG_PATH"));
 
   if (langPath.IsEmpty()) {
-    langPath.AssignLiteral(GONK_PICO_LANG_PATH);
+    langPath.AssignLiteral(PICO_LANG_PATH);
   }
 
   nsCOMPtr<nsIFile> voicesDir;
@@ -579,7 +579,8 @@ nsPicoService::Init()
     rv = dirIterator->HasMoreElements(&hasMoreElements);
   }
 
-  NS_DispatchToMainThread(NewRunnableMethod(this, &nsPicoService::RegisterVoices));
+  NS_DispatchToMainThread(NewRunnableMethod("nsPicoService::RegisterVoices",
+                                            this, &nsPicoService::RegisterVoices));
 }
 
 void

@@ -15,8 +15,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "DownloadsCommon",
                                   "resource:///modules/DownloadsCommon.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
                                   "resource://gre/modules/FileUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-                                  "resource://gre/modules/Promise.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
                                   "resource://gre/modules/PlacesUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "HttpServer",
@@ -25,77 +23,11 @@ XPCOMUtils.defineLazyModuleGetter(this, "HttpServer",
 var gTestTargetFile = FileUtils.getFile("TmpD", ["dm-ui-test.file"]);
 gTestTargetFile.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, FileUtils.PERMS_FILE);
 
-registerCleanupFunction(function() {
-  gTestTargetFile.remove(false);
-});
+// The file may have been already deleted when removing a paused download.
+registerCleanupFunction(() => OS.File.remove(gTestTargetFile.path,
+                                             { ignoreAbsent: true }));
 
 // Asynchronous support subroutines
-
-function promiseOpenAndLoadWindow(aOptions) {
-  return new Promise((resolve, reject) => {
-    let win = OpenBrowserWindow(aOptions);
-    win.addEventListener("load", function() {
-      resolve(win);
-    }, {once: true});
-  });
-}
-
-/**
- * Waits for a load (or custom) event to finish in a given tab. If provided
- * load an uri into the tab.
- *
- * @param tab
- *        The tab to load into.
- * @param [optional] url
- *        The url to load, or the current url.
- * @param [optional] event
- *        The load event type to wait for.  Defaults to "load".
- * @return {Promise} resolved when the event is handled.
- * @resolves to the received event
- * @rejects if a valid load event is not received within a meaningful interval
- */
-function promiseTabLoadEvent(tab, url, eventType = "load") {
-  return new Promise(resolve => {
-    info("Wait tab event: " + eventType);
-
-    function handle(event) {
-      if (event.originalTarget != tab.linkedBrowser.contentDocument ||
-          event.target.location.href == "about:blank" ||
-          (url && event.target.location.href != url)) {
-        info("Skipping spurious '" + eventType + "'' event" +
-             " for " + event.target.location.href);
-        return;
-      }
-      // Remove reference to tab from the cleanup function:
-      realCleanup = () => {};
-      tab.linkedBrowser.removeEventListener(eventType, handle, true);
-      info("Tab event received: " + eventType);
-      resolve(event);
-    }
-
-    // Juggle a bit to avoid leaks:
-    let realCleanup = () => tab.linkedBrowser.removeEventListener(eventType, handle, true);
-    registerCleanupFunction(() => realCleanup());
-
-    tab.linkedBrowser.addEventListener(eventType, handle, true, true);
-    if (url)
-      tab.linkedBrowser.loadURI(url);
-  });
-}
-
-function promiseWindowClosed(win) {
-  let promise = new Promise((resolve, reject) => {
-    Services.obs.addObserver(function obs(subject, topic) {
-      if (subject == win) {
-        Services.obs.removeObserver(obs, topic);
-        resolve();
-      }
-    }, "domwindowclosed");
-  });
-  win.close();
-  return promise;
-}
-
 
 function promiseFocus() {
   return new Promise(resolve => {
@@ -231,16 +163,6 @@ function httpUrl(aFileName) {
     aFileName;
 }
 
-function task_clearHistory() {
-  return new Promise(function(resolve) {
-    Services.obs.addObserver(function observeCH(aSubject, aTopic, aData) {
-      Services.obs.removeObserver(observeCH, PlacesUtils.TOPIC_EXPIRATION_FINISHED);
-      resolve();
-    }, PlacesUtils.TOPIC_EXPIRATION_FINISHED);
-    PlacesUtils.history.clear();
-  });
-}
-
 function openLibrary(aLeftPaneRoot) {
   let library = window.openDialog("chrome://browser/content/places/places.xul",
                                   "", "chrome,toolbar=yes,dialog=no,resizable",
@@ -275,4 +197,16 @@ function promiseAlertDialogOpen(buttonAction) {
       }
     });
   });
+}
+
+/**
+ * Waits for a given button to become visible.
+ */
+function promiseButtonShown(id) {
+  let dwu = window.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
+  return BrowserTestUtils.waitForCondition(() => {
+    let target = document.getElementById(id);
+    let bounds = dwu.getBoundsWithoutFlushing(target);
+    return bounds.width > 0 && bounds.height > 0;
+  }, `Waiting for button ${id} to have non-0 size`);
 }

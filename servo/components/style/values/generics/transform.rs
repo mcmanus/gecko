@@ -4,14 +4,30 @@
 
 //! Generic types for CSS values that are related to transformations.
 
-use euclid::Point2D;
 use std::fmt;
-use style_traits::{HasViewportPercentage, ToCss};
+use style_traits::ToCss;
 use values::CSSFloat;
 
-/// A generic transform origin.
+/// A generic 2D transformation matrix.
+#[allow(missing_docs)]
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-#[derive(Clone, Copy, Debug, HasViewportPercentage, PartialEq, ToComputedValue, ToCss)]
+#[derive(Clone, Copy, Debug, PartialEq, ToComputedValue, ToCss)]
+#[css(comma, function)]
+pub struct Matrix<T, U = T> {
+    pub a: T,
+    pub b: T,
+    pub c: T,
+    pub d: T,
+    pub e: U,
+    pub f: U,
+}
+
+/// A generic transform origin.
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[derive(Animate, Clone, ComputeSquaredDistance, Copy, Debug)]
+#[derive(PartialEq, ToAnimatedZero, ToComputedValue, ToCss)]
 pub struct TransformOrigin<H, V, Depth> {
     /// The horizontal origin.
     pub horizontal: H,
@@ -24,21 +40,19 @@ pub struct TransformOrigin<H, V, Depth> {
 /// A generic timing function.
 ///
 /// https://drafts.csswg.org/css-timing-1/#single-timing-function-production
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TimingFunction<Integer, Number> {
     /// `linear | ease | ease-in | ease-out | ease-in-out`
     Keyword(TimingKeyword),
     /// `cubic-bezier(<number>, <number>, <number>, <number>)`
-    CubicBezier(Point2D<Number>, Point2D<Number>),
+    #[allow(missing_docs)]
+    CubicBezier { x1: Number, y1: Number, x2: Number, y2: Number },
     /// `step-start | step-end | steps(<integer>, [ start | end ]?)`
     Steps(Integer, StepPosition),
     /// `frames(<integer>)`
     Frames(Integer),
-}
-
-impl<I, N> HasViewportPercentage for TimingFunction<I, N> {
-    fn has_viewport_percentage(&self) -> bool { false }
 }
 
 define_css_keyword_enum! { TimingKeyword:
@@ -86,15 +100,15 @@ where
     {
         match *self {
             TimingFunction::Keyword(keyword) => keyword.to_css(dest),
-            TimingFunction::CubicBezier(ref p1, ref p2) => {
+            TimingFunction::CubicBezier { ref x1, ref y1, ref x2, ref y2 } => {
                 dest.write_str("cubic-bezier(")?;
-                p1.x.to_css(dest)?;
+                x1.to_css(dest)?;
                 dest.write_str(", ")?;
-                p1.y.to_css(dest)?;
+                y1.to_css(dest)?;
                 dest.write_str(", ")?;
-                p2.x.to_css(dest)?;
+                x2.to_css(dest)?;
                 dest.write_str(", ")?;
-                p2.y.to_css(dest)?;
+                y2.to_css(dest)?;
                 dest.write_str(")")
             },
             TimingFunction::Steps(ref intervals, position) => {
@@ -116,15 +130,16 @@ where
 }
 
 impl TimingKeyword {
-    /// Returns this timing keyword as a pair of `cubic-bezier()` points.
+    /// Returns the keyword as a quadruplet of Bezier point coordinates
+    /// `(x1, y1, x2, y2)`.
     #[inline]
-    pub fn to_bezier_points(self) -> (Point2D<CSSFloat>, Point2D<CSSFloat>) {
+    pub fn to_bezier(self) -> (CSSFloat, CSSFloat, CSSFloat, CSSFloat) {
         match self {
-            TimingKeyword::Linear => (Point2D::new(0., 0.), Point2D::new(1., 1.)),
-            TimingKeyword::Ease => (Point2D::new(0.25, 0.1), Point2D::new(0.25, 1.)),
-            TimingKeyword::EaseIn => (Point2D::new(0.42, 0.), Point2D::new(1., 1.)),
-            TimingKeyword::EaseOut => (Point2D::new(0., 0.), Point2D::new(0.58, 1.)),
-            TimingKeyword::EaseInOut => (Point2D::new(0.42, 0.), Point2D::new(0.58, 1.)),
+            TimingKeyword::Linear => (0., 0., 1., 1.),
+            TimingKeyword::Ease => (0.25, 0.1, 0.25, 1.),
+            TimingKeyword::EaseIn => (0.42, 0., 1., 1.),
+            TimingKeyword::EaseOut => (0., 0., 0.58, 1.),
+            TimingKeyword::EaseInOut => (0.42, 0., 0.58, 1.),
         }
     }
 }

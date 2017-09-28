@@ -3,19 +3,21 @@
 "use strict";
 
 // The ext-* files are imported into the same scopes.
-/* import-globals-from ext-utils.js */
+/* import-globals-from ext-browser.js */
 
 var {
   ExtensionError,
   promiseObserved,
 } = ExtensionUtils;
 
+XPCOMUtils.defineLazyModuleGetter(this, "AddonManagerPrivate",
+                                  "resource://gre/modules/AddonManager.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "SessionStore",
                                   "resource:///modules/sessionstore/SessionStore.jsm");
 
 const SS_ON_CLOSED_OBJECTS_CHANGED = "sessionstore-closed-objects-changed";
 
-function getRecentlyClosed(maxResults, extension) {
+const getRecentlyClosed = (maxResults, extension) => {
   let recentlyClosed = [];
 
   // Get closed windows
@@ -39,9 +41,9 @@ function getRecentlyClosed(maxResults, extension) {
   // Sort windows and tabs
   recentlyClosed.sort((a, b) => b.lastModified - a.lastModified);
   return recentlyClosed.slice(0, maxResults);
-}
+};
 
-async function createSession(restored, extension, sessionId) {
+const createSession = async function createSession(restored, extension, sessionId) {
   if (!restored) {
     throw new ExtensionError(`Could not restore object using sessionId ${sessionId}.`);
   }
@@ -53,7 +55,33 @@ async function createSession(restored, extension, sessionId) {
   }
   sessionObj.tab = extension.tabManager.convert(restored);
   return sessionObj;
-}
+};
+
+const getEncodedKey = function getEncodedKey(extensionId, key) {
+  // Throw if using a temporary extension id.
+  if (AddonManagerPrivate.isTemporaryInstallID(extensionId)) {
+    let message =
+      "Sessions API storage methods will not work with a temporary addon ID. " +
+      "Please add an explicit addon ID to your manifest.";
+    throw new ExtensionError(message);
+  }
+
+  return `extension:${extensionId}:${key}`;
+};
+
+const getTabParams = function getTabParams(extensionId, key, id) {
+  let encodedKey = getEncodedKey(extensionId, key);
+  let tab = tabTracker.getTab(id);
+
+  return {encodedKey, tab};
+};
+
+const getWindowParams = function getWindowParams(extensionId, key, id, context) {
+  let encodedKey = getEncodedKey(extensionId, key);
+  let win = windowTracker.getWindow(id, context);
+
+  return {encodedKey, win};
+};
 
 this.sessions = class extends ExtensionAPI {
   getAPI(context) {
@@ -127,7 +155,59 @@ this.sessions = class extends ExtensionAPI {
           return createSession(session, extension, closedId);
         },
 
-        onChanged: new SingletonEventManager(context, "sessions.onChanged", fire => {
+        setTabValue(tabId, key, value) {
+          let {tab, encodedKey} =
+            getTabParams(extension.id, key, tabId);
+
+          SessionStore.setTabValue(tab, encodedKey, JSON.stringify(value));
+        },
+
+        async getTabValue(tabId, key) {
+          let {tab, encodedKey} =
+            getTabParams(extension.id, key, tabId);
+
+          let value = SessionStore.getTabValue(tab, encodedKey);
+          if (value) {
+            return JSON.parse(value);
+          }
+
+          return undefined;
+        },
+
+        removeTabValue(tabId, key) {
+          let {tab, encodedKey} =
+            getTabParams(extension.id, key, tabId);
+
+          SessionStore.deleteTabValue(tab, encodedKey);
+        },
+
+        setWindowValue(windowId, key, value) {
+          let {win, encodedKey} =
+            getWindowParams(extension.id, key, windowId, context);
+
+          SessionStore.setWindowValue(win, encodedKey, JSON.stringify(value));
+        },
+
+        async getWindowValue(windowId, key) {
+          let {win, encodedKey} =
+            getWindowParams(extension.id, key, windowId, context);
+
+          let value = SessionStore.getWindowValue(win, encodedKey);
+          if (value) {
+            return JSON.parse(value);
+          }
+
+          return undefined;
+        },
+
+        removeWindowValue(windowId, key) {
+          let {win, encodedKey} =
+            getWindowParams(extension.id, key, windowId, context);
+
+          SessionStore.deleteWindowValue(win, encodedKey);
+        },
+
+        onChanged: new EventManager(context, "sessions.onChanged", fire => {
           let observer = () => {
             fire.async();
           };

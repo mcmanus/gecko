@@ -13,6 +13,7 @@
 #include "AudioParamTimeline.h"
 #include "AudioContext.h"
 #include "nsMathUtils.h"
+#include "AlignmentUtils.h"
 
 using namespace mozilla::dom;
 
@@ -29,17 +30,16 @@ namespace mozilla {
 
 AudioNodeStream::AudioNodeStream(AudioNodeEngine* aEngine,
                                  Flags aFlags,
-                                 TrackRate aSampleRate,
-                                 AbstractThread* aMainThread)
-  : ProcessedMediaStream(aMainThread),
-    mEngine(aEngine),
-    mSampleRate(aSampleRate),
-    mFlags(aFlags),
-    mNumberOfInputChannels(2),
-    mIsActive(aEngine->IsActive()),
-    mMarkAsFinishedAfterThisBlock(false),
-    mAudioParamStream(false),
-    mPassThrough(false)
+                                 TrackRate aSampleRate)
+  : ProcessedMediaStream()
+  , mEngine(aEngine)
+  , mSampleRate(aSampleRate)
+  , mFlags(aFlags)
+  , mNumberOfInputChannels(2)
+  , mIsActive(aEngine->IsActive())
+  , mMarkAsFinishedAfterThisBlock(false)
+  , mAudioParamStream(false)
+  , mPassThrough(false)
 {
   MOZ_ASSERT(NS_IsMainThread());
   mSuspendedCount = !(mIsActive || mFlags & EXTERNAL_OUTPUT);
@@ -78,8 +78,7 @@ AudioNodeStream::Create(AudioContext* aCtx, AudioNodeEngine* aEngine,
   AudioNode* node = aEngine->NodeMainThread();
 
   RefPtr<AudioNodeStream> stream =
-    new AudioNodeStream(aEngine, aFlags, aGraph->GraphRate(),
-      aCtx->GetOwnerGlobal()->AbstractMainThreadFor(TaskCategory::Other));
+    new AudioNodeStream(aEngine, aFlags, aGraph->GraphRate());
   stream->mSuspendedCount += aCtx->ShouldSuspendNewStream();
   if (node) {
     stream->SetChannelMixingParametersImpl(node->ChannelCount(),
@@ -146,7 +145,9 @@ AudioNodeStream::SetStreamTimeParameter(uint32_t aIndex, AudioContext* aContext,
           SetStreamTimeParameterImpl(mIndex, mRelativeToStream, mStreamTime);
     }
     double mStreamTime;
-    MediaStream* mRelativeToStream;
+    MediaStream* MOZ_UNSAFE_REF("ControlMessages are processed in order.  This \
+destination stream is not yet destroyed.  Its (future) destroy message will be \
+processed after this message.") mRelativeToStream;
     uint32_t mIndex;
   };
 
@@ -253,24 +254,23 @@ AudioNodeStream::SetThreeDPointParameter(uint32_t aIndex, const ThreeDPoint& aVa
 }
 
 void
-AudioNodeStream::SetBuffer(already_AddRefed<ThreadSharedFloatArrayBufferList>&& aBuffer)
+AudioNodeStream::SetBuffer(AudioChunk&& aBuffer)
 {
   class Message final : public ControlMessage
   {
   public:
-    Message(AudioNodeStream* aStream,
-            already_AddRefed<ThreadSharedFloatArrayBufferList>& aBuffer)
+    Message(AudioNodeStream* aStream, AudioChunk&& aBuffer)
       : ControlMessage(aStream), mBuffer(aBuffer)
     {}
     void Run() override
     {
       static_cast<AudioNodeStream*>(mStream)->Engine()->
-          SetBuffer(mBuffer.forget());
+        SetBuffer(Move(mBuffer));
     }
-    RefPtr<ThreadSharedFloatArrayBufferList> mBuffer;
+    AudioChunk mBuffer;
   };
 
-  GraphImpl()->AppendMessage(MakeUnique<Message>(this, aBuffer));
+  GraphImpl()->AppendMessage(MakeUnique<Message>(this, Move(aBuffer)));
 }
 
 void

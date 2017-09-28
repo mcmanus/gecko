@@ -15,7 +15,7 @@ NS_IMPL_NS_NEW_HTML_ELEMENT(TableCol)
 namespace mozilla {
 namespace dom {
 
-// use the same protection as ancient code did 
+// use the same protection as ancient code did
 // http://lxr.mozilla.org/classic/source/lib/layout/laytable.c#46
 #define MAX_COLSPAN 1000
 
@@ -44,7 +44,7 @@ HTMLTableColElement::ParseAttribute(int32_t aNamespaceID,
     }
     if (aAttribute == nsGkAtoms::span) {
       /* protection from unrealistic large colspan values */
-      aResult.ParseIntWithFallback(aValue, 1, MAX_COLSPAN);
+      aResult.ParseClampedNonNegativeInt(aValue, 1, 1, MAX_COLSPAN);
       return true;
     }
     if (aAttribute == nsGkAtoms::width) {

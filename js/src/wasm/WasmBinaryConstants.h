@@ -306,12 +306,35 @@ enum class Op
     F32ReinterpretI32                    = 0xbe,
     F64ReinterpretI64                    = 0xbf,
 
-    // ------------------------------------------------------------------------
-    // The rest of these operators are currently only emitted internally when
-    // compiling asm.js and are rejected by wasm validation.
+#ifdef ENABLE_WASM_THREAD_OPS
+    // Sign extension
+    I32Extend8S                          = 0xc0,
+    I32Extend16S                         = 0xc1,
+    I64Extend8S                          = 0xc2,
+    I64Extend16S                         = 0xc3,
+    I64Extend32S                         = 0xc4,
+#endif
 
-    // asm.js-specific operators
-    TeeGlobal                            = 0xc8,
+    AtomicPrefix                         = 0xfe,
+    MozPrefix                            = 0xff,
+
+    Limit                                = 0x100
+};
+
+inline bool
+IsPrefixByte(uint8_t b) {
+    return b >= uint8_t(Op::AtomicPrefix);
+}
+
+enum class MozOp
+{
+    // ------------------------------------------------------------------------
+    // These operators are emitted internally when compiling asm.js and are
+    // rejected by wasm validation.  They are prefixed by MozPrefix.
+
+    // asm.js-specific operators.  They start at 1 so as to check for
+    // uninitialized (zeroed) storage.
+    TeeGlobal                            = 0x01,
     I32Min,
     I32Max,
     I32Neg,
@@ -427,6 +450,20 @@ enum class Op
 #undef OPCODE
 
     Limit
+};
+
+struct OpBytes
+{
+    // The bytes of the opcode have 16-bit representations to allow for a full
+    // 256-value range plus a sentinel Limit value.
+    uint16_t b0;
+    uint16_t b1;
+
+    explicit OpBytes(Op x) {
+        b0 = uint16_t(x);
+        b1 = 0;
+    }
+    OpBytes() = default;
 };
 
 static const char NameSectionName[]      = "name";

@@ -12,12 +12,12 @@ use std::f32::consts::PI;
 use std::fmt;
 use style_traits::ToCss;
 use values::{Either, None_};
-use values::computed::{Angle, Context, Length, LengthOrPercentage, NumberOrPercentage, ToComputedValue};
+use values::computed::{Angle, ComputedUrl, Context, Length, LengthOrPercentage, NumberOrPercentage, ToComputedValue};
 use values::computed::position::Position;
 use values::generics::image::{CompatMode, ColorStop as GenericColorStop, EndingShape as GenericEndingShape};
 use values::generics::image::{Gradient as GenericGradient, GradientItem as GenericGradientItem};
 use values::generics::image::{Image as GenericImage, GradientKind as GenericGradientKind};
-use values::generics::image::{ImageRect as GenericImageRect, LineDirection as GenericLineDirection};
+use values::generics::image::{LineDirection as GenericLineDirection, MozImageRect as GenericMozImageRect};
 use values::specified::image::LineDirection as SpecifiedLineDirection;
 use values::specified::position::{X, Y};
 
@@ -26,7 +26,7 @@ pub type ImageLayer = Either<None_, Image>;
 
 /// Computed values for an image according to CSS-IMAGES.
 /// https://drafts.csswg.org/css-images/#image-values
-pub type Image = GenericImage<Gradient, ImageRect>;
+pub type Image = GenericImage<Gradient, MozImageRect, ComputedUrl>;
 
 /// Computed values for a CSS gradient.
 /// https://drafts.csswg.org/css-images/#gradients
@@ -36,6 +36,7 @@ pub type Gradient = GenericGradient<
     LengthOrPercentage,
     Position,
     RGBA,
+    Angle,
 >;
 
 /// A computed gradient kind.
@@ -44,16 +45,25 @@ pub type GradientKind = GenericGradientKind<
     Length,
     LengthOrPercentage,
     Position,
+    Angle,
 >;
 
 /// A computed gradient line direction.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 pub enum LineDirection {
     /// An angle.
     Angle(Angle),
+    /// A horizontal direction.
+    Horizontal(X),
+    /// A vertical direction.
+    Vertical(Y),
     /// A corner.
     Corner(X, Y),
+    /// A Position and an Angle for legacy `-moz-` prefixed gradient.
+    #[cfg(feature = "gecko")]
+    MozPosition(Option<Position>, Option<Angle>),
 }
 
 /// A computed radial gradient ending shape.
@@ -65,14 +75,21 @@ pub type GradientItem = GenericGradientItem<RGBA, LengthOrPercentage>;
 /// A computed color stop.
 pub type ColorStop = GenericColorStop<RGBA, LengthOrPercentage>;
 
-/// Computed values for ImageRect.
-pub type ImageRect = GenericImageRect<NumberOrPercentage>;
+/// Computed values for `-moz-image-rect(...)`.
+pub type MozImageRect = GenericMozImageRect<NumberOrPercentage, ComputedUrl>;
 
 impl GenericLineDirection for LineDirection {
-    fn points_downwards(&self) -> bool {
+    fn points_downwards(&self, compat_mode: CompatMode) -> bool {
         match *self {
             LineDirection::Angle(angle) => angle.radians() == PI,
+            LineDirection::Vertical(Y::Bottom)
+                if compat_mode == CompatMode::Modern => true,
+            LineDirection::Vertical(Y::Top)
+                if compat_mode != CompatMode::Modern => true,
             LineDirection::Corner(..) => false,
+            #[cfg(feature = "gecko")]
+            LineDirection::MozPosition(_, _) => false,
+            _ => false,
         }
     }
 
@@ -81,6 +98,18 @@ impl GenericLineDirection for LineDirection {
     {
         match *self {
             LineDirection::Angle(ref angle) => angle.to_css(dest),
+            LineDirection::Horizontal(x) => {
+                if compat_mode == CompatMode::Modern {
+                    dest.write_str("to ")?;
+                }
+                x.to_css(dest)
+            },
+            LineDirection::Vertical(y) => {
+                if compat_mode == CompatMode::Modern {
+                    dest.write_str("to ")?;
+                }
+                y.to_css(dest)
+            },
             LineDirection::Corner(x, y) => {
                 if compat_mode == CompatMode::Modern {
                     dest.write_str("to ")?;
@@ -89,6 +118,21 @@ impl GenericLineDirection for LineDirection {
                 dest.write_str(" ")?;
                 y.to_css(dest)
             },
+            #[cfg(feature = "gecko")]
+            LineDirection::MozPosition(position, angle) => {
+                let mut need_space = false;
+                if let Some(position) = position {
+                    position.to_css(dest)?;
+                    need_space = true;
+                }
+                if let Some(angle) = angle {
+                    if need_space {
+                        dest.write_str(" ")?;
+                    }
+                    angle.to_css(dest)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -101,20 +145,19 @@ impl ToComputedValue for SpecifiedLineDirection {
             SpecifiedLineDirection::Angle(ref angle) => {
                 LineDirection::Angle(angle.to_computed_value(context))
             },
-            SpecifiedLineDirection::Horizontal(X::Left) => {
-                LineDirection::Angle(Angle::Degree(270.))
+            SpecifiedLineDirection::Horizontal(x) => {
+                LineDirection::Horizontal(x)
             },
-            SpecifiedLineDirection::Horizontal(X::Right) => {
-                LineDirection::Angle(Angle::Degree(90.))
-            },
-            SpecifiedLineDirection::Vertical(Y::Top) => {
-                LineDirection::Angle(Angle::Degree(0.))
-            },
-            SpecifiedLineDirection::Vertical(Y::Bottom) => {
-                LineDirection::Angle(Angle::Degree(180.))
+            SpecifiedLineDirection::Vertical(y) => {
+                LineDirection::Vertical(y)
             },
             SpecifiedLineDirection::Corner(x, y) => {
                 LineDirection::Corner(x, y)
+            },
+            #[cfg(feature = "gecko")]
+            SpecifiedLineDirection::MozPosition(ref position, ref angle) => {
+                LineDirection::MozPosition(position.to_computed_value(context),
+                                           angle.to_computed_value(context))
             },
         }
     }
@@ -124,8 +167,19 @@ impl ToComputedValue for SpecifiedLineDirection {
             LineDirection::Angle(ref angle) => {
                 SpecifiedLineDirection::Angle(ToComputedValue::from_computed_value(angle))
             },
+            LineDirection::Horizontal(x) => {
+                SpecifiedLineDirection::Horizontal(x)
+            },
+            LineDirection::Vertical(y) => {
+                SpecifiedLineDirection::Vertical(y)
+            },
             LineDirection::Corner(x, y) => {
                 SpecifiedLineDirection::Corner(x, y)
+            },
+            #[cfg(feature = "gecko")]
+            LineDirection::MozPosition(ref position, ref angle) => {
+                SpecifiedLineDirection::MozPosition(ToComputedValue::from_computed_value(position),
+                                                    ToComputedValue::from_computed_value(angle))
             },
         }
     }

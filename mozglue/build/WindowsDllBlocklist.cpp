@@ -73,6 +73,7 @@ struct DllBlockInfo {
   enum {
     FLAGS_DEFAULT = 0,
     BLOCK_WIN8PLUS_ONLY = 1,
+    BLOCK_WIN8_ONLY = 2,
     USE_TIMESTAMP = 4,
     CHILD_PROCESSES_ONLY = 8
   } flags;
@@ -246,6 +247,9 @@ static const DllBlockInfo sWindowsDllBlocklist[] = {
   // Nahimic is causing crashes, bug 1233556
   { "nahimicmsiosd.dll", ALL_VERSIONS },
 
+  // Bug 1268470 - crashes with Kaspersky Lab on Windows 8
+  { "klsihk64.dll", MAKE_VERSION(14, 0, 456, 0xffff), DllBlockInfo::BLOCK_WIN8_ONLY },
+
   { nullptr, 0 }
 };
 
@@ -300,7 +304,7 @@ printf_stderr(const char *fmt, ...)
 
 
 #ifdef _M_IX86
-typedef void (__fastcall* BaseThreadInitThunk_func)(BOOL aIsInitialThread, void* aStartAddress, void* aThreadParam);
+typedef MOZ_NORETURN_PTR void (__fastcall* BaseThreadInitThunk_func)(BOOL aIsInitialThread, void* aStartAddress, void* aThreadParam);
 static BaseThreadInitThunk_func stub_BaseThreadInitThunk = nullptr;
 #endif
 
@@ -520,7 +524,7 @@ DllBlockSet::Write(HANDLE file)
     for (DllBlockSet* b = gFirst; b; b = b->mNext) {
       // write name[,v.v.v.v];
       WriteFile(file, b->mName, strlen(b->mName), &nBytes, nullptr);
-      if (b->mVersion != -1) {
+      if (b->mVersion != ALL_VERSIONS) {
         WriteFile(file, ",", 1, &nBytes, nullptr);
         uint16_t parts[4];
         parts[0] = b->mVersion >> 48;
@@ -700,6 +704,11 @@ patched_LdrLoadDll (PWCHAR filePath, PULONG flags, PUNICODE_STRING moduleFileNam
       goto continue_loading;
     }
 
+    if ((info->flags & DllBlockInfo::BLOCK_WIN8_ONLY) &&
+        (!IsWin8OrLater() || IsWin8Point1OrLater())) {
+      goto continue_loading;
+    }
+
     if ((info->flags & DllBlockInfo::CHILD_PROCESSES_ONLY) &&
         !(sInitFlags & eDllBlocklistInitFlagIsChildProcess)) {
       goto continue_loading;
@@ -764,13 +773,11 @@ continue_loading:
   printf_stderr("LdrLoadDll: continuing load... ('%S')\n", moduleFileName->Buffer);
 #endif
 
-#ifdef MOZ_GECKO_PROFILER
   // A few DLLs such as xul.dll and nss3.dll get loaded before mozglue's
   // AutoProfilerLabel is initialized, and this is a no-op in those cases. But
   // the vast majority of DLLs do get labelled here.
   AutoProfilerLabel label("WindowsDllBlocklist::patched_LdrLoadDll", dllName,
                           __LINE__);
-#endif
 
 #ifdef _M_AMD64
   // Prevent the stack walker from suspending this thread when LdrLoadDll
@@ -780,38 +787,6 @@ continue_loading:
 
   return stub_LdrLoadDll(filePath, flags, moduleFileName, handle);
 }
-
-#ifdef _M_AMD64
-typedef NTSTATUS (NTAPI *LdrUnloadDll_func)(HMODULE module);
-static LdrUnloadDll_func stub_LdrUnloadDll;
-
-static NTSTATUS NTAPI
-patched_LdrUnloadDll(HMODULE module)
-{
-  // Prevent the stack walker from suspending this thread when LdrUnloadDll
-  // holds the RtlLookupFunctionEntry lock.
-  AutoSuppressStackWalking suppress;
-  return stub_LdrUnloadDll(module);
-}
-
-// These pointers are disguised as PVOID to avoid pulling in obscure headers
-typedef PVOID (WINAPI *LdrResolveDelayLoadedAPI_func)(PVOID ParentModuleBase,
-  PVOID DelayloadDescriptor, PVOID FailureDllHook, PVOID FailureSystemHook,
-  PVOID ThunkAddress, ULONG Flags);
-static LdrResolveDelayLoadedAPI_func stub_LdrResolveDelayLoadedAPI;
-
-static PVOID WINAPI patched_LdrResolveDelayLoadedAPI(PVOID ParentModuleBase,
-  PVOID DelayloadDescriptor, PVOID FailureDllHook, PVOID FailureSystemHook,
-  PVOID ThunkAddress, ULONG Flags)
-{
-  // Prevent the stack walker from suspending this thread when
-  // LdrResolveDelayLoadAPI holds the RtlLookupFunctionEntry lock.
-  AutoSuppressStackWalking suppress;
-  return stub_LdrResolveDelayLoadedAPI(ParentModuleBase, DelayloadDescriptor,
-                                       FailureDllHook, FailureSystemHook,
-                                       ThunkAddress, Flags);
-}
-#endif
 
 #ifdef _M_IX86
 static bool
@@ -843,7 +818,7 @@ patched_BaseThreadInitThunk(BOOL aIsInitialThread, void* aStartAddress,
                             void* aThreadParam)
 {
   if (ShouldBlockThread(aStartAddress)) {
-    aStartAddress = NopThreadProc;
+    aStartAddress = (void*)NopThreadProc;
   }
 
   stub_BaseThreadInitThunk(aIsInitialThread, aStartAddress, aThreadParam);
@@ -892,14 +867,6 @@ DllBlocklist_Initialize(uint32_t aInitFlags)
   Kernel32Intercept.Init("kernel32.dll");
 
 #ifdef _M_AMD64
-  NtDllIntercept.AddHook("LdrUnloadDll",
-                         reinterpret_cast<intptr_t>(patched_LdrUnloadDll),
-                         (void**)&stub_LdrUnloadDll);
-  if (IsWin8OrLater()) { // LdrResolveDelayLoadedAPI was introduced in Win8
-    NtDllIntercept.AddHook("LdrResolveDelayLoadedAPI",
-                           reinterpret_cast<intptr_t>(patched_LdrResolveDelayLoadedAPI),
-                           (void**)&stub_LdrResolveDelayLoadedAPI);
-  }
   if (!IsWin8OrLater()) {
     // The crash that this hook works around is only seen on Win7.
     Kernel32Intercept.AddHook("RtlInstallFunctionTableCallback",
@@ -908,17 +875,20 @@ DllBlocklist_Initialize(uint32_t aInitFlags)
   }
 #endif
 
-#ifdef _M_IX86 // Minimize impact; crashes in BaseThreadInitThunk are vastly more frequent on x86
-  if(!Kernel32Intercept.AddDetour("BaseThreadInitThunk",
+#ifdef _M_IX86 // Minimize impact. Crashes in BaseThreadInitThunk are more frequent on x86
+
+  // Bug 1361410: WRusr.dll will overwrite our hook and cause a crash.
+  // Workaround: If we detect WRusr.dll, don't hook.
+  if (!GetModuleHandleW(L"WRusr.dll")) {
+    if(!Kernel32Intercept.AddDetour("BaseThreadInitThunk",
                                     reinterpret_cast<intptr_t>(patched_BaseThreadInitThunk),
                                     (void**) &stub_BaseThreadInitThunk)) {
 #ifdef DEBUG
-    printf_stderr("BaseThreadInitThunk hook failed\n");
+      printf_stderr("BaseThreadInitThunk hook failed\n");
 #endif
+    }
   }
 #endif // _M_IX86
-
-
 }
 
 MFBT_API void

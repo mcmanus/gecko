@@ -13,8 +13,8 @@
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsIContentInlines.h"
+#include "nsIdentifierMapEntry.h"
 #include "nsTHashtable.h"
-#include "nsDocument.h"
 
 class nsIAtom;
 class nsIContent;
@@ -42,7 +42,7 @@ public:
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTINSERTED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
 
-  ShadowRoot(nsIContent* aContent, already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
+  ShadowRoot(Element* aElement, already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
              nsXBLPrototypeBinding* aProtoBinding);
 
   void AddToIdTable(Element* aElement, nsIAtom* aId);

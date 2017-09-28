@@ -9,6 +9,7 @@
 
 #include "mozilla/a11y/AccessibleHandler.h"
 #include "mozilla/mscom/COMPtrHolder.h"
+#include "mozilla/NotNull.h"
 
 #include <oleacc.h>
 
@@ -16,11 +17,12 @@ namespace mozilla {
 namespace a11y {
 
 typedef mozilla::mscom::COMPtrHolder<IAccessible, IID_IAccessible> IAccessibleHolder;
+typedef mozilla::mscom::COMPtrHolder<IDispatch, IID_IDispatch> IDispatchHolder;
 
 class Accessible;
 
 IAccessibleHolder
-CreateHolderFromAccessible(Accessible* aAccToWrap);
+CreateHolderFromAccessible(NotNull<Accessible*> aAccToWrap);
 
 typedef mozilla::mscom::COMPtrHolder<IHandlerControl, IID_IHandlerControl> IHandlerControlHolder;
 

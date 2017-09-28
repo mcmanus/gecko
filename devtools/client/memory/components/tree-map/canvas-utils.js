@@ -15,8 +15,8 @@
  * view of the visualization is drawn onto this canvas, providing a crisp zoomed
  * in view of the tree map.
  */
-const { debounce } = require("sdk/lang/functional");
-const EventEmitter = require("devtools/shared/event-emitter");
+const { debounce } = require("devtools/shared/debounce");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const FULLSCREEN_STYLE = {

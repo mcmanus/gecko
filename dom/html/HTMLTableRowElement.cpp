@@ -40,7 +40,7 @@ NS_IMPL_ADDREF_INHERITED(HTMLTableRowElement, Element)
 NS_IMPL_RELEASE_INHERITED(HTMLTableRowElement, Element)
 
 // QueryInterface implementation for HTMLTableRowElement
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(HTMLTableRowElement)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(HTMLTableRowElement)
 NS_INTERFACE_MAP_END_INHERITING(nsGenericHTMLElement)
 
 
@@ -278,7 +278,7 @@ HTMLTableRowElement::IsAttributeMapped(const nsIAtom* aAttribute) const
 {
   static const MappedAttributeEntry attributes[] = {
     { &nsGkAtoms::align },
-    { &nsGkAtoms::valign }, 
+    { &nsGkAtoms::valign },
     { &nsGkAtoms::height },
     { nullptr }
   };

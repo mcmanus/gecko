@@ -11,7 +11,6 @@
 #include <limits>
 
 #include "mozilla/Assertions.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "nsAutoPtr.h"
 #include "TimeUnits.h"
 #include "VideoUtils.h"
@@ -304,7 +303,7 @@ MP3TrackDemuxer::GetSamples(int32_t aNumSamples)
     frames->mSamples.AppendElement(frame);
   }
 
-  MP3LOGV("GetSamples() End mSamples.Size()=%" PRIuSIZE " aNumSamples=%d mOffset=%" PRIu64
+  MP3LOGV("GetSamples() End mSamples.Size()=%zu aNumSamples=%d mOffset=%" PRIu64
           " mNumParsedFrames=%" PRIu64 " mFrameIndex=%" PRId64
           " mTotalFrameLen=%" PRIu64 " mSamplesPerFrame=%d mSamplesPerSecond=%d "
           "mChannels=%d",
@@ -479,15 +478,15 @@ VerifyFrameConsistency(const FrameParser::Frame& aFrame1,
   const auto& h1 = aFrame1.Header();
   const auto& h2 = aFrame2.Header();
 
-  return h1.IsValid()
-         && h2.IsValid()
-         && h1.Layer() == h2.Layer()
-         && h1.SlotSize() == h2.SlotSize()
-         && h1.SamplesPerFrame() == h2.SamplesPerFrame()
-         && h1.Channels() == h2.Channels()
-         && h1.SampleRate() == h2.SampleRate()
-         && h1.RawVersion() == h2.RawVersion()
-         && h1.RawProtection() == h2.RawProtection();
+  return h1.IsValid() &&
+         h2.IsValid() &&
+         h1.Layer() == h2.Layer() &&
+         h1.SlotSize() == h2.SlotSize() &&
+         h1.SamplesPerFrame() == h2.SamplesPerFrame() &&
+         h1.Channels() == h2.Channels() &&
+         h1.SampleRate() == h2.SampleRate() &&
+         h1.RawVersion() == h2.RawVersion() &&
+         h1.RawProtection() == h2.RawProtection();
 }
 
 MediaByteRange
@@ -538,8 +537,8 @@ MP3TrackDemuxer::FindNextFrame()
       maxSkippableBytes = std::numeric_limits<uint32_t>::max();
     }
 
-    if ((mOffset - startOffset > maxSkippableBytes)
-        || (read = Read(buffer, mOffset, BUFFER_SIZE)) == 0) {
+    if ((mOffset - startOffset > maxSkippableBytes) ||
+        (read = Read(buffer, mOffset, BUFFER_SIZE)) == 0) {
       MP3LOG("FindNext() EOS or exceeded maxSkippeableBytes without a frame");
       // This is not a valid MPEG audio stream or we've reached EOS, give up.
       break;
@@ -555,9 +554,8 @@ MP3TrackDemuxer::FindNextFrame()
     // the reader shouldn't have any bytes remaining.
     MOZ_ASSERT(foundFrame || bytesToSkip || !reader.Remaining());
 
-    if (foundFrame && mParser.FirstFrame().Length()
-        && !VerifyFrameConsistency(mParser.FirstFrame(),
-                                   mParser.CurrentFrame())) {
+    if (foundFrame && mParser.FirstFrame().Length() &&
+        !VerifyFrameConsistency(mParser.FirstFrame(), mParser.CurrentFrame())) {
       // We've likely hit a false-positive, ignore it and proceed with the
       // search for the next valid frame.
       foundFrame = false;
@@ -630,7 +628,7 @@ MP3TrackDemuxer::GetNextFrame(const MediaByteRange& aRange)
     Read(frameWriter->Data(), frame->mOffset, frame->Size());
 
   if (read != aRange.Length()) {
-    MP3LOG("GetNext() Exit read=%u frame->Size()=%" PRIuSIZE, read, frame->Size());
+    MP3LOG("GetNext() Exit read=%u frame->Size()=%zu", read, frame->Size());
     return nullptr;
   }
 

@@ -56,7 +56,7 @@ struct ManifestDirective
 
   bool allowbootstrap;
 
-  // The contentaccessible flags only apply to content directives.
+  // The contentaccessible flags only apply to content/resource directives.
   bool contentflags;
 
   // Function to handle this directive. This isn't a union because C++ still
@@ -123,7 +123,7 @@ static const ManifestDirective kParsingTable[] = {
     nullptr, &nsChromeRegistry::ManifestOverride, nullptr
   },
   {
-    "resource",         2, false, true, true, true, false,
+    "resource",         2, false, true, true, true, true,
     nullptr, &nsChromeRegistry::ManifestResource, nullptr
   }
 };
@@ -225,7 +225,7 @@ LogMessageWithContext(FileLocation& aFile,
  * @return Whether the flag was handled.
  */
 static bool
-CheckFlag(const nsSubstring& aFlag, const nsSubstring& aData, bool& aResult)
+CheckFlag(const nsAString& aFlag, const nsAString& aData, bool& aResult)
 {
   if (!StringBeginsWith(aData, aFlag)) {
     return false;
@@ -284,8 +284,8 @@ enum TriState
  * @return Whether the flag was handled.
  */
 static bool
-CheckStringFlag(const nsSubstring& aFlag, const nsSubstring& aData,
-                const nsSubstring& aValue, TriState& aResult)
+CheckStringFlag(const nsAString& aFlag, const nsAString& aData,
+                const nsAString& aValue, TriState& aResult)
 {
   if (aData.Length() < aFlag.Length() + 1) {
     return false;
@@ -320,8 +320,8 @@ CheckStringFlag(const nsSubstring& aFlag, const nsSubstring& aData,
 }
 
 static bool
-CheckOsFlag(const nsSubstring& aFlag, const nsSubstring& aData,
-            const nsSubstring& aValue, TriState& aResult)
+CheckOsFlag(const nsAString& aFlag, const nsAString& aData,
+            const nsAString& aValue, TriState& aResult)
 {
   bool result = CheckStringFlag(aFlag, aData, aValue, aResult);
 #if defined(XP_UNIX) && !defined(XP_DARWIN) && !defined(ANDROID)

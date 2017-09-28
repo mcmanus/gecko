@@ -14,7 +14,7 @@
 #include "gfxFontVariations.h"
 #include "mozilla/RefPtr.h"             // for RefPtr
 #include "nsCoord.h"                    // for nscoord
-#include "nsStringFwd.h"                // for nsSubstring
+#include "nsStringFwd.h"                // for nsAString
 #include "nsString.h"               // for nsString
 #include "nsTArray.h"                   // for nsTArray
 
@@ -140,7 +140,8 @@ struct nsFont {
   void CopyAlternates(const nsFont& aOther);
 
   // Add featureSettings into style
-  void AddFontFeaturesToStyle(gfxFontStyle *aStyle) const;
+  void AddFontFeaturesToStyle(gfxFontStyle *aStyle,
+                              bool aVertical) const;
 
   void AddFontVariationsToStyle(gfxFontStyle *aStyle) const;
 };

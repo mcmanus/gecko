@@ -16,10 +16,9 @@
   </broadcasterset>
 
   <panelmultiview id="identity-popup-multiView"
-                  mainViewId="identity-popup-mainView"
-                  descriptionheightworkaround="true">
-    <panelview id="identity-popup-mainView" flex="1">
-
+                  mainViewId="identity-popup-mainView">
+    <panelview id="identity-popup-mainView" flex="1"
+               descriptionheightworkaround="true">
       <!-- Security Section -->
       <hbox id="identity-popup-security" class="identity-popup-section">
         <vbox id="identity-popup-security-content" flex="1">
@@ -84,7 +83,8 @@
       </hbox>
 
       <!-- Permissions Section -->
-      <hbox class="identity-popup-section">
+      <hbox class="identity-popup-section"
+            when-connection="not-secure secure secure-ev secure-cert-user-overridden file extension">
         <vbox id="identity-popup-permissions-content" flex="1">
           <label id="identity-popup-permissions-headline"
                  class="identity-popup-headline"
@@ -97,7 +97,8 @@
     </panelview>
 
     <!-- Security SubView -->
-    <panelview id="identity-popup-securityView">
+    <panelview id="identity-popup-securityView"
+               descriptionheightworkaround="true">
       <vbox id="identity-popup-securityView-header">
         <label class="plain">
           <label class="identity-popup-headline identity-popup-host"></label>

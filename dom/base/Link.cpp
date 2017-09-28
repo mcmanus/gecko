@@ -9,6 +9,11 @@
 #include "mozilla/EventStates.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/dom/Element.h"
+#ifdef ANDROID
+#include "mozilla/IHistory.h"
+#else
+#include "mozilla/places/History.h"
+#endif
 #include "nsIURL.h"
 #include "nsISizeOf.h"
 #include "nsIDocShell.h"
@@ -23,30 +28,35 @@
 #include "mozAutoDocUpdate.h"
 
 #include "mozilla/Services.h"
+#include "nsAttrValueInlines.h"
 
 namespace mozilla {
 namespace dom {
 
+#ifndef ANDROID
+using places::History;
+#endif
+
 Link::Link(Element *aElement)
   : mElement(aElement)
-  , mHistory(services::GetHistoryService())
   , mLinkState(eLinkState_NotLink)
   , mNeedsRegistration(false)
   , mRegistered(false)
   , mHasPendingLinkUpdate(false)
   , mInDNSPrefetch(false)
+  , mHistory(true)
 {
   MOZ_ASSERT(mElement, "Must have an element");
 }
 
 Link::Link()
   : mElement(nullptr)
-  , mHistory(nullptr)
   , mLinkState(eLinkState_NotLink)
   , mNeedsRegistration(false)
   , mRegistered(false)
   , mHasPendingLinkUpdate(false)
   , mInDNSPrefetch(false)
+  , mHistory(false)
 {
 }
 
@@ -94,7 +104,26 @@ Link::CancelDNSPrefetch(nsWrapperCache::FlagsType aDeferredFlag,
 }
 
 void
-Link::TryDNSPrefetchPreconnectOrPrefetchOrPrerender()
+Link::GetContentPolicyMimeTypeMedia(nsAttrValue& aAsAttr,
+                                    nsContentPolicyType& aPolicyType,
+                                    nsString& aMimeType,
+                                    nsAString& aMedia)
+{
+  nsAutoString as;
+  mElement->GetAttr(kNameSpaceID_None, nsGkAtoms::as, as);
+  Link::ParseAsValue(as, aAsAttr);
+  aPolicyType = AsValueToContentPolicy(aAsAttr);
+
+  nsAutoString type;
+  mElement->GetAttr(kNameSpaceID_None, nsGkAtoms::type, type);
+  nsAutoString notUsed;
+  nsContentUtils::SplitMimeType(type, aMimeType, notUsed);
+
+  mElement->GetAttr(kNameSpaceID_None, nsGkAtoms::media, aMedia);
+}
+
+void
+Link::TryDNSPrefetchOrPreconnectOrPrefetchOrPreloadOrPrerender()
 {
   MOZ_ASSERT(mElement->IsInComposedDoc());
   if (!ElementHasHref()) {
@@ -106,22 +135,45 @@ Link::TryDNSPrefetchPreconnectOrPrefetchOrPrerender()
     return;
   }
 
-  if (!nsContentUtils::PrefetchEnabled(mElement->OwnerDoc()->GetDocShell())) {
+  if (!nsContentUtils::PrefetchPreloadEnabled(mElement->OwnerDoc()->GetDocShell())) {
     return;
   }
 
   uint32_t linkTypes = nsStyleLinkElement::ParseLinkTypes(rel);
 
   if ((linkTypes & nsStyleLinkElement::ePREFETCH) ||
-      (linkTypes & nsStyleLinkElement::eNEXT)){
+      (linkTypes & nsStyleLinkElement::eNEXT) ||
+      (linkTypes & nsStyleLinkElement::ePRELOAD)){
     nsCOMPtr<nsIPrefetchService> prefetchService(do_GetService(NS_PREFETCHSERVICE_CONTRACTID));
     if (prefetchService) {
       nsCOMPtr<nsIURI> uri(GetURI());
       if (uri) {
         nsCOMPtr<nsIDOMNode> domNode = GetAsDOMNode(mElement);
-        prefetchService->PrefetchURI(uri,
-                                     mElement->OwnerDoc()->GetDocumentURI(),
-                                     domNode, linkTypes & nsStyleLinkElement::ePREFETCH);
+        if (linkTypes & nsStyleLinkElement::ePRELOAD) {
+          nsAttrValue asAttr;
+          nsContentPolicyType policyType;
+          nsAutoString mimeType;
+          nsAutoString media;
+          GetContentPolicyMimeTypeMedia(asAttr, policyType, mimeType, media);
+
+          if (policyType == nsIContentPolicy::TYPE_INVALID) {
+            // Ignore preload with a wrong or empty as attribute.
+            return;
+          }
+
+          if (!nsStyleLinkElement::CheckPreloadAttrs(asAttr, mimeType, media,
+                                                     mElement->OwnerDoc())) {
+            policyType = nsIContentPolicy::TYPE_INVALID;
+          }
+
+          prefetchService->PreloadURI(uri,
+                                      mElement->OwnerDoc()->GetDocumentURI(),
+                                      domNode, policyType);
+        } else {
+          prefetchService->PrefetchURI(uri,
+                                       mElement->OwnerDoc()->GetDocumentURI(),
+                                       domNode, linkTypes & nsStyleLinkElement::ePREFETCH);
+        }
         return;
       }
     }
@@ -152,14 +204,141 @@ Link::TryDNSPrefetchPreconnectOrPrefetchOrPrerender()
 }
 
 void
-Link::CancelPrefetch()
+Link::UpdatePreload(nsIAtom* aName, const nsAttrValue* aValue,
+                    const nsAttrValue* aOldValue)
+{
+  MOZ_ASSERT(mElement->IsInComposedDoc());
+
+  if (!ElementHasHref()) {
+     return;
+  }
+
+  nsAutoString rel;
+  if (!mElement->GetAttr(kNameSpaceID_None, nsGkAtoms::rel, rel)) {
+    return;
+  }
+
+  if (!nsContentUtils::PrefetchPreloadEnabled(mElement->OwnerDoc()->GetDocShell())) {
+    return;
+  }
+
+  uint32_t linkTypes = nsStyleLinkElement::ParseLinkTypes(rel);
+
+  if (!(linkTypes & nsStyleLinkElement::ePRELOAD)) {
+    return;
+  }
+
+  nsCOMPtr<nsIPrefetchService> prefetchService(do_GetService(NS_PREFETCHSERVICE_CONTRACTID));
+  if (!prefetchService) {
+    return;
+  }
+
+  nsCOMPtr<nsIURI> uri(GetURI());
+  if (!uri) {
+    return;
+  }
+
+  nsCOMPtr<nsIDOMNode> domNode = GetAsDOMNode(mElement);
+
+  nsAttrValue asAttr;
+  nsContentPolicyType asPolicyType;
+  nsAutoString mimeType;
+  nsAutoString media;
+  GetContentPolicyMimeTypeMedia(asAttr, asPolicyType, mimeType, media);
+
+  if (asPolicyType == nsIContentPolicy::TYPE_INVALID) {
+    // Ignore preload with a wrong or empty as attribute, but be sure to cancel
+    // the old one.
+    prefetchService->CancelPrefetchPreloadURI(uri, domNode);
+    return;
+  }
+
+  nsContentPolicyType policyType = asPolicyType;
+  if (!nsStyleLinkElement::CheckPreloadAttrs(asAttr, mimeType, media,
+                                             mElement->OwnerDoc())) {
+    policyType = nsIContentPolicy::TYPE_INVALID;
+  }
+
+  if (aName == nsGkAtoms::crossorigin) {
+    CORSMode corsMode = Element::AttrValueToCORSMode(aValue);
+    CORSMode oldCorsMode = Element::AttrValueToCORSMode(aOldValue);
+    if (corsMode != oldCorsMode) {
+      prefetchService->CancelPrefetchPreloadURI(uri, domNode);
+      prefetchService->PreloadURI(uri, mElement->OwnerDoc()->GetDocumentURI(),
+                                  domNode, policyType);
+    }
+    return;
+  }
+
+  nsContentPolicyType oldPolicyType;
+
+  if (aName == nsGkAtoms::as) {
+    if (aOldValue) {
+      oldPolicyType = AsValueToContentPolicy(*aOldValue);
+      if (!nsStyleLinkElement::CheckPreloadAttrs(*aOldValue, mimeType, media,
+                                                 mElement->OwnerDoc())) {
+        oldPolicyType = nsIContentPolicy::TYPE_INVALID;
+      }
+    } else {
+      oldPolicyType = nsIContentPolicy::TYPE_INVALID;
+    }    
+  } else if (aName == nsGkAtoms::type) {
+    nsAutoString oldType;
+    nsAutoString notUsed;
+    if (aOldValue) {
+      aOldValue->ToString(oldType);
+    } else {
+      oldType = EmptyString();
+    }
+    nsAutoString oldMimeType;
+    nsContentUtils::SplitMimeType(oldType, oldMimeType, notUsed);
+    if (nsStyleLinkElement::CheckPreloadAttrs(asAttr, oldMimeType, media,
+                                              mElement->OwnerDoc())) {
+      oldPolicyType = asPolicyType;
+    } else {
+      oldPolicyType = nsIContentPolicy::TYPE_INVALID;
+    }
+  } else {
+    MOZ_ASSERT(aName == nsGkAtoms::media);
+    nsAutoString oldMedia;
+    if (aOldValue) {
+      aOldValue->ToString(oldMedia);
+    } else {
+      oldMedia = EmptyString();
+    }
+    if (nsStyleLinkElement::CheckPreloadAttrs(asAttr, mimeType, oldMedia,
+                                              mElement->OwnerDoc())) {
+      oldPolicyType = asPolicyType;
+    } else {
+      oldPolicyType = nsIContentPolicy::TYPE_INVALID;
+    }
+  }
+
+  if ((policyType != oldPolicyType) &&
+      (oldPolicyType != nsIContentPolicy::TYPE_INVALID)) {
+    prefetchService->CancelPrefetchPreloadURI(uri, domNode);
+
+  }
+
+  // Trigger a new preload if the policy type has changed.
+  // Also trigger load if the new policy type is invalid, this will only
+  // trigger an error event.
+  if ((policyType != oldPolicyType) ||
+      (policyType == nsIContentPolicy::TYPE_INVALID)) {
+    prefetchService->PreloadURI(uri, mElement->OwnerDoc()->GetDocumentURI(),
+                                domNode, policyType);
+  }
+}
+
+void
+Link::CancelPrefetchOrPreload()
 {
   nsCOMPtr<nsIPrefetchService> prefetchService(do_GetService(NS_PREFETCHSERVICE_CONTRACTID));
   if (prefetchService) {
     nsCOMPtr<nsIURI> uri(GetURI());
     if (uri) {
       nsCOMPtr<nsIDOMNode> domNode = GetAsDOMNode(mElement);
-      prefetchService->CancelPrefetchURI(uri, domNode);
+      prefetchService->CancelPrefetchPreloadURI(uri, domNode);
     }
   }
 }
@@ -197,7 +376,8 @@ Link::LinkState() const
 
   // If we have not yet registered for notifications and need to,
   // due to our href changing, register now!
-  if (!mRegistered && mNeedsRegistration && element->IsInComposedDoc()) {
+  if (!mRegistered && mNeedsRegistration && element->IsInComposedDoc() &&
+      !HasPendingLinkUpdate()) {
     // Only try and register once.
     self->mNeedsRegistration = false;
 
@@ -209,12 +389,19 @@ Link::LinkState() const
     // Make sure the href attribute has a valid link (bug 23209).
     // If we have a good href, register with History if available.
     if (mHistory && hrefURI) {
-      nsresult rv = mHistory->RegisterVisitedCallback(hrefURI, self);
-      if (NS_SUCCEEDED(rv)) {
-        self->mRegistered = true;
+#ifdef ANDROID
+      nsCOMPtr<IHistory> history = services::GetHistoryService();
+#else
+      History* history = History::GetService();
+#endif
+      if (history) {
+        nsresult rv = history->RegisterVisitedCallback(hrefURI, self);
+        if (NS_SUCCEEDED(rv)) {
+          self->mRegistered = true;
 
-        // And make sure we are in the document's link map.
-        element->GetComposedDoc()->AddStyleRelevantLink(self);
+          // And make sure we are in the document's link map.
+          element->GetComposedDoc()->AddStyleRelevantLink(self);
+        }
       }
     }
   }
@@ -342,7 +529,8 @@ Link::SetSearch(const nsAString& aSearch)
     return;
   }
 
-  (void)url->SetQuery(NS_ConvertUTF16toUTF8(aSearch));
+  auto encoding = mElement->OwnerDoc()->GetDocumentCharacterSet();
+  (void)url->SetQueryWithEncoding(NS_ConvertUTF16toUTF8(aSearch), encoding);
   SetHrefAttribute(uri);
 }
 
@@ -580,14 +768,13 @@ Link::ResetLinkState(bool aNotify, bool aHasHref)
       // with it before.
       doc->ForgetLink(this);
     }
-
-    UnregisterFromHistory();
   }
 
   // If we have an href, we should register with the history.
   mNeedsRegistration = aHasHref;
 
   // If we've cached the URI, reset always invalidates it.
+  UnregisterFromHistory();
   mCachedURI = nullptr;
 
   // Update our state back to the default.
@@ -620,14 +807,19 @@ Link::UnregisterFromHistory()
     return;
   }
 
-  NS_ASSERTION(mCachedURI, "mRegistered is true, but we have no cached URI?!");
-
   // And tell History to stop tracking us.
-  if (mHistory) {
-    nsresult rv = mHistory->UnregisterVisitedCallback(mCachedURI, this);
-    NS_ASSERTION(NS_SUCCEEDED(rv), "This should only fail if we misuse the API!");
-    if (NS_SUCCEEDED(rv)) {
-      mRegistered = false;
+  if (mHistory && mCachedURI) {
+#ifdef ANDROID
+    nsCOMPtr<IHistory> history = services::GetHistoryService();
+#else
+    History* history = History::GetService();
+#endif
+    if (history) {
+      nsresult rv = history->UnregisterVisitedCallback(mCachedURI, this);
+      NS_ASSERTION(NS_SUCCEEDED(rv), "This should only fail if we misuse the API!");
+      if (NS_SUCCEEDED(rv)) {
+        mRegistered = false;
+      }
     }
   }
 }
@@ -659,22 +851,72 @@ Link::SetHrefAttribute(nsIURI *aURI)
 }
 
 size_t
-Link::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
+Link::SizeOfExcludingThis(mozilla::SizeOfState& aState) const
 {
   size_t n = 0;
 
   if (mCachedURI) {
     nsCOMPtr<nsISizeOf> iface = do_QueryInterface(mCachedURI);
     if (iface) {
-      n += iface->SizeOfIncludingThis(aMallocSizeOf);
+      n += iface->SizeOfIncludingThis(aState.mMallocSizeOf);
     }
   }
 
   // The following members don't need to be measured:
   // - mElement, because it is a pointer-to-self used to avoid QIs
-  // - mHistory, because it is non-owning
 
   return n;
+}
+
+static const nsAttrValue::EnumTable kAsAttributeTable[] = {
+  { "",              DESTINATION_INVALID       },
+  { "audio",         DESTINATION_AUDIO         },
+  { "font",          DESTINATION_FONT          },
+  { "image",         DESTINATION_IMAGE         },
+  { "script",        DESTINATION_SCRIPT        },
+  { "style",         DESTINATION_STYLE         },
+  { "track",         DESTINATION_TRACK         },
+  { "video",         DESTINATION_VIDEO         },
+  { "fetch",         DESTINATION_FETCH         },
+  { nullptr,         0 }
+};
+
+
+/* static */ void
+Link::ParseAsValue(const nsAString& aValue,
+                   nsAttrValue& aResult)
+{
+  DebugOnly<bool> success =
+  aResult.ParseEnumValue(aValue, kAsAttributeTable, false,
+                         // default value is a empty string
+                         // if aValue is not a value we
+                         // understand
+                         &kAsAttributeTable[0]);
+  MOZ_ASSERT(success);
+}
+
+/* static */ nsContentPolicyType
+Link::AsValueToContentPolicy(const nsAttrValue& aValue)
+{
+  switch(aValue.GetEnumValue()) {
+  case DESTINATION_INVALID:
+    return nsIContentPolicy::TYPE_INVALID;
+  case DESTINATION_AUDIO:
+  case DESTINATION_TRACK:
+  case DESTINATION_VIDEO:
+    return nsIContentPolicy::TYPE_MEDIA;
+  case DESTINATION_FONT:
+    return nsIContentPolicy::TYPE_FONT;
+  case DESTINATION_IMAGE:
+    return nsIContentPolicy::TYPE_IMAGE;
+  case DESTINATION_SCRIPT:
+    return nsIContentPolicy::TYPE_SCRIPT;
+  case DESTINATION_STYLE:
+    return nsIContentPolicy::TYPE_STYLESHEET;
+  case DESTINATION_FETCH:
+    return nsIContentPolicy::TYPE_OTHER;
+  }
+  return nsIContentPolicy::TYPE_INVALID;
 }
 
 } // namespace dom

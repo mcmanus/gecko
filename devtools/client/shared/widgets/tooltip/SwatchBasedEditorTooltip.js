@@ -4,7 +4,7 @@
 
 "use strict";
 
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 const KeyShortcuts = require("devtools/client/shared/key-shortcuts");
 const {HTMLTooltip} = require("devtools/client/shared/widgets/tooltip/HTMLTooltip");
 const InlineTooltip = require("devtools/client/shared/widgets/tooltip/InlineTooltip");
@@ -19,12 +19,10 @@ const INLINE_TOOLTIP_CLASS = "inline-tooltip-container";
  *        The document to attach the SwatchBasedEditorTooltip. This is either the toolbox
  *        document if the tooltip is a popup tooltip or the panel's document if it is an
  *        inline editor.
- * @param {String} stylesheet
- *        The stylesheet to be used for the HTMLTooltip.
  * @param {Boolean} useInline
  *        A boolean flag representing whether or not the InlineTooltip should be used.
  */
-function SwatchBasedEditorTooltip(document, stylesheet, useInline) {
+function SwatchBasedEditorTooltip(document, useInline) {
   EventEmitter.decorate(this);
 
   this.useInline = useInline;
@@ -40,7 +38,6 @@ function SwatchBasedEditorTooltip(document, stylesheet, useInline) {
       type: "arrow",
       consumeOutsideClicks: true,
       useXulWrapper: true,
-      stylesheet
     });
   }
 

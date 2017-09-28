@@ -6,6 +6,8 @@
 
 #include "jit/Ion.h"
 
+#include "jit/JitCompartment.h"
+
 #include "jscompartmentinlines.h"
 
 using namespace js;
@@ -37,7 +39,7 @@ CompileRuntime::jitRuntime()
     return runtime()->jitRuntime();
 }
 
-GeckoProfiler&
+GeckoProfilerRuntime&
 CompileRuntime::geckoProfiler()
 {
     return runtime()->geckoProfiler();
@@ -221,18 +223,6 @@ CompileRuntime*
 CompileCompartment::runtime()
 {
     return CompileRuntime::get(compartment()->runtimeFromAnyThread());
-}
-
-const void*
-CompileCompartment::addressOfEnumerators()
-{
-    return &compartment()->enumerators;
-}
-
-const void*
-CompileCompartment::addressOfLastCachedNativeIterator()
-{
-    return &compartment()->lastCachedNativeIterator;
 }
 
 const void*

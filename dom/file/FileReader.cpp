@@ -67,10 +67,11 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(FileReader,
   NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mResultArrayBuffer)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(FileReader)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(FileReader)
   NS_INTERFACE_MAP_ENTRY(nsITimerCallback)
   NS_INTERFACE_MAP_ENTRY(nsIInputStreamCallback)
   NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
+  NS_INTERFACE_MAP_ENTRY(nsINamed)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_ADDREF_INHERITED(FileReader, DOMEventTargetHelper)
@@ -323,6 +324,8 @@ FileReader::DoReadData(uint64_t aCount)
     //Update memory buffer to reflect the contents of the file
     if (!size.isValid() ||
         // PR_Realloc doesn't support over 4GB memory size even if 64-bit OS
+        // XXX: it's likely that this check is unnecessary and the comment is
+        // wrong because we no longer use PR_Realloc outside of NSPR and NSS.
         size.value() > UINT32_MAX ||
         size.value() > mTotal) {
       return NS_ERROR_OUT_OF_MEMORY;
@@ -371,22 +374,30 @@ FileReader::ReadFileContent(Blob& aBlob,
   mDataFormat = aDataFormat;
   CopyUTF16toUTF8(aCharset, mCharset);
 
-  nsresult rv;
-  nsCOMPtr<nsIStreamTransportService> sts =
-    do_GetService(kStreamTransportServiceCID, &rv);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    aRv.Throw(rv);
-    return;
-  }
-
   nsCOMPtr<nsIInputStream> stream;
   mBlob->GetInternalStream(getter_AddRefs(stream), aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return;
   }
 
+  bool nonBlocking = false;
+  aRv = stream->IsNonBlocking(&nonBlocking);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return;
+  }
+
   mAsyncStream = do_QueryInterface(stream);
-  if (!mAsyncStream) {
+
+  // We want to have a non-blocking nsIAsyncInputStream.
+  if (!mAsyncStream || !nonBlocking) {
+    nsresult rv;
+    nsCOMPtr<nsIStreamTransportService> sts =
+      do_GetService(kStreamTransportServiceCID, &rv);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      aRv.Throw(rv);
+      return;
+    }
+
     nsCOMPtr<nsITransport> transport;
     aRv = sts->CreateInputTransport(stream,
                                     /* aStartOffset */ 0,
@@ -608,7 +619,8 @@ FileReader::DispatchProgressEvent(const nsAString& aType)
     ProgressEvent::Constructor(this, aType, init);
   event->SetTrusted(true);
 
-  return DispatchDOMEvent(nullptr, event, nullptr, nullptr);
+  bool dummy;
+  return DispatchEvent(event, &dummy);
 }
 
 // nsITimerCallback
@@ -671,6 +683,14 @@ FileReader::OnInputStreamReady(nsIAsyncInputStream* aStream)
     StartProgressEventTimer();
   }
 
+  return NS_OK;
+}
+
+// nsINamed
+NS_IMETHODIMP
+FileReader::GetName(nsACString& aName)
+{
+  aName.AssignLiteral("FileReader");
   return NS_OK;
 }
 

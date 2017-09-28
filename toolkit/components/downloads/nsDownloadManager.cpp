@@ -117,9 +117,8 @@ nsDownloadManager::GetDefaultDownloadsDirectory(nsIFile **aResult)
   // Linux:
   // XDG user dir spec, with a fallback to Home/Downloads
 
-  nsXPIDLString folderName;
-  mBundle->GetStringFromName(u"downloadsFolder",
-                             getter_Copies(folderName));
+  nsAutoString folderName;
+  mBundle->GetStringFromName("downloadsFolder", folderName);
 
 #if defined (XP_MACOSX)
   rv = dirService->Get(NS_OSX_DEFAULT_DOWNLOAD_DIR,

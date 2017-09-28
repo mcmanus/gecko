@@ -7,6 +7,8 @@
 const {
   ACTIVITY_TYPE,
   OPEN_NETWORK_DETAILS,
+  ENABLE_PERSISTENT_LOGS,
+  DISABLE_BROWSER_CACHE,
   OPEN_STATISTICS,
   RESET_COLUMNS,
   SELECT_DETAILS_PANEL_TAB,
@@ -24,6 +26,30 @@ function openNetworkDetails(open) {
   return {
     type: OPEN_NETWORK_DETAILS,
     open,
+  };
+}
+
+/**
+ * Change persistent logs state.
+ *
+ * @param {boolean} enabled - expected persistent logs enabled state
+ */
+function enablePersistentLogs(enabled) {
+  return {
+    type: ENABLE_PERSISTENT_LOGS,
+    enabled,
+  };
+}
+
+/**
+ * Change browser cache state.
+ *
+ * @param {boolean} disabled - expected browser cache in disable state
+ */
+function disableBrowserCache(disabled) {
+  return {
+    type: DISABLE_BROWSER_CACHE,
+    disabled,
   };
 }
 
@@ -95,6 +121,22 @@ function toggleNetworkDetails() {
 }
 
 /**
+ * Toggle persistent logs status.
+ */
+function togglePersistentLogs() {
+  return (dispatch, getState) =>
+    dispatch(enablePersistentLogs(!getState().ui.persistentLogsEnabled));
+}
+
+/**
+ * Toggle browser cache status.
+ */
+function toggleBrowserCache() {
+  return (dispatch, getState) =>
+    dispatch(disableBrowserCache(!getState().ui.browserCacheDisabled));
+}
+
+/**
  * Toggle performance statistics panel.
  */
 function toggleStatistics() {
@@ -104,11 +146,15 @@ function toggleStatistics() {
 
 module.exports = {
   openNetworkDetails,
+  enablePersistentLogs,
+  disableBrowserCache,
   openStatistics,
   resetColumns,
   resizeWaterfall,
   selectDetailsPanelTab,
   toggleColumn,
   toggleNetworkDetails,
+  togglePersistentLogs,
+  toggleBrowserCache,
   toggleStatistics,
 };

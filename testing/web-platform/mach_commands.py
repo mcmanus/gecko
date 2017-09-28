@@ -46,10 +46,12 @@ class WebPlatformTestsRunnerSetup(MozbuildObject):
             kwargs["certutil_binary"] = self.get_binary_path('certutil')
 
         if kwargs["stackfix_dir"] is None:
-            kwargs["stackfix_dir"] = os.path.split(
-                self.get_binary_path(validate_exists=False))[0]
+            kwargs["stackfix_dir"] = self.bindir
 
         here = os.path.split(__file__)[0]
+
+        if kwargs["exclude"] is None and kwargs["include"] is None and not sys.platform.startswith("linux"):
+            kwargs["exclude"] = ["css"]
 
         if kwargs["ssl_type"] in (None, "pregenerated"):
             if kwargs["ca_cert_path"] is None:
@@ -66,35 +68,19 @@ class WebPlatformTestsRunnerSetup(MozbuildObject):
         if kwargs["webdriver_binary"] is None:
             kwargs["webdriver_binary"] = self.get_binary_path("geckodriver", validate_exists=False)
 
+        self.setup_fonts_firefox()
+
         kwargs = wptcommandline.check_args(kwargs)
+
+        return kwargs
 
     def kwargs_wptrun(self, kwargs):
         from wptrunner import wptcommandline
         here = os.path.join(self.topsrcdir, 'testing', 'web-platform')
 
-        sys.path.insert(0, os.path.join(here, "tests", "tools"))
-
-        import wptrun
-
-        product = kwargs["product"]
-
-        setup_func = {
-            "chrome": wptrun.setup_chrome,
-            "edge": wptrun.setup_edge,
-            "servo": wptrun.setup_servo,
-        }[product]
-
-        try:
-            wptrun.check_environ(product)
-
-            setup_func(wptrun.virtualenv.Virtualenv(self.virtualenv_manager.virtualenv_root),
-                       kwargs,
-                       True)
-        except wptrun.WptrunError as e:
-            print(e.message, file=sys.stderr)
-            sys.exit(1)
-
         kwargs["tests_root"] = os.path.join(here, "tests")
+
+        sys.path.insert(0, kwargs["tests_root"])
 
         if kwargs["metadata_root"] is None:
             metadir = os.path.join(here, "products", kwargs["product"])
@@ -109,7 +95,29 @@ class WebPlatformTestsRunnerSetup(MozbuildObject):
             with open(src_manifest) as src, open(dest_manifest, "w") as dest:
                 dest.write(src.read())
 
-        kwargs = wptcommandline.check_args(kwargs)
+        from tools.wpt import run
+
+        try:
+            kwargs = run.setup_wptrunner(run.virtualenv.Virtualenv(self.virtualenv_manager.virtualenv_root),
+                                         **kwargs)
+        except run.WptrunError as e:
+            print(e.message, file=sys.stderr)
+            sys.exit(1)
+
+        return kwargs
+
+    def setup_fonts_firefox(self):
+        # Ensure the Ahem font is available
+        if not sys.platform.startswith("darwin"):
+            font_path = os.path.join(os.path.dirname(self.get_binary_path()), "fonts")
+        else:
+            font_path = os.path.join(os.path.dirname(self.get_binary_path()), os.pardir, "Resources", "res", "fonts")
+        ahem_src = os.path.join(self.topsrcdir, "testing", "web-platform", "tests", "fonts", "Ahem.ttf")
+        ahem_dest = os.path.join(font_path, "Ahem.ttf")
+        if not os.path.exists(ahem_dest) and os.path.exists(ahem_src):
+            with open(ahem_src, "rb") as src, open(ahem_dest, "wb") as dest:
+                dest.write(src.read())
+
 
 
 class WebPlatformTestsUpdater(MozbuildObject):
@@ -123,11 +131,6 @@ class WebPlatformTestsUpdater(MozbuildObject):
         if kwargs["product"] is None:
             kwargs["product"] = "firefox"
 
-        if kwargs["sync"]:
-            if not kwargs["exclude"]:
-                kwargs["exclude"] = ["css/*"]
-            if not kwargs["include"]:
-                kwargs["include"] = ["css/css-timing-1/*", "css/css-animations-1/*", "css/css-transitions-1/*"]
 
 
         kwargs = updatecommandline.check_args(kwargs)
@@ -251,6 +254,11 @@ testing/web-platform/tests for tests that may be shared
         with open(path, "w") as f:
             f.write(template)
 
+        ref_path = kwargs["ref"]
+        if ref_path and not os.path.exists(ref_path):
+            with open(ref_path, "w") as f:
+                f.write(self.template_prefix % {"documentElement": ""})
+
         if kwargs["no_editor"]:
             editor = None
         elif kwargs["editor"]:
@@ -264,15 +272,14 @@ testing/web-platform/tests for tests that may be shared
 
         proc = None
         if editor:
+            if ref_path:
+                path = "%s %s" % (path, ref_path)
             proc = subprocess.Popen("%s %s" % (editor, path), shell=True)
-
-        if not kwargs["no_run"]:
-            p = create_parser_wpt()
-            wpt_kwargs = vars(p.parse_args(["--manifest-update", path]))
-            context.commands.dispatch("web-platform-tests", context, **wpt_kwargs)
 
         if proc:
             proc.wait()
+
+        context.commands.dispatch("wpt-manifest-update", context, {"check_clean": False, "rebuild": False})
 
 
 class WPTManifestUpdater(MozbuildObject):
@@ -298,15 +305,13 @@ def create_parser_create():
     p.add_argument("--no-editor", action="store_true",
                    help="Don't try to open the test in an editor")
     p.add_argument("-e", "--editor", action="store", help="Editor to use")
-    p.add_argument("--no-run", action="store_true",
-                   help="Don't try to update the wpt manifest or open the test in a browser")
     p.add_argument("--long-timeout", action="store_true",
                    help="Test should be given a long timeout (typically 60s rather than 10s, but varies depending on environment)")
     p.add_argument("--overwrite", action="store_true",
                    help="Allow overwriting an existing test file")
     p.add_argument("-r", "--reftest", action="store_true",
                    help="Create a reftest rather than a testharness (js) test"),
-    p.add_argument("-ref", "--reference", dest="ref", help="Path to the reference file")
+    p.add_argument("-m", "--reference", dest="ref", help="Path to the reference file")
     p.add_argument("--mismatch", action="store_true",
                    help="Create a mismatch reftest")
     p.add_argument("--wait", action="store_true",
@@ -382,7 +387,6 @@ class MachCommands(MachCommandBase):
 
     @Command("web-platform-tests-create",
              category="testing",
-             conditions=[conditions.is_firefox],
              parser=create_parser_create)
     def create_web_platform_test(self, **params):
         self.setup()
@@ -391,7 +395,6 @@ class MachCommands(MachCommandBase):
 
     @Command("wpt-create",
              category="testing",
-             conditions=[conditions.is_firefox],
              parser=create_parser_create)
     def create_wpt(self, **params):
         return self.create_web_platform_test(**params)

@@ -89,10 +89,11 @@ hardware (via AudioStream).
 #include "nsAutoPtr.h"
 #include "nsThreadUtils.h"
 #include "MediaDecoder.h"
-#include "MediaDecoderReader.h"
 #include "MediaDecoderOwner.h"
 #include "MediaEventSource.h"
+#include "MediaFormatReader.h"
 #include "MediaMetadataManager.h"
+#include "MediaQueue.h"
 #include "MediaStatistics.h"
 #include "MediaTimer.h"
 #include "ImageContainer.h"
@@ -107,8 +108,8 @@ class MediaSink;
 class AbstractThread;
 class AudioSegment;
 class DecodedStream;
-class MediaDecoderReaderWrapper;
 class OutputStreamManager;
+class ReaderProxy;
 class TaskQueue;
 
 extern LazyLogModule gMediaDecoderLog;
@@ -149,13 +150,12 @@ class MediaDecoderStateMachine
 {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaDecoderStateMachine)
 
-  using TrackSet = MediaDecoderReader::TrackSet;
+  using TrackSet = MediaFormatReader::TrackSet;
 
 public:
   typedef MediaDecoderOwner::NextFrameStatus NextFrameStatus;
   typedef mozilla::layers::ImageContainer::FrameID FrameID;
-  MediaDecoderStateMachine(MediaDecoder* aDecoder,
-                           MediaDecoderReader* aReader);
+  MediaDecoderStateMachine(MediaDecoder* aDecoder, MediaFormatReader* aReader);
 
   nsresult Init(MediaDecoder* aDecoder);
 
@@ -163,7 +163,6 @@ public:
   enum State
   {
     DECODER_STATE_DECODING_METADATA,
-    DECODER_STATE_WAIT_FOR_CDM,
     DECODER_STATE_DORMANT,
     DECODER_STATE_DECODING_FIRSTFRAME,
     DECODER_STATE_DECODING,
@@ -184,8 +183,11 @@ public:
 
   void DispatchSetPlaybackRate(double aPlaybackRate)
   {
-    OwnerThread()->DispatchStateChange(NewRunnableMethod<double>(
-      this, &MediaDecoderStateMachine::SetPlaybackRate, aPlaybackRate));
+    OwnerThread()->DispatchStateChange(
+      NewRunnableMethod<double>("MediaDecoderStateMachine::SetPlaybackRate",
+                                this,
+                                &MediaDecoderStateMachine::SetPlaybackRate,
+                                aPlaybackRate));
   }
 
   RefPtr<ShutdownPromise> BeginShutdown();
@@ -194,18 +196,37 @@ public:
   void DispatchSetFragmentEndTime(const media::TimeUnit& aEndTime)
   {
     RefPtr<MediaDecoderStateMachine> self = this;
-    nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction([self, aEndTime] () {
-      // A negative number means we don't have a fragment end time at all.
-      self->mFragmentEndTime = aEndTime >= media::TimeUnit::Zero()
-        ? aEndTime : media::TimeUnit::Invalid();
-    });
+    nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction(
+      "MediaDecoderStateMachine::DispatchSetFragmentEndTime",
+      [self, aEndTime]() {
+        // A negative number means we don't have a fragment end time at all.
+        self->mFragmentEndTime = aEndTime >= media::TimeUnit::Zero()
+                                   ? aEndTime
+                                   : media::TimeUnit::Invalid();
+      });
     OwnerThread()->Dispatch(r.forget());
   }
 
-  // Drop reference to mResource. Only called during shutdown dance.
-  void BreakCycles() {
-    MOZ_ASSERT(NS_IsMainThread());
-    mResource = nullptr;
+  void DispatchCanPlayThrough(bool aCanPlayThrough)
+  {
+    RefPtr<MediaDecoderStateMachine> self = this;
+    nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction(
+      "MediaDecoderStateMachine::DispatchCanPlayThrough",
+      [self, aCanPlayThrough]() {
+        self->mCanPlayThrough = aCanPlayThrough;
+      });
+    OwnerThread()->DispatchStateChange(r.forget());
+  }
+
+  void DispatchIsLiveStream(bool aIsLiveStream)
+  {
+    RefPtr<MediaDecoderStateMachine> self = this;
+    nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction(
+      "MediaDecoderStateMachine::DispatchIsLiveStream",
+      [self, aIsLiveStream]() {
+        self->mIsLiveStream = aIsLiveStream;
+      });
+    OwnerThread()->DispatchStateChange(r.forget());
   }
 
   TimedMetadataEventSource& TimedMetadataEvent() {
@@ -241,7 +262,6 @@ public:
 private:
   class StateObject;
   class DecodeMetadataState;
-  class WaitForCDMState;
   class DormantState;
   class DecodingFirstFrameState;
   class DecodingState;
@@ -249,6 +269,7 @@ private:
   class AccurateSeekingState;
   class NextFrameSeekingState;
   class NextFrameSeekingFromDormantState;
+  class VideoOnlySeekingState;
   class BufferingState;
   class CompletedState;
   class ShutdownState;
@@ -282,10 +303,6 @@ private:
   // Only called on the decoder thread. Must be called with
   // the decode monitor held.
   void UpdatePlaybackPosition(const media::TimeUnit& aTime);
-
-  bool CanPlayThrough();
-
-  MediaStatistics GetStatistics();
 
   bool HasAudio() const { return mInfo.ref().HasAudio(); }
   bool HasVideo() const { return mInfo.ref().HasVideo(); }
@@ -482,7 +499,6 @@ private:
   const RefPtr<AbstractThread> mAbstractMainThread;
   const RefPtr<FrameStatistics> mFrameStats;
   const RefPtr<VideoFrameContainer> mVideoFrameContainer;
-  const dom::AudioChannel mAudioChannel;
 
   // Task queue for running the state machine.
   RefPtr<TaskQueue> mTaskQueue;
@@ -512,28 +528,8 @@ private:
     return mDuration.Ref().ref();
   }
 
-  // Recomputes the canonical duration from various sources.
-  void RecomputeDuration();
-
-
   // FrameID which increments every time a frame is pushed to our queue.
   FrameID mCurrentFrameID;
-
-  // The highest timestamp that our position has reached. Monotonically
-  // increasing.
-  Watchable<media::TimeUnit> mObservedDuration;
-
-  // Returns true if we're logically playing, that is, if the Play() has
-  // been called and Pause() has not or we have not yet reached the end
-  // of media. This is irrespective of the seeking state; if the owner
-  // calls Play() and then Seek(), we still count as logically playing.
-  // The decoder monitor must be held.
-  bool IsLogicallyPlaying()
-  {
-    MOZ_ASSERT(OnTaskQueue());
-    return mPlayState == MediaDecoder::PLAY_STATE_PLAYING
-           || mNextPlayState == MediaDecoder::PLAY_STATE_PLAYING;
-  }
 
   // Media Fragment end time.
   media::TimeUnit mFragmentEndTime = media::TimeUnit::Invalid();
@@ -541,7 +537,7 @@ private:
   // The media sink resource.  Used on the state machine thread.
   RefPtr<media::MediaSink> mMediaSink;
 
-  const RefPtr<MediaDecoderReaderWrapper> mReader;
+  const RefPtr<ReaderProxy> mReader;
 
   // The end time of the last audio frame that's been pushed onto the media sink
   // in microseconds. This will approximately be the end time
@@ -569,28 +565,15 @@ private:
   // Must hold monitor.
   uint32_t GetAmpleVideoFrames() const;
 
-  // Low audio threshold. If we've decoded less than this much audio we
-  // consider our audio decode "behind", and we may skip video decoding
-  // in order to allow our audio decoding to catch up. We favour audio
-  // decoding over video. We increase this threshold if we're slow to
-  // decode video frames, in order to reduce the chance of audio underruns.
-  // Note that we don't ever reset this threshold, it only ever grows as
-  // we detect that the decode can't keep up with rendering.
-  media::TimeUnit mLowAudioThreshold;
-
   // Our "ample" audio threshold. Once we've this much audio decoded, we
-  // pause decoding. If we increase mLowAudioThreshold, we'll also
-  // increase this too appropriately (we don't want mLowAudioThreshold
-  // to be greater than mAmpleAudioThreshold, else we'd stop decoding!).
-  // Note that we don't ever reset this threshold, it only ever grows as
-  // we detect that the decode can't keep up with rendering.
+  // pause decoding.
   media::TimeUnit mAmpleAudioThreshold;
 
   // Only one of a given pair of ({Audio,Video}DataPromise, WaitForDataPromise)
   // should exist at any given moment.
-  using AudioDataPromise = MediaDecoderReader::AudioDataPromise;
-  using VideoDataPromise = MediaDecoderReader::VideoDataPromise;
-  using WaitForDataPromise = MediaDecoderReader::WaitForDataPromise;
+  using AudioDataPromise = MediaFormatReader::AudioDataPromise;
+  using VideoDataPromise = MediaFormatReader::VideoDataPromise;
+  using WaitForDataPromise = MediaFormatReader::WaitForDataPromise;
   MozPromiseRequestHolder<AudioDataPromise> mAudioDataRequest;
   MozPromiseRequestHolder<VideoDataPromise> mVideoDataRequest;
   MozPromiseRequestHolder<WaitForDataPromise> mAudioWaitRequest;
@@ -601,6 +584,10 @@ private:
 
   void OnSuspendTimerResolved();
   void CancelSuspendTimer();
+
+  bool mCanPlayThrough = false;
+
+  bool mIsLiveStream = false;
 
   // True if we shouldn't play our audio (but still write it to any capturing
   // streams). When this is true, the audio thread will never start again after
@@ -651,9 +638,6 @@ private:
   // Data about MediaStreams that are being fed by the decoder.
   const RefPtr<OutputStreamManager> mOutputStreamManager;
 
-  // Media data resource from the decoder.
-  RefPtr<MediaResource> mResource;
-
   // Track the current video decode mode.
   VideoDecodeMode mVideoDecodeMode;
 
@@ -677,23 +661,14 @@ private:
 
   MediaEventProducer<DecoderDoctorEvent> mOnDecoderDoctorEvent;
 
-  void OnCDMProxyReady(RefPtr<CDMProxy> aProxy);
-  void OnCDMProxyNotReady();
-  RefPtr<CDMProxy> mCDMProxy;
-  MozPromiseRequestHolder<MediaDecoder::CDMProxyPromise> mCDMProxyPromise;
-
   const bool mIsMSE;
 
 private:
   // The buffered range. Mirrored from the decoder thread.
   Mirror<media::TimeIntervals> mBuffered;
 
-  // The duration explicitly set by JS, mirrored from the main thread.
-  Mirror<Maybe<double>> mExplicitDuration;
-
-  // The current play state and next play state, mirrored from the main thread.
+  // The current play state, mirrored from the main thread.
   Mirror<MediaDecoder::PlayState> mPlayState;
-  Mirror<MediaDecoder::PlayState> mNextPlayState;
 
   // Volume of playback. 0.0 = muted. 1.0 = full volume.
   Mirror<double> mVolume;
@@ -712,16 +687,6 @@ private:
   // An identifier for the principal of the media. Used to track when
   // main-thread induced principal changes get reflected on MSG thread.
   Mirror<PrincipalHandle> mMediaPrincipalHandle;
-
-  // Estimate of the current playback rate (bytes/second).
-  Mirror<double> mPlaybackBytesPerSecond;
-
-  // True if mPlaybackBytesPerSecond is a reliable estimate.
-  Mirror<bool> mPlaybackRateReliable;
-
-  // Current decoding position in the stream.
-  Mirror<int64_t> mDecoderPosition;
-
 
   // Duration of the media. This is guaranteed to be non-null after we finish
   // decoding the first frame.

@@ -14,10 +14,13 @@ SOURCES += [
     'SandboxBroker.cpp',
     'SandboxBrokerCommon.cpp',
     'SandboxBrokerPolicyFactory.cpp',
+    'SandboxBrokerRealpath.cpp',
 ]
 
 if CONFIG['MOZ_ALSA']:
     DEFINES['MOZ_ALSA'] = True
+if CONFIG['MOZ_PULSEAUDIO']:
+    DEFINES['MOZ_PULSEAUDIO'] = True
 
 LOCAL_INCLUDES += [
     '/security/sandbox/linux', # SandboxLogging.h, SandboxInfo.h

@@ -32,8 +32,8 @@ struct nsCSSValuePairList;
 struct nsRuleData;
 
 namespace mozilla {
-  class GeckoStyleContext;
-}
+class GeckoStyleContext;
+} // namespace mozilla
 
 struct nsInheritedStyleData
 {
@@ -193,6 +193,7 @@ public:
     MOZ_ASSERT(!(mConditionalBits & GetBitForSID(aSID)),
                "rule node should not have unconditional and conditional style "
                "data for a given struct");
+    mConditionalBits &= ~GetBitForSID(aSID);
     mEntries[aSID] = aStyleStruct;
   }
 
@@ -200,13 +201,17 @@ public:
                     nsPresContext* aPresContext,
                     void* aStyleStruct,
                     const mozilla::RuleNodeCacheConditions& aConditions) {
-    MOZ_ASSERT((mConditionalBits & GetBitForSID(aSID)) ||
-               !mEntries[aSID],
-               "rule node should not have unconditional and conditional style "
-               "data for a given struct");
+    if (!(mConditionalBits & GetBitForSID(aSID))) {
+      MOZ_ASSERT(!mEntries[aSID],
+                 "rule node should not have unconditional and conditional "
+                 "style data for a given struct");
+      mEntries[aSID] = nullptr;
+    }
+
     MOZ_ASSERT(aConditions.CacheableWithDependencies(),
                "don't call SetStyleData with a cache key that has no "
                "conditions or is uncacheable");
+
 #ifdef DEBUG
     for (Entry* e = static_cast<Entry*>(mEntries[aSID]); e; e = e->mNext) {
       NS_WARNING_ASSERTION(e->mConditions != aConditions,
@@ -987,7 +992,7 @@ public:
   #undef STYLE_STRUCT_INHERITED
 
   static bool
-    HasAuthorSpecifiedRules(nsStyleContext* aStyleContext,
+    HasAuthorSpecifiedRules(mozilla::GeckoStyleContext* aStyleContext,
                             uint32_t ruleTypeMask,
                             bool aAuthorColorsAllowed);
 
@@ -1005,7 +1010,13 @@ public:
   // Expose this so media queries can use it
   static nscoord CalcLengthWithInitialFont(nsPresContext* aPresContext,
                                            const nsCSSValue& aValue);
+
   // Expose this so nsTransformFunctions can use it.
+  //
+  // FIXME(emilio): This can enter here with a Servo style context, which will
+  // mostly be fine except for our handling of rem units, I think.
+  //
+  // Ditto in SpecifiedCalcToComputedCalc.
   static nscoord CalcLength(const nsCSSValue& aValue,
                             nsStyleContext* aStyleContext,
                             nsPresContext* aPresContext,
@@ -1014,6 +1025,8 @@ public:
   struct ComputedCalc {
     nscoord mLength;
     float mPercent;
+
+    ComputedCalc() {}
 
     ComputedCalc(nscoord aLength, float aPercent)
       : mLength(aLength), mPercent(aPercent) {}

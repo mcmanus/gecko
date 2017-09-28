@@ -4,7 +4,7 @@
 
 // The ext-* files are imported into the same scopes.
 /* import-globals-from ext-browserAction.js */
-/* import-globals-from ext-utils.js */
+/* import-globals-from ext-browser.js */
 
 XPCOMUtils.defineLazyModuleGetter(this, "ExtensionParent",
                                   "resource://gre/modules/ExtensionParent.jsm");
@@ -25,7 +25,6 @@ this.commands = class extends ExtensionAPI {
     this.keysetsMap = new WeakMap();
 
     this.register();
-    EventEmitter.decorate(this);
   }
 
   onShutdown(reason) {
@@ -241,7 +240,7 @@ this.commands = class extends ExtensionAPI {
             });
           }));
         },
-        onCommand: new SingletonEventManager(context, "commands.onCommand", fire => {
+        onCommand: new EventManager(context, "commands.onCommand", fire => {
           let listener = (eventName, commandName) => {
             fire.async(commandName);
           };

@@ -129,7 +129,7 @@ GetVariantFromIVariant(nsIVariant* aInput, uint32_t aScalarKind,
                        mozilla::Maybe<ScalarVariant>& aOutput)
 {
   switch (aScalarKind) {
-    case nsITelemetry::SCALAR_COUNT:
+    case nsITelemetry::SCALAR_TYPE_COUNT:
       {
         uint32_t val = 0;
         nsresult rv = aInput->GetAsUint32(&val);
@@ -139,7 +139,7 @@ GetVariantFromIVariant(nsIVariant* aInput, uint32_t aScalarKind,
         aOutput = mozilla::Some(mozilla::AsVariant(val));
         break;
       }
-    case nsITelemetry::SCALAR_STRING:
+    case nsITelemetry::SCALAR_TYPE_STRING:
       {
         nsString val;
         nsresult rv = aInput->GetAsAString(val);
@@ -149,7 +149,7 @@ GetVariantFromIVariant(nsIVariant* aInput, uint32_t aScalarKind,
         aOutput = mozilla::Some(mozilla::AsVariant(val));
         break;
       }
-    case nsITelemetry::SCALAR_BOOLEAN:
+    case nsITelemetry::SCALAR_TYPE_BOOLEAN:
       {
         bool val = false;
         nsresult rv = aInput->GetAsBool(&val);
@@ -180,7 +180,7 @@ ScalarInfo::expiration() const
 }
 
 /**
- * The base scalar object, that servers as a common ancestor for storage
+ * The base scalar object, that serves as a common ancestor for storage
  * purposes.
  */
 class ScalarBase
@@ -522,13 +522,13 @@ internal_ScalarAllocate(uint32_t aScalarKind)
 {
   ScalarBase* scalar = nullptr;
   switch (aScalarKind) {
-  case nsITelemetry::SCALAR_COUNT:
+  case nsITelemetry::SCALAR_TYPE_COUNT:
     scalar = new ScalarUnsigned();
     break;
-  case nsITelemetry::SCALAR_STRING:
+  case nsITelemetry::SCALAR_TYPE_STRING:
     scalar = new ScalarString();
     break;
-  case nsITelemetry::SCALAR_BOOLEAN:
+  case nsITelemetry::SCALAR_TYPE_BOOLEAN:
     scalar = new ScalarBoolean();
     break;
   default:
@@ -805,46 +805,46 @@ internal_LogScalarError(const nsACString& aScalarName, ScalarResult aSr)
 
   switch (aSr) {
     case ScalarResult::NotInitialized:
-      errorMessage.Append(NS_LITERAL_STRING(" - Telemetry was not yet initialized."));
+      errorMessage.AppendLiteral(u" - Telemetry was not yet initialized.");
       break;
     case ScalarResult::CannotUnpackVariant:
-      errorMessage.Append(NS_LITERAL_STRING(" - Cannot convert the provided JS value to nsIVariant."));
+      errorMessage.AppendLiteral(u" - Cannot convert the provided JS value to nsIVariant.");
       break;
     case ScalarResult::CannotRecordInProcess:
-      errorMessage.Append(NS_LITERAL_STRING(" - Cannot record the scalar in the current process."));
+      errorMessage.AppendLiteral(u" - Cannot record the scalar in the current process.");
       break;
     case ScalarResult::KeyedTypeMismatch:
-      errorMessage.Append(NS_LITERAL_STRING(" - Attempting to manage a keyed scalar as a scalar (or vice-versa)."));
+      errorMessage.AppendLiteral(u" - Attempting to manage a keyed scalar as a scalar (or vice-versa).");
       break;
     case ScalarResult::UnknownScalar:
-      errorMessage.Append(NS_LITERAL_STRING(" - Unknown scalar."));
+      errorMessage.AppendLiteral(u" - Unknown scalar.");
       break;
     case ScalarResult::OperationNotSupported:
-      errorMessage.Append(NS_LITERAL_STRING(" - The requested operation is not supported on this scalar."));
+      errorMessage.AppendLiteral(u" - The requested operation is not supported on this scalar.");
       break;
     case ScalarResult::InvalidType:
-      errorMessage.Append(NS_LITERAL_STRING(" - Attempted to set the scalar to an invalid data type."));
+      errorMessage.AppendLiteral(u" - Attempted to set the scalar to an invalid data type.");
       break;
     case ScalarResult::InvalidValue:
-      errorMessage.Append(NS_LITERAL_STRING(" - Attempted to set the scalar to an incompatible value."));
+      errorMessage.AppendLiteral(u" - Attempted to set the scalar to an incompatible value.");
       break;
     case ScalarResult::StringTooLong:
-      errorMessage.Append(NS_LITERAL_STRING(" - Truncating scalar value to 50 characters."));
+      errorMessage.AppendLiteral(u" - Truncating scalar value to 50 characters.");
       break;
     case ScalarResult::KeyIsEmpty:
-      errorMessage.Append(NS_LITERAL_STRING(" - The key must not be empty."));
+      errorMessage.AppendLiteral(u" - The key must not be empty.");
       break;
     case ScalarResult::KeyTooLong:
-      errorMessage.Append(NS_LITERAL_STRING(" - The key length must be limited to 70 characters."));
+      errorMessage.AppendLiteral(u" - The key length must be limited to 70 characters.");
       break;
     case ScalarResult::TooManyKeys:
-      errorMessage.Append(NS_LITERAL_STRING(" - Keyed scalars cannot have more than 100 keys."));
+      errorMessage.AppendLiteral(u" - Keyed scalars cannot have more than 100 keys.");
       break;
     case ScalarResult::UnsignedNegativeValue:
-      errorMessage.Append(NS_LITERAL_STRING(" - Trying to set an unsigned scalar to a negative number."));
+      errorMessage.AppendLiteral(u" - Trying to set an unsigned scalar to a negative number.");
       break;
     case ScalarResult::UnsignedTruncatedValue:
-      errorMessage.Append(NS_LITERAL_STRING(" - Truncating float/double number."));
+      errorMessage.AppendLiteral(u" - Truncating float/double number.");
       break;
     default:
       // Nothing.
@@ -1174,7 +1174,7 @@ internal_GetKeyedScalarByEnum(mozilla::Telemetry::ScalarID aId,
   }
 
   // We don't currently support keyed string scalars. Disable them.
-  if (info.kind == nsITelemetry::SCALAR_STRING) {
+  if (info.kind == nsITelemetry::SCALAR_TYPE_STRING) {
     MOZ_ASSERT(false, "Keyed string scalars are not currently supported.");
     return NS_ERROR_INVALID_ARG;
   }
@@ -2201,13 +2201,13 @@ TelemetryScalar::UpdateChildData(ProcessID aProcessType,
         {
           switch (scalarType)
           {
-            case nsITelemetry::SCALAR_COUNT:
+            case nsITelemetry::SCALAR_TYPE_COUNT:
               scalar->SetValue(upd.mData->as<uint32_t>());
               break;
-            case nsITelemetry::SCALAR_BOOLEAN:
+            case nsITelemetry::SCALAR_TYPE_BOOLEAN:
               scalar->SetValue(upd.mData->as<bool>());
               break;
-            case nsITelemetry::SCALAR_STRING:
+            case nsITelemetry::SCALAR_TYPE_STRING:
               scalar->SetValue(upd.mData->as<nsString>());
               break;
           }
@@ -2215,7 +2215,7 @@ TelemetryScalar::UpdateChildData(ProcessID aProcessType,
         }
       case ScalarActionType::eAdd:
         {
-          if (scalarType != nsITelemetry::SCALAR_COUNT) {
+          if (scalarType != nsITelemetry::SCALAR_TYPE_COUNT) {
             NS_WARNING("Attempting to add on a non count scalar.");
             continue;
           }
@@ -2225,7 +2225,7 @@ TelemetryScalar::UpdateChildData(ProcessID aProcessType,
         }
       case ScalarActionType::eSetMaximum:
         {
-          if (scalarType != nsITelemetry::SCALAR_COUNT) {
+          if (scalarType != nsITelemetry::SCALAR_TYPE_COUNT) {
             NS_WARNING("Attempting to add on a non count scalar.");
             continue;
           }
@@ -2292,10 +2292,10 @@ TelemetryScalar::UpdateChildKeyedData(ProcessID aProcessType,
         {
           switch (scalarType)
           {
-            case nsITelemetry::SCALAR_COUNT:
+            case nsITelemetry::SCALAR_TYPE_COUNT:
               scalar->SetValue(NS_ConvertUTF8toUTF16(upd.mKey), upd.mData->as<uint32_t>());
               break;
-            case nsITelemetry::SCALAR_BOOLEAN:
+            case nsITelemetry::SCALAR_TYPE_BOOLEAN:
               scalar->SetValue(NS_ConvertUTF8toUTF16(upd.mKey), upd.mData->as<bool>());
               break;
             default:
@@ -2305,7 +2305,7 @@ TelemetryScalar::UpdateChildKeyedData(ProcessID aProcessType,
         }
       case ScalarActionType::eAdd:
         {
-          if (scalarType != nsITelemetry::SCALAR_COUNT) {
+          if (scalarType != nsITelemetry::SCALAR_TYPE_COUNT) {
             NS_WARNING("Attempting to add on a non count scalar.");
             continue;
           }
@@ -2315,7 +2315,7 @@ TelemetryScalar::UpdateChildKeyedData(ProcessID aProcessType,
         }
       case ScalarActionType::eSetMaximum:
         {
-          if (scalarType != nsITelemetry::SCALAR_COUNT) {
+          if (scalarType != nsITelemetry::SCALAR_TYPE_COUNT) {
             NS_WARNING("Attempting to add on a non count scalar.");
             continue;
           }
@@ -2346,12 +2346,12 @@ TelemetryScalar::RecordDiscardedData(ProcessID aProcessType,
   rv = internal_GetScalarByEnum(ScalarID::TELEMETRY_DISCARDED_ACCUMULATIONS,
                                 aProcessType, &scalar);
   MOZ_ASSERT(NS_SUCCEEDED(rv));
-  scalar->AddValue(aDiscardedData.mDiscardedAccumulations);
+  scalar->AddValue(aDiscardedData.mDiscardedHistogramAccumulations);
 
   rv = internal_GetScalarByEnum(ScalarID::TELEMETRY_DISCARDED_KEYED_ACCUMULATIONS,
                                 aProcessType, &scalar);
   MOZ_ASSERT(NS_SUCCEEDED(rv));
-  scalar->AddValue(aDiscardedData.mDiscardedKeyedAccumulations);
+  scalar->AddValue(aDiscardedData.mDiscardedKeyedHistogramAccumulations);
 
   rv = internal_GetScalarByEnum(ScalarID::TELEMETRY_DISCARDED_SCALAR_ACTIONS,
                                 aProcessType, &scalar);

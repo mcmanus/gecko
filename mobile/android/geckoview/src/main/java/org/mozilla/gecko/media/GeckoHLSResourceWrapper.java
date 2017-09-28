@@ -42,8 +42,7 @@ public class GeckoHLSResourceWrapper {
 
         mPlayer = GeckoPlayerFactory.getPlayer();
         try {
-            mPlayer.addResourceWrapperCallbackListener(callback);
-            mPlayer.init(url);
+            mPlayer.init(url, callback);
         } catch (Exception e) {
             Log.e(LOGTAG, "Failed to create GeckoHlsResourceWrapper !", e);
             callback.onError(BaseHlsPlayer.ResourceError.UNKNOWN.code());
@@ -62,6 +61,38 @@ public class GeckoHLSResourceWrapper {
         assertTrue(!mDestroy);
         assertTrue(mPlayer != null);
         return mPlayer.getId();
+    }
+
+    @WrapForJNI(calledFrom = "gecko")
+    public void suspend() {
+        if (DEBUG) Log.d(LOGTAG, "GeckoHLSResourceWrapper suspend");
+        if (mPlayer != null) {
+            mPlayer.suspend();
+        }
+    }
+
+    @WrapForJNI(calledFrom = "gecko")
+    public void resume() {
+        if (DEBUG) Log.d(LOGTAG, "GeckoHLSResourceWrapper resume");
+        if (mPlayer != null) {
+            mPlayer.resume();
+        }
+    }
+
+    @WrapForJNI(calledFrom = "gecko")
+    public void play() {
+        if (DEBUG) Log.d(LOGTAG, "GeckoHLSResourceWrapper mediaelement played");
+        if (mPlayer != null) {
+            mPlayer.play();
+        }
+    }
+
+    @WrapForJNI(calledFrom = "gecko")
+    public void pause() {
+        if (DEBUG) Log.d(LOGTAG, "GeckoHLSResourceWrapper mediaelement paused");
+        if (mPlayer != null) {
+            mPlayer.pause();
+        }
     }
 
     private static void assertTrue(boolean condition) {

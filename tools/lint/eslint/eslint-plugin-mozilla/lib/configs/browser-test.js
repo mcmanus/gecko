@@ -45,7 +45,6 @@ module.exports = {
     "privateNoteIntentionalCrash": false,
     "registerCleanupFunction": false,
     "requestLongerTimeout": false,
-    "thisTestLeaksUncaughtRejectionsAndShouldBeFixed": false,
     "todo": false,
     "todo_is": false,
     "todo_isnot": false,
@@ -61,6 +60,7 @@ module.exports = {
   "rules": {
     "mozilla/import-content-task-globals": "error",
     "mozilla/import-headjs-globals": "warn",
-    "mozilla/mark-test-function-used": "warn"
+    "mozilla/mark-test-function-used": "warn",
+    "mozilla/no-arbitrary-setTimeout": "error"
   }
 };

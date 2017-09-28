@@ -193,8 +193,8 @@ VerifyRGBXCorners(uint8_t* aData, const IntSize &aSize, const int32_t aStride, S
     return true;
   }
 
-  const int height = bounds.height;
-  const int width = bounds.width;
+  const int height = bounds.Height();
+  const int width = bounds.Width();
   const int pixelSize = 4;
   MOZ_ASSERT(aSize.width * pixelSize <= aStride);
 
@@ -848,16 +848,16 @@ ShrinkClippedStrokedRect(const Rect &aStrokedRect, const IntRect &aDeviceClip,
   Rect userSpaceStrokeClip =
     UserSpaceStrokeClip(aDeviceClip, aTransform, aStrokeOptions);
   RectDouble strokedRectDouble(
-    aStrokedRect.x, aStrokedRect.y, aStrokedRect.width, aStrokedRect.height);
+    aStrokedRect.x, aStrokedRect.y, aStrokedRect.Width(), aStrokedRect.Height());
   RectDouble intersection =
     strokedRectDouble.Intersect(RectDouble(userSpaceStrokeClip.x,
                                            userSpaceStrokeClip.y,
-                                           userSpaceStrokeClip.width,
-                                           userSpaceStrokeClip.height));
+                                           userSpaceStrokeClip.Width(),
+                                           userSpaceStrokeClip.Height()));
   Double dashPeriodLength = DashPeriodLength(aStrokeOptions);
   if (intersection.IsEmpty() || dashPeriodLength == 0.0f) {
     return Rect(
-      intersection.x, intersection.y, intersection.width, intersection.height);
+      intersection.x, intersection.y, intersection.Width(), intersection.Height());
   }
 
   // Reduce the rectangle side lengths in multiples of the dash period length
@@ -871,8 +871,8 @@ ShrinkClippedStrokedRect(const Rect &aStrokedRect, const IntRect &aDeviceClip,
   strokedRectDouble.Deflate(insetBy);
   return Rect(strokedRectDouble.x,
               strokedRectDouble.y,
-              strokedRectDouble.width,
-              strokedRectDouble.height);
+              strokedRectDouble.Width(),
+              strokedRectDouble.Height());
 }
 
 void
@@ -1443,10 +1443,21 @@ DrawTargetSkia::DrawGlyphs(ScaledFont* aFont,
 
   paint.mPaint.setSubpixelText(useSubpixelText);
 
-  std::vector<uint16_t> indices;
-  std::vector<SkPoint> offsets;
-  indices.resize(aBuffer.mNumGlyphs);
-  offsets.resize(aBuffer.mNumGlyphs);
+  const uint32_t heapSize = 64;
+  uint16_t indicesOnStack[heapSize];
+  SkPoint offsetsOnStack[heapSize];
+  std::vector<uint16_t> indicesOnHeap;
+  std::vector<SkPoint> offsetsOnHeap;
+  uint16_t* indices = indicesOnStack;
+  SkPoint* offsets = offsetsOnStack;
+  if (aBuffer.mNumGlyphs > heapSize) {
+    // Heap allocation/ deallocation is slow, use it only if we need a
+    // bigger(>heapSize) buffer.
+    indicesOnHeap.resize(aBuffer.mNumGlyphs);
+    offsetsOnHeap.resize(aBuffer.mNumGlyphs);
+    indices = (uint16_t*)&indicesOnHeap.front();
+    offsets = (SkPoint*)&offsetsOnHeap.front();
+  }
 
   for (unsigned int i = 0; i < aBuffer.mNumGlyphs; i++) {
     indices[i] = aBuffer.mGlyphs[i].mIndex;
@@ -1454,7 +1465,7 @@ DrawTargetSkia::DrawGlyphs(ScaledFont* aFont,
     offsets[i].fY = SkFloatToScalar(aBuffer.mGlyphs[i].mPosition.y);
   }
 
-  mCanvas->drawPosText(&indices.front(), aBuffer.mNumGlyphs*2, &offsets.front(), paint.mPaint);
+  mCanvas->drawPosText(indices, aBuffer.mNumGlyphs*2, offsets, paint.mPaint);
 }
 
 void
@@ -1552,7 +1563,7 @@ DrawTarget::Draw3DTransformedSurface(SourceSurface* aSurface, const Matrix4x4& a
   }
   std::unique_ptr<SkCanvas> dstCanvas(
     SkCanvas::MakeRasterDirect(
-      SkImageInfo::Make(xformBounds.width, xformBounds.height,
+                        SkImageInfo::Make(xformBounds.Width(), xformBounds.Height(),
                         GfxFormatToSkiaColorType(dstSurf->GetFormat()),
                         kPremul_SkAlphaType),
       dstSurf->GetData(), dstSurf->Stride()));
@@ -1802,7 +1813,7 @@ DrawTargetSkia::CopySurface(SourceSurface *aSurface,
 
   mCanvas->save();
   mCanvas->setMatrix(SkMatrix::MakeTrans(SkIntToScalar(aDestination.x), SkIntToScalar(aDestination.y)));
-  mCanvas->clipRect(SkRect::MakeIWH(aSourceRect.width, aSourceRect.height), SkClipOp::kReplace_deprecated);
+  mCanvas->clipRect(SkRect::MakeIWH(aSourceRect.Width(), aSourceRect.Height()), SkClipOp::kReplace_deprecated);
 
   SkPaint paint;
   if (!image->isOpaque()) {

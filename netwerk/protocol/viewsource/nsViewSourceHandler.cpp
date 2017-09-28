@@ -39,7 +39,7 @@ NS_IMETHODIMP
 nsViewSourceHandler::GetProtocolFlags(uint32_t *result)
 {
     *result = URI_NORELATIVE | URI_NOAUTH | URI_DANGEROUS_TO_LOAD |
-        URI_NON_PERSISTABLE;
+        URI_LOADABLE_BY_EXTENSIONS | URI_NON_PERSISTABLE;
     return NS_OK;
 }
 
@@ -145,10 +145,10 @@ nsViewSourceHandler::NewSrcdocChannel(nsIURI *aURI,
     return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsViewSourceHandler::AllowPort(int32_t port, const char *scheme, bool *_retval)
 {
-    // don't override anything.  
+    // don't override anything.
     *_retval = false;
     return NS_OK;
 }

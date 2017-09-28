@@ -10,12 +10,10 @@
 #include "MediaSourceDemuxer.h"
 #include "MediaSourceUtils.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/SizePrintfMacros.h"
-#include "mozilla/StateMirroring.h"
-#include "SourceBufferResource.h"
 #include "SourceBuffer.h"
-#include "WebMDemuxer.h"
+#include "SourceBufferResource.h"
 #include "SourceBufferTask.h"
+#include "WebMDemuxer.h"
 
 #ifdef MOZ_FMP4
 #include "MP4Demuxer.h"
@@ -42,16 +40,17 @@ using media::TimeUnit;
 using media::TimeInterval;
 using media::TimeIntervals;
 typedef SourceBufferTask::AppendBufferResult AppendBufferResult;
+typedef SourceBufferAttributes::AppendState AppendState;
 
 static const char*
-AppendStateToStr(SourceBufferAttributes::AppendState aState)
+AppendStateToStr(AppendState aState)
 {
   switch (aState) {
-    case SourceBufferAttributes::AppendState::WAITING_FOR_SEGMENT:
+    case AppendState::WAITING_FOR_SEGMENT:
       return "WAITING_FOR_SEGMENT";
-    case SourceBufferAttributes::AppendState::PARSING_INIT_SEGMENT:
+    case AppendState::PARSING_INIT_SEGMENT:
       return "PARSING_INIT_SEGMENT";
-    case SourceBufferAttributes::AppendState::PARSING_MEDIA_SEGMENT:
+    case AppendState::PARSING_MEDIA_SEGMENT:
       return "PARSING_MEDIA_SEGMENT";
     default:
       return "IMPOSSIBLE";
@@ -62,10 +61,11 @@ static Atomic<uint32_t> sStreamSourceID(0u);
 
 class DispatchKeyNeededEvent : public Runnable {
 public:
-  DispatchKeyNeededEvent(AbstractMediaDecoder* aDecoder,
-                         nsTArray<uint8_t>& aInitData,
+  DispatchKeyNeededEvent(MediaSourceDecoder* aDecoder,
+                         const nsTArray<uint8_t>& aInitData,
                          const nsString& aInitDataType)
-    : mDecoder(aDecoder)
+    : Runnable("DispatchKeyNeededEvent")
+    , mDecoder(aDecoder)
     , mInitData(aInitData)
     , mInitDataType(aInitDataType)
   {
@@ -81,7 +81,7 @@ public:
     return NS_OK;
   }
 private:
-  RefPtr<AbstractMediaDecoder> mDecoder;
+  RefPtr<MediaSourceDecoder> mDecoder;
   nsTArray<uint8_t> mInitData;
   nsString mInitDataType;
 };
@@ -123,7 +123,7 @@ TrackBuffersManager::AppendData(already_AddRefed<MediaByteBuffer> aData,
 {
   MOZ_ASSERT(NS_IsMainThread());
   RefPtr<MediaByteBuffer> data(aData);
-  MSE_DEBUG("Appending %" PRIuSIZE " bytes", data->Length());
+  MSE_DEBUG("Appending %zu bytes", data->Length());
 
   mEnded = false;
 
@@ -147,7 +147,10 @@ TrackBuffersManager::QueueTask(SourceBufferTask* aTask)
 {
   if (!OnTaskQueue()) {
     GetTaskQueue()->Dispatch(NewRunnableMethod<RefPtr<SourceBufferTask>>(
-      this, &TrackBuffersManager::QueueTask, aTask));
+      "TrackBuffersManager::QueueTask",
+      this,
+      &TrackBuffersManager::QueueTask,
+      aTask));
     return;
   }
   MOZ_ASSERT(OnTaskQueue());
@@ -208,11 +211,17 @@ TrackBuffersManager::ProcessTasks()
       mTaskQueue = nullptr;
       MOZ_DIAGNOSTIC_ASSERT(mQueue.Length() == 0,
                             "Detach task must be the last");
+      mVideoTracks.Reset();
+      mAudioTracks.Reset();
+      ShutdownDemuxers();
       return;
     default:
       NS_WARNING("Invalid Task");
   }
-  GetTaskQueue()->Dispatch(NewRunnableMethod(this, &TrackBuffersManager::ProcessTasks));
+  GetTaskQueue()->Dispatch(
+    NewRunnableMethod("TrackBuffersManager::ProcessTasks",
+                      this,
+                      &TrackBuffersManager::ProcessTasks));
 }
 
 // The MSE spec requires that we abort the current SegmentParserLoop
@@ -395,7 +404,7 @@ TrackBuffersManager::CompleteResetParserState()
     mCurrentInputBuffer->EvictAll();
     // The demuxer will be recreated during the next run of SegmentParserLoop.
     // As such we don't need to notify it that data has been removed.
-    mCurrentInputBuffer = new SourceBufferResource(mType);
+    mCurrentInputBuffer = new SourceBufferResource();
   }
 
   // We could be left with a demuxer in an unusable state. It needs to be
@@ -790,7 +799,10 @@ TrackBuffersManager::RejectAppend(const MediaResult& aRejectValue, const char* a
 void
 TrackBuffersManager::ScheduleSegmentParserLoop()
 {
-  GetTaskQueue()->Dispatch(NewRunnableMethod(this, &TrackBuffersManager::SegmentParserLoop));
+  GetTaskQueue()->Dispatch(
+    NewRunnableMethod("TrackBuffersManager::SegmentParserLoop",
+                      this,
+                      &TrackBuffersManager::SegmentParserLoop));
 }
 
 void
@@ -823,14 +835,13 @@ TrackBuffersManager::CreateDemuxerforMIMEType()
   }
 
 #ifdef MOZ_FMP4
-  if (mType.Type() == MEDIAMIMETYPE("video/mp4")
-      || mType.Type() == MEDIAMIMETYPE("audio/mp4")) {
+  if (mType.Type() == MEDIAMIMETYPE("video/mp4") ||
+      mType.Type() == MEDIAMIMETYPE("audio/mp4")) {
     mInputDemuxer = new MP4Demuxer(mCurrentInputBuffer);
     return;
   }
 #endif
   NS_WARNING("Not supported (yet)");
-  return;
 }
 
 // We reset the demuxer by creating a new one and initializing it.
@@ -839,7 +850,7 @@ TrackBuffersManager::ResetDemuxingState()
 {
   MOZ_ASSERT(mParser && mParser->HasInitData());
   RecreateParser(true);
-  mCurrentInputBuffer = new SourceBufferResource(mType);
+  mCurrentInputBuffer = new SourceBufferResource();
   // The demuxer isn't initialized yet ; we don't want to notify it
   // that data has been appended yet ; so we simply append the init segment
   // to the resource.
@@ -874,11 +885,12 @@ TrackBuffersManager::OnDemuxerResetDone(const MediaResult& aResult)
 
   if (aResult != NS_OK && mParentDecoder) {
     RefPtr<TrackBuffersManager> self = this;
-    mAbstractMainThread->Dispatch(NS_NewRunnableFunction([self, aResult] () {
-      if (self->mParentDecoder && self->mParentDecoder->GetOwner()) {
-        self->mParentDecoder->GetOwner()->DecodeWarning(aResult);
-      }
-    }));
+    mAbstractMainThread->Dispatch(NS_NewRunnableFunction(
+      "TrackBuffersManager::OnDemuxerResetDone", [self, aResult]() {
+        if (self->mParentDecoder && self->mParentDecoder->GetOwner()) {
+          self->mParentDecoder->GetOwner()->DecodeWarning(aResult);
+        }
+      }));
   }
 
   // Recreate track demuxers.
@@ -932,7 +944,7 @@ TrackBuffersManager::InitializationSegmentReceived()
     return;
   }
 
-  mCurrentInputBuffer = new SourceBufferResource(mType);
+  mCurrentInputBuffer = new SourceBufferResource();
   // The demuxer isn't initialized yet ; we don't want to notify it
   // that data has been appended yet ; so we simply append the init segment
   // to the resource.
@@ -999,10 +1011,11 @@ TrackBuffersManager::OnDemuxerInitDone(const MediaResult& aResult)
   int64_t duration = std::max(videoDuration, audioDuration);
   // 1. Update the duration attribute if it currently equals NaN.
   // Those steps are performed by the MediaSourceDecoder::SetInitialDuration
-  mAbstractMainThread->Dispatch(NewRunnableMethod<int64_t>
-                                (mParentDecoder.get(),
-                                &MediaSourceDecoder::SetInitialDuration,
-                                duration ? duration : -1));
+  mAbstractMainThread->Dispatch(
+    NewRunnableMethod<int64_t>("MediaSourceDecoder::SetInitialDuration",
+                               mParentDecoder.get(),
+                               &MediaSourceDecoder::SetInitialDuration,
+                               duration ? duration : -1));
 
   // 2. If the initialization segment has no audio, video, or text tracks, then
   // run the append error algorithm with the decode error parameter set to true
@@ -1159,11 +1172,12 @@ TrackBuffersManager::OnDemuxerInitDone(const MediaResult& aResult)
 
   if (aResult != NS_OK && mParentDecoder) {
     RefPtr<TrackBuffersManager> self = this;
-    mAbstractMainThread->Dispatch(NS_NewRunnableFunction([self, aResult] () {
-      if (self->mParentDecoder && self->mParentDecoder->GetOwner()) {
-        self->mParentDecoder->GetOwner()->DecodeWarning(aResult);
-      }
-    }));
+    mAbstractMainThread->Dispatch(NS_NewRunnableFunction(
+      "TrackBuffersManager::OnDemuxerInitDone", [self, aResult]() {
+        if (self->mParentDecoder && self->mParentDecoder->GetOwner()) {
+          self->mParentDecoder->GetOwner()->DecodeWarning(aResult);
+        }
+      }));
   }
 }
 
@@ -1259,12 +1273,29 @@ TrackBuffersManager::DoDemuxVideo()
 }
 
 void
-TrackBuffersManager::OnVideoDemuxCompleted(RefPtr<MediaTrackDemuxer::SamplesHolder> aSamples)
+TrackBuffersManager::MaybeDispatchEncryptedEvent(
+  const nsTArray<RefPtr<MediaRawData>>& aSamples)
+{
+  // Try and dispatch 'encrypted'. Won't go if ready state still HAVE_NOTHING.
+  for (const RefPtr<MediaRawData>& sample : aSamples) {
+    for (const nsTArray<uint8_t>& initData : sample->mCrypto.mInitDatas) {
+      nsCOMPtr<nsIRunnable> r = new DispatchKeyNeededEvent(
+        mParentDecoder, initData, sample->mCrypto.mInitDataType);
+      mAbstractMainThread->Dispatch(r.forget());
+    }
+  }
+}
+
+void
+TrackBuffersManager::OnVideoDemuxCompleted(
+  RefPtr<MediaTrackDemuxer::SamplesHolder> aSamples)
 {
   MOZ_ASSERT(OnTaskQueue());
-  MSE_DEBUG("%" PRIuSIZE " video samples demuxed", aSamples->mSamples.Length());
+  MSE_DEBUG("%zu video samples demuxed", aSamples->mSamples.Length());
   mVideoTracks.mDemuxRequest.Complete();
   mVideoTracks.mQueuedSamples.AppendElements(aSamples->mSamples);
+
+  MaybeDispatchEncryptedEvent(aSamples->mSamples);
   DoDemuxAudio();
 }
 
@@ -1287,10 +1318,12 @@ void
 TrackBuffersManager::OnAudioDemuxCompleted(RefPtr<MediaTrackDemuxer::SamplesHolder> aSamples)
 {
   MOZ_ASSERT(OnTaskQueue());
-  MSE_DEBUG("%" PRIuSIZE " audio samples demuxed", aSamples->mSamples.Length());
+  MSE_DEBUG("%zu audio samples demuxed", aSamples->mSamples.Length());
   mAudioTracks.mDemuxRequest.Complete();
   mAudioTracks.mQueuedSamples.AppendElements(aSamples->mSamples);
   CompleteCodedFrameProcessing();
+
+  MaybeDispatchEncryptedEvent(aSamples->mSamples);
 }
 
 void
@@ -1458,12 +1491,15 @@ TrackBuffersManager::ProcessFrames(TrackBuffer& aSamples, TrackData& aTrackData)
   // Some videos do not exactly start at 0, but instead a small negative value.
   // To avoid evicting the starting frame of those videos, we allow a leeway
   // of +- mLongestFrameDuration on the append window start.
-  // We only apply the leeway with the default append window start of 0
-  // otherwise do as per spec.
+  // We only apply the leeway with the default append window start of 0 and
+  // append window end of infinity.
+  // Otherwise do as per spec.
   TimeInterval targetWindow =
-    mAppendWindow.mStart != TimeUnit::FromSeconds(0)
+    (mAppendWindow.mStart != TimeUnit::FromSeconds(0) ||
+     mAppendWindow.mEnd != TimeUnit::FromInfinity())
     ? mAppendWindow
-    : TimeInterval(mAppendWindow.mStart, mAppendWindow.mEnd,
+    : TimeInterval(mAppendWindow.mStart,
+                   mAppendWindow.mEnd,
                    trackBuffer.mLastFrameDuration.isSome()
                    ? trackBuffer.mLongestFrameDuration
                    : aSamples[0]->mDuration);
@@ -1713,7 +1749,7 @@ TrackBuffersManager::InsertFrames(TrackBuffer& aSamples,
   // 5. Let track buffer equal the track buffer that the coded frame will be added to.
   auto& trackBuffer = aTrackData;
 
-  MSE_DEBUGV("Processing %" PRIuSIZE " %s frames(start:%" PRId64 " end:%" PRId64 ")",
+  MSE_DEBUGV("Processing %zu %s frames(start:%" PRId64 " end:%" PRId64 ")",
              aSamples.Length(),
              aTrackData.mInfo->mMimeType.get(),
              aIntervals.GetStart().ToMicroseconds(),
@@ -1745,8 +1781,8 @@ TrackBuffersManager::InsertFrames(TrackBuffer& aSamples,
 
   if (intersection.Length()) {
     if (aSamples[0]->mKeyframe &&
-        (mType.Type() == MEDIAMIMETYPE("video/webm")
-         || mType.Type() == MEDIAMIMETYPE("audio/webm"))) {
+        (mType.Type() == MEDIAMIMETYPE("video/webm") ||
+         mType.Type() == MEDIAMIMETYPE("audio/webm"))) {
       // We are starting a new GOP, we do not have to worry about breaking an
       // existing current coded frame group. Reset the next insertion index
       // so the search for when to start our frames removal can be exhaustive.
@@ -1994,7 +2030,7 @@ TrackBuffersManager::GetTracksList() const
 }
 
 void
-TrackBuffersManager::SetAppendState(SourceBufferAttributes::AppendState aAppendState)
+TrackBuffersManager::SetAppendState(AppendState aAppendState)
 {
   MSE_DEBUG("AppendState changed from %s to %s",
             AppendStateToStr(mSourceBufferAttributes->GetAppendState()), AppendStateToStr(aAppendState));

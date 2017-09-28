@@ -11,31 +11,26 @@
 /* global Service */
 
 Cu.import("resource://services-common/async.js");
-Cu.import("resource://testing-common/services/common/utils.js");
+Cu.import("resource://services-common/utils.js");
 Cu.import("resource://testing-common/PlacesTestUtils.jsm");
 Cu.import("resource://services-sync/util.js");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/PlacesUtils.jsm");
 Cu.import("resource://gre/modules/ObjectUtils.jsm");
 
+add_task(async function head_setup() {
+  // If a test imports Service, make sure it is initialized first.
+  if (this.Service) {
+    await this.Service.promiseInitialized;
+  }
+});
+
 // ================================================
 // Load mocking/stubbing library, sinon
 // docs: http://sinonjs.org/releases/v2.3.2/
 Cu.import("resource://gre/modules/Timer.jsm");
-const {Loader} = Cu.import("resource://gre/modules/commonjs/toolkit/loader.js", {});
-const loader = new Loader.Loader({
-  paths: {
-    "": "resource://testing-common/",
-  },
-  globals: {
-    setTimeout,
-    setInterval,
-    clearTimeout,
-    clearInterval,
-  },
-});
-const require = Loader.Require(loader, {id: ""});
-const sinon = require("sinon-2.3.2");
+Services.scriptloader.loadSubScript("resource://testing-common/sinon-2.3.2.js", this);
+/* globals sinon */
 // ================================================
 
 XPCOMUtils.defineLazyGetter(this, "SyncPingSchema", function() {
@@ -243,14 +238,14 @@ function mockGetWindowEnumerator(url, numWindows, numTabs, indexes, moreURLs) {
     elements.push(win);
 
     for (let t = 0; t < numTabs; ++t) {
-      tabs.push(TestingUtils.deepCopy({
+      tabs.push(Cu.cloneInto({
         index: indexes ? indexes() : 1,
         entries: (moreURLs ? [url].concat(moreURLs()) : [url]).map(url2entry),
         attributes: {
           image: "image"
         },
         lastAccessed: 1499
-      }));
+      }, {}));
     }
   }
 
@@ -384,7 +379,7 @@ function wait_for_pings(expectedPings) {
 
 async function wait_for_ping(callback, allowErrorPings, getFullPing = false) {
   let pingsPromise = wait_for_pings(1);
-  callback();
+  await callback();
   let [record] = await pingsPromise;
   if (allowErrorPings) {
     assert_valid_ping(record);
@@ -407,27 +402,27 @@ function sync_and_validate_telem(allowErrorPings, getFullPing = false) {
 // engine is actually synced, but we still want to ensure we're generating a
 // valid ping. Returns a promise that resolves to the ping, or rejects with the
 // thrown error after calling an optional callback.
-function sync_engine_and_validate_telem(engine, allowErrorPings, onError) {
-  return new Promise((resolve, reject) => {
-    let telem = get_sync_test_telemetry();
-    let caughtError = null;
-    // Clear out status, so failures from previous syncs won't show up in the
-    // telemetry ping.
-    let ns = {};
-    Cu.import("resource://services-sync/status.js", ns);
-    ns.Status._engines = {};
-    ns.Status.partial = false;
-    // Ideally we'd clear these out like we do with engines, (probably via
-    // Status.resetSync()), but this causes *numerous* tests to fail, so we just
-    // assume that if no failureReason or engine failures are set, and the
-    // status properties are the same as they were initially, that it's just
-    // a leftover.
-    // This is only an issue since we're triggering the sync of just one engine,
-    // without doing any other parts of the sync.
-    let initialServiceStatus = ns.Status._service;
-    let initialSyncStatus = ns.Status._sync;
+async function sync_engine_and_validate_telem(engine, allowErrorPings, onError) {
+  let telem = get_sync_test_telemetry();
+  let caughtError = null;
+  // Clear out status, so failures from previous syncs won't show up in the
+  // telemetry ping.
+  let ns = {};
+  Cu.import("resource://services-sync/status.js", ns);
+  ns.Status._engines = {};
+  ns.Status.partial = false;
+  // Ideally we'd clear these out like we do with engines, (probably via
+  // Status.resetSync()), but this causes *numerous* tests to fail, so we just
+  // assume that if no failureReason or engine failures are set, and the
+  // status properties are the same as they were initially, that it's just
+  // a leftover.
+  // This is only an issue since we're triggering the sync of just one engine,
+  // without doing any other parts of the sync.
+  let initialServiceStatus = ns.Status._service;
+  let initialSyncStatus = ns.Status._sync;
 
-    let oldSubmit = telem.submit;
+  let oldSubmit = telem.submit;
+  let submitPromise = new Promise((resolve, reject) => {
     telem.submit = function(ping) {
       telem.submit = oldSubmit;
       ping.syncs.forEach(record => {
@@ -472,27 +467,28 @@ function sync_engine_and_validate_telem(engine, allowErrorPings, onError) {
         resolve(ping.syncs[0]);
       }
     }
-    // neuter the scheduler as it interacts badly with some of the tests - the
-    // engine being synced usually isn't the registered engine, so we see
-    // scored incremented and not removed, which schedules unexpected syncs.
-    let oldObserve = Service.scheduler.observe;
-    Service.scheduler.observe = () => {};
-    try {
-      Svc.Obs.notify("weave:service:sync:start");
-      try {
-        engine.sync();
-      } catch (e) {
-        caughtError = e;
-      }
-      if (caughtError) {
-        Svc.Obs.notify("weave:service:sync:error", caughtError);
-      } else {
-        Svc.Obs.notify("weave:service:sync:finish");
-      }
-    } finally {
-      Service.scheduler.observe = oldObserve;
-    }
   });
+  // neuter the scheduler as it interacts badly with some of the tests - the
+  // engine being synced usually isn't the registered engine, so we see
+  // scored incremented and not removed, which schedules unexpected syncs.
+  let oldObserve = Service.scheduler.observe;
+  Service.scheduler.observe = () => {};
+  try {
+    Svc.Obs.notify("weave:service:sync:start");
+    try {
+      await engine.sync();
+    } catch (e) {
+      caughtError = e;
+    }
+    if (caughtError) {
+      Svc.Obs.notify("weave:service:sync:error", caughtError);
+    } else {
+      Svc.Obs.notify("weave:service:sync:finish");
+    }
+  } finally {
+    Service.scheduler.observe = oldObserve;
+  }
+  return submitPromise;
 }
 
 // Returns a promise that resolves once the specified observer notification
@@ -510,12 +506,6 @@ function promiseOneObserver(topic, callback) {
 function promiseStopServer(server) {
   return new Promise(resolve => server.stop(resolve));
 }
-
-function promiseNextTick() {
-  return new Promise(resolve => {
-    Utils.nextTick(resolve);
-  });
-}
 // Avoid an issue where `client.name2` containing unicode characters causes
 // a number of tests to fail, due to them assuming that we do not need to utf-8
 // encode or decode data sent through the mocked server (see bug 1268912).
@@ -525,12 +515,12 @@ Utils.getDefaultDeviceName = function() {
   return "Test device name";
 };
 
-function registerRotaryEngine() {
+async function registerRotaryEngine() {
   let {RotaryEngine} =
     Cu.import("resource://testing-common/services/sync/rotaryengine.js", {});
   Service.engineManager.clear();
 
-  Service.engineManager.register(RotaryEngine);
+  await Service.engineManager.register(RotaryEngine);
   let engine = Service.engineManager.get("rotary");
   engine.enabled = true;
 
@@ -621,7 +611,7 @@ async function promiseVisit(expectedType, expectedURI) {
 
 async function addVisit(suffix, referrer = null, transition = PlacesUtils.history.TRANSITION_LINK) {
   let uriString = "http://getfirefox.com/" + suffix;
-  let uri = Utils.makeURI(uriString);
+  let uri = CommonUtils.makeURI(uriString);
   _("Adding visit for URI " + uriString);
 
   let visitAddedPromise = promiseVisit("added", uri);

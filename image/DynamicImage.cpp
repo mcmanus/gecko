@@ -32,7 +32,7 @@ DynamicImage::GetProgressTracker()
 }
 
 size_t
-DynamicImage::SizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf) const
+DynamicImage::SizeOfSourceWithComputedFallback(SizeOfState& aState) const
 {
   return 0;
 }
@@ -132,6 +132,12 @@ nsresult
 DynamicImage::GetNativeSizes(nsTArray<IntSize>& aNativeSizes) const
 {
   return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+size_t
+DynamicImage::GetNativeSizesLength() const
+{
+  return 0;
 }
 
 NS_IMETHODIMP
@@ -235,7 +241,7 @@ DynamicImage::Draw(gfxContext* aContext,
   IntSize drawableSize(mDrawable->Size());
 
   if (aSize == drawableSize) {
-    gfxUtils::DrawPixelSnapped(aContext, mDrawable, drawableSize, aRegion,
+    gfxUtils::DrawPixelSnapped(aContext, mDrawable, SizeDouble(drawableSize), aRegion,
                                SurfaceFormat::B8G8R8A8, aSamplingFilter,
                                aOpacity);
     return DrawResult::SUCCESS;
@@ -250,7 +256,7 @@ DynamicImage::Draw(gfxContext* aContext,
   gfxContextMatrixAutoSaveRestore saveMatrix(aContext);
   aContext->Multiply(gfxMatrix::Scaling(scale.width, scale.height));
 
-  gfxUtils::DrawPixelSnapped(aContext, mDrawable, drawableSize, region,
+  gfxUtils::DrawPixelSnapped(aContext, mDrawable, SizeDouble(drawableSize), region,
                              SurfaceFormat::B8G8R8A8, aSamplingFilter,
                              aOpacity);
   return DrawResult::SUCCESS;

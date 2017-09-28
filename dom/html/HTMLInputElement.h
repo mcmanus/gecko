@@ -136,11 +136,8 @@ class HTMLInputElement final : public nsGenericHTMLFormElementWithState,
 
 public:
   using nsIConstraintValidation::GetValidationMessage;
-  using nsIConstraintValidation::CheckValidity;
-  using nsIConstraintValidation::ReportValidity;
-  using nsIConstraintValidation::WillValidate;
-  using nsIConstraintValidation::Validity;
   using nsGenericHTMLFormElementWithState::GetForm;
+  using nsGenericHTMLFormElementWithState::GetFormAction;
 
   enum class FromClone { no, yes };
 
@@ -175,7 +172,9 @@ public:
   // nsIDOMNSEditableElement
   NS_IMETHOD GetEditor(nsIEditor** aEditor) override
   {
-    return nsGenericHTMLElement::GetEditor(aEditor);
+    nsCOMPtr<nsIEditor> editor = GetEditor();
+    editor.forget(aEditor);
+    return NS_OK;
   }
 
   NS_IMETHOD SetUserInput(const nsAString& aInput) override;
@@ -234,7 +233,6 @@ public:
   NS_IMETHOD SetValueChanged(bool aValueChanged) override;
   NS_IMETHOD_(bool) IsSingleLineTextControl() const override;
   NS_IMETHOD_(bool) IsTextArea() const override;
-  NS_IMETHOD_(bool) IsPlainTextControl() const override;
   NS_IMETHOD_(bool) IsPasswordTextControl() const override;
   NS_IMETHOD_(int32_t) GetCols() override;
   NS_IMETHOD_(int32_t) GetWrapCols() override;
@@ -242,16 +240,14 @@ public:
   NS_IMETHOD_(void) GetDefaultValueFromContent(nsAString& aValue) override;
   NS_IMETHOD_(bool) ValueChanged() const override;
   NS_IMETHOD_(void) GetTextEditorValue(nsAString& aValue, bool aIgnoreWrap) const override;
-  NS_IMETHOD_(nsIEditor*) GetTextEditor() override;
+  NS_IMETHOD_(mozilla::TextEditor*) GetTextEditor() override;
   NS_IMETHOD_(nsISelectionController*) GetSelectionController() override;
   NS_IMETHOD_(nsFrameSelection*) GetConstFrameSelection() override;
   NS_IMETHOD BindToFrame(nsTextControlFrame* aFrame) override;
   NS_IMETHOD_(void) UnbindFromFrame(nsTextControlFrame* aFrame) override;
   NS_IMETHOD CreateEditor() override;
   NS_IMETHOD_(Element*) GetRootEditorNode() override;
-  NS_IMETHOD_(Element*) CreatePlaceholderNode() override;
   NS_IMETHOD_(Element*) GetPlaceholderNode() override;
-  NS_IMETHOD_(Element*) CreatePreviewNode() override;
   NS_IMETHOD_(Element*) GetPreviewNode() override;
   NS_IMETHOD_(void) UpdateOverlayTextVisibility(bool aNotify) override;
   NS_IMETHOD_(void) SetPreviewValue(const nsAString& aValue) override;
@@ -340,6 +336,17 @@ public:
     return mSelectionProperties;
   }
 
+  bool HasPatternAttribute() const
+  {
+    return mHasPatternAttribute;
+  }
+
+  virtual already_AddRefed<nsITextControlElement> GetAsTextControlElement() override
+  {
+    nsCOMPtr<nsITextControlElement> txt = this;
+    return txt.forget();
+  }
+
   // nsIConstraintValidation
   bool     IsTooLong();
   bool     IsTooShort();
@@ -359,10 +366,22 @@ public:
   void     UpdateRangeUnderflowValidityState();
   void     UpdateStepMismatchValidityState();
   void     UpdateBadInputValidityState();
+  // Update all our validity states and then update our element state
+  // as needed.  aNotify controls whether the element state update
+  // needs to notify.
   void     UpdateAllValidityStates(bool aNotify);
+  // Update all our validity states without updating element state.
+  // This should be called instead of UpdateAllValidityStates any time
+  // we're guaranteed that element state will be updated anyway.
+  void     UpdateAllValidityStatesButNotElementState();
   void     UpdateBarredFromConstraintValidation();
   nsresult GetValidationMessage(nsAString& aValidationMessage,
                                 ValidityStateType aType) override;
+
+  // Override SetCustomValidity so we update our state properly when it's called
+  // via bindings.
+  void SetCustomValidity(const nsAString& aError);
+
   /**
    * Update the value missing validity state for radio elements when they have
    * a group.
@@ -444,13 +463,19 @@ public:
 
   // WebIDL
 
-  // XPCOM GetAccept() is OK
+  void GetAccept(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::accept, aValue);
+  }
   void SetAccept(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::accept, aValue, aRv);
   }
 
-  // XPCOM GetAlt() is OK
+  void GetAlt(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::alt, aValue);
+  }
   void SetAlt(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::alt, aValue, aRv);
@@ -495,7 +520,7 @@ public:
     return GetBoolAttr(nsGkAtoms::disabled);
   }
 
-  void SetDisabled(bool aValue,ErrorResult& aRv)
+  void SetDisabled(bool aValue, ErrorResult& aRv)
   {
     SetHTMLBoolAttr(nsGkAtoms::disabled, aValue, aRv);
   }
@@ -503,6 +528,7 @@ public:
   // XPCOM GetForm() is OK
 
   FileList* GetFiles();
+  void SetFiles(FileList* aFiles);
 
   // XPCOM GetFormAction() is OK
   void SetFormAction(const nsAString& aValue, ErrorResult& aRv)
@@ -510,13 +536,13 @@ public:
     SetHTMLAttr(nsGkAtoms::formaction, aValue, aRv);
   }
 
-  // XPCOM GetFormEnctype() is OK
+  void GetFormEnctype(nsAString& aValue);
   void SetFormEnctype(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::formenctype, aValue, aRv);
   }
 
-  // XPCOM GetFormMethod() is OK
+  void GetFormMethod(nsAString& aValue);
   void SetFormMethod(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::formmethod, aValue, aRv);
@@ -532,7 +558,10 @@ public:
     SetHTMLBoolAttr(nsGkAtoms::formnovalidate, aValue, aRv);
   }
 
-  // XPCOM GetFormTarget() is OK
+  void GetFormTarget(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::formtarget, aValue);
+  }
   void SetFormTarget(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::formtarget, aValue, aRv);
@@ -551,7 +580,7 @@ public:
   }
   // XPCOM SetIndeterminate() is OK
 
-  // XPCOM GetInputMode() is OK
+  void GetInputMode(nsAString& aValue);
   void SetInputMode(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::inputmode, aValue, aRv);
@@ -559,7 +588,10 @@ public:
 
   nsGenericHTMLElement* GetList() const;
 
-  // XPCOM GetMax() is OK
+  void GetMax(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::max, aValue);
+  }
   void SetMax(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::max, aValue, aRv);
@@ -597,7 +629,10 @@ public:
     SetHTMLIntAttr(nsGkAtoms::minlength, aValue, aRv);
   }
 
-  // XPCOM GetMin() is OK
+  void GetMin(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::min, aValue);
+  }
   void SetMin(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::min, aValue, aRv);
@@ -619,13 +654,19 @@ public:
     SetHTMLAttr(nsGkAtoms::name, aValue, aRv);
   }
 
-  // XPCOM GetPattern() is OK
+  void GetPattern(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::pattern, aValue);
+  }
   void SetPattern(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::pattern, aValue, aRv);
   }
 
-  // XPCOM GetPlaceholder() is OK
+  void GetPlaceholder(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::placeholder, aValue);
+  }
   void SetPlaceholder(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::placeholder, aValue, aRv);
@@ -666,25 +707,34 @@ public:
     SetUnsignedIntAttr(nsGkAtoms::size, aValue, DEFAULT_COLS, aRv);
   }
 
-  // XPCOM GetSrc() is OK
+  void GetSrc(nsAString& aValue)
+  {
+    GetURIAttr(nsGkAtoms::src, nullptr, aValue);
+  }
   void SetSrc(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::src, aValue, aRv);
   }
 
-  // XPCOM GetStep() is OK
+  void GetStep(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::step, aValue);
+  }
   void SetStep(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::step, aValue, aRv);
   }
 
-  // XPCOM GetType() is OK
+  void GetType(nsAString& aValue);
   void SetType(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::type, aValue, aRv);
   }
 
-  // XPCOM GetDefaultValue() is OK
+  void GetDefaultValue(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::value, aValue);
+  }
   void SetDefaultValue(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::value, aValue, aRv);
@@ -731,13 +781,9 @@ public:
    */
   Decimal GetStep() const;
 
-  void GetValidationMessage(nsAString& aValidationMessage, ErrorResult& aRv);
-
-  // XPCOM GetCustomVisibility() is OK
-
   already_AddRefed<nsINodeList> GetLabels();
 
-  // XPCOM Select() is OK
+  void Select();
 
   Nullable<uint32_t> GetSelectionStart(ErrorResult& aRv);
   void SetSelectionStart(const Nullable<uint32_t>& aValue, ErrorResult& aRv);
@@ -788,13 +834,19 @@ public:
 
   void ChooseDirectory(ErrorResult& aRv);
 
-  // XPCOM GetAlign() is OK
+  void GetAlign(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::align, aValue);
+  }
   void SetAlign(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::align, aValue, aRv);
   }
 
-  // XPCOM GetUseMap() is OK
+  void GetUseMap(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::usemap, aValue);
+  }
   void SetUseMap(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::usemap, aValue, aRv);
@@ -844,6 +896,15 @@ public:
    */
   void UpdateValidityState();
 
+  /*
+   * The following are called from datetime input box binding to get the
+   * corresponding computed values.
+   */
+  double GetStepAsDouble() { return GetStep().toDouble(); }
+  double GetStepBaseAsDouble() { return GetStepBase().toDouble(); }
+  double GetMinimumAsDouble() { return GetMinimum().toDouble(); }
+  double GetMaximumAsDouble() { return GetMaximum().toDouble(); }
+
   HTMLInputElement* GetOwnerNumberControl();
 
   void StartNumberControlSpinnerSpin();
@@ -873,6 +934,9 @@ public:
 
   bool MozIsTextField(bool aExcludePassword);
 
+  /**
+   * GetEditor() is for webidl bindings.
+   */
   nsIEditor* GetEditor();
 
   void SetUserInput(const nsAString& aInput,
@@ -892,6 +956,22 @@ public:
   void UpdateEntries(const nsTArray<OwningFileOrDirectory>& aFilesOrDirectories);
 
   static void Shutdown();
+
+  /**
+   * Returns if the required attribute applies for the current type.
+   */
+  bool DoesRequiredApply() const;
+
+  /**
+   * Returns the current required state of the element. This function differs
+   * from Required() in that this function only returns true for input types
+   * that @required attribute applies and the attribute is set; in contrast,
+   * Required() returns true whenever @required attribute is set.
+   */
+  bool IsRequired() const
+  {
+    return State().HasState(NS_EVENT_STATE_REQUIRED);
+  }
 
 protected:
   virtual ~HTMLInputElement();
@@ -1090,11 +1170,6 @@ protected:
   bool DoesReadOnlyApply() const;
 
   /**
-   * Returns if the required attribute applies for the current type.
-   */
-  bool DoesRequiredApply() const;
-
-  /**
    * Returns if the min and max attributes apply for the current type.
    */
   bool DoesMinMaxApply() const;
@@ -1121,6 +1196,8 @@ protected:
 
   void FreeData();
   nsTextEditorState *GetEditorState() const;
+
+  mozilla::TextEditor* GetTextEditorFromState();
 
   /**
    * Manages the internal data storage across type changes.
@@ -1605,6 +1682,7 @@ protected:
   bool                     mPickerRunning : 1;
   bool                     mSelectionCached : 1;
   bool                     mIsPreviewEnabled : 1;
+  bool                     mHasPatternAttribute : 1;
 
 private:
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,

@@ -5,6 +5,8 @@ with the necessary tool and target support for the Firefox
 build environment.
 '''
 
+from __future__ import absolute_import, print_function
+
 import argparse
 import os.path
 import sys
@@ -206,6 +208,7 @@ mac64 = "x86_64-apple-darwin"
 mac32 = "i686-apple-darwin"
 win64 = "x86_64-pc-windows-msvc"
 win32 = "i686-pc-windows-msvc"
+mingw32 = "i686-pc-windows-gnu"
 
 
 def args():
@@ -234,3 +237,4 @@ if __name__ == '__main__':
     repack(linux64, [linux64, mac64], suffix='mac-cross', **args)
     repack(linux64, [linux64, android, android_x86, android_aarch64],
            suffix='android-cross', **args)
+    repack(linux64, [linux64, win32, mingw32], suffix='mingw32-cross', **args)

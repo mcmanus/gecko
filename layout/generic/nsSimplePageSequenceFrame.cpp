@@ -152,9 +152,8 @@ nsSimplePageSequenceFrame::Reflow(nsPresContext*     aPresContext,
                   "A Page Sequence is only for real pages");
   DO_GLOBAL_REFLOW_COUNT("nsSimplePageSequenceFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
   NS_FRAME_TRACE_REFLOW_IN("nsSimplePageSequenceFrame::Reflow");
-
-  aStatus.Reset();  // we're always complete
 
   // Don't do incremental reflow until we've taught tables how to do
   // it right in paginated mode.
@@ -311,12 +310,11 @@ nsSimplePageSequenceFrame::Reflow(nsPresContext*     aPresContext,
   }
 
   nsAutoString formattedDateString;
-  time_t ltime;
-  time( &ltime );
-  if (NS_SUCCEEDED(DateTimeFormat::FormatTime(kDateFormatShort,
-                                              kTimeFormatNoSeconds,
-                                              ltime,
-                                              formattedDateString))) {
+  PRTime now = PR_Now();
+  if (NS_SUCCEEDED(DateTimeFormat::FormatPRTime(kDateFormatShort,
+                                                kTimeFormatNoSeconds,
+                                                now,
+                                                formattedDateString))) {
     SetDateTimeStr(formattedDateString);
   }
 
@@ -328,7 +326,7 @@ nsSimplePageSequenceFrame::Reflow(nsPresContext*     aPresContext,
   aDesiredSize.SetOverflowAreasToDesiredBounds();
   FinishAndStoreOverflow(&aDesiredSize);
 
-  // cache the size so we can set the desired size 
+  // cache the size so we can set the desired size
   // for the other reflows that happen
   mSize.width  = maxXMost;
   mSize.height = y;
@@ -389,11 +387,11 @@ nsSimplePageSequenceFrame::GetPrintRange(int32_t* aFromPage, int32_t* aToPage)
 }
 
 // Helper Function
-void 
+void
 nsSimplePageSequenceFrame::SetPageNumberFormat(const char* aPropName, const char* aDefPropVal, bool aPageNumOnly)
 {
   // Doing this here so we only have to go get these formats once
-  nsXPIDLString pageNumberFormat;
+  nsAutoString pageNumberFormat;
   // Now go get the Localized Page Formating String
   nsresult rv =
     nsContentUtils::GetLocalizedString(nsContentUtils::ePRINTING_PROPERTIES,
@@ -546,13 +544,13 @@ nsSimplePageSequenceFrame::DetermineWhetherToPrintPage()
       return;
     } else {
       int32_t length = mPageRanges.Length();
-    
+
       // Page ranges are pairs (start, end)
       if (length && (length % 2 == 0)) {
         mPrintThisPage = false;
-      
+
         int32_t i;
-        for (i = 0; i < length; i += 2) {          
+        for (i = 0; i < length; i += 2) {
           if (mPageRanges[i] <= mPageNum && mPageNum <= mPageRanges[i+1]) {
             mPrintThisPage = true;
             break;
@@ -572,7 +570,7 @@ nsSimplePageSequenceFrame::DetermineWhetherToPrintPage()
       mPrintThisPage = false;  // don't print even numbered page
     }
   }
-  
+
   if (nsIPrintSettings::kRangeSelection == mPrintRangeType) {
     mPrintThisPage = true;
   }
@@ -600,7 +598,7 @@ nsSimplePageSequenceFrame::PrePrintNextPage(nsITimerCallback* aCallback, bool* a
     *aDone = true;
     return NS_ERROR_FAILURE;
   }
-  
+
   DetermineWhetherToPrintPage();
   // Nothing to do if the current page doesn't get printed OR rendering to
   // preview. For preview, the `CallPrintCallback` is called from within the
@@ -627,7 +625,7 @@ nsSimplePageSequenceFrame::PrePrintNextPage(nsITimerCallback* aCallback, bool* a
       NS_ENSURE_SUCCESS(rv, rv);
 
       mCalledBeginPage = true;
-      
+
       RefPtr<gfxContext> renderingContext = dc->CreateRenderingContext();
       NS_ENSURE_TRUE(renderingContext, NS_ERROR_OUT_OF_MEMORY);
 
@@ -684,9 +682,9 @@ nsSimplePageSequenceFrame::ResetPrintCanvasList()
   }
 
   mCurrentCanvasList.Clear();
-  mCurrentCanvasListSetup = false; 
+  mCurrentCanvasListSetup = false;
   return NS_OK;
-} 
+}
 
 NS_IMETHODIMP
 nsSimplePageSequenceFrame::PrintNextPage()
@@ -704,7 +702,7 @@ nsSimplePageSequenceFrame::PrintNextPage()
   //
   // Note: When print al the pages or a page range the printed page shows the
   // actual page number, when printing selection it prints the page number starting
-  // with the first page of the selection. For example if the user has a 
+  // with the first page of the selection. For example if the user has a
   // selection that starts on page 2 and ends on page 3, the page numbers when
   // print are 1 and then two (which is different than printing a page range, where
   // the page numbers would have been 2 and then 3)
@@ -814,7 +812,7 @@ nsSimplePageSequenceFrame::DoPageEnd()
   ResetPrintCanvasList();
 
   mPageNum++;
-  
+
   return rv;
 }
 
@@ -827,7 +825,6 @@ ComputePageSequenceTransform(nsIFrame* aFrame, float aAppUnitsPerPixel)
 
 void
 nsSimplePageSequenceFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                            const nsRect&           aDirtyRect,
                                             const nsDisplayListSet& aLists)
 {
   DisplayBorderBackgroundOutline(aBuilder, aLists);
@@ -841,13 +838,16 @@ nsSimplePageSequenceFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     clipState.Clear();
 
     nsIFrame* child = PrincipalChildList().FirstChild();
-    nsRect dirty = aDirtyRect;
+    nsRect dirty = aBuilder->GetDirtyRect();
     dirty.ScaleInverseRoundOut(PresContext()->GetPrintPreviewScale());
 
     while (child) {
       if (child->GetVisualOverflowRectRelativeToParent().Intersects(dirty)) {
-        child->BuildDisplayListForStackingContext(aBuilder,
-            dirty - child->GetPosition(), &content);
+        nsDisplayListBuilder::AutoBuildingDisplayList
+          buildingForChild(aBuilder, child,
+                           dirty - child->GetPosition(),
+                           aBuilder->IsAtRootOfPseudoStackingContext());
+        child->BuildDisplayListForStackingContext(aBuilder, &content);
         aBuilder->ResetMarkedFramesForDisplayList();
       }
       child = child->GetNextSibling();
@@ -864,7 +864,7 @@ nsSimplePageSequenceFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 //------------------------------------------------------------------------------
 void
 nsSimplePageSequenceFrame::SetPageNumberFormat(const nsAString& aFormatStr, bool aForPageNumOnly)
-{ 
+{
   NS_ASSERTION(mPageData != nullptr, "mPageData string cannot be null!");
 
   if (aForPageNumOnly) {
@@ -877,7 +877,7 @@ nsSimplePageSequenceFrame::SetPageNumberFormat(const nsAString& aFormatStr, bool
 //------------------------------------------------------------------------------
 void
 nsSimplePageSequenceFrame::SetDateTimeStr(const nsAString& aDateTimeStr)
-{ 
+{
   NS_ASSERTION(mPageData != nullptr, "mPageData string cannot be null!");
 
   mPageData->mDateTimeStr = aDateTimeStr;
@@ -886,7 +886,7 @@ nsSimplePageSequenceFrame::SetDateTimeStr(const nsAString& aDateTimeStr)
 //------------------------------------------------------------------------------
 // For Shrink To Fit
 //
-// Return the percentage that the page needs to shrink to 
+// Return the percentage that the page needs to shrink to
 //
 NS_IMETHODIMP
 nsSimplePageSequenceFrame::GetSTFPercent(float& aSTFPercent)

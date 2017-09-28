@@ -2,7 +2,9 @@
 * License, v. 2.0. If a copy of the MPL was not distributed with this
 * file, You can obtain one at http:mozilla.org/MPL/2.0/. */
 
+#include "nsComponentManagerUtils.h"
 #include "nsThreadUtils.h"
+#include "mozilla/IdleTaskRunner.h"
 #include "mozilla/UniquePtr.h"
 
 #include "gtest/gtest.h"
@@ -44,6 +46,8 @@ private:
 NS_IMPL_ISUPPORTS0(nsFoo)
 
 class TestSuicide : public mozilla::Runnable {
+public:
+  TestSuicide() : mozilla::Runnable("TestSuicide") {}
   NS_IMETHOD Run() override {
     // Runs first time on thread "Suicide", then dies on MainThread
     if (!NS_IsMainThread()) {
@@ -184,8 +188,9 @@ static void TestNewRunnableFunction(bool aNamed)
       nsCOMPtr<nsIRunnable> trackedRunnable;
       {
         TestCopyWithNoMove tracker(&copyCounter);
-        trackedRunnable = aNamed ? NS_NewRunnableFunction("unused", tracker) :
-                                   NS_NewRunnableFunction(tracker);
+        trackedRunnable =
+          aNamed ? NS_NewRunnableFunction("unused", tracker)
+                 : NS_NewRunnableFunction("TestNewRunnableFunction", tracker);
         // Original 'tracker' is destroyed here.
       }
       // Verify that the runnable contains a non-destroyed function object.
@@ -201,9 +206,11 @@ static void TestNewRunnableFunction(bool aNamed)
       {
         // Passing as rvalue, but using copy.
         // (TestCopyWithDeletedMove wouldn't allow this.)
-        trackedRunnable = aNamed ?
-          NS_NewRunnableFunction("unused", TestCopyWithNoMove(&copyCounter)) :
-          NS_NewRunnableFunction(TestCopyWithNoMove(&copyCounter));
+        trackedRunnable =
+          aNamed
+            ? NS_NewRunnableFunction("unused", TestCopyWithNoMove(&copyCounter))
+            : NS_NewRunnableFunction("TestNewRunnableFunction",
+                                     TestCopyWithNoMove(&copyCounter));
       }
       trackedRunnable->Run();
     }
@@ -216,8 +223,9 @@ static void TestNewRunnableFunction(bool aNamed)
       nsCOMPtr<nsIRunnable> trackedRunnable;
       {
         TestCopyWithDeletedMove tracker(&copyCounter);
-        trackedRunnable = aNamed ? NS_NewRunnableFunction("unused", tracker) :
-                                   NS_NewRunnableFunction(tracker);
+        trackedRunnable =
+          aNamed ? NS_NewRunnableFunction("unused", tracker)
+                 : NS_NewRunnableFunction("TestNewRunnableFunction", tracker);
       }
       trackedRunnable->Run();
     }
@@ -232,8 +240,10 @@ static void TestNewRunnableFunction(bool aNamed)
       nsCOMPtr<nsIRunnable> trackedRunnable;
       {
         TestMove tracker(&moveCounter);
-        trackedRunnable = aNamed ? NS_NewRunnableFunction("unused", Move(tracker)) :
-                                   NS_NewRunnableFunction(Move(tracker));
+        trackedRunnable =
+          aNamed
+            ? NS_NewRunnableFunction("unused", Move(tracker))
+            : NS_NewRunnableFunction("TestNewRunnableFunction", Move(tracker));
       }
       trackedRunnable->Run();
     }
@@ -245,9 +255,10 @@ static void TestNewRunnableFunction(bool aNamed)
     {
       nsCOMPtr<nsIRunnable> trackedRunnable;
       {
-        trackedRunnable = aNamed ?
-          NS_NewRunnableFunction("unused", TestMove(&moveCounter)) :
-          NS_NewRunnableFunction(TestMove(&moveCounter));
+        trackedRunnable =
+          aNamed ? NS_NewRunnableFunction("unused", TestMove(&moveCounter))
+                 : NS_NewRunnableFunction("TestNewRunnableFunction",
+                                          TestMove(&moveCounter));
       }
       trackedRunnable->Run();
     }
@@ -263,8 +274,10 @@ static void TestNewRunnableFunction(bool aNamed)
       nsCOMPtr<nsIRunnable> trackedRunnable;
       {
         TestCopyMove tracker(&copyCounter, &moveCounter);
-        trackedRunnable = aNamed ? NS_NewRunnableFunction("unused", Move(tracker)) :
-                                   NS_NewRunnableFunction(Move(tracker));
+        trackedRunnable =
+          aNamed
+            ? NS_NewRunnableFunction("unused", Move(tracker))
+            : NS_NewRunnableFunction("TestNewRunnableFunction", Move(tracker));
       }
       trackedRunnable->Run();
     }
@@ -279,9 +292,12 @@ static void TestNewRunnableFunction(bool aNamed)
     {
       nsCOMPtr<nsIRunnable> trackedRunnable;
       {
-        trackedRunnable = aNamed ?
-          NS_NewRunnableFunction("unused", TestCopyMove(&copyCounter, &moveCounter)) :
-          NS_NewRunnableFunction(TestCopyMove(&copyCounter, &moveCounter));
+        trackedRunnable =
+          aNamed
+            ? NS_NewRunnableFunction("unused",
+                                     TestCopyMove(&copyCounter, &moveCounter))
+            : NS_NewRunnableFunction("TestNewRunnableFunction",
+                                     TestCopyMove(&copyCounter, &moveCounter));
       }
       trackedRunnable->Run();
     }
@@ -299,9 +315,11 @@ static void TestNewRunnableFunction(bool aNamed)
       {
         TestCopyWithNoMove tracker(&copyCounter);
         // Expect 2 copies (here -> local lambda -> runnable lambda).
-        trackedRunnable = aNamed ?
-          NS_NewRunnableFunction("unused", [tracker]() mutable { tracker(); }) :
-          NS_NewRunnableFunction([tracker]() mutable { tracker(); });
+        trackedRunnable =
+          aNamed ? NS_NewRunnableFunction("unused",
+                                          [tracker]() mutable { tracker(); })
+                 : NS_NewRunnableFunction("TestNewRunnableFunction",
+                                          [tracker]() mutable { tracker(); });
       }
       trackedRunnable->Run();
     }
@@ -315,9 +333,11 @@ static void TestNewRunnableFunction(bool aNamed)
       {
         TestCopyWithDeletedMove tracker(&copyCounter);
         // Expect 2 copies (here -> local lambda -> runnable lambda).
-        trackedRunnable = aNamed ?
-          NS_NewRunnableFunction("unused", [tracker]() mutable { tracker(); }) :
-          NS_NewRunnableFunction([tracker]() mutable { tracker(); });
+        trackedRunnable =
+          aNamed ? NS_NewRunnableFunction("unused",
+                                          [tracker]() mutable { tracker(); })
+                 : NS_NewRunnableFunction("TestNewRunnableFunction",
+                                          [tracker]() mutable { tracker(); });
       }
       trackedRunnable->Run();
     }
@@ -336,9 +356,11 @@ static void TestNewRunnableFunction(bool aNamed)
       nsCOMPtr<nsIRunnable> trackedRunnable;
       {
         TestCopyMove tracker(&copyCounter, &moveCounter);
-        trackedRunnable = aNamed ?
-          NS_NewRunnableFunction("unused", [tracker]() mutable { tracker(); }) :
-          NS_NewRunnableFunction([tracker]() mutable { tracker(); });
+        trackedRunnable =
+          aNamed ? NS_NewRunnableFunction("unused",
+                                          [tracker]() mutable { tracker(); })
+                 : NS_NewRunnableFunction("TestNewRunnableFunction",
+                                          [tracker]() mutable { tracker(); });
         // Expect 1 copy (here -> local lambda) and 1 move (local -> runnable lambda).
       }
       trackedRunnable->Run();
@@ -363,7 +385,8 @@ TEST(ThreadUtils, NewNamedRunnableFunction)
   // Test naming.
   {
     const char* expectedName = "NamedRunnable";
-    RefPtr<Runnable> NamedRunnable = NS_NewRunnableFunction(expectedName, []{});
+    RefPtr<Runnable> NamedRunnable =
+      NS_NewRunnableFunction(expectedName, [] {});
     ExpectRunnableName(NamedRunnable, expectedName);
   }
 }
@@ -384,27 +407,34 @@ static void TestNewRunnableMethod(bool aNamed)
     // Read only string. Dereferencing in runnable method to check this works.
     char* message = (char*)"Test message";
 
-    NS_DispatchToMainThread(aNamed ?
-      NewRunnableMethod("unused", bar, &nsBar::DoBar1) :
-      NewRunnableMethod(bar, &nsBar::DoBar1));
-    NS_DispatchToMainThread(aNamed ?
-      NewRunnableMethod("unused", constBar, &nsBar::DoBar1Const) :
-      NewRunnableMethod(constBar, &nsBar::DoBar1Const));
-    NS_DispatchToMainThread(aNamed ?
-      NewRunnableMethod("unused", bar, &nsBar::DoBar2) :
-      NewRunnableMethod(bar, &nsBar::DoBar2));
-    NS_DispatchToMainThread(aNamed ?
-      NewRunnableMethod<RefPtr<nsFoo>>("unused", bar, &nsBar::DoBar3, foo) :
-      NewRunnableMethod<RefPtr<nsFoo>>(bar, &nsBar::DoBar3, foo));
-    NS_DispatchToMainThread(aNamed ?
-      NewRunnableMethod<RefPtr<nsFoo>>("unused", bar, &nsBar::DoBar4, foo) :
-      NewRunnableMethod<RefPtr<nsFoo>>(bar, &nsBar::DoBar4, foo));
-    NS_DispatchToMainThread(aNamed ?
-      NewRunnableMethod<nsFoo*>("unused", bar, &nsBar::DoBar5, rawFoo) :
-      NewRunnableMethod<nsFoo*>(bar, &nsBar::DoBar5, rawFoo));
-    NS_DispatchToMainThread(aNamed ?
-      NewRunnableMethod<char*>("unused", bar, &nsBar::DoBar6, message) :
-      NewRunnableMethod<char*>(bar, &nsBar::DoBar6, message));
+    NS_DispatchToMainThread(
+      aNamed ? NewRunnableMethod("unused", bar, &nsBar::DoBar1)
+             : NewRunnableMethod("nsBar::DoBar1", bar, &nsBar::DoBar1));
+    NS_DispatchToMainThread(
+      aNamed ? NewRunnableMethod("unused", constBar, &nsBar::DoBar1Const)
+             : NewRunnableMethod(
+                 "nsBar::DoBar1Const", constBar, &nsBar::DoBar1Const));
+    NS_DispatchToMainThread(
+      aNamed ? NewRunnableMethod("unused", bar, &nsBar::DoBar2)
+             : NewRunnableMethod("nsBar::DoBar2", bar, &nsBar::DoBar2));
+    NS_DispatchToMainThread(
+      aNamed
+        ? NewRunnableMethod<RefPtr<nsFoo>>("unused", bar, &nsBar::DoBar3, foo)
+        : NewRunnableMethod<RefPtr<nsFoo>>(
+            "nsBar::DoBar3", bar, &nsBar::DoBar3, foo));
+    NS_DispatchToMainThread(
+      aNamed
+        ? NewRunnableMethod<RefPtr<nsFoo>>("unused", bar, &nsBar::DoBar4, foo)
+        : NewRunnableMethod<RefPtr<nsFoo>>(
+            "nsBar::DoBar4", bar, &nsBar::DoBar4, foo));
+    NS_DispatchToMainThread(
+      aNamed ? NewRunnableMethod<nsFoo*>("unused", bar, &nsBar::DoBar5, rawFoo)
+             : NewRunnableMethod<nsFoo*>(
+                 "nsBar::DoBar5", bar, &nsBar::DoBar5, rawFoo));
+    NS_DispatchToMainThread(
+      aNamed ? NewRunnableMethod<char*>("unused", bar, &nsBar::DoBar6, message)
+             : NewRunnableMethod<char*>(
+                 "nsBar::DoBar6", bar, &nsBar::DoBar6, message));
 #ifdef HAVE_STDCALL
     NS_DispatchToMainThread(aNamed ?
       NewRunnableMethod("unused", bar, &nsBar::DoBar1std) :
@@ -554,7 +584,7 @@ public:
     ASSERT_TRUE(mSetIdleDeadlineCalled);
     mRunnableExecuted[2] = true;
     mSetIdleDeadlineCalled = false;
-    NS_DispatchToCurrentThread(NewRunnableMethod(this, &IdleObject::Method3));
+    NS_DispatchToCurrentThread(NewRunnableMethod("IdleObject::Method3", this, &IdleObject::Method3));
   }
 
   void Method3()
@@ -562,11 +592,13 @@ public:
     CheckExecutedMethods("Method3", 3);
 
     mTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
-    mTimer->InitWithFuncCallback(Method4, this, 10, nsITimer::TYPE_ONE_SHOT);
+    mTimer->InitWithNamedFuncCallback(
+      Method4, this, 10, nsITimer::TYPE_ONE_SHOT, "IdleObject::Method3");
     NS_IdleDispatchToCurrentThread(
-      NewIdleRunnableMethodWithTimer(this, &IdleObject::Method5), 50);
+      NewIdleRunnableMethodWithTimer("IdleObject::Method5", this, &IdleObject::Method5), 50);
     NS_IdleDispatchToCurrentThread(
-      NewRunnableMethod(this, &IdleObject::Method6), 100);
+      NewRunnableMethod("IdleObject::Method6", this, &IdleObject::Method6),
+      100);
 
     PR_Sleep(PR_MillisecondsToInterval(200));
     mRunnableExecuted[3] = true;
@@ -620,18 +652,21 @@ TEST(ThreadUtils, IdleRunnableMethod)
     RefPtr<IdleObjectInheritedSetDeadline> idleInheritedSetDeadline =
       new IdleObjectInheritedSetDeadline();
 
-    NS_DispatchToCurrentThread(NewRunnableMethod(idle, &IdleObject::Method0));
+    NS_DispatchToCurrentThread(
+      NewRunnableMethod("IdleObject::Method0", idle, &IdleObject::Method0));
     NS_IdleDispatchToCurrentThread(
-      NewIdleRunnableMethod(idle, &IdleObject::Method1));
+      NewIdleRunnableMethod("IdleObject::Method1", idle, &IdleObject::Method1));
     NS_IdleDispatchToCurrentThread(
-      NewIdleRunnableMethodWithTimer(idle, &IdleObject::Method2), 60000);
+      NewIdleRunnableMethodWithTimer("IdleObject::Method2", idle, &IdleObject::Method2), 60000);
     NS_IdleDispatchToCurrentThread(
-      NewIdleRunnableMethod(idle, &IdleObject::Method7));
+      NewIdleRunnableMethod("IdleObject::Method7", idle, &IdleObject::Method7));
     NS_IdleDispatchToCurrentThread(NewIdleRunnableMethod<const char*, uint32_t>(
-      idle, &IdleObject::CheckExecutedMethods, "final", 8));
+      "IdleObject::CheckExecutedMethods", idle, &IdleObject::CheckExecutedMethods, "final", 8));
     NS_IdleDispatchToCurrentThread(NewIdleRunnableMethod(
+      "IdleObjectWithoutSetDeadline::Method",
       idleNoSetDeadline, &IdleObjectWithoutSetDeadline::Method));
     NS_IdleDispatchToCurrentThread(NewIdleRunnableMethod(
+      "IdleObjectInheritedSetDeadline::Method",
       idleInheritedSetDeadline, &IdleObjectInheritedSetDeadline::Method));
 
     NS_ProcessPendingEvents(nullptr);
@@ -640,6 +675,83 @@ TEST(ThreadUtils, IdleRunnableMethod)
     ASSERT_TRUE(idleInheritedSetDeadline->mRunnableExecuted);
     ASSERT_TRUE(idleInheritedSetDeadline->mSetDeadlineCalled);
   }
+}
+
+TEST(ThreadUtils, IdleTaskRunner)
+{
+  using namespace mozilla;
+
+  // Repeating.
+  int cnt1 = 0;
+  RefPtr<IdleTaskRunner> runner1 =
+    IdleTaskRunner::Create([&cnt1](TimeStamp) { cnt1++; return true; },
+                           "runner1",
+                           10,
+                           3,
+                           true,
+                           nullptr);
+
+  // Non-repeating but callback always return false so it's still repeating.
+  int cnt2 = 0;
+  RefPtr<IdleTaskRunner> runner2 =
+    IdleTaskRunner::Create([&cnt2](TimeStamp) { cnt2++; return false; },
+                           "runner2",
+                           10,
+                           3,
+                           false,
+                           nullptr);
+
+  // Repeating until cnt3 >= 2 by returning 'true' in MayStopProcessing callback.
+  // The strategy is to stop repeating as early as possible so that
+  // we are more probable to catch the bug if it didn't stop as expected.
+  int cnt3 = 0;
+  RefPtr<IdleTaskRunner> runner3 =
+    IdleTaskRunner::Create([&cnt3](TimeStamp) { cnt3++; return true; },
+                           "runner3",
+                           10,
+                           3,
+                           true,
+                           [&cnt3]{ return cnt3 >= 2; });
+
+  // Non-repeating can callback return true so the callback will
+  // be only run once.
+  int cnt4 = 0;
+  RefPtr<IdleTaskRunner> runner4 =
+    IdleTaskRunner::Create([&cnt4](TimeStamp) { cnt4++; return true; },
+                           "runner4",
+                           10,
+                           3,
+                           false,
+                           nullptr);
+
+  // Firstly we wait until the two repeating tasks reach their limits.
+  MOZ_ALWAYS_TRUE(SpinEventLoopUntil([&]() { return cnt1 >= 100; }));
+  MOZ_ALWAYS_TRUE(SpinEventLoopUntil([&]() { return cnt2 >= 100; }));
+
+  // At any point ==> 0 <= cnt3 <= 2 since MayStopProcessing() would return
+  // true when cnt3 >= 2.
+  MOZ_ALWAYS_TRUE(SpinEventLoopUntil([&]() {
+    if (cnt3 > 2) {
+      EXPECT_TRUE(false) << "MaybeContinueProcess() doesn't work.";
+      return true; // Stop on failure.
+    }
+    return cnt3 == 2; // Stop finish if we have reached its max value.
+  }));
+
+  // At any point ==> 0 <= cnt4 <= 1 since this is a non-repeating
+  // idle runner.
+  MOZ_ALWAYS_TRUE(SpinEventLoopUntil([&]() {
+    // At any point: 0 <= cnt4 <= 1
+    if (cnt4 > 1) {
+      EXPECT_TRUE(false) << "The 'mRepeating' flag doesn't work.";
+      return true; // Stop on failure.
+    }
+    return cnt4 == 1;
+  }));
+
+  // The repeating timer with no "exit" condition requires an explicit
+  // Cancel() call.
+  runner1->Cancel();
 }
 
 // {9e70a320-be02-11d1-8031-006008159b5a}
@@ -1002,24 +1114,34 @@ TEST(ThreadUtils, main)
   // Test legacy functions.
 
   nsCOMPtr<nsIRunnable> r1 =
-    NewRunnableMethod(rpt, &ThreadUtilsObject::Test0);
+    NewRunnableMethod("TestThreadUtils::ThreadUtilsObject::Test0",
+                      rpt,
+                      &ThreadUtilsObject::Test0);
   r1->Run();
   EXPECT_EQ(count += 1, rpt->mCount);
 
-  r1 = NewRunnableMethod<int>(rpt, &ThreadUtilsObject::Test1i, 11);
+  r1 = NewRunnableMethod<int>("TestThreadUtils::ThreadUtilsObject::Test1i",
+                              rpt,
+                              &ThreadUtilsObject::Test1i,
+                              11);
   r1->Run();
   EXPECT_EQ(count += 2, rpt->mCount);
   EXPECT_EQ(11, rpt->mA0);
 
   // Test calling a method from a non-ref-counted base.
 
-  r1 = NewRunnableMethod(rpt, &ThreadUtilsObject::MethodFromNonRefCountedBase);
+  r1 = NewRunnableMethod("TestThreadUtils::ThreadUtilsObjectNonRefCountedBase::"
+                         "MethodFromNonRefCountedBase",
+                         rpt,
+                         &ThreadUtilsObject::MethodFromNonRefCountedBase);
   r1->Run();
   EXPECT_EQ(count, rpt->mCount);
 
   // Test variadic function with simple POD arguments.
 
-  r1 = NewRunnableMethod(rpt, &ThreadUtilsObject::Test0);
+  r1 = NewRunnableMethod("TestThreadUtils::ThreadUtilsObject::Test0",
+                         rpt,
+                         &ThreadUtilsObject::Test0);
   r1->Run();
   EXPECT_EQ(count += 1, rpt->mCount);
 
@@ -1032,20 +1154,31 @@ TEST(ThreadUtils, main)
                       StoreCopyPassByValue<int>>::value,
       "detail::ParameterStorage<StoreCopyPassByValue<int>>::Type should be StoreCopyPassByValue<int>");
 
-  r1 = NewRunnableMethod<int>(rpt, &ThreadUtilsObject::Test1i, 12);
+  r1 = NewRunnableMethod<int>("TestThreadUtils::ThreadUtilsObject::Test1i",
+                              rpt,
+                              &ThreadUtilsObject::Test1i,
+                              12);
   r1->Run();
   EXPECT_EQ(count += 2, rpt->mCount);
   EXPECT_EQ(12, rpt->mA0);
 
-  r1 = NewRunnableMethod<int, int>(
-       rpt, &ThreadUtilsObject::Test2i, 21, 22);
+  r1 = NewRunnableMethod<int, int>("TestThreadUtils::ThreadUtilsObject::Test2i",
+                                   rpt,
+                                   &ThreadUtilsObject::Test2i,
+                                   21,
+                                   22);
   r1->Run();
   EXPECT_EQ(count += 3, rpt->mCount);
   EXPECT_EQ(21, rpt->mA0);
   EXPECT_EQ(22, rpt->mA1);
 
   r1 = NewRunnableMethod<int, int, int>(
-       rpt, &ThreadUtilsObject::Test3i, 31, 32, 33);
+    "TestThreadUtils::ThreadUtilsObject::Test3i",
+    rpt,
+    &ThreadUtilsObject::Test3i,
+    31,
+    32,
+    33);
   r1->Run();
   EXPECT_EQ(count += 4, rpt->mCount);
   EXPECT_EQ(31, rpt->mA0);
@@ -1053,7 +1186,13 @@ TEST(ThreadUtils, main)
   EXPECT_EQ(33, rpt->mA2);
 
   r1 = NewRunnableMethod<int, int, int, int>(
-       rpt, &ThreadUtilsObject::Test4i, 41, 42, 43, 44);
+    "TestThreadUtils::ThreadUtilsObject::Test4i",
+    rpt,
+    &ThreadUtilsObject::Test4i,
+    41,
+    42,
+    43,
+    44);
   r1->Run();
   EXPECT_EQ(count += 5, rpt->mCount);
   EXPECT_EQ(41, rpt->mA0);
@@ -1065,7 +1204,10 @@ TEST(ThreadUtils, main)
 
   // Passing a short to make sure forwarding works with an inexact type match.
   short int si = 11;
-  r1 = NewRunnableMethod<int>(rpt, &ThreadUtilsObject::Test1i, si);
+  r1 = NewRunnableMethod<int>("TestThreadUtils::ThreadUtilsObject::Test1i",
+                              rpt,
+                              &ThreadUtilsObject::Test1i,
+                              si);
   r1->Run();
   EXPECT_EQ(count += 2, rpt->mCount);
   EXPECT_EQ(si, rpt->mA0);
@@ -1091,7 +1233,10 @@ TEST(ThreadUtils, main)
                 "detail::ParameterStorage<int*>::Type::passed_type should be int*");
   {
     int i = 12;
-    r1 = NewRunnableMethod<int*>(rpt, &ThreadUtilsObject::Test1pi, &i);
+    r1 = NewRunnableMethod<int*>("TestThreadUtils::ThreadUtilsObject::Test1pi",
+                                 rpt,
+                                 &ThreadUtilsObject::Test1pi,
+                                 &i);
     r1->Run();
     EXPECT_EQ(count += 2, rpt->mCount);
     EXPECT_EQ(i, rpt->mA0);
@@ -1118,7 +1263,11 @@ TEST(ThreadUtils, main)
                 "detail::ParameterStorage<const int*>::Type::passed_type should be const int*");
   {
     int i = 1201;
-    r1 = NewRunnableMethod<const int*>(rpt, &ThreadUtilsObject::Test1pci, &i);
+    r1 = NewRunnableMethod<const int*>(
+      "TestThreadUtils::ThreadUtilsObject::Test1pci",
+      rpt,
+      &ThreadUtilsObject::Test1pci,
+      &i);
     r1->Run();
     EXPECT_EQ(count += 2, rpt->mCount);
     EXPECT_EQ(i, rpt->mA0);
@@ -1134,7 +1283,10 @@ TEST(ThreadUtils, main)
   {
     int i = 1202;
     r1 = NewRunnableMethod<StoreCopyPassByPtr<int>>(
-         rpt, &ThreadUtilsObject::Test1pi, i);
+      "TestThreadUtils::ThreadUtilsObject::Test1pi",
+      rpt,
+      &ThreadUtilsObject::Test1pi,
+      i);
     r1->Run();
     EXPECT_EQ(count += 2, rpt->mCount);
     EXPECT_EQ(i, rpt->mA0);
@@ -1150,7 +1302,10 @@ TEST(ThreadUtils, main)
   {
     int i = 1203;
     r1 = NewRunnableMethod<StoreCopyPassByConstPtr<int>>(
-         rpt, &ThreadUtilsObject::Test1pci, i);
+      "TestThreadUtils::ThreadUtilsObject::Test1pci",
+      rpt,
+      &ThreadUtilsObject::Test1pci,
+      i);
     r1->Run();
     EXPECT_EQ(count += 2, rpt->mCount);
     EXPECT_EQ(i, rpt->mA0);
@@ -1209,7 +1364,10 @@ TEST(ThreadUtils, main)
                 "ParameterStorage<int&>::Type::passed_type should be int&");
   {
     int i = 13;
-    r1 = NewRunnableMethod<int&>(rpt, &ThreadUtilsObject::Test1ri, i);
+    r1 = NewRunnableMethod<int&>("TestThreadUtils::ThreadUtilsObject::Test1ri",
+                                 rpt,
+                                 &ThreadUtilsObject::Test1ri,
+                                 i);
     r1->Run();
     EXPECT_EQ(count += 2, rpt->mCount);
     EXPECT_EQ(i, rpt->mA0);
@@ -1230,8 +1388,11 @@ TEST(ThreadUtils, main)
                 "ParameterStorage<int&&>::Type::passed_type should be int&&");
   {
     int i = 14;
-    r1 = NewRunnableMethod<int&&>(
-          rpt, &ThreadUtilsObject::Test1rri, mozilla::Move(i));
+    r1 =
+      NewRunnableMethod<int&&>("TestThreadUtils::ThreadUtilsObject::Test1rri",
+                               rpt,
+                               &ThreadUtilsObject::Test1rri,
+                               mozilla::Move(i));
   }
   r1->Run();
   EXPECT_EQ(count += 2, rpt->mCount);
@@ -1253,7 +1414,10 @@ TEST(ThreadUtils, main)
   {
     mozilla::UniquePtr<int> upi;
     r1 = NewRunnableMethod<mozilla::UniquePtr<int>&&>(
-          rpt, &ThreadUtilsObject::Test1upi, mozilla::Move(upi));
+      "TestThreadUtils::ThreadUtilsObject::Test1upi",
+      rpt,
+      &ThreadUtilsObject::Test1upi,
+      mozilla::Move(upi));
   }
   r1->Run();
   EXPECT_EQ(count += 2, rpt->mCount);
@@ -1275,9 +1439,11 @@ TEST(ThreadUtils, main)
                 "ParameterStorage<StoreCopyPassByRRef<UniquePtr<int>>>::Type::passed_type should be UniquePtr<int>&&");
   {
     mozilla::UniquePtr<int> upi;
-    r1 = NewRunnableMethod
-         <StoreCopyPassByRRef<mozilla::UniquePtr<int>>>(
-           rpt, &ThreadUtilsObject::Test1upi, mozilla::Move(upi));
+    r1 = NewRunnableMethod<StoreCopyPassByRRef<mozilla::UniquePtr<int>>>(
+      "TestThreadUtils::ThreadUtilsObject::Test1upi",
+      rpt,
+      &ThreadUtilsObject::Test1upi,
+      mozilla::Move(upi));
   }
   r1->Run();
   EXPECT_EQ(count += 2, rpt->mCount);
@@ -1287,7 +1453,10 @@ TEST(ThreadUtils, main)
   {
     mozilla::UniquePtr<int> upi = mozilla::MakeUnique<int>(1);
     r1 = NewRunnableMethod<mozilla::UniquePtr<int>&&>(
-           rpt, &ThreadUtilsObject::Test1upi, mozilla::Move(upi));
+      "TestThreadUtils::ThreadUtilsObject::Test1upi",
+      rpt,
+      &ThreadUtilsObject::Test1upi,
+      mozilla::Move(upi));
   }
   r1->Run();
   EXPECT_EQ(count += 2, rpt->mCount);
@@ -1295,9 +1464,11 @@ TEST(ThreadUtils, main)
 
   {
     mozilla::UniquePtr<int> upi = mozilla::MakeUnique<int>(1);
-    r1 = NewRunnableMethod
-         <StoreCopyPassByRRef<mozilla::UniquePtr<int>>>
-         (rpt, &ThreadUtilsObject::Test1upi, mozilla::Move(upi));
+    r1 = NewRunnableMethod<StoreCopyPassByRRef<mozilla::UniquePtr<int>>>(
+      "TestThreadUtils::ThreadUtilsObject::Test1upi",
+      rpt,
+      &ThreadUtilsObject::Test1upi,
+      mozilla::Move(upi));
   }
   r1->Run();
   EXPECT_EQ(count += 2, rpt->mCount);
@@ -1305,7 +1476,10 @@ TEST(ThreadUtils, main)
 
   // Unique pointer as prvalue.
   r1 = NewRunnableMethod<mozilla::UniquePtr<int>&&>(
-         rpt, &ThreadUtilsObject::Test1upi, mozilla::MakeUnique<int>(2));
+    "TestThreadUtils::ThreadUtilsObject::Test1upi",
+    rpt,
+    &ThreadUtilsObject::Test1upi,
+    mozilla::MakeUnique<int>(2));
   r1->Run();
   EXPECT_EQ(count += 2, rpt->mCount);
   EXPECT_EQ(2, rpt->mA0);
@@ -1314,7 +1488,10 @@ TEST(ThreadUtils, main)
   {
     mozilla::UniquePtr<int> upi;
     r1 = NewRunnableMethod<mozilla::UniquePtr<int>&>(
-           rpt, &ThreadUtilsObject::Test1rupi, upi);
+      "TestThreadUtils::ThreadUtilsObject::Test1rupi",
+      rpt,
+      &ThreadUtilsObject::Test1rupi,
+      upi);
     // Passed as lref, so Run() must be called while local upi is still alive!
     r1->Run();
   }
@@ -1334,7 +1511,10 @@ TEST(ThreadUtils, main)
       EXPECT_EQ(1, gAlive);
       if (gDebug) { printf("%d - r2 = NewRunnableMethod<StoreCopyPassByValue<Spy>>(&TestByValue, s)\n", __LINE__); }
       r2 = NewRunnableMethod<StoreCopyPassByValue<Spy>>(
-           rpt, &ThreadUtilsObject::TestByValue, s);
+        "TestThreadUtils::ThreadUtilsObject::TestByValue",
+        rpt,
+        &ThreadUtilsObject::TestByValue,
+        s);
       EXPECT_EQ(2, gAlive);
       EXPECT_LE(1, gCopyConstructions); // At least 1 copy-construction.
       Spy::ClearActions();
@@ -1360,9 +1540,11 @@ TEST(ThreadUtils, main)
   if (gDebug) { printf("%d - Test: Store copy from prvalue, pass by value\n", __LINE__); }
   {
     if (gDebug) { printf("%d - r3 = NewRunnableMethod<StoreCopyPassByValue<Spy>>(&TestByValue, Spy(11))\n", __LINE__); }
-    nsCOMPtr<nsIRunnable> r3 =
-      NewRunnableMethod<StoreCopyPassByValue<Spy>>(
-        rpt, &ThreadUtilsObject::TestByValue, Spy(11));
+    nsCOMPtr<nsIRunnable> r3 = NewRunnableMethod<StoreCopyPassByValue<Spy>>(
+      "TestThreadUtils::ThreadUtilsObject::TestByValue",
+      rpt,
+      &ThreadUtilsObject::TestByValue,
+      Spy(11));
     EXPECT_EQ(1, gAlive);
     EXPECT_EQ(1, gConstructions);
     EXPECT_LE(1, gMoveConstructions);
@@ -1389,7 +1571,10 @@ TEST(ThreadUtils, main)
       EXPECT_EQ(1, gAlive);
       Spy::ClearActions();
       r4 = NewRunnableMethod<StoreCopyPassByValue<Spy>>(
-          rpt, &ThreadUtilsObject::TestByValue, mozilla::Move(s));
+        "TestThreadUtils::ThreadUtilsObject::TestByValue",
+        rpt,
+        &ThreadUtilsObject::TestByValue,
+        mozilla::Move(s));
       EXPECT_LE(1, gMoveConstructions);
       EXPECT_EQ(1, gAlive);
       EXPECT_EQ(1, gZombies);
@@ -1421,7 +1606,10 @@ TEST(ThreadUtils, main)
       EXPECT_EQ(1, gAlive);
       if (gDebug) { printf("%d - r5 = NewRunnableMethod<StoreCopyPassByConstLRef<Spy>>(&TestByConstLRef, s)\n", __LINE__); }
       r5 = NewRunnableMethod<StoreCopyPassByConstLRef<Spy>>(
-           rpt, &ThreadUtilsObject::TestByConstLRef, s);
+        "TestThreadUtils::ThreadUtilsObject::TestByConstLRef",
+        rpt,
+        &ThreadUtilsObject::TestByConstLRef,
+        s);
       EXPECT_EQ(2, gAlive);
       EXPECT_LE(1, gCopyConstructions); // At least 1 copy-construction.
       Spy::ClearActions();
@@ -1447,9 +1635,11 @@ TEST(ThreadUtils, main)
   if (gDebug) { printf("%d - Test: Store copy from prvalue, pass by const lvalue ref\n", __LINE__); }
   {
     if (gDebug) { printf("%d - r6 = NewRunnableMethod<StoreCopyPassByConstLRef<Spy>>(&TestByConstLRef, Spy(21))\n", __LINE__); }
-    nsCOMPtr<nsIRunnable> r6 =
-      NewRunnableMethod<StoreCopyPassByConstLRef<Spy>>(
-        rpt, &ThreadUtilsObject::TestByConstLRef, Spy(21));
+    nsCOMPtr<nsIRunnable> r6 = NewRunnableMethod<StoreCopyPassByConstLRef<Spy>>(
+      "TestThreadUtils::ThreadUtilsObject::TestByConstLRef",
+      rpt,
+      &ThreadUtilsObject::TestByConstLRef,
+      Spy(21));
     EXPECT_EQ(1, gAlive);
     EXPECT_EQ(1, gConstructions);
     EXPECT_LE(1, gMoveConstructions);
@@ -1478,7 +1668,10 @@ TEST(ThreadUtils, main)
       EXPECT_EQ(1, gAlive);
       if (gDebug) { printf("%d - r7 = NewRunnableMethod<StoreCopyPassByRRef<Spy>>(&TestByRRef, s)\n", __LINE__); }
       r7 = NewRunnableMethod<StoreCopyPassByRRef<Spy>>(
-           rpt, &ThreadUtilsObject::TestByRRef, s);
+        "TestThreadUtils::ThreadUtilsObject::TestByRRef",
+        rpt,
+        &ThreadUtilsObject::TestByRRef,
+        s);
       EXPECT_EQ(2, gAlive);
       EXPECT_LE(1, gCopyConstructions); // At least 1 copy-construction.
       Spy::ClearActions();
@@ -1505,9 +1698,11 @@ TEST(ThreadUtils, main)
   if (gDebug) { printf("%d - Test: Store copy from prvalue, pass by rvalue ref\n", __LINE__); }
   {
     if (gDebug) { printf("%d - r8 = NewRunnableMethod<StoreCopyPassByRRef<Spy>>(&TestByRRef, Spy(31))\n", __LINE__); }
-    nsCOMPtr<nsIRunnable> r8 =
-      NewRunnableMethod<StoreCopyPassByRRef<Spy>>(
-        rpt, &ThreadUtilsObject::TestByRRef, Spy(31));
+    nsCOMPtr<nsIRunnable> r8 = NewRunnableMethod<StoreCopyPassByRRef<Spy>>(
+      "TestThreadUtils::ThreadUtilsObject::TestByRRef",
+      rpt,
+      &ThreadUtilsObject::TestByRRef,
+      Spy(31));
     EXPECT_EQ(1, gAlive);
     EXPECT_EQ(1, gConstructions);
     EXPECT_LE(1, gMoveConstructions);
@@ -1536,8 +1731,10 @@ TEST(ThreadUtils, main)
     Spy::ClearActions();
     if (gDebug) { printf("%d - r9 = NewRunnableMethod<Spy&>(&TestByLRef, s)\n", __LINE__); }
     nsCOMPtr<nsIRunnable> r9 =
-      NewRunnableMethod<Spy&>(
-        rpt, &ThreadUtilsObject::TestByLRef, s);
+      NewRunnableMethod<Spy&>("TestThreadUtils::ThreadUtilsObject::TestByLRef",
+                              rpt,
+                              &ThreadUtilsObject::TestByLRef,
+                              s);
     EXPECT_EQ(0, gAllConstructions);
     EXPECT_EQ(0, gDestructions);
     EXPECT_EQ(1, gAlive);
@@ -1569,7 +1766,10 @@ TEST(ThreadUtils, main)
       EXPECT_EQ(1, gAlive);
       if (gDebug) { printf("%d - r10 = NewRunnableMethod<StoreRefPtrPassByPtr<Spy>>(&TestByRRef, s.get())\n", __LINE__); }
       r10 = NewRunnableMethod<StoreRefPtrPassByPtr<SpyWithISupports>>(
-            rpt, &ThreadUtilsObject::TestByPointer, s.get());
+        "TestThreadUtils::ThreadUtilsObject::TestByPointer",
+        rpt,
+        &ThreadUtilsObject::TestByPointer,
+        s.get());
       EXPECT_LE(0, gAllConstructions);
       EXPECT_EQ(1, gAlive);
       Spy::ClearActions();
@@ -1601,9 +1801,11 @@ TEST(ThreadUtils, main)
     EXPECT_EQ(1, gAlive);
     Spy::ClearActions();
     if (gDebug) { printf("%d - r11 = NewRunnableMethod<Spy*>(&TestByPointer, s)\n", __LINE__); }
-    nsCOMPtr<nsIRunnable> r11 =
-      NewRunnableMethod<Spy*>(
-        rpt, &ThreadUtilsObject::TestByPointer, &s);
+    nsCOMPtr<nsIRunnable> r11 = NewRunnableMethod<Spy*>(
+      "TestThreadUtils::ThreadUtilsObject::TestByPointer",
+      rpt,
+      &ThreadUtilsObject::TestByPointer,
+      &s);
     EXPECT_EQ(0, gAllConstructions);
     EXPECT_EQ(0, gDestructions);
     EXPECT_EQ(1, gAlive);
@@ -1631,9 +1833,11 @@ TEST(ThreadUtils, main)
     EXPECT_EQ(1, gAlive);
     Spy::ClearActions();
     if (gDebug) { printf("%d - r12 = NewRunnableMethod<Spy*>(&TestByPointer, s)\n", __LINE__); }
-    nsCOMPtr<nsIRunnable> r12 =
-      NewRunnableMethod<const Spy*>(
-        rpt, &ThreadUtilsObject::TestByPointerToConst, &s);
+    nsCOMPtr<nsIRunnable> r12 = NewRunnableMethod<const Spy*>(
+      "TestThreadUtils::ThreadUtilsObject::TestByPointerToConst",
+      rpt,
+      &ThreadUtilsObject::TestByPointerToConst,
+      &s);
     EXPECT_EQ(0, gAllConstructions);
     EXPECT_EQ(0, gDestructions);
     EXPECT_EQ(1, gAlive);

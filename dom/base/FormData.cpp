@@ -18,7 +18,7 @@ using namespace mozilla;
 using namespace mozilla::dom;
 
 FormData::FormData(nsISupports* aOwner)
-  : HTMLFormSubmission(WrapNotNull(UTF_8_ENCODING), nullptr)
+  : HTMLFormSubmission(UTF_8_ENCODING, nullptr)
   , mOwner(aOwner)
 {
 }
@@ -103,7 +103,8 @@ NS_INTERFACE_MAP_END
 // HTMLFormSubmission
 nsresult
 FormData::GetEncodedSubmission(nsIURI* aURI,
-                               nsIInputStream** aPostDataStream)
+                               nsIInputStream** aPostDataStream,
+                               int64_t* aPostDataStreamLength)
 {
   NS_NOTREACHED("Shouldn't call FormData::GetEncodedSubmission");
   return NS_OK;
@@ -402,7 +403,7 @@ NS_IMETHODIMP
 FormData::GetSendInfo(nsIInputStream** aBody, uint64_t* aContentLength,
                       nsACString& aContentTypeWithCharset, nsACString& aCharset)
 {
-  FSMultipartFormData fs(WrapNotNull(UTF_8_ENCODING), nullptr);
+  FSMultipartFormData fs(UTF_8_ENCODING, nullptr);
 
   for (uint32_t i = 0; i < mFormData.Length(); ++i) {
     if (mFormData[i].wasNullBlob) {

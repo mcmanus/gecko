@@ -15,6 +15,8 @@
 #if defined(XP_WIN)
 #include "AccessibleWrap.h"
 #include "Compatibility.h"
+#include "mozilla/mscom/PassthruProxy.h"
+#include "mozilla/mscom/Ptr.h"
 #include "nsWinUtils.h"
 #include "RootAccessible.h"
 #endif
@@ -33,8 +35,7 @@ DocAccessibleParent::RecvShowEvent(const ShowEventData& aData,
   MOZ_ASSERT(CheckDocTree());
 
   if (aData.NewTree().IsEmpty()) {
-    NS_ERROR("no children being added");
-    return IPC_FAIL_NO_REASON(this);
+    return IPC_FAIL(this, "No children being added");
   }
 
   ProxyAccessible* parent = GetAccessible(aData.ID());
@@ -158,8 +159,7 @@ DocAccessibleParent::RecvHideEvent(const uint64_t& aRootID,
   // We shouldn't actually need this because mAccessibles shouldn't have an
   // entry for the document itself, but it doesn't hurt to be explicit.
   if (!aRootID) {
-    NS_ERROR("trying to hide entire document?");
-    return IPC_FAIL_NO_REASON(this);
+    return IPC_FAIL(this, "Trying to hide entire document?");
   }
 
   ProxyEntry* rootEntry = mAccessibles.GetEntry(aRootID);
@@ -397,9 +397,8 @@ DocAccessibleParent::RecvRoleChangedEvent(const uint32_t& aRole)
     return IPC_OK();
   }
 
- if (aRole >= roles::LAST_ROLE) {
-   NS_ERROR("child sent bad role in RoleChangedEvent");
-   return IPC_FAIL_NO_REASON(this);
+ if (aRole > roles::LAST_ROLE) {
+   return IPC_FAIL(this, "Child sent bad role in RoleChangedEvent");
  }
 
  mRole = static_cast<a11y::role>(aRole);
@@ -626,26 +625,32 @@ DocAccessibleParent::MaybeInitWindowEmulation()
     tab->GetDocShellIsActive(&isActive);
   }
 
-  IAccessibleHolder hWndAccHolder;
-  HWND parentWnd = reinterpret_cast<HWND>(rootDocument->GetNativeWindow());
-  HWND hWnd = nsWinUtils::CreateNativeWindow(kClassNameTabContent,
-                                             parentWnd, rect.x, rect.y,
-                                             rect.width, rect.height,
-                                             isActive);
-  if (hWnd) {
-    // Attach accessible document to the emulated native window
-    ::SetPropW(hWnd, kPropNameDocAccParent, (HANDLE)this);
-    SetEmulatedWindowHandle(hWnd);
-    IAccessible* rawHWNDAcc = nullptr;
-    if (SUCCEEDED(::AccessibleObjectFromWindow(hWnd, OBJID_WINDOW,
-                                               IID_IAccessible,
-                                               (void**)&rawHWNDAcc))) {
-      hWndAccHolder.Set(IAccessibleHolder::COMPtrType(rawHWNDAcc));
-    }
-  }
+  nsWinUtils::NativeWindowCreateProc onCreate([this](HWND aHwnd) -> void {
+    IDispatchHolder hWndAccHolder;
 
-  Unused << SendEmulatedWindow(reinterpret_cast<uintptr_t>(mEmulatedWindowHandle),
-                               hWndAccHolder);
+    ::SetPropW(aHwnd, kPropNameDocAccParent, reinterpret_cast<HANDLE>(this));
+
+    SetEmulatedWindowHandle(aHwnd);
+
+    RefPtr<IAccessible> hwndAcc;
+    if (SUCCEEDED(::AccessibleObjectFromWindow(aHwnd, OBJID_WINDOW,
+                                               IID_IAccessible,
+                                               getter_AddRefs(hwndAcc)))) {
+      RefPtr<IDispatch> wrapped(mscom::PassthruProxy::Wrap<IDispatch>(WrapNotNull(hwndAcc)));
+      hWndAccHolder.Set(IDispatchHolder::COMPtrType(mscom::ToProxyUniquePtr(Move(wrapped))));
+    }
+
+    Unused << SendEmulatedWindow(reinterpret_cast<uintptr_t>(mEmulatedWindowHandle),
+                                 hWndAccHolder);
+  });
+
+  HWND parentWnd = reinterpret_cast<HWND>(rootDocument->GetNativeWindow());
+  DebugOnly<HWND> hWnd = nsWinUtils::CreateNativeWindow(kClassNameTabContent,
+                                                        parentWnd,
+                                                        rect.x, rect.y,
+                                                        rect.width, rect.height,
+                                                        isActive, &onCreate);
+  MOZ_ASSERT(hWnd);
 }
 
 /**
@@ -666,13 +671,21 @@ DocAccessibleParent::SendParentCOMProxy()
     return;
   }
 
-  IAccessible* rawNative = nullptr;
-  outerDoc->GetNativeInterface((void**) &rawNative);
-  MOZ_ASSERT(rawNative);
+  RefPtr<IAccessible> nativeAcc;
+  outerDoc->GetNativeInterface(getter_AddRefs(nativeAcc));
+  MOZ_ASSERT(nativeAcc);
 
-  IAccessibleHolder::COMPtrType ptr(rawNative);
-  IAccessibleHolder holder(Move(ptr));
-  Unused << PDocAccessibleParent::SendParentCOMProxy(holder);
+  RefPtr<IDispatch> wrapped(mscom::PassthruProxy::Wrap<IDispatch>(WrapNotNull(nativeAcc)));
+
+  IDispatchHolder::COMPtrType ptr(mscom::ToProxyUniquePtr(Move(wrapped)));
+  IDispatchHolder holder(Move(ptr));
+  if (!PDocAccessibleParent::SendParentCOMProxy(holder)) {
+    return;
+  }
+
+#if defined(MOZ_CONTENT_SANDBOX)
+  mParentProxyStream = Move(holder.GetPreservedStream());
+#endif // defined(MOZ_CONTENT_SANDBOX)
 }
 
 void

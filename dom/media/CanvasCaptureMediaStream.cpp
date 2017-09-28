@@ -144,7 +144,11 @@ public:
     if (!mTimer) {
       return;
     }
-    mTimer->InitWithFuncCallback(&TimerTick, this, int(1000 / mFPS), nsITimer::TYPE_REPEATING_SLACK);
+    mTimer->InitWithNamedFuncCallback(&TimerTick,
+                                      this,
+                                      int(1000 / mFPS),
+                                      nsITimer::TYPE_REPEATING_SLACK,
+                                      "dom::TimerDriver::TimerDriver");
   }
 
   static void TimerTick(nsITimer* aTimer, void* aClosure)
@@ -216,7 +220,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(CanvasCaptureMediaStream, DOMMediaStream,
 NS_IMPL_ADDREF_INHERITED(CanvasCaptureMediaStream, DOMMediaStream)
 NS_IMPL_RELEASE_INHERITED(CanvasCaptureMediaStream, DOMMediaStream)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(CanvasCaptureMediaStream)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(CanvasCaptureMediaStream)
 NS_INTERFACE_MAP_END_INHERITING(DOMMediaStream)
 
 CanvasCaptureMediaStream::CanvasCaptureMediaStream(nsPIDOMWindowInner* aWindow,
@@ -275,8 +279,7 @@ CanvasCaptureMediaStream::CreateSourceStream(nsPIDOMWindowInner* aWindow,
 {
   RefPtr<CanvasCaptureMediaStream> stream = new CanvasCaptureMediaStream(aWindow, aCanvas);
   MediaStreamGraph* graph =
-    MediaStreamGraph::GetInstance(MediaStreamGraph::SYSTEM_THREAD_DRIVER,
-                                  AudioChannel::Normal);
+    MediaStreamGraph::GetInstance(MediaStreamGraph::SYSTEM_THREAD_DRIVER, aWindow);
   stream->InitSourceStream(graph);
   return stream.forget();
 }

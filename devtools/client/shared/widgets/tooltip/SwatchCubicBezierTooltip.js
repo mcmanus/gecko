@@ -9,7 +9,7 @@ const {Task} = require("devtools/shared/task");
 const {CubicBezierWidget} = require("devtools/client/shared/widgets/CubicBezierWidget");
 const SwatchBasedEditorTooltip = require("devtools/client/shared/widgets/tooltip/SwatchBasedEditorTooltip");
 
-const Heritage = require("sdk/core/heritage");
+const {extend} = require("devtools/shared/extend");
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 
@@ -26,8 +26,7 @@ const XHTML_NS = "http://www.w3.org/1999/xhtml";
  *        inline editor.
  */
 function SwatchCubicBezierTooltip(document) {
-  let stylesheet = "chrome://devtools/content/shared/widgets/cubic-bezier.css";
-  SwatchBasedEditorTooltip.call(this, document, stylesheet);
+  SwatchBasedEditorTooltip.call(this, document);
 
   // Creating a cubic-bezier instance.
   // this.widget will always be a promise that resolves to the widget instance
@@ -35,7 +34,7 @@ function SwatchCubicBezierTooltip(document) {
   this._onUpdate = this._onUpdate.bind(this);
 }
 
-SwatchCubicBezierTooltip.prototype = Heritage.extend(SwatchBasedEditorTooltip.prototype, {
+SwatchCubicBezierTooltip.prototype = extend(SwatchBasedEditorTooltip.prototype, {
   /**
    * Fill the tooltip with a new instance of the cubic-bezier widget
    * initialized with the given value, and return a promise that resolves to

@@ -21,11 +21,7 @@
 #include <sys/prctl.h>
 #endif
 
-#ifdef MOZ_WIDGET_GONK
-#include <private/android_filesystem_config.h>
-#include <sys/syscall.h>
-#endif
-
+#include "base/string_util.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Move.h"
@@ -42,7 +38,7 @@ SandboxBroker::SandboxBroker(UniquePtr<const Policy> aPolicy, int aChildPid,
   : mChildPid(aChildPid), mPolicy(Move(aPolicy))
 {
   int fds[2];
-  if (0 != socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds)) {
+  if (0 != socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, fds)) {
     SANDBOX_LOG_ERROR("SandboxBroker: socketpair failed: %s", strerror(errno));
     mFileDesc = -1;
     aClientFd = -1;
@@ -92,8 +88,8 @@ SandboxBroker::~SandboxBroker() {
   // destructor can now return.
 }
 
-SandboxBroker::Policy::Policy() { }
-SandboxBroker::Policy::~Policy() { }
+SandboxBroker::Policy::Policy() = default;
+SandboxBroker::Policy::~Policy() = default;
 
 SandboxBroker::Policy::Policy(const Policy& aOther) {
   for (auto iter = aOther.mMap.ConstIter(); !iter.Done(); iter.Next()) {
@@ -205,14 +201,22 @@ SandboxBroker::Policy::AddDir(int aPerms, const char* aPath)
     return;
   }
 
+  // Add a Prefix permission on things inside the dir.
   nsDependentCString path(aPath);
   MOZ_ASSERT(path.Length() <= kMaxPathLen - 1);
   // Enforce trailing / on aPath
-  if (path[path.Length() - 1] != '/') {
+  if (path.Last() != '/') {
     path.Append('/');
   }
-
   Policy::AddPrefixInternal(aPerms, path);
+
+  // Add a path permission on the dir itself so it can
+  // be opened. We're guaranteed to have a trailing / now,
+  // so just cut that.
+  path.Truncate(path.Length() - 1);
+  if (!path.IsEmpty()) {
+    Policy::AddPath(aPerms, path.get(), AddAlways);
+  }
 }
 
 void
@@ -279,6 +283,79 @@ SandboxBroker::Policy::AddDynamic(int aPerms, const char* aPath)
   }
 }
 
+void
+SandboxBroker::Policy::AddAncestors(const char* aPath, int aPerms)
+{
+  nsAutoCString path(aPath);
+
+  while (true) {
+    const auto lastSlash = path.RFindCharInSet("/");
+    if (lastSlash <= 0) {
+      MOZ_ASSERT(lastSlash == 0);
+      return;
+    }
+    path.Truncate(lastSlash);
+    AddPath(aPerms, path.get());
+  }
+}
+
+void
+SandboxBroker::Policy::FixRecursivePermissions()
+{
+  // This builds an entirely new hashtable in order to avoid iterator
+  // invalidation problems.
+  PathPermissionMap oldMap;
+  mMap.SwapElements(oldMap);
+
+  if (SandboxInfo::Get().Test(SandboxInfo::kVerbose)) {
+    SANDBOX_LOG_ERROR("fixing recursive policy entries");
+  }
+
+  for (auto iter = oldMap.ConstIter(); !iter.Done(); iter.Next()) {
+    const nsACString& path = iter.Key();
+    const int& localPerms = iter.Data();
+    int inheritedPerms = 0;
+
+    nsAutoCString ancestor(path);
+    // This is slightly different from the loop in AddAncestors: it
+    // leaves the trailing slashes attached so they'll match AddDir
+    // entries.
+    while (true) {
+      // Last() release-asserts that the string is not empty.  We
+      // should never have empty keys in the map, and the Truncate()
+      // below will always give us a non-empty string.
+      if (ancestor.Last() == '/') {
+        ancestor.Truncate(ancestor.Length() - 1);
+      }
+      const auto lastSlash = ancestor.RFindCharInSet("/");
+      if (lastSlash < 0) {
+        MOZ_ASSERT(ancestor.IsEmpty());
+        break;
+      }
+      ancestor.Truncate(lastSlash + 1);
+      const int ancestorPerms = oldMap.Get(ancestor);
+      if (ancestorPerms & RECURSIVE) {
+        inheritedPerms |= ancestorPerms & ~RECURSIVE;
+      }
+    }
+
+    const int newPerms = localPerms | inheritedPerms;
+    if ((newPerms & ~RECURSIVE) == inheritedPerms) {
+      if (SandboxInfo::Get().Test(SandboxInfo::kVerbose)) {
+        SANDBOX_LOG_ERROR("removing redundant %s: %d -> %d", PromiseFlatCString(path).get(),
+                          localPerms, newPerms);
+      }
+      // Skip adding this entry to the new map.
+      continue;
+    }
+    if (SandboxInfo::Get().Test(SandboxInfo::kVerbose)) {
+      SANDBOX_LOG_ERROR("new policy for %s: %d -> %d", PromiseFlatCString(path).get(),
+                        localPerms, newPerms);
+    }
+    mMap.Put(path, newPerms);
+  }
+}
+
 int
 SandboxBroker::Policy::Lookup(const nsACString& aPath) const
 {
@@ -339,7 +416,7 @@ AllowOperation(int aReqFlags, int aPerms)
 static bool
 AllowAccess(int aReqFlags, int aPerms)
 {
-  if (aReqFlags & ~(R_OK|W_OK|F_OK)) {
+  if (aReqFlags & ~(R_OK|W_OK|X_OK|F_OK)) {
     return false;
   }
   int needed = 0;
@@ -393,6 +470,10 @@ AllowOpen(int aReqFlags, int aPerms)
   if (aReqFlags & O_CREAT) {
     needed |= SandboxBroker::MAY_CREATE;
   }
+  // Linux allows O_TRUNC even with O_RDONLY
+  if (aReqFlags & O_TRUNC) {
+    needed |= SandboxBroker::MAY_WRITE;
+  }
   return (aPerms & needed) == needed;
 }
 
@@ -421,11 +502,10 @@ DoLink(const char* aPath, const char* aPath2,
 size_t
 SandboxBroker::ConvertToRealPath(char* aPath, size_t aBufSize, size_t aPathLen)
 {
-  if (strstr(aPath, "..") != NULL) {
-    char* result = realpath(aPath, NULL);
-    if (result != NULL) {
-      strncpy(aPath, result, aBufSize);
-      aPath[aBufSize - 1] = '\0';
+  if (strstr(aPath, "..") != nullptr) {
+    char* result = realpath(aPath, nullptr);
+    if (result != nullptr) {
+      base::strlcpy(aPath, result, aBufSize);
       free(result);
       // Size changed, but guaranteed to be 0 terminated
       aPathLen = strlen(aPath);
@@ -433,6 +513,64 @@ SandboxBroker::ConvertToRealPath(char* aPath, size_t aBufSize, size_t aPathLen)
     // ValidatePath will handle failure to translate
   }
   return aPathLen;
+}
+
+nsCString
+SandboxBroker::ReverseSymlinks(const nsACString& aPath)
+{
+  // Revert any symlinks we previously resolved.
+  int32_t cutLength = aPath.Length();
+  nsCString cutPath(Substring(aPath, 0, cutLength));
+
+  for (;;) {
+    nsCString orig;
+    bool found = mSymlinkMap.Get(cutPath, &orig);
+    if (found) {
+      orig.Append(Substring(aPath, cutLength, aPath.Length() - cutLength));
+      return orig;
+    }
+    // Not found? Remove a path component and try again.
+    int32_t pos = cutPath.RFindChar('/');
+    if (pos == kNotFound || pos <= 0) {
+      // will be empty
+      return orig;
+    } else {
+      // Cut until just before the /
+      cutLength = pos;
+      cutPath.Assign(Substring(cutPath, 0, cutLength));
+    }
+  }
+}
+
+int
+SandboxBroker::SymlinkPermissions(const char* aPath, const size_t aPathLen)
+{
+  // Work on a temporary copy, so we can reverse it.
+  // Because we bail on a writable dir, SymlinkPath
+  // might not restore the callers' path exactly.
+  char pathBufSymlink[kMaxPathLen + 1];
+  strcpy(pathBufSymlink, aPath);
+
+  nsCString orig = ReverseSymlinks(nsDependentCString(pathBufSymlink, aPathLen));
+  if (!orig.IsEmpty()) {
+    if (SandboxInfo::Get().Test(SandboxInfo::kVerbose)) {
+      SANDBOX_LOG_ERROR("Reversing %s -> %s", aPath, orig.get());
+    }
+    base::strlcpy(pathBufSymlink, orig.get(), sizeof(pathBufSymlink));
+  }
+
+  int perms = 0;
+  // Resolve relative paths, propagate permissions and
+  // fail if a symlink is in a writable path. The output is in perms.
+  char* result = SandboxBroker::SymlinkPath(mPolicy.get(), pathBufSymlink, NULL, &perms);
+  if (result != NULL) {
+    free(result);
+    // We finished the translation, so we have a usable return in "perms".
+    return perms;
+  } else {
+    // Empty path means we got a writable dir in the chain.
+    return 0;
+  }
 }
 
 void
@@ -447,28 +585,14 @@ SandboxBroker::ThreadMain(void)
   // before the main thread loop starts
   bool permissive = SandboxInfo::Get().Test(SandboxInfo::kPermissive);
 
-#ifdef MOZ_WIDGET_GONK
-#ifdef __NR_setreuid32
-  static const long nr_setreuid = __NR_setreuid32;
-  static const long nr_setregid = __NR_setregid32;
-#else
-  static const long nr_setreuid = __NR_setreuid;
-  static const long nr_setregid = __NR_setregid;
-#endif
-  if (syscall(nr_setregid, getgid(), AID_APP + mChildPid) != 0 ||
-      syscall(nr_setreuid, getuid(), AID_APP + mChildPid) != 0) {
-    MOZ_CRASH("SandboxBroker: failed to drop privileges");
-  }
-#endif
-
   while (true) {
     struct iovec ios[2];
     // We will receive the path strings in 1 buffer and split them back up.
     char recvBuf[2 * (kMaxPathLen + 1)];
     char pathBuf[kMaxPathLen + 1];
     char pathBuf2[kMaxPathLen + 1];
-    size_t pathLen;
-    size_t pathLen2;
+    size_t pathLen = 0;
+    size_t pathLen2 = 0;
     char respBuf[kMaxPathLen + 1]; // Also serves as struct stat
     Request req;
     Response resp;
@@ -553,6 +677,18 @@ SandboxBroker::ThreadMain(void)
       pathLen = ConvertToRealPath(pathBuf, sizeof(pathBuf), pathLen);
       perms = mPolicy->Lookup(nsDependentCString(pathBuf, pathLen));
 
+      // We don't have read permissions on the requested dir.
+      // Did we arrive from a symlink in a path that is not writable?
+      // Then try to figure out the original path and see if that is readable.
+      if (!(perms & MAY_READ)) {
+          // Work on the original path,
+          // this reverses ConvertToRealPath above.
+          int symlinkPerms = SymlinkPermissions(recvBuf, first_len);
+          if (symlinkPerms > 0) {
+            perms = symlinkPerms;
+          }
+      }
+
       // Same for the second path.
       pathLen2 = strnlen(pathBuf2, kMaxPathLen);
       if (pathLen2 > 0) {
@@ -599,17 +735,7 @@ SandboxBroker::ThreadMain(void)
 
       case SANDBOX_FILE_ACCESS:
         if (permissive || AllowAccess(req.mFlags, perms)) {
-          // This can't use access() itself because that uses the ruid
-          // and not the euid.  In theory faccessat() with AT_EACCESS
-          // would work, but Linux doesn't actually implement the
-          // flags != 0 case; glibc has a hack which doesn't even work
-          // in this case so it'll ignore the flag, and Bionic just
-          // passes through the syscall and always ignores the flags.
-          //
-          // Instead, because we've already checked the requested
-          // r/w/x bits against the policy, just return success if the
-          // file exists and hope that's close enough.
-          if (stat(pathBuf, (struct stat*)&respBuf) == 0) {
+          if (access(pathBuf, req.mFlags) == 0) {
             resp.mError = 0;
           } else {
             resp.mError = -errno;
@@ -713,6 +839,34 @@ SandboxBroker::ThreadMain(void)
         if (permissive || AllowOperation(R_OK, perms)) {
           ssize_t respSize = readlink(pathBuf, (char*)&respBuf, sizeof(respBuf));
           if (respSize >= 0) {
+              if (respSize > 0) {
+              // Record the mapping so we can invert the file to the original
+              // symlink.
+              nsDependentCString orig(pathBuf, pathLen);
+              nsDependentCString xlat(respBuf, respSize);
+              if (!orig.Equals(xlat) && xlat[0] == '/') {
+                if (SandboxInfo::Get().Test(SandboxInfo::kVerbose)) {
+                  SANDBOX_LOG_ERROR("Recording mapping %s -> %s",
+                                    xlat.get(), orig.get());
+                }
+                mSymlinkMap.Put(xlat, orig);
+              }
+              // Make sure we can invert a fully resolved mapping too. If our
+              // caller is realpath, and there's a relative path involved, the
+              // client side will try to open this one.
+              char *resolvedBuf = realpath(pathBuf, nullptr);
+              if (resolvedBuf) {
+                nsDependentCString resolvedXlat(resolvedBuf);
+                if (!orig.Equals(resolvedXlat) && !xlat.Equals(resolvedXlat)) {
+                  if (SandboxInfo::Get().Test(SandboxInfo::kVerbose)) {
+                    SANDBOX_LOG_ERROR("Recording mapping %s -> %s",
+                                      resolvedXlat.get(), orig.get());
+                  }
+                  mSymlinkMap.Put(resolvedXlat, orig);
+                }
+                free(resolvedBuf);
+              }
+            }
             resp.mError = respSize;
             ios[1].iov_base = &respBuf;
             ios[1].iov_len = respSize;
@@ -762,9 +916,9 @@ void
 SandboxBroker::AuditDenial(int aOp, int aFlags, int aPerms, const char* aPath)
 {
   if (SandboxInfo::Get().Test(SandboxInfo::kVerbose)) {
-    SANDBOX_LOG_ERROR("SandboxBroker: denied op=%d rflags=%o perms=%d path=%s for pid=%d" \
-                      " error=\"%s\"", aOp, aFlags, aPerms, aPath, mChildPid,
-                      strerror(errno));
+    SANDBOX_LOG_ERROR("SandboxBroker: denied op=%s rflags=%o perms=%d path=%s for pid=%d",
+                      OperationDescription[aOp], aFlags,
+                      aPerms, aPath, mChildPid);
   }
 }
 

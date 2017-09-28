@@ -34,6 +34,7 @@
 #include "SVGImageContext.h"
 #include <limits>
 #include <algorithm>
+#include "gfxPoint.h"
 
 class gfxContext;
 class nsPresContext;
@@ -58,7 +59,6 @@ class nsStyleCorners;
 class nsPIDOMWindowOuter;
 class imgIRequest;
 class nsIDocument;
-struct gfxPoint;
 struct nsStyleFont;
 struct nsStyleImageOrientation;
 struct nsOverflowAreas;
@@ -72,6 +72,7 @@ struct ContainerLayerParameters;
 class WritingMode;
 class DisplayItemClip;
 class EffectSet;
+struct ActiveScrolledRoot;
 namespace dom {
 class CanvasRenderingContext2D;
 class DOMRectList;
@@ -184,9 +185,20 @@ public:
   static nsIContent* FindContentFor(ViewID aId);
 
   /**
+   * Find the view ID (or generate a new one) for the content element
+   * corresponding to the ASR.
+   */
+  static ViewID ViewIDForASR(const mozilla::ActiveScrolledRoot* aASR);
+
+  /**
    * Find the scrollable frame for a given ID.
    */
   static nsIScrollableFrame* FindScrollableFrameFor(ViewID aId);
+
+  /**
+   * Find the ID for a given scrollable frame.
+   */
+  static ViewID FindIDForScrollableFrame(nsIScrollableFrame* aScrollable);
 
   /**
    * Get display port for the given element, relative to the specified entity,
@@ -561,6 +573,12 @@ public:
                                         const ContainerLayerParameters& aContainerParameters);
 
   /**
+   * Get the scroll id for the root scrollframe of the presshell of the given
+   * prescontext. Returns NULL_SCROLL_ID if it couldn't be found.
+   */
+  static FrameMetrics::ViewID ScrollIdForRootScrollFrame(nsPresContext* aPresContext);
+
+  /**
    * Return true if aPresContext's viewport has a displayport.
    */
   static bool ViewportHasDisplayPort(nsPresContext* aPresContext);
@@ -779,6 +797,9 @@ public:
     TranslateViewToWidget(nsPresContext* aPresContext,
                           nsView* aView, nsPoint aPt,
                           nsIWidget* aWidget);
+
+  static mozilla::LayoutDeviceIntPoint
+    WidgetToWidgetOffset(nsIWidget* aFromWidget, nsIWidget* aToWidget);
 
   enum FrameForPointFlags {
     /**
@@ -1140,6 +1161,11 @@ public:
   static void GetAllInFlowBoxes(nsIFrame* aFrame, BoxCallback* aCallback);
 
   /**
+   * Like GetAllInFlowBoxes, but doesn't include continuations.
+   */
+  static void AddBoxesForFrame(nsIFrame* aFrame, BoxCallback* aCallback);
+
+  /**
    * Find the first frame descendant of aFrame (including aFrame) which is
    * not an anonymous frame that getBoxQuads/getClientRects should ignore.
    */
@@ -1345,14 +1371,14 @@ public:
    * containing aFrame.
    */
   static nsIFrame*
-  FirstContinuationOrIBSplitSibling(nsIFrame *aFrame);
+  FirstContinuationOrIBSplitSibling(const nsIFrame *aFrame);
 
   /**
    * Get the last frame in the continuation-plus-ib-split-sibling chain
    * containing aFrame.
    */
   static nsIFrame*
-  LastContinuationOrIBSplitSibling(nsIFrame *aFrame);
+  LastContinuationOrIBSplitSibling(const nsIFrame *aFrame);
 
   /**
    * Is FirstContinuationOrIBSplitSibling(aFrame) going to return
@@ -2319,11 +2345,6 @@ public:
   static bool CSSFiltersEnabled();
 
   /**
-   * Checks if we should enable parsing for CSS clip-path basic shapes.
-   */
-  static bool CSSClipPathShapesEnabled();
-
-  /**
    * Checks whether support for the CSS-wide "unset" value is enabled.
    */
   static bool UnsetValueEnabled();
@@ -2339,6 +2360,11 @@ public:
    * 'true' value is enabled.
    */
   static bool IsTextAlignUnsafeValueEnabled();
+
+  /**
+   * Checks whether support for inter-character ruby is enabled.
+   */
+  static bool IsInterCharacterRubyEnabled();
 
   static bool InterruptibleReflowEnabled()
   {
@@ -2458,10 +2484,17 @@ public:
   // to disable it dynamically in stylo-enabled builds via a pref.
   static bool StyloEnabled() {
 #ifdef MOZ_STYLO
-    return sStyloEnabled;
+    return sStyloEnabled && StyloSupportedInCurrentProcess();
 #else
     return false;
 #endif
+  }
+
+  // Whether Stylo should be allowed to be enabled in this process.  This
+  // returns true for content processes and the non-e10s parent process.
+  static bool StyloSupportedInCurrentProcess() {
+     return XRE_IsContentProcess() ||
+            (XRE_IsParentProcess() && !XRE_IsE10sParentProcess());
   }
 
   static bool StyleAttrWithXMLBaseDisabled() {
@@ -2719,9 +2752,7 @@ public:
                                   ViewID aScrollId,
                                   const std::string& aKey,
                                   const std::string& aValue) {
-    if (IsAPZTestLoggingEnabled()) {
-      DoLogTestDataForPaint(aManager, aScrollId, aKey, aValue);
-    }
+    DoLogTestDataForPaint(aManager, aScrollId, aKey, aValue);
   }
 
   /**
@@ -2734,10 +2765,8 @@ public:
                                   ViewID aScrollId,
                                   const std::string& aKey,
                                   const Value& aValue) {
-    if (IsAPZTestLoggingEnabled()) {
-      DoLogTestDataForPaint(aManager, aScrollId, aKey,
-          mozilla::ToString(aValue));
-    }
+    DoLogTestDataForPaint(aManager, aScrollId, aKey,
+                          mozilla::ToString(aValue));
   }
 
   /**
@@ -2824,6 +2853,16 @@ public:
                                               const mozilla::Maybe<nsRect>& aClipRect,
                                               bool aIsRoot,
                                               const ContainerLayerParameters& aContainerParameters);
+
+  /**
+   * Returns the metadata to put onto the root layer of a layer tree, if one is
+   * needed. The last argument is a callback function to check if the caller
+   * already has a metadata for a given scroll id.
+   */
+  static mozilla::Maybe<ScrollMetadata> GetRootMetadata(nsDisplayListBuilder* aBuilder,
+                                                        Layer* aRootLayer,
+                                                        const ContainerLayerParameters& aContainerParameters,
+                                                        const std::function<bool(ViewID& aScrollId)>& aCallback);
 
   /**
    * If the given scroll frame needs an area excluded from its composition
@@ -3110,6 +3149,23 @@ public:
 
   nsCOMPtr<nsIContent> mContent;
   nsCOMPtr<nsIAtom> mAttrName;
+};
+
+// This class allows you to easily set any pointer variable and ensure it's
+// set to nullptr when leaving its scope.
+template<typename T>
+class MOZ_RAII SetAndNullOnExit
+{
+public:
+  SetAndNullOnExit(T* &aVariable, T* aValue) {
+    aVariable = aValue;
+    mVariable = &aVariable;
+  }
+  ~SetAndNullOnExit() {
+    *mVariable = nullptr;
+  }
+private:
+  T** mVariable;
 };
 
 #endif // nsLayoutUtils_h__

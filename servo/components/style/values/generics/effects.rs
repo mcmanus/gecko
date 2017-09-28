@@ -5,20 +5,29 @@
 //! Generic types for CSS values related to effects.
 
 use std::fmt;
-use style_traits::ToCss;
+use style_traits::values::{SequenceWriter, ToCss};
 #[cfg(feature = "gecko")]
 use values::specified::url::SpecifiedUrl;
 
-/// A generic value for the `filter` property.
-///
-/// Keyword `none` is represented by an empty slice.
-#[cfg_attr(feature = "servo", derive(Deserialize, HeapSizeOf, Serialize))]
-#[derive(Clone, Debug, HasViewportPercentage, PartialEq, ToComputedValue)]
-pub struct FilterList<Filter>(pub Box<[Filter]>);
+/// A generic value for a single `box-shadow`.
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[derive(Animate, Clone, Debug, PartialEq)]
+#[derive(ToAnimatedValue, ToAnimatedZero)]
+pub struct BoxShadow<Color, SizeLength, BlurShapeLength, ShapeLength> {
+    /// The base shadow.
+    pub base: SimpleShadow<Color, SizeLength, BlurShapeLength>,
+    /// The spread radius.
+    pub spread: ShapeLength,
+    /// Whether this is an inset box shadow.
+    #[animation(constant)]
+    pub inset: bool,
+}
 
 /// A generic value for a single `filter`.
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
 #[cfg_attr(feature = "servo", derive(Deserialize, HeapSizeOf, Serialize))]
-#[derive(Clone, Debug, HasViewportPercentage, PartialEq, ToComputedValue, ToCss)]
+#[derive(Clone, Debug, PartialEq, ToAnimatedValue, ToComputedValue, ToCss)]
 pub enum Filter<Angle, Factor, Length, DropShadow> {
     /// `blur(<length>)`
     #[css(function)]
@@ -55,38 +64,47 @@ pub enum Filter<Angle, Factor, Length, DropShadow> {
     Url(SpecifiedUrl),
 }
 
-impl<F> FilterList<F> {
-    /// Returns `none`.
-    #[inline]
-    pub fn none() -> Self {
-        FilterList(vec![].into_boxed_slice())
-    }
+/// A generic value for the `drop-shadow()` filter and the `text-shadow` property.
+///
+/// Contrary to the canonical order from the spec, the color is serialised
+/// first, like in Gecko and Webkit.
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[derive(Animate, Clone, ComputeSquaredDistance, Debug)]
+#[derive(PartialEq, ToAnimatedValue, ToAnimatedZero, ToCss)]
+pub struct SimpleShadow<Color, SizeLength, ShapeLength> {
+    /// Color.
+    pub color: Color,
+    /// Horizontal radius.
+    pub horizontal: SizeLength,
+    /// Vertical radius.
+    pub vertical: SizeLength,
+    /// Blur radius.
+    pub blur: ShapeLength,
 }
 
-impl<F> From<Vec<F>> for FilterList<F> {
-    #[inline]
-    fn from(vec: Vec<F>) -> Self {
-        FilterList(vec.into_boxed_slice())
-    }
-}
-
-impl<F> ToCss for FilterList<F>
+impl<Color, SizeLength, BlurShapeLength, ShapeLength> ToCss for BoxShadow<Color,
+                                                                          SizeLength,
+                                                                          BlurShapeLength,
+                                                                          ShapeLength>
 where
-    F: ToCss,
+    Color: ToCss,
+    SizeLength: ToCss,
+    BlurShapeLength: ToCss,
+    ShapeLength: ToCss,
 {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result
     where
-        W: fmt::Write
+        W: fmt::Write,
     {
-        if let Some((first, rest)) = self.0.split_first() {
-            first.to_css(dest)?;
-            for filter in rest {
-                dest.write_str(" ")?;
-                filter.to_css(dest)?;
-            }
-            Ok(())
-        } else {
-            dest.write_str("none")
+        {
+            let mut writer = SequenceWriter::new(&mut *dest, " ");
+            writer.item(&self.base)?;
+            writer.item(&self.spread)?;
         }
+        if self.inset {
+            dest.write_str(" inset")?;
+        }
+        Ok(())
     }
 }

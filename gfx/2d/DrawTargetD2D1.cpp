@@ -15,6 +15,10 @@
 #include "FilterNodeD2D1.h"
 #include "ExtendInputEffectD2D1.h"
 #include "Tools.h"
+#include "nsAppRunner.h"
+#include "MainThreadUtils.h"
+
+#include "mozilla/Mutex.h"
 
 using namespace std;
 
@@ -31,10 +35,9 @@ namespace gfx {
 
 uint64_t DrawTargetD2D1::mVRAMUsageDT;
 uint64_t DrawTargetD2D1::mVRAMUsageSS;
-IDWriteFactory *DrawTargetD2D1::mDWriteFactory;
-ID2D1Factory1* DrawTargetD2D1::mFactory = nullptr;
+StaticRefPtr<ID2D1Factory1> DrawTargetD2D1::mFactory;
 
-ID2D1Factory1 *D2DFactory1()
+RefPtr<ID2D1Factory1> D2DFactory()
 {
   return DrawTargetD2D1::factory();
 }
@@ -42,7 +45,7 @@ ID2D1Factory1 *D2DFactory1()
 DrawTargetD2D1::DrawTargetD2D1()
   : mPushedLayers(1)
   , mUsedCommandListsSincePurge(0)
-  , mDidComplexBlendWithListInList(false)
+  , mComplexBlendsWithListInList(0)
   , mDeviceSeq(0)
 {
 }
@@ -99,29 +102,38 @@ DrawTargetD2D1::Snapshot()
   return snapshot.forget();
 }
 
-void
+bool
 DrawTargetD2D1::EnsureLuminanceEffect()
 {
   if (mLuminanceEffect.get()) {
-    return;
+    return true;
   }
 
   HRESULT hr = mDC->CreateEffect(CLSID_D2D1LuminanceToAlpha,
                                  getter_AddRefs(mLuminanceEffect));
   if (FAILED(hr)) {
-    gfxWarning() << "Failed to create luminance effect. Code: " << hexa(hr);
+    gfxCriticalError() << "Failed to create luminance effect. Code: " << hexa(hr);
+    return false;
   }
+
+  return true;
 }
 
 already_AddRefed<SourceSurface>
 DrawTargetD2D1::IntoLuminanceSource(LuminanceType aLuminanceType, float aOpacity)
 {
-  if (aLuminanceType != LuminanceType::LUMINANCE) {
+  if ((aLuminanceType != LuminanceType::LUMINANCE) ||
+      // See bug 1372577, some race condition where we get invalid
+      // results with D2D in the parent process. Fallback in that case.
+      XRE_IsParentProcess()) {
     return DrawTarget::IntoLuminanceSource(aLuminanceType, aOpacity);
   }
 
   // Create the luminance effect
-  EnsureLuminanceEffect();
+  if (!EnsureLuminanceEffect()) {
+    return DrawTarget::IntoLuminanceSource(aLuminanceType, aOpacity);
+  }
+
   mLuminanceEffect->SetInput(0, mBitmap);
 
   RefPtr<ID2D1Image> luminanceOutput;
@@ -180,8 +192,8 @@ DrawTargetD2D1::DrawSurface(SourceSurface *aSurface,
     samplingBounds = D2D1::RectF(0, 0, Float(aSurface->GetSize().width), Float(aSurface->GetSize().height));
   }
 
-  Float xScale = aDest.width / aSource.width;
-  Float yScale = aDest.height / aSource.height;
+  Float xScale = aDest.Width() / aSource.Width();
+  Float yScale = aDest.Height() / aSource.Height();
 
   RefPtr<ID2D1ImageBrush> brush;
 
@@ -413,8 +425,8 @@ DrawTargetD2D1::MaskSurface(const Pattern &aSource,
     // we have to fixup our sizes here.
     size.width = bitmap->GetSize().width;
     size.height = bitmap->GetSize().height;
-    dest.width = size.width;
-    dest.height = size.height;
+    dest.SetWidth(size.width);
+    dest.SetHeight(size.height);
   }
 
   // FillOpacityMask only works if the antialias mode is MODE_ALIASED
@@ -476,10 +488,10 @@ DrawTargetD2D1::CopySurface(SourceSurface *aSurface,
   }
 
   Rect srcRect(Float(sourceRect.x), Float(sourceRect.y),
-               Float(aSourceRect.width), Float(aSourceRect.height));
+               Float(aSourceRect.Width()), Float(aSourceRect.Height()));
 
   Rect dstRect(Float(aDestination.x), Float(aDestination.y),
-               Float(aSourceRect.width), Float(aSourceRect.height));
+               Float(aSourceRect.Width()), Float(aSourceRect.Height()));
 
   if (SUCCEEDED(hr) && bitmap) {
     mDC->SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_COPY);
@@ -598,7 +610,7 @@ DrawTargetD2D1::FillGlyphs(ScaledFont *aFont,
                            const GlyphBuffer &aBuffer,
                            const Pattern &aPattern,
                            const DrawOptions &aOptions,
-                           const GlyphRenderingOptions *aRenderingOptions)
+                           const GlyphRenderingOptions*)
 {
   if (aFont->GetType() != FontType::DWRITE) {
     gfxDebug() << *this << ": Ignoring drawing call for incompatible font.";
@@ -607,16 +619,7 @@ DrawTargetD2D1::FillGlyphs(ScaledFont *aFont,
 
   ScaledFontDWrite *font = static_cast<ScaledFontDWrite*>(aFont);
 
-  IDWriteRenderingParams *params = nullptr;
-  if (aRenderingOptions) {
-    if (aRenderingOptions->GetType() != FontType::DWRITE) {
-      gfxDebug() << *this << ": Ignoring incompatible GlyphRenderingOptions.";
-      // This should never happen.
-      MOZ_ASSERT(false);
-    } else {
-      params = static_cast<const GlyphRenderingOptionsDWrite*>(aRenderingOptions)->mParams;
-    }
-  }
+  IDWriteRenderingParams *params = font->mParams;
 
   AntialiasMode aaMode = font->GetDefaultAAMode();
 
@@ -947,6 +950,8 @@ DrawTargetD2D1::PopLayer()
   DCCommandSink sink(mDC);
   list->Stream(&sink);
 
+  mComplexBlendsWithListInList = 0;
+
   mDC->PopLayer();
 }
 
@@ -1035,7 +1040,8 @@ DrawTargetD2D1::CreateGradientStops(GradientStop *rawStops, uint32_t aNumStops, 
     return nullptr;
   }
 
-  return MakeAndAddRef<GradientStopsD2D>(stopCollection, Factory::GetDirect3D11Device());
+  RefPtr<ID3D11Device> device = Factory::GetDirect3D11Device();
+  return MakeAndAddRef<GradientStopsD2D>(stopCollection, device);
 }
 
 already_AddRefed<FilterNode>
@@ -1067,12 +1073,10 @@ DrawTargetD2D1::Init(ID3D11Texture2D* aTexture, SurfaceFormat aFormat)
 {
   HRESULT hr;
 
-  ID2D1Device* device = Factory::GetD2D1Device();
+  RefPtr<ID2D1Device> device = Factory::GetD2D1Device(&mDeviceSeq);
   if (!device) {
     gfxCriticalNote << "[D2D1.1] Failed to obtain a device for DrawTargetD2D1::Init(ID3D11Texture2D*, SurfaceFormat).";
     return false;
-  } else {
-    mDeviceSeq = Factory::GetD2D1DeviceSeq();
   }
 
   hr = device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_ENABLE_MULTITHREADED_OPTIMIZATIONS, getter_AddRefs(mDC));
@@ -1134,12 +1138,10 @@ DrawTargetD2D1::Init(const IntSize &aSize, SurfaceFormat aFormat)
 {
   HRESULT hr;
 
-  ID2D1Device* device = Factory::GetD2D1Device();
+  RefPtr<ID2D1Device> device = Factory::GetD2D1Device(&mDeviceSeq);
   if (!device) {
     gfxCriticalNote << "[D2D1.1] Failed to obtain a device for DrawTargetD2D1::Init(IntSize, SurfaceFormat).";
     return false;
-  } else {
-    mDeviceSeq = Factory::GetD2D1DeviceSeq();
   }
 
   hr = device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_ENABLE_MULTITHREADED_OPTIMIZATIONS, getter_AddRefs(mDC));
@@ -1199,12 +1201,17 @@ DrawTargetD2D1::GetByteSize() const
   return mSize.width * mSize.height * BytesPerPixel(mFormat);
 }
 
-ID2D1Factory1*
+RefPtr<ID2D1Factory1>
 DrawTargetD2D1::factory()
 {
-  if (mFactory) {
+  StaticMutexAutoLock lock(Factory::mDeviceLock);
+
+  if (mFactory || !NS_IsMainThread()) {
     return mFactory;
   }
+
+  // We don't allow initializing the factory off the main thread.
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
   RefPtr<ID2D1Factory> factory;
   D2D1CreateFactoryFunc createD2DFactory;
@@ -1235,10 +1242,13 @@ DrawTargetD2D1::factory()
     return nullptr;
   }
 
-  hr = factory->QueryInterface((ID2D1Factory1**)&mFactory);
-  if (FAILED(hr) || !mFactory) {
+  RefPtr<ID2D1Factory1> factory1;
+  hr = factory->QueryInterface(__uuidof(ID2D1Factory1), getter_AddRefs(factory1));
+  if (FAILED(hr) || !factory1) {
     return nullptr;
   }
+
+  mFactory = factory1;
 
   ExtendInputEffectD2D1::Register(mFactory);
   RadialGradientEffectD2D1::Register(mFactory);
@@ -1246,40 +1256,15 @@ DrawTargetD2D1::factory()
   return mFactory;
 }
 
-IDWriteFactory*
-DrawTargetD2D1::GetDWriteFactory()
-{
-  if (mDWriteFactory) {
-    return mDWriteFactory;
-  }
-
-  decltype(DWriteCreateFactory)* createDWriteFactory;
-  HMODULE dwriteModule = LoadLibraryW(L"dwrite.dll");
-  createDWriteFactory = (decltype(DWriteCreateFactory)*)
-    GetProcAddress(dwriteModule, "DWriteCreateFactory");
-
-  if (!createDWriteFactory) {
-    gfxWarning() << "Failed to locate DWriteCreateFactory function.";
-    return nullptr;
-  }
-
-  HRESULT hr = createDWriteFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-                                   reinterpret_cast<IUnknown**>(&mDWriteFactory));
-
-  if (FAILED(hr)) {
-    gfxWarning() << "Failed to create DWrite Factory.";
-  }
-
-  return mDWriteFactory;
-}
-
 void
 DrawTargetD2D1::CleanupD2D()
 {
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  Factory::mDeviceLock.AssertCurrentThreadOwns();
+
   if (mFactory) {
     RadialGradientEffectD2D1::Unregister(mFactory);
     ExtendInputEffectD2D1::Unregister(mFactory);
-    mFactory->Release();
     mFactory = nullptr;
   }
 }
@@ -1437,12 +1422,7 @@ DrawTargetD2D1::FinalizeDrawing(CompositionOp aOp, const Pattern &aPattern)
 
     mDC->DrawImage(blendEffect, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_COMPOSITE_MODE_BOUNDED_SOURCE_COPY);
 
-    // This may seem a little counter intuitive. If this is false, we go through the regular
-    // codepaths and set it to true. When this was true, GetImageForLayerContent will return
-    // a bitmap for the current command list and we will no longer have a complex blend
-    // with a list for tmpImage. Therefore we can set it to false again.
-    mDidComplexBlendWithListInList = !mDidComplexBlendWithListInList;
-
+    mComplexBlendsWithListInList++;
     return;
   }
 
@@ -1523,6 +1503,8 @@ DrawTargetD2D1::GetDeviceSpaceClipRect(D2D1_RECT_F& aClipRect, bool& aIsPixelAli
   return true;
 }
 
+static const uint32_t sComplexBlendsWithListAllowedInList = 4;
+
 already_AddRefed<ID2D1Image>
 DrawTargetD2D1::GetImageForLayerContent(bool aShouldPreserveContent)
 {
@@ -1552,7 +1534,7 @@ DrawTargetD2D1::GetImageForLayerContent(bool aShouldPreserveContent)
     list->Close();
 
     RefPtr<ID2D1Bitmap1> tmpBitmap;
-    if (mDidComplexBlendWithListInList) {
+    if (mComplexBlendsWithListInList >= sComplexBlendsWithListAllowedInList) {
       D2D1_BITMAP_PROPERTIES1 props =
         D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET,
                                 D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -1562,6 +1544,7 @@ DrawTargetD2D1::GetImageForLayerContent(bool aShouldPreserveContent)
       mDC->SetTarget(tmpBitmap);
       mDC->DrawImage(list, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_COMPOSITE_MODE_BOUNDED_SOURCE_COPY);
       mDC->SetTarget(CurrentTarget());
+      mComplexBlendsWithListInList = 0;
     }
 
     DCCommandSink sink(mDC);
@@ -1571,7 +1554,7 @@ DrawTargetD2D1::GetImageForLayerContent(bool aShouldPreserveContent)
       PushAllClips();
     }
 
-    if (mDidComplexBlendWithListInList) {
+    if (tmpBitmap) {
       return tmpBitmap.forget();
     }
 
@@ -1898,7 +1881,7 @@ DrawTargetD2D1::CreateBrushForPattern(const Pattern &aPattern, Float aAlpha)
       mat.PreTranslate(pat->mSamplingRect.x, pat->mSamplingRect.y);
     } else {
       // We will do a partial upload of the sampling restricted area from GetImageForSurface.
-      samplingBounds = D2D1::RectF(0, 0, pat->mSamplingRect.width, pat->mSamplingRect.height);
+      samplingBounds = D2D1::RectF(0, 0, pat->mSamplingRect.Width(), pat->mSamplingRect.Height());
     }
 
     D2D1_EXTEND_MODE xRepeat = D2DExtend(pat->mExtendMode, Axis::X_AXIS);
@@ -2022,7 +2005,8 @@ DrawTargetD2D1::PushD2DLayer(ID2D1DeviceContext *aDC, ID2D1Geometry *aGeometry, 
 
 bool
 DrawTargetD2D1::IsDeviceContextValid() {
-  return (mDeviceSeq == Factory::GetD2D1DeviceSeq()) && Factory::GetD2D1Device();
+  uint32_t seqNo;
+  return Factory::GetD2D1Device(&seqNo) && seqNo == mDeviceSeq;
 }
 
 }

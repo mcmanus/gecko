@@ -508,6 +508,21 @@ impl Gl for GlFns {
         }
     }
 
+    fn tex_sub_image_2d_pbo(&self,
+                            target: GLenum,
+                            level: GLint,
+                            xoffset: GLint,
+                            yoffset: GLint,
+                            width: GLsizei,
+                            height: GLsizei,
+                            format: GLenum,
+                            ty: GLenum,
+                            offset: usize) {
+        unsafe {
+            self.ffi_gl_.TexSubImage2D(target, level, xoffset, yoffset, width, height, format, ty, offset as *const c_void);
+        }
+    }
+
     fn tex_sub_image_3d(&self,
                         target: GLenum,
                         level: GLint,
@@ -532,6 +547,33 @@ impl Gl for GlFns {
                                        format,
                                        ty,
                                        data.as_ptr() as *const c_void);
+        }
+    }
+
+    fn tex_sub_image_3d_pbo(&self,
+                            target: GLenum,
+                            level: GLint,
+                            xoffset: GLint,
+                            yoffset: GLint,
+                            zoffset: GLint,
+                            width: GLsizei,
+                            height: GLsizei,
+                            depth: GLsizei,
+                            format: GLenum,
+                            ty: GLenum,
+                            offset: usize) {
+        unsafe {
+            self.ffi_gl_.TexSubImage3D(target,
+                                       level,
+                                       xoffset,
+                                       yoffset,
+                                       zoffset,
+                                       width,
+                                       height,
+                                       depth,
+                                       format,
+                                       ty,
+                                       offset as *const c_void);
         }
     }
 
@@ -1359,6 +1401,30 @@ impl Gl for GlFns {
             unsafe {
                 self.ffi_gl_.PopGroupMarkerEXT();
             }
+        }
+    }
+
+    fn fence_sync(&self, condition: GLenum, flags: GLbitfield) -> GLsync {
+        unsafe {
+           self.ffi_gl_.FenceSync(condition, flags) as *const _
+        }
+    }
+
+    fn client_wait_sync(&self, sync: GLsync, flags: GLbitfield, timeout: GLuint64) {
+        unsafe {
+            self.ffi_gl_.ClientWaitSync(sync as *const _, flags, timeout);
+        }
+    }
+
+    fn wait_sync(&self, sync: GLsync, flags: GLbitfield, timeout: GLuint64) {
+        unsafe {
+            self.ffi_gl_.WaitSync(sync as *const _, flags, timeout);
+        }
+    }
+
+    fn delete_sync(&self, sync: GLsync) {
+        unsafe {
+            self.ffi_gl_.DeleteSync(sync as *const _);
         }
     }
 }

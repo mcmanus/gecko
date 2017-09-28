@@ -14,6 +14,7 @@
 #include "nsError.h"
 #include "nsContentUtils.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/StylePrefs.h"
 #include "mozilla/Telemetry.h"
 #include "FontFaceSet.h"
 #include "nsPresContext.h"
@@ -141,10 +142,12 @@ nsFontFaceLoader::LoadTimerCallback(nsITimer* aTimer, void* aClosure)
           ufe->mFontDataLoadingState = gfxUserFontEntry::LOADING_ALMOST_DONE;
           uint32_t delay;
           loader->mLoadTimer->GetDelay(&delay);
-          loader->mLoadTimer->InitWithFuncCallback(LoadTimerCallback,
-                                                   static_cast<void*>(loader),
-                                                   delay >> 1,
-                                                   nsITimer::TYPE_ONE_SHOT);
+          loader->mLoadTimer->InitWithNamedFuncCallback(
+            LoadTimerCallback,
+            static_cast<void*>(loader),
+            delay >> 1,
+            nsITimer::TYPE_ONE_SHOT,
+            "nsFontFaceLoader::LoadTimerCallback");
           updateUserFontSet = false;
           LOG(("userfonts (%p) 75%% done, resetting timer\n", loader));
         }
@@ -305,7 +308,7 @@ uint8_t
 nsFontFaceLoader::GetFontDisplay()
 {
   uint8_t fontDisplay = NS_FONT_DISPLAY_AUTO;
-  if (Preferences::GetBool("layout.css.font-display.enabled")) {
+  if (StylePrefs::sFontDisplayEnabled) {
     fontDisplay = mUserFontEntry->GetFontDisplay();
   }
   return fontDisplay;

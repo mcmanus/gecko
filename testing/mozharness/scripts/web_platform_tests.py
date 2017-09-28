@@ -62,11 +62,41 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
             "default": False,
             "help": "Tries to enable the WebRender compositor."}
          ],
-        [["--parallel-stylo-traversal"], {
+        [["--headless"], {
             "action": "store_true",
-            "dest": "parallel_stylo_traversal",
+            "dest": "headless",
             "default": False,
-            "help": "Forcibly enable parallel traversal in Stylo with STYLO_THREADS=4"}
+            "help": "Run tests in headless mode."}
+         ],
+        [["--headless-width"], {
+            "action": "store",
+            "dest": "headless_width",
+            "default": "1600",
+            "help": "Specify headless fake screen width (default: 1600)."}
+         ],
+        [["--headless-height"], {
+            "action": "store",
+            "dest": "headless_height",
+            "default": "1200",
+            "help": "Specify headless fake screen height (default: 1200)."}
+         ],
+        [["--single-stylo-traversal"], {
+            "action": "store_true",
+            "dest": "single_stylo_traversal",
+            "default": False,
+            "help": "Forcibly enable single thread traversal in Stylo with STYLO_THREADS=1"}
+         ],
+        [["--enable-stylo"], {
+            "action": "store_true",
+            "dest": "enable_stylo",
+            "default": False,
+            "help": "Run tests with Stylo enabled"}
+         ],
+        [["--disable-stylo"], {
+            "action": "store_true",
+            "dest": "disable_stylo",
+            "default": False,
+            "help": "Run tests with Stylo disabled"}
          ],
     ] + copy.deepcopy(testing_config_options) + \
         copy.deepcopy(blobupload_config_options) + \
@@ -156,6 +186,8 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
         cmd += ["--log-raw=-",
                 "--log-raw=%s" % os.path.join(dirs["abs_blob_upload_dir"],
                                               "wpt_raw.log"),
+                "--log-wptreport=%s" % os.path.join(dirs["abs_blob_upload_dir"],
+                                                    "wptreport.json"),
                 "--log-errorsummary=%s" % os.path.join(dirs["abs_blob_upload_dir"],
                                                        "wpt_errorsummary.log"),
                 "--binary=%s" % self.binary_path,
@@ -164,13 +196,18 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
                 "--stackfix-dir=%s" % os.path.join(dirs["abs_test_install_dir"], "bin"),
                 "--run-by-dir=3"]
 
+        if not sys.platform.startswith("linux"):
+            cmd += ["--exclude=css"]
+
         for test_type in c.get("test_type", []):
             cmd.append("--test-type=%s" % test_type)
 
         if not c["e10s"]:
             cmd.append("--disable-e10s")
 
-        if c["parallel_stylo_traversal"]:
+        if c["single_stylo_traversal"]:
+            cmd.append("--stylo-threads=1")
+        else:
             cmd.append("--stylo-threads=4")
 
         for opt in ["total_chunks", "this_chunk"]:
@@ -195,13 +232,19 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
             'abs_work_dir': dirs["abs_work_dir"]
             }
 
-        try_options, try_tests = self.try_args("web-platform-tests")
+        test_type_suite = {
+            "testharness": "web-platform-tests",
+            "reftest": "web-platform-tests-reftests",
+            "wdspec": "web-platform-tests-wdspec",
+        }
+        for test_type in c.get("test_type", []):
+            try_options, try_tests = self.try_args(test_type_suite[test_type])
 
-        cmd.extend(self.query_options(options,
-                                      try_options,
-                                      str_format_values=str_format_values))
-        cmd.extend(self.query_tests_args(try_tests,
-                                         str_format_values=str_format_values))
+            cmd.extend(self.query_options(options,
+                                          try_options,
+                                          str_format_values=str_format_values))
+            cmd.extend(self.query_tests_args(try_tests,
+                                             str_format_values=str_format_values))
 
         return cmd
 
@@ -216,9 +259,26 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
                           "web-platform/*"],
             suite_categories=["web-platform"])
 
+    def _install_fonts(self):
+        # Ensure the Ahem font is available
+        dirs = self.query_abs_dirs()
+
+        if not sys.platform.startswith("darwin"):
+            font_path = os.path.join(os.path.dirname(self.binary_path), "fonts")
+        else:
+            font_path = os.path.join(os.path.dirname(self.binary_path), os.pardir, "Resources", "res", "fonts")
+        if not os.path.exists(font_path):
+            os.makedirs(font_path)
+        ahem_src = os.path.join(dirs["abs_wpttest_dir"], "tests", "fonts", "Ahem.ttf")
+        ahem_dest = os.path.join(font_path, "Ahem.ttf")
+        with open(ahem_src, "rb") as src, open(ahem_dest, "wb") as dest:
+            dest.write(src.read())
+
     def run_tests(self):
         dirs = self.query_abs_dirs()
         cmd = self._query_cmd()
+
+        self._install_fonts()
 
         parser = StructuredOutputParser(config=self.config,
                                         log_obj=self.log_obj,
@@ -226,14 +286,33 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCovera
                                         error_list=BaseErrorList + HarnessErrorList)
 
         env = {'MINIDUMP_SAVE_PATH': dirs['abs_blob_upload_dir']}
-        env['RUST_BACKTRACE'] = '1'
+        env['RUST_BACKTRACE'] = 'full'
 
         if self.config['allow_software_gl_layers']:
             env['MOZ_LAYERS_ALLOW_SOFTWARE_GL'] = '1'
         if self.config['enable_webrender']:
             env['MOZ_WEBRENDER'] = '1'
+            env['MOZ_ACCELERATED'] = '1'
+        if self.config['headless']:
+            env['MOZ_HEADLESS'] = '1'
+            env['MOZ_HEADLESS_WIDTH'] = self.config['headless_width']
+            env['MOZ_HEADLESS_HEIGHT'] = self.config['headless_height']
 
-        env['STYLO_THREADS'] = '4' if self.config['parallel_stylo_traversal'] else '1'
+        if self.config['disable_stylo']:
+            if self.config['single_stylo_traversal']:
+                self.fatal("--disable-stylo conflicts with --single-stylo-traversal")
+            if self.config['enable_stylo']:
+                self.fatal("--disable-stylo conflicts with --enable-stylo")
+
+        if self.config['single_stylo_traversal']:
+            env['STYLO_THREADS'] = '1'
+        else:
+            env['STYLO_THREADS'] = '4'
+
+        if self.config['enable_stylo']:
+            env['STYLO_FORCE_ENABLED'] = '1'
+        if self.config['disable_stylo']:
+            env['STYLO_FORCE_DISABLED'] = '1'
 
         env = self.query_env(partial_env=env, log_level=INFO)
 

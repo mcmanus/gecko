@@ -17,7 +17,9 @@ from .generator import TaskGraphGenerator
 from .create import create_tasks
 from .parameters import Parameters
 from .taskgraph import TaskGraph
-from actions import render_actions_json
+from .try_option_syntax import parse_message
+from .actions import render_actions_json
+from taskgraph.util.partials import populate_release_history
 from . import GECKO
 
 from taskgraph.util.templates import Templates
@@ -34,14 +36,10 @@ ARTIFACTS_DIR = 'artifacts'
 # See `taskcluster/docs/parameters.rst` for information on parameters.
 PER_PROJECT_PARAMETERS = {
     'try': {
-        'target_tasks_method': 'try_option_syntax',
-        # Always perform optimization.  This makes it difficult to use try
-        # pushes to run a task that would otherwise be optimized, but is a
-        # compromise to avoid essentially disabling optimization in try.
-        'optimize_target_tasks': True,
+        'target_tasks_method': 'try_tasks',
         # By default, the `try_option_syntax` `target_task_method` ignores this
         # parameter, and enables/disables nightlies depending whether
-        # `--include-nightly` is specified in the commmit message.
+        # `--include-nightly` is specified in the commit message.
         # We're setting the `include_nightly` parameter to True here for when
         # we submit decision tasks against Try that use other
         # `target_task_method`s, like `nightly_fennec` or `mozilla_beta_tasks`,
@@ -107,6 +105,7 @@ def taskgraph_decision(options):
     """
 
     parameters = get_decision_parameters(options)
+
     # create a TaskGraphGenerator instance
     tgg = TaskGraphGenerator(
         root_dir=options['root'],
@@ -191,6 +190,49 @@ def get_decision_parameters(options):
     if options.get('target_tasks_method'):
         parameters['target_tasks_method'] = options['target_tasks_method']
 
+    # If the target method is nightly, we should build partials. This means
+    # knowing what has been released previously.
+    # An empty release_history is fine, it just means no partials will be built
+    parameters.setdefault('release_history', dict())
+    if 'nightly' in parameters.get('target_tasks_method', ''):
+        parameters['release_history'] = populate_release_history('Firefox', project)
+
+    # if try_task_config.json is present, load it
+    task_config_file = os.path.join(os.getcwd(), 'try_task_config.json')
+
+    # load try settings
+    parameters['try_mode'] = None
+    if os.path.isfile(task_config_file):
+        parameters['try_mode'] = 'try_task_config'
+        with open(task_config_file, 'r') as fh:
+            parameters['try_task_config'] = json.load(fh)
+    else:
+        parameters['try_task_config'] = None
+
+    if 'try:' in parameters['message']:
+        parameters['try_mode'] = 'try_option_syntax'
+        args = parse_message(parameters['message'])
+        parameters['try_options'] = args
+    else:
+        parameters['try_options'] = None
+
+    parameters['optimize_target_tasks'] = {
+        # The user has explicitly requested a set of jobs, so run them all
+        # regardless of optimization.  Their dependencies can be optimized,
+        # though.
+        'try_task_config': False,
+
+        # Always perform optimization.  This makes it difficult to use try
+        # pushes to run a task that would otherwise be optimized, but is a
+        # compromise to avoid essentially disabling optimization in try.
+        # to run tasks that would otherwise be optimized, ues try_task_config.
+        'try_option_syntax': True,
+
+        # since no try jobs have been specified, the standard target task will
+        # be applied, and tasks should be optimized out of that.
+        None: True,
+    }[parameters['try_mode']]
+
     return Parameters(parameters)
 
 
@@ -210,6 +252,7 @@ def write_artifact(filename, data):
 
 
 def get_action_yml(parameters):
+    # NOTE: when deleting this function, delete taskcluster/taskgraph/util/templates.py too
     templates = Templates(os.path.join(GECKO, "taskcluster/taskgraph"))
     action_parameters = parameters.copy()
 

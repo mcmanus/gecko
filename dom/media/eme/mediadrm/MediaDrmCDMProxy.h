@@ -28,7 +28,7 @@ class MediaDrmCDMCallbackProxy;
 class MediaDrmCDMProxy : public CDMProxy {
 public:
 
-  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaDrmCDMProxy)
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaDrmCDMProxy, override)
 
   MediaDrmCDMProxy(dom::MediaKeys* aKeys,
                    const nsAString& aKeySystem,
@@ -77,7 +77,7 @@ public:
 
   void OnSessionMessage(const nsAString& aSessionId,
                         dom::MediaKeyMessageType aMessageType,
-                        nsTArray<uint8_t>& aMessage) override;
+                        const nsTArray<uint8_t>& aMessage) override;
 
   void OnExpirationChange(const nsAString& aSessionId,
                           UnixTime aExpiryTime) override;
@@ -151,7 +151,8 @@ private:
                       PromiseId aId,
                       nsresult aCode,
                       const nsCString& aReason)
-      : mProxy(aProxy)
+      : Runnable("RejectPromiseTask")
+      , mProxy(aProxy)
       , mId(aId)
       , mCode(aCode)
       , mReason(aReason)

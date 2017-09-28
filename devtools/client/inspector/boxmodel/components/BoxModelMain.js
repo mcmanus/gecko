@@ -120,11 +120,11 @@ module.exports = createClass({
   },
 
   getHeightValue(property) {
-    let { layout } = this.props.boxModel;
-
     if (property == undefined) {
       return "-";
     }
+
+    let { layout } = this.props.boxModel;
 
     property -= parseFloat(layout["border-top-width"]) +
                 parseFloat(layout["border-bottom-width"]) +
@@ -136,11 +136,11 @@ module.exports = createClass({
   },
 
   getWidthValue(property) {
-    let { layout } = this.props.boxModel;
-
     if (property == undefined) {
       return "-";
     }
+
+    let { layout } = this.props.boxModel;
 
     property -= parseFloat(layout["border-left-width"]) +
                 parseFloat(layout["border-right-width"]) +
@@ -439,7 +439,7 @@ module.exports = createClass({
 
     return dom.div(
       {
-        className: "boxmodel-main",
+        className: "boxmodel-main devtools-monospace",
         "data-box": "position",
         ref: div => {
           this.positionLayout = div;

@@ -16,7 +16,7 @@ NS_IMPL_ADDREF_INHERITED(CSSImportRule, css::Rule)
 NS_IMPL_RELEASE_INHERITED(CSSImportRule, css::Rule)
 
 // QueryInterface implementation for CSSImportRule
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(CSSImportRule)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(CSSImportRule)
   NS_INTERFACE_MAP_ENTRY(nsIDOMCSSImportRule)
 NS_INTERFACE_MAP_END_INHERITING(css::Rule)
 
@@ -31,7 +31,7 @@ NS_IMETHODIMP
 CSSImportRule::GetMedia(nsIDOMMediaList** aMedia)
 {
   NS_ENSURE_ARG_POINTER(aMedia);
-  NS_ADDREF(*aMedia = Media());
+  NS_IF_ADDREF(*aMedia = GetMedia());
   return NS_OK;
 }
 

@@ -202,13 +202,6 @@ nsTreeColumn::GetIdConst(const char16_t** aIdConst)
 }
 
 NS_IMETHODIMP
-nsTreeColumn::GetAtom(nsIAtom** aAtom)
-{
-  NS_IF_ADDREF(*aAtom = GetAtom());
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 nsTreeColumn::GetIndex(int32_t* aIndex)
 {
   *aIndex = GetIndex();
@@ -411,7 +404,7 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsTreeColumns)
   NS_INTERFACE_MAP_ENTRY(nsITreeColumns)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
-                                                                                
+
 NS_IMPL_CYCLE_COLLECTING_ADDREF(nsTreeColumns)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(nsTreeColumns)
 
@@ -544,7 +537,7 @@ nsTreeColumns::GetKeyColumn()
 
     if (!first)
       first = currCol;
-    
+
     if (nsContentUtils::HasNonEmptyAttr(currCol->mContent, kNameSpaceID_None,
                                         nsGkAtoms::sortDirection)) {
       // Use sorted column as the key.

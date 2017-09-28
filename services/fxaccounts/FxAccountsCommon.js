@@ -96,6 +96,7 @@ exports.ON_PASSWORD_CHANGED_NOTIFICATION = "fxaccounts:password_changed";
 exports.ON_PASSWORD_RESET_NOTIFICATION = "fxaccounts:password_reset";
 exports.ON_ACCOUNT_DESTROYED_NOTIFICATION = "fxaccounts:account_destroyed";
 exports.ON_COLLECTION_CHANGED_NOTIFICATION = "sync:collection_changed";
+exports.ON_VERIFY_LOGIN_NOTIFICATION = "fxaccounts:verify_login";
 
 exports.FXA_PUSH_SCOPE_ACCOUNT_UPDATE = "chrome://fxa-device-update";
 
@@ -111,6 +112,8 @@ exports.FX_OAUTH_CLIENT_ID = "5882386c6d801776";
 
 // Firefox Accounts WebChannel ID
 exports.WEBCHANNEL_ID = "account_updates";
+
+exports.PREF_LAST_FXA_USER = "identity.fxaccounts.lastSignedInUserHash";
 
 // Server errno.
 // From https://github.com/mozilla/fxa-auth-server/blob/master/docs/api.md#response-format

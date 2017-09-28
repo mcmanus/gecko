@@ -41,7 +41,6 @@
 
 #include "nsILoadGroup.h"
 
-#include "nsIDOMHTMLMapElement.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/GenericSpecifiedValuesInlines.h"
@@ -79,9 +78,11 @@ namespace dom {
 class ImageLoadTask : public Runnable
 {
 public:
-  ImageLoadTask(HTMLImageElement *aElement, bool aAlwaysLoad,
+  ImageLoadTask(HTMLImageElement* aElement,
+                bool aAlwaysLoad,
                 bool aUseUrgentStartForChannel)
-    : mElement(aElement)
+    : Runnable("dom::ImageLoadTask")
+    , mElement(aElement)
     , mAlwaysLoad(aAlwaysLoad)
     , mUseUrgentStartForChannel(aUseUrgentStartForChannel)
   {
@@ -131,39 +132,19 @@ HTMLImageElement::~HTMLImageElement()
 }
 
 
-NS_IMPL_ADDREF_INHERITED(HTMLImageElement, Element)
-NS_IMPL_RELEASE_INHERITED(HTMLImageElement, Element)
-
 NS_IMPL_CYCLE_COLLECTION_INHERITED(HTMLImageElement,
                                    nsGenericHTMLElement,
                                    mResponsiveSelector)
 
-// QueryInterface implementation for HTMLImageElement
-NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(HTMLImageElement)
-  NS_INTERFACE_TABLE_INHERITED(HTMLImageElement,
-                               nsIDOMHTMLImageElement,
-                               nsIImageLoadingContent,
-                               imgIOnloadBlocker,
-                               imgINotificationObserver)
-NS_INTERFACE_TABLE_TAIL_INHERITING(nsGenericHTMLElement)
-
+NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(HTMLImageElement,
+                                             nsGenericHTMLElement,
+                                             nsIDOMHTMLImageElement,
+                                             nsIImageLoadingContent,
+                                             imgIOnloadBlocker,
+                                             imgINotificationObserver)
 
 NS_IMPL_ELEMENT_CLONE(HTMLImageElement)
 
-
-NS_IMPL_STRING_ATTR(HTMLImageElement, Name, name)
-NS_IMPL_STRING_ATTR(HTMLImageElement, Align, align)
-NS_IMPL_STRING_ATTR(HTMLImageElement, Alt, alt)
-NS_IMPL_STRING_ATTR(HTMLImageElement, Border, border)
-NS_IMPL_INT_ATTR(HTMLImageElement, Hspace, hspace)
-NS_IMPL_BOOL_ATTR(HTMLImageElement, IsMap, ismap)
-NS_IMPL_URI_ATTR(HTMLImageElement, LongDesc, longdesc)
-NS_IMPL_STRING_ATTR(HTMLImageElement, Sizes, sizes)
-NS_IMPL_URI_ATTR(HTMLImageElement, Lowsrc, lowsrc)
-NS_IMPL_URI_ATTR(HTMLImageElement, Src, src)
-NS_IMPL_STRING_ATTR(HTMLImageElement, Srcset, srcset)
-NS_IMPL_STRING_ATTR(HTMLImageElement, UseMap, usemap)
-NS_IMPL_INT_ATTR(HTMLImageElement, Vspace, vspace)
 
 bool
 HTMLImageElement::IsInteractiveHTMLContent(bool aIgnoreTabindex) const
@@ -178,7 +159,7 @@ HTMLImageElement::AsyncEventRunning(AsyncEventDispatcher* aEvent)
   nsImageLoadingContent::AsyncEventRunning(aEvent);
 }
 
-nsresult
+void
 HTMLImageElement::GetCurrentSrc(nsAString& aValue)
 {
   nsCOMPtr<nsIURI> currentURI;
@@ -190,8 +171,6 @@ HTMLImageElement::GetCurrentSrc(nsAString& aValue)
   } else {
     SetDOMStringToNull(aValue);
   }
-
-  return NS_OK;
 }
 
 bool
@@ -220,16 +199,6 @@ HTMLImageElement::Complete()
      (imgIRequest::STATUS_LOAD_COMPLETE | imgIRequest::STATUS_ERROR)) != 0;
 }
 
-NS_IMETHODIMP
-HTMLImageElement::GetComplete(bool* aComplete)
-{
-  NS_PRECONDITION(aComplete, "Null out param!");
-
-  *aComplete = Complete();
-
-  return NS_OK;
-}
-
 CSSIntPoint
 HTMLImageElement::GetXY()
 {
@@ -252,52 +221,6 @@ int32_t
 HTMLImageElement::Y()
 {
   return GetXY().y;
-}
-
-NS_IMETHODIMP
-HTMLImageElement::GetX(int32_t* aX)
-{
-  *aX = X();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-HTMLImageElement::GetY(int32_t* aY)
-{
-  *aY = Y();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-HTMLImageElement::GetHeight(uint32_t* aHeight)
-{
-  *aHeight = Height();
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-HTMLImageElement::SetHeight(uint32_t aHeight)
-{
-  ErrorResult rv;
-  SetHeight(aHeight, rv);
-  return rv.StealNSResult();
-}
-
-NS_IMETHODIMP
-HTMLImageElement::GetWidth(uint32_t* aWidth)
-{
-  *aWidth = Width();
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-HTMLImageElement::SetWidth(uint32_t aWidth)
-{
-  ErrorResult rv;
-  SetWidth(aWidth, rv);
-  return rv.StealNSResult();
 }
 
 bool
@@ -430,7 +353,7 @@ HTMLImageElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
     if (InResponsiveMode()) {
       if (mResponsiveSelector &&
           mResponsiveSelector->Content() == this) {
-        mResponsiveSelector->SetDefaultSource(NullString());
+        mResponsiveSelector->SetDefaultSource(VoidString());
       }
       QueueImageLoadTask(true);
     } else {
@@ -676,7 +599,10 @@ HTMLImageElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
     if (LoadingEnabled() &&
         OwnerDoc()->IsCurrentActiveDocument()) {
       nsContentUtils::AddScriptRunner(
-        NewRunnableMethod<bool>(this, &HTMLImageElement::MaybeLoadImage, false));
+        NewRunnableMethod<bool>("dom::HTMLImageElement::MaybeLoadImage",
+                                this,
+                                &HTMLImageElement::MaybeLoadImage,
+                                false));
     }
   }
 
@@ -769,9 +695,14 @@ HTMLImageElement::NodeInfoChanged(nsIDocument* aOldDoc)
     // Bug 1076583 - We still behave synchronously in the non-responsive case
     nsContentUtils::AddScriptRunner(
       (InResponsiveMode())
-        ? NewRunnableMethod<bool>(this, &HTMLImageElement::QueueImageLoadTask, true)
-        : NewRunnableMethod<bool>(this, &HTMLImageElement::MaybeLoadImage, true)
-    );
+        ? NewRunnableMethod<bool>("dom::HTMLImageElement::QueueImageLoadTask",
+                                  this,
+                                  &HTMLImageElement::QueueImageLoadTask,
+                                  true)
+        : NewRunnableMethod<bool>("dom::HTMLImageElement::MaybeLoadImage",
+                                  this,
+                                  &HTMLImageElement::MaybeLoadImage,
+                                  true));
   }
 }
 
@@ -894,7 +825,10 @@ HTMLImageElement::CopyInnerTo(Element* aDest, bool aPreallocateChildren)
       mUseUrgentStartForChannel = EventStateManager::IsHandlingUserInput();
 
       nsContentUtils::AddScriptRunner(
-        NewRunnableMethod<bool>(dest, &HTMLImageElement::MaybeLoadImage, false));
+        NewRunnableMethod<bool>("dom::HTMLImageElement::MaybeLoadImage",
+                                dest,
+                                &HTMLImageElement::MaybeLoadImage,
+                                false));
     }
   }
 

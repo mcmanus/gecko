@@ -10,6 +10,7 @@
 #include "nsISupports.h"
 #include "PaymentRequest.h"
 #include "mozilla/dom/PaymentRequestBinding.h"
+#include "mozilla/dom/PaymentRequestUpdateEventBinding.h"
 #include "mozilla/dom/PaymentResponseBinding.h"
 #include "nsCOMPtr.h"
 #include "nsTArray.h"
@@ -40,7 +41,9 @@ public:
    *  process can ask specific task by sending requestId only.
    */
   nsresult
-  CreatePayment(nsPIDOMWindowInner* aWindow,
+  CreatePayment(JSContext* aCx,
+                nsPIDOMWindowInner* aWindow,
+                nsIPrincipal* aTopLevelPrincipal,
                 const Sequence<PaymentMethodData>& aMethodData,
                 const PaymentDetailsInit& aDetails,
                 const PaymentOptions& aOptions,
@@ -51,8 +54,15 @@ public:
   nsresult AbortPayment(const nsAString& aRequestId);
   nsresult CompletePayment(const nsAString& aRequestId,
                            const PaymentComplete& aComplete);
+  nsresult UpdatePayment(JSContext* aCx,
+                         const nsAString& aRequestId,
+                         const PaymentDetailsUpdate& aDetails);
 
   nsresult RespondPayment(const IPCPaymentActionResponse& aResponse);
+  nsresult ChangeShippingAddress(const nsAString& aRequestId,
+                                 const IPCPaymentAddress& aAddress);
+  nsresult ChangeShippingOption(const nsAString& aRequestId,
+                                const nsAString& aOption);
 
   nsresult
   ReleasePaymentChild(PaymentRequestChild* aPaymentChild);
@@ -72,6 +82,7 @@ private:
   // The container for the created PaymentRequests
   nsTArray<RefPtr<PaymentRequest>> mRequestQueue;
   nsRefPtrHashtable<nsRefPtrHashKey<PaymentRequest>, PaymentRequestChild> mPaymentChildHash;
+  RefPtr<PaymentRequest> mShowingRequest;
 };
 
 } // end of namespace dom

@@ -36,7 +36,7 @@ EXPORTS += [
     'CaretAssociationHint.h',
     'FrameProperties.h',
     'LayoutLogging.h',
-    'nsArenaMemoryStats.h',
+    'MobileViewportManager.h',
     'nsBidi.h',
     'nsBidiPresUtils.h',
     'nsCaret.h',
@@ -62,9 +62,11 @@ EXPORTS += [
     'nsStyleSheetService.h',
     'ScrollbarStyles.h',
     'StackArena.h',
+    'TouchManager.h',
     'Units.h',
     'UnitTransforms.h',
     'WordMovementType.h',
+    'ZoomConstraintsClient.h',
 ]
 
 EXPORTS.mozilla += [
@@ -120,21 +122,6 @@ UNIFIED_SOURCES += [
     'TouchManager.cpp',
     'ZoomConstraintsClient.cpp',
 ]
-
-if CONFIG['ENABLE_INTL_API']:
-    EXPORTS += [
-        'nsBidi_ICU.h',
-    ]
-    UNIFIED_SOURCES += [
-        'nsBidi_ICU.cpp',
-    ]
-else:
-    EXPORTS += [
-        'nsBidi_noICU.h',
-    ]
-    UNIFIED_SOURCES += [
-        'nsBidi_noICU.cpp',
-    ]
 
 # nsRefreshDriver.cpp needs to be built separately because of name clashes in the OS X headers
 SOURCES += [

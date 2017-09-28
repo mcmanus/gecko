@@ -15,6 +15,11 @@ extern crate webrender_bindings;
 extern crate cubeb_pulse;
 extern crate encoding_c;
 extern crate encoding_glue;
+#[cfg(feature = "cubeb-remoting")]
+extern crate audioipc_client;
+#[cfg(feature = "cubeb-remoting")]
+extern crate audioipc_server;
+extern crate u2fhid;
 
 use std::boxed::Box;
 use std::ffi::CStr;
@@ -38,7 +43,7 @@ pub extern "C" fn intentional_panic(message: *const c_char) {
 }
 
 /// Contains the panic message, if set.
-static mut PANIC_REASON: Option<(*const str, usize)> = None;
+static mut PANIC_REASON: Option<*const str> = None;
 
 /// Configure a panic hook to capture panic messages for crash reports.
 ///
@@ -50,34 +55,37 @@ static mut PANIC_REASON: Option<(*const str, usize)> = None;
 ///    overwrite `gMozCrashReason` with an unhelpful string.
 #[no_mangle]
 pub extern "C" fn install_rust_panic_hook() {
-    panic::set_hook(Box::new(|info| {
+    let default_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
         // Try to handle &str/String payloads, which should handle 99% of cases.
         let payload = info.payload();
         // We'll hold a raw *const str here, but it will be OK because
         // Rust is going to abort the process before the payload could be
         // deallocated.
         if let Some(s) = payload.downcast_ref::<&str>() {
-            unsafe { PANIC_REASON = Some((*s as *const str, s.len())) }
+            unsafe { PANIC_REASON = Some(*s as *const str); }
         } else if let Some(s) = payload.downcast_ref::<String>() {
-            unsafe { PANIC_REASON = Some((s.as_str() as *const str, s.len())) }
+            unsafe { PANIC_REASON = Some(s.as_str() as *const str); }
         } else {
             // Not the most helpful thing, but seems unlikely to happen
             // in practice.
             println!("Unhandled panic payload!");
         }
+        // Fall through to the default hook so we still print the reason and
+        // backtrace to the console.
+        default_hook(info);
     }));
 }
 
 #[no_mangle]
 pub extern "C" fn get_rust_panic_reason(reason: *mut *const c_char, length: *mut usize) -> bool {
     unsafe {
-        match PANIC_REASON {
-            Some((s, len)) => {
-                *reason = s as *const c_char;
-                *length = len;
-                true
-            }
-            None => false,
+        if let Some(s) = PANIC_REASON {
+            *reason = s as *const c_char;
+            *length = (*s).len();
+            true
+        } else {
+            false
         }
     }
 }

@@ -11,6 +11,7 @@
 #include "MediaInfo.h"
 #include "TimeUnits.h"
 #include "VideoLimits.h"
+#include "mozilla/gfx/Point.h" // for gfx::IntSize
 #include "mozilla/AbstractThread.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/CheckedInt.h"
@@ -20,10 +21,10 @@
 #include "mozilla/UniquePtr.h"
 #include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
+#include "nsINamed.h"
 #include "nsIThread.h"
 #include "nsITimer.h"
-#include "nsRect.h"
-#include "nsSize.h"
+
 #include "nsThreadUtils.h"
 #include "prtime.h"
 
@@ -90,7 +91,11 @@ private:
 class ShutdownThreadEvent : public Runnable
 {
 public:
-  explicit ShutdownThreadEvent(nsIThread* aThread) : mThread(aThread) {}
+  explicit ShutdownThreadEvent(nsIThread* aThread)
+    : Runnable("ShutdownThreadEvent")
+    , mThread(aThread)
+  {
+  }
   ~ShutdownThreadEvent() {}
   NS_IMETHOD Run() override {
     mThread->Shutdown();
@@ -144,7 +149,8 @@ nsresult SecondsToUsecs(double aSeconds, int64_t& aOutUsecs);
 // Scales the display rect aDisplay by aspect ratio aAspectRatio.
 // Note that aDisplay must be validated by IsValidVideoRegion()
 // before being used!
-void ScaleDisplayByAspectRatio(nsIntSize& aDisplay, float aAspectRatio);
+void
+ScaleDisplayByAspectRatio(gfx::IntSize& aDisplay, float aAspectRatio);
 
 // Downmix Stereo audio samples to Mono.
 // Input are the buffer contains stereo data and the number of frames.
@@ -157,8 +163,10 @@ bool IsVideoContentType(const nsCString& aContentType);
 // extracted inside a frame of size aFrame, and scaled up to and displayed
 // at a size of aDisplay. You should validate the frame, picture, and
 // display regions before using them to display video frames.
-bool IsValidVideoRegion(const nsIntSize& aFrame, const nsIntRect& aPicture,
-                        const nsIntSize& aDisplay);
+bool
+IsValidVideoRegion(const gfx::IntSize& aFrame,
+                   const gfx::IntRect& aPicture,
+                   const gfx::IntSize& aDisplay);
 
 // Template to automatically set a variable to a value on scope exit.
 // Useful for unsetting flags, etc.
@@ -189,7 +197,7 @@ class SharedThreadPool;
 // made async supported by MozPromise, making this unnecessary and
 // permitting unifying the pool.
 enum class MediaThreadType {
-  PLAYBACK, // MediaDecoderStateMachine and MediaDecoderReader
+  PLAYBACK, // MediaDecoderStateMachine and MediaFormatReader
   PLATFORM_DECODER
 };
 // Returns the thread pool that is shared amongst all decoder state machines
@@ -265,8 +273,11 @@ RefPtr<GenericPromise> InvokeUntil(Work aWork, Condition aCondition) {
       } else if (aLocalCondition()) {
         aPromise->Resolve(true, __func__);
       } else {
-        nsCOMPtr<nsIRunnable> r =
-          NS_NewRunnableFunction([aPromise, aLocalWork, aLocalCondition] () { Iteration(aPromise, aLocalWork, aLocalCondition); });
+        nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction(
+          "InvokeUntil::Helper::Iteration",
+          [aPromise, aLocalWork, aLocalCondition]() {
+            Iteration(aPromise, aLocalWork, aLocalCondition);
+          });
         AbstractThread::GetCurrent()->Dispatch(r.forget());
       }
     }
@@ -277,10 +288,11 @@ RefPtr<GenericPromise> InvokeUntil(Work aWork, Condition aCondition) {
 }
 
 // Simple timer to run a runnable after a timeout.
-class SimpleTimer : public nsITimerCallback
+class SimpleTimer : public nsITimerCallback, public nsINamed
 {
 public:
   NS_DECL_ISUPPORTS
+  NS_DECL_NSINAMED
 
   // Create a new timer to run aTask after aTimeoutMs milliseconds
   // on thread aTarget. If aTarget is null, task is run on the main thread.
@@ -340,22 +352,22 @@ constexpr bool
 StartsWithMIMETypeMajor(const char* aString,
                         const char* aMajor, size_t aMajorRemaining)
 {
-  return (aMajorRemaining == 0 && *aString == '/')
-         || (*aString == *aMajor
-             && StartsWithMIMETypeMajor(aString + 1,
-                                        aMajor + 1, aMajorRemaining - 1));
+  return (aMajorRemaining == 0 && *aString == '/') ||
+         (*aString == *aMajor && StartsWithMIMETypeMajor(aString + 1,
+                                                         aMajor + 1,
+                                                         aMajorRemaining - 1));
 }
 
 // aString should only contain [a-z0-9\-\.] and a final '\0'.
 constexpr bool
 EndsWithMIMESubtype(const char* aString, size_t aRemaining)
 {
-  return aRemaining == 0
-         || (((*aString >= 'a' && *aString <= 'z')
-              || (*aString >= '0' && *aString <= '9')
-              || *aString == '-'
-              || *aString == '.')
-             && EndsWithMIMESubtype(aString + 1, aRemaining - 1));
+  return aRemaining == 0 ||
+         (((*aString >= 'a' && *aString <= 'z') ||
+           (*aString >= '0' && *aString <= '9') ||
+           *aString == '-' ||
+           *aString == '.') &&
+          EndsWithMIMESubtype(aString + 1, aRemaining - 1));
 }
 
 // Simple MIME-type literal string checker with a given (major) type.
@@ -365,10 +377,10 @@ constexpr bool
 IsMIMETypeWithMajor(const char* aString, size_t aLength,
                     const char (&aMajor)[MajorLengthPlus1])
 {
-  return aLength > MajorLengthPlus1 // Major + '/' + at least 1 char
-         && StartsWithMIMETypeMajor(aString, aMajor, MajorLengthPlus1 - 1)
-         && EndsWithMIMESubtype(aString + MajorLengthPlus1,
-                                aLength - MajorLengthPlus1);
+  return aLength > MajorLengthPlus1 && // Major + '/' + at least 1 char
+         StartsWithMIMETypeMajor(aString, aMajor, MajorLengthPlus1 - 1) &&
+         EndsWithMIMESubtype(aString + MajorLengthPlus1,
+                             aLength - MajorLengthPlus1);
 }
 
 } // namespace detail
@@ -379,9 +391,9 @@ IsMIMETypeWithMajor(const char* aString, size_t aLength,
 constexpr bool
 IsMediaMIMEType(const char* aString, size_t aLength)
 {
-  return detail::IsMIMETypeWithMajor(aString, aLength, "application")
-         || detail::IsMIMETypeWithMajor(aString, aLength, "audio")
-         || detail::IsMIMETypeWithMajor(aString, aLength, "video");
+  return detail::IsMIMETypeWithMajor(aString, aLength, "application") ||
+         detail::IsMIMETypeWithMajor(aString, aLength, "audio") ||
+         detail::IsMIMETypeWithMajor(aString, aLength, "video");
 }
 
 // Simple MIME-type string literal checker.
@@ -512,10 +524,13 @@ public:
   explicit StringListRange(const String& aList) : mList(aList) {}
   Iterator begin() const
   {
-    return Iterator(mList.Data()
-                    + ((empties == StringListRangeEmptyItems::ProcessEmptyItems
-                        && mList.Length() == 0) ? 1 : 0),
-                    mList.Length());
+    return Iterator(
+      mList.Data()
+      + ((empties == StringListRangeEmptyItems::ProcessEmptyItems &&
+          mList.Length() == 0)
+          ? 1
+          : 0),
+      mList.Length());
   }
   Iterator end() const
   {

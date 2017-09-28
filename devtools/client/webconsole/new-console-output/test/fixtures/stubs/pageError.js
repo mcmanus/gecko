@@ -19,6 +19,7 @@ stubPreparedMessages.set("ReferenceError: asdf is not defined", new ConsoleMessa
   "source": "javascript",
   "timeStamp": 1476573167137,
   "type": "log",
+  "helperType": null,
   "level": "error",
   "messageText": "ReferenceError: asdf is not defined",
   "parameters": null,
@@ -44,7 +45,7 @@ stubPreparedMessages.set("ReferenceError: asdf is not defined", new ConsoleMessa
     },
     {
       "filename": "resource://testing-common/content-task.js line 52 > eval",
-      "lineNumber": 6,
+      "lineNumber": 7,
       "columnNumber": 9,
       "functionName": null
     },
@@ -73,6 +74,7 @@ stubPreparedMessages.set("SyntaxError: redeclaration of let a", new ConsoleMessa
   "source": "javascript",
   "timeStamp": 1487992945524,
   "type": "log",
+  "helperType": null,
   "level": "error",
   "messageText": "SyntaxError: redeclaration of let a",
   "parameters": null,
@@ -80,7 +82,7 @@ stubPreparedMessages.set("SyntaxError: redeclaration of let a", new ConsoleMessa
   "stacktrace": [
     {
       "filename": "resource://testing-common/content-task.js line 52 > eval",
-      "lineNumber": 6,
+      "lineNumber": 7,
       "columnNumber": 9,
       "functionName": null
     },
@@ -117,6 +119,7 @@ stubPreparedMessages.set("TypeError longString message", new ConsoleMessage({
   "source": "javascript",
   "timeStamp": 1493109507061,
   "type": "log",
+  "helperType": null,
   "level": "error",
   "messageText": {
     "type": "longString",
@@ -135,7 +138,7 @@ stubPreparedMessages.set("TypeError longString message", new ConsoleMessage({
     },
     {
       "filename": "resource://testing-common/content-task.js line 52 > eval",
-      "lineNumber": 6,
+      "lineNumber": 7,
       "columnNumber": 9,
       "functionName": null
     },
@@ -197,7 +200,7 @@ stubPackets.set("ReferenceError: asdf is not defined", {
       },
       {
         "filename": "resource://testing-common/content-task.js line 52 > eval",
-        "lineNumber": 6,
+        "lineNumber": 7,
         "columnNumber": 9,
         "functionName": null
       },
@@ -233,7 +236,7 @@ stubPackets.set("SyntaxError: redeclaration of let a", {
     "stacktrace": [
       {
         "filename": "resource://testing-common/content-task.js line 52 > eval",
-        "lineNumber": 6,
+        "lineNumber": 7,
         "columnNumber": 9,
         "functionName": null
       },
@@ -289,7 +292,7 @@ stubPackets.set("TypeError longString message", {
       },
       {
         "filename": "resource://testing-common/content-task.js line 52 > eval",
-        "lineNumber": 6,
+        "lineNumber": 7,
         "columnNumber": 9,
         "functionName": null
       },

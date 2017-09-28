@@ -7,11 +7,13 @@
 use {Atom, LocalName, Namespace};
 use context::QuirksMode;
 use element_state::ElementState;
+use fallible::FallibleVec;
+use hashglobe::FailedAllocationError;
 use selector_map::{MaybeCaseInsensitiveHashMap, SelectorMap, SelectorMapEntry};
 use selector_parser::SelectorImpl;
 use selectors::attr::NamespaceConstraint;
-use selectors::parser::{AncestorHashes, Combinator, Component};
-use selectors::parser::{Selector, SelectorAndHashes, SelectorIter, SelectorMethods};
+use selectors::parser::{Combinator, Component};
+use selectors::parser::{Selector, SelectorIter, SelectorMethods};
 use selectors::visitor::SelectorVisitor;
 use smallvec::SmallVec;
 
@@ -54,15 +56,15 @@ pub fn dir_selector_to_state(s: &[u16]) -> ElementState {
 /// rules and determine the maximum effect that a given state or attribute
 /// change may have on the style of elements in the document.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 pub struct Dependency {
     /// The dependency selector.
+    #[cfg_attr(feature = "gecko",
+               ignore_malloc_size_of = "CssRules have primary refs, we measure there")]
     #[cfg_attr(feature = "servo", ignore_heap_size_of = "Arc")]
     pub selector: Selector<SelectorImpl>,
-    /// The ancestor hashes associated with the above selector at the given
-    /// offset.
-    #[cfg_attr(feature = "servo", ignore_heap_size_of = "No heap data")]
-    pub hashes: AncestorHashes,
+
     /// The offset into the selector that we should match on.
     pub selector_offset: usize,
 }
@@ -109,15 +111,12 @@ impl SelectorMapEntry for Dependency {
     fn selector(&self) -> SelectorIter<SelectorImpl> {
         self.selector.iter_from(self.selector_offset)
     }
-
-    fn hashes(&self) -> &AncestorHashes {
-        &self.hashes
-    }
 }
 
 /// The same, but for state selectors, which can track more exactly what state
 /// do they track.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 pub struct StateDependency {
     /// The other dependency fields.
@@ -128,11 +127,7 @@ pub struct StateDependency {
 
 impl SelectorMapEntry for StateDependency {
     fn selector(&self) -> SelectorIter<SelectorImpl> {
-        self.dep.selector.iter_from(self.dep.selector_offset)
-    }
-
-    fn hashes(&self) -> &AncestorHashes {
-        &self.dep.hashes
+        self.dep.selector()
     }
 }
 
@@ -144,14 +139,16 @@ impl SelectorMapEntry for StateDependency {
 /// In particular, we want to lookup as few things as possible to get the fewer
 /// selectors the better, so this looks up by id, class, or looks at the list of
 /// state/other attribute affecting selectors.
+#[derive(Debug)]
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 pub struct InvalidationMap {
     /// A map from a given class name to all the selectors with that class
     /// selector.
-    pub class_to_selector: MaybeCaseInsensitiveHashMap<Atom, SelectorMap<Dependency>>,
+    pub class_to_selector: MaybeCaseInsensitiveHashMap<Atom, SmallVec<[Dependency; 1]>>,
     /// A map from a given id to all the selectors with that ID in the
     /// stylesheets currently applying to the document.
-    pub id_to_selector: MaybeCaseInsensitiveHashMap<Atom, SelectorMap<Dependency>>,
+    pub id_to_selector: MaybeCaseInsensitiveHashMap<Atom, SmallVec<[Dependency; 1]>>,
     /// A map of all the state dependencies.
     pub state_affecting_selectors: SelectorMap<StateDependency>,
     /// A map of other attribute affecting selectors.
@@ -193,34 +190,35 @@ impl InvalidationMap {
         })
     }
 
-    /// Adds a selector to this `InvalidationMap`.
+    /// Adds a selector to this `InvalidationMap`.  Returns Err(..) to
+    /// signify OOM.
     pub fn note_selector(
         &mut self,
-        selector_and_hashes: &SelectorAndHashes<SelectorImpl>,
-        quirks_mode: QuirksMode)
-    {
-        self.collect_invalidations_for(selector_and_hashes, quirks_mode)
+        selector: &Selector<SelectorImpl>,
+        quirks_mode: QuirksMode
+    ) -> Result<(), FailedAllocationError> {
+        self.collect_invalidations_for(selector, quirks_mode)
     }
 
     /// Clears this map, leaving it empty.
     pub fn clear(&mut self) {
         self.class_to_selector.clear();
         self.id_to_selector.clear();
-        self.state_affecting_selectors = SelectorMap::new();
-        self.other_attribute_affecting_selectors = SelectorMap::new();
+        self.state_affecting_selectors.clear();
+        self.other_attribute_affecting_selectors.clear();
         self.has_id_attribute_selectors = false;
         self.has_class_attribute_selectors = false;
     }
 
+    // Returns Err(..) to signify OOM.
     fn collect_invalidations_for(
         &mut self,
-        selector_and_hashes: &SelectorAndHashes<SelectorImpl>,
-        quirks_mode: QuirksMode)
-    {
-        debug!("InvalidationMap::collect_invalidations_for({:?})",
-               selector_and_hashes.selector);
+        selector: &Selector<SelectorImpl>,
+        quirks_mode: QuirksMode
+    ) -> Result<(), FailedAllocationError> {
+        debug!("InvalidationMap::collect_invalidations_for({:?})", selector);
 
-        let mut iter = selector_and_hashes.selector.iter();
+        let mut iter = selector.iter();
         let mut combinator;
         let mut index = 0;
 
@@ -249,66 +247,46 @@ impl InvalidationMap {
                 index += 1; // Account for the simple selector.
             }
 
-            // Reuse the bloom hashes if this is the base selector. Otherwise,
-            // rebuild them.
-            let mut hashes = None;
-
-            let mut get_hashes = || -> AncestorHashes {
-                if hashes.is_none() {
-                    hashes = Some(if sequence_start == 0 {
-                        selector_and_hashes.hashes.clone()
-                    } else {
-                        let seq_iter = selector_and_hashes.selector.iter_from(sequence_start);
-                        AncestorHashes::from_iter(seq_iter)
-                    });
-                }
-                hashes.clone().unwrap()
-            };
-
             self.has_id_attribute_selectors |= compound_visitor.has_id_attribute_selectors;
             self.has_class_attribute_selectors |= compound_visitor.has_class_attribute_selectors;
 
             for class in compound_visitor.classes {
                 self.class_to_selector
                     .entry(class, quirks_mode)
-                    .or_insert_with(SelectorMap::new)
-                    .insert(Dependency {
-                        selector: selector_and_hashes.selector.clone(),
+                    .or_insert_with(SmallVec::new)
+                    .try_push(Dependency {
+                        selector: selector.clone(),
                         selector_offset: sequence_start,
-                        hashes: get_hashes(),
-                    }, quirks_mode);
+                    })?;
             }
 
             for id in compound_visitor.ids {
                 self.id_to_selector
                     .entry(id, quirks_mode)
-                    .or_insert_with(SelectorMap::new)
-                    .insert(Dependency {
-                        selector: selector_and_hashes.selector.clone(),
+                    .or_insert_with(SmallVec::new)
+                    .try_push(Dependency {
+                        selector: selector.clone(),
                         selector_offset: sequence_start,
-                        hashes: get_hashes(),
-                    }, quirks_mode);
+                    })?;
             }
 
             if !compound_visitor.state.is_empty() {
                 self.state_affecting_selectors
                     .insert(StateDependency {
                         dep: Dependency {
-                            selector: selector_and_hashes.selector.clone(),
+                            selector: selector.clone(),
                             selector_offset: sequence_start,
-                            hashes: get_hashes(),
                         },
                         state: compound_visitor.state,
-                    }, quirks_mode);
+                    }, quirks_mode)?;
             }
 
             if compound_visitor.other_attributes {
                 self.other_attribute_affecting_selectors
                     .insert(Dependency {
-                        selector: selector_and_hashes.selector.clone(),
+                        selector: selector.clone(),
                         selector_offset: sequence_start,
-                        hashes: get_hashes(),
-                    }, quirks_mode);
+                    }, quirks_mode)?;
             }
 
             combinator = iter.next_sequence();
@@ -318,6 +296,8 @@ impl InvalidationMap {
 
             index += 1; // Account for the combinator.
         }
+
+        Ok(())
     }
 }
 

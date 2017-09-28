@@ -132,7 +132,7 @@ txToDocHandlerFactory::createHandlerWith(txOutputFormat* aFormat,
 
 nsresult
 txToDocHandlerFactory::createHandlerWith(txOutputFormat* aFormat,
-                                         const nsSubstring& aName,
+                                         const nsAString& aName,
                                          int32_t aNsID,
                                          txAXMLEventHandler** aHandler)
 {
@@ -224,7 +224,7 @@ txToFragmentHandlerFactory::createHandlerWith(txOutputFormat* aFormat,
 
 nsresult
 txToFragmentHandlerFactory::createHandlerWith(txOutputFormat* aFormat,
-                                              const nsSubstring& aName,
+                                              const nsAString& aName,
                                               int32_t aNsID,
                                               txAXMLEventHandler** aHandler)
 {
@@ -546,7 +546,8 @@ public:
   RefPtr<txMozillaXSLTProcessor> mProcessor;
 
   explicit nsTransformBlockerEvent(txMozillaXSLTProcessor* processor)
-    : mProcessor(processor)
+    : mozilla::Runnable("nsTransformBlockerEvent")
+    , mProcessor(processor)
   {}
 
   ~nsTransformBlockerEvent()
@@ -1076,25 +1077,22 @@ txMozillaXSLTProcessor::reportError(nsresult aResult,
         nsCOMPtr<nsIStringBundleService> sbs =
             mozilla::services::GetStringBundleService();
         if (sbs) {
-            nsXPIDLString errorText;
-            sbs->FormatStatusMessage(aResult, EmptyString().get(),
-                                     getter_Copies(errorText));
+            nsAutoString errorText;
+            sbs->FormatStatusMessage(aResult, EmptyString().get(), errorText);
 
-            nsXPIDLString errorMessage;
+            nsAutoString errorMessage;
             nsCOMPtr<nsIStringBundle> bundle;
             sbs->CreateBundle(XSLT_MSGS_URL, getter_AddRefs(bundle));
 
             if (bundle) {
                 const char16_t* error[] = { errorText.get() };
                 if (mStylesheet) {
-                    bundle->FormatStringFromName(u"TransformError",
-                                                 error, 1,
-                                                 getter_Copies(errorMessage));
+                    bundle->FormatStringFromName("TransformError",
+                                                 error, 1, errorMessage);
                 }
                 else {
-                    bundle->FormatStringFromName(u"LoadingError",
-                                                 error, 1,
-                                                 getter_Copies(errorMessage));
+                    bundle->FormatStringFromName("LoadingError",
+                                                 error, 1, errorMessage);
                 }
             }
             mErrorText.Assign(errorMessage);

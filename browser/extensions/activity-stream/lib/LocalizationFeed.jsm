@@ -4,13 +4,10 @@
 "use strict";
 
 const {utils: Cu} = Components;
-const {actionTypes: at, actionCreators: ac} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
-
+Cu.import("resource://gre/modules/Services.jsm");
 Cu.importGlobalProperties(["fetch"]);
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-  "resource://gre/modules/Services.jsm");
+const {actionCreators: ac, actionTypes: at} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
 
 // What is our default locale for the app?
 const DEFAULT_LOCALE = "en-US";
@@ -33,14 +30,18 @@ this.LocalizationFeed = class LocalizationFeed {
   }
 
   updateLocale() {
-    let locale = Services.locale.getRequestedLocale() || DEFAULT_LOCALE;
-    let strings = this.allStrings[locale];
+    // Order locales based on what we have available with fallback always first
+    const locales = Services.locale.negotiateLanguages(
+      Services.locale.getAppLocalesAsLangTags(), // desired locales
+      Object.keys(this.allStrings), // available locales
+      DEFAULT_LOCALE // fallback
+    ).reverse();
 
-    // Use the default strings for any that are missing
-    if (locale !== DEFAULT_LOCALE) {
-      strings = Object.assign({}, this.allStrings[DEFAULT_LOCALE], strings || {});
-    }
+    // Start with default (first) locale then merge in strings of better locales
+    const strings = Object.assign({}, ...locales.map(l => this.allStrings[l]));
 
+    // Use the best (last) locale as the primary locale
+    const locale = locales.pop();
     this.store.dispatch(ac.BroadcastToContent({
       type: at.LOCALE_UPDATED,
       data: {

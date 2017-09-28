@@ -4,12 +4,11 @@
 /* import-globals-from head.js */
 "use strict";
 
-const TEST_URI = "data:text/html;charset=utf-8,browser_css_angle.js";
 var {angleUtils} = require("devtools/client/shared/css-angle");
 
 add_task(function* () {
   yield addTab("about:blank");
-  let [host] = yield createHost("bottom", TEST_URI);
+  let [host] = yield createHost("bottom");
 
   info("Starting the test");
   testAngleUtils();
@@ -49,16 +48,17 @@ function testAngleValidity() {
 }
 
 function testToString(angle, deg, rad, grad, turn) {
-  angle.angleUnit = angleUtils.CssAngle.ANGLEUNIT.deg;
+  let { ANGLEUNIT } = angleUtils.CssAngle.prototype;
+  angle.angleUnit = ANGLEUNIT.deg;
   is(angle.toString(), deg, "toString() with deg type");
 
-  angle.angleUnit = angleUtils.CssAngle.ANGLEUNIT.rad;
+  angle.angleUnit = ANGLEUNIT.rad;
   is(angle.toString(), rad, "toString() with rad type");
 
-  angle.angleUnit = angleUtils.CssAngle.ANGLEUNIT.grad;
+  angle.angleUnit = ANGLEUNIT.grad;
   is(angle.toString(), grad, "toString() with grad type");
 
-  angle.angleUnit = angleUtils.CssAngle.ANGLEUNIT.turn;
+  angle.angleUnit = ANGLEUNIT.turn;
   is(angle.toString(), turn, "toString() with turn type");
 }
 

@@ -19,6 +19,7 @@
 #include "nsContentUtils.h"
 #include "mozilla/dom/GamepadManager.h"
 #include "mozilla/dom/VRServiceTest.h"
+#include "mozilla/layers/SyncObject.h"
 
 using layers::TextureClient;
 
@@ -61,7 +62,8 @@ VRManagerChild::IdentifyTextureHost(const TextureFactoryIdentifier& aIdentifier)
 {
   if (sVRManagerChildSingleton) {
     sVRManagerChildSingleton->mBackend = aIdentifier.mParentBackend;
-    sVRManagerChildSingleton->mSyncObject = SyncObject::CreateSyncObject(aIdentifier.mSyncHandle);
+    sVRManagerChildSingleton->mSyncObject =
+        layers::SyncObjectClient::CreateSyncObjectClient(aIdentifier.mSyncHandle);
   }
 }
 
@@ -192,15 +194,13 @@ VRManagerChild::AllocPVRLayerChild(const uint32_t& aDisplayID,
                                    const float& aRightEyeHeight,
                                    const uint32_t& aGroup)
 {
-  RefPtr<VRLayerChild> layer = new VRLayerChild(aDisplayID, this);
-  return layer.forget().take();
+  return VRLayerChild::CreateIPDLActor();
 }
 
 bool
 VRManagerChild::DeallocPVRLayerChild(PVRLayerChild* actor)
 {
-  delete actor;
-  return true;
+  return VRLayerChild::DestroyIPDLActor(actor);
 }
 
 void
@@ -403,10 +403,10 @@ VRManagerChild::CreateVRLayer(uint32_t aDisplayID,
                               uint32_t aGroup)
 {
   PVRLayerChild* vrLayerChild = AllocPVRLayerChild(aDisplayID, aLeftEyeRect.x,
-                                                   aLeftEyeRect.y, aLeftEyeRect.width,
-                                                   aLeftEyeRect.height, aRightEyeRect.x,
-                                                   aRightEyeRect.y, aRightEyeRect.width,
-                                                   aRightEyeRect.height,
+                                                   aLeftEyeRect.y, aLeftEyeRect.Width(),
+                                                   aLeftEyeRect.Height(), aRightEyeRect.x,
+                                                   aRightEyeRect.y, aRightEyeRect.Width(),
+                                                   aRightEyeRect.Height(),
                                                    aGroup);
   // Do the DOM labeling.
   if (aTarget) {
@@ -414,10 +414,10 @@ VRManagerChild::CreateVRLayer(uint32_t aDisplayID,
     MOZ_ASSERT(vrLayerChild->GetActorEventTarget());
   }
   return SendPVRLayerConstructor(vrLayerChild, aDisplayID, aLeftEyeRect.x,
-                                 aLeftEyeRect.y, aLeftEyeRect.width,
-                                 aLeftEyeRect.height, aRightEyeRect.x,
-                                 aRightEyeRect.y, aRightEyeRect.width,
-                                 aRightEyeRect.height,
+                                 aLeftEyeRect.y, aLeftEyeRect.Width(),
+                                 aLeftEyeRect.Height(), aRightEyeRect.x,
+                                 aRightEyeRect.y, aRightEyeRect.Width(),
+                                 aRightEyeRect.Height(),
                                  aGroup);
 }
 
@@ -528,6 +528,8 @@ VRManagerChild::RecvReplyCreateVRServiceTestController(const nsCString& aID,
 void
 VRManagerChild::RunFrameRequestCallbacks()
 {
+  AutoProfilerTracing tracing("VR", "RunFrameRequestCallbacks");
+
   TimeStamp nowTime = TimeStamp::Now();
   mozilla::TimeDuration duration = nowTime - mStartTimeStamp;
   DOMHighResTimeStamp timeStamp = duration.ToMilliseconds();
@@ -544,7 +546,9 @@ VRManagerChild::RunFrameRequestCallbacks()
 void
 VRManagerChild::FireDOMVRDisplayMountedEvent(uint32_t aDisplayID)
 {
-  nsContentUtils::AddScriptRunner(NewRunnableMethod<uint32_t>(this,
+  nsContentUtils::AddScriptRunner(NewRunnableMethod<uint32_t>(
+    "gfx::VRManagerChild::FireDOMVRDisplayMountedEventInternal",
+    this,
     &VRManagerChild::FireDOMVRDisplayMountedEventInternal,
     aDisplayID));
 }
@@ -552,7 +556,9 @@ VRManagerChild::FireDOMVRDisplayMountedEvent(uint32_t aDisplayID)
 void
 VRManagerChild::FireDOMVRDisplayUnmountedEvent(uint32_t aDisplayID)
 {
-  nsContentUtils::AddScriptRunner(NewRunnableMethod<uint32_t>(this,
+  nsContentUtils::AddScriptRunner(NewRunnableMethod<uint32_t>(
+    "gfx::VRManagerChild::FireDOMVRDisplayUnmountedEventInternal",
+    this,
     &VRManagerChild::FireDOMVRDisplayUnmountedEventInternal,
     aDisplayID));
 }
@@ -560,7 +566,9 @@ VRManagerChild::FireDOMVRDisplayUnmountedEvent(uint32_t aDisplayID)
 void
 VRManagerChild::FireDOMVRDisplayConnectEvent(uint32_t aDisplayID)
 {
-  nsContentUtils::AddScriptRunner(NewRunnableMethod<uint32_t>(this,
+  nsContentUtils::AddScriptRunner(NewRunnableMethod<uint32_t>(
+    "gfx::VRManagerChild::FireDOMVRDisplayConnectEventInternal",
+    this,
     &VRManagerChild::FireDOMVRDisplayConnectEventInternal,
     aDisplayID));
 }
@@ -568,7 +576,9 @@ VRManagerChild::FireDOMVRDisplayConnectEvent(uint32_t aDisplayID)
 void
 VRManagerChild::FireDOMVRDisplayDisconnectEvent(uint32_t aDisplayID)
 {
-  nsContentUtils::AddScriptRunner(NewRunnableMethod<uint32_t>(this,
+  nsContentUtils::AddScriptRunner(NewRunnableMethod<uint32_t>(
+    "gfx::VRManagerChild::FireDOMVRDisplayDisconnectEventInternal",
+    this,
     &VRManagerChild::FireDOMVRDisplayDisconnectEventInternal,
     aDisplayID));
 }
@@ -576,7 +586,9 @@ VRManagerChild::FireDOMVRDisplayDisconnectEvent(uint32_t aDisplayID)
 void
 VRManagerChild::FireDOMVRDisplayPresentChangeEvent(uint32_t aDisplayID)
 {
-  nsContentUtils::AddScriptRunner(NewRunnableMethod<uint32_t>(this,
+  nsContentUtils::AddScriptRunner(NewRunnableMethod<uint32_t>(
+    "gfx::VRManagerChild::FireDOMVRDisplayPresentChangeEventInternal",
+    this,
     &VRManagerChild::FireDOMVRDisplayPresentChangeEventInternal,
     aDisplayID));
 }

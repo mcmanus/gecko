@@ -58,6 +58,20 @@ EventTarget::SetEventHandler(nsIAtom* aType, const nsAString& aTypeString,
 }
 
 bool
+EventTarget::HasNonSystemGroupListenersForUntrustedKeyEvents() const
+{
+  EventListenerManager* elm = GetExistingListenerManager();
+  return elm && elm->HasNonSystemGroupListenersForUntrustedKeyEvents();
+}
+
+bool
+EventTarget::HasNonPassiveNonSystemGroupListenersForUntrustedKeyEvents() const
+{
+  EventListenerManager* elm = GetExistingListenerManager();
+  return elm && elm->HasNonPassiveNonSystemGroupListenersForUntrustedKeyEvents();
+}
+
+bool
 EventTarget::IsApzAware() const
 {
   EventListenerManager* elm = GetExistingListenerManager();

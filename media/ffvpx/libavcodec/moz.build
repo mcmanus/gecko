@@ -56,10 +56,13 @@ SOURCES += [
 ]
 
 SYMBOLS_FILE = 'avcodec.symbols'
-NO_VISIBILITY_FLAGS = True
+NoVisibilityFlags()
 
 USE_LIBS += [
      'mozavutil'
 ]
+
+if CONFIG['OS_TARGET'] != 'WINNT':
+    OS_LIBS += ['m']
 
 include("../ffvpxcommon.mozbuild")

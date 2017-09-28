@@ -20,14 +20,14 @@ use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
 use html5ever::{LocalName, Prefix};
 use parking_lot::RwLock;
+use servo_arc::Arc;
 use servo_config::prefs::PREFS;
 use std::ascii::AsciiExt;
 use std::sync::atomic::AtomicBool;
 use style::attr::AttrValue;
 use style::media_queries::MediaList;
 use style::str::HTML_SPACE_CHARACTERS;
-use style::stylearc::Arc;
-use style::stylesheets::{Stylesheet, CssRule, CssRules, Origin, ViewportRule};
+use style::stylesheets::{Stylesheet, StylesheetContents, CssRule, CssRules, Origin, ViewportRule};
 
 #[dom_struct]
 pub struct HTMLMetaElement {
@@ -99,24 +99,25 @@ impl HTMLMetaElement {
             let content = content.value();
             if !content.is_empty() {
                 if let Some(translated_rule) = ViewportRule::from_meta(&**content) {
-                    let document = self.upcast::<Node>().owner_doc();
+                    let document = document_from_node(self);
                     let shared_lock = document.style_shared_lock();
                     let rule = CssRule::Viewport(Arc::new(shared_lock.wrap(translated_rule)));
-                    *self.stylesheet.borrow_mut() = Some(Arc::new(Stylesheet {
-                        rules: CssRules::new(vec![rule], shared_lock),
-                        origin: Origin::Author,
-                        shared_lock: shared_lock.clone(),
-                        url_data: RwLock::new(window_from_node(self).get_url()),
-                        namespaces: Default::default(),
+                    let sheet = Arc::new(Stylesheet {
+                        contents: StylesheetContents {
+                            rules: CssRules::new(vec![rule], shared_lock),
+                            origin: Origin::Author,
+                            namespaces: Default::default(),
+                            quirks_mode: document.quirks_mode(),
+                            url_data: RwLock::new(window_from_node(self).get_url()),
+                            source_map_url: RwLock::new(None),
+                            source_url: RwLock::new(None),
+                        },
                         media: Arc::new(shared_lock.wrap(MediaList::empty())),
-                        // Viewport constraints are always recomputed on resize; they don't need to
-                        // force all styles to be recomputed.
-                        dirty_on_viewport_size_change: AtomicBool::new(false),
+                        shared_lock: shared_lock.clone(),
                         disabled: AtomicBool::new(false),
-                        quirks_mode: document.quirks_mode(),
-                    }));
-                    let doc = document_from_node(self);
-                    doc.invalidate_stylesheets();
+                    });
+                    *self.stylesheet.borrow_mut() = Some(sheet.clone());
+                    document.add_stylesheet(self.upcast(), sheet);
                 }
             }
         }
@@ -195,6 +196,10 @@ impl VirtualMethods for HTMLMetaElement {
 
         if context.tree_in_doc {
             self.process_referrer_attribute();
+
+            if let Some(s) = self.stylesheet.borrow_mut().take() {
+                document_from_node(self).remove_stylesheet(self.upcast(), &s);
+            }
         }
     }
 }

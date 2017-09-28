@@ -9,7 +9,7 @@
 #include "ShadowLayers.h"
 #include <set>                          // for _Rb_tree_const_iterator, etc
 #include <vector>                       // for vector
-#include "GeckoProfiler.h"              // for PROFILER_LABEL
+#include "GeckoProfiler.h"              // for AUTO_PROFILER_LABEL
 #include "ISurfaceAllocator.h"          // for IsSurfaceDescriptorValid
 #include "Layers.h"                     // for Layer
 #include "RenderTrace.h"                // for RenderTraceScope
@@ -32,6 +32,7 @@
 #include "mozilla/layers/LayersTypes.h"  // for MOZ_LAYERS_LOG
 #include "mozilla/layers/LayerTransactionChild.h"
 #include "mozilla/layers/PTextureChild.h"
+#include "mozilla/layers/SyncObject.h"
 #include "ShadowLayerUtils.h"
 #include "mozilla/layers/TextureClient.h"  // for TextureClient
 #include "mozilla/mozalloc.h"           // for operator new, etc
@@ -175,7 +176,7 @@ KnowsCompositor::IdentifyTextureHost(const TextureFactoryIdentifier& aIdentifier
 {
   mTextureFactoryIdentifier = aIdentifier;
 
-  mSyncObject = SyncObject::CreateSyncObject(aIdentifier.mSyncHandle);
+  mSyncObject = SyncObjectClient::CreateSyncObjectClient(aIdentifier.mSyncHandle);
 }
 
 KnowsCompositor::KnowsCompositor()
@@ -208,7 +209,8 @@ struct ReleaseOnMainThreadTask : public Runnable
   UniquePtr<T> mObj;
 
   explicit ReleaseOnMainThreadTask(UniquePtr<T>& aObj)
-    : mObj(Move(aObj))
+    : Runnable("layers::ReleaseOnMainThreadTask")
+    , mObj(Move(aObj))
   {}
 
   NS_IMETHOD Run() override {
@@ -233,7 +235,9 @@ ShadowLayerForwarder::~ShadowLayerForwarder()
           nsIEventTarget::DISPATCH_NORMAL);
       } else {
         NS_DispatchToMainThread(
-          NewRunnableMethod(mShadowManager, &LayerTransactionChild::Destroy));
+          NewRunnableMethod("layers::LayerTransactionChild::Destroy",
+                            mShadowManager,
+                            &LayerTransactionChild::Destroy));
       }
     }
   }
@@ -242,7 +246,6 @@ ShadowLayerForwarder::~ShadowLayerForwarder()
     RefPtr<ReleaseOnMainThreadTask<ActiveResourceTracker>> event =
       new ReleaseOnMainThreadTask<ActiveResourceTracker>(mActiveResourceTracker);
     if (mEventTarget) {
-      event->SetName("ActiveResourceTracker::~ActiveResourceTracker");
       mEventTarget->Dispatch(event.forget(), nsIEventTarget::DISPATCH_NORMAL);
     } else {
       NS_DispatchToMainThread(event);
@@ -614,8 +617,7 @@ ShadowLayerForwarder::EndTransaction(const nsIntRegion& aRegionToClear,
 
   MOZ_ASSERT(aId);
 
-  PROFILER_LABEL("ShadowLayerForwarder", "EndTransaction",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("ShadowLayerForwarder::EndTransaction", GRAPHICS);
 
   RenderTraceScope rendertrace("Foward Transaction", "000091");
   MOZ_ASSERT(!mTxn->Finished(), "forgot BeginTransaction?");
@@ -731,10 +733,14 @@ ShadowLayerForwarder::EndTransaction(const nsIntRegion& aRegionToClear,
   info.id() = aId;
   info.plugins() = mPluginWindowData;
   info.isFirstPaint() = mIsFirstPaint;
+  info.focusTarget() = mFocusTarget;
   info.scheduleComposite() = aScheduleComposite;
   info.paintSequenceNumber() = aPaintSequenceNumber;
   info.isRepeatTransaction() = aIsRepeatTransaction;
   info.transactionStart() = aTransactionStart;
+#if defined(ENABLE_FRAME_LATENCY_LOG)
+  info.fwdTime() = TimeStamp::Now();
+#endif
 
   TargetConfig targetConfig(mTxn->mTargetBounds,
                             mTxn->mTargetRotation,
@@ -761,6 +767,10 @@ ShadowLayerForwarder::EndTransaction(const nsIntRegion& aRegionToClear,
     }
   }
 
+  // We delay at the last possible minute, to give the paint thread a chance to
+  // finish. If it does we don't have to delay messages at all.
+  GetCompositorBridgeChild()->PostponeMessagesIfAsyncPainting();
+
   MOZ_LAYERS_LOG(("[LayersForwarder] sending transaction..."));
   RenderTraceScope rendertrace3("Forward Transaction", "000093");
   if (!mShadowManager->SendUpdate(info)) {
@@ -775,6 +785,7 @@ ShadowLayerForwarder::EndTransaction(const nsIntRegion& aRegionToClear,
 
   *aSent = true;
   mIsFirstPaint = false;
+  mFocusTarget = FocusTarget();
   MOZ_LAYERS_LOG(("[LayersForwarder] ... done"));
   return true;
 }

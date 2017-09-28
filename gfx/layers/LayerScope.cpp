@@ -344,9 +344,10 @@ private:
     class CreateServerSocketRunnable : public Runnable
     {
     public:
-        explicit CreateServerSocketRunnable(LayerScopeManager *aLayerScopeManager)
-            : mLayerScopeManager(aLayerScopeManager)
-        {
+      explicit CreateServerSocketRunnable(LayerScopeManager* aLayerScopeManager)
+        : Runnable("layers::LayerScopeManager::CreateServerSocketRunnable")
+        , mLayerScopeManager(aLayerScopeManager)
+      {
         }
         NS_IMETHOD Run() override {
             mLayerScopeManager->mWebSocketManager =
@@ -375,8 +376,8 @@ static void DumpRect(T* aPacketRect, const Rect& aRect)
 {
     aPacketRect->set_x(aRect.x);
     aPacketRect->set_y(aRect.y);
-    aPacketRect->set_w(aRect.width);
-    aPacketRect->set_h(aRect.height);
+    aPacketRect->set_w(aRect.Width());
+    aPacketRect->set_h(aRect.Height());
 }
 
 static void DumpFilter(TexturePacket* aTexturePacket,
@@ -627,7 +628,7 @@ public:
                     size_t aRects,
                     const gfx::Rect* aLayerRects,
                     const gfx::Rect* aTextureRects,
-                    const std::list<GLuint> aTexIDs,
+                    const std::list<GLuint>& aTexIDs,
                     void* aLayerRef)
         : DebugGLData(Packet::DRAW),
           mOffsetX(aOffsetX),

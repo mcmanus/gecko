@@ -44,11 +44,6 @@ typedef struct _nsCocoaWindowList {
   // Invalidation disabling
   BOOL mDisabledNeedsDisplay;
 
-  // DPI cache. Getting the physical screen size (CGDisplayScreenSize)
-  // is ridiculously slow, so we cache it in the toplevel window for all
-  // descendants to use.
-  float mDPI;
-
   NSTrackingArea* mTrackingArea;
 
   NSRect mDirtyRect;
@@ -66,7 +61,6 @@ typedef struct _nsCocoaWindowList {
 - (void)setTitlebarColor:(NSColor*)aColor forActiveWindow:(BOOL)aActive;
 - (NSColor*)titlebarColorForActiveWindow:(BOOL)aActive;
 
-- (float)getDPI;
 
 - (void)mouseEntered:(NSEvent*)aEvent;
 - (void)mouseExited:(NSEvent*)aEvent;
@@ -206,7 +200,7 @@ typedef struct _nsCocoaWindowList {
 - (void)restoreBackgroundColor;
 @end
 
-class nsCocoaWindow : public nsBaseWidget, public nsPIWidgetCocoa
+class nsCocoaWindow final : public nsBaseWidget, public nsPIWidgetCocoa
 {
 private:
   typedef nsBaseWidget Inherited;
@@ -253,6 +247,7 @@ public:
     virtual void            SetSizeConstraints(const SizeConstraints& aConstraints) override;
     virtual void            Move(double aX, double aY) override;
     virtual void            SetSizeMode(nsSizeMode aMode) override;
+    virtual void            SuppressAnimation(bool aSuppress) override;
     virtual void            HideWindowChrome(bool aShouldHide) override;
 
     void EnteredFullScreen(bool aFullScreen, bool aNativeMode = true);
@@ -420,6 +415,7 @@ protected:
 
   int32_t              mNumModalDescendents;
   InputContext         mInputContext;
+  NSWindowAnimationBehavior mWindowAnimationBehavior;
 };
 
 #endif // nsCocoaWindow_h_

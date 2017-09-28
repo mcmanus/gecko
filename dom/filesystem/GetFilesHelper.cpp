@@ -57,7 +57,7 @@ private:
                   nsTArray<RefPtr<GetFilesCallback>>& aCallbacks,
                   Sequence<RefPtr<File>>& aFiles,
                   already_AddRefed<nsIGlobalObject> aGlobal)
-    : Runnable("ReleaseRunnable")
+    : Runnable("dom::ReleaseRunnable")
   {
     mPromises.SwapElements(aPromises);
     mCallbacks.SwapElements(aCallbacks);
@@ -618,7 +618,7 @@ GetFilesHelperParent::GetFilesHelperParent(const nsID& aUUID,
 
 GetFilesHelperParent::~GetFilesHelperParent()
 {
-  NS_ReleaseOnMainThread(
+  NS_ReleaseOnMainThreadSystemGroup(
     "GetFilesHelperParent::mContentParent", mContentParent.forget());
 }
 

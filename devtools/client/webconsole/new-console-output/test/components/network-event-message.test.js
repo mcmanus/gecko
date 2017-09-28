@@ -57,12 +57,18 @@ describe("NetworkEventMessage component:", () => {
       const message = stubPreparedMessages.get("GET request");
 
       const indent = 10;
-      let wrapper = render(NetworkEventMessage({ message, serviceContainer, indent}));
-      expect(wrapper.find(".indent").prop("style").width)
-        .toBe(`${indent * INDENT_WIDTH}px`);
+      let wrapper = render(NetworkEventMessage({
+        message: Object.assign({}, message, {indent}),
+        serviceContainer
+      }));
+      let indentEl = wrapper.find(".indent");
+      expect(indentEl.prop("style").width).toBe(`${indent * INDENT_WIDTH}px`);
+      expect(indentEl.prop("data-indent")).toBe(`${indent}`);
 
       wrapper = render(NetworkEventMessage({ message, serviceContainer }));
-      expect(wrapper.find(".indent").prop("style").width).toBe(`0`);
+      indentEl = wrapper.find(".indent");
+      expect(indentEl.prop("style").width).toBe(`0`);
+      expect(indentEl.prop("data-indent")).toBe(`0`);
     });
   });
 
@@ -101,6 +107,18 @@ describe("NetworkEventMessage component:", () => {
       expect(wrapper.find(".message-body .url").text()).toBe(EXPECTED_URL);
       expect(wrapper.find(".message-body .status").length).toBe(1);
       expect(wrapper.find(".message-body .status").text()).toMatch(EXPECTED_STATUS);
+    });
+  });
+
+  describe("is expandable", () => {
+    it("renders as expected", () => {
+      const message = stubPreparedMessages.get("XHR POST request");
+      const wrapper = render(NetworkEventMessage({
+        message,
+        serviceContainer,
+      }));
+
+      expect(wrapper.find(".message .theme-twisty")).toExist();
     });
   });
 });

@@ -69,24 +69,6 @@ TCPSocketParentBase::~TCPSocketParentBase()
 {
 }
 
-uint32_t
-TCPSocketParent::GetAppId()
-{
-  return nsIScriptSecurityManager::UNKNOWN_APP_ID;
-};
-
-bool
-TCPSocketParent::GetInIsolatedMozBrowser()
-{
-  const PContentParent *content = Manager()->Manager();
-  if (PBrowserParent* browser = SingleManagedOrNull(content->ManagedPBrowserParent())) {
-    TabParent *tab = TabParent::GetFrom(browser);
-    return tab->IsIsolatedMozBrowserElement();
-  } else {
-    return false;
-  }
-}
-
 void
 TCPSocketParentBase::ReleaseIPDLReference()
 {
@@ -117,12 +99,7 @@ mozilla::ipc::IPCResult
 TCPSocketParent::RecvOpen(const nsString& aHost, const uint16_t& aPort, const bool& aUseSSL,
                           const bool& aUseArrayBuffers)
 {
-  // Obtain App ID
-  uint32_t appId = GetAppId();
-  bool     inIsolatedMozBrowser = GetInIsolatedMozBrowser();
-
   mSocket = new TCPSocket(nullptr, aHost, aPort, aUseSSL, aUseArrayBuffers);
-  mSocket->SetAppIdAndBrowser(appId, inIsolatedMozBrowser);
   mSocket->SetSocketBridgeParent(this);
   NS_ENSURE_SUCCESS(mSocket->Init(), IPC_OK());
   return IPC_OK();
@@ -204,15 +181,7 @@ TCPSocketParent::RecvOpenBind(const nsCString& aRemoteHost,
     }
   }
 
-  bool     inIsolatedMozBrowser = false;
-  const PContentParent *content = Manager()->Manager();
-  if (PBrowserParent* browser = SingleManagedOrNull(content->ManagedPBrowserParent())) {
-    TabParent *tab = TabParent::GetFrom(browser);
-    inIsolatedMozBrowser = tab->IsIsolatedMozBrowserElement();
-  }
-
   mSocket = new TCPSocket(nullptr, NS_ConvertUTF8toUTF16(aRemoteHost), aRemotePort, aUseSSL, aUseArrayBuffers);
-  mSocket->SetAppIdAndBrowser(nsIScriptSecurityManager::NO_APP_ID, inIsolatedMozBrowser);
   mSocket->SetSocketBridgeParent(this);
   rv = mSocket->InitWithUnconnectedTransport(socketTransport);
   NS_ENSURE_SUCCESS(rv, IPC_OK());
@@ -284,7 +253,7 @@ TCPSocketParent::RecvData(const SendableData& aData,
       const nsTArray<uint8_t>& buffer = aData.get_ArrayOfuint8_t();
       bool ok = IPC::DeserializeArrayBuffer(autoCx, buffer, &val);
       NS_ENSURE_TRUE(ok, IPC_OK());
-      RootedTypedArray<ArrayBuffer> data(autoCx);
+      RootedSpiderMonkeyInterface<ArrayBuffer> data(autoCx);
       data.Init(&val.toObject());
       Optional<uint32_t> byteLength(buffer.Length());
       mSocket->SendWithTrackingNumber(autoCx, data, 0, byteLength, aTrackingNumber, rv);

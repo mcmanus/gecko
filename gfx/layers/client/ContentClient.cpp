@@ -92,8 +92,15 @@ ContentClient::CreateContentClient(CompositableForwarder* aForwarder)
 }
 
 void
+ContentClient::BeginAsyncPaint()
+{
+  mInAsyncPaint = true;
+}
+
+void
 ContentClient::EndPaint(nsTArray<ReadbackProcessor::Update>* aReadbackUpdates)
 {
+  mInAsyncPaint = false;
 }
 
 void
@@ -130,7 +137,7 @@ ContentClientBasic::CreateBuffer(ContentType aType,
     gfxDevCrash(LogReason::AlphaWithBasicClient) << "Asking basic content client for component alpha";
   }
 
-  IntSize size(aRect.width, aRect.height);
+  IntSize size(aRect.Width(), aRect.Height());
 #ifdef XP_WIN
   if (mBackend == BackendType::CAIRO && 
       (aType == gfxContentType::COLOR || aType == gfxContentType::COLOR_ALPHA)) {
@@ -150,6 +157,14 @@ ContentClientBasic::CreateBuffer(ContentType aType,
     gfxPlatform::GetPlatform()->Optimal2DFormatForContent(aType));
 }
 
+RefPtr<CapturedPaintState>
+ContentClientBasic::BorrowDrawTargetForRecording(PaintState& aPaintState,
+                                                 RotatedContentBuffer::DrawIterator* aIter)
+{
+  // BasicLayers does not yet support OMTP.
+  return nullptr;
+}
+
 void
 ContentClientRemoteBuffer::DestroyBuffers()
 {
@@ -165,6 +180,20 @@ ContentClientRemoteBuffer::DestroyBuffers()
   }
 
   DestroyFrontBuffer();
+}
+
+RefPtr<CapturedPaintState>
+ContentClientRemoteBuffer::BorrowDrawTargetForRecording(PaintState& aPaintState,
+                                                        RotatedContentBuffer::DrawIterator* aIter)
+{
+  RefPtr<CapturedPaintState> cps = RotatedContentBuffer::BorrowDrawTargetForRecording(aPaintState, aIter);
+  if (!cps) {
+    return nullptr;
+  }
+
+  cps->mTextureClient = mTextureClient;
+  cps->mTextureClientOnWhite = mTextureClientOnWhite;
+  return cps.forget();
 }
 
 class RemoteBufferReadbackProcessor : public TextureReadbackSink
@@ -239,6 +268,13 @@ ContentClientRemoteBuffer::BeginPaint()
 }
 
 void
+ContentClientRemoteBuffer::BeginAsyncPaint()
+{
+  BeginPaint();
+  mInAsyncPaint = true;
+}
+
+void
 ContentClientRemoteBuffer::EndPaint(nsTArray<ReadbackProcessor::Update>* aReadbackUpdates)
 {
   MOZ_ASSERT(!mTextureClientOnWhite || !aReadbackUpdates || aReadbackUpdates->Length() == 0);
@@ -291,7 +327,7 @@ ContentClientRemoteBuffer::BuildTextureClients(SurfaceFormat aFormat,
   DestroyBuffers();
 
   mSurfaceFormat = aFormat;
-  mSize = IntSize(aRect.width, aRect.height);
+  mSize = IntSize(aRect.Width(), aRect.Height());
   mTextureFlags = TextureFlagsForRotatedContentBufferFlags(aFlags);
 
   if (aFlags & BUFFER_COMPONENT_ALPHA) {
@@ -349,14 +385,19 @@ ContentClientRemoteBuffer::CreateBuffer(ContentType aType,
     return;
   }
 
+  OpenMode mode = OpenMode::OPEN_READ_WRITE;
+  if (mInAsyncPaint) {
+    mode |= OpenMode::OPEN_ASYNC_WRITE;
+  }
+
   // We just created the textures and we are about to get their draw targets
   // so we have to lock them here.
-  DebugOnly<bool> locked = mTextureClient->Lock(OpenMode::OPEN_READ_WRITE);
+  DebugOnly<bool> locked = mTextureClient->Lock(mode);
   MOZ_ASSERT(locked, "Could not lock the TextureClient");
 
   *aBlackDT = mTextureClient->BorrowDrawTarget();
   if (aFlags & BUFFER_COMPONENT_ALPHA) {
-    locked = mTextureClientOnWhite->Lock(OpenMode::OPEN_READ_WRITE);
+    locked = mTextureClientOnWhite->Lock(mode);
     MOZ_ASSERT(locked, "Could not lock the second TextureClient for component alpha");
 
     *aWhiteDT = mTextureClientOnWhite->BorrowDrawTarget();
@@ -430,14 +471,18 @@ ContentClientRemoteBuffer::SwapBuffers(const nsIntRegion& aFrontUpdatedRegion)
 bool
 ContentClientRemoteBuffer::LockBuffers()
 {
+  OpenMode mode = OpenMode::OPEN_READ_WRITE;
+  if (mInAsyncPaint) {
+    mode |= OpenMode::OPEN_ASYNC_WRITE;
+  }
   if (mTextureClient) {
-    bool locked = mTextureClient->Lock(OpenMode::OPEN_READ_WRITE);
+    bool locked = mTextureClient->Lock(mode);
     if (!locked) {
       return false;
     }
   }
   if (mTextureClientOnWhite) {
-    bool locked = mTextureClientOnWhite->Lock(OpenMode::OPEN_READ_WRITE);
+    bool locked = mTextureClientOnWhite->Lock(mode);
     if (!locked) {
       UnlockBuffers();
       return false;
@@ -553,6 +598,13 @@ ContentClientDoubleBuffered::BeginPaint()
   mBufferRotation = mFrontBufferRotation;
 }
 
+void
+ContentClientDoubleBuffered::BeginAsyncPaint()
+{
+  BeginPaint();
+  mInAsyncPaint = true;
+}
+
 // Sync front/back buffers content
 // After executing, the new back buffer has the same (interesting) pixels as
 // the new front buffer, and mValidRegion et al. are correct wrt the new
@@ -573,8 +625,8 @@ ContentClientDoubleBuffered::FinalizeFrame(const nsIntRegion& aRegionToDraw)
                   this,
                   mFrontUpdatedRegion.GetBounds().x,
                   mFrontUpdatedRegion.GetBounds().y,
-                  mFrontUpdatedRegion.GetBounds().width,
-                  mFrontUpdatedRegion.GetBounds().height));
+                  mFrontUpdatedRegion.GetBounds().Width(),
+                  mFrontUpdatedRegion.GetBounds().Height()));
 
   mFrontAndBackBufferDiffer = false;
 

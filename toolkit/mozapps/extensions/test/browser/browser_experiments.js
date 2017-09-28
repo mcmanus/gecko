@@ -168,22 +168,27 @@ add_task(async function testOpenPreferences() {
   is_element_visible(btn, "Change telemetry button visible in in-content UI.");
 
   let deferred = Promise.defer();
-  Services.obs.addObserver(function observer(prefWin, topic, data) {
-    Services.obs.removeObserver(observer, "advanced-pane-loaded");
-    info("Advanced preference pane opened.");
-    executeSoon(function() {
-      // We want this test to fail if the preferences pane changes,
-      // but we can't check if the data-choices button is visible
-      // since it is only in the DOM when MOZ_TELEMETRY_REPORTING=1.
-      let el = prefWin.document.getElementById("header-advanced");
-      is_element_visible(el);
 
-      prefWin.close();
-      info("Closed preferences pane.");
+  function ensureElementIsVisible(preferencesPane, visibleElement) {
+    Services.obs.addObserver(function observer(prefWin, topic, data) {
+      Services.obs.removeObserver(observer, preferencesPane + "-pane-loaded");
+      info(preferencesPane + " preference pane opened.");
+      executeSoon(function() {
+        // We want this test to fail if the preferences pane changes,
+        // but we can't check if the data-choices button is visible
+        // since it is only in the DOM when MOZ_TELEMETRY_REPORTING=1.
+        let el = prefWin.document.getElementById(visibleElement);
+        is_element_visible(el);
 
-      deferred.resolve();
-    });
-  }, "advanced-pane-loaded");
+        prefWin.close();
+        info("Closed preferences pane.");
+
+        deferred.resolve();
+      });
+    }, preferencesPane + "-pane-loaded");
+  }
+
+  ensureElementIsVisible("privacy", "dataCollectionGroup");
 
   info("Loading preferences pane.");
   // We need to focus before synthesizing the mouse event (bug 1240052) as

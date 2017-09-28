@@ -11,15 +11,23 @@ let {profileStorage} = Cu.import("resource://formautofill/ProfileStorage.jsm", {
 
 var ParentUtils = {
   cleanUpAddress() {
-    Services.cpmm.addMessageListener("FormAutofill:Addresses", function getResult(result) {
-      Services.cpmm.removeMessageListener("FormAutofill:Addresses", getResult);
+    Services.cpmm.addMessageListener("FormAutofill:Records", function getResult(result) {
+      Services.cpmm.removeMessageListener("FormAutofill:Records", getResult);
 
       let addresses = result.data;
       Services.cpmm.sendAsyncMessage("FormAutofill:RemoveAddresses",
                                      {guids: addresses.map(address => address.guid)});
+
+      let count = addresses.length;
+      Services.obs.addObserver(function observer(subject, topic, data) {
+        if (!--count) {
+          Services.obs.removeObserver(observer, topic);
+          sendAsyncMessage("FormAutofillTest:AddressCleanedUp");
+        }
+      }, "formautofill-storage-changed");
     });
 
-    Services.cpmm.sendAsyncMessage("FormAutofill:GetAddresses", {searchString: ""});
+    Services.cpmm.sendAsyncMessage("FormAutofill:GetRecords", {searchString: "", collectionName: "addresses"});
   },
 
   updateAddress(type, chromeMsg, msgData, contentMsg) {
@@ -60,8 +68,8 @@ var ParentUtils = {
   },
 
   checkAddresses({expectedAddresses}) {
-    Services.cpmm.addMessageListener("FormAutofill:Addresses", function getResult(result) {
-      Services.cpmm.removeMessageListener("FormAutofill:Addresses", getResult);
+    Services.cpmm.addMessageListener("FormAutofill:Records", function getResult(result) {
+      Services.cpmm.removeMessageListener("FormAutofill:Records", getResult);
       let addresses = result.data;
       if (addresses.length !== expectedAddresses.length) {
         sendAsyncMessage("FormAutofillTest:areAddressesMatching", false);
@@ -82,7 +90,7 @@ var ParentUtils = {
       sendAsyncMessage("FormAutofillTest:areAddressesMatching", true);
     });
 
-    Services.cpmm.sendAsyncMessage("FormAutofill:GetAddresses", {searchString: ""});
+    Services.cpmm.sendAsyncMessage("FormAutofill:GetRecords", {searchString: "", collectionName: "addresses"});
   },
 };
 
@@ -102,6 +110,10 @@ addMessageListener("FormAutofillTest:UpdateAddress", (msg) => {
 
 addMessageListener("FormAutofillTest:CheckAddresses", (msg) => {
   ParentUtils.checkAddresses(msg);
+});
+
+addMessageListener("FormAutofillTest:CleanUpAddress", (msg) => {
+  ParentUtils.cleanUpAddress();
 });
 
 addMessageListener("cleanup", () => {

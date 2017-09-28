@@ -5,9 +5,9 @@
 use platform::windows::font_list::{descriptor_from_atom, font_from_atom};
 use servo_atoms::Atom;
 use std::io;
-use webrender_traits::NativeFontHandle;
+use webrender_api::NativeFontHandle;
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct FontTemplateData {
     pub bytes: Option<Vec<u8>>,
     pub identifier: Atom,

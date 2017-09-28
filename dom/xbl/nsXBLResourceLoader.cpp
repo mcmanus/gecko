@@ -113,7 +113,7 @@ nsXBLResourceLoader::LoadResources(nsIContent* aBoundElement)
       continue;
 
     if (NS_FAILED(NS_NewURI(getter_AddRefs(url), curr->mSrc,
-                            doc->GetDocumentCharacterSet().get(), docURL)))
+                            doc->GetDocumentCharacterSet(), docURL)))
       continue;
 
     if (curr->mType == nsGkAtoms::image) {
@@ -121,7 +121,7 @@ nsXBLResourceLoader::LoadResources(nsIContent* aBoundElement)
       // Passing nullptr for pretty much everything -- cause we don't care!
       // XXX: initialDocumentURI is nullptr!
       RefPtr<imgRequestProxy> req;
-      nsContentUtils::LoadImage(url, doc, doc, docPrincipal, docURL,
+      nsContentUtils::LoadImage(url, doc, doc, docPrincipal, 0, docURL,
                                 doc->GetReferrerPolicy(), nullptr,
                                 nsIRequest::LOAD_BACKGROUND, EmptyString(),
                                 getter_AddRefs(req));
@@ -151,7 +151,7 @@ nsXBLResourceLoader::LoadResources(nsIContent* aBoundElement)
       }
       else
       {
-        rv = cssLoader->LoadSheet(url, false, docPrincipal, EmptyCString(), this);
+        rv = cssLoader->LoadSheet(url, false, docPrincipal, nullptr, this);
         if (NS_SUCCEEDED(rv))
           ++mPendingSheets;
       }
@@ -258,16 +258,27 @@ nsXBLResourceLoader::NotifyBoundElements()
         if (shell) {
           nsIFrame* childFrame = content->GetPrimaryFrame();
           if (!childFrame) {
-            // Check to see if it's in the undisplayed content map, or the
-            // display: contents map.
+            // Check if it's in the display:none or display:contents maps.
             nsStyleContext* sc =
-              shell->FrameManager()->GetUndisplayedContent(content);
+              shell->FrameManager()->GetDisplayNoneStyleFor(content);
 
             if (!sc) {
               sc = shell->FrameManager()->GetDisplayContentsStyleFor(content);
             }
 
             if (!sc) {
+              if (ServoStyleSet* servoSet = shell->StyleSet()->GetAsServo()) {
+                // Ensure the element has servo data so that
+                // nsChangeHint_ReconstructFrame posted by
+                // PostRecreateFramesFor() is recognized.
+                //
+                // Also check MayTraverseFrom to handle programatic XBL consumers.
+                // See bug 1370793.
+                Element* element = content->AsElement();
+                if (servoSet->MayTraverseFrom(element)) {
+                  servoSet->StyleNewlyBoundElement(element);
+                }
+              }
               shell->PostRecreateFramesFor(content->AsElement());
             }
           }

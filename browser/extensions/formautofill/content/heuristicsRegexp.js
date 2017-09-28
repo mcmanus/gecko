@@ -29,6 +29,11 @@ var HeuristicsRegExp = {
     ),
 
     // ==== Telephone ====
+    "tel-extension": new RegExp(
+      "\\bext|ext\\b|extension" +
+      "|ramal",                     // pt-BR, pt-PT
+      "iu"
+    ),
     "tel": new RegExp(
       "phone|mobile|contact.?number" +
       "|telefonnummer" +                             // de-DE
@@ -116,8 +121,8 @@ var HeuristicsRegExp = {
       "iu"
     ),
     "address-level1": new RegExp(
-      // TODO: [Bug 1358960] JS does not support backward matching, and we
-      // should apply this pattern in JS rather than regexp.
+      // JS does not support backward matching, so the following pattern is
+      // applied in FormAutofillHeuristics.getInfo() rather than regexp.
       // "(?<!united )state|county|region|province"
       "state|county|region|province" +
       "|land" + // de-DE
@@ -155,6 +160,17 @@ var HeuristicsRegExp = {
     ),
 
     // ==== Name Fields ====
+    "name": new RegExp(
+      "^name|full.?name|your.?name|customer.?name|bill.?name|ship.?name" +
+      "|name.*first.*last|firstandlastname" +
+      "|nombre.*y.*apellidos" + // es
+      "|^nom" +                 // fr-FR
+      "|お名前|氏名" +          // ja-JP
+      "|^nome" +                // pt-BR, pt-PT
+      "|姓名" +                 // zh-CN
+      "|성명",                  // ko-KR
+      "iu"
+    ),
     "given-name": new RegExp(
       "first.*name|initials|fname|first$|given.*name" +
       "|vorname" +                // de-DE
@@ -186,16 +202,65 @@ var HeuristicsRegExp = {
       "|\\b성(?:[^명]|\\b)",                  // ko-KR
       "iu"
     ),
-    "name": new RegExp(
-      "^name|full.?name|your.?name|customer.?name|bill.?name|ship.?name" +
-      "|name.*first.*last|firstandlastname" +
-      "|nombre.*y.*apellidos" + // es
-      "|^nom" +                 // fr-FR
-      "|お名前|氏名" +          // ja-JP
-      "|^nome" +                // pt-BR, pt-PT
-      "|姓名" +                 // zh-CN
-      "|성명",                  // ko-KR
+
+    // ==== Credit Card Fields ====
+    "cc-name": new RegExp(
+      "card.?(?:holder|owner)|name.*(\\b)?on(\\b)?.*card" +
+      "|(?:card|cc).?name|cc.?full.?name" +
+      "|karteninhaber" +                  // de-DE
+      "|nombre.*tarjeta" +                // es
+      "|nom.*carte" +                     // fr-FR
+      "|nome.*cart" +                     // it-IT
+      "|名前" +                           // ja-JP
+      "|Имя.*карты" +                     // ru
+      "|信用卡开户名|开户名|持卡人姓名" + // zh-CN
+      "|持卡人姓名",                      // zh-TW
       "iu"
+    ),
+    "cc-number": new RegExp(
+      "(add)?(?:card|cc|acct).?(?:number|#|no|num|field)" +
+      "|nummer" +                // de-DE
+      "|credito|numero|número" + // es
+      "|numéro" +                // fr-FR
+      "|カード番号" +            // ja-JP
+      "|Номер.*карты" +          // ru
+      "|信用卡号|信用卡号码" +   // zh-CN
+      "|信用卡卡號" +            // zh-TW
+      "|카드",                   // ko-KR
+      "iu"
+    ),
+    "cc-exp-month": new RegExp(
+      "expir|exp.*mo|exp.*date|ccmonth|cardmonth|addmonth" +
+      "|gueltig|gültig|monat" + // de-DE
+      "|fecha" +                // es
+      "|date.*exp" +            // fr-FR
+      "|scadenza" +             // it-IT
+      "|有効期限" +             // ja-JP
+      "|validade" +             // pt-BR, pt-PT
+      "|Срок действия карты" +  // ru
+      "|月",                    // zh-CN,
+      "iu"
+    ),
+    "cc-exp-year": new RegExp(
+      "exp|^/|(add)?year" +
+      "|ablaufdatum|gueltig|gültig|jahr" + // de-DE
+      "|fecha" +                           // es
+      "|scadenza" +                        // it-IT
+      "|有効期限" +                        // ja-JP
+      "|validade" +                        // pt-BR, pt-PT
+      "|Срок действия карты" +             // ru
+      "|年|有效期",                        // zh-CN
+      "iu"
+    ),
+    "cc-exp": new RegExp(
+      "expir|exp.*date|^expfield$" +
+      "|gueltig|gültig" +     // de-DE
+      "|fecha" +              // es
+      "|date.*exp" +          // fr-FR
+      "|scadenza" +           // it-IT
+      "|有効期限" +           // ja-JP
+      "|validade" +           // pt-BR, pt-PT
+      "|Срок действия карты", // ru
     ),
   },
 };

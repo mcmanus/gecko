@@ -385,7 +385,8 @@
 #endif
                context="placesContext"
                openInTabs="children"
-               oncommand="BookmarksEventHandler.onCommand(event, this.parentNode._placesView);"
+               onmouseup="BookmarksEventHandler.onMouseUp(event);"
+               oncommand="BookmarksEventHandler.onCommand(event);"
                onclick="BookmarksEventHandler.onClick(event, this.parentNode._placesView);"
                onpopupshowing="BookmarkingUI.onMainMenuPopupShowing(event);
                                if (!this.parentNode._placesView)
@@ -424,10 +425,6 @@
                 class="show-only-for-keyboard"
                 command="Browser:BookmarkAllTabs"
                 key="bookmarkAllTabsKb"/>
-      <menuseparator/>
-      <menuitem label="&recentBookmarks.label;"
-                id="menu_recentBookmarks"
-                disabled="true"/>
       <menuseparator id="bookmarksToolbarSeparator"/>
       <menu id="bookmarksToolbarFolderMenu"
             class="menu-iconic bookmark-item"
@@ -473,8 +470,7 @@
 
             <menu id="tools-menu"
                   label="&toolsMenu.label;"
-                  accesskey="&toolsMenu.accesskey;"
-                  onpopupshowing="mirrorShow(this)">
+                  accesskey="&toolsMenu.accesskey;">
               <menupopup id="menu_ToolsPopup">
               <menuitem id="menu_openDownloads"
                         label="&downloads.label;"
@@ -520,13 +516,6 @@
                         key="key_viewInfo"
 #endif
                         command="View:PageInfo"/>
-              <menu id="menu_mirrorTabCmd"
-                    hidden="true"
-                    accesskey="&mirrorTabCmd.accesskey;"
-                    label="&mirrorTabCmd.label;">
-                <menupopup id="menu_mirrorTab-popup"
-                           onpopupshowing="populateMirrorTabMenu(this)"/>
-              </menu>
 #ifndef XP_UNIX
               <menuseparator id="prefSep"/>
               <menuitem id="menu_preferences"

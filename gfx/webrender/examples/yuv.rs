@@ -2,23 +2,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-extern crate app_units;
-extern crate euclid;
 extern crate gleam;
 extern crate glutin;
 extern crate webrender;
-extern crate webrender_traits;
 
-use gleam::gl;
+#[path = "common/boilerplate.rs"]
+mod boilerplate;
+
+use boilerplate::Example;
 use glutin::TouchPhase;
 use std::collections::HashMap;
-use std::env;
-use std::path::PathBuf;
-use webrender_traits::{ColorF, Epoch};
-use webrender_traits::{DeviceIntPoint, DeviceUintSize, LayoutPoint, LayoutRect, LayoutSize};
-use webrender_traits::{ImageData, ImageDescriptor, ImageFormat, ImageRendering};
-use webrender_traits::{PipelineId, TransformStyle};
-use webrender_traits::{YuvColorSpace, YuvData};
+use webrender::api::*;
 
 #[derive(Debug)]
 enum Gesture {
@@ -52,7 +46,12 @@ impl Touch {
     }
 
     fn current_distance_from_other(&self, other: &Touch) -> f32 {
-        dist(self.current_x, self.current_y, other.current_x, other.current_y)
+        dist(
+            self.current_x,
+            self.current_y,
+            other.current_x,
+            other.current_y,
+        )
     }
 }
 
@@ -87,13 +86,16 @@ impl TouchState {
         match touch.phase {
             TouchPhase::Started => {
                 debug_assert!(!self.active_touches.contains_key(&touch.id));
-                self.active_touches.insert(touch.id, Touch {
-                    id: touch.id,
-                    start_x: touch.location.0 as f32,
-                    start_y: touch.location.1 as f32,
-                    current_x: touch.location.0 as f32,
-                    current_y: touch.location.1 as f32,
-                });
+                self.active_touches.insert(
+                    touch.id,
+                    Touch {
+                        id: touch.id,
+                        start_x: touch.location.0 as f32,
+                        start_y: touch.location.1 as f32,
+                        current_x: touch.location.0 as f32,
+                        current_y: touch.location.1 as f32,
+                    },
+                );
                 self.current_gesture = Gesture::None;
             }
             TouchPhase::Moved => {
@@ -102,7 +104,7 @@ impl TouchState {
                         active_touch.current_x = touch.location.0 as f32;
                         active_touch.current_y = touch.location.1 as f32;
                     }
-                    None => panic!("move touch event with unknown touch id!")
+                    None => panic!("move touch event with unknown touch id!"),
                 }
 
                 match self.current_gesture {
@@ -158,194 +160,109 @@ impl TouchState {
     }
 }
 
-struct Notifier {
-    window_proxy: glutin::WindowProxy,
+struct App {
+    touch_state: TouchState,
 }
 
-impl Notifier {
-    fn new(window_proxy: glutin::WindowProxy) -> Notifier {
-        Notifier {
-            window_proxy: window_proxy,
+impl Example for App {
+    fn render(
+        &mut self,
+        api: &RenderApi,
+        builder: &mut DisplayListBuilder,
+        resources: &mut ResourceUpdates,
+        layout_size: LayoutSize,
+        _pipeline_id: PipelineId,
+        _document_id: DocumentId,
+    ) {
+        let bounds = LayoutRect::new(LayoutPoint::zero(), layout_size);
+        let info = LayoutPrimitiveInfo::new(bounds);
+        builder.push_stacking_context(
+            &info,
+            ScrollPolicy::Scrollable,
+            None,
+            TransformStyle::Flat,
+            None,
+            MixBlendMode::Normal,
+            Vec::new(),
+        );
+
+        let yuv_chanel1 = api.generate_image_key();
+        let yuv_chanel2 = api.generate_image_key();
+        let yuv_chanel2_1 = api.generate_image_key();
+        let yuv_chanel3 = api.generate_image_key();
+        resources.add_image(
+            yuv_chanel1,
+            ImageDescriptor::new(100, 100, ImageFormat::A8, true),
+            ImageData::new(vec![127; 100 * 100]),
+            None,
+        );
+        resources.add_image(
+            yuv_chanel2,
+            ImageDescriptor::new(100, 100, ImageFormat::RG8, true),
+            ImageData::new(vec![0; 100 * 100 * 2]),
+            None,
+        );
+        resources.add_image(
+            yuv_chanel2_1,
+            ImageDescriptor::new(100, 100, ImageFormat::A8, true),
+            ImageData::new(vec![127; 100 * 100]),
+            None,
+        );
+        resources.add_image(
+            yuv_chanel3,
+            ImageDescriptor::new(100, 100, ImageFormat::A8, true),
+            ImageData::new(vec![127; 100 * 100]),
+            None,
+        );
+
+        let info = LayoutPrimitiveInfo::with_clip_rect(
+            LayoutRect::new(LayoutPoint::new(100.0, 0.0), LayoutSize::new(100.0, 100.0)),
+            bounds,
+        );
+        builder.push_yuv_image(
+            &info,
+            YuvData::NV12(yuv_chanel1, yuv_chanel2),
+            YuvColorSpace::Rec601,
+            ImageRendering::Auto,
+        );
+
+        let info = LayoutPrimitiveInfo::with_clip_rect(
+            LayoutRect::new(LayoutPoint::new(300.0, 0.0), LayoutSize::new(100.0, 100.0)),
+            bounds,
+        );
+        builder.push_yuv_image(
+            &info,
+            YuvData::PlanarYCbCr(yuv_chanel1, yuv_chanel2_1, yuv_chanel3),
+            YuvColorSpace::Rec601,
+            ImageRendering::Auto,
+        );
+
+        builder.pop_stacking_context();
+    }
+
+    fn on_event(&mut self, event: glutin::Event, api: &RenderApi, document_id: DocumentId) -> bool {
+        match event {
+            glutin::Event::Touch(touch) => match self.touch_state.handle_event(touch) {
+                TouchResult::Pan(pan) => {
+                    api.set_pan(document_id, pan);
+                    api.generate_frame(document_id, None);
+                }
+                TouchResult::Zoom(zoom) => {
+                    api.set_pinch_zoom(document_id, ZoomFactor::new(zoom));
+                    api.generate_frame(document_id, None);
+                }
+                TouchResult::None => {}
+            },
+            _ => (),
         }
-    }
-}
 
-impl webrender_traits::RenderNotifier for Notifier {
-    fn new_frame_ready(&mut self) {
-        #[cfg(not(target_os = "android"))]
-        self.window_proxy.wakeup_event_loop();
-    }
-
-    fn new_scroll_frame_ready(&mut self, _composite_needed: bool) {
-        #[cfg(not(target_os = "android"))]
-        self.window_proxy.wakeup_event_loop();
+        false
     }
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let res_path = if args.len() > 1 {
-        Some(PathBuf::from(&args[1]))
-    } else {
-        None
+    let mut app = App {
+        touch_state: TouchState::new(),
     };
-
-    let window = glutin::WindowBuilder::new()
-                .with_title("WebRender Sample")
-                .with_multitouch()
-                .with_gl(glutin::GlRequest::GlThenGles {
-                    opengl_version: (3, 2),
-                    opengles_version: (3, 0)
-                })
-                .build()
-                .unwrap();
-
-    unsafe {
-        window.make_current().ok();
-    }
-
-    let gl = match gl::GlType::default() {
-        gl::GlType::Gl => unsafe { gl::GlFns::load_with(|symbol| window.get_proc_address(symbol) as *const _) },
-        gl::GlType::Gles => unsafe { gl::GlesFns::load_with(|symbol| window.get_proc_address(symbol) as *const _) },
-    };
-
-    println!("OpenGL version {}", gl.get_string(gl::VERSION));
-    println!("Shader resource path: {:?}", res_path);
-
-    let (width, height) = window.get_inner_size_pixels().unwrap();
-
-    let opts = webrender::RendererOptions {
-        resource_override_path: res_path,
-        debug: true,
-        precache_shaders: true,
-        blob_image_renderer: None,
-        device_pixel_ratio: window.hidpi_factor(),
-        .. Default::default()
-    };
-
-    let size = DeviceUintSize::new(width, height);
-    let (mut renderer, sender) = webrender::renderer::Renderer::new(gl, opts, size).unwrap();
-    let api = sender.create_api();
-
-    let notifier = Box::new(Notifier::new(window.create_window_proxy()));
-    renderer.set_render_notifier(notifier);
-
-    let epoch = Epoch(0);
-    let root_background_color = ColorF::new(0.3, 0.0, 0.0, 1.0);
-
-    let pipeline_id = PipelineId(0, 0);
-    let layout_size = LayoutSize::new(width as f32, height as f32);
-    let mut builder = webrender_traits::DisplayListBuilder::new(pipeline_id, layout_size);
-
-    let bounds = LayoutRect::new(LayoutPoint::zero(), layout_size);
-    builder.push_stacking_context(webrender_traits::ScrollPolicy::Scrollable,
-                                  bounds,
-                                  None,
-                                  TransformStyle::Flat,
-                                  None,
-                                  webrender_traits::MixBlendMode::Normal,
-                                  Vec::new());
-
-
-    let yuv_chanel1 = api.generate_image_key();
-    let yuv_chanel2 = api.generate_image_key();
-    let yuv_chanel2_1 = api.generate_image_key();
-    let yuv_chanel3 = api.generate_image_key();
-    api.add_image(
-        yuv_chanel1,
-        ImageDescriptor::new(100, 100, ImageFormat::A8, true),
-        ImageData::new(vec![127; 100 * 100]),
-        None,
-    );
-    api.add_image(
-        yuv_chanel2,
-        ImageDescriptor::new(100, 100, ImageFormat::RG8, true),
-        ImageData::new(vec![0; 100 * 100 * 2]),
-        None,
-    );
-    api.add_image(
-        yuv_chanel2_1,
-        ImageDescriptor::new(100, 100, ImageFormat::A8, true),
-        ImageData::new(vec![127; 100 * 100]),
-        None,
-    );
-    api.add_image(
-        yuv_chanel3,
-        ImageDescriptor::new(100, 100, ImageFormat::A8, true),
-        ImageData::new(vec![127; 100 * 100]),
-        None,
-    );
-
-    let clip = builder.push_clip_region(&bounds, vec![], None);
-    builder.push_yuv_image(
-        LayoutRect::new(LayoutPoint::new(100.0, 0.0), LayoutSize::new(100.0, 100.0)),
-        clip,
-        YuvData::NV12(yuv_chanel1, yuv_chanel2),
-        YuvColorSpace::Rec601,
-        ImageRendering::Auto,
-    );
-
-    let clip = builder.push_clip_region(&bounds, vec![], None);
-    builder.push_yuv_image(
-        LayoutRect::new(LayoutPoint::new(300.0, 0.0), LayoutSize::new(100.0, 100.0)),
-        clip,
-        YuvData::PlanarYCbCr(yuv_chanel1, yuv_chanel2_1, yuv_chanel3),
-        YuvColorSpace::Rec601,
-        ImageRendering::Auto,
-    );
-
-    builder.pop_stacking_context();
-
-    api.set_display_list(
-        Some(root_background_color),
-        epoch,
-        LayoutSize::new(width as f32, height as f32),
-        builder.finalize(),
-        true);
-    api.set_root_pipeline(pipeline_id);
-    api.generate_frame(None);
-
-    let mut touch_state = TouchState::new();
-
-    'outer: for event in window.wait_events() {
-        let mut events = Vec::new();
-        events.push(event);
-
-        for event in window.poll_events() {
-            events.push(event);
-        }
-
-        for event in events {
-            match event {
-                glutin::Event::Closed |
-                glutin::Event::KeyboardInput(_, _, Some(glutin::VirtualKeyCode::Escape)) |
-                glutin::Event::KeyboardInput(_, _, Some(glutin::VirtualKeyCode::Q)) => break 'outer,
-                glutin::Event::KeyboardInput(glutin::ElementState::Pressed,
-                                             _, Some(glutin::VirtualKeyCode::P)) => {
-                    let enable_profiler = !renderer.get_profiler_enabled();
-                    renderer.set_profiler_enabled(enable_profiler);
-                    api.generate_frame(None);
-                }
-                glutin::Event::Touch(touch) => {
-                    match touch_state.handle_event(touch) {
-                        TouchResult::Pan(pan) => {
-                            api.set_pan(pan);
-                            api.generate_frame(None);
-                        }
-                        TouchResult::Zoom(zoom) => {
-                            api.set_pinch_zoom(webrender_traits::ZoomFactor::new(zoom));
-                            api.generate_frame(None);
-                        }
-                        TouchResult::None => {}
-                    }
-                }
-                _ => ()
-            }
-        }
-
-        renderer.update();
-        renderer.render(DeviceUintSize::new(width, height));
-        window.swap_buffers().ok();
-    }
+    boilerplate::main_wrapper(&mut app, None);
 }
-

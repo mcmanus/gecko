@@ -36,7 +36,7 @@ add_task(async function test_downloads_open_requires_user_interaction() {
   async function backgroundScript() {
     await browser.test.assertRejects(
       browser.downloads.open(10),
-      "May only open downloads from a user input handler",
+      "downloads.open may only be called from a user input handler",
       "The error is informative.");
 
     browser.test.notifyPass("downloads tests");
@@ -56,6 +56,10 @@ add_task(async function test_downloads_open_requires_user_interaction() {
 });
 
 add_task(async function downloads_open_invalid_id() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["extensions.webextensions.remote", false]],
+  });
+
   async function pageScript() {
     window.addEventListener("keypress", async function handler() {
       try {

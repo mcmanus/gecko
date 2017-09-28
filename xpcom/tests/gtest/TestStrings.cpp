@@ -83,7 +83,7 @@ TEST(Strings, rfind)
   nsCString src(text);
   int32_t i;
 
-  i = src.RFind(term, true, 3, -1); 
+  i = src.RFind(term, true, 3, -1);
   EXPECT_EQ(i, kNotFound);
 
   i = src.RFind(term, true, -1, -1);
@@ -100,7 +100,7 @@ TEST(Strings, rfind_2)
 {
   const char text[] = "<!DOCTYPE blah blah blah>";
   nsCString src(text);
-  int32_t i = src.RFind("TYPE", false, 5, -1); 
+  int32_t i = src.RFind("TYPE", false, 5, -1);
   EXPECT_EQ(i, 5);
 }
 
@@ -323,8 +323,8 @@ TEST(Strings, replace_substr_2)
   const char *newName = "user";
   nsString acctName; acctName.AssignLiteral("forums.foo.com");
   nsAutoString newAcctName, oldVal, newVal;
-  oldVal.AssignWithConversion(oldName);
-  newVal.AssignWithConversion(newName);
+  CopyASCIItoUTF16(oldName, oldVal);
+  CopyASCIItoUTF16(newName, newVal);
   newAcctName.Assign(acctName);
 
   // here, oldVal is empty.  we are testing that this function
@@ -472,45 +472,6 @@ TEST(Strings, concat_3)
   EXPECT_STREQ(result.get(), "abc");
 }
 
-TEST(Strings, xpidl_string)
-{
-  nsXPIDLCString a, b;
-  a = b;
-  EXPECT_TRUE(a == b);
-
-  a.Adopt(0);
-  EXPECT_TRUE(a == b);
-
-  a.Append("foopy");
-  a.Assign(b);
-  EXPECT_TRUE(a == b);
-
-  a.Insert("", 0);
-  a.Assign(b);
-  EXPECT_TRUE(a == b);
-
-  const char text[] = "hello world";
-  *getter_Copies(a) = NS_strdup(text);
-  EXPECT_STREQ(a, text);
-
-  b = a;
-  EXPECT_STREQ(a, b);
-
-  a.Adopt(0);
-  nsACString::const_iterator begin, end;
-  a.BeginReading(begin);
-  a.EndReading(end);
-  char *r = ToNewCString(Substring(begin, end));
-  EXPECT_STREQ(r, "");
-  free(r);
-
-  a.Adopt(0);
-  EXPECT_TRUE(a.IsVoid());
-
-  int32_t index = a.FindCharInSet("xyz");
-  EXPECT_EQ(index, kNotFound);
-}
-
 TEST(Strings, empty_assign)
 {
   nsCString a;
@@ -537,7 +498,7 @@ TEST(Strings, substring)
   nsCString super("hello world"), sub("hello");
 
   // this tests that |super| starts with |sub|,
-  
+
   EXPECT_TRUE(sub.Equals(StringHead(super, sub.Length())));
 
   // and verifies that |sub| does not start with |super|.
@@ -720,21 +681,40 @@ TEST(Strings, voided)
 {
   const char kData[] = "hello world";
 
-  nsXPIDLCString str;
-  EXPECT_FALSE(str);
-  EXPECT_TRUE(str.IsVoid());
+  nsCString str;
+  EXPECT_TRUE(!str.IsVoid());
   EXPECT_TRUE(str.IsEmpty());
-
-  str.Assign(kData);
-  EXPECT_STREQ(str, kData);
+  EXPECT_STREQ(str.get(), "");
 
   str.SetIsVoid(true);
-  EXPECT_FALSE(str);
   EXPECT_TRUE(str.IsVoid());
   EXPECT_TRUE(str.IsEmpty());
+  EXPECT_STREQ(str.get(), "");
+
+  str.Assign(kData);
+  EXPECT_TRUE(!str.IsVoid());
+  EXPECT_TRUE(!str.IsEmpty());
+  EXPECT_STREQ(str.get(), kData);
+
+  str.SetIsVoid(true);
+  EXPECT_TRUE(str.IsVoid());
+  EXPECT_TRUE(str.IsEmpty());
+  EXPECT_STREQ(str.get(), "");
 
   str.SetIsVoid(false);
-  EXPECT_STREQ(str, "");
+  EXPECT_TRUE(!str.IsVoid());
+  EXPECT_TRUE(str.IsEmpty());
+  EXPECT_STREQ(str.get(), "");
+
+  str.Assign(kData);
+  EXPECT_TRUE(!str.IsVoid());
+  EXPECT_TRUE(!str.IsEmpty());
+  EXPECT_STREQ(str.get(), kData);
+
+  str.Adopt(nullptr);
+  EXPECT_TRUE(str.IsVoid());
+  EXPECT_TRUE(str.IsEmpty());
+  EXPECT_STREQ(str.get(), "");
 }
 
 TEST(Strings, voided_autostr)
@@ -1018,67 +998,67 @@ TEST(Strings, Split)
   nsString wide(u"hello world");
 
   size_t counter = 0;
-  for (const nsCSubstring& token : one.Split(',')) {
-    EXPECT_TRUE(token.Equals(NS_LITERAL_CSTRING("one")));
+  for (const nsACString& token : one.Split(',')) {
+    EXPECT_TRUE(token.EqualsLiteral("one"));
     counter++;
   }
   EXPECT_EQ(counter, (size_t)1);
 
   counter = 0;
-  for (const nsCSubstring& token : two.Split(';')) {
+  for (const nsACString& token : two.Split(';')) {
     if (counter == 0) {
-      EXPECT_TRUE(token.Equals(NS_LITERAL_CSTRING("one")));
+      EXPECT_TRUE(token.EqualsLiteral("one"));
     } else if (counter == 1) {
-      EXPECT_TRUE(token.Equals(NS_LITERAL_CSTRING("two")));
+      EXPECT_TRUE(token.EqualsLiteral("two"));
     }
     counter++;
   }
   EXPECT_EQ(counter, (size_t)2);
 
   counter = 0;
-  for (const nsCSubstring& token : three.Split('-')) {
+  for (const nsACString& token : three.Split('-')) {
     if (counter == 0) {
-      EXPECT_TRUE(token.Equals(NS_LITERAL_CSTRING("one")));
+      EXPECT_TRUE(token.EqualsLiteral("one"));
     } else if (counter == 1) {
-      EXPECT_TRUE(token.Equals(NS_LITERAL_CSTRING("")));
+      EXPECT_TRUE(token.EqualsLiteral(""));
     } else if (counter == 2) {
-      EXPECT_TRUE(token.Equals(NS_LITERAL_CSTRING("three")));
+      EXPECT_TRUE(token.EqualsLiteral("three"));
     }
     counter++;
   }
   EXPECT_EQ(counter, (size_t)3);
 
   counter = 0;
-  for (const nsCSubstring& token : empty.Split(',')) {
+  for (const nsACString& token : empty.Split(',')) {
     mozilla::Unused << token;
     counter++;
   }
   EXPECT_EQ(counter, (size_t)0);
 
   counter = 0;
-  for (const nsCSubstring& token : delimStart.Split('-')) {
+  for (const nsACString& token : delimStart.Split('-')) {
     if (counter == 0) {
-      EXPECT_TRUE(token.Equals(NS_LITERAL_CSTRING("")));
+      EXPECT_TRUE(token.EqualsLiteral(""));
     } else if (counter == 1) {
-      EXPECT_TRUE(token.Equals(NS_LITERAL_CSTRING("two")));
+      EXPECT_TRUE(token.EqualsLiteral("two"));
     }
     counter++;
   }
   EXPECT_EQ(counter, (size_t)2);
 
   counter = 0;
-  for (const nsCSubstring& token : delimEnd.Split('-')) {
+  for (const nsACString& token : delimEnd.Split('-')) {
     if (counter == 0) {
-      EXPECT_TRUE(token.Equals(NS_LITERAL_CSTRING("one")));
+      EXPECT_TRUE(token.EqualsLiteral("one"));
     } else if (counter == 1) {
-      EXPECT_TRUE(token.Equals(NS_LITERAL_CSTRING("")));
+      EXPECT_TRUE(token.EqualsLiteral(""));
     }
     counter++;
   }
   EXPECT_EQ(counter, (size_t)2);
 
   counter = 0;
-  for (const nsSubstring& token : wide.Split(' ')) {
+  for (const nsAString& token : wide.Split(' ')) {
     if (counter == 0) {
       EXPECT_TRUE(token.Equals(NS_LITERAL_STRING("hello")));
     } else if (counter == 1) {
@@ -1372,6 +1352,71 @@ MOZ_GTEST_BENCH(Strings, PerfStripCharsCRLF, [] {
       test3.StripChars("\r\n");
       test4.StripChars("\r\n");
       test5.StripChars("\r\n");
+    }
+});
+
+// Setup overhead test
+#define OneASCII "a"
+
+// Maximal non-SIMD legth
+#define FifteenASCII "Lorem ipsum dol"
+
+// Around hundred is common length for IsUTF8 check
+#define HundredASCII "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis ac tellus eget velit viverra viverra i"
+
+MOZ_GTEST_BENCH(Strings, PerfIsUTF8One, [] {
+    nsCString test(OneASCII);
+    for (int i = 0; i < 200000; i++) {
+      IsUTF8(test);
+    }
+});
+
+MOZ_GTEST_BENCH(Strings, PerfIsUTF8Fifteen, [] {
+    nsCString test(FifteenASCII);
+    for (int i = 0; i < 200000; i++) {
+      IsUTF8(test);
+    }
+});
+
+MOZ_GTEST_BENCH(Strings, PerfIsUTF8Hundred, [] {
+    nsCString test(HundredASCII);
+    for (int i = 0; i < 200000; i++) {
+      IsUTF8(test);
+    }
+});
+
+MOZ_GTEST_BENCH(Strings, PerfIsUTF8Example3, [] {
+    nsCString test(TestExample3);
+    for (int i = 0; i < 100000; i++) {
+      IsUTF8(test);
+    }
+});
+
+MOZ_GTEST_BENCH(Strings, PerfIsASCII8One, [] {
+    nsCString test(OneASCII);
+    for (int i = 0; i < 200000; i++) {
+      IsASCII(test);
+    }
+});
+
+MOZ_GTEST_BENCH(Strings, PerfIsASCIIFifteen, [] {
+    nsCString test(FifteenASCII);
+    for (int i = 0; i < 200000; i++) {
+      IsASCII(test);
+    }
+});
+
+MOZ_GTEST_BENCH(Strings, PerfIsASCIIHundred, [] {
+    nsCString test(HundredASCII);
+    for (int i = 0; i < 200000; i++) {
+      IsASCII(test);
+    }
+});
+
+MOZ_GTEST_BENCH(Strings, PerfIsASCIIExample3, [] {
+    nsCString test(TestExample3);
+    for (int i = 0; i < 100000; i++) {
+      IsUTF8(test);
     }
 });
 

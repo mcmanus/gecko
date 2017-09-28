@@ -63,8 +63,10 @@ public:
   virtual void ChildIsDirty(nsIFrame* aChild) override;
 
   virtual FrameSearchResult PeekOffsetNoAmount(bool aForward, int32_t* aOffset) override;
-  virtual FrameSearchResult PeekOffsetCharacter(bool aForward, int32_t* aOffset,
-                                     bool aRespectClusters = true) override;
+  virtual FrameSearchResult
+  PeekOffsetCharacter(bool aForward, int32_t* aOffset,
+                      PeekOffsetCharacterOptions aOptions =
+                        PeekOffsetCharacterOptions()) override;
 
   virtual nsresult AttributeChanged(int32_t         aNameSpaceID,
                                     nsIAtom*        aAttribute,
@@ -72,7 +74,7 @@ public:
 
 #ifdef DEBUG_FRAME_DUMP
   void List(FILE* out = stderr, const char* aPrefix = "", uint32_t aFlags = 0) const override;
-#endif  
+#endif
 
   // nsContainerFrame methods
 
@@ -382,7 +384,7 @@ public:
    */
   virtual bool DrainSelfOverflowList() override;
 
-  
+
   /**
    * Move all frames on our prev-in-flow's and our own ExcessOverflowContainers
    * lists to our OverflowContainers list.  If there are frames on multiple
@@ -417,7 +419,6 @@ public:
    * Add overflow containers to the display list
    */
   void DisplayOverflowContainers(nsDisplayListBuilder*   aBuilder,
-                                 const nsRect&           aDirtyRect,
                                  const nsDisplayListSet& aLists);
 
   /**
@@ -430,7 +431,6 @@ public:
    * to emulate what nsContainerFrame::Paint did.
    */
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   static void PlaceFrameView(nsIFrame* aFrame)
@@ -521,6 +521,20 @@ public:
   NS_DECLARE_FRAME_PROPERTY_FRAMELIST(ExcessOverflowContainersProperty)
   NS_DECLARE_FRAME_PROPERTY_FRAMELIST(BackdropProperty)
 
+  // Only really used on nsBlockFrame instances, but the caller thinks it could
+  // have arbitrary nsContainerFrames.
+  NS_DECLARE_FRAME_PROPERTY_WITHOUT_DTOR(FirstLetterProperty, nsIFrame)
+
+  void SetHasFirstLetterChild()
+  {
+    mHasFirstLetterChild = true;
+  }
+
+  void ClearHasFirstLetterChild()
+  {
+    mHasFirstLetterChild = false;
+  }
+
 #ifdef DEBUG
   // Use this to suppress the CRAZY_SIZE assertions.
   NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(DebugReflowingWithInfiniteISize, bool)
@@ -559,7 +573,6 @@ protected:
    * display items) go into the Content() list.
    */
   void BuildDisplayListForNonBlockChildren(nsDisplayListBuilder*   aBuilder,
-                                           const nsRect&           aDirtyRect,
                                            const nsDisplayListSet& aLists,
                                            uint32_t                aFlags = 0);
 
@@ -568,11 +581,9 @@ protected:
    * Intended as a convenience for derived classes.
    */
   void BuildDisplayListForInline(nsDisplayListBuilder*   aBuilder,
-                                 const nsRect&           aDirtyRect,
                                  const nsDisplayListSet& aLists) {
     DisplayBorderBackgroundOutline(aBuilder, aLists);
-    BuildDisplayListForNonBlockChildren(aBuilder, aDirtyRect, aLists,
-                                        DISPLAY_CHILD_INLINE);
+    BuildDisplayListForNonBlockChildren(aBuilder, aLists, DISPLAY_CHILD_INLINE);
   }
 
 
@@ -600,7 +611,7 @@ protected:
    * into an AutoFrameListPtr.
    */
   inline nsFrameList* StealOverflowFrames();
-  
+
   /**
    * Set the overflow list.  aOverflowFrames must not be an empty list.
    */
@@ -807,7 +818,7 @@ public:
     {
       if (mTracker) mTracker->BeginFinish(mChild);
     }
-    ~AutoFinish() 
+    ~AutoFinish()
     {
       if (mTracker) mTracker->EndFinish(mChild);
     }

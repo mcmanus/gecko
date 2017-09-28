@@ -13,8 +13,9 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/dom/CSSImportRule.h"
 
+#include "nsStringFwd.h"
+
 class nsMediaList;
-class nsString;
 
 namespace mozilla {
 
@@ -40,8 +41,9 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(ImportRule, Rule)
   NS_DECL_ISUPPORTS_INHERITED
 
-  // unhide since nsIDOMCSSImportRule has its own GetStyleSheet
+  // unhide since nsIDOMCSSImportRule has its own GetStyleSheet and GetMedia
   using dom::CSSImportRule::GetStyleSheet;
+  using dom::CSSImportRule::GetMedia;
 
   // Rule methods
 #ifdef DEBUG
@@ -58,7 +60,7 @@ public:
 
   // WebIDL interface
   void GetCssTextImpl(nsAString& aCssText) const override;
-  dom::MediaList* Media() const final;
+  dom::MediaList* GetMedia() const final;
   StyleSheet* GetStyleSheet() const final;
 
 private:

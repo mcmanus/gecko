@@ -386,6 +386,7 @@ class ICToNumber_Fallback : public ICFallbackStub
 
 // GetElem
 //      JSOP_GETELEM
+//      JSOP_GETELEM_SUPER
 
 class ICGetElem_Fallback : public ICMonitoredFallbackStub
 {
@@ -415,11 +416,19 @@ class ICGetElem_Fallback : public ICMonitoredFallbackStub
     // Compiler for this stub kind.
     class Compiler : public ICStubCompiler {
       protected:
+        bool hasReceiver_;
         MOZ_MUST_USE bool generateStubCode(MacroAssembler& masm);
 
+        virtual int32_t getKey() const {
+            return static_cast<int32_t>(engine_) |
+                  (static_cast<int32_t>(kind) << 1) |
+                  (static_cast<int32_t>(hasReceiver_) << 17);
+        }
+
       public:
-        explicit Compiler(JSContext* cx)
-          : ICStubCompiler(cx, ICStub::GetElem_Fallback, Engine::Baseline)
+        explicit Compiler(JSContext* cx, bool hasReceiver = false)
+          : ICStubCompiler(cx, ICStub::GetElem_Fallback, Engine::Baseline),
+            hasReceiver_(hasReceiver)
         { }
 
         ICStub* getStub(ICStubSpace* space) {
@@ -738,11 +747,11 @@ class ICCall_Fallback : public ICMonitoredFallbackStub
     static const uint32_t MAX_OPTIMIZED_STUBS = 16;
     static const uint32_t MAX_SCRIPTED_STUBS = 7;
     static const uint32_t MAX_NATIVE_STUBS = 7;
-  private:
 
+  private:
     explicit ICCall_Fallback(JitCode* stubCode)
       : ICMonitoredFallbackStub(ICStub::Call_Fallback, stubCode)
-    { }
+    {}
 
   public:
     void noteUnoptimizableCall() {
@@ -1350,12 +1359,12 @@ class ICTableSwitch : public ICStub
 };
 
 // IC for constructing an iterator from an input value.
-class ICIteratorNew_Fallback : public ICFallbackStub
+class ICGetIterator_Fallback : public ICFallbackStub
 {
     friend class ICStubSpace;
 
-    explicit ICIteratorNew_Fallback(JitCode* stubCode)
-      : ICFallbackStub(ICStub::IteratorNew_Fallback, stubCode)
+    explicit ICGetIterator_Fallback(JitCode* stubCode)
+      : ICFallbackStub(ICStub::GetIterator_Fallback, stubCode)
     { }
 
   public:
@@ -1365,11 +1374,11 @@ class ICIteratorNew_Fallback : public ICFallbackStub
 
       public:
         explicit Compiler(JSContext* cx)
-          : ICStubCompiler(cx, ICStub::IteratorNew_Fallback, Engine::Baseline)
+          : ICStubCompiler(cx, ICStub::GetIterator_Fallback, Engine::Baseline)
         { }
 
         ICStub* getStub(ICStubSpace* space) {
-            return newStub<ICIteratorNew_Fallback>(space, getStubCode());
+            return newStub<ICGetIterator_Fallback>(space, getStubCode());
         }
     };
 };

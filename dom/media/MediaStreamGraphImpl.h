@@ -14,6 +14,7 @@
 #include "mozilla/Monitor.h"
 #include "mozilla/TimeStamp.h"
 #include "nsIMemoryReporter.h"
+#include "nsINamed.h"
 #include "nsIThread.h"
 #include "nsIRunnable.h"
 #include "nsIAsyncShutdown.h"
@@ -93,18 +94,20 @@ public:
  * file. It's not in the anonymous namespace because MediaStream needs to
  * be able to friend it.
  *
- * There can be multiple MediaStreamGraph per process: one per AudioChannel.
+ * There can be multiple MediaStreamGraph per process: one per document.
  * Additionaly, each OfflineAudioContext object creates its own MediaStreamGraph
  * object too.
  */
 class MediaStreamGraphImpl : public MediaStreamGraph,
                              public nsIMemoryReporter,
-                             public nsITimerCallback
+                             public nsITimerCallback,
+                             public nsINamed
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIMEMORYREPORTER
   NS_DECL_NSITIMERCALLBACK
+  NS_DECL_NSINAMED
 
   /**
    * Use aGraphDriverRequested with SYSTEM_THREAD_DRIVER or AUDIO_THREAD_DRIVER
@@ -116,7 +119,7 @@ public:
    */
   explicit MediaStreamGraphImpl(GraphDriverType aGraphDriverRequested,
                                 TrackRate aSampleRate,
-                                dom::AudioChannel aChannel);
+                                AbstractThread* aWindow);
 
   /**
    * Unregisters memory reporting and deletes this instance. This should be
@@ -148,6 +151,12 @@ public:
    * during RunInStableState; the messages will run on the graph thread.
    */
   void AppendMessage(UniquePtr<ControlMessage> aMessage);
+
+  /**
+   * Dispatches a runnable from any thread to the correct main thread for this
+   * MediaStreamGraph.
+   */
+  void Dispatch(already_AddRefed<nsIRunnable>&& aRunnable);
 
   // Shutdown helpers.
 
@@ -444,8 +453,10 @@ public:
     mStreamOrderDirty = true;
   }
 
-  // Always stereo for now.
-  uint32_t AudioChannelCount() const { return 2; }
+  uint32_t AudioChannelCount() const
+  {
+    return std::min<uint32_t>(8, CubebUtils::MaxNumberOfChannels());
+  }
 
   double MediaTimeToSeconds(GraphTime aTime) const
   {
@@ -805,11 +816,10 @@ public:
    */
   RefPtr<AsyncLatencyLogger> mLatencyLog;
   AudioMixer mMixer;
+  const RefPtr<AbstractThread> mAbstractMainThread;
 #ifdef MOZ_WEBRTC
   RefPtr<AudioOutputObserver> mFarendObserverRef;
 #endif
-
-  dom::AudioChannel AudioChannel() const { return mAudioChannel; }
 
   // used to limit graph shutdown time
   nsCOMPtr<nsITimer> mShutdownTimer;
@@ -844,8 +854,6 @@ private:
    */
   bool mCanRunMessagesSynchronously;
 #endif
-
-  dom::AudioChannel mAudioChannel;
 };
 
 } // namespace mozilla

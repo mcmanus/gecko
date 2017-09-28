@@ -10,9 +10,9 @@
 #include "mozilla/dom/BorrowedAttrInfo.h"
 #include "nsCaseTreatment.h" // for enum, cannot be forward-declared
 #include "nsINode.h"
+#include "nsStringFwd.h"
 
 // Forward declarations
-class nsAString;
 class nsIAtom;
 class nsIURI;
 class nsRuleWalker;
@@ -21,6 +21,7 @@ class nsAttrName;
 class nsTextFragment;
 class nsIFrame;
 class nsXBLBinding;
+class nsITextControlElement;
 
 namespace mozilla {
 class EventChainPreVisitor;
@@ -527,10 +528,12 @@ public:
    * Determines if an event attribute name (such as onclick) is valid for
    * a given element type.
    * @note calls nsContentUtils::IsEventAttributeName with right flag
-   * @note overridden by subclasses as needed
+   * @note *Internal is overridden by subclasses as needed
    * @param aName the event name to look up
    */
-  virtual bool IsEventAttributeName(nsIAtom* aName)
+  bool IsEventAttributeName(nsIAtom* aName);
+
+  virtual bool IsEventAttributeNameInternal(nsIAtom* aName)
   {
     return false;
   }
@@ -820,10 +823,10 @@ public:
    * This method is called when the parser finishes creating the element's children,
    * if any are present.
    *
-   * NOTE: this is currently only called for textarea, select, applet, and
-   * object elements in the HTML content sink.  If you want
-   * to call it on your element, modify the content sink of your
-   * choice to do so.  This is an efficiency measure.
+   * NOTE: this is currently only called for textarea, select, and object
+   * elements in the HTML content sink. If you want to call it on your element,
+   * modify the content sink of your choice to do so. This is an efficiency
+   * measure.
    *
    * If you also need to determine whether the parser is the one creating your
    * element (through createElement() or cloneNode() generally) then add a
@@ -840,12 +843,14 @@ public:
   }
 
   /**
-   * For HTML textarea, select, applet, and object elements, returns
-   * true if all children have been added OR if the element was not
-   * created by the parser. Returns true for all other elements.
+   * For HTML textarea, select, and object elements, returns true if all
+   * children have been added OR if the element was not created by the parser.
+   * Returns true for all other elements.
+   *
    * @returns false if the element was created by the parser and
-   *                   it is an HTML textarea, select, applet, or object
+   *                   it is an HTML textarea, select, or object
    *                   element and not all children have been added.
+   *
    * @returns true otherwise.
    */
   virtual bool IsDoneAddingChildren()
@@ -906,12 +911,9 @@ public:
   {
     return (IsInUncomposedDoc() || IsInShadowTree()) ? mPrimaryFrame : nullptr;
   }
-  void SetPrimaryFrame(nsIFrame* aFrame) {
-    MOZ_ASSERT(IsInUncomposedDoc() || IsInShadowTree(), "This will end badly!");
-    NS_PRECONDITION(!aFrame || !mPrimaryFrame || aFrame == mPrimaryFrame,
-                    "Losing track of existing primary frame");
-    mPrimaryFrame = aFrame;
-  }
+
+  // Defined in nsIContentInlines.h because it needs nsIFrame.
+  inline void SetPrimaryFrame(nsIFrame* aFrame);
 
   nsresult LookupNamespaceURIInternal(const nsAString& aNamespacePrefix,
                                       nsAString& aNamespaceURI) const;
@@ -975,6 +977,12 @@ public:
   virtual void RemovePurple() = 0;
 
   virtual bool OwnedOnlyByTheDOMTree() { return false; }
+
+  virtual already_AddRefed<nsITextControlElement> GetAsTextControlElement()
+  {
+    return nullptr;
+  }
+
 protected:
   /**
    * Hook for implementing GetID.  This is guaranteed to only be

@@ -17,6 +17,8 @@
 #include "nsDisplayList.h"
 #include "nsIReflowCallback.h"
 #include "Units.h"
+#include "mozilla/layers/StackingContextHelper.h"
+#include "mozilla/webrender/WebRenderAPI.h"
 
 #ifdef XP_WIN
 #include <windows.h> // For HWND :(
@@ -60,6 +62,9 @@ public:
   typedef mozilla::layers::Layer Layer;
   typedef mozilla::layers::LayerManager LayerManager;
   typedef mozilla::layers::ImageContainer ImageContainer;
+  typedef mozilla::layers::StackingContextHelper StackingContextHelper;
+  typedef mozilla::layers::WebRenderLayerManager WebRenderLayerManager;
+  typedef mozilla::layers::WebRenderParentCommand WebRenderParentCommand;
   typedef mozilla::ContainerLayerParameters ContainerLayerParameters;
 
   NS_DECL_FRAMEARENA_HELPERS(nsPluginFrame)
@@ -80,7 +85,6 @@ public:
                          const ReflowInput* aReflowInput,
                          nsDidReflowStatus aStatus) override;
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual nsresult  HandleEvent(nsPresContext* aPresContext,
@@ -105,7 +109,7 @@ public:
 
   virtual void SetIsDocumentActive(bool aIsActive) override;
 
-  virtual nsresult GetCursor(const nsPoint& aPoint, 
+  virtual nsresult GetCursor(const nsPoint& aPoint,
                              nsIFrame::Cursor& aCursor) override;
 
   // APIs used by nsRootPresContext to set up the widget position/size/clip
@@ -174,7 +178,7 @@ public:
    * the frame's content-box but may be smaller if the plugin is rendering
    * asynchronously and has a different-sized image temporarily.
    */
-  nsRect GetPaintedRect(nsDisplayPlugin* aItem);
+  nsRect GetPaintedRect(const nsDisplayPlugin* aItem) const;
 
   /**
    * If aSupports has a nsPluginFrame, then prepare it for a DocShell swap.
@@ -222,6 +226,12 @@ public:
    */
   bool WantsToHandleWheelEventAsDefaultAction() const;
 
+  bool CreateWebRenderCommands(nsDisplayItem* aItem,
+                               mozilla::wr::DisplayListBuilder& aBuilder,
+                               mozilla::wr::IpcResourceUpdateQueue& aResources,
+                               const StackingContextHelper& aSc,
+                               mozilla::layers::WebRenderLayerManager* aManager,
+                               nsDisplayListBuilder* aDisplayListBuilder);
 protected:
   explicit nsPluginFrame(nsStyleContext* aContext);
   virtual ~nsPluginFrame();
@@ -232,7 +242,7 @@ protected:
                       const ReflowInput& aReflowInput,
                       ReflowOutput& aDesiredSize);
 
-  bool IsFocusable(int32_t *aTabIndex = nullptr, 
+  bool IsFocusable(int32_t *aTabIndex = nullptr,
                    bool aWithMouse = false) override;
 
   // check attributes and optionally CSS to see if we should display anything
@@ -243,7 +253,7 @@ protected:
   bool IsPaintedByGecko() const;
 
   nsIntPoint GetWindowOriginInPixels(bool aWindowless);
-  
+
   /*
    * If this frame is in a remote tab, return the tab offset to
    * the origin of the chrome window. In non-e10s, this return 0,0.
@@ -268,6 +278,7 @@ protected:
 
   nsView* GetViewInternal() const override { return mOuterView; }
   void SetViewInternal(nsView* aView) override { mOuterView = aView; }
+  bool GetBounds(nsDisplayItem* aItem, mozilla::gfx::IntSize& aSize, gfxRect& aRect);
 
 private:
   // Registers the plugin for a geometry update, and requests a geometry
@@ -292,9 +303,12 @@ private:
 
   class PluginEventNotifier : public mozilla::Runnable {
   public:
-    explicit PluginEventNotifier(const nsString &aEventType) : 
-      mEventType(aEventType) {}
-    
+    explicit PluginEventNotifier(const nsString& aEventType)
+      : mozilla::Runnable("nsPluginFrame::PluginEventNotifier")
+      , mEventType(aEventType)
+    {
+    }
+
     NS_IMETHOD Run() override;
   private:
     nsString mEventType;
@@ -348,9 +362,10 @@ public:
   }
 #endif
 
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) override;
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
+                           bool* aSnap) const override;
   virtual nsRegion GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
-                                   bool* aSnap) override;
+                                   bool* aSnap) const override;
   virtual void Paint(nsDisplayListBuilder* aBuilder,
                      gfxContext* aCtx) override;
   virtual bool ComputeVisibility(nsDisplayListBuilder* aBuilder,
@@ -363,7 +378,7 @@ public:
                                              const ContainerLayerParameters& aContainerParameters) override
   {
     return static_cast<nsPluginFrame*>(mFrame)->BuildLayer(aBuilder,
-                                                           aManager, 
+                                                           aManager,
                                                            this,
                                                            aContainerParameters);
   }
@@ -375,6 +390,12 @@ public:
     return static_cast<nsPluginFrame*>(mFrame)->GetLayerState(aBuilder,
                                                               aManager);
   }
+
+  virtual bool CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
+                                       mozilla::wr::IpcResourceUpdateQueue& aResources,
+                                       const StackingContextHelper& aSc,
+                                       mozilla::layers::WebRenderLayerManager* aManager,
+                                       nsDisplayListBuilder* aDisplayListBuilder) override;
 };
 
 #endif /* nsPluginFrame_h___ */

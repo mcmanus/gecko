@@ -4,13 +4,14 @@
 
 //! A list of CSS rules.
 
-use shared_lock::{DeepCloneWithLock, Locked, SharedRwLock, SharedRwLockReadGuard};
-use stylearc::Arc;
+#[cfg(feature = "gecko")]
+use malloc_size_of::{MallocShallowSizeOf, MallocSizeOfOps};
+use servo_arc::{Arc, RawOffsetArc};
+use shared_lock::{DeepCloneParams, DeepCloneWithLock, Locked, SharedRwLock, SharedRwLockReadGuard};
 use stylesheets::{CssRule, RulesMutateError};
 use stylesheets::loader::StylesheetLoader;
-use stylesheets::memory::{MallocSizeOfFn, MallocSizeOfWithGuard};
 use stylesheets::rule_parser::State;
-use stylesheets::stylesheet::Stylesheet;
+use stylesheets::stylesheet::StylesheetContents;
 
 /// A list of CSS rules.
 #[derive(Debug)]
@@ -27,25 +28,26 @@ impl DeepCloneWithLock for CssRules {
     fn deep_clone_with_lock(
         &self,
         lock: &SharedRwLock,
-        guard: &SharedRwLockReadGuard
-    ) -> Self {
-        CssRules(
-            self.0.iter().map(|ref x| x.deep_clone_with_lock(lock, guard)).collect()
-        )
-    }
-}
-
-impl MallocSizeOfWithGuard for CssRules {
-    fn malloc_size_of_children(
-        &self,
         guard: &SharedRwLockReadGuard,
-        malloc_size_of: MallocSizeOfFn
-    ) -> usize {
-        self.0.malloc_size_of_children(guard, malloc_size_of)
+        params: &DeepCloneParams,
+    ) -> Self {
+        CssRules(self.0.iter().map(|x| {
+            x.deep_clone_with_lock(lock, guard, params)
+        }).collect())
     }
 }
 
 impl CssRules {
+    /// Measure heap usage.
+    #[cfg(feature = "gecko")]
+    pub fn size_of(&self, guard: &SharedRwLockReadGuard, ops: &mut MallocSizeOfOps) -> usize {
+        let mut n = self.0.shallow_size_of(ops);
+        for rule in self.0.iter() {
+            n += rule.size_of(guard, ops);
+        }
+        n
+    }
+
     /// Trivially construct a new set of CSS rules.
     pub fn new(rules: Vec<CssRule>, shared_lock: &SharedRwLock) -> Arc<Locked<CssRules>> {
         Arc::new(shared_lock.wrap(CssRules(rules)))
@@ -101,18 +103,18 @@ pub trait CssRulesHelpers {
     fn insert_rule(&self,
                    lock: &SharedRwLock,
                    rule: &str,
-                   parent_stylesheet: &Stylesheet,
+                   parent_stylesheet_contents: &StylesheetContents,
                    index: usize,
                    nested: bool,
                    loader: Option<&StylesheetLoader>)
                    -> Result<CssRule, RulesMutateError>;
 }
 
-impl CssRulesHelpers for Arc<Locked<CssRules>> {
+impl CssRulesHelpers for RawOffsetArc<Locked<CssRules>> {
     fn insert_rule(&self,
                    lock: &SharedRwLock,
                    rule: &str,
-                   parent_stylesheet: &Stylesheet,
+                   parent_stylesheet_contents: &StylesheetContents,
                    index: usize,
                    nested: bool,
                    loader: Option<&StylesheetLoader>)
@@ -139,11 +141,17 @@ impl CssRulesHelpers for Arc<Locked<CssRules>> {
         // Step 3, 4
         // XXXManishearth should we also store the namespace map?
         let (new_rule, new_state) =
-            CssRule::parse(&rule, parent_stylesheet, state, loader)?;
+            CssRule::parse(
+                &rule,
+                parent_stylesheet_contents,
+                lock,
+                state,
+                loader
+            )?;
 
         {
             let mut write_guard = lock.write();
-            let mut rules = self.write_with(&mut write_guard);
+            let rules = self.write_with(&mut write_guard);
             // Step 5
             // Computes the maximum allowed parser state at a given index.
             let rev_state = rules.0.get(index).map_or(State::Body, CssRule::rule_state);

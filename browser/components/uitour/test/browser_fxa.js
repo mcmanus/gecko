@@ -5,6 +5,8 @@
 
 var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
+Cu.import("resource://services-sync/UIState.jsm");
+
 XPCOMUtils.defineLazyModuleGetter(this, "fxAccounts",
                                   "resource://gre/modules/FxAccounts.jsm");
 
@@ -36,12 +38,11 @@ var tests = [
     await setSignedInUser();
     let userData = await fxAccounts.getSignedInUser();
     isnot(userData, null, "Logged in now");
-    gSync.updateAllUI({ status: UIState. STATUS_SIGNED_IN, email: "foo@example.com" });
+    gSync.updateAllUI({ status: UIState.STATUS_SIGNED_IN, email: "foo@example.com" });
     await showMenuPromise("appMenu");
     await showHighlightPromise("accountStatus");
     let highlight = document.getElementById("UITourHighlightContainer");
-    let photon = Services.prefs.getBoolPref("browser.photon.structure.enabled");
-    let expectedTarget = photon ? "appMenu-fxa-avatar" : "PanelUI-fxa-avatar";
+    let expectedTarget = "appMenu-fxa-avatar";
     is(highlight.popupBoxObject.anchorNode.id, expectedTarget, "Anchored on avatar");
     is(highlight.getAttribute("targetName"), "accountStatus", "Correct highlight target");
   }),

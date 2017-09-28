@@ -60,8 +60,9 @@ private:
   {
     RefPtr<TaskQueue> taskqueue = mTaskQueue;
     nsCOMPtr<nsIRunnable> task =
-      NS_NewRunnableFunction([taskqueue]() { taskqueue->BeginShutdown(); });
-    SystemGroup::Dispatch("~AutoTaskQueue", TaskCategory::Other, task.forget());
+      NS_NewRunnableFunction("AutoTaskQueue::~AutoTaskQueue",
+                             [taskqueue]() { taskqueue->BeginShutdown(); });
+    SystemGroup::Dispatch(TaskCategory::Other, task.forget());
   }
   RefPtr<TaskQueue> mTaskQueue;
 };

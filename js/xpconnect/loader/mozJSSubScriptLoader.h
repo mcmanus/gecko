@@ -41,6 +41,7 @@ private:
 
     nsresult ReadScriptAsync(nsIURI* uri,
                              JS::HandleObject targetObj,
+                             JS::HandleObject loadScope,
                              const nsAString& charset,
                              nsIIOService* serv,
                              bool wantReturnValue,
@@ -51,6 +52,4 @@ private:
                                         LoadSubScriptOptions& options,
                                         JSContext* cx,
                                         JS::MutableHandleValue retval);
-
-    nsCOMPtr<nsIPrincipal> mSystemPrincipal;
 };

@@ -10,7 +10,6 @@
 #include "mozilla/LoadTainting.h"
 #include "mozilla/Logging.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/dom/SRILogHelper.h"
 #include "mozilla/dom/SRIMetadata.h"
 #include "nsContentUtils.h"
@@ -183,22 +182,18 @@ SRICheck::IntegrityMetadata(const nsAString& aMetadataList,
 
 /* static */ nsresult
 SRICheck::VerifyIntegrity(const SRIMetadata& aMetadata,
-                          nsIUnicharStreamLoader* aLoader,
-                          const nsAString& aString,
+                          nsIChannel* aChannel,
+                          const nsACString& aBytes,
                           const nsACString& aSourceFileURI,
                           nsIConsoleReportCollector* aReporter)
 {
-  NS_ENSURE_ARG_POINTER(aLoader);
   NS_ENSURE_ARG_POINTER(aReporter);
-
-  nsCOMPtr<nsIChannel> channel;
-  aLoader->GetChannel(getter_AddRefs(channel));
 
   if (MOZ_LOG_TEST(SRILogHelper::GetSriLog(), mozilla::LogLevel::Debug)) {
     nsAutoCString requestURL;
     nsCOMPtr<nsIURI> originalURI;
-    if (channel &&
-        NS_SUCCEEDED(channel->GetOriginalURI(getter_AddRefs(originalURI))) &&
+    if (aChannel &&
+        NS_SUCCEEDED(aChannel->GetOriginalURI(getter_AddRefs(originalURI))) &&
         originalURI) {
       originalURI->GetAsciiSpec(requestURL);
     }
@@ -206,14 +201,11 @@ SRICheck::VerifyIntegrity(const SRIMetadata& aMetadata,
   }
 
   SRICheckDataVerifier verifier(aMetadata, aSourceFileURI, aReporter);
-  nsresult rv;
-  nsDependentCString rawBuffer;
-  rv = aLoader->GetRawBuffer(rawBuffer);
-  NS_ENSURE_SUCCESS(rv, rv);
-  rv = verifier.Update(rawBuffer.Length(), (const uint8_t*)rawBuffer.get());
+  nsresult rv =
+    verifier.Update(aBytes.Length(), (const uint8_t*)aBytes.BeginReading());
   NS_ENSURE_SUCCESS(rv, rv);
 
-  return verifier.Verify(aMetadata, channel, aSourceFileURI, aReporter);
+  return verifier.Verify(aMetadata, aChannel, aSourceFileURI, aReporter);
 }
 
 //////////////////////////////////////////////////////////////
@@ -372,7 +364,7 @@ SRICheckDataVerifier::Verify(const SRIMetadata& aMetadata,
     nsCOMPtr<nsIRequest> request;
     request = do_QueryInterface(aChannel);
     request->GetName(requestURL);
-    SRILOG(("SRICheckDataVerifier::Verify, url=%s (length=%" PRIuSIZE ")",
+    SRILOG(("SRICheckDataVerifier::Verify, url=%s (length=%zu)",
             requestURL.get(), mBytesHashed));
   }
 

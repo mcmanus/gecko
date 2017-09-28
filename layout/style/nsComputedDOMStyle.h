@@ -122,7 +122,7 @@ public:
   }
 
   static nsIPresShell*
-  GetPresShellForContent(nsIContent* aContent);
+  GetPresShellForContent(const nsIContent* aContent);
 
   // Helper for nsDOMWindowUtils::GetVisitedDependentComputedStyle
   void SetExposeVisitedStyle(bool aExpose) {
@@ -168,8 +168,9 @@ private:
 
   // Helper functions called by UpdateCurrentStyleSources.
   void ClearStyleContext();
-  void SetResolvedStyleContext(RefPtr<nsStyleContext>&& aContext);
-  void SetFrameStyleContext(nsStyleContext* aContext);
+  void SetResolvedStyleContext(RefPtr<nsStyleContext>&& aContext,
+                               uint64_t aGeneration);
+  void SetFrameStyleContext(nsStyleContext* aContext, uint64_t aGeneration);
 
   static already_AddRefed<nsStyleContext>
   DoGetStyleContextNoFlush(mozilla::dom::Element* aElement,
@@ -295,6 +296,7 @@ private:
   already_AddRefed<CSSValue> DoGetFontSize();
   already_AddRefed<CSSValue> DoGetFontSizeAdjust();
   already_AddRefed<CSSValue> DoGetOsxFontSmoothing();
+  already_AddRefed<CSSValue> DoGetFontSmoothingBackgroundColor();
   already_AddRefed<CSSValue> DoGetFontStretch();
   already_AddRefed<CSSValue> DoGetFontStyle();
   already_AddRefed<CSSValue> DoGetFontSynthesis();
@@ -344,7 +346,6 @@ private:
 
   /* Mask properties */
   already_AddRefed<CSSValue> DoGetMask();
-#ifdef MOZ_ENABLE_MASK_AS_SHORTHAND
   already_AddRefed<CSSValue> DoGetMaskImage();
   already_AddRefed<CSSValue> DoGetMaskPosition();
   already_AddRefed<CSSValue> DoGetMaskPositionX();
@@ -355,7 +356,7 @@ private:
   already_AddRefed<CSSValue> DoGetMaskSize();
   already_AddRefed<CSSValue> DoGetMaskMode();
   already_AddRefed<CSSValue> DoGetMaskComposite();
-#endif
+
   /* Padding properties */
   already_AddRefed<CSSValue> DoGetPaddingTop();
   already_AddRefed<CSSValue> DoGetPaddingBottom();

@@ -144,7 +144,7 @@ class VRDisplay;
 enum class VRDisplayEventReason : uint8_t;
 class VREventObserver;
 class WakeLock;
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_WIDGET_ANDROID)
 class WindowOrientationObserver;
 #endif
 class Worklet;
@@ -261,7 +261,7 @@ private:
 
 class nsGlobalWindow : public mozilla::dom::EventTarget,
                        public nsPIDOMWindow<nsISupports>,
-                       private nsIDOMWindowInternal,
+                       private nsIDOMWindow,
                        public nsIScriptGlobalObject,
                        public nsIScriptObjectPrincipal,
                        public nsSupportsWeakReference,
@@ -474,9 +474,6 @@ public:
 
   static bool IsPrivilegedChromeWindow(JSContext* /* unused */, JSObject* aObj);
 
-  static bool IsShowModalDialogEnabled(JSContext* /* unused */ = nullptr,
-                                       JSObject* /* unused */ = nullptr);
-
   static bool IsRequestIdleCallbackEnabled(JSContext* aCx, JSObject* /* unused */);
 
   bool DoResolve(JSContext* aCx, JS::Handle<JSObject*> aObj,
@@ -601,15 +598,16 @@ public:
     return mIsChrome;
   }
 
-  using nsPIDOMWindow::IsModalContentWindow;
-  static bool IsModalContentWindow(JSContext* aCx, JSObject* aGlobal);
-
   // GetScrollFrame does not flush.  Callers should do it themselves as needed,
   // depending on which info they actually want off the scrollable frame.
   nsIScrollableFrame *GetScrollFrame();
 
   nsresult Observe(nsISupports* aSubject, const char* aTopic,
                    const char16_t* aData);
+
+  void ObserveStorageNotification(mozilla::dom::StorageEvent* aEvent,
+                                  const char16_t* aStorageType,
+                                  bool aPrivateBrowsing);
 
   // Outer windows only.
   void UnblockScriptedClosing();
@@ -647,20 +645,13 @@ public:
   virtual void EnableDeviceSensor(uint32_t aType) override;
   virtual void DisableDeviceSensor(uint32_t aType) override;
 
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_WIDGET_ANDROID)
   virtual void EnableOrientationChangeListener() override;
   virtual void DisableOrientationChangeListener() override;
 #endif
 
   virtual void EnableTimeChangeNotifications() override;
   virtual void DisableTimeChangeNotifications() override;
-
-#ifdef MOZ_B2G
-  // Inner windows only.
-  virtual void EnableNetworkEvent(mozilla::EventMessage aEventMessage) override;
-  virtual void DisableNetworkEvent(
-                 mozilla::EventMessage aEventMessage) override;
-#endif // MOZ_B2G
 
   virtual nsresult SetArguments(nsIArray* aArguments) override;
 
@@ -725,7 +716,7 @@ public:
     return sWindowsById;
   }
 
-  void AddSizeOfIncludingThis(nsWindowSizes* aWindowSizes) const;
+  void AddSizeOfIncludingThis(nsWindowSizes& aWindowSizes) const;
 
   // Inner windows only.
   void AddEventTargetObject(mozilla::DOMEventTargetHelper* aObject);
@@ -746,9 +737,10 @@ public:
     ContinueSlowScript = 0,
     ContinueSlowScriptAndKeepNotifying,
     AlwaysContinueSlowScript,
-    KillSlowScript
+    KillSlowScript,
+    KillScriptGlobal
   };
-  SlowScriptResponse ShowSlowScriptDialog();
+  SlowScriptResponse ShowSlowScriptDialog(const nsString& aAddonId);
 
   // Inner windows only.
   void AddGamepad(uint32_t aIndex, mozilla::dom::Gamepad* aGamepad);
@@ -937,7 +929,7 @@ public:
   nsIDOMOfflineResourceList* GetApplicationCache(mozilla::ErrorResult& aError);
   already_AddRefed<nsIDOMOfflineResourceList> GetApplicationCache() override;
 
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_WIDGET_ANDROID)
   int16_t Orientation(mozilla::dom::CallerType aCallerType) const;
 #endif
 
@@ -965,7 +957,7 @@ public:
   GetPaintWorklet(mozilla::ErrorResult& aRv);
 
   void
-  GetAppLocalesAsBCP47(nsTArray<nsString>& aLocales);
+  GetRegionalPrefsLocales(nsTArray<nsString>& aLocales);
 
 #ifdef ENABLE_INTL_API
   mozilla::dom::IntlUtils*
@@ -1007,12 +999,6 @@ public:
                                                 mozilla::ErrorResult& aRv);
   void PrintOuter(mozilla::ErrorResult& aError);
   void Print(mozilla::ErrorResult& aError);
-  void ShowModalDialog(JSContext* aCx, const nsAString& aUrl,
-                       JS::Handle<JS::Value> aArgument,
-                       const nsAString& aOptions,
-                       JS::MutableHandle<JS::Value> aRetval,
-                       nsIPrincipal& aSubjectPrincipal,
-                       mozilla::ErrorResult& aError);
   void PostMessageMoz(JSContext* aCx, JS::Handle<JS::Value> aMessage,
                       const nsAString& aTargetOrigin,
                       const mozilla::dom::Sequence<JSObject*>& aTransfer,
@@ -1248,17 +1234,6 @@ public:
     return win.forget();
   }
 
-  void Get_content(JSContext* aCx,
-                   JS::MutableHandle<JSObject*> aRetval,
-                   mozilla::dom::SystemCallerGuarantee aCallerType,
-                   mozilla::ErrorResult& aError)
-  {
-    if (mDoc) {
-      mDoc->WarnOnceAbout(nsIDocument::eWindow_Content);
-    }
-    GetContent(aCx, aRetval, aCallerType, aError);
-  }
-
   already_AddRefed<mozilla::dom::Promise>
   CreateImageBitmap(JSContext* aCx,
                     const mozilla::dom::ImageBitmapSource& aImage,
@@ -1332,6 +1307,8 @@ public:
   already_AddRefed<nsWindowRoot> GetWindowRoot(mozilla::ErrorResult& aError);
 
   mozilla::dom::Performance* GetPerformance();
+
+  void UpdateTopInnerWindow();
 
 protected:
   // Web IDL helpers
@@ -1736,7 +1713,6 @@ protected:
 public:
   // Outer windows only.
   nsDOMWindowList* GetWindowList();
-
 protected:
   // Helper for getComputedStyle and getDefaultComputedStyle
   already_AddRefed<nsICSSDeclaration>
@@ -1772,18 +1748,6 @@ protected:
                       JS::Handle<JS::Value> aTransfer,
                       nsIPrincipal& aSubjectPrincipal,
                       mozilla::ErrorResult& aError);
-
-  already_AddRefed<nsIVariant>
-    ShowModalDialogOuter(const nsAString& aUrl, nsIVariant* aArgument,
-                         const nsAString& aOptions,
-                         nsIPrincipal& aSubjectPrincipal,
-                         mozilla::ErrorResult& aError);
-
-  already_AddRefed<nsIVariant>
-    ShowModalDialog(const nsAString& aUrl, nsIVariant* aArgument,
-                    const nsAString& aOptions,
-                    nsIPrincipal& aSubjectPrincipal,
-                    mozilla::ErrorResult& aError);
 
   // Ask the user if further dialogs should be blocked, if dialogs are currently
   // being abused. This is used in the cases where we have no modifiable UI to
@@ -1825,8 +1789,7 @@ private:
 
 public:
   // Dispatch a runnable related to the global.
-  virtual nsresult Dispatch(const char* aName,
-                            mozilla::TaskCategory aCategory,
+  virtual nsresult Dispatch(mozilla::TaskCategory aCategory,
                             already_AddRefed<nsIRunnable>&& aRunnable) override;
 
   virtual nsISerialEventTarget*
@@ -1935,9 +1898,6 @@ protected:
   // For |window.arguments|, via |openDialog|.
   nsCOMPtr<nsIArray>            mArguments;
 
-  // For |window.dialogArguments|, via |showModalDialog|.
-  RefPtr<DialogValueHolder> mDialogArguments;
-
   // Only used in the outer.
   RefPtr<DialogValueHolder> mReturnValue;
 
@@ -2001,11 +1961,6 @@ protected:
   nsCOMPtr<nsIURI> mLastOpenedURI;
 #endif
 
-#ifdef MOZ_B2G
-  bool mNetworkUploadObserverEnabled;
-  bool mNetworkDownloadObserverEnabled;
-#endif // MOZ_B2G
-
   bool mCleanedUp;
 
   nsCOMPtr<nsIDOMOfflineResourceList> mApplicationCache;
@@ -2043,7 +1998,7 @@ protected:
 
   nsTArray<uint32_t> mEnabledSensors;
 
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_WIDGET_ANDROID)
   nsAutoPtr<mozilla::dom::WindowOrientationObserver> mOrientationChangeObserver;
 #endif
 
@@ -2084,7 +2039,6 @@ protected:
   friend class IdleRequestExecutor;
 
   static WindowByIdTable* sWindowsById;
-  static bool sWarnedAboutWindowInternal;
 };
 
 inline nsISupports*
@@ -2177,40 +2131,14 @@ public:
   nsCOMPtr<mozIDOMWindowProxy> mOpenerForInitialContentBrowser;
 };
 
-/*
- * nsGlobalModalWindow inherits from nsGlobalWindow. It is the global
- * object created for a modal content windows only (i.e. not modal
- * chrome dialogs).
- */
-class nsGlobalModalWindow : public nsGlobalWindow,
-                            public nsIDOMModalContentWindow
-{
-public:
-  NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_NSIDOMMODALCONTENTWINDOW
-
-  static already_AddRefed<nsGlobalModalWindow> Create(nsGlobalWindow *aOuterWindow);
-
-protected:
-  explicit nsGlobalModalWindow(nsGlobalWindow *aOuterWindow)
-    : nsGlobalWindow(aOuterWindow)
-  {
-    mIsModalContentWindow = true;
-  }
-
-  ~nsGlobalModalWindow() {}
-};
-
 /* factory function */
 inline already_AddRefed<nsGlobalWindow>
-NS_NewScriptGlobalObject(bool aIsChrome, bool aIsModalContentWindow)
+NS_NewScriptGlobalObject(bool aIsChrome)
 {
   RefPtr<nsGlobalWindow> global;
 
   if (aIsChrome) {
     global = nsGlobalChromeWindow::Create(nullptr);
-  } else if (aIsModalContentWindow) {
-    global = nsGlobalModalWindow::Create(nullptr);
   } else {
     global = nsGlobalWindow::Create(nullptr);
   }

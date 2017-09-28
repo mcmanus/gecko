@@ -2,12 +2,6 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-//
-// Whitelisting this test.
-// As part of bug 1077403, the leaking uncaught rejection should be fixed.
-//
-thisTestLeaksUncaughtRejectionsAndShouldBeFixed("TypeError: window.location is null");
-
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
   "resource://gre/modules/Promise.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "fxAccounts",
@@ -32,44 +26,6 @@ registerCleanupFunction(function() {
 });
 
 var gTests = [
-{
-  desc: "Test the remote commands",
-  async teardown() {
-    gBrowser.removeCurrentTab();
-    await signOut();
-  },
-  async run() {
-    setPref("identity.fxaccounts.remote.signup.uri",
-            "https://example.com/browser/browser/base/content/test/sync/accounts_testRemoteCommands.html");
-    let tab = await promiseNewTabLoadEvent("about:accounts");
-    let mm = tab.linkedBrowser.messageManager;
-
-    let deferred = Promise.defer();
-
-    // We'll get a message when openPrefs() is called, which this test should
-    // arrange.
-    let promisePrefsOpened = promiseOneMessage(tab, "test:openPrefsCalled");
-    let results = 0;
-    try {
-      mm.addMessageListener("test:response", function responseHandler(msg) {
-        let data = msg.data.data;
-        if (data.type == "testResult") {
-          ok(data.pass, data.info);
-          results++;
-        } else if (data.type == "testsComplete") {
-          is(results, data.count, "Checking number of results received matches the number of tests that should have run");
-          mm.removeMessageListener("test:response", responseHandler);
-          deferred.resolve();
-        }
-      });
-    } catch (e) {
-      ok(false, "Failed to get all commands");
-      deferred.reject();
-    }
-    await deferred.promise;
-    await promisePrefsOpened;
-  }
-},
 {
   desc: "Test action=signin - no user logged in",
   teardown: () => gBrowser.removeCurrentTab(),

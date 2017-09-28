@@ -9,6 +9,7 @@
 #include "nsIObserver.h"
 #include "nsString.h"
 #include "nsTArray.h"
+#include "nsWeakReference.h"
 
 #include "mozILocaleService.h"
 
@@ -68,7 +69,8 @@ namespace intl {
  * but we negotiate between languages etc.
  */
 class LocaleService : public mozILocaleService,
-                      public nsIObserver
+                      public nsIObserver,
+                      public nsSupportsWeakReference
 {
 public:
   NS_DECL_ISUPPORTS
@@ -125,6 +127,26 @@ public:
    */
   void GetAppLocalesAsLangTags(nsTArray<nsCString>& aRetVal);
   void GetAppLocalesAsBCP47(nsTArray<nsCString>& aRetVal);
+
+
+  /**
+   * Returns a list of locales to use for any regional specific operations
+   * like date formatting, calendars, unit formatting etc.
+   *
+   * The result is a ordered list of valid locale IDs and it should be
+   * used for all APIs that accept list of locales, like ECMA402 and L10n APIs.
+   *
+   * This API always returns at least one locale.
+   *
+   * Example: ["en-US", "de", "pl", "sr-Cyrl", "zh-Hans-HK"]
+   *
+   * Usage:
+   *   nsTArray<nsCString> rgLocales;
+   *   LocaleService::GetInstance()->GetRegionalPrefsLocales(rgLocales);
+   *
+   * (See mozILocaleService.idl for a JS-callable version of this.)
+   */
+  void GetRegionalPrefsLocales(nsTArray<nsCString>& aRetVal);
 
   /**
    * This method should only be called in the client mode.
@@ -249,7 +271,9 @@ private:
     void SetVariantRange();
     void SetRegionRange();
 
-    bool AddLikelySubtags(); // returns false if nothing changed
+    // returns false if nothing changed
+    bool AddLikelySubtags();
+    bool AddLikelySubtagsWithoutRegion();
 
     const nsCString& AsString() const {
       return mLocaleStr;
@@ -269,6 +293,8 @@ private:
     nsCString mScript;
     nsCString mRegion;
     nsCString mVariant;
+
+    bool AddLikelySubtagsForLocale(const nsACString& aLocale);
   };
 
   void FilterMatches(const nsTArray<nsCString>& aRequested,
@@ -280,6 +306,7 @@ private:
 
   virtual ~LocaleService();
 
+  nsAutoCStringN<16>  mDefaultLocale;
   nsTArray<nsCString> mAppLocales;
   nsTArray<nsCString> mRequestedLocales;
   nsTArray<nsCString> mAvailableLocales;

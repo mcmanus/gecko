@@ -89,7 +89,7 @@ impl Permissions {
         let root_desc = match Permissions::create_descriptor(cx, permissionDesc) {
             Ok(descriptor) => descriptor,
             Err(error) => {
-                p.reject_error(cx, error);
+                p.reject_error(error);
                 return p;
             },
         };
@@ -103,7 +103,7 @@ impl Permissions {
                 let bluetooth_desc = match Bluetooth::create_descriptor(cx, permissionDesc) {
                     Ok(descriptor) => descriptor,
                     Err(error) => {
-                        p.reject_error(cx, error);
+                        p.reject_error(error);
                         return p;
                     },
                 };
@@ -140,14 +140,14 @@ impl Permissions {
                         // (Request) Step 7. The default algorithm always resolve
 
                         // (Request) Step 8.
-                        p.resolve_native(cx, &status);
+                        p.resolve_native(&status);
                     },
                     &Operation::Query => {
                         // (Query) Step 6.
                         Permissions::permission_query(cx, &p, &root_desc, &status);
 
                         // (Query) Step 7.
-                        p.resolve_native(cx, &status);
+                        p.resolve_native(&status);
                     },
 
                     &Operation::Revoke => {
@@ -241,7 +241,7 @@ impl PermissionAlgorithm for Permissions {
                 let state =
                     prompt_user(&format!("{} {} ?", REQUEST_DIALOG_MESSAGE, perm_name.clone()));
 
-                let globalscope = GlobalScope::current();
+                let globalscope = GlobalScope::current().expect("No current global object");
                 globalscope.as_window()
                            .permission_state_invocation_results()
                            .borrow_mut()
@@ -266,7 +266,7 @@ pub fn get_descriptor_permission_state(permission_name: PermissionName,
     // Step 1.
     let settings = match env_settings_obj {
         Some(env_settings_obj) => Root::from_ref(env_settings_obj),
-        None => GlobalScope::current(),
+        None => GlobalScope::current().expect("No current global object"),
     };
 
     // Step 2.

@@ -31,6 +31,9 @@ public:
           uint64_t* aOutInputBlockId) override;
 
   void
+  SetKeyboardMap(const KeyboardMap& aKeyboardMap) override;
+
+  void
   ZoomToRect(
           const ScrollableLayerGuid& aGuid,
           const CSSRect& aRect,
@@ -52,9 +55,6 @@ public:
           const Maybe<ZoomConstraints>& aConstraints) override;
 
   void
-  CancelAnimation(const ScrollableLayerGuid &aGuid) override;
-
-  void
   SetDPI(float aDpiValue) override;
 
   void
@@ -68,15 +68,24 @@ public:
           const AsyncDragMetrics& aDragMetrics) override;
 
   void
+  StartAutoscroll(
+          const ScrollableLayerGuid& aGuid,
+          const ScreenPoint& aAnchorLocation) override;
+
+  void
+  StopAutoscroll(const ScrollableLayerGuid& aGuid) override;
+
+  void
   SetLongTapEnabled(bool aTapGestureEnabled) override;
 
   void
   ProcessTouchVelocity(uint32_t aTimestampMs, float aSpeedY) override;
 
   void
-  TransformEventRefPoint(
+  ProcessUnhandledEvent(
           LayoutDeviceIntPoint* aRefPoint,
-          ScrollableLayerGuid* aOutTargetGuid) override;
+          ScrollableLayerGuid*  aOutTargetGuid,
+          uint64_t*             aOutFocusSequenceNumber) override;
 
   void
   UpdateWheelTransaction(
@@ -94,6 +103,8 @@ protected:
                                                  const ScrollableLayerGuid& aGuid,
                                                  const LayoutDeviceCoord& aSpanChange,
                                                  const Modifiers& aModifiers) override;
+
+  mozilla::ipc::IPCResult RecvCancelAutoscroll(const FrameMetrics::ViewID& aScrollId) override;
 
   virtual
   ~APZCTreeManagerChild() { }

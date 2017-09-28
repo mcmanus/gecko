@@ -30,11 +30,18 @@ impl CSS {
 
     /// https://drafts.csswg.org/css-conditional/#dom-css-supports
     pub fn Supports(win: &Window, property: DOMString, value: DOMString) -> bool {
-        let decl = Declaration { prop: property.into(), val: value.into() };
+        let mut decl = String::new();
+        serialize_identifier(&property, &mut decl).unwrap();
+        decl.push_str(": ");
+        decl.push_str(&value);
+        let decl = Declaration(decl);
         let url = win.Document().url();
-        let context = ParserContext::new_for_cssom(&url, win.css_error_reporter(), Some(CssRuleType::Supports),
-                                                   PARSING_MODE_DEFAULT,
-                                                   QuirksMode::NoQuirks);
+        let context = ParserContext::new_for_cssom(
+            &url,
+            Some(CssRuleType::Style),
+            PARSING_MODE_DEFAULT,
+            QuirksMode::NoQuirks
+        );
         decl.eval(&context)
     }
 
@@ -45,9 +52,12 @@ impl CSS {
         let cond = parse_condition_or_declaration(&mut input);
         if let Ok(cond) = cond {
             let url = win.Document().url();
-            let context = ParserContext::new_for_cssom(&url, win.css_error_reporter(), Some(CssRuleType::Supports),
-                                                       PARSING_MODE_DEFAULT,
-                                                       QuirksMode::NoQuirks);
+            let context = ParserContext::new_for_cssom(
+                &url,
+                Some(CssRuleType::Style),
+                PARSING_MODE_DEFAULT,
+                QuirksMode::NoQuirks
+            );
             cond.eval(&context)
         } else {
             false

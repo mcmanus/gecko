@@ -30,7 +30,6 @@ public:
 
   // nsIFrame overrides
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
 #ifdef ACCESSIBILITY
@@ -56,9 +55,11 @@ public:
   virtual bool IsEmpty() override;
   virtual bool IsSelfEmpty() override;
 
-  virtual FrameSearchResult PeekOffsetCharacter(bool aForward, int32_t* aOffset,
-                                     bool aRespectClusters = true) override;
-  
+  virtual FrameSearchResult
+  PeekOffsetCharacter(bool aForward, int32_t* aOffset,
+                      PeekOffsetCharacterOptions aOptions =
+                        PeekOffsetCharacterOptions()) override;
+
   virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
   virtual nsresult StealFrame(nsIFrame* aChild) override;
 
@@ -117,9 +118,7 @@ public:
   // Restyles the block wrappers around our non-inline-outside kids.
   // This will only be called when such wrappers in fact exist.
   void UpdateStyleOfOwnedAnonBoxesForIBSplit(
-      mozilla::ServoStyleSet& aStyleSet,
-      nsStyleChangeList& aChangeList,
-      nsChangeHint aHintForThisFrame);
+    mozilla::ServoRestyleState& aRestyleState);
 
 protected:
   // Additional reflow state used during our reflow methods

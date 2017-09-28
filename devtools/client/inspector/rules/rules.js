@@ -26,11 +26,12 @@ const {
   VIEW_NODE_VALUE_TYPE,
   VIEW_NODE_IMAGE_URL_TYPE,
   VIEW_NODE_LOCATION_TYPE,
+  VIEW_NODE_SHAPE_POINT_TYPE,
 } = require("devtools/client/inspector/shared/node-types");
 const StyleInspectorMenu = require("devtools/client/inspector/shared/style-inspector-menu");
 const TooltipsOverlay = require("devtools/client/inspector/shared/tooltips-overlay");
-const {createChild, promiseWarn, throttle} = require("devtools/client/inspector/shared/utils");
-const EventEmitter = require("devtools/shared/event-emitter");
+const {createChild, promiseWarn, debounce} = require("devtools/client/inspector/shared/utils");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 const KeyShortcuts = require("devtools/client/shared/key-shortcuts");
 const clipboardHelper = require("devtools/shared/platform/clipboard");
 const AutocompletePopup = require("devtools/client/shared/autocomplete-popup");
@@ -41,13 +42,14 @@ const PREF_DEFAULT_COLOR_UNIT = "devtools.defaultColorUnit";
 const PREF_ENABLE_MDN_DOCS_TOOLTIP =
       "devtools.inspector.mdnDocsTooltip.enabled";
 const FILTER_CHANGED_TIMEOUT = 150;
-const PREF_ORIG_SOURCES = "devtools.styleeditor.source-maps-enabled";
+const PREF_ORIG_SOURCES = "devtools.source-map.client-service.enabled";
 
 // This is used to parse user input when filtering.
 const FILTER_PROP_RE = /\s*([^:\s]*)\s*:\s*(.*?)\s*;?$/;
 // This is used to parse the filter search value to see if the filter
 // should be strict or not
 const FILTER_STRICT_RE = /\s*`(.*?)`\s*$/;
+const INSET_POINT_TYPES = ["top", "right", "bottom", "left"];
 
 /**
  * Our model looks like this:
@@ -107,8 +109,8 @@ function CssRuleView(inspector, document, store, pageStyle) {
   this.store = store || {};
   this.pageStyle = pageStyle;
 
-  // Allow tests to override throttling behavior, as this can cause intermittents.
-  this.throttle = throttle;
+  // Allow tests to override debouncing behavior, as this can cause intermittents.
+  this.debounce = debounce;
 
   this.cssProperties = getCssProperties(inspector.toolbox);
 
@@ -148,7 +150,6 @@ function CssRuleView(inspector, document, store, pageStyle) {
   this.element.addEventListener("contextmenu", this._onContextMenu);
   this.addRuleButton.addEventListener("click", this._onAddRule);
   this.searchField.addEventListener("input", this._onFilterStyles);
-  this.searchField.addEventListener("contextmenu", this.inspector.onTextBoxContextMenu);
   this.searchClearButton.addEventListener("click", this._onClearSearch);
   this.pseudoClassToggle.addEventListener("click", this._onTogglePseudoClassPanel);
   this.classToggle.addEventListener("click", this._onToggleClassPanel);
@@ -332,6 +333,19 @@ CssRuleView.prototype = {
         pseudoElement: prop.rule.pseudoElement,
         sheetHref: prop.rule.domRule.href,
         textProperty: prop
+      };
+    } else if (classes.contains("ruleview-shape-point") && prop) {
+      type = VIEW_NODE_SHAPE_POINT_TYPE;
+      value = {
+        property: getPropertyNameAndValue(node).name,
+        value: node.textContent,
+        enabled: prop.enabled,
+        overridden: prop.overridden,
+        pseudoElement: prop.rule.pseudoElement,
+        sheetHref: prop.rule.domRule.href,
+        textProperty: prop,
+        toggleActive: getShapeToggleActive(node),
+        point: getShapePoint(node)
       };
     } else if (classes.contains("theme-link") &&
                !classes.contains("ruleview-rule-source") && prop) {
@@ -686,8 +700,6 @@ CssRuleView.prototype = {
     this.element.removeEventListener("contextmenu", this._onContextMenu);
     this.addRuleButton.removeEventListener("click", this._onAddRule);
     this.searchField.removeEventListener("input", this._onFilterStyles);
-    this.searchField.removeEventListener("contextmenu",
-      this.inspector.onTextBoxContextMenu);
     this.searchClearButton.removeEventListener("click", this._onClearSearch);
     this.pseudoClassToggle.removeEventListener("click", this._onTogglePseudoClassPanel);
     this.classToggle.removeEventListener("click", this._onToggleClassPanel);
@@ -885,7 +897,7 @@ CssRuleView.prototype = {
       // Notify anyone that cares that we refreshed.
       return onEditorsReady.then(() => {
         this.emit("ruleview-refreshed");
-      }, e => console.error(e));
+      }, console.error);
     }).catch(promiseWarn);
   },
 
@@ -899,6 +911,7 @@ CssRuleView.prototype = {
 
     createChild(this.element, "div", {
       id: "ruleview-no-results",
+      class: "devtools-sidepanel-no-result",
       textContent: l10n("rule.empty")
     });
   },
@@ -991,12 +1004,7 @@ CssRuleView.prototype = {
     container.hidden = false;
     this.element.appendChild(container);
 
-    header.addEventListener("dblclick", () => {
-      this._toggleContainerVisibility(twisty, container, isPseudo,
-        !this.showPseudoElements);
-    });
-
-    twisty.addEventListener("click", () => {
+    header.addEventListener("click", () => {
       this._toggleContainerVisibility(twisty, container, isPseudo,
         !this.showPseudoElements);
     });
@@ -1045,7 +1053,7 @@ CssRuleView.prototype = {
   },
 
   _getRuleViewHeaderClassName: function (isPseudo) {
-    let baseClassName = "theme-gutter ruleview-header";
+    let baseClassName = "ruleview-header";
     return isPseudo ? baseClassName + " ruleview-expandable-header" :
       baseClassName;
   },
@@ -1537,6 +1545,52 @@ function getPropertyNameAndValue(node) {
     }
     node = node.parentNode;
   }
+}
+
+/**
+ * Walk up the DOM from a given node until a parent property holder is found,
+ * and return an active shape toggle if one exists.
+ *
+ * @param {DOMNode} node
+ *        The node to start from
+ * @returns {DOMNode} The active shape toggle node, if one exists.
+ */
+function getShapeToggleActive(node) {
+  while (true) {
+    if (!node || !node.classList) {
+      return null;
+    }
+    // Check first for ruleview-computed since it's the deepest
+    if (node.classList.contains("ruleview-computed") ||
+        node.classList.contains("ruleview-property")) {
+      return node.querySelector(".ruleview-shape.active");
+    }
+    node = node.parentNode;
+  }
+}
+
+/**
+ * Get the point associated with a shape point node.
+ *
+ * @param {DOMNode} node
+ *        A shape point node
+ * @returns {String} The point associated with the given node.
+ */
+function getShapePoint(node) {
+  let classList = node.classList;
+  let point = node.dataset.point;
+  // Inset points use classes instead of data because a single span can represent
+  // multiple points.
+  let insetClasses = [];
+  classList.forEach(className => {
+    if (INSET_POINT_TYPES.includes(className)) {
+      insetClasses.push(className);
+    }
+  });
+  if (insetClasses.length > 0) {
+    point = insetClasses.join(",");
+  }
+  return point;
 }
 
 function RuleViewTool(inspector, window) {

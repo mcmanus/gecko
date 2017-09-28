@@ -392,9 +392,6 @@ DiskInit.h
 dlfcn.h
 dlgs.h
 dl.h
-#ifdef MOZ_WIDGET_GONK
-dns_sd.h
-#endif
 docobj.h
 dos/dosextens.h
 dos.h
@@ -838,6 +835,7 @@ PMApplication.h
 pmddim.h
 poll.h
 Polygon.h
+port.h
 portable.h
 Power.h
 PP_ClassHeaders.cp
@@ -887,6 +885,7 @@ rpc/types.h
 sane/sane.h
 sane/sanei.h
 sane/saneopts.h
+sanitizer/asan_interface.h
 sched.h
 Scrap.h
 Screen.h
@@ -1276,6 +1275,9 @@ bzlib.h
 gio/gio.h
 #if MOZ_SYSTEM_LIBEVENT==1
 event.h
+event2/event.h
+event2/event_compat.h
+event2/event_struct.h
 #else
 sys/event.h
 #endif
@@ -1326,6 +1328,7 @@ unicode/ucol.h
 unicode/udat.h
 unicode/udatpg.h
 unicode/uenum.h
+unicode/unistr.h
 unicode/unorm.h
 unicode/unum.h
 unicode/upluralrules.h

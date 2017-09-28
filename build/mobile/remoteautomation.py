@@ -60,7 +60,7 @@ class RemoteAutomation(Automation):
         self._remoteLog = logfile
 
     # Set up what we need for the remote environment
-    def environment(self, env=None, xrePath=None, crashreporter=True, debugger=False, dmdPath=None, lsanPath=None):
+    def environment(self, env=None, xrePath=None, crashreporter=True, debugger=False, dmdPath=None, lsanPath=None, ubsanPath=None):
         # Because we are running remote, we don't want to mimic the local env
         # so no copying of os.environ
         if env is None:
@@ -383,6 +383,7 @@ class RemoteAutomation(Automation):
             status = 0
             top = self.procName
             slowLog = False
+            endTime = datetime.datetime.now() + datetime.timedelta(seconds = timeout)
             while (top == self.procName):
                 # Get log updates on each interval, but if it is taking
                 # too long, only do it every 60 seconds
@@ -397,7 +398,7 @@ class RemoteAutomation(Automation):
                 time.sleep(interval)
                 timer += interval
                 noOutputTimer += interval
-                if (timer > timeout):
+                if datetime.datetime.now() > endTime:
                     status = 1
                     break
                 if (noOutputTimeout and noOutputTimer > noOutputTimeout):

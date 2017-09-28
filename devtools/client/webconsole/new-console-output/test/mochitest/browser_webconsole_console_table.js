@@ -115,6 +115,19 @@ add_task(function* () {
         ["1", "Elena"],
       ]
     }
+  }, {
+    info: "Testing nested object with falsy values",
+    input: [
+      {a: null, b: false, c: undefined, d: 0},
+      {b: null, c: false, d: undefined, e: 0}
+    ],
+    expected: {
+      columns: ["(index)", "a", "b", "c", "d", "e"],
+      rows: [
+        ["0", "null", "false", "undefined", "0", "undefined"],
+        ["1", "undefined", "null", "false", "undefined", "0"],
+      ]
+    }
   }];
 
   yield ContentTask.spawn(gBrowser.selectedBrowser, testCases, function (tests) {
@@ -122,24 +135,19 @@ add_task(function* () {
       content.wrappedJSObject.doConsoleTable(test.input, test.headers);
     });
   });
-
   let nodes = [];
   for (let testCase of testCases) {
     let node = yield waitFor(
-      () => findConsoleTable(hud.ui.experimentalOutputNode, testCases.indexOf(testCase))
+      () => findConsoleTable(hud.ui.outputNode, testCases.indexOf(testCase))
     );
     nodes.push(node);
   }
-
-  let consoleTableNodes = hud.ui.experimentalOutputNode.querySelectorAll(
+  let consoleTableNodes = hud.ui.outputNode.querySelectorAll(
     ".message .new-consoletable");
-
   is(consoleTableNodes.length, testCases.length,
     "console has the expected number of consoleTable items");
-
   testCases.forEach((testCase, index) => testItem(testCase, nodes[index]));
 });
-
 function testItem(testCase, node) {
   info(testCase.info);
 

@@ -37,6 +37,11 @@
 #include "mozilla/Sprintf.h"
 #include "nsSocketTransportService2.h"
 #include "nsNetUtil.h"
+#include "nsICacheEntry.h"
+#include "nsICacheStorageService.h"
+#include "nsICacheStorage.h"
+#include "CacheControlParser.h"
+#include "LoadContextInfo.h"
 
 namespace mozilla {
 namespace net {
@@ -135,6 +140,8 @@ Http2Session::Http2Session(nsISocketTransport *aSocketTransport, uint32_t versio
 
   mPingThreshold = gHttpHandler->SpdyPingThreshold();
   mPreviousPingThreshold = mPingThreshold;
+  mCurrentForegroundTabOuterContentWindowId =
+    gHttpHandler->ConnMgr()->CurrentTopLevelOuterContentWindowId();
 }
 
 void
@@ -413,7 +420,11 @@ Http2Session::AddStream(nsAHttpTransaction *aHttpTransaction,
     return true;
   }
 
-  Http2Stream *stream = new Http2Stream(aHttpTransaction, this, aPriority);
+  Http2Stream *stream =
+    new Http2Stream(aHttpTransaction,
+                    this,
+                    aPriority,
+                    mCurrentForegroundTabOuterContentWindowId);
 
   LOG3(("Http2Session::AddStream session=%p stream=%p serial=%" PRIu64 " "
         "NextID=0x%X (tentative)", this, stream, mSerial, mNextStreamID));
@@ -792,14 +803,9 @@ Http2Session::GeneratePriority(uint32_t aID, uint8_t aPriorityWeight)
   LOG3(("Http2Session::GeneratePriority %p %X %X\n",
         this, aID, aPriorityWeight));
 
-  uint32_t frameSize = kFrameHeaderBytes + 5;
-  char *packet = EnsureOutputBuffer(frameSize);
-  mOutputQueueUsed += frameSize;
+  char *packet = CreatePriorityFrame(aID, 0, aPriorityWeight);
 
-  CreateFrameHeader(packet, 5, FRAME_TYPE_PRIORITY, 0, aID);
-  NetworkEndian::writeUint32(packet + kFrameHeaderBytes, 0);
-  memcpy(packet + frameSize - 1, &aPriorityWeight, 1);
-  LogIO(this, nullptr, "Generate Priority", packet, frameSize);
+  LogIO(this, nullptr, "Generate Priority", packet, kFrameHeaderBytes + 5);
   FlushOutputQueue();
 }
 
@@ -858,8 +864,8 @@ Http2Session::GenerateGoAway(uint32_t aStatusCode)
 // flush out silent but broken intermediaries
 // 2] a settings frame which sets a small flow control window for pushes
 // 3] a window update frame which creates a large session flow control window
-// 4] 5 priority frames for streams which will never be opened with headers
-//    these streams (3, 5, 7, 9, b) build a dependency tree that all other
+// 4] 6 priority frames for streams which will never be opened with headers
+//    these streams (3, 5, 7, 9, b, d) build a dependency tree that all other
 //    streams will be direct leaves of.
 void
 Http2Session::SendHello()
@@ -867,11 +873,11 @@ Http2Session::SendHello()
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   LOG3(("Http2Session::SendHello %p\n", this));
 
-  // sized for magic + 5 settings and a session window update and 5 priority frames
+  // sized for magic + 5 settings and a session window update and 6 priority frames
   // 24 magic, 33 for settings (9 header + 4 settings @6), 13 for window update,
-  // 5 priority frames at 14 (9 + 5) each
+  // 6 priority frames at 14 (9 + 5) each
   static const uint32_t maxSettings = 5;
-  static const uint32_t prioritySize = 5 * (kFrameHeaderBytes + 5);
+  static const uint32_t prioritySize = kPriorityGroupCount * (kFrameHeaderBytes + 5);
   static const uint32_t maxDataLen = 24 + kFrameHeaderBytes + maxSettings * 6 + 13 + prioritySize;
   char *packet = EnsureOutputBuffer(maxDataLen);
   memcpy(packet, kMagicHello, 24);
@@ -976,14 +982,38 @@ Http2Session::SendHello()
 }
 
 void
-Http2Session::CreatePriorityNode(uint32_t streamID, uint32_t dependsOn, uint8_t weight,
-                                 const char *label)
+Http2Session::SendPriorityFrame(uint32_t streamID,
+                                uint32_t dependsOn,
+                                uint8_t weight)
 {
-  char *packet = mOutputQueueBuffer.get() + mOutputQueueUsed;
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+  LOG3(("Http2Session::SendPriorityFrame %p Frame 0x%X depends on 0x%X "
+        "weight %d\n", this, streamID, dependsOn, weight));
+
+  char *packet = CreatePriorityFrame(streamID, dependsOn, weight);
+
+  LogIO(this, nullptr, "SendPriorityFrame", packet, kFrameHeaderBytes + 5);
+  FlushOutputQueue();
+}
+
+char *
+Http2Session::CreatePriorityFrame(uint32_t streamID,
+                                  uint32_t dependsOn,
+                                  uint8_t weight)
+{
+  char *packet = EnsureOutputBuffer(kFrameHeaderBytes + 5);
   CreateFrameHeader(packet, 5, FRAME_TYPE_PRIORITY, 0, streamID);
   mOutputQueueUsed += kFrameHeaderBytes + 5;
   NetworkEndian::writeUint32(packet + kFrameHeaderBytes, dependsOn); // depends on
   packet[kFrameHeaderBytes + 4] = weight; // weight
+  return packet;
+}
+
+void
+Http2Session::CreatePriorityNode(uint32_t streamID, uint32_t dependsOn, uint8_t weight,
+                                 const char *label)
+{
+  char *packet = CreatePriorityFrame(streamID, dependsOn, weight);
 
   LOG3(("Http2Session %p generate Priority Frame 0x%X depends on 0x%X "
         "weight %d for %s class\n", this, streamID, dependsOn, weight, label));
@@ -1105,7 +1135,9 @@ Http2Session::CleanupStream(Http2Stream *aStream, nsresult aResult,
         SpdyPushCache *cache = nullptr;
         requestContext->GetSpdyPushCache(&cache);
         if (cache) {
-          Http2PushedStream *trash = cache->RemovePushedStreamHttp2(hashKey);
+          // Make sure the id of the stream in the push cache is the same
+          // as the id of the stream we're cleaning up! See bug 1368080.
+          Http2PushedStream *trash = cache->RemovePushedStreamHttp2ByID(hashKey, aStream->StreamID());
           LOG3(("Http2Session::CleanupStream %p aStream=%p pushStream=%p trash=%p",
                 this, aStream, pushStream, trash));
         }
@@ -1748,7 +1780,11 @@ Http2Session::RecvPushPromise(Http2Session *self)
     new Http2PushTransactionBuffer();
   transactionBuffer->SetConnection(self);
   Http2PushedStream *pushedStream =
-    new Http2PushedStream(transactionBuffer, self, associatedStream, promisedID);
+    new Http2PushedStream(transactionBuffer,
+                          self,
+                          associatedStream,
+                          promisedID,
+                          self->mCurrentForegroundTabOuterContentWindowId);
 
   rv = pushedStream->ConvertPushHeaders(&self->mDecompressor,
                                         self->mDecompressBuffer,
@@ -1807,15 +1843,25 @@ Http2Session::RecvPushPromise(Http2Session *self)
   // does the pushed origin belong on this connection?
   LOG3(("Http2Session::RecvPushPromise %p origin check %s", self,
         pushedStream->Origin().get()));
-  RefPtr<nsStandardURL> pushedURL;
-  rv = Http2Stream::MakeOriginURL(pushedStream->Origin(), pushedURL);
+  RefPtr<nsStandardURL> pushedOrigin;
+  rv = Http2Stream::MakeOriginURL(pushedStream->Origin(), pushedOrigin);
   nsAutoCString pushedHostName;
   int32_t pushedPort = -1;
   if (NS_SUCCEEDED(rv)) {
-    rv = pushedURL->GetHost(pushedHostName);
+    rv = pushedOrigin->GetHost(pushedHostName);
   }
   if (NS_SUCCEEDED(rv)) {
-    rv = pushedURL->GetPort(&pushedPort);
+    rv = pushedOrigin->GetPort(&pushedPort);
+    if (NS_SUCCEEDED(rv) && pushedPort == -1) {
+      // Need to get the right default port, so TestJoinConnection below can
+      // check things correctly. See bug 1397621.
+      bool isHttp = false;
+      if (NS_SUCCEEDED(pushedOrigin->SchemeIs("http", &isHttp)) && isHttp) {
+        pushedPort = NS_HTTP_DEFAULT_PORT;
+      } else {
+        pushedPort = NS_HTTPS_DEFAULT_PORT;
+      }
+    }
   }
   if (NS_FAILED(rv) ||
       !self->TestJoinConnection(pushedHostName, pushedPort)) {
@@ -1832,10 +1878,40 @@ Http2Session::RecvPushPromise(Http2Session *self)
   } else {
     LOG3(("Http2Session::RecvPushPromise %p place stream into session cache\n", self));
     if (!cache->RegisterPushedStreamHttp2(key, pushedStream)) {
+      // This only happens if they've already pushed us this item.
       LOG3(("Http2Session::RecvPushPromise registerPushedStream Failed\n"));
-      self->CleanupStream(pushedStream, NS_ERROR_FAILURE, INTERNAL_ERROR);
+      self->CleanupStream(pushedStream, NS_ERROR_FAILURE, REFUSED_STREAM_ERROR);
       self->ResetDownstreamState();
       return NS_OK;
+    }
+
+    // Kick off a lookup into the HTTP cache so we can cancel the push if it's
+    // unneeded (we already have it in our local regular cache). See bug 1367551.
+    nsCOMPtr<nsICacheStorageService> css =
+      do_GetService("@mozilla.org/netwerk/cache-storage-service;1");
+    mozilla::OriginAttributes oa;
+    pushedStream->GetOriginAttributes(&oa);
+    RefPtr<LoadContextInfo> lci = GetLoadContextInfo(false, oa);
+    nsCOMPtr<nsICacheStorage> ds;
+    css->DiskCacheStorage(lci, false, getter_AddRefs(ds));
+    // Build up our full URL for the cache lookup
+    nsAutoCString spec;
+    spec.Assign(pushedStream->Origin());
+    spec.Append(pushedStream->Path());
+    RefPtr<nsStandardURL> pushedURL;
+    // Nifty trick: this doesn't actually do anything origin-specific, it's just
+    // named that way. So by passing it the full spec here, we get a URL with
+    // the full path.
+    // Another nifty trick! Even though this is using nsIURIs (which are not
+    // generally ok off the main thread), since we're not using the protocol
+    // handler to create any URIs, this will work just fine here. Don't try this
+    // at home, though, kids. I'm a trained professional.
+    if (NS_SUCCEEDED(Http2Stream::MakeOriginURL(spec, pushedURL))) {
+      LOG3(("Http2Session::RecvPushPromise %p check disk cache for entry", self));
+      RefPtr<CachePushCheckCallback> cpcc = new CachePushCheckCallback(self, promisedID, pushedStream->GetRequestString());
+      if (NS_FAILED(ds->AsyncOpenURI(pushedURL, EmptyCString(), nsICacheStorage::OPEN_READONLY|nsICacheStorage::OPEN_SECRETLY, cpcc))) {
+        LOG3(("Http2Session::RecvPushPromise %p failed to open cache entry for push check", self));
+      }
     }
   }
 
@@ -1847,6 +1923,167 @@ Http2Session::RecvPushPromise(Http2Session *self)
   pushedStream->SetPriority(Http2Stream::kWorstPriority);
   self->GeneratePriority(promisedID, priorityWeight);
   self->ResetDownstreamState();
+  return NS_OK;
+}
+
+NS_IMPL_ISUPPORTS(Http2Session::CachePushCheckCallback, nsICacheEntryOpenCallback);
+
+Http2Session::CachePushCheckCallback::CachePushCheckCallback(Http2Session *session, uint32_t promisedID, const nsACString &requestString)
+  :mPromisedID(promisedID)
+{
+  mSession = session;
+  mRequestHead.ParseHeaderSet(requestString.BeginReading());
+}
+
+NS_IMETHODIMP
+Http2Session::CachePushCheckCallback::OnCacheEntryCheck(nsICacheEntry *entry, nsIApplicationCache *appCache, uint32_t *result)
+{
+  MOZ_ASSERT(OnSocketThread(), "Not on socket thread?!");
+
+  // We never care to fully open the entry, since we won't actually use it.
+  // We just want to be able to do all our checks to see if a future channel can
+  // use this entry, or if we need to accept the push.
+  *result = nsICacheEntryOpenCallback::ENTRY_NOT_WANTED;
+
+  bool isForcedValid = false;
+  entry->GetIsForcedValid(&isForcedValid);
+
+  nsHttpResponseHead cachedResponseHead;
+  nsresult rv = nsHttp::GetHttpResponseHeadFromCacheEntry(entry, &cachedResponseHead);
+  if (NS_FAILED(rv)) {
+    // Couldn't make sense of what's in the cache entry, go ahead and accept
+    // the push.
+    return NS_OK;
+  }
+
+  if ((cachedResponseHead.Status() / 100) != 2) {
+    // Assume the push is sending us a success, while we don't have one in the
+    // cache, so we'll accept the push.
+    return NS_OK;
+  }
+
+  // Get the method that was used to generate the cached response
+  nsCString buf;
+  rv = entry->GetMetaDataElement("request-method", getter_Copies(buf));
+  if (NS_FAILED(rv)) {
+    // Can't check request method, accept the push
+    return NS_OK;
+  }
+  nsAutoCString pushedMethod;
+  mRequestHead.Method(pushedMethod);
+  if (!buf.Equals(pushedMethod)) {
+    // Methods don't match, accept the push
+    return NS_OK;
+  }
+
+  int64_t size, contentLength;
+  rv = nsHttp::CheckPartial(entry, &size, &contentLength, &cachedResponseHead);
+  if (NS_FAILED(rv)) {
+    // Couldn't figure out if this was partial or not, accept the push.
+    return NS_OK;
+  }
+
+  if (size == int64_t(-1) || contentLength != size) {
+    // This is partial content in the cache, accept the push.
+    return NS_OK;
+  }
+
+  nsAutoCString requestedETag;
+  if (NS_FAILED(mRequestHead.GetHeader(nsHttp::If_Match, requestedETag))) {
+    // Can't check etag
+    return NS_OK;
+  }
+  if (!requestedETag.IsEmpty()) {
+    nsAutoCString cachedETag;
+    if (NS_FAILED(cachedResponseHead.GetHeader(nsHttp::ETag, cachedETag))) {
+      // Can't check etag
+      return NS_OK;
+    }
+    if (!requestedETag.Equals(cachedETag)) {
+      // ETags don't match, accept the push.
+      return NS_OK;
+    }
+  }
+
+  nsAutoCString imsString;
+  Unused << mRequestHead.GetHeader(nsHttp::If_Modified_Since, imsString);
+  if (!buf.IsEmpty()) {
+    uint32_t ims = buf.ToInteger(&rv);
+    uint32_t lm;
+    rv = cachedResponseHead.GetLastModifiedValue(&lm);
+    if (NS_SUCCEEDED(rv) && lm && lm < ims) {
+      // The push appears to be newer than what's in our cache, accept it.
+      return NS_OK;
+    }
+  }
+
+  nsAutoCString cacheControlRequestHeader;
+  Unused << mRequestHead.GetHeader(nsHttp::Cache_Control, cacheControlRequestHeader);
+  CacheControlParser cacheControlRequest(cacheControlRequestHeader);
+  if (cacheControlRequest.NoStore()) {
+    // Don't use a no-store cache entry, accept the push.
+    return NS_OK;
+  }
+
+  nsCString cachedAuth;
+  rv = entry->GetMetaDataElement("auth", getter_Copies(cachedAuth));
+  if (NS_SUCCEEDED(rv)) {
+    uint32_t lastModifiedTime;
+    rv = entry->GetLastModified(&lastModifiedTime);
+    if (NS_SUCCEEDED(rv)) {
+      if ((gHttpHandler->SessionStartTime() > lastModifiedTime) && !cachedAuth.IsEmpty()) {
+        // Need to revalidate this, as the auth is old. Accept the push.
+        return NS_OK;
+      }
+
+      if (cachedAuth.IsEmpty() && mRequestHead.HasHeader(nsHttp::Authorization)) {
+        // They're pushing us something with auth, but we didn't cache anything
+        // with auth. Accept the push.
+        return NS_OK;
+      }
+    }
+  }
+
+  bool weaklyFramed, isImmutable;
+  nsHttp::DetermineFramingAndImmutability(entry, &cachedResponseHead, true,
+                                          &weaklyFramed, &isImmutable);
+
+  // We'll need this value in later computations...
+  uint32_t lastModifiedTime;
+  rv = entry->GetLastModified(&lastModifiedTime);
+  if (NS_FAILED(rv)) {
+    // Ugh, this really sucks. OK, accept the push.
+    return NS_OK;
+  }
+
+  // Determine if this is the first time that this cache entry
+  // has been accessed during this session.
+  bool fromPreviousSession =
+          (gHttpHandler->SessionStartTime() > lastModifiedTime);
+
+  bool validationRequired = nsHttp::ValidationRequired(isForcedValid,
+    &cachedResponseHead, 0/*NWGH: ??? - loadFlags*/, false, isImmutable, false, mRequestHead, entry,
+    cacheControlRequest, fromPreviousSession);
+
+  if (validationRequired) {
+    // A real channel would most likely hit the net at this point, so let's
+    // accept the push.
+    return NS_OK;
+  }
+
+  // If we get here, then we would be able to use this cache entry. Cancel the
+  // push so as not to waste any more bandwidth.
+  mSession->CleanupStream(mPromisedID, NS_ERROR_FAILURE, Http2Session::REFUSED_STREAM_ERROR);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+Http2Session::CachePushCheckCallback::OnCacheEntryAvailable(
+    nsICacheEntry *entry, bool isNew, nsIApplicationCache *appCache,
+    nsresult result)
+{
+  // Nothing to do here, all the work is in OnCacheEntryCheck.
   return NS_OK;
 }
 
@@ -2107,11 +2344,12 @@ Http2Session::RecvContinuation(Http2Session *self)
 class UpdateAltSvcEvent : public Runnable
 {
 public:
-UpdateAltSvcEvent(const nsCString &header,
-                  const nsCString &aOrigin,
-                  nsHttpConnectionInfo *aCI,
-                  nsIInterfaceRequestor *callbacks)
-    : mHeader(header)
+  UpdateAltSvcEvent(const nsCString& header,
+                    const nsCString& aOrigin,
+                    nsHttpConnectionInfo* aCI,
+                    nsIInterfaceRequestor* callbacks)
+    : Runnable("net::UpdateAltSvcEvent")
+    , mHeader(header)
     , mOrigin(aOrigin)
     , mCI(aCI)
     , mCallbacks(callbacks)
@@ -2216,7 +2454,7 @@ Http2Session::RecvAltSvc(Http2Session *self)
       self->ResetDownstreamState();
       return NS_OK;
     }
-    
+
     if (NS_FAILED(self->SetInputFrameDataStream(self->mInputFrameID)) ||
         !self->mInputFrameDataStream->Transaction() ||
         !self->mInputFrameDataStream->Transaction()->RequestHead()) {
@@ -2430,6 +2668,15 @@ Http2Session::OnTransportStatus(nsITransport* aTransport,
   case NS_NET_STATUS_TLS_HANDSHAKE_ENDED:
   {
     Http2Stream *target = mStreamIDHash.Get(mUseH2Deps ? 0xF : 0x3);
+    if (!target) {
+      // any transaction will do if we can't find the low numbered one
+      // generally this happens when the initial transaction hasn't been
+      // assigned a stream id yet.
+      auto iter = mStreamTransactionHash.Iter();
+      if (!iter.Done()) {
+        target = iter.Data();
+      }
+    }
     nsAHttpTransaction *transaction = target ? target->Transaction() : nullptr;
     if (transaction)
       transaction->OnTransportStatus(aTransport, aStatus, aProgress);
@@ -2522,6 +2769,9 @@ Http2Session::ReadSegmentsAgain(nsAHttpSegmentReader *reader,
             this, stream, stream->StreamID()));
       FlushOutputQueue();
       SetWriteCallbacks();
+      if (!mCannotDo0RTTStreams.Contains(stream)) {
+        mCannotDo0RTTStreams.AppendElement(stream);
+      }
       // We can still send our preamble
       *countRead = mOutputQueueUsed - mOutputQueueSent;
       return *countRead ? NS_OK : NS_BASE_STREAM_WOULD_BLOCK;
@@ -3018,7 +3268,10 @@ Http2Session::WriteSegmentsAgain(nsAHttpSegmentWriter *writer,
     LOG3(("Http2Session::WriteSegments %p trying to discard %d bytes of data",
           this, discardCount));
 
-    if (!discardCount) {
+    if (!discardCount && mDownstreamState == DISCARDING_DATA_FRAME) {
+      // Only do this short-cirtuit if we're not discarding a pure padding
+      // frame, as we need to potentially handle the stream FIN in those cases.
+      // See bug 1381016 comment 36 for more details.
       ResetDownstreamState();
       Unused << ResumeRecv();
       return NS_BASE_STREAM_WOULD_BLOCK;
@@ -3143,15 +3396,27 @@ Http2Session::Finish0RTT(bool aRestart, bool aAlpnChanged)
       // This is the easy case - early data failed, but we're speaking h2, so
       // we just need to rewind to the beginning of the preamble and try again.
       mOutputQueueSent = 0;
+
+      for (size_t i = 0; i < mCannotDo0RTTStreams.Length(); ++i) {
+        if (mCannotDo0RTTStreams[i] && VerifyStream(mCannotDo0RTTStreams[i])) {
+          TransactionHasDataToWrite(mCannotDo0RTTStreams[i]);
+        }
+      }
     }
   } else {
     // 0RTT succeeded
+    for (size_t i = 0; i < mCannotDo0RTTStreams.Length(); ++i) {
+      if (mCannotDo0RTTStreams[i] && VerifyStream(mCannotDo0RTTStreams[i])) {
+        TransactionHasDataToWrite(mCannotDo0RTTStreams[i]);
+      }
+    }
     // Make sure we look for any incoming data in repsonse to our early data.
     Unused << ResumeRecv();
   }
 
   mAttemptingEarlyData = false;
   m0RTTStreams.Clear();
+  mCannotDo0RTTStreams.Clear();
   RealignOutputQueue();
 
   return NS_OK;
@@ -4252,6 +4517,18 @@ Http2Session::RealJoinConnection(const nsACString &hostname, int32_t port,
     }
   }
   return joinedReturn;
+}
+
+void
+Http2Session::TopLevelOuterContentWindowIdChanged(uint64_t windowId)
+{
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+
+  mCurrentForegroundTabOuterContentWindowId = windowId;
+
+  for (auto iter = mStreamTransactionHash.Iter(); !iter.Done(); iter.Next()) {
+    iter.Data()->TopLevelOuterContentWindowIdChanged(windowId);
+  }
 }
 
 } // namespace net

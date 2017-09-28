@@ -2,7 +2,6 @@
 
 requestLongerTimeout(2);
 
-var {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
 Cu.import("resource://gre/modules/Services.jsm");
 
 const gHttpTestRoot = "http://example.com/browser/dom/base/test/";
@@ -89,7 +88,7 @@ add_task(async function() {
 
 
 function waitForDestroyedDocuments() {
-  let deferred = promise.defer();
+  let deferred = PromiseUtils.defer();
   SpecialPowers.exactGC(deferred.resolve);
   return deferred.promise;
 }
@@ -109,15 +108,25 @@ function waitForPageLoad(browser) {
 
 function grabHistogramsFromContent(use_counter_middlefix, page_before = null) {
   let telemetry = Cc["@mozilla.org/base/telemetry;1"].getService(Ci.nsITelemetry);
-  let suffix = Services.appinfo.browserTabsRemoteAutostart ? "#content" : "";
-  let gather = () => [
-    telemetry.getHistogramById("USE_COUNTER2_" + use_counter_middlefix + "_PAGE" + suffix).snapshot().sum,
-    telemetry.getHistogramById("USE_COUNTER2_" + use_counter_middlefix + "_DOCUMENT" + suffix).snapshot().sum,
-    telemetry.getHistogramById("CONTENT_DOCUMENTS_DESTROYED" + suffix).snapshot().sum,
-    telemetry.getHistogramById("TOP_LEVEL_CONTENT_DOCUMENTS_DESTROYED" + suffix).snapshot().sum,
-  ];
+  let gather = () => {
+    let snapshots;
+    if (Services.appinfo.browserTabsRemoteAutostart) {
+      snapshots = telemetry.snapshotHistograms(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN, false, false).content;
+    } else {
+      snapshots = telemetry.snapshotHistograms(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN, false, false).parent;
+    }
+    let checkGet = (probe) => {
+      return snapshots[probe] ? snapshots[probe].sum : 0;
+    };
+    return [
+      checkGet("USE_COUNTER2_" + use_counter_middlefix + "_PAGE"),
+      checkGet("USE_COUNTER2_" + use_counter_middlefix + "_DOCUMENT"),
+      checkGet("CONTENT_DOCUMENTS_DESTROYED"),
+      checkGet("TOP_LEVEL_CONTENT_DOCUMENTS_DESTROYED"),
+    ];
+  };
   return BrowserTestUtils.waitForCondition(() => {
-    return page_before != telemetry.getHistogramById("USE_COUNTER2_" + use_counter_middlefix + "_PAGE" + suffix).snapshot().sum;
+    return page_before != gather()[0];
   }).then(gather, gather);
 }
 

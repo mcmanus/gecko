@@ -93,7 +93,7 @@ static NS_DEFINE_CID(kPlacesInitCompleteCID,
 static NS_DEFINE_CID(kSessionStoreWindowRestoredCID,
   NS_SESSION_STORE_WINDOW_RESTORED_EVENT_CID);
 static NS_DEFINE_CID(kXPCOMShutdownCID,
-  NS_XPCOM_SHUTDOWN_EVENT_CID);  
+  NS_XPCOM_SHUTDOWN_EVENT_CID);
 #endif //defined(XP_WIN)
 
 using namespace mozilla;
@@ -103,7 +103,11 @@ private:
   RefPtr<nsAppStartup> mService;
 
 public:
-  explicit nsAppExitEvent(nsAppStartup *service) : mService(service) {}
+  explicit nsAppExitEvent(nsAppStartup* service)
+    : mozilla::Runnable("nsAppExitEvent")
+    , mService(service)
+  {
+  }
 
   NS_IMETHOD Run() override {
     // Tell the appshell to exit
@@ -123,7 +127,8 @@ public:
  * @param stamp The timestamp to be converted
  * @returns The converted timestamp
  */
-uint64_t ComputeAbsoluteTimestamp(PRTime prnow, TimeStamp now, TimeStamp stamp)
+static uint64_t
+ComputeAbsoluteTimestamp(TimeStamp stamp)
 {
   static PRTime sAbsoluteNow = PR_Now();
   static TimeStamp sMonotonicNow = TimeStamp::Now();
@@ -237,7 +242,7 @@ NS_IMPL_ISUPPORTS(nsAppStartup,
 NS_IMETHODIMP
 nsAppStartup::CreateHiddenWindow()
 {
-#if defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_UIKIT)
+#if defined(MOZ_WIDGET_UIKIT)
   return NS_OK;
 #else
   nsCOMPtr<nsIAppShellService> appShellService
@@ -252,7 +257,7 @@ nsAppStartup::CreateHiddenWindow()
 NS_IMETHODIMP
 nsAppStartup::DestroyHiddenWindow()
 {
-#if defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_UIKIT)
+#if defined(MOZ_WIDGET_UIKIT)
   return NS_OK;
 #else
   nsCOMPtr<nsIAppShellService> appShellService
@@ -382,7 +387,7 @@ nsAppStartup::Quit(uint32_t aMode)
       }
     }
 
-    PROFILER_MARKER("Shutdown start");
+    profiler_add_marker("Shutdown start");
     mozilla::RecordShutdownStartTimeStamp();
     mShuttingDown = true;
     if (!mRestart) {
@@ -752,8 +757,6 @@ nsAppStartup::GetStartupInfo(JSContext* aCx, JS::MutableHandle<JS::Value> aRetva
   aRetval.setObject(*obj);
 
   TimeStamp procTime = StartupTimeline::Get(StartupTimeline::PROCESS_CREATION);
-  TimeStamp now = TimeStamp::Now();
-  PRTime absNow = PR_Now();
 
   if (procTime.IsNull()) {
     bool error = false;
@@ -785,7 +788,7 @@ nsAppStartup::GetStartupInfo(JSContext* aCx, JS::MutableHandle<JS::Value> aRetva
 
     if (!stamp.IsNull()) {
       if (stamp >= procTime) {
-        PRTime prStamp = ComputeAbsoluteTimestamp(absNow, now, stamp)
+        PRTime prStamp = ComputeAbsoluteTimestamp(stamp)
           / PR_USEC_PER_MSEC;
         JS::Rooted<JSObject*> date(aCx, JS::NewDateObject(aCx, JS::TimeClip(prStamp)));
         JS_DefineProperty(aCx, obj, StartupTimeline::Describe(ev), date, JSPROP_ENUMERATE);
@@ -939,14 +942,12 @@ nsAppStartup::TrackStartupCrashEnd()
   // Use the timestamp of XRE_main as an approximation for the lock file timestamp.
   // See MAX_STARTUP_BUFFER for the buffer time period.
   TimeStamp mainTime = StartupTimeline::Get(StartupTimeline::MAIN);
-  TimeStamp now = TimeStamp::Now();
-  PRTime prNow = PR_Now();
   nsresult rv;
 
   if (mainTime.IsNull()) {
     NS_WARNING("Could not get StartupTimeline::MAIN time.");
   } else {
-    uint64_t lockFileTime = ComputeAbsoluteTimestamp(prNow, now, mainTime);
+    uint64_t lockFileTime = ComputeAbsoluteTimestamp(mainTime);
 
     rv = Preferences::SetInt(kPrefLastSuccess,
       (int32_t)(lockFileTime / PR_USEC_PER_SEC));

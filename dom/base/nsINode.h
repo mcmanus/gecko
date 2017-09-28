@@ -17,12 +17,15 @@
 #include "nsNodeInfoManager.h"      // for use in NodePrincipal()
 #include "nsPropertyTable.h"        // for typedefs
 #include "nsTObserverArray.h"       // for member
+#include "nsWindowSizes.h"          // for nsStyleSizes
 #include "mozilla/ErrorResult.h"
+#include "mozilla/LinkedList.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/dom/EventTarget.h" // for base class
 #include "js/TypeDecls.h"     // for Handle, Value, JSObject, JSContext
 #include "mozilla/dom/DOMString.h"
 #include "mozilla/dom/BindingDeclarations.h"
+#include "nsTHashtable.h"
 #include <iosfwd>
 
 // Including 'windows.h' will #define GetClassInfo to something else.
@@ -33,7 +36,7 @@
 #endif
 
 class nsAttrAndChildArray;
-class nsChildContentList;
+class nsAttrChildContentList;
 struct nsCSSSelectorList;
 class nsDOMAttributeMap;
 class nsIAnimationObserver;
@@ -41,7 +44,6 @@ class nsIContent;
 class nsIDocument;
 class nsIDOMElement;
 class nsIDOMNodeList;
-class nsIEditor;
 class nsIFrame;
 class nsIMutationObserver;
 class nsINode;
@@ -52,9 +54,11 @@ class nsIURI;
 class nsNodeSupportsWeakRefTearoff;
 class nsNodeWeakReference;
 class nsDOMMutationObserver;
+class nsRange;
 
 namespace mozilla {
 class EventListenerManager;
+class TextEditor;
 namespace dom {
 /**
  * @return true if aChar is what the WHATWG defines as a 'ascii whitespace'.
@@ -261,12 +265,12 @@ private:
 };
 
 // This should be used for any nsINode sub-class that has fields of its own
-// that it needs to measure;  any sub-class that doesn't use it will inherit
-// SizeOfExcludingThis from its super-class.  SizeOfIncludingThis() need not be
-// defined, it is inherited from nsINode.
-// This macro isn't actually specific to nodes, and bug 956400 will move it into MFBT.
-#define NS_DECL_SIZEOF_EXCLUDING_THIS \
-  virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const override;
+// that it needs to measure; any sub-class that doesn't use it will inherit
+// AddSizeOfExcludingThis from its super-class. AddSizeOfIncludingThis() need
+// not be defined, it is inherited from nsINode.
+#define NS_DECL_ADDSIZEOFEXCLUDINGTHIS \
+  virtual void AddSizeOfExcludingThis(nsWindowSizes& aSizes, \
+                                      size_t* aNodeSize) const override;
 
 // Categories of node properties
 // 0 is global.
@@ -301,6 +305,10 @@ public:
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_INODE_IID)
 
+  // The |aNodeSize| outparam on this function is where the actual node size
+  // value is put. It gets added to the appropriate value within |aSizes| by
+  // AddSizeOfNodeTree().
+  //
   // Among the sub-classes that inherit (directly or indirectly) from nsINode,
   // measurement of the following members may be added later if DMD finds it is
   // worthwhile:
@@ -324,15 +332,18 @@ public:
   // The following members don't need to be measured:
   // - nsIContent: mPrimaryFrame, because it's non-owning and measured elsewhere
   //
-  virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
+  virtual void AddSizeOfExcludingThis(nsWindowSizes& aSizes,
+                                      size_t* aNodeSize) const;
 
   // SizeOfIncludingThis doesn't need to be overridden by sub-classes because
   // sub-classes of nsINode are guaranteed to be laid out in memory in such a
   // way that |this| points to the start of the allocated object, even in
-  // methods of nsINode's sub-classes, and so |aMallocSizeOf(this)| is always
-  // safe to call no matter which object it was invoked on.
-  virtual size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const {
-    return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
+  // methods of nsINode's sub-classes, so aSizes.mState.mMallocSizeOf(this) is
+  // always safe to call no matter which object it was invoked on.
+  virtual void AddSizeOfIncludingThis(nsWindowSizes& aSizes,
+                                      size_t* aNodeSize) const {
+    *aNodeSize += aSizes.mState.mMallocSizeOf(this);
+    AddSizeOfExcludingThis(aSizes, aNodeSize);
   }
 
   friend class nsNodeUtils;
@@ -398,6 +409,16 @@ public:
    * @return whether the content matches ALL flags passed in
    */
   virtual bool IsNodeOfType(uint32_t aFlags) const = 0;
+
+  bool
+  IsContainerNode() const
+  {
+    return IsElement() ||
+      !(IsNodeOfType(eTEXT) ||
+        IsNodeOfType(ePROCESSING_INSTRUCTION) ||
+        IsNodeOfType(eCOMMENT) ||
+        IsNodeOfType(eDATA_NODE));
+  }
 
   virtual JSObject* WrapObject(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
 
@@ -479,17 +500,6 @@ public:
    * @return the child, or null if index out of bounds
    */
   virtual nsIContent* GetChildAt(uint32_t aIndex) const = 0;
-
-  /**
-   * Get a raw pointer to the child array.  This should only be used if you
-   * plan to walk a bunch of the kids, promise to make sure that nothing ever
-   * mutates (no attribute changes, not DOM tree changes, no script execution,
-   * NOTHING), and will never ever peform an out-of-bounds access here.  This
-   * method may return null if there are no children, or it may return a
-   * garbage pointer.  In all cases the out param will be set to the number of
-   * children.
-   */
-  virtual nsIContent * const * GetChildArray(uint32_t* aChildCount) const = 0;
 
   /**
    * Get the index of a child within this content
@@ -938,6 +948,9 @@ public:
    */
   inline nsINode* GetFlattenedTreeParentNodeForStyle() const;
 
+  inline mozilla::dom::Element* GetFlattenedTreeParentElement() const;
+  inline mozilla::dom::Element* GetFlattenedTreeParentElementForStyle() const;
+
   /**
    * Get the parent nsINode for this node if it is an Element.
    * @return the parent node
@@ -1093,20 +1106,28 @@ public:
     /**
      * A list of mutation observers
      */
-    nsTObserverArray<nsIMutationObserver*> mMutationObservers;
+    nsAutoTObserverArray<nsIMutationObserver*, 1> mMutationObservers;
 
     /**
      * An object implementing nsIDOMNodeList for this content (childNodes)
      * @see nsIDOMNodeList
      * @see nsGenericHTMLElement::GetChildNodes
      */
-    RefPtr<nsChildContentList> mChildNodes;
+    RefPtr<nsAttrChildContentList> mChildNodes;
 
     /**
      * Weak reference to this node.  This is cleared by the destructor of
      * nsNodeWeakReference.
      */
     nsNodeWeakReference* MOZ_NON_OWNING_REF mWeakReference;
+
+    /**
+     * A set of ranges which are in the selection and which have this node as
+     * their endpoints' common ancestor.  This is a UniquePtr instead of just a
+     * LinkedList, because that prevents us from pushing DOMSlots up to the next
+     * allocation bucket size, at the cost of some complexity.
+     */
+    mozilla::UniquePtr<mozilla::LinkedList<nsRange>> mCommonAncestorRanges;
 
     /**
      * Number of descendant nodes in the uncomposed document that have been
@@ -1242,7 +1263,8 @@ public:
    * an editor. Note that this should be only used for getting input or textarea
    * editor's root content. This method doesn't support HTML editors.
    */
-  nsIContent* GetTextEditorRootContent(nsIEditor** aEditor = nullptr);
+  nsIContent* GetTextEditorRootContent(
+                mozilla::TextEditor** aTextEditor = nullptr);
 
   /**
    * Get the nearest selection root, ie. the node that will be selected if the
@@ -1258,10 +1280,9 @@ public:
   nsIContent* GetFirstChild() const { return mFirstChild; }
   nsIContent* GetLastChild() const
   {
-    uint32_t count;
-    nsIContent* const* children = GetChildArray(&count);
+    uint32_t count = GetChildCount();
 
-    return count > 0 ? children[count - 1] : nullptr;
+    return count > 0 ? GetChildAt(count - 1) : nullptr;
   }
 
   /**
@@ -1560,6 +1581,12 @@ private:
     ParserHasNotified,
     // Sets if the node is apz aware or we have apz aware listeners.
     MayBeApzAware,
+    // Set if the element might have any kind of anonymous content children,
+    // which would not be found through the element's children list.
+    ElementMayHaveAnonymousChildren,
+    // Set if this node has at some point (and may still have)
+    // display:none or display:contents children.
+    NodeMayHaveChildrenWithLayoutBoxesDisabled,
     // Guard value
     BooleanFlagCount
   };
@@ -1698,6 +1725,23 @@ public:
   {
     return GetBoolFlag(MayBeApzAware);
   }
+
+  void SetMayHaveAnonymousChildren() { SetBoolFlag(ElementMayHaveAnonymousChildren); }
+  bool MayHaveAnonymousChildren() const { return GetBoolFlag(ElementMayHaveAnonymousChildren); }
+
+  void SetMayHaveChildrenWithLayoutBoxesDisabled()
+  {
+    SetBoolFlag(NodeMayHaveChildrenWithLayoutBoxesDisabled);
+  }
+  void UnsetMayHaveChildrenWithLayoutBoxesDisabled()
+  {
+    ClearBoolFlag(NodeMayHaveChildrenWithLayoutBoxesDisabled);
+  }
+  bool MayHaveChildrenWithLayoutBoxesDisabled() const
+  {
+    return GetBoolFlag(NodeMayHaveChildrenWithLayoutBoxesDisabled);
+  }
+
 protected:
   void SetParentIsContent(bool aValue) { SetBoolFlag(ParentIsContent, aValue); }
   void SetIsInDocument() { SetBoolFlag(IsInDocument); }
@@ -1743,6 +1787,7 @@ public:
   void UnbindObject(nsISupports* aObject);
 
   void GetBoundMutationObservers(nsTArray<RefPtr<nsDOMMutationObserver> >& aResult);
+  void GenerateXPath(nsAString& aResult);
 
   already_AddRefed<mozilla::dom::AccessibleNode> GetAccessibleNode();
 
@@ -1889,6 +1934,27 @@ public:
                                                   CallerType aCallerType,
                                                   ErrorResult& aRv);
 
+  const mozilla::LinkedList<nsRange>* GetExistingCommonAncestorRanges() const
+  {
+    if (!HasSlots()) {
+      return nullptr;
+    }
+    return GetExistingSlots()->mCommonAncestorRanges.get();
+  }
+
+  mozilla::LinkedList<nsRange>* GetExistingCommonAncestorRanges()
+  {
+    if (!HasSlots()) {
+      return nullptr;
+    }
+    return GetExistingSlots()->mCommonAncestorRanges.get();
+  }
+
+  mozilla::UniquePtr<mozilla::LinkedList<nsRange>>& GetCommonAncestorRangesPtr()
+  {
+    return Slots()->mCommonAncestorRanges;
+  }
+
 protected:
 
   // Override this function to create a custom slots class.
@@ -1914,7 +1980,7 @@ protected:
     return GetExistingSlots();
   }
 
-  nsTObserverArray<nsIMutationObserver*> *GetMutationObservers()
+  nsAutoTObserverArray<nsIMutationObserver*, 1> *GetMutationObservers()
   {
     return HasSlots() ? &GetExistingSlots()->mMutationObservers : nullptr;
   }

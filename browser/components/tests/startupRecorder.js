@@ -26,7 +26,14 @@ if (AppConstants.platform == "linux")
 function startupRecorder() {
   this.wrappedJSObject = this;
   this.loader = Cc["@mozilla.org/moz/jsloader;1"].getService(Ci.xpcIJSModuleLoader);
-  this.data = {};
+  this.data = {
+    images: {
+      "image-drawing": new Set(),
+      "image-loading": new Set(),
+    },
+    code: {}
+  };
+  this.done = new Promise(resolve => { this._resolve = resolve });
 }
 startupRecorder.prototype = {
   classID: Components.ID("{11c095b2-e42e-4bdf-9dd0-aed87595f6a4}"),
@@ -34,13 +41,15 @@ startupRecorder.prototype = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
 
   record(name) {
-    this.data[name] = {
+    if (!Services.prefs.getBoolPref("browser.startup.record", false))
+      return;
+
+    this.data.code[name] = {
       components: this.loader.loadedComponents(),
       modules: this.loader.loadedModules(),
       services: Object.keys(Cc).filter(c => {
         try {
-          Cm.isServiceInstantiatedByContractID(c, Ci.nsISupports);
-          return true;
+          return Cm.isServiceInstantiatedByContractID(c, Ci.nsISupports);
         } catch (e) {
           return false;
         }
@@ -57,6 +66,8 @@ startupRecorder.prototype = {
       let topics = [
         "profile-do-change", // This catches stuff loaded during app-startup
         "toplevel-window-ready", // Catches stuff from final-ui-startup
+        "image-loading",
+        "image-drawing",
         firstPaintNotification,
         "sessionstore-windows-restored",
       ];
@@ -65,13 +76,40 @@ startupRecorder.prototype = {
       return;
     }
 
+    if (topic == "image-drawing" || topic == "image-loading") {
+      this.data.images[topic].add(data);
+      return;
+    }
+
     Services.obs.removeObserver(this, topic);
 
     if (topic == "sessionstore-windows-restored") {
-      // We use idleDispatch here to record the set of loaded scripts after we
-      // are fully done with startup and ready to react to user events.
-      Services.tm.mainThread.idleDispatch(
+      if (!Services.prefs.getBoolPref("browser.startup.record", false)) {
+        this._resolve();
+        this._resolve = null;
+        return;
+      }
+
+      // We use idleDispatchToMainThread here to record the set of
+      // loaded scripts after we are fully done with startup and ready
+      // to react to user events.
+      Services.tm.dispatchToMainThread(
         this.record.bind(this, "before handling user events"));
+
+      // 10 is an arbitrary value here, it needs to be at least 2 to avoid
+      // races with code initializing itself using idle callbacks.
+      (function waitForIdle(callback, count = 10) {
+        if (count)
+          Services.tm.idleDispatchToMainThread(() => waitForIdle(callback, count - 1));
+        else
+          callback();
+      })(() => {
+        this.record("before becoming idle");
+        Services.obs.removeObserver(this, "image-drawing");
+        Services.obs.removeObserver(this, "image-loading");
+        this._resolve();
+        this._resolve = null;
+      });
     } else {
       const topicsToNames = {
         "profile-do-change": "before profile selection",

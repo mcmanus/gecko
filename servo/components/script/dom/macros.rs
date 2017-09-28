@@ -303,7 +303,7 @@ macro_rules! make_nonzero_dimension_setter(
 /// For use on non-jsmanaged types
 /// Use #[derive(JSTraceable)] on JS managed types
 macro_rules! unsafe_no_jsmanaged_fields(
-    ($($ty:ident),+) => (
+    ($($ty:ty),+) => (
         $(
             #[allow(unsafe_code)]
             unsafe impl $crate::dom::bindings::trace::JSTraceable for $ty {
@@ -334,7 +334,7 @@ macro_rules! jsmanaged_array(
 
 /// These are used to generate a event handler which has no special case.
 macro_rules! define_event_handler(
-    ($handler: ident, $event_type: ident, $getter: ident, $setter: ident, $setter_fn: ident) => (
+    ($handler: ty, $event_type: ident, $getter: ident, $setter: ident, $setter_fn: ident) => (
         fn $getter(&self) -> Option<::std::rc::Rc<$handler>> {
             use dom::bindings::inheritance::Castable;
             use dom::eventtarget::EventTarget;
@@ -352,7 +352,7 @@ macro_rules! define_event_handler(
 );
 
 macro_rules! define_window_owned_event_handler(
-    ($handler: ident, $event_type: ident, $getter: ident, $setter: ident) => (
+    ($handler: ty, $event_type: ident, $getter: ident, $setter: ident) => (
         fn $getter(&self) -> Option<::std::rc::Rc<$handler>> {
             let document = document_from_node(self);
             if document.has_browsing_context() {
@@ -373,36 +373,59 @@ macro_rules! define_window_owned_event_handler(
 
 macro_rules! event_handler(
     ($event_type: ident, $getter: ident, $setter: ident) => (
-        define_event_handler!(EventHandlerNonNull, $event_type, $getter, $setter,
-                              set_event_handler_common);
+        define_event_handler!(
+            ::dom::bindings::codegen::Bindings::EventHandlerBinding::EventHandlerNonNull,
+            $event_type,
+            $getter,
+            $setter,
+            set_event_handler_common
+        );
     )
 );
 
 macro_rules! error_event_handler(
     ($event_type: ident, $getter: ident, $setter: ident) => (
-        define_event_handler!(OnErrorEventHandlerNonNull, $event_type, $getter, $setter,
-                              set_error_event_handler);
+        define_event_handler!(
+            ::dom::bindings::codegen::Bindings::EventHandlerBinding::OnErrorEventHandlerNonNull,
+            $event_type,
+            $getter,
+            $setter,
+            set_error_event_handler
+        );
     )
 );
 
 macro_rules! beforeunload_event_handler(
     ($event_type: ident, $getter: ident, $setter: ident) => (
-        define_event_handler!(OnBeforeUnloadEventHandlerNonNull, $event_type,
-                              $getter, $setter, set_beforeunload_event_handler);
+        define_event_handler!(
+            ::dom::bindings::codegen::Bindings::EventHandlerBinding::OnBeforeUnloadEventHandlerNonNull,
+            $event_type,
+            $getter,
+            $setter,
+            set_beforeunload_event_handler
+        );
     )
 );
 
 macro_rules! window_owned_event_handler(
     ($event_type: ident, $getter: ident, $setter: ident) => (
-        define_window_owned_event_handler!(EventHandlerNonNull,
-                                           $event_type, $getter, $setter);
+        define_window_owned_event_handler!(
+            ::dom::bindings::codegen::Bindings::EventHandlerBinding::EventHandlerNonNull,
+            $event_type,
+            $getter,
+            $setter
+        );
     )
 );
 
 macro_rules! window_owned_beforeunload_event_handler(
     ($event_type: ident, $getter: ident, $setter: ident) => (
-        define_window_owned_event_handler!(OnBeforeUnloadEventHandlerNonNull,
-                                           $event_type, $getter, $setter);
+        define_window_owned_event_handler!(
+            ::dom::bindings::codegen::Bindings::EventHandlerBinding::OnBeforeUnloadEventHandlerNonNull,
+            $event_type,
+            $getter,
+            $setter
+        );
     )
 );
 
@@ -503,6 +526,13 @@ macro_rules! window_event_handlers(
         event_handler!(unhandledrejection, GetOnunhandledrejection,
                        SetOnunhandledrejection);
         event_handler!(unload, GetOnunload, SetOnunload);
+        event_handler!(vrdisplayconnect, GetOnvrdisplayconnect, SetOnvrdisplayconnect);
+        event_handler!(vrdisplaydisconnect, GetOnvrdisplaydisconnect, SetOnvrdisplaydisconnect);
+        event_handler!(vrdisplayactivate, GetOnvrdisplayactivate, SetOnvrdisplayactivate);
+        event_handler!(vrdisplaydeactivate, GetOnvrdisplaydeactivate, SetOnvrdisplaydeactivate);
+        event_handler!(vrdisplayblur, GetOnvrdisplayblur, SetOnvrdisplayblur);
+        event_handler!(vrdisplayfocus, GetOnvrdisplayfocus, SetOnvrdisplayfocus);
+        event_handler!(vrdisplaypresentchange, GetOnvrdisplaypresentchange, SetOnvrdisplaypresentchange);
     );
     (ForwardToWindow) => (
         window_owned_event_handler!(afterprint, GetOnafterprint,
@@ -528,6 +558,14 @@ macro_rules! window_event_handlers(
         window_owned_event_handler!(unhandledrejection, GetOnunhandledrejection,
                                     SetOnunhandledrejection);
         window_owned_event_handler!(unload, GetOnunload, SetOnunload);
+
+        window_owned_event_handler!(vrdisplayconnect, GetOnvrdisplayconnect, SetOnvrdisplayconnect);
+        window_owned_event_handler!(vrdisplaydisconnect, GetOnvrdisplaydisconnect, SetOnvrdisplaydisconnect);
+        window_owned_event_handler!(vrdisplayactivate, GetOnvrdisplayactivate, SetOnvrdisplayactivate);
+        window_owned_event_handler!(vrdisplaydeactivate, GetOnvrdisplaydeactivate, SetOnvrdisplaydeactivate);
+        window_owned_event_handler!(vrdisplayblur, GetOnvrdisplayblur, SetOnvrdisplayblur);
+        window_owned_event_handler!(vrdisplayfocus, GetOnvrdisplayfocus, SetOnvrdisplayfocus);
+        window_owned_event_handler!(vrdisplaypresentchange, GetOnvrdisplaypresentchange, SetOnvrdisplaypresentchange);
     );
 );
 
@@ -557,3 +595,42 @@ macro_rules! rooted_vec {
         let mut $name = $crate::dom::bindings::trace::RootedVec::from_iter(&mut root, $iter);
     }
 }
+
+/// DOM struct implementation for simple interfaces inheriting from PerformanceEntry.
+macro_rules! impl_performance_entry_struct(
+    ($binding:ident, $struct:ident, $type:expr) => (
+        use dom::bindings::codegen::Bindings::$binding;
+        use dom::bindings::js::Root;
+        use dom::bindings::reflector::reflect_dom_object;
+        use dom::bindings::str::DOMString;
+        use dom::globalscope::GlobalScope;
+        use dom::performanceentry::PerformanceEntry;
+        use dom_struct::dom_struct;
+
+        #[dom_struct]
+        pub struct $struct {
+            entry: PerformanceEntry,
+        }
+
+        impl $struct {
+            fn new_inherited(name: DOMString, start_time: f64, duration: f64)
+                -> $struct {
+                $struct {
+                    entry: PerformanceEntry::new_inherited(name,
+                                                           DOMString::from($type),
+                                                           start_time,
+                                                           duration)
+                }
+            }
+
+            #[allow(unrooted_must_root)]
+            pub fn new(global: &GlobalScope,
+                       name: DOMString,
+                       start_time: f64,
+                       duration: f64) -> Root<$struct> {
+                let entry = $struct::new_inherited(name, start_time, duration);
+                reflect_dom_object(box entry, global, $binding::Wrap)
+            }
+        }
+    );
+);

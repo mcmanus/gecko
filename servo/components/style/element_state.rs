@@ -14,6 +14,7 @@ bitflags! {
     ///
     /// TODO(emilio): We really really want to use the NS_EVENT_STATE bindings
     /// for this.
+    #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub flags ElementState: u64 {
         /// The mouse is down on this element.
@@ -136,5 +137,18 @@ bitflags! {
         const IN_AUTOFILL_STATE = 1 << 50,
         /// Non-standard & undocumented.
         const IN_AUTOFILL_PREVIEW_STATE = 1 << 51,
+    }
+}
+
+bitflags! {
+    /// Event-based document states.
+    ///
+    /// NB: Is important for this to remain in sync with Gecko's
+    /// dom/base/nsIDocument.h.
+    pub flags DocumentState: u64 {
+        /// RTL locale: specific to the XUL localedir attribute
+        const NS_DOCUMENT_STATE_RTL_LOCALE = 1 << 0,
+        /// Window activation status
+        const NS_DOCUMENT_STATE_WINDOW_INACTIVE = 1 << 1,
     }
 }

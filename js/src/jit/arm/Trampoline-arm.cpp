@@ -33,7 +33,7 @@ static const FloatRegisterSet NonVolatileFloatRegs =
                      (1ULL << FloatRegisters::d15));
 
 static void
-GenerateReturn(MacroAssembler& masm, int returnCode, GeckoProfiler* prof)
+GenerateReturn(MacroAssembler& masm, int returnCode)
 {
     // Restore non-volatile floating point registers.
     masm.transferMultipleByRuns(NonVolatileFloatRegs, IsLoad, StackPointer, IA);
@@ -288,7 +288,7 @@ JitRuntime::generateEnterJIT(JSContext* cx, EnterJitType type)
         masm.push(Imm32(0)); // Fake return address.
         // No GC things to mark on the stack, push a bare token.
         masm.loadJSContext(scratch);
-        masm.enterFakeExitFrame(scratch, scratch, ExitFrameLayoutBareToken);
+        masm.enterFakeExitFrame(scratch, scratch, ExitFrameToken::Bare);
 
         masm.push(framePtr); // BaselineFrame
         masm.push(r0); // jitcode
@@ -297,7 +297,8 @@ JitRuntime::generateEnterJIT(JSContext* cx, EnterJitType type)
         masm.passABIArg(r11); // BaselineFrame
         masm.passABIArg(OsrFrameReg); // InterpreterFrame
         masm.passABIArg(numStackValues);
-        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, jit::InitBaselineFrameForOsr));
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, jit::InitBaselineFrameForOsr), MoveOp::GENERAL,
+                         CheckUnsafeCallWithABI::DontCheckHasExitFrame);
 
         Register jitcode = regs.takeAny();
         masm.pop(jitcode);
@@ -377,7 +378,7 @@ JitRuntime::generateEnterJIT(JSContext* cx, EnterJitType type)
     //                   JSReturnReg_Data, EDtrAddr(r5, EDtrOffImm(0)));
 
     // Restore non-volatile registers and return.
-    GenerateReturn(masm, true, &cx->runtime()->geckoProfiler());
+    GenerateReturn(masm, true);
 
     Linker linker(masm);
     AutoFlushICache afc("EnterJIT");
@@ -434,7 +435,8 @@ JitRuntime::generateInvalidator(JSContext* cx)
     masm.passABIArg(r0);
     masm.passABIArg(r1);
     masm.passABIArg(r2);
-    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, InvalidationBailout));
+    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, InvalidationBailout), MoveOp::GENERAL,
+                     CheckUnsafeCallWithABI::DontCheckOther);
 
     masm.ma_ldr(DTRAddr(sp, DtrOffImm(0)), r2);
     {
@@ -516,7 +518,7 @@ JitRuntime::generateArgumentsRectifier(JSContext* cx, void** returnAddrOut)
     }
 
     // Push undefined.
-    masm.moveValue(UndefinedValue(), r5, r4);
+    masm.moveValue(UndefinedValue(), ValueOperand(r5, r4));
     {
         Label undefLoopTop;
         masm.bind(&undefLoopTop);
@@ -676,7 +678,8 @@ GenerateBailoutThunk(JSContext* cx, MacroAssembler& masm, uint32_t frameClass)
     masm.passABIArg(r1);
 
     // Sp % 8 == 0
-    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, Bailout));
+    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, Bailout), MoveOp::GENERAL,
+                     CheckUnsafeCallWithABI::DontCheckOther);
     masm.ma_ldr(DTRAddr(sp, DtrOffImm(0)), r2);
     {
         ScratchRegisterScope scratch(masm);
@@ -882,7 +885,7 @@ JitRuntime::generateVMWrapper(JSContext* cx, const VMFunction& f)
     if (outReg != InvalidReg)
         masm.passABIArg(outReg);
 
-    masm.callWithABI(f.wrapped);
+    masm.callWithABI(f.wrapped, MoveOp::GENERAL, CheckUnsafeCallWithABI::DontCheckHasExitFrame);
 
     if (!generateTLExitVM(cx, masm, f))
         return nullptr;
@@ -894,6 +897,8 @@ JitRuntime::generateVMWrapper(JSContext* cx, const VMFunction& f)
         break;
       case Type_Bool:
         masm.branchIfFalseBool(r0, masm.failureLabel());
+        break;
+      case Type_Void:
         break;
       default:
         MOZ_CRASH("unknown failure kind");

@@ -7,22 +7,32 @@
 package org.mozilla.gecko.mma;
 
 import android.app.Activity;
+import android.app.Notification;
 import android.content.Context;
-import android.content.pm.PackageManager;
+import android.content.SharedPreferences;
+import android.os.Bundle;
+import android.support.annotation.DrawableRes;
+import android.support.annotation.NonNull;
+import android.support.v4.app.NotificationCompat;
 
 import com.leanplum.Leanplum;
 import com.leanplum.LeanplumActivityHelper;
+import com.leanplum.LeanplumPushNotificationCustomizer;
+import com.leanplum.LeanplumPushService;
+import com.leanplum.internal.Constants;
 
 import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.MmaConstants;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 
 public class MmaLeanplumImp implements MmaInterface {
+
+
     @Override
-    public void init(final Activity activity) {
+    public void init(final Activity activity, Map<String, ?> attributes) {
         if (activity == null) {
             return;
         }
@@ -36,13 +46,11 @@ public class MmaLeanplumImp implements MmaInterface {
             Leanplum.setAppIdForDevelopmentMode(MmaConstants.MOZ_LEANPLUM_SDK_CLIENTID, MmaConstants.MOZ_LEANPLUM_SDK_KEY);
         }
 
-        Map<String, Object> attributes = new HashMap<>();
-        boolean installedFocus = isPackageInstalled(activity, "org.mozilla.focus");
-        boolean installedKlar = isPackageInstalled(activity, "org.mozilla.klar");
-        if (installedFocus || installedKlar) {
-            attributes.put("focus", "installed");
+        if (attributes != null) {
+            Leanplum.start(activity, attributes);
+        } else {
+            Leanplum.start(activity);
         }
-        Leanplum.start(activity, attributes);
 
         // this is special to Leanplum. Since we defer LeanplumActivityHelper's onResume call till
         // switchboard completes loading. We miss the call to LeanplumActivityHelper.onResume.
@@ -62,18 +70,35 @@ public class MmaLeanplumImp implements MmaInterface {
     }
 
     @Override
+    public void setGcmSenderId(String senderIds) {
+        LeanplumPushService.setGcmSenderId(senderIds);
+    }
+
+    @Override
+    public void setCustomIcon(@DrawableRes final int iconResId) {
+        LeanplumPushService.setCustomizer(new LeanplumPushNotificationCustomizer() {
+            @Override
+            public void customize(NotificationCompat.Builder builder, Bundle notificationPayload) {
+                builder.setSmallIcon(iconResId);
+                builder.setDefaults(Notification.DEFAULT_SOUND);
+            }
+
+        });
+    }
+
+    @Override
     public void start(Context context) {
 
     }
 
     @Override
-    public void track(String leanplumEvent) {
+    public void event(String leanplumEvent) {
         Leanplum.track(leanplumEvent);
 
     }
 
     @Override
-    public void track(String leanplumEvent, double value) {
+    public void event(String leanplumEvent, double value) {
         Leanplum.track(leanplumEvent, value);
 
     }
@@ -83,13 +108,23 @@ public class MmaLeanplumImp implements MmaInterface {
         Leanplum.stop();
     }
 
-    private static boolean isPackageInstalled(final Context context, String packageName) {
-        try {
-            PackageManager pm = context.getPackageManager();
-            pm.getPackageInfo(packageName, 0);
+    @Override
+    public boolean handleGcmMessage(Context context, String from, Bundle bundle) {
+        if (from != null && from.equals(MmaConstants.MOZ_MMA_SENDER_ID) && bundle.containsKey(Constants.Keys.PUSH_MESSAGE_TEXT)) {
+            LeanplumPushService.handleNotification(context, bundle);
             return true;
-        } catch (PackageManager.NameNotFoundException e) {
-            return false;
         }
+        return false;
     }
+
+    @Override
+    public String getMmaSenderId() {
+        return MmaConstants.MOZ_MMA_SENDER_ID;
+    }
+
+    @Override
+    public void setDeviceId(@NonNull String deviceId) {
+        Leanplum.setDeviceId(deviceId);
+    }
+
 }

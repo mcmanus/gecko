@@ -42,7 +42,6 @@
 #include "nsReadableUtils.h"
 #include "nsLocalFile.h"
 #include "nsIComponentManager.h"
-#include "nsXPIDLString.h"
 #include "prproces.h"
 #include "nsIDirectoryEnumerator.h"
 #include "nsISimpleEnumerator.h"
@@ -239,12 +238,10 @@ nsLocalFile::nsLocalFile(const nsLocalFile& aOther)
 #ifdef MOZ_WIDGET_COCOA
 NS_IMPL_ISUPPORTS(nsLocalFile,
                   nsILocalFileMac,
-                  nsILocalFile,
                   nsIFile,
                   nsIHashable)
 #else
 NS_IMPL_ISUPPORTS(nsLocalFile,
-                  nsILocalFile,
                   nsIFile,
                   nsIHashable)
 #endif
@@ -1908,7 +1905,7 @@ nsLocalFile::SetPersistentDescriptor(const nsACString& aPersistentDescriptor)
   AliasRecord aliasHeader = *(AliasPtr)decodedData;
   int32_t aliasSize = ::GetAliasSizeFromPtr(&aliasHeader);
   if (aliasSize > ((int32_t)dataSize * 3) / 4) { // be paranoid about having too few data
-    PR_Free(decodedData);
+    PR_Free(decodedData); // PL_Base64Decode() uses PR_Malloc().
     return NS_ERROR_FAILURE;
   }
 
@@ -1920,7 +1917,7 @@ nsLocalFile::SetPersistentDescriptor(const nsACString& aPersistentDescriptor)
   if (::PtrToHand(decodedData, &newHandle, aliasSize) != noErr) {
     rv = NS_ERROR_OUT_OF_MEMORY;
   }
-  PR_Free(decodedData);
+  PR_Free(decodedData); // PL_Base64Decode() uses PR_Malloc().
   if (NS_FAILED(rv)) {
     return rv;
   }

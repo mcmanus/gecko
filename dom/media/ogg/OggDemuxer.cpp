@@ -6,7 +6,6 @@
 
 #include "nsError.h"
 #include "MediaDecoderStateMachine.h"
-#include "AbstractMediaDecoder.h"
 #include "OggDemuxer.h"
 #include "OggCodecState.h"
 #include "mozilla/AbstractThread.h"
@@ -129,17 +128,21 @@ OggDemuxer::~OggDemuxer()
     // a chained stream or not.
     bool isChained = mIsChained;
     void* ptr = this;
-    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction([ptr, isChained]() -> void {
-      // We can't use OGG_DEBUG here because it implicitly refers to `this`,
-      // which we can't capture in this runnable.
-      MOZ_LOG(gMediaDemuxerLog, mozilla::LogLevel::Debug,
-              ("OggDemuxer(%p)::%s: Reporting telemetry MEDIA_OGG_LOADED_IS_CHAINED=%d",
-               ptr, __func__, isChained));
-      Telemetry::Accumulate(Telemetry::HistogramID::MEDIA_OGG_LOADED_IS_CHAINED, isChained);
-    });
-    SystemGroup::Dispatch("~OggDemuxer::report_telemetry",
-                          TaskCategory::Other,
-                          task.forget());
+    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction(
+      "OggDemuxer::~OggDemuxer", [ptr, isChained]() -> void {
+        // We can't use OGG_DEBUG here because it implicitly refers to `this`,
+        // which we can't capture in this runnable.
+        MOZ_LOG(gMediaDemuxerLog,
+                mozilla::LogLevel::Debug,
+                ("OggDemuxer(%p)::%s: Reporting telemetry "
+                 "MEDIA_OGG_LOADED_IS_CHAINED=%d",
+                 ptr,
+                 __func__,
+                 isChained));
+        Telemetry::Accumulate(
+          Telemetry::HistogramID::MEDIA_OGG_LOADED_IS_CHAINED, isChained);
+      });
+    SystemGroup::Dispatch(TaskCategory::Other, task.forget());
   }
 }
 
@@ -672,8 +675,7 @@ OggDemuxer::ReadOggChain(const media::TimeUnit& aLastEndTime)
        newVorbisState->GetInfo()->GetAsAudioInfo()->mChannels)) {
 
     SetupTarget(&mVorbisState, newVorbisState);
-    LOG(LogLevel::Debug,
-        ("New vorbis ogg link, serial=%d\n", mVorbisState->mSerial));
+    OGG_DEBUG("New vorbis ogg link, serial=%d\n", mVorbisState->mSerial);
 
     if (msgInfo) {
       InitTrack(msgInfo, &mInfo.mAudio, true);
@@ -708,8 +710,7 @@ OggDemuxer::ReadOggChain(const media::TimeUnit& aLastEndTime)
        newFlacState->GetInfo()->GetAsAudioInfo()->mChannels)) {
 
     SetupTarget(&mFlacState, newFlacState);
-    LOG(LogLevel::Debug,
-        ("New flac ogg link, serial=%d\n", mFlacState->mSerial));
+    OGG_DEBUG("New flac ogg link, serial=%d\n", mFlacState->mSerial);
 
     if (msgInfo) {
       InitTrack(msgInfo, &mInfo.mAudio, true);
@@ -1175,8 +1176,8 @@ OggDemuxer::SeekToKeyframeUsingIndex(TrackInfo::TrackType aType, int64_t aTarget
     // Index must be invalid.
     return RollbackIndexedSeek(aType, tell);
   }
-  LOG(LogLevel::Debug, ("Seeking using index to keyframe at offset %" PRId64 "\n",
-                     keyframe.mKeyPoint.mOffset));
+  OGG_DEBUG("Seeking using index to keyframe at offset %" PRId64 "\n",
+                     keyframe.mKeyPoint.mOffset);
   nsresult res = Resource(aType)->Seek(nsISeekableStream::NS_SEEK_SET,
                                        keyframe.mKeyPoint.mOffset);
   NS_ENSURE_SUCCESS(res, SEEK_FATAL_ERROR);
@@ -1198,8 +1199,8 @@ OggDemuxer::SeekToKeyframeUsingIndex(TrackInfo::TrackType aType, int64_t aTarget
                                     skippedBytes);
   NS_ENSURE_TRUE(syncres != PAGE_SYNC_ERROR, SEEK_FATAL_ERROR);
   if (syncres != PAGE_SYNC_OK || skippedBytes != 0) {
-    LOG(LogLevel::Debug, ("Indexed-seek failure: Ogg Skeleton Index is invalid "
-                       "or sync error after seek"));
+    OGG_DEBUG("Indexed-seek failure: Ogg Skeleton Index is invalid "
+              "or sync error after seek");
     return RollbackIndexedSeek(aType, tell);
   }
   uint32_t serial = ogg_page_serialno(&page);
@@ -1359,6 +1360,7 @@ OggTrackDemuxer::NextSample()
     // This will also update mSharedAudioTrackInfo.
     mParent->ReadOggChain(data->GetEndTime());
   }
+  data->mTime += mParent->mDecodedAudioDuration;
   return data;
 }
 

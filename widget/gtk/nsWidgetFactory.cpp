@@ -17,6 +17,7 @@
 #include "nsWindow.h"
 #include "nsTransferable.h"
 #include "nsHTMLFormatConverter.h"
+#include "HeadlessClipboard.h"
 #ifdef MOZ_X11
 #include "nsClipboardHelper.h"
 #include "nsClipboard.h"
@@ -66,14 +67,12 @@ using namespace mozilla::widget;
 static NS_DEFINE_CID(kXULFilePickerCID, XULFILEPICKER_CID);
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsWindow)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsChildWindow)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsTransferable)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsBidiKeyboard)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHTMLFormatConverter)
 #ifdef MOZ_X11
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIdleServiceGTK, nsIdleServiceGTK::GetInstance)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsClipboardHelper)
-NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIClipboard, nsClipboard::GetInstance)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsDragService, nsDragService::GetInstance)
 #endif
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsISound, nsSound::GetInstance)
@@ -195,6 +194,28 @@ nsColorPickerConstructor(nsISupports *aOuter, REFNSIID aIID,
     return picker->QueryInterface(aIID, aResult);
 }
 
+static nsresult
+nsClipboardConstructor(nsISupports *aOuter, REFNSIID aIID,
+                       void **aResult)
+{
+  *aResult = nullptr;
+  if (aOuter != nullptr) {
+    return NS_ERROR_NO_AGGREGATION;
+  }
+
+  nsCOMPtr<nsIClipboard> inst;
+  if (gfxPlatform::IsHeadless()) {
+    inst = new HeadlessClipboard();
+  } else {
+    RefPtr<nsClipboard> clipboard = new nsClipboard();
+    nsresult rv = clipboard->Init();
+    NS_ENSURE_SUCCESS(rv, rv);
+    inst = clipboard;
+  }
+
+  return inst->QueryInterface(aIID, aResult);
+}
+
 NS_DEFINE_NAMED_CID(NS_WINDOW_CID);
 NS_DEFINE_NAMED_CID(NS_CHILD_CID);
 NS_DEFINE_NAMED_CID(NS_APPSHELL_CID);
@@ -230,7 +251,7 @@ NS_DEFINE_NAMED_CID(NS_GFXINFO_CID);
 
 static const mozilla::Module::CIDEntry kWidgetCIDs[] = {
     { &kNS_WINDOW_CID, false, nullptr, nsWindowConstructor },
-    { &kNS_CHILD_CID, false, nullptr, nsChildWindowConstructor },
+    { &kNS_CHILD_CID, false, nullptr, nsWindowConstructor },
     { &kNS_APPSHELL_CID, false, nullptr, nsAppShellConstructor, Module::ALLOW_IN_GPU_PROCESS },
     { &kNS_COLORPICKER_CID, false, nullptr, nsColorPickerConstructor, Module::MAIN_PROCESS_ONLY },
     { &kNS_FILEPICKER_CID, false, nullptr, nsFilePickerConstructor, Module::MAIN_PROCESS_ONLY },
@@ -240,7 +261,7 @@ static const mozilla::Module::CIDEntry kWidgetCIDs[] = {
     { &kNS_SOUND_CID, false, nullptr, nsISoundConstructor, Module::MAIN_PROCESS_ONLY },
     { &kNS_TRANSFERABLE_CID, false, nullptr, nsTransferableConstructor },
 #ifdef MOZ_X11
-    { &kNS_CLIPBOARD_CID, false, nullptr, nsIClipboardConstructor, Module::MAIN_PROCESS_ONLY },
+    { &kNS_CLIPBOARD_CID, false, nullptr, nsClipboardConstructor, Module::MAIN_PROCESS_ONLY },
     { &kNS_CLIPBOARDHELPER_CID, false, nullptr, nsClipboardHelperConstructor },
     { &kNS_DRAGSERVICE_CID, false, nullptr, nsDragServiceConstructor, Module::MAIN_PROCESS_ONLY },
 #endif

@@ -7,7 +7,7 @@
 Components.utils.import("resource://gre/modules/AppConstants.jsm");
 Components.utils.import("resource://gre/modules/ContextualIdentityService.jsm");
 
-const containersBundle = Services.strings.createBundle("chrome://browser/locale/preferences-old/containers.properties");
+const containersBundle = Services.strings.createBundle("chrome://browser/locale/preferences/containers.properties");
 
 const defaultContainerIcon = "fingerprint";
 const defaultContainerColor = "blue";
@@ -18,7 +18,7 @@ let gContainersPane = {
     this._list = document.getElementById("containersView");
 
     document.getElementById("backContainersLink").addEventListener("click", function() {
-      gotoPref("privacy");
+      gotoPref("general");
     });
 
     this._rebuildView();
@@ -40,7 +40,7 @@ let gContainersPane = {
     }
   },
 
-  onRemoveClick(button) {
+  async onRemoveClick(button) {
     let userContextId = parseInt(button.getAttribute("value"), 10);
 
     let count = ContextualIdentityService.countContainerTabs(userContextId);
@@ -62,7 +62,7 @@ let gContainersPane = {
         return;
       }
 
-      ContextualIdentityService.closeContainerTabs(userContextId);
+      await ContextualIdentityService.closeContainerTabs(userContextId);
     }
 
     ContextualIdentityService.remove(userContextId);

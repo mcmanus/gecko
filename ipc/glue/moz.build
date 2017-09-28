@@ -189,6 +189,7 @@ LOCAL_INCLUDES += [
     '/caps',
     '/dom/broadcastchannel',
     '/dom/indexedDB',
+    '/dom/storage',
     '/dom/workers',
     '/media/webrtc/trunk',
     '/xpcom/build',
@@ -213,15 +214,6 @@ LOCAL_INCLUDES += [
     '/toolkit/xre',
     '/xpcom/threads',
 ]
-
-if CONFIG['MOZ_CODE_COVERAGE']:
-    SOURCES += [
-        'CodeCoverageHandler.cpp',
-    ]
-
-    EXPORTS.mozilla += [
-        'CodeCoverageHandler.h',
-    ]
 
 include('/ipc/chromium/chromium-config.mozbuild')
 

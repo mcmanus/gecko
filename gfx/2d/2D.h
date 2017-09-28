@@ -27,6 +27,8 @@
 // solution.
 #include "mozilla/RefPtr.h"
 #include "mozilla/ServoUtils.h"
+#include "mozilla/StaticMutex.h"
+#include "mozilla/StaticPtr.h"
 #include "mozilla/WeakPtr.h"
 
 #include "mozilla/DebugOnly.h"
@@ -70,8 +72,14 @@ namespace mozilla {
 
 class Mutex;
 
+namespace wr {
+struct WrFontInstanceOptions;
+struct FontInstancePlatformOptions;
+}
+
 namespace gfx {
 class UnscaledFont;
+class ScaledFont;
 }
 
 template<>
@@ -83,6 +91,15 @@ struct WeakPtrTraits<gfx::UnscaledFont>
     // thread to be accessed from other threads if the Servo font metrics
     // mutex is locked, and for objects created on Servo style worker threads
     // to be accessed later back on the main thread.
+    AssertIsMainThreadOrServoFontMetricsLocked();
+  }
+};
+
+template<>
+struct WeakPtrTraits<gfx::ScaledFont>
+{
+  static void AssertSafeToAccessFromNonOwningThread()
+  {
     AssertIsMainThreadOrServoFontMetricsLocked();
   }
 };
@@ -758,7 +775,9 @@ public:
   virtual already_AddRefed<ScaledFont>
     CreateScaledFont(Float aGlyphSize,
                      const uint8_t* aInstanceData,
-                     uint32_t aInstanceDataLength)
+                     uint32_t aInstanceDataLength,
+                     const FontVariation* aVariations,
+                     uint32_t aNumVariations)
   {
     return nullptr;
   }
@@ -767,22 +786,28 @@ protected:
   UnscaledFont() {}
 
 private:
-  static uint32_t sDeletionCounter;
+  static Atomic<uint32_t> sDeletionCounter;
 };
 
 /** This class is an abstraction of a backend/platform specific font object
  * at a particular size. It is passed into text drawing calls to describe
  * the font used for the drawing call.
  */
-class ScaledFont : public external::AtomicRefCounted<ScaledFont>
+class ScaledFont
+  : public external::AtomicRefCounted<ScaledFont>
+  , public SupportsWeakPtr<ScaledFont>
 {
 public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(ScaledFont)
-  virtual ~ScaledFont() {}
+  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(ScaledFont)
+
+  virtual ~ScaledFont();
 
   virtual FontType GetType() const = 0;
   virtual Float GetSize() const = 0;
   virtual AntialiasMode GetDefaultAAMode();
+
+  static uint32_t DeletionCounter() { return sDeletionCounter; }
 
   /** This allows getting a path that describes the outline of a set of glyphs.
    * A target is passed in so that the guarantee is made the returned path
@@ -802,9 +827,18 @@ public:
    */
   virtual void GetGlyphDesignMetrics(const uint16_t* aGlyphIndices, uint32_t aNumGlyphs, GlyphMetrics* aGlyphMetrics) = 0;
 
-  typedef void (*FontInstanceDataOutput)(const uint8_t* aData, uint32_t aLength, void* aBaton);
+  typedef void (*FontInstanceDataOutput)(const uint8_t* aData, uint32_t aLength,
+                                         const FontVariation* aVariations, uint32_t aNumVariations,
+                                         void* aBaton);
 
   virtual bool GetFontInstanceData(FontInstanceDataOutput, void *) { return false; }
+
+  virtual bool GetWRFontInstanceOptions(Maybe<wr::WrFontInstanceOptions>* aOutOptions,
+                                        Maybe<wr::FontInstancePlatformOptions>* aOutPlatformOptions,
+                                        std::vector<FontVariation>* aOutVariations)
+  {
+    return false;
+  }
 
   virtual bool CanSerialize() { return false; }
 
@@ -821,6 +855,9 @@ public:
 
   const RefPtr<UnscaledFont>& GetUnscaledFont() const { return mUnscaledFont; }
 
+  virtual cairo_scaled_font_t* GetCairoScaledFont() { return nullptr; }
+  virtual void SetCairoScaledFont(cairo_scaled_font_t* font) {}
+
 protected:
   explicit ScaledFont(const RefPtr<UnscaledFont>& aUnscaledFont)
     : mUnscaledFont(aUnscaledFont)
@@ -828,6 +865,9 @@ protected:
 
   UserData mUserData;
   RefPtr<UnscaledFont> mUnscaledFont;
+
+private:
+  static Atomic<uint32_t> sDeletionCounter;
 };
 
 /**
@@ -880,7 +920,7 @@ class DrawTargetCapture;
  * may be used either through a Snapshot or by flushing the target and directly
  * accessing the backing store a DrawTarget was created with.
  */
-class DrawTarget : public RefCounted<DrawTarget>
+class DrawTarget : public external::AtomicRefCounted<DrawTarget>
 {
 public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(DrawTarget)
@@ -1230,14 +1270,6 @@ public:
     CreateSimilarDrawTarget(const IntSize &aSize, SurfaceFormat aFormat) const = 0;
 
   /**
-   * Create a DrawTarget that captures the drawing commands and can be replayed
-   * onto a compatible DrawTarget afterwards.
-   *
-   * @param aSize Size of the area this DT will capture.
-   */
-  virtual already_AddRefed<DrawTargetCapture> CreateCaptureDT(const IntSize& aSize);
-
-  /**
    * Create a draw target optimized for drawing a shadow.
    *
    * Note that aSigma is the blur radius that must be used when we draw the
@@ -1495,6 +1527,16 @@ public:
   static already_AddRefed<DrawTarget>
     CreateDrawTarget(BackendType aBackend, const IntSize &aSize, SurfaceFormat aFormat);
 
+  /**
+   * Create a DrawTarget that captures the drawing commands and can be replayed
+   * onto a compatible DrawTarget afterwards.
+   *
+   * @param aSize Size of the area this DT will capture.
+   */
+  static already_AddRefed<DrawTargetCapture>
+    CreateCaptureDrawTarget(BackendType aBackend, const IntSize &aSize, SurfaceFormat aFormat);
+
+
   static already_AddRefed<DrawTarget>
     CreateWrapAndRecordDrawTarget(DrawEventRecorder *aRecorder, DrawTarget *aDT);
 
@@ -1520,12 +1562,13 @@ public:
    *
    * @param aData Pointer to the data
    * @param aSize Size of the TrueType data
-   * @param aType Type of NativeFontResource that should be created.
+   * @param aBackendType Type of the reference DrawTarget the font should be created for.
+   * @param aFontType Type of NativeFontResource that should be created.
    * @param aFontContext Optional native font context to be used to create the NativeFontResource.
    * @return a NativeFontResource of nullptr if failed.
    */
   static already_AddRefed<NativeFontResource>
-    CreateNativeFontResource(uint8_t *aData, uint32_t aSize, FontType aType, void* aFontContext = nullptr);
+    CreateNativeFontResource(uint8_t *aData, uint32_t aSize, BackendType aBackendType, FontType aFontType, void* aFontContext = nullptr);
 
   /**
    * This creates an unscaled font of the given type based on font descriptor
@@ -1642,6 +1685,8 @@ public:
 
   static FT_Library NewFTLibrary();
   static void ReleaseFTLibrary(FT_Library aFTLibrary);
+  static void LockFTLibrary(FT_Library aFTLibrary);
+  static void UnlockFTLibrary(FT_Library aFTLibrary);
 
   static FT_Face NewFTFace(FT_Library aFTLibrary, const char* aFileName, int aFaceIndex);
   static FT_Face NewFTFaceFromData(FT_Library aFTLibrary, const uint8_t* aData, size_t aDataSize, int aFaceIndex);
@@ -1661,15 +1706,13 @@ public:
    * Returns true on success, or false on failure and leaves the D2D1/Direct3D11 devices unset.
    */
   static bool SetDirect3D11Device(ID3D11Device *aDevice);
+  static RefPtr<ID3D11Device> GetDirect3D11Device();
+  static RefPtr<ID2D1Device> GetD2D1Device(uint32_t* aOutSeqNo = nullptr);
+  static bool HasD2D1Device();
+  static RefPtr<IDWriteFactory> GetDWriteFactory();
   static bool SetDWriteFactory(IDWriteFactory *aFactory);
-  static ID3D11Device *GetDirect3D11Device();
-  static ID2D1Device *GetD2D1Device();
-  static uint32_t GetD2D1DeviceSeq();
-  static IDWriteFactory *GetDWriteFactory();
+  static RefPtr<IDWriteFactory> EnsureDWriteFactory();
   static bool SupportsD2D1();
-
-  static already_AddRefed<GlyphRenderingOptions>
-    CreateDWriteGlyphRenderingOptions(IDWriteRenderingParams *aParams);
 
   static uint64_t GetD2DVRAMUsageDrawTarget();
   static uint64_t GetD2DVRAMUsageSourceSurface();
@@ -1681,16 +1724,28 @@ public:
                                   const RefPtr<UnscaledFont>& aUnscaledFont,
                                   Float aSize,
                                   bool aUseEmbeddedBitmap,
-                                  bool aForceGDIMode);
+                                  bool aForceGDIMode,
+                                  IDWriteRenderingParams *aParams,
+                                  Float aGamma,
+                                  Float aContrast);
 
   static void UpdateSystemTextQuality();
 
 private:
-  static ID2D1Device *mD2D1Device;
-  static ID3D11Device *mD3D11Device;
-  static IDWriteFactory *mDWriteFactory;
+  static StaticRefPtr<ID2D1Device> mD2D1Device;
+  static StaticRefPtr<ID3D11Device> mD3D11Device;
+  static StaticRefPtr<IDWriteFactory> mDWriteFactory;
+  static bool mDWriteFactoryInitialized;
+
+protected:
+  // This guards access to the singleton devices above, as well as the
+  // singleton devices in DrawTargetD2D1.
+  static StaticMutex mDeviceLock;
+
+  friend class DrawTargetD2D1;
 #endif
 
+private:
   static DrawEventRecorder *mRecorder;
 };
 

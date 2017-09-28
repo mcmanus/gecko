@@ -17,7 +17,6 @@
 #include "nsIRDFService.h"
 #include "nsRDFCID.h"
 #include "nsString.h"
-#include "nsXPIDLString.h"
 #include "plstr.h"
 #include "rdf.h"
 #include "rdfutil.h"
@@ -124,11 +123,11 @@ RDFContainerUtilsImpl::IndexToOrdinalResource(int32_t aIndex, nsIRDFResource **a
     nsAutoCString uri(kRDFNameSpaceURI);
     uri.Append('_');
     uri.AppendInt(aIndex);
-    
+
     nsresult rv = gRDFService->GetResource(uri, aOrdinal);
     NS_ASSERTION(NS_SUCCEEDED(rv), "unable to get ordinal resource");
     if (NS_FAILED(rv)) return rv;
-    
+
     return NS_OK;
 }
 

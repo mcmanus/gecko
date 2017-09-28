@@ -61,31 +61,44 @@ mod bindings {
         }
     }
 
+    fn read_config(path: &PathBuf) -> toml::Table {
+        println!("cargo:rerun-if-changed={}", path.to_str().unwrap());
+        update_last_modified(&path);
+
+        let mut contents = String::new();
+        File::open(path).expect("Failed to open config file")
+            .read_to_string(&mut contents).expect("Failed to read config file");
+        let mut parser = toml::Parser::new(&contents);
+        if let Some(result) = parser.parse() {
+            result
+        } else {
+            use std::fmt::Write;
+            let mut reason = String::from("Failed to parse config file:");
+            for err in parser.errors.iter() {
+                let parsed = &contents[..err.lo];
+                write!(&mut reason, "\n* line {} column {}: {}",
+                       parsed.lines().count(),
+                       parsed.lines().last().map_or(0, |l| l.len()),
+                       err).unwrap();
+            }
+            panic!(reason)
+        }
+    }
+
     lazy_static! {
         static ref CONFIG: toml::Table = {
+            // Load Gecko's binding generator config from the source tree.
             let path = PathBuf::from(env::var("MOZ_SRC").unwrap())
                 .join("layout/style/ServoBindings.toml");
-            println!("cargo:rerun-if-changed={}", path.to_str().unwrap());
-            update_last_modified(&path);
-
-            let mut contents = String::new();
-            File::open(path).expect("Failed to open config file")
-                .read_to_string(&mut contents).expect("Failed to read config file");
-            let mut parser = toml::Parser::new(&contents);
-            if let Some(result) = parser.parse() {
-                result
-            } else {
-                use std::fmt::Write;
-                let mut reason = String::from("Failed to parse config file:");
-                for err in parser.errors.iter() {
-                    let parsed = &contents[..err.lo];
-                    write!(&mut reason, "\n* line {} column {}: {}",
-                           parsed.lines().count(),
-                           parsed.lines().last().map_or(0, |l| l.len()),
-                           err).unwrap();
-                }
-                panic!(reason)
-            }
+            read_config(&path)
+        };
+        static ref BUILD_CONFIG: toml::Table = {
+            // Load build-specific config overrides.
+            // FIXME: We should merge with CONFIG above instead of
+            // forcing callers to do it.
+            let path = PathBuf::from(env::var("MOZ_TOPOBJDIR").unwrap())
+                .join("layout/style/bindgen.toml");
+            read_config(&path)
         };
         static ref TARGET_INFO: HashMap<String, String> = {
             const TARGET_PREFIX: &'static str = "CARGO_CFG_TARGET_";
@@ -120,7 +133,8 @@ mod bindings {
     }
 
     fn update_last_modified(file: &Path) {
-        let modified = get_modified_time(file).unwrap();
+        let modified = get_modified_time(file)
+            .expect("Couldn't get file modification time");
         let mut last_modified = LAST_MODIFIED.lock().unwrap();
         *last_modified = cmp::max(modified, *last_modified);
     }
@@ -213,6 +227,8 @@ mod bindings {
             let mut matched_os = false;
             let build_config = CONFIG["build"].as_table().expect("Malformed config file");
             builder = add_clang_args(builder, build_config, &mut matched_os);
+            let build_config = BUILD_CONFIG["build"].as_table().expect("Malformed config file");
+            builder = add_clang_args(builder, build_config, &mut matched_os);
             if !matched_os {
                 panic!("Unknown platform");
             }
@@ -276,7 +292,7 @@ mod bindings {
             },
         };
         for fixup in fixups.iter() {
-            result = Regex::new(&format!(r"\b{}\b", fixup.pat)).unwrap().replace_all(&result, fixup.rep.as_str())
+            result = Regex::new(&fixup.pat).unwrap().replace_all(&result, &*fixup.rep)
                 .into_owned().into();
         }
         let bytes = result.into_bytes();
@@ -410,7 +426,7 @@ mod bindings {
                 let servo = item["servo"].as_str().unwrap();
                 let gecko_name = gecko.rsplit("::").next().unwrap();
                 fixups.push(Fixup {
-                    pat: format!("root::{}", gecko),
+                    pat: format!("\\broot::{}\\b", gecko),
                     rep: format!("::gecko_bindings::structs::{}", gecko_name)
                 });
                 builder.hide_type(gecko)
@@ -534,7 +550,8 @@ mod bindings {
     }
 
     fn generate_atoms() {
-        let script = Path::new(file!()).parent().unwrap().join("gecko").join("regen_atoms.py");
+        let script = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("gecko").join("regen_atoms.py");
         println!("cargo:rerun-if-changed={}", script.display());
         let status = Command::new(&*PYTHON)
             .arg(&script)
@@ -580,11 +597,12 @@ mod bindings {
 
 #[cfg(not(feature = "bindgen"))]
 mod bindings {
-    use std::path::Path;
+    use std::env;
+    use std::path::PathBuf;
     use super::common::*;
 
     pub fn generate() {
-        let dir = Path::new(file!()).parent().unwrap().join("gecko/generated");
+        let dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("gecko/generated");
         println!("cargo:rerun-if-changed={}", dir.display());
         copy_dir(&dir, &*OUTDIR_PATH, |path| {
             println!("cargo:rerun-if-changed={}", path.display());

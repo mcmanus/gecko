@@ -206,12 +206,10 @@ nsSVGViewBox::GetBaseValueString(nsAString& aValue) const
     aValue.AssignLiteral("none");
     return;
   }
-  char16_t buf[200];
-  nsTextFormatter::snprintf(buf, sizeof(buf)/sizeof(char16_t),
+  nsTextFormatter::ssprintf(aValue,
                             u"%g %g %g %g",
                             (double)mBaseVal.x, (double)mBaseVal.y,
                             (double)mBaseVal.width, (double)mBaseVal.height);
-  aValue.Assign(buf);
 }
 
 
@@ -327,7 +325,7 @@ nsSVGViewBox::SMILViewBox
   *static_cast<nsSVGViewBoxRect*>(val.mU.mPtr) = viewBox;
   aValue = Move(val);
   aPreventCachingOfSandwich = false;
-  
+
   return NS_OK;
 }
 

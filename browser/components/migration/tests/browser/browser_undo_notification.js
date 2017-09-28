@@ -18,6 +18,7 @@ add_task(async function autoMigrationUndoNotificationShows() {
   scope.AutoMigrate.canUndo = () => true;
   let undoCalled;
   scope.AutoMigrate.undo = () => { undoCalled = true };
+
   for (let url of ["about:newtab", "about:home"]) {
     undoCalled = false;
     // Can't use pushPrefEnv because of bug 1323779

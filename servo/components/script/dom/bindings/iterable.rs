@@ -22,7 +22,7 @@ use std::cell::Cell;
 use std::ptr;
 
 /// The values that an iterator will iterate over.
-#[derive(JSTraceable, HeapSizeOf)]
+#[derive(HeapSizeOf, JSTraceable)]
 pub enum IteratorType {
     /// The keys of the iterable object.
     Keys,
@@ -106,7 +106,7 @@ impl<T: DomObject + JSTraceable + Iterable> IterableIterator<T> {
         self.index.set(index + 1);
         result.map(|_| {
             assert!(!rval.is_null());
-            unsafe { NonZero::new(rval.get()) }
+            unsafe { NonZero::new_unchecked(rval.get()) }
         })
     }
 }

@@ -337,7 +337,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(nsNavHistoryContainerResultNode, nsNavHistory
 NS_IMPL_ADDREF_INHERITED(nsNavHistoryContainerResultNode, nsNavHistoryResultNode)
 NS_IMPL_RELEASE_INHERITED(nsNavHistoryContainerResultNode, nsNavHistoryResultNode)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(nsNavHistoryContainerResultNode)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsNavHistoryContainerResultNode)
   NS_INTERFACE_MAP_STATIC_AMBIGUOUS(nsNavHistoryContainerResultNode)
   NS_INTERFACE_MAP_ENTRY(nsINavHistoryContainerResultNode)
 NS_INTERFACE_MAP_END_INHERITING(nsNavHistoryResultNode)
@@ -1708,43 +1708,6 @@ nsNavHistoryContainerResultNode::GetChildIndex(nsINavHistoryResultNode* aNode,
   return NS_OK;
 }
 
-
-NS_IMETHODIMP
-nsNavHistoryContainerResultNode::FindNodeByDetails(const nsACString& aURIString,
-                                                   PRTime aTime,
-                                                   int64_t aItemId,
-                                                   bool aRecursive,
-                                                   nsINavHistoryResultNode** _retval) {
-  if (!mExpanded)
-    return NS_ERROR_NOT_AVAILABLE;
-
-  *_retval = nullptr;
-  for (int32_t i = 0; i < mChildren.Count(); ++i) {
-    if (mChildren[i]->mURI.Equals(aURIString) &&
-        mChildren[i]->mTime == aTime &&
-        mChildren[i]->mItemId == aItemId) {
-      *_retval = mChildren[i];
-      break;
-    }
-
-    if (aRecursive && mChildren[i]->IsContainer()) {
-      nsNavHistoryContainerResultNode* asContainer =
-        mChildren[i]->GetAsContainer();
-      if (asContainer->mExpanded) {
-        nsresult rv = asContainer->FindNodeByDetails(aURIString, aTime,
-                                                     aItemId,
-                                                     aRecursive,
-                                                     _retval);
-
-        if (NS_SUCCEEDED(rv) && _retval)
-          break;
-      }
-    }
-  }
-  NS_IF_ADDREF(*_retval);
-  return NS_OK;
-}
-
 /**
  * HOW QUERY UPDATING WORKS
  *
@@ -2497,7 +2460,10 @@ nsNavHistoryQueryResultNode::OnVisit(nsIURI* aURI, int64_t aVisitId,
       nsresult rv = history->VisitIdToResultNode(aVisitId, mOptions,
                                                  getter_AddRefs(addition));
       NS_ENSURE_SUCCESS(rv, rv);
-      NS_ENSURE_STATE(addition);
+      if (!addition) {
+        // Certain result types manage the nodes by themselves.
+        return NS_OK;
+      }
       addition->mTransitionType = aTransitionType;
       if (!history->EvaluateQueryForNode(mQueries, mOptions, addition))
         return NS_OK; // don't need to include in our query
@@ -3891,7 +3857,10 @@ nsNavHistoryFolderResultNode::OnItemVisited(int64_t aItemId,
   rv = history->VisitIdToResultNode(aVisitId, mOptions,
                                     getter_AddRefs(visitNode));
   NS_ENSURE_SUCCESS(rv, rv);
-  NS_ENSURE_STATE(visitNode);
+  if (!visitNode) {
+    // Certain result types manage the nodes by themselves.
+    return NS_OK;
+  }
   node->mFrecency = visitNode->mFrecency;
 
   if (AreChildrenVisible()) {
@@ -4436,7 +4405,7 @@ nsNavHistoryResult::GetSkipTags(bool *aSkipTags)
 NS_IMETHODIMP
 nsNavHistoryResult::GetSkipDescendantsOnItemRemoval(bool *aSkipDescendantsOnItemRemoval)
 {
-  *aSkipDescendantsOnItemRemoval = false;
+  *aSkipDescendantsOnItemRemoval = true;
   return NS_OK;
 }
 
@@ -4707,7 +4676,7 @@ nsNavHistoryResult::OnVisit(nsIURI* aURI, int64_t aVisitId, PRTime aTime,
       NS_ENSURE_TRUE(history, NS_OK);
       nsAutoCString todayLabel;
       history->GetStringFromName(
-        u"finduri-AgeInDays-is-0", todayLabel);
+        "finduri-AgeInDays-is-0", todayLabel);
       todayIsMissing = !todayLabel.Equals(title);
     }
   }

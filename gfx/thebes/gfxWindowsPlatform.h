@@ -121,9 +121,6 @@ public:
       CreateOffscreenSurface(const IntSize& aSize,
                              gfxImageFormat aFormat) override;
 
-    virtual already_AddRefed<mozilla::gfx::ScaledFont>
-      GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont) override;
-
     enum RenderMode {
         /* Use GDI and windows surfaces */
         RENDER_GDI = 0,
@@ -171,15 +168,11 @@ public:
 
     virtual bool CanUseHardwareVideoDecoding() override;
 
-    /**
-     * Check whether format is supported on a platform or not (if unclear, returns true)
-     */
-    virtual bool IsFontFormatSupported(nsIURI *aFontURI, uint32_t aFormatFlags) override;
-
     virtual void CompositorUpdated() override;
 
     bool DidRenderingDeviceReset(DeviceResetReason* aResetReason = nullptr) override;
     void SchedulePaintIfDeviceReset() override;
+    void CheckForContentOnlyDeviceReset();
 
     mozilla::gfx::BackendType GetContentBackendFor(mozilla::layers::LayersBackend aLayers) override;
 
@@ -192,8 +185,7 @@ public:
 
     void SetupClearTypeParams();
 
-    IDWriteFactory *GetDWriteFactory() { return mDWriteFactory; }
-    inline bool DWriteEnabled() { return !!mDWriteFactory; }
+    inline bool DWriteEnabled() const { return !!mozilla::gfx::Factory::GetDWriteFactory(); }
     inline DWRITE_MEASURING_MODE DWriteMeasuringMode() { return mMeasuringMode; }
 
     IDWriteRenderingParams *GetRenderingParams(TextRenderingMode aRenderMode)
@@ -258,8 +250,8 @@ private:
     void InitializeD3D11Config();
     void InitializeD2DConfig();
     void InitializeDirectDrawConfig();
+    void InitializeAdvancedLayersConfig();
 
-    RefPtr<IDWriteFactory> mDWriteFactory;
     RefPtr<IDWriteRenderingParams> mRenderingParams[TEXT_RENDERING_COUNT];
     DWRITE_MEASURING_MODE mMeasuringMode;
 

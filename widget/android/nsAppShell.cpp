@@ -70,7 +70,6 @@
 #include "GeckoProcessManager.h"
 #include "GeckoScreenOrientation.h"
 #include "PrefsHelper.h"
-#include "fennec/GeckoApp.h"
 #include "fennec/MemoryMonitor.h"
 #include "fennec/Telemetry.h"
 #include "fennec/ThumbnailHelper.h"
@@ -149,6 +148,7 @@ public:
     {
         struct NoOpRunnable : Runnable
         {
+            NoOpRunnable() : Runnable("NoOpRunnable") {}
             NS_IMETHOD Run() override { return NS_OK; }
         };
 
@@ -241,7 +241,18 @@ public:
 
     static int64_t RunUiThreadCallback()
     {
-        return AndroidUiThread::RunDelayedTasksIfValid();
+        return RunAndroidUiTasks();
+    }
+
+    static void ForceQuit()
+    {
+        nsCOMPtr<nsIAppStartup> appStartup =
+            do_GetService(NS_APPSTARTUP_CONTRACTID);
+
+        if (appStartup) {
+            appStartup->Quit(nsIAppStartup::eForceQuit);
+        }
+
     }
 };
 
@@ -400,7 +411,6 @@ nsAppShell::nsAppShell()
 
         if (jni::IsFennec()) {
             mozilla::ANRReporter::Init();
-            mozilla::GeckoApp::Init();
             mozilla::MemoryMonitor::Init();
             mozilla::widget::Telemetry::Init();
             mozilla::ThumbnailHelper::Init();
@@ -677,8 +687,7 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
 {
     EVLOG("nsAppShell::ProcessNextNativeEvent %d", mayWait);
 
-    PROFILER_LABEL("nsAppShell", "ProcessNextNativeEvent",
-        js::ProfileEntry::Category::EVENTS);
+    AUTO_PROFILER_LABEL("nsAppShell::ProcessNextNativeEvent", EVENTS);
 
     mozilla::UniquePtr<Event> curEvent;
 
@@ -696,8 +705,8 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
                 return true;
             }
 
-            PROFILER_LABEL("nsAppShell", "ProcessNextNativeEvent::Wait",
-                js::ProfileEntry::Category::EVENTS);
+            AUTO_PROFILER_LABEL("nsAppShell::ProcessNextNativeEvent:Wait",
+                                EVENTS);
             mozilla::HangMonitor::Suspend();
 
             curEvent = mEventQueue.Pop(/* mayWait */ true);

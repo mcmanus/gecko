@@ -168,7 +168,6 @@ nsTableWrapperFrame::RemoveFrame(ChildListID  aListID,
 
 void
 nsTableWrapperFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                      const nsRect&           aDirtyRect,
                                       const nsDisplayListSet& aLists)
 {
   // No border, background or outline are painted because they all belong
@@ -177,20 +176,22 @@ nsTableWrapperFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   // If there's no caption, take a short cut to avoid having to create
   // the special display list set and then sort it.
   if (mCaptionFrames.IsEmpty()) {
-    BuildDisplayListForInnerTable(aBuilder, aDirtyRect, aLists);
+    BuildDisplayListForInnerTable(aBuilder, aLists);
     return;
   }
 
   nsDisplayListCollection set;
-  BuildDisplayListForInnerTable(aBuilder, aDirtyRect, set);
-  
+  BuildDisplayListForInnerTable(aBuilder, set);
+
   nsDisplayListSet captionSet(set, set.BlockBorderBackgrounds());
-  BuildDisplayListForChild(aBuilder, mCaptionFrames.FirstChild(),
-                           aDirtyRect, captionSet);
+  BuildDisplayListForChild(aBuilder, mCaptionFrames.FirstChild(), captionSet);
 
   // Now we have to sort everything by content order, since the caption
-  // may be somewhere inside the table
-  set.BlockBorderBackgrounds()->SortByContentOrder(GetContent());
+  // may be somewhere inside the table.
+  // We don't sort BlockBorderBackgrounds and BorderBackgrounds because the
+  // display items in those lists should stay out of content order in order to
+  // follow the rules in https://www.w3.org/TR/CSS21/zindex.html#painting-order
+  // and paint the caption background after all of the rest.
   set.Floats()->SortByContentOrder(GetContent());
   set.Content()->SortByContentOrder(GetContent());
   set.PositionedDescendants()->SortByContentOrder(GetContent());
@@ -200,7 +201,6 @@ nsTableWrapperFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
 void
 nsTableWrapperFrame::BuildDisplayListForInnerTable(nsDisplayListBuilder*   aBuilder,
-                                                   const nsRect&           aDirtyRect,
                                                    const nsDisplayListSet& aLists)
 {
   // Just paint the regular children, but the children's background is our
@@ -208,7 +208,7 @@ nsTableWrapperFrame::BuildDisplayListForInnerTable(nsDisplayListBuilder*   aBuil
   nsIFrame* kid = mFrames.FirstChild();
   // The children should be in content order
   while (kid) {
-    BuildDisplayListForChild(aBuilder, kid, aDirtyRect, aLists);
+    BuildDisplayListForChild(aBuilder, kid, aLists);
     kid = kid->GetNextSibling();
   }
 }
@@ -229,10 +229,11 @@ nsTableWrapperFrame::GetParentStyleContext(nsIFrame** aProviderFrame) const
   return (*aProviderFrame = InnerTableFrame())->StyleContext();
 }
 
-// INCREMENTAL REFLOW HELPER FUNCTIONS 
+// INCREMENTAL REFLOW HELPER FUNCTIONS
 
 void
 nsTableWrapperFrame::InitChildReflowInput(nsPresContext& aPresContext,
+                                          const ReflowInput& aOuterRI,
                                           ReflowInput&   aReflowInput)
 {
   nsMargin collapseBorder;
@@ -255,6 +256,11 @@ nsTableWrapperFrame::InitChildReflowInput(nsPresContext& aPresContext,
         cbSize.emplace(*cb);
         *cbSize -= aReflowInput.ComputedLogicalMargin().Size(wm);
       }
+    }
+    if (!cbSize) {
+      // For inner table frames, the containing block is the same as for
+      // the outer table frame.
+      cbSize.emplace(aOuterRI.mContainingBlockSize);
     }
   }
   aReflowInput.Init(&aPresContext, cbSize.ptrOr(nullptr), pCollapseBorder,
@@ -282,7 +288,7 @@ nsTableWrapperFrame::GetChildMargin(nsPresContext*           aPresContext,
   LogicalSize availSize(wm, aAvailISize, aOuterRI.AvailableSize(wm).BSize(wm));
   ReflowInput childRI(aPresContext, aOuterRI, aChildFrame, availSize,
                             nullptr, ReflowInput::CALLER_WILL_INIT);
-  InitChildReflowInput(*aPresContext, childRI);
+  InitChildReflowInput(*aPresContext, aOuterRI, childRI);
 
   aMargin = childRI.ComputedLogicalMargin();
 }
@@ -595,7 +601,7 @@ nsTableWrapperFrame::GetCaptionOrigin(uint32_t             aCaptionSide,
   if (mCaptionFrames.IsEmpty()) {
     return NS_OK;
   }
-  
+
   NS_ASSERTION(NS_AUTOMARGIN != aCaptionMargin.IStart(aWM) &&
                NS_AUTOMARGIN != aCaptionMargin.BStart(aWM) &&
                NS_AUTOMARGIN != aCaptionMargin.BEnd(aWM),
@@ -685,7 +691,7 @@ nsTableWrapperFrame::GetInnerOrigin(uint32_t             aCaptionSide,
                NS_AUTOMARGIN != aInnerMargin.BStart(aWM) &&
                NS_AUTOMARGIN != aInnerMargin.BEnd(aWM),
                "The computed inner margin is auto?");
-  
+
   aOrigin.I(aWM) = aOrigin.B(aWM) = 0;
   if ((NS_UNCONSTRAINEDSIZE == aInnerSize.ISize(aWM)) ||
       (NS_UNCONSTRAINEDSIZE == aInnerSize.BSize(aWM)) ||
@@ -721,7 +727,7 @@ nsTableWrapperFrame::GetInnerOrigin(uint32_t             aCaptionSide,
       aOrigin.I(aWM) = aInnerMargin.IStart(aWM);
       break;
   }
-  
+
   // block-dir computation
   switch (aCaptionSide) {
     case NS_STYLE_CAPTION_SIDE_BOTTOM:
@@ -792,7 +798,7 @@ nsTableWrapperFrame::OuterBeginReflowChild(nsPresContext*            aPresContex
   // so that caller can use it after we return.
   aChildRI.emplace(aPresContext, aOuterRI, aChildFrame, availSize,
                   nullptr, ReflowInput::CALLER_WILL_INIT);
-  InitChildReflowInput(*aPresContext, *aChildRI);
+  InitChildReflowInput(*aPresContext, aOuterRI, *aChildRI);
 
   // see if we need to reset top-of-page due to a caption
   if (aChildRI->mFlags.mIsTopOfPage &&
@@ -855,10 +861,10 @@ nsTableWrapperFrame::Reflow(nsPresContext*           aPresContext,
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsTableWrapperFrame");
   DISPLAY_REFLOW(aPresContext, this, aOuterRI, aDesiredSize, aStatus);
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
   // Initialize out parameters
   aDesiredSize.ClearSize();
-  aStatus.Reset();
 
   if (!HasAnyStateBits(NS_FRAME_FIRST_REFLOW)) {
     // Set up our kids.  They're already present, on an overflow list,
@@ -883,7 +889,7 @@ nsTableWrapperFrame::Reflow(nsPresContext*           aPresContext,
     captionFirstReflow =
       mCaptionFrames.FirstChild()->HasAnyStateBits(NS_FRAME_FIRST_REFLOW);
   }
-  
+
   // ComputeAutoSize has to match this logic.
   WritingMode wm = aOuterRI.GetWritingMode();
   uint8_t captionSide = GetCaptionSide();

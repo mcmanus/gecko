@@ -34,8 +34,8 @@ namespace HangMonitor {
 } // namespace HangMonitor
 namespace Telemetry {
 
-struct Accumulation;
-struct KeyedAccumulation;
+struct HistogramAccumulation;
+struct KeyedHistogramAccumulation;
 struct ScalarAction;
 struct KeyedScalarAction;
 struct ChildEventData;
@@ -44,13 +44,6 @@ enum TimerResolution {
   Millisecond,
   Microsecond
 };
-
-/**
- * Create and destroy the underlying base::StatisticsRecorder singleton.
- * Creation has to be done very early in the startup sequence.
- */
-void CreateStatisticsRecorder();
-void DestroyStatisticsRecorder();
 
 /**
  * Initialize the Telemetry service on the main thread at startup.
@@ -113,6 +106,23 @@ void AccumulateCategorical(E enumValue) {
 };
 
 /**
+ * Adds sample to a keyed categorical histogram defined in TelemetryHistogramEnums.h
+ * This is the typesafe - and preferred - way to use the keyed categorical histograms
+ * by passing values from the corresponding Telemetry::LABELS_* enum.
+ *
+ * @param key - the string key
+ * @param enumValue - Label value from one of the Telemetry::LABELS_* enums.
+ */
+template<class E>
+void AccumulateCategoricalKeyed(const nsCString& key, E enumValue) {
+  static_assert(IsCategoricalLabelEnum<E>::value,
+                "Only categorical label enum types are supported.");
+  Accumulate(static_cast<HistogramID>(CategoricalLabelId<E>::value),
+             key,
+             static_cast<uint32_t>(enumValue));
+};
+
+/**
  * Adds sample to a categorical histogram defined in TelemetryHistogramEnums.h
  * This string will be matched against the labels defined in Histograms.json.
  * If the string does not match a label defined for the histogram, nothing will
@@ -133,7 +143,7 @@ void AccumulateCategorical(HistogramID id, const nsCString& label);
 void AccumulateTimeDelta(HistogramID id, TimeStamp start, TimeStamp end = TimeStamp::Now());
 
 /**
- * Enable/disable recording for this histogram at runtime.
+ * Enable/disable recording for this histogram in this process at runtime.
  * Recording is enabled by default, unless listed at kRecordingInitiallyDisabledIDs[].
  * id must be a valid telemetry enum, otherwise an assertion is triggered.
  *
@@ -316,8 +326,7 @@ void RecordChromeHang(uint32_t aDuration,
                       ProcessedStack &aStack,
                       int32_t aSystemUptime,
                       int32_t aFirefoxUptime,
-                      mozilla::UniquePtr<mozilla::HangMonitor::HangAnnotations>
-                              aAnnotations);
+                      mozilla::HangMonitor::HangAnnotations&& aAnnotations);
 
 /**
  * Record the current thread's call stack on demand. Note that, the stack is
@@ -330,20 +339,6 @@ void RecordChromeHang(uint32_t aDuration,
  */
 void CaptureStack(const nsCString& aKey);
 #endif
-
-class ThreadHangStats;
-
-/**
- * Move a ThreadHangStats to Telemetry storage. Normally Telemetry queries
- * for active ThreadHangStats through BackgroundHangMonitor, but once a
- * thread exits, the thread's copy of ThreadHangStats needs to be moved to
- * inside Telemetry using this function.
- *
- * @param aStats ThreadHangStats to save; the data inside aStats
- *               will be moved and aStats should be treated as
- *               invalid after this function returns
- */
-void RecordThreadHangStats(ThreadHangStats&& aStats);
 
 /**
  * Record a failed attempt at locking the user's profile.

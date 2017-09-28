@@ -165,6 +165,32 @@ function Tester(aTests, structuredLogger, aCallback) {
   });
 
   this._coverageCollector = null;
+
+  const XPCOMUtilsMod = Components.utils.import("resource://gre/modules/XPCOMUtils.jsm", {});
+
+  // Avoid failing tests when XPCOMUtils.defineLazyScriptGetter is used.
+  XPCOMUtilsMod.Services = Object.create(Services, {
+    scriptloader: {
+      configurable: true,
+      writable: true,
+      value: {
+        loadSubScript: (url, obj, charset) => {
+          let before = Object.keys(window);
+          try {
+            return this._scriptLoader.loadSubScript(url, obj, charset);
+          } finally {
+            for (let property of Object.keys(window)) {
+              if (!before.includes(property) && !this._globalProperties.includes(property)) {
+                this._globalProperties.push(property);
+                this.SimpleTest.info("Global property added while loading " + url + ": " + property);
+              }
+            }
+          }
+        },
+        loadSubScriptWithOptions: this._scriptLoader.loadSubScriptWithOptions.bind(this._scriptLoader),
+      },
+    },
+  });
 }
 Tester.prototype = {
   EventUtils: {},
@@ -186,7 +212,7 @@ Tester.prototype = {
     return this.tests[this.currentTestIndex];
   },
   get done() {
-    return this.currentTestIndex == this.tests.length - 1;
+    return (this.currentTestIndex == this.tests.length - 1) && (this.repeat <= 0);
   },
 
   start: function Tester_start() {
@@ -269,7 +295,6 @@ Tester.prototype = {
     // Remove stale windows
     this.structuredLogger.info("checking window state");
     let windowsEnum = Services.wm.getEnumerator(null);
-    let createdFakeTestForLogging = false;
     while (windowsEnum.hasMoreElements()) {
       let win = windowsEnum.getNext();
       if (win != window && !win.closed &&
@@ -291,24 +316,12 @@ Tester.prototype = {
             allowFailure: this.currentTest.allowFailure,
           }));
         } else {
-          if (!createdFakeTestForLogging) {
-            createdFakeTestForLogging = true;
-            this.structuredLogger.testStart("browser-test.js");
-          }
           this.failuresFromInitialWindowState++;
-          this.structuredLogger.testStatus("browser-test.js",
-                                           msg, "FAIL", false, "");
+          this.structuredLogger.error("browser-test.js | " + msg);
         }
 
         win.close();
       }
-    }
-    if (createdFakeTestForLogging) {
-      let time = Date.now() - startTime;
-      this.structuredLogger.testEnd("browser-test.js",
-                                    "OK",
-                                    undefined,
-                                    "finished window state check in " + time + "ms");
     }
 
     // Make sure the window is raised before each test.
@@ -323,43 +336,34 @@ Tester.prototype = {
     // Include failures from window state checking prior to running the first test
     failCount += this.failuresFromInitialWindowState;
 
-    if (this.repeat > 0) {
-      --this.repeat;
-      this.currentTestIndex = -1;
-      this.nextTest();
+    TabDestroyObserver.destroy();
+    Services.console.unregisterListener(this);
+
+    // It's important to terminate the module to avoid crashes on shutdown.
+    this.PromiseTestUtils.uninit();
+
+    // In the main process, we print the ShutdownLeaksCollector message here.
+    let pid = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime).processID;
+    dump("Completed ShutdownLeaks collections in process " + pid + "\n");
+
+    this.structuredLogger.info("TEST-START | Shutdown");
+
+    if (this.tests.length) {
+      let e10sMode = gMultiProcessBrowser ? "e10s" : "non-e10s";
+      this.structuredLogger.info("Browser Chrome Test Summary");
+      this.structuredLogger.info("Passed:  " + passCount);
+      this.structuredLogger.info("Failed:  " + failCount);
+      this.structuredLogger.info("Todo:    " + todoCount);
+      this.structuredLogger.info("Mode:    " + e10sMode);
     } else {
-      TabDestroyObserver.destroy();
-      Services.console.unregisterListener(this);
-
-      // It's important to terminate the module to avoid crashes on shutdown.
-      this.PromiseTestUtils.uninit();
-
-      // In the main process, we print the ShutdownLeaksCollector message here.
-      let pid = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime).processID;
-      dump("Completed ShutdownLeaks collections in process " + pid + "\n");
-
-      this.structuredLogger.info("TEST-START | Shutdown");
-
-      if (this.tests.length) {
-        let e10sMode = gMultiProcessBrowser ? "e10s" : "non-e10s";
-        this.structuredLogger.info("Browser Chrome Test Summary");
-        this.structuredLogger.info("Passed:  " + passCount);
-        this.structuredLogger.info("Failed:  " + failCount);
-        this.structuredLogger.info("Todo:    " + todoCount);
-        this.structuredLogger.info("Mode:    " + e10sMode);
-      } else {
-        this.structuredLogger.testEnd("browser-test.js",
-                                      "FAIL",
-                                      "PASS",
-                                      "No tests to run. Did you pass invalid test_paths?");
-      }
-      this.structuredLogger.info("*** End BrowserChrome Test Results ***");
-
-      // Tests complete, notify the callback and return
-      this.callback(this.tests);
-      this.callback = null;
-      this.tests = null;
+      this.structuredLogger.error("browser-test.js | No tests to run. Did you pass invalid test_paths?");
     }
+    this.structuredLogger.info("*** End BrowserChrome Test Results ***");
+
+    // Tests complete, notify the callback and return
+    this.callback(this.tests);
+    this.callback = null;
+    this.tests = null;
   },
 
   haltTests: function Tester_haltTests() {
@@ -616,8 +620,6 @@ Tester.prototype = {
             sidebar.setAttribute("src", "data:text/html;charset=utf-8,");
             sidebar.docShell.createAboutBlankContentViewer(null);
             sidebar.setAttribute("src", "about:blank");
-
-            SocialShare.uninit();
           }
 
           // Destroy BackgroundPageThumbs resources.
@@ -682,8 +684,18 @@ Tester.prototype = {
         return;
       }
 
-      this.currentTestIndex++;
-      this.execTest();
+      if (this.repeat > 0) {
+        --this.repeat;
+        if (this.currentTestIndex < 0) {
+          this.currentTestIndex = 0;
+        }
+        this.execTest();
+      } else {
+        this.currentTestIndex++;
+        if (gConfig.repeat)
+          this.repeat = gConfig.repeat;
+        this.execTest();
+      }
     });
   }),
 
@@ -771,9 +783,25 @@ Tester.prototype = {
         }
         let Promise = this.Promise;
         let PromiseTestUtils = this.PromiseTestUtils;
+
+        // Allow for a task to be skipped; we need only use the structured logger
+        // for this, whilst deactivating log buffering to ensure that messages
+        // are always printed to stdout.
+        let skipTask = (task) => {
+          let logger = this.structuredLogger;
+          logger.deactivateBuffering();
+          logger.testStatus(this.currentTest.path, task.name, "SKIP");
+          logger.warning("Skipping test " + task.name);
+          logger.activateBuffering();
+        };
+
         this.Task.spawn(function*() {
           let task;
           while ((task = this.__tasks.shift())) {
+            if (task.__skipMe || (this.__runOnlyThisTask && task != this.__runOnlyThisTask)) {
+              skipTask(task);
+              continue;
+            }
             this.SimpleTest.info("Entering test " + task.name);
             try {
               yield task();
@@ -1046,9 +1074,6 @@ function testScope(aTester, aTest, expected) {
     self.SimpleTest.ignoreAllUncaughtExceptions(aIgnoring);
   };
 
-  this.thisTestLeaksUncaughtRejectionsAndShouldBeFixed = function(...rejections) {
-  };
-
   this.expectAssertions = function test_expectAssertions(aMin, aMax) {
     let min = aMin;
     let max = aMax;
@@ -1088,9 +1113,18 @@ function testScope(aTester, aTest, expected) {
     })
   };
 }
+
+function decorateTaskFn(fn) {
+  fn = fn.bind(this);
+  fn.skip = () => fn.__skipMe = true;
+  fn.only = () => this.__runOnlyThisTask = fn;
+  return fn;
+}
+
 testScope.prototype = {
   __done: true,
   __tasks: null,
+  __runOnlyThisTask: null,
   __waitTimer: null,
   __cleanupFunctions: [],
   __timeoutFactor: 1,
@@ -1146,7 +1180,9 @@ testScope.prototype = {
       this.waitForExplicitFinish();
       this.__tasks = [];
     }
-    this.__tasks.push(aFunction.bind(this));
+    let bound = decorateTaskFn.call(this, aFunction);
+    this.__tasks.push(bound);
+    return bound;
   },
 
   destroy: function test_destroy() {

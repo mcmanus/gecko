@@ -206,10 +206,6 @@ class TestResolver(MozbuildObject):
                 'mochitest', 'a11y'),
             'browser-chrome': os.path.join(self.topobjdir, '_tests', 'testing',
                 'mochitest', 'browser'),
-            'jetpack-package': os.path.join(self.topobjdir, '_tests', 'testing',
-                'mochitest', 'jetpack-package'),
-            'jetpack-addon': os.path.join(self.topobjdir, '_tests', 'testing',
-                'mochitest', 'jetpack-addon'),
             'chrome': os.path.join(self.topobjdir, '_tests', 'testing',
                 'mochitest', 'chrome'),
             'mochitest': os.path.join(self.topobjdir, '_tests', 'testing',
@@ -291,12 +287,11 @@ TEST_MANIFESTS = dict(
     A11Y=('a11y', 'testing/mochitest', 'a11y', True),
     BROWSER_CHROME=('browser-chrome', 'testing/mochitest', 'browser', True),
     ANDROID_INSTRUMENTATION=('instrumentation', 'instrumentation', '.', False),
-    JETPACK_PACKAGE=('jetpack-package', 'testing/mochitest', 'jetpack-package', True),
-    JETPACK_ADDON=('jetpack-addon', 'testing/mochitest', 'jetpack-addon', False),
     FIREFOX_UI_FUNCTIONAL=('firefox-ui-functional', 'firefox-ui', '.', False),
     FIREFOX_UI_UPDATE=('firefox-ui-update', 'firefox-ui', '.', False),
     PUPPETEER_FIREFOX=('firefox-ui-functional', 'firefox-ui', '.', False),
     PYTHON_UNITTEST=('python', 'python', '.', False),
+    CRAMTEST=('cram', 'cram', '.', False),
 
     # marionette tests are run from the srcdir
     # TODO(ato): make packaging work as for other test suites
@@ -444,9 +439,9 @@ def _resolve_installs(paths, topobjdir, manifest):
         for install_info in installs:
             try:
                 if len(install_info) == 3:
-                    manifest.add_pattern_symlink(*install_info)
+                    manifest.add_pattern_link(*install_info)
                 if len(install_info) == 2:
-                    manifest.add_symlink(*install_info)
+                    manifest.add_link(*install_info)
             except ValueError:
                 # A duplicate value here is pretty likely when running
                 # multiple directories at once, and harmless.
@@ -495,9 +490,9 @@ def install_test_files(topsrcdir, topobjdir, tests_root, test_objs):
     for source, dest in set(install_info.installs):
         if dest in install_info.external_installs:
             continue
-        manifest.add_symlink(source, dest)
+        manifest.add_link(source, dest)
     for base, pattern, dest in install_info.pattern_installs:
-        manifest.add_pattern_symlink(base, pattern, dest)
+        manifest.add_pattern_link(base, pattern, dest)
 
     _resolve_installs(install_info.deferred_installs, topobjdir, manifest)
 

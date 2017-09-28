@@ -53,7 +53,6 @@ function getLogSuffix() {
 }
 
 Cu.import("resource://gre/modules/Services.jsm", this);
-Cu.import("resource://gre/modules/ctypes.jsm", this);
 
 const DIR_MACOS = IS_MACOSX ? "Contents/MacOS/" : "";
 const DIR_RESOURCES = IS_MACOSX ? "Contents/Resources/" : "";
@@ -97,6 +96,7 @@ const ERR_BACKUP_DISCARD = "backup_discard: unable to remove";
 const ERR_MOVE_DESTDIR_7 = "Moving destDir to tmpDir failed, err: 7";
 const ERR_BACKUP_CREATE_7 = "backup_create failed: 7";
 const ERR_LOADSOURCEFILE_FAILED = "LoadSourceFile failed";
+const ERR_PARENT_PID_PERSISTS = "The parent process didn't exit! Continuing with update.";
 
 const LOG_SVC_SUCCESSFUL_LAUNCH = "Process was started... waiting on result.";
 
@@ -139,7 +139,7 @@ var gTestID;
 
 var gTestserver;
 
-var gRegisteredServiceCleanup;
+var gIncrementalDownloadErrorType;
 
 var gCheckFunc;
 var gResponseBody;
@@ -158,6 +158,8 @@ var gHandle;
 var gGREDirOrig;
 var gGREBinDirOrig;
 var gAppDirOrig;
+
+var gPIDPersistProcess;
 
 // Variables are used instead of contants so tests can override these values if
 // necessary.
@@ -190,6 +192,11 @@ var DEBUG_AUS_TEST = true;
 const DATA_URI_SPEC = Services.io.newFileURI(do_get_file("../data", false)).spec;
 /* import-globals-from ../data/shared.js */
 Services.scriptloader.loadSubScript(DATA_URI_SPEC + "shared.js", this);
+
+XPCOMUtils.defineLazyModuleGetter(this, "ctypes",
+                                  "resource://gre/modules/ctypes.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "MockRegistrar",
+                                  "resource://testing-common/MockRegistrar.jsm");
 
 var gTestFiles = [];
 var gTestDirs = [];
@@ -746,16 +753,6 @@ var gTestDirsPartialSuccess = [
 // Concatenate the common files to the beginning of the array.
 gTestDirsPartialSuccess = gTestDirsCommon.concat(gTestDirsPartialSuccess);
 
-// This makes it possible to run most tests on xulrunner where the update
-// channel default preference is not set.
-if (MOZ_APP_NAME == "xulrunner") {
-  try {
-    gDefaultPrefBranch.getCharPref(PREF_APP_UPDATE_CHANNEL);
-  } catch (e) {
-    setUpdateChannel("test_channel");
-  }
-}
-
 /**
  * Helper function for setting up the test environment.
  */
@@ -770,20 +767,6 @@ function setupTestCommon() {
   gTestID = caller.filename.toString().split("/").pop().split(".")[0];
 
   createAppInfo("xpcshell@tests.mozilla.org", APP_INFO_NAME, "1.0", "2.0");
-
-  // Tests that don't work with XULRunner.
-  const XUL_RUNNER_INCOMPATIBLE = ["marAppApplyUpdateAppBinInUseStageSuccess_win",
-                                   "marAppApplyUpdateStageSuccess",
-                                   "marAppApplyUpdateSuccess",
-                                   "marAppApplyUpdateAppBinInUseStageSuccessSvc_win",
-                                   "marAppApplyUpdateStageSuccessSvc",
-                                   "marAppApplyUpdateSuccessSvc"];
-  // Replace with Array.prototype.includes when it has stabilized.
-  if (MOZ_APP_NAME == "xulrunner" &&
-      XUL_RUNNER_INCOMPATIBLE.indexOf(gTestID) != -1) {
-    logTestInfo("Unable to run this test on xulrunner");
-    return false;
-  }
 
   if (IS_SERVICE_TEST && !shouldRunServiceTest()) {
     return false;
@@ -843,7 +826,7 @@ function setupTestCommon() {
   }
   grePrefsFile.append("greprefs.js");
   if (!grePrefsFile.exists()) {
-    grePrefsFile.create(Ci.nsILocalFile.NORMAL_FILE_TYPE, PERMS_FILE);
+    grePrefsFile.create(Ci.nsIFile.NORMAL_FILE_TYPE, PERMS_FILE);
   }
 
   // Remove the updates directory on Windows and Mac OS X which is located
@@ -874,20 +857,16 @@ function setupTestCommon() {
 function cleanupTestCommon() {
   debugDump("start - general test cleanup");
 
-  // Force the update manager to reload the update data to prevent it from
-  // writing the old data to the files that have just been removed.
-  reloadUpdateManagerData();
-
   if (gChannel) {
     gPrefRoot.removeObserver(PREF_APP_UPDATE_CHANNEL, observer);
   }
 
-  // Call app update's observe method passing xpcom-shutdown to test that the
+  // Call app update's observe method passing quit-application to test that the
   // shutdown of app update runs without throwing or leaking. The observer
   // method is used directly instead of calling notifyObservers so components
   // outside of the scope of this test don't assert and thereby cause app update
   // tests to fail.
-  gAUS.observe(null, "xpcom-shutdown", "");
+  gAUS.observe(null, "quit-application", "");
 
   gTestserver = null;
 
@@ -986,6 +965,14 @@ function cleanupTestCommon() {
  * inspected.
  */
 function doTestFinish() {
+  // Create empty update xml files and force the update manager to reload the
+  // update data. This will prevent the update manager from writing the test
+  // update data to the files when the test ends.
+  writeUpdatesToXMLFile(getLocalUpdatesXMLString(""), true);
+  writeUpdatesToXMLFile(getLocalUpdatesXMLString(""), false);
+  reloadUpdateManagerData();
+  gUpdateManager.saveUpdates();
+
   if (DEBUG_AUS_TEST) {
     // This prevents do_print errors from being printed by the xpcshell test
     // harness due to nsUpdateService.js logging to the console when the
@@ -993,6 +980,49 @@ function doTestFinish() {
     Services.prefs.setBoolPref(PREF_APP_UPDATE_LOG, false);
     gAUS.observe(null, "nsPref:changed", PREF_APP_UPDATE_LOG);
   }
+  do_execute_soon(testFinishWaitForUpdateXMLFiles);
+}
+
+/**
+ * Waits until the active-update.xml and updates.xml files don't exist and then
+ * calls do_test_finished to end the test. This is necessary due to these files
+ * being written asynchronously by nsIUpdateManager.
+ */
+function testFinishWaitForUpdateXMLFiles() {
+  let tmpActiveUpdateXML = getUpdatesRootDir();
+  tmpActiveUpdateXML.append(FILE_ACTIVE_UPDATE_XML + ".tmp");
+  if (tmpActiveUpdateXML.exists()) {
+    // Since the file is removed asynchronously wait until it has been removed.
+    // Uses do_timeout instead of do_execute_soon to lessen log spew.
+    do_timeout(10, testFinishWaitForUpdateXMLFiles);
+    return;
+  }
+
+  let tmpUpdatesXML = getUpdatesRootDir();
+  tmpUpdatesXML.append(FILE_UPDATES_XML + ".tmp");
+  if (tmpUpdatesXML.exists()) {
+    // Since the file is removed asynchronously wait until it has been removed.
+    // Uses do_timeout instead of do_execute_soon to lessen log spew.
+    do_timeout(10, testFinishWaitForUpdateXMLFiles);
+    return;
+  }
+
+  let activeUpdateXML = getUpdatesXMLFile(true);
+  if (activeUpdateXML.exists()) {
+    // Since the file is removed asynchronously wait until it has been removed.
+    // Uses do_timeout instead of do_execute_soon to lessen log spew.
+    do_timeout(10, testFinishWaitForUpdateXMLFiles);
+    return;
+  }
+
+  let updatesXML = getUpdatesXMLFile(false);
+  if (updatesXML.exists()) {
+    // Since the file is removed asynchronously wait until it has been removed.
+    // Uses do_timeout instead of do_execute_soon to lessen log spew.
+    do_timeout(10, testFinishWaitForUpdateXMLFiles);
+    return;
+  }
+
   do_execute_soon(do_test_finished);
 }
 
@@ -1075,6 +1105,101 @@ function checkAppBundleModTime() {
   Assert.ok(timeDiff < MAC_MAX_TIME_DIFFERENCE,
             "the last modified time on the apply to directory should " +
             "change after a successful update");
+}
+
+/**
+ * Performs Update Manager checks to verify that the update metadata is correct
+ * and that it is the same after the update xml files are reloaded.
+ *
+ * @param   aStatusFileState
+ *          The expected state of the status file.
+ * @param   aHasActiveUpdate
+ *          Should there be an active update.
+ * @param   aUpdateStatusState
+ *          The expected update's status state.
+ * @param   aUpdateErrCode
+ *          The expected update's error code.
+ * @param   aUpdateCount
+ *          The update history's update count.
+ */
+function checkUpdateManager(aStatusFileState, aHasActiveUpdate,
+                            aUpdateStatusState, aUpdateErrCode, aUpdateCount) {
+  Assert.equal(readStatusState(), aStatusFileState,
+               "the status file state" + MSG_SHOULD_EQUAL);
+  let msgTags = [" after startup ", " after a file reload "];
+  for (let i = 0; i < msgTags.length; ++i) {
+    logTestInfo("checking Update Manager updates" + msgTags[i]) +
+                "is performed";
+    if (aHasActiveUpdate) {
+      Assert.ok(!!gUpdateManager.activeUpdate, msgTags[i] +
+                "the active update should be defined");
+    } else {
+      Assert.ok(!gUpdateManager.activeUpdate, msgTags[i] +
+                "the active update should not be defined");
+    }
+    Assert.equal(gUpdateManager.updateCount, aUpdateCount, msgTags[i] +
+                 "the update manager updateCount attribute" + MSG_SHOULD_EQUAL);
+    if (aUpdateCount > 0) {
+      let update = gUpdateManager.getUpdateAt(0);
+      Assert.equal(update.state, aUpdateStatusState, msgTags[i] +
+                   "the first update state" + MSG_SHOULD_EQUAL);
+      Assert.equal(update.errorCode, aUpdateErrCode, msgTags[i] +
+                   "the first update errorCode" + MSG_SHOULD_EQUAL);
+    }
+    if (i != msgTags.length - 1) {
+      reloadUpdateManagerData();
+    }
+  }
+}
+
+/**
+ * Waits until the active-update.xml and updates.xml files exists or not based
+ * on the parameters specified when calling this function or the default values
+ * if the parameters are not specified. After these conditions are met the
+ * waitForUpdateXMLFilesFinished function is called. This is necessary due to
+ * these files being written asynchronously by nsIUpdateManager.
+ *
+ * @param   aActiveUpdateExists (optional)
+ *          Whether the active-update.xml file should exist (default is false).
+ * @param   aUpdatesExists (optional)
+ *          Whether the updates.xml file should exist (default is true).
+ */
+function waitForUpdateXMLFiles(aActiveUpdateExists = false, aUpdatesExists = true) {
+  let tmpActiveUpdateXML = getUpdatesRootDir();
+  tmpActiveUpdateXML.append(FILE_ACTIVE_UPDATE_XML + ".tmp");
+  if (tmpActiveUpdateXML.exists()) {
+    // Since the file is removed asynchronously wait until it has been removed.
+    // Uses do_timeout instead of do_execute_soon to lessen log spew.
+    do_timeout(10, () => waitForUpdateXMLFiles(aActiveUpdateExists, aUpdatesExists));
+    return;
+  }
+
+  let tmpUpdatesXML = getUpdatesRootDir();
+  tmpUpdatesXML.append(FILE_UPDATES_XML + ".tmp");
+  if (tmpUpdatesXML.exists()) {
+    // Since the file is removed asynchronously wait until it has been removed.
+    // Uses do_timeout instead of do_execute_soon to lessen log spew.
+    do_timeout(10, () => waitForUpdateXMLFiles(aActiveUpdateExists, aUpdatesExists));
+    return;
+  }
+
+  let activeUpdateXML = getUpdatesXMLFile(true);
+  if (activeUpdateXML.exists() != aActiveUpdateExists) {
+    // Since the file is removed asynchronously wait until it has been removed.
+    // Uses do_timeout instead of do_execute_soon to lessen log spew.
+    do_timeout(10, () => waitForUpdateXMLFiles(aActiveUpdateExists, aUpdatesExists));
+    return;
+  }
+
+  let updatesXML = getUpdatesXMLFile(false);
+  if (updatesXML.exists() != aUpdatesExists) {
+    // Since the file is removed asynchronously wait until it has been removed.
+    // Uses do_timeout instead of do_execute_soon to lessen log spew.
+    do_timeout(10, () => waitForUpdateXMLFiles(aActiveUpdateExists, aUpdatesExists));
+    return;
+  }
+
+  do_execute_soon(waitForUpdateXMLFilesFinished);
 }
 
 /**
@@ -1284,12 +1409,12 @@ function getMaintSvcDir() {
 }
 
 /**
- * Get the nsILocalFile for a Windows special folder determined by the CSIDL
+ * Get the nsIFile for a Windows special folder determined by the CSIDL
  * passed.
  *
  * @param   aCSIDL
  *          The CSIDL for the Windows special folder.
- * @return  The nsILocalFile for the Windows special folder.
+ * @return  The nsIFile for the Windows special folder.
  * @throws  If called from a platform other than Windows.
  */
 function getSpecialFolderDir(aCSIDL) {
@@ -1315,7 +1440,7 @@ function getSpecialFolderDir(aCSIDL) {
     return null;
   }
   debugDump("SHGetSpecialFolderPath returned path: " + path);
-  let dir = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsILocalFile);
+  let dir = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
   dir.initWithPath(path);
   return dir;
 }
@@ -1438,7 +1563,7 @@ function getMockUpdRootDWin() {
   }
 
   let updatesDir = Cc["@mozilla.org/file/local;1"].
-                   createInstance(Ci.nsILocalFile);
+                   createInstance(Ci.nsIFile);
   updatesDir.initWithPath(localAppDataDir.path + "\\" + relPathUpdates);
   return updatesDir;
 }
@@ -1448,7 +1573,7 @@ XPCOMUtils.defineLazyGetter(this, "gUpdatesRootDir", function test_gURD() {
     do_throw("Mac OS X only function called by a different platform!");
   }
 
-  let dir = Services.dirsvc.get("ULibDir", Ci.nsILocalFile);
+  let dir = Services.dirsvc.get("ULibDir", Ci.nsIFile);
   dir.append("Caches");
   if (MOZ_APP_VENDOR || MOZ_APP_BASENAME) {
     dir.append(MOZ_APP_VENDOR ? MOZ_APP_VENDOR : MOZ_APP_BASENAME);
@@ -1477,7 +1602,7 @@ function getMockUpdRootDMac() {
 
   let pathUpdates = gUpdatesRootDir.path + appDirPath;
   let updatesDir = Cc["@mozilla.org/file/local;1"].
-                   createInstance(Ci.nsILocalFile);
+                   createInstance(Ci.nsIFile);
   updatesDir.initWithPath(pathUpdates);
   return updatesDir;
 }
@@ -1684,6 +1809,12 @@ function runUpdate(aExpectedStatus, aSwitchApp, aExpectedExitValue, aCheckSvcLog
     }
   }
 
+  let pid = 0;
+  if (gPIDPersistProcess) {
+    pid = gPIDPersistProcess.pid;
+    gEnv.set("MOZ_TEST_SHORTER_WAIT_PID", "1");
+  }
+
   // Copy the updater binary to the directory where it will apply updates.
   let updateBin = copyTestUpdaterForRunUsingUpdater();
   Assert.ok(updateBin.exists(),
@@ -1702,10 +1833,10 @@ function runUpdate(aExpectedStatus, aSwitchApp, aExpectedExitValue, aCheckSvcLog
   let args = [updatesDirPath, installDirPath];
   if (aSwitchApp) {
     args[2] = stageDirPath;
-    args[3] = "0/replace";
+    args[3] = pid + "/replace";
   } else {
     args[2] = applyToDirPath;
-    args[3] = "0";
+    args[3] = pid;
   }
 
   let launchBin = IS_SERVICE_TEST && isInvalidArgTest ? callbackApp : updateBin;
@@ -1734,6 +1865,10 @@ function runUpdate(aExpectedStatus, aSwitchApp, aExpectedExitValue, aCheckSvcLog
   process.run(true, args, args.length);
 
   resetEnvironment();
+
+  if (gPIDPersistProcess) {
+    gEnv.set("MOZ_TEST_SHORTER_WAIT_PID", "");
+  }
 
   let status = readStatusFile();
   if ((!IS_SERVICE_TEST && process.exitValue != aExpectedExitValue) ||
@@ -1954,11 +2089,6 @@ function checkUpdateStagedState(aUpdateState) {
     Assert.equal(gUpdateManager.activeUpdate.state, STATE_AFTER_STAGE,
                  "the update state" + MSG_SHOULD_EQUAL);
   }
-
-  Assert.equal(gUpdateManager.updateCount, 1,
-               "the update manager updateCount attribute" + MSG_SHOULD_EQUAL);
-  Assert.equal(gUpdateManager.getUpdateAt(0).state, STATE_AFTER_STAGE,
-               "the update state" + MSG_SHOULD_EQUAL);
 
   let log = getUpdateLog(FILE_LAST_UPDATE_LOG);
   Assert.ok(log.exists(),
@@ -2243,7 +2373,7 @@ function copyFileToTestAppDir(aFileRelPath, aInGreDir) {
       if (destFile.exists()) {
         destFile.remove(false);
       }
-      let ln = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsILocalFile);
+      let ln = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
       ln.initWithPath("/bin/ln");
       let process = Cc["@mozilla.org/process/util;1"].createInstance(Ci.nsIProcess);
       process.init(ln);
@@ -2397,7 +2527,7 @@ function getLaunchBin() {
     launchBin.append("cmd.exe");
   } else {
     launchBin = Cc["@mozilla.org/file/local;1"].
-                createInstance(Ci.nsILocalFile);
+                createInstance(Ci.nsIFile);
     launchBin.initWithPath("/bin/sh");
   }
   Assert.ok(launchBin.exists(),
@@ -2445,16 +2575,21 @@ function lockDirectory(aDirPath) {
  * Launches the test helper binary to make it in use for updater tests and then
  * calls waitForHelperSleep.
  *
- * @param   aTestFile
- *          The test file object that describes the file to make in use.
+ * @param   aRelPath
+ *          The relative path in the apply to directory for the helper binary.
+ * @param   aCopyTestHelper
+ *          Whether to copy the test helper binary to the relative path in the
+ *          apply to directory.
  */
 function runHelperFileInUse(aRelPath, aCopyTestHelper) {
-  logTestInfo("aRelPath: " + aRelPath);
+  debugDump("aRelPath: " + aRelPath);
   // Launch an existing file so it is in use during the update.
   let helperBin = getTestDirFile(FILE_HELPER_BIN);
   let fileInUseBin = getApplyDirFile(aRelPath);
   if (aCopyTestHelper) {
-    fileInUseBin.remove(false);
+    if (fileInUseBin.exists()) {
+      fileInUseBin.remove(false);
+    }
     helperBin.copyTo(fileInUseBin.parent, fileInUseBin.leafName);
   }
   fileInUseBin.permissions = PERMS_DIRECTORY;
@@ -2464,6 +2599,38 @@ function runHelperFileInUse(aRelPath, aCopyTestHelper) {
                          createInstance(Ci.nsIProcess);
   fileInUseProcess.init(fileInUseBin);
   fileInUseProcess.run(false, args, args.length);
+
+  do_execute_soon(waitForHelperSleep);
+}
+
+/**
+ * Launches the test helper binary to provide a pid that is in use for updater
+ * tests and then calls waitForHelperSleep.
+ *
+ * @param   aRelPath
+ *          The relative path in the apply to directory for the helper binary.
+ * @param   aCopyTestHelper
+ *          Whether to copy the test helper binary to the relative path in the
+ *          apply to directory.
+ */
+function runHelperPIDPersists(aRelPath, aCopyTestHelper) {
+  debugDump("aRelPath: " + aRelPath);
+  // Launch an existing file so it is in use during the update.
+  let helperBin = getTestDirFile(FILE_HELPER_BIN);
+  let pidPersistsBin = getApplyDirFile(aRelPath);
+  if (aCopyTestHelper) {
+    if (pidPersistsBin.exists()) {
+      pidPersistsBin.remove(false);
+    }
+    helperBin.copyTo(pidPersistsBin.parent, pidPersistsBin.leafName);
+  }
+  pidPersistsBin.permissions = PERMS_DIRECTORY;
+  let args = [getApplyDirPath() + DIR_RESOURCES, "input", "output", "-s",
+              HELPER_SLEEP_TIMEOUT];
+  gPIDPersistProcess = Cc["@mozilla.org/process/util;1"].
+                       createInstance(Ci.nsIProcess);
+  gPIDPersistProcess.init(pidPersistsBin);
+  gPIDPersistProcess.run(false, args, args.length);
 
   do_execute_soon(waitForHelperSleep);
 }
@@ -2597,6 +2764,7 @@ function waitForHelperExit() {
  */
 function setupUpdaterTest(aMarFile, aPostUpdateAsync,
                           aPostUpdateExeRelPathPrefix = "") {
+  debugDump("start - updater test setup");
   let updatesPatchDir = getUpdatesPatchDir();
   if (!updatesPatchDir.exists()) {
     updatesPatchDir.create(Ci.nsIFile.DIRECTORY_TYPE, PERMS_DIRECTORY);
@@ -2612,6 +2780,7 @@ function setupUpdaterTest(aMarFile, aPostUpdateAsync,
   helperBin.copyToFollowingLinks(afterApplyBinDir, gPostUpdateBinFile);
 
   gTestFiles.forEach(function SUT_TF_FE(aTestFile) {
+    debugDump("start - setup test file: " + aTestFile.fileName);
     if (aTestFile.originalFile || aTestFile.originalContents) {
       let testDir = getApplyDirFile(aTestFile.relPathDir, true);
       if (!testDir.exists()) {
@@ -2640,11 +2809,13 @@ function setupUpdaterTest(aMarFile, aPostUpdateAsync,
         }
       }
     }
+    debugDump("finish - setup test file: " + aTestFile.fileName);
   });
 
   // Add the test directory that will be updated for a successful update or left
   // in the initial state for a failed update.
   gTestDirs.forEach(function SUT_TD_FE(aTestDir) {
+    debugDump("start - setup test directory: " + aTestDir.relPathDir);
     let testDir = getApplyDirFile(aTestDir.relPathDir, true);
     if (!testDir.exists()) {
       testDir.create(Ci.nsIFile.DIRECTORY_TYPE, PERMS_DIRECTORY);
@@ -2676,6 +2847,7 @@ function setupUpdaterTest(aMarFile, aPostUpdateAsync,
         }
       });
     }
+    debugDump("finish - setup test directory: " + aTestDir.relPathDir);
   });
 
   setupActiveUpdate();
@@ -2684,6 +2856,7 @@ function setupUpdaterTest(aMarFile, aPostUpdateAsync,
     createUpdaterINI(aPostUpdateAsync, aPostUpdateExeRelPathPrefix);
   }
 
+  debugDump("finish - updater test setup");
   setupAppFilesAsync();
 }
 
@@ -3507,7 +3680,7 @@ const downloadListener = {
   onStopRequest: function DL_onStopRequest(aRequest, aContext, aStatus) {
     gStatusResult = aStatus;
     // Use a timeout to allow the request to complete
-    do_execute_soon(gCheckFunc);
+    do_execute_soon(downloadListenerStop);
   },
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIRequestObserver,
@@ -3644,7 +3817,7 @@ function getProcessArgs(aExtraArgs) {
   if (IS_UNIX) {
     let launchScript = getLaunchScript();
     // Precreate the script with executable permissions
-    launchScript.create(Ci.nsILocalFile.NORMAL_FILE_TYPE, PERMS_DIRECTORY);
+    launchScript.create(Ci.nsIFile.NORMAL_FILE_TYPE, PERMS_DIRECTORY);
 
     let scriptContents = "#! /bin/sh\n";
     scriptContents += appBinPath + " -no-remote -test-process-updates " +
@@ -3738,6 +3911,17 @@ function adjustGeneralPaths() {
       }
       gProcess = null;
       debugDump("finish - kill process");
+    }
+
+    if (gPIDPersistProcess && gPIDPersistProcess.isRunning) {
+      debugDump("start - kill pid persist process");
+      try {
+        gPIDPersistProcess.kill();
+      } catch (e) {
+        debugDump("kill pid persist process failed. Exception: " + e);
+      }
+      gPIDPersistProcess = null;
+      debugDump("finish - kill pid persist process");
     }
 
     if (gHandle) {
@@ -3887,6 +4071,132 @@ function runUpdateUsingApp(aExpectedStatus) {
   debugDump("finish - launching application to apply update");
 }
 
+/* This Mock incremental downloader is used to verify that connection interrupts
+ * work correctly in updater code. The implementation of the mock incremental
+ * downloader is very simple, it simply copies the file to the destination
+ * location.
+ */
+function initMockIncrementalDownload() {
+  const INC_CONTRACT_ID = "@mozilla.org/network/incremental-download;1";
+  let incrementalDownloadCID =
+    MockRegistrar.register(INC_CONTRACT_ID, IncrementalDownload);
+  do_register_cleanup(() => {
+    MockRegistrar.unregister(incrementalDownloadCID);
+  });
+}
+
+function IncrementalDownload() {
+  this.wrappedJSObject = this;
+}
+
+IncrementalDownload.prototype = {
+  /* nsIIncrementalDownload */
+  init(uri, file, chunkSize, intervalInSeconds) {
+    this._destination = file;
+    this._URI = uri;
+    this._finalURI = uri;
+  },
+
+  start(observer, ctxt) {
+    let tm = Cc["@mozilla.org/thread-manager;1"].
+             getService(Ci.nsIThreadManager);
+    // Do the actual operation async to give a chance for observers to add
+    // themselves.
+    tm.dispatchToMainThread(() => {
+      this._observer = observer.QueryInterface(Ci.nsIRequestObserver);
+      this._ctxt = ctxt;
+      this._observer.onStartRequest(this, this._ctxt);
+      let mar = getTestDirFile(FILE_SIMPLE_MAR);
+      mar.copyTo(this._destination.parent, this._destination.leafName);
+      let status = Cr.NS_OK;
+      switch (gIncrementalDownloadErrorType++) {
+        case 0:
+          status = Cr.NS_ERROR_NET_RESET;
+          break;
+        case 1:
+          status = Cr.NS_ERROR_CONNECTION_REFUSED;
+          break;
+        case 2:
+          status = Cr.NS_ERROR_NET_RESET;
+          break;
+        case 3:
+          status = Cr.NS_OK;
+          break;
+        case 4:
+          status = Cr.NS_ERROR_OFFLINE;
+          // After we report offline, we want to eventually show offline
+          // status being changed to online.
+          let tm2 = Cc["@mozilla.org/thread-manager;1"].
+                    getService(Ci.nsIThreadManager);
+          tm2.dispatchToMainThread(function() {
+            Services.obs.notifyObservers(gAUS,
+                                         "network:offline-status-changed",
+                                         "online");
+          });
+          break;
+      }
+      this._observer.onStopRequest(this, this._ctxt, status);
+    });
+  },
+
+  get URI() {
+    return this._URI;
+  },
+
+  get currentSize() {
+    throw Cr.NS_ERROR_NOT_IMPLEMENTED;
+  },
+
+  get destination() {
+    return this._destination;
+  },
+
+  get finalURI() {
+    return this._finalURI;
+  },
+
+  get totalSize() {
+    throw Cr.NS_ERROR_NOT_IMPLEMENTED;
+  },
+
+  /* nsIRequest */
+  cancel(aStatus) {
+    throw Cr.NS_ERROR_NOT_IMPLEMENTED;
+  },
+  suspend() {
+    throw Cr.NS_ERROR_NOT_IMPLEMENTED;
+  },
+  isPending() {
+    throw Cr.NS_ERROR_NOT_IMPLEMENTED;
+  },
+  _loadFlags: 0,
+  get loadFlags() {
+    return this._loadFlags;
+  },
+  set loadFlags(val) {
+    this._loadFlags = val;
+  },
+
+  _loadGroup: null,
+  get loadGroup() {
+    return this._loadGroup;
+  },
+  set loadGroup(val) {
+    this._loadGroup = val;
+  },
+
+  _name: "",
+  get name() {
+    return this._name;
+  },
+
+  _status: 0,
+  get status() {
+    return this._status;
+  },
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsIIncrementalDownload])
+};
+
 /**
  * Sets the environment that will be used by the application process when it is
  * launched.
@@ -3925,7 +4235,7 @@ function setEnvironment() {
   if (IS_UNIX) {
     let appGreBinDir = gGREBinDirOrig.clone();
     let envGreBinDir = Cc["@mozilla.org/file/local;1"].
-                       createInstance(Ci.nsILocalFile);
+                       createInstance(Ci.nsIFile);
     let shouldSetEnv = true;
     if (IS_MACOSX) {
       if (gEnv.exists("DYLD_LIBRARY_PATH")) {

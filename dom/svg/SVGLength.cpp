@@ -23,11 +23,7 @@ static uint16_t GetUnitTypeForString(const nsAString& unitStr);
 void
 SVGLength::GetValueAsString(nsAString &aValue) const
 {
-  char16_t buf[24];
-  nsTextFormatter::snprintf(buf, sizeof(buf)/sizeof(char16_t),
-                            u"%g",
-                            (double)mValue);
-  aValue.Assign(buf);
+  nsTextFormatter::ssprintf(aValue, u"%g", (double)mValue);
 
   nsAutoString unitString;
   GetUnitString(unitString, mUnit);
@@ -213,7 +209,6 @@ GetUnitString(nsAString& unit, uint16_t unitType)
     return;
   }
   NS_NOTREACHED("Unknown unit type"); // Someone's using an SVGLength with an invalid unit?
-  return;
 }
 
 static uint16_t

@@ -4286,6 +4286,28 @@ function runQueryTextContentEventTest()
   is(result.text, "abc", "runQueryTextContentEventTest #16 (0, 3), \"" + contenteditable.innerHTML + "\"");
 }
 
+function runQuerySelectionEventTest()
+{
+  contenteditable.focus();
+
+  var selection = windowOfContenteditable.getSelection();
+
+  // #1
+  contenteditable.innerHTML = "<br/>a";
+  selection.setBaseAndExtent(contenteditable.firstChild, 0, contenteditable.lastChild, 1);
+  checkSelection(0, kLF + "a", "runQuerySelectionEventTest #1, \"" + contenteditable.innerHTML + "\"");
+
+  // #2
+  contenteditable.innerHTML = "<p></p><p>abc</p>";
+  selection.setBaseAndExtent(contenteditable.firstChild, 0, contenteditable.lastChild.firstChild, 1);
+  checkSelection(kLFLen, kLF + "a", "runQuerySelectionEventTest #2, \"" + contenteditable.innerHTML + "\"");
+
+  // #3
+  contenteditable.innerHTML = "<p>abc</p><p>def</p>";
+  selection.setBaseAndExtent(contenteditable.firstChild, 0, contenteditable.lastChild.firstChild, 1);
+  checkSelection(kLFLen, "abc" + kLF + "d", "runQuerySelectionEventTest #3, \"" + contenteditable.innerHTML + "\"");
+}
+
 function runQueryIMESelectionTest()
 {
   textarea.focus();
@@ -4506,6 +4528,89 @@ function runQueryContentEventRelativeToInsertionPoint()
   }
 
   synthesizeComposition({ type: "compositioncommitasis" });
+}
+
+function runBug1375825Test()
+{
+  contenteditable.focus();
+
+  // #1
+  contenteditable.innerHTML = "abc<span contenteditable=\"false\">defgh</span>";
+
+  var ret = synthesizeQueryTextRect(2, 1);
+  if (!checkQueryContentResult(ret, "runBug1375825Test #1 (2, 1), \"" + contenteditable.innerHTML + "\"")) {
+    return;
+  }
+  is(ret.text, "c", "runBug1375825Test #1 (2, 1), \"" + contenteditable.innerHTML + "\": should have queried a rect for 'c'");
+
+  ret = synthesizeQueryTextRect(3, 1);
+  if (!checkQueryContentResult(ret, "runBug1375825Test #1 (3, 1), \"" + contenteditable.innerHTML + "\"")) {
+    return;
+  }
+  is(ret.text, "d", "runBug1375825Test #1 (3, 1), \"" + contenteditable.innerHTML + "\": should have queried a rect for 'd'");
+
+  ret = synthesizeQueryTextRect(4, 1);
+  if (!checkQueryContentResult(ret, "runBug1375825Test #1 (4, 1), \"" + contenteditable.innerHTML + "\"")) {
+    return;
+  }
+  is(ret.text, "e", "runBug1375825Test #1 (4, 1), \"" + contenteditable.innerHTML + "\": should have queried a rect for 'e'");
+
+  ret = synthesizeQueryTextRect(5, 1);
+  if (!checkQueryContentResult(ret, "runBug1375825Test #1 (5, 1), \"" + contenteditable.innerHTML + "\"")) {
+    return;
+  }
+  is(ret.text, "f", "runBug1375825Test #1 (5, 1), \"" + contenteditable.innerHTML + "\": should have queried a rect for 'f'");
+
+  ret = synthesizeQueryTextRect(6, 1);
+  if (!checkQueryContentResult(ret, "runBug1375825Test #1 (6, 1), \"" + contenteditable.innerHTML + "\"")) {
+    return;
+  }
+  is(ret.text, "g", "runBug1375825Test #1 (6, 1), \"" + contenteditable.innerHTML + "\": should have queried a rect for 'g'");
+
+  ret = synthesizeQueryTextRect(7, 1);
+  if (!checkQueryContentResult(ret, "runBug1375825Test #1 (7, 1), \"" + contenteditable.innerHTML + "\"")) {
+    return;
+  }
+  is(ret.text, "h", "runBug1375825Test #1 (7, 1), \"" + contenteditable.innerHTML + "\": should have queried a rect for 'h'");
+
+  // #2
+  contenteditable.innerHTML = "abc<span style=\"-moz-user-select: all;\">defgh</span>";
+
+  ret = synthesizeQueryTextRect(2, 1);
+  if (!checkQueryContentResult(ret, "runBug1375825Test #2 (2, 1), \"" + contenteditable.innerHTML + "\"")) {
+    return;
+  }
+  is(ret.text, "c", "runBug1375825Test #2 (2, 1), \"" + contenteditable.innerHTML + "\": should have queried a rect for 'c'");
+
+  ret = synthesizeQueryTextRect(3, 1);
+  if (!checkQueryContentResult(ret, "runBug1375825Test #2 (3, 1), \"" + contenteditable.innerHTML + "\"")) {
+    return;
+  }
+  is(ret.text, "d", "runBug1375825Test #2 (3, 1), \"" + contenteditable.innerHTML + "\": should have queried a rect for 'd'");
+
+  ret = synthesizeQueryTextRect(4, 1);
+  if (!checkQueryContentResult(ret, "runBug1375825Test #2 (4, 1), \"" + contenteditable.innerHTML + "\"")) {
+    return;
+  }
+  is(ret.text, "e", "runBug1375825Test #2 (4, 1), \"" + contenteditable.innerHTML + "\": should have queried a rect for 'e'");
+
+  ret = synthesizeQueryTextRect(5, 1);
+  if (!checkQueryContentResult(ret, "runBug1375825Test #2 (5, 1), \"" + contenteditable.innerHTML + "\"")) {
+    return;
+  }
+  is(ret.text, "f", "runBug1375825Test #2 (5, 1), \"" + contenteditable.innerHTML + "\": should have queried a rect for 'f'");
+
+  ret = synthesizeQueryTextRect(6, 1);
+  if (!checkQueryContentResult(ret, "runBug1375825Test #2 (6, 1), \"" + contenteditable.innerHTML + "\"")) {
+    return;
+  }
+  is(ret.text, "g", "runBug1375825Test #2 (6, 1), \"" + contenteditable.innerHTML + "\": should have queried a rect for 'g'");
+
+  ret = synthesizeQueryTextRect(7, 1);
+  if (!checkQueryContentResult(ret, "runBug1375825Test #2 (7, 1), \"" + contenteditable.innerHTML + "\"")) {
+    return;
+  }
+  is(ret.text, "h", "runBug1375825Test #2 (7, 1), \"" + contenteditable.innerHTML + "\": should have queried a rect for 'h'");
 }
 
 function runCSSTransformTest()
@@ -7779,9 +7884,9 @@ function* runIMEContentObserverTest()
       dumpUnexpectedNotifications(description, 3);
     } else {
       checkTextChangeNotification(notifications[0], description, { offset: 2 + offsetAtContainer, removedLength: kLFLen, addedLength: 0 });
-      todo_is(notifications.length, 3, description + " should cause 3 notifications");
-      todo_is(notifications[1] && notifications[1].type, "notify-selection-change", description + " should cause selection change notification");
-      todo_is(notifications[2] && notifications[2].type, "notify-position-change", description + " should cause position change notification");
+      is(notifications.length, 3, description + " should cause 3 notifications");
+      is(notifications[1] && notifications[1].type, "notify-selection-change", description + " should cause selection change notification");
+      is(notifications[2] && notifications[2].type, "notify-position-change", description + " should cause position change notification");
     }
 
     // "a[B]d"
@@ -8037,11 +8142,13 @@ function* testBody()
   runCharAtPointAtOutsideTest();
   runSetSelectionEventTest();
   runQueryTextContentEventTest();
+  runQuerySelectionEventTest();
   runQueryIMESelectionTest();
   runQueryContentEventRelativeToInsertionPoint();
   yield* runIMEContentObserverTest();
   runCSSTransformTest();
   runBug722639Test();
+  runBug1375825Test();
   runForceCommitTest();
   runNestedSettingValue();
   runBug811755Test();

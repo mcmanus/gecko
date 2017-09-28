@@ -29,7 +29,6 @@
 #include "nsIServiceManager.h"
 #include "nsRDFCID.h"
 #include "nsString.h"
-#include "nsXPIDLString.h"
 #include "mozilla/Logging.h"
 #include "rdf.h"
 #include "rdfutil.h"
@@ -157,7 +156,7 @@ ContainerEnumeratorImpl::HasMoreElements(bool* aResult)
 
          const char16_t *nextValStr;
          nextValLiteral->GetValueConst(&nextValStr);
-		 
+
          nsresult err;
          int32_t nextVal = nsAutoString(nextValStr).ToInteger(&err);
 

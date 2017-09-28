@@ -2,22 +2,22 @@
  * Copyright (c) 2007 Henri Sivonen
  * Copyright (c) 2008-2015 Mozilla Foundation
  *
- * Permission is hereby granted, free of charge, to any person obtaining a 
- * copy of this software and associated documentation files (the "Software"), 
- * to deal in the Software without restriction, including without limitation 
- * the rights to use, copy, modify, merge, publish, distribute, sublicense, 
- * and/or sell copies of the Software, and to permit persons to whom the 
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in 
+ * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
 
@@ -42,6 +42,7 @@
 #include "nsHtml5Macros.h"
 #include "nsIContentHandle.h"
 #include "nsHtml5Portability.h"
+#include "nsHtml5ContentCreatorFunction.h"
 
 #include "nsHtml5AttributeName.h"
 #include "nsHtml5ElementName.h"
@@ -77,6 +78,7 @@ nsHtml5MetaScanner::nsHtml5MetaScanner(nsHtml5TreeBuilder* tb)
   , charset(nullptr)
   , httpEquivState(HTTP_EQUIV_NOT_SEEN)
   , treeBuilder(tb)
+  , mEncoding(nullptr)
 {
   MOZ_COUNT_CTOR(nsHtml5MetaScanner);
 }
@@ -753,11 +755,13 @@ nsHtml5MetaScanner::handleAttributeValue()
     return;
   }
   if (contentIndex == CONTENT.length && !content) {
-    content = nsHtml5Portability::newStringFromBuffer(strBuf, 0, strBufLen, treeBuilder);
+    content = nsHtml5Portability::newStringFromBuffer(
+      strBuf, 0, strBufLen, treeBuilder, false);
     return;
   }
   if (charsetIndex == CHARSET.length && !charset) {
-    charset = nsHtml5Portability::newStringFromBuffer(strBuf, 0, strBufLen, treeBuilder);
+    charset = nsHtml5Portability::newStringFromBuffer(
+      strBuf, 0, strBufLen, treeBuilder, false);
     return;
   }
   if (httpEquivIndex == HTTP_EQUIV.length &&

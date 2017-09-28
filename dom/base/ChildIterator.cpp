@@ -168,11 +168,9 @@ FlattenedChildIterator::Init(bool aIgnoreXBL)
     mParent->OwnerDoc()->BindingManager()->GetBindingWithContent(mParent);
 
   if (binding) {
-    nsIContent* anon = binding->GetAnonymousContent();
-    if (anon) {
-      mParent = anon;
-      mXBLInvolved = true;
-    }
+    MOZ_ASSERT(binding->GetAnonymousContent());
+    mParent = binding->GetAnonymousContent();
+    mXBLInvolved = true;
   }
 
   // We set mXBLInvolved to true if either:
@@ -476,43 +474,6 @@ AllChildrenIterator::GetPreviousChild()
 
   mPhase = eAtBegin;
   return nullptr;
-}
-
-/* static */ bool
-StyleChildrenIterator::IsNeeded(const Element* aElement)
-{
-  // If the node is in an anonymous subtree, we conservatively return true to
-  // handle insertion points.
-  if (aElement->IsInAnonymousSubtree()) {
-    return true;
-  }
-
-  // If the node has an XBL binding with anonymous content return true.
-  if (aElement->HasFlag(NODE_MAY_BE_IN_BINDING_MNGR)) {
-    nsBindingManager* manager = aElement->OwnerDoc()->BindingManager();
-    nsXBLBinding* binding = manager->GetBindingWithContent(aElement);
-    if (binding && binding->GetAnonymousContent()) {
-      return true;
-    }
-  }
-
-  // If the node has a ::before or ::after pseudo, return true, because we want
-  // to visit those.
-  //
-  // TODO(emilio): Make this fast adding a bit? or, perhaps just using
-  // ProbePseudoElementStyle? It should be quite fast in Stylo.
-  if (aElement->GetProperty(nsGkAtoms::beforePseudoProperty) ||
-      aElement->GetProperty(nsGkAtoms::afterPseudoProperty)) {
-    return true;
-  }
-
-  // If the node has native anonymous content, return true.
-  nsIAnonymousContentCreator* ac = do_QueryFrame(aElement->GetPrimaryFrame());
-  if (ac) {
-    return true;
-  }
-
-  return false;
 }
 
 nsIContent*

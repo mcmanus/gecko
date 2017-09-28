@@ -34,7 +34,6 @@
 #include "mozilla/EventStateManager.h"
 #include "nsIAtom.h"
 #include "nsRange.h"
-#include "nsContentList.h"
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/dom/Element.h"
 #include "nsRuleWalker.h"
@@ -97,20 +96,17 @@ inDOMUtils::GetAllStyleSheets(nsIDOMDocument *aDocument, uint32_t *aLength,
     for (int32_t i = 0; i < styleSet->SheetCount(sheetType); i++) {
       sheets.AppendElement(styleSet->StyleSheetAt(sheetType, i));
     }
-    if (styleSet->IsGecko()) {
-      AutoTArray<CSSStyleSheet*, 32> xblSheetArray;
-      styleSet->AsGecko()->AppendAllXBLStyleSheets(xblSheetArray);
 
-      // The XBL stylesheet array will quite often be full of duplicates. Cope:
-      nsTHashtable<nsPtrHashKey<CSSStyleSheet>> sheetSet;
-      for (CSSStyleSheet* sheet : xblSheetArray) {
-        if (!sheetSet.Contains(sheet)) {
-          sheetSet.PutEntry(sheet);
-          sheets.AppendElement(sheet);
-        }
+    AutoTArray<StyleSheet*, 32> xblSheetArray;
+    styleSet->AppendAllXBLStyleSheets(xblSheetArray);
+
+    // The XBL stylesheet array will quite often be full of duplicates. Cope:
+    nsTHashtable<nsPtrHashKey<StyleSheet>> sheetSet;
+    for (StyleSheet* sheet : xblSheetArray) {
+      if (!sheetSet.Contains(sheet)) {
+        sheetSet.PutEntry(sheet);
+        sheets.AppendElement(sheet);
       }
-    } else {
-      NS_WARNING("stylo: XBL style sheets not supported yet");
     }
   }
 
@@ -267,24 +263,51 @@ inDOMUtils::GetCSSStyleRules(nsIDOMElement *aElement,
       }
     }
   } else {
-    // It's a Servo source, so use some servo methods on the element to get
-    // the rule list.
-    nsTArray<const RawServoStyleRule*> rawRuleList;
-    Servo_Element_GetStyleRuleList(element, &rawRuleList);
-
     nsIDocument* doc = element->GetOwnerDocument();
     nsIPresShell* shell = doc->GetShell();
     if (!shell) {
       return NS_OK;
     }
 
-    ServoStyleSet* styleSet = shell->StyleSet()->AsServo();
-    ServoStyleRuleMap* map = styleSet->StyleRuleMap();
-    map->EnsureTable();
+    ServoStyleContext* servo = styleContext->AsServo();
+    nsTArray<const RawServoStyleRule*> rawRuleList;
+    Servo_ComputedValues_GetStyleRuleList(servo, &rawRuleList);
+
+    AutoTArray<ServoStyleRuleMap*, 1> maps;
+    {
+      ServoStyleSet* styleSet = shell->StyleSet()->AsServo();
+      ServoStyleRuleMap* map = styleSet->StyleRuleMap();
+      map->EnsureTable();
+      maps.AppendElement(map);
+    }
+
+    // Collect style rule maps for bindings.
+    for (nsIContent* bindingContent = element; bindingContent;
+         bindingContent = bindingContent->GetBindingParent()) {
+      if (nsXBLBinding* binding = bindingContent->GetXBLBinding()) {
+        if (ServoStyleSet* styleSet = binding->GetServoStyleSet()) {
+          ServoStyleRuleMap* map = styleSet->StyleRuleMap();
+          map->EnsureTable();
+          maps.AppendElement(map);
+        }
+      }
+      // Note that we intentionally don't cut off here, unlike when we
+      // do styling, because even if style rules from parent binding
+      // do not apply to the element directly in those cases, their
+      // rules may still show up in the list we get above due to the
+      // inheritance in cascading.
+    }
 
     // Find matching rules in the table.
     for (const RawServoStyleRule* rawRule : Reversed(rawRuleList)) {
-      if (ServoStyleRule* rule = map->Lookup(rawRule)) {
+      ServoStyleRule* rule = nullptr;
+      for (ServoStyleRuleMap* map : maps) {
+        rule = map->Lookup(rawRule);
+        if (rule) {
+          break;
+        }
+      }
+      if (rule) {
         rules->AppendElement(static_cast<css::Rule*>(rule), false);
       } else {
         MOZ_ASSERT_UNREACHABLE("We should be able to map a raw rule to a rule");
@@ -587,7 +610,6 @@ static void GetColorsForProperty(const uint32_t aParserVariant,
     }
     InsertNoDuplicates(aArray, NS_LITERAL_STRING("currentColor"));
   }
-  return;
 }
 
 static void GetOtherValuesForProperty(const uint32_t aParserVariant,
@@ -751,12 +773,10 @@ PropertySupportsVariant(nsCSSPropertyID aPropertyID, uint32_t aVariant)
       case eCSSProperty_background_position_x:
       case eCSSProperty_background_position_y:
       case eCSSProperty_background_size:
-#ifdef MOZ_ENABLE_MASK_AS_SHORTHAND
       case eCSSProperty_mask_position:
       case eCSSProperty_mask_position_x:
       case eCSSProperty_mask_position_y:
       case eCSSProperty_mask_size:
-#endif
       case eCSSProperty_grid_auto_columns:
       case eCSSProperty_grid_auto_rows:
       case eCSSProperty_grid_template_columns:

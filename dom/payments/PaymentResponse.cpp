@@ -5,6 +5,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/dom/PaymentResponse.h"
+#include "mozilla/dom/BasicCardPaymentBinding.h"
+#include "BasicCardPayment.h"
+#include "PaymentAddress.h"
+#include "PaymentRequestUtils.h"
 
 namespace mozilla {
 namespace dom {
@@ -35,6 +39,7 @@ PaymentResponse::PaymentResponse(nsPIDOMWindowInner* aWindow,
   , mInternalId(aInternalId)
   , mRequestId(aRequestId)
   , mMethodName(aMethodName)
+  , mDetails(aDetails)
   , mShippingOption(aShippingOption)
   , mPayerName(aPayerName)
   , mPayerEmail(aPayerEmail)
@@ -44,9 +49,6 @@ PaymentResponse::PaymentResponse(nsPIDOMWindowInner* aWindow,
 
   // TODO: from https://github.com/w3c/browser-payment-api/issues/480
   // Add payerGivenName + payerFamilyName to PaymentAddress
-
-  // TODO : need to figure how to deserialize aDetails to JSObject
-
 }
 
 PaymentResponse::~PaymentResponse()
@@ -72,9 +74,27 @@ PaymentResponse::GetMethodName(nsString& aRetVal) const
 }
 
 void
-PaymentResponse::GetDetails(JSContext* cx, JS::MutableHandle<JSObject*> aRetVal) const
+PaymentResponse::GetDetails(JSContext* aCx, JS::MutableHandle<JSObject*> aRetVal) const
 {
-  // TODO : need to save aDetails as JSObject
+  RefPtr<BasicCardService> service = BasicCardService::GetService();
+  MOZ_ASSERT(service);
+  if (!service->IsBasicCardPayment(mMethodName)) {
+    DeserializeToJSObject(mDetails, aCx, aRetVal);
+  } else {
+    BasicCardResponse response;
+    nsresult rv = service->DecodeBasicCardData(mDetails, mOwner, response);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return;
+    }
+
+    MOZ_ASSERT(aCx);
+    JS::RootedValue value(aCx);
+    JS::MutableHandleValue handleValue(&value);
+    if (NS_WARN_IF(!response.ToObjectInternal(aCx, handleValue))) {
+      return;
+    }
+    aRetVal.set(&handleValue.toObject());
+  }
 }
 
 void

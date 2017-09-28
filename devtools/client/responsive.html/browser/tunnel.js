@@ -247,7 +247,8 @@ function tunnelToInnerBrowser(outer, inner) {
       // this event doesn't give enough info to use them.
       browserWindow.browserDOMWindow
         .openURI(uri, null, Ci.nsIBrowserDOMWindow.OPEN_NEWTAB,
-                 Ci.nsIBrowserDOMWindow.OPEN_NEW);
+                 Ci.nsIBrowserDOMWindow.OPEN_NEW,
+                 outer.contentPrincipal);
     },
 
     stop() {

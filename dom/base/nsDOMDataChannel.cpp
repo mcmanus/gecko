@@ -68,7 +68,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_ADDREF_INHERITED(nsDOMDataChannel, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(nsDOMDataChannel, DOMEventTargetHelper)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(nsDOMDataChannel)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsDOMDataChannel)
   NS_INTERFACE_MAP_ENTRY(nsIDOMDataChannel)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
@@ -110,11 +110,6 @@ nsDOMDataChannel::Init(nsPIDOMWindowInner* aDOMWindow)
   LOG(("%s: origin = %s\n",__FUNCTION__,NS_LossyConvertUTF16toASCII(mOrigin).get()));
   return rv;
 }
-
-NS_IMPL_EVENT_HANDLER(nsDOMDataChannel, open)
-NS_IMPL_EVENT_HANDLER(nsDOMDataChannel, error)
-NS_IMPL_EVENT_HANDLER(nsDOMDataChannel, close)
-NS_IMPL_EVENT_HANDLER(nsDOMDataChannel, message)
 
 // Most of the GetFoo()/SetFoo()s don't need to touch shared resources and
 // are safe after Close()
@@ -270,7 +265,7 @@ void
 nsDOMDataChannel::Send(const nsAString& aData, ErrorResult& aRv)
 {
   NS_ConvertUTF16toUTF8 msgString(aData);
-  Send(nullptr, msgString, msgString.Length(), false, aRv);
+  Send(nullptr, msgString, false, aRv);
 }
 
 void
@@ -294,7 +289,7 @@ nsDOMDataChannel::Send(Blob& aData, ErrorResult& aRv)
     return;
   }
 
-  Send(msgStream, EmptyCString(), msgLength, true, aRv);
+  Send(msgStream, EmptyCString(), true, aRv);
 }
 
 void
@@ -310,7 +305,7 @@ nsDOMDataChannel::Send(const ArrayBuffer& aData, ErrorResult& aRv)
   char* data = reinterpret_cast<char*>(aData.Data());
 
   nsDependentCSubstring msgString(data, len);
-  Send(nullptr, msgString, len, true, aRv);
+  Send(nullptr, msgString, true, aRv);
 }
 
 void
@@ -326,13 +321,12 @@ nsDOMDataChannel::Send(const ArrayBufferView& aData, ErrorResult& aRv)
   char* data = reinterpret_cast<char*>(aData.Data());
 
   nsDependentCSubstring msgString(data, len);
-  Send(nullptr, msgString, len, true, aRv);
+  Send(nullptr, msgString, true, aRv);
 }
 
 void
 nsDOMDataChannel::Send(nsIInputStream* aMsgStream,
                        const nsACString& aMsgString,
-                       uint32_t aMsgLength,
                        bool aIsBinary,
                        ErrorResult& aRv)
 {
@@ -357,18 +351,14 @@ nsDOMDataChannel::Send(nsIInputStream* aMsgStream,
   MOZ_ASSERT(state == mozilla::DataChannel::OPEN,
              "Unknown state in nsDOMDataChannel::Send");
 
-  bool sent;
   if (aMsgStream) {
-    sent = mDataChannel->SendBinaryStream(aMsgStream, aMsgLength);
+    mDataChannel->SendBinaryStream(aMsgStream, aRv);
   } else {
     if (aIsBinary) {
-      sent = mDataChannel->SendBinaryMsg(aMsgString);
+      mDataChannel->SendBinaryMsg(aMsgString, aRv);
     } else {
-      sent = mDataChannel->SendMsg(aMsgString);
+      mDataChannel->SendMsg(aMsgString, aRv);
     }
-  }
-  if (!sent) {
-    aRv.Throw(NS_ERROR_FAILURE);
   }
 }
 
@@ -427,7 +417,8 @@ nsDOMDataChannel::DoOnMessageAvailable(const nsACString& aData,
   event->SetTrusted(true);
 
   LOG(("%p(%p): %s - Dispatching\n",this,(void*)mDataChannel,__FUNCTION__));
-  rv = DispatchDOMEvent(nullptr, static_cast<Event*>(event), nullptr, nullptr);
+  bool dummy;
+  rv = DispatchEvent(static_cast<Event*>(event), &dummy);
   if (NS_FAILED(rv)) {
     NS_WARNING("Failed to dispatch the message event!!!");
   }
@@ -465,7 +456,8 @@ nsDOMDataChannel::OnSimpleEvent(nsISupports* aContext, const nsAString& aName)
   event->InitEvent(aName, false, false);
   event->SetTrusted(true);
 
-  return DispatchDOMEvent(nullptr, event, nullptr, nullptr);
+  bool dummy;
+  return DispatchEvent(event, &dummy);
 }
 
 nsresult
@@ -577,8 +569,7 @@ nsDOMDataChannel::UpdateMustKeepAlive()
   }
 
   if (mSelfRef && !shouldKeepAlive) {
-    // release our self-reference (safely) by putting it in an event (always)
-    NS_ReleaseOnMainThread("nsDOMDataChannel::mSelfRef", mSelfRef.forget(), true);
+    ReleaseSelf();
   } else if (!mSelfRef && shouldKeepAlive) {
     mSelfRef = this;
   }
@@ -590,11 +581,20 @@ nsDOMDataChannel::DontKeepAliveAnyMore()
   MOZ_ASSERT(NS_IsMainThread());
 
   if (mSelfRef) {
-    // Since we're on MainThread, force an eventloop trip to avoid deleting ourselves.
-    NS_ReleaseOnMainThread("nsDOMDataChannel::mSelfRef", mSelfRef.forget(), true);
+    // Since we're on MainThread, force an eventloop trip to avoid deleting
+    // ourselves.
+    ReleaseSelf();
   }
 
   mCheckMustKeepAlive = false;
+}
+
+void
+nsDOMDataChannel::ReleaseSelf()
+{
+  // release our self-reference (safely) by putting it in an event (always)
+  NS_ReleaseOnMainThreadSystemGroup("nsDOMDataChannel::mSelfRef",
+                                    mSelfRef.forget(), true);
 }
 
 void

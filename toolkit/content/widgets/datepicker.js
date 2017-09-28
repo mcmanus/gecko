@@ -24,8 +24,10 @@ function DatePicker(context) {
      *           {Number} year [optional]
      *           {Number} month [optional]
      *           {Number} date [optional]
-     *           {String} min
-     *           {String} max
+     *           {Number} min
+     *           {Number} max
+     *           {Number} step
+     *           {Number} stepBase
      *           {Number} firstDayOfWeek
      *           {Array<Number>} weekends
      *           {Array<String>} monthStrings
@@ -38,16 +40,17 @@ function DatePicker(context) {
       this._setDefaultState();
       this._createComponents();
       this._update();
+      document.dispatchEvent(new CustomEvent("PickerReady"));
     },
 
     /*
      * Set initial date picker states.
      */
     _setDefaultState() {
-      const { year, month, day, min, max, firstDayOfWeek, weekends,
+      const { year, month, day, min, max, step, stepBase, firstDayOfWeek, weekends,
               monthStrings, weekdayStrings, locale, dir } = this.props;
       const dateKeeper = new DateKeeper({
-        year, month, day, min, max, firstDayOfWeek, weekends,
+        year, month, day, min, max, step, stepBase, firstDayOfWeek, weekends,
         calViewSize: CAL_VIEW_SIZE
       });
 
@@ -59,7 +62,7 @@ function DatePicker(context) {
         isMonthPickerVisible: false,
         datetimeOrders: new Intl.DateTimeFormat(locale)
                           .formatToParts(new Date(0)).map(part => part.type),
-        getDayString: new Intl.NumberFormat(locale).format,
+        getDayString: day => day ? new Intl.NumberFormat(locale).format(day) : "",
         getWeekHeaderString: weekday => weekdayStrings[weekday],
         getMonthString: month => monthStrings[month],
         setSelection: date => {
@@ -106,7 +109,10 @@ function DatePicker(context) {
       this.components = {
         calendar: new Calendar({
           calViewSize: CAL_VIEW_SIZE,
-          locale: this.state.locale
+          locale: this.state.locale,
+          setSelection: this.state.setSelection,
+          getDayString: this.state.getDayString,
+          getWeekHeaderString: this.state.getWeekHeaderString
         }, {
           weekHeader: this.context.weekHeader,
           daysView: this.context.daysView
@@ -147,10 +153,7 @@ function DatePicker(context) {
       this.components.calendar.setProps({
         isVisible: !isMonthPickerVisible,
         days: this.state.days,
-        weekHeaders: dateKeeper.state.weekHeaders,
-        setSelection: this.state.setSelection,
-        getDayString: this.state.getDayString,
-        getWeekHeaderString: this.state.getWeekHeaderString
+        weekHeaders: dateKeeper.state.weekHeaders
       });
 
       isMonthPickerVisible ?
@@ -260,8 +263,8 @@ function DatePicker(context) {
     set({ year, month, day }) {
       const { dateKeeper } = this.state;
 
-      dateKeeper.set({
-        year, month, day
+      dateKeeper.setCalendarMonth({
+        year, month
       });
       dateKeeper.setSelection({
         year, month, day

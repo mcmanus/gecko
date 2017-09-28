@@ -240,7 +240,7 @@
           return this._sameProcessAsFrameLoader && this._sameProcessAsFrameLoader.get();
         ]]></getter>
         <setter><![CDATA[
-          this._sameProcessAsFrameLoader = Cu.getWeakReference(val);
+          this._sameProcessAsFrameLoader = Components.utils.getWeakReference(val);
         ]]></setter>
       </property>
 
@@ -251,7 +251,7 @@
           if (this._docShell)
             return this._docShell;
 
-          let frameLoader = this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner).frameLoader;
+          let {frameLoader} = this;
           if (!frameLoader)
             return null;
           this._docShell = frameLoader.docShell;
@@ -266,7 +266,7 @@
           if (this._loadContext)
             return this._loadContext;
 
-          let frameLoader = this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner).frameLoader;
+          let {frameLoader} = this;
           if (!frameLoader)
             return null;
           this._loadContext = frameLoader.loadContext;
@@ -347,11 +347,10 @@
                 readonly="true">
         <getter>
           <![CDATA[
-            var owner = this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner);
-            if (!owner.frameLoader) {
-              return null;
+            if (this.frameLoader) {
+              return this.frameLoader.messageManager;
             }
-            return owner.frameLoader.messageManager;
+            return null;
           ]]>
         </getter>
 
@@ -520,6 +519,17 @@
       <property name="contentPrincipal"
                 onget="return this.contentDocument.nodePrincipal;"
                 readonly="true"/>
+
+      <property name="contentRequestContextID" readonly="true">
+        <getter><![CDATA[
+          try {
+            return this.contentDocument.documentLoadGroup
+                       .requestContextID;
+          } catch (e) {
+            return null;
+          }
+        ]]></getter>
+      </property>
 
       <property name="showWindowResizer"
                 onset="if (val) this.setAttribute('showresizer', 'true');
@@ -720,10 +730,23 @@
         </body>
       </method>
 
-      <method name="audioPlaybackBlockStarted">
+      <!--
+        When the pref "media.block-autoplay-until-in-foreground" is on, all
+        windows would be blocked by default in gecko. The "block" means the
+        autoplay media can't be started in that tab unless the tab has been
+        visited or resumed by tab's play tab icon. Since the window is blocked
+        by default, there's no method to signal entering that state.
+        (1) If the window is resumed, no matter it has autoplay media or not
+            - will call mediaBlockStopped()
+        (2) If the window has blocked any autoplay media
+            - will call activeMediaBlockStarted()
+        (3) If the window has resumed any autoplay media
+            - will call activeMediaBlockStopped()
+       -->
+      <method name="activeMediaBlockStarted">
         <body>
           <![CDATA[
-            this._audioBlocked = true;
+            this._hasAnyPlayingMediaBeenBlocked = true;
             let event = document.createEvent("Events");
             event.initEvent("DOMAudioPlaybackBlockStarted", true, false);
             this.dispatchEvent(event);
@@ -731,16 +754,24 @@
         </body>
       </method>
 
-      <method name="audioPlaybackBlockStopped">
+      <method name="activeMediaBlockStopped">
         <body>
           <![CDATA[
-            if (!this._audioBlocked) {
+            if (!this._hasAnyPlayingMediaBeenBlocked) {
               return;
             }
-            this._audioBlocked = false;
+            this._hasAnyPlayingMediaBeenBlocked = false;
             let event = document.createEvent("Events");
             event.initEvent("DOMAudioPlaybackBlockStopped", true, false);
             this.dispatchEvent(event);
+          ]]>
+        </body>
+      </method>
+
+      <method name="mediaBlockStopped">
+        <body>
+          <![CDATA[
+            this._mediaBlocked = false;
           ]]>
         </body>
       </method>
@@ -750,11 +781,19 @@
                 onget="return this._audioMuted;"
                 readonly="true"/>
 
+      <field name="_mediaBlocked">true</field>
+      <property name="mediaBlocked" readonly="true">
+        <getter>
+          <![CDATA[
+            if (this.mPrefs.getBoolPref("media.block-autoplay-until-in-foreground", true)) {
+              return this._mediaBlocked;
+            }
+            return false;
+          ]]>
+        </getter>
+      </property>
 
-      <field name="_audioBlocked">false</field>
-      <property name="audioBlocked"
-                onget="return this._audioBlocked;"
-                readonly="true"/>
+      <field name="_hasAnyPlayingMediaBeenBlocked">false</field>
 
       <method name="mute">
         <parameter name="transientState"/>
@@ -805,25 +844,41 @@
         </body>
       </method>
 
-      <method name="blockMedia">
+      <method name="resumeMedia">
         <body>
           <![CDATA[
-            this._audioBlocked = true;
+            this._mediaBlocked = false;
             this.messageManager.sendAsyncMessage("AudioPlayback",
-                                                 {type: "blockInactivePageMedia"});
+                                                 {type: "resumeMedia"});
+            if (this._hasAnyPlayingMediaBeenBlocked) {
+              this._hasAnyPlayingMediaBeenBlocked = false;
+              let event = document.createEvent("Events");
+              event.initEvent("DOMAudioPlaybackBlockStopped", true, false);
+              this.dispatchEvent(event);
+            }
           ]]>
         </body>
       </method>
 
-      <method name="resumeMedia">
+      <!--
+        Only send the message "Browser:UnselectedTabHover" when someone requests
+        for the message, which can reduce non-necessary communication.
+      -->
+      <field name="_shouldSendUnselectedTabHover">false</field>
+      <field name="_unselectedTabHoverMessageListenerCount">0</field>
+      <property name="shouldHandleUnselectedTabHover"
+                onget="return this._shouldSendUnselectedTabHover;"
+                readonly="true"/>
+
+      <method name="unselectedTabHover">
+        <parameter name="hovered"/>
         <body>
           <![CDATA[
-            this._audioBlocked = false;
-            this.messageManager.sendAsyncMessage("AudioPlayback",
-                                                 {type: "resumeMedia"});
-            let event = document.createEvent("Events");
-            event.initEvent("DOMAudioPlaybackBlockStopped", true, false);
-            this.dispatchEvent(event);
+            if (!this._shouldSendUnselectedTabHover) {
+              return;
+            }
+            this.messageManager.sendAsyncMessage("Browser:UnselectedTabHover",
+              { hovered });
           ]]>
         </body>
       </method>
@@ -956,8 +1011,10 @@
             this.messageManager.addMessageListener("Autoscroll:Cancel", this);
             this.messageManager.addMessageListener("AudioPlayback:Start", this);
             this.messageManager.addMessageListener("AudioPlayback:Stop", this);
-            this.messageManager.addMessageListener("AudioPlayback:BlockStart", this);
-            this.messageManager.addMessageListener("AudioPlayback:BlockStop", this);
+            this.messageManager.addMessageListener("AudioPlayback:ActiveMediaBlockStart", this);
+            this.messageManager.addMessageListener("AudioPlayback:ActiveMediaBlockStop", this);
+            this.messageManager.addMessageListener("AudioPlayback:MediaBlockStop", this);
+            this.messageManager.addMessageListener("UnselectedTabHover:Toggle", this);
 
             if (this.hasAttribute("selectmenulist")) {
               this.messageManager.addMessageListener("Forms:ShowDropDown", this);
@@ -1044,6 +1101,24 @@
                 return false;
               }
               this.startScroll(data.scrolldir, data.screenX, data.screenY);
+              if (this.isRemoteBrowser && data.scrollId != null &&
+                  this.mPrefs.getBoolPref("apz.autoscroll.enabled", false)) {
+                let { tabParent } = this.frameLoader;
+                if (tabParent) {
+                  // If APZ is handling the autoscroll, it may decide to cancel
+                  // it of its own accord, so register an observer to allow it
+                  // to notify us of that.
+                  var os = Components.classes["@mozilla.org/observer-service;1"]
+                                     .getService(Components.interfaces.nsIObserverService);
+                  os.addObserver(this, "apz:cancel-autoscroll", true);
+
+                  tabParent.startApzAutoscroll(data.screenX, data.screenY,
+                                               data.scrollId, data.presShellId);
+                }
+                // Save the IDs for later
+                this._autoScrollScrollId = data.scrollId;
+                this._autoScrollPresShellId = data.presShellId;
+              }
               return true;
             }
             case "Autoscroll:Cancel":
@@ -1055,11 +1130,19 @@
             case "AudioPlayback:Stop":
               this.audioPlaybackStopped();
               break;
-            case "AudioPlayback:BlockStart":
-              this.audioPlaybackBlockStarted();
+            case "AudioPlayback:ActiveMediaBlockStart":
+              this.activeMediaBlockStarted();
               break;
-            case "AudioPlayback:BlockStop":
-              this.audioPlaybackBlockStopped();
+            case "AudioPlayback:ActiveMediaBlockStop":
+              this.activeMediaBlockStopped();
+              break;
+            case "AudioPlayback:MediaBlockStop":
+              this.mediaBlockStopped();
+              break;
+            case "UnselectedTabHover:Toggle":
+              this._shouldSendUnselectedTabHover = data.enable ?
+                ++this._unselectedTabHoverMessageListenerCount > 0 :
+                --this._unselectedTabHoverMessageListenerCount == 0;
               break;
             case "Forms:ShowDropDown": {
               if (!this._selectParentHelper) {
@@ -1103,10 +1186,19 @@
         <parameter name="aState"/>
         <body>
           <![CDATA[
-            if (aTopic != "browser:purge-session-history")
-              return;
+            if (aTopic == "browser:purge-session-history") {
+              this.purgeSessionHistory();
+            } else if (aTopic == "apz:cancel-autoscroll") {
+              if (aState == this._autoScrollScrollId) {
+                this._autoScrollPopup.hidePopup();
 
-            this.purgeSessionHistory();
+                // Set this._autoScrollScrollId to null, so in stopScroll() we
+                // don't call stopApzAutoscroll() (since it's APZ that
+                // initiated the stopping).
+                this._autoScrollScrollId = null;
+                this._autoScrollPresShellId = null;
+              }
+            }
           ]]>
         </body>
       </method>
@@ -1135,6 +1227,9 @@
       <field name="_startY">null</field>
       <field name="_autoScrollPopup">null</field>
       <field name="_autoScrollNeedsCleanup">false</field>
+      <!-- These IDs identify the scroll frame being autoscrolled. -->
+      <field name="_autoScrollScrollId">null</field>
+      <field name="_autoScrollPresShellId">null</field>
 
       <method name="stopScroll">
         <body>
@@ -1150,6 +1245,24 @@
               window.removeEventListener("keypress", this, true);
               window.removeEventListener("keyup", this, true);
               this.messageManager.sendAsyncMessage("Autoscroll:Stop");
+
+              var os = Components.classes["@mozilla.org/observer-service;1"]
+                                 .getService(Components.interfaces.nsIObserverService);
+              try {
+                os.removeObserver(this, "apz:cancel-autoscroll");
+              } catch (ex) {
+                // It's not clear why this sometimes throws an exception
+              }
+
+              if (this.isRemoteBrowser && this._autoScrollScrollId != null) {
+                let { tabParent } = this.frameLoader;
+                if (tabParent) {
+                  tabParent.stopApzAutoscroll(this._autoScrollScrollId,
+                                              this._autoScrollPresShellId);
+                }
+                this._autoScrollScrollId = null;
+                this._autoScrollPresShellId = null;
+              }
             }
          ]]>
        </body>
@@ -1165,6 +1278,7 @@
             // events can be handled by browser-content.js.
             popup.setAttribute("mousethrough", "always");
             popup.setAttribute("rolluponmousewheel", "true");
+            popup.setAttribute("hidden", "true");
             return popup;
           ]]>
         </body>
@@ -1195,6 +1309,7 @@
               this._autoScrollPopup.setAttribute("translucent", /Win|Mac/.test(navigator.platform));
             }
 
+            this._autoScrollPopup.removeAttribute("hidden");
             this._autoScrollPopup.setAttribute("noautofocus", "true");
             this._autoScrollPopup.setAttribute("scrolldir", scrolldir);
             this._autoScrollPopup.addEventListener("popuphidden", this, true);
@@ -1464,14 +1579,13 @@
         <parameter name="aPrintProgressListener"/>
         <body>
           <![CDATA[
-            var owner = this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner);
-            if (!owner.frameLoader) {
+            if (!this.frameLoader) {
               throw Components.Exception("No frame loader.",
                                          Components.results.NS_ERROR_FAILURE);
             }
 
-            owner.frameLoader.print(aOuterWindowID, aPrintSettings,
-                                    aPrintProgressListener);
+            this.frameLoader.print(aOuterWindowID, aPrintSettings,
+                                   aPrintProgressListener);
           ]]>
         </body>
       </method>
@@ -1479,6 +1593,7 @@
       <method name="dropLinks">
         <parameter name="aLinksCount"/>
         <parameter name="aLinks"/>
+        <parameter name="aTriggeringPrincipal"/>
         <body><![CDATA[
           if (!this.droppedLinkHandler) {
             return false;
@@ -1491,7 +1606,7 @@
               type: aLinks[i + 2],
             });
           }
-          this.droppedLinkHandler(null, links);
+          this.droppedLinkHandler(null, links, aTriggeringPrincipal);
           return true;
         ]]></body>
       </method>
@@ -1593,17 +1708,7 @@
         }
 
         if (links.length) {
-          // Bug 1368481: mozSourceNode is null if the drag event originated
-          // in an external application - needs better fallback!
-          let triggeringPrincipal;
-          let sourceNode = event.dataTransfer.mozSourceNode;
-          if (sourceNode) {
-            triggeringPrincipal = sourceNode.nodePrincipal;
-          } else {
-            var secMan = Components.classes["@mozilla.org/scriptsecuritymanager;1"].
-              getService(Components.interfaces.nsIScriptSecurityManager);
-            triggeringPrincipal = secMan.getSystemPrincipal();
-          }
+          let triggeringPrincipal = linkHandler.getTriggeringPrincipal(event);
           this.droppedLinkHandler(event, links, triggeringPrincipal);
         }
       ]]>

@@ -412,8 +412,8 @@ const ExpectComparisonTo = {
 // to a nearest |app_units::Au| (i.e. i32), so we might have a tiny difference
 // between the results from getOMTAStyle() and getComputedStyle().
 // Note: 1 AU ~= 60 CSS pixel unit.
-const isServo = SpecialPowers.getBoolPref('layout.css.servo.enabled');
-const toleranceForServoBackend = isServo ? 0.5 / 60.0 : 0.0;
+const isStylo = SpecialPowers.DOMWindowUtils.isStyledByServo;
+const toleranceForServoBackend = isStylo ? 0.5 / 60.0 : 0.0;
 
 (function() {
   window.omta_todo_is = function(elem, property, expected, runningOn, desc,
@@ -599,30 +599,35 @@ const toleranceForServoBackend = isServo ? 0.5 / 60.0 : 0.0;
     }
   }
 
+  // Return the first defined value in args.
+  function defined(...args) {
+    return args.find(arg => typeof arg !== 'undefined');
+  }
+
   // Takes an object of the form { a: 1.1, e: 23 } and builds up a 3d matrix
   // with unspecified values filled in with identity values.
   function convertObjectTo3dMatrix(obj) {
     return [
       [
-        obj.a || obj.sx || obj.m11 || 1,
+        defined(obj.a, obj.sx, obj.m11, 1),
         obj.b || obj.m12 || 0,
         obj.m13 || 0,
         obj.m14 || 0
       ], [
         obj.c || obj.m21 || 0,
-        obj.d || obj.sy || obj.m22 || 1,
+        defined(obj.d, obj.sy, obj.m22, 1),
         obj.m23 || 0,
         obj.m24 || 0
       ], [
         obj.m31 || 0,
         obj.m32 || 0,
-        obj.sz || obj.m33 || 1,
+        defined(obj.sz, obj.m33, 1),
         obj.m34 || 0
       ], [
         obj.e || obj.tx || obj.m41 || 0,
         obj.f || obj.ty || obj.m42 || 0,
         obj.tz || obj.m43 || 0,
-        obj.m44 || 1
+        defined(obj.m44, 1),
       ]
     ];
   }

@@ -39,13 +39,12 @@ ${helpers.predefined_type(
     boxed=True,
     spec="https://www.w3.org/TR/SVG2/painting.html#SpecifyingFillPaint")}
 
-${helpers.predefined_type("fill-opacity", "Opacity", "1.0",
+${helpers.predefined_type("fill-opacity", "SVGOpacity", "Default::default()",
                           products="gecko", animation_value_type="ComputedValue",
                           spec="https://www.w3.org/TR/SVG11/painting.html#FillOpacityProperty")}
 
 ${helpers.single_keyword("fill-rule", "nonzero evenodd",
                          gecko_enum_prefix="StyleFillRule",
-                         gecko_inexhaustive=True,
                          products="gecko", animation_value_type="discrete",
                          spec="https://www.w3.org/TR/SVG11/painting.html#FillRuleProperty")}
 
@@ -64,11 +63,11 @@ ${helpers.predefined_type(
     spec="https://www.w3.org/TR/SVG2/painting.html#SpecifyingStrokePaint")}
 
 ${helpers.predefined_type(
-    "stroke-width", "LengthOrPercentageOrNumber",
-    "Either::First(1.0)",
-    "parse_non_negative",
+    "stroke-width", "SVGWidth",
+    "::values::computed::NonNegativeLength::new(1.).into()",
     products="gecko",
-    animation_value_type="ComputedValue",
+    boxed="True",
+    animation_value_type="::values::computed::SVGWidth",
     spec="https://www.w3.org/TR/SVG2/painting.html#StrokeWidth")}
 
 ${helpers.single_keyword("stroke-linecap", "butt round square",
@@ -79,31 +78,30 @@ ${helpers.single_keyword("stroke-linejoin", "miter round bevel",
                          products="gecko", animation_value_type="discrete",
                          spec="https://www.w3.org/TR/SVG11/painting.html#StrokeLinejoinProperty")}
 
-${helpers.predefined_type("stroke-miterlimit", "Number", "4.0",
-                          "parse_at_least_one", products="gecko",
-                          animation_value_type="ComputedValue",
+${helpers.predefined_type("stroke-miterlimit", "GreaterThanOrEqualToOneNumber",
+                          "From::from(4.0)",
+                          products="gecko",
+                          animation_value_type="::values::computed::GreaterThanOrEqualToOneNumber",
                           spec="https://www.w3.org/TR/SVG11/painting.html#StrokeMiterlimitProperty")}
 
-${helpers.predefined_type("stroke-opacity", "Opacity", "1.0",
+${helpers.predefined_type("stroke-opacity", "SVGOpacity", "Default::default()",
                           products="gecko", animation_value_type="ComputedValue",
                           spec="https://www.w3.org/TR/SVG11/painting.html#StrokeOpacityProperty")}
 
-${helpers.predefined_type("stroke-dasharray",
-                          "LengthOrPercentageOrNumber",
-                          "Either::First(0.0)",
-                          "parse_non_negative",
-                          vector="True",
-                          delegate_animate="True",
-                          allow_empty="True",
-                          products="gecko",
-                          animation_value_type="ComputedValue",
-                          space_separated_allowed="True",
-                          spec="https://www.w3.org/TR/SVG2/painting.html#StrokeDashing")}
+${helpers.predefined_type(
+    "stroke-dasharray",
+    "SVGStrokeDashArray",
+    "Default::default()",
+    products="gecko",
+    animation_value_type="::values::computed::SVGStrokeDashArray",
+    spec="https://www.w3.org/TR/SVG2/painting.html#StrokeDashing",
+)}
 
 ${helpers.predefined_type(
-    "stroke-dashoffset", "LengthOrPercentageOrNumber",
-    "Either::First(0.0)",
+    "stroke-dashoffset", "SVGLength",
+    "Au(0).into()",
     products="gecko",
+    boxed="True",
     animation_value_type="ComputedValue",
     spec="https://www.w3.org/TR/SVG2/painting.html#StrokeDashing")}
 
@@ -111,34 +109,31 @@ ${helpers.predefined_type(
 ${helpers.single_keyword("clip-rule", "nonzero evenodd",
                          products="gecko",
                          gecko_enum_prefix="StyleFillRule",
-                         gecko_inexhaustive=True,
                          animation_value_type="discrete",
                          spec="https://www.w3.org/TR/SVG11/masking.html#ClipRuleProperty")}
 
 ${helpers.predefined_type("marker-start", "UrlOrNone", "Either::Second(None_)",
                           products="gecko",
                           boxed="True" if product == "gecko" else "False",
-                          animation_value_type="none",
+                          animation_value_type="discrete",
                           spec="https://www.w3.org/TR/SVG2/painting.html#VertexMarkerProperties")}
 
 ${helpers.predefined_type("marker-mid", "UrlOrNone", "Either::Second(None_)",
                           products="gecko",
                           boxed="True" if product == "gecko" else "False",
-                          animation_value_type="none",
+                          animation_value_type="discrete",
                           spec="https://www.w3.org/TR/SVG2/painting.html#VertexMarkerProperties")}
 
 ${helpers.predefined_type("marker-end", "UrlOrNone", "Either::Second(None_)",
                           products="gecko",
                           boxed="True" if product == "gecko" else "False",
-                          animation_value_type="none",
+                          animation_value_type="discrete",
                           spec="https://www.w3.org/TR/SVG2/painting.html#VertexMarkerProperties")}
 
 <%helpers:longhand name="paint-order"
-                   animation_value_type="none"
+                   animation_value_type="discrete"
                    products="gecko"
                    spec="https://www.w3.org/TR/SVG2/painting.html#PaintOrder">
-
-    use values::computed::ComputedValueAsSpecified;
     use std::fmt;
     use style_traits::ToCss;
 
@@ -165,8 +160,9 @@ ${helpers.predefined_type("marker-end", "UrlOrNone", "Either::Second(None_)",
     ///
     /// Higher priority values, i.e. the values specified first,
     /// will be painted first (and may be covered by paintings of lower priority)
-    #[derive(PartialEq, Clone, Copy, Debug)]
+    #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+    #[derive(Clone, Copy, Debug, PartialEq, ToComputedValue)]
     pub struct SpecifiedValue(pub u8);
 
     pub mod computed_value {
@@ -259,22 +255,14 @@ ${helpers.predefined_type("marker-end", "UrlOrNone", "Either::Second(None_)",
             Ok(())
         }
     }
-
-    no_viewport_percentage!(SpecifiedValue);
-
-    impl ComputedValueAsSpecified for SpecifiedValue { }
 </%helpers:longhand>
+
 <%helpers:vector_longhand name="-moz-context-properties"
                    animation_value_type="none"
                    products="gecko"
                    spec="Nonstandard (Internal-only)"
                    allow_empty="True">
     use values::CustomIdent;
-    use values::computed::ComputedValueAsSpecified;
-
-    no_viewport_percentage!(SpecifiedValue);
-
-    impl ComputedValueAsSpecified for SpecifiedValue { }
 
     pub type SpecifiedValue = CustomIdent;
 

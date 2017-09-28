@@ -7,12 +7,8 @@ function checkSimplePayment(aSimplePayment) {
 
   const methodData = aSimplePayment.paymentMethods.queryElementAt(0, Ci.nsIPaymentMethodData);
   ok(methodData, "Fail to get payment methodData.");
-  is(methodData.supportedMethods.length, 2, "supportedMethods' length should be 2.");
-  let supportedMethod = methodData.supportedMethods.queryElementAt(0, Ci.nsISupportsString);
-  is(supportedMethod, "MyPay", "1st supported method should be 'MyPay'.");
-  supportedMethod = methodData.supportedMethods.queryElementAt(1, Ci.nsISupportsString);
-  is(supportedMethod, "TestPay", "2nd supported method should be 'TestPay'.");
-  is(methodData.data, "", "method data should be empty");
+  is(methodData.supportedMethods, "MyPay", "supported method should be 'MyPay'.");
+  ok(!methodData.data, "methodData.data should not exist.");
 
   // checking the passed PaymentDetails parameter
   const details = aSimplePayment.paymentDetails;
@@ -34,74 +30,24 @@ function checkSimplePayment(aSimplePayment) {
   is(paymentOptions.shippingType, "shipping", "shippingType option should be 'shipping'");
 }
 
-function checkComplexPayment(aPayment) {
+function checkDupShippingOptionsPayment(aPayment) {
   // checking the passed PaymentMethods parameter
   is(aPayment.paymentMethods.length, 1, "paymentMethods' length should be 1.");
 
   const methodData = aPayment.paymentMethods.queryElementAt(0, Ci.nsIPaymentMethodData);
   ok(methodData, "Fail to get payment methodData.");
-  is(methodData.supportedMethods.length, 2, "supportedMethods' length should be 2.");
-  let supportedMethod = methodData.supportedMethods.queryElementAt(0, Ci.nsISupportsString);
-  is(supportedMethod, "MyPay", "1st supported method should be 'MyPay'.");
-  supportedMethod = methodData.supportedMethods.queryElementAt(1, Ci.nsISupportsString);
-  is(supportedMethod, "TestPay", "2nd supported method should be 'TestPay'.");
-  is(methodData.data, "", "method data should be empty");
+  is(methodData.supportedMethods, "MyPay", "methodData.supportedMethod name should be 'MyPay'.");
+  ok(!methodData.data, "methodData.data should not exist.");
 
   // checking the passed PaymentDetails parameter
   const details = aPayment.paymentDetails;
-  is(details.id, "complex details", "details.id should be 'complex details'.");
+  is(details.id, "duplicate shipping options details", "details.id should be 'duplicate shipping options details'.");
   is(details.totalItem.label, "Donation", "total item's label should be 'Donation'.");
   is(details.totalItem.amount.currency, "USD", "total item's currency should be 'USD'.");
   is(details.totalItem.amount.value, "55.00", "total item's value should be '55.00'.");
 
-  const displayItems = details.displayItems;
-  is(displayItems.length, 2, "displayItems' length should be 2.");
-  let item = displayItems.queryElementAt(0, Ci.nsIPaymentItem);
-  is(item.label, "Original donation amount", "1st display item's label should be 'Original donation amount'.");
-  is(item.amount.currency, "USD", "1st display item's currency should be 'USD'.");
-  is(item.amount.value, "-65.00", "1st display item's value should be '-65.00'.");
-  item = displayItems.queryElementAt(1, Ci.nsIPaymentItem);
-  is(item.label, "Friends and family discount", "2nd display item's label should be 'Friends and family discount'.");
-  is(item.amount.currency, "USD", "2nd display item's currency should be 'USD'.");
-  is(item.amount.value, "10.00", "2nd display item's value should be '10.00'.");
-
-  const modifiers = details.modifiers;
-  is(modifiers.length, 1, "modifiers' length should be 1.");
-
-  const modifier = modifiers.queryElementAt(0, Ci.nsIPaymentDetailsModifier);
-  const modifierSupportedMethods = modifier.supportedMethods;
-  is(modifierSupportedMethods.length, 1, "modifier's supported methods length should be 1.");
-  supportedMethod = modifierSupportedMethods.queryElementAt(0, Ci.nsISupportsString);
-  is(supportedMethod, "MyPay", "modifier's supported method name should be 'MyPay'.");
-  is(modifier.total.label, "Discounted donation", "modifier's total label should be 'Discounted donation'.");
-  is(modifier.total.amount.currency, "USD", "modifier's total currency should be 'USD'.");
-  is(modifier.total.amount.value, "45.00", "modifier's total value should be '45.00'.");
-
-  const additionalItems = modifier.additionalDisplayItems;
-  is(additionalItems.length, "1", "additionalDisplayItems' length should be 1.");
-  const additionalItem = additionalItems.queryElementAt(0, Ci.nsIPaymentItem);
-  is(additionalItem.label, "MyPay discount", "additional item's label should be 'MyPay discount'.");
-  is(additionalItem.amount.currency, "USD", "additional item's currency should be 'USD'.");
-  is(additionalItem.amount.value, "-10.00", "additional item's value should be '-10.00'.");
-  is(modifier.data, "{\"discountProgramParticipantId\":\"86328764873265\"}",
-     "modifier's data should be '{\"discountProgramParticipantId\":\"86328764873265\"}'.");
-
   const shippingOptions = details.shippingOptions;
-  is(shippingOptions.length, 2, "shippingOptions' length should be 2.");
-
-  let shippingOption = shippingOptions.queryElementAt(0, Ci.nsIPaymentShippingOption);
-  is(shippingOption.id, "NormalShipping", "1st shippingOption's id should be 'NoramlShpping'.");
-  is(shippingOption.label, "NormalShipping", "1st shippingOption's lable should be 'NormalShipping'.");
-  is(shippingOption.amount.currency, "USD", "1st shippingOption's amount currency should be 'USD'.");
-  is(shippingOption.amount.value, "10.00", "1st shippingOption's amount value should be '10.00'.");
-  ok(shippingOption.selected, "1st shippingOption should be selected.");
-
-  shippingOption = shippingOptions.queryElementAt(1, Ci.nsIPaymentShippingOption);
-  is(shippingOption.id, "FastShipping", "2nd shippingOption's id should be 'FastShpping'.");
-  is(shippingOption.label, "FastShipping", "2nd shippingOption's lable should be 'FastShipping'.");
-  is(shippingOption.amount.currency, "USD", "2nd shippingOption's amount currency should be 'USD'.");
-  is(shippingOption.amount.value, "30.00", "2nd shippingOption's amount value should be '30.00'.");
-  ok(!shippingOption.selected, "2nd shippingOption should not be selected.");
+  is(shippingOptions.length, 0, "shippingOptions' length should be 0.");
 
   // checking the passed PaymentOptions parameter
   const paymentOptions = aPayment.paymentOptions;

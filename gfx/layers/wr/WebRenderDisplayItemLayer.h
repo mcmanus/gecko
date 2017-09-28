@@ -26,26 +26,17 @@ public:
     MOZ_COUNT_CTOR(WebRenderDisplayItemLayer);
   }
 
-  Maybe<wr::ImageKey> SendImageContainer(ImageContainer* aContainer,
-                                         nsTArray<layers::WebRenderParentCommand>& aParentCommands);
-  bool PushItemAsBlobImage(wr::DisplayListBuilder& aBuilder,
-                           const StackingContextHelper& aSc);
-
 protected:
   virtual ~WebRenderDisplayItemLayer();
 
 public:
   Layer* GetLayer() override { return this; }
   void RenderLayer(wr::DisplayListBuilder& aBuilder,
+                   wr::IpcResourceUpdateQueue& aResources,
                    const StackingContextHelper& aHelper) override;
 
 private:
   wr::BuiltDisplayList mBuiltDisplayList;
-  nsTArray<WebRenderParentCommand> mParentCommands;
-  RefPtr<ImageClient> mImageClient;
-  RefPtr<ImageContainer> mImageContainer;
-  wr::MaybeExternalImageId mExternalImageId;
-  Maybe<wr::ImageKey> mKey;
 };
 
 } // namespace layers

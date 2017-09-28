@@ -1,4 +1,4 @@
-fuzzy-if(Android,4,11) == out-of-bounds-selectedindex.html out-of-bounds-selectedindex-ref.html # test for bug 471741
+fuzzy-if(Android,4,12) == out-of-bounds-selectedindex.html out-of-bounds-selectedindex-ref.html # test for bug 471741
 == multiple.html multiple-ref.html
 == boguskids.html boguskids-ref.html
 == dynamic-boguskids.html boguskids-ref.html
@@ -11,3 +11,4 @@ needs-focus == focusring-2.html focusring-2-ref.html
 needs-focus == focusring-3.html focusring-3-ref.html
 == dynamic-text-indent-1.html dynamic-text-indent-1-ref.html
 == dynamic-text-overflow-1.html dynamic-text-overflow-1-ref.html
+== listbox-zero-row-initial.html listbox-zero-row-initial-ref.html

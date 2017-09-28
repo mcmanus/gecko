@@ -10,7 +10,7 @@ const TEST_URI = "http://example.com/browser/devtools/client/webconsole/" +
                  "test/test-bug-599725-response-headers.sjs";
 
 function performTest(request, hud) {
-  let deferred = promise.defer();
+  let deferred = defer();
 
   let headers = null;
 
@@ -49,6 +49,9 @@ let waitForRequest = Task.async(function*(hud) {
 });
 
 add_task(function* () {
+  // Disable rcwn to make sure we will send a conditional request.
+  yield pushPref("network.http.rcwn.enabled", false);
+
   let { browser } = yield loadTab(INIT_URI);
 
   let hud = yield openConsole();

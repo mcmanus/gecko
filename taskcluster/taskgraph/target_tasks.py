@@ -5,6 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from __future__ import absolute_import, print_function, unicode_literals
+
 from taskgraph import try_option_syntax
 from taskgraph.util.attributes import match_run_on_projects
 
@@ -48,11 +49,15 @@ def standard_filter(task, parameters):
     )
 
 
-@_target_task('try_option_syntax')
-def target_tasks_try_option_syntax(full_task_graph, parameters):
+def _try_task_config(full_task_graph, parameters):
+    requested_tasks = parameters['try_task_config']['tasks']
+    return list(set(requested_tasks) & full_task_graph.graph.nodes)
+
+
+def _try_option_syntax(full_task_graph, parameters):
     """Generate a list of target tasks based on try syntax in
     parameters['message'] and, for context, the full task graph."""
-    options = try_option_syntax.TryOptionSyntax(parameters['message'], full_task_graph)
+    options = try_option_syntax.TryOptionSyntax(parameters, full_task_graph)
     target_tasks_labels = [t.label for t in full_task_graph.tasks.itervalues()
                            if options.task_matches(t)]
 
@@ -97,11 +102,25 @@ def target_tasks_try_option_syntax(full_task_graph, parameters):
     return target_tasks_labels
 
 
+@_target_task('try_tasks')
+def target_tasks_try(full_task_graph, parameters):
+    try_mode = parameters['try_mode']
+    if try_mode == 'try_task_config':
+        return _try_task_config(full_task_graph, parameters)
+    elif try_mode == 'try_option_syntax':
+        return _try_option_syntax(full_task_graph, parameters)
+    else:
+        # With no try mode, we would like to schedule everything (following
+        # run_on_projects) and let optimization trim it down.  But optimization
+        # isn't yet up to the task, so instead we use try_option_syntax with
+        # an empty message (which basically just schedules `-j`objs)
+        return _try_option_syntax(full_task_graph, parameters)
+
+
 @_target_task('default')
 def target_tasks_default(full_task_graph, parameters):
     """Target the tasks which have indicated they should be run on this project
     via the `run_on_projects` attributes."""
-
     return [l for l, t in full_task_graph.tasks.iteritems()
             if standard_filter(t, parameters)]
 
@@ -197,8 +216,8 @@ def target_tasks_nightly_fennec(full_task_graph, parameters):
     def filter(task):
         platform = task.attributes.get('build_platform')
         if platform in ('android-aarch64-nightly',
-                        'android-api-15-nightly',
-                        'android-api-15-old-id-nightly',
+                        'android-api-16-nightly',
+                        'android-api-16-old-id-nightly',
                         'android-nightly',
                         'android-x86-nightly',
                         'android-x86-old-id-nightly'):
@@ -230,22 +249,40 @@ def target_tasks_mozilla_beta(full_task_graph, parameters):
         if not standard_filter(task, parameters):
             return False
         platform = task.attributes.get('build_platform')
-        if platform in ('linux64-pgo', 'linux-pgo', 'android-api-15-nightly',
-                        'android-x86-nightly'):
+        if platform in (
+                # On beta, Nightly builds are already PGOs
+                'linux-pgo', 'linux64-pgo',
+                'win32-pgo', 'win64-pgo',
+                'android-api-16-nightly', 'android-x86-nightly'
+                ):
             return False
-        if platform in ('macosx64-nightly', 'win64-nightly'):
-            # Don't do some nightlies on-push until it's ready.
-            return False
-        if platform in ('linux64', 'linux'):
-            if task.attributes['build_type'] == 'opt':
+
+        if platform in (
+                'linux', 'linux64',
+                'macosx64',
+                'win32', 'win64',
+                ):
+            if task.attributes['build_type'] == 'opt' and \
+               task.attributes.get('unittest_suite') != 'talos':
                 return False
+
         # skip l10n, beetmover, balrog
         if task.kind in [
-            'balrog', 'beetmover', 'beetmover-checksums', 'beetmover-l10n',
-            'checksums-signing', 'nightly-l10n', 'nightly-l10n-signing',
+            'balrog',
+            'beetmover', 'beetmover-checksums', 'beetmover-l10n',
+            'beetmover-repackage', 'beetmover-repackage-signing',
+            'checksums-signing',
+            'nightly-l10n', 'nightly-l10n-signing',
             'push-apk', 'push-apk-breakpoint',
+            'repackage-l10n',
         ]:
             return False
+
+        # No l10n repacks per push. They may be triggered by kinds which depend
+        # on l10n builds/repacks. For instance: "repackage-signing"
+        if task.attributes.get('locale', '') != '':
+            return False
+
         return True
 
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
@@ -290,21 +327,6 @@ def target_tasks_pine(full_task_graph, parameters):
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
 
 
-@_target_task('stylo_tasks')
-def target_tasks_stylo(full_task_graph, parameters):
-    """Target stylotasks that only run on the m-c branch."""
-    def filter(task):
-        platform = task.attributes.get('build_platform')
-        # only select platforms
-        if platform not in ('linux64-stylo'):
-            return False
-        return True
-    return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
-
-
-# nightly_linux should be refactored to be nightly_all once
-# https://bugzilla.mozilla.org/show_bug.cgi?id=1267425 dependent bugs are
-# implemented
 @_target_task('nightly_macosx')
 def target_tasks_nightly_macosx(full_task_graph, parameters):
     """Select the set of tasks required for a nightly build of macosx. The
@@ -317,16 +339,52 @@ def target_tasks_nightly_macosx(full_task_graph, parameters):
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
 
 
-# nightly_win64 should be refactored to be nightly_all once
-# https://bugzilla.mozilla.org/show_bug.cgi?id=1267425 dependent bugs are
-# implemented
-@_target_task('nightly_win64')
-def target_tasks_nightly_win64(full_task_graph, parameters):
-    """Select the set of tasks required for a nightly build of win64. The
-    nightly build process involves a pipeline of builds, signing,
+@_target_task('nightly_win32')
+def target_tasks_nightly_win32(full_task_graph, parameters):
+    """Select the set of tasks required for a nightly build of win32 and win64.
+    The nightly build process involves a pipeline of builds, signing,
     and, eventually, uploading the tasks to balrog."""
     def filter(task):
         platform = task.attributes.get('build_platform')
+        if not filter_for_project(task, parameters):
+            return False
+        if platform in ('win32-nightly', ):
+            return task.attributes.get('nightly', False)
+    return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
+
+
+@_target_task('nightly_win64')
+def target_tasks_nightly_win64(full_task_graph, parameters):
+    """Select the set of tasks required for a nightly build of win32 and win64.
+    The nightly build process involves a pipeline of builds, signing,
+    and, eventually, uploading the tasks to balrog."""
+    def filter(task):
+        platform = task.attributes.get('build_platform')
+        if not filter_for_project(task, parameters):
+            return False
         if platform in ('win64-nightly', ):
             return task.attributes.get('nightly', False)
+    return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
+
+
+@_target_task('nightly_desktop')
+def target_tasks_nightly_desktop(full_task_graph, parameters):
+    """Select the set of tasks required for a nightly build of linux, mac,
+    windows."""
+    # Avoid duplicate tasks.
+    return list(
+        set(target_tasks_nightly_win32(full_task_graph, parameters))
+        | set(target_tasks_nightly_win64(full_task_graph, parameters))
+        | set(target_tasks_nightly_macosx(full_task_graph, parameters))
+        | set(target_tasks_nightly_linux(full_task_graph, parameters))
+    )
+
+
+# Opt DMD builds should only run nightly
+@_target_task('nightly_dmd')
+def target_tasks_dmd(full_task_graph, parameters):
+    """Target DMD that run nightly on the m-c branch."""
+    def filter(task):
+        platform = task.attributes.get('build_platform', '')
+        return platform.endswith('-dmd')
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]

@@ -111,8 +111,9 @@ this.XPCOMUtils = {
     if (interfaces) {
       for (let i = 0; i < interfaces.length; i++) {
         let iface = interfaces[i];
-        if (Ci[iface]) {
-          a.push(Ci[iface].name);
+        let name = (iface && iface.name) || String(iface);
+        if (name in Ci) {
+          a.push(name);
         }
       }
     }
@@ -210,6 +211,41 @@ this.XPCOMUtils = {
   },
 
   /**
+   * Defines a getter on a specified object for a script.  The script will not
+   * be loaded until first use.
+   *
+   * @param aObject
+   *        The object to define the lazy getter on.
+   * @param aNames
+   *        The name of the getter to define on aObject for the script.
+   *        This can be a string if the script exports only one symbol,
+   *        or an array of strings if the script can be first accessed
+   *        from several different symbols.
+   * @param aResource
+   *        The URL used to obtain the script.
+   */
+  defineLazyScriptGetter: function XPCU_defineLazyScriptGetter(aObject, aNames,
+                                                               aResource)
+  {
+    if (!Array.isArray(aNames)) {
+      aNames = [aNames];
+    }
+    for (let name of aNames) {
+      Object.defineProperty(aObject, name, {
+        get: function() {
+          for (let n of aNames) {
+            delete aObject[n];
+          }
+          Services.scriptloader.loadSubScript(aResource, aObject);
+          return aObject[name];
+        },
+        configurable: true,
+        enumerable: true
+      });
+    }
+  },
+
+  /**
    * Defines a getter on a specified object for a service.  The service will not
    * be obtained until first use.
    *
@@ -229,6 +265,30 @@ this.XPCOMUtils = {
     this.defineLazyGetter(aObject, aName, function XPCU_serviceLambda() {
       return Cc[aContract].getService(Ci[aInterfaceName]);
     });
+  },
+
+  /**
+   * Defines a lazy service getter on a specified object for each
+   * property in the given object.
+   *
+   * @param aObject
+   *        The object to define the lazy getter on.
+   * @param aServices
+   *        An object with a property for each service to be
+   *        imported, where the property name is the name of the
+   *        symbol to define, and the value is a 2-element array
+   *        containing the contract ID and the interface name of the
+   *        service, as passed to defineLazyServiceGetter.
+   */
+  defineLazyServiceGetters: function XPCU_defineLazyServiceGetters(
+                                   aObject, aServices)
+  {
+    for (let [name, service] of Object.entries(aServices)) {
+      // Note: This is hot code, and cross-compartment array wrappers
+      // are not JIT-friendly to destructuring or spread operators, so
+      // we need to use indexed access instead.
+      this.defineLazyServiceGetter(aObject, name, service[0], service[1]);
+    }
   },
 
   /**
@@ -284,6 +344,25 @@ this.XPCOMUtils = {
   },
 
   /**
+   * Defines a lazy module getter on a specified object for each
+   * property in the given object.
+   *
+   * @param aObject
+   *        The object to define the lazy getter on.
+   * @param aModules
+   *        An object with a property for each module property to be
+   *        imported, where the property name is the name of the
+   *        imported symbol and the value is the module URI.
+   */
+  defineLazyModuleGetters: function XPCU_defineLazyModuleGetters(
+                                   aObject, aModules)
+  {
+    for (let [name, module] of Object.entries(aModules)) {
+      this.defineLazyModuleGetter(aObject, name, module);
+    }
+  },
+
+  /**
    * Defines a getter on a specified object for preference value. The
    * preference is read the first time that the property is accessed,
    * and is thereafter kept up-to-date using a preference observer.
@@ -316,7 +395,7 @@ this.XPCOMUtils = {
     // cannot define a value in place of a getter after we read the
     // preference.
     let observer = {
-      QueryInterface: this.generateQI([Ci.nsIObserver, Ci.nsISupportsWeakReference]),
+      QueryInterface: XPCU_lazyPreferenceObserverQI,
 
       value: undefined,
 
@@ -348,7 +427,32 @@ this.XPCOMUtils = {
 
     function lazyGetter() {
       if (observer.value === undefined) {
-        observer.value = aTransform(Preferences.get(aPreference, aDefaultValue));
+        let prefValue;
+        switch (Services.prefs.getPrefType(aPreference)) {
+          case Ci.nsIPrefBranch.PREF_STRING:
+            prefValue = Services.prefs.getStringPref(aPreference);
+            break;
+
+          case Ci.nsIPrefBranch.PREF_INT:
+            prefValue = Services.prefs.getIntPref(aPreference);
+            break;
+
+          case Ci.nsIPrefBranch.PREF_BOOL:
+            prefValue = Services.prefs.getBoolPref(aPreference);
+            break;
+
+          case Ci.nsIPrefBranch.PREF_INVALID:
+            prefValue = aDefaultValue;
+            break;
+
+          default:
+            // This should never happen.
+            throw new Error(`Error getting pref ${aPreference}; its value's type is ` +
+                            `${Services.prefs.getPrefType(aPreference)}, which I don't ` +
+                            `know how to handle.`);
+        }
+
+        observer.value = aTransform(prefValue);
       }
       return observer.value;
     }
@@ -421,9 +525,9 @@ this.XPCOMUtils = {
     if (!("__URI__" in that))
       throw Error("importRelative may only be used from a JSM, and its first argument "+
                   "must be that JSM's global object (hint: use this)");
-    let uri = that.__URI__;
-    let i = uri.lastIndexOf("/");
-    Components.utils.import(uri.substring(0, i+1) + path, scope || that);
+
+    Cu.importGlobalProperties(["URL"]);
+    Components.utils.import(new URL(path, that.__URI__).href, scope || that);
   },
 
   /**
@@ -464,8 +568,8 @@ this.XPCOMUtils = {
   },
 };
 
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
+var XPCU_lazyPreferenceObserverQI = XPCOMUtils.generateQI([Ci.nsIObserver, Ci.nsISupportsWeakReference]);
+
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                   "resource://gre/modules/Services.jsm");
 

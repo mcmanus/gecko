@@ -8,7 +8,7 @@
 
 #include "nsSVGLength2.h"
 #include "mozilla/dom/SVGAnimatedLength.h"
-#include "mozilla/dom/SVGSVGElement.h"
+#include "mozilla/dom/SVGViewportElement.h"
 #include "nsContentUtils.h" // NS_ENSURE_FINITE
 #include "nsIFrame.h"
 #include "nsSMILFloatType.h"
@@ -63,15 +63,14 @@ GetUnitString(nsAString& unit, uint16_t unitType)
   }
 
   NS_NOTREACHED("Unknown unit type");
-  return;
 }
 
 static uint16_t
 GetUnitTypeForString(const nsAString& unitStr)
 {
-  if (unitStr.IsEmpty()) 
+  if (unitStr.IsEmpty())
     return nsIDOMSVGLength::SVG_LENGTHTYPE_NUMBER;
-                   
+
   nsIAtom *unitAtom = NS_GetStaticAtom(unitStr);
   if (unitAtom) {
     for (uint32_t i = 0 ; i < ArrayLength(unitMap) ; i++) {
@@ -87,11 +86,7 @@ GetUnitTypeForString(const nsAString& unitStr)
 static void
 GetValueString(nsAString &aValueAsString, float aValue, uint16_t aUnitType)
 {
-  char16_t buf[24];
-  nsTextFormatter::snprintf(buf, sizeof(buf)/sizeof(char16_t),
-                            u"%g",
-                            (double)aValue);
-  aValueAsString.Assign(buf);
+  nsTextFormatter::ssprintf(aValueAsString, u"%g", (double)aValue);
 
   nsAutoString unitString;
   GetUnitString(unitString, aUnitType);
@@ -129,7 +124,7 @@ FixAxisLength(float aLength)
 }
 
 SVGElementMetrics::SVGElementMetrics(nsSVGElement* aSVGElement,
-                                     SVGSVGElement* aCtx)
+                                     SVGViewportElement* aCtx)
   : mSVGElement(aSVGElement)
   , mCtx(aCtx)
 {
@@ -164,7 +159,7 @@ SVGElementMetrics::EnsureCtx() const
     mCtx = mSVGElement->GetCtx();
     if (!mCtx && mSVGElement->IsSVGElement(nsGkAtoms::svg)) {
       // mSVGElement must be the outer svg element
-      mCtx = static_cast<SVGSVGElement*>(mSVGElement);
+      mCtx = static_cast<SVGViewportElement*>(mSVGElement);
     }
   }
   return mCtx != nullptr;
@@ -217,20 +212,20 @@ UserSpaceMetricsWithSize::GetAxisLength(uint8_t aCtxType) const
 }
 
 float
-nsSVGLength2::GetUnitScaleFactor(nsSVGElement *aSVGElement,
+nsSVGLength2::GetUnitScaleFactor(nsSVGElement* aSVGElement,
                                  uint8_t aUnitType) const
 {
   return GetUnitScaleFactor(SVGElementMetrics(aSVGElement), aUnitType);
 }
 
 float
-nsSVGLength2::GetUnitScaleFactor(SVGSVGElement *aCtx, uint8_t aUnitType) const
+nsSVGLength2::GetUnitScaleFactor(SVGViewportElement* aCtx, uint8_t aUnitType) const
 {
   return GetUnitScaleFactor(SVGElementMetrics(aCtx, aCtx), aUnitType);
 }
 
 float
-nsSVGLength2::GetUnitScaleFactor(nsIFrame *aFrame, uint8_t aUnitType) const
+nsSVGLength2::GetUnitScaleFactor(nsIFrame* aFrame, uint8_t aUnitType) const
 {
   nsIContent* content = aFrame->GetContent();
   if (content->IsSVGElement()) {
@@ -483,7 +478,7 @@ nsSVGLength2::SMILLength::ValueFromString(const nsAString& aStr,
 {
   float value;
   uint16_t unitType;
-  
+
   if (!GetValueFromString(aStr, value, &unitType)) {
     return NS_ERROR_DOM_SYNTAX_ERR;
   }
@@ -514,7 +509,7 @@ nsSVGLength2::SMILLength::ClearAnimValue()
     mVal->mIsAnimated = false;
     mVal->mAnimVal = mVal->mBaseVal;
     mSVGElement->DidAnimateLength(mVal->mAttrEnum);
-  }  
+  }
 }
 
 nsresult

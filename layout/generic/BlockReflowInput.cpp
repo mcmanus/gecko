@@ -106,8 +106,6 @@ BlockReflowInput::BlockReflowInput(const ReflowInput& aReflowInput,
   FloatManager()->GetTranslation(mFloatManagerI, mFloatManagerB);
   FloatManager()->PushState(&mFloatManagerStateBefore); // never popped
 
-  mReflowStatus.Reset();
-
   mNextInFlow = static_cast<nsBlockFrame*>(mBlock->GetNextInFlow());
 
   LAYOUT_WARN_IF_FALSE(NS_UNCONSTRAINEDSIZE != aReflowInput.ComputedISize(),
@@ -251,7 +249,7 @@ BlockReflowInput::ComputeBlockAvailSpace(nsIFrame* aFrame,
   // nsBlockFrame::ISizeToClearPastFloats would need to use the
   // shrink-wrap formula, max(MIN_ISIZE, min(avail width, PREF_ISIZE))
   // rather than just using MIN_ISIZE.
-  NS_ASSERTION(nsBlockFrame::BlockCanIntersectFloats(aFrame) == 
+  NS_ASSERTION(nsBlockFrame::BlockCanIntersectFloats(aFrame) ==
                  !aBlockAvoidsFloats,
                "unexpected replaced width");
   if (!aBlockAvoidsFloats) {
@@ -844,7 +842,7 @@ BlockReflowInput::FlowAndPlaceFloat(nsIFrame* aFloat)
           nsIContent* content = prevFrame->GetContent();
           if (content) {
             // we're interested only if previous frame is align=left
-            // IE messes things up when "right" (overlapping frames) 
+            // IE messes things up when "right" (overlapping frames)
             if (content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::align,
                                      NS_LITERAL_STRING("left"), eIgnoreCase)) {
               keepFloatOnSameLine = true;
@@ -857,7 +855,7 @@ BlockReflowInput::FlowAndPlaceFloat(nsIFrame* aFloat)
         }
       }
 
-      // the table does not fit anymore in this line so advance to next band 
+      // the table does not fit anymore in this line so advance to next band
       mBCoord += floatAvailableSpace.mRect.BSize(wm);
       // To match nsBlockFrame::AdjustFloatAvailableSpace, we have to
       // get a new width for the new band.

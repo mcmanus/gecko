@@ -88,7 +88,8 @@ namespace jit {
     _(Lsh)                                                                  \
     _(Rsh)                                                                  \
     _(Ursh)                                                                 \
-    _(SignExtend)                                                           \
+    _(SignExtendInt32)                                                      \
+    _(SignExtendInt64)                                                      \
     _(MinMax)                                                               \
     _(Abs)                                                                  \
     _(Clz)                                                                  \
@@ -110,6 +111,7 @@ namespace jit {
     _(CharCodeAt)                                                           \
     _(FromCharCode)                                                         \
     _(FromCodePoint)                                                        \
+    _(StringConvertCase)                                                    \
     _(SinCos)                                                               \
     _(StringSplit)                                                          \
     _(Substr)                                                               \
@@ -129,6 +131,7 @@ namespace jit {
     _(ExtendInt32ToInt64)                                                   \
     _(Int64ToFloatingPoint)                                                 \
     _(ToString)                                                             \
+    _(ToObject)                                                             \
     _(ToObjectOrNull)                                                       \
     _(NewArray)                                                             \
     _(NewArrayCopyOnWrite)                                                  \
@@ -144,10 +147,10 @@ namespace jit {
     _(NewStringObject)                                                      \
     _(ObjectState)                                                          \
     _(ArrayState)                                                           \
+    _(ArgumentState)                                                        \
     _(InitElem)                                                             \
     _(InitElemGetterSetter)                                                 \
     _(MutateProto)                                                          \
-    _(InitProp)                                                             \
     _(InitPropGetterSetter)                                                 \
     _(Start)                                                                \
     _(OsrEntry)                                                             \
@@ -161,6 +164,7 @@ namespace jit {
     _(RegExpInstanceOptimizable)                                            \
     _(GetFirstDollarIndex)                                                  \
     _(StringReplace)                                                        \
+    _(ClassConstructor)                                                     \
     _(Lambda)                                                               \
     _(LambdaArrow)                                                          \
     _(SetFunName)                                                           \
@@ -217,6 +221,7 @@ namespace jit {
     _(LoadUnboxedScalar)                                                    \
     _(LoadUnboxedObjectOrNull)                                              \
     _(LoadUnboxedString)                                                    \
+    _(LoadElementFromState)                                                 \
     _(StoreElement)                                                         \
     _(StoreElementHole)                                                     \
     _(FallibleStoreElement)                                                 \
@@ -252,7 +257,7 @@ namespace jit {
     _(DeleteProperty)                                                       \
     _(DeleteElement)                                                        \
     _(SetPropertyCache)                                                     \
-    _(IteratorStart)                                                        \
+    _(GetIteratorCache)                                                     \
     _(IteratorMore)                                                         \
     _(IsNoIter)                                                             \
     _(IteratorEnd)                                                          \
@@ -276,8 +281,11 @@ namespace jit {
     _(SetDOMProperty)                                                       \
     _(IsConstructor)                                                        \
     _(IsCallable)                                                           \
+    _(IsArray)                                                              \
+    _(IsTypedArray)                                                         \
     _(IsObject)                                                             \
     _(HasClass)                                                             \
+    _(ObjectClassToString)                                                  \
     _(CopySign)                                                             \
     _(Rotate)                                                               \
     _(NewDerivedTypedObject)                                                \
@@ -294,6 +302,9 @@ namespace jit {
     _(CheckIsCallable)                                                      \
     _(CheckObjCoercible)                                                    \
     _(DebugCheckSelfHosted)                                                 \
+    _(FinishBoundFunctionInit)                                              \
+    _(IsPackedArray)                                                        \
+    _(GetPrototypeOf)                                                       \
     _(AsmJSLoadHeap)                                                        \
     _(AsmJSStoreHeap)                                                       \
     _(AsmJSCompareExchangeHeap)                                             \

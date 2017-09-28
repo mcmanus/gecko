@@ -112,8 +112,8 @@ l10n_description_schema = Schema({
     # Extra environment values to pass to the worker
     Optional('env'): _by_platform({basestring: taskref_or_string}),
 
-    # Number of chunks to split the locale repacks up into
-    Optional('chunks'): _by_platform(int),
+    # Max number locales per chunk
+    Optional('locales-per-chunk'): _by_platform(int),
 
     # Task deps to chain this task with, added in transforms from dependent-task
     # if this is a nightly
@@ -215,6 +215,20 @@ def setup_nightly_dependency(config, jobs):
             yield job
             continue  # do not add a dep unless we're a nightly
         job['dependencies'] = {'unsigned-build': job['dependent-task'].label}
+        if job['attributes']['build_platform'].startswith('win') or \
+                job['attributes']['build_platform'].startswith('linux'):
+            # Weave these in and just assume they will be there in the resulting graph
+            job['dependencies'].update({
+                'signed-build': 'build-signing-{}'.format(job['name']),
+            })
+        if job['attributes']['build_platform'].startswith('macosx'):
+            job['dependencies'].update({
+                'repackage': 'repackage-{}'.format(job['name'])
+            })
+        if job['attributes']['build_platform'].startswith('win'):
+            job['dependencies'].update({
+                'repackage-signed': 'repackage-signing-{}'.format(job['name'])
+            })
         yield job
 
 
@@ -223,7 +237,7 @@ def handle_keyed_by(config, jobs):
     """Resolve fields that can be keyed by platform, etc."""
     fields = [
         "locales-file",
-        "chunks",
+        "locales-per-chunk",
         "worker-type",
         "description",
         "run-time",
@@ -265,12 +279,12 @@ def all_locales_attribute(config, jobs):
 def chunk_locales(config, jobs):
     """ Utilizes chunking for l10n stuff """
     for job in jobs:
-        chunks = job.get('chunks')
+        locales_per_chunk = job.get('locales-per-chunk')
         locales_with_changesets = job['attributes']['all_locales_with_changesets']
-        if chunks:
-            if chunks > len(locales_with_changesets):
-                # Reduce chunks down to the number of locales
-                chunks = len(locales_with_changesets)
+        if locales_per_chunk:
+            chunks, remainder = divmod(len(locales_with_changesets), locales_per_chunk)
+            if remainder:
+                chunks = int(chunks + 1)
             for this_chunk in range(1, chunks + 1):
                 chunked = copy.deepcopy(job)
                 chunked['name'] = chunked['name'].replace(
@@ -331,8 +345,9 @@ def mh_options_replace_project(config, jobs):
 def chain_of_trust(config, jobs):
     for job in jobs:
         # add the docker image to the chain of trust inputs in task.extra
-        cot = job.setdefault('extra', {}).setdefault('chainOfTrust', {})
-        cot.setdefault('inputs', {})['docker-image'] = {"task-reference": "<docker-image>"}
+        if not job['worker-type'].endswith("-b-win2012"):
+            cot = job.setdefault('extra', {}).setdefault('chainOfTrust', {})
+            cot.setdefault('inputs', {})['docker-image'] = {"task-reference": "<docker-image>"}
         yield job
 
 
@@ -348,12 +363,6 @@ def make_job_description(config, jobs):
     for job in jobs:
         job_description = {
             'name': job['name'],
-            'worker': {
-                'docker-image': {'in-tree': 'desktop-build'},
-                'max-run-time': job['run-time'],
-                'chain-of-trust': True,
-            },
-            'extra': job['extra'],
             'worker-type': job['worker-type'],
             'description': job['description'],
             'run': {
@@ -363,8 +372,6 @@ def make_job_description(config, jobs):
                 'script': job['mozharness']['script'],
                 'actions': job['mozharness']['actions'],
                 'options': job['mozharness']['options'],
-                'tooltool-downloads': job['tooltool'],
-                'need-xvfb': True,
             },
             'attributes': job['attributes'],
             'treeherder': {
@@ -375,6 +382,25 @@ def make_job_description(config, jobs):
             },
             'run-on-projects': job.get('run-on-projects') if job.get('run-on-projects') else [],
         }
+        if job.get('extra'):
+            job_description['extra'] = job['extra']
+
+        if job['worker-type'].endswith("-b-win2012"):
+            job_description['worker'] = {
+                'os': 'windows',
+                'max-run-time': 7200,
+                'chain-of-trust': True,
+            }
+            job_description['run']['use-simple-package'] = False
+            job_description['run']['use-magic-mh-args'] = False
+        else:
+            job_description['worker'] = {
+                'docker-image': {'in-tree': 'desktop-build'},
+                'max-run-time': job['run-time'],
+                'chain-of-trust': True,
+            }
+            job_description['run']['tooltool-downloads'] = job['tooltool']
+            job_description['run']['need-xvfb'] = True
 
         if job.get('index'):
             job_description['index'] = {

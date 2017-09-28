@@ -14,16 +14,11 @@ namespace dom {
 
 // nsISupports implementation
 
-NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(XMLStylesheetProcessingInstruction)
-  NS_INTERFACE_TABLE_INHERITED(XMLStylesheetProcessingInstruction, nsIDOMNode,
-                               nsIDOMProcessingInstruction,
-                               nsIStyleSheetLinkingElement)
-NS_INTERFACE_TABLE_TAIL_INHERITING(ProcessingInstruction)
-
-NS_IMPL_ADDREF_INHERITED(XMLStylesheetProcessingInstruction,
-                         ProcessingInstruction)
-NS_IMPL_RELEASE_INHERITED(XMLStylesheetProcessingInstruction,
-                          ProcessingInstruction)
+NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(XMLStylesheetProcessingInstruction,
+                                             ProcessingInstruction,
+                                             nsIDOMNode,
+                                             nsIDOMProcessingInstruction,
+                                             nsIStyleSheetLinkingElement)
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(XMLStylesheetProcessingInstruction)
 
@@ -63,9 +58,10 @@ XMLStylesheetProcessingInstruction::BindToTree(nsIDocument* aDocument,
 
   void (XMLStylesheetProcessingInstruction::*update)() =
     &XMLStylesheetProcessingInstruction::UpdateStyleSheetInternal;
-  nsContentUtils::AddScriptRunner(NewRunnableMethod(this, update));
+  nsContentUtils::AddScriptRunner(NewRunnableMethod(
+    "dom::XMLStylesheetProcessingInstruction::BindToTree", this, update));
 
-  return rv;  
+  return rv;
 }
 
 void
@@ -114,15 +110,14 @@ XMLStylesheetProcessingInstruction::GetStyleSheetURL(bool* aIsInline)
   }
 
   nsIURI *baseURL;
-  nsAutoCString charset;
   nsIDocument *document = OwnerDoc();
   baseURL = mOverriddenBaseURI ?
             mOverriddenBaseURI.get() :
             document->GetDocBaseURI();
-  charset = document->GetDocumentCharacterSet();
+  auto encoding = document->GetDocumentCharacterSet();
 
   nsCOMPtr<nsIURI> aURI;
-  NS_NewURI(getter_AddRefs(aURI), href, charset.get(), baseURL);
+  NS_NewURI(getter_AddRefs(aURI), href, encoding, baseURL);
   return aURI.forget();
 }
 
@@ -178,8 +173,6 @@ XMLStylesheetProcessingInstruction::GetStyleSheetInfo(nsAString& aTitle,
   // If we get here we assume that we're loading a css file, so set the
   // type to 'text/css'
   aType.AssignLiteral("text/css");
-
-  return;
 }
 
 nsGenericDOMDataNode*

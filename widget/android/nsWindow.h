@@ -41,7 +41,7 @@ namespace mozilla {
     } // namespace ipc
 }
 
-class nsWindow : public nsBaseWidget
+class nsWindow final : public nsBaseWidget
 {
 private:
     virtual ~nsWindow();
@@ -130,16 +130,7 @@ public:
             nsWindow* operator->() const { return mWindow; }
         };
 
-        WindowPtr(NativePtr<Impl>* aPtr, nsWindow* aWindow)
-            : mPtr(aPtr)
-            , mWindow(aWindow)
-            , mWindowLock(NativePtr<Impl>::sName)
-        {
-            MOZ_ASSERT(NS_IsMainThread());
-            if (mPtr) {
-                mPtr->mPtr = this;
-            }
-        }
+        WindowPtr(NativePtr<Impl>* aPtr, nsWindow* aWindow);
 
         ~WindowPtr()
         {
@@ -319,7 +310,7 @@ public:
     mozilla::java::GeckoEditable::Ref& GetEditableParent() { return mEditable; }
 
     void RecvToolbarAnimatorMessageFromCompositor(int32_t aMessage) override;
-    void UpdateRootFrameMetrics(const ScreenPoint& aScrollOffset, const CSSToScreenScale& aZoom, const CSSRect& aPage) override;
+    void UpdateRootFrameMetrics(const ScreenPoint& aScrollOffset, const CSSToScreenScale& aZoom) override;
     void RecvScreenPixels(mozilla::ipc::Shmem&& aMem, const ScreenIntSize& aSize) override;
 protected:
     void BringToFront();
@@ -357,5 +348,22 @@ private:
     int64_t GetRootLayerId() const;
     RefPtr<mozilla::layers::UiCompositorControllerChild> GetUiCompositorControllerChild();
 };
+
+// Explicit template declarations to make clang be quiet.
+template<> const char nsWindow::NativePtr<nsWindow::LayerViewSupport>::sName[];
+template<> const char nsWindow::NativePtr<mozilla::widget::GeckoEditableSupport>::sName[];
+template<> const char nsWindow::NativePtr<nsWindow::NPZCSupport>::sName[];
+
+template<class Impl>
+nsWindow::WindowPtr<Impl>::WindowPtr(NativePtr<Impl>* aPtr, nsWindow* aWindow)
+    : mPtr(aPtr)
+    , mWindow(aWindow)
+    , mWindowLock(NativePtr<Impl>::sName)
+{
+    MOZ_ASSERT(NS_IsMainThread());
+    if (mPtr) {
+        mPtr->mPtr = this;
+    }
+}
 
 #endif /* NSWINDOW_H_ */

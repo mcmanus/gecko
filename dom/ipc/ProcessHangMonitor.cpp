@@ -22,6 +22,7 @@
 #include "mozilla/plugins/PluginBridge.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Unused.h"
+#include "mozilla/WeakPtr.h"
 
 #include "nsIFrameLoader.h"
 #include "nsIHangReport.h"
@@ -84,9 +85,11 @@ class HangMonitorChild
 
   typedef ProcessHangMonitor::SlowScriptAction SlowScriptAction;
   SlowScriptAction NotifySlowScript(nsITabChild* aTabChild,
-                                    const char* aFileName);
+                                    const char* aFileName,
+                                    const nsString& aAddonId);
   void NotifySlowScriptAsync(TabId aTabId,
-                             const nsCString& aFileName);
+                             const nsCString& aFileName,
+                             const nsString& aAddonId);
 
   bool IsDebuggerStartupComplete();
 
@@ -97,7 +100,7 @@ class HangMonitorChild
   void ClearHangAsync();
   void ClearForcePaint();
 
-  mozilla::ipc::IPCResult RecvTerminateScript() override;
+  mozilla::ipc::IPCResult RecvTerminateScript(const bool& aTerminateGlobal) override;
   mozilla::ipc::IPCResult RecvBeginStartingDebugger() override;
   mozilla::ipc::IPCResult RecvEndStartingDebugger() override;
 
@@ -130,6 +133,7 @@ class HangMonitorChild
 
   // These fields must be accessed with mMonitor held.
   bool mTerminateScript;
+  bool mTerminateGlobal;
   bool mStartDebugger;
   bool mFinishedStartingDebugger;
   bool mForcePaint;
@@ -161,10 +165,12 @@ public:
   NS_IMETHOD GetHangType(uint32_t* aHangType) override;
   NS_IMETHOD GetScriptBrowser(nsIDOMElement** aBrowser) override;
   NS_IMETHOD GetScriptFileName(nsACString& aFileName) override;
+  NS_IMETHOD GetAddonId(nsAString& aAddonId) override;
 
   NS_IMETHOD GetPluginName(nsACString& aPluginName) override;
 
   NS_IMETHOD TerminateScript() override;
+  NS_IMETHOD TerminateGlobal() override;
   NS_IMETHOD BeginStartingDebugger() override;
   NS_IMETHOD EndStartingDebugger() override;
   NS_IMETHOD TerminatePlugin() override;
@@ -208,10 +214,13 @@ private:
 
 class HangMonitorParent
   : public PProcessHangMonitorParent
+  , public SupportsWeakPtr<HangMonitorParent>
 {
 public:
   explicit HangMonitorParent(ProcessHangMonitor* aMonitor);
   ~HangMonitorParent() override;
+
+  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(HangMonitorParent)
 
   void Bind(Endpoint<PProcessHangMonitorParent>&& aEndpoint);
 
@@ -226,7 +235,7 @@ public:
 
   void ForcePaint(dom::TabParent* aTabParent, uint64_t aLayerObserverEpoch);
 
-  void TerminateScript();
+  void TerminateScript(bool aTerminateGlobal);
   void BeginStartingDebugger();
   void EndStartingDebugger();
   void CleanupPluginHang(uint32_t aPluginId, bool aRemoveFiles);
@@ -250,6 +259,8 @@ private:
   void SendHangNotification(const HangData& aHangData,
                             const nsString& aBrowserDumpId,
                             bool aTakeMinidump);
+  void OnTakeFullMinidumpComplete(const HangData& aHangData,
+                                  const nsString& aDumpId);
 
   void ClearHangNotification();
 
@@ -289,6 +300,7 @@ HangMonitorChild::HangMonitorChild(ProcessHangMonitor* aMonitor)
    mMonitor("HangMonitorChild lock"),
    mSentReport(false),
    mTerminateScript(false),
+   mTerminateGlobal(false),
    mStartDebugger(false),
    mFinishedStartingDebugger(false),
    mForcePaint(false),
@@ -369,16 +381,22 @@ HangMonitorChild::ActorDestroy(ActorDestroyReason aWhy)
 
   // We use a task here to ensure that IPDL is finished with this
   // HangMonitorChild before it gets deleted on the main thread.
-  Dispatch(NewNonOwningRunnableMethod(this, &HangMonitorChild::ShutdownOnThread));
+  Dispatch(NewNonOwningRunnableMethod("HangMonitorChild::ShutdownOnThread",
+                                      this,
+                                      &HangMonitorChild::ShutdownOnThread));
 }
 
 mozilla::ipc::IPCResult
-HangMonitorChild::RecvTerminateScript()
+HangMonitorChild::RecvTerminateScript(const bool& aTerminateGlobal)
 {
   MOZ_RELEASE_ASSERT(IsOnThread());
 
   MonitorAutoLock lock(mMonitor);
-  mTerminateScript = true;
+  if (aTerminateGlobal) {
+    mTerminateGlobal = true;
+  } else {
+    mTerminateScript = true;
+  }
   return IPC_OK();
 }
 
@@ -444,16 +462,18 @@ HangMonitorChild::Bind(Endpoint<PProcessHangMonitorChild>&& aEndpoint)
 
 void
 HangMonitorChild::NotifySlowScriptAsync(TabId aTabId,
-                                        const nsCString& aFileName)
+                                        const nsCString& aFileName,
+                                        const nsString& aAddonId)
 {
   if (mIPCOpen) {
-    Unused << SendHangEvidence(SlowScriptData(aTabId, aFileName));
+    Unused << SendHangEvidence(SlowScriptData(aTabId, aFileName, aAddonId));
   }
 }
 
 HangMonitorChild::SlowScriptAction
 HangMonitorChild::NotifySlowScript(nsITabChild* aTabChild,
-                                   const char* aFileName)
+                                   const char* aFileName,
+                                   const nsString& aAddonId)
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
@@ -465,6 +485,11 @@ HangMonitorChild::NotifySlowScript(nsITabChild* aTabChild,
     if (mTerminateScript) {
       mTerminateScript = false;
       return SlowScriptAction::Terminate;
+    }
+
+    if (mTerminateGlobal) {
+      mTerminateGlobal = false;
+      return SlowScriptAction::TerminateGlobal;
     }
 
     if (mStartDebugger) {
@@ -480,10 +505,12 @@ HangMonitorChild::NotifySlowScript(nsITabChild* aTabChild,
   }
   nsAutoCString filename(aFileName);
 
-  Dispatch(NewNonOwningRunnableMethod
-           <TabId, nsCString>(this,
-                              &HangMonitorChild::NotifySlowScriptAsync,
-                              id, filename));
+  Dispatch(NewNonOwningRunnableMethod<TabId, nsCString, nsString>(
+    "HangMonitorChild::NotifySlowScriptAsync",
+    this,
+    &HangMonitorChild::NotifySlowScriptAsync,
+    id,
+    filename, aAddonId));
   return SlowScriptAction::Continue;
 }
 
@@ -511,9 +538,11 @@ HangMonitorChild::NotifyPluginHang(uint32_t aPluginId)
   mSentReport = true;
 
   // bounce to background thread
-  Dispatch(NewNonOwningRunnableMethod<uint32_t>(this,
-                                                &HangMonitorChild::NotifyPluginHangAsync,
-                                                aPluginId));
+  Dispatch(NewNonOwningRunnableMethod<uint32_t>(
+    "HangMonitorChild::NotifyPluginHangAsync",
+    this,
+    &HangMonitorChild::NotifyPluginHangAsync,
+    aPluginId));
 }
 
 void
@@ -535,11 +564,14 @@ HangMonitorChild::ClearHang()
 
   if (mSentReport) {
     // bounce to background thread
-    Dispatch(NewNonOwningRunnableMethod(this, &HangMonitorChild::ClearHangAsync));
+    Dispatch(NewNonOwningRunnableMethod("HangMonitorChild::ClearHangAsync",
+                                        this,
+                                        &HangMonitorChild::ClearHangAsync));
 
     MonitorAutoLock lock(mMonitor);
     mSentReport = false;
     mTerminateScript = false;
+    mTerminateGlobal = false;
     mStartDebugger = false;
     mFinishedStartingDebugger = false;
   }
@@ -603,7 +635,8 @@ HangMonitorParent::Shutdown()
     mProcess = nullptr;
   }
 
-  Dispatch(NewNonOwningRunnableMethod(this,
+  Dispatch(NewNonOwningRunnableMethod("HangMonitorParent::ShutdownOnThread",
+                                      this,
                                       &HangMonitorParent::ShutdownOnThread));
 
   while (!mShutdownDone) {
@@ -634,8 +667,12 @@ HangMonitorParent::ForcePaint(dom::TabParent* aTab, uint64_t aLayerObserverEpoch
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
   if (sShouldForcePaint) {
     TabId id = aTab->GetTabId();
-    Dispatch(NewNonOwningRunnableMethod
-             <TabId, uint64_t>(this, &HangMonitorParent::ForcePaintOnThread, id, aLayerObserverEpoch));
+    Dispatch(NewNonOwningRunnableMethod<TabId, uint64_t>(
+      "HangMonitorParent::ForcePaintOnThread",
+      this,
+      &HangMonitorParent::ForcePaintOnThread,
+      id,
+      aLayerObserverEpoch));
   }
 }
 
@@ -673,24 +710,48 @@ HangMonitorParent::SendHangNotification(const HangData& aHangData,
   // chrome process, main thread
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
-  nsString dumpId;
   if ((aHangData.type() == HangData::TPluginHangData) && aTakeMinidump) {
     // We've been handed a partial minidump; complete it with plugin and
     // content process dumps.
     const PluginHangData& phd = aHangData.get_PluginHangData();
-    plugins::TakeFullMinidump(phd.pluginId(), phd.contentProcessId(),
-                              aBrowserDumpId, dumpId);
-    UpdateMinidump(phd.pluginId(), dumpId);
+
+    WeakPtr<HangMonitorParent> self = this;
+    std::function<void(nsString)> callback =
+      [self, aHangData](nsString aResult) {
+        MOZ_RELEASE_ASSERT(NS_IsMainThread());
+
+        if (!self) {
+          // Don't report hang since the process has already shut down.
+          return;
+        }
+
+        self->UpdateMinidump(aHangData.get_PluginHangData().pluginId(),
+                       aResult);
+        self->OnTakeFullMinidumpComplete(aHangData, aResult);
+      };
+
+    plugins::TakeFullMinidump(phd.pluginId(),
+                              phd.contentProcessId(),
+                              aBrowserDumpId,
+                              Move(callback),
+                              true);
   } else {
     // We already have a full minidump; go ahead and use it.
-    dumpId = aBrowserDumpId;
+    OnTakeFullMinidumpComplete(aHangData, aBrowserDumpId);
   }
+}
 
-  mProcess->SetHangData(aHangData, dumpId);
+void
+HangMonitorParent::OnTakeFullMinidumpComplete(const HangData& aHangData,
+                                              const nsString& aDumpId)
+{
+  mProcess->SetHangData(aHangData, aDumpId);
 
   nsCOMPtr<nsIObserverService> observerService =
     mozilla::services::GetObserverService();
-  observerService->NotifyObservers(mProcess, "process-hang-report", nullptr);
+  observerService->NotifyObservers(mProcess,
+                                   "process-hang-report",
+                                   nullptr);
 }
 
 void
@@ -793,12 +854,12 @@ HangMonitorParent::RecvClearHang()
 }
 
 void
-HangMonitorParent::TerminateScript()
+HangMonitorParent::TerminateScript(bool aTerminateGlobal)
 {
   MOZ_RELEASE_ASSERT(IsOnThread());
 
   if (mIPCOpen) {
-    Unused << SendTerminateScript();
+    Unused << SendTerminateScript(aTerminateGlobal);
   }
 }
 
@@ -913,6 +974,18 @@ HangMonitoredProcess::GetScriptFileName(nsACString& aFileName)
 }
 
 NS_IMETHODIMP
+HangMonitoredProcess::GetAddonId(nsAString& aAddonId)
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  if (mHangData.type() != HangData::TSlowScriptData) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  aAddonId = mHangData.get_SlowScriptData().addonId();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 HangMonitoredProcess::GetPluginName(nsACString& aPluginName)
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
@@ -944,8 +1017,29 @@ HangMonitoredProcess::TerminateScript()
     return NS_ERROR_UNEXPECTED;
   }
 
-  ProcessHangMonitor::Get()->Dispatch(NewNonOwningRunnableMethod(mActor,
-                                                                 &HangMonitorParent::TerminateScript));
+  ProcessHangMonitor::Get()->Dispatch(
+    NewNonOwningRunnableMethod<bool>("HangMonitorParent::TerminateScript",
+                                     mActor,
+                                     &HangMonitorParent::TerminateScript, false));
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HangMonitoredProcess::TerminateGlobal()
+{
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
+  if (mHangData.type() != HangData::TSlowScriptData) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  if (!mActor) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  ProcessHangMonitor::Get()->Dispatch(
+    NewNonOwningRunnableMethod<bool>("HangMonitorParent::TerminateScript",
+                                     mActor,
+                                     &HangMonitorParent::TerminateScript, true));
   return NS_OK;
 }
 
@@ -961,8 +1055,10 @@ HangMonitoredProcess::BeginStartingDebugger()
     return NS_ERROR_UNEXPECTED;
   }
 
-  ProcessHangMonitor::Get()->Dispatch(NewNonOwningRunnableMethod(mActor,
-                                                                 &HangMonitorParent::BeginStartingDebugger));
+  ProcessHangMonitor::Get()->Dispatch(
+    NewNonOwningRunnableMethod("HangMonitorParent::BeginStartingDebugger",
+                               mActor,
+                               &HangMonitorParent::BeginStartingDebugger));
   return NS_OK;
 }
 
@@ -978,8 +1074,10 @@ HangMonitoredProcess::EndStartingDebugger()
     return NS_ERROR_UNEXPECTED;
   }
 
-  ProcessHangMonitor::Get()->Dispatch(NewNonOwningRunnableMethod(mActor,
-                                                                 &HangMonitorParent::EndStartingDebugger));
+  ProcessHangMonitor::Get()->Dispatch(
+    NewNonOwningRunnableMethod("HangMonitorParent::EndStartingDebugger",
+                               mActor,
+                               &HangMonitorParent::EndStartingDebugger));
   return NS_OK;
 }
 
@@ -994,12 +1092,20 @@ HangMonitoredProcess::TerminatePlugin()
   // Use the multi-process crash report generated earlier.
   uint32_t id = mHangData.get_PluginHangData().pluginId();
   base::ProcessId contentPid = mHangData.get_PluginHangData().contentProcessId();
-  plugins::TerminatePlugin(id, contentPid, NS_LITERAL_CSTRING("HangMonitor"),
-                           mDumpId);
 
-  if (mActor) {
-    mActor->CleanupPluginHang(id, false);
-  }
+  RefPtr<HangMonitoredProcess> self{this};
+  std::function<void(bool)> callback =
+    [self, id](bool aResult) {
+      if (self->mActor) {
+        self->mActor->CleanupPluginHang(id, false);
+      }
+    };
+
+  plugins::TerminatePlugin(id,
+                           contentPid,
+                           NS_LITERAL_CSTRING("HangMonitor"),
+                           mDumpId,
+                           Move(callback));
   return NS_OK;
 }
 
@@ -1108,10 +1214,11 @@ ProcessHangMonitor::Observe(nsISupports* aSubject, const char* aTopic, const cha
 
 ProcessHangMonitor::SlowScriptAction
 ProcessHangMonitor::NotifySlowScript(nsITabChild* aTabChild,
-                                     const char* aFileName)
+                                     const char* aFileName,
+                                     const nsString& aAddonId)
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
-  return HangMonitorChild::Get()->NotifySlowScript(aTabChild, aFileName);
+  return HangMonitorChild::Get()->NotifySlowScript(aTabChild, aFileName, aAddonId);
 }
 
 bool
@@ -1159,10 +1266,12 @@ CreateHangMonitorParent(ContentParent* aContentParent,
   auto* process = new HangMonitoredProcess(parent, aContentParent);
   parent->SetProcess(process);
 
-  monitor->Dispatch(NewNonOwningRunnableMethod
-                    <Endpoint<PProcessHangMonitorParent>&&>(parent,
-                                                            &HangMonitorParent::Bind,
-                                                            Move(aEndpoint)));
+  monitor->Dispatch(
+    NewNonOwningRunnableMethod<Endpoint<PProcessHangMonitorParent>&&>(
+      "HangMonitorParent::Bind",
+      parent,
+      &HangMonitorParent::Bind,
+      Move(aEndpoint)));
 
   return parent;
 }
@@ -1178,10 +1287,12 @@ mozilla::CreateHangMonitorChild(Endpoint<PProcessHangMonitorChild>&& aEndpoint)
   ProcessHangMonitor* monitor = ProcessHangMonitor::GetOrCreate();
   auto* child = new HangMonitorChild(monitor);
 
-  monitor->Dispatch(NewNonOwningRunnableMethod
-                    <Endpoint<PProcessHangMonitorChild>&&>(child,
-                                                           &HangMonitorChild::Bind,
-                                                           Move(aEndpoint)));
+  monitor->Dispatch(
+    NewNonOwningRunnableMethod<Endpoint<PProcessHangMonitorChild>&&>(
+      "HangMonitorChild::Bind",
+      child,
+      &HangMonitorChild::Bind,
+      Move(aEndpoint)));
 }
 
 void

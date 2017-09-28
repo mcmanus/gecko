@@ -37,7 +37,7 @@ namespace dom {
 namespace indexedDB {
 
 class MOZ_STACK_CLASS LoggingIdString final
-  : public nsAutoCString
+  : public nsAutoCStringN<NSID_LENGTH>
 {
 public:
   LoggingIdString()
@@ -61,9 +61,10 @@ public:
   LoggingIdString(const nsID& aID)
   {
     static_assert(NSID_LENGTH > 1, "NSID_LENGTH is set incorrectly!");
-    static_assert(NSID_LENGTH <= kDefaultStorageSize,
-                  "nID string won't fit in our storage!");
-    MOZ_ASSERT(Capacity() > NSID_LENGTH);
+    static_assert(NSID_LENGTH <= kStorageSize,
+                  "nsID string won't fit in our storage!");
+    // Capacity() excludes the null terminator; NSID_LENGTH includes it.
+    MOZ_ASSERT(Capacity() + 1 == NSID_LENGTH);
 
     if (IndexedDatabaseManager::GetLoggingMode() !=
           IndexedDatabaseManager::Logging_Disabled) {
@@ -305,7 +306,7 @@ LoggingHelper(bool aUseProfiler, const char* aFmt, ...)
     MOZ_LOG(logModule, logLevel, ("%s", message.get()));
 
     if (aUseProfiler) {
-      PROFILER_MARKER(message.get());
+      profiler_add_marker(message.get());
     }
   }
 }

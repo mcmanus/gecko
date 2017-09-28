@@ -34,11 +34,11 @@ HTTP(..) == font-features-hlig-3.html font-features-noliga.html
 
 # compare font-language-override rendering to lang-tagged rendering
 HTTP(..) == font-features-turkish-override-1.html font-features-turkish.html
-fails-if(styloVsGecko||stylo) HTTP(..) == font-features-turkish-override-2.html font-features-turkish.html
+HTTP(..) == font-features-turkish-override-2.html font-features-turkish.html
 
 # check use of font-language-override to override explicit lang tag
 HTTP(..) == font-features-turkish-override-3.html font-features-ref.html
-fails-if(styloVsGecko||stylo) HTTP(..) == font-features-turkish-override-4.html font-features-ref.html
+HTTP(..) == font-features-turkish-override-4.html font-features-ref.html
 HTTP(..) == font-features-turkish-override-5.html font-features-turkish.html
 
 # check that last value wins if a feature is repeated
@@ -51,15 +51,15 @@ HTTP(..) == font-features-order-4.html font-features-noliga.html
 HTTP(..) == font-features-order-5.html font-features-hlig.html
 
 # check priority involving feature settings and font-variant-alternates
-fails-if(styloVsGecko||stylo) HTTP(..) == alternates-order.html alternates-order-ref.html
+HTTP(..) == alternates-order.html alternates-order-ref.html
 
 # check that font-specific values line up with @font-face feature settings
-HTTP(..) == annotations.html annotations-ref.html
+skip-if((stylo||styloVsGecko)&&winWidget) HTTP(..) == annotations.html annotations-ref.html
 
 # font-variant subproperties
 # test for specific features being on and others off, based on prop values
 # (debug problems with font-variant-debug.html which displays all props)
-fails-if(styloVsGecko||stylo) HTTP(..) == font-variant-alternates.html font-variant-alternates-ref.html
+HTTP(..) == font-variant-alternates.html font-variant-alternates-ref.html
 HTTP(..) == font-variant-caps.html font-variant-caps-ref.html
 HTTP(..) == font-variant-east-asian.html font-variant-east-asian-ref.html
 HTTP(..) == font-variant-ligatures.html font-variant-ligatures-ref.html
@@ -118,3 +118,6 @@ HTTP(..) == subsuper-nofallback.html subsuper-nofallback-ref1.html
 random-if(cocoaWidget) HTTP(..) == subsuper-nofallback.html subsuper-nofallback-ref2.html # bug 1139269
 HTTP(..) != subsuper-nofallback.html subsuper-nofallback-notref.html
 HTTP(..) == subsuper-fallback-size.html subsuper-fallback-size-ref.html
+
+# GPOS spacing adjustments in vertical mode -- subsetted opentype/cff test font fails to load on Win7
+random-if(/^Windows\x20NT\x206\.1/.test(http.oscpu)) HTTP(..) == 1376231-vertical-gpos-adjustments.html 1376231-vertical-gpos-adjustments-ref.html

@@ -138,7 +138,7 @@ DOMIntersectionObserver::SetRootMargin(const nsAString& aString)
 void
 DOMIntersectionObserver::GetRootMargin(mozilla::dom::DOMString& aRetVal)
 {
-  mRootMargin.AppendToString(eCSSProperty_DOM, aRetVal, nsCSSValue::eNormalized);
+  mRootMargin.AppendToString(eCSSProperty_DOM, aRetVal);
 }
 
 void
@@ -150,31 +150,35 @@ DOMIntersectionObserver::GetThresholds(nsTArray<double>& aRetVal)
 void
 DOMIntersectionObserver::Observe(Element& aTarget)
 {
-  if (mObservationTargets.EnsureInserted(&aTarget)) {
-    // A new entry was created.
-    aTarget.RegisterIntersectionObserver(this);
-    Connect();
+  if (mObservationTargets.Contains(&aTarget)) {
+    return;
   }
+  aTarget.RegisterIntersectionObserver(this);
+  mObservationTargets.AppendElement(&aTarget);
+  Connect();
 }
 
 void
 DOMIntersectionObserver::Unobserve(Element& aTarget)
 {
-  if (mObservationTargets.Count() == 1) {
+  if (!mObservationTargets.Contains(&aTarget)) {
+    return;
+  }
+
+  if (mObservationTargets.Length() == 1) {
     Disconnect();
     return;
   }
 
-  mObservationTargets.RemoveEntry(&aTarget);
+  mObservationTargets.RemoveElement(&aTarget);
   aTarget.UnregisterIntersectionObserver(this);
 }
 
 void
 DOMIntersectionObserver::UnlinkTarget(Element& aTarget)
 {
-  if (mObservationTargets.EnsureRemoved(&aTarget) &&
-      mObservationTargets.Count() == 0) {
-    // We removed the last entry.
+  mObservationTargets.RemoveElement(&aTarget);
+  if (mObservationTargets.Length() == 0) {
     Disconnect();
   }
 }
@@ -200,8 +204,8 @@ DOMIntersectionObserver::Disconnect()
   }
 
   mConnected = false;
-  for (auto iter = mObservationTargets.Iter(); !iter.Done(); iter.Next()) {
-    Element* target = iter.Get()->GetKey();
+  for (size_t i = 0; i < mObservationTargets.Length(); ++i) {
+    Element* target = mObservationTargets.ElementAt(i);
     target->UnregisterIntersectionObserver(this);
   }
   mObservationTargets.Clear();
@@ -304,7 +308,11 @@ DOMIntersectionObserver::Update(nsIDocument* aDocument, DOMHighResTimeStamp time
         }
         root = rootFrame->GetContent()->AsElement();
         nsIScrollableFrame* scrollFrame = do_QueryFrame(rootFrame);
-        rootRect = scrollFrame->GetScrollPortRect();
+        // If we end up with a null root frame for some reason, we'll proceed
+        // with an empty root intersection rect.
+        if (scrollFrame) {
+          rootRect = scrollFrame->GetScrollPortRect();
+        }
       }
     }
   }
@@ -312,7 +320,7 @@ DOMIntersectionObserver::Update(nsIDocument* aDocument, DOMHighResTimeStamp time
   nsMargin rootMargin;
   NS_FOR_CSS_SIDES(side) {
     nscoord basis = side == eSideTop || side == eSideBottom ?
-      rootRect.height : rootRect.width;
+      rootRect.Height() : rootRect.Width();
     nsCSSValue value = mRootMargin.*nsCSSRect::sides[side];
     nsStyleCoord coord;
     if (value.IsPixelLengthUnit()) {
@@ -325,8 +333,8 @@ DOMIntersectionObserver::Update(nsIDocument* aDocument, DOMHighResTimeStamp time
     rootMargin.Side(side) = nsLayoutUtils::ComputeCBDependentValue(basis, coord);
   }
 
-  for (auto iter = mObservationTargets.Iter(); !iter.Done(); iter.Next()) {
-    Element* target = iter.Get()->GetKey();
+  for (size_t i = 0; i < mObservationTargets.Length(); ++i) {
+    Element* target = mObservationTargets.ElementAt(i);
     nsIFrame* targetFrame = target->GetPrimaryFrame();
     nsRect targetRect;
     Maybe<nsRect> intersectionRect;
@@ -422,10 +430,10 @@ DOMIntersectionObserver::Update(nsIDocument* aDocument, DOMHighResTimeStamp time
       }
     }
 
-    double targetArea = targetRect.width * targetRect.height;
+    double targetArea = targetRect.Width() * targetRect.Height();
     double intersectionArea = !intersectionRect ?
-      0 : intersectionRect->width * intersectionRect->height;
-    
+      0 : intersectionRect->Width() * intersectionRect->Height();
+
     double intersectionRatio;
     if (targetArea > 0.0) {
       intersectionRatio = intersectionArea / targetArea;
@@ -433,15 +441,15 @@ DOMIntersectionObserver::Update(nsIDocument* aDocument, DOMHighResTimeStamp time
       intersectionRatio = intersectionRect.isSome() ? 1.0 : 0.0;
     }
 
-    size_t threshold = -1;
+    int32_t threshold = -1;
     if (intersectionRatio > 0.0) {
       if (intersectionRatio >= 1.0) {
         intersectionRatio = 1.0;
-        threshold = mThresholds.Length();
+        threshold = (int32_t)mThresholds.Length();
       } else {
         for (size_t k = 0; k < mThresholds.Length(); ++k) {
           if (mThresholds[k] <= intersectionRatio) {
-            threshold = k + 1;
+            threshold = (int32_t)k + 1;
           } else {
             break;
           }
@@ -501,7 +509,7 @@ DOMIntersectionObserver::Notify()
   }
   mozilla::dom::Sequence<mozilla::OwningNonNull<DOMIntersectionObserverEntry>> entries;
   if (entries.SetCapacity(mQueuedEntries.Length(), mozilla::fallible)) {
-    for (uint32_t i = 0; i < mQueuedEntries.Length(); ++i) {
+    for (size_t i = 0; i < mQueuedEntries.Length(); ++i) {
       RefPtr<DOMIntersectionObserverEntry> next = mQueuedEntries[i];
       *entries.AppendElement(mozilla::fallible) = next;
     }

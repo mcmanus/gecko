@@ -2118,6 +2118,14 @@ TSFTextStore::FlushPendingActions()
     return;
   }
 
+  // Some TIP may request lock but does nothing during the lock.  In such case,
+  // this should do nothing.  For example, when MS-IME for Japanese is active
+  // and we're inactivating, this case occurs and causes different behavior
+  // from the other TIPs.
+  if (mPendingActions.IsEmpty()) {
+    return;
+  }
+
   RefPtr<nsWindowBase> widget(mWidget);
   nsresult rv = mDispatcher->BeginNativeInputTransaction();
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -2486,6 +2494,18 @@ TSFTextStore::GetSelection(ULONG ulIndex,
 
   Selection& selectionForTSF = SelectionForTSFRef();
   if (selectionForTSF.IsDirty()) {
+    if (DoNotReturnErrorFromGetSelection()) {
+      AutoSetTemporarySelection temprarySetter(selectionForTSF);
+      *pSelection = selectionForTSF.ACP();
+      *pcFetched = 1;
+      MOZ_LOG(sTextStoreLog, LogLevel::Info,
+        ("0x%p   TSFTextStore::GetSelection() returns fake selection range "
+         "for avoiding a crash in TSF, "
+         "acpStart=%d, acpEnd=%d (length=%d), reverted=%s",
+         this, selectionForTSF.StartOffset(), selectionForTSF.EndOffset(),
+         selectionForTSF.Length(), GetBoolName(selectionForTSF.IsReversed())));
+      return S_OK;
+    }
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("0x%p   TSFTextStore::GetSelection() FAILED due to "
        "SelectionForTSFRef() failure", this));
@@ -2494,8 +2514,24 @@ TSFTextStore::GetSelection(ULONG ulIndex,
   *pSelection = selectionForTSF.ACP();
   *pcFetched = 1;
   MOZ_LOG(sTextStoreLog, LogLevel::Info,
-    ("0x%p   TSFTextStore::GetSelection() succeeded", this));
+    ("0x%p   TSFTextStore::GetSelection() succeeded, "
+     "acpStart=%d, acpEnd=%d (length=%d), reverted=%s",
+     this, selectionForTSF.StartOffset(), selectionForTSF.EndOffset(),
+     selectionForTSF.Length(), GetBoolName(selectionForTSF.IsReversed())));
   return S_OK;
+}
+
+// static
+bool
+TSFTextStore::DoNotReturnErrorFromGetSelection()
+{
+  // There is a crash bug of TSF if we return error from GetSelection().
+  // That was introduced in Anniversary Update (build 14393, see bug 1312302)
+  // TODO: We should avoid to run this hack on fixed builds.  When we get
+  //       exact build number, we should get back here.
+  static bool sTSFMayCrashIfGetSelectionReturnsError =
+    IsWindows10BuildOrLater(14393);
+  return sTSFMayCrashIfGetSelectionReturnsError;
 }
 
 bool
@@ -5227,14 +5263,7 @@ TSFTextStore::CreateAndSetFocus(nsWindowBase* aFocusedWidget,
 
   HRESULT hr;
   RefPtr<ITfThreadMgr> threadMgr = sThreadMgr;
-  {
-    // Windows 10's softwware keyboard requires that SetSelection must be
-    // always successful into SetFocus.  If returning error, it might crash
-    // into TextInputFramework.dll.
-    AutoSetTemporarySelection setSelection(textStore->SelectionForTSFRef());
-
-    hr = threadMgr->SetFocus(newDocMgr);
-  }
+  hr = threadMgr->SetFocus(newDocMgr);
 
   if (NS_WARN_IF(FAILED(hr))) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
@@ -5312,18 +5341,33 @@ TSFTextStore::CreateAndSetFocus(nsWindowBase* aFocusedWidget,
 IMENotificationRequests
 TSFTextStore::GetIMENotificationRequests()
 {
-  if (sThreadMgr && sEnabledTextStore && sEnabledTextStore->mDocumentMgr) {
-    RefPtr<ITfDocumentMgr> docMgr;
-    sThreadMgr->GetFocus(getter_AddRefs(docMgr));
-    if (docMgr == sEnabledTextStore->mDocumentMgr) {
-      return IMENotificationRequests(
-               IMENotificationRequests::NOTIFY_TEXT_CHANGE |
-               IMENotificationRequests::NOTIFY_POSITION_CHANGE |
-               IMENotificationRequests::NOTIFY_MOUSE_BUTTON_EVENT_ON_CHAR |
-               IMENotificationRequests::NOTIFY_DURING_DEACTIVE);
-    }
+  if (!sEnabledTextStore ||
+      NS_WARN_IF(!sEnabledTextStore->mDocumentMgr)) {
+    // If there is no active text store, we don't need any notifications
+    // since there is no sink which needs notifications.
+    return IMENotificationRequests();
   }
-  return IMENotificationRequests();
+
+  // Otherwise, requests all notifications since even if some of them may not
+  // be required by the sink of active TIP, active TIP may be changed and
+  // other TIPs may need all notifications.
+  // Note that Windows temporarily steal focus from active window if the main
+  // process which created the window becomes busy.  In this case, we shouldn't
+  // commit composition since user may want to continue to compose the
+  // composition after becoming not busy.  Therefore, we need notifications
+  // even during deactive.
+  // Be aware, we don't need to check actual focused text store.  For example,
+  // MS-IME for Japanese handles focus messages by themselves and sets focused
+  // text store to nullptr when the process is being inactivated.  However,
+  // we still need to reuse sEnabledTextStore if the process is activated and
+  // focused element isn't changed.  Therefore, if sEnabledTextStore isn't
+  // nullptr, we need to keep notifying the sink even when it is not focused
+  // text store for the thread manager.
+  return IMENotificationRequests(
+           IMENotificationRequests::NOTIFY_TEXT_CHANGE |
+           IMENotificationRequests::NOTIFY_POSITION_CHANGE |
+           IMENotificationRequests::NOTIFY_MOUSE_BUTTON_EVENT_ON_CHAR |
+           IMENotificationRequests::NOTIFY_DURING_DEACTIVE);
 }
 
 nsresult

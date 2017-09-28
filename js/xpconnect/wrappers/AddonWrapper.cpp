@@ -114,8 +114,7 @@ InterposeCall(JSContext* cx, JS::HandleObject target, const JS::CallArgs& args, 
     nsCOMPtr<nsIAddonInterposition> interp = scope->GetInterposition();
 
     RootedObject unwrappedTarget(cx, UncheckedUnwrap(target));
-    XPCWrappedNativeScope* targetScope = ObjectScope(unwrappedTarget);
-    bool hasInterpostion = targetScope->HasCallInterposition();
+    bool hasInterpostion = xpc::CompartmentPrivate::Get(unwrappedTarget)->addonCallInterposition;
 
     if (!hasInterpostion)
         return true;
@@ -189,7 +188,7 @@ bool
 AddonWrapper<Base>::get(JSContext* cx, JS::Handle<JSObject*> wrapper, JS::Handle<Value> receiver,
                         JS::Handle<jsid> id, JS::MutableHandle<JS::Value> vp) const
 {
-    PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
+    AUTO_PROFILER_LABEL("AddonWrapper::get", OTHER);
 
     Rooted<PropertyDescriptor> desc(cx);
     if (!InterposeProperty(cx, wrapper, nullptr, id, &desc))

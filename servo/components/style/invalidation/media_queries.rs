@@ -8,8 +8,8 @@ use context::QuirksMode;
 use fnv::FnvHashSet;
 use media_queries::Device;
 use shared_lock::SharedRwLockReadGuard;
-use stylesheets::{DocumentRule, ImportRule, MediaRule,  SupportsRule};
-use stylesheets::{NestedRuleIterationCondition, Stylesheet};
+use stylesheets::{DocumentRule, ImportRule, MediaRule};
+use stylesheets::{NestedRuleIterationCondition, Stylesheet, SupportsRule};
 
 /// A key for a given media query result.
 ///
@@ -23,9 +23,17 @@ use stylesheets::{NestedRuleIterationCondition, Stylesheet};
 ///
 /// If this changes, though, we may need to remove the item from the cache if
 /// present before it goes away.
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 pub struct MediaListKey(usize);
+
+impl MediaListKey {
+    /// Create a MediaListKey from a raw usize.
+    pub fn from_raw(k: usize) -> Self {
+        MediaListKey(k)
+    }
+}
 
 /// A trait to get a given `MediaListKey` for a given item that can hold a
 /// `MediaList`.
@@ -45,6 +53,8 @@ impl ToMediaListKey for MediaRule {}
 
 /// A struct that holds the result of a media query evaluation pass for the
 /// media queries that evaluated successfully.
+#[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 pub struct EffectiveMediaQueryResults {
     /// The set of media lists that matched last time.

@@ -167,7 +167,7 @@ SessionStorageManager::CheckStorage(nsIPrincipal* aPrincipal,
   nsAutoCString originKey;
   nsAutoCString originAttributes;
   nsresult rv = GenerateOriginKey(aPrincipal, originAttributes, originKey);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  if (NS_FAILED(rv)) {
     return rv;
   }
 
@@ -200,15 +200,6 @@ SessionStorageManager::CheckStorage(nsIPrincipal* aPrincipal,
 
   *aRetval = true;
   return NS_OK;
-}
-
-NS_IMETHODIMP
-SessionStorageManager::GetLocalStorageForPrincipal(nsIPrincipal* aPrincipal,
-                                                   const nsAString& aDocumentURI,
-                                                   bool aPrivate,
-                                                   nsIDOMStorage** aRetval)
-{
-  return NS_ERROR_UNEXPECTED;
 }
 
 void

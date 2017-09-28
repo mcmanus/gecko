@@ -24,6 +24,7 @@ common-tests:
     - jittest
     - jsreftest
     - marionette
+    - marionette-headless
     - mochitest
     - mochitest-a11y
     - mochitest-browser-chrome
@@ -31,11 +32,12 @@ common-tests:
     - mochitest-clipboard
     - mochitest-devtools-chrome
     - mochitest-gpu
-    - mochitest-jetpack
     - mochitest-media
     - mochitest-webgl
     - reftest
     - reftest-no-accel
+    - telemetry-tests-client
+    - test-verify
     - xpcshell
 
 web-platform-tests:
@@ -43,13 +45,10 @@ web-platform-tests:
     - web-platform-tests-reftests
     - web-platform-tests-wdspec
 
-external-media-tests:
-    - external-media-tests-base
-    - external-media-tests-youtube
-
-external-media-tests-slow:
-    # twitch tests are too slow and stall under debug, give them their own special set
-    - external-media-tests-twitch
+web-platform-tests-headless:
+    - web-platform-tests-headless
+    - web-platform-tests-reftests-headless
+    - web-platform-tests-wdspec-headless
 
 opt-only-tests:
     - mochitest-valgrind
@@ -66,30 +65,52 @@ talos:
     - talos-svgr
     - talos-tp5o
     - talos-perf-reftest
+    - talos-perf-reftest-singletons
 
 awsy:
     - awsy
 
-headless:
-    - marionette-headless
+awsy-stylo-disabled:
+    - awsy-stylo-disabled
+
+awsy-stylo-sequential:
+    - awsy-stylo-sequential
 
 ##
 # Limited test sets for specific platforms
 
-stylo-tests:
+stylo-disabled-tests:
     - cppunit
     - crashtest
     - reftest
-    - reftest-stylo
-    - mochitest-style
-    - mochitest-chrome-style
     - web-platform-tests
     - web-platform-tests-reftests
+    - mochitest
+    - mochitest-a11y
+    - mochitest-browser-chrome
+    - mochitest-browser-screenshots
+    - mochitest-chrome
+    - mochitest-clipboard
+    - mochitest-gpu
+    - mochitest-media
+    - mochitest-webgl
 
-stylo-sequential-tests:
-    - crashtest
+reftest-stylo:
     - reftest-stylo
-    - mochitest-style
+
+qr-talos:
+    - talos-chrome
+    - talos-dromaeojs
+    - talos-g1
+    # - talos-g2 # doesn't work with QR yet
+    - talos-g3
+    - talos-g4
+    - talos-g5
+    - talos-other
+    - talos-svgr
+    - talos-tp5o
+    - talos-perf-reftest
+    - talos-perf-reftest-singletons
 
 qr-tests:
     - cppunit
@@ -102,7 +123,6 @@ qr-tests:
     - mochitest-media
     - mochitest-webgl
     - reftest
-    - reftest-no-accel
     - xpcshell
 
 jsdcov-code-coverage-tests:
@@ -111,10 +131,24 @@ jsdcov-code-coverage-tests:
     - mochitest-devtools-chrome
     - xpcshell
 
-##
-# Test sets still being greened up in various ways
+linux-talos-stylo-disabled:
+    - talos-chrome-stylo-disabled
+    - talos-dromaeojs-stylo-disabled
+    - talos-g1-stylo-disabled
+    - talos-g2-stylo-disabled
+    - talos-g3-stylo-disabled
+    - talos-g4-stylo-disabled
+    - talos-g5-stylo-disabled
+    - talos-other-stylo-disabled
+    - talos-svgr-stylo-disabled
+    - talos-tp5o-stylo-disabled
+    - talos-perf-reftest-stylo-disabled
+    - talos-perf-reftest-singletons-stylo-disabled
 
-windows-vm-tests:
+windows-reftest-gpu:
+    - reftest-gpu
+
+windows-tests:
     - cppunit
     - crashtest
     - firefox-ui-functional-local
@@ -123,38 +157,7 @@ windows-vm-tests:
     - jittest
     - jsreftest
     - marionette
-    - mochitest
-    - mochitest-a11y
-    - mochitest-browser-chrome
-    - mochitest-devtools-chrome
-    - mochitest-jetpack
-    - mochitest-media
-    - web-platform-tests
-    - web-platform-tests-reftests
-    #- xpcshell
-
-windows-gpu-tests:
-    - reftest
-    - reftest-no-accel
-    - mochitest-gpu
-    - mochitest-webgl
-
-# these tests currently run on hardware, but may migrate above when validated
-# see https://bugzilla.mozilla.org/show_bug.cgi?id=1280474#c36
-#    - mochitest-chrome
-#    - mochitest-clipboard
-
-macosx64-tests:
-    - cppunit
-    - crashtest
-    - external-media-tests-base
-    - external-media-tests-youtube
-    - firefox-ui-functional-local
-    - firefox-ui-functional-remote
-    - gtest
-    - jittest
-    - jsreftest
-    - marionette
+    - marionette-headless
     - mochitest
     - mochitest-a11y
     - mochitest-browser-chrome
@@ -162,7 +165,62 @@ macosx64-tests:
     - mochitest-clipboard
     - mochitest-devtools-chrome
     - mochitest-gpu
-    - mochitest-jetpack
+    - mochitest-media
+    - mochitest-webgl
+    - reftest
+    - reftest-no-accel
+    - web-platform-tests
+    - web-platform-tests-reftests
+    - xpcshell
+
+windows-talos:
+    - talos-chrome
+    - talos-dromaeojs
+    - talos-g1
+    - talos-g2
+    - talos-g4
+    - talos-g5
+    - talos-other
+    - talos-perf-reftest
+    - talos-perf-reftest-singletons
+    - talos-svgr
+    - talos-tp5o
+    - talos-xperf
+    - talos-tp6
+    - talos-tp6-stylo-threads
+
+windows-talos-stylo-disabled:
+    - talos-chrome-stylo-disabled
+    - talos-dromaeojs-stylo-disabled
+    - talos-g1-stylo-disabled
+    - talos-g2-stylo-disabled
+    - talos-g4-stylo-disabled
+    - talos-g5-stylo-disabled
+    - talos-other-stylo-disabled
+    - talos-perf-reftest-stylo-disabled
+    - talos-perf-reftest-singletons-stylo-disabled
+    - talos-svgr-stylo-disabled
+    - talos-tp5o-stylo-disabled
+    - talos-xperf-stylo-disabled
+    - talos-tp6-stylo-disabled
+
+macosx64-tests:
+    - cppunit
+    - crashtest
+    - firefox-ui-functional-local
+    - firefox-ui-functional-remote
+    - gtest
+    - jittest
+    - jsreftest
+    - marionette
+    - marionette-headless
+    - mochitest
+    - mochitest-a11y
+    - mochitest-browser-chrome
+    - mochitest-chrome
+    - mochitest-clipboard
+    - mochitest-devtools-chrome
+    - mochitest-gpu
     - mochitest-media
     - mochitest-webgl
     - reftest
@@ -170,7 +228,7 @@ macosx64-tests:
     - web-platform-tests-reftests
     - xpcshell
 
-macosx64-tests-talos:
+macosx64-talos:
     - talos-chrome
     - talos-dromaeojs
     - talos-g1
@@ -181,6 +239,23 @@ macosx64-tests-talos:
     - talos-svgr
     - talos-tp5o
     - talos-perf-reftest
+    - talos-perf-reftest-singletons
+    - talos-tp6
+    - talos-tp6-stylo-threads
+
+macosx64-talos-stylo-disabled:
+    - talos-chrome-stylo-disabled
+    - talos-dromaeojs-stylo-disabled
+    - talos-g1-stylo-disabled
+    - talos-g2-stylo-disabled
+    - talos-g4-stylo-disabled
+    - talos-g5-stylo-disabled
+    - talos-other-stylo-disabled
+    - talos-svgr-stylo-disabled
+    - talos-tp5o-stylo-disabled
+    - talos-perf-reftest-stylo-disabled
+    - talos-perf-reftest-singletons-stylo-disabled
+    - talos-tp6-stylo-disabled
 
 linux32-tests:
     - cppunit
@@ -197,7 +272,6 @@ linux32-tests:
     - mochitest-chrome
     - mochitest-clipboard
     - mochitest-gpu
-    - mochitest-jetpack
     - mochitest-media
     - mochitest-webgl
     - reftest
@@ -240,3 +314,6 @@ android-gradle-tests:
 android-x86-tests:
     - mochitest-chrome
     - xpcshell
+
+devtools-tests:
+    - mochitest-devtools-chrome

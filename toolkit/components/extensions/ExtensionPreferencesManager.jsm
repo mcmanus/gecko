@@ -124,8 +124,9 @@ function setPrefs(setting, item) {
  *          if preferences were not set.
 */
 async function processSetting(extension, name, action) {
-  let expectedItem = await ExtensionSettingsStore.getSetting(STORE_TYPE, name);
-  let item = await ExtensionSettingsStore[action](extension, STORE_TYPE, name);
+  await ExtensionSettingsStore.initialize();
+  let expectedItem = ExtensionSettingsStore.getSetting(STORE_TYPE, name);
+  let item = ExtensionSettingsStore[action](extension, STORE_TYPE, name);
   if (item) {
     let setting = settingsMap.get(name);
     let expectedPrefs = expectedItem.initialValue
@@ -168,6 +169,19 @@ this.ExtensionPreferencesManager = {
   },
 
   /**
+   * Gets the id of the extension controlling a preference or null if it isn't
+   * being controlled.
+   *
+   * @param {string} prefName The name of the preference.
+   *
+   * @returns {Promise} Resolves to the id of the extension, or null.
+   */
+  async getControllingExtensionId(prefName) {
+    await ExtensionSettingsStore.initialize();
+    return ExtensionSettingsStore.getTopExtensionId(STORE_TYPE, prefName);
+  },
+
+  /**
    * Indicates that an extension would like to change the value of a previously
    * defined setting.
    *
@@ -185,6 +199,7 @@ this.ExtensionPreferencesManager = {
    */
   async setSetting(extension, name, value) {
     let setting = settingsMap.get(name);
+    await ExtensionSettingsStore.initialize();
     let item = await ExtensionSettingsStore.addSetting(
       extension, STORE_TYPE, name, value, initialValueCallback.bind(setting));
     if (item) {
@@ -251,7 +266,8 @@ this.ExtensionPreferencesManager = {
    *        The extension for which all settings are being unset.
    */
   async disableAll(extension) {
-    let settings = await ExtensionSettingsStore.getAllForExtension(extension, STORE_TYPE);
+    await ExtensionSettingsStore.initialize();
+    let settings = ExtensionSettingsStore.getAllForExtension(extension, STORE_TYPE);
     let disablePromises = [];
     for (let name of settings) {
       disablePromises.push(this.disableSetting(extension, name));
@@ -267,7 +283,8 @@ this.ExtensionPreferencesManager = {
    *        The extension for which all settings are being enabled.
    */
   async enableAll(extension) {
-    let settings = await ExtensionSettingsStore.getAllForExtension(extension, STORE_TYPE);
+    await ExtensionSettingsStore.initialize();
+    let settings = ExtensionSettingsStore.getAllForExtension(extension, STORE_TYPE);
     let enablePromises = [];
     for (let name of settings) {
       enablePromises.push(this.enableSetting(extension, name));
@@ -283,12 +300,26 @@ this.ExtensionPreferencesManager = {
    *        The extension for which all settings are being unset.
    */
   async removeAll(extension) {
-    let settings = await ExtensionSettingsStore.getAllForExtension(extension, STORE_TYPE);
+    await ExtensionSettingsStore.initialize();
+    let settings = ExtensionSettingsStore.getAllForExtension(extension, STORE_TYPE);
     let removePromises = [];
     for (let name of settings) {
       removePromises.push(this.removeSetting(extension, name));
     }
     await Promise.all(removePromises);
+  },
+
+  /**
+   * Return the currently active value for a setting.
+   *
+   * @param {string} name
+   *        The unique id of the setting.
+   *
+   * @returns {Object} The current setting object.
+   */
+  async getSetting(name) {
+    await ExtensionSettingsStore.initialize();
+    return ExtensionSettingsStore.getSetting(STORE_TYPE, name);
   },
 
   /**
@@ -300,16 +331,24 @@ this.ExtensionPreferencesManager = {
    *        The extension for which levelOfControl is being requested.
    * @param {string} name
    *        The unique id of the setting.
+   * @param {string} storeType
+   *        The name of the store in ExtensionSettingsStore.
+   *        Defaults to STORE_TYPE.
    *
    * @returns {Promise}
    *          Resolves to the level of control of the extension over the setting.
    */
-  async getLevelOfControl(extension, name) {
-    for (let prefName of settingsMap.get(name).prefNames) {
-      if (Preferences.locked(prefName)) {
-        return "not_controllable";
+  async getLevelOfControl(extension, name, storeType = STORE_TYPE) {
+    // This could be called for a setting that isn't defined to the PreferencesManager,
+    // in which case we simply defer to the SettingsStore.
+    if (storeType === STORE_TYPE) {
+      for (let prefName of settingsMap.get(name).prefNames) {
+        if (Preferences.locked(prefName)) {
+          return "not_controllable";
+        }
       }
     }
-    return await ExtensionSettingsStore.getLevelOfControl(extension, STORE_TYPE, name);
+    await ExtensionSettingsStore.initialize();
+    return ExtensionSettingsStore.getLevelOfControl(extension, storeType, name);
   },
 };

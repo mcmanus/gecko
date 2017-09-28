@@ -11,6 +11,7 @@
 #include <d2d1_1.h>
 #include "PathD2D.h"
 #include "HelpersD2D.h"
+#include "mozilla/StaticPtr.h"
 
 #include <vector>
 #include <sstream>
@@ -153,9 +154,8 @@ public:
     return GetImageForSurface(aSurface, mat, aExtendMode, nullptr);
   }
 
-  static ID2D1Factory1 *factory();
+  static RefPtr<ID2D1Factory1> factory();
   static void CleanupD2D();
-  static IDWriteFactory *GetDWriteFactory();
 
   operator std::string() const {
     std::stringstream stream;
@@ -291,15 +291,14 @@ private:
   // this causes an infinite recursion inside D2D as it tries to resolve the bounds.
   // If we resolve the current command list before this happens
   // we can avoid the subsequent hang. (See bug 1293586)
-  bool mDidComplexBlendWithListInList;
+  uint32_t mComplexBlendsWithListInList;
 
-  static ID2D1Factory1 *mFactory;
-  static IDWriteFactory *mDWriteFactory;
+  static StaticRefPtr<ID2D1Factory1> mFactory;
   // This value is uesed to verify if the DrawTarget is created by a stale device.
   uint32_t mDeviceSeq;
 
   // List of effects we use
-  void EnsureLuminanceEffect();
+  bool EnsureLuminanceEffect();
   RefPtr<ID2D1Effect> mLuminanceEffect;
 };
 

@@ -24,19 +24,25 @@ LOCAL_INCLUDES += [
 UNIFIED_SOURCES += [
     'gfxVR.cpp',
     'gfxVROSVR.cpp',
-    'gfxVRPuppet.cpp',
     'ipc/VRLayerChild.cpp',
     'ipc/VRLayerParent.cpp',
     'ipc/VRManagerChild.cpp',
     'ipc/VRManagerParent.cpp',
     'VRDisplayClient.cpp',
-    'VRDisplayHost.cpp',
     'VRDisplayPresentation.cpp',
     'VRManager.cpp',
 ]
 
+# VRDisplayHost includes MacIOSurface.h which includes Mac headers
+# which define Size and Points types in the root namespace that
+# often conflict with our own types.
+SOURCES += [
+    'gfxVRPuppet.cpp',
+    'VRDisplayHost.cpp',
+]
+
 # Build OpenVR on Windows, Linux, and macOS desktop targets
-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('cocoa', 'uikit', 'windows', 'gtk2', 'gtk3'):
+if CONFIG['OS_TARGET'] in ('WINNT', 'Linux', 'Darwin'):
     DIRS += [
         'openvr',
     ]
@@ -44,7 +50,7 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('cocoa', 'uikit', 'windows', 'gtk2', 'gtk3')
         'gfxVROpenVR.cpp',
     ]
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
+if CONFIG['OS_TARGET'] == 'WINNT':
     SOURCES += [
         'gfxVROculus.cpp',
     ]

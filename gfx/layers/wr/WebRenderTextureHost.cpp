@@ -18,7 +18,6 @@ WebRenderTextureHost::WebRenderTextureHost(const SurfaceDescriptor& aDesc,
                                            wr::ExternalImageId& aExternalImageId)
   : TextureHost(aFlags)
   , mExternalImageId(aExternalImageId)
-  , mIsWrappingNativeHandle(false)
 {
   // The wrapped textureHost will be used in WebRender, and the WebRender could
   // run at another thread. It's hard to control the life-time when gecko
@@ -47,25 +46,6 @@ WebRenderTextureHost::CreateRenderTextureHost(const layers::SurfaceDescriptor& a
 {
   MOZ_ASSERT(aTexture);
 
-  switch (aDesc.type()) {
-    case SurfaceDescriptor::TSurfaceDescriptorBuffer: {
-      mIsWrappingNativeHandle = false;
-      break;
-    }
-#ifdef XP_MACOSX
-    case SurfaceDescriptor::TSurfaceDescriptorMacIOSurface: {
-      mIsWrappingNativeHandle = true;
-      break;
-    }
-#endif
-    case SurfaceDescriptor::TSurfaceDescriptorGPUVideo: {
-      mIsWrappingNativeHandle = !aTexture->HasIntermediateBuffer();
-      break;
-    }
-    default:
-      gfxCriticalError() << "No WR implement for texture type:" << aDesc.type();
-  }
-
   aTexture->CreateRenderTexture(mExternalImageId);
 }
 
@@ -80,7 +60,6 @@ void
 WebRenderTextureHost::Unlock()
 {
   MOZ_ASSERT_UNREACHABLE("unexpected to be called");
-  return;
 }
 
 bool
@@ -166,20 +145,20 @@ WebRenderTextureHost::GetWRImageKeys(nsTArray<wr::ImageKey>& aImageKeys,
 }
 
 void
-WebRenderTextureHost::AddWRImage(wr::WebRenderAPI* aAPI,
+WebRenderTextureHost::AddWRImage(wr::ResourceUpdateQueue& aResources,
                                  Range<const wr::ImageKey>& aImageKeys,
                                  const wr::ExternalImageId& aExtID)
 {
   MOZ_ASSERT(mWrappedTextureHost);
   MOZ_ASSERT(mExternalImageId == aExtID);
 
-  mWrappedTextureHost->AddWRImage(aAPI, aImageKeys, aExtID);
+  mWrappedTextureHost->AddWRImage(aResources, aImageKeys, aExtID);
 }
 
 void
 WebRenderTextureHost::PushExternalImage(wr::DisplayListBuilder& aBuilder,
-                                        const WrRect& aBounds,
-                                        const WrClipRegionToken aClip,
+                                        const wr::LayoutRect& aBounds,
+                                        const wr::LayoutRect& aClip,
                                         wr::ImageRendering aFilter,
                                         Range<const wr::ImageKey>& aImageKeys)
 {

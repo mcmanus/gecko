@@ -10,7 +10,7 @@
 "use strict";
 
 const {Task} = require("devtools/shared/task");
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 const {colorUtils} = require("devtools/shared/css/color");
 const {LocalizationHelper} = require("devtools/shared/l10n");
 const L10N = new LocalizationHelper("devtools/client/locales/inspector.properties");
@@ -265,6 +265,7 @@ ColorWidget.prototype = {
     this.element = this.parentEl.ownerDocument.createElementNS(XHTML_NS, "div");
 
     this.element.className = "colorwidget-container";
+    // eslint-disable-next-line no-unsanitized/property
     this.element.innerHTML = `
       <div class="colorwidget-top">
         <div class="colorwidget-fill"></div>

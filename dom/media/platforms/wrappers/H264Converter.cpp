@@ -32,10 +32,11 @@ H264Converter::H264Converter(PlatformDecoderModule* aPDM,
   , mType(aParams.mType)
   , mOnWaitingForKeyEvent(aParams.mOnWaitingForKeyEvent)
   , mDecoderOptions(aParams.mOptions)
+  , mRate(aParams.mRate)
 {
-  CreateDecoder(mOriginalConfig, aParams.mDiagnostics);
+  mLastError = CreateDecoder(mOriginalConfig, aParams.mDiagnostics);
   if (mDecoder) {
-    MOZ_ASSERT(mp4_demuxer::AnnexB::HasSPS(mOriginalConfig.mExtraData));
+    MOZ_ASSERT(mp4_demuxer::H264::HasSPS(mOriginalConfig.mExtraData));
     // The video metadata contains out of band SPS/PPS (AVC1) store it.
     mOriginalExtraData = mOriginalConfig.mExtraData;
   }
@@ -62,8 +63,8 @@ H264Converter::Decode(MediaRawData* aSample)
 {
   MOZ_RELEASE_ASSERT(mFlushPromise.IsEmpty(), "Flush operatin didn't complete");
 
-  MOZ_RELEASE_ASSERT(!mDecodePromiseRequest.Exists()
-                     && !mInitPromiseRequest.Exists(),
+  MOZ_RELEASE_ASSERT(!mDecodePromiseRequest.Exists() &&
+                       !mInitPromiseRequest.Exists(),
                      "Can't request a new decode until previous one completed");
 
   if (!mp4_demuxer::AnnexB::ConvertSampleToAVCC(aSample)) {
@@ -74,7 +75,14 @@ H264Converter::Decode(MediaRawData* aSample)
       __func__);
   }
 
-  nsresult rv;
+  if (!mp4_demuxer::AnnexB::IsAVCC(aSample)) {
+    return DecodePromise::CreateAndReject(
+      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                  RESULT_DETAIL("Invalid H264 content")),
+      __func__);
+  }
+
+  MediaResult rv(NS_OK);
   if (!mDecoder) {
     // It is not possible to create an AVCC H264 decoder without SPS.
     // As such, creation will fail if the extra_data just extracted doesn't
@@ -105,18 +113,15 @@ H264Converter::Decode(MediaRawData* aSample)
   }
 
   if (NS_FAILED(rv)) {
-    return DecodePromise::CreateAndReject(
-      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
-                  RESULT_DETAIL("Unable to create H264 decoder")),
-      __func__);
+    return DecodePromise::CreateAndReject(rv, __func__);
   }
 
   if (mNeedKeyframe && !aSample->mKeyframe) {
     return DecodePromise::CreateAndResolve(DecodedData(), __func__);
   }
 
-  if (!*mNeedAVCC
-      && !mp4_demuxer::AnnexB::ConvertSampleToAnnexB(aSample, mNeedKeyframe)) {
+  if (!*mNeedAVCC &&
+      !mp4_demuxer::AnnexB::ConvertSampleToAnnexB(aSample, mNeedKeyframe)) {
     return DecodePromise::CreateAndReject(
       MediaResult(NS_ERROR_OUT_OF_MEMORY,
                   RESULT_DETAIL("ConvertSampleToAnnexB")),
@@ -236,11 +241,11 @@ H264Converter::SetSeekThreshold(const media::TimeUnit& aTime)
   }
 }
 
-nsresult
+MediaResult
 H264Converter::CreateDecoder(const VideoInfo& aConfig,
                              DecoderDoctorDiagnostics* aDiagnostics)
 {
-  if (!mp4_demuxer::AnnexB::HasSPS(aConfig.mExtraData)) {
+  if (!mp4_demuxer::H264::HasSPS(aConfig.mExtraData)) {
     // nothing found yet, will try again later
     return NS_ERROR_NOT_INITIALIZED;
   }
@@ -250,20 +255,20 @@ H264Converter::CreateDecoder(const VideoInfo& aConfig,
   if (mp4_demuxer::H264::DecodeSPSFromExtraData(aConfig.mExtraData, spsdata)) {
     // Do some format check here.
     // WMF H.264 Video Decoder and Apple ATDecoder do not support YUV444 format.
-    if (spsdata.profile_idc == 244 /* Hi444PP */
-        || spsdata.chroma_format_idc == PDMFactory::kYUV444) {
-      mLastError = NS_ERROR_FAILURE;
+    if (spsdata.profile_idc == 244 /* Hi444PP */ ||
+        spsdata.chroma_format_idc == PDMFactory::kYUV444) {
       if (aDiagnostics) {
         aDiagnostics->SetVideoNotSupported();
       }
-      return NS_ERROR_FAILURE;
+      return MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                         RESULT_DETAIL("No support for YUV444 format."));
     }
   } else {
-    // SPS was invalid.
-    mLastError = NS_ERROR_FAILURE;
-    return NS_ERROR_FAILURE;
+    return MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                       RESULT_DETAIL("Invalid SPS NAL."));
   }
 
+  MediaResult error = NS_OK;
   mDecoder = mPDM->CreateVideoDecoder({
     aConfig,
     mTaskQueue,
@@ -273,12 +278,19 @@ H264Converter::CreateDecoder(const VideoInfo& aConfig,
     mGMPCrashHelper,
     mType,
     mOnWaitingForKeyEvent,
-    mDecoderOptions
+    mDecoderOptions,
+    mRate,
+    &error
   });
 
   if (!mDecoder) {
-    mLastError = NS_ERROR_FAILURE;
-    return NS_ERROR_FAILURE;
+    if (NS_FAILED(error)) {
+      // The decoder supports CreateDecoderParam::mError, returns the value.
+      return error;
+    } else {
+      return MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                         RESULT_DETAIL("Unable to create H264 decoder"));
+    }
   }
 
   mNeedKeyframe = true;
@@ -286,14 +298,14 @@ H264Converter::CreateDecoder(const VideoInfo& aConfig,
   return NS_OK;
 }
 
-nsresult
+MediaResult
 H264Converter::CreateDecoderAndInit(MediaRawData* aSample)
 {
   RefPtr<MediaByteBuffer> extra_data =
-    mp4_demuxer::AnnexB::ExtractExtraData(aSample);
-  bool inbandExtradata = mp4_demuxer::AnnexB::HasSPS(extra_data);
+    mp4_demuxer::H264::ExtractExtraData(aSample);
+  bool inbandExtradata = mp4_demuxer::H264::HasSPS(extra_data);
   if (!inbandExtradata &&
-      !mp4_demuxer::AnnexB::HasSPS(mCurrentConfig.mExtraData)) {
+      !mp4_demuxer::H264::HasSPS(mCurrentConfig.mExtraData)) {
     return NS_ERROR_NOT_INITIALIZED;
   }
 
@@ -301,7 +313,7 @@ H264Converter::CreateDecoderAndInit(MediaRawData* aSample)
     UpdateConfigFromExtraData(extra_data);
   }
 
-  nsresult rv =
+  MediaResult rv =
     CreateDecoder(mCurrentConfig, /* DecoderDoctorDiagnostics* */ nullptr);
 
   if (NS_SUCCEEDED(rv)) {
@@ -349,8 +361,8 @@ bool
 H264Converter::CanRecycleDecoder() const
 {
   MOZ_ASSERT(mDecoder);
-  return MediaPrefs::MediaDecoderCheckRecycling()
-         && mDecoder->SupportDecoderRecycling();
+  return MediaPrefs::MediaDecoderCheckRecycling() &&
+         mDecoder->SupportDecoderRecycling();
 }
 
 void
@@ -362,12 +374,11 @@ H264Converter::DecodeFirstSample(MediaRawData* aSample)
     return;
   }
 
-  if (!*mNeedAVCC
-      && !mp4_demuxer::AnnexB::ConvertSampleToAnnexB(aSample, mNeedKeyframe)) {
-    mDecodePromise.Reject(
-      MediaResult(NS_ERROR_OUT_OF_MEMORY,
-                  RESULT_DETAIL("ConvertSampleToAnnexB")),
-      __func__);
+  if (!*mNeedAVCC &&
+      !mp4_demuxer::AnnexB::ConvertSampleToAnnexB(aSample, mNeedKeyframe)) {
+    mDecodePromise.Reject(MediaResult(NS_ERROR_OUT_OF_MEMORY,
+                                      RESULT_DETAIL("ConvertSampleToAnnexB")),
+                          __func__);
     return;
   }
 
@@ -389,12 +400,12 @@ H264Converter::DecodeFirstSample(MediaRawData* aSample)
     ->Track(mDecodePromiseRequest);
 }
 
-nsresult
+MediaResult
 H264Converter::CheckForSPSChange(MediaRawData* aSample)
 {
   RefPtr<MediaByteBuffer> extra_data =
-    mp4_demuxer::AnnexB::ExtractExtraData(aSample);
-  if (!mp4_demuxer::AnnexB::HasSPS(extra_data)) {
+    mp4_demuxer::H264::ExtractExtraData(aSample);
+  if (!mp4_demuxer::H264::HasSPS(extra_data)) {
     MOZ_ASSERT(mCanRecycleDecoder.isSome());
     if (!*mCanRecycleDecoder) {
       // If the decoder can't be recycled, the out of band extradata will never
@@ -406,15 +417,15 @@ H264Converter::CheckForSPSChange(MediaRawData* aSample)
     // We now check if the out of band one has changed.
     // This scenario can only occur on Android with devices that can recycle a
     // decoder.
-    if (!mp4_demuxer::AnnexB::HasSPS(aSample->mExtraData) ||
-        mp4_demuxer::AnnexB::CompareExtraData(aSample->mExtraData,
-                                              mOriginalExtraData)) {
+    if (!mp4_demuxer::H264::HasSPS(aSample->mExtraData) ||
+        mp4_demuxer::H264::CompareExtraData(aSample->mExtraData,
+                                            mOriginalExtraData)) {
       return NS_OK;
     }
     extra_data = mOriginalExtraData = aSample->mExtraData;
   }
-  if (mp4_demuxer::AnnexB::CompareExtraData(extra_data,
-                                            mCurrentConfig.mExtraData)) {
+  if (mp4_demuxer::H264::CompareExtraData(extra_data,
+                                          mCurrentConfig.mExtraData)) {
     return NS_OK;
   }
 
@@ -501,7 +512,7 @@ void H264Converter::FlushThenShutdownDecoder(MediaRawData* aPendingSample)
                           return;
                         }
 
-                        nsresult rv = CreateDecoderAndInit(sample);
+                        MediaResult rv = CreateDecoderAndInit(sample);
                         if (rv == NS_ERROR_DOM_MEDIA_INITIALIZING_DECODER) {
                           // All good so far, will continue later.
                           return;
@@ -529,9 +540,8 @@ void
 H264Converter::UpdateConfigFromExtraData(MediaByteBuffer* aExtraData)
 {
   mp4_demuxer::SPSData spsdata;
-  if (mp4_demuxer::H264::DecodeSPSFromExtraData(aExtraData, spsdata)
-      && spsdata.pic_width > 0
-      && spsdata.pic_height > 0) {
+  if (mp4_demuxer::H264::DecodeSPSFromExtraData(aExtraData, spsdata) &&
+      spsdata.pic_width > 0 && spsdata.pic_height > 0) {
     mp4_demuxer::H264::EnsureSPSIsSane(spsdata);
     mCurrentConfig.mImage.width = spsdata.pic_width;
     mCurrentConfig.mImage.height = spsdata.pic_height;

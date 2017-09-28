@@ -122,7 +122,7 @@ class WindowsDllNopSpacePatcher
   // (This should be nsTArray, but non-XPCOM code uses this class.)
   static const size_t maxPatchedFns = 16;
   byteptr_t mPatchedFns[maxPatchedFns];
-  int mPatchedFnsLen;
+  size_t mPatchedFnsLen;
 
 public:
   WindowsDllNopSpacePatcher()
@@ -135,7 +135,7 @@ public:
   {
     // Restore the mov edi, edi to the beginning of each function we patched.
 
-    for (int i = 0; i < mPatchedFnsLen; i++) {
+    for (size_t i = 0; i < mPatchedFnsLen; i++) {
       byteptr_t fn = mPatchedFns[i];
 
       // Ensure we can write to the code.
@@ -396,7 +396,7 @@ public:
 #else
 #error "Unknown processor type"
 #endif
-      byteptr_t origBytes = *((byteptr_t*)p);
+      byteptr_t origBytes = (byteptr_t)DecodePointer(*((byteptr_t*)p));
 
       // ensure we can modify the original code
       AutoVirtualProtect protect(origBytes, nBytes, PAGE_EXECUTE_READWRITE);
@@ -408,9 +408,15 @@ public:
       // in the trampoline.
       intptr_t dest = (intptr_t)(p + sizeof(void*));
 #if defined(_M_IX86)
+      // Ensure the JMP from CreateTrampoline is where we expect it to be.
+      if (origBytes[0] != 0xE9)
+        continue;
       *((intptr_t*)(origBytes + 1)) =
         dest - (intptr_t)(origBytes + 5); // target displacement
 #elif defined(_M_X64)
+      // Ensure the MOV R11 from CreateTrampoline is where we expect it to be.
+      if (origBytes[0] != 0x49 || origBytes[1] != 0xBB)
+        continue;
       *((intptr_t*)(origBytes + 2)) = dest;
 #else
 #error "Unknown processor type"
@@ -736,7 +742,7 @@ protected:
 
     // We keep the address of the original function in the first bytes of
     // the trampoline buffer
-    *((void**)tramp) = aOrigFunction;
+    *((void**)tramp) = EncodePointer(aOrigFunction);
     tramp += sizeof(void*);
 
     byteptr_t origBytes = (byteptr_t)aOrigFunction;
@@ -903,7 +909,25 @@ protected:
           MOZ_ASSERT_UNREACHABLE("Unrecognized opcode sequence");
           return;
         }
-      } else if (origBytes[nOrigBytes] == 0x45) {
+      } else if (origBytes[nOrigBytes] == 0x44) {
+        // REX.R
+        COPY_CODES(1);
+
+        // TODO: Combine with the "0x89" case below in the REX.W section
+        if (origBytes[nOrigBytes] == 0x89) {
+          // mov r/m32, r32
+          COPY_CODES(1);
+          int len = CountModRmSib(origBytes + nOrigBytes);
+          if (len < 0) {
+            MOZ_ASSERT_UNREACHABLE("Unrecognized opcode sequence");
+            return;
+          }
+          COPY_CODES(len);
+        } else {
+          MOZ_ASSERT_UNREACHABLE("Unrecognized opcode sequence");
+          return;
+        }
+       } else if (origBytes[nOrigBytes] == 0x45) {
         // REX.R & REX.B
         COPY_CODES(1);
 

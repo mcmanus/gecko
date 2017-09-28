@@ -204,7 +204,7 @@ public:
     void SetFrom(const dom::ConstrainDOMStringParameters& aOther);
     ValueType Clamp(const ValueType& n) const;
     ValueType Get(const ValueType& defaultValue) const {
-      return Clamp(mIdeal.size() ? mIdeal : defaultValue);
+      return Clamp(mIdeal.empty() ? defaultValue : mIdeal);
     }
     bool Intersects(const StringRange& aOther) const;
     void Intersect(const StringRange& aOther);
@@ -226,6 +226,7 @@ public:
   StringRange mDeviceId;
   LongRange mViewportOffsetX, mViewportOffsetY, mViewportWidth, mViewportHeight;
   BooleanRange mEchoCancellation, mNoiseSuppression, mAutoGainControl;
+  LongRange mChannelCount;
 private:
   typedef NormalizedConstraintSet T;
 public:
@@ -258,7 +259,9 @@ public:
                       aOther.mNoiseSuppression,
                       advanced, aList)
   , mAutoGainControl(&T::mAutoGainControl, "autoGainControl",
-                     aOther.mAutoGainControl, advanced, aList) {}
+                     aOther.mAutoGainControl, advanced, aList)
+  , mChannelCount(&T::mChannelCount, "channelCount",
+                  aOther.mChannelCount, advanced, aList) {}
 };
 
 template<> bool NormalizedConstraintSet::Range<bool>::Merge(const Range& aOther);

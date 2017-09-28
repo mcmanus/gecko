@@ -7,10 +7,8 @@
 #include "jit/shared/CodeGenerator-shared-inl.h"
 
 #include "mozilla/DebugOnly.h"
-#include "mozilla/SizePrintfMacros.h"
 
 #include "jit/CompactBuffer.h"
-#include "jit/IonCaches.h"
 #include "jit/JitcodeMap.h"
 #include "jit/JitSpewer.h"
 #include "jit/MacroAssembler.h"
@@ -163,6 +161,10 @@ CodeGeneratorShared::generateEpilogue()
 bool
 CodeGeneratorShared::generateOutOfLineCode()
 {
+    // OOL paths should not attempt to use |current| as it's the last block
+    // instead of the block corresponding to the OOL path.
+    current = nullptr;
+
     for (size_t i = 0; i < outOfLineCode_.length(); i++) {
         // Add native => bytecode mapping entries for OOL sites.
         // Not enabled on wasm yet since it doesn't contain bytecode mappings.
@@ -234,7 +236,7 @@ CodeGeneratorShared::addNativeToBytecodeEntry(const BytecodeSite* site)
         // bytecodeOffset, but the nativeOffset has changed, do nothing.
         // The same site just generated some more code.
         if (lastEntry.tree == tree && lastEntry.pc == pc) {
-            JitSpew(JitSpew_Profiling, " => In-place update [%" PRIuSIZE "-%" PRIu32 "]",
+            JitSpew(JitSpew_Profiling, " => In-place update [%zu-%" PRIu32 "]",
                     lastEntry.nativeOffset.offset(), nativeOffset);
             return true;
         }
@@ -281,7 +283,7 @@ CodeGeneratorShared::dumpNativeToBytecodeEntries()
 {
 #ifdef JS_JITSPEW
     InlineScriptTree* topTree = gen->info().inlineScriptTree();
-    JitSpewStart(JitSpew_Profiling, "Native To Bytecode Entries for %s:%" PRIuSIZE "\n",
+    JitSpewStart(JitSpew_Profiling, "Native To Bytecode Entries for %s:%zu\n",
                  topTree->script()->filename(), topTree->script()->lineno());
     for (unsigned i = 0; i < nativeToBytecodeList_.length(); i++)
         dumpNativeToBytecodeEntry(i);
@@ -304,7 +306,7 @@ CodeGeneratorShared::dumpNativeToBytecodeEntry(uint32_t idx)
         if (nextRef->tree == ref.tree)
             pcDelta = nextRef->pc - ref.pc;
     }
-    JitSpewStart(JitSpew_Profiling, "    %08" PRIxSIZE " [+%-6d] => %-6ld [%-4d] {%-10s} (%s:%" PRIuSIZE,
+    JitSpewStart(JitSpew_Profiling, "    %08zx [+%-6d] => %-6ld [%-4d] {%-10s} (%s:%zu",
                  ref.nativeOffset.offset(),
                  nativeDelta,
                  (long) (ref.pc - script->code()),
@@ -313,7 +315,7 @@ CodeGeneratorShared::dumpNativeToBytecodeEntry(uint32_t idx)
                  script->filename(), script->lineno());
 
     for (tree = tree->caller(); tree; tree = tree->caller()) {
-        JitSpewCont(JitSpew_Profiling, " <= %s:%" PRIuSIZE, tree->script()->filename(),
+        JitSpewCont(JitSpew_Profiling, " <= %s:%zu", tree->script()->filename(),
                                                     tree->script()->lineno());
     }
     JitSpewCont(JitSpew_Profiling, ")");
@@ -603,7 +605,7 @@ CodeGeneratorShared::encode(LSnapshot* snapshot)
         lirOpcode = ins->op();
         lirId = ins->id();
         if (ins->mirRaw()) {
-            mirOpcode = ins->mirRaw()->op();
+            mirOpcode = uint32_t(ins->mirRaw()->op());
             mirId = ins->mirRaw()->id();
             if (ins->mirRaw()->trackedPc())
                 pcOpcode = *ins->mirRaw()->trackedPc();
@@ -929,7 +931,7 @@ CodeGeneratorShared::generateCompactTrackedOptimizationsMap(JSContext* cx, JitCo
             "== Compact Native To Optimizations Map [%p-%p] size %u",
             data, data + trackedOptimizationsMapSize_, trackedOptimizationsMapSize_);
     JitSpew(JitSpew_OptimizationTrackingExtended,
-            "     with type list of length %" PRIuSIZE ", size %" PRIuSIZE,
+            "     with type list of length %zu, size %zu",
             allTypes->length(), allTypes->length() * sizeof(IonTrackedTypeWithAddendum));
 
     return true;
@@ -1345,7 +1347,7 @@ CodeGeneratorShared::callVM(const VMFunction& fun, LInstruction* ins, const Regi
 {
     // If we're calling a function with an out parameter type of double, make
     // sure we have an FPU.
-    MOZ_ASSERT_IF(fun.outParam == Type_Double, GetJitContext()->runtime->jitSupportsFloatingPoint());
+    MOZ_ASSERT_IF(fun.outParam == Type_Double, gen->runtime->jitSupportsFloatingPoint());
 
 #ifdef DEBUG
     if (ins->mirRaw()) {

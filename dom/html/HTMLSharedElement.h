@@ -8,9 +8,6 @@
 #define mozilla_dom_HTMLSharedElement_h
 
 #include "nsIDOMHTMLBaseElement.h"
-#include "nsIDOMHTMLDirectoryElement.h"
-#include "nsIDOMHTMLQuoteElement.h"
-#include "nsIDOMHTMLHeadElement.h"
 #include "nsIDOMHTMLHtmlElement.h"
 #include "nsGenericHTMLElement.h"
 
@@ -24,9 +21,6 @@ namespace dom {
 
 class HTMLSharedElement final : public nsGenericHTMLElement,
                                 public nsIDOMHTMLBaseElement,
-                                public nsIDOMHTMLDirectoryElement,
-                                public nsIDOMHTMLQuoteElement,
-                                public nsIDOMHTMLHeadElement,
                                 public nsIDOMHTMLHtmlElement
 {
 public:
@@ -44,12 +38,6 @@ public:
 
   // nsIDOMHTMLBaseElement
   NS_DECL_NSIDOMHTMLBASEELEMENT
-
-  // nsIDOMHTMLQuoteElement
-  NS_DECL_NSIDOMHTMLQUOTEELEMENT
-
-  // nsIDOMHTMLHeadElement
-  NS_DECL_NSIDOMHTMLHEADELEMENT
 
   // nsIDOMHTMLHtmlElement
   NS_DECL_NSIDOMHTMLHTMLELEMENT
@@ -147,7 +135,11 @@ public:
   }
 
   // HTMLQuoteElement
-  // The XPCOM GetCite works fine for us
+  void GetCite(nsString& aCite)
+  {
+    GetHTMLURIAttr(nsGkAtoms::cite, aCite);
+  }
+
   void SetCite(const nsAString& aValue, ErrorResult& aResult)
   {
     MOZ_ASSERT(mNodeInfo->Equals(nsGkAtoms::q) ||

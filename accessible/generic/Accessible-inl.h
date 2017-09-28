@@ -77,7 +77,7 @@ Accessible::IsSearchbox() const
   return (roleMapEntry && roleMapEntry->Is(nsGkAtoms::searchbox)) ||
     (mContent->IsHTMLElement(nsGkAtoms::input) &&
      mContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
-                           nsGkAtoms::textInputType, eCaseMatters));
+                           nsGkAtoms::search, eCaseMatters));
 }
 
 inline bool
@@ -95,7 +95,13 @@ Accessible::HasNumericValue() const
     return true;
 
   const nsRoleMapEntry* roleMapEntry = ARIARoleMap();
-  return roleMapEntry && roleMapEntry->valueRule != eNoValue;
+  if (!roleMapEntry || roleMapEntry->valueRule == eNoValue)
+    return false;
+
+  if (roleMapEntry->valueRule == eHasValueMinMaxIfFocusable)
+    return InteractiveState() & states::FOCUSABLE;
+
+  return true;
 }
 
 inline void

@@ -153,12 +153,14 @@ WebGLBuffer::BufferData(GLenum target, size_t size, const void* data, GLenum usa
         gl->fBufferData(target, size, uploadData, usage);
     }
 
+    mContext->OnDataAllocCall();
+
     mUsage = usage;
     mByteLength = size;
     mIndexCache = Move(newIndexCache);
 
     if (mIndexCache) {
-        if (mIndexRanges.size()) {
+        if (!mIndexRanges.empty()) {
             mContext->GeneratePerfWarning("[%p] Invalidating %u ranges.", this,
                                           uint32_t(mIndexRanges.size()));
             mIndexRanges.clear();
@@ -249,7 +251,7 @@ WebGLBuffer::InvalidateCacheRange(size_t byteOffset, size_t byteLength) const
         invalids.push_back(range);
     }
 
-    if (invalids.size()) {
+    if (!invalids.empty()) {
         mContext->GeneratePerfWarning("[%p] Invalidating %u/%u ranges.", this,
                                       uint32_t(invalids.size()),
                                       uint32_t(mIndexRanges.size()));

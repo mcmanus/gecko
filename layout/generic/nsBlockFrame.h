@@ -44,6 +44,8 @@ class nsBlockInFlowLineIterator;
 class nsBulletFrame;
 namespace mozilla {
 class BlockReflowInput;
+class ServoRestyleState;
+class StyleSetHandle;
 } // namespace mozilla
 
 /**
@@ -138,7 +140,6 @@ public:
   nsSplittableType GetSplittableType() const override;
   bool IsFloatContainingBlock() const override;
   void BuildDisplayList(nsDisplayListBuilder* aBuilder,
-                        const nsRect& aDirtyRect,
                         const nsDisplayListSet& aLists) override;
   bool IsFrameOfType(uint32_t aFlags) const override
   {
@@ -270,6 +271,16 @@ public:
     return outside ? outside : GetInsideBullet();
   }
 
+  /**
+   * @return the first-letter frame or nullptr if we don't have one.
+   */
+  nsIFrame* GetFirstLetter() const;
+
+  /**
+   * @return the ::first-line frame or nullptr if we don't have one.
+   */
+  nsIFrame* GetFirstLineFrame() const;
+
   void MarkIntrinsicISizesDirty() override;
 private:
   void CheckIntrinsicCacheAgainstShrinkWrapState();
@@ -380,9 +391,9 @@ public:
    * Must only be called while this block frame is in reflow.
    * aFloatStatus must be the float's true, unmodified reflow status.
    */
-  nsresult SplitFloat(BlockReflowInput& aState,
-                      nsIFrame* aFloat,
-                      nsReflowStatus aFloatStatus);
+  void SplitFloat(BlockReflowInput& aState,
+                  nsIFrame* aFloat,
+                  const nsReflowStatus& aFloatStatus);
 
   /**
    * Walks up the frame tree, starting with aCandidate, and returns the first
@@ -394,6 +405,16 @@ public:
     nsLineList mLines;
     nsFrameList mFrames;
   };
+
+  /**
+   * Update the styles of our various pseudo-elements (bullets, first-line,
+   * etc, but _not_ first-letter).
+   */
+  void UpdatePseudoElementStyles(mozilla::ServoRestyleState& aRestyleState);
+
+  // Update our first-letter styles during stylo post-traversal.  This needs to
+  // be done at a slightly different time than our other pseudo-elements.
+  void UpdateFirstLetterStyle(mozilla::ServoRestyleState& aRestyleState);
 
 protected:
   explicit nsBlockFrame(nsStyleContext* aContext, ClassID aID = kClassID)
@@ -902,6 +923,13 @@ protected:
   nsFrameList* EnsurePushedFloats();
   // Remove and return the pushed floats list.
   nsFrameList* RemovePushedFloats();
+
+  // Resolve a style context for our bullet frame.  aType should be
+  // mozListBullet or mozListNumber.  Passing in the style set is an
+  // optimization, because all callsites have it.
+  already_AddRefed<nsStyleContext> ResolveBulletStyle(
+    mozilla::CSSPseudoElementType aType,
+    mozilla::StyleSetHandle aStyleSet);
 
 #ifdef DEBUG
   void VerifyLines(bool aFinalCheckOK);

@@ -35,17 +35,19 @@ using namespace mozilla::net;
 
 class nsFileCopyEvent : public Runnable {
 public:
-  nsFileCopyEvent(nsIOutputStream *dest, nsIInputStream *source, int64_t len)
-    : mDest(dest)
+  nsFileCopyEvent(nsIOutputStream* dest, nsIInputStream* source, int64_t len)
+    : mozilla::Runnable("nsFileCopyEvent")
+    , mDest(dest)
     , mSource(source)
     , mLen(len)
     , mStatus(NS_OK)
-    , mInterruptStatus(NS_OK) {
+    , mInterruptStatus(NS_OK)
+  {
   }
 
   // Read the current status of the file copy operation.
   nsresult Status() { return mStatus; }
-  
+
   // Call this method to perform the file copy synchronously.
   void DoCopy();
 
@@ -112,7 +114,7 @@ nsFileCopyEvent::DoCopy()
       mSink->OnTransportStatus(nullptr, NS_NET_STATUS_WRITING, progress,
                                mLen);
     }
-                               
+
     len -= num;
   }
 
@@ -212,7 +214,7 @@ nsFileUploadContentStream::ReadSegments(nsWriteSegmentFun fun, void *closure,
     // Inform the caller that they will have to wait for the copy operation to
     // complete asynchronously.  We'll kick of the copy operation once they
     // call AsyncWait.
-    return NS_BASE_STREAM_WOULD_BLOCK;  
+    return NS_BASE_STREAM_WOULD_BLOCK;
   }
 
   // Perform copy synchronously, and then close out the stream.
@@ -233,7 +235,9 @@ nsFileUploadContentStream::AsyncWait(nsIInputStreamCallback *callback,
 
   if (IsNonBlocking()) {
     nsCOMPtr<nsIRunnable> callback =
-      NewRunnableMethod(this, &nsFileUploadContentStream::OnCopyComplete);
+      NewRunnableMethod("nsFileUploadContentStream::OnCopyComplete",
+                        this,
+                        &nsFileUploadContentStream::OnCopyComplete);
     mCopyEvent->Dispatch(callback, mSink, target);
   }
 
@@ -251,7 +255,7 @@ nsFileUploadContentStream::OnCopyComplete()
 
 //-----------------------------------------------------------------------------
 
-nsFileChannel::nsFileChannel(nsIURI *uri) 
+nsFileChannel::nsFileChannel(nsIURI *uri)
   : mFileURI(uri)
 {
 }
@@ -372,7 +376,7 @@ nsFileChannel::OpenContentStream(bool async, nsIInputStream **result,
   rv = NS_GetFileProtocolHandler(getter_AddRefs(fileHandler));
   if (NS_FAILED(rv))
     return rv;
-    
+
   nsCOMPtr<nsIURI> newURI;
   rv = fileHandler->ReadURLFile(file, getter_AddRefs(newURI));
   if (NS_SUCCEEDED(rv)) {
@@ -434,7 +438,7 @@ nsFileChannel::OpenContentStream(bool async, nsIInputStream **result,
       int64_t size;
       rv = file->GetFileSize(&size);
       if (NS_FAILED(rv)) {
-        if (async && 
+        if (async &&
             (NS_ERROR_FILE_NOT_FOUND == rv ||
              NS_ERROR_FILE_TARGET_DOES_NOT_EXIST == rv)) {
           size = 0;

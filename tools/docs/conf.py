@@ -16,15 +16,15 @@ topsrcdir = os.path.normpath(os.path.join(OUR_DIR, '..', '..'))
 
 EXTRA_PATHS = (
     'layout/tools/reftest',
-    'python/futures',
-    'python/jsmin',
     'python/mach',
     'python/mozbuild',
     'python/mozversioncontrol',
-    'python/which',
     'testing/mozbase/manifestparser',
     'testing/mozbase/mozfile',
     'testing/mozbase/mozprocess',
+    'third_party/python/futures',
+    'third_party/python/jsmin',
+    'third_party/python/which',
 )
 
 sys.path[:0] = [os.path.join(topsrcdir, p) for p in EXTRA_PATHS]
@@ -81,3 +81,5 @@ else:
 
 html_static_path = ['_static']
 htmlhelp_basename = 'MozillaTreeDocs'
+
+moz_project_name = 'main'

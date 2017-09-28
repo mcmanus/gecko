@@ -885,7 +885,7 @@ public:
   void Overload19(JSContext*, const Dict&);
   void Overload20(JSContext*, const Dict&);
   void Overload20(const Sequence<int32_t>&);
-  
+
   // Variadic handling
   void PassVariadicThirdArg(const nsAString&, int32_t,
                             const Sequence<OwningNonNull<TestInterface> >&);
@@ -977,6 +977,10 @@ public:
   void SetDashed_attribute(int8_t);
   int8_t Dashed_attribute();
   void Dashed_method();
+
+  bool NonEnumerableAttr() const;
+  void SetNonEnumerableAttr(bool);
+  void NonEnumerableMethod();
 
   // Methods and properties imported via "implements"
   bool ImplementedProperty();

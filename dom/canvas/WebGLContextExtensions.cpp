@@ -10,6 +10,7 @@
 #include "GLContext.h"
 
 #include "nsString.h"
+#include "nsContentUtils.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "AccessCheck.h"
@@ -142,11 +143,11 @@ WebGLContext::IsExtensionSupported(WebGLExtensionID ext) const
     case WebGLExtensionID::WEBGL_compressed_texture_s3tc:
         return WebGLExtensionCompressedTextureS3TC::IsSupported(this);
     case WebGLExtensionID::WEBGL_compressed_texture_s3tc_srgb:
-        return WebGLExtensionCompressedTextureS3TC::IsSupported(this) &&
-               gl->IsExtensionSupported(gl::GLContext::EXT_texture_sRGB);
+        return WebGLExtensionCompressedTextureS3TC_SRGB::IsSupported(this);
     case WebGLExtensionID::WEBGL_debug_renderer_info:
         return Preferences::GetBool("webgl.enable-debug-renderer-info", false);
-
+    case WebGLExtensionID::WEBGL_debug_shaders:
+        return !nsContentUtils::ShouldResistFingerprinting();
     case WebGLExtensionID::WEBGL_lose_context:
         // We always support this extension.
         return true;
@@ -465,7 +466,9 @@ WebGLContext::GetSupportedExtensions(dom::Nullable< nsTArray<nsString> >& retval
     nsTArray<nsString>& arr = retval.SetValue();
 
     for (size_t i = 0; i < size_t(WebGLExtensionID::Max); i++) {
-        WebGLExtensionID extension = WebGLExtensionID(i);
+        const auto extension = WebGLExtensionID(i);
+        if (extension == WebGLExtensionID::MOZ_debug)
+            continue; // Hide MOZ_debug from this list.
 
         if (IsExtensionSupported(callerType, extension)) {
             const char* extStr = GetExtensionString(extension);

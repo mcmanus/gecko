@@ -59,10 +59,6 @@ dictionary RTCOfferOptions : RTCOfferAnswerOptions {
   long    offerToReceiveVideo;
   long    offerToReceiveAudio;
   boolean iceRestart = false;
-
-  // Mozilla proprietary options (at risk: Bug 1196974)
-  boolean mozDontOfferDataChannel;
-  boolean mozBundleOnly;
 };
 
 interface RTCDataChannel;
@@ -86,7 +82,11 @@ interface RTCPeerConnection : EventTarget  {
   Promise<void> setLocalDescription (RTCSessionDescriptionInit description);
   Promise<void> setRemoteDescription (RTCSessionDescriptionInit description);
   readonly attribute RTCSessionDescription? localDescription;
+  readonly attribute RTCSessionDescription? currentLocalDescription;
+  readonly attribute RTCSessionDescription? pendingLocalDescription;
   readonly attribute RTCSessionDescription? remoteDescription;
+  readonly attribute RTCSessionDescription? currentRemoteDescription;
+  readonly attribute RTCSessionDescription? pendingRemoteDescription;
   readonly attribute RTCSignalingState signalingState;
   Promise<void> addIceCandidate ((RTCIceCandidateInit or RTCIceCandidate)? candidate);
   readonly attribute boolean? canTrickleIceCandidates;

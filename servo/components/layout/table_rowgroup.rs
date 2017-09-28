@@ -9,7 +9,8 @@
 use app_units::Au;
 use block::{BlockFlow, ISizeAndMarginsComputer};
 use context::LayoutContext;
-use display_list_builder::DisplayListBuildState;
+use display_list_builder::{BlockFlowDisplayListBuilding, DisplayListBuildState};
+use display_list_builder::{NEVER_CREATES_CONTAINING_BLOCK, StackingContextCollectionState};
 use euclid::Point2D;
 use flow::{Flow, FlowClass, OpaqueFlow};
 use fragment::{Fragment, FragmentBorderBoxIterator, Overflow};
@@ -20,7 +21,7 @@ use std::fmt;
 use std::iter::{IntoIterator, Iterator, Peekable};
 use style::computed_values::{border_collapse, border_spacing};
 use style::logical_geometry::LogicalSize;
-use style::properties::ServoComputedValues;
+use style::properties::ComputedValues;
 use table::{ColumnIntrinsicInlineSize, InternalTable, TableLikeFlow};
 
 /// A table formatting context.
@@ -54,10 +55,7 @@ impl TableRowGroupFlow {
         TableRowGroupFlow {
             block_flow: BlockFlow::from_fragment(fragment),
             column_intrinsic_inline_sizes: Vec::new(),
-            spacing: border_spacing::T {
-                horizontal: Au(0),
-                vertical: Au(0),
-            },
+            spacing: border_spacing::T::zero(),
             collapsed_inline_direction_border_widths_for_table: Vec::new(),
             collapsed_block_direction_border_widths_for_table: Vec::new(),
         }
@@ -161,11 +159,11 @@ impl Flow for TableRowGroupFlow {
 
     fn assign_block_size(&mut self, _: &LayoutContext) {
         debug!("assign_block_size: assigning block_size for table_rowgroup");
-        self.block_flow.assign_block_size_for_table_like_flow(self.spacing.vertical)
+        self.block_flow.assign_block_size_for_table_like_flow(self.spacing.vertical());
     }
 
-    fn compute_absolute_position(&mut self, layout_context: &LayoutContext) {
-        self.block_flow.compute_absolute_position(layout_context)
+    fn compute_stacking_relative_position(&mut self, layout_context: &LayoutContext) {
+        self.block_flow.compute_stacking_relative_position(layout_context)
     }
 
     fn update_late_computed_inline_position_if_necessary(&mut self, inline_position: Au) {
@@ -181,16 +179,24 @@ impl Flow for TableRowGroupFlow {
         self.block_flow.build_display_list(state);
     }
 
-    fn collect_stacking_contexts(&mut self, state: &mut DisplayListBuildState) {
-        self.block_flow.collect_stacking_contexts(state);
+    fn collect_stacking_contexts(&mut self, state: &mut StackingContextCollectionState) {
+        self.block_flow.collect_stacking_contexts_for_block(state, NEVER_CREATES_CONTAINING_BLOCK);
     }
 
-    fn repair_style(&mut self, new_style: &::StyleArc<ServoComputedValues>) {
+    fn repair_style(&mut self, new_style: &::ServoArc<ComputedValues>) {
         self.block_flow.repair_style(new_style)
     }
 
     fn compute_overflow(&self) -> Overflow {
         self.block_flow.compute_overflow()
+    }
+
+    fn contains_roots_of_absolute_flow_tree(&self) -> bool {
+        self.block_flow.contains_roots_of_absolute_flow_tree()
+    }
+
+    fn is_absolute_containing_block(&self) -> bool {
+        self.block_flow.is_absolute_containing_block()
     }
 
     fn generated_containing_block_size(&self, flow: OpaqueFlow) -> LogicalSize<Au> {

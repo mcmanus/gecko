@@ -42,21 +42,8 @@ public:
     //
     // If you need to use tail dispatch on other XPCOM threads, you'll need to
     // implement an nsIThreadObserver to fire the tail dispatcher at the
-    // appropriate times.
-    nsCOMPtr<nsIThread> thread(do_QueryInterface(aTarget));
-    bool isOnCurrentThread = false;
-    aTarget->IsOnCurrentThread(&isOnCurrentThread);
-
-    MOZ_ASSERT_IF(aRequireTailDispatch,
-      (thread && NS_IsMainThread() && NS_GetCurrentThread() == thread) ||
-      (!thread && NS_IsMainThread() && isOnCurrentThread));
-
-    // XXX Bug 1323742:
-    // We hold mRunningThread for IsCurrentThreadIn() for now.
-    // This shall be replaced by this == GetCurrent() in the future in
-    // AbstractThread perspective instead of PR_Thread perspective.
-    mRunningThread = thread ? thread.get() : NS_GetCurrentThread();
-    MOZ_ASSERT(mRunningThread);
+    // appropriate times. You will also need to modify this assertion.
+    MOZ_ASSERT_IF(aRequireTailDispatch, NS_IsMainThread() && aTarget->IsOnCurrentThread());
   }
 
   virtual void Dispatch(already_AddRefed<nsIRunnable> aRunnable,
@@ -80,16 +67,13 @@ public:
 
   virtual bool IsCurrentThreadIn() override
   {
-    // Compare NSPR threads so that this works after shutdown when
-    // NS_GetCurrentThread starts returning null.
-    PRThread* thread = nullptr;
-    mRunningThread->GetPRThread(&thread);
-    bool in = PR_GetCurrentThread() == thread;
-    return in;
+    return mTarget->IsOnCurrentThread();
   }
 
   void FireTailDispatcher()
   {
+    AutoEnter context(this);
+
     MOZ_DIAGNOSTIC_ASSERT(mTailDispatcher.isSome());
     mTailDispatcher.ref().DrainDirectTasks();
     mTailDispatcher.reset();
@@ -97,14 +81,14 @@ public:
 
   virtual TaskDispatcher& TailDispatcher() override
   {
-    // See the comment in the constructor.
-    MOZ_ASSERT(mRunningThread ==
-      static_cast<EventTargetWrapper*>(sMainThread.get())->mRunningThread);
     MOZ_ASSERT(IsCurrentThreadIn());
     if (!mTailDispatcher.isSome()) {
       mTailDispatcher.emplace(/* aIsTailDispatcher = */ true);
 
-      nsCOMPtr<nsIRunnable> event = NewRunnableMethod(this, &EventTargetWrapper::FireTailDispatcher);
+      nsCOMPtr<nsIRunnable> event =
+        NewRunnableMethod("EventTargetWrapper::FireTailDispatcher",
+                          this,
+                          &EventTargetWrapper::FireTailDispatcher);
       nsContentUtils::RunInStableState(event.forget());
     }
 
@@ -154,7 +138,8 @@ private:
     explicit Runner(EventTargetWrapper* aThread,
                     already_AddRefed<nsIRunnable> aRunnable,
                     bool aDrainDirectTasks)
-      : mThread(aThread)
+      : CancelableRunnable("EventTargetWrapper::Runner")
+      , mThread(aThread)
       , mRunnable(aRunnable)
       , mDrainDirectTasks(aDrainDirectTasks)
     {
@@ -311,7 +296,6 @@ AbstractThread::InitMainThread()
   if (!sCurrentThreadTLS.init()) {
     MOZ_CRASH();
   }
-  sCurrentThreadTLS.set(sMainThread);
 }
 
 void
@@ -344,7 +328,8 @@ AbstractThread::CreateXPCOMThreadWrapper(nsIThread* aThread, bool aRequireTailDi
   // target thread. This ensures that sCurrentThreadTLS is as expected by
   // AbstractThread::GetCurrent() on the target thread.
   nsCOMPtr<nsIRunnable> r =
-    NS_NewRunnableFunction([wrapper]() { sCurrentThreadTLS.set(wrapper); });
+    NS_NewRunnableFunction("AbstractThread::CreateXPCOMThreadWrapper",
+                           [wrapper]() { sCurrentThreadTLS.set(wrapper); });
   aThread->Dispatch(r.forget(), NS_DISPATCH_NORMAL);
   return wrapper.forget();
 }

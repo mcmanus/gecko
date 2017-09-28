@@ -2,15 +2,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-'use strict';
+"use strict";
 
 /* import-globals-from ../mochitest/common.js */
 /* import-globals-from events.js */
 
 /* exported Logger, MOCHITESTS_DIR, invokeSetAttribute, invokeFocus,
-            invokeSetStyle, getAccessibleDOMNodeID,
+            invokeSetStyle, getAccessibleDOMNodeID, getAccessibleTagName,
             addAccessibleTask, findAccessibleChildByID, isDefunct,
-            CURRENT_CONTENT_DIR, loadScripts, loadFrameScripts, Cc, Cu */
+            CURRENT_CONTENT_DIR, loadScripts, loadFrameScripts, snippetToURL,
+            Cc, Cu, arrayFromChildren */
 
 const { interfaces: Ci, utils: Cu, classes: Cc } = Components;
 
@@ -18,18 +19,20 @@ const { interfaces: Ci, utils: Cu, classes: Cc } = Components;
  * Current browser test directory path used to load subscripts.
  */
 const CURRENT_DIR =
-  'chrome://mochitests/content/browser/accessible/tests/browser/';
+  "chrome://mochitests/content/browser/accessible/tests/browser/";
 /**
  * A11y mochitest directory where we find common files used in both browser and
  * plain tests.
  */
 const MOCHITESTS_DIR =
-  'chrome://mochitests/content/a11y/accessible/tests/mochitest/';
+  "chrome://mochitests/content/a11y/accessible/tests/mochitest/";
 /**
  * A base URL for test files used in content.
  */
 const CURRENT_CONTENT_DIR =
-  'http://example.com/browser/accessible/tests/browser/';
+  "http://example.com/browser/accessible/tests/browser/";
+
+const LOADED_FRAMESCRIPTS = new Map();
 
 /**
  * Used to dump debug information.
@@ -160,7 +163,7 @@ function invokeFocus(browser, id) {
  */
 function loadScripts(...scripts) {
   for (let script of scripts) {
-    let path = typeof script === 'string' ? `${CURRENT_DIR}${script}` :
+    let path = typeof script === "string" ? `${CURRENT_DIR}${script}` :
       `${script.dir}${script.name}`;
     Services.scriptloader.loadSubScript(path, this);
   }
@@ -175,8 +178,8 @@ function loadFrameScripts(browser, ...scripts) {
   let mm = browser.messageManager;
   for (let script of scripts) {
     let frameScript;
-    if (typeof script === 'string') {
-      if (script.includes('.js')) {
+    if (typeof script === "string") {
+      if (script.includes(".js")) {
         // If script string includes a .js extention, assume it is a script
         // path.
         frameScript = `${CURRENT_DIR}${script}`;
@@ -188,8 +191,43 @@ function loadFrameScripts(browser, ...scripts) {
       // Script is a object that has { dir, name } format.
       frameScript = `${script.dir}${script.name}`;
     }
+
+    let loadedScriptSet = LOADED_FRAMESCRIPTS.get(frameScript);
+    if (!loadedScriptSet) {
+      loadedScriptSet = new WeakSet();
+      LOADED_FRAMESCRIPTS.set(frameScript, loadedScriptSet);
+    } else if (loadedScriptSet.has(browser)) {
+      continue;
+    }
+
     mm.loadFrameScript(frameScript, false, true);
+    loadedScriptSet.add(browser);
   }
+}
+
+/**
+ * Takes an HTML snippet and returns an encoded URI for a full document
+ * with the snippet.
+ * @param {String} snippet   a markup snippet.
+ * @param {Object} bodyAttrs extra attributes to use in the body tag. Default is
+ *                           { id: "body "}.
+ * @return {String} a base64 encoded data url of the document container the
+ *                  snippet.
+ **/
+function snippetToURL(snippet, bodyAttrs = {}) {
+  let attrs = Object.assign({}, { id: "body" }, bodyAttrs);
+  let attrsString = Object.entries(attrs).map(
+    ([attr, value]) => `${attr}=${JSON.stringify(value)}`).join(" ");
+  let encodedDoc = btoa(
+    `<html>
+      <head>
+        <meta charset="utf-8"/>
+        <title>Accessibility Test</title>
+      </head>
+      <body ${attrsString}>${snippet}</body>
+    </html>`);
+
+  return `data:text/html;charset=utf-8;base64,${encodedDoc}`;
 }
 
 /**
@@ -204,31 +242,22 @@ function loadFrameScripts(browser, ...scripts) {
 function addAccessibleTask(doc, task) {
   add_task(async function() {
     let url;
-    if (doc.includes('doc_')) {
+    if (doc.includes("doc_")) {
       url = `${CURRENT_CONTENT_DIR}e10s/${doc}`;
     } else {
-      // Assume it's a markup snippet.
-      url = "data:text/html;charset=utf-8;base64,";
-      url += btoa(
-        `<html>
-          <head>
-            <meta charset="utf-8"/>
-            <title>Accessibility Test</title>
-          </head>
-          <body id="body">${doc}</body>
-        </html>`);
+      url = snippetToURL(doc);
     }
 
     registerCleanupFunction(() => {
-      let observers = Services.obs.enumerateObservers('accessible-event');
+      let observers = Services.obs.enumerateObservers("accessible-event");
       while (observers.hasMoreElements()) {
         Services.obs.removeObserver(
           observers.getNext().QueryInterface(Ci.nsIObserver),
-          'accessible-event');
+          "accessible-event");
       }
     });
 
-    let onDocLoad = waitForEvent(EVENT_DOCUMENT_LOAD_COMPLETE, 'body');
+    let onDocLoad = waitForEvent(EVENT_DOCUMENT_LOAD_COMPLETE, "body");
 
     await BrowserTestUtils.withNewTab({
       gBrowser,
@@ -246,8 +275,8 @@ function addAccessibleTask(doc, task) {
       await SimpleTest.promiseFocus(browser);
 
       loadFrameScripts(browser,
-        'let { document, window, navigator } = content;',
-        { name: 'common.js', dir: MOCHITESTS_DIR });
+        "let { document, window, navigator } = content;",
+        { name: "common.js", dir: MOCHITESTS_DIR });
 
       Logger.log(
         `e10s enabled: ${Services.appinfo.browserTabsRemoteAutostart}`);
@@ -278,6 +307,19 @@ function isDefunct(accessible) {
     }
   }
   return defunct;
+}
+
+/**
+ * Get the DOM tag name for a given accessible.
+ * @param  {nsIAccessible}  accessible accessible
+ * @return {String?}                   tag name of associated DOM node, or null.
+ */
+function getAccessibleTagName(acc) {
+  try {
+    return acc.attributes.getStringProperty("tag");
+  } catch (e) {
+    return null;
+  }
 }
 
 /**
@@ -315,4 +357,9 @@ function queryInterfaces(accessible, interfaces) {
   }
 
   return accessible;
+}
+
+function arrayFromChildren(accessible) {
+  return Array.from({ length: accessible.childCount }, (c, i) =>
+    accessible.getChildAt(i));
 }

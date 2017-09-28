@@ -3,7 +3,6 @@
 // This file expects these globals to be defined by the test case.
 /* global gTestTab:true, gContentAPI:true, gContentWindow:true, tests:false */
 
-Cu.import("resource://gre/modules/Promise.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "UITour",
                                   "resource:///modules/UITour.jsm");
 
@@ -135,6 +134,16 @@ function getConfigurationPromise(configName) {
       contentWin.Mozilla.UITour.getConfiguration(contentConfigName, resolve);
     });
   });
+}
+
+function getShowHighlightTargetName() {
+  let highlight = document.getElementById("UITourHighlight");
+  return highlight.parentElement.getAttribute("targetName");
+}
+
+function getShowInfoTargetName() {
+  let tooltip = document.getElementById("UITourTooltip");
+  return tooltip.getAttribute("targetName");
 }
 
 function hideInfoPromise(...args) {

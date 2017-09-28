@@ -59,6 +59,8 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     warnedAboutDateToLocaleFormat(false),
     warnedAboutExprClosure(false),
     warnedAboutForEach(false),
+    warnedAboutLegacyGenerator(false),
+    warnedAboutObjectWatch(false),
     warnedAboutStringGenericsMethods(0),
 #ifdef DEBUG
     firedOnNewGlobalObject(false),
@@ -67,6 +69,7 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     enterCompartmentDepth(0),
     performanceMonitoring(runtime_),
     data(nullptr),
+    realmData(nullptr),
     allocationMetadataBuilder(nullptr),
     lastAnimationTime(0),
     regExps(zone),
@@ -85,16 +88,17 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     randomKeyGenerator_(runtime_->forkRandomKeyGenerator()),
     watchpointMap(nullptr),
     scriptCountsMap(nullptr),
+    scriptNameMap(nullptr),
     debugScriptMap(nullptr),
     debugEnvs(nullptr),
     enumerators(nullptr),
-    lastCachedNativeIterator(nullptr),
     compartmentStats_(nullptr),
     scheduledForDestruction(false),
     maybeAlive(true),
     jitCompartment_(nullptr),
     mappedArgumentsTemplate_(nullptr),
     unmappedArgumentsTemplate_(nullptr),
+    iterResultTemplate_(nullptr),
     lcovOutput()
 {
     PodArrayZero(sawDeprecatedLanguageExtension);
@@ -115,6 +119,7 @@ JSCompartment::~JSCompartment()
     js_delete(jitCompartment_);
     js_delete(watchpointMap);
     js_delete(scriptCountsMap);
+    js_delete(scriptNameMap);
     js_delete(debugScriptMap);
     js_delete(debugEnvs);
     js_delete(objectMetadataTable);
@@ -152,14 +157,15 @@ JSCompartment::init(JSContext* maybecx)
         return false;
     }
 
-    if (!regExps.init(maybecx))
-        return false;
-
     enumerators = NativeIterator::allocateSentinel(maybecx);
     if (!enumerators)
         return false;
 
-    if (!savedStacks_.init() || !varNames_.init() || !templateLiteralMap_.init()) {
+    if (!savedStacks_.init() ||
+        !varNames_.init() ||
+        !templateLiteralMap_.init() ||
+        !iteratorCache.init())
+    {
         if (maybecx)
             ReportOutOfMemory(maybecx);
         return false;
@@ -567,14 +573,27 @@ JSCompartment::getOrCreateNonSyntacticLexicalEnvironment(JSContext* cx, HandleOb
             return nullptr;
     }
 
-    // The key is the unwrapped dynamic scope, as we may be creating different
-    // WithEnvironmentObject wrappers each time.
-    MOZ_ASSERT(!enclosing->as<WithEnvironmentObject>().isSyntactic());
-    RootedObject key(cx, &enclosing->as<WithEnvironmentObject>().object());
+    // If a wrapped WithEnvironmentObject was passed in, unwrap it, as we may
+    // be creating different WithEnvironmentObject wrappers each time.
+    RootedObject key(cx, enclosing);
+    if (enclosing->is<WithEnvironmentObject>()) {
+        MOZ_ASSERT(!enclosing->as<WithEnvironmentObject>().isSyntactic());
+        key = &enclosing->as<WithEnvironmentObject>().object();
+    }
     RootedObject lexicalEnv(cx, nonSyntacticLexicalEnvironments_->lookup(key));
 
     if (!lexicalEnv) {
-        lexicalEnv = LexicalEnvironmentObject::createNonSyntactic(cx, enclosing);
+        // NOTE: The default global |this| value is set to key for compatibility
+        // with existing users of the lexical environment cache.
+        //  - When used by shared-global JSM loader, |this| must be the
+        //    NonSyntacticVariablesObject passed as enclosing.
+        //  - When used by SubscriptLoader, |this| must be the target object of
+        //    the WithEnvironmentObject wrapper.
+        //  - When used by XBL/DOM Events, we execute directly as a function and
+        //    do not access the |this| value.
+        // See js::GetFunctionThis / js::GetNonSyntacticGlobalThis
+        MOZ_ASSERT(key->is<NonSyntacticVariablesObject>() || !key->is<EnvironmentObject>());
+        lexicalEnv = LexicalEnvironmentObject::createNonSyntactic(cx, enclosing, /*thisv = */key);
         if (!lexicalEnv)
             return nullptr;
         if (!nonSyntacticLexicalEnvironments_->add(cx, key, lexicalEnv))
@@ -589,9 +608,13 @@ JSCompartment::getNonSyntacticLexicalEnvironment(JSObject* enclosing) const
 {
     if (!nonSyntacticLexicalEnvironments_)
         return nullptr;
-    if (!enclosing->is<WithEnvironmentObject>())
-        return nullptr;
-    JSObject* key = &enclosing->as<WithEnvironmentObject>().object();
+    // If a wrapped WithEnvironmentObject was passed in, unwrap it as in
+    // getOrCreateNonSyntacticLexicalEnvironment.
+    JSObject* key = enclosing;
+    if (enclosing->is<WithEnvironmentObject>()) {
+        MOZ_ASSERT(!enclosing->as<WithEnvironmentObject>().isSyntactic());
+        key = &enclosing->as<WithEnvironmentObject>().object();
+    }
     JSObject* lexicalEnv = nonSyntacticLexicalEnvironments_->lookup(key);
     if (!lexicalEnv)
         return nullptr;
@@ -653,7 +676,7 @@ JSCompartment::getTemplateLiteralObject(JSContext* cx, HandleObject rawStrings,
     } else {
         MOZ_ASSERT(templateObj->nonProxyIsExtensible());
         RootedValue rawValue(cx, ObjectValue(*rawStrings));
-        if (!DefineProperty(cx, templateObj, cx->names().raw, rawValue, nullptr, nullptr, 0))
+        if (!DefineDataProperty(cx, templateObj, cx->names().raw, rawValue, 0))
             return false;
         if (!FreezeObject(cx, rawStrings))
             return false;
@@ -690,7 +713,7 @@ JSCompartment::traceOutgoingCrossCompartmentWrappers(JSTracer* trc)
              * We have a cross-compartment wrapper. Its private pointer may
              * point into the compartment being collected, so we should mark it.
              */
-            TraceEdge(trc, wrapper->slotOfPrivate(), "cross-compartment wrapper");
+            ProxyObject::traceEdgeToTarget(trc, wrapper);
         }
     }
 }
@@ -810,6 +833,7 @@ JSCompartment::finishRoots()
         objectMetadataTable->clear();
 
     clearScriptCounts();
+    clearScriptNames();
 
     if (nonSyntacticLexicalEnvironments_)
         nonSyntacticLexicalEnvironments_->clear();
@@ -825,6 +849,8 @@ JSCompartment::sweepAfterMinorGC(JSTracer* trc)
         table.sweepAfterMinorGC();
 
     crossCompartmentWrappers.sweepAfterMinorGC(trc);
+
+    sweepMapAndSetObjectsAfterMinorGC();
 }
 
 void
@@ -920,6 +946,20 @@ JSCompartment::sweepWatchpoints()
         watchpointMap->sweep();
 }
 
+void
+JSCompartment::sweepMapAndSetObjectsAfterMinorGC()
+{
+    auto fop = runtime_->defaultFreeOp();
+
+    for (auto mapobj : mapsWithNurseryMemory)
+        MapObject::sweepAfterMinorGC(fop, mapobj);
+    mapsWithNurseryMemory.clearAndFree();
+
+    for (auto setobj : setsWithNurseryMemory)
+        SetObject::sweepAfterMinorGC(fop, setobj);
+    setsWithNurseryMemory.clearAndFree();
+}
+
 namespace {
 struct TraceRootFunctor {
     JSTracer* trc;
@@ -954,6 +994,9 @@ JSCompartment::sweepTemplateObjects()
 
     if (unmappedArgumentsTemplate_ && IsAboutToBeFinalized(&unmappedArgumentsTemplate_))
         unmappedArgumentsTemplate_.set(nullptr);
+
+    if (iterResultTemplate_ && IsAboutToBeFinalized(&iterResultTemplate_))
+        iterResultTemplate_.set(nullptr);
 }
 
 /* static */ void
@@ -1008,6 +1051,14 @@ JSCompartment::fixupScriptMapsAfterMovingGC()
         }
     }
 
+    if (scriptNameMap) {
+        for (ScriptNameMap::Enum e(*scriptNameMap); !e.empty(); e.popFront()) {
+            JSScript* script = e.front().key();
+            if (!IsAboutToBeFinalizedUnbarriered(&script) && script != e.front().key())
+                e.rekeyFront(script);
+        }
+    }
+
     if (debugScriptMap) {
         for (DebugScriptMap::Enum e(*debugScriptMap); !e.empty(); e.popFront()) {
             JSScript* script = e.front().key();
@@ -1026,6 +1077,15 @@ JSCompartment::checkScriptMapsAfterMovingGC()
             JSScript* script = r.front().key();
             CheckGCThingAfterMovingGC(script);
             auto ptr = scriptCountsMap->lookup(script);
+            MOZ_RELEASE_ASSERT(ptr.found() && &*ptr == &r.front());
+        }
+    }
+
+    if (scriptNameMap) {
+        for (auto r = scriptNameMap->all(); !r.empty(); r.popFront()) {
+            JSScript* script = r.front().key();
+            CheckGCThingAfterMovingGC(script);
+            auto ptr = scriptNameMap->lookup(script);
             MOZ_RELEASE_ASSERT(ptr.found() && &*ptr == &r.front());
         }
     }
@@ -1052,8 +1112,8 @@ JSCompartment::purge()
 {
     dtoaCache.purge();
     newProxyCache.purge();
-    lastCachedNativeIterator = nullptr;
     objectGroups.purge();
+    iteratorCache.clearAndShrink();
 }
 
 void
@@ -1068,7 +1128,6 @@ JSCompartment::clearTables()
     MOZ_ASSERT(!jitCompartment_);
     MOZ_ASSERT(!debugEnvs);
     MOZ_ASSERT(enumerators->next() == enumerators);
-    MOZ_ASSERT(regExps.empty());
     MOZ_ASSERT(templateLiteralMap_.empty());
 
     objectGroups.clearTables();
@@ -1274,6 +1333,7 @@ JSCompartment::updateDebuggerObservesCoverage()
         return;
 
     clearScriptCounts();
+    clearScriptNames();
 }
 
 bool
@@ -1316,6 +1376,19 @@ JSCompartment::clearScriptCounts()
 }
 
 void
+JSCompartment::clearScriptNames()
+{
+    if (!scriptNameMap)
+        return;
+
+    for (ScriptNameMap::Range r = scriptNameMap->all(); !r.empty(); r.popFront())
+        js_delete(r.front().value());
+
+    js_delete(scriptNameMap);
+    scriptNameMap = nullptr;
+}
+
+void
 JSCompartment::clearBreakpointsIn(FreeOp* fop, js::Debugger* dbg, HandleObject handler)
 {
     for (auto script = zone()->cellIter<JSScript>(); !script.done(); script.next()) {
@@ -1335,7 +1408,6 @@ JSCompartment::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
                                       size_t* lazyArrayBuffersArg,
                                       size_t* objectMetadataTablesArg,
                                       size_t* crossCompartmentWrappersArg,
-                                      size_t* regexpCompartment,
                                       size_t* savedStacksSet,
                                       size_t* varNamesSet,
                                       size_t* nonSyntacticLexicalEnvironmentsArg,
@@ -1354,7 +1426,6 @@ JSCompartment::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
     if (objectMetadataTable)
         *objectMetadataTablesArg += objectMetadataTable->sizeOfIncludingThis(mallocSizeOf);
     *crossCompartmentWrappersArg += crossCompartmentWrappers.sizeOfExcludingThis(mallocSizeOf);
-    *regexpCompartment += regExps.sizeOfExcludingThis(mallocSizeOf);
     *savedStacksSet += savedStacks_.sizeOfExcludingThis(mallocSizeOf);
     *varNamesSet += varNames_.sizeOfExcludingThis(mallocSizeOf);
     if (nonSyntacticLexicalEnvironments_)

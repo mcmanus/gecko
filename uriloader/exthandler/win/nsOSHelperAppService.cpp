@@ -8,7 +8,6 @@
 #include "nsOSHelperAppService.h"
 #include "nsISupports.h"
 #include "nsString.h"
-#include "nsXPIDLString.h"
 #include "nsIURL.h"
 #include "nsIMIMEInfo.h"
 #include "nsMIMEInfoWin.h"
@@ -225,7 +224,7 @@ NS_IMETHODIMP nsOSHelperAppService::GetApplicationDescription(const nsACString& 
 //
 // This function sets only the Description attribute of the input nsIMIMEInfo.
 /* static */
-nsresult nsOSHelperAppService::GetMIMEInfoFromRegistry(const nsAFlatString& fileType, nsIMIMEInfo *pInfo)
+nsresult nsOSHelperAppService::GetMIMEInfoFromRegistry(const nsString& fileType, nsIMIMEInfo *pInfo)
 {
   nsresult rv = NS_OK;
 
@@ -390,7 +389,7 @@ nsOSHelperAppService::GetDefaultAppInfo(const nsAString& aAppInfo,
   return NS_OK;
 }
 
-already_AddRefed<nsMIMEInfoWin> nsOSHelperAppService::GetByExtension(const nsAFlatString& aFileExt, const char *aTypeHint)
+already_AddRefed<nsMIMEInfoWin> nsOSHelperAppService::GetByExtension(const nsString& aFileExt, const char *aTypeHint)
 {
   if (aFileExt.IsEmpty())
     return nullptr;

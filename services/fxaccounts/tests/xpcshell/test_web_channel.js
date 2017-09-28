@@ -4,17 +4,14 @@
 "use strict";
 
 Cu.import("resource://gre/modules/FxAccountsCommon.js");
+Cu.import("resource://services-crypto/utils.js");
 const { FxAccountsWebChannel, FxAccountsWebChannelHelpers } =
     Cu.import("resource://gre/modules/FxAccountsWebChannel.jsm", {});
 
 const URL_STRING = "https://example.com";
 
 const mockSendingContext = {
-  browser: {
-    docShell: {
-      usePrivateBrowsing: false
-    }
-  },
+  browser: {},
   principal: {},
   eventTarget: {}
 };
@@ -259,6 +256,9 @@ add_test(function test_fxa_status_message() {
             sessionToken: "session-token",
             uid: "uid",
             verified: true
+          },
+          capabilities: {
+            engines: ["creditcards", "addresses"]
           }
         };
       }
@@ -276,6 +276,8 @@ add_test(function test_fxa_status_message() {
       do_check_eq(signedInUser.sessionToken, "session-token");
       do_check_eq(signedInUser.uid, "uid");
       do_check_eq(signedInUser.verified, true);
+
+      deepEqual(response.data.capabilities.engines, ["creditcards", "addresses"]);
 
       run_next_test();
     }
@@ -337,7 +339,8 @@ add_task(async function test_helpers_login_without_customize_sync() {
           do_check_false("verifiedCanLinkAccount" in accountData);
 
           // previously signed in user preference is updated.
-          do_check_eq(helpers.getPreviousAccountNameHashPref(), helpers.sha256("testuser@testuser.com"));
+          do_check_eq(helpers.getPreviousAccountNameHashPref(),
+                      CryptoUtils.sha256Base64("testuser@testuser.com"));
 
           resolve();
         });
@@ -417,6 +420,42 @@ add_task(async function test_helpers_login_with_customize_sync_and_declined_engi
   });
 });
 
+add_task(async function test_helpers_login_with_offered_sync_engines() {
+  let helpers;
+  const setSignedInUserCalled = new Promise(resolve => {
+    helpers = new FxAccountsWebChannelHelpers({
+      fxAccounts: {
+        async setSignedInUser(accountData) {
+          resolve(accountData);
+        }
+      }
+    });
+  });
+
+  Services.prefs.setBoolPref("services.sync.engine.creditcards", false);
+  Services.prefs.setBoolPref("services.sync.engine.addresses", false);
+
+  await helpers.login({
+    email: "testuser@testuser.com",
+    verifiedCanLinkAccount: true,
+    customizeSync: true,
+    declinedSyncEngines: ["addresses"],
+    offeredSyncEngines: ["creditcards", "addresses"]
+  });
+
+  const accountData = await setSignedInUserCalled;
+
+  // ensure fxAccounts is informed of the new user being signed in.
+  equal(accountData.email, "testuser@testuser.com");
+
+  // offeredSyncEngines should be stripped in the data.
+  ok(!("offeredSyncEngines" in accountData));
+  // credit cards was offered but not declined.
+  equal(Services.prefs.getBoolPref("services.sync.engine.creditcards"), true);
+  // addresses was offered and explicitely declined.
+  equal(Services.prefs.getBoolPref("services.sync.engine.addresses"), false);
+});
+
 add_test(function test_helpers_open_sync_preferences() {
   let helpers = new FxAccountsWebChannelHelpers({
     fxAccounts: {
@@ -431,6 +470,34 @@ add_test(function test_helpers_open_sync_preferences() {
   };
 
   helpers.openSyncPreferences(mockBrowser, "fxa:verification_complete");
+});
+
+add_task(async function test_helpers_getFxAStatus_extra_engines() {
+  let helpers = new FxAccountsWebChannelHelpers({
+    fxAccounts: {
+      getSignedInUser() {
+        return Promise.resolve({
+          email: "testuser@testuser.com",
+          kA: "kA",
+          kb: "kB",
+          sessionToken: "sessionToken",
+          uid: "uid",
+          verified: true
+        });
+      }
+    },
+    privateBrowsingUtils: {
+      isBrowserPrivate: () => true
+    }
+  });
+
+  Services.prefs.setBoolPref("services.sync.engine.creditcards.available", true);
+  // Not defining "services.sync.engine.addresses.available" on purpose.
+
+  let fxaStatus = await helpers.getFxaStatus("sync", mockSendingContext);
+  ok(!!fxaStatus);
+  ok(!!fxaStatus.signedInUser);
+  deepEqual(fxaStatus.capabilities.engines, ["creditcards"]);
 });
 
 
@@ -654,19 +721,41 @@ add_task(async function test_helpers_shouldAllowFxaStatus_no_service_private_bro
 });
 
 add_task(async function test_helpers_isPrivateBrowsingMode_private_browsing() {
-  let helpers = new FxAccountsWebChannelHelpers({});
-  mockSendingContext.browser.docShell.usePrivateBrowsing = true;
+  let wasCalled = {
+    isBrowserPrivate: false
+  };
+  let helpers = new FxAccountsWebChannelHelpers({
+    privateBrowsingUtils: {
+      isBrowserPrivate(browser) {
+        wasCalled.isBrowserPrivate = true;
+        do_check_eq(browser, mockSendingContext.browser);
+        return true;
+      }
+    }
+  });
 
   let isPrivateBrowsingMode = helpers.isPrivateBrowsingMode(mockSendingContext);
   do_check_true(isPrivateBrowsingMode);
+  do_check_true(wasCalled.isBrowserPrivate);
 });
 
 add_task(async function test_helpers_isPrivateBrowsingMode_private_browsing() {
-  let helpers = new FxAccountsWebChannelHelpers({});
-  mockSendingContext.browser.docShell.usePrivateBrowsing = false;
+  let wasCalled = {
+    isBrowserPrivate: false
+  };
+  let helpers = new FxAccountsWebChannelHelpers({
+    privateBrowsingUtils: {
+      isBrowserPrivate(browser) {
+        wasCalled.isBrowserPrivate = true;
+        do_check_eq(browser, mockSendingContext.browser);
+        return false;
+      }
+    }
+  });
 
   let isPrivateBrowsingMode = helpers.isPrivateBrowsingMode(mockSendingContext);
   do_check_false(isPrivateBrowsingMode);
+  do_check_true(wasCalled.isBrowserPrivate);
 });
 
 add_task(async function test_helpers_change_password() {
@@ -729,10 +818,6 @@ add_task(async function test_helpers_change_password_with_error() {
     do_check_false(wasCalled.updateDeviceRegistration);
   }
 });
-
-function run_test() {
-  run_next_test();
-}
 
 function makeObserver(aObserveTopic, aObserveFunc) {
   let callback = function(aSubject, aTopic, aData) {

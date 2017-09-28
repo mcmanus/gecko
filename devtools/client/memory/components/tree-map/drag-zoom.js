@@ -4,9 +4,9 @@
 
 "use strict";
 
-const { debounce } = require("sdk/lang/functional");
+const { debounce } = require("devtools/shared/debounce");
 const { lerp } = require("devtools/client/memory/utils");
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 
 const LERP_SPEED = 0.5;
 const ZOOM_SPEED = 0.01;

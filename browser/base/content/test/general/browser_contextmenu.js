@@ -23,7 +23,12 @@ Services.scriptloader.loadSubScript(chrome_base + "contextmenu_common.js", this)
 add_task(async function test_xul_text_link_label() {
   let url = chrome_base + "subtst_contextmenu_xul.xul";
 
-  await BrowserTestUtils.openNewForegroundTab(gBrowser, url);
+  await BrowserTestUtils.openNewForegroundTab({
+    gBrowser,
+    url,
+    waitForLoad: true,
+    waitForStateStop: true,
+  });
 
   await test_contextmenu("#test-xul-text-link-label",
     ["context-openlinkintab", true,
@@ -38,7 +43,9 @@ add_task(async function test_xul_text_link_label() {
      "context-savelink",      true,
      ...(hasPocket ? ["context-savelinktopocket", true] : []),
      "context-copylink",      true,
-     "context-searchselect",  true
+     "context-searchselect",  true,
+     "---", null,
+     "context-sendlinktodevice", true, [], null,
     ]
   );
 
@@ -89,6 +96,8 @@ add_task(async function test_plaintext() {
                     "---",                  null,
                     "context-savepage",     true,
                     ...(hasPocket ? ["context-pocket", true] : []),
+                    "---", null,
+                    "context-sendpagetodevice", true, [], null,
                     "---",                  null,
                     "context-viewbgimage",  false,
                     "context-selectall",    true,
@@ -115,7 +124,9 @@ add_task(async function test_link() {
      "context-savelink",      true,
      ...(hasPocket ? ["context-savelinktopocket", true] : []),
      "context-copylink",      true,
-     "context-searchselect",  true
+     "context-searchselect",  true,
+     "---", null,
+     "context-sendlinktodevice", true, [], null,
     ]
   );
 });
@@ -173,8 +184,6 @@ add_task(async function test_video_ok() {
      "context-savevideo",          true,
      "context-video-saveimage",    true,
      "context-sendvideo",          true,
-     "context-castvideo",          null,
-       [], null
     ]
   );
 });
@@ -220,8 +229,6 @@ add_task(async function test_video_bad() {
      "context-savevideo",          true,
      "context-video-saveimage",    false,
      "context-sendvideo",          true,
-     "context-castvideo",          null,
-       [], null
     ]
   );
 });
@@ -246,8 +253,6 @@ add_task(async function test_video_bad2() {
      "context-savevideo",          false,
      "context-video-saveimage",    false,
      "context-sendvideo",          false,
-     "context-castvideo",          null,
-       [], null
     ]
   );
 });
@@ -262,6 +267,8 @@ add_task(async function test_iframe() {
      "---",                  null,
      "context-savepage",     true,
      ...(hasPocket ? ["context-pocket", true] : []),
+     "---", null,
+     "context-sendpagetodevice", true, [], null,
      "---",                  null,
      "context-viewbgimage",  false,
      "context-selectall",    true,
@@ -306,8 +313,6 @@ add_task(async function test_video_in_iframe() {
      "context-savevideo",          true,
      "context-video-saveimage",    true,
      "context-sendvideo",          true,
-     "context-castvideo",          null,
-       [], null,
      "frame",                null,
          ["context-showonlythisframe", true,
           "context-openframeintab",    true,
@@ -566,6 +571,8 @@ add_task(async function test_pagemenu() {
      "---",                  null,
      "context-savepage",     true,
      ...(hasPocket ? ["context-pocket", true] : []),
+     "---", null,
+     "context-sendpagetodevice", true, [], null,
      "---",                  null,
      "context-viewbgimage",  false,
      "context-selectall",    true,
@@ -598,6 +605,8 @@ add_task(async function test_dom_full_screen() {
      "---",                          null,
      "context-savepage",             true,
      ...(hasPocket ? ["context-pocket", true] : []),
+     "---", null,
+     "context-sendpagetodevice", true, [], null,
      "---",                          null,
      "context-viewbgimage",          false,
      "context-selectall",            true,
@@ -646,6 +655,8 @@ add_task(async function test_pagemenu2() {
      "context-savepage",     true,
      ...(hasPocket ? ["context-pocket", true] : []),
      "---",                  null,
+     "context-sendpagetodevice", true, [], null,
+     "---",                  null,
      "context-viewbgimage",  false,
      "context-selectall",    true,
      "---",                  null,
@@ -692,6 +703,8 @@ add_task(async function test_select_text_link() {
      "context-selectall",                   true,
      "---",                                 null,
      "context-searchselect",                true,
+     "---",                                 null,
+     "context-sendlinktodevice", true, [],  null,
      "context-viewpartialsource-selection", true
     ],
     {
@@ -732,7 +745,9 @@ add_task(async function test_imagelink() {
      "context-saveimage",            true,
      "context-sendimage",            true,
      "context-setDesktopBackground", true,
-     "context-viewimageinfo",        true
+     "context-viewimageinfo",        true,
+     "---",                          null,
+     "context-sendlinktodevice",     true, [], null,
     ]
   );
 });
@@ -825,6 +840,8 @@ add_task(async function test_click_to_play_blocked_plugin() {
      "context-savepage",     true,
      ...(hasPocket ? ["context-pocket", true] : []),
      "---",                  null,
+     "context-sendpagetodevice", true, [], null,
+     "---",                  null,
      "context-viewbgimage",  false,
      "context-selectall",    true,
      "---",                  null,
@@ -869,6 +886,8 @@ add_task(async function test_srcdoc() {
      "---",                  null,
      "context-savepage",     true,
      ...(hasPocket ? ["context-pocket", true] : []),
+     "---",                  null,
+     "context-sendpagetodevice", true, [], null,
      "---",                  null,
      "context-viewbgimage",  false,
      "context-selectall",    true,
@@ -920,7 +939,9 @@ add_task(async function test_svg_link() {
      "context-savelink",      true,
      ...(hasPocket ? ["context-savelinktopocket", true] : []),
      "context-copylink",      true,
-     "context-searchselect",  true
+     "context-searchselect",  true,
+     "---",                   null,
+     "context-sendlinktodevice", true, [], null,
     ]
   );
 
@@ -937,7 +958,9 @@ add_task(async function test_svg_link() {
      "context-savelink",      true,
      ...(hasPocket ? ["context-savelinktopocket", true] : []),
      "context-copylink",      true,
-     "context-searchselect",  true
+     "context-searchselect",  true,
+     "---",                   null,
+     "context-sendlinktodevice", true, [], null,
     ]
   );
 
@@ -954,7 +977,9 @@ add_task(async function test_svg_link() {
      "context-savelink",      true,
      ...(hasPocket ? ["context-savelinktopocket", true] : []),
      "context-copylink",      true,
-     "context-searchselect",  true
+     "context-searchselect",  true,
+     "---",                   null,
+     "context-sendlinktodevice", true, [], null,
     ]
   );
 });

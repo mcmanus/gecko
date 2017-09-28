@@ -17,7 +17,6 @@
 struct JSFreeOp;
 
 class nsWrapperCache;
-class nsAXPCNativeCallContext;
 %}
 
 /***************************************************************************/
@@ -32,7 +31,6 @@ class nsAXPCNativeCallContext;
       native JSEqualityOp(JSEqualityOp);
 [ptr] native JSScriptPtr(JSScript);
 [ptr] native voidPtrPtr(void*);
-[ptr] native nsAXPCNativeCallContextPtr(nsAXPCNativeCallContext);
 [ptr] native nsWrapperCachePtr(nsWrapperCache);
 [ref] native JSCompartmentOptions(JS::CompartmentOptions);
 [ref] native JSCallArgsRef(const JS::CallArgs);
@@ -282,33 +280,6 @@ interface nsIXPConnect : nsISupports
 %}
 
     /**
-     * Creates a new global object using the given aCOMObj as the global
-     * object. The object will be set up according to the flags (defined
-     * below). If you do not pass INIT_JS_STANDARD_CLASSES, then aCOMObj
-     * must implement nsIXPCScriptable so it can resolve the standard
-     * classes when asked by the JS engine.
-     *
-     * @param aJSContext the context to use while creating the global object.
-     * @param aCOMObj the native object that represents the global object.
-     * @param aPrincipal the principal of the code that will run in this
-     *                   compartment. Can be null if not on the main thread.
-     * @param aFlags one of the flags below specifying what options this
-     *               global object wants.
-     * @param aOptions JSAPI-specific options for the new compartment.
-     */
-    nsIXPConnectJSObjectHolder
-    initClassesWithNewWrappedGlobal(
-                  in JSContextPtr         aJSContext,
-                  in nsISupports          aCOMObj,
-                  in nsIPrincipal         aPrincipal,
-                  in uint32_t             aFlags,
-                  in JSCompartmentOptions aOptions);
-
-    const uint32_t INIT_JS_STANDARD_CLASSES  = 1 << 0;
-    const uint32_t DONT_FIRE_ONNEWGLOBALHOOK = 1 << 1;
-    const uint32_t OMIT_COMPONENTS_OBJECT    = 1 << 2;
-
-    /**
     * wrapNative will create a new JSObject or return an existing one.
     *
     * This method now correctly deals with cases where the passed in xpcom
@@ -413,13 +384,8 @@ interface nsIXPConnect : nsISupports
     getWrappedNativeOfJSObject(in JSContextPtr aJSContext,
                                in JSObjectPtr  aJSObj);
 
-    [noscript, notxpcom] nsISupports
-    getNativeOfWrapper(in JSContextPtr aJSContext,
-                       in JSObjectPtr  aJSObj);
-
     // Will return null if there is no JS stack right now.
     readonly attribute nsIStackFrame                CurrentJSStack;
-    readonly attribute nsAXPCNativeCallContextPtr   CurrentNativeCallContext;
 
     void debugDump(in short depth);
     void debugDumpObject(in nsISupports aCOMObj, in short depth);

@@ -38,6 +38,10 @@ Services.scriptloader.loadSubScript(
   this
 );
 var { Toolbox } = require("devtools/client/framework/toolbox");
+const sourceUtils = {
+  isLoaded: source => source.get("loadedState") === "loaded"
+};
+
 const EXAMPLE_URL =
   "http://example.com/browser/devtools/client/debugger/new/test/mochitest/examples/";
 
@@ -147,6 +151,10 @@ function waitForThreadEvents(dbg, eventName) {
  */
 function waitForState(dbg, predicate) {
   return new Promise(resolve => {
+    if (predicate(dbg.store.getState())) {
+      return resolve();
+    }
+
     const unsubscribe = dbg.store.subscribe(() => {
       if (predicate(dbg.store.getState())) {
         unsubscribe();
@@ -187,8 +195,38 @@ function waitForSources(dbg, ...sources) {
   );
 }
 
-function waitForElement(dbg, selector) {
-  return waitUntil(() => findElementWithSelector(dbg, selector));
+/**
+ * Waits for a source to be loaded.
+ *
+ * @memberof mochitest/waits
+ * @param {Object} dbg
+ * @param {String} source
+ * @return {Promise}
+ * @static
+ */
+function waitForSource(dbg, url) {
+  return waitForState(dbg, state => {
+    const sources = dbg.selectors.getSources(state);
+    return sources.find(s => (s.get("url") || "").includes(url));
+  });
+}
+
+async function waitForElement(dbg, selector) {
+  await waitUntil(() => findElementWithSelector(dbg, selector));
+  return findElementWithSelector(dbg, selector);
+}
+
+function waitForSelectedSource(dbg, sourceId) {
+  return waitForState(dbg, state => {
+    const source = dbg.selectors.getSelectedSource(state);
+    const isLoaded =
+      source && source.has("loadedState") && sourceUtils.isLoaded(source);
+    if (sourceId) {
+      return isLoaded && sourceId == source.get("id");
+    }
+
+    return isLoaded;
+  });
 }
 
 /**
@@ -200,25 +238,33 @@ function waitForElement(dbg, selector) {
  * @param {Number} line
  * @static
  */
-function assertPausedLocation(dbg, source, line) {
+function assertPausedLocation(dbg) {
   const { selectors: { getSelectedSource, getPause }, getState } = dbg;
-  source = findSource(dbg, source);
 
-  // Check the selected source
-  is(getSelectedSource(getState()).get("id"), source.id);
+  ok(isTopFrameSelected(dbg, getState()), "top frame's source is selected");
 
   // Check the pause location
   const pause = getPause(getState());
-  const location = pause && pause.frame && pause.frame.location;
+  const pauseLine = pause && pause.frame && pause.frame.location.line;
+  assertDebugLine(dbg, pauseLine);
+}
 
-  is(location.sourceId, source.id);
-  is(location.line, line);
-
+function assertDebugLine(dbg, line) {
   // Check the debug line
+  const lineInfo = getCM(dbg).lineInfo(line - 1);
   ok(
-    getCM(dbg).lineInfo(line - 1).wrapClass.includes("debug-line"),
+    lineInfo.wrapClass.includes("debug-line"),
     "Line is highlighted as paused"
   );
+
+  const markedSpans = lineInfo.handle.markedSpans;
+  if (markedSpans && markedSpans.length > 0) {
+    const marker = markedSpans[0].marker;
+    ok(
+      marker.className.includes("debug-expression"),
+      "expression is highlighted as paused"
+    );
+  }
 }
 
 /**
@@ -245,7 +291,9 @@ function assertHighlightLocation(dbg, source, line) {
     "Highlighted line is visible"
   );
   ok(
-    getCM(dbg).lineInfo(line - 1).wrapClass.includes("highlight-line"),
+    getCM(dbg)
+      .lineInfo(line - 1)
+      .wrapClass.includes("highlight-line"),
     "Line is highlighted"
   );
 }
@@ -269,24 +317,37 @@ function isPaused(dbg) {
  * @param {Object} dbg
  * @static
  */
-function waitForPaused(dbg) {
-  return Task.spawn(function*() {
-    // We want to make sure that we get both a real paused event and
-    // that the state is fully populated. The client may do some more
-    // work (call other client methods) before populating the state.
-    yield waitForThreadEvents(dbg, "paused"), yield waitForState(dbg, state => {
-      const pause = dbg.selectors.getPause(state);
-      // Make sure we have the paused state.
-      if (!pause) {
-        return false;
-      }
-      // Make sure the source text is completely loaded for the
-      // source we are paused in.
-      const sourceId = pause && pause.frame && pause.frame.location.sourceId;
-      const sourceText = dbg.selectors.getSourceText(dbg.getState(), sourceId);
-      return sourceText && !sourceText.get("loading");
-    });
-  });
+async function waitForPaused(dbg) {
+  // We want to make sure that we get both a real paused event and
+  // that the state is fully populated. The client may do some more
+  // work (call other client methods) before populating the state.
+  await waitForThreadEvents(dbg, "paused");
+  await waitForState(dbg, state => isTopFrameSelected(dbg, state));
+}
+
+function isTopFrameSelected(dbg, state) {
+  const pause = dbg.selectors.getPause(state);
+
+  // Make sure we have the paused state.
+  if (!pause) {
+    return false;
+  }
+
+  // Make sure the source text is completely loaded for the
+  // source we are paused in.
+  const sourceId = pause.frame && pause.frame.location.sourceId;
+  const source = dbg.selectors.getSelectedSource(state);
+
+  if (!source) {
+    return false;
+  }
+
+  const isLoaded = source.has("loadedState") && sourceUtils.isLoaded(source);
+  if (!isLoaded) {
+    return false;
+  }
+
+  return source.get("id") == sourceId;
 }
 
 function createDebuggerContext(toolbox) {
@@ -381,12 +442,13 @@ function findSource(dbg, url) {
 function selectSource(dbg, url, line) {
   info("Selecting source: " + url);
   const source = findSource(dbg, url);
-  const hasText = !!dbg.selectors.getSourceText(dbg.getState(), source.id);
-  dbg.actions.selectSource(source.id, { line });
+  return dbg.actions.selectSource(source.id, { line });
+}
 
-  if (!hasText) {
-    return waitForDispatch(dbg, "LOAD_SOURCE_TEXT");
-  }
+function closeTab(dbg, url) {
+  info("Closing tab: " + url);
+  const source = findSource(dbg, url);
+  return dbg.actions.closeTab(source.url);
 }
 
 /**
@@ -446,7 +508,7 @@ function resume(dbg) {
 }
 
 function deleteExpression(dbg, input) {
-  info("Resuming");
+  info(`Delete expression "${input}"`);
   return dbg.actions.deleteExpression({ input });
 }
 
@@ -460,7 +522,7 @@ function deleteExpression(dbg, input) {
  * @static
  */
 function reload(dbg, ...sources) {
-  return dbg.client.reload().then(() => waitForSources(...sources));
+  return dbg.client.reload().then(() => waitForSources(dbg, ...sources));
 }
 
 /**
@@ -494,6 +556,13 @@ function addBreakpoint(dbg, source, line, col) {
   const sourceId = source.id;
   dbg.actions.addBreakpoint({ sourceId, line, col });
   return waitForDispatch(dbg, "ADD_BREAKPOINT");
+}
+
+function disableBreakpoint(dbg, source, line, col) {
+  source = findSource(dbg, source);
+  const sourceId = source.id;
+  dbg.actions.disableBreakpoint({ sourceId, line, col });
+  return waitForDispatch(dbg, "DISABLE_BREAKPOINT");
 }
 
 /**
@@ -558,6 +627,14 @@ function invokeInTab(fnc) {
 const isLinux = Services.appinfo.OS === "Linux";
 const isMac = Services.appinfo.OS === "Darwin";
 const cmdOrCtrl = isLinux ? { ctrlKey: true } : { metaKey: true };
+const shiftOrAlt = isMac
+  ? { accelKey: true, shiftKey: true }
+  : { accelKey: true, altKey: true };
+
+const cmdShift = isMac
+  ? { accelKey: true, shiftKey: true, metaKey: true }
+  : { accelKey: true, altKey: true, ctrlKey: true };
+
 // On Mac, going to beginning/end only works with meta+left/right.  On
 // Windows, it only works with home/end.  On Linux, apparently, either
 // ctrl+left/right or home/end work.
@@ -567,10 +644,15 @@ const endKey = isMac
 const startKey = isMac
   ? { code: "VK_LEFT", modifiers: cmdOrCtrl }
   : { code: "VK_HOME" };
+
 const keyMappings = {
+  debugger: { code: "s", modifiers: shiftOrAlt },
+  inspector: { code: "c", modifiers: shiftOrAlt },
   sourceSearch: { code: "p", modifiers: cmdOrCtrl },
   fileSearch: { code: "f", modifiers: cmdOrCtrl },
+  functionSearch: { code: "o", modifiers: cmdShift },
   Enter: { code: "VK_RETURN" },
+  ShiftEnter: { code: "VK_RETURN", modifiers: shiftOrAlt },
   Up: { code: "VK_UP" },
   Down: { code: "VK_DOWN" },
   Right: { code: "VK_RIGHT" },
@@ -579,6 +661,7 @@ const keyMappings = {
   Start: startKey,
   Tab: { code: "VK_TAB" },
   Escape: { code: "VK_ESCAPE" },
+  Delete: { code: "VK_DELETE" },
   pauseKey: { code: "VK_F8" },
   resumeKey: { code: "VK_F8" },
   stepOverKey: { code: "VK_F10" },
@@ -599,16 +682,14 @@ const keyMappings = {
  * @static
  */
 function pressKey(dbg, keyName) {
-  let keyEvent = keyMappings[keyName];
+  const keyEvent = keyMappings[keyName];
 
   const { code, modifiers } = keyEvent;
   return EventUtils.synthesizeKey(code, modifiers || {}, dbg.win);
 }
 
 function type(dbg, string) {
-  string.split("").forEach(char => {
-    EventUtils.synthesizeKey(char, {}, dbg.win);
-  });
+  string.split("").forEach(char => EventUtils.synthesizeKey(char, {}, dbg.win));
 }
 
 function isVisibleWithin(outerEl, innerEl) {
@@ -621,16 +702,17 @@ const selectors = {
   callStackHeader: ".call-stack-pane ._header",
   callStackBody: ".call-stack-pane .pane",
   expressionNode: i =>
-    `.expressions-list .tree-node:nth-child(${i}) .object-label`,
+    `.expressions-list .expression-container:nth-child(${i}) .object-label`,
   expressionValue: i =>
-    `.expressions-list .tree-node:nth-child(${i}) .object-value`,
+    `.expressions-list .expression-container:nth-child(${i}) .object-delimiter + *`,
   expressionClose: i =>
     `.expressions-list .expression-container:nth-child(${i}) .close`,
   expressionNodes: ".expressions-list .tree-node",
   scopesHeader: ".scopes-pane ._header",
   breakpointItem: i => `.breakpoints-list .breakpoint:nth-child(${i})`,
   scopeNode: i => `.scopes-list .tree-node:nth-child(${i}) .object-label`,
-  scopeValue: i => `.scopes-list .tree-node:nth-child(${i}) .object-value`,
+  scopeValue: i =>
+    `.scopes-list .tree-node:nth-child(${i}) .object-delimiter + *`,
   frame: i => `.frames ul li:nth-child(${i})`,
   frames: ".frames ul li",
   gutter: i => `.CodeMirror-code *:nth-child(${i}) .CodeMirror-linenumber`,
@@ -640,6 +722,7 @@ const selectors = {
   highlightLine: ".CodeMirror-code > .highlight-line",
   codeMirror: ".CodeMirror",
   resume: ".resume.active",
+  sourceTabs: `.source-tabs`,
   stepOver: ".stepOver.active",
   stepOut: ".stepOut.active",
   stepIn: ".stepIn.active",
@@ -649,7 +732,9 @@ const selectors = {
   editorFooter: ".editor-pane .source-footer",
   sourceNode: i => `.sources-list .tree-node:nth-child(${i})`,
   sourceNodes: ".sources-list .tree-node",
-  sourceArrow: i => `.sources-list .tree-node:nth-child(${i}) .arrow`
+  sourceArrow: i => `.sources-list .tree-node:nth-child(${i}) .arrow`,
+  resultItems: `.result-list .result-item`,
+  fileMatch: `.managed-tree .result`
 };
 
 function getSelector(elementName, ...args) {
@@ -689,12 +774,17 @@ function findAllElements(dbg, elementName, ...args) {
  * @return {Promise}
  * @static
  */
-function clickElement(dbg, elementName, ...args) {
+async function clickElement(dbg, elementName, ...args) {
   const selector = getSelector(elementName, ...args);
-  const el = findElement(dbg, elementName, ...args);
+  const el = await waitForElement(dbg, selector);
+
   el.scrollIntoView();
 
-  return EventUtils.synthesizeMouseAtCenter(
+  return clickElementWithSelector(dbg, selector);
+}
+
+function clickElementWithSelector(dbg, selector) {
+  EventUtils.synthesizeMouseAtCenter(
     findElementWithSelector(dbg, selector),
     {},
     dbg.win

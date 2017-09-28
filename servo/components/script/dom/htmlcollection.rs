@@ -26,7 +26,7 @@ pub trait CollectionFilter : JSTraceable {
 // An optional u32, using maxint to represent None.
 // It would be nicer just to use Option<u32> for this, but that would produce word
 // alignment issues since Option<u32> uses 33 bits.
-#[derive(Clone, Copy, JSTraceable, HeapSizeOf)]
+#[derive(Clone, Copy, HeapSizeOf, JSTraceable)]
 struct OptionU32 {
     bits: u32,
 }
@@ -119,7 +119,7 @@ impl HTMLCollection {
                              -> Root<HTMLCollection> {
         // case 1
         if qualified_name == local_name!("*") {
-            #[derive(JSTraceable, HeapSizeOf)]
+            #[derive(HeapSizeOf, JSTraceable)]
             struct AllFilter;
             impl CollectionFilter for AllFilter {
                 fn filter(&self, _elem: &Element, _root: &Node) -> bool {
@@ -129,7 +129,7 @@ impl HTMLCollection {
             return HTMLCollection::create(window, root, box AllFilter);
         }
 
-        #[derive(JSTraceable, HeapSizeOf)]
+        #[derive(HeapSizeOf, JSTraceable)]
         struct HtmlDocumentFilter {
             qualified_name: LocalName,
             ascii_lower_qualified_name: LocalName,
@@ -152,7 +152,7 @@ impl HTMLCollection {
     }
 
     fn match_element(elem: &Element, qualified_name: &LocalName) -> bool {
-        match elem.prefix() {
+        match elem.prefix().as_ref() {
             None => elem.local_name() == qualified_name,
             Some(prefix) => qualified_name.starts_with(&**prefix) &&
                 qualified_name.find(":") == Some(prefix.len()) &&
@@ -169,7 +169,7 @@ impl HTMLCollection {
     }
 
     pub fn by_qual_tag_name(window: &Window, root: &Node, qname: QualName) -> Root<HTMLCollection> {
-        #[derive(JSTraceable, HeapSizeOf)]
+        #[derive(HeapSizeOf, JSTraceable)]
         struct TagNameNSFilter {
             qname: QualName
         }
@@ -193,7 +193,7 @@ impl HTMLCollection {
 
     pub fn by_atomic_class_name(window: &Window, root: &Node, classes: Vec<Atom>)
                          -> Root<HTMLCollection> {
-        #[derive(JSTraceable, HeapSizeOf)]
+        #[derive(HeapSizeOf, JSTraceable)]
         struct ClassNameFilter {
             classes: Vec<Atom>
         }
@@ -212,7 +212,7 @@ impl HTMLCollection {
     }
 
     pub fn children(window: &Window, root: &Node) -> Root<HTMLCollection> {
-        #[derive(JSTraceable, HeapSizeOf)]
+        #[derive(HeapSizeOf, JSTraceable)]
         struct ElementChildFilter;
         impl CollectionFilter for ElementChildFilter {
             fn filter(&self, elem: &Element, root: &Node) -> bool {
@@ -224,11 +224,9 @@ impl HTMLCollection {
 
     pub fn elements_iter_after<'a>(&'a self, after: &'a Node) -> impl Iterator<Item=Root<Element>> + 'a {
         // Iterate forwards from a node.
-        HTMLCollectionElementsIter {
-            node_iter: after.following_nodes(&self.root),
-            root: Root::from_ref(&self.root),
-            filter: &self.filter,
-        }
+        after.following_nodes(&self.root)
+            .filter_map(Root::downcast)
+            .filter(move |element| self.filter.filter(&element, &self.root))
     }
 
     pub fn elements_iter<'a>(&'a self) -> impl Iterator<Item=Root<Element>> + 'a {
@@ -238,35 +236,13 @@ impl HTMLCollection {
 
     pub fn elements_iter_before<'a>(&'a self, before: &'a Node) -> impl Iterator<Item=Root<Element>> + 'a {
         // Iterate backwards from a node.
-        HTMLCollectionElementsIter {
-            node_iter: before.preceding_nodes(&self.root),
-            root: Root::from_ref(&self.root),
-            filter: &self.filter,
-        }
+        before.preceding_nodes(&self.root)
+            .filter_map(Root::downcast)
+            .filter(move |element| self.filter.filter(&element, &self.root))
     }
 
     pub fn root_node(&self) -> Root<Node> {
         Root::from_ref(&self.root)
-    }
-}
-
-// TODO: Make this generic, and avoid code duplication
-struct HTMLCollectionElementsIter<'a, I> {
-    node_iter: I,
-    root: Root<Node>,
-    filter: &'a Box<CollectionFilter>,
-}
-
-impl<'a, I: Iterator<Item=Root<Node>>> Iterator for HTMLCollectionElementsIter<'a, I> {
-    type Item = Root<Element>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let filter = &self.filter;
-        let root = &self.root;
-        self.node_iter.by_ref()
-                      .filter_map(Root::downcast)
-                      .filter(|element| filter.filter(&element, root))
-                      .next()
     }
 }
 

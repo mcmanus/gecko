@@ -7,6 +7,8 @@
 #ifndef MOZILLA_LAYERS_RENDEREROGL_H
 #define MOZILLA_LAYERS_RENDEREROGL_H
 
+#include "mozilla/layers/CompositorTypes.h"
+#include "mozilla/layers/SyncObject.h"
 #include "mozilla/webrender/RenderThread.h"
 #include "mozilla/webrender/WebRenderTypes.h"
 #include "mozilla/webrender/webrender_ffi.h"
@@ -40,11 +42,11 @@ class RenderTextureHost;
 /// on the render thread instead of the compositor thread.
 class RendererOGL
 {
-  friend WrExternalImage LockExternalImage(void* aObj, WrExternalImageId aId, uint8_t aChannelIndex);
-  friend void UnlockExternalImage(void* aObj, WrExternalImageId aId, uint8_t aChannelIndex);
+  friend wr::WrExternalImage LockExternalImage(void* aObj, wr::WrExternalImageId aId, uint8_t aChannelIndex);
+  friend void UnlockExternalImage(void* aObj, wr::WrExternalImageId aId, uint8_t aChannelIndex);
 
 public:
-  WrExternalImageHandler GetExternalImageHandler();
+  wr::WrExternalImageHandler GetExternalImageHandler();
 
   /// This can be called on the render thread only.
   void Update();
@@ -59,6 +61,9 @@ public:
   void SetProfilerEnabled(bool aEnabled);
 
   /// This can be called on the render thread only.
+  void SetFrameStartTime(const TimeStamp& aTime);
+
+  /// This can be called on the render thread only.
   ~RendererOGL();
 
   /// This can be called on the render thread only.
@@ -66,7 +71,7 @@ public:
               RefPtr<gl::GLContext>&& aGL,
               RefPtr<widget::CompositorWidget>&&,
               wr::WindowId aWindowId,
-              WrRenderer* aWrRenderer,
+              wr::Renderer* aRenderer,
               layers::CompositorBridgeParentBase* aBridge);
 
   /// This can be called on the render thread only.
@@ -75,22 +80,28 @@ public:
   /// This can be called on the render thread only.
   bool Resume();
 
+  layers::SyncObjectHost* GetSyncObject() const { return mSyncObject.get(); }
+
   layers::CompositorBridgeParentBase* GetCompositorBridge() { return mBridge; }
 
-  WrRenderedEpochs* FlushRenderedEpochs();
+  wr::WrRenderedEpochs* FlushRenderedEpochs();
 
-  RenderTextureHost* GetRenderTexture(WrExternalImageId aExternalImageId);
+  RenderTextureHost* GetRenderTexture(wr::WrExternalImageId aExternalImageId);
 
-  WrRenderer* GetWrRenderer() { return mWrRenderer; }
+  wr::Renderer* GetRenderer() { return mRenderer; }
 
 protected:
+  void NotifyWebRenderError(WebRenderError aError);
 
   RefPtr<RenderThread> mThread;
   RefPtr<gl::GLContext> mGL;
   RefPtr<widget::CompositorWidget> mWidget;
-  WrRenderer* mWrRenderer;
+  wr::Renderer* mRenderer;
   layers::CompositorBridgeParentBase* mBridge;
   wr::WindowId mWindowId;
+  TimeStamp mFrameStartTime;
+  RefPtr<layers::SyncObjectHost> mSyncObject;
+  wr::DebugFlags mDebugFlags;
 };
 
 } // namespace wr

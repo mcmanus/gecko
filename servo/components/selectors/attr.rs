@@ -7,7 +7,7 @@ use parser::SelectorImpl;
 use std::ascii::AsciiExt;
 use std::fmt;
 
-#[derive(Eq, PartialEq, Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct AttrSelectorWithNamespace<Impl: SelectorImpl> {
     pub namespace: NamespaceConstraint<(Impl::NamespacePrefix, Impl::NamespaceUrl)>,
     pub local_name: Impl::LocalName,
@@ -27,7 +27,7 @@ impl<Impl: SelectorImpl> AttrSelectorWithNamespace<Impl> {
     }
 }
 
-#[derive(Eq, PartialEq, Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum NamespaceConstraint<NamespaceUrl> {
     Any,
 
@@ -35,7 +35,7 @@ pub enum NamespaceConstraint<NamespaceUrl> {
     Specific(NamespaceUrl),
 }
 
-#[derive(Eq, PartialEq, Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum ParsedAttrSelectorOperation<AttrValue> {
     Exists,
     WithValue {
@@ -45,7 +45,7 @@ pub enum ParsedAttrSelectorOperation<AttrValue> {
     }
 }
 
-#[derive(Eq, PartialEq, Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum AttrSelectorOperation<AttrValue> {
     Exists,
     WithValue {
@@ -66,7 +66,7 @@ impl<AttrValue> AttrSelectorOperation<AttrValue> {
     }
 }
 
-#[derive(Eq, PartialEq, Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub enum AttrSelectorOperator {
     Equal,
     Includes,
@@ -78,13 +78,15 @@ pub enum AttrSelectorOperator {
 
 impl ToCss for AttrSelectorOperator {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
+        // https://drafts.csswg.org/cssom/#serializing-selectors
+        // See "attribute selector".
         dest.write_str(match *self {
-            AttrSelectorOperator::Equal => " = ",
-            AttrSelectorOperator::Includes => " ~= ",
-            AttrSelectorOperator::DashMatch => " |= ",
-            AttrSelectorOperator::Prefix => " ^= ",
-            AttrSelectorOperator::Substring => " *= ",
-            AttrSelectorOperator::Suffix => " $= ",
+            AttrSelectorOperator::Equal => "=",
+            AttrSelectorOperator::Includes => "~=",
+            AttrSelectorOperator::DashMatch => "|=",
+            AttrSelectorOperator::Prefix => "^=",
+            AttrSelectorOperator::Substring => "*=",
+            AttrSelectorOperator::Suffix => "$=",
         })
     }
 }
@@ -125,7 +127,7 @@ impl AttrSelectorOperator {
 /// The definition of whitespace per CSS Selectors Level 3 § 4.
 pub static SELECTOR_WHITESPACE: &'static [char] = &[' ', '\t', '\n', '\r', '\x0C'];
 
-#[derive(Eq, PartialEq, Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParsedCaseSensitivity {
     CaseSensitive,
     AsciiCaseInsensitive,
@@ -148,7 +150,7 @@ impl ParsedCaseSensitivity {
     }
 }
 
-#[derive(Eq, PartialEq, Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CaseSensitivity {
     CaseSensitive,
     AsciiCaseInsensitive,

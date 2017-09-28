@@ -91,17 +91,6 @@ nsProfiler::CanProfile(bool *aCanProfile)
   return NS_OK;
 }
 
-static bool
-HasFeature(const char** aFeatures, uint32_t aFeatureCount, const char* aFeature)
-{
-  for (size_t i = 0; i < aFeatureCount; i++) {
-    if (strcmp(aFeatures[i], aFeature) == 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
 NS_IMETHODIMP
 nsProfiler::StartProfiler(uint32_t aEntries, double aInterval,
                           const char** aFeatures, uint32_t aFeatureCount,
@@ -111,19 +100,9 @@ nsProfiler::StartProfiler(uint32_t aEntries, double aInterval,
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  #define ADD_FEATURE_BIT(n_, str_, Name_) \
-    if (HasFeature(aFeatures, aFeatureCount, str_)) { \
-      features |= ProfilerFeature::Name_; \
-    }
-
-  // Convert the array of strings to a bitfield.
-  uint32_t features = 0;
-  PROFILER_FOR_EACH_FEATURE(ADD_FEATURE_BIT)
-
-  #undef ADD_FEATURE_BIT
-
   ResetGathering();
 
+  uint32_t features = ParseFeaturesFromStringArray(aFeatures, aFeatureCount);
   profiler_start(aEntries, aInterval, features, aFilters, aFilterCount);
 
   return NS_OK;
@@ -168,7 +147,7 @@ nsProfiler::ResumeSampling()
 NS_IMETHODIMP
 nsProfiler::AddMarker(const char *aMarker)
 {
-  PROFILER_MARKER(aMarker);
+  profiler_add_marker(aMarker);
   return NS_OK;
 }
 
@@ -373,7 +352,8 @@ nsProfiler::GetProfileDataAsArrayBuffer(double aSinceTime, JSContext* aCx,
 
 NS_IMETHODIMP
 nsProfiler::DumpProfileToFileAsync(const nsACString& aFilename,
-                                   double aSinceTime)
+                                   double aSinceTime, JSContext* aCx,
+                                   nsISupports** aPromise)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -381,11 +361,28 @@ nsProfiler::DumpProfileToFileAsync(const nsACString& aFilename,
     return NS_ERROR_FAILURE;
   }
 
+  if (NS_WARN_IF(!aCx)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsIGlobalObject* globalObject =
+    xpc::NativeGlobal(JS::CurrentGlobalOrNull(aCx));
+
+  if (NS_WARN_IF(!globalObject)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  ErrorResult result;
+  RefPtr<Promise> promise = Promise::Create(globalObject, result);
+  if (NS_WARN_IF(result.Failed())) {
+    return result.StealNSResult();
+  }
+
   nsCString filename(aFilename);
 
   StartGathering(aSinceTime)->Then(
     GetMainThreadSerialEventTarget(), __func__,
-    [filename](const nsCString& aResult) {
+    [filename, promise](const nsCString& aResult) {
       nsCOMPtr<nsIFile> file = do_CreateInstance(NS_LOCAL_FILE_CONTRACTID);
       nsresult rv = file->InitWithNativePath(filename);
       if (NS_FAILED(rv)) {
@@ -397,9 +394,14 @@ nsProfiler::DumpProfileToFileAsync(const nsACString& aFilename,
       uint32_t sz;
       of->Write(aResult.get(), aResult.Length(), &sz);
       of->Close();
-    },
-    [](nsresult aRv) { });
 
+      promise->MaybeResolveWithUndefined();
+    },
+    [promise](nsresult aRv) {
+      promise->MaybeReject(aRv);
+    });
+
+  promise.forget(aPromise);
   return NS_OK;
 }
 
@@ -559,7 +561,7 @@ nsProfiler::ReceiveShutdownProfile(const nsCString& aProfile)
   if (mExitProfiles.Length() >= MAX_SUBPROCESS_EXIT_PROFILES) {
     mExitProfiles.RemoveElementAt(0);
   }
-  mExitProfiles.AppendElement(aProfile);
+  mExitProfiles.AppendElement(ExitProfile{ aProfile, TimeStamp::Now() });
 }
 
 RefPtr<nsProfiler::GatheringPromise>
@@ -586,9 +588,13 @@ nsProfiler::StartGathering(double aSinceTime)
 
   mWriter.emplace();
 
+  TimeStamp thisProcessFirstSampleTime;
+
   // Start building up the JSON result and grab the profile from this process.
   mWriter->Start(SpliceableJSONWriter::SingleLineStyle);
-  if (!profiler_stream_json_for_this_process(*mWriter, aSinceTime)) {
+  if (!profiler_stream_json_for_this_process(*mWriter, aSinceTime,
+                                             /* aIsShuttingDown */ true,
+                                             &thisProcessFirstSampleTime)) {
     // The profiler is inactive. This either means that it was inactive even
     // at the time that ProfileGatherer::Start() was called, or that it was
     // stopped on a different thread since that call. Either way, we need to
@@ -600,9 +606,15 @@ nsProfiler::StartGathering(double aSinceTime)
 
   // If we have any process exit profiles, add them immediately, and clear
   // mExitProfiles.
-  for (size_t i = 0; i < mExitProfiles.Length(); ++i) {
-    if (!mExitProfiles[i].IsEmpty()) {
-      mWriter->Splice(mExitProfiles[i].get());
+  for (auto& exitProfile : mExitProfiles) {
+    if (thisProcessFirstSampleTime &&
+        exitProfile.mGatherTime < thisProcessFirstSampleTime) {
+      // Don't include exit profiles that have no overlap with the profile
+      // from our own process.
+      continue;
+    }
+    if (!exitProfile.mJSON.IsEmpty()) {
+      mWriter->Splice(exitProfile.mJSON.get());
     }
   }
   mExitProfiles.Clear();

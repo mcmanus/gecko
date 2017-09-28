@@ -8,6 +8,7 @@
 
 #include "mozilla/Assertions.h"
 
+#include <functional>
 #include <stddef.h>
 #include <stdint.h>
 #include "nsError.h"
@@ -198,11 +199,14 @@ ThreadId CurrentThreadId();
  *   aIncomingDumpToPair.
  * @return bool indicating success or failure
  */
-bool CreateMinidumpsAndPair(ProcessHandle aTargetPid,
-                            ThreadId aTargetBlamedThread,
-                            const nsACString& aIncomingPairName,
-                            nsIFile* aIncomingDumpToPair,
-                            nsIFile** aTargetDumpOut);
+void
+CreateMinidumpsAndPair(ProcessHandle aTargetPid,
+                       ThreadId aTargetBlamedThread,
+                       const nsACString& aIncomingPairName,
+                       nsIFile* aIncomingDumpToPair,
+                       nsIFile** aTargetDumpOut,
+                       std::function<void(bool)>&& aCallback,
+                       bool aAsync);
 
 // Create an additional minidump for a child of a process which already has
 // a minidump (|parentMinidump|).
@@ -212,6 +216,10 @@ bool CreateAdditionalChildMinidump(ProcessHandle childPid,
                                    ThreadId childBlamedThread,
                                    nsIFile* parentMinidump,
                                    const nsACString& name);
+
+// Parent-side API, returns the tmp dir for child processes to use, accounting
+// for sandbox considerations.
+void GetChildProcessTmpDir(nsIFile** aOutTmpDir);
 
 #  if defined(XP_WIN32) || defined(XP_MACOSX)
 // Parent-side API for children
@@ -243,7 +251,7 @@ void UnregisterInjectorCallback(DWORD processID);
 
 // Child-side API
 bool SetRemoteExceptionHandler(const nsACString& crashPipe);
-void InitChildProcessTmpDir();
+void InitChildProcessTmpDir(nsIFile* aDirOverride = nullptr);
 
 #  elif defined(XP_LINUX)
 // Parent-side API for children

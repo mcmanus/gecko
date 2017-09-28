@@ -2,8 +2,6 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
                                   "resource://gre/modules/NetUtil.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-                                  "resource://gre/modules/Promise.jsm");
 // Global test server for serving safebrowsing updates.
 var gHttpServ = null;
 // Global nsIUrlClassifierDBService
@@ -75,8 +73,6 @@ function run_test() {
   gHttpServ.registerDirectory("/", do_get_cwd());
 
   gHttpServ.registerPathHandler("/downloads", function(request, response) {
-    let buf = NetUtil.readInputStreamToString(request.bodyInputStream,
-      request.bodyInputStream.available());
     let blob = processUpdateRequest();
     response.setHeader("Content-Type",
                        "application/vnd.google.safebrowsing-update", false);

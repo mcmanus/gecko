@@ -9,6 +9,7 @@ const tagssvc  = PlacesUtils.tagging;
 const annosvc  = PlacesUtils.annotations;
 const PT       = PlacesTransactions;
 const rootGuid = PlacesUtils.bookmarks.rootGuid;
+const menuGuid = PlacesUtils.bookmarks.menuGuid;
 
 Components.utils.importGlobalProperties(["URL"]);
 
@@ -161,11 +162,17 @@ function ensureUndoState(aExpectedEntries = [], aExpectedUndoPosition = 0) {
 }
 
 function ensureItemsAdded(...items) {
-  Assert.equal(observer.itemsAdded.size, items.length);
+  let expectedResultsCount = items.length;
+
   for (let item of items) {
-    Assert.ok(observer.itemsAdded.has(item.guid));
+    if ("children" in item) {
+      expectedResultsCount += item.children.length;
+    }
+    Assert.ok(observer.itemsAdded.has(item.guid),
+      `Should have the expected guid ${item.guid}`);
     let info = observer.itemsAdded.get(item.guid);
-    Assert.equal(info.parentGuid, item.parentGuid);
+    Assert.equal(info.parentGuid, item.parentGuid,
+      "Should have notified the correct parentGuid");
     for (let propName of ["title", "index", "itemType"]) {
       if (propName in item)
         Assert.equal(info[propName], item[propName]);
@@ -173,22 +180,36 @@ function ensureItemsAdded(...items) {
     if ("url" in item)
       Assert.ok(info.url.equals(item.url));
   }
+
+  Assert.equal(observer.itemsAdded.size, expectedResultsCount,
+    "Should have added the correct number of items");
 }
 
 function ensureItemsRemoved(...items) {
-  Assert.equal(observer.itemsRemoved.size, items.length);
+  let expectedResultsCount = items.length;
+
   for (let item of items) {
     // We accept both guids and full info object here.
     if (typeof(item) == "string") {
-      Assert.ok(observer.itemsRemoved.has(item));
+      Assert.ok(observer.itemsRemoved.has(item),
+        `Should have removed the expected guid ${item}`);
     } else {
-      Assert.ok(observer.itemsRemoved.has(item.guid));
+      if ("children" in item) {
+        expectedResultsCount += item.children.length;
+      }
+
+      Assert.ok(observer.itemsRemoved.has(item.guid),
+        `Should have removed expected guid ${item.guid}`);
       let info = observer.itemsRemoved.get(item.guid);
-      Assert.equal(info.parentGuid, item.parentGuid);
+      Assert.equal(info.parentGuid, item.parentGuid,
+        "Should have notified the correct parentGuid");
       if ("index" in item)
         Assert.equal(info.index, item.index);
     }
   }
+
+  Assert.equal(observer.itemsRemoved.size, expectedResultsCount,
+    "Should have removed the correct number of items");
 }
 
 function ensureItemsChanged(...items) {
@@ -245,8 +266,13 @@ function ensureTagsForURI(aURI, aTags) {
   do_check_true(aTags.every( t => tagsSet.includes(t)));
 }
 
-function createTestFolderInfo(aTitle = "Test Folder") {
-  return { parentGuid: rootGuid, title: aTitle };
+function createTestFolderInfo(title = "Test Folder", parentGuid = menuGuid,
+                              children = undefined) {
+  let info = { parentGuid, title };
+  if (children) {
+    info.children = children;
+  }
+  return info;
 }
 
 function isLivemarkTree(aTree) {
@@ -259,17 +285,42 @@ async function ensureLivemarkCreatedByAddLivemark(aLivemarkGuid) {
   await PlacesUtils.livemarks.getLivemark({ guid: aLivemarkGuid });
 }
 
+function removeAllDatesInTree(tree) {
+  if ("lastModified" in tree) {
+    delete tree.lastModified;
+  }
+  if ("dateAdded" in tree) {
+    delete tree.dateAdded;
+  }
+
+  if (!tree.children) {
+    return;
+  }
+
+  for (let child of tree.children) {
+    removeAllDatesInTree(child);
+  }
+}
+
 // Checks if two bookmark trees (as returned by promiseBookmarksTree) are the
 // same.
 // false value for aCheckParentAndPosition is ignored if aIsRestoredItem is set.
 async function ensureEqualBookmarksTrees(aOriginal,
-                                    aNew,
-                                    aIsRestoredItem = true,
-                                    aCheckParentAndPosition = false) {
+                                         aNew,
+                                         aIsRestoredItem = true,
+                                         aCheckParentAndPosition = false,
+                                         aIgnoreAllDates = false) {
   // Note "id" is not-enumerable, and is therefore skipped by Object.keys (both
   // ours and the one at deepEqual). This is fine for us because ids are not
   // restored by Redo.
   if (aIsRestoredItem) {
+    if (aIgnoreAllDates) {
+      removeAllDatesInTree(aOriginal);
+      removeAllDatesInTree(aNew);
+    } else if (!aOriginal.lastModified) {
+      // Ignore lastModified for newly created items, for performance reasons.
+      aNew.lastModified = aOriginal.lastModified;
+    }
     Assert.deepEqual(aOriginal, aNew);
     if (isLivemarkTree(aNew))
       await ensureLivemarkCreatedByAddLivemark(aNew.guid);
@@ -312,6 +363,14 @@ async function ensureBookmarksTreeRestoredCorrectly(...aOriginalBookmarksTrees) 
     let restoredTree =
       await PlacesUtils.promiseBookmarksTree(originalTree.guid);
     await ensureEqualBookmarksTrees(originalTree, restoredTree);
+  }
+}
+
+async function ensureBookmarksTreeRestoredCorrectlyExceptDates(...aOriginalBookmarksTrees) {
+  for (let originalTree of aOriginalBookmarksTrees) {
+    let restoredTree =
+      await PlacesUtils.promiseBookmarksTree(originalTree.guid);
+    await ensureEqualBookmarksTrees(originalTree, restoredTree, true, false, true);
   }
 }
 
@@ -373,12 +432,16 @@ add_task(async function test_new_folder_with_annotation() {
   ensureUndoState();
   let txn = PT.NewFolder(folder_info);
   folder_info.guid = await txn.transact();
+  let originalInfo = await PlacesUtils.promiseBookmarksTree(folder_info.guid);
   let ensureDo = async function(aRedo = false) {
     ensureUndoState([[txn]], 0);
     await ensureItemsAdded(folder_info);
     ensureAnnotationsSet(folder_info.guid, [ANNO]);
-    if (aRedo)
-      ensureTimestampsUpdated(folder_info.guid, true);
+    if (aRedo) {
+      // Ignore lastModified in the comparison, for performance reasons.
+      originalInfo.lastModified = null;
+      await ensureBookmarksTreeRestoredCorrectlyExceptDates(originalInfo);
+    }
     observer.reset();
   };
 
@@ -387,6 +450,51 @@ add_task(async function test_new_folder_with_annotation() {
     ensureItemsRemoved({ guid:       folder_info.guid,
                          parentGuid: folder_info.parentGuid,
                          index:      bmStartIndex });
+    observer.reset();
+  };
+
+  await ensureDo();
+  await PT.undo();
+  await ensureUndo();
+  await PT.redo();
+  await ensureDo(true);
+  await PT.undo();
+  ensureUndo();
+  await PT.clearTransactionsHistory();
+  ensureUndoState();
+});
+
+add_task(async function test_new_folder_with_children() {
+  let folder_info = createTestFolderInfo("Test folder", PlacesUtils.bookmarks.menuGuid, [{
+    url: "http://test_create_item.com",
+    title: "Test creating an item"
+  }]);
+  ensureUndoState();
+  let txn = PT.NewFolder(folder_info);
+  folder_info.guid = await txn.transact();
+  let originalInfo = await PlacesUtils.promiseBookmarksTree(folder_info.guid);
+  let ensureDo = async function(aRedo = false) {
+    ensureUndoState([[txn]], 0);
+    ensureItemsAdded(folder_info);
+    if (aRedo) {
+      // Ignore lastModified in the comparison, for performance reasons.
+      originalInfo.lastModified = null;
+      await ensureBookmarksTreeRestoredCorrectlyExceptDates(originalInfo);
+    }
+    observer.reset();
+  };
+
+  let ensureUndo = () => {
+    ensureUndoState([[txn]], 1);
+    ensureItemsRemoved({
+      guid: folder_info.guid,
+      parentGuid: folder_info.parentGuid,
+      index: bmStartIndex,
+      children: [{
+        title: "Test creating an item",
+        url: "http://test_create_item.com",
+      }]
+    });
     observer.reset();
   };
 
@@ -411,11 +519,12 @@ add_task(async function test_new_bookmark() {
   let txn = PT.NewBookmark(bm_info);
   bm_info.guid = await txn.transact();
 
+  let originalInfo = await PlacesUtils.promiseBookmarksTree(bm_info.guid);
   let ensureDo = async function(aRedo = false) {
     ensureUndoState([[txn]], 0);
     await ensureItemsAdded(bm_info);
     if (aRedo)
-      ensureTimestampsUpdated(bm_info.guid, true);
+      await ensureBookmarksTreeRestoredCorrectly(originalInfo);
     observer.reset();
   };
   let ensureUndo = () => {
@@ -599,6 +708,12 @@ add_task(async function test_remove_folder() {
     return [folder_level_1_txn, folder_level_2_txn];
   });
 
+  let original_folder_level_1_tree =
+    await PlacesUtils.promiseBookmarksTree(folder_level_1_info.guid);
+  let original_folder_level_2_tree =
+    Object.assign({ parentGuid: original_folder_level_1_tree.guid },
+                  original_folder_level_1_tree.children[0]);
+
   ensureUndoState([[folder_level_2_txn_result, folder_level_1_txn_result]]);
   await ensureItemsAdded(folder_level_1_info, folder_level_2_info);
   observer.reset();
@@ -615,7 +730,7 @@ add_task(async function test_remove_folder() {
   ensureUndoState([ [remove_folder_2_txn],
                     [folder_level_2_txn_result, folder_level_1_txn_result] ], 1);
   await ensureItemsAdded(folder_level_2_info);
-  ensureTimestampsUpdated(folder_level_2_info.guid, true);
+  await ensureBookmarksTreeRestoredCorrectly(original_folder_level_2_tree);
   observer.reset();
 
   // Redo Remove "Folder Level 2"
@@ -630,7 +745,7 @@ add_task(async function test_remove_folder() {
   ensureUndoState([ [remove_folder_2_txn],
                     [folder_level_2_txn_result, folder_level_1_txn_result] ], 1);
   await ensureItemsAdded(folder_level_2_info);
-  ensureTimestampsUpdated(folder_level_2_info.guid, true);
+  await ensureBookmarksTreeRestoredCorrectly(original_folder_level_2_tree);
   observer.reset();
 
   // Undo the creation of both folders
@@ -645,8 +760,7 @@ add_task(async function test_remove_folder() {
   ensureUndoState([ [remove_folder_2_txn],
                     [folder_level_2_txn_result, folder_level_1_txn_result] ], 1);
   await ensureItemsAdded(folder_level_1_info, folder_level_2_info);
-  ensureTimestampsUpdated(folder_level_1_info.guid, true);
-  ensureTimestampsUpdated(folder_level_2_info.guid, true);
+  await ensureBookmarksTreeRestoredCorrectlyExceptDates(original_folder_level_1_tree);
   observer.reset();
 
   // Redo Remove "Folder Level 2"
@@ -677,8 +791,6 @@ add_task(async function test_add_and_remove_bookmarks_with_additional_info() {
   const testURI = NetUtil.newURI("http://add.remove.tag");
   const TAG_1 = "TestTag1";
   const TAG_2 = "TestTag2";
-  const KEYWORD = "test_keyword";
-  const POST_DATA = "post_data";
   const ANNO = { name: "TestAnno", value: "TestAnnoValue" };
 
   let folder_info = createTestFolderInfo();
@@ -689,13 +801,14 @@ add_task(async function test_add_and_remove_bookmarks_with_additional_info() {
   observer.reset();
   let b1_info = { parentGuid: folder_info.guid, url: testURI, tags: [TAG_1] };
   b1_info.guid = await PT.NewBookmark(b1_info).transact();
+  let b1_originalInfo = await PlacesUtils.promiseBookmarksTree(b1_info.guid);
   ensureTags([TAG_1]);
   await PT.undo();
   ensureTags([]);
 
   observer.reset();
   await PT.redo();
-  ensureTimestampsUpdated(b1_info.guid, true);
+  await ensureBookmarksTreeRestoredCorrectly(b1_originalInfo);
   ensureTags([TAG_1]);
 
   // Check if the Remove transaction removes and restores tags of children
@@ -705,7 +818,7 @@ add_task(async function test_add_and_remove_bookmarks_with_additional_info() {
 
   observer.reset();
   await PT.undo();
-  ensureTimestampsUpdated(b1_info.guid, true);
+  await ensureBookmarksTreeRestoredCorrectly(b1_originalInfo);
   ensureTags([TAG_1]);
 
   await PT.redo();
@@ -713,27 +826,22 @@ add_task(async function test_add_and_remove_bookmarks_with_additional_info() {
 
   observer.reset();
   await PT.undo();
-  ensureTimestampsUpdated(b1_info.guid, true);
+  await ensureBookmarksTreeRestoredCorrectly(b1_originalInfo);
   ensureTags([TAG_1]);
 
   // * Check that no-op tagging (the uri is already tagged with TAG_1) is
   //   also a no-op on undo.
-  // * Test the "keyword" property of the NewBookmark transaction.
   observer.reset();
   let b2_info = { parentGuid:  folder_info.guid,
-                  url:         testURI, tags: [TAG_1, TAG_2],
-                  keyword:     KEYWORD,
-                  postData:    POST_DATA,
+                  url:         testURI,
+                  tags:        [TAG_1, TAG_2],
                   annotations: [ANNO] };
   b2_info.guid = await PT.NewBookmark(b2_info).transact();
   let b2_post_creation_changes = [
    { guid: b2_info.guid,
      isAnnoProperty: true,
      property: ANNO.name,
-     newValue: ANNO.value },
-   { guid: b2_info.guid,
-     property: "keyword",
-     newValue: KEYWORD } ];
+     newValue: ANNO.value } ];
   ensureItemsChanged(...b2_post_creation_changes);
   ensureTags([TAG_1, TAG_2]);
 
@@ -742,9 +850,7 @@ add_task(async function test_add_and_remove_bookmarks_with_additional_info() {
   await ensureItemsRemoved(b2_info);
   ensureTags([TAG_1]);
 
-  // Check if Remove correctly restores keywords, tags and annotations.
-  // Since both bookmarks share the same uri, they also share the keyword that
-  // is not removed along with one of the bookmarks.
+  // Check if Remove correctly restores tags and annotations.
   observer.reset();
   await PT.redo();
   ensureItemsChanged({ guid: b2_info.guid,
@@ -760,10 +866,6 @@ add_task(async function test_add_and_remove_bookmarks_with_additional_info() {
   await PT.Remove(folder_info.guid).transact();
   await ensureItemsRemoved(b1_info, b2_info, folder_info);
   ensureTags([]);
-  // There is no keyword removal notification cause all bookmarks are removed
-  // before the keyword itself, so there's no one to notify.
-  let entry = await PlacesUtils.keywords.fetch(KEYWORD);
-  Assert.equal(entry, null, "keyword has been removed");
 
   observer.reset();
   await PT.undo();
@@ -880,6 +982,7 @@ add_task(async function test_add_and_remove_livemark() {
   let removeTxn = PT.Remove(guid);
   await removeTxn.transact();
   await ensureNonExistent(guid);
+
   async function undo() {
     ensureUndoState([[removeTxn], [createLivemarkTxn]], 0);
     await PT.undo();
@@ -1461,9 +1564,9 @@ add_task(async function test_copy() {
 
     async function redo() {
       await PT.redo();
-      await ensureBookmarksTreeRestoredCorrectly(originalInfo);
+      await ensureBookmarksTreeRestoredCorrectlyExceptDates(originalInfo);
       await PT.redo();
-      await ensureBookmarksTreeRestoredCorrectly(duplicateInfo);
+      await ensureBookmarksTreeRestoredCorrectlyExceptDates(duplicateInfo);
     }
     async function undo() {
       await PT.undo();
@@ -1601,7 +1704,7 @@ add_task(async function test_invalid_uri_spec_throws() {
 });
 
 add_task(async function test_annotate_multiple_items() {
-  let parentGuid = rootGuid;
+  let parentGuid = menuGuid;
   let guids = [
     await PT.NewBookmark({ url: "about:blank", parentGuid }).transact(),
     await PT.NewFolder({ title: "Test Folder", parentGuid }).transact()];
@@ -1643,7 +1746,7 @@ add_task(async function test_remove_multiple() {
   let guids = [];
   await PT.batch(async function() {
     let folderGuid = await PT.NewFolder({ title: "Test Folder",
-                                          parentGuid: rootGuid }).transact();
+                                          parentGuid: menuGuid }).transact();
     let nestedFolderGuid =
       await PT.NewFolder({ title: "Nested Test Folder",
                            parentGuid: folderGuid }).transact();
@@ -1653,7 +1756,7 @@ add_task(async function test_remove_multiple() {
 
     let bmGuid =
       await PT.NewBookmark({ url: new URL("http://test.bookmark.removed"),
-                             parentGuid: rootGuid }).transact();
+                             parentGuid: menuGuid }).transact();
     guids.push(bmGuid);
   });
 
@@ -1677,46 +1780,13 @@ add_task(async function test_remove_multiple() {
 
   // Redo it.
   await PT.redo();
-  await ensureBookmarksTreeRestoredCorrectly(...originalInfos);
+  await ensureBookmarksTreeRestoredCorrectlyExceptDates(...originalInfos);
 
   // Redo remove.
   await PT.redo();
   await ensureNonExistent(...guids);
 
   // Cleanup
-  await PT.clearTransactionsHistory();
-  observer.reset();
-});
-
-add_task(async function test_remove_bookmarks_for_urls() {
-  let urls = [new URL("http://test.url.1"), new URL("http://test.url.2")];
-  let guids = [];
-  await PT.batch(async function() {
-    for (let url of urls) {
-      for (let title of ["test title a", "test title b"]) {
-        let txn = PT.NewBookmark({ url, title, parentGuid: rootGuid });
-        guids.push(await txn.transact());
-      }
-    }
-  });
-
-  let originalInfos = [];
-  for (let guid of guids) {
-    originalInfos.push(await PlacesUtils.promiseBookmarksTree(guid));
-  }
-
-  await PT.RemoveBookmarksForUrls(urls).transact();
-  await ensureNonExistent(...guids);
-  await PT.undo();
-  await ensureBookmarksTreeRestoredCorrectly(...originalInfos);
-  await PT.redo();
-  await ensureNonExistent(...guids);
-  await PT.undo();
-  await ensureBookmarksTreeRestoredCorrectly(...originalInfos);
-
-  // Cleanup.
-  await PT.redo();
-  await ensureNonExistent(...guids);
   await PT.clearTransactionsHistory();
   observer.reset();
 });

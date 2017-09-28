@@ -21,6 +21,8 @@ if CONFIG['MOZ_UPDATER']:
 external_dirs += ['modules/brotli']
 external_dirs += ['modules/woff2']
 
+external_dirs += ['modules/xz-embedded']
+
 if CONFIG['MOZ_VORBIS']:
     external_dirs += ['media/libvorbis']
 
@@ -42,12 +44,6 @@ if not CONFIG['MOZ_SYSTEM_PNG']:
 if CONFIG['CPU_ARCH'] == 'arm':
     external_dirs += ['media/openmax_dl']
 
-if CONFIG['MOZ_WEBSPEECH_POCKETSPHINX']:
-    external_dirs += [
-        'media/sphinxbase',
-        'media/pocketsphinx',
-    ]
-
 if CONFIG['MOZ_FFVPX']:
     external_dirs += ['media/ffvpx']
 
@@ -63,8 +59,5 @@ external_dirs += [
     'media/libsoundtouch',
     'media/psshparser'
 ]
-
-if CONFIG['MOZ_LINKER']:
-    external_dirs += ['modules/xz-embedded']
 
 DIRS += ['../../' + i for i in external_dirs]

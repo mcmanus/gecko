@@ -7,20 +7,25 @@
 #ifndef GFX_TEXTRUN_H
 #define GFX_TEXTRUN_H
 
+#include <stdint.h>
+
 #include "gfxTypes.h"
-#include "nsString.h"
 #include "gfxPoint.h"
 #include "gfxFont.h"
 #include "gfxFontConstants.h"
-#include "nsTArray.h"
 #include "gfxSkipChars.h"
 #include "gfxPlatform.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/RefPtr.h"
+#include "nsPoint.h"
+#include "nsString.h"
+#include "nsTArray.h"
+#include "nsTextFrameUtils.h"
 #include "DrawMode.h"
 #include "harfbuzz/hb.h"
 #include "nsUnicodeScriptCodes.h"
 #include "nsColor.h"
-#include "nsTextFrameUtils.h"
+#include "X11UndefineNone.h"
 
 #ifdef DEBUG
 #include <stdio.h>
@@ -37,6 +42,9 @@ class gfxMissingFontRecorder;
 namespace mozilla {
 class SVGContextPaint;
 enum class StyleHyphens : uint8_t;
+namespace layout {
+class TextDrawTarget;
+};
 };
 
 /**
@@ -236,9 +244,10 @@ public:
         virtual uint32_t GetAppUnitsPerDevUnit() const = 0;
     };
 
-    struct DrawParams
+    struct MOZ_STACK_CLASS DrawParams
     {
         gfxContext* context;
+        mozilla::layout::TextDrawTarget* textDrawer = nullptr;
         DrawMode drawMode = DrawMode::GLYPH_FILL;
         nscolor textStrokeColor = 0;
         gfxPattern* textStrokePattern = nullptr;
@@ -279,7 +288,9 @@ public:
      * from aProvider. The provided point is the baseline origin of the
      * line of emphasis marks.
      */
-    void DrawEmphasisMarks(gfxContext* aContext, gfxTextRun* aMark,
+    void DrawEmphasisMarks(gfxContext* aContext,
+                           mozilla::layout::TextDrawTarget* aTextDrawer,
+                           gfxTextRun* aMark,
                            gfxFloat aMarkAdvance, gfxPoint aPt,
                            Range aRange, PropertyProvider* aProvider) const;
 
@@ -459,7 +470,7 @@ public:
         uint8_t         mMatchType;
     };
 
-    class GlyphRunIterator {
+    class MOZ_STACK_CLASS GlyphRunIterator {
     public:
         GlyphRunIterator(const gfxTextRun *aTextRun, Range aRange)
           : mTextRun(aTextRun)
@@ -808,8 +819,12 @@ private:
     }
 
     void             *mUserData;
-    gfxFontGroup     *mFontGroup; // addrefed on creation, but our reference
-                                  // may be released by ReleaseFontGroup()
+
+    // mFontGroup is usually a strong reference, but refcounting is managed
+    // manually because it may be explicitly released by ReleaseFontGroup()
+    // in the case where the font group actually owns the textrun.
+    gfxFontGroup* MOZ_OWNING_REF mFontGroup;
+
     gfxSkipChars      mSkipChars;
 
     nsTextFrameUtils::Flags mFlags2; // additional flags (see also gfxShapedText::mFlags)
@@ -933,10 +948,9 @@ public:
     enum { UNDERLINE_OFFSET_NOT_SET = INT16_MAX };
     gfxFloat GetUnderlineOffset();
 
-    already_AddRefed<gfxFont>
-        FindFontForChar(uint32_t ch, uint32_t prevCh, uint32_t aNextCh,
-                        Script aRunScript, gfxFont *aPrevMatchedFont,
-                        uint8_t *aMatchType);
+    gfxFont* FindFontForChar(uint32_t ch, uint32_t prevCh, uint32_t aNextCh,
+                             Script aRunScript, gfxFont *aPrevMatchedFont,
+                             uint8_t *aMatchType);
 
     gfxUserFontSet* GetUserFontSet();
 
@@ -989,11 +1003,10 @@ public:
 
 protected:
     // search through pref fonts for a character, return nullptr if no matching pref font
-    already_AddRefed<gfxFont> WhichPrefFontSupportsChar(uint32_t aCh);
+    gfxFont* WhichPrefFontSupportsChar(uint32_t aCh);
 
-    already_AddRefed<gfxFont>
-        WhichSystemFontSupportsChar(uint32_t aCh, uint32_t aNextCh,
-                                    Script aRunScript);
+    gfxFont* WhichSystemFontSupportsChar(uint32_t aCh, uint32_t aNextCh,
+                                         Script aRunScript);
 
     template<typename T>
     void ComputeRanges(nsTArray<gfxTextRange>& mRanges,
@@ -1126,8 +1139,10 @@ protected:
         RefPtr<gfxFontFamily> mFamily;
         // either a font or a font entry exists
         union {
-            gfxFont*            mFont;
-            gfxFontEntry*       mFontEntry;
+            // Whichever of these fields is actually present will be a strong
+            // reference, with refcounting handled manually.
+            gfxFont* MOZ_OWNING_REF      mFont;
+            gfxFontEntry* MOZ_OWNING_REF mFontEntry;
         };
         bool                    mNeedsBold   : 1;
         bool                    mFontCreated : 1;
@@ -1234,7 +1249,7 @@ protected:
     // Helper for font-matching:
     // search all faces in a family for a fallback in cases where it's unclear
     // whether the family might have a font for a given character
-    already_AddRefed<gfxFont>
+    gfxFont*
     FindFallbackFaceForChar(gfxFontFamily* aFamily, uint32_t aCh,
                             Script aRunScript);
 

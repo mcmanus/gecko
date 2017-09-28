@@ -7,7 +7,7 @@
 // These are injected from XPIProvider.jsm
 /* globals ADDON_SIGNING, SIGNED_TYPES, BOOTSTRAP_REASONS, DB_SCHEMA,
           AddonInternal, XPIProvider, XPIStates, syncLoadManifestFromFile,
-          isUsableAddon, recordAddonTelemetry, applyBlocklistChanges,
+          isUsableAddon, recordAddonTelemetry,
           flushChromeCaches, descriptorToPath */
 
 var Cc = Components.classes;
@@ -19,7 +19,6 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/AddonManager.jsm");
 /* globals AddonManagerPrivate*/
-Cu.import("resource://gre/modules/Preferences.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "AddonRepository",
                                   "resource://gre/modules/addons/AddonRepository.jsm");
@@ -27,16 +26,11 @@ XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
                                   "resource://gre/modules/FileUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "DeferredSave",
                                   "resource://gre/modules/DeferredSave.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-                                  "resource://gre/modules/Promise.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "Blocklist",
                                    "@mozilla.org/extensions/blocklist;1",
                                    Ci.nsIBlocklistService);
-
-XPCOMUtils.defineLazyPreferenceGetter(this, "ALLOW_NON_MPC",
-                                      "extensions.allow-non-mpc-extensions");
 
 Cu.import("resource://gre/modules/Log.jsm");
 const LOGGER_ID = "addons.xpi-utils";
@@ -60,7 +54,6 @@ const PREF_E10S_BLOCKED_BY_ADDONS     = "extensions.e10sBlockedByAddons";
 const PREF_E10S_MULTI_BLOCKED_BY_ADDONS = "extensions.e10sMultiBlockedByAddons";
 const PREF_E10S_HAS_NONEXEMPT_ADDON   = "extensions.e10s.rollout.hasAddon";
 
-const KEY_APP_PROFILE                 = "app-profile";
 const KEY_APP_SYSTEM_ADDONS           = "app-system-addons";
 const KEY_APP_SYSTEM_DEFAULTS         = "app-system-defaults";
 const KEY_APP_GLOBAL                  = "app-global";
@@ -78,7 +71,8 @@ const PROP_JSON_FIELDS = ["id", "syncGUID", "location", "version", "type",
                           "strictCompatibility", "locales", "targetApplications",
                           "targetPlatforms", "multiprocessCompatible", "signedState",
                           "seen", "dependencies", "hasEmbeddedWebExtension", "mpcOptedOut",
-                          "userPermissions", "icons", "iconURL", "icon64URL"];
+                          "userPermissions", "icons", "iconURL", "icon64URL",
+                          "blocklistState", "blocklistURL"];
 
 // Time to wait before async save of XPI JSON database, in milliseconds
 const ASYNC_SAVE_DELAY_MS = 20;
@@ -660,7 +654,7 @@ this.XPIDatabase = {
    *                          flush after the database is flushed and
    *                          all cleanup is done
    */
-  shutdown() {
+  async shutdown() {
     logger.debug("shutdown");
     if (this.initialized) {
       // If our last database I/O had an error, try one last time to save.
@@ -678,28 +672,33 @@ this.XPIDatabase = {
             "XPIDB_saves_late", this._deferredSave.dirty ? 1 : 0);
       }
 
-      // Return a promise that any pending writes of the DB are complete and we
-      // are finished cleaning up
-      let flushPromise = this.flush();
-      flushPromise.catch(error => {
-          logger.error("Flush of XPI database failed", error);
-          AddonManagerPrivate.recordSimpleMeasure("XPIDB_shutdownFlush_failed", 1);
-          // If our last attempt to read or write the DB failed, force a new
-          // extensions.ini to be written to disk on the next startup
-          Services.prefs.setBoolPref(PREF_PENDING_OPERATIONS, true);
-        })
-        .then(count => {
-          // Clear out the cached addons data loaded from JSON
-          delete this.addonDB;
-          delete this._dbPromise;
-          // same for the deferred save
-          delete this._deferredSave;
-          // re-enable the schema version setter
-          delete this._schemaVersionSet;
-        });
-      return flushPromise;
+      // If we're shutting down while still loading, finish loading
+      // before everything else!
+      if (this._dbPromise) {
+        await this._dbPromise;
+      }
+
+      // Await and pending DB writes and finish cleaning up.
+      try {
+        await this.flush();
+      } catch (error) {
+        logger.error("Flush of XPI database failed", error);
+        AddonManagerPrivate.recordSimpleMeasure("XPIDB_shutdownFlush_failed", 1);
+        // If our last attempt to read or write the DB failed, force a new
+        // extensions.ini to be written to disk on the next startup
+        Services.prefs.setBoolPref(PREF_PENDING_OPERATIONS, true);
+
+        throw error;
+      }
+
+      // Clear out the cached addons data loaded from JSON
+      delete this.addonDB;
+      delete this._dbPromise;
+      // same for the deferred save
+      delete this._deferredSave;
+      // re-enable the schema version setter
+      delete this._schemaVersionSet;
     }
-    return Promise.resolve(0);
   },
 
   /**
@@ -1090,7 +1089,7 @@ this.XPIDatabase = {
 
     let blockE10s = false;
 
-    Preferences.set(PREF_E10S_HAS_NONEXEMPT_ADDON, false);
+    Services.prefs.setBoolPref(PREF_E10S_HAS_NONEXEMPT_ADDON, false);
     for (let [, addon] of this.addonDB) {
       let active = (addon.visible && !addon.disabled && !addon.pendingUninstall);
 
@@ -1099,7 +1098,7 @@ this.XPIDatabase = {
         break;
       }
     }
-    Preferences.set(PREF_E10S_BLOCKED_BY_ADDONS, blockE10s);
+    Services.prefs.setBoolPref(PREF_E10S_BLOCKED_BY_ADDONS, blockE10s);
   },
 
   updateAddonsBlockingE10sMulti() {
@@ -1113,7 +1112,7 @@ this.XPIDatabase = {
         break;
       }
     }
-    Preferences.set(PREF_E10S_MULTI_BLOCKED_BY_ADDONS, blockMulti);
+    Services.prefs.setBoolPref(PREF_E10S_MULTI_BLOCKED_BY_ADDONS, blockMulti);
   },
 
   /**
@@ -1270,16 +1269,12 @@ this.XPIDatabaseReconcile = {
     if (isDetectedInstall && aNewAddon.foreignInstall) {
       // If the add-on is a foreign install and is in a scope where add-ons
       // that were dropped in should default to disabled then disable it
-      let disablingScopes = Preferences.get(PREF_EM_AUTO_DISABLED_SCOPES, 0);
+      let disablingScopes = Services.prefs.getIntPref(PREF_EM_AUTO_DISABLED_SCOPES, 0);
       if (aInstallLocation.scope & disablingScopes) {
         logger.warn("Disabling foreign installed add-on " + aNewAddon.id + " in "
             + aInstallLocation.name);
         aNewAddon.userDisabled = true;
-
-        // If we don't have an old app version then this is a new profile in
-        // which case just mark any sideloaded add-ons as already seen.
-        aNewAddon.seen = (aInstallLocation.name != KEY_APP_PROFILE &&
-                          !aOldAppVersion);
+        aNewAddon.seen = false;
       }
     }
 
@@ -1326,13 +1321,14 @@ this.XPIDatabaseReconcile = {
       if (!aNewAddon) {
         let file = new nsIFile(aAddonState.path);
         aNewAddon = syncLoadManifestFromFile(file, aInstallLocation);
-        applyBlocklistChanges(aOldAddon, aNewAddon);
 
         // Carry over any pendingUninstall state to add-ons modified directly
         // in the profile. This is important when the attempt to remove the
         // add-on in processPendingFileChanges failed and caused an mtime
         // change to the add-ons files.
         aNewAddon.pendingUninstall = aOldAddon.pendingUninstall;
+
+        aNewAddon.updateBlocklistState({oldAddon: aOldAddon});
       }
 
       // The ID in the manifest that was loaded must match the ID of the old
@@ -1432,9 +1428,7 @@ this.XPIDatabaseReconcile = {
       copyProperties(manifest, props, aOldAddon);
     }
 
-    // This updates the addon's JSON cached data in place
-    applyBlocklistChanges(aOldAddon, aOldAddon, aOldAppVersion,
-                          aOldPlatformVersion);
+    aOldAddon.updateBlocklistState({updateDatabase: false});
     aOldAddon.appDisabled = !isUsableAddon(aOldAddon);
 
     return aOldAddon;
@@ -1531,7 +1525,6 @@ this.XPIDatabaseReconcile = {
               }
             }
 
-            let wasDisabled = oldAddon.appDisabled;
             let oldPath = oldAddon.path || descriptorToPath(oldAddon.descriptor);
 
             // The add-on has changed if the modification time has changed, if
@@ -1557,18 +1550,6 @@ this.XPIDatabaseReconcile = {
             } else {
               // No change
               newAddon = oldAddon;
-            }
-
-            // If an extension has just become appDisabled and it appears to
-            // be due to the ALLOW_NON_MPC pref, show a notification.  If the
-            // extension is also disabled for some other reason(s), don't
-            // bother with the notification since flipping the pref will leave
-            // the extension disabled.
-            if (!wasDisabled && newAddon.appDisabled &&
-                !ALLOW_NON_MPC && !newAddon.multiprocessCompatible &&
-                (newAddon.blocklistState != Ci.nsIBlocklistService.STATE_BLOCKED) &&
-                newAddon.isPlatformCompatible && newAddon.isCompatible) {
-              AddonManagerPrivate.nonMpcDisabled = true;
             }
 
             if (newAddon)

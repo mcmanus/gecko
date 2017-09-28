@@ -15,7 +15,6 @@
 
 #include "mozilla/Attributes.h"
 #include "nsXMLContentSerializer.h"
-#include "nsIEntityConverter.h"
 #include "nsString.h"
 #include "nsTArray.h"
 
@@ -103,7 +102,6 @@ private:
   bool IsElementPreformatted(nsIContent* aNode);
 
 protected:
-  nsCOMPtr<nsIEntityConverter> mEntityConverter;
 
   /*
    * isHTMLParser should be set to true by the HTML parser which inherits from
@@ -129,7 +127,7 @@ protected:
   // whole documents.
   bool          mRewriteEncodingDeclaration;
 
-  // To keep track of First LI child of OL in selected range 
+  // To keep track of First LI child of OL in selected range
   bool          mIsFirstChildOfOL;
 
   // To keep track of startvalue of OL and first list item for nested lists

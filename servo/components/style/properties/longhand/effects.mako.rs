@@ -11,27 +11,20 @@ ${helpers.predefined_type("opacity",
                           "Opacity",
                           "1.0",
                           animation_value_type="ComputedValue",
-                          flags="CREATES_STACKING_CONTEXT",
+                          flags="CREATES_STACKING_CONTEXT APPLIES_TO_PLACEHOLDER",
                           spec="https://drafts.csswg.org/css-color/#opacity")}
 
-<%helpers:vector_longhand name="box-shadow" allow_empty="True"
-                          animation_value_type="IntermediateShadowList"
-                          extra_prefixes="webkit"
-                          ignored_when_colors_disabled="True"
-                          spec="https://drafts.csswg.org/css-backgrounds/#box-shadow">
-    pub type SpecifiedValue = specified::Shadow;
-
-    pub mod computed_value {
-        use values::computed::Shadow;
-
-        pub type T = Shadow;
-    }
-
-    pub fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                         -> Result<specified::Shadow, ParseError<'i>> {
-        specified::Shadow::parse(context, input, false)
-    }
-</%helpers:vector_longhand>
+${helpers.predefined_type(
+    "box-shadow",
+    "BoxShadow",
+    None,
+    vector=True,
+    animation_value_type="AnimatedBoxShadowList",
+    extra_prefixes="webkit",
+    ignored_when_colors_disabled=True,
+    flags="APPLIES_TO_FIRST_LETTER",
+    spec="https://drafts.csswg.org/css-backgrounds/#box-shadow",
+)}
 
 ${helpers.predefined_type("clip",
                           "ClipRectOrAuto",
@@ -43,8 +36,10 @@ ${helpers.predefined_type("clip",
 
 ${helpers.predefined_type(
     "filter",
-    "FilterList",
-    "computed::FilterList::none()",
+    "Filter",
+    None,
+    vector=True,
+    separator="Space",
     animation_value_type="AnimatedFilterList",
     extra_prefixes="webkit",
     flags="CREATES_STACKING_CONTEXT FIXPOS_CB",

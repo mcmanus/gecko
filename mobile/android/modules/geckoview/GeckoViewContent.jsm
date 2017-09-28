@@ -9,9 +9,11 @@ this.EXPORTED_SYMBOLS = ["GeckoViewContent"];
 const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 
 Cu.import("resource://gre/modules/GeckoViewModule.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-var dump = Cu.import("resource://gre/modules/AndroidLog.jsm", {})
-           .AndroidLog.d.bind(null, "ViewContent");
+XPCOMUtils.defineLazyGetter(this, "dump", () =>
+    Cu.import("resource://gre/modules/AndroidLog.jsm",
+              {}).AndroidLog.d.bind(null, "ViewContent"));
 
 function debug(aMsg) {
   // dump(aMsg);
@@ -19,17 +21,24 @@ function debug(aMsg) {
 
 class GeckoViewContent extends GeckoViewModule {
   init() {
-    this.messageManager.loadFrameScript("chrome://geckoview/content/GeckoViewContent.js", true);
+    this.frameScriptLoaded = false;
+  }
+
+  register() {
+    if (!this.frameScriptLoaded) {
+      this.messageManager.loadFrameScript(
+        "chrome://geckoview/content/GeckoViewContent.js", true);
+      this.frameScriptLoaded = true;
+    }
+
+    this.window.addEventListener("MozDOMFullScreen:Entered", this,
+                                 /* capture */ true, /* untrusted */ false);
+    this.window.addEventListener("MozDOMFullScreen:Exited", this,
+                                 /* capture */ true, /* untrusted */ false);
+
+    this.eventDispatcher.registerListener(this, "GeckoViewContent:ExitFullScreen");
     this.messageManager.addMessageListener("GeckoView:DOMFullscreenExit", this);
     this.messageManager.addMessageListener("GeckoView:DOMFullscreenRequest", this);
-    this.messageManager.addMessageListener("GeckoView:DOMTitleChanged", this);
-
-    this.window.addEventListener("MozDOMFullscreen:Entered", this,
-                                 /* capture */ true, /* untrusted */ false);
-    this.window.addEventListener("MozDOMFullscreen:Exited", this,
-                                 /* capture */ true, /* untrusted */ false);
-
-    this.eventDispatcher.registerListener(this, ["GeckoViewContent:ExitFullScreen"]);
   }
 
   // Bundle event handler.
@@ -40,6 +49,16 @@ class GeckoViewContent extends GeckoViewModule {
         this.messageManager.sendAsyncMessage("GeckoView:DOMFullscreenExited");
         break;
     }
+  }
+
+  unregister() {
+    this.window.removeEventListener("MozDOMFullScreen:Entered", this,
+                                    /* capture */ true);
+    this.window.removeEventListener("MozDOMFullScreen:Exited", this,
+                                    /* capture */ true);
+    this.eventDispatcher.unregisterListener(this, "GeckoViewContent:ExitFullScreen");
+    this.messageManager.removeMessageListener("GeckoView:DOMFullscreenExit", this);
+    this.messageManager.removeMessageListener("GeckoView:DOMFullscreenRequest", this);
   }
 
   // DOM event handler
@@ -73,12 +92,6 @@ class GeckoViewContent extends GeckoViewModule {
         this.window.QueryInterface(Ci.nsIInterfaceRequestor)
                    .getInterface(Ci.nsIDOMWindowUtils)
                    .remoteFrameFullscreenChanged(aMsg.target);
-        break;
-      case "GeckoView:DOMTitleChanged":
-        this.eventDispatcher.sendRequest({
-          type: "GeckoView:DOMTitleChanged",
-          title: aMsg.data.title
-        });
         break;
     }
   }

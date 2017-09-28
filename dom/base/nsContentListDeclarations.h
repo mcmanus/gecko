@@ -9,14 +9,12 @@
 
 #include <stdint.h>
 #include "nsCOMPtr.h"
+#include "nsStringFwd.h"
 
 class nsContentList;
 class nsIAtom;
 class nsIContent;
 class nsINode;
-// Can't use nsStringFwd.h because that's internal-API-only.
-class nsString;
-class nsAString;
 
 namespace mozilla {
 namespace dom {
@@ -57,17 +55,12 @@ NS_GetContentList(nsINode* aRootNode,
                   int32_t aMatchNameSpaceId,
                   const nsAString& aTagname);
 
+template<class ListType>
 already_AddRefed<nsContentList>
-NS_GetFuncStringNodeList(nsINode* aRootNode,
+GetFuncStringContentList(nsINode* aRootNode,
                          nsContentListMatchFunc aFunc,
                          nsContentListDestroyFunc aDestroyFunc,
                          nsFuncStringContentListDataAllocator aDataAllocator,
                          const nsAString& aString);
-already_AddRefed<nsContentList>
-NS_GetFuncStringHTMLCollection(nsINode* aRootNode,
-                               nsContentListMatchFunc aFunc,
-                               nsContentListDestroyFunc aDestroyFunc,
-                               nsFuncStringContentListDataAllocator aDataAllocator,
-                               const nsAString& aString);
 
 #endif // nsContentListDeclarations_h

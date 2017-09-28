@@ -49,7 +49,7 @@ using mozilla::dom::Location;
 void
 nsChromeRegistry::LogMessage(const char* aMsg, ...)
 {
-  nsCOMPtr<nsIConsoleService> console 
+  nsCOMPtr<nsIConsoleService> console
     (do_GetService(NS_CONSOLESERVICE_CONTRACTID));
   if (!console)
     return;
@@ -70,7 +70,7 @@ nsChromeRegistry::LogMessageWithContext(nsIURI* aURL, uint32_t aLineNumber, uint
 {
   nsresult rv;
 
-  nsCOMPtr<nsIConsoleService> console 
+  nsCOMPtr<nsIConsoleService> console
     (do_GetService(NS_CONSOLESERVICE_CONTRACTID));
 
   nsCOMPtr<nsIScriptError> error
@@ -166,7 +166,7 @@ nsChromeRegistry::GetProviderAndPath(nsIURL* aChromeURL,
 #endif
 
   nsAutoCString path;
-  rv = aChromeURL->GetPath(path);
+  rv = aChromeURL->GetPathQueryRef(path);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (path.Length() < 3) {
@@ -230,7 +230,7 @@ nsChromeRegistry::Canonify(nsIURL* aChromeURL)
     else {
       return NS_ERROR_INVALID_ARG;
     }
-    aChromeURL->SetPath(path);
+    aChromeURL->SetPathQueryRef(path);
   }
   else {
     // prevent directory traversals ("..")
@@ -249,7 +249,7 @@ nsChromeRegistry::Canonify(nsIURL* aChromeURL)
           // chrome: URIs with double-escapes are trying to trick us.
           // watch for %2e, and %25 in case someone triple unescapes
           if (pos[1] == '2' &&
-               ( pos[2] == 'e' || pos[2] == 'E' || 
+               ( pos[2] == 'e' || pos[2] == 'E' ||
                  pos[2] == '5' ))
             return NS_ERROR_DOM_BAD_URI;
           break;
@@ -355,7 +355,7 @@ NS_IMETHODIMP nsChromeRegistry::RefreshSkins()
     }
     windowEnumerator->HasMoreElements(&more);
   }
-   
+
   return NS_OK;
 }
 
@@ -471,7 +471,7 @@ nsChromeRegistry::FlushAllCaches()
 
   obsSvc->NotifyObservers((nsIChromeRegistry*) this,
                           NS_CHROME_FLUSH_TOPIC, nullptr);
-}  
+}
 
 // xxxbsmedberg Move me to nsIWindowMediator
 NS_IMETHODIMP
@@ -656,7 +656,7 @@ nsChromeRegistry::GetDirectionForLocale(const nsACString& aLocale)
     return false;
   }
 
-  nsXPIDLCString dir;
+  nsCString dir;
   prefBranch->GetCharPref(prefString.get(), getter_Copies(dir));
   if (dir.IsEmpty()) {
     int32_t hyphen = prefString.FindChar('-');

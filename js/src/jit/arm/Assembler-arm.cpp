@@ -659,15 +659,31 @@ Assembler::finish()
 }
 
 bool
-Assembler::asmMergeWith(Assembler& other)
+Assembler::appendRawCode(const uint8_t* code, size_t numBytes)
 {
     flush();
-    other.flush();
-    if (other.oom())
+    return m_buffer.appendRawCode(code, numBytes);
+}
+
+bool
+Assembler::reserve(size_t size)
+{
+    // This buffer uses fixed-size chunks so there's no point in reserving
+    // now vs. on-demand.
+    return !oom();
+}
+
+bool
+Assembler::swapBuffer(wasm::Bytes& bytes)
+{
+    // For now, specialize to the one use case. As long as wasm::Bytes is a
+    // Vector, not a linked-list of chunks, there's not much we can do other
+    // than copy.
+    MOZ_ASSERT(bytes.empty());
+    if (!bytes.resize(bytesNeeded()))
         return false;
-    if (!AssemblerShared::asmMergeWith(size(), other))
-        return false;
-    return m_buffer.appendBuffer(other.m_buffer);
+    m_buffer.executableCopy(bytes.begin());
+    return true;
 }
 
 void
@@ -790,16 +806,16 @@ uintptr_t
 Assembler::GetPointer(uint8_t* instPtr)
 {
     InstructionIterator iter((Instruction*)instPtr);
-    uintptr_t ret = (uintptr_t)GetPtr32Target(&iter, nullptr, nullptr);
+    uintptr_t ret = (uintptr_t)GetPtr32Target(iter, nullptr, nullptr);
     return ret;
 }
 
 template<class Iter>
 const uint32_t*
-Assembler::GetPtr32Target(Iter* start, Register* dest, RelocStyle* style)
+Assembler::GetPtr32Target(Iter start, Register* dest, RelocStyle* style)
 {
-    Instruction* load1 = start->cur();
-    Instruction* load2 = start->next();
+    Instruction* load1 = start.cur();
+    Instruction* load2 = start.next();
 
     if (load1->is<InstMovW>() && load2->is<InstMovT>()) {
         if (style)
@@ -863,9 +879,8 @@ Assembler::TraceJumpRelocations(JSTracer* trc, JitCode* code, CompactBufferReade
 
 template <class Iter>
 static void
-TraceOneDataRelocation(JSTracer* trc, Iter* iter)
+TraceOneDataRelocation(JSTracer* trc, Iter iter)
 {
-    Instruction* ins = iter->cur();
     Register dest;
     Assembler::RelocStyle rs;
     const void* prior = Assembler::GetPtr32Target(iter, &dest, &rs);
@@ -876,12 +891,12 @@ TraceOneDataRelocation(JSTracer* trc, Iter* iter)
                                              "ion-masm-ptr");
 
     if (ptr != prior) {
-        MacroAssemblerARM::ma_mov_patch(Imm32(int32_t(ptr)), dest, Assembler::Always, rs, ins);
+        MacroAssemblerARM::ma_mov_patch(Imm32(int32_t(ptr)), dest, Assembler::Always, rs, iter);
 
         // L_LDR won't cause any instructions to be updated.
         if (rs != Assembler::L_LDR) {
-            AutoFlushICache::flush(uintptr_t(ins), 4);
-            AutoFlushICache::flush(uintptr_t(ins->next()), 4);
+            AutoFlushICache::flush(uintptr_t(iter.cur()), 4);
+            AutoFlushICache::flush(uintptr_t(iter.next()), 4);
         }
     }
 }
@@ -892,7 +907,7 @@ TraceDataRelocations(JSTracer* trc, uint8_t* buffer, CompactBufferReader& reader
     while (reader.more()) {
         size_t offset = reader.readUnsigned();
         InstructionIterator iter((Instruction*)(buffer + offset));
-        TraceOneDataRelocation(trc, &iter);
+        TraceOneDataRelocation(trc, iter);
     }
 }
 
@@ -901,8 +916,8 @@ TraceDataRelocations(JSTracer* trc, ARMBuffer* buffer, CompactBufferReader& read
 {
     while (reader.more()) {
         BufferOffset offset(reader.readUnsigned());
-        ARMBuffer::AssemblerBufferInstIterator iter(offset, buffer);
-        TraceOneDataRelocation(trc, &iter);
+        BufferInstructionIterator iter(offset, buffer);
+        TraceOneDataRelocation(trc, iter);
     }
 }
 
@@ -949,20 +964,21 @@ Assembler::processCodeLabels(uint8_t* rawCode)
 {
     for (size_t i = 0; i < codeLabels_.length(); i++) {
         CodeLabel label = codeLabels_[i];
-        Bind(rawCode, label.patchAt(), rawCode + label.target()->offset());
+        Bind(rawCode, *label.patchAt(), *label.target());
     }
 }
 
 void
-Assembler::writeCodePointer(CodeOffset* label) {
-    BufferOffset off = writeInst(LabelBase::INVALID_OFFSET);
+Assembler::writeCodePointer(CodeOffset* label)
+{
+    BufferOffset off = writeInst(-1);
     label->bind(off.getOffset());
 }
 
 void
-Assembler::Bind(uint8_t* rawCode, CodeOffset* label, const void* address)
+Assembler::Bind(uint8_t* rawCode, CodeOffset label, CodeOffset target)
 {
-    *reinterpret_cast<const void**>(rawCode + label->offset()) = address;
+    *reinterpret_cast<const void**>(rawCode + label.offset()) = rawCode + target.offset();
 }
 
 Assembler::Condition
@@ -2388,10 +2404,9 @@ Assembler::as_b(Label* l, Condition c)
     if (oom())
         return BufferOffset();
 
-    int32_t old;
     BufferOffset ret;
     if (l->used()) {
-        old = l->offset();
+        int32_t old = l->offset();
         // This will currently throw an assertion if we couldn't actually
         // encode the offset of the branch.
         if (!BOffImm::IsInRange(old)) {
@@ -2400,7 +2415,6 @@ Assembler::as_b(Label* l, Condition c)
         }
         ret = as_b(BOffImm(old), c, l);
     } else {
-        old = LabelBase::INVALID_OFFSET;
         BOffImm inv;
         ret = as_b(inv, c, l);
     }
@@ -2408,8 +2422,7 @@ Assembler::as_b(Label* l, Condition c)
     if (oom())
         return BufferOffset();
 
-    DebugOnly<int32_t> check = l->use(ret.getOffset());
-    MOZ_ASSERT(check == old);
+    l->use(ret.getOffset());
     return ret;
 }
 
@@ -2475,20 +2488,18 @@ Assembler::as_bl(Label* l, Condition c)
     if (oom())
         return BufferOffset();
 
-    int32_t old;
     BufferOffset ret;
-    // See if the list was empty :(
+    // See if the list was empty.
     if (l->used()) {
         // This will currently throw an assertion if we couldn't actually encode
         // the offset of the branch.
-        old = l->offset();
+        int32_t old = l->offset();
         if (!BOffImm::IsInRange(old)) {
             m_buffer.fail_bail();
             return ret;
         }
         ret = as_bl(BOffImm(old), c, l);
     } else {
-        old = LabelBase::INVALID_OFFSET;
         BOffImm inv;
         ret = as_bl(inv, c, l);
     }
@@ -2496,8 +2507,7 @@ Assembler::as_bl(Label* l, Condition c)
     if (oom())
         return BufferOffset();
 
-    DebugOnly<int32_t> check = l->use(ret.getOffset());
-    MOZ_ASSERT(check == old);
+    l->use(ret.getOffset());
     return ret;
 }
 
@@ -2924,7 +2934,8 @@ Assembler::retarget(Label* label, Label* target)
             // use chain, prepending the entire use chain of target.
             Instruction branch = *editSrc(labelBranchOffset);
             Condition c = branch.extractCond();
-            int32_t prev = target->use(label->offset());
+            int32_t prev = target->offset();
+            target->use(label->offset());
             if (branch.is<InstBImm>())
                 as_b(BOffImm(prev), c, labelBranchOffset);
             else if (branch.is<InstBLImm>())
@@ -2934,8 +2945,7 @@ Assembler::retarget(Label* label, Label* target)
         } else {
             // The target is unbound and unused. We can just take the head of
             // the list hanging off of label, and dump that into target.
-            DebugOnly<uint32_t> prev = target->use(label->offset());
-            MOZ_ASSERT((int32_t)prev == Label::INVALID_OFFSET);
+            target->use(label->offset());
         }
     }
     label->reset();
@@ -3124,14 +3134,14 @@ Assembler::PatchDataWithValueCheck(CodeLocationLabel label, PatchedImmPtr newVal
                                    PatchedImmPtr expectedValue)
 {
     Instruction* ptr = reinterpret_cast<Instruction*>(label.raw());
-    InstructionIterator iter(ptr);
+
     Register dest;
     Assembler::RelocStyle rs;
-
-    DebugOnly<const uint32_t*> val = GetPtr32Target(&iter, &dest, &rs);
+    DebugOnly<const uint32_t*> val = GetPtr32Target(InstructionIterator(ptr), &dest, &rs);
     MOZ_ASSERT(uint32_t((const uint32_t*)val) == uint32_t(expectedValue.value));
 
-    MacroAssembler::ma_mov_patch(Imm32(int32_t(newValue.value)), dest, Always, rs, ptr);
+    MacroAssembler::ma_mov_patch(Imm32(int32_t(newValue.value)), dest, Always, rs,
+                                 InstructionIterator(ptr));
 
     // L_LDR won't cause any instructions to be updated.
     if (rs != L_LDR) {
@@ -3185,6 +3195,20 @@ InstIsGuard(Instruction* inst, const PoolHeader** ph)
 }
 
 static bool
+InstIsGuard(BufferInstructionIterator& iter, const PoolHeader** ph)
+{
+    Instruction* inst = iter.cur();
+    Assembler::Condition c = inst->extractCond();
+    if (c != Assembler::Always)
+        return false;
+    if (!(inst->is<InstBXReg>() || inst->is<InstBImm>()))
+        return false;
+    // See if the next instruction is a pool header.
+    *ph = iter.peek()->as<const PoolHeader>();
+    return *ph != nullptr;
+}
+
+static bool
 InstIsBNop(Instruction* inst)
 {
     // In some special situations, it is necessary to insert a NOP into the
@@ -3227,6 +3251,28 @@ Instruction::skipPool()
     if (InstIsBNop(this))
         return (this + 1)->skipPool();
     return this;
+}
+
+void
+BufferInstructionIterator::skipPool()
+{
+    // If this is a guard, and the next instruction is a header, always work
+    // around the pool. If it isn't a guard, then start looking ahead.
+
+    const PoolHeader* ph;
+    if (InstIsGuard(*this, &ph)) {
+        // Don't skip a natural guard.
+        if (ph->isNatural())
+            return;
+        advance(sizeof(Instruction) * (1 + ph->size()));
+        skipPool();
+        return;
+    }
+
+    if (InstIsBNop(cur())) {
+        next();
+        skipPool();
+    }
 }
 
 // Cases to be handled:
@@ -3370,13 +3416,6 @@ Assembler::BailoutTableStart(uint8_t* code)
     inst = inst->skipPool();
     MOZ_ASSERT(inst->is<InstBLImm>());
     return (uint8_t*) inst;
-}
-
-InstructionIterator::InstructionIterator(Instruction* i_)
-  : i(i_)
-{
-    // Work around pools with an artificial pool guard and around nop-fill.
-    i = i->skipPool();
 }
 
 uint32_t Assembler::NopFill = 0;

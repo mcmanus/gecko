@@ -11,7 +11,6 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/EndianUtils.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "VideoUtils.h"
 
 extern mozilla::LazyLogModule gMediaDemuxerLog;
@@ -115,7 +114,7 @@ FrameParser::Parse(ByteReader* aReader, uint32_t* aBytesToSkip)
         // buffer, therefore we return immediately and let the calling function
         // handle skipping the rest of the tag.
         MP3LOGV("ID3v2 tag detected, size=%d,"
-                " needing to skip %" PRIuSIZE " bytes past the current buffer",
+                " needing to skip %zu bytes past the current buffer",
                 tagSize, skipSize - aReader->Remaining());
         *aBytesToSkip = skipSize - aReader->Remaining();
         return false;
@@ -402,12 +401,12 @@ FrameParser::VBRHeader::IsValid() const
 bool
 FrameParser::VBRHeader::IsComplete() const
 {
-  return IsValid()
-         && mNumAudioFrames.valueOr(0) > 0
-         && mNumBytes.valueOr(0) > 0
+  return IsValid() &&
+         mNumAudioFrames.valueOr(0) > 0 &&
+         mNumBytes.valueOr(0) > 0
          // We don't care about the scale for any computations here.
          // && mScale < 101
-         && true;
+         ;
 }
 
 int64_t
@@ -527,7 +526,7 @@ FrameParser::VBRHeader::Parse(ByteReader* aReader)
   const bool rv = ParseVBRI(aReader) || ParseXing(aReader);
   if (rv) {
     MP3LOG("VBRHeader::Parse found valid VBR/CBR header: type=%s"
-           " NumAudioFrames=%u NumBytes=%u Scale=%u TOC-size=%" PRIuSIZE,
+           " NumAudioFrames=%u NumBytes=%u Scale=%u TOC-size=%zu",
            vbr_header::TYPE_STR[Type()], NumAudioFrames().valueOr(0),
            NumBytes().valueOr(0), Scale().valueOr(0), mTOC.size());
   }
@@ -700,8 +699,8 @@ ID3Parser::ID3Header::IsValid(int aPos) const
       // Expecting "ID3".
       return id3_header::ID[aPos] == c;
     case 3:
-      return MajorVersion() >= id3_header::MIN_MAJOR_VER
-             && MajorVersion() <= id3_header::MAX_MAJOR_VER;
+      return MajorVersion() >= id3_header::MIN_MAJOR_VER &&
+             MajorVersion() <= id3_header::MAX_MAJOR_VER;
     case 4:
       return MinorVersion() < 0xFF;
     case 5:
@@ -722,8 +721,8 @@ ID3Parser::ID3Header::IsValid() const
 bool
 ID3Parser::ID3Header::Update(uint8_t c)
 {
-  if (mPos >= id3_header::SIZE_END - id3_header::SIZE_LEN
-      && mPos < id3_header::SIZE_END) {
+  if (mPos >= id3_header::SIZE_END - id3_header::SIZE_LEN &&
+      mPos < id3_header::SIZE_END) {
     mSize <<= 7;
     mSize |= c;
   }

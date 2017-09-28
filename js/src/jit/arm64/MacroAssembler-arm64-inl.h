@@ -1459,6 +1459,12 @@ MacroAssembler::branchTestString(Condition cond, Register tag, Label* label)
 }
 
 void
+MacroAssembler::branchTestString(Condition cond, const Address& address, Label* label)
+{
+    branchTestStringImpl(cond, address, label);
+}
+
+void
 MacroAssembler::branchTestString(Condition cond, const BaseIndex& address, Label* label)
 {
     branchTestStringImpl(cond, address, label);
@@ -1654,6 +1660,12 @@ MacroAssembler::branchTestMagic(Condition cond, const Address& valaddr, JSWhyMag
     uint64_t magic = MagicValue(why).asRawBits();
     cmpPtr(valaddr, ImmWord(magic));
     B(label, cond);
+}
+
+void
+MacroAssembler::branchToComputedAddress(const BaseIndex& addr)
+{
+    MOZ_CRASH("branchToComputedAddress");
 }
 
 // ========================================================================

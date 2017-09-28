@@ -13,7 +13,6 @@
 #include "OmxPlatformLayer.h"
 
 #include "mozilla/IntegerPrintfMacros.h"
-#include "mozilla/SizePrintfMacros.h"
 
 #ifdef LOG
 #undef LOG
@@ -301,8 +300,8 @@ OmxDataDecoder::FillBufferDone(BufferData* aData)
   MOZ_ASSERT(!aData || aData->mStatus == BufferData::BufferStatus::OMX_CLIENT);
 
   // Don't output sample when flush or shutting down, especially for video
-  // decoded frame. Because video decoded frame has a promise in BufferData
-  // waiting for layer to resolve it via recycle callback on Gonk, if other
+  // decoded frame. Because video decoded frame can have a promise in
+  // BufferData waiting for layer to resolve it via recycle callback, if other
   // module doesn't send it to layer, it will cause a unresolved promise and
   // waiting for resolve infinitely.
   if (mFlushing || mShuttingDown) {
@@ -337,8 +336,7 @@ OmxDataDecoder::Output(BufferData* aData)
 
   if (isPlatformData) {
     // If the MediaData is platform dependnet data, it's mostly a kind of
-    // limited resource, for example, GraphicBuffer on Gonk. So we use promise
-    // to notify when the resource is free.
+    // limited resource, so we use promise to notify when the resource is free.
     aData->mStatus = BufferData::BufferStatus::OMX_CLIENT_OUTPUT;
 
     MOZ_RELEASE_ASSERT(aData->mPromise.IsEmpty());
@@ -386,16 +384,17 @@ OmxDataDecoder::EmptyBufferDone(BufferData* aData)
     mCheckingInputExhausted = true;
 
     RefPtr<OmxDataDecoder> self = this;
-    nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction([self, this]() {
-      mCheckingInputExhausted = false;
+    nsCOMPtr<nsIRunnable> r =
+      NS_NewRunnableFunction("OmxDataDecoder::EmptyBufferDone", [self, this]() {
+        mCheckingInputExhausted = false;
 
-      if (mMediaRawDatas.Length()) {
-        return;
-      }
+        if (mMediaRawDatas.Length()) {
+          return;
+        }
 
-      mDecodePromise.ResolveIfExists(mDecodedData, __func__);
-      mDecodedData.Clear();
-    });
+        mDecodePromise.ResolveIfExists(mDecodedData, __func__);
+        mDecodedData.Clear();
+      });
 
     mOmxTaskQueue->Dispatch(r.forget());
   }
@@ -729,7 +728,7 @@ OmxDataDecoder::CollectBufferPromises(OMX_DIRTYPE aType)
     }
   }
 
-  LOG("CollectBufferPromises: type %d, total %" PRIuSIZE " promiese", aType, promises.Length());
+  LOG("CollectBufferPromises: type %d, total %zu promiese", aType, promises.Length());
   if (promises.Length()) {
     return OmxBufferPromise::All(mOmxTaskQueue, promises);
   }

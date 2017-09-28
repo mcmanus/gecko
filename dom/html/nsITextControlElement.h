@@ -9,9 +9,8 @@
 
 #include "nsISupports.h"
 #include "nsCOMPtr.h"
+#include "nsStringFwd.h"
 class nsIContent;
-class nsAString;
-class nsIEditor;
 class nsISelectionController;
 class nsFrameSelection;
 class nsTextControlFrame;
@@ -19,6 +18,7 @@ class nsTextControlFrame;
 namespace mozilla {
 
 class ErrorResult;
+class TextEditor;
 
 namespace dom {
 class Element;
@@ -55,12 +55,6 @@ public:
    * @return whether this is a textarea text control
    */
   NS_IMETHOD_(bool) IsTextArea() const = 0;
-
-  /**
-   * Find out whether this control edits plain text.  (Currently always true.)
-   * @return whether this is a plain text control
-   */
-  NS_IMETHOD_(bool) IsPlainTextControl() const = 0;
 
   /**
    * Find out whether this is a password control (input type=password)
@@ -109,7 +103,7 @@ public:
    * The return value is null if the control does not support an editor
    * (for example, if it is a checkbox.)
    */
-  NS_IMETHOD_(nsIEditor*) GetTextEditor() = 0;
+  NS_IMETHOD_(mozilla::TextEditor*) GetTextEditor() = 0;
 
   /**
    * Get the selection controller object associated with the text editor.
@@ -145,19 +139,9 @@ public:
   NS_IMETHOD_(mozilla::dom::Element*) GetRootEditorNode() = 0;
 
   /**
-   * Create the placeholder anonymous node for the text control and returns it.
-   */
-  NS_IMETHOD_(mozilla::dom::Element*) CreatePlaceholderNode() = 0;
-
-  /**
    * Get the placeholder anonymous node for the text control.
    */
   NS_IMETHOD_(mozilla::dom::Element*) GetPlaceholderNode() = 0;
-
-  /**
-   * Create the preview anonymous node for the text control and returns it.
-   */
-  NS_IMETHOD_(mozilla::dom::Element*) CreatePreviewNode() = 0;
 
   /**
    * Get the preview anonymous node for the text control.
@@ -220,7 +204,7 @@ public:
   static const int32_t DEFAULT_ROWS_TEXTAREA = 2;
   static const int32_t DEFAULT_UNDO_CAP = 1000;
 
-  // wrap can be one of these three values.  
+  // wrap can be one of these three values.
   typedef enum {
     eHTMLTextWrap_Off     = 1,    // "off"
     eHTMLTextWrap_Hard    = 2,    // "hard"

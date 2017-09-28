@@ -13,6 +13,7 @@
 #include "mozilla/Atomics.h"
 #include "mozilla/Maybe.h"
 #include "nsCOMPtr.h"
+#include "nsStringFwd.h"
 #include "nsTArrayForwardDeclare.h"
 
 /**
@@ -30,7 +31,6 @@
  */
 
 class nsIRunnable;
-class nsCString;
 
 namespace mozilla {
 
@@ -146,7 +146,7 @@ PRTime GetStartTime();
  * Internal functions.
  */
 
-already_AddRefed<Runnable>
+already_AddRefed<nsIRunnable>
 CreateTracedRunnable(already_AddRefed<nsIRunnable>&& aRunnable);
 
 // Free the TraceInfo allocated on a thread's TLS. Currently we are wrapping

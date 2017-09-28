@@ -47,7 +47,7 @@ let gSiteDataSettings = {
 
     let brandShortName = document.getElementById("bundle_brand").getString("brandShortName");
     let settingsDescription = document.getElementById("settingsDescription");
-    settingsDescription.textContent = this._prefStrBundle.getFormattedString("siteDataSettings.description", [brandShortName]);
+    settingsDescription.textContent = this._prefStrBundle.getFormattedString("siteDataSettings2.description", [brandShortName]);
 
     setEventListener("hostCol", "click", this.onClickTreeCol);
     setEventListener("usageCol", "click", this.onClickTreeCol);
@@ -296,6 +296,12 @@ let gSiteDataSettings = {
     let siteItems = this._list.getElementsByTagName("richlistitem");
     if (siteItems.length > 0) {
       this._removeSiteItems(siteItems);
+    }
+  },
+
+  onKeyPress(e) {
+    if (e.keyCode == KeyEvent.DOM_VK_ESCAPE) {
+      this.close();
     }
   }
 };

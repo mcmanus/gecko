@@ -19,18 +19,32 @@ extern crate app_units;
 extern crate euclid;
 #[cfg(feature = "servo")] extern crate heapsize;
 #[cfg(feature = "servo")] #[macro_use] extern crate heapsize_derive;
+#[cfg(feature = "gecko")] extern crate malloc_size_of;
+#[cfg(feature = "gecko")] #[macro_use] extern crate malloc_size_of_derive;
 extern crate selectors;
 #[cfg(feature = "servo")] #[macro_use] extern crate serde;
+#[cfg(feature = "servo")] extern crate webrender_api;
+#[cfg(feature = "servo")] extern crate servo_atoms;
 
-use cssparser::CompactCowStr;
+#[cfg(feature = "servo")] pub use webrender_api::DevicePixel;
+
+use cssparser::{CowRcStr, Token};
 use selectors::parser::SelectorParseError;
+#[cfg(feature = "servo")] use servo_atoms::Atom;
+
+/// One hardware pixel.
+///
+/// This unit corresponds to the smallest addressable element of the display hardware.
+#[cfg(not(feature = "servo"))]
+#[derive(Clone, Copy, Debug)]
+pub enum DevicePixel {}
 
 /// Opaque type stored in type-unsafe work queues for parallel layout.
 /// Must be transmutable to and from `TNode`.
 pub type UnsafeNode = (usize, usize);
 
 /// Represents a mobile style pinch zoom factor.
-/// TODO(gw): Once WR supports pinch zoom, use a type directly from webrender_traits.
+/// TODO(gw): Once WR supports pinch zoom, use a type directly from webrender_api.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "servo", derive(Deserialize, Serialize, HeapSizeOf))]
 pub struct PinchZoomFactor(f32);
@@ -71,8 +85,7 @@ pub mod values;
 #[macro_use]
 pub mod viewport;
 
-pub use values::{ToCss, OneOrMoreSeparated, CommaSeparator, SpaceSeparator, IsCommaSeparator};
-pub use viewport::HasViewportPercentage;
+pub use values::{Comma, CommaWithSpace, OneOrMoreSeparated, Separator, Space, ToCss};
 
 /// The error type for all CSS parsing routines.
 pub type ParseError<'i> = cssparser::ParseError<'i, SelectorParseError<'i, StyleParseError<'i>>>;
@@ -81,9 +94,9 @@ pub type ParseError<'i> = cssparser::ParseError<'i, SelectorParseError<'i, Style
 /// Errors that can be encountered while parsing CSS values.
 pub enum StyleParseError<'i> {
     /// A bad URL token in a DVB.
-    BadUrlInDeclarationValueBlock,
+    BadUrlInDeclarationValueBlock(CowRcStr<'i>),
     /// A bad string token in a DVB.
-    BadStringInDeclarationValueBlock,
+    BadStringInDeclarationValueBlock(CowRcStr<'i>),
     /// Unexpected closing parenthesis in a DVB.
     UnbalancedCloseParenthesisInDeclarationValueBlock,
     /// Unexpected closing bracket in a DVB.
@@ -91,15 +104,21 @@ pub enum StyleParseError<'i> {
     /// Unexpected closing curly bracket in a DVB.
     UnbalancedCloseCurlyBracketInDeclarationValueBlock,
     /// A property declaration parsing error.
-    PropertyDeclaration(PropertyDeclarationParseError),
+    PropertyDeclaration(PropertyDeclarationParseError<'i>),
     /// A property declaration value had input remaining after successfully parsing.
     PropertyDeclarationValueNotExhausted,
     /// An unexpected dimension token was encountered.
-    UnexpectedDimension(CompactCowStr<'i>),
-    /// A media query using a ranged expression with no value was encountered.
+    UnexpectedDimension(CowRcStr<'i>),
+    /// Expected identifier not found.
+    ExpectedIdentifier(Token<'i>),
+    /// Missing or invalid media feature name.
+    MediaQueryExpectedFeatureName(CowRcStr<'i>),
+    /// Missing or invalid media feature value.
+    MediaQueryExpectedFeatureValue,
+    /// min- or max- properties must have a value.
     RangedExpressionWithNoValue,
     /// A function was encountered that was not expected.
-    UnexpectedFunction(CompactCowStr<'i>),
+    UnexpectedFunction(CowRcStr<'i>),
     /// @namespace must be before any rule but @charset and @import
     UnexpectedNamespaceRule,
     /// @import must be before any rule but @charset
@@ -107,20 +126,53 @@ pub enum StyleParseError<'i> {
     /// Unexpected @charset rule encountered.
     UnexpectedCharsetRule,
     /// Unsupported @ rule
-    UnsupportedAtRule(CompactCowStr<'i>),
+    UnsupportedAtRule(CowRcStr<'i>),
     /// A placeholder for many sources of errors that require more specific variants.
     UnspecifiedError,
+    /// An unexpected token was found within a namespace rule.
+    UnexpectedTokenWithinNamespace(Token<'i>),
+    /// An error was encountered while parsing a property value.
+    ValueError(ValueParseError<'i>),
+}
+
+/// Specific errors that can be encountered while parsing property values.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ValueParseError<'i> {
+    /// An invalid token was encountered while parsing a color value.
+    InvalidColor(Token<'i>),
+    /// An invalid filter value was encountered.
+    InvalidFilter(Token<'i>),
+}
+
+impl<'a> From<ValueParseError<'a>> for ParseError<'a> {
+    fn from(this: ValueParseError<'a>) -> Self {
+        StyleParseError::ValueError(this).into()
+    }
+}
+
+impl<'i> ValueParseError<'i> {
+    /// Attempt to extract a ValueParseError value from a ParseError.
+    pub fn from_parse_error(this: ParseError<'i>) -> Option<ValueParseError<'i>> {
+        match this {
+            cssparser::ParseError::Custom(
+                SelectorParseError::Custom(
+                    StyleParseError::ValueError(e))) => Some(e),
+            _ => None,
+        }
+    }
 }
 
 /// The result of parsing a property declaration.
-#[derive(Eq, PartialEq, Copy, Clone, Debug)]
-pub enum PropertyDeclarationParseError {
+#[derive(Clone, Debug, PartialEq)]
+pub enum PropertyDeclarationParseError<'i> {
     /// The property declaration was for an unknown property.
-    UnknownProperty,
+    UnknownProperty(CowRcStr<'i>),
+    /// An unknown vendor-specific identifier was encountered.
+    UnknownVendorProperty,
     /// The property declaration was for a disabled experimental property.
     ExperimentalProperty,
     /// The property declaration contained an invalid value.
-    InvalidValue,
+    InvalidValue(CowRcStr<'i>, Option<ValueParseError<'i>>),
     /// The declaration contained an animation property, and we were parsing
     /// this as a keyframe block (so that property should be ignored).
     ///
@@ -136,8 +188,8 @@ impl<'a> From<StyleParseError<'a>> for ParseError<'a> {
     }
 }
 
-impl<'a> From<PropertyDeclarationParseError> for ParseError<'a> {
-    fn from(this: PropertyDeclarationParseError) -> Self {
+impl<'a> From<PropertyDeclarationParseError<'a>> for ParseError<'a> {
+    fn from(this: PropertyDeclarationParseError<'a>) -> Self {
         cssparser::ParseError::Custom(SelectorParseError::Custom(StyleParseError::PropertyDeclaration(this)))
     }
 }
@@ -170,3 +222,9 @@ impl ParsingMode {
     }
 }
 
+#[cfg(feature = "servo")]
+/// Speculatively execute paint code in the worklet thread pool.
+pub trait SpeculativePainter: Send + Sync {
+    /// https://drafts.css-houdini.org/css-paint-api/#draw-a-paint-image
+    fn speculatively_draw_a_paint_image(&self, properties: Vec<(Atom, String)>, arguments: Vec<String>);
+}

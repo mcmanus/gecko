@@ -6,6 +6,7 @@
 #ifndef __NS_SVGPAINTSERVERFRAME_H__
 #define __NS_SVGPAINTSERVERFRAME_H__
 
+#include "gfxRect.h"
 #include "mozilla/Attributes.h"
 #include "nsCOMPtr.h"
 #include "nsFrame.h"
@@ -23,8 +24,6 @@ class DrawTarget;
 class gfxContext;
 class gfxPattern;
 class nsStyleContext;
-
-struct gfxRect;
 
 /**
  * RAII class used to temporarily set and remove the
@@ -87,7 +86,6 @@ public:
 
   // nsIFrame methods:
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override {}
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override

@@ -7,6 +7,7 @@ Runs the reftest test harness.
 """
 
 import collections
+import copy
 import itertools
 import json
 import multiprocessing
@@ -18,6 +19,7 @@ import signal
 import subprocess
 import sys
 import threading
+from datetime import datetime, timedelta
 
 SCRIPT_DIRECTORY = os.path.abspath(
     os.path.realpath(os.path.dirname(__file__)))
@@ -72,6 +74,21 @@ summaryLines = [('Successful', [('pass', 'pass'), ('loadOnly', 'load only')]),
                                     ('random', 'random'),
                                     ('skipped', 'skipped'),
                                     ('slow', 'slow')])]
+
+
+def update_mozinfo():
+    """walk up directories to find mozinfo.json update the info"""
+    # TODO: This should go in a more generic place, e.g. mozinfo
+
+    path = SCRIPT_DIRECTORY
+    dirs = set()
+    while path != os.path.expanduser('~'):
+        if path in dirs:
+            break
+        dirs.add(path)
+        path = os.path.split(path)[0]
+    mozinfo.find_and_update_from_json(*dirs)
+
 
 # Python's print is not threadsafe.
 printLock = threading.Lock()
@@ -207,13 +224,15 @@ class ReftestResolver(object):
 
 
 class RefTest(object):
+    TEST_SEEN_INITIAL = 'reftest'
+    TEST_SEEN_FINAL = 'Main app process exited normally'
     use_marionette = True
     oldcwd = os.getcwd()
     resolver_cls = ReftestResolver
 
     def __init__(self):
-        self.update_mozinfo()
-        self.lastTestSeen = 'reftest'
+        update_mozinfo()
+        self.lastTestSeen = self.TEST_SEEN_INITIAL
         self.haveDumpedScreen = False
         self.resolver = self.resolver_cls()
         self.log = None
@@ -231,19 +250,6 @@ class RefTest(object):
             options.log_tbpl_level = fmt_options['level'] = 'debug'
         self.log = mozlog.commandline.setup_logging(
             "reftest harness", options, {"tbpl": sys.stdout}, fmt_options)
-
-    def update_mozinfo(self):
-        """walk up directories to find mozinfo.json update the info"""
-        # TODO: This should go in a more generic place, e.g. mozinfo
-
-        path = SCRIPT_DIRECTORY
-        dirs = set()
-        while path != os.path.expanduser('~'):
-            if path in dirs:
-                break
-            dirs.add(path)
-            path = os.path.split(path)[0]
-        mozinfo.find_and_update_from_json(*dirs)
 
     def getFullPath(self, path):
         "Get an absolute path relative to self.oldcwd."
@@ -289,7 +295,8 @@ class RefTest(object):
         prefs['reftest.logLevel'] = options.log_tbpl_level or 'info'
         prefs['reftest.manifests'] = json.dumps(manifests)
 
-        if startAfter is not None:
+        if startAfter not in (None, self.TEST_SEEN_INITIAL, self.TEST_SEEN_FINAL):
+            self.log.info("Setting reftest.startAfter to %s" % startAfter)
             prefs['reftest.startAfter'] = startAfter
 
         if options.e10s:
@@ -300,6 +307,24 @@ class RefTest(object):
         if platform.system() in ("Windows", "Microsoft") and \
            '5.1' in platform.version() and options.e10s:
             prefs['layers.acceleration.disabled'] = True
+
+        sandbox_whitelist_paths = [SCRIPT_DIRECTORY]
+        try:
+            if options.workPath:
+                sandbox_whitelist_paths.append(options.workPath)
+        except AttributeError:
+            pass
+        if platform.system() == "Linux":
+            try:
+                if options.objPath:
+                    sandbox_whitelist_paths.append(options.objPath)
+            except AttributeError:
+                pass
+        if (platform.system() == "Linux" or
+            platform.system() in ("Windows", "Microsoft")):
+            # Trailing slashes are needed to indicate directories on Linux and Windows
+            sandbox_whitelist_paths = map(lambda p: os.path.join(p, ""),
+                                          sandbox_whitelist_paths)
 
         # Bug 1300355: Disable canvas cache for win7 as it uses
         # too much memory and causes OOMs.
@@ -345,7 +370,8 @@ class RefTest(object):
 
         kwargs = {'addons': addons,
                   'preferences': prefs,
-                  'locations': locations}
+                  'locations': locations,
+                  'whitelistpaths': sandbox_whitelist_paths}
         if profile_to_clone:
             profile = mozprofile.Profile.clone(profile_to_clone, **kwargs)
         else:
@@ -367,6 +393,8 @@ class RefTest(object):
         browserEnv["XPCOM_DEBUG_BREAK"] = "stack"
         if hasattr(options, "topsrcdir"):
             browserEnv["MOZ_DEVELOPER_REPO_DIR"] = options.topsrcdir
+        if hasattr(options, "topobjdir"):
+            browserEnv["MOZ_DEVELOPER_OBJ_DIR"] = options.topobjdir
 
         if mozinfo.info["asan"]:
             # Disable leak checking for reftests for now
@@ -387,50 +415,86 @@ class RefTest(object):
         browserEnv["XPCOM_MEM_BLOAT_LOG"] = self.leakLogFile
         return browserEnv
 
-    def killNamedOrphans(self, pname):
-        """ Kill orphan processes matching the given command name """
-        self.log.info("Checking for orphan %s processes..." % pname)
-
-        def _psInfo(line):
-            if pname in line:
-                self.log.info(line)
-        process = mozprocess.ProcessHandler(['ps', '-f'],
-                                            processOutputLine=_psInfo)
-        process.run()
-        process.wait()
-
-        def _psKill(line):
-            parts = line.split()
-            if len(parts) == 3 and parts[0].isdigit():
-                pid = int(parts[0])
-                if parts[2] == pname and parts[1] == '1':
-                    self.log.info("killing %s orphan with pid %d" % (pname, pid))
-                    try:
-                        os.kill(
-                            pid, getattr(signal, "SIGKILL", signal.SIGTERM))
-                    except Exception as e:
-                        self.log.info("Failed to kill process %d: %s" %
-                                      (pid, str(e)))
-        process = mozprocess.ProcessHandler(['ps', '-o', 'pid,ppid,comm'],
-                                            processOutputLine=_psKill)
-        process.run()
-        process.wait()
-
     def cleanup(self, profileDir):
         if profileDir:
             shutil.rmtree(profileDir, True)
 
+    def verifyTests(self, tests, options):
+        """
+        Support --verify mode: Run test(s) many times in a variety of
+        configurations/environments in an effort to find intermittent
+        failures.
+        """
+
+        self._populate_logger(options)
+
+        # Number of times to repeat test(s) when running with --repeat
+        VERIFY_REPEAT = 20
+        # Number of times to repeat test(s) when running test in separate browser
+        VERIFY_REPEAT_SINGLE_BROWSER = 10
+
+        def step1():
+            stepOptions = copy.deepcopy(options)
+            stepOptions.repeat = VERIFY_REPEAT
+            stepOptions.runUntilFailure = True
+            result = self.runTests(tests, stepOptions)
+            return result
+
+        def step2():
+            stepOptions = copy.deepcopy(options)
+            for i in xrange(VERIFY_REPEAT_SINGLE_BROWSER):
+                result = self.runTests(tests, stepOptions)
+                if result != 0:
+                    break
+            return result
+
+        steps = [
+            ("1. Run each test %d times in one browser." % VERIFY_REPEAT,
+             step1),
+            ("2. Run each test %d times in a new browser each time." %
+             VERIFY_REPEAT_SINGLE_BROWSER,
+             step2),
+        ]
+
+        stepResults = {}
+        for (descr, step) in steps:
+            stepResults[descr] = "not run / incomplete"
+
+        startTime = datetime.now()
+        maxTime = timedelta(seconds=options.verify_max_time)
+        finalResult = "PASSED"
+        for (descr, step) in steps:
+            if (datetime.now() - startTime) > maxTime:
+                self.log.info("::: Test verification is taking too long: Giving up!")
+                self.log.info("::: So far, all checks passed, but not all checks were run.")
+                break
+            self.log.info(':::')
+            self.log.info('::: Running test verification step "%s"...' % descr)
+            self.log.info(':::')
+            result = step()
+            if result != 0:
+                stepResults[descr] = "FAIL"
+                finalResult = "FAILED!"
+                break
+            stepResults[descr] = "Pass"
+
+        self.log.info(':::')
+        self.log.info('::: Test verification summary for:')
+        self.log.info(':::')
+        for test in tests:
+            self.log.info('::: '+test)
+        self.log.info(':::')
+        for descr in sorted(stepResults.keys()):
+            self.log.info('::: %s : %s' % (descr, stepResults[descr]))
+        self.log.info(':::')
+        self.log.info('::: Test verification %s' % finalResult)
+        self.log.info(':::')
+
+        return result
+
     def runTests(self, tests, options, cmdargs=None):
         cmdargs = cmdargs or []
         self._populate_logger(options)
-
-        # Despite our efforts to clean up servers started by this script, in practice
-        # we still see infrequent cases where a process is orphaned and interferes
-        # with future tests, typically because the old server is keeping the port in use.
-        # Try to avoid those failures by checking for and killing orphan servers before
-        # trying to start new ones.
-        self.killNamedOrphans('ssltunnel')
-        self.killNamedOrphans('xpcshell')
 
         if options.cleanupCrashes:
             mozcrash.cleanup_pending_crash_reports()
@@ -635,7 +699,7 @@ class RefTest(object):
                 marionette_args['port'] = int(port)
 
             marionette = Marionette(**marionette_args)
-            marionette.start_session(timeout=options.marionette_port_timeout)
+            marionette.start_session()
 
             addons = Addons(marionette)
             if options.specialPowersExtensionPath:
@@ -654,7 +718,7 @@ class RefTest(object):
             # use process_output so message is logged verbatim
             self.log.process_output(None, msg)
         else:
-            self.lastTestSeen = 'Main app process exited normally'
+            self.lastTestSeen = self.TEST_SEEN_FINAL
 
         crashed = mozcrash.log_crashes(self.log, os.path.join(profile.profile, 'minidumps'),
                                        symbolsPath, test=self.lastTestSeen)
@@ -708,6 +772,11 @@ class RefTest(object):
                 if status == 0:
                     break
 
+                if startAfter == self.TEST_SEEN_FINAL:
+                    self.log.info("Finished running all tests, skipping resume "
+                                  "despite non-zero status code: %s" % status)
+                    break
+
                 if startAfter is not None and options.shuffle:
                     self.log.error("Can not resume from a crash with --shuffle "
                                    "enabled. Please consider disabling --shuffle")
@@ -731,8 +800,6 @@ class RefTest(object):
     def copyExtraFilesToProfile(self, options, profile):
         "Copy extra files or dirs specified on the command line to the testing profile."
         profileDir = profile.profile
-        if not os.path.exists(os.path.join(profileDir, "hyphenation")):
-            os.makedirs(os.path.join(profileDir, "hyphenation"))
         for f in options.extraProfileFiles:
             abspath = self.getFullPath(f)
             if os.path.isfile(abspath):
@@ -740,7 +807,10 @@ class RefTest(object):
                     extra_prefs = mozprofile.Preferences.read_prefs(abspath)
                     profile.set_preferences(extra_prefs)
                 elif os.path.basename(abspath).endswith('.dic'):
-                    shutil.copy2(abspath, os.path.join(profileDir, "hyphenation"))
+                    hyphDir = os.path.join(profileDir, "hyphenation")
+                    if not os.path.exists(hyphDir):
+                        os.makedirs(hyphDir)
+                    shutil.copy2(abspath, hyphDir)
                 else:
                     shutil.copy2(abspath, profileDir)
             elif os.path.isdir(abspath):
@@ -770,7 +840,12 @@ def run_test_harness(parser, options):
     if options.xrePath is None:
         options.xrePath = os.path.dirname(options.app)
 
-    return reftest.runTests(options.tests, options)
+    if options.verify:
+        result = reftest.verifyTests(options.tests, options)
+    else:
+        result = reftest.runTests(options.tests, options)
+
+    return result
 
 
 if __name__ == "__main__":

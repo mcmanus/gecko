@@ -51,8 +51,10 @@ SOURCES += [
 ]
 
 SYMBOLS_FILE =  'avutil.symbols'
-NO_VISIBILITY_FLAGS = True
+NoVisibilityFlags()
 
 OS_LIBS += CONFIG['REALTIME_LIBS']
+if CONFIG['OS_TARGET'] != 'WINNT':
+    OS_LIBS += ['m']
 
 include("../ffvpxcommon.mozbuild")

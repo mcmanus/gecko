@@ -15,7 +15,8 @@ namespace mozilla {
 
 ServoDocumentRule::ServoDocumentRule(RefPtr<RawServoDocumentRule> aRawRule,
                                      uint32_t aLine, uint32_t aColumn)
-  : CSSMozDocumentRule(Servo_DocumentRule_GetRules(aRawRule).Consume())
+  : CSSMozDocumentRule(Servo_DocumentRule_GetRules(aRawRule).Consume(),
+                       aLine, aColumn)
   , mRawRule(Move(aRawRule))
 {
 }
@@ -28,7 +29,7 @@ NS_IMPL_ADDREF_INHERITED(ServoDocumentRule, CSSMozDocumentRule)
 NS_IMPL_RELEASE_INHERITED(ServoDocumentRule, CSSMozDocumentRule)
 
 // QueryInterface implementation for MozDocumentRule
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServoDocumentRule)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServoDocumentRule)
 NS_INTERFACE_MAP_END_INHERITING(CSSMozDocumentRule)
 
 /* virtual */ already_AddRefed<css::Rule>

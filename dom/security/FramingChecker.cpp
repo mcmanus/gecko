@@ -183,7 +183,7 @@ ShouldIgnoreFrameOptions(nsIChannel* aChannel, nsIPrincipal* aPrincipal)
   uint64_t innerWindowID = loadInfo ? loadInfo->GetInnerWindowID() : 0;
   const char16_t* params[] = { u"x-frame-options",
                                u"frame-ancestors" };
-  CSP_LogLocalizedStr(u"IgnoringSrcBecauseOfDirective",
+  CSP_LogLocalizedStr("IgnoringSrcBecauseOfDirective",
                       params, ArrayLength(params),
                       EmptyString(), // no sourcefile
                       EmptyString(), // no scriptsample
@@ -239,7 +239,7 @@ FramingChecker::CheckFrameOptions(nsIChannel* aChannel,
   // be many.  If any want to deny the load, deny the load.
   nsCharSeparatedTokenizer tokenizer(xfoHeaderValue, ',');
   while (tokenizer.hasMoreTokens()) {
-    const nsSubstring& tok = tokenizer.nextToken();
+    const nsAString& tok = tokenizer.nextToken();
     if (!CheckOneFrameOptionsPolicy(httpChannel, tok, aDocShell)) {
       // cancel the load and display about:blank
       httpChannel->Cancel(NS_BINDING_ABORTED);
@@ -330,10 +330,12 @@ FramingChecker::ReportXFOViolation(nsIDocShellTreeItem* aTopDocShellItem,
       break;
   }
 
-  rv = errorObject->InitWithWindowID(msg, EmptyString(), EmptyString(), 0, 0,
-                                     nsIScriptError::errorFlag,
-                                     "X-Frame-Options",
-                                     topInnerWindow->WindowID());
+  // It is ok to use InitWithSanitizedSource, because the source string is
+  // empty.
+  rv = errorObject->InitWithSanitizedSource(msg, EmptyString(), EmptyString(),
+                                            0, 0, nsIScriptError::errorFlag,
+                                            "X-Frame-Options",
+                                            topInnerWindow->WindowID());
   if (NS_FAILED(rv)) {
     return;
   }

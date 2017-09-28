@@ -194,7 +194,7 @@ public:
   // Must be threadsafe for StaticRefPtr/ClearOnShutdown
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(SingletonThreadHolder)
 
-  explicit SingletonThreadHolder(const nsCSubstring& aName)
+  explicit SingletonThreadHolder(const nsACString& aName)
     : mName(aName)
   {
     mParentThread = NS_GetCurrentThread();
@@ -1673,7 +1673,7 @@ class NrTcpSocketIpc::TcpSocketReadyRunner: public Runnable
 {
 public:
   explicit TcpSocketReadyRunner(NrTcpSocketIpc *sck)
-    : socket_(sck) {}
+    : Runnable("NrTcpSocketIpc::TcpSocketReadyRunner"), socket_(sck) {}
 
   NS_IMETHOD Run() override {
     socket_->maybe_post_socket_ready();
@@ -1936,7 +1936,7 @@ int NrTcpSocketIpc::read(void* buf, size_t maxlen, size_t *len) {
     ABORT(R_FAILED);
   }
 
-  if (msg_queue_.size() == 0) {
+  if (msg_queue_.empty()) {
     ABORT(R_WOULDBLOCK);
   }
 
@@ -2102,7 +2102,7 @@ void NrTcpSocketIpc::maybe_post_socket_ready() {
       }
     }
     if (poll_flags() & PR_POLL_READ) {
-      if (msg_queue_.size()) {
+      if (!msg_queue_.empty()) {
         if (msg_queue_.size() > 5) {
           r_log(LOG_GENERIC, LOG_INFO, "Firing read callback (%u)",
                 (uint32_t)msg_queue_.size());
@@ -2233,7 +2233,7 @@ static int nr_socket_local_destroy(void **objp) {
     return 0;
 
   NrSocketBase *sock = static_cast<NrSocketBase *>(*objp);
-  *objp = 0;
+  *objp = nullptr;
 
   sock->close();  // Signal STS that we want not to listen
   sock->Release();  // Decrement the ref count

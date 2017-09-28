@@ -50,7 +50,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "plhash.h"
-#include "prmem.h"
 
 #include "prthread.h"
 
@@ -188,19 +187,19 @@ AssertActivityIsLegal()
 static void*
 DefaultAllocTable(void* aPool, size_t aSize)
 {
-  return PR_MALLOC(aSize);
+  return malloc(aSize);
 }
 
 static void
 DefaultFreeTable(void* aPool, void* aItem)
 {
-  PR_Free(aItem);
+  free(aItem);
 }
 
 static PLHashEntry*
 DefaultAllocEntry(void* aPool, const void* aKey)
 {
-  return PR_NEW(PLHashEntry);
+  return (PLHashEntry*) malloc(sizeof(PLHashEntry));
 }
 
 static void
@@ -208,7 +207,7 @@ SerialNumberFreeEntry(void* aPool, PLHashEntry* aHashEntry, unsigned aFlag)
 {
   if (aFlag == HT_FREE_ENTRY) {
     delete static_cast<SerialNumberRecord*>(aHashEntry->value);
-    PR_Free(aHashEntry);
+    free(aHashEntry);
   }
 }
 
@@ -217,7 +216,7 @@ TypesToLogFreeEntry(void* aPool, PLHashEntry* aHashEntry, unsigned aFlag)
 {
   if (aFlag == HT_FREE_ENTRY) {
     free(const_cast<char*>(static_cast<const char*>(aHashEntry->key)));
-    PR_Free(aHashEntry);
+    free(aHashEntry);
   }
 }
 
@@ -392,7 +391,7 @@ BloatViewFreeEntry(void* aPool, PLHashEntry* aHashEntry, unsigned aFlag)
   if (aFlag == HT_FREE_ENTRY) {
     BloatEntry* entry = static_cast<BloatEntry*>(aHashEntry->value);
     delete entry;
-    PR_Free(aHashEntry);
+    free(aHashEntry);
   }
 }
 
@@ -880,8 +879,7 @@ RecordStackFrame(uint32_t /*aFrameNumber*/, void* aPC, void* /*aSP*/,
 void
 nsTraceRefcnt::WalkTheStack(FILE* aStream)
 {
-  MozStackWalk(PrintStackFrame, /* skipFrames */ 2, /* maxFrames */ 0, aStream,
-               0, nullptr);
+  MozStackWalk(PrintStackFrame, /* skipFrames */ 2, /* maxFrames */ 0, aStream);
 }
 
 /**
@@ -899,7 +897,7 @@ WalkTheStackCached(FILE* aStream)
     gCodeAddressService = new WalkTheStackCodeAddressService();
   }
   MozStackWalk(PrintStackFrameCached, /* skipFrames */ 2, /* maxFrames */ 0,
-               aStream, 0, nullptr);
+               aStream);
 }
 
 static void
@@ -912,8 +910,7 @@ WalkTheStackSavingLocations(std::vector<void*>& aLocations)
     0 +                         // this frame gets inlined
     1 +                         // GetSerialNumber
     1;                          // NS_LogCtor
-  MozStackWalk(RecordStackFrame, kFramesToSkip, /* maxFrames */ 0,
-               &aLocations, 0, nullptr);
+  MozStackWalk(RecordStackFrame, kFramesToSkip, /* maxFrames */ 0, &aLocations);
 }
 
 //----------------------------------------------------------------------

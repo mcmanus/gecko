@@ -114,7 +114,7 @@ public:
   static void TimerCallback(nsITimer* aTimer, void* aClosure);
 
   nsresult PrintErrorOnConsole(const char* aBundleURI,
-                               const char16_t* aError,
+                               const char* aError,
                                const char16_t** aFormatStrings,
                                uint32_t aFormatStringsLen);
   nsresult ConsoleError();
@@ -391,7 +391,9 @@ EventSourceImpl::Close()
   // Asynchronously call CloseInternal to prevent EventSourceImpl from being
   // synchronously destoryed while dispatching DOM event.
   DebugOnly<nsresult> rv =
-    Dispatch(NewRunnableMethod(this, &EventSourceImpl::CloseInternal),
+    Dispatch(NewRunnableMethod("dom::EventSourceImpl::CloseInternal",
+                               this,
+                               &EventSourceImpl::CloseInternal),
              NS_DISPATCH_NORMAL);
   MOZ_ASSERT(NS_SUCCEEDED(rv));
 }
@@ -683,7 +685,9 @@ EventSourceImpl::OnStartRequest(nsIRequest* aRequest, nsISupports* aCtxt)
       }
     }
   }
-  rv = Dispatch(NewRunnableMethod(this, &EventSourceImpl::AnnounceConnection),
+  rv = Dispatch(NewRunnableMethod("dom::EventSourceImpl::AnnounceConnection",
+                                  this,
+                                  &EventSourceImpl::AnnounceConnection),
                 NS_DISPATCH_NORMAL);
   NS_ENSURE_SUCCESS(rv, rv);
   mStatus = PARSE_STATE_BEGIN_OF_STREAM;
@@ -742,29 +746,6 @@ EventSourceImpl::ParseSegment(const char* aBuffer, uint32_t aLength)
   }
 }
 
-class DataAvailableRunnable final : public Runnable
-{
-  private:
-    RefPtr<EventSourceImpl> mEventSourceImpl;
-    UniquePtr<char[]> mData;
-    uint32_t mLength;
-  public:
-    DataAvailableRunnable(EventSourceImpl* aEventSourceImpl,
-                          UniquePtr<char[]> aData,
-                          uint32_t aLength)
-      : mEventSourceImpl(aEventSourceImpl)
-      , mData(Move(aData))
-      , mLength(aLength)
-    {
-    }
-
-    NS_IMETHOD Run() override
-    {
-      mEventSourceImpl->ParseSegment(mData.get(), mLength);
-      return NS_OK;
-    }
-};
-
 NS_IMETHODIMP
 EventSourceImpl::OnDataAvailable(nsIRequest* aRequest,
                                  nsISupports* aContext,
@@ -772,8 +753,7 @@ EventSourceImpl::OnDataAvailable(nsIRequest* aRequest,
                                  uint64_t aOffset,
                                  uint32_t aCount)
 {
-  // Although we try to retarget OnDataAvailable to target thread, it may fail
-  // and fallback to main thread.
+  AssertIsOnTargetThread();
   NS_ENSURE_ARG_POINTER(aInputStream);
   if (IsClosed()) {
     return NS_ERROR_ABORT;
@@ -783,28 +763,8 @@ EventSourceImpl::OnDataAvailable(nsIRequest* aRequest,
   NS_ENSURE_SUCCESS(rv, rv);
 
   uint32_t totalRead;
-  if (IsTargetThread()) {
-    rv = aInputStream->ReadSegments(EventSourceImpl::StreamReaderFunc, this,
+  return aInputStream->ReadSegments(EventSourceImpl::StreamReaderFunc, this,
                                     aCount, &totalRead);
-  } else {
-    // This could be happened when fail to retarget to target thread and
-    // fallback to the main thread.
-    AssertIsOnMainThread();
-    auto data = MakeUniqueFallible<char[]>(aCount);
-    if (!data) {
-      return NS_ERROR_OUT_OF_MEMORY;
-    }
-    rv = aInputStream->Read(data.get(), aCount, &totalRead);
-    NS_ENSURE_SUCCESS(rv, rv);
-    MOZ_ASSERT(totalRead <= aCount, "EventSource read more than available!!");
-
-    nsCOMPtr<nsIRunnable> dataAvailable =
-      new DataAvailableRunnable(this, Move(data), totalRead);
-
-    MOZ_ASSERT(mWorkerPrivate);
-    rv = Dispatch(dataAvailable.forget(), NS_DISPATCH_NORMAL);
-  }
-  return rv;
 }
 
 NS_IMETHODIMP
@@ -840,9 +800,10 @@ EventSourceImpl::OnStopRequest(nsIRequest* aRequest,
   nsresult rv = CheckHealthOfRequestCallback(aRequest);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = Dispatch(
-         NewRunnableMethod(this, &EventSourceImpl::ReestablishConnection),
-         NS_DISPATCH_NORMAL);
+  rv = Dispatch(NewRunnableMethod("dom::EventSourceImpl::ReestablishConnection",
+                                  this,
+                                  &EventSourceImpl::ReestablishConnection),
+                NS_DISPATCH_NORMAL);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
@@ -1245,9 +1206,12 @@ EventSourceImpl::SetReconnectionTimeout()
     NS_ENSURE_STATE(mTimer);
   }
 
-  nsresult rv = mTimer->InitWithFuncCallback(TimerCallback, this,
-                                             mReconnectionTime,
-                                             nsITimer::TYPE_ONE_SHOT);
+  nsresult rv = mTimer->InitWithNamedFuncCallback(
+    TimerCallback,
+    this,
+    mReconnectionTime,
+    nsITimer::TYPE_ONE_SHOT,
+    "dom::EventSourceImpl::SetReconnectionTimeout");
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
@@ -1255,7 +1219,7 @@ EventSourceImpl::SetReconnectionTimeout()
 
 nsresult
 EventSourceImpl::PrintErrorOnConsole(const char* aBundleURI,
-                                     const char16_t* aError,
+                                     const char* aError,
                                      const char16_t** aFormatStrings,
                                      uint32_t aFormatStringsLen)
 {
@@ -1279,13 +1243,12 @@ EventSourceImpl::PrintErrorOnConsole(const char* aBundleURI,
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Localize the error message
-  nsXPIDLString message;
+  nsAutoString message;
   if (aFormatStrings) {
     rv = strBundle->FormatStringFromName(aError, aFormatStrings,
-                                         aFormatStringsLen,
-                                         getter_Copies(message));
+                                         aFormatStringsLen, message);
   } else {
-    rv = strBundle->GetStringFromName(aError, getter_Copies(message));
+    rv = strBundle->GetStringFromName(aError, message);
   }
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -1318,11 +1281,11 @@ EventSourceImpl::ConsoleError()
 
   if (ReadyState() == CONNECTING) {
     rv = PrintErrorOnConsole("chrome://global/locale/appstrings.properties",
-                             u"connectionFailure",
+                             "connectionFailure",
                              formatStrings, ArrayLength(formatStrings));
   } else {
     rv = PrintErrorOnConsole("chrome://global/locale/appstrings.properties",
-                             u"netInterrupt",
+                             "netInterrupt",
                              formatStrings, ArrayLength(formatStrings));
   }
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1341,7 +1304,9 @@ EventSourceImpl::DispatchFailConnection()
   if (NS_FAILED(rv)) {
     NS_WARNING("Failed to print to the console error");
   }
-  rv = Dispatch(NewRunnableMethod(this, &EventSourceImpl::FailConnection),
+  rv = Dispatch(NewRunnableMethod("dom::EventSourceImpl::FailConnection",
+                                  this,
+                                  &EventSourceImpl::FailConnection),
                 NS_DISPATCH_NORMAL);
   MOZ_ASSERT(NS_SUCCEEDED(rv));
 }
@@ -1407,7 +1372,9 @@ EventSourceImpl::Thaw()
   nsresult rv;
   if (!mGoingToDispatchAllMessages && mMessagesToDispatch.GetSize() > 0) {
     nsCOMPtr<nsIRunnable> event =
-      NewRunnableMethod(this, &EventSourceImpl::DispatchAllMessageEvents);
+      NewRunnableMethod("dom::EventSourceImpl::DispatchAllMessageEvents",
+                        this,
+                        &EventSourceImpl::DispatchAllMessageEvents);
     NS_ENSURE_STATE(event);
 
     mGoingToDispatchAllMessages = true;
@@ -1468,7 +1435,9 @@ EventSourceImpl::DispatchCurrentMessageEvent()
 
   if (!mGoingToDispatchAllMessages) {
     nsCOMPtr<nsIRunnable> event =
-      NewRunnableMethod(this, &EventSourceImpl::DispatchAllMessageEvents);
+      NewRunnableMethod("dom::EventSourceImpl::DispatchAllMessageEvents",
+                        this,
+                        &EventSourceImpl::DispatchAllMessageEvents);
     NS_ENSURE_STATE(event);
 
     mGoingToDispatchAllMessages = true;
@@ -1532,8 +1501,8 @@ EventSourceImpl::DispatchAllMessageEvents()
                             Sequence<OwningNonNull<MessagePort>>());
     event->SetTrusted(true);
 
-    rv = mEventSource->DispatchDOMEvent(nullptr, static_cast<Event*>(event),
-                                        nullptr, nullptr);
+    bool dummy;
+    rv = mEventSource->DispatchEvent(static_cast<Event*>(event), &dummy);
     if (NS_FAILED(rv)) {
       NS_WARNING("Failed to dispatch the message event!!!");
       return;
@@ -1971,7 +1940,8 @@ EventSource::CreateAndDispatchSimpleEvent(const nsAString& aName)
   // it doesn't bubble, and it isn't cancelable
   event->InitEvent(aName, false, false);
   event->SetTrusted(true);
-  return DispatchDOMEvent(nullptr, event, nullptr, nullptr);
+  bool dummy;
+  return DispatchEvent(event, &dummy);
 }
 
 /* static */ already_AddRefed<EventSource>
@@ -2090,7 +2060,7 @@ EventSource::IsCertainlyAliveForCC() const
   return mKeepingAlive;
 }
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(EventSource)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(EventSource)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_ADDREF_INHERITED(EventSource, DOMEventTargetHelper)

@@ -16,7 +16,8 @@ namespace mozilla {
 
 ServoSupportsRule::ServoSupportsRule(RefPtr<RawServoSupportsRule> aRawRule,
                                      uint32_t aLine, uint32_t aColumn)
-  : CSSSupportsRule(Servo_SupportsRule_GetRules(aRawRule).Consume())
+  : CSSSupportsRule(Servo_SupportsRule_GetRules(aRawRule).Consume(),
+                    aLine, aColumn)
   , mRawRule(Move(aRawRule))
 {
 }
@@ -29,7 +30,7 @@ NS_IMPL_ADDREF_INHERITED(ServoSupportsRule, CSSSupportsRule)
 NS_IMPL_RELEASE_INHERITED(ServoSupportsRule, CSSSupportsRule)
 
 // QueryInterface implementation for SupportsRule
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServoSupportsRule)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServoSupportsRule)
 NS_INTERFACE_MAP_END_INHERITING(CSSSupportsRule)
 
 /* virtual */ already_AddRefed<css::Rule>

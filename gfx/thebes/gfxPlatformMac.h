@@ -30,9 +30,6 @@ public:
       CreateOffscreenSurface(const IntSize& aSize,
                              gfxImageFormat aFormat) override;
 
-    already_AddRefed<mozilla::gfx::ScaledFont>
-      GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont) override;
-
     gfxFontGroup*
     CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
                     const gfxFontStyle *aStyle,
@@ -46,7 +43,7 @@ public:
     GetSystemFontFamilyList(InfallibleTArray<mozilla::dom::FontFamilyListEntry>*
                             aFontFamilies) override;
 
-    bool IsFontFormatSupported(nsIURI *aFontURI, uint32_t aFormatFlags) override;
+    bool IsFontFormatSupported(uint32_t aFormatFlags) override;
 
     virtual void GetCommonFallbackFonts(uint32_t aCh, uint32_t aNextCh,
                                         Script aRunScript,

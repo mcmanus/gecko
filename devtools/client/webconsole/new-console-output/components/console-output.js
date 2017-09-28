@@ -20,6 +20,9 @@ const {
   getAllRepeatById,
 } = require("devtools/client/webconsole/new-console-output/selectors/messages");
 const MessageContainer = createFactory(require("devtools/client/webconsole/new-console-output/components/message-container").MessageContainer);
+const {
+  MESSAGE_TYPE,
+} = require("devtools/client/webconsole/new-console-output/constants");
 
 const ConsoleOutput = createClass({
 
@@ -39,6 +42,7 @@ const ConsoleOutput = createClass({
     messagesRepeat: PropTypes.object.isRequired,
     networkMessagesUpdate: PropTypes.object.isRequired,
     visibleMessages: PropTypes.array.isRequired,
+    networkMessageActiveTabId: PropTypes.string.isRequired,
   },
 
   componentDidMount() {
@@ -56,11 +60,20 @@ const ConsoleOutput = createClass({
       return;
     }
 
-    // Figure out if we are at the bottom. If so, then any new message should be scrolled
-    // into view.
     const lastChild = outputNode.lastChild;
-    const delta = nextProps.visibleMessages.length - this.props.visibleMessages.length;
-    this.shouldScrollBottom = delta > 0 && isScrolledToBottom(lastChild, outputNode);
+    const visibleMessagesDelta =
+      nextProps.visibleMessages.length - this.props.visibleMessages.length;
+    const messagesDelta =
+      nextProps.messages.size - this.props.messages.size;
+
+    // We need to scroll to the bottom if:
+    // - the number of messages displayed changed
+    //   and we are already scrolled to the bottom
+    // - the number of messages in the store changed
+    //   and the new message is an evaluation result.
+    this.shouldScrollBottom =
+      (messagesDelta > 0 && nextProps.messages.last().type === MESSAGE_TYPE.RESULT) ||
+      (visibleMessagesDelta > 0 && isScrolledToBottom(lastChild, outputNode));
   },
 
   componentDidUpdate() {
@@ -84,6 +97,7 @@ const ConsoleOutput = createClass({
       messagesTableData,
       messagesRepeat,
       networkMessagesUpdate,
+      networkMessageActiveTabId,
       serviceContainer,
       timestampsVisible,
     } = this.props;
@@ -91,13 +105,15 @@ const ConsoleOutput = createClass({
     let messageNodes = visibleMessages.map((messageId) => MessageContainer({
       dispatch,
       key: messageId,
+      messageId,
       serviceContainer,
       open: messagesUi.includes(messageId),
       tableData: messagesTableData.get(messageId),
       timestampsVisible,
       repeat: messagesRepeat[messageId],
       networkMessageUpdate: networkMessagesUpdate[messageId],
-      getMessage: () => messages.get(messageId)
+      networkMessageActiveTabId,
+      getMessage: () => messages.get(messageId),
     }));
 
     return (
@@ -133,6 +149,7 @@ function mapStateToProps(state, props) {
     messagesRepeat: getAllRepeatById(state),
     networkMessagesUpdate: getAllNetworkMessagesUpdateById(state),
     timestampsVisible: state.ui.timestampsVisible,
+    networkMessageActiveTabId: state.ui.networkMessageActiveTabId,
   };
 }
 

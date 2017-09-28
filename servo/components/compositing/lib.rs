@@ -4,7 +4,9 @@
 
 #![deny(unsafe_code)]
 #![feature(box_syntax)]
+#![feature(nonzero)]
 
+extern crate core;
 extern crate euclid;
 extern crate gfx_traits;
 extern crate gleam;
@@ -22,10 +24,11 @@ extern crate servo_url;
 extern crate style_traits;
 extern crate time;
 extern crate webrender;
-extern crate webrender_traits;
+extern crate webrender_api;
 
 pub use compositor_thread::CompositorProxy;
 pub use compositor::IOCompositor;
+pub use compositor::ShutdownState;
 use euclid::TypedSize2D;
 use ipc_channel::ipc::IpcSender;
 use msg::constellation_msg::PipelineId;

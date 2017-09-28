@@ -5,9 +5,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <map>
-#ifdef MOZ_WIDGET_GONK
-#include "GonkPermission.h"
-#endif // MOZ_WIDGET_GONK
 #include "nsCOMPtr.h"
 #include "nsIDOMElement.h"
 #include "nsIPrincipal.h"
@@ -391,6 +388,9 @@ nsContentPermissionUtils::AskPermission(nsIContentPermissionRequest* aRequest,
     nsCOMPtr<nsIPrincipal> principal;
     rv = aRequest->GetPrincipal(getter_AddRefs(principal));
     NS_ENSURE_SUCCESS(rv, rv);
+
+    ContentChild::GetSingleton()->SetEventTargetForActor(
+      req, aWindow->EventTargetFor(TaskCategory::Other));
 
     req->IPDLAddRef();
     ContentChild::GetSingleton()->SendPContentPermissionRequestConstructor(

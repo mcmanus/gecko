@@ -306,7 +306,8 @@ LoadContextOptions(const char* aPrefName, void* /* aClosure */)
   JS::ContextOptions contextOptions;
   contextOptions.setAsmJS(GetWorkerPref<bool>(NS_LITERAL_CSTRING("asmjs")))
                 .setWasm(GetWorkerPref<bool>(NS_LITERAL_CSTRING("wasm")))
-                .setWasmAlwaysBaseline(GetWorkerPref<bool>(NS_LITERAL_CSTRING("wasm_baselinejit")))
+                .setWasmBaseline(GetWorkerPref<bool>(NS_LITERAL_CSTRING("wasm_baselinejit")))
+                .setWasmIon(GetWorkerPref<bool>(NS_LITERAL_CSTRING("wasm_ionjit")))
                 .setThrowOnAsmJSValidationFailure(GetWorkerPref<bool>(
                       NS_LITERAL_CSTRING("throw_on_asmjs_validation_failure")))
                 .setBaseline(GetWorkerPref<bool>(NS_LITERAL_CSTRING("baselinejit")))
@@ -317,6 +318,7 @@ LoadContextOptions(const char* aPrefName, void* /* aClosure */)
 #ifdef FUZZING
                 .setFuzzing(GetWorkerPref<bool>(NS_LITERAL_CSTRING("fuzzing.enabled")))
 #endif
+                .setStreams(GetWorkerPref<bool>(NS_LITERAL_CSTRING("streams")))
                 .setExtraWarnings(GetWorkerPref<bool>(NS_LITERAL_CSTRING("strict")));
 
   RuntimeService::SetDefaultContextOptions(contextOptions);
@@ -717,26 +719,25 @@ AsmJSCacheOpenEntryForWrite(JS::Handle<JSObject*> aGlobal,
                                        aHandle);
 }
 
-class AsyncTaskWorkerHolder final : public WorkerHolder
+// JSDispatchableRunnables are WorkerRunnables used to dispatch JS::Dispatchable
+// back to their worker thread. A WorkerRunnable is used for two reasons:
+//
+// 1. The JS::Dispatchable::run() callback may run JS so we cannot use a control
+// runnable since they use async interrupts and break JS run-to-completion.
+//
+// 2. The DispatchToEventLoopCallback interface is *required* to fail during
+// shutdown (see jsapi.h) which is exactly what WorkerRunnable::Dispatch() will
+// do. Moreover, JS_DestroyContext() does *not* block on JS::Dispatchable::run
+// being called, DispatchToEventLoopCallback failure is expected to happen
+// during shutdown.
+class JSDispatchableRunnable final : public WorkerRunnable
 {
-  bool Notify(Status aStatus) override
-  {
-    // The async task must complete in bounded time and there is not (currently)
-    // a clean way to cancel it. Async tasks do not run arbitrary content.
-    return true;
-  }
+  JS::Dispatchable* mDispatchable;
 
-public:
-  WorkerPrivate* Worker() const
+  ~JSDispatchableRunnable()
   {
-    return mWorkerPrivate;
+    MOZ_ASSERT(!mDispatchable);
   }
-};
-
-template <class RunnableBase>
-class AsyncTaskBase : public RunnableBase
-{
-  UniquePtr<AsyncTaskWorkerHolder> mHolder;
 
   // Disable the usual pre/post-dispatch thread assertions since we are
   // dispatching from some random JS engine internal thread:
@@ -747,153 +748,69 @@ class AsyncTaskBase : public RunnableBase
   }
 
   void PostDispatch(WorkerPrivate* aWorkerPrivate, bool aDispatchResult) override
-  { }
-
-protected:
-  explicit AsyncTaskBase(UniquePtr<AsyncTaskWorkerHolder> aHolder)
-    : RunnableBase(aHolder->Worker(),
-                   WorkerRunnable::WorkerThreadUnchangedBusyCount)
-    , mHolder(Move(aHolder))
-  {
-    MOZ_ASSERT(mHolder);
-  }
-
-  ~AsyncTaskBase()
-  {
-    MOZ_ASSERT(!mHolder);
-  }
-
-  void DestroyHolder()
-  {
-    MOZ_ASSERT(mHolder);
-    mHolder.reset();
-  }
-
-public:
-  UniquePtr<AsyncTaskWorkerHolder> StealHolder()
-  {
-    return Move(mHolder);
-  }
-};
-
-class AsyncTaskRunnable final : public AsyncTaskBase<WorkerRunnable>
-{
-  JS::AsyncTask* mTask;
-
-  ~AsyncTaskRunnable()
-  {
-    MOZ_ASSERT(!mTask);
-  }
-
-  void PostDispatch(WorkerPrivate* aWorkerPrivate, bool aDispatchResult) override
   {
     // For the benefit of the destructor assert.
     if (!aDispatchResult) {
-      mTask = nullptr;
+      mDispatchable = nullptr;
     }
   }
 
 public:
-  AsyncTaskRunnable(UniquePtr<AsyncTaskWorkerHolder> aHolder,
-                    JS::AsyncTask* aTask)
-    : AsyncTaskBase<WorkerRunnable>(Move(aHolder))
-    , mTask(aTask)
+  JSDispatchableRunnable(WorkerPrivate* aWorkerPrivate,
+                         JS::Dispatchable* aDispatchable)
+    : WorkerRunnable(aWorkerPrivate,
+                     WorkerRunnable::WorkerThreadUnchangedBusyCount)
+    , mDispatchable(aDispatchable)
   {
-    MOZ_ASSERT(mTask);
+    MOZ_ASSERT(mDispatchable);
   }
 
   bool WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override
   {
     MOZ_ASSERT(aWorkerPrivate == mWorkerPrivate);
     MOZ_ASSERT(aCx == mWorkerPrivate->GetJSContext());
-    MOZ_ASSERT(mTask);
+    MOZ_ASSERT(mDispatchable);
 
     AutoJSAPI jsapi;
     jsapi.Init();
 
-    mTask->finish(mWorkerPrivate->GetJSContext());
-    mTask = nullptr;  // mTask may delete itself
-
-    DestroyHolder();
+    mDispatchable->run(mWorkerPrivate->GetJSContext(),
+                       JS::Dispatchable::NotShuttingDown);
+    mDispatchable = nullptr;  // mDispatchable may delete itself
 
     return true;
   }
 
   nsresult Cancel() override
   {
-    MOZ_ASSERT(mTask);
+    MOZ_ASSERT(mDispatchable);
 
     AutoJSAPI jsapi;
     jsapi.Init();
 
-    mTask->cancel(mWorkerPrivate->GetJSContext());
-    mTask = nullptr;  // mTask may delete itself
-
-    DestroyHolder();
+    mDispatchable->run(mWorkerPrivate->GetJSContext(),
+                       JS::Dispatchable::ShuttingDown);
+    mDispatchable = nullptr;  // mDispatchable may delete itself
 
     return WorkerRunnable::Cancel();
   }
 };
 
-class AsyncTaskControlRunnable final
-  : public AsyncTaskBase<WorkerControlRunnable>
-{
-public:
-  explicit AsyncTaskControlRunnable(UniquePtr<AsyncTaskWorkerHolder> aHolder)
-    : AsyncTaskBase<WorkerControlRunnable>(Move(aHolder))
-  { }
-
-  bool WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override
-  {
-    // See comment in FinishAsyncTaskCallback.
-    DestroyHolder();
-    return true;
-  }
-};
-
 static bool
-StartAsyncTaskCallback(JSContext* aCx, JS::AsyncTask* aTask)
+DispatchToEventLoop(void* aClosure, JS::Dispatchable* aDispatchable)
 {
-  WorkerPrivate* worker = GetWorkerPrivateFromContext(aCx);
-  worker->AssertIsOnWorkerThread();
+  // This callback may execute either on the worker thread or a random
+  // JS-internal helper thread.
 
-  auto holder = MakeUnique<AsyncTaskWorkerHolder>();
-  if (!holder->HoldWorker(worker, Status::Closing)) {
-    return false;
-  }
+  // See comment at JS::InitDispatchToEventLoop() below for how we know the
+  // WorkerPrivate is alive.
+  WorkerPrivate* workerPrivate = reinterpret_cast<WorkerPrivate*>(aClosure);
 
-  // Matched by a UniquePtr in FinishAsyncTaskCallback which, by
-  // interface contract, must be called in the future.
-  aTask->user = holder.release();
-  return true;
-}
-
-static bool
-FinishAsyncTaskCallback(JS::AsyncTask* aTask)
-{
-  // May execute either on the worker thread or a random JS-internal helper
-  // thread.
-
-  // Match the release() in StartAsyncTaskCallback.
-  UniquePtr<AsyncTaskWorkerHolder> holder(
-    static_cast<AsyncTaskWorkerHolder*>(aTask->user));
-
-  RefPtr<AsyncTaskRunnable> r = new AsyncTaskRunnable(Move(holder), aTask);
-
-  // WorkerRunnable::Dispatch() can fail during worker shutdown. In that case,
-  // report failure back to the JS engine but make sure to release the
-  // WorkerHolder on the worker thread using a control runnable. Control
-  // runables aren't suitable for calling AsyncTask::finish() since they are run
-  // via the interrupt callback which breaks JS run-to-completion.
-  if (!r->Dispatch()) {
-    RefPtr<AsyncTaskControlRunnable> cr =
-      new AsyncTaskControlRunnable(r->StealHolder());
-
-    MOZ_ALWAYS_TRUE(cr->Dispatch());
-    return false;
-  }
-
-  return true;
+  // Dispatch is expected to fail during shutdown for the reasons outlined in
+  // the JSDispatchableRunnable comment above.
+  RefPtr<JSDispatchableRunnable> r =
+    new JSDispatchableRunnable(workerPrivate, aDispatchable);
+  return r->Dispatch();
 }
 
 class WorkerJSContext;
@@ -949,18 +866,6 @@ InitJSContextForWorker(WorkerPrivate* aWorkerPrivate, JSContext* aWorkerCx)
   JSSettings settings;
   aWorkerPrivate->CopyJSSettings(settings);
 
-  {
-    JS::UniqueChars defaultLocale = aWorkerPrivate->AdoptDefaultLocale();
-    MOZ_ASSERT(defaultLocale,
-               "failure of a WorkerPrivate to have a default locale should "
-               "have made the worker fail to spawn");
-
-    if (!JS_SetDefaultLocale(aWorkerCx, defaultLocale.get())) {
-      NS_WARNING("failed to set workerCx's default locale");
-      return false;
-    }
-  }
-
   JS::ContextOptionsRef(aWorkerCx) = settings.contextOptions;
 
   JSSettings::JSGCSettingsArray& gcSettings = settings.gcSettings;
@@ -968,9 +873,9 @@ InitJSContextForWorker(WorkerPrivate* aWorkerPrivate, JSContext* aWorkerCx)
   // This is the real place where we set the max memory for the runtime.
   for (uint32_t index = 0; index < ArrayLength(gcSettings); index++) {
     const JSSettings::JSGCSetting& setting = gcSettings[index];
-    if (setting.IsSet()) {
+    if (setting.key.isSome()) {
       NS_ASSERTION(setting.value, "Can't handle 0 values!");
-      JS_SetGCParameter(aWorkerCx, setting.key, setting.value);
+      JS_SetGCParameter(aWorkerCx, *setting.key, setting.value);
     }
   }
 
@@ -991,7 +896,9 @@ InitJSContextForWorker(WorkerPrivate* aWorkerPrivate, JSContext* aWorkerCx)
   };
   JS::SetAsmJSCacheOps(aWorkerCx, &asmJSCacheOps);
 
-  JS::SetAsyncTaskCallbacks(aWorkerCx, StartAsyncTaskCallback, FinishAsyncTaskCallback);
+  // A WorkerPrivate lives strictly longer than its JSRuntime so we can safely
+  // store a raw pointer as the callback's closure argument on the JSRuntime.
+  JS::InitDispatchToEventLoop(aWorkerCx, DispatchToEventLoop, (void*)aWorkerPrivate);
 
   if (!JS::InitSelfHostedCode(aWorkerCx)) {
     NS_WARNING("Could not init self-hosted code!");
@@ -1058,6 +965,17 @@ public:
   {
     MOZ_COUNT_CTOR_INHERITED(WorkerJSRuntime, CycleCollectedJSRuntime);
     MOZ_ASSERT(aWorkerPrivate);
+
+    {
+      JS::UniqueChars defaultLocale = aWorkerPrivate->AdoptDefaultLocale();
+      MOZ_ASSERT(defaultLocale,
+                 "failure of a WorkerPrivate to have a default locale should "
+                 "have made the worker fail to spawn");
+
+      if (!JS_SetDefaultLocale(Runtime(), defaultLocale.get())) {
+        NS_WARNING("failed to set workerCx's default locale");
+      }
+    }
   }
 
   void Shutdown(JSContext* cx) override
@@ -1254,7 +1172,10 @@ public:
   WorkerThreadPrimaryRunnable(WorkerPrivate* aWorkerPrivate,
                               WorkerThread* aThread,
                               JSRuntime* aParentRuntime)
-  : mWorkerPrivate(aWorkerPrivate), mThread(aThread), mParentRuntime(aParentRuntime)
+    : mozilla::Runnable("WorkerThreadPrimaryRunnable")
+    , mWorkerPrivate(aWorkerPrivate)
+    , mThread(aThread)
+    , mParentRuntime(aParentRuntime)
   {
     MOZ_ASSERT(aWorkerPrivate);
     MOZ_ASSERT(aThread);
@@ -1320,8 +1241,8 @@ AppNameOverrideChanged(const char* /* aPrefName */, void* /* aClosure */)
 {
   AssertIsOnMainThread();
 
-  const nsAdoptingString& override =
-    mozilla::Preferences::GetString("general.appname.override");
+  nsAutoString override;
+  Preferences::GetString("general.appname.override", override);
 
   RuntimeService* runtime = RuntimeService::GetService();
   if (runtime) {
@@ -1334,8 +1255,8 @@ AppVersionOverrideChanged(const char* /* aPrefName */, void* /* aClosure */)
 {
   AssertIsOnMainThread();
 
-  const nsAdoptingString& override =
-    mozilla::Preferences::GetString("general.appversion.override");
+  nsAutoString override;
+  Preferences::GetString("general.appversion.override", override);
 
   RuntimeService* runtime = RuntimeService::GetService();
   if (runtime) {
@@ -1348,8 +1269,8 @@ PlatformOverrideChanged(const char* /* aPrefName */, void* /* aClosure */)
 {
   AssertIsOnMainThread();
 
-  const nsAdoptingString& override =
-    mozilla::Preferences::GetString("general.platform.override");
+  nsAutoString override;
+  Preferences::GetString("general.platform.override", override);
 
   RuntimeService* runtime = RuntimeService::GetService();
   if (runtime) {
@@ -1649,6 +1570,7 @@ RuntimeService::RegisterWorker(WorkerPrivate* aWorkerPrivate)
     domainInfo = mDomainMap.LookupForAdd(domain).OrInsert(
       [&domain, parent] () {
         NS_ASSERTION(!parent, "Shouldn't have a parent here!");
+        Unused << parent; // silence clang -Wunused-lambda-capture in opt builds
         WorkerDomainInfo* wdi = new WorkerDomainInfo();
         wdi->mDomain = domain;
         return wdi;
@@ -1981,10 +1903,11 @@ RuntimeService::ShutdownIdleThreads(nsITimer* aTimer, void* /* aClosure */)
 
     // Reschedule the timer.
     MOZ_ALWAYS_SUCCEEDS(
-      aTimer->InitWithFuncCallback(ShutdownIdleThreads,
-                                   nullptr,
-                                   delay,
-                                   nsITimer::TYPE_ONE_SHOT));
+      aTimer->InitWithNamedFuncCallback(ShutdownIdleThreads,
+                                        nullptr,
+                                        delay,
+                                        nsITimer::TYPE_ONE_SHOT,
+                                        "RuntimeService::ShutdownIdleThreads"));
   }
 
   for (uint32_t index = 0; index < expiredThreads.Length(); index++) {
@@ -2011,10 +1934,10 @@ RuntimeService::Init()
   }
 
   // Initialize JSSettings.
-  if (!sDefaultJSSettings.gcSettings[0].IsSet()) {
+  if (sDefaultJSSettings.gcSettings[0].key.isNothing()) {
     sDefaultJSSettings.contextOptions = JS::ContextOptions();
     sDefaultJSSettings.chrome.maxScriptRuntime = -1;
-    sDefaultJSSettings.chrome.compartmentOptions.behaviors().setVersion(JSVERSION_LATEST);
+    sDefaultJSSettings.chrome.compartmentOptions.behaviors().setVersion(JSVERSION_DEFAULT);
     sDefaultJSSettings.content.maxScriptRuntime = MAX_SCRIPT_RUN_TIME_SEC;
 #ifdef JS_GC_ZEAL
     sDefaultJSSettings.gcZealFrequency = JS_DEFAULT_ZEAL_FREQ;
@@ -2498,7 +2421,7 @@ RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
   if (!workerPrivate) {
     workerPrivate =
       WorkerPrivate::Constructor(aCx, aScriptURL, false,
-                                 WorkerTypeShared, aName, NullCString(),
+                                 WorkerTypeShared, aName, VoidCString(),
                                  aLoadInfo, rv);
     NS_ENSURE_TRUE(workerPrivate, rv.StealNSResult());
 
@@ -2618,10 +2541,11 @@ RuntimeService::NoteIdleThread(WorkerThread* aThread)
     MOZ_ALWAYS_SUCCEEDS(aThread->Shutdown());
   } else if (scheduleTimer) {
     MOZ_ALWAYS_SUCCEEDS(
-      mIdleThreadTimer->InitWithFuncCallback(ShutdownIdleThreads,
-                                             nullptr,
-                                             IDLE_THREAD_TIMEOUT_SEC * 1000,
-                                             nsITimer::TYPE_ONE_SHOT));
+      mIdleThreadTimer->InitWithNamedFuncCallback(ShutdownIdleThreads,
+                                                  nullptr,
+                                                  IDLE_THREAD_TIMEOUT_SEC * 1000,
+                                                  nsITimer::TYPE_ONE_SHOT,
+                                                  "RuntimeService::ShutdownIdleThreads"));
   }
 }
 
@@ -2842,10 +2766,10 @@ WorkerThreadPrimaryRunnable::Run()
 
   profiler_register_thread(threadName.get(), &stackBaseGuess);
 
-  // Note: SynchronouslyCreateForCurrentThread() must be called prior to
+  // Note: GetOrCreateForCurrentThread() must be called prior to
   //       mWorkerPrivate->SetThread() in order to avoid accidentally consuming
   //       worker messages here.
-  if (NS_WARN_IF(!BackgroundChild::SynchronouslyCreateForCurrentThread())) {
+  if (NS_WARN_IF(!BackgroundChild::GetOrCreateForCurrentThread())) {
     // XXX need to fire an error at parent.
     // Failed in creating BackgroundChild: probably in shutdown. Continue to run
     // without BackgroundChild created.
@@ -2905,9 +2829,7 @@ WorkerThreadPrimaryRunnable::Run()
     }
 
     {
-#ifdef MOZ_GECKO_PROFILER
       profiler_set_js_context(cx);
-#endif
 
       {
         JSAutoRequest ar(cx);
@@ -2921,9 +2843,7 @@ WorkerThreadPrimaryRunnable::Run()
 
       BackgroundChild::CloseForCurrentThread();
 
-#ifdef MOZ_GECKO_PROFILER
       profiler_clear_js_context();
-#endif
     }
 
     // There may still be runnables on the debugger event queue that hold a

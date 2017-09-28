@@ -33,10 +33,10 @@
 /* Style */
 
 .notificationbox .notification {
-  background-color: InfoBackground;
+  color: var(--theme-toolbar-color);
+  background-color: var(--theme-body-background);
   text-shadow: none;
-  border-top: 1px solid ThreeDShadow;
-  border-bottom: 1px solid ThreeDShadow;
+  border-bottom: 1px solid var(--theme-splitter-color);
 }
 
 .notificationbox .notification[data-type="info"] {
@@ -83,7 +83,7 @@
   background-color: transparent;
   background-repeat: no-repeat;
   border-radius: 11px;
-  filter: invert(0);
+  filter: var(--theme-messageCloseButtonFilter);
 }
 
 .notificationbox .messageCloseButton:hover {

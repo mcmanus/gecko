@@ -226,7 +226,7 @@ JitRuntime::generateEnterJIT(JSContext* cx, EnterJitType type)
         masm.push(Imm32(0));
         // No GC things to mark on the stack, push a bare token.
         masm.loadJSContext(scratch);
-        masm.enterFakeExitFrame(scratch, scratch, ExitFrameLayoutBareToken);
+        masm.enterFakeExitFrame(scratch, scratch, ExitFrameToken::Bare);
 
         masm.push(framePtr);
         masm.push(jitcode);
@@ -235,7 +235,8 @@ JitRuntime::generateEnterJIT(JSContext* cx, EnterJitType type)
         masm.passABIArg(framePtr); // BaselineFrame
         masm.passABIArg(OsrFrameReg); // InterpreterFrame
         masm.passABIArg(numStackValues);
-        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, jit::InitBaselineFrameForOsr));
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, jit::InitBaselineFrameForOsr), MoveOp::GENERAL,
+                         CheckUnsafeCallWithABI::DontCheckHasExitFrame);
 
         masm.pop(jitcode);
         masm.pop(framePtr);
@@ -368,7 +369,8 @@ JitRuntime::generateInvalidator(JSContext* cx)
     masm.passABIArg(eax);
     masm.passABIArg(ebx);
     masm.passABIArg(ecx);
-    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, InvalidationBailout));
+    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, InvalidationBailout), MoveOp::GENERAL,
+                     CheckUnsafeCallWithABI::DontCheckOther);
 
     masm.pop(ecx); // Get bailoutInfo outparam.
     masm.pop(ebx); // Get the frameSize outparam.
@@ -440,7 +442,7 @@ JitRuntime::generateArgumentsRectifier(JSContext* cx, void** returnAddrOut)
     // Copy the number of actual arguments.
     masm.loadPtr(Address(esp, RectifierFrameLayout::offsetOfNumActualArgs()), edx);
 
-    masm.moveValue(UndefinedValue(), ebx, edi);
+    masm.moveValue(UndefinedValue(), ValueOperand(ebx, edi));
 
     // NOTE: The fact that x86 ArgumentsRectifier saves the FramePointer is relied upon
     // by the baseline bailout code.  If this changes, fix that code!  See
@@ -603,7 +605,8 @@ GenerateBailoutThunk(JSContext* cx, MacroAssembler& masm, uint32_t frameClass)
     masm.setupUnalignedABICall(ecx);
     masm.passABIArg(eax);
     masm.passABIArg(ebx);
-    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, Bailout));
+    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, Bailout), MoveOp::GENERAL,
+                     CheckUnsafeCallWithABI::DontCheckOther);
 
     masm.pop(ecx); // Get bailoutInfo outparam.
 
@@ -795,7 +798,7 @@ JitRuntime::generateVMWrapper(JSContext* cx, const VMFunction& f)
     if (outReg != InvalidReg)
         masm.passABIArg(outReg);
 
-    masm.callWithABI(f.wrapped);
+    masm.callWithABI(f.wrapped, MoveOp::GENERAL, CheckUnsafeCallWithABI::DontCheckHasExitFrame);
 
     if (!generateTLExitVM(cx, masm, f))
         return nullptr;
@@ -808,6 +811,8 @@ JitRuntime::generateVMWrapper(JSContext* cx, const VMFunction& f)
       case Type_Bool:
         masm.testb(eax, eax);
         masm.j(Assembler::Zero, masm.failureLabel());
+        break;
+      case Type_Void:
         break;
       default:
         MOZ_CRASH("unknown failure kind");

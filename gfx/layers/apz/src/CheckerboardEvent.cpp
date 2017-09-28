@@ -114,8 +114,8 @@ CheckerboardEvent::LogInfo(RendertraceProperty aProperty,
       << sColors[aProperty] << " "
       << aRect.x << " "
       << aRect.y << " "
-      << aRect.width << " "
-      << aRect.height << " "
+      << aRect.Width() << " "
+      << aRect.Height() << " "
       << "// " << sDescriptions[aProperty]
       << aExtraInfo << std::endl;
 }
@@ -159,7 +159,7 @@ CheckerboardEvent::StartEvent()
   }
   MonitorAutoLock lock(mRendertraceLock);
   std::vector<PropertyValue> history;
-  for (int i = 0; i < MAX_RendertraceProperty; i++) {
+  for (size_t i = 0; i < sRendertracePropertyCount; i++) {
     mBufferedProperties[i].Flush(history, lock);
   }
   std::sort(history.begin(), history.end());

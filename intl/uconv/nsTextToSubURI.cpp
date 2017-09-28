@@ -102,8 +102,8 @@ static bool statefulCharset(const char *charset)
 }
 
 nsresult
-nsTextToSubURI::convertURItoUnicode(const nsAFlatCString& aCharset,
-                                    const nsAFlatCString& aURI,
+nsTextToSubURI::convertURItoUnicode(const nsCString& aCharset,
+                                    const nsCString& aURI,
                                     nsAString& aOut)
 {
   // check for 7bit encoding the data may not be ASCII after we decode
@@ -131,13 +131,13 @@ nsTextToSubURI::convertURItoUnicode(const nsAFlatCString& aCharset,
   return encoding->DecodeWithoutBOMHandlingAndWithoutReplacement(aURI, aOut);
 }
 
-NS_IMETHODIMP  nsTextToSubURI::UnEscapeURIForUI(const nsACString & aCharset, 
-                                                const nsACString &aURIFragment, 
+NS_IMETHODIMP  nsTextToSubURI::UnEscapeURIForUI(const nsACString & aCharset,
+                                                const nsACString &aURIFragment,
                                                 nsAString &_retval)
 {
   nsAutoCString unescapedSpec;
   // skip control octets (0x00 - 0x1f and 0x7f) when unescaping
-  NS_UnescapeURL(PromiseFlatCString(aURIFragment), 
+  NS_UnescapeURL(PromiseFlatCString(aURIFragment),
                  esc_SkipControl | esc_AlwaysCopy, unescapedSpec);
 
   // in case of failure, return escaped URI
@@ -152,9 +152,9 @@ NS_IMETHODIMP  nsTextToSubURI::UnEscapeURIForUI(const nsACString & aCharset,
 
   // If there are any characters that are unsafe for URIs, reescape those.
   if (mUnsafeChars.IsEmpty()) {
-    nsAdoptingString blacklist;
+    nsAutoString blacklist;
     nsresult rv = mozilla::Preferences::GetString("network.IDN.blacklist_chars",
-                                                  &blacklist);
+                                                  blacklist);
     if (NS_SUCCEEDED(rv)) {
       // we allow SPACE and IDEOGRAPHIC SPACE in this method
       blacklist.StripChars(u" \u3000");
@@ -189,7 +189,7 @@ nsTextToSubURI::UnEscapeNonAsciiURI(const nsACString& aCharset,
   // leave the URI as it is if it's not UTF-8 and aCharset is not a ASCII
   // superset since converting "http:" with such an encoding is always a bad
   // idea.
-  if (!IsUTF8(unescapedSpec) && 
+  if (!IsUTF8(unescapedSpec) &&
       (aCharset.LowerCaseEqualsLiteral("utf-16") ||
        aCharset.LowerCaseEqualsLiteral("utf-16be") ||
        aCharset.LowerCaseEqualsLiteral("utf-16le") ||

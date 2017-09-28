@@ -5,14 +5,11 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 UNIFIED_SOURCES += [
+    'TestCollation.cpp',
+    'TestDateTimeFormat.cpp',
     'TestLocaleService.cpp',
     'TestLocaleServiceNegotiate.cpp',
+    'TestOSPreferences.cpp',
 ]
-
-if CONFIG['ENABLE_INTL_API']:
-    UNIFIED_SOURCES += [
-        'TestDateTimeFormat.cpp',
-        'TestOSPreferences.cpp',
-    ]
 
 FINAL_LIBRARY = 'xul-gtest'

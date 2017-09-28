@@ -12,8 +12,11 @@ cd /setup
 apt_packages=()
 apt_packages+=('curl')
 apt_packages+=('locales')
+apt_packages+=('git')
 apt_packages+=('python')
 apt_packages+=('python-pip')
+apt_packages+=('python3')
+apt_packages+=('python3-pip')
 apt_packages+=('sudo')
 apt_packages+=('wget')
 apt_packages+=('xz-utils')
@@ -25,6 +28,9 @@ apt-get install -y ${apt_packages[@]}
 # and python scripts raise UnicodeEncodeError when trying to print unicode characters.
 locale-gen en_US.UTF-8
 dpkg-reconfigure locales
+
+su -c 'git config --global user.email "worker@mozilla.test"' worker
+su -c 'git config --global user.name "worker"' worker
 
 tooltool_fetch() {
     cat >manifest.tt
@@ -42,6 +48,28 @@ cd /build
 # install node
 
 . install-node.sh
+
+/build/tooltool.py fetch -m /tmp/eslint.tt
+mv /build/node_modules /build/node_modules_eslint
+/build/tooltool.py fetch -m /tmp/eslint-plugin-mozilla.tt
+mv /build/node_modules /build/node_modules_eslint-plugin-mozilla
+
+###
+# fzf setup
+###
+
+tooltool_fetch <<EOF
+[
+  {
+    "size": 866160,
+    "digest": "9f0ef6bf44b8622bd0e4e8b0b5b5c714c0a2ce4487e6f234e7d4caac458164c521949f4d84b8296274e8bd20966f835e26f6492ba499405d38b620181e82429e",
+    "algorithm": "sha512",
+    "filename": "fzf-0.16.11-linux_amd64.tgz",
+    "unpack": true
+  }
+]
+EOF
+mv fzf /usr/local/bin
 
 ###
 # Flake8 Setup

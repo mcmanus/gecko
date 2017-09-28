@@ -5,6 +5,12 @@
 
 const {actionTypes: at} = Components.utils.import("resource://activity-stream/common/Actions.jsm", {});
 
+// Locales that should be displayed RTL
+const RTL_LIST = ["ar", "he", "fa", "ur"];
+
+const TOP_SITES_DEFAULT_LENGTH = 6;
+const TOP_SITES_SHOWMORE_LENGTH = 12;
+
 const INITIAL_STATE = {
   App: {
     // Have we received real data from the app yet?
@@ -12,26 +18,40 @@ const INITIAL_STATE = {
     // The locale of the browser
     locale: "",
     // Localized strings with defaults
-    strings: {},
+    strings: null,
+    // The text direction for the locale
+    textDirection: "",
     // The version of the system-addon
     version: null
   },
+  Snippets: {initialized: false},
   TopSites: {
     // Have we received real data from history yet?
     initialized: false,
     // The history (and possibly default) links
-    rows: []
+    rows: [],
+    // Used in content only to dispatch action from
+    // context menu to TopSitesEdit.
+    editForm: {
+      visible: false,
+      site: null
+    }
   },
   Prefs: {
     initialized: false,
     values: {}
-  }
+  },
+  Dialog: {
+    visible: false,
+    data: {}
+  },
+  Sections: []
 };
 
 function App(prevState = INITIAL_STATE.App, action) {
   switch (action.type) {
     case at.INIT:
-      return Object.assign({}, action.data || {}, {initialized: true});
+      return Object.assign({}, prevState, action.data || {}, {initialized: true});
     case at.LOCALE_UPDATED: {
       if (!action.data) {
         return prevState;
@@ -39,12 +59,46 @@ function App(prevState = INITIAL_STATE.App, action) {
       let {locale, strings} = action.data;
       return Object.assign({}, prevState, {
         locale,
-        strings
+        strings,
+        textDirection: RTL_LIST.indexOf(locale.split("-")[0]) >= 0 ? "rtl" : "ltr"
       });
     }
     default:
       return prevState;
   }
+}
+
+/**
+ * insertPinned - Inserts pinned links in their specified slots
+ *
+ * @param {array} a list of links
+ * @param {array} a list of pinned links
+ * @return {array} resulting list of links with pinned links inserted
+ */
+function insertPinned(links, pinned) {
+  // Remove any pinned links
+  const pinnedUrls = pinned.map(link => link && link.url);
+  let newLinks = links.filter(link => (link ? !pinnedUrls.includes(link.url) : false));
+  newLinks = newLinks.map(link => {
+    if (link && link.isPinned) {
+      delete link.isPinned;
+      delete link.pinIndex;
+    }
+    return link;
+  });
+
+  // Then insert them in their specified location
+  pinned.forEach((val, index) => {
+    if (!val) { return; }
+    let link = Object.assign({}, val, {isPinned: true, pinIndex: index});
+    if (index > newLinks.length) {
+      newLinks[index] = link;
+    } else {
+      newLinks.splice(index, 0, link);
+    }
+  });
+
+  return newLinks;
 }
 
 function TopSites(prevState = INITIAL_STATE.TopSites, action) {
@@ -56,9 +110,13 @@ function TopSites(prevState = INITIAL_STATE.TopSites, action) {
         return prevState;
       }
       return Object.assign({}, prevState, {initialized: true, rows: action.data});
+    case at.TOP_SITES_EDIT:
+      return Object.assign({}, prevState, {editForm: {visible: true, site: action.data}});
+    case at.TOP_SITES_CANCEL_EDIT:
+      return Object.assign({}, prevState, {editForm: {visible: false}});
     case at.SCREENSHOT_UPDATED:
       newRows = prevState.rows.map(row => {
-        if (row.url === action.data.url) {
+        if (row && row.url === action.data.url) {
           hasMatch = true;
           return Object.assign({}, row, {screenshot: action.data.screenshot});
         }
@@ -66,17 +124,23 @@ function TopSites(prevState = INITIAL_STATE.TopSites, action) {
       });
       return hasMatch ? Object.assign({}, prevState, {rows: newRows}) : prevState;
     case at.PLACES_BOOKMARK_ADDED:
+      if (!action.data) {
+        return prevState;
+      }
       newRows = prevState.rows.map(site => {
-        if (site.url === action.data.url) {
-          const {bookmarkGuid, bookmarkTitle, lastModified} = action.data;
-          return Object.assign({}, site, {bookmarkGuid, bookmarkTitle, bookmarkDateCreated: lastModified});
+        if (site && site.url === action.data.url) {
+          const {bookmarkGuid, bookmarkTitle, dateAdded} = action.data;
+          return Object.assign({}, site, {bookmarkGuid, bookmarkTitle, bookmarkDateCreated: dateAdded});
         }
         return site;
       });
       return Object.assign({}, prevState, {rows: newRows});
     case at.PLACES_BOOKMARK_REMOVED:
+      if (!action.data) {
+        return prevState;
+      }
       newRows = prevState.rows.map(site => {
-        if (site.url === action.data.url) {
+        if (site && site.url === action.data.url) {
           const newSite = Object.assign({}, site);
           delete newSite.bookmarkGuid;
           delete newSite.bookmarkTitle;
@@ -86,10 +150,26 @@ function TopSites(prevState = INITIAL_STATE.TopSites, action) {
         return site;
       });
       return Object.assign({}, prevState, {rows: newRows});
-    case at.PLACES_LINK_DELETED:
-    case at.PLACES_LINK_BLOCKED:
-      newRows = prevState.rows.filter(val => val.url !== action.data.url);
+    case at.BLOCK_URL:
+    case at.DELETE_HISTORY_URL:
+      // Optimistically update the UI by responding to the context menu action
+      // events and removing the site that was blocked/deleted with an empty slot.
+      // Once refresh() finishes, we update the UI again with a new site
+      newRows = prevState.rows.filter(val => val && val.url !== action.data.url);
       return Object.assign({}, prevState, {rows: newRows});
+    default:
+      return prevState;
+  }
+}
+
+function Dialog(prevState = INITIAL_STATE.Dialog, action) {
+  switch (action.type) {
+    case at.DIALOG_OPEN:
+      return Object.assign({}, prevState, {visible: true, data: action.data});
+    case at.DIALOG_CANCEL:
+      return Object.assign({}, prevState, {visible: false});
+    case at.DELETE_HISTORY_URL:
+      return Object.assign({}, INITIAL_STATE.Dialog);
     default:
       return prevState;
   }
@@ -109,7 +189,130 @@ function Prefs(prevState = INITIAL_STATE.Prefs, action) {
   }
 }
 
-this.INITIAL_STATE = INITIAL_STATE;
-this.reducers = {TopSites, App, Prefs};
+function Sections(prevState = INITIAL_STATE.Sections, action) {
+  let hasMatch;
+  let newState;
+  switch (action.type) {
+    case at.SECTION_DEREGISTER:
+      return prevState.filter(section => section.id !== action.data);
+    case at.SECTION_REGISTER:
+      // If section exists in prevState, update it
+      newState = prevState.map(section => {
+        if (section && section.id === action.data.id) {
+          hasMatch = true;
+          return Object.assign({}, section, action.data);
+        }
+        return section;
+      });
 
-this.EXPORTED_SYMBOLS = ["reducers", "INITIAL_STATE"];
+      // Invariant: Sections array sorted in increasing order of property `order`.
+      // If section doesn't exist in prevState, create a new section object. If
+      // the section has an order, insert it at the correct place in the array.
+      // Otherwise, prepend it and set the order to be minimal.
+      if (!hasMatch) {
+        const initialized = !!(action.data.rows && action.data.rows.length > 0);
+        let order;
+        let index;
+        if (prevState.length > 0) {
+          order = action.data.order !== undefined ? action.data.order : prevState[0].order - 1;
+          index = newState.findIndex(section => section.order >= order);
+          if (index === -1) {
+            index = newState.length;
+          }
+        } else {
+          order = action.data.order !== undefined ? action.data.order : 0;
+          index = 0;
+        }
+
+        const section = Object.assign({title: "", rows: [], order, enabled: false}, action.data, {initialized});
+        newState.splice(index, 0, section);
+      }
+      return newState;
+    case at.SECTION_UPDATE:
+      return prevState.map(section => {
+        if (section && section.id === action.data.id) {
+          // If the action is updating rows, we should consider initialized to be true.
+          // This can be overridden if initialized is defined in the action.data
+          const initialized = action.data.rows ? {initialized: true} : {};
+          return Object.assign({}, section, initialized, action.data);
+        }
+        return section;
+      });
+    case at.SECTION_UPDATE_CARD:
+      return prevState.map(section => {
+        if (section && section.id === action.data.id && section.rows) {
+          const newRows = section.rows.map(card => {
+            if (card.url === action.data.url) {
+              return Object.assign({}, card, action.data.options);
+            }
+            return card;
+          });
+          return Object.assign({}, section, {rows: newRows});
+        }
+        return section;
+      });
+    case at.PLACES_BOOKMARK_ADDED:
+      if (!action.data) {
+        return prevState;
+      }
+      return prevState.map(section => Object.assign({}, section, {
+        rows: section.rows.map(item => {
+          // find the item within the rows that is attempted to be bookmarked
+          if (item.url === action.data.url) {
+            const {bookmarkGuid, bookmarkTitle, dateAdded} = action.data;
+            Object.assign(item, {bookmarkGuid, bookmarkTitle, bookmarkDateCreated: dateAdded});
+            if (!item.type || item.type === "history") {
+              item.type = "bookmark";
+            }
+          }
+          return item;
+        })
+      }));
+    case at.PLACES_BOOKMARK_REMOVED:
+      if (!action.data) {
+        return prevState;
+      }
+      return prevState.map(section => Object.assign({}, section, {
+        rows: section.rows.map(item => {
+          // find the bookmark within the rows that is attempted to be removed
+          if (item.url === action.data.url) {
+            const newSite = Object.assign({}, item);
+            delete newSite.bookmarkGuid;
+            delete newSite.bookmarkTitle;
+            delete newSite.bookmarkDateCreated;
+            if (!newSite.type || newSite.type === "bookmark") {
+              newSite.type = "history";
+            }
+            return newSite;
+          }
+          return item;
+        })
+      }));
+    case at.PLACES_LINK_DELETED:
+    case at.PLACES_LINK_BLOCKED:
+      return prevState.map(section =>
+        Object.assign({}, section, {rows: section.rows.filter(site => site.url !== action.data.url)}));
+    default:
+      return prevState;
+  }
+}
+
+function Snippets(prevState = INITIAL_STATE.Snippets, action) {
+  switch (action.type) {
+    case at.SNIPPETS_DATA:
+      return Object.assign({}, prevState, {initialized: true}, action.data);
+    case at.SNIPPETS_RESET:
+      return INITIAL_STATE.Snippets;
+    default:
+      return prevState;
+  }
+}
+
+this.INITIAL_STATE = INITIAL_STATE;
+this.TOP_SITES_DEFAULT_LENGTH = TOP_SITES_DEFAULT_LENGTH;
+this.TOP_SITES_SHOWMORE_LENGTH = TOP_SITES_SHOWMORE_LENGTH;
+
+this.reducers = {TopSites, App, Snippets, Prefs, Dialog, Sections};
+this.insertPinned = insertPinned;
+
+this.EXPORTED_SYMBOLS = ["reducers", "INITIAL_STATE", "insertPinned", "TOP_SITES_DEFAULT_LENGTH", "TOP_SITES_SHOWMORE_LENGTH"];

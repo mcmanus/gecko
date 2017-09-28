@@ -7,19 +7,17 @@ XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
                                   "resource://gre/modules/AddonManager.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AddonManagerPrivate",
                                   "resource://gre/modules/AddonManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Extension",
-                                  "resource://gre/modules/Extension.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ExtensionParent",
                                   "resource://gre/modules/ExtensionParent.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                  "resource://gre/modules/Services.jsm");
 
 this.runtime = class extends ExtensionAPI {
   getAPI(context) {
     let {extension} = context;
     return {
       runtime: {
-        onStartup: new SingletonEventManager(context, "runtime.onStartup", fire => {
+        onStartup: new EventManager(context, "runtime.onStartup", fire => {
           if (context.incognito) {
             // This event should not fire if we are operating in a private profile.
             return () => {};
@@ -35,7 +33,7 @@ this.runtime = class extends ExtensionAPI {
           };
         }).api(),
 
-        onInstalled: new SingletonEventManager(context, "runtime.onInstalled", fire => {
+        onInstalled: new EventManager(context, "runtime.onInstalled", fire => {
           let temporary = !!extension.addonData.temporarilyInstalled;
 
           let listener = () => {
@@ -63,7 +61,7 @@ this.runtime = class extends ExtensionAPI {
           };
         }).api(),
 
-        onUpdateAvailable: new SingletonEventManager(context, "runtime.onUpdateAvailable", fire => {
+        onUpdateAvailable: new EventManager(context, "runtime.onUpdateAvailable", fire => {
           let instanceID = extension.addonData.instanceID;
           AddonManager.addUpgradeListener(instanceID, upgrade => {
             extension.upgrade = upgrade;
@@ -126,12 +124,12 @@ this.runtime = class extends ExtensionAPI {
 
           let uri;
           try {
-            uri = NetUtil.newURI(url);
+            uri = new URL(url);
           } catch (e) {
             return Promise.reject({message: `Invalid URL: ${JSON.stringify(url)}`});
           }
 
-          if (uri.scheme != "http" && uri.scheme != "https") {
+          if (uri.protocol != "http:" && uri.protocol != "https:") {
             return Promise.reject({message: "url must have the scheme http or https"});
           }
 

@@ -62,7 +62,7 @@ public:
 
   void Reflow(nsPresContext* aPresContext,
               ReflowOutput& aDesiredSize,
-              const ReflowInput& aReflowState,
+              const ReflowInput& aReflowInput,
               nsReflowStatus& aStatus) override;
 
   // nsIAnonymousContentCreator
@@ -73,7 +73,8 @@ public:
   nsresult AttributeChanged(int32_t aNameSpaceID, nsIAtom* aAttribute,
                             int32_t aModType) override;
 
-  void UpdateInputBoxValue();
+  void OnValueChanged();
+  void OnMinMaxStepAttrChanged();
   void SetValueFromPicker(const DateTimeValue& aValue);
   void HandleFocusEvent();
   void HandleBlurEvent();
@@ -87,7 +88,8 @@ private:
   {
   public:
     explicit SyncDisabledStateEvent(nsDateTimeControlFrame* aFrame)
-    : mFrame(aFrame)
+      : mozilla::Runnable("nsDateTimeControlFrame::SyncDisabledStateEvent")
+      , mFrame(aFrame)
     {}
 
     NS_IMETHOD Run() override

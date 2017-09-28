@@ -27,7 +27,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(TextTrack,
 
 NS_IMPL_ADDREF_INHERITED(TextTrack, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(TextTrack, DOMEventTargetHelper)
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(TextTrack)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(TextTrack)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 TextTrack::TextTrack(nsPIDOMWindowInner* aOwnerWindow,
@@ -337,11 +337,10 @@ TextTrack::DispatchAsyncTrustedEvent(const nsString& aEventName)
   }
   RefPtr<TextTrack> self = this;
   nsGlobalWindow::Cast(win)->Dispatch(
-    "TextTrack::DispatchAsyncTrustedEvent", TaskCategory::Other,
-    NS_NewRunnableFunction([self, aEventName]() {
-      self->DispatchTrustedEvent(aEventName);
-    })
-  );
+    TaskCategory::Other,
+    NS_NewRunnableFunction(
+      "dom::TextTrack::DispatchAsyncTrustedEvent",
+      [self, aEventName]() { self->DispatchTrustedEvent(aEventName); }));
 }
 
 bool

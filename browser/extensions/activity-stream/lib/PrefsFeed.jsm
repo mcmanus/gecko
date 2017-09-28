@@ -4,42 +4,52 @@
 "use strict";
 
 const {utils: Cu} = Components;
-const {actionTypes: at, actionCreators: ac} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Prefs",
-  "resource://activity-stream/lib/ActivityStreamPrefs.jsm");
+const {actionCreators: ac, actionTypes: at} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
+const {Prefs} = Cu.import("resource://activity-stream/lib/ActivityStreamPrefs.jsm", {});
+const {PrerenderData} = Cu.import("resource://activity-stream/common/PrerenderData.jsm", {});
 
 this.PrefsFeed = class PrefsFeed {
-  constructor(prefNames) {
-    this._prefNames = prefNames;
+  constructor(prefMap) {
+    this._prefMap = prefMap;
     this._prefs = new Prefs();
-    this._observers = new Map();
   }
-  onPrefChanged(name, value) {
-    this.store.dispatch(ac.BroadcastToContent({type: at.PREF_CHANGED, data: {name, value}}));
-  }
-  init() {
-    const values = {};
 
-    // Set up listeners for each activity stream pref
-    for (const name of this._prefNames) {
-      const handler = value => {
-        this.onPrefChanged(name, value);
-      };
-      this._observers.set(name, handler, this);
-      this._prefs.observe(name, handler);
+  // If the any prefs are set to something other than what the prerendered version
+  // of AS expects, we can't use it.
+  _setPrerenderPref(name) {
+    this._prefs.set("prerender", PrerenderData.arePrefsValid(pref => this._prefs.get(pref)));
+  }
+
+  _checkPrerender(name) {
+    if (PrerenderData.invalidatingPrefs.includes(name)) {
+      this._setPrerenderPref();
+    }
+  }
+
+  onPrefChanged(name, value) {
+    if (this._prefMap.has(name)) {
+      this.store.dispatch(ac.BroadcastToContent({type: at.PREF_CHANGED, data: {name, value}}));
+    }
+    this._checkPrerender(name);
+  }
+
+  init() {
+    this._prefs.observeBranch(this);
+
+    // Get the initial value of each activity stream pref
+    const values = {};
+    for (const name of this._prefMap.keys()) {
       values[name] = this._prefs.get(name);
     }
 
     // Set the initial state of all prefs in redux
     this.store.dispatch(ac.BroadcastToContent({type: at.PREFS_INITIAL_VALUES, data: values}));
+
+    this._setPrerenderPref();
   }
   removeListeners() {
-    for (const name of this._prefNames) {
-      this._prefs.ignore(name, this._observers.get(name));
-    }
-    this._observers.clear();
+    this._prefs.ignoreBranch(this);
   }
   onAction(action) {
     switch (action.type) {

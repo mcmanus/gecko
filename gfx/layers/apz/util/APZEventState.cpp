@@ -21,6 +21,7 @@
 #include "nsDocShell.h"
 #include "nsIDOMMouseEvent.h"
 #include "nsIDOMWindowUtils.h"
+#include "nsINamed.h"
 #include "nsIScrollableFrame.h"
 #include "nsIScrollbarMediator.h"
 #include "nsITimer.h"
@@ -124,6 +125,7 @@ APZEventState::~APZEventState()
 {}
 
 class DelayedFireSingleTapEvent final : public nsITimerCallback
+                                      , public nsINamed
 {
 public:
   NS_DECL_ISUPPORTS
@@ -154,6 +156,13 @@ public:
     return NS_OK;
   }
 
+  NS_IMETHOD
+  GetName(nsACString& aName) override
+  {
+    aName.AssignLiteral("DelayedFireSingleTapEvent");
+    return NS_OK;
+  }
+
   void ClearTimer() {
     mTimer = nullptr;
   }
@@ -171,7 +180,7 @@ private:
   RefPtr<nsIContent> mTouchRollup;
 };
 
-NS_IMPL_ISUPPORTS(DelayedFireSingleTapEvent, nsITimerCallback)
+NS_IMPL_ISUPPORTS(DelayedFireSingleTapEvent, nsITimerCallback, nsINamed)
 
 void
 APZEventState::ProcessSingleTap(const CSSPoint& aPoint,
@@ -196,16 +205,8 @@ APZEventState::ProcessSingleTap(const CSSPoint& aPoint,
   }
 
   LayoutDevicePoint ldPoint = aPoint * aScale;
-  if (!mActiveElementManager->ActiveElementUsesStyle()) {
-    // If the active element isn't visually affected by the :active style, we
-    // have no need to wait the extra sActiveDurationMs to make the activation
-    // visually obvious to the user.
-    widget::nsAutoRollup rollup(touchRollup.get());
-    APZCCallbackHelper::FireSingleTapEvent(ldPoint, aModifiers, aClickCount, widget);
-    return;
-  }
 
-  APZES_LOG("Active element uses style, scheduling timer for click event\n");
+  APZES_LOG("Scheduling timer for click event\n");
   nsCOMPtr<nsITimer> timer = do_CreateInstance(NS_TIMER_CONTRACTID);
   dom::TabChild* tabChild = widget->GetOwningTabChild();
 
@@ -490,11 +491,6 @@ APZEventState::ProcessAPZStateChange(ViewID aViewId,
     mActiveElementManager->HandleTouchEnd();
     break;
   }
-  case APZStateChange::eSentinel:
-    // Should never happen, but we want this case branch to stop the compiler
-    // whining about unhandled values.
-    MOZ_ASSERT(false);
-    break;
   }
 }
 

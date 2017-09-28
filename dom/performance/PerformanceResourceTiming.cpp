@@ -17,7 +17,7 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(PerformanceResourceTiming,
                                                PerformanceEntry)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(PerformanceResourceTiming)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(PerformanceResourceTiming)
 NS_INTERFACE_MAP_END_INHERITING(PerformanceEntry)
 
 NS_IMPL_ADDREF_INHERITED(PerformanceResourceTiming, PerformanceEntry)
@@ -26,7 +26,7 @@ NS_IMPL_RELEASE_INHERITED(PerformanceResourceTiming, PerformanceEntry)
 PerformanceResourceTiming::PerformanceResourceTiming(PerformanceTiming* aPerformanceTiming,
                                                      Performance* aPerformance,
                                                      const nsAString& aName)
-: PerformanceEntry(aPerformance, aName, NS_LITERAL_STRING("resource")),
+: PerformanceEntry(aPerformance->GetParentObject(), aName, NS_LITERAL_STRING("resource")),
   mTiming(aPerformanceTiming),
   mEncodedBodySize(0),
   mTransferSize(0),
@@ -50,4 +50,18 @@ JSObject*
 PerformanceResourceTiming::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
   return PerformanceResourceTimingBinding::Wrap(aCx, this, aGivenProto);
+}
+
+size_t
+PerformanceResourceTiming::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
+{
+  return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
+}
+
+size_t
+PerformanceResourceTiming::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
+{
+  return PerformanceEntry::SizeOfExcludingThis(aMallocSizeOf) +
+         mInitiatorType.SizeOfExcludingThisIfUnshared(aMallocSizeOf) +
+         mNextHopProtocol.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
 }

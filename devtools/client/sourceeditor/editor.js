@@ -30,7 +30,7 @@ const RE_SCRATCHPAD_ERROR = /(?:@Scratchpad\/\d+:|\()(\d+):?(\d+)?(?:\)|\n)/;
 const RE_JUMP_TO_LINE = /^(\d+):?(\d+)?/;
 
 const Services = require("Services");
-const events = require("devtools/shared/event-emitter");
+const events = require("devtools/shared/old-event-emitter");
 const { PrefObserver } = require("devtools/client/shared/prefs");
 const { getClientCssProperties } = require("devtools/shared/fronts/css-properties");
 const KeyShortcuts = require("devtools/client/shared/key-shortcuts");
@@ -48,37 +48,14 @@ const {
 
 const { OS } = Services.appinfo;
 
-// CM_STYLES, CM_SCRIPTS and CM_IFRAME represent the HTML,
-// JavaScript and CSS that is injected into an iframe in
-// order to initialize a CodeMirror instance.
-
-const CM_STYLES = [
-  "chrome://devtools/content/sourceeditor/codemirror/lib/codemirror.css",
-  "chrome://devtools/content/sourceeditor/codemirror/addon/dialog/dialog.css",
-  "chrome://devtools/content/sourceeditor/codemirror/mozilla.css"
-];
-
-CM_STYLES.push(
-  "chrome://devtools/content/sourceeditor/codemirror/old-debugger.css"
-);
+// CM_SCRIPTS and CM_IFRAME represent the HTML and JavaScript that is
+// injected into an iframe in order to initialize a CodeMirror instance.
 
 const CM_SCRIPTS = [
   "chrome://devtools/content/sourceeditor/codemirror/codemirror.bundle.js",
 ];
 
-const CM_IFRAME =
-  "data:text/html;charset=utf8,<!DOCTYPE html>" +
-  "<html dir='ltr'>" +
-  "  <head>" +
-  "    <style>" +
-  "      html, body { height: 100%; }" +
-  "      body { margin: 0; overflow: hidden; }" +
-  "      .CodeMirror { width: 100% !important; line-height: 1.25 !important; }" +
-  "    </style>" +
-  CM_STYLES.map(style => "<link rel='stylesheet' href='" + style + "'>").join("\n") +
-  "  </head>" +
-  "  <body class='theme-body devtools-monospace'></body>" +
-  "</html>";
+const CM_IFRAME = "chrome://devtools/content/sourceeditor/codemirror/cmiframe.html";
 
 const CM_MAPPING = [
   "focus",
@@ -485,7 +462,9 @@ Editor.prototype = {
   replaceDocument: function (doc) {
     let cm = editors.get(this);
     cm.swapDoc(doc);
-    this._updateLineNumberFormat();
+    if (!Services.prefs.getBoolPref("devtools.debugger.new-debugger-frontend")) {
+      this._updateLineNumberFormat();
+    }
   },
 
   /**
@@ -572,7 +551,7 @@ Editor.prototype = {
   setText: function (value) {
     let cm = editors.get(this);
 
-    if (typeof value !== "string") {  // wasm?
+    if (typeof value !== "string" && "binary" in value) {  // wasm?
       // binary does not survive as Uint8Array, converting from string
       let binary = value.binary;
       let data = new Uint8Array(binary.length);
@@ -591,7 +570,10 @@ Editor.prototype = {
       // cm will try to split into lines anyway, saving memory
       value = { split: () => lines };
     }
-    this._updateLineNumberFormat();
+
+    if (!Services.prefs.getBoolPref("devtools.debugger.new-debugger-frontend")) {
+      this._updateLineNumberFormat();
+    }
 
     cm.setValue(value);
 
@@ -819,6 +801,7 @@ Editor.prototype = {
 
     let marker = cm.getWrapperElement().ownerDocument.createElement("div");
     marker.className = markerClass;
+    // eslint-disable-next-line no-unsanitized/property
     marker.innerHTML = content;
     cm.setGutterMarker(info.line, gutterName, marker);
   },

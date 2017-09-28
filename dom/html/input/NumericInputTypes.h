@@ -18,6 +18,9 @@ public:
   bool IsRangeUnderflow() const override;
   bool HasStepMismatch(bool aUseZeroIfValueNaN) const override;
 
+  nsresult GetRangeOverflowMessage(nsAString& aMessage) override;
+  nsresult GetRangeUnderflowMessage(nsAString& aMessage) override;
+
   bool ConvertStringToNumber(nsAString& aValue,
                              mozilla::Decimal& aResultValue) const override;
   bool ConvertNumberToString(mozilla::Decimal aValue,
@@ -42,12 +45,16 @@ public:
   bool IsValueMissing() const override;
   bool HasBadInput() const override;
 
+  nsresult GetValueMissingMessage(nsAString& aMessage) override;
+  nsresult GetBadInputMessage(nsAString& aMessage) override;
+
+protected:
+  bool IsMutable() const override;
+
 private:
   explicit NumberInputType(mozilla::dom::HTMLInputElement* aInputElement)
     : NumericInputTypeBase(aInputElement)
   {}
-
-  bool IsMutable() const override;
 };
 
 // input type=range

@@ -24,8 +24,8 @@
 #include "nsRect.h"
 #include "nsString.h"
 #include "nsStubDocumentObserver.h"
-#include "nsSVGEffects.h" // for nsSVGRenderingObserver
-#include "nsWindowMemoryReporter.h"
+#include "SVGObserverUtils.h" // for nsSVGRenderingObserver
+#include "nsWindowSizes.h"
 #include "ImageRegion.h"
 #include "ISurfaceProvider.h"
 #include "LookupResult.h"
@@ -66,7 +66,7 @@ public:
     Element* elem = GetTarget();
     MOZ_ASSERT(elem, "no root SVG node for us to observe");
 
-    nsSVGEffects::AddRenderingObserver(elem, this);
+    SVGObserverUtils::AddRenderingObserver(elem, this);
     mInObserverList = true;
   }
 
@@ -108,7 +108,7 @@ protected:
     // Our caller might've removed us from rendering-observer list.
     // Add ourselves back!
     if (!mInObserverList) {
-      nsSVGEffects::AddRenderingObserver(elem, this);
+      SVGObserverUtils::AddRenderingObserver(elem, this);
       mInObserverList = true;
     }
   }
@@ -304,8 +304,8 @@ SVGDrawingCallback::operator()(gfxContext* aContext,
   }
   aContext->SetMatrix(
     aContext->CurrentMatrix().PreMultiply(matrix).
-                              Scale(double(mSize.width) / mViewportSize.width,
-                                    double(mSize.height) / mViewportSize.height));
+                              PreScale(double(mSize.width) / mViewportSize.width,
+                                       double(mSize.height) / mViewportSize.height));
 
   nsPresContext* presContext = presShell->GetPresContext();
   MOZ_ASSERT(presContext, "pres shell w/out pres context");
@@ -380,7 +380,7 @@ VectorImage::Init(const char* aMimeType,
 }
 
 size_t
-VectorImage::SizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf) const
+VectorImage::SizeOfSourceWithComputedFallback(SizeOfState& aState) const
 {
   if (!mSVGDocumentWrapper) {
     return 0; // No document, so no memory used for the document.
@@ -391,8 +391,8 @@ VectorImage::SizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf) const
     return 0; // No document, so no memory used for the document.
   }
 
-  nsWindowSizes windowSizes(aMallocSizeOf);
-  doc->DocAddSizeOfIncludingThis(&windowSizes);
+  nsWindowSizes windowSizes(aState);
+  doc->DocAddSizeOfIncludingThis(windowSizes);
 
   if (windowSizes.getTotalSize() == 0) {
     // MallocSizeOf fails on this platform. Because we also use this method for
@@ -427,7 +427,7 @@ VectorImage::OnImageDataComplete(nsIRequest* aRequest,
   if (NS_FAILED(aStatus)) {
     finalStatus = aStatus;
   }
-  
+
   Progress loadProgress = LoadCompleteProgress(aLastPart, mError, finalStatus);
 
   if (mIsFullyLoaded || mError) {
@@ -526,6 +526,13 @@ nsresult
 VectorImage::GetNativeSizes(nsTArray<IntSize>& aNativeSizes) const
 {
   return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+//******************************************************************************
+size_t
+VectorImage::GetNativeSizesLength() const
+{
+  return 0;
 }
 
 //******************************************************************************
@@ -1019,11 +1026,25 @@ VectorImage::Show(gfxDrawable* aDrawable, const SVGDrawingParameters& aParams)
 {
   MOZ_ASSERT(aDrawable, "Should have a gfxDrawable by now");
   gfxUtils::DrawPixelSnapped(aParams.context, aDrawable,
-                             aParams.size,
+                             SizeDouble(aParams.size),
                              aParams.region,
                              SurfaceFormat::B8G8R8A8,
                              aParams.samplingFilter,
                              aParams.flags, aParams.opacity);
+
+#ifdef DEBUG
+  // Record the image drawing for startup performance testing.
+  if (NS_IsMainThread()) {
+    nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+    NS_WARNING_ASSERTION(obs, "Can't get an observer service handle");
+    if (obs) {
+      nsCOMPtr<nsIURI> imageURI = mURI->ToIURI();
+      nsAutoCString spec;
+      imageURI->GetSpec(spec);
+      obs->NotifyObservers(nullptr, "image-drawing", NS_ConvertUTF8toUTF16(spec).get());
+    }
+  }
+#endif
 
   MOZ_ASSERT(mRenderingObserver, "Should have a rendering observer by now");
   mRenderingObserver->ResumeHonoringInvalidations();

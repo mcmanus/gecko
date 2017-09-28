@@ -19,6 +19,7 @@
 #include "nsIFrame.h"
 #include "nsImageRenderer.h"
 #include "nsCSSRenderingBorders.h"
+#include "TextDrawTarget.h"
 
 class gfxContext;
 class nsStyleContext;
@@ -114,12 +115,12 @@ struct nsCSSRendering {
    * Initialize any static variables used by nsCSSRendering.
    */
   static void Init();
-  
+
   /**
    * Clean up any static variables used by nsCSSRendering.
    */
   static void Shutdown();
-  
+
   static bool GetShadowInnerRadii(nsIFrame* aFrame,
                                   const nsRect& aFrameArea,
                                   RectCornerRadii& aOutInnerRadii);
@@ -501,15 +502,19 @@ struct nsCSSRendering {
                                                               int32_t aLayer);
   static DrawResult BuildWebRenderDisplayItemsForStyleImageLayer(const PaintBGParams& aParams,
                                                                  mozilla::wr::DisplayListBuilder& aBuilder,
+                                                                 mozilla::wr::IpcResourceUpdateQueue& aResources,
                                                                  const mozilla::layers::StackingContextHelper& aSc,
-                                                                 nsTArray<mozilla::layers::WebRenderParentCommand>& aParentCommands,
-                                                                 mozilla::layers::WebRenderDisplayItemLayer* aLayer);
+                                                                 mozilla::layers::WebRenderDisplayItemLayer* aLayer,
+                                                                 mozilla::layers::WebRenderLayerManager* aManager,
+                                                                 nsDisplayItem* aItem);
 
   static DrawResult BuildWebRenderDisplayItemsForStyleImageLayerWithSC(const PaintBGParams& aParams,
                                                                        mozilla::wr::DisplayListBuilder& aBuilder,
+                                                                       mozilla::wr::IpcResourceUpdateQueue& aResources,
                                                                        const mozilla::layers::StackingContextHelper& aSc,
-                                                                       nsTArray<mozilla::layers::WebRenderParentCommand>& aParentCommands,
                                                                        mozilla::layers::WebRenderDisplayItemLayer* aLayer,
+                                                                       mozilla::layers::WebRenderLayerManager* aManager,
+                                                                       nsDisplayItem* aItem,
                                                                        nsStyleContext *mBackgroundSC,
                                                                        const nsStyleBorder& aBorder);
 
@@ -545,10 +550,9 @@ struct nsCSSRendering {
                                      nscolor       aBGColor,
                                      const nsRect& aBorderRect,
                                      int32_t       aAppUnitsPerDevPixel,
-                                     int32_t       aAppUnitsPerCSSPixel,
-                                     uint8_t       aStartBevelSide = 0,
+                                     mozilla::Side aStartBevelSide = mozilla::eSideTop,
                                      nscoord       aStartBevelOffset = 0,
-                                     uint8_t       aEndBevelSide = 0,
+                                     mozilla::Side aEndBevelSide = mozilla::eSideTop,
                                      nscoord       aEndBevelOffset = 0);
 
   // NOTE: pt, dirtyRect, lineSize, ascent, offset in the following
@@ -584,6 +588,7 @@ struct nsCSSRendering {
     uint8_t style = NS_STYLE_TEXT_DECORATION_STYLE_NONE;
     bool vertical = false;
   };
+
   struct PaintDecorationLineParams : DecorationRectParams
   {
     // No need to paint outside this rect.
@@ -595,6 +600,7 @@ struct nsCSSRendering {
     // The distance between the left edge of the given frame and the
     // position of the text as positioned without offset of the shadow.
     Float icoordInFrame = 0.0f;
+    mozilla::layout::TextDrawTarget* textDrawer = nullptr;
   };
 
   /**
@@ -711,7 +717,8 @@ class nsContextBoxBlur {
 
 public:
   enum {
-    FORCE_MASK = 0x01
+    FORCE_MASK = 0x01,
+    DISABLE_HARDWARE_ACCELERATION_BLUR = 0x02
   };
   /**
    * Prepares a gfxContext to draw on. Do not call this twice; if you want
@@ -743,7 +750,7 @@ public:
    *
    * @param aSkipRect            An area in device pixels (NOT app units!) to avoid
    *                             blurring over, to prevent unnecessary work.
-   *                             
+   *
    * @param aFlags               FORCE_MASK to ensure that the content drawn to the
    *                             returned gfxContext is used as a mask, and not
    *                             drawn directly to aDestinationCtx.

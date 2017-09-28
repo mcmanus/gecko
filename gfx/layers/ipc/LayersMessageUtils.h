@@ -12,13 +12,17 @@
 #include "chrome/common/ipc_message_utils.h"
 #include "gfxTelemetry.h"
 #include "ipc/IPCMessageUtils.h"
+#include "ipc/nsGUIEventIPC.h"
 #include "mozilla/GfxMessageUtils.h"
 #include "mozilla/layers/AsyncDragMetrics.h"
 #include "mozilla/layers/CompositorOptions.h"
 #include "mozilla/layers/CompositorTypes.h"
+#include "mozilla/layers/FocusTarget.h"
 #include "mozilla/layers/GeckoContentController.h"
+#include "mozilla/layers/KeyboardMap.h"
 #include "mozilla/layers/LayerAttributes.h"
 #include "mozilla/layers/LayersTypes.h"
+#include "mozilla/Move.h"
 
 #include <stdint.h>
 
@@ -38,10 +42,10 @@ struct ParamTraits<mozilla::layers::LayersBackend>
 
 template <>
 struct ParamTraits<mozilla::layers::ScaleMode>
-  : public ContiguousEnumSerializer<
+  : public ContiguousEnumSerializerInclusive<
              mozilla::layers::ScaleMode,
              mozilla::layers::ScaleMode::SCALE_NONE,
-             mozilla::layers::ScaleMode::SENTINEL>
+             mozilla::layers::kHighestScaleMode>
 {};
 
 template <>
@@ -60,18 +64,18 @@ struct ParamTraits<mozilla::layers::DiagnosticTypes>
 
 template <>
 struct ParamTraits<mozilla::layers::ScrollDirection>
-  : public ContiguousEnumSerializer<
+  : public ContiguousEnumSerializerInclusive<
             mozilla::layers::ScrollDirection,
             mozilla::layers::ScrollDirection::NONE,
-            mozilla::layers::ScrollDirection::SENTINEL>
+            mozilla::layers::kHighestScrollDirection>
 {};
 
 template<>
 struct ParamTraits<mozilla::layers::FrameMetrics::ScrollOffsetUpdateType>
-  : public ContiguousEnumSerializer<
+  : public ContiguousEnumSerializerInclusive<
              mozilla::layers::FrameMetrics::ScrollOffsetUpdateType,
              mozilla::layers::FrameMetrics::ScrollOffsetUpdateType::eNone,
-             mozilla::layers::FrameMetrics::ScrollOffsetUpdateType::eSentinel>
+             mozilla::layers::FrameMetrics::sHighestScrollOffsetUpdateType>
 {};
 
 template<>
@@ -304,6 +308,7 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
     WriteParam(aMsg, aParam.mSupportsPartialUploads);
     WriteParam(aMsg, aParam.mSupportsComponentAlpha);
     WriteParam(aMsg, aParam.mSupportsBackdropCopyForComponentAlpha);
+    WriteParam(aMsg, aParam.mUsingAdvancedLayers);
     WriteParam(aMsg, aParam.mSyncHandle);
   }
 
@@ -317,6 +322,7 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
                   ReadParam(aMsg, aIter, &aResult->mSupportsPartialUploads) &&
                   ReadParam(aMsg, aIter, &aResult->mSupportsComponentAlpha) &&
                   ReadParam(aMsg, aIter, &aResult->mSupportsBackdropCopyForComponentAlpha) &&
+                  ReadParam(aMsg, aIter, &aResult->mUsingAdvancedLayers) &&
                   ReadParam(aMsg, aIter, &aResult->mSyncHandle);
     return result;
   }
@@ -415,24 +421,146 @@ struct ParamTraits<mozilla::layers::EventRegions>
   }
 };
 
-typedef mozilla::layers::GeckoContentController::TapType TapType;
+template <>
+struct ParamTraits<mozilla::layers::FocusTarget::ScrollTargets>
+{
+  typedef mozilla::layers::FocusTarget::ScrollTargets paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam)
+  {
+    WriteParam(aMsg, aParam.mHorizontal);
+    WriteParam(aMsg, aParam.mVertical);
+  }
+
+  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
+  {
+    return ReadParam(aMsg, aIter, &aResult->mHorizontal) &&
+           ReadParam(aMsg, aIter, &aResult->mVertical);
+  }
+};
+
+template <>
+struct ParamTraits<mozilla::layers::FocusTarget::NoFocusTarget>
+  : public EmptyStructSerializer<mozilla::layers::FocusTarget::NoFocusTarget>
+{};
+
+template <>
+struct ParamTraits<mozilla::layers::FocusTarget>
+{
+  typedef mozilla::layers::FocusTarget paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam)
+  {
+    WriteParam(aMsg, aParam.mSequenceNumber);
+    WriteParam(aMsg, aParam.mFocusHasKeyEventListeners);
+    WriteParam(aMsg, aParam.mData);
+  }
+
+  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
+  {
+    if (!ReadParam(aMsg, aIter, &aResult->mSequenceNumber) ||
+        !ReadParam(aMsg, aIter, &aResult->mFocusHasKeyEventListeners) ||
+        !ReadParam(aMsg, aIter, &aResult->mData)) {
+      return false;
+    }
+    return true;
+  }
+};
+
+template <>
+struct ParamTraits<mozilla::layers::KeyboardScrollAction::KeyboardScrollActionType>
+  : public ContiguousEnumSerializerInclusive<
+             mozilla::layers::KeyboardScrollAction::KeyboardScrollActionType,
+             mozilla::layers::KeyboardScrollAction::KeyboardScrollActionType::eScrollCharacter,
+             mozilla::layers::KeyboardScrollAction::sHighestKeyboardScrollActionType>
+{};
+
+template <>
+struct ParamTraits<mozilla::layers::KeyboardScrollAction>
+{
+  typedef mozilla::layers::KeyboardScrollAction paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam)
+  {
+    WriteParam(aMsg, aParam.mType);
+    WriteParam(aMsg, aParam.mForward);
+  }
+
+  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
+  {
+    return ReadParam(aMsg, aIter, &aResult->mType) &&
+           ReadParam(aMsg, aIter, &aResult->mForward);
+  }
+};
+
+template <>
+struct ParamTraits<mozilla::layers::KeyboardShortcut>
+{
+  typedef mozilla::layers::KeyboardShortcut paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam)
+  {
+    WriteParam(aMsg, aParam.mAction);
+    WriteParam(aMsg, aParam.mKeyCode);
+    WriteParam(aMsg, aParam.mCharCode);
+    WriteParam(aMsg, aParam.mModifiers);
+    WriteParam(aMsg, aParam.mModifiersMask);
+    WriteParam(aMsg, aParam.mEventType);
+    WriteParam(aMsg, aParam.mDispatchToContent);
+  }
+
+  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
+  {
+    return ReadParam(aMsg, aIter, &aResult->mAction) &&
+           ReadParam(aMsg, aIter, &aResult->mKeyCode) &&
+           ReadParam(aMsg, aIter, &aResult->mCharCode) &&
+           ReadParam(aMsg, aIter, &aResult->mModifiers) &&
+           ReadParam(aMsg, aIter, &aResult->mModifiersMask) &&
+           ReadParam(aMsg, aIter, &aResult->mEventType) &&
+           ReadParam(aMsg, aIter, &aResult->mDispatchToContent);
+  }
+};
+
+template <>
+struct ParamTraits<mozilla::layers::KeyboardMap>
+{
+  typedef mozilla::layers::KeyboardMap paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam)
+  {
+    WriteParam(aMsg, aParam.Shortcuts());
+  }
+
+  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
+  {
+    nsTArray<mozilla::layers::KeyboardShortcut> shortcuts;
+    if (!ReadParam(aMsg, aIter, &shortcuts)) {
+      return false;
+    }
+    *aResult = mozilla::layers::KeyboardMap(mozilla::Move(shortcuts));
+    return true;
+  }
+};
+
+typedef mozilla::layers::GeckoContentController GeckoContentController;
+typedef GeckoContentController::TapType TapType;
 
 template <>
 struct ParamTraits<TapType>
-  : public ContiguousEnumSerializer<
+  : public ContiguousEnumSerializerInclusive<
              TapType,
              TapType::eSingleTap,
-             TapType::eSentinel>
+             GeckoContentController::sHighestTapType>
 {};
 
-typedef mozilla::layers::GeckoContentController::APZStateChange APZStateChange;
+typedef GeckoContentController::APZStateChange APZStateChange;
 
 template <>
 struct ParamTraits<APZStateChange>
-  : public ContiguousEnumSerializer<
+  : public ContiguousEnumSerializerInclusive<
              APZStateChange,
              APZStateChange::eTransformBegin,
-             APZStateChange::eSentinel>
+             GeckoContentController::sHighestAPZStateChange>
 {};
 
 template<>
@@ -474,11 +602,13 @@ struct ParamTraits<mozilla::layers::CompositorOptions>
   static void Write(Message* aMsg, const paramType& aParam) {
     WriteParam(aMsg, aParam.mUseAPZ);
     WriteParam(aMsg, aParam.mUseWebRender);
+    WriteParam(aMsg, aParam.mUseAdvancedLayers);
   }
 
   static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult) {
     return ReadParam(aMsg, aIter, &aResult->mUseAPZ)
-        && ReadParam(aMsg, aIter, &aResult->mUseWebRender);
+        && ReadParam(aMsg, aIter, &aResult->mUseWebRender)
+        && ReadParam(aMsg, aIter, &aResult->mUseAdvancedLayers);
   }
 };
 

@@ -11,9 +11,12 @@ const {
 } = require("devtools/client/webconsole/new-console-output/utils/messages");
 const { IdGenerator } = require("devtools/client/webconsole/new-console-output/utils/id-generator");
 const { batchActions } = require("devtools/client/shared/redux/middleware/debounce");
+
 const {
   MESSAGE_ADD,
+  MESSAGES_ADD,
   NETWORK_MESSAGE_UPDATE,
+  NETWORK_UPDATE_REQUEST,
   MESSAGES_CLEAR,
   MESSAGE_OPEN,
   MESSAGE_CLOSE,
@@ -22,6 +25,31 @@ const {
 } = require("../constants");
 
 const defaultIdGenerator = new IdGenerator();
+
+function messagesAdd(packets, idGenerator = null) {
+  if (idGenerator == null) {
+    idGenerator = defaultIdGenerator;
+  }
+  let messages = packets.map(packet => prepareMessage(packet, idGenerator));
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].type === MESSAGE_TYPE.CLEAR) {
+      return batchActions([
+        messagesClear(),
+        {
+          type: MESSAGES_ADD,
+          messages: messages.slice(i),
+        }
+      ]);
+    }
+  }
+
+  // When this is used for non-cached messages then handle clear message and
+  // split up into batches
+  return {
+    type: MESSAGES_ADD,
+    messages
+  };
+}
 
 function messageAdd(packet, idGenerator = null) {
   if (idGenerator == null) {
@@ -91,7 +119,7 @@ function messageTableDataReceive(id, data) {
   };
 }
 
-function networkMessageUpdate(packet, idGenerator = null) {
+function networkMessageUpdate(packet, idGenerator = null, response) {
   if (idGenerator == null) {
     idGenerator = defaultIdGenerator;
   }
@@ -101,17 +129,27 @@ function networkMessageUpdate(packet, idGenerator = null) {
   return {
     type: NETWORK_MESSAGE_UPDATE,
     message,
+    response,
+  };
+}
+
+function networkUpdateRequest(id, data) {
+  return {
+    type: NETWORK_UPDATE_REQUEST,
+    id,
+    data,
   };
 }
 
 module.exports = {
   messageAdd,
+  messagesAdd,
   messagesClear,
   messageOpen,
   messageClose,
   messageTableDataGet,
   networkMessageUpdate,
+  networkUpdateRequest,
   // for test purpose only.
   messageTableDataReceive,
 };
-

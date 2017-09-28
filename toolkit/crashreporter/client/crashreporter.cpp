@@ -439,12 +439,6 @@ void SendCompleted(bool success, const string& serverResponse)
   }
 }
 
-bool ShouldEnableSending()
-{
-  srand(time(0));
-  return ((rand() % 100) < MOZ_CRASHREPORTER_ENABLE_PERCENT);
-}
-
 static string ComputeDumpHash() {
 #ifdef XP_LINUX
   // On Linux we rely on the system-provided libcurl which uses nss so we have
@@ -763,8 +757,9 @@ int main(int argc, char** argv)
     }
 
     string sendURL = queryParameters["ServerURL"];
-    // we don't need to actually send this
+    // we don't need to actually send these
     queryParameters.erase("ServerURL");
+    queryParameters.erase("StackTraces");
 
     queryParameters["Throttleable"] = "1";
 

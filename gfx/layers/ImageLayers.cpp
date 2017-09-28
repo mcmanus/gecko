@@ -33,7 +33,7 @@ void ImageLayer::ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransformToSu
   // Snap image edges to pixel boundaries
   gfxRect sourceRect(0, 0, 0, 0);
   if (mContainer) {
-    sourceRect.SizeTo(mContainer->GetCurrentSize());
+    sourceRect.SizeTo(gfx::SizeDouble(mContainer->GetCurrentSize()));
   }
   // Snap our local transform first, and snap the inherited transform as well.
   // This makes our snapping equivalent to what would happen if our content
@@ -44,11 +44,11 @@ void ImageLayer::ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransformToSu
       SnapTransformTranslation(aTransformToSurface, nullptr);
 
   if (mScaleMode != ScaleMode::SCALE_NONE &&
-      sourceRect.width != 0.0 && sourceRect.height != 0.0) {
+      sourceRect.Width() != 0.0 && sourceRect.Height() != 0.0) {
     NS_ASSERTION(mScaleMode == ScaleMode::STRETCH,
                  "No other scalemodes than stretch and none supported yet.");
-    local.PreScale(mScaleToSize.width / sourceRect.width,
-                   mScaleToSize.height / sourceRect.height, 1.0);
+    local.PreScale(mScaleToSize.width / sourceRect.Width(),
+                   mScaleToSize.height / sourceRect.Height(), 1.0);
 
     mEffectiveTransformForBuffer =
         SnapTransform(local, sourceRect, nullptr) *

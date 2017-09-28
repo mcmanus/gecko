@@ -6,7 +6,7 @@
 #include "ClientPaintedLayer.h"
 #include "ClientTiledPaintedLayer.h"     // for ClientTiledPaintedLayer
 #include <stdint.h>                     // for uint32_t
-#include "GeckoProfiler.h"              // for PROFILER_LABEL
+#include "GeckoProfiler.h"              // for AUTO_PROFILER_LABEL
 #include "client/ClientLayerManager.h"  // for ClientLayerManager, etc
 #include "gfxContext.h"                 // for gfxContext
 #include "gfx2DGlue.h"
@@ -25,6 +25,7 @@
 #include "nsRect.h"                     // for mozilla::gfx::IntRect
 #include "PaintThread.h"
 #include "ReadbackProcessor.h"
+#include "RotatedBuffer.h"
 
 namespace mozilla {
 namespace layers {
@@ -113,50 +114,6 @@ ClientPaintedLayer::UpdatePaintRegion(PaintState& aState)
   return true;
 }
 
-void
-ClientPaintedLayer::PaintOffMainThread(DrawEventRecorderMemory* aRecorder)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  LayerIntRegion visibleRegion = GetVisibleRegion();
-  mContentClient->BeginPaint();
-
-  uint32_t flags = GetPaintFlags();
-
-  PaintState state =
-    mContentClient->BeginPaintBuffer(this, flags);
-  if (!UpdatePaintRegion(state)) {
-    return;
-  }
-
-  bool didUpdate = false;
-  RotatedContentBuffer::DrawIterator iter;
-  while (DrawTarget* target = mContentClient->BorrowDrawTargetForPainting(state, &iter)) {
-    if (!target || !target->IsValid()) {
-      if (target) {
-        mContentClient->ReturnDrawTargetToBuffer(target);
-      }
-      continue;
-    }
-
-    SetAntialiasingFlags(this, target);
-
-    // Basic version, wait for the paint thread to finish painting.
-    PaintThread::Get()->PaintContents(aRecorder, target);
-
-    mContentClient->ReturnDrawTargetToBuffer(target);
-    didUpdate = true;
-  }
-
-  // ending paint w/o any readback updates
-  // TODO: Fix me
-  mContentClient->EndPaint(nullptr);
-
-  if (didUpdate) {
-    UpdateContentClient(state);
-   }
- }
-
-
 uint32_t
 ClientPaintedLayer::GetPaintFlags()
 {
@@ -177,8 +134,7 @@ ClientPaintedLayer::GetPaintFlags()
 void
 ClientPaintedLayer::PaintThebes(nsTArray<ReadbackProcessor::Update>* aReadbackUpdates)
 {
-  PROFILER_LABEL("ClientPaintedLayer", "PaintThebes",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("ClientPaintedLayer::PaintThebes", GRAPHICS);
 
   NS_ASSERTION(ClientManager()->InDrawing(),
                "Can only draw in drawing phase");
@@ -187,8 +143,7 @@ ClientPaintedLayer::PaintThebes(nsTArray<ReadbackProcessor::Update>* aReadbackUp
 
   uint32_t flags = GetPaintFlags();
 
-  PaintState state =
-    mContentClient->BeginPaintBuffer(this, flags);
+  PaintState state = mContentClient->BeginPaintBuffer(this, flags);
   if (!UpdatePaintRegion(state)) {
     return;
   }
@@ -228,64 +183,94 @@ ClientPaintedLayer::PaintThebes(nsTArray<ReadbackProcessor::Update>* aReadbackUp
   }
 }
 
-already_AddRefed<DrawEventRecorderMemory>
-ClientPaintedLayer::RecordPaintedLayer()
+/***
+ * If we can, let's paint this ClientPaintedLayer's contents off the main thread.
+ * The essential idea is that we ask the ContentClient for a DrawTarget and record
+ * the moz2d commands. On the Paint Thread, we replay those commands to the
+ * destination draw target. There are a couple of lifetime issues here though:
+ *
+ * 1) TextureClient owns the underlying buffer and DrawTarget. Because of this
+ *    we have to keep the TextureClient and DrawTarget alive but trick the
+ *    TextureClient into thinking it's already returned the DrawTarget
+ *    since we iterate through different Rects to get DrawTargets*. If
+ *    the TextureClient goes away, the DrawTarget and thus buffer can too.
+ * 2) When ContentClient::EndPaint happens, it flushes the DrawTarget. We have
+ *    to Reflush on the Paint Thread
+ * 3) DrawTarget API is NOT thread safe. We get around this by recording
+ *    on the main thread and painting on the paint thread. Logically,
+ *    ClientLayerManager will force a flushed paint and block the main thread
+ *    if we have another transaction. Thus we have a gap between when the main
+ *    thread records, the paint thread paints, and we block the main thread
+ *    from trying to paint again. The underlying API however is NOT thread safe.
+ *  4) We have both "sync" and "async" OMTP. Sync OMTP means we paint on the main thread
+ *     but block the main thread while the paint thread paints. Async OMTP doesn't block
+ *     the main thread. Sync OMTP is only meant to be used as a debugging tool.
+ */
+bool
+ClientPaintedLayer::PaintOffMainThread()
 {
-  LayerIntRegion visibleRegion = GetVisibleRegion();
-  LayerIntRect bounds = visibleRegion.GetBounds();
-  LayerIntSize size = bounds.Size();
+  mContentClient->BeginAsyncPaint();
 
-  if (visibleRegion.IsEmpty()) {
-    if (gfxPrefs::LayersDump()) {
-      printf_stderr("PaintedLayer %p skipping\n", this);
+  uint32_t flags = GetPaintFlags();
+
+  PaintState state = mContentClient->BeginPaintBuffer(this, flags);
+  if (!UpdatePaintRegion(state)) {
+    return false;
+  }
+
+  bool didUpdate = false;
+  RotatedContentBuffer::DrawIterator iter;
+
+  // Debug Protip: Change to BorrowDrawTargetForPainting if using sync OMTP.
+  while (RefPtr<CapturedPaintState> captureState =
+          mContentClient->BorrowDrawTargetForRecording(state, &iter))
+  {
+    DrawTarget* target = captureState->mTarget;
+    if (!target || !target->IsValid()) {
+      if (target) {
+        mContentClient->ReturnDrawTargetToBuffer(target);
+      }
+      continue;
     }
-    return nullptr;
+
+    RefPtr<DrawTargetCapture> captureDT =
+      Factory::CreateCaptureDrawTarget(target->GetBackendType(),
+                                       target->GetSize(),
+                                       target->GetFormat());
+
+    captureDT->SetTransform(captureState->mTargetTransform);
+    SetAntialiasingFlags(this, captureDT);
+
+    RefPtr<gfxContext> ctx = gfxContext::CreatePreservingTransformOrNull(captureDT);
+    MOZ_ASSERT(ctx); // already checked the target above
+
+    ClientManager()->GetPaintedLayerCallback()(this,
+                                              ctx,
+                                              iter.mDrawRegion,
+                                              iter.mDrawRegion,
+                                              state.mClip,
+                                              state.mRegionToInvalidate,
+                                              ClientManager()->GetPaintedLayerCallbackData());
+
+    ctx = nullptr;
+
+    captureState->mCapture = captureDT.forget();
+    PaintThread::Get()->PaintContents(captureState,
+                                      RotatedContentBuffer::PrepareDrawTargetForPainting);
+
+    mContentClient->ReturnDrawTargetToBuffer(target);
+
+    didUpdate = true;
   }
 
-  nsIntRegion regionToPaint;
-  regionToPaint.Sub(mVisibleRegion.ToUnknownRegion(), GetValidRegion());
+  PaintThread::Get()->EndLayer();
+  mContentClient->EndPaint(nullptr);
 
-  if (regionToPaint.IsEmpty()) {
-    // Do we ever have to do anything if the region to paint is empty
-    // but we have a painted layer callback?
-    return nullptr;
+  if (didUpdate) {
+    UpdateContentClient(state);
+    ClientManager()->SetNeedTextureSyncOnPaintThread();
   }
-
-  if (!ClientManager()->GetPaintedLayerCallback()) {
-    ClientManager()->SetTransactionIncomplete();
-    return nullptr;
-  }
-
-  // I know this is slow and we should probably use DrawTargetCapture
-  // But for now, the recording draw target / replay should actually work
-  // Replay for WR happens in Moz2DIMageRenderer
-  IntSize imageSize(size.ToUnknownSize());
-
-  // DrawTargetRecording also plays back the commands while
-  // recording, hence the dummy DT. DummyDT will actually have
-  // the drawn painted layer.
-  RefPtr<DrawEventRecorderMemory> recorder =
-    MakeAndAddRef<DrawEventRecorderMemory>();
-  RefPtr<DrawTarget> dummyDt =
-    Factory::CreateDrawTarget(gfx::BackendType::SKIA, imageSize, gfx::SurfaceFormat::B8G8R8A8);
-
-  RefPtr<DrawTarget> dt =
-    Factory::CreateRecordingDrawTarget(recorder, dummyDt, imageSize);
-
-  dt->ClearRect(Rect(0, 0, imageSize.width, imageSize.height));
-  dt->SetTransform(Matrix().PreTranslate(-bounds.x, -bounds.y));
-  RefPtr<gfxContext> ctx = gfxContext::CreatePreservingTransformOrNull(dt);
-  MOZ_ASSERT(ctx); // already checked the target above
-
-  ClientManager()->GetPaintedLayerCallback()(this,
-                                             ctx,
-                                             visibleRegion.ToUnknownRegion(),
-                                             visibleRegion.ToUnknownRegion(),
-                                             DrawRegionClip::DRAW,
-                                             nsIntRegion(),
-                                             ClientManager()->GetPaintedLayerCallbackData());
-
-  return recorder.forget();
+  return true;
 }
 
 void
@@ -293,20 +278,14 @@ ClientPaintedLayer::RenderLayerWithReadback(ReadbackProcessor *aReadback)
 {
   RenderMaskLayers(this);
 
-  if (CanRecordLayer(aReadback)) {
-    RefPtr<DrawEventRecorderMemory> recorder = RecordPaintedLayer();
-    if (recorder) {
-      if (!EnsureContentClient()) {
-        return;
-      }
-
-      PaintOffMainThread(recorder);
-      return;
-    }
-  }
-
   if (!EnsureContentClient()) {
     return;
+  }
+
+  if (CanRecordLayer(aReadback)) {
+    if (PaintOffMainThread()) {
+      return;
+    }
   }
 
   nsTArray<ReadbackProcessor::Update> readbackUpdates;

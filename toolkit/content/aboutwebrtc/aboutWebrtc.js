@@ -139,11 +139,13 @@ Control.prototype = {
   update() {
     this.ctrl.textContent = this._label;
 
+    this.msg.textContent = "";
     if (this._message) {
-      this.msg.innerHTML =
-        `<span class="info-label">${this._messageHeader}:</span> ${this._message}`;
-    } else {
-      this.msg.innerHTML = null;
+      this.msg.appendChild(Object.assign(document.createElement("span"), {
+        className: "info-label",
+        textContent: `${this._messageHeader}: `,
+      }));
+      this.msg.appendChild(document.createTextNode(this._message));
     }
   },
 
@@ -170,29 +172,29 @@ SavePage.prototype.onClick = function() {
   FoldEffect.expandAll();
   FilePicker.init(window, getString("save_page_dialog_title"), FilePicker.modeSave);
   FilePicker.defaultString = LOGFILE_NAME_DEFAULT;
-  let rv = FilePicker.show();
+  FilePicker.open(rv => {
+    if (rv == FilePicker.returnOK || rv == FilePicker.returnReplace) {
+      let fout = FileUtils.openAtomicFileOutputStream(
+        FilePicker.file, FileUtils.MODE_WRONLY | FileUtils.MODE_CREATE);
 
-  if (rv == FilePicker.returnOK || rv == FilePicker.returnReplace) {
-    let fout = FileUtils.openAtomicFileOutputStream(
-      FilePicker.file, FileUtils.MODE_WRONLY | FileUtils.MODE_CREATE);
+      let nodes = content.querySelectorAll(".no-print");
+      let noPrintList = [];
+      for (let node of nodes) {
+        noPrintList.push(node);
+        node.style.setProperty("display", "none");
+      }
 
-    let nodes = content.querySelectorAll(".no-print");
-    let noPrintList = [];
-    for (let node of nodes) {
-      noPrintList.push(node);
-      node.style.setProperty("display", "none");
+      fout.write(content.outerHTML, content.outerHTML.length);
+      FileUtils.closeAtomicFileOutputStream(fout);
+
+      for (let node of noPrintList) {
+        node.style.removeProperty("display");
+      }
+
+      this._message = formatString("save_page_msg", [FilePicker.file.path], 1);
+      this.update();
     }
-
-    fout.write(content.outerHTML, content.outerHTML.length);
-    FileUtils.closeAtomicFileOutputStream(fout);
-
-    for (let node of noPrintList) {
-      node.style.removeProperty("display");
-    }
-
-    this._message = formatString("save_page_msg", [FilePicker.file.path], 1);
-    this.update();
-  }
+  });
 };
 
 function DebugMode() {
@@ -305,7 +307,7 @@ var AboutWebRTC = {
       msg.textContent = getString("cannot_retrieve_log");
       parent.appendChild(msg);
       msg = document.createElement("p");
-      msg.innerHTML = `${data.error.name}: ${data.error.message}`;
+      msg.textContent = `${data.error.name}: ${data.error.message}`;
       parent.appendChild(msg);
       return;
     }

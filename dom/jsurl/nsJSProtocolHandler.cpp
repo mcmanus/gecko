@@ -9,7 +9,7 @@
 #include "jswrapper.h"
 #include "nsCRT.h"
 #include "nsError.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "nsReadableUtils.h"
 #include "nsJSProtocolHandler.h"
 #include "nsStringStream.h"
@@ -28,7 +28,6 @@
 #include "nsIWindowMediator.h"
 #include "nsPIDOMWindow.h"
 #include "nsIConsoleService.h"
-#include "nsXPIDLString.h"
 #include "nsEscape.h"
 #include "nsIWebNavigation.h"
 #include "nsIDocShell.h"
@@ -96,7 +95,7 @@ nsresult nsJSThunk::Init(nsIURI* uri)
     NS_ENSURE_ARG_POINTER(uri);
 
     // Get the script string to evaluate...
-    nsresult rv = uri->GetPath(mScript);
+    nsresult rv = uri->GetPathQueryRef(mScript);
     if (NS_FAILED(rv)) return rv;
 
     // Get the url.
@@ -147,7 +146,7 @@ nsresult nsJSThunk::EvaluateScript(nsIChannel *aChannel,
         // Nothing to do here.
         return NS_ERROR_DOM_RETVAL_UNDEFINED;
     }
-    
+
     NS_ENSURE_ARG_POINTER(aChannel);
 
     // Get principal of code for execution
@@ -182,7 +181,7 @@ nsresult nsJSThunk::EvaluateScript(nsIChannel *aChannel,
         rv = csp->GetAllowsInline(nsIContentPolicy::TYPE_SCRIPT,
                                   EmptyString(), // aNonce
                                   true,         // aParserCreated
-                                  EmptyString(), // aContent
+                                  nullptr, // aContent
                                   0,             // aLineNumber
                                   &allowsInlineScript);
 
@@ -232,11 +231,6 @@ nsresult nsJSThunk::EvaluateScript(nsIChannel *aChannel,
     // Unescape the script
     NS_UnescapeURL(script);
 
-
-    nsCOMPtr<nsIScriptSecurityManager> securityManager;
-    securityManager = do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID, &rv);
-    if (NS_FAILED(rv))
-        return rv;
 
     // New script entry point required, due to the "Create a script" step of
     // http://www.whatwg.org/specs/web-apps/current-work/#javascript-protocol
@@ -342,7 +336,7 @@ public:
 
     // Actually evaluate the script.
     void EvaluateScript();
-    
+
 protected:
     virtual ~nsJSChannel();
 
@@ -351,7 +345,7 @@ protected:
     void NotifyListener();
 
     void CleanupStrongRefs();
-    
+
 protected:
     nsCOMPtr<nsIChannel>    mStreamChannel;
     nsCOMPtr<nsIPropertyBag2> mPropertyBag;
@@ -479,9 +473,9 @@ nsJSChannel::GetStatus(nsresult *aResult)
     if (NS_SUCCEEDED(mStatus) && mOpenedStreamChannel) {
         return mStreamChannel->GetStatus(aResult);
     }
-    
+
     *aResult = mStatus;
-        
+
     return NS_OK;
 }
 
@@ -493,7 +487,7 @@ nsJSChannel::Cancel(nsresult aStatus)
     if (mOpenedStreamChannel) {
         mStreamChannel->Cancel(aStatus);
     }
-    
+
     return NS_OK;
 }
 
@@ -582,7 +576,7 @@ nsJSChannel::AsyncOpen(nsIStreamListener *aListener, nsISupports *aContext)
     if (!mOriginalInnerWindow) {
         return NS_ERROR_NOT_AVAILABLE;
     }
-    
+
     mListener = aListener;
 
     mIsActive = true;
@@ -663,7 +657,8 @@ nsJSChannel::AsyncOpen(nsIStreamListener *aListener, nsISupports *aContext)
         name = "nsJSChannel::NotifyListener";
     }
 
-    nsresult rv = NS_DispatchToCurrentThread(mozilla::NewRunnableMethod(name, this, method));
+    nsresult rv = NS_DispatchToCurrentThread(
+      mozilla::NewRunnableMethod(name, this, method));
 
     if (NS_FAILED(rv)) {
         loadGroup->RemoveRequest(this, nullptr, rv);
@@ -687,14 +682,14 @@ nsJSChannel::EvaluateScript()
 {
     // Synchronously execute the script...
     // mIsActive is used to indicate the the request is 'busy' during the
-    // the script evaluation phase.  This means that IsPending() will 
+    // the script evaluation phase.  This means that IsPending() will
     // indicate the the request is busy while the script is executing...
 
     // Note that we want to be in the loadgroup and pending while we evaluate
     // the script, so that we find out if the loadgroup gets canceled by the
     // script execution (in which case we shouldn't pump out data even if the
     // script returns it).
-    
+
     if (NS_SUCCEEDED(mStatus)) {
         nsresult rv = mIOThunk->EvaluateScript(mStreamChannel, mPopupState,
                                                mExecutionPolicy,
@@ -705,7 +700,7 @@ nsJSChannel::EvaluateScript()
             mStatus = rv;
         }
     }
-    
+
     // Remove the javascript channel from its loadgroup...
     nsCOMPtr<nsILoadGroup> loadGroup;
     mStreamChannel->GetLoadGroup(getter_AddRefs(loadGroup));
@@ -726,7 +721,7 @@ nsJSChannel::EvaluateScript()
         }
         return;
     }
-    
+
     // EvaluateScript() succeeded, and we were not canceled, that
     // means there's data to parse as a result of evaluating the
     // script.
@@ -773,7 +768,7 @@ nsJSChannel::EvaluateScript()
         }
         return;
     }
-    
+
     mStatus = mStreamChannel->AsyncOpen2(this);
     if (NS_SUCCEEDED(mStatus)) {
         // mStreamChannel will call OnStartRequest and OnStopRequest on
@@ -791,12 +786,10 @@ nsJSChannel::EvaluateScript()
             // failed.  We'll still get notified by the stream channel when it
             // finishes.
         }
-        
+
     } else if (mIsAsync) {
         NotifyListener();
     }
-
-    return;
 }
 
 void
@@ -862,7 +855,7 @@ nsJSChannel::SetLoadFlags(nsLoadFlags aLoadFlags)
 
     // XXXbz this, and a whole lot of other hackery, could go away if we'd just
     // cancel the current document load on javascript: load start like IE does.
-    
+
     mLoadFlags = aLoadFlags & ~LOAD_DOCUMENT_URI;
 
     if (bogusLoadBackground) {
@@ -908,7 +901,7 @@ nsJSChannel::SetLoadGroup(nsILoadGroup* aLoadGroup)
             }
         }
     }
-    
+
     return mStreamChannel->SetLoadGroup(aLoadGroup);
 }
 
@@ -948,7 +941,7 @@ nsJSChannel::SetNotificationCallbacks(nsIInterfaceRequestor* aCallbacks)
     return mStreamChannel->SetNotificationCallbacks(aCallbacks);
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsJSChannel::GetSecurityInfo(nsISupports * *aSecurityInfo)
 {
     return mStreamChannel->GetSecurityInfo(aSecurityInfo);
@@ -1026,12 +1019,12 @@ nsJSChannel::OnStartRequest(nsIRequest* aRequest,
 {
     NS_ENSURE_TRUE(aRequest == mStreamChannel, NS_ERROR_UNEXPECTED);
 
-    return mListener->OnStartRequest(this, aContext);    
+    return mListener->OnStartRequest(this, aContext);
 }
 
 NS_IMETHODIMP
 nsJSChannel::OnDataAvailable(nsIRequest* aRequest,
-                             nsISupports* aContext, 
+                             nsISupports* aContext,
                              nsIInputStream* aInputStream,
                              uint64_t aOffset,
                              uint32_t aCount)
@@ -1057,7 +1050,7 @@ nsJSChannel::OnStopRequest(nsIRequest* aRequest,
     if (NS_FAILED(mStatus)) {
         aStatus = mStatus;
     }
-    
+
     nsresult rv = listener->OnStopRequest(this, aContext, aStatus);
 
     nsCOMPtr<nsILoadGroup> loadGroup;
@@ -1075,7 +1068,7 @@ NS_IMETHODIMP
 nsJSChannel::SetExecutionPolicy(uint32_t aPolicy)
 {
     NS_ENSURE_ARG(aPolicy <= EXECUTE_NORMAL);
-    
+
     mExecutionPolicy = aPolicy;
     return NS_OK;
 }
@@ -1141,14 +1134,14 @@ nsJSProtocolHandler::Create(nsISupports *aOuter, REFNSIID aIID, void **aResult)
     return rv;
 }
 
-nsresult 
-nsJSProtocolHandler::EnsureUTF8Spec(const nsAFlatCString &aSpec, const char *aCharset, 
+nsresult
+nsJSProtocolHandler::EnsureUTF8Spec(const nsCString& aSpec, const char *aCharset,
                                     nsACString &aUTF8Spec)
 {
   aUTF8Spec.Truncate();
 
   nsresult rv;
-  
+
   if (!mTextToSubURI) {
     mTextToSubURI = do_GetService(NS_ITEXTTOSUBURI_CONTRACTID, &rv);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -1255,10 +1248,10 @@ nsJSProtocolHandler::NewChannel(nsIURI* uri, nsIChannel* *result)
     return NewChannel2(uri, nullptr, result);
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsJSProtocolHandler::AllowPort(int32_t port, const char *scheme, bool *_retval)
 {
-    // don't override anything.  
+    // don't override anything.
     *_retval = false;
     return NS_OK;
 }
@@ -1419,7 +1412,7 @@ nsJSURI::EqualsInternal(nsIURI* aOther,
     return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsJSURI::GetClassIDNoAlloc(nsCID *aClassIDNoAlloc)
 {
     *aClassIDNoAlloc = kJSURICID;

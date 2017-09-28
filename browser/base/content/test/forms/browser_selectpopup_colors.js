@@ -130,12 +130,21 @@ const SELECT_STYLE_OF_OPTION_CHANGES_AFTER_FOCUS_EVENT =
   "  select.addEventListener('focus', () => select.style.color = 'red');" +
   "</script></html>";
 
-const SELECT_STYLE_OF_OPTION_CHANGES_AFTER_TRANSITIONEND =
+const SELECT_COLOR_OF_OPTION_CHANGES_AFTER_TRANSITIONEND =
   "<html><head><style>" +
   "  select { transition: all .1s; }" +
   "  select:focus { background-color: orange; }" +
   "</style></head><body><select id='one'>" +
   '  <option>{"color": "rgb(0, 0, 0)", "backgroundColor": "rgba(0, 0, 0, 0)"}</option>' +
+  '  <option selected="true">{"end": "true"}</option>' +
+  "</select></body></html>";
+
+const SELECT_TEXTSHADOW_OF_OPTION_CHANGES_AFTER_TRANSITIONEND =
+  "<html><head><style>" +
+  "  select { transition: all .1s; }" +
+  "  select:focus { text-shadow: 0 0 0 #303030; }" +
+  "</style></head><body><select id='one'>" +
+  '  <option>{"color": "rgb(0, 0, 0)", "backgroundColor": "rgba(0, 0, 0, 0)", "textShadow": "rgb(48, 48, 48) 0px 0px 0px"}</option>' +
   '  <option selected="true">{"end": "true"}</option>' +
   "</select></body></html>";
 
@@ -159,6 +168,19 @@ for (let i = 0; i < 75; i++) {
 SELECT_LONG_WITH_TRANSITION +=
     '  <option selected="true">{"end": "true"}</option>' +
   "</select></body></html>";
+
+const SELECT_INHERITED_COLORS_ON_OPTIONS_DONT_GET_UNIQUE_RULES_IF_RULE_SET_ON_SELECT = `
+   <html><head><style>
+     select { color: blue; text-shadow: 1px 1px 2px blue; }
+     .redColor { color: red; }
+     .textShadow { text-shadow: 1px 1px 2px black; }
+   </style></head><body><select id='one'>
+     <option>{"color": "rgb(0, 0, 255)", "backgroundColor": "rgba(0, 0, 0, 0)"}</option>
+     <option class="redColor">{"color": "rgb(255, 0, 0)", "backgroundColor": "rgba(0, 0, 0, 0)"}</option>
+     <option class="textShadow">{"color": "rgb(0, 0, 255)", "textShadow": "rgb(0, 0, 0) 1px 1px 2px", "backgroundColor": "rgba(0, 0, 0, 0)"}</option>
+     <option selected="true">{"end": "true"}</option>
+   </select></body></html>
+`;
 
 function getSystemColor(color) {
   // Need to convert system color to RGB color.
@@ -406,7 +428,7 @@ add_task(async function test_style_of_options_is_dependent_on_focus_of_select_af
   await testSelectColors(SELECT_STYLE_OF_OPTION_CHANGES_AFTER_FOCUS_EVENT, 2, options);
 });
 
-add_task(async function test_style_of_options_is_dependent_on_transitionend() {
+add_task(async function test_color_of_options_is_dependent_on_transitionend() {
   let options = {
     selectColor: "rgb(0, 0, 0)",
     selectBgColor: "rgb(255, 165, 0)",
@@ -416,7 +438,19 @@ add_task(async function test_style_of_options_is_dependent_on_transitionend() {
     }
   };
 
-  await testSelectColors(SELECT_STYLE_OF_OPTION_CHANGES_AFTER_TRANSITIONEND, 2, options);
+  await testSelectColors(SELECT_COLOR_OF_OPTION_CHANGES_AFTER_TRANSITIONEND, 2, options);
+});
+
+add_task(async function test_textshadow_of_options_is_dependent_on_transitionend() {
+  let options = {
+    skipSelectColorTest: true,
+    waitForComputedStyle: {
+      property: "text-shadow",
+      value: "rgb(48, 48, 48) 0px 0px 0px"
+    }
+  };
+
+  await testSelectColors(SELECT_TEXTSHADOW_OF_OPTION_CHANGES_AFTER_TRANSITIONEND, 2, options);
 });
 
 add_task(async function test_transparent_color_with_text_shadow() {
@@ -447,6 +481,51 @@ add_task(async function test_select_with_transition_doesnt_lose_scroll_position(
   let scrollBox = selectPopup.scrollBox;
   is(scrollBox.scrollTop, scrollBox.scrollTopMax,
     "The popup should be scrolled to the bottom of the list (where the selected item is)");
+
+  await hideSelectPopup(selectPopup, "escape");
+  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+});
+
+add_task(async function test_select_inherited_colors_on_options_dont_get_unique_rules_if_rule_set_on_select() {
+  let options = {
+    selectColor: "rgb(0, 0, 255)",
+    selectBgColor: "rgb(255, 255, 255)",
+    selectTextShadow: "rgb(0, 0, 255) 1px 1px 2px",
+    leaveOpen: true
+  };
+
+  await testSelectColors(SELECT_INHERITED_COLORS_ON_OPTIONS_DONT_GET_UNIQUE_RULES_IF_RULE_SET_ON_SELECT, 4, options);
+
+  let stylesheetEl = document.getElementById("ContentSelectDropdownStylesheet");
+  let sheet = stylesheetEl.sheet;
+  /* Check that there are no rulesets for the first option, but that
+     one exists for the second option and sets the color of that
+     option to "rgb(255, 0, 0)" */
+
+  function hasMatchingRuleForOption(cssRules, index, styles = {}) {
+    for (let rule of cssRules) {
+      if (rule.selectorText.includes(`:nth-child(${index})`)) {
+        if (Object.keys(styles).some(key => rule.style[key] !== styles[key])) {
+          continue;
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  is(hasMatchingRuleForOption(sheet.cssRules, 1), false,
+    "There should be no rules specific to option1");
+  is(hasMatchingRuleForOption(sheet.cssRules, 2, {
+    color: "rgb(255, 0, 0)"
+  }), true, "There should be a rule specific to option2 and it should have color: red");
+  is(hasMatchingRuleForOption(sheet.cssRules, 3, {
+    "text-shadow": "rgb(0, 0, 0) 1px 1px 2px"
+  }), true, "There should be a rule specific to option3 and it should have text-shadow: rgb(0, 0, 0) 1px 1px 2px");
+
+
+  let menulist = document.getElementById("ContentSelectDropdown");
+  let selectPopup = menulist.menupopup;
 
   await hideSelectPopup(selectPopup, "escape");
   await BrowserTestUtils.removeTab(gBrowser.selectedTab);

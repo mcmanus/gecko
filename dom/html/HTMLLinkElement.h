@@ -36,8 +36,7 @@ public:
   // nsIDOMHTMLLinkElement
   NS_DECL_NSIDOMHTMLLINKELEMENT
 
-  // DOM memory reporter participant
-  NS_DECL_SIZEOF_EXCLUDING_THIS
+  NS_DECL_ADDSIZEOFEXCLUDINGTHIS
 
   void LinkAdded();
   void LinkRemoved();
@@ -117,6 +116,11 @@ public:
   void SetHreflang(const nsAString& aHreflang, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::hreflang, aHreflang, aRv);
+  }
+  void GetAs(nsAString& aResult);
+  void SetAs(const nsAString& aAs, ErrorResult& aRv)
+  {
+    SetAttr(nsGkAtoms::as ,aAs, aRv);
   }
   nsDOMTokenList* Sizes()
   {

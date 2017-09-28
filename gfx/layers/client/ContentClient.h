@@ -37,6 +37,7 @@ class DrawTarget;
 namespace layers {
 
 class PaintedLayer;
+class CapturedPaintState;
 
 /**
  * A compositable client for PaintedLayers. These are different to Image/Canvas
@@ -82,7 +83,8 @@ public:
   static already_AddRefed<ContentClient> CreateContentClient(CompositableForwarder* aFwd);
 
   explicit ContentClient(CompositableForwarder* aForwarder)
-  : CompositableClient(aForwarder)
+  : CompositableClient(aForwarder),
+    mInAsyncPaint(false)
   {}
   virtual ~ContentClient()
   {}
@@ -95,6 +97,9 @@ public:
   virtual gfx::DrawTarget* BorrowDrawTargetForPainting(RotatedContentBuffer::PaintState& aPaintState,
                                                        RotatedContentBuffer::DrawIterator* aIter = nullptr) = 0;
   virtual void ReturnDrawTargetToBuffer(gfx::DrawTarget*& aReturned) = 0;
+  virtual RefPtr<CapturedPaintState> BorrowDrawTargetForRecording(
+    RotatedContentBuffer::PaintState& aPaintState,
+    RotatedContentBuffer::DrawIterator* aIter) = 0;
 
   // Called as part of the layers transation reply. Conveys data about our
   // buffer(s) from the compositor. If appropriate we should swap references
@@ -103,7 +108,11 @@ public:
 
   // call before and after painting into this content client
   virtual void BeginPaint() {}
+  virtual void BeginAsyncPaint();
   virtual void EndPaint(nsTArray<ReadbackProcessor::Update>* aReadbackUpdates = nullptr);
+
+protected:
+  bool mInAsyncPaint;
 };
 
 /**
@@ -146,6 +155,9 @@ public:
   {
     return RotatedContentBuffer::BorrowDrawTargetForPainting(aPaintState, aIter);
   }
+  virtual RefPtr<CapturedPaintState> BorrowDrawTargetForRecording(PaintState& aPaintState,
+                                                                  RotatedContentBuffer::DrawIterator* aIter) override;
+
   virtual void ReturnDrawTargetToBuffer(gfx::DrawTarget*& aReturned) override
   {
     BorrowDrawTarget::ReturnDrawTarget(aReturned);
@@ -229,6 +241,9 @@ public:
   {
     return RotatedContentBuffer::BorrowDrawTargetForPainting(aPaintState, aIter);
   }
+  virtual RefPtr<CapturedPaintState> BorrowDrawTargetForRecording(PaintState& aPaintState,
+                                                                  RotatedContentBuffer::DrawIterator* aIter) override;
+
   virtual void ReturnDrawTargetToBuffer(gfx::DrawTarget*& aReturned) override
   {
     BorrowDrawTarget::ReturnDrawTarget(aReturned);
@@ -243,6 +258,7 @@ public:
    * are affected by mapping/unmapping.
    */
   virtual void BeginPaint() override;
+  virtual void BeginAsyncPaint() override;
   virtual void EndPaint(nsTArray<ReadbackProcessor::Update>* aReadbackUpdates = nullptr) override;
 
   virtual void Updated(const nsIntRegion& aRegionToDraw,
@@ -347,6 +363,7 @@ public:
   virtual void SwapBuffers(const nsIntRegion& aFrontUpdatedRegion) override;
 
   virtual void BeginPaint() override;
+  virtual void BeginAsyncPaint() override;
 
   virtual void FinalizeFrame(const nsIntRegion& aRegionToDraw) override;
 

@@ -13,6 +13,7 @@
  *          openExtensionContextMenu closeExtensionContextMenu
  *          openActionContextMenu openSubmenu closeActionContextMenu
  *          openTabContextMenu closeTabContextMenu
+ *          openToolsMenu closeToolsMenu
  *          imageBuffer imageBufferFromDataURI
  *          getListStyleImage getPanelForNode
  *          awaitExtensionPanel awaitPopupResize
@@ -33,16 +34,17 @@ PromiseTestUtils.whitelistRejectionsGlobally(/Receiving end does not exist/);
 
 const {AppConstants} = Cu.import("resource://gre/modules/AppConstants.jsm", {});
 const {CustomizableUI} = Cu.import("resource:///modules/CustomizableUI.jsm", {});
+const {Preferences} = Cu.import("resource://gre/modules/Preferences.jsm", {});
 
 // We run tests under two different configurations, from browser.ini and
 // browser-remote.ini. When running from browser-remote.ini, the tests are
 // copied to the sub-directory "test-oop-extensions", which we detect here, and
 // use to select our configuration.
-if (gTestPath.includes("test-oop-extensions")) {
-  SpecialPowers.pushPrefEnv({set: [
-    ["extensions.webextensions.remote", true],
-    ["layers.popups.compositing.enabled", true],
-  ]});
+let remote = gTestPath.includes("test-oop-extensions");
+SpecialPowers.pushPrefEnv({set: [
+  ["extensions.webextensions.remote", remote],
+]});
+if (remote) {
   // We don't want to reset this at the end of the test, so that we don't have
   // to spawn a new extension child process for each test unit.
   SpecialPowers.setIntPref("dom.ipc.keepProcessesAlive.extension", 1);
@@ -192,8 +194,11 @@ function getPanelForNode(node) {
 }
 
 var awaitBrowserLoaded = browser => ContentTask.spawn(browser, null, () => {
-  if (content.document.readyState !== "complete") {
-    return ContentTaskUtils.waitForEvent(this, "load", true).then(() => {});
+  if (content.document.readyState !== "complete" ||
+      content.document.documentURI === "about:blank") {
+    return ContentTaskUtils.waitForEvent(this, "load", true, event => {
+      return content.document.documentURI !== "about:blank";
+    }).then(() => {});
   }
 });
 
@@ -205,15 +210,14 @@ var awaitExtensionPanel = async function(extension, win = window, awaitLoad = tr
   await Promise.all([
     promisePopupShown(getPanelForNode(browser)),
 
-    awaitLoad && awaitBrowserLoaded(browser, awaitLoad),
+    awaitLoad && awaitBrowserLoaded(browser),
   ]);
 
   return browser;
 };
 
 function getCustomizableUIPanelID() {
-  return gPhotonStructure ? CustomizableUI.AREA_FIXED_OVERFLOW_PANEL
-                          : CustomizableUI.AREA_PANEL;
+  return CustomizableUI.AREA_FIXED_OVERFLOW_PANEL;
 }
 
 function getBrowserActionWidget(extension) {
@@ -226,7 +230,7 @@ function getBrowserActionPopup(extension, win = window) {
   if (group.areaType == CustomizableUI.TYPE_TOOLBAR) {
     return win.document.getElementById("customizationui-widget-panel");
   }
-  return gPhotonStructure ? win.PanelUI.overflowPanel : win.PanelUI.panel;
+  return win.PanelUI.overflowPanel;
 }
 
 var showBrowserAction = async function(extension, win = window) {
@@ -236,14 +240,7 @@ var showBrowserAction = async function(extension, win = window) {
   if (group.areaType == CustomizableUI.TYPE_TOOLBAR) {
     ok(!widget.overflowed, "Expect widget not to be overflowed");
   } else if (group.areaType == CustomizableUI.TYPE_MENU_PANEL) {
-    // Show the right panel. After Photon is turned on permanently, this
-    // can be re-simplified. This is unfortunately easier than getting
-    // and using the panel (area) ID out of CustomizableUI for the widget.
-    if (gPhotonStructure) {
-      await win.document.getElementById("nav-bar").overflowable.show();
-    } else {
-      await win.PanelUI.show();
-    }
+    await win.document.getElementById("nav-bar").overflowable.show();
   }
 };
 
@@ -252,8 +249,7 @@ var clickBrowserAction = async function(extension, win = window) {
   await showBrowserAction(extension, win);
 
   let widget = getBrowserActionWidget(extension).forWindow(win);
-
-  EventUtils.synthesizeMouseAtCenter(widget.node, {}, win);
+  widget.node.click();
 };
 
 function closeBrowserAction(extension, win = window) {
@@ -320,7 +316,7 @@ async function openExtensionContextMenu(selector = "#img1") {
     return null;
   }
 
-  let extensionMenu = topLevelMenu[0].childNodes[0];
+  let extensionMenu = topLevelMenu[0];
   let popupShownPromise = BrowserTestUtils.waitForEvent(contextMenu, "popupshown");
   EventUtils.synthesizeMouseAtCenter(extensionMenu, {});
   await popupShownPromise;
@@ -331,7 +327,39 @@ async function closeExtensionContextMenu(itemToSelect, modifiers = {}) {
   let contentAreaContextMenu = document.getElementById("contentAreaContextMenu");
   let popupHiddenPromise = BrowserTestUtils.waitForEvent(contentAreaContextMenu, "popuphidden");
   EventUtils.synthesizeMouseAtCenter(itemToSelect, modifiers);
-  return popupHiddenPromise;
+  await popupHiddenPromise;
+
+  // Bug 1351638: parent menu fails to close intermittently, make sure it does.
+  contentAreaContextMenu.hidePopup();
+}
+
+async function openToolsMenu(win = window) {
+  const node = win.document.getElementById("tools-menu");
+  const menu = win.document.getElementById("menu_ToolsPopup");
+  const shown = BrowserTestUtils.waitForEvent(menu, "popupshown");
+  if (AppConstants.platform === "macosx") {
+    // We can't open menubar items on OSX, so mocking instead.
+    menu.dispatchEvent(new MouseEvent("popupshowing"));
+    menu.dispatchEvent(new MouseEvent("popupshown"));
+  } else {
+    node.open = true;
+  }
+  await shown;
+  return menu;
+}
+
+function closeToolsMenu(itemToSelect, win = window) {
+  const menu = win.document.getElementById("menu_ToolsPopup");
+  const hidden = BrowserTestUtils.waitForEvent(menu, "popuphidden");
+  if (AppConstants.platform === "macosx") {
+    // Mocking on OSX, see above.
+    itemToSelect.doCommand();
+    menu.dispatchEvent(new MouseEvent("popuphiding"));
+    menu.dispatchEvent(new MouseEvent("popuphidden"));
+  } else {
+    EventUtils.synthesizeMouseAtCenter(itemToSelect, {}, win);
+  }
+  return hidden;
 }
 
 async function openChromeContextMenu(menuId, target, win = window) {

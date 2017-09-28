@@ -5,24 +5,33 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "hasht.h"
-#include "nsNetCID.h"
 #include "nsICryptoHash.h"
+#include "nsNetCID.h"
+#include "nsThreadUtils.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/dom/AuthenticatorAttestationResponse.h"
 #include "mozilla/dom/Promise.h"
-#include "mozilla/dom/WebAuthnManager.h"
-#include "mozilla/dom/WebAuthnUtil.h"
 #include "mozilla/dom/PWebAuthnTransaction.h"
+#include "mozilla/dom/U2FUtil.h"
+#include "mozilla/dom/WebAuthnCBORUtil.h"
+#include "mozilla/dom/WebAuthnManager.h"
 #include "mozilla/dom/WebAuthnTransactionChild.h"
+#include "mozilla/dom/WebAuthnUtil.h"
 #include "mozilla/dom/WebCryptoCommon.h"
-#include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/ipc/BackgroundChild.h"
-#include "nsThreadUtils.h"
+#include "mozilla/ipc/PBackgroundChild.h"
 
 using namespace mozilla::ipc;
 
 namespace mozilla {
 namespace dom {
+
+/***********************************************************************
+ * Protocol Constants
+ **********************************************************************/
+
+const uint8_t FLAG_TUP = 0x01; // Test of User Presence required
+const uint8_t FLAG_AT = 0x40; // Authenticator Data is provided
 
 /***********************************************************************
  * Statics
@@ -33,7 +42,10 @@ StaticRefPtr<WebAuthnManager> gWebAuthnManager;
 static mozilla::LazyLogModule gWebAuthnManagerLog("webauthnmanager");
 }
 
-NS_IMPL_ISUPPORTS(WebAuthnManager, nsIIPCBackgroundChildCreateCallback);
+NS_NAMED_LITERAL_STRING(kVisibilityChange, "visibilitychange");
+
+NS_IMPL_ISUPPORTS(WebAuthnManager, nsIIPCBackgroundChildCreateCallback,
+                  nsIDOMEventListener);
 
 /***********************************************************************
  * Utility Functions
@@ -44,8 +56,6 @@ static nsresult
 GetAlgorithmName(const OOS& aAlgorithm,
                  /* out */ nsString& aName)
 {
-  MOZ_ASSERT(aAlgorithm.IsString()); // TODO: remove assertion when we coerce.
-
   if (aAlgorithm.IsString()) {
     // If string, then treat as algorithm name
     aName.Assign(aAlgorithm.GetAsString());
@@ -53,40 +63,14 @@ GetAlgorithmName(const OOS& aAlgorithm,
     // TODO: Coerce to string and extract name. See WebCryptoTask.cpp
   }
 
-  if (!NormalizeToken(aName, aName)) {
+  // Only ES256 is currently supported
+  if (NORMALIZED_EQUALS(aName, JWK_ALG_ECDSA_P_256)) {
+    aName.AssignLiteral(JWK_ALG_ECDSA_P_256);
+  } else {
     return NS_ERROR_DOM_SYNTAX_ERR;
   }
 
   return NS_OK;
-}
-
-static nsresult
-HashCString(nsICryptoHash* aHashService, const nsACString& aIn,
-            /* out */ CryptoBuffer& aOut)
-{
-  MOZ_ASSERT(aHashService);
-
-  nsresult rv = aHashService->Init(nsICryptoHash::SHA256);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  rv = aHashService->Update(
-    reinterpret_cast<const uint8_t*>(aIn.BeginReading()),aIn.Length());
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  nsAutoCString fullHash;
-  // Passing false below means we will get a binary result rather than a
-  // base64-encoded string.
-  rv = aHashService->Finish(false, fullHash);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  aOut.Assign(fullHash);
-  return rv;
 }
 
 static nsresult
@@ -104,7 +88,7 @@ AssembleClientData(const nsAString& aOrigin, const CryptoBuffer& aChallenge,
   CollectedClientData clientDataObject;
   clientDataObject.mChallenge.Assign(challengeBase64);
   clientDataObject.mOrigin.Assign(aOrigin);
-  clientDataObject.mHashAlg.Assign(NS_LITERAL_STRING("S256"));
+  clientDataObject.mHashAlg.AssignLiteral(u"SHA-256");
 
   nsAutoString temp;
   if (NS_WARN_IF(!clientDataObject.ToJSON(temp))) {
@@ -117,12 +101,13 @@ AssembleClientData(const nsAString& aOrigin, const CryptoBuffer& aChallenge,
 
 nsresult
 GetOrigin(nsPIDOMWindowInner* aParent,
-          /*out*/ nsAString& aOrigin)
+          /*out*/ nsAString& aOrigin, /*out*/ nsACString& aHost)
 {
+  MOZ_ASSERT(aParent);
   nsCOMPtr<nsIDocument> doc = aParent->GetDoc();
   MOZ_ASSERT(doc);
 
-  nsIPrincipal* principal = doc->NodePrincipal();
+  nsCOMPtr<nsIPrincipal> principal = doc->NodePrincipal();
   nsresult rv = nsContentUtils::GetUTFOrigin(principal, aOrigin);
   if (NS_WARN_IF(NS_FAILED(rv)) ||
       NS_WARN_IF(aOrigin.IsEmpty())) {
@@ -137,6 +122,14 @@ GetOrigin(nsPIDOMWindowInner* aParent,
     return NS_ERROR_DOM_NOT_ALLOWED_ERR;
   }
 
+  nsCOMPtr<nsIURI> originUri;
+  if (NS_FAILED(principal->GetURI(getter_AddRefs(originUri)))) {
+    return NS_ERROR_FAILURE;
+  }
+  if (NS_FAILED(originUri->GetAsciiHost(aHost))) {
+    return NS_ERROR_FAILURE;
+  }
+
   return NS_OK;
 }
 
@@ -146,14 +139,68 @@ RelaxSameOrigin(nsPIDOMWindowInner* aParent,
                 /* out */ nsACString& aRelaxedRpId)
 {
   MOZ_ASSERT(aParent);
+  nsCOMPtr<nsIDocument> doc = aParent->GetDoc();
+  MOZ_ASSERT(doc);
+
+  nsCOMPtr<nsIPrincipal> principal = doc->NodePrincipal();
+  nsCOMPtr<nsIURI> uri;
+  if (NS_FAILED(principal->GetURI(getter_AddRefs(uri)))) {
+    return NS_ERROR_FAILURE;
+  }
+  nsAutoCString originHost;
+  if (NS_FAILED(uri->GetAsciiHost(originHost))) {
+    return NS_ERROR_FAILURE;
+  }
   nsCOMPtr<nsIDocument> document = aParent->GetDoc();
   if (!document || !document->IsHTMLDocument()) {
     return NS_ERROR_FAILURE;
   }
+  nsHTMLDocument* html = document->AsHTMLDocument();
+  if (NS_WARN_IF(!html)) {
+    return NS_ERROR_FAILURE;
+  }
 
-  // TODO: Bug 1329764: Invoke the Relax Algorithm, once properly defined
+  if (!html->IsRegistrableDomainSuffixOfOrEqualTo(aInputRpId, originHost)) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
   aRelaxedRpId.Assign(NS_ConvertUTF16toUTF8(aInputRpId));
   return NS_OK;
+}
+
+static void
+ListenForVisibilityEvents(nsPIDOMWindowInner* aParent,
+                          WebAuthnManager* aListener)
+{
+  MOZ_ASSERT(aParent);
+  MOZ_ASSERT(aListener);
+
+  nsCOMPtr<nsIDocument> doc = aParent->GetExtantDoc();
+  if (NS_WARN_IF(!doc)) {
+    return;
+  }
+
+  nsresult rv = doc->AddSystemEventListener(kVisibilityChange, aListener,
+                                            /* use capture */ true,
+                                            /* wants untrusted */ false);
+  Unused << NS_WARN_IF(NS_FAILED(rv));
+}
+
+static void
+StopListeningForVisibilityEvents(nsPIDOMWindowInner* aParent,
+                                 WebAuthnManager* aListener)
+{
+  MOZ_ASSERT(aParent);
+  MOZ_ASSERT(aListener);
+
+  nsCOMPtr<nsIDocument> doc = aParent->GetExtantDoc();
+  if (NS_WARN_IF(!doc)) {
+    return;
+  }
+
+  nsresult rv = doc->RemoveSystemEventListener(kVisibilityChange, aListener,
+                                               /* use capture */ true);
+  Unused << NS_WARN_IF(NS_FAILED(rv));
 }
 
 /***********************************************************************
@@ -171,6 +218,11 @@ WebAuthnManager::MaybeClearTransaction()
   mClientData.reset();
   mInfo.reset();
   mTransactionPromise = nullptr;
+  if (mCurrentParent) {
+    StopListeningForVisibilityEvents(mCurrentParent, this);
+    mCurrentParent = nullptr;
+  }
+
   if (mChild) {
     RefPtr<WebAuthnTransactionChild> c;
     mChild.swap(c);
@@ -183,14 +235,25 @@ WebAuthnManager::~WebAuthnManager()
   MaybeClearTransaction();
 }
 
-already_AddRefed<MozPromise<nsresult, nsresult, false>>
+RefPtr<WebAuthnManager::BackgroundActorPromise>
 WebAuthnManager::GetOrCreateBackgroundActor()
 {
-  bool ok = BackgroundChild::GetOrCreateForCurrentThread(this);
-  if (NS_WARN_IF(!ok)) {
-    ActorFailed();
+  MOZ_ASSERT(NS_IsMainThread());
+
+  PBackgroundChild *actor = BackgroundChild::GetForCurrentThread();
+  RefPtr<WebAuthnManager::BackgroundActorPromise> promise =
+    mPBackgroundCreationPromise.Ensure(__func__);
+
+  if (actor) {
+    ActorCreated(actor);
+  } else {
+    bool ok = BackgroundChild::GetOrCreateForCurrentThread(this);
+    if (NS_WARN_IF(!ok)) {
+      ActorFailed();
+    }
   }
-  return mPBackgroundCreationPromise.Ensure(__func__);
+
+  return promise;
 }
 
 //static
@@ -232,7 +295,8 @@ WebAuthnManager::MakeCredential(nsPIDOMWindowInner* aParent,
   }
 
   nsString origin;
-  rv = GetOrigin(aParent, origin);
+  nsCString rpId;
+  rv = GetOrigin(aParent, origin, rpId);
   if (NS_WARN_IF(rv.Failed())) {
     promise->MaybeReject(rv);
     return promise.forget();
@@ -242,19 +306,14 @@ WebAuthnManager::MakeCredential(nsPIDOMWindowInner* aParent,
   // reasonable range as defined by the platform and if not, correct it to the
   // closest value lying within that range.
 
-  double adjustedTimeout = 30.0;
+  uint32_t adjustedTimeout = 30000;
   if (aOptions.mTimeout.WasPassed()) {
     adjustedTimeout = aOptions.mTimeout.Value();
-    adjustedTimeout = std::max(15.0, adjustedTimeout);
-    adjustedTimeout = std::min(120.0, adjustedTimeout);
+    adjustedTimeout = std::max(15000u, adjustedTimeout);
+    adjustedTimeout = std::min(120000u, adjustedTimeout);
   }
 
-  nsCString rpId;
-  if (!aOptions.mRp.mId.WasPassed()) {
-    // If rp.id is not specified, then set rpId to callerOrigin, and rpIdHash to
-    // the SHA-256 hash of rpId.
-    rpId.Assign(NS_ConvertUTF16toUTF8(origin));
-  } else {
+  if (aOptions.mRp.mId.WasPassed()) {
     // If rpId is specified, then invoke the procedure used for relaxing the
     // same-origin restriction by setting the document.domain attribute, using
     // rpId as the given value but without changing the current document’s
@@ -352,7 +411,7 @@ WebAuthnManager::MakeCredential(nsPIDOMWindowInner* aParent,
     if (normalizedParams[a].mType == PublicKeyCredentialType::Public_key &&
         normalizedParams[a].mAlgorithm.IsString() &&
         normalizedParams[a].mAlgorithm.GetAsString().EqualsLiteral(
-          WEBCRYPTO_NAMED_CURVE_P256)) {
+          JWK_ALG_ECDSA_P_256)) {
       isValidCombination = true;
       break;
     }
@@ -438,6 +497,8 @@ WebAuthnManager::MakeCredential(nsPIDOMWindowInner* aParent,
   mClientData = Some(clientDataJSON);
   mCurrentParent = aParent;
   mInfo = Some(info);
+  ListenForVisibilityEvents(aParent, this);
+
   return promise.forget();
 }
 
@@ -452,6 +513,13 @@ void
 WebAuthnManager::StartSign() {
   if (mChild) {
     mChild->SendRequestSign(mInfo.ref());
+  }
+}
+
+void
+WebAuthnManager::StartCancel() {
+  if (mChild) {
+    mChild->SendRequestCancel();
   }
 }
 
@@ -472,7 +540,8 @@ WebAuthnManager::GetAssertion(nsPIDOMWindowInner* aParent,
   }
 
   nsString origin;
-  rv = GetOrigin(aParent, origin);
+  nsCString rpId;
+  rv = GetOrigin(aParent, origin, rpId);
   if (NS_WARN_IF(rv.Failed())) {
     promise->MaybeReject(rv);
     return promise.forget();
@@ -489,12 +558,7 @@ WebAuthnManager::GetAssertion(nsPIDOMWindowInner* aParent,
     adjustedTimeout = std::min(120000u, adjustedTimeout);
   }
 
-  nsCString rpId;
-  if (!aOptions.mRpId.WasPassed()) {
-    // If rpId is not specified, then set rpId to callerOrigin, and rpIdHash to
-    // the SHA-256 hash of rpId.
-    rpId.Assign(NS_ConvertUTF16toUTF8(origin));
-  } else {
+  if (aOptions.mRpId.WasPassed()) {
     // If rpId is specified, then invoke the procedure used for relaxing the
     // same-origin restriction by setting the document.domain attribute, using
     // rpId as the given value but without changing the current document’s
@@ -606,20 +670,32 @@ WebAuthnManager::GetAssertion(nsPIDOMWindowInner* aParent,
   mClientData = Some(clientDataJSON);
   mCurrentParent = aParent;
   mInfo = Some(info);
+  ListenForVisibilityEvents(aParent, this);
+
   return promise.forget();
 }
 
 void
-WebAuthnManager::FinishMakeCredential(nsTArray<uint8_t>& aRegBuffer,
-                                      nsTArray<uint8_t>& aSigBuffer)
+WebAuthnManager::FinishMakeCredential(nsTArray<uint8_t>& aRegBuffer)
 {
   MOZ_ASSERT(mTransactionPromise);
   MOZ_ASSERT(mInfo.isSome());
 
   CryptoBuffer regData;
   if (NS_WARN_IF(!regData.Assign(aRegBuffer.Elements(), aRegBuffer.Length()))) {
-    mTransactionPromise->MaybeReject(NS_ERROR_OUT_OF_MEMORY);
+    Cancel(NS_ERROR_OUT_OF_MEMORY);
     return;
+  }
+
+  mozilla::dom::CryptoBuffer aaguidBuf;
+  if (NS_WARN_IF(!aaguidBuf.SetCapacity(16, mozilla::fallible))) {
+    Cancel(NS_ERROR_OUT_OF_MEMORY);
+    return;
+  }
+  // TODO: Adjust the AAGUID from all zeroes in Bug 1381575 (if needed)
+  // See https://github.com/w3c/webauthn/issues/506
+  for (int i=0; i<16; i++) {
+    aaguidBuf.AppendElement(0x00, mozilla::fallible);
   }
 
   // Decompose the U2F registration packet
@@ -628,16 +704,19 @@ WebAuthnManager::FinishMakeCredential(nsTArray<uint8_t>& aRegBuffer,
   CryptoBuffer attestationCertBuf;
   CryptoBuffer signatureBuf;
 
+  // Only handles attestation cert chains of length=1.
   nsresult rv = U2FDecomposeRegistrationResponse(regData, pubKeyBuf, keyHandleBuf,
                                                  attestationCertBuf, signatureBuf);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     Cancel(rv);
     return;
   }
+  MOZ_ASSERT(keyHandleBuf.Length() <= 0xFFFF);
 
-  CryptoBuffer signatureData;
-  if (NS_WARN_IF(!signatureData.Assign(aSigBuffer.Elements(), aSigBuffer.Length()))) {
-    Cancel(NS_ERROR_OUT_OF_MEMORY);
+  nsAutoString keyHandleBase64Url;
+  rv = keyHandleBuf.ToJwkBase64(keyHandleBase64Url);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    Cancel(rv);
     return;
   }
 
@@ -653,11 +732,50 @@ WebAuthnManager::FinishMakeCredential(nsTArray<uint8_t>& aRegBuffer,
     return;
   }
 
-  CryptoBuffer authenticatorDataBuf;
-  rv = U2FAssembleAuthenticatorData(authenticatorDataBuf, rpIdHashBuf,
-                                    signatureData);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  // Construct the public key object
+  CryptoBuffer pubKeyObj;
+  rv = CBOREncodePublicKeyObj(pubKeyBuf, pubKeyObj);
+  if (NS_FAILED(rv)) {
+    Cancel(rv);
+    return;
+  }
+
+  // During create credential, counter is always 0 for U2F
+  // See https://github.com/w3c/webauthn/issues/507
+  mozilla::dom::CryptoBuffer counterBuf;
+  if (NS_WARN_IF(!counterBuf.SetCapacity(4, mozilla::fallible))) {
     Cancel(NS_ERROR_OUT_OF_MEMORY);
+    return;
+  }
+  counterBuf.AppendElement(0x00, mozilla::fallible);
+  counterBuf.AppendElement(0x00, mozilla::fallible);
+  counterBuf.AppendElement(0x00, mozilla::fallible);
+  counterBuf.AppendElement(0x00, mozilla::fallible);
+
+  // Construct the Attestation Data, which slots into the end of the
+  // Authentication Data buffer.
+  CryptoBuffer attDataBuf;
+  rv = AssembleAttestationData(aaguidBuf, keyHandleBuf, pubKeyObj, attDataBuf);
+  if (NS_FAILED(rv)) {
+    Cancel(rv);
+    return;
+  }
+
+  mozilla::dom::CryptoBuffer authDataBuf;
+  rv = AssembleAuthenticatorData(rpIdHashBuf, FLAG_TUP, counterBuf, attDataBuf,
+                                 authDataBuf);
+  if (NS_FAILED(rv)) {
+    Cancel(rv);
+    return;
+  }
+
+  // The Authentication Data buffer gets CBOR-encoded with the Cert and
+  // Signature to build the Attestation Object.
+  CryptoBuffer attObj;
+  rv = CBOREncodeAttestationObj(authDataBuf, attestationCertBuf, signatureBuf,
+                                attObj);
+  if (NS_FAILED(rv)) {
+    Cancel(rv);
     return;
   }
 
@@ -667,9 +785,11 @@ WebAuthnManager::FinishMakeCredential(nsTArray<uint8_t>& aRegBuffer,
   RefPtr<AuthenticatorAttestationResponse> attestation =
       new AuthenticatorAttestationResponse(mCurrentParent);
   attestation->SetClientDataJSON(clientDataBuf);
-  attestation->SetAttestationObject(regData);
+  attestation->SetAttestationObject(attObj);
 
   RefPtr<PublicKeyCredential> credential = new PublicKeyCredential(mCurrentParent);
+  credential->SetId(keyHandleBase64Url);
+  credential->SetType(NS_LITERAL_STRING("public-key"));
   credential->SetRawId(keyHandleBuf);
   credential->SetResponse(attestation);
 
@@ -684,8 +804,9 @@ WebAuthnManager::FinishGetAssertion(nsTArray<uint8_t>& aCredentialId,
   MOZ_ASSERT(mTransactionPromise);
   MOZ_ASSERT(mInfo.isSome());
 
-  CryptoBuffer signatureData;
-  if (NS_WARN_IF(!signatureData.Assign(aSigBuffer.Elements(), aSigBuffer.Length()))) {
+  CryptoBuffer tokenSignatureData;
+  if (NS_WARN_IF(!tokenSignatureData.Assign(aSigBuffer.Elements(),
+                                            aSigBuffer.Length()))) {
     Cancel(NS_ERROR_OUT_OF_MEMORY);
     return;
   }
@@ -702,9 +823,21 @@ WebAuthnManager::FinishGetAssertion(nsTArray<uint8_t>& aCredentialId,
     return;
   }
 
+  CryptoBuffer signatureBuf;
+  CryptoBuffer counterBuf;
+  uint8_t flags = 0;
+  nsresult rv = U2FDecomposeSignResponse(tokenSignatureData, flags, counterBuf,
+                                         signatureBuf);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    Cancel(rv);
+    return;
+  }
+
+  CryptoBuffer attestationDataBuf;
   CryptoBuffer authenticatorDataBuf;
-  nsresult rv = U2FAssembleAuthenticatorData(authenticatorDataBuf, rpIdHashBuf,
-                                             signatureData);
+  rv = AssembleAuthenticatorData(rpIdHashBuf, FLAG_TUP, counterBuf,
+                                 /* deliberately empty */ attestationDataBuf,
+                                 authenticatorDataBuf);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     Cancel(rv);
     return;
@@ -712,6 +845,13 @@ WebAuthnManager::FinishGetAssertion(nsTArray<uint8_t>& aCredentialId,
 
   CryptoBuffer credentialBuf;
   if (!credentialBuf.Assign(aCredentialId)) {
+    Cancel(NS_ERROR_OUT_OF_MEMORY);
+    return;
+  }
+
+  nsAutoString credentialBase64Url;
+  rv = credentialBuf.ToJwkBase64(credentialBase64Url);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
     Cancel(rv);
     return;
   }
@@ -725,10 +865,12 @@ WebAuthnManager::FinishGetAssertion(nsTArray<uint8_t>& aCredentialId,
     new AuthenticatorAssertionResponse(mCurrentParent);
   assertion->SetClientDataJSON(clientDataBuf);
   assertion->SetAuthenticatorData(authenticatorDataBuf);
-  assertion->SetSignature(signatureData);
+  assertion->SetSignature(signatureBuf);
 
   RefPtr<PublicKeyCredential> credential =
     new PublicKeyCredential(mCurrentParent);
+  credential->SetId(credentialBase64Url);
+  credential->SetType(NS_LITERAL_STRING("public-key"));
   credential->SetRawId(credentialBuf);
   credential->SetResponse(assertion);
 
@@ -739,19 +881,50 @@ WebAuthnManager::FinishGetAssertion(nsTArray<uint8_t>& aCredentialId,
 void
 WebAuthnManager::Cancel(const nsresult& aError)
 {
-  if (mChild) {
-    mChild->SendRequestCancel();
-  }
+  MOZ_ASSERT(NS_IsMainThread());
+
   if (mTransactionPromise) {
     mTransactionPromise->MaybeReject(aError);
   }
+
   MaybeClearTransaction();
+}
+
+NS_IMETHODIMP
+WebAuthnManager::HandleEvent(nsIDOMEvent* aEvent)
+{
+  MOZ_ASSERT(aEvent);
+
+  nsAutoString type;
+  aEvent->GetType(type);
+  if (!type.Equals(kVisibilityChange)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsIDocument> doc =
+    do_QueryInterface(aEvent->InternalDOMEvent()->GetTarget());
+  MOZ_ASSERT(doc);
+
+  if (doc && doc->Hidden()) {
+    MOZ_LOG(gWebAuthnManagerLog, LogLevel::Debug,
+            ("Visibility change: WebAuthn window is hidden, cancelling job."));
+
+    StartCancel();
+    Cancel(NS_ERROR_ABORT);
+  }
+
+  return NS_OK;
 }
 
 void
 WebAuthnManager::ActorCreated(PBackgroundChild* aActor)
 {
+  MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aActor);
+
+  if (mChild) {
+    return;
+  }
 
   RefPtr<WebAuthnTransactionChild> mgr(new WebAuthnTransactionChild());
   PWebAuthnTransactionChild* constructedMgr =

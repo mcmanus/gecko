@@ -1,9 +1,10 @@
 /* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set sts=2 sw=2 et tw=80: */
+
 "use strict";
 
-XPCOMUtils.defineLazyModuleGetter(this, "EventEmitter",
-                                  "resource://gre/modules/EventEmitter.jsm");
+// The ext-* files are imported into the same scopes.
+/* import-globals-from ext-utils.js */
 
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                   "resource://gre/modules/Services.jsm");
@@ -19,10 +20,12 @@ var {
 } = ExtensionParent;
 
 // WeakMap[Extension -> PageAction]
-var pageActionMap = new WeakMap();
+let pageActionMap = new WeakMap();
 
-class PageAction {
+class PageAction extends EventEmitter {
   constructor(manifest, extension) {
+    super();
+
     this.id = null;
 
     this.extension = extension;
@@ -42,13 +45,12 @@ class PageAction {
       id: `{${extension.uuid}}`,
       clickCallback: () => {
         let tab = tabTracker.activeTab;
+
+        this.tabManager.addActiveTabPermission(tab);
+
         let popup = this.tabContext.get(tab.id).popup || this.defaults.popup;
         if (popup) {
-          let win = Services.wm.getMostRecentWindow("navigator:browser");
-          win.BrowserApp.addTab(popup, {
-            selected: true,
-            parentId: win.BrowserApp.selectedTab.id,
-          });
+          tabTracker.openExtensionPopupTab(popup);
         } else {
           this.emit("click", tab);
         }
@@ -61,8 +63,6 @@ class PageAction {
                        (evt, tabId) => { this.onTabSelected(tabId); });
     this.tabContext.on("tab-closed", // eslint-disable-line mozilla/balanced-listeners
                        (evt, tabId) => { this.onTabClosed(tabId); });
-
-    EventEmitter.decorate(this);
   }
 
   /**
@@ -147,7 +147,8 @@ class PageAction {
    * @returns {Promise} resolves when the page action is shown.
    */
   show() {
-    if (this.id) {
+    // The PageAction icon has been created or it is being converted.
+    if (this.id || this.shouldShow) {
       return Promise.resolve();
     }
 
@@ -177,6 +178,10 @@ class PageAction {
         this.id = PageActions.add(this.options);
       }
     }).catch(() => {
+      // The "icon conversion" promise has been rejected, set `this.shouldShow` to `false`
+      // so that we will try again on the next `pageAction.show` call.
+      this.shouldShow = false;
+
       return Promise.reject({
         message: "Failed to load PageAction icon",
       });
@@ -188,6 +193,7 @@ class PageAction {
    */
   hide() {
     this.shouldShow = false;
+
     if (this.id) {
       PageActions.remove(this.id);
       this.id = null;
@@ -198,7 +204,7 @@ class PageAction {
     this.tabContext.shutdown();
     this.hide();
   }
-};
+}
 
 this.pageAction = class extends ExtensionAPI {
   onManifestEntry(entryName) {
@@ -226,7 +232,7 @@ this.pageAction = class extends ExtensionAPI {
 
     return {
       pageAction: {
-        onClicked: new SingletonEventManager(context, "pageAction.onClicked", fire => {
+        onClicked: new EventManager(context, "pageAction.onClicked", fire => {
           let listener = (event, tab) => {
             fire.async(tabManager.convert(tab));
           };
@@ -237,23 +243,23 @@ this.pageAction = class extends ExtensionAPI {
         }).api(),
 
         show(tabId) {
-          let tab = tabId ? tabTracker.getTab(tabId) : null;
+          let tab = tabTracker.getTab(tabId);
           return pageActionMap.get(extension).setProperty(tab, "show", true);
         },
 
         hide(tabId) {
-          let tab = tabId ? tabTracker.getTab(tabId) : null;
+          let tab = tabTracker.getTab(tabId);
           pageActionMap.get(extension).setProperty(tab, "show", false);
         },
 
         setPopup(details) {
-          let tab = details.tabId ? tabTracker.getTab(details.tabId) : null;
+          let tab = tabTracker.getTab(details.tabId);
           let url = details.popup && context.uri.resolve(details.popup);
           pageActionMap.get(extension).setProperty(tab, "popup", url);
         },
 
         getPopup(details) {
-          let tab = details.tabId ? tabTracker.getTab(details.tabId) : null;
+          let tab = tabTracker.getTab(details.tabId);
           let popup = pageActionMap.get(extension).getProperty(tab, "popup");
           return Promise.resolve(popup);
         },

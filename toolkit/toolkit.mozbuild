@@ -4,8 +4,12 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+if CONFIG['ENABLE_TESTS']:
+    DIRS += [
+        '/toolkit/library/gtest/rust',
+    ]
+
 DIRS += [
-    '/toolkit/library/gtest/rust',
     '/toolkit/library/rust',
 ]
 
@@ -71,15 +75,6 @@ if CONFIG['MOZ_WEBRTC'] and CONFIG['COMPILE_ENVIRONMENT']:
         '/media/mtransport',
     ]
 
-if CONFIG['MOZ_OMX_PLUGIN']:
-    DIRS += [
-        '/media/omx-plugin/lib/ics/libutils',
-        '/media/omx-plugin/lib/ics/libstagefright',
-        '/media/omx-plugin/lib/ics/libvideoeditorplayer',
-        '/media/omx-plugin',
-        '/media/omx-plugin/kk',
-    ]
-
 if CONFIG['ENABLE_TESTS']:
     DIRS += ['/testing/specialpowers']
 
@@ -99,12 +94,6 @@ DIRS += [
     '/xpfe/appshell'
 ]
 
-# This needs to be built after the gfx/ directory
-# to ensure all dependencies for skia (e.g. mozalloc, xpcom)
-# have been built
-if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
-    DIRS += ['/other-licenses/skia-npapi']
-
 if CONFIG['MOZ_UNIVERSALCHARDET']:
     DIRS += ['/extensions/universalchardet']
 
@@ -120,9 +109,9 @@ if CONFIG['MOZ_JPROF']:
     DIRS += ['/tools/jprof']
 
 DIRS += [
+    '/tools/code-coverage',
     '/tools/power',
     '/tools/profiler',
-    '/tools/memory-profiler',
     '/xpfe/components',
 ]
 
@@ -152,8 +141,6 @@ DIRS += [
 
 if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
     DIRS += ['/toolkit/system/gnome']
-
-DIRS += ['/addon-sdk']
 
 if CONFIG['ENABLE_MARIONETTE']:
     DIRS += [

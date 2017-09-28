@@ -6,29 +6,20 @@ config = {
     "update_platform": "Linux_x86-gcc3",
     "mozconfig": "%(branch)s/browser/config/mozconfigs/linux32/l10n-mozconfig-devedition",
     "bootstrap_env": {
-        "MOZ_OBJDIR": "obj-l10n",
+        "MOZ_OBJDIR": "obj-firefox",
         "EN_US_BINARY_URL": "%(en_us_binary_url)s",
-        "LOCALE_MERGEDIR": "%(abs_merge_dir)s/",
         "MOZ_UPDATE_CHANNEL": "%(update_channel)s",
         "DIST": "%(abs_objdir)s",
-        "LOCALE_MERGEDIR": "%(abs_merge_dir)s/",
         "L10NBASEDIR": "../../l10n",
         "MOZ_MAKE_COMPLETE_MAR": "1",
-        'TOOLTOOL_CACHE': '/builds/tooltool_cache',
-        'TOOLTOOL_HOME': '/builds',
         'EN_US_PACKAGE_NAME': 'target.tar.bz2',
     },
     "ssh_key_dir": "/home/mock_mozilla/.ssh",
     "log_name": "single_locale",
-    "objdir": "obj-l10n",
+    "objdir": "obj-firefox",
     "js_src_dir": "js/src",
     "vcs_share_base": "/builds/hg-shared",
 
-    # tooltool
-    'tooltool_url': 'https://api.pub.build.mozilla.org/tooltool/',
-    'tooltool_script': ["/builds/tooltool.py"],
-    'tooltool_bootstrap': "setup.sh",
-    'tooltool_manifest_src': 'browser/config/tooltool-manifests/linux32/releng.manifest',
     # balrog credential file:
     'balrog_credentials_file': 'oauth.txt',
 
@@ -38,7 +29,6 @@ config = {
     "locales_file": "%(branch)s/browser/locales/all-locales",
     "locales_dir": "browser/locales",
     "hg_l10n_tag": "default",
-    "merge_locales": True,
 
     # MAR
     "previous_mar_dir": "dist/previous",
@@ -118,7 +108,6 @@ config = {
         ('/home/cltbld/.boto', '/builds/.boto'),
         ('/builds/gapi.data', '/builds/gapi.data'),
         ('/builds/relengapi.tok', '/builds/relengapi.tok'),
-        ('/tools/tooltool.py', '/builds/tooltool.py'),
         ('/usr/local/lib/hgext', '/usr/local/lib/hgext'),
     ],
 }

@@ -13,7 +13,7 @@
 #include "nsError.h"
 #include "nsDisplayList.h"
 #include "FrameLayerBuilder.h"
-#include "nsSVGEffects.h"
+#include "SVGObserverUtils.h"
 #include "imgIContainer.h"
 #include "Image.h"
 
@@ -121,7 +121,7 @@ ImageLoader::MaybeRegisterCSSImage(ImageLoader::Image* aImage)
   // Ignore errors here.  If cloning fails for some reason we'll put a null
   // entry in the hash and we won't keep trying to clone.
   mInClone = true;
-  canonicalRequest->Clone(this, getter_AddRefs(request));
+  canonicalRequest->SyncClone(this, mDocument, getter_AddRefs(request));
   mInClone = false;
 
   aImage->mRequests.Put(mDocument, request);
@@ -190,7 +190,7 @@ ImageLoader::DropRequestsForFrame(nsIFrame* aFrame)
 {
   MOZ_ASSERT(aFrame->HasImageRequest(), "why call me?");
   nsAutoPtr<RequestSet> requestSet;
-  mFrameToRequestMap.RemoveAndForget(aFrame, requestSet);
+  mFrameToRequestMap.Remove(aFrame, &requestSet);
   aFrame->SetHasImageRequest(false);
   if (MOZ_UNLIKELY(!requestSet)) {
     MOZ_ASSERT_UNREACHABLE("HasImageRequest was lying");
@@ -268,7 +268,7 @@ ImageLoader::LoadImage(nsIURI* aURI, nsIPrincipal* aOriginPrincipal,
 
   RefPtr<imgRequestProxy> request;
   nsresult rv = nsContentUtils::LoadImage(aURI, mDocument, mDocument,
-                                          aOriginPrincipal, aReferrer,
+                                          aOriginPrincipal, 0, aReferrer,
                                           mDocument->GetReferrerPolicy(),
                                           nullptr, nsIRequest::LOAD_NORMAL,
                                           NS_LITERAL_STRING("css"),
@@ -280,7 +280,7 @@ ImageLoader::LoadImage(nsIURI* aURI, nsIPrincipal* aOriginPrincipal,
 
   RefPtr<imgRequestProxy> clonedRequest;
   mInClone = true;
-  rv = request->Clone(this, getter_AddRefs(clonedRequest));
+  rv = request->SyncClone(this, mDocument, getter_AddRefs(clonedRequest));
   mInClone = false;
 
   if (NS_FAILED(rv)) {
@@ -322,19 +322,19 @@ ImageLoader::GetPresContext()
   return shell->GetPresContext();
 }
 
-void InvalidateImagesCallback(nsIFrame* aFrame, 
+void InvalidateImagesCallback(nsIFrame* aFrame,
                               DisplayItemData* aItem)
 {
-  nsDisplayItem::Type type = nsDisplayItem::GetDisplayItemTypeFromKey(aItem->GetDisplayItemKey());
-  uint8_t flags = nsDisplayItem::GetDisplayItemFlagsForType(type);
+  DisplayItemType type = GetDisplayItemTypeFromKey(aItem->GetDisplayItemKey());
+  uint8_t flags = GetDisplayItemFlagsForType(type);
 
-  if (flags & nsDisplayItem::TYPE_RENDERS_NO_IMAGES) {
+  if (flags & TYPE_RENDERS_NO_IMAGES) {
     return;
   }
 
   if (nsLayoutUtils::InvalidationDebuggingIsEnabled()) {
     printf_stderr("Invalidating display item(type=%d) based on frame %p \
-      because it might contain an invalidated image\n", type, aFrame);
+      because it might contain an invalidated image\n", static_cast<uint32_t>(type), aFrame);
   }
   aItem->Invalidate();
   aFrame->SchedulePaint();
@@ -362,7 +362,7 @@ ImageLoader::DoRedraw(FrameSet* aFrameSet, bool aForcePaint)
         // Update ancestor rendering observers (-moz-element etc)
         nsIFrame *f = frame;
         while (f && !f->HasAnyStateBits(NS_FRAME_DESCENDANT_NEEDS_PAINT)) {
-          nsSVGEffects::InvalidateDirectRenderingObservers(f);
+          SVGObserverUtils::InvalidateDirectRenderingObservers(f);
           f = nsLayoutUtils::GetCrossDocParentFrame(f);
         }
 
@@ -416,7 +416,7 @@ ImageLoader::Notify(imgIRequest* aRequest, int32_t aType, const nsIntRect* aData
 
 nsresult
 ImageLoader::OnSizeAvailable(imgIRequest* aRequest, imgIContainer* aImage)
-{ 
+{
   nsPresContext* presContext = GetPresContext();
   if (!presContext) {
     return NS_OK;

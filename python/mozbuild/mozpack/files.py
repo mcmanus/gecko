@@ -145,13 +145,13 @@ class BaseFile(object):
         # - keep file type (e.g. S_IFREG)
         ret = stat.S_IFMT(mode)
         # - expand user read and execute permissions to everyone
-        if mode & 0400:
-            ret |= 0444
-        if mode & 0100:
-            ret |= 0111
-        # - keep user write permissions
-        if mode & 0200:
-            ret |= 0200
+        if mode & 0o0400:
+            ret |= 0o0444
+        if mode & 0o0100:
+            ret |= 0o0111
+         # - keep user write permissions
+        if mode & 0o0200:
+            ret |= 0o0200
         # - leave away sticky bit, setuid, setgid
         return ret
 
@@ -234,6 +234,12 @@ class BaseFile(object):
         '''
         return None
 
+    def inputs(self):
+        '''
+        Return an iterable of the input file paths that impact this output file.
+        '''
+        raise NotImplementedError('BaseFile.inputs() not implemented.')
+
 
 class File(BaseFile):
     '''
@@ -260,6 +266,9 @@ class File(BaseFile):
 
     def size(self):
         return os.stat(self.path).st_size
+
+    def inputs(self):
+        return (self.path,)
 
 
 class ExecutableFile(File):
@@ -391,6 +400,57 @@ class AbsoluteSymlinkFile(File):
         return True
 
 
+class HardlinkFile(File):
+    '''File class that is copied by hard linking (if available)
+
+    This is similar to the AbsoluteSymlinkFile, but with hard links. The symlink
+    implementation requires paths to be absolute, because they are resolved at
+    read time, which makes relative paths messy. Hard links resolve paths at
+    link-creation time, so relative paths are fine.
+    '''
+
+    def copy(self, dest, skip_if_older=True):
+        assert isinstance(dest, basestring)
+
+        if not hasattr(os, 'link'):
+            return super(HardlinkFile, self).copy(
+                dest, skip_if_older=skip_if_older
+            )
+
+        try:
+            path_st = os.stat(self.path)
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                raise ErrorMessage('Hard link target path does not exist: %s' % self.path)
+            else:
+                raise
+
+        st = None
+        try:
+            st = os.lstat(dest)
+        except OSError as e:
+            if e.errno != errno.ENOENT:
+                raise
+
+        if st:
+            # The dest already points to the right place.
+            if st.st_dev == path_st.st_dev and st.st_ino == path_st.st_ino:
+                return False
+            # The dest exists and it points to the wrong place
+            os.remove(dest)
+
+        # At this point, either the dest used to exist and we just deleted it,
+        # or it never existed. We can now safely create the hard link.
+        try:
+            os.link(self.path, dest)
+        except OSError:
+            # If we can't hard link, fall back to copying
+            return super(HardlinkFile, self).copy(
+                dest, skip_if_older=skip_if_older
+            )
+        return True
+
+
 class ExistingFile(BaseFile):
     '''
     File class that represents a file that may exist but whose content comes
@@ -423,6 +483,9 @@ class ExistingFile(BaseFile):
             errors.fatal("Required existing file doesn't exist: %s" %
                 dest.path)
 
+    def inputs(self):
+        return ()
+
 
 class PreprocessedFile(BaseFile):
     '''
@@ -438,6 +501,17 @@ class PreprocessedFile(BaseFile):
         self.extra_depends = list(extra_depends or [])
         self.silence_missing_directive_warnings = \
             silence_missing_directive_warnings
+
+    def inputs(self):
+        pp = Preprocessor(defines=self.defines, marker=self.marker)
+        pp.setSilenceDirectiveWarnings(self.silence_missing_directive_warnings)
+
+        with open(self.path, 'rU') as input:
+            with open(os.devnull, 'w') as output:
+                pp.processFile(input=input, output=output)
+
+        # This always yields at least self.path.
+        return pp.includes
 
     def copy(self, dest, skip_if_older=True):
         '''
@@ -513,6 +587,9 @@ class GeneratedFile(BaseFile):
 
     def size(self):
         return len(self.content)
+
+    def inputs(self):
+        return ()
 
 
 class DeflatedFile(BaseFile):
@@ -918,7 +995,7 @@ class FileFinder(BaseFinder):
 
     def get(self, path):
         srcpath = os.path.join(self.base, path)
-        if not os.path.exists(srcpath):
+        if not os.path.lexists(srcpath):
             return None
 
         for p in self.ignore:
@@ -1091,7 +1168,9 @@ class MercurialRevisionFinder(BaseFinder):
         # operation requires this list.
         out = self._client.rawcommand([b'files', b'--rev', str(self._rev)])
         for relpath in out.splitlines():
-            self._files[relpath] = None
+            # Mercurial may use \ as path separator on Windows. So use
+            # normpath().
+            self._files[mozpath.normpath(relpath)] = None
 
     def _find(self, pattern):
         if self._recognize_repo_paths:
@@ -1100,6 +1179,7 @@ class MercurialRevisionFinder(BaseFinder):
         return self._find_helper(pattern, self._files, self._get)
 
     def get(self, path):
+        path = mozpath.normpath(path)
         if self._recognize_repo_paths:
             if not path.startswith(self._root):
                 raise ValueError('lookups in recognize_repo_paths mode must be '

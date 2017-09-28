@@ -18,10 +18,10 @@ nsHtml5ViewSourceUtils::NewBodyAttributes()
 
   nsString klass;
   if (mozilla::Preferences::GetBool("view_source.wrap_long_lines", true)) {
-    klass.Append(NS_LITERAL_STRING("wrap "));
+    klass.AppendLiteral(u"wrap ");
   }
   if (mozilla::Preferences::GetBool("view_source.syntax_highlight", true)) {
-    klass.Append(NS_LITERAL_STRING("highlight"));
+    klass.AppendLiteral(u"highlight");
   }
   if (!klass.IsEmpty()) {
     bodyAttrs->addAttribute(
@@ -50,7 +50,7 @@ nsHtml5ViewSourceUtils::NewLinkAttributes()
   nsHtml5String type = nsHtml5Portability::newStringFromLiteral("text/css");
   linkAttrs->addAttribute(nsHtml5AttributeName::ATTR_TYPE, type, -1);
   nsHtml5String href = nsHtml5Portability::newStringFromLiteral(
-    "resource://gre-resources/viewsource.css");
+    "resource://content-accessible/viewsource.css");
   linkAttrs->addAttribute(nsHtml5AttributeName::ATTR_HREF, href, -1);
   return linkAttrs;
 }

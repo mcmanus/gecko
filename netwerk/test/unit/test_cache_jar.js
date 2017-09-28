@@ -2,6 +2,7 @@ Cu.import("resource://testing-common/httpd.js");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "URL", function() {
   return "http://localhost:" + httpserv.identity.primaryPort + "/cached";
@@ -88,11 +89,11 @@ async function run_all_tests() {
 
 function run_test() {
   do_get_profile();
-  if (!newCacheBackEndUsed()) {
-    do_check_true(true, "This test checks only cache2 specific behavior.");
-    return;
-  }
+
   do_test_pending();
+
+  Services.prefs.setBoolPref("network.http.rcwn.enabled", false);
+
   httpserv = new HttpServer();
   httpserv.registerPathHandler("/cached", cached_handler);
   httpserv.start(-1);

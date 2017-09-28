@@ -7,6 +7,8 @@ XPCOMUtils.defineLazyGetter(this, "ExtensionManager", () => {
 });
 Cu.import("resource://gre/modules/ExtensionPermissions.jsm");
 
+const BROWSER_PROPERTIES = "chrome://browser/locale/browser.properties";
+
 AddonTestUtils.init(this);
 AddonTestUtils.overrideCertDB();
 AddonTestUtils.createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
@@ -26,6 +28,27 @@ function findWinUtils(extension) {
               .getInterface(Ci.nsIDOMWindowUtils);
 }
 
+let sawPrompt = false;
+let acceptPrompt = false;
+const observer = {
+  observe(subject, topic, data) {
+    if (topic == "webextension-optional-permission-prompt") {
+      sawPrompt = true;
+      let {resolve} = subject.wrappedJSObject;
+      resolve(acceptPrompt);
+    }
+  },
+};
+
+add_task(function setup() {
+  Services.prefs.setBoolPref("extensions.webextOptionalPermissionPrompts", true);
+  Services.obs.addObserver(observer, "webextension-optional-permission-prompt");
+  do_register_cleanup(() => {
+    Services.obs.removeObserver(observer, "webextension-optional-permission-prompt");
+    Services.prefs.clearUserPref("extensions.webextOptionalPermissionPrompts");
+  });
+});
+
 add_task(async function test_permissions() {
   const REQUIRED_PERMISSIONS = ["downloads"];
   const REQUIRED_ORIGINS = ["*://site.com/", "*://*.domain.com/"];
@@ -35,29 +58,14 @@ add_task(async function test_permissions() {
   const OPTIONAL_ORIGINS = ["http://optionalsite.com/", "https://*.optionaldomain.com/"];
   const OPTIONAL_ORIGINS_NORMALIZED = ["http://optionalsite.com/*", "https://*.optionaldomain.com/*"];
 
-  let acceptPrompt = false;
-  const observer = {
-    observe(subject, topic, data) {
-      if (topic == "webextension-optional-permission-prompt") {
-        let {resolve} = subject.wrappedJSObject;
-        resolve(acceptPrompt);
-      }
-    },
-  };
-
-  Services.prefs.setBoolPref("extensions.webextOptionalPermissionPrompts", true);
-  Services.obs.addObserver(observer, "webextension-optional-permission-prompt");
-  do_register_cleanup(() => {
-    Services.obs.removeObserver(observer, "webextension-optional-permission-prompt");
-    Services.prefs.clearUserPref("extensions.webextOptionalPermissionPrompts");
-  });
-
   await AddonTestUtils.promiseStartupManager();
 
   function background() {
     browser.test.onMessage.addListener(async (method, arg) => {
       if (method == "getAll") {
         let perms = await browser.permissions.getAll();
+        let url = browser.extension.getURL("*");
+        perms.origins = perms.origins.filter(i => i != url);
         browser.test.sendMessage("getAll.result", perms);
       } else if (method == "contains") {
         let result = await browser.permissions.contains(arg);
@@ -124,7 +132,7 @@ add_task(async function test_permissions() {
   let perm = OPTIONAL_PERMISSIONS[0];
   result = await call("request", {permissions: [perm]});
   equal(result.status, "error", "request() fails if not called from an event handler");
-  ok(/May only request permissions from a user input handler/.test(result.message),
+  ok(/request may only be called from a user input handler/.test(result.message),
      "error message for calling request() outside an event handler is reasonable");
   result = await call("contains", {permissions: [perm]});
   equal(result, false, "Permission requested outside an event handler was not granted");
@@ -203,6 +211,8 @@ add_task(async function test_startup() {
     });
 
     let all = await browser.permissions.getAll();
+    let url = browser.extension.getURL("*");
+    all.origins = all.origins.filter(i => i != url);
     browser.test.sendMessage("perms", all);
   }
 
@@ -228,9 +238,7 @@ add_task(async function test_startup() {
   await extension2.startup();
 
   let perms = await extension1.awaitMessage("perms");
-  dump(`perms1 ${JSON.stringify(perms)}\n`);
   perms = await extension2.awaitMessage("perms");
-  dump(`perms2 ${JSON.stringify(perms)}\n`);
 
   let winUtils = findWinUtils(extension1);
   let handle = winUtils.setHandlingUserInput(true);
@@ -262,4 +270,139 @@ add_task(async function test_startup() {
 
   await extension1.unload();
   await extension2.unload();
+});
+
+// Test that we don't prompt for permissions an extension already has.
+add_task(async function test_alreadyGranted() {
+  const REQUIRED_PERMISSIONS = [
+    "geolocation",
+    "*://required-host.com/",
+    "*://*.required-domain.com/",
+  ];
+  const OPTIONAL_PERMISSIONS = [
+    ...REQUIRED_PERMISSIONS,
+    "clipboardRead",
+    "*://optional-host.com/",
+    "*://*.optional-domain.com/",
+  ];
+
+  function pageScript() {
+    browser.test.onMessage.addListener(async (msg, arg) => {
+      if (msg == "request") {
+        let result = await browser.permissions.request(arg);
+        browser.test.sendMessage("request.result", result);
+      } else if (msg == "remove") {
+        let result = await browser.permissions.remove(arg);
+        browser.test.sendMessage("remove.result", result);
+      } else if (msg == "close") {
+        window.close();
+      }
+    });
+
+    browser.test.sendMessage("page-ready");
+  }
+
+  let extension = ExtensionTestUtils.loadExtension({
+    background() {
+      browser.test.sendMessage("ready", browser.runtime.getURL("page.html"));
+    },
+
+    manifest: {
+      permissions: REQUIRED_PERMISSIONS,
+      optional_permissions: OPTIONAL_PERMISSIONS,
+    },
+
+    files: {
+      "page.html": `<html><head>
+          <script src="page.js"><\/script>
+        </head></html>`,
+
+      "page.js": pageScript,
+    },
+  });
+
+  await extension.startup();
+
+  let winUtils = findWinUtils(extension);
+  let handle = winUtils.setHandlingUserInput(true);
+
+  let url = await extension.awaitMessage("ready");
+  await ExtensionTestUtils.loadContentPage(url);
+  await extension.awaitMessage("page-ready");
+
+  async function checkRequest(arg, expectPrompt, msg) {
+    sawPrompt = false;
+    extension.sendMessage("request", arg);
+    let result = await extension.awaitMessage("request.result");
+    ok(result, "request() call succeeded");
+    equal(sawPrompt, expectPrompt,
+          `Got ${expectPrompt ? "" : "no "}permission prompt for ${msg}`);
+  }
+
+  await checkRequest({permissions: ["geolocation"]}, false,
+                     "required permission from manifest");
+  await checkRequest({origins: ["http://required-host.com/"]}, false,
+                     "origin permission from manifest");
+  await checkRequest({origins: ["http://host.required-domain.com/"]}, false,
+                     "wildcard origin permission from manifest");
+
+  await checkRequest({permissions: ["clipboardRead"]}, true,
+                     "optional permission");
+  await checkRequest({permissions: ["clipboardRead"]}, false,
+                     "already granted optional permission");
+
+  await checkRequest({origins: ["http://optional-host.com/"]}, true,
+                     "optional origin");
+  await checkRequest({origins: ["http://optional-host.com/"]}, false,
+                     "already granted origin permission");
+
+  await checkRequest({origins: ["http://*.optional-domain.com/"]}, true,
+                     "optional wildcard origin");
+  await checkRequest({origins: ["http://*.optional-domain.com/"]}, false,
+                     "already granted optional wildcard origin");
+  await checkRequest({origins: ["http://host.optional-domain.com/"]}, false,
+                     "host matching optional wildcard origin");
+
+  handle.destruct();
+  await extension.unload();
+});
+
+// IMPORTANT: Do not change this list without review from a Web Extensions peer!
+
+const GRANTED_WITHOUT_USER_PROMPT = [
+  "activeTab",
+  "alarms",
+  "contextMenus",
+  "contextualIdentities",
+  "cookies",
+  "geckoProfiler",
+  "identity",
+  "idle",
+  "menus",
+  "storage",
+  "theme",
+  "webRequest",
+  "webRequestBlocking",
+];
+
+add_task(function test_permissions_have_localization_strings() {
+  const ns = Schemas.getNamespace("manifest");
+
+  const permissions = ns.get("Permission").choices;
+  const optional = ns.get("OptionalPermission").choices;
+
+  const bundle = Services.strings.createBundle(BROWSER_PROPERTIES);
+
+  for (const choice of permissions.concat(optional)) {
+    for (const perm of choice.enumeration || []) {
+      try {
+        const str = bundle.GetStringFromName(`webextPerms.description.${perm}`);
+
+        ok(str.length, `Found localization string for '${perm}' permission`);
+      } catch (e) {
+        ok(GRANTED_WITHOUT_USER_PROMPT.includes(perm),
+          `Permission '${perm}' intentionally granted without prompting the user`);
+      }
+    }
+  }
 });

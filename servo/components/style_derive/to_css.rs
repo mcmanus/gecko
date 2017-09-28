@@ -2,72 +2,43 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use quote;
-use syn;
+use cg;
+use quote::Tokens;
+use syn::DeriveInput;
 use synstructure;
 
-pub fn derive(input: syn::DeriveInput) -> quote::Tokens {
+pub fn derive(input: DeriveInput) -> Tokens {
     let name = &input.ident;
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-    let mut where_clause = where_clause.clone();
-    for param in &input.generics.ty_params {
-        where_clause.predicates.push(where_predicate(syn::Ty::Path(None, param.ident.clone().into())))
-    }
+    let trait_path = &["style_traits", "ToCss"];
+    let (impl_generics, ty_generics, mut where_clause) =
+        cg::trait_parts(&input, trait_path);
 
+    let input_attrs = cg::parse_input_attrs::<CssInputAttrs>(&input);
     let style = synstructure::BindStyle::Ref.into();
     let match_body = synstructure::each_variant(&input, &style, |bindings, variant| {
         let mut identifier = to_css_identifier(variant.ident.as_ref());
-        let mut expr = if let Some((first, rest)) = bindings.split_first() {
-            if has_free_params(&first.field.ty, &input.generics.ty_params) {
-                where_clause.predicates.push(where_predicate(first.field.ty.clone()));
-            }
-            let mut expr = quote! {
-                ::style_traits::ToCss::to_css(#first, dest)
-            };
-            for binding in rest {
-                if has_free_params(&binding.field.ty, &input.generics.ty_params) {
-                    where_clause.predicates.push(where_predicate(binding.field.ty.clone()));
-                }
+        let variant_attrs = cg::parse_variant_attrs::<CssVariantAttrs>(variant);
+        let separator = if variant_attrs.comma { ", " } else { " " };
+        let mut expr = if !bindings.is_empty() {
+            let mut expr = quote! {};
+            for binding in bindings {
+                where_clause.add_trait_bound(&binding.field.ty);
                 expr = quote! {
-                    #expr?;
-                    ::std::fmt::Write::write_str(dest, " ")?;
-                    ::style_traits::ToCss::to_css(#binding, dest)
+                    #expr
+                    writer.item(#binding)?;
                 };
             }
-            expr
+            quote! {{
+                let mut writer = ::style_traits::values::SequenceWriter::new(&mut *dest, #separator);
+                #expr
+                Ok(())
+            }}
         } else {
             quote! {
                 ::std::fmt::Write::write_str(dest, #identifier)
             }
         };
-        let mut css_attrs = variant.attrs.iter().filter(|attr| attr.name() == "css");
-        let is_function = css_attrs.next().map_or(false, |attr| {
-            match attr.value {
-                syn::MetaItem::List(ref ident, ref items) if ident.as_ref() == "css" => {
-                    let mut nested = items.iter();
-                    let is_function = nested.next().map_or(false, |attr| {
-                        match *attr {
-                            syn::NestedMetaItem::MetaItem(syn::MetaItem::Word(ref ident)) => {
-                                if ident.as_ref() != "function" {
-                                    panic!("only `#[css(function)]` is supported for now")
-                                }
-                                true
-                            },
-                            _ => panic!("only `#[css(<ident>)]` is supported for now"),
-                        }
-                    });
-                    if nested.next().is_some() {
-                        panic!("only `#[css()]` or `#[css(<ident>)]` is supported for now")
-                    }
-                    is_function
-                },
-                _ => panic!("only `#[css(...)]` is supported for now"),
-            }
-        });
-        if css_attrs.next().is_some() {
-            panic!("only a single `#[css(...)]` attribute is supported for now");
-        }
-        if is_function {
+        if variant_attrs.function {
             identifier.push_str("(");
             expr = quote! {
                 ::std::fmt::Write::write_str(dest, #identifier)?;
@@ -78,9 +49,9 @@ pub fn derive(input: syn::DeriveInput) -> quote::Tokens {
         Some(expr)
     });
 
-    quote! {
+    let mut impls = quote! {
         impl #impl_generics ::style_traits::ToCss for #name #ty_generics #where_clause {
-            #[allow(unused_variables, unused_imports)]
+            #[allow(unused_variables)]
             #[inline]
             fn to_css<W>(&self, dest: &mut W) -> ::std::fmt::Result
             where
@@ -91,55 +62,39 @@ pub fn derive(input: syn::DeriveInput) -> quote::Tokens {
                 }
             }
         }
-    }
-}
+    };
 
-/// Returns whether `ty` is parameterized by any parameter from `params`.
-fn has_free_params(ty: &syn::Ty, params: &[syn::TyParam]) -> bool {
-    use syn::visit::Visitor;
-
-    struct HasFreeParams<'a> {
-        params: &'a [syn::TyParam],
-        has_free: bool,
-    }
-
-    impl<'a> Visitor for HasFreeParams<'a> {
-        fn visit_path(&mut self, path: &syn::Path) {
-            if !path.global && path.segments.len() == 1 {
-                if self.params.iter().any(|param| param.ident == path.segments[0].ident) {
-                    self.has_free = true;
+    if input_attrs.derive_debug {
+        impls.append(quote! {
+            impl #impl_generics ::std::fmt::Debug for #name #ty_generics #where_clause {
+                fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+                    ::style_traits::ToCss::to_css(self, f)
                 }
             }
-            syn::visit::walk_path(self, path);
-        }
+        });
     }
 
-    let mut visitor = HasFreeParams { params: params, has_free: false };
-    visitor.visit_ty(ty);
-    visitor.has_free
+    impls
 }
 
-/// `#ty: ::style_traits::ToCss`
-fn where_predicate(ty: syn::Ty) -> syn::WherePredicate {
-    syn::WherePredicate::BoundPredicate(syn::WhereBoundPredicate {
-        bound_lifetimes: vec![],
-        bounded_ty: ty,
-        bounds: vec![syn::TyParamBound::Trait(
-            syn::PolyTraitRef {
-                bound_lifetimes: vec![],
-                trait_ref: syn::Path {
-                    global: true,
-                    segments: vec!["style_traits".into(), "ToCss".into()],
-                },
-            },
-            syn::TraitBoundModifier::None
-        )],
-    })
+#[darling(attributes(css), default)]
+#[derive(Default, FromDeriveInput)]
+struct CssInputAttrs {
+    derive_debug: bool,
+    function: bool,
+    comma: bool,
+}
+
+#[darling(attributes(css), default)]
+#[derive(Default, FromVariant)]
+struct CssVariantAttrs {
+    function: bool,
+    comma: bool,
 }
 
 /// Transforms "FooBar" to "foo-bar".
 ///
-/// If the first Camel segment is "Moz"" or "Webkit", the result string
+/// If the first Camel segment is "Moz" or "Webkit", the result string
 /// is prepended with "-".
 fn to_css_identifier(mut camel_case: &str) -> String {
     camel_case = camel_case.trim_right_matches('_');

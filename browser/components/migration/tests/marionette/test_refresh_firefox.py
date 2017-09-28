@@ -25,6 +25,9 @@ class TestFirefoxRefresh(MarionetteTestCase):
     _formHistoryFieldName = "some-very-unique-marionette-only-firefox-reset-field"
     _formHistoryValue = "special-pumpkin-value"
 
+    _formAutofillAvailable = False
+    _formAutofillAddressGuid = None
+
     _expectedURLs = ["about:robots", "about:mozilla"]
 
     def savePassword(self):
@@ -101,6 +104,28 @@ class TestFirefoxRefresh(MarionetteTestCase):
         if error:
           print error
 
+    def createFormAutofill(self):
+        if not self._formAutofillAvailable:
+            return
+        self._formAutofillAddressGuid = self.runAsyncCode("""
+          const TEST_ADDRESS_1 = {
+            "given-name": "John",
+            "additional-name": "R.",
+            "family-name": "Smith",
+            organization: "World Wide Web Consortium",
+            "street-address": "32 Vassar Street\\\nMIT Room 32-G524",
+            "address-level2": "Cambridge",
+            "address-level1": "MA",
+            "postal-code": "02139",
+            country: "US",
+            tel: "+15195555555",
+            email: "user@example.com",
+          };
+          return global.profileStorage.initialize().then(() => {
+            return global.profileStorage.addresses.add(TEST_ADDRESS_1);
+          }).then(marionetteScriptFinished);
+        """)
+
     def createCookie(self):
         self.runCode("""
           // Expire in 15 minutes:
@@ -146,6 +171,17 @@ class TestFirefoxRefresh(MarionetteTestCase):
           }
         """, script_args=(self._expectedURLs,))
 
+    def createSync(self):
+        # This script will write an entry to the login manager and create
+        # a signedInUser.json in the profile dir.
+        self.runAsyncCode("""
+          Cu.import("resource://gre/modules/FxAccountsStorage.jsm");
+          let storage = new FxAccountsStorageManager();
+          let data = {email: "test@test.com", uid: "uid", keyFetchToken: "top-secret"};
+          storage.initialize(data);
+          storage.finalize().then(marionetteScriptFinished);
+        """);
+
     def checkPassword(self):
         loginInfo = self.marionette.execute_script("""
           let ary = Services.logins.findLogins({},
@@ -161,7 +197,8 @@ class TestFirefoxRefresh(MarionetteTestCase):
         loginCount = self.marionette.execute_script("""
           return Services.logins.getAllLogins().length;
         """)
-        self.assertEqual(loginCount, 1, "No other logins are present")
+        # Note that we expect 2 logins - one from us, one from sync.
+        self.assertEqual(loginCount, 2, "No other logins are present")
 
     def checkBookmark(self):
         titleInBookmarks = self.marionette.execute_script("""
@@ -224,6 +261,25 @@ class TestFirefoxRefresh(MarionetteTestCase):
           global.FormHistory.count({}, callbacks);
         """)
         self.assertEqual(formHistoryCount, 1, "There should be only 1 entry in the form history")
+
+    def checkFormAutofill(self):
+        if not self._formAutofillAvailable:
+            return
+
+        formAutofillResults = self.runAsyncCode("""
+          return global.profileStorage.initialize().then(() => {
+            return global.profileStorage.addresses.getAll()
+          }).then(marionetteScriptFinished);
+        """,)
+        if type(formAutofillResults) == str:
+            self.fail(formAutofillResults)
+            return
+
+        formAutofillAddressCount = len(formAutofillResults)
+        self.assertEqual(formAutofillAddressCount, 1, "Should have exactly 1 saved address, got %d" % formAutofillAddressCount)
+        if formAutofillAddressCount == 1:
+            self.assertEqual(formAutofillResults[0]['guid'], self._formAutofillAddressGuid)
+
 
     def checkCookie(self):
         cookieInfo = self.runCode("""
@@ -292,12 +348,42 @@ class TestFirefoxRefresh(MarionetteTestCase):
         """)
         self.assertSequenceEqual(tabURIs, self._expectedURLs)
 
+    def checkSync(self, hasMigrated):
+        result = self.runAsyncCode("""
+          Cu.import("resource://gre/modules/FxAccountsStorage.jsm");
+          let prefs = new global.Preferences("services.sync.");
+          let storage = new FxAccountsStorageManager();
+          let result = {};
+          storage.initialize();
+          storage.getAccountData().then(data => {
+            result.accountData = data;
+            return storage.finalize();
+          }).then(() => {
+            result.prefUsername = prefs.get("username");
+            marionetteScriptFinished(result);
+          }).catch(err => {
+            marionetteScriptFinished(err.toString());
+          });
+        """);
+        if type(result) != dict:
+            self.fail(result)
+            return
+        self.assertEqual(result["accountData"]["email"], "test@test.com");
+        self.assertEqual(result["accountData"]["uid"], "uid");
+        self.assertEqual(result["accountData"]["keyFetchToken"], "top-secret");
+        if hasMigrated:
+          # This test doesn't actually configure sync itself, so the username
+          # pref only exists after migration.
+          self.assertEqual(result["prefUsername"], "test@test.com");
+
     def checkProfile(self, hasMigrated=False):
         self.checkPassword()
         self.checkBookmark()
         self.checkHistory()
         self.checkFormHistory()
+        self.checkFormAutofill()
         self.checkCookie()
+        self.checkSync(hasMigrated);
         if hasMigrated:
             self.checkSession()
 
@@ -306,8 +392,10 @@ class TestFirefoxRefresh(MarionetteTestCase):
         self.createBookmark()
         self.createHistory()
         self.createFormHistory()
+        self.createFormAutofill()
         self.createCookie()
         self.createSession()
+        self.createSync()
 
     def setUpScriptData(self):
         self.marionette.set_context(self.marionette.CONTEXT_CHROME)
@@ -317,6 +405,14 @@ class TestFirefoxRefresh(MarionetteTestCase):
           global.profSvc = Cc["@mozilla.org/toolkit/profile-service;1"].getService(Ci.nsIToolkitProfileService);
           global.Preferences = Cu.import("resource://gre/modules/Preferences.jsm", {}).Preferences;
           global.FormHistory = Cu.import("resource://gre/modules/FormHistory.jsm", {}).FormHistory;
+        """)
+        self._formAutofillAvailable = self.runCode("""
+          try {
+            global.profileStorage = Cu.import("resource://formautofill/ProfileStorage.jsm", {}).profileStorage;
+          } catch(e) {
+            return false;
+          }
+          return true;
         """)
 
     def runCode(self, script, *args, **kwargs):

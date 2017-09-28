@@ -2,8 +2,6 @@
 
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-  "resource://gre/modules/Promise.jsm");
 
 /**
  * A wrapper for the findbar's method "close", which is not synchronous
@@ -36,13 +34,13 @@ function pushPrefs(...aPrefs) {
  * Used to check whether the audio unblocking icon is in the tab.
  */
 async function waitForTabBlockEvent(tab, expectBlocked) {
-  if (tab.soundBlocked == expectBlocked) {
+  if (tab.activeMediaBlocked == expectBlocked) {
     ok(true, "The tab should " + (expectBlocked ? "" : "not ") + "be blocked");
   } else {
     info("Block state doens't match, wait for attributes changes.");
     await BrowserTestUtils.waitForEvent(tab, "TabAttrModified", false, (event) => {
-      if (event.detail.changed.indexOf("blocked") >= 0) {
-        is(tab.soundBlocked, expectBlocked, "The tab should " + (expectBlocked ? "" : "not ") + "be blocked");
+      if (event.detail.changed.indexOf("activemedia-blocked") >= 0) {
+        is(tab.activeMediaBlocked, expectBlocked, "The tab should " + (expectBlocked ? "" : "not ") + "be blocked");
         return true;
       }
       return false;
@@ -123,4 +121,89 @@ function leave_icon(icon) {
   EventUtils.synthesizeMouseAtCenter(document.documentElement, {type: "mousemove"});
 
   disable_non_test_mouse(false);
+}
+
+/**
+ * Helper class for testing datetime input picker widget
+ */
+class DateTimeTestHelper {
+  constructor() {
+    this.panel = document.getElementById("DateTimePickerPanel");
+    this.panel.setAttribute("animate", false);
+    this.tab = null;
+    this.frame = null;
+  }
+
+  /**
+   * Opens a new tab with the URL of the test page, and make sure the picker is
+   * ready for testing.
+   *
+   * @param  {String} pageUrl
+   */
+  async openPicker(pageUrl) {
+    this.tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, pageUrl);
+    await BrowserTestUtils.synthesizeMouseAtCenter("input", {}, gBrowser.selectedBrowser);
+    // If dateTimePopupFrame doesn't exist yet, wait for the binding to be attached
+    if (!this.panel.dateTimePopupFrame) {
+      await BrowserTestUtils.waitForEvent(this.panel, "DateTimePickerBindingReady")
+    }
+    this.frame = this.panel.dateTimePopupFrame;
+    await BrowserTestUtils.waitForEvent(this.frame, "load", true);
+    // Wait for picker elements to be ready and open panel transition to end
+    await BrowserTestUtils.waitForEvent(this.frame.contentDocument, "PickerReady");
+  }
+
+  /**
+   * Find an element on the picker.
+   *
+   * @param  {String} selector
+   * @return {DOMElement}
+   */
+  getElement(selector) {
+    return this.frame.contentDocument.querySelector(selector);
+  }
+
+  /**
+   * Find the children of an element on the picker.
+   *
+   * @param  {String} selector
+   * @return {Array<DOMElement>}
+   */
+  getChildren(selector) {
+    return Array.from(this.getElement(selector).children);
+  }
+
+  /**
+   * Click on an element
+   *
+   * @param  {DOMElement} element
+   */
+  click(element) {
+    EventUtils.synthesizeMouseAtCenter(element, {}, this.frame.contentWindow);
+  }
+
+  /**
+   * Close the panel and the tab
+   */
+  async tearDown() {
+    if (!this.panel.hidden) {
+      let pickerClosePromise = new Promise(resolve => {
+        this.panel.addEventListener("popuphidden", resolve, {once: true});
+      });
+      this.panel.closePicker();
+      await pickerClosePromise;
+    }
+    await BrowserTestUtils.removeTab(this.tab);
+    this.tab = null;
+  }
+
+  /**
+   * Clean up after tests. Remove the frame to prevent leak.
+   */
+  cleanup() {
+    this.frame.remove();
+    this.frame = null;
+    this.panel.removeAttribute("animate");
+    this.panel = null;
+  }
 }

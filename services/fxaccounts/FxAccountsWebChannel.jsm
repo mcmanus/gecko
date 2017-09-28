@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+"use strict";
 
 /**
  * Firefox Accounts Web Channel.
@@ -24,8 +25,12 @@ XPCOMUtils.defineLazyModuleGetter(this, "fxAccounts",
                                   "resource://gre/modules/FxAccounts.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "FxAccountsStorageManagerCanStoreField",
                                   "resource://gre/modules/FxAccountsStorage.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
+                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Weave",
                                   "resource://services-sync/main.js");
+XPCOMUtils.defineLazyModuleGetter(this, "CryptoUtils",
+                                  "resource://services-crypto/utils.js");
 
 const COMMAND_PROFILE_CHANGE       = "profile:change";
 const COMMAND_CAN_LINK_ACCOUNT     = "fxaccounts:can_link_account";
@@ -36,7 +41,10 @@ const COMMAND_SYNC_PREFERENCES     = "fxaccounts:sync_preferences";
 const COMMAND_CHANGE_PASSWORD      = "fxaccounts:change_password";
 const COMMAND_FXA_STATUS           = "fxaccounts:fxa_status";
 
-const PREF_LAST_FXA_USER           = "identity.fxaccounts.lastSignedInUserHash";
+// These engines were added years after Sync had been introduced, they need
+// special handling since they are system add-ons and are un-available on
+// older versions of Firefox.
+const EXTRA_ENGINES = ["addresses", "creditcards"];
 
 /**
  * A helper function that extracts the message and stack from an error object.
@@ -75,12 +83,12 @@ this.FxAccountsWebChannel = function(options) {
   if (!options) {
     throw new Error("Missing configuration options");
   }
-  if (!options["content_uri"]) {
+  if (!options.content_uri) {
     throw new Error("Missing 'content_uri' option");
   }
   this._contentUri = options.content_uri;
 
-  if (!options["channel_id"]) {
+  if (!options.channel_id) {
     throw new Error("Missing 'channel_id' option");
   }
   this._webChannelId = options.channel_id;
@@ -256,6 +264,7 @@ this.FxAccountsWebChannelHelpers = function(options) {
   options = options || {};
 
   this._fxAccounts = options.fxAccounts || fxAccounts;
+  this._privateBrowsingUtils = options.privateBrowsingUtils || PrivateBrowsingUtils;
 };
 
 this.FxAccountsWebChannelHelpers.prototype = {
@@ -279,6 +288,17 @@ this.FxAccountsWebChannelHelpers.prototype = {
     // We don't act on customizeSync anymore, it used to open a dialog inside
     // the browser to selecte the engines to sync but we do it on the web now.
     delete accountData.customizeSync;
+
+    if (accountData.offeredSyncEngines) {
+      EXTRA_ENGINES.forEach(engine => {
+        if (accountData.offeredSyncEngines.includes(engine) &&
+            !accountData.declinedSyncEngines.includes(engine)) {
+          // These extra engines are disabled by default.
+          Services.prefs.setBoolPref(`services.sync.engine.${engine}`, true);
+        }
+      });
+      delete accountData.offeredSyncEngines;
+    }
 
     if (accountData.declinedSyncEngines) {
       let declinedSyncEngines = accountData.declinedSyncEngines;
@@ -327,15 +347,12 @@ this.FxAccountsWebChannelHelpers.prototype = {
    * Check if `sendingContext` is in private browsing mode.
    */
   isPrivateBrowsingMode(sendingContext) {
-    if (!sendingContext ||
-        !sendingContext.browser ||
-        !sendingContext.browser.docShell ||
-        sendingContext.browser.docShell.usePrivateBrowsing === undefined) {
+    if (!sendingContext) {
       log.error("Unable to check for private browsing mode, assuming true");
       return true;
     }
 
-    const isPrivateBrowsing = sendingContext.browser.docShell.usePrivateBrowsing;
+    const isPrivateBrowsing = this._privateBrowsingUtils.isBrowserPrivate(sendingContext.browser);
     log.debug("is private browsing", isPrivateBrowsing);
     return isPrivateBrowsing;
   },
@@ -384,8 +401,21 @@ this.FxAccountsWebChannelHelpers.prototype = {
     }
 
     return {
-      signedInUser
+      signedInUser,
+      capabilities: {
+        engines: this._getAvailableExtraEngines()
+      }
     };
+  },
+
+  _getAvailableExtraEngines() {
+    return EXTRA_ENGINES.filter(engineName => {
+      try {
+        return Services.prefs.getBoolPref(`services.sync.engine.${engineName}.available`);
+      } catch (e) {
+        return false;
+      }
+    });
   },
 
   changePassword(credentials) {
@@ -429,24 +459,7 @@ this.FxAccountsWebChannelHelpers.prototype = {
    * @param acctName the account name of the user's account.
    */
   setPreviousAccountNameHashPref(acctName) {
-    Services.prefs.setStringPref(PREF_LAST_FXA_USER, this.sha256(acctName));
-  },
-
-  /**
-   * Given a string, returns the SHA265 hash in base64
-   */
-  sha256(str) {
-    let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
-                      .createInstance(Ci.nsIScriptableUnicodeConverter);
-    converter.charset = "UTF-8";
-    // Data is an array of bytes.
-    let data = converter.convertToByteArray(str, {});
-    let hasher = Cc["@mozilla.org/security/hash;1"]
-                   .createInstance(Ci.nsICryptoHash);
-    hasher.init(hasher.SHA256);
-    hasher.update(data, data.length);
-
-    return hasher.finish(true);
+    Services.prefs.setStringPref(PREF_LAST_FXA_USER, CryptoUtils.sha256Base64(acctName));
   },
 
   /**
@@ -474,7 +487,7 @@ this.FxAccountsWebChannelHelpers.prototype = {
    */
   _needRelinkWarning(acctName) {
     let prevAcctHash = this.getPreviousAccountNameHashPref();
-    return prevAcctHash && prevAcctHash != this.sha256(acctName);
+    return prevAcctHash && prevAcctHash != CryptoUtils.sha256Base64(acctName);
   },
 
   /**
@@ -511,7 +524,7 @@ var singleton;
 // (eg, it uses the observer service to tell interested parties of interesting
 // things) and allowing multiple channels would cause such notifications to be
 // sent multiple times.
-this.EnsureFxAccountsWebChannel = function() {
+this.EnsureFxAccountsWebChannel = () => {
   let contentUri = Services.urlFormatter.formatURLPref("identity.fxaccounts.remote.webchannel.uri");
   if (singleton && singleton._contentUri !== contentUri) {
     singleton.tearDown();

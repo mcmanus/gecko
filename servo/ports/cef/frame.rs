@@ -8,11 +8,12 @@ use interfaces::{CefBrowser, CefFrame, CefStringVisitor, cef_frame_t, cef_string
 use types::{cef_string_t, cef_string_userfree_t};
 
 use compositing::windowing::WindowEvent;
+use servo::servo_url::ServoUrl;
 use std::cell::RefCell;
 
 pub struct ServoCefFrame {
-    pub title_visitor: RefCell<Option<CefStringVisitor>>,
     pub url: RefCell<String>,
+    pub title: RefCell<Vec<u16>>,
 
     /// A reference to the browser.
     pub browser: RefCell<Option<CefBrowser>>,
@@ -21,8 +22,8 @@ pub struct ServoCefFrame {
 impl ServoCefFrame {
     pub fn new() -> ServoCefFrame {
         ServoCefFrame {
-            title_visitor: RefCell::new(None),
             url: RefCell::new(String::new()),
+            title: RefCell::new(vec![]),
             browser: RefCell::new(None),
         }
     }
@@ -34,7 +35,9 @@ full_cef_class_impl! {
             let this = this.downcast();
             let url = String::from_utf16(url).unwrap();
             *this.url.borrow_mut() = url.clone();
-            let event = WindowEvent::LoadUrl(url);
+            let id = this.browser.borrow().as_ref().unwrap().get_browser_id();
+            let url = ServoUrl::parse(&url).or(ServoUrl::parse("about:blank")).unwrap();
+            let event = WindowEvent::LoadUrl(id, url);
             this.browser.borrow_mut().as_mut().unwrap().send_window_event(event);
         }}
         fn get_url(&this,) -> cef_string_userfree_t {{
@@ -44,15 +47,14 @@ full_cef_class_impl! {
         }}
         fn get_text(&this, visitor: *mut cef_string_visitor_t [CefStringVisitor],) -> () {{
             let this = this.downcast();
-            *this.title_visitor.borrow_mut() = Some(visitor);
-            this.browser.borrow().as_ref().unwrap().request_title_for_main_frame();
+            let str = &*this.title.borrow();
+            visitor.visit(str)
         }}
     }
 }
 
 pub trait ServoCefFrameExtensions {
     fn set_browser(&self, browser: CefBrowser);
-    fn set_url(&self, url: &[u16]);
     fn load(&self);
 }
 
@@ -60,12 +62,11 @@ impl ServoCefFrameExtensions for CefFrame {
     fn set_browser(&self, browser: CefBrowser) {
         *self.downcast().browser.borrow_mut() = Some(browser)
     }
-    fn set_url(&self, url: &[u16]) {
-        let frame = self.downcast();
-        *frame.url.borrow_mut() = String::from_utf16(url).unwrap();
-    }
     fn load(&self) {
-        let event = WindowEvent::LoadUrl(self.downcast().url.borrow().clone());
+        let id = self.downcast().browser.borrow().as_ref().unwrap().get_browser_id();
+        let url = self.downcast().url.borrow();
+        let url = ServoUrl::parse(&*url).or(ServoUrl::parse("about:blank")).unwrap();
+        let event = WindowEvent::LoadUrl(id, url);
         self.downcast().browser.borrow_mut().as_mut().unwrap().send_window_event(event);
     }
 }

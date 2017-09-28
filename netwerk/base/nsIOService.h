@@ -96,6 +96,7 @@ public:
     bool IsLinkUp();
 
     static bool IsDataURIUniqueOpaqueOrigin();
+    static bool BlockToplevelDataUriNavigations();
 
     // Used to count the total number of HTTP requests made
     void IncrementRequestNumber() { mTotalRequests++; }
@@ -135,6 +136,7 @@ private:
 
     nsresult InitializeSocketTransportService();
     nsresult InitializeNetworkLinkService();
+    nsresult InitializeProtocolProxyService();
 
     // consolidated helper function
     void LookupProxyInfo(nsIURI *aURI, nsIURI *aProxyURI, uint32_t aProxyFlags,
@@ -186,6 +188,7 @@ private:
     bool                                 mNetworkNotifyChanged;
 
     static bool                          sIsDataURIUniqueOpaqueOrigin;
+    static bool                          sBlockToplevelDataUriNavigations;
 
     uint32_t mTotalRequests;
     uint32_t mCacheWon;

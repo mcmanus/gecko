@@ -28,7 +28,7 @@
 namespace mozilla {
 namespace dom {
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServiceWorkerContainer)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServiceWorkerContainer)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_ADDREF_INHERITED(ServiceWorkerContainer, DOMEventTargetHelper)
@@ -143,20 +143,12 @@ ServiceWorkerContainer::Register(const nsAString& aScriptURL,
   }
 
   nsCOMPtr<nsIURI> baseURI;
-
-  nsIDocument* doc = GetEntryDocument();
-  if (doc) {
-    baseURI = doc->GetBaseURI();
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
+  if (window) {
+    baseURI = window->GetDocBaseURI();
   } else {
-    // XXXnsm. One of our devtools browser test calls register() from a content
-    // script where there is no valid entry document. Use the window to resolve
-    // the uri in that case.
-    nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
-    nsCOMPtr<nsPIDOMWindowOuter> outerWindow;
-    if (window && (outerWindow = window->GetOuterWindow()) &&
-        outerWindow->GetServiceWorkersTestingEnabled()) {
-      baseURI = window->GetDocBaseURI();
-    }
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return nullptr;
   }
 
   nsresult rv;
@@ -207,13 +199,10 @@ ServiceWorkerContainer::Register(const nsAString& aScriptURL,
     }
   }
 
-  // This is a quick fix for temporarily turning off script loading setting when
-  // registering a service worker. This should be removed in Bug 1353636.
-  nsLoadFlags loadFlags = nsIRequest::LOAD_NORMAL;
-
   // The spec says that the "client" passed to Register() must be the global
   // where the ServiceWorkerContainer was retrieved from.
-  aRv = swm->Register(GetOwner(), scopeURI, scriptURI, loadFlags,
+  aRv = swm->Register(GetOwner(), scopeURI, scriptURI,
+                      static_cast<uint16_t>(aOptions.mUpdateViaCache),
                       getter_AddRefs(promise));
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;

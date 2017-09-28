@@ -366,7 +366,7 @@ NetworkResponseListener.prototype = {
   bodySize: null,
 
   /**
-   * Response body size on the wire, potentially compressed / encoded.
+   * Response size on the wire, potentially compressed / encoded.
    */
   transferredSize: null,
 
@@ -593,7 +593,7 @@ NetworkResponseListener.prototype = {
     };
 
     response.size = this.bodySize;
-    response.transferredSize = this.transferredSize;
+    response.transferredSize = this.transferredSize + this.httpActivity.headersSize;
 
     try {
       response.mimeType = this.request.contentType;
@@ -731,7 +731,9 @@ NetworkMonitor.prototype = {
     0x804b0004: "STATUS_CONNECTED_TO",
     0x804b0005: "STATUS_SENDING_TO",
     0x804b000a: "STATUS_WAITING_FOR",
-    0x804b0006: "STATUS_RECEIVING_FROM"
+    0x804b0006: "STATUS_RECEIVING_FROM",
+    0x804b000c: "STATUS_TLS_STARTING",
+    0x804b000d: "STATUS_TLS_ENDING"
   },
 
   httpDownloadActivities: [
@@ -1335,6 +1337,7 @@ NetworkMonitor.prototype = {
     response.headersSize = extraStringData.length;
 
     httpActivity.responseStatus = response.status;
+    httpActivity.headersSize = response.headersSize;
 
     // Discard the response body for known response statuses.
     switch (parseInt(response.status, 10)) {
@@ -1391,6 +1394,7 @@ NetworkMonitor.prototype = {
         timings: {
           blocked: 0,
           dns: 0,
+          ssl: 0,
           connect: 0,
           send: 0,
           wait: 0,
@@ -1423,6 +1427,36 @@ NetworkMonitor.prototype = {
                            timings.STATUS_CONNECTING_TO.first;
     } else {
       harTimings.connect = -1;
+    }
+
+    if (timings.STATUS_TLS_STARTING && timings.STATUS_TLS_ENDING) {
+      harTimings.ssl = timings.STATUS_TLS_ENDING.last -
+                           timings.STATUS_TLS_STARTING.first;
+    } else {
+      harTimings.ssl = -1;
+    }
+
+    // sometimes the connection information events are attached to a speculative
+    // channel instead of this one, but necko might glue them back together in the
+    // nsITimedChannel interface used by Resource and Navigation Timing
+    let timedChannel = httpActivity.channel.QueryInterface(Ci.nsITimedChannel);
+
+    if ((harTimings.connect <= 0) && timedChannel) {
+      if (timedChannel.secureConnectionStartTime > timedChannel.connectStartTime) {
+        harTimings.connect =
+          timedChannel.secureConnectionStartTime - timedChannel.connectStartTime;
+        harTimings.ssl =
+          timedChannel.connectEndTime - timedChannel.secureConnectionStartTime;
+      } else {
+        harTimings.connect =
+          timedChannel.connectEndTime - timedChannel.connectStartTime;
+        harTimings.ssl = -1;
+      }
+    }
+
+    if ((harTimings.dns <= 0) && timedChannel) {
+      harTimings.dns =
+        timedChannel.domainLookupEndTime - timedChannel.domainLookupStartTime;
     }
 
     if (timings.STATUS_SENDING_TO) {

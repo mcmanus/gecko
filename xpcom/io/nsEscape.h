@@ -43,32 +43,27 @@ extern "C" {
 char* nsEscape(const char* aStr, size_t aLength, size_t* aOutputLen,
                nsEscapeMask aMask);
 
+/**
+ * Decodes '%'-escaped hex codes into character values, modifies the parameter,
+ * returns the same buffer
+ */
 char* nsUnescape(char* aStr);
-/* decode % escaped hex codes into character values,
- * modifies the parameter, returns the same buffer
- */
 
+/**
+ * Decodes '%'-escaped hex codes into character values, modifies the parameter
+ * buffer, returns the length of the result (result may contain \0's).
+ */
 int32_t nsUnescapeCount(char* aStr);
-/* decode % escaped hex codes into character values,
- * modifies the parameter buffer, returns the length of the result
- * (result may contain \0's).
- */
-
-char*
-nsEscapeHTML(const char* aString);
-
-char16_t*
-nsEscapeHTML2(const char16_t* aSourceBuffer,
-              int32_t aSourceBufferLen = -1);
-/*
- * Escape problem char's for HTML display
- */
-
 
 #ifdef __cplusplus
 }
 #endif
 
+/**
+ * Infallibly append aSrc to aDst, escaping chars that are problematic for HTML
+ * display.
+ */
+void nsAppendEscapedHTML(const nsACString& aSrc, nsACString& aDst);
 
 /**
  * NS_EscapeURL/NS_UnescapeURL constants for |flags| parameter:
@@ -152,8 +147,8 @@ NS_UnescapeURL(char* aStr)
 /**
  * String friendly versions...
  */
-inline const nsCSubstring&
-NS_EscapeURL(const nsCSubstring& aStr, uint32_t aFlags, nsCSubstring& aResult)
+inline const nsACString&
+NS_EscapeURL(const nsACString& aStr, uint32_t aFlags, nsACString& aResult)
 {
   if (NS_EscapeURL(aStr.Data(), aStr.Length(), aFlags, aResult)) {
     return aResult;
@@ -166,19 +161,32 @@ NS_EscapeURL(const nsCSubstring& aStr, uint32_t aFlags, nsCSubstring& aResult)
  * the original string or an escaped copy.
  */
 nsresult
-NS_EscapeURL(const nsCSubstring& aStr, uint32_t aFlags, nsCSubstring& aResult,
+NS_EscapeURL(const nsACString& aStr, uint32_t aFlags, nsACString& aResult,
              const mozilla::fallible_t&);
 
-inline const nsCSubstring&
-NS_UnescapeURL(const nsCSubstring& aStr, uint32_t aFlags, nsCSubstring& aResult)
+// Forward declaration for nsASCIIMask.h
+typedef std::array<bool, 128> ASCIIMaskArray;
+
+/**
+ * The same as NS_EscapeURL, except it also filters out characters that match
+ * aFilterMask.
+ */
+nsresult
+NS_EscapeAndFilterURL(const nsACString& aStr, uint32_t aFlags,
+                      const ASCIIMaskArray* aFilterMask,
+                      nsACString& aResult, const mozilla::fallible_t&);
+
+
+inline const nsACString&
+NS_UnescapeURL(const nsACString& aStr, uint32_t aFlags, nsACString& aResult)
 {
   if (NS_UnescapeURL(aStr.Data(), aStr.Length(), aFlags, aResult)) {
     return aResult;
   }
   return aStr;
 }
-const nsSubstring&
-NS_EscapeURL(const nsSubstring& aStr, uint32_t aFlags, nsSubstring& aResult);
+const nsAString&
+NS_EscapeURL(const nsAString& aStr, uint32_t aFlags, nsAString& aResult);
 
 /**
  * Percent-escapes all characters in aStr that occurs in aForbidden.
@@ -189,9 +197,9 @@ NS_EscapeURL(const nsSubstring& aStr, uint32_t aFlags, nsSubstring& aResult);
  * @return aResult if some characters were escaped, or aStr otherwise (aResult
  *         is unmodified in that case)
  */
-const nsSubstring&
-NS_EscapeURL(const nsAFlatString& aStr, const nsTArray<char16_t>& aForbidden,
-             nsSubstring& aResult);
+const nsAString&
+NS_EscapeURL(const nsString& aStr, const nsTArray<char16_t>& aForbidden,
+             nsAString& aResult);
 
 /**
  * CString version of nsEscape. Returns true on success, false

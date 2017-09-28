@@ -8,7 +8,7 @@
   Eric D Vaughan
   A frame that can have multiple children. Only one child may be displayed at one time. So the
   can be flipped though like a deck of cards.
- 
+
 **/
 
 #ifndef nsDeckFrame_h___
@@ -33,14 +33,12 @@ public:
   NS_IMETHOD DoXULLayout(nsBoxLayoutState& aState) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual void RemoveFrame(ChildListID aListID,
                            nsIFrame* aOldFrame) override;
 
   virtual void BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
-                                           const nsRect&           aDirtyRect,
                                            const nsDisplayListSet& aLists) override;
 
   virtual void Init(nsIContent*       aContent,

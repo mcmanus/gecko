@@ -67,6 +67,13 @@ public:
 
   T& operator*() const { return *get(); }
 
+  T* forget()
+  {
+    T* temp = mRawPtr;
+    mRawPtr = nullptr;
+    return temp;
+  }
+
 private:
   // Disallow copy constructor, but only in debug mode.  We only define
   // a default constructor in debug mode (see above); if we declared
@@ -265,6 +272,14 @@ RefPtr<T>&
 RefPtr<T>::operator=(const mozilla::StaticRefPtr<U>& aOther)
 {
   return operator=(aOther.get());
+}
+
+template <class T>
+inline already_AddRefed<T>
+do_AddRef(const mozilla::StaticRefPtr<T>& aObj)
+{
+  RefPtr<T> ref(aObj);
+  return ref.forget();
 }
 
 #endif

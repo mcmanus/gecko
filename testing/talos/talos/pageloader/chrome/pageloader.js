@@ -2,6 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* import-globals-from memory.js */
+/* import-globals-from report.js */
+/* eslint mozilla/avoid-Date-timing: "off" */
+
 try {
   if (Cc === undefined) {
     var Cc = Components.classes;
@@ -39,6 +43,7 @@ var forceCC = true;
 var reportRSS = true;
 
 var useMozAfterPaint = false;
+var useFNBPaint = false;
 var gPaintWindow = window;
 var gPaintListener = false;
 var loadNoCache = false;
@@ -46,8 +51,11 @@ var scrollTest = false;
 var gDisableE10S = false;
 var gUseE10S = false;
 var profilingInfo = false;
+var baseVsRef = false;
 
-//when TEST_DOES_OWN_TIMING, we need to store the time from the page as MozAfterPaint can be slower than pageload
+var isIdleCallbackPending = false;
+
+// when TEST_DOES_OWN_TIMING, we need to store the time from the page as MozAfterPaint can be slower than pageload
 var gTime = -1;
 var gStartTime = -1;
 var gReference = -1;
@@ -106,6 +114,7 @@ SingleTimeout.prototype.clear = function() {
 };
 
 var failTimeout = new SingleTimeout();
+var renderReport;
 
 function plInit() {
   if (running) {
@@ -118,7 +127,7 @@ function plInit() {
 
   try {
     var args;
-    
+
     /*
      * Desktop firefox:
      * non-chrome talos runs - tp-cmdline will create and load pageloader
@@ -144,6 +153,7 @@ function plInit() {
     if (args.timeout) timeout = parseInt(args.timeout);
     if (args.delay) delay = parseInt(args.delay);
     if (args.mozafterpaint) useMozAfterPaint = true;
+    if (args.fnbpaint) useFNBPaint = true;
     if (args.rss) reportRSS = true;
     if (args.loadnocache) loadNoCache = true;
     if (args.scrolltest) scrollTest = true;
@@ -151,7 +161,7 @@ function plInit() {
     if (args.profilinginfo) profilingInfo = JSON.parse(args.profilinginfo)
 
     if (profilingInfo) {
-      Profiler.initFromObject(profilingInfo);
+      TalosParentProfiler.initFromObject(profilingInfo);
     }
 
     forceCC = !args.noForceCC;
@@ -172,34 +182,33 @@ function plInit() {
     pages = plLoadURLsFromURI(fileURI);
 
     if (!pages) {
-      dumpLine('tp: could not load URLs, quitting');
+      dumpLine("tp: could not load URLs, quitting");
       plStop(true);
     }
 
     if (pages.length == 0) {
-      dumpLine('tp: no pages to test, quitting');
+      dumpLine("tp: no pages to test, quitting");
       plStop(true);
     }
 
     if (startIndex < 0)
       startIndex = 0;
     if (endIndex == -1 || endIndex >= pages.length)
-      endIndex = pages.length-1;
+      endIndex = pages.length - 1;
     if (startIndex > endIndex) {
       dumpLine("tp: error: startIndex >= endIndex");
       plStop(true);
     }
 
-    pages = pages.slice(startIndex,endIndex+1);
+    pages = pages.slice(startIndex, endIndex + 1);
     pageUrls = pages.map(function(p) { return p.url.spec.toString(); });
     report = new Report();
-
     if (doRenderTest)
       renderReport = new Report();
 
     pageIndex = 0;
     if (profilingInfo) {
-      Profiler.beginTest(getCurrentPageShortName());
+      TalosParentProfiler.beginTest(getCurrentPageShortName());
     }
 
     // Create a new chromed browser window for content
@@ -214,21 +223,20 @@ function plInit() {
       toolbars = "titlebar,resizable";
     }
 
-    browserWindow = wwatch.openWindow
-      (null, "chrome://browser/content/", "_blank",
+    browserWindow = wwatch.openWindow(null, "chrome://browser/content/", "_blank",
        `chrome,${toolbars},dialog=no,width=${winWidth},height=${winHeight}`, blank);
 
     gPaintWindow = browserWindow;
     // get our window out of the way
-    window.resizeTo(10,10);
+    window.resizeTo(10, 10);
 
-    var browserLoadFunc = function (ev) {
-      browserWindow.removeEventListener('load', browserLoadFunc, true);
+    var browserLoadFunc = function(ev) {
+      browserWindow.removeEventListener("load", browserLoadFunc, true);
 
       // do this half a second after load, because we need to be
       // able to resize the window and not have it get clobbered
       // by the persisted values
-      setTimeout(function () {
+      setTimeout(function() {
         // For e10s windows, since bug 1261842, the initial browser is remote unless
         // it attempts to browse to a URI that should be non-remote (landed at bug 1047603).
         //
@@ -258,36 +266,68 @@ function plInit() {
                     content.selectedBrowser.getAttribute("remote") == "true")
 
         // Load the frame script for e10s / IPC message support
-        if (gUseE10S) {
-          let contentScript = "data:,function _contentLoadHandler(e) { " +
-            "  if (e.originalTarget.defaultView == content) { " +
-            "    content.wrappedJSObject.tpRecordTime = function(t, s, n) { sendAsyncMessage('PageLoader:RecordTime', { time: t, startTime: s, testName: n }); }; ";
-          if (useMozAfterPaint) {
-            contentScript += "" +
-            "function _contentPaintHandler() { " +
-            "  var utils = content.QueryInterface(Components.interfaces.nsIInterfaceRequestor).getInterface(Components.interfaces.nsIDOMWindowUtils); " +
-            "  if (utils.isMozAfterPaintPending) { " +
-            "    addEventListener('MozAfterPaint', function(e) { " +
-            "      removeEventListener('MozAfterPaint', arguments.callee, true); " +
-            "      sendAsyncMessage('PageLoader:LoadEvent', {}); " +
-            "    }, true); " +
-            "  } else { " +
-            "    sendAsyncMessage('PageLoader:LoadEvent', {}); " +
-            "  } " +
-            "}; " +
-            "content.setTimeout(_contentPaintHandler, 0); ";
-          } else {
-            contentScript += "    sendAsyncMessage('PageLoader:LoadEvent', {}); ";
-          }
+        let contentScript = "data:,function _contentLoadHandler(e) { " +
+          "  if (e.originalTarget.defaultView == content) { " +
+          "    content.wrappedJSObject.tpRecordTime = function(t, s, n) { sendAsyncMessage('PageLoader:RecordTime', { time: t, startTime: s, testName: n }); }; ";
+        // setup idle-callback
+        contentScript += "" +
+        "var idleCallbackHandle; " +
+        "function _idleCallbackHandler() { " +
+        "  content.window.cancelIdleCallback(idleCallbackHandle); " +
+        "  sendAsyncMessage('PageLoader:IdleCallbackReceived', {}); " +
+        "}; " +
+        "function _setIdleCallback() { " +
+        "  idleCallbackHandle = content.window.requestIdleCallback(_idleCallbackHandler); " +
+        "  sendAsyncMessage('PageLoader:IdleCallbackSet', {}); " +
+        "}; ";
+        if (useFNBPaint) {
           contentScript += "" +
-            "  }" +
-            "} " +
-            "addEventListener('load', _contentLoadHandler, true); ";
-          content.selectedBrowser.messageManager.loadFrameScript(contentScript, false, true);
-          content.selectedBrowser.messageManager.loadFrameScript("chrome://pageloader/content/talos-content.js", false);
-          content.selectedBrowser.messageManager.loadFrameScript("chrome://pageloader/content/tscroll.js", false, true);
-          content.selectedBrowser.messageManager.loadFrameScript("chrome://pageloader/content/Profiler.js", false, true);
+          "var gRetryCounter = 0; " +
+          "function _contentFNBPaintHandler() { " +
+          "  x = content.window.performance.timing.timeToNonBlankPaint; " +
+          "  if (typeof x == 'undefined') { " +
+          "    sendAsyncMessage('PageLoader:FNBPaintError', {}); " +
+          "  } " +
+          "  if (x > 0) { " +
+          "    sendAsyncMessage('PageLoader:LoadEvent', { 'fnbpaint': x }); " +
+          "  } else { " +
+          "    gRetryCounter += 1; " +
+          "    if (gRetryCounter <= 10) { " +
+          "      dump('fnbpaint is not yet available (0), retry number ' + gRetryCounter + '...\\n'); " +
+          "      content.setTimeout(_contentFNBPaintHandler, 100); " +
+          "    } else { " +
+          "      dump('unable to get a value for fnbpaint after ' + gRetryCounter + ' retries\\n'); " +
+          "      sendAsyncMessage('PageLoader:FNBPaintError', {}); " +
+          "    } " +
+          "  } " +
+          "}; " +
+          "content.setTimeout(_contentFNBPaintHandler, 0); ";
+        } else if (useMozAfterPaint) {
+          contentScript += "" +
+          "function _contentPaintHandler() { " +
+          "  var utils = content.QueryInterface(Components.interfaces.nsIInterfaceRequestor).getInterface(Components.interfaces.nsIDOMWindowUtils); " +
+          "  if (utils.isMozAfterPaintPending) { " +
+          "    addEventListener('MozAfterPaint', function(e) { " +
+          "      removeEventListener('MozAfterPaint', arguments.callee, true); " +
+          "      sendAsyncMessage('PageLoader:LoadEvent', {}); " +
+          "    }, true); " +
+          "  } else { " +
+          "    sendAsyncMessage('PageLoader:LoadEvent', {}); " +
+          "  } " +
+          "}; " +
+          "content.setTimeout(_contentPaintHandler, 0); ";
+        } else {
+          contentScript += "    sendAsyncMessage('PageLoader:LoadEvent', {}); ";
         }
+        contentScript += "" +
+          "  content.setTimeout(_setIdleCallback, 0); " +
+          "  }" +
+          "} " +
+          "addEventListener('load', _contentLoadHandler, true); ";
+        content.selectedBrowser.messageManager.loadFrameScript(contentScript, false, true);
+        content.selectedBrowser.messageManager.loadFrameScript("chrome://pageloader/content/talos-content.js", false);
+        content.selectedBrowser.messageManager.loadFrameScript("chrome://pageloader/content/tscroll.js", false, true);
+        content.selectedBrowser.messageManager.loadFrameScript("chrome://pageloader/content/Profiler.js", false, true);
 
         if (reportRSS) {
           initializeMemoryCollector(plLoadPage, 100);
@@ -297,8 +337,8 @@ function plInit() {
       }, 500);
     };
 
-    browserWindow.addEventListener('load', browserLoadFunc, true);
-  } catch(e) {
+    browserWindow.addEventListener("load", browserLoadFunc, true);
+  } catch (e) {
     dumpLine("pageloader exception: " + e);
     plStop(true);
   }
@@ -309,11 +349,15 @@ function plPageFlags() {
 }
 
 var ContentListener = {
-  receiveMessage: function(message) {
+  receiveMessage(message) {
     switch (message.name) {
-      case 'PageLoader:LoadEvent': return plLoadHandlerMessage(message);
-      case 'PageLoader:RecordTime': return plRecordTimeMessage(message);
+      case "PageLoader:LoadEvent": return plLoadHandlerMessage(message);
+      case "PageLoader:FNBPaintError": return plFNBPaintErrorMessage(message);
+      case "PageLoader:RecordTime": return plRecordTimeMessage(message);
+      case "PageLoader:IdleCallbackSet": return plIdleCallbackSet();
+      case "PageLoader:IdleCallbackReceived": return plIdleCallbackReceived();
     }
+    return undefined;
   },
 };
 
@@ -321,6 +365,10 @@ var ContentListener = {
 var removeLastAddedListener = null;
 var removeLastAddedMsgListener = null;
 function plLoadPage() {
+  if (profilingInfo) {
+    TalosParentProfiler.beginTest(getCurrentPageShortName() + "_pagecycle_" + pageCycle);
+  }
+
   var pageName = pages[pageIndex].url.spec;
 
   if (removeLastAddedListener) {
@@ -333,49 +381,28 @@ function plLoadPage() {
     removeLastAddedMsgListener = null;
   }
 
-  if ((plPageFlags() & TEST_DOES_OWN_TIMING) && !gUseE10S) {
-    // if the page does its own timing, use a capturing handler
-    // to make sure that we can set up the function for content to call
-
-    content.addEventListener('load', plLoadHandlerCapturing, true);
-    removeLastAddedListener = function() {
-      content.removeEventListener('load', plLoadHandlerCapturing, true);
-      if (useMozAfterPaint) {
-        content.removeEventListener("MozAfterPaint", plPaintedCapturing, true);
-        gPaintListener = false;
-      }
-    };
-  } else if (!gUseE10S) {
-    // if the page doesn't do its own timing, use a bubbling handler
-    // to make sure that we're called after the page's own onload() handling
-
-    // XXX we use a capturing event here too -- load events don't bubble up
-    // to the <browser> element.  See bug 390263.
-    content.addEventListener('load', plLoadHandler, true);
-    removeLastAddedListener = function() {
-      content.removeEventListener('load', plLoadHandler, true);
-      if (useMozAfterPaint) {
-        gPaintWindow.removeEventListener("MozAfterPaint", plPainted, true);
-        gPaintListener = false;
-      }
-    };
+  // messages to watch for page load
+  let mm = content.selectedBrowser.messageManager;
+  mm.addMessageListener("PageLoader:LoadEvent", ContentListener);
+  mm.addMessageListener("PageLoader:RecordTime", ContentListener);
+  mm.addMessageListener("PageLoader:IdleCallbackSet", ContentListener);
+  mm.addMessageListener("PageLoader:IdleCallbackReceived", ContentListener);
+  if (useFNBPaint) {
+    mm.addMessageListener("PageLoader:FNBPaintError", ContentListener);
   }
 
-  // If the test browser is remote (e10s / IPC) we need to use messages to watch for page load
-  if (gUseE10S) {
-    let mm = content.selectedBrowser.messageManager;
-    mm.addMessageListener('PageLoader:LoadEvent', ContentListener);
-    mm.addMessageListener('PageLoader:RecordTime', ContentListener);
-    removeLastAddedMsgListener = function() {
-      mm.removeMessageListener('PageLoader:LoadEvent', ContentListener);
-      mm.removeMessageListener('PageLoader:RecordTime', ContentListener);
-    };
-  }
-
+  removeLastAddedMsgListener = function() {
+    mm.removeMessageListener("PageLoader:LoadEvent", ContentListener);
+    mm.removeMessageListener("PageLoader:RecordTime", ContentListener);
+    mm.removeMessageListener("PageLoader:IdleCallbackSet", ContentListener);
+    mm.removeMessageListener("PageLoader:IdleCallbackReceived", ContentListener);
+    if (useFNBPaint) {
+      mm.removeMessageListener("PageLoader:FNBPaintError", ContentListener);
+    }
+  };
   failTimeout.register(loadFail, timeout);
-
   // record which page we are about to open
-  Profiler.mark("Opening " + pages[pageIndex].url.path);
+  TalosParentProfiler.mark("Opening " + pages[pageIndex].url.pathQueryRef);
 
   if (reportRSS) {
     collectMemory(startAndLoadURI, pageName);
@@ -389,8 +416,9 @@ function startAndLoadURI(pageName) {
     // Resume the profiler because we're really measuring page load time.
     // If the test is doing its own timing, it'll also need to do its own
     // profiler pausing / resuming.
-    Profiler.resume("Starting to load URI " + pageName, true);
+    TalosParentProfiler.resume("Starting to load URI " + pageName);
   }
+
   start_time = Date.now();
   if (loadNoCache) {
     content.loadURIWithFlags(pageName, Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE);
@@ -401,7 +429,7 @@ function startAndLoadURI(pageName) {
 
 function getTestName() { // returns tp5n
   var pageName = pages[pageIndex].url.spec;
-  let parts = pageName.split('/');
+  let parts = pageName.split("/");
   if (parts.length > 4) {
     return parts[4];
   }
@@ -410,7 +438,7 @@ function getTestName() { // returns tp5n
 
 function getCurrentPageShortName() {
   var pageName = pages[pageIndex].url.spec;
-  let parts = pageName.split('/');
+  let parts = pageName.split("/");
   if (parts.length > 5) {
     return parts[5];
   }
@@ -422,16 +450,17 @@ function loadFail() {
   numRetries++;
 
   if (numRetries >= maxRetries) {
-    dumpLine('__FAILTimeout in ' + getTestName() + '__FAIL');
-    dumpLine('__FAILTimeout (' + numRetries + '/' + maxRetries + ') exceeded on ' + pageName + '__FAIL');
-    Profiler.finishTest();
-    plStop(true);
+    dumpLine("__FAILTimeout in " + getTestName() + "__FAIL");
+    dumpLine("__FAILTimeout (" + numRetries + "/" + maxRetries + ") exceeded on " + pageName + "__FAIL");
+    TalosParentProfiler.finishTest().then(() => {
+      plStop(true);
+    });
   } else {
-    dumpLine('__WARNTimeout (' + numRetries + '/' + maxRetries + ') exceeded on ' + pageName + '__WARN');
+    dumpLine("__WARNTimeout (" + numRetries + "/" + maxRetries + ") exceeded on " + pageName + "__WARN");
     // TODO: make this a cleaner cleanup
     pageCycle--;
-    content.removeEventListener('load', plLoadHandler, true);
-    content.removeEventListener('load', plLoadHandlerCapturing, true);
+    content.removeEventListener("load", plLoadHandler, true);
+    content.removeEventListener("load", plLoadHandlerCapturing, true);
     content.removeEventListener("MozAfterPaint", plPaintedCapturing, true);
     content.removeEventListener("MozAfterPaint", plPainted, true);
     gPaintWindow.removeEventListener("MozAfterPaint", plPaintedCapturing, true);
@@ -440,30 +469,32 @@ function loadFail() {
     removeLastAddedMsgListener = null;
     gPaintListener = false;
 
-    //TODO: consider adding a tab and removing the old tab?!?
+    // TODO: consider adding a tab and removing the old tab?!?
     setTimeout(plLoadPage, delay);
   }
 }
 
 var plNextPage = async function() {
   var doNextPage = false;
+
+  // ensure we've receive idle-callback before proceeding
+  if (isIdleCallbackPending) {
+    dumpLine("Waiting for idle-callback");
+    await waitForIdleCallback();
+  }
+
+  if (profilingInfo) {
+    await TalosParentProfiler.finishTest();
+  }
+
   if (pageCycle < numPageCycles) {
     pageCycle++;
     doNextPage = true;
-  } else {
-    if (profilingInfo) {
-      await Profiler.finishTestAsync();
-    }
-
-    if (pageIndex < pages.length-1) {
-      pageIndex++;
-      if (profilingInfo) {
-        Profiler.beginTest(getCurrentPageShortName());
-      }
-      recordedName = null;
-      pageCycle = 1;
-      doNextPage = true;
-    }
+  } else if (pageIndex < pages.length - 1) {
+    pageIndex++;
+    recordedName = null;
+    pageCycle = 1;
+    doNextPage = true;
   }
 
   if (doNextPage == true) {
@@ -488,6 +519,29 @@ var plNextPage = async function() {
   }
 };
 
+function waitForIdleCallback() {
+  return new Promise(resolve => {
+    function checkForIdleCallback() {
+      if (!isIdleCallbackPending) {
+        resolve();
+      } else {
+        setTimeout(checkForIdleCallback, 5);
+      }
+    }
+    checkForIdleCallback();
+  });
+}
+
+function plIdleCallbackSet() {
+  if (!scrollTest) {
+    isIdleCallbackPending = true;
+  }
+}
+
+function plIdleCallbackReceived() {
+  isIdleCallbackPending = false;
+}
+
 function forceContentGC() {
   return new Promise((resolve) => {
     let mm = browserWindow.getBrowser().selectedBrowser.messageManager;
@@ -502,18 +556,26 @@ function forceContentGC() {
 function plRecordTime(time) {
   var pageName = pages[pageIndex].url.spec;
   var i = pageIndex
-  if (i < pages.length-1) {
+  if (i < pages.length - 1) {
     i++;
   } else {
     i = 0;
   }
   var nextName = pages[i].url.spec;
   if (!recordedName) {
-    recordedName = pageUrls[pageIndex];
+    // when doing base vs ref type of test, add pre 'base' or 'ref' to reported page name;
+    // this is necessary so that if multiple subtests use same reference page, results for
+    // each ref page run will be kept separate for each base vs ref run, and not grouped
+    // into just one set of results values for everytime that reference page was loaded
+    if (baseVsRef) {
+      recordedName = pages[pageIndex].pre + pageUrls[pageIndex];
+    } else {
+      recordedName = pageUrls[pageIndex];
+    }
   }
   if (typeof(time) == "string") {
-    var times = time.split(',');
-    var names = recordedName.split(',');
+    var times = time.split(",");
+    var names = recordedName.split(",");
     for (var t = 0; t < times.length; t++) {
       if (names.length == 1) {
         report.recordTime(names, times[t]);
@@ -525,31 +587,31 @@ function plRecordTime(time) {
     report.recordTime(recordedName, time);
   }
   if (noisy) {
-    dumpLine("Cycle " + (cycle+1) + "(" + pageCycle + ")" + ": loaded " + pageName + " (next: " + nextName + ")");
+    dumpLine("Cycle " + (cycle + 1) + "(" + pageCycle + "): loaded " + pageName + " (next: " + nextName + ")");
   }
 }
 
 function plLoadHandlerCapturing(evt) {
   // make sure we pick up the right load event
-  if (evt.type != 'load' ||
+  if (evt.type != "load" ||
        evt.originalTarget.defaultView.frameElement)
       return;
 
-  //set the tpRecordTime function (called from test pages we load) to store a global time.
-  content.contentWindow.wrappedJSObject.tpRecordTime = function (time, startTime, testName) {
+  // set the tpRecordTime function (called from test pages we load) to store a global time.
+  content.contentWindow.wrappedJSObject.tpRecordTime = function(time, startTime, testName) {
     gTime = time;
     gStartTime = startTime;
     recordedName = testName;
     setTimeout(plWaitForPaintingCapturing, 0);
   }
 
-  content.contentWindow.wrappedJSObject.plGarbageCollect = function () {
+  content.contentWindow.wrappedJSObject.plGarbageCollect = function() {
     window.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
           .getInterface(Components.interfaces.nsIDOMWindowUtils)
           .garbageCollect();
   }
 
-  content.removeEventListener('load', plLoadHandlerCapturing, true);
+  content.removeEventListener("load", plLoadHandlerCapturing, true);
   removeLastAddedListener = null;
 
   setTimeout(plWaitForPaintingCapturing, 0);
@@ -561,9 +623,9 @@ function sendScroll() {
   const SCROLL_TEST_NUM_STEPS = 100;
   // The page doesn't really use tpRecordTime. Instead, we trigger the scroll test,
   // and the scroll test will call tpRecordTime which will take us to the next page
-  let details = {target: 'content', stepSize: SCROLL_TEST_STEP_PX, opt_numSteps: SCROLL_TEST_NUM_STEPS};
+  let details = {target: "content", stepSize: SCROLL_TEST_STEP_PX, opt_numSteps: SCROLL_TEST_NUM_STEPS};
   let mm = content.selectedBrowser.messageManager;
-  mm.sendAsyncMessage("PageLoader:ScrollTest", { details: details });
+  mm.sendAsyncMessage("PageLoader:ScrollTest", { details });
 }
 
 function plWaitForPaintingCapturing() {
@@ -606,7 +668,7 @@ function _loadHandlerCapturing() {
 
   if (gTime !== -1) {
     plRecordTime(gTime);
-    Profiler.pause("capturing load handler fired", true);
+    TalosParentProfiler.pause("capturing load handler fired");
     gTime = -1;
     recordedName = null;
     setTimeout(plNextPage, delay);
@@ -616,11 +678,11 @@ function _loadHandlerCapturing() {
 // the onload handler
 function plLoadHandler(evt) {
   // make sure we pick up the right load event
-  if (evt.type != 'load' ||
+  if (evt.type != "load" ||
        evt.originalTarget.defaultView.frameElement)
       return;
 
-  content.removeEventListener('load', plLoadHandler, true);
+  content.removeEventListener("load", plLoadHandler, true);
   setTimeout(waitForPainted, 0);
 }
 
@@ -646,13 +708,20 @@ function plPainted() {
   _loadHandler();
 }
 
-function _loadHandler() {
+function _loadHandler(fnbpaint = 0) {
   failTimeout.clear();
+  var end_time = 0;
 
-  var end_time = Date.now();
-  var time = (end_time - start_time);
+  if (fnbpaint !== 0) {
+    // window.performance.timing.timeToNonBlankPaint is a timestamp
+    end_time = fnbpaint;
+  } else {
+    end_time = Date.now();
+  }
 
-  Profiler.pause("Bubbling load handler fired.", true);
+  var duration = (end_time - start_time);
+
+  TalosParentProfiler.pause("Bubbling load handler fired.");
 
   // does this page want to do its own timing?
   // if so, we shouldn't be here
@@ -661,7 +730,7 @@ function _loadHandler() {
     plStop(true);
   }
 
-  plRecordTime(time);
+  plRecordTime(duration);
 
   if (doRenderTest)
     runRenderTest();
@@ -670,7 +739,11 @@ function _loadHandler() {
 }
 
 // the core handler for remote (e10s) browser
-function plLoadHandlerMessage() {
+function plLoadHandlerMessage(message) {
+  let fnbpaint = 0;
+  if (message.json.fnbpaint !== undefined) {
+    fnbpaint = message.json.fnbpaint;
+  }
   failTimeout.clear();
 
   if ((plPageFlags() & EXECUTE_SCROLL_TEST)) {
@@ -698,7 +771,7 @@ function plLoadHandlerMessage() {
       plNextPage();
     }
   } else {
-    _loadHandler();
+    _loadHandler(fnbpaint);
   }
 }
 
@@ -712,6 +785,12 @@ function plRecordTimeMessage(message) {
     gStartTime = message.json.startTime;
   }
   _loadHandlerCapturing();
+}
+
+// error retrieving fnbpaint
+function plFNBPaintErrorMessage(message) {
+  dumpLine("Abort: firstNonBlankPaint value is not available after loading the page");
+  plStop(true);
 }
 
 function runRenderTest() {
@@ -749,7 +828,7 @@ function plStopAll(force) {
     if (force == false) {
       pageIndex = 0;
       pageCycle = 1;
-      if (cycle < NUM_CYCLES-1) {
+      if (cycle < NUM_CYCLES - 1) {
         cycle++;
         recordedName = null;
         setTimeout(plLoadPage, delay);
@@ -769,19 +848,28 @@ function plStopAll(force) {
   }
 
   if (content) {
-    content.removeEventListener('load', plLoadHandlerCapturing, true);
-    content.removeEventListener('load', plLoadHandler, true);
-    if (useMozAfterPaint)
+    content.removeEventListener("load", plLoadHandlerCapturing, true);
+    content.removeEventListener("load", plLoadHandler, true);
+
+    if (useMozAfterPaint) {
       content.removeEventListener("MozAfterPaint", plPaintedCapturing, true);
       content.removeEventListener("MozAfterPaint", plPainted, true);
-
-    if (gUseE10S) {
-      let mm = content.selectedBrowser.messageManager;
-      mm.removeMessageListener('PageLoader:LoadEvent', ContentListener);
-      mm.removeMessageListener('PageLoader:RecordTime', ContentListener);
-
-      mm.loadFrameScript("data:,removeEventListener('load', _contentLoadHandler, true);", false, true);
     }
+
+    let mm = content.selectedBrowser.messageManager;
+    mm.removeMessageListener("PageLoader:LoadEvent", ContentListener);
+    mm.removeMessageListener("PageLoader:RecordTime", ContentListener);
+
+    if (useFNBPaint) {
+      mm.removeMessageListener("PageLoader:FNBPaintError", ContentListener);
+    }
+
+    if (isIdleCallbackPending) {
+      mm.removeMessageListener("PageLoader:IdleCallbackSet", ContentListener);
+      mm.removeMessageListener("PageLoader:IdleCallbackReceived", ContentListener);
+    }
+
+    mm.loadFrameScript("data:,removeEventListener('load', _contentLoadHandler, true);", false, true);
   }
 
   if (MozillaFileLogger && MozillaFileLogger._foStream)
@@ -804,17 +892,18 @@ function plLoadURLsFromURI(manifestUri) {
 
   try {
     fstream.init(uriFile.file, -1, 0, 0);
-  } catch(ex) {
+  } catch (ex) {
       dumpLine("tp: the file %s doesn't exist" % uriFile.file);
       return null;
   }
 
   var lstream = fstream.QueryInterface(Ci.nsILineInputStream);
 
-  var d = [];
+  var url_array = [];
 
   var lineNo = 0;
-  var line = {value:null};
+  var line = {value: null};
+  var baseVsRefIndex = 0;
   var more;
   do {
     lineNo++;
@@ -822,16 +911,17 @@ function plLoadURLsFromURI(manifestUri) {
     var s = line.value;
 
     // strip comments (only leading ones)
-    s = s.replace(/^#.*/, '');
+    s = s.replace(/^#.*/, "");
 
     // strip leading and trailing whitespace
-    s = s.replace(/^\s*/, '').replace(/\s*$/, '');
+    s = s.replace(/^\s*/, "").replace(/\s*$/, "");
 
     if (!s)
       continue;
 
     var flags = 0;
     var urlspec = s;
+    baseVsRefIndex += 1;
 
     // split on whitespace, and figure out if we have any flags
     var items = s.split(/\s+/);
@@ -850,7 +940,7 @@ function plLoadURLsFromURI(manifestUri) {
       var subItems = plLoadURLsFromURI(subManifest);
       if (subItems == null)
         return null;
-      d = d.concat(subItems);
+      url_array = url_array.concat(subItems);
     } else {
       // For scrollTest flag, we accept "normal" pages but treat them as TEST_DOES_OWN_TIMING
       // together with EXECUTE_SCROLL_TEST which makes us run the scroll test on load.
@@ -870,22 +960,58 @@ function plLoadURLsFromURI(manifestUri) {
           flags |= TEST_DOES_OWN_TIMING;
 
         urlspec = items[1];
+      } else if (items.length == 3) {
+        // base vs ref type of talos test
+        // expect each manifest line to be in the format of:
+        // & http://localhost/tests/perf-reftest/base-page.html, http://localhost/tests/perf-reftest/reference-page.html
+        // test will run with the base page, then with the reference page; and ultimately the actual test results will
+        // be the comparison values of those two pages; more than one line will result in base vs ref subtests
+        if (items[0].indexOf("&") != -1) {
+          baseVsRef = true;
+          flags |= TEST_DOES_OWN_TIMING;
+          // for the base, must remove the comma on the end of the actual url
+          var urlspecBase = items[1].slice(0, -1);
+          var urlspecRef = items[2];
+        } else {
+          dumpLine("tp: Error on line " + lineNo + " in " + manifestUri.spec + ": unknown manifest format!");
+          return null;
+        }
       } else if (items.length != 1) {
         dumpLine("tp: Error on line " + lineNo + " in " + manifestUri.spec + ": whitespace must be %-escaped!");
         return null;
       }
 
-      var url = gIOS.newURI(urlspec, null, manifestUri);
+      var url;
 
-      if (pageFilterRegexp && !pageFilterRegexp.test(url.spec))
-        continue;
+      if (!baseVsRef) {
+        url = gIOS.newURI(urlspec, null, manifestUri);
 
-      d.push({   url: url,
-               flags: flags });
+        if (pageFilterRegexp && !pageFilterRegexp.test(url.spec))
+          continue;
+
+        url_array.push({ url, flags });
+      } else {
+        // base vs ref type of talos test
+        // we add a 'pre' prefix here indicating that this particular page is a base page or a reference
+        // page; later on this 'pre' is used when recording the actual time value/result; because in
+        // the results we use the url as the results key; but we might use the same test page as a reference
+        // page in the same test suite, so we need to add a prefix so this results key is always unique
+        url = gIOS.newURI(urlspecBase, null, manifestUri);
+        if (pageFilterRegexp && !pageFilterRegexp.test(url.spec))
+          continue;
+        var pre = "base_page_" + baseVsRefIndex + "_";
+        url_array.push({ url, flags, pre });
+
+        url = gIOS.newURI(urlspecRef, null, manifestUri);
+        if (pageFilterRegexp && !pageFilterRegexp.test(url.spec))
+          continue;
+        pre = "ref_page_" + baseVsRefIndex + "_";
+        url_array.push({ url, flags, pre });
+      }
     }
   } while (more);
 
-  return d;
+  return url_array;
 }
 
 function dumpLine(str) {

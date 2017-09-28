@@ -119,11 +119,31 @@ APZCTreeManagerChild::ReceiveInputEvent(
     event = processedEvent;
     return res;
   }
+  case KEYBOARD_INPUT: {
+    KeyboardInput& event = aEvent.AsKeyboardInput();
+    KeyboardInput processedEvent;
+
+    nsEventStatus res;
+    SendReceiveKeyboardInputEvent(event,
+                                  &res,
+                                  &processedEvent,
+                                  aOutTargetGuid,
+                                  aOutInputBlockId);
+
+    event = processedEvent;
+    return res;
+  }
   default: {
     MOZ_ASSERT_UNREACHABLE("Invalid InputData type.");
     return nsEventStatus_eConsumeNoDefault;
   }
   }
+}
+
+void
+APZCTreeManagerChild::SetKeyboardMap(const KeyboardMap& aKeyboardMap)
+{
+  SendSetKeyboardMap(aKeyboardMap);
 }
 
 void
@@ -160,12 +180,6 @@ APZCTreeManagerChild::UpdateZoomConstraints(
 }
 
 void
-APZCTreeManagerChild::CancelAnimation(const ScrollableLayerGuid &aGuid)
-{
-  SendCancelAnimation(aGuid);
-}
-
-void
 APZCTreeManagerChild::SetDPI(float aDpiValue)
 {
   SendSetDPI(aDpiValue);
@@ -188,6 +202,20 @@ APZCTreeManagerChild::StartScrollbarDrag(
 }
 
 void
+APZCTreeManagerChild::StartAutoscroll(
+    const ScrollableLayerGuid& aGuid,
+    const ScreenPoint& aAnchorLocation)
+{
+  SendStartAutoscroll(aGuid, aAnchorLocation);
+}
+
+void
+APZCTreeManagerChild::StopAutoscroll(const ScrollableLayerGuid& aGuid)
+{
+  SendStopAutoscroll(aGuid);
+}
+
+void
 APZCTreeManagerChild::SetLongTapEnabled(bool aTapGestureEnabled)
 {
   SendSetLongTapEnabled(aTapGestureEnabled);
@@ -207,11 +235,15 @@ APZCTreeManagerChild::UpdateWheelTransaction(
   SendUpdateWheelTransaction(aRefPoint, aEventMessage);
 }
 
-void APZCTreeManagerChild::TransformEventRefPoint(
+void APZCTreeManagerChild::ProcessUnhandledEvent(
     LayoutDeviceIntPoint* aRefPoint,
-    ScrollableLayerGuid* aOutTargetGuid)
+    ScrollableLayerGuid*  aOutTargetGuid,
+    uint64_t*             aOutFocusSequenceNumber)
 {
-  SendTransformEventRefPoint(*aRefPoint, aRefPoint, aOutTargetGuid);
+  SendProcessUnhandledEvent(*aRefPoint,
+                            aRefPoint,
+                            aOutTargetGuid,
+                            aOutFocusSequenceNumber);
 }
 
 mozilla::ipc::IPCResult
@@ -253,6 +285,18 @@ APZCTreeManagerChild::RecvNotifyPinchGesture(const PinchGestureType& aType,
       mCompositorSession->GetWidget()) {
     APZCCallbackHelper::NotifyPinchGesture(aType, aSpanChange, aModifiers, mCompositorSession->GetWidget());
   }
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+APZCTreeManagerChild::RecvCancelAutoscroll(const FrameMetrics::ViewID& aScrollId)
+{
+  // This will only get sent from the GPU process to the parent process, so
+  // this function should never get called in the content process.
+  MOZ_ASSERT(XRE_IsParentProcess());
+  MOZ_ASSERT(NS_IsMainThread());
+
+  APZCCallbackHelper::CancelAutoscroll(aScrollId);
   return IPC_OK();
 }
 

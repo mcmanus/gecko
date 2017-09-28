@@ -113,7 +113,7 @@ DirectoryProvider.prototype = {
       return;
 
     let curLocale = "";
-    let reqLocales = Services.locales.getRequestedLocales();
+    let reqLocales = Services.locale.getRequestedLocales();
     if (reqLocales.length > 0) {
       curLocale = reqLocales[0];
     }
@@ -134,7 +134,7 @@ DirectoryProvider.prototype = {
       defLocalePlugins.append(defLocale);
       if (defLocalePlugins.exists())
         array.push(defLocalePlugins);
-    } catch(e) {
+    } catch (e) {
     }
   },
 
@@ -147,8 +147,7 @@ DirectoryProvider.prototype = {
 
     if (prop == NS_APP_DISTRIBUTION_SEARCH_DIR_LIST) {
       this._appendDistroSearchDirs(result);
-    }
-    else {
+    } else {
       /**
        * We want to preserve the following order, since the search service
        * loads engines in first-loaded-wins order.

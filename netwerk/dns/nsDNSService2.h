@@ -19,6 +19,8 @@
 #include "mozilla/Mutex.h"
 #include "mozilla/Attributes.h"
 
+class nsAuthSSPI;
+
 class nsDNSService final : public nsPIDNSService
                          , public nsIObserver
                          , public nsIMemoryReporter
@@ -38,6 +40,14 @@ public:
 
     bool GetOffline() const;
 
+protected:
+    friend class nsAuthSSPI;
+
+    nsresult DeprecatedSyncResolve(const nsACString &aHostname,
+                                   uint32_t flags,
+                                   const mozilla::OriginAttributes &aOriginAttributes,
+                                   nsIDNSRecord **result);
+
 private:
     ~nsDNSService();
 
@@ -50,6 +60,11 @@ private:
                                 nsIIDNService    *aIDN,
                                 nsACString       &aACE);
 
+    nsresult ResolveInternal(const nsACString &aHostname,
+                             uint32_t flags,
+                             const mozilla::OriginAttributes &aOriginAttributes,
+                             nsIDNSRecord **result);
+
     RefPtr<nsHostResolver>  mResolver;
     nsCOMPtr<nsIIDNService>   mIDN;
 
@@ -59,8 +74,8 @@ private:
     // mIPv4OnlyDomains is a comma-separated list of domains for which only
     // IPv4 DNS lookups are performed. This allows the user to disable IPv6 on
     // a per-domain basis and work around broken DNS servers. See bug 68796.
-    nsAdoptingCString                         mIPv4OnlyDomains;
-    nsAdoptingCString                         mForceResolve;
+    nsCString                                 mIPv4OnlyDomains;
+    nsCString                                 mForceResolve;
     bool                                      mDisableIPv6;
     bool                                      mDisablePrefetch;
     bool                                      mBlockDotOnion;

@@ -302,7 +302,7 @@ nsAbsoluteContainingBlock::FrameDependsOnContainer(nsIFrame* f,
         !IsFixedPaddingSize(padding->mPadding.GetBEnd(wm))) {
       return true;
     }
-      
+
     // See if f's position might have changed.
     if (!IsFixedMarginSize(margin->mMargin.GetBStart(wm)) ||
         !IsFixedMarginSize(margin->mMargin.GetBEnd(wm))) {
@@ -616,7 +616,7 @@ nsAbsoluteContainingBlock::ResolveSizeDependentOffsets(
 // positioned child has the exact same size and position and skip the
 // reflow...
 
-// When bug 154892 is checked in, make sure that when 
+// When bug 154892 is checked in, make sure that when
 // mChildListID == kFixedList, the height is unconstrained.
 // since we don't allow replicated frames to split.
 
@@ -630,6 +630,8 @@ nsAbsoluteContainingBlock::ReflowAbsoluteFrame(nsIFrame*                aDelegat
                                                nsReflowStatus&          aStatus,
                                                nsOverflowAreas*         aOverflowAreas)
 {
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
+
 #ifdef DEBUG
   if (nsBlockFrame::gNoisyReflow) {
     nsFrame::IndentBy(stdout,nsBlockFrame::gNoiseIndent);
@@ -681,8 +683,8 @@ nsAbsoluteContainingBlock::ReflowAbsoluteFrame(nsIFrame*                aDelegat
 
   // Get the border values
   WritingMode outerWM = aReflowInput.GetWritingMode();
-  const LogicalMargin border(outerWM,
-                             aReflowInput.mStyleBorder->GetComputedBorder());
+  const LogicalMargin border(outerWM, aDelegatingFrame->GetUsedBorder());
+
   LogicalMargin margin =
     kidReflowInput.ComputedLogicalMargin().ConvertTo(outerWM, wm);
 

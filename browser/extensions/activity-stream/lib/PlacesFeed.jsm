@@ -3,17 +3,18 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {utils: Cu, interfaces: Ci} = Components;
-const {actionTypes: at, actionCreators: ac} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
-
+const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+
+const {actionCreators: ac, actionTypes: at} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
 
 XPCOMUtils.defineLazyModuleGetter(this, "NewTabUtils",
   "resource://gre/modules/NewTabUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
   "resource://gre/modules/PlacesUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-  "resource://gre/modules/Services.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Pocket",
+  "chrome://pocket/content/Pocket.jsm");
 
 const LINK_BLOCKED_EVENT = "newtab-linkBlocked";
 
@@ -54,6 +55,16 @@ class HistoryObserver extends Observer {
   onClearHistory() {
     this.dispatch({type: at.PLACES_HISTORY_CLEARED});
   }
+
+  // Empty functions to make xpconnect happy
+  onBeginUpdateBatch() {}
+  onEndUpdateBatch() {}
+  onVisit() {}
+  onTitleChanged() {}
+  onFrecencyChanged() {}
+  onManyFrecenciesChanged() {}
+  onPageChanged() {}
+  onDeleteVisits() {}
 }
 
 /**
@@ -77,19 +88,24 @@ class BookmarksObserver extends Observer {
    * @param  {int} dateAdded
    * @param  {str} guid      The unique id of the bookmark
    */
-  async onItemAdded(...args) {
+  onItemAdded(...args) {
     const type = args[3];
-    const guid = args[7];
     if (type !== PlacesUtils.bookmarks.TYPE_BOOKMARK) {
       return;
     }
-    try {
-      // bookmark: {bookmarkGuid, bookmarkTitle, lastModified, url}
-      const bookmark = await NewTabUtils.activityStreamProvider.getBookmark(guid);
-      this.dispatch({type: at.PLACES_BOOKMARK_ADDED, data: bookmark});
-    } catch (e) {
-      Cu.reportError(e);
-    }
+    const uri = args[4];
+    const bookmarkTitle = args[5];
+    const dateAdded = args[6];
+    const bookmarkGuid = args[7];
+    this.dispatch({
+      type: at.PLACES_BOOKMARK_ADDED,
+      data: {
+        bookmarkGuid,
+        bookmarkTitle,
+        dateAdded,
+        url: uri.spec
+      }
+    });
   }
 
   /**
@@ -126,6 +142,16 @@ class BookmarksObserver extends Observer {
    * @param  {str} guid         The unique id of the bookmark
    */
   async onItemChanged(...args) {
+
+    /*
+    // Disabled due to performance cost, see Issue 3203 /
+    // https://bugzilla.mozilla.org/show_bug.cgi?id=1392267.
+    //
+    // If this is used, please consider avoiding the call to
+    // NewTabUtils.activityStreamProvider.getBookmark which performs an additional
+    // fetch to the database.
+    // If you need more fields, please talk to the places team.
+
     const property = args[1];
     const type = args[5];
     const guid = args[7];
@@ -141,7 +167,14 @@ class BookmarksObserver extends Observer {
     } catch (e) {
       Cu.reportError(e);
     }
+    */
   }
+
+  // Empty functions to make xpconnect happy
+  onBeginUpdateBatch() {}
+  onEndUpdateBatch() {}
+  onItemVisited() {}
+  onItemMoved() {}
 }
 
 class PlacesFeed {
@@ -151,8 +184,14 @@ class PlacesFeed {
   }
 
   addObservers() {
-    PlacesUtils.history.addObserver(this.historyObserver, true);
-    PlacesUtils.bookmarks.addObserver(this.bookmarksObserver, true);
+    // NB: Directly get services without importing the *BIG* PlacesUtils module
+    Cc["@mozilla.org/browser/nav-history-service;1"]
+      .getService(Ci.nsINavHistoryService)
+      .addObserver(this.historyObserver, true);
+    Cc["@mozilla.org/browser/nav-bookmarks-service;1"]
+      .getService(Ci.nsINavBookmarksService)
+      .addObserver(this.bookmarksObserver, true);
+
     Services.obs.addObserver(this, LINK_BLOCKED_EVENT);
   }
 
@@ -179,10 +218,19 @@ class PlacesFeed {
     }
   }
 
+  openNewWindow(action, isPrivate = false) {
+    const win = action._target.browser.ownerGlobal;
+    const privateParam = {private: isPrivate};
+    const params = (action.data.referrer) ?
+      Object.assign(privateParam, {referrerURI: Services.io.newURI(action.data.referrer)}) : privateParam;
+    win.openLinkIn(action.data.url, "window", params);
+  }
+
   onAction(action) {
     switch (action.type) {
       case at.INIT:
-        this.addObservers();
+        // Briefly avoid loading services for observing for better startup timing
+        Services.tm.dispatchToMainThread(() => this.addObservers());
         break;
       case at.UNINIT:
         this.removeObservers();
@@ -191,14 +239,38 @@ class PlacesFeed {
         NewTabUtils.activityStreamLinks.blockURL({url: action.data});
         break;
       case at.BOOKMARK_URL:
-        NewTabUtils.activityStreamLinks.addBookmark(action.data);
+        NewTabUtils.activityStreamLinks.addBookmark(action.data, action._target.browser);
         break;
       case at.DELETE_BOOKMARK_BY_ID:
         NewTabUtils.activityStreamLinks.deleteBookmark(action.data);
         break;
-      case at.DELETE_HISTORY_URL:
-        NewTabUtils.activityStreamLinks.deleteHistoryEntry(action.data);
+      case at.DELETE_HISTORY_URL: {
+        const {url, forceBlock} = action.data;
+        NewTabUtils.activityStreamLinks.deleteHistoryEntry(url);
+        if (forceBlock) {
+          NewTabUtils.activityStreamLinks.blockURL({url});
+        }
         break;
+      }
+      case at.OPEN_NEW_WINDOW:
+        this.openNewWindow(action);
+        break;
+      case at.OPEN_PRIVATE_WINDOW:
+        this.openNewWindow(action, true);
+        break;
+      case at.SAVE_TO_POCKET:
+        Pocket.savePage(action._target.browser, action.data.site.url, action.data.site.title);
+        break;
+      case at.OPEN_LINK: {
+        const win = action._target.browser.ownerGlobal;
+        const where = win.whereToOpenLink(action.data.event);
+        if (action.data.referrer) {
+          win.openLinkIn(action.data.url, where, {referrerURI: Services.io.newURI(action.data.referrer)});
+        } else {
+          win.openLinkIn(action.data.url, where, {});
+        }
+        break;
+      }
     }
   }
 }

@@ -92,8 +92,6 @@ const char* const XPCJSRuntime::mStrings[] = {
     "createInstance",       // IDX_CREATE_INSTANCE
     "item",                 // IDX_ITEM
     "__proto__",            // IDX_PROTO
-    "__iterator__",         // IDX_ITERATOR
-    "__exposedProps__",     // IDX_EXPOSEDPROPS
     "eval",                 // IDX_EVAL
     "controllers",          // IDX_CONTROLLERS
     "Controllers",          // IDX_CONTROLLERS_CLASS
@@ -140,7 +138,7 @@ public:
   nsresult Dispatch()
   {
       nsCOMPtr<nsIRunnable> self(this);
-      return NS_IdleDispatchToCurrentThread(self.forget(), 1000);
+      return NS_IdleDispatchToCurrentThread(self.forget(), 2500);
   }
 
   void Start(bool aContinuation = false, bool aPurge = false)
@@ -171,16 +169,16 @@ namespace xpc {
 CompartmentPrivate::CompartmentPrivate(JSCompartment* c)
     : wantXrays(false)
     , allowWaivers(true)
-    , writeToGlobalPrototype(false)
-    , skipWriteToGlobalPrototype(false)
     , isWebExtensionContentScript(false)
+    , hasInterposition(false)
     , waiveInterposition(false)
+    , addonCallInterposition(false)
     , allowCPOWs(false)
+    , isContentXBLCompartment(false)
+    , isAddonCompartment(false)
     , universalXPConnectEnabled(false)
     , forcePermissiveCOWs(false)
     , wasNuked(false)
-    , scriptability(c)
-    , scope(nullptr)
     , mWrappedJSMap(JSObject2WrappedJSMap::newMap(XPC_JS_MAP_LENGTH))
 {
     MOZ_COUNT_CTOR(xpc::CompartmentPrivate);
@@ -192,6 +190,14 @@ CompartmentPrivate::~CompartmentPrivate()
     MOZ_COUNT_DTOR(xpc::CompartmentPrivate);
     mWrappedJSMap->ShutdownMarker();
     delete mWrappedJSMap;
+}
+
+RealmPrivate::RealmPrivate(JS::Realm* realm)
+    : writeToGlobalPrototype(false)
+    , skipWriteToGlobalPrototype(false)
+    , scriptability(JS::GetCompartmentForRealm(realm))
+    , scope(nullptr)
+{
 }
 
 static bool
@@ -250,16 +256,23 @@ bool CompartmentPrivate::TryParseLocationURI(CompartmentPrivate::LocationHint aL
         return false;
 
     // Handle Sandbox location strings.
-    // A sandbox string looks like this:
+    // A sandbox string looks like this, for anonymous sandboxes, and builds
+    // where Sandbox location tagging is enabled:
+    //
     // <sandboxName> (from: <js-stack-frame-filename>:<lineno>)
+    //
     // where <sandboxName> is user-provided via Cu.Sandbox()
     // and <js-stack-frame-filename> and <lineno> is the stack frame location
     // from where Cu.Sandbox was called.
+    //
+    // Otherwise, it is simply the caller-provided name, which is usually a URI.
+    //
     // <js-stack-frame-filename> furthermore is "free form", often using a
     // "uri -> uri -> ..." chain. The following code will and must handle this
     // common case.
+    //
     // It should be noted that other parts of the code may already rely on the
-    // "format" of these strings, such as the add-on SDK.
+    // "format" of these strings.
 
     static const nsDependentCString from("(from: ");
     static const nsDependentCString arrow(" -> ");
@@ -316,24 +329,24 @@ PrincipalImmuneToScriptPolicy(nsIPrincipal* aPrincipal)
     if (nsXPConnect::SecurityManager()->IsSystemPrincipal(aPrincipal))
         return true;
 
+    auto principal = BasePrincipal::Cast(aPrincipal);
+
     // ExpandedPrincipal gets a free pass.
-    nsCOMPtr<nsIExpandedPrincipal> ep = do_QueryInterface(aPrincipal);
-    if (ep)
+    if (principal->Is<ExpandedPrincipal>()) {
         return true;
+    }
+
+    // WebExtension principals get a free pass.
+    nsString addonId;
+    if (IsWebExtensionPrincipal(principal, addonId)) {
+        return true;
+    }
 
     // Check whether our URI is an "about:" URI that allows scripts.  If it is,
     // we need to allow JS to run.
     nsCOMPtr<nsIURI> principalURI;
     aPrincipal->GetURI(getter_AddRefs(principalURI));
     MOZ_ASSERT(principalURI);
-
-    // WebExtension principals gets a free pass.
-    nsString addonId;
-    aPrincipal->GetAddonId(addonId);
-    bool isWebExtension = !addonId.IsEmpty();
-    if (isWebExtension) {
-        return true;
-    }
 
     bool isAbout;
     nsresult rv = principalURI->SchemeIs("about", &isAbout);
@@ -413,29 +426,39 @@ Scriptability::SetDocShellAllowsScript(bool aAllowed)
 Scriptability&
 Scriptability::Get(JSObject* aScope)
 {
-    return CompartmentPrivate::Get(aScope)->scriptability;
+    return RealmPrivate::Get(aScope)->scriptability;
 }
 
 bool
-IsContentXBLScope(JSCompartment* compartment)
+IsContentXBLCompartment(JSCompartment* compartment)
 {
-    // We always eagerly create compartment privates for XBL scopes.
+    // We always eagerly create compartment privates for content XBL compartments.
     CompartmentPrivate* priv = CompartmentPrivate::Get(compartment);
-    if (!priv || !priv->scope)
-        return false;
-    return priv->scope->IsContentXBLScope();
+    return priv && priv->isContentXBLCompartment;
+}
+
+bool
+IsContentXBLScope(JS::Realm* realm)
+{
+    return IsContentXBLCompartment(JS::GetCompartmentForRealm(realm));
 }
 
 bool
 IsInContentXBLScope(JSObject* obj)
 {
-    return IsContentXBLScope(js::GetObjectCompartment(obj));
+    return IsContentXBLCompartment(js::GetObjectCompartment(obj));
+}
+
+bool
+IsAddonCompartment(JSCompartment* compartment)
+{
+    return CompartmentPrivate::Get(compartment)->isAddonCompartment;
 }
 
 bool
 IsInAddonScope(JSObject* obj)
 {
-    return ObjectScope(obj)->IsAddonScope();
+    return IsAddonCompartment(js::GetObjectCompartment(obj));
 }
 
 bool
@@ -482,7 +505,8 @@ EnableUniversalXPConnect(JSContext* cx)
     // The Components object normally isn't defined for unprivileged web content,
     // but we define it when UniversalXPConnect is enabled to support legacy
     // tests.
-    XPCWrappedNativeScope* scope = priv->scope;
+    Realm* realm = GetCurrentRealmOrNull(cx);
+    XPCWrappedNativeScope* scope = RealmPrivate::Get(realm)->scope;
     if (!scope)
         return true;
     scope->ForcePrivilegedComponents();
@@ -514,7 +538,7 @@ WindowOrNull(JSObject* aObj)
     MOZ_ASSERT(!js::IsWrapper(aObj));
 
     nsGlobalWindow* win = nullptr;
-    UNWRAP_OBJECT(Window, aObj, win);
+    UNWRAP_NON_WRAPPER_OBJECT(Window, aObj, win);
     return win;
 }
 
@@ -579,9 +603,11 @@ NukeAllWrappersForCompartment(JSContext* cx, JSCompartment* compartment,
     // compartment. Set the wasNuked bit so WrapperFactory will return a
     // DeadObjectProxy when asked to create a new wrapper for it, and mark as
     // unscriptable.
-    auto compartmentPrivate = xpc::CompartmentPrivate::Get(compartment);
-    compartmentPrivate->wasNuked = true;
-    compartmentPrivate->scriptability.Block();
+    xpc::CompartmentPrivate::Get(compartment)->wasNuked = true;
+
+    // TODO: Loop over all realms in the compartment instead.
+    Realm* realm = GetRealmForCompartment(compartment);
+    xpc::RealmPrivate::Get(realm)->scriptability.Block();
 }
 
 } // namespace xpc
@@ -629,12 +655,6 @@ void XPCJSRuntime::TraceNativeBlackRoots(JSTracer* trc)
             roots->TraceJSAll(trc);
     }
 
-    // XPCJSObjectHolders don't participate in cycle collection, so always
-    // trace them here.
-    XPCRootSetElem* e;
-    for (e = mObjectHolderRoots; e; e = e->GetNextRoot())
-        static_cast<XPCJSObjectHolder*>(e)->TraceJS(trc);
-
     JSContext* cx = XPCJSContext::Get()->Context();
     dom::TraceBlackJS(trc, JS_GetGCParameter(cx, JSGC_NUMBER),
                       nsXPConnect::XPConnect()->IsShuttingDown());
@@ -664,11 +684,13 @@ XPCJSRuntime::TraverseAdditionalNativeRoots(nsCycleCollectionNoteRootCallback& c
            if (val.isObject() && !JS::ObjectIsMarkedGray(&val.toObject()))
                continue;
         }
-        cb.NoteXPCOMRoot(v);
+        cb.NoteXPCOMRoot(v,
+                         XPCTraceableVariant::NS_CYCLE_COLLECTION_INNERCLASS::GetParticipant());
     }
 
     for (XPCRootSetElem* e = mWrappedJSRoots; e ; e = e->GetNextRoot()) {
-        cb.NoteXPCOMRoot(ToSupports(static_cast<nsXPCWrappedJS*>(e)));
+        cb.NoteXPCOMRoot(ToSupports(static_cast<nsXPCWrappedJS*>(e)),
+                         nsXPCWrappedJS::NS_CYCLE_COLLECTION_INNERCLASS::GetParticipant());
     }
 }
 
@@ -746,7 +768,8 @@ XPCJSRuntime::DoCycleCollectionCallback(JSContext* cx)
     // The GC has detected that a CC at this point would collect a tremendous
     // amount of garbage that is being revivified unnecessarily.
     NS_DispatchToCurrentThread(
-            NS_NewRunnableFunction([](){nsJSContext::CycleCollectNow(nullptr);}));
+      NS_NewRunnableFunction("XPCJSRuntime::DoCycleCollectionCallback",
+                             []() { nsJSContext::CycleCollectNow(nullptr); }));
 
     XPCJSRuntime* self = nsXPConnect::GetRuntimeInstance();
     if (!self)
@@ -767,7 +790,6 @@ XPCJSRuntime::CustomGCCallback(JSGCStatus status)
 /* static */ void
 XPCJSRuntime::FinalizeCallback(JSFreeOp* fop,
                                JSFinalizeStatus status,
-                               bool isZoneGC,
                                void* data)
 {
     XPCJSRuntime* self = nsXPConnect::GetRuntimeInstance();
@@ -962,9 +984,10 @@ class LargeAllocationFailureRunnable final : public Runnable
 
   public:
     LargeAllocationFailureRunnable()
-      : mMutex("LargeAllocationFailureRunnable::mMutex"),
-        mCondVar(mMutex, "LargeAllocationFailureRunnable::mCondVar"),
-        mWaiting(true)
+      : mozilla::Runnable("LargeAllocationFailureRunnable")
+      , mMutex("LargeAllocationFailureRunnable::mMutex")
+      , mCondVar(mMutex, "LargeAllocationFailureRunnable::mCondVar")
+      , mWaiting(true)
     {
         MOZ_ASSERT(!NS_IsMainThread());
     }
@@ -1043,6 +1066,7 @@ XPCJSRuntime::Shutdown(JSContext* cx)
     JS_RemoveFinalizeCallback(cx, FinalizeCallback);
     JS_RemoveWeakPointerZonesCallback(cx, WeakPointerZonesCallback);
     JS_RemoveWeakPointerCompartmentCallback(cx, WeakPointerCompartmentCallback);
+    xpc_DelocalizeRuntime(JS_GetRuntime(cx));
 
     JS::SetGCSliceCallback(cx, mPrevGCSliceCallback);
 
@@ -1398,6 +1422,10 @@ ReportZoneStats(const JS::ZoneStats& zStats,
         zStats.typePool,
         "Type sets and related data.");
 
+    ZCREPORT_BYTES(pathPrefix + NS_LITERAL_CSTRING("regexp-zone"),
+        zStats.regexpZone,
+        "The regexp zone and regexp data.");
+
     ZCREPORT_BYTES(pathPrefix + NS_LITERAL_CSTRING("jit-zone"),
         zStats.jitZone,
         "The JIT zone.");
@@ -1455,7 +1483,7 @@ ReportZoneStats(const JS::ZoneStats& zStats,
         bool truncated = notableString.Length() < info.length;
 
         nsCString path = pathPrefix +
-            nsPrintfCString("strings/" STRING_LENGTH "%" PRIuSIZE ", copies=%d, \"%s\"%s)/",
+            nsPrintfCString("strings/" STRING_LENGTH "%zu, copies=%d, \"%s\"%s)/",
                             info.length, info.numCopies, escapedString.get(),
                             truncated ? " (truncated)" : "");
 
@@ -1702,7 +1730,7 @@ ReportCompartmentStats(const JS::CompartmentStats& cStats,
             // Insert the add-on id as "add-ons/@id@/" after "explicit/" to
             // aggregate add-on compartments.
             static const size_t explicitLength = strlen("explicit/");
-            addonId.Insert(NS_LITERAL_CSTRING("add-ons/"), 0);
+            addonId.InsertLiteral("add-ons/", 0);
             addonId += "/";
             cJSPathPrefix.Insert(addonId, explicitLength);
             cDOMPathPrefix.Insert(addonId, explicitLength);
@@ -1795,10 +1823,6 @@ ReportCompartmentStats(const JS::CompartmentStats& cStats,
     ZCREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("cross-compartment-wrapper-table"),
         cStats.crossCompartmentWrappersTable,
         "The cross-compartment wrapper table.");
-
-    ZCREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("regexp-compartment"),
-        cStats.regexpCompartment,
-        "The regexp compartment and regexp data.");
 
     ZCREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("saved-stacks-set"),
         cStats.savedStacksSet,
@@ -2122,25 +2146,16 @@ MOZ_DEFINE_MALLOC_SIZE_OF(OrphanMallocSizeOf)
 
 namespace xpc {
 
-static size_t
-SizeOfTreeIncludingThis(nsINode* tree)
-{
-    size_t n = tree->SizeOfIncludingThis(OrphanMallocSizeOf);
-    for (nsIContent* child = tree->GetFirstChild(); child; child = child->GetNextNode(tree))
-        n += child->SizeOfIncludingThis(OrphanMallocSizeOf);
-
-    return n;
-}
-
 class OrphanReporter : public JS::ObjectPrivateVisitor
 {
   public:
     explicit OrphanReporter(GetISupportsFun aGetISupports)
       : JS::ObjectPrivateVisitor(aGetISupports)
-    {
-    }
+      , mState(OrphanMallocSizeOf)
+    {}
 
-    virtual size_t sizeOfIncludingThis(nsISupports* aSupports) override {
+    virtual size_t sizeOfIncludingThis(nsISupports* aSupports) override
+    {
         size_t n = 0;
         nsCOMPtr<nsINode> node = do_QueryInterface(aSupports);
         // https://bugzilla.mozilla.org/show_bug.cgi?id=773533#c11 explains
@@ -2153,21 +2168,31 @@ class OrphanReporter : public JS::ObjectPrivateVisitor
             // sub-tree that this node belongs to, measure the sub-tree's size
             // and then record its root so we don't measure it again.
             nsCOMPtr<nsINode> orphanTree = node->SubtreeRoot();
-            if (orphanTree &&
-                !mAlreadyMeasuredOrphanTrees.Contains(orphanTree)) {
-                // If PutEntry() fails we don't measure this tree, which could
-                // lead to under-measurement. But that's better than the
-                // alternatives, which are over-measurement or an OOM abort.
-                if (mAlreadyMeasuredOrphanTrees.PutEntry(orphanTree, fallible)) {
-                    n += SizeOfTreeIncludingThis(orphanTree);
-                }
+            if (orphanTree && !mState.HaveSeenPtr(orphanTree.get())) {
+                n += SizeOfTreeIncludingThis(orphanTree);
             }
         }
         return n;
     }
 
+    size_t SizeOfTreeIncludingThis(nsINode* tree)
+    {
+        size_t nodeSize = 0;
+        nsWindowSizes sizes(mState);
+        tree->AddSizeOfIncludingThis(sizes, &nodeSize);
+        for (nsIContent* child = tree->GetFirstChild(); child; child = child->GetNextNode(tree))
+            child->AddSizeOfIncludingThis(sizes, &nodeSize);
+
+        // We combine the node size with nsStyleSizes here. It's not ideal, but
+        // it's hard to get the style structs measurements out to
+        // nsWindowMemoryReporter. Also, we drop mServoData in
+        // UnbindFromTree(), so in theory any non-in-tree element won't have
+        // any style data to measure.
+        return nodeSize + sizes.getTotalSize();
+    }
+
   private:
-    nsTHashtable <nsISupportsHashKey> mAlreadyMeasuredOrphanTrees;
+    SizeOfState mState;
 };
 
 #ifdef DEBUG
@@ -2199,28 +2224,24 @@ class XPCJSRuntimeStats : public JS::RuntimeStats
         for (size_t i = 0; i != compartmentStatsVector.length(); ++i)
             delete static_cast<xpc::CompartmentStatsExtras*>(compartmentStatsVector[i].extra);
 
-
         for (size_t i = 0; i != zoneStatsVector.length(); ++i)
             delete static_cast<xpc::ZoneStatsExtras*>(zoneStatsVector[i].extra);
     }
 
     virtual void initExtraZoneStats(JS::Zone* zone, JS::ZoneStats* zStats) override {
-        // Get the compartment's global.
-        nsXPConnect* xpc = nsXPConnect::XPConnect();
+        // Get some global in this zone.
         AutoSafeJSContext cx;
         JSCompartment* comp = js::GetAnyCompartmentInZone(zone);
+        Rooted<Realm*> realm(cx, JS::GetRealmForCompartment(comp));
         xpc::ZoneStatsExtras* extras = new xpc::ZoneStatsExtras;
         extras->pathPrefix.AssignLiteral("explicit/js-non-window/zones/");
-        RootedObject global(cx, JS_GetGlobalForCompartmentOrNull(cx, comp));
+        RootedObject global(cx, JS::GetRealmGlobalOrNull(realm));
         if (global) {
-            // Need to enter the compartment, otherwise GetNativeOfWrapper()
-            // might crash.
-            JSAutoCompartment ac(cx, global);
-            nsISupports* native = xpc->GetNativeOfWrapper(cx, global);
-            if (nsCOMPtr<nsPIDOMWindowInner> piwindow = do_QueryInterface(native)) {
+            RefPtr<nsGlobalWindow> window;
+            if (NS_SUCCEEDED(UNWRAP_OBJECT(Window, global, window))) {
                 // The global is a |window| object.  Use the path prefix that
                 // we should have already created for it.
-                if (mTopWindowPaths->Get(piwindow->WindowID(),
+                if (mTopWindowPaths->Get(window->WindowID(),
                                          &extras->pathPrefix))
                     extras->pathPrefix.AppendLiteral("/js-");
             }
@@ -2251,19 +2272,16 @@ class XPCJSRuntimeStats : public JS::RuntimeStats
         }
 
         // Get the compartment's global.
-        nsXPConnect* xpc = nsXPConnect::XPConnect();
         AutoSafeJSContext cx;
         bool needZone = true;
-        RootedObject global(cx, JS_GetGlobalForCompartmentOrNull(cx, c));
+        Rooted<Realm*> realm(cx, JS::GetRealmForCompartment(c));
+        RootedObject global(cx, JS::GetRealmGlobalOrNull(realm));
         if (global) {
-            // Need to enter the compartment, otherwise GetNativeOfWrapper()
-            // might crash.
-            JSAutoCompartment ac(cx, global);
-            nsISupports* native = xpc->GetNativeOfWrapper(cx, global);
-            if (nsCOMPtr<nsPIDOMWindowInner> piwindow = do_QueryInterface(native)) {
+            RefPtr<nsGlobalWindow> window;
+            if (NS_SUCCEEDED(UNWRAP_OBJECT(Window, global, window))) {
                 // The global is a |window| object.  Use the path prefix that
                 // we should have already created for it.
-                if (mWindowPaths->Get(piwindow->WindowID(),
+                if (mWindowPaths->Get(window->WindowID(),
                                       &extras->jsPathPrefix)) {
                     extras->domPathPrefix.Assign(extras->jsPathPrefix);
                     extras->domPathPrefix.AppendLiteral("/dom/");
@@ -2566,6 +2584,9 @@ AccumulateTelemetryCallback(int id, uint32_t sample, const char* key)
       case JS_TELEMETRY_GC_BUDGET_MS:
         Telemetry::Accumulate(Telemetry::GC_BUDGET_MS, sample);
         break;
+      case JS_TELEMETRY_GC_BUDGET_OVERRUN:
+        Telemetry::Accumulate(Telemetry::GC_BUDGET_OVERRUN, sample);
+        break;
       case JS_TELEMETRY_GC_ANIMATION_MS:
         Telemetry::Accumulate(Telemetry::GC_ANIMATION_MS, sample);
         break;
@@ -2662,6 +2683,21 @@ AccumulateTelemetryCallback(int id, uint32_t sample, const char* key)
 }
 
 static void
+SetUseCounterCallback(JSObject* obj, JSUseCounter counter)
+{
+    switch (counter) {
+      case JSUseCounter::ASMJS:
+        SetDocumentAndPageUseCounter(obj, eUseCounter_custom_JS_asmjs);
+        break;
+      case JSUseCounter::WASM:
+        SetDocumentAndPageUseCounter(obj, eUseCounter_custom_JS_wasm);
+        break;
+      default:
+        MOZ_ASSERT_UNREACHABLE("Unexpected JSUseCounter id");
+    }
+}
+
+static void
 CompartmentNameCallback(JSContext* cx, JSCompartment* comp,
                         char* buf, size_t bufsize)
 {
@@ -2673,6 +2709,22 @@ CompartmentNameCallback(JSContext* cx, JSCompartment* comp,
     if (name.Length() >= bufsize)
         name.Truncate(bufsize - 1);
     memcpy(buf, name.get(), name.Length() + 1);
+}
+
+static void
+DestroyRealm(JSFreeOp* fop, JS::Realm* realm)
+{
+    // Get the current compartment private into an AutoPtr (which will do the
+    // cleanup for us), and null out the private field.
+    mozilla::UniquePtr<RealmPrivate> priv(RealmPrivate::Get(realm));
+    JS::SetRealmPrivate(realm, nullptr);
+}
+
+static void
+GetRealmName(JSContext* cx, Handle<Realm*> realm, char* buf, size_t bufsize)
+{
+    JSCompartment* comp = GetCompartmentForRealm(realm);
+    CompartmentNameCallback(cx, comp, buf, bufsize);
 }
 
 static bool
@@ -2813,7 +2865,6 @@ XPCJSRuntime::XPCJSRuntime(JSContext* aCx)
    mDoingFinalization(false),
    mVariantRoots(nullptr),
    mWrappedJSRoots(nullptr),
-   mObjectHolderRoots(nullptr),
    mAsyncSnowWhiteFreer(new AsyncFreeSnowWhite())
 {
     MOZ_COUNT_CTOR_INHERITED(XPCJSRuntime, CycleCollectedJSRuntime);
@@ -2847,6 +2898,8 @@ XPCJSRuntime::Initialize(JSContext* cx)
     JS_SetDestroyCompartmentCallback(cx, CompartmentDestroyedCallback);
     JS_SetSizeOfIncludingThisCompartmentCallback(cx, CompartmentSizeOfIncludingThisCallback);
     JS_SetCompartmentNameCallback(cx, CompartmentNameCallback);
+    JS::SetDestroyRealmCallback(cx, DestroyRealm);
+    JS::SetRealmNameCallback(cx, GetRealmName);
     mPrevGCSliceCallback = JS::SetGCSliceCallback(cx, GCSliceCallback);
     mPrevDoCycleCollectionCallback = JS::SetDoCycleCollectionCallback(cx,
             DoCycleCollectionCallback);
@@ -2856,7 +2909,9 @@ XPCJSRuntime::Initialize(JSContext* cx)
     JS_SetWrapObjectCallbacks(cx, &WrapObjectCallbacks);
     js::SetPreserveWrapperCallback(cx, PreserveWrapper);
     JS_SetAccumulateTelemetryCallback(cx, AccumulateTelemetryCallback);
+    JS_SetSetUseCounterCallback(cx, SetUseCounterCallback);
     js::SetWindowProxyClass(cx, &OuterWindowProxyClass);
+    js::SetXrayJitInfo(&gXrayJitInfo);
     JS::SetProcessLargeAllocationFailureCallback(OnLargeAllocationFailureCallback);
 
     // The JS engine needs to keep the source code around in order to implement
@@ -2886,6 +2941,8 @@ XPCJSRuntime::Initialize(JSContext* cx)
     RegisterJSMainRuntimeCompartmentsSystemDistinguishedAmount(JSMainRuntimeCompartmentsSystemDistinguishedAmount);
     RegisterJSMainRuntimeCompartmentsUserDistinguishedAmount(JSMainRuntimeCompartmentsUserDistinguishedAmount);
     mozilla::RegisterJSSizeOfTab(JSSizeOfTab);
+
+    xpc_LocalizeRuntime(JS_GetRuntime(cx));
 }
 
 bool
@@ -3031,7 +3088,7 @@ XPCRootSetElem::AddToRootSet(XPCRootSetElem** listHead)
 void
 XPCRootSetElem::RemoveFromRootSet()
 {
-    JS::PokeGC(XPCJSContext::Get()->Context());
+    JS::NotifyGCRootsRemoved(XPCJSContext::Get()->Context());
 
     MOZ_ASSERT(mSelfp, "Must be linked");
 

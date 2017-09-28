@@ -4,7 +4,7 @@ add_task(async function() {
   info("Bug 479348 - Properties on a root should be read-only.");
 
   await withSidebarTree("bookmarks", async function(tree) {
-    let itemId = PlacesUIUtils.leftPaneQueries["UnfiledBookmarks"];
+    let itemId = PlacesUIUtils.leftPaneQueries.UnfiledBookmarks;
     tree.selectItems([itemId]);
     ok(tree.controller.isCommandEnabled("placesCmd_show:info"),
        "'placesCmd_show:info' on current selected node is enabled");
@@ -34,7 +34,7 @@ add_task(async function() {
            "Root title is correct");
         // Check the shortcut's title.
         let bookmark = await PlacesUtils.bookmarks.fetch(tree.selectedNode.bookmarkGuid);
-        is(bookmark.title, null,
+        is(bookmark.title, "",
            "Shortcut title is null");
       }
     );

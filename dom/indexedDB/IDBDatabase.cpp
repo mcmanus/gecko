@@ -73,9 +73,9 @@ class CancelableRunnableWrapper final
   nsCOMPtr<nsIRunnable> mRunnable;
 
 public:
-  explicit
-  CancelableRunnableWrapper(nsIRunnable* aRunnable)
-    : mRunnable(aRunnable)
+  explicit CancelableRunnableWrapper(nsIRunnable* aRunnable)
+    : CancelableRunnable("dom::CancelableRunnableWrapper")
+    , mRunnable(aRunnable)
   {
     MOZ_ASSERT(aRunnable);
   }
@@ -177,6 +177,7 @@ IDBDatabase::IDBDatabase(IDBOpenDBRequest* aRequest,
   , mClosed(false)
   , mInvalidated(false)
   , mQuotaExceeded(false)
+  , mIncreasedActiveDatabaseCount(false)
 {
   MOZ_ASSERT(aRequest);
   MOZ_ASSERT(aFactory);
@@ -189,6 +190,7 @@ IDBDatabase::~IDBDatabase()
 {
   AssertIsOnOwningThread();
   MOZ_ASSERT(!mBackgroundActor);
+  MOZ_ASSERT(!mIncreasedActiveDatabaseCount);
 }
 
 // static
@@ -219,11 +221,8 @@ IDBDatabase::Create(IDBOpenDBRequest* aRequest,
       MOZ_ASSERT(obsSvc);
 
       // This topic must be successfully registered.
-      if (NS_WARN_IF(NS_FAILED(
-            obsSvc->AddObserver(observer, kWindowObserverTopic, false)))) {
-        observer->Revoke();
-        return nullptr;
-      }
+      MOZ_ALWAYS_SUCCEEDS(
+        obsSvc->AddObserver(observer, kWindowObserverTopic, false));
 
       // These topics are not crucial.
       if (NS_FAILED(obsSvc->AddObserver(observer,
@@ -238,6 +237,8 @@ IDBDatabase::Create(IDBOpenDBRequest* aRequest,
       db->mObserver.swap(observer);
     }
   }
+
+  db->IncreaseActiveDatabaseCount();
 
   return db.forget();
 }
@@ -289,6 +290,10 @@ IDBDatabase::CloseInternal()
     if (mBackgroundActor && !mInvalidated) {
       mBackgroundActor->SendClose();
     }
+
+    // Decrease the number of active databases right after the database is
+    // closed.
+    MaybeDecreaseActiveDatabaseCount();
   }
 }
 
@@ -967,19 +972,30 @@ IDBDatabase::NoteFinishedFileActor(PBackgroundIDBDatabaseFileChild* aFileActor)
 }
 
 void
-IDBDatabase::DelayedMaybeExpireFileActors()
+IDBDatabase::NoteActiveTransaction()
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mFactory);
+
+  // Increase the number of active transactions.
+  mFactory->UpdateActiveTransactionCount(1);
+}
+
+void
+IDBDatabase::NoteInactiveTransaction()
 {
   AssertIsOnOwningThread();
 
   if (!mBackgroundActor || !mFileActors.Count()) {
+    MOZ_ASSERT(mFactory);
+    mFactory->UpdateActiveTransactionCount(-1);
     return;
   }
 
   RefPtr<Runnable> runnable =
-    NewRunnableMethod<bool>("IDBDatabase::ExpireFileActors",
-                            this,
-                            &IDBDatabase::ExpireFileActors,
-                            /* aExpireAll */ false);
+    NewRunnableMethod("IDBDatabase::NoteInactiveTransactionDelayed",
+                      this,
+                      &IDBDatabase::NoteInactiveTransactionDelayed);
   MOZ_ASSERT(runnable);
 
   if (!NS_IsMainThread()) {
@@ -1132,6 +1148,15 @@ IDBDatabase::Invalidate()
 }
 
 void
+IDBDatabase::NoteInactiveTransactionDelayed()
+{
+  ExpireFileActors(/* aExpireAll */ false);
+
+  MOZ_ASSERT(mFactory);
+  mFactory->UpdateActiveTransactionCount(-1);
+}
+
+void
 IDBDatabase::LogWarning(const char* aMessageName,
                         const nsAString& aFilename,
                         uint32_t aLineNumber,
@@ -1152,7 +1177,7 @@ IDBDatabase::LogWarning(const char* aMessageName,
 NS_IMPL_ADDREF_INHERITED(IDBDatabase, IDBWrapperCache)
 NS_IMPL_RELEASE_INHERITED(IDBDatabase, IDBWrapperCache)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(IDBDatabase)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(IDBDatabase)
 NS_INTERFACE_MAP_END_INHERITING(IDBWrapperCache)
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(IDBDatabase)
@@ -1350,6 +1375,30 @@ IDBDatabase::RenameIndex(int64_t aObjectStoreId,
   foundIndexMetadata->name() = nsString(aName);
 
   return NS_OK;
+}
+
+void
+IDBDatabase::IncreaseActiveDatabaseCount()
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mFactory);
+  MOZ_ASSERT(!mIncreasedActiveDatabaseCount);
+
+  mFactory->UpdateActiveDatabaseCount(1);
+  mIncreasedActiveDatabaseCount = true;
+}
+
+void
+IDBDatabase::MaybeDecreaseActiveDatabaseCount()
+{
+  AssertIsOnOwningThread();
+
+  if (mIncreasedActiveDatabaseCount) {
+    // Decrease the number of active databases.
+    MOZ_ASSERT(mFactory);
+    mFactory->UpdateActiveDatabaseCount(-1);
+    mIncreasedActiveDatabaseCount = false;
+  }
 }
 
 } // namespace dom

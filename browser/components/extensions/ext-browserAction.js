@@ -6,7 +6,7 @@
 /* global browserActionFor:false, sidebarActionFor:false, pageActionFor:false */
 
 // The ext-* files are imported into the same scopes.
-/* import-globals-from ext-utils.js */
+/* import-globals-from ext-browser.js */
 
 XPCOMUtils.defineLazyModuleGetter(this, "CustomizableUI",
                                   "resource:///modules/CustomizableUI.jsm");
@@ -23,10 +23,6 @@ XPCOMUtils.defineLazyServiceGetter(this, "DOMUtils",
                                    "@mozilla.org/inspector/dom-utils;1",
                                    "inIDOMUtils");
 
-Cu.import("resource://gre/modules/EventEmitter.jsm");
-
-XPCOMUtils.defineLazyPreferenceGetter(this, "gPhotonStructure", "browser.photon.structure.enabled");
-
 var {
   DefaultWeakMap,
 } = ExtensionUtils;
@@ -35,6 +31,7 @@ Cu.import("resource://gre/modules/ExtensionParent.jsm");
 
 var {
   IconDetails,
+  StartupCache,
 } = ExtensionParent;
 
 const POPUP_PRELOAD_TIMEOUT_MS = 200;
@@ -43,14 +40,14 @@ const POPUP_RESULT_HISTOGRAM = "WEBEXT_BROWSERACTION_POPUP_PRELOAD_RESULT_COUNT"
 
 var XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
-function isAncestorOrSelf(target, node) {
+const isAncestorOrSelf = (target, node) => {
   for (; node; node = node.parentNode) {
     if (node === target) {
       return true;
     }
   }
   return false;
-}
+};
 
 // WeakMap[Extension -> BrowserAction]
 const browserActionMap = new WeakMap();
@@ -58,7 +55,7 @@ const browserActionMap = new WeakMap();
 XPCOMUtils.defineLazyGetter(this, "browserAreas", () => {
   return {
     "navbar": CustomizableUI.AREA_NAVBAR,
-    "menupanel": gPhotonStructure ? CustomizableUI.AREA_FIXED_OVERFLOW_PANEL : CustomizableUI.AREA_PANEL,
+    "menupanel": CustomizableUI.AREA_FIXED_OVERFLOW_PANEL,
     "tabstrip": CustomizableUI.AREA_TABSTRIP,
     "personaltoolbar": CustomizableUI.AREA_BOOKMARKS,
   };
@@ -69,7 +66,7 @@ this.browserAction = class extends ExtensionAPI {
     return browserActionMap.get(extension);
   }
 
-  onManifestEntry(entryName) {
+  async onManifestEntry(entryName) {
     let {extension} = this;
 
     let options = extension.manifest.browser_action;
@@ -92,7 +89,6 @@ this.browserAction = class extends ExtensionAPI {
       title: options.default_title || extension.name,
       badgeText: "",
       badgeBackgroundColor: null,
-      icon: IconDetails.normalize({path: options.default_icon}, extension),
       popup: options.default_popup || "",
       area: browserAreas[options.default_area || "navbar"],
     };
@@ -103,13 +99,26 @@ this.browserAction = class extends ExtensionAPI {
                                  "or not in your browser_action options.");
     }
 
+    browserActionMap.set(extension, this);
+
+    this.defaults.icon = await StartupCache.get(
+      extension, ["browserAction", "default_icon"],
+      () => IconDetails.normalize({
+        path: options.default_icon,
+        iconType: "browserAction",
+        themeIcons: options.theme_icons,
+      }, extension));
+
+    this.iconData.set(
+      this.defaults.icon,
+      await StartupCache.get(
+        extension, ["browserAction", "default_icon_data"],
+        () => this.getIconData(this.defaults.icon)));
+
     this.tabContext = new TabContext(tab => Object.create(this.defaults),
                                      extension);
 
-    EventEmitter.decorate(this);
-
     this.build();
-    browserActionMap.set(extension, this);
   }
 
   onShutdown(reason) {
@@ -131,6 +140,10 @@ this.browserAction = class extends ExtensionAPI {
       tooltiptext: this.defaults.title || "",
       defaultArea: this.defaults.area,
 
+      // Don't attempt to load properties from the built-in widget string
+      // bundle.
+      localized: false,
+
       onBeforeCreated: document => {
         let view = document.createElementNS(XUL_NS, "panelview");
         view.id = this.viewId;
@@ -138,7 +151,11 @@ this.browserAction = class extends ExtensionAPI {
         view.setAttribute("extension", true);
 
         document.getElementById("PanelUI-multiView").appendChild(view);
-        document.addEventListener("popupshowing", this);
+
+        if (this.extension.hasPermission("menus") ||
+            this.extension.hasPermission("contextMenus")) {
+          document.addEventListener("popupshowing", this);
+        }
       },
 
       onDestroyed: document => {
@@ -161,7 +178,7 @@ this.browserAction = class extends ExtensionAPI {
         node.onmouseover = event => this.handleEvent(event);
         node.onmouseout = event => this.handleEvent(event);
 
-        this.updateButton(node, this.defaults);
+        this.updateButton(node, this.defaults, true);
       },
 
       onViewShowing: async event => {
@@ -178,10 +195,6 @@ this.browserAction = class extends ExtensionAPI {
         // Google Chrome onClicked extension API.
         if (popupURL) {
           try {
-            // FIXME: The line below needs to change eventually, but for now:
-            // ensure the view is _always_ visible _before_ `popup.attach()` is
-            // called. PanelMultiView.jsm dictates different behavior.
-            event.target.setAttribute("current", true);
             let popup = this.getPopup(document.defaultView, popupURL);
             let attachPromise = popup.attach(event.target);
             event.detail.addBlocker(attachPromise);
@@ -202,7 +215,9 @@ this.browserAction = class extends ExtensionAPI {
           // This isn't not a hack, but it seems to provide the correct behavior
           // with the fewest complications.
           event.preventDefault();
-          this.emit("click");
+          this.emit("click", tabbrowser.selectedBrowser);
+          // Ensure we close any popups this node was in:
+          CustomizableUI.hidePanelForNode(event.target);
         }
       },
     });
@@ -241,16 +256,13 @@ this.browserAction = class extends ExtensionAPI {
     // Google Chrome onClicked extension API.
     if (this.getProperty(tab, "popup")) {
       if (this.widget.areaType == CustomizableUI.TYPE_MENU_PANEL) {
-        if (gPhotonStructure) {
-          await window.document.getElementById("nav-bar").overflowable.show();
-        } else {
-          await window.PanelUI.show();
-        }
+        await window.document.getElementById("nav-bar").overflowable.show();
       }
 
       let event = new window.CustomEvent("command", {bubbles: true, cancelable: true});
       widget.node.dispatchEvent(event);
     } else {
+      this.tabManager.addActiveTabPermission(tab);
       this.emit("click");
     }
   }
@@ -329,10 +341,6 @@ this.browserAction = class extends ExtensionAPI {
 
 
       case "popupshowing":
-        if (!global.actionContextMenu) {
-          break;
-        }
-
         const menu = event.target;
         const trigger = menu.triggerNode;
         const node = window.document.getElementById(this.id);
@@ -416,10 +424,9 @@ this.browserAction = class extends ExtensionAPI {
 
   // Update the toolbar button |node| with the tab context data
   // in |tabData|.
-  updateButton(node, tabData) {
+  updateButton(node, tabData, sync = false) {
     let title = tabData.title || this.extension.name;
-
-    node.ownerGlobal.requestAnimationFrame(() => {
+    let callback = () => {
       node.setAttribute("tooltiptext", title);
       node.setAttribute("label", title);
 
@@ -454,7 +461,12 @@ this.browserAction = class extends ExtensionAPI {
       }
 
       node.setAttribute("style", style);
-    });
+    };
+    if (sync) {
+      callback();
+    } else {
+      node.ownerGlobal.requestAnimationFrame(callback);
+    }
   }
 
   getIconData(icons) {
@@ -465,7 +477,7 @@ this.browserAction = class extends ExtensionAPI {
 
     // If the best available icon size is not divisible by 16, check if we have
     // an 18px icon to fall back to, and trim off the padding instead.
-    if (size % 16 && !icon.endsWith(".svg")) {
+    if (size % 16 && typeof icon === "string" && !icon.endsWith(".svg")) {
       let result = IconDetails.getPreferredIcon(icons, this.extension, 18);
 
       if (result.size % 18 == 0) {
@@ -475,14 +487,27 @@ this.browserAction = class extends ExtensionAPI {
       }
     }
 
-    let getIcon = size => IconDetails.escapeUrl(
-      IconDetails.getPreferredIcon(icons, this.extension, size).icon);
+    let getIcon = (size, theme) => {
+      let {icon} = IconDetails.getPreferredIcon(icons, this.extension, size);
+      if (typeof icon === "object") {
+        return IconDetails.escapeUrl(icon[theme]);
+      }
+      return IconDetails.escapeUrl(icon);
+    };
+
+    let getStyle = (name, size) => {
+      return `
+        --webextension-${name}: url("${getIcon(size, "default")}");
+        --webextension-${name}-light: url("${getIcon(size, "light")}");
+        --webextension-${name}-dark: url("${getIcon(size, "dark")}");
+      `;
+    };
 
     let style = `
-      --webextension-menupanel-image: url("${getIcon(32)}");
-      --webextension-menupanel-image-2x: url("${getIcon(64)}");
-      --webextension-toolbar-image: url("${IconDetails.escapeUrl(icon)}");
-      --webextension-toolbar-image-2x: url("${getIcon(baseSize * 2)}");
+      ${getStyle("menupanel-image", 32)}
+      ${getStyle("menupanel-image-2x", 64)}
+      ${getStyle("toolbar-image", baseSize)}
+      ${getStyle("toolbar-image-2x", baseSize * 2)}
     `;
 
     return {style, legacy};
@@ -550,9 +575,10 @@ this.browserAction = class extends ExtensionAPI {
 
     return {
       browserAction: {
-        onClicked: new SingletonEventManager(context, "browserAction.onClicked", fire => {
-          let listener = () => {
-            fire.async(tabManager.convert(tabTracker.activeTab));
+        onClicked: new InputEventManager(context, "browserAction.onClicked", fire => {
+          let listener = (event, browser) => {
+            context.withPendingBrowser(browser, () =>
+              fire.sync(tabManager.convert(tabTracker.activeTab)));
           };
           browserAction.on("click", listener);
           return () => {
@@ -591,6 +617,8 @@ this.browserAction = class extends ExtensionAPI {
         setIcon: function(details) {
           let tab = getTab(details.tabId);
 
+          details.iconType = "browserAction";
+
           let icon = IconDetails.normalize(details, extension, context);
           browserAction.setProperty(tab, "icon", icon);
         },
@@ -617,6 +645,9 @@ this.browserAction = class extends ExtensionAPI {
           // For internal consistency, we currently resolve both relative to the
           // calling context.
           let url = details.popup && context.uri.resolve(details.popup);
+          if (url && !context.checkLoadURL(url)) {
+            return Promise.reject({message: `Access denied for URL ${url}`});
+          }
           browserAction.setProperty(tab, "popup", url);
         },
 
@@ -642,6 +673,11 @@ this.browserAction = class extends ExtensionAPI {
 
           let color = browserAction.getProperty(tab, "badgeBackgroundColor");
           return Promise.resolve(color || [0xd9, 0, 0, 255]);
+        },
+
+        openPopup: function() {
+          let window = windowTracker.topWindow;
+          browserAction.triggerAction(window);
         },
       },
     };

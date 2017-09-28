@@ -54,7 +54,7 @@
 #include "nsTArray.h"
 #include "nsTemplateMatch.h"
 #include "nsTemplateRule.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "nsWhitespaceTokenizer.h"
 #include "nsGkAtoms.h"
 #include "nsXULElement.h"
@@ -64,7 +64,7 @@
 #include "PLDHashTable.h"
 #include "plhash.h"
 #include "nsPIDOMWindow.h"
-#include "nsIConsoleService.h" 
+#include "nsIConsoleService.h"
 #include "nsNetUtil.h"
 #include "nsXULTemplateBuilder.h"
 #include "nsXULTemplateQueryProcessorRDF.h"
@@ -87,8 +87,6 @@ using namespace mozilla;
 nsrefcnt                  nsXULTemplateBuilder::gRefCnt = 0;
 nsIRDFService*            nsXULTemplateBuilder::gRDFService;
 nsIRDFContainerUtils*     nsXULTemplateBuilder::gRDFContainerUtils;
-nsIScriptSecurityManager* nsXULTemplateBuilder::gScriptSecurityManager;
-nsIPrincipal*             nsXULTemplateBuilder::gSystemPrincipal;
 nsIObserverService*       nsXULTemplateBuilder::gObserverService;
 
 LazyLogModule gXULTemplateLog("nsXULTemplateBuilder");
@@ -132,8 +130,6 @@ nsXULTemplateBuilder::~nsXULTemplateBuilder(void)
     if (--gRefCnt == 0) {
         NS_IF_RELEASE(gRDFService);
         NS_IF_RELEASE(gRDFContainerUtils);
-        NS_IF_RELEASE(gSystemPrincipal);
-        NS_IF_RELEASE(gScriptSecurityManager);
         NS_IF_RELEASE(gObserverService);
     }
 }
@@ -154,15 +150,6 @@ nsXULTemplateBuilder::InitGlobals()
 
         NS_DEFINE_CID(kRDFContainerUtilsCID, NS_RDFCONTAINERUTILS_CID);
         rv = CallGetService(kRDFContainerUtilsCID, &gRDFContainerUtils);
-        if (NS_FAILED(rv))
-            return rv;
-
-        rv = CallGetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID,
-                            &gScriptSecurityManager);
-        if (NS_FAILED(rv))
-            return rv;
-
-        rv = gScriptSecurityManager->GetSystemPrincipal(&gSystemPrincipal);
         if (NS_FAILED(rv))
             return rv;
 
@@ -298,7 +285,7 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsXULTemplateBuilder)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIXULTemplateBuilder)
 NS_INTERFACE_MAP_END
 
-JSObject* 
+JSObject*
 nsXULTemplateBuilder::WrapObject(JSContext* aCx,
                                  JS::Handle<JSObject*> aGivenProto)
 {
@@ -500,7 +487,7 @@ nsXULTemplateBuilder::HasGeneratedContent(nsIRDFResource* aResource,
                                           bool* aGenerated)
 {
     ErrorResult rv;
-    const nsAString& tag = aTag ? nsDependentAtomString(aTag) : NullString();
+    const nsAString& tag = aTag ? nsDependentAtomString(aTag) : VoidString();
     *aGenerated = HasGeneratedContent(aResource, tag, rv);
     return rv.StealNSResult();
 }
@@ -798,7 +785,7 @@ nsXULTemplateBuilder::UpdateResultInContainer(nsIXULTemplateResult* aOldResult,
                         if (findmatch->GetContainer() == aInsertionPoint) {
                             nsTemplateQuerySet* qs =
                                 mQuerySets[findmatch->QuerySetPriority()];
-                        
+
                             DetermineMatchedRule(aInsertionPoint, findmatch->mResult,
                                                  qs, &matchedrule, &ruleindex);
 
@@ -1206,14 +1193,18 @@ nsXULTemplateBuilder::AttributeChanged(nsIDocument* aDocument,
         // case we may need to nuke and rebuild the entire content model
         // beneath the element.
         if (aAttribute == nsGkAtoms::ref)
-            nsContentUtils::AddScriptRunner(
-                NewRunnableMethod(this, &nsXULTemplateBuilder::RunnableRebuild));
+          nsContentUtils::AddScriptRunner(
+            NewRunnableMethod("nsXULTemplateBuilder::RunnableRebuild",
+                              this,
+                              &nsXULTemplateBuilder::RunnableRebuild));
 
         // Check for a change to the 'datasources' attribute. If so, setup
         // mDB by parsing the new value and rebuild.
         else if (aAttribute == nsGkAtoms::datasources) {
-            nsContentUtils::AddScriptRunner(
-                NewRunnableMethod(this, &nsXULTemplateBuilder::RunnableLoadAndRebuild));
+          nsContentUtils::AddScriptRunner(
+            NewRunnableMethod("nsXULTemplateBuilder::RunnableLoadAndRebuild",
+                              this,
+                              &nsXULTemplateBuilder::RunnableLoadAndRebuild));
         }
     }
 }
@@ -1233,7 +1224,9 @@ nsXULTemplateBuilder::ContentRemoved(nsIDocument* aDocument,
 
         // Pass false to Uninit since content is going away anyway
         nsContentUtils::AddScriptRunner(
-            NewRunnableMethod(this, &nsXULTemplateBuilder::UninitFalse));
+          NewRunnableMethod("nsXULTemplateBuilder::UninitFalse",
+                            this,
+                            &nsXULTemplateBuilder::UninitFalse));
 
         MOZ_ASSERT(aDocument == mObservedDocument);
         StopObserving();
@@ -1272,7 +1265,9 @@ nsXULTemplateBuilder::NodeWillBeDestroyed(const nsINode* aNode)
     mCompDB = nullptr;
 
     nsContentUtils::AddScriptRunner(
-        NewRunnableMethod(this, &nsXULTemplateBuilder::UninitTrue));
+      NewRunnableMethod("nsXULTemplateBuilder::UninitTrue",
+                        this,
+                        &nsXULTemplateBuilder::UninitTrue));
 }
 
 
@@ -1291,7 +1286,7 @@ nsXULTemplateBuilder::LoadDataSources(nsIDocument* aDocument,
 
     nsresult rv;
     bool isRDFQuery = false;
-  
+
     // we'll set these again later, after we create a new composite ds
     mDB = nullptr;
     mCompDB = nullptr;
@@ -1307,7 +1302,7 @@ nsXULTemplateBuilder::LoadDataSources(nsIDocument* aDocument,
 
     // create the query processor. The querytype attribute on the root element
     // may be used to create one of a specific type.
-  
+
     // XXX should non-chrome be restricted to specific names?
     if (querytype.IsEmpty())
         querytype.AssignLiteral("rdf");
@@ -1348,10 +1343,10 @@ nsXULTemplateBuilder::LoadDataSources(nsIDocument* aDocument,
         // JS property "by hand".
         InitHTMLTemplateRoot();
     }
-  
+
     return NS_OK;
 }
-  
+
 nsresult
 nsXULTemplateBuilder::LoadDataSourceUrls(nsIDocument* aDocument,
                                          const nsAString& aDataSources,
@@ -1364,9 +1359,7 @@ nsXULTemplateBuilder::LoadDataSourceUrls(nsIDocument* aDocument,
     NS_ASSERTION(docPrincipal == mRoot->NodePrincipal(),
                  "Principal mismatch?  Which one to use?");
 
-    bool isTrusted = false;
-    nsresult rv = IsSystemPrincipal(docPrincipal, &isTrusted);
-    NS_ENSURE_SUCCESS(rv, rv);
+    bool isTrusted = docPrincipal->GetIsSystemPrincipal();
 
     // Parse datasources: they are assumed to be a whitespace
     // separated list of URIs; e.g.,
@@ -1379,6 +1372,7 @@ nsXULTemplateBuilder::LoadDataSourceUrls(nsIDocument* aDocument,
     if (!uriList)
         return NS_ERROR_FAILURE;
 
+    nsresult rv;
     nsAutoString datasources(aDataSources);
     uint32_t first = 0;
     while (1) {
@@ -1439,7 +1433,7 @@ nsXULTemplateBuilder::LoadDataSourceUrls(nsIDocument* aDocument,
                                         getter_AddRefs(mDataSource));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    if (aIsRDFQuery && mDataSource) {  
+    if (aIsRDFQuery && mDataSource) {
         // check if we were given an inference engine type
         nsCOMPtr<nsIRDFInferDataSource> inferDB = do_QueryInterface(mDataSource);
         if (inferDB) {
@@ -2123,7 +2117,7 @@ nsXULTemplateBuilder::CompileExtendedQuery(nsIContent* aRuleElement,
     // allow the conditions to be placed directly inside the rule
     if (!conditions)
         conditions = aRuleElement;
-  
+
     rv = CompileConditions(rule, conditions);
     // If the rule compilation failed, then we have to bail.
     if (NS_FAILED(rv)) {
@@ -2536,17 +2530,6 @@ nsXULTemplateBuilder::AddBindingsFor(nsXULTemplateBuilder* aThis,
         // In the simple syntax, the binding is always from the
         // member variable, through the property, to the target.
         rule->AddBinding(rule->GetMemberVariable(), property, var);
-}
-
-
-nsresult
-nsXULTemplateBuilder::IsSystemPrincipal(nsIPrincipal *principal, bool *result)
-{
-  if (!gSystemPrincipal)
-    return NS_ERROR_UNEXPECTED;
-
-  *result = (principal == gSystemPrincipal);
-  return NS_OK;
 }
 
 bool

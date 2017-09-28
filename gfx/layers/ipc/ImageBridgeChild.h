@@ -21,6 +21,7 @@
 #include "nsDebug.h"                    // for NS_RUNTIMEABORT
 #include "nsIObserver.h"
 #include "nsRegion.h"                   // for nsIntRegion
+#include "nsRefPtrHashtable.h"
 #include "mozilla/gfx/Rect.h"
 #include "mozilla/ReentrantMonitor.h"   // for ReentrantMonitor, etc
 
@@ -203,8 +204,7 @@ public:
   already_AddRefed<CanvasClient> CreateCanvasClient(CanvasClient::CanvasClientType aType,
                                                     TextureFlags aFlag);
   void UpdateAsyncCanvasRenderer(AsyncCanvasRenderer* aClient);
-  void UpdateImageClient(RefPtr<ImageClient> aClient, RefPtr<ImageContainer> aContainer);
-  static void DispatchReleaseTextureClient(TextureClient* aClient);
+  void UpdateImageClient(RefPtr<ImageContainer> aContainer);
 
   /**
    * Flush all Images sent to CompositableHost.
@@ -237,8 +237,6 @@ private:
     CompositableType aType,
     ImageContainer* aImageContainer);
 
-  void ReleaseTextureClientNow(TextureClient* aClient);
-
   void UpdateAsyncCanvasRendererNow(AsyncCanvasRenderer* aClient);
   void UpdateAsyncCanvasRendererSync(
     SynchronousTask* aTask,
@@ -251,6 +249,8 @@ private:
 
   void ProxyAllocShmemNow(SynchronousTask* aTask, AllocShmemParams* aParams);
   void ProxyDeallocShmemNow(SynchronousTask* aTask, Shmem* aShmem, bool* aResult);
+
+  void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aIdentifier);
 
 public:
   // CompositableForwarder
@@ -392,7 +392,7 @@ private:
    * Hold TextureClients refs until end of their usages on host side.
    * It defer calling of TextureClient recycle callback.
    */
-  nsDataHashtable<nsUint64HashKey, RefPtr<TextureClient> > mTexturesWaitingRecycled;
+  nsRefPtrHashtable<nsUint64HashKey, TextureClient> mTexturesWaitingRecycled;
 
   /**
    * Mapping from async compositable IDs to image containers.

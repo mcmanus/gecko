@@ -380,6 +380,62 @@ Blocklist.prototype = {
   },
 
   /**
+   * Returns a matching blocklist entry for the given add-on, if one
+   * exists.
+   *
+   * @param   id
+   *          The ID of the item to get the blocklist state for.
+   * @param   version
+   *          The version of the item to get the blocklist state for.
+   * @param   addonEntries
+   *          The add-on blocklist entries to compare against.
+   * @param   appVersion
+   *          The application version to compare to, will use the current
+   *          version if null.
+   * @param   toolkitVersion
+   *          The toolkit version to compare to, will use the current version if
+   *          null.
+   * @returns A blocklist entry for this item, with `state` and `url`
+   *          properties indicating the block state and URL, if there is
+   *          a matching blocklist entry, or null otherwise.
+   */
+  _getAddonBlocklistEntry(addon, addonEntries, appVersion, toolkitVersion) {
+    if (!gBlocklistEnabled)
+      return null;
+
+    // Not all applications implement nsIXULAppInfo (e.g. xpcshell doesn't).
+    if (!appVersion && !gApp.version)
+      return null;
+
+    if (!appVersion)
+      appVersion = gApp.version;
+    if (!toolkitVersion)
+      toolkitVersion = gApp.platformVersion;
+
+    var blItem = this._findMatchingAddonEntry(addonEntries, addon);
+    if (!blItem)
+      return null;
+
+    for (let currentblItem of blItem.versions) {
+      if (currentblItem.includesItem(addon.version, appVersion, toolkitVersion)) {
+        return {
+          state: (currentblItem.severity >= gBlocklistLevel ?
+                  Ci.nsIBlocklistService.STATE_BLOCKED : Ci.nsIBlocklistService.STATE_SOFTBLOCKED),
+          url: blItem.blockID && this._createBlocklistURL(blItem.blockID),
+        };
+      }
+    }
+    return null;
+  },
+
+  getAddonBlocklistEntry(addon, appVersion, toolkitVersion) {
+    if (!this._isBlocklistLoaded())
+      this._loadBlocklist();
+    return this._getAddonBlocklistEntry(addon, this._addonEntries,
+                                        appVersion, toolkitVersion);
+  },
+
+  /**
    * Private version of getAddonBlocklistState that allows the caller to pass in
    * the add-on blocklist entries to compare against.
    *
@@ -399,27 +455,9 @@ Blocklist.prototype = {
    *          defined in nsIBlocklistService.
    */
   _getAddonBlocklistState(addon, addonEntries, appVersion, toolkitVersion) {
-    if (!gBlocklistEnabled)
-      return Ci.nsIBlocklistService.STATE_NOT_BLOCKED;
-
-    // Not all applications implement nsIXULAppInfo (e.g. xpcshell doesn't).
-    if (!appVersion && !gApp.version)
-      return Ci.nsIBlocklistService.STATE_NOT_BLOCKED;
-
-    if (!appVersion)
-      appVersion = gApp.version;
-    if (!toolkitVersion)
-      toolkitVersion = gApp.platformVersion;
-
-    var blItem = this._findMatchingAddonEntry(addonEntries, addon);
-    if (!blItem)
-      return Ci.nsIBlocklistService.STATE_NOT_BLOCKED;
-
-    for (let currentblItem of blItem.versions) {
-      if (currentblItem.includesItem(addon.version, appVersion, toolkitVersion))
-        return currentblItem.severity >= gBlocklistLevel ? Ci.nsIBlocklistService.STATE_BLOCKED :
-                                                       Ci.nsIBlocklistService.STATE_SOFTBLOCKED;
-    }
+    let entry = this._getAddonBlocklistEntry(addon, addonEntries, appVersion, toolkitVersion);
+    if (entry)
+      return entry.state;
     return Ci.nsIBlocklistService.STATE_NOT_BLOCKED;
   },
 
@@ -475,17 +513,11 @@ Blocklist.prototype = {
 
   /* See nsIBlocklistService */
   getAddonBlocklistURL(addon, appVersion, toolkitVersion) {
-    if (!gBlocklistEnabled)
-      return "";
-
     if (!this._isBlocklistLoaded())
       this._loadBlocklist();
 
-    let blItem = this._findMatchingAddonEntry(this._addonEntries, addon);
-    if (!blItem || !blItem.blockID)
-      return null;
-
-    return this._createBlocklistURL(blItem.blockID);
+    let entry = this._getAddonBlocklistEntry(addon, this._addonEntries);
+    return entry && entry.url;
   },
 
   _createBlocklistURL(id) {
@@ -595,7 +627,6 @@ Blocklist.prototype = {
     request.channel.notificationCallbacks = new gCertUtils.BadCertHandler();
     request.overrideMimeType("text/xml");
     request.setRequestHeader("Cache-Control", "no-cache");
-    request.QueryInterface(Components.interfaces.nsIJSXMLHttpRequest);
 
     request.addEventListener("error", event => this.onXMLError(event));
     request.addEventListener("load", event => this.onXMLLoad(event));
@@ -891,10 +922,6 @@ Blocklist.prototype = {
                                                       this._handleEmItemNode);
           break;
         case "pluginItems":
-          // We don't support plugins on b2g.
-          if (AppConstants.MOZ_B2G) {
-            return;
-          }
           this._pluginEntries = this._processItemNodes(element.childNodes, "pluginItem",
                                                        this._handlePluginItemNode);
           break;
@@ -1130,8 +1157,7 @@ Blocklist.prototype = {
 
   /* See nsIBlocklistService */
   getPluginBlocklistState(plugin, appVersion, toolkitVersion) {
-    if (AppConstants.platform == "android" ||
-        AppConstants.MOZ_B2G) {
+    if (AppConstants.platform == "android") {
       return Ci.nsIBlocklistService.STATE_NOT_BLOCKED;
     }
     if (!this._isBlocklistLoaded())
@@ -1293,10 +1319,6 @@ Blocklist.prototype = {
   },
 
   _blocklistUpdated(oldAddonEntries, oldPluginEntries) {
-    if (AppConstants.MOZ_B2G) {
-      return;
-    }
-
     var addonList = [];
 
     // A helper function that reverts the prefs passed to default values.
@@ -1307,10 +1329,15 @@ Blocklist.prototype = {
     const types = ["extension", "theme", "locale", "dictionary", "service"];
     AddonManager.getAddonsByTypes(types, addons => {
       for (let addon of addons) {
-        let oldState = Ci.nsIBlocklistService.STATE_NOTBLOCKED;
-        if (oldAddonEntries)
+        let oldState = addon.blocklistState;
+        if (addon.updateBlocklistState) {
+          addon.updateBlocklistState(false);
+        } else if (oldAddonEntries) {
           oldState = this._getAddonBlocklistState(addon, oldAddonEntries);
-        let state = this.getAddonBlocklistState(addon);
+        } else {
+          oldState = Ci.nsIBlocklistService.STATE_NOTBLOCKED;
+        }
+        let state = addon.blocklistState;
 
         LOG("Blocklist state for " + addon.id + " changed from " +
             oldState + " to " + state);
@@ -1323,7 +1350,7 @@ Blocklist.prototype = {
           // It's a hard block. We must reset certain preferences.
           let prefs = this._getAddonPrefs(addon);
           resetPrefs(prefs);
-         }
+        }
 
         // Ensure that softDisabled is false if the add-on is not soft blocked
         if (state != Ci.nsIBlocklistService.STATE_SOFTBLOCKED)

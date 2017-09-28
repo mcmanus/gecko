@@ -33,6 +33,11 @@ runHeuristicsTest([
         {"section": "section-payment", "addressType": "", "contactType": "", "fieldName": "cc-number"},
         {"section": "section-payment", "addressType": "", "contactType": "", "fieldName": "cc-exp-month"},
         {"section": "section-payment", "addressType": "", "contactType": "", "fieldName": "cc-exp-year"},
+        // FIXME bug 1392932 - the following field shouldn't be recognized as
+        // "tel-extension".
+        // The wrong prediction is caused by the name attr "brwsrAutofillText"
+        // which matches the regexp "ext\\b".
+        {"section": "", "addressType": "", "contactType": "", "fieldName": "tel-extension"},
 //      {"section": "", "addressType": "", "contactType": "", "fieldName": "cc-csc"},
         {"section": "section-payment", "addressType": "", "contactType": "", "fieldName": "tel"},
       ],

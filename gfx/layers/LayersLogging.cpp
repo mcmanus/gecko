@@ -65,12 +65,12 @@ AppendToString(std::stringstream& aStream, const nsRect& r,
   aStream << pfx;
   aStream << nsPrintfCString(
     "(x=%d, y=%d, w=%d, h=%d)",
-    r.x, r.y, r.width, r.height).get();
+    r.x, r.y, r.Width(), r.Height()).get();
   aStream << sfx;
 }
 
 void
-AppendToString(std::stringstream& aStream, const WrColor& c,
+AppendToString(std::stringstream& aStream, const wr::ColorF& c,
                const char* pfx, const char* sfx)
 {
   aStream << pfx;
@@ -81,24 +81,34 @@ AppendToString(std::stringstream& aStream, const WrColor& c,
 }
 
 void
-AppendToString(std::stringstream& aStream, const WrRect& r,
+AppendToString(std::stringstream& aStream, const wr::LayoutRect& r,
                const char* pfx, const char* sfx)
 {
   aStream << pfx;
   aStream << nsPrintfCString(
     "(x=%f, y=%f, w=%f, h=%f)",
-    r.x, r.y, r.width, r.height).get();
+    r.origin.x, r.origin.y, r.size.width, r.size.height).get();
   aStream << sfx;
 }
 
 void
-AppendToString(std::stringstream& aStream, const WrSize& s,
+AppendToString(std::stringstream& aStream, const wr::LayoutSize& s,
                const char* pfx, const char* sfx)
 {
   aStream << pfx;
   aStream << nsPrintfCString(
     "(w=%f, h=%f)",
     s.width, s.height).get();
+  aStream << sfx;
+}
+
+void
+AppendToString(std::stringstream& aStream, const wr::StickySideConstraint& s,
+               const char* pfx, const char* sfx)
+{
+  aStream << pfx;
+  aStream << nsPrintfCString("(margin=%f max=%f)",
+      s.margin, s.max_offset).get();
   aStream << sfx;
 }
 

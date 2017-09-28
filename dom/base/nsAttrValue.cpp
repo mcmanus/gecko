@@ -280,7 +280,7 @@ nsAttrValue::SetTo(const nsAttrValue& aOther)
     {
       ResetIfSet();
       mBits = aOther.mBits;
-      return;      
+      return;
     }
   }
 
@@ -835,13 +835,13 @@ nsAttrValue::AtomAt(int32_t aIndex) const
 {
   NS_PRECONDITION(aIndex >= 0, "Index must not be negative");
   NS_PRECONDITION(GetAtomCount() > uint32_t(aIndex), "aIndex out of range");
-  
+
   if (BaseType() == eAtomBase) {
     return GetAtomValue();
   }
 
   NS_ASSERTION(Type() == eAtomArray, "GetAtomCount must be confused");
-  
+
   return GetAtomArrayValue()->ElementAt(aIndex);
 }
 
@@ -1110,7 +1110,7 @@ nsAttrValue::Equals(nsIAtom* aValue, nsCaseTreatment aCaseSensitive) const
     aValue->ToString(value);
     return Equals(value, aCaseSensitive);
   }
-  
+
   switch (BaseType()) {
     case eStringBase:
     {
@@ -1256,7 +1256,7 @@ nsAttrValue::ParseAtomArray(const nsAString& aValue)
   aValue.BeginReading(iter);
   aValue.EndReading(end);
   bool hasSpace = false;
-  
+
   // skip initial whitespace
   while (iter != end && nsContentUtils::IsHTMLWhitespace(*iter)) {
     hasSpace = true;
@@ -1302,8 +1302,8 @@ nsAttrValue::ParseAtomArray(const nsAString& aValue)
   }
 
   AtomArray* array = GetAtomArrayValue();
-  
-  if (!array->AppendElement(classAtom)) {
+
+  if (!array->AppendElement(Move(classAtom))) {
     Reset();
     return;
   }
@@ -1318,7 +1318,7 @@ nsAttrValue::ParseAtomArray(const nsAString& aValue)
 
     classAtom = NS_AtomizeMainThread(Substring(start, iter));
 
-    if (!array->AppendElement(classAtom)) {
+    if (!array->AppendElement(Move(classAtom))) {
       Reset();
       return;
     }
@@ -1330,7 +1330,6 @@ nsAttrValue::ParseAtomArray(const nsAString& aValue)
   }
 
   SetMiscAtomOrString(&aValue);
-  return;
 }
 
 void
@@ -1712,12 +1711,11 @@ nsAttrValue::LoadImage(nsIDocument* aDocument)
   MiscContainer* cont = GetMiscContainer();
   mozilla::css::URLValue* url = cont->mValue.mURL;
 
-  NS_ASSERTION(!url->mString.IsEmpty(),
+  NS_ASSERTION(!url->IsStringEmpty(),
                "How did we end up with an empty string for eURL");
 
   mozilla::css::ImageValue* image =
-    new css::ImageValue(url->GetURI(), url->mString,
-                        do_AddRef(url->mExtraData), aDocument);
+      mozilla::css::ImageValue::CreateFromURLValue(url, aDocument);
 
   NS_ADDREF(image);
   cont->mValue.mImage = image;
@@ -1757,7 +1755,8 @@ nsAttrValue::ParseStyleAttribute(const nsAString& aString,
     RefPtr<URLExtraData> data = new URLExtraData(baseURI, docURI,
                                                  aElement->NodePrincipal());
     decl = ServoDeclarationBlock::FromCssText(aString, data,
-                                              ownerDoc->GetCompatibilityMode());
+                                              ownerDoc->GetCompatibilityMode(),
+                                              ownerDoc->CSSLoader());
   } else {
     css::Loader* cssLoader = ownerDoc->CSSLoader();
     nsCSSParser cssParser(cssLoader);

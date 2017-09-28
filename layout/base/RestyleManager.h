@@ -10,8 +10,8 @@
 #include "mozilla/OverflowChangedTracker.h"
 #include "nsChangeHint.h"
 #include "nsPresContext.h"
+#include "nsStringFwd.h"
 
-class nsCString;
 class nsCSSFrameConstructor;
 class nsStyleChangeList;
 
@@ -39,6 +39,13 @@ public:
   // Get an integer that increments every time we process pending restyles.
   // The value is never 0.
   uint32_t GetRestyleGeneration() const { return mRestyleGeneration; }
+  // Unlike GetRestyleGeneration, which means the actual restyling count,
+  // GetUndisplayedRestyleGeneration represents any possible DOM changes that
+  // can cause restyling. This is needed for getComputedStyle to work with
+  // non-styled (e.g. display: none) elements.
+  uint32_t GetUndisplayedRestyleGeneration() const {
+    return mUndisplayedRestyleGeneration;
+  }
 
   // Get an integer that increments every time there is a style change
   // as a result of a change to the :hover content state.
@@ -219,8 +226,7 @@ protected:
 
   void ContentStateChangedInternal(Element* aElement,
                                    EventStates aStateMask,
-                                   nsChangeHint* aOutChangeHint,
-                                   nsRestyleHint* aOutRestyleHint);
+                                   nsChangeHint* aOutChangeHint);
 
   bool IsDisconnected() { return mPresContext == nullptr; }
 
@@ -234,6 +240,15 @@ protected:
       // nsPresContext::GetRestyleGeneration returns when it no
       // longer has a RestyleManager.
       ++mRestyleGeneration;
+    }
+    IncrementUndisplayedRestyleGeneration();
+  }
+
+  void IncrementUndisplayedRestyleGeneration() {
+    if (++mUndisplayedRestyleGeneration == 0) {
+      // Ensure mUndisplayedRestyleGeneration > 0, for the same reason as
+      // IncrementRestyleGeneration.
+      ++mUndisplayedRestyleGeneration;
     }
   }
 
@@ -249,6 +264,7 @@ protected:
 private:
   nsPresContext* mPresContext; // weak, can be null after Disconnect().
   uint32_t mRestyleGeneration;
+  uint32_t mUndisplayedRestyleGeneration;
   uint32_t mHoverGeneration;
 
   // Used to keep track of frames that have been destroyed during
@@ -256,9 +272,9 @@ private:
   // they're referenced again later in the changelist.
   mozilla::UniquePtr<nsTHashtable<nsPtrHashKey<const nsIFrame>>> mDestroyedFrames;
 
+protected:
   const StyleBackendType mType;
 
-protected:
   // True if we're in the middle of a nsRefreshDriver refresh
   bool mInStyleRefresh;
 
@@ -267,31 +283,6 @@ protected:
   uint64_t mAnimationGeneration;
 
   OverflowChangedTracker mOverflowChangedTracker;
-
-  /**
-   * These are protected static methods that help with the change hint
-   * processing bits of the restyle managers.
-   */
-  static nsIFrame*
-  GetNearestAncestorFrame(nsIContent* aContent);
-
-  static nsIFrame*
-  GetNextBlockInInlineSibling(nsIFrame* aFrame);
-
-  /**
-   * Get the next continuation or similar ib-split sibling (assuming
-   * block/inline alternation), conditionally on it having the same style.
-   *
-   * Since this is used when deciding to copy the new style context, it
-   * takes as an argument the old style context to check if the style is
-   * the same.  When it is used in other contexts (i.e., where the next
-   * continuation would already have the new style context), the current
-   * style context should be passed.
-   */
-  static nsIFrame*
-  GetNextContinuationWithSameStyle(nsIFrame* aFrame,
-                                   nsStyleContext* aOldStyleContext,
-                                   bool* aHaveMoreContinuations = nullptr);
 
   AnimationsWithDestroyedFrame* mAnimationsWithDestroyedFrame = nullptr;
 

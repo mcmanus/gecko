@@ -8,7 +8,7 @@
   Eric D Vaughan
   A frame that can have multiple children. Only one child may be displayed at one time. So the
   can be flipped though like a Stack of cards.
- 
+
 **/
 
 #ifndef nsStackFrame_h___
@@ -33,7 +33,6 @@ public:
 #endif
 
   virtual void BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
-                                           const nsRect&           aDirtyRect,
                                            const nsDisplayListSet& aLists) override;
 
 protected:

@@ -9,7 +9,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <cstdlib>
-#include <pthread.h>
+#include <unistd.h>
 
 #include "APKOpen.h"
 
@@ -104,7 +104,7 @@ public:
     };
 
     static bool IsJavaUiThread() {
-        return pthread_equal(pthread_self(), ::getJavaUiThread());
+        return mozilla::jni::GetUIThreadId() == gettid();
     }
 
     static void ConstructBridge();
@@ -224,15 +224,6 @@ protected:
     jni::Object::GlobalRef mMessageQueue;
     jfieldID mMessageQueueMessages;
     jmethodID mMessageQueueNext;
-
-private:
-    class DelayedTask;
-    nsTArray<DelayedTask> mUiTaskQueue;
-    mozilla::Mutex mUiTaskQueueLock;
-
-public:
-    void PostTaskToUiThread(already_AddRefed<nsIRunnable> aTask, int aDelayMs);
-    int64_t RunDelayedUiThreadTasks();
 };
 
 class AutoJNIClass {

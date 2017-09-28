@@ -12,7 +12,7 @@
 #include "ImageTypes.h"                 // for ImageFormat, etc
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT_HELPER2
 #include "mozilla/Mutex.h"              // for Mutex
-#include "mozilla/ReentrantMonitor.h"   // for ReentrantMonitorAutoEnter, etc
+#include "mozilla/RecursiveMutex.h"     // for RecursiveMutex, etc
 #include "mozilla/TimeStamp.h"          // for TimeStamp
 #include "mozilla/gfx/Point.h"          // For IntSize
 #include "mozilla/layers/LayersTypes.h"  // for LayersBackend, etc
@@ -58,7 +58,12 @@ public:
    */
   class SurfaceReleaser : public mozilla::Runnable {
   public:
-    explicit SurfaceReleaser(RawRef aRef) : mRef(aRef) {}
+    explicit SurfaceReleaser(RawRef aRef)
+      : mozilla::Runnable(
+          "nsAutoRefTraits<nsMainThreadSourceSurfaceRef>::SurfaceReleaser")
+      , mRef(aRef)
+    {
+    }
     NS_IMETHOD Run() override {
       mRef->Release();
       return NS_OK;
@@ -96,7 +101,12 @@ public:
    */
   class SurfaceReleaser : public mozilla::Runnable {
   public:
-    explicit SurfaceReleaser(RawRef aRef) : mRef(aRef) {}
+    explicit SurfaceReleaser(RawRef aRef)
+      : mozilla::Runnable(
+          "nsAutoRefTraits<nsOwningThreadSourceSurfaceRef>::SurfaceReleaser")
+      , mRef(aRef)
+    {
+    }
     NS_IMETHOD Run() override {
       mRef->Release();
       return NS_OK;
@@ -410,7 +420,7 @@ public:
   /**
    * Set aImages as the list of timestamped to display. The Images must have
    * been created by this ImageContainer.
-   * Can be called on any thread. This method takes mReentrantMonitor
+   * Can be called on any thread. This method takes mRecursiveMutex
    * when accessing thread-shared state.
    * aImages must be non-empty. The first timestamp in the list may be
    * null but the others must not be, and the timestamps must increase.
@@ -427,7 +437,7 @@ public:
    * Note that this must not be called if ENABLE_ASYNC has not been set.
    *
    * The implementation calls CurrentImageChanged() while holding
-   * mReentrantMonitor.
+   * mRecursiveMutex.
    *
    * If this ImageContainer has an ImageClient for async video:
    * Schedule a task to send the image to the compositor using the
@@ -459,7 +469,7 @@ public:
    * been created by this ImageContainer.
    * Must be called on the main thread, within a layers transaction.
    *
-   * This method takes mReentrantMonitor
+   * This method takes mRecursiveMutex
    * when accessing thread-shared state.
    * aImage can be null. While it's null, nothing will be painted.
    *
@@ -490,7 +500,7 @@ public:
 
   /**
    * Returns if the container currently has an image.
-   * Can be called on any thread. This method takes mReentrantMonitor
+   * Can be called on any thread. This method takes mRecursiveMutex
    * when accessing thread-shared state.
    */
   bool HasCurrentImage();
@@ -518,7 +528,7 @@ public:
 
   /**
    * Returns the size of the image in pixels.
-   * Can be called on any thread. This method takes mReentrantMonitor when accessing
+   * Can be called on any thread. This method takes mRecursiveMutex when accessing
    * thread-shared state.
    */
   gfx::IntSize GetCurrentSize();
@@ -527,15 +537,18 @@ public:
    * Sets a size that the image is expected to be rendered at.
    * This is a hint for image backends to optimize scaling.
    * Default implementation in this class is to ignore the hint.
-   * Can be called on any thread. This method takes mReentrantMonitor
+   * Can be called on any thread. This method takes mRecursiveMutex
    * when accessing thread-shared state.
    */
   void SetScaleHint(const gfx::IntSize& aScaleHint)
   { mScaleHint = aScaleHint; }
 
+  const gfx::IntSize& GetScaleHint() const
+  { return mScaleHint; }
+
   void SetImageFactory(ImageFactory *aFactory)
   {
-    ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+    RecursiveMutexAutoLock lock(mRecursiveMutex);
     mImageFactory = aFactory ? aFactory : new ImageFactory();
   }
 
@@ -559,7 +572,7 @@ public:
    */
   TimeDuration GetPaintDelay()
   {
-    ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+    RecursiveMutexAutoLock lock(mRecursiveMutex);
     return mPaintDelay;
   }
 
@@ -568,7 +581,7 @@ public:
    * and painted at least once.  Can be called from any thread.
    */
   uint32_t GetPaintCount() {
-    ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+    RecursiveMutexAutoLock lock(mRecursiveMutex);
     return mPaintCount;
   }
 
@@ -582,7 +595,7 @@ public:
    */
   uint32_t GetDroppedImageCount()
   {
-    ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+    RecursiveMutexAutoLock lock(mRecursiveMutex);
     return mDroppedImageCount;
   }
 
@@ -594,12 +607,21 @@ public:
   }
 
   /**
+   * Get the ImageClient associated with this container. Returns only after
+   * validating, and it will recreate the image client if that fails.
+   * Returns nullptr if not applicable.
+   */
+  already_AddRefed<ImageClient> GetImageClient();
+
+  /**
    * Main thread only.
    */
   static ProducerID AllocateProducerID();
 
+  void DropImageClient();
+
 private:
-  typedef mozilla::ReentrantMonitor ReentrantMonitor;
+  typedef mozilla::RecursiveMutex RecursiveMutex;
 
   // Private destructor, to discourage deletion outside of Release():
   ~ImageContainer();
@@ -614,9 +636,9 @@ private:
 
   void EnsureImageClient();
 
-  // ReentrantMonitor to protect thread safe access to the "current
+  // RecursiveMutex to protect thread safe access to the "current
   // image", and any other state which is shared between threads.
-  ReentrantMonitor mReentrantMonitor;
+  RecursiveMutex mRecursiveMutex;
 
 #ifdef XP_WIN
   RefPtr<D3D11YCbCrRecycleAllocator> mD3D11YCbCrRecycleAllocator;
@@ -632,10 +654,10 @@ private:
   // threadsafe.
   uint32_t mPaintCount;
 
-  // See GetPaintDelay. Accessed only with mReentrantMonitor held.
+  // See GetPaintDelay. Accessed only with mRecursiveMutex held.
   TimeDuration mPaintDelay;
 
-  // See GetDroppedImageCount. Accessed only with mReentrantMonitor held.
+  // See GetDroppedImageCount. Accessed only with mRecursiveMutex held.
   uint32_t mDroppedImageCount;
 
   // This is the image factory used by this container, layer managers using
@@ -681,6 +703,23 @@ public:
   Image* GetImage() const
   {
     return mImages.IsEmpty() ? nullptr : mImages[0].mImage.get();
+  }
+
+  Image* GetImage(TimeStamp aTimeStamp) const
+  {
+    if (mImages.IsEmpty()) {
+      return nullptr;
+    }
+
+    MOZ_ASSERT(!aTimeStamp.IsNull());
+    uint32_t chosenIndex = 0;
+
+    while (chosenIndex + 1 < mImages.Length() &&
+           mImages[chosenIndex + 1].mTimeStamp <= aTimeStamp) {
+      ++chosenIndex;
+    }
+
+    return mImages[chosenIndex].mImage.get();
   }
 
 private:

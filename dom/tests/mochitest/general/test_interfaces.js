@@ -29,6 +29,8 @@ var ecmaGlobals =
     "ArrayBuffer",
     "Atomics",
     "Boolean",
+    {name: "ByteLengthQueuingStrategy", disabled: !SpecialPowers.Cu.getJSTestingFunctions().streamsAreEnabled()},
+    {name: "CountQueuingStrategy", disabled: !SpecialPowers.Cu.getJSTestingFunctions().streamsAreEnabled()},
     "DataView",
     "Date",
     "Error",
@@ -44,8 +46,7 @@ var ecmaGlobals =
     "Int32Array",
     "Int8Array",
     "InternalError",
-    {name: "Intl", nonReleaseAndroid: true, android: false},
-    "Iterator",
+    "Intl",
     "JSON",
     "Map",
     "Math",
@@ -55,6 +56,7 @@ var ecmaGlobals =
     "Promise",
     "Proxy",
     "RangeError",
+    {name: "ReadableStream", disabled: !SpecialPowers.Cu.getJSTestingFunctions().streamsAreEnabled()},
     "ReferenceError",
     "Reflect",
     "RegExp",
@@ -99,6 +101,10 @@ var legacyMozPrefixedInterfaces =
 // IMPORTANT: Do not change the list below without review from a DOM peer!
 var interfaceNamesInGlobalScope =
   [
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "AbortController",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "AbortSignal",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "AnalyserNode",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -394,8 +400,6 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLAnchorElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "HTMLAppletElement",
-// IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLAreaElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLAudioElement",
@@ -412,7 +416,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLCollection",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "HTMLContentElement",
+    {name: "HTMLContentElement", stylo: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLDataElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -510,7 +514,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLSelectElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "HTMLShadowElement",
+    {name: "HTMLShadowElement", stylo: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLSourceElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -640,6 +644,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MediaRecorder",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "MediaRecorderErrorEvent",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "MediaSource",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MediaStream",
@@ -730,9 +736,9 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PerformanceNavigation",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "PerformanceObserver", nightly: true},
+    "PerformanceObserver",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "PerformanceObserverEntryList", nightly: true},
+    "PerformanceObserverEntryList",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PerformanceResourceTiming",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -755,9 +761,6 @@ var interfaceNamesInGlobalScope =
     "PopupBlockedEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "PopupBoxObject", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "PresentationDeviceInfoManager",
-     disabled: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "Presentation", desktop: false, release: false },
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -788,8 +791,6 @@ var interfaceNamesInGlobalScope =
     "RadioNodeList",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Range",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    "RecordErrorEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Rect",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -843,7 +844,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "ScopedCredentialInfo", disabled: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "ShadowRoot", // Bogus, but the test harness forces it on.  See bug 1159768.
+    {name: "ShadowRoot", stylo: false}, // Bogus, but the test harness forces it on.  See bug 1159768.
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "SharedWorker",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -873,7 +874,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "StorageEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "StorageManager", nightly: true, isSecureContext: true, android: false},
+    {name: "StorageManager", isSecureContext: true, android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "StyleSheet",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1299,6 +1300,7 @@ function createInterfaceMap(isXBLScope) {
   var isWindows = /Windows/.test(navigator.oscpu);
   var isAndroid = navigator.userAgent.includes("Android");
   var isLinux = /Linux/.test(navigator.oscpu) && !isAndroid;
+  var isStylo = SpecialPowers.DOMWindowUtils.isStyledByServo;
   var isSecureContext = window.isSecureContext;
 
   var interfaceMap = {};
@@ -1312,14 +1314,14 @@ function createInterfaceMap(isXBLScope) {
         ok(!("pref" in entry), "Bogus pref annotation for " + entry.name);
         if ((entry.nightly === !isNightly) ||
             (entry.nightlyAndroid === !(isAndroid && isNightly) && isAndroid) ||
-            (entry.nonReleaseAndroid === !(isAndroid && !isRelease) && isAndroid) ||
             (entry.xbl === !isXBLScope) ||
             (entry.desktop === !isDesktop) ||
             (entry.windows === !isWindows) ||
             (entry.releaseNonWindows === !isRelease && !isWindows) ||
             (entry.mac === !isMac) ||
             (entry.linux === !isLinux) ||
-            (entry.android === !isAndroid && !entry.nonReleaseAndroid && !entry.nightlyAndroid) ||
+            (entry.android === !isAndroid && !entry.nightlyAndroid) ||
+            (entry.stylo === !isStylo) ||
             (entry.release === !isRelease) ||
             (entry.isSecureContext === !isSecureContext) ||
             entry.disabled) {

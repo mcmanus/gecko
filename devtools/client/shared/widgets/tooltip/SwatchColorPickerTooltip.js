@@ -13,7 +13,7 @@ const SwatchBasedEditorTooltip = require("devtools/client/shared/widgets/tooltip
 const {LocalizationHelper} = require("devtools/shared/l10n");
 const L10N = new LocalizationHelper("devtools/client/locales/inspector.properties");
 
-const Heritage = require("sdk/core/heritage");
+const {extend} = require("devtools/shared/extend");
 
 const colorWidgetPref = "devtools.inspector.colorWidget.enabled";
 const NEW_COLOR_WIDGET = Services.prefs.getBoolPref(colorWidgetPref);
@@ -38,10 +38,7 @@ const XHTML_NS = "http://www.w3.org/1999/xhtml";
 function SwatchColorPickerTooltip(document,
                                   inspector,
                                   {supportsCssColor4ColorFunction}) {
-  let stylesheet = NEW_COLOR_WIDGET ?
-    "chrome://devtools/content/shared/widgets/color-widget.css" :
-    "chrome://devtools/content/shared/widgets/spectrum.css";
-  SwatchBasedEditorTooltip.call(this, document, stylesheet);
+  SwatchBasedEditorTooltip.call(this, document);
 
   this.inspector = inspector;
 
@@ -53,7 +50,7 @@ function SwatchColorPickerTooltip(document,
   this.cssColor4 = supportsCssColor4ColorFunction();
 }
 
-SwatchColorPickerTooltip.prototype = Heritage.extend(SwatchBasedEditorTooltip.prototype, {
+SwatchColorPickerTooltip.prototype = extend(SwatchBasedEditorTooltip.prototype, {
   /**
    * Fill the tooltip with a new instance of the spectrum color picker widget
    * initialized with the given color, and return the instance of spectrum
@@ -167,6 +164,10 @@ SwatchColorPickerTooltip.prototype = Heritage.extend(SwatchBasedEditorTooltip.pr
   _openEyeDropper: function () {
     let {inspector, toolbox, telemetry} = this.inspector;
     telemetry.toolOpened("pickereyedropper");
+
+    // cancelling picker(if it is already selected) on opening eye-dropper
+    toolbox.highlighterUtils.cancelPicker();
+
     inspector.pickColorFromPage(toolbox, {copyOnSelect: false}).then(() => {
       this.eyedropperOpen = true;
 
@@ -174,11 +175,12 @@ SwatchColorPickerTooltip.prototype = Heritage.extend(SwatchBasedEditorTooltip.pr
       this.hide();
 
       this.tooltip.emit("eyedropper-opened");
-    }, e => console.error(e));
+    }, console.error);
 
     inspector.once("color-picked", color => {
       toolbox.win.focus();
       this._selectColor(color);
+      this._onEyeDropperDone();
     });
 
     inspector.once("color-pick-canceled", () => {

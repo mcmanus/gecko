@@ -12,7 +12,6 @@
 #include "mozilla/EndianUtils.h"
 #include "mozilla/Logging.h"
 #include "mozilla/RefPtr.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/UniquePtr.h"
 #include "VideoUtils.h"
@@ -466,7 +465,7 @@ ConvertIndex(FallibleTArray<Index::Indice>& aDest,
 {
   if (!aDest.SetCapacity(aIndex.Length(), mozilla::fallible)) {
     return MediaResult{NS_ERROR_OUT_OF_MEMORY,
-                       RESULT_DETAIL("Could not resize to %" PRIuSIZE " indices",
+                       RESULT_DETAIL("Could not resize to %zu indices",
                                      aIndex.Length())};
   }
   for (size_t i = 0; i < aIndex.Length(); i++) {
@@ -764,11 +763,13 @@ MP4MetadataRust::Init()
     mp4parse_log(true);
   }
 
+  mp4parse_fallible_allocation(true);
+
   mp4parse_status rv = mp4parse_read(mRustParser.get());
   MOZ_LOG(sLog, LogLevel::Debug, ("rust parser returned %d\n", rv));
   Telemetry::Accumulate(Telemetry::MEDIA_RUST_MP4PARSE_SUCCESS,
                         rv == mp4parse_status_OK);
-  if (rv != mp4parse_status_OK) {
+  if (rv != mp4parse_status_OK && rv != mp4parse_status_TABLE_TOO_LARGE) {
     MOZ_LOG(sLog, LogLevel::Info, ("Rust mp4 parser fails to parse this stream."));
     MOZ_ASSERT(rv > 0);
     Telemetry::Accumulate(Telemetry::MEDIA_RUST_MP4PARSE_ERROR_CODE, rv);
@@ -827,6 +828,9 @@ MP4MetadataRust::GetNumberTracks(mozilla::TrackInfo::TrackType aType) const
     mp4parse_track_info track_info;
     rv = mp4parse_get_track_info(mRustParser.get(), i, &track_info);
     if (rv != mp4parse_status_OK) {
+      continue;
+    }
+    if (track_info.codec == mp4parse_codec::mp4parse_codec_UNKNOWN) {
       continue;
     }
     if (TrackTypeEqual(aType, track_info.track_type)) {
@@ -901,6 +905,9 @@ MP4MetadataRust::GetTrackInfo(mozilla::TrackInfo::TrackType aType,
     case mp4parse_codec_VP9: codec_string = "vp9"; break;
     case mp4parse_codec_MP3: codec_string = "mp3"; break;
     case mp4parse_codec_MP4V: codec_string = "mp4v"; break;
+    case mp4parse_codec_JPEG: codec_string = "jpeg"; break;
+    case mp4parse_codec_AC3: codec_string = "ac-3"; break;
+    case mp4parse_codec_EC3: codec_string = "ec-3"; break;
   }
   MOZ_LOG(sLog, LogLevel::Debug, ("track codec %s (%u)\n",
         codec_string, info.codec));

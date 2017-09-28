@@ -13,9 +13,6 @@
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventListenerManager.h"
-#ifdef MOZ_B2G
-#include "mozilla/Hal.h"
-#endif // #ifdef MOZ_B2G
 #include "mozilla/HalSensor.h"
 #include "mozilla/InternalMutationEvent.h"
 #include "mozilla/JSEventHandler.h"
@@ -33,9 +30,7 @@
 
 #include "EventListenerService.h"
 #include "GeckoProfiler.h"
-#ifdef MOZ_GECKO_PROFILER
 #include "ProfilerMarkerPayload.h"
-#endif
 #include "nsCOMArray.h"
 #include "nsCOMPtr.h"
 #include "nsContentUtils.h"
@@ -48,6 +43,7 @@
 #include "nsIDOMEventListener.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsISupports.h"
+#include "nsISupportsPrimitives.h"
 #include "nsIXPConnect.h"
 #include "nsJSUtils.h"
 #include "nsNameSpaceManager.h"
@@ -130,6 +126,7 @@ EventListenerManagerBase::EventListenerManagerBase()
   , mMayHavePointerEnterLeaveEventListener(false)
   , mMayHaveKeyEventListener(false)
   , mMayHaveInputOrCompositionEventListener(false)
+  , mMayHaveSelectionChangeEventListener(false)
   , mClearingListeners(false)
   , mIsMainThreadELM(NS_IsMainThread())
 {
@@ -346,18 +343,10 @@ EventListenerManager::AddEventListenerInternal(
     EnableDevice(eDeviceLight);
   } else if (aTypeAtom == nsGkAtoms::ondevicemotion) {
     EnableDevice(eDeviceMotion);
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_WIDGET_ANDROID)
   } else if (aTypeAtom == nsGkAtoms::onorientationchange) {
     EnableDevice(eOrientationChange);
 #endif
-#ifdef MOZ_B2G
-  } else if (aTypeAtom == nsGkAtoms::onmoztimechange) {
-    EnableDevice(eTimeChange);
-  } else if (aTypeAtom == nsGkAtoms::onmoznetworkupload) {
-    EnableDevice(eNetworkUpload);
-  } else if (aTypeAtom == nsGkAtoms::onmoznetworkdownload) {
-    EnableDevice(eNetworkDownload);
-#endif // MOZ_B2G
   } else if (aTypeAtom == nsGkAtoms::ontouchstart ||
              aTypeAtom == nsGkAtoms::ontouchend ||
              aTypeAtom == nsGkAtoms::ontouchmove ||
@@ -416,6 +405,11 @@ EventListenerManager::AddEventListenerInternal(
              aTypeAtom == nsGkAtoms::oninput) {
     if (!aFlags.mInSystemGroup) {
       mMayHaveInputOrCompositionEventListener = true;
+    }
+  } else if (aEventMessage == eSelectionChange) {
+    mMayHaveSelectionChangeEventListener = true;
+     if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+      window->SetHasSelectionChangeEventListeners();
     }
   }
 
@@ -485,13 +479,8 @@ EventListenerManager::IsDeviceType(EventMessage aEventMessage)
     case eDeviceLight:
     case eDeviceProximity:
     case eUserProximity:
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_WIDGET_ANDROID)
     case eOrientationChange:
-#endif
-#ifdef MOZ_B2G
-    case eTimeChange:
-    case eNetworkUpload:
-    case eNetworkDownload:
 #endif
       return true;
     default:
@@ -514,6 +503,7 @@ EventListenerManager::EnableDevice(EventMessage aEventMessage)
       // Falls back to SENSOR_ROTATION_VECTOR and SENSOR_ORIENTATION if
       // unavailable on device.
       window->EnableDeviceSensor(SENSOR_GAME_ROTATION_VECTOR);
+      window->EnableDeviceSensor(SENSOR_ROTATION_VECTOR);
 #else
       window->EnableDeviceSensor(SENSOR_ORIENTATION);
 #endif
@@ -538,18 +528,9 @@ EventListenerManager::EnableDevice(EventMessage aEventMessage)
       window->EnableDeviceSensor(SENSOR_LINEAR_ACCELERATION);
       window->EnableDeviceSensor(SENSOR_GYROSCOPE);
       break;
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_WIDGET_ANDROID)
     case eOrientationChange:
       window->EnableOrientationChangeListener();
-      break;
-#endif
-#ifdef MOZ_B2G
-    case eTimeChange:
-      window->EnableTimeChangeNotifications();
-      break;
-    case eNetworkUpload:
-    case eNetworkDownload:
-      window->EnableNetworkEvent(aEventMessage);
       break;
 #endif
     default:
@@ -593,20 +574,11 @@ EventListenerManager::DisableDevice(EventMessage aEventMessage)
     case eDeviceLight:
       window->DisableDeviceSensor(SENSOR_LIGHT);
       break;
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_WIDGET_ANDROID)
     case eOrientationChange:
       window->DisableOrientationChangeListener();
       break;
 #endif
-#ifdef MOZ_B2G
-    case eTimeChange:
-      window->DisableTimeChangeNotifications();
-      break;
-    case eNetworkUpload:
-    case eNetworkDownload:
-      window->DisableNetworkEvent(aEventMessage);
-      break;
-#endif // MOZ_B2G
     default:
       NS_WARNING("Disabling an unknown device sensor.");
       break;
@@ -871,12 +843,16 @@ EventListenerManager::SetEventHandler(nsIAtom* aName,
       scriptSample.AppendLiteral(" attribute on ");
       scriptSample.Append(tagName);
       scriptSample.AppendLiteral(" element");
+      nsCOMPtr<nsISupportsString> sampleIString(do_CreateInstance(NS_SUPPORTS_STRING_CONTRACTID));
+      if (sampleIString) {
+        sampleIString->SetData(scriptSample);
+      }
 
       bool allowsInlineScript = true;
       rv = csp->GetAllowsInline(nsIContentPolicy::TYPE_SCRIPT,
                                 EmptyString(), // aNonce
                                 true, // aParserCreated (true because attribute event handler)
-                                scriptSample,
+                                sampleIString,
                                 0,             // aLineNumber
                                 &allowsInlineScript);
       NS_ENSURE_SUCCESS(rv, rv);
@@ -1281,7 +1257,6 @@ EventListenerManager::HandleEventInternal(nsPresContext* aPresContext,
 
             nsresult rv = NS_OK;
             if (profiler_is_active()) {
-#ifdef MOZ_GECKO_PROFILER
               // Add a profiler label and a profiler marker for the actual
               // dispatch of the event.
               // This is a very hot code path, so we need to make sure not to
@@ -1289,9 +1264,9 @@ EventListenerManager::HandleEventInternal(nsPresContext* aPresContext,
               nsAutoString typeStr;
               (*aDOMEvent)->GetType(typeStr);
               NS_LossyConvertUTF16toASCII typeCStr(typeStr);
-              PROFILER_LABEL_DYNAMIC("EventListenerManager", "HandleEventInternal",
-                                     js::ProfileEntry::Category::EVENTS,
-                                     typeCStr.get());
+              AUTO_PROFILER_LABEL_DYNAMIC(
+                "EventListenerManager::HandleEventInternal", EVENTS,
+                typeCStr.get());
               TimeStamp startTime = TimeStamp::Now();
 
               rv = HandleEventSubType(listener, *aDOMEvent, aCurrentTarget);
@@ -1299,13 +1274,11 @@ EventListenerManager::HandleEventInternal(nsPresContext* aPresContext,
               TimeStamp endTime = TimeStamp::Now();
               uint16_t phase;
               (*aDOMEvent)->GetEventPhase(&phase);
-              PROFILER_MARKER_PAYLOAD(
+              profiler_add_marker(
                 "DOMEvent",
                 MakeUnique<DOMEventMarkerPayload>(typeStr, phase,
+                                                  aEvent->mTimeStamp,
                                                   startTime, endTime));
-#else
-              MOZ_CRASH("Gecko Profiler is N/A but profiler_is_active() returned true");
-#endif
             } else {
               rv = HandleEventSubType(listener, *aDOMEvent, aCurrentTarget);
             }
@@ -1761,6 +1734,41 @@ EventListenerManager::TraceListeners(JSTracer* aTrc)
     // We might have eWrappedJSListener, but that is the legacy type for
     // JS implemented event listeners, and trickier to handle here.
   }
+}
+
+bool
+EventListenerManager::HasNonSystemGroupListenersForUntrustedKeyEvents()
+{
+  uint32_t count = mListeners.Length();
+  for (uint32_t i = 0; i < count; ++i) {
+    Listener* listener = &mListeners.ElementAt(i);
+    if (!listener->mFlags.mInSystemGroup &&
+        listener->mFlags.mAllowUntrustedEvents &&
+        (listener->mTypeAtom == nsGkAtoms::onkeydown ||
+         listener->mTypeAtom == nsGkAtoms::onkeypress ||
+         listener->mTypeAtom == nsGkAtoms::onkeyup)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool
+EventListenerManager::HasNonPassiveNonSystemGroupListenersForUntrustedKeyEvents()
+{
+  uint32_t count = mListeners.Length();
+  for (uint32_t i = 0; i < count; ++i) {
+    Listener* listener = &mListeners.ElementAt(i);
+    if (!listener->mFlags.mPassive &&
+        !listener->mFlags.mInSystemGroup &&
+        listener->mFlags.mAllowUntrustedEvents &&
+        (listener->mTypeAtom == nsGkAtoms::onkeydown ||
+         listener->mTypeAtom == nsGkAtoms::onkeypress ||
+         listener->mTypeAtom == nsGkAtoms::onkeyup)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool

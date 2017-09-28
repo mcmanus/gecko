@@ -37,7 +37,6 @@
 #include "nsIDOMWindowUtils.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsILoadContext.h"
-#include "nsIProgrammingLanguage.h"
 #include "nsISensitiveInfoHiddenURI.h"
 #include "nsIServiceManager.h"
 #include "nsISupportsPrimitives.h"
@@ -583,7 +582,7 @@ private:
         innerID = NS_LITERAL_STRING("ServiceWorker");
         // Use scope as ID so the webconsole can decide if the message should
         // show up per tab
-        id.AssignWithConversion(mWorkerPrivate->ServiceWorkerScope());
+        CopyASCIItoUTF16(mWorkerPrivate->ServiceWorkerScope(), id);
       } else {
         innerID = NS_LITERAL_STRING("Worker");
       }
@@ -886,10 +885,8 @@ Console::Shutdown()
     }
   }
 
-  NS_ReleaseOnMainThread(
-    "Console::mStorage", mStorage.forget());
-  NS_ReleaseOnMainThread(
-    "Console::mSandbox", mSandbox.forget());
+  NS_ReleaseOnMainThreadSystemGroup("Console::mStorage", mStorage.forget());
+  NS_ReleaseOnMainThreadSystemGroup("Console::mSandbox", mSandbox.forget());
 
   mTimerRegistry.Clear();
   mCounterRegistry.Clear();
@@ -1055,6 +1052,11 @@ void
 Console::ProfileMethodInternal(JSContext* aCx, const nsAString& aAction,
                                const Sequence<JS::Value>& aData)
 {
+  // Make all Console API no-op if DevTools aren't enabled.
+  if (!nsContentUtils::DevToolsEnabled(aCx)) {
+    return;
+  }
+
   if (!NS_IsMainThread()) {
     // Here we are in a worker thread.
     RefPtr<ConsoleProfileRunnable> runnable =
@@ -1153,7 +1155,6 @@ StackFrameToStackEntry(JSContext* aCx, nsIStackFrame* aStackFrame,
     aStackEntry.mAsyncCause.Construct(cause);
   }
 
-  aStackEntry.mLanguage = nsIProgrammingLanguage::JAVASCRIPT;
   return NS_OK;
 }
 
@@ -1204,6 +1205,10 @@ Console::MethodInternal(JSContext* aCx, MethodName aMethodName,
                         const nsAString& aMethodString,
                         const Sequence<JS::Value>& aData)
 {
+  // Make all Console API no-op if DevTools aren't enabled.
+  if (!nsContentUtils::DevToolsEnabled(aCx)) {
+    return;
+  }
   AssertIsOnOwningThread();
 
   RefPtr<ConsoleCallData> callData(new ConsoleCallData());
@@ -1511,13 +1516,6 @@ Console::PopulateConsoleNotificationInTheTargetScope(JSContext* aCx,
   ClearException ce(aCx);
   RootedDictionary<ConsoleEvent> event(aCx);
 
-  // Save the principal's OriginAttributes in the console event data
-  // so that we will be able to filter messages by origin attributes.
-  JS::Rooted<JS::Value> originAttributesValue(aCx);
-  if (ToJSValue(aCx, aData->mOriginAttributes, &originAttributesValue)) {
-    event.mOriginAttributes = originAttributesValue;
-  }
-
   event.mAddonId = aData->mAddonId;
 
   event.mID.Construct();
@@ -1660,11 +1658,10 @@ Console::PopulateConsoleNotificationInTheTargetScope(JSContext* aCx,
                                     JS::PrivateValue(aData->mStack.get()));
 
       if (NS_WARN_IF(!JS_DefineProperty(aCx, eventObj, "stacktrace",
-                                        JS::UndefinedHandleValue,
-                                        JSPROP_ENUMERATE | JSPROP_SHARED |
-                                        JSPROP_GETTER | JSPROP_SETTER,
                                         JS_DATA_TO_FUNC_PTR(JSNative, funObj.get()),
-                                        nullptr))) {
+                                        nullptr,
+                                        JSPROP_ENUMERATE | JSPROP_SHARED |
+                                        JSPROP_GETTER | JSPROP_SETTER))) {
         return false;
       }
     }
@@ -1847,7 +1844,7 @@ Console::ProcessArguments(JSContext* aCx,
           int32_t diff = aSequence.Length() - aStyles.Length();
           if (diff > 0) {
             for (int32_t i = 0; i < diff; i++) {
-              if (NS_WARN_IF(!aStyles.AppendElement(NullString(), fallible))) {
+              if (NS_WARN_IF(!aStyles.AppendElement(VoidString(), fallible))) {
                 return false;
               }
             }
@@ -2085,10 +2082,7 @@ Console::StopTimer(JSContext* aCx, const JS::Value& aName,
   aTimerLabel = key;
 
   DOMHighResTimeStamp value = 0;
-  if (auto entry = mTimerRegistry.Lookup(key)) {
-    value = entry.Data();
-    entry.Remove();
-  } else {
+  if (!mTimerRegistry.Remove(key, &value)) {
     NS_WARNING("mTimerRegistry entry not found");
     return eTimerDoesntExist;
   }

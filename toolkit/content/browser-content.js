@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* eslint-env mozilla/frame-script */
+/* global sendAsyncMessage */
 
 var Cc = Components.classes;
 var Ci = Components.interfaces;
@@ -19,6 +20,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
   "resource://gre/modules/BrowserUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "SelectContentHelper",
   "resource://gre/modules/SelectContentHelper.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "FindContent",
+  "resource://gre/modules/FindContent.jsm");
 
 var global = this;
 
@@ -38,6 +41,8 @@ var ClickEventHandler = {
     this._screenX = null;
     this._screenY = null;
     this._lastFrame = null;
+    this._autoscrollHandledByApz = false;
+    this._scrollId = null;
     this.autoscrollLoop = this.autoscrollLoop.bind(this);
 
     Services.els.addSystemEventListener(global, "mousedown", this, true);
@@ -134,10 +139,32 @@ var ClickEventHandler = {
     if (!this._scrollable)
       return;
 
+    // In some configurations like Print Preview, content.performance
+    // (which we use below) is null. Autoscrolling is broken in Print
+    // Preview anyways (see bug 1393494), so just don't start it at all.
+    if (!content.performance)
+      return;
+
+    let domUtils = content.QueryInterface(Ci.nsIInterfaceRequestor)
+                          .getInterface(Ci.nsIDOMWindowUtils);
+    let scrollable = this._scrollable;
+    if (scrollable instanceof Ci.nsIDOMWindow) {
+      // getViewId() needs an element to operate on.
+      scrollable = scrollable.document.documentElement;
+    }
+    this._scrollId = null;
+    try {
+      this._scrollId = domUtils.getViewId(scrollable);
+    } catch (e) {
+      // No view ID - leave this._scrollId as null. Receiving side will check.
+    }
+    let presShellId = domUtils.getPresShellId();
     let [enabled] = sendSyncMessage("Autoscroll:Start",
                                     {scrolldir: this._scrolldir,
                                      screenX: event.screenX,
-                                     screenY: event.screenY});
+                                     screenY: event.screenY,
+                                     scrollId: this._scrollId,
+                                     presShellId});
     if (!enabled) {
       this._scrollable = null;
       return;
@@ -145,6 +172,7 @@ var ClickEventHandler = {
 
     Services.els.addSystemEventListener(global, "mousemove", this, true);
     addEventListener("pagehide", this, true);
+    Services.obs.addObserver(this, "autoscroll-handled-by-apz");
 
     this._ignoreMouseEvents = true;
     this._startX = event.screenX;
@@ -153,6 +181,7 @@ var ClickEventHandler = {
     this._screenY = event.screenY;
     this._scrollErrorX = 0;
     this._scrollErrorY = 0;
+    this._autoscrollHandledByApz = false;
     this._lastFrame = content.performance.now();
 
     content.requestAnimationFrame(this.autoscrollLoop);
@@ -165,6 +194,7 @@ var ClickEventHandler = {
 
       Services.els.removeSystemEventListener(global, "mousemove", this, true);
       removeEventListener("pagehide", this, true);
+      Services.obs.removeObserver(this, "autoscroll-handled-by-apz");
     }
   },
 
@@ -188,6 +218,12 @@ var ClickEventHandler = {
   autoscrollLoop(timestamp) {
     if (!this._scrollable) {
       // Scrolling has been canceled
+      return;
+    }
+
+    if (this._autoscrollHandledByApz) {
+      // APZ is handling the autoscroll, so we don't need to keep running
+      // this callback.
       return;
     }
 
@@ -224,6 +260,7 @@ var ClickEventHandler = {
       top: actualScrollY,
       behavior: "instant"
     });
+
     content.requestAnimationFrame(this.autoscrollLoop);
   },
 
@@ -255,6 +292,15 @@ var ClickEventHandler = {
       case "Autoscroll:Stop": {
         this.stopScroll();
         break;
+      }
+    }
+  },
+
+  observe(subject, topic, data) {
+    if (topic === "autoscroll-handled-by-apz") {
+      // The caller passes in the scroll id via 'data'.
+      if (data == this._scrollId) {
+        this._autoscrollHandledByApz = true;
       }
     }
   },
@@ -409,13 +455,13 @@ var Printing = {
     "Printing:Preview:Exit",
     "Printing:Preview:Navigate",
     "Printing:Preview:ParseDocument",
-    "Printing:Preview:UpdatePageCount",
     "Printing:Print",
   ],
 
   init() {
     this.MESSAGES.forEach(msgName => addMessageListener(msgName, this));
     addEventListener("PrintingError", this, true);
+    addEventListener("printPreviewUpdate", this, true);
   },
 
   get shouldSavePrintSettings() {
@@ -423,16 +469,49 @@ var Printing = {
            Services.prefs.getBoolPref("print.save_print_settings");
   },
 
+  printPreviewInitializingInfo: null,
+
   handleEvent(event) {
-    if (event.type == "PrintingError") {
-      let win = event.target.defaultView;
-      let wbp = win.QueryInterface(Ci.nsIInterfaceRequestor)
-                   .getInterface(Ci.nsIWebBrowserPrint);
-      let nsresult = event.detail;
-      sendAsyncMessage("Printing:Error", {
-        isPrinting: wbp.doingPrint,
-        nsresult,
-      });
+    switch (event.type) {
+      case "PrintingError": {
+        let win = event.target.defaultView;
+        let wbp = win.QueryInterface(Ci.nsIInterfaceRequestor)
+                     .getInterface(Ci.nsIWebBrowserPrint);
+        let nsresult = event.detail;
+        sendAsyncMessage("Printing:Error", {
+          isPrinting: wbp.doingPrint,
+          nsresult,
+        });
+        break;
+      }
+
+      case "printPreviewUpdate": {
+        let info = this.printPreviewInitializingInfo;
+        if (!info) {
+          // If there is no printPreviewInitializingInfo then we did not
+          // initiate the preview so ignore this event.
+          return;
+        }
+
+        // Only send Printing:Preview:Entered message on first update, indicated
+        // by printPreviewInitializingInfo.entered not being set.
+        if (!info.entered) {
+          info.entered = true;
+          sendAsyncMessage("Printing:Preview:Entered", {
+            failed: false,
+            changingBrowsers: info.changingBrowsers
+          });
+
+          // If we have another request waiting, dispatch it now.
+          if (info.nextRequest) {
+            Services.tm.dispatchToMainThread(info.nextRequest);
+          }
+        }
+
+        // Always send page count update.
+        this.updatePageCount();
+        break;
+      }
     }
   },
 
@@ -456,11 +535,6 @@ var Printing = {
 
       case "Printing:Preview:ParseDocument": {
         this.parseDocument(data.URL, Services.wm.getOuterWindowWithId(data.windowID));
-        break;
-      }
-
-      case "Printing:Preview:UpdatePageCount": {
-        this.updatePageCount();
         break;
       }
 
@@ -618,28 +692,6 @@ var Printing = {
   },
 
   enterPrintPreview(contentWindow, simplifiedMode, changingBrowsers, defaultPrinterName) {
-    // We'll call this whenever we've finished reflowing the document, or if
-    // we errored out while attempting to print preview (in which case, we'll
-    // notify the parent that we've failed).
-    let notifyEntered = (error) => {
-      removeEventListener("printPreviewUpdate", onPrintPreviewReady);
-      sendAsyncMessage("Printing:Preview:Entered", {
-        failed: !!error,
-        changingBrowsers,
-      });
-    };
-
-    let onPrintPreviewReady = () => {
-      notifyEntered();
-    };
-
-    // We have to wait for the print engine to finish reflowing all of the
-    // documents and subdocuments before we can tell the parent to flip to
-    // the print preview UI - otherwise, the print preview UI might ask for
-    // information (like the number of pages in the document) before we have
-    // our PresShells set up.
-    addEventListener("printPreviewUpdate", onPrintPreviewReady);
-
     try {
       let printSettings = this.getPrintSettings(defaultPrinterName);
 
@@ -649,28 +701,42 @@ var Printing = {
       if (printSettings && simplifiedMode)
         printSettings.docURL = contentWindow.document.baseURI;
 
-      // The print preview docshell will be in a different TabGroup,
-      // so we run it in a separate runnable to avoid touching a
-      // different TabGroup in our own runnable.
-      Services.tm.dispatchToMainThread(() => {
+      // The print preview docshell will be in a different TabGroup, so
+      // printPreviewInitialize must be run in a separate runnable to avoid
+      // touching a different TabGroup in our own runnable.
+      let printPreviewInitialize = () => {
         try {
+          this.printPreviewInitializingInfo = { changingBrowsers };
           docShell.printPreview.printPreview(printSettings, contentWindow, this);
         } catch (error) {
           // This might fail if we, for example, attempt to print a XUL document.
           // In that case, we inform the parent to bail out of print preview.
           Components.utils.reportError(error);
-          notifyEntered(error);
+          this.printPreviewInitializingInfo = null;
+          sendAsyncMessage("Printing:Preview:Entered", { failed: true });
         }
-      });
+      }
+
+      // If printPreviewInitializingInfo.entered is not set we are still in the
+      // initial setup of a previous preview request. We delay this one until
+      // that has finished because running them at the same time will almost
+      // certainly cause failures.
+      if (this.printPreviewInitializingInfo &&
+          !this.printPreviewInitializingInfo.entered) {
+        this.printPreviewInitializingInfo.nextRequest = printPreviewInitialize;
+      } else {
+        Services.tm.dispatchToMainThread(printPreviewInitialize);
+      }
     } catch (error) {
       // This might fail if we, for example, attempt to print a XUL document.
       // In that case, we inform the parent to bail out of print preview.
       Components.utils.reportError(error);
-      notifyEntered(error);
+      sendAsyncMessage("Printing:Preview:Entered", { failed: true });
     }
   },
 
   exitPrintPreview() {
+    this.printPreviewInitializingInfo = null;
     docShell.printPreview.exitPrintPreview();
   },
 
@@ -1006,9 +1072,6 @@ var AudioPlaybackListener = {
       case "mediaControlStopped":
         utils.mediaSuspend = suspendTypes.SUSPENDED_STOP_DISPOSABLE;
         break;
-      case "blockInactivePageMedia":
-        utils.mediaSuspend = suspendTypes.SUSPENDED_BLOCK;
-        break;
       case "resumeMedia":
         utils.mediaSuspend = suspendTypes.NONE_SUSPENDED;
         break;
@@ -1022,10 +1085,12 @@ var AudioPlaybackListener = {
     if (topic === "audio-playback") {
       if (subject && subject.top == global.content) {
         let name = "AudioPlayback:";
-        if (data === "blockStart") {
-          name += "BlockStart";
-        } else if (data === "blockStop") {
-          name += "BlockStop";
+        if (data === "activeMediaBlockStart") {
+          name += "ActiveMediaBlockStart";
+        } else if (data === "activeMediaBlockStop") {
+          name += "ActiveMediaBlockStop";
+        } else if (data == "mediaBlockStop") {
+          name += "MediaBlockStop";
         } else {
           name += (data === "active") ? "Start" : "Stop";
         }
@@ -1041,6 +1106,23 @@ var AudioPlaybackListener = {
   },
 };
 AudioPlaybackListener.init();
+
+var UnselectedTabHoverObserver = {
+  init() {
+    addMessageListener("Browser:UnselectedTabHover", this);
+    addEventListener("UnselectedTabHover:Enable", this);
+    addEventListener("UnselectedTabHover:Disable", this);
+  },
+  receiveMessage(message) {
+    Services.obs.notifyObservers(content.window, "unselected-tab-hover",
+                                 message.data.hovered);
+  },
+  handleEvent(event) {
+    sendAsyncMessage("UnselectedTabHover:Toggle",
+                     { enable: event.type == "UnselectedTabHover:Enable" });
+  }
+};
+UnselectedTabHoverObserver.init();
 
 addMessageListener("Browser:PurgeSessionHistory", function BrowserPurgeHistory() {
   let sessionHistory = docShell.QueryInterface(Ci.nsIWebNavigation).sessionHistory;
@@ -1264,7 +1346,7 @@ var ViewSelectionSource = {
       return undefined;
 
     // serialize
-    const VIEW_SOURCE_CSS = "resource://gre-resources/viewsource.css";
+    const VIEW_SOURCE_CSS = "resource://content-accessible/viewsource.css";
     const BUNDLE_URL = "chrome://global/locale/viewSource.properties";
 
     let bundle = Services.strings.createBundle(BUNDLE_URL);
@@ -1387,35 +1469,8 @@ var ViewSelectionSource = {
       return charTable[letter];
     }
 
-    function convertEntity(letter) {
-      try {
-        var unichar = this._entityConverter
-                          .ConvertToEntity(letter, entityVersion);
-        var entity = unichar.substring(1); // extract '&'
-        return '&amp;<span class="entity">' + entity + "</span>";
-      } catch (ex) {
-        return letter;
-      }
-    }
-
-    if (!this._entityConverter) {
-      try {
-        this._entityConverter = Cc["@mozilla.org/intl/entityconverter;1"]
-                                  .createInstance(Ci.nsIEntityConverter);
-      } catch (e) { }
-    }
-
-    const entityVersion = Ci.nsIEntityConverter.entityW3C;
-
-    var str = text;
-
     // replace chars in our charTable
-    str = str.replace(/[<>&"]/g, charTableLookup);
-
-    // replace chars > 0x7f via nsIEntityConverter
-    str = str.replace(/[^\0-\u007f]/g, convertEntity);
-
-    return str;
+    return text.replace(/[<>&"]/g, charTableLookup);
   }
 };
 
@@ -1749,9 +1804,10 @@ let DateTimePickerListener = {
             // element's value.
             value: Object.keys(value).length > 0 ? value
                                                  : this._inputElement.value,
-            step: this._inputElement.step,
-            min: this._inputElement.min,
-            max: this._inputElement.max,
+            min: this._inputElement.getMinimum(),
+            max: this._inputElement.getMaximum(),
+            step: this._inputElement.getStep(),
+            stepBase: this._inputElement.getStepBase(),
           },
         });
         break;
@@ -1800,3 +1856,38 @@ addEventListener("mozshowdropdown-sourcetouch", event => {
     new SelectContentHelper(event.target, {isOpenedViaTouch: true}, this);
   }
 });
+
+let ExtFind = {
+  init() {
+    addMessageListener("ext-Finder:CollectResults", this);
+    addMessageListener("ext-Finder:HighlightResults", this);
+    addMessageListener("ext-Finder:clearHighlighting", this);
+  },
+
+  _findContent: null,
+
+  async receiveMessage(message) {
+    if (!this._findContent) {
+      this._findContent = new FindContent(docShell);
+    }
+
+    let data;
+    switch (message.name) {
+      case "ext-Finder:CollectResults":
+        this.finderInited = true;
+        data = await this._findContent.findRanges(message.data);
+        sendAsyncMessage("ext-Finder:CollectResultsFinished", data);
+        break;
+      case "ext-Finder:HighlightResults":
+        data = this._findContent.highlightResults(message.data);
+        sendAsyncMessage("ext-Finder:HighlightResultsFinished", data);
+        break;
+      case "ext-Finder:clearHighlighting":
+        this._findContent.highlighter.highlight(false);
+        break;
+    }
+  },
+}
+
+ExtFind.init();
+

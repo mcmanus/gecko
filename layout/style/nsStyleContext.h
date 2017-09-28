@@ -26,12 +26,8 @@ class ServoStyleContext;
 } // namespace mozilla
 
 extern "C" {
-#define STYLE_STRUCT(name_, checkdata_cb_)     \
-  struct nsStyle##name_;                       \
-  const nsStyle##name_* Servo_GetStyle##name_( \
-    ServoComputedValuesBorrowedOrNull computed_values);
-#include "nsStyleStructList.h"
-#undef STYLE_STRUCT
+  void Servo_StyleContext_AddRef(const mozilla::ServoStyleContext* aContext);
+  void Servo_StyleContext_Release(const mozilla::ServoStyleContext* aContext);
 }
 
 /**
@@ -66,8 +62,6 @@ public:
 #endif
   MOZ_DECL_STYLO_CONVERT_METHODS(mozilla::GeckoStyleContext, mozilla::ServoStyleContext);
 
-  void Destroy();
-
   // These two methods are for use by ArenaRefPtr.
   static mozilla::ArenaObjectID ArenaObjectID()
   {
@@ -75,36 +69,8 @@ public:
   }
   nsIPresShell* Arena();
 
-#ifdef DEBUG
-  /**
-   * Initializes a cached pref, which is only used in DEBUG code.
-   */
-  static void Initialize();
-#endif
-
-  nsrefcnt AddRef() {
-    if (mRefCnt == UINT32_MAX) {
-      NS_WARNING("refcount overflow, leaking object");
-      return mRefCnt;
-    }
-    ++mRefCnt;
-    NS_LOG_ADDREF(this, mRefCnt, "nsStyleContext", sizeof(nsStyleContext));
-    return mRefCnt;
-  }
-
-  nsrefcnt Release() {
-    if (mRefCnt == UINT32_MAX) {
-      NS_WARNING("refcount overflow, leaking object");
-      return mRefCnt;
-    }
-    --mRefCnt;
-    NS_LOG_RELEASE(this, mRefCnt, "nsStyleContext");
-    if (mRefCnt == 0) {
-      Destroy();
-      return 0;
-    }
-    return mRefCnt;
-  }
+  inline void AddRef();
+  inline void Release();
 
 #ifdef DEBUG
   void FrameAddRef() {
@@ -120,20 +86,7 @@ public:
   }
 #endif
 
-  bool HasSingleReference() const {
-    NS_ASSERTION(mRefCnt != 0,
-                 "do not call HasSingleReference on a newly created "
-                 "nsStyleContext with no references yet");
-    return mRefCnt == 1;
-  }
-
   inline nsPresContext* PresContext() const;
-
-  inline mozilla::GeckoStyleContext* GetParent() const;
-
-  nsStyleContext* GetParentAllowServo() const {
-    return mParent;
-  }
 
   nsIAtom* GetPseudo() const { return mPseudoTag; }
   mozilla::CSSPseudoElementType GetPseudoType() const {
@@ -141,11 +94,26 @@ public:
              mBits >> NS_STYLE_CONTEXT_TYPE_SHIFT);
   }
 
-  bool IsAnonBox() const {
-    return
-      GetPseudoType() == mozilla::CSSPseudoElementType::InheritingAnonBox ||
-      GetPseudoType() == mozilla::CSSPseudoElementType::NonInheritingAnonBox;
+  bool IsInheritingAnonBox() const {
+    return GetPseudoType() == mozilla::CSSPseudoElementType::InheritingAnonBox;
   }
+
+  bool IsNonInheritingAnonBox() const {
+    return GetPseudoType() == mozilla::CSSPseudoElementType::NonInheritingAnonBox;
+  }
+
+  // This function is rather slow; you probably don't want to use it outside
+  // asserts unless you have to.  We _could_ add a new CSSPseudoElementType for
+  // wrapper anon boxes, but that adds a bunch of complexity everywhere we
+  // resolve anonymous box styles...
+  bool IsWrapperAnonBox() const {
+    return nsCSSAnonBoxes::IsWrapperAnonBox(GetPseudo());
+  }
+
+  bool IsAnonBox() const {
+    return IsInheritingAnonBox() || IsNonInheritingAnonBox();
+  }
+
   bool IsPseudoElement() const { return mPseudoTag && !IsAnonBox(); }
 
 
@@ -218,35 +186,7 @@ public:
   // examining the corresponding struct on |this|.  Doing so will likely
   // both (1) lead to a privacy leak and (2) lead to dynamic change bugs
   // related to the Peek code in nsStyleContext::CalcStyleDifference.
-  nsStyleContext* GetStyleIfVisited() const
-    { return mStyleIfVisited; }
-
-  // To be called only from nsStyleSet / ServoStyleSet.
-  void SetStyleIfVisited(already_AddRefed<nsStyleContext> aStyleIfVisited)
-  {
-    MOZ_ASSERT(!IsStyleIfVisited(), "this context is not visited data");
-    NS_ASSERTION(!mStyleIfVisited, "should only be set once");
-
-    mStyleIfVisited = aStyleIfVisited;
-
-    MOZ_ASSERT(mStyleIfVisited->IsStyleIfVisited(),
-               "other context is visited data");
-    MOZ_ASSERT(!mStyleIfVisited->GetStyleIfVisited(),
-               "other context does not have visited data");
-    NS_ASSERTION(GetStyleIfVisited()->GetPseudo() == GetPseudo(),
-                 "pseudo tag mismatch");
-    if (GetParentAllowServo() && GetParentAllowServo()->GetStyleIfVisited()) {
-      NS_ASSERTION(GetStyleIfVisited()->GetParentAllowServo() ==
-                     GetParentAllowServo()->GetStyleIfVisited() ||
-                   GetStyleIfVisited()->GetParentAllowServo() ==
-                     GetParentAllowServo(),
-                   "parent mismatch");
-    } else {
-      NS_ASSERTION(GetStyleIfVisited()->GetParentAllowServo() ==
-                     GetParentAllowServo(),
-                   "parent mismatch");
-    }
-  }
+  inline nsStyleContext* GetStyleIfVisited() const;
 
   // Does any descendant of this style context have any style values
   // that were computed based on this style context's ancestors?
@@ -269,7 +209,7 @@ public:
   }
 
   inline nsRuleNode* RuleNode();
-  inline ServoComputedValues* ComputedValues();
+  inline const ServoComputedData* ComputedData();
 
   void AddStyleBit(const uint64_t& aBit) { mBits |= aBit; }
 
@@ -310,6 +250,14 @@ public:
   #include "nsStyleStructList.h"
   #undef STYLE_STRUCT
 
+  // Value that can be passed as CalcStyleDifference's aRelevantStructs
+  // argument to indicate that all structs that are currently resolved on the
+  // old style context should be compared.  This is only relevant for
+  // ServoStyleContexts.
+  enum { kAllResolvedStructs = 0xffffffff };
+  static_assert(kAllResolvedStructs != NS_STYLE_INHERIT_MASK,
+                "uint32_t not big enough for special kAllResolvedStructs value");
+
   /**
    * Compute the style changes needed during restyling when this style
    * context is being replaced by aNewContext.  (This is nonsymmetric since
@@ -323,32 +271,20 @@ public:
    *
    * aEqualStructs must not be null.  Into it will be stored a bitfield
    * representing which structs were compared to be non-equal.
+   *
+   * aRelevantStructs must be kAllResolvedStructs for GeckoStyleContexts.
+   * For ServoStyleContexts, it controls which structs will be compared.
+   * This is needed because in some cases, we can't rely on mBits in the
+   * old style context to accurately reflect which are the relevant
+   * structs to be compared.
    */
   nsChangeHint CalcStyleDifference(nsStyleContext* aNewContext,
                                    uint32_t* aEqualStructs,
-                                   uint32_t* aSamePointerStructs);
-
-  /**
-   * Like the above, but allows comparing ServoComputedValues instead of needing
-   * a full-fledged style context.
-   */
-  nsChangeHint CalcStyleDifference(const ServoComputedValues* aNewComputedValues,
-                                   uint32_t* aEqualStructs,
-                                   uint32_t* aSamePointerStructs);
-
-private:
-  template<class StyleContextLike>
-  nsChangeHint CalcStyleDifferenceInternal(StyleContextLike* aNewContext,
-                                           uint32_t* aEqualStructs,
-                                           uint32_t* aSamePointerStructs);
+                                   uint32_t* aSamePointerStructs,
+                                   uint32_t aRelevantStructs =
+                                     kAllResolvedStructs);
 
 public:
-  /**
-   * Ensures the same structs are cached on this style context as would be
-   * done if we called aOther->CalcDifference(this).
-   */
-  void EnsureSameStructsCached(nsStyleContext* aOldContext);
-
   /**
    * Get a color that depends on link-visitedness using this and
    * this->GetStyleIfVisited().
@@ -375,15 +311,6 @@ public:
    */
   inline void StartBackgroundImageLoads();
 
-  /**
-   * Moves this style context to a new parent.
-   *
-   * This function violates style context tree immutability, and
-   * is a very low-level function and should only be used after verifying
-   * many conditions that make it safe to call.
-   */
-  void MoveTo(nsStyleContext* aNewParent);
-
 #ifdef DEBUG
   void List(FILE* out, int32_t aIndent, bool aListDescendants = true);
   static const char* StructName(nsStyleStructID aSID);
@@ -393,66 +320,10 @@ public:
 protected:
   // protected destructor to discourage deletion outside of Release()
   ~nsStyleContext() {}
-  // Where the actual destructor lives
-  // We use this instead of a real destructor because we need
-  // this to be called *before* the subclass fields are destroyed
-  // by the subclass destructor
-  void Destructor();
+
   // Delegated Helper constructor.
-  nsStyleContext(nsStyleContext* aParent,
-                 nsIAtom* aPseudoTag,
+  nsStyleContext(nsIAtom* aPseudoTag,
                  mozilla::CSSPseudoElementType aPseudoType);
-
-  // Helper post-contruct hook.
-  void FinishConstruction();
-
-  // Only does stuff in Gecko mode
-  void AddChild(nsStyleContext* aChild);
-  void RemoveChild(nsStyleContext* aChild);
-
-  void SetStyleBits();
-
-  const void* StyleStructFromServoComputedValues(nsStyleStructID aSID) {
-    switch (aSID) {
-#define STYLE_STRUCT(name_, checkdata_cb_)                                    \
-      case eStyleStruct_##name_:                                              \
-        return Servo_GetStyle##name_(ComputedValues());
-#include "nsStyleStructList.h"
-#undef STYLE_STRUCT
-      default:
-        MOZ_ASSERT_UNREACHABLE("unexpected nsStyleStructID value");
-        return nullptr;
-    }
-  }
-
-#ifdef DEBUG
-  struct AutoCheckDependency {
-
-    nsStyleContext* mStyleContext;
-    nsStyleStructID mOuterSID;
-
-    AutoCheckDependency(nsStyleContext* aContext, nsStyleStructID aInnerSID)
-      : mStyleContext(aContext)
-    {
-      mOuterSID = aContext->mComputingStruct;
-      MOZ_ASSERT(mOuterSID == nsStyleStructID_None ||
-                 DependencyAllowed(mOuterSID, aInnerSID),
-                 "Undeclared dependency, see generate-stylestructlist.py");
-      aContext->mComputingStruct = aInnerSID;
-    }
-
-    ~AutoCheckDependency()
-    {
-      mStyleContext->mComputingStruct = mOuterSID;
-    }
-
-  };
-
-#define AUTO_CHECK_DEPENDENCY(sid_) \
-  AutoCheckDependency checkNesting_(this, sid_)
-#else
-#define AUTO_CHECK_DEPENDENCY(sid_)
-#endif
 
   // Helper functions for GetStyle* and PeekStyle*
   #define STYLE_STRUCT_INHERITED(name_, checkdata_cb_)                  \
@@ -466,13 +337,6 @@ protected:
   #undef STYLE_STRUCT_RESET
   #undef STYLE_STRUCT_INHERITED
 
-  RefPtr<nsStyleContext> mParent;
-
-  // Style to be used instead for the R, G, and B components of color,
-  // background-color, and border-*-color if the nearest ancestor link
-  // element is visited (see RelevantLinkVisited()).
-  RefPtr<nsStyleContext> mStyleIfVisited;
-
   // If this style context is for a pseudo-element or anonymous box,
   // the relevant atom.
   nsCOMPtr<nsIAtom> mPseudoTag;
@@ -485,13 +349,9 @@ protected:
   //    nsStyleStruct.h.
   uint64_t                mBits;
 
-  uint32_t                mRefCnt;
-
 #ifdef DEBUG
   uint32_t                mFrameRefCnt; // number of frames that use this
                                         // as their style context
-
-  nsStyleStructID         mComputingStruct;
 
   static bool DependencyAllowed(nsStyleStructID aOuterSID,
                                 nsStyleStructID aInnerSID)
@@ -504,18 +364,11 @@ protected:
 #endif
 };
 
-already_AddRefed<nsStyleContext>
-NS_NewStyleContext(nsStyleContext* aParentContext,
+already_AddRefed<mozilla::GeckoStyleContext>
+NS_NewStyleContext(mozilla::GeckoStyleContext* aParentContext,
                    nsIAtom* aPseudoTag,
                    mozilla::CSSPseudoElementType aPseudoType,
                    nsRuleNode* aRuleNode,
                    bool aSkipParentDisplayBasedStyleFixup);
-
-already_AddRefed<nsStyleContext>
-NS_NewStyleContext(nsStyleContext* aParentContext,
-                   nsPresContext* aPresContext,
-                   nsIAtom* aPseudoTag,
-                   mozilla::CSSPseudoElementType aPseudoType,
-                   already_AddRefed<ServoComputedValues> aComputedValues);
 
 #endif

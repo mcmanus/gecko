@@ -8,7 +8,7 @@
 
 class nsITreeBoxObject;
 
-nsIFrame* NS_NewTreeColFrame(nsIPresShell* aPresShell, 
+nsIFrame* NS_NewTreeColFrame(nsIPresShell* aPresShell,
                              nsStyleContext* aContext);
 
 class nsTreeColFrame final : public nsBoxFrame
@@ -26,7 +26,6 @@ public:
   virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
 
   virtual void BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
-                                           const nsRect&           aDirtyRect,
                                            const nsDisplayListSet& aLists) override;
 
   virtual nsresult AttributeChanged(int32_t aNameSpaceID,

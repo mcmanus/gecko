@@ -52,7 +52,7 @@
         <item name="android:textColorHintInverse">@color/text_color_hint_inverse</item>
 
         <!-- Highlight colors -->
-        <item name="android:textColorHighlight">@color/fennec_ui_orange</item>
+        <item name="android:textColorHighlight">@color/fennec_ui_accent</item>
         <item name="android:textColorHighlightInverse">@color/text_color_highlight_inverse</item>
 
         <!-- Link colors -->
@@ -68,7 +68,7 @@
         <item name="android:textAppearanceMediumInverse">@style/TextAppearance.Medium.Inverse</item>
         <item name="android:textAppearanceSmallInverse">@style/TextAppearance.Small.Inverse</item>
 
-        <item name="colorAccent">@color/action_orange</item>
+        <item name="colorAccent">@color/action_accent</item>
 
         <item name="actionBarTheme">@style/GeckoActionBar</item>
     </style>
@@ -105,19 +105,13 @@
     </style>
 
     <!-- Make an activity appear like an overlay. -->
-    <style name="OverlayActivity" parent="Gecko">
+    <style name="OverlayActivity.Base" parent="Gecko">
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:backgroundDimEnabled">true</item>
-
-        <!-- Set the app's title bar color in the recent app switcher.
-
-             Note: We'd prefer not to show up in the recent app switcher (bug 1137928). -->
-        <item name="android:colorPrimary">@color/text_and_tabs_tray_grey</item>
-        <!-- We display the overlay on top of other Activities so show their status bar. -->
-        <item name="android:statusBarColor">@android:color/transparent</item>
     </style>
+    <style name="OverlayActivity" parent="OverlayActivity.Base"/>
 
     <!--
         Themes for CustomTabsActivity. Since CustomTabsActivity usually be used by 3-rd party apps,
@@ -135,14 +129,14 @@
     <style name="Bookmark" parent="Theme.AppCompat.Light.DialogWhenLarge"/>
     <style name="Bookmark.Gecko" parent="Gecko">
         <item name="toolbarStyle">@style/BookmarkToolbarStyle</item>
-        <item name="colorAccent">@color/fennec_ui_orange</item>
+        <item name="colorAccent">@color/fennec_ui_accent</item>
         <item name="colorControlNormal">@color/disabled_grey</item>
 
         <item name="android:textColorHint">@color/tabs_tray_icon_grey</item>
     </style>
-    <style name="BookmarkToolbarStyle" parent="@style/Widget.AppCompat.Toolbar">
+    <style name="BookmarkToolbarStyle.Base" parent="@style/Widget.AppCompat.Toolbar">
         <item name="android:paddingRight">5dp</item>
-        <item name="android:paddingEnd">5dp</item>
     </style>
+    <style name="BookmarkToolbarStyle" parent="BookmarkToolbarStyle.Base"/>
 
 </resources>

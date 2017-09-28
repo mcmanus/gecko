@@ -33,6 +33,7 @@
 #include "mozilla/layers/AtomicRefCountedWithFinalize.h"
 #include "mozilla/gfx/Rect.h"
 
+class MacIOSurface;
 namespace mozilla {
 namespace ipc {
 class Shmem;
@@ -40,7 +41,7 @@ class Shmem;
 
 namespace wr {
 class DisplayListBuilder;
-class WebRenderAPI;
+class ResourceUpdateQueue;
 }
 
 namespace layers {
@@ -617,7 +618,7 @@ public:
   // register the RenderTextureHost into render thread.
   virtual void CreateRenderTexture(const wr::ExternalImageId& aExternalImageId)
   {
-    MOZ_ASSERT_UNREACHABLE("No CreateRenderTexture() implementation for this TextureHost type.");
+    MOZ_RELEASE_ASSERT(false, "No CreateRenderTexture() implementation for this TextureHost type.");
   }
 
   // Create all necessary image keys for this textureHost rendering.
@@ -632,9 +633,9 @@ public:
     MOZ_ASSERT_UNREACHABLE("No GetWRImageKeys() implementation for this TextureHost type.");
   }
 
-  // Add all necessary textureHost informations to WebrenderAPI. Then, WR could
-  // use these informations to compose this textureHost.
-  virtual void AddWRImage(wr::WebRenderAPI* aAPI,
+  // Add all necessary TextureHost informations to the resource update queue.
+  // Then, WR will use this informations to read from the TextureHost.
+  virtual void AddWRImage(wr::ResourceUpdateQueue& aResources,
                           Range<const wr::ImageKey>& aImageKeys,
                           const wr::ExternalImageId& aExtID)
   {
@@ -643,13 +644,18 @@ public:
 
   // Put all necessary WR commands into DisplayListBuilder for this textureHost rendering.
   virtual void PushExternalImage(wr::DisplayListBuilder& aBuilder,
-                                 const WrRect& aBounds,
-                                 const WrClipRegionToken aClip,
+                                 const wr::LayoutRect& aBounds,
+                                 const wr::LayoutRect& aClip,
                                  wr::ImageRendering aFilter,
                                  Range<const wr::ImageKey>& aKeys)
   {
     MOZ_ASSERT_UNREACHABLE("No PushExternalImage() implementation for this TextureHost type.");
   }
+
+  /**
+   * Some API's can use the cross-process IOSurface directly, such as OpenVR
+   */
+  virtual MacIOSurface* GetMacIOSurface() { return nullptr; }
 
 protected:
   void ReadUnlock();
@@ -744,13 +750,13 @@ public:
   virtual void GetWRImageKeys(nsTArray<wr::ImageKey>& aImageKeys,
                               const std::function<wr::ImageKey()>& aImageKeyAllocator) override;
 
-  virtual void AddWRImage(wr::WebRenderAPI* aAPI,
+  virtual void AddWRImage(wr::ResourceUpdateQueue& aResources,
                           Range<const wr::ImageKey>& aImageKeys,
                           const wr::ExternalImageId& aExtID) override;
 
   virtual void PushExternalImage(wr::DisplayListBuilder& aBuilder,
-                                 const WrRect& aBounds,
-                                 const WrClipRegionToken aClip,
+                                 const wr::LayoutRect& aBounds,
+                                 const wr::LayoutRect& aClip,
                                  wr::ImageRendering aFilter,
                                  Range<const wr::ImageKey>& aImageKeys) override;
 

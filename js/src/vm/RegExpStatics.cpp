@@ -38,8 +38,6 @@ resc_trace(JSTracer* trc, JSObject* obj)
 static const ClassOps RegExpStaticsObjectClassOps = {
     nullptr, /* addProperty */
     nullptr, /* delProperty */
-    nullptr, /* getProperty */
-    nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* newEnumerate */
     nullptr, /* resolve */
@@ -81,10 +79,10 @@ RegExpStatics::executeLazy(JSContext* cx)
     MOZ_ASSERT(matchesInput);
     MOZ_ASSERT(lazyIndex != size_t(-1));
 
-    /* Retrieve or create the RegExpShared in this compartment. */
-    RootedRegExpShared shared(cx);
+    /* Retrieve or create the RegExpShared in this zone. */
     RootedAtom source(cx, lazySource);
-    if (!cx->compartment()->regExps.get(cx, source, lazyFlags, &shared))
+    RootedRegExpShared shared(cx, cx->zone()->regExps.get(cx, source, lazyFlags));
+    if (!shared)
         return false;
 
     /*

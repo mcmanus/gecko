@@ -4,10 +4,6 @@
 
 Cu.import("resource://gre/modules/PromiseUtils.jsm", this);
 
-function run_test() {
-  run_next_test();
-}
-
 add_task(async function test_no_condition() {
   for (let kind of ["phase", "barrier", "xpcom-barrier", "xpcom-barrier-unwrapped"]) {
     do_print("Testing a barrier with no condition (" + kind + ")");
@@ -96,7 +92,7 @@ add_task(async function test_phase_removeBlocker() {
     let lock = makeLock(kind);
     let blocker = () => {
       do_print("This promise will never be resolved");
-      return Promise.defer().promise;
+      return PromiseUtils.defer().promise;
     };
 
     lock.addBlocker("Wait forever", blocker);
@@ -124,13 +120,13 @@ add_task(async function test_phase_removeBlocker() {
       () => {
         do_print("This blocker will self-destruct");
         do_remove_blocker(lock, blockers[0], true);
-        return Promise.defer().promise;
+        return PromiseUtils.defer().promise;
       },
       () => {
         do_print("This blocker will self-destruct twice");
         do_remove_blocker(lock, blockers[1], true);
         do_remove_blocker(lock, blockers[1], false);
-        return Promise.defer().promise;
+        return PromiseUtils.defer().promise;
       },
       () => {
         do_print("Attempt to remove non-registered blockers during wait()");
@@ -167,7 +163,7 @@ add_task(async function test_state() {
   // Set up the barrier. Note that we cannot test `barrier.state`
   // immediately, as it initially contains "Not started"
   let barrier = new AsyncShutdown.Barrier("test_filename");
-  let deferred = Promise.defer();
+  let deferred = PromiseUtils.defer();
   let {filename, lineNumber} = Components.stack;
   barrier.client.addBlocker(BLOCKER_NAME,
     function() {

@@ -9,8 +9,9 @@
 
 #include "nsISubstitutingProtocolHandler.h"
 
-#include "nsInterfaceHashtable.h"
 #include "nsIOService.h"
+#include "nsISubstitutionObserver.h"
+#include "nsDataHashtable.h"
 #include "nsStandardURL.h"
 #include "mozilla/chrome/RegistryMessageUtils.h"
 #include "mozilla/Maybe.h"
@@ -43,13 +44,16 @@ protected:
   virtual ~SubstitutingProtocolHandler() {}
   void ConstructInternal();
 
-  MOZ_MUST_USE nsresult SendSubstitution(const nsACString& aRoot, nsIURI* aBaseURI);
+  MOZ_MUST_USE nsresult SendSubstitution(const nsACString& aRoot, nsIURI* aBaseURI, uint32_t aFlags);
+
+  nsresult GetSubstitutionFlags(const nsACString& root, uint32_t* flags);
 
   // Override this in the subclass to try additional lookups after checking
   // mSubstitutions.
-  virtual MOZ_MUST_USE nsresult GetSubstitutionInternal(const nsACString& aRoot, nsIURI** aResult)
+  virtual MOZ_MUST_USE nsresult GetSubstitutionInternal(const nsACString& aRoot, nsIURI** aResult, uint32_t* aFlags)
   {
     *aResult = nullptr;
+    *aFlags = 0;
     return NS_ERROR_NOT_AVAILABLE;
   }
 
@@ -73,10 +77,33 @@ protected:
   nsIIOService* IOService() { return mIOService; }
 
 private:
+  struct SubstitutionEntry
+  {
+    SubstitutionEntry()
+        : flags(0)
+    {
+    }
+
+    ~SubstitutionEntry()
+    {
+    }
+
+    nsCOMPtr<nsIURI> baseURI;
+    uint32_t flags;
+  };
+
+  // Notifies all observers that a new substitution from |aRoot| to
+  // |aBaseURI| has been set/installed for this protocol handler.
+  void NotifyObservers(const nsACString& aRoot, nsIURI* aBaseURI);
+
   nsCString mScheme;
   Maybe<uint32_t> mFlags;
-  nsInterfaceHashtable<nsCStringHashKey,nsIURI> mSubstitutions;
+  nsDataHashtable<nsCStringHashKey, SubstitutionEntry> mSubstitutions;
   nsCOMPtr<nsIIOService> mIOService;
+
+  // The list of observers added with AddObserver that will be
+  // notified when substitutions are set or unset.
+  nsTArray<nsCOMPtr<nsISubstitutionObserver>> mObservers;
 
   // In general, we expect the principal of a document loaded from a
   // substituting URI to be a codebase principal for that URI (rather than

@@ -37,9 +37,9 @@ namespace net {
 static nsresult
 SchemeIsHTTPS(const nsACString &originScheme, bool &outIsHTTPS)
 {
-  outIsHTTPS = originScheme.Equals(NS_LITERAL_CSTRING("https"));
+  outIsHTTPS = originScheme.EqualsLiteral("https");
 
-  if (!outIsHTTPS && !originScheme.Equals(NS_LITERAL_CSTRING("http"))) {
+  if (!outIsHTTPS && !originScheme.EqualsLiteral("http")) {
       MOZ_ASSERT(false, "unexpected scheme");
       return NS_ERROR_UNEXPECTED;
   }
@@ -92,7 +92,7 @@ AltSvcMapping::ProcessHeader(const nsCString &buf, const nsCString &originScheme
         parsedAltSvc.mValues[index].mValues[pairIndex].mValue;
 
       if (!pairIndex) {
-        if (currentName.Equals(NS_LITERAL_CSTRING("clear"))) {
+        if (currentName.EqualsLiteral("clear")) {
           clearEntry = true;
           break;
         }
@@ -107,7 +107,7 @@ AltSvcMapping::ProcessHeader(const nsCString &buf, const nsCString &originScheme
           colonIndex = 0;
         }
         hostname.Assign(currentValue.BeginReading(), colonIndex);
-      } else if (currentName.Equals(NS_LITERAL_CSTRING("ma"))) {
+      } else if (currentName.EqualsLiteral("ma")) {
         maxage = atoi(PromiseFlatCString(currentValue).get());
         break;
       } else {
@@ -228,7 +228,7 @@ AltSvcMapping::MakeHashKey(nsCString &outKey,
   outKey.Truncate();
 
   if (originPort == -1) {
-    bool isHttps = originScheme.Equals("https");
+    bool isHttps = originScheme.EqualsLiteral("https");
     originPort = isHttps ? NS_HTTPS_DEFAULT_PORT : NS_HTTP_DEFAULT_PORT;
   }
 
@@ -270,7 +270,8 @@ AltSvcMapping::Sync()
 
   if (!NS_IsMainThread()) {
     nsCOMPtr<nsIRunnable> r;
-    r = NewRunnableMethod<nsCString>(this,
+    r = NewRunnableMethod<nsCString>("net::AltSvcMapping::SyncString",
+                                     this,
                                      &AltSvcMapping::SyncString,
                                      value);
     NS_DispatchToMainThread(r, NS_DISPATCH_NORMAL);
@@ -387,7 +388,7 @@ COMPILER ERROR
     int32_t start = 0;
     int32_t idx;
     idx = str.FindChar(':', start); if (idx < 0) break;
-    mHttps = Substring(str, start, idx - start).Equals(NS_LITERAL_CSTRING("https"));
+    mHttps = Substring(str, start, idx - start).EqualsLiteral("https");
     _NS_NEXT_TOKEN;
     mOriginHost = Substring(str, start, idx - start);
     _NS_NEXT_TOKEN;
@@ -399,17 +400,17 @@ COMPILER ERROR
     _NS_NEXT_TOKEN;
     mUsername = Substring(str, start, idx - start);
     _NS_NEXT_TOKEN;
-    mPrivate = Substring(str, start, idx - start).Equals(NS_LITERAL_CSTRING("y"));
+    mPrivate = Substring(str, start, idx - start).EqualsLiteral("y");
     _NS_NEXT_TOKEN;
     mExpiresAt = nsCString(Substring(str, start, idx - start)).ToInteger(&code);
     _NS_NEXT_TOKEN;
     mALPNToken = Substring(str, start, idx - start);
     _NS_NEXT_TOKEN;
-    mValidated = Substring(str, start, idx - start).Equals(NS_LITERAL_CSTRING("y"));
+    mValidated = Substring(str, start, idx - start).EqualsLiteral("y");
     _NS_NEXT_TOKEN;
     mStorageEpoch = nsCString(Substring(str, start, idx - start)).ToInteger(&code);
     _NS_NEXT_TOKEN;
-    mMixedScheme = Substring(str, start, idx - start).Equals(NS_LITERAL_CSTRING("y"));
+    mMixedScheme = Substring(str, start, idx - start).EqualsLiteral("y");
     _NS_NEXT_TOKEN;
     Unused << mOriginAttributes.PopulateFromSuffix(Substring(str, start, idx - start));
     #undef _NS_NEXT_TOKEN
@@ -624,7 +625,7 @@ public:
              mTransactionAlternate->mWKResponse.get()));
       } else if (!mAlternateCT.Equals(mOriginCT)) {
         LOG(("WellKnownChecker::Done %p alternate and origin content types dont match\n", this));
-      } else if (!mAlternateCT.Equals(NS_LITERAL_CSTRING("application/json"))) {
+      } else if (!mAlternateCT.EqualsLiteral("application/json")) {
         LOG(("WellKnownChecker::Done %p .wk content type is %s\n", this, mAlternateCT.get()));
       } else if (!uu) {
         LOG(("WellKnownChecker::Done %p json parser service unavailable\n", this));
@@ -938,7 +939,7 @@ AltSvcCache::UpdateAltServiceMapping(AltSvcMapping *map, nsProxyInfo *pi,
 
     nsCOMPtr<nsIURI> wellKnown;
     nsAutoCString uri(origin);
-    uri.Append(NS_LITERAL_CSTRING("/.well-known/http-opportunistic"));
+    uri.AppendLiteral("/.well-known/http-opportunistic");
     NS_NewURI(getter_AddRefs(wellKnown), uri);
 
     auto *checker = new WellKnownChecker(wellKnown, origin, caps, ci, map);
@@ -1003,18 +1004,21 @@ AltSvcCache::GetAltServiceMapping(const nsACString &scheme, const nsACString &ho
 
 class ProxyClearHostMapping : public Runnable {
 public:
-  explicit ProxyClearHostMapping(const nsACString &host, int32_t port,
-                                 const OriginAttributes &originAttributes)
-    : mHost(host)
+  explicit ProxyClearHostMapping(const nsACString& host,
+                                 int32_t port,
+                                 const OriginAttributes& originAttributes)
+    : Runnable("net::ProxyClearHostMapping")
+    , mHost(host)
     , mPort(port)
     , mOriginAttributes(originAttributes)
-    {}
+  {
+  }
 
-    NS_IMETHOD Run() override
-    {
-      MOZ_ASSERT(NS_IsMainThread());
-      gHttpHandler->ConnMgr()->ClearHostMapping(mHost, mPort, mOriginAttributes);
-      return NS_OK;
+  NS_IMETHOD Run() override
+  {
+    MOZ_ASSERT(NS_IsMainThread());
+    gHttpHandler->ConnMgr()->ClearHostMapping(mHost, mPort, mOriginAttributes);
+    return NS_OK;
     }
 private:
     nsCString mHost;

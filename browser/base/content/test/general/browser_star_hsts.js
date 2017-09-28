@@ -1,6 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 
 var secureURL = "https://example.com/browser/browser/base/content/test/general/browser_star_hsts.sjs";
 var unsecureURL = "http://example.com/browser/browser/base/content/test/general/browser_star_hsts.sjs";
@@ -24,11 +25,10 @@ add_task(async function test_star_redirect() {
 
   await promiseStarState(BookmarkingUI.STATUS_UNSTARRED);
 
-  let promiseBookmark = promiseOnBookmarkItemAdded(gBrowser.currentURI);
+  let bookmarkPanel = document.getElementById("editBookmarkPanel");
+  let shownPromise = promisePopupShown(bookmarkPanel);
   BookmarkingUI.star.click();
-  // This resolves on the next tick, so the star should have already been
-  // updated at that point.
-  await promiseBookmark;
+  await shownPromise;
 
   is(BookmarkingUI.status, BookmarkingUI.STATUS_STARRED, "The star is starred");
 });

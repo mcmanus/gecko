@@ -17,7 +17,6 @@
 #include "nsAppShellWindowEnumerator.h"
 #include "nsWindowMediator.h"
 #include "nsIWindowMediatorListener.h"
-#include "nsXPIDLString.h"
 #include "nsGlobalWindow.h"
 
 #include "nsIDocShell.h"
@@ -121,7 +120,7 @@ nsWindowMediator::UnregisterWindow(nsWindowInfo *inInfo)
     iter.GetNext()->OnCloseWindow(window);
   }
 
-  // Remove from the lists and free up 
+  // Remove from the lists and free up
   if (inInfo == mOldestWindow)
     mOldestWindow = inInfo->mYounger;
   if (inInfo == mTopmostWindow)
@@ -131,7 +130,7 @@ nsWindowMediator::UnregisterWindow(nsWindowInfo *inInfo)
     mOldestWindow = nullptr;
   if (inInfo == mTopmostWindow)
     mTopmostWindow = nullptr;
-  delete inInfo;  
+  delete inInfo;
 
   return NS_OK;
 }
@@ -272,7 +271,7 @@ nsWindowMediator::GetMostRecentWindow(const char16_t* inType,
   nsWindowInfo* info = MostRecentWindowInfo(inType, false);
   if (info && info->mWindow) {
     nsCOMPtr<nsPIDOMWindowOuter> DOMWindow;
-    if (NS_SUCCEEDED(GetDOMWindow(info->mWindow, DOMWindow))) {  
+    if (NS_SUCCEEDED(GetDOMWindow(info->mWindow, DOMWindow))) {
       DOMWindow.forget(outWindow);
       return NS_OK;
     }
@@ -392,12 +391,12 @@ nsWindowMediator::UpdateWindowTimeStamp(nsIXULWindow* inWindow)
     info->mTimeStamp = ++mTimeStamp;
     return NS_OK;
   }
-  return NS_ERROR_FAILURE; 
+  return NS_ERROR_FAILURE;
 }
 
 NS_IMETHODIMP
 nsWindowMediator::UpdateWindowTitle(nsIXULWindow* inWindow,
-                                    const char16_t* inTitle)
+                                    const nsAString& inTitle)
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
   NS_ENSURE_STATE(mReady);
@@ -783,9 +782,9 @@ NS_IMETHODIMP
 nsWindowMediator::AddListener(nsIWindowMediatorListener* aListener)
 {
   NS_ENSURE_ARG_POINTER(aListener);
-  
+
   mListeners.AppendElement(aListener);
-  
+
   return NS_OK;
 }
 
@@ -795,7 +794,7 @@ nsWindowMediator::RemoveListener(nsIWindowMediatorListener* aListener)
   NS_ENSURE_ARG_POINTER(aListener);
 
   mListeners.RemoveElement(aListener);
-  
+
   return NS_OK;
 }
 

@@ -106,8 +106,7 @@ GetPIPNSSBundleString(const char* stringName, nsAString& result)
     return rv;
   }
   result.Truncate();
-  return pipnssBundle->GetStringFromName(
-    NS_ConvertASCIItoUTF16(stringName).get(), getter_Copies(result));
+  return pipnssBundle->GetStringFromName(stringName, result);
 }
 
 static nsresult
@@ -126,8 +125,7 @@ PIPBundleFormatStringFromName(const char* stringName, const char16_t** params,
   }
   result.Truncate();
   return pipnssBundle->FormatStringFromName(
-    NS_ConvertASCIItoUTF16(stringName).get(), params, numParams,
-    getter_Copies(result));
+    stringName, params, numParams, result);
 }
 
 static nsresult
@@ -209,9 +207,8 @@ ProcessSerialNumberDER(const SECItem& serialItem,
 static nsresult
 GetDefaultOIDFormat(SECItem* oid, nsAString& outString, char separator)
 {
-  char buf[300];
-  unsigned int len = 0;
-  int written, invalidCount = 0;
+  outString.Truncate();
+  int invalidCount = 0;
 
   unsigned int i;
   unsigned long val = 0;
@@ -251,27 +248,17 @@ GetDefaultOIDFormat(SECItem* oid, nsAString& outString, char separator)
         unsigned long one = std::min(val / 40, 2UL); // never > 2
         unsigned long two = val - (one * 40);
 
-        written = snprintf(
-          &buf[len], sizeof(buf) - len, "%lu%c%lu", one, separator, two);
+        outString.AppendPrintf("%lu%c%lu", one, separator, two);
       } else {
-        written =
-          snprintf(&buf[len], sizeof(buf) - len, "%c%lu", separator, val);
+        outString.AppendPrintf("%c%lu", separator, val);
       }
     } else {
+      if (!first) {
+        outString.AppendPrintf("%c", separator);
+      }
       nsAutoString unknownText;
       GetPIPNSSBundleString("CertUnknown", unknownText);
-      if (first) {
-        written = snprintf(&buf[len],
-                           sizeof(buf) - len,
-                           "%s",
-                           NS_ConvertUTF16toUTF8(unknownText).get());
-      } else {
-        written = snprintf(&buf[len],
-                           sizeof(buf) - len,
-                           "%c%s",
-                           separator,
-                           NS_ConvertUTF16toUTF8(unknownText).get());
-      }
+      outString.Append(unknownText);
 
       if (++invalidCount > 3) {
         // Allow only 3 occurences of Unknown in OID display string to
@@ -280,17 +267,11 @@ GetDefaultOIDFormat(SECItem* oid, nsAString& outString, char separator)
       }
     }
 
-    if (written < 0)
-      return NS_ERROR_FAILURE;
-
-    len += written;
-    MOZ_ASSERT(len < sizeof(buf), "OID data too big to display in 300 chars.");
     val = 0;
     invalid = false;
     first = false;
   }
 
-  CopyASCIItoUTF16(buf, outString);
   return NS_OK;
 }
 
@@ -988,7 +969,7 @@ ProcessGeneralName(const UniquePLArenaPool& arena, CERTGeneralName* current,
   NS_ENSURE_ARG_POINTER(current);
 
   nsAutoString key;
-  nsXPIDLString value;
+  nsAutoString value;
   nsresult rv = NS_OK;
 
   switch (current->type) {
@@ -1904,7 +1885,7 @@ nsNSSCertificate::CreateTBSCertificateASN1Struct(nsIASN1Sequence** retSequence)
   algID->SetDisplayName(text);
   asn1Objects->AppendElement(algID, false);
 
-  nsXPIDLString value;
+  nsString value;
   ProcessName(&mCert->issuer, getter_Copies(value));
 
   printableItem = new nsNSSASN1PrintableItem();

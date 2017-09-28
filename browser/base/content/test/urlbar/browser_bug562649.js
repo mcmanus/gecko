@@ -1,9 +1,11 @@
 function test() {
-  const URI = "data:text/plain,bug562649";
+  const TEST_PATH = getRootDirectory(gTestPath).replace("chrome://mochitests/content", "https://example.com");
+  const URI = TEST_PATH + "file_bug562649.html";
   window.browserDOMWindow.openURI(makeURI(URI),
                                   null,
                                   Ci.nsIBrowserDOMWindow.OPEN_NEWTAB,
-                                  Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL);
+                                  Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL,
+                                  Services.scriptSecurityManager.getSystemPrincipal());
 
   is(gBrowser.userTypedValue, URI, "userTypedValue matches test URI");
   is(gURLBar.value, URI, "location bar value matches test URI");

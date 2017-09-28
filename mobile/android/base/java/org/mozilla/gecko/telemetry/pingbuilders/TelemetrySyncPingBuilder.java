@@ -27,8 +27,6 @@ import java.util.HashMap;
  * somewhere in {@link org.mozilla.gecko.sync.telemetry.TelemetryCollector} and friends.
  */
 public class TelemetrySyncPingBuilder extends TelemetryLocalPingBuilder {
-    private static final int DATA_FORMAT_VERSION = 1;
-
     public TelemetrySyncPingBuilder setStages(@NonNull final Serializable data) {
         HashMap<String, TelemetryStageCollector> stages = castSyncData(data);
 
@@ -37,7 +35,7 @@ public class TelemetrySyncPingBuilder extends TelemetryLocalPingBuilder {
             final TelemetryStageCollector stage = stages.get(stageName);
 
             // Skip stages that did nothing.
-            if (stage.inbound == 0 && stage.outbound == 0) {
+            if (stage.inbound == 0 && stage.outbound == 0 && stage.error == null && stage.validation == null) {
                 continue;
             }
 
@@ -84,6 +82,10 @@ public class TelemetrySyncPingBuilder extends TelemetryLocalPingBuilder {
             // Spreading around our schema definition like that is awkward, but, alas, here we are.
             if (stage.error != null) {
                 stageJSON.put("failureReason", stage.error);
+            }
+            // As above for validation too.
+            if (stage.validation != null) {
+                stageJSON.put("validation", stage.validation);
             }
 
             addUnchecked(engines, stageJSON);
@@ -143,7 +145,7 @@ public class TelemetrySyncPingBuilder extends TelemetryLocalPingBuilder {
 
     @Override
     public TelemetryLocalPing build() {
-        payload.put("version", DATA_FORMAT_VERSION);
+        payload.put("when", System.currentTimeMillis());
         return new TelemetryLocalPing(payload, docID);
     }
 

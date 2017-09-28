@@ -12,6 +12,7 @@
 #include "mozilla/layers/CompositorThread.h" // for CompositorThreadHolder
 #include "mozilla/layers/LayerAnimationUtils.h" // for TimingFunctionToComputedTimingFunction
 #include "mozilla/StyleAnimationValue.h" // for StyleAnimationValue, etc
+#include "nsDeviceContext.h"            // for AppUnitsPerCSSPixel
 #include "nsDisplayList.h"              // for nsDisplayTransform, etc
 
 namespace mozilla {
@@ -45,6 +46,46 @@ CompositorAnimationStorage::GetAnimatedValue(const uint64_t& aId) const
 {
   MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
   return mAnimatedValues.Get(aId);
+}
+
+Maybe<float>
+CompositorAnimationStorage::GetAnimationOpacity(const uint64_t& aId) const
+{
+  auto value = GetAnimatedValue(aId);
+  if (!value || value->mType != AnimatedValue::OPACITY) {
+    return Nothing();
+  }
+
+  return Some(value->mOpacity);
+}
+
+Maybe<gfx::Matrix4x4>
+CompositorAnimationStorage::GetAnimationTransform(const uint64_t& aId) const
+{
+  auto value = GetAnimatedValue(aId);
+  if (!value || value->mType != AnimatedValue::TRANSFORM) {
+    return Nothing();
+  }
+
+  gfx::Matrix4x4 transform = value->mTransform.mFrameTransform;
+  const TransformData& data = value->mTransform.mData;
+  float scale = data.appUnitsPerDevPixel();
+  gfx::Point3D transformOrigin = data.transformOrigin();
+
+  // Undo the rebasing applied by
+  // nsDisplayTransform::GetResultingTransformMatrixInternal
+  transform.ChangeBasis(-transformOrigin);
+
+  // Convert to CSS pixels (this undoes the operations performed by
+  // nsStyleTransformMatrix::ProcessTranslatePart which is called from
+  // nsDisplayTransform::GetResultingTransformMatrix)
+  double devPerCss =
+    double(scale) / double(nsDeviceContext::AppUnitsPerCSSPixel());
+  transform._41 *= devPerCss;
+  transform._42 *= devPerCss;
+  transform._43 *= devPerCss;
+
+  return Some(transform);
 }
 
 void
@@ -474,22 +515,18 @@ AnimationHelper::SetAnimations(AnimationArray& aAnimations,
     AnimData* data = aAnimData.AppendElement();
     InfallibleTArray<Maybe<ComputedTimingFunction>>& functions =
       data->mFunctions;
-    const InfallibleTArray<AnimationSegment>& segments = animation.segments();
-    for (uint32_t j = 0; j < segments.Length(); j++) {
-      TimingFunction tf = segments.ElementAt(j).sampleFn();
-
-      Maybe<ComputedTimingFunction> ctf =
-        AnimationUtils::TimingFunctionToComputedTimingFunction(tf);
-      functions.AppendElement(ctf);
-    }
-
-    // Precompute the StyleAnimationValues that we need if this is a transform
-    // animation.
     InfallibleTArray<StyleAnimationValue>& startValues = data->mStartValues;
     InfallibleTArray<StyleAnimationValue>& endValues = data->mEndValues;
+
+    const InfallibleTArray<AnimationSegment>& segments = animation.segments();
     for (const AnimationSegment& segment : segments) {
       startValues.AppendElement(ToStyleAnimationValue(segment.startState()));
       endValues.AppendElement(ToStyleAnimationValue(segment.endState()));
+
+      TimingFunction tf = segment.sampleFn();
+      Maybe<ComputedTimingFunction> ctf =
+        AnimationUtils::TimingFunctionToComputedTimingFunction(tf);
+      functions.AppendElement(ctf);
     }
   }
 }

@@ -26,7 +26,6 @@
 #include <process.h>
 #include <shobjidl.h>
 #include "mozilla/ipc/WindowsMessageLoop.h"
-#include "mozilla/TlsAllocationTracker.h"
 #endif
 
 #include "nsAppDirectoryServiceDefs.h"
@@ -73,14 +72,13 @@
 
 #include "mozilla/ipc/TestShellParent.h"
 #include "mozilla/ipc/XPCShellEnvironment.h"
+#include "mozilla/Scheduler.h"
 #include "mozilla/WindowsDllBlocklist.h"
 
 #include "GMPProcessChild.h"
 #include "mozilla/gfx/GPUProcessImpl.h"
 
 #include "GeckoProfiler.h"
-
-#include "mozilla/Telemetry.h"
 
 #if defined(MOZ_SANDBOX) && defined(XP_WIN)
 #include "mozilla/sandboxTarget.h"
@@ -89,9 +87,7 @@
 
 #if defined(MOZ_CONTENT_SANDBOX)
 #include "mozilla/SandboxSettings.h"
-#if !defined(MOZ_WIDGET_GONK)
 #include "mozilla/Preferences.h"
-#endif
 #endif
 
 #if defined(XP_LINUX) && defined(MOZ_GMP_SANDBOX)
@@ -309,7 +305,7 @@ SetTaskbarGroupId(const nsString& aId)
 #endif
 
 #if defined(MOZ_CRASHREPORTER)
-#if defined(MOZ_CONTENT_SANDBOX) && !defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_CONTENT_SANDBOX)
 void
 AddContentSandboxLevelAnnotation()
 {
@@ -321,7 +317,7 @@ AddContentSandboxLevelAnnotation()
       NS_LITERAL_CSTRING("ContentSandboxLevel"), levelString);
   }
 }
-#endif /* MOZ_CONTENT_SANDBOX && !MOZ_WIDGET_GONK */
+#endif /* MOZ_CONTENT_SANDBOX */
 #endif /* MOZ_CRASHREPORTER */
 
 namespace {
@@ -369,14 +365,6 @@ XRE_InitChildProcess(int aArgc,
 #endif
 
 #if defined(XP_WIN)
-#ifndef DEBUG
-  // XXX Bug 1320134: added for diagnosing the crashes because we're running out
-  // of TLS indices on Windows. Remove after the root cause is found.
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
-    mozilla::InitTlsAllocationTracker();
-  }
-#endif
-
   // From the --attach-console support in nsNativeAppSupportWin.cpp, but
   // here we are a content child process, so we always attempt to attach
   // to the parent's (ie, the browser's) console.
@@ -409,21 +397,12 @@ XRE_InitChildProcess(int aArgc,
   // NB: This must be called before profiler_init
   ScopedLogging logger;
 
-  // This is needed by Telemetry to initialize histogram collection.
-  // NB: This must be called after NS_LogInit().
-  // NS_LogInit must be called before Telemetry::CreateStatisticsRecorder
-  // so as to avoid many log messages of the form
-  //   WARNING: XPCOM objects created/destroyed from static ctor/dtor: [..]
-  // See bug 1279614.
-  Telemetry::CreateStatisticsRecorder();
-
   mozilla::LogModule::Init();
 
   char aLocal;
   AutoProfilerInit profilerInit(&aLocal);
 
-  PROFILER_LABEL("Startup", "XRE_InitChildProcess",
-    js::ProfileEntry::Category::OTHER);
+  AUTO_PROFILER_LABEL("XRE_InitChildProcess", OTHER);
 
   // Ensure AbstractThread is minimally setup, so async IPC messages
   // work properly.
@@ -584,6 +563,20 @@ XRE_InitChildProcess(int aArgc,
   base::ProcessId parentPID = strtol(parentPIDString, &end, 10);
   MOZ_ASSERT(!*end, "invalid parent PID");
 
+  nsCOMPtr<nsIFile> crashReportTmpDir;
+  if (XRE_GetProcessType() == GeckoProcessType_GPU) {
+    aArgc--;
+    if (strlen(aArgv[aArgc])) { // if it's empty, ignore it
+      nsresult rv = XRE_GetFileFromPath(aArgv[aArgc], getter_AddRefs(crashReportTmpDir));
+      if (NS_FAILED(rv)) {
+        // If we don't have a valid tmp dir we can probably still run ok, but
+        // crash report .extra files might not get picked up by the parent
+        // process. Debug-assert because this shouldn't happen in practice.
+        MOZ_ASSERT(false, "GPU process started without valid tmp dir!");
+      }
+    }
+  }
+
 #ifdef XP_MACOSX
   mozilla::ipc::SharedMemoryBasic::SetupMachMemory(parentPID, ports_in_receiver, ports_in_sender,
                                                    ports_out_sender, ports_out_receiver, true);
@@ -598,7 +591,7 @@ XRE_InitChildProcess(int aArgc,
     // '-' implies no support
     if (*appModelUserId != '-') {
       nsString appId;
-      appId.AssignWithConversion(nsDependentCString(appModelUserId));
+      CopyASCIItoUTF16(nsDependentCString(appModelUserId), appId);
       // The version string is encased in quotes
       appId.Trim("\"");
       // Set the id
@@ -683,7 +676,7 @@ XRE_InitChildProcess(int aArgc,
 
 #ifdef MOZ_CRASHREPORTER
 #if defined(XP_WIN) || defined(XP_MACOSX)
-      CrashReporter::InitChildProcessTmpDir();
+      CrashReporter::InitChildProcessTmpDir(crashReportTmpDir);
 #endif
 #endif
 
@@ -703,7 +696,7 @@ XRE_InitChildProcess(int aArgc,
       OverrideDefaultLocaleIfNeeded();
 
 #if defined(MOZ_CRASHREPORTER)
-#if defined(MOZ_CONTENT_SANDBOX) && !defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_CONTENT_SANDBOX)
       AddContentSandboxLevelAnnotation();
 #endif
 #endif
@@ -723,15 +716,6 @@ XRE_InitChildProcess(int aArgc,
     }
   }
 
-#if defined(XP_WIN) && !defined(DEBUG)
-  // XXX Bug 1320134: added for diagnosing the crashes because we're running out
-  // of TLS indices on Windows. Remove after the root cause is found.
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
-    mozilla::ShutdownTlsAllocationTracker();
-  }
-#endif
-
-  Telemetry::DestroyStatisticsRecorder();
   return XRE_DeinitCommandLine();
 }
 
@@ -751,10 +735,10 @@ class MainFunctionRunnable : public Runnable
 public:
   NS_DECL_NSIRUNNABLE
 
-  MainFunctionRunnable(MainFunction aFunction,
-                       void* aData)
-  : mFunction(aFunction),
-    mData(aData)
+  MainFunctionRunnable(MainFunction aFunction, void* aData)
+    : mozilla::Runnable("MainFunctionRunnable")
+    , mFunction(aFunction)
+    , mData(aData)
   {
     NS_ASSERTION(aFunction, "Don't give me a null pointer!");
   }
@@ -853,7 +837,7 @@ XRE_RunAppShell()
     nsCOMPtr<nsIAppShell> appShell(do_GetService(kAppShellCID));
     NS_ENSURE_TRUE(appShell, NS_ERROR_FAILURE);
 #if defined(XP_MACOSX)
-    {
+    if (XRE_UseNativeEventProcessing()) {
       // In content processes that want XPCOM (and hence want
       // AppShell), we usually run our hybrid event loop through
       // MessagePump::Run(), by way of nsBaseAppShell::Run().  The
@@ -904,6 +888,8 @@ XRE_ShutdownChildProcess()
   mozilla::DebugOnly<MessageLoop*> ioLoop = XRE_GetIOMessageLoop();
   MOZ_ASSERT(!!ioLoop, "Bad shutdown order");
 
+  Scheduler::Shutdown();
+
   // Quit() sets off the following chain of events
   //  (1) UI loop starts quitting
   //  (2) UI loop returns from Run() in XRE_InitChildProcess()
@@ -911,6 +897,7 @@ XRE_ShutdownChildProcess()
   //  (4) ProcessChild joins the IO thread
   //  (5) exit()
   MessageLoop::current()->Quit();
+
 #if defined(XP_MACOSX)
   nsCOMPtr<nsIAppShell> appShell(do_GetService(kAppShellCID));
   if (appShell) {
@@ -928,7 +915,13 @@ ContentParent* gContentParent; //long-lived, manually refcounted
 TestShellParent* GetOrCreateTestShellParent()
 {
     if (!gContentParent) {
-        RefPtr<ContentParent> parent = ContentParent::GetNewOrUsedBrowserProcess();
+        // Use a "web" child process by default.  File a bug if you don't like
+        // this and you're sure you wouldn't be better off writing a "browser"
+        // chrome mochitest where you can have multiple types of content
+        // processes.
+        RefPtr<ContentParent> parent =
+            ContentParent::GetNewOrUsedBrowserProcess(
+                NS_LITERAL_STRING(DEFAULT_REMOTE_TYPE));
         parent.forget(&gContentParent);
     } else if (!gContentParent->IsAlive()) {
         return nullptr;

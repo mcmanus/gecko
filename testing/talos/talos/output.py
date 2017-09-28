@@ -4,31 +4,15 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 """output formats for Talos"""
+from __future__ import absolute_import
 
 import filter
-import json
+# NOTE: we have a circular dependency with output.py when we import results
+import simplejson as json
 import utils
-
 from mozlog import get_proxy_logger
 
-# NOTE: we have a circular dependency with output.py when we import results
-import results as TalosResults
-
 LOG = get_proxy_logger()
-
-
-def filesizeformat(bytes):
-    """
-    Format the value like a 'human-readable' file size (i.e. 13 KB, 4.1 MB, 102
-    bytes, etc).
-    """
-    bytes = float(bytes)
-    formats = ('B', 'KB', 'MB')
-    for f in formats:
-        if bytes < 1024:
-            return "%.1f%s" % (bytes, f)
-        bytes /= 1024
-    return "%.1fGB" % bytes  # has to be GB
 
 
 class Output(object):
@@ -38,11 +22,13 @@ class Output(object):
     def check(cls, urls):
         """check to ensure that the urls are valid"""
 
-    def __init__(self, results):
+    def __init__(self, results, tsresult_class):
         """
         - results : TalosResults instance
+        - tsresult_class : Results class
         """
         self.results = results
+        self.tsresult_class = tsresult_class
 
     def __call__(self):
         suites = []
@@ -68,8 +54,7 @@ class Output(object):
                 vals = []
                 replicates = {}
 
-                # TODO: counters!!!! we don't have any, but they suffer the
-                # same
+                # TODO: counters!!!! we don't have any, but they suffer the same
                 for result in test.results:
                     # XXX this will not work for manifests which list
                     # the same page name twice. It also ignores cycles
@@ -77,7 +62,7 @@ class Output(object):
                         if page == 'NULL':
                             page = test.name()
                             if tsresult is None:
-                                tsresult = r = TalosResults.Results()
+                                tsresult = r = self.tsresult_class()
                                 r.results = [{'index': 0, 'page': test.name(),
                                               'runs': val}]
                             else:
@@ -88,11 +73,26 @@ class Output(object):
 
                 tresults = [tsresult] if tsresult else test.results
 
+                # Merge results for the same page when using cycle > 1
+                merged_results = {}
+                for result in tresults:
+                    results = []
+                    for r in result.results:
+                        page = r['page']
+                        if page in merged_results:
+                            merged_results[page]['runs'].extend(r['runs'])
+                        else:
+                            merged_results[page] = r
+                            results.append(r)
+                    # override the list of page results for each run
+                    result.results = results
+
                 for result in tresults:
                     filtered_results = \
                         result.values(suite['name'],
                                       test.test_config['filters'])
                     vals.extend([[i['value'], j] for i, j in filtered_results])
+                    subtest_index = 0
                     for val, page in filtered_results:
                         if page == 'NULL':
                             # no real subtests
@@ -102,7 +102,18 @@ class Output(object):
                             'value': val['filtered'],
                             'replicates': replicates[page],
                         }
+                        # if results are from a comparison test i.e. perf-reftest, it will also
+                        # contain replicates for 'base' and 'reference'; we wish to keep those
+                        # to reference; actual results were calculated as the difference of those
+                        base_runs = result.results[subtest_index].get('base_runs', None)
+                        ref_runs = result.results[subtest_index].get('ref_runs', None)
+                        if base_runs and ref_runs:
+                            subtest['base_replicates'] = base_runs
+                            subtest['ref_replicates'] = ref_runs
+
                         subtests.append(subtest)
+                        subtest_index += 1
+
                         if test.test_config.get('lower_is_better') is not None:
                             subtest['lowerIsBetter'] = \
                                 test.test_config['lower_is_better']
@@ -168,7 +179,7 @@ class Output(object):
                                'subtests': counter_subtests})
         return test_results
 
-    def output(self, results, results_url, tbpl_output):
+    def output(self, results, results_url):
         """output to the a file if results_url starts with file://
         - results : json instance
         - results_url : file:// URL
@@ -179,8 +190,7 @@ class Output(object):
         results_scheme, results_server, results_path, _, _ = results_url_split
 
         if results_scheme in ('http', 'https'):
-            self.post(results, results_server, results_path, results_scheme,
-                      tbpl_output)
+            self.post(results, results_server, results_path, results_scheme)
         elif results_scheme == 'file':
             with open(results_path, 'w') as f:
                 for result in results:
@@ -194,12 +204,13 @@ class Output(object):
         # This is the output that treeherder expects to find when parsing the
         # log file
         if 'geckoProfile' not in self.results.extra_options:
-            LOG.info("PERFHERDER_DATA: %s" % json.dumps(results))
+            LOG.info("PERFHERDER_DATA: %s" % json.dumps(results,
+                                                        ignore_nan=True))
         if results_scheme in ('file'):
             json.dump(results, open(results_path, 'w'), indent=2,
-                      sort_keys=True)
+                      sort_keys=True, ignore_nan=True)
 
-    def post(self, results, server, path, scheme, tbpl_output):
+    def post(self, results, server, path, scheme):
         raise NotImplementedError("Abstract base class")
 
     @classmethod

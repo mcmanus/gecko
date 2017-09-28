@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import os
 
 import yaml
@@ -40,6 +42,9 @@ class Parser(object):
                                    not all(isinstance(a, basestring) for a in linter[attr])):
                 raise LinterParseError(linter['path'], "The {} directive must be a "
                                                        "list of strings!".format(attr))
+
+        if 'extensions' in linter:
+            linter['extensions'] = [e.strip('.') for e in linter['extensions']]
 
     def parse(self, path):
         """Read a linter and return its LINTER definition.

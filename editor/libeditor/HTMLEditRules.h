@@ -94,6 +94,7 @@ public:
                           bool* aCancel, bool* aHandled) override;
   NS_IMETHOD DidDoAction(Selection* aSelection, RulesInfo* aInfo,
                          nsresult aResult) override;
+  NS_IMETHOD_(bool) DocumentIsEmpty() override;
   NS_IMETHOD DocumentModified() override;
 
   nsresult GetListState(bool* aMixed, bool* aOL, bool* aUL, bool* aDL);
@@ -170,6 +171,18 @@ protected:
                               nsIEditor::EDirection aDir,
                               nsresult aResult);
   nsresult InsertBRIfNeeded(Selection* aSelection);
+
+  /**
+   * Insert a normal <br> element or a moz-<br> element to aNode when
+   * aNode is a block and it has no children.
+   *
+   * @param aNode           Reference to a block parent.
+   * @param aInsertMozBR    true if this should insert a moz-<br> element.
+   *                        Otherwise, i.e., this should insert a normal <br>
+   *                        element, false.
+   */
+  nsresult InsertBRIfNeededInternal(nsINode& aNode, bool aInsertMozBR);
+
   mozilla::EditorDOMPoint GetGoodSelPointForNode(nsINode& aNode,
                                                  nsIEditor::EDirection aAction);
 
@@ -320,9 +333,8 @@ protected:
   bool IsFirstNode(nsIDOMNode* aNode);
   bool IsLastNode(nsIDOMNode* aNode);
   nsresult NormalizeSelection(Selection* aSelection);
-  void GetPromotedPoint(RulesEndpoint aWhere, nsIDOMNode* aNode,
-                        int32_t aOffset, EditAction actionID,
-                        nsCOMPtr<nsIDOMNode>* outNode, int32_t* outOffset);
+  EditorDOMPoint GetPromotedPoint(RulesEndpoint aWhere, nsINode& aNode,
+                                  int32_t aOffset, EditAction actionID);
   void GetPromotedRanges(Selection& aSelection,
                          nsTArray<RefPtr<nsRange>>& outArrayOfRanges,
                          EditAction inOperationType);
@@ -402,7 +414,25 @@ protected:
   nsresult SelectionEndpointInNode(nsINode* aNode, bool* aResult);
   nsresult UpdateDocChangeRange(nsRange* aRange);
   nsresult ConfirmSelectionInBody();
-  nsresult InsertMozBRIfNeeded(nsINode& aNode);
+
+  /**
+   * Insert normal <br> element into aNode when aNode is a block and it has
+   * no children.
+   */
+  nsresult InsertBRIfNeeded(nsINode& aNode)
+  {
+    return InsertBRIfNeededInternal(aNode, false);
+  }
+
+  /**
+   * Insert moz-<br> element (<br type="_moz">) into aNode when aNode is a
+   * block and it has no children.
+   */
+  nsresult InsertMozBRIfNeeded(nsINode& aNode)
+  {
+    return InsertBRIfNeededInternal(aNode, true);
+  }
+
   bool IsEmptyInline(nsINode& aNode);
   bool ListIsEmptyLine(nsTArray<OwningNonNull<nsINode>>& arrayOfNodes);
   nsresult RemoveAlignment(nsINode& aNode, const nsAString& aAlignType,

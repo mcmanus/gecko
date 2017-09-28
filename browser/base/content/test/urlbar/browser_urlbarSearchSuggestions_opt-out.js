@@ -1,3 +1,4 @@
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 // The order of the tests here matters!
 
 const SUGGEST_ALL_PREF = "browser.search.suggest.enabled";
@@ -38,7 +39,7 @@ add_task(async function focus() {
   setupVisibleHint();
   gURLBar.blur();
   let popupPromise = promisePopupShown(gURLBar.popup);
-  gURLBar.focus();
+  focusAndSelectUrlBar(true);
   await popupPromise;
   Assert.ok(gURLBar.popup.popupOpen, "popup should be open");
   assertVisible(true);
@@ -56,27 +57,46 @@ add_task(async function focus() {
 
   // Check the Change Options link.
   let changeOptionsLink = document.getElementById("search-suggestions-change-settings");
-  let prefsPromise = BrowserTestUtils.waitForLocationChange(gBrowser, "about:preferences#general-search");
+  let prefsPromise = BrowserTestUtils.waitForLocationChange(gBrowser, "about:preferences#search");
   changeOptionsLink.click();
   await prefsPromise;
   Assert.ok(!gURLBar.popup.popupOpen, "popup should be closed");
+  // The preferences page does fancy stuff with focus, ensure to unload it.
+  await BrowserTestUtils.loadURI(gBrowser.selectedBrowser, "about:blank");
 });
 
-add_task(async function new_tab() {
-  // Opening a new tab when the urlbar is unfocused, should focusing it and thus
-  // open the popup in order to show the notification.
+add_task(async function click_on_focused() {
+  // Even if the location bar is already focused, we should still show the popup
+  // and the notification on click.
   setupVisibleHint();
   gURLBar.blur();
+  // Won't show the hint since it's not user initiated.
+  gURLBar.focus();
+  await new Promise(resolve => setTimeout(resolve, 500));
+  Assert.ok(!gURLBar.popup.popupOpen, "popup should be closed");
+
   let popupPromise = promisePopupShown(gURLBar.popup);
-  // openNewForegroundTab doesn't focus the urlbar.
-  await BrowserTestUtils.synthesizeKey("t", { accelKey: true }, gBrowser.selectedBrowser);
+  EventUtils.synthesizeMouseAtCenter(gURLBar.inputField, { button: 0, type: "mousedown" });
   await popupPromise;
+
   Assert.ok(gURLBar.popup.popupOpen, "popup should be open");
   assertVisible(true);
   assertFooterVisible(false);
   Assert.equal(gURLBar.popup._matchCount, 0, "popup should have no results");
-  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  gURLBar.blur();
   Assert.ok(!gURLBar.popup.popupOpen, "popup should be closed");
+});
+
+add_task(async function new_tab() {
+  // Opening a new tab when the urlbar is unfocused, should focus it but not
+  // open the popup.
+  setupVisibleHint();
+  gURLBar.blur();
+  // openNewForegroundTab doesn't focus the urlbar.
+  await BrowserTestUtils.synthesizeKey("t", { accelKey: true }, gBrowser.selectedBrowser);
+  await new Promise(resolve => setTimeout(resolve, 500));
+  Assert.ok(!gURLBar.popup.popupOpen, "popup should be closed");
+  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
 add_task(async function privateWindow() {

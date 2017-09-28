@@ -26,6 +26,7 @@
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
 #include "nsIStringStream.h"
+#include "nsISupportsPrimitives.h"
 #include "nsIUploadChannel.h"
 #include "nsIScriptError.h"
 #include "nsIWebNavigation.h"
@@ -82,7 +83,7 @@ CreateCacheKey_Internal(nsIURI* aContentLocation,
   outCacheKey.Truncate();
   if (aContentType != nsIContentPolicy::TYPE_SCRIPT && isDataScheme) {
     // For non-script data: URI, use ("data:", aContentType) as the cache key.
-    outCacheKey.Append(NS_LITERAL_CSTRING("data:"));
+    outCacheKey.AppendLiteral("data:");
     outCacheKey.AppendInt(aContentType);
     return NS_OK;
   }
@@ -94,7 +95,7 @@ CreateCacheKey_Internal(nsIURI* aContentLocation,
   // Don't cache for a URI longer than the cutoff size.
   if (spec.Length() <= CSP_CACHE_URI_CUTOFF_SIZE) {
     outCacheKey.Append(spec);
-    outCacheKey.Append(NS_LITERAL_CSTRING("!"));
+    outCacheKey.AppendLiteral("!");
     outCacheKey.AppendInt(aContentType);
   }
 
@@ -505,7 +506,7 @@ NS_IMETHODIMP
 nsCSPContext::GetAllowsInline(nsContentPolicyType aContentType,
                               const nsAString& aNonce,
                               bool aParserCreated,
-                              const nsAString& aContent,
+                              nsISupports* aElementOrContent,
                               uint32_t aLineNumber,
                               bool* outAllowsInline)
 {
@@ -520,12 +521,36 @@ nsCSPContext::GetAllowsInline(nsContentPolicyType aContentType,
     return NS_OK;
   }
 
+   nsAutoString content(EmptyString());
+
   // always iterate all policies, otherwise we might not send out all reports
   for (uint32_t i = 0; i < mPolicies.Length(); i++) {
     bool allowed =
       mPolicies[i]->allows(aContentType, CSP_UNSAFE_INLINE, EmptyString(), aParserCreated) ||
-      mPolicies[i]->allows(aContentType, CSP_NONCE, aNonce, aParserCreated) ||
-      mPolicies[i]->allows(aContentType, CSP_HASH, aContent, aParserCreated);
+      mPolicies[i]->allows(aContentType, CSP_NONCE, aNonce, aParserCreated);
+
+    // If the inlined script or style is allowed by either unsafe-inline or the
+    // nonce, go ahead and shortcut this loop so we can avoid allocating
+    // unecessary strings
+    if (allowed) {
+      continue;
+    }
+
+    // Check the content length to ensure the content is not allocated more than
+    // once. Even though we are in a for loop, it is probable that there is only one
+    // policy, so this check may be unnecessary.
+    if (content.Length() == 0) {
+      // postpone the allocation until absolutely necessary.
+      nsCOMPtr<nsISupportsString> stringContent = do_QueryInterface(aElementOrContent);
+      nsCOMPtr<nsIScriptElement> element = do_QueryInterface(aElementOrContent);
+      if (stringContent) {
+        Unused << stringContent->GetData(content);
+      } else if (element) {
+        element->GetScriptText(content);
+      }
+    }
+
+    allowed = mPolicies[i]->allows(aContentType, CSP_HASH, content, aParserCreated);
 
     if (!allowed) {
       // policy is violoated: deny the load unless policy is report only and
@@ -537,7 +562,7 @@ nsCSPContext::GetAllowsInline(nsContentPolicyType aContentType,
       mPolicies[i]->getDirectiveStringForContentType(aContentType, violatedDirective);
       reportInlineViolation(aContentType,
                             aNonce,
-                            aContent,
+                            content,
                             violatedDirective,
                             i,
                             aLineNumber);
@@ -715,7 +740,7 @@ nsCSPContext::EnsureEventTarget(nsIEventTarget* aEventTarget)
 }
 
 struct ConsoleMsgQueueElem {
-  nsXPIDLString mMsg;
+  nsString      mMsg;
   nsString      mSourceName;
   nsString      mSourceLine;
   uint32_t      mLineNumber;
@@ -743,7 +768,7 @@ nsCSPContext::flushConsoleMessages()
 }
 
 void
-nsCSPContext::logToConsole(const char16_t* aName,
+nsCSPContext::logToConsole(const char* aName,
                            const char16_t** aParams,
                            uint32_t aParamsLength,
                            const nsAString& aSourceName,
@@ -754,8 +779,8 @@ nsCSPContext::logToConsole(const char16_t* aName,
 {
   // let's check if we have to queue up console messages
   if (mQueueUpMessages) {
-    nsXPIDLString msg;
-    CSP_GetLocalizedStr(aName, aParams, aParamsLength, getter_Copies(msg));
+    nsAutoString msg;
+    CSP_GetLocalizedStr(aName, aParams, aParamsLength, msg);
     ConsoleMsgQueueElem &elem = *mConsoleMsgQueue.AppendElement();
     elem.mMsg = msg;
     elem.mSourceName = PromiseFlatString(aSourceName);
@@ -842,15 +867,6 @@ nsCSPContext::SendReports(nsISupports* aBlockedContentSource,
                           uint32_t aLineNum)
 {
   NS_ENSURE_ARG_MAX(aViolatedPolicyIndex, mPolicies.Length() - 1);
-
-#ifdef MOZ_B2G
-  // load group information (on process-split necko implementations like b2g).
-  // (fix this in bug 1011086)
-  if (!mCallingChannelLoadGroup) {
-    NS_WARNING("Load group required but not present for report sending; cannot send CSP violation reports");
-    return NS_ERROR_FAILURE;
-  }
-#endif
 
   dom::CSPReport report;
   nsresult rv;
@@ -944,7 +960,7 @@ nsCSPContext::SendReports(nsISupports* aBlockedContentSource,
       const char16_t* params[] = { reportURIs[r].get() };
       CSPCONTEXTLOG(("Could not create nsIURI for report URI %s",
                      reportURICstring.get()));
-      logToConsole(u"triedToSendReport", params, ArrayLength(params),
+      logToConsole("triedToSendReport", params, ArrayLength(params),
                    aSourceFile, aScriptSample, aLineNum, 0, nsIScriptError::errorFlag);
       continue; // don't return yet, there may be more URIs
     }
@@ -985,7 +1001,7 @@ nsCSPContext::SendReports(nsISupports* aBlockedContentSource,
 
     if (!isHttpScheme) {
       const char16_t* params[] = { reportURIs[r].get() };
-      logToConsole(u"reportURInotHttpsOrHttp2", params, ArrayLength(params),
+      logToConsole("reportURInotHttpsOrHttp2", params, ArrayLength(params),
                    aSourceFile, aScriptSample, aLineNum, 0, nsIScriptError::errorFlag);
       continue;
     }
@@ -1050,7 +1066,7 @@ nsCSPContext::SendReports(nsISupports* aBlockedContentSource,
     if (NS_FAILED(rv)) {
       const char16_t* params[] = { reportURIs[r].get() };
       CSPCONTEXTLOG(("AsyncOpen failed for report URI %s", NS_ConvertUTF16toUTF8(params[0]).get()));
-      logToConsole(u"triedToSendReport", params, ArrayLength(params),
+      logToConsole("triedToSendReport", params, ArrayLength(params),
                    aSourceFile, aScriptSample, aLineNum, 0, nsIScriptError::errorFlag);
     } else {
       CSPCONTEXTLOG(("Sent violation report to URI %s", reportURICstring.get()));
@@ -1075,7 +1091,8 @@ class CSPReportSenderRunnable final : public Runnable
                             const nsAString& aScriptSample,
                             uint32_t aLineNum,
                             nsCSPContext* aCSPContext)
-      : mBlockedContentSource(aBlockedContentSource)
+      : mozilla::Runnable("CSPReportSenderRunnable")
+      , mBlockedContentSource(aBlockedContentSource)
       , mOriginalURI(aOriginalURI)
       , mViolatedPolicyIndex(aViolatedPolicyIndex)
       , mReportOnlyFlag(aReportOnlyFlag)
@@ -1141,8 +1158,8 @@ class CSPReportSenderRunnable final : public Runnable
         nsString blockedDataChar16 = NS_ConvertUTF8toUTF16(blockedDataStr);
         const char16_t* params[] = { mViolatedDirective.get(),
                                      blockedDataChar16.get() };
-        mCSPContext->logToConsole(mReportOnlyFlag ? u"CSPROViolationWithURI" :
-                                                    u"CSPViolationWithURI",
+        mCSPContext->logToConsole(mReportOnlyFlag ? "CSPROViolationWithURI" :
+                                                    "CSPViolationWithURI",
                                   params, ArrayLength(params), mSourceFile, mScriptSample,
                                   mLineNum, 0, nsIScriptError::errorFlag);
       }
@@ -1211,11 +1228,16 @@ nsCSPContext::AsyncReportViolation(nsISupports* aBlockedContentSource,
                                 aLineNum,
                                 this);
 
+  // If the document is currently buffering up CSP violation reports, send the
+  // runnable to it instead of dispatching it immediately.
+  nsCOMPtr<nsIDocument> doc = do_QueryReferent(mLoadingContext);
+  if (doc && doc->ShouldBufferCSPViolations()) {
+    doc->BufferCSPViolation(task);
+    return NS_OK;
+  }
+
   if (XRE_IsContentProcess()) {
     if (mEventTarget) {
-      if (nsCOMPtr<nsINamed> named = do_QueryInterface(task)) {
-        named->SetName("CSPReportSenderRunnable");
-      }
       mEventTarget->Dispatch(task.forget(), NS_DISPATCH_NORMAL);
       return NS_OK;
     }
@@ -1424,7 +1446,7 @@ nsCSPContext::GetCSPSandboxFlags(uint32_t* aOutSandboxFlags)
                      NS_ConvertUTF16toUTF8(policy).get()));
 
       const char16_t* params[] = { policy.get() };
-      logToConsole(u"ignoringReportOnlyDirective", params, ArrayLength(params),
+      logToConsole("ignoringReportOnlyDirective", params, ArrayLength(params),
                    EmptyString(), EmptyString(), 0, 0, nsIScriptError::warningFlag);
     }
   }

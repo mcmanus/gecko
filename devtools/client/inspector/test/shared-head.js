@@ -53,6 +53,7 @@ var openInspectorSidebarTab = Task.async(function* (id) {
 
   info("Selecting the " + id + " sidebar");
 
+  let onSidebarSelect = inspector.sidebar.once("select");
   if (id === "computedview" || id === "layoutview") {
     // The layout and computed views should wait until the box-model widget is ready.
     let onBoxModelViewReady = inspector.once("boxmodel-view-updated");
@@ -61,6 +62,7 @@ var openInspectorSidebarTab = Task.async(function* (id) {
   } else {
     inspector.sidebar.select(id);
   }
+  yield onSidebarSelect;
 
   return {
     toolbox,
@@ -78,9 +80,9 @@ var openInspectorSidebarTab = Task.async(function* (id) {
  */
 function openRuleView() {
   return openInspectorSidebarTab("ruleview").then(data => {
-    // Replace the view to use a custom throttle function that can be triggered manually
+    // Replace the view to use a custom debounce function that can be triggered manually
     // through an additional ".flush()" property.
-    data.inspector.getPanel("ruleview").view.throttle = manualThrottle();
+    data.inspector.getPanel("ruleview").view.debounce = manualDebounce();
 
     return {
       toolbox: data.toolbox,
@@ -134,7 +136,7 @@ function openLayoutView() {
       toolbox: data.toolbox,
       inspector: data.inspector,
       boxmodel: data.inspector.getPanel("boxmodel"),
-      gridInspector: data.inspector.gridInspector,
+      gridInspector: data.inspector.layoutview.gridInspector,
       testActor: data.testActor
     };
   });
@@ -199,16 +201,16 @@ var selectNode = Task.async(function* (selector, inspector, reason = "test") {
 
 /**
  * Create a throttling function that can be manually "flushed". This is to replace the
- * use of the `throttle` function from `devtools/client/inspector/shared/utils.js`, which
+ * use of the `debounce` function from `devtools/client/inspector/shared/utils.js`, which
  * has a setTimeout that can cause intermittents.
- * @return {Function} This function has the same function signature as throttle, but
+ * @return {Function} This function has the same function signature as debounce, but
  *                    the property `.flush()` has been added for flushing out any
- *                    throttled calls.
+ *                    debounced calls.
  */
-function manualThrottle() {
+function manualDebounce() {
   let calls = [];
 
-  function throttle(func, wait, scope) {
+  function debounce(func, wait, scope) {
     return function () {
       let existingCall = calls.find(call => call.func === func);
       if (existingCall) {
@@ -219,12 +221,12 @@ function manualThrottle() {
     };
   }
 
-  throttle.flush = function () {
+  debounce.flush = function () {
     calls.forEach(({func, scope, args}) => func.apply(scope, args));
     calls = [];
   };
 
-  return throttle;
+  return debounce;
 }
 
 /**
@@ -241,12 +243,12 @@ function waitForContentMessage(name) {
 
   let mm = gBrowser.selectedBrowser.messageManager;
 
-  let def = defer();
-  mm.addMessageListener(name, function onMessage(msg) {
-    mm.removeMessageListener(name, onMessage);
-    def.resolve(msg.data);
+  return new Promise(resolve => {
+    mm.addMessageListener(name, function onMessage(msg) {
+      mm.removeMessageListener(name, onMessage);
+      resolve(msg.data);
+    });
   });
-  return def.promise;
 }
 
 /**

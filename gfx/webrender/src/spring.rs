@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use webrender_traits::LayerPoint;
+use api::LayerPoint;
 
 /// Some arbitrarily small positive number used as threshold value.
 pub const EPSILON: f32 = 0.1;
@@ -34,8 +34,8 @@ impl Spring {
             cur: pos,
             prev: pos,
             dest: pos,
-            stiffness: stiffness,
-            damping: damping,
+            stiffness,
+            damping,
         }
     }
 
@@ -53,17 +53,24 @@ impl Spring {
     /// Run one tick of the spring animation. Return true if the animation is complete.
     pub fn animate(&mut self) -> bool {
         if !is_resting(self.cur.x, self.prev.x, self.dest.x) ||
-                !is_resting(self.cur.y, self.prev.y, self.dest.y) {
-            let next = LayerPoint::new(next(self.cur.x,
-                                            self.prev.x,
-                                            self.dest.x,
-                                            self.stiffness,
-                                            self.damping),
-                                       next(self.cur.y,
-                                            self.prev.y,
-                                            self.dest.y,
-                                            self.stiffness,
-                                            self.damping));
+            !is_resting(self.cur.y, self.prev.y, self.dest.y)
+        {
+            let next = LayerPoint::new(
+                next(
+                    self.cur.x,
+                    self.prev.x,
+                    self.dest.x,
+                    self.stiffness,
+                    self.damping,
+                ),
+                next(
+                    self.cur.y,
+                    self.prev.y,
+                    self.dest.y,
+                    self.stiffness,
+                    self.damping,
+                ),
+            );
             let (cur, dest) = (self.cur, self.dest);
             self.coords(next, cur, dest);
             false

@@ -10,7 +10,6 @@
 #include "js/TypeDecls.h"
 #include "LiveResizeListener.h"
 #include "mozilla/ContentCache.h"
-#include "mozilla/dom/AudioChannelBinding.h"
 #include "mozilla/dom/ipc/IdType.h"
 #include "mozilla/dom/PBrowserParent.h"
 #include "mozilla/dom/PContent.h"
@@ -165,16 +164,13 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvSetHasBeforeUnload(const bool& aHasBeforeUnload) override;
 
-  virtual mozilla::ipc::IPCResult RecvBrowserFrameOpenWindow(PBrowserParent* aOpener,
-                                                             PRenderFrameParent* aRenderFrame,
-                                                             const nsString& aURL,
-                                                             const nsString& aName,
-                                                             const nsString& aFeatures,
-                                                             bool* aOutWindowOpened,
-                                                             TextureFactoryIdentifier* aTextureFactoryIdentifier,
-                                                             uint64_t* aLayersId,
-                                                             CompositorOptions* aCompositorOptions,
-                                                             uint32_t* aMaxTouchPoints) override;
+  virtual mozilla::ipc::IPCResult
+  RecvBrowserFrameOpenWindow(PBrowserParent* aOpener,
+                             PRenderFrameParent* aRenderFrame,
+                             const nsString& aURL,
+                             const nsString& aName,
+                             const nsString& aFeatures,
+                             BrowserFrameOpenWindowResolver&& aResolve) override;
 
   virtual mozilla::ipc::IPCResult
   RecvSyncMessage(const nsString& aMessage,
@@ -198,7 +194,7 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvNotifyIMEFocus(const ContentCache& aContentCache,
                      const widget::IMENotification& aEventMessage,
-                     widget::IMENotificationRequests* aRequests) override;
+                     NotifyIMEFocusResolver&& aResolve) override;
 
   virtual mozilla::ipc::IPCResult
   RecvNotifyIMETextChange(const ContentCache& aContentCache,
@@ -253,6 +249,7 @@ public:
                                                       const nsString& aType,
                                                       const nsString& aInputmode,
                                                       const nsString& aActionHint,
+                                                      const bool& aInPrivateBrowsing,
                                                       const int32_t& aCause,
                                                       const int32_t& aFocusChange) override;
 
@@ -302,13 +299,6 @@ public:
 
   virtual mozilla::ipc::IPCResult RecvHideTooltip() override;
 
-  virtual mozilla::ipc::IPCResult RecvGetDPI(float* aValue) override;
-
-  virtual mozilla::ipc::IPCResult RecvGetDefaultScale(double* aValue) override;
-
-  virtual mozilla::ipc::IPCResult RecvGetWidgetRounding(int32_t* aValue) override;
-
-  virtual mozilla::ipc::IPCResult RecvGetWidgetNativeData(WindowsHandle* aValue) override;
 
   virtual mozilla::ipc::IPCResult RecvSetNativeChildOfShareableWindow(const uintptr_t& childWindow) override;
 
@@ -371,8 +361,7 @@ public:
   void ThemeChanged();
 
   void HandleAccessKey(const WidgetKeyboardEvent& aEvent,
-                       nsTArray<uint32_t>& aCharCodes,
-                       const int32_t& aModifierMask);
+                       nsTArray<uint32_t>& aCharCodes);
 
   void Activate();
 
@@ -443,17 +432,35 @@ public:
                     int32_t aCharCode, int32_t aModifiers,
                     bool aPreventDefault);
 
-  bool SendRealMouseEvent(mozilla::WidgetMouseEvent& aEvent);
+  /**
+   * The following Send*Event() marks aEvent as posted to remote process if
+   * it succeeded.  So, you can check the result with
+   * aEvent.HasBeenPostedToRemoteProcess().
+   */
+  void SendRealMouseEvent(WidgetMouseEvent& aEvent);
 
-  bool SendRealDragEvent(mozilla::WidgetDragEvent& aEvent,
+  void SendRealDragEvent(WidgetDragEvent& aEvent,
                          uint32_t aDragAction,
                          uint32_t aDropEffect);
 
-  bool SendMouseWheelEvent(mozilla::WidgetWheelEvent& aEvent);
+  void SendMouseWheelEvent(WidgetWheelEvent& aEvent);
 
-  bool SendRealKeyEvent(mozilla::WidgetKeyboardEvent& aEvent);
+  void SendRealKeyEvent(WidgetKeyboardEvent& aEvent);
 
-  bool SendRealTouchEvent(WidgetTouchEvent& aEvent);
+  void SendRealTouchEvent(WidgetTouchEvent& aEvent);
+
+  void SendPluginEvent(WidgetPluginEvent& aEvent);
+
+  /**
+   * Different from above Send*Event(), these methods return true if the
+   * event has been posted to the remote process or failed to do that but
+   * shouldn't be handled by following event listeners.
+   * If you need to check if it's actually posted to the remote process,
+   * you can refer aEvent.HasBeenPostedToRemoteProcess().
+   */
+  bool SendCompositionEvent(mozilla::WidgetCompositionEvent& aEvent);
+
+  bool SendSelectionEvent(mozilla::WidgetSelectionEvent& aEvent);
 
   bool SendHandleTap(TapType aType,
                      const LayoutDevicePoint& aPoint,
@@ -501,19 +508,9 @@ public:
 
   bool HandleQueryContentEvent(mozilla::WidgetQueryContentEvent& aEvent);
 
-  bool SendCompositionEvent(mozilla::WidgetCompositionEvent& aEvent);
-
-  bool SendSelectionEvent(mozilla::WidgetSelectionEvent& aEvent);
-
   bool SendPasteTransferable(const IPCDataTransfer& aDataTransfer,
                              const bool& aIsPrivateData,
                              const IPC::Principal& aRequestingPrincipal);
-
-  /**
-   * OnDestroyTextComposition() should be called when TextComposition instance
-   * which dispatched composition events to this instance is being destroyed.
-   */
-  void OnDestroyTextComposition();
 
   static TabParent* GetFrom(nsFrameLoader* aFrameLoader);
 
@@ -535,14 +532,28 @@ public:
    */
   bool IsDestroyed() const { return mIsDestroyed; }
 
+  // Returns the closest widget for our frameloader's content.
   already_AddRefed<nsIWidget> GetWidget() const;
+
+  // Returns the top-level widget for our frameloader's document.
+  already_AddRefed<nsIWidget> GetDocWidget() const;
 
   const TabId GetTabId() const
   {
     return mTabId;
   }
 
+  // Returns the offset from the origin of our frameloader's nearest widget to
+  // the origin of its layout frame. This offset is used to translate event
+  // coordinates relative to the PuppetWidget origin in the child process.
   LayoutDeviceIntPoint GetChildProcessOffset();
+
+  // Returns the offset from the on-screen origin of our top-level window's
+  // widget (including window decorations) to the origin of our frameloader's
+  // nearest widget. This offset is used to translate coordinates from the
+  // PuppetWidget's origin to absolute screen coordinates in the child.
+  LayoutDeviceIntPoint GetClientOffset();
+
   LayoutDevicePoint AdjustTapToChildWidget(const LayoutDevicePoint& aPoint);
 
   /**
@@ -592,6 +603,9 @@ public:
   void LiveResizeStarted() override;
   void LiveResizeStopped() override;
 
+  void SetReadyToHandleInputEvents() { mIsReadyToHandleInputEvents = true; }
+  bool IsReadyToHandleInputEvents() { return mIsReadyToHandleInputEvents; }
+
 protected:
   bool ReceiveMessage(const nsString& aMessage,
                       bool aSync,
@@ -616,6 +630,8 @@ protected:
   virtual bool DeallocPRenderFrameParent(PRenderFrameParent* aFrame) override;
 
   virtual mozilla::ipc::IPCResult RecvRemotePaintIsReady() override;
+
+  virtual mozilla::ipc::IPCResult RecvRemoteIsReadyToHandleInputEvents() override;
 
   virtual mozilla::ipc::IPCResult RecvForcePaintNoOp(const uint64_t& aLayerObserverEpoch) override;
 
@@ -737,6 +753,12 @@ private:
 
   bool mHasContentOpener;
 
+  // When dropping links we perform a roundtrip from
+  // Parent (SendRealDragEvent) -> Child -> Parent (RecvDropLinks)
+  // and have to ensure that the child did not modify links to be loaded.
+  bool QueryDropLinksForVerification();
+  nsTArray<nsString> mVerifyDropLinks;
+
 #ifdef DEBUG
   int32_t mActiveSupressDisplayportCount;
 #endif
@@ -766,6 +788,14 @@ private:
   // True if at least one window hosted in the TabChild has added a
   // beforeunload event listener.
   bool mHasBeforeUnload;
+
+  // True when the remote browser is created and ready to handle input events.
+  bool mIsReadyToHandleInputEvents;
+
+  // True if we suppress the eMouseEnterIntoWidget event due to the TabChild was
+  // not ready to handle it. We will resend it when the next time we fire a
+  // mouse event and the TabChild is ready.
+  bool mIsMouseEnterIntoWidgetEventSuppressed;
 
 public:
   static TabParent* GetTabParentFromLayersId(uint64_t aLayersId);

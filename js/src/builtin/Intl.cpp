@@ -15,6 +15,7 @@
 #include "mozilla/HashFunctions.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/Range.h"
+#include "mozilla/TypeTraits.h"
 
 #include <string.h>
 
@@ -29,7 +30,6 @@
 #include "builtin/IntlTimeZoneData.h"
 #include "ds/Sort.h"
 #if ENABLE_INTL_API
-#include "unicode/plurrule.h"
 #include "unicode/ucal.h"
 #include "unicode/ucol.h"
 #include "unicode/udat.h"
@@ -94,37 +94,6 @@ enum UErrorCode {
     U_BUFFER_OVERFLOW_ERROR,
 };
 
-}
-
-namespace icu {
-
-class StringEnumeration {
-    public:
-        explicit StringEnumeration();
-};
-
-StringEnumeration::StringEnumeration()
-{
-    MOZ_CRASH("StringEnumeration::StringEnumeration: Intl API disabled");
-}
-
-class PluralRules {
-public:
-
-    StringEnumeration* getKeywords(UErrorCode& status) const;
-
-};
-
-StringEnumeration*
-PluralRules::getKeywords(UErrorCode& status) const
-{
-    MOZ_CRASH("PluralRules::getKeywords: Intl API disabled");
-}
-
-} // icu namespace
-
-namespace {
-
 typedef bool UBool;
 typedef char16_t UChar;
 typedef double UDate;
@@ -133,30 +102,6 @@ inline UBool
 U_FAILURE(UErrorCode code)
 {
     MOZ_CRASH("U_FAILURE: Intl API disabled");
-}
-
-inline const UChar*
-Char16ToUChar(const char16_t* chars)
-{
-    MOZ_CRASH("Char16ToUChar: Intl API disabled");
-}
-
-inline UChar*
-Char16ToUChar(char16_t* chars)
-{
-    MOZ_CRASH("Char16ToUChar: Intl API disabled");
-}
-
-inline char16_t*
-UCharToChar16(UChar* chars)
-{
-    MOZ_CRASH("UCharToChar16: Intl API disabled");
-}
-
-inline const char16_t*
-UCharToChar16(const UChar* chars)
-{
-    MOZ_CRASH("UCharToChar16: Intl API disabled");
 }
 
 const char*
@@ -177,20 +122,6 @@ uloc_isRightToLeft(const char* locale)
     MOZ_CRASH("uloc_isRightToLeft: Intl API disabled");
 }
 
-struct UFormattable;
-
-void
-ufmt_close(UFormattable* fmt)
-{
-    MOZ_CRASH("ufmt_close: Intl API disabled");
-}
-
-double
-ufmt_getDouble(UFormattable* fmt, UErrorCode *status)
-{
-    MOZ_CRASH("ufmt_getDouble: Intl API disabled");
-}
-
 struct UEnumeration;
 
 int32_t
@@ -209,12 +140,6 @@ void
 uenum_close(UEnumeration* en)
 {
     MOZ_CRASH("uenum_close: Intl API disabled");
-}
-
-UEnumeration*
-uenum_openFromStringEnumeration(icu::StringEnumeration* adopted, UErrorCode* ec)
-{
-    MOZ_CRASH("uenum_openFromStringEnumeration: Intl API disabled");
 }
 
 struct UCollator;
@@ -359,8 +284,6 @@ unum_setAttribute(UNumberFormat* fmt, UNumberFormatAttribute  attr, int32_t newV
     MOZ_CRASH("unum_setAttribute: Intl API disabled");
 }
 
-#if defined(ICU_UNUM_HAS_FORMATDOUBLEFORFIELDS)
-
 int32_t
 unum_formatDoubleForFields(const UNumberFormat* fmt, double number, UChar* result,
                            int32_t resultLength, UFieldPositionIterator* fpositer,
@@ -384,17 +307,6 @@ enum UNumberFormatFields {
     UNUM_FIELD_COUNT,
 };
 
-#else
-
-int32_t
-unum_formatDouble(const UNumberFormat* fmt, double number, UChar* result,
-                  int32_t resultLength, UFieldPosition* pos, UErrorCode* status)
-{
-    MOZ_CRASH("unum_formatDouble: Intl API disabled");
-}
-
-#endif // defined(ICU_UNUM_HAS_FORMATDOUBLEFORFIELDS)
-
 void
 unum_close(UNumberFormat* fmt)
 {
@@ -406,17 +318,6 @@ unum_setTextAttribute(UNumberFormat* fmt, UNumberFormatTextAttribute tag, const 
                       int32_t newValueLength, UErrorCode* status)
 {
     MOZ_CRASH("unum_setTextAttribute: Intl API disabled");
-}
-
-UFormattable*
-unum_parseToUFormattable(const UNumberFormat* fmt,
-                         UFormattable *result,
-                         const UChar* text,
-                         int32_t textLength,
-                         int32_t* parsePos, /* 0 = start */
-                         UErrorCode* status)
-{
-    MOZ_CRASH("unum_parseToUFormattable: Intl API disabled");
 }
 
 typedef void* UNumberingSystem;
@@ -811,10 +712,16 @@ uplrules_openForType(const char *locale, UPluralType type, UErrorCode *status)
 }
 
 int32_t
-uplrules_select(const UPluralRules *uplrules, double number, UChar *keyword, int32_t capacity,
-                UErrorCode *status)
+uplrules_selectWithFormat(const UPluralRules* uplrules, double number, const UNumberFormat* fmt,
+                          UChar* keyword, int32_t capacity, UErrorCode* status)
 {
-    MOZ_CRASH("uplrules_select: Intl API disabled");
+    MOZ_CRASH("uplrules_selectWithFormat: Intl API disabled");
+}
+
+UEnumeration*
+uplrules_getKeywords(const UPluralRules* uplrules, UErrorCode* status)
+{
+    MOZ_CRASH("uplrules_getKeywords: Intl API disabled");
 }
 
 int32_t
@@ -918,11 +825,8 @@ intl_availableLocales(JSContext* cx, CountAvailable countAvailable,
         a = Atomize(cx, lang.get(), strlen(lang.get()));
         if (!a)
             return false;
-        if (!DefineProperty(cx, locales, a->asPropertyName(), TrueHandleValue, nullptr, nullptr,
-                            JSPROP_ENUMERATE))
-        {
+        if (!DefineDataProperty(cx, locales, a->asPropertyName(), TrueHandleValue))
             return false;
-        }
     }
 #endif
     result.setObject(*locales);
@@ -987,6 +891,10 @@ class ScopedICUObject
     }
 };
 
+// Starting with ICU 59, UChar defaults to char16_t.
+static_assert(mozilla::IsSame<UChar, char16_t>::value,
+              "We don't support redefining UChar to a different type");
+
 // The inline capacity we use for the char16_t Vectors.
 static const size_t INITIAL_CHAR_BUFFER_SIZE = 32;
 
@@ -998,13 +906,13 @@ Call(JSContext* cx, const ICUStringFunction& strFn)
     MOZ_ALWAYS_TRUE(chars.resize(INITIAL_CHAR_BUFFER_SIZE));
 
     UErrorCode status = U_ZERO_ERROR;
-    int32_t size = strFn(Char16ToUChar(chars.begin()), INITIAL_CHAR_BUFFER_SIZE, &status);
+    int32_t size = strFn(chars.begin(), INITIAL_CHAR_BUFFER_SIZE, &status);
     if (status == U_BUFFER_OVERFLOW_ERROR) {
         MOZ_ASSERT(size >= 0);
         if (!chars.resize(size_t(size)))
             return nullptr;
         status = U_ZERO_ERROR;
-        strFn(Char16ToUChar(chars.begin()), size, &status);
+        strFn(chars.begin(), size, &status);
     }
     if (U_FAILURE(status)) {
         JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_INTERNAL_INTL_ERROR);
@@ -1021,8 +929,6 @@ Call(JSContext* cx, const ICUStringFunction& strFn)
 const ClassOps CollatorObject::classOps_ = {
     nullptr, /* addProperty */
     nullptr, /* delProperty */
-    nullptr, /* getProperty */
-    nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* newEnumerate */
     nullptr, /* resolve */
@@ -1078,7 +984,7 @@ Collator(JSContext* cx, const CallArgs& args)
 
     // Steps 2-5 (Inlined 9.1.14, OrdinaryCreateFromConstructor).
     RootedObject proto(cx);
-    if (args.isConstructing() && !GetPrototypeFromCallableConstructor(cx, args, &proto))
+    if (!GetPrototypeFromBuiltinConstructor(cx, args, &proto))
         return false;
 
     if (!proto) {
@@ -1161,7 +1067,7 @@ CreateCollatorPrototype(JSContext* cx, HandleObject Intl, Handle<GlobalObject*> 
 
     // 8.1
     RootedValue ctorValue(cx, ObjectValue(*ctor));
-    if (!DefineProperty(cx, Intl, cx->names().Collator, ctorValue, nullptr, nullptr, 0))
+    if (!DefineDataProperty(cx, Intl, cx->names().Collator, ctorValue, 0))
         return nullptr;
 
     return proto;
@@ -1212,7 +1118,7 @@ js::intl_availableCollations(JSContext* cx, unsigned argc, Value* vp)
 
     // The first element of the collations array must be |null| per
     // ES2017 Intl, 10.2.3 Internal Slots.
-    if (!DefineElement(cx, collations, index++, NullHandleValue))
+    if (!DefineDataElement(cx, collations, index++, NullHandleValue))
         return false;
 
     RootedValue element(cx);
@@ -1235,7 +1141,7 @@ js::intl_availableCollations(JSContext* cx, unsigned argc, Value* vp)
         if (!jscollation)
             return false;
         element = StringValue(jscollation);
-        if (!DefineElement(cx, collations, index++, element))
+        if (!DefineDataElement(cx, collations, index++, element))
             return false;
     }
 
@@ -1406,8 +1312,8 @@ intl_CompareStrings(JSContext* cx, UCollator* coll, HandleString str1, HandleStr
     mozilla::Range<const char16_t> chars2 = stableChars2.twoByteRange();
 
     UCollationResult uresult = ucol_strcoll(coll,
-                                            Char16ToUChar(chars1.begin().get()), chars1.length(),
-                                            Char16ToUChar(chars2.begin().get()), chars2.length());
+                                            chars1.begin().get(), chars1.length(),
+                                            chars2.begin().get(), chars2.length());
     int32_t res;
     switch (uresult) {
         case UCOL_LESS: res = -1; break;
@@ -1589,8 +1495,6 @@ js::intl_isUpperCaseFirst(JSContext* cx, unsigned argc, Value* vp)
 const ClassOps NumberFormatObject::classOps_ = {
     nullptr, /* addProperty */
     nullptr, /* delProperty */
-    nullptr, /* getProperty */
-    nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* newEnumerate */
     nullptr, /* resolve */
@@ -1646,7 +1550,7 @@ NumberFormat(JSContext* cx, const CallArgs& args, bool construct)
 
     // Step 2 (Inlined 9.1.14, OrdinaryCreateFromConstructor).
     RootedObject proto(cx);
-    if (args.isConstructing() && !GetPrototypeFromCallableConstructor(cx, args, &proto))
+    if (!GetPrototypeFromBuiltinConstructor(cx, args, &proto))
         return false;
 
     if (!proto) {
@@ -1730,7 +1634,6 @@ CreateNumberFormatPrototype(JSContext* cx, HandleObject Intl, Handle<GlobalObjec
     if (!JS_DefineProperties(cx, proto, numberFormat_properties))
         return nullptr;
 
-#if defined(ICU_UNUM_HAS_FORMATDOUBLEFORFIELDS)
     // If the still-experimental NumberFormat.prototype.formatToParts method is
     // enabled, also add it.
     if (cx->compartment()->creationOptions().experimentalNumberFormatFormatToPartsEnabled()) {
@@ -1743,14 +1646,13 @@ CreateNumberFormatPrototype(JSContext* cx, HandleObject Intl, Handle<GlobalObjec
             return nullptr;
         }
 
-        if (!DefineProperty(cx, proto, cx->names().formatToParts, ftp, nullptr, nullptr, 0))
+        if (!DefineDataProperty(cx, proto, cx->names().formatToParts, ftp, 0))
             return nullptr;
     }
-#endif // defined(ICU_UNUM_HAS_FORMATDOUBLEFORFIELDS)
 
     // 8.1
     RootedValue ctorValue(cx, ObjectValue(*ctor));
-    if (!DefineProperty(cx, Intl, cx->names().NumberFormat, ctorValue, nullptr, nullptr, 0))
+    if (!DefineDataProperty(cx, Intl, cx->names().NumberFormat, ctorValue, 0))
         return nullptr;
 
     constructor.set(ctor);
@@ -1928,7 +1830,7 @@ NewUNumberFormat(JSContext* cx, Handle<NumberFormatObject*> numberFormat)
         if (!stableChars.initTwoByte(cx, currency))
             return nullptr;
         // uCurrency remains owned by stableChars.
-        uCurrency = Char16ToUChar(stableChars.twoByteRange().begin().get());
+        uCurrency = stableChars.twoByteRange().begin().get();
 
         if (!GetProperty(cx, internals, internals, cx->names().currencyDisplay, &value))
             return nullptr;
@@ -2018,18 +1920,8 @@ PartitionNumberPattern(JSContext* cx, UNumberFormat* nf, double* x,
     if (IsNegativeZero(*x))
         *x = 0.0;
 
-#if !defined(ICU_UNUM_HAS_FORMATDOUBLEFORFIELDS)
-    MOZ_ASSERT(fpositer == nullptr,
-               "shouldn't be requesting field information from an ICU that "
-               "can't provide it");
-#endif
-
     return Call(cx, [nf, x, fpositer](UChar* chars, int32_t size, UErrorCode* status) {
-#if defined(ICU_UNUM_HAS_FORMATDOUBLEFORFIELDS)
         return unum_formatDoubleForFields(nf, *x, chars, size, fpositer, status);
-#else
-        return unum_formatDouble(nf, *x, chars, size, nullptr, status);
-#endif
     });
 }
 
@@ -2047,8 +1939,6 @@ intl_FormatNumber(JSContext* cx, UNumberFormat* nf, double x, MutableHandleValue
 }
 
 using FieldType = ImmutablePropertyNamePtr JSAtomState::*;
-
-#if defined(ICU_UNUM_HAS_FORMATDOUBLEFORFIELDS)
 
 static FieldType
 GetFieldTypeForNumberField(UNumberFormatFields fieldName, double d)
@@ -2105,10 +1995,12 @@ GetFieldTypeForNumberField(UNumberFormatFields fieldName, double d)
                                "and scientific notation were never requested");
         break;
 
+#ifndef U_HIDE_DEPRECATED_API
       case UNUM_FIELD_COUNT:
         MOZ_ASSERT_UNREACHABLE("format field sentinel value returned by "
                                "iterator!");
         break;
+#endif
     }
 
     MOZ_ASSERT_UNREACHABLE("unenumerated, undocumented format field returned "
@@ -2413,7 +2305,7 @@ intl_FormatNumberToParts(JSContext* cx, UNumberFormat* nf, double x, MutableHand
             return false;
 
         propVal.setString(cx->names().*type);
-        if (!DefineProperty(cx, singlePart, cx->names().type, propVal))
+        if (!DefineDataProperty(cx, singlePart, cx->names().type, propVal))
             return false;
 
         JSLinearString* partSubstr =
@@ -2422,11 +2314,11 @@ intl_FormatNumberToParts(JSContext* cx, UNumberFormat* nf, double x, MutableHand
             return false;
 
         propVal.setString(partSubstr);
-        if (!DefineProperty(cx, singlePart, cx->names().value, propVal))
+        if (!DefineDataProperty(cx, singlePart, cx->names().value, propVal))
             return false;
 
         propVal.setObject(*singlePart);
-        if (!DefineElement(cx, partsArray, partIndex, propVal))
+        if (!DefineDataElement(cx, partsArray, partIndex, propVal))
             return false;
 
         lastEndIndex = endIndex;
@@ -2439,8 +2331,6 @@ intl_FormatNumberToParts(JSContext* cx, UNumberFormat* nf, double x, MutableHand
     result.setObject(*partsArray);
     return true;
 }
-
-#endif // defined(ICU_UNUM_HAS_FORMATDOUBLEFORFIELDS)
 
 bool
 js::intl_FormatNumber(JSContext* cx, unsigned argc, Value* vp)
@@ -2465,15 +2355,9 @@ js::intl_FormatNumber(JSContext* cx, unsigned argc, Value* vp)
     }
 
     // Use the UNumberFormat to actually format the number.
-#if defined(ICU_UNUM_HAS_FORMATDOUBLEFORFIELDS)
     if (args[2].toBoolean()) {
         return intl_FormatNumberToParts(cx, nf, args[1].toNumber(), args.rval());
     }
-#else
-    MOZ_ASSERT(!args[2].toBoolean(),
-               "shouldn't be doing formatToParts without an ICU that "
-               "supports it");
-#endif // defined(ICU_UNUM_HAS_FORMATDOUBLEFORFIELDS)
     return intl_FormatNumber(cx, nf, args[1].toNumber(), args.rval());
 }
 
@@ -2483,8 +2367,6 @@ js::intl_FormatNumber(JSContext* cx, unsigned argc, Value* vp)
 const ClassOps DateTimeFormatObject::classOps_ = {
     nullptr, /* addProperty */
     nullptr, /* delProperty */
-    nullptr, /* getProperty */
-    nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* newEnumerate */
     nullptr, /* resolve */
@@ -2541,7 +2423,7 @@ DateTimeFormat(JSContext* cx, const CallArgs& args, bool construct, DateTimeForm
 
     // Step 2 (Inlined 9.1.14, OrdinaryCreateFromConstructor).
     RootedObject proto(cx);
-    if (args.isConstructing() && !GetPrototypeFromCallableConstructor(cx, args, &proto))
+    if (!GetPrototypeFromBuiltinConstructor(cx, args, &proto))
         return false;
 
     if (!proto) {
@@ -2644,7 +2526,7 @@ CreateDateTimeFormatPrototype(JSContext* cx, HandleObject Intl, Handle<GlobalObj
 
     // 8.1
     RootedValue ctorValue(cx, ObjectValue(*ctor));
-    if (!DefineProperty(cx, Intl, cx->names().DateTimeFormat, ctorValue, nullptr, nullptr, 0))
+    if (!DefineDataProperty(cx, Intl, cx->names().DateTimeFormat, ctorValue, 0))
         return nullptr;
 
     constructor.set(ctor);
@@ -2731,7 +2613,7 @@ js::intl_availableCalendars(JSContext* cx, unsigned argc, Value* vp)
     if (!DefaultCalendar(cx, locale, &element))
         return false;
 
-    if (!DefineElement(cx, calendars, index++, element))
+    if (!DefineDataElement(cx, calendars, index++, element))
         return false;
 
     // Now get the calendars that "would make a difference", i.e., not the default.
@@ -2763,7 +2645,7 @@ js::intl_availableCalendars(JSContext* cx, unsigned argc, Value* vp)
         if (!jscalendar)
             return false;
         element = StringValue(jscalendar);
-        if (!DefineElement(cx, calendars, index++, element))
+        if (!DefineDataElement(cx, calendars, index++, element))
             return false;
 
         // ICU doesn't return calendar aliases, append them here.
@@ -2773,7 +2655,7 @@ js::intl_availableCalendars(JSContext* cx, unsigned argc, Value* vp)
                 if (!jscalendar)
                     return false;
                 element = StringValue(jscalendar);
-                if (!DefineElement(cx, calendars, index++, element))
+                if (!DefineDataElement(cx, calendars, index++, element))
                     return false;
             }
         }
@@ -3124,7 +3006,7 @@ js::intl_canonicalizeTimeZone(JSContext* cx, unsigned argc, Value* vp)
     mozilla::Range<const char16_t> tzchars = stableChars.twoByteRange();
 
     JSString* str = Call(cx, [&tzchars](UChar* chars, uint32_t size, UErrorCode* status) {
-        return ucal_getCanonicalTimeZoneID(Char16ToUChar(tzchars.begin().get()), tzchars.length(),
+        return ucal_getCanonicalTimeZoneID(tzchars.begin().get(), tzchars.length(),
                                            chars, size, nullptr, status);
     });
     if (!str)
@@ -3206,8 +3088,8 @@ js::intl_patternForSkeleton(JSContext* cx, unsigned argc, Value* vp)
     ScopedICUObject<UDateTimePatternGenerator, udatpg_close> toClose(gen);
 
     JSString* str = Call(cx, [gen, &skelChars](UChar* chars, uint32_t size, UErrorCode* status) {
-        return udatpg_getBestPattern(gen, Char16ToUChar(skelChars.begin().get()),
-                                     skelChars.length(), chars, size, status);
+        return udatpg_getBestPattern(gen, skelChars.begin().get(), skelChars.length(),
+                                     chars, size, status);
     });
     if (!str)
         return false;
@@ -3272,8 +3154,8 @@ js::intl_patternForStyle(JSContext* cx, unsigned argc, Value* vp)
 
     UErrorCode status = U_ZERO_ERROR;
     UDateFormat* df = udat_open(timeStyle, dateStyle, icuLocale(locale.ptr()),
-                                Char16ToUChar(timeZoneChars.begin().get()),
-                                timeZoneChars.length(), nullptr, -1, &status);
+                                timeZoneChars.begin().get(), timeZoneChars.length(),
+                                nullptr, -1, &status);
     if (U_FAILURE(status)) {
         JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_INTERNAL_INTL_ERROR);
         return false;
@@ -3333,8 +3215,8 @@ NewUDateFormat(JSContext* cx, Handle<DateTimeFormatObject*> dateTimeFormat)
     UErrorCode status = U_ZERO_ERROR;
     UDateFormat* df =
         udat_open(UDAT_PATTERN, UDAT_PATTERN, icuLocale(locale.ptr()),
-                  Char16ToUChar(timeZoneChars.begin().get()), timeZoneChars.length(),
-                  Char16ToUChar(patternChars.begin().get()), patternChars.length(), &status);
+                  timeZoneChars.begin().get(), timeZoneChars.length(),
+                  patternChars.begin().get(), patternChars.length(), &status);
     if (U_FAILURE(status)) {
         JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_INTERNAL_INTL_ERROR);
         return nullptr;
@@ -3434,19 +3316,19 @@ GetFieldTypeForFormatField(UDateFormatField fieldName)
 #ifndef U_HIDE_INTERNAL_API
       case UDAT_RELATED_YEAR_FIELD:
 #endif
-#ifndef U_HIDE_DRAFT_API
       case UDAT_AM_PM_MIDNIGHT_NOON_FIELD:
       case UDAT_FLEXIBLE_DAY_PERIOD_FIELD:
-#endif
 #ifndef U_HIDE_INTERNAL_API
       case UDAT_TIME_SEPARATOR_FIELD:
 #endif
         // These fields are all unsupported.
         return nullptr;
 
+#ifndef U_HIDE_DEPRECATED_API
       case UDAT_FIELD_COUNT:
         MOZ_ASSERT_UNREACHABLE("format field sentinel value returned by "
                                "iterator!");
+#endif
     }
 
     MOZ_ASSERT_UNREACHABLE("unenumerated, undocumented format field returned "
@@ -3500,7 +3382,7 @@ intl_FormatToPartsDateTime(JSContext* cx, UDateFormat* df, double x, MutableHand
             return false;
 
         partType = StringValue(cx->names().*type);
-        if (!DefineProperty(cx, singlePart, cx->names().type, partType))
+        if (!DefineDataProperty(cx, singlePart, cx->names().type, partType))
             return false;
 
         JSLinearString* partSubstr =
@@ -3509,11 +3391,11 @@ intl_FormatToPartsDateTime(JSContext* cx, UDateFormat* df, double x, MutableHand
             return false;
 
         val = StringValue(partSubstr);
-        if (!DefineProperty(cx, singlePart, cx->names().value, val))
+        if (!DefineDataProperty(cx, singlePart, cx->names().value, val))
             return false;
 
         val = ObjectValue(*singlePart);
-        if (!DefineElement(cx, partsArray, partIndex, val))
+        if (!DefineDataElement(cx, partsArray, partIndex, val))
             return false;
 
         lastEndIndex = endIndex;
@@ -3594,8 +3476,6 @@ js::intl_FormatDateTime(JSContext* cx, unsigned argc, Value* vp)
 const ClassOps PluralRulesObject::classOps_ = {
     nullptr, /* addProperty */
     nullptr, /* delProperty */
-    nullptr, /* getProperty */
-    nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* newEnumerate */
     nullptr, /* resolve */
@@ -3649,7 +3529,7 @@ PluralRules(JSContext* cx, unsigned argc, Value* vp)
 
     // Step 2 (Inlined 9.1.14, OrdinaryCreateFromConstructor).
     RootedObject proto(cx);
-    if (!GetPrototypeFromCallableConstructor(cx, args, &proto))
+    if (!GetPrototypeFromBuiltinConstructor(cx, args, &proto))
         return false;
 
     if (!proto) {
@@ -3710,7 +3590,7 @@ CreatePluralRulesPrototype(JSContext* cx, HandleObject Intl, Handle<GlobalObject
         return nullptr;
 
     RootedValue ctorValue(cx, ObjectValue(*ctor));
-    if (!DefineProperty(cx, Intl, cx->names().PluralRules, ctorValue, nullptr, nullptr, 0))
+    if (!DefineDataProperty(cx, Intl, cx->names().PluralRules, ctorValue, 0))
         return nullptr;
 
     return proto;
@@ -3795,40 +3675,6 @@ js::intl_SelectPluralRule(JSContext* cx, unsigned argc, Value* vp)
 
     double x = args[1].toNumber();
 
-    // We need a NumberFormat in order to format the number
-    // using the number formatting options (minimum/maximum*Digits)
-    // before we push the result to PluralRules.
-    //
-    // This should be fixed in ICU 59 and we'll be able to switch to that
-    // API: http://bugs.icu-project.org/trac/ticket/12763
-    //
-    RootedValue fmtNumValue(cx);
-    if (!intl_FormatNumber(cx, nf, x, &fmtNumValue))
-        return false;
-    AutoStableStringChars stableChars(cx);
-    if (!stableChars.initTwoByte(cx, fmtNumValue.toString()))
-        return false;
-
-    const UChar* uFmtNumValue = Char16ToUChar(stableChars.twoByteRange().begin().get());
-
-    UErrorCode status = U_ZERO_ERROR;
-
-    UFormattable* fmt = unum_parseToUFormattable(nf, nullptr, uFmtNumValue,
-                                                 stableChars.twoByteRange().length(), nullptr,
-                                                 &status);
-    if (U_FAILURE(status)) {
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_INTERNAL_INTL_ERROR);
-        return false;
-    }
-
-    ScopedICUObject<UFormattable, ufmt_close> closeUFormattable(fmt);
-
-    double y = ufmt_getDouble(fmt, &status);
-    if (U_FAILURE(status)) {
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_INTERNAL_INTL_ERROR);
-        return false;
-    }
-
     UPluralType category;
     if (StringEqualsAscii(type, "cardinal")) {
         category = UPLURAL_TYPE_CARDINAL;
@@ -3838,16 +3684,16 @@ js::intl_SelectPluralRule(JSContext* cx, unsigned argc, Value* vp)
     }
 
     // TODO: Cache UPluralRules in PluralRulesObject::UPluralRulesSlot.
+    UErrorCode status = U_ZERO_ERROR;
     UPluralRules* pr = uplrules_openForType(icuLocale(locale.ptr()), category, &status);
     if (U_FAILURE(status)) {
         JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_INTERNAL_INTL_ERROR);
         return false;
     }
-
     ScopedICUObject<UPluralRules, uplrules_close> closePluralRules(pr);
 
-    JSString* str = Call(cx, [pr, y](UChar* chars, int32_t size, UErrorCode* status) {
-        return uplrules_select(pr, y, chars, size, status);
+    JSString* str = Call(cx, [pr, x, nf](UChar* chars, int32_t size, UErrorCode* status) {
+        return uplrules_selectWithFormat(pr, x, nf, chars, size, status);
     });
     if (!str)
         return false;
@@ -3884,24 +3730,13 @@ js::intl_GetPluralCategories(JSContext* cx, unsigned argc, Value* vp)
         JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_INTERNAL_INTL_ERROR);
         return false;
     }
-
     ScopedICUObject<UPluralRules, uplrules_close> closePluralRules(pr);
 
-    // We should get a C API for that in ICU 59 and switch to it.
-    // https://ssl.icu-project.org/trac/ticket/12772
-    icu::StringEnumeration* kwenum =
-        reinterpret_cast<icu::PluralRules*>(pr)->getKeywords(status);
+    UEnumeration* ue = uplrules_getKeywords(pr, &status);
     if (U_FAILURE(status)) {
         JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_INTERNAL_INTL_ERROR);
         return false;
     }
-
-    UEnumeration* ue = uenum_openFromStringEnumeration(kwenum, &status);
-    if (U_FAILURE(status)) {
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_INTERNAL_INTL_ERROR);
-        return false;
-    }
-
     ScopedICUObject<UEnumeration, uenum_close> closeEnum(ue);
 
     RootedObject res(cx, NewDenseEmptyArray(cx));
@@ -3928,7 +3763,7 @@ js::intl_GetPluralCategories(JSContext* cx, unsigned argc, Value* vp)
             return false;
 
         element.setString(str);
-        if (!DefineElement(cx, res, i++, element))
+        if (!DefineDataElement(cx, res, i++, element))
             return false;
     } while (true);
 
@@ -3977,9 +3812,7 @@ js::intl_toLocaleLowerCase(JSContext* cx, unsigned argc, Value* vp)
     MOZ_ASSERT(args[0].isString());
     MOZ_ASSERT(args[1].isString());
 
-    RootedLinearString linear(cx, args[0].toString()->ensureLinear(cx));
-    if (!linear)
-        return false;
+    RootedString string(cx, args[0].toString());
 
     RootedLinearString locale(cx, args[1].toString()->ensureLinear(cx));
     if (!locale)
@@ -3987,7 +3820,7 @@ js::intl_toLocaleLowerCase(JSContext* cx, unsigned argc, Value* vp)
 
     // Call String.prototype.toLowerCase() for language independent casing.
     if (!HasLanguageDependentCasing(locale)) {
-        JSString* str = js::StringToLowerCase(cx, linear);
+        JSString* str = js::StringToLowerCase(cx, string);
         if (!str)
             return false;
 
@@ -3996,7 +3829,7 @@ js::intl_toLocaleLowerCase(JSContext* cx, unsigned argc, Value* vp)
     }
 
     AutoStableStringChars inputChars(cx);
-    if (!inputChars.initTwoByte(cx, linear))
+    if (!inputChars.initTwoByte(cx, string))
         return false;
     mozilla::Range<const char16_t> input = inputChars.twoByteRange();
 
@@ -4005,7 +3838,7 @@ js::intl_toLocaleLowerCase(JSContext* cx, unsigned argc, Value* vp)
                   "Case conversion doesn't overflow int32_t indices");
 
     JSString* str = Call(cx, [&input, &locale](UChar* chars, int32_t size, UErrorCode* status) {
-        return u_strToLower(chars, size, Char16ToUChar(input.begin().get()), input.length(),
+        return u_strToLower(chars, size, input.begin().get(), input.length(),
                             CaseMappingLocale(locale), status);
     });
     if (!str)
@@ -4023,9 +3856,7 @@ js::intl_toLocaleUpperCase(JSContext* cx, unsigned argc, Value* vp)
     MOZ_ASSERT(args[0].isString());
     MOZ_ASSERT(args[1].isString());
 
-    RootedLinearString linear(cx, args[0].toString()->ensureLinear(cx));
-    if (!linear)
-        return false;
+    RootedString string(cx, args[0].toString());
 
     RootedLinearString locale(cx, args[1].toString()->ensureLinear(cx));
     if (!locale)
@@ -4033,7 +3864,7 @@ js::intl_toLocaleUpperCase(JSContext* cx, unsigned argc, Value* vp)
 
     // Call String.prototype.toUpperCase() for language independent casing.
     if (!HasLanguageDependentCasing(locale)) {
-        JSString* str = js::StringToUpperCase(cx, linear);
+        JSString* str = js::StringToUpperCase(cx, string);
         if (!str)
             return false;
 
@@ -4042,7 +3873,7 @@ js::intl_toLocaleUpperCase(JSContext* cx, unsigned argc, Value* vp)
     }
 
     AutoStableStringChars inputChars(cx);
-    if (!inputChars.initTwoByte(cx, linear))
+    if (!inputChars.initTwoByte(cx, string))
         return false;
     mozilla::Range<const char16_t> input = inputChars.twoByteRange();
 
@@ -4051,7 +3882,7 @@ js::intl_toLocaleUpperCase(JSContext* cx, unsigned argc, Value* vp)
                   "Case conversion doesn't overflow int32_t indices");
 
     JSString* str = Call(cx, [&input, &locale](UChar* chars, int32_t size, UErrorCode* status) {
-        return u_strToUpper(chars, size, Char16ToUChar(input.begin().get()), input.length(),
+        return u_strToUpper(chars, size, input.begin().get(), input.length(),
                             CaseMappingLocale(locale), status);
     });
     if (!str)
@@ -4092,12 +3923,12 @@ js::intl_GetCalendarInfo(JSContext* cx, unsigned argc, Value* vp)
     int32_t firstDayOfWeek = ucal_getAttribute(cal, UCAL_FIRST_DAY_OF_WEEK);
     v.setInt32(firstDayOfWeek);
 
-    if (!DefineProperty(cx, info, cx->names().firstDayOfWeek, v))
+    if (!DefineDataProperty(cx, info, cx->names().firstDayOfWeek, v))
         return false;
 
     int32_t minDays = ucal_getAttribute(cal, UCAL_MINIMAL_DAYS_IN_FIRST_WEEK);
     v.setInt32(minDays);
-    if (!DefineProperty(cx, info, cx->names().minDays, v))
+    if (!DefineDataProperty(cx, info, cx->names().minDays, v))
         return false;
 
     UCalendarWeekdayType prevDayType = ucal_getDayOfWeekType(cal, UCAL_SATURDAY, &status);
@@ -4145,10 +3976,10 @@ js::intl_GetCalendarInfo(JSContext* cx, unsigned argc, Value* vp)
     MOZ_ASSERT(weekendStart.isInt32());
     MOZ_ASSERT(weekendEnd.isInt32());
 
-    if (!DefineProperty(cx, info, cx->names().weekendStart, weekendStart))
+    if (!DefineDataProperty(cx, info, cx->names().weekendStart, weekendStart))
         return false;
 
-    if (!DefineProperty(cx, info, cx->names().weekendEnd, weekendEnd))
+    if (!DefineDataProperty(cx, info, cx->names().weekendEnd, weekendEnd))
         return false;
 
     args.rval().setObject(*info);
@@ -4257,7 +4088,7 @@ ComputeSingleDisplayName(JSContext* cx, UDateFormat* fmt, UDateTimePatternGenera
         const UChar* value = udatpg_getAppendItemName(dtpg, fieldType, &resultSize);
         MOZ_ASSERT(resultSize >= 0);
 
-        return NewStringCopyN<CanGC>(cx, UCharToChar16(value), size_t(resultSize));
+        return NewStringCopyN<CanGC>(cx, value, size_t(resultSize));
     }
 
     if (MatchPart(&iter, end, "gregorian")) {
@@ -4472,7 +4303,7 @@ js::intl_ComputeDisplayNames(JSContext* cx, unsigned argc, Value* vp)
 
         // 5.b. Append the result string to result.
         v.setString(displayName);
-        if (!DefineElement(cx, result, i, v))
+        if (!DefineDataElement(cx, result, i, v))
             return false;
     }
 
@@ -4495,14 +4326,14 @@ js::intl_GetLocaleInfo(JSContext* cx, unsigned argc, Value* vp)
     if (!info)
         return false;
 
-    if (!DefineProperty(cx, info, cx->names().locale, args[0]))
+    if (!DefineDataProperty(cx, info, cx->names().locale, args[0]))
         return false;
 
     bool rtl = uloc_isRightToLeft(icuLocale(locale.ptr()));
 
     RootedValue dir(cx, StringValue(rtl ? cx->names().rtl : cx->names().ltr));
 
-    if (!DefineProperty(cx, info, cx->names().direction, dir))
+    if (!DefineDataProperty(cx, info, cx->names().direction, dir))
         return false;
 
     args.rval().setObject(*info);
@@ -4569,11 +4400,8 @@ GlobalObject::initIntlObject(JSContext* cx, Handle<GlobalObject*> global)
 
     // The |Intl| object is fully set up now, so define the global property.
     RootedValue intlValue(cx, ObjectValue(*intl));
-    if (!DefineProperty(cx, global, cx->names().Intl, intlValue, nullptr, nullptr,
-                        JSPROP_RESOLVING))
-    {
+    if (!DefineDataProperty(cx, global, cx->names().Intl, intlValue, JSPROP_RESOLVING))
         return false;
-    }
 
     // Now that the |Intl| object is successfully added, we can OOM-safely fill
     // in all relevant reserved global slots.

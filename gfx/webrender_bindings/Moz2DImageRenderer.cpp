@@ -10,6 +10,7 @@
 #include "mozilla/gfx/InlineTranslator.h"
 #include "mozilla/gfx/RecordedEvent.h"
 #include "WebRenderTypes.h"
+#include "webrender_ffi.h"
 
 #include <iostream>
 
@@ -20,19 +21,6 @@
 namespace mozilla {
 namespace wr {
 
-class InMemoryStreamBuffer: public std::streambuf
-{
-public:
-  explicit InMemoryStreamBuffer(const Range<const uint8_t> aBlob)
-  {
-    // we need to cast away the const because C++ doesn't
-    // have a separate type of streambuf that can only
-    // be read from
-    auto start = const_cast<char*>(reinterpret_cast<const char*>(aBlob.begin().get()));
-    setg(start, start, start + aBlob.length());
-  }
-};
-
 #ifdef MOZ_ENABLE_FREETYPE
 static MOZ_THREAD_LOCAL(FT_Library) sFTLibrary;
 #endif
@@ -40,6 +28,8 @@ static MOZ_THREAD_LOCAL(FT_Library) sFTLibrary;
 static bool Moz2DRenderCallback(const Range<const uint8_t> aBlob,
                                 gfx::IntSize aSize,
                                 gfx::SurfaceFormat aFormat,
+                                const uint16_t *aTileSize,
+                                const mozilla::wr::TileOffset *aTileOffset,
                                 Range<uint8_t> aOutput)
 {
   MOZ_ASSERT(aSize.width > 0 && aSize.height > 0);
@@ -84,12 +74,21 @@ static bool Moz2DRenderCallback(const Range<const uint8_t> aBlob,
     return false;
   }
 
-  InMemoryStreamBuffer streamBuffer(aBlob);
-  std::istream stream(&streamBuffer);
+  if (aTileOffset) {
+    // It's overkill to use a TiledDrawTarget for a single tile
+    // but it was the easiest way to get the offset handling working
+    gfx::TileSet tileset;
+    gfx::Tile tile;
+    tile.mDrawTarget = dt;
+    tile.mTileOrigin = gfx::IntPoint(aTileOffset->x * *aTileSize, aTileOffset->y * *aTileSize);
+    tileset.mTiles = &tile;
+    tileset.mTileCount = 1;
+    dt = gfx::Factory::CreateTiledDrawTarget(tileset);
+  }
 
   gfx::InlineTranslator translator(dt, fontContext);
 
-  auto ret = translator.TranslateRecording(stream);
+  auto ret = translator.TranslateRecording((char*)aBlob.begin().get(), aBlob.length());
 
 #if 0
   static int i = 0;
@@ -106,14 +105,18 @@ static bool Moz2DRenderCallback(const Range<const uint8_t> aBlob,
 
 extern "C" {
 
-bool wr_moz2d_render_cb(const WrByteSlice blob,
+bool wr_moz2d_render_cb(const mozilla::wr::ByteSlice blob,
                         uint32_t width, uint32_t height,
                         mozilla::wr::ImageFormat aFormat,
-                        MutByteSlice output)
+                        const uint16_t *aTileSize,
+                        const mozilla::wr::TileOffset *aTileOffset,
+                        mozilla::wr::MutByteSlice output)
 {
   return mozilla::wr::Moz2DRenderCallback(mozilla::wr::ByteSliceToRange(blob),
                                           mozilla::gfx::IntSize(width, height),
-                                          mozilla::wr::WrImageFormatToSurfaceFormat(aFormat),
+                                          mozilla::wr::ImageFormatToSurfaceFormat(aFormat),
+                                          aTileSize,
+                                          aTileOffset,
                                           mozilla::wr::MutByteSliceToRange(output));
 }
 

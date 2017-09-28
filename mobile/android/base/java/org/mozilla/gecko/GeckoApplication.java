@@ -4,6 +4,7 @@
 
 package org.mozilla.gecko;
 
+import android.app.Activity;
 import android.app.Application;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -41,6 +42,7 @@ import org.mozilla.gecko.media.AudioFocusAgent;
 import org.mozilla.gecko.media.RemoteManager;
 import org.mozilla.gecko.notifications.NotificationClient;
 import org.mozilla.gecko.notifications.NotificationHelper;
+import org.mozilla.gecko.permissions.Permissions;
 import org.mozilla.gecko.preferences.DistroSharedPrefsImport;
 import org.mozilla.gecko.util.ActivityUtils;
 import org.mozilla.gecko.telemetry.TelemetryBackgroundReceiver;
@@ -55,7 +57,8 @@ import java.io.File;
 import java.lang.reflect.Method;
 import java.util.UUID;
 
-public class GeckoApplication extends Application {
+public class GeckoApplication extends Application
+                              implements HapticFeedbackDelegate {
     private static final String LOG_TAG = "GeckoApplication";
     private static final String MEDIA_DECODING_PROCESS_CRASH = "MEDIA_DECODING_PROCESS_CRASH";
 
@@ -227,6 +230,7 @@ public class GeckoApplication extends Application {
 
         final Context context = getApplicationContext();
         GeckoAppShell.setApplicationContext(context);
+        GeckoAppShell.setHapticFeedbackDelegate(this);
         GeckoAppShell.setGeckoInterface(new GeckoAppShell.GeckoInterface() {
             @Override
             public boolean openUriExternal(final String targetURI, final String mimeType,
@@ -278,9 +282,14 @@ public class GeckoApplication extends Application {
 
         GeckoService.register();
 
+        IntentHelper.init();
+
         final EventListener listener = new EventListener();
         EventDispatcher.getInstance().registerUiThreadListener(listener,
                 "Gecko:Exited",
+                "RuntimePermissions:Check",
+                "Snackbar:Show",
+                "Share:Text",
                 null);
         EventDispatcher.getInstance().registerBackgroundThreadListener(listener,
                 "Profile:Create",
@@ -415,6 +424,54 @@ public class GeckoApplication extends Application {
                     restartIntent = null;
                 }
                 shutdown(restartIntent);
+
+            } else if ("RuntimePermissions:Check".equals(event)) {
+                final String[] permissions = message.getStringArray("permissions");
+                final boolean shouldPrompt = message.getBoolean("shouldPrompt", false);
+                final Activity currentActivity =
+                        GeckoActivityMonitor.getInstance().getCurrentActivity();
+                final Context context = (currentActivity != null) ?
+                        currentActivity : GeckoAppShell.getApplicationContext();
+
+                Permissions.from(context)
+                           .withPermissions(permissions)
+                           .doNotPromptIf(!shouldPrompt || currentActivity == null)
+                           .andFallback(new Runnable() {
+                               @Override
+                               public void run() {
+                                   callback.sendSuccess(false);
+                               }
+                           })
+                           .run(new Runnable() {
+                               @Override
+                               public void run() {
+                                   callback.sendSuccess(true);
+                               }
+                           });
+
+            } else if ("Share:Text".equals(event)) {
+                final String text = message.getString("text");
+                final String title = message.getString("title", "");
+                IntentHelper.openUriExternal(text, "text/plain", "", "",
+                                             Intent.ACTION_SEND, title, false);
+
+                // Context: Sharing via chrome list (no explicit session is active)
+                Telemetry.sendUIEvent(TelemetryContract.Event.SHARE,
+                                      TelemetryContract.Method.LIST, "text");
+
+            } else if ("Snackbar:Show".equals(event)) {
+                final Activity currentActivity =
+                        GeckoActivityMonitor.getInstance().getCurrentActivity();
+                if (currentActivity == null) {
+                    if (callback != null) {
+                        callback.sendError("No activity");
+                    }
+                    return;
+                }
+                SnackbarBuilder.builder(currentActivity)
+                        .fromEvent(message)
+                        .callback(callback)
+                        .buildAndShow();
             }
         }
     }
@@ -478,11 +535,13 @@ public class GeckoApplication extends Application {
     }
 
     public static void createAppShortcut(final String aTitle, final String aURI,
-                                         final String manifestPath, final Bitmap aIcon) {
+                                         final String manifestPath, final String manifestUrl,
+                                         final Bitmap aIcon) {
         final Intent shortcutIntent = new Intent();
         shortcutIntent.setAction(GeckoApp.ACTION_WEBAPP);
         shortcutIntent.setData(Uri.parse(aURI));
         shortcutIntent.putExtra("MANIFEST_PATH", manifestPath);
+        shortcutIntent.putExtra("MANIFEST_URL", manifestUrl);
         shortcutIntent.setClassName(AppConstants.ANDROID_PACKAGE_NAME,
                                     LauncherActivity.class.getName());
         Telemetry.sendUIEvent(TelemetryContract.Event.ACTION,
@@ -576,5 +635,14 @@ public class GeckoApplication extends Application {
                 null);
 
         return bitmap;
+    }
+
+    @Override // HapticFeedbackDelegate
+    public void performHapticFeedback(final int effect) {
+        final Activity currentActivity =
+                GeckoActivityMonitor.getInstance().getCurrentActivity();
+        if (currentActivity != null) {
+            currentActivity.getWindow().getDecorView().performHapticFeedback(effect);
+        }
     }
 }

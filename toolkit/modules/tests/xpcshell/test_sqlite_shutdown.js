@@ -12,7 +12,6 @@ Cu.import("resource://gre/modules/osfile.jsm");
 Cu.import("resource://gre/modules/Sqlite.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/AsyncShutdown.jsm");
-Cu.import("resource://gre/modules/Promise.jsm");
 
 function getConnection(dbName, extraOptions = {}) {
   let path = dbName + ".sqlite";
@@ -54,10 +53,6 @@ function sleep(ms) {
     }, ms, timer.TYPE_ONE_SHOT);
 
   });
-}
-
-function run_test() {
-  run_next_test();
 }
 
 

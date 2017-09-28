@@ -7,13 +7,27 @@
 package org.mozilla.gecko.mma;
 
 import android.app.Activity;
-import android.app.Application;
 import android.content.Context;
+import android.os.Bundle;
+import android.support.annotation.DrawableRes;
+import android.support.annotation.NonNull;
+
+import java.util.Map;
 
 
 public class MmaStubImp implements MmaInterface {
     @Override
-    public void init(Activity activity) {
+    public void init(Activity activity, Map<String, ?> attributes) {
+
+    }
+
+    @Override
+    public void setGcmSenderId(String senderIds) {
+
+    }
+
+    @Override
+    public void setCustomIcon(@DrawableRes int iconResId) {
 
     }
 
@@ -23,12 +37,12 @@ public class MmaStubImp implements MmaInterface {
     }
 
     @Override
-    public void track(String leanplumEvent) {
+    public void event(String leanplumEvent) {
 
     }
 
     @Override
-    public void track(String leanplumEvent, double value) {
+    public void event(String leanplumEvent, double value) {
 
     }
 
@@ -36,4 +50,20 @@ public class MmaStubImp implements MmaInterface {
     public void stop() {
 
     }
+
+    @Override
+    public boolean handleGcmMessage(Context context, String from, Bundle bundle) {
+        return false;
+    }
+
+    @Override
+    public String getMmaSenderId() {
+        return "";
+    }
+
+    @Override
+    public void setDeviceId(@NonNull String deviceId) {
+
+    }
+
 }

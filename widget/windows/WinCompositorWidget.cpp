@@ -19,7 +19,7 @@ namespace widget {
 
 using namespace mozilla::gfx;
 
-WinCompositorWidget::WinCompositorWidget(const CompositorWidgetInitData& aInitData,
+WinCompositorWidget::WinCompositorWidget(const WinCompositorWidgetInitData& aInitData,
                                          const layers::CompositorOptions& aOptions)
  : CompositorWidget(aOptions)
  , mWidgetKey(aInitData.widgetKey()),
@@ -104,10 +104,16 @@ WinCompositorWidget::StartRemoteDrawing()
     return nullptr;
   }
 
-  MOZ_ASSERT(!mCompositeDC);
-  mCompositeDC = dc;
+  RefPtr<DrawTarget> dt =
+    mozilla::gfx::Factory::CreateDrawTargetForCairoSurface(surf->CairoSurface(),
+                                                           size);
+  if (dt) {
+    mCompositeDC = dc;
+  } else {
+    FreeWindowSurface(dc);
+  }
 
-  return mozilla::gfx::Factory::CreateDrawTargetForCairoSurface(surf->CairoSurface(), size);
+  return dt.forget();
 }
 
 void

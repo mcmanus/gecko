@@ -22,7 +22,6 @@ XPIDL_SOURCES += [
     'nsIHttpChannelAuthProvider.idl',
     'nsIHttpChannelChild.idl',
     'nsIHttpChannelInternal.idl',
-    'nsIHttpEventSink.idl',
     'nsIHttpHeaderVisitor.idl',
     'nsIHttpProtocolHandler.idl',
     'nsIRaceCacheWithNetwork.idl',
@@ -127,8 +126,10 @@ FINAL_LIBRARY = 'xul'
 LOCAL_INCLUDES += [
     '/dom/base',
     '/netwerk/base',
+    '/netwerk/cookie',
+    '/netwerk/protocol/http/quic/mozquic',
     '/netwerk/socket',
-    'quic/mozquic',
+    '/security/pkix/include',
 ]
 
 EXTRA_COMPONENTS += [

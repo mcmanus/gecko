@@ -10,7 +10,6 @@
 #include "mozilla/dom/WebGL2RenderingContextBinding.h"
 #include "mozilla/dom/WebGLRenderingContextBinding.h"
 #include "mozilla/RefPtr.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "nsPrintfCString.h"
 #include "WebGLActiveInfo.h"
 #include "WebGLContext.h"
@@ -600,7 +599,7 @@ WebGLProgram::GetActiveAttrib(GLuint index) const
     const auto& attribs = mMostRecentLinkInfo->attribs;
 
     if (index >= attribs.size()) {
-        mContext->ErrorInvalidValue("`index` (%i) must be less than %s (%" PRIuSIZE ").",
+        mContext->ErrorInvalidValue("`index` (%i) must be less than %s (%zu).",
                                     index, "ACTIVE_ATTRIBS", attribs.size());
         return nullptr;
     }
@@ -621,7 +620,7 @@ WebGLProgram::GetActiveUniform(GLuint index) const
     const auto& uniforms = mMostRecentLinkInfo->uniforms;
 
     if (index >= uniforms.size()) {
-        mContext->ErrorInvalidValue("`index` (%i) must be less than %s (%" PRIuSIZE ").",
+        mContext->ErrorInvalidValue("`index` (%i) must be less than %s (%zu).",
                                     index, "ACTIVE_UNIFORMS", uniforms.size());
         return nullptr;
     }
@@ -699,7 +698,7 @@ WebGLProgram::GetFragDataLocation(const nsAString& userName_wide) const
         if (!ParseName(userName, &baseUserName, &isArray, &arrayIndex))
             return -1;
 
-        if (arrayIndex >= mContext->mImplMaxDrawBuffers)
+        if (arrayIndex >= mContext->mGLMaxDrawBuffers)
             return -1;
 
         const auto baseLoc = GetFragDataByUserName(this, baseUserName);
@@ -1264,7 +1263,7 @@ WebGLProgram::ValidateAfterTentativeLink(nsCString* const out_linkLog) const
     // * Unrecognized varying name
     // * Duplicate varying name
     // * Too many components for specified buffer mode
-    if (mNextLink_TransformFeedbackVaryings.size()) {
+    if (!mNextLink_TransformFeedbackVaryings.empty()) {
         GLuint maxComponentsPerIndex = 0;
         switch (mNextLink_TransformFeedbackBufferMode) {
         case LOCAL_GL_INTERLEAVED_ATTRIBS:
@@ -1284,7 +1283,7 @@ WebGLProgram::ValidateAfterTentativeLink(nsCString* const out_linkLog) const
         std::vector<size_t> componentsPerVert;
         std::set<const WebGLActiveInfo*> alreadyUsed;
         for (const auto& wideUserName : mNextLink_TransformFeedbackVaryings) {
-            if (!componentsPerVert.size() ||
+            if (componentsPerVert.empty() ||
                 mNextLink_TransformFeedbackBufferMode == LOCAL_GL_SEPARATE_ATTRIBS)
             {
                 componentsPerVert.push_back(0);
@@ -1609,7 +1608,7 @@ webgl::LinkedProgramInfo::MapFragDataName(const nsCString& userName,
 {
     // FS outputs can be arrays, but not structures.
 
-    if (!fragDataMap.size()) {
+    if (fragDataMap.empty()) {
         // No mappings map from validation, so just forward it.
         *out_mappedName = userName;
         return true;

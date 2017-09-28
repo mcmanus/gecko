@@ -92,7 +92,7 @@ SVGTransformableElement::GetAttributeChangeHint(const nsIAtom* aAttribute,
 }
 
 bool
-SVGTransformableElement::IsEventAttributeName(nsIAtom* aName)
+SVGTransformableElement::IsEventAttributeNameInternal(nsIAtom* aName)
 {
   return nsContentUtils::IsEventAttributeName(aName, EventNameType_SVGGraphic);
 }
@@ -172,7 +172,7 @@ SVGTransformableElement::GetFarthestViewportElement()
 }
 
 already_AddRefed<SVGIRect>
-SVGTransformableElement::GetBBox(const SVGBoundingBoxOptions& aOptions, 
+SVGTransformableElement::GetBBox(const SVGBoundingBoxOptions& aOptions,
                                  ErrorResult& rv)
 {
   nsIFrame* frame = GetPrimaryFrame(FlushType::Layout);
@@ -188,7 +188,9 @@ SVGTransformableElement::GetBBox(const SVGBoundingBoxOptions& aOptions,
   }
 
   if (!NS_SVGNewGetBBoxEnabled()) {
-    return NS_NewSVGRect(this, ToRect(nsSVGUtils::GetBBox(frame)));
+    return NS_NewSVGRect(this, ToRect(nsSVGUtils::GetBBox(frame,
+                                      nsSVGUtils::eBBoxIncludeFillGeometry |
+                                      nsSVGUtils::eUseUserSpaceOfUseElement)));
   } else {
     uint32_t flags = 0;
     if (aOptions.mFill) {
@@ -210,6 +212,7 @@ SVGTransformableElement::GetBBox(const SVGBoundingBoxOptions& aOptions,
         flags == nsSVGUtils::eBBoxIncludeClipped) {
       flags |= nsSVGUtils::eBBoxIncludeFill;
     }
+    flags |= nsSVGUtils::eUseUserSpaceOfUseElement;
     return NS_NewSVGRect(this, ToRect(nsSVGUtils::GetBBox(frame, flags)));
   }
 }

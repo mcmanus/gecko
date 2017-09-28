@@ -25,8 +25,7 @@
 namespace mozilla {
 namespace gfx {
 
-ID2D1Factory1* D2DFactory1();
-static ID2D1Factory* D2DFactory() { return D2DFactory1(); }
+RefPtr<ID2D1Factory1> D2DFactory();
 
 static inline D2D1_POINT_2F D2DPoint(const Point &aPoint)
 {
@@ -579,7 +578,7 @@ CreatePartialBitmapForSurface(DataSourceSurface *aSurface, const Matrix &aDestin
 
   Rect uploadRect(0, 0, Float(size.width), Float(size.height));
   if (aSourceRect) {
-    uploadRect = Rect(aSourceRect->x, aSourceRect->y, aSourceRect->width, aSourceRect->height);
+    uploadRect = Rect(aSourceRect->x, aSourceRect->y, aSourceRect->Width(), aSourceRect->Height());
   }
 
   // Limit the uploadRect as much as possible without supporting discontiguous uploads 
@@ -611,10 +610,10 @@ CreatePartialBitmapForSurface(DataSourceSurface *aSurface, const Matrix &aDestin
     // upload rect safely without looking at extend mode.
   } else if (rect.x >= 0 && rect.XMost() < size.width) {
     uploadRect.x = rect.x;
-    uploadRect.width = rect.width;
+    uploadRect.SetWidth(rect.Width());
   } else if (rect.y >= 0 && rect.YMost() < size.height) {
     uploadRect.y = rect.y;
-    uploadRect.height = rect.height;
+    uploadRect.SetHeight(rect.Height());
   }
 
   if (uploadRect.IsEmpty()) {
@@ -622,8 +621,8 @@ CreatePartialBitmapForSurface(DataSourceSurface *aSurface, const Matrix &aDestin
     return nullptr;
   }
 
-  if (uploadRect.width <= aRT->GetMaximumBitmapSize() &&
-      uploadRect.height <= aRT->GetMaximumBitmapSize()) {
+  if (uploadRect.Width() <= aRT->GetMaximumBitmapSize() &&
+      uploadRect.Height() <= aRT->GetMaximumBitmapSize()) {
     {
       // Scope to auto-Unmap() |mapping|.
       DataSourceSurface::ScopedMap mapping(aSurface, DataSourceSurface::READ);
@@ -632,7 +631,7 @@ CreatePartialBitmapForSurface(DataSourceSurface *aSurface, const Matrix &aDestin
       }
 
       // A partial upload will suffice.
-      aRT->CreateBitmap(D2D1::SizeU(uint32_t(uploadRect.width), uint32_t(uploadRect.height)),
+      aRT->CreateBitmap(D2D1::SizeU(uint32_t(uploadRect.Width()), uint32_t(uploadRect.Height())),
                         mapping.GetData() + int(uploadRect.x) * Bpp + int(uploadRect.y) * mapping.GetStride(),
                         mapping.GetStride(),
                         D2D1::BitmapProperties(D2DPixelFormat(aSurface->GetFormat())),

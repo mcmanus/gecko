@@ -12,6 +12,8 @@
 #include "VorbisUtils.h"
 #include "mozilla/Base64.h"
 #include "mozilla/SharedThreadPool.h"
+#include "mozilla/SystemGroup.h"
+#include "mozilla/TaskCategory.h"
 #include "mozilla/TaskQueue.h"
 #include "mozilla/Telemetry.h"
 #include "nsCharSeparatedTokenizer.h"
@@ -21,7 +23,6 @@
 #include "nsIServiceManager.h"
 #include "nsMathUtils.h"
 #include "nsServiceManagerUtils.h"
-#include "nsSize.h"
 #include "nsThreadUtils.h"
 
 #include <functional>
@@ -81,7 +82,8 @@ static int32_t ConditionDimension(float aValue)
   return 0;
 }
 
-void ScaleDisplayByAspectRatio(nsIntSize& aDisplay, float aAspectRatio)
+void
+ScaleDisplayByAspectRatio(gfx::IntSize& aDisplay, float aAspectRatio)
 {
   if (aAspectRatio > 1.0) {
     // Increase the intrinsic width
@@ -171,8 +173,9 @@ IsVideoContentType(const nsCString& aContentType)
 }
 
 bool
-IsValidVideoRegion(const nsIntSize& aFrame, const nsIntRect& aPicture,
-                   const nsIntSize& aDisplay)
+IsValidVideoRegion(const gfx::IntSize& aFrame,
+                   const gfx::IntRect& aPicture,
+                   const gfx::IntSize& aDisplay)
 {
   return
     aFrame.width <= PlanarYCbCrImage::MAX_DIMENSION &&
@@ -341,6 +344,13 @@ SimpleTimer::Notify(nsITimer *timer) {
   return NS_OK;
 }
 
+NS_IMETHODIMP
+SimpleTimer::GetName(nsACString& aName)
+{
+  aName.AssignLiteral("SimpleTimer");
+  return NS_OK;
+}
+
 nsresult
 SimpleTimer::Init(nsIRunnable* aTask, uint32_t aTimeoutMs, nsIEventTarget* aTarget)
 {
@@ -378,7 +388,7 @@ SimpleTimer::Init(nsIRunnable* aTask, uint32_t aTimeoutMs, nsIEventTarget* aTarg
   return NS_OK;
 }
 
-NS_IMPL_ISUPPORTS(SimpleTimer, nsITimerCallback)
+NS_IMPL_ISUPPORTS(SimpleTimer, nsITimerCallback, nsINamed)
 
 already_AddRefed<SimpleTimer>
 SimpleTimer::Create(nsIRunnable* aTask, uint32_t aTimeoutMs, nsIEventTarget* aTarget)
@@ -395,9 +405,9 @@ LogToBrowserConsole(const nsAString& aMsg)
 {
   if (!NS_IsMainThread()) {
     nsString msg(aMsg);
-    nsCOMPtr<nsIRunnable> task =
-      NS_NewRunnableFunction([msg]() { LogToBrowserConsole(msg); });
-    SystemGroup::Dispatch("LogToBrowserConsole", TaskCategory::Other, task.forget());
+    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction(
+      "LogToBrowserConsole", [msg]() { LogToBrowserConsole(msg); });
+    SystemGroup::Dispatch(TaskCategory::Other, task.forget());
     return;
   }
   nsCOMPtr<nsIConsoleService> console(
@@ -417,7 +427,7 @@ ParseCodecsString(const nsAString& aCodecs, nsTArray<nsString>& aOutCodecs)
   bool expectMoreTokens = false;
   nsCharSeparatedTokenizer tokenizer(aCodecs, ',');
   while (tokenizer.hasMoreTokens()) {
-    const nsSubstring& token = tokenizer.nextToken();
+    const nsAString& token = tokenizer.nextToken();
     expectMoreTokens = tokenizer.separatorAfterCurrentToken();
     aOutCodecs.AppendElement(token);
   }
@@ -457,7 +467,9 @@ IsAACCodecString(const nsAString& aCodec)
 {
   return
     aCodec.EqualsLiteral("mp4a.40.2") || // MPEG4 AAC-LC
+    aCodec.EqualsLiteral("mp4a.40.02") || // MPEG4 AAC-LC(for compatibility)
     aCodec.EqualsLiteral("mp4a.40.5") || // MPEG4 HE-AAC
+    aCodec.EqualsLiteral("mp4a.40.05") || // MPEG4 HE-AAC(for compatibility)
     aCodec.EqualsLiteral("mp4a.67") || // MPEG2 AAC-LC
     aCodec.EqualsLiteral("mp4a.40.29");  // MPEG4 HE-AACv2
 }

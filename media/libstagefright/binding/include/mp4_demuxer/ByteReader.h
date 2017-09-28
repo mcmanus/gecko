@@ -6,7 +6,6 @@
 #define BYTE_READER_H_
 
 #include "mozilla/EndianUtils.h"
-#include "mozilla/Vector.h"
 #include "nsTArray.h"
 #include "MediaData.h"
 
@@ -16,10 +15,6 @@ class MOZ_RAII ByteReader
 {
 public:
   ByteReader() : mPtr(nullptr), mRemaining(0) {}
-  explicit ByteReader(const mozilla::Vector<uint8_t>& aData)
-    : mPtr(aData.begin()), mRemaining(aData.length()), mLength(aData.length())
-  {
-  }
   ByteReader(const uint8_t* aData, size_t aSize)
     : mPtr(aData), mRemaining(aSize), mLength(aSize)
   {
@@ -50,20 +45,20 @@ public:
   {
   }
 
-  size_t Offset()
+  size_t Offset() const
   {
     return mLength - mRemaining;
   }
 
   size_t Remaining() const { return mRemaining; }
 
-  bool CanRead8() { return mRemaining >= 1; }
+  bool CanRead8() const { return mRemaining >= 1; }
 
   uint8_t ReadU8()
   {
     auto ptr = Read(1);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to read data");
       return 0;
     }
     return *ptr;
@@ -75,7 +70,7 @@ public:
   {
     auto ptr = Read(2);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to read data");
       return 0;
     }
     return mozilla::BigEndian::readUint16(ptr);
@@ -85,7 +80,7 @@ public:
   {
     auto ptr = Read(2);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to read data");
       return 0;
     }
     return mozilla::LittleEndian::readInt16(ptr);
@@ -95,7 +90,7 @@ public:
   {
     auto ptr = Read(3);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to read data");
       return 0;
     }
     return ptr[0] << 16 | ptr[1] << 8 | ptr[2];
@@ -110,7 +105,7 @@ public:
   {
     auto ptr = Read(3);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to read data");
       return 0;
     }
     int32_t result = int32_t(ptr[2] << 16 | ptr[1] << 8 | ptr[0]);
@@ -126,7 +121,7 @@ public:
   {
     auto ptr = Read(4);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to read data");
       return 0;
     }
     return mozilla::BigEndian::readUint32(ptr);
@@ -136,7 +131,7 @@ public:
   {
     auto ptr = Read(4);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to read data");
       return 0;
     }
     return mozilla::BigEndian::readInt32(ptr);
@@ -146,7 +141,7 @@ public:
   {
     auto ptr = Read(8);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to read data");
       return 0;
     }
     return mozilla::BigEndian::readUint64(ptr);
@@ -156,7 +151,7 @@ public:
   {
     auto ptr = Read(8);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to read data");
       return 0;
     }
     return mozilla::BigEndian::readInt64(ptr);
@@ -188,82 +183,82 @@ public:
     return mPtr;
   }
 
-  uint8_t PeekU8()
+  uint8_t PeekU8() const
   {
     auto ptr = Peek(1);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to peek data");
       return 0;
     }
     return *ptr;
   }
 
-  uint16_t PeekU16()
+  uint16_t PeekU16() const
   {
     auto ptr = Peek(2);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to peek data");
       return 0;
     }
     return mozilla::BigEndian::readUint16(ptr);
   }
 
-  uint32_t PeekU24()
+  uint32_t PeekU24() const
   {
     auto ptr = Peek(3);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to peek data");
       return 0;
     }
     return ptr[0] << 16 | ptr[1] << 8 | ptr[2];
   }
 
-  uint32_t Peek24()
+  uint32_t Peek24() const
   {
     return (uint32_t)PeekU24();
   }
 
-  uint32_t PeekU32()
+  uint32_t PeekU32() const
   {
     auto ptr = Peek(4);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to peek data");
       return 0;
     }
     return mozilla::BigEndian::readUint32(ptr);
   }
 
-  int32_t Peek32()
+  int32_t Peek32() const
   {
     auto ptr = Peek(4);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to peek data");
       return 0;
     }
     return mozilla::BigEndian::readInt32(ptr);
   }
 
-  uint64_t PeekU64()
+  uint64_t PeekU64() const
   {
     auto ptr = Peek(8);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to peek data");
       return 0;
     }
     return mozilla::BigEndian::readUint64(ptr);
   }
 
-  int64_t Peek64()
+  int64_t Peek64() const
   {
     auto ptr = Peek(8);
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Failed to peek data");
       return 0;
     }
     return mozilla::BigEndian::readInt64(ptr);
   }
 
-  const uint8_t* Peek(size_t aCount)
+  const uint8_t* Peek(size_t aCount) const
   {
     if (aCount > mRemaining) {
       return nullptr;
@@ -274,7 +269,7 @@ public:
   const uint8_t* Seek(size_t aOffset)
   {
     if (aOffset >= mLength) {
-      MOZ_ASSERT(false);
+      NS_WARNING("Seek failed");
       return nullptr;
     }
 
@@ -290,18 +285,18 @@ public:
     return mPtr;
   }
 
-  uint32_t Align()
+  uint32_t Align() const
   {
     return 4 - ((intptr_t)mPtr & 3);
   }
 
-  template <typename T> bool CanReadType() { return mRemaining >= sizeof(T); }
+  template <typename T> bool CanReadType() const { return mRemaining >= sizeof(T); }
 
   template <typename T> T ReadType()
   {
     auto ptr = Read(sizeof(T));
     if (!ptr) {
-      MOZ_ASSERT(false);
+      NS_WARNING("ReadType failed");
       return 0;
     }
     return *reinterpret_cast<const T*>(ptr);
@@ -312,6 +307,7 @@ public:
   {
     auto ptr = Read(aLength * sizeof(T));
     if (!ptr) {
+      NS_WARNING("ReadArray failed");
       return false;
     }
 
@@ -325,6 +321,7 @@ public:
   {
     auto ptr = Read(aLength * sizeof(T));
     if (!ptr) {
+      NS_WARNING("ReadArray failed");
       return false;
     }
 

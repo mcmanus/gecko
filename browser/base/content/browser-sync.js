@@ -2,6 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// This file is loaded into the browser window scope.
+/* eslint-env mozilla/browser-window */
+
 Cu.import("resource://services-sync/UIState.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "EnsureFxAccountsWebChannel",
@@ -44,6 +47,15 @@ var gSync = {
     return Cc["@mozilla.org/weave/service;1"].getService().wrappedJSObject.ready;
   },
 
+  // Returns true if sync is configured but hasn't loaded or is yet to determine
+  // if any remote clients exist.
+  get syncConfiguredAndLoading() {
+    return UIState.get().status == UIState.STATUS_SIGNED_IN &&
+           (!this.syncReady ||
+           // lastSync will be non-zero after the first sync
+           Weave.Service.clientsEngine.lastSync == 0);
+  },
+
   get isSignedIn() {
     return UIState.get().status == UIState.STATUS_SIGNED_IN;
   },
@@ -53,15 +65,14 @@ var gSync = {
            .sort((a, b) => a.name.localeCompare(b.name));
   },
 
-  _generateNodeGetters(usePhoton) {
-    let prefix = usePhoton ? "appMenu-" : "PanelUI-";
+  _generateNodeGetters() {
     for (let k of ["Status", "Avatar", "Label", "Container"]) {
       let prop = "appMenu" + k;
       let suffix = k.toLowerCase();
       delete this[prop];
       this.__defineGetter__(prop, function() {
         delete this[prop];
-        return this[prop] = document.getElementById(prefix + "fxa-" + suffix);
+        return this[prop] = document.getElementById("appMenu-fxa-" + suffix);
       });
     }
   },
@@ -76,13 +87,10 @@ var gSync = {
         this.updateAllUI(state);
       }
     }
-
-    this.maybeMoveSyncedTabsButton();
   },
 
   init() {
-    // Bail out if we're already initialized or for pop-up windows.
-    if (this._initialized || !window.toolbar.visible) {
+    if (this._initialized) {
       return;
     }
 
@@ -90,14 +98,7 @@ var gSync = {
       Services.obs.addObserver(this, topic, true);
     }
 
-    // Use this getter not because 'lazy' but because of the observer,
-    // which lets us easily update our UI according to the pref flip
-    XPCOMUtils.defineLazyPreferenceGetter(this, "gPhotonStructure",
-      "browser.photon.structure.enabled", (pref, old, newValue) => {
-      this._generateNodeGetters(newValue);
-      this._maybeUpdateUIState();
-    });
-    this._generateNodeGetters(this.gPhotonStructure);
+    this._generateNodeGetters();
 
     // initial label for the sync buttons.
     let broadcaster = document.getElementById("sync-status");
@@ -265,7 +266,8 @@ var gSync = {
     }
     let url = "about:accounts?" + params;
     switchToTabHavingURI(url, true, {
-      replaceQueryString: true
+      replaceQueryString: true,
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
     });
   },
 
@@ -276,12 +278,21 @@ var gSync = {
   async openDevicesManagementPage(entryPoint) {
     let url = await fxAccounts.promiseAccountsManageDevicesURI(entryPoint);
     switchToTabHavingURI(url, true, {
-      replaceQueryString: true
+      replaceQueryString: true,
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
     });
   },
 
+  openSendToDevicePromo() {
+    let url = Services.prefs.getCharPref("app.productInfo.baseURL");
+    url += "send-tabs/?utm_source=" + Services.appinfo.name.toLowerCase();
+    switchToTabHavingURI(url, true, { replaceQueryString: true });
+  },
+
   sendTabToDevice(url, clientId, title) {
-    Weave.Service.clientsEngine.sendURIToClientForDisplay(url, clientId, title);
+    Weave.Service.clientsEngine.sendURIToClientForDisplay(url, clientId, title).catch(e => {
+      console.error("Could not send tab to device", e);
+    });
   },
 
   populateSendTabToDevicesMenu(devicesPopup, url, title, createDeviceNodeFn) {
@@ -300,42 +311,118 @@ var gSync = {
       }
     }
 
-    const fragment = document.createDocumentFragment();
-    if (this.syncReady) {
-      const onTargetDeviceCommand = (event) => {
-        let clients = event.target.getAttribute("clientId") ?
-          [event.target.getAttribute("clientId")] :
-          this.remoteClients.map(client => client.id);
-
-        clients.forEach(clientId => this.sendTabToDevice(url, clientId, title));
-        gPageActionButton.panel.hidePopup();
-      }
-
-      function addTargetDevice(clientId, name, clientType) {
-        const targetDevice = createDeviceNodeFn(clientId, name, clientType);
-        targetDevice.addEventListener("command", onTargetDeviceCommand, true);
-        targetDevice.classList.add("sync-menuitem", "sendtab-target");
-        targetDevice.setAttribute("clientId", clientId);
-        targetDevice.setAttribute("clientType", clientType);
-        targetDevice.setAttribute("label", name);
-        fragment.appendChild(targetDevice);
-      }
-
-      const clients = this.remoteClients;
-      for (let client of clients) {
-        addTargetDevice(client.id, client.name, client.type);
-      }
-
-      // "Send to All Devices" menu item
-      if (clients.length > 1) {
-        const separator = createDeviceNodeFn();
-        separator.classList.add("sync-menuitem");
-        fragment.appendChild(separator);
-        const allDevicesLabel = this.fxaStrings.GetStringFromName("sendToAllDevices.menuitem");
-        addTargetDevice("", allDevicesLabel, "");
-      }
+    if (gSync.syncConfiguredAndLoading) {
+      // We can only be in this case in the page action menu.
+      return;
     }
+
+    const fragment = document.createDocumentFragment();
+
+    const state = UIState.get();
+    if (state.status == UIState.STATUS_SIGNED_IN && this.remoteClients.length > 0) {
+      this._appendSendTabDeviceList(fragment, createDeviceNodeFn, url, title);
+    } else if (state.status == UIState.STATUS_SIGNED_IN) {
+      this._appendSendTabSingleDevice(fragment, createDeviceNodeFn);
+    } else if (state.status == UIState.STATUS_NOT_VERIFIED ||
+               state.status == UIState.STATUS_LOGIN_FAILED) {
+      this._appendSendTabVerify(fragment, createDeviceNodeFn);
+    } else /* status is STATUS_NOT_CONFIGURED */ {
+      this._appendSendTabUnconfigured(fragment, createDeviceNodeFn);
+    }
+
     devicesPopup.appendChild(fragment);
+  },
+
+  _appendSendTabDeviceList(fragment, createDeviceNodeFn, url, title) {
+    const onTargetDeviceCommand = (event) => {
+      let clients = event.target.getAttribute("clientId") ?
+        [event.target.getAttribute("clientId")] :
+        this.remoteClients.map(client => client.id);
+
+      clients.forEach(clientId => this.sendTabToDevice(url, clientId, title));
+    }
+
+    function addTargetDevice(clientId, name, clientType) {
+      const targetDevice = createDeviceNodeFn(clientId, name, clientType);
+      targetDevice.addEventListener("command", onTargetDeviceCommand, true);
+      targetDevice.classList.add("sync-menuitem", "sendtab-target");
+      targetDevice.setAttribute("clientId", clientId);
+      targetDevice.setAttribute("clientType", clientType);
+      targetDevice.setAttribute("label", name);
+      fragment.appendChild(targetDevice);
+    }
+
+    const clients = this.remoteClients;
+    for (let client of clients) {
+      const type = client.formfactor && client.formfactor.includes("tablet") ?
+                   "tablet" : client.type;
+      addTargetDevice(client.id, client.name, type);
+    }
+
+    // "Send to All Devices" menu item
+    if (clients.length > 1) {
+      const separator = createDeviceNodeFn();
+      separator.classList.add("sync-menuitem");
+      fragment.appendChild(separator);
+      const allDevicesLabel = this.fxaStrings.GetStringFromName("sendToAllDevices.menuitem");
+      addTargetDevice("", allDevicesLabel, "");
+    }
+  },
+
+  _appendSendTabSingleDevice(fragment, createDeviceNodeFn) {
+    const noDevices = this.fxaStrings.GetStringFromName("sendTabToDevice.singledevice.status");
+    const learnMore = this.fxaStrings.GetStringFromName("sendTabToDevice.singledevice");
+    this._appendSendTabInfoItems(fragment, createDeviceNodeFn, noDevices, learnMore, () => {
+      this.openSendToDevicePromo();
+    });
+  },
+
+  _appendSendTabVerify(fragment, createDeviceNodeFn) {
+    const notVerified = this.fxaStrings.GetStringFromName("sendTabToDevice.verify.status");
+    const verifyAccount = this.fxaStrings.GetStringFromName("sendTabToDevice.verify");
+    this._appendSendTabInfoItems(fragment, createDeviceNodeFn, notVerified, verifyAccount, () => {
+      this.openPrefs("sendtab");
+    });
+  },
+
+  _appendSendTabUnconfigured(fragment, createDeviceNodeFn) {
+    const notConnected = this.fxaStrings.GetStringFromName("sendTabToDevice.unconfigured.status");
+    const learnMore = this.fxaStrings.GetStringFromName("sendTabToDevice.unconfigured");
+    this._appendSendTabInfoItems(fragment, createDeviceNodeFn, notConnected, learnMore, () => {
+      this.openSendToDevicePromo();
+    });
+
+    // Now add a 'sign in to sync' item above the 'learn more' item.
+    const signInToSync = this.fxaStrings.GetStringFromName("sendTabToDevice.signintosync");
+    let signInItem = createDeviceNodeFn(null, signInToSync, null);
+    signInItem.classList.add("sync-menuitem");
+    signInItem.setAttribute("label", signInToSync);
+    // Show an icon if opened in the page action panel:
+    if (signInItem.classList.contains("subviewbutton")) {
+      signInItem.classList.add("subviewbutton-iconic", "signintosync");
+    }
+    signInItem.addEventListener("command", () => {
+      this.openPrefs("sendtab");
+    });
+    fragment.insertBefore(signInItem, fragment.lastChild);
+  },
+
+  _appendSendTabInfoItems(fragment, createDeviceNodeFn, statusLabel, actionLabel, actionCommand) {
+    const status = createDeviceNodeFn(null, statusLabel, null);
+    status.setAttribute("label", statusLabel);
+    status.setAttribute("disabled", true);
+    status.classList.add("sync-menuitem");
+    fragment.appendChild(status);
+
+    const separator = createDeviceNodeFn(null, null, null);
+    separator.classList.add("sync-menuitem");
+    fragment.appendChild(separator);
+
+    const actionItem = createDeviceNodeFn(null, actionLabel, null);
+    actionItem.addEventListener("command", actionCommand, true);
+    actionItem.classList.add("sync-menuitem");
+    actionItem.setAttribute("label", actionLabel);
+    fragment.appendChild(actionItem);
   },
 
   isSendableURI(aURISpec) {
@@ -362,37 +449,37 @@ var gSync = {
 
   // "Send Tab to Device" menu item
   updateTabContextMenu(aPopupMenu, aTargetTab) {
-    const show = this.syncReady &&
-                 this.remoteClients.length > 0 &&
-                 this.isSendableURI(aTargetTab.linkedBrowser.currentURI.spec);
+    const enabled = !this.syncConfiguredAndLoading &&
+                    this.isSendableURI(aTargetTab.linkedBrowser.currentURI.spec);
 
-    ["context_sendTabToDevice", "context_sendTabToDevice_separator"]
-    .forEach(id => document.getElementById(id).hidden = !show);
+    document.getElementById("context_sendTabToDevice").disabled = !enabled;
   },
 
   // "Send Page to Device" and "Send Link to Device" menu items
-  initPageContextMenu(contextMenu) {
-    const remoteClientPresent = this.syncReady && this.remoteClients.length > 0;
+  updateContentContextMenu(contextMenu) {
     // showSendLink and showSendPage are mutually exclusive
-    let showSendLink = remoteClientPresent
-                       && (contextMenu.onSaveableLink || contextMenu.onPlainTextLink);
-    const showSendPage = !showSendLink && remoteClientPresent
+    const showSendLink = contextMenu.onSaveableLink || contextMenu.onPlainTextLink;
+    const showSendPage = !showSendLink
                          && !(contextMenu.isContentSelected ||
                               contextMenu.onImage || contextMenu.onCanvas ||
                               contextMenu.onVideo || contextMenu.onAudio ||
-                              contextMenu.onLink || contextMenu.onTextInput)
-                         && this.isSendableURI(contextMenu.browser.currentURI.spec);
-
-    if (showSendLink) {
-      // This isn't part of the condition above since we don't want to try and
-      // send the page if a link is clicked on or selected but is not sendable.
-      showSendLink = this.isSendableURI(contextMenu.linkURL);
-    }
+                              contextMenu.onLink || contextMenu.onTextInput);
 
     ["context-sendpagetodevice", "context-sep-sendpagetodevice"]
     .forEach(id => contextMenu.showItem(id, showSendPage));
     ["context-sendlinktodevice", "context-sep-sendlinktodevice"]
     .forEach(id => contextMenu.showItem(id, showSendLink));
+
+    if (!showSendLink && !showSendPage) {
+      return;
+    }
+
+    const targetURI = showSendLink ? contextMenu.linkURL :
+                                     contextMenu.browser.currentURI.spec;
+    const enabled = !this.syncConfiguredAndLoading && this.isSendableURI(targetURI);
+    contextMenu.setItemAttr(showSendPage ? "context-sendpagetodevice" :
+                                           "context-sendlinktodevice",
+                                           "disabled", !enabled || null);
   },
 
   // Functions called by observers
@@ -402,7 +489,7 @@ var gSync = {
 
     let broadcaster = document.getElementById("sync-status");
     broadcaster.setAttribute("syncstatus", "active");
-    broadcaster.setAttribute("label", this.syncStrings.GetStringFromName("syncing2.label"));
+    broadcaster.setAttribute("label", this.syncStrings.GetStringFromName("syncingtabs.label"));
     broadcaster.setAttribute("disabled", "true");
   },
 
@@ -439,7 +526,6 @@ var gSync = {
     if (state.status == UIState.STATUS_SIGNED_IN) {
       setTimeout(() => Weave.Service.errorHandler.syncAndReportErrors(), 0);
     }
-    Services.obs.notifyObservers(null, "cloudsync:user-sync");
   },
 
   openPrefs(entryPoint = "syncbutton", origin = undefined) {
@@ -461,28 +547,6 @@ var gSync = {
       // It is placed somewhere else - just try and show it.
       PanelUI.showSubView("PanelUI-remotetabs", anchor, area);
     }
-  },
-
-  /* After we are initialized we perform a once-only check for the sync
-     button being in "customize purgatory" and if so, move it to the panel.
-     This is done primarily for profiles created before SyncedTabs landed,
-     where the button defaulted to being in that purgatory.
-     We use a preference to ensure we only do it once, so people can still
-     customize it away and have it stick.
-  */
-  maybeMoveSyncedTabsButton() {
-    if (gPhotonStructure) {
-      return;
-    }
-    const prefName = "browser.migrated-sync-button";
-    let migrated = Services.prefs.getBoolPref(prefName, false);
-    if (migrated) {
-      return;
-    }
-    if (!CustomizableUI.getPlacementOfWidget("sync-button")) {
-      CustomizableUI.addWidgetToArea("sync-button", CustomizableUI.AREA_PANEL);
-    }
-    Services.prefs.setBoolPref(prefName, true);
   },
 
   /* Update the tooltip for the sync-status broadcaster (which will update the

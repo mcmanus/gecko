@@ -1,17 +1,21 @@
 "use strict";
 
+/* global windowTracker */
+
 Cu.import("resource://gre/modules/Services.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
                                   "resource://gre/modules/LightweightThemeManager.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "gThemesEnabled", () => {
-  return Preferences.get("extensions.webextensions.themes.enabled");
+  return Services.prefs.getBoolPref("extensions.webextensions.themes.enabled");
 });
 
-const ICONS = Preferences.get("extensions.webextensions.themes.icons.buttons", "").split(",");
+var {
+  getWinUtils,
+} = ExtensionUtils;
+
+const ICONS = Services.prefs.getStringPref("extensions.webextensions.themes.icons.buttons", "").split(",");
 
 /** Class representing a theme. */
 class Theme {
@@ -38,8 +42,14 @@ class Theme {
    *
    * @param {Object} details Theme part of the manifest. Supported
    *   properties can be found in the schema under ThemeType.
+   * @param {Object} targetWindow The window to apply the theme to. Omitting
+   *   this parameter will apply the theme globally.
    */
-  load(details) {
+  load(details, targetWindow) {
+    if (targetWindow) {
+      this.lwtStyles.window = getWinUtils(targetWindow).outerWindowID;
+    }
+
     if (details.colors) {
       this.loadColors(details.colors);
     }
@@ -64,6 +74,9 @@ class Theme {
       Services.obs.notifyObservers(null,
         "lightweight-theme-styling-update",
         JSON.stringify(this.lwtStyles));
+    } else {
+      this.logger.warn("Your theme doesn't include one of the following required " +
+        "properties: 'headerURL', 'accentcolor' or 'textcolor'");
     }
   }
 
@@ -93,6 +106,18 @@ class Theme {
         case "textcolor":
         case "tab_text":
           this.lwtStyles.textcolor = cssColor;
+          break;
+        case "toolbar":
+          this.lwtStyles.toolbarColor = cssColor;
+          break;
+        case "toolbar_text":
+          this.lwtStyles.toolbar_text = cssColor;
+          break;
+        case "toolbar_field":
+          this.lwtStyles.toolbar_field = cssColor;
+          break;
+        case "toolbar_field_text":
+          this.lwtStyles.toolbar_field_text = cssColor;
           break;
       }
     }
@@ -133,14 +158,17 @@ class Theme {
    * @param {Object} icons Dictionary mapping icon properties to extension URLs.
    */
   loadIcons(icons) {
-    if (!Preferences.get("extensions.webextensions.themes.icons.enabled")) {
+    if (!Services.prefs.getBoolPref("extensions.webextensions.themes.icons.enabled")) {
       // Return early if icons are disabled.
       return;
     }
 
     for (let icon of Object.getOwnPropertyNames(icons)) {
       let val = icons[icon];
-      if (!val || !ICONS.includes(icon)) {
+      // We also have to compare against the baseURI spec because
+      // `val` might have been resolved already. Resolving "" against
+      // the baseURI just produces that URI, so check for equality.
+      if (!val || val == this.baseURI.spec || !ICONS.includes(icon)) {
         continue;
       }
       let variableName = `--${icon}-icon`;
@@ -266,7 +294,7 @@ this.theme = class extends ExtensionAPI {
 
     return {
       theme: {
-        update: (details) => {
+        update: (windowId, details) => {
           if (!gThemesEnabled) {
             // Return early if themes are disabled.
             return;
@@ -279,7 +307,24 @@ this.theme = class extends ExtensionAPI {
             this.theme = new Theme(extension.baseURI, extension.logger);
           }
 
-          this.theme.load(details);
+          let browserWindow;
+          if (windowId !== null) {
+            browserWindow = windowTracker.getWindow(windowId, context);
+          }
+          this.theme.load(details, browserWindow);
+        },
+        reset: () => {
+          if (!gThemesEnabled) {
+            // Return early if themes are disabled.
+            return;
+          }
+
+          if (!this.theme) {
+            // If no theme has been initialized, nothing to do.
+            return;
+          }
+
+          this.theme.unload();
         },
       },
     };

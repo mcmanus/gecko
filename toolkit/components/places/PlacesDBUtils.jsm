@@ -75,7 +75,12 @@ this.PlacesDBUtils = {
    * Executes integrity check, common and advanced maintenance tasks (like
    * expiration and vacuum).  Will also collect statistics on the database.
    *
-   * @return a Map[taskName(String) -> Object]. The Object has the following properties:
+   * Note: although this function isn't actually async, we keep it async to
+   * allow us to maintain a simple, consistent API for the tasks within this object.
+   *
+   * @return {Promise}
+   *        A promise that resolves with a Map[taskName(String) -> Object].
+   *        The Object has the following properties:
    *         - succeeded: boolean
    *         - logs: an array of strings containing the messages logged by the task.
    */
@@ -94,8 +99,10 @@ this.PlacesDBUtils = {
   /**
    * Forces a full refresh of Places views.
    *
-   * @return {Promise} resolved when refresh is complete.
-   * @resolves to an array of logs for this task.
+   * Note: although this function isn't actually async, we keep it async to
+   * allow us to maintain a simple, consistent API for the tasks within this object.
+   *
+   * @returns {Array} An empty array.
    */
   async _refreshUI() {
     // Send batch update notifications to update the UI.
@@ -133,6 +140,9 @@ this.PlacesDBUtils = {
   /**
    * Checks integrity but does not try to fix the database through a reindex.
    *
+   * Note: although this function isn't actually async, we keep it async to
+   * allow us to maintain a simple, consistent API for the tasks within this object.
+   *
    * @return {Promise} resolves if database is sane.
    * @resolves to an array of logs for this task.
    * @rejects if we're unable to fix corruption or unable to check status.
@@ -161,9 +171,9 @@ this.PlacesDBUtils = {
         await db.execute(
           "PRAGMA integrity_check",
           null,
-          r => {
+          (r, cancel) => {
             row = r;
-            throw StopIteration;
+            cancel();
           });
         if (row.getResultByIndex(0) === "ok") {
           logs.push("The database is sane");
@@ -203,22 +213,22 @@ this.PlacesDBUtils = {
     let logs = [];
 
     let stmts = await PlacesDBUtils._getBoundCoherenceStatements();
-    let allStatementsPromises = [];
     let coherenceCheck = true;
     await PlacesUtils.withConnectionWrapper(
       "PlacesDBUtils: coherence check:",
       db => db.executeTransaction(async () => {
         for (let {query, params} of stmts) {
           params = params ? params : null;
-          allStatementsPromises.push(db.execute(query, params).catch(ex => {
+          try {
+            await db.execute(query, params);
+          } catch (ex) {
             Cu.reportError(ex);
             coherenceCheck = false;
-          }));
+          }
         }
       })
     );
 
-    await Promise.all(allStatementsPromises);
     if (coherenceCheck) {
       logs.push("The database is coherent");
     } else {
@@ -306,7 +316,7 @@ this.PlacesDBUtils = {
       query: "SELECT id FROM moz_bookmarks WHERE id = :places_root",
       params: {}
     };
-    selectPlacesRoot.params["places_root"] = PlacesUtils.placesRootId;
+    selectPlacesRoot.params.places_root = PlacesUtils.placesRootId;
     let db = await PlacesUtils.promiseDBConnection();
     let rows = await db.execute(selectPlacesRoot.query, selectPlacesRoot.params);
     if (rows.length === 0) {
@@ -317,9 +327,9 @@ this.PlacesDBUtils = {
            VALUES (:places_root, 2, NULL, 0, 0, :title, :guid)`,
         params: {}
       };
-      createPlacesRoot.params["places_root"] = PlacesUtils.placesRootId;
-      createPlacesRoot.params["title"] = "";
-      createPlacesRoot.params["guid"] = PlacesUtils.bookmarks.rootGuid;
+      createPlacesRoot.params.places_root = PlacesUtils.placesRootId;
+      createPlacesRoot.params.title = "";
+      createPlacesRoot.params.guid = PlacesUtils.bookmarks.rootGuid;
       cleanupStatements.push(createPlacesRoot);
 
       // Now ensure that other roots are children of Places root.
@@ -329,11 +339,11 @@ this.PlacesDBUtils = {
              ( :menuGuid, :toolbarGuid, :unfiledGuid, :tagsGuid )`,
         params: {}
       };
-      fixPlacesRootChildren.params["places_root"] = PlacesUtils.placesRootId;
-      fixPlacesRootChildren.params["menuGuid"] = PlacesUtils.bookmarks.menuGuid;
-      fixPlacesRootChildren.params["toolbarGuid"] = PlacesUtils.bookmarks.toolbarGuid;
-      fixPlacesRootChildren.params["unfiledGuid"] = PlacesUtils.bookmarks.unfiledGuid;
-      fixPlacesRootChildren.params["tagsGuid"] = PlacesUtils.bookmarks.tagsGuid;
+      fixPlacesRootChildren.params.places_root = PlacesUtils.placesRootId;
+      fixPlacesRootChildren.params.menuGuid = PlacesUtils.bookmarks.menuGuid;
+      fixPlacesRootChildren.params.toolbarGuid = PlacesUtils.bookmarks.toolbarGuid;
+      fixPlacesRootChildren.params.unfiledGuid = PlacesUtils.bookmarks.unfiledGuid;
+      fixPlacesRootChildren.params.tagsGuid = PlacesUtils.bookmarks.tagsGuid;
       cleanupStatements.push(fixPlacesRootChildren);
     }
     // C.2 fix roots titles
@@ -346,16 +356,16 @@ this.PlacesDBUtils = {
       query: updateRootTitleSql,
       params: {}
     };
-    fixPlacesRootTitle.params["root_id"] = PlacesUtils.placesRootId;
-    fixPlacesRootTitle.params["title"] = "";
+    fixPlacesRootTitle.params.root_id = PlacesUtils.placesRootId;
+    fixPlacesRootTitle.params.title = "";
     cleanupStatements.push(fixPlacesRootTitle);
     // bookmarks menu
     let fixBookmarksMenuTitle = {
       query: updateRootTitleSql,
       params: {}
     };
-    fixBookmarksMenuTitle.params["root_id"] = PlacesUtils.bookmarksMenuFolderId;
-    fixBookmarksMenuTitle.params["title"] =
+    fixBookmarksMenuTitle.params.root_id = PlacesUtils.bookmarksMenuFolderId;
+    fixBookmarksMenuTitle.params.title =
       PlacesUtils.getString("BookmarksMenuFolderTitle");
     cleanupStatements.push(fixBookmarksMenuTitle);
     // bookmarks toolbar
@@ -363,8 +373,8 @@ this.PlacesDBUtils = {
       query: updateRootTitleSql,
       params: {}
     };
-    fixBookmarksToolbarTitle.params["root_id"] = PlacesUtils.toolbarFolderId;
-    fixBookmarksToolbarTitle.params["title"] =
+    fixBookmarksToolbarTitle.params.root_id = PlacesUtils.toolbarFolderId;
+    fixBookmarksToolbarTitle.params.title =
       PlacesUtils.getString("BookmarksToolbarFolderTitle");
     cleanupStatements.push(fixBookmarksToolbarTitle);
     // unsorted bookmarks
@@ -372,8 +382,8 @@ this.PlacesDBUtils = {
       query: updateRootTitleSql,
       params: {}
     };
-    fixUnsortedBookmarksTitle.params["root_id"] = PlacesUtils.unfiledBookmarksFolderId;
-    fixUnsortedBookmarksTitle.params["title"] =
+    fixUnsortedBookmarksTitle.params.root_id = PlacesUtils.unfiledBookmarksFolderId;
+    fixUnsortedBookmarksTitle.params.title =
       PlacesUtils.getString("OtherBookmarksFolderTitle");
     cleanupStatements.push(fixUnsortedBookmarksTitle);
     // tags
@@ -381,8 +391,8 @@ this.PlacesDBUtils = {
       query: updateRootTitleSql,
       params: {}
     };
-    fixTagsRootTitle.params["root_id"] = PlacesUtils.tagsFolderId;
-    fixTagsRootTitle.params["title"] =
+    fixTagsRootTitle.params.root_id = PlacesUtils.tagsFolderId;
+    fixTagsRootTitle.params.title =
       PlacesUtils.getString("TagsFolderTitle");
     cleanupStatements.push(fixTagsRootTitle);
 
@@ -400,12 +410,12 @@ this.PlacesDBUtils = {
        )`,
       params: {}
     };
-    deleteNoPlaceItems.params["bookmark_type"] = PlacesUtils.bookmarks.TYPE_BOOKMARK;
-    deleteNoPlaceItems.params["rootGuid"] = PlacesUtils.bookmarks.rootGuid;
-    deleteNoPlaceItems.params["menuGuid"] = PlacesUtils.bookmarks.menuGuid;
-    deleteNoPlaceItems.params["toolbarGuid"] = PlacesUtils.bookmarks.toolbarGuid;
-    deleteNoPlaceItems.params["unfiledGuid"] = PlacesUtils.bookmarks.unfiledGuid;
-    deleteNoPlaceItems.params["tagsGuid"] = PlacesUtils.bookmarks.tagsGuid;
+    deleteNoPlaceItems.params.bookmark_type = PlacesUtils.bookmarks.TYPE_BOOKMARK;
+    deleteNoPlaceItems.params.rootGuid = PlacesUtils.bookmarks.rootGuid;
+    deleteNoPlaceItems.params.menuGuid = PlacesUtils.bookmarks.menuGuid;
+    deleteNoPlaceItems.params.toolbarGuid = PlacesUtils.bookmarks.toolbarGuid;
+    deleteNoPlaceItems.params.unfiledGuid = PlacesUtils.bookmarks.unfiledGuid;
+    deleteNoPlaceItems.params.tagsGuid = PlacesUtils.bookmarks.tagsGuid;
     cleanupStatements.push(deleteNoPlaceItems);
 
     // D.2 remove items that are not uri bookmarks from tag containers
@@ -421,13 +431,13 @@ this.PlacesDBUtils = {
        )`,
       params: {}
     };
-    deleteBogusTagChildren.params["tags_folder"] = PlacesUtils.tagsFolderId;
-    deleteBogusTagChildren.params["bookmark_type"] = PlacesUtils.bookmarks.TYPE_BOOKMARK;
-    deleteBogusTagChildren.params["rootGuid"] = PlacesUtils.bookmarks.rootGuid;
-    deleteBogusTagChildren.params["menuGuid"] = PlacesUtils.bookmarks.menuGuid;
-    deleteBogusTagChildren.params["toolbarGuid"] = PlacesUtils.bookmarks.toolbarGuid;
-    deleteBogusTagChildren.params["unfiledGuid"] = PlacesUtils.bookmarks.unfiledGuid;
-    deleteBogusTagChildren.params["tagsGuid"] = PlacesUtils.bookmarks.tagsGuid;
+    deleteBogusTagChildren.params.tags_folder = PlacesUtils.tagsFolderId;
+    deleteBogusTagChildren.params.bookmark_type = PlacesUtils.bookmarks.TYPE_BOOKMARK;
+    deleteBogusTagChildren.params.rootGuid = PlacesUtils.bookmarks.rootGuid;
+    deleteBogusTagChildren.params.menuGuid = PlacesUtils.bookmarks.menuGuid;
+    deleteBogusTagChildren.params.toolbarGuid = PlacesUtils.bookmarks.toolbarGuid;
+    deleteBogusTagChildren.params.unfiledGuid = PlacesUtils.bookmarks.unfiledGuid;
+    deleteBogusTagChildren.params.tagsGuid = PlacesUtils.bookmarks.tagsGuid;
     cleanupStatements.push(deleteBogusTagChildren);
 
     // D.3 remove empty tags
@@ -444,12 +454,12 @@ this.PlacesDBUtils = {
        )`,
       params: {}
     };
-    deleteEmptyTags.params["tags_folder"] = PlacesUtils.tagsFolderId;
-    deleteEmptyTags.params["rootGuid"] = PlacesUtils.bookmarks.rootGuid;
-    deleteEmptyTags.params["menuGuid"] = PlacesUtils.bookmarks.menuGuid;
-    deleteEmptyTags.params["toolbarGuid"] = PlacesUtils.bookmarks.toolbarGuid;
-    deleteEmptyTags.params["unfiledGuid"] = PlacesUtils.bookmarks.unfiledGuid;
-    deleteEmptyTags.params["tagsGuid"] = PlacesUtils.bookmarks.tagsGuid;
+    deleteEmptyTags.params.tags_folder = PlacesUtils.tagsFolderId;
+    deleteEmptyTags.params.rootGuid = PlacesUtils.bookmarks.rootGuid;
+    deleteEmptyTags.params.menuGuid = PlacesUtils.bookmarks.menuGuid;
+    deleteEmptyTags.params.toolbarGuid = PlacesUtils.bookmarks.toolbarGuid;
+    deleteEmptyTags.params.unfiledGuid = PlacesUtils.bookmarks.unfiledGuid;
+    deleteEmptyTags.params.tagsGuid = PlacesUtils.bookmarks.tagsGuid;
     cleanupStatements.push(deleteEmptyTags);
 
     // D.4 move orphan items to unsorted folder
@@ -464,12 +474,12 @@ this.PlacesDBUtils = {
        )`,
       params: {}
     };
-    fixOrphanItems.params["unsorted_folder"] = PlacesUtils.unfiledBookmarksFolderId;
-    fixOrphanItems.params["rootGuid"] = PlacesUtils.bookmarks.rootGuid;
-    fixOrphanItems.params["menuGuid"] = PlacesUtils.bookmarks.menuGuid;
-    fixOrphanItems.params["toolbarGuid"] = PlacesUtils.bookmarks.toolbarGuid;
-    fixOrphanItems.params["unfiledGuid"] = PlacesUtils.bookmarks.unfiledGuid;
-    fixOrphanItems.params["tagsGuid"] = PlacesUtils.bookmarks.tagsGuid;
+    fixOrphanItems.params.unsorted_folder = PlacesUtils.unfiledBookmarksFolderId;
+    fixOrphanItems.params.rootGuid = PlacesUtils.bookmarks.rootGuid;
+    fixOrphanItems.params.menuGuid = PlacesUtils.bookmarks.menuGuid;
+    fixOrphanItems.params.toolbarGuid = PlacesUtils.bookmarks.toolbarGuid;
+    fixOrphanItems.params.unfiledGuid = PlacesUtils.bookmarks.unfiledGuid;
+    fixOrphanItems.params.tagsGuid = PlacesUtils.bookmarks.tagsGuid;
     cleanupStatements.push(fixOrphanItems);
 
     // D.6 fix wrong item types
@@ -487,14 +497,14 @@ this.PlacesDBUtils = {
        )`,
       params: {}
     };
-    fixBookmarksAsFolders.params["bookmark_type"] = PlacesUtils.bookmarks.TYPE_BOOKMARK;
-    fixBookmarksAsFolders.params["folder_type"] = PlacesUtils.bookmarks.TYPE_FOLDER;
-    fixBookmarksAsFolders.params["separator_type"] = PlacesUtils.bookmarks.TYPE_SEPARATOR;
-    fixBookmarksAsFolders.params["rootGuid"] = PlacesUtils.bookmarks.rootGuid;
-    fixBookmarksAsFolders.params["menuGuid"] = PlacesUtils.bookmarks.menuGuid;
-    fixBookmarksAsFolders.params["toolbarGuid"] = PlacesUtils.bookmarks.toolbarGuid;
-    fixBookmarksAsFolders.params["unfiledGuid"] = PlacesUtils.bookmarks.unfiledGuid;
-    fixBookmarksAsFolders.params["tagsGuid"] = PlacesUtils.bookmarks.tagsGuid;
+    fixBookmarksAsFolders.params.bookmark_type = PlacesUtils.bookmarks.TYPE_BOOKMARK;
+    fixBookmarksAsFolders.params.folder_type = PlacesUtils.bookmarks.TYPE_FOLDER;
+    fixBookmarksAsFolders.params.separator_type = PlacesUtils.bookmarks.TYPE_SEPARATOR;
+    fixBookmarksAsFolders.params.rootGuid = PlacesUtils.bookmarks.rootGuid;
+    fixBookmarksAsFolders.params.menuGuid = PlacesUtils.bookmarks.menuGuid;
+    fixBookmarksAsFolders.params.toolbarGuid = PlacesUtils.bookmarks.toolbarGuid;
+    fixBookmarksAsFolders.params.unfiledGuid = PlacesUtils.bookmarks.unfiledGuid;
+    fixBookmarksAsFolders.params.tagsGuid = PlacesUtils.bookmarks.tagsGuid;
     cleanupStatements.push(fixBookmarksAsFolders);
 
     // D.7 fix wrong item types
@@ -511,13 +521,13 @@ this.PlacesDBUtils = {
        )`,
       params: {}
     };
-    fixFoldersAsBookmarks.params["bookmark_type"] = PlacesUtils.bookmarks.TYPE_BOOKMARK;
-    fixFoldersAsBookmarks.params["folder_type"] = PlacesUtils.bookmarks.TYPE_FOLDER;
-    fixFoldersAsBookmarks.params["rootGuid"] = PlacesUtils.bookmarks.rootGuid;
-    fixFoldersAsBookmarks.params["menuGuid"] = PlacesUtils.bookmarks.menuGuid;
-    fixFoldersAsBookmarks.params["toolbarGuid"] = PlacesUtils.bookmarks.toolbarGuid;
-    fixFoldersAsBookmarks.params["unfiledGuid"] = PlacesUtils.bookmarks.unfiledGuid;
-    fixFoldersAsBookmarks.params["tagsGuid"] = PlacesUtils.bookmarks.tagsGuid;
+    fixFoldersAsBookmarks.params.bookmark_type = PlacesUtils.bookmarks.TYPE_BOOKMARK;
+    fixFoldersAsBookmarks.params.folder_type = PlacesUtils.bookmarks.TYPE_FOLDER;
+    fixFoldersAsBookmarks.params.rootGuid = PlacesUtils.bookmarks.rootGuid;
+    fixFoldersAsBookmarks.params.menuGuid = PlacesUtils.bookmarks.menuGuid;
+    fixFoldersAsBookmarks.params.toolbarGuid = PlacesUtils.bookmarks.toolbarGuid;
+    fixFoldersAsBookmarks.params.unfiledGuid = PlacesUtils.bookmarks.unfiledGuid;
+    fixFoldersAsBookmarks.params.tagsGuid = PlacesUtils.bookmarks.tagsGuid;
     cleanupStatements.push(fixFoldersAsBookmarks);
 
     // D.9 fix wrong parents
@@ -536,14 +546,14 @@ this.PlacesDBUtils = {
        )`,
       params: {}
     };
-    fixInvalidParents.params["unsorted_folder"] = PlacesUtils.unfiledBookmarksFolderId;
-    fixInvalidParents.params["bookmark_type"] = PlacesUtils.bookmarks.TYPE_BOOKMARK;
-    fixInvalidParents.params["separator_type"] = PlacesUtils.bookmarks.TYPE_SEPARATOR;
-    fixInvalidParents.params["rootGuid"] = PlacesUtils.bookmarks.rootGuid;
-    fixInvalidParents.params["menuGuid"] = PlacesUtils.bookmarks.menuGuid;
-    fixInvalidParents.params["toolbarGuid"] = PlacesUtils.bookmarks.toolbarGuid;
-    fixInvalidParents.params["unfiledGuid"] = PlacesUtils.bookmarks.unfiledGuid;
-    fixInvalidParents.params["tagsGuid"] = PlacesUtils.bookmarks.tagsGuid;
+    fixInvalidParents.params.unsorted_folder = PlacesUtils.unfiledBookmarksFolderId;
+    fixInvalidParents.params.bookmark_type = PlacesUtils.bookmarks.TYPE_BOOKMARK;
+    fixInvalidParents.params.separator_type = PlacesUtils.bookmarks.TYPE_SEPARATOR;
+    fixInvalidParents.params.rootGuid = PlacesUtils.bookmarks.rootGuid;
+    fixInvalidParents.params.menuGuid = PlacesUtils.bookmarks.menuGuid;
+    fixInvalidParents.params.toolbarGuid = PlacesUtils.bookmarks.toolbarGuid;
+    fixInvalidParents.params.unfiledGuid = PlacesUtils.bookmarks.unfiledGuid;
+    fixInvalidParents.params.tagsGuid = PlacesUtils.bookmarks.tagsGuid;
     cleanupStatements.push(fixInvalidParents);
 
     // D.10 recalculate positions
@@ -617,9 +627,9 @@ this.PlacesDBUtils = {
          AND parent = :tags_folder`,
       params: {}
     };
-    fixEmptyNamedTags.params["empty_title"] = "(notitle)";
-    fixEmptyNamedTags.params["folder_type"] = PlacesUtils.bookmarks.TYPE_FOLDER;
-    fixEmptyNamedTags.params["tags_folder"] = PlacesUtils.tagsFolderId;
+    fixEmptyNamedTags.params.empty_title = "(notitle)";
+    fixEmptyNamedTags.params.folder_type = PlacesUtils.bookmarks.TYPE_FOLDER;
+    fixEmptyNamedTags.params.tags_folder = PlacesUtils.tagsFolderId;
     cleanupStatements.push(fixEmptyNamedTags);
 
     // MOZ_ICONS
@@ -757,13 +767,16 @@ this.PlacesDBUtils = {
   /**
    * Tries to vacuum the database.
    *
+   * Note: although this function isn't actually async, we keep it async to
+   * allow us to maintain a simple, consistent API for the tasks within this object.
+   *
    * @return {Promise} resolves when database is vacuumed.
    * @resolves to an array of logs for this task.
    * @rejects if we are unable to vacuum database.
    */
   async vacuum() {
     let logs = [];
-    let DBFile = Services.dirsvc.get("ProfD", Ci.nsILocalFile);
+    let DBFile = Services.dirsvc.get("ProfD", Ci.nsIFile);
     DBFile.append("places.sqlite");
     logs.push("Initial database size is " +
                 parseInt(DBFile.fileSize / 1024) + " KiB");
@@ -773,7 +786,7 @@ this.PlacesDBUtils = {
         await db.execute("VACUUM");
       }).then(() => {
         logs.push("The database has been vacuumed");
-        let vacuumedDBFile = Services.dirsvc.get("ProfD", Ci.nsILocalFile);
+        let vacuumedDBFile = Services.dirsvc.get("ProfD", Ci.nsIFile);
         vacuumedDBFile.append("places.sqlite");
         logs.push("Final database size is " +
                    parseInt(vacuumedDBFile.fileSize / 1024) + " KiB");
@@ -786,6 +799,9 @@ this.PlacesDBUtils = {
 
   /**
    * Forces a full expiration on the database.
+   *
+   * Note: although this function isn't actually async, we keep it async to
+   * allow us to maintain a simple, consistent API for the tasks within this object.
    *
    * @return {Promise} resolves when the database in cleaned up.
    * @resolves to an array of logs for this task.
@@ -819,7 +835,7 @@ this.PlacesDBUtils = {
    */
   async stats() {
     let logs = [];
-    let DBFile = Services.dirsvc.get("ProfD", Ci.nsILocalFile);
+    let DBFile = Services.dirsvc.get("ProfD", Ci.nsIFile);
     DBFile.append("places.sqlite");
     logs.push("Database size is " + parseInt(DBFile.fileSize / 1024) + " KiB");
 
@@ -882,6 +898,9 @@ this.PlacesDBUtils = {
 
   /**
    * Collects telemetry data and reports it to Telemetry.
+   *
+   * Note: although this function isn't actually async, we keep it async to
+   * allow us to maintain a simple, consistent API for the tasks within this object.
    *
    */
   async telemetry() {
@@ -949,7 +968,7 @@ this.PlacesDBUtils = {
 
       { histogram: "PLACES_DATABASE_FILESIZE_MB",
         callback() {
-          let DBFile = Services.dirsvc.get("ProfD", Ci.nsILocalFile);
+          let DBFile = Services.dirsvc.get("ProfD", Ci.nsIFile);
           DBFile.append("places.sqlite");
           return parseInt(DBFile.fileSize / BYTES_PER_MEBIBYTE);
         }
@@ -1034,7 +1053,9 @@ this.PlacesDBUtils = {
    * @param tasks
    *        Array of tasks to be executed, in form of pointers to methods in
    *        this module.
-   * @return a Map[taskName(String) -> Object]. The Object has the following properties:
+   * @return {Promise}
+   *        A promise that resolves with a Map[taskName(String) -> Object].
+   *        The Object has the following properties:
    *         - succeeded: boolean
    *         - logs: an array of strings containing the messages logged by the task
    */

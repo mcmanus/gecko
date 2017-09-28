@@ -15,6 +15,7 @@ const {
   SELECT_REQUEST,
   SEND_CUSTOM_REQUEST,
   UPDATE_REQUEST,
+  UPDATE_PROPS,
 } = require("../constants");
 
 const Request = I.Record({
@@ -67,34 +68,6 @@ const Requests = I.Record({
   firstStartedMillis: +Infinity,
   lastEndedMillis: -Infinity,
 });
-
-const UPDATE_PROPS = [
-  "method",
-  "url",
-  "remotePort",
-  "remoteAddress",
-  "status",
-  "statusText",
-  "httpVersion",
-  "securityState",
-  "securityInfo",
-  "mimeType",
-  "contentSize",
-  "transferredSize",
-  "totalTime",
-  "eventTimings",
-  "headersSize",
-  "customQueryValue",
-  "requestHeaders",
-  "requestHeadersFromUploadStream",
-  "requestCookies",
-  "requestPostData",
-  "responseHeaders",
-  "responseCookies",
-  "responseContent",
-  "responseContentDataUri",
-  "formDataSections",
-];
 
 /**
  * Remove the currently selected custom request.
@@ -168,8 +141,8 @@ function requestsReducer(state = new Requests(), action) {
               request.urlDetails = getUrlDetails(value);
               break;
             case "totalTime":
-              const endedMillis = request.startedMillis + value;
-              lastEndedMillis = Math.max(lastEndedMillis, endedMillis);
+              request.endedMillis = request.startedMillis + value;
+              lastEndedMillis = Math.max(lastEndedMillis, request.endedMillis);
               break;
             case "requestPostData":
               request.requestHeadersFromUploadStream = {

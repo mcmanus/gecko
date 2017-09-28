@@ -39,24 +39,12 @@
 namespace mozilla {
 namespace dom {
 
-static nsresult
-GetDocumentCharacterSetForURI(const nsAString& aHref, nsACString& aCharset)
-{
-  aCharset.Truncate();
-
-  if (nsIDocument* doc = GetEntryDocument()) {
-    aCharset = doc->GetDocumentCharacterSet();
-  }
-
-  return NS_OK;
-}
-
 Location::Location(nsPIDOMWindowInner* aWindow, nsIDocShell *aDocShell)
   : mInnerWindow(aWindow)
 {
-  MOZ_ASSERT(aDocShell);
   MOZ_ASSERT(mInnerWindow->IsInnerWindow());
 
+  // aDocShell can be null if it gets called after nsDocShell::Destory().
   mDocShell = do_GetWeakReference(aDocShell);
 }
 
@@ -506,11 +494,12 @@ Location::SetHrefWithBase(const nsAString& aHref, nsIURI* aBase,
 
   nsCOMPtr<nsIDocShell> docShell(do_QueryReferent(mDocShell));
 
-  nsAutoCString docCharset;
-  if (NS_SUCCEEDED(GetDocumentCharacterSetForURI(aHref, docCharset)))
-    result = NS_NewURI(getter_AddRefs(newUri), aHref, docCharset.get(), aBase);
-  else
+  if (nsIDocument* doc = GetEntryDocument()) {
+    result = NS_NewURI(getter_AddRefs(newUri), aHref,
+                       doc->GetDocumentCharacterSet(), aBase);
+  } else {
     result = NS_NewURI(getter_AddRefs(newUri), aHref, nullptr, aBase);
+  }
 
   if (newUri) {
     /* Check with the scriptContext if it is currently processing a script tag.
@@ -832,7 +821,12 @@ Location::SetSearch(const nsAString& aSearch,
     return;
   }
 
-  aRv = url->SetQuery(NS_ConvertUTF16toUTF8(aSearch));
+  if (nsIDocument* doc = GetEntryDocument()) {
+    aRv = url->SetQueryWithEncoding(NS_ConvertUTF16toUTF8(aSearch),
+                                    doc->GetDocumentCharacterSet());
+  } else {
+    aRv = url->SetQuery(NS_ConvertUTF16toUTF8(aSearch));
+  }
   if (NS_WARN_IF(aRv.Failed())) {
     return;
   }

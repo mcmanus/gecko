@@ -10,7 +10,6 @@
 
 use context::{LayoutContext, with_thread_local_font_context};
 use flow::{self, AFFECTS_COUNTERS, Flow, HAS_COUNTER_AFFECTING_CHILDREN, ImmutableFlowUtils};
-use flow::InorderFlowTraversal;
 use fragment::{Fragment, GeneratedContentInfo, SpecificFragmentInfo, UnscannedTextFragmentInfo};
 use gfx::display_list::OpaqueNode;
 use script_layout_interface::wrapper_traits::PseudoElementType;
@@ -18,10 +17,11 @@ use smallvec::SmallVec;
 use std::collections::{HashMap, LinkedList};
 use style::computed_values::{display, list_style_type};
 use style::computed_values::content::ContentItem;
-use style::properties::ServoComputedValues;
+use style::properties::ComputedValues;
 use style::selector_parser::RestyleDamage;
 use style::servo::restyle_damage::RESOLVE_GENERATED_CONTENT;
 use text::TextRunScanner;
+use traversal::InorderFlowTraversal;
 
 // Decimal styles per CSS-COUNTER-STYLES § 6.1:
 static DECIMAL: [char; 10] = [ '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' ];
@@ -130,14 +130,14 @@ impl<'a> InorderFlowTraversal for ResolveGeneratedContent<'a> {
     }
 
     #[inline]
-    fn should_process(&mut self, flow: &mut Flow) -> bool {
+    fn should_process_subtree(&mut self, flow: &mut Flow) -> bool {
         flow::base(flow).restyle_damage.intersects(RESOLVE_GENERATED_CONTENT) ||
             flow::base(flow).flags.intersects(AFFECTS_COUNTERS | HAS_COUNTER_AFFECTING_CHILDREN)
     }
 }
 
 /// The object that mutates the generated content fragments.
-struct ResolveGeneratedContentFragmentMutator<'a,'b:'a> {
+struct ResolveGeneratedContentFragmentMutator<'a, 'b: 'a> {
     /// The traversal.
     traversal: &'a mut ResolveGeneratedContent<'b>,
     /// The level we're at in the flow tree.
@@ -148,7 +148,7 @@ struct ResolveGeneratedContentFragmentMutator<'a,'b:'a> {
     incremented: bool,
 }
 
-impl<'a,'b> ResolveGeneratedContentFragmentMutator<'a,'b> {
+impl<'a, 'b> ResolveGeneratedContentFragmentMutator<'a, 'b> {
     fn mutate_fragment(&mut self, fragment: &mut Fragment) {
         // We only reset and/or increment counters once per flow. This avoids double-incrementing
         // counters on list items (once for the main fragment and once for the marker).
@@ -298,7 +298,7 @@ impl<'a,'b> ResolveGeneratedContentFragmentMutator<'a,'b> {
         self.incremented = true
     }
 
-    fn quote(&self, style: &ServoComputedValues, close: bool) -> String {
+    fn quote(&self, style: &ComputedValues, close: bool) -> String {
         let quotes = &style.get_list().quotes;
         if quotes.0.is_empty() {
             return String::new()
@@ -368,7 +368,7 @@ impl Counter {
               layout_context: &LayoutContext,
               node: OpaqueNode,
               pseudo: PseudoElementType<()>,
-              style: ::StyleArc<ServoComputedValues>,
+              style: ::ServoArc<ComputedValues>,
               list_style_type: list_style_type::T,
               mode: RenderingMode)
               -> Option<SpecificFragmentInfo> {
@@ -431,7 +431,7 @@ struct CounterValue {
 fn render_text(layout_context: &LayoutContext,
                node: OpaqueNode,
                pseudo: PseudoElementType<()>,
-               style: ::StyleArc<ServoComputedValues>,
+               style: ::ServoArc<ComputedValues>,
                string: String)
                -> Option<SpecificFragmentInfo> {
     let mut fragments = LinkedList::new();

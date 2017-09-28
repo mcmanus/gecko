@@ -123,6 +123,7 @@
 #include "SVGSVGElement.h"
 #include "DisplayItemClip.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
+#include "prenv.h"
 
 #ifdef MOZ_XUL
 #include "nsXULPopupManager.h"
@@ -155,6 +156,7 @@ using namespace mozilla::gfx;
 #define WEBKIT_PREFIXES_ENABLED_PREF_NAME "layout.css.prefixes.webkit"
 #define TEXT_ALIGN_UNSAFE_ENABLED_PREF_NAME "layout.css.text-align-unsafe-value.enabled"
 #define FLOAT_LOGICAL_VALUES_ENABLED_PREF_NAME "layout.css.float-logical-values.enabled"
+#define INTERCHARACTER_RUBY_ENABLED_PREF_NAME "layout.css.ruby.intercharacter.enabled"
 
 // The time in number of frames that we estimate for a refresh driver
 // to be quiescent
@@ -694,22 +696,6 @@ nsLayoutUtils::CSSFiltersEnabled()
 }
 
 bool
-nsLayoutUtils::CSSClipPathShapesEnabled()
-{
-  static bool sCSSClipPathShapesEnabled;
-  static bool sCSSClipPathShapesPrefCached = false;
-
-  if (!sCSSClipPathShapesPrefCached) {
-   sCSSClipPathShapesPrefCached = true;
-   Preferences::AddBoolVarCache(&sCSSClipPathShapesEnabled,
-                                "layout.css.clip-path-shapes.enabled",
-                                false);
-  }
-
-  return sCSSClipPathShapesEnabled;
-}
-
-bool
 nsLayoutUtils::UnsetValueEnabled()
 {
   static bool sUnsetValueEnabled;
@@ -755,6 +741,22 @@ nsLayoutUtils::IsTextAlignUnsafeValueEnabled()
   }
 
   return sTextAlignUnsafeValueEnabled;
+}
+
+bool
+nsLayoutUtils::IsInterCharacterRubyEnabled()
+{
+  static bool sInterCharacterRubyEnabled;
+  static bool sInterCharacterRubyEnabledPrefCached = false;
+
+  if (!sInterCharacterRubyEnabledPrefCached) {
+    sInterCharacterRubyEnabledPrefCached = true;
+    Preferences::AddBoolVarCache(&sInterCharacterRubyEnabled,
+                                 INTERCHARACTER_RUBY_ENABLED_PREF_NAME,
+                                 false);
+  }
+
+  return sInterCharacterRubyEnabled;
 }
 
 void
@@ -834,6 +836,13 @@ nsLayoutUtils::FindContentFor(ViewID aId)
   }
 }
 
+ViewID
+nsLayoutUtils::ViewIDForASR(const mozilla::ActiveScrolledRoot* aASR)
+{
+  nsIContent* content = aASR->mScrollableFrame->GetScrolledFrame()->GetContent();
+  return nsLayoutUtils::FindOrCreateIDFor(content);
+}
+
 nsIFrame*
 GetScrollFrameFromContent(nsIContent* aContent)
 {
@@ -863,6 +872,25 @@ nsLayoutUtils::FindScrollableFrameFor(ViewID aId)
 
   nsIFrame* scrollFrame = GetScrollFrameFromContent(content);
   return scrollFrame ? scrollFrame->GetScrollTargetFrame() : nullptr;
+}
+
+ViewID
+nsLayoutUtils::FindIDForScrollableFrame(nsIScrollableFrame* aScrollable)
+{
+  if (!aScrollable) {
+    return FrameMetrics::NULL_SCROLL_ID;
+  }
+
+  nsIFrame* scrollFrame = do_QueryFrame(aScrollable);
+  nsIContent* scrollContent = scrollFrame->GetContent();
+
+  FrameMetrics::ViewID scrollId;
+  if (scrollContent &&
+      nsLayoutUtils::FindIDFor(scrollContent, &scrollId)) {
+    return scrollId;
+  }
+
+  return FrameMetrics::NULL_SCROLL_ID;
 }
 
 static nsRect
@@ -915,30 +943,41 @@ nsLayoutUtils::GetCurrentAPZResolutionScale(nsIPresShell* aShell) {
 // Return the maximum displayport size, based on the LayerManager's maximum
 // supported texture size. The result is in app units.
 static nscoord
-GetMaxDisplayPortSize(nsIContent* aContent)
+GetMaxDisplayPortSize(nsIContent* aContent, nsPresContext* aFallbackPrescontext)
 {
   MOZ_ASSERT(!gfxPrefs::LayersTilesEnabled(), "Do not clamp displayports if tiling is enabled");
 
+  // Pick a safe maximum displayport size for sanity purposes. This is the
+  // lowest maximum texture size on tileless-platforms (Windows, D3D10).
+  // If the gfx.max-texture-size pref is set, further restrict the displayport
+  // size to fit within that, because the compositor won't upload stuff larger
+  // than this size.
+  nscoord safeMaximum = aFallbackPrescontext
+      ? aFallbackPrescontext->DevPixelsToAppUnits(
+            std::min(8192, gfxPlatform::MaxTextureSize()))
+      : nscoord_MAX;
+
   nsIFrame* frame = aContent->GetPrimaryFrame();
   if (!frame) {
-    return nscoord_MAX;
+    return safeMaximum;
   }
   frame = nsLayoutUtils::GetDisplayRootFrame(frame);
 
   nsIWidget* widget = frame->GetNearestWidget();
   if (!widget) {
-    return nscoord_MAX;
+    return safeMaximum;
   }
   LayerManager* lm = widget->GetLayerManager();
   if (!lm) {
-    return nscoord_MAX;
+    return safeMaximum;
   }
   nsPresContext* presContext = frame->PresContext();
 
   int32_t maxSizeInDevPixels = lm->GetMaxTextureSize();
   if (maxSizeInDevPixels < 0 || maxSizeInDevPixels == INT_MAX) {
-    return nscoord_MAX;
+    return safeMaximum;
   }
+  maxSizeInDevPixels = std::min(maxSizeInDevPixels, gfxPlatform::MaxTextureSize());
   return presContext->DevPixelsToAppUnits(maxSizeInDevPixels);
 }
 
@@ -1065,12 +1104,8 @@ GetDisplayPortFromMarginsData(nsIContent* aContent,
   } else {
     // Calculate the displayport to make sure we fit within the max texture size
     // when not tiling.
-    nscoord maxSizeAppUnits = GetMaxDisplayPortSize(aContent);
-    if (maxSizeAppUnits == nscoord_MAX) {
-      // Pick a safe maximum displayport size for sanity purposes. This is the
-      // lowest maximum texture size on tileless-platforms (Windows, D3D10).
-      maxSizeAppUnits = presContext->DevPixelsToAppUnits(8192);
-    }
+    nscoord maxSizeAppUnits = GetMaxDisplayPortSize(aContent, presContext);
+    MOZ_ASSERT(maxSizeAppUnits < nscoord_MAX);
 
     // The alignment code can round up to 3 tiles, we want to make sure
     // that the displayport can grow by up to 3 tiles without going
@@ -1229,8 +1264,18 @@ nsLayoutUtils::IsMissingDisplayPortBaseRect(nsIContent* aContent)
   return false;
 }
 
+enum class MaxSizeExceededBehaviour {
+  // Ask GetDisplayPortImpl to assert if the calculated displayport exceeds
+  // the maximum allowed size.
+  eAssert,
+  // Ask GetDisplayPortImpl to pretend like there's no displayport at all, if
+  // the calculated displayport exceeds the maximum allowed size.
+  eDrop,
+};
+
 static bool
-GetDisplayPortImpl(nsIContent* aContent, nsRect* aResult, float aMultiplier)
+GetDisplayPortImpl(nsIContent* aContent, nsRect* aResult, float aMultiplier,
+                   MaxSizeExceededBehaviour aBehaviour = MaxSizeExceededBehaviour::eAssert)
 {
   DisplayPortPropertyData* rectData = nullptr;
   DisplayPortMarginsPropertyData* marginsData = nullptr;
@@ -1257,12 +1302,18 @@ GetDisplayPortImpl(nsIContent* aContent, nsRect* aResult, float aMultiplier)
   }
 
   if (!gfxPrefs::LayersTilesEnabled()) {
-    // Either we should have gotten a valid rect directly from the displayport
-    // base, or we should have computed a valid rect from the margins.
-    NS_ASSERTION(result.width <= GetMaxDisplayPortSize(aContent),
-                 "Displayport must be a valid texture size");
-    NS_ASSERTION(result.height <= GetMaxDisplayPortSize(aContent),
-                 "Displayport must be a valid texture size");
+    // Perform the desired error handling if the displayport dimensions
+    // exceeds the maximum allowed size
+    nscoord maxSize = GetMaxDisplayPortSize(aContent, nullptr);
+    if (result.width > maxSize || result.height > maxSize) {
+      switch (aBehaviour) {
+      case MaxSizeExceededBehaviour::eAssert:
+        NS_ASSERTION(false, "Displayport must be a valid texture size");
+        break;
+      case MaxSizeExceededBehaviour::eDrop:
+        return false;
+      }
+    }
   }
 
   *aResult = result;
@@ -1305,7 +1356,13 @@ nsLayoutUtils::GetDisplayPortForVisibilityTesting(
   RelativeTo aRelativeTo /* = RelativeTo::ScrollPort */)
 {
   MOZ_ASSERT(aResult);
-  bool usingDisplayPort = GetDisplayPortImpl(aContent, aResult, 1.0f);
+  // Since the base rect might not have been updated very recently, it's
+  // possible to end up with an extra-large displayport at this point, if the
+  // zoom level is changed by a lot. Instead of using the default behaviour of
+  // asserting, we can just ignore the displayport if that happens, as this
+  // call site is best-effort.
+  bool usingDisplayPort = GetDisplayPortImpl(aContent, aResult, 1.0f,
+      MaxSizeExceededBehaviour::eDrop);
   if (usingDisplayPort && aRelativeTo == RelativeTo::ScrollFrame) {
     TranslateFromScrollPortToScrollFrame(aContent, aResult);
   }
@@ -1564,6 +1621,9 @@ GetPseudo(const nsIContent* aContent, nsIAtom* aPseudoProperty)
 {
   MOZ_ASSERT(aPseudoProperty == nsGkAtoms::beforePseudoProperty ||
              aPseudoProperty == nsGkAtoms::afterPseudoProperty);
+  if (!aContent->MayHaveAnonymousChildren()) {
+    return nullptr;
+  }
   return static_cast<Element*>(aContent->GetProperty(aPseudoProperty));
 }
 
@@ -2050,13 +2110,20 @@ nsLayoutUtils::SetFixedPositionLayerData(Layer* aLayer,
     }
   }
 
+  ViewID id = ScrollIdForRootScrollFrame(aPresContext);
+  aLayer->SetFixedPositionData(id, anchor, sides);
+}
+
+FrameMetrics::ViewID
+nsLayoutUtils::ScrollIdForRootScrollFrame(nsPresContext* aPresContext)
+{
   ViewID id = FrameMetrics::NULL_SCROLL_ID;
   if (nsIFrame* rootScrollFrame = aPresContext->PresShell()->GetRootScrollFrame()) {
     if (nsIContent* content = rootScrollFrame->GetContent()) {
       id = FindOrCreateIDFor(content);
     }
   }
-  aLayer->SetFixedPositionData(id, anchor, sides);
+  return id;
 }
 
 bool
@@ -2407,7 +2474,7 @@ static void ConstrainToCoordValues(float& aStart, float& aSize)
     float excess = aSize - nscoord_MAX;
     excess /= 2;
     aStart += excess;
-    aSize = nscoord_MAX;
+    aSize = (float)nscoord_MAX;
   }
 }
 
@@ -2622,7 +2689,7 @@ nsLayoutUtils::MatrixTransformPoint(const nsPoint &aPoint,
 {
   gfxPoint image = gfxPoint(NSAppUnitsToFloatPixels(aPoint.x, aFactor),
                             NSAppUnitsToFloatPixels(aPoint.y, aFactor));
-  image.Transform(aMatrix);
+  image = aMatrix.TransformPoint(image);
   return nsPoint(NSFloatPixelsToAppUnits(float(image.x), aFactor),
                  NSFloatPixelsToAppUnits(float(image.y), aFactor));
 }
@@ -2927,12 +2994,15 @@ nsLayoutUtils::GetLayerTransformForFrame(nsIFrame* aFrame,
   nsDisplayListBuilder builder(root,
                                nsDisplayListBuilderMode::TRANSFORM_COMPUTATION,
                                false/*don't build caret*/);
+  builder.BeginFrame();
   nsDisplayList list;
   nsDisplayTransform* item =
     new (&builder) nsDisplayTransform(&builder, aFrame, &list, nsRect());
 
   *aTransform = item->GetTransform();
   item->~nsDisplayTransform();
+
+  builder.EndFrame();
 
   return true;
 }
@@ -3072,8 +3142,8 @@ static LayoutDeviceIntPoint GetWidgetOffset(nsIWidget* aWidget, nsIWidget*& aRoo
   return offset;
 }
 
-static LayoutDeviceIntPoint
-WidgetToWidgetOffset(nsIWidget* aFrom, nsIWidget* aTo) {
+LayoutDeviceIntPoint
+nsLayoutUtils::WidgetToWidgetOffset(nsIWidget* aFrom, nsIWidget* aTo) {
   nsIWidget* fromRoot;
   LayoutDeviceIntPoint fromOffset = GetWidgetOffset(aFrom, fromRoot);
   nsIWidget* toRoot;
@@ -3176,8 +3246,7 @@ struct AutoNestedPaintCount {
 nsIFrame*
 nsLayoutUtils::GetFrameForPoint(nsIFrame* aFrame, nsPoint aPt, uint32_t aFlags)
 {
-  PROFILER_LABEL("nsLayoutUtils", "GetFrameForPoint",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("nsLayoutUtils::GetFrameForPoint", GRAPHICS);
 
   nsresult rv;
   AutoTArray<nsIFrame*,8> outFrames;
@@ -3191,12 +3260,12 @@ nsLayoutUtils::GetFramesForArea(nsIFrame* aFrame, const nsRect& aRect,
                                 nsTArray<nsIFrame*> &aOutFrames,
                                 uint32_t aFlags)
 {
-  PROFILER_LABEL("nsLayoutUtils", "GetFramesForArea",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("nsLayoutUtils::GetFramesForArea", GRAPHICS);
 
   nsDisplayListBuilder builder(aFrame,
                                nsDisplayListBuilderMode::EVENT_DELIVERY,
                                false);
+  builder.BeginFrame();
   nsDisplayList list;
 
   if (aFlags & IGNORE_PAINT_SUPPRESSION) {
@@ -3215,7 +3284,9 @@ nsLayoutUtils::GetFramesForArea(nsIFrame* aFrame, const nsRect& aRect,
   }
 
   builder.EnterPresShell(aFrame);
-  aFrame->BuildDisplayListForStackingContext(&builder, aRect, &list);
+
+  builder.SetDirtyRect(aRect);
+  aFrame->BuildDisplayListForStackingContext(&builder, &list);
   builder.LeavePresShell(aFrame, nullptr);
 
 #ifdef MOZ_DUMP_PAINTING
@@ -3231,7 +3302,8 @@ nsLayoutUtils::GetFramesForArea(nsIFrame* aFrame, const nsRect& aRect,
   nsDisplayItem::HitTestState hitTestState;
   builder.SetHitTestShouldStopAtFirstOpaque(aFlags & ONLY_VISIBLE);
   list.HitTest(&builder, aRect, &hitTestState, &aOutFrames);
-  list.DeleteAll();
+  list.DeleteAll(&builder);
+  builder.EndFrame();
   return NS_OK;
 }
 
@@ -3425,8 +3497,7 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
                           nsDisplayListBuilderMode aBuilderMode,
                           PaintFrameFlags aFlags)
 {
-  PROFILER_LABEL("nsLayoutUtils", "PaintFrame",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("nsLayoutUtils::PaintFrame", GRAPHICS);
 
 #ifdef MOZ_DUMP_PAINTING
   if (!gPaintCountStack) {
@@ -3457,6 +3528,9 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
   TimeStamp startBuildDisplayList = TimeStamp::Now();
   nsDisplayListBuilder builder(aFrame, aBuilderMode,
                                !(aFlags & PaintFrameFlags::PAINT_HIDE_CARET));
+
+  builder.BeginFrame();
+
   if (aFlags & PaintFrameFlags::PAINT_IN_TRANSFORM) {
     builder.SetInTransform(true);
   }
@@ -3519,7 +3593,7 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
           nsLayoutUtils::PointToGfxPoint(pos,
                                          presContext->AppUnitsPerDevPixel());
         aRenderingContext->SetMatrix(
-          aRenderingContext->CurrentMatrix().Translate(devPixelOffset));
+          aRenderingContext->CurrentMatrix().PreTranslate(devPixelOffset));
       }
     }
     builder.SetIgnoreScrollFrame(rootScrollFrame);
@@ -3537,8 +3611,8 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
   nsRect dirtyRect = visibleRegion.GetBounds();
 
   {
-    PROFILER_LABEL("nsLayoutUtils", "PaintFrame::BuildDisplayList",
-      js::ProfileEntry::Category::GRAPHICS);
+    AUTO_PROFILER_LABEL("nsLayoutUtils::PaintFrame:BuildDisplayList",
+                        GRAPHICS);
     AutoProfilerTracing tracing("Paint", "DisplayList");
 
     PaintTelemetry::AutoRecord record(PaintTelemetry::Metric::DisplayList);
@@ -3571,7 +3645,8 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
 
       nsDisplayListBuilder::AutoCurrentScrollParentIdSetter idSetter(&builder, id);
 
-      aFrame->BuildDisplayListForStackingContext(&builder, dirtyRect, &list);
+      builder.SetDirtyRect(dirtyRect);
+      aFrame->BuildDisplayListForStackingContext(&builder, &list);
     }
 
     LayoutFrameType frameType = aFrame->Type();
@@ -3752,7 +3827,9 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
 
     std::stringstream lsStream;
     nsFrame::PrintDisplayList(&builder, list, lsStream);
-    layerManager->GetRoot()->SetDisplayListLog(lsStream.str().c_str());
+    if (layerManager->GetRoot()) {
+      layerManager->GetRoot()->SetDisplayListLog(lsStream.str().c_str());
+    }
   }
 
 #ifdef MOZ_DUMP_PAINTING
@@ -3805,9 +3882,10 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
     }
   }
 
+  builder.EndFrame();
 
   // Flush the list so we don't trigger the IsEmpty-on-destruction assertion
-  list.DeleteAll();
+  list.DeleteAll(&builder);
   return NS_OK;
 }
 
@@ -3876,9 +3954,9 @@ nsLayoutUtils::BinarySearchForPosition(DrawTarget* aDrawTarget,
   return false;
 }
 
-static void
-AddBoxesForFrame(nsIFrame* aFrame,
-                 nsLayoutUtils::BoxCallback* aCallback)
+void
+nsLayoutUtils::AddBoxesForFrame(nsIFrame* aFrame,
+                                nsLayoutUtils::BoxCallback* aCallback)
 {
   nsIAtom* pseudoType = aFrame->StyleContext()->GetPseudo();
 
@@ -4500,15 +4578,12 @@ nsLayoutUtils::GetNextContinuationOrIBSplitSibling(nsIFrame *aFrame)
 }
 
 nsIFrame*
-nsLayoutUtils::FirstContinuationOrIBSplitSibling(nsIFrame *aFrame)
+nsLayoutUtils::FirstContinuationOrIBSplitSibling(const nsIFrame* aFrame)
 {
-  nsIFrame *result = aFrame->FirstContinuation();
+  nsIFrame* result = aFrame->FirstContinuation();
+
   if (result->GetStateBits() & NS_FRAME_PART_OF_IBSPLIT) {
-    while (true) {
-      nsIFrame* f =
-        result->GetProperty(nsIFrame::IBSplitPrevSibling());
-      if (!f)
-        break;
+    while (auto* f = result->GetProperty(nsIFrame::IBSplitPrevSibling())) {
       result = f;
     }
   }
@@ -4517,22 +4592,17 @@ nsLayoutUtils::FirstContinuationOrIBSplitSibling(nsIFrame *aFrame)
 }
 
 nsIFrame*
-nsLayoutUtils::LastContinuationOrIBSplitSibling(nsIFrame *aFrame)
+nsLayoutUtils::LastContinuationOrIBSplitSibling(const nsIFrame* aFrame)
 {
-  nsIFrame *result = aFrame->FirstContinuation();
+  nsIFrame* result = aFrame->FirstContinuation();
+
   if (result->GetStateBits() & NS_FRAME_PART_OF_IBSPLIT) {
-    while (true) {
-      nsIFrame* f = result->GetProperty(nsIFrame::IBSplitSibling());
-      if (!f) {
-        break;
-      }
+    while (auto* f = result->GetProperty(nsIFrame::IBSplitSibling())) {
       result = f;
     }
   }
 
-  result = result->LastContinuation();
-
-  return result;
+  return result->LastContinuation();
 }
 
 bool
@@ -5999,7 +6069,8 @@ nsLayoutUtils::PaintTextShadow(const nsIFrame* aFrame,
     nsContextBoxBlur contextBoxBlur;
     gfxContext* shadowContext = contextBoxBlur.Init(shadowRect, 0, blurRadius,
                                                     presCtx->AppUnitsPerDevPixel(),
-                                                    aDestCtx, aDirtyRect, nullptr);
+                                                    aDestCtx, aDirtyRect, nullptr,
+                                                    nsContextBoxBlur::DISABLE_HARDWARE_ACCELERATION_BLUR);
     if (!shadowContext)
       continue;
 
@@ -6463,8 +6534,8 @@ ComputeSnappedImageDrawingParameters(gfxContext*     aCtx,
   // and has integer coordinates. If not, we need these properties to compute
   // the optimal drawn image size, so compute |snappedDestSize| here.
   gfxSize snappedDestSize = dest.Size();
+  gfxSize scaleFactors = currentMatrix.ScaleFactors(true);
   if (!didSnap) {
-    gfxSize scaleFactors = currentMatrix.ScaleFactors(true);
     snappedDestSize.Scale(scaleFactors.width, scaleFactors.height);
     snappedDestSize.width = NS_round(snappedDestSize.width);
     snappedDestSize.height = NS_round(snappedDestSize.height);
@@ -6476,7 +6547,7 @@ ComputeSnappedImageDrawingParameters(gfxContext*     aCtx,
   snappedDestSize.height = std::max(snappedDestSize.height, 1.0);
 
   // Bail if we're not going to end up drawing anything.
-  if (fill.IsEmpty() || snappedDestSize.IsEmpty()) {
+  if (fill.IsEmpty()) {
     return SnappedImageDrawingParameters();
   }
 
@@ -6484,12 +6555,24 @@ ComputeSnappedImageDrawingParameters(gfxContext*     aCtx,
     aImage->OptimalImageSizeForDest(snappedDestSize,
                                     imgIContainer::FRAME_CURRENT,
                                     aSamplingFilter, aImageFlags);
-  gfxSize imageSize(intImageSize.width, intImageSize.height);
 
-  // XXX(seth): May be buggy; see bug 1151016.
-  CSSIntSize svgViewportSize = currentMatrix.IsIdentity()
-    ? CSSIntSize(intImageSize.width, intImageSize.height)
-    : CSSIntSize::Truncate(devPixelDest.width, devPixelDest.height);
+  nsIntSize svgViewportSize;
+  if (scaleFactors.width == 1.0 && scaleFactors.height == 1.0) {
+    // intImageSize is scaled by currentMatrix. But since there are no scale
+    // factors in currentMatrix, it is safe to assign intImageSize to
+    // svgViewportSize directly.
+    svgViewportSize = intImageSize;
+  } else {
+    // We should not take into account any transformation of currentMatrix
+    // when computing svg viewport size. Since currentMatrix contains scale
+    // factors, we need to recompute SVG viewport by unscaled devPixelDest.
+    svgViewportSize = aImage->OptimalImageSizeForDest(devPixelDest.Size(),
+                                                      imgIContainer::FRAME_CURRENT,
+                                                      aSamplingFilter,
+                                                      aImageFlags);
+  }
+
+  gfxSize imageSize(intImageSize.width, intImageSize.height);
 
   // Compute the set of pixels that would be sampled by an ideal rendering
   gfxPoint subimageTopLeft =
@@ -6536,7 +6619,7 @@ ComputeSnappedImageDrawingParameters(gfxContext*     aCtx,
       imageSpaceAnchorPoint = StableRound(imageSpaceAnchorPoint);
       anchorPoint = imageSpaceAnchorPoint;
       anchorPoint = MapToFloatUserPixels(imageSize, devPixelDest, anchorPoint);
-      anchorPoint = currentMatrix.Transform(anchorPoint);
+      anchorPoint = currentMatrix.TransformPoint(anchorPoint);
       anchorPoint = StableRound(anchorPoint);
     }
 
@@ -6576,14 +6659,14 @@ ComputeSnappedImageDrawingParameters(gfxContext*     aCtx,
   if (didSnap && !invTransform.HasNonIntegerTranslation()) {
     // This form of Transform is safe to call since non-axis-aligned
     // transforms wouldn't be snapped.
-    devPixelDirty = currentMatrix.Transform(devPixelDirty);
+    devPixelDirty = currentMatrix.TransformRect(devPixelDirty);
     devPixelDirty.RoundOut();
     fill = fill.Intersect(devPixelDirty);
   }
   if (fill.IsEmpty())
     return SnappedImageDrawingParameters();
 
-  gfxRect imageSpaceFill(didSnap ? invTransform.Transform(fill)
+  gfxRect imageSpaceFill(didSnap ? invTransform.TransformRect(fill)
                                  : invTransform.TransformBounds(fill));
 
   // If we didn't snap, we need to post-multiply the matrix on the context to
@@ -6606,7 +6689,9 @@ ComputeSnappedImageDrawingParameters(gfxContext*     aCtx,
     ImageRegion::CreateWithSamplingRestriction(imageSpaceFill, subimage, extendMode);
 
   return SnappedImageDrawingParameters(transform, intImageSize,
-                                       region, svgViewportSize);
+                                       region,
+                                       CSSIntSize(svgViewportSize.width,
+                                                  svgViewportSize.height));
 }
 
 static DrawResult
@@ -6650,9 +6735,7 @@ DrawImageInternal(gfxContext&            aContext,
   {
     gfxContextMatrixAutoSaveRestore contextMatrixRestorer(&aContext);
 
-    RefPtr<gfxContext> destCtx = &aContext;
-
-    destCtx->SetMatrix(params.imageSpaceToDeviceSpace);
+    aContext.SetMatrix(params.imageSpaceToDeviceSpace);
 
     Maybe<SVGImageContext> fallbackContext;
     if (!aSVGContext) {
@@ -6660,7 +6743,7 @@ DrawImageInternal(gfxContext&            aContext,
       fallbackContext.emplace(Some(params.svgViewportSize));
     }
 
-    result = aImage->Draw(destCtx, params.size, params.region,
+    result = aImage->Draw(&aContext, params.size, params.region,
                           imgIContainer::FRAME_CURRENT, aSamplingFilter,
                           aSVGContext ? aSVGContext : fallbackContext,
                           aImageFlags, aOpacity);
@@ -6850,8 +6933,7 @@ nsLayoutUtils::DrawBackgroundImage(gfxContext&         aContext,
                                    ExtendMode          aExtendMode,
                                    float               aOpacity)
 {
-  PROFILER_LABEL("layout", "nsLayoutUtils::DrawBackgroundImage",
-                 js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("nsLayoutUtils::DrawBackgroundImage", GRAPHICS);
 
   Maybe<SVGImageContext> svgContext(Some(SVGImageContext(Some(aImageSize))));
   SVGImageContext::MaybeStoreContextPaint(svgContext, aForFrame, aImage);
@@ -7246,7 +7328,9 @@ nsLayoutUtils::SurfaceFromOffscreenCanvas(OffscreenCanvas* aOffscreenCanvas,
     // If the element doesn't have a context then we won't get a snapshot. The canvas spec wants us to not error and just
     // draw nothing, so return an empty surface.
     result.mAlphaType = gfxAlphaType::Opaque;
-    DrawTarget *ref = aTarget ? aTarget.get() : gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget();
+    RefPtr<DrawTarget> ref =
+      aTarget ? aTarget
+              : gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget();
     RefPtr<DrawTarget> dt = ref->CreateSimilarDrawTarget(IntSize(size.width, size.height),
                                                          SurfaceFormat::B8G8R8A8);
     if (dt) {
@@ -7414,7 +7498,9 @@ nsLayoutUtils::SurfaceFromElement(HTMLCanvasElement* aElement,
     // If the element doesn't have a context then we won't get a snapshot. The canvas spec wants us to not error and just
     // draw nothing, so return an empty surface.
     result.mAlphaType = gfxAlphaType::Opaque;
-    DrawTarget *ref = aTarget ? aTarget.get() : gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget();
+    RefPtr<DrawTarget> ref =
+      aTarget ? aTarget
+              : gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget();
     RefPtr<DrawTarget> dt = ref->CreateSimilarDrawTarget(IntSize(size.width, size.height),
                                                         SurfaceFormat::B8G8R8A8);
     if (dt) {
@@ -7786,8 +7872,14 @@ nsLayoutUtils::Initialize()
   Preferences::AddBoolVarCache(&sTextCombineUprightDigitsEnabled,
                                "layout.css.text-combine-upright-digits.enabled");
 #ifdef MOZ_STYLO
-  Preferences::AddBoolVarCache(&sStyloEnabled,
-                               "layout.css.servo.enabled");
+  if (PR_GetEnv("STYLO_FORCE_ENABLED")) {
+    sStyloEnabled = true;
+  } else if (PR_GetEnv("STYLO_FORCE_DISABLED")) {
+    sStyloEnabled = false;
+  } else {
+    Preferences::AddBoolVarCache(&sStyloEnabled,
+                                 "layout.css.servo.enabled");
+  }
 #endif
   Preferences::AddBoolVarCache(&sStyleAttrWithXMLBaseDisabled,
                                "layout.css.style-attr-with-xml-base.disabled");
@@ -7931,19 +8023,23 @@ nsLayoutUtils::PostRestyleEvent(Element* aElement,
   }
 }
 
-nsSetAttrRunnable::nsSetAttrRunnable(nsIContent* aContent, nsIAtom* aAttrName,
+nsSetAttrRunnable::nsSetAttrRunnable(nsIContent* aContent,
+                                     nsIAtom* aAttrName,
                                      const nsAString& aValue)
-  : mContent(aContent),
-    mAttrName(aAttrName),
-    mValue(aValue)
+  : mozilla::Runnable("nsSetAttrRunnable")
+  , mContent(aContent)
+  , mAttrName(aAttrName)
+  , mValue(aValue)
 {
   NS_ASSERTION(aContent && aAttrName, "Missing stuff, prepare to crash");
 }
 
-nsSetAttrRunnable::nsSetAttrRunnable(nsIContent* aContent, nsIAtom* aAttrName,
+nsSetAttrRunnable::nsSetAttrRunnable(nsIContent* aContent,
+                                     nsIAtom* aAttrName,
                                      int32_t aValue)
-  : mContent(aContent),
-    mAttrName(aAttrName)
+  : mozilla::Runnable("nsSetAttrRunnable")
+  , mContent(aContent)
+  , mAttrName(aAttrName)
 {
   NS_ASSERTION(aContent && aAttrName, "Missing stuff, prepare to crash");
   mValue.AppendInt(aValue);
@@ -7957,8 +8053,9 @@ nsSetAttrRunnable::Run()
 
 nsUnsetAttrRunnable::nsUnsetAttrRunnable(nsIContent* aContent,
                                          nsIAtom* aAttrName)
-  : mContent(aContent),
-    mAttrName(aAttrName)
+  : mozilla::Runnable("nsUnsetAttrRunnable")
+  , mContent(aContent)
+  , mAttrName(aAttrName)
 {
   NS_ASSERTION(aContent && aAttrName, "Missing stuff, prepare to crash");
 }
@@ -8474,6 +8571,7 @@ nsLayoutUtils::DoLogTestDataForPaint(LayerManager* aManager,
                                      const std::string& aKey,
                                      const std::string& aValue)
 {
+  MOZ_ASSERT(nsLayoutUtils::IsAPZTestLoggingEnabled(), "don't call me");
   if (ClientLayerManager* mgr = aManager->AsClientLayerManager()) {
     mgr->LogTestDataForCurrentPaint(aScrollId, aKey, aValue);
   } else if (WebRenderLayerManager* wrlm = aManager->AsWebRenderLayerManager()) {
@@ -8784,13 +8882,17 @@ nsLayoutUtils::ComputeScrollMetadata(nsIFrame* aForFrame,
     nsRect dp;
     if (nsLayoutUtils::GetDisplayPort(aContent, &dp)) {
       metrics.SetDisplayPort(CSSRect::FromAppUnits(dp));
-      nsLayoutUtils::LogTestDataForPaint(aLayer->Manager(), scrollId, "displayport",
-          metrics.GetDisplayPort());
+      if (IsAPZTestLoggingEnabled()) {
+        LogTestDataForPaint(aLayer->Manager(), scrollId, "displayport",
+                            metrics.GetDisplayPort());
+      }
     }
     if (nsLayoutUtils::GetCriticalDisplayPort(aContent, &dp)) {
       metrics.SetCriticalDisplayPort(CSSRect::FromAppUnits(dp));
-      nsLayoutUtils::LogTestDataForPaint(aLayer->Manager(), scrollId,
-          "criticalDisplayport", metrics.GetCriticalDisplayPort());
+      if (IsAPZTestLoggingEnabled()) {
+        LogTestDataForPaint(aLayer->Manager(), scrollId, "criticalDisplayport",
+                            metrics.GetCriticalDisplayPort());
+      }
     }
     DisplayPortMarginsPropertyData* marginsData =
         static_cast<DisplayPortMarginsPropertyData*>(aContent->GetProperty(nsGkAtoms::DisplayPortMargins));
@@ -8951,8 +9053,10 @@ nsLayoutUtils::ComputeScrollMetadata(nsIFrame* aForFrame,
       nsAutoString contentDescription;
       content->Describe(contentDescription);
       metadata.SetContentDescription(NS_LossyConvertUTF16toASCII(contentDescription));
-      nsLayoutUtils::LogTestDataForPaint(aLayer->Manager(), scrollId, "contentDescription",
-          metadata.GetContentDescription().get());
+      if (IsAPZTestLoggingEnabled()) {
+        LogTestDataForPaint(aLayer->Manager(), scrollId, "contentDescription",
+                            metadata.GetContentDescription().get());
+      }
     }
   }
 
@@ -8986,6 +9090,65 @@ nsLayoutUtils::ComputeScrollMetadata(nsIFrame* aForFrame,
   }
 
   return metadata;
+}
+
+/*static*/ Maybe<ScrollMetadata>
+nsLayoutUtils::GetRootMetadata(nsDisplayListBuilder* aBuilder,
+                               Layer* aRootLayer,
+                               const ContainerLayerParameters& aContainerParameters,
+                               const std::function<bool(ViewID& aScrollId)>& aCallback)
+{
+  nsIFrame* frame = aBuilder->RootReferenceFrame();
+  nsPresContext* presContext = frame->PresContext();
+  nsIPresShell* presShell = presContext->PresShell();
+  nsIDocument* document = presShell->GetDocument();
+
+  // If we're using containerless scrolling, there is still one case where we
+  // want the root container layer to have metrics. If the parent process is
+  // using XUL windows, there is no root scrollframe, and without explicitly
+  // creating metrics there will be no guaranteed top-level APZC.
+  bool addMetrics = gfxPrefs::LayoutUseContainersForRootFrames() ||
+      (XRE_IsParentProcess() && !presShell->GetRootScrollFrame());
+
+  // Add metrics if there are none in the layer tree with the id (create an id
+  // if there isn't one already) of the root scroll frame/root content.
+  bool ensureMetricsForRootId =
+    nsLayoutUtils::AsyncPanZoomEnabled(frame) &&
+    !gfxPrefs::LayoutUseContainersForRootFrames() &&
+    aBuilder->IsPaintingToWindow() &&
+    !presContext->GetParentPresContext();
+
+  nsIContent* content = nullptr;
+  nsIFrame* rootScrollFrame = presShell->GetRootScrollFrame();
+  if (rootScrollFrame) {
+    content = rootScrollFrame->GetContent();
+  } else {
+    // If there is no root scroll frame, pick the document element instead.
+    // The only case we don't want to do this is in non-APZ fennec, where
+    // we want the root xul document to get a null scroll id so that the root
+    // content document gets the first non-null scroll id.
+    content = document->GetDocumentElement();
+  }
+
+  if (ensureMetricsForRootId && content) {
+    ViewID scrollId = nsLayoutUtils::FindOrCreateIDFor(content);
+    if (aCallback(scrollId)) {
+      ensureMetricsForRootId = false;
+    }
+  }
+
+  if (addMetrics || ensureMetricsForRootId) {
+    bool isRootContent = presContext->IsRootContentDocument();
+
+    nsRect viewport(aBuilder->ToReferenceFrame(frame), frame->GetSize());
+    return Some(nsLayoutUtils::ComputeScrollMetadata(frame,
+                           rootScrollFrame, content,
+                           aBuilder->FindReferenceFrameFor(frame),
+                           aRootLayer, FrameMetrics::NULL_SCROLL_ID, viewport, Nothing(),
+                           isRootContent, aContainerParameters));
+  }
+
+  return Nothing();
 }
 
 /* static */ bool
@@ -9125,9 +9288,11 @@ nsLayoutUtils::GetSelectionBoundingRect(Selection* aSel)
     for (int32_t idx = 0; idx < rangeCount; ++idx) {
       nsRange* range = aSel->GetRangeAt(idx);
       nsRange::CollectClientRectsAndText(&accumulator, nullptr, range,
-                                  range->GetStartParent(), range->StartOffset(),
-                                  range->GetEndParent(), range->EndOffset(),
-                                  true, false);
+                                         range->GetStartContainer(),
+                                         range->StartOffset(),
+                                         range->GetEndContainer(),
+                                         range->EndOffset(),
+                                         true, false);
     }
     res = accumulator.mResultRect.IsEmpty() ? accumulator.mFirstRect :
       accumulator.mResultRect;
@@ -9243,8 +9408,9 @@ static void UpdateDisplayPortMarginsForPendingMetrics(FrameMetrics& aMetrics) {
 /* static */ void
 nsLayoutUtils::UpdateDisplayPortMarginsFromPendingMessages()
 {
-  if (mozilla::dom::ContentChild::GetSingleton() &&
-      mozilla::dom::ContentChild::GetSingleton()->GetIPCChannel()) {
+  if (XRE_IsContentProcess() &&
+      mozilla::layers::CompositorBridgeChild::Get() &&
+      mozilla::layers::CompositorBridgeChild::Get()->GetIPCChannel()) {
     CompositorBridgeChild::Get()->GetIPCChannel()->PeekMessages(
       [](const IPC::Message& aMsg) -> bool {
         if (aMsg.type() == mozilla::layers::PAPZ::Msg_RequestContentRepaint__ID) {

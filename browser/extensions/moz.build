@@ -5,10 +5,12 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 DIRS += [
+    'activity-stream',
     'aushelper',
-    'clicktoplay-rollout',
     'e10srollout',
     'followonsearch',
+    'formautofill',
+    'onboarding',
     'pdfjs',
     'pocket',
     'screenshots',
@@ -20,7 +22,6 @@ DIRS += [
 if not CONFIG['RELEASE_OR_BETA']:
     DIRS += [
         'flyweb',
-        'formautofill',
         'presentation',
     ]
 
@@ -36,9 +37,8 @@ if CONFIG['MOZ_MORTAR']:
         'mortar',
     ]
 
-# Nightly-only system add-ons
-if CONFIG['NIGHTLY_BUILD']:
+# Add ASan reporter system add-on if requested
+if CONFIG['MOZ_ASAN_REPORTER']:
     DIRS += [
-        'activity-stream',
-        'onboarding',
+        'asan-reporter',
     ]

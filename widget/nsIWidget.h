@@ -61,6 +61,7 @@ class CompositorBridgeChild;
 class LayerManager;
 class LayerManagerComposite;
 class PLayerTransactionChild;
+class WebRenderBridgeChild;
 struct ScrollableLayerGuid;
 } // namespace layers
 namespace gfx {
@@ -73,6 +74,10 @@ class TextEventDispatcherListener;
 class CompositorWidget;
 class CompositorWidgetInitData;
 } // namespace widget
+namespace wr {
+class DisplayListBuilder;
+class IpcResourceUpdateQueue;
+} // namespace wr
 } // namespace mozilla
 
 /**
@@ -206,8 +211,12 @@ enum nsCursor {   ///(normal cursor,       usually rendered as an arrow)
                 eCursor_ns_resize,
                 eCursor_ew_resize,
                 eCursor_none,
-                // This one better be the last one in this list.
-                eCursorCount
+                // This one is used for array sizing, and so better be the last
+                // one in this list...
+                eCursorCount,
+
+                // ...except for this one.
+                eCursorInvalid = eCursorCount + 1
                 };
 
 enum nsTopLevelWidgetZPlacement { // for PlaceBehind()
@@ -336,6 +345,7 @@ class nsIWidget : public nsISupports
     typedef mozilla::layers::LayerManagerComposite LayerManagerComposite;
     typedef mozilla::layers::LayersBackend LayersBackend;
     typedef mozilla::layers::PLayerTransactionChild PLayerTransactionChild;
+    typedef mozilla::layers::ScrollableLayerGuid ScrollableLayerGuid;
     typedef mozilla::layers::ZoomConstraints ZoomConstraints;
     typedef mozilla::widget::IMEMessage IMEMessage;
     typedef mozilla::widget::IMENotification IMENotification;
@@ -358,6 +368,7 @@ class nsIWidget : public nsISupports
     typedef mozilla::ScreenPoint ScreenPoint;
     typedef mozilla::CSSToScreenScale CSSToScreenScale;
     typedef mozilla::DesktopIntRect DesktopIntRect;
+    typedef mozilla::CSSPoint CSSPoint;
     typedef mozilla::CSSRect CSSRect;
 
     // Used in UpdateThemeGeometries.
@@ -831,6 +842,11 @@ class nsIWidget : public nsISupports
     virtual void SetSizeMode(nsSizeMode aMode) = 0;
 
     /**
+     * Suppress animations that are applied to a window by OS.
+     */
+    virtual void SuppressAnimation(bool aSuppress) {}
+
+    /**
      * Return size mode (minimized, maximized, normalized).
      * Returns a value from nsSizeMode (see nsIWidgetListener.h)
      */
@@ -1280,6 +1296,20 @@ class nsIWidget : public nsISupports
     virtual void PrepareWindowEffects() = 0;
 
     /**
+     * Called on the main thread at the end of WebRender display list building.
+     */
+    virtual void AddWindowOverlayWebRenderCommands(mozilla::layers::WebRenderBridgeChild* aWrBridge,
+                                                   mozilla::wr::DisplayListBuilder& aBuilder,
+                                                   mozilla::wr::IpcResourceUpdateQueue& aResources) {}
+
+    /**
+     * Called on the main thread when WebRender resources used for
+     * AddWindowOverlayWebRenderCommands need to be destroyed.
+     */
+    virtual void CleanupWebRenderWindowOverlay(mozilla::layers::WebRenderBridgeChild* aWrBridge,
+                                               mozilla::wr::IpcResourceUpdateQueue& aResources) {}
+
+    /**
      * Called when Gecko knows which themed widgets exist in this window.
      * The passed array contains an entry for every themed widget of the right
      * type (currently only NS_THEME_TOOLBAR) within the window, except for
@@ -1381,7 +1411,7 @@ class nsIWidget : public nsISupports
      * not need a layers update to process the event.
      */
     virtual void SetConfirmedTargetAPZC(uint64_t aInputBlockId,
-                                        const nsTArray<mozilla::layers::ScrollableLayerGuid>& aTargets) const = 0;
+                                        const nsTArray<ScrollableLayerGuid>& aTargets) const = 0;
 
     /**
      * Returns true if APZ is in use, false otherwise.
@@ -1392,6 +1422,7 @@ class nsIWidget : public nsISupports
      * Enables the dropping of files to a widget.
      */
     virtual void EnableDragDrop(bool aEnable) = 0;
+    virtual nsresult AsyncEnableDragDrop(bool aEnable) = 0;
 
     /**
      * Enables/Disables system mouse capture.
@@ -1664,6 +1695,20 @@ class nsIWidget : public nsISupports
     virtual nsresult ClearNativeTouchSequence(nsIObserver* aObserver);
 
     virtual void StartAsyncScrollbarDrag(const AsyncDragMetrics& aDragMetrics) = 0;
+
+    /**
+     * Notify APZ to start autoscrolling.
+     * @param aAnchorLocation the location of the autoscroll anchor
+     * @param aGuid identifies the scroll frame to be autoscrolled
+     */
+    virtual void StartAsyncAutoscroll(const ScreenPoint& aAnchorLocation,
+                                      const ScrollableLayerGuid& aGuid) = 0;
+
+    /**
+     * Notify APZ to stop autoscrolling.
+     * @param aGuid identifies the scroll frame which is being autoscrolled.
+     */
+    virtual void StopAsyncAutoscroll(const ScrollableLayerGuid& aGuid) = 0;
 
     // If this widget supports out-of-process compositing, it can override
     // this method to provide additional information to the compositor.
@@ -2056,9 +2101,8 @@ public:
      *
      * @param aScrollOffset  page scroll offset value in screen pixels.
      * @param aZoom          current page zoom.
-     * @param aPage          bounds of the page in CSS coordinates.
      */
-    virtual void UpdateRootFrameMetrics(const ScreenPoint& aScrollOffset, const CSSToScreenScale& aZoom, const CSSRect& aPage) = 0;
+    virtual void UpdateRootFrameMetrics(const ScreenPoint& aScrollOffset, const CSSToScreenScale& aZoom) = 0;
 
     /**
      * RecvScreenPixels Buffer containing the pixel from the frame buffer. Used for android robocop tests.

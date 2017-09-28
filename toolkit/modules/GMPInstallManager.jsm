@@ -21,8 +21,7 @@ var GMPInstallFailureReason = {
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
-Cu.import("resource://gre/modules/Promise.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
+Cu.import("resource://gre/modules/PromiseUtils.jsm");
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
 Cu.import("resource://gre/modules/GMPUtils.jsm");
@@ -59,19 +58,19 @@ GMPInstallManager.prototype = {
   /**
    * Obtains a URL with replacement of vars
    */
-  _getURL() {
+  async _getURL() {
     let log = getScopedLogger("GMPInstallManager._getURL");
     // Use the override URL if it is specified.  The override URL is just like
     // the normal URL but it does not check the cert.
-    let url = GMPPrefs.get(GMPPrefs.KEY_URL_OVERRIDE);
+    let url = GMPPrefs.getString(GMPPrefs.KEY_URL_OVERRIDE, "");
     if (url) {
       log.info("Using override url: " + url);
     } else {
-      url = GMPPrefs.get(GMPPrefs.KEY_URL);
+      url = GMPPrefs.getString(GMPPrefs.KEY_URL);
       log.info("Using url: " + url);
     }
 
-    url = UpdateUtils.formatUpdateURL(url);
+    url = await UpdateUtils.formatUpdateURL(url);
 
     log.info("Using url (with replacement): " + url);
     return url;
@@ -88,26 +87,27 @@ GMPInstallManager.prototype = {
    *           status: The HTTP status code
    *           type: Sometimes specifies type of rejection
    */
-  checkForAddons() {
+  async checkForAddons() {
     let log = getScopedLogger("GMPInstallManager.checkForAddons");
     if (this._deferred) {
         log.error("checkForAddons already called");
         return Promise.reject({type: "alreadycalled"});
     }
-    this._deferred = Promise.defer();
-    let url = this._getURL();
+    this._deferred = PromiseUtils.defer();
 
     let allowNonBuiltIn = true;
     let certs = null;
     if (!Services.prefs.prefHasUserValue(GMPPrefs.KEY_URL_OVERRIDE)) {
-      allowNonBuiltIn = !GMPPrefs.get(GMPPrefs.KEY_CERT_REQUIREBUILTIN, true);
-      if (GMPPrefs.get(GMPPrefs.KEY_CERT_CHECKATTRS, true)) {
+      allowNonBuiltIn = !GMPPrefs.getString(GMPPrefs.KEY_CERT_REQUIREBUILTIN, true);
+      if (GMPPrefs.getBool(GMPPrefs.KEY_CERT_CHECKATTRS, true)) {
         certs = gCertUtils.readCertPrefs(GMPPrefs.KEY_CERTS_BRANCH);
       }
     }
 
+    let url = await this._getURL();
+
     let addonPromise = ProductAddonChecker
-      .getProductAddonList(url, allowNonBuiltIn, certs);
+        .getProductAddonList(url, allowNonBuiltIn, certs);
 
     addonPromise.then(res => {
       if (!res || !res.gmpAddons) {
@@ -121,7 +121,6 @@ GMPInstallManager.prototype = {
       this._deferred.reject(ex);
       delete this._deferred;
     });
-
     return this._deferred.promise;
   },
   /**
@@ -148,7 +147,7 @@ GMPInstallManager.prototype = {
     let now = Math.round(Date.now() / 1000);
     // Default to 0 here because `now - 0` will be returned later if that case
     // is hit. We want a large value so a check will occur.
-    let lastCheck = GMPPrefs.get(GMPPrefs.KEY_UPDATE_LAST_CHECK, 0);
+    let lastCheck = GMPPrefs.getInt(GMPPrefs.KEY_UPDATE_LAST_CHECK, 0);
     // Handle clock jumps, return now since we want it to represent
     // a lot of time has passed since the last check.
     if (now < lastCheck) {
@@ -157,26 +156,26 @@ GMPInstallManager.prototype = {
     return now - lastCheck;
   },
   get _isEMEEnabled() {
-    return GMPPrefs.get(GMPPrefs.KEY_EME_ENABLED, true);
+    return GMPPrefs.getBool(GMPPrefs.KEY_EME_ENABLED, true);
   },
   _isAddonEnabled(aAddon) {
-    return GMPPrefs.get(GMPPrefs.KEY_PLUGIN_ENABLED, true, aAddon);
+    return GMPPrefs.getBool(GMPPrefs.KEY_PLUGIN_ENABLED, true, aAddon);
   },
   _isAddonUpdateEnabled(aAddon) {
     return this._isAddonEnabled(aAddon) &&
-           GMPPrefs.get(GMPPrefs.KEY_PLUGIN_AUTOUPDATE, true, aAddon);
+           GMPPrefs.getBool(GMPPrefs.KEY_PLUGIN_AUTOUPDATE, true, aAddon);
   },
   _updateLastCheck() {
     let now = Math.round(Date.now() / 1000);
-    GMPPrefs.set(GMPPrefs.KEY_UPDATE_LAST_CHECK, now);
+    GMPPrefs.setInt(GMPPrefs.KEY_UPDATE_LAST_CHECK, now);
   },
   _versionchangeOccurred() {
-    let savedBuildID = GMPPrefs.get(GMPPrefs.KEY_BUILDID, null);
-    let buildID = Services.appinfo.platformBuildID;
+    let savedBuildID = GMPPrefs.getString(GMPPrefs.KEY_BUILDID, "");
+    let buildID = Services.appinfo.platformBuildID || "";
     if (savedBuildID == buildID) {
       return false;
     }
-    GMPPrefs.set(GMPPrefs.KEY_BUILDID, buildID);
+    GMPPrefs.setString(GMPPrefs.KEY_BUILDID, buildID);
     return true;
   },
   /**
@@ -195,8 +194,8 @@ GMPInstallManager.prototype = {
                "new or updated GMPs.");
     } else {
       let secondsBetweenChecks =
-        GMPPrefs.get(GMPPrefs.KEY_SECONDS_BETWEEN_CHECKS,
-                     DEFAULT_SECONDS_BETWEEN_CHECKS)
+        GMPPrefs.getInt(GMPPrefs.KEY_SECONDS_BETWEEN_CHECKS,
+                        DEFAULT_SECONDS_BETWEEN_CHECKS)
       let secondsSinceLast = this._getTimeSinceLastCheck();
       log.info("Last check was: " + secondsSinceLast +
                " seconds ago, minimum seconds: " + secondsBetweenChecks);
@@ -350,7 +349,7 @@ GMPAddon.prototype = {
   },
   get isInstalled() {
     return this.version &&
-      GMPPrefs.get(GMPPrefs.KEY_PLUGIN_VERSION, "", this.id) === this.version;
+      GMPPrefs.getString(GMPPrefs.KEY_PLUGIN_VERSION, "", this.id) === this.version;
   },
   get isEME() {
     return this.id == "gmp-widevinecdm" || this.id.indexOf("gmp-eme-") == 0;
@@ -361,7 +360,7 @@ GMPAddon.prototype = {
    */
   get isUpdate() {
     return this.version &&
-      GMPPrefs.get(GMPPrefs.KEY_PLUGIN_VERSION, false, this.id);
+      GMPPrefs.getBool(GMPPrefs.KEY_PLUGIN_VERSION, false, this.id);
   },
 };
 /**
@@ -382,7 +381,7 @@ GMPExtractor.prototype = {
    *         See GMPInstallManager.installAddon for resolve/rejected info
    */
   install() {
-    this._deferred = Promise.defer();
+    this._deferred = PromiseUtils.defer();
     let deferredPromise = this._deferred;
     let {zipPath, relativeInstallPath} = this;
     let worker =
@@ -444,15 +443,15 @@ GMPDownloader.prototype = {
       return installPromise.then(extractedPaths => {
         // Success, set the prefs
         let now = Math.round(Date.now() / 1000);
-        GMPPrefs.set(GMPPrefs.KEY_PLUGIN_LAST_UPDATE, now, gmpAddon.id);
+        GMPPrefs.setInt(GMPPrefs.KEY_PLUGIN_LAST_UPDATE, now, gmpAddon.id);
         // Remember our ABI, so that if the profile is migrated to another
         // platform or from 32 -> 64 bit, we notice and don't try to load the
         // unexecutable plugin library.
-        GMPPrefs.set(GMPPrefs.KEY_PLUGIN_ABI, UpdateUtils.ABI, gmpAddon.id);
+        GMPPrefs.setString(GMPPrefs.KEY_PLUGIN_ABI, UpdateUtils.ABI, gmpAddon.id);
         // Setting the version pref signals installation completion to consumers,
         // if you need to set other prefs etc. do it before this.
-        GMPPrefs.set(GMPPrefs.KEY_PLUGIN_VERSION, gmpAddon.version,
-                     gmpAddon.id);
+        GMPPrefs.setString(GMPPrefs.KEY_PLUGIN_VERSION, gmpAddon.version,
+                           gmpAddon.id);
         return extractedPaths;
       });
     });

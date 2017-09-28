@@ -37,10 +37,6 @@ NS_IMPL_RELEASE_INHERITED(HTMLSharedElement, Element)
 // QueryInterface implementation for HTMLSharedElement
 NS_INTERFACE_MAP_BEGIN(HTMLSharedElement)
   NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLBaseElement, base)
-  NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLDirectoryElement, dir)
-  NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLQuoteElement, q)
-  NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLQuoteElement, blockquote)
-  NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLHeadElement, head)
   NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLHtmlElement, html)
 NS_INTERFACE_MAP_END_INHERITING(nsGenericHTMLElement)
 
@@ -48,7 +44,7 @@ NS_INTERFACE_MAP_END_INHERITING(nsGenericHTMLElement)
 NS_IMPL_ELEMENT_CLONE(HTMLSharedElement)
 
 // nsIDOMHTMLQuoteElement
-NS_IMPL_URI_ATTR(HTMLSharedElement, Cite, cite)
+// Empty
 
 // nsIDOMHTMLHeadElement
 // Empty
@@ -76,7 +72,7 @@ HTMLSharedElement::GetHref(nsAString& aValue)
     aValue = href;
     return NS_OK;
   }
-  
+
   nsAutoCString spec;
   uri->GetSpec(spec);
   CopyUTF8toUTF16(spec, aValue);
@@ -139,9 +135,9 @@ HTMLSharedElement::IsAttributeMapped(const nsIAtom* aAttribute) const
     static const MappedAttributeEntry attributes[] = {
       { &nsGkAtoms::type },
       // { &nsGkAtoms::compact }, // XXX
-      { nullptr} 
+      { nullptr}
     };
-  
+
     static const MappedAttributeEntry* const map[] = {
       attributes,
       sCommonAttributeMap,

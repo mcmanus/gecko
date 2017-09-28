@@ -4,83 +4,173 @@
 
 //! Specified types for CSS values related to effects.
 
-use cssparser::{BasicParseError, Parser, Token};
+use cssparser::{Parser, Token, BasicParseError};
 use parser::{Parse, ParserContext};
-#[cfg(feature = "gecko")]
-use std::fmt;
-use style_traits::ParseError;
+use style_traits::{ParseError, StyleParseError, ValueParseError};
 #[cfg(not(feature = "gecko"))]
-use style_traits::StyleParseError;
-#[cfg(feature = "gecko")]
-use style_traits::ToCss;
-use values::computed::{Context, Number as ComputedNumber, ToComputedValue};
-use values::computed::effects::DropShadow as ComputedDropShadow;
+use values::Impossible;
+use values::computed::{Context, NonNegativeNumber as ComputedNonNegativeNumber, ToComputedValue};
+use values::computed::effects::BoxShadow as ComputedBoxShadow;
+use values::computed::effects::SimpleShadow as ComputedSimpleShadow;
+use values::generics::NonNegative;
+use values::generics::effects::BoxShadow as GenericBoxShadow;
 use values::generics::effects::Filter as GenericFilter;
-use values::generics::effects::FilterList as GenericFilterList;
-use values::specified::{Angle, Percentage};
-#[cfg(feature = "gecko")]
-use values::specified::color::Color;
-use values::specified::length::Length;
+use values::generics::effects::SimpleShadow as GenericSimpleShadow;
+use values::specified::{Angle, NumberOrPercentage};
+use values::specified::color::RGBAColor;
+use values::specified::length::{Length, NonNegativeLength};
 #[cfg(feature = "gecko")]
 use values::specified::url::SpecifiedUrl;
 
-/// A specified value for the `filter` property.
-pub type FilterList = GenericFilterList<Filter>;
+/// A specified value for a single shadow of the `box-shadow` property.
+pub type BoxShadow = GenericBoxShadow<Option<RGBAColor>, Length,
+                                      Option<NonNegativeLength>, Option<Length>>;
 
 /// A specified value for a single `filter`.
-pub type Filter = GenericFilter<Angle, Factor, Length, DropShadow>;
+#[cfg(feature = "gecko")]
+pub type Filter = GenericFilter<Angle, Factor, NonNegativeLength, SimpleShadow>;
+
+/// A specified value for a single `filter`.
+#[cfg(not(feature = "gecko"))]
+pub type Filter = GenericFilter<Angle, Factor, NonNegativeLength, Impossible>;
 
 /// A value for the `<factor>` parts in `Filter`.
-///
-/// FIXME: Should be `NumberOrPercentage`, but Gecko doesn't support that yet.
-#[cfg_attr(feature = "servo", derive(Deserialize, HeapSizeOf, Serialize))]
-#[derive(Clone, Debug, HasViewportPercentage, PartialEq, ToCss)]
-pub enum Factor {
-    /// Literal number.
-    Number(ComputedNumber),
-    /// Literal percentage.
-    Percentage(Percentage),
+#[derive(Clone, Debug, PartialEq, ToCss)]
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+pub struct Factor(NumberOrPercentage);
+
+impl Factor {
+    /// Parse this factor but clamp to one if the value is over 100%.
+    #[inline]
+    pub fn parse_with_clamping_to_one<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>
+    ) -> Result<Self, ParseError<'i>> {
+        Factor::parse(context, input).map(|v| v.clamp_to_one())
+    }
+
+    /// Clamp the value to 1 if the value is over 100%.
+    #[inline]
+    fn clamp_to_one(self) -> Self {
+        match self.0 {
+            NumberOrPercentage::Percentage(percent) => {
+                Factor(NumberOrPercentage::Percentage(percent.clamp_to_hundred()))
+            },
+            NumberOrPercentage::Number(number) => {
+                Factor(NumberOrPercentage::Number(number.clamp_to_one()))
+            }
+        }
+    }
 }
 
-/// A specified value for the `drop-shadow()` filter.
-///
-/// Currently unsupported outside of Gecko.
-#[cfg(not(feature = "gecko"))]
-#[cfg_attr(feature = "servo", derive(Deserialize, HeapSizeOf, Serialize))]
-#[derive(Clone, Debug, HasViewportPercentage, PartialEq, ToCss)]
-pub enum DropShadow {}
-
-/// A specified value for the `drop-shadow()` filter.
-///
-/// Contrary to the canonical order from the spec, the color is serialised
-/// first, like in Gecko's computed values and in all Webkit's values.
-#[cfg(feature = "gecko")]
-#[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
-pub struct DropShadow {
-    /// Color.
-    pub color: Option<Color>,
-    /// Horizontal radius.
-    pub horizontal: Length,
-    /// Vertical radius.
-    pub vertical: Length,
-    /// Blur radius.
-    pub blur: Option<Length>,
-}
-
-impl Parse for FilterList {
+impl Parse for Factor {
     #[inline]
     fn parse<'i, 't>(
         context: &ParserContext,
         input: &mut Parser<'i, 't>
     ) -> Result<Self, ParseError<'i>> {
-        let mut filters = vec![];
-        while let Ok(filter) = input.try(|i| Filter::parse(context, i)) {
-            filters.push(filter);
+        NumberOrPercentage::parse_non_negative(context, input).map(Factor)
+    }
+}
+
+impl ToComputedValue for Factor {
+    type ComputedValue = ComputedNonNegativeNumber;
+
+    #[inline]
+    fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
+        use values::computed::NumberOrPercentage;
+        match self.0.to_computed_value(context) {
+            NumberOrPercentage::Number(n) => n.into(),
+            NumberOrPercentage::Percentage(p) => p.0.into(),
         }
-        if filters.is_empty() {
-            input.expect_ident_matching("none")?;
+    }
+
+    #[inline]
+    fn from_computed_value(computed: &Self::ComputedValue) -> Self {
+        Factor(NumberOrPercentage::Number(ToComputedValue::from_computed_value(&computed.0)))
+    }
+}
+
+/// A specified value for the `drop-shadow()` filter.
+pub type SimpleShadow = GenericSimpleShadow<Option<RGBAColor>, Length, Option<NonNegativeLength>>;
+
+impl Parse for BoxShadow {
+    fn parse<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self, ParseError<'i>> {
+        let mut lengths = None;
+        let mut color = None;
+        let mut inset = false;
+
+        loop {
+            if !inset {
+                if input.try(|input| input.expect_ident_matching("inset")).is_ok() {
+                    inset = true;
+                    continue;
+                }
+            }
+            if lengths.is_none() {
+                let value = input.try::<_, _, ParseError>(|i| {
+                    let horizontal = Length::parse(context, i)?;
+                    let vertical = Length::parse(context, i)?;
+                    let (blur, spread) = match i.try::<_, _, ParseError>(|i| Length::parse_non_negative(context, i)) {
+                        Ok(blur) => {
+                            let spread = i.try(|i| Length::parse(context, i)).ok();
+                            (Some(blur.into()), spread)
+                        },
+                        Err(_) => (None, None),
+                    };
+                    Ok((horizontal, vertical, blur, spread))
+                });
+                if let Ok(value) = value {
+                    lengths = Some(value);
+                    continue;
+                }
+            }
+            if color.is_none() {
+                if let Ok(value) = input.try(|i| RGBAColor::parse(context, i)) {
+                    color = Some(value);
+                    continue;
+                }
+            }
+            break;
         }
-        Ok(GenericFilterList(filters.into_boxed_slice()))
+
+        let lengths = lengths.ok_or(StyleParseError::UnspecifiedError)?;
+        Ok(BoxShadow {
+            base: SimpleShadow {
+                color: color,
+                horizontal: lengths.0,
+                vertical: lengths.1,
+                blur: lengths.2,
+            },
+            spread: lengths.3,
+            inset: inset,
+        })
+    }
+}
+
+impl ToComputedValue for BoxShadow {
+    type ComputedValue = ComputedBoxShadow;
+
+    #[inline]
+    fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
+        ComputedBoxShadow {
+            base: self.base.to_computed_value(context),
+            spread: self.spread.as_ref().unwrap_or(&Length::zero()).to_computed_value(context),
+            inset: self.inset,
+        }
+    }
+
+    #[inline]
+    fn from_computed_value(computed: &ComputedBoxShadow) -> Self {
+        BoxShadow {
+            base: ToComputedValue::from_computed_value(&computed.base),
+            spread: Some(ToComputedValue::from_computed_value(&computed.spread)),
+            inset: computed.inset,
+        }
     }
 }
 
@@ -96,149 +186,87 @@ impl Parse for Filter {
                 return Ok(GenericFilter::Url(url));
             }
         }
-        let function = input.expect_function()?;
+        let function = match input.expect_function() {
+            Ok(f) => f.clone(),
+            Err(BasicParseError::UnexpectedToken(t)) =>
+                return Err(ValueParseError::InvalidFilter(t.clone()).into()),
+            Err(e) => return Err(e.into()),
+        };
         input.parse_nested_block(|i| {
-            try_match_ident_ignore_ascii_case! { function,
-                "blur" => Ok(GenericFilter::Blur(Length::parse_non_negative(context, i)?)),
+            match_ignore_ascii_case! { &*function,
+                "blur" => Ok(GenericFilter::Blur((Length::parse_non_negative(context, i)?).into())),
                 "brightness" => Ok(GenericFilter::Brightness(Factor::parse(context, i)?)),
                 "contrast" => Ok(GenericFilter::Contrast(Factor::parse(context, i)?)),
-                "grayscale" => Ok(GenericFilter::Grayscale(Factor::parse(context, i)?)),
+                "grayscale" => {
+                    // Values of amount over 100% are allowed but UAs must clamp the values to 1.
+                    // https://drafts.fxtf.org/filter-effects/#funcdef-filter-grayscale
+                    Ok(GenericFilter::Grayscale(Factor::parse_with_clamping_to_one(context, i)?))
+                },
                 "hue-rotate" => Ok(GenericFilter::HueRotate(Angle::parse(context, i)?)),
-                "invert" => Ok(GenericFilter::Invert(Factor::parse(context, i)?)),
-                "opacity" => Ok(GenericFilter::Opacity(Factor::parse(context, i)?)),
+                "invert" => {
+                    // Values of amount over 100% are allowed but UAs must clamp the values to 1.
+                    // https://drafts.fxtf.org/filter-effects/#funcdef-filter-invert
+                    Ok(GenericFilter::Invert(Factor::parse_with_clamping_to_one(context, i)?))
+                },
+                "opacity" => {
+                    // Values of amount over 100% are allowed but UAs must clamp the values to 1.
+                    // https://drafts.fxtf.org/filter-effects/#funcdef-filter-opacity
+                    Ok(GenericFilter::Opacity(Factor::parse_with_clamping_to_one(context, i)?))
+                },
                 "saturate" => Ok(GenericFilter::Saturate(Factor::parse(context, i)?)),
-                "sepia" => Ok(GenericFilter::Sepia(Factor::parse(context, i)?)),
-                "drop-shadow" => Ok(GenericFilter::DropShadow(DropShadow::parse(context, i)?)),
+                "sepia" => {
+                    // Values of amount over 100% are allowed but UAs must clamp the values to 1.
+                    // https://drafts.fxtf.org/filter-effects/#funcdef-filter-sepia
+                    Ok(GenericFilter::Sepia(Factor::parse_with_clamping_to_one(context, i)?))
+                },
+                "drop-shadow" => Ok(GenericFilter::DropShadow(Parse::parse(context, i)?)),
+                _ => Err(ValueParseError::InvalidFilter(Token::Function(function.clone())).into()),
             }
         })
     }
 }
 
-impl Parse for Factor {
-    #[inline]
-    fn parse<'i, 't>(
-        _context: &ParserContext,
-        input: &mut Parser<'i, 't>
-    ) -> Result<Self, ParseError<'i>> {
-        match input.next()? {
-            Token::Number { value, .. } if value.is_sign_positive() => {
-                Ok(Factor::Number(value))
-            },
-            Token::Percentage { unit_value, .. } if unit_value.is_sign_positive() => {
-                Ok(Factor::Percentage(Percentage(unit_value)))
-            },
-            other => Err(BasicParseError::UnexpectedToken(other).into()),
-        }
-    }
-}
-
-impl ToComputedValue for Factor {
-    /// This should actually be `ComputedNumberOrPercentage`, but layout uses
-    /// `computed::effects::FilterList` directly in `StackingContext`.
-    type ComputedValue = ComputedNumber;
-
-    #[inline]
-    fn to_computed_value(&self, _context: &Context) -> Self::ComputedValue {
-        match *self {
-            Factor::Number(number) => number,
-            Factor::Percentage(percentage) => percentage.0,
-        }
-    }
-
-    #[inline]
-    fn from_computed_value(computed: &Self::ComputedValue) -> Self {
-        Factor::Number(*computed)
-    }
-}
-
-impl Parse for DropShadow {
-    #[cfg(not(feature = "gecko"))]
-    #[inline]
-    fn parse<'i, 't>(
-        _context: &ParserContext,
-        _input: &mut Parser<'i, 't>
-    ) -> Result<Self, ParseError<'i>> {
-        Err(StyleParseError::UnspecifiedError.into())
-    }
-
-    #[cfg(feature = "gecko")]
+impl Parse for SimpleShadow {
     #[inline]
     fn parse<'i, 't>(
         context: &ParserContext,
         input: &mut Parser<'i, 't>
     ) -> Result<Self, ParseError<'i>> {
-        let color = input.try(|i| Color::parse(context, i)).ok();
+        let color = input.try(|i| RGBAColor::parse(context, i)).ok();
         let horizontal = Length::parse(context, input)?;
         let vertical = Length::parse(context, input)?;
         let blur = input.try(|i| Length::parse_non_negative(context, i)).ok();
-        let color = color.or_else(|| input.try(|i| Color::parse(context, i)).ok());
-        Ok(DropShadow {
+        let color = color.or_else(|| input.try(|i| RGBAColor::parse(context, i)).ok());
+        Ok(SimpleShadow {
             color: color,
             horizontal: horizontal,
             vertical: vertical,
-            blur: blur,
+            blur: blur.map(NonNegative::<Length>),
         })
     }
 }
 
-impl ToComputedValue for DropShadow {
-    type ComputedValue = ComputedDropShadow;
+impl ToComputedValue for SimpleShadow {
+    type ComputedValue = ComputedSimpleShadow;
 
-    #[cfg(not(feature = "gecko"))]
-    #[inline]
-    fn to_computed_value(&self, _context: &Context) -> Self::ComputedValue {
-        match *self {}
-    }
-
-    #[cfg(feature = "gecko")]
     #[inline]
     fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
-        ComputedDropShadow {
-            color:
-                self.color.as_ref().unwrap_or(&Color::CurrentColor).to_computed_value(context),
+        ComputedSimpleShadow {
+            color: self.color.to_computed_value(context),
             horizontal: self.horizontal.to_computed_value(context),
             vertical: self.vertical.to_computed_value(context),
             blur:
-                self.blur.as_ref().unwrap_or(&Length::zero()).to_computed_value(context),
+                self.blur.as_ref().unwrap_or(&NonNegativeLength::zero()).to_computed_value(context),
         }
     }
 
-    #[cfg(not(feature = "gecko"))]
     #[inline]
     fn from_computed_value(computed: &Self::ComputedValue) -> Self {
-        match *computed {}
-    }
-
-    #[cfg(feature = "gecko")]
-    #[inline]
-    fn from_computed_value(computed: &Self::ComputedValue) -> Self {
-        DropShadow {
-            color: Some(ToComputedValue::from_computed_value(&computed.color)),
+        SimpleShadow {
+            color: ToComputedValue::from_computed_value(&computed.color),
             horizontal: ToComputedValue::from_computed_value(&computed.horizontal),
             vertical: ToComputedValue::from_computed_value(&computed.vertical),
             blur: Some(ToComputedValue::from_computed_value(&computed.blur)),
         }
-    }
-}
-
-#[cfg(feature = "gecko")]
-impl ToCss for DropShadow {
-    #[inline]
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result
-    where
-        W: fmt::Write,
-    {
-        if let Some(ref color) = self.color {
-            color.to_css(dest)?;
-            dest.write_str(" ")?;
-        }
-        self.horizontal.to_css(dest)?;
-        dest.write_str(" ")?;
-        self.vertical.to_css(dest)?;
-        if let Some(ref blur) = self.blur {
-            dest.write_str(" ")?;
-            blur.to_css(dest)?;
-        }
-        Ok(())
     }
 }

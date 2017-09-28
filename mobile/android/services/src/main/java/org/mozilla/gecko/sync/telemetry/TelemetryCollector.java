@@ -64,6 +64,10 @@ public class TelemetryCollector {
         return collector;
     }
 
+    public boolean hasCollectorFor(@NonNull String stageName) {
+        return stageCollectors.containsKey(stageName);
+    }
+
     public void setRestarted() {
         this.didRestart = true;
     }
@@ -82,20 +86,17 @@ public class TelemetryCollector {
     }
 
     public void setError(@NonNull String name, @NonNull Exception e) {
-        setError(name, e.getClass().getSimpleName());
+        setError(name, e, null);
     }
 
-    public void setError(@NonNull String name, @NonNull String details) {
-        setError(name, details, null);
-    }
-
-    public void setError(@NonNull String name, @NonNull String details, @Nullable Exception e) {
+    public void setError(@NonNull String name, @NonNull Exception e, @Nullable String details) {
         final ExtendedJSONObject error = new ExtendedJSONObject();
         error.put("name", name);
-        if (e != null) {
-            error.put("error", e.getClass().getSimpleName() + ":" + details);
+        final String exceptionName = e.getClass().getSimpleName();
+        if (details != null) {
+            error.put("error", exceptionName + ":" + details);
         } else {
-            error.put("error", details);
+            error.put("error", exceptionName);
         }
         this.error = error;
     }

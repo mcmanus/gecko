@@ -91,6 +91,11 @@ public:
 
     Result<Ok, nsresult> InitCache(const Maybe<ipc::FileDescriptor>& cacheFile, ScriptCacheChild* cacheChild);
 
+    bool Active()
+    {
+      return mCacheInitialized && !mStartupFinished;
+    }
+
 private:
     Result<Ok, nsresult> InitCacheInternal();
 
@@ -140,7 +145,7 @@ private:
     class CachedScript : public LinkedListElement<CachedScript>
     {
     public:
-        CachedScript(CachedScript&&) = default;
+        CachedScript(CachedScript&&) = delete;
 
         CachedScript(ScriptPreloader& cache, const nsCString& url, const nsCString& cachePath, JSScript* script)
             : mCache(cache)
@@ -264,8 +269,12 @@ private:
                 return size;
             }
 
-            size += (mURL.SizeOfExcludingThisEvenIfShared(mallocSizeOf) +
+            // Note: mURL and mCachePath use the same string for scripts loaded
+            // by the message manager. The following statement avoids
+            // double-measuring in that case.
+            size += (mURL.SizeOfExcludingThisIfUnshared(mallocSizeOf) +
                      mCachePath.SizeOfExcludingThisEvenIfShared(mallocSizeOf));
+
             return size;
         }
 
@@ -355,6 +364,7 @@ private:
     void ForceWriteCacheFile();
     void Cleanup();
 
+    void FinishPendingParses(MonitorAutoLock& aMal);
     void InvalidateCache();
 
     // Opens the cache file for reading.
@@ -366,6 +376,8 @@ private:
     // Prepares scripts for writing to the cache, serializing new scripts to
     // XDR, and calculating their size-based offsets.
     void PrepareCacheWrite();
+
+    void PrepareCacheWriteInternal();
 
     // Returns a file pointer for the cache file with the given name in the
     // current profile.
@@ -379,8 +391,13 @@ private:
     void DecodeNextBatch(size_t chunkSize);
 
     static void OffThreadDecodeCallback(void* token, void* context);
-    void FinishOffThreadDecode();
+    void MaybeFinishOffThreadDecode();
     void DoFinishOffThreadDecode();
+
+    // Returns the global scope object for off-thread compilation. When global
+    // sharing is enabled in the component loader, this should be the shared
+    // module global. Otherwise, it should be the XPConnect compilation scope.
+    JSObject* CompilationScope(JSContext* cx);
 
     size_t ShallowHeapSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf)
     {
@@ -410,6 +427,7 @@ private:
     bool mSaveComplete = false;
     bool mDataPrepared = false;
     bool mCacheInvalidated = false;
+    bool mBlockedOnSyncDispatch = false;
 
     // The list of scripts that we read from the initial startup cache file,
     // but have yet to initiate a decode task for.

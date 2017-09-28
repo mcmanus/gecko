@@ -299,16 +299,16 @@ var clickContainer = Task.async(function* (selector, inspector) {
  */
 function mouseLeaveMarkupView(inspector) {
   info("Leaving the markup-view area");
-  let def = defer();
 
   // Find another element to mouseover over in order to leave the markup-view
   let btn = inspector.toolbox.doc.querySelector("#toolbox-controls");
 
   EventUtils.synthesizeMouseAtCenter(btn, {type: "mousemove"},
     inspector.toolbox.win);
-  executeSoon(def.resolve);
 
-  return def.promise;
+  return new Promise(resolve => {
+    executeSoon(resolve);
+  });
 }
 
 /**
@@ -503,11 +503,11 @@ const getHighlighterHelperFor = (type) => Task.async(
       //   mouse.up();         // synthesize "mouseup" at 20,30
       mouse: new Proxy({}, {
         get: (target, name) =>
-          function* (x = prevX, y = prevY) {
+          function* (x = prevX, y = prevY, selector = ":root") {
             prevX = x;
             prevY = y;
             yield testActor.synthesizeMouse({
-              selector: ":root", x, y, options: {type: "mouse" + name}});
+              selector, x, y, options: {type: "mouse" + name}});
           }
       }),
 
@@ -547,11 +547,11 @@ function* waitForMultipleChildrenUpdates(inspector) {
  */
 function waitForChildrenUpdated({markup}) {
   info("Waiting for queued children updates to be handled");
-  let def = defer();
-  markup._waitForChildren().then(() => {
-    executeSoon(def.resolve);
+  return new Promise(resolve => {
+    markup._waitForChildren().then(() => {
+      executeSoon(resolve);
+    });
   });
-  return def.promise;
 }
 
 /**
@@ -566,43 +566,42 @@ function waitForChildrenUpdated({markup}) {
  * ready
  */
 function waitForStyleEditor(toolbox, href) {
-  let def = defer();
-
   info("Waiting for the toolbox to switch to the styleeditor");
-  toolbox.once("styleeditor-selected").then(() => {
-    let panel = toolbox.getCurrentPanel();
-    ok(panel && panel.UI, "Styleeditor panel switched to front");
 
-    // A helper that resolves the promise once it receives an editor that
-    // matches the expected href. Returns false if the editor was not correct.
-    let gotEditor = (event, editor) => {
-      let currentHref = editor.styleSheet.href;
-      if (!href || (href && currentHref.endsWith(href))) {
-        info("Stylesheet editor selected");
-        panel.UI.off("editor-selected", gotEditor);
+  return new Promise(resolve => {
+    toolbox.once("styleeditor-selected").then(() => {
+      let panel = toolbox.getCurrentPanel();
+      ok(panel && panel.UI, "Styleeditor panel switched to front");
 
-        editor.getSourceEditor().then(sourceEditor => {
-          info("Stylesheet editor fully loaded");
-          def.resolve(sourceEditor);
-        });
+      // A helper that resolves the promise once it receives an editor that
+      // matches the expected href. Returns false if the editor was not correct.
+      let gotEditor = (event, editor) => {
+        let currentHref = editor.styleSheet.href;
+        if (!href || (href && currentHref.endsWith(href))) {
+          info("Stylesheet editor selected");
+          panel.UI.off("editor-selected", gotEditor);
 
-        return true;
+          editor.getSourceEditor().then(sourceEditor => {
+            info("Stylesheet editor fully loaded");
+            resolve(sourceEditor);
+          });
+
+          return true;
+        }
+
+        info("The editor was incorrect. Waiting for editor-selected event.");
+        return false;
+      };
+
+      // The expected editor may already be selected. Check the if the currently
+      // selected editor is the expected one and if not wait for an
+      // editor-selected event.
+      if (!gotEditor("styleeditor-selected", panel.UI.selectedEditor)) {
+        // The expected editor is not selected (yet). Wait for it.
+        panel.UI.on("editor-selected", gotEditor);
       }
-
-      info("The editor was incorrect. Waiting for editor-selected event.");
-      return false;
-    };
-
-    // The expected editor may already be selected. Check the if the currently
-    // selected editor is the expected one and if not wait for an
-    // editor-selected event.
-    if (!gotEditor("styleeditor-selected", panel.UI.selectedEditor)) {
-      // The expected editor is not selected (yet). Wait for it.
-      panel.UI.on("editor-selected", gotEditor);
-    }
+    });
   });
-
-  return def.promise;
 }
 
 /**
@@ -710,7 +709,7 @@ function* assertShowPreviewTooltip(view, target) {
 
   let name = "previewTooltip";
   ok(view.tooltips._instances.has(name),
-    `Tooltip '${name}' has been instanciated`);
+    `Tooltip '${name}' has been instantiated`);
   let tooltip = view.tooltips.getTooltip(name);
 
   if (!tooltip.isVisible()) {
@@ -802,4 +801,34 @@ function* getDisplayedNodeTextContent(selector, inspector) {
     return textContainer.textContent;
   }
   return null;
+}
+
+/**
+ * Toggle the shapes highlighter by simulating a click on the toggle
+ * in the rules view with the given selector and property
+ *
+ * @param {CssRuleView} view
+ *        The instance of the rule-view panel
+ * @param {Object} highlighters
+ *        The highlighters instance of the rule-view panel
+ * @param {String} selector
+ *        The selector in the rule-view to look for the property in
+ * @param {String} property
+ *        The name of the property
+ * @param {Boolean} show
+ *        If true, the shapes highlighter is being shown. If false, it is being hidden
+ */
+function* toggleShapesHighlighter(view, highlighters, selector, property, show) {
+  info("Toggle shapes highlighter");
+  let container = getRuleViewProperty(view, selector, property).valueSpan;
+  let shapesToggle = container.querySelector(".ruleview-shape");
+  if (show) {
+    let onHighlighterShown = highlighters.once("shapes-highlighter-shown");
+    shapesToggle.click();
+    yield onHighlighterShown;
+  } else {
+    let onHighlighterHidden = highlighters.once("shapes-highlighter-hidden");
+    shapesToggle.click();
+    yield onHighlighterHidden;
+  }
 }

@@ -40,6 +40,8 @@ int
 irregexp::CaseInsensitiveCompareStrings(const CharT* substring1, const CharT* substring2,
 					size_t byteLength)
 {
+    AutoUnsafeCallWithABI unsafe;
+
     MOZ_ASSERT(byteLength % sizeof(CharT) == 0);
     size_t length = byteLength / sizeof(CharT);
 
@@ -70,6 +72,8 @@ int
 irregexp::CaseInsensitiveCompareUCStrings(const CharT* substring1, const CharT* substring2,
                                           size_t byteLength)
 {
+    AutoUnsafeCallWithABI unsafe;
+
     MOZ_ASSERT(byteLength % sizeof(CharT) == 0);
     size_t length = byteLength / sizeof(CharT);
 
@@ -98,9 +102,8 @@ irregexp::CaseInsensitiveCompareUCStrings(const char16_t* substring1,
                                           size_t byteLength);
 
 InterpretedRegExpMacroAssembler::InterpretedRegExpMacroAssembler(JSContext* cx, LifoAlloc* alloc,
-                                                                 RegExpShared* shared,
                                                                  size_t numSavedRegisters)
-  : RegExpMacroAssembler(cx, *alloc, shared, numSavedRegisters),
+  : RegExpMacroAssembler(cx, *alloc, numSavedRegisters),
     pc_(0),
     advance_current_start_(0),
     advance_current_offset_(0),
@@ -157,6 +160,8 @@ InterpretedRegExpMacroAssembler::Backtrack()
     Emit(BC_POP_BT, 0);
 }
 
+static const int32_t INVALID_OFFSET = -1;
+
 void
 InterpretedRegExpMacroAssembler::Bind(jit::Label* label)
 {
@@ -164,11 +169,12 @@ InterpretedRegExpMacroAssembler::Bind(jit::Label* label)
     MOZ_ASSERT(!label->bound());
     if (label->used()) {
         int pos = label->offset();
-        while (pos != jit::Label::INVALID_OFFSET) {
+        MOZ_ASSERT(pos >= 0);
+        do {
             int fixup = pos;
             pos = *reinterpret_cast<int32_t*>(buffer_ + fixup);
             *reinterpret_cast<uint32_t*>(buffer_ + fixup) = pc_;
-        }
+        } while (pos != INVALID_OFFSET);
     }
     label->bind(pc_);
 }
@@ -313,7 +319,8 @@ InterpretedRegExpMacroAssembler::CheckCharacterNotInRange(char16_t from, char16_
 }
 
 void
-InterpretedRegExpMacroAssembler::CheckBitInTable(uint8_t* table, jit::Label* on_bit_set)
+InterpretedRegExpMacroAssembler::CheckBitInTable(RegExpShared::JitCodeTable table,
+                                                 jit::Label* on_bit_set)
 {
     static const int kBitsPerByte = 8;
 
@@ -516,7 +523,8 @@ InterpretedRegExpMacroAssembler::EmitOrLink(jit::Label* label)
     if (label->bound()) {
         Emit32(label->offset());
     } else {
-        int pos = label->use(pc_);
+        int pos = label->used() ? label->offset() : INVALID_OFFSET;
+        label->use(pc_);
         Emit32(pos);
     }
 }

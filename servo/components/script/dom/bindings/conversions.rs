@@ -32,6 +32,7 @@
 //! | sequences               | `Vec<T>`                         |
 //! | union types             | `T`                              |
 
+use dom::bindings::error::{Error, Fallible};
 use dom::bindings::inheritance::Castable;
 use dom::bindings::js::Root;
 use dom::bindings::num::Finite;
@@ -48,15 +49,15 @@ use js::glue::{GetProxyPrivate, IsWrapper};
 use js::glue::{RUST_JSID_IS_INT, RUST_JSID_TO_INT};
 use js::glue::{RUST_JSID_IS_STRING, RUST_JSID_TO_STRING, UnwrapObject};
 use js::jsapi::{HandleId, HandleObject, HandleValue, JSContext, JSObject, JSString};
-use js::jsapi::{JS_GetLatin1StringCharsAndLength, JS_GetReservedSlot};
-use js::jsapi::{JS_GetTwoByteStringCharsAndLength, JS_IsArrayObject};
+use js::jsapi::{JS_GetLatin1StringCharsAndLength, JS_GetProperty, JS_GetReservedSlot};
+use js::jsapi::{JS_GetTwoByteStringCharsAndLength, JS_IsArrayObject, JS_IsExceptionPending};
 use js::jsapi::{JS_NewStringCopyN, JS_StringHasLatin1Chars, MutableHandleValue};
-use js::jsval::{ObjectValue, StringValue};
+use js::jsval::{ObjectValue, StringValue, UndefinedValue};
 use js::rust::{ToString, get_object_class, is_dom_class, is_dom_object, maybe_wrap_value};
 use libc;
 use num_traits::Float;
 use servo_config::opts;
-use std::{char, ptr, slice};
+use std::{char, ffi, ptr, slice};
 
 /// A trait to check whether a given `JSObject` implements an IDL interface.
 pub trait IDLInterface {
@@ -83,13 +84,13 @@ impl<T: Float + FromJSValConvertible<Config=()>> FromJSValConvertible for Finite
                          value: HandleValue,
                          option: ())
                          -> Result<ConversionResult<Finite<T>>, ()> {
-        let result = match FromJSValConvertible::from_jsval(cx, value, option) {
-            Ok(ConversionResult::Success(v)) => v,
-            Ok(ConversionResult::Failure(error)) => {
+        let result = match FromJSValConvertible::from_jsval(cx, value, option)? {
+            ConversionResult::Success(v) => v,
+            ConversionResult::Failure(error) => {
+                // FIXME(emilio): Why throwing instead of propagating the error?
                 throw_type_error(cx, &error);
                 return Err(());
             }
-            _ => return Err(()),
         };
         match Finite::new(result) {
             Some(v) => Ok(ConversionResult::Success(v)),
@@ -131,20 +132,6 @@ impl <T: FromJSValConvertible + JSTraceable> FromJSValConvertible for RootedTrac
     }
 }
 
-/// Convert `id` to a `DOMString`, assuming it is string-valued.
-///
-/// Handling of invalid UTF-16 in strings depends on the relevant option.
-///
-/// # Panics
-///
-/// Panics if `id` is not string-valued.
-pub fn string_jsid_to_string(cx: *mut JSContext, id: HandleId) -> DOMString {
-    unsafe {
-        assert!(RUST_JSID_IS_STRING(id));
-        jsstring_to_str(cx, RUST_JSID_TO_STRING(id))
-    }
-}
-
 /// Convert `id` to a `DOMString`. Returns `None` if `id` is not a string or
 /// integer.
 ///
@@ -169,7 +156,7 @@ impl ToJSValConvertible for USVString {
 }
 
 /// Behavior for stringification of `JSVal`s.
-#[derive(PartialEq, Clone)]
+#[derive(Clone, PartialEq)]
 pub enum StringificationBehavior {
     /// Convert `null` to the string `"null"`.
     Default,
@@ -480,4 +467,46 @@ pub unsafe fn is_array_like(cx: *mut JSContext, value: HandleValue) -> bool {
     let mut result = false;
     assert!(JS_IsArrayObject(cx, value, &mut result));
     result
+}
+
+/// Get a property from a JS object.
+pub unsafe fn get_property_jsval(cx: *mut JSContext,
+                                 object: HandleObject,
+                                 name: &str,
+                                 rval: MutableHandleValue)
+                                 -> Fallible<()>
+{
+    rval.set(UndefinedValue());
+    let cname = match ffi::CString::new(name) {
+        Ok(cname) => cname,
+        Err(_) => return Ok(()),
+    };
+    JS_GetProperty(cx, object, cname.as_ptr(), rval);
+    if JS_IsExceptionPending(cx) {
+        return Err(Error::JSFailed);
+    }
+    Ok(())
+}
+
+/// Get a property from a JS object, and convert it to a Rust value.
+pub unsafe fn get_property<T>(cx: *mut JSContext,
+                              object: HandleObject,
+                              name: &str,
+                              option: T::Config)
+                              -> Fallible<Option<T>> where
+    T: FromJSValConvertible
+{
+    debug!("Getting property {}.", name);
+    rooted!(in(cx) let mut result = UndefinedValue());
+    get_property_jsval(cx, object, name, result.handle_mut())?;
+    if result.is_undefined() {
+        debug!("No property {}.", name);
+        return Ok(None);
+    }
+    debug!("Converting property {}.", name);
+    match T::from_jsval(cx, result.handle(), option) {
+        Ok(ConversionResult::Success(value)) => Ok(Some(value)),
+        Ok(ConversionResult::Failure(_)) => Ok(None),
+        Err(()) => Err(Error::JSFailed),
+    }
 }

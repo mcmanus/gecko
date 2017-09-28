@@ -29,7 +29,7 @@ public:
 
   static already_AddRefed<ServoDeclarationBlock>
   FromCssText(const nsAString& aCssText, URLExtraData* aExtraData,
-              nsCompatibility aMode);
+              nsCompatibility aMode, css::Loader* aLoader);
 
   RawServoDeclarationBlock* Raw() const { return mRaw; }
   RawServoDeclarationBlock* const* RefRaw() const {
@@ -64,10 +64,6 @@ public:
 
   void GetPropertyValue(const nsAString& aProperty, nsAString& aValue) const;
   void GetPropertyValueByID(nsCSSPropertyID aPropID, nsAString& aValue) const;
-  void GetAuthoredPropertyValue(const nsAString& aProperty,
-                                nsAString& aValue) const {
-    GetPropertyValue(aProperty, aValue);
-  }
   bool GetPropertyIsImportant(const nsAString& aProperty) const;
   void RemoveProperty(const nsAString& aProperty);
   void RemovePropertyByID(nsCSSPropertyID aPropID);

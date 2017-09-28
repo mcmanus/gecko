@@ -10,82 +10,77 @@
  * for tips on how to do that.
  */
 const EXPECTED_APPMENU_OPEN_REFLOWS = [
-  [
-    "openPopup@chrome://global/content/bindings/popup.xml",
-    "show/</<@chrome://browser/content/customizableui/panelUI.js",
-  ],
+  {
+    stack: [
+      "openPopup@chrome://global/content/bindings/popup.xml",
+      "show/</<@chrome://browser/content/customizableui/panelUI.js",
+    ],
+  },
 
-  [
-    "get_alignmentPosition@chrome://global/content/bindings/popup.xml",
-    "adjustArrowPosition@chrome://global/content/bindings/popup.xml",
-    "onxblpopupshowing@chrome://global/content/bindings/popup.xml",
-    "openPopup@chrome://global/content/bindings/popup.xml",
-    "show/</<@chrome://browser/content/customizableui/panelUI.js",
-  ],
+  {
+    stack: [
+      "get_alignmentPosition@chrome://global/content/bindings/popup.xml",
+      "adjustArrowPosition@chrome://global/content/bindings/popup.xml",
+      "onxblpopupshowing@chrome://global/content/bindings/popup.xml",
+      "openPopup@chrome://global/content/bindings/popup.xml",
+      "show/</<@chrome://browser/content/customizableui/panelUI.js",
+    ],
 
-  [
-    "get_alignmentPosition@chrome://global/content/bindings/popup.xml",
-    "adjustArrowPosition@chrome://global/content/bindings/popup.xml",
-    "onxblpopupshowing@chrome://global/content/bindings/popup.xml",
-    "openPopup@chrome://global/content/bindings/popup.xml",
-    "show/</<@chrome://browser/content/customizableui/panelUI.js",
-  ],
+    times: 2, // This number should only ever go down - never up.
+  },
 
-  [
-    "get_alignmentPosition@chrome://global/content/bindings/popup.xml",
-    "adjustArrowPosition@chrome://global/content/bindings/popup.xml",
-    "onxblpopuppositioned@chrome://global/content/bindings/popup.xml",
-  ],
+  {
+    stack: [
+      "get_alignmentPosition@chrome://global/content/bindings/popup.xml",
+      "adjustArrowPosition@chrome://global/content/bindings/popup.xml",
+      "onxblpopuppositioned@chrome://global/content/bindings/popup.xml",
+    ],
+  },
 
-  [
-    "get_alignmentPosition@chrome://global/content/bindings/popup.xml",
-    "handleEvent@resource:///modules/PanelMultiView.jsm",
-    "openPopup@chrome://global/content/bindings/popup.xml",
-  ],
+  {
+    stack: [
+      "get_alignmentPosition@chrome://global/content/bindings/popup.xml",
+      "handleEvent@resource:///modules/PanelMultiView.jsm",
+      "openPopup@chrome://global/content/bindings/popup.xml",
+    ],
+  },
 
-  [
-    "handleEvent@resource:///modules/PanelMultiView.jsm",
-    "openPopup@chrome://global/content/bindings/popup.xml",
-  ],
+  {
+    stack: [
+      "handleEvent@resource:///modules/PanelMultiView.jsm",
+      "openPopup@chrome://global/content/bindings/popup.xml",
+    ],
 
-  [
-    "handleEvent@resource:///modules/PanelMultiView.jsm",
-    "openPopup@chrome://global/content/bindings/popup.xml",
-  ],
-
-  [
-    "handleEvent@resource:///modules/PanelMultiView.jsm",
-    "openPopup@chrome://global/content/bindings/popup.xml",
-  ],
-
-  [
-    "handleEvent@resource:///modules/PanelMultiView.jsm",
-    "openPopup@chrome://global/content/bindings/popup.xml",
-  ],
-
-  [
-    "handleEvent@resource:///modules/PanelMultiView.jsm",
-    "openPopup@chrome://global/content/bindings/popup.xml",
-  ],
-
-  [
-    "handleEvent@resource:///modules/PanelMultiView.jsm",
-    "openPopup@chrome://global/content/bindings/popup.xml",
-  ],
+    times: 6, // This number should only ever go down - never up.
+  },
 ];
 
 const EXPECTED_APPMENU_SUBVIEW_REFLOWS = [
   /**
-   * Nothing here! Please don't add anything new!
+   * The synced tabs view has labels that are multiline. Because of bugs in
+   * XUL layout relating to multiline text in scrollable containers, we need
+   * to manually read their height in order to ensure container heights are
+   * correct. Unfortunately this requires 2 sync reflows.
+   *
+   * If we add more views where this is necessary, we may need to duplicate
+   * these expected reflows further.
+   */
+  {
+    stack: [
+      "descriptionHeightWorkaround@resource:///modules/PanelMultiView.jsm",
+      "_cleanupTransitionPhase@resource:///modules/PanelMultiView.jsm",
+    ],
+
+    times: 2, // This number should only ever go down - never up.
+  },
+
+  /**
+   * Please don't add anything new!
    */
 ];
 
 add_task(async function() {
   await ensureNoPreloadedBrowser();
-
-  await SpecialPowers.pushPrefEnv({
-    set: [["browser.photon.structure.enabled", true]],
-  });
 
   // First, open the appmenu.
   await withReflowObserver(async function() {
@@ -93,7 +88,7 @@ add_task(async function() {
       BrowserTestUtils.waitForEvent(PanelUI.panel, "popuppositioned");
     await PanelUI.show();
     await popupPositioned;
-  }, EXPECTED_APPMENU_OPEN_REFLOWS, window, PanelUI.panel);
+  }, EXPECTED_APPMENU_OPEN_REFLOWS);
 
   // Now open a series of subviews, and then close the appmenu. We
   // should not reflow during any of this.
@@ -110,14 +105,27 @@ add_task(async function() {
       }
 
       for (let button of navButtons) {
+        info("Click " + button.id);
         button.click();
         await BrowserTestUtils.waitForEvent(PanelUI.panel, "ViewShown");
+
+        // Workaround until bug 1363756 is fixed, then this can be removed.
+        await BrowserTestUtils.waitForCondition(() => {
+          return !PanelUI.multiView.instance._viewContainer.hasAttribute("width");
+        });
+
+        info("Shown " + PanelUI.multiView.instance._currentSubView.id);
         // Unfortunately, I can't find a better accessor to the current
         // subview, so I have to reach the PanelMultiView instance
         // here.
         await openSubViewsRecursively(PanelUI.multiView.instance._currentSubView);
         PanelUI.multiView.goBack();
         await BrowserTestUtils.waitForEvent(PanelUI.panel, "ViewShown");
+
+        // Workaround until bug 1363756 is fixed, then this can be removed.
+        await BrowserTestUtils.waitForCondition(() => {
+          return !PanelUI.multiView.instance._viewContainer.hasAttribute("width");
+        });
       }
     }
 
@@ -126,5 +134,5 @@ add_task(async function() {
     let hidden = BrowserTestUtils.waitForEvent(PanelUI.panel, "popuphidden");
     PanelUI.hide();
     await hidden;
-  }, EXPECTED_APPMENU_SUBVIEW_REFLOWS, window, PanelUI.panel);
+  }, EXPECTED_APPMENU_SUBVIEW_REFLOWS);
 });

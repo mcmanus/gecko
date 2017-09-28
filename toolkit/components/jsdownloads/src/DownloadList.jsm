@@ -1,21 +1,9 @@
-/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80 filetype=javascript: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /**
- * This file includes the following constructors and global objects:
- *
- * DownloadList
- * Represents a collection of Download objects that can be viewed and managed by
- * the user interface, and persisted across sessions.
- *
- * DownloadCombinedList
- * Provides a unified, unordered list combining public and private downloads.
- *
- * DownloadSummary
- * Provides an aggregated view on the contents of a DownloadList.
+ * Provides collections of Download objects and aggregate views on them.
  */
 
 "use strict";
@@ -26,19 +14,9 @@ this.EXPORTED_SYMBOLS = [
   "DownloadSummary",
 ];
 
-// Globals
-
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cu = Components.utils;
-const Cr = Components.results;
+const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-                                  "resource://gre/modules/Promise.jsm");
-
-// DownloadList
 
 /**
  * Represents a collection of Download objects that can be viewed and managed by
@@ -151,6 +129,12 @@ this.DownloadList.prototype = {
    *          onDownloadRemoved: function (aDownload) {
    *            // Called after aDownload is removed from the list.
    *          },
+   *          onDownloadBatchStarting: function () {
+   *            // Called before multiple changes are made at the same time.
+   *          },
+   *          onDownloadBatchEnded: function () {
+   *            // Called after all the changes have been made.
+   *          },
    *        }
    *
    * @return {Promise}
@@ -162,6 +146,7 @@ this.DownloadList.prototype = {
     this._views.add(aView);
 
     if ("onDownloadAdded" in aView) {
+      this._notifyAllViews("onDownloadBatchStarting");
       for (let download of this._downloads) {
         try {
           aView.onDownloadAdded(download);
@@ -169,6 +154,7 @@ this.DownloadList.prototype = {
           Cu.reportError(ex);
         }
       }
+      this._notifyAllViews("onDownloadBatchEnded");
     }
 
     return Promise.resolve();
@@ -192,18 +178,17 @@ this.DownloadList.prototype = {
   },
 
   /**
-   * Notifies all the views of a download addition, change, or removal.
+   * Notifies all the views of a download addition, change, removal, or other
+   * event. The additional arguments are passed to the called method.
    *
-   * @param aMethodName
+   * @param methodName
    *        String containing the name of the method to call on the view.
-   * @param aDownload
-   *        The Download object that changed.
    */
-  _notifyAllViews(aMethodName, aDownload) {
+  _notifyAllViews(methodName, ...args) {
     for (let view of this._views) {
       try {
-        if (aMethodName in view) {
-          view[aMethodName](aDownload);
+        if (methodName in view) {
+          view[methodName](...args);
         }
       } catch (ex) {
         Cu.reportError(ex);
@@ -247,8 +232,6 @@ this.DownloadList.prototype = {
     })().catch(Cu.reportError);
   },
 };
-
-// DownloadCombinedList
 
 /**
  * Provides a unified, unordered list combining public and private downloads.
@@ -329,17 +312,18 @@ this.DownloadCombinedList.prototype = {
     return this._publicList.remove(aDownload);
   },
 
-  // DownloadList view
-
+  // DownloadList callback
   onDownloadAdded(aDownload) {
     this._downloads.push(aDownload);
     this._notifyAllViews("onDownloadAdded", aDownload);
   },
 
+  // DownloadList callback
   onDownloadChanged(aDownload) {
     this._notifyAllViews("onDownloadChanged", aDownload);
   },
 
+  // DownloadList callback
   onDownloadRemoved(aDownload) {
     let index = this._downloads.indexOf(aDownload);
     if (index != -1) {
@@ -348,8 +332,6 @@ this.DownloadCombinedList.prototype = {
     this._notifyAllViews("onDownloadRemoved", aDownload);
   },
 };
-
-// DownloadSummary
 
 /**
  * Provides an aggregated view on the contents of a DownloadList.
@@ -518,8 +500,7 @@ this.DownloadSummary.prototype = {
     }
   },
 
-  // DownloadList view
-
+  // DownloadList callback
   onDownloadAdded(aDownload) {
     this._downloads.push(aDownload);
     if (this._list) {
@@ -527,10 +508,12 @@ this.DownloadSummary.prototype = {
     }
   },
 
+  // DownloadList callback
   onDownloadChanged(aDownload) {
     this._onListChanged();
   },
 
+  // DownloadList callback
   onDownloadRemoved(aDownload) {
     let index = this._downloads.indexOf(aDownload);
     if (index != -1) {

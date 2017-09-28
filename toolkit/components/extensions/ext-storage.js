@@ -3,18 +3,18 @@
 // The ext-* files are imported into the same scopes.
 /* import-globals-from ext-toolkit.js */
 
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionStorage",
-                                  "resource://gre/modules/ExtensionStorage.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "extensionStorageSync",
-                                  "resource://gre/modules/ExtensionStorageSync.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AddonManagerPrivate",
-                                  "resource://gre/modules/AddonManager.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AddonManagerPrivate: "resource://gre/modules/AddonManager.jsm",
+  ExtensionStorage: "resource://gre/modules/ExtensionStorage.jsm",
+  extensionStorageSync: "resource://gre/modules/ExtensionStorageSync.jsm",
+  NativeManifests: "resource://gre/modules/NativeManifests.jsm",
+});
 
 var {
   ExtensionError,
 } = ExtensionUtils;
 
-function enforceNoTemporaryAddon(extensionId) {
+const enforceNoTemporaryAddon = extensionId => {
   const EXCEPTION_MESSAGE =
         "The storage API will not work with a temporary addon ID. " +
         "Please add an explicit addon ID to your manifest. " +
@@ -22,7 +22,18 @@ function enforceNoTemporaryAddon(extensionId) {
   if (AddonManagerPrivate.isTemporaryInstallID(extensionId)) {
     throw new ExtensionError(EXCEPTION_MESSAGE);
   }
-}
+};
+
+// WeakMap[extension -> Promise<SerializableMap?>]
+const managedStorage = new WeakMap();
+
+const lookupManagedStorage = async (extensionId, context) => {
+  let info = await NativeManifests.lookupManifest("storage", extensionId, context);
+  if (info) {
+    return ExtensionStorage._serializableMap(info.manifest.data);
+  }
+  return null;
+};
 
 this.storage = class extends ExtensionAPI {
   getAPI(context) {
@@ -63,9 +74,27 @@ this.storage = class extends ExtensionAPI {
           },
         },
 
-        onChanged: new SingletonEventManager(context, "storage.onChanged", fire => {
+        managed: {
+          async get(keys) {
+            enforceNoTemporaryAddon(extension.id);
+            let lookup = managedStorage.get(extension);
+
+            if (!lookup) {
+              lookup = lookupManagedStorage(extension.id, context);
+              managedStorage.set(extension, lookup);
+            }
+
+            let data = await lookup;
+            if (!data) {
+              return Promise.reject({message: "Managed storage manifest not found"});
+            }
+            return ExtensionStorage._filterProperties(data, keys);
+          },
+        },
+
+        onChanged: new EventManager(context, "storage.onChanged", fire => {
           let listenerLocal = changes => {
-            fire.async(changes, "local");
+            fire.raw(changes, "local");
           };
           let listenerSync = changes => {
             fire.async(changes, "sync");

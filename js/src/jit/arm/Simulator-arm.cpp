@@ -33,7 +33,6 @@
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MathAlgorithms.h"
-#include "mozilla/SizePrintfMacros.h"
 
 #include "jit/arm/Assembler-arm.h"
 #include "jit/arm/disasm/Constants-arm.h"
@@ -1104,7 +1103,7 @@ Simulator::setLastDebuggerInput(char* input)
 /* static */ void
 SimulatorProcess::FlushICache(void* start_addr, size_t size)
 {
-    JitSpewCont(JitSpew_CacheFlush, "[%p %" PRIxSIZE "]", start_addr, size);
+    JitSpewCont(JitSpew_CacheFlush, "[%p %zx]", start_addr, size);
     if (!ICacheCheckingDisableCount) {
         AutoLockSimulatorCache als;
         js::jit::FlushICacheLocked(icache(), start_addr, size);
@@ -1547,6 +1546,17 @@ Simulator::exclusiveMonitorClear()
     exclusiveMonitorHeld_ = false;
 }
 
+void
+Simulator::startInterrupt(WasmActivation* activation)
+{
+    JS::ProfilingFrameIterator::RegisterState state;
+    state.pc = (void*) get_pc();
+    state.fp = (void*) get_register(fp);
+    state.sp = (void*) get_register(sp);
+    state.lr = (void*) get_register(lr);
+    activation->startInterrupt(state);
+}
+
 // The signal handler only redirects the PC to the interrupt stub when the PC is
 // in function code. However, this guard is racy for the ARM simulator since the
 // signal handler samples PC in the middle of simulating an instruction and thus
@@ -1555,21 +1565,19 @@ Simulator::exclusiveMonitorClear()
 void
 Simulator::handleWasmInterrupt()
 {
-    void* pc = (void*)get_pc();
+    uint8_t* pc = (uint8_t*)get_pc();
     uint8_t* fp = (uint8_t*)get_register(r11);
 
-    WasmActivation* activation = wasm::ActivationIfInnermost(cx_);
-    const wasm::CodeSegment* segment;
-    const wasm::Code* code = activation->compartment()->wasm.lookupCode(pc, &segment);
-    if (!code || !segment->containsFunctionPC(pc))
+    const wasm::CodeSegment* cs = nullptr;
+    if (!wasm::InInterruptibleCode(cx_, pc, &cs))
         return;
 
     // fp can be null during the prologue/epilogue of the entry function.
     if (!fp)
         return;
 
-    activation->startInterrupt(pc, fp);
-    set_pc(int32_t(segment->interruptCode()));
+    startInterrupt(wasm::ActivationIfInnermost(cx_));
+    set_pc(int32_t(cs->interruptCode()));
 }
 
 // WebAssembly memories contain an extra region of guard pages (see
@@ -1587,14 +1595,21 @@ Simulator::handleWasmFault(int32_t addr, unsigned numBytes)
 
     void* pc = reinterpret_cast<void*>(get_pc());
     uint8_t* fp = reinterpret_cast<uint8_t*>(get_register(r11));
-    wasm::Instance* instance = wasm::LookupFaultingInstance(act, pc, fp);
+
+    // Cache the wasm::Code to avoid lookup on every load/store.
+    if (!wasm_code_ || !wasm_code_->containsCodePC(pc))
+        wasm_code_ = act->compartment()->wasm.lookupCode(pc);
+    if (!wasm_code_)
+        return false;
+
+    wasm::Instance* instance = wasm::LookupFaultingInstance(*wasm_code_, pc, fp);
     if (!instance || !instance->memoryAccessInGuardRegion((uint8_t*)addr, numBytes))
         return false;
 
     const wasm::CodeSegment* segment;
     const wasm::MemoryAccess* memoryAccess = instance->code().lookupMemoryAccess(pc, &segment);
     if (!memoryAccess) {
-        act->startInterrupt(pc, fp);
+        startInterrupt(act);
         if (!instance->code().containsCodePC(pc, &segment))
             MOZ_CRASH("Cannot map PC to trap handler");
         set_pc(int32_t(segment->outOfBoundsCode()));
@@ -4782,6 +4797,19 @@ Simulator::disable_single_stepping()
     single_step_callback_arg_ = nullptr;
 }
 
+static void
+FakeInterruptHandler()
+{
+    JSContext* cx = TlsContext.get();
+    uint8_t* pc = cx->simulator()->get_pc_as<uint8_t*>();
+
+    const wasm::CodeSegment* cs = nullptr;
+    if (!wasm::InInterruptibleCode(cx, pc, &cs))
+        return;
+
+    cx->simulator()->trigger_wasm_interrupt();
+}
+
 template<bool EnableStopSimAt>
 void
 Simulator::execute()
@@ -4801,6 +4829,8 @@ Simulator::execute()
         } else {
             if (single_stepping_)
                 single_step_callback_(single_step_callback_arg_, this, (void*)program_counter);
+            if (MOZ_UNLIKELY(JitOptions.simulatorAlwaysInterrupt))
+                FakeInterruptHandler();
             SimInstruction* instr = reinterpret_cast<SimInstruction*>(program_counter);
             instructionDecode(instr);
             icount_++;

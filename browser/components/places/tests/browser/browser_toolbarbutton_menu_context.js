@@ -1,3 +1,4 @@
+CustomizableUI.addWidgetToArea("bookmarks-menu-button", CustomizableUI.AREA_NAVBAR, 4);
 var bookmarksMenuButton = document.getElementById("bookmarks-menu-button");
 var BMB_menuPopup = document.getElementById("BMB_bookmarksPopup");
 var BMB_showAllBookmarks = document.getElementById("BMB_bookmarksShowAll");
@@ -9,19 +10,19 @@ add_task(async function testPopup() {
   info("Checking popup context menu before moving the bookmarks button");
   await checkPopupContextMenu();
   let pos = CustomizableUI.getPlacementOfWidget("bookmarks-menu-button").position;
-  let target = gPhotonStructure ? CustomizableUI.AREA_FIXED_OVERFLOW_PANEL
-                                : CustomizableUI.AREA_PANEL;
+  let target = CustomizableUI.AREA_FIXED_OVERFLOW_PANEL;
   CustomizableUI.addWidgetToArea("bookmarks-menu-button", target);
   CustomizableUI.addWidgetToArea("bookmarks-menu-button", CustomizableUI.AREA_NAVBAR, pos);
   info("Checking popup context menu after moving the bookmarks button");
   await checkPopupContextMenu();
+  CustomizableUI.reset();
 });
 
 async function checkPopupContextMenu() {
-  let dropmarker = document.getAnonymousElementByAttribute(bookmarksMenuButton, "anonid", "dropmarker");
+  let clickTarget = bookmarksMenuButton;
   BMB_menuPopup.setAttribute("style", "transition: none;");
   let popupShownPromise = onPopupEvent(BMB_menuPopup, "shown");
-  EventUtils.synthesizeMouseAtCenter(dropmarker, {});
+  EventUtils.synthesizeMouseAtCenter(clickTarget, {});
   info("Waiting for bookmarks menu to be shown.");
   await popupShownPromise;
   let contextMenuShownPromise = onPopupEvent(contextMenu, "shown");
@@ -43,13 +44,13 @@ async function checkPopupContextMenu() {
 
 function onPopupEvent(popup, evt) {
   let fullEvent = "popup" + evt;
-  let deferred = new Promise.defer();
-  let onPopupHandler = (e) => {
-    if (e.target == popup) {
-      popup.removeEventListener(fullEvent, onPopupHandler);
-      deferred.resolve();
-    }
-  };
-  popup.addEventListener(fullEvent, onPopupHandler);
-  return deferred.promise;
+  return new Promise(resolve => {
+    let onPopupHandler = (e) => {
+      if (e.target == popup) {
+        popup.removeEventListener(fullEvent, onPopupHandler);
+        resolve();
+      }
+    };
+    popup.addEventListener(fullEvent, onPopupHandler);
+  });
 }

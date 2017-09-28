@@ -34,6 +34,9 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/gfx/2D.h"
 
+using namespace mozilla;
+using namespace mozilla::gfx;
+
 /**
  * gfxFT2Font
  */
@@ -90,7 +93,7 @@ gfxFT2Font::AddRange(const char16_t *aText, uint32_t aOffset,
             cgd = cgdNext;
             cgdNext = nullptr;
         } else {
-            cgd = GetGlyphDataForChar(ch);
+            cgd = GetGlyphDataForChar(face, ch);
         }
 
         FT_UInt gid = cgd->glyphIndex;
@@ -108,7 +111,7 @@ gfxFT2Font::AddRange(const char16_t *aText, uint32_t aOffset,
             if (FT_HAS_KERNING(face) && i + 1 < aLength) {
                 chNext = aText[i + 1];
                 if (chNext != 0) {
-                    cgdNext = GetGlyphDataForChar(chNext);
+                    cgdNext = GetGlyphDataForChar(face, chNext);
                     gidNext = cgdNext->glyphIndex;
                     if (gidNext && gidNext != spaceGlyph)
                         lsbDeltaNext = cgdNext->lsbDelta;
@@ -157,7 +160,7 @@ gfxFT2Font::AddRange(const char16_t *aText, uint32_t aOffset,
     }
 }
 
-gfxFT2Font::gfxFT2Font(const RefPtr<mozilla::gfx::UnscaledFontFreeType>& aUnscaledFont,
+gfxFT2Font::gfxFT2Font(const RefPtr<UnscaledFontFreeType>& aUnscaledFont,
                        cairo_scaled_font_t *aCairoFont,
                        FT2FontEntry *aFontEntry,
                        const gfxFontStyle *aFontStyle,
@@ -173,12 +176,26 @@ gfxFT2Font::~gfxFT2Font()
 {
 }
 
-void
-gfxFT2Font::FillGlyphDataForChar(uint32_t ch, CachedGlyphData *gd)
+already_AddRefed<ScaledFont>
+gfxFT2Font::GetScaledFont(DrawTarget *aTarget)
 {
-    gfxFT2LockedFace faceLock(this);
-    FT_Face face = faceLock.get();
+    if (!mAzureScaledFont) {
+        NativeFont nativeFont;
+        nativeFont.mType = NativeFontType::CAIRO_FONT_FACE;
+        nativeFont.mFont = GetCairoScaledFont();
+        mAzureScaledFont =
+            Factory::CreateScaledFontForNativeFont(nativeFont,
+                                                   GetUnscaledFont(),
+                                                   GetAdjustedSize());
+    }
 
+    RefPtr<ScaledFont> scaledFont(mAzureScaledFont);
+    return scaledFont.forget();
+}
+
+void
+gfxFT2Font::FillGlyphDataForChar(FT_Face face, uint32_t ch, CachedGlyphData *gd)
+{
     if (!face->charmap || face->charmap->encoding != FT_ENCODING_UNICODE) {
         FT_Select_Charmap(face, FT_ENCODING_UNICODE);
     }
@@ -211,7 +228,7 @@ gfxFT2Font::FillGlyphDataForChar(uint32_t ch, CachedGlyphData *gd)
 }
 
 void
-gfxFT2Font::AddSizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
+gfxFT2Font::AddSizeOfExcludingThis(MallocSizeOf aMallocSizeOf,
                                    FontCacheSizes* aSizes) const
 {
     gfxFont::AddSizeOfExcludingThis(aMallocSizeOf, aSizes);
@@ -220,7 +237,7 @@ gfxFT2Font::AddSizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
 }
 
 void
-gfxFT2Font::AddSizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
+gfxFT2Font::AddSizeOfIncludingThis(MallocSizeOf aMallocSizeOf,
                                    FontCacheSizes* aSizes) const
 {
     aSizes->mFontInstances += aMallocSizeOf(this);

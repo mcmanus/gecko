@@ -25,7 +25,7 @@ function getEventDir() {
  * @param callback
  *        A JavaScript function to be called after the subprocess
  *        crashes. It will be passed (minidump, extra), where
- *         minidump is an nsILocalFile of the minidump file produced,
+ *         minidump is an nsIFile of the minidump file produced,
  *         and extra is an object containing the key,value pairs from
  *         the .extra file.
  *
@@ -38,13 +38,13 @@ function do_crash(setup, callback, canReturnZero) {
   // get current process filename (xpcshell)
   let ds = Components.classes["@mozilla.org/file/directory_service;1"]
     .getService(Components.interfaces.nsIProperties);
-  let bin = ds.get("XREExeF", Components.interfaces.nsILocalFile);
+  let bin = ds.get("XREExeF", Components.interfaces.nsIFile);
   if (!bin.exists()) {
     // weird, can't find xpcshell binary?
     do_throw("Can't find xpcshell binary!");
   }
   // get Gre dir (GreD)
-  let greD = ds.get("GreD", Components.interfaces.nsILocalFile);
+  let greD = ds.get("GreD", Components.interfaces.nsIFile);
   let headfile = do_get_file("crasher_subprocess_head.js");
   let tailfile = do_get_file("crasher_subprocess_tail.js");
   // run xpcshell -g GreD -f head -e "some setup code" -f tail
@@ -91,7 +91,7 @@ function do_crash(setup, callback, canReturnZero) {
 function getMinidump() {
   let en = do_get_tempdir().directoryEntries;
   while (en.hasMoreElements()) {
-    let f = en.getNext().QueryInterface(Components.interfaces.nsILocalFile);
+    let f = en.getNext().QueryInterface(Components.interfaces.nsIFile);
     if (f.leafName.substr(-4) == ".dmp") {
       return f;
     }
@@ -145,6 +145,13 @@ function handleMinidump(callback) {
   }
 }
 
+/**
+ * Helper for testing a content process crash.
+ *
+ * This variant accepts a setup function which runs in the content process
+ * to set data as needed _before_ the crash.  The tail file triggers a generic
+ * crash after setup.
+ */
 function do_content_crash(setup, callback) {
   do_load_child_test_harness();
   do_test_pending();
@@ -187,6 +194,55 @@ function do_content_crash(setup, callback) {
         sendCommand("load(\"" + tailfile.path.replace(/\\/g, "/") + "\");", () =>
           do_execute_soon(handleCrash)
         )
+      )
+    );
+  });
+}
+
+/**
+ * Helper for testing a content process crash.
+ *
+ * This variant accepts a trigger function which runs in the content process
+ * and does something to _trigger_ the crash.
+ */
+function do_triggered_content_crash(trigger, callback) {
+  do_load_child_test_harness();
+  do_test_pending();
+
+  // Setting the minidump path won't work in the child, so we need to do
+  // that here.
+  let crashReporter =
+      Components.classes["@mozilla.org/toolkit/crash-reporter;1"]
+                .getService(Components.interfaces.nsICrashReporter);
+  crashReporter.minidumpPath = do_get_tempdir();
+
+  /* import-globals-from ../unit/crasher_subprocess_head.js */
+
+  let headfile = do_get_file("../unit/crasher_subprocess_head.js");
+  if (trigger) {
+    if (typeof(trigger) == "function") {
+      // funky, but convenient
+      trigger = "(" + trigger.toSource() + ")();";
+    }
+  }
+
+  let handleCrash = function() {
+    let id = getMinidump().leafName.slice(0, -4);
+    Services.crashmanager.ensureCrashIsPresent(id).then(() => {
+      try {
+        handleMinidump(callback);
+      } catch (x) {
+        do_report_unexpected_exception(x);
+      }
+      do_test_finished();
+    });
+  };
+
+  do_get_profile();
+  makeFakeAppDir().then(() => {
+    sendCommand("load(\"" + headfile.path.replace(/\\/g, "/") + "\");", () =>
+      sendCommand(trigger, () =>
+        do_execute_soon(handleCrash)
       )
     );
   });

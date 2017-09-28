@@ -6,8 +6,10 @@
 
 #include "IIRFilterNode.h"
 #include "AudioNodeEngine.h"
-
+#include "AudioDestinationNode.h"
 #include "blink/IIRFilter.h"
+#include "PlayingRefChangeHandler.h"
+#include "AlignmentUtils.h"
 
 #include "nsGkAtoms.h"
 
@@ -56,9 +58,8 @@ public:
 
           RefPtr<PlayingRefChangeHandler> refchanged =
             new PlayingRefChangeHandler(aStream, PlayingRefChangeHandler::RELEASE);
-          aStream->Graph()->
-            DispatchToMainThreadAfterStreamStateUpdate(mAbstractMainThread,
-                                                       refchanged.forget());
+          aStream->Graph()->DispatchToMainThreadAfterStreamStateUpdate(
+            refchanged.forget());
 
           aOutput->SetNull(WEBAUDIO_BLOCK_SIZE);
           return;
@@ -70,9 +71,8 @@ public:
       if (mIIRFilters.IsEmpty()) {
         RefPtr<PlayingRefChangeHandler> refchanged =
           new PlayingRefChangeHandler(aStream, PlayingRefChangeHandler::ADDREF);
-        aStream->Graph()->
-          DispatchToMainThreadAfterStreamStateUpdate(mAbstractMainThread,
-                                                     refchanged.forget());
+        aStream->Graph()->DispatchToMainThreadAfterStreamStateUpdate(
+          refchanged.forget());
       } else {
         WebAudioUtils::LogToDeveloperConsole(mWindowID,
                                              "IIRFilterChannelCountChangeWarning");
@@ -127,7 +127,7 @@ public:
   }
 
 private:
-  AudioNodeStream* mDestination;
+  RefPtr<AudioNodeStream> mDestination;
   nsTArray<nsAutoPtr<blink::IIRFilter>> mIIRFilters;
   AudioDoubleArray mFeedforward;
   AudioDoubleArray mFeedback;

@@ -182,7 +182,7 @@ EVENT(click,
       eMouseEventClass)
 EVENT(close,
       eClose,
-      EventNameType_HTML,
+      EventNameType_HTMLXUL,
       eBasicEventClass)
 EVENT(contextmenu,
       eContextMenu,
@@ -551,6 +551,10 @@ WINDOW_EVENT(message,
              eMessage,
              EventNameType_None,
              eBasicEventClass)
+WINDOW_EVENT(messageerror,
+             eMessageError,
+             EventNameType_HTMLBodyOrFramesetOnly,
+             eBasicEventClass)
 WINDOW_EVENT(offline,
              eOffline,
              EventNameType_XUL | EventNameType_HTMLBodyOrFramesetOnly,
@@ -559,7 +563,7 @@ WINDOW_EVENT(online,
              eOnline,
              EventNameType_XUL | EventNameType_HTMLBodyOrFramesetOnly,
              eBasicEventClass)
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_WIDGET_ANDROID)
 WINDOW_EVENT(orientationchange,
              eOrientationChange,
              EventNameType_HTMLBodyOrFramesetOnly,
@@ -642,21 +646,6 @@ WINDOW_ONLY_EVENT(appinstalled,
                   eBasicEventClass)
 
 
-#ifdef MOZ_B2G
-WINDOW_ONLY_EVENT(moztimechange,
-                  eTimeChange,
-                  EventNameType_None,
-                  eBasicEventClass)
-WINDOW_ONLY_EVENT(moznetworkupload,
-                  eNetworkUpload,
-                  EventNameType_None,
-                  eBasicEventClass)
-WINDOW_ONLY_EVENT(moznetworkdownload,
-                  eNetworkDownload,
-                  EventNameType_None,
-                  eBasicEventClass)
-#endif // MOZ_B2G
-
 TOUCH_EVENT(touchstart,
             eTouchStart,
             EventNameType_All,
@@ -682,6 +671,11 @@ DOCUMENT_ONLY_EVENT(selectionchange,
                     eSelectionChange,
                     EventNameType_HTMLXUL,
                     eBasicEventClass)
+DOCUMENT_ONLY_EVENT(visibilitychange,
+                    eVisibilityChange,
+                    EventNameType_HTMLXUL,
+                    eBasicEventClass)
+
 
 NON_IDL_EVENT(MozMouseHittest,
               eMouseHitTest,
@@ -784,10 +778,6 @@ NON_IDL_EVENT(command,
               eXULCommand,
               EventNameType_XUL,
               eInputEventClass)
-NON_IDL_EVENT(close,
-              eWindowClose,
-              EventNameType_XUL,
-              eBasicEventClass)
 NON_IDL_EVENT(popupshowing,
               eXULPopupShowing,
               EventNameType_XUL,

@@ -17,10 +17,11 @@ pub mod display_list;
 mod test::{
 };
 
-extern crate webrender_traits;
+extern crate webrender_api;
 extern crate style_traits;
 
 #[foo = "bar,baz"]
+#[derive(Copy,Debug, ComputeSquaredDistance)]
 impl test {
 
     fn test_fun(y:f32)->f32{
@@ -72,4 +73,10 @@ impl test {
       } else { // Should not trigger
           "false"
       } // Should not trigger
+
+    if  true { // Double space after keyword
+        42
+    } else {
+        let xif = 42 in {  xif  } // Should not trigger
+    }
 }

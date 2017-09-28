@@ -119,8 +119,13 @@ enum MixedContentHSTSPrimingState {
 class nsMixedContentEvent : public Runnable
 {
 public:
-  nsMixedContentEvent(nsISupports *aContext, MixedContentTypes aType, bool aRootHasSecureConnection)
-    : mContext(aContext), mType(aType), mRootHasSecureConnection(aRootHasSecureConnection)
+  nsMixedContentEvent(nsISupports* aContext,
+                      MixedContentTypes aType,
+                      bool aRootHasSecureConnection)
+    : mozilla::Runnable("nsMixedContentEvent")
+    , mContext(aContext)
+    , mType(aType)
+    , mRootHasSecureConnection(aRootHasSecureConnection)
   {}
 
   NS_IMETHOD Run() override
@@ -459,7 +464,7 @@ nsMixedContentBlocker::IsPotentiallyTrustworthyLoopbackURL(nsIURI* aURL) {
   // We could also allow 'localhost' (if we can guarantee that it resolves
   // to a loopback address), but Chrome doesn't support it as of writing. For
   // web compat, lets only allow what Chrome allows.
-  return host.Equals("127.0.0.1") || host.Equals("::1");
+  return host.EqualsLiteral("127.0.0.1") || host.EqualsLiteral("::1");
 }
 
 /* Static version of ShouldLoad() that contains all the Mixed Content Blocker
@@ -808,7 +813,7 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
     NS_ConvertUTF8toUTF16 reportSpec(spec);
 
     const char16_t* params[] = { reportSpec.get()};
-    CSP_LogLocalizedStr(u"blockAllMixedContent",
+    CSP_LogLocalizedStr("blockAllMixedContent",
                         params, ArrayLength(params),
                         EmptyString(), // aSourceFile
                         EmptyString(), // aScriptSample

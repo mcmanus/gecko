@@ -132,7 +132,7 @@ OrientedImage::GetFrame(uint32_t aWhichFrame,
   RefPtr<gfxContext> ctx = gfxContext::CreateOrNull(target);
   MOZ_ASSERT(ctx); // already checked the draw target above
   ctx->Multiply(OrientationMatrix(size));
-  gfxUtils::DrawPixelSnapped(ctx, drawable, size, ImageRegion::Create(size),
+  gfxUtils::DrawPixelSnapped(ctx, drawable, SizeDouble(size), ImageRegion::Create(size),
                              surfaceFormat, SamplingFilter::LINEAR);
 
   return target->Snapshot();
@@ -184,7 +184,7 @@ struct MatrixBuilder
     if (mInvert) {
       mMatrix *= gfxMatrix::Scaling(1.0 / aX, 1.0 / aY);
     } else {
-      mMatrix.Scale(aX, aY);
+      mMatrix.PreScale(aX, aY);
     }
   }
 
@@ -193,7 +193,7 @@ struct MatrixBuilder
     if (mInvert) {
       mMatrix *= gfxMatrix::Rotation(-aPhi);
     } else {
-      mMatrix.Rotate(aPhi);
+      mMatrix.PreRotate(aPhi);
     }
   }
 
@@ -202,7 +202,7 @@ struct MatrixBuilder
     if (mInvert) {
       mMatrix *= gfxMatrix::Translation(-aDelta);
     } else {
-      mMatrix.Translate(aDelta);
+      mMatrix.PreTranslate(aDelta);
     }
   }
 
@@ -365,10 +365,10 @@ OrientedImage::GetImageSpaceInvalidationRect(const nsIntRect& aRect)
   // Transform the invalidation rect into the correct orientation.
   gfxMatrix matrix(OrientationMatrix(innerSize));
   gfxRect invalidRect(matrix.TransformBounds(gfxRect(rect.x, rect.y,
-                                                     rect.width, rect.height)));
+                                                     rect.Width(), rect.Height())));
 
   return IntRect::RoundOut(invalidRect.x, invalidRect.y,
-                           invalidRect.width, invalidRect.height);
+                           invalidRect.Width(), invalidRect.Height());
 }
 
 } // namespace image

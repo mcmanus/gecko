@@ -10,7 +10,8 @@
 #include "WMF.h"
 #include "mozilla/Mutex.h"
 #include "nsAutoPtr.h"
-#include "nsRect.h"
+#include "mozilla/gfx/Rect.h"
+#include "d3d11.h"
 
 namespace mozilla {
 
@@ -42,7 +43,7 @@ public:
 
   // Creates an Image for the video frame stored in aVideoSample.
   virtual HRESULT CopyToImage(IMFSample* aVideoSample,
-                              const nsIntRect& aRegion,
+                              const gfx::IntRect& aRegion,
                               layers::Image** aOutImage) = 0;
 
   virtual HRESULT CopyToBGRATexture(ID3D11Texture2D *aInTexture,
@@ -64,13 +65,10 @@ public:
 
   virtual bool SupportsConfig(IMFMediaType* aType, float aFramerate) = 0;
 
-  // When we want to decode with DXVA2 directly instead of using it by MFT, we
-  // need to take responsibility for creating a decoder and handle the related
-  // decoding operations by ourself.
-  virtual bool CreateDXVA2Decoder(const VideoInfo& aVideoInfo,
-                                  nsACString& aFailureReason) = 0;
+  static bool IsNV12Supported(uint32_t aVendorID,
+                              uint32_t aDeviceID,
+                              const nsAString& aDriverVersionString);
 
-  virtual uint32_t GetVendorId() const = 0;
 protected:
   Mutex mLock;
   DXVA2Manager();

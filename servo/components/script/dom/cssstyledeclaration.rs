@@ -14,6 +14,7 @@ use dom::element::Element;
 use dom::node::{Node, window_from_node, document_from_node};
 use dom::window::Window;
 use dom_struct::dom_struct;
+use servo_arc::Arc;
 use servo_url::ServoUrl;
 use std::ascii::AsciiExt;
 use style::attr::AttrValue;
@@ -21,7 +22,6 @@ use style::properties::{Importance, PropertyDeclarationBlock, PropertyId, Longha
 use style::properties::{parse_one_declaration_into, parse_style_attribute, SourcePropertyDeclaration};
 use style::selector_parser::PseudoElement;
 use style::shared_lock::Locked;
-use style::stylearc::Arc;
 use style_traits::{PARSING_MODE_DEFAULT, ToCss};
 
 // http://dev.w3.org/csswg/cssom/#the-cssstyledeclaration-interface
@@ -104,6 +104,8 @@ impl CSSStyleOwner {
                     f(&mut *pdb.write_with(&mut guard), &mut changed)
                 };
                 if changed {
+                    // If this is changed, see also
+                    // CSSStyleRule::SetSelectorText, which does the same thing.
                     rule.global().as_window().Document().invalidate_stylesheets();
                 }
                 result
@@ -146,13 +148,13 @@ impl CSSStyleOwner {
         match *self {
             CSSStyleOwner::Element(ref el) => window_from_node(&**el).Document().base_url(),
             CSSStyleOwner::CSSRule(ref rule, _) => {
-                (*rule.parent_stylesheet().style_stylesheet().url_data.read()).clone()
+                (*rule.parent_stylesheet().style_stylesheet().contents.url_data.read()).clone()
             }
         }
     }
 }
 
-#[derive(PartialEq, HeapSizeOf)]
+#[derive(HeapSizeOf, PartialEq)]
 pub enum CSSModificationAccess {
     ReadWrite,
     Readonly,
@@ -236,7 +238,7 @@ impl CSSStyleDeclaration {
             return Err(Error::NoModificationAllowed);
         }
 
-        self.owner.mutate_associated_block(|ref mut pdb, mut changed| {
+        self.owner.mutate_associated_block(|pdb, changed| {
             if value.is_empty() {
                 // Step 3
                 *changed = pdb.remove_property(&id);
@@ -294,7 +296,7 @@ impl CSSStyleDeclarationMethods for CSSStyleDeclaration {
 
     // https://dev.w3.org/csswg/cssom/#dom-cssstyledeclaration-getpropertyvalue
     fn GetPropertyValue(&self, property: DOMString) -> DOMString {
-        let id = if let Ok(id) = PropertyId::parse(property.into()) {
+        let id = if let Ok(id) = PropertyId::parse(&property, None) {
             id
         } else {
             // Unkwown property
@@ -305,7 +307,7 @@ impl CSSStyleDeclarationMethods for CSSStyleDeclaration {
 
     // https://dev.w3.org/csswg/cssom/#dom-cssstyledeclaration-getpropertypriority
     fn GetPropertyPriority(&self, property: DOMString) -> DOMString {
-        let id = if let Ok(id) = PropertyId::parse(property.into()) {
+        let id = if let Ok(id) = PropertyId::parse(&property, None) {
             id
         } else {
             // Unkwown property
@@ -329,7 +331,7 @@ impl CSSStyleDeclarationMethods for CSSStyleDeclaration {
                    priority: DOMString)
                    -> ErrorResult {
         // Step 3
-        let id = if let Ok(id) = PropertyId::parse(property.into()) {
+        let id = if let Ok(id) = PropertyId::parse(&property, None) {
             id
         } else {
             // Unknown property
@@ -346,7 +348,7 @@ impl CSSStyleDeclarationMethods for CSSStyleDeclaration {
         }
 
         // Step 2 & 3
-        let id = match PropertyId::parse(property.into()) {
+        let id = match PropertyId::parse(&property, None) {
             Ok(id) => id,
             Err(..) => return Ok(()), // Unkwown property
         };
@@ -358,7 +360,7 @@ impl CSSStyleDeclarationMethods for CSSStyleDeclaration {
             _ => return Ok(()),
         };
 
-        self.owner.mutate_associated_block(|ref mut pdb, mut changed| {
+        self.owner.mutate_associated_block(|pdb, changed| {
             // Step 5 & 6
             *changed = pdb.set_importance(&id, importance);
         });
@@ -378,7 +380,7 @@ impl CSSStyleDeclarationMethods for CSSStyleDeclaration {
             return Err(Error::NoModificationAllowed);
         }
 
-        let id = if let Ok(id) = PropertyId::parse(property.into()) {
+        let id = if let Ok(id) = PropertyId::parse(&property, None) {
             id
         } else {
             // Unkwown property, cannot be there to remove.
@@ -386,7 +388,7 @@ impl CSSStyleDeclarationMethods for CSSStyleDeclaration {
         };
 
         let mut string = String::new();
-        self.owner.mutate_associated_block(|mut pdb, mut changed| {
+        self.owner.mutate_associated_block(|pdb, changed| {
             pdb.property_value_to_css(&id, &mut string).unwrap();
             *changed = pdb.remove_property(&id);
         });
@@ -408,10 +410,10 @@ impl CSSStyleDeclarationMethods for CSSStyleDeclaration {
     // https://dev.w3.org/csswg/cssom/#the-cssstyledeclaration-interface
     fn IndexedGetter(&self, index: u32) -> Option<DOMString> {
         self.owner.with_block(|pdb| {
-            pdb.declarations().get(index as usize).map(|entry| {
-                let (ref declaration, importance) = *entry;
+            pdb.declarations().get(index as usize).map(|declaration| {
+                let important = pdb.declarations_importance().get(index);
                 let mut css = declaration.to_css_string();
-                if importance.important() {
+                if important {
                     css += " !important";
                 }
                 DOMString::from(css)
@@ -436,7 +438,7 @@ impl CSSStyleDeclarationMethods for CSSStyleDeclaration {
         }
 
         let quirks_mode = window.Document().quirks_mode();
-        self.owner.mutate_associated_block(|mut pdb, mut _changed| {
+        self.owner.mutate_associated_block(|pdb, _changed| {
             // Step 3
             *pdb = parse_style_attribute(&value,
                                          &self.owner.base_url(),

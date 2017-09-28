@@ -79,6 +79,22 @@ Tree Information
    associated with this tree.  This dictates the names of resources used in the
    generated tasks, and those tasks will fail if it is incorrect.
 
+Try Configuration
+-----------------
+
+``try_mode``
+    The mode in which a try push is operating.  This can be one of
+    ``"try_task_config"``, ``"try_option_syntax"``, or ``None`` meaning no try
+    input was provided.
+
+``try_options``
+    The arguments given as try syntax (as a dictionary), or ``None`` if
+    ``try_mode`` is not ``try_option_syntax``.
+
+``try_task_config``
+    The contents of the ``try_task_config.json`` file, or ``None`` if
+    ``try_mode`` is not ``try_task_config``.
+
 Target Set
 ----------
 
@@ -98,7 +114,13 @@ syntax or reading a project-specific configuration file).
     one of the functions in ``taskcluster/taskgraph/target_tasks.py``.
 
 ``optimize_target_tasks``
-   If true, then target tasks are eligible for optimization.
+    If true, then target tasks are eligible for optimization.
 
 ``include_nightly``
-   If true, then nightly tasks are eligible for optimization.
+    If true, then nightly tasks are eligible for optimization.
+
+``release_history``
+   History of recent releases by platform and locale, used when generating
+   partial updates for nightly releases.
+   Suitable contents can be generated with ``mach release-history``,
+   which will print to the console by default.

@@ -23,12 +23,11 @@ public:
                     nsIFrame*         aPrevInFlow) override;
 
   virtual void BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
-                                           const nsRect&           aDirtyRect,
                                            const nsDisplayListSet& aLists) override;
 
   virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
 
-  virtual nsresult HandleEvent(nsPresContext* aPresContext, 
+  virtual nsresult HandleEvent(nsPresContext* aPresContext,
                                mozilla::WidgetGUIEvent* aEvent,
                                nsEventStatus* aEventStatus) override;
 
@@ -44,7 +43,7 @@ public:
 #endif
 
   /**
-   * Our implementation of MouseClicked. 
+   * Our implementation of MouseClicked.
    * @param aTrustEvent if true and aEvent as null, then assume the event was trusted
    */
   void DoMouseClick(mozilla::WidgetGUIEvent* aEvent, bool aTrustEvent);

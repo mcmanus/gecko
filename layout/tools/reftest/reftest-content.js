@@ -16,12 +16,15 @@ const PRINTSETTINGS_CONTRACTID = "@mozilla.org/gfx/printsettings-service;1";
 const ENVIRONMENT_CONTRACTID = "@mozilla.org/process/environment;1";
 const NS_OBSERVER_SERVICE_CONTRACTID = "@mozilla.org/observer-service;1";
 const NS_GFXINFO_CONTRACTID = "@mozilla.org/gfx/info;1";
+const IO_SERVICE_CONTRACTID = "@mozilla.org/network/io-service;1"
 
 // "<!--CLEAR-->"
 const BLANK_URL_FOR_CLEARING = "data:text/html;charset=UTF-8,%3C%21%2D%2DCLEAR%2D%2D%3E";
 
 CU.import("resource://gre/modules/Timer.jsm");
 CU.import("chrome://reftest/content/AsyncSpellCheckTestHelper.jsm");
+CU.import("resource://gre/modules/Services.jsm");
+CU.import('resource://gre/modules/XPCOMUtils.jsm');
 
 var gBrowserIsRemote;
 var gIsWebRenderEnabled;
@@ -51,6 +54,8 @@ var gClearingForAssertionCheck = false;
 const TYPE_LOAD = 'load';  // test without a reference (just test that it does
                            // not assert, crash, hang, or leak)
 const TYPE_SCRIPT = 'script'; // test contains individual test results
+const TYPE_PRINT = 'print'; // test and reference will be printed to PDF's and
+                            // compared structurally
 
 function markupDocumentViewer() {
     return docShell.contentViewer;
@@ -177,10 +182,15 @@ function resetZoom() {
 
 function doPrintMode(contentRootElement) {
     // use getAttribute because className works differently in HTML and SVG
-    return contentRootElement &&
-           contentRootElement.hasAttribute('class') &&
-           contentRootElement.getAttribute('class').split(/\s+/)
-                             .indexOf("reftest-print") != -1;
+    if (contentRootElement &&
+        contentRootElement.hasAttribute('class')) {
+        var classList = contentRootElement.getAttribute('class').split(/\s+/);
+        if (classList.indexOf("reftest-print") != -1) {
+            SendException("reftest-print is obsolete, use reftest-paged instead");
+            return;
+        }
+        return classList.indexOf("reftest-paged") != -1;
+    }
 }
 
 function setupPrintMode() {
@@ -203,6 +213,68 @@ function setupPrintMode() {
    ps.footerStrCenter = "";
    ps.footerStrRight = "";
    docShell.contentViewer.setPageMode(true, ps);
+}
+
+// Prints current page to a PDF file and calls callback when sucessfully
+// printed and written.
+function printToPdf(callback) {
+    var currentDoc = content.document;
+    var isPrintSelection = false;
+    var printRange = '';
+
+    if (currentDoc) {
+        var contentRootElement = currentDoc.documentElement;
+        printRange = contentRootElement.getAttribute("reftest-print-range") || '';
+    }
+
+    if (printRange) {
+        if (printRange === 'selection') {
+            isPrintSelection = true;
+        } else if (!/^[1-9]\d*-[1-9]\d*$/.test(printRange)) {
+            SendException("invalid value for reftest-print-range");
+            return;
+        }
+    }
+
+    var fileName = "reftest-print.pdf";
+    var file = Services.dirsvc.get("TmpD", CI.nsIFile);
+    file.append(fileName);
+    file.createUnique(file.NORMAL_FILE_TYPE, 0o644);
+
+    var PSSVC = CC[PRINTSETTINGS_CONTRACTID].getService(CI.nsIPrintSettingsService);
+    var ps = PSSVC.newPrintSettings;
+    ps.printSilent = true;
+    ps.showPrintProgress = false;
+    ps.printBGImages = true;
+    ps.printBGColors = true;
+    ps.printToFile = true;
+    ps.toFileName = file.path;
+    ps.printFrameType = CI.nsIPrintSettings.kFramesAsIs;
+    ps.outputFormat = CI.nsIPrintSettings.kOutputFormatPDF;
+
+    if (isPrintSelection) {
+        ps.printRange = CI.nsIPrintSettings.kRangeSelection;
+    } else if (printRange) {
+        ps.printRange = CI.nsIPrintSettings.kRangeSpecifiedPageRange;
+        var range = printRange.split('-');
+        ps.startPageRange = +range[0] || 1;
+        ps.endPageRange = +range[1] || 1;
+    }
+
+    var webBrowserPrint = content.QueryInterface(CI.nsIInterfaceRequestor)
+                                 .getInterface(CI.nsIWebBrowserPrint);
+    webBrowserPrint.print(ps, {
+        onStateChange: function(webProgress, request, stateFlags, status) {
+            if (stateFlags & CI.nsIWebProgressListener.STATE_STOP &&
+                stateFlags & CI.nsIWebProgressListener.STATE_IS_NETWORK) {
+                callback(status, file.path);
+            }
+        },
+        onProgressChange: function () {},
+        onLocationChange: function () {},
+        onStatusChange: function () {},
+        onSecurityChange: function () {},
+    });
 }
 
 function attrOrDefault(element, attr, def) {
@@ -584,7 +656,8 @@ function WaitForTestEnd(contentRootElement, inPrintMode, spellCheckedElements) {
             os.addObserver(flushWaiter, "apz-repaints-flushed");
 
             var willSnapshot = (gCurrentTestType != TYPE_SCRIPT) &&
-                               (gCurrentTestType != TYPE_LOAD);
+                               (gCurrentTestType != TYPE_LOAD) &&
+                               (gCurrentTestType != TYPE_PRINT);
             var noFlush =
                 !(contentRootElement &&
                   contentRootElement.classList.contains("reftest-no-flush"));
@@ -675,9 +748,17 @@ function OnDocumentLoad(event)
         // Ignore load events for subframes.
         return;
 
-    if (gClearingForAssertionCheck &&
-        currentDoc.location.href == BLANK_URL_FOR_CLEARING) {
-        DoAssertionCheck();
+    if (gClearingForAssertionCheck) {
+        if (currentDoc.location.href == BLANK_URL_FOR_CLEARING) {
+            DoAssertionCheck();
+            return;
+        }
+
+        // It's likely the previous test document reloads itself and causes the
+        // attempt of loading blank page fails. In this case we should retry
+        // loading the blank page.
+        LogInfo("Retry loading a blank page");
+        LoadURI(BLANK_URL_FOR_CLEARING);
         return;
     }
 
@@ -833,7 +914,15 @@ function RecordResult()
     clearTimeout(gFailureTimeout);
     gFailureReason = null;
     gFailureTimeout = null;
+    gCurrentURL = null;
 
+    if (gCurrentTestType == TYPE_PRINT) {
+        printToPdf(function (status, fileName) {
+            SendPrintResult(currentTestRunTime, status, fileName);
+            FinishTestItem();
+        });
+        return;
+    }
     if (gCurrentTestType == TYPE_SCRIPT) {
         var error = '';
         var testwindow = content;
@@ -948,8 +1037,9 @@ const SYNC_ALLOW_DISABLE = 0x1;
 function SynchronizeForSnapshot(flags)
 {
     if (gCurrentTestType == TYPE_SCRIPT ||
-        gCurrentTestType == TYPE_LOAD) {
-        // Script tests or load-only tests do not need any snapshotting
+        gCurrentTestType == TYPE_LOAD ||
+        gCurrentTestType == TYPE_PRINT) {
+        // Script, load-only, and PDF-print tests do not need any snapshotting.
         return;
     }
 
@@ -980,6 +1070,10 @@ function RegisterMessageListeners()
         function (m) { RecvLoadScriptTest(m.json.uri, m.json.timeout); }
     );
     addMessageListener(
+        "reftest:LoadPrintTest",
+        function (m) { RecvLoadPrintTest(m.json.uri, m.json.timeout); }
+    );
+    addMessageListener(
         "reftest:LoadTest",
         function (m) { RecvLoadTest(m.json.type, m.json.uri, m.json.timeout); }
     );
@@ -1003,6 +1097,11 @@ function RecvLoadTest(type, uri, timeout)
 function RecvLoadScriptTest(uri, timeout)
 {
     StartTestURI(TYPE_SCRIPT, uri, timeout);
+}
+
+function RecvLoadPrintTest(uri, timeout)
+{
+    StartTestURI(TYPE_PRINT, uri, timeout);
 }
 
 function RecvResetRenderingState()
@@ -1094,6 +1193,12 @@ function SendScriptResults(runtimeMs, error, results)
 {
     sendAsyncMessage("reftest:ScriptResults",
                      { runtimeMs: runtimeMs, error: error, results: results });
+}
+
+function SendPrintResult(runtimeMs, status, fileName)
+{
+    sendAsyncMessage("reftest:PrintResult",
+                     { runtimeMs: runtimeMs, status: status, fileName: fileName });
 }
 
 function SendExpectProcessCrash(runtimeMs)

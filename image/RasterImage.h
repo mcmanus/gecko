@@ -161,13 +161,14 @@ public:
 #endif
 
   nsresult GetNativeSizes(nsTArray<gfx::IntSize>& aNativeSizes) const override;
+  size_t GetNativeSizesLength() const override;
   virtual nsresult StartAnimation() override;
   virtual nsresult StopAnimation() override;
 
   // Methods inherited from Image
   virtual void OnSurfaceDiscarded(const SurfaceKey& aSurfaceKey) override;
 
-  virtual size_t SizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf)
+  virtual size_t SizeOfSourceWithComputedFallback(SizeOfState& aState)
     const override;
   virtual void CollectSizeOfSurfaces(nsTArray<SurfaceMemoryCounter>& aCounters,
                                      MallocSizeOf aMallocSizeOf) const override;
@@ -316,15 +317,10 @@ private:
 
   void UpdateImageContainer();
 
-  // We would like to just check if we have a zero lock count, but we can't do
-  // that for animated images because in EnsureAnimExists we lock the image and
-  // never unlock so that animated images always have their lock count >= 1. In
-  // that case we use our animation consumers count as a proxy for lock count.
-  bool IsUnlocked() {
-    return (mLockCount == 0 ||
-            (!gfxPrefs::ImageMemAnimatedDiscardable() &&
-             (mAnimationState && mAnimationConsumers == 0)));
-  }
+#ifdef DEBUG
+  // Records the image drawing for startup performance testing.
+  void NotifyDrawingObservers();
+#endif
 
   //////////////////////////////////////////////////////////////////////////////
   // Decoding.
@@ -374,7 +370,7 @@ private:
    * metadata decode proves to be wrong due to image corruption, the frames we
    * have may violate this class's invariants. Either way, we need to
    * immediately discard the invalid frames and redecode so that callers don't
-   * perceive that we've entered an invalid state. 
+   * perceive that we've entered an invalid state.
    *
    * RecoverFromInvalidFrames discards all existing frames and redecodes using
    * the provided @aSize and @aFlags.

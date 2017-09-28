@@ -21,6 +21,7 @@
 #include "gc/NurseryAwareHashMap.h"
 #include "gc/Zone.h"
 #include "vm/PIC.h"
+#include "vm/ReceiverGuard.h"
 #include "vm/RegExpShared.h"
 #include "vm/SavedStacks.h"
 #include "vm/TemplateRegistry.h"
@@ -39,7 +40,9 @@ template <typename Node, typename Derived> class ComponentFinder;
 
 class GlobalObject;
 class LexicalEnvironmentObject;
+class MapObject;
 class ScriptSourceObject;
+class SetObject;
 struct NativeIterator;
 
 /*
@@ -517,6 +520,27 @@ class MOZ_RAII AutoSetNewObjectMetadata : private JS::CustomAutoRooter
     ~AutoSetNewObjectMetadata();
 };
 
+class PropertyIteratorObject;
+
+struct IteratorHashPolicy
+{
+    struct Lookup {
+        ReceiverGuard* guards;
+        size_t numGuards;
+        uint32_t key;
+
+        Lookup(ReceiverGuard* guards, size_t numGuards, uint32_t key)
+          : guards(guards), numGuards(numGuards), key(key)
+        {
+            MOZ_ASSERT(numGuards > 0);
+        }
+    };
+    static HashNumber hash(const Lookup& lookup) {
+        return lookup.key;
+    }
+    static bool match(PropertyIteratorObject* obj, const Lookup& lookup);
+};
+
 } /* namespace js */
 
 namespace js {
@@ -599,9 +623,11 @@ struct JSCompartment
   public:
     bool                         isSelfHosting;
     bool                         marked;
-    bool                         warnedAboutDateToLocaleFormat;
-    bool                         warnedAboutExprClosure;
-    bool                         warnedAboutForEach;
+    bool                         warnedAboutDateToLocaleFormat : 1;
+    bool                         warnedAboutExprClosure : 1;
+    bool                         warnedAboutForEach : 1;
+    bool                         warnedAboutLegacyGenerator : 1;
+    bool                         warnedAboutObjectWatch : 1;
     uint32_t                     warnedAboutStringGenericsMethods;
 
 #ifdef DEBUG
@@ -646,12 +672,12 @@ struct JSCompartment
         return runtime_;
     }
 
-    /*
-     * Nb: global_ might be nullptr, if (a) it's the atoms compartment, or
-     * (b) the compartment's global has been collected.  The latter can happen
-     * if e.g. a string in a compartment is rooted but no object is, and thus
-     * the global isn't rooted, and thus the global can be finalized while the
-     * compartment lives on.
+    /* The global object for this compartment.
+     *
+     * This returns nullptr if this is the atoms compartment.  (The global_
+     * field is also null briefly during GC, after the global object is
+     * collected; but when that happens the JSCompartment is destroyed during
+     * the same GC.)
      *
      * In contrast, JSObject::global() is infallible because marking a JSObject
      * always marks its global as well.
@@ -662,10 +688,14 @@ struct JSCompartment
     /* An unbarriered getter for use while tracing. */
     inline js::GlobalObject* unsafeUnbarrieredMaybeGlobal() const;
 
+    /* True if a global object exists, but it's being collected. */
+    inline bool globalIsAboutToBeFinalized();
+
     inline void initGlobal(js::GlobalObject& global);
 
   public:
     void*                        data;
+    void*                        realmData;
 
   private:
     const js::AllocationMetadataBuilder *allocationMetadataBuilder;
@@ -673,9 +703,6 @@ struct JSCompartment
     js::SavedStacks              savedStacks_;
 
     js::WrapperMap               crossCompartmentWrappers;
-
-    using CCKeyVector = mozilla::Vector<js::CrossCompartmentKey, 0, js::SystemAllocPolicy>;
-    CCKeyVector                  nurseryCCKeys;
 
     // The global environment record's [[VarNames]] list that contains all
     // names declared using FunctionDeclaration, GeneratorDeclaration, and
@@ -691,6 +718,11 @@ struct JSCompartment
     int64_t                      lastAnimationTime;
 
     js::RegExpCompartment        regExps;
+
+    using IteratorCache = js::HashSet<js::PropertyIteratorObject*,
+                                      js::IteratorHashPolicy,
+                                      js::SystemAllocPolicy>;
+    IteratorCache iteratorCache;
 
     /*
      * For generational GC, record whether a write barrier has added this
@@ -736,7 +768,6 @@ struct JSCompartment
                                 size_t* lazyArrayBuffers,
                                 size_t* objectMetadataTables,
                                 size_t* crossCompartmentWrappers,
-                                size_t* regexpCompartment,
                                 size_t* savedStacksSet,
                                 size_t* varNamesSet,
                                 size_t* nonSyntacticLexicalScopes,
@@ -840,6 +871,7 @@ struct JSCompartment
     ~JSCompartment();
 
     MOZ_MUST_USE bool init(JSContext* maybecx);
+    void destroy(js::FreeOp* fop);
 
     MOZ_MUST_USE inline bool wrap(JSContext* cx, JS::MutableHandleValue vp);
 
@@ -913,6 +945,7 @@ struct JSCompartment
     bool preserveJitCode() { return creationOptions_.preserveJitCode(); }
 
     void sweepAfterMinorGC(JSTracer* trc);
+    void sweepMapAndSetObjectsAfterMinorGC();
 
     void sweepCrossCompartmentWrappers();
     void sweepSavedStacks();
@@ -1090,6 +1123,7 @@ struct JSCompartment
     bool collectCoverageForDebug() const;
     bool collectCoverageForPGO() const;
     void clearScriptCounts();
+    void clearScriptNames();
 
     bool needsDelazificationForDebugger() const {
         return debugModeBits & DebuggerNeedsDelazification;
@@ -1116,6 +1150,7 @@ struct JSCompartment
     js::WatchpointMap* watchpointMap;
 
     js::ScriptCountsMap* scriptCountsMap;
+    js::ScriptNameMap* scriptNameMap;
 
     js::DebugScriptMap* debugScriptMap;
 
@@ -1127,9 +1162,6 @@ struct JSCompartment
      * suppression.
      */
     js::NativeIterator* enumerators;
-
-    /* Native iterator most recently started. */
-    js::PropertyIteratorObject* lastCachedNativeIterator;
 
   private:
     /* Used by memory reporters and invalid otherwise. */
@@ -1166,6 +1198,7 @@ struct JSCompartment
 
     js::ReadBarriered<js::ArgumentsObject*> mappedArgumentsTemplate_;
     js::ReadBarriered<js::ArgumentsObject*> unmappedArgumentsTemplate_;
+    js::ReadBarriered<js::NativeObject*> iterResultTemplate_;
 
   public:
     bool ensureJitCompartmentExists(JSContext* cx);
@@ -1176,6 +1209,10 @@ struct JSCompartment
     js::ArgumentsObject* getOrCreateArgumentsTemplateObject(JSContext* cx, bool mapped);
 
     js::ArgumentsObject* maybeArgumentsTemplateObject(bool mapped) const;
+
+    static const size_t IterResultObjectValueSlot = 0;
+    static const size_t IterResultObjectDoneSlot = 1;
+    js::NativeObject* getOrCreateIterResultTemplateObject(JSContext* cx);
 
   private:
     // Used for collecting telemetry on SpiderMonkey's deprecated language extensions.
@@ -1190,6 +1227,27 @@ struct JSCompartment
     // Aggregated output used to collect JSScript hit counts when code coverage
     // is enabled.
     js::coverage::LCovCompartment lcovOutput;
+
+    bool addMapWithNurseryMemory(js::MapObject* obj) {
+        MOZ_ASSERT_IF(!mapsWithNurseryMemory.empty(),
+                      mapsWithNurseryMemory.back() != obj);
+        return mapsWithNurseryMemory.append(obj);
+    }
+
+    bool addSetWithNurseryMemory(js::SetObject* obj) {
+        MOZ_ASSERT_IF(!setsWithNurseryMemory.empty(),
+                      setsWithNurseryMemory.back() != obj);
+        return setsWithNurseryMemory.append(obj);
+    }
+
+  private:
+
+    /*
+     * Lists of map and set objects allocated in the nursery or with iterators
+     * allocated there. Such objects need to be swept after minor GC.
+     */
+    js::Vector<js::MapObject*, 0, js::SystemAllocPolicy> mapsWithNurseryMemory;
+    js::Vector<js::SetObject*, 0, js::SystemAllocPolicy> setsWithNurseryMemory;
 };
 
 namespace js {

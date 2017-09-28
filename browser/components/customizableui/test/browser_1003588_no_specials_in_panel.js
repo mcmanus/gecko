@@ -20,7 +20,7 @@ function simulateItemDragAndEnd(aToDrag, aTarget) {
 }
 
 add_task(async function checkNoAddingToPanel() {
-  let area = gPhotonStructure ? CustomizableUI.AREA_FIXED_OVERFLOW_PANEL : CustomizableUI.AREA_PANEL;
+  let area = CustomizableUI.AREA_FIXED_OVERFLOW_PANEL;
   let previousPlacements = getAreaWidgetIds(area);
   CustomizableUI.addWidgetToArea("separator", area);
   CustomizableUI.addWidgetToArea("spring", area);
@@ -61,9 +61,8 @@ add_task(async function checkAddingToToolbar() {
 
 
 add_task(async function checkDragging() {
-  await SpecialPowers.pushPrefEnv({set: [["browser.photon.structure.enabled", false]]});
-  let startArea = CustomizableUI.AREA_NAVBAR;
-  let targetArea = CustomizableUI.AREA_PANEL;
+  let startArea = CustomizableUI.AREA_TABSTRIP;
+  let targetArea = CustomizableUI.AREA_FIXED_OVERFLOW_PANEL;
   let startingToolbarPlacements = getAreaWidgetIds(startArea);
   let startingTargetPlacements = getAreaWidgetIds(targetArea);
 
@@ -81,8 +80,11 @@ add_task(async function checkDragging() {
   is(elementsToMove.length, 3, "Should have 3 elements to try and drag.");
 
   await startCustomizing();
+  let existingSpecial = null;
+  existingSpecial = gCustomizeMode.visiblePalette.querySelector("toolbarspring");
+  ok(existingSpecial, "Should have a flexible space in the palette by default in photon");
   for (let id of elementsToMove) {
-    simulateItemDragAndEnd(document.getElementById(id), PanelUI.contents);
+    simulateItemDragAndEnd(document.getElementById(id), document.getElementById(targetArea));
   }
 
   assertAreaPlacements(startArea, placementsWithSpecials);
@@ -95,8 +97,10 @@ add_task(async function checkDragging() {
   assertAreaPlacements(startArea, startingToolbarPlacements);
   assertAreaPlacements(targetArea, startingTargetPlacements);
 
-  ok(!gCustomizeMode.visiblePalette.querySelector("toolbarspring,toolbarseparator,toolbarspacer"),
-     "No specials should make it to the palette alive.");
+  let allSpecials = gCustomizeMode.visiblePalette.querySelectorAll("toolbarspring,toolbarseparator,toolbarspacer");
+  allSpecials = [...allSpecials].filter(special => special != existingSpecial);
+  ok(!allSpecials.length,
+     "No (new) specials should make it to the palette alive.");
   await endCustomizing();
 });
 

@@ -154,7 +154,7 @@ IsBackgroundFinalized(AllocKind kind)
         true,      /* AllocKind::OBJECT_GROUP */
         true,      /* AllocKind::FAT_INLINE_STRING */
         true,      /* AllocKind::STRING */
-        false,     /* AllocKind::EXTERNAL_STRING */
+        true,      /* AllocKind::EXTERNAL_STRING */
         true,      /* AllocKind::FAT_INLINE_ATOM */
         true,      /* AllocKind::ATOM */
         true,      /* AllocKind::SYMBOL */
@@ -756,7 +756,7 @@ class ArenaLists
     /*
      * Moves all arenas from |fromArenaLists| into |this|.
      */
-    void adoptArenas(JSRuntime* runtime, ArenaLists* fromArenaLists);
+    void adoptArenas(JSRuntime* runtime, ArenaLists* fromArenaLists, bool targetZoneIsCollecting);
 
     /* True if the Arena in question is found in this ArenaLists */
     bool containsArena(JSRuntime* runtime, Arena* arena);
@@ -815,8 +815,6 @@ class ArenaLists
                                    ShouldCheckThresholds checkThresholds,
                                    AutoMaybeStartBackgroundAllocation& maybeStartBGAlloc);
     inline TenuredCell* allocateFromArenaInner(JS::Zone* zone, Arena* arena, AllocKind kind);
-
-    inline void normalizeBackgroundFinalizeState(AllocKind thingKind);
 
     friend class GCRuntime;
     friend class js::Nursery;
@@ -1166,7 +1164,7 @@ inline void CheckValueAfterMovingGC(const JS::Value& value);
 #endif // JSGC_HASH_TABLE_CHECKS
 
 #define JS_FOR_EACH_ZEAL_MODE(D)               \
-            D(Poke, 1)                         \
+            D(RootsChange, 1)                  \
             D(Alloc, 2)                        \
             D(FrameGC, 3)                      \
             D(VerifierPre, 4)                  \

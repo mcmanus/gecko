@@ -83,7 +83,6 @@ public:
   virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual nsContainerFrame* GetContentInsertionFrame() override;
@@ -249,7 +248,7 @@ public:
 protected:
   /**
    * Return the first non-disabled option starting at aFromIndex (inclusive).
-   * @param aFoundIndex if non-null, set to the index of the returned option 
+   * @param aFoundIndex if non-null, set to the index of the returned option
    */
   HTMLOptionElement* GetNonDisabledOptionFrom(int32_t aFromIndex,
                                               int32_t* aFoundIndex = nullptr);

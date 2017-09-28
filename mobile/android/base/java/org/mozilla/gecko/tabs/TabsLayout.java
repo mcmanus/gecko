@@ -20,8 +20,6 @@ import android.widget.Button;
 
 import java.util.ArrayList;
 
-import static org.mozilla.gecko.Tab.TabType;
-
 public abstract class TabsLayout extends RecyclerView
         implements TabsPanel.TabsLayout,
         Tabs.OnTabsChangedListener,
@@ -32,16 +30,15 @@ public abstract class TabsLayout extends RecyclerView
     private static final String LOGTAG = "Gecko" + TabsLayout.class.getSimpleName();
 
     private final boolean isPrivate;
-    private final TabType type;
     private TabsPanel tabsPanel;
     private final TabsLayoutAdapter tabsAdapter;
+    private View emptyView;
 
     public TabsLayout(Context context, AttributeSet attrs, int itemViewLayoutResId) {
         super(context, attrs);
 
         TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.TabsLayout);
         isPrivate = (a.getInt(R.styleable.TabsLayout_tabs, 0x0) == 1);
-        type = TabType.BROWSING;
         a.recycle();
 
         tabsAdapter = new TabsLayoutAdapter(context, itemViewLayoutResId, isPrivate,
@@ -76,7 +73,13 @@ public abstract class TabsLayout extends RecyclerView
 
     @Override
     public void show() {
-        setVisibility(View.VISIBLE);
+        final boolean hasTabs = (tabsAdapter.getItemCount() > 0);
+        setVisibility(hasTabs ? VISIBLE : GONE);
+
+        if (emptyView != null) {
+            emptyView.setVisibility(hasTabs ? GONE : VISIBLE);
+        }
+
         Tabs.getInstance().refreshThumbnails();
         Tabs.registerOnTabsChangedListener(this);
         refreshTabsData();
@@ -87,6 +90,10 @@ public abstract class TabsLayout extends RecyclerView
         setVisibility(View.GONE);
         Tabs.unregisterOnTabsChangedListener(this);
         tabsAdapter.clear();
+
+        if (emptyView != null) {
+            emptyView.setVisibility(VISIBLE);
+        }
     }
 
     @Override
@@ -100,10 +107,6 @@ public abstract class TabsLayout extends RecyclerView
 
     @Override
     public void onTabChanged(Tab tab, Tabs.TabEvents msg, String data) {
-        if (msg != Tabs.TabEvents.RESTORED && tab.getType() != type) {
-            return;
-        }
-
         switch (msg) {
             case ADDED:
                 int tabIndex = Integer.parseInt(data);
@@ -189,13 +192,21 @@ public abstract class TabsLayout extends RecyclerView
         final Iterable<Tab> allTabs = Tabs.getInstance().getTabsInOrder();
 
         for (final Tab tab : allTabs) {
-            if (tab.isPrivate() == isPrivate && tab.getType() == type) {
+            if (tab.isPrivate() == isPrivate) {
                 tabData.add(tab);
             }
         }
 
         tabsAdapter.setTabs(tabData);
         scrollSelectedTabToTopOfTray();
+
+        // Show empty view if we're in private panel and there's no private tabs.
+        boolean hasTabs = !tabData.isEmpty();
+        setVisibility(hasTabs ? VISIBLE : GONE);
+
+        if (emptyView != null) {
+            emptyView.setVisibility(hasTabs ? GONE : VISIBLE);
+        }
     }
 
     private void closeTab(View view) {
@@ -243,7 +254,7 @@ public abstract class TabsLayout extends RecyclerView
 
     @Override
     public void setEmptyView(View emptyView) {
-        // We never display an empty view.
+        this.emptyView = emptyView;
     }
 
     @Override

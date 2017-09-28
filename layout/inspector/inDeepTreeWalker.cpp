@@ -14,7 +14,6 @@
 #include "nsServiceManagerUtils.h"
 #include "inIDOMUtils.h"
 #include "nsIContent.h"
-#include "nsContentList.h"
 #include "ChildIterator.h"
 #include "mozilla/dom/Element.h"
 
@@ -112,7 +111,7 @@ inDeepTreeWalker::GetRoot(nsIDOMNode** aRoot)
   return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 inDeepTreeWalker::GetWhatToShow(uint32_t* aWhatToShow)
 {
   *aWhatToShow = mWhatToShow;

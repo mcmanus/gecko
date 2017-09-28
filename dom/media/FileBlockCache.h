@@ -62,8 +62,14 @@ protected:
 
 public:
   // Launch thread and open temporary file.
-  // If re-initializing, just discard pending writes if any.
   nsresult Init() override;
+
+  // Will discard pending changes if any.
+  void Flush() override;
+
+  // Maximum number of blocks allowed in this block cache.
+  // Calculated from "media.cache_size" pref.
+  int32_t GetMaxBlocks() const override;
 
   // Can be called on any thread. This defers to a non-main thread.
   nsresult WriteBlock(uint32_t aBlockIndex,

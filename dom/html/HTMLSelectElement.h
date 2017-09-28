@@ -211,7 +211,7 @@ public:
   }
   bool Required() const
   {
-    return GetBoolAttr(nsGkAtoms::required);
+    return State().HasState(NS_EVENT_STATE_REQUIRED);
   }
   void SetRequired(bool aVal, ErrorResult& aRv)
   {
@@ -275,13 +275,9 @@ public:
   void GetValue(DOMString& aValue);
   // Uses XPCOM SetValue.
 
-  // nsIConstraintValidation::WillValidate is fine.
-  // nsIConstraintValidation::Validity() is fine.
-  // nsIConstraintValidation::GetValidationMessage() is fine.
-  // nsIConstraintValidation::CheckValidity() is fine.
-  using nsIConstraintValidation::CheckValidity;
-  using nsIConstraintValidation::ReportValidity;
-  // nsIConstraintValidation::SetCustomValidity() is fine.
+  // Override SetCustomValidity so we update our state properly when it's called
+  // via bindings.
+  void SetCustomValidity(const nsAString& aError);
 
   using nsINode::Remove;
 
@@ -345,7 +341,7 @@ public:
    */
   NS_IMETHOD IsOptionDisabled(int32_t aIndex,
                               bool* aIsDisabled);
-  bool IsOptionDisabled(HTMLOptionElement* aOption);
+  bool IsOptionDisabled(HTMLOptionElement* aOption) const;
 
   /**
    * Sets multiple options (or just sets startIndex if select is single)
@@ -525,7 +521,7 @@ protected:
 
   // nsIConstraintValidation
   void UpdateBarredFromConstraintValidation();
-  bool IsValueMissing();
+  bool IsValueMissing() const;
 
   /**
    * Get the index of the first option at, under or following the content in

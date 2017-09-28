@@ -17,42 +17,6 @@ typedef mozilla::dom::Sequence<nsString> WebrtcGlobalLog;
 namespace IPC {
 
 template<typename T>
-struct ParamTraits<mozilla::dom::Optional<T>>
-{
-  typedef mozilla::dom::Optional<T> paramType;
-
-  static void Write(Message* aMsg, const paramType& aParam)
-  {
-    if (aParam.WasPassed()) {
-      WriteParam(aMsg, true);
-      WriteParam(aMsg, aParam.Value());
-      return;
-    }
-
-    WriteParam(aMsg, false);
-  }
-
-  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
-  {
-    bool was_passed = false;
-
-    if (!ReadParam(aMsg, aIter, &was_passed)) {
-      return false;
-    }
-
-    aResult->Reset(); //XXX Optional_base seems to reach this point with isSome true.
-
-    if (was_passed) {
-      if (!ReadParam(aMsg, aIter, &(aResult->Construct()))) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-};
-
-template<typename T>
 struct ParamTraits<mozilla::dom::Sequence<T>>
 {
   typedef mozilla::dom::Sequence<T> paramType;
@@ -353,6 +317,7 @@ struct ParamTraits<mozilla::dom::RTCInboundRTPStreamStats>
   {
     WriteParam(aMsg, aParam.mBytesReceived);
     WriteParam(aMsg, aParam.mDiscardedPackets);
+    WriteParam(aMsg, aParam.mFramesDecoded);
     WriteParam(aMsg, aParam.mJitter);
     WriteParam(aMsg, aParam.mMozAvSyncDelay);
     WriteParam(aMsg, aParam.mMozJitterBufferDelay);
@@ -367,6 +332,7 @@ struct ParamTraits<mozilla::dom::RTCInboundRTPStreamStats>
   {
     if (!ReadParam(aMsg, aIter, &(aResult->mBytesReceived)) ||
         !ReadParam(aMsg, aIter, &(aResult->mDiscardedPackets)) ||
+        !ReadParam(aMsg, aIter, &(aResult->mFramesDecoded)) ||
         !ReadParam(aMsg, aIter, &(aResult->mJitter)) ||
         !ReadParam(aMsg, aIter, &(aResult->mMozAvSyncDelay)) ||
         !ReadParam(aMsg, aIter, &(aResult->mMozJitterBufferDelay)) ||

@@ -4,7 +4,6 @@
 
 //! Little helpers for `nsCSSValue`.
 
-use app_units::Au;
 use gecko_bindings::bindings;
 use gecko_bindings::structs;
 use gecko_bindings::structs::{nsCSSValue, nsCSSUnit};
@@ -14,8 +13,7 @@ use std::marker::PhantomData;
 use std::mem;
 use std::ops::{Index, IndexMut};
 use std::slice;
-use values::computed::{Angle, LengthOrPercentage};
-use values::specified::length::Percentage;
+use values::computed::{Angle, LengthOrPercentage, Percentage};
 use values::specified::url::SpecifiedUrl;
 
 impl nsCSSValue {
@@ -76,8 +74,8 @@ impl nsCSSValue {
     /// Sets LengthOrPercentage value to this nsCSSValue.
     pub unsafe fn set_lop(&mut self, lop: LengthOrPercentage) {
         match lop {
-            LengthOrPercentage::Length(au) => {
-                bindings::Gecko_CSSValue_SetAbsoluteLength(self, au.0)
+            LengthOrPercentage::Length(px) => {
+                bindings::Gecko_CSSValue_SetPixelLength(self, px.px())
             }
             LengthOrPercentage::Percentage(pc) => {
                 bindings::Gecko_CSSValue_SetPercentage(self, pc.0)
@@ -90,9 +88,10 @@ impl nsCSSValue {
 
     /// Returns LengthOrPercentage value.
     pub unsafe fn get_lop(&self) -> LengthOrPercentage {
+        use values::computed::Length;
         match self.mUnit {
             nsCSSUnit::eCSSUnit_Pixel => {
-                LengthOrPercentage::Length(Au(bindings::Gecko_CSSValue_GetAbsoluteLength(self)))
+                LengthOrPercentage::Length(Length::new(bindings::Gecko_CSSValue_GetNumber(self)))
             },
             nsCSSUnit::eCSSUnit_Percent => {
                 LengthOrPercentage::Percentage(Percentage(bindings::Gecko_CSSValue_GetPercentage(self)))

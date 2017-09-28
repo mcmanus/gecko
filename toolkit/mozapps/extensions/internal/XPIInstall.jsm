@@ -36,8 +36,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "ChromeManifestParser",
                                   "resource://gre/modules/ChromeManifestParser.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ExtensionData",
                                   "resource://gre/modules/Extension.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Locale",
-                                  "resource://gre/modules/Locale.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
                                   "resource://gre/modules/FileUtils.jsm");
 XPCOMUtils.defineLazyGetter(this, "IconDetails", () => {
@@ -49,8 +47,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
                                   "resource://gre/modules/NetUtil.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ZipUtils",
                                   "resource://gre/modules/ZipUtils.jsm");
 
@@ -71,7 +67,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "XPIInternal",
 XPCOMUtils.defineLazyModuleGetter(this, "XPIProvider",
                                   "resource://gre/modules/addons/XPIProvider.jsm");
 
-/* globals AddonInternal, BOOTSTRAP_REASONS, KEY_APP_SYSTEM_ADDONS, KEY_APP_SYSTEM_DEFAULTS, KEY_APP_TEMPORARY, TEMPORARY_ADDON_SUFFIX, TOOLKIT_ID, XPIDatabase, XPIStates, applyBlocklistChanges, getExternalType, isTheme, isUsableAddon, isWebExtension, recordAddonTelemetry */
+/* globals AddonInternal, BOOTSTRAP_REASONS, KEY_APP_SYSTEM_ADDONS, KEY_APP_SYSTEM_DEFAULTS, KEY_APP_TEMPORARY, TEMPORARY_ADDON_SUFFIX, TOOLKIT_ID, XPIDatabase, XPIStates, getExternalType, isTheme, isUsableAddon, isWebExtension, recordAddonTelemetry */
 const XPI_INTERNAL_SYMBOLS = [
   "AddonInternal",
   "BOOTSTRAP_REASONS",
@@ -82,7 +78,6 @@ const XPI_INTERNAL_SYMBOLS = [
   "TOOLKIT_ID",
   "XPIDatabase",
   "XPIStates",
-  "applyBlocklistChanges",
   "getExternalType",
   "isTheme",
   "isUsableAddon",
@@ -339,8 +334,6 @@ async function loadManifestFromWebManifest(aUri) {
     throw new Error("Extension is invalid");
   }
 
-  let theme = Boolean(manifest.theme);
-
   let bss = (manifest.browser_specific_settings && manifest.browser_specific_settings.gecko)
       || (manifest.applications && manifest.applications.gecko) || {};
   if (manifest.browser_specific_settings && manifest.applications) {
@@ -355,7 +348,8 @@ async function loadManifestFromWebManifest(aUri) {
   let addon = new AddonInternal();
   addon.id = bss.id;
   addon.version = manifest.version;
-  addon.type = "webextension" + (theme ? "-theme" : "");
+  addon.type = extension.type === "extension" ?
+               "webextension" : `webextension-${extension.type}`;
   addon.unpack = false;
   addon.strictCompatibility = true;
   addon.bootstrap = true;
@@ -440,7 +434,7 @@ async function loadManifestFromWebManifest(aUri) {
 
   addon.targetPlatforms = [];
   // Themes are disabled by default, except when they're installed from a web page.
-  addon.userDisabled = theme;
+  addon.userDisabled = (extension.type === "theme");
   addon.softDisabled = addon.blocklistState == nsIBlocklistService.STATE_SOFTBLOCKED;
 
   return addon;
@@ -855,6 +849,7 @@ var loadManifestFromDir = async function(aDir, aInstallLocation) {
   addon.size = getFileSize(aDir);
   addon.signedState = await verifyDirSignedState(aDir, addon)
     .then(({signedState}) => signedState);
+  addon.updateBlocklistState();
   addon.appDisabled = !isUsableAddon(addon);
 
   defineSyncGUID(addon);
@@ -940,6 +935,7 @@ var loadManifestFromZipReader = async function(aZipReader, aInstallLocation) {
       addon.id = generateTemporaryInstallID(aZipReader.file);
     }
   }
+  addon.updateBlocklistState();
   addon.appDisabled = !isUsableAddon(addon);
 
   defineSyncGUID(addon);
@@ -1029,37 +1025,6 @@ function getTemporaryFile() {
 }
 
 /**
- * Verifies that a zip file's contents are all signed by the same principal.
- * Directory entries and anything in the META-INF directory are not checked.
- *
- * @param  aZip
- *         A nsIZipReader to check
- * @param  aCertificate
- *         The nsIX509Cert to compare against
- * @return true if all the contents that should be signed were signed by the
- *         principal
- */
-function verifyZipSigning(aZip, aCertificate) {
-  var count = 0;
-  var entries = aZip.findEntries(null);
-  while (entries.hasMore()) {
-    var entry = entries.getNext();
-    // Nothing in META-INF is in the manifest.
-    if (entry.substr(0, 9) == "META-INF/")
-      continue;
-    // Directory entries aren't in the manifest.
-    if (entry.substr(-1) == "/")
-      continue;
-    count++;
-    var entryCertificate = aZip.getSigningCert(entry);
-    if (!entryCertificate || !aCertificate.equals(entryCertificate)) {
-      return false;
-    }
-  }
-  return aZip.manifestEntriesCount == count;
-}
-
-/**
  * Returns the signedState for a given return code and certificate by verifying
  * it against the expected ID.
  */
@@ -1083,8 +1048,8 @@ function getSignedStatus(aRv, aCert, aAddonID) {
       if (expectedCommonName && expectedCommonName != aCert.commonName)
         return AddonManager.SIGNEDSTATE_BROKEN;
 
-      let hotfixID = Preferences.get(PREF_EM_HOTFIX_ID, undefined);
-      if (hotfixID && hotfixID == aAddonID && Preferences.get(PREF_EM_CERT_CHECKATTRIBUTES, false)) {
+      let hotfixID = Services.prefs.getStringPref(PREF_EM_HOTFIX_ID, undefined);
+      if (hotfixID && hotfixID == aAddonID && Services.prefs.getBoolPref(PREF_EM_CERT_CHECKATTRIBUTES, false)) {
         // The hotfix add-on has some more rigorous certificate checks
         try {
           CertUtils.validateCert(aCert,
@@ -1133,7 +1098,7 @@ function shouldVerifySignedState(aAddon) {
     return false;
 
   // Hotfixes should always have their signature checked
-  let hotfixID = Preferences.get(PREF_EM_HOTFIX_ID, undefined);
+  let hotfixID = Services.prefs.getStringPref(PREF_EM_HOTFIX_ID, undefined);
   if (hotfixID && aAddon.id == hotfixID)
     return true;
 
@@ -1162,7 +1127,7 @@ function verifyZipSignedState(aFile, aAddon) {
     });
 
   let root = Ci.nsIX509CertDB.AddonsPublicRoot;
-  if (!AppConstants.MOZ_REQUIRE_SIGNING && Preferences.get(PREF_XPI_SIGNATURES_DEV_ROOT, false))
+  if (!AppConstants.MOZ_REQUIRE_SIGNING && Services.prefs.getBoolPref(PREF_XPI_SIGNATURES_DEV_ROOT, false))
     root = Ci.nsIX509CertDB.AddonsStageRoot;
 
   return new Promise(resolve => {
@@ -1204,7 +1169,7 @@ function verifyDirSignedState(aDir, aAddon) {
     });
 
   let root = Ci.nsIX509CertDB.AddonsPublicRoot;
-  if (!AppConstants.MOZ_REQUIRE_SIGNING && Preferences.get(PREF_XPI_SIGNATURES_DEV_ROOT, false))
+  if (!AppConstants.MOZ_REQUIRE_SIGNING && Services.prefs.getBoolPref(PREF_XPI_SIGNATURES_DEV_ROOT, false))
     root = Ci.nsIX509CertDB.AddonsStageRoot;
 
   return new Promise(resolve => {
@@ -1457,8 +1422,6 @@ class AddonInstall {
 
     this.file = null;
     this.ownsTempFile = null;
-    this.certificate = null;
-    this.certName = null;
 
     this.addon = null;
     this.state = null;
@@ -1672,25 +1635,6 @@ class AddonInstall {
 
         return Promise.reject([AddonManager.ERROR_CORRUPT_FILE,
                                "signature verification failed"])
-      }
-    } else if (this.addon.signedState == AddonManager.SIGNEDSTATE_UNKNOWN ||
-             this.addon.signedState == AddonManager.SIGNEDSTATE_NOT_REQUIRED) {
-      // Check object signing certificate, if any
-      let x509 = zipreader.getSigningCert(null);
-      if (x509) {
-        logger.debug("Verifying XPI signature");
-        if (verifyZipSigning(zipreader, x509)) {
-          this.certificate = x509;
-          if (this.certificate.commonName.length > 0) {
-            this.certName = this.certificate.commonName;
-          } else {
-            this.certName = this.certificate.organization;
-          }
-        } else {
-          zipreader.close();
-          return Promise.reject([AddonManager.ERROR_CORRUPT_FILE,
-                                 "XPI is incorrectly signed"]);
-        }
       }
     }
 
@@ -1975,7 +1919,7 @@ class AddonInstall {
     let installedUnpacked = 0;
 
     // First stage the file regardless of whether restarting is necessary
-    if (this.addon.unpack || Preferences.get(PREF_XPI_UNPACK, false)) {
+    if (this.addon.unpack || Services.prefs.getBoolPref(PREF_XPI_UNPACK, false)) {
       logger.debug("Addon " + this.addon.id + " will be installed as " +
                    "an unpacked directory");
       stagedAddon.leafName = this.addon.id;
@@ -2137,8 +2081,7 @@ this.LocalAddonInstall = class extends AddonInstall {
     });
 
     this.existingAddon = addon;
-    if (addon)
-      applyBlocklistChanges(addon, this.addon);
+    this.addon.updateBlocklistState({oldAddon: this.existingAddon});
     this.addon.updateDate = Date.now();
     this.addon.installDate = addon ? addon.installDate : this.addon.updateDate;
 
@@ -2314,7 +2257,7 @@ this.DownloadAddonInstall = class extends AddonInstall {
                    createInstance(Ci.nsIStreamListenerTee);
     listener.init(this, this.stream);
     try {
-      let requireBuiltIn = Preferences.get(PREF_INSTALL_REQUIREBUILTINCERTS, true);
+      let requireBuiltIn = Services.prefs.getBoolPref(PREF_INSTALL_REQUIREBUILTINCERTS, true);
       this.badCertHandler = new CertUtils.BadCertHandler(!requireBuiltIn);
 
       this.channel = NetUtil.newChannel({
@@ -2460,7 +2403,7 @@ this.DownloadAddonInstall = class extends AddonInstall {
         if (!this.hash && (aRequest instanceof Ci.nsIChannel)) {
           try {
             CertUtils.checkCert(aRequest,
-                                !Preferences.get(PREF_INSTALL_REQUIREBUILTINCERTS, true));
+                                !Services.prefs.getBoolPref(PREF_INSTALL_REQUIREBUILTINCERTS, true));
           } catch (e) {
             this.downloadFailed(AddonManager.ERROR_NETWORK_FAILURE, e);
             return;
@@ -2543,10 +2486,10 @@ this.DownloadAddonInstall = class extends AddonInstall {
       if (this.existingAddon) {
         this.addon.existingAddonID = this.existingAddon.id;
         this.addon.installDate = this.existingAddon.installDate;
-        applyBlocklistChanges(this.existingAddon, this.addon);
       } else {
         this.addon.installDate = this.addon.updateDate;
       }
+      this.addon.updateBlocklistState({oldAddon: this.existingAddon});
 
       if (AddonManagerPrivate.callInstallListeners("onDownloadEnded",
                                                    this.listeners,
@@ -2715,7 +2658,7 @@ AddonInstallWrapper.prototype = {
 };
 
 ["name", "version", "icons", "releaseNotesURI", "file", "state", "error",
- "progress", "maxProgress", "certificate", "certName"].forEach(function(aProp) {
+ "progress", "maxProgress"].forEach(function(aProp) {
   Object.defineProperty(AddonInstallWrapper.prototype, aProp, {
     get() {
       return installFor(this)[aProp];

@@ -2,21 +2,7 @@
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- *
- * This Original Code has been modified by IBM Corporation.
- * Modifications made by IBM described herein are
- * Copyright (c) International Business Machines
- * Corporation, 2000
- *
- * Modifications to Mozilla code or documentation
- * identified per MPL Section 3.3
- *
- * Date         Modified by     Description of modification
- * 03/27/2000   IBM Corp.       Added PR_CALLBACK for Optlink
- *                               use in OS2
- */
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
 
@@ -58,7 +44,7 @@
 #include "nsRDFBaseDataSources.h"
 #include "nsString.h"
 #include "nsReadableUtils.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "rdfutil.h"
 #include "PLDHashTable.h"
 #include "plstr.h"
@@ -240,7 +226,7 @@ protected:
     PLDHashTable mForwardArcs;
     PLDHashTable mReverseArcs;
 
-    nsCOMArray<nsIRDFObserver> mObservers;  
+    nsCOMArray<nsIRDFObserver> mObservers;
     uint32_t                   mNumObservers;
 
     // VisitFoo needs to block writes, [Un]Assert only allowed
@@ -253,8 +239,8 @@ protected:
 
     // Thread-safe writer implementation methods.
     nsresult
-    LockedAssert(nsIRDFResource* source, 
-                 nsIRDFResource* property, 
+    LockedAssert(nsIRDFResource* source,
+                 nsIRDFResource* property,
                  nsIRDFNode* target,
                  bool tv);
 
@@ -643,7 +629,7 @@ InMemoryArcsEnumeratorImpl::HasMoreElements(bool* aResult)
             //      another assertion that has the same property as this one.
             // The first is a practical concern; the second a defense against
             // an obscure crash and other erratic behavior.  To ensure the
-            // second condition, skip down the chain until we find the next 
+            // second condition, skip down the chain until we find the next
             // assertion with a property that doesn't match the current one.
             // (All these assertions would be skipped via mAlreadyReturned
             // checks anyways; this is even a bit faster.)
@@ -804,19 +790,19 @@ InMemoryDataSource::LogOperation(const char* aOperation,
     if (! MOZ_LOG_TEST(gLog, LogLevel::Debug))
         return;
 
-    nsXPIDLCString uri;
+    nsCString uri;
     aSource->GetValue(getter_Copies(uri));
     MOZ_LOG(gLog, LogLevel::Debug,
            ("InMemoryDataSource(%p): %s", this, aOperation));
 
     MOZ_LOG(gLog, LogLevel::Debug,
-           ("  [(%p)%s]--", aSource, (const char*) uri));
+           ("  [(%p)%s]--", aSource, uri.get()));
 
     aProperty->GetValue(getter_Copies(uri));
 
     char tv = (aTruthValue ? '-' : '!');
     MOZ_LOG(gLog, LogLevel::Debug,
-           ("  --%c[(%p)%s]--", tv, aProperty, (const char*) uri));
+           ("  --%c[(%p)%s]--", tv, aProperty, uri.get()));
 
     nsCOMPtr<nsIRDFResource> resource;
     nsCOMPtr<nsIRDFLiteral> literal;
@@ -824,18 +810,13 @@ InMemoryDataSource::LogOperation(const char* aOperation,
     if ((resource = do_QueryInterface(aTarget)) != nullptr) {
         resource->GetValue(getter_Copies(uri));
         MOZ_LOG(gLog, LogLevel::Debug,
-           ("  -->[(%p)%s]", aTarget, (const char*) uri));
+           ("  -->[(%p)%s]", aTarget, uri.get()));
     }
     else if ((literal = do_QueryInterface(aTarget)) != nullptr) {
-        nsXPIDLString value;
+        nsString value;
         literal->GetValue(getter_Copies(value));
-        nsAutoString valueStr(value);
-        char* valueCStr = ToNewCString(valueStr);
-
         MOZ_LOG(gLog, LogLevel::Debug,
-           ("  -->(\"%s\")\n", valueCStr));
-
-        free(valueCStr);
+           ("  -->(\"%s\")\n", NS_ConvertUTF16toUTF8(value).get()));
     }
     else {
         MOZ_LOG(gLog, LogLevel::Debug,
@@ -1137,9 +1118,9 @@ InMemoryDataSource::LockedAssert(nsIRDFResource* aSource,
 
 NS_IMETHODIMP
 InMemoryDataSource::Assert(nsIRDFResource* aSource,
-                           nsIRDFResource* aProperty, 
+                           nsIRDFResource* aProperty,
                            nsIRDFNode* aTarget,
-                           bool aTruthValue) 
+                           bool aTruthValue)
 {
     NS_PRECONDITION(aSource != nullptr, "null ptr");
     if (! aSource)
@@ -1473,7 +1454,7 @@ InMemoryDataSource::RemoveObserver(nsIRDFObserver* aObserver)
     return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 InMemoryDataSource::HasArcIn(nsIRDFNode *aNode, nsIRDFResource *aArc, bool *result)
 {
     Assertion* ass = GetReverseArcs(aNode);
@@ -1955,7 +1936,7 @@ InMemoryDataSource::VisitAllTriples(rdfITripleVisitor *aVisitor)
     --mReadCount;
 
     return rv;
-} 
+}
 
 ////////////////////////////////////////////////////////////////////////
 

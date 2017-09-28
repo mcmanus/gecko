@@ -4,13 +4,14 @@
 
 from __future__ import absolute_import, print_function, unicode_literals
 
+import contextlib
 import unittest
 
-from .. import target_tasks
-from .. import try_option_syntax
-from ..graph import Graph
-from ..taskgraph import TaskGraph
-from ..task import Task
+from taskgraph import target_tasks
+from taskgraph import try_option_syntax
+from taskgraph.graph import Graph
+from taskgraph.taskgraph import TaskGraph
+from taskgraph.task import Task
 from mozunit import main
 
 
@@ -53,7 +54,7 @@ class TestTargetTasks(unittest.TestCase):
         self.assertTrue(self.default_matches(['integration'], 'mozilla-inbound'))
         self.assertFalse(self.default_matches(['integration'], 'baobab'))
 
-    def test_default_relesae(self):
+    def test_default_release(self):
         """run_on_projects=[release] includes release projects"""
         self.assertTrue(self.default_matches(['release'], 'mozilla-central'))
         self.assertFalse(self.default_matches(['release'], 'mozilla-inbound'))
@@ -65,22 +66,55 @@ class TestTargetTasks(unittest.TestCase):
         self.assertFalse(self.default_matches([], 'mozilla-inbound'))
         self.assertFalse(self.default_matches([], 'baobab'))
 
-    def test_try_option_syntax(self):
+    def make_task_graph(self):
         tasks = {
             'a': Task(kind=None, label='a', attributes={}, task={}),
             'b': Task(kind=None, label='b', attributes={'at-at': 'yep'}, task={}),
+            'c': Task(kind=None, label='c', attributes={'run_on_projects': ['try']}, task={}),
         }
-        graph = Graph(nodes=set('ab'), edges=set())
-        tg = TaskGraph(tasks, graph)
-        params = {'message': 'try me'}
+        graph = Graph(nodes=set('abc'), edges=set())
+        return TaskGraph(tasks, graph)
 
+    @contextlib.contextmanager
+    def fake_TryOptionSyntax(self):
         orig_TryOptionSyntax = try_option_syntax.TryOptionSyntax
         try:
             try_option_syntax.TryOptionSyntax = FakeTryOptionSyntax
-            method = target_tasks.get_method('try_option_syntax')
-            self.assertEqual(method(tg, params), ['b'])
+            yield
         finally:
             try_option_syntax.TryOptionSyntax = orig_TryOptionSyntax
+
+    def test_just_try_it(self):
+        "try_mode = None runs try optoin syntax with no options"
+        tg = self.make_task_graph()
+        method = target_tasks.get_method('try_tasks')
+        with self.fake_TryOptionSyntax():
+            params = {
+                'try_mode': None,
+                'message': '',
+            }
+            self.assertEqual(method(tg, params), ['b'])
+
+    def test_try_option_syntax(self):
+        "try_mode = try_option_syntax uses TryOptionSyntax"
+        tg = self.make_task_graph()
+        method = target_tasks.get_method('try_tasks')
+        with self.fake_TryOptionSyntax():
+            params = {
+                'try_mode': 'try_option_syntax',
+                'message': 'try: -p all',
+            }
+            self.assertEqual(method(tg, params), ['b'])
+
+    def test_try_task_config(self):
+        "try_mode = try_task_config uses the try config"
+        tg = self.make_task_graph()
+        method = target_tasks.get_method('try_tasks')
+        params = {
+            'try_mode': 'try_task_config',
+            'try_task_config': {'tasks': ['a']},
+        }
+        self.assertEqual(method(tg, params), ['a'])
 
 
 if __name__ == '__main__':

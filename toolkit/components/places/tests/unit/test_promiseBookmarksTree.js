@@ -57,6 +57,7 @@ async function compareToNode(aItem, aNode, aIsRootItem, aExcludedGuids = []) {
   switch (aNode.type) {
     case Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER:
       Assert.equal(aItem.type, PlacesUtils.TYPE_X_MOZ_PLACE_CONTAINER);
+      Assert.equal(aItem.typeCode, PlacesUtils.bookmarks.TYPE_FOLDER);
       compare_prop("title", "title", true);
       check_unset(...BOOKMARK_ONLY_PROPS);
 
@@ -95,10 +96,12 @@ async function compareToNode(aItem, aNode, aIsRootItem, aExcludedGuids = []) {
       break;
     case Ci.nsINavHistoryResultNode.RESULT_TYPE_SEPARATOR:
       Assert.equal(aItem.type, PlacesUtils.TYPE_X_MOZ_PLACE_SEPARATOR);
+      Assert.equal(aItem.typeCode, PlacesUtils.bookmarks.TYPE_SEPARATOR);
       check_unset(...BOOKMARK_ONLY_PROPS, ...FOLDER_ONLY_PROPS);
       break;
     default:
       Assert.equal(aItem.type, PlacesUtils.TYPE_X_MOZ_PLACE);
+      Assert.equal(aItem.typeCode, PlacesUtils.bookmarks.TYPE_BOOKMARK);
       compare_prop("uri");
       // node.tags's format is "a, b" whilst promiseBoookmarksTree is "a,b"
       if (aNode.tags === null)
@@ -156,10 +159,10 @@ async function new_bookmark(aInfo) {
   await PlacesTransactions.NewBookmark(aInfo).transact();
 }
 
-async function new_folder(aInfo) {
+function new_folder(aInfo) {
   if (!("title" in aInfo))
     aInfo.title = "Test Item (folder) " + itemsCount;
-  return await PlacesTransactions.NewFolder(aInfo).transact();
+  return PlacesTransactions.NewFolder(aInfo).transact();
 }
 
 // Walks a result nodes tree and test promiseBookmarksTree for each node.
@@ -190,7 +193,7 @@ async function test_promiseBookmarksTreeAgainstResult(aItemGuid = "",
   let itemId = aItemGuid ?
     await PlacesUtils.promiseItemId(aItemGuid) : PlacesUtils.placesRootId;
   let node = PlacesUtils.getFolderContents(itemId).root;
-  return await test_promiseBookmarksTreeForEachNode(node, aOptions, aExcludedGuids);
+  return test_promiseBookmarksTreeForEachNode(node, aOptions, aExcludedGuids);
 }
 
 add_task(async function() {

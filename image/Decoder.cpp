@@ -124,7 +124,7 @@ Decoder::Decode(IResumable* aOnResume /* = nullptr */)
 
   LexerResult lexerResult(TerminalState::FAILURE);
   {
-    PROFILER_LABEL("ImageDecoder", "Decode", js::ProfileEntry::Category::GRAPHICS);
+    AUTO_PROFILER_LABEL("Decoder::Decode", GRAPHICS);
     AutoRecordDecoderTelemetry telemetry(this);
 
     lexerResult =  DoDecode(*mIterator, aOnResume);
@@ -327,7 +327,7 @@ Decoder::AllocateFrameInternal(uint32_t aFrameNum,
   }
 
   if (aOutputSize.width <= 0 || aOutputSize.height <= 0 ||
-      aFrameRect.width <= 0 || aFrameRect.height <= 0) {
+      aFrameRect.Width() <= 0 || aFrameRect.Height() <= 0) {
     NS_WARNING("Trying to add frame with zero or negative size");
     return RawAccessFrameRef();
   }
@@ -404,6 +404,14 @@ Decoder::PostSize(int32_t aWidth,
 
   // Set our intrinsic size.
   mImageMetadata.SetSize(aWidth, aHeight, aOrientation);
+
+  // Verify it is the expected size, if given. Note that this is only used by
+  // the ICO decoder for embedded image types, so only its subdecoders are
+  // required to handle failures in PostSize.
+  if (!IsExpectedSize()) {
+    PostError();
+    return;
+  }
 
   // Set our output size if it's not already set.
   if (!mOutputSize) {

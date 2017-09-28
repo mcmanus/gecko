@@ -5,6 +5,7 @@
 
 #include "DrawTargetCapture.h"
 #include "DrawCommand.h"
+#include "gfxPlatform.h"
 
 namespace mozilla {
 namespace gfx {
@@ -22,6 +23,30 @@ DrawTargetCaptureImpl::~DrawTargetCaptureImpl()
   }
 }
 
+DrawTargetCaptureImpl::DrawTargetCaptureImpl(BackendType aBackend,
+                                             const IntSize& aSize,
+                                             SurfaceFormat aFormat)
+  : mSize(aSize)
+{
+  RefPtr<DrawTarget> screenRefDT =
+      gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget();
+
+  mFormat = aFormat;
+  if (aBackend == screenRefDT->GetBackendType()) {
+    mRefDT = screenRefDT;
+  } else {
+    // If you got here, we have to create a new ref DT to create
+    // backend specific assets like paths / gradients. Try to
+    // create the same backend type as the screen ref dt.
+    gfxWarning() << "Creating a RefDT in DrawTargetCapture.";
+
+    // Create a 1x1 size ref dt to create assets
+    // If we have to snapshot, we'll just create the real DT
+    IntSize size(1, 1);
+    mRefDT = Factory::CreateDrawTarget(aBackend, size, mFormat);
+  }
+}
+
 bool
 DrawTargetCaptureImpl::Init(const IntSize& aSize, DrawTarget* aRefDT)
 {
@@ -32,13 +57,14 @@ DrawTargetCaptureImpl::Init(const IntSize& aSize, DrawTarget* aRefDT)
   mRefDT = aRefDT;
 
   mSize = aSize;
+  mFormat = aRefDT->GetFormat();
   return true;
 }
 
 already_AddRefed<SourceSurface>
 DrawTargetCaptureImpl::Snapshot()
 {
-  RefPtr<DrawTarget> dt = mRefDT->CreateSimilarDrawTarget(mSize, mRefDT->GetFormat());
+  RefPtr<DrawTarget> dt = mRefDT->CreateSimilarDrawTarget(mSize, mFormat);
 
   ReplayToDrawTarget(dt, Matrix());
 
@@ -50,6 +76,17 @@ DrawTargetCaptureImpl::DetachAllSnapshots()
 {}
 
 #define AppendCommand(arg) new (AppendToCommandList<arg>()) arg
+
+void
+DrawTargetCaptureImpl::SetPermitSubpixelAA(bool aPermitSubpixelAA)
+{
+  AppendCommand(SetPermitSubpixelAACommand)(aPermitSubpixelAA);
+
+  // Have to update mPermitSubpixelAA for this DT
+  // because some code paths query the current setting
+  // to determine subpixel AA eligibility.
+  DrawTarget::SetPermitSubpixelAA(aPermitSubpixelAA);
+}
 
 void
 DrawTargetCaptureImpl::DrawSurface(SourceSurface *aSurface,
@@ -152,6 +189,16 @@ DrawTargetCaptureImpl::FillGlyphs(ScaledFont* aFont,
   AppendCommand(FillGlyphsCommand)(aFont, aBuffer, aPattern, aOptions, aRenderingOptions);
 }
 
+void DrawTargetCaptureImpl::StrokeGlyphs(ScaledFont* aFont,
+                                         const GlyphBuffer& aBuffer,
+                                         const Pattern& aPattern,
+                                         const StrokeOptions& aStrokeOptions,
+                                         const DrawOptions& aOptions,
+                                         const GlyphRenderingOptions* aRenderingOptions)
+{
+  AppendCommand(StrokeGlyphsCommand)(aFont, aBuffer, aPattern, aStrokeOptions, aOptions, aRenderingOptions);
+}
+
 void
 DrawTargetCaptureImpl::Mask(const Pattern &aSource,
                             const Pattern &aMask,
@@ -173,6 +220,39 @@ DrawTargetCaptureImpl::PushClipRect(const Rect& aRect)
 }
 
 void
+DrawTargetCaptureImpl::PushLayer(bool aOpaque,
+                                 Float aOpacity,
+                                 SourceSurface* aMask,
+                                 const Matrix& aMaskTransform,
+                                 const IntRect& aBounds,
+                                 bool aCopyBackground)
+{
+  // Have to update mPermitSubpixelAA for this DT
+  // because some code paths query the current setting
+  // to determine subpixel AA eligibility.
+  PushedLayer layer(GetPermitSubpixelAA());
+  mPushedLayers.push_back(layer);
+  DrawTarget::SetPermitSubpixelAA(aOpaque);
+
+  AppendCommand(PushLayerCommand)(aOpaque,
+                                  aOpacity,
+                                  aMask,
+                                  aMaskTransform,
+                                  aBounds,
+                                  aCopyBackground);
+}
+
+void
+DrawTargetCaptureImpl::PopLayer()
+{
+  MOZ_ASSERT(mPushedLayers.size());
+  DrawTarget::SetPermitSubpixelAA(mPushedLayers.back().mOldPermitSubpixelAA);
+  mPushedLayers.pop_back();
+
+  AppendCommand(PopLayerCommand)();
+}
+
+void
 DrawTargetCaptureImpl::PopClip()
 {
   AppendCommand(PopClipCommand)();
@@ -182,6 +262,11 @@ void
 DrawTargetCaptureImpl::SetTransform(const Matrix& aTransform)
 {
   AppendCommand(SetTransformCommand)(aTransform);
+
+  // Have to update the transform for this DT
+  // because some code paths query the current transform
+  // to render specific things.
+  DrawTarget::SetTransform(aTransform);
 }
 
 void

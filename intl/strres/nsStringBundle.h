@@ -30,12 +30,6 @@ public:
 protected:
     virtual ~nsStringBundle();
 
-    //
-    // functional decomposition of the funitions repeatively called
-    //
-    nsresult GetStringFromID(int32_t aID, nsAString& aResult);
-    nsresult GetStringFromName(const nsAString& aName, nsAString& aResult);
-
     nsresult GetCombinedEnumeration(nsIStringBundleOverride* aOverrideString,
                                     nsISimpleEnumerator** aResult);
 private:
@@ -48,7 +42,7 @@ private:
 public:
     static nsresult FormatString(const char16_t *formatStr,
                                  const char16_t **aParams, uint32_t aLength,
-                                 char16_t **aResult);
+                                 nsAString& aResult);
 };
 
 class nsExtensibleStringBundle;

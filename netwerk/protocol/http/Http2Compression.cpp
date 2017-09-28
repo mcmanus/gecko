@@ -209,8 +209,8 @@ nvFIFO::~nvFIFO()
 void
 nvFIFO::AddElement(const nsCString &name, const nsCString &value)
 {
-  mByteCount += name.Length() + value.Length() + 32;
   nvPair *pair = new nvPair(name, value);
+  mByteCount += pair->Size();
   mTable.PushFront(pair);
 }
 
@@ -1458,7 +1458,6 @@ Http2Compressor::ProcessHeader(const nvPair inputPair, bool noLocalIndex,
 
   LOG(("Compressor state after index"));
   DumpState();
-  return;
 }
 
 void

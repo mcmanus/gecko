@@ -33,7 +33,7 @@ function testNestedObject(objExpr, summary = objExpr) {
       ".jsonPanelBox .treeTable .objectCell");
     is(objectCellText, summary, objExpr + " has a visible summary");
 
-    // Collapsed auto-expanded node.
+    // Collapse auto-expanded node.
     yield clickJsonNode(".jsonPanelBox .treeTable .treeLabel");
 
     let textAfter = yield getElementText(
@@ -45,4 +45,4 @@ function testNestedObject(objExpr, summary = objExpr) {
 add_task(testRootObject("null"));
 add_task(testNestedObject("null"));
 add_task(testNestedObject("[]"));
-add_task(testNestedObject("{}", "Object"));
+add_task(testNestedObject("{}"));

@@ -11,16 +11,17 @@ use Atom;
 use dom::{TElement, TNode};
 use fnv::FnvHashSet;
 use invalidation::element::restyle_hints::RestyleHint;
+use media_queries::Device;
 use selector_parser::SelectorImpl;
 use selectors::attr::CaseSensitivity;
 use selectors::parser::{Component, Selector};
 use shared_lock::SharedRwLockReadGuard;
-use stylesheets::{CssRule, Stylesheet};
-use stylist::Stylist;
+use stylesheets::{CssRule, StylesheetInDocument};
 
 /// An invalidation scope represents a kind of subtree that may need to be
 /// restyled.
-#[derive(Debug, Hash, Eq, PartialEq)]
+#[derive(Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 enum InvalidationScope {
     /// All the descendants of an element with a given id.
     ID(Atom),
@@ -52,8 +53,9 @@ impl InvalidationScope {
 
 /// A set of invalidations due to stylesheet additions.
 ///
-/// TODO(emilio): We might be able to do the same analysis for removals and
-/// media query changes too?
+/// TODO(emilio): We might be able to do the same analysis for media query
+/// changes too (or even selector changes?).
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 pub struct StylesheetInvalidationSet {
     /// The style scopes we know we have to restyle so far.
     invalid_scopes: FnvHashSet<InvalidationScope>,
@@ -80,11 +82,14 @@ impl StylesheetInvalidationSet {
     /// Analyze the given stylesheet, and collect invalidations from their
     /// rules, in order to avoid doing a full restyle when we style the document
     /// next time.
-    pub fn collect_invalidations_for(
+    pub fn collect_invalidations_for<S>(
         &mut self,
-        stylist: &Stylist,
-        stylesheet: &Stylesheet,
-        guard: &SharedRwLockReadGuard)
+        device: &Device,
+        stylesheet: &S,
+        guard: &SharedRwLockReadGuard
+    )
+    where
+        S: StylesheetInDocument,
     {
         debug!("StylesheetInvalidationSet::collect_invalidations_for");
         if self.fully_invalid {
@@ -92,13 +97,13 @@ impl StylesheetInvalidationSet {
             return;
         }
 
-        if stylesheet.disabled() ||
-           !stylesheet.is_effective_for_device(stylist.device(), guard) {
+        if !stylesheet.enabled() ||
+           !stylesheet.is_effective_for_device(device, guard) {
             debug!(" > Stylesheet was not effective");
             return; // Nothing to do here.
         }
 
-        for rule in stylesheet.effective_rules(stylist.device(), guard) {
+        for rule in stylesheet.effective_rules(device, guard) {
             self.collect_invalidations_for_rule(rule, guard);
             if self.fully_invalid {
                 self.invalid_scopes.clear();
@@ -112,12 +117,21 @@ impl StylesheetInvalidationSet {
 
     /// Clears the invalidation set, invalidating elements as needed if
     /// `document_element` is provided.
-    pub fn flush<E>(&mut self, document_element: Option<E>)
+    ///
+    /// Returns true if any invalidations ocurred.
+    pub fn flush<E>(&mut self, document_element: Option<E>) -> bool
         where E: TElement,
     {
-        if let Some(e) = document_element {
-            self.process_invalidations(e);
-        }
+        let have_invalidations = match document_element {
+            Some(e) => self.process_invalidations(e),
+            None => false,
+        };
+        self.clear();
+        have_invalidations
+    }
+
+    /// Clears the invalidation set without processing.
+    pub fn clear(&mut self) {
         self.invalid_scopes.clear();
         self.fully_invalid = false;
     }
@@ -134,7 +148,7 @@ impl StylesheetInvalidationSet {
             if self.fully_invalid {
                 debug!("process_invalidations: fully_invalid({:?})",
                        element);
-                data.restyle.hint.insert(RestyleHint::restyle_subtree());
+                data.hint.insert(RestyleHint::restyle_subtree());
                 return true;
             }
         }
@@ -165,7 +179,7 @@ impl StylesheetInvalidationSet {
             return false;
         }
 
-        if data.restyle.hint.contains_subtree() {
+        if data.hint.contains_subtree() {
             debug!("process_invalidations_in_subtree: {:?} was already invalid",
                    element);
             return false;
@@ -175,7 +189,7 @@ impl StylesheetInvalidationSet {
             if scope.matches(element) {
                 debug!("process_invalidations_in_subtree: {:?} matched {:?}",
                        element, scope);
-                data.restyle.hint.insert(RestyleHint::restyle_subtree());
+                data.hint.insert(RestyleHint::restyle_subtree());
                 return true;
             }
         }
@@ -279,8 +293,8 @@ impl StylesheetInvalidationSet {
         match *rule {
             Style(ref lock) => {
                 let style_rule = lock.read_with(guard);
-                for selector_and_hashes in &style_rule.selectors.0 {
-                    self.collect_scopes(&selector_and_hashes.selector);
+                for selector in &style_rule.selectors.0 {
+                    self.collect_scopes(selector);
                     if self.fully_invalid {
                         return;
                     }
@@ -298,7 +312,8 @@ impl StylesheetInvalidationSet {
             CounterStyle(..) |
             Keyframes(..) |
             Page(..) |
-            Viewport(..) => {
+            Viewport(..) |
+            FontFeatureValues(..) => {
                 debug!(" > Found unsupported rule, marking the whole subtree \
                        invalid.");
 

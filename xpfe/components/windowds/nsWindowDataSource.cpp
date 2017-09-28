@@ -121,7 +121,7 @@ NS_INTERFACE_MAP_END
 
 NS_IMETHODIMP
 nsWindowDataSource::OnWindowTitleChange(nsIXULWindow *window,
-                                        const char16_t *newTitle)
+                                        const nsAString& newTitle)
 {
     nsresult rv;
 
@@ -137,7 +137,8 @@ nsWindowDataSource::OnWindowTitleChange(nsIXULWindow *window,
     NS_ENSURE_TRUE(windowResource, NS_ERROR_UNEXPECTED);
 
     nsCOMPtr<nsIRDFLiteral> newTitleLiteral;
-    rv = gRDFService->GetLiteral(newTitle, getter_AddRefs(newTitleLiteral));
+    rv = gRDFService->GetLiteral(PromiseFlatString(newTitle).get(),
+                                 getter_AddRefs(newTitleLiteral));
     NS_ENSURE_SUCCESS(rv, rv);
 
     // get the old title
@@ -184,12 +185,9 @@ nsWindowDataSource::OnCloseWindow(nsIXULWindow *window)
 {
     nsresult rv;
     nsCOMPtr<nsIRDFResource> resource;
-    mWindowResources.Get(window, getter_AddRefs(resource));
-    if (!resource) {
+    if (!mWindowResources.Remove(window, getter_AddRefs(resource))) {
         return NS_ERROR_UNEXPECTED;
     }
-
-    mWindowResources.Remove(window);
 
     // make sure we're not shutting down
     if (!mContainer) return NS_OK;

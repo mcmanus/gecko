@@ -116,7 +116,7 @@ InitListUpdateRequest(ThreatType aThreatType,
   // Only set non-empty state.
   if (aStateBase64[0] != '\0') {
     nsCString stateBinary;
-    nsresult rv = Base64Decode(nsCString(aStateBase64), stateBinary);
+    nsresult rv = Base64Decode(nsDependentCString(aStateBase64), stateBinary);
     if (NS_SUCCEEDED(rv)) {
       aListUpdateRequest->set_state(stateBinary.get(), stateBinary.Length());
     }
@@ -131,7 +131,7 @@ CreateClientInfo()
   nsCOMPtr<nsIPrefBranch> prefBranch =
     do_GetService(NS_PREFSERVICE_CONTRACTID);
 
-  nsXPIDLCString clientId;
+  nsCString clientId;
   nsresult rv = prefBranch->GetCharPref("browser.safebrowsing.id",
                                         getter_Copies(clientId));
 
@@ -142,6 +142,26 @@ CreateClientInfo()
   c->set_client_id(clientId.get());
 
   return c;
+}
+
+static bool
+IsAllowedOnCurrentPlatform(uint32_t aThreatType)
+{
+  PlatformType platform = GetPlatformType();
+
+  switch (aThreatType) {
+  case POTENTIALLY_HARMFUL_APPLICATION:
+    // Bug 1388582 - Google server would respond 404 error if the request
+    // contains PHA on non-mobile platform.
+    return ANDROID_PLATFORM == platform;
+  case MALICIOUS_BINARY:
+  case CSD_DOWNLOAD_WHITELIST:
+    // Bug 1392204 - 'goog-downloadwhite-proto' and 'goog-badbinurl-proto'
+    // are not available on android.
+    return ANDROID_PLATFORM != platform;
+  }
+  // We allow every threat type not listed in the switch cases.
+  return true;
 }
 
 } // end of namespace safebrowsing.
@@ -201,7 +221,7 @@ nsUrlClassifierUtils::GetKeyForURI(nsIURI * uri, nsACString & _retval)
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsAutoCString path;
-  rv = innerURI->GetPath(path);
+  rv = innerURI->GetPathQueryRef(path);
   NS_ENSURE_SUCCESS(rv, rv);
 
   // strip out anchors
@@ -227,18 +247,22 @@ static const struct {
   const char* mListName;
   uint32_t mThreatType;
 } THREAT_TYPE_CONV_TABLE[] = {
-  { "goog-malware-proto",  MALWARE_THREAT},            // 1
-  { "googpub-phish-proto", SOCIAL_ENGINEERING_PUBLIC}, // 2
-  { "goog-unwanted-proto", UNWANTED_SOFTWARE},         // 3
-  { "goog-phish-proto", SOCIAL_ENGINEERING},           // 5
+  { "goog-malware-proto",  MALWARE_THREAT},                  // 1
+  { "googpub-phish-proto", SOCIAL_ENGINEERING_PUBLIC},       // 2
+  { "goog-unwanted-proto", UNWANTED_SOFTWARE},               // 3
+  { "goog-harmful-proto",  POTENTIALLY_HARMFUL_APPLICATION}, // 4
+  { "goog-phish-proto",    SOCIAL_ENGINEERING},              // 5
 
   // For application reputation
-  { "goog-badbinurl-proto", MALICIOUS_BINARY},         // 7
+  { "goog-badbinurl-proto", MALICIOUS_BINARY},            // 7
   { "goog-downloadwhite-proto", CSD_DOWNLOAD_WHITELIST},  // 9
+
+  // For login reputation
+  { "goog-passwordwhite-proto", CSD_WHITELIST}, // 8
 
   // For testing purpose.
   { "test-phish-proto",    SOCIAL_ENGINEERING_PUBLIC}, // 2
-  { "test-unwanted-proto", UNWANTED_SOFTWARE}, // 3
+  { "test-unwanted-proto", UNWANTED_SOFTWARE},         // 3
 };
 
 NS_IMETHODIMP
@@ -292,13 +316,16 @@ nsUrlClassifierUtils::GetTelemetryProvider(const nsACString& aTableName,
                                   nsACString& aProvider)
 {
   GetProvider(aTableName, aProvider);
-  // Filter out build-in providers: mozilla, google, google4
-  // Empty provider is filtered as "other"
+  // Whitelist known providers to avoid reporting on private ones.
+  // An empty provider is treated as "other"
   if (!NS_LITERAL_CSTRING("mozilla").Equals(aProvider) &&
       !NS_LITERAL_CSTRING("google").Equals(aProvider) &&
       !NS_LITERAL_CSTRING("google4").Equals(aProvider) &&
+      !NS_LITERAL_CSTRING("baidu").Equals(aProvider) &&
+      !NS_LITERAL_CSTRING("mozcn").Equals(aProvider) &&
+      !NS_LITERAL_CSTRING("yandex").Equals(aProvider) &&
       !NS_LITERAL_CSTRING(TESTING_TABLE_PROVIDER_NAME).Equals(aProvider)) {
-    aProvider.Assign(NS_LITERAL_CSTRING("other"));
+    aProvider.AssignLiteral("other");
   }
 
   return NS_OK;
@@ -312,10 +339,10 @@ nsUrlClassifierUtils::GetProtocolVersion(const nsACString& aProvider,
   if (prefBranch) {
       nsPrintfCString prefName("browser.safebrowsing.provider.%s.pver",
                                nsCString(aProvider).get());
-      nsXPIDLCString version;
+      nsCString version;
       nsresult rv = prefBranch->GetCharPref(prefName.get(), getter_Copies(version));
 
-      aVersion = NS_SUCCEEDED(rv) ? version : DEFAULT_PROTOCOL_VERSION;
+      aVersion = NS_SUCCEEDED(rv) ? version.get() : DEFAULT_PROTOCOL_VERSION;
   } else {
       aVersion = DEFAULT_PROTOCOL_VERSION;
   }
@@ -340,6 +367,13 @@ nsUrlClassifierUtils::MakeUpdateRequestV4(const char** aListNames,
     nsresult rv = ConvertListNameToThreatType(listName, &threatType);
     if (NS_FAILED(rv)) {
       continue; // Unknown list name.
+    }
+    if (!IsAllowedOnCurrentPlatform(threatType)) {
+      NS_WARNING(nsPrintfCString("Threat type %d (%s) is unsupported on current platform: %d",
+                                 threatType,
+                                 aListNames[i],
+                                 GetPlatformType()).get());
+      continue; // Some threat types are not available on some platforms.
     }
     auto lur = r.mutable_list_update_requests()->Add();
     InitListUpdateRequest(static_cast<ThreatType>(threatType), aStatesBase64[i], lur);
@@ -374,24 +408,31 @@ nsUrlClassifierUtils::MakeFindFullHashRequestV4(const char** aListNames,
 
   nsresult rv;
 
-  // Set up FindFullHashesRequest.client_states.
-  for (uint32_t i = 0; i < aListCount; i++) {
-    nsCString stateBinary;
-    rv = Base64Decode(nsCString(aListStatesBase64[i]), stateBinary);
-    NS_ENSURE_SUCCESS(rv, rv);
-    r.add_client_states(stateBinary.get(), stateBinary.Length());
-  }
-
   //-------------------------------------------------------------------
   // Set up FindFullHashesRequest.threat_info.
   auto threatInfo = r.mutable_threat_info();
 
   // 1) Set threat types.
   for (uint32_t i = 0; i < aListCount; i++) {
+    // Add threat types.
     uint32_t threatType;
-    rv = ConvertListNameToThreatType(nsCString(aListNames[i]), &threatType);
+    rv = ConvertListNameToThreatType(nsDependentCString(aListNames[i]), &threatType);
     NS_ENSURE_SUCCESS(rv, rv);
+    if (!IsAllowedOnCurrentPlatform(threatType)) {
+      NS_WARNING(nsPrintfCString("Threat type %d (%s) is unsupported on current platform: %d",
+                                 threatType,
+                                 aListNames[i],
+                                 GetPlatformType()).get());
+      continue;
+    }
     threatInfo->add_threat_types((ThreatType)threatType);
+
+    // Add client states for index 'i' only when the threat type is available
+    // on current platform.
+    nsCString stateBinary;
+    rv = Base64Decode(nsDependentCString(aListStatesBase64[i]), stateBinary);
+    NS_ENSURE_SUCCESS(rv, rv);
+    r.add_client_states(stateBinary.get(), stateBinary.Length());
   }
 
   // 2) Set platform type.
@@ -403,7 +444,7 @@ nsUrlClassifierUtils::MakeFindFullHashRequestV4(const char** aListNames,
   // 4) Set threat entries.
   for (uint32_t i = 0; i < aPrefixCount; i++) {
     nsCString prefixBinary;
-    rv = Base64Decode(nsCString(aPrefixesBase64[i]), prefixBinary);
+    rv = Base64Decode(nsDependentCString(aPrefixesBase64[i]), prefixBinary);
     threatInfo->add_threat_entries()->set_hash(prefixBinary.get(),
                                                prefixBinary.Length());
   }
@@ -461,7 +502,7 @@ nsUrlClassifierUtils::ParseFindFullHashResponseV4(const nsACString& aResponse,
     }
     auto& hash = m.threat().hash();
     auto cacheDurationSec = m.cache_duration().seconds();
-    aCallback->OnCompleteHashFound(nsCString(hash.c_str(), hash.length()),
+    aCallback->OnCompleteHashFound(nsDependentCString(hash.c_str(), hash.length()),
                                    tableNames, cacheDurationSec);
 
     Telemetry::Accumulate(Telemetry::URLCLASSIFIER_POSITIVE_CACHE_DURATION,
@@ -548,7 +589,7 @@ nsUrlClassifierUtils::ReadProvidersFromPrefs(ProviderDictType& aDict)
     nsCString provider(entry->GetKey());
     nsPrintfCString owninListsPref("%s.lists", provider.get());
 
-    nsXPIDLCString owningLists;
+    nsCString owningLists;
     nsresult rv = prefBranch->GetCharPref(owninListsPref.get(),
                                           getter_Copies(owningLists));
     if (NS_FAILED(rv)) {
@@ -719,7 +760,6 @@ nsUrlClassifierUtils::ParseIPAddress(const nsACString & host,
       _retval.Append(canonical);
     }
   }
-  return;
 }
 
 void

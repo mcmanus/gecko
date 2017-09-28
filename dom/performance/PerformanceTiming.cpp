@@ -78,12 +78,40 @@ PerformanceTiming::InitializeTimingInfo(nsITimedChannel* aChannel)
     aChannel->GetDomainLookupStart(&mDomainLookupStart);
     aChannel->GetDomainLookupEnd(&mDomainLookupEnd);
     aChannel->GetConnectStart(&mConnectStart);
+    aChannel->GetSecureConnectionStart(&mSecureConnectionStart);
     aChannel->GetConnectEnd(&mConnectEnd);
     aChannel->GetRequestStart(&mRequestStart);
     aChannel->GetResponseStart(&mResponseStart);
     aChannel->GetCacheReadStart(&mCacheReadStart);
     aChannel->GetResponseEnd(&mResponseEnd);
     aChannel->GetCacheReadEnd(&mCacheReadEnd);
+
+    // the performance timing api essentially requires that the event timestamps
+    // are >= asyncOpen().. but in truth the browser engages in a number of
+    // speculative activities that sometimes mean connections and lookups begin
+    // earlier. Workaround that here by just using asyncOpen as the minimum
+    // timestamp for dns and connection info.
+    if (!mAsyncOpen.IsNull()) {
+      if (!mDomainLookupStart.IsNull() && mDomainLookupStart < mAsyncOpen) {
+        mDomainLookupStart = mAsyncOpen;
+      }
+
+      if (!mDomainLookupEnd.IsNull() && mDomainLookupEnd < mAsyncOpen) {
+        mDomainLookupEnd = mAsyncOpen;
+      }
+
+      if (!mConnectStart.IsNull() && mConnectStart < mAsyncOpen) {
+        mConnectStart = mAsyncOpen;
+      }
+
+      if (!mSecureConnectionStart.IsNull() && mSecureConnectionStart < mAsyncOpen) {
+        mSecureConnectionStart = mAsyncOpen;
+      }
+
+      if (!mConnectEnd.IsNull() && mConnectEnd < mAsyncOpen) {
+        mConnectEnd = mAsyncOpen;
+      }
+    }
   }
 }
 
@@ -297,6 +325,23 @@ PerformanceTiming::ConnectStart()
 }
 
 DOMHighResTimeStamp
+PerformanceTiming::SecureConnectionStartHighRes()
+{
+  if (!nsContentUtils::IsPerformanceTimingEnabled() || !IsInitialized() ||
+      nsContentUtils::ShouldResistFingerprinting()) {
+    return mZeroTime;
+  }
+  return mSecureConnectionStart.IsNull() ? mZeroTime
+                                         : TimeStampToDOMHighRes(mSecureConnectionStart);
+}
+
+DOMTimeMilliSec
+PerformanceTiming::SecureConnectionStart()
+{
+  return static_cast<int64_t>(SecureConnectionStartHighRes());
+}
+
+DOMHighResTimeStamp
 PerformanceTiming::ConnectEndHighRes()
 {
   if (!nsContentUtils::IsPerformanceTimingEnabled() || !IsInitialized() ||
@@ -340,6 +385,11 @@ PerformanceTiming::ResponseStartHighRes()
   if (mResponseStart.IsNull() ||
      (!mCacheReadStart.IsNull() && mCacheReadStart < mResponseStart)) {
     mResponseStart = mCacheReadStart;
+  }
+
+  if (mResponseStart.IsNull() ||
+      (!mRequestStart.IsNull() && mResponseStart < mRequestStart)) {
+    mResponseStart = mRequestStart;
   }
   return TimeStampToDOMHighResOrFetchStart(mResponseStart);
 }

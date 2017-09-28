@@ -74,7 +74,7 @@ nsLeafBoxFrame::AttributeChanged(int32_t aNameSpaceID,
   nsresult rv = nsLeafFrame::AttributeChanged(aNameSpaceID, aAttribute,
                                               aModType);
 
-  if (aAttribute == nsGkAtoms::mousethrough) 
+  if (aAttribute == nsGkAtoms::mousethrough)
     UpdateMouseThrough();
 
   return rv;
@@ -101,7 +101,6 @@ void nsLeafBoxFrame::UpdateMouseThrough()
 
 void
 nsLeafBoxFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                 const nsRect&           aDirtyRect,
                                  const nsDisplayListSet& aLists)
 {
   // REVIEW: GetFrameForPoint used to not report events for the background
@@ -199,6 +198,7 @@ nsLeafBoxFrame::Reflow(nsPresContext*   aPresContext,
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsLeafBoxFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
   NS_ASSERTION(aReflowInput.ComputedWidth() >=0 &&
                aReflowInput.ComputedHeight() >= 0, "Computed Size < 0");
@@ -220,7 +220,7 @@ nsLeafBoxFrame::Reflow(nsPresContext*   aPresContext,
       break;
     default:printf("<unknown>%d", aReflowInput.reason);break;
   }
-  
+
   printSize("AW", aReflowInput.AvailableWidth());
   printSize("AH", aReflowInput.AvailableHeight());
   printSize("CW", aReflowInput.ComputedWidth());
@@ -229,8 +229,6 @@ nsLeafBoxFrame::Reflow(nsPresContext*   aPresContext,
   printf(" *\n");
 
 #endif
-
-  aStatus.Reset();
 
   // create the layout state
   nsBoxLayoutState state(aPresContext, aReflowInput.mRenderingContext);
@@ -294,10 +292,10 @@ nsLeafBoxFrame::Reflow(nsPresContext*   aPresContext,
   nsRect r(mRect.x, mRect.y, computedSize.width, computedSize.height);
 
   SetXULBounds(state, r);
- 
+
   // layout our children
   XULLayout(state);
-  
+
   // ok our child could have gotten bigger. So lets get its bounds
   aDesiredSize.Width() = mRect.width;
   aDesiredSize.Height() = mRect.height;
@@ -311,9 +309,9 @@ nsLeafBoxFrame::Reflow(nsPresContext*   aPresContext,
     printf("%p ** nsLBF(done) W:%d H:%d  ", this, aDesiredSize.Width(), aDesiredSize.Height());
 
     if (maxElementWidth) {
-      printf("MW:%d\n", *maxElementWidth); 
+      printf("MW:%d\n", *maxElementWidth);
     } else {
-      printf("MW:?\n"); 
+      printf("MW:?\n");
     }
 
   }

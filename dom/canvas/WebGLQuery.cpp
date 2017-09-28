@@ -18,13 +18,16 @@ class AvailableRunnable final : public Runnable
     const RefPtr<WebGLQuery> mQuery;
 
 public:
-    explicit AvailableRunnable(WebGLQuery* query)
-        : mQuery(query)
-    { }
+  explicit AvailableRunnable(WebGLQuery* query)
+    : Runnable("AvailableRunnable")
+    , mQuery(query)
+  {
+  }
 
-    NS_IMETHOD Run() override {
-        mQuery->mCanBeAvailable = true;
-        return NS_OK;
+  NS_IMETHOD Run() override
+  {
+    mQuery->mCanBeAvailable = true;
+    return NS_OK;
     }
 };
 
@@ -56,6 +59,19 @@ WebGLQuery::Delete()
     mContext->MakeContextCurrent();
     mContext->gl->fDeleteQueries(1, &mGLName);
     LinkedListElement<WebGLQuery>::removeFrom(mContext->mQueries);
+}
+
+static void
+DispatchAvailableRunnable(WebGLQuery* query)
+{
+    RefPtr<AvailableRunnable> runnable = new AvailableRunnable(query);
+
+    nsIDocument* document = query->mContext->GetOwnerDoc();
+    if (document) {
+        document->Dispatch(TaskCategory::Other, runnable.forget());
+        return;
+    }
+    NS_DispatchToCurrentThread(runnable.forget());
 }
 
 ////
@@ -123,7 +139,7 @@ WebGLQuery::EndQuery()
 
     ////
 
-    NS_DispatchToCurrentThread(new AvailableRunnable(this));
+    DispatchAvailableRunnable(this);
 }
 
 void
@@ -251,7 +267,7 @@ WebGLQuery::QueryCounter(const char* funcName, GLenum target)
     gl->MakeCurrent();
     gl->fQueryCounter(mGLName, mTarget);
 
-    NS_DispatchToCurrentThread(new AvailableRunnable(this));
+    DispatchAvailableRunnable(this);
 }
 
 ////

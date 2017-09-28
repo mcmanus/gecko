@@ -27,16 +27,10 @@ HTMLMetaElement::~HTMLMetaElement()
 }
 
 
-NS_IMPL_ISUPPORTS_INHERITED(HTMLMetaElement, nsGenericHTMLElement,
-                            nsIDOMHTMLMetaElement)
+NS_IMPL_ISUPPORTS_INHERITED0(HTMLMetaElement, nsGenericHTMLElement)
 
 NS_IMPL_ELEMENT_CLONE(HTMLMetaElement)
 
-
-NS_IMPL_STRING_ATTR(HTMLMetaElement, Content, content)
-NS_IMPL_STRING_ATTR(HTMLMetaElement, HttpEquiv, httpEquiv)
-NS_IMPL_STRING_ATTR(HTMLMetaElement, Name, name)
-NS_IMPL_STRING_ATTR(HTMLMetaElement, Scheme, scheme)
 
 nsresult
 HTMLMetaElement::SetMetaReferrer(nsIDocument* aDocument)
@@ -103,14 +97,14 @@ HTMLMetaElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
     nsContentUtils::ProcessViewportInfo(aDocument, content);
   }
 
-  if (CSPService::sCSPEnabled && aDocument &&
+  if (CSPService::sCSPEnabled && aDocument && !aDocument->IsLoadedAsData() &&
       AttrValueIs(kNameSpaceID_None, nsGkAtoms::httpEquiv, nsGkAtoms::headerCSP, eIgnoreCase)) {
 
     // only accept <meta http-equiv="Content-Security-Policy" content=""> if it appears
     // in the <head> element.
     Element* headElt = aDocument->GetHeadElement();
     if (headElt && nsContentUtils::ContentIsDescendantOf(this, headElt)) {
-      
+
       nsAutoString content;
       rv = GetContent(content);
       NS_ENSURE_SUCCESS(rv, rv);

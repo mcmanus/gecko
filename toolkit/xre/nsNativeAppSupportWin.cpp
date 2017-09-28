@@ -6,12 +6,12 @@
 #include "nsNativeAppSupportBase.h"
 #include "nsNativeAppSupportWin.h"
 #include "nsAppRunner.h"
+#include "nsContentUtils.h"
 #include "nsXULAppAPI.h"
 #include "nsString.h"
 #include "nsIBrowserDOMWindow.h"
 #include "nsICommandLineRunner.h"
 #include "nsCOMPtr.h"
-#include "nsXPIDLString.h"
 #include "nsIComponentManager.h"
 #include "nsIServiceManager.h"
 #include "nsIDOMChromeWindow.h"
@@ -39,6 +39,7 @@
 #include "nsIWindowMediator.h"
 #include "nsNativeCharsetUtils.h"
 #include "nsIAppStartup.h"
+#include "mozilla/Assertions.h"
 #include "mozilla/dom/Location.h"
 
 #include <windows.h>
@@ -109,7 +110,7 @@ struct Win32Mutex {
             // Make sure we release it if we own it.
             Unlock();
 
-            BOOL rc = CloseHandle( mHandle );
+            BOOL rc MOZ_UNUSED_ATTRIBUTE = CloseHandle( mHandle );
 #if MOZ_DEBUG_DDE
             if ( !rc ) {
                 printf( "CloseHandle error = 0x%08X\n", (int)GetLastError() );
@@ -924,10 +925,10 @@ nsNativeAppSupportWin::HandleDDENotification( UINT uType,       // transaction t
                     ParseDDEArg(hsz2, 2, windowID);
                     // "" means to open the URL in a new window.
                     if ( windowID.IsEmpty() ) {
-                        url.Insert(NS_LITERAL_STRING("mozilla -new-window "), 0);
+                        url.InsertLiteral(u"mozilla -new-window ", 0);
                     }
                     else {
-                        url.Insert(NS_LITERAL_STRING("mozilla -url "), 0);
+                        url.InsertLiteral(u"mozilla -url ", 0);
                     }
 
 #if MOZ_DEBUG_DDE
@@ -988,11 +989,11 @@ nsNativeAppSupportWin::HandleDDENotification( UINT uType,       // transaction t
                             break;
                         }
                         // And from the base window we can get the title.
-                        nsXPIDLString title;
+                        nsString title;
                         if(!baseWindow) {
                             break;
                         }
-                        baseWindow->GetTitle(getter_Copies(title));
+                        baseWindow->GetTitle(title);
                         // Escape any double-quotes in the title.
                         escapeQuotes( title );
 
@@ -1089,10 +1090,10 @@ nsNativeAppSupportWin::HandleDDENotification( UINT uType,       // transaction t
 
             // "" means to open the URL in a new window.
             if ( windowID.IsEmpty() ) {
-                url.Insert(NS_LITERAL_STRING("mozilla -new-window "), 0);
+                url.InsertLiteral(u"mozilla -new-window ", 0);
             }
             else {
-                url.Insert(NS_LITERAL_STRING("mozilla -url "), 0);
+                url.InsertLiteral(u"mozilla -url ", 0);
             }
 #if MOZ_DEBUG_DDE
             printf( "Handling dde XTYP_REQUEST request: [%s]...\n", NS_ConvertUTF16toUTF8(url).get() );
@@ -1463,6 +1464,7 @@ nsNativeAppSupportWin::OpenBrowserWindow()
             rv = bwin->OpenURI( uri, 0,
                                 nsIBrowserDOMWindow::OPEN_DEFAULTWINDOW,
                                 nsIBrowserDOMWindow::OPEN_EXTERNAL,
+                                nsContentUtils::GetSystemPrincipal(),
                                 getter_AddRefs( container ) );
             if ( NS_SUCCEEDED( rv ) )
               return NS_OK;
@@ -1484,4 +1486,3 @@ nsNativeAppSupportWin::OpenBrowserWindow()
 
     return cmdLine->Run();
 }
-

@@ -8,6 +8,8 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/ipc/BackgroundChild.h"
+#include "EventQueue.h"
+#include "mozilla/ThreadEventQueue.h"
 #include "nsIThreadInternal.h"
 #include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
@@ -65,7 +67,11 @@ private:
 };
 
 WorkerThread::WorkerThread()
-  : nsThread(nsThread::NOT_MAIN_THREAD, kWorkerStackSize)
+  : nsThread(WrapNotNull(new ThreadEventQueue<mozilla::EventQueue>(
+                           MakeUnique<mozilla::EventQueue>())),
+             nsThread::NOT_MAIN_THREAD,
+             kWorkerStackSize)
+  , mLock("WorkerThread::mLock")
   , mWorkerPrivateCondVar(mLock, "WorkerThread::mWorkerPrivateCondVar")
   , mWorkerPrivate(nullptr)
   , mOtherThreadsDispatchingViaEventTarget(0)
@@ -313,7 +319,7 @@ WorkerThread::RecursionDepth(const WorkerThreadFriendKey& /* aKey */) const
 NS_IMPL_ISUPPORTS(WorkerThread::Observer, nsIThreadObserver)
 
 NS_IMETHODIMP
-WorkerThread::Observer::OnDispatchedEvent(nsIThreadInternal* /* aThread */)
+WorkerThread::Observer::OnDispatchedEvent()
 {
   MOZ_CRASH("OnDispatchedEvent() should never be called!");
 }
@@ -326,7 +332,7 @@ WorkerThread::Observer::OnProcessNextEvent(nsIThreadInternal* /* aThread */,
 
   // If the PBackground child is not created yet, then we must permit
   // blocking event processing to support
-  // BackgroundChild::SynchronouslyCreateForCurrentThread(). If this occurs
+  // BackgroundChild::GetOrCreateCreateForCurrentThread(). If this occurs
   // then we are spinning on the event queue at the start of
   // PrimaryWorkerRunnable::Run() and don't want to process the event in
   // mWorkerPrivate yet.

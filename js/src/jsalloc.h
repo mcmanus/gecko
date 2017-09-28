@@ -17,6 +17,12 @@
 #include "js/TypeDecls.h"
 #include "js/Utility.h"
 
+extern JS_PUBLIC_API(void) JS_ReportOutOfMemory(JSContext* cx);
+
+namespace JS {
+struct Zone;
+} // namespace JS
+
 namespace js {
 
 enum class AllocFunction {
@@ -24,7 +30,6 @@ enum class AllocFunction {
     Calloc,
     Realloc
 };
-
 /* Policy for using system memory functions and doing no error reporting. */
 class SystemAllocPolicy
 {
@@ -131,6 +136,40 @@ class TempAllocPolicy
         }
 
         return true;
+    }
+};
+
+/*
+ * Allocation policy that uses Zone::pod_malloc and friends, so that memory
+ * pressure is accounted for on the zone. This is suitable for memory associated
+ * with GC things allocated in the zone.
+ *
+ * Since it doesn't hold a JSContext (those may not live long enough), it can't
+ * report out-of-memory conditions itself; the caller must check for OOM and
+ * take the appropriate action.
+ *
+ * FIXME bug 647103 - replace these *AllocPolicy names.
+ */
+class ZoneAllocPolicy
+{
+    JS::Zone* const zone;
+
+  public:
+    MOZ_IMPLICIT ZoneAllocPolicy(JS::Zone* z) : zone(z) {}
+
+    // These methods are defined in gc/Zone.h.
+    template <typename T> inline T* maybe_pod_malloc(size_t numElems);
+    template <typename T> inline T* maybe_pod_calloc(size_t numElems);
+    template <typename T> inline T* maybe_pod_realloc(T* p, size_t oldSize, size_t newSize);
+    template <typename T> inline T* pod_malloc(size_t numElems);
+    template <typename T> inline T* pod_calloc(size_t numElems);
+    template <typename T> inline T* pod_realloc(T* p, size_t oldSize, size_t newSize);
+
+    void free_(void* p) { js_free(p); }
+    void reportAllocOverflow() const {}
+
+    MOZ_MUST_USE bool checkSimulatedOOM() const {
+        return !js::oom::ShouldFailWithOOM();
     }
 };
 

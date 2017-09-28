@@ -21,6 +21,8 @@ class InputData;
 
 namespace layers {
 
+class KeyboardMap;
+
 enum AllowedTouchBehavior {
   NONE =               0,
   VERTICAL_PAN =       1 << 0,
@@ -105,6 +107,11 @@ public:
       uint64_t* aOutInputBlockId);
 
   /**
+   * Set the keyboard shortcuts to use for translating keyboard events.
+   */
+  virtual void SetKeyboardMap(const KeyboardMap& aKeyboardMap) = 0;
+
+  /**
    * Kicks an animation to zoom to a rect. This may be either a zoom out or zoom
    * in. The actual animation is done on the compositor thread after being set
    * up. |aRect| must be given in CSS pixels, relative to the document.
@@ -150,13 +157,6 @@ public:
       const ScrollableLayerGuid& aGuid,
       const Maybe<ZoomConstraints>& aConstraints) = 0;
 
-  /**
-   * Cancels any currently running animation. Note that all this does is set the
-   * state of the AsyncPanZoomController back to NOTHING, but it is the
-   * animation's responsibility to check this before advancing.
-   */
-  virtual void CancelAnimation(const ScrollableLayerGuid &aGuid) = 0;
-
   virtual void SetDPI(float aDpiValue) = 0;
 
   /**
@@ -175,6 +175,12 @@ public:
   virtual void StartScrollbarDrag(
       const ScrollableLayerGuid& aGuid,
       const AsyncDragMetrics& aDragMetrics) = 0;
+
+  virtual void StartAutoscroll(
+      const ScrollableLayerGuid& aGuid,
+      const ScreenPoint& aAnchorLocation) = 0;
+
+  virtual void StopAutoscroll(const ScrollableLayerGuid& aGuid) = 0;
 
   /**
    * Function used to disable LongTap gestures.
@@ -204,9 +210,10 @@ protected:
 
   // Methods to help process WidgetInputEvents (or manage conversion to/from InputData)
 
-  virtual void TransformEventRefPoint(
+  virtual void ProcessUnhandledEvent(
       LayoutDeviceIntPoint* aRefPoint,
-      ScrollableLayerGuid* aOutTargetGuid) = 0;
+      ScrollableLayerGuid* aOutTargetGuid,
+      uint64_t* aOutFocusSequenceNumber) = 0;
 
   virtual void UpdateWheelTransaction(
       LayoutDeviceIntPoint aRefPoint,

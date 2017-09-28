@@ -7,6 +7,7 @@
 #define AUDIO_SESSION_H_
 
 #include "mozilla/Attributes.h"
+#include "mozilla/ReentrantMonitor.h"
 #include "mozilla/TimeStamp.h"
 #include "nsTArray.h"
 
@@ -124,6 +125,7 @@ public:
   virtual MediaConduitErrorCode SendAudioFrame(const int16_t speechData[],
                                                int32_t lengthSamples,
                                                int32_t samplingFreqHz,
+                                               uint32_t channels,
                                                int32_t capture_time) override;
 
   /**
@@ -222,7 +224,8 @@ public:
                             double* framerateStdDev,
                             double* bitrateMean,
                             double* bitrateStdDev,
-                            uint32_t* discardedPackets) override
+                            uint32_t* discardedPackets,
+                            uint32_t* framesDecoded) override
   {
     return false;
   }

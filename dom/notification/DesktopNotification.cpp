@@ -37,7 +37,8 @@ public:
   NS_DECL_NSICONTENTPERMISSIONREQUEST
 
   explicit DesktopNotificationRequest(DesktopNotification* aNotification)
-    : mDesktopNotification(aNotification)
+    : Runnable("dom::DesktopNotificationRequest")
+    , mDesktopNotification(aNotification)
   {
     mRequester = new nsContentPermissionRequester(mDesktopNotification->GetOwner());
   }
@@ -158,7 +159,8 @@ DesktopNotification::DispatchNotificationEvent(const nsString& aName)
   // it doesn't bubble, and it isn't cancelable
   event->InitEvent(aName, false, false);
   event->SetTrusted(true);
-  DispatchDOMEvent(nullptr, event, nullptr, nullptr);
+  bool dummy;
+  DispatchEvent(event, &dummy);
 }
 
 nsresult

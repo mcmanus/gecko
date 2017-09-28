@@ -3,13 +3,11 @@
 "use strict";
 
 // The ext-* files are imported into the same scopes.
-/* import-globals-from ext-utils.js */
+/* import-globals-from ext-browser.js */
 
 XPCOMUtils.defineLazyServiceGetter(this, "aboutNewTabService",
                                    "@mozilla.org/browser/aboutnewtab-service;1",
                                    "nsIAboutNewTabService");
-XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
-                                  "resource://gre/modules/AppConstants.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 
@@ -17,9 +15,9 @@ var {
   promiseObserved,
 } = ExtensionUtils;
 
-function onXULFrameLoaderCreated({target}) {
+const onXULFrameLoaderCreated = ({target}) => {
   target.messageManager.sendAsyncMessage("AllowScriptsToClose", {});
-}
+};
 
 this.windows = class extends ExtensionAPI {
   getAPI(context) {
@@ -39,7 +37,7 @@ this.windows = class extends ExtensionAPI {
           fire.async(windowTracker.getId(window));
         }).api(),
 
-        onFocusChanged: new SingletonEventManager(context, "windows.onFocusChanged", fire => {
+        onFocusChanged: new EventManager(context, "windows.onFocusChanged", fire => {
           // Keep track of the last windowId used to fire an onFocusChanged event
           let lastOnFocusChangedWindowId;
 
@@ -189,6 +187,9 @@ this.windows = class extends ExtensionAPI {
                                                "XULFrameLoaderCreated", onXULFrameLoaderCreated);
               }
             }
+            if (createData.titlePreface) {
+              win.setTitlePreface(createData.titlePreface);
+            }
             return win.convert({populate: true});
           });
         },
@@ -216,6 +217,11 @@ this.windows = class extends ExtensionAPI {
           }
 
           win.updateGeometry(updateInfo);
+
+          if (updateInfo.titlePreface) {
+            win.setTitlePreface(updateInfo.titlePreface);
+            win.window.gBrowser.updateTitlebar();
+          }
 
           // TODO: All the other properties, focused=false...
 

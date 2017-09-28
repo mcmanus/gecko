@@ -7,13 +7,14 @@
 use app_units::Au;
 use cssparser::Parser;
 use parser::ParserContext;
-use properties::animated_properties::Animatable;
-use std::fmt;
-use style_traits::{ToCss, ParseError};
+use style_traits::ParseError;
+use values::animated::{Animate, Procedure, ToAnimatedZero};
+use values::distance::{ComputeSquaredDistance, SquaredDistance};
 
 /// A generic value for the `initial-letter` property.
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-#[derive(Clone, Copy, Debug, HasViewportPercentage, PartialEq, ToComputedValue)]
+#[derive(Clone, Copy, Debug, PartialEq, ToComputedValue, ToCss)]
 pub enum InitialLetter<Number, Integer> {
     /// `normal`
     Normal,
@@ -29,32 +30,10 @@ impl<N, I> InitialLetter<N, I> {
     }
 }
 
-impl<N, I> ToCss for InitialLetter<N, I>
-where
-    N: ToCss,
-    I: ToCss,
-{
-    fn to_css<W>(&self, dest: &mut W) -> fmt::Result
-    where
-        W: fmt::Write,
-    {
-        match *self {
-            InitialLetter::Normal => dest.write_str("normal"),
-            InitialLetter::Specified(ref size, ref sink) => {
-                size.to_css(dest)?;
-                if let Some(ref sink) = *sink {
-                    dest.write_str(" ")?;
-                    sink.to_css(dest)?;
-                }
-                Ok(())
-            },
-        }
-    }
-}
-
 /// A generic spacing value for the `letter-spacing` and `word-spacing` properties.
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-#[derive(Clone, Copy, Debug, HasViewportPercentage, PartialEq, ToComputedValue, ToCss)]
+#[derive(Clone, Copy, Debug, PartialEq, ToComputedValue, ToCss)]
 pub enum Spacing<Value> {
     /// `normal`
     Normal,
@@ -94,32 +73,48 @@ impl<Value> Spacing<Value> {
     }
 }
 
-impl<Value> Animatable for Spacing<Value>
-    where Value: Animatable + From<Au>,
+impl<Value> Animate for Spacing<Value>
+where
+    Value: Animate + From<Au>,
 {
     #[inline]
-    fn add_weighted(&self, other: &Self, self_portion: f64, other_portion: f64) -> Result<Self, ()> {
+    fn animate(&self, other: &Self, procedure: Procedure) -> Result<Self, ()> {
         if let (&Spacing::Normal, &Spacing::Normal) = (self, other) {
             return Ok(Spacing::Normal);
         }
         let zero = Value::from(Au(0));
         let this = self.value().unwrap_or(&zero);
         let other = other.value().unwrap_or(&zero);
-        this.add_weighted(other, self_portion, other_portion).map(Spacing::Value)
-    }
-
-    #[inline]
-    fn compute_distance(&self, other: &Self) -> Result<f64, ()> {
-        let zero = Value::from(Au(0));
-        let this = self.value().unwrap_or(&zero);
-        let other = other.value().unwrap_or(&zero);
-        this.compute_distance(other)
+        Ok(Spacing::Value(this.animate(other, procedure)?))
     }
 }
 
+impl<V> ComputeSquaredDistance for Spacing<V>
+where
+    V: ComputeSquaredDistance + From<Au>,
+{
+    #[inline]
+    fn compute_squared_distance(&self, other: &Self) -> Result<SquaredDistance, ()> {
+        let zero = V::from(Au(0));
+        let this = self.value().unwrap_or(&zero);
+        let other = other.value().unwrap_or(&zero);
+        this.compute_squared_distance(other)
+    }
+}
+
+impl<V> ToAnimatedZero for Spacing<V>
+where
+    V: From<Au>,
+{
+    #[inline]
+    fn to_animated_zero(&self) -> Result<Self, ()> { Err(()) }
+}
+
 /// A generic value for the `line-height` property.
+#[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-#[derive(Clone, Copy, Debug, HasViewportPercentage, PartialEq, ToCss)]
+#[derive(Animate, Clone, ComputeSquaredDistance, Copy, Debug)]
+#[derive(PartialEq, ToAnimatedValue, ToCss)]
 pub enum LineHeight<Number, LengthOrPercentage> {
     /// `normal`
     Normal,

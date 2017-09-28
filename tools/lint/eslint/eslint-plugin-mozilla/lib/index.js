@@ -30,6 +30,7 @@ module.exports = {
     ".xml": require("../lib/processors/xbl-bindings")
   },
   rules: {
+    "avoid-Date-timing": require("../lib/rules/avoid-Date-timing"),
     "avoid-removeChild": require("../lib/rules/avoid-removeChild"),
     "avoid-nsISupportsString-preferences":
       require("../lib/rules/avoid-nsISupportsString-preferences"),
@@ -42,6 +43,7 @@ module.exports = {
     "import-headjs-globals": require("../lib/rules/import-headjs-globals"),
     "mark-test-function-used": require("../lib/rules/mark-test-function-used"),
     "no-aArgs": require("../lib/rules/no-aArgs"),
+    "no-arbitrary-setTimeout": require("../lib/rules/no-arbitrary-setTimeout"),
     "no-cpows-in-tests": require("../lib/rules/no-cpows-in-tests"),
     "no-single-arg-cu-import": require("../lib/rules/no-single-arg-cu-import"),
     "no-import-into-var-and-global":
@@ -50,6 +52,8 @@ module.exports = {
     "no-useless-parameters": require("../lib/rules/no-useless-parameters"),
     "no-useless-removeEventListener":
       require("../lib/rules/no-useless-removeEventListener"),
+    "no-useless-run-test":
+      require("../lib/rules/no-useless-run-test"),
     "reject-importGlobalProperties":
       require("../lib/rules/reject-importGlobalProperties"),
     "reject-some-requires": require("../lib/rules/reject-some-requires"),
@@ -59,6 +63,7 @@ module.exports = {
     "var-only-at-top-level": require("../lib/rules/var-only-at-top-level")
   },
   rulesConfig: {
+    "avoid-Date-timing": "off",
     "avoid-removeChild": "off",
     "avoid-nsISupportsString-preferences": "off",
     "balanced-listeners": "off",
@@ -68,11 +73,13 @@ module.exports = {
     "import-headjs-globals": "off",
     "mark-test-function-used": "off",
     "no-aArgs": "off",
+    "no-arbitrary-setTimeout": "off",
     "no-cpows-in-tests": "off",
     "no-single-arg-cu-import": "off",
     "no-import-into-var-and-global": "off",
     "no-task": "off",
     "no-useless-parameters": "off",
+    "no-useless-run-test": "off",
     "no-useless-removeEventListener": "off",
     "reject-importGlobalProperties": "off",
     "reject-some-requires": "off",

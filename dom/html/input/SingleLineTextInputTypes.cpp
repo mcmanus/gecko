@@ -58,7 +58,7 @@ SingleLineTextInputTypeBase::IsTooShort() const
 bool
 SingleLineTextInputTypeBase::IsValueMissing() const
 {
-  if (!mInputElement->HasAttr(kNameSpaceID_None, nsGkAtoms::required)) {
+  if (!mInputElement->IsRequired()) {
     return false;
   }
 
@@ -72,8 +72,12 @@ SingleLineTextInputTypeBase::IsValueMissing() const
 bool
 SingleLineTextInputTypeBase::HasPatternMismatch() const
 {
+  if (!mInputElement->HasPatternAttribute()) {
+    return false;
+  }
+
   nsAutoString pattern;
- if (!mInputElement->GetAttr(kNameSpaceID_None, nsGkAtoms::pattern, pattern)) {
+  if (!mInputElement->GetAttr(kNameSpaceID_None, nsGkAtoms::pattern, pattern)) {
     return false;
   }
 
@@ -120,6 +124,14 @@ URLInputType::HasTypeMismatch() const
 
 }
 
+nsresult
+URLInputType::GetTypeMismatchMessage(nsAString& aMessage)
+{
+  return nsContentUtils::GetLocalizedString(nsContentUtils::eDOM_PROPERTIES,
+                                            "FormValidationInvalidURL",
+                                            aMessage);
+}
+
 /* input type=email */
 
 bool
@@ -154,6 +166,22 @@ EmailInputType::HasBadInput() const
     }
   }
   return false;
+}
+
+nsresult
+EmailInputType::GetTypeMismatchMessage(nsAString& aMessage)
+{
+  return nsContentUtils::GetLocalizedString(nsContentUtils::eDOM_PROPERTIES,
+                                            "FormValidationInvalidEmail",
+                                            aMessage);
+}
+
+nsresult
+EmailInputType::GetBadInputMessage(nsAString& aMessage)
+{
+  return nsContentUtils::GetLocalizedString(nsContentUtils::eDOM_PROPERTIES,
+                                            "FormValidationInvalidEmail",
+                                            aMessage);
 }
 
 /* static */ bool

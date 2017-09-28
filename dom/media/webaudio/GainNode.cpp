@@ -18,7 +18,7 @@ namespace dom {
 NS_IMPL_CYCLE_COLLECTION_INHERITED(GainNode, AudioNode,
                                    mGain)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(GainNode)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(GainNode)
 NS_INTERFACE_MAP_END_INHERITING(AudioNode)
 
 NS_IMPL_ADDREF_INHERITED(GainNode, AudioNode)
@@ -101,7 +101,7 @@ public:
   size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const override
   {
     // Not owned:
-    // - mDestination (probably)
+    // - mDestination - MediaStreamGraphImpl::CollectSizesForMemoryReport() accounts for mDestination.
     // - mGain - Internal ref owned by AudioNode
     return AudioNodeEngine::SizeOfExcludingThis(aMallocSizeOf);
   }
@@ -111,7 +111,7 @@ public:
     return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
   }
 
-  AudioNodeStream* mDestination;
+  RefPtr<AudioNodeStream> mDestination;
   AudioParamTimeline mGain;
 };
 

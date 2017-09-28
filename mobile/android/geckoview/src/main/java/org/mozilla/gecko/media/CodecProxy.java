@@ -34,6 +34,7 @@ public final class CodecProxy {
     private CallbacksForwarder mCallbacks;
     private String mRemoteDrmStubId;
     private Queue<Sample> mSurfaceOutputs = new ConcurrentLinkedQueue<>();
+    private boolean mFlushed = true;
 
     public interface Callbacks {
         void onInputStatus(long timestamp, boolean processed);
@@ -57,7 +58,6 @@ public final class CodecProxy {
 
     private class CallbacksForwarder extends ICodecCallbacks.Stub {
         private final Callbacks mCallbacks;
-        private boolean mEndOfInput;
         private boolean mCodecProxyReleased;
 
         CallbacksForwarder(Callbacks callbacks) {
@@ -66,14 +66,14 @@ public final class CodecProxy {
 
         @Override
         public synchronized void onInputQueued(long timestamp) throws RemoteException {
-            if (!mEndOfInput && !mCodecProxyReleased) {
+            if (!mCodecProxyReleased) {
                 mCallbacks.onInputStatus(timestamp, true /* processed */);
             }
         }
 
         @Override
         public synchronized void onInputPending(long timestamp) throws RemoteException {
-            if (!mEndOfInput && !mCodecProxyReleased) {
+            if (!mCodecProxyReleased) {
                 mCallbacks.onInputStatus(timestamp, false /* processed */);
             }
         }
@@ -97,9 +97,13 @@ public final class CodecProxy {
                 mCallbacks.onOutput(sample);
             } else {
                 // Non-surface output needs no rendering.
-                mCallbacks.onOutput(sample);
-                mRemote.releaseOutput(sample, false);
-                sample.dispose();
+                try {
+                    mCallbacks.onOutput(sample);
+                    mRemote.releaseOutput(sample, false);
+                    sample.dispose();
+                } catch (Exception e) {
+                    reportError(true);
+                }
             }
         }
 
@@ -112,10 +116,6 @@ public final class CodecProxy {
             if (!mCodecProxyReleased) {
                 mCallbacks.onError(fatal);
             }
-        }
-
-        private void setEndOfInput(boolean end) {
-            mEndOfInput = end;
         }
 
         private synchronized void setCodecProxyReleased() {
@@ -199,7 +199,6 @@ public final class CodecProxy {
         }
 
         boolean eos = info.flags == MediaCodec.BUFFER_FLAG_END_OF_STREAM;
-        mCallbacks.setEndOfInput(eos);
 
         if (eos) {
             return sendInput(Sample.EOS);
@@ -209,12 +208,12 @@ public final class CodecProxy {
             return sendInput(mRemote.dequeueInput(info.size).set(bytes, info, cryptoInfo));
         } catch (RemoteException | NullPointerException e) {
             Log.e(LOGTAG, "fail to dequeue input buffer", e);
-            return false;
         } catch (IOException e) {
             Log.e(LOGTAG, "fail to copy input data.", e);
             // Balance dequeue/queue.
-            return sendInput(null);
+            sendInput(null);
         }
+        return false;
     }
 
     private boolean sendInput(Sample sample) {
@@ -222,6 +221,7 @@ public final class CodecProxy {
             mRemote.queueInput(sample);
             if (sample != null) {
                 sample.dispose();
+                mFlushed = false;
             }
         } catch (Exception e) {
             Log.e(LOGTAG, "fail to queue input:" + sample, e);
@@ -233,6 +233,9 @@ public final class CodecProxy {
 
     @WrapForJNI
     public synchronized boolean flush() {
+        if (mFlushed) {
+            return true;
+        }
         if (mRemote == null) {
             Log.e(LOGTAG, "cannot flush an ended codec");
             return false;
@@ -240,6 +243,7 @@ public final class CodecProxy {
         try {
             if (DEBUG) { Log.d(LOGTAG, "flush " + this); }
             mRemote.flush();
+            mFlushed = true;
         } catch (DeadObjectException e) {
             return false;
         } catch (RemoteException e) {

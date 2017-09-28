@@ -42,7 +42,8 @@
     "be": {
         "platforms": [
             "android", 
-            "android-api-15"
+            "android-api-15", 
+            "android-multilocale"
         ], 
         "revision": "default"
     }, 
@@ -683,10 +684,18 @@
         ], 
         "revision": "default"
     }, 
-    "wo": {
+    "vi": {
         "platforms": [
             "android", 
             "android-api-15"
+        ], 
+        "revision": "default"
+    }, 
+    "wo": {
+        "platforms": [
+            "android", 
+            "android-api-15", 
+            "android-multilocale"
         ], 
         "revision": "default"
     }, 
@@ -701,7 +710,8 @@
     "zam": {
         "platforms": [
             "android", 
-            "android-api-15"
+            "android-api-15", 
+            "android-multilocale"
         ], 
         "revision": "default"
     }, 

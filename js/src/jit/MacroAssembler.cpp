@@ -438,7 +438,7 @@ MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const T& src, const V
             bind(&isDouble);
             {
                 convertUInt32ToDouble(temp, ScratchDoubleReg);
-                boxDouble(ScratchDoubleReg, dest);
+                boxDouble(ScratchDoubleReg, dest, ScratchDoubleReg);
             }
             bind(&done);
         } else {
@@ -451,12 +451,12 @@ MacroAssembler::loadFromTypedArray(Scalar::Type arrayType, const T& src, const V
         loadFromTypedArray(arrayType, src, AnyRegister(ScratchFloat32Reg), dest.scratchReg(),
                            nullptr);
         convertFloat32ToDouble(ScratchFloat32Reg, ScratchDoubleReg);
-        boxDouble(ScratchDoubleReg, dest);
+        boxDouble(ScratchDoubleReg, dest, ScratchDoubleReg);
         break;
       case Scalar::Float64:
         loadFromTypedArray(arrayType, src, AnyRegister(ScratchDoubleReg), dest.scratchReg(),
                            nullptr);
-        boxDouble(ScratchDoubleReg, dest);
+        boxDouble(ScratchDoubleReg, dest, ScratchDoubleReg);
         break;
       default:
         MOZ_CRASH("Invalid typed array type");
@@ -735,9 +735,8 @@ MacroAssembler::checkUnboxedArrayCapacity(Register obj, const RegisterOrInt32Con
 void
 MacroAssembler::checkAllocatorState(Label* fail)
 {
-    // Don't execute the inline path if we are tracing allocations,
-    // or when the memory profiler is enabled.
-    if (js::gc::TraceEnabled() || MemProfiler::enabled())
+    // Don't execute the inline path if we are tracing allocations.
+    if (js::gc::TraceEnabled())
         jump(fail);
 
 #ifdef JS_GC_ZEAL
@@ -960,8 +959,19 @@ MacroAssembler::copySlotsFromTemplate(Register obj, const NativeObject* template
                                       uint32_t start, uint32_t end)
 {
     uint32_t nfixed = Min(templateObj->numFixedSlotsForCompilation(), end);
-    for (unsigned i = start; i < nfixed; i++)
-        storeValue(templateObj->getFixedSlot(i), Address(obj, NativeObject::getFixedSlotOffset(i)));
+    for (unsigned i = start; i < nfixed; i++) {
+        // Template objects are not exposed to script and therefore immutable.
+        // However, regexp template objects are sometimes used directly (when
+        // the cloning is not observable), and therefore we can end up with a
+        // non-zero lastIndex. Detect this case here and just substitute 0, to
+        // avoid racing with the main thread updating this slot.
+        Value v;
+        if (templateObj->is<RegExpObject>() && i == RegExpObject::lastIndexSlot())
+            v = Int32Value(0);
+        else
+            v = templateObj->getFixedSlot(i);
+        storeValue(v, Address(obj, NativeObject::getFixedSlotOffset(i)));
+    }
 }
 
 void
@@ -986,7 +996,7 @@ MacroAssembler::fillSlotsWithConstantValue(Address base, Register temp,
     for (unsigned i = start; i < end; ++i, addr.offset += sizeof(GCPtrValue))
         store32(temp, ToType(addr));
 #else
-    moveValue(v, temp);
+    moveValue(v, ValueOperand(temp));
     for (uint32_t i = start; i < end; ++i, base.offset += sizeof(GCPtrValue))
         storePtr(temp, base);
 #endif
@@ -1033,7 +1043,7 @@ FindStartOfUninitializedAndUndefinedSlots(NativeObject* templateObj, uint32_t ns
 static void
 AllocateObjectBufferWithInit(JSContext* cx, TypedArrayObject* obj, int32_t count)
 {
-    JS::AutoCheckCannotGC nogc(cx);
+    AutoUnsafeCallWithABI unsafe;
 
     obj->initPrivate(nullptr);
 
@@ -1258,8 +1268,17 @@ MacroAssembler::initGCThing(Register obj, Register temp, JSObject* templateObj,
 
             if (ntemplate->hasPrivate() && !ntemplate->is<TypedArrayObject>()) {
                 uint32_t nfixed = ntemplate->numFixedSlotsForCompilation();
-                storePtr(ImmPtr(ntemplate->getPrivate()),
-                         Address(obj, NativeObject::getPrivateDataOffset(nfixed)));
+                Address privateSlot(obj, NativeObject::getPrivateDataOffset(nfixed));
+                if (ntemplate->is<RegExpObject>()) {
+                    // RegExpObject stores a GC thing (RegExpShared*) in its
+                    // private slot, so we have to use ImmGCPtr.
+                    RegExpObject* regexp = &ntemplate->as<RegExpObject>();
+                    MOZ_ASSERT(regexp->hasShared());
+                    MOZ_ASSERT(ntemplate->getPrivate() == regexp->sharedRef().get());
+                    storePtr(ImmGCPtr(regexp->sharedRef().get()), privateSlot);
+                } else {
+                    storePtr(ImmPtr(ntemplate->getPrivate()), privateSlot);
+                }
             }
         }
     } else if (templateObj->is<InlineTypedObject>()) {
@@ -1466,18 +1485,19 @@ MacroAssembler::typeOfObject(Register obj, Register scratch, Label* slow,
 void
 MacroAssembler::loadJSContext(Register dest)
 {
-    CompileCompartment* compartment = GetJitContext()->compartment;
+    JitContext* jcx = GetJitContext();
+    CompileCompartment* compartment = jcx->compartment;
     if (compartment->zone()->isAtomsZone()) {
         // If we are in the atoms zone then we are generating a runtime wide
         // trampoline which can run in any zone. Load the context which is
         // currently running using cooperative scheduling in the runtime.
         // (This will need to be fixed when we have preemptive scheduling,
         // bug 1323066).
-        loadPtr(AbsoluteAddress(GetJitContext()->runtime->addressOfActiveJSContext()), dest);
+        loadPtr(AbsoluteAddress(jcx->runtime->addressOfActiveJSContext()), dest);
     } else {
         // If we are in a specific zone then the current context will be stored
         // in the containing zone group.
-        loadPtr(AbsoluteAddress(GetJitContext()->compartment->zone()->addressOfJSContext()), dest);
+        loadPtr(AbsoluteAddress(compartment->zone()->addressOfJSContext()), dest);
     }
 }
 
@@ -1530,7 +1550,8 @@ MacroAssembler::generateBailoutTail(Register scratch, Register bailoutInfo)
         loadJSContext(ReturnReg);
         setupUnalignedABICall(scratch);
         passABIArg(ReturnReg);
-        callWithABI(JS_FUNC_TO_DATA_PTR(void*, BailoutReportOverRecursed));
+        callWithABI(JS_FUNC_TO_DATA_PTR(void*, BailoutReportOverRecursed), MoveOp::GENERAL,
+                    CheckUnsafeCallWithABI::DontCheckHasExitFrame);
         jump(exceptionLabel());
     }
 
@@ -1572,7 +1593,7 @@ MacroAssembler::generateBailoutTail(Register scratch, Register bailoutInfo)
         push(Address(bailoutInfo, offsetof(BaselineBailoutInfo, resumeAddr)));
         // No GC things to mark on the stack, push a bare token.
         loadJSContext(scratch);
-        enterFakeExitFrame(scratch, scratch, ExitFrameLayoutBareToken);
+        enterFakeExitFrame(scratch, scratch, ExitFrameToken::Bare);
 
         // If monitorStub is non-null, handle resumeAddr appropriately.
         Label noMonitor;
@@ -1595,7 +1616,8 @@ MacroAssembler::generateBailoutTail(Register scratch, Register bailoutInfo)
             // Call a stub to free allocated memory and create arguments objects.
             setupUnalignedABICall(temp);
             passABIArg(bailoutInfo);
-            callWithABI(JS_FUNC_TO_DATA_PTR(void*, FinishBailoutToBaseline));
+            callWithABI(JS_FUNC_TO_DATA_PTR(void*, FinishBailoutToBaseline),
+                        MoveOp::GENERAL, CheckUnsafeCallWithABI::DontCheckHasExitFrame);
             branchTest32(Zero, ReturnReg, ReturnReg, exceptionLabel());
 
             // Restore values where they need to be and resume execution.
@@ -1633,7 +1655,8 @@ MacroAssembler::generateBailoutTail(Register scratch, Register bailoutInfo)
             // Call a stub to free allocated memory and create arguments objects.
             setupUnalignedABICall(temp);
             passABIArg(bailoutInfo);
-            callWithABI(JS_FUNC_TO_DATA_PTR(void*, FinishBailoutToBaseline));
+            callWithABI(JS_FUNC_TO_DATA_PTR(void*, FinishBailoutToBaseline),
+                        MoveOp::GENERAL, CheckUnsafeCallWithABI::DontCheckHasExitFrame);
             branchTest32(Zero, ReturnReg, ReturnReg, exceptionLabel());
 
             // Restore values where they need to be and resume execution.
@@ -1709,7 +1732,9 @@ MacroAssembler::assumeUnreachable(const char* output)
         setupUnalignedABICall(temp);
         movePtr(ImmPtr(output), temp);
         passABIArg(temp);
-        callWithABI(JS_FUNC_TO_DATA_PTR(void*, AssumeUnreachable_));
+        callWithABI(JS_FUNC_TO_DATA_PTR(void*, AssumeUnreachable_),
+                    MoveOp::GENERAL,
+                    CheckUnsafeCallWithABI::DontCheckOther);
 
         PopRegsInMask(save);
     }
@@ -1733,7 +1758,10 @@ MacroAssembler::assertTestInt32(Condition cond, const T& value, const char* outp
 template void MacroAssembler::assertTestInt32(Condition, const Address&, const char*);
 
 static void
-Printf0_(const char* output) {
+Printf0_(const char* output)
+{
+    AutoUnsafeCallWithABI unsafe;
+
     // Use stderr instead of stdout because this is only used for debug
     // output. stderr is less likely to interfere with the program's normal
     // output, and it's always unbuffered.
@@ -1758,7 +1786,9 @@ MacroAssembler::printf(const char* output)
 }
 
 static void
-Printf1_(const char* output, uintptr_t value) {
+Printf1_(const char* output, uintptr_t value)
+{
+    AutoUnsafeCallWithABI unsafe;
     AutoEnterOOMUnsafeRegion oomUnsafe;
     js::UniqueChars line = JS_sprintf_append(nullptr, output, value);
     if (!line)
@@ -1804,7 +1834,8 @@ MacroAssembler::tracelogStartId(Register logger, uint32_t textId, bool force)
     passABIArg(logger);
     move32(Imm32(textId), temp);
     passABIArg(temp);
-    callWithABI(JS_FUNC_TO_DATA_PTR(void*, TraceLogStartEventPrivate));
+    callWithABI(JS_FUNC_TO_DATA_PTR(void*, TraceLogStartEventPrivate), MoveOp::GENERAL,
+                CheckUnsafeCallWithABI::DontCheckOther);
 
     PopRegsInMask(save);
 }
@@ -1823,7 +1854,8 @@ MacroAssembler::tracelogStartId(Register logger, Register textId)
     setupUnalignedABICall(temp);
     passABIArg(logger);
     passABIArg(textId);
-    callWithABI(JS_FUNC_TO_DATA_PTR(void*, TraceLogStartEventPrivate));
+    callWithABI(JS_FUNC_TO_DATA_PTR(void*, TraceLogStartEventPrivate), MoveOp::GENERAL,
+                CheckUnsafeCallWithABI::DontCheckOther);
 
     PopRegsInMask(save);
 }
@@ -1844,7 +1876,8 @@ MacroAssembler::tracelogStartEvent(Register logger, Register event)
     setupUnalignedABICall(temp);
     passABIArg(logger);
     passABIArg(event);
-    callWithABI(JS_FUNC_TO_DATA_PTR(void*, TraceLogFunc));
+    callWithABI(JS_FUNC_TO_DATA_PTR(void*, TraceLogFunc), MoveOp::GENERAL,
+                CheckUnsafeCallWithABI::DontCheckOther);
 
     PopRegsInMask(save);
 }
@@ -1867,7 +1900,8 @@ MacroAssembler::tracelogStopId(Register logger, uint32_t textId, bool force)
     move32(Imm32(textId), temp);
     passABIArg(temp);
 
-    callWithABI(JS_FUNC_TO_DATA_PTR(void*, TraceLogStopEventPrivate));
+    callWithABI(JS_FUNC_TO_DATA_PTR(void*, TraceLogStopEventPrivate), MoveOp::GENERAL,
+                CheckUnsafeCallWithABI::DontCheckOther);
 
     PopRegsInMask(save);
 }
@@ -1886,7 +1920,8 @@ MacroAssembler::tracelogStopId(Register logger, Register textId)
     setupUnalignedABICall(temp);
     passABIArg(logger);
     passABIArg(textId);
-    callWithABI(JS_FUNC_TO_DATA_PTR(void*, TraceLogStopEventPrivate));
+    callWithABI(JS_FUNC_TO_DATA_PTR(void*, TraceLogStopEventPrivate), MoveOp::GENERAL,
+                CheckUnsafeCallWithABI::DontCheckOther);
 
     PopRegsInMask(save);
 }
@@ -1908,7 +1943,7 @@ MacroAssembler::convertInt32ValueToDouble(ValueOperand val)
     branchTestInt32(Assembler::NotEqual, val, &done);
     unboxInt32(val, val.scratchReg());
     convertInt32ToDouble(val.scratchReg(), ScratchDoubleReg);
-    boxDouble(ScratchDoubleReg, val);
+    boxDouble(ScratchDoubleReg, val, ScratchDoubleReg);
     bind(&done);
 }
 
@@ -2087,7 +2122,8 @@ MacroAssembler::outOfLineTruncateSlow(FloatRegister src, Register dest, bool wid
     } else {
         setupUnalignedABICall(dest);
         passABIArg(src, MoveOp::DOUBLE);
-        callWithABI(mozilla::BitwiseCast<void*, int32_t(*)(double)>(JS::ToInt32));
+        callWithABI(mozilla::BitwiseCast<void*, int32_t(*)(double)>(JS::ToInt32),
+                    MoveOp::GENERAL, CheckUnsafeCallWithABI::DontCheckOther);
     }
     storeCallWordResult(dest);
 
@@ -2781,7 +2817,7 @@ MacroAssembler::passABIArg(const MoveOperand& from, MoveOp::Type type)
 }
 
 void
-MacroAssembler::callWithABINoProfiler(void* fun, MoveOp::Type result)
+MacroAssembler::callWithABINoProfiler(void* fun, MoveOp::Type result, CheckUnsafeCallWithABI check)
 {
     appendSignatureType(result);
 #ifdef JS_SIMULATOR
@@ -2790,8 +2826,33 @@ MacroAssembler::callWithABINoProfiler(void* fun, MoveOp::Type result)
 
     uint32_t stackAdjust;
     callWithABIPre(&stackAdjust);
+
+#ifdef DEBUG
+    if (check == CheckUnsafeCallWithABI::Check) {
+        push(ReturnReg);
+        loadJSContext(ReturnReg);
+        Address flagAddr(ReturnReg, JSContext::offsetOfInUnsafeCallWithABI());
+        store32(Imm32(1), flagAddr);
+        pop(ReturnReg);
+    }
+#endif
+
     call(ImmPtr(fun));
+
     callWithABIPost(stackAdjust, result);
+
+#ifdef DEBUG
+    if (check == CheckUnsafeCallWithABI::Check) {
+        Label ok;
+        push(ReturnReg);
+        loadJSContext(ReturnReg);
+        Address flagAddr(ReturnReg, JSContext::offsetOfInUnsafeCallWithABI());
+        branch32(Assembler::Equal, flagAddr, Imm32(0), &ok);
+        assumeUnreachable("callWithABI: callee did not use AutoInUnsafeCallWithABI");
+        bind(&ok);
+        pop(ReturnReg);
+    }
+#endif
 }
 
 void
@@ -3075,7 +3136,7 @@ MacroAssembler::wasmEmitTrapOutOfLineCode()
     // iterator to find the right CodeRange while walking the stack.
     breakpoint();
 
-    clearTrapSites();
+    trapSites().clear();
 }
 
 void

@@ -11,7 +11,6 @@
 #include "nsPluginsDir.h"
 #include "nsPluginHost.h"
 #include "nsIBlocklistService.h"
-#include "nsIPlatformCharset.h"
 #include "nsPluginLogging.h"
 #include "nsNPAPIPlugin.h"
 #include "nsCharSeparatedTokenizer.h"
@@ -43,7 +42,7 @@ static bool ExtensionInList(const nsCString& aExtensionList,
 {
   nsCCharSeparatedTokenizer extensions(aExtensionList, ',');
   while (extensions.hasMoreTokens()) {
-    const nsCSubstring& extension = extensions.nextToken();
+    const nsACString& extension = extensions.nextToken();
     if (extension.Equals(aExtension, nsCaseInsensitiveCStringComparator())) {
       return true;
     }
@@ -231,9 +230,7 @@ nsPluginTag::nsPluginTag(nsPluginInfo* aPluginInfo,
     mContentProcessRunningCount(0),
     mHadLocalInstance(false),
     mLibrary(nullptr),
-    mIsJavaPlugin(false),
     mIsFlashPlugin(false),
-    mSupportsAsyncInit(false),
     mSupportsAsyncRender(false),
     mFullPath(aPluginInfo->fFullPath),
     mLastModifiedTime(aLastModifiedTime),
@@ -268,9 +265,7 @@ nsPluginTag::nsPluginTag(const char* aName,
     mContentProcessRunningCount(0),
     mHadLocalInstance(false),
     mLibrary(nullptr),
-    mIsJavaPlugin(false),
     mIsFlashPlugin(false),
-    mSupportsAsyncInit(false),
     mSupportsAsyncRender(false),
     mFullPath(aFullPath),
     mLastModifiedTime(aLastModifiedTime),
@@ -296,27 +291,24 @@ nsPluginTag::nsPluginTag(uint32_t aId,
                          nsTArray<nsCString> aMimeTypes,
                          nsTArray<nsCString> aMimeDescriptions,
                          nsTArray<nsCString> aExtensions,
-                         bool aIsJavaPlugin,
                          bool aIsFlashPlugin,
-                         bool aSupportsAsyncInit,
                          bool aSupportsAsyncRender,
                          int64_t aLastModifiedTime,
                          bool aFromExtension,
-                         int32_t aSandboxLevel)
+                         int32_t aSandboxLevel,
+                         uint16_t aBlocklistState)
   : nsIInternalPluginTag(aName, aDescription, aFileName, aVersion, aMimeTypes,
                          aMimeDescriptions, aExtensions),
     mId(aId),
     mContentProcessRunningCount(0),
     mLibrary(nullptr),
-    mIsJavaPlugin(aIsJavaPlugin),
     mIsFlashPlugin(aIsFlashPlugin),
-    mSupportsAsyncInit(aSupportsAsyncInit),
     mSupportsAsyncRender(aSupportsAsyncRender),
     mLastModifiedTime(aLastModifiedTime),
     mSandboxLevel(aSandboxLevel),
     mNiceFileName(),
-    mCachedBlocklistState(nsIBlocklistService::STATE_NOT_BLOCKED),
-    mCachedBlocklistStateValid(false),
+    mCachedBlocklistState(aBlocklistState),
+    mCachedBlocklistStateValid(true),
     mIsFromExtension(aFromExtension)
 {
 }
@@ -354,27 +346,16 @@ void nsPluginTag::InitMime(const char* const* aMimeTypes,
 
     // Look for certain special plugins.
     switch (nsPluginHost::GetSpecialType(mimeType)) {
-      case nsPluginHost::eSpecialType_Java:
-        mIsJavaPlugin = true;
-        mSupportsAsyncInit = true;
-        break;
       case nsPluginHost::eSpecialType_Flash:
         // VLC sometimes claims to implement the Flash MIME type, and we want
         // to allow users to control that separately from Adobe Flash.
         if (Name().EqualsLiteral("Shockwave Flash")) {
           mIsFlashPlugin = true;
-          mSupportsAsyncInit = true;
         }
         break;
       case nsPluginHost::eSpecialType_Test:
-        mSupportsAsyncInit = true;
-        break;
       case nsPluginHost::eSpecialType_None:
       default:
-#ifndef RELEASE_OR_BETA
-        // Allow async init for all plugins on Nightly and Aurora
-        mSupportsAsyncInit = true;
-#endif
         break;
     }
 
@@ -444,7 +425,7 @@ nsPluginTag::InitSandboxLevel()
 
 #if !defined(XP_WIN) && !defined(XP_MACOSX)
 static void
-ConvertToUTF8(nsAFlatCString& aString)
+ConvertToUTF8(nsCString& aString)
 {
   Unused << UTF_8_ENCODING->DecodeWithoutBOMHandling(aString, aString);
 }
@@ -700,11 +681,6 @@ nsPluginTag::GetNiceFileName()
     return mNiceFileName;
   }
 
-  if (mIsJavaPlugin) {
-    mNiceFileName.AssignLiteral("java");
-    return mNiceFileName;
-  }
-
   mNiceFileName = MakeNiceFileName(mFileName);
   return mNiceFileName;
 }
@@ -719,44 +695,42 @@ nsPluginTag::GetNiceName(nsACString & aResult)
 NS_IMETHODIMP
 nsPluginTag::GetBlocklistState(uint32_t *aResult)
 {
-#if defined(MOZ_WIDGET_ANDROID)
-  *aResult = nsIBlocklistService::STATE_NOT_BLOCKED;
-  return NS_OK;
-#else
-  if (mCachedBlocklistStateValid) {
+  // If we're in the content process, assume our cache state to always be valid,
+  // as the only way it can be updated is via a plugin list push from the
+  // parent process.
+  if (!XRE_IsParentProcess()) {
     *aResult = mCachedBlocklistState;
     return NS_OK;
   }
 
-  if (!XRE_IsParentProcess()) {
-    *aResult = nsIBlocklistService::STATE_BLOCKED;
-    dom::ContentChild* cp = dom::ContentChild::GetSingleton();
-    if (!cp->SendGetBlocklistState(mId, aResult)) {
-      return NS_OK;
-    }
-  } else {
-    nsCOMPtr<nsIBlocklistService> blocklist =
-      do_GetService("@mozilla.org/extensions/blocklist;1");
+  nsCOMPtr<nsIBlocklistService> blocklist =
+    do_GetService("@mozilla.org/extensions/blocklist;1");
 
-    if (!blocklist) {
-      *aResult = nsIBlocklistService::STATE_NOT_BLOCKED;
-      return NS_OK;
-    }
-
-    // The EmptyString()s are so we use the currently running application
-    // and toolkit versions
-    if (NS_FAILED(blocklist->GetPluginBlocklistState(this, EmptyString(),
-                                                     EmptyString(), aResult))) {
-      *aResult = nsIBlocklistService::STATE_NOT_BLOCKED;
-      return NS_OK;
-    }
+  if (!blocklist) {
+    *aResult = nsIBlocklistService::STATE_NOT_BLOCKED;
+  }
+  // The EmptyString()s are so we use the currently running application
+  // and toolkit versions
+  else if (NS_FAILED(blocklist->GetPluginBlocklistState(this, EmptyString(),
+                                                   EmptyString(), aResult))) {
+    *aResult = nsIBlocklistService::STATE_NOT_BLOCKED;
   }
 
   MOZ_ASSERT(*aResult <= UINT16_MAX);
   mCachedBlocklistState = (uint16_t) *aResult;
   mCachedBlocklistStateValid = true;
   return NS_OK;
-#endif // defined(MOZ_WIDGET_ANDROID)
+}
+
+void
+nsPluginTag::SetBlocklistState(uint16_t aBlocklistState)
+{
+  // We should only ever call this on content processes. Any calls in the parent
+  // process should route through GetBlocklistState since we'll have the
+  // blocklist service there.
+  MOZ_ASSERT(!XRE_IsParentProcess());
+  mCachedBlocklistState = aBlocklistState;
+  mCachedBlocklistStateValid = true;
 }
 
 void

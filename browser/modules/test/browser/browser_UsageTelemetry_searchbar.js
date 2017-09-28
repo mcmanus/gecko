@@ -64,6 +64,10 @@ function clickSearchbarSuggestion(entryName) {
 }
 
 add_task(async function setup() {
+  await SpecialPowers.pushPrefEnv({ set: [
+    ["browser.search.widget.inNavBar", true],
+  ]});
+
   // Create two new search engines. Mark one as the default engine, so
   // the test don't crash. We need to engines for this test as the searchbar
   // doesn't display the default search engine among the one-off engines.
@@ -106,9 +110,8 @@ add_task(async function test_plainQuery() {
   // Let's reset the counts.
   Services.telemetry.clearScalars();
   Services.telemetry.clearEvents();
-  let resultMethodHist = Services.telemetry.getHistogramById("FX_SEARCHBAR_SELECTED_RESULT_METHOD");
-  resultMethodHist.clear();
-  let search_hist = getSearchCountsHistogram();
+  let resultMethodHist = getAndClearHistogram("FX_SEARCHBAR_SELECTED_RESULT_METHOD");
+  let search_hist = getAndClearKeyedHistogram("SEARCH_COUNTS");
 
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, "about:blank");
 
@@ -128,7 +131,7 @@ add_task(async function test_plainQuery() {
   checkKeyedHistogram(search_hist, "other-MozSearch.searchbar", 1);
 
   // Also check events.
-  let events = Services.telemetry.snapshotBuiltinEvents(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN, false);
+  let events = Services.telemetry.snapshotEvents(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN, false);
   events = (events.parent || []).filter(e => e[1] == "navigation" && e[2] == "search");
   checkEvents(events, [["navigation", "search", "searchbar", "enter", {engine: "other-MozSearch"}]]);
 
@@ -147,9 +150,8 @@ add_task(async function test_oneOff_enter() {
   // Let's reset the counts.
   Services.telemetry.clearScalars();
   Services.telemetry.clearEvents();
-  let resultMethodHist = Services.telemetry.getHistogramById("FX_SEARCHBAR_SELECTED_RESULT_METHOD");
-  resultMethodHist.clear();
-  let search_hist = getSearchCountsHistogram();
+  let resultMethodHist = getAndClearHistogram("FX_SEARCHBAR_SELECTED_RESULT_METHOD");
+  let search_hist = getAndClearKeyedHistogram("SEARCH_COUNTS");
 
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, "about:blank");
 
@@ -172,7 +174,7 @@ add_task(async function test_oneOff_enter() {
   checkKeyedHistogram(search_hist, "other-MozSearch2.searchbar", 1);
 
   // Also check events.
-  let events = Services.telemetry.snapshotBuiltinEvents(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN, false);
+  let events = Services.telemetry.snapshotEvents(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN, false);
   events = (events.parent || []).filter(e => e[1] == "navigation" && e[2] == "search");
   checkEvents(events, [["navigation", "search", "searchbar", "oneoff", {engine: "other-MozSearch2"}]]);
 
@@ -191,8 +193,7 @@ add_task(async function test_oneOff_enter() {
 add_task(async function test_oneOff_enterSelection() {
   // Let's reset the counts.
   Services.telemetry.clearScalars();
-  let resultMethodHist = Services.telemetry.getHistogramById("FX_SEARCHBAR_SELECTED_RESULT_METHOD");
-  resultMethodHist.clear();
+  let resultMethodHist = getAndClearHistogram("FX_SEARCHBAR_SELECTED_RESULT_METHOD");
 
   // Create an engine to generate search suggestions and add it as default
   // for this test.
@@ -235,8 +236,7 @@ add_task(async function test_oneOff_enterSelection() {
 add_task(async function test_oneOff_click() {
   // Let's reset the counts.
   Services.telemetry.clearScalars();
-  let resultMethodHist = Services.telemetry.getHistogramById("FX_SEARCHBAR_SELECTED_RESULT_METHOD");
-  resultMethodHist.clear();
+  let resultMethodHist = getAndClearHistogram("FX_SEARCHBAR_SELECTED_RESULT_METHOD");
 
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, "about:blank");
 
@@ -260,9 +260,8 @@ add_task(async function test_suggestion_click() {
   // Let's reset the counts.
   Services.telemetry.clearScalars();
   Services.telemetry.clearEvents();
-  let resultMethodHist = Services.telemetry.getHistogramById("FX_SEARCHBAR_SELECTED_RESULT_METHOD");
-  resultMethodHist.clear();
-  let search_hist = getSearchCountsHistogram();
+  let resultMethodHist = getAndClearHistogram("FX_SEARCHBAR_SELECTED_RESULT_METHOD");
+  let search_hist = getAndClearKeyedHistogram("SEARCH_COUNTS");
 
   // Create an engine to generate search suggestions and add it as default
   // for this test.
@@ -297,7 +296,7 @@ add_task(async function test_suggestion_click() {
   checkKeyedHistogram(search_hist, searchEngineId + ".searchbar", 1);
 
   // Also check events.
-  let events = Services.telemetry.snapshotBuiltinEvents(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN, false);
+  let events = Services.telemetry.snapshotEvents(Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTIN, false);
   events = (events.parent || []).filter(e => e[1] == "navigation" && e[2] == "search");
   checkEvents(events, [["navigation", "search", "searchbar", "suggestion", {engine: searchEngineId}]]);
 
@@ -319,8 +318,7 @@ add_task(async function test_suggestion_click() {
 add_task(async function test_suggestion_enterSelection() {
   // Let's reset the counts.
   Services.telemetry.clearScalars();
-  let resultMethodHist = Services.telemetry.getHistogramById("FX_SEARCHBAR_SELECTED_RESULT_METHOD");
-  resultMethodHist.clear();
+  let resultMethodHist = getAndClearHistogram("FX_SEARCHBAR_SELECTED_RESULT_METHOD");
 
   // Create an engine to generate search suggestions and add it as default
   // for this test.

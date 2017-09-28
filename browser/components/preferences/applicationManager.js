@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-/* import-globals-from in-content/applications.js */
+/* import-globals-from in-content/main.js */
 
 var Cc = Components.classes;
 var Ci = Components.interfaces;
@@ -12,13 +12,15 @@ var gAppManagerDialog = {
 
   init: function appManager_init() {
     this.handlerInfo = window.arguments[0];
-
+    Services.scriptloader.loadSubScript("chrome://browser/content/preferences/in-content/main.js",
+      window);
+    var pane = gMainPane;
     var bundle = document.getElementById("appManagerBundle");
     var contentText;
     if (this.handlerInfo.type == TYPE_MAYBE_FEED)
       contentText = bundle.getString("handleWebFeeds");
     else {
-      var description = gApplicationsPane._describeType(this.handlerInfo);
+      var description = pane._describeType(this.handlerInfo);
       var key =
         (this.handlerInfo.wrappedHandlerInfo instanceof Ci.nsIMIMEInfo) ? "handleFile"
                                                                         : "handleProtocol";
@@ -31,12 +33,12 @@ var gAppManagerDialog = {
     var apps = this.handlerInfo.possibleApplicationHandlers.enumerate();
     while (apps.hasMoreElements()) {
       let app = apps.getNext();
-      if (!gApplicationsPane.isValidHandlerApp(app))
+      if (!pane.isValidHandlerApp(app))
         continue;
 
       app.QueryInterface(Ci.nsIHandlerApp);
       var item = list.appendItem(app.name);
-      item.setAttribute("image", gApplicationsPane._getIconURLForHandlerApp(app));
+      item.setAttribute("image", pane._getIconURLForHandlerApp(app));
       item.className = "listitem-iconic";
       item.app = app;
     }

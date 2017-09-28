@@ -33,12 +33,9 @@ nsDOMCSSDeclaration::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProt
   return dom::CSS2PropertiesBinding::Wrap(aCx, this, aGivenProto);
 }
 
-NS_INTERFACE_TABLE_HEAD(nsDOMCSSDeclaration)
-  NS_INTERFACE_TABLE(nsDOMCSSDeclaration,
-                     nsICSSDeclaration,
-                     nsIDOMCSSStyleDeclaration)
-  NS_INTERFACE_TABLE_TO_MAP_SEGUE
-NS_INTERFACE_MAP_END
+NS_IMPL_QUERY_INTERFACE(nsDOMCSSDeclaration,
+                        nsICSSDeclaration,
+                        nsIDOMCSSStyleDeclaration)
 
 NS_IMETHODIMP
 nsDOMCSSDeclaration::GetPropertyValue(const nsCSSPropertyID aPropID,
@@ -130,7 +127,7 @@ nsDOMCSSDeclaration::SetCssText(const nsAString& aCssText)
     }
 
     newdecl = ServoDeclarationBlock::FromCssText(aCssText, servoEnv.mUrlExtraData,
-                                                 servoEnv.mCompatMode);
+                                                 servoEnv.mCompatMode, servoEnv.mLoader);
   } else {
     CSSParsingEnvironment geckoEnv;
     GetCSSParsingEnvironment(geckoEnv);
@@ -190,16 +187,6 @@ nsDOMCSSDeclaration::GetPropertyValue(const nsAString& aPropertyName,
   aReturn.Truncate();
   if (DeclarationBlock* decl = GetCSSDeclaration(eOperation_Read)) {
     decl->GetPropertyValue(aPropertyName, aReturn);
-  }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDOMCSSDeclaration::GetAuthoredPropertyValue(const nsAString& aPropertyName,
-                                              nsAString& aReturn)
-{
-  if (DeclarationBlock* decl = GetCSSDeclaration(eOperation_Read)) {
-    decl->GetAuthoredPropertyValue(aPropertyName, aReturn);
   }
   return NS_OK;
 }
@@ -284,19 +271,21 @@ nsDOMCSSDeclaration::GetServoCSSParsingEnvironmentForRule(const css::Rule* aRule
 {
   StyleSheet* sheet = aRule ? aRule->GetStyleSheet() : nullptr;
   if (!sheet) {
-    return { nullptr, eCompatibility_FullStandards };
+    return { nullptr, eCompatibility_FullStandards, nullptr };
   }
 
   if (nsIDocument* document = aRule->GetDocument()) {
     return {
       sheet->AsServo()->URLData(),
       document->GetCompatibilityMode(),
+      document->CSSLoader(),
     };
   }
 
   return {
     sheet->AsServo()->URLData(),
     eCompatibility_FullStandards,
+    nullptr,
   };
 }
 
@@ -369,7 +358,7 @@ nsDOMCSSDeclaration::ParsePropertyValue(const nsCSSPropertyID aPropID,
       NS_ConvertUTF16toUTF8 value(aPropValue);
       return Servo_DeclarationBlock_SetPropertyById(
         decl->Raw(), aPropID, &value, aIsImportant, env.mUrlExtraData,
-        ParsingMode::Default, env.mCompatMode);
+        ParsingMode::Default, env.mCompatMode, env.mLoader);
     });
 }
 
@@ -392,7 +381,7 @@ nsDOMCSSDeclaration::ParseCustomPropertyValue(const nsAString& aPropertyName,
       NS_ConvertUTF16toUTF8 value(aPropValue);
       return Servo_DeclarationBlock_SetProperty(
         decl->Raw(), &property, &value, aIsImportant, env.mUrlExtraData,
-        ParsingMode::Default, env.mCompatMode);
+        ParsingMode::Default, env.mCompatMode, env.mLoader);
     });
 }
 

@@ -29,7 +29,6 @@
 #include "nsIURL.h"
 #include "nsRDFCID.h"
 #include "nsString.h"
-#include "nsXPIDLString.h"
 #include "nsUnicharUtils.h"
 #include "rdfutil.h"
 #include "prtime.h"
@@ -37,7 +36,7 @@
 ////////////////////////////////////////////////////////////////////////
 
 nsresult
-rdf_MakeRelativeRef(const nsCSubstring& aBaseURI, nsCString& aURI)
+rdf_MakeRelativeRef(const nsACString& aBaseURI, nsCString& aURI)
 {
     // This implementation is extremely simple: e.g., it can't compute
     // relative paths, or anything fancy like that. If the context URI

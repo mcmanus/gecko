@@ -48,7 +48,7 @@ static constexpr Register WasmIonExitRegE1 { Registers::invalid_reg };
 
 static constexpr Register WasmIonExitRegReturnData { Registers::invalid_reg };
 static constexpr Register WasmIonExitRegReturnType { Registers::invalid_reg };
-static constexpr Register WasmIonExitTlsReg = { Registers::invalid_reg };
+static constexpr Register WasmIonExitTlsReg { Registers::invalid_reg };
 static constexpr Register WasmIonExitRegD0 { Registers::invalid_reg };
 static constexpr Register WasmIonExitRegD1 { Registers::invalid_reg };
 static constexpr Register WasmIonExitRegD2 { Registers::invalid_reg };
@@ -145,13 +145,14 @@ class Assembler : public AssemblerShared
 
     static void PatchWrite_NearCall(CodeLocationLabel, CodeLocationLabel) { MOZ_CRASH(); }
     static uint32_t PatchWrite_NearCallSize() { MOZ_CRASH(); }
-    static void PatchInstructionImmediate(uint8_t*, PatchedImmPtr) { MOZ_CRASH(); }
 
     static void ToggleToJmp(CodeLocationLabel) { MOZ_CRASH(); }
     static void ToggleToCmp(CodeLocationLabel) { MOZ_CRASH(); }
     static void ToggleCall(CodeLocationLabel, bool) { MOZ_CRASH(); }
 
     static uintptr_t GetPointer(uint8_t*) { MOZ_CRASH(); }
+
+    static bool HasRoundInstruction(RoundingMode) { return false; }
 
     void verifyHeapAccessDisassembly(uint32_t begin, uint32_t end,
                                      const Disassembler::HeapAccess& heapAccess)
@@ -186,7 +187,7 @@ class MacroAssemblerNone : public Assembler
     size_t numCodeLabels() const { MOZ_CRASH(); }
     CodeLabel codeLabel(size_t) { MOZ_CRASH(); }
 
-    bool asmMergeWith(const MacroAssemblerNone&) { MOZ_CRASH(); }
+    bool appendRawCode(const uint8_t* code, size_t numBytes) { MOZ_CRASH(); }
 
     void trace(JSTracer*) { MOZ_CRASH(); }
     static void TraceJumpRelocations(JSTracer*, JitCode*, CompactBufferReader&) { MOZ_CRASH(); }
@@ -196,9 +197,7 @@ class MacroAssemblerNone : public Assembler
     static bool SupportsSimd() { return false; }
     static bool SupportsUnalignedAccesses() { return false; }
 
-    static bool HasRoundInstruction(RoundingMode) { return false; }
-
-    void executableCopy(void*, bool) { MOZ_CRASH(); }
+    void executableCopy(void*, bool = true) { MOZ_CRASH(); }
     void copyJumpRelocationTable(uint8_t*) { MOZ_CRASH(); }
     void copyDataRelocationTable(uint8_t*) { MOZ_CRASH(); }
     void copyPreBarrierTable(uint8_t*) { MOZ_CRASH(); }
@@ -210,11 +209,11 @@ class MacroAssemblerNone : public Assembler
     void bindLater(Label*, wasm::TrapDesc) { MOZ_CRASH(); }
     template <typename T> void j(Condition, T) { MOZ_CRASH(); }
     template <typename T> void jump(T) { MOZ_CRASH(); }
+    void writeCodePointer(CodeOffset* label) { MOZ_CRASH(); }
     void haltingAlign(size_t) { MOZ_CRASH(); }
     void nopAlign(size_t) { MOZ_CRASH(); }
     void checkStackAlignment() { MOZ_CRASH(); }
     uint32_t currentOffset() { MOZ_CRASH(); }
-    uint32_t labelToPatchOffset(CodeOffset) { MOZ_CRASH(); }
     CodeOffset labelForPatch() { MOZ_CRASH(); }
 
     void nop() { MOZ_CRASH(); }
@@ -360,7 +359,7 @@ class MacroAssemblerNone : public Assembler
 
     Register splitTagForTest(ValueOperand) { MOZ_CRASH(); }
 
-    void boxDouble(FloatRegister, ValueOperand) { MOZ_CRASH(); }
+    void boxDouble(FloatRegister, ValueOperand, FloatRegister) { MOZ_CRASH(); }
     void boxNonDouble(JSValueType, Register, ValueOperand) { MOZ_CRASH(); }
     template <typename T> void unboxInt32(T, Register) { MOZ_CRASH(); }
     template <typename T> void unboxBoolean(T, Register) { MOZ_CRASH(); }
@@ -423,12 +422,6 @@ class MacroAssemblerNone : public Assembler
     // Instrumentation for entering and leaving the profiler.
     void profilerEnterFrame(Register , Register ) { MOZ_CRASH(); }
     void profilerExitFrame() { MOZ_CRASH(); }
-
-    void disableProtection() { MOZ_CRASH(); }
-    void enableProtection() { MOZ_CRASH(); }
-    void setLowerBoundForProtection(size_t) { MOZ_CRASH(); }
-    void unprotectRegion(unsigned char*, size_t) { MOZ_CRASH(); }
-    void reprotectRegion(unsigned char*, size_t) { MOZ_CRASH(); }
 
 #ifdef JS_NUNBOX32
     Address ToPayload(Address) { MOZ_CRASH(); }

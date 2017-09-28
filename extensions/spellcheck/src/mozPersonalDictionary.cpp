@@ -53,7 +53,9 @@ NS_INTERFACE_MAP_END
 class mozPersonalDictionaryLoader final : public mozilla::Runnable
 {
 public:
-  explicit mozPersonalDictionaryLoader(mozPersonalDictionary *dict) : mDict(dict)
+  explicit mozPersonalDictionaryLoader(mozPersonalDictionary* dict)
+    : mozilla::Runnable("mozPersonalDictionaryLoader")
+    , mDict(dict)
   {
   }
 
@@ -62,7 +64,7 @@ public:
     mDict->SyncLoad();
 
     // Release the dictionary on the main thread
-    NS_ReleaseOnMainThread(
+    NS_ReleaseOnMainThreadSystemGroup(
       "mozPersonalDictionaryLoader::mDict",
       mDict.forget().downcast<mozIPersonalDictionary>());
 
@@ -76,12 +78,13 @@ private:
 class mozPersonalDictionarySave final : public mozilla::Runnable
 {
 public:
-  explicit mozPersonalDictionarySave(mozPersonalDictionary *aDict,
+  explicit mozPersonalDictionarySave(mozPersonalDictionary* aDict,
                                      nsCOMPtr<nsIFile> aFile,
-                                     nsTArray<nsString> &&aDictWords)
-    : mDictWords(aDictWords),
-      mFile(aFile),
-      mDict(aDict)
+                                     nsTArray<nsString>&& aDictWords)
+    : mozilla::Runnable("mozPersonalDictionarySave")
+    , mDictWords(aDictWords)
+    , mFile(aFile)
+    , mDict(aDict)
   {
   }
 
@@ -135,7 +138,7 @@ public:
     }
 
     // Release the dictionary on the main thread.
-    NS_ReleaseOnMainThread(
+    NS_ReleaseOnMainThreadSystemGroup(
       "mozPersonalDictionarySave::mDict",
       mDict.forget().downcast<mozIPersonalDictionary>());
 
@@ -190,7 +193,7 @@ void mozPersonalDictionary::WaitForLoad()
   }
 
   // If the dictionary hasn't been loaded, we try to lock the same monitor
-  // that the thread uses that does the load. This way the main thread will 
+  // that the thread uses that does the load. This way the main thread will
   // be suspended until the monitor becomes available.
   mozilla::MonitorAutoLock mon(mMonitor);
 
@@ -304,7 +307,7 @@ void mozPersonalDictionary::SyncLoadInternal()
     while(!done && ((c == '\n') || (c == '\r'))){
       if( (NS_OK != convStream->Read(&c, 1, &nRead)) || (nRead != 1)) done = true;
     }
-    if (!done){ 
+    if (!done){
       nsAutoString word;
       while((c != '\n') && (c != '\r') && !done){
         word.Append(c);
@@ -427,7 +430,7 @@ NS_IMETHODIMP mozPersonalDictionary::RemoveWord(const char16_t *aWord, const cha
 NS_IMETHODIMP mozPersonalDictionary::IgnoreWord(const char16_t *aWord)
 {
   // avoid adding duplicate words to the ignore list
-  if (aWord && !mIgnoreTable.GetEntry(aWord)) 
+  if (aWord && !mIgnoreTable.GetEntry(aWord))
     mIgnoreTable.PutEntry(aWord);
   return NS_OK;
 }

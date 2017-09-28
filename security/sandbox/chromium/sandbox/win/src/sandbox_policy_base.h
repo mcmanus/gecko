@@ -42,6 +42,7 @@ class PolicyBase final : public TargetPolicy {
   ResultCode SetTokenLevel(TokenLevel initial, TokenLevel lockdown) override;
   TokenLevel GetInitialTokenLevel() const override;
   TokenLevel GetLockdownTokenLevel() const override;
+  void SetDoNotUseRestrictingSIDs() final;
   ResultCode SetJobLevel(JobLevel job_level, uint32_t ui_exceptions) override;
   JobLevel GetJobLevel() const override;
   ResultCode SetJobMemoryLimit(size_t memory_limit) override;
@@ -127,6 +128,7 @@ class PolicyBase final : public TargetPolicy {
   // The user-defined global policy settings.
   TokenLevel lockdown_level_;
   TokenLevel initial_level_;
+  bool use_restricting_sids_ = true;
   JobLevel job_level_;
   uint32_t ui_exceptions_;
   size_t memory_limit_;
@@ -160,7 +162,10 @@ class PolicyBase final : public TargetPolicy {
 
   static HDESK alternate_desktop_handle_;
   static HWINSTA alternate_winstation_handle_;
+  static HDESK alternate_desktop_local_winstation_handle_;
   static IntegrityLevel alternate_desktop_integrity_level_label_;
+  static IntegrityLevel
+      alternate_desktop_local_winstation_integrity_level_label_;
 
   // Contains the list of handles being shared with the target process.
   // This list contains handles other than the stderr/stdout handles which are

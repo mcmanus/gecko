@@ -6,7 +6,6 @@ var { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
 Cu.import("resource://gre/modules/NetUtil.jsm");
-Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://testing-common/AppInfo.jsm");
@@ -75,7 +74,7 @@ function configureToLoadJarEngines() {
  */
 function installAddonEngine(name = "engine-addon") {
   const XRE_EXTENSIONS_DIR_LIST = "XREExtDL";
-  const profD = do_get_profile().QueryInterface(Ci.nsILocalFile);
+  const profD = do_get_profile().QueryInterface(Ci.nsIFile);
 
   let dir = profD.clone();
   dir.append("extensions");
@@ -126,7 +125,7 @@ function installAddonEngine(name = "engine-addon") {
 function installDistributionEngine() {
   const XRE_APP_DISTRIBUTION_DIR = "XREAppDist";
 
-  const profD = do_get_profile().QueryInterface(Ci.nsILocalFile);
+  const profD = do_get_profile().QueryInterface(Ci.nsIFile);
 
   let dir = profD.clone();
   dir.append("distribution");

@@ -15,30 +15,34 @@ EXPORTS.mozilla.dom += [
     'AuthenticatorAssertionResponse.h',
     'AuthenticatorAttestationResponse.h',
     'AuthenticatorResponse.h',
-    'NSSU2FTokenRemote.h',
     'PublicKeyCredential.h',
+    'U2FHIDTokenManager.h',
     'U2FSoftTokenManager.h',
     'U2FTokenManager.h',
     'U2FTokenTransport.h',
+    'WebAuthnCBORUtil.h',
     'WebAuthnManager.h',
     'WebAuthnRequest.h',
     'WebAuthnTransactionChild.h',
     'WebAuthnTransactionParent.h',
-    'WebAuthnUtil.h'
+    'WebAuthnUtil.h',
 ]
 
 UNIFIED_SOURCES += [
     'AuthenticatorAssertionResponse.cpp',
     'AuthenticatorAttestationResponse.cpp',
     'AuthenticatorResponse.cpp',
-    'NSSU2FTokenRemote.cpp',
+    'cbor-cpp/src/encoder.cpp',
+    'cbor-cpp/src/output_dynamic.cpp',
     'PublicKeyCredential.cpp',
+    'U2FHIDTokenManager.cpp',
     'U2FSoftTokenManager.cpp',
     'U2FTokenManager.cpp',
+    'WebAuthnCBORUtil.cpp',
     'WebAuthnManager.cpp',
     'WebAuthnTransactionChild.cpp',
     'WebAuthnTransactionParent.cpp',
-    'WebAuthnUtil.cpp'
+    'WebAuthnUtil.cpp',
 ]
 
 include('/ipc/chromium/chromium-config.mozbuild')
@@ -53,4 +57,10 @@ LOCAL_INCLUDES += [
     '/security/pkix/lib',
 ]
 
+if CONFIG['OS_ARCH'] == 'WINNT':
+    OS_LIBS += [
+        'hid',
+    ]
+
 MOCHITEST_MANIFESTS += ['tests/mochitest.ini']
+BROWSER_CHROME_MANIFESTS += ['tests/browser/browser.ini']

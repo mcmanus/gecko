@@ -10,13 +10,16 @@ UNIFIED_SOURCES += [
     'TestAtoms.cpp',
     'TestAutoPtr.cpp',
     'TestAutoRef.cpp',
+    'TestAutoRefCnt.cpp',
     'TestBase64.cpp',
     'TestCallTemplates.cpp',
     'TestCloneInputStream.cpp',
     'TestCOMPtrEq.cpp',
     'TestCRT.cpp',
+    'TestDafsa.cpp',
     'TestEncoding.cpp',
-    'TestEscapeURL.cpp',
+    'TestEscape.cpp',
+    'TestEventPriorities.cpp',
     'TestEventTargetQI.cpp',
     'TestExpirationTracker.cpp',
     'TestFile.cpp',
@@ -32,6 +35,7 @@ UNIFIED_SOURCES += [
     'TestPLDHash.cpp',
     'TestPriorityQueue.cpp',
     'TestRacingServiceManager.cpp',
+    'TestRecursiveMutex.cpp',
     'TestRWLock.cpp',
     'TestSlicedInputStream.cpp',
     'TestSnappyStreams.cpp',
@@ -53,7 +57,6 @@ UNIFIED_SOURCES += [
     'TestTimeStamp.cpp',
     'TestTokenizer.cpp',
     'TestUTF.cpp',
-    'TestXPIDLString.cpp',
 ]
 
 if CONFIG['MOZ_DEBUG'] and CONFIG['OS_ARCH'] not in ('WINNT') and CONFIG['OS_TARGET'] != 'Android':
@@ -69,9 +72,6 @@ if CONFIG['WRAP_STL_INCLUDES'] and not CONFIG['CLANG_CL']:
         'TestSTLWrappers.cpp',
     ]
 
-if CONFIG['MOZ_CODE_COVERAGE']:
-    DEFINES['MOZ_CODE_COVERAGE'] = True
-
 # Compile TestAllocReplacement separately so Windows headers don't pollute
 # the global namespace for other files.
 SOURCES += [
@@ -85,6 +85,13 @@ SOURCES += [
 LOCAL_INCLUDES += [
     '../../base',
 ]
+
+GENERATED_FILES = [
+    'dafsa_test_1.inc',
+]
+dafsa_data = GENERATED_FILES['dafsa_test_1.inc']
+dafsa_data.script = '../../ds/make_dafsa.py'
+dafsa_data.inputs = ['dafsa_test_1.dat']
 
 FINAL_LIBRARY = 'xul-gtest'
 

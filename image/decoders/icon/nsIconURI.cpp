@@ -118,6 +118,30 @@ nsMozIconURI::GetSpecIgnoringRef(nsACString& result)
 }
 
 NS_IMETHODIMP
+nsMozIconURI::GetDisplaySpec(nsACString& aUnicodeSpec)
+{
+  return GetSpec(aUnicodeSpec);
+}
+
+NS_IMETHODIMP
+nsMozIconURI::GetDisplayHostPort(nsACString& aUnicodeHostPort)
+{
+  return GetHostPort(aUnicodeHostPort);
+}
+
+NS_IMETHODIMP
+nsMozIconURI::GetDisplayHost(nsACString& aUnicodeHost)
+{
+  return GetHost(aUnicodeHost);
+}
+
+NS_IMETHODIMP
+nsMozIconURI::GetDisplayPrePath(nsACString& aPrePath)
+{
+  return GetPrePath(aPrePath);
+}
+
+NS_IMETHODIMP
 nsMozIconURI::GetHasRef(bool* result)
 {
   *result = false;
@@ -359,14 +383,14 @@ nsMozIconURI::SetPort(int32_t aPort)
 }
 
 NS_IMETHODIMP
-nsMozIconURI::GetPath(nsACString& aPath)
+nsMozIconURI::GetPathQueryRef(nsACString& aPath)
 {
   aPath.Truncate();
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsMozIconURI::SetPath(const nsACString& aPath)
+nsMozIconURI::SetPathQueryRef(const nsACString& aPath)
 {
   return NS_ERROR_FAILURE;
 }
@@ -393,6 +417,13 @@ nsMozIconURI::GetQuery(nsACString& aQuery)
 
 NS_IMETHODIMP
 nsMozIconURI::SetQuery(const nsACString& aQuery)
+{
+  return NS_ERROR_FAILURE;
+}
+
+NS_IMETHODIMP
+nsMozIconURI::SetQueryWithEncoding(const nsACString& aQuery,
+                                   const Encoding* aEncoding)
 {
   return NS_ERROR_FAILURE;
 }
@@ -521,13 +552,6 @@ NS_IMETHODIMP
 nsMozIconURI::GetAsciiHost(nsACString& aHostA)
 {
   return GetHost(aHostA);
-}
-
-NS_IMETHODIMP
-nsMozIconURI::GetOriginCharset(nsACString& result)
-{
-  result.Truncate();
-  return NS_OK;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

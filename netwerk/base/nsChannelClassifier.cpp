@@ -13,6 +13,7 @@
 #include "nsICacheEntry.h"
 #include "nsICachingChannel.h"
 #include "nsIChannel.h"
+#include "nsIClassOfService.h"
 #include "nsIDocShell.h"
 #include "nsIDocument.h"
 #include "nsIDOMDocument.h"
@@ -119,14 +120,18 @@ CachedPrefs::OnPrefsChange(const char* aPref, void* aClosure)
   CachedPrefs* prefs = static_cast<CachedPrefs*> (aClosure);
 
   if (!strcmp(aPref, URLCLASSIFIER_SKIP_HOSTNAMES)) {
-    nsCString skipHostnames = Preferences::GetCString(URLCLASSIFIER_SKIP_HOSTNAMES);
+    nsCString skipHostnames;
+    Preferences::GetCString(URLCLASSIFIER_SKIP_HOSTNAMES, skipHostnames);
     ToLowerCase(skipHostnames);
     prefs->SetSkipHostnames(skipHostnames);
   } else if (!strcmp(aPref, URLCLASSIFIER_TRACKING_WHITELIST)) {
-    nsCString trackingWhitelist = Preferences::GetCString(URLCLASSIFIER_TRACKING_WHITELIST);
+    nsCString trackingWhitelist;
+    Preferences::GetCString(URLCLASSIFIER_TRACKING_WHITELIST,
+                            trackingWhitelist);
     prefs->SetTrackingWhiteList(trackingWhitelist);
   } else if (!strcmp(aPref, URLCLASSIFIER_TRACKING_TABLE)) {
-    nsCString trackingBlacklist = Preferences::GetCString(URLCLASSIFIER_TRACKING_TABLE);
+    nsCString trackingBlacklist;
+    Preferences::GetCString(URLCLASSIFIER_TRACKING_TABLE, trackingBlacklist);
     prefs->SetTrackingBlackList(trackingBlacklist);
   }
 }
@@ -201,9 +206,36 @@ LowerPriorityHelper(nsIChannel* aChannel)
 {
   MOZ_ASSERT(aChannel);
 
-  nsCOMPtr<nsISupportsPriority> p = do_QueryInterface(aChannel);
-  if (p) {
-    p->SetPriority(nsISupportsPriority::PRIORITY_LOWEST);
+  bool isBlockingResource = false;
+
+  nsCOMPtr<nsIClassOfService> cos(do_QueryInterface(aChannel));
+  if (cos) {
+    if (nsContentUtils::IsTailingEnabled()) {
+      uint32_t cosFlags = 0;
+      cos->GetClassFlags(&cosFlags);
+      isBlockingResource = cosFlags & (nsIClassOfService::UrgentStart |
+                                       nsIClassOfService::Leader |
+                                       nsIClassOfService::Unblocked);
+
+      // Requests not allowed to be tailed are usually those with higher
+      // prioritization.  That overweights being a tracker: don't throttle
+      // them when not in background.
+      if (!(cosFlags & nsIClassOfService::TailForbidden)) {
+        cos->AddClassFlags(nsIClassOfService::Throttleable);
+      }
+    } else {
+      // Yes, we even don't want to evaluate the isBlockingResource when tailing is off
+      // see bug 1395525.
+
+      cos->AddClassFlags(nsIClassOfService::Throttleable);
+    }
+  }
+
+  if (!isBlockingResource) {
+    nsCOMPtr<nsISupportsPriority> p = do_QueryInterface(aChannel);
+    if (p) {
+      p->SetPriority(nsISupportsPriority::PRIORITY_LOWEST);
+    }
   }
 }
 
@@ -218,7 +250,13 @@ nsChannelClassifier::nsChannelClassifier(nsIChannel *aChannel)
     mTrackingProtectionEnabled(Nothing()),
     mTrackingAnnotationEnabled(Nothing())
 {
+  LOG(("nsChannelClassifier::nsChannelClassifier %p", this));
   MOZ_ASSERT(mChannel);
+}
+
+nsChannelClassifier::~nsChannelClassifier()
+{
+  LOG(("nsChannelClassifier::~nsChannelClassifier %p", this));
 }
 
 bool
@@ -641,7 +679,7 @@ nsChannelClassifier::IsHostnameWhitelisted(nsIURI *aUri,
 
   nsCCharSeparatedTokenizer tokenizer(aWhitelisted, ',');
   while (tokenizer.hasMoreTokens()) {
-    const nsCSubstring& token = tokenizer.nextToken();
+    const nsACString& token = tokenizer.nextToken();
     if (token.Equals(host)) {
       LOG(("nsChannelClassifier[%p]:StartInternal skipping %s (whitelisted)",
            this, host.get()));
@@ -728,7 +766,7 @@ nsChannelClassifier::HasBeenClassified(nsIChannel *aChannel)
         return false;
     }
 
-    nsXPIDLCString tag;
+    nsCString tag;
     cacheEntry->GetMetaDataElement("necko:classified", getter_Copies(tag));
     return tag.EqualsLiteral("1");
 }

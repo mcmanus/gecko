@@ -4,8 +4,12 @@
 
 loader: taskgraph.loader.transform:loader
 
+kind-dependencies:
+   - toolchain
+
 transforms:
    - taskgraph.transforms.build_attrs:transforms
+   - taskgraph.transforms.use_toolchains:transforms
    - taskgraph.transforms.job:transforms
    - taskgraph.transforms.task:transforms
 
@@ -33,12 +37,15 @@ jobs:
         run:
             using: hazard
             command: >
-                cd /home/worker/checkouts/gecko/taskcluster/scripts/builder
+                cd /builds/worker/checkouts/gecko/taskcluster/scripts/builder
                 && ./build-haz-linux.sh --project shell $HOME/workspace
         when:
             files-changed:
                 - js/public/**
                 - js/src/**
+        toolchains:
+            - linux64-clang
+            - linux64-gcc-4.9
 
     linux64-haz/debug:
         description: "Browser Hazard Analysis Linux"
@@ -55,5 +62,8 @@ jobs:
             using: hazard
             mozconfig: "browser/config/mozconfigs/linux64/hazards"
             command: >
-                cd /home/worker/checkouts/gecko/taskcluster/scripts/builder
+                cd /builds/worker/checkouts/gecko/taskcluster/scripts/builder
                 && ./build-haz-linux.sh --project browser $HOME/workspace
+        toolchains:
+            - linux64-clang
+            - linux64-gcc-4.9

@@ -45,6 +45,7 @@
 #include "nsStringStream.h"
 #include "nsIAuthPrompt.h"
 #include "nsIAuthPrompt2.h"
+#include "nsIClassOfService.h"
 #include "nsIOutputStream.h"
 #include "nsISupportsPrimitives.h"
 #include "nsISupportsPriority.h"
@@ -145,7 +146,11 @@ NS_IMPL_ISUPPORTS(nsXHRParseEndListener, nsIDOMEventListener)
 class nsResumeTimeoutsEvent : public Runnable
 {
 public:
-  explicit nsResumeTimeoutsEvent(nsPIDOMWindowInner* aWindow) : mWindow(aWindow) {}
+  explicit nsResumeTimeoutsEvent(nsPIDOMWindowInner* aWindow)
+    : Runnable("dom::nsResumeTimeoutsEvent")
+    , mWindow(aWindow)
+  {
+  }
 
   NS_IMETHOD Run() override
   {
@@ -178,9 +183,11 @@ XMLHttpRequestMainThread::sDontWarnAboutSyncXHR = false;
 
 XMLHttpRequestMainThread::XMLHttpRequestMainThread()
   : mResponseBodyDecodedPos(0),
+    mResponseCharset(nullptr),
     mResponseType(XMLHttpRequestResponseType::_empty),
     mRequestObserver(nullptr),
     mState(State::unsent),
+    mStyleBackend(StyleBackendType::None),
     mFlagSynchronous(false), mFlagAborted(false), mFlagParseBody(false),
     mFlagSyncLooping(false), mFlagBackgroundRequest(false),
     mFlagHadUploadListenersOnSend(false), mFlagACwithCredentials(false),
@@ -308,11 +315,9 @@ XMLHttpRequestMainThread::ResetResponse()
   TruncateResponseText();
   mResponseBlob = nullptr;
   mBlobStorage = nullptr;
-  mBlobSet = nullptr;
   mResultArrayBuffer = nullptr;
   mArrayBufferBuilder.reset();
   mResultJSON.setUndefined();
-  mDataAvailable = 0;
   mLoadTransferred = 0;
   mResponseBodyDecodedPos = 0;
 }
@@ -375,9 +380,8 @@ XMLHttpRequestMainThread::IsCertainlyAliveForCC() const
 }
 
 // QueryInterface implementation for XMLHttpRequestMainThread
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(XMLHttpRequestMainThread)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(XMLHttpRequestMainThread)
   NS_INTERFACE_MAP_ENTRY(nsIXMLHttpRequest)
-  NS_INTERFACE_MAP_ENTRY(nsIJSXMLHttpRequest)
   NS_INTERFACE_MAP_ENTRY(nsIRequestObserver)
   NS_INTERFACE_MAP_ENTRY(nsIStreamListener)
   NS_INTERFACE_MAP_ENTRY(nsIChannelEventSink)
@@ -391,8 +395,6 @@ NS_INTERFACE_MAP_END_INHERITING(XMLHttpRequestEventTarget)
 
 NS_IMPL_ADDREF_INHERITED(XMLHttpRequestMainThread, XMLHttpRequestEventTarget)
 NS_IMPL_RELEASE_INHERITED(XMLHttpRequestMainThread, XMLHttpRequestEventTarget)
-
-NS_IMPL_EVENT_HANDLER(XMLHttpRequestMainThread, readystatechange)
 
 void
 XMLHttpRequestMainThread::DisconnectFromOwner()
@@ -492,13 +494,12 @@ XMLHttpRequestMainThread::GetResponseXML(ErrorResult& aRv)
 nsresult
 XMLHttpRequestMainThread::DetectCharset()
 {
-  mResponseCharset.Truncate();
+  mResponseCharset = nullptr;
   mDecoder = nullptr;
 
   if (mResponseType != XMLHttpRequestResponseType::_empty &&
       mResponseType != XMLHttpRequestResponseType::Text &&
-      mResponseType != XMLHttpRequestResponseType::Json &&
-      mResponseType != XMLHttpRequestResponseType::Moz_chunked_text) {
+      mResponseType != XMLHttpRequestResponseType::Json) {
     return NS_OK;
   }
 
@@ -519,7 +520,7 @@ XMLHttpRequestMainThread::DetectCharset()
     encoding = UTF_8_ENCODING;
   }
 
-  encoding->Name(mResponseCharset);
+  mResponseCharset = encoding;
   mDecoder = encoding->NewDecoderWithBOMRemoval();
 
   return NS_OK;
@@ -603,19 +604,18 @@ XMLHttpRequestMainThread::GetResponseText(XMLHttpRequestStringSnapshot& aSnapsho
   aSnapshot.Reset();
 
   if (mResponseType != XMLHttpRequestResponseType::_empty &&
-      mResponseType != XMLHttpRequestResponseType::Text &&
-      mResponseType != XMLHttpRequestResponseType::Moz_chunked_text) {
+      mResponseType != XMLHttpRequestResponseType::Text) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_XHR_HAS_WRONG_RESPONSETYPE_FOR_RESPONSETEXT);
     return;
   }
 
-  if (mResponseType == XMLHttpRequestResponseType::Moz_chunked_text &&
-      !mInLoadProgressEvent) {
-    aSnapshot.SetVoid();
+  if (mState != State::loading && mState != State::done) {
     return;
   }
 
-  if (mState != State::loading && mState != State::done) {
+  // Main Fetch step 18 requires to ignore body for head/connect methods.
+  if (mRequestMethod.EqualsLiteral("HEAD") ||
+      mRequestMethod.EqualsLiteral("CONNECT")) {
     return;
   }
 
@@ -671,31 +671,6 @@ XMLHttpRequestMainThread::CreateResponseParsedJSON(JSContext* aCx)
   return NS_OK;
 }
 
-void
-XMLHttpRequestMainThread::CreatePartialBlob(ErrorResult& aRv)
-{
-  // mBlobSet can be null if the request has been canceled
-  if (!mBlobSet) {
-    return;
-  }
-
-  nsAutoCString contentType;
-  if (mState == State::done) {
-    mChannel->GetContentType(contentType);
-  }
-
-  nsTArray<RefPtr<BlobImpl>> subImpls(mBlobSet->GetBlobImpls());
-  RefPtr<BlobImpl> blobImpl =
-    MultipartBlobImpl::Create(Move(subImpls),
-                              NS_ConvertASCIItoUTF16(contentType),
-                              aRv);
-  if (NS_WARN_IF(aRv.Failed())) {
-    return;
-  }
-
-  mResponseBlob = Blob::Create(GetOwner(), blobImpl);
-}
-
 NS_IMETHODIMP XMLHttpRequestMainThread::GetResponseType(nsAString& aResponseType)
 {
   MOZ_ASSERT(mResponseType < XMLHttpRequestResponseType::EndGuard_);
@@ -737,18 +712,13 @@ XMLHttpRequestMainThread::SetResponseType(XMLHttpRequestResponseType aResponseTy
   }
 
   if (mFlagSynchronous &&
-      (aResponseType == XMLHttpRequestResponseType::Moz_chunked_text ||
-       aResponseType == XMLHttpRequestResponseType::Moz_chunked_arraybuffer)) {
+      aResponseType == XMLHttpRequestResponseType::Moz_chunked_arraybuffer) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_XHR_CHUNKED_RESPONSETYPES_UNSUPPORTED_FOR_SYNC);
     return;
   }
 
   // We want to get rid of this moz-only types. Bug 1335365.
-  if (aResponseType == XMLHttpRequestResponseType::Moz_blob) {
-    Telemetry::Accumulate(Telemetry::MOZ_BLOB_IN_XHR, 1);
-  } else if (aResponseType == XMLHttpRequestResponseType::Moz_chunked_text) {
-    Telemetry::Accumulate(Telemetry::MOZ_CHUNKED_TEXT_IN_XHR, 1);
-  } else if (aResponseType == XMLHttpRequestResponseType::Moz_chunked_arraybuffer) {
+  if (aResponseType == XMLHttpRequestResponseType::Moz_chunked_arraybuffer) {
     Telemetry::Accumulate(Telemetry::MOZ_CHUNKED_ARRAYBUFFER_IN_XHR, 1);
   }
 
@@ -772,7 +742,6 @@ XMLHttpRequestMainThread::GetResponse(JSContext* aCx,
   switch (mResponseType) {
   case XMLHttpRequestResponseType::_empty:
   case XMLHttpRequestResponseType::Text:
-  case XMLHttpRequestResponseType::Moz_chunked_text:
   {
     DOMString str;
     GetResponseText(str, aRv);
@@ -807,17 +776,10 @@ XMLHttpRequestMainThread::GetResponse(JSContext* aCx,
     return;
   }
   case XMLHttpRequestResponseType::Blob:
-  case XMLHttpRequestResponseType::Moz_blob:
   {
     if (mState != State::done) {
-      if (mResponseType != XMLHttpRequestResponseType::Moz_blob) {
-        aResponse.setNull();
-        return;
-      }
-
-      if (!mResponseBlob) {
-        CreatePartialBlob(aRv);
-      }
+      aResponse.setNull();
+      return;
     }
 
     if (!mResponseBlob) {
@@ -1420,8 +1382,7 @@ XMLHttpRequestMainThread::DispatchProgressEvent(DOMEventTargetHelper* aTarget,
     mInLoadProgressEvent = false;
 
     // clear chunked responses after every progress event
-    if (mResponseType == XMLHttpRequestResponseType::Moz_chunked_text ||
-        mResponseType == XMLHttpRequestResponseType::Moz_chunked_arraybuffer) {
+    if (mResponseType == XMLHttpRequestResponseType::Moz_chunked_arraybuffer) {
       mResponseBody.Truncate();
       TruncateResponseText();
       mResultArrayBuffer = nullptr;
@@ -1451,7 +1412,8 @@ XMLHttpRequestMainThread::DispatchOrStoreEvent(DOMEventTargetHelper* aTarget,
     return;
   }
 
-  aTarget->DispatchDOMEvent(nullptr, aEvent, nullptr, nullptr);
+  bool dummy;
+  aTarget->DispatchEvent(aEvent, &dummy);
 }
 
 void
@@ -1471,8 +1433,8 @@ XMLHttpRequestMainThread::ResumeEventDispatching()
   pendingEvents.SwapElements(mPendingEvents);
 
   for (uint32_t i = 0; i < pendingEvents.Length(); ++i) {
-    pendingEvents[i].mTarget->
-      DispatchDOMEvent(nullptr, pendingEvents[i].mEvent, nullptr, nullptr);
+    bool dummy;
+    pendingEvents[i].mTarget->DispatchEvent(pendingEvents[i].mEvent, &dummy);
   }
 }
 
@@ -1518,7 +1480,7 @@ void
 XMLHttpRequestMainThread::Open(const nsACString& aMethod, const nsAString& aUrl,
                                ErrorResult& aRv)
 {
-  Open(aMethod, aUrl, true, NullString(), NullString(), aRv);
+  Open(aMethod, aUrl, true, VoidString(), VoidString(), aRv);
 }
 
 // This case is hit when the async parameter is specified, even if the
@@ -1703,13 +1665,6 @@ XMLHttpRequestMainThread::StreamReaderFunc(nsIInputStream* in,
   if (xmlHttpRequest->mResponseType == XMLHttpRequestResponseType::Blob) {
     xmlHttpRequest->MaybeCreateBlobStorage();
     rv = xmlHttpRequest->mBlobStorage->Append(fromRawSegment, count);
-  } else if (xmlHttpRequest->mResponseType == XMLHttpRequestResponseType::Moz_blob) {
-    if (!xmlHttpRequest->mBlobSet) {
-      xmlHttpRequest->mBlobSet = new BlobSet();
-    }
-    rv = xmlHttpRequest->mBlobSet->AppendVoidPtr(fromRawSegment, count);
-    // Clear the cache so that the blob size is updated.
-    xmlHttpRequest->mResponseBlob = nullptr;
   } else if ((xmlHttpRequest->mResponseType == XMLHttpRequestResponseType::Arraybuffer &&
               !xmlHttpRequest->mIsMappedArrayBuffer) ||
              xmlHttpRequest->mResponseType == XMLHttpRequestResponseType::Moz_chunked_arraybuffer) {
@@ -1718,8 +1673,13 @@ XMLHttpRequestMainThread::StreamReaderFunc(nsIInputStream* in,
     if (xmlHttpRequest->mArrayBufferBuilder.capacity() == 0)
       xmlHttpRequest->mArrayBufferBuilder.setCapacity(std::max(count, XML_HTTP_REQUEST_ARRAYBUFFER_MIN_SIZE));
 
-    xmlHttpRequest->mArrayBufferBuilder.append(reinterpret_cast<const uint8_t*>(fromRawSegment), count,
-                                               XML_HTTP_REQUEST_ARRAYBUFFER_MAX_GROWTH);
+    if (NS_WARN_IF(!xmlHttpRequest->mArrayBufferBuilder.append(
+                      reinterpret_cast<const uint8_t*>(fromRawSegment),
+                      count,
+                      XML_HTTP_REQUEST_ARRAYBUFFER_MAX_GROWTH))) {
+      return NS_ERROR_OUT_OF_MEMORY;
+    }
+
   } else if (xmlHttpRequest->mResponseType == XMLHttpRequestResponseType::_empty &&
              xmlHttpRequest->mResponseXML) {
     // Copy for our own use
@@ -1728,11 +1688,13 @@ XMLHttpRequestMainThread::StreamReaderFunc(nsIInputStream* in,
     }
   } else if (xmlHttpRequest->mResponseType == XMLHttpRequestResponseType::_empty ||
              xmlHttpRequest->mResponseType == XMLHttpRequestResponseType::Text ||
-             xmlHttpRequest->mResponseType == XMLHttpRequestResponseType::Json ||
-             xmlHttpRequest->mResponseType == XMLHttpRequestResponseType::Moz_chunked_text) {
+             xmlHttpRequest->mResponseType == XMLHttpRequestResponseType::Json) {
     NS_ASSERTION(!xmlHttpRequest->mResponseXML,
                  "We shouldn't be parsing a doc here");
-    xmlHttpRequest->AppendToResponseText(fromRawSegment, count);
+    rv = xmlHttpRequest->AppendToResponseText(fromRawSegment, count);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
   }
 
   if (xmlHttpRequest->mFlagParseBody) {
@@ -1865,7 +1827,6 @@ XMLHttpRequestMainThread::LocalFileToBlobCompleted(Blob* aBlob)
 
   mResponseBlob = aBlob;
   mBlobStorage = nullptr;
-  mBlobSet = nullptr;
   NS_ASSERTION(mResponseBody.IsEmpty(), "mResponseBody should be empty");
 
   ChangeStateToDone();
@@ -1888,8 +1849,7 @@ XMLHttpRequestMainThread::OnDataAvailable(nsIRequest *request,
   nsresult rv;
 
   nsCOMPtr<nsIFile> localFile;
-  if ((mResponseType == XMLHttpRequestResponseType::Blob ||
-       mResponseType == XMLHttpRequestResponseType::Moz_blob)) {
+  if (mResponseType == XMLHttpRequestResponseType::Blob) {
     rv = GetLocalFileFromChannel(request, getter_AddRefs(localFile));
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
@@ -1897,15 +1857,7 @@ XMLHttpRequestMainThread::OnDataAvailable(nsIRequest *request,
 
     if (localFile) {
       mBlobStorage = nullptr;
-      mBlobSet = nullptr;
       NS_ASSERTION(mResponseBody.IsEmpty(), "mResponseBody should be empty");
-
-      // We don't have to read from the local file for the blob response
-      int64_t fileSize;
-      rv = localFile->GetFileSize(&fileSize);
-      NS_ENSURE_SUCCESS(rv, rv);
-
-      mDataAvailable = fileSize;
 
       // The nsIStreamListener contract mandates us to read from the stream
       // before returning.
@@ -1928,8 +1880,6 @@ XMLHttpRequestMainThread::OnDataAvailable(nsIRequest *request,
                            (void*)this, count, &totalRead);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  mDataAvailable += totalRead;
-
   // Fire the first progress event/loading state change
   if (mState != State::loading) {
     ChangeState(State::loading);
@@ -1950,8 +1900,7 @@ XMLHttpRequestMainThread::OnDataAvailable(nsIRequest *request,
 NS_IMETHODIMP
 XMLHttpRequestMainThread::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
 {
-  PROFILER_LABEL("XMLHttpRequestMainThread", "OnStartRequest",
-    js::ProfileEntry::Category::NETWORK);
+  AUTO_PROFILER_LABEL("XMLHttpRequestMainThread::OnStartRequest", NETWORK);
 
   nsresult rv = NS_OK;
   if (!mFirstStartRequestSeen && mRequestObserver) {
@@ -2022,7 +1971,7 @@ XMLHttpRequestMainThread::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
   // Fallback to 'application/octet-stream'
   nsAutoCString type;
   channel->GetContentType(type);
-  if (type.Equals(UNKNOWN_CONTENT_TYPE)) {
+  if (type.EqualsLiteral(UNKNOWN_CONTENT_TYPE)) {
     channel->SetContentType(NS_LITERAL_CSTRING(APPLICATION_OCTET_STREAM));
   }
 
@@ -2077,15 +2026,11 @@ XMLHttpRequestMainThread::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
   }
 
   // Set up responseXML
-  bool parseBody = mResponseType == XMLHttpRequestResponseType::_empty ||
-                   mResponseType == XMLHttpRequestResponseType::Document;
-  nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(mChannel));
-  if (parseBody && httpChannel) {
-    nsAutoCString method;
-    rv = httpChannel->GetRequestMethod(method);
-    MOZ_ASSERT(NS_SUCCEEDED(rv));
-    parseBody = !method.EqualsLiteral("HEAD");
-  }
+  // Note: Main Fetch step 18 requires to ignore body for head/connect methods.
+  bool parseBody = (mResponseType == XMLHttpRequestResponseType::_empty ||
+                    mResponseType == XMLHttpRequestResponseType::Document) &&
+                   !(mRequestMethod.EqualsLiteral("HEAD") ||
+                     mRequestMethod.EqualsLiteral("CONNECT"));
 
   mIsHtml = false;
   mWarnAboutSyncHtml = false;
@@ -2158,7 +2103,8 @@ XMLHttpRequestMainThread::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
                            emptyStr, emptyStr, nullptr, docURI,
                            baseURI, requestingPrincipal, true, global,
                            mIsHtml ? DocumentFlavorHTML :
-                                     DocumentFlavorLegacyGuess);
+                                     DocumentFlavorLegacyGuess,
+                           mStyleBackend);
     NS_ENSURE_SUCCESS(rv, rv);
     mResponseXML = do_QueryInterface(responseDoc);
     mResponseXML->SetChromeXHRDocURI(chromeXHRDocURI);
@@ -2226,8 +2172,7 @@ XMLHttpRequestMainThread::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
 NS_IMETHODIMP
 XMLHttpRequestMainThread::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult status)
 {
-  PROFILER_LABEL("XMLHttpRequestMainThread", "OnStopRequest",
-    js::ProfileEntry::Category::NETWORK);
+  AUTO_PROFILER_LABEL("XMLHttpRequestMainThread::OnStopRequest", NETWORK);
 
   if (request != mChannel) {
     // Can this still happen?
@@ -2265,8 +2210,7 @@ XMLHttpRequestMainThread::OnStopRequest(nsIRequest *request, nsISupports *ctxt, 
   // blob. We have this error because we canceled the channel. The status will
   // be set to NS_OK.
   if (status == NS_ERROR_FILE_ALREADY_EXISTS &&
-      (mResponseType == XMLHttpRequestResponseType::Blob ||
-       mResponseType == XMLHttpRequestResponseType::Moz_blob)) {
+      mResponseType == XMLHttpRequestResponseType::Blob) {
     nsCOMPtr<nsIFile> file;
     nsresult rv = GetLocalFileFromChannel(request, getter_AddRefs(file));
     if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -2302,41 +2246,18 @@ XMLHttpRequestMainThread::OnStopRequest(nsIRequest *request, nsISupports *ctxt, 
   }
 
   if (NS_SUCCEEDED(status) &&
-      (mResponseType == XMLHttpRequestResponseType::Blob ||
-       mResponseType == XMLHttpRequestResponseType::Moz_blob) &&
+      mResponseType == XMLHttpRequestResponseType::Blob &&
       !waitingForBlobCreation) {
     // Smaller files may be written in cache map instead of separate files.
     // Also, no-store response cannot be written in persistent cache.
     nsAutoCString contentType;
     mChannel->GetContentType(contentType);
 
-    if (mResponseType == XMLHttpRequestResponseType::Blob) {
-      // mBlobStorage can be null if the channel is non-file non-cacheable
-      // and if the response length is zero.
-      MaybeCreateBlobStorage();
-      mBlobStorage->GetBlobWhenReady(GetOwner(), contentType, this);
-      waitingForBlobCreation = true;
-    } else {
-      // mBlobSet can be null if the channel is non-file non-cacheable
-      // and if the response length is zero.
-      if (!mBlobSet) {
-        mBlobSet = new BlobSet();
-      }
-
-      ErrorResult error;
-      nsTArray<RefPtr<BlobImpl>> subImpls(mBlobSet->GetBlobImpls());
-      RefPtr<BlobImpl> blobImpl =
-        MultipartBlobImpl::Create(Move(subImpls),
-                                  NS_ConvertASCIItoUTF16(contentType),
-                                  error);
-      mBlobSet = nullptr;
-
-      if (NS_WARN_IF(error.Failed())) {
-        return error.StealNSResult();
-      }
-
-      mResponseBlob = Blob::Create(GetOwner(), blobImpl);
-    }
+    // mBlobStorage can be null if the channel is non-file non-cacheable
+    // and if the response length is zero.
+    MaybeCreateBlobStorage();
+    mBlobStorage->GetBlobWhenReady(GetOwner(), contentType, this);
+    waitingForBlobCreation = true;
 
     NS_ASSERTION(mResponseBody.IsEmpty(), "mResponseBody should be empty");
     NS_ASSERTION(mResponseText.IsEmpty(), "mResponseText should be empty");
@@ -2433,7 +2354,7 @@ XMLHttpRequestMainThread::MatchCharsetAndDecoderToResponseDocument()
     mResponseCharset = mResponseXML->GetDocumentCharacterSet();
     TruncateResponseText();
     mResponseBodyDecodedPos = 0;
-    mDecoder = Encoding::ForName(mResponseCharset)->NewDecoderWithBOMRemoval();
+    mDecoder = mResponseCharset->NewDecoderWithBOMRemoval();
   }
 }
 
@@ -2617,12 +2538,21 @@ XMLHttpRequestMainThread::MaybeLowerChannelPriority()
     return;
   }
 
-  nsCOMPtr<nsISupportsPriority> p = do_QueryInterface(mChannel);
-  if (!p) {
-    return;
+  if (nsContentUtils::IsTailingEnabled()) {
+    nsCOMPtr<nsIClassOfService> cos = do_QueryInterface(mChannel);
+    if (cos) {
+      // Adding TailAllowed to overrule the Unblocked flag, but to preserve
+      // the effect of Unblocked when tailing is off.
+      cos->AddClassFlags(nsIClassOfService::Throttleable |
+                         nsIClassOfService::Tail |
+                         nsIClassOfService::TailAllowed);
+    }
   }
 
-  p->SetPriority(nsISupportsPriority::PRIORITY_LOWEST);
+  nsCOMPtr<nsISupportsPriority> p = do_QueryInterface(mChannel);
+  if (p) {
+    p->SetPriority(nsISupportsPriority::PRIORITY_LOWEST);
+  }
 }
 
 nsresult
@@ -2783,7 +2713,7 @@ XMLHttpRequestMainThread::InitiateFetch(nsIInputStream* aUploadStream,
   nsAutoCString contentType;
   if (NS_FAILED(mChannel->GetContentType(contentType)) ||
       contentType.IsEmpty() ||
-      contentType.Equals(UNKNOWN_CONTENT_TYPE)) {
+      contentType.EqualsLiteral(UNKNOWN_CONTENT_TYPE)) {
     mChannel->SetContentType(NS_LITERAL_CSTRING("text/xml"));
   }
 
@@ -2897,7 +2827,7 @@ XMLHttpRequestMainThread::Send(nsIVariant* aVariant)
     nsresult rv = aVariant->GetAsJSVal(&realVal);
     if (NS_SUCCEEDED(rv) && !realVal.isPrimitive()) {
       JS::Rooted<JSObject*> obj(rootingCx, realVal.toObjectOrNull());
-      RootedTypedArray<ArrayBuffer> buf(rootingCx);
+      RootedSpiderMonkeyInterface<ArrayBuffer> buf(rootingCx);
       if (buf.Init(obj)) {
         BodyExtractor<const ArrayBuffer> body(&buf);
         return SendInternal(&body);
@@ -2934,6 +2864,61 @@ XMLHttpRequestMainThread::UnsuppressEventHandlingAndResume()
   if (mResumeTimeoutRunnable) {
     DispatchToMainThread(mResumeTimeoutRunnable.forget());
     mResumeTimeoutRunnable = nullptr;
+  }
+}
+
+void
+XMLHttpRequestMainThread::Send(JSContext* aCx,
+                               const Nullable<DocumentOrBlobOrArrayBufferViewOrArrayBufferOrFormDataOrURLSearchParamsOrUSVString>& aData,
+                               ErrorResult& aRv)
+{
+  if (aData.IsNull()) {
+    aRv = SendInternal(nullptr);
+    return;
+  }
+
+
+  if (aData.Value().IsDocument()) {
+    BodyExtractor<nsIDocument> body(&aData.Value().GetAsDocument());
+    aRv = SendInternal(&body);
+    return;
+  }
+
+  if (aData.Value().IsBlob()) {
+    BodyExtractor<nsIXHRSendable> body(&aData.Value().GetAsBlob());
+    aRv = SendInternal(&body);
+    return;
+  }
+
+  if (aData.Value().IsArrayBuffer()) {
+    BodyExtractor<const ArrayBuffer> body(&aData.Value().GetAsArrayBuffer());
+    aRv = SendInternal(&body);
+    return;
+  }
+
+  if (aData.Value().IsArrayBufferView()) {
+    BodyExtractor<const ArrayBufferView>
+      body(&aData.Value().GetAsArrayBufferView());
+    aRv = SendInternal(&body);
+    return;
+  }
+
+  if (aData.Value().IsFormData()) {
+    BodyExtractor<nsIXHRSendable> body(&aData.Value().GetAsFormData());
+    aRv = SendInternal(&body);
+    return;
+  }
+
+  if (aData.Value().IsURLSearchParams()) {
+    BodyExtractor<nsIXHRSendable> body(&aData.Value().GetAsURLSearchParams());
+    aRv = SendInternal(&body);
+    return;
+  }
+
+  if (aData.Value().IsUSVString()) {
+    BodyExtractor<const nsAString> body(&aData.Value().GetAsUSVString());
+    aRv = SendInternal(&body);
+    return;
   }
 }
 
@@ -3123,9 +3108,11 @@ XMLHttpRequestMainThread::SendInternal(const BodyExtractorBase* aBody)
     } else {
       // Defer the actual sending of async events just in case listeners
       // are attached after the send() method is called.
-      return DispatchToMainThread(NewRunnableMethod<ProgressEventType>(this,
-                 &XMLHttpRequestMainThread::CloseRequestWithError,
-                 ProgressEventType::error));
+      return DispatchToMainThread(NewRunnableMethod<ProgressEventType>(
+        "dom::XMLHttpRequestMainThread::CloseRequestWithError",
+        this,
+        &XMLHttpRequestMainThread::CloseRequestWithError,
+        ProgressEventType::error));
     }
   }
 
@@ -3740,7 +3727,7 @@ XMLHttpRequestMainThread::HandleProgressTimerCallback()
   }
 
   if (InUploadPhase()) {
-    if (mUpload && !mUploadComplete) {
+    if (mUpload && !mUploadComplete && mFlagHadUploadListenersOnSend) {
       DispatchProgressEvent(mUpload, ProgressEventType::progress,
                             mUploadTransferred, mUploadTotal);
     }
@@ -3949,12 +3936,6 @@ XMLHttpRequestMainThread::GetName(nsACString& aName)
   return NS_OK;
 }
 
-NS_IMETHODIMP
-XMLHttpRequestMainThread::SetName(const char* aName)
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
 // nsXMLHttpRequestXPCOMifier implementation
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsXMLHttpRequestXPCOMifier)
   NS_INTERFACE_MAP_ENTRY(nsIStreamListener)
@@ -3964,6 +3945,7 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsXMLHttpRequestXPCOMifier)
   NS_INTERFACE_MAP_ENTRY(nsIProgressEventSink)
   NS_INTERFACE_MAP_ENTRY(nsIInterfaceRequestor)
   NS_INTERFACE_MAP_ENTRY(nsITimerCallback)
+  NS_INTERFACE_MAP_ENTRY(nsINamed)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIStreamListener)
 NS_INTERFACE_MAP_END
 

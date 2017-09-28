@@ -235,30 +235,23 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsAboutProtocolHandler)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsSafeAboutProtocolHandler)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsNestedAboutURI)
 
-#ifdef NECKO_PROTOCOL_about
 // about
 #include "nsAboutCache.h"
 #include "nsAboutCacheEntry.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsAboutCacheEntry)
-#endif
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsApplicationCacheService)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsApplicationCacheNamespace)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsApplicationCache)
 
-#ifdef NECKO_PROTOCOL_file
 // file
 #include "nsFileProtocolHandler.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsFileProtocolHandler, Init)
-#endif
 
-#ifdef NECKO_PROTOCOL_ftp
 // ftp
 #include "nsFtpProtocolHandler.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsFtpProtocolHandler, Init)
-#endif
 
-#ifdef NECKO_PROTOCOL_http
 // http/https
 #include "nsHttpHandler.h"
 #include "Http2Compression.h"
@@ -288,7 +281,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(ThrottleQueue)
 NS_GENERIC_FACTORY_CONSTRUCTOR(BackgroundChannelRegistrar)
 } // namespace net
 } // namespace mozilla
-#endif // !NECKO_PROTOCOL_http
 
 #include "mozilla/net/Dashboard.h"
 namespace mozilla {
@@ -306,7 +298,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(NamedPipeService, Init)
 } // namespace mozilla
 #endif
 
-#ifdef NECKO_PROTOCOL_res
 // resource
 #include "nsResProtocolHandler.h"
 #include "ExtensionProtocolHandler.h"
@@ -314,33 +305,24 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(NamedPipeService, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsResProtocolHandler, Init)
 
 namespace mozilla {
-NS_GENERIC_FACTORY_CONSTRUCTOR(ExtensionProtocolHandler)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(ExtensionProtocolHandler,
+    ExtensionProtocolHandler::GetSingleton)
 NS_GENERIC_FACTORY_CONSTRUCTOR(SubstitutingURL)
 } // namespace mozilla
-#endif
 
-#ifdef NECKO_PROTOCOL_device
 #include "nsDeviceProtocolHandler.h"
 typedef mozilla::net::nsDeviceProtocolHandler nsDeviceProtocolHandler;
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsDeviceProtocolHandler)
-#endif
 
-#ifdef NECKO_PROTOCOL_viewsource
 #include "nsViewSourceHandler.h"
 typedef mozilla::net::nsViewSourceHandler nsViewSourceHandler;
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsViewSourceHandler)
-#endif
 
-#ifdef NECKO_PROTOCOL_data
 #include "nsDataHandler.h"
-#endif
 
-#ifdef NECKO_PROTOCOL_wyciwyg
 #include "nsWyciwygProtocolHandler.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsWyciwygProtocolHandler)
-#endif
 
-#ifdef NECKO_PROTOCOL_websocket
 #include "WebSocketChannel.h"
 #include "WebSocketChannelChild.h"
 namespace mozilla {
@@ -384,16 +366,6 @@ WEB_SOCKET_HANDLER_CONSTRUCTOR(WebSocketSSLChannel, true)
 #undef WEB_SOCKET_HANDLER_CONSTRUCTOR
 } // namespace net
 } // namespace mozilla
-#endif
-
-#ifdef NECKO_PROTOCOL_rtsp
-#include "RtspHandler.h"
-namespace mozilla {
-namespace net {
-NS_GENERIC_FACTORY_CONSTRUCTOR(RtspHandler)
-} // namespace mozilla::net
-} // namespace mozilla
-#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -439,10 +411,8 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsNotifyAddrListener, Init)
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#ifdef NECKO_PROTOCOL_ftp
 #include "nsFTPDirListingConv.h"
 nsresult NS_NewFTPDirListingConv(nsFTPDirListingConv** result);
-#endif
 
 #include "nsStreamConverterService.h"
 #include "nsMultiMixedConv.h"
@@ -521,125 +491,123 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsBinHexDecoder)
 #endif
 
 static nsresult
-CreateNewStreamConvServiceFactory(nsISupports* aOuter, REFNSIID aIID, void **aResult) 
+CreateNewStreamConvServiceFactory(nsISupports* aOuter, REFNSIID aIID, void **aResult)
 {
-    if (!aResult) {                                                  
-        return NS_ERROR_INVALID_POINTER;                             
+    if (!aResult) {
+        return NS_ERROR_INVALID_POINTER;
     }
-    if (aOuter) {                                                    
-        *aResult = nullptr;                                           
-        return NS_ERROR_NO_AGGREGATION;                              
-    }   
+    if (aOuter) {
+        *aResult = nullptr;
+        return NS_ERROR_NO_AGGREGATION;
+    }
     nsStreamConverterService* inst = nullptr;
     nsresult rv = NS_NewStreamConv(&inst);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-        return rv;                                                   
-    } 
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+        return rv;
+    }
     rv = inst->QueryInterface(aIID, aResult);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-    }                                                                
-    NS_RELEASE(inst);             /* get rid of extra refcnt */      
-    return rv;              
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+    }
+    NS_RELEASE(inst);             /* get rid of extra refcnt */
+    return rv;
 }
 
-#ifdef NECKO_PROTOCOL_ftp
 static nsresult
-CreateNewFTPDirListingConv(nsISupports* aOuter, REFNSIID aIID, void **aResult) 
+CreateNewFTPDirListingConv(nsISupports* aOuter, REFNSIID aIID, void **aResult)
 {
-    if (!aResult) {                                                  
-        return NS_ERROR_INVALID_POINTER;                             
+    if (!aResult) {
+        return NS_ERROR_INVALID_POINTER;
     }
-    if (aOuter) {                                                    
-        *aResult = nullptr;                                           
-        return NS_ERROR_NO_AGGREGATION;                              
-    }   
+    if (aOuter) {
+        *aResult = nullptr;
+        return NS_ERROR_NO_AGGREGATION;
+    }
     nsFTPDirListingConv* inst = nullptr;
     nsresult rv = NS_NewFTPDirListingConv(&inst);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-        return rv;                                                   
-    } 
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+        return rv;
+    }
     rv = inst->QueryInterface(aIID, aResult);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-    }                                                                
-    NS_RELEASE(inst);             /* get rid of extra refcnt */      
-    return rv;              
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+    }
+    NS_RELEASE(inst);             /* get rid of extra refcnt */
+    return rv;
 }
-#endif
 
 static nsresult
-CreateNewMultiMixedConvFactory(nsISupports* aOuter, REFNSIID aIID, void **aResult) 
+CreateNewMultiMixedConvFactory(nsISupports* aOuter, REFNSIID aIID, void **aResult)
 {
-    if (!aResult) {                                                  
-        return NS_ERROR_INVALID_POINTER;                             
+    if (!aResult) {
+        return NS_ERROR_INVALID_POINTER;
     }
-    if (aOuter) {                                                    
-        *aResult = nullptr;                                           
-        return NS_ERROR_NO_AGGREGATION;                              
-    }   
+    if (aOuter) {
+        *aResult = nullptr;
+        return NS_ERROR_NO_AGGREGATION;
+    }
     nsMultiMixedConv* inst = nullptr;
     nsresult rv = NS_NewMultiMixedConv(&inst);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-        return rv;                                                   
-    } 
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+        return rv;
+    }
     rv = inst->QueryInterface(aIID, aResult);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-    }                                                                
-    NS_RELEASE(inst);             /* get rid of extra refcnt */      
-    return rv;              
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+    }
+    NS_RELEASE(inst);             /* get rid of extra refcnt */
+    return rv;
 }
 
 static nsresult
-CreateNewTXTToHTMLConvFactory(nsISupports* aOuter, REFNSIID aIID, void **aResult) 
+CreateNewTXTToHTMLConvFactory(nsISupports* aOuter, REFNSIID aIID, void **aResult)
 {
-    if (!aResult) {                                                  
-        return NS_ERROR_INVALID_POINTER;                             
+    if (!aResult) {
+        return NS_ERROR_INVALID_POINTER;
     }
-    if (aOuter) {                                                    
-        *aResult = nullptr;                                           
-        return NS_ERROR_NO_AGGREGATION;                              
-    }   
+    if (aOuter) {
+        *aResult = nullptr;
+        return NS_ERROR_NO_AGGREGATION;
+    }
     mozTXTToHTMLConv* inst = nullptr;
     nsresult rv = MOZ_NewTXTToHTMLConv(&inst);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-        return rv;                                                   
-    } 
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+        return rv;
+    }
     rv = inst->QueryInterface(aIID, aResult);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-    }                                                                
-    NS_RELEASE(inst);             /* get rid of extra refcnt */      
-    return rv;              
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+    }
+    NS_RELEASE(inst);             /* get rid of extra refcnt */
+    return rv;
 }
 
 static nsresult
-CreateNewHTTPCompressConvFactory (nsISupports* aOuter, REFNSIID aIID, void **aResult) 
+CreateNewHTTPCompressConvFactory (nsISupports* aOuter, REFNSIID aIID, void **aResult)
 {
-    if (!aResult) {                                                  
-        return NS_ERROR_INVALID_POINTER;                             
+    if (!aResult) {
+        return NS_ERROR_INVALID_POINTER;
     }
-    if (aOuter) {                                                    
-        *aResult = nullptr;                                           
-        return NS_ERROR_NO_AGGREGATION;                              
-    }   
+    if (aOuter) {
+        *aResult = nullptr;
+        return NS_ERROR_NO_AGGREGATION;
+    }
     mozilla::net::nsHTTPCompressConv* inst = nullptr;
     nsresult rv = NS_NewHTTPCompressConv (&inst);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-        return rv;                                                   
-    } 
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+        return rv;
+    }
     rv = inst->QueryInterface(aIID, aResult);
-    if (NS_FAILED(rv)) {                                             
-        *aResult = nullptr;                                           
-    }                                                                
-    NS_RELEASE(inst);             /* get rid of extra refcnt */      
-    return rv;              
+    if (NS_FAILED(rv)) {
+        *aResult = nullptr;
+    }
+    NS_RELEASE(inst);             /* get rid of extra refcnt */
+    return rv;
 }
 
 static nsresult
@@ -657,7 +625,7 @@ CreateNewUnknownDecoderFactory(nsISupports *aOuter, REFNSIID aIID, void **aResul
   }
 
   nsUnknownDecoder *inst;
-  
+
   inst = new nsUnknownDecoder();
   if (!inst) {
     return NS_ERROR_OUT_OF_MEMORY;
@@ -714,18 +682,14 @@ static void nsNetShutdown()
 #ifdef XP_MACOSX
     net_ShutdownURLHelperOSX();
 #endif
-    
+
     // Release DNS service reference.
     nsDNSPrefetch::Shutdown();
 
-#ifdef NECKO_PROTOCOL_websocket
     // Release the Websocket Admission Manager
     mozilla::net::WebSocketChannel::Shutdown();
-#endif // NECKO_PROTOCOL_websocket
 
-#ifdef NECKO_PROTOCOL_http
     mozilla::net::Http2CompressionCleanup();
-#endif // NECKO_PROTOCOL_http
 
     delete gNetSniffers;
     gNetSniffers = nullptr;
@@ -782,9 +746,7 @@ NS_DEFINE_NAMED_CID(NS_STREAMCONVERTERSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_NAMEDPIPESERVICE_CID);
 #endif
 NS_DEFINE_NAMED_CID(NS_DASHBOARD_CID);
-#ifdef NECKO_PROTOCOL_ftp
 NS_DEFINE_NAMED_CID(NS_FTPDIRLISTINGCONVERTER_CID);
-#endif
 NS_DEFINE_NAMED_CID(NS_NSINDEXEDTOHTMLCONVERTER_CID);
 NS_DEFINE_NAMED_CID(NS_DIRINDEXPARSER_CID);
 NS_DEFINE_NAMED_CID(NS_MULTIMIXEDCONVERTER_CID);
@@ -798,10 +760,7 @@ NS_DEFINE_NAMED_CID(NS_BINHEXDECODER_CID);
 NS_DEFINE_NAMED_CID(MOZITXTTOHTMLCONV_CID);
 NS_DEFINE_NAMED_CID(NS_DIRINDEX_CID);
 NS_DEFINE_NAMED_CID(NS_MIMEHEADERPARAM_CID);
-#ifdef NECKO_PROTOCOL_file
 NS_DEFINE_NAMED_CID(NS_FILEPROTOCOLHANDLER_CID);
-#endif
-#ifdef NECKO_PROTOCOL_http
 NS_DEFINE_NAMED_CID(NS_HTTPPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_HTTPSPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_HTTPBASICAUTH_CID);
@@ -812,23 +771,16 @@ NS_DEFINE_NAMED_CID(NS_HTTPCHANNELAUTHPROVIDER_CID);
 NS_DEFINE_NAMED_CID(NS_HTTPACTIVITYDISTRIBUTOR_CID);
 NS_DEFINE_NAMED_CID(NS_THROTTLEQUEUE_CID);
 NS_DEFINE_NAMED_CID(NS_BACKGROUNDCHANNELREGISTRAR_CID);
-#endif // !NECKO_PROTOCOL_http
-#ifdef NECKO_PROTOCOL_ftp
 NS_DEFINE_NAMED_CID(NS_FTPPROTOCOLHANDLER_CID);
-#endif
-#ifdef NECKO_PROTOCOL_res
 NS_DEFINE_NAMED_CID(NS_RESPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_EXTENSIONPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_SUBSTITUTINGURL_CID);
-#endif
 NS_DEFINE_NAMED_CID(NS_ABOUTPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_SAFEABOUTPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_ABOUT_BLANK_MODULE_CID);
 NS_DEFINE_NAMED_CID(NS_NESTEDABOUTURI_CID);
-#ifdef NECKO_PROTOCOL_about
 NS_DEFINE_NAMED_CID(NS_ABOUT_CACHE_MODULE_CID);
 NS_DEFINE_NAMED_CID(NS_ABOUT_CACHE_ENTRY_MODULE_CID);
-#endif
 NS_DEFINE_NAMED_CID(NS_SOCKSSOCKETPROVIDER_CID);
 NS_DEFINE_NAMED_CID(NS_SOCKS4SOCKETPROVIDER_CID);
 NS_DEFINE_NAMED_CID(NS_UDPSOCKETPROVIDER_CID);
@@ -844,25 +796,12 @@ NS_DEFINE_NAMED_CID(NS_COOKIESERVICE_CID);
 #ifdef NECKO_WIFI
 NS_DEFINE_NAMED_CID(NS_WIFI_MONITOR_COMPONENT_CID);
 #endif
-#ifdef NECKO_PROTOCOL_data
 NS_DEFINE_NAMED_CID(NS_DATAPROTOCOLHANDLER_CID);
-#endif
-#ifdef NECKO_PROTOCOL_device
 NS_DEFINE_NAMED_CID(NS_DEVICEPROTOCOLHANDLER_CID);
-#endif
-#ifdef NECKO_PROTOCOL_viewsource
 NS_DEFINE_NAMED_CID(NS_VIEWSOURCEHANDLER_CID);
-#endif
-#ifdef NECKO_PROTOCOL_wyciwyg
 NS_DEFINE_NAMED_CID(NS_WYCIWYGPROTOCOLHANDLER_CID);
-#endif
-#ifdef NECKO_PROTOCOL_websocket
 NS_DEFINE_NAMED_CID(NS_WEBSOCKETPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_WEBSOCKETSSLPROTOCOLHANDLER_CID);
-#endif
-#ifdef NECKO_PROTOCOL_rtsp
-NS_DEFINE_NAMED_CID(NS_RTSPPROTOCOLHANDLER_CID);
-#endif
 #if defined(XP_WIN)
 NS_DEFINE_NAMED_CID(NS_NETWORK_LINK_SERVICE_CID);
 #elif defined(MOZ_WIDGET_COCOA)
@@ -935,9 +874,7 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_NAMEDPIPESERVICE_CID, false, NULL, mozilla::net::NamedPipeServiceConstructor },
 #endif
     { &kNS_DASHBOARD_CID, false, nullptr, mozilla::net::DashboardConstructor },
-#ifdef NECKO_PROTOCOL_ftp
     { &kNS_FTPDIRLISTINGCONVERTER_CID, false, nullptr, CreateNewFTPDirListingConv },
-#endif
     { &kNS_NSINDEXEDTOHTMLCONVERTER_CID, false, nullptr, nsIndexedToHTML::Create },
     { &kNS_DIRINDEXPARSER_CID, false, nullptr, nsDirIndexParserConstructor },
     { &kNS_MULTIMIXEDCONVERTER_CID, false, nullptr, CreateNewMultiMixedConvFactory },
@@ -951,10 +888,7 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kMOZITXTTOHTMLCONV_CID, false, nullptr, CreateNewTXTToHTMLConvFactory },
     { &kNS_DIRINDEX_CID, false, nullptr, nsDirIndexConstructor },
     { &kNS_MIMEHEADERPARAM_CID, false, nullptr, nsMIMEHeaderParamImplConstructor },
-#ifdef NECKO_PROTOCOL_file
     { &kNS_FILEPROTOCOLHANDLER_CID, false, nullptr, nsFileProtocolHandlerConstructor },
-#endif
-#ifdef NECKO_PROTOCOL_http
     { &kNS_HTTPPROTOCOLHANDLER_CID, false, nullptr, mozilla::net::nsHttpHandlerConstructor },
     { &kNS_HTTPSPROTOCOLHANDLER_CID, false, nullptr, mozilla::net::nsHttpsHandlerConstructor },
     { &kNS_HTTPBASICAUTH_CID, false, nullptr, mozilla::net::nsHttpBasicAuthConstructor },
@@ -965,23 +899,16 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_HTTPACTIVITYDISTRIBUTOR_CID, false, nullptr, mozilla::net::nsHttpActivityDistributorConstructor },
     { &kNS_THROTTLEQUEUE_CID, false, nullptr, mozilla::net::ThrottleQueueConstructor },
     { &kNS_BACKGROUNDCHANNELREGISTRAR_CID, false, nullptr, mozilla::net::BackgroundChannelRegistrarConstructor },
-#endif // !NECKO_PROTOCOL_http
-#ifdef NECKO_PROTOCOL_ftp
     { &kNS_FTPPROTOCOLHANDLER_CID, false, nullptr, nsFtpProtocolHandlerConstructor },
-#endif
-#ifdef NECKO_PROTOCOL_res
     { &kNS_RESPROTOCOLHANDLER_CID, false, nullptr, nsResProtocolHandlerConstructor },
     { &kNS_EXTENSIONPROTOCOLHANDLER_CID, false, nullptr, mozilla::ExtensionProtocolHandlerConstructor },
     { &kNS_SUBSTITUTINGURL_CID, false, nullptr, mozilla::SubstitutingURLConstructor },
-#endif
     { &kNS_ABOUTPROTOCOLHANDLER_CID, false, nullptr, nsAboutProtocolHandlerConstructor },
     { &kNS_SAFEABOUTPROTOCOLHANDLER_CID, false, nullptr, nsSafeAboutProtocolHandlerConstructor },
     { &kNS_ABOUT_BLANK_MODULE_CID, false, nullptr, nsAboutBlank::Create },
     { &kNS_NESTEDABOUTURI_CID, false, nullptr, nsNestedAboutURIConstructor },
-#ifdef NECKO_PROTOCOL_about
     { &kNS_ABOUT_CACHE_MODULE_CID, false, nullptr, nsAboutCache::Create },
     { &kNS_ABOUT_CACHE_ENTRY_MODULE_CID, false, nullptr, nsAboutCacheEntryConstructor },
-#endif
     { &kNS_SOCKSSOCKETPROVIDER_CID, false, nullptr, nsSOCKSSocketProvider::CreateV5 },
     { &kNS_SOCKS4SOCKETPROVIDER_CID, false, nullptr, nsSOCKSSocketProvider::CreateV4 },
     { &kNS_UDPSOCKETPROVIDER_CID, false, nullptr, nsUDPSocketProviderConstructor },
@@ -997,27 +924,14 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
 #ifdef NECKO_WIFI
     { &kNS_WIFI_MONITOR_COMPONENT_CID, false, nullptr, nsWifiMonitorConstructor },
 #endif
-#ifdef NECKO_PROTOCOL_data
     { &kNS_DATAPROTOCOLHANDLER_CID, false, nullptr, nsDataHandler::Create },
-#endif
-#ifdef NECKO_PROTOCOL_device
     { &kNS_DEVICEPROTOCOLHANDLER_CID, false, nullptr, nsDeviceProtocolHandlerConstructor},
-#endif
-#ifdef NECKO_PROTOCOL_viewsource
     { &kNS_VIEWSOURCEHANDLER_CID, false, nullptr, nsViewSourceHandlerConstructor },
-#endif
-#ifdef NECKO_PROTOCOL_wyciwyg
     { &kNS_WYCIWYGPROTOCOLHANDLER_CID, false, nullptr, nsWyciwygProtocolHandlerConstructor },
-#endif
-#ifdef NECKO_PROTOCOL_websocket
     { &kNS_WEBSOCKETPROTOCOLHANDLER_CID, false, nullptr,
       mozilla::net::WebSocketChannelConstructor },
     { &kNS_WEBSOCKETSSLPROTOCOLHANDLER_CID, false, nullptr,
       mozilla::net::WebSocketSSLChannelConstructor },
-#endif
-#ifdef NECKO_PROTOCOL_rtsp
-    { &kNS_RTSPPROTOCOLHANDLER_CID, false, nullptr, mozilla::net::RtspHandlerConstructor },
-#endif
 #if defined(XP_WIN)
     { &kNS_NETWORK_LINK_SERVICE_CID, false, nullptr, nsNotifyAddrListenerConstructor },
 #elif defined(MOZ_WIDGET_COCOA)
@@ -1090,9 +1004,7 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { NS_NAMEDPIPESERVICE_CONTRACTID, &kNS_NAMEDPIPESERVICE_CID },
 #endif
     { NS_DASHBOARD_CONTRACTID, &kNS_DASHBOARD_CID },
-#ifdef NECKO_PROTOCOL_ftp
     { NS_ISTREAMCONVERTER_KEY FTP_TO_INDEX, &kNS_FTPDIRLISTINGCONVERTER_CID },
-#endif
     { NS_ISTREAMCONVERTER_KEY INDEX_TO_HTML, &kNS_NSINDEXEDTOHTMLCONVERTER_CID },
     { NS_DIRINDEXPARSER_CONTRACTID, &kNS_DIRINDEXPARSER_CID },
     { NS_ISTREAMCONVERTER_KEY MULTI_MIXED_X, &kNS_MULTIMIXEDCONVERTER_CID },
@@ -1114,10 +1026,7 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { MOZ_TXTTOHTMLCONV_CONTRACTID, &kMOZITXTTOHTMLCONV_CID },
     { "@mozilla.org/dirIndex;1", &kNS_DIRINDEX_CID },
     { NS_MIMEHEADERPARAM_CONTRACTID, &kNS_MIMEHEADERPARAM_CID },
-#ifdef NECKO_PROTOCOL_file
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "file", &kNS_FILEPROTOCOLHANDLER_CID },
-#endif
-#ifdef NECKO_PROTOCOL_http
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "http", &kNS_HTTPPROTOCOLHANDLER_CID },
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "https", &kNS_HTTPSPROTOCOLHANDLER_CID },
     { NS_HTTP_AUTHENTICATOR_CONTRACTID_PREFIX "basic", &kNS_HTTPBASICAUTH_CID },
@@ -1128,21 +1037,14 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { NS_HTTPACTIVITYDISTRIBUTOR_CONTRACTID, &kNS_HTTPACTIVITYDISTRIBUTOR_CID },
     { NS_THROTTLEQUEUE_CONTRACTID, &kNS_THROTTLEQUEUE_CID },
     { NS_BACKGROUNDCHANNELREGISTRAR_CONTRACTID, &kNS_BACKGROUNDCHANNELREGISTRAR_CID },
-#endif // !NECKO_PROTOCOL_http
-#ifdef NECKO_PROTOCOL_ftp
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "ftp", &kNS_FTPPROTOCOLHANDLER_CID },
-#endif
-#ifdef NECKO_PROTOCOL_res
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "resource", &kNS_RESPROTOCOLHANDLER_CID },
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "moz-extension", &kNS_EXTENSIONPROTOCOLHANDLER_CID },
-#endif
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "about", &kNS_ABOUTPROTOCOLHANDLER_CID },
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "moz-safe-about", &kNS_SAFEABOUTPROTOCOLHANDLER_CID },
     { NS_ABOUT_MODULE_CONTRACTID_PREFIX "blank", &kNS_ABOUT_BLANK_MODULE_CID },
-#ifdef NECKO_PROTOCOL_about
     { NS_ABOUT_MODULE_CONTRACTID_PREFIX "cache", &kNS_ABOUT_CACHE_MODULE_CID },
     { NS_ABOUT_MODULE_CONTRACTID_PREFIX "cache-entry", &kNS_ABOUT_CACHE_ENTRY_MODULE_CID },
-#endif
     { NS_NETWORK_SOCKET_CONTRACTID_PREFIX "socks", &kNS_SOCKSSOCKETPROVIDER_CID },
     { NS_NETWORK_SOCKET_CONTRACTID_PREFIX "socks4", &kNS_SOCKS4SOCKETPROVIDER_CID },
     { NS_NETWORK_SOCKET_CONTRACTID_PREFIX "udp", &kNS_UDPSOCKETPROVIDER_CID },
@@ -1158,25 +1060,12 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
 #ifdef NECKO_WIFI
     { NS_WIFI_MONITOR_CONTRACTID, &kNS_WIFI_MONITOR_COMPONENT_CID },
 #endif
-#ifdef NECKO_PROTOCOL_data
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "data", &kNS_DATAPROTOCOLHANDLER_CID },
-#endif
-#ifdef NECKO_PROTOCOL_device
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "moz-device", &kNS_DEVICEPROTOCOLHANDLER_CID },
-#endif
-#ifdef NECKO_PROTOCOL_viewsource
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "view-source", &kNS_VIEWSOURCEHANDLER_CID },
-#endif
-#ifdef NECKO_PROTOCOL_wyciwyg
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "wyciwyg", &kNS_WYCIWYGPROTOCOLHANDLER_CID },
-#endif
-#ifdef NECKO_PROTOCOL_websocket
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "ws", &kNS_WEBSOCKETPROTOCOLHANDLER_CID },
     { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "wss", &kNS_WEBSOCKETSSLPROTOCOLHANDLER_CID },
-#endif
-#ifdef NECKO_PROTOCOL_rtsp
-    { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "rtsp", &kNS_RTSPPROTOCOLHANDLER_CID },
-#endif
 #if defined(XP_WIN)
     { NS_NETWORK_LINK_SERVICE_CONTRACTID, &kNS_NETWORK_LINK_SERVICE_CID },
 #elif defined(MOZ_WIDGET_COCOA)

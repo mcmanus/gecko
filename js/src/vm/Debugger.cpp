@@ -32,6 +32,8 @@
 #include "js/Vector.h"
 #include "proxy/ScriptedProxyHandler.h"
 #include "vm/ArgumentsObject.h"
+#include "vm/AsyncFunction.h"
+#include "vm/AsyncIteration.h"
 #include "vm/DebuggerMemory.h"
 #include "vm/GeckoProfiler.h"
 #include "vm/GeneratorObject.h"
@@ -85,8 +87,6 @@ enum {
 const ClassOps DebuggerFrame::classOps_ = {
     nullptr,    /* addProperty */
     nullptr,    /* delProperty */
-    nullptr,    /* getProperty */
-    nullptr,    /* setProperty */
     nullptr,    /* enumerate   */
     nullptr,    /* newEnumerate */
     nullptr,    /* resolve     */
@@ -119,8 +119,6 @@ const Class DebuggerArguments::class_ = {
 const ClassOps DebuggerEnvironment::classOps_ = {
     nullptr,    /* addProperty */
     nullptr,    /* delProperty */
-    nullptr,    /* getProperty */
-    nullptr,    /* setProperty */
     nullptr,    /* enumerate   */
     nullptr,    /* newEnumerate */
     nullptr,    /* resolve     */
@@ -147,8 +145,6 @@ enum {
 const ClassOps DebuggerObject::classOps_ = {
     nullptr,    /* addProperty */
     nullptr,    /* delProperty */
-    nullptr,    /* getProperty */
-    nullptr,    /* setProperty */
     nullptr,    /* enumerate   */
     nullptr,    /* newEnumerate */
     nullptr,    /* resolve     */
@@ -175,8 +171,6 @@ enum {
 static const ClassOps DebuggerScript_classOps = {
     nullptr,    /* addProperty */
     nullptr,    /* delProperty */
-    nullptr,    /* getProperty */
-    nullptr,    /* setProperty */
     nullptr,    /* enumerate   */
     nullptr,    /* newEnumerate */
     nullptr,    /* resolve     */
@@ -204,8 +198,6 @@ enum {
 static const ClassOps DebuggerSource_classOps = {
     nullptr,    /* addProperty */
     nullptr,    /* delProperty */
-    nullptr,    /* getProperty */
-    nullptr,    /* setProperty */
     nullptr,    /* enumerate   */
     nullptr,    /* newEnumerate */
     nullptr,    /* resolve     */
@@ -226,6 +218,34 @@ static const Class DebuggerSource_class = {
 
 
 /*** Utils ***************************************************************************************/
+
+/*
+ * If fun is an interpreted function, remove any async function/generator
+ * wrapper and return the underlying scripted function. Otherwise, return fun
+ * unchanged.
+ *
+ * Async functions are implemented as native functions wrapped around a scripted
+ * function. JSScripts hold ordinary inner JSFunctions in their object arrays,
+ * and when we need to actually create a JS-visible function object, we build an
+ * ordinary JS closure and apply the async wrapper to it. Async generators are
+ * similar.
+ *
+ * This means that JSFunction::isInterpreted returns false for such functions,
+ * even though their actual code is indeed JavaScript. Debugger should treat
+ * async functions and generators like any other scripted function, so we must
+ * carefully check for them whenever we want inspect a function.
+ */
+
+static JSFunction*
+RemoveAsyncWrapper(JSFunction *fun)
+{
+    if (js::IsWrappedAsyncFunction(fun))
+        fun = js::GetUnwrappedAsyncFunction(fun);
+    else if (js::IsWrappedAsyncGenerator(fun))
+        fun = js::GetUnwrappedAsyncGenerator(fun);
+
+    return fun;
+}
 
 static inline bool
 EnsureFunctionHasScript(JSContext* cx, HandleFunction fun)
@@ -358,7 +378,7 @@ class MOZ_RAII js::EnterDebuggeeNoExecute
                 }
                 const char* filename = script->filename() ? script->filename() : "(none)";
                 char linenoStr[15];
-                SprintfLiteral(linenoStr, "%" PRIuSIZE, script->lineno());
+                SprintfLiteral(linenoStr, "%zu", script->lineno());
                 unsigned flags = warning ? JSREPORT_WARNING : JSREPORT_ERROR;
                 // FIXME: filename should be UTF-8 (bug 987069).
                 return JS_ReportErrorFlagsAndNumberLatin1(cx, flags, GetErrorMessage, nullptr,
@@ -648,19 +668,19 @@ WasmBreakpointSite::destroyIfEmpty(FreeOp* fop)
 
 Debugger::Debugger(JSContext* cx, NativeObject* dbg)
   : object(dbg),
-    debuggees(cx->runtime()),
+    debuggees(cx->zone()),
     uncaughtExceptionHook(nullptr),
     enabled(true),
     allowUnobservedAsmJS(false),
     allowWasmBinarySource(false),
     collectCoverageInfo(false),
-    observedGCs(cx->runtime()),
+    observedGCs(cx->zone()),
     allocationsLog(cx),
     trackingAllocationSites(false),
     allocationSamplingProbability(1.0),
     maxAllocationsLogLength(DEFAULT_MAX_LOG_LENGTH),
     allocationsLogOverflowed(false),
-    frames(cx->runtime()),
+    frames(cx->zone()),
     scripts(cx),
     sources(cx),
     objects(cx),
@@ -1173,7 +1193,7 @@ Debugger::wrapDebuggeeValue(JSContext* cx, MutableHandleValue vp)
         }
 
         RootedValue trueVal(cx, BooleanValue(true));
-        if (!DefineProperty(cx, optObj, name, trueVal))
+        if (!DefineDataProperty(cx, optObj, name, trueVal))
             return false;
 
         vp.setObject(*optObj);
@@ -1487,7 +1507,7 @@ Debugger::newCompletionValue(JSContext* cx, JSTrapStatus status, const Value& va
     /* Common tail for JSTRAP_RETURN and JSTRAP_THROW. */
     RootedPlainObject obj(cx, NewBuiltinClassInstance<PlainObject>(cx));
     if (!obj ||
-        !NativeDefineProperty(cx, obj, key, value, nullptr, nullptr, JSPROP_ENUMERATE))
+        !NativeDefineDataProperty(cx, obj, key, value, JSPROP_ENUMERATE))
     {
         return false;
     }
@@ -1952,6 +1972,7 @@ Debugger::slowPathOnNewWasmInstance(JSContext* cx, Handle<WasmInstanceObject*> w
 Debugger::onTrap(JSContext* cx, MutableHandleValue vp)
 {
     FrameIter iter(cx);
+    JS::AutoSaveExceptionState saveExc(cx);
     Rooted<GlobalObject*> global(cx);
     BreakpointSite* site;
     bool isJS; // true when iter.hasScript(), false when iter.isWasm()
@@ -2049,13 +2070,7 @@ Debugger::onSingleStep(JSContext* cx, MutableHandleValue vp)
      * onStep handlers mess with that (other than by returning a resumption
      * value).
      */
-    RootedValue exception(cx, UndefinedValue());
-    bool exceptionPending = cx->isExceptionPending();
-    if (exceptionPending) {
-        if (!cx->getPendingException(&exception))
-            return JSTRAP_ERROR;
-        cx->clearPendingException();
-    }
+    JS::AutoSaveExceptionState saveExc(cx);
 
     /*
      * Build list of Debugger.Frame instances referring to this frame with
@@ -2121,8 +2136,6 @@ Debugger::onSingleStep(JSContext* cx, MutableHandleValue vp)
     }
 
     vp.setUndefined();
-    if (exceptionPending)
-        cx->setPendingException(exception);
     return JSTRAP_CONTINUE;
 }
 
@@ -2602,21 +2615,24 @@ UpdateExecutionObservabilityOfScriptsInZone(JSContext* cx, Zone* zone,
     //
     // Mark active baseline scripts in the observable set so that they don't
     // get discarded. They will be recompiled.
-    for (JitActivationIterator actIter(cx, zone->group()->ownerContext()); !actIter.done(); ++actIter) {
-        if (actIter->compartment()->zone() != zone)
-            continue;
+    for (const CooperatingContext& target : cx->runtime()->cooperatingContexts()) {
+        for (JitActivationIterator actIter(cx, target); !actIter.done(); ++actIter) {
+            if (actIter->compartment()->zone() != zone)
+                continue;
 
-        for (JitFrameIterator iter(actIter); !iter.done(); ++iter) {
-            switch (iter.type()) {
-              case JitFrame_BaselineJS:
-                MarkBaselineScriptActiveIfObservable(iter.script(), obs);
-                break;
-              case JitFrame_IonJS:
-                MarkBaselineScriptActiveIfObservable(iter.script(), obs);
-                for (InlineFrameIterator inlineIter(cx, &iter); inlineIter.more(); ++inlineIter)
-                    MarkBaselineScriptActiveIfObservable(inlineIter.script(), obs);
-                break;
-              default:;
+            for (OnlyJSJitFrameIter iter(actIter); !iter.done(); ++iter) {
+                const jit::JSJitFrameIter& frame = iter.frame();
+                switch (frame.type()) {
+                  case JitFrame_BaselineJS:
+                    MarkBaselineScriptActiveIfObservable(frame.script(), obs);
+                    break;
+                  case JitFrame_IonJS:
+                    MarkBaselineScriptActiveIfObservable(frame.script(), obs);
+                    for (InlineFrameIterator inlineIter(cx, &frame); inlineIter.more(); ++inlineIter)
+                        MarkBaselineScriptActiveIfObservable(inlineIter.script(), obs);
+                    break;
+                  default:;
+                }
             }
         }
     }
@@ -3285,8 +3301,6 @@ Debugger::findZoneEdges(Zone* zone, js::gc::ZoneComponentFinder& finder)
 const ClassOps Debugger::classOps_ = {
     nullptr,    /* addProperty */
     nullptr,    /* delProperty */
-    nullptr,    /* getProperty */
-    nullptr,    /* setProperty */
     nullptr,    /* enumerate   */
     nullptr,    /* newEnumerate */
     nullptr,    /* resolve     */
@@ -4232,12 +4246,12 @@ class MOZ_STACK_CLASS Debugger::ScriptQuery
         cx(cx),
         debugger(dbg),
         iterMarker(&cx->runtime()->gc),
-        compartments(cx->runtime()),
+        compartments(cx->zone()),
         url(cx),
         displayURLString(cx),
         hasSource(false),
         source(cx, AsVariant(static_cast<ScriptSourceObject*>(nullptr))),
-        innermostForCompartment(cx->runtime()),
+        innermostForCompartment(cx->zone()),
         vector(cx, ScriptVector(cx)),
         wasmInstanceVector(cx, WasmInstanceObjectVector(cx))
     {}
@@ -4487,7 +4501,7 @@ class MOZ_STACK_CLASS Debugger::ScriptQuery
     /* Require the set of compartments to stay fixed while the ScriptQuery is alive. */
     gc::AutoEnterIteration iterMarker;
 
-    typedef HashSet<JSCompartment*, DefaultHasher<JSCompartment*>, RuntimeAllocPolicy>
+    typedef HashSet<JSCompartment*, DefaultHasher<JSCompartment*>, ZoneAllocPolicy>
         CompartmentSet;
 
     /* A script must be in one of these compartments to match the query. */
@@ -4520,7 +4534,7 @@ class MOZ_STACK_CLASS Debugger::ScriptQuery
     /* True if the query has an 'innermost' property whose value is true. */
     bool innermost;
 
-    typedef HashMap<JSCompartment*, JSScript*, DefaultHasher<JSCompartment*>, RuntimeAllocPolicy>
+    typedef HashMap<JSCompartment*, JSScript*, DefaultHasher<JSCompartment*>, ZoneAllocPolicy>
         CompartmentToScriptMap;
 
     /*
@@ -4691,8 +4705,6 @@ class MOZ_STACK_CLASS Debugger::ScriptQuery
                 return;
             }
         }
-
-        return;
     }
 
     /*
@@ -5031,269 +5043,6 @@ Debugger::makeGlobalObjectReference(JSContext* cx, unsigned argc, Value* vp)
     return dbg->wrapDebuggeeValue(cx, args.rval());
 }
 
-#ifdef JS_TRACE_LOGGING
-static bool
-DefineProperty(JSContext* cx, HandleObject obj, HandleId id, const char* value, size_t n)
-{
-    JSString* text = JS_NewStringCopyN(cx, value, n);
-    if (!text)
-        return false;
-
-    RootedValue str(cx, StringValue(text));
-    return JS_DefinePropertyById(cx, obj, id, str, JSPROP_ENUMERATE);
-}
-
-# ifdef NIGHTLY_BUILD
-bool
-Debugger::setupTraceLogger(JSContext* cx, unsigned argc, Value* vp)
-{
-    THIS_DEBUGGER(cx, argc, vp, "setupTraceLogger", args, dbg);
-    if (!args.requireAtLeast(cx, "Debugger.setupTraceLogger", 1))
-        return false;
-
-    RootedObject obj(cx, ToObject(cx, args[0]));
-    if (!obj)
-        return false;
-
-    AutoIdVector ids(cx);
-    if (!GetPropertyKeys(cx, obj, JSITER_OWNONLY, &ids))
-        return false;
-
-    if (ids.length() == 0) {
-        args.rval().setBoolean(true);
-        return true;
-    }
-
-    Vector<uint32_t> textIds(cx);
-    if (!textIds.reserve(ids.length()))
-        return false;
-
-    Vector<bool> values(cx);
-    if (!values.reserve(ids.length()))
-        return false;
-
-    for (size_t i = 0; i < ids.length(); i++) {
-        if (!JSID_IS_STRING(ids[i])) {
-            args.rval().setBoolean(false);
-            return true;
-        }
-
-        JSString* id = JSID_TO_STRING(ids[i]);
-        JSLinearString* linear = id->ensureLinear(cx);
-        if (!linear)
-            return false;
-
-        uint32_t textId = TLStringToTextId(linear);
-
-        if (!TLTextIdIsTogglable(textId)) {
-            args.rval().setBoolean(false);
-            return true;
-        }
-
-        RootedValue v(cx);
-        if (!GetProperty(cx, obj, obj, ids[i], &v))
-            return false;
-
-        textIds.infallibleAppend(textId);
-        values.infallibleAppend(ToBoolean(v));
-    }
-
-    MOZ_ASSERT(ids.length() == textIds.length());
-    MOZ_ASSERT(textIds.length() == values.length());
-
-    for (size_t i = 0; i < textIds.length(); i++) {
-        if (values[i])
-            TraceLogEnableTextId(cx, textIds[i]);
-        else
-            TraceLogDisableTextId(cx, textIds[i]);
-    }
-
-    args.rval().setBoolean(true);
-    return true;
-}
-
-bool
-Debugger::drainTraceLogger(JSContext* cx, unsigned argc, Value* vp)
-{
-    THIS_DEBUGGER(cx, argc, vp, "drainTraceLogger", args, dbg);
-
-    TraceLoggerThread* logger = TraceLoggerForCurrentThread(cx);
-    bool lostEvents = logger->lostEvents(dbg->traceLoggerLastDrainedIteration,
-                                         dbg->traceLoggerLastDrainedSize);
-
-    size_t numEvents;
-    EventEntry* events = logger->getEventsStartingAt(&dbg->traceLoggerLastDrainedIteration,
-                                                     &dbg->traceLoggerLastDrainedSize,
-                                                     &numEvents);
-
-    RootedObject array(cx, NewDenseEmptyArray(cx));
-    if (!array)
-        return false;
-
-    JSAtom* dataAtom = Atomize(cx, "data", strlen("data"));
-    if (!dataAtom)
-        return false;
-
-    RootedId dataId(cx, AtomToId(dataAtom));
-
-    /* Add all events to the array. */
-    uint32_t index = 0;
-    for (EventEntry* eventItem = events; eventItem < events + numEvents; eventItem++, index++) {
-        RootedObject item(cx, NewObjectWithGivenProto(cx, &PlainObject::class_, nullptr));
-        if (!item)
-            return false;
-
-        const char* eventText = logger->eventText(eventItem->textId);
-        if (!DefineProperty(cx, item, dataId, eventText, strlen(eventText)))
-            return false;
-
-        RootedValue obj(cx, ObjectValue(*item));
-        if (!JS_DefineElement(cx, array, index, obj, JSPROP_ENUMERATE))
-            return false;
-    }
-
-    /* Add "lostEvents" indicating if there are events that were lost. */
-    RootedValue lost(cx, BooleanValue(lostEvents));
-    if (!JS_DefineProperty(cx, array, "lostEvents", lost, JSPROP_ENUMERATE))
-        return false;
-
-    args.rval().setObject(*array);
-
-    return true;
-}
-# endif // NIGHTLY_BUILD
-
-bool
-Debugger::setupTraceLoggerScriptCalls(JSContext* cx, unsigned argc, Value* vp)
-{
-    THIS_DEBUGGER(cx, argc, vp, "setupTraceLoggerScriptCalls", args, dbg);
-    if (!args.requireAtLeast(cx, "Debugger.setupTraceLoggerScriptCalls", 0))
-        return false;
-
-    TraceLogEnableTextId(cx, TraceLogger_Scripts);
-    TraceLogEnableTextId(cx, TraceLogger_InlinedScripts);
-    TraceLogDisableTextId(cx, TraceLogger_AnnotateScripts);
-
-    args.rval().setBoolean(true);
-
-    return true;
-}
-
-bool
-Debugger::startTraceLogger(JSContext* cx, unsigned argc, Value* vp)
-{
-    THIS_DEBUGGER(cx, argc, vp, "startTraceLogger", args, dbg);
-    if (!args.requireAtLeast(cx, "Debugger.startTraceLogger", 0))
-        return false;
-
-    TraceLoggerThread* logger = TraceLoggerForCurrentThread(cx);
-    if (!TraceLoggerEnable(logger, cx))
-        return false;
-
-    args.rval().setUndefined();
-
-    return true;
-}
-
-bool
-Debugger::endTraceLogger(JSContext* cx, unsigned argc, Value* vp)
-{
-    THIS_DEBUGGER(cx, argc, vp, "endTraceLogger", args, dbg);
-    if (!args.requireAtLeast(cx, "Debugger.endTraceLogger", 0))
-        return false;
-
-    TraceLoggerThread* logger = TraceLoggerForCurrentThread(cx);
-    TraceLoggerDisable(logger);
-
-    args.rval().setUndefined();
-
-    return true;
-}
-
-bool
-Debugger::drainTraceLoggerScriptCalls(JSContext* cx, unsigned argc, Value* vp)
-{
-    THIS_DEBUGGER(cx, argc, vp, "drainTraceLoggerScriptCalls", args, dbg);
-
-    TraceLoggerThread* logger = TraceLoggerForCurrentThread(cx);
-    bool lostEvents = logger->lostEvents(dbg->traceLoggerScriptedCallsLastDrainedIteration,
-                                         dbg->traceLoggerScriptedCallsLastDrainedSize);
-
-    size_t numEvents;
-    EventEntry* events = logger->getEventsStartingAt(
-                                         &dbg->traceLoggerScriptedCallsLastDrainedIteration,
-                                         &dbg->traceLoggerScriptedCallsLastDrainedSize,
-                                         &numEvents);
-
-    RootedObject array(cx, NewDenseEmptyArray(cx));
-    if (!array)
-        return false;
-
-    JSAtom* logTypeAtom = Atomize(cx, "logType", strlen("logType"));
-    if (!logTypeAtom)
-        return false;
-
-    RootedId fileNameId(cx, AtomToId(cx->names().fileName));
-    RootedId lineNumberId(cx, AtomToId(cx->names().lineNumber));
-    RootedId columnNumberId(cx, AtomToId(cx->names().columnNumber));
-    RootedId logTypeId(cx, AtomToId(logTypeAtom));
-
-    /* Add all events to the array. */
-    uint32_t index = 0;
-    for (EventEntry* eventItem = events; eventItem < events + numEvents; eventItem++) {
-        RootedObject item(cx, NewObjectWithGivenProto(cx, &PlainObject::class_, nullptr));
-        if (!item)
-            return false;
-
-        // Filter out internal time.
-        uint32_t textId = eventItem->textId;
-        if (textId == TraceLogger_Internal) {
-            eventItem++;
-            MOZ_ASSERT(eventItem->textId == TraceLogger_Stop);
-            continue;
-        }
-
-        if (textId != TraceLogger_Stop && !logger->textIdIsScriptEvent(textId))
-            continue;
-
-        const char* type = (textId == TraceLogger_Stop) ? "Stop" : "Script";
-        if (!DefineProperty(cx, item, logTypeId, type, strlen(type)))
-            return false;
-
-        if (textId != TraceLogger_Stop) {
-            const char* filename;
-            const char* lineno;
-            const char* colno;
-            size_t filename_len, lineno_len, colno_len;
-            logger->extractScriptDetails(textId, &filename, &filename_len, &lineno, &lineno_len,
-                                         &colno, &colno_len);
-
-            if (!DefineProperty(cx, item, fileNameId, filename, filename_len))
-                return false;
-            if (!DefineProperty(cx, item, lineNumberId, lineno, lineno_len))
-                return false;
-            if (!DefineProperty(cx, item, columnNumberId, colno, colno_len))
-                return false;
-        }
-
-        RootedValue obj(cx, ObjectValue(*item));
-        if (!JS_DefineElement(cx, array, index, obj, JSPROP_ENUMERATE))
-            return false;
-
-        index++;
-    }
-
-    /* Add "lostEvents" indicating if there are events that were lost. */
-    RootedValue lost(cx, BooleanValue(lostEvents));
-    if (!JS_DefineProperty(cx, array, "lostEvents", lost, JSPROP_ENUMERATE))
-        return false;
-
-    args.rval().setObject(*array);
-
-    return true;
-}
-#endif
-
 bool
 Debugger::isCompilableUnit(JSContext* cx, unsigned argc, Value* vp)
 {
@@ -5411,16 +5160,6 @@ const JSFunctionSpec Debugger::methods[] = {
     JS_FN("findObjects", Debugger::findObjects, 1, 0),
     JS_FN("findAllGlobals", Debugger::findAllGlobals, 0, 0),
     JS_FN("makeGlobalObjectReference", Debugger::makeGlobalObjectReference, 1, 0),
-#ifdef JS_TRACE_LOGGING
-    JS_FN("setupTraceLoggerScriptCalls", Debugger::setupTraceLoggerScriptCalls, 0, 0),
-    JS_FN("drainTraceLoggerScriptCalls", Debugger::drainTraceLoggerScriptCalls, 0, 0),
-    JS_FN("startTraceLogger", Debugger::startTraceLogger, 0, 0),
-    JS_FN("endTraceLogger", Debugger::endTraceLogger, 0, 0),
-# ifdef NIGHTLY_BUILD
-    JS_FN("setupTraceLogger", Debugger::setupTraceLogger, 1, 0),
-    JS_FN("drainTraceLogger", Debugger::drainTraceLogger, 0, 0),
-# endif
-#endif
     JS_FN("adoptDebuggeeValue", Debugger::adoptDebuggeeValue, 1, 0),
     JS_FS_END
 };
@@ -5628,6 +5367,22 @@ DebuggerScript_checkThis(JSContext* cx, const CallArgs& args, const char* fnname
     if (!obj)                                                                       \
         return false;                                                               \
     RootedScript script(cx, GetScriptReferent(obj).as<JSScript*>())
+
+static bool
+DebuggerScript_getIsGeneratorFunction(JSContext* cx, unsigned argc, Value* vp)
+{
+    THIS_DEBUGSCRIPT_SCRIPT(cx, argc, vp, "(get isGeneratorFunction)", args, obj, script);
+    args.rval().setBoolean(script->isLegacyGenerator() || script->isStarGenerator());
+    return true;
+}
+
+static bool
+DebuggerScript_getIsAsyncFunction(JSContext* cx, unsigned argc, Value* vp)
+{
+    THIS_DEBUGSCRIPT_SCRIPT(cx, argc, vp, "(get isAsyncFunction)", args, obj, script);
+    args.rval().setBoolean(script->isAsync());
+    return true;
+}
 
 static bool
 DebuggerScript_getDisplayName(JSContext* cx, unsigned argc, Value* vp)
@@ -5944,7 +5699,7 @@ class BytecodeRangeWithPosition : private BytecodeRange
          */
         jsbytecode *lastLinePC = nullptr;
         while (!SN_IS_TERMINATOR(sn) && snpc <= frontPC()) {
-            SrcNoteType type = (SrcNoteType) SN_TYPE(sn);
+            SrcNoteType type = SN_TYPE(sn);
             if (type == SRC_COLSPAN) {
                 ptrdiff_t colspan = SN_OFFSET_TO_COLSPAN(GetSrcNoteOffset(sn, 0));
                 MOZ_ASSERT(ptrdiff_t(column) + colspan >= 0);
@@ -5985,14 +5740,9 @@ class BytecodeRangeWithPosition : private BytecodeRange
  *       The instruction cannot be reached, so the instruction is not an entry
  *       point for the line it is on.
  *   - hasSingleEdge:
- *   - hasMultipleEdgesFromSingleLine:
  *       The instruction can be reached from a single line. If this line is
  *       different from the line the instruction is on, the instruction is an
  *       entry point for that line.
- *   - hasMultipleEdgesFromMultipleLines:
- *       The instruction can be reached from multiple lines. At least one of
- *       these lines is guaranteed to be different from the line the instruction
- *       is on, so the instruction is an entry point for that line.
  *
  * Similarly, an instruction on a given position (line/column pair) is an
  * entry point for that position if it can be reached from (an instruction on) a
@@ -6004,21 +5754,11 @@ class BytecodeRangeWithPosition : private BytecodeRange
  *       The instruction can be reached from a single position. If this line is
  *       different from the position the instruction is on, the instruction is
  *       an entry point for that position.
- *   - hasMultipleEdgesFromSingleLine:
- *   - hasMultipleEdgesFromMultipleLines:
- *       The instruction can be reached from multiple positions. At least one
- *       of these positions is guaranteed to be different from the position the
- *       instruction is on, so the instruction is an entry point for that
- *       position.
  */
 class FlowGraphSummary {
   public:
     class Entry {
       public:
-        static Entry createWithNoEdges() {
-            return Entry(SIZE_MAX, 0);
-        }
-
         static Entry createWithSingleEdge(size_t lineno, size_t column) {
             return Entry(lineno, column);
         }
@@ -6039,22 +5779,6 @@ class FlowGraphSummary {
 
         bool hasSingleEdge() const {
             return lineno_ != SIZE_MAX && column_ != SIZE_MAX;
-        }
-
-        bool hasMultipleEdgesFromSingleLine() const {
-            return lineno_ != SIZE_MAX && column_ == SIZE_MAX;
-        }
-
-        bool hasMultipleEdgesFromMultipleLines() const {
-            return lineno_ == SIZE_MAX && column_ == SIZE_MAX;
-        }
-
-        bool operator==(const Entry& other) const {
-            return lineno_ == other.lineno_ && column_ == other.column_;
-        }
-
-        bool operator!=(const Entry& other) const {
-            return lineno_ != other.lineno_ || column_ != other.column_;
         }
 
         size_t lineno() const {
@@ -6225,11 +5949,11 @@ class DebuggerScriptGetOffsetLocationMatcher
 
         RootedId id(cx_, NameToId(cx_->names().lineNumber));
         RootedValue value(cx_, NumberValue(lineno));
-        if (!DefineProperty(cx_, result_, id, value))
+        if (!DefineDataProperty(cx_, result_, id, value))
             return false;
 
         value = NumberValue(column);
-        if (!DefineProperty(cx_, result_, cx_->names().columnNumber, value))
+        if (!DefineDataProperty(cx_, result_, cx_->names().columnNumber, value))
             return false;
 
         // The same entry point test that is used by getAllColumnOffsets.
@@ -6238,7 +5962,7 @@ class DebuggerScriptGetOffsetLocationMatcher
                         (flowData[offset].lineno() != r.frontLineNumber() ||
                          flowData[offset].column() != r.frontColumnNumber()));
         value.setBoolean(isEntryPoint);
-        if (!DefineProperty(cx_, result_, cx_->names().isEntryPoint, value))
+        if (!DefineDataProperty(cx_, result_, cx_->names().isEntryPoint, value))
             return false;
 
         return true;
@@ -6262,15 +5986,15 @@ class DebuggerScriptGetOffsetLocationMatcher
 
         RootedId id(cx_, NameToId(cx_->names().lineNumber));
         RootedValue value(cx_, NumberValue(lineno));
-        if (!DefineProperty(cx_, result_, id, value))
+        if (!DefineDataProperty(cx_, result_, id, value))
             return false;
 
         value = NumberValue(column);
-        if (!DefineProperty(cx_, result_, cx_->names().columnNumber, value))
+        if (!DefineDataProperty(cx_, result_, cx_->names().columnNumber, value))
             return false;
 
         value.setBoolean(true);
-        if (!DefineProperty(cx_, result_, cx_->names().isEntryPoint, value))
+        if (!DefineDataProperty(cx_, result_, cx_->names().isEntryPoint, value))
             return false;
 
         return true;
@@ -6353,7 +6077,7 @@ DebuggerScript_getAllOffsets(JSContext* cx, unsigned argc, Value* vp)
                 }
 
                 RootedValue value(cx, ObjectValue(*offsets));
-                if (!DefineProperty(cx, result, id, value))
+                if (!DefineDataProperty(cx, result, id, value))
                     return false;
             }
 
@@ -6379,16 +6103,16 @@ class DebuggerScriptGetAllColumnOffsetsMatcher
 
         RootedId id(cx_, NameToId(cx_->names().lineNumber));
         RootedValue value(cx_, NumberValue(lineno));
-        if (!DefineProperty(cx_, entry, id, value))
+        if (!DefineDataProperty(cx_, entry, id, value))
             return false;
 
         value = NumberValue(column);
-        if (!DefineProperty(cx_, entry, cx_->names().columnNumber, value))
+        if (!DefineDataProperty(cx_, entry, cx_->names().columnNumber, value))
             return false;
 
         id = NameToId(cx_->names().offset);
         value = NumberValue(offset);
-        if (!DefineProperty(cx_, entry, id, value))
+        if (!DefineDataProperty(cx_, entry, id, value))
             return false;
 
         return NewbornArrayPush(cx_, result_, ObjectValue(*entry));
@@ -7037,10 +6761,10 @@ DebuggerScript_getOffsetsCoverage(JSContext* cx, unsigned argc, Value* vp)
     if (!result)
         return false;
 
-    RootedId offsetId(cx, AtomToId(cx->names().offset));
-    RootedId lineNumberId(cx, AtomToId(cx->names().lineNumber));
-    RootedId columnNumberId(cx, AtomToId(cx->names().columnNumber));
-    RootedId countId(cx, AtomToId(cx->names().count));
+    RootedId offsetId(cx, NameToId(cx->names().offset));
+    RootedId lineNumberId(cx, NameToId(cx->names().lineNumber));
+    RootedId columnNumberId(cx, NameToId(cx->names().columnNumber));
+    RootedId countId(cx, NameToId(cx->names().count));
 
     RootedObject item(cx);
     RootedValue offsetValue(cx);
@@ -7068,10 +6792,10 @@ DebuggerScript_getOffsetsCoverage(JSContext* cx, unsigned argc, Value* vp)
         // number of hit counts, and append it to the array.
         item = NewObjectWithGivenProto<PlainObject>(cx, nullptr);
         if (!item ||
-            !DefineProperty(cx, item, offsetId, offsetValue) ||
-            !DefineProperty(cx, item, lineNumberId, lineNumberValue) ||
-            !DefineProperty(cx, item, columnNumberId, columnNumberValue) ||
-            !DefineProperty(cx, item, countId, countValue) ||
+            !DefineDataProperty(cx, item, offsetId, offsetValue) ||
+            !DefineDataProperty(cx, item, lineNumberId, lineNumberValue) ||
+            !DefineDataProperty(cx, item, columnNumberId, columnNumberValue) ||
+            !DefineDataProperty(cx, item, countId, countValue) ||
             !NewbornArrayPush(cx, result, ObjectValue(*item)))
         {
             return false;
@@ -7097,6 +6821,8 @@ DebuggerScript_construct(JSContext* cx, unsigned argc, Value* vp)
 }
 
 static const JSPropertySpec DebuggerScript_properties[] = {
+    JS_PSG("isGeneratorFunction", DebuggerScript_getIsGeneratorFunction, 0),
+    JS_PSG("isAsyncFunction", DebuggerScript_getIsAsyncFunction, 0),
     JS_PSG("displayName", DebuggerScript_getDisplayName, 0),
     JS_PSG("url", DebuggerScript_getUrl, 0),
     JS_PSG("startLine", DebuggerScript_getStartLine, 0),
@@ -7600,9 +7326,11 @@ DebuggerSource_getIntroductionType(JSContext* cx, unsigned argc, Value* vp)
 static bool
 DebuggerSource_setSourceMapURL(JSContext* cx, unsigned argc, Value* vp)
 {
-    THIS_DEBUGSOURCE_SOURCE(cx, argc, vp, "sourceMapURL", args, obj, sourceObject);
+    THIS_DEBUGSOURCE_SOURCE(cx, argc, vp, "set sourceMapURL", args, obj, sourceObject);
     ScriptSource* ss = sourceObject->source();
     MOZ_ASSERT(ss);
+    if (!args.requireAtLeast(cx, "set sourceMapURL", 1))
+        return false;
 
     JSString* str = ToString<CanGC>(cx, args[0]);
     if (!str)
@@ -7872,11 +7600,11 @@ UpdateFrameIterPc(FrameIter& iter)
         while (activationIter.activation() != activation)
             ++activationIter;
 
-        jit::JitFrameIterator jitIter(activationIter);
-        while (!jitIter.isIonJS() || jitIter.jsFrame() != jsFrame)
+        OnlyJSJitFrameIter jitIter(activationIter);
+        while (!jitIter.frame().isIonJS() || jitIter.frame().jsFrame() != jsFrame)
             ++jitIter;
 
-        jit::InlineFrameIterator ionInlineIter(cx, &jitIter);
+        jit::InlineFrameIterator ionInlineIter(cx, &jitIter.frame());
         while (ionInlineIter.frameNo() != frame->frameNo())
             ++ionInlineIter;
 
@@ -8106,6 +7834,8 @@ DebuggerFrame::getArguments(JSContext *cx, HandleDebuggerFrame frame,
         if (!proto)
             return false;
         arguments = DebuggerArguments::create(cx, proto, frame);
+        if (!arguments)
+            return false;
     } else {
         arguments = nullptr;
     }
@@ -8127,11 +7857,10 @@ DebuggerFrame::getArguments(JSContext *cx, HandleDebuggerFrame frame,
  */
 static bool
 EvaluateInEnv(JSContext* cx, Handle<Env*> env, AbstractFramePtr frame,
-              jsbytecode* pc, mozilla::Range<const char16_t> chars, const char* filename,
+              mozilla::Range<const char16_t> chars, const char* filename,
               unsigned lineno, MutableHandleValue rval)
 {
     assertSameCompartment(cx, env, frame);
-    MOZ_ASSERT_IF(frame, pc);
 
     CompileOptions options(cx);
     options.setIsRunOnce(true)
@@ -8139,8 +7868,8 @@ EvaluateInEnv(JSContext* cx, Handle<Env*> env, AbstractFramePtr frame,
            .setFileAndLine(filename, lineno)
            .setCanLazilyParse(false)
            .setIntroductionType("debugger eval")
-           .maybeMakeStrictMode(frame ? frame.script()->strict() : false);
-    RootedScript callerScript(cx, frame ? frame.script() : nullptr);
+           .maybeMakeStrictMode(frame && frame.hasScript() ? frame.script()->strict() : false);
+    RootedScript callerScript(cx, frame && frame.hasScript() ? frame.script() : nullptr);
     SourceBufferHolder srcBuf(chars.begin().get(), chars.length(), SourceBufferHolder::NoOwnership);
     RootedScript script(cx);
 
@@ -8234,7 +7963,7 @@ DebuggerGenericEval(JSContext* cx, const mozilla::Range<const char16_t> chars,
             cx->markId(id);
             MutableHandleValue val = values[i];
             if (!cx->compartment()->wrap(cx, val) ||
-                !NativeDefineProperty(cx, nenv, id, val, nullptr, nullptr, 0))
+                !NativeDefineDataProperty(cx, nenv, id, val, 0))
             {
                 return false;
             }
@@ -8255,9 +7984,8 @@ DebuggerGenericEval(JSContext* cx, const mozilla::Range<const char16_t> chars,
     LeaveDebuggeeNoExecute nnx(cx);
     RootedValue rval(cx);
     AbstractFramePtr frame = iter ? iter->abstractFramePtr() : NullFramePtr();
-    jsbytecode* pc = iter ? iter->pc() : nullptr;
 
-    bool ok = EvaluateInEnv(cx, env, frame, pc, chars,
+    bool ok = EvaluateInEnv(cx, env, frame, chars,
                             options.filename() ? options.filename() : "debugger eval code",
                             options.lineno(), &rval);
     Debugger::resultToCompletion(cx, ok, rval, &status, value);
@@ -8271,8 +7999,6 @@ DebuggerFrame::eval(JSContext* cx, HandleDebuggerFrame frame, mozilla::Range<con
                     MutableHandleValue value)
 {
     MOZ_ASSERT(frame->isLive());
-    if (!requireScriptReferent(cx, frame))
-        return false;
 
     Debugger* dbg = frame->owner();
 
@@ -8417,10 +8143,10 @@ static void
 DebuggerFrame_trace(JSTracer* trc, JSObject* obj)
 {
     OnStepHandler* onStepHandler = obj->as<DebuggerFrame>().onStepHandler();
-    if (onStepHandler) 
+    if (onStepHandler)
         onStepHandler->trace(trc);
     OnPopHandler* onPopHandler = obj->as<DebuggerFrame>().onPopHandler();
-    if (onPopHandler) 
+    if (onPopHandler)
         onPopHandler->trace(trc);
 }
 
@@ -8741,8 +8467,8 @@ DebuggerArguments::create(JSContext* cx, HandleObject proto, HandleDebuggerFrame
     MOZ_ASSERT(referent.numActualArgs() <= 0x7fffffff);
     unsigned fargc = referent.numActualArgs();
     RootedValue fargcVal(cx, Int32Value(fargc));
-    if (!NativeDefineProperty(cx, obj, cx->names().length, fargcVal, nullptr, nullptr,
-                              JSPROP_PERMANENT | JSPROP_READONLY))
+    if (!NativeDefineDataProperty(cx, obj, cx->names().length, fargcVal,
+                                  JSPROP_PERMANENT | JSPROP_READONLY))
     {
         return nullptr;
     }
@@ -8756,9 +8482,9 @@ DebuggerArguments::create(JSContext* cx, HandleObject proto, HandleDebuggerFrame
             return nullptr;
         id = INT_TO_JSID(i);
         if (!getobj ||
-            !NativeDefineProperty(cx, obj, id, UndefinedHandleValue,
-                                  JS_DATA_TO_FUNC_PTR(GetterOp, getobj.get()), nullptr,
-                                  JSPROP_ENUMERATE | JSPROP_SHARED | JSPROP_GETTER))
+            !NativeDefineAccessorProperty(cx, obj, id,
+                                          JS_DATA_TO_FUNC_PTR(GetterOp, getobj.get()), nullptr,
+                                          JSPROP_ENUMERATE | JSPROP_SHARED | JSPROP_GETTER))
         {
             return nullptr;
         }
@@ -8790,12 +8516,11 @@ DebuggerFrame_getScript(JSContext* cx, unsigned argc, Value* vp)
     RootedObject scriptObject(cx);
     if (frame.isFunctionFrame()) {
         RootedFunction callee(cx, frame.callee());
-        if (callee->isInterpreted()) {
-            RootedScript script(cx, callee->nonLazyScript());
-            scriptObject = debug->wrapScript(cx, script);
-            if (!scriptObject)
-                return false;
-        }
+        MOZ_ASSERT(callee->isInterpreted());
+        RootedScript script(cx, callee->nonLazyScript());
+        scriptObject = debug->wrapScript(cx, script);
+        if (!scriptObject)
+            return false;
     } else if (frame.isWasmDebugFrame()) {
         RootedWasmInstanceObject instance(cx, frame.wasmInstance()->object());
         scriptObject = debug->wrapWasmScript(cx, instance);
@@ -8811,7 +8536,9 @@ DebuggerFrame_getScript(JSContext* cx, unsigned argc, Value* vp)
         if (!scriptObject)
             return false;
     }
-    args.rval().setObjectOrNull(scriptObject);
+
+    MOZ_ASSERT(scriptObject);
+    args.rval().setObject(*scriptObject);
     return true;
 }
 
@@ -9148,6 +8875,34 @@ DebuggerObject::isArrowFunctionGetter(JSContext* cx, unsigned argc, Value* vp)
 }
 
 /* static */ bool
+DebuggerObject::isAsyncFunctionGetter(JSContext* cx, unsigned argc, Value* vp)
+{
+    THIS_DEBUGOBJECT(cx, argc, vp, "get isAsyncFunction", args, object)
+
+    if (!object->isDebuggeeFunction()) {
+        args.rval().setUndefined();
+        return true;
+    }
+
+    args.rval().setBoolean(object->isAsyncFunction());
+    return true;
+}
+
+/* static */ bool
+DebuggerObject::isGeneratorFunctionGetter(JSContext* cx, unsigned argc, Value* vp)
+{
+    THIS_DEBUGOBJECT(cx, argc, vp, "get isGeneratorFunction", args, object)
+
+    if (!object->isDebuggeeFunction()) {
+        args.rval().setUndefined();
+        return true;
+    }
+
+    args.rval().setBoolean(object->isGeneratorFunction());
+    return true;
+}
+
+/* static */ bool
 DebuggerObject::protoGetter(JSContext* cx, unsigned argc, Value* vp)
 {
     THIS_DEBUGOBJECT(cx, argc, vp, "get proto", args, object)
@@ -9251,7 +9006,7 @@ DebuggerObject::scriptGetter(JSContext* cx, unsigned argc, Value* vp)
         return true;
     }
 
-    RootedFunction fun(cx, &obj->as<JSFunction>());
+    RootedFunction fun(cx, RemoveAsyncWrapper(&obj->as<JSFunction>()));
     if (!fun->isInterpreted()) {
         args.rval().setUndefined();
         return true;
@@ -9281,21 +9036,26 @@ DebuggerObject::environmentGetter(JSContext* cx, unsigned argc, Value* vp)
     THIS_DEBUGOBJECT_OWNER_REFERENT(cx, argc, vp, "get environment", args, dbg, obj);
 
     /* Don't bother switching compartments just to check obj's type and get its env. */
-    if (!obj->is<JSFunction>() || !obj->as<JSFunction>().isInterpreted()) {
+    if (!obj->is<JSFunction>()) {
+        args.rval().setUndefined();
+        return true;
+    }
+
+    RootedFunction fun(cx, RemoveAsyncWrapper(&obj->as<JSFunction>()));
+    if (!fun->isInterpreted()) {
         args.rval().setUndefined();
         return true;
     }
 
     /* Only hand out environments of debuggee functions. */
-    if (!dbg->observesGlobal(&obj->global())) {
+    if (!dbg->observesGlobal(&fun->global())) {
         args.rval().setNull();
         return true;
     }
 
     Rooted<Env*> env(cx);
     {
-        AutoCompartment ac(cx, obj);
-        RootedFunction fun(cx, &obj->as<JSFunction>());
+        AutoCompartment ac(cx, fun);
         env = GetDebugEnvironmentForFunction(cx, fun);
         if (!env)
             return false;
@@ -10054,6 +9814,8 @@ const JSPropertySpec DebuggerObject::properties_[] = {
     JS_PSG("callable", DebuggerObject::callableGetter, 0),
     JS_PSG("isBoundFunction", DebuggerObject::isBoundFunctionGetter, 0),
     JS_PSG("isArrowFunction", DebuggerObject::isArrowFunctionGetter, 0),
+    JS_PSG("isGeneratorFunction", DebuggerObject::isGeneratorFunctionGetter, 0),
+    JS_PSG("isAsyncFunction", DebuggerObject::isAsyncFunctionGetter, 0),
     JS_PSG("proto", DebuggerObject::protoGetter, 0),
     JS_PSG("class", DebuggerObject::classGetter, 0),
     JS_PSG("name", DebuggerObject::nameGetter, 0),
@@ -10182,7 +9944,24 @@ DebuggerObject::isArrowFunction() const
 {
     MOZ_ASSERT(isDebuggeeFunction());
 
-    return referent()->as<JSFunction>().isArrow();
+    return RemoveAsyncWrapper(&referent()->as<JSFunction>())->isArrow();
+}
+
+bool
+DebuggerObject::isAsyncFunction() const
+{
+    MOZ_ASSERT(isDebuggeeFunction());
+
+    return RemoveAsyncWrapper(&referent()->as<JSFunction>())->isAsync();
+}
+
+bool
+DebuggerObject::isGeneratorFunction() const
+{
+    MOZ_ASSERT(isDebuggeeFunction());
+
+    JSFunction* fun = RemoveAsyncWrapper(&referent()->as<JSFunction>());
+    return fun->isLegacyGenerator() || fun->isStarGenerator();
 }
 
 bool
@@ -10290,7 +10069,7 @@ DebuggerObject::getParameterNames(JSContext* cx, HandleDebuggerObject object,
 {
     MOZ_ASSERT(object->isDebuggeeFunction());
 
-    RootedFunction referent(cx, &object->referent()->as<JSFunction>());
+    RootedFunction referent(cx, RemoveAsyncWrapper(&object->referent()->as<JSFunction>()));
 
     if (!result.growBy(referent->nargs()))
         return false;
@@ -11652,7 +11431,7 @@ Builder::Object::definePropertyToTrusted(JSContext* cx, const char* name,
         return false;
     RootedId id(cx, AtomToId(atom));
 
-    return DefineProperty(cx, value, id, trusted);
+    return DefineDataProperty(cx, value, id, trusted);
 }
 
 bool
@@ -11777,11 +11556,8 @@ JS_DefineDebuggerObject(JSContext* cx, HandleObject obj)
         return false;
     debuggeeWouldRunCtor = global->getConstructor(JSProto_DebuggeeWouldRun);
     RootedId debuggeeWouldRunId(cx, NameToId(ClassName(JSProto_DebuggeeWouldRun, cx)));
-    if (!DefineProperty(cx, debugCtor, debuggeeWouldRunId, debuggeeWouldRunCtor,
-                        nullptr, nullptr, 0))
-    {
+    if (!DefineDataProperty(cx, debugCtor, debuggeeWouldRunId, debuggeeWouldRunCtor, 0))
         return false;
-    }
 
     debugProto->setReservedSlot(Debugger::JSSLOT_DEBUG_FRAME_PROTO, ObjectValue(*frameProto));
     debugProto->setReservedSlot(Debugger::JSSLOT_DEBUG_OBJECT_PROTO, ObjectValue(*objectProto));
@@ -11911,7 +11687,7 @@ DefineStringProperty(JSContext* cx, HandleObject obj, PropertyName* propName, co
             return false;
         val = StringValue(atomized);
     }
-    return DefineProperty(cx, obj, propName, val);
+    return DefineDataProperty(cx, obj, propName, val);
 }
 
 JSObject*
@@ -11922,7 +11698,7 @@ GarbageCollectionEvent::toJSObject(JSContext* cx) const
     if (!obj ||
         !DefineStringProperty(cx, obj, cx->names().nonincrementalReason, nonincrementalReason) ||
         !DefineStringProperty(cx, obj, cx->names().reason, reason) ||
-        !DefineProperty(cx, obj, cx->names().gcCycleNumber, gcCycleNumberVal))
+        !DefineDataProperty(cx, obj, cx->names().gcCycleNumber, gcCycleNumberVal))
     {
         return nullptr;
     }
@@ -11942,22 +11718,41 @@ GarbageCollectionEvent::toJSObject(JSContext* cx) const
         RootedValue start(cx), end(cx);
         start = NumberValue((range.front().startTimestamp - originTime).ToMilliseconds());
         end = NumberValue((range.front().endTimestamp - originTime).ToMilliseconds());
-        if (!DefineProperty(cx, collectionObj, cx->names().startTimestamp, start) ||
-            !DefineProperty(cx, collectionObj, cx->names().endTimestamp, end))
+        if (!DefineDataProperty(cx, collectionObj, cx->names().startTimestamp, start) ||
+            !DefineDataProperty(cx, collectionObj, cx->names().endTimestamp, end))
         {
             return nullptr;
         }
 
         RootedValue collectionVal(cx, ObjectValue(*collectionObj));
-        if (!DefineElement(cx, slicesArray, idx++, collectionVal))
+        if (!DefineDataElement(cx, slicesArray, idx++, collectionVal))
             return nullptr;
     }
 
     RootedValue slicesValue(cx, ObjectValue(*slicesArray));
-    if (!DefineProperty(cx, obj, cx->names().collections, slicesValue))
+    if (!DefineDataProperty(cx, obj, cx->names().collections, slicesValue))
         return nullptr;
 
     return obj;
+}
+
+JS_PUBLIC_API(bool)
+FireOnGarbageCollectionHookRequired(JSContext* cx)
+{
+    AutoCheckCannotGC noGC;
+
+    for (ZoneGroupsIter group(cx->runtime()); !group.done(); group.next()) {
+        for (Debugger* dbg : group->debuggerList()) {
+            if (dbg->enabled &&
+                dbg->observedGC(cx->runtime()->gc.majorGCCount()) &&
+                dbg->getHook(Debugger::OnGarbageCollection))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 JS_PUBLIC_API(bool)

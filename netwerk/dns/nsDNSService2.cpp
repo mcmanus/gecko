@@ -453,9 +453,10 @@ nsDNSSyncRequest::SizeOfIncludingThis(MallocSizeOf mallocSizeOf) const
 class NotifyDNSResolution: public Runnable
 {
 public:
-    explicit NotifyDNSResolution(const nsACString &aHostname)
-        : mHostname(aHostname)
-    {
+  explicit NotifyDNSResolution(const nsACString& aHostname)
+    : mozilla::Runnable("NotifyDNSResolution")
+    , mHostname(aHostname)
+  {
     }
 
     NS_IMETHOD Run() override
@@ -546,9 +547,9 @@ nsDNSService::Init()
     int      proxyType        = nsIProtocolProxyService::PROXYCONFIG_DIRECT;
     bool     notifyResolution = false;
 
-    nsAdoptingCString ipv4OnlyDomains;
-    nsAdoptingCString localDomains;
-    nsAdoptingCString forceResolve;
+    nsCString ipv4OnlyDomains;
+    nsCString localDomains;
+    nsCString forceResolve;
 
     // read prefs
     nsCOMPtr<nsIPrefBranch> prefs = do_GetService(NS_PREFSERVICE_CONTRACTID);
@@ -617,18 +618,18 @@ nsDNSService::Init()
         MutexAutoLock lock(mLock);
         mResolver = res;
         mIDN = idn;
-        mIPv4OnlyDomains = ipv4OnlyDomains; // exchanges buffer ownership
+        mIPv4OnlyDomains = ipv4OnlyDomains;
         mOfflineLocalhost = offlineLocalhost;
         mDisableIPv6 = disableIPv6;
         mBlockDotOnion = blockDotOnion;
         mForceResolve = forceResolve;
         mForceResolveOn = !mForceResolve.IsEmpty();
 
-        // Disable prefetching either by explicit preference or if a manual proxy is configured 
+        // Disable prefetching either by explicit preference or if a manual proxy is configured
         mDisablePrefetch = disablePrefetch || (proxyType == nsIProtocolProxyService::PROXYCONFIG_MANUAL);
 
         mLocalDomains.Clear();
-        if (localDomains) {
+        if (!localDomains.IsVoid()) {
             nsCCharSeparatedTokenizer tokenizer(localDomains, ',',
                                                 nsCCharSeparatedTokenizer::SEPARATOR_OPTIONAL);
 
@@ -991,6 +992,29 @@ nsDNSService::ResolveNative(const nsACString        &aHostname,
                             const OriginAttributes  &aOriginAttributes,
                             nsIDNSRecord           **result)
 {
+    // Synchronous resolution is not available on the main thread.
+    if (NS_IsMainThread()) {
+        return NS_ERROR_NOT_AVAILABLE;
+    }
+
+    return ResolveInternal(aHostname, flags, aOriginAttributes, result);
+}
+
+nsresult
+nsDNSService::DeprecatedSyncResolve(const nsACString        &aHostname,
+                                    uint32_t                 flags,
+                                    const OriginAttributes  &aOriginAttributes,
+                                    nsIDNSRecord           **result)
+{
+    return ResolveInternal(aHostname, flags, aOriginAttributes, result);
+}
+
+nsresult
+nsDNSService::ResolveInternal(const nsACString        &aHostname,
+                              uint32_t                 flags,
+                              const OriginAttributes  &aOriginAttributes,
+                              nsIDNSRecord           **result)
+{
     // grab reference to global host resolver and IDN service.  beware
     // simultaneous shutdown!!
     RefPtr<nsHostResolver> res;
@@ -1027,7 +1051,7 @@ nsDNSService::ResolveNative(const nsACString        &aHostname,
     // on the same thread.  so, our mutex needs to be re-entrant.  in other words,
     // we need to use a monitor! ;-)
     //
-    
+
     PRMonitor *mon = PR_NewMonitor();
     if (!mon)
         return NS_ERROR_OUT_OF_MEMORY;
@@ -1127,7 +1151,7 @@ nsDNSService::GetAFForLookup(const nsACString &host, uint32_t flags)
 
         // see if host is in one of the IPv4-only domains
         domain = mIPv4OnlyDomains.BeginReading();
-        domainEnd = mIPv4OnlyDomains.EndReading(); 
+        domainEnd = mIPv4OnlyDomains.EndReading();
 
         nsACString::const_iterator hostStart;
         host.BeginReading(hostStart);

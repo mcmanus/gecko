@@ -2,19 +2,7 @@
  * vim: set ts=2 sw=2 et tw=78:
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * This Original Code has been modified by IBM Corporation.
- * Modifications made by IBM described herein are
- * Copyright (c) International Business Machines
- * Corporation, 2000
- *
- * Modifications to Mozilla code or documentation
- * identified per MPL Section 3.3
- *
- * Date         Modified by     Description of modification
- * 05/03/2000   IBM Corp.       Observer events for reflow states
- */
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* a presentation of a document, part 2 */
 
@@ -24,6 +12,7 @@
 #include "MobileViewportManager.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/EventForwards.h"
+#include "mozilla/layers/FocusTarget.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StyleSetHandle.h"
 #include "mozilla/UniquePtr.h"
@@ -58,6 +47,7 @@ namespace mozilla {
 
 namespace dom {
 class Element;
+class Selection;
 }  // namespace dom
 
 class EventDispatchingCallback;
@@ -85,6 +75,9 @@ class PresShell final : public nsIPresShell,
                         public nsIObserver,
                         public nsSupportsWeakReference
 {
+protected:
+  typedef mozilla::layers::FocusTarget FocusTarget;
+
 public:
   PresShell();
 
@@ -101,6 +94,7 @@ public:
 
   NS_IMETHOD GetSelection(RawSelectionType aRawSelectionType,
                           nsISelection** aSelection) override;
+  dom::Selection* GetDOMSelection(RawSelectionType aRawSelectionType) override;
   virtual mozilla::dom::Selection*
     GetCurrentSelection(SelectionType aSelectionType) override;
   virtual already_AddRefed<nsISelectionController>
@@ -131,9 +125,7 @@ public:
   virtual bool IsSafeToFlush() const override;
   virtual void DoFlushPendingNotifications(mozilla::FlushType aType) override;
   virtual void DoFlushPendingNotifications(mozilla::ChangesToFlush aType) override;
-  virtual void DestroyFramesFor(nsIContent*  aContent,
-                                nsIContent** aDestroyedFramesFor) override;
-  virtual void CreateFramesFor(nsIContent* aContent) override;
+  virtual void DestroyFramesFor(mozilla::dom::Element* aElement) override;
 
   /**
    * Post a callback that should be handled after reflow has finished.
@@ -209,6 +201,8 @@ public:
                   uint32_t aFlags) override;
 
   virtual already_AddRefed<nsPIDOMWindowOuter> GetRootWindow() override;
+
+  virtual already_AddRefed<nsPIDOMWindowOuter> GetFocusedDOMWindowInOurWindow() override;
 
   virtual LayerManager* GetLayerManager() override;
 
@@ -368,13 +362,8 @@ public:
 
   virtual void LoadComplete() override;
 
-  void AddSizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
-                              nsArenaMemoryStats* aArenaObjectsSize,
-                              size_t* aPresShellSize,
-                              size_t* aStyleSetsSize,
-                              size_t* aTextRunsSize,
-                              size_t* aPresContextSize,
-                              size_t* aFramePropertiesSize) override;
+  virtual void AddSizeOfIncludingThis(nsWindowSizes& aWindowSizes)
+    const override;
   size_t SizeOfTextRuns(mozilla::MallocSizeOf aMallocSizeOf) const;
 
   // This data is stored as a content property (nsGkAtoms::scrolling) on
@@ -688,9 +677,6 @@ protected:
   nsresult HandlePositionedEvent(nsIFrame* aTargetFrame,
                                  mozilla::WidgetGUIEvent* aEvent,
                                  nsEventStatus* aEventStatus);
-  // This returns the focused DOM window under our top level window.
-  //  I.e., when we are deactive, this returns the *last* focused DOM window.
-  already_AddRefed<nsPIDOMWindowOuter> GetFocusedDOMWindowInOurWindow();
 
   /*
    * This and the next two helper methods are used to target and position the
@@ -863,6 +849,11 @@ protected:
   // when target of pointer event was deleted during executing user handlers.
   nsCOMPtr<nsIContent>      mPointerEventTarget;
 
+  // The focus sequence number of the last processed input event
+  uint64_t                  mAPZFocusSequenceNumber;
+  // The focus information needed for async keyboard scrolling
+  FocusTarget               mAPZFocusTarget;
+
   // This is used to protect ourselves from triggering reflow while in the
   // middle of frame construction and the like... it really shouldn't be
   // needed, one hopes, but it is for now.
@@ -911,6 +902,8 @@ protected:
 
   static mozilla::TimeStamp sLastInputCreated;
   static mozilla::TimeStamp sLastInputProcessed;
+
+  static bool               sProcessInteractable;
 };
 
 } // namespace mozilla

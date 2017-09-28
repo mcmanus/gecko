@@ -12,16 +12,16 @@ const fm = Services.focus;
 
 function EventStore() {
   this["main-window"] = [];
-  this["window1"] = [];
-  this["window2"] = [];
+  this.window1 = [];
+  this.window2 = [];
 }
 
 EventStore.prototype = {
   "push": function(event) {
     if (event.indexOf("1") > -1) {
-      this["window1"].push(event);
+      this.window1.push(event);
     } else if (event.indexOf("2") > -1) {
-      this["window2"].push(event);
+      this.window2.push(event);
     } else {
       this["main-window"].push(event);
     }
@@ -71,6 +71,9 @@ function focusInChild() {
   }
 
   function eventListener(event) {
+    // Stop the shim code from seeing this event process.
+    event.stopImmediatePropagation();
+
     var id;
     if (event.target instanceof Components.interfaces.nsIDOMWindow)
       id = getWindowDocId(event.originalTarget) + "-window";
@@ -136,7 +139,7 @@ add_task(async function() {
   await promiseTabLoadEvent(tab1, "data:text/html," + escape(testPage1));
   await promiseTabLoadEvent(tab2, "data:text/html," + escape(testPage2));
 
-  var childFocusScript = "data:,(" + focusInChild.toString() + ")();";
+  var childFocusScript = "data:,(" + escape(focusInChild.toString()) + ")();";
   browser1.messageManager.loadFrameScript(childFocusScript, true);
   browser2.messageManager.loadFrameScript(childFocusScript, true);
 
@@ -380,10 +383,6 @@ function _browser_tabfocus_test_eventOccured(event) {
 
   var id;
 
-  // Some focus events from the child bubble up? Ignore them.
-  if (Cu.isCrossProcessWrapper(event.originalTarget))
-    return;
-
   if (event.target instanceof Window)
     id = getWindowDocId(event.originalTarget) + "-window";
   else if (event.target instanceof Document)
@@ -544,7 +543,7 @@ function expectFocusShift(callback, expectedWindow, expectedElement, focusChange
     callback();
 
     // No events are expected, so resolve the promise immediately.
-    if (expectedEvents["main-window"].length + expectedEvents["window1"].length + expectedEvents["window2"].length == 0) {
+    if (expectedEvents["main-window"].length + expectedEvents.window1.length + expectedEvents.window2.length == 0) {
       currentPromiseResolver();
       currentPromiseResolver = null;
     }

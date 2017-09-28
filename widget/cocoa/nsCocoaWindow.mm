@@ -7,6 +7,7 @@
 #include "nsCocoaWindow.h"
 
 #include "NativeKeyBindings.h"
+#include "ScreenHelperCocoa.h"
 #include "TextInputHandler.h"
 #include "nsObjCExceptions.h"
 #include "nsCOMPtr.h"
@@ -77,6 +78,21 @@ enum NSWindowOcclusionState {
 
 @interface NSWindow(OcclusionState)
 - (NSWindowOcclusionState) occlusionState;
+@end
+
+#endif
+
+#if !defined(MAC_OS_X_VERSION_10_10) || \
+    MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_10
+
+enum NSWindowTitleVisibility {
+  NSWindowTitleVisible = 0,
+  NSWindowTitleHidden  = 1
+};
+
+@interface NSWindow(TitleVisibility)
+- (void)setTitleVisibility:(NSWindowTitleVisibility)visibility;
+- (void)setTitlebarAppearsTransparent:(BOOL)isTitlebarTransparent;
 @end
 
 #endif
@@ -894,6 +910,7 @@ nsCocoaWindow::Show(bool bState)
           }
         }
         [mWindow setAnimationBehavior:behavior];
+        mWindowAnimationBehavior = behavior;
       }
       [mWindow makeKeyAndOrderFront:nil];
       NS_OBJC_END_TRY_ABORT_BLOCK;
@@ -1297,6 +1314,18 @@ nsCocoaWindow::SetSizeMode(nsSizeMode aMode)
   }
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
+}
+
+void
+nsCocoaWindow::SuppressAnimation(bool aSuppress)
+{
+  if ([mWindow respondsToSelector:@selector(setAnimationBehavior:)]) {
+    if (aSuppress) {
+      [mWindow setAnimationBehavior:NSWindowAnimationBehaviorNone];
+    } else {
+      [mWindow setAnimationBehavior:mWindowAnimationBehavior];
+    }
+  }
 }
 
 // This has to preserve the window's frame bounds.
@@ -1816,15 +1845,16 @@ nsCocoaWindow::SetTitle(const nsAString& aTitle)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
-  if (!mWindow)
+  if (!mWindow) {
     return NS_OK;
+  }
 
   const nsString& strTitle = PromiseFlatString(aTitle);
-  NSString* title = [NSString stringWithCharacters:reinterpret_cast<const unichar*>(strTitle.get())
+  const unichar* uniTitle = reinterpret_cast<const unichar*>(strTitle.get());
+  NSString* title = [NSString stringWithCharacters:uniTitle
                                             length:strTitle.Length()];
-
   if ([mWindow drawsContentsIntoWindowFrame] && ![mWindow wantsTitleDrawn]) {
-    // Don't cause invalidations.
+    // Don't cause invalidations when the title isn't displayed.
     [mWindow disableSetNeedsDisplay];
     [mWindow setTitle:title];
     [mWindow enableSetNeedsDisplay];
@@ -2267,6 +2297,14 @@ nsCocoaWindow::SetWindowTransform(const gfx::Matrix& aTransform)
   }
 
   transform.PreTranslate(-mBounds.x, -mBounds.y);
+
+  // Snap translations to device pixels, to match what we do for CSS transforms
+  // and because the window server rounds down instead of to nearest.
+  if (!transform.HasNonTranslation() && transform.HasNonIntegerTranslation()) {
+    auto snappedTranslation = gfx::IntPoint::Round(transform.GetTranslation());
+    transform = gfx::Matrix::Translation(snappedTranslation.x,
+                                         snappedTranslation.y);
+  }
 
   // We also need to account for the backing scale factor: aTransform is given
   // in device pixels, but CGSSetWindowTransform works with logical display
@@ -2865,31 +2903,6 @@ nsCocoaWindow::GetEditCommands(NativeKeyBindingsType aType,
 
 @end
 
-static float
-GetDPI(NSWindow* aWindow)
-{
-  NSScreen* screen = [aWindow screen];
-  if (!screen)
-    return 96.0f;
-
-  CGDirectDisplayID displayID =
-    [[[screen deviceDescription] objectForKey:@"NSScreenNumber"] intValue];
-  CGFloat heightMM = ::CGDisplayScreenSize(displayID).height;
-  size_t heightPx = ::CGDisplayPixelsHigh(displayID);
-  if (heightMM < 1 || heightPx < 1) {
-    // Something extremely bogus is going on
-    return 96.0f;
-  }
-
-  float dpi = heightPx / (heightMM / MM_PER_INCH_FLOAT);
-
-  // Account for HiDPI mode where Cocoa's "points" do not correspond to real
-  // device pixels
-  CGFloat backingScale = GetBackingScaleFactor(aWindow);
-
-  return dpi * backingScale;
-}
-
 @interface NSView(FrameViewMethodSwizzling)
 - (NSPoint)FrameView__closeButtonOrigin;
 - (NSPoint)FrameView__fullScreenButtonOrigin;
@@ -3043,7 +3056,6 @@ static NSMutableSet *gSwizzledFrameViewClasses = nil;
   mActiveTitlebarColor = nil;
   mInactiveTitlebarColor = nil;
   mDisabledNeedsDisplay = NO;
-  mDPI = GetDPI(self);
   mTrackingArea = nil;
   mDirtyRect = NSZeroRect;
   mBeingShown = NO;
@@ -3144,6 +3156,13 @@ static const NSString* kStateCollectionBehavior = @"collectionBehavior";
   if (changed) {
     [self updateContentViewSize];
     [self reflowTitlebarElements];
+    if ([self respondsToSelector:@selector(setTitleVisibility:)]) {
+      [self setTitleVisibility:mDrawsIntoWindowFrame ? NSWindowTitleHidden :
+                                                       NSWindowTitleVisible];
+    }
+    if ([self respondsToSelector:@selector(setTitlebarAppearsTransparent:)]) {
+      [self setTitlebarAppearsTransparent:mDrawsIntoWindowFrame];
+    }
   }
 }
 
@@ -3189,11 +3208,6 @@ static const NSString* kStateCollectionBehavior = @"collectionBehavior";
 - (NSColor*)titlebarColorForActiveWindow:(BOOL)aActive
 {
   return aActive ? mActiveTitlebarColor : mInactiveTitlebarColor;
-}
-
-- (float)getDPI
-{
-  return mDPI;
 }
 
 - (NSView*)trackingAreaView

@@ -9,6 +9,7 @@ this.EXPORTED_SYMBOLS = [
   "BrowserUsageTelemetry",
   "URLBAR_SELECTED_RESULT_TYPES",
   "URLBAR_SELECTED_RESULT_METHODS",
+  "MINIMUM_TAB_COUNT_INTERVAL_MS",
  ];
 
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
@@ -23,7 +24,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
 const MAX_UNIQUE_VISITED_DOMAINS = 100;
 
 // Observed topic names.
-const WINDOWS_RESTORED_TOPIC = "sessionstore-windows-restored";
 const TAB_RESTORING_TOPIC = "SSTabRestoring";
 const TELEMETRY_SUBSESSIONSPLIT_TOPIC = "internal-telemetry-after-subsession-split";
 const DOMWINDOW_OPENED_TOPIC = "domwindowopened";
@@ -85,6 +85,10 @@ const URLBAR_SELECTED_RESULT_METHODS = {
   click: 2,
 };
 
+
+const MINIMUM_TAB_COUNT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes, in ms
+
+
 function getOpenTabsAndWinsCounts() {
   let tabCount = 0;
   let winCount = 0;
@@ -99,17 +103,16 @@ function getOpenTabsAndWinsCounts() {
   return { tabCount, winCount };
 }
 
+function getTabCount() {
+  return getOpenTabsAndWinsCounts().tabCount;
+}
+
 function getSearchEngineId(engine) {
   if (engine) {
     if (engine.identifier) {
       return engine.identifier;
     }
-    // Due to bug 1222070, we can't directly check Services.telemetry.canRecordExtended
-    // here.
-    const extendedTelemetry = Services.prefs.getBoolPref("toolkit.telemetry.enabled");
-    if (engine.name && extendedTelemetry) {
-      // If it's a custom search engine only report the engine name
-      // if extended Telemetry is enabled.
+    if (engine.name) {
       return "other-" + engine.name;
     }
   }
@@ -193,6 +196,9 @@ let URICountListener = {
 
     // Update the URI counts.
     Services.telemetry.scalarAdd(TOTAL_URI_COUNT_SCALAR_NAME, 1);
+
+    // Update tab count
+    BrowserUsageTelemetry._recordTabCount();
 
     // We only want to count the unique domains up to MAX_UNIQUE_VISITED_DOMAINS.
     if (this._domainSet.size == MAX_UNIQUE_VISITED_DOMAINS) {
@@ -311,8 +317,9 @@ let urlbarListener = {
 
 let BrowserUsageTelemetry = {
   init() {
-    Services.obs.addObserver(this, WINDOWS_RESTORED_TOPIC);
+    this._lastRecordTabCount = 0;
     urlbarListener.init();
+    this._setupAfterRestore();
   },
 
   /**
@@ -333,15 +340,11 @@ let BrowserUsageTelemetry = {
   uninit() {
     Services.obs.removeObserver(this, DOMWINDOW_OPENED_TOPIC);
     Services.obs.removeObserver(this, TELEMETRY_SUBSESSIONSPLIT_TOPIC);
-    Services.obs.removeObserver(this, WINDOWS_RESTORED_TOPIC);
     urlbarListener.uninit();
   },
 
   observe(subject, topic, data) {
     switch (topic) {
-      case WINDOWS_RESTORED_TOPIC:
-        this._setupAfterRestore();
-        break;
       case DOMWINDOW_OPENED_TOPIC:
         this._onWindowOpen(subject);
         break;
@@ -608,6 +611,8 @@ let BrowserUsageTelemetry = {
     // Update the "tab opened" count and its maximum.
     Services.telemetry.scalarAdd(TAB_OPEN_EVENT_COUNT_SCALAR_NAME, 1);
     Services.telemetry.scalarSetMaximum(MAX_TAB_COUNT_SCALAR_NAME, tabCount);
+
+    this._recordTabCount(tabCount);
   },
 
   /**
@@ -640,4 +645,15 @@ let BrowserUsageTelemetry = {
     };
     win.addEventListener("load", onLoad);
   },
+
+  _recordTabCount(tabCount) {
+    let currentTime = Date.now();
+    if (currentTime > this._lastRecordTabCount + MINIMUM_TAB_COUNT_INTERVAL_MS) {
+      if (tabCount === undefined) {
+        tabCount = getTabCount();
+      }
+      Services.telemetry.getHistogramById("TAB_COUNT").add(tabCount);
+      this._lastRecordTabCount = currentTime;
+    }
+  }
 };

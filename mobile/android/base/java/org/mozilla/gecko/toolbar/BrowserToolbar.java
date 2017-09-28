@@ -9,14 +9,12 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 
+import android.graphics.Rect;
 import android.support.annotation.Nullable;
 import android.support.v4.content.ContextCompat;
-import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.BrowserApp;
-import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.R;
-import org.mozilla.gecko.SiteIdentity;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.Telemetry;
@@ -37,9 +35,10 @@ import org.mozilla.gecko.toolbar.ToolbarDisplayLayout.UpdateFlags;
 import org.mozilla.gecko.util.Clipboard;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.MenuUtils;
-import org.mozilla.gecko.widget.themed.ThemedFrameLayout;
+import org.mozilla.gecko.util.WindowUtil;
+import org.mozilla.gecko.widget.AnimatedProgressBar;
+import org.mozilla.gecko.widget.TouchDelegateWithReset;
 import org.mozilla.gecko.widget.themed.ThemedImageButton;
-import org.mozilla.gecko.widget.themed.ThemedImageView;
 import org.mozilla.gecko.widget.themed.ThemedRelativeLayout;
 
 import android.content.Context;
@@ -59,6 +58,7 @@ import android.view.View;
 import android.view.ViewTreeObserver.OnGlobalLayoutListener;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.support.annotation.NonNull;
@@ -85,7 +85,9 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
                                                 GeckoMenu.ActionItemBarPresenter {
     private static final String LOGTAG = "GeckoToolbar";
 
-    private static final int LIGHTWEIGHT_THEME_INVERT_ALPHA = 34; // 255 - alpha = invert_alpha
+    private static final int LIGHTWEIGHT_THEME_INVERT_ALPHA_START = 204; // 255 - alpha = invert_alpha
+    private static final int LIGHTWEIGHT_THEME_INVERT_ALPHA_END = 102;
+    public static final int LIGHTWEIGHT_THEME_INVERT_ALPHA_TABLET = 51;
 
     public interface OnActivateListener {
         public void onActivate();
@@ -117,15 +119,15 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
     }
 
     protected final ToolbarDisplayLayout urlDisplayLayout;
+    protected final HorizontalScrollView urlDisplayScroll;
     protected final ToolbarEditLayout urlEditLayout;
     protected final View urlBarEntry;
     protected boolean isSwitchingTabs;
     protected final ThemedImageButton tabsButton;
 
-    private ToolbarProgressView progressBar;
+    private AnimatedProgressBar progressBar;
     protected final TabCounter tabsCounter;
-    protected final ThemedFrameLayout menuButton;
-    protected final ThemedImageView menuIcon;
+    protected final View menuButton;
     private MenuPopup menuPopup;
     protected final List<View> focusOrder;
 
@@ -188,6 +190,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
         isSwitchingTabs = true;
 
         urlDisplayLayout = (ToolbarDisplayLayout) findViewById(R.id.display_layout);
+        urlDisplayScroll = (HorizontalScrollView) findViewById(R.id.url_bar_title_scroll_view);
         urlBarEntry = findViewById(R.id.url_bar_entry);
         urlEditLayout = (ToolbarEditLayout) findViewById(R.id.edit_layout);
 
@@ -195,8 +198,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
         tabsCounter = (TabCounter) findViewById(R.id.tabs_counter);
         tabsCounter.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
 
-        menuButton = (ThemedFrameLayout) findViewById(R.id.menu);
-        menuIcon = (ThemedImageView) findViewById(R.id.menu_icon);
+        menuButton = findViewById(R.id.menu);
 
         // The focusOrder List should be filled by sub-classes.
         focusOrder = new ArrayList<View>();
@@ -216,7 +218,27 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
         urlDisplayLayout.setToolbarPrefs(prefs);
         urlEditLayout.setToolbarPrefs(prefs);
 
-        setOnCreateContextMenuListener(new View.OnCreateContextMenuListener() {
+        // ScrollViews are allowed to have only one child.
+        final View scrollChild = urlDisplayScroll.getChildAt(0);
+
+        urlDisplayScroll.addOnLayoutChangeListener(new OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View v, int left, int top, int right, int bottom, int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                final int width = urlDisplayScroll.getWidth();
+                final int height = urlDisplayScroll.getHeight();
+                final int oldWidth = oldRight - oldLeft;
+                final int oldHeight = oldBottom - oldTop;
+
+                if (width != oldWidth || height != oldHeight) {
+                    final Rect r = new Rect();
+                    r.right = width;
+                    r.bottom = height;
+                    urlDisplayScroll.setTouchDelegate(new TouchDelegateWithReset(r, scrollChild));
+                }
+            }
+        });
+
+        scrollChild.setOnCreateContextMenuListener(new View.OnCreateContextMenuListener() {
             @Override
             public void onCreateContextMenu(ContextMenu menu, View v, ContextMenu.ContextMenuInfo menuInfo) {
                 // Do not show the context menu while editing
@@ -259,7 +281,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
             }
         });
 
-        setOnClickListener(new OnClickListener() {
+        scrollChild.setOnClickListener(new OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (activateListener != null) {
@@ -335,6 +357,8 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
                 activity.openOptionsMenu();
             }
         });
+
+        WindowUtil.setStatusBarColor(activity, isPrivateMode());
     }
 
     @Override
@@ -356,7 +380,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
         urlEditLayout.onParentFocus();
     }
 
-    public void setProgressBar(ToolbarProgressView progressBar) {
+    public void setProgressBar(AnimatedProgressBar progressBar) {
         this.progressBar = progressBar;
     }
 
@@ -365,7 +389,6 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
     }
 
     public void refresh() {
-        progressBar.setImageDrawable(getResources().getDrawable(R.drawable.progress));
         urlDisplayLayout.dismissSiteIdentityPopup();
         urlEditLayout.refresh();
     }
@@ -442,7 +465,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
             switch (msg) {
                 case START:
                     updateProgressVisibility(tab, Tab.LOAD_PROGRESS_INIT);
-                    // Fall through.
+                    break;
                 case ADDED:
                 case LOCATION_CHANGE:
                 case LOAD_ERROR:
@@ -450,8 +473,9 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
                 case STOP:
                     flags.add(UpdateFlags.PROGRESS);
                     if (progressBar.getVisibility() == View.VISIBLE) {
-                        progressBar.animateProgress(tab.getLoadProgress());
+                        progressBar.setProgress(tab.getLoadProgress());
                     }
+                    updateProgressVisibility();
                     break;
 
                 case SELECTED:
@@ -836,13 +860,22 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
 
     @Override
     public void setPrivateMode(boolean isPrivate) {
+        final boolean modeChanged = isPrivateMode() != isPrivate;
+
         super.setPrivateMode(isPrivate);
 
         tabsButton.setPrivateMode(isPrivate);
-        menuButton.setPrivateMode(isPrivate);
+        tabsCounter.setPrivateMode(isPrivate);
         urlEditLayout.setPrivateMode(isPrivate);
+        urlDisplayLayout.setPrivateMode(isPrivate);
+
+        ((ThemedImageButton) menuButton).setPrivateMode(isPrivate);
 
         shadowPaint.setColor(isPrivate ? shadowPrivateColor : shadowColor);
+
+        if (modeChanged) {
+            WindowUtil.setStatusBarColor(activity, isPrivate);
+        }
     }
 
     public void show() {
@@ -901,7 +934,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
         }
 
         final StateListDrawable stateList = new StateListDrawable();
-        stateList.addState(PRIVATE_STATE_SET, getColorDrawable(R.color.tabs_tray_grey_pressed));
+        stateList.addState(PRIVATE_STATE_SET, getColorDrawable(R.color.photon_browser_toolbar_bg_private));
         stateList.addState(EMPTY_STATE_SET, drawable);
 
         setBackgroundDrawable(stateList);
@@ -930,7 +963,19 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
 
         final LightweightThemeDrawable drawable = theme.getColorDrawable(view, color);
         if (drawable != null) {
-            drawable.setAlpha(LIGHTWEIGHT_THEME_INVERT_ALPHA, LIGHTWEIGHT_THEME_INVERT_ALPHA);
+            final int startAlpha, endAlpha;
+            final boolean horizontalGradient;
+
+            if (HardwareUtils.isTablet()) {
+                startAlpha = LIGHTWEIGHT_THEME_INVERT_ALPHA_TABLET;
+                endAlpha = LIGHTWEIGHT_THEME_INVERT_ALPHA_TABLET;
+                horizontalGradient = false;
+            } else {
+                startAlpha = LIGHTWEIGHT_THEME_INVERT_ALPHA_START;
+                endAlpha = LIGHTWEIGHT_THEME_INVERT_ALPHA_END;
+                horizontalGradient = true;
+            }
+            drawable.setAlpha(startAlpha, endAlpha, horizontalGradient);
         }
 
         return drawable;

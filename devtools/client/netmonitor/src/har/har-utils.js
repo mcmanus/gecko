@@ -6,8 +6,10 @@
 
 "use strict";
 
+const Services = require("Services");
 const { Ci, Cc, CC } = require("chrome");
 const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
+const { gDevTools } = require("devtools/client/framework/devtools");
 
 XPCOMUtils.defineLazyGetter(this, "dirService", function () {
   return Cc["@mozilla.org/file/directory_service;1"]
@@ -19,11 +21,11 @@ XPCOMUtils.defineLazyGetter(this, "ZipWriter", function () {
 });
 
 XPCOMUtils.defineLazyGetter(this, "LocalFile", function () {
-  return new CC("@mozilla.org/file/local;1", "nsILocalFile", "initWithPath");
+  return new CC("@mozilla.org/file/local;1", "nsIFile", "initWithPath");
 });
 
 XPCOMUtils.defineLazyGetter(this, "getMostRecentBrowserWindow", function () {
-  return require("sdk/window/utils").getMostRecentBrowserWindow;
+  return Services.wm.getMostRecentWindow(gDevTools.chromeWindowType);
 });
 
 const OPEN_FLAGS = {
@@ -125,7 +127,7 @@ var HarUtils = {
 
       // Create compressed file with the original file path name.
       let zipFile = Cc["@mozilla.org/file/local;1"]
-        .createInstance(Ci.nsILocalFile);
+        .createInstance(Ci.nsIFile);
       zipFile.initWithPath(originalFilePath);
 
       // The file within the zipped file doesn't use .zip extension.
@@ -157,11 +159,11 @@ var HarUtils = {
     let dir;
 
     if (!path) {
-      dir = dirService.get("ProfD", Ci.nsILocalFile);
+      dir = dirService.get("ProfD", Ci.nsIFile);
       dir.append("har");
       dir.append("logs");
     } else {
-      dir = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsILocalFile);
+      dir = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
       dir.initWithPath(path);
     }
 

@@ -112,17 +112,19 @@ PresentationTCPSessionTransport::BuildTCPSenderTransport(nsISocketTransport* aTr
 
   nsCOMPtr<nsIPresentationSessionTransport> sessionTransport = do_QueryObject(this);
   nsCOMPtr<nsIRunnable> onSessionTransportRunnable =
-    NewRunnableMethod
-      <nsIPresentationSessionTransport*>(mListener,
-                                         &nsIPresentationSessionTransportBuilderListener::OnSessionTransport,
-                                         sessionTransport);
+    NewRunnableMethod<nsIPresentationSessionTransport*>(
+      "nsIPresentationSessionTransportBuilderListener::OnSessionTransport",
+      mListener,
+      &nsIPresentationSessionTransportBuilderListener::OnSessionTransport,
+      sessionTransport);
 
   NS_DispatchToCurrentThread(onSessionTransportRunnable.forget());
 
-  nsCOMPtr<nsIRunnable> setReadyStateRunnable =
-    NewRunnableMethod<ReadyState>(this,
-                                  &PresentationTCPSessionTransport::SetReadyState,
-                                  ReadyState::OPEN);
+  nsCOMPtr<nsIRunnable> setReadyStateRunnable = NewRunnableMethod<ReadyState>(
+    "dom::PresentationTCPSessionTransport::SetReadyState",
+    this,
+    &PresentationTCPSessionTransport::SetReadyState,
+    ReadyState::OPEN);
   return NS_DispatchToCurrentThread(setReadyStateRunnable.forget());
 }
 
@@ -192,10 +194,11 @@ PresentationTCPSessionTransport::BuildTCPReceiverTransport(nsIPresentationChanne
 
   nsCOMPtr<nsIPresentationSessionTransport> sessionTransport = do_QueryObject(this);
   nsCOMPtr<nsIRunnable> runnable =
-    NewRunnableMethod
-      <nsIPresentationSessionTransport*>(mListener,
-                                         &nsIPresentationSessionTransportBuilderListener::OnSessionTransport,
-                                         sessionTransport);
+    NewRunnableMethod<nsIPresentationSessionTransport*>(
+      "nsIPresentationSessionTransportBuilderListener::OnSessionTransport",
+      mListener,
+      &nsIPresentationSessionTransportBuilderListener::OnSessionTransport,
+      sessionTransport);
   return NS_DispatchToCurrentThread(runnable.forget());
 }
 
@@ -237,6 +240,7 @@ PresentationTCPSessionTransport::CreateStream()
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
+  nsCOMPtr<nsIInputStream> stream = do_QueryInterface(mMultiplexStream);
 
   mMultiplexStreamCopier = do_CreateInstance("@mozilla.org/network/async-stream-copier;1", &rv);
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -250,7 +254,7 @@ PresentationTCPSessionTransport::CreateStream()
   }
 
   nsCOMPtr<nsIEventTarget> target = do_QueryInterface(sts);
-  rv = mMultiplexStreamCopier->Init(mMultiplexStream,
+  rv = mMultiplexStreamCopier->Init(stream,
                                     mSocketOutputStream,
                                     target,
                                     true, /* source buffered */

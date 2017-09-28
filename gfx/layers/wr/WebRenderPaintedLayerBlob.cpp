@@ -13,6 +13,7 @@
 #include "mozilla/layers/ScrollingLayersHelper.h"
 #include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/WebRenderBridgeChild.h"
+#include "mozilla/layers/IpcResourceUpdateQueue.h"
 #include "mozilla/layers/UpdateImageHelper.h"
 #include "mozilla/webrender/WebRenderTypes.h"
 
@@ -23,6 +24,7 @@ using namespace mozilla::gfx;
 
 void
 WebRenderPaintedLayerBlob::RenderLayer(wr::DisplayListBuilder& aBuilder,
+                                       wr::IpcResourceUpdateQueue& aResources,
                                        const StackingContextHelper& aSc)
 {
   LayerIntRegion visibleRegion = GetVisibleRegion();
@@ -69,30 +71,30 @@ WebRenderPaintedLayerBlob::RenderLayer(wr::DisplayListBuilder& aBuilder,
 
     recorder->Finish();
 
-    wr::ByteBuffer bytes;
-    bytes.Allocate(recorder->RecordingSize());
-    DebugOnly<bool> ok = recorder->CopyRecording((char*)bytes.AsSlice().begin().get(), bytes.AsSlice().length());
-    MOZ_ASSERT(ok);
+    AddToValidRegion(regionToPaint);
 
-    //XXX: We should switch to updating the blob image instead of adding a new one
-    //     That will get rid of this discard bit
+    wr::ByteBuffer bytes(recorder->mOutputStream.mLength, (uint8_t*)recorder->mOutputStream.mData);
+
     if (mImageKey.isSome()) {
-      WrManager()->AddImageKeyForDiscard(mImageKey.value());
+      //XXX: We should switch to updating the blob image instead of adding a new one
+      aResources.DeleteImage(mImageKey.value());
     }
-    mImageKey = Some(GetImageKey());
-    WrBridge()->SendAddBlobImage(mImageKey.value(), imageSize, size.width * 4, dt->GetFormat(), bytes);
-  } else {
-    MOZ_ASSERT(GetInvalidRegion().IsEmpty());
+    mImageKey = Some(GenerateImageKey());
+
+    wr::ImageDescriptor descriptor(imageSize, 0, dt->GetFormat());
+    aResources.AddBlobImage(mImageKey.value(), descriptor, bytes.AsSlice());
+    mImageBounds = visibleRegion.GetBounds();
   }
 
-  ScrollingLayersHelper scroller(this, aBuilder, aSc);
+  ScrollingLayersHelper scroller(this, aBuilder, aResources, aSc);
   StackingContextHelper sc(aSc, aBuilder, this);
   LayerRect rect = Bounds();
   DumpLayerInfo("PaintedLayer", rect);
 
-  WrClipRegionToken clip = aBuilder.PushClipRegion(sc.ToRelativeWrRect(rect));
-
-  aBuilder.PushImage(sc.ToRelativeWrRect(rect), clip, wr::ImageRendering::Auto, mImageKey.value());
+  aBuilder.PushImage(sc.ToRelativeLayoutRect(LayerRect(mImageBounds)),
+                     sc.ToRelativeLayoutRect(rect),
+                     true,
+                     wr::ImageRendering::Auto, mImageKey.value());
 }
 
 } // namespace layers

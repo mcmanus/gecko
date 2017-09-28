@@ -3,26 +3,25 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "SimpleChannel.h"
+
 #include "nsBaseChannel.h"
+#include "nsIChannel.h"
+#include "nsIChildChannel.h"
 #include "nsIInputStream.h"
 #include "nsIRequest.h"
-#include "SimpleChannel.h"
+#include "nsISupportsImpl.h"
+#include "nsNetUtil.h"
+
+#include "mozilla/Unused.h"
+#include "mozilla/dom/ContentChild.h"
+#include "mozilla/net/NeckoChild.h"
+#include "mozilla/net/PSimpleChannelChild.h"
 
 namespace mozilla {
 namespace net {
 
-// Like MOZ_TRY, but returns the unwrapped error value rather than a
-// GenericErrorResult on failure.
-#define TRY_VAR(target, expr) \
-  do { \
-    auto result = (expr); \
-    if (result.isErr()) { \
-      return result.unwrapErr(); \
-    } \
-    (target) = result.unwrap(); \
-  } while (0)
-
-class SimpleChannel final : public nsBaseChannel
+class SimpleChannel : public nsBaseChannel
 {
 public:
   explicit SimpleChannel(UniquePtr<SimpleChannelCallbacks>&& aCallbacks);
@@ -52,7 +51,7 @@ SimpleChannel::OpenContentStream(bool async, nsIInputStream **streamOut, nsIChan
   NS_ENSURE_TRUE(mCallbacks, NS_ERROR_UNEXPECTED);
 
   nsCOMPtr<nsIInputStream> stream;
-  TRY_VAR(stream, mCallbacks->OpenContentStream(async, this));
+  MOZ_TRY_VAR(stream, mCallbacks->OpenContentStream(async, this));
   MOZ_ASSERT(stream);
 
   mCallbacks = nullptr;
@@ -68,7 +67,7 @@ SimpleChannel::BeginAsyncRead(nsIStreamListener* listener, nsIRequest** request)
   NS_ENSURE_TRUE(mCallbacks, NS_ERROR_UNEXPECTED);
 
   nsCOMPtr<nsIRequest> req;
-  TRY_VAR(req, mCallbacks->StartAsyncRead(listener, this));
+  MOZ_TRY_VAR(req, mCallbacks->StartAsyncRead(listener, this));
 
   mCallbacks = nullptr;
 
@@ -76,12 +75,96 @@ SimpleChannel::BeginAsyncRead(nsIStreamListener* listener, nsIRequest** request)
   return NS_OK;
 }
 
-#undef TRY_VAR
+class SimpleChannelChild final : public SimpleChannel
+                               , public nsIChildChannel
+                               , public PSimpleChannelChild
+{
+public:
+  explicit SimpleChannelChild(UniquePtr<SimpleChannelCallbacks>&& aCallbacks);
+
+  NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_NSICHILDCHANNEL
+
+protected:
+  virtual void ActorDestroy(ActorDestroyReason why) override;
+
+private:
+  virtual ~SimpleChannelChild() = default;
+
+  void AddIPDLReference();
+
+  RefPtr<SimpleChannelChild> mIPDLRef;
+};
+
+NS_IMPL_ISUPPORTS_INHERITED(SimpleChannelChild, SimpleChannel, nsIChildChannel)
+
+SimpleChannelChild::SimpleChannelChild(UniquePtr<SimpleChannelCallbacks>&& aCallbacks)
+  : SimpleChannel(Move(aCallbacks))
+  , mIPDLRef(nullptr)
+{
+}
+
+NS_IMETHODIMP
+SimpleChannelChild::ConnectParent(uint32_t aId)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  mozilla::dom::ContentChild* cc =
+    static_cast<mozilla::dom::ContentChild*>(gNeckoChild->Manager());
+  if (cc->IsShuttingDown()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  if (!gNeckoChild->SendPSimpleChannelConstructor(this, aId)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // IPC now has a ref to us.
+  mIPDLRef = this;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+SimpleChannelChild::CompleteRedirectSetup(nsIStreamListener* aListener,
+                                          nsISupports* aContext)
+{
+  if (mIPDLRef) {
+    MOZ_ASSERT(NS_IsMainThread());
+  }
+
+  nsresult rv;
+  if (mLoadInfo && mLoadInfo->GetEnforceSecurity()) {
+    MOZ_ASSERT(!aContext, "aContext should be null!");
+    rv = AsyncOpen2(aListener);
+  } else {
+    rv = AsyncOpen(aListener, aContext);
+  }
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  if (mIPDLRef) {
+    Unused << Send__delete__(this);
+  }
+  return NS_OK;
+}
+
+void
+SimpleChannelChild::ActorDestroy(ActorDestroyReason why)
+{
+  MOZ_ASSERT(mIPDLRef);
+  mIPDLRef = nullptr;
+}
+
 
 already_AddRefed<nsIChannel>
 NS_NewSimpleChannelInternal(nsIURI* aURI, nsILoadInfo* aLoadInfo, UniquePtr<SimpleChannelCallbacks>&& aCallbacks)
 {
-  RefPtr<SimpleChannel> chan = new SimpleChannel(Move(aCallbacks));
+  RefPtr<SimpleChannel> chan;
+  if (IsNeckoChild()) {
+    chan = new SimpleChannelChild(Move(aCallbacks));
+  } else {
+    chan = new SimpleChannel(Move(aCallbacks));
+  }
 
   chan->SetURI(aURI);
 

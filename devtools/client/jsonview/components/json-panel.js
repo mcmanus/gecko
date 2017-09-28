@@ -81,6 +81,7 @@ define(function (require, exports, module) {
       // Render the value (summary) using Reps library.
       return Rep(Object.assign({}, props, {
         cropLimit: 50,
+        noGrip: true
       }));
     },
 
@@ -116,18 +117,16 @@ define(function (require, exports, module) {
       let content;
       let data = this.props.data;
 
-      try {
-        if (isObject(data)) {
-          content = this.renderTree();
-        } else {
-          content = div({className: "jsonParseError"},
-            data + ""
-          );
-        }
-      } catch (err) {
+      if (!isObject(data)) {
+        content = div({className: "jsonPrimitiveValue"}, Rep({
+          object: data
+        }));
+      } else if (data instanceof Error) {
         content = div({className: "jsonParseError"},
-          err + ""
+          data + ""
         );
+      } else {
+        content = this.renderTree();
       }
 
       return (

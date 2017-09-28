@@ -12,11 +12,13 @@
 #include "base/thread.h"                // for Thread
 #include "base/message_loop.h"
 #include "nsISupportsImpl.h"
+#include "nsRefPtrHashtable.h"
 #include "ThreadSafeRefcountingWithMainThreadDestruction.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/webrender/webrender_ffi.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/webrender/WebRenderTypes.h"
+#include "mozilla/layers/SynchronousTask.h"
 
 namespace mozilla {
 namespace wr {
@@ -32,10 +34,10 @@ public:
 
   ~WebRenderThreadPool();
 
-  WrThreadPool* Raw() { return mThreadPool; }
+  wr::WrThreadPool* Raw() { return mThreadPool; }
 
 protected:
-  WrThreadPool* mThreadPool;
+  wr::WrThreadPool* mThreadPool;
 };
 
 
@@ -105,9 +107,6 @@ public:
   void NewFrameReady(wr::WindowId aWindowId);
 
   /// Automatically forwarded to the render thread.
-  void NewScrollFrameReady(wr::WindowId aWindowId, bool aCompositeNeeded);
-
-  /// Automatically forwarded to the render thread.
   void PipelineSizeChanged(wr::WindowId aWindowId, uint64_t aPipelineId, float aWidth, float aHeight);
 
   /// Automatically forwarded to the render thread.
@@ -142,6 +141,7 @@ private:
   explicit RenderThread(base::Thread* aThread);
 
   void DeferredRenderTextureHostDestroy(RefPtr<RenderTextureHost> aTexture);
+  void ShutDownTask(layers::SynchronousTask* aTask);
 
   ~RenderThread();
 
@@ -155,7 +155,8 @@ private:
   nsDataHashtable<nsUint64HashKey, uint32_t> mPendingFrameCounts;
 
   Mutex mRenderTextureMapLock;
-  nsDataHashtable<nsUint64HashKey, RefPtr<RenderTextureHost> > mRenderTextures;
+  nsRefPtrHashtable<nsUint64HashKey, RenderTextureHost> mRenderTextures;
+  bool mHasShutdown;
 };
 
 } // namespace wr

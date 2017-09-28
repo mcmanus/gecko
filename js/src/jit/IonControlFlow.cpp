@@ -7,7 +7,6 @@
 #include "jit/IonControlFlow.h"
 
 #include "mozilla/DebugOnly.h"
-#include "mozilla/SizePrintfMacros.h"
 
 using namespace js;
 using namespace js::jit;
@@ -22,15 +21,9 @@ ControlFlowGenerator::ControlFlowGenerator(TempAllocator& temp, JSScript* script
     loops_(temp),
     switches_(temp),
     labels_(temp),
-    analysis_(temp, script),
-    aborted_(false)
+    aborted_(false),
+    checkedTryFinally_(false)
 { }
-
-bool
-ControlFlowGenerator::init()
-{
-    return analysis_.init(alloc(), gsn);
-}
 
 static inline int32_t
 GetJumpOffset(jsbytecode* pc)
@@ -49,7 +42,7 @@ ControlFlowGraph::dump(GenericPrinter& print, JSScript* script)
 
     fprintf(stderr, "Dumping cfg:\n\n");
     for (size_t i = 0; i < blocks_.length(); i++) {
-        print.printf(" Block %" PRIuSIZE ", %" PRIuSIZE ":%" PRIuSIZE "\n",
+        print.printf(" Block %zu, %zu:%zu\n",
                      blocks_[i].id(),
                      script->pcToOffset(blocks_[i].startPc()),
                      script->pcToOffset(blocks_[i].stopPc()));
@@ -57,12 +50,12 @@ ControlFlowGraph::dump(GenericPrinter& print, JSScript* script)
         jsbytecode* pc = blocks_[i].startPc();
         for ( ; pc < blocks_[i].stopPc(); pc += CodeSpec[JSOp(*pc)].length) {
             MOZ_ASSERT(pc < script->codeEnd());
-            print.printf("  %" PRIuSIZE ": %s\n", script->pcToOffset(pc),
+            print.printf("  %zu: %s\n", script->pcToOffset(pc),
                                                   CodeName[JSOp(*pc)]);
         }
 
         if (blocks_[i].stopIns()->isGoto()) {
-            print.printf("  %s (popping:%" PRIuSIZE ") [",
+            print.printf("  %s (popping:%zu) [",
                          blocks_[i].stopIns()->Name(),
                          blocks_[i].stopIns()->toGoto()->popAmount());
         } else {
@@ -71,7 +64,7 @@ ControlFlowGraph::dump(GenericPrinter& print, JSScript* script)
         for (size_t j=0; j<blocks_[i].stopIns()->numSuccessors(); j++) {
             if (j!=0)
                 print.printf(", ");
-            print.printf("%" PRIuSIZE, blocks_[i].stopIns()->getSuccessor(j)->id());
+            print.printf("%zu", blocks_[i].stopIns()->getSuccessor(j)->id());
         }
         print.printf("]\n\n");
     }
@@ -262,8 +255,6 @@ ControlFlowGenerator::traverseBytecode()
         JSOp op = JSOp(*pc);
         pc += CodeSpec[op].length;
     }
-
-    return true;
 }
 
 ControlFlowGenerator::ControlStatus
@@ -539,8 +530,15 @@ ControlFlowGenerator::processTry()
     MOZ_ASSERT(JSOp(*pc) == JSOP_TRY);
 
     // Try-finally is not yet supported.
-    if (analysis_.hasTryFinally())
-        return ControlStatus::Abort;
+    if (!checkedTryFinally_) {
+        JSTryNote* tn = script->trynotes()->vector;
+        JSTryNote* tnlimit = tn + script->trynotes()->length;
+        for (; tn < tnlimit; tn++) {
+            if (tn->kind == JSTRY_FINALLY)
+                return ControlStatus::Abort;
+        }
+        checkedTryFinally_ = true;
+    }
 
     jssrcnote* sn = GetSrcNote(gsn, script, pc);
     MOZ_ASSERT(SN_TYPE(sn) == SRC_TRY);
@@ -566,21 +564,11 @@ ControlFlowGenerator::processTry()
     //
     // To handle this, we create two blocks: one for the try block and one
     // for the code following the try-catch statement.
-    //
-    // If the code after the try block is unreachable (control flow in both the
-    // try and catch blocks is terminated), only create the try block, to avoid
-    // parsing unreachable code.
 
     CFGBlock* tryBlock = CFGBlock::New(alloc(), GetNextPc(pc));
 
-    CFGBlock* successor;
-    if (analysis_.maybeInfo(afterTry)) {
-        successor = CFGBlock::New(alloc(), afterTry);
-        current->setStopIns(CFGTry::New(alloc(), tryBlock, endpc, successor));
-    } else {
-        successor = nullptr;
-        current->setStopIns(CFGTry::New(alloc(), tryBlock, endpc));
-    }
+    CFGBlock* successor = CFGBlock::New(alloc(), afterTry);
+    current->setStopIns(CFGTry::New(alloc(), tryBlock, endpc, successor));
     current->setStopPc(pc);
 
     if (!cfgStack_.append(CFGState::Try(endpc, successor)))
@@ -599,11 +587,7 @@ ControlFlowGenerator::ControlStatus
 ControlFlowGenerator::processTryEnd(CFGState& state)
 {
     MOZ_ASSERT(state.state == CFGState::TRY);
-
-    if (!state.try_.successor) {
-        MOZ_ASSERT(!current);
-        return ControlStatus::Ended;
-    }
+    MOZ_ASSERT(state.try_.successor);
 
     if (current) {
         current->setStopIns(CFGGoto::New(alloc(), state.try_.successor));
@@ -954,6 +938,9 @@ ControlFlowGenerator::processWhileOrForInLoop(jssrcnote* sn)
     CFGLoopEntry* ins = CFGLoopEntry::New(alloc(), header, stackPhiCount);
     if (LoopEntryCanIonOsr(loopEntry))
         ins->setCanOsr();
+
+    if (SN_TYPE(sn) == SRC_FOR_IN)
+        ins->setIsForIn();
 
     current->setStopIns(ins);
     current->setStopPc(pc);
@@ -1632,7 +1619,7 @@ ControlFlowGenerator::processBreak(JSOp op, jssrcnote* sn)
     DebugOnly<bool> found = false;
 
     if (SN_TYPE(sn) == SRC_BREAK2LABEL) {
-        for (size_t i = labels_.length() - 1; i < labels_.length(); i--) {
+        for (size_t i = labels_.length() - 1; ; i--) {
             CFGState& cfg = cfgStack_[labels_[i].cfgEntry];
             MOZ_ASSERT(cfg.state == CFGState::LABEL);
             if (cfg.stopAt == target) {
@@ -1640,9 +1627,11 @@ ControlFlowGenerator::processBreak(JSOp op, jssrcnote* sn)
                 found = true;
                 break;
             }
+            if (i == 0)
+                break;
         }
     } else {
-        for (size_t i = loops_.length() - 1; i < loops_.length(); i--) {
+        for (size_t i = loops_.length() - 1; ; i--) {
             CFGState& cfg = cfgStack_[loops_[i].cfgEntry];
             MOZ_ASSERT(cfg.isLoop());
             if (cfg.loop.exitpc == target) {
@@ -1650,6 +1639,8 @@ ControlFlowGenerator::processBreak(JSOp op, jssrcnote* sn)
                 found = true;
                 break;
             }
+            if (i == 0)
+                break;
         }
     }
 
@@ -1678,7 +1669,7 @@ ControlFlowGenerator::processContinue(JSOp op)
     // Find the target loop.
     CFGState* found = nullptr;
     jsbytecode* target = pc + GetJumpOffset(pc);
-    for (size_t i = loops_.length() - 1; i < loops_.length(); i--) {
+    for (size_t i = loops_.length() - 1; ; i--) {
         // +1 to skip JSOP_JUMPTARGET.
         if (loops_[i].continuepc == target + 1 ||
             EffectiveContinue(loops_[i].continuepc) == target)
@@ -1686,6 +1677,8 @@ ControlFlowGenerator::processContinue(JSOp op)
             found = &cfgStack_[loops_[i].cfgEntry];
             break;
         }
+        if (i == 0)
+            break;
     }
 
     // There must always be a valid target loop structure. If not, there's
@@ -1711,11 +1704,13 @@ ControlFlowGenerator::processSwitchBreak(JSOp op)
     // Find the target switch.
     CFGState* found = nullptr;
     jsbytecode* target = pc + GetJumpOffset(pc);
-    for (size_t i = switches_.length() - 1; i < switches_.length(); i--) {
+    for (size_t i = switches_.length() - 1; ; i--) {
         if (switches_[i].continuepc == target) {
             found = &cfgStack_[switches_[i].cfgEntry];
             break;
         }
+        if (i == 0)
+            break;
     }
 
     // There must always be a valid target loop structure. If not, there's

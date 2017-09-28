@@ -45,6 +45,7 @@ nsSHEntry::nsSHEntry(const nsSHEntry& aOther)
   : mShared(aOther.mShared)
   , mURI(aOther.mURI)
   , mOriginalURI(aOther.mOriginalURI)
+  , mResultPrincipalURI(aOther.mResultPrincipalURI)
   , mReferrerURI(aOther.mReferrerURI)
   , mReferrerPolicy(aOther.mReferrerPolicy)
   , mTitle(aOther.mTitle)
@@ -475,7 +476,7 @@ nsSHEntry::Create(nsIURI* aURI, const nsAString& aTitle,
   mShared->mExpired = false;
 
   mIsSrcdocEntry = false;
-  mSrcdocData = NullString();
+  mSrcdocData = VoidString();
 
   mLoadedInThisProcess = true;
 

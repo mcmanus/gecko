@@ -66,7 +66,6 @@ AACAudioSpecificConfigToUserData(uint8_t aAACProfileLevelIndication,
     // The AudioSpecificConfig is TTTTTFFF|FCCCCGGG
     // (T=ObjectType, F=Frequency, C=Channel, G=GASpecificConfig)
     // If frequency = 0xf, then the frequency is explicitly defined on 24 bits.
-    int8_t profile = (aAudioSpecConfig[0] & 0xF8) >> 3;
     int8_t frequency =
       (aAudioSpecConfig[0] & 0x7) << 1 | (aAudioSpecConfig[1] & 0x80) >> 7;
     int8_t channels = (aAudioSpecConfig[1] & 0x78) >> 3;
@@ -252,13 +251,12 @@ WMFAudioMFTManager::Output(int64_t aStreamOffset,
 
   if (!sample) {
     LOG("Audio MFTDecoder returned success but null output.");
-    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction([]() -> void {
+    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction("WMFAudioMFTManager::Output",
+                                                        []() -> void {
       LOG("Reporting telemetry AUDIO_MFT_OUTPUT_NULL_SAMPLES");
       Telemetry::Accumulate(Telemetry::HistogramID::AUDIO_MFT_OUTPUT_NULL_SAMPLES, 1);
     });
-    SystemGroup::Dispatch("WMFAudioMFTManager::Output()::report_telemetry",
-                          TaskCategory::Other,
-                          task.forget());
+    SystemGroup::Dispatch(TaskCategory::Other, task.forget());
     return E_FAIL;
   }
 

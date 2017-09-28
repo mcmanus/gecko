@@ -12,7 +12,7 @@
 
 [package]
 name = "app_units"
-version = "0.5.0"
+version = "0.5.6"
 authors = ["The Servo Project Developers"]
 description = "Servo app units type (Au)"
 documentation = "http://doc.servo.org/app_units/"
@@ -24,8 +24,8 @@ version = "0.3"
 [dependencies.num-traits]
 version = "0.1.32"
 
-[dependencies.serde]
-version = "1.0"
-
 [dependencies.heapsize]
 version = ">=0.3, < 0.5"
+
+[dependencies.serde]
+version = "1.0"

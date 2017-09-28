@@ -47,7 +47,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(nsXULTreeBuilder, nsXULTemplateBuilder,
                                    mLocalStore,
                                    mObservers)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(nsXULTreeBuilder)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsXULTreeBuilder)
     NS_INTERFACE_MAP_ENTRY(nsIXULTreeBuilder)
     NS_INTERFACE_MAP_ENTRY(nsITreeView)
 NS_INTERFACE_MAP_END_INHERITING(nsXULTemplateBuilder)
@@ -63,7 +63,7 @@ nsXULTreeBuilder::~nsXULTreeBuilder()
 {
 }
 
-JSObject* 
+JSObject*
 nsXULTreeBuilder::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
     return XULTreeBuilderBinding::Wrap(aCx, this, aGivenProto);
@@ -215,7 +215,7 @@ nsXULTreeBuilder::Sort(Element& aElement)
     // Sort it.
     SortSubtree(mRows.GetRoot());
     mRows.InvalidateCachedRow();
-    if (mBoxObject) 
+    if (mBoxObject)
         mBoxObject->Invalidate();
 
     nsTreeUtils::UpdateSortIndicators(&aElement, dir);
@@ -697,11 +697,9 @@ nsXULTreeBuilder::SetTree(nsITreeBoxObject* aTree)
     NS_ENSURE_TRUE(mRoot, NS_ERROR_NOT_INITIALIZED);
 
     // Only use the XUL store if the root's principal is trusted.
-    bool isTrusted = false;
-    nsresult rv = IsSystemPrincipal(mRoot->NodePrincipal(), &isTrusted);
-    if (NS_SUCCEEDED(rv) && isTrusted) {
+    if (mRoot->NodePrincipal()->GetIsSystemPrincipal()) {
         mLocalStore = do_GetService("@mozilla.org/xul/xulstore;1");
-        if(NS_WARN_IF(!mLocalStore)){
+        if (NS_WARN_IF(!mLocalStore)) {
             return NS_ERROR_NOT_INITIALIZED;
         }
     }
@@ -1038,7 +1036,7 @@ nsXULTreeBuilder::HasGeneratedContent(nsIRDFResource* aResource,
 
     nsCOMPtr<nsIRDFResource> rootresource;
     aError = mRootResult->GetResource(getter_AddRefs(rootresource));
-    if (aError.Failed()) { 
+    if (aError.Failed()) {
         return false;
     }
 
@@ -1253,14 +1251,14 @@ nsXULTreeBuilder::EnsureSortVariables()
     // Grovel through <treecols> kids to find the <treecol>
     // with the sort attributes.
     nsCOMPtr<nsIContent> treecols;
- 
+
     nsXULContentUtils::FindChildByTag(mRoot, kNameSpaceID_XUL,
                                       nsGkAtoms::treecols,
                                       getter_AddRefs(treecols));
 
     if (!treecols)
         return NS_OK;
-        
+
     for (nsIContent* child = treecols->GetFirstChild();
          child;
          child = child->GetNextSibling()) {
@@ -1513,7 +1511,7 @@ nsXULTreeBuilder::OpenSubtreeForQuerySet(nsTreeRows::Subtree* aSubtree,
                                          nsTArray<int32_t>& open)
 {
     int32_t count = *aDelta;
-    
+
     nsCOMPtr<nsISimpleEnumerator> results;
     nsresult rv = mQueryProcessor->GenerateResults(mDataSource, aResult,
                                                    aQuerySet->mCompiledQuery,
@@ -1854,7 +1852,7 @@ nsXULTreeBuilder::CanDrop(int32_t aRow, int32_t aOrientation,
             }
         }
     }
-    
+
     return false;
 }
 

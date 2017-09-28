@@ -5,15 +5,15 @@
 """
 module to handle Gecko profilling.
 """
+from __future__ import absolute_import
 
+import json
 import os
 import tempfile
 import zipfile
-import json
+
 import mozfile
-
 from mozlog import get_proxy_logger
-
 from talos.profiler import symbolication, profiling
 
 LOG = get_proxy_logger()
@@ -136,7 +136,8 @@ class GeckoProfile(object):
             # mapping of app or platform names to directories
             # Note: App & OS names from requests are converted
             # to all-uppercase internally
-            "symbolPaths": self.symbol_paths
+            "symbolPaths": self.symbol_paths,
+            "platformsRequiringSymbols": ["Windows", "Microsoft"]
         })
 
         if self.browser_config['symbols_path']:

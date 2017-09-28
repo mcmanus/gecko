@@ -12,7 +12,7 @@
 // document process. For example, it shouldn't be evaluated in the parent
 // process until we try to debug a document living in the parent process.
 
-var { Ci, Cu, Cr } = require("chrome");
+var { Ci, Cu, Cr, Cc } = require("chrome");
 var Services = require("Services");
 var { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
 var promise = require("promise");
@@ -24,16 +24,14 @@ var DevToolsUtils = require("devtools/shared/DevToolsUtils");
 var { assert } = DevToolsUtils;
 var { TabSources } = require("./utils/TabSources");
 var makeDebugger = require("./utils/make-debugger");
+const EventEmitter = require("devtools/shared/event-emitter");
+
+const EXTENSION_CONTENT_JSM = "resource://gre/modules/ExtensionContent.jsm";
 
 loader.lazyRequireGetter(this, "ThreadActor", "devtools/server/actors/script", true);
 loader.lazyRequireGetter(this, "unwrapDebuggerObjectGlobal", "devtools/server/actors/script", true);
 loader.lazyRequireGetter(this, "WorkerActorList", "devtools/server/actors/worker-list", true);
-loader.lazyImporter(this, "ExtensionContent", "resource://gre/modules/ExtensionContent.jsm");
-
-// Assumptions on events module:
-// events needs to be dispatched synchronously,
-// by calling the listeners in the order or registration.
-loader.lazyRequireGetter(this, "events", "sdk/event/core");
+loader.lazyImporter(this, "ExtensionContent", EXTENSION_CONTENT_JSM);
 
 loader.lazyRequireGetter(this, "StyleSheetActor", "devtools/server/actors/stylesheets", true);
 
@@ -195,6 +193,10 @@ function getInnerId(window) {
  *        The conection to the client.
  */
 function TabActor(connection) {
+  // This usage of decorate should be removed in favor of using ES6 extends EventEmitter.
+  // See Bug 1394816.
+  EventEmitter.decorate(this);
+
   this.conn = connection;
   this._tabActorPool = null;
   // A map of actor names to actor instances provided by extensions.
@@ -226,7 +228,9 @@ function TabActor(connection) {
     frames: true,
     // Do not require to send reconfigure request to reset the document state
     // to what it was before using the TabActor
-    noTabReconfigureOnClose: true
+    noTabReconfigureOnClose: true,
+    // Supports the logErrorInPage request.
+    logErrorInPage: true,
   };
 
   this._workerActorList = null;
@@ -334,8 +338,11 @@ TabActor.prototype = {
    * current tab content's DOM window.
    */
   get webextensionsContentScriptGlobals() {
-    // Ignore xpcshell runtime which spawn TabActors without a window.
-    if (this.window) {
+    // Ignore xpcshell runtime which spawn TabActors without a window
+    // and only retrieve the content scripts globals if the ExtensionContent JSM module
+    // has been already loaded (which is true if the WebExtensions internals have already
+    // been loaded in the same content process).
+    if (this.window && Cu.isModuleLoaded(EXTENSION_CONTENT_JSM)) {
       return ExtensionContent.getContentScriptGlobals(this.window);
     }
 
@@ -661,6 +668,17 @@ TabActor.prototype = {
     });
   },
 
+  onLogErrorInPage(request) {
+    let {text, category} = request;
+    let scriptErrorClass = Cc["@mozilla.org/scripterror;1"];
+    let scriptError = scriptErrorClass.createInstance(Ci.nsIScriptError);
+    scriptError.initWithWindowID(text, null, null, 0, 0, 1,
+                                 category, getInnerId(this.window));
+    let console = Cc["@mozilla.org/consoleservice;1"].getService(Ci.nsIConsoleService);
+    console.logMessage(scriptError);
+    return {};
+  },
+
   _onWorkerActorListChanged() {
     this._workerActorList.onListChanged = null;
     this.conn.sendActorEvent(this.actorID, "workerListChanged");
@@ -672,8 +690,10 @@ TabActor.prototype = {
     if (!this.attached) {
       return;
     }
+
+    subject.QueryInterface(Ci.nsIDocShell);
+
     if (topic == "webnavigation-create") {
-      subject.QueryInterface(Ci.nsIDocShell);
       this._onDocShellCreated(subject);
     } else if (topic == "webnavigation-destroy") {
       this._onDocShellDestroy(subject);
@@ -1194,7 +1214,7 @@ TabActor.prototype = {
       enumerable: true,
       configurable: true
     });
-    events.emit(this, "changed-toplevel-document");
+    this.emit("changed-toplevel-document");
     this.conn.send({
       from: this.actorID,
       type: "frameUpdate",
@@ -1216,7 +1236,7 @@ TabActor.prototype = {
       this._updateChildDocShells();
     }
 
-    events.emit(this, "window-ready", {
+    this.emit("window-ready", {
       window: window,
       isTopLevel: isTopLevel,
       id: getWindowID(window)
@@ -1243,7 +1263,7 @@ TabActor.prototype = {
   },
 
   _windowDestroyed(window, id = null, isFrozen = false) {
-    events.emit(this, "window-destroyed", {
+    this.emit("window-destroyed", {
       window: window,
       isTopLevel: window == this.window,
       id: id || getWindowID(window),
@@ -1280,7 +1300,7 @@ TabActor.prototype = {
     // This event fires once navigation starts,
     // (all pending user prompts are dealt with),
     // but before the first request starts.
-    events.emit(this, "will-navigate", {
+    this.emit("will-navigate", {
       window: window,
       isTopLevel: isTopLevel,
       newURI: newURI,
@@ -1329,7 +1349,7 @@ TabActor.prototype = {
     // by calling the listeners in the order or registration.
     // This event is fired once the document is loaded,
     // after the load event, it's document ready-state is 'complete'.
-    events.emit(this, "navigate", {
+    this.emit("navigate", {
       window: window,
       isTopLevel: isTopLevel
     });
@@ -1397,7 +1417,7 @@ TabActor.prototype = {
     this._styleSheetActors.set(styleSheet, actor);
 
     this._tabPool.addActor(actor);
-    events.emit(this, "stylesheet-added", actor);
+    this.emit("stylesheet-added", actor);
 
     return actor;
   },
@@ -1426,6 +1446,7 @@ TabActor.prototype.requestTypes = {
   "switchToFrame": TabActor.prototype.onSwitchToFrame,
   "listFrames": TabActor.prototype.onListFrames,
   "listWorkers": TabActor.prototype.onListWorkers,
+  "logErrorInPage": TabActor.prototype.onLogErrorInPage,
 };
 
 exports.TabActor = TabActor;
@@ -1533,19 +1554,23 @@ DebuggerProgressListener.prototype = {
       return;
     }
 
-    // pageshow events for non-persisted pages have already been handled by a
-    // prior DOMWindowCreated event. For persisted pages, act as if the window
-    // had just been created since it's been unfrozen from bfcache.
-    if (evt.type == "pageshow" && !evt.persisted) {
+    let window = evt.target.defaultView;
+    let innerID = getWindowID(window);
+
+    // This method is alled on DOMWindowCreated and pageshow
+    // The common scenario is DOMWindowCreated, which is fired when the document
+    // loads. But we are to listen for pageshow in order to handle BFCache.
+    // When a page does into the BFCache, a pagehide event is fired with persisted=true
+    // but it doesn't necessarely mean persisted will be true for the pageshow
+    // event fired when the page is reloaded from the BFCache (see bug 1378133)
+    // So just check if we already know this window and accept any that isn't known yet
+    if (this._knownWindowIDs.has(innerID)) {
       return;
     }
 
-    let window = evt.target.defaultView;
     this._tabActor._windowReady(window);
 
-    if (evt.type !== "pageshow") {
-      this._knownWindowIDs.set(getWindowID(window), window);
-    }
+    this._knownWindowIDs.set(innerID, window);
   }, "DebuggerProgressListener.prototype.onWindowCreated"),
 
   onWindowHidden: DevToolsUtils.makeInfallible(function (evt) {
@@ -1563,6 +1588,7 @@ DebuggerProgressListener.prototype = {
 
     let window = evt.target.defaultView;
     this._tabActor._windowDestroyed(window, null, true);
+    this._knownWindowIDs.delete(getWindowID(window));
   }, "DebuggerProgressListener.prototype.onWindowHidden"),
 
   observe: DevToolsUtils.makeInfallible(function (subject, topic) {

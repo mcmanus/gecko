@@ -79,7 +79,7 @@ MediaDataDecoderProxy::Shutdown()
                      [self, this]() { return mProxyDecoder->Shutdown(); });
 }
 
-const char*
+nsCString
 MediaDataDecoderProxy::GetDescriptionName() const
 {
   MOZ_ASSERT(!mIsShutdown);
@@ -107,6 +107,7 @@ MediaDataDecoderProxy::SetSeekThreshold(const media::TimeUnit& aTime)
   RefPtr<MediaDataDecoderProxy> self = this;
   media::TimeUnit time = aTime;
   mProxyThread->Dispatch(NS_NewRunnableFunction(
+    "MediaDataDecoderProxy::SetSeekThreshold",
     [self, time] { self->mProxyDecoder->SetSeekThreshold(time); }));
 }
 

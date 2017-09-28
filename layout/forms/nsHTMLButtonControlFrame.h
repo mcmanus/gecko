@@ -30,7 +30,6 @@ public:
   NS_DECL_FRAMEARENA_HELPERS(nsHTMLButtonControlFrame)
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual nscoord GetMinISize(gfxContext *aRenderingContext) override;
@@ -49,7 +48,7 @@ public:
                                  BaselineSharingGroup aBaselineGroup,
                                  nscoord* aBaseline) const override;
 
-  virtual nsresult HandleEvent(nsPresContext* aPresContext, 
+  virtual nsresult HandleEvent(nsPresContext* aPresContext,
                                mozilla::WidgetGUIEvent* aEvent,
                                nsEventStatus* aEventStatus) override;
 
@@ -58,9 +57,9 @@ public:
                     nsIFrame*         aPrevInFlow) override;
 
   virtual nsStyleContext* GetAdditionalStyleContext(int32_t aIndex) const override;
-  virtual void SetAdditionalStyleContext(int32_t aIndex, 
+  virtual void SetAdditionalStyleContext(int32_t aIndex,
                                          nsStyleContext* aStyleContext) override;
- 
+
 #ifdef DEBUG
   virtual void AppendFrames(ChildListID     aListID,
                             nsFrameList&    aFrameList) override;

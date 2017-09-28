@@ -2,21 +2,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#![feature(ascii_ctype)]
 #![feature(box_syntax)]
 #![feature(conservative_impl_trait)]
 #![feature(const_fn)]
+#![feature(const_ptr_null)]
+#![feature(const_ptr_null_mut)]
 #![feature(core_intrinsics)]
 #![feature(mpsc_select)]
 #![feature(nonzero)]
 #![feature(on_unimplemented)]
-#![feature(optin_builtin_traits)]
-#![feature(option_entry)]
 #![feature(plugin)]
 #![feature(proc_macro)]
-#![feature(stmt_expr_attributes)]
 #![feature(try_from)]
-#![feature(unboxed_closures)]
-#![feature(untagged_unions)]
 
 #![deny(unsafe_code)]
 #![allow(non_snake_case)]
@@ -27,7 +25,6 @@
 
 extern crate angle;
 extern crate app_units;
-extern crate atomic_refcell;
 extern crate audio_video_metadata;
 extern crate base64;
 #[macro_use]
@@ -47,7 +44,6 @@ extern crate domobject_derive;
 extern crate encoding;
 extern crate euclid;
 extern crate fnv;
-extern crate gfx_traits;
 extern crate gleam;
 extern crate half;
 #[macro_use] extern crate heapsize;
@@ -67,9 +63,11 @@ extern crate lazy_static;
 extern crate libc;
 #[macro_use]
 extern crate log;
+extern crate metrics;
 #[macro_use]
 extern crate mime;
 extern crate mime_guess;
+extern crate mitochondria;
 extern crate msg;
 extern crate net_traits;
 extern crate num_traits;
@@ -79,7 +77,6 @@ extern crate parking_lot;
 extern crate phf;
 #[macro_use]
 extern crate profile_traits;
-extern crate range;
 extern crate ref_filter_map;
 extern crate ref_slice;
 extern crate regex;
@@ -87,6 +84,7 @@ extern crate script_layout_interface;
 extern crate script_traits;
 extern crate selectors;
 extern crate serde;
+extern crate servo_arc;
 #[macro_use] extern crate servo_atoms;
 extern crate servo_config;
 extern crate servo_geometry;
@@ -104,9 +102,12 @@ extern crate unicode_segmentation;
 extern crate url;
 extern crate utf8;
 extern crate uuid;
-extern crate webrender_traits;
+extern crate webrender_api;
 extern crate webvr_traits;
 extern crate xml5ever;
+
+#[macro_use]
+mod task;
 
 mod body;
 pub mod clipboard_provider;
@@ -116,7 +117,6 @@ pub mod document_loader;
 mod dom;
 pub mod fetch;
 mod layout_image;
-pub mod layout_wrapper;
 mod mem;
 mod microtask;
 mod network_listener;
@@ -132,6 +132,24 @@ pub mod textinput;
 mod timers;
 mod unpremultiplytable;
 mod webdriver_handlers;
+
+/// A module with everything layout can use from script.
+///
+/// Try to keep this small!
+///
+/// TODO(emilio): A few of the FooHelpers can go away, presumably...
+pub mod layout_exports {
+    pub use dom::bindings::inheritance::{CharacterDataTypeId, ElementTypeId};
+    pub use dom::bindings::inheritance::{HTMLElementTypeId, NodeTypeId};
+    pub use dom::bindings::js::LayoutJS;
+    pub use dom::characterdata::LayoutCharacterDataHelpers;
+    pub use dom::document::{Document, LayoutDocumentHelpers, PendingRestyle};
+    pub use dom::element::{Element, LayoutElementHelpers, RawLayoutElementHelpers};
+    pub use dom::node::{CAN_BE_FRAGMENTED, HAS_DIRTY_DESCENDANTS, IS_IN_DOC};
+    pub use dom::node::{HANDLED_SNAPSHOT, HAS_SNAPSHOT};
+    pub use dom::node::{LayoutNodeHelpers, Node};
+    pub use dom::text::Text;
+}
 
 use dom::bindings::codegen::RegisterBindings;
 use dom::bindings::proxyhandler;

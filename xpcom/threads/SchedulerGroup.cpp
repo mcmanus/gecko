@@ -10,6 +10,7 @@
 #include "mozilla/AbstractThread.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Move.h"
+#include "mozilla/Unused.h"
 #include "nsINamed.h"
 #include "nsQueryObject.h"
 #include "mozilla/dom/ScriptSettings.h"
@@ -53,6 +54,7 @@ NS_DEFINE_STATIC_IID_ACCESSOR(SchedulerEventTarget, NS_DISPATCHEREVENTTARGET_IID
 
 static Atomic<uint64_t> gEarliestUnprocessedVsync(0);
 
+#ifdef EARLY_BETA_OR_EARLIER
 class MOZ_RAII AutoCollectVsyncTelemetry final
 {
 public:
@@ -61,18 +63,14 @@ public:
     : mIsBackground(aRunnable->IsBackground())
   {
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-#ifdef EARLY_BETA_OR_EARLIER
     aRunnable->GetName(mKey);
     mStart = TimeStamp::Now();
-#endif
   }
   ~AutoCollectVsyncTelemetry()
   {
-#ifdef EARLY_BETA_OR_EARLIER
     if (Telemetry::CanRecordBase()) {
       CollectTelemetry();
     }
-#endif
   }
 
 private:
@@ -125,9 +123,8 @@ AutoCollectVsyncTelemetry::CollectTelemetry()
   }
 
   Telemetry::Accumulate(Telemetry::CONTENT_JS_KNOWN_TICK_DELAY_MS, duration);
-
-  return;
 }
+#endif
 
 } // namespace
 
@@ -148,7 +145,7 @@ SchedulerEventTarget::Dispatch(already_AddRefed<nsIRunnable> aRunnable, uint32_t
   if (NS_WARN_IF(aFlags != NS_DISPATCH_NORMAL)) {
     return NS_ERROR_UNEXPECTED;
   }
-  return mDispatcher->Dispatch(nullptr, mCategory, Move(aRunnable));
+  return mDispatcher->Dispatch(mCategory, Move(aRunnable));
 }
 
 NS_IMETHODIMP
@@ -171,20 +168,13 @@ SchedulerEventTarget::IsOnCurrentThreadInfallible()
 }
 
 /* static */ nsresult
-SchedulerGroup::UnlabeledDispatch(const char* aName,
-                                  TaskCategory aCategory,
+SchedulerGroup::UnlabeledDispatch(TaskCategory aCategory,
                                   already_AddRefed<nsIRunnable>&& aRunnable)
 {
-  nsCOMPtr<nsIRunnable> runnable(aRunnable);
-  if (aName) {
-    if (nsCOMPtr<nsINamed> named = do_QueryInterface(runnable)) {
-      named->SetName(aName);
-    }
-  }
   if (NS_IsMainThread()) {
-    return NS_DispatchToCurrentThread(runnable.forget());
+    return NS_DispatchToCurrentThread(Move(aRunnable));
   } else {
-    return NS_DispatchToMainThread(runnable.forget());
+    return NS_DispatchToMainThread(Move(aRunnable));
   }
 }
 
@@ -213,19 +203,21 @@ SchedulerGroup::MarkVsyncRan()
   gEarliestUnprocessedVsync = 0;
 }
 
-SchedulerGroup* SchedulerGroup::sRunningDispatcher;
+MOZ_THREAD_LOCAL(bool) SchedulerGroup::sTlsValidatingAccess;
 
 SchedulerGroup::SchedulerGroup()
- : mAccessValid(false)
+ : mIsRunning(false)
 {
+  if (NS_IsMainThread()) {
+    sTlsValidatingAccess.infallibleInit();
+  }
 }
 
 nsresult
-SchedulerGroup::Dispatch(const char* aName,
-                         TaskCategory aCategory,
+SchedulerGroup::Dispatch(TaskCategory aCategory,
                          already_AddRefed<nsIRunnable>&& aRunnable)
 {
-  return LabeledDispatch(aName, aCategory, Move(aRunnable));
+  return LabeledDispatch(aCategory, Move(aRunnable));
 }
 
 nsISerialEventTarget*
@@ -307,49 +299,85 @@ SchedulerGroup::FromEventTarget(nsIEventTarget* aEventTarget)
 }
 
 nsresult
-SchedulerGroup::LabeledDispatch(const char* aName,
-                                TaskCategory aCategory,
+SchedulerGroup::LabeledDispatch(TaskCategory aCategory,
                                 already_AddRefed<nsIRunnable>&& aRunnable)
 {
   nsCOMPtr<nsIRunnable> runnable(aRunnable);
   if (XRE_IsContentProcess()) {
-    runnable = new Runnable(runnable.forget(), this);
+    RefPtr<Runnable> internalRunnable = new Runnable(runnable.forget(), this);
+    return InternalUnlabeledDispatch(aCategory, internalRunnable.forget());
   }
-  return UnlabeledDispatch(aName, aCategory, runnable.forget());
+  return UnlabeledDispatch(aCategory, runnable.forget());
 }
 
-void
+/*static*/ nsresult
+SchedulerGroup::InternalUnlabeledDispatch(TaskCategory aCategory,
+                                          already_AddRefed<Runnable>&& aRunnable)
+{
+  if (NS_IsMainThread()) {
+    // NS_DispatchToCurrentThread will not leak the passed in runnable
+    // when it fails, so we don't need to do anything special.
+    return NS_DispatchToCurrentThread(Move(aRunnable));
+  }
+
+  RefPtr<Runnable> runnable(aRunnable);
+  nsresult rv = NS_DispatchToMainThread(do_AddRef(runnable));
+  if (NS_FAILED(rv)) {
+    // Dispatch failed.  This is a situation where we would have used
+    // NS_DispatchToMainThread rather than calling into the SchedulerGroup
+    // machinery, and the caller would be expecting to leak the nsIRunnable
+    // originally passed in.  But because we've had to wrap things up
+    // internally, we were going to leak the nsIRunnable *and* our Runnable
+    // wrapper.  But there's no reason that we have to leak our Runnable
+    // wrapper; we can just leak the wrapped nsIRunnable, and let the caller
+    // take care of unleaking it if they need to.
+    Unused << runnable->mRunnable.forget().take();
+    nsrefcnt refcnt = runnable.get()->Release();
+    MOZ_RELEASE_ASSERT(refcnt == 1, "still holding an unexpected reference!");
+  }
+
+  return rv;
+}
+
+/* static */ void
 SchedulerGroup::SetValidatingAccess(ValidationType aType)
 {
-  sRunningDispatcher = aType == StartValidation ? this : nullptr;
-  mAccessValid = aType == StartValidation;
+  bool validating = aType == StartValidation;
+  sTlsValidatingAccess.set(validating);
 
   dom::AutoJSAPI jsapi;
   jsapi.Init();
-  js::EnableAccessValidation(jsapi.cx(), !!sRunningDispatcher);
+  js::EnableAccessValidation(jsapi.cx(), validating);
 }
 
 SchedulerGroup::Runnable::Runnable(already_AddRefed<nsIRunnable>&& aRunnable,
                                    SchedulerGroup* aGroup)
- : mRunnable(Move(aRunnable)),
-   mGroup(aGroup)
+  : mozilla::Runnable("SchedulerGroup::Runnable")
+  , mRunnable(Move(aRunnable))
+  , mGroup(aGroup)
 {
+}
+
+bool
+SchedulerGroup::Runnable::GetAffectedSchedulerGroups(nsTArray<RefPtr<SchedulerGroup>>& aGroups)
+{
+  aGroups.Clear();
+  aGroups.AppendElement(Group());
+  return true;
 }
 
 NS_IMETHODIMP
 SchedulerGroup::Runnable::GetName(nsACString& aName)
 {
-  mozilla::Runnable::GetName(aName);
-  if (aName.IsEmpty()) {
-    // Try to get a name from the underlying runnable.
-    nsCOMPtr<nsINamed> named = do_QueryInterface(mRunnable);
-    if (named) {
-      named->GetName(aName);
-    }
-    if (aName.IsEmpty()) {
-      aName.AssignLiteral("anonymous");
-    }
+  // Try to get a name from the underlying runnable.
+  nsCOMPtr<nsINamed> named = do_QueryInterface(mRunnable);
+  if (named) {
+    named->GetName(aName);
   }
+  if (aName.IsEmpty()) {
+    aName.AssignLiteral("anonymous");
+  }
+
   aName.AppendASCII("(labeled)");
   return NS_OK;
 }
@@ -359,12 +387,12 @@ SchedulerGroup::Runnable::Run()
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
-  mGroup->SetValidatingAccess(StartValidation);
-
   nsresult result;
 
   {
+#ifdef EARLY_BETA_OR_EARLIER
     AutoCollectVsyncTelemetry telemetry(this);
+#endif
     result = mRunnable->Run();
   }
 
@@ -376,26 +404,16 @@ SchedulerGroup::Runnable::Run()
   return result;
 }
 
+NS_IMETHODIMP
+SchedulerGroup::Runnable::GetPriority(uint32_t* aPriority)
+{
+  *aPriority = nsIRunnablePriority::PRIORITY_NORMAL;
+  nsCOMPtr<nsIRunnablePriority> runnablePrio = do_QueryInterface(mRunnable);
+  return runnablePrio ? runnablePrio->GetPriority(aPriority) : NS_OK;
+}
+
 NS_IMPL_ISUPPORTS_INHERITED(SchedulerGroup::Runnable,
                             mozilla::Runnable,
+                            nsIRunnablePriority,
+                            nsILabelableRunnable,
                             SchedulerGroup::Runnable)
-
-SchedulerGroup::AutoProcessEvent::AutoProcessEvent()
- : mPrevRunningDispatcher(SchedulerGroup::sRunningDispatcher)
-{
-  SchedulerGroup* prev = sRunningDispatcher;
-  if (prev) {
-    MOZ_ASSERT(prev->mAccessValid);
-    prev->SetValidatingAccess(EndValidation);
-  }
-}
-
-SchedulerGroup::AutoProcessEvent::~AutoProcessEvent()
-{
-  MOZ_ASSERT(!sRunningDispatcher);
-
-  SchedulerGroup* prev = mPrevRunningDispatcher;
-  if (prev) {
-    prev->SetValidatingAccess(StartValidation);
-  }
-}

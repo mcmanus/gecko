@@ -7,11 +7,13 @@
 //! [media]: https://drafts.csswg.org/css-conditional/#at-ruledef-media
 
 use cssparser::SourceLocation;
+#[cfg(feature = "gecko")]
+use malloc_size_of::{MallocSizeOfOps, MallocUnconditionalShallowSizeOf};
 use media_queries::MediaList;
-use shared_lock::{DeepCloneWithLock, Locked, SharedRwLock, SharedRwLockReadGuard, ToCssWithGuard};
+use servo_arc::Arc;
+use shared_lock::{DeepCloneParams, DeepCloneWithLock, Locked, SharedRwLock, SharedRwLockReadGuard, ToCssWithGuard};
 use std::fmt;
 use style_traits::ToCss;
-use stylearc::Arc;
 use stylesheets::CssRules;
 
 /// An [`@media`][media] urle.
@@ -25,6 +27,16 @@ pub struct MediaRule {
     pub rules: Arc<Locked<CssRules>>,
     /// The source position where this media rule was found.
     pub source_location: SourceLocation,
+}
+
+impl MediaRule {
+    /// Measure heap usage.
+    #[cfg(feature = "gecko")]
+    pub fn size_of(&self, guard: &SharedRwLockReadGuard, ops: &mut MallocSizeOfOps) -> usize {
+        // Measurement of other fields may be added later.
+        self.rules.unconditional_shallow_size_of(ops) +
+            self.rules.read_with(guard).size_of(guard, ops)
+    }
 }
 
 impl ToCssWithGuard for MediaRule {
@@ -47,13 +59,14 @@ impl DeepCloneWithLock for MediaRule {
     fn deep_clone_with_lock(
         &self,
         lock: &SharedRwLock,
-        guard: &SharedRwLockReadGuard
+        guard: &SharedRwLockReadGuard,
+        params: &DeepCloneParams,
     ) -> Self {
         let media_queries = self.media_queries.read_with(guard);
         let rules = self.rules.read_with(guard);
         MediaRule {
             media_queries: Arc::new(lock.wrap(media_queries.clone())),
-            rules: Arc::new(lock.wrap(rules.deep_clone_with_lock(lock, guard))),
+            rules: Arc::new(lock.wrap(rules.deep_clone_with_lock(lock, guard, params))),
             source_location: self.source_location.clone(),
         }
     }

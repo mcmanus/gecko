@@ -15,13 +15,12 @@
 #include "nsThreadUtils.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Logging.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "nsIForcePendingChannel.h"
 #include "nsIRequest.h"
 
 // brotli headers
 #include "state.h"
-#include "decode.h"
+#include "brotli/decode.h"
 
 namespace mozilla {
 namespace net {
@@ -133,7 +132,7 @@ nsHTTPCompressConv::OnStopRequest(nsIRequest* request, nsISupports *aContext,
 {
   nsresult status = aStatus;
   LOG(("nsHttpCompresssConv %p onstop %" PRIx32 "\n", this, static_cast<uint32_t>(aStatus)));
-  
+
   // Framing integrity is enforced for content-encoding: gzip, but not for
   // content-encoding: deflate. Note that gzip vs deflate is NOT determined
   // by content sniffing but only via header.
@@ -183,7 +182,7 @@ nsHTTPCompressConv::BrotliHandler(nsIInputStream *stream, void *closure, const c
   uint8_t *outPtr;
   size_t outSize;
   size_t avail = aAvail;
-  BrotliResult res;
+  BrotliDecoderResult res;
 
   if (!self->mBrotli) {
     *countRead = aAvail;
@@ -201,18 +200,19 @@ nsHTTPCompressConv::BrotliHandler(nsIInputStream *stream, void *closure, const c
     outPtr = outBuffer.get();
 
     // brotli api is documented in brotli/dec/decode.h and brotli/dec/decode.c
-    LOG(("nsHttpCompresssConv %p brotlihandler decompress %" PRIuSIZE "\n", self, avail));
+    LOG(("nsHttpCompresssConv %p brotlihandler decompress %zu\n", self, avail));
     size_t totalOut = self->mBrotli->mTotalOut;
-    res = ::BrotliDecompressStream(
+    res = ::BrotliDecoderDecompressStream(
+      &self->mBrotli->mState,
       &avail, reinterpret_cast<const unsigned char **>(&dataIn),
-      &outSize, &outPtr, &totalOut, &self->mBrotli->mState);
+      &outSize, &outPtr, &totalOut);
     outSize = kOutSize - outSize;
     self->mBrotli->mTotalOut = totalOut;
-    self->mBrotli->mBrotliStateIsStreamEnd = BrotliStateIsStreamEnd(&self->mBrotli->mState);
-    LOG(("nsHttpCompresssConv %p brotlihandler decompress rv=%" PRIx32 " out=%" PRIuSIZE "\n",
+    self->mBrotli->mBrotliStateIsStreamEnd = BrotliDecoderIsFinished(&self->mBrotli->mState);
+    LOG(("nsHttpCompresssConv %p brotlihandler decompress rv=%" PRIx32 " out=%zu\n",
          self, static_cast<uint32_t>(res), outSize));
 
-    if (res == BROTLI_RESULT_ERROR) {
+    if (res == BROTLI_DECODER_RESULT_ERROR) {
       LOG(("nsHttpCompressConv %p marking invalid encoding", self));
       self->mBrotli->mStatus = NS_ERROR_INVALID_CONTENT_ENCODING;
       return self->mBrotli->mStatus;
@@ -220,7 +220,7 @@ nsHTTPCompressConv::BrotliHandler(nsIInputStream *stream, void *closure, const c
 
     // in 'the current implementation' brotli must consume everything before
     // asking for more input
-    if (res == BROTLI_RESULT_NEEDS_MORE_INPUT) {
+    if (res == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT) {
       MOZ_ASSERT(!avail);
       if (avail) {
         LOG(("nsHttpCompressConv %p did not consume all input", self));
@@ -241,13 +241,13 @@ nsHTTPCompressConv::BrotliHandler(nsIInputStream *stream, void *closure, const c
       }
     }
 
-    if (res == BROTLI_RESULT_SUCCESS ||
-        res == BROTLI_RESULT_NEEDS_MORE_INPUT) {
+    if (res == BROTLI_DECODER_RESULT_SUCCESS ||
+        res == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT) {
       *countRead = aAvail;
       return NS_OK;
     }
-    MOZ_ASSERT (res == BROTLI_RESULT_NEEDS_MORE_OUTPUT);
-  } while (res == BROTLI_RESULT_NEEDS_MORE_OUTPUT);
+    MOZ_ASSERT (res == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT);
+  } while (res == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT);
 
   self->mBrotli->mStatus = NS_ERROR_UNEXPECTED;
   return self->mBrotli->mStatus;
@@ -434,7 +434,7 @@ nsHTTPCompressConv::OnDataAvailable(nsIRequest* request,
           if (bytesWritten) {
             rv = do_OnDataAvailable(request, aContext, aSourceOffset, (char *)mOutBuffer, bytesWritten);
             if (NS_FAILED (rv)) {
-              return rv; 
+              return rv;
             }
           }
         } else if (code == Z_BUF_ERROR) {

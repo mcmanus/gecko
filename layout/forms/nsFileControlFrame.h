@@ -33,7 +33,6 @@ public:
                     nsIFrame*         aPrevInFlow) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   NS_DECL_QUERYFRAME
@@ -95,7 +94,8 @@ protected:
   {
   public:
     explicit SyncDisabledStateEvent(nsFileControlFrame* aFrame)
-      : mFrame(aFrame)
+      : mozilla::Runnable("nsFileControlFrame::SyncDisabledStateEvent")
+      , mFrame(aFrame)
     {}
 
     NS_IMETHOD Run() override {

@@ -16,7 +16,7 @@
 
 using mozilla::OriginAttributes;
 
-/** 
+/**
  * The nsCookie class is the main cookie storage medium for use within cookie
  * code. It implements nsICookie2, which extends nsICookie, a frozen interface
  * for xpcom access of cookie objects.
@@ -48,7 +48,8 @@ class nsCookie : public nsICookie2
              bool            aIsSession,
              bool            aIsSecure,
              bool            aIsHttpOnly,
-             const OriginAttributes& aOriginAttributes)
+             const OriginAttributes& aOriginAttributes,
+             int32_t         aSameSite)
      : mName(aName)
      , mValue(aValue)
      , mHost(aHost)
@@ -61,6 +62,7 @@ class nsCookie : public nsICookie2
      , mIsSecure(aIsSecure)
      , mIsHttpOnly(aIsHttpOnly)
      , mOriginAttributes(aOriginAttributes)
+     , mSameSite(aSameSite)
     {
     }
 
@@ -92,7 +94,8 @@ class nsCookie : public nsICookie2
                              bool              aIsSession,
                              bool              aIsSecure,
                              bool              aIsHttpOnly,
-                             const OriginAttributes& aOriginAttributes);
+                             const OriginAttributes& aOriginAttributes,
+                             int32_t           aSameSite);
 
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
@@ -110,6 +113,7 @@ class nsCookie : public nsICookie2
     inline bool IsSecure()                const { return mIsSecure; }
     inline bool IsHttpOnly()              const { return mIsHttpOnly; }
     inline const OriginAttributes& OriginAttributesRef() const { return mOriginAttributes; }
+    inline int32_t SameSite()               const { return mSameSite; }
 
     // setters
     inline void SetExpiry(int64_t aExpiry)        { mExpiry = aExpiry; }
@@ -129,7 +133,7 @@ class nsCookie : public nsICookie2
     // we use char* ptrs to store the strings in a contiguous block,
     // so we save on the overhead of using nsCStrings. However, we
     // store a terminating null for each string, so we can hand them
-    // out as nsAFlatCStrings.
+    // out as nsCStrings.
     //
     // Please update SizeOfIncludingThis if this strategy changes.
     const char  *mName;
@@ -144,6 +148,31 @@ class nsCookie : public nsICookie2
     bool mIsSecure;
     bool mIsHttpOnly;
     mozilla::OriginAttributes mOriginAttributes;
+    int32_t     mSameSite;
 };
 
+// Comparator class for sorting cookies before sending to a server.
+class CompareCookiesForSending
+{
+public:
+  bool Equals(const nsCookie* aCookie1, const nsCookie* aCookie2) const
+  {
+    return aCookie1->CreationTime() == aCookie2->CreationTime() &&
+           aCookie2->Path().Length() == aCookie1->Path().Length();
+  }
+
+  bool LessThan(const nsCookie* aCookie1, const nsCookie* aCookie2) const
+  {
+    // compare by cookie path length in accordance with RFC2109
+    int32_t result = aCookie2->Path().Length() - aCookie1->Path().Length();
+    if (result != 0)
+      return result < 0;
+
+    // when path lengths match, older cookies should be listed first.  this is
+    // required for backwards compatibility since some websites erroneously
+    // depend on receiving cookies in the order in which they were sent to the
+    // browser!  see bug 236772.
+    return aCookie1->CreationTime() < aCookie2->CreationTime();
+  }
+};
 #endif // nsCookie_h__

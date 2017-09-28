@@ -8,10 +8,10 @@
 #define nsIContentSerializer_h
 
 #include "nsISupports.h"
+#include "nsStringFwd.h"
 
 class nsIContent;
 class nsIDocument;
-class nsAString;
 
 namespace mozilla {
 class Encoding;
@@ -25,7 +25,7 @@ class Element;
   { 0x93, 0xdf, 0xb6, 0xfa, 0xb5, 0xd5, 0x46, 0x88 } }
 
 class nsIContentSerializer : public nsISupports {
- public: 
+ public:
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_ICONTENTSERIALIZER_IID)
 
@@ -64,8 +64,8 @@ class nsIContentSerializer : public nsISupports {
   NS_IMETHOD Flush(nsAString& aStr) = 0;
 
   /**
-   * Append any items in the beginning of the document that won't be 
-   * serialized by other methods. XML declaration is the most likely 
+   * Append any items in the beginning of the document that won't be
+   * serialized by other methods. XML declaration is the most likely
    * thing this method can produce.
    */
   NS_IMETHOD AppendDocumentStart(nsIDocument *aDocument,

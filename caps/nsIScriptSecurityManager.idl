@@ -126,6 +126,13 @@ interface nsIScriptSecurityManager : nsISupports
                                       in AUTF8String uri,
                                       in unsigned long flags);
 
+    /**
+     * Returns true if the URI is from a domain that is white-listed through
+     * prefs to be allowed to use file:// URIs.
+     * @param aUri the URI to be tested
+     */
+    bool inFileURIWhitelist(in nsIURI aUri);
+
     ///////////////// Principals ///////////////////////
 
     /**
@@ -146,13 +153,6 @@ interface nsIScriptSecurityManager : nsISupports
      */
     nsIPrincipal getDocShellCodebasePrincipal(in nsIURI uri,
                                               in nsIDocShell docShell);
-
-    /**
-     * Legacy method for getting a principal with no origin attributes.
-     *
-     * @deprecated use createCodebasePrincipal instead.
-     */
-    [deprecated] nsIPrincipal getCodebasePrincipal(in nsIURI uri);
 
     /**
      * Returns a principal whose origin is composed of |uri| and |originAttributes|.

@@ -71,7 +71,7 @@ function chromeTouchEventCounter(operation) {
   }
 
   if (typeof chromeTouchEventCounter.chromeHelper == 'undefined') {
-    // This is the first time getSnapshot is being called; do initialization
+    // This is the first time chromeTouchEventCounter is being called; do initialization
     chromeTouchEventCounter.chromeHelper = SpecialPowers.loadChromeScript(chromeProcessCounter);
     SimpleTest.registerCleanupFunction(function() { chromeTouchEventCounter.chromeHelper.destroy() });
   }
@@ -91,6 +91,11 @@ function waitFor(eventType, count) {
     }
   }
   return true;
+}
+
+function RunAfterProcessedQueuedInputEvents(aCallback) {
+  let tm = SpecialPowers.Services.tm;
+  tm.dispatchToMainThread(aCallback, SpecialPowers.Ci.nsIRunnablePriority.PRIORITY_INPUT);
 }
 
 function* test(testDriver) {
@@ -139,8 +144,8 @@ function* test(testDriver) {
   // scrolling even though we know we haven't yet processed the DOM touch events
   // in the child process yet.
   //
-  // Note that the "async callback" we use here is SpecialPowers.executeSoon,
-  // because nothing else does exactly what we want:
+  // Note that the "async callback" we use here is SpecialPowers.tm.dispatchToMainThread
+  // with priority = input, because nothing else does exactly what we want:
   // - setTimeout(..., 0) does not maintain ordering, because it respects the
   //   time delta provided (i.e. the callback can jump the queue to meet its
   //   deadline).
@@ -149,6 +154,9 @@ function* test(testDriver) {
   //   round-trip time.
   // - SimpleTest.executeSoon has a codepath that delegates to setTimeout, so
   //   is less reliable if it ever decides to switch to that codepath.
+  // - SpecialPowers.executeSoon dispatches a task to main thread. However,
+  //   normal runnables may be preempted by input events and be executed in an
+  //   unexpected order.
 
   // The other problem we need to deal with is the asynchronicity in the chrome
   // process. That is, we might request a snapshot before the chrome process has
@@ -169,19 +177,20 @@ function* test(testDriver) {
   // Set up the child process events and callbacks
   var scroller = document.getElementById('scroller');
   synthesizeNativeTouch(scroller, 10, 110, SpecialPowers.DOMWindowUtils.TOUCH_CONTACT, null, 0);
-  SpecialPowers.executeSoon(testDriver);
+  RunAfterProcessedQueuedInputEvents(testDriver);
   for (var i = 1; i < 10; i++) {
     synthesizeNativeTouch(scroller, 10, 110 - (i * 10), SpecialPowers.DOMWindowUtils.TOUCH_CONTACT, null, 0);
-    SpecialPowers.executeSoon(testDriver);
+    RunAfterProcessedQueuedInputEvents(testDriver);
   }
   synthesizeNativeTouch(scroller, 10, 10, SpecialPowers.DOMWindowUtils.TOUCH_REMOVE, null, 0);
-  SpecialPowers.executeSoon(testDriver);
+  RunAfterProcessedQueuedInputEvents(testDriver);
   ok(true, "Finished setting up event queue");
 
   // Get our baseline snapshot
   var rect = rectRelativeToScreen(scroller);
   var lastSnapshot = getSnapshot(rect);
   ok(true, "Got baseline snapshot");
+  var numDifferentSnapshotPairs = 0;
 
   yield; // this will tell the chrome process to synthesize the touchstart event
          // and then we wait to make sure it got processed:
@@ -192,16 +201,24 @@ function* test(testDriver) {
     yield;
     ok(waitFor('touchmove', i), "Touchmove processed in chrome process");
 
+    // Take a snapshot after each touch move event. This forces
+    // a composite each time, even we don't get a vsync in this
+    // interval.
     var snapshot = getSnapshot(rect);
-    if (i == 1) {
-      // The first touchmove is consumed to get us into the panning state, so
-      // no actual panning occurs
-      ok(lastSnapshot == snapshot, "Snapshot 1 was the same as baseline");
-    } else {
-      ok(lastSnapshot != snapshot, "Snapshot " + i + " was different from the previous one");
+    if (lastSnapshot != snapshot) {
+      numDifferentSnapshotPairs += 1;
     }
     lastSnapshot = snapshot;
   }
+
+  // Check that the snapshot has changed since the baseline, indicating
+  // that the touch events caused async scrolling. Note that, since we
+  // orce a composite after each touch event, even if there is a frame
+  // of delay between APZ processing a touch event and the compositor
+  // applying the async scroll (bug 1375949), by the end of the gesture
+  // the snapshot should have changed.
+  ok(numDifferentSnapshotPairs > 0,
+     "The number of different snapshot pairs was " + numDifferentSnapshotPairs);
 
   // Wait for the touchend as well, just for good form
   yield;

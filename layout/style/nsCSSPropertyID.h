@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* enum types for CSS properties and their values */
- 
+
 #ifndef nsCSSPropertyID_h___
 #define nsCSSPropertyID_h___
 
@@ -41,7 +41,7 @@ enum nsCSSPropertyID {
   // Make the count continue where it left off:
   eCSSProperty_COUNT_DUMMY2 = eCSSProperty_COUNT - 1,
 
-  #define CSS_PROP_ALIAS(aliasname_, id_, method_, pref_) \
+  #define CSS_PROP_ALIAS(aliasname_, aliasid_, id_, method_, pref_) \
     eCSSPropertyAlias_##method_,
   #include "nsCSSPropAliasList.h"
   #undef CSS_PROP_ALIAS

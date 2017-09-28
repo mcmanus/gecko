@@ -33,7 +33,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(SVGSwitchElement, SVGSwitchElementBase,
 NS_IMPL_ADDREF_INHERITED(SVGSwitchElement,SVGSwitchElementBase)
 NS_IMPL_RELEASE_INHERITED(SVGSwitchElement,SVGSwitchElementBase)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(SVGSwitchElement)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(SVGSwitchElement)
 NS_INTERFACE_MAP_END_INHERITING(SVGSwitchElementBase)
 
 //----------------------------------------------------------------------
@@ -127,8 +127,8 @@ SVGSwitchElement::IsAttributeMapped(const nsIAtom* name) const
 nsIContent *
 SVGSwitchElement::FindActiveChild() const
 {
-  const nsAdoptingString& acceptLangs =
-    Preferences::GetLocalizedString("intl.accept_languages");
+  nsAutoString acceptLangs;
+  Preferences::GetLocalizedString("intl.accept_languages", acceptLangs);
 
   if (!acceptLangs.IsEmpty()) {
     int32_t bestLanguagePreferenceRank = -1;

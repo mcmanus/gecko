@@ -9,7 +9,6 @@
 #define mozilla_dom_HTMLHRElement_h
 
 #include "nsGenericHTMLElement.h"
-#include "nsIDOMHTMLHRElement.h"
 #include "nsMappedAttributes.h"
 #include "nsAttrValueInlines.h"
 #include "nsRuleData.h"
@@ -17,17 +16,13 @@
 namespace mozilla {
 namespace dom {
 
-class HTMLHRElement final : public nsGenericHTMLElement,
-                            public nsIDOMHTMLHRElement
+class HTMLHRElement final : public nsGenericHTMLElement
 {
 public:
   explicit HTMLHRElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
-
-  // nsIDOMHTMLHRElement
-  NS_DECL_NSIDOMHTMLHRELEMENT
 
   virtual bool ParseAttribute(int32_t aNamespaceID,
                               nsIAtom* aAttribute,
@@ -39,12 +34,19 @@ public:
                          bool aPreallocateChildren) const override;
 
   // WebIDL API
+  void GetAlign(nsAString& aValue) const
+  {
+    GetHTMLAttr(nsGkAtoms::align, aValue);
+  }
   void SetAlign(const nsAString& aAlign, ErrorResult& aError)
   {
     SetHTMLAttr(nsGkAtoms::align, aAlign, aError);
   }
 
-  // The XPCOM GetColor is OK for us
+  void GetColor(nsAString& aValue) const
+  {
+    GetHTMLAttr(nsGkAtoms::color, aValue);
+  }
   void SetColor(const nsAString& aColor, ErrorResult& aError)
   {
     SetHTMLAttr(nsGkAtoms::color, aColor, aError);
@@ -59,13 +61,19 @@ public:
     SetHTMLBoolAttr(nsGkAtoms::noshade, aNoShade, aError);
   }
 
-  // The XPCOM GetSize is OK for us
+  void GetSize(nsAString& aValue) const
+  {
+    GetHTMLAttr(nsGkAtoms::size, aValue);
+  }
   void SetSize(const nsAString& aSize, ErrorResult& aError)
   {
     SetHTMLAttr(nsGkAtoms::size, aSize, aError);
   }
 
-  // The XPCOM GetWidth is OK for us
+  void GetWidth(nsAString& aValue) const
+  {
+    GetHTMLAttr(nsGkAtoms::width, aValue);
+  }
   void SetWidth(const nsAString& aWidth, ErrorResult& aError)
   {
     SetHTMLAttr(nsGkAtoms::width, aWidth, aError);

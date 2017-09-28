@@ -43,7 +43,7 @@
 
 #if DEBUG
 #include "nsIWebNavigation.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #endif
 
 nsWebBrowserFind::nsWebBrowserFind()
@@ -516,7 +516,7 @@ nsWebBrowserFind::GetSearchLimits(nsIDOMRange* aSearchRange,
 
   nsCOMPtr<nsIDOMRange> range;
   nsCOMPtr<nsIDOMNode> node;
-  int32_t offset;
+  uint32_t offset;
 
   // Forward, not wrapping: SelEnd to DocEnd
   if (!mFindBackwards && !aWrap) {
@@ -798,8 +798,10 @@ nsWebBrowserFind::GetFrameSelection(nsPIDOMWindowOuter* aWindow)
   nsPresContext* presContext = presShell->GetPresContext();
 
   nsCOMPtr<nsPIDOMWindowOuter> focusedWindow;
-  nsCOMPtr<nsIContent> focusedContent = nsFocusManager::GetFocusedDescendant(
-    aWindow, false, getter_AddRefs(focusedWindow));
+  nsCOMPtr<nsIContent> focusedContent =
+    nsFocusManager::GetFocusedDescendant(aWindow,
+                                         nsFocusManager::eOnlyCurrentWindow,
+                                         getter_AddRefs(focusedWindow));
 
   nsIFrame* frame =
     focusedContent ? focusedContent->GetPrimaryFrame() : nullptr;

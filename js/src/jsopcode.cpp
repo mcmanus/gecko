@@ -13,7 +13,6 @@
 #define __STDC_FORMAT_MACROS
 
 #include "mozilla/Attributes.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/Vector.h"
 
@@ -116,45 +115,12 @@ js::GetVariableBytecodeLength(jsbytecode* pc)
     }
 }
 
-unsigned
-js::StackUses(JSScript* script, jsbytecode* pc)
-{
-    JSOp op = (JSOp) *pc;
-    const JSCodeSpec& cs = CodeSpec[op];
-    if (cs.nuses >= 0)
-        return cs.nuses;
-
-    MOZ_ASSERT(CodeSpec[op].nuses == -1);
-    switch (op) {
-      case JSOP_POPN:
-        return GET_UINT16(pc);
-      case JSOP_NEW:
-      case JSOP_SUPERCALL:
-        return 2 + GET_ARGC(pc) + 1;
-      default:
-        /* stack: fun, this, [argc arguments] */
-        MOZ_ASSERT(op == JSOP_CALL || op == JSOP_CALL_IGNORES_RV || op == JSOP_EVAL ||
-                   op == JSOP_CALLITER ||
-                   op == JSOP_STRICTEVAL || op == JSOP_FUNCALL || op == JSOP_FUNAPPLY);
-        return 2 + GET_ARGC(pc);
-    }
-}
-
-unsigned
-js::StackDefs(JSScript* script, jsbytecode* pc)
-{
-    JSOp op = (JSOp) *pc;
-    const JSCodeSpec& cs = CodeSpec[op];
-    MOZ_ASSERT(cs.ndefs >= 0);
-    return cs.ndefs;
-}
-
 const char * PCCounts::numExecName = "interp";
 
 static MOZ_MUST_USE bool
 DumpIonScriptCounts(Sprinter* sp, HandleScript script, jit::IonScriptCounts* ionCounts)
 {
-    if (!sp->jsprintf("IonScript [%" PRIuSIZE " blocks]:\n", ionCounts->numBlocks()))
+    if (!sp->jsprintf("IonScript [%zu blocks]:\n", ionCounts->numBlocks()))
         return false;
 
     for (size_t i = 0; i < ionCounts->numBlocks(); i++) {
@@ -242,11 +208,11 @@ js::DumpCompartmentPCCounts(JSContext* cx)
         if (!sprinter.init())
             return false;
 
-        fprintf(stdout, "--- SCRIPT %s:%" PRIuSIZE " ---\n", script->filename(), script->lineno());
+        fprintf(stdout, "--- SCRIPT %s:%zu ---\n", script->filename(), script->lineno());
         if (!DumpPCCounts(cx, script, &sprinter))
             return false;
         fputs(sprinter.string(), stdout);
-        fprintf(stdout, "--- END SCRIPT %s:%" PRIuSIZE " ---\n", script->filename(), script->lineno());
+        fprintf(stdout, "--- END SCRIPT %s:%zu ---\n", script->filename(), script->lineno());
     }
 
     return true;
@@ -481,7 +447,6 @@ class BytecodeParser
     bool parse();
 
 #ifdef DEBUG
-    bool isReachable(uint32_t offset) { return maybeCode(offset); }
     bool isReachable(const jsbytecode* pc) { return maybeCode(pc); }
 #endif /* DEBUG */
 
@@ -532,14 +497,6 @@ class BytecodeParser
         MOZ_ASSERT(uint32_t(operand) < code.stackDepthAfter);
         return code.offsetStackAfter[operand];
     }
-    jsbytecode* pcForStackOperandAfterPC(jsbytecode* pc, int operand, uint8_t* defIndex) {
-        size_t offset = script_->pcToOffset(pc);
-        const OffsetAndDefIndex& offsetAndDefIndex = offsetForStackOperandAfterPC(offset, operand);
-        if (offsetAndDefIndex.isSpecial())
-            return nullptr;
-        *defIndex = offsetAndDefIndex.defIndex();
-        return script_->offsetToPC(offsetAndDefIndex.offset());
-    }
 
     template <typename Callback>
     bool forEachJumpOrigins(jsbytecode* pc, Callback callback) {
@@ -568,11 +525,6 @@ class BytecodeParser
         ReportOutOfMemory(cx_);
     }
 
-    uint32_t numSlots() {
-        return 1 + script_->nfixed() +
-               (script_->functionNonDelazifying() ? script_->functionNonDelazifying()->nargs() : 0);
-    }
-
     uint32_t maximumStackDepth() {
         return script_->nslots() - script_->nfixed();
     }
@@ -582,13 +534,15 @@ class BytecodeParser
         MOZ_ASSERT(codeArray_[offset]);
         return *codeArray_[offset];
     }
-    Bytecode& getCode(const jsbytecode* pc) { return getCode(script_->pcToOffset(pc)); }
 
     Bytecode* maybeCode(uint32_t offset) {
         MOZ_ASSERT(offset < script_->length());
         return codeArray_[offset];
     }
+
+#ifdef DEBUG
     Bytecode* maybeCode(const jsbytecode* pc) { return maybeCode(script_->pcToOffset(pc)); }
+#endif
 
     uint32_t simulateOp(JSOp op, uint32_t offset, OffsetAndDefIndex* offsetStack,
                         uint32_t stackDepth);
@@ -607,8 +561,9 @@ uint32_t
 BytecodeParser::simulateOp(JSOp op, uint32_t offset, OffsetAndDefIndex* offsetStack,
                            uint32_t stackDepth)
 {
-    uint32_t nuses = GetUseCount(script_, offset);
-    uint32_t ndefs = GetDefCount(script_, offset);
+    jsbytecode* pc = script_->offsetToPC(offset);
+    uint32_t nuses = GetUseCount(pc);
+    uint32_t ndefs = GetDefCount(pc);
 
     MOZ_ASSERT(stackDepth >= nuses);
     stackDepth -= nuses;
@@ -684,7 +639,6 @@ BytecodeParser::simulateOp(JSOp op, uint32_t offset, OffsetAndDefIndex* offsetSt
 
       case JSOP_DUPAT: {
         MOZ_ASSERT(ndefs == 1);
-        jsbytecode* pc = script_->offsetToPC(offset);
         unsigned n = GET_UINT24(pc);
         MOZ_ASSERT(n < stackDepth);
         offsetStack[stackDepth] = offsetStack[stackDepth - 1 - n];
@@ -700,7 +654,6 @@ BytecodeParser::simulateOp(JSOp op, uint32_t offset, OffsetAndDefIndex* offsetSt
       }
 
       case JSOP_PICK: {
-        jsbytecode* pc = script_->offsetToPC(offset);
         unsigned n = GET_UINT8(pc);
         MOZ_ASSERT(ndefs == n + 1);
         uint32_t top = stackDepth + n;
@@ -712,7 +665,6 @@ BytecodeParser::simulateOp(JSOp op, uint32_t offset, OffsetAndDefIndex* offsetSt
       }
 
       case JSOP_UNPICK: {
-        jsbytecode* pc = script_->offsetToPC(offset);
         unsigned n = GET_UINT8(pc);
         MOZ_ASSERT(ndefs == n + 1);
         uint32_t top = stackDepth + n;
@@ -743,6 +695,7 @@ BytecodeParser::simulateOp(JSOp op, uint32_t offset, OffsetAndDefIndex* offsetSt
       case JSOP_THROWSETCONST:
       case JSOP_INITALIASEDLEXICAL:
       case JSOP_INITIALYIELD:
+      case JSOP_ITERNEXT:
         // Keep the top value.
         MOZ_ASSERT(nuses == 1);
         MOZ_ASSERT(ndefs == 1);
@@ -1209,7 +1162,7 @@ ToDisassemblySource(JSContext* cx, HandleValue v, JSAutoByteString* bytes)
 
         if (obj.is<JSFunction>()) {
             RootedFunction fun(cx, &obj.as<JSFunction>());
-            JSString* str = JS_DecompileFunction(cx, fun, JS_DONT_PRETTY_PRINT);
+            JSString* str = JS_DecompileFunction(cx, fun);
             if (!str)
                 return false;
             return bytes->encodeLatin1(cx, str);
@@ -1615,7 +1568,8 @@ Disassemble1(JSContext* cx, HandleScript script, jsbytecode* pc,
     if (!dumpStack())
         return 0;
 
-    sp->put("\n");
+    if (!sp->put("\n"))
+        return 0;
     return len;
 }
 
@@ -1886,9 +1840,32 @@ ExpressionDecompiler::decompilePC(jsbytecode* pc, uint8_t defIndex)
                write("(...)");
       case JSOP_NEWARRAY:
         return write("[]");
-      case JSOP_REGEXP:
-      case JSOP_OBJECT:
+      case JSOP_REGEXP: {
+        RootedObject obj(cx, script->getObject(GET_UINT32_INDEX(pc)));
+        JSString* str = obj->as<RegExpObject>().toString(cx);
+        if (!str)
+            return false;
+        return write(str);
+      }
       case JSOP_NEWARRAY_COPYONWRITE: {
+        RootedObject obj(cx, script->getObject(GET_UINT32_INDEX(pc)));
+        Handle<ArrayObject*> aobj = obj.as<ArrayObject>();
+        if (!write("["))
+            return false;
+        for (size_t i = 0; i < aobj->getDenseInitializedLength(); i++) {
+            if (i > 0 && !write(", "))
+                return false;
+
+            RootedValue v(cx, aobj->getDenseElement(i));
+            MOZ_RELEASE_ASSERT(v.isPrimitive() && !v.isMagic());
+
+            JSString* str = ValueToSource(cx, v);
+            if (!str || !write(str))
+                return false;
+        }
+        return write("]");
+      }
+      case JSOP_OBJECT: {
         JSObject* obj = script->getObject(GET_UINT32_INDEX(pc));
         RootedValue objv(cx, ObjectValue(*obj));
         JSString* str = ValueToSource(cx, objv);
@@ -2705,7 +2682,7 @@ GetPCCountJSON(JSContext* cx, const ScriptAndCounts& sac, StringBuffer& buf)
     if (!AppendJSONProperty(buf, "text", NO_COMMA))
         return false;
 
-    JSString* str = JS_DecompileScript(cx, script, nullptr, 0);
+    JSString* str = JS_DecompileScript(cx, script);
     if (!str || !(str = StringToSource(cx, str)))
         return false;
 
@@ -2942,7 +2919,6 @@ GenerateLcovInfo(JSContext* cx, JSCompartment* comp, GenericPrinter& out)
     coverage::LCovCompartment compCover;
     for (JSScript* topLevel: topScripts) {
         RootedScript topScript(cx, topLevel);
-        compCover.collectSourceFile(comp, &topScript->scriptSourceUnwrap());
 
         // We found the top-level script, visit all the functions reachable
         // from the top-level function, and delazify them.
@@ -2954,7 +2930,8 @@ GenerateLcovInfo(JSContext* cx, JSCompartment* comp, GenericPrinter& out)
         RootedFunction fun(cx);
         do {
             script = queue.popCopy();
-            compCover.collectCodeCoverageInfo(comp, script->sourceObject(), script);
+            if (script->filename())
+                compCover.collectCodeCoverageInfo(comp, script, script->filename());
 
             // Iterate from the last to the first object in order to have
             // the functions them visited in the opposite order when popping

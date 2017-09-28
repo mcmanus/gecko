@@ -22,12 +22,10 @@
 #ifndef rdfutil_h__
 #define rdfutil_h__
 
-
-class nsACString;
-class nsCString;
+#include "nsStringFwd.h"
 
 nsresult
-rdf_MakeRelativeRef(const nsCSubstring& aBaseURI, nsCString& aURI);
+rdf_MakeRelativeRef(const nsACString& aBaseURI, nsCString& aURI);
 
 void
 rdf_FormatDate(PRTime aTime, nsACString &aResult);

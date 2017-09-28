@@ -7,6 +7,8 @@ Support for running toolchain-building jobs via dedicated scripts
 
 from __future__ import absolute_import, print_function, unicode_literals
 
+import hashlib
+
 from taskgraph.util.schema import Schema
 from voluptuous import Optional, Required, Any
 
@@ -14,6 +16,8 @@ from taskgraph.transforms.job import run_job_using
 from taskgraph.transforms.job.common import (
     docker_worker_add_tc_vcs_cache,
     docker_worker_add_gecko_vcs_env_vars,
+    docker_worker_add_public_artifacts,
+    docker_worker_add_tooltool,
     support_vcs_checkout,
 )
 from taskgraph.util.hash import hash_paths
@@ -39,29 +43,51 @@ toolchain_run_schema = Schema({
     # Paths/patterns pointing to files that influence the outcome of a
     # toolchain build.
     Optional('resources'): [basestring],
+
+    # Path to the artifact produced by the toolchain job
+    Required('toolchain-artifact'): basestring,
+
+    # An alias that can be used instead of the real toolchain job name in
+    # the toolchains list for build jobs.
+    Optional('toolchain-alias'): basestring,
 })
 
 
-def add_optimizations(config, run, taskdesc):
+def add_optimization(config, run, taskdesc):
     files = list(run.get('resources', []))
     # This file
     files.append('taskcluster/taskgraph/transforms/job/toolchain.py')
     # The script
     files.append('taskcluster/scripts/misc/{}'.format(run['script']))
+    # Tooltool manifest if any is defined:
+    tooltool_manifest = taskdesc['worker']['env'].get('TOOLTOOL_MANIFEST')
+    if tooltool_manifest:
+        files.append(tooltool_manifest)
+
+    digest = hash_paths(GECKO, files)
+
+    # If the task has dependencies, we need those dependencies to influence
+    # the index path. So take the digest from the files above, add the list
+    # of its dependencies, and hash the aggregate.
+    # If the task has no dependencies, just use the digest from above.
+    deps = taskdesc['dependencies']
+    if deps:
+        data = [digest] + sorted(deps.values())
+        digest = hashlib.sha256('\n'.join(data)).hexdigest()
 
     label = taskdesc['label']
     subs = {
-        'name': label.replace('toolchain-', '').split('/')[0],
-        'digest': hash_paths(GECKO, files),
+        'name': label.replace('%s-' % config.kind, ''),
+        'digest': digest,
     }
-
-    optimizations = taskdesc.setdefault('optimizations', [])
 
     # We'll try to find a cached version of the toolchain at levels above
     # and including the current level, starting at the highest level.
+    index_routes = []
     for level in reversed(range(int(config.params['level']), 4)):
         subs['level'] = level
-        optimizations.append(['index-search', TOOLCHAIN_INDEX.format(**subs)])
+        index_routes.append(TOOLCHAIN_INDEX.format(**subs))
+    taskdesc['optimization'] = {'index-search': index_routes}
 
     # ... and cache at the lowest level.
     taskdesc.setdefault('routes', []).append(
@@ -75,17 +101,12 @@ def docker_worker_toolchain(config, job, taskdesc):
 
     worker = taskdesc['worker']
     worker['artifacts'] = []
-    worker['caches'] = []
+    worker['chain-of-trust'] = True
 
-    worker['artifacts'].append({
-        'name': 'public',
-        'path': '/home/worker/workspace/artifacts/',
-        'type': 'directory',
-    })
-
+    docker_worker_add_public_artifacts(config, job, taskdesc)
     docker_worker_add_tc_vcs_cache(config, job, taskdesc)
     docker_worker_add_gecko_vcs_env_vars(config, job, taskdesc)
-    support_vcs_checkout(config, job, taskdesc)
+    support_vcs_checkout(config, job, taskdesc, sparse=True)
 
     env = worker['env']
     env.update({
@@ -95,42 +116,28 @@ def docker_worker_toolchain(config, job, taskdesc):
         'MOZ_AUTOMATION': '1',
     })
 
-    # tooltool downloads.  By default we download using the API endpoint, but
-    # the job can optionally request relengapi-proxy (for example when downloading
-    # internal tooltool resources.  So we define the tooltool cache unconditionally.
-    worker['caches'].append({
-        'type': 'persistent',
-        'name': 'tooltool-cache',
-        'mount-point': '/home/worker/tooltool-cache',
-    })
-    env['TOOLTOOL_CACHE'] = '/home/worker/tooltool-cache'
-
-    # tooltool downloads
-    worker['relengapi-proxy'] = False  # but maybe enabled for tooltool below
     if run['tooltool-downloads']:
-        worker['relengapi-proxy'] = True
-        taskdesc['scopes'].extend([
-            'docker-worker:relengapi-proxy:tooltool.download.public',
-        ])
-        if run['tooltool-downloads'] == 'internal':
-            taskdesc['scopes'].append(
-                'docker-worker:relengapi-proxy:tooltool.download.internal')
+        internal = run['tooltool-downloads'] == 'internal'
+        docker_worker_add_tooltool(config, job, taskdesc, internal=internal)
 
     worker['command'] = [
-        '/home/worker/bin/run-task',
-        # Various caches/volumes are default owned by root:root.
-        '--chown-recursive', '/home/worker/workspace',
-        '--chown-recursive', '/home/worker/tooltool-cache',
-        '--vcs-checkout=/home/worker/workspace/build/src',
+        '/builds/worker/bin/run-task',
+        '--vcs-checkout=/builds/worker/workspace/build/src',
+        '--sparse-profile', 'build/sparse-profiles/toolchain-build',
         '--',
         'bash',
         '-c',
-        'cd /home/worker && '
+        'cd /builds/worker && '
         './workspace/build/src/taskcluster/scripts/misc/{}'.format(
             run['script'])
     ]
 
-    add_optimizations(config, run, taskdesc)
+    attributes = taskdesc.setdefault('attributes', {})
+    attributes['toolchain-artifact'] = run['toolchain-artifact']
+    if 'toolchain-alias' in run:
+        attributes['toolchain-alias'] = run['toolchain-alias']
+
+    add_optimization(config, run, taskdesc)
 
 
 @run_job_using("generic-worker", "toolchain-script", schema=toolchain_run_schema)
@@ -144,18 +151,9 @@ def windows_toolchain(config, job, taskdesc):
         'path': r'public\build',
         'type': 'directory',
     }]
+    worker['chain-of-trust'] = True
 
     docker_worker_add_gecko_vcs_env_vars(config, job, taskdesc)
-
-    # We fetch LLVM SVN into this.
-    svn_cache = 'level-{}-toolchain-clang-cl-build-svn'.format(config.params['level'])
-    worker['mounts'] = [{
-        'cache-name': svn_cache,
-        'directory': r'llvm-sources',
-    }]
-    taskdesc['scopes'].extend([
-        'generic-worker:cache:' + svn_cache,
-    ])
 
     env = worker['env']
     env.update({
@@ -181,4 +179,9 @@ def windows_toolchain(config, job, taskdesc):
         r'{} -c ./build/src/taskcluster/scripts/misc/{}'.format(bash, run['script'])
     ]
 
-    add_optimizations(config, run, taskdesc)
+    attributes = taskdesc.setdefault('attributes', {})
+    attributes['toolchain-artifact'] = run['toolchain-artifact']
+    if 'toolchain-alias' in run:
+        attributes['toolchain-alias'] = run['toolchain-alias']
+
+    add_optimization(config, run, taskdesc)

@@ -9,6 +9,7 @@
 #include "nsIAtom.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/ClearOnShutdown.h"
+#include "mozilla/Encoding.h"
 #include "mozilla/intl/OSPreferences.h"
 #include "mozilla/ServoBindings.h"
 
@@ -46,11 +47,13 @@ nsLanguageAtomService::LookupLanguage(const nsACString &aLanguage)
 }
 
 already_AddRefed<nsIAtom>
-nsLanguageAtomService::LookupCharSet(const nsACString& aCharSet)
+nsLanguageAtomService::LookupCharSet(NotNull<const Encoding*> aEncoding)
 {
+  nsAutoCString charset;
+  aEncoding->Name(charset);
   nsAutoCString group;
   if (NS_FAILED(nsUConvPropertySearch::SearchPropertyValue(
-      encodingsGroups, ArrayLength(encodingsGroups), aCharSet, group))) {
+      encodingsGroups, ArrayLength(encodingsGroups), charset, group))) {
     return RefPtr<nsIAtom>(nsGkAtoms::Unicode).forget();
   }
   return NS_Atomize(group);
@@ -61,11 +64,19 @@ nsLanguageAtomService::GetLocaleLanguage()
 {
   do {
     if (!mLocaleLanguage) {
-      nsAutoCString locale;
-      OSPreferences::GetInstance()->GetSystemLocale(locale);
+      AutoTArray<nsCString, 10> regionalPrefsLocales;
+      if (OSPreferences::GetInstance()->GetRegionalPrefsLocales(
+                                          regionalPrefsLocales)) {
+        // use lowercase for all language atoms
+        ToLowerCase(regionalPrefsLocales[0]);
+        mLocaleLanguage = NS_Atomize(regionalPrefsLocales[0]);
+      } else {
+        nsAutoCString locale;
+        OSPreferences::GetInstance()->GetSystemLocale(locale);
 
-      ToLowerCase(locale); // use lowercase for all language atoms
-      mLocaleLanguage = NS_Atomize(locale);
+        ToLowerCase(locale); // use lowercase for all language atoms
+        mLocaleLanguage = NS_Atomize(locale);
+      }
     }
   } while (0);
 
@@ -98,6 +109,7 @@ nsLanguageAtomService::GetUncachedLanguageGroup(nsIAtom* aLanguage) const
 {
   nsAutoCString langStr;
   aLanguage->ToUTF8String(langStr);
+  ToLowerCase(langStr);
 
   nsAutoCString langGroupStr;
   nsresult res =

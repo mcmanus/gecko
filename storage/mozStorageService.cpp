@@ -288,8 +288,7 @@ Service::~Service()
   if (rc != SQLITE_OK)
     NS_WARNING("sqlite3 did not shutdown cleanly.");
 
-  DebugOnly<bool> shutdownObserved = !sXPConnect;
-  NS_ASSERTION(shutdownObserved, "Shutdown was not observed!");
+  shutdown(); // To release sXPConnect.
 
   gService = nullptr;
   delete mSqliteVFS;
@@ -387,6 +386,7 @@ Service::minimizeMemory()
       // dispatch will fail and that's okay.
       nsCOMPtr<nsIRunnable> event =
         NewRunnableMethod<const nsCString>(
+          "Connection::ExecuteSimpleSQL",
           conn, &Connection::ExecuteSimpleSQL, shrinkPragma);
       Unused << conn->threadOpenedOn->Dispatch(event, NS_DISPATCH_NORMAL);
     }
@@ -677,7 +677,8 @@ public:
                     nsIFile* aStorageFile,
                     int32_t aGrowthIncrement,
                     mozIStorageCompletionCallback* aCallback)
-    : mConnection(aConnection)
+    : Runnable("storage::AsyncInitDatabase")
+    , mConnection(aConnection)
     , mStorageFile(aStorageFile)
     , mGrowthIncrement(aGrowthIncrement)
     , mCallback(aCallback)
@@ -713,15 +714,15 @@ private:
 
   ~AsyncInitDatabase()
   {
-    NS_ReleaseOnMainThread(
+    NS_ReleaseOnMainThreadSystemGroup(
       "AsyncInitDatabase::mStorageFile", mStorageFile.forget());
-    NS_ReleaseOnMainThread(
+    NS_ReleaseOnMainThreadSystemGroup(
       "AsyncInitDatabase::mConnection", mConnection.forget());
 
     // Generally, the callback will be released by CallbackComplete.
     // However, if for some reason Run() is not executed, we still
     // need to ensure that it is released here.
-    NS_ReleaseOnMainThread(
+    NS_ReleaseOnMainThreadSystemGroup(
       "AsyncInitDatabase::mCallback", mCallback.forget());
   }
 
@@ -933,6 +934,13 @@ Service::Observe(nsISupports *, const char *aTopic, const char16_t *)
   } else if (strcmp(aTopic, "xpcom-shutdown") == 0) {
     shutdown();
   } else if (strcmp(aTopic, "xpcom-shutdown-threads") == 0) {
+    // The Service is kept alive by our strong observer references and
+    // references held by Connection instances.  Since we're about to remove the
+    // former and then wait for the latter ones to go away, it behooves us to
+    // hold a strong reference to ourselves so our calls to getConnections() do
+    // not happen on a deleted object.
+    RefPtr<Service> kungFuDeathGrip = this;
+
     nsCOMPtr<nsIObserverService> os =
       mozilla::services::GetObserverService();
 

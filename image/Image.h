@@ -72,11 +72,15 @@ struct SurfaceMemoryCounter
 {
   SurfaceMemoryCounter(const SurfaceKey& aKey,
                        bool aIsLocked,
+                       bool aCannotSubstitute,
+                       bool aIsFactor2,
                        SurfaceMemoryCounterType aType =
                          SurfaceMemoryCounterType::NORMAL)
     : mKey(aKey)
     , mType(aType)
     , mIsLocked(aIsLocked)
+    , mCannotSubstitute(aCannotSubstitute)
+    , mIsFactor2(aIsFactor2)
   { }
 
   const SurfaceKey& Key() const { return mKey; }
@@ -84,19 +88,21 @@ struct SurfaceMemoryCounter
   const MemoryCounter& Values() const { return mValues; }
   SurfaceMemoryCounterType Type() const { return mType; }
   bool IsLocked() const { return mIsLocked; }
+  bool CannotSubstitute() const { return mCannotSubstitute; }
+  bool IsFactor2() const { return mIsFactor2; }
 
 private:
   const SurfaceKey mKey;
   MemoryCounter mValues;
   const SurfaceMemoryCounterType mType;
   const bool mIsLocked;
+  const bool mCannotSubstitute;
+  const bool mIsFactor2;
 };
 
 struct ImageMemoryCounter
 {
-  ImageMemoryCounter(Image* aImage,
-                     MallocSizeOf aMallocSizeOf,
-                     bool aIsUsed);
+  ImageMemoryCounter(Image* aImage, SizeOfState& aState, bool aIsUsed);
 
   nsCString& URI() { return mURI; }
   const nsCString& URI() const { return mURI; }
@@ -167,7 +173,7 @@ public:
    * ensure that something reasonable is always returned.
    */
   virtual size_t
-    SizeOfSourceWithComputedFallback(MallocSizeOf aMallocSizeOf) const = 0;
+    SizeOfSourceWithComputedFallback(SizeOfState& aState) const = 0;
 
   /**
    * Collect an accounting of the memory occupied by the image's surfaces (which

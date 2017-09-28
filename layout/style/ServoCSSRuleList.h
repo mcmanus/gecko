@@ -49,7 +49,7 @@ public:
   nsresult InsertRule(const nsAString& aRule, uint32_t aIndex);
   nsresult DeleteRule(uint32_t aIndex);
 
-  uint16_t GetRuleType(uint32_t aIndex) const;
+  uint16_t GetDOMCSSRuleType(uint32_t aIndex) const;
 
 private:
   virtual ~ServoCSSRuleList();
@@ -70,9 +70,6 @@ private:
   void EnumerateInstantiatedRules(Func aCallback);
 
   void DropAllRules();
-
-  template<typename ChildSheetGetter>
-  inline void ConstructImportRule(uint32_t aIndex, ChildSheetGetter aGetter);
 
   // mStyleSheet may be nullptr when it drops the reference to us.
   ServoStyleSheet* mStyleSheet = nullptr;

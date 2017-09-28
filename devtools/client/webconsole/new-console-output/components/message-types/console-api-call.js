@@ -21,16 +21,15 @@ const Message = createFactory(require("devtools/client/webconsole/new-console-ou
 ConsoleApiCall.displayName = "ConsoleApiCall";
 
 ConsoleApiCall.propTypes = {
+  dispatch: PropTypes.func.isRequired,
   message: PropTypes.object.isRequired,
   open: PropTypes.bool,
   serviceContainer: PropTypes.object.isRequired,
-  indent: PropTypes.number.isRequired,
   timestampsVisible: PropTypes.bool.isRequired,
 };
 
 ConsoleApiCall.defaultProps = {
   open: false,
-  indent: 0,
 };
 
 function ConsoleApiCall(props) {
@@ -40,12 +39,12 @@ function ConsoleApiCall(props) {
     open,
     tableData,
     serviceContainer,
-    indent,
     timestampsVisible,
     repeat,
   } = props;
   const {
     id: messageId,
+    indent,
     source,
     type,
     level,
@@ -58,16 +57,25 @@ function ConsoleApiCall(props) {
   } = message;
 
   let messageBody;
+  const messageBodyConfig = {
+    dispatch,
+    messageId,
+    parameters,
+    userProvidedStyles,
+    serviceContainer,
+    type,
+  };
+
   if (type === "trace") {
     messageBody = dom.span({className: "cm-variable"}, "console.trace()");
   } else if (type === "assert") {
-    let reps = formatReps(parameters);
+    let reps = formatReps(messageBodyConfig);
     messageBody = dom.span({ className: "cm-variable" }, "Assertion failed: ", reps);
   } else if (type === "table") {
     // TODO: Chrome does not output anything, see if we want to keep this
     messageBody = dom.span({className: "cm-variable"}, "console.table()");
   } else if (parameters) {
-    messageBody = formatReps(parameters, userProvidedStyles, serviceContainer);
+    messageBody = formatReps(messageBodyConfig);
   } else {
     messageBody = messageText;
   }
@@ -79,7 +87,7 @@ function ConsoleApiCall(props) {
       id: message.id,
       serviceContainer,
       parameters: message.parameters,
-      tableData
+      tableData,
     });
   }
 
@@ -114,16 +122,32 @@ function ConsoleApiCall(props) {
   });
 }
 
-function formatReps(parameters, userProvidedStyles, serviceContainer) {
+function formatReps(options = {}) {
+  const {
+    dispatch,
+    loadedObjectProperties,
+    loadedObjectEntries,
+    messageId,
+    parameters,
+    serviceContainer,
+    userProvidedStyles,
+    type,
+  } = options;
+
   return (
     parameters
       // Get all the grips.
       .map((grip, key) => GripMessageBody({
+        dispatch,
+        messageId,
         grip,
         key,
         userProvidedStyle: userProvidedStyles ? userProvidedStyles[key] : null,
         serviceContainer,
         useQuotes: false,
+        loadedObjectProperties,
+        loadedObjectEntries,
+        type,
       }))
       // Interleave spaces.
       .reduce((arr, v, i) => {

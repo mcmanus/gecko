@@ -26,6 +26,7 @@
 #include "vm/Debugger.h"
 #include "vm/StringBuffer.h"
 #include "wasm/WasmBinaryToText.h"
+#include "wasm/WasmInstance.h"
 #include "wasm/WasmValidate.h"
 
 using namespace js;
@@ -549,6 +550,61 @@ DebugState::debugGetResultType(uint32_t funcIndex)
     return metadata().debugFuncReturnTypes[funcIndex];
 }
 
+bool
+DebugState::getGlobal(Instance& instance, uint32_t globalIndex, MutableHandleValue vp)
+{
+    const GlobalDesc& global = metadata().globals[globalIndex];
+
+    if (global.isConstant()) {
+        Val value = global.constantValue();
+        switch (value.type()) {
+          case ValType::I32:
+            vp.set(Int32Value(value.i32()));
+            break;
+          case ValType::I64:
+          // Just display as a Number; it's ok if we lose some precision
+            vp.set(NumberValue((double)value.i64()));
+            break;
+          case ValType::F32:
+            vp.set(NumberValue(JS::CanonicalizeNaN(value.f32())));
+            break;
+          case ValType::F64:
+            vp.set(NumberValue(JS::CanonicalizeNaN(value.f64())));
+            break;
+          default:
+            MOZ_CRASH("Global constant type");
+        }
+        return true;
+    }
+
+    uint8_t* globalData = instance.globalSegment().globalData();
+    void* dataPtr = globalData + global.offset();
+    switch (global.type()) {
+      case ValType::I32: {
+        vp.set(Int32Value(*static_cast<int32_t*>(dataPtr)));
+        break;
+      }
+      case ValType::I64: {
+        // Just display as a Number; it's ok if we lose some precision
+        vp.set(NumberValue((double)*static_cast<int64_t*>(dataPtr)));
+        break;
+      }
+      case ValType::F32: {
+        vp.set(NumberValue(JS::CanonicalizeNaN(*static_cast<float*>(dataPtr))));
+        break;
+      }
+      case ValType::F64: {
+        vp.set(NumberValue(JS::CanonicalizeNaN(*static_cast<double*>(dataPtr))));
+        break;
+      }
+      default:
+        MOZ_CRASH("Global variable type");
+        break;
+    }
+    return true;
+}
+
+
 JSString*
 DebugState::debugDisplayURL(JSContext* cx) const
 {
@@ -556,9 +612,11 @@ DebugState::debugDisplayURL(JSContext* cx) const
     // - "wasm:" as protocol;
     // - URI encoded filename from metadata (if can be encoded), plus ":";
     // - 64-bit hash of the module bytes (as hex dump).
+
     js::StringBuffer result(cx);
     if (!result.append("wasm:"))
         return nullptr;
+
     if (const char* filename = metadata().filename.get()) {
         js::StringBuffer filenamePrefix(cx);
         // EncodeURI returns false due to invalid chars or OOM -- fail only
@@ -567,19 +625,25 @@ DebugState::debugDisplayURL(JSContext* cx) const
             if (!cx->isExceptionPending())
                 return nullptr;
             cx->clearPendingException(); // ignore invalid URI
-        } else if (!result.append(filenamePrefix.finishString()) || !result.append(":")) {
+        } else if (!result.append(filenamePrefix.finishString())) {
             return nullptr;
         }
     }
 
-    const ModuleHash& hash = metadata().hash;
-    for (size_t i = 0; i < sizeof(ModuleHash); i++) {
-        char digit1 = hash[i] / 16, digit2 = hash[i] % 16;
-        if (!result.append((char)(digit1 < 10 ? digit1 + '0' : digit1 + 'a' - 10)))
+    if (metadata().debugEnabled) {
+        if (!result.append(":"))
             return nullptr;
-        if (!result.append((char)(digit2 < 10 ? digit2 + '0' : digit2 + 'a' - 10)))
-            return nullptr;
+
+        const ModuleHash& hash = metadata().debugHash;
+        for (size_t i = 0; i < sizeof(ModuleHash); i++) {
+            char digit1 = hash[i] / 16, digit2 = hash[i] % 16;
+            if (!result.append((char)(digit1 < 10 ? digit1 + '0' : digit1 + 'a' - 10)))
+                return nullptr;
+            if (!result.append((char)(digit2 < 10 ? digit2 + '0' : digit2 + 'a' - 10)))
+                return nullptr;
+        }
     }
+
     return result.finishString();
 }
 

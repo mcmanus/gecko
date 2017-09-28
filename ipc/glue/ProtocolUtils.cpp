@@ -76,7 +76,8 @@ public:
                 NestedLevel aNestedLevel = NOT_NESTED)
     : IPC::Message(MSG_ROUTING_CONTROL, // these only go to top-level actors
                    CHANNEL_OPENED_MESSAGE_TYPE,
-                   aNestedLevel)
+                   0,
+                   HeaderFlags(aNestedLevel))
   {
     IPC::WriteParam(this, aDescriptor);
     IPC::WriteParam(this, aOtherProcess);
@@ -643,7 +644,16 @@ IToplevelProtocol::Open(MessageChannel* aChannel,
                         mozilla::ipc::Side aSide)
 {
   SetOtherProcessId(base::GetCurrentProcId());
-  return GetIPCChannel()->Open(aChannel, aMessageLoop, aSide);
+  return GetIPCChannel()->Open(aChannel, aMessageLoop->SerialEventTarget(), aSide);
+}
+
+bool
+IToplevelProtocol::Open(MessageChannel* aChannel,
+                        nsIEventTarget* aEventTarget,
+                        mozilla::ipc::Side aSide)
+{
+  SetOtherProcessId(base::GetCurrentProcId());
+  return GetIPCChannel()->Open(aChannel, aEventTarget, aSide);
 }
 
 void
@@ -816,13 +826,6 @@ IToplevelProtocol::ShmemDestroyed(const Message& aMsg)
 already_AddRefed<nsIEventTarget>
 IToplevelProtocol::GetMessageEventTarget(const Message& aMsg)
 {
-  if (IsMainThreadProtocol() && SystemGroup::Initialized()) {
-    if (aMsg.type() == SHMEM_CREATED_MESSAGE_TYPE ||
-        aMsg.type() == SHMEM_DESTROYED_MESSAGE_TYPE) {
-      return do_AddRef(SystemGroup::EventTargetFor(TaskCategory::Other));
-    }
-  }
-
   int32_t route = aMsg.routing_id();
 
   Maybe<MutexAutoLock> lock;

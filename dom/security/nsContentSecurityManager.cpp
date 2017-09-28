@@ -1,8 +1,10 @@
 #include "nsContentSecurityManager.h"
+#include "nsEscape.h"
 #include "nsIChannel.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIStreamListener.h"
 #include "nsILoadInfo.h"
+#include "nsIOService.h"
 #include "nsContentUtils.h"
 #include "nsCORSListenerProxy.h"
 #include "nsIStreamListener.h"
@@ -11,12 +13,72 @@
 #include "nsCDefaultURIFixup.h"
 #include "nsIURIFixup.h"
 #include "nsIImageLoadingContent.h"
+#include "NullPrincipal.h"
 
 #include "mozilla/dom/Element.h"
 
 NS_IMPL_ISUPPORTS(nsContentSecurityManager,
                   nsIContentSecurityManager,
                   nsIChannelEventSink)
+
+/* static */ bool
+nsContentSecurityManager::AllowTopLevelNavigationToDataURI(
+  nsIURI* aURI,
+  nsContentPolicyType aContentPolicyType,
+  nsIPrincipal* aTriggeringPrincipal,
+  bool aLoadFromExternal)
+{
+  // Let's block all toplevel document navigations to a data: URI.
+  // In all cases where the toplevel document is navigated to a
+  // data: URI the triggeringPrincipal is a codeBasePrincipal, or
+  // a NullPrincipal. In other cases, e.g. typing a data: URL into
+  // the URL-Bar, the triggeringPrincipal is a SystemPrincipal;
+  // we don't want to block those loads. Only exception, loads coming
+  // from an external applicaton (e.g. Thunderbird) don't load
+  // using a codeBasePrincipal, but we want to block those loads.
+  if (!mozilla::net::nsIOService::BlockToplevelDataUriNavigations()) {
+    return true;
+  }
+  if (aContentPolicyType != nsIContentPolicy::TYPE_DOCUMENT) {
+    return true;
+  }
+  bool isDataURI =
+    (NS_SUCCEEDED(aURI->SchemeIs("data", &isDataURI)) && isDataURI);
+  if (!isDataURI) {
+    return true;
+  }
+  // Whitelist data: images as long as they are not SVGs
+  nsAutoCString filePath;
+  aURI->GetFilePath(filePath);
+  if (StringBeginsWith(filePath, NS_LITERAL_CSTRING("image/")) &&
+      !StringBeginsWith(filePath, NS_LITERAL_CSTRING("image/svg+xml"))) {
+    return true;
+  }
+  // Whitelist data: PDFs
+  if (StringBeginsWith(filePath, NS_LITERAL_CSTRING("application/pdf"))) {
+    return true;
+  }
+  if (!aLoadFromExternal &&
+      nsContentUtils::IsSystemPrincipal(aTriggeringPrincipal)) {
+    return true;
+  }
+  nsAutoCString dataSpec;
+  aURI->GetSpec(dataSpec);
+  if (dataSpec.Length() > 50) {
+    dataSpec.Truncate(50);
+    dataSpec.AppendLiteral("...");
+  }
+  NS_ConvertUTF8toUTF16 specUTF16(NS_UnescapeURL(dataSpec));
+  const char16_t* params[] = { specUTF16.get() };
+  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                  NS_LITERAL_CSTRING("DATA_URI_BLOCKED"),
+                                  // no doc available, log to browser console
+                                  nullptr,
+                                  nsContentUtils::eSECURITY_PROPERTIES,
+                                  "BlockTopLevelDataURINavigation",
+                                  params, ArrayLength(params));
+  return false;
+}
 
 static nsresult
 ValidateSecurityFlags(nsILoadInfo* aLoadInfo)
@@ -175,7 +237,7 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
   nsContentPolicyType internalContentPolicyType =
     aLoadInfo->InternalContentPolicyType();
   nsCString mimeTypeGuess;
-  nsCOMPtr<nsINode> requestingContext = nullptr;
+  nsCOMPtr<nsISupports> requestingContext = nullptr;
 
   nsCOMPtr<nsIURI> uri;
   nsresult rv = NS_GetFinalChannelURI(aChannel, getter_AddRefs(uri));
@@ -229,7 +291,7 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
 
     case nsIContentPolicy::TYPE_DOCUMENT: {
       mimeTypeGuess = EmptyCString();
-      requestingContext = aLoadInfo->LoadingNode();
+      requestingContext = aLoadInfo->ContextForTopLevelLoad();
       break;
     }
 
@@ -259,10 +321,13 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
     case nsIContentPolicy::TYPE_XMLHTTPREQUEST: {
       // alias nsIContentPolicy::TYPE_DATAREQUEST:
       requestingContext = aLoadInfo->LoadingNode();
-      MOZ_ASSERT(!requestingContext ||
-                 requestingContext->NodeType() == nsIDOMNode::DOCUMENT_NODE,
-                 "type_xml requires requestingContext of type Document");
-
+#ifdef DEBUG
+      {
+        nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext);
+        MOZ_ASSERT(!node || node->NodeType() == nsIDOMNode::DOCUMENT_NODE,
+                   "type_xml requires requestingContext of type Document");
+      }
+#endif
       // We're checking for the external TYPE_XMLHTTPREQUEST here in case
       // an addon creates a request with that type.
       if (internalContentPolicyType ==
@@ -283,18 +348,26 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
     case nsIContentPolicy::TYPE_OBJECT_SUBREQUEST: {
       mimeTypeGuess = EmptyCString();
       requestingContext = aLoadInfo->LoadingNode();
-      MOZ_ASSERT(!requestingContext ||
-                 requestingContext->NodeType() == nsIDOMNode::ELEMENT_NODE,
-                 "type_subrequest requires requestingContext of type Element");
+#ifdef DEBUG
+      {
+        nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext);
+        MOZ_ASSERT(!node || node->NodeType() == nsIDOMNode::ELEMENT_NODE,
+                   "type_subrequest requires requestingContext of type Element");
+      }
+#endif
       break;
     }
 
     case nsIContentPolicy::TYPE_DTD: {
       mimeTypeGuess = EmptyCString();
       requestingContext = aLoadInfo->LoadingNode();
-      MOZ_ASSERT(!requestingContext ||
-                 requestingContext->NodeType() == nsIDOMNode::DOCUMENT_NODE,
-                 "type_dtd requires requestingContext of type Document");
+#ifdef DEBUG
+      {
+        nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext);
+        MOZ_ASSERT(!node || node->NodeType() == nsIDOMNode::DOCUMENT_NODE,
+                   "type_dtd requires requestingContext of type Document");
+      }
+#endif
       break;
     }
 
@@ -312,9 +385,13 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
         mimeTypeGuess = EmptyCString();
       }
       requestingContext = aLoadInfo->LoadingNode();
-      MOZ_ASSERT(!requestingContext ||
-                 requestingContext->NodeType() == nsIDOMNode::ELEMENT_NODE,
-                 "type_media requires requestingContext of type Element");
+#ifdef DEBUG
+      {
+        nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext);
+        MOZ_ASSERT(!node || node->NodeType() == nsIDOMNode::ELEMENT_NODE,
+                   "type_media requires requestingContext of type Element");
+      }
+#endif
       break;
     }
 
@@ -342,18 +419,26 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
     case nsIContentPolicy::TYPE_XSLT: {
       mimeTypeGuess = NS_LITERAL_CSTRING("application/xml");
       requestingContext = aLoadInfo->LoadingNode();
-      MOZ_ASSERT(!requestingContext ||
-                 requestingContext->NodeType() == nsIDOMNode::DOCUMENT_NODE,
-                 "type_xslt requires requestingContext of type Document");
+#ifdef DEBUG
+      {
+        nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext);
+        MOZ_ASSERT(!node || node->NodeType() == nsIDOMNode::DOCUMENT_NODE,
+                   "type_xslt requires requestingContext of type Document");
+      }
+#endif
       break;
     }
 
     case nsIContentPolicy::TYPE_BEACON: {
       mimeTypeGuess = EmptyCString();
       requestingContext = aLoadInfo->LoadingNode();
-      MOZ_ASSERT(!requestingContext ||
-                 requestingContext->NodeType() == nsIDOMNode::DOCUMENT_NODE,
-                 "type_beacon requires requestingContext of type Document");
+#ifdef DEBUG
+      {
+        nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext);
+        MOZ_ASSERT(!node || node->NodeType() == nsIDOMNode::DOCUMENT_NODE,
+                   "type_beacon requires requestingContext of type Document");
+      }
+#endif
       break;
     }
 
@@ -396,8 +481,7 @@ DoContentSecurityChecks(nsIChannel* aChannel, nsILoadInfo* aLoadInfo)
                                  mimeTypeGuess,
                                  nullptr,        //extra,
                                  &shouldLoad,
-                                 nsContentUtils::GetContentPolicy(),
-                                 nsContentUtils::GetSecurityManager());
+                                 nsContentUtils::GetContentPolicy());
 
   if (NS_FAILED(rv) || NS_CP_REJECTED(shouldLoad)) {
     if ((NS_SUCCEEDED(rv) && shouldLoad == nsIContentPolicy::REJECT_TYPE) &&
@@ -502,6 +586,27 @@ nsContentSecurityManager::AsyncOnChannelRedirect(nsIChannel* aOldChannel,
     }
   }
 
+  // Redirecting to a toplevel data: URI is not allowed, hence we pass
+  // a NullPrincipal as the TriggeringPrincipal to
+  // AllowTopLevelNavigationToDataURI() which definitely blocks any
+  // data: URI load.
+  nsCOMPtr<nsILoadInfo> newLoadInfo = aNewChannel->GetLoadInfo();
+  if (newLoadInfo) {
+    nsCOMPtr<nsIURI> uri;
+    nsresult rv = NS_GetFinalChannelURI(aNewChannel, getter_AddRefs(uri));
+    NS_ENSURE_SUCCESS(rv, rv);
+    nsCOMPtr<nsIPrincipal> nullTriggeringPrincipal = NullPrincipal::Create();
+    if (!nsContentSecurityManager::AllowTopLevelNavigationToDataURI(
+          uri,
+          newLoadInfo->GetExternalContentPolicyType(),
+          nullTriggeringPrincipal,
+          false)) {
+        // logging to console happens within AllowTopLevelNavigationToDataURI
+      aOldChannel->Cancel(NS_ERROR_DOM_BAD_URI);
+      return NS_ERROR_DOM_BAD_URI;
+    }
+  }
+
   // Also verify that the redirecting server is allowed to redirect to the
   // given URI
   nsCOMPtr<nsIPrincipal> oldPrincipal;
@@ -509,21 +614,14 @@ nsContentSecurityManager::AsyncOnChannelRedirect(nsIChannel* aOldChannel,
     GetChannelResultPrincipal(aOldChannel, getter_AddRefs(oldPrincipal));
 
   nsCOMPtr<nsIURI> newURI;
-  aNewChannel->GetURI(getter_AddRefs(newURI));
-  nsCOMPtr<nsIURI> newOriginalURI;
-  aNewChannel->GetOriginalURI(getter_AddRefs(newOriginalURI));
-
-  NS_ENSURE_STATE(oldPrincipal && newURI && newOriginalURI);
+  Unused << NS_GetFinalChannelURI(aNewChannel, getter_AddRefs(newURI));
+  NS_ENSURE_STATE(oldPrincipal && newURI);
 
   const uint32_t flags =
       nsIScriptSecurityManager::LOAD_IS_AUTOMATIC_DOCUMENT_REPLACEMENT |
       nsIScriptSecurityManager::DISALLOW_SCRIPT;
   nsresult rv = nsContentUtils::GetSecurityManager()->
     CheckLoadURIWithPrincipal(oldPrincipal, newURI, flags);
-  if (NS_SUCCEEDED(rv) && newOriginalURI != newURI) {
-      rv = nsContentUtils::GetSecurityManager()->
-        CheckLoadURIWithPrincipal(oldPrincipal, newOriginalURI, flags);
-  }
   NS_ENSURE_SUCCESS(rv, rv);
 
   aCb->OnRedirectVerifyCallback(NS_OK);
@@ -710,9 +808,9 @@ nsContentSecurityManager::IsOriginPotentiallyTrustworthy(nsIPrincipal* aPrincipa
     return NS_OK;
   }
 
-  if (host.Equals("127.0.0.1") ||
-      host.Equals("localhost") ||
-      host.Equals("::1")) {
+  if (host.EqualsLiteral("127.0.0.1") ||
+      host.EqualsLiteral("localhost") ||
+      host.EqualsLiteral("::1")) {
     *aIsTrustWorthy = true;
     return NS_OK;
   }
@@ -722,11 +820,13 @@ nsContentSecurityManager::IsOriginPotentiallyTrustworthy(nsIPrincipal* aPrincipa
   // whitelist for network resources, i.e., those with scheme "http" or "ws".
   // The pref should contain a comma-separated list of hostnames.
   if (scheme.EqualsLiteral("http") || scheme.EqualsLiteral("ws")) {
-    nsAdoptingCString whitelist = Preferences::GetCString("dom.securecontext.whitelist");
-    if (whitelist) {
+    nsAutoCString whitelist;
+    nsresult rv =
+      Preferences::GetCString("dom.securecontext.whitelist", whitelist);
+    if (NS_SUCCEEDED(rv)) {
       nsCCharSeparatedTokenizer tokenizer(whitelist, ',');
       while (tokenizer.hasMoreTokens()) {
-        const nsCSubstring& allowedHost = tokenizer.nextToken();
+        const nsACString& allowedHost = tokenizer.nextToken();
         if (host.Equals(allowedHost)) {
           *aIsTrustWorthy = true;
           return NS_OK;

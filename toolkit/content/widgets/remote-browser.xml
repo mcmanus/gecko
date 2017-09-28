@@ -153,6 +153,12 @@
                 onget="return this._contentPrincipal"
                 readonly="true"/>
 
+      <field name="_contentRequestContextID">null</field>
+
+      <property name="contentRequestContextID"
+                onget="return this._contentRequestContextID"
+                readonly="true"/>
+
       <property name="contentDocumentAsCPOW"
                 onget="return this.contentWindowAsCPOW ? this.contentWindowAsCPOW.document : null"
                 readonly="true"/>
@@ -212,8 +218,7 @@
 
       <property name="hasContentOpener">
         <getter><![CDATA[
-          let {frameLoader} = this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner);
-          return frameLoader.tabParent.hasContentOpener;
+          return this.frameLoader.tabParent.hasContentOpener;
         ]]></getter>
       </property>
 
@@ -232,14 +237,12 @@
       <property name="docShellIsActive">
         <getter>
           <![CDATA[
-            let {frameLoader} = this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner);
-            return frameLoader.tabParent.docShellIsActive;
+            return this.frameLoader.tabParent.docShellIsActive;
           ]]>
         </getter>
         <setter>
           <![CDATA[
-            let {frameLoader} = this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner);
-            frameLoader.tabParent.docShellIsActive = val;
+            this.frameLoader.tabParent.docShellIsActive = val;
             return val;
           ]]>
         </setter>
@@ -248,7 +251,7 @@
       <method name="preserveLayers">
         <parameter name="preserve"/>
         <body><![CDATA[
-          let {frameLoader} = this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner);
+          let {frameLoader} = this;
           if (frameLoader.tabParent) {
             frameLoader.tabParent.preserveLayers(preserve);
           }
@@ -284,8 +287,7 @@
       <method name="permitUnload">
         <body>
         <![CDATA[
-          let { frameLoader } = this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner);
-          let tabParent = frameLoader.tabParent;
+          let {tabParent} = this.frameLoader;
 
           if (!tabParent.hasBeforeUnload) {
             return { permitUnload: true, timedOut: false };
@@ -388,8 +390,10 @@
             Services.obs.addObserver(this, "browser:purge-session-history", true);
           }
 
-          let jsm = "resource://gre/modules/RemoteController.jsm";
-          let RemoteController = Components.utils.import(jsm, {}).RemoteController;
+          let rc_js = "resource://gre/modules/RemoteController.js";
+          let scope = {};
+          Services.scriptloader.loadSubScript(rc_js, scope);
+          let RemoteController = scope.RemoteController;
           this._controller = new RemoteController(this);
           this.controllers.appendController(this._controller);
         ]]>
@@ -561,8 +565,7 @@
             // needed to create a document with the given principal.
             let permissionPrincipal =
               BrowserUtils.principalWithMatchingOA(aPrincipal, this.contentPrincipal);
-            let {frameLoader} = this.QueryInterface(Components.interfaces.nsIFrameLoaderOwner);
-            frameLoader.tabParent.transmitPermissionsForPrincipal(permissionPrincipal);
+            this.frameLoader.tabParent.transmitPermissionsForPrincipal(permissionPrincipal);
 
             // Create the about blank content viewer in the content process
             this.messageManager.sendAsyncMessage("Browser:CreateAboutBlank", aPrincipal);

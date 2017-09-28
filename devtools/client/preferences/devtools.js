@@ -13,12 +13,8 @@ pref("devtools.devedition.promo.url", "https://www.mozilla.org/firefox/developer
   pref("devtools.devedition.promo.enabled", false);
 #endif
 
-// DevTools development workflow
-pref("devtools.loader.hotreload", false);
-
 // Developer toolbar preferences
 pref("devtools.toolbar.enabled", true);
-pref("devtools.toolbar.visible", false);
 
 // Enable DevTools WebIDE by default
 pref("devtools.webide.enabled", true);
@@ -64,6 +60,8 @@ pref("devtools.inspector.showAllAnonymousContent", false);
 pref("devtools.inspector.mdnDocsTooltip.enabled", false);
 // Enable the new color widget
 pref("devtools.inspector.colorWidget.enabled", false);
+// Enable the CSS shapes highlighter
+pref("devtools.inspector.shapesHighlighter.enabled", false);
 
 // Enable the Font Inspector
 pref("devtools.fontinspector.enabled", true);
@@ -76,9 +74,12 @@ pref("devtools.promote.layoutview", 1);
 pref("devtools.promote.layoutview.showPromoteBar", true);
 
 // Grid highlighter preferences
+pref("devtools.gridinspector.gridOutlineMaxColumns", 50);
+pref("devtools.gridinspector.gridOutlineMaxRows", 50);
 pref("devtools.gridinspector.showGridAreas", false);
 pref("devtools.gridinspector.showGridLineNumbers", false);
 pref("devtools.gridinspector.showInfiniteLines", false);
+pref("devtools.gridinspector.showNegativeLineNumbers", false);
 
 // Whether or not the box model panel is opened in the computed view
 pref("devtools.computed.boxmodel.opened", true);
@@ -160,8 +161,8 @@ pref("devtools.netmonitor.enabled", true);
 pref("devtools.netmonitor.panes-network-details-width", 550);
 pref("devtools.netmonitor.panes-network-details-height", 450);
 pref("devtools.netmonitor.filters", "[\"all\"]");
-pref("devtools.netmonitor.hiddenColumns",
-  "[\"cookies\",\"duration\",\"endTime\",\"latency\",\"protocol\",\"remoteip\",\"responseTime\",\"scheme\",\"setCookies\",\"startTime\"]"
+pref("devtools.netmonitor.visibleColumns",
+  "[\"status\",\"method\",\"file\",\"domain\",\"cause\",\"type\",\"transferred\",\"contentSize\",\"waterfall\"]"
 );
 
 // The default Network monitor HAR export setting
@@ -197,7 +198,6 @@ pref("devtools.storage.enabled", true);
 
 // Enable the Style Editor.
 pref("devtools.styleeditor.enabled", true);
-pref("devtools.styleeditor.source-maps-enabled", true);
 pref("devtools.styleeditor.autocompletion-enabled", true);
 pref("devtools.styleeditor.showMediaSidebar", true);
 pref("devtools.styleeditor.mediaSidebarWidth", 238);
@@ -225,13 +225,6 @@ pref("devtools.dom.enabled", false);
 
 // Web Audio Editor Inspector Width should be a preference
 pref("devtools.webaudioeditor.inspectorWidth", 300);
-
-// Default theme ("dark" or "light")
-#ifdef MOZ_DEV_EDITION
-sticky_pref("devtools.theme", "dark");
-#else
-sticky_pref("devtools.theme", "light");
-#endif
 
 // Web console filters
 pref("devtools.webconsole.filter.error", true);
@@ -293,10 +286,11 @@ pref("devtools.webconsole.ui.filterbar", false);
 // Max number of inputs to store in web console history.
 pref("devtools.webconsole.inputHistoryCount", 50);
 
-// Persistent logging: |true| if you want the Web Console to keep all of the
+// Persistent logging: |true| if you want the relevant tool to keep all of the
 // logged messages after reloading the page, |false| if you want the output to
 // be cleared each time page navigation happens.
 pref("devtools.webconsole.persistlog", false);
+pref("devtools.netmonitor.persistlog", false);
 
 // Web Console timestamp: |true| if you want the logs and instructions
 // in the Web Console to display a timestamp, or |false| to not display
@@ -307,22 +301,18 @@ pref("devtools.webconsole.timestampMessages", false);
 // to automatically trigger multiline editing (equivalent to shift + enter).
 pref("devtools.webconsole.autoMultiline", true);
 
-// Enable the experimental webconsole frontend
-#if defined(NIGHTLY_BUILD)
+// Enable the new webconsole frontend
 pref("devtools.webconsole.new-frontend-enabled", true);
-#else
-pref("devtools.webconsole.new-frontend-enabled", false);
-#endif
 
 // Enable client-side mapping service for source maps
 pref("devtools.source-map.client-service.enabled", true);
 
 // The number of lines that are displayed in the web console.
-pref("devtools.hud.loglimit", 1000);
+pref("devtools.hud.loglimit", 10000);
 
-// The number of lines that are displayed in the web console for the Net,
+// The number of lines that are displayed in the old web console for the Net,
 // CSS, JS and Web Developer categories. These defaults should be kept in sync
-// with DEFAULT_LOG_LIMIT in the webconsole frontend.
+// with DEFAULT_LOG_LIMIT in the old webconsole frontend.
 pref("devtools.hud.loglimit.network", 1000);
 pref("devtools.hud.loglimit.cssparser", 1000);
 pref("devtools.hud.loglimit.exception", 1000);
@@ -347,9 +337,6 @@ pref("devtools.editor.autocomplete", true);
 // opened developer tool. This allows us to ping telemetry just once per browser
 // version for each user.
 pref("devtools.telemetry.tools.opened.version", "{}");
-
-// Enable the JSON View tool (an inspector for application/json documents).
-pref("devtools.jsonview.enabled", true);
 
 // Enable the HTML responsive design mode for all channels.
 pref("devtools.responsive.html.enabled", true);

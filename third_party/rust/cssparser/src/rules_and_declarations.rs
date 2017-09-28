@@ -4,11 +4,10 @@
 
 // https://drafts.csswg.org/css-syntax/#parsing
 
-use compact_cow_str::CompactCowStr;
-use parser::{parse_until_before, parse_until_after, parse_nested_block};
+use cow_rc_str::CowRcStr;
+use parser::{parse_until_before, parse_until_after, parse_nested_block, ParserState};
 use std::ascii::AsciiExt;
-use std::ops::Range;
-use super::{Token, Parser, Delimiter, SourcePosition, ParseError, BasicParseError};
+use super::{Token, Parser, Delimiter, ParseError, BasicParseError, SourceLocation};
 
 
 /// Parse `!important`.
@@ -16,7 +15,7 @@ use super::{Token, Parser, Delimiter, SourcePosition, ParseError, BasicParseErro
 /// Typical usage is `input.try(parse_important).is_ok()`
 /// at the end of a `DeclarationParser::parse_value` implementation.
 pub fn parse_important<'i, 't>(input: &mut Parser<'i, 't>) -> Result<(), BasicParseError<'i>> {
-    try!(input.expect_delim('!'));
+    input.expect_delim('!')?;
     input.expect_ident_matching("important")
 }
 
@@ -24,24 +23,17 @@ pub fn parse_important<'i, 't>(input: &mut Parser<'i, 't>) -> Result<(), BasicPa
 /// The return value for `AtRuleParser::parse_prelude`.
 /// Indicates whether the at-rule is expected to have a `{ /* ... */ }` block
 /// or end with a `;` semicolon.
-pub enum AtRuleType<P, R> {
+pub enum AtRuleType<P, PB> {
     /// The at-rule is expected to end with a `;` semicolon. Example: `@import`.
     ///
-    /// The value is the finished representation of an at-rule
-    /// as returned by `RuleListParser::next` or `DeclarationListParser::next`.
-    WithoutBlock(R),
+    /// The value is the representation of all data of the rule which would be
+    /// handled in rule_without_block.
+    WithoutBlock(P),
 
     /// The at-rule is expected to have a a `{ /* ... */ }` block. Example: `@media`
     ///
     /// The value is the representation of the "prelude" part of the rule.
-    WithBlock(P),
-
-    /// The at-rule may either have a block or end with a semicolon.
-    ///
-    /// This is mostly for testing. As of this writing no real CSS at-rule behaves like this.
-    ///
-    /// The value is the representation of the "prelude" part of the rule.
-    OptionalBlock(P),
+    WithBlock(PB),
 }
 
 /// A trait to provide various parsing of declaration values.
@@ -72,7 +64,7 @@ pub trait DeclarationParser<'i> {
     /// If `!important` can be used in a given context,
     /// `input.try(parse_important).is_ok()` should be used at the end
     /// of the implementation of this method and the result should be part of the return value.
-    fn parse_value<'t>(&mut self, name: CompactCowStr<'i>, input: &mut Parser<'i, 't>)
+    fn parse_value<'t>(&mut self, name: CowRcStr<'i>, input: &mut Parser<'i, 't>)
                        -> Result<Self::Declaration, ParseError<'i, Self::Error>>;
 }
 
@@ -86,8 +78,11 @@ pub trait DeclarationParser<'i> {
 /// so that `impl AtRuleParser<(), ()> for ... {}` can be used
 /// for using `DeclarationListParser` to parse a declartions list with only qualified rules.
 pub trait AtRuleParser<'i> {
-    /// The intermediate representation of an at-rule prelude.
-    type Prelude;
+    /// The intermediate representation of prelude of an at-rule without block;
+    type PreludeNoBlock;
+
+    /// The intermediate representation of prelude of an at-rule with block;
+    type PreludeBlock;
 
     /// The finished representation of an at-rule.
     type AtRule;
@@ -112,11 +107,24 @@ pub trait AtRuleParser<'i> {
     /// The given `input` is a "delimited" parser
     /// that ends wherever the prelude should end.
     /// (Before the next semicolon, the next `{`, or the end of the current block.)
-    fn parse_prelude<'t>(&mut self, name: CompactCowStr<'i>, input: &mut Parser<'i, 't>)
-                     -> Result<AtRuleType<Self::Prelude, Self::AtRule>, ParseError<'i, Self::Error>> {
+    fn parse_prelude<'t>(&mut self, name: CowRcStr<'i>, input: &mut Parser<'i, 't>)
+                     -> Result<AtRuleType<Self::PreludeNoBlock, Self::PreludeBlock>,
+                               ParseError<'i, Self::Error>> {
         let _ = name;
         let _ = input;
-        Err(ParseError::Basic(BasicParseError::AtRuleInvalid))
+        Err(ParseError::Basic(BasicParseError::AtRuleInvalid(name)))
+    }
+
+    /// End an at-rule which doesn't have block. Return the finished
+    /// representation of the at-rule.
+    ///
+    /// This is only called when `parse_prelude` returned `WithoutBlock`, and
+    /// either the `;` semicolon indeed follows the prelude, or parser is at
+    /// the end of the input.
+    fn rule_without_block(&mut self, prelude: Self::PreludeNoBlock) -> Self::AtRule {
+        let _ = prelude;
+        panic!("The `AtRuleParser::rule_without_block` method must be overriden \
+                if `AtRuleParser::parse_prelude` ever returns `AtRuleType::WithoutBlock`.")
     }
 
     /// Parse the content of a `{ /* ... */ }` block for the body of the at-rule.
@@ -125,23 +133,13 @@ pub trait AtRuleParser<'i> {
     /// as returned by `RuleListParser::next` or `DeclarationListParser::next`,
     /// or `Err(())` to ignore the entire at-rule as invalid.
     ///
-    /// This is only called when `parse_prelude` returned `WithBlock` or `OptionalBlock`,
-    /// and a block was indeed found following the prelude.
-    fn parse_block<'t>(&mut self, prelude: Self::Prelude, input: &mut Parser<'i, 't>)
+    /// This is only called when `parse_prelude` returned `WithBlock`, and a block
+    /// was indeed found following the prelude.
+    fn parse_block<'t>(&mut self, prelude: Self::PreludeBlock, input: &mut Parser<'i, 't>)
                        -> Result<Self::AtRule, ParseError<'i, Self::Error>> {
         let _ = prelude;
         let _ = input;
-        Err(ParseError::Basic(BasicParseError::AtRuleInvalid))
-    }
-
-    /// An `OptionalBlock` prelude was followed by `;`.
-    ///
-    /// Convert the prelude into the finished representation of the at-rule
-    /// as returned by `RuleListParser::next` or `DeclarationListParser::next`.
-    fn rule_without_block(&mut self, prelude: Self::Prelude) -> Self::AtRule {
-        let _ = prelude;
-        panic!("The `AtRuleParser::rule_without_block` method must be overriden \
-                if `AtRuleParser::parse_prelude` ever returns `AtRuleType::OptionalBlock`.")
+        Err(ParseError::Basic(BasicParseError::AtRuleBodyInvalid))
     }
 }
 
@@ -238,34 +236,44 @@ where P: DeclarationParser<'i, Declaration = I, Error = E> +
 
     fn next(&mut self) -> Option<Result<I, PreciseParseError<'i, E>>> {
         loop {
-            let start_position = self.input.position();
-            match self.input.next_including_whitespace_and_comments() {
-                Ok(Token::WhiteSpace(_)) | Ok(Token::Comment(_)) | Ok(Token::Semicolon) => {}
-                Ok(Token::Ident(name)) => {
+            let start = self.input.state();
+            // FIXME: remove intermediate variable when lifetimes are non-lexical
+            let ident = match self.input.next_including_whitespace_and_comments() {
+                Ok(&Token::WhiteSpace(_)) | Ok(&Token::Comment(_)) | Ok(&Token::Semicolon) => continue,
+                Ok(&Token::Ident(ref name)) => Ok(Ok(name.clone())),
+                Ok(&Token::AtKeyword(ref name)) => Ok(Err(name.clone())),
+                Ok(token) => Err(token.clone()),
+                Err(_) => return None,
+            };
+            match ident {
+                Ok(Ok(name)) => {
+                    // Ident
                     return Some({
                         let parser = &mut self.parser;
                         // FIXME: https://github.com/rust-lang/rust/issues/42508
                         parse_until_after::<'i, 't, _, _, _>(self.input, Delimiter::Semicolon, |input| {
-                            try!(input.expect_colon());
+                            input.expect_colon()?;
                             parser.parse_value(name, input)
                         })
                     }.map_err(|e| PreciseParseError {
                         error: e,
-                        span: start_position..self.input.position()
+                        slice: self.input.slice_from(start.position()),
+                        location: start.source_location(),
                     }))
                 }
-                Ok(Token::AtKeyword(name)) => {
-                    return Some(parse_at_rule(start_position, name, self.input, &mut self.parser))
+                Ok(Err(name)) => {
+                    // At-keyword
+                    return Some(parse_at_rule(&start, name, self.input, &mut self.parser))
                 }
-                Ok(_) => {
+                Err(token) => {
                     return Some(self.input.parse_until_after(Delimiter::Semicolon,
-                                                             |_| Err(ParseError::Basic(BasicParseError::ExpectedToken(Token::Semicolon))))
+                                                             |_| Err(ParseError::Basic(BasicParseError::UnexpectedToken(token.clone()))))
                                 .map_err(|e| PreciseParseError {
                                     error: e,
-                                    span: start_position..self.input.position()
+                                    slice: self.input.slice_from(start.position()),
+                                    location: start.source_location(),
                                 }))
                 }
-                Err(_) => return None,
             }
         }
     }
@@ -333,30 +341,46 @@ where P: QualifiedRuleParser<'i, QualifiedRule = R, Error = E> +
 
     fn next(&mut self) -> Option<Result<R, PreciseParseError<'i, E>>> {
         loop {
-            let start_position = self.input.position();
-            match self.input.next_including_whitespace_and_comments() {
-                Ok(Token::WhiteSpace(_)) | Ok(Token::Comment(_)) => {}
-                Ok(Token::CDO) | Ok(Token::CDC) if self.is_stylesheet => {}
-                Ok(Token::AtKeyword(name)) => {
-                    let first_stylesheet_rule = self.is_stylesheet && !self.any_rule_so_far;
-                    self.any_rule_so_far = true;
-                    if first_stylesheet_rule && name.eq_ignore_ascii_case("charset") {
-                        let delimiters = Delimiter::Semicolon | Delimiter::CurlyBracketBlock;
-                        let _: Result<(), ParseError<()>> = self.input.parse_until_after(delimiters, |_| Ok(()));
-                    } else {
-                        return Some(parse_at_rule(start_position, name, self.input, &mut self.parser))
+            if self.is_stylesheet {
+                self.input.skip_cdc_and_cdo()
+            } else {
+                self.input.skip_whitespace()
+            }
+            let start = self.input.state();
+
+            let at_keyword;
+            match self.input.next_byte() {
+                Some(b'@') => {
+                    match self.input.next_including_whitespace_and_comments() {
+                        Ok(&Token::AtKeyword(ref name)) => at_keyword = Some(name.clone()),
+                        _ => at_keyword = None,
+                    }
+                    // FIXME: move this back inside `match` when lifetimes are non-lexical
+                    if at_keyword.is_none() {
+                        self.input.reset(&start)
                     }
                 }
-                Ok(_) => {
-                    self.any_rule_so_far = true;
-                    self.input.reset(start_position);
-                    return Some(parse_qualified_rule(self.input, &mut self.parser)
-                                .map_err(|e| PreciseParseError {
-                                    error: e,
-                                    span: start_position..self.input.position()
-                                }))
+                Some(_) => at_keyword = None,
+                None => return None
+            }
+
+            if let Some(name) = at_keyword {
+                let first_stylesheet_rule = self.is_stylesheet && !self.any_rule_so_far;
+                self.any_rule_so_far = true;
+                if first_stylesheet_rule && name.eq_ignore_ascii_case("charset") {
+                    let delimiters = Delimiter::Semicolon | Delimiter::CurlyBracketBlock;
+                    let _: Result<(), ParseError<()>> = self.input.parse_until_after(delimiters, |_| Ok(()));
+                } else {
+                    return Some(parse_at_rule(&start, name.clone(), self.input, &mut self.parser))
                 }
-                Err(_) => return None,
+            } else {
+                self.any_rule_so_far = true;
+                return Some(parse_qualified_rule(self.input, &mut self.parser)
+                            .map_err(|e| PreciseParseError {
+                                error: e,
+                                slice: self.input.slice_from(start.position()),
+                                location: start.source_location(),
+                            }))
             }
         }
     }
@@ -369,13 +393,15 @@ pub fn parse_one_declaration<'i, 't, P, E>(input: &mut Parser<'i, 't>, parser: &
                                                      PreciseParseError<'i, E>>
                                            where P: DeclarationParser<'i, Error = E> {
     let start_position = input.position();
+    let start_location = input.current_source_location();
     input.parse_entirely(|input| {
-        let name = try!(input.expect_ident());
-        try!(input.expect_colon());
+        let name = input.expect_ident()?.clone();
+        input.expect_colon()?;
         parser.parse_value(name, input)
     }).map_err(|e| PreciseParseError {
         error: e,
-        span: start_position..input.position()
+        slice: input.slice_from(start_position),
+        location: start_location,
     })
 }
 
@@ -386,28 +412,44 @@ pub fn parse_one_rule<'i, 't, R, P, E>(input: &mut Parser<'i, 't>, parser: &mut 
 where P: QualifiedRuleParser<'i, QualifiedRule = R, Error = E> +
          AtRuleParser<'i, AtRule = R, Error = E> {
     input.parse_entirely(|input| {
-        loop {
-            let start_position = input.position();
-            match try!(input.next_including_whitespace_and_comments()) {
-                Token::WhiteSpace(_) | Token::Comment(_) => {}
-                Token::AtKeyword(name) => {
-                    return parse_at_rule(start_position, name, input, parser).map_err(|e| e.error)
-                }
-                _ => {
-                    input.reset(start_position);
-                    return parse_qualified_rule(input, parser)
-                }
+        input.skip_whitespace();
+        let start = input.state();
+
+        let at_keyword;
+        if input.next_byte() == Some(b'@') {
+            match *input.next_including_whitespace_and_comments()? {
+                Token::AtKeyword(ref name) => at_keyword = Some(name.clone()),
+                _ => at_keyword = None,
             }
+            // FIXME: move this back inside `match` when lifetimes are non-lexical
+            if at_keyword.is_none() {
+                input.reset(&start)
+            }
+        } else {
+            at_keyword = None
+        }
+
+        if let Some(name) = at_keyword {
+            parse_at_rule(&start, name, input, parser).map_err(|e| e.error)
+        } else {
+            parse_qualified_rule(input, parser)
         }
     })
 }
 
+/// A parse error with details of where it occured
 pub struct PreciseParseError<'i, E: 'i> {
+    /// Error details
     pub error: ParseError<'i, E>,
-    pub span: Range<SourcePosition>,
+
+    /// The relevant slice of the input.
+    pub slice: &'i str,
+
+    /// The line number and column number of the start of the relevant input slice.
+    pub location: SourceLocation,
 }
 
-fn parse_at_rule<'i: 't, 't, P, E>(start_position: SourcePosition, name: CompactCowStr<'i>,
+fn parse_at_rule<'i: 't, 't, P, E>(start: &ParserState, name: CowRcStr<'i>,
                                    input: &mut Parser<'i, 't>, parser: &mut P)
                                    -> Result<<P as AtRuleParser<'i>>::AtRule, PreciseParseError<'i, E>>
                                    where P: AtRuleParser<'i, Error = E> {
@@ -417,62 +459,51 @@ fn parse_at_rule<'i: 't, 't, P, E>(start_position: SourcePosition, name: Compact
         parser.parse_prelude(name, input)
     });
     match result {
-        Ok(AtRuleType::WithoutBlock(rule)) => {
+        Ok(AtRuleType::WithoutBlock(prelude)) => {
             match input.next() {
-                Ok(Token::Semicolon) | Err(_) => Ok(rule),
-                Ok(Token::CurlyBracketBlock) => Err(PreciseParseError {
+                Ok(&Token::Semicolon) | Err(_) => Ok(parser.rule_without_block(prelude)),
+                Ok(&Token::CurlyBracketBlock) => Err(PreciseParseError {
                     error: ParseError::Basic(BasicParseError::UnexpectedToken(Token::CurlyBracketBlock)),
-                    span: start_position..input.position(),
+                    slice: input.slice_from(start.position()),
+                    location: start.source_location(),
                 }),
                 Ok(_) => unreachable!()
             }
         }
         Ok(AtRuleType::WithBlock(prelude)) => {
             match input.next() {
-                Ok(Token::CurlyBracketBlock) => {
+                Ok(&Token::CurlyBracketBlock) => {
                     // FIXME: https://github.com/rust-lang/rust/issues/42508
                     parse_nested_block::<'i, 't, _, _, _>(input, move |input| parser.parse_block(prelude, input))
                         .map_err(|e| PreciseParseError {
                             error: e,
-                            span: start_position..input.position(),
+                            slice: input.slice_from(start.position()),
+                            location: start.source_location(),
                         })
                 }
-                Ok(Token::Semicolon) => Err(PreciseParseError {
+                Ok(&Token::Semicolon) => Err(PreciseParseError {
                     error: ParseError::Basic(BasicParseError::UnexpectedToken(Token::Semicolon)),
-                    span: start_position..input.position()
+                    slice: input.slice_from(start.position()),
+                    location: start.source_location(),
                 }),
                 Err(e) => Err(PreciseParseError {
                     error: ParseError::Basic(e),
-                    span: start_position..input.position(),
+                    slice: input.slice_from(start.position()),
+                    location: start.source_location(),
                 }),
                 Ok(_) => unreachable!()
             }
         }
-        Ok(AtRuleType::OptionalBlock(prelude)) => {
-            match input.next() {
-                Ok(Token::Semicolon) | Err(_) => Ok(parser.rule_without_block(prelude)),
-                Ok(Token::CurlyBracketBlock) => {
-                    // FIXME: https://github.com/rust-lang/rust/issues/42508
-                    parse_nested_block::<'i, 't, _, _, _>(input, move |input| parser.parse_block(prelude, input))
-                        .map_err(|e| PreciseParseError {
-                            error: e,
-                            span: start_position..input.position(),
-                        })
-                }
-                _ => unreachable!()
-            }
-        }
-        Err(_) => {
+        Err(error) => {
             let end_position = input.position();
-            let error = match input.next() {
-                Ok(Token::CurlyBracketBlock) => BasicParseError::UnexpectedToken(Token::CurlyBracketBlock),
-                Ok(Token::Semicolon) => BasicParseError::UnexpectedToken(Token::Semicolon),
-                Err(e) => e,
+            match input.next() {
+                Ok(&Token::CurlyBracketBlock) | Ok(&Token::Semicolon) | Err(_) => {},
                 _ => unreachable!()
             };
             Err(PreciseParseError {
-                error: ParseError::Basic(error),
-                span: start_position..end_position,
+                error: error,
+                slice: input.slice(start.position()..end_position),
+                location: start.source_location(),
             })
         }
     }
@@ -486,10 +517,10 @@ fn parse_qualified_rule<'i, 't, P, E>(input: &mut Parser<'i, 't>, parser: &mut P
     let prelude = parse_until_before::<'i, 't, _, _, _>(input, Delimiter::CurlyBracketBlock, |input| {
         parser.parse_prelude(input)
     });
-    match try!(input.next()) {
+    match *input.next()? {
         Token::CurlyBracketBlock => {
             // Do this here so that we consume the `{` even if the prelude is `Err`.
-            let prelude = try!(prelude);
+            let prelude = prelude?;
             // FIXME: https://github.com/rust-lang/rust/issues/42508
             parse_nested_block::<'i, 't, _, _, _>(input, move |input| parser.parse_block(prelude, input))
         }

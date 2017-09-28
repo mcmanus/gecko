@@ -107,8 +107,6 @@ using namespace dom;
 
 //#define DEBUG_DOCSHELL_FOCUS
 
-#define NS_USER_INTERACTION_INTERVAL 5000 // ms
-
 static const LayoutDeviceIntPoint kInvalidRefPoint = LayoutDeviceIntPoint(-1,-1);
 
 static uint32_t gMouseOrKeyboardEventCounter = 0;
@@ -186,13 +184,6 @@ PrintDocTreeAll(nsIDocShellTreeItem* aItem)
 }
 #endif
 
-// mask values for ui.key.chromeAccess and ui.key.contentAccess
-#define NS_MODIFIER_SHIFT    1
-#define NS_MODIFIER_CONTROL  2
-#define NS_MODIFIER_ALT      4
-#define NS_MODIFIER_META     8
-#define NS_MODIFIER_OS       16
-
 /******************************************************************/
 /* mozilla::UITimerCallback                                       */
 /******************************************************************/
@@ -242,12 +233,6 @@ UITimerCallback::GetName(nsACString& aName)
 {
   aName.AssignASCII("UITimerCallback_timer");
   return NS_OK;
-}
-
-NS_IMETHODIMP
-UITimerCallback::SetName(const char* aName)
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 /******************************************************************/
@@ -503,7 +488,7 @@ void
 EventStateManager::TryToFlushPendingNotificationsToIME()
 {
   if (mIMEContentObserver) {
-    mIMEContentObserver->TryToFlushPendingNotifications();
+    mIMEContentObserver->TryToFlushPendingNotifications(true);
   }
 }
 
@@ -690,8 +675,8 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
     // event was sent twice into child process of content.
     // (From specific widget code (sending is not permanent) and
     // from ESM::DispatchMouseOrPointerEvent (sending is permanent)).
-    // Flag mNoCrossProcessBoundaryForwarding helps to
-    // suppress sending accidental event from widget code.
+    // IsCrossProcessForwardingStopped() helps to suppress sending accidental
+    // event from widget code.
     aEvent->StopCrossProcessForwarding();
     break;
   case eMouseExitFromWidget:
@@ -707,7 +692,8 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
       ClearCachedWidgetCursor(mCurrentTarget);
     }
 
-    // Flag helps to suppress double event sending into process of content.
+    // IsCrossProcessForwardingStopped() helps to suppress double event sending
+    // into process of content.
     // For more information see comment above, at eMouseEnterIntoWidget case.
     aEvent->StopCrossProcessForwarding();
 
@@ -767,30 +753,34 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
   case eKeyPress:
     {
       WidgetKeyboardEvent* keyEvent = aEvent->AsKeyboardEvent();
-
-      int32_t modifierMask = 0;
-      if (keyEvent->IsShift())
-        modifierMask |= NS_MODIFIER_SHIFT;
-      if (keyEvent->IsControl())
-        modifierMask |= NS_MODIFIER_CONTROL;
-      if (keyEvent->IsAlt())
-        modifierMask |= NS_MODIFIER_ALT;
-      if (keyEvent->IsMeta())
-        modifierMask |= NS_MODIFIER_META;
-      if (keyEvent->IsOS())
-        modifierMask |= NS_MODIFIER_OS;
-
-      // Prevent keyboard scrolling while an accesskey modifier is in use.
-      if (modifierMask) {
-        bool matchesContentAccessKey = (modifierMask == Prefs::ContentAccessModifierMask());
-        
-        if (modifierMask == Prefs::ChromeAccessModifierMask() ||
-            matchesContentAccessKey) {
+      if (keyEvent->ModifiersMatchWithAccessKey(AccessKeyType::eChrome) ||
+          keyEvent->ModifiersMatchWithAccessKey(AccessKeyType::eContent)) {
+        // If the eKeyPress event will be sent to a remote process, this
+        // process needs to wait reply from the remote process for checking if
+        // preceding eKeyDown event is consumed.  If preceding eKeyDown event
+        // is consumed in the remote process, TabChild won't send the event
+        // back to this process.  So, only when this process receives a reply
+        // eKeyPress event in TabParent, we should handle accesskey in this
+        // process.
+        if (IsRemoteTarget(GetFocusedContent())) {
+          // However, if there is no accesskey target for the key combination,
+          // we don't need to wait reply from the remote process.  Otherwise,
+          // Mark the event as waiting reply from remote process and stop
+          // propagation in this process.
+          if (CheckIfEventMatchesAccessKey(keyEvent, aPresContext)) {
+            keyEvent->StopPropagation();
+            keyEvent->MarkAsWaitingReplyFromRemoteProcess();
+          }
+        }
+        // If the event target is in this process, we can handle accesskey now
+        // since if preceding eKeyDown event was consumed, eKeyPress event
+        // won't be dispatched by widget.  So, coming eKeyPress event means
+        // that the preceding eKeyDown event wasn't consumed in this case.
+        else {
           AutoTArray<uint32_t, 10> accessCharCodes;
           keyEvent->GetAccessKeyCandidates(accessCharCodes);
 
-          if (HandleAccessKey(keyEvent, aPresContext, accessCharCodes,
-                              modifierMask, matchesContentAccessKey)) {
+          if (HandleAccessKey(keyEvent, aPresContext, accessCharCodes)) {
             *aStatus = nsEventStatus_eConsumeNoDefault;
           }
         }
@@ -816,6 +806,18 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
       RefPtr<TextComposition> composition =
         IMEStateManager::GetTextCompositionFor(aPresContext);
       aEvent->AsKeyboardEvent()->mIsComposing = !!composition;
+
+      // Widget may need to perform default action for specific keyboard
+      // event if it's not consumed.  In this case, widget has already marked
+      // the event as "waiting reply from remote process".  However, we need
+      // to reset it if the target (focused content) isn't in a remote process
+      // because PresShell needs to check if it's marked as so before
+      // dispatching events into the DOM tree.
+      if (aEvent->IsWaitingReplyFromRemoteProcess() &&
+          !aEvent->PropagationStopped() &&
+          !IsRemoteTarget(content)) {
+        aEvent->ResetWaitingReplyFromRemoteProcessState();
+      }
     }
     break;
   case eWheel:
@@ -923,23 +925,21 @@ EventStateManager::HandleQueryContentEvent(WidgetQueryContentEvent* aEvent)
   handler.HandleQueryContentEvent(aEvent);
 }
 
-// static
-int32_t
-EventStateManager::GetAccessModifierMaskFor(nsISupports* aDocShell)
+static AccessKeyType
+GetAccessKeyTypeFor(nsISupports* aDocShell)
 {
   nsCOMPtr<nsIDocShellTreeItem> treeItem(do_QueryInterface(aDocShell));
-  if (!treeItem)
-    return -1; // invalid modifier
+  if (!treeItem) {
+    return AccessKeyType::eNone;
+  }
 
   switch (treeItem->ItemType()) {
-  case nsIDocShellTreeItem::typeChrome:
-    return Prefs::ChromeAccessModifierMask();
-
-  case nsIDocShellTreeItem::typeContent:
-    return Prefs::ContentAccessModifierMask();
-
-  default:
-    return -1; // invalid modifier
+    case nsIDocShellTreeItem::typeChrome:
+      return AccessKeyType::eChrome;
+    case nsIDocShellTreeItem::typeContent:
+      return AccessKeyType::eContent;
+    default:
+      return AccessKeyType::eNone;
   }
 }
 
@@ -991,8 +991,22 @@ IsAccessKeyTarget(nsIContent* aContent, nsIFrame* aFrame, nsAString& aKey)
 }
 
 bool
-EventStateManager::ExecuteAccessKey(nsTArray<uint32_t>& aAccessCharCodes,
-                                    bool aIsTrustedEvent)
+EventStateManager::CheckIfEventMatchesAccessKey(WidgetKeyboardEvent* aEvent,
+                                                nsPresContext* aPresContext)
+{
+  AutoTArray<uint32_t, 10> accessCharCodes;
+  aEvent->GetAccessKeyCandidates(accessCharCodes);
+  return WalkESMTreeToHandleAccessKey(const_cast<WidgetKeyboardEvent*>(aEvent),
+                                      aPresContext, accessCharCodes,
+                                      nullptr, eAccessKeyProcessingNormal,
+                                      false);
+}
+
+bool
+EventStateManager::LookForAccessKeyAndExecute(
+                     nsTArray<uint32_t>& aAccessCharCodes,
+                     bool aIsTrustedEvent,
+                     bool aExecute)
 {
   int32_t count, start = -1;
   nsIContent* focusedContent = GetFocusedContent();
@@ -1012,6 +1026,9 @@ EventStateManager::ExecuteAccessKey(nsTArray<uint32_t>& aAccessCharCodes,
       content = mAccessKeys[(start + count) % length];
       frame = content->GetPrimaryFrame();
       if (IsAccessKeyTarget(content, frame, accessKey)) {
+        if (!aExecute) {
+          return true;
+        }
         bool shouldActivate = Prefs::KeyCausesActivation();
         while (shouldActivate && ++count <= length) {
           nsIContent *oc = mAccessKeys[(start + count) % length];
@@ -1058,30 +1075,33 @@ EventStateManager::GetAccessKeyLabelPrefix(Element* aElement, nsAString& aPrefix
   nsAutoString separator, modifierText;
   nsContentUtils::GetModifierSeparatorText(separator);
 
-  nsCOMPtr<nsISupports> container = aElement->OwnerDoc()->GetDocShell();
-  int32_t modifierMask = GetAccessModifierMaskFor(container);
-
-  if (modifierMask == -1) {
+  AccessKeyType accessKeyType =
+    GetAccessKeyTypeFor(aElement->OwnerDoc()->GetDocShell());
+  if (accessKeyType == AccessKeyType::eNone) {
+    return;
+  }
+  Modifiers modifiers = WidgetKeyboardEvent::AccessKeyModifiers(accessKeyType);
+  if (modifiers == MODIFIER_NONE) {
     return;
   }
 
-  if (modifierMask & NS_MODIFIER_CONTROL) {
+  if (modifiers & MODIFIER_CONTROL) {
     nsContentUtils::GetControlText(modifierText);
     aPrefix.Append(modifierText + separator);
   }
-  if (modifierMask & NS_MODIFIER_META) {
+  if (modifiers & MODIFIER_META) {
     nsContentUtils::GetMetaText(modifierText);
     aPrefix.Append(modifierText + separator);
   }
-  if (modifierMask & NS_MODIFIER_OS) {
+  if (modifiers & MODIFIER_OS) {
     nsContentUtils::GetOSText(modifierText);
     aPrefix.Append(modifierText + separator);
   }
-  if (modifierMask & NS_MODIFIER_ALT) {
+  if (modifiers & MODIFIER_ALT) {
     nsContentUtils::GetAltText(modifierText);
     aPrefix.Append(modifierText + separator);
   }
-  if (modifierMask & NS_MODIFIER_SHIFT) {
+  if (modifiers & MODIFIER_SHIFT) {
     nsContentUtils::GetShiftText(modifierText);
     aPrefix.Append(modifierText + separator);
   }
@@ -1091,12 +1111,11 @@ struct MOZ_STACK_CLASS AccessKeyInfo
 {
   WidgetKeyboardEvent* event;
   nsTArray<uint32_t>& charCodes;
-  int32_t modifierMask;
 
-  AccessKeyInfo(WidgetKeyboardEvent* aEvent, nsTArray<uint32_t>& aCharCodes, int32_t aModifierMask)
+  AccessKeyInfo(WidgetKeyboardEvent* aEvent,
+                nsTArray<uint32_t>& aCharCodes)
     : event(aEvent)
     , charCodes(aCharCodes)
-    , modifierMask(aModifierMask)
   {
   }
 };
@@ -1110,10 +1129,15 @@ HandleAccessKeyInRemoteChild(TabParent* aTabParent, void* aArg)
   bool active;
   aTabParent->GetDocShellIsActive(&active);
   if (active) {
-    accessKeyInfo->event->mAccessKeyForwardedToChild = true;
+    // Even if there is no target for the accesskey in this process,
+    // the event may match with a content accesskey.  If so, the keyboard
+    // event should be handled with reply event for preventing double action.
+    // (e.g., Alt+Shift+F on Windows may focus a content in remote and open
+    // "File" menu.)
+    accessKeyInfo->event->StopPropagation();
+    accessKeyInfo->event->MarkAsWaitingReplyFromRemoteProcess();
     aTabParent->HandleAccessKey(*accessKeyInfo->event,
-                                accessKeyInfo->charCodes,
-                                accessKeyInfo->modifierMask);
+                                accessKeyInfo->charCodes);
     return true;
   }
 
@@ -1121,25 +1145,29 @@ HandleAccessKeyInRemoteChild(TabParent* aTabParent, void* aArg)
 }
 
 bool
-EventStateManager::HandleAccessKey(WidgetKeyboardEvent* aEvent,
-                                   nsPresContext* aPresContext,
-                                   nsTArray<uint32_t>& aAccessCharCodes,
-                                   bool aMatchesContentAccessKey,
-                                   nsIDocShellTreeItem* aBubbledFrom,
-                                   ProcessingAccessKeyState aAccessKeyState,
-                                   int32_t aModifierMask)
+EventStateManager::WalkESMTreeToHandleAccessKey(
+                     WidgetKeyboardEvent* aEvent,
+                     nsPresContext* aPresContext,
+                     nsTArray<uint32_t>& aAccessCharCodes,
+                     nsIDocShellTreeItem* aBubbledFrom,
+                     ProcessingAccessKeyState aAccessKeyState,
+                     bool aExecute)
 {
   EnsureDocument(mPresContext);
   nsCOMPtr<nsIDocShell> docShell = aPresContext->GetDocShell();
   if (NS_WARN_IF(!docShell) || NS_WARN_IF(!mDocument)) {
     return false;
   }
-
+  AccessKeyType accessKeyType = GetAccessKeyTypeFor(docShell);
+  if (accessKeyType == AccessKeyType::eNone) {
+    return false;
+  }
   // Alt or other accesskey modifier is down, we may need to do an accesskey.
   if (mAccessKeys.Count() > 0 &&
-      aModifierMask == GetAccessModifierMaskFor(docShell)) {
+      aEvent->ModifiersMatchWithAccessKey(accessKeyType)) {
     // Someone registered an accesskey.  Find and activate it.
-    if (ExecuteAccessKey(aAccessCharCodes, aEvent->IsTrusted())) {
+    if (LookForAccessKeyAndExecute(aAccessCharCodes,
+                                   aEvent->IsTrusted(), aExecute)) {
       return true;
     }
   }
@@ -1172,9 +1200,9 @@ EventStateManager::HandleAccessKey(WidgetKeyboardEvent* aEvent,
         static_cast<EventStateManager*>(subPC->EventStateManager());
 
       if (esm &&
-          esm->HandleAccessKey(aEvent, subPC, aAccessCharCodes,
-                               aMatchesContentAccessKey, nullptr,
-                               eAccessKeyProcessingDown, aModifierMask)) {
+          esm->WalkESMTreeToHandleAccessKey(aEvent, subPC, aAccessCharCodes,
+                                            nullptr, eAccessKeyProcessingDown,
+                                            aExecute)) {
         return true;
       }
     }
@@ -1195,59 +1223,73 @@ EventStateManager::HandleAccessKey(WidgetKeyboardEvent* aEvent,
       EventStateManager* esm =
         static_cast<EventStateManager*>(parentPC->EventStateManager());
       if (esm &&
-          esm->HandleAccessKey(aEvent, parentPC, aAccessCharCodes,
-                               aMatchesContentAccessKey, docShell,
-                               eAccessKeyProcessingDown, aModifierMask)) {
+          esm->WalkESMTreeToHandleAccessKey(aEvent, parentPC, aAccessCharCodes,
+                                            docShell, eAccessKeyProcessingDown,
+                                            aExecute)) {
         return true;
       }
     }
   }// if end. bubble up process
 
   // If the content access key modifier is pressed, try remote children
-  if (aMatchesContentAccessKey && mDocument && mDocument->GetWindow()) {
-    // If the focus is currently on a node with a TabParent, the key event will
-    // get forwarded to the child process and HandleAccessKey called from there.
+  if (aExecute &&
+      aEvent->ModifiersMatchWithAccessKey(AccessKeyType::eContent) &&
+      mDocument && mDocument->GetWindow()) {
+    // If the focus is currently on a node with a TabParent, the key event
+    // should've gotten forwarded to the child process and HandleAccessKey
+    // called from there.
+    if (TabParent::GetFrom(GetFocusedContent())) {
+      // If access key may be only in remote contents, this method won't handle
+      // access key synchronously.  In this case, only reply event should reach
+      // here.
+      MOZ_ASSERT(aEvent->IsHandledInRemoteProcess() ||
+                 !aEvent->IsWaitingReplyFromRemoteProcess());
+    }
     // If focus is somewhere else, then we need to check the remote children.
-    nsFocusManager* fm = nsFocusManager::GetFocusManager();
-    nsIContent* focusedContent = fm ? fm->GetFocusedContent() : nullptr;
-    if (TabParent::GetFrom(focusedContent)) {
-      // A remote child process is focused. The key event should get sent to
-      // the child process.
-      aEvent->mAccessKeyForwardedToChild = true;
-    } else {
-      AccessKeyInfo accessKeyInfo(aEvent, aAccessCharCodes, aModifierMask);
+    // However, if the event has already been handled in a remote process,
+    // then, focus is moved from the remote process after posting the event.
+    // In such case, we shouldn't retry to handle access keys in remote
+    // processes.
+    else if (!aEvent->IsHandledInRemoteProcess()) {
+      AccessKeyInfo accessKeyInfo(aEvent, aAccessCharCodes);
       nsContentUtils::CallOnAllRemoteChildren(mDocument->GetWindow(),
-                                              HandleAccessKeyInRemoteChild, &accessKeyInfo);
+                                              HandleAccessKeyInRemoteChild,
+                                              &accessKeyInfo);
     }
   }
 
   return false;
 }// end of HandleAccessKey
 
-bool
+void
 EventStateManager::DispatchCrossProcessEvent(WidgetEvent* aEvent,
                                              nsFrameLoader* aFrameLoader,
-                                             nsEventStatus *aStatus) {
+                                             nsEventStatus *aStatus)
+{
   TabParent* remote = TabParent::GetFrom(aFrameLoader);
   if (!remote) {
-    return false;
+    return;
   }
 
   switch (aEvent->mClass) {
   case eMouseEventClass: {
-    return remote->SendRealMouseEvent(*aEvent->AsMouseEvent());
+    remote->SendRealMouseEvent(*aEvent->AsMouseEvent());
+    return;
   }
   case eKeyboardEventClass: {
-    return remote->SendRealKeyEvent(*aEvent->AsKeyboardEvent());
+    remote->SendRealKeyEvent(*aEvent->AsKeyboardEvent());
+    return;
   }
   case eWheelEventClass: {
-    return remote->SendMouseWheelEvent(*aEvent->AsWheelEvent());
+    remote->SendMouseWheelEvent(*aEvent->AsWheelEvent());
+    return;
   }
   case eTouchEventClass: {
     // Let the child process synthesize a mouse event if needed, and
     // ensure we don't synthesize one in this process.
     *aStatus = nsEventStatus_eConsumeNoDefault;
-    return remote->SendRealTouchEvent(*aEvent->AsTouchEvent());
+    remote->SendRealTouchEvent(*aEvent->AsTouchEvent());
+    return;
   }
   case eDragEventClass: {
     if (remote->Manager()->IsContentParent()) {
@@ -1267,14 +1309,13 @@ EventStateManager::DispatchCrossProcessEvent(WidgetEvent* aEvent,
       }
     }
 
-    bool retval = remote->SendRealDragEvent(*aEvent->AsDragEvent(),
-                                            action, dropEffect);
-
-    return retval;
+    remote->SendRealDragEvent(*aEvent->AsDragEvent(), action, dropEffect);
+    return;
   }
   case ePluginEventClass: {
     *aStatus = nsEventStatus_eConsumeNoDefault;
-    return remote->SendPluginEvent(*aEvent->AsPluginEvent());
+    remote->SendPluginEvent(*aEvent->AsPluginEvent());
+    return;
   }
   default: {
     MOZ_CRASH("Attempt to send non-whitelisted event?");
@@ -1295,6 +1336,9 @@ EventStateManager::HandleCrossProcessEvent(WidgetEvent* aEvent,
       !aEvent->CanBeSentToRemoteProcess()) {
     return false;
   }
+
+  MOZ_ASSERT(!aEvent->HasBeenPostedToRemoteProcess(),
+    "Why do we need to post same event to remote processes again?");
 
   // Collect the remote event targets we're going to forward this
   // event to.
@@ -1346,7 +1390,6 @@ EventStateManager::HandleCrossProcessEvent(WidgetEvent* aEvent,
 
   // Look up the frame loader for all the remote targets we found, and
   // then dispatch the event to the remote content they represent.
-  bool dispatched = false;
   for (uint32_t i = 0; i < targets.Length(); ++i) {
     nsIContent* target = targets[i];
     nsCOMPtr<nsIFrameLoaderOwner> loaderOwner = do_QueryInterface(target);
@@ -1365,9 +1408,9 @@ EventStateManager::HandleCrossProcessEvent(WidgetEvent* aEvent,
       continue;
     }
 
-    dispatched |= DispatchCrossProcessEvent(aEvent, frameLoader, aStatus);
+    DispatchCrossProcessEvent(aEvent, frameLoader, aStatus);
   }
-  return dispatched;
+  return aEvent->HasBeenPostedToRemoteProcess();
 }
 
 //
@@ -1401,7 +1444,7 @@ EventStateManager::CreateClickHoldTimer(nsPresContext* inPresContext,
     if (nsContentUtils::HasNonEmptyAttr(mGestureDownContent, kNameSpaceID_None,
                                         nsGkAtoms::popup))
       return;
-    
+
     // check for a <menubutton> like bookmarks
     if (mGestureDownContent->IsXULElement(nsGkAtoms::menubutton))
       return;
@@ -1412,9 +1455,12 @@ EventStateManager::CreateClickHoldTimer(nsPresContext* inPresContext,
     int32_t clickHoldDelay =
       Preferences::GetInt("ui.click_hold_context_menus.delay", 500);
     mClickHoldTimer->SetTarget(SystemGroup::EventTargetFor(TaskCategory::Other));
-    mClickHoldTimer->InitWithFuncCallback(sClickHoldCallback, this,
-                                          clickHoldDelay,
-                                          nsITimer::TYPE_ONE_SHOT);
+    mClickHoldTimer->InitWithNamedFuncCallback(
+      sClickHoldCallback,
+      this,
+      clickHoldDelay,
+      nsITimer::TYPE_ONE_SHOT,
+      "EventStateManager::CreateClickHoldTimer");
   }
 } // CreateClickHoldTimer
 
@@ -1523,8 +1569,7 @@ EventStateManager::FireContextClick()
         allowedToDispatch = formCtrl->IsTextOrNumberControl(/*aExcludePassword*/ false) ||
                             formCtrl->ControlType() == NS_FORM_INPUT_FILE;
       }
-      else if (mGestureDownContent->IsAnyOfHTMLElements(nsGkAtoms::applet,
-                                                        nsGkAtoms::embed,
+      else if (mGestureDownContent->IsAnyOfHTMLElements(nsGkAtoms::embed,
                                                         nsGkAtoms::object,
                                                         nsGkAtoms::label)) {
         allowedToDispatch = false;
@@ -1537,13 +1582,13 @@ EventStateManager::FireContextClick()
                              WidgetMouseEvent::eReal);
       event.mClickCount = 1;
       FillInEventFromGestureDown(&event);
-        
+
       // stop selection tracking, we're in control now
       if (mCurrentTarget)
       {
         RefPtr<nsFrameSelection> frameSel =
           mCurrentTarget->GetFrameSelection();
-        
+
         if (frameSel && frameSel->GetDragState()) {
           // note that this can cause selection changed events to fire if we're in
           // a text field, which will null out mCurrentTarget
@@ -1727,6 +1772,11 @@ EventStateManager::GenerateDragGesture(nsPresContext* aPresContext,
 
       RefPtr<DataTransfer> dataTransfer =
         new DataTransfer(window, eDragStart, false, -1);
+      auto protectDataTransfer = MakeScopeExit([&] {
+        if (dataTransfer) {
+          dataTransfer->Disconnect();
+        }
+      });
 
       nsCOMPtr<nsISelection> selection;
       nsCOMPtr<nsIContent> eventContent, targetContent;
@@ -1793,11 +1843,6 @@ EventStateManager::GenerateDragGesture(nsPresContext* aPresContext,
                                          "on-datatransfer-available",
                                          nullptr);
       }
-
-      // now that the dataTransfer has been updated in the dragstart and
-      // draggesture events, make it read only so that the data doesn't
-      // change during the drag.
-      dataTransfer->SetReadOnly();
 
       if (status != nsEventStatus_eConsumeNoDefault) {
         bool dragStarted = DoDefaultDragStart(aPresContext, event, dataTransfer,
@@ -1961,6 +2006,18 @@ EventStateManager::DoDefaultDragStart(nsPresContext* aPresContext,
   if (!transArray)
     return false;
 
+  // After this function returns, the DataTransfer will be cleared so it appears
+  // empty to content. We need to pass a DataTransfer into the Drag Session, so
+  // we need to make a copy.
+  RefPtr<DataTransfer> dataTransfer;
+  aDataTransfer->Clone(aDragTarget, eDrop, aDataTransfer->MozUserCancelled(),
+                       false, getter_AddRefs(dataTransfer));
+
+  // Copy over the drop effect, as Clone doesn't copy it for us.
+  uint32_t dropEffect;
+  aDataTransfer->GetDropEffectInt(&dropEffect);
+  dataTransfer->SetDropEffectInt(dropEffect);
+
   // XXXndeakin don't really want to create a new drag DOM event
   // here, but we need something to pass to the InvokeDragSession
   // methods.
@@ -1973,7 +2030,7 @@ EventStateManager::DoDefaultDragStart(nsPresContext* aPresContext,
   // other than a selection is being dragged.
   if (!dragImage && aSelection) {
     dragService->InvokeDragSessionWithSelection(aSelection, transArray,
-                                                action, event, aDataTransfer);
+                                                action, event, dataTransfer);
   }
   else {
     // if dragging within a XUL tree and no custom drag image was
@@ -2000,7 +2057,7 @@ EventStateManager::DoDefaultDragStart(nsPresContext* aPresContext,
                                             dragImage ? dragImage->AsDOMNode() :
                                                         nullptr,
                                             imageX, imageY, event,
-                                            aDataTransfer);
+                                            dataTransfer);
   }
 
   return true;
@@ -2819,19 +2876,39 @@ NodeAllowsClickThrough(nsINode* aNode)
 
 void
 EventStateManager::PostHandleKeyboardEvent(WidgetKeyboardEvent* aKeyboardEvent,
-                                           nsEventStatus& aStatus,
-                                           bool dispatchedToContentProcess)
+                                           nsIFrame* aTargetFrame,
+                                           nsEventStatus& aStatus)
 {
   if (aStatus == nsEventStatus_eConsumeNoDefault) {
     return;
   }
 
-  if (!dispatchedToContentProcess) {
+  if (!aKeyboardEvent->HasBeenPostedToRemoteProcess()) {
+    if (aKeyboardEvent->IsWaitingReplyFromRemoteProcess()) {
+      RefPtr<TabParent> remote = aTargetFrame ?
+        TabParent::GetFrom(aTargetFrame->GetContent()) : nullptr;
+      if (remote && !remote->IsReadyToHandleInputEvents()) {
+        // We need to dispatch the event to the browser element again if we were
+        // waiting for the key reply but the event wasn't sent to the content
+        // process due to the remote browser wasn't ready.
+        WidgetKeyboardEvent keyEvent(*aKeyboardEvent);
+        aKeyboardEvent->MarkAsHandledInRemoteProcess();
+        EventDispatcher::Dispatch(remote->GetOwnerElement(), mPresContext,
+                                  &keyEvent);
+        if (keyEvent.DefaultPrevented()) {
+          aKeyboardEvent->PreventDefault(!keyEvent.DefaultPreventedByContent());
+          aStatus = nsEventStatus_eConsumeNoDefault;
+          return;
+        }
+      }
+    }
     // The widget expects a reply for every keyboard event. If the event wasn't
     // dispatched to a content process (non-e10s or no content process
     // running), we need to short-circuit here. Otherwise, we need to wait for
     // the content process to handle the event.
-    aKeyboardEvent->mWidget->PostHandleKeyEvent(aKeyboardEvent);
+    if (aKeyboardEvent->mWidget) {
+      aKeyboardEvent->mWidget->PostHandleKeyEvent(aKeyboardEvent);
+    }
     if (aKeyboardEvent->DefaultPrevented()) {
       aStatus = nsEventStatus_eConsumeNoDefault;
       return;
@@ -2851,8 +2928,9 @@ EventStateManager::PostHandleKeyboardEvent(WidgetKeyboardEvent* aKeyboardEvent,
         // because to the FocusManager the remote-browser looks like one
         // element, so we would just move the focus to the next element
         // in chrome, instead of handling it in content.
-        if (dispatchedToContentProcess)
+        if (aKeyboardEvent->HasBeenPostedToRemoteProcess()) {
           break;
+        }
 
         EnsureDocument(mPresContext);
         nsIFocusManager* fm = nsFocusManager::GetFocusManager();
@@ -2903,7 +2981,7 @@ EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
   mCurrentTarget = aTargetFrame;
   mCurrentTargetContent = nullptr;
 
-  bool dispatchedToContentProcess = HandleCrossProcessEvent(aEvent, aStatus);
+  HandleCrossProcessEvent(aEvent, aStatus);
   // NOTE: the above call may have destroyed aTargetFrame, please use
   // mCurrentTarget henceforth.  This is to avoid using it accidentally:
   aTargetFrame = nullptr;
@@ -2935,7 +3013,8 @@ EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
       // <xul:browser remote> element. This will ensure that subsequent mousemove/mouseup
       // events will continue to be dispatched to this element and therefore forwarded
       // to the child.
-      if (dispatchedToContentProcess && !nsIPresShell::GetCapturingContent()) {
+      if (aEvent->HasBeenPostedToRemoteProcess() &&
+          !nsIPresShell::GetCapturingContent()) {
         nsIContent* content = mCurrentTarget ? mCurrentTarget->GetContent() : nullptr;
         nsIPresShell::SetCapturingContent(content, 0);
       }
@@ -2949,7 +3028,7 @@ EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
       // check if the event is DefaultPrevented.
       if (nsEventStatus_eConsumeNoDefault != *aStatus &&
           !aEvent->DefaultPrevented()) {
-        nsCOMPtr<nsIContent> newFocus;      
+        nsCOMPtr<nsIContent> newFocus;
         bool suppressBlur = false;
         if (mCurrentTarget) {
           mCurrentTarget->GetContentForEvent(aEvent, getter_AddRefs(newFocus));
@@ -3440,7 +3519,7 @@ EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
       if (ContentChild* child = ContentChild::GetSingleton()) {
         child->SendUpdateDropEffect(action, dropEffect);
       }
-      if (dispatchedToContentProcess) {
+      if (aEvent->HasBeenPostedToRemoteProcess()) {
         dragSession->SetCanDrop(true);
       } else if (initialDataTransfer) {
         // Now set the drop effect in the initial dataTransfer. This ensures
@@ -3476,7 +3555,7 @@ EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
   case eKeyPress:
     {
       WidgetKeyboardEvent* keyEvent = aEvent->AsKeyboardEvent();
-      PostHandleKeyboardEvent(keyEvent, *aStatus, dispatchedToContentProcess);
+      PostHandleKeyboardEvent(keyEvent, mCurrentTarget, *aStatus);
     }
     break;
 
@@ -3536,7 +3615,7 @@ EventStateManager::NotifyDestroyPresContext(nsPresContext* aPresContext)
     // Bug 70855: Presentation is going away, possibly for a reframe.
     // Reset the hover state so that if we're recreating the presentation,
     // we won't have the old hover state still set in the new presentation,
-    // as if the new presentation is resized, a new element may be hovered. 
+    // as if the new presentation is resized, a new element may be hovered.
     SetContentState(nullptr, NS_EVENT_STATE_HOVER);
   }
   mPointersEnterLeaveHelper.Clear();
@@ -3865,8 +3944,7 @@ CreateMouseOrPointerWidgetEvent(WidgetMouseEvent* aMouseEvent,
 {
   WidgetPointerEvent* sourcePointer = aMouseEvent->AsPointerEvent();
   if (sourcePointer) {
-    PROFILER_LABEL("Input", "DispatchPointerEvent",
-      js::ProfileEntry::Category::EVENTS);
+    AUTO_PROFILER_LABEL("CreateMouseOrPointerWidgetEvent", EVENTS);
 
     nsAutoPtr<WidgetPointerEvent> newPointerEvent;
     newPointerEvent =
@@ -3933,11 +4011,6 @@ EventStateManager::DispatchMouseOrPointerEvent(WidgetMouseEvent* aMouseEvent,
   mCurrentTargetContent = aTargetContent;
 
   nsIFrame* targetFrame = nullptr;
-
-  if (aMouseEvent->AsMouseEvent()) {
-    PROFILER_LABEL("Input", "DispatchMouseEvent",
-      js::ProfileEntry::Category::EVENTS);
-  }
 
   nsEventStatus status = nsEventStatus_eIgnore;
   ESMEventCB callback(aTargetContent);
@@ -4040,9 +4113,9 @@ void
 EventStateManager::NotifyMouseOut(WidgetMouseEvent* aMouseEvent,
                                   nsIContent* aMovingInto)
 {
-  OverOutElementsWrapper* wrapper = GetWrapperByEventID(aMouseEvent);
+  RefPtr<OverOutElementsWrapper> wrapper = GetWrapperByEventID(aMouseEvent);
 
-  if (!wrapper->mLastOverElement)
+  if (!wrapper || !wrapper->mLastOverElement)
     return;
   // Before firing mouseout, check for recursion
   if (wrapper->mLastOverElement == wrapper->mFirstOutEventElement)
@@ -4108,9 +4181,9 @@ EventStateManager::NotifyMouseOver(WidgetMouseEvent* aMouseEvent,
 {
   NS_ASSERTION(aContent, "Mouse must be over something");
 
-  OverOutElementsWrapper* wrapper = GetWrapperByEventID(aMouseEvent);
+  RefPtr<OverOutElementsWrapper> wrapper = GetWrapperByEventID(aMouseEvent);
 
-  if (wrapper->mLastOverElement == aContent)
+  if (!wrapper || wrapper->mLastOverElement == aContent)
     return;
 
   // Before firing mouseover, check for recursion
@@ -4140,7 +4213,7 @@ EventStateManager::NotifyMouseOver(WidgetMouseEvent* aMouseEvent,
   nsCOMPtr<nsIContent> lastOverElement = wrapper->mLastOverElement;
 
   bool isPointer = aMouseEvent->mClass == ePointerEventClass;
-  
+
   EnterLeaveDispatcher enterDispatcher(this, aContent, lastOverElement,
                                        aMouseEvent,
                                        isPointer ? ePointerEnter : eMouseEnter);
@@ -4280,7 +4353,7 @@ EventStateManager::GenerateMouseEnterExit(WidgetMouseEvent* aMouseEvent)
         targetElement = mDocument->GetRootElement();
       }
       if (targetElement) {
-        OverOutElementsWrapper* helper = GetWrapperByEventID(aMouseEvent);
+        RefPtr<OverOutElementsWrapper> helper = GetWrapperByEventID(aMouseEvent);
         if (helper) {
           helper->mLastOverElement = targetElement;
         }
@@ -4295,8 +4368,8 @@ EventStateManager::GenerateMouseEnterExit(WidgetMouseEvent* aMouseEvent)
       // This is actually the window mouse exit or pointer leave event. We're not moving
       // into any new element.
 
-      OverOutElementsWrapper* helper = GetWrapperByEventID(aMouseEvent);
-      if (helper->mLastOverFrame &&
+      RefPtr<OverOutElementsWrapper> helper = GetWrapperByEventID(aMouseEvent);
+      if (helper && helper->mLastOverFrame &&
           nsContentUtils::GetTopLevelWidget(aMouseEvent->mWidget) !=
           nsContentUtils::GetTopLevelWidget(helper->mLastOverFrame->GetNearestWidget())) {
         // the Mouse/PointerOut event widget doesn't have same top widget with
@@ -4895,7 +4968,7 @@ EventStateManager::SetContentState(nsIContent* aContent, EventStates aState)
     } else {
       NS_ASSERTION(aState == NS_EVENT_STATE_HOVER, "How did that happen?");
       nsIContent* newHover;
-      
+
       if (mPresContext->IsDynamic()) {
         newHover = aContent;
       } else {
@@ -5111,8 +5184,10 @@ EventStateManager::GetFocusedContent()
     return nullptr;
 
   nsCOMPtr<nsPIDOMWindowOuter> focusedWindow;
-  return nsFocusManager::GetFocusedDescendant(mDocument->GetWindow(), false,
-                                              getter_AddRefs(focusedWindow));
+  return nsFocusManager::GetFocusedDescendant(
+                           mDocument->GetWindow(),
+                           nsFocusManager::eOnlyCurrentWindow,
+                           getter_AddRefs(focusedWindow));
 }
 
 //-------------------------------------------------------
@@ -5175,8 +5250,11 @@ EventStateManager::DoContentCommandEvent(WidgetContentCommandEvent* aEvent)
     default:
       return NS_ERROR_NOT_IMPLEMENTED;
   }
+  // If user tries to do something, user must try to do it in visible window.
+  // So, let's retrieve controller of visible window.
   nsCOMPtr<nsIController> controller;
-  nsresult rv = root->GetControllerForCommand(cmd, getter_AddRefs(controller));
+  nsresult rv = root->GetControllerForCommand(cmd, true,
+                                              getter_AddRefs(controller));
   NS_ENSURE_SUCCESS(rv, rv);
   if (!controller) {
     // When GetControllerForCommand succeeded but there is no controller, the
@@ -5290,7 +5368,7 @@ EventStateManager::DoContentCommandScrollEvent(
   aEvent->mSucceeded = true;
 
   nsIScrollableFrame* sf =
-    ps->GetFrameToScrollAsScrollable(nsIPresShell::eEither);
+    ps->GetScrollableFrameToScroll(nsIPresShell::eEither);
   aEvent->mIsEnabled = sf ?
     (aEvent->mScroll.mIsHorizontal ?
       WheelHandlingUtils::CanScrollOn(sf, aEvent->mScroll.mAmount, 0) :
@@ -5795,9 +5873,6 @@ EventStateManager::WheelPrefs::IsOverOnePageScrollAllowedY(
 
 bool EventStateManager::Prefs::sKeyCausesActivation = true;
 bool EventStateManager::Prefs::sClickHoldContextMenu = false;
-int32_t EventStateManager::Prefs::sGenericAccessModifierKey = -1;
-int32_t EventStateManager::Prefs::sChromeAccessModifierMask = 0;
-int32_t EventStateManager::Prefs::sContentAccessModifierMask = 0;
 
 // static
 void
@@ -5822,21 +5897,6 @@ EventStateManager::Prefs::Init()
                                     sClickHoldContextMenu);
   MOZ_ASSERT(NS_SUCCEEDED(rv),
              "Failed to observe \"ui.click_hold_context_menus\"");
-  rv = Preferences::AddIntVarCache(&sGenericAccessModifierKey,
-                                   "ui.key.generalAccessKey",
-                                   sGenericAccessModifierKey);
-  MOZ_ASSERT(NS_SUCCEEDED(rv),
-             "Failed to observe \"ui.key.generalAccessKey\"");
-  rv = Preferences::AddIntVarCache(&sChromeAccessModifierMask,
-                                   "ui.key.chromeAccess",
-                                   sChromeAccessModifierMask);
-  MOZ_ASSERT(NS_SUCCEEDED(rv),
-             "Failed to observe \"ui.key.chromeAccess\"");
-  rv = Preferences::AddIntVarCache(&sContentAccessModifierMask,
-                                   "ui.key.contentAccess",
-                                   sContentAccessModifierMask);
-  MOZ_ASSERT(NS_SUCCEEDED(rv),
-             "Failed to observe \"ui.key.contentAccess\"");
   sPrefsAlreadyCached = true;
 }
 
@@ -5855,44 +5915,6 @@ void
 EventStateManager::Prefs::Shutdown()
 {
   Preferences::UnregisterCallback(OnChange, "dom.popup_allowed_events");
-}
-
-// static
-int32_t
-EventStateManager::Prefs::ChromeAccessModifierMask()
-{
-  return GetAccessModifierMask(nsIDocShellTreeItem::typeChrome);
-}
-
-// static
-int32_t
-EventStateManager::Prefs::ContentAccessModifierMask()
-{
-  return GetAccessModifierMask(nsIDocShellTreeItem::typeContent);
-}
-
-// static
-int32_t
-EventStateManager::Prefs::GetAccessModifierMask(int32_t aItemType)
-{
-  switch (sGenericAccessModifierKey) {
-    case -1:                             break; // use the individual prefs
-    case nsIDOMKeyEvent::DOM_VK_SHIFT:   return NS_MODIFIER_SHIFT;
-    case nsIDOMKeyEvent::DOM_VK_CONTROL: return NS_MODIFIER_CONTROL;
-    case nsIDOMKeyEvent::DOM_VK_ALT:     return NS_MODIFIER_ALT;
-    case nsIDOMKeyEvent::DOM_VK_META:    return NS_MODIFIER_META;
-    case nsIDOMKeyEvent::DOM_VK_WIN:     return NS_MODIFIER_OS;
-    default:                             return 0;
-  }
-
-  switch (aItemType) {
-    case nsIDocShellTreeItem::typeChrome:
-      return sChromeAccessModifierMask;
-    case nsIDocShellTreeItem::typeContent:
-      return sContentAccessModifierMask;
-    default:
-      return 0;
-  }
 }
 
 /******************************************************************/

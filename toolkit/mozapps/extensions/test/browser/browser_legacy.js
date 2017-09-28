@@ -17,7 +17,7 @@ add_task(async function() {
   let exceptions = Services.prefs.getCharPref("extensions.legacy.exceptions");
   exceptions = [ exceptions, ...IGNORE ].join(",");
 
-  SpecialPowers.pushPrefEnv({
+  await SpecialPowers.pushPrefEnv({
     set: [
       ["extensions.legacy.enabled", false],
       ["extensions.legacy.exceptions", exceptions],
@@ -111,7 +111,7 @@ add_task(async function() {
   // The legacy category does not watch for new installs since new
   // legacy extensions cannot be installed while legacy extensions
   // are disabled, so manually refresh it here.
-  await mgrWin.gLegacyView.refresh();
+  await mgrWin.gLegacyView.refreshVisibility();
 
   // Make sure we re-render the extensions list, after that we should
   // still just have the original two entries.
@@ -132,7 +132,7 @@ add_task(async function() {
 
   // Follow the link to the legacy extensions page
   let legacyLink = mgrWin.document.getElementById("legacy-extensions-learnmore-link");
-  is_element_visible(legacyLink, "Link to leagcy extension is visible");
+  is_element_visible(legacyLink, "Link to legacy extension is visible");
 
   let loadPromise = new Promise(resolve => wait_for_view_load(mgrWin, resolve, true));
   legacyLink.click();
@@ -156,7 +156,7 @@ add_task(async function() {
   });
 
   // The entry on the left side should now read "Unsupported"
-  await mgrWin.gLegacyView.refresh();
+  await mgrWin.gLegacyView.refreshVisibility();
   is(catItem.disabled, false, "Legacy category is visible");
   is(catItem.getAttribute("name"), get_string("type.unsupported.name"),
      "Category label with unsigned extensions is correct");
@@ -186,7 +186,7 @@ add_task(async function() {
   });
 
   // The name of the pane should go back to "Legacy Extensions"
-  await mgrWin.gLegacyView.refresh();
+  await mgrWin.gLegacyView.refreshVisibility();
   is(catItem.disabled, false, "Legacy category is visible");
   is(catItem.getAttribute("name"), get_string("type.legacy.name"),
      "Category label with no unsigned extensions is correct");
@@ -206,5 +206,20 @@ add_task(async function() {
     "unsigned_legacy@tests.mozilla.org",
   ]);
 
+  await close_manager(mgrWin);
+
+  // Now enable legacy extensions and open a new addons manager tab.
+  // The remembered last view will be the list of legacy extensions but
+  // now that legacy extensions are enabled, we should jump to the
+  // regular Extensions list.
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["extensions.legacy.enabled", true],
+    ],
+  });
+
+  mgrWin = await open_manager(null);
+  is(mgrWin.gViewController.currentViewId, "addons://list/extension",
+     "addons manager switched to extensions list");
   await close_manager(mgrWin);
 });

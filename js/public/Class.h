@@ -436,7 +436,7 @@ typedef bool
  * that object.  A null return value means OOM.
  */
 typedef JSString*
-(* JSFunToStringOp)(JSContext* cx, JS::HandleObject obj, unsigned indent);
+(* JSFunToStringOp)(JSContext* cx, JS::HandleObject obj, bool isToSource);
 
 /**
  * Resolve a lazy property named by id in obj by defining it directly in obj.
@@ -473,9 +473,12 @@ typedef bool
 typedef void
 (* JSFinalizeOp)(JSFreeOp* fop, JSObject* obj);
 
-/** Finalizes external strings created by JS_NewExternalString. */
+/**
+ * Finalizes external strings created by JS_NewExternalString. The finalizer
+ * can be called off the main thread.
+ */
 struct JSStringFinalizer {
-    void (*finalize)(JS::Zone* zone, const JSStringFinalizer* fin, char16_t* chars);
+    void (*finalize)(const JSStringFinalizer* fin, char16_t* chars);
 };
 
 /**
@@ -507,8 +510,8 @@ typedef void
 typedef JSObject*
 (* JSWeakmapKeyDelegateOp)(JSObject* obj);
 
-typedef void
-(* JSObjectMovedOp)(JSObject* obj, const JSObject* old);
+typedef size_t
+(* JSObjectMovedOp)(JSObject* obj, JSObject* old);
 
 /* js::Class operation signatures. */
 
@@ -604,8 +607,6 @@ typedef void
     \
     JSAddPropertyOp    getAddProperty() const { return cOps ? cOps->addProperty : nullptr; } \
     JSDeletePropertyOp getDelProperty() const { return cOps ? cOps->delProperty : nullptr; } \
-    JSGetterOp         getGetProperty() const { return cOps ? cOps->getProperty : nullptr; } \
-    JSSetterOp         getSetProperty() const { return cOps ? cOps->setProperty : nullptr; } \
     JSEnumerateOp      getEnumerate()   const { return cOps ? cOps->enumerate   : nullptr; } \
     JSNewEnumerateOp   getNewEnumerate()const { return cOps ? cOps->newEnumerate: nullptr; } \
     JSResolveOp        getResolve()     const { return cOps ? cOps->resolve     : nullptr; } \
@@ -638,8 +639,6 @@ struct JS_STATIC_CLASS ClassOps
     /* Function pointer members (may be null). */
     JSAddPropertyOp     addProperty;
     JSDeletePropertyOp  delProperty;
-    JSGetterOp          getProperty;
-    JSSetterOp          setProperty;
     JSEnumerateOp       enumerate;
     JSNewEnumerateOp    newEnumerate;
     JSResolveOp         resolve;
@@ -712,7 +711,8 @@ struct JS_STATIC_CLASS ClassExtension
     JSWeakmapKeyDelegateOp weakmapKeyDelegateOp;
 
     /**
-     * Optional hook called when an object is moved by a compacting GC.
+     * Optional hook called when an object is moved by generational or
+     * compacting GC.
      *
      * There may exist weak pointers to an object that are not traced through
      * when the normal trace APIs are used, for example objects in the wrapper
@@ -721,6 +721,12 @@ struct JS_STATIC_CLASS ClassExtension
      * Note that this hook can be called before JS_NewObject() returns if a GC
      * is triggered during construction of the object. This can happen for
      * global objects for example.
+     *
+     * The function should return the difference between nursery bytes used and
+     * tenured bytes used, which may be nonzero e.g. if some nursery-allocated
+     * data beyond the actual GC thing is moved into malloced memory.
+     *
+     * This is used to compute the nursery promotion rate.
      */
     JSObjectMovedOp objectMovedOp;
 };
@@ -756,8 +762,6 @@ struct JS_STATIC_CLASS JSClassOps
     /* Function pointer members (may be null). */
     JSAddPropertyOp     addProperty;
     JSDeletePropertyOp  delProperty;
-    JSGetterOp          getProperty;
-    JSSetterOp          setProperty;
     JSEnumerateOp       enumerate;
     JSNewEnumerateOp    newEnumerate;
     JSResolveOp         resolve;
@@ -981,10 +985,6 @@ struct JS_STATIC_CLASS Class
 static_assert(offsetof(JSClassOps, addProperty) == offsetof(ClassOps, addProperty),
               "ClassOps and JSClassOps must be consistent");
 static_assert(offsetof(JSClassOps, delProperty) == offsetof(ClassOps, delProperty),
-              "ClassOps and JSClassOps must be consistent");
-static_assert(offsetof(JSClassOps, getProperty) == offsetof(ClassOps, getProperty),
-              "ClassOps and JSClassOps must be consistent");
-static_assert(offsetof(JSClassOps, setProperty) == offsetof(ClassOps, setProperty),
               "ClassOps and JSClassOps must be consistent");
 static_assert(offsetof(JSClassOps, enumerate) == offsetof(ClassOps, enumerate),
               "ClassOps and JSClassOps must be consistent");

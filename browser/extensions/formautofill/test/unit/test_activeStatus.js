@@ -39,30 +39,28 @@ add_task(async function test_activeStatus_observe() {
   formAutofillParent._active = true;
   formAutofillParent._computeStatus.returns(true);
   formAutofillParent.observe(null, "nsPref:changed", "extensions.formautofill.addresses.enabled");
+  formAutofillParent.observe(null, "nsPref:changed", "extensions.formautofill.creditCards.enabled");
   do_check_eq(formAutofillParent._onStatusChanged.called, false);
 
   // _active != _computeStatus() => Need to trigger _onStatusChanged
   formAutofillParent._computeStatus.returns(false);
   formAutofillParent._onStatusChanged.reset();
   formAutofillParent.observe(null, "nsPref:changed", "extensions.formautofill.addresses.enabled");
+  formAutofillParent.observe(null, "nsPref:changed", "extensions.formautofill.creditCards.enabled");
   do_check_eq(formAutofillParent._onStatusChanged.called, true);
 
-  // profile added => Need to trigger _onStatusChanged
-  formAutofillParent._computeStatus.returns(!formAutofillParent._active);
-  formAutofillParent._onStatusChanged.reset();
-  formAutofillParent.observe(null, "formautofill-storage-changed", "add");
-  do_check_eq(formAutofillParent._onStatusChanged.called, true);
+  // profile changed => Need to trigger _onStatusChanged
+  ["add", "update", "remove", "reconcile", "merge"].forEach(event => {
+    formAutofillParent._computeStatus.returns(!formAutofillParent._active);
+    formAutofillParent._onStatusChanged.reset();
+    formAutofillParent.observe(null, "formautofill-storage-changed", event);
+    do_check_eq(formAutofillParent._onStatusChanged.called, true);
+  });
 
-  // profile removed => Need to trigger _onStatusChanged
+  // profile metadata updated => No need to trigger _onStatusChanged
   formAutofillParent._computeStatus.returns(!formAutofillParent._active);
   formAutofillParent._onStatusChanged.reset();
-  formAutofillParent.observe(null, "formautofill-storage-changed", "remove");
-  do_check_eq(formAutofillParent._onStatusChanged.called, true);
-
-  // profile updated => no need to trigger _onStatusChanged
-  formAutofillParent._computeStatus.returns(!formAutofillParent._active);
-  formAutofillParent._onStatusChanged.reset();
-  formAutofillParent.observe(null, "formautofill-storage-changed", "update");
+  formAutofillParent.observe(null, "formautofill-storage-changed", "notifyUsed");
   do_check_eq(formAutofillParent._onStatusChanged.called, false);
 });
 
@@ -70,6 +68,7 @@ add_task(async function test_activeStatus_computeStatus() {
   let formAutofillParent = new FormAutofillParent();
   do_register_cleanup(function cleanup() {
     Services.prefs.clearUserPref("extensions.formautofill.addresses.enabled");
+    Services.prefs.clearUserPref("extensions.formautofill.creditCards.enabled");
   });
 
   sinon.stub(profileStorage.addresses, "getAll");
@@ -77,19 +76,32 @@ add_task(async function test_activeStatus_computeStatus() {
 
   // pref is enabled and profile is empty.
   Services.prefs.setBoolPref("extensions.formautofill.addresses.enabled", true);
+  Services.prefs.setBoolPref("extensions.formautofill.creditCards.enabled", true);
   do_check_eq(formAutofillParent._computeStatus(), false);
 
   // pref is disabled and profile is empty.
   Services.prefs.setBoolPref("extensions.formautofill.addresses.enabled", false);
+  Services.prefs.setBoolPref("extensions.formautofill.creditCards.enabled", false);
   do_check_eq(formAutofillParent._computeStatus(), false);
 
   profileStorage.addresses.getAll.returns([{"given-name": "John"}]);
   formAutofillParent.observe(null, "formautofill-storage-changed", "add");
   // pref is enabled and profile is not empty.
   Services.prefs.setBoolPref("extensions.formautofill.addresses.enabled", true);
+  Services.prefs.setBoolPref("extensions.formautofill.addresses.enabled", true);
   do_check_eq(formAutofillParent._computeStatus(), true);
+
+  // pref is partial enabled and profile is not empty.
+  Services.prefs.setBoolPref("extensions.formautofill.addresses.enabled", true);
+  Services.prefs.setBoolPref("extensions.formautofill.creditCards.enabled", false);
+  do_check_eq(formAutofillParent._computeStatus(), true);
+  Services.prefs.setBoolPref("extensions.formautofill.addresses.enabled", false);
+  Services.prefs.setBoolPref("extensions.formautofill.creditCards.enabled", true);
+  do_check_eq(formAutofillParent._computeStatus(), true);
+
 
   // pref is disabled and profile is not empty.
   Services.prefs.setBoolPref("extensions.formautofill.addresses.enabled", false);
+  Services.prefs.setBoolPref("extensions.formautofill.creditCards.enabled", false);
   do_check_eq(formAutofillParent._computeStatus(), false);
 });

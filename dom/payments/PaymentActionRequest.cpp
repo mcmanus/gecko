@@ -74,11 +74,13 @@ NS_IMETHODIMP
 PaymentCreateActionRequest::InitRequest(const nsAString& aRequestId,
                                         nsIPaymentActionCallback* aCallback,
                                         const uint64_t aTabId,
+                                        nsIPrincipal* aTopLevelPrincipal,
                                         nsIArray* aMethodData,
                                         nsIPaymentDetails* aDetails,
                                         nsIPaymentOptions* aOptions)
 {
   NS_ENSURE_ARG_POINTER(aCallback);
+  NS_ENSURE_ARG_POINTER(aTopLevelPrincipal);
   NS_ENSURE_ARG_POINTER(aMethodData);
   NS_ENSURE_ARG_POINTER(aDetails);
   NS_ENSURE_ARG_POINTER(aOptions);
@@ -87,6 +89,7 @@ PaymentCreateActionRequest::InitRequest(const nsAString& aRequestId,
     return rv;
   }
   mTabId = aTabId;
+  mTopLevelPrincipal = aTopLevelPrincipal;
   mMethodData = aMethodData;
   mDetails = aDetails;
   mOptions = aOptions;
@@ -98,6 +101,16 @@ PaymentCreateActionRequest::GetTabId(uint64_t* aTabId)
 {
   NS_ENSURE_ARG_POINTER(aTabId);
   *aTabId = mTabId;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+PaymentCreateActionRequest::GetTopLevelPrincipal(nsIPrincipal** aTopLevelPrincipal)
+{
+  NS_ENSURE_ARG_POINTER(aTopLevelPrincipal);
+  MOZ_ASSERT(mTopLevelPrincipal);
+  nsCOMPtr<nsIPrincipal> principal = mTopLevelPrincipal;
+  principal.forget(aTopLevelPrincipal);
   return NS_OK;
 }
 
@@ -160,6 +173,37 @@ PaymentCompleteActionRequest::InitRequest(const nsAString& aRequestId,
     return rv;
   }
   mCompleteStatus = aCompleteStatus;
+  return NS_OK;
+}
+
+/* PaymentUpdateActionRequest */
+
+NS_IMPL_ISUPPORTS_INHERITED(PaymentUpdateActionRequest,
+                            PaymentActionRequest,
+                            nsIPaymentUpdateActionRequest)
+
+NS_IMETHODIMP
+PaymentUpdateActionRequest::GetDetails(nsIPaymentDetails** aDetails)
+{
+  NS_ENSURE_ARG_POINTER(aDetails);
+  MOZ_ASSERT(mDetails);
+  nsCOMPtr<nsIPaymentDetails> details = mDetails;
+  details.forget(aDetails);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+PaymentUpdateActionRequest::InitRequest(const nsAString& aRequestId,
+                                        nsIPaymentActionCallback* aCallback,
+                                        nsIPaymentDetails* aDetails)
+{
+  NS_ENSURE_ARG_POINTER(aCallback);
+  NS_ENSURE_ARG_POINTER(aDetails);
+  nsresult rv = Init(aRequestId, nsIPaymentActionRequest::UPDATE_ACTION, aCallback);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+  mDetails = aDetails;
   return NS_OK;
 }
 

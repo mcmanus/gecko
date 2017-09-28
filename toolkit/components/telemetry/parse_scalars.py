@@ -9,15 +9,15 @@ import shared_telemetry_utils as utils
 from shared_telemetry_utils import ParserError
 
 # The map of containing the allowed scalar types and their mapping to
-# nsITelemetry::SCALAR_* type constants.
+# nsITelemetry::SCALAR_TYPE_* type constants.
 
-BASE_DOC_URL = 'https://gecko.readthedocs.io/en/latest/toolkit/components/' + \
+BASE_DOC_URL = 'https://firefox-source-docs.mozilla.org/toolkit/components/' + \
                'telemetry/telemetry/collection/scalars.html'
 
 SCALAR_TYPES_MAP = {
-    'uint': 'nsITelemetry::SCALAR_COUNT',
-    'string': 'nsITelemetry::SCALAR_STRING',
-    'boolean': 'nsITelemetry::SCALAR_BOOLEAN'
+    'uint': 'nsITelemetry::SCALAR_TYPE_COUNT',
+    'string': 'nsITelemetry::SCALAR_TYPE_STRING',
+    'boolean': 'nsITelemetry::SCALAR_TYPE_BOOLEAN'
 }
 
 
@@ -38,7 +38,7 @@ class ScalarType:
 
         # Everything is ok, set the rest of the data.
         self._definition = definition
-        definition['expires'] = utils.add_expiration_postfix(definition['expires'])
+        self._expires = utils.add_expiration_postfix(definition['expires'])
 
     def validate_names(self, group_name, probe_name):
         """Validate the group and probe name:
@@ -189,6 +189,12 @@ class ScalarType:
                 raise ParserError(self._name + ' - unknown value in record_in_processes: ' + proc +
                                   '.\nSee: {}'.format(BASE_DOC_URL))
 
+        # Validate the expiration version.
+        expires = definition.get('expires')
+        if not utils.validate_expiration_version(expires):
+            raise ParserError('{} - invalid expires: {}.\nSee: {}#required-fields'
+                              .format(self._name, expires, BASE_DOC_URL))
+
     @property
     def name(self):
         """Get the scalar name"""
@@ -222,7 +228,7 @@ class ScalarType:
     @property
     def expires(self):
         """Get the scalar expiration"""
-        return self._definition['expires']
+        return self._expires
 
     @property
     def kind(self):

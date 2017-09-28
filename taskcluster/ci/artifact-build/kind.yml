@@ -4,8 +4,12 @@
 
 loader: taskgraph.loader.transform:loader
 
+kind-dependencies:
+   - toolchain
+
 transforms:
    - taskgraph.transforms.build_attrs:transforms
+   - taskgraph.transforms.use_toolchains:transforms
    - taskgraph.transforms.job:transforms
    - taskgraph.transforms.task:transforms
 
@@ -20,6 +24,7 @@ jobs:
             kind: build
             symbol: AB
             tier: 2
+        run-on-projects: [ 'trunk', 'try' ]
         worker-type: aws-provisioner-v1/gecko-{level}-b-linux
         worker:
             docker-image: {in-tree: desktop-build}
@@ -37,4 +42,3 @@ jobs:
             tooltool-downloads: public
             need-xvfb: true
             keep-artifacts: false
-

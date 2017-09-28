@@ -7,6 +7,7 @@ from __future__ import absolute_import, print_function, unicode_literals
 import argparse
 import collections
 import errno
+import hashlib
 import itertools
 import json
 import logging
@@ -24,10 +25,13 @@ from mach.decorators import (
     CommandArgumentGroup,
     CommandProvider,
     Command,
+    SettingsProvider,
     SubCommand,
 )
 
 from mach.mixin.logging import LoggingMixin
+
+from mach.main import Mach
 
 from mozbuild.base import (
     BuildEnvironmentNotFoundException,
@@ -38,6 +42,7 @@ from mozbuild.base import (
     MozconfigLoadException,
     ObjdirMismatchException,
 )
+from mozbuild.util import ensureParentDir
 
 from mozbuild.backend import (
     backends,
@@ -127,46 +132,28 @@ class TerminalLoggingHandler(logging.Handler):
             self.release()
 
 
-class BuildProgressFooter(object):
-    """Handles display of a build progress indicator in a terminal.
+class Footer(object):
+    """Handles display of a footer in a terminal.
 
-    When mach builds inside a blessings-supported terminal, it will render
-    progress information collected from a BuildMonitor. This class converts the
-    state of BuildMonitor into terminal output.
+    This class implements the functionality common to all mach commands
+    that render a footer.
     """
 
-    def __init__(self, terminal, monitor):
+    def __init__(self, terminal):
         # terminal is a blessings.Terminal.
         self._t = terminal
         self._fh = sys.stdout
-        self.tiers = monitor.tiers.tier_status.viewitems()
 
     def clear(self):
         """Removes the footer from the current terminal."""
         self._fh.write(self._t.move_x(0))
         self._fh.write(self._t.clear_eol())
 
-    def draw(self):
-        """Draws this footer in the terminal."""
+    def write(self, parts):
+        """Write some output in the footer, accounting for terminal width.
 
-        if not self.tiers:
-            return
-
-        # The drawn terminal looks something like:
-        # TIER: base nspr nss js platform app SUBTIER: static export libs tools DIRECTORIES: 06/09 (memory)
-
-        # This is a list of 2-tuples of (encoding function, input). None means
-        # no encoding. For a full reason on why we do things this way, read the
-        # big comment below.
-        parts = [('bold', 'TIER:')]
-        append = parts.append
-        for tier, status in self.tiers:
-            if status is None:
-                append(tier)
-            elif status == 'finished':
-                append(('green', tier))
-            else:
-                append(('underline_yellow', tier))
+        parts is a list of 2-tuples of (encoding_function, input).
+        None means no encoding."""
 
         # We don't want to write more characters than the current width of the
         # terminal otherwise wrapping may result in weird behavior. We can't
@@ -199,15 +186,47 @@ class BuildProgressFooter(object):
             self._fh.write(' '.join(write_pieces))
 
 
-class BuildOutputManager(LoggingMixin):
-    """Handles writing build output to a terminal, to logs, etc."""
+class BuildProgressFooter(Footer):
+    """Handles display of a build progress indicator in a terminal.
 
-    def __init__(self, log_manager, monitor):
+    When mach builds inside a blessings-supported terminal, it will render
+    progress information collected from a BuildMonitor. This class converts the
+    state of BuildMonitor into terminal output.
+    """
+
+    def __init__(self, terminal, monitor):
+        Footer.__init__(self, terminal)
+        self.tiers = monitor.tiers.tier_status.viewitems()
+
+    def draw(self):
+        """Draws this footer in the terminal."""
+
+        if not self.tiers:
+            return
+
+        # The drawn terminal looks something like:
+        # TIER: static export libs tools
+
+        parts = [('bold', 'TIER:')]
+        append = parts.append
+        for tier, status in self.tiers:
+            if status is None:
+                append(tier)
+            elif status == 'finished':
+                append(('green', tier))
+            else:
+                append(('underline_yellow', tier))
+
+        self.write(parts)
+
+
+class OutputManager(LoggingMixin):
+    """Handles writing job output to a terminal or log."""
+
+    def __init__(self, log_manager, footer):
         self.populate_logger()
 
-        self.monitor = monitor
         self.footer = None
-
         terminal = log_manager.terminal
 
         # TODO convert terminal footer to config file setting.
@@ -217,7 +236,7 @@ class BuildOutputManager(LoggingMixin):
             return
 
         self.t = terminal
-        self.footer = BuildProgressFooter(terminal, monitor)
+        self.footer = footer
 
         self._handler = TerminalLoggingHandler()
         self._handler.setFormatter(log_manager.terminal_formatter)
@@ -235,11 +254,6 @@ class BuildOutputManager(LoggingMixin):
             # Prevents the footer from being redrawn if logging occurs.
             self._handler.footer = None
 
-        # Ensure the resource monitor is stopped because leaving it running
-        # could result in the process hanging on exit because the resource
-        # collection child process hasn't been told to stop.
-        self.monitor.stop_resource_recording()
-
     def write_line(self, line):
         if self.footer:
             self.footer.clear()
@@ -255,6 +269,22 @@ class BuildOutputManager(LoggingMixin):
 
         self.footer.clear()
         self.footer.draw()
+
+class BuildOutputManager(OutputManager):
+    """Handles writing build output to a terminal, to logs, etc."""
+
+    def __init__(self, log_manager, monitor, footer):
+        self.monitor = monitor
+        OutputManager.__init__(self, log_manager, footer)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        OutputManager.__exit__(self, exc_type, exc_value, traceback)
+
+        # Ensure the resource monitor is stopped because leaving it running
+        # could result in the process hanging on exit because the resource
+        # collection child process hasn't been told to stop.
+        self.monitor.stop_resource_recording()
+
 
     def on_line(self, line):
         warning, state_changed, relevant = self.monitor.on_line(line)
@@ -277,6 +307,45 @@ class StoreDebugParamsAndWarnAction(argparse.Action):
         sys.stderr.write('The --debugparams argument is deprecated. Please ' +
                          'use --debugger-args instead.\n\n')
         setattr(namespace, self.dest, values)
+
+
+@CommandProvider
+class Watch(MachCommandBase):
+    """Interface to watch and re-build the tree."""
+
+    @Command('watch', category='post-build', description='Watch and re-build the tree.',
+             conditions=[conditions.is_firefox])
+    @CommandArgument('-v', '--verbose', action='store_true',
+                     help='Verbose output for what commands the watcher is running.')
+    def watch(self, verbose=False):
+        """Watch and re-build the source tree."""
+
+        if not conditions.is_artifact_build(self):
+            print('mach watch requires an artifact build. See '
+                  'https://developer.mozilla.org/docs/Mozilla/Developer_guide/Build_Instructions/Simple_Firefox_build')
+            return 1
+
+        if not self.substs.get('WATCHMAN', None):
+            print('mach watch requires watchman to be installed. See '
+                  'https://developer.mozilla.org/docs/Mozilla/Developer_guide/Build_Instructions/Incremental_builds_with_filesystem_watching')
+            return 1
+
+        self._activate_virtualenv()
+        try:
+            self.virtualenv_manager.install_pip_package('pywatchman==1.3.0')
+        except Exception:
+            print('Could not install pywatchman from pip. See '
+                  'https://developer.mozilla.org/docs/Mozilla/Developer_guide/Build_Instructions/Incremental_builds_with_filesystem_watching')
+            return 1
+
+        from mozbuild.faster_daemon import Daemon
+        daemon = Daemon(self.config_environment)
+
+        try:
+            return daemon.watch()
+        except KeyboardInterrupt:
+            # Suppress ugly stack trace when user hits Ctrl-C.
+            sys.exit(3)
 
 
 @CommandProvider
@@ -331,12 +400,13 @@ class Build(MachCommandBase):
         monitor = self._spawn(BuildMonitor)
         monitor.init(warnings_path)
         ccache_start = monitor.ccache_stats()
+        footer = BuildProgressFooter(self.log_manager.terminal, monitor)
 
         # Disable indexing in objdir because it is not necessary and can slow
         # down builds.
         mkdir(self.topobjdir, not_indexed=True)
 
-        with BuildOutputManager(self.log_manager, monitor) as output:
+        with BuildOutputManager(self.log_manager, monitor, footer) as output:
             monitor.start()
 
             if directory is not None and not what:
@@ -484,9 +554,14 @@ class Build(MachCommandBase):
                                                 "tools",
                                                "rewriting",
                                                "ThirdPartyPaths.txt")
-                with open(pathToThirdparty) as f:
-                    # Normalize the path (no trailing /)
-                    LOCAL_SUPPRESS_DIRS = tuple(d.rstrip('/') for d in f.read().splitlines())
+
+                if os.path.exists(pathToThirdparty):
+                    with open(pathToThirdparty) as f:
+                        # Normalize the path (no trailing /)
+                        LOCAL_SUPPRESS_DIRS = tuple(d.rstrip('/') for d in f.read().splitlines())
+                else:
+                    # For application based on gecko like thunderbird
+                    LOCAL_SUPPRESS_DIRS = ()
 
                 suppressed_by_dir = collections.Counter()
 
@@ -712,6 +787,54 @@ class Build(MachCommandBase):
 
         return self._run_command_in_objdir(args=args, pass_thru=True,
             ensure_exit_code=False)
+
+
+@CommandProvider
+class CargoProvider(MachCommandBase):
+    """Invoke cargo in useful ways."""
+
+    @Command('cargo', category='build',
+             description='Invoke cargo in useful ways.')
+    def cargo(self):
+        self.parser.print_usage()
+        return 1
+
+    @SubCommand('cargo', 'check',
+                description='Run `cargo check` on a given crate.  Defaults to gkrust.')
+    @CommandArgument('crates', default=None, nargs='*', help='The crate name(s) to check.')
+    def check(self, crates=None):
+        # XXX duplication with `mach vendor rust`
+        crates_and_roots = {
+            'gkrust': 'toolkit/library/rust',
+            'gkrust-gtest': 'toolkit/library/gtest/rust',
+            'mozjs_sys': 'js/src',
+            'geckodriver': 'testing/geckodriver',
+        }
+
+        if crates == None:
+            crates = ['gkrust']
+
+        for crate in crates:
+            root = crates_and_roots.get(crate, None)
+            if not root:
+                print('Cannot locate crate %s.  Please check your spelling or '
+                      'add the crate information to the list.' % crate)
+                return 1
+
+            check_targets = [
+                'force-cargo-library-check',
+                'force-cargo-host-library-check',
+                'force-cargo-program-check',
+                'force-cargo-host-program-check',
+            ]
+
+            ret = self._run_make(srcdir=False, directory=root,
+                                 ensure_exit_code=0, silent=True,
+                                 print_directory=False, target=check_targets)
+            if ret != 0:
+                return ret
+
+        return 0
 
 @CommandProvider
 class Doctor(MachCommandBase):
@@ -978,7 +1101,7 @@ class GTestCommands(MachCommandBase):
 
         # Note: we must normalize the path here so that gtest on Windows sees
         # a MOZ_GMP_PATH which has only Windows dir seperators, because
-        # nsILocalFile cannot open the paths with non-Windows dir seperators.
+        # nsIFile cannot open the paths with non-Windows dir seperators.
         xre_path = os.path.join(os.path.normpath(self.topobjdir), "dist", "bin")
         gtest_env["MOZ_XRE_DIR"] = xre_path
         gtest_env["MOZ_GMP_PATH"] = os.pathsep.join(
@@ -1155,6 +1278,16 @@ class Install(MachCommandBase):
             self.notify('Install complete')
         return ret
 
+@SettingsProvider
+class RunSettings():
+    config_settings = [
+        ('runprefs.*', 'string', """
+Pass a pref into Firefox when using `mach run`, of the form `foo.bar=value`.
+Prefs will automatically be cast into the appropriate type. Integers can be
+single quoted to force them to be strings.
+""".strip()),
+    ]
+
 @CommandProvider
 class RunProgram(MachCommandBase):
     """Run the compiled program."""
@@ -1176,6 +1309,8 @@ class RunProgram(MachCommandBase):
         help='Run the program with electrolysis disabled.')
     @CommandArgument('--enable-crash-reporter', action='store_true', group=prog_group,
         help='Run the program with the crash reporter enabled.')
+    @CommandArgument('--setpref', action='append', default=[], group=prog_group,
+        help='Set the specified pref before starting the program. Can be set multiple times. Prefs can also be set in ~/.mozbuild/machrc in the [runprefs] section - see `./mach settings` for more information.')
 
     @CommandArgumentGroup('debugging')
     @CommandArgument('--debug', action='store_true', group='debugging',
@@ -1199,8 +1334,8 @@ class RunProgram(MachCommandBase):
     @CommandArgument('--show-dump-stats', action='store_true', group='DMD',
         help='Show stats when doing dumps.')
     def run(self, params, remote, background, noprofile, disable_e10s,
-        enable_crash_reporter, debug, debugger, debugger_args,
-        dmd, mode, stacks, show_dump_stats):
+        enable_crash_reporter, setpref, debug, debugger,
+        debugger_args, dmd, mode, stacks, show_dump_stats):
 
         if conditions.is_android(self):
             # Running Firefox for Android is completely different
@@ -1215,6 +1350,7 @@ class RunProgram(MachCommandBase):
             args = ['']
 
         else:
+            from mozprofile import Profile, Preferences
 
             try:
                 binpath = self.get_binary_path('app')
@@ -1238,18 +1374,34 @@ class RunProgram(MachCommandBase):
             no_profile_option_given = \
                 all(p not in params for p in ['-profile', '--profile', '-P'])
             if no_profile_option_given and not noprofile:
+                prefs = {
+                   'browser.shell.checkDefaultBrowser': False,
+                   'general.warnOnAboutConfig': False,
+                }
+                prefs.update(self._mach_context.settings.runprefs)
+                prefs.update([p.split('=', 1) for p in setpref])
+                for pref in prefs:
+                    prefs[pref] = Preferences.cast(prefs[pref])
+
                 path = os.path.join(self.topobjdir, 'tmp', 'scratch_user')
-                if not os.path.isdir(path):
-                    os.makedirs(path)
+                profile = Profile(path, preferences=prefs)
                 args.append('-profile')
-                args.append(path)
+                args.append(profile.profile)
+
+            if not no_profile_option_given and setpref:
+                print("setpref is only supported if a profile is not specified")
+                return 1
 
         extra_env = {
             'MOZ_DEVELOPER_REPO_DIR': self.topsrcdir,
+            'MOZ_DEVELOPER_OBJ_DIR': self.topobjdir,
+            'RUST_BACKTRACE': 'full',
         }
 
         if not enable_crash_reporter:
             extra_env['MOZ_CRASHREPORTER_DISABLE'] = '1'
+        else:
+            extra_env['MOZ_CRASHREPORTER'] = '1'
 
         if disable_e10s:
             extra_env['MOZ_FORCE_DISABLE_E10S'] = '1'
@@ -1501,7 +1653,7 @@ class ArtifactSubCommand(SubCommand):
     def __call__(self, func):
         after = SubCommand.__call__(self, func)
         jobchoices = {
-            'android-api-15',
+            'android-api-16',
             'android-x86',
             'linux',
             'linux64',
@@ -1546,24 +1698,16 @@ class PackageFrontend(MachCommandBase):
         state_dir = self._mach_context.state_dir
         cache_dir = os.path.join(state_dir, 'package-frontend')
 
-        import which
-
         here = os.path.abspath(os.path.dirname(__file__))
         build_obj = MozbuildObject.from_environment(cwd=here)
 
         hg = None
         if conditions.is_hg(build_obj):
-            if self._is_windows():
-                hg = which.which('hg.exe')
-            else:
-                hg = which.which('hg')
+            hg = build_obj.substs['HG']
 
         git = None
         if conditions.is_git(build_obj):
-            if self._is_windows():
-                git = which.which('git.exe')
-            else:
-                git = which.which('git')
+            git = build_obj.substs['GIT']
 
         from mozbuild.artifacts import Artifacts
         artifacts = Artifacts(tree, self.substs, self.defines, job,
@@ -1616,13 +1760,16 @@ class PackageFrontend(MachCommandBase):
         help='Do not unpack any downloaded file')
     @CommandArgument('--retry', type=int, default=0,
         help='Number of times to retry failed downloads')
+    @CommandArgument('--artifact-manifest', metavar='FILE',
+        help='Store a manifest about the downloaded taskcluster artifacts')
     @CommandArgument('files', nargs='*',
-        help='Only download the given file names (you may use file name stems)')
+        help='A list of files to download, in the form path@task-id, in '
+             'addition to the files listed in the tooltool manifest.')
     def artifact_toolchain(self, verbose=False, cache_dir=None,
                           skip_cache=False, from_build=(),
                           tooltool_manifest=None, authentication_file=None,
                           tooltool_url=None, no_unpack=False, retry=None,
-                          files=()):
+                          artifact_manifest=None, files=()):
         '''Download, cache and install pre-built toolchains.
         '''
         from mozbuild.artifacts import ArtifactCache
@@ -1637,7 +1784,6 @@ class PackageFrontend(MachCommandBase):
         import shutil
 
         from taskgraph.generator import Kind
-        from taskgraph.optimize import optimize_task
         from taskgraph.util.taskcluster import (
             get_artifact_url,
             list_artifacts,
@@ -1661,7 +1807,7 @@ class PackageFrontend(MachCommandBase):
             cache_dir = os.path.join(self._mach_context.state_dir, 'toolchains')
 
         tooltool_url = (tooltool_url or
-                        'https://api.pub.build.mozilla.org/tooltool').rstrip('/')
+                        'https://tooltool.mozilla-releng.net').rstrip('/')
 
         cache = ArtifactCache(cache_dir=cache_dir, log=self.log,
                               skip_cache=skip_cache)
@@ -1695,6 +1841,32 @@ class PackageFrontend(MachCommandBase):
                     return True
                 return super(DownloadRecord, self).validate()
 
+        class ArtifactRecord(DownloadRecord):
+            def __init__(self, task_id, artifact_name):
+                cot = cache._download_manager.session.get(
+                    get_artifact_url(task_id, 'public/chainOfTrust.json.asc'))
+                digest = algorithm = None
+                if cot.status_code == 200:
+                    # The file is GPG-signed, but we don't care about validating
+                    # that. Instead of parsing the PGP signature, we just take
+                    # the one line we're interested in, which starts with a `{`.
+                    data = {}
+                    for l in cot.content.splitlines():
+                        if l.startswith('{'):
+                            try:
+                                data = json.loads(l)
+                                break
+                            except Exception:
+                                pass
+                for algorithm, digest in (data.get('artifacts', {})
+                                              .get(artifact_name, {}).items()):
+                    pass
+
+                name = os.path.basename(artifact_name)
+                super(ArtifactRecord, self).__init__(
+                    get_artifact_url(task_id, artifact_name), name,
+                    None, digest, algorithm, unpack=True)
+
         records = OrderedDict()
         downloaded = []
 
@@ -1710,6 +1882,12 @@ class PackageFrontend(MachCommandBase):
                     setup=record.setup)
 
         if from_build:
+            if 'TASK_ID' in os.environ:
+                self.log(logging.ERROR, 'artifact', {},
+                         'Do not use --from-build in automation; all dependencies '
+                         'should be determined in the decision task.')
+                return 1
+            from taskgraph.optimize import IndexSearch
             params = {
                 'message': '',
                 'project': '',
@@ -1736,43 +1914,49 @@ class PackageFrontend(MachCommandBase):
 
             toolchains = tasks('toolchain')
 
+            aliases = {}
+            for t in toolchains.values():
+                alias = t.attributes.get('toolchain-alias')
+                if alias:
+                    aliases['toolchain-{}'.format(alias)] = \
+                        t.task['metadata']['name']
+
             for b in from_build:
                 user_value = b
 
                 if not b.startswith('toolchain-'):
                     b = 'toolchain-{}'.format(b)
 
-                task = toolchains.get(b)
+                task = toolchains.get(aliases.get(b, b))
                 if not task:
                     self.log(logging.ERROR, 'artifact', {'build': user_value},
                              'Could not find a toolchain build named `{build}`')
                     return 1
 
-                task_id = optimize_task(task, {})
-                if task_id in (True, False):
+                task_id = IndexSearch().should_replace_task(
+                    task, {}, task.optimization.get('index-search', []))
+                artifact_name = task.attributes.get('toolchain-artifact')
+                if task_id in (True, False) or not artifact_name:
                     self.log(logging.ERROR, 'artifact', {'build': user_value},
                              'Could not find artifacts for a toolchain build '
                              'named `{build}`')
                     return 1
 
-                for artifact in list_artifacts(task_id):
-                    name = artifact['name']
-                    if not name.startswith('public/'):
-                        continue
-                    name = name[len('public/'):]
-                    if name.startswith('logs/'):
-                        continue
-                    name = os.path.basename(name)
-                    records[name] = DownloadRecord(
-                        get_artifact_url(task_id, artifact['name']),
-                        name, None, None, None, unpack=True)
+                record = ArtifactRecord(task_id, artifact_name)
+                records[record.filename] = record
+
+        # Handle the list of files of the form path@task-id on the command
+        # line. Each of those give a path to an artifact to download.
+        for f in files:
+            if '@' not in f:
+                self.log(logging.ERROR, 'artifact', {},
+                         'Expected a list of files of the form path@task-id')
+                return 1
+            name, task_id = f.rsplit('@', 1)
+            record = ArtifactRecord(task_id, name)
+            records[record.filename] = record
 
         for record in records.itervalues():
-            if files and not any(record.basename == f or
-                                      record.basename.startswith('%s.' % f)
-                                      for f in files):
-                continue
-
             self.log(logging.INFO, 'artifact', {'name': record.basename},
                      'Downloading {name}')
             valid = False
@@ -1782,22 +1966,24 @@ class PackageFrontend(MachCommandBase):
                 try:
                     record.fetch_with(cache)
                 except (requests.exceptions.HTTPError,
+                        requests.exceptions.ChunkedEncodingError,
                         requests.exceptions.ConnectionError) as e:
 
-                    if isinstance(e, requests.exceptions.ConnectionError):
-                        should_retry = True
-                    else:
+                    if isinstance(e, requests.exceptions.HTTPError):
                         # The relengapi proxy likes to return error 400 bad request
                         # which seems improbably to be due to our (simple) GET
                         # being borked.
                         status = e.response.status_code
                         should_retry = status >= 500 or status == 400
+                    else:
+                        should_retry = True
 
                     if should_retry or attempt < retry:
                         level = logging.WARN
                     else:
                         level = logging.ERROR
-                    self.log(level, 'artifact', {}, e.message)
+                    # e.message is not always a string, so convert it first.
+                    self.log(level, 'artifact', {}, str(e.message))
                     if not should_retry:
                         break
                     if attempt < retry:
@@ -1823,6 +2009,8 @@ class PackageFrontend(MachCommandBase):
                          'Failed to download {name}')
                 return 1
 
+        artifacts = {} if artifact_manifest else None
+
         for record in downloaded:
             local = os.path.join(os.getcwd(), record.basename)
             if os.path.exists(local):
@@ -1835,6 +2023,19 @@ class PackageFrontend(MachCommandBase):
                 os.link(record.filename, local)
             except Exception:
                 shutil.copy(record.filename, local)
+            # Keep a sha256 of each downloaded file, for the chain-of-trust
+            # validation.
+            if artifact_manifest is not None:
+                with open(local) as fh:
+                    h = hashlib.sha256()
+                    while True:
+                        data = fh.read(1024 * 1024)
+                        if not data:
+                            break
+                        h.update(data)
+                artifacts[record.url] = {
+                    'sha256': h.hexdigest(),
+                }
             if record.unpack and not no_unpack:
                 unpack_file(local, record.setup)
                 os.unlink(local)
@@ -1844,8 +2045,403 @@ class PackageFrontend(MachCommandBase):
             if files:
                 return 1
 
+        if artifacts:
+            ensureParentDir(artifact_manifest)
+            with open(artifact_manifest, 'w') as fh:
+                json.dump(artifacts, fh, indent=4, sort_keys=True)
+
         return 0
 
+class StaticAnalysisSubCommand(SubCommand):
+    def __call__(self, func):
+        after = SubCommand.__call__(self, func)
+        args = [
+            CommandArgument('--verbose', '-v', action='store_true',
+                            help='Print verbose output.'),
+        ]
+        for arg in args:
+            after = arg(after)
+        return after
+
+
+class StaticAnalysisMonitor(object):
+    def __init__(self, srcdir, objdir, total):
+        self._total = total
+        self._processed = 0
+        self._current = None
+        self._srcdir = srcdir
+
+        from mozbuild.compilation.warnings import (
+            WarningsCollector,
+            WarningsDatabase,
+        )
+
+        self._warnings_database = WarningsDatabase()
+
+        def on_warning(warning):
+            filename = warning['filename']
+            self._warnings_database.insert(warning)
+
+        self._warnings_collector = WarningsCollector(on_warning, objdir=objdir)
+
+    @property
+    def num_files(self):
+        return self._total
+
+    @property
+    def num_files_processed(self):
+        return self._processed
+
+    @property
+    def current_file(self):
+        return self._current
+
+    @property
+    def warnings_db(self):
+        return self._warnings_database
+
+    def on_line(self, line):
+        warning = None
+
+        try:
+            warning = self._warnings_collector.process_line(line)
+        except:
+            pass
+
+        if line.find('clang-tidy') != -1:
+            filename = line.split(' ')[-1]
+            if os.path.isfile(filename):
+                self._current = os.path.relpath(filename, self._srcdir)
+            else:
+                self._current = None
+            self._processed = self._processed + 1
+            return (warning, False)
+        return (warning, True)
+
+
+class StaticAnalysisFooter(Footer):
+    """Handles display of a static analysis progress indicator in a terminal.
+    """
+
+    def __init__(self, terminal, monitor):
+        Footer.__init__(self, terminal)
+        self.monitor = monitor
+
+    def draw(self):
+        """Draws this footer in the terminal."""
+
+        monitor = self.monitor
+        total = monitor.num_files
+        processed = monitor.num_files_processed
+        percent = '(%.2f%%)' % (processed * 100.0 / total)
+        parts = [
+            ('dim', 'Processing'),
+            ('yellow', str(processed)),
+            ('dim', 'of'),
+            ('yellow', str(total)),
+            ('dim', 'files'),
+            ('green', percent)
+        ]
+        if monitor.current_file:
+            parts.append(('bold', monitor.current_file))
+
+        self.write(parts)
+
+
+class StaticAnalysisOutputManager(OutputManager):
+    """Handles writing static analysis output to a terminal."""
+
+    def __init__(self, log_manager, monitor, footer):
+        self.monitor = monitor
+        OutputManager.__init__(self, log_manager, footer)
+
+    def on_line(self, line):
+        warning, relevant = self.monitor.on_line(line)
+
+        if warning:
+            self.log(logging.INFO, 'compiler_warning', warning,
+                'Warning: {flag} in {filename}: {message}')
+
+        if relevant:
+            self.log(logging.INFO, 'build_output', {'line': line}, '{line}')
+        else:
+            have_handler = hasattr(self, 'handler')
+            if have_handler:
+                self.handler.acquire()
+            try:
+                self.refresh()
+            finally:
+                if have_handler:
+                    self.handler.release()
+
+
+@CommandProvider
+class StaticAnalysis(MachCommandBase):
+    """Utilities for running C++ static analysis checks."""
+
+    @Command('static-analysis', category='testing',
+             description='Run C++ static analysis checks')
+    def static_analysis(self):
+        # If not arguments are provided, just print a help message.
+        mach = Mach(os.getcwd())
+        mach.run(['static-analysis', '--help'])
+
+    @StaticAnalysisSubCommand('static-analysis', 'check',
+                              'Run the checks using the helper tool')
+    @CommandArgument('source', nargs='*', default=['.*'],
+                     help='Source files to be analyzed (regex on path). '
+                          'Can be omitted, in which case the entire code base '
+                          'is analyzed.  The source argument is ignored if '
+                          'there is anything fed through stdin, in which case '
+                          'the analysis is only performed on the files changed '
+                          'in the patch streamed through stdin.  This is called '
+                          'the diff mode.')
+    @CommandArgument('--checks', '-c', default='-*,mozilla-*', metavar='checks',
+        help='Static analysis checks to enable.  By default, this enables only '
+             'custom Mozilla checks, but can be any clang-tidy checks syntax.')
+    @CommandArgument('--jobs', '-j', default='0', metavar='jobs', type=int,
+        help='Number of concurrent jobs to run. Default is the number of CPUs.')
+    @CommandArgument('--strip', '-p', default='1', metavar='NUM',
+                     help='Strip NUM leading components from file names in diff mode.')
+    @CommandArgument('--fix', '-f', default=False, action='store_true',
+                     help='Try to autofix errors detected by clang-tidy checkers.')
+    def check(self, source=None, jobs=2, strip=1, verbose=False,
+              checks='-*,mozilla-*', fix=False):
+        self._set_log_level(verbose)
+        rc = self._build_compile_db(verbose=verbose)
+        if rc != 0:
+            return rc
+
+        rc = self._build_export(jobs=jobs, verbose=verbose)
+        if rc != 0:
+            return rc
+
+        rc = self._get_clang_tidy(verbose=verbose)
+        if rc != 0:
+            return rc
+
+        python = self.virtualenv_manager.python_path
+
+        common_args = ['-clang-tidy-binary', self._clang_tidy_path,
+                       '-checks=%s' % checks,
+                       '-extra-arg=-DMOZ_CLANG_PLUGIN']
+        if fix:
+            common_args.append('-fix')
+
+        self.log_manager.register_structured_logger(logging.getLogger('mozbuild'))
+
+        compile_db = json.loads(open(self._compile_db, 'r').read())
+        total = 0
+        files = []
+        import re
+        name_re = re.compile('(' + ')|('.join(source) + ')')
+        for f in compile_db:
+            if name_re.search(f['file']):
+                total = total + 1
+                files.append(f['file'])
+
+        if not total:
+            return 0
+
+        args = [python, self._run_clang_tidy_path, '-p', self.topobjdir]
+        args += ['-j', str(jobs)] + files + common_args
+        cwd = self.topobjdir
+
+        monitor = StaticAnalysisMonitor(self.topsrcdir, self.topobjdir, total)
+
+        footer = StaticAnalysisFooter(self.log_manager.terminal, monitor)
+        with StaticAnalysisOutputManager(self.log_manager, monitor, footer) as output:
+            rc = self.run_process(args=args, line_handler=output.on_line, cwd=cwd)
+
+            self.log(logging.WARNING, 'warning_summary',
+                     {'count': len(monitor.warnings_db)},
+                     '{count} warnings present.')
+            return rc
+
+    @StaticAnalysisSubCommand('static-analysis', 'install',
+                              'Install the static analysis helper tool')
+    @CommandArgument('source', nargs='?', type=str,
+                     help='Where to fetch a local archive containing the clang-tidy helper tool.'
+                          'It will be installed in ~/.mozbuild/clang-tidy/.'
+                          'Can be omitted, in which case the latest clang-tidy '
+                          ' helper for the platform would be automatically '
+                          'detected and installed.')
+    @CommandArgument('--skip-cache', action='store_true',
+                     help='Skip all local caches to force re-fetching the helper tool.',
+                     default=False)
+    def install(self, source=None, skip_cache=False, verbose=False):
+        self._set_log_level(verbose)
+        rc = self._get_clang_tidy(force=True, skip_cache=skip_cache,
+                                  source=source, verbose=verbose)
+        return rc
+
+    @StaticAnalysisSubCommand('static-analysis', 'clear-cache',
+                              'Delete local helpers and reset static analysis helper tool cache')
+    def clear_cache(self, verbose=False):
+        self._set_log_level(verbose)
+        rc = self._get_clang_tidy(force=True, download_if_needed=False,
+                                  verbose=verbose)
+        if rc != 0:
+            return rc
+
+        self._artifact_manager.artifact_clear_cache()
+
+    @StaticAnalysisSubCommand('static-analysis', 'print-checks',
+                              'Print a list of the static analysis checks performed by default')
+    def print_checks(self, verbose=False):
+        self._set_log_level(verbose)
+        rc = self._get_clang_tidy(verbose=verbose)
+        if rc != 0:
+            return rc
+        args = [self._clang_tidy_path, '-list-checks', '-checks=-*,mozilla-*']
+        return self._run_command_in_objdir(args=args, pass_thru=True)
+
+    def _get_config_environment(self):
+        ran_configure = False
+        config = None
+        builder = Build(self._mach_context)
+
+        try:
+            config = self.config_environment
+        except Exception:
+            print('Looks like configure has not run yet, running it now...')
+            rc = builder.configure()
+            if rc != 0:
+                return (rc, config, ran_configure)
+            ran_configure = True
+            try:
+                config = self.config_environment
+            except Exception as e:
+                pass
+
+        return (0, config, ran_configure)
+
+    def _build_compile_db(self, verbose=False):
+        self._compile_db = mozpath.join(self.topobjdir, 'compile_commands.json')
+        if os.path.exists(self._compile_db):
+            return 0
+        else:
+            rc, config, ran_configure = self._get_config_environment()
+            if rc != 0:
+                return rc
+
+            if ran_configure:
+                # Configure may have created the compilation database if the
+                # mozconfig enables building the CompileDB backend by default,
+                # So we recurse to see if the file exists once again.
+                return self._build_compile_db(verbose=verbose)
+
+            if config:
+                print('Looks like a clang compilation database has not been '
+                      'created yet, creating it now...')
+                builder = Build(self._mach_context)
+                rc = builder.build_backend(['CompileDB'], verbose=verbose)
+                if rc != 0:
+                    return rc
+                assert os.path.exists(self._compile_db)
+                return 0
+
+    def _build_export(self, jobs, verbose=False):
+        def on_line(line):
+            self.log(logging.INFO, 'build_output', {'line': line}, '{line}')
+
+        builder = Build(self._mach_context)
+        # First install what we can through install manifests.
+        rc = builder._run_make(directory=self.topobjdir, target='pre-export',
+                               line_handler=None, silent=not verbose)
+        if rc != 0:
+            return rc
+
+        # Then build the rest of the build dependencies by running the full
+        # export target, because we can't do anything better.
+        return builder._run_make(directory=self.topobjdir, target='export',
+                                 line_handler=None, silent=not verbose,
+                                 num_jobs=jobs)
+
+    def _get_clang_tidy(self, force=False, skip_cache=False,
+                        source=None, download_if_needed=True,
+                        verbose=False):
+        rc, config, _ = self._get_config_environment()
+
+        if rc != 0:
+            return rc
+
+        clang_tidy_path = mozpath.join(self._mach_context.state_dir,
+                                       "clang-tidy")
+        self._clang_tidy_path = mozpath.join(clang_tidy_path, "clang", "bin",
+                                             "clang-tidy" + config.substs.get('BIN_SUFFIX', ''))
+        self._run_clang_tidy_path = mozpath.join(clang_tidy_path, "clang", "share",
+                                                 "clang", "run-clang-tidy.py")
+
+        if os.path.exists(self._clang_tidy_path) and \
+           os.path.exists(self._run_clang_tidy_path) and \
+           not force:
+            return 0
+        else:
+            if os.path.isdir(clang_tidy_path) and download_if_needed:
+                # The directory exists, perhaps it's corrupted?  Delete it
+                # and start from scratch.
+                import shutil
+                shutil.rmtree(clang_tidy_path)
+                return self._get_clang_tidy(force=force, skip_cache=skip_cache,
+                                            source=source, verbose=verbose,
+                                            download_if_needed=download_if_needed)
+
+            # Create base directory where we store clang binary
+            os.mkdir(clang_tidy_path)
+
+            if source:
+                return self._get_clang_tidy_from_source(source)
+
+            self._artifact_manager = PackageFrontend(self._mach_context)
+
+            if not download_if_needed:
+                return 0
+
+            job, _ = self.platform
+
+            if job is None:
+                raise Exception('The current platform isn\'t supported. '
+                                'Currently only the following platforms are '
+                                'supported: win32/win64, linux64 and macosx64.')
+            else:
+                job += '-clang-tidy'
+
+            # We want to unpack data in the clang-tidy mozbuild folder
+            currentWorkingDir = os.getcwd()
+            os.chdir(clang_tidy_path)
+            rc = self._artifact_manager.artifact_toolchain(verbose=verbose,
+                                                           skip_cache=skip_cache,
+                                                           from_build=[job],
+                                                           no_unpack=False,
+                                                           retry=0)
+            # Change back the cwd
+            os.chdir(currentWorkingDir)
+
+            return rc
+
+    def _get_clang_tidy_from_source(self, filename):
+        from mozbuild.action.tooltool import unpack_file
+        clang_tidy_path = mozpath.join(self._mach_context.state_dir,
+                                       "clang-tidy")
+
+        currentWorkingDir = os.getcwd()
+        os.chdir(clang_tidy_path)
+
+        unpack_file(filename)
+
+        # Change back the cwd
+        os.chdir(currentWorkingDir)
+
+        clang_path = mozpath.join(clang_tidy_path, 'clang')
+
+        if not os.path.isdir(clang_path):
+            raise Exception('Extracted the archive but didn\'t find '
+                            'the expected output')
+
+        assert os.path.exists(self._clang_tidy_path)
+        assert os.path.exists(self._run_clang_tidy_path)
+        return 0
 
 @CommandProvider
 class Vendor(MachCommandBase):
@@ -1874,6 +2470,8 @@ class Vendor(MachCommandBase):
                 description='Vendor av1 video codec reference implementation into the source repository.')
     @CommandArgument('-r', '--revision',
         help='Repository tag or commit to update to.')
+    @CommandArgument('--repo',
+        help='Repository url to pull a snapshot from. Supports github and googlesource.')
     @CommandArgument('--ignore-modified', action='store_true',
         help='Ignore modified files in current checkout',
         default=False)

@@ -338,7 +338,7 @@ function synthesizeWheel(aTarget, aOffsetX, aOffsetY, aEvent, aWindow)
   var options = 0;
   if (aEvent.isPixelOnlyDevice &&
       (aEvent.deltaMode == WheelEvent.DOM_DELTA_PIXEL)) {
-    options |= utils.WHEEL_EVENT_CAUSED_BY_PIXEL_ONLY_DEVICE;
+    options |= utils.WHEEL_EVENT_CAUSED_BY_NO_LINE_OR_PAGE_DELTA_DEVICE;
   }
   if (aEvent.isMomentum) {
     options |= utils.WHEEL_EVENT_CAUSED_BY_MOMENTUM;
@@ -482,7 +482,7 @@ function isKeypressFiredKey(aDOMKeyCode)
     if (aDOMKeyCode.indexOf("VK_") == 0) {
       aDOMKeyCode = KeyEvent["DOM_" + aDOMKeyCode];
       if (!aDOMKeyCode) {
-        throw "Unknown key: " + aDOMKeyCode;
+        throw new Error(`Unknown key: ${aDOMKeyCode}`);
       }
     } else {
       // If the key generates a character, it must cause a keypress event.
@@ -529,7 +529,7 @@ function synthesizeKey(aKey, aEvent, aWindow)
     if (aKey.indexOf("VK_") == 0) {
       keyCode = KeyEvent["DOM_" + aKey];
       if (!keyCode) {
-        throw "Unknown key: " + aKey;
+        throw new Error(`Unknown key: ${aKey}`);
       }
     } else {
       charCode = aKey.charCodeAt(0);

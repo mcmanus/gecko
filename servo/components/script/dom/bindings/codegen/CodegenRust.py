@@ -788,7 +788,7 @@ def getJSToNativeConversionInfo(type, descriptorProvider, failureCode=None,
                 if !JS_WrapValue(cx, valueToResolve.handle_mut()) {
                 $*{exceptionCode}
                 }
-                match Promise::Resolve(&promiseGlobal, cx, valueToResolve.handle()) {
+                match Promise::new_resolved(&promiseGlobal, cx, valueToResolve.handle()) {
                     Ok(value) => value,
                     Err(error) => {
                     throw_dom_exception(cx, &promiseGlobal, error);
@@ -1848,7 +1848,8 @@ class CGImports(CGWrapper):
     """
     Generates the appropriate import/use statements.
     """
-    def __init__(self, child, descriptors, callbacks, dictionaries, enums, imports, config, ignored_warnings=None):
+    def __init__(self, child, descriptors, callbacks, dictionaries, enums, typedefs, imports, config,
+                 ignored_warnings=None):
         """
         Adds a set of imports.
         """
@@ -1936,6 +1937,11 @@ class CGImports(CGWrapper):
         # Import the type names used in the dictionaries that are being defined.
         for d in dictionaries:
             types += componentTypes(d)
+
+        # Import the type names used in the typedefs that are being defined.
+        for t in typedefs:
+            if not t.innerType.isCallback():
+                types += componentTypes(t.innerType)
 
         # Normalize the types we've collected and remove any ones which can't be imported.
         types = removeWrapperAndNullableTypes(types)
@@ -2292,6 +2298,7 @@ def UnionTypes(descriptors, dictionaries, callbacks, typedefs, config):
                      callbacks=[],
                      dictionaries=[],
                      enums=[],
+                     typedefs=[],
                      imports=imports,
                      config=config,
                      ignored_warnings=[])
@@ -3152,7 +3159,7 @@ class CGCallGenerator(CGThing):
     """
     def __init__(self, errorResult, arguments, argsPre, returnType,
                  extendedAttributes, descriptor, nativeMethodName,
-                 static, object="this"):
+                 static, object="this", hasCEReactions=False):
         CGThing.__init__(self)
 
         assert errorResult is None or isinstance(errorResult, str)
@@ -3185,6 +3192,9 @@ class CGCallGenerator(CGThing):
             call = CGWrapper(call, pre="%s." % object)
         call = CGList([call, CGWrapper(args, pre="(", post=")")])
 
+        if hasCEReactions:
+            self.cgRoot.append(CGGeneric("push_new_element_queue();\n"))
+
         self.cgRoot.append(CGList([
             CGGeneric("let result: "),
             result,
@@ -3192,6 +3202,9 @@ class CGCallGenerator(CGThing):
             call,
             CGGeneric(";"),
         ]))
+
+        if hasCEReactions:
+            self.cgRoot.append(CGGeneric("pop_current_element_queue();\n"))
 
         if isFallible:
             if static:
@@ -3267,11 +3280,12 @@ class CGPerSignatureCall(CGThing):
                                                           idlNode.maplikeOrSetlikeOrIterable,
                                                           idlNode.identifier.name))
         else:
+            hasCEReactions = idlNode.getExtendedAttribute("CEReactions")
             cgThings.append(CGCallGenerator(
                 errorResult,
                 self.getArguments(), self.argsPre, returnType,
                 self.extendedAttributes, descriptor, nativeMethodName,
-                static))
+                static, hasCEReactions=hasCEReactions))
 
         self.cgRoot = CGList(cgThings, "\n")
 
@@ -4736,7 +4750,7 @@ class CGProxyNamedOperation(CGProxySpecialOperation):
     def define(self):
         # Our first argument is the id we're getting.
         argName = self.arguments[0].identifier.name
-        return ("let %s = string_jsid_to_string(cx, id);\n"
+        return ("let %s = jsid_to_string(cx, id).expect(\"Not a string-convertible JSID?\");\n"
                 "let this = UnwrapProxy(proxy);\n"
                 "let this = &*this;\n" % argName +
                 CGProxySpecialOperation.define(self))
@@ -4803,15 +4817,14 @@ class CGDOMJSProxyHandler_getOwnPropertyDescriptor(CGAbstractExternMethod):
                                         "bool", args)
         self.descriptor = descriptor
 
+    # https://heycam.github.io/webidl/#LegacyPlatformObjectGetOwnProperty
     def getBody(self):
         indexedGetter = self.descriptor.operations['IndexedGetter']
-        indexedSetter = self.descriptor.operations['IndexedSetter']
 
         get = ""
-        if indexedGetter or indexedSetter:
+        if indexedGetter:
             get = "let index = get_array_index_from_id(cx, id);\n"
 
-        if indexedGetter:
             attrs = "JSPROP_ENUMERATE"
             if self.descriptor.operations['IndexedSetter'] is None:
                 attrs += " | JSPROP_READONLY"
@@ -4850,11 +4863,16 @@ class CGDOMJSProxyHandler_getOwnPropertyDescriptor(CGAbstractExternMethod):
                 'successCode': fillDescriptor,
                 'pre': 'rooted!(in(cx) let mut result_root = UndefinedValue());'
             }
+
+            # See the similar-looking in CGDOMJSProxyHandler_get for the spec quote.
+            condition = "RUST_JSID_IS_STRING(id) || RUST_JSID_IS_INT(id)"
+            if indexedGetter:
+                condition = "index.is_none() && (%s)" % condition
             # Once we start supporting OverrideBuiltins we need to make
             # ResolveOwnProperty or EnumerateOwnProperties filter out named
             # properties that shadow prototype properties.
             namedGet = """
-if RUST_JSID_IS_STRING(id) {
+if %s {
     let mut has_on_proto = false;
     if !has_property_on_prototype(cx, proxy, id, &mut has_on_proto) {
         return false;
@@ -4863,7 +4881,7 @@ if RUST_JSID_IS_STRING(id) {
         %s
     }
 }
-""" % CGIndenter(CGProxyNamedGetter(self.descriptor, templateValues), 8).define()
+""" % (condition, CGIndenter(CGProxyNamedGetter(self.descriptor, templateValues), 8).define())
         else:
             namedGet = ""
 
@@ -4921,20 +4939,18 @@ class CGDOMJSProxyHandler_defineProperty(CGAbstractExternMethod):
             if self.descriptor.hasUnforgeableMembers:
                 raise TypeError("Can't handle a named setter on an interface that has "
                                 "unforgeables. Figure out how that should work!")
-            set += ("if RUST_JSID_IS_STRING(id) {\n" +
+            set += ("if RUST_JSID_IS_STRING(id) || RUST_JSID_IS_INT(id) {\n" +
                     CGIndenter(CGProxyNamedSetter(self.descriptor)).define() +
                     "    return (*opresult).succeed();\n" +
-                    "} else {\n" +
-                    "    return false;\n" +
                     "}\n")
         else:
-            set += ("if RUST_JSID_IS_STRING(id) {\n" +
+            set += ("if RUST_JSID_IS_STRING(id) || RUST_JSID_IS_INT(id) {\n" +
                     CGIndenter(CGProxyNamedGetter(self.descriptor)).define() +
                     "    if result.is_some() {\n"
                     "        return (*opresult).failNoNamedSetter();\n"
                     "    }\n"
                     "}\n")
-            set += "return proxyhandler::define_property(%s);" % ", ".join(a.name for a in self.args)
+        set += "return proxyhandler::define_property(%s);" % ", ".join(a.name for a in self.args)
         return set
 
     def definition_body(self):
@@ -5081,9 +5097,12 @@ class CGDOMJSProxyHandler_hasOwn(CGAbstractExternMethod):
             indexed = ""
 
         namedGetter = self.descriptor.operations['NamedGetter']
+        condition = "RUST_JSID_IS_STRING(id) || RUST_JSID_IS_INT(id)"
+        if indexedGetter:
+            condition = "index.is_none() && (%s)" % condition
         if namedGetter:
             named = """\
-if RUST_JSID_IS_STRING(id) {
+if %s {
     let mut has_on_proto = false;
     if !has_property_on_prototype(cx, proxy, id, &mut has_on_proto) {
         return false;
@@ -5095,7 +5114,7 @@ if RUST_JSID_IS_STRING(id) {
     }
 }
 
-""" % CGIndenter(CGProxyNamedGetter(self.descriptor), 8).define()
+""" % (condition, CGIndenter(CGProxyNamedGetter(self.descriptor), 8).define())
         else:
             named = ""
 
@@ -5124,6 +5143,7 @@ class CGDOMJSProxyHandler_get(CGAbstractExternMethod):
         CGAbstractExternMethod.__init__(self, descriptor, "get", "bool", args)
         self.descriptor = descriptor
 
+    # https://heycam.github.io/webidl/#LegacyPlatformObjectGetOwnProperty
     def getBody(self):
         getFromExpando = """\
 rooted!(in(cx) let mut expando = ptr::null_mut());
@@ -5163,9 +5183,16 @@ if !expando.is_null() {
 
         namedGetter = self.descriptor.operations['NamedGetter']
         if namedGetter:
-            getNamed = ("if RUST_JSID_IS_STRING(id) {\n" +
+            condition = "RUST_JSID_IS_STRING(id) || RUST_JSID_IS_INT(id)"
+            # From step 1:
+            #     If O supports indexed properties and P is an array index, then:
+            #
+            #         3. Set ignoreNamedProps to true.
+            if indexedGetter:
+                condition = "index.is_none() && (%s)" % condition
+            getNamed = ("if %s {\n" +
                         CGIndenter(CGProxyNamedGetter(self.descriptor, templateValues)).define() +
-                        "}\n")
+                        "}\n") % condition
         else:
             getNamed = ""
 
@@ -5363,7 +5390,12 @@ let result = match result {
     },
 };
 
-JS_SetPrototype(cx, result.reflector().get_jsobject(), prototype.handle());
+rooted!(in(cx) let mut element = result.reflector().get_jsobject().get());
+if !JS_WrapObject(cx, element.handle_mut()) {
+    return false;
+}
+
+JS_SetPrototype(cx, element.handle(), prototype.handle());
 
 (result).to_jsval(cx, args.rval());
 return true;
@@ -5500,15 +5532,17 @@ class CGWeakReferenceableTrait(CGThing):
         return self.code
 
 
-def generate_imports(config, cgthings, descriptors, callbacks=None, dictionaries=None, enums=None):
+def generate_imports(config, cgthings, descriptors, callbacks=None, dictionaries=None, enums=None, typedefs=None):
     if not callbacks:
         callbacks = []
     if not dictionaries:
         dictionaries = []
     if not enums:
         enums = []
+    if not typedefs:
+        typedefs = []
 
-    return CGImports(cgthings, descriptors, callbacks, dictionaries, enums, [
+    return CGImports(cgthings, descriptors, callbacks, dictionaries, enums, typedefs, [
         'core::nonzero::NonZero',
         'js',
         'js::JSCLASS_GLOBAL_SLOT_COUNT',
@@ -5614,6 +5648,7 @@ def generate_imports(config, cgthings, descriptors, callbacks=None, dictionaries
         'js::glue::GetProxyPrivate',
         'js::glue::NewProxyObject',
         'js::glue::ProxyTraps',
+        'js::glue::RUST_JSID_IS_INT',
         'js::glue::RUST_JSID_IS_STRING',
         'js::glue::RUST_SYMBOL_TO_JSID',
         'js::glue::int_to_jsid',
@@ -5642,6 +5677,8 @@ def generate_imports(config, cgthings, descriptors, callbacks=None, dictionaries
         'dom::bindings::interface::define_guarded_properties',
         'dom::bindings::interface::html_constructor',
         'dom::bindings::interface::is_exposed_in',
+        'dom::bindings::interface::pop_current_element_queue',
+        'dom::bindings::interface::push_new_element_queue',
         'dom::bindings::iterable::Iterable',
         'dom::bindings::iterable::IteratorType',
         'dom::bindings::js::JS',
@@ -5698,7 +5735,7 @@ def generate_imports(config, cgthings, descriptors, callbacks=None, dictionaries
         'dom::bindings::conversions::root_from_handleobject',
         'dom::bindings::conversions::root_from_handlevalue',
         'dom::bindings::conversions::root_from_object',
-        'dom::bindings::conversions::string_jsid_to_string',
+        'dom::bindings::conversions::jsid_to_string',
         'dom::bindings::codegen::PrototypeList',
         'dom::bindings::codegen::RegisterBindings',
         'dom::bindings::codegen::UnionTypes',
@@ -6211,7 +6248,7 @@ class CGBindingRoot(CGThing):
         # Do codegen for all the enums.
         cgthings = [CGEnum(e) for e in enums]
 
-        # Do codegen for all the typdefs
+        # Do codegen for all the typedefs
         for t in typedefs:
             typeName = getRetvalDeclarationForType(t.innerType, config.getDescriptorProvider())
             substs = {
@@ -6249,7 +6286,7 @@ class CGBindingRoot(CGThing):
 
         # Add imports
         curr = generate_imports(config, curr, callbackDescriptors, mainCallbacks,
-                                dictionaries, enums)
+                                dictionaries, enums, typedefs)
 
         # Add the auto-generated comment.
         curr = CGWrapper(curr, pre=AUTOGENERATED_WARNING_COMMENT)
@@ -7051,7 +7088,7 @@ class GlobalGenRoots():
             CGRegisterProxyHandlers(config),
         ], "\n")
 
-        return CGImports(code, descriptors=[], callbacks=[], dictionaries=[], enums=[], imports=[
+        return CGImports(code, descriptors=[], callbacks=[], dictionaries=[], enums=[], typedefs=[], imports=[
             'dom::bindings::codegen::Bindings',
             'dom::bindings::codegen::PrototypeList::Proxies',
             'libc',

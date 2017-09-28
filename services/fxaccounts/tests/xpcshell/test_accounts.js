@@ -121,7 +121,7 @@ function MockFxAccountsClient() {
     return Promise.resolve(sessionToken);
   };
 
-  this.signCertificate = function() { throw "no" };
+  this.signCertificate = function() { throw new Error("no"); };
 
   this.signOut = () => Promise.resolve();
   this.signOutAndDestroyDevice = () => Promise.resolve({});
@@ -299,13 +299,7 @@ add_task(async function test_update_account_data() {
   do_check_eq((await account.getSignedInUser()).assertion, "new_assertion",
               "new field value was saved");
 
-  // but we should fail attempting to change email or uid.
-  newCreds = {
-    email: "someoneelse@example.com",
-    uid: credentials.uid,
-    assertion: "new_assertion",
-  }
-  await Assert.rejects(account.updateUserAccountData(newCreds));
+  // but we should fail attempting to change the uid.
   newCreds = {
     email: credentials.email,
     uid: "another_uid",
@@ -313,7 +307,7 @@ add_task(async function test_update_account_data() {
   }
   await Assert.rejects(account.updateUserAccountData(newCreds));
 
-  // should fail without email or uid.
+  // should fail without the uid.
   newCreds = {
     assertion: "new_assertion",
   }
@@ -535,6 +529,110 @@ add_test(function test_polling_timeout() {
   });
 });
 
+add_test(function test_pollEmailStatus_start_verified() {
+  let fxa = new MockFxAccounts();
+  let test_user = getTestUser("carol");
+
+  fxa.internal.POLL_SESSION = 20 * 60000;
+  fxa.internal.VERIFICATION_POLL_TIMEOUT_INITIAL = 50000;
+
+  fxa.setSignedInUser(test_user).then(() => {
+    fxa.internal.getUserAccountData().then(user => {
+      fxa.internal.fxAccountsClient._email = test_user.email;
+      fxa.internal.fxAccountsClient._verified = true;
+      const mock = sinon.mock(fxa.internal)
+      mock.expects("_scheduleNextPollEmailStatus").never();
+      fxa.internal.startPollEmailStatus(fxa.internal.currentAccountState, user.sessionToken, "start").then(() => {
+        mock.verify();
+        mock.restore();
+        run_next_test();
+      });
+    });
+  });
+});
+
+add_test(function test_pollEmailStatus_start() {
+  let fxa = new MockFxAccounts();
+  let test_user = getTestUser("carol");
+
+  fxa.internal.POLL_SESSION = 20 * 60000;
+  fxa.internal.VERIFICATION_POLL_TIMEOUT_INITIAL = 123456;
+
+  fxa.setSignedInUser(test_user).then(() => {
+    fxa.internal.getUserAccountData().then(user => {
+      const mock = sinon.mock(fxa.internal)
+      mock.expects("_scheduleNextPollEmailStatus").once()
+          .withArgs(fxa.internal.currentAccountState, user.sessionToken, 123456, "start");
+      fxa.internal.startPollEmailStatus(fxa.internal.currentAccountState, user.sessionToken, "start").then(() => {
+        mock.verify();
+        mock.restore();
+        run_next_test();
+      });
+    });
+  });
+});
+
+add_test(function test_pollEmailStatus_start_subsequent() {
+  let fxa = new MockFxAccounts();
+  let test_user = getTestUser("carol");
+
+  fxa.internal.POLL_SESSION = 20 * 60000;
+  fxa.internal.VERIFICATION_POLL_TIMEOUT_INITIAL = 123456;
+  fxa.internal.VERIFICATION_POLL_TIMEOUT_SUBSEQUENT = 654321;
+  fxa.internal.VERIFICATION_POLL_START_SLOWDOWN_THRESHOLD = -1;
+
+  fxa.setSignedInUser(test_user).then(() => {
+    fxa.internal.getUserAccountData().then(user => {
+      const mock = sinon.mock(fxa.internal)
+      mock.expects("_scheduleNextPollEmailStatus").once()
+          .withArgs(fxa.internal.currentAccountState, user.sessionToken, 654321, "start");
+      fxa.internal.startPollEmailStatus(fxa.internal.currentAccountState, user.sessionToken, "start").then(() => {
+        mock.verify();
+        mock.restore();
+        run_next_test();
+      });
+    });
+  });
+});
+
+add_test(function test_pollEmailStatus_browser_startup() {
+  let fxa = new MockFxAccounts();
+  let test_user = getTestUser("carol");
+
+  fxa.internal.POLL_SESSION = 20 * 60000;
+  fxa.internal.VERIFICATION_POLL_TIMEOUT_SUBSEQUENT = 654321;
+
+  fxa.setSignedInUser(test_user).then(() => {
+    fxa.internal.getUserAccountData().then(user => {
+      const mock = sinon.mock(fxa.internal)
+      mock.expects("_scheduleNextPollEmailStatus").once()
+          .withArgs(fxa.internal.currentAccountState, user.sessionToken, 654321, "browser-startup");
+      fxa.internal.startPollEmailStatus(fxa.internal.currentAccountState, user.sessionToken, "browser-startup").then(() => {
+        mock.verify();
+        mock.restore();
+        run_next_test();
+      });
+    });
+  });
+});
+
+add_test(function test_pollEmailStatus_push() {
+  let fxa = new MockFxAccounts();
+  let test_user = getTestUser("carol");
+
+  fxa.setSignedInUser(test_user).then(() => {
+    fxa.internal.getUserAccountData().then(user => {
+      const mock = sinon.mock(fxa.internal)
+      mock.expects("_scheduleNextPollEmailStatus").never();
+      fxa.internal.startPollEmailStatus(fxa.internal.currentAccountState, user.sessionToken, "push").then(() => {
+        mock.verify();
+        mock.restore();
+        run_next_test();
+      });
+    });
+  });
+});
+
 add_test(function test_getKeys() {
   let fxa = new MockFxAccounts();
   let user = getTestUser("eusebius");
@@ -709,6 +807,9 @@ add_task(async function test_getAssertion_invalid_token() {
     email: "sonia@example.com",
   };
   await fxa.setSignedInUser(creds);
+  // we have what we still believe to be a valid session token, so we should
+  // consider that we have a local session.
+  do_check_true(await fxa.hasLocalSession());
 
   try {
     let promiseAssertion = fxa.getAssertion("audience.example.com");
@@ -726,6 +827,7 @@ add_task(async function test_getAssertion_invalid_token() {
   let user = await fxa.internal.getUserAccountData();
   do_check_eq(user.email, creds.email);
   do_check_eq(user.sessionToken, null);
+  do_check_false(await fxa.hasLocalSession());
 });
 
 add_task(async function test_getAssertion() {
@@ -1064,7 +1166,10 @@ add_task(async function test_sign_out_with_remote_error() {
   let fxa = new MockFxAccounts();
   let remoteSignOutCalled = false;
   // Force remote sign out to trigger an error
-  fxa.internal.deleteDeviceRegistration = function() { remoteSignOutCalled = true; throw "Remote sign out error"; };
+  fxa.internal.deleteDeviceRegistration = function() {
+    remoteSignOutCalled = true;
+    throw new Error("Remote sign out error");
+  };
   let promiseLogout = new Promise(resolve => {
     makeObserver(ONLOGOUT_NOTIFICATION, function() {
       log.debug("test_sign_out_with_remote_error observed onlogout");

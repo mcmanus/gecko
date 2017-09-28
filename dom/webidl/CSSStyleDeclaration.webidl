@@ -8,7 +8,7 @@
  */
 
 interface CSSStyleDeclaration {
-  [SetterThrows]
+  [CEReactions, SetterThrows]
   attribute DOMString cssText;
 
   readonly attribute unsigned long length;
@@ -20,16 +20,10 @@ interface CSSStyleDeclaration {
   [Throws]
   CSSValue? getPropertyCSSValue(DOMString property);
   DOMString getPropertyPriority(DOMString property);
-  [Throws]
+  [CEReactions, Throws]
   void setProperty(DOMString property, [TreatNullAs=EmptyString] DOMString value, [TreatNullAs=EmptyString] optional DOMString priority = "");
-  [Throws]
+  [CEReactions, Throws]
   DOMString removeProperty(DOMString property);
 
   readonly attribute CSSRule? parentRule;
-};
-
-// Mozilla extensions
-partial interface CSSStyleDeclaration {
-  [ChromeOnly,Throws]
-  DOMString getAuthoredPropertyValue(DOMString property);
 };

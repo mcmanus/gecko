@@ -48,6 +48,12 @@ public:
   static already_AddRefed<ThreadSharedFloatArrayBufferList>
   Create(uint32_t aChannelCount, size_t aLength, const mozilla::fallible_t&);
 
+  ThreadSharedFloatArrayBufferList*
+  AsThreadSharedFloatArrayBufferList() override
+  {
+    return this;
+  };
+
   struct Storage final
   {
     Storage() :
@@ -288,7 +294,7 @@ public:
   {
     NS_ERROR("Invalid SetThreeDPointParameter index");
   }
-  virtual void SetBuffer(already_AddRefed<ThreadSharedFloatArrayBufferList> aBuffer)
+  virtual void SetBuffer(AudioChunk&& aBuffer)
   {
     NS_ERROR("SetBuffer called on engine that doesn't support it");
   }
@@ -393,7 +399,8 @@ public:
   }
 
 private:
-  dom::AudioNode* mNode; // main thread only
+  // This is cleared from AudioNode::DestroyMediaStream()
+  dom::AudioNode* MOZ_NON_OWNING_REF mNode; // main thread only
   const char* const mNodeType;
   const uint16_t mInputCount;
   const uint16_t mOutputCount;

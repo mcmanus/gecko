@@ -57,21 +57,8 @@ public:
     const unsigned char* buffer() const { return m_formatter.buffer(); }
     unsigned char* data() { return m_formatter.data(); }
     bool oom() const { return m_formatter.oom(); }
-
-    void disableProtection() { m_formatter.disableProtection(); }
-    void enableProtection() { m_formatter.enableProtection(); }
-    void setLowerBoundForProtection(size_t size)
-    {
-        m_formatter.setLowerBoundForProtection(size);
-    }
-    void unprotectRegion(unsigned char* first, size_t size)
-    {
-        m_formatter.unprotectRegion(first, size);
-    }
-    void reprotectRegion(unsigned char* first, size_t size)
-    {
-        m_formatter.reprotectRegion(first, size);
-    }
+    bool reserve(size_t size) { return m_formatter.reserve(size); }
+    bool swapBuffer(wasm::Bytes& other) { return m_formatter.swapBuffer(other); }
 
     void nop()
     {
@@ -3888,11 +3875,9 @@ threeByteOpImmSimd("vblendps", VEX_PD, OP3_BLENDPS_VpsWpsIb, ESCAPE_3A, imm, off
         const unsigned char* src = m_formatter.buffer();
         memcpy(dst, src, size());
     }
-    MOZ_MUST_USE bool appendBuffer(const BaseAssembler& other)
+    MOZ_MUST_USE bool appendRawCode(const uint8_t* code, size_t numBytes)
     {
-        const unsigned char* buf = other.m_formatter.buffer();
-        bool ret = m_formatter.append(buf, other.size());
-        return ret;
+        return m_formatter.append(code, numBytes);
     }
 
   protected:
@@ -5159,22 +5144,9 @@ threeByteOpImmSimd("vblendps", VEX_PD, OP3_BLENDPS_VpsWpsIb, ESCAPE_3A, imm, off
         const unsigned char* buffer() const { return m_buffer.buffer(); }
         unsigned char* data() { return m_buffer.data(); }
         bool oom() const { return m_buffer.oom(); }
+        bool reserve(size_t size) { return m_buffer.reserve(size); }
+        bool swapBuffer(wasm::Bytes& other) { return m_buffer.swap(other); }
         bool isAligned(int alignment) const { return m_buffer.isAligned(alignment); }
-
-        void disableProtection() { m_buffer.disableProtection(); }
-        void enableProtection() { m_buffer.enableProtection(); }
-        void setLowerBoundForProtection(size_t size)
-        {
-            m_buffer.setLowerBoundForProtection(size);
-        }
-        void unprotectRegion(unsigned char* first, size_t size)
-        {
-            m_buffer.unprotectRegion(first, size);
-        }
-        void reprotectRegion(unsigned char* first, size_t size)
-        {
-            m_buffer.reprotectRegion(first, size);
-        }
 
         MOZ_MUST_USE bool append(const unsigned char* values, size_t size)
         {

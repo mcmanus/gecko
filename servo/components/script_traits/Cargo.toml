@@ -10,7 +10,6 @@ name = "script_traits"
 path = "lib.rs"
 
 [dependencies]
-app_units = "0.5"
 bluetooth_traits = {path = "../bluetooth_traits"}
 canvas_traits = {path = "../canvas_traits"}
 cookie = "0.6"
@@ -25,7 +24,6 @@ ipc-channel = "0.8"
 libc = "0.2"
 msg = {path = "../msg"}
 net_traits = {path = "../net_traits"}
-offscreen_gl_context = { version = "0.11", features = ["serde"] }
 profile_traits = {path = "../profile_traits"}
 rustc-serialize = "0.3.4"
 serde = "1.0"
@@ -34,5 +32,5 @@ servo_url = {path = "../url"}
 style_traits = {path = "../style_traits", features = ["servo"]}
 time = "0.1.12"
 url = {version = "1.2", features = ["heap_size"]}
-webrender_traits = {git = "https://github.com/servo/webrender", features = ["ipc"]}
+webrender_api = {git = "https://github.com/servo/webrender", features = ["ipc"]}
 webvr_traits = {path = "../webvr_traits"}

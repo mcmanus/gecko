@@ -9,19 +9,6 @@
 # ==============================================================
 # Some of the options here imply an option from js/moz.configure,
 # so, need to be declared before the include.
-option('--enable-systrace', env='MOZ_USE_SYSTRACE',
-       help='Turn on systrace for the Gecko profiler on android/b2g')
-
-@depends('--enable-systrace', target)
-def systrace(value, target):
-    if value and target.os != 'Android':
-        die('--enable-systrace cannot be used when targeting %s',
-            target.os)
-    if value:
-        return True
-
-set_define('MOZ_USE_SYSTRACE', systrace)
-
 
 option('--enable-jprof', env='MOZ_JPROF',
        help='Enable jprof profiling tool (needs mozilla/tools/jprof)')
@@ -99,12 +86,20 @@ option('--with-l10n-base', nargs=1, env='L10NBASEDIR',
 
 @depends('--with-l10n-base')
 @imports(_from='os.path', _import='isdir')
+@imports(_from='os.path', _import='expanduser')
+@imports(_from='os', _import='environ')
 def l10n_base(value):
     if value:
         path = value[0]
         if not isdir(path):
             die("Invalid value --with-l10n-base, %s doesn't exist", path)
-        return os.path.realpath(os.path.abspath(path))
+    else:
+        path = os.path.join(
+            environ.get(
+                'MOZBUILD_STATE_PATH',
+                expanduser(os.path.join('~', '.mozbuild'))),
+            'l10n-central')
+    return os.path.realpath(os.path.abspath(path))
 
 set_config('L10NBASEDIR', l10n_base)
 
@@ -125,7 +120,6 @@ option('--enable-default-toolkit', nargs=1,
 def toolkit(value, target, _):
     # Define possible choices for each platform. The default is the first one
     # listed when there are several.
-    os = target.os
     if target.os == 'WINNT':
         platform_choices = ('cairo-windows',)
     elif target.os == 'OSX':
@@ -133,19 +127,15 @@ def toolkit(value, target, _):
     elif target.os == 'iOS':
         platform_choices = ('cairo-uikit',)
     elif target.os == 'Android':
-        if value.origin == 'implied':
-            # Trust values coming from imply_option() (used in
-            # b2g/moz.configure).
-            platform_choices = tuple(value)
-        else:
-            platform_choices = ('cairo-android',)
+        platform_choices = ('cairo-android',)
     else:
         platform_choices = ('cairo-gtk3', 'cairo-gtk3-wayland')
 
     if value:
         if value[0] not in platform_choices:
             die('`%s` is not a valid value for --enable-default-toolkit on %s\n'
-                'Valid values: %s', value[0], os, ', '.join(platform_choices))
+                'Valid values: %s', value[0], target.os,
+                ', '.join(platform_choices))
         return value[0]
 
     return platform_choices[0]
@@ -327,35 +317,6 @@ def freetype2_combined_info(fontconfig_info, freetype2_info):
 add_old_configure_assignment('_HAVE_FREETYPE2',
                              depends_if(freetype2_info)(lambda _: True))
 
-# Build Freetype in the tree
-# ==============================================================
-@depends(target)
-def tree_freetype(target):
-    if target.os == 'Android':
-        return True
-
-set_define('MOZ_TREE_FREETYPE', tree_freetype)
-set_config('MOZ_TREE_FREETYPE', tree_freetype)
-add_old_configure_assignment('MOZ_TREE_FREETYPE', tree_freetype)
-
-set_define('HAVE_FT_BITMAP_SIZE_Y_PPEM', tree_freetype)
-set_define('HAVE_FT_GLYPHSLOT_EMBOLDEN', tree_freetype)
-set_define('HAVE_FT_LOAD_SFNT_TABLE', tree_freetype)
-
-@depends(freetype2_combined_info, tree_freetype, check_build_environment)
-def ft2_info(freetype2_combined_info, tree_freetype, build_env):
-    if tree_freetype:
-        return namespace(cflags=('-I%s/modules/freetype2/include' % build_env.topsrcdir,),
-                         libs=())
-    if freetype2_combined_info:
-        return freetype2_combined_info
-
-set_config('FT2_LIBS', ft2_info.libs)
-add_old_configure_assignment('FT2_LIBS',
-                             ft2_info.libs)
-add_old_configure_assignment('FT2_CFLAGS',
-                             ft2_info.cflags)
-
 # Apple platform decoder support
 # ==============================================================
 @depends(toolkit)
@@ -414,7 +375,7 @@ option('--enable-av1',
 def av1(value, target, milestone):
     enabled = bool(value)
     if value.origin == 'default' and milestone.is_nightly:
-        enabled = target.os not in ('Android', 'WINNT')
+        enabled = target.os != 'Android'
     if enabled:
         return True
 
@@ -540,33 +501,17 @@ project_flag('MOZ_ANDROID_HISTORY',
              help='Enable Android History instead of Places',
              set_as_define=True)
 
-project_flag('MOZ_ALLOW_LEGACY_EXTENSIONS',
-             help='Allow legacy browser extensions',
-             default=True, set_as_define=True)
+option(env='MOZ_ALLOW_LEGACY_EXTENSIONS',
+       default=milestone.is_nightly,
+       help='Allow legacy browser extensions')
 
-option(env='MOZ_PHOTON_ANIMATIONS',
-       help='Enable Photon UI animations',
-       default=milestone.is_nightly)
+@depends('MOZ_ALLOW_LEGACY_EXTENSIONS')
+def legacy_extensions(value):
+    if bool(value):
+        return True
 
-@depends('MOZ_PHOTON_ANIMATIONS')
-def photon_animations(value):
-    if value:
-        return bool(value)
-
-set_config('MOZ_PHOTON_ANIMATIONS', photon_animations)
-set_define('MOZ_PHOTON_ANIMATIONS', photon_animations)
-
-option(env='MOZ_PHOTON_THEME',
-       help='Enable Photon theme',
-       default=milestone.is_nightly)
-
-@depends('MOZ_PHOTON_THEME')
-def photon_theme(value):
-    if value:
-        return bool(value)
-
-set_config('MOZ_PHOTON_THEME', photon_theme)
-set_define('MOZ_PHOTON_THEME', photon_theme)
+set_config('MOZ_ALLOW_LEGACY_EXTENSIONS', legacy_extensions)
+set_define('MOZ_ALLOW_LEGACY_EXTENSIONS', legacy_extensions)
 
 @depends('MOZ_PLACES', 'MOZ_ANDROID_HISTORY')
 def check_places_and_android_history(places, android_history):
@@ -618,22 +563,32 @@ simple_keyfile('Adjust SDK')
 
 id_and_secret_keyfile('Leanplum SDK')
 
+simple_keyfile('Pocket API')
+
 # Servo integration
 # ==============================================================
 option('--enable-stylo', nargs='?', choices=('build',),
        help='Include Stylo in the build and/or enable it at runtime')
 
-@depends('--enable-stylo', '--help')
-def stylo_config(value, _):
+@depends('--enable-stylo', '--help', target)
+def stylo_config(value, _, target):
     build_stylo = None
     enable_stylo = None
 
-    # The default is to not build Stylo at all.
+    # If nothing is specified, default to building and enabling Stylo where it
+    # is known to work.
     if value.origin == 'default':
-        pass
+        if target.os == 'Android':
+            # Stylo on Android is happening Later(tm).
+            pass
+        else:
+            build_stylo = True
+            enable_stylo = True
     elif len(value) and value[0] == 'build':
+        # Build but disable by request.
         build_stylo = True
     elif bool(value):
+        # Build and enable.
         build_stylo = True
         enable_stylo = True
 
@@ -658,11 +613,50 @@ def building_stylo_bindgen(stylo_config, bindgen_enabled, compile_environment):
 # configure options.  The Windows installer of LLVM/Clang doesn't provide
 # llvm-config, so we need both methods to support all of our tier-1
 # platforms.
-llvm_config = check_prog('LLVM_CONFIG', ('llvm-config-4.0',
-                                         'llvm-config40',
-                                         'llvm-config-3.9',
-                                         'llvm-config39',
-                                         'llvm-config',),
+@depends(host)
+@imports('which')
+@imports('os')
+@imports('subprocess')
+def llvm_config_paths(host):
+    llvm_supported_versions = ['6.0', '5.0', '4.0', '3.9']
+    llvm_config_progs = []
+    for version in llvm_supported_versions:
+        llvm_config_progs += [
+            'llvm-config-%s' % version,
+            'llvm-config-mp-%s' % version,    # MacPorts' chosen naming scheme.
+            'llvm-config%s' % version.replace('.', ''),
+        ]
+    llvm_config_progs.append('llvm-config')
+
+    # Homebrew on macOS doesn't make clang available on PATH, so we have to
+    # look for it in non-standard places.
+    if host.kernel == 'Darwin':
+        try:
+            brew = which.which('brew')
+            brew_config = subprocess.check_output([brew, 'config']).strip()
+
+            for line in brew_config.splitlines():
+                if line.startswith('HOMEBREW_PREFIX'):
+                    fields = line.split(None, 2)
+                    prefix = fields[1] if len(fields) == 2 else ''
+                    path = ['opt', 'llvm', 'bin', 'llvm-config']
+                    llvm_config_progs.append(os.path.join(prefix, *path))
+                    break
+        except which.WhichError:
+            # Homebrew not installed, which is fine.
+            pass
+
+    # Also add in the location to which `mach bootstrap` or
+    # `mach artifact toolchain` installs clang.
+    mozbuild_state_dir = os.environ.get('MOZBUILD_STATE_PATH',
+                                        os.path.expanduser(os.path.join('~', '.mozbuild')))
+    bootstrap_llvm_config = os.path.join(mozbuild_state_dir, 'clang', 'bin', 'llvm-config')
+
+    llvm_config_progs.append(bootstrap_llvm_config)
+
+    return llvm_config_progs
+
+llvm_config = check_prog('LLVM_CONFIG', llvm_config_paths,
                          when=building_stylo_bindgen,
                          what='llvm-config', allow_missing=True)
 
@@ -694,8 +688,9 @@ with only_when(building_stylo_bindgen):
             '''.format(version, min_version)))
 
     @depends(llvm_config, '--with-libclang-path', '--with-clang-path',
-             library_name_info, host)
+             host_library_name_info, host)
     @imports('os.path')
+    @imports('glob')
     @imports(_from='textwrap', _import='dedent')
     def bindgen_config_paths(llvm_config, libclang_path, clang_path,
                              library_name_info, host):
@@ -706,10 +701,13 @@ with only_when(building_stylo_bindgen):
             libclang_choices = []
             if host.os == 'WINNT':
                 libclang_choices.append('libclang.dll')
-            libclang_choices.append('%sclang%s' % (library_name_info.dll_prefix,
-                                                   library_name_info.dll_suffix))
+            libclang_choices.append('%sclang%s' % (library_name_info.dll.prefix,
+                                                   library_name_info.dll.suffix))
             if host.kernel == 'Linux':
                 libclang_choices.append('libclang.so.1')
+
+            if host.os == 'OpenBSD':
+                libclang_choices = glob.glob(path + '/libclang.so.*.*')
 
             # At least one of the choices must be found.
             for choice in libclang_choices:
@@ -742,10 +740,19 @@ with only_when(building_stylo_bindgen):
             # but not have other packages installed.  Since the user is trying
             # to use their system packages, we can't be more specific about what
             # they need.
+            clang_resolved = find_program(clang_path)
+            if not clang_resolved:
+                die(dedent('''\
+                The file {} returned by `llvm-config {}` does not exist.
+                clang is required to build Stylo.  Please install the necessary packages,
+                run `mach bootstrap`, or add --disable-stylo to your mozconfig.
+                '''.format(clang_path, '--bindir')))
+
             if not os.path.exists(libclang_path):
                 die(dedent('''\
                 The directory {} returned by `llvm-config {}` does not exist.
-                Please check your system configuration.
+                clang is required to build Stylo.  Please install the necessary packages,
+                run `mach bootstrap`, or add --disable-stylo to your mozconfig.
                 '''.format(libclang_path, libclang_arg)))
 
             (found, searched) = search_for_libclang(libclang_path)
@@ -753,18 +760,13 @@ with only_when(building_stylo_bindgen):
                 die(dedent('''\
                 Could not find the clang shared library in the path {}
                 returned by `llvm-config {}` (searched for files {}).
-                Please check your system configuration.
+                clang is required to build Stylo.  Please install the necessary packages,
+                run `mach bootstrap`, or add --disable-stylo to your mozconfig.
                 '''.format(libclang_path, libclang_arg, searched)))
-
-            if not os.path.exists(clang_path):
-                die(dedent('''\
-                The file {} returned by `llvm-config {}` does not exist.
-                Please check your system configuration.
-                '''.format(clang_path, '--bindir')))
 
             return namespace(
                 libclang_path=libclang_path,
-                clang_path=clang_path,
+                clang_path=clang_resolved,
             )
 
         if (not libclang_path and clang_path) or \
@@ -772,6 +774,9 @@ with only_when(building_stylo_bindgen):
             die(dedent('''\
             You must provide both of --with-libclang-path and --with-clang-path
             or neither of them.'''))
+
+        libclang_path = libclang_path[0]
+        clang_path = clang_path[0]
 
         if not os.path.exists(libclang_path) or \
            not os.path.isdir(libclang_path):
@@ -786,15 +791,15 @@ with only_when(building_stylo_bindgen):
             specified by --with-libclang-path (searched for files {}).
             '''.format(libclang_path, searched)))
 
-        if not os.path.exists(clang_path) or \
-           not os.path.isfile(clang_path):
+        clang_resolved = find_program(clang_path)
+        if not clang_resolved:
             die(dedent('''\
             The argument to --with-clang-path is not a file: {}
             '''.format(clang_path)))
 
         return namespace(
-            libclang_path=libclang_path[0],
-            clang_path=clang_path[0],
+            libclang_path=libclang_path,
+            clang_path=clang_resolved,
         )
 
     set_config('MOZ_LIBCLANG_PATH', bindgen_config_paths.libclang_path)
@@ -828,7 +833,7 @@ def webrender(value, milestone):
     if value.origin == 'default':
         # if nothing is specified, default to just building on Nightly
         build_webrender = milestone.is_nightly
-    elif value == 'build':
+    elif len(value) and value[0] == 'build':
         # if explicitly set to 'build', then we build but don't enable
         build_webrender = True
     elif bool(value):
@@ -910,26 +915,6 @@ set_config('MOZ_WEBSPEECH', webspeech)
 set_define('MOZ_WEBSPEECH', webspeech)
 add_old_configure_assignment('MOZ_WEBSPEECH', webspeech)
 
-# Speech API pocketsphinx backend
-# ==============================================================
-@depends(build_project, milestone, webspeech)
-def webspeech_pocketsphinx(build_project, milestone, webspeech):
-    if webspeech and milestone.is_nightly and build_project == 'b2g':
-        return True
-
-set_config('MOZ_WEBSPEECH_POCKETSPHINX', webspeech_pocketsphinx)
-set_define('MOZ_WEBSPEECH_POCKETSPHINX', webspeech_pocketsphinx)
-
-# Speech API models
-# ==============================================================
-@depends(build_project, milestone, webspeech)
-def webspeech_models(build_project, milestone, webspeech):
-    if webspeech and milestone.is_nightly and build_project == 'b2g':
-        return True
-
-set_config('MOZ_WEBSPEECH_MODELS', webspeech_models)
-set_define('MOZ_WEBSPEECH_MODELS', webspeech_models)
-
 # Speech API test backend
 # ==============================================================
 option('--enable-webspeechtestbackend', default=webspeech,
@@ -950,72 +935,6 @@ set_config('MOZ_IPDL_TESTS',
            depends_if('--enable-ipdl-tests')(lambda _: True))
 
 include('nss.configure')
-
-# Network protocol support
-# ==============================================================
-@depends(check_build_environment, toolkit_gtk, '--help')
-@imports('os')
-@imports(_from='__builtin__', _import='sorted')
-def all_necko_protocols(build_env, toolkit_gtk, _):
-    basedir = os.path.join(build_env.topsrcdir, 'netwerk', 'protocol')
-    return tuple(sorted(p for p in os.listdir(basedir)
-                        if (os.path.isdir(os.path.join(basedir, p)) and
-                            (p != 'gio' or toolkit_gtk))))
-
-default_necko_protocols = all_necko_protocols
-
-@deprecated_option('--enable-necko-protocols', nargs='*')
-def necko_protocols(protocols):
-    return protocols
-
-@depends(necko_protocols, default_necko_protocols)
-def necko_protocols(protocols, default_protocols):
-    if protocols is None or (protocols and len(protocols) == 0):
-        return None
-    if len(protocols) == 1 and protocols[0] == '':
-        return False
-    result = set()
-    for p in protocols:
-        if p in ('yes', 'all', 'default'):
-            result |= set(default_protocols)
-            continue
-        if p in ('no', 'none'):
-            result = set()
-            continue
-        if p.startswith('-'):
-            if p[1:] in result:
-                result.remove(p[1:])
-        else:
-            result.add(p)
-    if result != set(default_protocols):
-        return tuple(result)
-
-imply_option('--enable-network-protocols', necko_protocols,
-             reason='--enable-necko-protocols')
-
-option('--enable-network-protocols', nargs='+', default=default_necko_protocols,
-       choices=all_necko_protocols,
-       help='Enable/disable specific protocol handlers')
-
-@depends('--enable-network-protocols')
-def necko_protocol_defines(protocols):
-    return tuple('NECKO_PROTOCOL_%s' % p for p in protocols)
-
-add_old_configure_assignment('_NON_GLOBAL_ACDEFINES', necko_protocol_defines)
-
-@depends(necko_protocol_defines)
-@imports('__sandbox__')
-def set_necko_protocol_defines(protocols):
-    for p in protocols:
-        __sandbox__.set_define_impl(p, True)
-
-@depends('--enable-network-protocols')
-@imports(_from='__builtin__', _import='sorted')
-def necko_protocols(protocols):
-    return tuple(sorted(protocols))
-
-set_config('NECKO_PROTOCOLS', necko_protocols)
-add_old_configure_assignment('NECKO_PROTOCOLS', necko_protocols)
 
 # Graphics
 # ==============================================================
@@ -1119,6 +1038,35 @@ def skia_includes(skia, skia_gpu):
 
 set_config('SKIA_INCLUDES', skia_includes)
 
+# Build Freetype in the tree
+# ==============================================================
+@depends(target, skia_pdf)
+def tree_freetype(target, skia_pdf):
+    if target.os == 'Android' or (skia_pdf and target.os == 'WINNT'):
+        return True
+
+set_define('MOZ_TREE_FREETYPE', tree_freetype)
+set_config('MOZ_TREE_FREETYPE', tree_freetype)
+add_old_configure_assignment('MOZ_TREE_FREETYPE', tree_freetype)
+
+set_define('HAVE_FT_BITMAP_SIZE_Y_PPEM', tree_freetype)
+set_define('HAVE_FT_GLYPHSLOT_EMBOLDEN', tree_freetype)
+set_define('HAVE_FT_LOAD_SFNT_TABLE', tree_freetype)
+
+@depends(freetype2_combined_info, tree_freetype, check_build_environment)
+def ft2_info(freetype2_combined_info, tree_freetype, build_env):
+    if tree_freetype:
+        return namespace(cflags=('-I%s/modules/freetype2/include' % build_env.topsrcdir,),
+                         libs=())
+    if freetype2_combined_info:
+        return freetype2_combined_info
+
+set_config('FT2_LIBS', ft2_info.libs)
+add_old_configure_assignment('FT2_LIBS',
+                             ft2_info.libs)
+add_old_configure_assignment('FT2_CFLAGS',
+                             ft2_info.cflags)
+
 # Mortar
 # ==============================================================
 option('--enable-mortar', help='Enable mortar extension')
@@ -1195,3 +1143,44 @@ def geckodriver(enable, automation, compile_env, cross_compile, hazard, target):
             return True
 
 set_config('ENABLE_GECKODRIVER', geckodriver)
+
+# Code Coverage
+# ==============================================================
+
+option('--enable-coverage', env='MOZ_CODE_COVERAGE',
+       help='Enable code coverage')
+
+@depends('--enable-coverage')
+def code_coverage(value):
+    if value:
+        return True
+
+set_config('MOZ_CODE_COVERAGE', code_coverage)
+set_define('MOZ_CODE_COVERAGE', code_coverage)
+
+# Cubeb Audio Remoting
+# ==============================================================
+
+option('--enable-cubeb-remoting', env='MOZ_CUBEB_REMOTING',
+       help='Enable cubeb audio remoting')
+
+@depends('--enable-cubeb-remoting')
+def cubeb_remoting(value):
+    if value:
+        return True
+
+set_config('MOZ_CUBEB_REMOTING', cubeb_remoting)
+set_define('MOZ_CUBEB_REMOTING', cubeb_remoting)
+
+# ASan Reporter Addon
+# ==============================================================
+option('--enable-address-sanitizer-reporter',
+       help='Enable Address Sanitizer Reporter Extension')
+
+@depends('--enable-address-sanitizer-reporter')
+def enable_asan_reporter(value):
+    if value:
+        return True
+
+set_config('MOZ_ASAN_REPORTER', enable_asan_reporter)
+set_define('MOZ_ASAN_REPORTER', enable_asan_reporter)

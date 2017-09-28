@@ -42,6 +42,12 @@ public:
   // If re-initializing, clear buffer.
   virtual nsresult Init() override;
 
+  void Flush() override;
+
+  // Maximum number of blocks allowed in this block cache.
+  // Based on initial content length, and minimum usable block cache.
+  int32_t GetMaxBlocks() const override { return mMaxBlocks; }
+
   // Can be called on any thread.
   virtual nsresult WriteBlock(uint32_t aBlockIndex,
                               Span<const uint8_t> aData1,
@@ -71,11 +77,14 @@ private:
   // Initial content length.
   const size_t mInitialContentLength;
 
+  // Maximum number of blocks that this MemoryBlockCache expects.
+  const int32_t mMaxBlocks;
+
   // Mutex which controls access to all members below.
   Mutex mMutex;
 
   nsTArray<uint8_t> mBuffer;
-  bool mHasGrown;
+  bool mHasGrown = false;
 };
 
 } // End namespace mozilla.

@@ -44,6 +44,7 @@ function EventTooltip(tooltip, eventListenerInfos, toolbox) {
   this._headerClicked = this._headerClicked.bind(this);
   this._debugClicked = this._debugClicked.bind(this);
   this.destroy = this.destroy.bind(this);
+  this._subscriptions = [];
 }
 
 EventTooltip.prototype = {
@@ -64,8 +65,10 @@ EventTooltip.prototype = {
 
     const sourceMapService = this._toolbox.sourceMapURLService;
 
+    const Bubbling = L10N.getStr("eventsTooltip.Bubbling");
+    const Capturing = L10N.getStr("eventsTooltip.Capturing");
     for (let listener of this._eventListenerInfos) {
-      let phase = listener.capturing ? "Capturing" : "Bubbling";
+      let phase = listener.capturing ? Capturing : Bubbling;
       let level = listener.DOM0 ? "DOM0" : "DOM2";
 
       // Create this early so we can refer to it from a closure, below.
@@ -106,26 +109,33 @@ EventTooltip.prototype = {
       if (listener.hide.filename) {
         text = L10N.getStr("eventsTooltip.unknownLocation");
         title = L10N.getStr("eventsTooltip.unknownLocationExplanation");
-      } else if (sourceMapService) {
+      } else {
         const location = this._parseLocation(text);
         if (location) {
-          sourceMapService.originalPositionFor(location.url, location.line)
-            .then((originalLocation) => {
-              // Do nothing if the tooltip was destroyed while we were
-              // waiting for a response.
-              if (this._tooltip) {
-                if (originalLocation) {
-                  const { sourceUrl, line } = originalLocation;
-                  let newURI = sourceUrl + ":" + line;
-                  filename.textContent = newURI;
-                  filename.setAttribute("title", newURI);
-                  let eventEditor = this._eventEditors.get(content);
-                  eventEditor.uri = newURI;
-                }
-                // This is emitted for testing.
-                this._tooltip.emit("event-tooltip-source-map-ready");
-              }
-            });
+          let callback = (enabled, url, line, column) => {
+            // Do nothing if the tooltip was destroyed while we were
+            // waiting for a response.
+            if (this._tooltip) {
+              const newUrl = enabled ? url : location.url;
+              const newLine = enabled ? line : location.line;
+
+              let newURI = newUrl + ":" + newLine;
+              filename.textContent = newURI;
+              filename.setAttribute("title", newURI);
+              let eventEditor = this._eventEditors.get(content);
+              eventEditor.uri = newURI;
+
+              // This is emitted for testing.
+              this._tooltip.emit("event-tooltip-source-map-ready");
+            }
+          };
+
+          sourceMapService.subscribe(location.url, location.line, null, callback);
+          this._subscriptions.push({
+            url: location.url,
+            line: location.line,
+            callback
+          });
         }
       }
 
@@ -171,7 +181,6 @@ EventTooltip.prototype = {
         let dom0 = doc.createElementNS(XHTML_NS, "span");
         dom0.className = "event-tooltip-attributes";
         dom0.textContent = level;
-        dom0.setAttribute("title", level);
         attributesBox.appendChild(dom0);
       }
 
@@ -314,6 +323,12 @@ EventTooltip.prototype = {
     let sourceNodes = this.container.querySelectorAll(".event-tooltip-debugger-icon");
     for (let node of sourceNodes) {
       node.removeEventListener("click", this._debugClicked);
+    }
+
+    const sourceMapService = this._toolbox.sourceMapURLService;
+    for (let subscription of this._subscriptions) {
+      sourceMapService.unsubscribe(subscription.url, subscription.line, null,
+                                   subscription.callback);
     }
 
     this._eventListenerInfos = this._toolbox = this._tooltip = null;

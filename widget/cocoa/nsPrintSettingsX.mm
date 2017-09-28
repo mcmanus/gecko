@@ -127,7 +127,7 @@ NS_IMETHODIMP nsPrintSettingsX::ReadPageFormatFromPrefs()
 
   nsAutoCString encodedData;
   nsresult rv =
-    Preferences::GetCString(MAC_OS_X_PAGE_SETUP_PREFNAME, &encodedData);
+    Preferences::GetCString(MAC_OS_X_PAGE_SETUP_PREFNAME, encodedData);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -311,19 +311,49 @@ nsPrintSettingsX::SetScaling(double aScaling)
 }
 
 NS_IMETHODIMP
+nsPrintSettingsX::GetScaling(double *aScaling)
+{
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+
+  NSDictionary* printInfoDict = [mPrintInfo dictionary];
+
+  *aScaling = [[printInfoDict objectForKey: NSPrintScalingFactor] doubleValue];
+
+  // Limit scaling precision to whole number percent values
+  *aScaling = round(*aScaling * 100.0) / 100.0;
+
+  return NS_OK;
+
+  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
+}
+
+NS_IMETHODIMP
 nsPrintSettingsX::SetToFileName(const char16_t *aToFileName)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
-  NSMutableDictionary* printInfoDict = [mPrintInfo dictionary];
-  nsString filename = nsDependentString(aToFileName);
-
-  NSURL* jobSavingURL =
-      [NSURL fileURLWithPath: nsCocoaUtils::ToNSString(filename)];
-  if (jobSavingURL) {
-    [printInfoDict setObject: NSPrintSaveJob forKey: NSPrintJobDisposition];
-    [printInfoDict setObject: jobSavingURL forKey: NSPrintJobSavingURL];
+  if (XRE_IsContentProcess() &&
+      Preferences::GetBool("print.print_via_parent")) {
+    // On content sandbox, NSPrintJobSavingURL will returns error since
+    // sandbox disallows file access.
+    return nsPrintSettings::SetToFileName(aToFileName);
   }
+
+  NSMutableDictionary* printInfoDict = [mPrintInfo dictionary];
+
+  if (aToFileName && aToFileName[0]) {
+    NSURL* jobSavingURL =
+        [NSURL fileURLWithPath: nsCocoaUtils::ToNSString(
+                                  nsDependentString(aToFileName))];
+    if (jobSavingURL) {
+      [printInfoDict setObject: NSPrintSaveJob forKey: NSPrintJobDisposition];
+      [printInfoDict setObject: jobSavingURL forKey: NSPrintJobSavingURL];
+    }
+    mToFileName = aToFileName;
+  } else {
+    mToFileName.Truncate();
+  }
+
   NSPrintInfo* newPrintInfo =
       [[NSPrintInfo alloc] initWithDictionary: printInfoDict];
   if (NS_WARN_IF(!newPrintInfo)) {

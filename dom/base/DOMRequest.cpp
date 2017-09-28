@@ -67,7 +67,7 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(DOMRequest,
   NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mResult)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(DOMRequest)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(DOMRequest)
   NS_INTERFACE_MAP_ENTRY(nsIDOMDOMRequest)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
@@ -79,9 +79,6 @@ DOMRequest::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
   return DOMRequestBinding::Wrap(aCx, this, aGivenProto);
 }
-
-NS_IMPL_EVENT_HANDLER(DOMRequest, success)
-NS_IMPL_EVENT_HANDLER(DOMRequest, error)
 
 NS_IMETHODIMP
 DOMRequest::GetReadyState(nsAString& aReadyState)
@@ -299,10 +296,10 @@ DOMRequestService::FireDetailedError(nsIDOMDOMRequest* aRequest,
 class FireSuccessAsyncTask : public mozilla::Runnable
 {
 
-  FireSuccessAsyncTask(DOMRequest* aRequest,
-                       const JS::Value& aResult) :
-    mReq(aRequest),
-    mResult(RootingCx(), aResult)
+  FireSuccessAsyncTask(DOMRequest* aRequest, const JS::Value& aResult)
+    : mozilla::Runnable("FireSuccessAsyncTask")
+    , mReq(aRequest)
+    , mResult(RootingCx(), aResult)
   {
   }
 
@@ -336,10 +333,10 @@ private:
 class FireErrorAsyncTask : public mozilla::Runnable
 {
 public:
-  FireErrorAsyncTask(DOMRequest* aRequest,
-                     const nsAString& aError) :
-    mReq(aRequest),
-    mError(aError)
+  FireErrorAsyncTask(DOMRequest* aRequest, const nsAString& aError)
+    : mozilla::Runnable("FireErrorAsyncTask")
+    , mReq(aRequest)
+    , mError(aError)
   {
   }
 

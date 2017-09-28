@@ -83,7 +83,7 @@ DetailsFrame::CheckValidMainSummary(const nsFrameList& aFrameList) const
 void
 DetailsFrame::DestroyFrom(nsIFrame* aDestructRoot)
 {
-  nsContentUtils::DestroyAnonymousContent(&mDefaultSummary);
+  DestroyAnonymousContent(mDefaultSummary.forget());
   nsBlockFrame::DestroyFrom(aDestructRoot);
 }
 
@@ -105,7 +105,7 @@ DetailsFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
                                  nsIDOMNode::ELEMENT_NODE);
   mDefaultSummary = new HTMLSummaryElement(nodeInfo);
 
-  nsXPIDLString defaultSummaryText;
+  nsAutoString defaultSummaryText;
   nsContentUtils::GetLocalizedString(nsContentUtils::eFORMS_PROPERTIES,
                                      "DefaultSummary", defaultSummaryText);
   RefPtr<nsTextNode> description = new nsTextNode(nodeInfoManager);
@@ -124,6 +124,15 @@ DetailsFrame::AppendAnonymousContentTo(nsTArray<nsIContent*>& aElements,
   if (mDefaultSummary) {
     aElements.AppendElement(mDefaultSummary);
   }
+}
+
+bool
+DetailsFrame::HasMainSummaryFrame(nsIFrame* aSummaryFrame)
+{
+  nsIFrame* firstChild =
+    nsPlaceholderFrame::GetRealFrameFor(mFrames.FirstChild());
+
+  return aSummaryFrame == firstChild;
 }
 
 } // namespace mozilla

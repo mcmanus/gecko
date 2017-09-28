@@ -13,6 +13,7 @@
 #include "Filters.h"
 #include "mozilla/UniquePtr.h"
 #include "RecordingTypes.h"
+#include "RecordedEventImpl.h"
 
 namespace mozilla {
 namespace gfx {
@@ -31,7 +32,7 @@ void WrapAndRecordSourceSurfaceUserDataFunc(void *aUserData)
   userData->recorder->RemoveSourceSurface((SourceSurface*)userData->refPtr);
   userData->recorder->RemoveStoredObject(userData->refPtr);
   userData->recorder->RecordEvent(
-    RecordedSourceSurfaceDestruction(userData->refPtr));
+    RecordedSourceSurfaceDestruction(ReferencePtr(userData->refPtr)));
 
   delete userData;
 }
@@ -74,7 +75,6 @@ EnsureSurfaceStored(DrawEventRecorderPrivate *aRecorder, SourceSurface *aSurface
   userData->recorder = aRecorder;
   aSurface->AddUserData(reinterpret_cast<UserDataKey*>(aRecorder),
                         userData, &WrapAndRecordSourceSurfaceUserDataFunc);
-  return;
 }
 
 class SourceSurfaceWrapAndRecord : public SourceSurface
@@ -90,7 +90,7 @@ public:
   ~SourceSurfaceWrapAndRecord()
   {
     mRecorder->RemoveStoredObject(this);
-    mRecorder->RecordEvent(RecordedSourceSurfaceDestruction(this));
+    mRecorder->RecordEvent(RecordedSourceSurfaceDestruction(ReferencePtr(this)));
   }
 
   virtual SurfaceType GetType() const { return SurfaceType::RECORDING; }
@@ -115,7 +115,7 @@ public:
   ~GradientStopsWrapAndRecord()
   {
     mRecorder->RemoveStoredObject(this);
-    mRecorder->RecordEvent(RecordedGradientStopsDestruction(this));
+    mRecorder->RecordEvent(RecordedGradientStopsDestruction(ReferencePtr(this)));
   }
 
   virtual BackendType GetBackendType() const { return BackendType::RECORDING; }
@@ -159,7 +159,7 @@ public:
   ~FilterNodeWrapAndRecord()
   {
     mRecorder->RemoveStoredObject(this);
-    mRecorder->RecordEvent(RecordedFilterNodeDestruction(this));
+    mRecorder->RecordEvent(RecordedFilterNodeDestruction(ReferencePtr(this)));
   }
 
   static FilterNode*
@@ -314,7 +314,7 @@ DrawTargetWrapAndRecord::DrawTargetWrapAndRecord(const DrawTargetWrapAndRecord *
 
 DrawTargetWrapAndRecord::~DrawTargetWrapAndRecord()
 {
-  mRecorder->RecordEvent(RecordedDrawTargetDestruction(this));
+  mRecorder->RecordEvent(RecordedDrawTargetDestruction(static_cast<DrawTarget*>(this)));
 }
 
 void
@@ -376,7 +376,7 @@ void WrapAndRecordFontUserDataDestroyFunc(void *aUserData)
   WrapAndRecordFontUserData *userData =
     static_cast<WrapAndRecordFontUserData*>(aUserData);
 
-  userData->recorder->RecordEvent(RecordedScaledFontDestruction(userData->refPtr));
+  userData->recorder->RecordEvent(RecordedScaledFontDestruction(ReferencePtr(userData->refPtr)));
   userData->recorder->RemoveScaledFont((ScaledFont*)userData->refPtr);
   delete userData;
 }
@@ -586,7 +586,7 @@ DrawTargetWrapAndRecord::PushClipRect(const Rect &aRect)
 void
 DrawTargetWrapAndRecord::PopClip()
 {
-  mRecorder->RecordEvent(RecordedPopClip(this));
+  mRecorder->RecordEvent(RecordedPopClip(static_cast<DrawTarget*>(this)));
   mFinalDT->PopClip();
 }
 
@@ -610,7 +610,7 @@ DrawTargetWrapAndRecord::PushLayer(bool aOpaque, Float aOpacity,
 void
 DrawTargetWrapAndRecord::PopLayer()
 {
-  mRecorder->RecordEvent(RecordedPopLayer(this));
+  mRecorder->RecordEvent(RecordedPopLayer(static_cast<DrawTarget*>(this)));
   mFinalDT->PopLayer();
 }
 
@@ -722,7 +722,7 @@ DrawTargetWrapAndRecord::EnsurePathStored(const Path *aPath)
     pathWrapAndRecord = builderWrapAndRecord->Finish().downcast<PathRecording>();
   }
 
-  mRecorder->RecordEvent(RecordedPathCreation(pathWrapAndRecord));
+  mRecorder->RecordEvent(RecordedPathCreation(pathWrapAndRecord.get()));
   mRecorder->AddStoredObject(pathWrapAndRecord);
   pathWrapAndRecord->mStoredRecorders.push_back(mRecorder);
 

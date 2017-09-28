@@ -31,26 +31,18 @@ Cu.importGlobalProperties(["URL"]);
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/AppConstants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                  "resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-                                  "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Sqlite",
-                                  "resource://gre/modules/Sqlite.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-                                  "resource://gre/modules/Promise.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Deprecated",
-                                  "resource://gre/modules/Deprecated.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Bookmarks",
-                                  "resource://gre/modules/Bookmarks.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "History",
-                                  "resource://gre/modules/History.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
-                                  "resource://gre/modules/AsyncShutdown.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesSyncUtils",
-                                  "resource://gre/modules/PlacesSyncUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetters(this, {
+  Services: "resource://gre/modules/Services.jsm",
+  NetUtil: "resource://gre/modules/NetUtil.jsm",
+  OS: "resource://gre/modules/osfile.jsm",
+  Sqlite: "resource://gre/modules/Sqlite.jsm",
+  Deprecated: "resource://gre/modules/Deprecated.jsm",
+  Bookmarks: "resource://gre/modules/Bookmarks.jsm",
+  History: "resource://gre/modules/History.jsm",
+  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
+  PlacesSyncUtils: "resource://gre/modules/PlacesSyncUtils.jsm",
+});
 
 // The minimum amount of transactions before starting a batch. Usually we do
 // do incremental updates, a batch will cause views to completely
@@ -212,6 +204,7 @@ function serializeNode(aNode, aIsLivemark) {
 // Imposed to limit database size.
 const DB_URL_LENGTH_MAX = 65536;
 const DB_TITLE_LENGTH_MAX = 4096;
+const DB_DESCRIPTION_LENGTH_MAX = 1024;
 
 /**
  * List of bookmark object validators, one per each known property.
@@ -231,10 +224,13 @@ const BOOKMARK_VALIDATORS = Object.freeze({
                                   PlacesUtils.bookmarks.TYPE_FOLDER,
                                   PlacesUtils.bookmarks.TYPE_SEPARATOR ].includes(v)),
   title: v => {
-    simpleValidateFunc(val => val === null || typeof(val) == "string").call(this, v);
-    if (!v)
-      return null;
-    return v.slice(0, DB_TITLE_LENGTH_MAX);
+    if (v === null) {
+      return "";
+    }
+    if (typeof(v) == "string") {
+      return v.slice(0, DB_TITLE_LENGTH_MAX);
+    }
+    throw new Error("Invalid title");
   },
   url: v => {
     simpleValidateFunc(val => (typeof(val) == "string" && val.length <= DB_URL_LENGTH_MAX) ||
@@ -390,6 +386,8 @@ this.PlacesUtils = {
    * @return microseconds from the epoch.
    */
   toPRTime(date) {
+    if (typeof date != "number" && date.constructor.name != "Date")
+      throw new Error("Invalid value passed to toPRTime");
     return date * 1000;
   },
 
@@ -401,6 +399,8 @@ this.PlacesUtils = {
    * @return a Date object.
    */
   toDate(time) {
+    if (typeof time != "number")
+      throw new Error("Invalid value passed to toDate");
     return new Date(parseInt(time / 1000));
   },
 
@@ -516,6 +516,9 @@ this.PlacesUtils = {
    * Checks validity of an object, filling up default values for optional
    * properties.
    *
+   * @param {string} name
+   *        The operation name. This is included in the error message if
+   *        validation fails.
    * @param validators (object)
    *        An object containing input validators. Keys should be field names;
    *        values should be validation functions.
@@ -537,9 +540,9 @@ this.PlacesUtils = {
    * @throws if the object contains invalid data.
    * @note any unknown properties are pass-through.
    */
-  validateItemProperties(validators, props, behavior = {}) {
+  validateItemProperties(name, validators, props, behavior = {}) {
     if (!props)
-      throw new Error("Input should be a valid object");
+      throw new Error(`${name}: Input should be a valid object`);
     // Make a shallow copy of `props` to avoid mutating the original object
     // when filling in defaults.
     let input = Object.assign({}, props);
@@ -554,7 +557,7 @@ this.PlacesUtils = {
       }
       if (behavior[prop].hasOwnProperty("validIf") && input[prop] !== undefined &&
           !behavior[prop].validIf(input)) {
-        throw new Error(`Invalid value for property '${prop}': ${JSON.stringify(input[prop])}`);
+        throw new Error(`${name}: Invalid value for property '${prop}': ${JSON.stringify(input[prop])}`);
       }
       if (behavior[prop].hasOwnProperty("defaultValue") && input[prop] === undefined) {
         input[prop] = behavior[prop].defaultValue;
@@ -575,12 +578,12 @@ this.PlacesUtils = {
         try {
           normalizedInput[prop] = validators[prop](input[prop], input);
         } catch (ex) {
-          throw new Error(`Invalid value for property '${prop}': ${input[prop]}`);
+          throw new Error(`${name}: Invalid value for property '${prop}': ${JSON.stringify(input[prop])}`);
         }
       }
     }
     if (required.size > 0)
-      throw new Error(`The following properties were expected: ${[...required].join(", ")}`);
+      throw new Error(`${name}: The following properties were expected: ${[...required].join(", ")}`);
     return normalizedInput;
   },
 
@@ -610,22 +613,6 @@ this.PlacesUtils = {
         while (this._shutdownFunctions.length > 0) {
           this._shutdownFunctions.shift().apply(this);
         }
-        if (this._bookmarksServiceObserversQueue.length > 0) {
-          // Since we are shutting down, there's no reason to add the observers.
-          this._bookmarksServiceObserversQueue.length = 0;
-        }
-        break;
-      case "bookmarks-service-ready":
-        this._bookmarksServiceReady = true;
-        while (this._bookmarksServiceObserversQueue.length > 0) {
-          let observerInfo = this._bookmarksServiceObserversQueue.shift();
-          this.bookmarks.addObserver(observerInfo.observer, observerInfo.weak);
-        }
-
-        // Initialize the keywords cache to start observing bookmarks
-        // notifications.  This is needed as far as we support both the old and
-        // the new bookmarking APIs at the same time.
-        gKeywordsCachePromise.catch(Cu.reportError);
         break;
     }
   },
@@ -993,20 +980,52 @@ this.PlacesUtils = {
       visits: [],
     };
 
+    if (typeof pageInfo != "object" || !pageInfo) {
+      throw new TypeError("pageInfo must be an object");
+    }
+
     if (!pageInfo.url) {
       throw new TypeError("PageInfo object must have a url property");
     }
 
     info.url = this.normalizeToURLOrGUID(pageInfo.url);
 
-    if (!validateVisits) {
-      return info;
+    if (typeof pageInfo.guid === "string" && this.isValidGuid(pageInfo.guid)) {
+      info.guid = pageInfo.guid;
+    } else if (pageInfo.guid) {
+      throw new TypeError(`guid property of PageInfo object: ${pageInfo.guid} is invalid`);
     }
 
     if (typeof pageInfo.title === "string") {
       info.title = pageInfo.title;
     } else if (pageInfo.title != null && pageInfo.title != undefined) {
       throw new TypeError(`title property of PageInfo object: ${pageInfo.title} must be a string if provided`);
+    }
+
+    if (typeof pageInfo.description === "string" || pageInfo.description === null) {
+      info.description = pageInfo.description ? pageInfo.description.slice(0, DB_DESCRIPTION_LENGTH_MAX) : null;
+    } else if (pageInfo.description !== undefined) {
+      throw new TypeError(`description property of pageInfo object: ${pageInfo.description} must be either a string or null if provided`);
+    }
+
+    if (pageInfo.previewImageURL || pageInfo.previewImageURL === null) {
+      let previewImageURL = pageInfo.previewImageURL;
+
+      if (previewImageURL === null) {
+        info.previewImageURL = null;
+      } else if (typeof(previewImageURL) === "string" && previewImageURL.length <= DB_URL_LENGTH_MAX) {
+        info.previewImageURL = new URL(previewImageURL);
+      } else if (previewImageURL instanceof Ci.nsIURI && previewImageURL.spec.length <= DB_URL_LENGTH_MAX) {
+        info.previewImageURL = new URL(previewImageURL.spec);
+      } else if (previewImageURL instanceof URL && previewImageURL.href.length <= DB_URL_LENGTH_MAX) {
+        info.previewImageURL = previewImageURL;
+      } else {
+        throw new TypeError("previewImageURL property of pageInfo object: ${previewImageURL} is invalid");
+      }
+    }
+
+    if (!validateVisits) {
+      return info;
     }
 
     if (!pageInfo.visits || !Array.isArray(pageInfo.visits) || !pageInfo.visits.length) {
@@ -1080,6 +1099,9 @@ this.PlacesUtils = {
    */
   getFolderContents:
   function PU_getFolderContents(aFolderId, aExcludeItems, aExpandQueries) {
+    if (typeof aFolderId !== "number") {
+      throw new Error("aFolderId should be a number.");
+    }
     var query = this.history.getNewQuery();
     query.setFolders([aFolderId], 1);
     var options = this.history.getNewQueryOptions();
@@ -1089,30 +1111,6 @@ this.PlacesUtils = {
     var result = this.history.executeQuery(query, options);
     result.root.containerOpen = true;
     return result;
-  },
-
-  /**
-   * Fetch all annotations for a URI, including all properties of each
-   * annotation which would be required to recreate it.
-   * @param aURI
-   *        The URI for which annotations are to be retrieved.
-   * @return Array of objects, each containing the following properties:
-   *         name, flags, expires, value
-   */
-  getAnnotationsForURI: function PU_getAnnotationsForURI(aURI) {
-    var annosvc = this.annotations;
-    var annos = [], val = null;
-    var annoNames = annosvc.getPageAnnotationNames(aURI);
-    for (var i = 0; i < annoNames.length; i++) {
-      var flags = {}, exp = {}, storageType = {};
-      annosvc.getPageAnnotationInfo(aURI, annoNames[i], flags, exp, storageType);
-      val = annosvc.getPageAnnotation(aURI, annoNames[i]);
-      annos.push({name: annoNames[i],
-                  flags: flags.value,
-                  expires: exp.value,
-                  value: val});
-    }
-    return annos;
   },
 
   /**
@@ -1306,33 +1304,6 @@ this.PlacesUtils = {
   },
 
   /**
-   * Get the URI (and any associated POST data) for a given keyword.
-   * @param aKeyword string keyword
-   * @returns an array containing a string URL and a string of POST data
-   *
-   * @deprecated
-   */
-  getURLAndPostDataForKeyword(aKeyword) {
-    Deprecated.warning("getURLAndPostDataForKeyword() is deprecated, please " +
-                       "use PlacesUtils.keywords.fetch() instead",
-                       "https://bugzilla.mozilla.org/show_bug.cgi?id=1100294");
-
-    let stmt = PlacesUtils.history.DBConnection.createStatement(
-      `SELECT h.url, k.post_data
-       FROM moz_keywords k
-       JOIN moz_places h ON h.id = k.place_id
-       WHERE k.keyword = :keyword`);
-    stmt.params.keyword = aKeyword.toLowerCase();
-    try {
-      if (!stmt.executeStep())
-        return [ null, null ];
-      return [ stmt.row.url, stmt.row.post_data ];
-    } finally {
-      stmt.finalize();
-    }
-  },
-
-  /**
    * Get all bookmarks for a URL, excluding items under tags.
    */
   getBookmarksForURI:
@@ -1517,63 +1488,12 @@ this.PlacesUtils = {
    *   connection and returns a Promise. Shutdown is guaranteed to not interrupt
    *   execution of `task`.
    */
-  withConnectionWrapper: (name, task) => {
+  async withConnectionWrapper(name, task) {
     if (!name) {
       throw new TypeError("Expecting a user-readable name");
     }
-    return (async function() {
-      let db = await gAsyncDBWrapperPromised;
-      return db.executeBeforeShutdown(name, task);
-    })();
-  },
-
-  /**
-   * Lazily adds a bookmarks observer, waiting for the bookmarks service to be
-   * alive before registering the observer.  This is especially useful in the
-   * startup path, to avoid initializing the service just to add an observer.
-   *
-   * @param aObserver
-   *        Object implementing nsINavBookmarkObserver
-   * @param [optional]aWeakOwner
-   *        Whether to use weak ownership.
-   *
-   * @note Correct functionality of lazy observers relies on the fact Places
-   *       notifies categories before real observers, and uses
-   *       PlacesCategoriesStarter component to kick-off the registration.
-   */
-  _bookmarksServiceReady: false,
-  _bookmarksServiceObserversQueue: [],
-  addLazyBookmarkObserver:
-  function PU_addLazyBookmarkObserver(aObserver, aWeakOwner) {
-    if (this._bookmarksServiceReady) {
-      this.bookmarks.addObserver(aObserver, aWeakOwner === true);
-      return;
-    }
-    this._bookmarksServiceObserversQueue.push({ observer: aObserver,
-                                                weak: aWeakOwner === true });
-  },
-
-  /**
-   * Removes a bookmarks observer added through addLazyBookmarkObserver.
-   *
-   * @param aObserver
-   *        Object implementing nsINavBookmarkObserver
-   */
-  removeLazyBookmarkObserver:
-  function PU_removeLazyBookmarkObserver(aObserver) {
-    if (this._bookmarksServiceReady) {
-      this.bookmarks.removeObserver(aObserver);
-      return;
-    }
-    let index = -1;
-    for (let i = 0;
-         i < this._bookmarksServiceObserversQueue.length && index == -1; i++) {
-      if (this._bookmarksServiceObserversQueue[i].observer === aObserver)
-        index = i;
-    }
-    if (index != -1) {
-      this._bookmarksServiceObserversQueue.splice(index, 1);
-    }
+    let db = await gAsyncDBWrapperPromised;
+    return db.executeBeforeShutdown(name, task);
   },
 
   /**
@@ -1625,22 +1545,6 @@ this.PlacesUtils = {
       });
 
     });
-  },
-
-  /**
-   * Deprecated wrapper for History.jsm::fetch.
-   *
-   * @param aPlaceIdentifier
-   *        either an URL or a GUID (@see History.jsm::fetch)
-   * @return {Promise}.
-   * @resolve a PageInfo
-   * @reject if there is an error in the place identifier
-   */
-  promisePlaceInfo(aPlaceIdentifier) {
-    Deprecated.warning(`PlacesUtils.promisePlaceInfo() is deprecated.
-                        Please use PlacesUtils.history.fetch()`,
-                       "https://bugzilla.mozilla.org/show_bug.cgi?id=1350377");
-    return PlacesUtils.history.fetch(aPlaceIdentifier);
   },
 
   /**
@@ -1791,6 +1695,8 @@ this.PlacesUtils = {
    *  - [deprecated] id (number): the item's id. This is only if
    *    aOptions.includeItemIds is set.
    *  - type (string):  the item's type.  @see PlacesUtils.TYPE_X_*
+   *  - typeCode (number):  the item's type in numeric format.
+   *    @see PlacesUtils.bookmarks.TYPE_*
    *  - title (string): the item's title. If it has no title, this property
    *    isn't set.
    *  - dateAdded (number, microseconds from the epoch): the date-added value of
@@ -1849,6 +1755,7 @@ this.PlacesUtils = {
       GuidHelper.updateCache(itemId, item.guid);
 
       let type = aRow.getResultByName("type");
+      item.typeCode = type;
       if (type == Ci.nsINavBookmarksService.TYPE_BOOKMARK)
         copyProps("charset", "tags", "iconuri");
 
@@ -1913,8 +1820,8 @@ this.PlacesUtils = {
          FROM moz_bookmarks b2
          JOIN descendants ON b2.parent = descendants.id AND b2.id <> :tags_folder)
        SELECT d.level, d.id, d.guid, d.parent, d.parentGuid, d.type,
-              d.position AS [index], d.title, d.dateAdded, d.lastModified,
-              h.url, (SELECT icon_url FROM moz_icons i
+              d.position AS [index], IFNULL(d.title, "") AS title, d.dateAdded,
+              d.lastModified, h.url, (SELECT icon_url FROM moz_icons i
                       JOIN moz_icons_to_pages ON icon_id = i.id
                       JOIN moz_pages_w_icons pi ON page_id = pi.id
                       WHERE pi.page_url_hash = hash(h.url) AND pi.page_url = h.url
@@ -2069,7 +1976,10 @@ XPCOMUtils.defineLazyServiceGetter(PlacesUtils, "livemarks",
                                    "@mozilla.org/browser/livemark-service;2",
                                    "mozIAsyncLivemarks");
 
-XPCOMUtils.defineLazyGetter(PlacesUtils, "keywords", () => Keywords);
+XPCOMUtils.defineLazyGetter(PlacesUtils, "keywords", () => {
+  gKeywordsCachePromise.catch(Cu.reportError);
+  return Keywords;
+});
 
 XPCOMUtils.defineLazyGetter(PlacesUtils, "transactionManager", function() {
   let tm = Cc["@mozilla.org/transactionmanager;1"].
@@ -2128,7 +2038,8 @@ function setupDbForShutdown(conn, name) {
       // Before it can safely close its connection, we need to make sure
       // that we have closed the high-level connection.
       try {
-        AsyncShutdown.placesClosingInternalConnection.addBlocker(`${name} closing as part of Places shutdown`,
+        PlacesUtils.history.connectionShutdownClient.jsclient.addBlocker(
+          `${name} closing as part of Places shutdown`,
           async function() {
             state = "1. Service has initiated shutdown";
 
@@ -2393,41 +2304,6 @@ XPCOMUtils.defineLazyGetter(this, "gKeywordsCachePromise", () =>
   PlacesUtils.withConnectionWrapper("PlacesUtils: gKeywordsCachePromise",
     async function(db) {
       let cache = new Map();
-      let rows = await db.execute(
-        `SELECT keyword, url, post_data
-         FROM moz_keywords k
-         JOIN moz_places h ON h.id = k.place_id
-        `);
-      let brokenKeywords = [];
-      for (let row of rows) {
-        let keyword = row.getResultByName("keyword");
-        try {
-          let entry = { keyword,
-                        url: new URL(row.getResultByName("url")),
-                        postData: row.getResultByName("post_data") };
-          cache.set(keyword, entry);
-        } catch (ex) {
-          // The url is invalid, don't load the keyword and remove it, or it
-          // would break the whole keywords API.
-          brokenKeywords.push(keyword);
-        }
-      }
-      if (brokenKeywords.length) {
-        await db.execute(
-          `DELETE FROM moz_keywords
-           WHERE keyword IN (${brokenKeywords.map(JSON.stringify).join(",")})
-          `);
-      }
-
-      // Helper to get a keyword from an href.
-      function keywordsForHref(href) {
-        let keywords = [];
-        for (let [ key, val ] of cache) {
-          if (val.url.href == href)
-            keywords.push(key);
-        }
-        return keywords;
-      }
 
       // Start observing changes to bookmarks. For now we are going to keep that
       // relation for backwards compatibility reasons, but mostly because we are
@@ -2467,29 +2343,22 @@ XPCOMUtils.defineLazyGetter(this, "gKeywordsCachePromise", () =>
           }
 
           if (prop == "keyword") {
-            this._onKeywordChanged(guid, val).catch(Cu.reportError);
+            this._onKeywordChanged(guid, val, oldVal);
           } else if (prop == "uri") {
             this._onUrlChanged(guid, val, oldVal).catch(Cu.reportError);
           }
         },
 
-        async _onKeywordChanged(guid, keyword) {
-          let bookmark = await PlacesUtils.bookmarks.fetch(guid);
-          // Due to mixed sync/async operations, by this time the bookmark could
-          // have disappeared and we already handle removals in onItemRemoved.
-          if (!bookmark) {
-            return;
-          }
-
+        _onKeywordChanged(guid, keyword, href) {
           if (keyword.length == 0) {
             // We are removing a keyword.
-            let keywords = keywordsForHref(bookmark.url.href)
+            let keywords = keywordsForHref(href)
             for (let kw of keywords) {
               cache.delete(kw);
             }
           } else {
             // We are adding a new keyword.
-            cache.set(keyword, { keyword, url: bookmark.url });
+            cache.set(keyword, { keyword, url: new URL(href) });
           }
         },
 
@@ -2514,6 +2383,44 @@ XPCOMUtils.defineLazyGetter(this, "gKeywordsCachePromise", () =>
       PlacesUtils.registerShutdownFunction(() => {
         PlacesUtils.bookmarks.removeObserver(observer);
       });
+
+      let rows = await db.execute(
+        `SELECT keyword, url, post_data
+         FROM moz_keywords k
+         JOIN moz_places h ON h.id = k.place_id
+        `);
+      let brokenKeywords = [];
+      for (let row of rows) {
+        let keyword = row.getResultByName("keyword");
+        try {
+          let entry = { keyword,
+                        url: new URL(row.getResultByName("url")),
+                        postData: row.getResultByName("post_data") };
+          cache.set(keyword, entry);
+        } catch (ex) {
+          // The url is invalid, don't load the keyword and remove it, or it
+          // would break the whole keywords API.
+          brokenKeywords.push(keyword);
+        }
+      }
+
+      if (brokenKeywords.length) {
+        await db.execute(
+          `DELETE FROM moz_keywords
+           WHERE keyword IN (${brokenKeywords.map(JSON.stringify).join(",")})
+          `);
+      }
+
+      // Helper to get a keyword from an href.
+      function keywordsForHref(href) {
+        let keywords = [];
+        for (let [ key, val ] of cache) {
+          if (val.url.href == href)
+            keywords.push(key);
+        }
+        return keywords;
+      }
+
       return cache;
     }
 ));

@@ -22,7 +22,7 @@ public:
   friend nsIFrame* NS_NewMathMLmfencedFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
   virtual void
-  SetAdditionalStyleContext(int32_t          aIndex, 
+  SetAdditionalStyleContext(int32_t          aIndex,
                             nsStyleContext*  aStyleContext) override;
   virtual nsStyleContext*
   GetAdditionalStyleContext(int32_t aIndex) const override;
@@ -41,7 +41,6 @@ public:
          nsReflowStatus&          aStatus) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual void
@@ -62,9 +61,8 @@ public:
   FixInterFrameSpacing(ReflowOutput& aDesiredSize) override;
 
   // helper routines to format the MathMLChars involved here
-  static nsresult
-  ReflowChar(nsPresContext*       aPresContext,
-             DrawTarget*          aDrawTarget,
+  nsresult
+  ReflowChar(DrawTarget*          aDrawTarget,
              nsFontMetrics&       aFontMetrics,
              float                aFontSizeInflation,
              nsMathMLChar*        aMathMLChar,
@@ -105,7 +103,7 @@ protected:
   {}
 
   virtual ~nsMathMLmfencedFrame();
-  
+
   nsMathMLChar* mOpenChar;
   nsMathMLChar* mCloseChar;
   nsMathMLChar* mSeparatorsChar;

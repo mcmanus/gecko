@@ -33,7 +33,6 @@
 #include "nsTextFragment.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/LookAndFeel.h"
-#include "mozilla/dom/Selection.h"
 #include "nsIBidiKeyboard.h"
 #include "nsContentUtils.h"
 
@@ -42,7 +41,7 @@ using namespace mozilla::dom;
 using namespace mozilla::gfx;
 
 // The bidi indicator hangs off the caret to one side, to show which
-// direction the typing is in. It needs to be at least 2x2 to avoid looking like 
+// direction the typing is in. It needs to be at least 2x2 to avoid looking like
 // an insignificant dot
 static const int32_t kMinBidiIndicatorPixels = 2;
 
@@ -168,7 +167,7 @@ nsresult nsCaret::Init(nsIPresShell *inPresShell)
   if (privateSelection)
     privateSelection->AddSelectionListener(this);
   mDomSelectionWeak = do_GetWeakReference(domSelection);
-  
+
   return NS_OK;
 }
 
@@ -213,7 +212,7 @@ void nsCaret::Terminate()
 {
   // this doesn't erase the caret if it's drawn. Should it? We might not have
   // a good drawing environment during teardown.
-  
+
   StopBlinking();
   mBlinkTimer = nullptr;
 
@@ -241,7 +240,7 @@ void nsCaret::SetSelection(nsISelection *aDOMSel)
   MOZ_ASSERT(aDOMSel);
   mDomSelectionWeak = do_GetWeakReference(aDOMSel);   // weak reference to pres shell
   ResetBlinking();
-  SchedulePaint();
+  SchedulePaint(aDOMSel);
 }
 
 void nsCaret::SetVisible(bool inMakeVisible)
@@ -250,30 +249,6 @@ void nsCaret::SetVisible(bool inMakeVisible)
   mIgnoreUserModify = mVisible;
   ResetBlinking();
   SchedulePaint();
-}
-
-bool nsCaret::IsVisible()
-{
-  if (!mVisible || mHideCount) {
-    return false;
-  }
-
-  if (!mShowDuringSelection) {
-    Selection* selection = GetSelectionInternal();
-    if (!selection) {
-      return false;
-    }
-    bool isCollapsed;
-    if (NS_FAILED(selection->GetIsCollapsed(&isCollapsed)) || !isCollapsed) {
-      return false;
-    }
-  }
-
-  if (IsMenuPopupHidingCaret()) {
-    return false;
-  }
-
-  return true;
 }
 
 void nsCaret::AddForceHide()
@@ -464,9 +439,14 @@ nsCaret::GetSelectionInternal()
   return domSelection ? domSelection->AsSelection() : nullptr;
 }
 
-void nsCaret::SchedulePaint()
+void nsCaret::SchedulePaint(nsISelection* aSelection)
 {
-  Selection* selection = GetSelectionInternal();
+  Selection* selection;
+  if (aSelection) {
+    selection = aSelection->AsSelection();
+  } else {
+    selection = GetSelectionInternal();
+  }
   nsINode* focusNode;
   if (mOverrideContent) {
     focusNode = mOverrideContent;
@@ -487,7 +467,7 @@ void nsCaret::SchedulePaint()
   f->SchedulePaint();
 }
 
-void nsCaret::SetVisibilityDuringSelection(bool aVisibility) 
+void nsCaret::SetVisibilityDuringSelection(bool aVisibility)
 {
   mShowDuringSelection = aVisibility;
   SchedulePaint();
@@ -609,7 +589,11 @@ NS_IMETHODIMP
 nsCaret::NotifySelectionChanged(nsIDOMDocument *, nsISelection *aDomSel,
                                 int16_t aReason)
 {
-  if ((aReason & nsISelectionListener::MOUSEUP_REASON) || !IsVisible())//this wont do
+  // Note that aDomSel, per the comment below may not be the same as our
+  // selection, but that's OK since if that is the case, it wouldn't have
+  // mattered what IsVisible() returns here, so we just opt for checking
+  // the selection later down below.
+  if ((aReason & nsISelectionListener::MOUSEUP_REASON) || !IsVisible(aDomSel))//this wont do
     return NS_OK;
 
   nsCOMPtr<nsISelection> domSel(do_QueryReferent(mDomSelectionWeak));
@@ -626,7 +610,7 @@ nsCaret::NotifySelectionChanged(nsIDOMDocument *, nsISelection *aDomSel,
     return NS_OK;
 
   ResetBlinking();
-  SchedulePaint();
+  SchedulePaint(aDomSel);
 
   return NS_OK;
 }
@@ -654,8 +638,15 @@ void nsCaret::ResetBlinking()
   } else {
     nsresult  err;
     mBlinkTimer = do_CreateInstance("@mozilla.org/timer;1", &err);
-    if (NS_FAILED(err))
+    if (NS_FAILED(err)) {
       return;
+    }
+
+    if (nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell)) {
+      if (nsCOMPtr<nsIDocument> doc = presShell->GetDocument()) {
+        mBlinkTimer->SetTarget(doc->EventTargetFor(TaskCategory::Other));
+      }
+    }
   }
 
   if (blinkRate > 0) {
@@ -707,7 +698,7 @@ nsCaret::GetCaretFrameForNodeOffset(nsFrameSelection*    aFrameSelection,
   // that text frame instead. This way, the caret will be positioned as if
   // trailing whitespace was not trimmed.
   AdjustCaretFrameForLineEnd(&theFrame, &theFrameOffset);
-  
+
   // Mamdouh : modification of the caret to work at rtl and ltr with Bidi
   //
   // Direction Style from visibility->mDirection
@@ -733,7 +724,7 @@ nsCaret::GetCaretFrameForNodeOffset(nsFrameSelection*    aFrameSelection,
     {
       nsPrevNextBidiLevels levels = aFrameSelection->
         GetPrevNextBidiLevels(aContentNode, aOffset, false);
-    
+
       /* Boundary condition, we need to know the Bidi levels of the characters before and after the caret */
       if (levels.mFrameBefore || levels.mFrameAfter)
       {
@@ -760,7 +751,7 @@ nsCaret::GetCaretFrameForNodeOffset(nsFrameSelection*    aFrameSelection,
                 theFrame->GetOffsets(start, end);
                 theFrameOffset = end;
               }
-              else 
+              else
               {
                 // if there is no frameBefore, we must be at the beginning of the line
                 // so we stay with the current frame.
@@ -795,7 +786,7 @@ nsCaret::GetCaretFrameForNodeOffset(nsFrameSelection*    aFrameSelection,
                 theFrame->GetOffsets(start, end);
                 theFrameOffset = start;
               }
-              else 
+              else
               {
                 // if there is no frameAfter, we must be at the end of the line
                 // so we stay with the current frame.
@@ -883,7 +874,7 @@ bool nsCaret::IsMenuPopupHidingCaret()
   if (popups.Length() == 0)
     return false; // No popups, so caret can't be hidden by them.
 
-  // Get the selection focus content, that's where the caret would 
+  // Get the selection focus content, that's where the caret would
   // go if it was drawn.
   nsCOMPtr<nsIDOMNode> node;
   nsCOMPtr<nsISelection> domSelection = do_QueryReferent(mDomSelectionWeak);

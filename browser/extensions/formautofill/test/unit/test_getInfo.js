@@ -96,29 +96,12 @@ const TESTCASES = [
     },
   },
   {
-    description: "2 address line inputs",
+    description: "address line input",
     document: `<label for="targetElement">street</label>
                <input id="targetElement" type="text">`,
     elementId: "targetElement",
-    fieldDetails: [{fieldName: "address-line1"}],
     expectedReturnValue: {
-      fieldName: "address-line2",
-      section: "",
-      addressType: "",
-      contactType: "",
-    },
-  },
-  {
-    description: "3 address line inputs",
-    document: `<label for="targetElement">street</label>
-               <input id="targetElement" type="text">`,
-    elementId: "targetElement",
-    fieldDetails: [
-      {fieldName: "address-line1"},
-      {fieldName: "address-line2"},
-    ],
-    expectedReturnValue: {
-      fieldName: "address-line3",
+      fieldName: "address-line1",
       section: "",
       addressType: "",
       contactType: "",
@@ -208,6 +191,54 @@ const TESTCASES = [
       contactType: "",
     },
   },
+  {
+    description: "Exclude United State string",
+    document: `<label>United State
+                 <input id="targetElement" />
+               </label>`,
+    elementId: "targetElement",
+    expectedReturnValue: null,
+  },
+  {
+    description: "\"County\" field with \"United State\" string",
+    document: `<label>United State County
+                 <input id="targetElement" />
+               </label>`,
+    elementId: "targetElement",
+    expectedReturnValue: {
+      fieldName: "address-level1",
+      section: "",
+      addressType: "",
+      contactType: "",
+    },
+  },
+  {
+    description: "\"city\" field with double \"United State\" string",
+    document: `<label>United State united sTATE city
+                 <input id="targetElement" />
+               </label>`,
+    elementId: "targetElement",
+    expectedReturnValue: {
+      fieldName: "address-level2",
+      section: "",
+      addressType: "",
+      contactType: "",
+    },
+  },
+  {
+    description: "Verify credit card number",
+    document: `<form>
+                 <label for="targetElement"> Card Number</label>
+                 <input id="targetElement" type="text">
+               </form>`,
+    elementId: "targetElement",
+    expectedReturnValue: {
+      fieldName: "cc-number",
+      section: "",
+      addressType: "",
+      contactType: "",
+    },
+  },
 ];
 
 TESTCASES.forEach(testcase => {
@@ -218,8 +249,9 @@ TESTCASES.forEach(testcase => {
       "http://localhost:8080/test/", testcase.document);
 
     let element = doc.getElementById(testcase.elementId);
-    let value = FormAutofillHeuristics.getInfo(element, testcase.fieldDetails);
+    let value = FormAutofillHeuristics.getInfo(element);
 
     Assert.deepEqual(value, testcase.expectedReturnValue);
+    LabelUtils.clearLabelMap();
   });
 });

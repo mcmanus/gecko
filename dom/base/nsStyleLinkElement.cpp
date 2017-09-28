@@ -33,6 +33,14 @@
 #include "nsContentUtils.h"
 #include "nsStyleUtil.h"
 #include "nsQueryObject.h"
+#include "nsIContentPolicy.h"
+#include "nsMimeTypes.h"
+#include "imgLoader.h"
+#include "MediaContainerType.h"
+#include "DecoderDoctorDiagnostics.h"
+#include "DecoderTraits.h"
+#include "MediaList.h"
+#include "nsAttrValueInlines.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -62,7 +70,7 @@ nsStyleLinkElement::Traverse(nsCycleCollectionTraversalCallback &cb)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mStyleSheet);
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsStyleLinkElement::SetStyleSheet(StyleSheet* aStyleSheet)
 {
   if (mStyleSheet) {
@@ -76,7 +84,7 @@ nsStyleLinkElement::SetStyleSheet(StyleSheet* aStyleSheet)
       mStyleSheet->SetOwningNode(node);
     }
   }
-    
+
   return NS_OK;
 }
 
@@ -86,7 +94,7 @@ nsStyleLinkElement::GetStyleSheet()
   return mStyleSheet;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsStyleLinkElement::InitStyleLinkElement(bool aDontLoadStyle)
 {
   mDontLoadStyle = aDontLoadStyle;
@@ -143,6 +151,8 @@ static uint32_t ToLinkMask(const nsAString& aLink)
     return nsStyleLinkElement::eALTERNATE;
   else if (aLink.EqualsLiteral("preconnect"))
     return nsStyleLinkElement::ePRECONNECT;
+  else if (aLink.EqualsLiteral("preload"))
+    return nsStyleLinkElement::ePRELOAD;
   else if (aLink.EqualsLiteral("prerender"))
     return nsStyleLinkElement::ePRERENDER;
   else
@@ -185,6 +195,126 @@ uint32_t nsStyleLinkElement::ParseLinkTypes(const nsAString& aTypes)
   return linkMask;
 }
 
+// We will use official mime-types from:
+// https://www.iana.org/assignments/media-types/media-types.xhtml#font
+// We do not support old deprecated mime-types for preload feature.
+// (We currectly do not support font/collection)
+static uint32_t StyleLinkElementFontMimeTypesNum = 5;
+static const char* StyleLinkElementFontMimeTypes[] = {
+  "font/otf",
+  "font/sfnt",
+  "font/ttf",
+  "font/woff",
+  "font/woff2"
+};
+
+bool
+IsFontMimeType(const nsAString& aType)
+{
+  if (aType.IsEmpty()) {
+    return true;
+  }
+  for (uint32_t i = 0; i < StyleLinkElementFontMimeTypesNum; i++) {
+    if (aType.EqualsASCII(StyleLinkElementFontMimeTypes[i])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool
+nsStyleLinkElement::CheckPreloadAttrs(const nsAttrValue& aAs,
+                                      const nsAString& aType,
+                                      const nsAString& aMedia,
+                                      nsIDocument* aDocument)
+{
+  nsContentPolicyType policyType = Link::AsValueToContentPolicy(aAs);
+  if (policyType == nsIContentPolicy::TYPE_INVALID) {
+    return false;
+  }
+
+  // Check if media attribute is valid.
+  if (!aMedia.IsEmpty()) {
+    RefPtr<MediaList> mediaList = MediaList::Create(aDocument->GetStyleBackendType(),
+                                                    aMedia);
+    nsIPresShell* shell = aDocument->GetShell();
+    if (!shell) {
+      return false;
+    }
+
+    nsPresContext* presContext = shell->GetPresContext();
+    if (!presContext) {
+      return false;
+    }
+    if (!mediaList->Matches(presContext)) {
+      return false;
+    }
+  }
+
+  if (aType.IsEmpty()) {
+    return true;
+  }
+
+  nsString type = nsString(aType);
+  ToLowerCase(type);
+
+  if (policyType == nsIContentPolicy::TYPE_OTHER) {
+    return true;
+
+  } else if (policyType == nsIContentPolicy::TYPE_MEDIA) {
+    if (aAs.GetEnumValue() == DESTINATION_TRACK) {
+      if (type.EqualsASCII("text/vtt")) {
+        return true;
+      } else {
+        return false;
+      }
+    }
+    Maybe<MediaContainerType> mimeType = MakeMediaContainerType(aType);
+    if (!mimeType) {
+      return false;
+    }
+    DecoderDoctorDiagnostics diagnostics;
+    CanPlayStatus status = DecoderTraits::CanHandleContainerType(*mimeType,
+                                                                 &diagnostics);
+    // Preload if this return CANPLAY_YES and CANPLAY_MAYBE.
+    if (status == CANPLAY_NO) {
+      return false;
+    } else {
+      return true;
+    }
+
+  } else if (policyType == nsIContentPolicy::TYPE_FONT) {
+    if (IsFontMimeType(type)) {
+      return true;
+    } else {
+      return false;
+    }
+
+  } else if (policyType == nsIContentPolicy::TYPE_IMAGE) {
+    if (imgLoader::SupportImageWithMimeType(NS_ConvertUTF16toUTF8(type).get(),
+                                            AcceptedMimeTypes::IMAGES_AND_DOCUMENTS)) {
+      return true;
+    } else {
+      return false;
+    }
+
+  } else if (policyType == nsIContentPolicy::TYPE_SCRIPT) {
+    if (nsContentUtils::IsJavascriptMIMEType(type)) {
+      return true;
+    } else {
+      return false;
+    }
+
+  } else if (policyType == nsIContentPolicy::TYPE_STYLESHEET) {
+    if (type.EqualsASCII("text/css")) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  return false;
+}
+
 NS_IMETHODIMP
 nsStyleLinkElement::UpdateStyleSheet(nsICSSLoaderObserver* aObserver,
                                      bool* aWillNotify,
@@ -224,7 +354,8 @@ IsScopedStyleElement(nsIContent* aContent)
   // if it is scoped.
   return (aContent->IsHTMLElement(nsGkAtoms::style) ||
           aContent->IsSVGElement(nsGkAtoms::style)) &&
-         aContent->HasAttr(kNameSpaceID_None, nsGkAtoms::scoped);
+         aContent->HasAttr(kNameSpaceID_None, nsGkAtoms::scoped) &&
+         aContent->OwnerDoc()->IsScopedStyleEnabled();
 }
 
 static bool
@@ -300,7 +431,7 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
   Element* oldScopeElement = nullptr;
   if (mStyleSheet) {
     if (mStyleSheet->IsServo()) {
-      NS_WARNING("stylo: ServoStyleSheets don't support <style scoped>");
+      // XXXheycam ServoStyleSheets don't support <style scoped>.
     } else {
       oldScopeElement = mStyleSheet->AsGecko()->GetScopeElement();
     }
@@ -391,6 +522,16 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
 
   bool doneLoading = false;
   nsresult rv = NS_OK;
+
+  // Load the link's referrerpolicy attribute. If the link does not provide a
+  // referrerpolicy attribute, ignore this and use the document's referrer
+  // policy
+
+  net::ReferrerPolicy referrerPolicy = GetLinkReferrerPolicy();
+  if (referrerPolicy == net::RP_Unset) {
+    referrerPolicy = doc->GetReferrerPolicy();
+  }
+
   if (isInline) {
     nsAutoString text;
     if (!nsContentUtils::GetNodeTextContent(thisContent, false, text, fallible)) {
@@ -408,7 +549,8 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
     // Parse the style sheet.
     rv = doc->CSSLoader()->
       LoadInlineStyle(thisContent, text, mLineNumber, title, media,
-                      scopeElement, aObserver, &doneLoading, &isAlternate);
+                      referrerPolicy, scopeElement, aObserver, &doneLoading,
+                      &isAlternate);
   }
   else {
     nsAutoString integrity;
@@ -417,15 +559,6 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
       MOZ_LOG(SRILogHelper::GetSriLog(), mozilla::LogLevel::Debug,
               ("nsStyleLinkElement::DoUpdateStyleSheet, integrity=%s",
                NS_ConvertUTF16toUTF8(integrity).get()));
-    }
-
-    // if referrer attributes are enabled in preferences, load the link's referrer
-    // attribute. If the link does not provide a referrer attribute, ignore this
-    // and use the document's referrer policy
-
-    net::ReferrerPolicy referrerPolicy = GetLinkReferrerPolicy();
-    if (referrerPolicy == net::RP_Unset) {
-      referrerPolicy = doc->GetReferrerPolicy();
     }
 
     // XXXbz clone the URI here to work around content policies modifying URIs.

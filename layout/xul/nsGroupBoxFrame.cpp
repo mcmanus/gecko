@@ -29,7 +29,6 @@ public:
   virtual nsresult GetXULBorderAndPadding(nsMargin& aBorderAndPadding) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
 #ifdef DEBUG_FRAME_DUMP
@@ -49,9 +48,9 @@ public:
   // our child box has no content node so it will search for a parent with one.
   // that will be us.
   virtual void GetInitialOrientation(bool& aHorizontal) override { aHorizontal = false; }
-  virtual bool GetInitialHAlignment(Halignment& aHalign) override { aHalign = hAlign_Left; return true; } 
-  virtual bool GetInitialVAlignment(Valignment& aValign) override { aValign = vAlign_Top; return true; } 
-  virtual bool GetInitialAutoStretch(bool& aStretch) override { aStretch = true; return true; } 
+  virtual bool GetInitialHAlignment(Halignment& aHalign) override { aHalign = hAlign_Left; return true; }
+  virtual bool GetInitialVAlignment(Valignment& aValign) override { aValign = vAlign_Top; return true; }
+  virtual bool GetInitialAutoStretch(bool& aStretch) override { aStretch = true; return true; }
 
   nsIFrame* GetCaptionBox(nsRect& aCaptionRect);
 };
@@ -69,7 +68,7 @@ public:
     return MakeFrameName("GroupBoxFrameInner", aResult);
   }
 #endif
-  
+
   // we are always flexible
   virtual bool GetDefaultFlex(int32_t& aFlex) { aFlex = 1; return true; }
 
@@ -101,7 +100,7 @@ public:
   nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) override;
   void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                  const nsDisplayItemGeometry* aGeometry,
-                                 nsRegion *aInvalidRegion) override;
+                                 nsRegion *aInvalidRegion) const override;
   virtual void HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
                        HitTestState* aState, nsTArray<nsIFrame*> *aOutFrames) override {
     aOutFrames->AppendElement(mFrame);
@@ -118,10 +117,9 @@ nsDisplayXULGroupBorder::AllocateGeometry(nsDisplayListBuilder* aBuilder)
 }
 
 void
-nsDisplayXULGroupBorder::ComputeInvalidationRegion(
-  nsDisplayListBuilder* aBuilder,
-  const nsDisplayItemGeometry* aGeometry,
-  nsRegion* aInvalidRegion)
+nsDisplayXULGroupBorder::ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
+                                                   const nsDisplayItemGeometry* aGeometry,
+                                                   nsRegion* aInvalidRegion) const
 {
   auto geometry =
     static_cast<const nsDisplayItemGenericImageGeometry*>(aGeometry);
@@ -147,7 +145,6 @@ nsDisplayXULGroupBorder::Paint(nsDisplayListBuilder* aBuilder,
 
 void
 nsGroupBoxFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                  const nsRect&           aDirtyRect,
                                   const nsDisplayListSet& aLists)
 {
   // Paint our background and border
@@ -157,11 +154,11 @@ nsGroupBoxFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       aLists.BorderBackground());
     aLists.BorderBackground()->AppendNewToTop(new (aBuilder)
       nsDisplayXULGroupBorder(aBuilder, this));
-    
+
     DisplayOutline(aBuilder, aLists);
   }
 
-  BuildDisplayListForChildren(aBuilder, aDirtyRect, aLists);
+  BuildDisplayListForChildren(aBuilder, aLists);
 }
 
 nsRect
@@ -247,7 +244,7 @@ nsGroupBoxFrame::PaintBorder(gfxContext& aRenderingContext,
       nsCSSRendering::PaintBorder(presContext, aRenderingContext, this,
                                   aDirtyRect, rect, mStyleContext,
                                   PaintBorderFlags::SYNC_DECODE_IMAGES, skipSides);
-  
+
     aRenderingContext.Restore();
     // draw bottom
 
@@ -262,7 +259,7 @@ nsGroupBoxFrame::PaintBorder(gfxContext& aRenderingContext,
       nsCSSRendering::PaintBorder(presContext, aRenderingContext, this,
                                   aDirtyRect, rect, mStyleContext,
                                   PaintBorderFlags::SYNC_DECODE_IMAGES, skipSides);
-    
+
     aRenderingContext.Restore();
   } else {
     result &=

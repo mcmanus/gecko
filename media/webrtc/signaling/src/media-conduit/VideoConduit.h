@@ -7,6 +7,7 @@
 
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/ReentrantMonitor.h"
 #include "mozilla/SharedThreadPool.h"
 #include "nsAutoPtr.h"
 #include "nsITimer.h"
@@ -255,14 +256,6 @@ public:
     mPCHandle = aPCHandle;
   }
 
-  unsigned short SendingWidth() override {
-    return mSendingWidth;
-  }
-
-  unsigned short SendingHeight() override {
-    return mSendingHeight;
-  }
-
   unsigned int SendingMaxFs() override {
     if(mCurSendCodecConfig) {
       return mCurSendCodecConfig->mEncodingConstraints.maxFs;
@@ -322,7 +315,8 @@ public:
                             double* framerateStdDev,
                             double* bitrateMean,
                             double* bitrateStdDev,
-                            uint32_t* discardedPackets) override;
+                            uint32_t* discardedPackets,
+                            uint32_t* framesDecoded) override;
   bool GetAVStats(int32_t* jitterBufferDelayMs,
                   int32_t* playoutBufferDelayMs,
                   int32_t* avSyncOffsetMs) override;
@@ -398,16 +392,22 @@ private:
      * @param aOutDiscPackets: number of discarded packets
      */
     void DiscardedPackets(uint32_t& aOutDiscPackets) const;
+   /**
+    * Returns the number of frames decoded
+    * @param aOutDiscPackets: number of frames decoded
+    */
+    void FramesDecoded(uint32_t& aFramesDecoded) const;
     void Update(const webrtc::VideoReceiveStream::Stats& aStats);
   private:
     uint32_t mDiscardedPackets = 0;
+    uint32_t mFramesDecoded = 0;
   };
   /*
    * Stores encoder configuration information and produces
    * a VideoEncoderConfig from it.
    */
   class VideoStreamFactory;
-  
+
   class VideoEncoderConfigBuilder {
   public:
     /**
@@ -443,7 +443,7 @@ private:
                                 webrtc::VideoCodec& cinst);
 
   //Checks the codec to be applied
-  MediaConduitErrorCode ValidateCodecConfig(const VideoCodecConfig* codecInfo, bool send);
+  MediaConduitErrorCode ValidateCodecConfig(const VideoCodecConfig* codecInfo);
 
   //Utility function to dump recv codec database
   void DumpCodecDB() const;
@@ -539,6 +539,8 @@ private:
   bool mLockScaling; // for tests that care about output resolution
   uint8_t mSpatialLayers;
   uint8_t mTemporalLayers;
+
+  rtc::VideoSinkWants mLastSinkWanted;
 
   static const unsigned int sAlphaNum = 7;
   static const unsigned int sAlphaDen = 8;

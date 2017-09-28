@@ -13,7 +13,7 @@
 #include "nsIURI.h"
 #include "nsIURL.h"
 #include "nsIChannel.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "nsReadableUtils.h"
 #include "nsNetUtil.h"
 #include "plstr.h"
@@ -569,7 +569,15 @@ nsXBLPrototypeBinding::GetRuleProcessor()
   return nullptr;
 }
 
-const ServoStyleSet*
+void
+nsXBLPrototypeBinding::ComputeServoStyleSet(nsPresContext* aPresContext)
+{
+  if (mResources) {
+    mResources->ComputeServoStyleSet(aPresContext);
+  }
+}
+
+ServoStyleSet*
 nsXBLPrototypeBinding::GetServoStyleSet() const
 {
   return mResources ? mResources->GetServoStyleSet() : nullptr;
@@ -635,7 +643,7 @@ nsXBLPrototypeBinding::ConstructAttributeTable(nsIContent* aElement)
         int32_t attributeNsID = kNameSpaceID_None;
 
         // Figure out if this token contains a :.
-        nsAutoString attrTok; attrTok.AssignWithConversion(token);
+        NS_ConvertASCIItoUTF16 attrTok(token);
         int32_t index = attrTok.Find("=", true);
         nsresult rv;
         if (index != -1) {
@@ -655,8 +663,7 @@ nsXBLPrototypeBinding::ConstructAttributeTable(nsIContent* aElement)
             return;
         }
         else {
-          nsAutoString tok;
-          tok.AssignWithConversion(token);
+          NS_ConvertASCIItoUTF16 tok(token);
           rv = nsContentUtils::SplitQName(aElement, tok, &atomNsID,
                                           getter_AddRefs(atom));
           if (NS_FAILED(rv))
@@ -1632,7 +1639,7 @@ nsXBLPrototypeBinding::ResolveBaseBinding()
     mBinding->UnsetAttr(kNameSpaceID_None, nsGkAtoms::display, false);
 
     return NS_NewURI(getter_AddRefs(mBaseBindingURI), value,
-                     doc->GetDocumentCharacterSet().get(),
+                     doc->GetDocumentCharacterSet(),
                      doc->GetDocBaseURI());
   }
 

@@ -32,7 +32,10 @@ ContentBridgeChild::~ContentBridgeChild()
 void
 ContentBridgeChild::ActorDestroy(ActorDestroyReason aWhy)
 {
-  MessageLoop::current()->PostTask(NewRunnableMethod(this, &ContentBridgeChild::DeferredDestroy));
+  MessageLoop::current()->PostTask(
+    NewRunnableMethod("dom::ContentBridgeChild::DeferredDestroy",
+                      this,
+                      &ContentBridgeChild::DeferredDestroy));
 }
 
 /*static*/ void
@@ -216,13 +219,6 @@ ContentBridgeChild::RecvDeactivate(PBrowserChild* aTab)
 {
   TabChild* tab = static_cast<TabChild*>(aTab);
   return tab->RecvDeactivate();
-}
-
-mozilla::ipc::IPCResult
-ContentBridgeChild::RecvParentActivated(PBrowserChild* aTab, const bool& aActivated)
-{
-  TabChild* tab = static_cast<TabChild*>(aTab);
-  return tab->RecvParentActivated(aActivated);
 }
 
 already_AddRefed<nsIEventTarget>

@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/mozalloc.h"           // for operator new
+#include "mozilla/dom/Selection.h"
 #include "nsAString.h"
 #include "nsComponentManagerUtils.h"    // for do_CreateInstance
 #include "nsComposerCommandsUpdater.h"
@@ -40,7 +41,8 @@ nsComposerCommandsUpdater::~nsComposerCommandsUpdater()
 }
 
 NS_IMPL_ISUPPORTS(nsComposerCommandsUpdater, nsISelectionListener,
-                  nsIDocumentStateListener, nsITransactionListener, nsITimerCallback)
+                  nsIDocumentStateListener, nsITransactionListener,
+                  nsITimerCallback, nsINamed)
 
 #if 0
 #pragma mark -
@@ -340,9 +342,7 @@ nsComposerCommandsUpdater::SelectionIsCollapsed()
     return false;
   }
 
-  bool selectionCollapsed = false;
-  domSelection->GetIsCollapsed(&selectionCollapsed);
-  return selectionCollapsed;
+  return domSelection->AsSelection()->IsCollapsed();
 }
 
 already_AddRefed<nsPICommandUpdater>
@@ -353,6 +353,13 @@ nsComposerCommandsUpdater::GetCommandUpdater()
   nsCOMPtr<nsICommandManager> manager = docShell->GetCommandManager();
   nsCOMPtr<nsPICommandUpdater> updater = do_QueryInterface(manager);
   return updater.forget();
+}
+
+NS_IMETHODIMP
+nsComposerCommandsUpdater::GetName(nsACString& aName)
+{
+  aName.AssignLiteral("nsComposerCommandsUpdater");
+  return NS_OK;
 }
 
 #if 0

@@ -18,6 +18,7 @@
 #include "LayerState.h"
 #include "Layers.h"
 #include "LayerUserData.h"
+#include "nsDisplayItemTypes.h"
 
 class nsDisplayListBuilder;
 class nsDisplayList;
@@ -207,7 +208,6 @@ struct ContainerLayerParameters {
     , mInTransformedSubtree(false)
     , mInActiveTransformedSubtree(false)
     , mDisableSubpixelAntialiasingInDescendants(false)
-    , mInLowPrecisionDisplayPort(false)
     , mForEventsAndPluginsOnly(false)
     , mLayerCreationHint(layers::LayerManager::NONE)
   {}
@@ -221,7 +221,6 @@ struct ContainerLayerParameters {
     , mInTransformedSubtree(false)
     , mInActiveTransformedSubtree(false)
     , mDisableSubpixelAntialiasingInDescendants(false)
-    , mInLowPrecisionDisplayPort(false)
     , mForEventsAndPluginsOnly(false)
     , mLayerCreationHint(layers::LayerManager::NONE)
   {}
@@ -238,7 +237,6 @@ struct ContainerLayerParameters {
     , mInTransformedSubtree(aParent.mInTransformedSubtree)
     , mInActiveTransformedSubtree(aParent.mInActiveTransformedSubtree)
     , mDisableSubpixelAntialiasingInDescendants(aParent.mDisableSubpixelAntialiasingInDescendants)
-    , mInLowPrecisionDisplayPort(aParent.mInLowPrecisionDisplayPort)
     , mForEventsAndPluginsOnly(aParent.mForEventsAndPluginsOnly)
     , mLayerCreationHint(aParent.mLayerCreationHint)
   {}
@@ -271,7 +269,6 @@ struct ContainerLayerParameters {
   bool mInTransformedSubtree;
   bool mInActiveTransformedSubtree;
   bool mDisableSubpixelAntialiasingInDescendants;
-  bool mInLowPrecisionDisplayPort;
   bool mForEventsAndPluginsOnly;
   layers::LayerManager::PaintedLayerCreationHint mLayerCreationHint;
 
@@ -289,15 +286,15 @@ struct ContainerLayerParameters {
 };
 
 /**
- * The FrameLayerBuilder is responsible for converting display lists 
+ * The FrameLayerBuilder is responsible for converting display lists
  * into layer trees. Every LayerManager needs a unique FrameLayerBuilder
  * to build layers.
- * 
+ *
  * The most important API in this class is BuildContainerLayerFor. This
  * method takes a display list as input and constructs a ContainerLayer
  * with child layers that render the contents of the display list. It
  * records the relationship between frames and layers.
- * 
+ *
  * That data enables us to retain layer trees. When constructing a
  * ContainerLayer, we first check to see if there's an existing
  * ContainerLayer for the same frame that can be recycled. If we recycle
@@ -306,12 +303,12 @@ struct ContainerLayerParameters {
  * recycling layers deterministically, we can ensure that when nothing
  * changes in a display list, we will reuse the existing layers without
  * changes.
- * 
+ *
  * We expose a GetLeafLayerFor method that can be called by display items
  * that make their own layers (e.g. canvas and video); this method
  * locates the last layer used to render the display item, if any, and
  * return it as a candidate for recycling.
- * 
+ *
  * FrameLayerBuilder sets up PaintedLayers so that 0,0 in the Painted layer
  * corresponds to the (pixel-snapped) top-left of the aAnimatedGeometryRoot.
  * It sets up ContainerLayers so that 0,0 in the container layer
@@ -426,7 +423,7 @@ public:
    * for the given display item key. If there isn't one, we return null,
    * otherwise we return the layer.
    */
-  static Layer* GetDedicatedLayer(nsIFrame* aFrame, uint32_t aDisplayItemKey);
+  static Layer* GetDedicatedLayer(nsIFrame* aFrame, DisplayItemType aDisplayItemType);
 
   /**
    * This callback must be provided to EndTransaction. The callback data
@@ -500,8 +497,8 @@ public:
    * and each subsequent merged frame if no layer is found for the underlying
    * frame.
    */
-  Layer* GetOldLayerFor(nsDisplayItem* aItem, 
-                        nsDisplayItemGeometry** aOldGeometry = nullptr, 
+  Layer* GetOldLayerFor(nsDisplayItem* aItem,
+                        nsDisplayItemGeometry** aOldGeometry = nullptr,
                         DisplayItemClip** aOldClip = nullptr);
 
   void ClearCachedGeometry(nsDisplayItem* aItem);
@@ -583,11 +580,11 @@ public:
   /**
    * Stores a Layer as the dedicated layer in the DisplayItemData for a given frame/key pair.
    *
-   * Used when we optimize a PaintedLayer into an ImageLayer and want to retroactively update the 
+   * Used when we optimize a PaintedLayer into an ImageLayer and want to retroactively update the
    * DisplayItemData so we can retrieve the layer from within layout.
    */
   void StoreOptimizedLayerForFrame(nsDisplayItem* aItem, Layer* aLayer);
-  
+
   static void RemoveFrameFromLayerManager(const nsIFrame* aFrame,
                                           SmallPointerArray<DisplayItemData>& aArray);
 
@@ -630,14 +627,14 @@ protected:
    * Get the DisplayItemData associated with this frame / display item pair,
    * using the LayerManager instead of FrameLayerBuilder.
    */
-  static DisplayItemData* GetDisplayItemDataForManager(nsIFrame* aFrame, 
-                                                       uint32_t aDisplayItemKey, 
+  static DisplayItemData* GetDisplayItemDataForManager(nsIFrame* aFrame,
+                                                       uint32_t aDisplayItemKey,
                                                        LayerManager* aManager);
-  static DisplayItemData* GetDisplayItemDataForManager(nsIFrame* aFrame, 
+  static DisplayItemData* GetDisplayItemDataForManager(nsIFrame* aFrame,
                                                        uint32_t aDisplayItemKey);
   static DisplayItemData* GetDisplayItemDataForManager(nsDisplayItem* aItem, LayerManager* aManager);
-  static DisplayItemData* GetDisplayItemDataForManager(nsIFrame* aFrame, 
-                                                       uint32_t aDisplayItemKey, 
+  static DisplayItemData* GetDisplayItemDataForManager(nsIFrame* aFrame,
+                                                       uint32_t aDisplayItemKey,
                                                        LayerManagerData* aData);
 
   /**
@@ -677,7 +674,6 @@ protected:
   void PaintItems(nsTArray<ClippedDisplayItem>& aItems,
                   const nsIntRect& aRect,
                   gfxContext* aContext,
-                  gfxContext* aRC,
                   nsDisplayListBuilder* aBuilder,
                   nsPresContext* aPresContext,
                   const nsIntPoint& aOffset,

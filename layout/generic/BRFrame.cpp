@@ -34,8 +34,10 @@ public:
   virtual ContentOffsets CalcContentOffsetsFromFramePoint(nsPoint aPoint) override;
 
   virtual FrameSearchResult PeekOffsetNoAmount(bool aForward, int32_t* aOffset) override;
-  virtual FrameSearchResult PeekOffsetCharacter(bool aForward, int32_t* aOffset,
-                                     bool aRespectClusters = true) override;
+  virtual FrameSearchResult
+  PeekOffsetCharacter(bool aForward, int32_t* aOffset,
+                      PeekOffsetCharacterOptions aOptions =
+                        PeekOffsetCharacterOptions()) override;
   virtual FrameSearchResult PeekOffsetWord(bool aForward, bool aWordSelectEatSpace,
                               bool aIsKeyboardSelect, int32_t* aOffset,
                               PeekWordState* aState) override;
@@ -96,6 +98,8 @@ BRFrame::Reflow(nsPresContext* aPresContext,
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("BRFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aMetrics, aStatus);
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
+
   WritingMode wm = aReflowInput.GetWritingMode();
   LogicalSize finalSize(wm);
   finalSize.BSize(wm) = 0; // BR frames with block size 0 are ignored in quirks
@@ -158,12 +162,8 @@ BRFrame::Reflow(nsPresContext* aPresContext,
       breakType = StyleClear::Line;
     }
 
-    aStatus.Reset();
     aStatus.SetInlineLineBreakAfter(breakType);
     ll->SetLineEndsInBR(true);
-  }
-  else {
-    aStatus.Reset();
   }
 
   aMetrics.SetSize(wm, finalSize);
@@ -244,7 +244,7 @@ BRFrame::PeekOffsetNoAmount(bool aForward, int32_t* aOffset)
 
 nsIFrame::FrameSearchResult
 BRFrame::PeekOffsetCharacter(bool aForward, int32_t* aOffset,
-                             bool aRespectClusters)
+                             PeekOffsetCharacterOptions aOptions)
 {
   NS_ASSERTION (aOffset && *aOffset <= 1, "aOffset out of range");
   // Keep going. The actual line jumping will stop us.

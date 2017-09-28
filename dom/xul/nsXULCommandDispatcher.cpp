@@ -110,7 +110,10 @@ nsXULCommandDispatcher::GetRootFocusedContentAndWindow(nsPIDOMWindowOuter** aWin
 
   if (nsCOMPtr<nsPIDOMWindowOuter> win = mDocument->GetWindow()) {
     if (nsCOMPtr<nsPIDOMWindowOuter> rootWindow = win->GetPrivateRoot()) {
-      return nsFocusManager::GetFocusedDescendant(rootWindow, true, aWindow);
+      return nsFocusManager::GetFocusedDescendant(
+                               rootWindow,
+                               nsFocusManager::eIncludeAllDescendants,
+                               aWindow);
     }
   }
 
@@ -262,9 +265,9 @@ nsXULCommandDispatcher::AddCommandUpdater(nsIDOMElement* aElement,
 
 #ifdef DEBUG
       if (MOZ_LOG_TEST(gCommandLog, LogLevel::Debug)) {
-        nsAutoCString eventsC, targetsC, aeventsC, atargetsC; 
-        eventsC.AssignWithConversion(updater->mEvents);
-        targetsC.AssignWithConversion(updater->mTargets);
+        nsAutoCString eventsC, targetsC, aeventsC, atargetsC;
+        LossyCopyUTF16toASCII(updater->mEvents, eventsC);
+        LossyCopyUTF16toASCII(updater->mTargets, targetsC);
         CopyUTF16toUTF8(aEvents, aeventsC);
         CopyUTF16toUTF8(aTargets, atargetsC);
         MOZ_LOG(gCommandLog, LogLevel::Debug,
@@ -290,7 +293,7 @@ nsXULCommandDispatcher::AddCommandUpdater(nsIDOMElement* aElement,
   }
 #ifdef DEBUG
   if (MOZ_LOG_TEST(gCommandLog, LogLevel::Debug)) {
-    nsAutoCString aeventsC, atargetsC; 
+    nsAutoCString aeventsC, atargetsC;
     CopyUTF16toUTF8(aEvents, aeventsC);
     CopyUTF16toUTF8(aTargets, atargetsC);
 
@@ -321,9 +324,9 @@ nsXULCommandDispatcher::RemoveCommandUpdater(nsIDOMElement* aElement)
     if (updater->mElement == aElement) {
 #ifdef DEBUG
       if (MOZ_LOG_TEST(gCommandLog, LogLevel::Debug)) {
-        nsAutoCString eventsC, targetsC; 
-        eventsC.AssignWithConversion(updater->mEvents);
-        targetsC.AssignWithConversion(updater->mTargets);
+        nsAutoCString eventsC, targetsC;
+        LossyCopyUTF16toASCII(updater->mEvents, eventsC);
+        LossyCopyUTF16toASCII(updater->mTargets, targetsC);
         MOZ_LOG(gCommandLog, LogLevel::Debug,
                ("xulcmd[%p] remove  %p(events=%s targets=%s)",
                 this, aElement,
@@ -389,7 +392,7 @@ nsXULCommandDispatcher::UpdateCommands(const nsAString& aEventName)
 
 #ifdef DEBUG
     if (MOZ_LOG_TEST(gCommandLog, LogLevel::Debug)) {
-      nsAutoCString aeventnameC; 
+      nsAutoCString aeventnameC;
       CopyUTF16toUTF8(aEventName, aeventnameC);
       MOZ_LOG(gCommandLog, LogLevel::Debug,
              ("xulcmd[%p] update %p event=%s",
@@ -405,7 +408,7 @@ nsXULCommandDispatcher::UpdateCommands(const nsAString& aEventName)
 }
 
 bool
-nsXULCommandDispatcher::Matches(const nsString& aList, 
+nsXULCommandDispatcher::Matches(const nsString& aList,
                                 const nsAString& aElement)
 {
   if (aList.EqualsLiteral("*"))
@@ -438,7 +441,7 @@ nsXULCommandDispatcher::GetControllers(nsIControllers** aResult)
   nsCOMPtr<nsPIWindowRoot> root = GetWindowRoot();
   NS_ENSURE_TRUE(root, NS_ERROR_FAILURE);
 
-  return root->GetControllers(aResult);
+  return root->GetControllers(false /* for any window */, aResult);
 }
 
 NS_IMETHODIMP
@@ -447,7 +450,8 @@ nsXULCommandDispatcher::GetControllerForCommand(const char *aCommand, nsIControl
   nsCOMPtr<nsPIWindowRoot> root = GetWindowRoot();
   NS_ENSURE_TRUE(root, NS_ERROR_FAILURE);
 
-  return root->GetControllerForCommand(aCommand, _retval);
+  return root->GetControllerForCommand(aCommand, false /* for any window */,
+                                       _retval);
 }
 
 NS_IMETHODIMP

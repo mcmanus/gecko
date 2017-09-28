@@ -68,7 +68,6 @@ public:
   virtual void UnionChildOverflow(nsOverflowAreas& aOverflowAreas) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual void Init(nsIContent*       aContent,
@@ -153,7 +152,7 @@ public:
       InvalidateFrame();
     }
   }
-  
+
   void ClearInvalidRegion() { mInvalidRegion.SetEmpty(); }
 
   const nsRegion& GetInvalidRegion() {
@@ -171,7 +170,7 @@ protected:
   bool mCallingReflowSVG;
 
   /* Returns true if our content is the document element and our document is
-   * embedded in an HTML 'object', 'embed' or 'applet' element. Set
+   * embedded in an HTML 'object' or 'embed' element. Set
    * aEmbeddingFrame to obtain the nsIFrame for the embedding HTML element.
    */
   bool IsRootOfReplacedElementSubDoc(nsIFrame **aEmbeddingFrame = nullptr);
@@ -188,9 +187,7 @@ protected:
   // subtree if we were to use a list (see bug 381285 comment 20).
   nsAutoPtr<nsTHashtable<nsPtrHashKey<nsSVGForeignObjectFrame> > > mForeignObjectHash;
 
-  nsAutoPtr<gfxMatrix> mCanvasTM;
-
-  nsRegion mInvalidRegion; 
+  nsRegion mInvalidRegion;
 
   float mFullZoom;
 

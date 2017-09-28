@@ -4,8 +4,10 @@
 // corresponding Java methods and rerun the build. Manually updating this file
 // will cause your build to fail.
 
+#ifndef MOZ_PREPROCESSOR
 #include "GeneratedJNIWrappers.h"
 #include "mozilla/jni/Accessors.h"
+#endif
 
 namespace mozilla {
 namespace java {
@@ -188,7 +190,7 @@ auto GeckoAppShell::EnableBatteryNotifications() -> void
 constexpr char GeckoAppShell::EnableLocation_t::name[];
 constexpr char GeckoAppShell::EnableLocation_t::signature[];
 
-auto GeckoAppShell::EnableLocation(bool a0) -> void
+auto GeckoAppShell::EnableLocation(bool a0) -> bool
 {
     return mozilla::jni::Method<EnableLocation_t>::Call(GeckoAppShell::Context(), nullptr, a0);
 }
@@ -465,14 +467,6 @@ auto GeckoAppShell::KillAnyZombies() -> void
     return mozilla::jni::Method<KillAnyZombies_t>::Call(GeckoAppShell::Context(), nullptr);
 }
 
-constexpr char GeckoAppShell::LoadPluginClass_t::name[];
-constexpr char GeckoAppShell::LoadPluginClass_t::signature[];
-
-auto GeckoAppShell::LoadPluginClass(mozilla::jni::String::Param a0, mozilla::jni::String::Param a1) -> mozilla::jni::Class::LocalRef
-{
-    return mozilla::jni::Method<LoadPluginClass_t>::Call(GeckoAppShell::Context(), nullptr, a0, a1);
-}
-
 constexpr char GeckoAppShell::LockScreenOrientation_t::name[];
 constexpr char GeckoAppShell::LockScreenOrientation_t::signature[];
 
@@ -648,9 +642,9 @@ auto GeckoEditableChild::NotifyIME(int32_t a0) const -> void
 constexpr char GeckoEditableChild::NotifyIMEContext_t::name[];
 constexpr char GeckoEditableChild::NotifyIMEContext_t::signature[];
 
-auto GeckoEditableChild::NotifyIMEContext(int32_t a0, mozilla::jni::String::Param a1, mozilla::jni::String::Param a2, mozilla::jni::String::Param a3) const -> void
+auto GeckoEditableChild::NotifyIMEContext(int32_t a0, mozilla::jni::String::Param a1, mozilla::jni::String::Param a2, mozilla::jni::String::Param a3, bool a4, bool a5) const -> void
 {
-    return mozilla::jni::Method<NotifyIMEContext_t>::Call(GeckoEditableChild::mCtx, nullptr, a0, a1, a2, a3);
+    return mozilla::jni::Method<NotifyIMEContext_t>::Call(GeckoEditableChild::mCtx, nullptr, a0, a1, a2, a3, a4, a5);
 }
 
 constexpr char GeckoEditableChild::OnDefaultKeyEvent_t::name[];
@@ -735,6 +729,9 @@ auto GeckoThread::CheckAndSetState(mozilla::jni::Object::Param a0, mozilla::jni:
     return mozilla::jni::Method<CheckAndSetState_t>::Call(GeckoThread::Context(), nullptr, a0, a1);
 }
 
+constexpr char GeckoThread::ForceQuit_t::name[];
+constexpr char GeckoThread::ForceQuit_t::signature[];
+
 constexpr char GeckoThread::IsChildProcess_t::name[];
 constexpr char GeckoThread::IsChildProcess_t::signature[];
 
@@ -804,6 +801,19 @@ auto GeckoThread::MsgQueue() -> mozilla::jni::Object::LocalRef
 auto GeckoThread::MsgQueue(mozilla::jni::Object::Param a0) -> void
 {
     return mozilla::jni::Field<MsgQueue_t>::Set(GeckoThread::Context(), nullptr, a0);
+}
+
+constexpr char GeckoThread::UiThreadId_t::name[];
+constexpr char GeckoThread::UiThreadId_t::signature[];
+
+auto GeckoThread::UiThreadId() -> int32_t
+{
+    return mozilla::jni::Field<UiThreadId_t>::Get(GeckoThread::Context(), nullptr);
+}
+
+auto GeckoThread::UiThreadId(int32_t a0) -> void
+{
+    return mozilla::jni::Field<UiThreadId_t>::Set(GeckoThread::Context(), nullptr, a0);
 }
 
 const char GeckoThread::State::name[] =
@@ -1048,9 +1058,9 @@ auto GeckoLayerClient::SynthesizeNativeTouchPoint(int32_t a0, int32_t a1, int32_
 constexpr char GeckoLayerClient::UpdateRootFrameMetrics_t::name[];
 constexpr char GeckoLayerClient::UpdateRootFrameMetrics_t::signature[];
 
-auto GeckoLayerClient::UpdateRootFrameMetrics(float a0, float a1, float a2, float a3, float a4, float a5, float a6) const -> void
+auto GeckoLayerClient::UpdateRootFrameMetrics(float a0, float a1, float a2) const -> void
 {
-    return mozilla::jni::Method<UpdateRootFrameMetrics_t>::Call(GeckoLayerClient::mCtx, nullptr, a0, a1, a2, a3, a4, a5, a6);
+    return mozilla::jni::Method<UpdateRootFrameMetrics_t>::Call(GeckoLayerClient::mCtx, nullptr, a0, a1, a2);
 }
 
 const char GeckoSurface::name[] =
@@ -1167,17 +1177,6 @@ constexpr char GeckoSurfaceTexture::UpdateTexImage_t::signature[];
 auto GeckoSurfaceTexture::UpdateTexImage() const -> void
 {
     return mozilla::jni::Method<UpdateTexImage_t>::Call(GeckoSurfaceTexture::mCtx, nullptr);
-}
-
-const char ImmutableViewportMetrics::name[] =
-        "org/mozilla/gecko/gfx/ImmutableViewportMetrics";
-
-constexpr char ImmutableViewportMetrics::New_t::name[];
-constexpr char ImmutableViewportMetrics::New_t::signature[];
-
-auto ImmutableViewportMetrics::New(float a0, float a1, float a2, float a3, float a4, float a5, float a6, float a7, float a8, float a9, int32_t a10, int32_t a11, float a12) -> ImmutableViewportMetrics::LocalRef
-{
-    return mozilla::jni::Constructor<New_t>::Call(ImmutableViewportMetrics::Context(), nullptr, a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12);
 }
 
 const char LayerView::name[] =
@@ -2056,6 +2055,38 @@ constexpr char GeckoHLSResourceWrapper::GetPlayerId_t::signature[];
 auto GeckoHLSResourceWrapper::GetPlayerId() const -> int32_t
 {
     return mozilla::jni::Method<GetPlayerId_t>::Call(GeckoHLSResourceWrapper::mCtx, nullptr);
+}
+
+constexpr char GeckoHLSResourceWrapper::Pause_t::name[];
+constexpr char GeckoHLSResourceWrapper::Pause_t::signature[];
+
+auto GeckoHLSResourceWrapper::Pause() const -> void
+{
+    return mozilla::jni::Method<Pause_t>::Call(GeckoHLSResourceWrapper::mCtx, nullptr);
+}
+
+constexpr char GeckoHLSResourceWrapper::Play_t::name[];
+constexpr char GeckoHLSResourceWrapper::Play_t::signature[];
+
+auto GeckoHLSResourceWrapper::Play() const -> void
+{
+    return mozilla::jni::Method<Play_t>::Call(GeckoHLSResourceWrapper::mCtx, nullptr);
+}
+
+constexpr char GeckoHLSResourceWrapper::Resume_t::name[];
+constexpr char GeckoHLSResourceWrapper::Resume_t::signature[];
+
+auto GeckoHLSResourceWrapper::Resume() const -> void
+{
+    return mozilla::jni::Method<Resume_t>::Call(GeckoHLSResourceWrapper::mCtx, nullptr);
+}
+
+constexpr char GeckoHLSResourceWrapper::Suspend_t::name[];
+constexpr char GeckoHLSResourceWrapper::Suspend_t::signature[];
+
+auto GeckoHLSResourceWrapper::Suspend() const -> void
+{
+    return mozilla::jni::Method<Suspend_t>::Call(GeckoHLSResourceWrapper::mCtx, nullptr);
 }
 
 const char GeckoHLSResourceWrapper::Callbacks::name[] =

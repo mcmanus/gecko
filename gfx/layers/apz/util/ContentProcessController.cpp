@@ -9,6 +9,7 @@
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/APZChild.h"
+#include "nsIContentInlines.h"
 
 #include "InputData.h"                  // for InputData
 
@@ -89,6 +90,19 @@ void
 ContentProcessController::NotifyAsyncScrollbarDragRejected(const FrameMetrics::ViewID& aScrollId)
 {
   APZCCallbackHelper::NotifyAsyncScrollbarDragRejected(aScrollId);
+}
+
+void
+ContentProcessController::NotifyAutoscrollHandledByAPZ(const FrameMetrics::ViewID& aScrollId)
+{
+  APZCCallbackHelper::NotifyAutoscrollHandledByAPZ(aScrollId);
+}
+
+void
+ContentProcessController::CancelAutoscroll(const ScrollableLayerGuid& aGuid)
+{
+  // This should never get called
+  MOZ_ASSERT_UNREACHABLE("Unexpected message to content process");
 }
 
 void

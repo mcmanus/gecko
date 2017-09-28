@@ -33,6 +33,7 @@ namespace jit {
     _(JSOP_NOP)                \
     _(JSOP_NOP_DESTRUCTURING)  \
     _(JSOP_LABEL)              \
+    _(JSOP_ITERNEXT)           \
     _(JSOP_POP)                \
     _(JSOP_POPN)               \
     _(JSOP_DUPAT)              \
@@ -122,6 +123,9 @@ namespace jit {
     _(JSOP_CALLELEM)           \
     _(JSOP_DELELEM)            \
     _(JSOP_STRICTDELELEM)      \
+    _(JSOP_GETELEM_SUPER)      \
+    _(JSOP_SETELEM_SUPER)      \
+    _(JSOP_STRICTSETELEM_SUPER) \
     _(JSOP_IN)                 \
     _(JSOP_HASOWN)             \
     _(JSOP_GETGNAME)           \
@@ -136,6 +140,9 @@ namespace jit {
     _(JSOP_CALLPROP)           \
     _(JSOP_DELPROP)            \
     _(JSOP_STRICTDELPROP)      \
+    _(JSOP_GETPROP_SUPER)      \
+    _(JSOP_SETPROP_SUPER)      \
+    _(JSOP_STRICTSETPROP_SUPER) \
     _(JSOP_LENGTH)             \
     _(JSOP_GETBOUNDNAME)       \
     _(JSOP_GETALIASEDVAR)      \

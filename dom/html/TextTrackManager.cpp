@@ -12,7 +12,6 @@
 #include "mozilla/dom/TextTrackCue.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/ClearOnShutdown.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Telemetry.h"
 #include "nsComponentManagerUtils.h"
 #include "nsGlobalWindow.h"
@@ -131,6 +130,7 @@ TextTrackManager::TextTrackManager(HTMLMediaElement *aMediaElement)
   if (!sParserWrapper) {
     nsCOMPtr<nsIWebVTTParserWrapper> parserWrapper =
       do_CreateInstance(NS_WEBVTTPARSERWRAPPER_CONTRACTID);
+    MOZ_ASSERT(parserWrapper, "Can't create nsIWebVTTParserWrapper");
     sParserWrapper = parserWrapper;
     ClearOnShutdown(&sParserWrapper);
   }
@@ -170,8 +170,10 @@ TextTrackManager::AddTextTrack(TextTrackKind aKind, const nsAString& aLabel,
   ReportTelemetryForTrack(track);
 
   if (aTextTrackSource == TextTrackSource::Track) {
-    RefPtr<nsIRunnable> task =
-      NewRunnableMethod(this, &TextTrackManager::HonorUserPreferencesForTrackSelection);
+    RefPtr<nsIRunnable> task = NewRunnableMethod(
+      "dom::TextTrackManager::HonorUserPreferencesForTrackSelection",
+      this,
+      &TextTrackManager::HonorUserPreferencesForTrackSelection);
     nsContentUtils::RunInStableState(task.forget());
   }
 
@@ -190,8 +192,10 @@ TextTrackManager::AddTextTrack(TextTrack* aTextTrack)
   ReportTelemetryForTrack(aTextTrack);
 
   if (aTextTrack->GetTextTrackSource() == TextTrackSource::Track) {
-    RefPtr<nsIRunnable> task =
-      NewRunnableMethod(this, &TextTrackManager::HonorUserPreferencesForTrackSelection);
+    RefPtr<nsIRunnable> task = NewRunnableMethod(
+      "dom::TextTrackManager::HonorUserPreferencesForTrackSelection",
+      this,
+      &TextTrackManager::HonorUserPreferencesForTrackSelection);
     nsContentUtils::RunInStableState(task.forget());
   }
 }
@@ -260,7 +264,7 @@ TextTrackManager::UpdateCueDisplay()
   WEBVTT_LOG("UpdateCueDisplay");
   mUpdateCueDisplayDispatched = false;
 
-  if (!mMediaElement || !mTextTracks) {
+  if (!mMediaElement || !mTextTracks || IsShutdown()) {
     return;
   }
 
@@ -281,7 +285,7 @@ TextTrackManager::UpdateCueDisplay()
 
   if (showingCues.Length() > 0) {
     WEBVTT_LOG("UpdateCueDisplay ProcessCues");
-    WEBVTT_LOGV("UpdateCueDisplay showingCues.Length() %" PRIuSIZE, showingCues.Length());
+    WEBVTT_LOGV("UpdateCueDisplay showingCues.Length() %zu", showingCues.Length());
     RefPtr<nsVariantCC> jsCues = new nsVariantCC();
 
     jsCues->SetAsArray(nsIDataType::VTYPE_INTERFACE,
@@ -483,12 +487,15 @@ class SimpleTextTrackEvent : public Runnable
 {
 public:
   friend class CompareSimpleTextTrackEvents;
-  SimpleTextTrackEvent(const nsAString& aEventName, double aTime,
-                       TextTrack* aTrack, TextTrackCue* aCue)
-  : mName(aEventName),
-    mTime(aTime),
-    mTrack(aTrack),
-    mCue(aCue)
+  SimpleTextTrackEvent(const nsAString& aEventName,
+                       double aTime,
+                       TextTrack* aTrack,
+                       TextTrackCue* aCue)
+    : Runnable("dom::SimpleTextTrackEvent")
+    , mName(aEventName)
+    , mTime(aTime)
+    , mTrack(aTrack)
+    , mCue(aCue)
   {}
 
   NS_IMETHOD Run() {
@@ -496,6 +503,14 @@ public:
       mCue.get(), NS_ConvertUTF16toUTF8(mName).get(), mTime);
     mCue->DispatchTrustedEvent(mName);
     return NS_OK;
+  }
+
+  void Dispatch() {
+    if (nsCOMPtr<nsIGlobalObject> global = mCue->GetOwnerGlobal()) {
+      global->Dispatch(TaskCategory::Other, do_AddRef(this));
+    } else {
+      NS_DispatchToMainThread(do_AddRef(this));
+    }
   }
 
 private:
@@ -618,14 +633,16 @@ private:
 void
 TextTrackManager::DispatchUpdateCueDisplay()
 {
-  if (!mUpdateCueDisplayDispatched && !mShutdown &&
+  if (!mUpdateCueDisplayDispatched && !IsShutdown() &&
       (mMediaElement->GetHasUserInteraction() || mMediaElement->IsCurrentlyPlaying())) {
     WEBVTT_LOG("DispatchUpdateCueDisplay");
     nsPIDOMWindowInner* win = mMediaElement->OwnerDoc()->GetInnerWindow();
     if (win) {
       nsGlobalWindow::Cast(win)->Dispatch(
-        "TextTrackManager::UpdateCueDisplay", TaskCategory::Other,
-        NewRunnableMethod(this, &TextTrackManager::UpdateCueDisplay));
+        TaskCategory::Other,
+        NewRunnableMethod("dom::TextTrackManager::UpdateCueDisplay",
+                          this,
+                          &TextTrackManager::UpdateCueDisplay));
       mUpdateCueDisplayDispatched = true;
     }
   }
@@ -638,14 +655,16 @@ TextTrackManager::DispatchTimeMarchesOn()
   // enqueue the current playback position and whether only that changed
   // through its usual monotonic increase during normal playback; current
   // executing call upon completion will check queue for further 'work'.
-  if (!mTimeMarchesOnDispatched && !mShutdown &&
+  if (!mTimeMarchesOnDispatched && !IsShutdown() &&
       (mMediaElement->GetHasUserInteraction() || mMediaElement->IsCurrentlyPlaying())) {
     WEBVTT_LOG("DispatchTimeMarchesOn");
     nsPIDOMWindowInner* win = mMediaElement->OwnerDoc()->GetInnerWindow();
     if (win) {
       nsGlobalWindow::Cast(win)->Dispatch(
-        "TextTrackManager::TimeMarchesOn", TaskCategory::Other,
-        NewRunnableMethod(this, &TextTrackManager::TimeMarchesOn));
+        TaskCategory::Other,
+        NewRunnableMethod("dom::TextTrackManager::TimeMarchesOn",
+                          this,
+                          &TextTrackManager::TimeMarchesOn));
       mTimeMarchesOnDispatched = true;
     }
   }
@@ -660,7 +679,7 @@ TextTrackManager::TimeMarchesOn()
   mTimeMarchesOnDispatched = false;
 
   // Early return if we don't have any TextTracks or shutting down.
-  if (!mTextTracks || mTextTracks->Length() == 0 || mShutdown) {
+  if (!mTextTracks || mTextTracks->Length() == 0 || IsShutdown()) {
     return;
   }
 
@@ -839,7 +858,7 @@ TextTrackManager::TimeMarchesOn()
 
   // Fire the eventList
   for (uint32_t i = 0; i < eventList.Length(); ++i) {
-    NS_DispatchToMainThread(eventList[i].forget());
+    eventList[i]->Dispatch();
   }
 
   // Step 16.
@@ -909,6 +928,11 @@ TextTrackManager::IsLoaded()
   return mTextTracks ? mTextTracks->AreTextTracksLoaded() : true;
 }
 
+bool
+TextTrackManager::IsShutdown() const
+{
+  return (mShutdown || !sParserWrapper);
+}
 
 } // namespace dom
 } // namespace mozilla

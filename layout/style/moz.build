@@ -109,6 +109,7 @@ EXPORTS.mozilla += [
     'ServoDocumentRule.h',
     'ServoElementSnapshot.h',
     'ServoElementSnapshotTable.h',
+    'ServoFontFeatureValuesRule.h',
     'ServoImportRule.h',
     'ServoKeyframeRule.h',
     'ServoKeyframesRule.h',
@@ -119,6 +120,7 @@ EXPORTS.mozilla += [
     'ServoPropPrefList.h',
     'ServoSpecifiedValues.h',
     'ServoStyleContext.h',
+    'ServoStyleContextInlines.h',
     'ServoStyleRule.h',
     'ServoStyleSet.h',
     'ServoStyleSheet.h',
@@ -129,6 +131,7 @@ EXPORTS.mozilla += [
     'StyleAnimationValue.h',
     'StyleBackendType.h',
     'StyleComplexColor.h',
+    'StylePrefs.h',
     'StyleSetHandle.h',
     'StyleSetHandleInlines.h',
     'StyleSheet.h',
@@ -139,6 +142,7 @@ EXPORTS.mozilla += [
 
 EXPORTS.mozilla.dom += [
     'CSS.h',
+    'CSSFontFeatureValuesRule.h',
     'CSSImportRule.h',
     'CSSKeyframeRule.h',
     'CSSKeyframesRule.h',
@@ -166,7 +170,9 @@ EXPORTS.mozilla.css += [
     'Loader.h',
     'NameSpaceRule.h',
     'Rule.h',
+    'SheetLoadData.h',
     'SheetParsingMode.h',
+    'StreamLoader.h',
     'StyleRule.h',
     'URLMatchingFunction.h',
 ]
@@ -176,6 +182,7 @@ UNIFIED_SOURCES += [
     'BindingStyleRule.cpp',
     'CounterStyleManager.cpp',
     'CSS.cpp',
+    'CSSFontFeatureValuesRule.cpp',
     'CSSImportRule.cpp',
     'CSSKeyframeRule.cpp',
     'CSSKeyframesRule.cpp',
@@ -247,6 +254,7 @@ UNIFIED_SOURCES += [
     'ServoDeclarationBlock.cpp',
     'ServoDocumentRule.cpp',
     'ServoElementSnapshot.cpp',
+    'ServoFontFeatureValuesRule.cpp',
     'ServoImportRule.cpp',
     'ServoKeyframeRule.cpp',
     'ServoKeyframesRule.cpp',
@@ -260,7 +268,9 @@ UNIFIED_SOURCES += [
     'ServoStyleSet.cpp',
     'ServoStyleSheet.cpp',
     'ServoSupportsRule.cpp',
+    'StreamLoader.cpp',
     'StyleAnimationValue.cpp',
+    'StylePrefs.cpp',
     'StyleRule.cpp',
     'StyleSheet.cpp',
     'URLExtraData.cpp',
@@ -293,7 +303,12 @@ JAR_MANIFESTS += ['jar.mn']
 RESOURCE_FILES += [
     'contenteditable.css',
     'designmode.css',
+]
+
+CONTENT_ACCESSIBLE_FILES += [
     'ImageDocument.css',
+    'res/plaintext.css',
+    'res/viewsource.css',
     'TopLevelImageDocument.css',
     'TopLevelVideoDocument.css',
 ]
@@ -314,4 +329,8 @@ if CONFIG['COMPILE_ENVIRONMENT']:
     css_props.inputs = [
         'nsCSSPropsGenerated.inc.in',
         'PythonCSSProps.h',
+    ]
+
+    CONFIGURE_SUBST_FILES += [
+        'bindgen.toml',
     ]

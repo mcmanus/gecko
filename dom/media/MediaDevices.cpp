@@ -10,6 +10,7 @@
 #include "mozilla/MediaManager.h"
 #include "MediaTrackConstraints.h"
 #include "nsIEventTarget.h"
+#include "nsINamed.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsIPermissionManager.h"
 #include "nsPIDOMWindow.h"
@@ -20,7 +21,7 @@
 namespace mozilla {
 namespace dom {
 
-class FuzzTimerCallBack final : public nsITimerCallback
+class FuzzTimerCallBack final : public nsITimerCallback, public nsINamed
 {
   ~FuzzTimerCallBack() {}
 
@@ -35,11 +36,17 @@ public:
     return NS_OK;
   }
 
+  NS_IMETHOD GetName(nsACString& aName) override
+  {
+    aName.AssignLiteral("FuzzTimerCallBack");
+    return NS_OK;
+  }
+
 private:
   nsCOMPtr<MediaDevices> mMediaDevices;
 };
 
-NS_IMPL_ISUPPORTS(FuzzTimerCallBack, nsITimerCallback)
+NS_IMPL_ISUPPORTS(FuzzTimerCallBack, nsITimerCallback, nsINamed)
 
 class MediaDevices::GumResolver : public nsIDOMGetUserMediaSuccessCallback
 {
@@ -75,8 +82,6 @@ public:
   NS_IMETHOD
   OnSuccess(nsIVariant* aDevices) override
   {
-    // Cribbed from MediaPermissionGonk.cpp
-
     // Create array for nsIMediaDevice
     nsTArray<nsCOMPtr<nsIMediaDevice>> devices;
     // Contain the fumes

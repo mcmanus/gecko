@@ -88,7 +88,6 @@ class MediaStreamTrack::PrincipalHandleListener : public MediaStreamTrackListene
 public:
   explicit PrincipalHandleListener(MediaStreamTrack* aTrack)
     : mTrack(aTrack)
-    , mAbstractMainThread(aTrack->mOwningStream->AbstractMainThread())
     {}
 
   void Forget()
@@ -112,15 +111,17 @@ public:
                                     const PrincipalHandle& aNewPrincipalHandle) override
   {
     aGraph->DispatchToMainThreadAfterStreamStateUpdate(
-      mAbstractMainThread,
       NewRunnableMethod<StoreCopyPassByConstLRef<PrincipalHandle>>(
-        this, &PrincipalHandleListener::DoNotifyPrincipalHandleChanged, aNewPrincipalHandle));
+        "dom::MediaStreamTrack::PrincipalHandleListener::"
+        "DoNotifyPrincipalHandleChanged",
+        this,
+        &PrincipalHandleListener::DoNotifyPrincipalHandleChanged,
+        aNewPrincipalHandle));
   }
 
 protected:
   // These fields may only be accessed on the main thread
   MediaStreamTrack* mTrack;
-  const RefPtr<AbstractThread> mAbstractMainThread;
 };
 
 MediaStreamTrack::MediaStreamTrack(DOMMediaStream* aStream, TrackID aTrackID,
@@ -206,7 +207,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_ADDREF_INHERITED(MediaStreamTrack, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(MediaStreamTrack, DOMEventTargetHelper)
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(MediaStreamTrack)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(MediaStreamTrack)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 nsPIDOMWindowInner*

@@ -1,3 +1,21 @@
+with Files("awsy/**"):
+    BUG_COMPONENT = ("Testing", "AWSY")
+
+with Files("config/**"):
+    BUG_COMPONENT = ("Testing", "General")
+
+with Files("*.py"):
+    BUG_COMPONENT = ("Testing", "General")
+
+with Files("moz.build"):
+    BUG_COMPONENT = ("Testing", "General")
+
+with Files("*.mk"):
+    BUG_COMPONENT = ("Testing", "General")
+
+with Files("README.txt"):
+    BUG_COMPONENT = ("Testing", "General")
+
 with Files("talos/**"):
     BUG_COMPONENT = ("Testing", "Talos")
 
@@ -72,9 +90,6 @@ with Files("config/mozbase_requirements.txt"):
 
 with Files("config/firefox_ui_requirements.txt"):
     BUG_COMPONENT = ("Testing", "Firfox UI Tests")
-
-with Files("config/external-media-tests-requirements.txt"):
-    BUG_COMPONENT = ("Testing", "external-media-tests")
 
 with Files("tools/**"):
     BUG_COMPONENT = ("Testing", "General")

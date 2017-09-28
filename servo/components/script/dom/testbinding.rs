@@ -35,7 +35,7 @@ use dom::promise::Promise;
 use dom::promisenativehandler::{PromiseNativeHandler, Callback};
 use dom::url::URL;
 use dom_struct::dom_struct;
-use js::jsapi::{HandleObject, HandleValue, Heap, JSContext, JSObject, JSAutoCompartment};
+use js::jsapi::{HandleObject, HandleValue, Heap, JSContext, JSObject};
 use js::jsapi::{JS_NewPlainObject, JS_NewUint8ClampedArray};
 use js::jsval::{JSVal, NullValue};
 use script_traits::MsDuration;
@@ -154,7 +154,7 @@ impl TestBindingMethods for TestBinding {
     unsafe fn ArrayAttribute(&self, cx: *mut JSContext) -> NonZero<*mut JSObject> {
         rooted!(in(cx) let array = JS_NewUint8ClampedArray(cx, 16));
         assert!(!array.is_null());
-        NonZero::new(array.get())
+        NonZero::new_unchecked(array.get())
     }
     #[allow(unsafe_code)]
     unsafe fn AnyAttribute(&self, _: *mut JSContext) -> JSVal { NullValue() }
@@ -164,7 +164,7 @@ impl TestBindingMethods for TestBinding {
     unsafe fn ObjectAttribute(&self, cx: *mut JSContext) -> NonZero<*mut JSObject> {
         rooted!(in(cx) let obj = JS_NewPlainObject(cx));
         assert!(!obj.is_null());
-        NonZero::new(obj.get())
+        NonZero::new_unchecked(obj.get())
     }
     #[allow(unsafe_code)]
     unsafe fn SetObjectAttribute(&self, _: *mut JSContext, _: *mut JSObject) {}
@@ -675,13 +675,13 @@ impl TestBindingMethods for TestBinding {
     #[allow(unrooted_must_root)]
     #[allow(unsafe_code)]
     unsafe fn ReturnResolvedPromise(&self, cx: *mut JSContext, v: HandleValue) -> Fallible<Rc<Promise>> {
-        Promise::Resolve(&self.global(), cx, v)
+        Promise::new_resolved(&self.global(), cx, v)
     }
 
     #[allow(unrooted_must_root)]
     #[allow(unsafe_code)]
     unsafe fn ReturnRejectedPromise(&self, cx: *mut JSContext, v: HandleValue) -> Fallible<Rc<Promise>> {
-        Promise::Reject(&self.global(), cx, v)
+        Promise::new_rejected(&self.global(), cx, v)
     }
 
     #[allow(unsafe_code)]
@@ -695,7 +695,7 @@ impl TestBindingMethods for TestBinding {
     }
 
     fn PromiseRejectWithTypeError(&self, p: &Promise, s: USVString) {
-        p.reject_error(self.global().get_cx(), Error::Type(s.0));
+        p.reject_error(Error::Type(s.0));
     }
 
     #[allow(unrooted_must_root)]
@@ -723,7 +723,7 @@ impl TestBindingMethods for TestBinding {
         p.append_native_handler(&handler);
         return p;
 
-        #[derive(JSTraceable, HeapSizeOf)]
+        #[derive(HeapSizeOf, JSTraceable)]
         struct SimpleHandler {
             #[ignore_heap_size_of = "Rc has unclear ownership semantics"]
             handler: Rc<SimpleCallback>,
@@ -804,7 +804,7 @@ impl TestBinding {
     pub unsafe fn condition_unsatisfied(_: *mut JSContext, _: HandleObject) -> bool { false }
 }
 
-#[derive(JSTraceable, HeapSizeOf)]
+#[derive(HeapSizeOf, JSTraceable)]
 pub struct TestBindingCallback {
     #[ignore_heap_size_of = "unclear ownership semantics"]
     promise: TrustedPromise,
@@ -814,9 +814,6 @@ pub struct TestBindingCallback {
 impl TestBindingCallback {
     #[allow(unrooted_must_root)]
     pub fn invoke(self) {
-        let p = self.promise.root();
-        let cx = p.global().get_cx();
-        let _ac = JSAutoCompartment::new(cx, p.reflector().get_jsobject().get());
-        p.resolve_native(cx, &self.value);
+        self.promise.root().resolve_native(&self.value);
     }
 }

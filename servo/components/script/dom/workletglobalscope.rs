@@ -10,22 +10,27 @@ use dom::paintworkletglobalscope::PaintWorkletGlobalScope;
 use dom::paintworkletglobalscope::PaintWorkletTask;
 use dom::testworkletglobalscope::TestWorkletGlobalScope;
 use dom::testworkletglobalscope::TestWorkletTask;
+use dom::worklet::WorkletExecutor;
 use dom_struct::dom_struct;
 use ipc_channel::ipc;
 use ipc_channel::ipc::IpcSender;
+use js::jsapi::JSContext;
 use js::jsval::UndefinedValue;
 use js::rust::Runtime;
-use microtask::Microtask;
-use microtask::MicrotaskQueue;
 use msg::constellation_msg::PipelineId;
 use net_traits::ResourceThreads;
+use net_traits::image_cache::ImageCache;
 use profile_traits::mem;
 use profile_traits::time;
-use script_traits::ScriptMsg;
-use script_traits::TimerSchedulerMsg;
+use script_thread::MainThreadScriptMsg;
+use script_traits::{Painter, ScriptMsg};
+use script_traits::{ScriptToConstellationChan, TimerSchedulerMsg};
+use servo_atoms::Atom;
 use servo_url::ImmutableOrigin;
 use servo_url::MutableOrigin;
 use servo_url::ServoUrl;
+use std::sync::Arc;
+use std::sync::mpsc::Sender;
 
 #[dom_struct]
 /// https://drafts.css-houdini.org/worklets/#workletglobalscope
@@ -34,31 +39,49 @@ pub struct WorkletGlobalScope {
     globalscope: GlobalScope,
     /// The base URL for this worklet.
     base_url: ServoUrl,
-    /// The microtask queue for this worklet
-    microtask_queue: MicrotaskQueue,
+    /// Sender back to the script thread
+    #[ignore_heap_size_of = "channels are hard"]
+    to_script_thread_sender: Sender<MainThreadScriptMsg>,
+    /// Worklet task executor
+    executor: WorkletExecutor,
 }
 
 impl WorkletGlobalScope {
     /// Create a new stack-allocated `WorkletGlobalScope`.
-    pub fn new_inherited(pipeline_id: PipelineId,
-                         base_url: ServoUrl,
-                         init: &WorkletGlobalScopeInit)
-                         -> WorkletGlobalScope {
+    pub fn new_inherited(
+        pipeline_id: PipelineId,
+        base_url: ServoUrl,
+        executor: WorkletExecutor,
+        init: &WorkletGlobalScopeInit,
+    ) -> Self {
         // Any timer events fired on this global are ignored.
         let (timer_event_chan, _) = ipc::channel().unwrap();
-        WorkletGlobalScope {
-            globalscope: GlobalScope::new_inherited(pipeline_id,
-                                                    init.devtools_chan.clone(),
-                                                    init.mem_profiler_chan.clone(),
-                                                    init.time_profiler_chan.clone(),
-                                                    init.constellation_chan.clone(),
-                                                    init.scheduler_chan.clone(),
-                                                    init.resource_threads.clone(),
-                                                    timer_event_chan,
-                                                    MutableOrigin::new(ImmutableOrigin::new_opaque())),
-            base_url: base_url,
-            microtask_queue: MicrotaskQueue::default(),
+        let script_to_constellation_chan = ScriptToConstellationChan {
+            sender: init.to_constellation_sender.clone(),
+            pipeline_id,
+        };
+        Self {
+            globalscope: GlobalScope::new_inherited(
+                pipeline_id,
+                init.devtools_chan.clone(),
+                init.mem_profiler_chan.clone(),
+                init.time_profiler_chan.clone(),
+                script_to_constellation_chan,
+                init.scheduler_chan.clone(),
+                init.resource_threads.clone(),
+                timer_event_chan,
+                MutableOrigin::new(ImmutableOrigin::new_opaque()),
+                Default::default(),
+            ),
+            base_url,
+            to_script_thread_sender: init.to_script_thread_sender.clone(),
+            executor,
         }
+    }
+
+    /// Get the JS context.
+    pub fn get_cx(&self) -> *mut JSContext {
+        self.globalscope.get_cx()
     }
 
     /// Evaluate a JS script in this global.
@@ -68,23 +91,31 @@ impl WorkletGlobalScope {
         self.globalscope.evaluate_js_on_global_with_result(&*script, rval.handle_mut())
     }
 
+    /// Register a paint worklet to the script thread.
+    pub fn register_paint_worklet(
+        &self,
+        name: Atom,
+        properties: Vec<Atom>,
+        painter: Box<Painter>,
+    ) {
+        self.to_script_thread_sender
+            .send(MainThreadScriptMsg::RegisterPaintWorklet {
+                pipeline_id: self.globalscope.pipeline_id(),
+                name,
+                properties,
+                painter,
+            })
+            .expect("Worklet thread outlived script thread.");
+    }
+
     /// The base URL of this global.
     pub fn base_url(&self) -> ServoUrl {
         self.base_url.clone()
     }
 
-    /// Queue up a microtask to be executed in this global.
-    pub fn enqueue_microtask(&self, job: Microtask) {
-        self.microtask_queue.enqueue(job);
-    }
-
-    /// Perform any queued microtasks.
-    pub fn perform_a_microtask_checkpoint(&self) {
-        self.microtask_queue.checkpoint(|id| {
-            let global = self.upcast::<GlobalScope>();
-            assert_eq!(global.pipeline_id(), id);
-            Some(Root::from_ref(global))
-        });
+    /// The worklet executor.
+    pub fn executor(&self) -> WorkletExecutor {
+        self.executor.clone()
     }
 
     /// Perform a worklet task
@@ -105,6 +136,8 @@ impl WorkletGlobalScope {
 /// Resources required by workletglobalscopes
 #[derive(Clone)]
 pub struct WorkletGlobalScopeInit {
+    /// Channel to the main script thread
+    pub to_script_thread_sender: Sender<MainThreadScriptMsg>,
     /// Channel to a resource thread
     pub resource_threads: ResourceThreads,
     /// Channel to the memory profiler
@@ -114,9 +147,11 @@ pub struct WorkletGlobalScopeInit {
     /// Channel to devtools
     pub devtools_chan: Option<IpcSender<ScriptToDevtoolsControlMsg>>,
     /// Messages to send to constellation
-    pub constellation_chan: IpcSender<ScriptMsg>,
+    pub to_constellation_sender: IpcSender<(PipelineId, ScriptMsg)>,
     /// Message to send to the scheduler
     pub scheduler_chan: IpcSender<TimerSchedulerMsg>,
+    /// The image cache
+    pub image_cache: Arc<ImageCache>,
 }
 
 /// https://drafts.css-houdini.org/worklets/#worklet-global-scope-type
@@ -134,14 +169,15 @@ impl WorkletGlobalScopeType {
                runtime: &Runtime,
                pipeline_id: PipelineId,
                base_url: ServoUrl,
+               executor: WorkletExecutor,
                init: &WorkletGlobalScopeInit)
                -> Root<WorkletGlobalScope>
     {
         match *self {
             WorkletGlobalScopeType::Test =>
-                Root::upcast(TestWorkletGlobalScope::new(runtime, pipeline_id, base_url, init)),
+                Root::upcast(TestWorkletGlobalScope::new(runtime, pipeline_id, base_url, executor, init)),
             WorkletGlobalScopeType::Paint =>
-                Root::upcast(PaintWorkletGlobalScope::new(runtime, pipeline_id, base_url, init)),
+                Root::upcast(PaintWorkletGlobalScope::new(runtime, pipeline_id, base_url, executor, init)),
         }
     }
 }

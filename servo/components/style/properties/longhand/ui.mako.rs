@@ -17,25 +17,25 @@ ${helpers.single_keyword("ime-mode", "auto normal active disabled inactive",
                          spec="https://drafts.csswg.org/css-ui/#input-method-editor")}
 
 ${helpers.single_keyword("-moz-user-select", "auto text none all element elements" +
-                            " toggle tri-state -moz-all -moz-none -moz-text",
+                            " toggle tri-state -moz-all -moz-text",
                          products="gecko",
                          alias="-webkit-user-select",
                          gecko_ffi_name="mUserSelect",
                          gecko_enum_prefix="StyleUserSelect",
-                         animation_value_type="none",
+                         gecko_strip_moz_prefix=False,
+                         aliases="-moz-none=none",
+                         animation_value_type="discrete",
                          spec="https://drafts.csswg.org/css-ui-4/#propdef-user-select")}
 
 ${helpers.single_keyword("-moz-window-dragging", "default drag no-drag", products="gecko",
                          gecko_ffi_name="mWindowDragging",
                          gecko_enum_prefix="StyleWindowDragging",
-                         gecko_inexhaustive=True,
                          animation_value_type="discrete",
                          spec="None (Nonstandard Firefox-only property)")}
 
 ${helpers.single_keyword("-moz-window-shadow", "none default menu tooltip sheet", products="gecko",
                          gecko_ffi_name="mWindowShadow",
                          gecko_constant_prefix="NS_STYLE_WINDOW_SHADOW",
-                         gecko_inexhaustive=True,
                          animation_value_type="discrete",
                          internal=True,
                          spec="None (Nonstandard internal property)")}
@@ -46,13 +46,11 @@ ${helpers.single_keyword("-moz-window-shadow", "none default menu tooltip sheet"
                    spec="None (Nonstandard Firefox-only property)">
     use std::fmt;
     use style_traits::ToCss;
-    use values::computed::ComputedValueAsSpecified;
-
-    no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
-        #[derive(Debug, Clone, Copy, PartialEq)]
+        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+        #[derive(Clone, Copy, Debug, PartialEq, ToComputedValue)]
         pub struct T(pub bool);
     }
 
@@ -73,8 +71,6 @@ ${helpers.single_keyword("-moz-window-shadow", "none default menu tooltip sheet"
     pub fn get_initial_specified_value() -> SpecifiedValue {
         computed_value::T(false)
     }
-
-    impl ComputedValueAsSpecified for SpecifiedValue {}
 
     pub fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
                          -> Result<SpecifiedValue, ParseError<'i>> {

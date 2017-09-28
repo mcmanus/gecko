@@ -73,10 +73,6 @@ var gBookmarksFileOld;
 // Places bookmarks.html file pointer.
 var gBookmarksFileNew;
 
-function run_test() {
-  run_next_test();
-}
-
 add_task(async function setup() {
   // Avoid creating smart bookmarks during the test.
   Services.prefs.setIntPref("browser.places.smartBookmarksVersion", -1);
@@ -85,7 +81,7 @@ add_task(async function setup() {
   gBookmarksFileOld = do_get_file("bookmarks.preplaces.html");
 
   // File pointer to a new Places-exported bookmarks file.
-  gBookmarksFileNew = Services.dirsvc.get("ProfD", Ci.nsILocalFile);
+  gBookmarksFileNew = Services.dirsvc.get("ProfD", Ci.nsIFile);
   gBookmarksFileNew.append("bookmarks.exported.html");
   if (gBookmarksFileNew.exists()) {
     gBookmarksFileNew.remove(false);
@@ -323,13 +319,7 @@ function checkItem(aExpected, aNode) {
             do_check_eq(aNode.uri, aExpected.url)
           break;
         case "icon":
-          let deferred = Promise.defer();
-          PlacesUtils.favicons.getFaviconDataForPage(
-            NetUtil.newURI(aExpected.url),
-            function(aURI, aDataLen, aData, aMimeType) {
-              deferred.resolve(aData);
-            });
-          let data = await deferred.promise;
+          let {data} = await getFaviconDataForPage(aExpected.url);
           let base64Icon = "data:image/png;base64," +
                            base64EncodeString(String.fromCharCode.apply(String, data));
           do_check_true(base64Icon == aExpected.icon);

@@ -17,6 +17,7 @@
 #include "nsRefPtrHashtable.h"
 
 #include "nsBaseWidget.h"
+#include "CompositorWidget.h"
 #include <gdk/gdk.h>
 #include <gtk/gtk.h>
 
@@ -68,11 +69,12 @@ class TimeStamp;
 class CurrentX11TimeGetter;
 }
 
-class nsWindow : public nsBaseWidget
+class nsWindow final : public nsBaseWidget
 {
 public:
     typedef mozilla::gfx::DrawTarget DrawTarget;
     typedef mozilla::WidgetEventTime WidgetEventTime;
+    typedef mozilla::widget::PlatformCompositorWidgetDelegate PlatformCompositorWidgetDelegate;
 
     nsWindow();
 
@@ -101,11 +103,7 @@ public:
     virtual nsIWidget *GetParent() override;
     virtual float      GetDPI() override;
     virtual double     GetDefaultScaleInternal() override;
-    // Under Gtk, we manage windows using device pixels so no scaling is needed:
-    mozilla::DesktopToLayoutDeviceScale GetDesktopToDeviceScale() final
-    {
-        return mozilla::DesktopToLayoutDeviceScale(1.0);
-    }
+    mozilla::DesktopToLayoutDeviceScale GetDesktopToDeviceScale() override;
     virtual void       SetParent(nsIWidget* aNewParent) override;
     virtual void       SetModal(bool aModal) override;
     virtual bool       IsVisible() const override;
@@ -440,6 +438,8 @@ private:
     GtkWidget          *mShell;
     MozContainer       *mContainer;
     GdkWindow          *mGdkWindow;
+    PlatformCompositorWidgetDelegate* mCompositorWidgetDelegate;
+
 
     uint32_t            mHasMappedToplevel : 1,
                         mIsFullyObscured : 1,
@@ -545,6 +545,8 @@ private:
                                           LayersBackend aBackendHint = mozilla::layers::LayersBackend::LAYERS_NONE,
                                           LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT) override;
 
+    void SetCompositorWidgetDelegate(CompositorWidgetDelegate* delegate) override;
+
     void CleanLayerManagerRecursive();
 
     virtual int32_t RoundsWidgetCoordinatesTo() override;
@@ -565,12 +567,6 @@ private:
     RefPtr<mozilla::widget::IMContextWrapper> mIMContext;
 
     mozilla::UniquePtr<mozilla::CurrentX11TimeGetter> mCurrentTimeGetter;
-};
-
-class nsChildWindow : public nsWindow {
-public:
-    nsChildWindow();
-    ~nsChildWindow();
 };
 
 #endif /* __nsWindow_h__ */

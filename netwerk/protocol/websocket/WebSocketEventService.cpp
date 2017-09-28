@@ -35,9 +35,9 @@ IsChildProcess()
 class WebSocketBaseRunnable : public Runnable
 {
 public:
-  WebSocketBaseRunnable(uint32_t aWebSocketSerialID,
-                        uint64_t aInnerWindowID)
-    : mWebSocketSerialID(aWebSocketSerialID)
+  WebSocketBaseRunnable(uint32_t aWebSocketSerialID, uint64_t aInnerWindowID)
+    : Runnable("net::WebSocketBaseRunnable")
+    , mWebSocketSerialID(aWebSocketSerialID)
     , mInnerWindowID(aInnerWindowID)
   {}
 
@@ -201,6 +201,14 @@ private:
   uint16_t mCode;
   const nsString mReason;
 };
+
+/* static */ already_AddRefed<WebSocketEventService>
+WebSocketEventService::Get()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  RefPtr<WebSocketEventService> service = gWebSocketEventService.get();
+  return service.forget();
+}
 
 /* static */ already_AddRefed<WebSocketEventService>
 WebSocketEventService::GetOrCreate()

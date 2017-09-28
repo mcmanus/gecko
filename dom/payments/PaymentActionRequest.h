@@ -45,6 +45,7 @@ private:
   ~PaymentCreateActionRequest() = default;
 
   uint64_t mTabId;
+  nsCOMPtr<nsIPrincipal> mTopLevelPrincipal;
   nsCOMPtr<nsIArray> mMethodData;
   nsCOMPtr<nsIPaymentDetails> mDetails;
   nsCOMPtr<nsIPaymentOptions> mOptions;
@@ -64,6 +65,21 @@ private:
   ~PaymentCompleteActionRequest() = default;
 
   nsString mCompleteStatus;
+};
+
+class PaymentUpdateActionRequest final : public nsIPaymentUpdateActionRequest
+                                       , public PaymentActionRequest
+{
+public:
+  NS_DECL_ISUPPORTS_INHERITED
+  NS_FORWARD_NSIPAYMENTACTIONREQUEST(PaymentActionRequest::)
+  NS_DECL_NSIPAYMENTUPDATEACTIONREQUEST
+
+  PaymentUpdateActionRequest() = default;
+private:
+  ~PaymentUpdateActionRequest() = default;
+
+  nsCOMPtr<nsIPaymentDetails> mDetails;
 };
 
 } // end of namespace dom

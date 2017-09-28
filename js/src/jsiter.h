@@ -157,22 +157,21 @@ class StringIteratorObject : public JSObject
 StringIteratorObject*
 NewStringIteratorObject(JSContext* cx, NewObjectKind newKind = GenericObject);
 
-bool
-GetIterator(JSContext* cx, HandleObject obj, unsigned flags, MutableHandleObject objp);
-
 JSObject*
-GetIteratorObject(JSContext* cx, HandleObject obj, unsigned flags);
+GetIterator(JSContext* cx, HandleObject obj, unsigned flags);
+
+PropertyIteratorObject*
+LookupInIteratorCache(JSContext* cx, HandleObject obj);
 
 /*
  * Creates either a key or value iterator, depending on flags. For a value
  * iterator, performs value-lookup to convert the given list of jsids.
  */
-bool
-EnumeratedIdVectorToIterator(JSContext* cx, HandleObject obj, unsigned flags, AutoIdVector& props,
-                             MutableHandleObject objp);
+JSObject*
+EnumeratedIdVectorToIterator(JSContext* cx, HandleObject obj, unsigned flags, AutoIdVector& props);
 
-bool
-NewEmptyPropertyIterator(JSContext* cx, unsigned flags, MutableHandleObject objp);
+JSObject*
+NewEmptyPropertyIterator(JSContext* cx, unsigned flags);
 
 /*
  * Convert the value stored in *vp to its iteration object. The flags should
@@ -194,9 +193,6 @@ IteratorCloseForException(JSContext* cx, HandleObject obj);
 
 void
 UnwindIteratorForUncatchableException(JSContext* cx, JSObject* obj);
-
-bool
-IteratorConstructor(JSContext* cx, unsigned argc, Value* vp);
 
 extern bool
 SuppressDeletedProperty(JSContext* cx, HandleObject obj, jsid id);
@@ -221,8 +217,8 @@ ThrowStopIteration(JSContext* cx);
 extern JSObject*
 CreateIterResultObject(JSContext* cx, HandleValue value, bool done);
 
-extern JSObject*
-InitLegacyIteratorClass(JSContext* cx, HandleObject obj);
+bool
+IsPropertyIterator(HandleValue v);
 
 extern JSObject*
 InitStopIterationClass(JSContext* cx, HandleObject obj);

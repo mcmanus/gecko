@@ -15,13 +15,13 @@
 namespace mozilla {
 namespace gfx {
 
-VRLayerChild::VRLayerChild(uint32_t aVRDisplayID, VRManagerChild* aVRManagerChild)
-  : mVRDisplayID(aVRDisplayID)
-  , mCanvasElement(nullptr)
+VRLayerChild::VRLayerChild()
+  : mCanvasElement(nullptr)
   , mShSurfClient(nullptr)
   , mFront(nullptr)
-  , mIPCOpen(true)
+  , mIPCOpen(false)
 {
+  MOZ_COUNT_CTOR(VRLayerChild);
 }
 
 VRLayerChild::~VRLayerChild()
@@ -47,7 +47,7 @@ VRLayerChild::Initialize(dom::HTMLCanvasElement* aCanvasElement)
 }
 
 void
-VRLayerChild::SubmitFrame()
+VRLayerChild::SubmitFrame(uint64_t aFrameId)
 {
   if (!mCanvasElement) {
     return;
@@ -72,7 +72,7 @@ VRLayerChild::SubmitFrame()
   mFront->SyncWithObject(vrmc->GetSyncObject());
   MOZ_ALWAYS_TRUE(mFront->InitIPDLActor(vrmc));
 
-  SendSubmitFrame(mFront->GetIPDLActor());
+  SendSubmitFrame(mFront->GetIPDLActor(), aFrameId);
 }
 
 bool
@@ -88,11 +88,39 @@ VRLayerChild::ClearSurfaces()
   mShSurfClient = nullptr;
 }
 
-mozilla::ipc::IPCResult
-VRLayerChild::Recv__delete__()
+void
+VRLayerChild::ActorDestroy(ActorDestroyReason aWhy)
 {
   mIPCOpen = false;
-  return IPC_OK();
+}
+
+// static
+PVRLayerChild*
+VRLayerChild::CreateIPDLActor()
+{
+  VRLayerChild* c = new VRLayerChild();
+  c->AddIPDLReference();
+  return c;
+}
+
+// static
+bool
+VRLayerChild::DestroyIPDLActor(PVRLayerChild* actor)
+{
+  static_cast<VRLayerChild*>(actor)->ReleaseIPDLReference();
+  return true;
+}
+
+void
+VRLayerChild::AddIPDLReference() {
+  MOZ_ASSERT(mIPCOpen == false);
+  mIPCOpen = true;
+  AddRef();
+}
+void
+VRLayerChild::ReleaseIPDLReference() {
+  MOZ_ASSERT(mIPCOpen == false);
+  Release();
 }
 
 } // namespace gfx

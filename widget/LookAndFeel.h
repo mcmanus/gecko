@@ -156,8 +156,24 @@ public:
     //inactive light hightlight
     eColorID__moz_mac_secondaryhighlight,
 
+    // Font smoothing background colors needed by the Mac OS X theme, based
+    // on -moz-appearance names
+    eColorID__moz_mac_vibrancy_light,
+    eColorID__moz_mac_vibrancy_dark,
+    eColorID__moz_mac_menupopup,
+    eColorID__moz_mac_menuitem,
+    eColorID__moz_mac_active_menuitem,
+    eColorID__moz_mac_source_list,
+    eColorID__moz_mac_source_list_selection,
+    eColorID__moz_mac_active_source_list_selection,
+    eColorID__moz_mac_tooltip,
+
     // vista rebars
 
+    // accent color for title bar
+    eColorID__moz_win_accentcolor,
+    // color from drawing text over the accent color
+    eColorID__moz_win_accentcolortext,
     // media rebar text
     eColorID__moz_win_mediatext,
     // communications rebar text
@@ -237,6 +253,15 @@ public:
     eIntID_TabFocusModel,
     // Should menu items blink when they're chosen?
     eIntID_ChosenMenuItemsShouldBlink,
+
+    /*
+     * A Boolean value to determine whether the Windows accent color
+     * should be applied to the title bar.
+     *
+     * The value of this metric is not used on other platforms. These platforms
+     * should return NS_ERROR_NOT_IMPLEMENTED when queried for this metric.
+     */
+    eIntID_WindowsAccentColorInTitlebar,
 
     /*
      * A Boolean value to determine whether the Windows default theme is
@@ -604,6 +629,16 @@ public:
    * cached data would be released.
    */
   static void Refresh();
+
+  /**
+   * GTK's initialization code can't be run off main thread, call this
+   * if you plan on using LookAndFeel off main thread later.
+   *
+   * This initialized state may get reset due to theme changes, so it
+   * must be called prior to each potential off-main-thread LookAndFeel
+   * call, not just once.
+   */
+  static void NativeInit();
 
   /**
    * If the implementation is caching values, these accessors allow the

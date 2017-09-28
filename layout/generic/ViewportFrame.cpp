@@ -10,6 +10,7 @@
 
 #include "mozilla/ViewportFrame.h"
 
+#include "mozilla/ServoRestyleManager.h"
 #include "nsGkAtoms.h"
 #include "nsIScrollableFrame.h"
 #include "nsSubDocumentFrame.h"
@@ -18,6 +19,7 @@
 #include "GeckoProfiler.h"
 #include "nsIMozBrowserFrame.h"
 #include "nsPlaceholderFrame.h"
+#include "mozilla/ServoStyleContextInlines.h"
 
 using namespace mozilla;
 typedef nsAbsoluteContainingBlock::AbsPosReflowFlags AbsPosReflowFlags;
@@ -46,23 +48,21 @@ ViewportFrame::Init(nsIContent*       aContent,
   if (parent) {
     nsFrameState state = parent->GetStateBits();
 
-    mState |= state & (NS_FRAME_IN_POPUP);
+    AddStateBits(state & (NS_FRAME_IN_POPUP));
   }
 }
 
 void
 ViewportFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists)
 {
-  PROFILER_LABEL("ViewportFrame", "BuildDisplayList",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("ViewportFrame::BuildDisplayList", GRAPHICS);
 
   if (nsIFrame* kid = mFrames.FirstChild()) {
     // make the kid's BorderBackground our own. This ensures that the canvas
     // frame's background becomes our own background and therefore appears
     // below negative z-index elements.
-    BuildDisplayListForChild(aBuilder, kid, aDirtyRect, aLists);
+    BuildDisplayListForChild(aBuilder, kid, aLists);
   }
 
   nsDisplayList topLayerList;
@@ -123,8 +123,12 @@ BuildDisplayListForTopLayerFrame(nsDisplayListBuilder* aBuilder,
     asrSetter.SetCurrentActiveScrolledRoot(
       savedOutOfFlowData->mContainingBlockActiveScrolledRoot);
   }
+  nsDisplayListBuilder::AutoBuildingDisplayList
+    buildingForChild(aBuilder, aFrame, dirty,
+                     aBuilder->IsAtRootOfPseudoStackingContext());
+
   nsDisplayList list;
-  aFrame->BuildDisplayListForStackingContext(aBuilder, dirty, &list);
+  aFrame->BuildDisplayListForStackingContext(aBuilder, &list);
   aList->AppendToTop(&list);
 }
 
@@ -289,10 +293,8 @@ ViewportFrame::Reflow(nsPresContext*           aPresContext,
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("ViewportFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
   NS_FRAME_TRACE_REFLOW_IN("ViewportFrame::Reflow");
-
-  // Initialize OUT parameters
-  aStatus.Reset();
 
   // Because |Reflow| sets ComputedBSize() on the child to our
   // ComputedBSize().
@@ -416,24 +418,23 @@ ViewportFrame::ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas)
 }
 
 void
-ViewportFrame::UpdateStyle(ServoStyleSet& aStyleSet,
-                           nsStyleChangeList& aChangeList)
+ViewportFrame::UpdateStyle(ServoRestyleState& aRestyleState)
 {
-  nsStyleContext* oldContext = StyleContext();
+  ServoStyleContext* oldContext = StyleContext()->AsServo();
   nsIAtom* pseudo = oldContext->GetPseudo();
-  RefPtr<nsStyleContext> newContext =
-    aStyleSet.ResolveInheritingAnonymousBoxStyle(pseudo, nullptr);
+  RefPtr<ServoStyleContext> newContext =
+    aRestyleState.StyleSet().ResolveInheritingAnonymousBoxStyle(pseudo, nullptr);
 
   // We're special because we have a null GetContent(), so don't call things
   // like UpdateStyleOfOwnedChildFrame that try to append changes for the
   // content to the change list.  Nor do we computed a changehint, since we have
   // no way to apply it anyway.
-  newContext->EnsureSameStructsCached(oldContext);
+  newContext->ResolveSameStructsAs(oldContext);
 
   MOZ_ASSERT(!GetNextContinuation(), "Viewport has continuations?");
   SetStyleContext(newContext);
 
-  UpdateStyleOfOwnedAnonBoxes(aStyleSet, aChangeList, nsChangeHint_Empty);
+  UpdateStyleOfOwnedAnonBoxes(aRestyleState);
 }
 
 void

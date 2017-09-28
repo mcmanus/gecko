@@ -122,7 +122,7 @@ pref("network.predictor.max-db-size", 2097152); // bytes
 pref("network.predictor.preserve", 50); // percentage of predictor data to keep when cleaning up
 
 // Use JS mDNS as a fallback
-pref("network.mdns.use_js_fallback", true);
+pref("network.mdns.use_js_fallback", false);
 
 /* history max results display */
 pref("browser.display.history.maxresults", 100);
@@ -144,6 +144,10 @@ pref("browser.sessionstore.max_tabs_undo", 10);
 pref("browser.sessionstore.max_resumed_crashes", 2);
 pref("browser.sessionstore.privacy_level", 0); // saving data: 0 = all, 1 = unencrypted sites, 2 = never
 pref("browser.sessionstore.debug_logging", false);
+
+// Download protection lists are not available on Fennec.
+pref("urlclassifier.downloadAllowTable", "");
+pref("urlclassifier.downloadBlockTable", "");
 
 /* these should help performance */
 pref("mozilla.widget.force-24bpp", true);
@@ -230,9 +234,14 @@ pref("extensions.compatability.locales.buildid", "0");
 /* Don't let XPIProvider install distribution add-ons; we do our own thing on mobile. */
 pref("extensions.installDistroAddons", false);
 
+pref("extensions.webextPermissionPrompts", true);
+pref("extensions.webextOptionalPermissionPrompts", true);
+
 // Add-on content security policies.
 pref("extensions.webextensions.base-content-security-policy", "script-src 'self' https://* moz-extension: blob: filesystem: 'unsafe-eval' 'unsafe-inline'; object-src 'self' https://* moz-extension: blob: filesystem:;");
 pref("extensions.webextensions.default-content-security-policy", "script-src 'self'; object-src 'self';");
+
+pref("extensions.legacy.enabled", false);
 
 /* block popups by default, and notify the user about blocked popups */
 pref("dom.disable_open_during_load", true);
@@ -447,14 +456,8 @@ pref("browser.ui.scroll-toolbar-threshold", 10);
 pref("browser.ui.selection.distance", 250);
 
 // plugins
-pref("plugin.disable", false);
+pref("plugin.disable", true);
 pref("dom.ipc.plugins.enabled", false);
-
-// This pref isn't actually used anymore, but we're leaving this here to avoid changing
-// the default so that we can migrate a user-set pref. See bug 885357.
-pref("plugins.click_to_play", true);
-// The default value for nsIPluginTag.enabledState (STATE_CLICKTOPLAY = 1)
-pref("plugin.default.state", 1);
 
 // product URLs
 // The breakpad report server to link to in about:crashes
@@ -568,7 +571,15 @@ pref("apz.fling_friction", "0.004");
 pref("apz.fling_stopped_threshold", "0.0");
 pref("apz.max_velocity_inches_per_ms", "0.07");
 pref("apz.overscroll.enabled", true);
+pref("apz.second_tap_tolerance", "0.3");
+pref("apz.touch_move_tolerance", "0.03");
 pref("apz.touch_start_tolerance", "0.06");
+
+#ifdef NIGHTLY_BUILD
+pref("apz.frame_delay.enabled", true);
+#else
+pref("apz.frame_delay.enabled", false);
+#endif
 
 pref("layers.progressive-paint", true);
 pref("layers.low-precision-buffer", true);
@@ -635,12 +646,13 @@ pref("media.eme.enabled", true);
 pref("media.hls.enabled", true);
 #endif
 
+// Whether to suspend decoding of videos in background tabs.
+pref("media.suspend-bkgnd-video.enabled", true);
+
 // optimize images memory usage
 pref("image.downscale-during-decode.enabled", true);
 
 pref("browser.safebrowsing.downloads.enabled", false);
-
-pref("browser.safebrowsing.id", @MOZ_APP_UA_NAME@);
 
 // True if this is the first time we are showing about:firstrun
 pref("browser.firstrun.show.uidiscovery", true);
@@ -734,10 +746,6 @@ pref("media.stagefright.omxcodec.flags", 0);
 
 // Coalesce touch events to prevent them from flooding the event queue
 pref("dom.event.touch.coalescing.enabled", false);
-
-// On memory pressure, release dirty but unused pages held by jemalloc
-// back to the system.
-pref("memory.free_dirty_pages", true);
 
 pref("layout.framevisibility.numscrollportwidths", 1);
 pref("layout.framevisibility.numscrollportheights", 1);
@@ -916,6 +924,7 @@ pref("dom.presentation.receiver.enabled", true); // enable 1-UA mode
 
 pref("dom.audiochannel.audioCompeting", true);
 pref("dom.audiochannel.mediaControl", true);
+pref("media.block-autoplay-until-in-foreground", false);
 
 // Space separated list of URLS that are allowed to send objects (instead of
 // only strings) through webchannels. This list is duplicated in browser/app/profile/firefox.js
@@ -931,3 +940,7 @@ pref("javascript.options.native_regexp", false);
 
 // Ask for permission when enumerating WebRTC devices.
 pref("media.navigator.permission.device", true);
+
+#ifdef NIGHTLY_BUILD
+pref("media.videocontrols.lock-video-orientation", true);
+#endif

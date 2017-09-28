@@ -72,6 +72,30 @@ var snapshotFormatters = {
     $("multiprocess-box").textContent = strings.formatStringFromName("multiProcessWindows",
       [data.numRemoteWindows, data.numTotalWindows, statusText], 3);
 
+    if (data.remoteAutoStart) {
+      $("contentprocesses-box").textContent = data.currentContentProcesses +
+                                              "/" +
+                                              data.maxContentProcesses;
+    } else {
+      $("contentprocesses-row").hidden = true;
+    }
+
+    let styloReason;
+    if (!data.styloBuild) {
+      styloReason = strings.GetStringFromName("disabledByBuild");
+    } else if (data.styloResult != data.styloDefault) {
+      if (data.styloResult) {
+        styloReason = strings.GetStringFromName("enabledByUser");
+      } else {
+        styloReason = strings.GetStringFromName("disabledByUser");
+      }
+    } else if (data.styloDefault) {
+      styloReason = strings.GetStringFromName("enabledByDefault");
+    } else {
+      styloReason = strings.GetStringFromName("disabledByDefault");
+    }
+    $("stylo-box").textContent = `${data.styloResult} (${styloReason})`;
+
     let keyGoogleFound = data.keyGoogleFound ? "found" : "missing";
     $("key-google-box").textContent = strings.GetStringFromName(keyGoogleFound);
 
@@ -234,7 +258,7 @@ var snapshotFormatters = {
     let apzInfo = [];
     let formatApzInfo = function(info) {
       let out = [];
-      for (let type of ["Wheel", "Touch", "Drag"]) {
+      for (let type of ["Wheel", "Touch", "Drag", "Keyboard", "Autoscroll"]) {
         let key = "Apz" + type + "Input";
 
         if (!(key in info))
@@ -393,16 +417,22 @@ var snapshotFormatters = {
     }
 
     // graphics-features-tbody
-
-    let compositor = data.windowLayerManagerRemote
-                     ? data.windowLayerManagerType
-                     : "BasicLayers (" + strings.GetStringFromName("mainThreadNoOMTC") + ")";
+    let compositor = "";
+    if (data.windowLayerManagerRemote) {
+      compositor = data.windowLayerManagerType;
+      if (data.windowUsingAdvancedLayers) {
+        compositor += " (Advanced Layers)";
+      }
+    } else {
+      compositor = "BasicLayers (" + strings.GetStringFromName("mainThreadNoOMTC") + ")";
+    }
     addRow("features", "compositing", compositor);
     delete data.windowLayerManagerRemote;
     delete data.windowLayerManagerType;
     delete data.numTotalWindows;
     delete data.numAcceleratedWindows;
     delete data.numAcceleratedWindowsMessage;
+    delete data.windowUsingAdvancedLayers;
 
     addRow("features", "asyncPanZoom",
            apzInfo.length
@@ -419,8 +449,8 @@ var snapshotFormatters = {
     addRowFromKey("features", "webgl2DriverExtensions");
     addRowFromKey("features", "webgl2Extensions");
     addRowFromKey("features", "supportsHardwareH264", "hardwareH264");
-    addRowFromKey("features", "currentAudioBackend", "audioBackend");
     addRowFromKey("features", "direct2DEnabled", "#Direct2D");
+    addRowFromKey("features", "offMainThreadPaintEnabled");
 
     if ("directWriteEnabled" in data) {
       let message = data.directWriteEnabled;
@@ -568,6 +598,112 @@ var snapshotFormatters = {
     }
   },
 
+  media: function media(data) {
+    let strings = stringBundle();
+
+    function insertBasicInfo(key, value) {
+      function createRow(key, value) {
+        let th = $.new("th", strings.GetStringFromName(key), "column");
+        let td = $.new("td", value);
+        td.style["white-space"] = "pre-wrap";
+        td.colSpan = 8;
+        return $.new("tr", [th, td]);
+      }
+      $.append($("media-info-tbody"), [createRow(key, value)]);
+    }
+
+    function createDeviceInfoRow(device) {
+      let deviceInfo = Ci.nsIAudioDeviceInfo;
+
+      let states = {};
+      states[deviceInfo.STATE_DISABLED] = "Disabled";
+      states[deviceInfo.STATE_UNPLUGGED] = "Unplugged";
+      states[deviceInfo.STATE_ENABLED] = "Enabled";
+
+      let preferreds = {};
+      preferreds[deviceInfo.PREF_NONE] = "None";
+      preferreds[deviceInfo.PREF_MULTIMEDIA] = "Multimedia";
+      preferreds[deviceInfo.PREF_VOICE] = "Voice";
+      preferreds[deviceInfo.PREF_NOTIFICATION] = "Notification";
+      preferreds[deviceInfo.PREF_ALL] = "All";
+
+      let formats = {};
+      formats[deviceInfo.FMT_S16LE] = "S16LE";
+      formats[deviceInfo.FMT_S16BE] = "S16BE";
+      formats[deviceInfo.FMT_F32LE] = "F32LE";
+      formats[deviceInfo.FMT_F32BE] = "F32BE";
+
+      function toPreferredString(preferred) {
+        if (preferred == deviceInfo.PREF_NONE) {
+          return preferreds[deviceInfo.PREF_NONE];
+        } else if (preferred & deviceInfo.PREF_ALL) {
+          return preferreds[deviceInfo.PREF_ALL];
+        }
+        let str = "";
+        for (let pref of [deviceInfo.PREF_MULTIMEDIA,
+                          deviceInfo.PREF_VOICE,
+                          deviceInfo.PREF_NOTIFICATION]) {
+          if (preferred & pref) {
+            str += " " + preferreds[pref];
+          }
+        }
+        return str;
+      }
+
+      function toFromatString(dev) {
+        let str = "default: " + formats[dev.defaultFormat] + ", support:";
+        for (let fmt of [deviceInfo.FMT_S16LE,
+                         deviceInfo.FMT_S16BE,
+                         deviceInfo.FMT_F32LE,
+                         deviceInfo.FMT_F32BE]) {
+          if (dev.supportedFormat & fmt) {
+            str += " " + formats[fmt];
+          }
+        }
+        return str;
+      }
+
+      function toRateString(dev) {
+        return "default: " + dev.defaultRate +
+               ", support: " + dev.minRate + " - " + dev.maxRate;
+      }
+
+      function toLatencyString(dev) {
+        return dev.minLatency + " - " + dev.maxLatency;
+      }
+
+      return $.new("tr", [$.new("td", device.name),
+                          $.new("td", device.groupId),
+                          $.new("td", device.vendor),
+                          $.new("td", states[device.state]),
+                          $.new("td", toPreferredString(device.preferred)),
+                          $.new("td", toFromatString(device)),
+                          $.new("td", device.maxChannels),
+                          $.new("td", toRateString(device)),
+                          $.new("td", toLatencyString(device))]);
+    }
+
+    function insertDeviceInfo(side, devices) {
+      let rows = [];
+      for (let dev of devices) {
+        rows.push(createDeviceInfoRow(dev));
+      }
+      $.append($("media-" + side + "-devices-tbody"), rows);
+    }
+
+    // Basic information
+    insertBasicInfo("audioBackend", data.currentAudioBackend);
+    insertBasicInfo("maxAudioChannels", data.currentMaxAudioChannels);
+    insertBasicInfo("channelLayout", data.currentPreferredChannelLayout);
+    insertBasicInfo("sampleRate", data.currentPreferredSampleRate);
+
+    // Output devices information
+    insertDeviceInfo("output", data.audioOutputDevices);
+
+    // Input devices information
+    insertDeviceInfo("input", data.audioInputDevices);
+  },
+
   javaScript: function javaScript(data) {
     $("javascript-incremental-gc").textContent = data.incrementalGCEnabled;
   },
@@ -575,9 +711,15 @@ var snapshotFormatters = {
   accessibility: function accessibility(data) {
     $("a11y-activated").textContent = data.isActive;
     $("a11y-force-disabled").textContent = data.forceDisabled || 0;
+
     let a11yHandlerUsed = $("a11y-handler-used");
     if (a11yHandlerUsed) {
       a11yHandlerUsed.textContent = data.handlerUsed;
+    }
+
+    let a11yInstantiator = $("a11y-instantiator");
+    if (a11yInstantiator) {
+      a11yInstantiator.textContent = data.instantiator;
     }
   },
 
@@ -622,7 +764,7 @@ var snapshotFormatters = {
     for (let key in data) {
       // Simplify the display a little in the common case.
       if (key === "hasPrivilegedUserNamespaces" &&
-          data[key] === data["hasUserNamespaces"]) {
+          data[key] === data.hasUserNamespaces) {
         continue;
       }
       if (key === "syscallLog") {
@@ -996,7 +1138,7 @@ function openProfileDirectory() {
 
   // Show the profile directory.
   let nsLocalFile = Components.Constructor("@mozilla.org/file/local;1",
-                                           "nsILocalFile", "initWithPath");
+                                           "nsIFile", "initWithPath");
   new nsLocalFile(profileDir).reveal();
 }
 

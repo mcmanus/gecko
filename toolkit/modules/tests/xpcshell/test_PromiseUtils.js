@@ -1,5 +1,6 @@
   /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 
 "use strict";
 
@@ -8,9 +9,6 @@ Components.utils.import("resource://gre/modules/Timer.jsm");
 Components.utils.import("resource://testing-common/PromiseTestUtils.jsm");
 
 // Tests for PromiseUtils.jsm
-function run_test() {
-  run_next_test();
-}
 
 // Tests for PromiseUtils.defer()
 

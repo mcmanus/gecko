@@ -16,6 +16,7 @@
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/Move.h"
 #include "mozilla/mscom/AgileReference.h"
+#include "mozilla/mscom/FastMarshaler.h"
 #include "mozilla/mscom/MainThreadInvoker.h"
 #include "mozilla/mscom/Ptr.h"
 #include "mozilla/mscom/StructStream.h"
@@ -43,18 +44,25 @@ HandlerProvider::QueryInterface(REFIID riid, void** ppv)
     return E_INVALIDARG;
   }
 
-  RefPtr<IUnknown> punk;
-
   if (riid == IID_IUnknown || riid == IID_IGeckoBackChannel) {
-    punk = static_cast<IGeckoBackChannel*>(this);
+    RefPtr<IUnknown> punk(static_cast<IGeckoBackChannel*>(this));
+    punk.forget(ppv);
+    return S_OK;
   }
 
-  if (!punk) {
-    return E_NOINTERFACE;
+  if (riid == IID_IMarshal) {
+    if (!mFastMarshalUnk) {
+      HRESULT hr = mscom::FastMarshaler::Create(
+        static_cast<IGeckoBackChannel*>(this), getter_AddRefs(mFastMarshalUnk));
+      if (FAILED(hr)) {
+        return hr;
+      }
+    }
+
+    return mFastMarshalUnk->QueryInterface(riid, ppv);
   }
 
-  punk.forget(ppv);
-  return S_OK;
+  return E_NOINTERFACE;
 }
 
 ULONG
@@ -95,7 +103,8 @@ HandlerProvider::GetAndSerializePayload(const MutexAutoLock&)
 
   IA2Payload payload{};
 
-  if (!mscom::InvokeOnMainThread(this, &HandlerProvider::BuildIA2Data,
+  if (!mscom::InvokeOnMainThread("HandlerProvider::BuildIA2Data",
+                                 this, &HandlerProvider::BuildIA2Data,
                                  &payload.mData) ||
       !payload.mData.mUniqueId) {
     return;
@@ -130,8 +139,10 @@ HandlerProvider::GetHandlerPayloadSize(NotNull<DWORD*> aOutPayloadSize)
 
   GetAndSerializePayload(lock);
 
-  if (!mSerializer) {
-    return E_FAIL;
+  if (!mSerializer || !(*mSerializer)) {
+    // Failed payload serialization is non-fatal
+    *aOutPayloadSize = mscom::StructToStream::GetEmptySize();
+    return S_OK;
   }
 
   *aOutPayloadSize = mSerializer->GetSize();
@@ -175,7 +186,8 @@ HandlerProvider::WriteHandlerPayload(NotNull<IStream*> aStream)
 {
   MutexAutoLock lock(mMutex);
 
-  if (!mSerializer) {
+  if (!mSerializer || !(*mSerializer)) {
+    // Failed payload serialization is non-fatal
     mscom::StructToStream emptyStruct;
     return emptyStruct.Write(aStream);
   }
@@ -236,7 +248,8 @@ HandlerProvider::put_HandlerControl(long aPid, IHandlerControl* aCtrl)
 
   auto ptrProxy = mscom::ToProxyUniquePtr(aCtrl);
 
-  if (!mscom::InvokeOnMainThread(this,
+  if (!mscom::InvokeOnMainThread("HandlerProvider::SetHandlerControlOnMainThread",
+                                 this,
                                  &HandlerProvider::SetHandlerControlOnMainThread,
                                  static_cast<DWORD>(aPid), Move(ptrProxy))) {
     return E_FAIL;
@@ -250,7 +263,8 @@ HandlerProvider::Refresh(IA2Data* aOutData)
 {
   MOZ_ASSERT(mscom::IsCurrentThreadMTA());
 
-  if (!mscom::InvokeOnMainThread(this, &HandlerProvider::BuildIA2Data,
+  if (!mscom::InvokeOnMainThread("HandlerProvider::BuildIA2Data",
+                                 this, &HandlerProvider::BuildIA2Data,
                                  aOutData)) {
     return E_FAIL;
   }

@@ -119,7 +119,7 @@ nsBox::GetBoxName(nsAutoString& aName)
 nsresult
 nsBox::BeginXULLayout(nsBoxLayoutState& aState)
 {
-#ifdef DEBUG_LAYOUT 
+#ifdef DEBUG_LAYOUT
 
   nsBoxAddIndents();
   printf("XULLayout: ");
@@ -131,7 +131,7 @@ nsBox::BeginXULLayout(nsBoxLayoutState& aState)
   // mark ourselves as dirty so no child under us
   // can post an incremental layout.
   // XXXldb Is this still needed?
-  mState |= NS_FRAME_HAS_DIRTY_CHILDREN;
+  AddStateBits(NS_FRAME_HAS_DIRTY_CHILDREN);
 
   if (GetStateBits() & NS_FRAME_IS_DIRTY)
   {
@@ -260,9 +260,9 @@ nsBox::SetXULBounds(nsBoxLayoutState& aState, const nsRect& aRect, bool aRemoveO
       if ((rect.x != aRect.x) || (rect.y != aRect.y))
         nsContainerFrame::PositionChildViews(this);
     }
-  
 
-   /*  
+
+   /*
     // only if the origin changed
     if ((rect.x != aRect.x) || (rect.y != aRect.y))  {
       if (frame->HasView()) {
@@ -297,7 +297,7 @@ nsresult
 nsBox::GetXULBorder(nsMargin& aMargin)
 {
   aMargin.SizeTo(0,0,0,0);
-    
+
   const nsStyleDisplay* disp = StyleDisplay();
   if (disp->mAppearance && gTheme) {
     // Go to the theme for the border.
@@ -524,7 +524,7 @@ nsBox::SyncLayout(nsBoxLayoutState& aState)
     return NS_OK;
   }
   */
-  
+
 
   if (GetStateBits() & NS_FRAME_IS_DIRTY)
      XULRedraw(aState);
@@ -567,7 +567,7 @@ nsBox::SyncLayout(nsBoxLayoutState& aState)
     // things like opacity correct
     nsContainerFrame::SyncFrameViewAfterReflow(presContext, this, view,
                                                visualOverflow, flags);
-  } 
+  }
 
   return NS_OK;
 }

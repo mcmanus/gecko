@@ -210,8 +210,11 @@ public:
                          nsIAtom* aWhich,
                          int32_t aValue,
                          bool aUserChanged)
-  : mListener(aListener), mWhich(aWhich),
-    mValue(aValue), mUserChanged(aUserChanged)
+    : mozilla::Runnable("nsValueChangedRunnable")
+    , mListener(aListener)
+    , mWhich(aWhich)
+    , mValue(aValue)
+    , mUserChanged(aUserChanged)
   {}
 
   NS_IMETHOD Run() override
@@ -229,10 +232,10 @@ public:
 class nsDragStateChangedRunnable : public Runnable
 {
 public:
-  nsDragStateChangedRunnable(nsISliderListener* aListener,
-                             bool aDragBeginning)
-  : mListener(aListener),
-    mDragBeginning(aDragBeginning)
+  nsDragStateChangedRunnable(nsISliderListener* aListener, bool aDragBeginning)
+    : mozilla::Runnable("nsDragStateChangedRunnable")
+    , mListener(aListener)
+    , mDragBeginning(aDragBeginning)
   {}
 
   NS_IMETHOD Run() override
@@ -318,7 +321,6 @@ nsSliderFrame::AttributeChanged(int32_t aNameSpaceID,
 
 void
 nsSliderFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists)
 {
   if (aBuilder->IsForEventDelivery() && isDraggingThumb()) {
@@ -328,8 +330,8 @@ nsSliderFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       nsDisplayEventReceiver(aBuilder, this));
     return;
   }
-  
-  nsBoxFrame::BuildDisplayList(aBuilder, aDirtyRect, aLists);
+
+  nsBoxFrame::BuildDisplayList(aBuilder, aLists);
 }
 
 static bool
@@ -349,7 +351,6 @@ UsesCustomScrollbarMediator(nsIFrame* scrollbarBox) {
 
 void
 nsSliderFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
-                                           const nsRect&           aDirtyRect,
                                            const nsDisplayListSet& aLists)
 {
   // if we are too small to have a thumb don't paint it.
@@ -418,15 +419,17 @@ nsSliderFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
         refSize.width /= scale.width;
         refSize.height /= scale.height;
       }
-      nsRect dirty = aDirtyRect.Intersect(thumbRect);
-      dirty = nsLayoutUtils::ComputePartialPrerenderArea(aDirtyRect, overflow, refSize);
+      nsRect dirty = aBuilder->GetDirtyRect().Intersect(thumbRect);
+      dirty = nsLayoutUtils::ComputePartialPrerenderArea(aBuilder->GetDirtyRect(), overflow, refSize);
+
+      nsDisplayListBuilder::AutoBuildingDisplayList
+        buildingDisplayList(aBuilder, this, dirty, false);
 
       // Clip the thumb layer to the slider track. This is necessary to ensure
       // FrameLayerBuilder is able to merge content before and after the
       // scrollframe into the same layer (otherwise it thinks the thumb could
       // potentially move anywhere within the existing clip).
       DisplayListClipState::AutoSaveRestore thumbClipState(aBuilder);
-      aBuilder->GetCurrentReferenceFrame();
       thumbClipState.ClipContainingBlockDescendants(
           GetRectRelativeToSelf() + aBuilder->ToReferenceFrame(this));
 
@@ -439,7 +442,7 @@ nsSliderFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
 
       nsDisplayListBuilder::AutoContainerASRTracker contASRTracker(aBuilder);
       nsDisplayListCollection tempLists;
-      nsBoxFrame::BuildDisplayListForChildren(aBuilder, dirty, tempLists);
+      nsBoxFrame::BuildDisplayListForChildren(aBuilder, tempLists);
 
       // This is a bit of a hack. Collect up all descendant display items
       // and merge them into a single Content() list.
@@ -470,8 +473,8 @@ nsSliderFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
       return;
     }
   }
-  
-  nsBoxFrame::BuildDisplayListForChildren(aBuilder, aDirtyRect, aLists);
+
+  nsBoxFrame::BuildDisplayListForChildren(aBuilder, aLists);
 }
 
 NS_IMETHODIMP
@@ -890,7 +893,7 @@ nsSliderFrame::CurrentPositionChanged()
 static void UpdateAttribute(nsIContent* aScrollbar, nscoord aNewPos, bool aNotify, bool aIsSmooth) {
   nsAutoString str;
   str.AppendInt(aNewPos);
-  
+
   if (aIsSmooth) {
     aScrollbar->SetAttr(kNameSpaceID_None, nsGkAtoms::smooth, NS_LITERAL_STRING("true"), false);
   }
@@ -911,7 +914,7 @@ nsSliderFrame::SetCurrentThumbPosition(nsIContent* aScrollbar, nscoord aNewThumb
   GetXULClientRect(crect);
   nscoord offset = IsXULHorizontal() ? crect.x : crect.y;
   int32_t newPos = NSToIntRound((aNewThumbPos - offset) / mRatio);
-  
+
   if (aMaySnap && mContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::snap,
                                         nsGkAtoms::_true, eCaseMatters)) {
     // If snap="true", then the slider may only be set to min + (increment * x).
@@ -919,7 +922,7 @@ nsSliderFrame::SetCurrentThumbPosition(nsIContent* aScrollbar, nscoord aNewThumb
     int32_t increment = GetIncrement(aScrollbar);
     newPos = NSToIntRound(newPos / float(increment)) * increment;
   }
-  
+
   SetCurrentPosition(aScrollbar, newPos, aIsSmooth);
 }
 
@@ -1340,11 +1343,7 @@ nsSliderFrame::ShouldScrollToClickForEvent(WidgetGUIEvent* aEvent)
     return false;
   }
 
-  if (aEvent->mMessage == eTouchStart) {
-    return GetScrollToClick();
-  }
-
-  if (aEvent->mMessage != eMouseDown) {
+  if (aEvent->mMessage != eMouseDown && aEvent->mMessage != eTouchStart) {
     return false;
   }
 
@@ -1354,6 +1353,10 @@ nsSliderFrame::ShouldScrollToClickForEvent(WidgetGUIEvent* aEvent)
     return false;
   }
 #endif
+
+  if (aEvent->mMessage == eTouchStart) {
+    return GetScrollToClick();
+  }
 
   WidgetMouseEvent* mouseEvent = aEvent->AsMouseEvent();
   if (mouseEvent->button == WidgetMouseEvent::eLeftButton) {
@@ -1424,9 +1427,9 @@ nsSliderFrame::HandlePress(nsPresContext* aPresContext,
   if (mContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::disabled,
                             nsGkAtoms::_true, eCaseMatters))
     return NS_OK;
-  
+
   nsRect thumbRect = thumbFrame->GetRect();
-  
+
   nscoord change = 1;
   nsPoint eventPoint;
   if (!GetEventPoint(aEvent, eventPoint)) {
@@ -1436,7 +1439,7 @@ nsSliderFrame::HandlePress(nsPresContext* aPresContext,
   mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
       (uint32_t) ScrollInputMethod::MainThreadScrollbarTrackClick);
 
-  if (IsXULHorizontal() ? eventPoint.x < thumbRect.x 
+  if (IsXULHorizontal() ? eventPoint.x < thumbRect.x
                         : eventPoint.y < thumbRect.y)
     change = -1;
 
@@ -1529,9 +1532,9 @@ nsSliderFrame::EnsureOrient()
 
   bool isHorizontal = (scrollbarBox->GetStateBits() & NS_STATE_IS_HORIZONTAL) != 0;
   if (isHorizontal)
-      mState |= NS_STATE_IS_HORIZONTAL;
+      AddStateBits(NS_STATE_IS_HORIZONTAL);
   else
-      mState &= ~NS_STATE_IS_HORIZONTAL;
+      RemoveStateBits(NS_STATE_IS_HORIZONTAL);
 }
 
 

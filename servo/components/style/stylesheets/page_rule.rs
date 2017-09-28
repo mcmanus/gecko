@@ -7,11 +7,13 @@
 //! [page]: https://drafts.csswg.org/css2/page.html#page-box
 
 use cssparser::SourceLocation;
+#[cfg(feature = "gecko")]
+use malloc_size_of::{MallocSizeOf, MallocSizeOfOps, MallocUnconditionalShallowSizeOf};
 use properties::PropertyDeclarationBlock;
-use shared_lock::{DeepCloneWithLock, Locked, SharedRwLock, SharedRwLockReadGuard, ToCssWithGuard};
+use servo_arc::Arc;
+use shared_lock::{DeepCloneParams, DeepCloneWithLock, Locked, SharedRwLock, SharedRwLockReadGuard, ToCssWithGuard};
 use std::fmt;
 use style_traits::ToCss;
-use stylearc::Arc;
 
 /// A [`@page`][page] rule.
 ///
@@ -28,6 +30,15 @@ pub struct PageRule {
     pub block: Arc<Locked<PropertyDeclarationBlock>>,
     /// The source position this rule was found at.
     pub source_location: SourceLocation,
+}
+
+impl PageRule {
+    /// Measure heap usage.
+    #[cfg(feature = "gecko")]
+    pub fn size_of(&self, guard: &SharedRwLockReadGuard, ops: &mut MallocSizeOfOps) -> usize {
+        // Measurement of other fields may be added later.
+        self.block.unconditional_shallow_size_of(ops) + self.block.read_with(guard).size_of(ops)
+    }
 }
 
 impl ToCssWithGuard for PageRule {
@@ -51,6 +62,7 @@ impl DeepCloneWithLock for PageRule {
         &self,
         lock: &SharedRwLock,
         guard: &SharedRwLockReadGuard,
+        _params: &DeepCloneParams,
     ) -> Self {
         PageRule {
             block: Arc::new(lock.wrap(self.block.read_with(&guard).clone())),

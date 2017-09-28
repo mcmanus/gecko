@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nspr.h"
+#include "mozilla/dom/TabGroup.h"
 #include "mozilla/Logging.h"
 #include "mozilla/IntegerPrintfMacros.h"
 
@@ -14,7 +15,7 @@
 #include "nsIWebProgressListener2.h"
 
 #include "nsIServiceManager.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 
 #include "nsIURL.h"
 #include "nsCOMPtr.h"
@@ -924,6 +925,29 @@ nsDocLoader::GetDOMWindowID(uint64_t *aResult)
 }
 
 NS_IMETHODIMP
+nsDocLoader::GetInnerDOMWindowID(uint64_t *aResult)
+{
+  *aResult = 0;
+
+  nsCOMPtr<mozIDOMWindowProxy> window;
+  nsresult rv = GetDOMWindow(getter_AddRefs(window));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsPIDOMWindowOuter> outer = nsPIDOMWindowOuter::From(window);
+  NS_ENSURE_STATE(outer);
+
+  nsPIDOMWindowInner* inner = outer->GetCurrentInnerWindow();
+  if (!inner) {
+    // If we don't have an inner window, return 0.
+    return NS_OK;
+  }
+
+  MOZ_ASSERT(inner->IsInnerWindow());
+  *aResult = inner->WindowID();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsDocLoader::GetIsTopLevel(bool *aResult)
 {
   *aResult = false;
@@ -954,6 +978,27 @@ nsDocLoader::GetLoadType(uint32_t *aLoadType)
 {
   *aLoadType = 0;
 
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+nsDocLoader::GetTarget(nsIEventTarget** aTarget)
+{
+  nsCOMPtr<mozIDOMWindowProxy> window;
+  nsresult rv = GetDOMWindow(getter_AddRefs(window));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsPIDOMWindowOuter> piwindow = nsPIDOMWindowOuter::From(window);
+  NS_ENSURE_STATE(piwindow);
+
+  nsCOMPtr<nsIEventTarget> target = piwindow->TabGroup()->EventTargetFor(mozilla::TaskCategory::Other);
+  target.forget(aTarget);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDocLoader::SetTarget(nsIEventTarget* aTarget)
+{
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
@@ -1117,9 +1162,8 @@ NS_IMETHODIMP nsDocLoader::OnStatus(nsIRequest* aRequest, nsISupports* ctxt,
       mozilla::services::GetStringBundleService();
     if (!sbs)
       return NS_ERROR_FAILURE;
-    nsXPIDLString msg;
-    nsresult rv = sbs->FormatStatusMessage(aStatus, aStatusArg,
-                                           getter_Copies(msg));
+    nsAutoString msg;
+    nsresult rv = sbs->FormatStatusMessage(aStatus, aStatusArg, msg);
     if (NS_FAILED(rv))
       return rv;
 
@@ -1140,7 +1184,7 @@ NS_IMETHODIMP nsDocLoader::OnStatus(nsIRequest* aRequest, nsISupports* ctxt,
       // Put the info at the front of the list
       mStatusInfoList.insertFront(info->mLastStatus);
     }
-    FireOnStatusChange(this, aRequest, aStatus, msg);
+    FireOnStatusChange(this, aRequest, aStatus, msg.get());
   }
   return NS_OK;
 }

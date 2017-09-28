@@ -28,7 +28,12 @@ pref("security.ssl3.dhe_rsa_aes_128_sha", true);
 pref("security.ssl3.dhe_rsa_aes_256_sha", true);
 pref("security.ssl3.rsa_aes_128_sha", true);
 pref("security.ssl3.rsa_aes_256_sha", true);
+// Deprecate 3DES on nightly builds, Bug 1386754
+#ifdef RELEASE_OR_BETA
 pref("security.ssl3.rsa_des_ede3_sha", true);
+#else
+pref("security.ssl3.rsa_des_ede3_sha", false);
+#endif
 
 pref("security.content.signature.root_hash",
      "97:E8:BA:9C:F1:2F:B3:DE:53:CC:42:A4:E6:57:7E:D6:4D:F4:93:C2:47:B4:14:FE:A0:36:81:8D:38:23:56:0E");
@@ -37,6 +42,14 @@ pref("security.default_personal_cert",   "Ask Every Time");
 pref("security.remember_cert_checkbox_default_setting", true);
 pref("security.ask_for_password",        0);
 pref("security.password_lifetime",       30);
+
+// If true, use the modern sqlite-backed certificate and key databases in NSS.
+// If false, use the default format. Currently the default in NSS is the old
+// BerkeleyDB format, but this will change in bug 1377940.
+// Changing this requires a restart to take effect.
+// Note that the environment variable MOZPSM_NSSDBDIR_OVERRIDE can override both
+// the behavior of this preference and the NSS default.
+pref("security.use_sqldb", false);
 
 // The supported values of this pref are:
 // 0: disable detecting Family Safety mode and importing the root
@@ -51,11 +64,7 @@ pref("security.enterprise_roots.enabled", false);
 // 0: do not fetch OCSP
 // 1: fetch OCSP for DV and EV certificates
 // 2: fetch OCSP only for EV certificates
-#ifdef RELEASE_OR_BETA
 pref("security.OCSP.enabled", 1);
-#else
-pref("security.OCSP.enabled", 2);
-#endif
 pref("security.OCSP.require", false);
 pref("security.OCSP.GET.enabled", false);
 #ifdef RELEASE_OR_BETA
@@ -104,13 +113,13 @@ pref("security.pki.netscape_step_up_policy", 2);
 // 1: Only collect telemetry. CT qualification checks are not performed.
 pref("security.pki.certificate_transparency.mode", 0);
 
+// Hardware Origin-bound Second Factor Support
 pref("security.webauth.u2f", false);
-pref("security.webauth.u2f_enable_softtoken", false);
-pref("security.webauth.u2f_enable_usbtoken", false);
-
 pref("security.webauth.webauthn", false);
+// Only one of "enable_softtoken" and "enable_usbtoken" can be true
+// at a time.
 pref("security.webauth.webauthn_enable_softtoken", false);
-pref("security.webauth.webauthn_enable_usbtoken", false);
+pref("security.webauth.webauthn_enable_usbtoken", true);
 
 pref("security.ssl.errorReporting.enabled", true);
 pref("security.ssl.errorReporting.url", "https://incoming.telemetry.mozilla.org/submit/sslreports/");
@@ -124,12 +133,11 @@ pref("security.cert_pinning.max_max_age_seconds", 5184000);
 // HSTS Priming
 // If a request is mixed-content, send an HSTS priming request to attempt to
 // see if it is available over HTTPS.
-#ifdef RELEASE
 // Don't change the order of evaluation of mixed-content and HSTS upgrades in
-// order to be most compatible with current standards
+// order to be most compatible with current standards in Release
 pref("security.mixed_content.send_hsts_priming", false);
 pref("security.mixed_content.use_hsts", false);
-#else
+#ifdef EARLY_BETA_OR_EARLIER
 // Change the order of evaluation so HSTS upgrades happen before
 // mixed-content blocking
 pref("security.mixed_content.send_hsts_priming", true);

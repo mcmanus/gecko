@@ -1,7 +1,7 @@
 # This lists the known child processes we collect Telemetry for.
 # The entries are keyed with the names used in Telemetry internally, the same name that is used
 # in the main pings payload, i.e. "payload/processes/<process name>". See:
-# https://gecko.readthedocs.io/en/latest/toolkit/components/telemetry/telemetry/data/main-ping.html#processes
+# https://firefox-source-docs.mozilla.org/toolkit/components/telemetry/telemetry/data/main-ping.html#processes
 #
 # For now this is only used to inform the data pipeline about new processes, but will be used to
 # generate headers with C++ data later (enums, strings, ...).
@@ -19,3 +19,8 @@ extension:
 gpu:
   gecko_enum: GeckoProcessType_GPU
   description: This is the compositor or GPU process.
+dynamic:
+  gecko_enum: GeckoProcessType_Default
+  description: >
+    This is not a real process, it is used to logically group add-on probes.
+    It contains data of any probes registered at runtime by add-ons.

@@ -19,6 +19,8 @@ EXPORTS.mozilla.dom.ipc += [
 ]
 
 EXPORTS.mozilla.dom += [
+    'CoalescedInputData.h',
+    'CoalescedMouseData.h',
     'CoalescedWheelData.h',
     'ContentBridgeChild.h',
     'ContentBridgeParent.h',
@@ -50,6 +52,7 @@ EXPORTS.mozilla += [
 ]
 
 UNIFIED_SOURCES += [
+    'CoalescedMouseData.cpp',
     'CoalescedWheelData.cpp',
     'ColorPickerParent.cpp',
     'ContentBridgeChild.cpp',
@@ -126,7 +129,6 @@ LOCAL_INCLUDES += [
     '/dom/geolocation',
     '/dom/media/webspeech/synth/ipc',
     '/dom/security',
-    '/dom/storage',
     '/dom/workers',
     '/extensions/cookie',
     '/extensions/spellcheck/src',
@@ -162,9 +164,6 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2'):
 
 if CONFIG['MOZ_TOOLKIT_SEARCH']:
     DEFINES['MOZ_TOOLKIT_SEARCH'] = True
-
-if CONFIG['MOZ_CODE_COVERAGE']:
-    DEFINES['MOZ_CODE_COVERAGE'] = True
 
 JAR_MANIFESTS += ['jar.mn']
 

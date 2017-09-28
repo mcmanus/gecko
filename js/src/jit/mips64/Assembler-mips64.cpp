@@ -111,7 +111,7 @@ jit::PatchBackedge(CodeLocationJump& jump, CodeLocationLabel label,
     if (BOffImm16::IsInRange(targetAddr - sourceAddr)) {
         branch->setBOffImm16(BOffImm16(targetAddr - sourceAddr));
     } else {
-        if (target == JitRuntime::BackedgeLoopHeader) {
+        if (target == JitZoneGroup::BackedgeLoopHeader) {
             Instruction* inst = &branch[1];
             Assembler::UpdateLoad64Value(inst, targetAddr);
             // Jump to first ori. The lui will be executed in delay slot.
@@ -126,7 +126,7 @@ jit::PatchBackedge(CodeLocationJump& jump, CodeLocationLabel label,
 }
 
 void
-Assembler::executableCopy(uint8_t* buffer, bool flushICache = true)
+Assembler::executableCopy(uint8_t* buffer, bool flushICache)
 {
     MOZ_ASSERT(isFinished);
     m_buffer.executableCopy(buffer);
@@ -235,12 +235,12 @@ Assembler::trace(JSTracer* trc)
 }
 
 void
-Assembler::Bind(uint8_t* rawCode, CodeOffset* label, const void* address)
+Assembler::Bind(uint8_t* rawCode, CodeOffset label, CodeOffset target)
 {
-    if (label->bound()) {
-        intptr_t offset = label->offset();
+    if (label.bound()) {
+        intptr_t offset = label.offset();
         Instruction* inst = (Instruction*) (rawCode + offset);
-        Assembler::UpdateLoad64Value(inst, (uint64_t)address);
+        Assembler::UpdateLoad64Value(inst, (uint64_t)(rawCode + target.offset()));
     }
 }
 
@@ -488,13 +488,6 @@ Assembler::PatchDataWithValueCheck(CodeLocationLabel label, PatchedImmPtr newVal
     Assembler::UpdateLoad64Value(inst, uint64_t(newValue.value));
 
     AutoFlushICache::flush(uintptr_t(inst), 6 * sizeof(uint32_t));
-}
-
-void
-Assembler::PatchInstructionImmediate(uint8_t* code, PatchedImmPtr imm)
-{
-    InstImm* inst = (InstImm*)code;
-    Assembler::UpdateLoad64Value(inst, (uint64_t)imm.value);
 }
 
 uint64_t

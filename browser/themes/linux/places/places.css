@@ -3,8 +3,52 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* Sidebars */
+
+#history-panel,
+#bookmarksPanel {
+  -moz-appearance: none;
+  background-color: transparent;
+}
+
+#sidebar-search-container {
+  padding: 4px;
+}
+
+#search-box {
+  margin: 0;
+}
+
+#viewButton {
+  -moz-appearance: none;
+  border-radius: 4px;
+  margin: 1px 0;
+  margin-inline-start: 4px;
+  padding: 2px 4px;
+  color: inherit;
+}
+
+#viewButton:-moz-focusring:not(:hover):not([open]) {
+  outline: 1px dotted -moz-DialogText;
+}
+
+#viewButton:hover {
+  background: hsla(240, 5%, 5%, 0.1);
+}
+
+#viewButton[open] {
+  background: hsla(240, 5%, 5%, 0.15);
+}
+
 .sidebar-placesTree {
   margin: 0;
+  color: inherit;
+  -moz-appearance: none;
+  border: 0;
+  background: transparent;
+}
+
+.sidebar-placesTreechildren::-moz-tree-row {
+  min-height: 24px;
 }
 
 .sidebar-placesTreechildren::-moz-tree-cell(leaf) ,
@@ -22,101 +66,10 @@
 }
 
 /* Trees */
-treechildren::-moz-tree-image(title) {
-  padding-right: 2px;
-  margin: 0px 2px;
-  width: 16px;
-  height: 16px;
-  list-style-image: url("chrome://mozapps/skin/places/defaultFavicon.svg");
-}
 
-treechildren::-moz-tree-image(title, livemarkItem) {
-  list-style-image: url("chrome://browser/skin/places/livemark-item.png");
-  -moz-image-region: rect(0px, 16px, 16px, 0px);
-}
+%include ../../shared/places/tree-icons.inc.css
 
-treechildren::-moz-tree-image(title, livemarkItem, visited) {
-  -moz-image-region: rect(0px, 32px, 16px, 16px);
-}
-
-treechildren::-moz-tree-image(title, separator) {
-  list-style-image: none;
-  width: 0;
-  height: 0;
-}
-
-treechildren::-moz-tree-image(title, container) {
-  list-style-image: url("moz-icon://stock/gtk-directory?size=menu");
-}
-
-treechildren::-moz-tree-image(title, container, livemark) {
-  list-style-image: url("chrome://browser/skin/feeds/feedIcon16.png");
-  -moz-image-region: auto;
-}
-
-treechildren::-moz-tree-image(container, OrganizerQuery_AllBookmarks) {
-  list-style-image: url("chrome://browser/skin/Toolbar-small.png");
-  -moz-image-region: rect(0px 48px 16px 32px);
-}
-
-treechildren::-moz-tree-image(container, OrganizerQuery_BookmarksToolbar) {
-  list-style-image: url("chrome://browser/skin/places/bookmarksToolbar.png");
-  -moz-image-region: auto;
-}
-
-treechildren::-moz-tree-image(container, OrganizerQuery_BookmarksMenu) {
-  list-style-image: url("chrome://browser/skin/places/bookmarksMenu.png");
-  -moz-image-region: auto;
-}
-
-treechildren::-moz-tree-image(container, OrganizerQuery_UnfiledBookmarks) {
-  list-style-image: url("chrome://browser/skin/places/unsortedBookmarks.png");
-  -moz-image-region: auto;
-}
-
-/* query-nodes should be styled even if they're not expandable */
-treechildren::-moz-tree-image(title, query) {
-  list-style-image: url("chrome://browser/skin/places/query.png");
-}
-
-treechildren::-moz-tree-image(query, OrganizerQuery_Downloads) {
-  list-style-image: url("chrome://browser/skin/places/downloads.png");
-  -moz-image-region: auto;
-}
-
-treechildren::-moz-tree-image(title, query, tagContainer),
-treechildren::-moz-tree-image(query, OrganizerQuery_Tags) {
-  list-style-image: url("chrome://browser/skin/places/tag.png");
-}
-
-/* calendar icon for folders grouping items by date */
-treechildren::-moz-tree-image(title, query, dayContainer) {
-  list-style-image: url("chrome://browser/skin/places/calendar.png");
-}
-
-treechildren::-moz-tree-image(title, query, hostContainer) {
-  list-style-image: url("moz-icon://stock/gtk-directory?size=menu");
-}
-
-treechildren::-moz-tree-image(title, query, hostContainer, open) {
-  list-style-image: url("moz-icon://stock/gtk-directory?size=menu");
-}
-
-treechildren::-moz-tree-image(title, query, OrganizerQuery_History) {
-  list-style-image: url("chrome://browser/skin/Toolbar-small.png");
-  -moz-image-region: rect(0px 32px 16px 16px);
-}
-
-/* We want some queries to look like ordinary folders. This must come
-   after the (title, query) selector, or it would get overridden. */
-treechildren::-moz-tree-image(title, query, folder) {
-  list-style-image: url("moz-icon://stock/gtk-directory?size=menu");
-}
-
-treechildren::-moz-tree-image(cutting) {
-  opacity: 0.5;
-}
-
-treechildren::-moz-tree-cell-text(cutting) {
-  opacity: 0.7;
+treechildren:-moz-tree-image(container,selected),
+treechildren:-moz-tree-image(selected,focus) {
+  fill: HighlightText;
 }

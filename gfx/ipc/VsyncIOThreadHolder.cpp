@@ -6,6 +6,8 @@
 
 #include "VsyncIOThreadHolder.h"
 
+#include "mozilla/SystemGroup.h"
+
 namespace mozilla {
 namespace gfx {
 
@@ -25,7 +27,8 @@ VsyncIOThreadHolder::~VsyncIOThreadHolder()
   if (NS_IsMainThread()) {
     mThread->AsyncShutdown();
   } else {
-    NS_DispatchToMainThread(NewRunnableMethod(mThread, &nsIThread::AsyncShutdown));
+    SystemGroup::Dispatch(TaskCategory::Other, NewRunnableMethod(
+      "nsIThread::AsyncShutdown", mThread, &nsIThread::AsyncShutdown));
   }
 }
 

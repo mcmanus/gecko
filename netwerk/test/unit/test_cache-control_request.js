@@ -1,5 +1,6 @@
 Cu.import("resource://testing-common/httpd.js");
 Cu.import("resource://gre/modules/NetUtil.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 var httpserver = new HttpServer();
 httpserver.start(-1);
@@ -85,12 +86,9 @@ function run_test()
 {
   do_get_profile();
 
-  if (!newCacheBackEndUsed()) {
-    do_check_true(true, "This test doesn't run when the old cache back end is used since it depends on the new APIs.");
-    return;
-  }
-
   do_test_pending();
+
+  Services.prefs.setBoolPref("network.http.rcwn.enabled", false);
 
   httpserver.registerPathHandler(resource_age_100, resource_age_100_handler);
   httpserver.registerPathHandler(resource_stale_100, resource_stale_100_handler);

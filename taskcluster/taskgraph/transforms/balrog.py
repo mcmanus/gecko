@@ -8,6 +8,7 @@ Transform the beetmover task into an actual task description.
 from __future__ import absolute_import, print_function, unicode_literals
 
 from taskgraph.transforms.base import TransformSequence
+from taskgraph.util.attributes import copy_attributes_from_dependent_job
 from taskgraph.util.schema import validate_schema, Schema
 from taskgraph.util.scriptworker import (get_balrog_server_scope,
                                          get_balrog_channel_scopes)
@@ -55,7 +56,7 @@ def make_task_description(config, jobs):
         dep_job = job['dependent-task']
 
         treeherder = job.get('treeherder', {})
-        treeherder.setdefault('symbol', 'tc-Up(N)')
+        treeherder.setdefault('symbol', 'c-Up(N)')
         dep_th_platform = dep_job.task.get('extra', {}).get(
             'treeherder', {}).get('machine', {}).get('platform', '')
         treeherder.setdefault('platform',
@@ -63,17 +64,24 @@ def make_task_description(config, jobs):
         treeherder.setdefault('tier', 1)
         treeherder.setdefault('kind', 'build')
 
-        attributes = {
-            'nightly': dep_job.attributes.get('nightly', False),
-            'build_platform': dep_job.attributes.get('build_platform'),
-            'build_type': dep_job.attributes.get('build_type'),
-        }
+        attributes = copy_attributes_from_dependent_job(dep_job)
+
+        treeherder_job_symbol = dep_job.attributes.get('locale', 'N')
 
         if dep_job.attributes.get('locale'):
-            treeherder['symbol'] = 'tc-Up({})'.format(dep_job.attributes.get('locale'))
+            treeherder['symbol'] = 'c-Up({})'.format(treeherder_job_symbol)
             attributes['locale'] = dep_job.attributes.get('locale')
 
-        label = job.get('label', "balrog-{}".format(dep_job.label))
+        label = job['label']
+
+        description = (
+            "Balrog submission for locale '{locale}' for build '"
+            "{build_platform}/{build_type}'".format(
+                locale=attributes.get('locale', 'en-US'),
+                build_platform=attributes.get('build_platform'),
+                build_type=attributes.get('build_type')
+            )
+        )
 
         upstream_artifacts = [{
             "taskId": {"task-reference": "<beetmover>"},
@@ -88,9 +96,7 @@ def make_task_description(config, jobs):
 
         task = {
             'label': label,
-            'description': "{} Balrog".format(
-                dep_job.task["metadata"]["description"]),
-            # do we have to define worker type somewhere?
+            'description': description,
             'worker-type': 'scriptworker-prov-v1/balrogworker-v1',
             'worker': {
                 'implementation': 'balrog',

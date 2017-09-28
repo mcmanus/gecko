@@ -38,6 +38,11 @@ class BitReader;
 
 struct SPSData
 {
+  bool operator==(const SPSData& aOther) const;
+  bool operator!=(const SPSData& aOther) const;
+
+  bool valid;
+
   /* Decoded Members */
   /*
     pic_width is the decoded width according to:
@@ -391,10 +396,6 @@ struct SPSData
   */
   uint8_t chroma_sample_loc_type_top_field;
   uint8_t chroma_sample_loc_type_bottom_field;
-  bool timing_info_present_flag;
-  uint32_t num_units_in_tick;
-  uint32_t time_scale;
-  bool fixed_frame_rate_flag;
 
   bool scaling_matrix_present;
   uint8_t scaling_matrix4x4[6][16];
@@ -403,15 +404,53 @@ struct SPSData
   SPSData();
 };
 
+struct SEIRecoveryData
+{
+  /*
+    recovery_frame_cnt specifies the recovery point of output pictures in output
+    order. All decoded pictures in output order are indicated to be correct or
+    approximately correct in content starting at the output order position of
+    the reference picture having the frame_num equal to the frame_num of the VCL
+    NAL units for the current access unit incremented by recovery_frame_cnt in
+    modulo MaxFrameNum arithmetic. recovery_frame_cnt shall be in the range of 0
+    to MaxFrameNum − 1, inclusive.
+  */
+  uint32_t recovery_frame_cnt = 0;
+  /*
+    exact_match_flag indicates whether decoded pictures at and subsequent to the
+    specified recovery point in output order derived by starting the decoding
+    process at the access unit associated with the recovery point SEI message
+    shall be an exact match to the pictures that would be produced by starting
+    the decoding process at the location of a previous IDR access unit in the
+    NAL unit stream. The value 0 indicates that the match need not be exact and
+    the value 1 indicates that the match shall be exact.
+  */
+  bool exact_match_flag = false;
+  /*
+    broken_link_flag indicates the presence or absence of a broken link in the
+    NAL unit stream at the location of the recovery point SEI message */
+  bool broken_link_flag = false;
+  /*
+    changing_slice_group_idc equal to 0 indicates that decoded pictures are
+    correct or approximately correct in content at and subsequent to the
+    recovery point in output order when all macroblocks of the primary coded
+    pictures are decoded within the changing slice group period
+  */
+  uint8_t changing_slice_group_idc = 0;
+};
+
 class H264
 {
 public:
-  /* Extract RAW BYTE SEQUENCE PAYLOAD from NAL content.
-     Returns nullptr if invalid content.
-     This is compliant to ITU H.264 7.3.1 Syntax in tabular form NAL unit syntax
-   */
-  static already_AddRefed<mozilla::MediaByteBuffer> DecodeNALUnit(
-    const mozilla::MediaByteBuffer* aNAL);
+  /* Check if out of band extradata contains a SPS NAL */
+  static bool HasSPS(const mozilla::MediaByteBuffer* aExtraData);
+  // Extract SPS and PPS NALs from aSample by looking into each NALs.
+  // aSample must be in AVCC format.
+  static already_AddRefed<mozilla::MediaByteBuffer> ExtractExtraData(
+    const mozilla::MediaRawData* aSample);
+  // Return true if both extradata are equal.
+  static bool CompareExtraData(const mozilla::MediaByteBuffer* aExtraData1,
+                               const mozilla::MediaByteBuffer* aExtraData2);
 
   // Ensure that SPS data makes sense, Return true if SPS data was, and false
   // otherwise. If false, then content will be adjusted accordingly.
@@ -437,11 +476,23 @@ public:
   static FrameType GetFrameType(const mozilla::MediaRawData* aSample);
 
 private:
+  friend class SPSNAL;
+  /* Extract RAW BYTE SEQUENCE PAYLOAD from NAL content.
+     Returns nullptr if invalid content.
+     This is compliant to ITU H.264 7.3.1 Syntax in tabular form NAL unit syntax
+   */
+  static already_AddRefed<mozilla::MediaByteBuffer> DecodeNALUnit(
+    const uint8_t* aNAL, size_t aLength);
   /* Decode SPS NAL RBSP and fill SPSData structure */
   static bool DecodeSPS(const mozilla::MediaByteBuffer* aSPS, SPSData& aDest);
   static bool vui_parameters(BitReader& aBr, SPSData& aDest);
   // Read HRD parameters, all data is ignored.
   static void hrd_parameters(BitReader& aBr);
+  static uint8_t NumSPS(const mozilla::MediaByteBuffer* aExtraData);
+  // Decode SEI payload and return true if the SEI NAL indicates a recovery
+  // point.
+  static bool DecodeRecoverySEI(const mozilla::MediaByteBuffer* aSEI,
+                                SEIRecoveryData& aDest);
 };
 
 } // namespace mp4_demuxer

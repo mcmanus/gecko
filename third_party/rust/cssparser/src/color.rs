@@ -88,7 +88,7 @@ impl<'de> Deserialize<'de> for RGBA {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
         where D: Deserializer<'de>
     {
-        let (r, g, b, a) = try!(Deserialize::deserialize(deserializer));
+        let (r, g, b, a) = Deserialize::deserialize(deserializer)?;
         Ok(RGBA::new(r, g, b, a))
     }
 }
@@ -100,25 +100,33 @@ impl ToCss for RGBA {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result
         where W: fmt::Write,
     {
-        // Try first with two decimal places, then with three.
-        let mut rounded_alpha = (self.alpha_f32() * 100.).round() / 100.;
-        if clamp_unit_f32(rounded_alpha) != self.alpha {
-            rounded_alpha = (self.alpha_f32() * 1000.).round() / 1000.;
-        }
+        let serialize_alpha = self.alpha != 255;
 
-        if self.alpha == 255 {
-            write!(dest, "rgb({}, {}, {})", self.red, self.green, self.blue)
-        } else {
-            write!(dest, "rgba({}, {}, {}, {})",
-                   self.red, self.green, self.blue, rounded_alpha)
+        dest.write_str(if serialize_alpha { "rgba(" } else { "rgb(" })?;
+        self.red.to_css(dest)?;
+        dest.write_str(", ")?;
+        self.green.to_css(dest)?;
+        dest.write_str(", ")?;
+        self.blue.to_css(dest)?;
+        if serialize_alpha {
+            dest.write_str(", ")?;
+
+            // Try first with two decimal places, then with three.
+            let mut rounded_alpha = (self.alpha_f32() * 100.).round() / 100.;
+            if clamp_unit_f32(rounded_alpha) != self.alpha {
+                rounded_alpha = (self.alpha_f32() * 1000.).round() / 1000.;
+            }
+
+            rounded_alpha.to_css(dest)?;
         }
+        dest.write_char(')')
     }
 }
 
 /// A <color> value.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Color {
-    /// The 'currentColor' keyword
+    /// The 'currentcolor' keyword
     CurrentColor,
     /// Everything else gets converted to RGBA during parsing
     RGBA(RGBA),
@@ -130,7 +138,7 @@ known_heap_size!(0, Color);
 impl ToCss for Color {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
         match *self {
-            Color::CurrentColor => dest.write_str("currentColor"),
+            Color::CurrentColor => dest.write_str("currentcolor"),
             Color::RGBA(ref rgba) => rgba.to_css(dest),
         }
     }
@@ -141,7 +149,8 @@ impl Color {
     ///
     /// FIXME(#2) Deprecated CSS2 System Colors are not supported yet.
     pub fn parse<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Color, BasicParseError<'i>> {
-        let token = try!(input.next());
+        // FIXME: remove clone() when lifetimes are non-lexical
+        let token = input.next()?.clone();
         match token {
             Token::Hash(ref value) | Token::IDHash(ref value) => {
                 Color::parse_hash(value.as_bytes())
@@ -162,26 +171,26 @@ impl Color {
     pub fn parse_hash(value: &[u8]) -> Result<Self, ()> {
         match value.len() {
             8 => Ok(rgba(
-                try!(from_hex(value[0])) * 16 + try!(from_hex(value[1])),
-                try!(from_hex(value[2])) * 16 + try!(from_hex(value[3])),
-                try!(from_hex(value[4])) * 16 + try!(from_hex(value[5])),
-                try!(from_hex(value[6])) * 16 + try!(from_hex(value[7]))),
+                from_hex(value[0])? * 16 + from_hex(value[1])?,
+                from_hex(value[2])? * 16 + from_hex(value[3])?,
+                from_hex(value[4])? * 16 + from_hex(value[5])?,
+                from_hex(value[6])? * 16 + from_hex(value[7])?),
             ),
             6 => Ok(rgb(
-                try!(from_hex(value[0])) * 16 + try!(from_hex(value[1])),
-                try!(from_hex(value[2])) * 16 + try!(from_hex(value[3])),
-                try!(from_hex(value[4])) * 16 + try!(from_hex(value[5]))),
+                from_hex(value[0])? * 16 + from_hex(value[1])?,
+                from_hex(value[2])? * 16 + from_hex(value[3])?,
+                from_hex(value[4])? * 16 + from_hex(value[5])?),
             ),
             4 => Ok(rgba(
-                try!(from_hex(value[0])) * 17,
-                try!(from_hex(value[1])) * 17,
-                try!(from_hex(value[2])) * 17,
-                try!(from_hex(value[3])) * 17),
+                from_hex(value[0])? * 17,
+                from_hex(value[1])? * 17,
+                from_hex(value[2])? * 17,
+                from_hex(value[3])? * 17),
             ),
             3 => Ok(rgb(
-                try!(from_hex(value[0])) * 17,
-                try!(from_hex(value[1])) * 17,
-                try!(from_hex(value[2])) * 17),
+                from_hex(value[0])? * 17,
+                from_hex(value[1])? * 17,
+                from_hex(value[2])? * 17),
             ),
             _ => Err(())
         }
@@ -420,30 +429,26 @@ fn parse_color_function<'i, 't>(name: &str, arguments: &mut Parser<'i, 't>) -> R
 
     let alpha = if !arguments.is_exhausted() {
         if uses_commas {
-            try!(arguments.expect_comma());
+            arguments.expect_comma()?;
         } else {
-            match try!(arguments.next()) {
-                Token::Delim('/') => {},
-                t => return Err(BasicParseError::UnexpectedToken(t)),
-            };
+            arguments.expect_delim('/')?;
         };
-        let token = try!(arguments.next());
-        match token {
+        match *arguments.next()? {
             Token::Number { value: v, .. } => {
                 clamp_unit_f32(v)
             }
             Token::Percentage { unit_value: v, .. } => {
                 clamp_unit_f32(v)
             }
-            t => {
-                return Err(BasicParseError::UnexpectedToken(t))
+            ref t => {
+                return Err(BasicParseError::UnexpectedToken(t.clone()))
             }
         }
     } else {
         255
     };
 
-    try!(arguments.expect_exhausted());
+    arguments.expect_exhausted()?;
     Ok(rgba(red, green, blue, alpha))
 }
 
@@ -457,36 +462,36 @@ fn parse_rgb_components_rgb<'i, 't>(arguments: &mut Parser<'i, 't>) -> Result<(u
 
     // Either integers or percentages, but all the same type.
     // https://drafts.csswg.org/css-color/#rgb-functions
-    match try!(arguments.next()) {
+    match arguments.next()?.clone() {
         Token::Number { value: v, .. } => {
             red = clamp_floor_256_f32(v);
-            green = clamp_floor_256_f32(match try!(arguments.next()) {
+            green = clamp_floor_256_f32(match arguments.next()?.clone() {
                 Token::Number { value: v, .. } => v,
                 Token::Comma => {
                     uses_commas = true;
-                    try!(arguments.expect_number())
+                    arguments.expect_number()?
                 }
                 t => return Err(BasicParseError::UnexpectedToken(t))
             });
             if uses_commas {
-                try!(arguments.expect_comma());
+                arguments.expect_comma()?;
             }
-            blue = clamp_floor_256_f32(try!(arguments.expect_number()));
+            blue = clamp_floor_256_f32(arguments.expect_number()?);
         }
         Token::Percentage { unit_value, .. } => {
             red = clamp_unit_f32(unit_value);
-            green = clamp_unit_f32(match try!(arguments.next()) {
+            green = clamp_unit_f32(match arguments.next()?.clone() {
                 Token::Percentage { unit_value, .. } => unit_value,
                 Token::Comma => {
                     uses_commas = true;
-                    try!(arguments.expect_percentage())
+                    arguments.expect_percentage()?
                 }
                 t => return Err(BasicParseError::UnexpectedToken(t))
             });
             if uses_commas {
-                try!(arguments.expect_comma());
+                arguments.expect_comma()?;
             }
-            blue = clamp_unit_f32(try!(arguments.expect_percentage()));
+            blue = clamp_unit_f32(arguments.expect_percentage()?);
         }
         t => return Err(BasicParseError::UnexpectedToken(t))
     };
@@ -498,42 +503,40 @@ fn parse_rgb_components_hsl<'i, 't>(arguments: &mut Parser<'i, 't>) -> Result<(u
     let mut uses_commas = false;
     // Hue given as an angle
     // https://drafts.csswg.org/css-values/#angles
-    let token = try!(arguments.next());
-    let hue_degrees = match token {
-        Token::Number { value: v, .. } => Ok(v),
+    let hue_degrees = match *arguments.next()? {
+        Token::Number { value: v, .. } => v,
         Token::Dimension { value: v, ref unit, .. } => {
             match_ignore_ascii_case! { &*unit,
-                "deg" => Ok(v),
-                "grad" => Ok(v * 360. / 400.),
-                "rad" => Ok(v * 360. / (2. * PI)),
-                "turn" => Ok(v * 360.),
-                _ => Err(()),
+                "deg" => v,
+                "grad" => v * 360. / 400.,
+                "rad" => v * 360. / (2. * PI),
+                "turn" => v * 360.,
+                _ => return Err(BasicParseError::UnexpectedToken(Token::Ident(unit.clone()))),
             }
         }
-        t => return Err(BasicParseError::UnexpectedToken(t))
+        ref t => return Err(BasicParseError::UnexpectedToken(t.clone()))
     };
-    let hue_degrees = try!(hue_degrees.map_err(|()| BasicParseError::UnexpectedToken(token)));
     // Subtract an integer before rounding, to avoid some rounding errors:
     let hue_normalized_degrees = hue_degrees - 360. * (hue_degrees / 360.).floor();
     let hue = hue_normalized_degrees / 360.;
 
     // Saturation and lightness are clamped to 0% ... 100%
     // https://drafts.csswg.org/css-color/#the-hsl-notation
-    let saturation = match try!(arguments.next()) {
+    let saturation = match arguments.next()?.clone() {
         Token::Percentage { unit_value, .. } => unit_value,
         Token::Comma => {
             uses_commas = true;
-            try!(arguments.expect_percentage())
+            arguments.expect_percentage()?
         }
         t => return Err(BasicParseError::UnexpectedToken(t))
     };
     let saturation = saturation.max(0.).min(1.);
 
     if uses_commas {
-        try!(arguments.expect_comma());
+        arguments.expect_comma()?;
     }
 
-    let lightness = try!(arguments.expect_percentage());
+    let lightness = arguments.expect_percentage()?;
     let lightness = lightness.max(0.).min(1.);
 
     // https://drafts.csswg.org/css-color/#hsl-color

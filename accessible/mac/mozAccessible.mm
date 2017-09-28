@@ -33,6 +33,7 @@
 using namespace mozilla;
 using namespace mozilla::a11y;
 
+#define NSAccessibilityDOMIdentifierAttribute @"AXDOMIdentifier"
 #define NSAccessibilityMathRootRadicandAttribute @"AXMathRootRadicand"
 #define NSAccessibilityMathRootIndexAttribute @"AXMathRootIndex"
 #define NSAccessibilityMathFractionNumeratorAttribute @"AXMathFractionNumerator"
@@ -159,6 +160,7 @@ ConvertToNSArray(nsTArray<ProxyAccessible*>& aArray)
 - (NSArray*)additionalAccessibilityAttributeNames
 {
   NSMutableArray* additional = [NSMutableArray array];
+  [additional addObject:NSAccessibilityDOMIdentifierAttribute];
   switch (mRole) {
     case roles::MATHML_ROOT:
       [additional addObject:NSAccessibilityMathRootIndexAttribute];
@@ -321,6 +323,17 @@ ConvertToNSArray(nsTArray<ProxyAccessible*>& aArray)
   }
   if ([attribute isEqualToString:NSAccessibilityHelpAttribute])
     return [self help];
+  if ([attribute isEqualToString:NSAccessibilityOrientationAttribute])
+    return [self orientation];
+
+  if ([attribute isEqualToString:NSAccessibilityDOMIdentifierAttribute]) {
+    nsAutoString id;
+    if (accWrap)
+      nsCoreUtils::GetID(accWrap->GetContent(), id);
+    else
+      proxy->DOMNodeID(id);
+    return nsCocoaUtils::ToNSString(id);
+  }
 
   switch (mRole) {
   case roles::MATHML_ROOT:
@@ -785,7 +798,7 @@ ConvertToNSArray(nsTArray<ProxyAccessible*>& aArray)
     if (roleAtom == nsGkAtoms::note_)
       return @"AXDocumentNote";
     if (roleAtom == nsGkAtoms::region)
-      return @"AXDocumentRegion";
+      return mRole == roles::REGION ? @"AXLandmarkRegion" : nil;
     if (roleAtom == nsGkAtoms::status)
       return @"AXApplicationStatus";
     if (roleAtom == nsGkAtoms::tabpanel)
@@ -886,9 +899,6 @@ ConvertToNSArray(nsTArray<ProxyAccessible*>& aArray)
     case roles::ALERT:
       return @"AXApplicationAlert";
 
-    case roles::SEPARATOR:
-      return @"AXContentSeparator";
-
     case roles::PROPERTYPAGE:
       return @"AXTabPanel";
 
@@ -910,6 +920,7 @@ ConvertToNSArray(nsTArray<ProxyAccessible*>& aArray)
     // macOS added an AXSubrole value to distinguish generic AXGroup objects
     // from those which are AXGroups as a result of an explicit ARIA role,
     // such as the non-landmark, non-listitem text containers in DPub ARIA.
+    case roles::FOOTNOTE:
     case roles::SECTION:
       if (roleAtom)
         return @"AXApplicationGroup";
@@ -941,13 +952,13 @@ static const RoleDescrMap sRoleDescrMap[] = {
   { @"AXDocumentArticle", NS_LITERAL_STRING("article") },
   { @"AXDocumentMath", NS_LITERAL_STRING("math") },
   { @"AXDocumentNote", NS_LITERAL_STRING("note") },
-  { @"AXDocumentRegion", NS_LITERAL_STRING("region") },
   { @"AXLandmarkApplication", NS_LITERAL_STRING("application") },
   { @"AXLandmarkBanner", NS_LITERAL_STRING("banner") },
   { @"AXLandmarkComplementary", NS_LITERAL_STRING("complementary") },
   { @"AXLandmarkContentInfo", NS_LITERAL_STRING("content") },
   { @"AXLandmarkMain", NS_LITERAL_STRING("main") },
   { @"AXLandmarkNavigation", NS_LITERAL_STRING("navigation") },
+  { @"AXLandmarkRegion", NS_LITERAL_STRING("region") },
   { @"AXLandmarkSearch", NS_LITERAL_STRING("search") },
   { @"AXSearchField", NS_LITERAL_STRING("searchTextField") },
   { @"AXTabPanel", NS_LITERAL_STRING("tabPanel") },
@@ -968,6 +979,12 @@ struct RoleDescrComparator
 {
   if (mRole == roles::DOCUMENT)
     return utils::LocalizedString(NS_LITERAL_STRING("htmlContent"));
+
+  if (mRole == roles::FIGURE)
+    return utils::LocalizedString(NS_LITERAL_STRING("figure"));
+
+  if (mRole == roles::HEADING)
+    return utils::LocalizedString(NS_LITERAL_STRING("heading"));
 
   NSString* subrole = [self subrole];
 
@@ -1055,6 +1072,28 @@ struct RoleDescrComparator
   NS_OBJC_END_TRY_ABORT_BLOCK_NIL;
 }
 
+- (NSString*)orientation
+{
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NIL;
+
+  uint64_t state;
+  if (AccessibleWrap* accWrap = [self getGeckoAccessible])
+    state = accWrap->InteractiveState();
+  else if (ProxyAccessible* proxy = [self getProxyAccessible])
+    state = proxy->State();
+  else
+    state = 0;
+
+  if (state & states::HORIZONTAL)
+    return NSAccessibilityHorizontalOrientationValue;
+  if (state & states::VERTICAL)
+    return NSAccessibilityVerticalOrientationValue;
+
+  return NSAccessibilityUnknownOrientationValue;
+
+  NS_OBJC_END_TRY_ABORT_BLOCK_NIL;
+}
+
 // objc-style description (from NSObject); not to be confused with the accessible description above.
 - (NSString*)description
 {
@@ -1067,7 +1106,11 @@ struct RoleDescrComparator
 
 - (BOOL)isFocused
 {
-  return FocusMgr()->IsFocused([self getGeckoAccessible]);
+  if (AccessibleWrap* accWrap = [self getGeckoAccessible]) {
+    return FocusMgr()->IsFocused(accWrap);
+  }
+
+  return false; //XXX: proxy implementation is needed.
 }
 
 - (BOOL)canBeFocused

@@ -6,9 +6,8 @@
 
 <% data.new_style_struct("Counters", inherited=False, gecko_name="Content") %>
 
-<%helpers:longhand name="content" boxed="True" animation_value_type="none"
+<%helpers:longhand name="content" boxed="True" animation_value_type="discrete"
                    spec="https://drafts.csswg.org/css-content/#propdef-content">
-    use values::computed::ComputedValueAsSpecified;
     #[cfg(feature = "gecko")]
     use values::generics::CounterStyleOrNone;
     #[cfg(feature = "gecko")]
@@ -21,9 +20,6 @@
 
     pub use self::computed_value::T as SpecifiedValue;
     pub use self::computed_value::ContentItem;
-
-    impl ComputedValueAsSpecified for SpecifiedValue {}
-    no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
         use cssparser;
@@ -40,8 +36,9 @@
         #[cfg(feature = "gecko")]
         use values::specified::Attr;
 
-        #[derive(Debug, PartialEq, Eq, Clone)]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
+        #[derive(Clone, Debug, Eq, PartialEq, ToComputedValue)]
         pub enum ContentItem {
             /// Literal string content.
             String(String),
@@ -101,8 +98,9 @@
             }
         }
 
-        #[derive(Debug, PartialEq, Eq, Clone)]
+        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+        #[derive(Clone, Debug, Eq, PartialEq, ToComputedValue)]
         pub enum T {
             Normal,
             None,
@@ -179,21 +177,22 @@
                     continue;
                 }
             % endif
-            match input.next() {
-                Ok(Token::QuotedString(value)) => {
-                    content.push(ContentItem::String(value.into_owned()))
+            // FIXME: remove clone() when lifetimes are non-lexical
+            match input.next().map(|t| t.clone()) {
+                Ok(Token::QuotedString(ref value)) => {
+                    content.push(ContentItem::String(value.as_ref().to_owned()))
                 }
-                Ok(Token::Function(name)) => {
+                Ok(Token::Function(ref name)) => {
                     let result = match_ignore_ascii_case! { &name,
                         "counter" => Some(input.parse_nested_block(|input| {
-                            let name = input.expect_ident()?.into_owned();
+                            let name = input.expect_ident()?.as_ref().to_owned();
                             let style = parse_counter_style(context, input);
                             Ok(ContentItem::Counter(name, style))
                         })),
                         "counters" => Some(input.parse_nested_block(|input| {
-                            let name = input.expect_ident()?.into_owned();
+                            let name = input.expect_ident()?.as_ref().to_owned();
                             input.expect_comma()?;
-                            let separator = input.expect_string()?.into_owned();
+                            let separator = input.expect_string()?.as_ref().to_owned();
                             let style = parse_counter_style(context, input);
                             Ok(ContentItem::Counters(name, separator, style))
                         })),
@@ -206,10 +205,10 @@
                     };
                     match result {
                         Some(result) => content.push(result?),
-                        None => return Err(StyleParseError::UnexpectedFunction(name).into())
+                        None => return Err(StyleParseError::UnexpectedFunction(name.clone()).into())
                     }
                 }
-                Ok(Token::Ident(ident)) => {
+                Ok(Token::Ident(ref ident)) => {
                     let valid = match_ignore_ascii_case! { &ident,
                         "open-quote" => { content.push(ContentItem::OpenQuote); true },
                         "close-quote" => { content.push(ContentItem::CloseQuote); true },
@@ -219,7 +218,7 @@
                         _ => false,
                     };
                     if !valid {
-                        return Err(SelectorParseError::UnexpectedIdent(ident).into())
+                        return Err(SelectorParseError::UnexpectedIdent(ident.clone()).into())
                     }
                 }
                 Err(_) => break,
@@ -233,13 +232,14 @@
     }
 </%helpers:longhand>
 
-<%helpers:longhand name="counter-increment" animation_value_type="none"
+<%helpers:longhand name="counter-increment" animation_value_type="discrete"
                    spec="https://drafts.csswg.org/css-lists/#propdef-counter-increment">
     use std::fmt;
     use style_traits::ToCss;
     use values::CustomIdent;
 
-    #[derive(Debug, Clone, PartialEq)]
+    #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
+    #[derive(Clone, Debug, PartialEq)]
     pub struct SpecifiedValue(pub Vec<(CustomIdent, specified::Integer)>);
 
     pub mod computed_value {
@@ -247,7 +247,8 @@
         use style_traits::ToCss;
         use values::CustomIdent;
 
-        #[derive(Debug, Clone, PartialEq)]
+        #[derive(Clone, Debug, PartialEq)]
+        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
         pub struct T(pub Vec<(CustomIdent, i32)>);
 
@@ -295,7 +296,6 @@
         computed_value::T(Vec::new())
     }
 
-    no_viewport_percentage!(SpecifiedValue);
 
     impl ToCss for SpecifiedValue {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result
@@ -333,8 +333,8 @@
         let mut counters = Vec::new();
         loop {
             let counter_name = match input.next() {
-                Ok(Token::Ident(ident)) => CustomIdent::from_ident(ident, &["none"])?,
-                Ok(t) => return Err(BasicParseError::UnexpectedToken(t).into()),
+                Ok(&Token::Ident(ref ident)) => CustomIdent::from_ident(ident, &["none"])?,
+                Ok(t) => return Err(BasicParseError::UnexpectedToken(t.clone()).into()),
                 Err(_) => break,
             };
             let counter_delta = input.try(|input| specified::parse_integer(context, input))
@@ -350,7 +350,7 @@
     }
 </%helpers:longhand>
 
-<%helpers:longhand name="counter-reset" animation_value_type="none"
+<%helpers:longhand name="counter-reset" animation_value_type="discrete"
                    spec="https://drafts.csswg.org/css-lists-3/#propdef-counter-reset">
     pub use super::counter_increment::{SpecifiedValue, computed_value, get_initial_value};
     use super::counter_increment::parse_common;

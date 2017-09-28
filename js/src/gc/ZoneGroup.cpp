@@ -11,6 +11,8 @@
 #include "jit/IonBuilder.h"
 #include "jit/JitCompartment.h"
 
+using namespace js;
+
 namespace js {
 
 ZoneGroup::ZoneGroup(JSRuntime* runtime)
@@ -18,7 +20,7 @@ ZoneGroup::ZoneGroup(JSRuntime* runtime)
     ownerContext_(TlsContext.get()),
     enterCount(1),
     zones_(this),
-    usedByHelperThread(false),
+    helperThreadUse(HelperThreadUse::None),
 #ifdef DEBUG
     ionBailAfter_(this, 0),
 #endif
@@ -43,6 +45,7 @@ ZoneGroup::init()
 ZoneGroup::~ZoneGroup()
 {
 #ifdef DEBUG
+    MOZ_ASSERT(helperThreadUse == HelperThreadUse::None);
     {
         AutoLockHelperThreadState lock;
         MOZ_ASSERT(ionLazyLinkListSize_ == 0);
@@ -63,7 +66,7 @@ ZoneGroup::enter(JSContext* cx)
         MOZ_ASSERT(enterCount);
     } else {
         if (useExclusiveLocking) {
-            MOZ_ASSERT(!usedByHelperThread);
+            MOZ_ASSERT(!usedByHelperThread());
             while (ownerContext().context() != nullptr) {
                 cx->yieldToEmbedding();
             }
@@ -130,4 +133,43 @@ ZoneGroup::ionLazyLinkListAdd(jit::IonBuilder* builder)
     ionLazyLinkListSize_++;
 }
 
+void
+ZoneGroup::deleteEmptyZone(Zone* zone)
+{
+    MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime));
+    MOZ_ASSERT(zone->group() == this);
+    MOZ_ASSERT(zone->compartments().empty());
+    for (auto& i : zones()) {
+        if (i == zone) {
+            zones().erase(&i);
+            zone->destroy(runtime->defaultFreeOp());
+            return;
+        }
+    }
+    MOZ_CRASH("Zone not found");
+}
+
 } // namespace js
+
+JS::AutoRelinquishZoneGroups::AutoRelinquishZoneGroups(JSContext* cx)
+  : cx(cx)
+{
+    MOZ_ASSERT(cx == TlsContext.get());
+
+    AutoEnterOOMUnsafeRegion oomUnsafe;
+    for (ZoneGroupsIter group(cx->runtime()); !group.done(); group.next()) {
+        while (group->ownerContext().context() == cx) {
+            group->leave();
+            if (!enterList.append(group))
+                oomUnsafe.crash("AutoRelinquishZoneGroups");
+        }
+    }
+}
+
+JS::AutoRelinquishZoneGroups::~AutoRelinquishZoneGroups()
+{
+    for (size_t i = 0; i < enterList.length(); i++) {
+        ZoneGroup* group = static_cast<ZoneGroup*>(enterList[i]);
+        group->enter(cx);
+    }
+}

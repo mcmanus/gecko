@@ -398,7 +398,7 @@ nsPluginStreamListenerPeer::SetupPluginCacheFile(nsIChannel* channel)
       return rv;
 
     // Create a file to save our stream into. Should we scramble the name?
-    filename.Insert(NS_LITERAL_CSTRING("plugin-"), 0);
+    filename.InsertLiteral("plugin-", 0);
     rv = pluginTmp->AppendNative(filename);
     if (NS_FAILED(rv))
       return rv;
@@ -428,8 +428,7 @@ nsPluginStreamListenerPeer::OnStartRequest(nsIRequest *request,
                                            nsISupports* aContext)
 {
   nsresult rv = NS_OK;
-  PROFILER_LABEL("nsPluginStreamListenerPeer", "OnStartRequest",
-    js::ProfileEntry::Category::OTHER);
+  AUTO_PROFILER_LABEL("nsPluginStreamListenerPeer::OnStartRequest", OTHER);
 
   nsCOMPtr<nsIRequest> baseRequest = GetBaseRequest(request);
   if (mRequests.IndexOfObject(baseRequest) == -1) {
@@ -659,7 +658,6 @@ nsPluginStreamListenerPeer::MakeByteRangeString(NPByteRange* aRangeList, nsACStr
 
   rangeRequest = string;
   *numRequests  = requestCnt;
-  return;
 }
 
 // XXX: Converting the channel within nsPluginStreamListenerPeer

@@ -3,6 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 %endif
+%filter substitution
+%define identityPopupExpanderWidth 38px
 
 /* Hide all conditional elements by default. */
 :-moz-any([when-connection],[when-mixedcontent],[when-ciphers],[when-loginforms]) {
@@ -67,6 +69,10 @@
 
 #identity-popup > .panel-arrowcontainer > .panel-arrowcontent {
   padding: 0;
+  /* Set default fill for icons in the identity popup.
+     Individual icons can override this. */
+  fill: currentColor;
+  fill-opacity: .6;
 }
 
 .panel-mainview[panelid=identity-popup] {
@@ -122,22 +128,26 @@
   margin: 0;
   padding: 4px 0;
   min-width: auto;
-  width: var(--identity-popup-expander-width);
-  border: 0 none;
+  width: @identityPopupExpanderWidth@;
+  border-style: none;
   -moz-appearance: none;
-  background: url("chrome://browser/skin/controlcenter/arrow-subview.svg") center no-repeat;
+  background: url("chrome://browser/skin/arrow-left.svg") center no-repeat;
   background-size: 16px, auto;
-}
-
-.identity-popup-expander:-moz-locale-dir(rtl) {
-  transform: scaleX(-1);
+  -moz-context-properties: fill;
+  fill: currentColor;
+  color: inherit;
 }
 
 .identity-popup-expander[panel-multiview-anchor] {
   transition: background-color 250ms ease-in;
   background-color: Highlight;
-  background-image: url("chrome://browser/skin/controlcenter/arrow-subview-back.svg"),
-                    linear-gradient(rgba(255,255,255,0.3), transparent);
+  background-image: url("chrome://browser/skin/arrow-left.svg");
+  color: HighlightText;
+}
+
+.identity-popup-expander[panel-multiview-anchor]:-moz-locale-dir(rtl),
+.identity-popup-expander:not([panel-multiview-anchor]):-moz-locale-dir(ltr) {
+  transform: scaleX(-1);
 }
 
 .identity-popup-expander > .button-box {
@@ -145,13 +155,12 @@
 }
 
 .identity-popup-expander:not([panel-multiview-anchor]) > .button-box {
-  border-left: 1px solid var(--panel-separator-color);
+  border-right: 1px solid var(--panel-separator-color);
 }
 
 .identity-popup-expander:hover {
   background-color: var(--arrowpanel-dimmed);
-  background-image: url("chrome://browser/skin/controlcenter/arrow-subview.svg"),
-                    linear-gradient(rgba(255,255,255,0.3), transparent);
+  background-image: url("chrome://browser/skin/arrow-left.svg");
 }
 
 .identity-popup-expander:hover:active {
@@ -187,7 +196,7 @@
   word-wrap: break-word;
   /* 1em + 2em + 24px is #identity-popup-security-content padding
    * 30em is .panel-mainview:not([panelid="PanelUI-popup"]) width */
-  max-width: calc(30rem - 3rem - 24px - var(--identity-popup-expander-width))
+  max-width: calc(30rem - 3rem - 24px - @identityPopupExpanderWidth@);
 }
 
 .identity-popup-warning-gray {
@@ -204,17 +213,13 @@
 .identity-popup-warning-yellow:-moz-locale-dir(rtl) {
   background-position: 100% 50%;
 }
-
 /* SECURITY */
-
 .identity-popup-connection-secure {
-  color: #418220;
+  color: #058B00;
 }
-
 .identity-popup-connection-not-secure {
   color: #d74345;
 }
-
 #identity-popup-securityView {
   overflow: hidden;
 }
@@ -228,25 +233,25 @@
 #identity-popup[connection=chrome] #identity-popup-security-content {
   background-image: url(chrome://branding/content/icon48.png);
 }
-
 #identity-popup[connection^=secure] #identity-popup-securityView,
 #identity-popup[connection^=secure] #identity-popup-security-content {
-  background-image: url(chrome://browser/skin/controlcenter/connection.svg#connection-secure);
+  background-image: url(chrome://browser/skin/controlcenter/connection.svg);
+  -moz-context-properties: fill;
+  fill: #12BC00;
 }
-
 /* Use [isbroken] to make sure we don't show a lock on an http page. See Bug 1192162. */
 #identity-popup[ciphers=weak] #identity-popup-securityView,
 #identity-popup[ciphers=weak] #identity-popup-security-content,
 #identity-popup[mixedcontent~=passive-loaded][isbroken] #identity-popup-securityView,
 #identity-popup[mixedcontent~=passive-loaded][isbroken] #identity-popup-security-content {
-  background-image: url(chrome://browser/skin/controlcenter/connection.svg#connection-degraded);
+  background-image: url(chrome://browser/skin/controlcenter/connection.svg);
+  -moz-context-properties: fill, fill-opacity;
 }
 
 #identity-popup[connection=secure-cert-user-overridden] #identity-popup-securityView,
 #identity-popup[connection=secure-cert-user-overridden] #identity-popup-security-content {
   background-image: url(chrome://browser/skin/connection-mixed-passive-loaded.svg);
-  -moz-context-properties: fill;
-  fill: GrayText;
+  -moz-context-properties: fill, fill-opacity;
 }
 
 #identity-popup[loginforms=insecure] #identity-popup-securityView,
@@ -254,6 +259,7 @@
 #identity-popup[mixedcontent~=active-loaded][isbroken] #identity-popup-securityView,
 #identity-popup[mixedcontent~=active-loaded][isbroken] #identity-popup-security-content {
   background-image: url(chrome://browser/skin/controlcenter/mcb-disabled.svg);
+  -moz-context-properties: fill, fill-opacity;
 }
 
 #identity-popup[connection=extension] #identity-popup-securityView,

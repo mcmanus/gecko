@@ -5,10 +5,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Attributes.h"
+#include "mozilla/ClearOnShutdown.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Likely.h"
 #include "mozilla/Printf.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Unused.h"
 
 #include "mozilla/net/CookieServiceChild.h"
@@ -20,6 +20,8 @@
 #include "nsIScriptSecurityManager.h"
 
 #include "nsIIOService.h"
+#include "nsIPermissionManager.h"
+#include "nsIProtocolHandler.h"
 #include "nsIPrefBranch.h"
 #include "nsIPrefService.h"
 #include "nsIScriptError.h"
@@ -71,14 +73,14 @@ using namespace mozilla::net;
  * useful types & constants
  ******************************************************************************/
 
-static nsCookieService *gCookieService;
+static StaticRefPtr<nsCookieService> gCookieService;
 
 // XXX_hack. See bug 178993.
 // This is a hack to hide HttpOnly cookies from older browsers
 #define HTTP_ONLY_PREFIX "#HttpOnly_"
 
 #define COOKIES_FILE "cookies.sqlite"
-#define COOKIES_SCHEMA_VERSION 8
+#define COOKIES_SCHEMA_VERSION 9
 
 // parameter indexes; see EnsureReadDomain, EnsureReadComplete and
 // ReadCookieDBListener::HandleResult
@@ -93,6 +95,7 @@ static nsCookieService *gCookieService;
 #define IDX_HTTPONLY 8
 #define IDX_BASE_DOMAIN 9
 #define IDX_ORIGIN_ATTRIBUTES 10
+#define IDX_SAME_SITE 11
 
 #define TOPIC_CLEAR_ORIGIN_DATA "clear-origin-attributes-data"
 
@@ -137,21 +140,6 @@ static void
 bindCookieParameters(mozIStorageBindingParamsArray *aParamsArray,
                      const nsCookieKey &aKey,
                      const nsCookie *aCookie);
-
-// struct for temporarily storing cookie attributes during header parsing
-struct nsCookieAttributes
-{
-  nsAutoCString name;
-  nsAutoCString value;
-  nsAutoCString host;
-  nsAutoCString path;
-  nsAutoCString expires;
-  nsAutoCString maxage;
-  int64_t expiryTime;
-  bool isSession;
-  bool isSecure;
-  bool isHttpOnly;
-};
 
 // stores the nsCookieEntry entryclass and an index into the cookie array
 // within that entryclass, for purposes of storing an iteration state that
@@ -316,15 +304,15 @@ LogEvicted(nsCookie *aCookie, const char* details)
   MOZ_LOG(gCookieLog, LogLevel::Debug,("\n"));
 }
 
-// inline wrappers to make passing in nsAFlatCStrings easier
+// inline wrappers to make passing in nsCStrings easier
 static inline void
-LogFailure(bool aSetCookie, nsIURI *aHostURI, const nsAFlatCString &aCookieString, const char *aReason)
+LogFailure(bool aSetCookie, nsIURI *aHostURI, const nsCString& aCookieString, const char *aReason)
 {
   LogFailure(aSetCookie, aHostURI, aCookieString.get(), aReason);
 }
 
 static inline void
-LogSuccess(bool aSetCookie, nsIURI *aHostURI, const nsAFlatCString &aCookieString, nsCookie *aCookie, bool aReplacing)
+LogSuccess(bool aSetCookie, nsIURI *aHostURI, const nsCString& aCookieString, nsCookie *aCookie, bool aReplacing)
 {
   LogSuccess(aSetCookie, aHostURI, aCookieString.get(), aCookie, aReplacing);
 }
@@ -608,12 +596,6 @@ NS_IMPL_ISUPPORTS(AppClearDataObserver, nsIObserver)
 } // namespace
 
 size_t
-nsCookieKey::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
-{
-  return mBaseDomain.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
-}
-
-size_t
 nsCookieEntry::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
 {
   size_t amount = nsCookieKey::SizeOfExcludingThis(aMallocSizeOf);
@@ -658,7 +640,7 @@ DBState::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
  * singleton instance ctor/dtor methods
  ******************************************************************************/
 
-nsICookieService*
+already_AddRefed<nsICookieService>
 nsCookieService::GetXPCOMSingleton()
 {
   if (IsNeckoChild())
@@ -667,14 +649,13 @@ nsCookieService::GetXPCOMSingleton()
   return GetSingleton();
 }
 
-nsCookieService*
+already_AddRefed<nsCookieService>
 nsCookieService::GetSingleton()
 {
   NS_ASSERTION(!IsNeckoChild(), "not a parent process");
 
   if (gCookieService) {
-    NS_ADDREF(gCookieService);
-    return gCookieService;
+    return do_AddRef(gCookieService);
   }
 
   // Create a new singleton nsCookieService.
@@ -685,13 +666,14 @@ nsCookieService::GetSingleton()
   // See bug 209571.
   gCookieService = new nsCookieService();
   if (gCookieService) {
-    NS_ADDREF(gCookieService);
-    if (NS_FAILED(gCookieService->Init())) {
-      NS_RELEASE(gCookieService);
+    if (NS_SUCCEEDED(gCookieService->Init())) {
+      ClearOnShutdown(&gCookieService);
+    } else {
+      gCookieService = nullptr;
     }
   }
 
-  return gCookieService;
+  return do_AddRef(gCookieService);
 }
 
 /* static */ void
@@ -1052,7 +1034,7 @@ nsCookieService::TryInitDB(bool aRecreateDB)
           int64_t id = select->AsInt64(SCHEMA2_IDX_ID);
           select->GetUTF8String(SCHEMA2_IDX_HOST, host);
 
-          rv = GetBaseDomainFromHost(host, baseDomain);
+          rv = GetBaseDomainFromHost(mTLDService, host, baseDomain);
           NS_ENSURE_SUCCESS(rv, RESULT_RETRY);
 
           mozStorageStatementScoper scoper(update);
@@ -1410,6 +1392,16 @@ nsCookieService::TryInitDB(bool aRecreateDB)
         COOKIE_LOGSTRING(LogLevel::Debug,
           ("Upgraded database to schema version 8"));
       }
+      MOZ_FALLTHROUGH;
+
+    case 8:
+      {
+        // Add the sameSite column to the table.
+        rv = mDefaultDBState->dbConn->ExecuteSimpleSQL(
+          NS_LITERAL_CSTRING("ALTER TABLE moz_cookies ADD sameSite INTEGER"));
+        COOKIE_LOGSTRING(LogLevel::Debug,
+          ("Upgraded database to schema version 9"));
+      }
 
       // No more upgrades. Update the schema version.
       rv = mDefaultDBState->dbConn->SetSchemaVersion(COOKIES_SCHEMA_VERSION);
@@ -1457,7 +1449,8 @@ nsCookieService::TryInitDB(bool aRecreateDB)
             "lastAccessed, "
             "creationTime, "
             "isSecure, "
-            "isHttpOnly "
+            "isHttpOnly, "
+            "sameSite "
           "FROM moz_cookies"), getter_AddRefs(stmt));
         if (NS_SUCCEEDED(rv))
           break;
@@ -1498,7 +1491,8 @@ nsCookieService::TryInitDB(bool aRecreateDB)
       "lastAccessed, "
       "creationTime, "
       "isSecure, "
-      "isHttpOnly"
+      "isHttpOnly, "
+      "sameSite "
     ") VALUES ("
       ":baseDomain, "
       ":originAttributes, "
@@ -1510,7 +1504,8 @@ nsCookieService::TryInitDB(bool aRecreateDB)
       ":lastAccessed, "
       ":creationTime, "
       ":isSecure, "
-      ":isHttpOnly"
+      ":isHttpOnly, "
+      ":sameSite"
     ")"),
     getter_AddRefs(mDefaultDBState->stmtInsert));
   NS_ENSURE_SUCCESS(rv, RESULT_RETRY);
@@ -1563,7 +1558,7 @@ nsCookieService::CreateTableWorker(const char* aName)
   // set will still work once they upgrade back.
   nsAutoCString command("CREATE TABLE ");
   command.Append(aName);
-  command.Append(" ("
+  command.AppendLiteral(" ("
       "id INTEGER PRIMARY KEY, "
       "baseDomain TEXT, "
       "originAttributes TEXT NOT NULL DEFAULT '', "
@@ -1577,6 +1572,7 @@ nsCookieService::CreateTableWorker(const char* aName)
       "isSecure INTEGER, "
       "isHttpOnly INTEGER, "
       "inBrowserElement INTEGER DEFAULT 0, "
+      "sameSite INTEGER DEFAULT 0, "
       "CONSTRAINT moz_uniqueid UNIQUE (name, host, path, originAttributes)"
     ")");
   return mDefaultDBState->dbConn->ExecuteSimpleSQL(command);
@@ -1968,6 +1964,9 @@ nsCookieService::Observe(nsISupports     *aSubject,
 
   } else if (!strcmp(aTopic, "last-pb-context-exited")) {
     // Flush all the cookies stored by private browsing contexts
+    mozilla::OriginAttributesPattern pattern;
+    pattern.mPrivateBrowsingId.Construct(1);
+    RemoveCookiesWithOriginAttributes(pattern, EmptyCString());
     mPrivateDBState = new DBState();
   }
 
@@ -2061,6 +2060,27 @@ nsCookieService::SetCookieStringFromHttp(nsIURI     *aHostURI,
                                true);
 }
 
+int64_t
+nsCookieService::ParseServerTime(const nsCString &aServerTime)
+{
+  // parse server local time. this is not just done here for efficiency
+  // reasons - if there's an error parsing it, and we need to default it
+  // to the current time, we must do it here since the current time in
+  // SetCookieInternal() will change for each cookie processed (e.g. if the
+  // user is prompted).
+  PRTime tempServerTime;
+  int64_t serverTime;
+  PRStatus result = PR_ParseTimeString(aServerTime.get(), true,
+                                       &tempServerTime);
+  if (result == PR_SUCCESS) {
+    serverTime = tempServerTime / int64_t(PR_USEC_PER_SEC);
+  } else {
+    serverTime = PR_Now() / PR_USEC_PER_SEC;
+  }
+
+  return serverTime;
+}
+
 nsresult
 nsCookieService::SetCookieStringCommon(nsIURI *aHostURI,
                                        const char *aCookieHeader,
@@ -2114,7 +2134,7 @@ nsCookieService::SetCookieStringInternal(nsIURI                 *aHostURI,
   // is acceptable.
   bool requireHostMatch;
   nsAutoCString baseDomain;
-  nsresult rv = GetBaseDomain(aHostURI, baseDomain, requireHostMatch);
+  nsresult rv = GetBaseDomain(mTLDService, aHostURI, baseDomain, requireHostMatch);
   if (NS_FAILED(rv)) {
     COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, aCookieHeader,
                       "couldn't get base domain from URI");
@@ -2124,7 +2144,13 @@ nsCookieService::SetCookieStringInternal(nsIURI                 *aHostURI,
   nsCookieKey key(baseDomain, aOriginAttrs);
 
   // check default prefs
-  CookieStatus cookieStatus = CheckPrefs(aHostURI, aIsForeign, aCookieHeader.get());
+  uint32_t priorCookieCount = 0;
+  nsAutoCString hostFromURI;
+  aHostURI->GetHost(hostFromURI);
+  CountCookiesFromHost(hostFromURI, &priorCookieCount);
+  CookieStatus cookieStatus = CheckPrefs(mPermissionService, mCookieBehavior,
+                                         mThirdPartySession, aHostURI, aIsForeign,
+                                         aCookieHeader.get(), priorCookieCount);
 
   // fire a notification if third party or if cookie was rejected
   // (but not if there was an error)
@@ -2147,20 +2173,7 @@ nsCookieService::SetCookieStringInternal(nsIURI                 *aHostURI,
     break;
   }
 
-  // parse server local time. this is not just done here for efficiency
-  // reasons - if there's an error parsing it, and we need to default it
-  // to the current time, we must do it here since the current time in
-  // SetCookieInternal() will change for each cookie processed (e.g. if the
-  // user is prompted).
-  PRTime tempServerTime;
-  int64_t serverTime;
-  PRStatus result = PR_ParseTimeString(aServerTime.get(), true,
-                                       &tempServerTime);
-  if (result == PR_SUCCESS) {
-    serverTime = tempServerTime / int64_t(PR_USEC_PER_SEC);
-  } else {
-    serverTime = PR_Now() / PR_USEC_PER_SEC;
-  }
+  int64_t serverTime = ParseServerTime(aServerTime);
 
   // process each cookie in the header
   while (SetCookieInternal(aHostURI, key, requireHostMatch, cookieStatus,
@@ -2245,14 +2258,36 @@ nsCookieService::NotifyThirdParty(nsIURI *aHostURI, bool aIsAccepted, nsIChannel
 // cookies.
 void
 nsCookieService::NotifyChanged(nsISupports     *aSubject,
-                               const char16_t *aData)
+                               const char16_t *aData,
+                               bool aOldCookieIsSession)
 {
   const char* topic = mDBState == mPrivateDBState ?
       "private-cookie-changed" : "cookie-changed";
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
-  if (os) {
-    os->NotifyObservers(aSubject, topic, aData);
+  if (!os) {
+    return;
   }
+  // Notify for topic "private-cookie-changed" or "cookie-changed"
+  os->NotifyObservers(aSubject, topic, aData);
+
+  // Notify for topic "session-cookie-changed" to update the copy of session
+  // cookies in session restore component.
+  // Ignore private session cookies since they will not be restored.
+  if (mDBState == mPrivateDBState) {
+    return;
+  }
+  // Filter out notifications for individual non-session cookies.
+  if (NS_LITERAL_STRING("changed").Equals(aData) ||
+      NS_LITERAL_STRING("deleted").Equals(aData) ||
+      NS_LITERAL_STRING("added").Equals(aData)) {
+    nsCOMPtr<nsICookie> xpcCookie = do_QueryInterface(aSubject);
+    MOZ_ASSERT(xpcCookie);
+    auto cookie = static_cast<nsCookie*>(xpcCookie.get());
+    if (!cookie->IsSession() && !aOldCookieIsSession) {
+      return;
+    }
+  }
+  os->NotifyObservers(aSubject, "session-cookie-changed", aData);
 }
 
 already_AddRefed<nsIArray>
@@ -2456,6 +2491,7 @@ nsCookieService::Add(const nsACString &aHost,
                      bool              aIsSession,
                      int64_t           aExpiry,
                      JS::HandleValue   aOriginAttributes,
+                     int32_t           aSameSite,
                      JSContext*        aCx,
                      uint8_t           aArgc)
 {
@@ -2471,7 +2507,7 @@ nsCookieService::Add(const nsACString &aHost,
   NS_ENSURE_SUCCESS(rv, rv);
 
   return AddNative(aHost, aPath, aName, aValue, aIsSecure, aIsHttpOnly,
-                   aIsSession, aExpiry, &attrs);
+                   aIsSession, aExpiry, &attrs, aSameSite);
 }
 
 NS_IMETHODIMP_(nsresult)
@@ -2483,7 +2519,8 @@ nsCookieService::AddNative(const nsACString &aHost,
                            bool              aIsHttpOnly,
                            bool              aIsSession,
                            int64_t           aExpiry,
-                           OriginAttributes* aOriginAttributes)
+                           OriginAttributes* aOriginAttributes,
+                           int32_t           aSameSite)
 {
   if (NS_WARN_IF(!aOriginAttributes)) {
     return NS_ERROR_FAILURE;
@@ -2505,7 +2542,7 @@ nsCookieService::AddNative(const nsACString &aHost,
   // get the base domain for the host URI.
   // e.g. for "www.bbc.co.uk", this would be "bbc.co.uk".
   nsAutoCString baseDomain;
-  rv = GetBaseDomainFromHost(host, baseDomain);
+  rv = GetBaseDomainFromHost(mTLDService, host, baseDomain);
   NS_ENSURE_SUCCESS(rv, rv);
 
   int64_t currentTimeInUsec = PR_Now();
@@ -2519,7 +2556,8 @@ nsCookieService::AddNative(const nsACString &aHost,
                      aIsSession,
                      aIsSecure,
                      aIsHttpOnly,
-                     key.mOriginAttributes);
+                     key.mOriginAttributes,
+                     aSameSite);
   if (!cookie) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -2548,7 +2586,7 @@ nsCookieService::Remove(const nsACString& aHost, const OriginAttributes& aAttrs,
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsAutoCString baseDomain;
-  rv = GetBaseDomainFromHost(host, baseDomain);
+  rv = GetBaseDomainFromHost(mTLDService, host, baseDomain);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsListIter matchIter;
@@ -2568,7 +2606,7 @@ nsCookieService::Remove(const nsACString& aHost, const OriginAttributes& aAttrs,
     if (!host.IsEmpty() && host.First() == '.')
       host.Cut(0, 1);
 
-    host.Insert(NS_LITERAL_CSTRING("http://"), 0);
+    host.InsertLiteral("http://", 0);
 
     nsCOMPtr<nsIURI> uri;
     NS_NewURI(getter_AddRefs(uri), host);
@@ -2651,7 +2689,8 @@ nsCookieService::Read()
       "isSecure, "
       "isHttpOnly, "
       "baseDomain, "
-      "originAttributes "
+      "originAttributes, "
+      "sameSite "
     "FROM moz_cookies "
     "WHERE baseDomain NOTNULL"), getter_AddRefs(stmtRead));
   NS_ENSURE_SUCCESS(rv, RESULT_RETRY);
@@ -2712,6 +2751,7 @@ nsCookieService::GetCookieFromRow(T &aRow, const OriginAttributes& aOriginAttrib
   int64_t creationTime = aRow->AsInt64(IDX_CREATION_TIME);
   bool isSecure = 0 != aRow->AsInt32(IDX_SECURE);
   bool isHttpOnly = 0 != aRow->AsInt32(IDX_HTTPONLY);
+  int32_t sameSite = aRow->AsInt32(IDX_SAME_SITE);
 
   // Create a new nsCookie and assign the data.
   return nsCookie::Create(name, value, host, path,
@@ -2721,7 +2761,8 @@ nsCookieService::GetCookieFromRow(T &aRow, const OriginAttributes& aOriginAttrib
                           false,
                           isSecure,
                           isHttpOnly,
-                          aOriginAttributes);
+                          aOriginAttributes,
+                          sameSite);
 }
 
 void
@@ -2758,8 +2799,10 @@ nsCookieService::AsyncReadComplete()
 
   // Close sync connection asynchronously: if we let destructor close, it may
   // cause an expensive fsync operation on the main-thread.
-  mDefaultDBState->syncConn->AsyncClose(nullptr);
-  mDefaultDBState->syncConn = nullptr;
+  if (mDefaultDBState->syncConn) {
+    mDefaultDBState->syncConn->AsyncClose(nullptr);
+    mDefaultDBState->syncConn = nullptr;
+  }
   mDefaultDBState->hostArray.Clear();
   mDefaultDBState->readSet.Clear();
 
@@ -2828,7 +2871,10 @@ nsCookieService::EnsureReadDomain(const nsCookieKey &aKey)
         "lastAccessed, "
         "creationTime, "
         "isSecure, "
-        "isHttpOnly "
+        "isHttpOnly, "
+        "baseDomain, "
+        "originAttributes, "
+        "sameSite "
       "FROM moz_cookies "
       "WHERE baseDomain = :baseDomain "
       "  AND originAttributes = :originAttributes"),
@@ -2892,7 +2938,7 @@ nsCookieService::EnsureReadDomain(const nsCookieKey &aKey)
   mDefaultDBState->readSet.PutEntry(aKey);
 
   COOKIE_LOGSTRING(LogLevel::Debug,
-    ("EnsureReadDomain(): %" PRIuSIZE " cookies read for base domain %s, "
+    ("EnsureReadDomain(): %zu cookies read for base domain %s, "
      " originAttributes = %s", array.Length(), aKey.mBaseDomain.get(),
      suffix.get()));
 }
@@ -2925,7 +2971,8 @@ nsCookieService::EnsureReadComplete()
       "isSecure, "
       "isHttpOnly, "
       "baseDomain, "
-      "originAttributes  "
+      "originAttributes, "
+      "sameSite "
     "FROM moz_cookies "
     "WHERE baseDomain NOTNULL"), getter_AddRefs(stmt));
 
@@ -2989,7 +3036,7 @@ nsCookieService::EnsureReadComplete()
   mDefaultDBState->readSet.Clear();
 
   COOKIE_LOGSTRING(LogLevel::Debug,
-    ("EnsureReadComplete(): %" PRIuSIZE " cookies read", array.Length()));
+    ("EnsureReadComplete(): %zu cookies read", array.Length()));
 }
 
 NS_IMETHODIMP
@@ -3023,7 +3070,7 @@ nsCookieService::ImportCookies(nsIFile *aCookieFile)
   nsAutoCString buffer, baseDomain;
   bool isMore = true;
   int32_t hostIndex, isDomainIndex, pathIndex, secureIndex, expiresIndex, nameIndex, cookieIndex;
-  nsASingleFragmentCString::char_iterator iter;
+  nsACString::char_iterator iter;
   int32_t numInts;
   int64_t expires;
   bool isDomain, isHttpOnly = false;
@@ -3099,7 +3146,7 @@ nsCookieService::ImportCookies(nsIFile *aCookieFile)
     }
 
     isDomain = Substring(buffer, isDomainIndex, pathIndex - isDomainIndex - 1).EqualsLiteral(kTrue);
-    const nsASingleFragmentCString &host = Substring(buffer, hostIndex, isDomainIndex - hostIndex - 1);
+    const nsACString& host = Substring(buffer, hostIndex, isDomainIndex - hostIndex - 1);
     // check for bad legacy cookies (domain not starting with a dot, or containing a port),
     // and discard
     if ((isDomain && !host.IsEmpty() && host.First() != '.') ||
@@ -3108,7 +3155,7 @@ nsCookieService::ImportCookies(nsIFile *aCookieFile)
     }
 
     // compute the baseDomain from the host
-    rv = GetBaseDomainFromHost(host, baseDomain);
+    rv = GetBaseDomainFromHost(mTLDService, host, baseDomain);
     if (NS_FAILED(rv))
       continue;
 
@@ -3129,7 +3176,8 @@ nsCookieService::ImportCookies(nsIFile *aCookieFile)
                        false,
                        Substring(buffer, secureIndex, expiresIndex - secureIndex - 1).EqualsLiteral(kTrue),
                        isHttpOnly,
-                       key.mOriginAttributes);
+                       key.mOriginAttributes,
+                       nsICookie2::SAMESITE_UNSET);
     if (!newCookie) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
@@ -3176,33 +3224,10 @@ nsCookieService::ImportCookies(nsIFile *aCookieFile)
 // helper function for GetCookieList
 static inline bool ispathdelimiter(char c) { return c == '/' || c == '?' || c == '#' || c == ';'; }
 
-// Comparator class for sorting cookies before sending to a server.
-class CompareCookiesForSending
+bool
+nsCookieService::DomainMatches(nsCookie* aCookie,
+                               const nsACString& aHost)
 {
-public:
-  bool Equals(const nsCookie* aCookie1, const nsCookie* aCookie2) const
-  {
-    return aCookie1->CreationTime() == aCookie2->CreationTime() &&
-           aCookie2->Path().Length() == aCookie1->Path().Length();
-  }
-
-  bool LessThan(const nsCookie* aCookie1, const nsCookie* aCookie2) const
-  {
-    // compare by cookie path length in accordance with RFC2109
-    int32_t result = aCookie2->Path().Length() - aCookie1->Path().Length();
-    if (result != 0)
-      return result < 0;
-
-    // when path lengths match, older cookies should be listed first.  this is
-    // required for backwards compatibility since some websites erroneously
-    // depend on receiving cookies in the order in which they were sent to the
-    // browser!  see bug 236772.
-    return aCookie1->CreationTime() < aCookie2->CreationTime();
-  }
-};
-
-static bool
-DomainMatches(nsCookie* aCookie, const nsACString& aHost) {
   // first, check for an exact host or domain cookie match, e.g. "google.com"
   // or ".google.com"; second a subdomain match, e.g.
   // host = "mail.google.com", cookie domain = ".google.com".
@@ -3210,8 +3235,10 @@ DomainMatches(nsCookie* aCookie, const nsACString& aHost) {
       (aCookie->IsDomain() && StringEndsWith(aHost, aCookie->Host()));
 }
 
-static bool
-PathMatches(nsCookie* aCookie, const nsACString& aPath) {
+bool
+nsCookieService::PathMatches(nsCookie* aCookie,
+                             const nsACString& aPath)
+{
   // calculate cookie path length, excluding trailing '/'
   uint32_t cookiePathLen = aCookie->Path().Length();
   if (cookiePathLen > 0 && aCookie->Path().Last() == '/')
@@ -3243,11 +3270,11 @@ PathMatches(nsCookie* aCookie, const nsACString& aPath) {
 }
 
 void
-nsCookieService::GetCookieStringInternal(nsIURI *aHostURI,
-                                         bool aIsForeign,
-                                         bool aHttpBound,
-                                         const OriginAttributes& aOriginAttrs,
-                                         nsCString &aCookieString)
+nsCookieService::GetCookiesForURI(nsIURI *aHostURI,
+                                  bool aIsForeign,
+                                  bool aHttpBound,
+                                  const OriginAttributes& aOriginAttrs,
+                                  nsTArray<nsCookie*>& aCookieList)
 {
   NS_ASSERTION(aHostURI, "null host!");
 
@@ -3266,18 +3293,22 @@ nsCookieService::GetCookieStringInternal(nsIURI *aHostURI,
   // is acceptable.
   bool requireHostMatch;
   nsAutoCString baseDomain, hostFromURI, pathFromURI;
-  nsresult rv = GetBaseDomain(aHostURI, baseDomain, requireHostMatch);
+  nsresult rv = GetBaseDomain(mTLDService, aHostURI, baseDomain, requireHostMatch);
   if (NS_SUCCEEDED(rv))
     rv = aHostURI->GetAsciiHost(hostFromURI);
   if (NS_SUCCEEDED(rv))
-    rv = aHostURI->GetPath(pathFromURI);
+    rv = aHostURI->GetPathQueryRef(pathFromURI);
   if (NS_FAILED(rv)) {
     COOKIE_LOGFAILURE(GET_COOKIE, aHostURI, nullptr, "invalid host/path from URI");
     return;
   }
 
   // check default prefs
-  CookieStatus cookieStatus = CheckPrefs(aHostURI, aIsForeign, nullptr);
+  uint32_t priorCookieCount = 0;
+  CountCookiesFromHost(hostFromURI, &priorCookieCount);
+  CookieStatus cookieStatus = CheckPrefs(mPermissionService, mCookieBehavior,
+                                         mThirdPartySession, aHostURI, aIsForeign,
+                                         nullptr, priorCookieCount);
 
   // for GetCookie(), we don't fire rejection notifications.
   switch (cookieStatus) {
@@ -3302,7 +3333,6 @@ nsCookieService::GetCookieStringInternal(nsIURI *aHostURI,
   }
 
   nsCookie *cookie;
-  AutoTArray<nsCookie*, 8> foundCookieList;
   int64_t currentTimeInUsec = PR_Now();
   int64_t currentTime = currentTimeInUsec / PR_USEC_PER_SEC;
   bool stale = false;
@@ -3343,13 +3373,13 @@ nsCookieService::GetCookieStringInternal(nsIURI *aHostURI,
     }
 
     // all checks passed - add to list and check if lastAccessed stamp needs updating
-    foundCookieList.AppendElement(cookie);
+    aCookieList.AppendElement(cookie);
     if (cookie->IsStale()) {
       stale = true;
     }
   }
 
-  int32_t count = foundCookieList.Length();
+  int32_t count = aCookieList.Length();
   if (count == 0)
     return;
 
@@ -3365,7 +3395,7 @@ nsCookieService::GetCookieStringInternal(nsIURI *aHostURI,
     }
 
     for (int32_t i = 0; i < count; ++i) {
-      cookie = foundCookieList.ElementAt(i);
+      cookie = aCookieList.ElementAt(i);
 
       if (cookie->IsStale()) {
         UpdateCookieInList(cookie, currentTimeInUsec, paramsArray);
@@ -3389,9 +3419,21 @@ nsCookieService::GetCookieStringInternal(nsIURI *aHostURI,
   // return cookies in order of path length; longest to shortest.
   // this is required per RFC2109.  if cookies match in length,
   // then sort by creation time (see bug 236772).
-  foundCookieList.Sort(CompareCookiesForSending());
+  aCookieList.Sort(CompareCookiesForSending());
+}
 
-  for (int32_t i = 0; i < count; ++i) {
+void
+nsCookieService::GetCookieStringInternal(nsIURI *aHostURI,
+                                         bool aIsForeign,
+                                         bool aHttpBound,
+                                         const OriginAttributes& aOriginAttrs,
+                                         nsCString &aCookieString)
+{
+  AutoTArray<nsCookie*, 8> foundCookieList;
+  GetCookiesForURI(aHostURI, aIsForeign, aHttpBound, aOriginAttrs, foundCookieList);
+
+  nsCookie* cookie;
+  for (uint32_t i = 0; i < foundCookieList.Length(); ++i) {
     cookie = foundCookieList.ElementAt(i);
 
     // check if we have anything to write
@@ -3419,23 +3461,24 @@ nsCookieService::GetCookieStringInternal(nsIURI *aHostURI,
 // processes a single cookie, and returns true if there are more cookies
 // to be processed
 bool
-nsCookieService::SetCookieInternal(nsIURI                        *aHostURI,
-                                   const nsCookieKey             &aKey,
-                                   bool                           aRequireHostMatch,
-                                   CookieStatus                   aStatus,
-                                   nsDependentCString            &aCookieHeader,
-                                   int64_t                        aServerTime,
-                                   bool                           aFromHttp,
-                                   nsIChannel                    *aChannel)
+nsCookieService::CanSetCookie(nsIURI*             aHostURI,
+                              const nsCookieKey&  aKey,
+                              nsCookieAttributes& aCookieAttributes,
+                              bool                aRequireHostMatch,
+                              CookieStatus        aStatus,
+                              nsDependentCString& aCookieHeader,
+                              int64_t             aServerTime,
+                              bool                aFromHttp,
+                              nsIChannel*         aChannel,
+                              bool                aLeaveSecureAlone,
+                              bool&               aSetCookie)
 {
   NS_ASSERTION(aHostURI, "null host!");
 
-  // create a stack-based nsCookieAttributes, to store all the
-  // attributes parsed from the cookie
-  nsCookieAttributes cookieAttributes;
+  aSetCookie = false;
 
   // init expiryTime such that session cookies won't prematurely expire
-  cookieAttributes.expiryTime = INT64_MAX;
+  aCookieAttributes.expiryTime = INT64_MAX;
 
   // aCookieHeader is an in/out param to point to the next cookie, if
   // there is one. Save the present value for logging purposes
@@ -3443,7 +3486,7 @@ nsCookieService::SetCookieInternal(nsIURI                        *aHostURI,
 
   // newCookie says whether there are multiple cookies in the header;
   // so we can handle them separately.
-  bool newCookie = ParseAttributes(aCookieHeader, cookieAttributes);
+  bool newCookie = ParseAttributes(aCookieHeader, aCookieAttributes);
 
   // Collect telemetry on how often secure cookies are set from non-secure
   // origins, and vice-versa.
@@ -3456,23 +3499,23 @@ nsCookieService::SetCookieInternal(nsIURI                        *aHostURI,
   nsresult rv = aHostURI->SchemeIs("https", &isHTTPS);
   if (NS_SUCCEEDED(rv)) {
     Telemetry::Accumulate(Telemetry::COOKIE_SCHEME_SECURITY,
-                          ((cookieAttributes.isSecure)? 0x02 : 0x00) |
+                          ((aCookieAttributes.isSecure)? 0x02 : 0x00) |
                           ((isHTTPS)? 0x01 : 0x00));
   }
 
   int64_t currentTimeInUsec = PR_Now();
 
   // calculate expiry time of cookie.
-  cookieAttributes.isSession = GetExpiry(cookieAttributes, aServerTime,
+  aCookieAttributes.isSession = GetExpiry(aCookieAttributes, aServerTime,
                                          currentTimeInUsec / PR_USEC_PER_SEC);
   if (aStatus == STATUS_ACCEPT_SESSION) {
     // force lifetime to session. note that the expiration time, if set above,
     // will still apply.
-    cookieAttributes.isSession = true;
+    aCookieAttributes.isSession = true;
   }
 
   // reject cookie if it's over the size limit, per RFC2109
-  if ((cookieAttributes.name.Length() + cookieAttributes.value.Length()) > kMaxBytesPerCookie) {
+  if ((aCookieAttributes.name.Length() + aCookieAttributes.value.Length()) > kMaxBytesPerCookie) {
     COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, savedCookieHeader, "cookie too big (> 4kb)");
     return newCookie;
   }
@@ -3483,22 +3526,22 @@ nsCookieService::SetCookieInternal(nsIURI                        *aHostURI,
                                          0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
                                          0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
                                          0x1F, 0x00 };
-  if (cookieAttributes.name.FindCharInSet(illegalNameCharacters, 0) != -1) {
+  if (aCookieAttributes.name.FindCharInSet(illegalNameCharacters, 0) != -1) {
     COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, savedCookieHeader, "invalid name character");
     return newCookie;
   }
 
   // domain & path checks
-  if (!CheckDomain(cookieAttributes, aHostURI, aKey.mBaseDomain, aRequireHostMatch)) {
+  if (!CheckDomain(aCookieAttributes, aHostURI, aKey.mBaseDomain, aRequireHostMatch)) {
     COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, savedCookieHeader, "failed the domain tests");
     return newCookie;
   }
-  if (!CheckPath(cookieAttributes, aHostURI)) {
+  if (!CheckPath(aCookieAttributes, aHostURI)) {
     COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, savedCookieHeader, "failed the path tests");
     return newCookie;
   }
   // magic prefix checks. MUST be run after CheckDomain() and CheckPath()
-  if (!CheckPrefixes(cookieAttributes, isHTTPS)) {
+  if (!CheckPrefixes(aCookieAttributes, isHTTPS)) {
     COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, savedCookieHeader, "failed the prefix tests");
     return newCookie;
   }
@@ -3515,11 +3558,63 @@ nsCookieService::SetCookieInternal(nsIURI                        *aHostURI,
                                      0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
                                      0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D,
                                      0x1E, 0x1F, 0x3B, 0x00 };
-  if (aFromHttp && (cookieAttributes.value.FindCharInSet(illegalCharacters, 0) != -1)) {
+  if (aFromHttp && (aCookieAttributes.value.FindCharInSet(illegalCharacters, 0) != -1)) {
     COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, savedCookieHeader, "invalid value character");
     return newCookie;
   }
 
+  // if the new cookie is httponly, make sure we're not coming from script
+  if (!aFromHttp && aCookieAttributes.isHttpOnly) {
+    COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, savedCookieHeader,
+      "cookie is httponly; coming from script");
+    return newCookie;
+  }
+
+  bool isSecure = true;
+  if (aHostURI) {
+    aHostURI->SchemeIs("https", &isSecure);
+  }
+
+  // If the new cookie is non-https and wants to set secure flag,
+  // browser have to ignore this new cookie.
+  // (draft-ietf-httpbis-cookie-alone section 3.1)
+  if (aLeaveSecureAlone && aCookieAttributes.isSecure && !isSecure) {
+    COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, aCookieHeader,
+      "non-https cookie can't set secure flag");
+    Telemetry::Accumulate(Telemetry::COOKIE_LEAVE_SECURE_ALONE,
+                          BLOCKED_SECURE_SET_FROM_HTTP);
+    return newCookie;
+  }
+
+  aSetCookie = true;
+  return newCookie;
+}
+
+// processes a single cookie, and returns true if there are more cookies
+// to be processed
+bool
+nsCookieService::SetCookieInternal(nsIURI                        *aHostURI,
+                                   const mozilla::nsCookieKey    &aKey,
+                                   bool                           aRequireHostMatch,
+                                   CookieStatus                   aStatus,
+                                   nsDependentCString            &aCookieHeader,
+                                   int64_t                        aServerTime,
+                                   bool                           aFromHttp,
+                                   nsIChannel                    *aChannel)
+{
+  NS_ASSERTION(aHostURI, "null host!");
+  bool canSetCookie = false;
+  nsDependentCString savedCookieHeader(aCookieHeader);
+  nsCookieAttributes cookieAttributes;
+  bool newCookie = CanSetCookie(aHostURI, aKey, cookieAttributes, aRequireHostMatch,
+                                aStatus, aCookieHeader, aServerTime, aFromHttp,
+                                aChannel, mLeaveSecureAlone, canSetCookie);
+
+  if (!canSetCookie) {
+    return newCookie;
+  }
+
+  int64_t currentTimeInUsec = PR_Now();
   // create a new nsCookie and copy attributes
   RefPtr<nsCookie> cookie =
     nsCookie::Create(cookieAttributes.name,
@@ -3532,7 +3627,8 @@ nsCookieService::SetCookieInternal(nsIURI                        *aHostURI,
                      cookieAttributes.isSession,
                      cookieAttributes.isSecure,
                      cookieAttributes.isHttpOnly,
-                     aKey.mOriginAttributes);
+                     aKey.mOriginAttributes,
+                     cookieAttributes.sameSite);
   if (!cookie)
     return newCookie;
 
@@ -3570,42 +3666,25 @@ nsCookieService::SetCookieInternal(nsIURI                        *aHostURI,
 // and deletes a cookie (if maximum number of cookies has been
 // reached). also performs list maintenance by removing expired cookies.
 void
-nsCookieService::AddInternal(const nsCookieKey             &aKey,
-                             nsCookie                      *aCookie,
-                             int64_t                        aCurrentTimeInUsec,
-                             nsIURI                        *aHostURI,
-                             const char                    *aCookieHeader,
-                             bool                           aFromHttp)
+nsCookieService::AddInternal(const nsCookieKey &aKey,
+                             nsCookie          *aCookie,
+                             int64_t            aCurrentTimeInUsec,
+                             nsIURI            *aHostURI,
+                             const char        *aCookieHeader,
+                             bool               aFromHttp)
 {
   int64_t currentTime = aCurrentTimeInUsec / PR_USEC_PER_SEC;
 
-  // if the new cookie is httponly, make sure we're not coming from script
-  if (!aFromHttp && aCookie->IsHttpOnly()) {
-    COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, aCookieHeader,
-      "cookie is httponly; coming from script");
-    return;
-  }
-
-  bool isSecure = true;
-  if (aHostURI && NS_FAILED(aHostURI->SchemeIs("https", &isSecure))) {
-    isSecure = false;
-  }
-
-  // If the new cookie is non-https and wants to set secure flag,
-  // browser have to ignore this new cookie.
-  // (draft-ietf-httpbis-cookie-alone section 3.1)
-  if (mLeaveSecureAlone && aCookie->IsSecure() && !isSecure) {
-    COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, aCookieHeader,
-      "non-https cookie can't set secure flag");
-    Telemetry::Accumulate(Telemetry::COOKIE_LEAVE_SECURE_ALONE,
-                          BLOCKED_SECURE_SET_FROM_HTTP);
-    return;
-  }
   nsListIter exactIter;
   bool foundCookie = false;
   foundCookie = FindCookie(aKey, aCookie->Host(),
                            aCookie->Name(), aCookie->Path(), exactIter);
   bool foundSecureExact = foundCookie && exactIter.Cookie()->IsSecure();
+  bool isSecure = true;
+  if (aHostURI && NS_FAILED(aHostURI->SchemeIs("https", &isSecure)))  {
+    isSecure = false;
+  }
+  bool oldCookieIsSession = false;
   if (mLeaveSecureAlone) {
     // Step1, call FindSecureCookie(). FindSecureCookie() would
     // find the existing cookie with the security flag and has
@@ -3647,6 +3726,7 @@ nsCookieService::AddInternal(const nsCookieKey             &aKey,
   nsCOMPtr<nsIArray> purgedList;
   if (foundCookie) {
     oldCookie = exactIter.Cookie();
+    oldCookieIsSession = oldCookie->IsSession();
 
     // Check if the old cookie is stale (i.e. has already expired). If so, we
     // need to be careful about the semantics of removing it and adding the new
@@ -3780,7 +3860,7 @@ nsCookieService::AddInternal(const nsCookieKey             &aKey,
     NotifyChanged(purgedList, u"batch-deleted");
   }
 
-  NotifyChanged(aCookie, foundCookie ? u"changed" : u"added");
+  NotifyChanged(aCookie, foundCookie ? u"changed" : u"added", oldCookieIsSession);
 }
 
 /******************************************************************************
@@ -3866,13 +3946,13 @@ static inline bool istokenseparator (char c) { return isvalueseparator(c) || c =
 // Parse a single token/value pair.
 // Returns true if a cookie terminator is found, so caller can parse new cookie.
 bool
-nsCookieService::GetTokenValue(nsASingleFragmentCString::const_char_iterator &aIter,
-                               nsASingleFragmentCString::const_char_iterator &aEndIter,
+nsCookieService::GetTokenValue(nsACString::const_char_iterator &aIter,
+                               nsACString::const_char_iterator &aEndIter,
                                nsDependentCSubstring                         &aTokenString,
                                nsDependentCSubstring                         &aTokenValue,
                                bool                                          &aEqualsFound)
 {
-  nsASingleFragmentCString::const_char_iterator start, lastSpace;
+  nsACString::const_char_iterator start, lastSpace;
   // initialize value string to clear garbage
   aTokenValue.Rebind(aIter, aIter);
 
@@ -3940,14 +4020,17 @@ nsCookieService::ParseAttributes(nsDependentCString &aCookieHeader,
   static const char kMaxage[]  = "max-age";
   static const char kSecure[]  = "secure";
   static const char kHttpOnly[]  = "httponly";
+  static const char kSameSite[]       = "samesite";
+  static const char kSameSiteLax[]    = "lax";
 
-  nsASingleFragmentCString::const_char_iterator tempBegin, tempEnd;
-  nsASingleFragmentCString::const_char_iterator cookieStart, cookieEnd;
+  nsACString::const_char_iterator tempBegin, tempEnd;
+  nsACString::const_char_iterator cookieStart, cookieEnd;
   aCookieHeader.BeginReading(cookieStart);
   aCookieHeader.EndReading(cookieEnd);
 
   aCookieAttributes.isSecure = false;
   aCookieAttributes.isHttpOnly = false;
+  aCookieAttributes.sameSite = nsICookie2::SAMESITE_UNSET;
 
   nsDependentCSubstring tokenString(cookieStart, cookieStart);
   nsDependentCSubstring tokenValue (cookieStart, cookieStart);
@@ -3996,6 +4079,14 @@ nsCookieService::ParseAttributes(nsDependentCString &aCookieHeader,
     // just set the boolean
     else if (tokenString.LowerCaseEqualsLiteral(kHttpOnly))
       aCookieAttributes.isHttpOnly = true;
+
+    else if (tokenString.LowerCaseEqualsLiteral(kSameSite)) {
+      if (tokenValue.LowerCaseEqualsLiteral(kSameSiteLax)) {
+        aCookieAttributes.sameSite = nsICookie2::SAMESITE_LAX;
+      } else {
+        aCookieAttributes.sameSite = nsICookie2::SAMESITE_STRICT;
+      }
+    }
   }
 
   // rebind aCookieHeader, in case we need to process another cookie
@@ -4015,13 +4106,14 @@ nsCookieService::ParseAttributes(nsDependentCString &aCookieHeader,
 // be the exact host, and aRequireHostMatch will be true to indicate that
 // substring matches should not be performed.
 nsresult
-nsCookieService::GetBaseDomain(nsIURI    *aHostURI,
+nsCookieService::GetBaseDomain(nsIEffectiveTLDService *aTLDService,
+                               nsIURI    *aHostURI,
                                nsCString &aBaseDomain,
                                bool      &aRequireHostMatch)
 {
   // get the base domain. this will fail if the host contains a leading dot,
   // more than one trailing dot, or is otherwise malformed.
-  nsresult rv = mTLDService->GetBaseDomain(aHostURI, 0, aBaseDomain);
+  nsresult rv = aTLDService->GetBaseDomain(aHostURI, 0, aBaseDomain);
   aRequireHostMatch = rv == NS_ERROR_HOST_IS_IP_ADDRESS ||
                       rv == NS_ERROR_INSUFFICIENT_DOMAIN_LEVELS;
   if (aRequireHostMatch) {
@@ -4048,14 +4140,15 @@ nsCookieService::GetBaseDomain(nsIURI    *aHostURI,
 }
 
 // Get the base domain for aHost; e.g. for "www.bbc.co.uk", this would be
-// "bbc.co.uk". This is done differently than GetBaseDomain(): it is assumed
+// "bbc.co.uk". This is done differently than GetBaseDomain(mTLDService, ): it is assumed
 // that aHost is already normalized, and it may contain a leading dot
 // (indicating that it represents a domain). A trailing dot may be present.
 // If aHost is an IP address, an alias such as 'localhost', an eTLD such as
 // 'co.uk', or the empty string, aBaseDomain will be the exact host, and a
 // leading dot will be treated as an error.
 nsresult
-nsCookieService::GetBaseDomainFromHost(const nsACString &aHost,
+nsCookieService::GetBaseDomainFromHost(nsIEffectiveTLDService *aTLDService,
+                                       const nsACString &aHost,
                                        nsCString        &aBaseDomain)
 {
   // aHost must not be the string '.'.
@@ -4067,7 +4160,7 @@ nsCookieService::GetBaseDomainFromHost(const nsACString &aHost,
 
   // get the base domain. this will fail if the host contains a leading dot,
   // more than one trailing dot, or is otherwise malformed.
-  nsresult rv = mTLDService->GetBaseDomainFromHost(Substring(aHost, domain), 0, aBaseDomain);
+  nsresult rv = aTLDService->GetBaseDomainFromHost(Substring(aHost, domain), 0, aBaseDomain);
   if (rv == NS_ERROR_HOST_IS_IP_ADDRESS ||
       rv == NS_ERROR_INSUFFICIENT_DOMAIN_LEVELS) {
     // aHost is either an IP address, an alias such as 'localhost', an eTLD
@@ -4114,9 +4207,13 @@ static inline bool IsSubdomainOf(const nsCString &a, const nsCString &b)
 }
 
 CookieStatus
-nsCookieService::CheckPrefs(nsIURI          *aHostURI,
-                            bool             aIsForeign,
-                            const char      *aCookieHeader)
+nsCookieService::CheckPrefs(nsICookiePermission *aPermissionService,
+                            uint8_t              aCookieBehavior,
+                            bool                 aThirdPartySession,
+                            nsIURI              *aHostURI,
+                            bool                 aIsForeign,
+                            const char          *aCookieHeader,
+                            const int            aNumOfCookies)
 {
   nsresult rv;
 
@@ -4129,11 +4226,11 @@ nsCookieService::CheckPrefs(nsIURI          *aHostURI,
 
   // check the permission list first; if we find an entry, it overrides
   // default prefs. see bug 184059.
-  if (mPermissionService) {
+  if (aPermissionService) {
     nsCookieAccess access;
     // Not passing an nsIChannel here is probably OK; our implementation
     // doesn't do anything with it anyway.
-    rv = mPermissionService->CanAccess(aHostURI, nullptr, &access);
+    rv = aPermissionService->CanAccess(aHostURI, nullptr, &access);
 
     // if we found an entry, use it
     if (NS_SUCCEEDED(rv)) {
@@ -4159,11 +4256,7 @@ nsCookieService::CheckPrefs(nsIURI          *aHostURI,
       case nsICookiePermission::ACCESS_LIMIT_THIRD_PARTY:
         if (!aIsForeign)
           return STATUS_ACCEPTED;
-        uint32_t priorCookieCount = 0;
-        nsAutoCString hostFromURI;
-        aHostURI->GetHost(hostFromURI);
-        CountCookiesFromHost(hostFromURI, &priorCookieCount);
-        if (priorCookieCount == 0) {
+        if (aNumOfCookies == 0) {
           COOKIE_LOGFAILURE(aCookieHeader ? SET_COOKIE : GET_COOKIE, aHostURI,
                             aCookieHeader, "third party cookies are blocked "
                             "for this site");
@@ -4175,31 +4268,27 @@ nsCookieService::CheckPrefs(nsIURI          *aHostURI,
   }
 
   // check default prefs
-  if (mCookieBehavior == nsICookieService::BEHAVIOR_REJECT) {
+  if (aCookieBehavior == nsICookieService::BEHAVIOR_REJECT) {
     COOKIE_LOGFAILURE(aCookieHeader ? SET_COOKIE : GET_COOKIE, aHostURI, aCookieHeader, "cookies are disabled");
     return STATUS_REJECTED;
   }
 
   // check if cookie is foreign
   if (aIsForeign) {
-    if (mCookieBehavior == nsICookieService::BEHAVIOR_ACCEPT && mThirdPartySession)
+    if (aCookieBehavior == nsICookieService::BEHAVIOR_ACCEPT && aThirdPartySession)
       return STATUS_ACCEPT_SESSION;
 
-    if (mCookieBehavior == nsICookieService::BEHAVIOR_REJECT_FOREIGN) {
+    if (aCookieBehavior == nsICookieService::BEHAVIOR_REJECT_FOREIGN) {
       COOKIE_LOGFAILURE(aCookieHeader ? SET_COOKIE : GET_COOKIE, aHostURI, aCookieHeader, "context is third party");
       return STATUS_REJECTED;
     }
 
-    if (mCookieBehavior == nsICookieService::BEHAVIOR_LIMIT_FOREIGN) {
-      uint32_t priorCookieCount = 0;
-      nsAutoCString hostFromURI;
-      aHostURI->GetHost(hostFromURI);
-      CountCookiesFromHost(hostFromURI, &priorCookieCount);
-      if (priorCookieCount == 0) {
+    if (aCookieBehavior == nsICookieService::BEHAVIOR_LIMIT_FOREIGN) {
+      if (aNumOfCookies == 0) {
         COOKIE_LOGFAILURE(aCookieHeader ? SET_COOKIE : GET_COOKIE, aHostURI, aCookieHeader, "context is third party");
         return STATUS_REJECTED;
       }
-      if (mThirdPartySession)
+      if (aThirdPartySession)
         return STATUS_ACCEPT_SESSION;
     }
   }
@@ -4248,7 +4337,7 @@ nsCookieService::CheckDomain(nsCookieAttributes &aCookieAttributes,
     if (IsSubdomainOf(aCookieAttributes.host, aBaseDomain) &&
         IsSubdomainOf(hostFromURI, aCookieAttributes.host)) {
       // prepend a dot to indicate a domain cookie
-      aCookieAttributes.host.Insert(NS_LITERAL_CSTRING("."), 0);
+      aCookieAttributes.host.InsertLiteral(".", 0);
       return true;
     }
 
@@ -4268,7 +4357,7 @@ nsCookieService::CheckDomain(nsCookieAttributes &aCookieAttributes,
 }
 
 nsCString
-GetPathFromURI(nsIURI* aHostURI)
+nsCookieService::GetPathFromURI(nsIURI* aHostURI)
 {
   // strip down everything after the last slash to get the path,
   // ignoring slashes in the query string part.
@@ -4279,7 +4368,7 @@ GetPathFromURI(nsIURI* aHostURI)
   if (hostURL) {
     hostURL->GetDirectory(path);
   } else {
-    aHostURI->GetPath(path);
+    aHostURI->GetPathQueryRef(path);
     int32_t slash = path.RFindChar('/');
     if (slash != kNotFound) {
       path.Truncate(slash + 1);
@@ -4306,7 +4395,7 @@ nsCookieService::CheckPath(nsCookieAttributes &aCookieAttributes,
      */
     // get path from aHostURI
     nsAutoCString pathFromURI;
-    if (NS_FAILED(aHostURI->GetPath(pathFromURI)) ||
+    if (NS_FAILED(aHostURI->GetPathQueryRef(pathFromURI)) ||
         !StringBeginsWith(pathFromURI, aCookieAttributes.path)) {
       return false;
     }
@@ -4640,7 +4729,7 @@ nsCookieService::CookieExistsNative(nsICookie2* aCookie,
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsAutoCString baseDomain;
-  rv = GetBaseDomainFromHost(host, baseDomain);
+  rv = GetBaseDomainFromHost(mTLDService, host, baseDomain);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsListIter iter;
@@ -4662,7 +4751,7 @@ nsCookieService::FindStaleCookie(nsCookieEntry *aEntry,
   bool requireHostMatch = true;
   nsAutoCString baseDomain, sourceHost, sourcePath;
   if (aSource) {
-    GetBaseDomain(aSource, baseDomain, requireHostMatch);
+    GetBaseDomain(mTLDService, aSource, baseDomain, requireHostMatch);
     aSource->GetAsciiHost(sourceHost);
     sourcePath = GetPathFromURI(aSource);
   }
@@ -4775,7 +4864,7 @@ nsCookieService::CountCookiesFromHost(const nsACString &aHost,
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsAutoCString baseDomain;
-  rv = GetBaseDomainFromHost(host, baseDomain);
+  rv = GetBaseDomainFromHost(mTLDService, host, baseDomain);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCookieKey key = DEFAULT_APP_KEY(baseDomain);
@@ -4809,7 +4898,7 @@ nsCookieService::GetCookiesFromHost(const nsACString     &aHost,
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsAutoCString baseDomain;
-  rv = GetBaseDomainFromHost(host, baseDomain);
+  rv = GetBaseDomainFromHost(mTLDService, host, baseDomain);
   NS_ENSURE_SUCCESS(rv, rv);
 
   OriginAttributes attrs;
@@ -4855,7 +4944,7 @@ nsCookieService::GetCookiesWithOriginAttributes(const nsAString&    aPattern,
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsAutoCString baseDomain;
-  rv = GetBaseDomainFromHost(host, baseDomain);
+  rv = GetBaseDomainFromHost(mTLDService, host, baseDomain);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return GetCookiesWithOriginAttributes(pattern, baseDomain, aEnumerator);
@@ -4914,7 +5003,7 @@ nsCookieService::RemoveCookiesWithOriginAttributes(const nsAString& aPattern,
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsAutoCString baseDomain;
-  rv = GetBaseDomainFromHost(host, baseDomain);
+  rv = GetBaseDomainFromHost(mTLDService, host, baseDomain);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return RemoveCookiesWithOriginAttributes(pattern, baseDomain);
@@ -4975,8 +5064,8 @@ nsCookieService::RemoveCookiesWithOriginAttributes(
 
 // find an secure cookie specified by host and name
 bool
-nsCookieService::FindSecureCookie(const nsCookieKey    &aKey,
-                                  nsCookie             *aCookie)
+nsCookieService::FindSecureCookie(const nsCookieKey &aKey,
+                                  nsCookie          *aCookie)
 {
   EnsureReadDomain(aKey);
 
@@ -5010,9 +5099,9 @@ nsCookieService::FindSecureCookie(const nsCookieKey    &aKey,
 // find an exact cookie specified by host, name, and path that hasn't expired.
 bool
 nsCookieService::FindCookie(const nsCookieKey    &aKey,
-                            const nsAFlatCString &aHost,
-                            const nsAFlatCString &aName,
-                            const nsAFlatCString &aPath,
+                            const nsCString& aHost,
+                            const nsCString& aName,
+                            const nsCString& aPath,
                             nsListIter           &aIter)
 {
   EnsureReadDomain(aKey);
@@ -5160,6 +5249,10 @@ bindCookieParameters(mozIStorageBindingParamsArray *aParamsArray,
 
   rv = params->BindInt32ByName(NS_LITERAL_CSTRING("isHttpOnly"),
                                aCookie->IsHttpOnly());
+  NS_ASSERT_SUCCESS(rv);
+
+  rv = params->BindInt32ByName(NS_LITERAL_CSTRING("sameSite"),
+                               aCookie->SameSite());
   NS_ASSERT_SUCCESS(rv);
 
   // Bind the params to the array.

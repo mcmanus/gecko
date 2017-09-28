@@ -30,10 +30,11 @@ use dom::bindings::str::{DOMString, USVString};
 use dom::bindings::xmlname::namespace_from_domstring;
 use dom::characterdata::{CharacterData, LayoutCharacterDataHelpers};
 use dom::cssstylesheet::CSSStyleSheet;
+use dom::customelementregistry::{CallbackReaction, try_upgrade_element};
 use dom::document::{Document, DocumentSource, HasBrowsingContext, IsHTMLDocument};
 use dom::documentfragment::DocumentFragment;
 use dom::documenttype::DocumentType;
-use dom::element::{Element, ElementCreator};
+use dom::element::{CustomElementCreationMode, Element, ElementCreator};
 use dom::eventtarget::EventTarget;
 use dom::globalscope::GlobalScope;
 use dom::htmlbodyelement::HTMLBodyElement;
@@ -66,14 +67,17 @@ use ref_slice::ref_slice;
 use script_layout_interface::{HTMLCanvasData, OpaqueStyleAndLayoutData, SVGSVGData};
 use script_layout_interface::{LayoutElementType, LayoutNodeType, TrustedNodeAddress};
 use script_layout_interface::message::Msg;
+use script_thread::ScriptThread;
 use script_traits::DocumentActivity;
 use script_traits::UntrustedNodeAddress;
 use selectors::matching::{matches_selector_list, MatchingContext, MatchingMode};
 use selectors::parser::SelectorList;
+use servo_arc::Arc;
 use servo_url::ServoUrl;
+use smallvec::SmallVec;
 use std::borrow::ToOwned;
 use std::cell::{Cell, UnsafeCell, RefMut};
-use std::cmp::max;
+use std::cmp;
 use std::default::Default;
 use std::iter;
 use std::mem;
@@ -81,7 +85,6 @@ use std::ops::Range;
 use style::context::QuirksMode;
 use style::dom::OpaqueNode;
 use style::selector_parser::{SelectorImpl, SelectorParser};
-use style::stylearc::Arc;
 use style::stylesheets::Stylesheet;
 use style::thread_state;
 use uuid::Uuid;
@@ -146,7 +149,7 @@ pub struct Node {
 
 bitflags! {
     #[doc = "Flags for node items."]
-    #[derive(JSTraceable, HeapSizeOf)]
+    #[derive(HeapSizeOf, JSTraceable)]
     pub flags NodeFlags: u16 {
         #[doc = "Specifies whether this node is in a document."]
         const IS_IN_DOC = 1 << 0,
@@ -166,8 +169,7 @@ bitflags! {
         /// Whether any ancestor is a fragmentation container
         const CAN_BE_FRAGMENTED = 1 << 4,
 
-        #[doc = "Specifies whether this node needs to be dirted when viewport size changed."]
-        const DIRTY_ON_VIEWPORT_SIZE_CHANGE = 1 << 5,
+        // There's a free bit here.
 
         #[doc = "Specifies whether the parser has set an associated form owner for \
                  this element. Only applicable for form-associatable elements."]
@@ -200,7 +202,7 @@ impl Drop for Node {
 /// suppress observers flag
 /// https://dom.spec.whatwg.org/#concept-node-insert
 /// https://dom.spec.whatwg.org/#concept-node-remove
-#[derive(Copy, Clone, HeapSizeOf)]
+#[derive(Clone, Copy, HeapSizeOf)]
 enum SuppressObserver {
     Suppressed,
     Unsuppressed
@@ -313,6 +315,10 @@ impl Node {
             // e.g. when removing a <form>.
             vtable_for(&&*node).unbind_from_tree(&context);
             node.style_and_layout_data.get().map(|d| node.dispose(d));
+            // https://dom.spec.whatwg.org/#concept-node-remove step 14
+            if let Some(element) = node.as_custom_element() {
+                ScriptThread::enqueue_callback_reaction(&*element, CallbackReaction::Disconnected, None);
+            }
         }
 
         self.owner_doc().content_and_heritage_changed(self, NodeDamage::OtherNodeDamage);
@@ -321,6 +327,15 @@ impl Node {
 
     pub fn to_untrusted_node_address(&self) -> UntrustedNodeAddress {
         UntrustedNodeAddress(self.reflector().get_jsobject().get() as *const c_void)
+    }
+
+    pub fn as_custom_element(&self) -> Option<Root<Element>> {
+        self.downcast::<Element>()
+            .and_then(|element| if element.get_custom_element_definition().is_some() {
+                Some(Root::from_ref(element))
+            } else {
+                None
+            })
     }
 }
 
@@ -348,7 +363,9 @@ impl<'a> Iterator for QuerySelectorIterator {
         self.iterator.by_ref().filter_map(|node| {
             // TODO(cgaebel): Is it worth it to build a bloom filter here
             // (instead of passing `None`)? Probably.
-            let mut ctx = MatchingContext::new(MatchingMode::Normal, None,
+            //
+            // FIXME(bholley): Consider an nth-index cache here.
+            let mut ctx = MatchingContext::new(MatchingMode::Normal, None, None,
                 node.owner_doc().quirks_mode());
             if let Some(element) = Root::downcast(node) {
                 if matches_selector_list(selectors, &element, &mut ctx) {
@@ -367,6 +384,17 @@ impl Node {
         for kid in self.children() {
             kid.teardown();
         }
+    }
+
+    /// Returns true if this node is before `other` in the same connected DOM
+    /// tree.
+    pub fn is_before(&self, other: &Node) -> bool {
+        let cmp = other.CompareDocumentPosition(self);
+        if cmp & NodeConstants::DOCUMENT_POSITION_DISCONNECTED != 0 {
+            return false;
+        }
+
+        cmp & NodeConstants::DOCUMENT_POSITION_PRECEDING != 0
     }
 
     /// Return all registered mutation observers for this node.
@@ -428,6 +456,11 @@ impl Node {
         self.preceding_siblings().count() as u32
     }
 
+    /// Returns true if this node has a parent.
+    pub fn has_parent(&self) -> bool {
+        self.parent_node.get().is_some()
+    }
+
     pub fn children_count(&self) -> u32 {
         self.children_count.get()
     }
@@ -467,7 +500,7 @@ impl Node {
         // the document's version, but we do have to deal with the case where the node has moved
         // document, so may have a higher version count than its owning document.
         let doc: Root<Node> = Root::upcast(self.owner_doc());
-        let version = max(self.inclusive_descendants_version(), doc.inclusive_descendants_version()) + 1;
+        let version = cmp::max(self.inclusive_descendants_version(), doc.inclusive_descendants_version()) + 1;
         for ancestor in self.inclusive_ancestors() {
             ancestor.inclusive_descendants_version.set(version);
         }
@@ -499,15 +532,17 @@ impl Node {
         TreeIterator::new(self)
     }
 
-    pub fn inclusively_following_siblings(&self) -> NodeSiblingIterator {
-        NodeSiblingIterator {
+    pub fn inclusively_following_siblings(&self) -> impl Iterator<Item=Root<Node>> {
+        SimpleNodeIterator {
             current: Some(Root::from_ref(self)),
+            next_node: |n| n.GetNextSibling(),
         }
     }
 
-    pub fn inclusively_preceding_siblings(&self) -> ReverseSiblingIterator {
-        ReverseSiblingIterator {
+    pub fn inclusively_preceding_siblings(&self) -> impl Iterator<Item=Root<Node>> {
+        SimpleNodeIterator {
             current: Some(Root::from_ref(self)),
+            next_node: |n| n.GetPreviousSibling(),
         }
     }
 
@@ -519,15 +554,17 @@ impl Node {
         parent.ancestors().any(|ancestor| &*ancestor == self)
     }
 
-    pub fn following_siblings(&self) -> NodeSiblingIterator {
-        NodeSiblingIterator {
+    pub fn following_siblings(&self) -> impl Iterator<Item=Root<Node>> {
+        SimpleNodeIterator {
             current: self.GetNextSibling(),
+            next_node: |n| n.GetNextSibling(),
         }
     }
 
-    pub fn preceding_siblings(&self) -> ReverseSiblingIterator {
-        ReverseSiblingIterator {
+    pub fn preceding_siblings(&self) -> impl Iterator<Item=Root<Node>> {
+        SimpleNodeIterator {
             current: self.GetPreviousSibling(),
+            next_node: |n| n.GetPreviousSibling(),
         }
     }
 
@@ -545,9 +582,10 @@ impl Node {
         }
     }
 
-    pub fn descending_last_children(&self) -> LastChildIterator {
-        LastChildIterator {
+    pub fn descending_last_children(&self) -> impl Iterator<Item=Root<Node>> {
+        SimpleNodeIterator {
             current: self.GetLastChild(),
+            next_node: |n| n.GetLastChild(),
         }
     }
 
@@ -602,8 +640,8 @@ impl Node {
             // Step 6 && Step 7
             (false, false, _, true) | (false, true, QuirksMode::Quirks, _) => {
                 Rect::new(Point2D::new(window.ScrollX(), window.ScrollY()),
-                                       Size2D::new(max(window.InnerWidth(), scroll_area.size.width),
-                                                   max(window.InnerHeight(), scroll_area.size.height)))
+                                       Size2D::new(cmp::max(window.InnerWidth(), scroll_area.size.width),
+                                                   cmp::max(window.InnerHeight(), scroll_area.size.height)))
             },
             // Step 9
             _ => scroll_area
@@ -718,7 +756,8 @@ impl Node {
             Err(_) => Err(Error::Syntax),
             // Step 3.
             Ok(selectors) => {
-                let mut ctx = MatchingContext::new(MatchingMode::Normal, None,
+                // FIXME(bholley): Consider an nth-index cache here.
+                let mut ctx = MatchingContext::new(MatchingMode::Normal, None, None,
                                                    self.owner_doc().quirks_mode());
                 Ok(self.traverse_preorder().filter_map(Root::downcast).find(|element| {
                     matches_selector_list(&selectors, element, &mut ctx)
@@ -755,15 +794,17 @@ impl Node {
         Ok(NodeList::new_simple_list(&window, iter))
     }
 
-    pub fn ancestors(&self) -> AncestorIterator {
-        AncestorIterator {
-            current: self.GetParentNode()
+    pub fn ancestors(&self) -> impl Iterator<Item=Root<Node>> {
+        SimpleNodeIterator {
+            current: self.GetParentNode(),
+            next_node: |n| n.GetParentNode(),
         }
     }
 
-    pub fn inclusive_ancestors(&self) -> AncestorIterator {
-        AncestorIterator {
-            current: Some(Root::from_ref(self))
+    pub fn inclusive_ancestors(&self) -> impl Iterator<Item=Root<Node>> {
+        SimpleNodeIterator {
+            current: Some(Root::from_ref(self)),
+            next_node: |n| n.GetParentNode(),
         }
     }
 
@@ -783,15 +824,17 @@ impl Node {
         self.is_in_doc() && self.owner_doc().browsing_context().is_some()
     }
 
-    pub fn children(&self) -> NodeSiblingIterator {
-        NodeSiblingIterator {
+    pub fn children(&self) -> impl Iterator<Item=Root<Node>> {
+        SimpleNodeIterator {
             current: self.GetFirstChild(),
+            next_node: |n| n.GetNextSibling(),
         }
     }
 
-    pub fn rev_children(&self) -> ReverseSiblingIterator {
-        ReverseSiblingIterator {
+    pub fn rev_children(&self) -> impl Iterator<Item=Root<Node>> {
+        SimpleNodeIterator {
             current: self.GetLastChild(),
+            next_node: |n| n.GetPreviousSibling(),
         }
     }
 
@@ -981,8 +1024,8 @@ pub trait LayoutNodeHelpers {
     fn image_url(&self) -> Option<ServoUrl>;
     fn canvas_data(&self) -> Option<HTMLCanvasData>;
     fn svg_data(&self) -> Option<SVGSVGData>;
-    fn iframe_browsing_context_id(&self) -> BrowsingContextId;
-    fn iframe_pipeline_id(&self) -> PipelineId;
+    fn iframe_browsing_context_id(&self) -> Option<BrowsingContextId>;
+    fn iframe_pipeline_id(&self) -> Option<PipelineId>;
     fn opaque(&self) -> OpaqueNode;
 }
 
@@ -1132,16 +1175,16 @@ impl LayoutNodeHelpers for LayoutJS<Node> {
             .map(|svg| svg.data())
     }
 
-    fn iframe_browsing_context_id(&self) -> BrowsingContextId {
+    fn iframe_browsing_context_id(&self) -> Option<BrowsingContextId> {
         let iframe_element = self.downcast::<HTMLIFrameElement>()
             .expect("not an iframe element!");
-        iframe_element.browsing_context_id().unwrap()
+        iframe_element.browsing_context_id()
     }
 
-    fn iframe_pipeline_id(&self) -> PipelineId {
+    fn iframe_pipeline_id(&self) -> Option<PipelineId> {
         let iframe_element = self.downcast::<HTMLIFrameElement>()
             .expect("not an iframe element!");
-        iframe_element.pipeline_id().unwrap()
+        iframe_element.pipeline_id()
     }
 
     #[allow(unsafe_code)]
@@ -1156,40 +1199,6 @@ impl LayoutNodeHelpers for LayoutJS<Node> {
 //
 // Iteration and traversal
 //
-
-pub struct NodeSiblingIterator {
-    current: Option<Root<Node>>,
-}
-
-impl Iterator for NodeSiblingIterator {
-    type Item = Root<Node>;
-
-    fn next(&mut self) -> Option<Root<Node>> {
-        let current = match self.current.take() {
-            None => return None,
-            Some(current) => current,
-        };
-        self.current = current.GetNextSibling();
-        Some(current)
-    }
-}
-
-pub struct ReverseSiblingIterator {
-    current: Option<Root<Node>>,
-}
-
-impl Iterator for ReverseSiblingIterator {
-    type Item = Root<Node>;
-
-    fn next(&mut self) -> Option<Root<Node>> {
-        let current = match self.current.take() {
-            None => return None,
-            Some(current) => current,
-        };
-        self.current = current.GetPreviousSibling();
-        Some(current)
-    }
-}
 
 pub struct FollowingNodeIterator {
     current: Option<Root<Node>>,
@@ -1283,37 +1292,22 @@ impl Iterator for PrecedingNodeIterator {
     }
 }
 
-pub struct LastChildIterator {
+struct SimpleNodeIterator<I>
+    where I: Fn(&Node) -> Option<Root<Node>>
+{
     current: Option<Root<Node>>,
+    next_node: I,
 }
 
-impl Iterator for LastChildIterator {
+impl<I> Iterator for SimpleNodeIterator<I>
+    where I: Fn(&Node) -> Option<Root<Node>>
+{
     type Item = Root<Node>;
 
-    fn next(&mut self) -> Option<Root<Node>> {
-        let current = match self.current.take() {
-            None => return None,
-            Some(current) => current,
-        };
-        self.current = current.GetLastChild();
-        Some(current)
-    }
-}
-
-pub struct AncestorIterator {
-    current: Option<Root<Node>>,
-}
-
-impl Iterator for AncestorIterator {
-    type Item = Root<Node>;
-
-    fn next(&mut self) -> Option<Root<Node>> {
-        let current = match self.current.take() {
-            None => return None,
-            Some(current) => current,
-        };
-        self.current = current.GetParentNode();
-        Some(current)
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.current.take();
+        self.current = current.as_ref().and_then(|c| (self.next_node)(c));
+        current
     }
 }
 
@@ -1376,7 +1370,7 @@ impl Iterator for TreeIterator {
 }
 
 /// Specifies whether children must be recursively cloned or not.
-#[derive(Copy, Clone, PartialEq, HeapSizeOf)]
+#[derive(Clone, Copy, HeapSizeOf, PartialEq)]
 pub enum CloneChildrenFlag {
     CloneChildren,
     DoNotCloneChildren
@@ -1436,13 +1430,19 @@ impl Node {
         let old_doc = node.owner_doc();
         // Step 2.
         node.remove_self();
+        // Step 3.
         if &*old_doc != document {
-            // Step 3.
+            // Step 3.1.
             for descendant in node.traverse_preorder() {
                 descendant.set_owner_doc(document);
             }
-            // Step 4.
+            for descendant in node.traverse_preorder().filter_map(|d| d.as_custom_element()) {
+                // Step 3.2.
+                ScriptThread::enqueue_callback_reaction(&*descendant,
+                    CallbackReaction::Adopted(old_doc.clone(), Root::from_ref(document)), None);
+            }
             for descendant in node.traverse_preorder() {
+                // Step 3.3.
                 vtable_for(&descendant).adopting_steps(&old_doc);
             }
         }
@@ -1649,7 +1649,19 @@ impl Node {
         for kid in new_nodes {
             // Step 7.1.
             parent.add_child(*kid, child);
-            // Step 7.2: insertion steps.
+            // Step 7.7.
+            for descendant in kid.traverse_preorder().filter_map(Root::downcast::<Element>) {
+                // Step 7.7.2.
+                if descendant.is_connected() {
+                    if descendant.get_custom_element_definition().is_some() {
+                        // Step 7.7.2.1.
+                        ScriptThread::enqueue_callback_reaction(&*descendant, CallbackReaction::Connected, None);
+                    } else {
+                        // Step 7.7.2.2.
+                        try_upgrade_element(&*descendant);
+                    }
+                }
+            }
         }
         if let SuppressObserver::Unsuppressed = suppress_observers {
             vtable_for(&parent).children_changed(
@@ -1818,12 +1830,15 @@ impl Node {
             NodeTypeId::Element(..) => {
                 let element = node.downcast::<Element>().unwrap();
                 let name = QualName {
-                    prefix: element.prefix().map(|p| Prefix::from(&**p)),
+                    prefix: element.prefix().as_ref().map(|p| Prefix::from(&**p)),
                     ns: element.namespace().clone(),
                     local: element.local_name().clone()
                 };
                 let element = Element::create(name,
-                    &document, ElementCreator::ScriptCreated);
+                                              element.get_is(),
+                                              &document,
+                                              ElementCreator::ScriptCreated,
+                                              CustomElementCreationMode::Asynchronous);
                 Root::upcast::<Node>(element)
             },
         };
@@ -2284,7 +2299,7 @@ impl NodeMethods for Node {
             let element = node.downcast::<Element>().unwrap();
             let other_element = other.downcast::<Element>().unwrap();
             (*element.namespace() == *other_element.namespace()) &&
-            (element.prefix() == other_element.prefix()) &&
+            (*element.prefix() == *other_element.prefix()) &&
             (*element.local_name() == *other_element.local_name()) &&
             (element.attrs().len() == other_element.attrs().len())
         }
@@ -2362,55 +2377,70 @@ impl NodeMethods for Node {
 
     // https://dom.spec.whatwg.org/#dom-node-comparedocumentposition
     fn CompareDocumentPosition(&self, other: &Node) -> u16 {
+        // step 1.
         if self == other {
-            // step 2.
-            0
-        } else {
-            let mut lastself = Root::from_ref(self);
-            let mut lastother = Root::from_ref(other);
-            for ancestor in self.ancestors() {
-                if &*ancestor == other {
-                    // step 4.
-                    return NodeConstants::DOCUMENT_POSITION_CONTAINS +
-                           NodeConstants::DOCUMENT_POSITION_PRECEDING;
-                }
-                lastself = ancestor;
-            }
-            for ancestor in other.ancestors() {
-                if &*ancestor == self {
-                    // step 5.
-                    return NodeConstants::DOCUMENT_POSITION_CONTAINED_BY +
-                           NodeConstants::DOCUMENT_POSITION_FOLLOWING;
-                }
-                lastother = ancestor;
-            }
+            return 0
+        }
 
-            if lastself != lastother {
-                let abstract_uint: uintptr_t = as_uintptr(&self);
-                let other_uint: uintptr_t = as_uintptr(&*other);
+        // FIXME(emilio): This will eventually need to handle attribute nodes.
 
-                let random = if abstract_uint < other_uint {
+        let mut self_and_ancestors =
+            self.inclusive_ancestors().collect::<SmallVec<[_; 20]>>();
+        let mut other_and_ancestors =
+            other.inclusive_ancestors().collect::<SmallVec<[_; 20]>>();
+
+        if self_and_ancestors.last() != other_and_ancestors.last() {
+            let random =
+                as_uintptr(self_and_ancestors.last().unwrap())
+                    < as_uintptr(other_and_ancestors.last().unwrap());
+            let random = if random {
+                NodeConstants::DOCUMENT_POSITION_FOLLOWING
+            } else {
+                NodeConstants::DOCUMENT_POSITION_PRECEDING
+            };
+
+            // Disconnected.
+            return random +
+                NodeConstants::DOCUMENT_POSITION_DISCONNECTED +
+                NodeConstants::DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC;
+        }
+
+        let mut parent = self_and_ancestors.pop().unwrap();
+        other_and_ancestors.pop().unwrap();
+
+        let mut current_position = cmp::min(self_and_ancestors.len(), other_and_ancestors.len());
+
+        while current_position > 0 {
+            current_position -= 1;
+            let child_1 = self_and_ancestors.pop().unwrap();
+            let child_2 = other_and_ancestors.pop().unwrap();
+
+            if child_1 != child_2 {
+                let is_before =
+                    parent.children().position(|c| c == child_1).unwrap()
+                     < parent.children().position(|c| c == child_2).unwrap();
+                // If I am before, `other` is following, and the other way
+                // around.
+                return if is_before {
                     NodeConstants::DOCUMENT_POSITION_FOLLOWING
                 } else {
                     NodeConstants::DOCUMENT_POSITION_PRECEDING
                 };
-                // step 3.
-                return random +
-                    NodeConstants::DOCUMENT_POSITION_DISCONNECTED +
-                    NodeConstants::DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC;
             }
 
-            for child in lastself.traverse_preorder() {
-                if &*child == other {
-                    // step 6.
-                    return NodeConstants::DOCUMENT_POSITION_PRECEDING;
-                }
-                if &*child == self {
-                    // step 7.
-                    return NodeConstants::DOCUMENT_POSITION_FOLLOWING;
-                }
-            }
-            unreachable!()
+            parent = child_1;
+        }
+
+        // We hit the end of one of the parent chains, so one node needs to be
+        // contained in the other.
+        //
+        // If we're the container, return that `other` is contained by us.
+        return if self_and_ancestors.len() < other_and_ancestors.len() {
+            NodeConstants::DOCUMENT_POSITION_FOLLOWING +
+            NodeConstants::DOCUMENT_POSITION_CONTAINED_BY
+        } else {
+            NodeConstants::DOCUMENT_POSITION_PRECEDING +
+            NodeConstants::DOCUMENT_POSITION_CONTAINS
         }
     }
 
@@ -2503,7 +2533,7 @@ impl VirtualMethods for Node {
 }
 
 /// A summary of the changes that happened to a node.
-#[derive(Copy, Clone, PartialEq, HeapSizeOf)]
+#[derive(Clone, Copy, HeapSizeOf, PartialEq)]
 pub enum NodeDamage {
     /// The node's `style` attribute changed.
     NodeStyleDamaged,
@@ -2522,6 +2552,11 @@ pub enum ChildrenMutation<'a> {
         next: Option<&'a Node>,
     },
     ReplaceAll { removed: &'a [&'a Node], added: &'a [&'a Node] },
+    /// Mutation for when a Text node's data is modified.
+    /// This doesn't change the structure of the list, which is what the other
+    /// variants' fields are stored for at the moment, so this can just have no
+    /// fields.
+    ChangeText,
 }
 
 impl<'a> ChildrenMutation<'a> {
@@ -2573,6 +2608,9 @@ impl<'a> ChildrenMutation<'a> {
     }
 
     /// Get the child that follows the added or removed children.
+    /// Currently only used when this mutation might force us to
+    /// restyle later children (see HAS_SLOW_SELECTOR_LATER_SIBLINGS and
+    /// Element's implementation of VirtualMethods::children_changed).
     pub fn next_child(&self) -> Option<&Node> {
         match *self {
             ChildrenMutation::Append { .. } => None,
@@ -2580,6 +2618,7 @@ impl<'a> ChildrenMutation<'a> {
             ChildrenMutation::Prepend { next, .. } => Some(next),
             ChildrenMutation::Replace { next, .. } => next,
             ChildrenMutation::ReplaceAll { .. } => None,
+            ChildrenMutation::ChangeText => None,
         }
     }
 
@@ -2617,6 +2656,7 @@ impl<'a> ChildrenMutation<'a> {
 
             ChildrenMutation::Replace { prev: None, next: None, .. } => unreachable!(),
             ChildrenMutation::ReplaceAll { .. } => None,
+            ChildrenMutation::ChangeText => None,
         }
     }
 }

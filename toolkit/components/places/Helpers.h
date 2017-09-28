@@ -193,11 +193,11 @@ public:
    */
   FinalizeStatementCacheProxy(
     mozilla::storage::StatementCache<StatementType>& aStatementCache,
-    nsISupports* aOwner
-  )
-  : mStatementCache(aStatementCache)
-  , mOwner(aOwner)
-  , mCallingThread(do_GetCurrentThread())
+    nsISupports* aOwner)
+    : Runnable("places::FinalizeStatementCacheProxy")
+    , mStatementCache(aStatementCache)
+    , mOwner(aOwner)
+    , mCallingThread(do_GetCurrentThread())
   {
   }
 
@@ -228,23 +228,6 @@ protected:
  */
 bool GetHiddenState(bool aIsRedirect,
                     uint32_t aTransitionType);
-
-/**
- * Notifies a specified topic via the observer service.
- */
-class PlacesEvent : public Runnable
-{
-public:
-  NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_NSIRUNNABLE
-
-  explicit PlacesEvent(const char* aTopic);
-protected:
-  ~PlacesEvent() {}
-  void Notify();
-
-  const char* const mTopic;
-};
 
 /**
  * Used to notify a topic to system observers on async execute completion.

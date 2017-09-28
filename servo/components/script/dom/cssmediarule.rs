@@ -15,10 +15,10 @@ use dom::cssstylesheet::CSSStyleSheet;
 use dom::medialist::MediaList;
 use dom::window::Window;
 use dom_struct::dom_struct;
+use servo_arc::Arc;
 use style::media_queries::parse_media_query_list;
 use style::parser::ParserContext;
 use style::shared_lock::{Locked, ToCssWithGuard};
-use style::stylearc::Arc;
 use style::stylesheets::{CssRuleType, MediaRule};
 use style_traits::{PARSING_MODE_DEFAULT, ToCss};
 
@@ -72,13 +72,15 @@ impl CSSMediaRule {
         let mut input = ParserInput::new(&text);
         let mut input = Parser::new(&mut input);
         let global = self.global();
-        let win = global.as_window();
-        let url = win.get_url();
-        let quirks_mode = win.Document().quirks_mode();
-        let context = ParserContext::new_for_cssom(&url, win.css_error_reporter(), Some(CssRuleType::Media),
+        let window = global.as_window();
+        let url = window.get_url();
+        let quirks_mode = window.Document().quirks_mode();
+        let context = ParserContext::new_for_cssom(&url, Some(CssRuleType::Media),
                                                    PARSING_MODE_DEFAULT,
                                                    quirks_mode);
-        let new_medialist = parse_media_query_list(&context, &mut input);
+
+        let new_medialist = parse_media_query_list(&context, &mut input,
+                                                   window.css_error_reporter());
         let mut guard = self.cssconditionrule.shared_lock().write();
 
         // Clone an Arc because we can’t borrow `guard` twice at the same time.

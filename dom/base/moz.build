@@ -15,7 +15,6 @@ TEST_DIRS += ['test']
 XPIDL_SOURCES += [
     'mozIDOMWindow.idl',
     'nsIContentPolicy.idl',
-    'nsIContentPolicyBase.idl',
     'nsIDocumentEncoder.idl',
     'nsIDOMDataChannel.idl',
     'nsIDOMDOMCursor.idl',
@@ -35,7 +34,6 @@ XPIDL_SOURCES += [
     'nsISelectionDisplay.idl',
     'nsISelectionListener.idl',
     'nsISelectionPrivate.idl',
-    'nsISimpleContentPolicy.idl',
     'nsISlowScriptDebug.idl',
 ]
 
@@ -84,6 +82,7 @@ EXPORTS += [
     'nsIContentInlines.h',
     'nsIContentIterator.h',
     'nsIContentSerializer.h',
+    'nsIdentifierMapEntry.h',
     'nsIDocument.h',
     'nsIDocumentInlines.h',
     'nsIDocumentObserver.h',
@@ -124,9 +123,11 @@ EXPORTS += [
     'nsTreeSanitizer.h',
     'nsViewportInfo.h',
     'nsWindowMemoryReporter.h',
+    'nsWindowSizes.h',
     'nsWrapperCache.h',
     'nsWrapperCacheInlines.h',
     'nsXMLNameSpaceMap.h',
+    'XPathGenerator.h',
 ]
 
 if CONFIG['MOZ_WEBRTC']:
@@ -352,6 +353,7 @@ UNIFIED_SOURCES += [
     'TextInputProcessor.cpp',
     'ThirdPartyUtil.cpp',
     'Timeout.cpp',
+    'TimeoutBudgetManager.cpp',
     'TimeoutExecutor.cpp',
     'TimeoutHandler.cpp',
     'TimeoutManager.cpp',
@@ -360,6 +362,7 @@ UNIFIED_SOURCES += [
     'WebSocket.cpp',
     'WindowNamedPropertiesHandler.cpp',
     'WindowOrientationObserver.cpp',
+    'XPathGenerator.cpp',
 ]
 
 if CONFIG['MOZ_WEBRTC']:

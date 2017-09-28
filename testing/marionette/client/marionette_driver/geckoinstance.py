@@ -48,6 +48,8 @@ class GeckoInstance(object):
         "extensions.getAddons.cache.enabled": False,
         # Disable intalling any distribution add-ons
         "extensions.installDistroAddons": False,
+        # Make sure Shield doesn't hit the network.
+        "extensions.shield-recipe-client.api_url": "",
         "extensions.showMismatchUI": False,
         # Turn off extension updates so they don't bother tests
         "extensions.update.enabled": False,
@@ -258,7 +260,6 @@ class GeckoInstance(object):
         Depending on self.runner_class, setting `clean` to True may also kill
         the emulator process in which this instance is running.
 
-        :param restart: If True, assume this is being called by restart method.
         :param clean: If True, also perform runner cleanup.
         """
         if self.runner:
@@ -297,7 +298,11 @@ class FennecInstance(GeckoInstance):
         "browser.snippets.firstrunHomepage.enabled": False,
 
         # Disable safebrowsing components
+        "browser.safebrowsing.blockedURIs.enabled": False,
         "browser.safebrowsing.downloads.enabled": False,
+        "browser.safebrowsing.passwords.enabled": False,
+        "browser.safebrowsing.malware.enabled": False,
+        "browser.safebrowsing.phishing.enabled": False,
 
         # Do not restore the last open set of tabs if the browser has crashed
         "browser.sessionstore.resume_from_crash": False,
@@ -391,17 +396,16 @@ class FennecInstance(GeckoInstance):
 
         return runner_args
 
-    def close(self, restart=False, clean=False):
+    def close(self, clean=False):
         """
         Close the managed Gecko process.
 
         If `clean` is True and the Fennec instance is running in an
         emulator managed by mozrunner, this will stop the emulator.
 
-        :param restart: If True, assume this is being called by restart method.
         :param clean: If True, also perform runner cleanup.
         """
-        super(FennecInstance, self).close(restart, clean)
+        super(FennecInstance, self).close(clean)
         if clean and self.runner and self.runner.device.connected:
             self.runner.device.dm.remove_forward(
                 "tcp:{}".format(self.marionette_port))
@@ -435,6 +439,7 @@ class DesktopInstance(GeckoInstance):
         # Disable safebrowsing components
         "browser.safebrowsing.blockedURIs.enabled": False,
         "browser.safebrowsing.downloads.enabled": False,
+        "browser.safebrowsing.passwords.enabled": False,
         "browser.safebrowsing.malware.enabled": False,
         "browser.safebrowsing.phishing.enabled": False,
 

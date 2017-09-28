@@ -146,7 +146,7 @@ public:
           TimeUnit::FromMicroseconds(presentationTimeUs));
 
         v->SetListener(Move(releaseSample));
-        mDecoder->UpdateOutputStatus(v);
+        mDecoder->UpdateOutputStatus(Move(v));
       }
 
       if (isEOS) {
@@ -167,11 +167,9 @@ public:
 
   RemoteVideoDecoder(const VideoInfo& aConfig,
                      MediaFormat::Param aFormat,
-                     layers::ImageContainer* aImageContainer,
                      const nsString& aDrmStubId, TaskQueue* aTaskQueue)
     : RemoteDataDecoder(MediaData::Type::VIDEO_DATA, aConfig.mMimeType,
                         aFormat, aDrmStubId, aTaskQueue)
-    , mImageContainer(aImageContainer)
     , mConfig(aConfig)
   {
   }
@@ -216,6 +214,7 @@ public:
   RefPtr<MediaDataDecoder::FlushPromise> Flush() override
   {
     mInputInfos.Clear();
+    mSeekTarget.reset();
     return RemoteDataDecoder::Flush();
   }
 
@@ -237,13 +236,31 @@ public:
     return mIsCodecSupportAdaptivePlayback;
   }
 
+  void SetSeekThreshold(const TimeUnit& aTime) override
+  {
+    mSeekTarget = Some(aTime);
+  }
+
+  bool IsUsefulData(const RefPtr<MediaData>& aSample) override
+  {
+    AssertOnTaskQueue();
+    if (!mSeekTarget) {
+      return true;
+    }
+    if (aSample->GetEndTime() > mSeekTarget.value()) {
+      mSeekTarget.reset();
+      return true;
+    }
+    return false;
+  }
+
 private:
-  layers::ImageContainer* mImageContainer;
   const VideoInfo mConfig;
   GeckoSurface::GlobalRef mSurface;
   AndroidSurfaceTextureHandle mSurfaceHandle;
   SimpleMap<InputInfo> mInputInfos;
   bool mIsCodecSupportAdaptivePlayback = false;
+  Maybe<TimeUnit> mSeekTarget;
 };
 
 class RemoteAudioDecoder : public RemoteDataDecoder
@@ -351,7 +368,7 @@ private:
           FramesToTimeUnit(numFrames, mOutputSampleRate), numFrames,
           Move(audio), mOutputChannels, mOutputSampleRate);
 
-        mDecoder->UpdateOutputStatus(data);
+        mDecoder->UpdateOutputStatus(Move(data));
       }
 
       if ((flags & MediaCodec::BUFFER_FLAG_END_OF_STREAM) != 0) {
@@ -423,7 +440,7 @@ RemoteDataDecoder::CreateVideoDecoder(const CreateDecoderParams& aParams,
     nullptr);
 
   RefPtr<MediaDataDecoder> decoder = new RemoteVideoDecoder(
-    config, format, aParams.mImageContainer, aDrmStubId, aParams.mTaskQueue);
+    config, format, aDrmStubId, aParams.mTaskQueue);
   if (aProxy) {
     decoder = new EMEMediaDataDecoderProxy(aParams, decoder.forget(), aProxy);
   }
@@ -555,7 +572,8 @@ RemoteDataDecoder::UpdateInputStatus(int64_t aTimestamp, bool aProcessed)
 {
   if (!mTaskQueue->IsCurrentThreadIn()) {
     mTaskQueue->Dispatch(
-      NewRunnableMethod<int64_t, bool>(this,
+      NewRunnableMethod<int64_t, bool>("RemoteDataDecoder::UpdateInputStatus",
+                                       this,
                                        &RemoteDataDecoder::UpdateInputStatus,
                                        aTimestamp,
                                        aProcessed));
@@ -579,20 +597,23 @@ RemoteDataDecoder::UpdateInputStatus(int64_t aTimestamp, bool aProcessed)
 }
 
 void
-RemoteDataDecoder::UpdateOutputStatus(MediaData* aSample)
+RemoteDataDecoder::UpdateOutputStatus(RefPtr<MediaData>&& aSample)
 {
   if (!mTaskQueue->IsCurrentThreadIn()) {
     mTaskQueue->Dispatch(
-      NewRunnableMethod<MediaData*>(this,
-                                    &RemoteDataDecoder::UpdateOutputStatus,
-                                    aSample));
+      NewRunnableMethod<const RefPtr<MediaData>>("RemoteDataDecoder::UpdateOutputStatus",
+                                                 this,
+                                                 &RemoteDataDecoder::UpdateOutputStatus,
+                                                 Move(aSample)));
     return;
   }
   AssertOnTaskQueue();
   if (mShutdown) {
     return;
   }
-  mDecodedData.AppendElement(aSample);
+  if (IsUsefulData(aSample)) {
+    mDecodedData.AppendElement(Move(aSample));
+  }
   ReturnDecodedData();
 }
 
@@ -606,7 +627,8 @@ RemoteDataDecoder::ReturnDecodedData()
   if (!mDecodePromise.IsEmpty()) {
     mDecodePromise.Resolve(mDecodedData, __func__);
     mDecodedData.Clear();
-  } else if (!mDrainPromise.IsEmpty()) {
+  } else if (!mDrainPromise.IsEmpty() &&
+             (!mDecodedData.IsEmpty() || mDrainStatus == DrainStatus::DRAINED)) {
     mDrainPromise.Resolve(mDecodedData, __func__);
     mDecodedData.Clear();
   }
@@ -617,7 +639,8 @@ RemoteDataDecoder::DrainComplete()
 {
   if (!mTaskQueue->IsCurrentThreadIn()) {
     mTaskQueue->Dispatch(
-      NewRunnableMethod(this, &RemoteDataDecoder::DrainComplete));
+      NewRunnableMethod("RemoteDataDecoder::DrainComplete",
+                        this, &RemoteDataDecoder::DrainComplete));
     return;
   }
   AssertOnTaskQueue();
@@ -635,7 +658,8 @@ RemoteDataDecoder::Error(const MediaResult& aError)
 {
   if (!mTaskQueue->IsCurrentThreadIn()) {
     mTaskQueue->Dispatch(
-      NewRunnableMethod<MediaResult>(this, &RemoteDataDecoder::Error, aError));
+      NewRunnableMethod<MediaResult>("RemoteDataDecoder::Error",
+                                     this, &RemoteDataDecoder::Error, aError));
     return;
   }
   AssertOnTaskQueue();

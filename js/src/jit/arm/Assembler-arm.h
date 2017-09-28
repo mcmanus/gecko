@@ -1384,15 +1384,9 @@ class Assembler : public AssemblerShared
 
     static uintptr_t GetPointer(uint8_t*);
     template <class Iter>
-    static const uint32_t* GetPtr32Target(Iter* iter, Register* dest = nullptr, RelocStyle* rs = nullptr);
+    static const uint32_t* GetPtr32Target(Iter iter, Register* dest = nullptr, RelocStyle* rs = nullptr);
 
     bool oom() const;
-
-    void disableProtection() {}
-    void enableProtection() {}
-    void setLowerBoundForProtection(size_t) {}
-    void unprotectRegion(unsigned char*, size_t) {}
-    void reprotectRegion(unsigned char*, size_t) {}
 
     void setPrinter(Sprinter* sp) {
 #ifdef JS_DISASM_ARM
@@ -1408,7 +1402,9 @@ class Assembler : public AssemblerShared
     bool isFinished;
   public:
     void finish();
-    bool asmMergeWith(Assembler& other);
+    bool appendRawCode(const uint8_t* code, size_t numBytes);
+    bool reserve(size_t size);
+    bool swapBuffer(wasm::Bytes& bytes);
     void copyJumpRelocationTable(uint8_t* dest);
     void copyDataRelocationTable(uint8_t* dest);
 
@@ -1718,12 +1714,7 @@ class Assembler : public AssemblerShared
     // I'm going to pretend this doesn't exist for now.
     void retarget(Label* label, void* target, Relocation::Kind reloc);
 
-    void Bind(uint8_t* rawCode, CodeOffset* label, const void* address);
-
-    // See Bind
-    size_t labelToPatchOffset(CodeOffset label) {
-        return label.offset();
-    }
+    static void Bind(uint8_t* rawCode, CodeOffset label, CodeOffset target);
 
     void as_bkpt();
 
@@ -1924,10 +1915,6 @@ class Assembler : public AssemblerShared
     static void PatchDataWithValueCheck(CodeLocationLabel label, ImmPtr newValue,
                                         ImmPtr expectedValue);
     static void PatchWrite_Imm32(CodeLocationLabel label, Imm32 imm);
-
-    static void PatchInstructionImmediate(uint8_t* code, PatchedImmPtr imm) {
-        MOZ_CRASH("Unused.");
-    }
 
     static uint32_t AlignDoubleArg(uint32_t offset) {
         return (offset + 1) & ~1;
@@ -2258,22 +2245,33 @@ class InstMOV : public InstALU
     static InstMOV* AsTHIS (const Instruction& i);
 };
 
-
 class InstructionIterator
 {
   private:
-    Instruction* i;
-
+    Instruction* inst_;
   public:
-    explicit InstructionIterator(Instruction* i_);
-
+    explicit InstructionIterator(Instruction* inst) : inst_(inst) {
+        skipPool();
+    }
+    void skipPool() {
+        inst_ = inst_->skipPool();
+    }
     Instruction* next() {
-        i = i->next();
+        inst_ = inst_->next();
         return cur();
     }
     Instruction* cur() const {
-        return i;
+        return inst_;
     }
+};
+
+class BufferInstructionIterator : public ARMBuffer::AssemblerBufferInstIterator
+{
+  public:
+    BufferInstructionIterator(BufferOffset bo, ARMBuffer* buffer)
+      : ARMBuffer::AssemblerBufferInstIterator(bo, buffer)
+    {}
+    void skipPool();
 };
 
 static const uint32_t NumIntArgRegs = 4;

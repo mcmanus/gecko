@@ -41,7 +41,6 @@ public class IconGenerator implements IconLoader {
             0xFF36385A,
     };
 
-    private static final int TEXT_SIZE_DP = 12;
     @Override
     public IconResponse load(IconRequest request) {
         if (request.getIconCount() > 1) {
@@ -56,7 +55,7 @@ public class IconGenerator implements IconLoader {
     /**
      * Generate default favicon for the given page URL.
      */
-    @VisibleForTesting static IconResponse generate(Context context, String pageURL) {
+    public static IconResponse generate(Context context, String pageURL) {
         final Resources resources = context.getResources();
         final int widthAndHeight = resources.getDimensionPixelSize(R.dimen.favicon_bg);
         final int roundedCorners = resources.getDimensionPixelOffset(R.dimen.favicon_corner_radius);
@@ -75,7 +74,9 @@ public class IconGenerator implements IconLoader {
 
         final String character = getRepresentativeCharacter(pageURL);
 
-        final float textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, TEXT_SIZE_DP, context.getResources().getDisplayMetrics());
+        // The text size is calculated dynamically based on the target icon size (1/8th). For an icon
+        // size of 112dp we'd use a text size of 14dp (112 / 8).
+        final float textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, widthAndHeight / 8, context.getResources().getDisplayMetrics());
 
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setTextSize(textSize);
@@ -86,7 +87,7 @@ public class IconGenerator implements IconLoader {
                 (int) ((canvas.getHeight() / 2) - ((paint.descent() + paint.ascent()) / 2)),
                 paint);
 
-        return IconResponse.createGenerated(favicon, color & 0x7FFFFFFF);
+        return IconResponse.createGenerated(favicon, color);
     }
 
     /**

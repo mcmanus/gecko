@@ -8,9 +8,9 @@
 
 #include "MainThreadUtils.h"
 #include "mozilla/a11y/Accessible.h"
+#include "mozilla/a11y/Platform.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/mscom/MainThreadRuntime.h"
-#include "mozilla/mscom/Ptr.h"
 #include "mozilla/mscom/Registration.h"
 #include "mozilla/UniquePtr.h"
 #include "nsAccessibilityService.h"
@@ -24,6 +24,10 @@
 #if defined(MOZ_TELEMETRY_REPORTING)
 #include "mozilla/Telemetry.h"
 #endif // defined(MOZ_TELEMETRY_REPORTING)
+
+#ifdef MOZ_CRASHREPORTER
+#include "nsExceptionHandler.h"
+#endif
 
 #include <oaidl.h>
 
@@ -92,8 +96,15 @@ LazyInstantiator::GetRootAccessible(HWND aHwnd)
 
   // a11y is running, so we just resolve the real root accessible.
   a11y::Accessible* rootAcc = widget::WinUtils::GetRootAccessibleForHWND(aHwnd);
-  if (!rootAcc || !rootAcc->IsRoot()) {
+  if (!rootAcc) {
     return nullptr;
+  }
+
+  if (!rootAcc->IsRoot()) {
+    // rootAcc might represent a popup as opposed to a true root accessible.
+    // In that case we just use the regular Accessible::GetNativeInterface.
+    rootAcc->GetNativeInterface(getter_AddRefs(result));
+    return result.forget();
   }
 
   // Subtle: rootAcc might still be wrapped by a LazyInstantiator, but we
@@ -252,21 +263,32 @@ LazyInstantiator::ShouldInstantiate(const DWORD aClientTid)
   }
   */
 
-#if defined(MOZ_TELEMETRY_REPORTING)
+  // Store full path to executable for support purposes.
+  nsAutoString filePath;
+  nsresult rv = clientExe->GetPath(filePath);
+  if (NS_SUCCEEDED(rv)) {
+    a11y::SetInstantiator(filePath);
+  }
+
+#if defined(MOZ_TELEMETRY_REPORTING) || defined(MOZ_CRASHREPORTER)
   if (!mTelemetryThread) {
     // Call GatherTelemetry on a background thread because it does I/O on
     // the executable file to retrieve version information.
     nsCOMPtr<nsIRunnable> runnable(
-        NewRunnableMethod<nsCOMPtr<nsIFile>>(this,
+        NewRunnableMethod<nsCOMPtr<nsIFile>, RefPtr<AccumulateRunnable>>(
+                                             "LazyInstantiator::GatherTelemetry",
+                                             this,
                                              &LazyInstantiator::GatherTelemetry,
-                                             clientExe));
+                                             clientExe,
+                                             new AccumulateRunnable(this)));
     NS_NewThread(getter_AddRefs(mTelemetryThread), runnable);
   }
-#endif // defined(MOZ_TELEMETRY_REPORTING)
+#endif // defined(MOZ_TELEMETRY_REPORTING) || defined(MOZ_CRASHREPORTER)
+
   return true;
 }
 
-#if defined(MOZ_TELEMETRY_REPORTING)
+#if defined(MOZ_TELEMETRY_REPORTING) || defined(MOZ_CRASHREPORTER)
 /**
  * Appends version information in the format "|a.b.c.d".
  * If there is no version information, we append nothing.
@@ -321,7 +343,8 @@ LazyInstantiator::AppendVersionInfo(nsIFile* aClientExe,
 }
 
 void
-LazyInstantiator::GatherTelemetry(nsIFile* aClientExe)
+LazyInstantiator::GatherTelemetry(nsIFile* aClientExe,
+                                  AccumulateRunnable* aRunnable)
 {
   MOZ_ASSERT(!NS_IsMainThread());
 
@@ -331,10 +354,11 @@ LazyInstantiator::GatherTelemetry(nsIFile* aClientExe)
     AppendVersionInfo(aClientExe, value);
   }
 
+  aRunnable->SetData(value);
+
   // Now that we've (possibly) obtained version info, send the resulting
   // string back to the main thread to accumulate in telemetry.
-  NS_DispatchToMainThread(NewNonOwningRunnableMethod<nsString>(this,
-        &LazyInstantiator::AccumulateTelemetry, value));
+  NS_DispatchToMainThread(aRunnable);
 }
 
 void
@@ -343,7 +367,15 @@ LazyInstantiator::AccumulateTelemetry(const nsString& aValue)
   MOZ_ASSERT(NS_IsMainThread());
 
   if (!aValue.IsEmpty()) {
-    Telemetry::ScalarSet(Telemetry::ScalarID::A11Y_INSTANTIATORS, aValue);
+#if defined(MOZ_TELEMETRY_REPORTING)
+    Telemetry::ScalarSet(Telemetry::ScalarID::A11Y_INSTANTIATORS,
+                         aValue);
+#endif // defined(MOZ_TELEMETRY_REPORTING)
+#if defined(MOZ_CRASHREPORTER)
+    CrashReporter::
+      AnnotateCrashReport(NS_LITERAL_CSTRING("AccessibilityClient"),
+                          NS_ConvertUTF16toUTF8(aValue));
+#endif // defined(MOZ_CRASHREPORTER)
   }
 
   if (mTelemetryThread) {
@@ -351,7 +383,7 @@ LazyInstantiator::AccumulateTelemetry(const nsString& aValue)
     mTelemetryThread = nullptr;
   }
 }
-#endif // defined(MOZ_TELEMETRY_REPORTING)
+#endif // defined(MOZ_TELEMETRY_REPORTING) || defined(MOZ_CRASHREPORTER)
 
 RootAccessibleWrap*
 LazyInstantiator::ResolveRootAccWrap()

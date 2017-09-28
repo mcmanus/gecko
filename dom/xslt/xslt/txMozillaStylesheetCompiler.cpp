@@ -84,7 +84,8 @@ public:
     NS_IMETHOD WillResume(void) override { return NS_OK; }
     NS_IMETHOD SetParser(nsParserBase* aParser) override { return NS_OK; }
     virtual void FlushPendingNotifications(mozilla::FlushType aType) override { }
-    NS_IMETHOD SetDocumentCharset(nsACString& aCharset) override { return NS_OK; }
+    virtual void SetDocumentCharset(NotNull<const Encoding*> aEncoding)
+      override { }
     virtual nsISupports *GetTarget() override { return nullptr; }
 
 private:
@@ -132,7 +133,7 @@ txStylesheetSink::HandleStartElement(const char16_t *aName,
 
         return rv;
     }
-    
+
     return NS_OK;
 }
 
@@ -216,9 +217,9 @@ txStylesheetSink::ReportError(const char16_t *aErrorText,
     return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 txStylesheetSink::DidBuildModel(bool aTerminated)
-{  
+{
     return mCompiler->doneLoading();
 }
 
@@ -269,9 +270,7 @@ txStylesheetSink::OnStartRequest(nsIRequest *aRequest, nsISupports *aContext)
         encoding = UTF_8_ENCODING;
     }
 
-    nsAutoCString charset;
-    encoding->Name(charset);
-    mParser->SetDocumentCharset(charset, charsetSource);
+    mParser->SetDocumentCharset(WrapNotNull(encoding), charsetSource);
 
     nsAutoCString contentType;
     channel->GetContentType(contentType);
@@ -282,7 +281,7 @@ txStylesheetSink::OnStartRequest(nsIRequest *aRequest, nsISupports *aContext)
     channel->GetURI(getter_AddRefs(uri));
     bool sniff;
     if (NS_SUCCEEDED(uri->SchemeIs("file", &sniff)) && sniff &&
-        contentType.Equals(UNKNOWN_CONTENT_TYPE)) {
+        contentType.EqualsLiteral(UNKNOWN_CONTENT_TYPE)) {
         nsresult rv;
         nsCOMPtr<nsIStreamConverterService> serv =
             do_GetService("@mozilla.org/streamConverters;1", &rv);
@@ -523,7 +522,7 @@ static nsresult
 handleNode(nsINode* aNode, txStylesheetCompiler* aCompiler)
 {
     nsresult rv = NS_OK;
-    
+
     if (aNode->IsElement()) {
         dom::Element* element = aNode->AsElement();
 
@@ -556,7 +555,7 @@ handleNode(nsINode* aNode, txStylesheetCompiler* aCompiler)
         for (nsIContent* child = element->GetFirstChild();
              child;
              child = child->GetNextSibling()) {
-             
+
             rv = handleNode(child, aCompiler);
             NS_ENSURE_SUCCESS(rv, rv);
         }
@@ -574,7 +573,7 @@ handleNode(nsINode* aNode, txStylesheetCompiler* aCompiler)
         for (nsIContent* child = aNode->GetFirstChild();
              child;
              child = child->GetNextSibling()) {
-             
+
             rv = handleNode(child, aCompiler);
             NS_ENSURE_SUCCESS(rv, rv);
         }
@@ -676,12 +675,12 @@ TX_CompileStylesheet(nsINode* aNode, txMozillaXSLTProcessor* aProcessor,
     if (aNode->IsNodeOfType(nsINode::eCONTENT)) {
       uri = static_cast<nsIContent*>(aNode)->GetBaseURI();
     }
-    else { 
+    else {
       NS_ASSERTION(aNode->IsNodeOfType(nsINode::eDOCUMENT), "not a doc");
       uri = static_cast<nsIDocument*>(aNode)->GetBaseURI();
     }
     NS_ENSURE_TRUE(uri, NS_ERROR_FAILURE);
-    
+
     nsAutoCString spec;
     uri->GetSpec(spec);
     NS_ConvertUTF8toUTF16 baseURI(spec);
@@ -715,7 +714,7 @@ TX_CompileStylesheet(nsINode* aNode, txMozillaXSLTProcessor* aProcessor,
 
     rv = compiler->doneLoading();
     NS_ENSURE_SUCCESS(rv, rv);
-    
+
     *aStylesheet = compiler->getStylesheet();
     NS_ADDREF(*aStylesheet);
 

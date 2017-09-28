@@ -28,9 +28,7 @@
 //! ```
 
 use super::context::{BindgenContext, ItemId};
-use super::derive::{CanDeriveCopy, CanDeriveDebug};
-use super::item::{Item, ItemAncestors};
-use super::layout::Layout;
+use super::item::{IsOpaque, Item, ItemAncestors, ItemCanonicalPath};
 use super::traversal::{EdgeKind, Trace, Tracer};
 use clang;
 use parse::ClangItemParser;
@@ -110,9 +108,8 @@ pub trait TemplateParameters {
     /// parameters. Of course, Rust does not allow generic parameters to be
     /// anything but types, so we must treat them as opaque, and avoid
     /// instantiating them.
-    fn self_template_params(&self,
-                            ctx: &BindgenContext)
-                            -> Option<Vec<ItemId>>;
+    fn self_template_params(&self, ctx: &BindgenContext)
+        -> Option<Vec<ItemId>>;
 
     /// Get the number of free template parameters this template declaration
     /// has.
@@ -140,7 +137,8 @@ pub trait TemplateParameters {
     /// `Foo<int,char>::Inner`. `Foo` *must* be instantiated with template
     /// arguments before we can gain access to the `Inner` member type.
     fn all_template_params(&self, ctx: &BindgenContext) -> Option<Vec<ItemId>>
-        where Self: ItemAncestors,
+    where
+        Self: ItemAncestors,
     {
         let each_self_params: Vec<Vec<_>> = self.ancestors(ctx)
             .filter_map(|id| id.self_template_params(ctx))
@@ -148,10 +146,13 @@ pub trait TemplateParameters {
         if each_self_params.is_empty() {
             None
         } else {
-            Some(each_self_params.into_iter()
-                .rev()
-                .flat_map(|params| params)
-                .collect())
+            Some(
+                each_self_params
+                    .into_iter()
+                    .rev()
+                    .flat_map(|params| params)
+                    .collect(),
+            )
         }
     }
 
@@ -159,19 +160,23 @@ pub trait TemplateParameters {
     /// subset of `all_template_params` and does not necessarily contain any of
     /// `self_template_params`.
     fn used_template_params(&self, ctx: &BindgenContext) -> Option<Vec<ItemId>>
-        where Self: AsRef<ItemId>,
+    where
+        Self: AsRef<ItemId>,
     {
-        assert!(ctx.in_codegen_phase(),
-                "template parameter usage is not computed until codegen");
+        assert!(
+            ctx.in_codegen_phase(),
+            "template parameter usage is not computed until codegen"
+        );
 
         let id = *self.as_ref();
-        ctx.resolve_item(id)
-            .all_template_params(ctx)
-            .map(|all_params| {
-                all_params.into_iter()
+        ctx.resolve_item(id).all_template_params(ctx).map(
+            |all_params| {
+                all_params
+                    .into_iter()
                     .filter(|p| ctx.uses_template_parameter(id, *p))
                     .collect()
-            })
+            },
+        )
     }
 }
 
@@ -181,13 +186,18 @@ pub trait AsTemplateParam {
     type Extra;
 
     /// Convert this thing to the item id of a named template type parameter.
-    fn as_template_param(&self,
-                         ctx: &BindgenContext,
-                         extra: &Self::Extra)
-                         -> Option<ItemId>;
+    fn as_template_param(
+        &self,
+        ctx: &BindgenContext,
+        extra: &Self::Extra,
+    ) -> Option<ItemId>;
 
     /// Is this a named template type parameter?
-    fn is_template_param(&self, ctx: &BindgenContext, extra: &Self::Extra) -> bool {
+    fn is_template_param(
+        &self,
+        ctx: &BindgenContext,
+        extra: &Self::Extra,
+    ) -> bool {
         self.as_template_param(ctx, extra).is_some()
     }
 }
@@ -204,10 +214,12 @@ pub struct TemplateInstantiation {
 
 impl TemplateInstantiation {
     /// Construct a new template instantiation from the given parts.
-    pub fn new<I>(template_definition: ItemId,
-                  template_args: I)
-                  -> TemplateInstantiation
-        where I: IntoIterator<Item = ItemId>,
+    pub fn new<I>(
+        template_definition: ItemId,
+        template_args: I,
+    ) -> TemplateInstantiation
+    where
+        I: IntoIterator<Item = ItemId>,
     {
         TemplateInstantiation {
             definition: template_definition,
@@ -226,9 +238,10 @@ impl TemplateInstantiation {
     }
 
     /// Parse a `TemplateInstantiation` from a clang `Type`.
-    pub fn from_ty(ty: &clang::Type,
-                   ctx: &mut BindgenContext)
-                   -> Option<TemplateInstantiation> {
+    pub fn from_ty(
+        ty: &clang::Type,
+        ctx: &mut BindgenContext,
+    ) -> Option<TemplateInstantiation> {
         use clang_sys::*;
 
         let template_args = ty.template_args()
@@ -252,95 +265,84 @@ impl TemplateInstantiation {
             });
 
         let declaration = ty.declaration();
-        let definition = if declaration.kind() == CXCursor_TypeAliasTemplateDecl {
-            Some(declaration)
-        } else {
-            declaration
-                .specialized()
-                .or_else(|| {
+        let definition =
+            if declaration.kind() == CXCursor_TypeAliasTemplateDecl {
+                Some(declaration)
+            } else {
+                declaration.specialized().or_else(|| {
                     let mut template_ref = None;
                     ty.declaration().visit(|child| {
-                        if child.kind() == CXCursor_TemplateRef {
-                            template_ref = Some(child);
-                            return CXVisit_Break;
-                        }
+                    if child.kind() == CXCursor_TemplateRef {
+                        template_ref = Some(child);
+                        return CXVisit_Break;
+                    }
 
-                        // Instantiations of template aliases might have the
-                        // TemplateRef to the template alias definition arbitrarily
-                        // deep, so we need to recurse here and not only visit
-                        // direct children.
-                        CXChildVisit_Recurse
-                    });
+                    // Instantiations of template aliases might have the
+                    // TemplateRef to the template alias definition arbitrarily
+                    // deep, so we need to recurse here and not only visit
+                    // direct children.
+                    CXChildVisit_Recurse
+                });
 
                     template_ref.and_then(|cur| cur.referenced())
                 })
-        };
+            };
 
         let definition = match definition {
             Some(def) => def,
             None => {
                 if !ty.declaration().is_builtin() {
-                    warn!("Could not find template definition for template \
-                           instantiation");
+                    warn!(
+                        "Could not find template definition for template \
+                           instantiation"
+                    );
                 }
-                return None
+                return None;
             }
         };
 
         let template_definition =
             Item::from_ty_or_ref(definition.cur_type(), definition, None, ctx);
 
-        Some(TemplateInstantiation::new(template_definition, template_args))
-    }
-
-    /// Does this instantiation have a vtable?
-    pub fn has_vtable(&self, ctx: &BindgenContext) -> bool {
-        ctx.resolve_type(self.definition).has_vtable(ctx)
-    }
-
-    /// Does this instantiation have a destructor?
-    pub fn has_destructor(&self, ctx: &BindgenContext) -> bool {
-        ctx.resolve_type(self.definition).has_destructor(ctx) ||
-        self.args.iter().any(|arg| ctx.resolve_type(*arg).has_destructor(ctx))
+        Some(TemplateInstantiation::new(
+            template_definition,
+            template_args,
+        ))
     }
 }
 
-impl<'a> CanDeriveCopy<'a> for TemplateInstantiation {
-    type Extra = ();
+impl IsOpaque for TemplateInstantiation {
+    type Extra = Item;
 
-    fn can_derive_copy(&self, ctx: &BindgenContext, _: ()) -> bool {
-        self.definition.can_derive_copy(ctx, ()) &&
-        self.args.iter().all(|arg| arg.can_derive_copy(ctx, ()))
-    }
+    /// Is this an opaque template instantiation?
+    fn is_opaque(&self, ctx: &BindgenContext, item: &Item) -> bool {
+        if self.template_definition().is_opaque(ctx, &()) {
+            return true;
+        }
 
-    fn can_derive_copy_in_array(&self, ctx: &BindgenContext, _: ()) -> bool {
-        self.definition.can_derive_copy_in_array(ctx, ()) &&
-        self.args.iter().all(|arg| arg.can_derive_copy_in_array(ctx, ()))
-    }
-}
+        // TODO(#774): This doesn't properly handle opaque instantiations where
+        // an argument is itself an instantiation because `canonical_name` does
+        // not insert the template arguments into the name, ie it for nested
+        // template arguments it creates "Foo" instead of "Foo<int>". The fully
+        // correct fix is to make `canonical_{name,path}` include template
+        // arguments properly.
 
-impl CanDeriveDebug for TemplateInstantiation {
-    type Extra = Option<Layout>;
-
-    fn can_derive_debug(&self,
-                        ctx: &BindgenContext,
-                        layout: Option<Layout>)
-                        -> bool {
-        self.args.iter().all(|arg| arg.can_derive_debug(ctx, ())) &&
-        ctx.resolve_type(self.definition)
-            .as_comp()
-            .and_then(|c| {
-                // For non-type template parameters, we generate an opaque
-                // blob, and in this case the instantiation has a better
-                // idea of the layout than the definition does.
-                if c.has_non_type_template_params() {
-                    let opaque = layout.unwrap_or(Layout::zero()).opaque();
-                    Some(opaque.can_derive_debug(ctx, ()))
-                } else {
-                    None
-                }
+        let mut path = item.canonical_path(ctx);
+        let args: Vec<_> = self.template_arguments()
+            .iter()
+            .map(|arg| {
+                let arg_path = arg.canonical_path(ctx);
+                arg_path[1..].join("::")
             })
-            .unwrap_or_else(|| self.definition.can_derive_debug(ctx, ()))
+            .collect();
+        {
+            let last = path.last_mut().unwrap();
+            last.push('<');
+            last.push_str(&args.join(", "));
+            last.push('>');
+        }
+
+        ctx.opaque_by_name(&path)
     }
 }
 
@@ -348,7 +350,8 @@ impl Trace for TemplateInstantiation {
     type Extra = ();
 
     fn trace<T>(&self, _ctx: &BindgenContext, tracer: &mut T, _: &())
-        where T: Tracer,
+    where
+        T: Tracer,
     {
         tracer.visit_kind(self.definition, EdgeKind::TemplateDeclaration);
         for &item in self.template_arguments() {

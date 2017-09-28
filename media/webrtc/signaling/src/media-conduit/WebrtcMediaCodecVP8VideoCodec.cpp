@@ -105,7 +105,7 @@ public:
       ok = NS_SUCCEEDED(info->PresentationTimeUs(&presentationTimeUs));
       MOZ_RELEASE_ASSERT(ok);
 
-      mEncodedImage._timeStamp = presentationTimeUs;
+      mEncodedImage._timeStamp = presentationTimeUs / PR_USEC_PER_MSEC;
       mEncodedImage.capture_time_ms_ = mEncodedImage._timeStamp;
 
       int32_t flags;
@@ -260,7 +260,8 @@ public:
 
 protected:
   MediaCodecOutputDrain()
-    : mMonitor("MediaCodecOutputDrain monitor")
+    : Runnable("MediaCodecOutputDrain")
+    , mMonitor("MediaCodecOutputDrain monitor")
     , mEnding(false)
   {}
 
@@ -695,8 +696,7 @@ static bool I420toNV12(uint8_t* dstY, uint16_t* dstUV, const webrtc::VideoFrame&
 
 // Encoder.
 WebrtcMediaCodecVP8VideoEncoder::WebrtcMediaCodecVP8VideoEncoder()
-  : mTimestamp(0)
-  , mCallback(nullptr)
+  : mCallback(nullptr)
   , mMediaCodecEncoder(nullptr) {
   CSFLogDebug(logTag,  "%s ", __FUNCTION__);
 
@@ -1075,9 +1075,9 @@ int32_t WebrtcMediaCodecVP8VideoRemoteEncoder::Encode(
   }
 
   if((*frame_types)[0] == webrtc::kVideoFrameKey) {
-    bufferInfo->Set(0, size, inputImage.timestamp(), MediaCodec::BUFFER_FLAG_SYNC_FRAME);
+    bufferInfo->Set(0, size, inputImage.render_time_ms() * PR_USEC_PER_MSEC, MediaCodec::BUFFER_FLAG_SYNC_FRAME);
   } else {
-    bufferInfo->Set(0, size, inputImage.timestamp(), 0);
+    bufferInfo->Set(0, size, inputImage.render_time_ms() * PR_USEC_PER_MSEC, 0);
   }
 
   mJavaEncoder->Input(bytes, bufferInfo, nullptr);

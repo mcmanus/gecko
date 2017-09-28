@@ -53,11 +53,15 @@ public:
 
   ServoKeyframeRule* GetRule(uint32_t aIndex) {
     if (!mRules[aIndex]) {
-      ServoKeyframeRule* rule = new ServoKeyframeRule(
-        Servo_KeyframesRule_GetKeyframe(mRawRule, aIndex).Consume());
-      mRules.ReplaceObjectAt(rule, aIndex);
-      rule->SetStyleSheet(mStyleSheet);
-      rule->SetParentRule(mParentRule);
+      uint32_t line = 0, column = 0;
+      RefPtr<RawServoKeyframe> rule =
+        Servo_KeyframesRule_GetKeyframeAt(mRawRule, aIndex,
+                                          &line, &column).Consume();
+      ServoKeyframeRule* ruleObj =
+        new ServoKeyframeRule(rule.forget(), line, column);
+      mRules.ReplaceObjectAt(ruleObj, aIndex);
+      ruleObj->SetStyleSheet(mStyleSheet);
+      ruleObj->SetParentRule(mParentRule);
     }
     return static_cast<ServoKeyframeRule*>(mRules[aIndex]);
   }
@@ -75,6 +79,7 @@ public:
   void AppendRule() {
     mRules.AppendObject(nullptr);
   }
+
   void RemoveRule(uint32_t aIndex) {
     mRules.RemoveObjectAt(aIndex);
   }
@@ -120,7 +125,7 @@ private:
 };
 
 // QueryInterface implementation for ServoKeyframeList
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServoKeyframeList)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServoKeyframeList)
 NS_INTERFACE_MAP_END_INHERITING(dom::CSSRuleList)
 
 NS_IMPL_ADDREF_INHERITED(ServoKeyframeList, dom::CSSRuleList)
@@ -163,7 +168,7 @@ ServoKeyframesRule::~ServoKeyframesRule()
 NS_IMPL_ADDREF_INHERITED(ServoKeyframesRule, dom::CSSKeyframesRule)
 NS_IMPL_RELEASE_INHERITED(ServoKeyframesRule, dom::CSSKeyframesRule)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServoKeyframesRule)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServoKeyframesRule)
 NS_INTERFACE_MAP_END_INHERITING(dom::CSSKeyframesRule)
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(ServoKeyframesRule)
@@ -279,11 +284,10 @@ ServoKeyframesRule::AppendRule(const nsAString& aRule)
 
   NS_ConvertUTF16toUTF8 rule(aRule);
   UpdateRule([this, sheet, &rule]() {
-    if (Servo_KeyframesRule_AppendRule(mRawRule, sheet->AsServo()->RawSheet(),
-                                       &rule)) {
-      if (mKeyframeList) {
-        mKeyframeList->AppendRule();
-      }
+    bool parsedOk = Servo_KeyframesRule_AppendRule(
+      mRawRule, sheet->AsServo()->RawContents(), &rule);
+    if (parsedOk && mKeyframeList) {
+      mKeyframeList->AppendRule();
     }
   });
   return NS_OK;

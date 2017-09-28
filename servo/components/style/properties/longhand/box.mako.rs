@@ -10,18 +10,22 @@
                          gecko_name="Display") %>
 
 // TODO(SimonSapin): don't parse `inline-table`, since we don't support it
+//
+// We allow "display" to apply to placeholders because we need to make the
+// placeholder pseudo-element an inline-block in the UA stylesheet in Gecko.
 <%helpers:longhand name="display"
-                   need_clone="True"
                    animation_value_type="discrete"
                    custom_cascade="${product == 'servo'}"
+                   flags="APPLIES_TO_PLACEHOLDER"
                    spec="https://drafts.csswg.org/css-display/#propdef-display">
     <%
         values = """inline block inline-block
             table inline-table table-row-group table-header-group table-footer-group
             table-row table-column-group table-column table-cell table-caption
-            list-item flex inline-flex
-            none
+            list-item none
         """.split()
+        webkit_prefixed_values = "flex inline-flex".split()
+        values += webkit_prefixed_values
         if product == "gecko":
             values += """grid inline-grid ruby ruby-base ruby-base-container
                 ruby-text ruby-text-container contents flow-root -webkit-box
@@ -29,9 +33,7 @@
                 -moz-grid-group -moz-grid-line -moz-stack -moz-inline-stack -moz-deck
                 -moz-popup -moz-groupbox""".split()
     %>
-    use values::computed::ComputedValueAsSpecified;
     use style_traits::ToCss;
-    no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
         pub use super::SpecifiedValue as T;
@@ -50,6 +52,34 @@
                          | T::inline_grid
                          % endif
                 )
+            }
+
+            /// Returns whether an element with this display type is a line
+            /// participant, which means it may lay its children on the same
+            /// line as itself.
+            pub fn is_line_participant(&self) -> bool {
+                matches!(*self,
+                         T::inline
+                         % if product == "gecko":
+                         | T::contents
+                         | T::ruby
+                         | T::ruby_base_container
+                         % endif
+                )
+            }
+
+            /// Returns whether this "display" value is one of the types for
+            /// ruby.
+            #[cfg(feature = "gecko")]
+            pub fn is_ruby_type(&self) -> bool {
+                matches!(*self, T::ruby | T::ruby_base | T::ruby_text |
+                         T::ruby_base_container | T::ruby_text_container)
+            }
+
+            /// Returns whether this "display" value is a ruby level container.
+            #[cfg(feature = "gecko")]
+            pub fn is_ruby_level_container(&self) -> bool {
+                matches!(*self, T::ruby_base_container | T::ruby_text_container)
             }
 
             /// Convert this display into an equivalent block display.
@@ -81,12 +111,32 @@
                     // Everything else becomes block.
                     _ => T::block,
                 }
+
+            }
+
+            /// Convert this display into an inline-outside display.
+            ///
+            /// Ideally it should implement spec: https://drafts.csswg.org/css-display/#inlinify
+            /// but the spec isn't stable enough, so we copy what Gecko does for now.
+            #[cfg(feature = "gecko")]
+            pub fn inlinify(&self) -> Self {
+                match *self {
+                    T::block | T::flow_root => T::inline_block,
+                    T::table => T::inline_table,
+                    T::flex => T::inline_flex,
+                    T::grid => T::inline_grid,
+                    T::_moz_box => T::_moz_inline_box,
+                    T::_moz_stack => T::_moz_inline_stack,
+                    T::_webkit_box => T::_webkit_inline_box,
+                    other => other,
+                }
             }
         }
     }
 
     #[allow(non_camel_case_types)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, ToComputedValue)]
+    #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf, Deserialize, Serialize))]
     pub enum SpecifiedValue {
         % for value in values:
@@ -121,20 +171,19 @@
                     Ok(computed_value::T::${to_rust_ident(value)})
                 },
             % endfor
+            % for value in webkit_prefixed_values:
+                "-webkit-${value}" => {
+                    Ok(computed_value::T::${to_rust_ident(value)})
+                },
+            % endfor
         }
     }
 
-    impl ComputedValueAsSpecified for SpecifiedValue {}
-
     % if product == "servo":
         fn cascade_property_custom(_declaration: &PropertyDeclaration,
-                                   _inherited_style: &ComputedValues,
-                                   context: &mut computed::Context,
-                                   _cacheable: &mut bool,
-                                   _error_reporter: &ParseErrorReporter) {
+                                   context: &mut computed::Context) {
             longhands::_servo_display_for_hypothetical_box::derive_from_display(context);
             longhands::_servo_text_decorations_in_effect::derive_from_display(context);
-            longhands::_servo_under_display_none::derive_from_display(context);
         }
     % endif
 
@@ -146,12 +195,11 @@
 
 ${helpers.single_keyword("-moz-top-layer", "none top",
                          gecko_constant_prefix="NS_STYLE_TOP_LAYER",
-                         gecko_ffi_name="mTopLayer", need_clone=True,
+                         gecko_ffi_name="mTopLayer",
                          products="gecko", animation_value_type="none", internal=True,
                          spec="Internal (not web-exposed)")}
 
-${helpers.single_keyword("position", "static absolute relative fixed",
-                         extra_gecko_values="sticky",
+${helpers.single_keyword("position", "static absolute relative fixed sticky",
                          animation_value_type="discrete",
                          flags="CREATES_STACKING_CONTEXT ABSPOS_CB",
                          spec="https://drafts.csswg.org/css-position/#position-property")}
@@ -165,8 +213,9 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
                                   gecko_enum_prefix="StyleFloat"
                                   gecko_inexhaustive="True"
                                   gecko_ffi_name="mFloat"
+                                  gecko_pref_ident="float_"
+                                  flags="APPLIES_TO_FIRST_LETTER"
                                   spec="https://drafts.csswg.org/css-box/#propdef-float">
-    no_viewport_percentage!(SpecifiedValue);
     impl ToComputedValue for SpecifiedValue {
         type ComputedValue = computed_value::T;
 
@@ -175,10 +224,24 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
             let ltr = context.style().writing_mode.is_bidi_ltr();
             // https://drafts.csswg.org/css-logical-props/#float-clear
             match *self {
-                SpecifiedValue::inline_start if ltr => computed_value::T::left,
-                SpecifiedValue::inline_start => computed_value::T::right,
-                SpecifiedValue::inline_end if ltr => computed_value::T::right,
-                SpecifiedValue::inline_end => computed_value::T::left,
+                SpecifiedValue::inline_start => {
+                    context.rule_cache_conditions.borrow_mut()
+                        .set_writing_mode_dependency(context.builder.writing_mode);
+                    if ltr {
+                        computed_value::T::left
+                    } else {
+                        computed_value::T::right
+                    }
+                }
+                SpecifiedValue::inline_end => {
+                    context.rule_cache_conditions.borrow_mut()
+                        .set_writing_mode_dependency(context.builder.writing_mode);
+                    if ltr {
+                        computed_value::T::right
+                    } else {
+                        computed_value::T::left
+                    }
+                }
                 % for value in "none left right".split():
                     SpecifiedValue::${value} => computed_value::T::${value},
                 % endfor
@@ -205,7 +268,6 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
                                   gecko_enum_prefix="StyleClear"
                                   gecko_ffi_name="mBreakType"
                                   spec="https://www.w3.org/TR/CSS2/visuren.html#flow-control">
-    no_viewport_percentage!(SpecifiedValue);
     impl ToComputedValue for SpecifiedValue {
         type ComputedValue = computed_value::T;
 
@@ -214,10 +276,24 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
             let ltr = context.style().writing_mode.is_bidi_ltr();
             // https://drafts.csswg.org/css-logical-props/#float-clear
             match *self {
-                SpecifiedValue::inline_start if ltr => computed_value::T::left,
-                SpecifiedValue::inline_start => computed_value::T::right,
-                SpecifiedValue::inline_end if ltr => computed_value::T::right,
-                SpecifiedValue::inline_end => computed_value::T::left,
+                SpecifiedValue::inline_start => {
+                    context.rule_cache_conditions.borrow_mut()
+                        .set_writing_mode_dependency(context.builder.writing_mode);
+                    if ltr {
+                        computed_value::T::left
+                    } else {
+                        computed_value::T::right
+                    }
+                }
+                SpecifiedValue::inline_end => {
+                    context.rule_cache_conditions.borrow_mut()
+                        .set_writing_mode_dependency(context.builder.writing_mode);
+                    if ltr {
+                        computed_value::T::right
+                    } else {
+                        computed_value::T::left
+                    }
+                }
                 % for value in "none left right both".split():
                     SpecifiedValue::${value} => computed_value::T::${value},
                 % endfor
@@ -249,128 +325,20 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
     #[inline]
     pub fn derive_from_display(context: &mut Context) {
         let d = context.style().get_box().clone_display();
-        context.mutate_style().mutate_box().set__servo_display_for_hypothetical_box(d);
+        context.builder.set__servo_display_for_hypothetical_box(d);
     }
 
 </%helpers:longhand>
 
-<%helpers:longhand name="vertical-align" animation_value_type="ComputedValue"
-                   spec="https://www.w3.org/TR/CSS2/visudet.html#propdef-vertical-align">
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::specified::AllowQuirks;
 
-    <% vertical_align = data.longhands_by_name["vertical-align"] %>
-    <% vertical_align.keyword = Keyword("vertical-align",
-                                        "baseline sub super top text-top middle bottom text-bottom",
-                                        extra_gecko_values="-moz-middle-with-baseline") %>
-    <% vertical_align_keywords = vertical_align.keyword.values_for(product) %>
-
-    ${helpers.gecko_keyword_conversion(vertical_align.keyword)}
-
-    /// The `vertical-align` value.
-    #[allow(non_camel_case_types)]
-    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub enum SpecifiedValue {
-        % for keyword in vertical_align_keywords:
-            ${to_rust_ident(keyword)},
-        % endfor
-        LengthOrPercentage(specified::LengthOrPercentage),
-    }
-
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match *self {
-                % for keyword in vertical_align_keywords:
-                    SpecifiedValue::${to_rust_ident(keyword)} => dest.write_str("${keyword}"),
-                % endfor
-                SpecifiedValue::LengthOrPercentage(ref value) => value.to_css(dest),
-            }
-        }
-    }
-    /// baseline | sub | super | top | text-top | middle | bottom | text-bottom
-    /// | <percentage> | <length>
-    pub fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                         -> Result<SpecifiedValue, ParseError<'i>> {
-        if let Ok(lop) = input.try(|i| specified::LengthOrPercentage::parse_quirky(context, i, AllowQuirks::Yes)) {
-            return Ok(SpecifiedValue::LengthOrPercentage(lop));
-        }
-
-        try_match_ident_ignore_ascii_case! { input.expect_ident()?,
-            % for keyword in vertical_align_keywords:
-                "${keyword}" => Ok(SpecifiedValue::${to_rust_ident(keyword)}),
-            % endfor
-        }
-    }
-
-    /// The computed value for `vertical-align`.
-    pub mod computed_value {
-        use std::fmt;
-        use style_traits::ToCss;
-        use values::computed;
-
-        /// The keywords are the same, and the `LengthOrPercentage` is computed
-        /// here.
-        #[allow(non_camel_case_types)]
-        #[derive(PartialEq, Copy, Clone, Debug)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub enum T {
-            % for keyword in vertical_align_keywords:
-                ${to_rust_ident(keyword)},
-            % endfor
-            LengthOrPercentage(computed::LengthOrPercentage),
-        }
-        impl ToCss for T {
-            fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-                match *self {
-                    % for keyword in vertical_align_keywords:
-                        T::${to_rust_ident(keyword)} => dest.write_str("${keyword}"),
-                    % endfor
-                    T::LengthOrPercentage(ref value) => value.to_css(dest),
-                }
-            }
-        }
-    }
-
-    /// The initial computed value for `vertical-align`.
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        computed_value::T::baseline
-    }
-
-    impl ToComputedValue for SpecifiedValue {
-        type ComputedValue = computed_value::T;
-
-        #[inline]
-        fn to_computed_value(&self, context: &Context) -> computed_value::T {
-            match *self {
-                % for keyword in vertical_align_keywords:
-                    SpecifiedValue::${to_rust_ident(keyword)} => {
-                        computed_value::T::${to_rust_ident(keyword)}
-                    }
-                % endfor
-                SpecifiedValue::LengthOrPercentage(ref value) =>
-                    computed_value::T::LengthOrPercentage(value.to_computed_value(context)),
-            }
-        }
-        #[inline]
-        fn from_computed_value(computed: &computed_value::T) -> Self {
-            match *computed {
-                % for keyword in vertical_align_keywords:
-                    computed_value::T::${to_rust_ident(keyword)} => {
-                        SpecifiedValue::${to_rust_ident(keyword)}
-                    }
-                % endfor
-                computed_value::T::LengthOrPercentage(value) =>
-                    SpecifiedValue::LengthOrPercentage(
-                      ToComputedValue::from_computed_value(&value)
-                    ),
-            }
-        }
-    }
-</%helpers:longhand>
-
+${helpers.predefined_type(
+    "vertical-align",
+    "VerticalAlign",
+    "computed::VerticalAlign::baseline()",
+    animation_value_type="ComputedValue",
+    flags="APPLIES_TO_FIRST_LETTER APPLIES_TO_FIRST_LINE APPLIES_TO_PLACEHOLDER",
+    spec="https://www.w3.org/TR/CSS2/visudet.html#propdef-vertical-align",
+)}
 
 // CSS 2.1, Section 11 - Visual effects
 
@@ -381,6 +349,7 @@ ${helpers.single_keyword("-servo-overflow-clip-box", "padding-box content-box",
 
 ${helpers.single_keyword("overflow-clip-box", "padding-box content-box",
     products="gecko", animation_value_type="discrete", internal=True,
+    flags="APPLIES_TO_PLACEHOLDER",
     spec="Internal, not web-exposed, \
           may be standardized in the future (https://developer.mozilla.org/en-US/docs/Web/CSS/overflow-clip-box)")}
 
@@ -390,14 +359,16 @@ ${helpers.single_keyword("overflow-clip-box", "padding-box content-box",
 
 // FIXME(pcwalton, #2742): Implement scrolling for `scroll` and `auto`.
 ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
-                         need_clone=True, animation_value_type="discrete",
+                         animation_value_type="discrete",
                          extra_gecko_values="-moz-hidden-unscrollable",
                          custom_consts=overflow_custom_consts,
                          gecko_constant_prefix="NS_STYLE_OVERFLOW",
+                         flags="APPLIES_TO_PLACEHOLDER",
                          spec="https://drafts.csswg.org/css-overflow/#propdef-overflow-x")}
 
 // FIXME(pcwalton, #2742): Implement scrolling for `scroll` and `auto`.
-<%helpers:longhand name="overflow-y" need_clone="True" animation_value_type="discrete"
+<%helpers:longhand name="overflow-y" animation_value_type="discrete"
+                   flags="APPLIES_TO_PLACEHOLDER",
                    spec="https://drafts.csswg.org/css-overflow/#propdef-overflow-y">
     pub use super::overflow_x::{SpecifiedValue, parse, get_initial_value, computed_value};
 </%helpers:longhand>
@@ -423,17 +394,19 @@ ${helpers.predefined_type("transition-timing-function",
                           extra_prefixes="moz webkit",
                           spec="https://drafts.csswg.org/css-transitions/#propdef-transition-timing-function")}
 
-${helpers.predefined_type("transition-property",
-                          "TransitionProperty",
-                          "computed::TransitionProperty::All",
-                          initial_specified_value="specified::TransitionProperty::All",
-                          vector=True,
-                          allow_empty=True,
-                          need_index=True,
-                          needs_context=False,
-                          animation_value_type="none",
-                          extra_prefixes="moz webkit",
-                          spec="https://drafts.csswg.org/css-transitions/#propdef-transition-property")}
+${helpers.predefined_type(
+    "transition-property",
+    "TransitionProperty",
+    "computed::TransitionProperty::All",
+    initial_specified_value="specified::TransitionProperty::All",
+    vector=True,
+    allow_empty="NotInitial",
+    need_index=True,
+    needs_context=False,
+    animation_value_type="none",
+    extra_prefixes="moz webkit",
+    spec="https://drafts.csswg.org/css-transitions/#propdef-transition-property",
+)}
 
 ${helpers.predefined_type("transition-delay",
                           "Time",
@@ -454,14 +427,14 @@ ${helpers.predefined_type("transition-delay",
     use Atom;
     use std::fmt;
     use style_traits::ToCss;
-    use values::computed::ComputedValueAsSpecified;
     use values::KeyframesName;
 
     pub mod computed_value {
         pub use super::SpecifiedValue as T;
     }
 
-    #[derive(Clone, Debug, Hash, Eq, PartialEq)]
+    #[derive(Clone, Debug, Eq, Hash, PartialEq, ToComputedValue)]
+    #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub struct SpecifiedValue(pub Option<KeyframesName>);
 
@@ -499,8 +472,10 @@ ${helpers.predefined_type("transition-delay",
     }
 
     impl Parse for SpecifiedValue {
-        fn parse<'i, 't>(context: &ParserContext, input: &mut ::cssparser::Parser<'i, 't>)
-                         -> Result<Self, ParseError<'i>> {
+        fn parse<'i, 't>(
+            context: &ParserContext,
+            input: &mut ::cssparser::Parser<'i, 't>
+        ) -> Result<Self, ParseError<'i>> {
             if let Ok(name) = input.try(|input| KeyframesName::parse(context, input)) {
                 Ok(SpecifiedValue(Some(name)))
             } else {
@@ -508,14 +483,14 @@ ${helpers.predefined_type("transition-delay",
             }
         }
     }
-    no_viewport_percentage!(SpecifiedValue);
 
-    pub fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                         -> Result<SpecifiedValue,ParseError<'i>> {
+    pub fn parse<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<SpecifiedValue,ParseError<'i>> {
         SpecifiedValue::parse(context, input)
     }
 
-    impl ComputedValueAsSpecified for SpecifiedValue {}
 </%helpers:vector_longhand>
 
 ${helpers.predefined_type("animation-duration",
@@ -529,6 +504,8 @@ ${helpers.predefined_type("animation-duration",
                           extra_prefixes="moz webkit",
                           spec="https://drafts.csswg.org/css-transitions/#propdef-transition-duration")}
 
+// animation-timing-function is the exception to the rule for allowed_in_keyframe_block:
+// https://drafts.csswg.org/css-animations/#keyframes
 ${helpers.predefined_type("animation-timing-function",
                           "TimingFunction",
                           "computed::TimingFunction::ease()",
@@ -546,15 +523,14 @@ ${helpers.predefined_type("animation-timing-function",
                           extra_prefixes="moz webkit"
                           spec="https://drafts.csswg.org/css-animations/#propdef-animation-iteration-count",
                           allowed_in_keyframe_block="False">
-    use values::computed::ComputedValueAsSpecified;
-
     pub mod computed_value {
         pub use super::SpecifiedValue as T;
     }
 
     // https://drafts.csswg.org/css-animations/#animation-iteration-count
+    #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    #[derive(Debug, Clone, PartialEq, ToCss)]
+    #[derive(Clone, Debug, PartialEq, ToCss, ToComputedValue)]
     pub enum SpecifiedValue {
         Number(f32),
         Infinite,
@@ -576,7 +552,6 @@ ${helpers.predefined_type("animation-timing-function",
         }
     }
 
-    no_viewport_percentage!(SpecifiedValue);
 
     #[inline]
     pub fn get_initial_value() -> computed_value::T {
@@ -589,12 +564,12 @@ ${helpers.predefined_type("animation-timing-function",
     }
 
     #[inline]
-    pub fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                         -> Result<SpecifiedValue, ParseError<'i>> {
+    pub fn parse<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<SpecifiedValue, ParseError<'i>> {
         SpecifiedValue::parse(context, input)
     }
-
-    impl ComputedValueAsSpecified for SpecifiedValue {}
 </%helpers:vector_longhand>
 
 <% animation_direction_custom_consts = { "alternate-reverse": "Alternate_reverse" } %>
@@ -609,17 +584,14 @@ ${helpers.single_keyword("animation-direction",
                          spec="https://drafts.csswg.org/css-animations/#propdef-animation-direction",
                          allowed_in_keyframe_block=False)}
 
-// animation-play-state is the exception to the rule for allowed_in_keyframe_block:
-// https://drafts.csswg.org/css-animations/#keyframes
 ${helpers.single_keyword("animation-play-state",
                          "running paused",
-                         need_clone=True,
                          need_index=True,
                          animation_value_type="none",
                          vector=True,
                          extra_prefixes="moz webkit",
                          spec="https://drafts.csswg.org/css-animations/#propdef-animation-play-state",
-                         allowed_in_keyframe_block=True)}
+                         allowed_in_keyframe_block=False)}
 
 ${helpers.single_keyword("animation-fill-mode",
                          "none forwards backwards both",
@@ -647,9 +619,8 @@ ${helpers.predefined_type("animation-delay",
         "scroll-snap-points-" + axis,
         "ScrollSnapPoint",
         "computed::ScrollSnapPoint::none()",
-        animation_value_type="none",
+        animation_value_type="discrete",
         products="gecko",
-        disable_when_testing=True,
         spec="Nonstandard (https://www.w3.org/TR/2015/WD-css-snappoints-1-20150326/#scroll-snap-points)",
     )}
 % endfor
@@ -660,40 +631,39 @@ ${helpers.predefined_type("scroll-snap-destination",
                           products="gecko",
                           boxed="True",
                           spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-snap-destination)",
-                          animation_value_type="ComputedValue")}
+                          animation_value_type="discrete")}
 
-${helpers.predefined_type("scroll-snap-coordinate",
-                          "Position",
-                          "computed::Position::zero()",
-                          vector=True,
-                          products="gecko",
-                          spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-snap-destination)",
-                          animation_value_type="ComputedValue",
-                          allow_empty=True,
-                          delegate_animate=True)}
-
+${helpers.predefined_type(
+    "scroll-snap-coordinate",
+    "Position",
+    "computed::Position::zero()",
+    vector=True,
+    products="gecko",
+    spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-snap-destination)",
+    animation_value_type="discrete",
+    allow_empty="NotInitial"
+)}
 
 <%helpers:longhand name="transform" extra_prefixes="webkit"
                    animation_value_type="ComputedValue"
                    flags="CREATES_STACKING_CONTEXT FIXPOS_CB"
                    spec="https://drafts.csswg.org/css-transforms/#propdef-transform">
-    use app_units::Au;
     use values::computed::{LengthOrPercentageOrNumber as ComputedLoPoNumber, LengthOrNumber as ComputedLoN};
     use values::computed::{LengthOrPercentage as ComputedLoP, Length as ComputedLength};
-    use values::specified::{Angle, Integer, Length, LengthOrPercentage, Percentage};
+    use values::generics::transform::Matrix;
+    use values::specified::{Angle, Integer, Length, LengthOrPercentage};
     use values::specified::{LengthOrNumber, LengthOrPercentageOrNumber as LoPoNumber, Number};
     use style_traits::ToCss;
-    use style_traits::values::Css;
 
     use std::fmt;
 
     pub mod computed_value {
-        use app_units::Au;
         use values::CSSFloat;
         use values::computed;
-        use values::computed::{Length, LengthOrPercentage, Percentage};
+        use values::computed::{Length, LengthOrPercentage};
 
         #[derive(Clone, Copy, Debug, PartialEq)]
+        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
         pub struct ComputedMatrix {
             pub m11: CSSFloat, pub m12: CSSFloat, pub m13: CSSFloat, pub m14: CSSFloat,
@@ -703,6 +673,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
         }
 
         #[derive(Clone, Copy, Debug, PartialEq)]
+        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
         pub struct ComputedMatrixWithPercents {
             pub m11: CSSFloat, pub m12: CSSFloat, pub m13: CSSFloat, pub m14: CSSFloat,
@@ -730,12 +701,13 @@ ${helpers.predefined_type("scroll-snap-coordinate",
                     m21: 0.0, m22: 1.0, m23: 0.0, m24: 0.0,
                     m31: 0.0, m32: 0.0, m33: 1.0, m34: 0.0,
                     m41: LengthOrPercentage::zero(), m42: LengthOrPercentage::zero(),
-                    m43: Au(0), m44: 1.0
+                    m43: Length::new(0.), m44: 1.0
                 }
             }
         }
 
         #[derive(Clone, Debug, PartialEq)]
+        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
         pub enum ComputedOperation {
             Matrix(ComputedMatrix),
@@ -761,7 +733,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
             //                       progress: ... } ]
             InterpolateMatrix { from_list: T,
                                 to_list: T,
-                                progress: Percentage },
+                                progress: computed::Percentage },
             // For accumulate operation of mismatched transform lists.
             AccumulateMatrix { from_list: T,
                                to_list: T,
@@ -769,6 +741,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
         }
 
         #[derive(Clone, Debug, PartialEq)]
+        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
         pub struct T(pub Option<Vec<ComputedOperation>>);
     }
@@ -779,14 +752,15 @@ ${helpers.predefined_type("scroll-snap-coordinate",
     /// Multiple transform functions compose a transformation.
     ///
     /// Some transformations can be expressed by other more general functions.
-    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
+    #[derive(Clone, Debug, PartialEq)]
+    #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub enum SpecifiedOperation {
         /// Represents a 2D 2x3 matrix.
-        Matrix { a: Number, b: Number, c: Number, d: Number, e: Number, f: Number },
+        Matrix(Matrix<Number>),
         /// Represents a 3D 4x4 matrix with percentage and length values.
         /// For `moz-transform`.
-        PrefixedMatrix { a: Number, b: Number, c: Number, d: Number, e: LoPoNumber, f: LoPoNumber },
+        PrefixedMatrix(Matrix<Number, LoPoNumber>),
         /// Represents a 3D 4x4 matrix.
         Matrix3D {
             m11: Number, m12: Number, m13: Number, m14: Number,
@@ -848,7 +822,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
         /// A intermediate type for interpolation of mismatched transform lists.
         InterpolateMatrix { from_list: SpecifiedValue,
                             to_list: SpecifiedValue,
-                            progress: Percentage },
+                            progress: computed::Percentage },
         /// A intermediate type for accumulation of mismatched transform lists.
         AccumulateMatrix { from_list: SpecifiedValue,
                            to_list: SpecifiedValue,
@@ -864,65 +838,113 @@ ${helpers.predefined_type("scroll-snap-coordinate",
 
     impl ToCss for SpecifiedOperation {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            use self::SpecifiedOperation::*;
             match *self {
-                Matrix { a, b, c, d, e, f} => write!(
-                    dest, "matrix({}, {}, {}, {}, {}, {})",
-                    Css(a), Css(b), Css(c), Css(d), Css(e), Css(f)),
-                PrefixedMatrix { a, b, c, d, ref e, ref f} => write!(
-                    dest, "matrix({}, {}, {}, {}, {}, {})",
-                    Css(a), Css(b), Css(c), Css(d), Css(e), Css(f)),
-                Matrix3D {
+                SpecifiedOperation::Matrix(ref m) => m.to_css(dest),
+                SpecifiedOperation::PrefixedMatrix(ref m) => m.to_css(dest),
+                SpecifiedOperation::Matrix3D {
                     m11, m12, m13, m14,
                     m21, m22, m23, m24,
                     m31, m32, m33, m34,
-                    m41, m42, m43, m44 } => write!(
-                        dest, "matrix3d({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                        Css(m11), Css(m12), Css(m13), Css(m14),
-                        Css(m21), Css(m22), Css(m23), Css(m24),
-                        Css(m31), Css(m32), Css(m33), Css(m34),
-                        Css(m41), Css(m42), Css(m43), Css(m44)),
-                PrefixedMatrix3D {
+                    m41, m42, m43, m44,
+                } => {
+                    serialize_function!(dest, matrix3d(
+                        m11, m12, m13, m14,
+                        m21, m22, m23, m24,
+                        m31, m32, m33, m34,
+                        m41, m42, m43, m44,
+                    ))
+                }
+                SpecifiedOperation::PrefixedMatrix3D {
                     m11, m12, m13, m14,
                     m21, m22, m23, m24,
                     m31, m32, m33, m34,
-                    ref m41, ref m42, ref m43, m44 } => write!(
-                        dest, "matrix3d({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                        Css(m11), Css(m12), Css(m13), Css(m14),
-                        Css(m21), Css(m22), Css(m23), Css(m24),
-                        Css(m31), Css(m32), Css(m33), Css(m34),
-                        Css(m41), Css(m42), Css(m43), Css(m44)),
-                Skew(ax, None) => write!(dest, "skew({})", Css(ax)),
-                Skew(ax, Some(ay)) => write!(dest, "skew({}, {})", Css(ax), Css(ay)),
-                SkewX(angle) => write!(dest, "skewX({})", Css(angle)),
-                SkewY(angle) => write!(dest, "skewY({})", Css(angle)),
-                Translate(ref tx, None) => write!(dest, "translate({})", Css(tx)),
-                Translate(ref tx, Some(ref ty)) => write!(dest, "translate({}, {})", Css(tx), Css(ty)),
-                TranslateX(ref tx) => write!(dest, "translateX({})", Css(tx)),
-                TranslateY(ref ty) => write!(dest, "translateY({})", Css(ty)),
-                TranslateZ(ref tz) => write!(dest, "translateZ({})", Css(tz)),
-                Translate3D(ref tx, ref ty, ref tz) => write!(
-                    dest, "translate3d({}, {}, {})", Css(tx), Css(ty), Css(tz)),
-                Scale(factor, None) => write!(dest, "scale({})", Css(factor)),
-                Scale(sx, Some(sy)) => write!(dest, "scale({}, {})", Css(sx), Css(sy)),
-                ScaleX(sx) => write!(dest, "scaleX({})", Css(sx)),
-                ScaleY(sy) => write!(dest, "scaleY({})", Css(sy)),
-                ScaleZ(sz) => write!(dest, "scaleZ({})", Css(sz)),
-                Scale3D(sx, sy, sz) => write!(dest, "scale3d({}, {}, {})", Css(sx), Css(sy), Css(sz)),
-                Rotate(theta) => write!(dest, "rotate({})", Css(theta)),
-                RotateX(theta) => write!(dest, "rotateX({})", Css(theta)),
-                RotateY(theta) => write!(dest, "rotateY({})", Css(theta)),
-                RotateZ(theta) => write!(dest, "rotateZ({})", Css(theta)),
-                Rotate3D(x, y, z, theta) => write!(
-                    dest, "rotate3d({}, {}, {}, {})",
-                    Css(x), Css(y), Css(z), Css(theta)),
-                Perspective(ref length) => write!(dest, "perspective({})", Css(length)),
-                _ => unreachable!(),
+                    ref m41, ref m42, ref m43, m44,
+                } => {
+                    serialize_function!(dest, matrix3d(
+                        m11, m12, m13, m14,
+                        m21, m22, m23, m24,
+                        m31, m32, m33, m34,
+                        m41, m42, m43, m44,
+                    ))
+                }
+                SpecifiedOperation::Skew(ax, None) => {
+                    serialize_function!(dest, skew(ax))
+                }
+                SpecifiedOperation::Skew(ax, Some(ay)) => {
+                    serialize_function!(dest, skew(ax, ay))
+                }
+                SpecifiedOperation::SkewX(angle) => {
+                    serialize_function!(dest, skewX(angle))
+                }
+                SpecifiedOperation::SkewY(angle) => {
+                    serialize_function!(dest, skewY(angle))
+                }
+                SpecifiedOperation::Translate(ref tx, None) => {
+                    serialize_function!(dest, translate(tx))
+                }
+                SpecifiedOperation::Translate(ref tx, Some(ref ty)) => {
+                    serialize_function!(dest, translate(tx, ty))
+                }
+                SpecifiedOperation::TranslateX(ref tx) => {
+                    serialize_function!(dest, translateX(tx))
+                }
+                SpecifiedOperation::TranslateY(ref ty) => {
+                    serialize_function!(dest, translateY(ty))
+                }
+                SpecifiedOperation::TranslateZ(ref tz) => {
+                    serialize_function!(dest, translateZ(tz))
+                }
+                SpecifiedOperation::Translate3D(ref tx, ref ty, ref tz) => {
+                    serialize_function!(dest, translate3d(tx, ty, tz))
+                }
+                SpecifiedOperation::Scale(factor, None) => {
+                    serialize_function!(dest, scale(factor))
+                }
+                SpecifiedOperation::Scale(sx, Some(sy)) => {
+                    serialize_function!(dest, scale(sx, sy))
+                }
+                SpecifiedOperation::ScaleX(sx) => {
+                    serialize_function!(dest, scaleX(sx))
+                }
+                SpecifiedOperation::ScaleY(sy) => {
+                    serialize_function!(dest, scaleY(sy))
+                }
+                SpecifiedOperation::ScaleZ(sz) => {
+                    serialize_function!(dest, scaleZ(sz))
+                }
+                SpecifiedOperation::Scale3D(sx, sy, sz) => {
+                    serialize_function!(dest, scale3d(sx, sy, sz))
+                }
+                SpecifiedOperation::Rotate(theta) => {
+                    serialize_function!(dest, rotate(theta))
+                }
+                SpecifiedOperation::RotateX(theta) => {
+                    serialize_function!(dest, rotateX(theta))
+                }
+                SpecifiedOperation::RotateY(theta) => {
+                    serialize_function!(dest, rotateY(theta))
+                }
+                SpecifiedOperation::RotateZ(theta) => {
+                    serialize_function!(dest, rotateZ(theta))
+                }
+                SpecifiedOperation::Rotate3D(x, y, z, theta) => {
+                    serialize_function!(dest, rotate3d(x, y, z, theta))
+                }
+                SpecifiedOperation::Perspective(ref length) => {
+                    serialize_function!(dest, perspective(length))
+                }
+                SpecifiedOperation::InterpolateMatrix { ref from_list, ref to_list, progress } => {
+                    serialize_function!(dest, interpolatematrix(from_list, to_list, progress))
+                }
+                SpecifiedOperation::AccumulateMatrix { ref from_list, ref to_list, count } => {
+                    serialize_function!(dest, accumulatematrix(from_list, to_list, count))
+                }
             }
         }
     }
 
-    #[derive(Clone, Debug, HasViewportPercentage, PartialEq)]
+    #[derive(Clone, Debug, PartialEq)]
+    #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub struct SpecifiedValue(Vec<SpecifiedOperation>);
 
@@ -951,248 +973,176 @@ ${helpers.predefined_type("scroll-snap-coordinate",
     }
 
     // Allow unitless zero angle for rotate() and skew() to align with gecko
-    fn parse_internal<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>, prefixed: bool)
-        -> Result<SpecifiedValue,ParseError<'i>> {
+    fn parse_internal<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+        prefixed: bool,
+    ) -> Result<SpecifiedValue,ParseError<'i>> {
+        use style_traits::{Separator, Space};
+
         if input.try(|input| input.expect_ident_matching("none")).is_ok() {
             return Ok(SpecifiedValue(Vec::new()))
         }
 
-        let mut result = Vec::new();
-        loop {
-            let name = match input.try(|i| i.expect_function()) {
-                Ok(name) => name,
-                Err(_) => break,
-            };
-            let valid_fn = match_ignore_ascii_case! {
-                &name,
-                "matrix" => {
-                    input.parse_nested_block(|input| {
-                        // Standard matrix parsing.
+        Ok(SpecifiedValue(Space::parse(input, |input| {
+            let function = input.expect_function()?.clone();
+            input.parse_nested_block(|input| {
+                let result = match_ignore_ascii_case! { &function,
+                    "matrix" => {
+                        let a = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let b = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let c = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let d = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
                         if !prefixed {
-                            let values = input.parse_comma_separated(|input| {
-                                specified::parse_number(context, input)
-                            })?;
-                            if values.len() != 6 {
-                                return Err(StyleParseError::UnspecifiedError.into())
-                            }
-
-                            result.push(SpecifiedOperation::Matrix {
-                                a: values[0],
-                                b: values[1],
-                                c: values[2],
-                                d: values[3],
-                                e: values[4],
-                                f: values[5],
-                            });
-                            return Ok(true);
-                        }
-
-                        // Non-standard prefixed matrix parsing.
-                        //
-                        // -moz-transform accepts LengthOrPercentageOrNumber in the
-                        //  nondiagonal homogeneous components. transform accepts only number.
-                        let mut values = Vec::with_capacity(4);
-                        let mut lengths = Vec::with_capacity(2);
-
-                        // Consume first number
-                        values.push(specified::parse_number(context, input)?);
-
-                        // Parse other 5 number/LengthOrPercentageOrNumber
-                        for i in 0..5 {
+                            // Standard matrix parsing.
+                            let e = specified::parse_number(context, input)?;
                             input.expect_comma()?;
-                            if i < 3 {
-                                values.push(specified::parse_number(context, input)?);
-                            } else {
-                                // -moz-transform accepts LengthOrPercentageOrNumber in the nondiagonal
-                                // homogeneous components. transform accepts only number.
-                                lengths.push(LoPoNumber::parse(context, input)?)
-                            }
+                            let f = specified::parse_number(context, input)?;
+                            Ok(SpecifiedOperation::Matrix(Matrix { a, b, c, d, e, f }))
+                        } else {
+                            // Non-standard prefixed matrix parsing for -moz-transform.
+                            let e = LoPoNumber::parse(context, input)?;
+                            input.expect_comma()?;
+                            let f = LoPoNumber::parse(context, input)?;
+                            Ok(SpecifiedOperation::PrefixedMatrix(Matrix { a, b, c, d, e, f }))
                         }
-
-                        result.push(SpecifiedOperation::PrefixedMatrix {
-                            a: values[0],
-                            b: values[1],
-                            c: values[2],
-                            d: values[3],
-                            e: lengths[0].clone(),
-                            f: lengths[1].clone(),
-                        });
-                        Ok(true)
-                    })?
-                },
-                "matrix3d" => {
-                    input.parse_nested_block(|input| {
-                        // Standard matrix3d parsing.
+                    },
+                    "matrix3d" => {
+                        let m11 = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let m12 = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let m13 = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let m14 = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let m21 = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let m22 = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let m23 = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let m24 = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let m31 = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let m32 = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let m33 = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
+                        let m34 = specified::parse_number(context, input)?;
+                        input.expect_comma()?;
                         if !prefixed {
-                            let values = input.parse_comma_separated(|i| specified::parse_number(context, i))?;
-                            if values.len() != 16 {
-                                return Err(StyleParseError::UnspecifiedError.into())
-                            }
-
-                            result.push(SpecifiedOperation::Matrix3D {
-                                m11: values[ 0], m12: values[ 1], m13: values[ 2], m14: values[ 3],
-                                m21: values[ 4], m22: values[ 5], m23: values[ 6], m24: values[ 7],
-                                m31: values[ 8], m32: values[ 9], m33: values[10], m34: values[11],
-                                m41: values[12], m42: values[13], m43: values[14], m44: values[15]
-                            });
-                            return Ok(true);
-                        }
-
-                        // Non-standard prefixed matrix3d parsing.
-                        //
-                        // -moz-transform accepts LengthOrPercentageOrNumber in the
-                        //  nondiagonal homogeneous components. transform accepts only number.
-                        let mut values = Vec::with_capacity(13);
-                        let mut lops = Vec::with_capacity(2);
-                        let mut length_or_number = None;
-
-                        // Parse first number
-                        values.push(specified::parse_number(context, input)?);
-
-                        // Parse other 15 number/LengthOrPercentageOrNumber
-                        for i in 0..15 {
+                            // Standard matrix3d parsing.
+                            let m41 = specified::parse_number(context, input)?;
                             input.expect_comma()?;
-                            // -moz-transform accepts LengthOrPercentageOrNumber in the nondiagonal
-                            // homogeneous components. transform accepts only number.
-                            if i < 11 || i > 13 {
-                                values.push(specified::parse_number(context, input)?);
-                            } else if i == 13 {
-                                // m43
-                                length_or_number = Some(LengthOrNumber::parse(context, input)?);
-                            } else {
-                                // m41 and m42
-                                lops.push(LoPoNumber::parse(context, input)?);
-                            }
+                            let m42 = specified::parse_number(context, input)?;
+                            input.expect_comma()?;
+                            let m43 = specified::parse_number(context, input)?;
+                            input.expect_comma()?;
+                            let m44 = specified::parse_number(context, input)?;
+                            Ok(SpecifiedOperation::Matrix3D {
+                                m11, m12, m13, m14,
+                                m21, m22, m23, m24,
+                                m31, m32, m33, m34,
+                                m41, m42, m43, m44,
+                            })
+                        } else {
+                            // Non-standard prefixed matrix parsing for -moz-transform.
+                            let m41 = LoPoNumber::parse(context, input)?;
+                            input.expect_comma()?;
+                            let m42 = LoPoNumber::parse(context, input)?;
+                            input.expect_comma()?;
+                            let m43 = LengthOrNumber::parse(context, input)?;
+                            input.expect_comma()?;
+                            let m44 = specified::parse_number(context, input)?;
+                            Ok(SpecifiedOperation::PrefixedMatrix3D {
+                                m11, m12, m13, m14,
+                                m21, m22, m23, m24,
+                                m31, m32, m33, m34,
+                                m41, m42, m43, m44,
+                            })
                         }
-
-                        result.push(SpecifiedOperation::PrefixedMatrix3D {
-                            m11: values[ 0], m12: values[ 1], m13: values[ 2], m14: values[ 3],
-                            m21: values[ 4], m22: values[ 5], m23: values[ 6], m24: values[ 7],
-                            m31: values[ 8], m32: values[ 9], m33: values[10], m34: values[11],
-                            m41: lops[0].clone(), m42: lops[1].clone(), m43: length_or_number.unwrap(),
-                            m44: values[12]
-                        });
-                        Ok(true)
-                    })?
-                },
-                "translate" => {
-                    input.parse_nested_block(|input| {
+                    },
+                    "translate" => {
                         let sx = specified::LengthOrPercentage::parse(context, input)?;
                         if input.try(|input| input.expect_comma()).is_ok() {
                             let sy = specified::LengthOrPercentage::parse(context, input)?;
-                            result.push(SpecifiedOperation::Translate(sx, Some(sy)));
+                            Ok(SpecifiedOperation::Translate(sx, Some(sy)))
                         } else {
-                            result.push(SpecifiedOperation::Translate(sx, None));
+                            Ok(SpecifiedOperation::Translate(sx, None))
                         }
-                        Ok(true)
-                    })?
-                },
-                "translatex" => {
-                    input.parse_nested_block(|input| {
+                    },
+                    "translatex" => {
                         let tx = specified::LengthOrPercentage::parse(context, input)?;
-                        result.push(SpecifiedOperation::TranslateX(tx));
-                        Ok(true)
-                    })?
-                },
-                "translatey" => {
-                    input.parse_nested_block(|input| {
+                        Ok(SpecifiedOperation::TranslateX(tx))
+                    },
+                    "translatey" => {
                         let ty = specified::LengthOrPercentage::parse(context, input)?;
-                        result.push(SpecifiedOperation::TranslateY(ty));
-                        Ok(true)
-                    })?
-                },
-                "translatez" => {
-                    input.parse_nested_block(|input| {
+                        Ok(SpecifiedOperation::TranslateY(ty))
+                    },
+                    "translatez" => {
                         let tz = specified::Length::parse(context, input)?;
-                        result.push(SpecifiedOperation::TranslateZ(tz));
-                        Ok(true)
-                    })?
-                },
-                "translate3d" => {
-                    input.parse_nested_block(|input| {
+                        Ok(SpecifiedOperation::TranslateZ(tz))
+                    },
+                    "translate3d" => {
                         let tx = specified::LengthOrPercentage::parse(context, input)?;
                         input.expect_comma()?;
                         let ty = specified::LengthOrPercentage::parse(context, input)?;
                         input.expect_comma()?;
                         let tz = specified::Length::parse(context, input)?;
-                        result.push(SpecifiedOperation::Translate3D(tx, ty, tz));
-                        Ok(true)
-                    })?
-                },
-                "scale" => {
-                    input.parse_nested_block(|input| {
+                        Ok(SpecifiedOperation::Translate3D(tx, ty, tz))
+                    },
+                    "scale" => {
                         let sx = specified::parse_number(context, input)?;
                         if input.try(|input| input.expect_comma()).is_ok() {
                             let sy = specified::parse_number(context, input)?;
-                            result.push(SpecifiedOperation::Scale(sx, Some(sy)));
+                            Ok(SpecifiedOperation::Scale(sx, Some(sy)))
                         } else {
-                            result.push(SpecifiedOperation::Scale(sx, None));
+                            Ok(SpecifiedOperation::Scale(sx, None))
                         }
-                        Ok(true)
-                    })?
-                },
-                "scalex" => {
-                    input.parse_nested_block(|input| {
+                    },
+                    "scalex" => {
                         let sx = specified::parse_number(context, input)?;
-                        result.push(SpecifiedOperation::ScaleX(sx));
-                        Ok(true)
-                    })?
-                },
-                "scaley" => {
-                    input.parse_nested_block(|input| {
+                        Ok(SpecifiedOperation::ScaleX(sx))
+                    },
+                    "scaley" => {
                         let sy = specified::parse_number(context, input)?;
-                        result.push(SpecifiedOperation::ScaleY(sy));
-                        Ok(true)
-                    })?
-                },
-                "scalez" => {
-                    input.parse_nested_block(|input| {
+                        Ok(SpecifiedOperation::ScaleY(sy))
+                    },
+                    "scalez" => {
                         let sz = specified::parse_number(context, input)?;
-                        result.push(SpecifiedOperation::ScaleZ(sz));
-                        Ok(true)
-                    })?
-                },
-                "scale3d" => {
-                    input.parse_nested_block(|input| {
+                        Ok(SpecifiedOperation::ScaleZ(sz))
+                    },
+                    "scale3d" => {
                         let sx = specified::parse_number(context, input)?;
                         input.expect_comma()?;
                         let sy = specified::parse_number(context, input)?;
                         input.expect_comma()?;
                         let sz = specified::parse_number(context, input)?;
-                        result.push(SpecifiedOperation::Scale3D(sx, sy, sz));
-                        Ok(true)
-                    })?
-                },
-                "rotate" => {
-                    input.parse_nested_block(|input| {
+                        Ok(SpecifiedOperation::Scale3D(sx, sy, sz))
+                    },
+                    "rotate" => {
                         let theta = specified::Angle::parse_with_unitless(context, input)?;
-                        result.push(SpecifiedOperation::Rotate(theta));
-                        Ok(true)
-                    })?
-                },
-                "rotatex" => {
-                    input.parse_nested_block(|input| {
+                        Ok(SpecifiedOperation::Rotate(theta))
+                    },
+                    "rotatex" => {
                         let theta = specified::Angle::parse_with_unitless(context, input)?;
-                        result.push(SpecifiedOperation::RotateX(theta));
-                        Ok(true)
-                    })?
-                },
-                "rotatey" => {
-                    input.parse_nested_block(|input| {
+                        Ok(SpecifiedOperation::RotateX(theta))
+                    },
+                    "rotatey" => {
                         let theta = specified::Angle::parse_with_unitless(context, input)?;
-                        result.push(SpecifiedOperation::RotateY(theta));
-                        Ok(true)
-                    })?
-                },
-                "rotatez" => {
-                    input.parse_nested_block(|input| {
+                        Ok(SpecifiedOperation::RotateY(theta))
+                    },
+                    "rotatez" => {
                         let theta = specified::Angle::parse_with_unitless(context, input)?;
-                        result.push(SpecifiedOperation::RotateZ(theta));
-                        Ok(true)
-                    })?
-                },
-                "rotate3d" => {
-                    input.parse_nested_block(|input| {
+                        Ok(SpecifiedOperation::RotateZ(theta))
+                    },
+                    "rotate3d" => {
                         let ax = specified::parse_number(context, input)?;
                         input.expect_comma()?;
                         let ay = specified::parse_number(context, input)?;
@@ -1200,56 +1150,36 @@ ${helpers.predefined_type("scroll-snap-coordinate",
                         let az = specified::parse_number(context, input)?;
                         input.expect_comma()?;
                         let theta = specified::Angle::parse_with_unitless(context, input)?;
-                        // TODO(gw): Check the axis can be normalized!!
-                        result.push(SpecifiedOperation::Rotate3D(ax, ay, az, theta));
-                        Ok(true)
-                    })?
-                },
-                "skew" => {
-                    input.parse_nested_block(|input| {
-                        let theta_x = specified::Angle::parse_with_unitless(context, input)?;
+                        // TODO(gw): Check that the axis can be normalized.
+                        Ok(SpecifiedOperation::Rotate3D(ax, ay, az, theta))
+                    },
+                    "skew" => {
+                        let ax = specified::Angle::parse_with_unitless(context, input)?;
                         if input.try(|input| input.expect_comma()).is_ok() {
-                            let theta_y = specified::Angle::parse_with_unitless(context, input)?;
-                            result.push(SpecifiedOperation::Skew(theta_x, Some(theta_y)));
+                            let ay = specified::Angle::parse_with_unitless(context, input)?;
+                            Ok(SpecifiedOperation::Skew(ax, Some(ay)))
                         } else {
-                            result.push(SpecifiedOperation::Skew(theta_x, None));
+                            Ok(SpecifiedOperation::Skew(ax, None))
                         }
-                        Ok(true)
-                    })?
-                },
-                "skewx" => {
-                    input.parse_nested_block(|input| {
-                        let theta_x = specified::Angle::parse_with_unitless(context, input)?;
-                        result.push(SpecifiedOperation::SkewX(theta_x));
-                        Ok(true)
-                    })?
-                },
-                "skewy" => {
-                    input.parse_nested_block(|input| {
-                        let theta_y = specified::Angle::parse_with_unitless(context, input)?;
-                        result.push(SpecifiedOperation::SkewY(theta_y));
-                        Ok(true)
-                    })?
-                },
-                "perspective" => {
-                    input.parse_nested_block(|input| {
+                    },
+                    "skewx" => {
+                        let theta = specified::Angle::parse_with_unitless(context, input)?;
+                        Ok(SpecifiedOperation::SkewX(theta))
+                    },
+                    "skewy" => {
+                        let theta = specified::Angle::parse_with_unitless(context, input)?;
+                        Ok(SpecifiedOperation::SkewY(theta))
+                    },
+                    "perspective" => {
                         let d = specified::Length::parse_non_negative(context, input)?;
-                        result.push(SpecifiedOperation::Perspective(d));
-                        Ok(true)
-                    })?
-                },
-                _ => false
-            };
-            if !valid_fn {
-                return Err(StyleParseError::UnexpectedFunction(name).into());
-            }
-        }
-
-        if !result.is_empty() {
-            Ok(SpecifiedValue(result))
-        } else {
-            Err(StyleParseError::UnspecifiedError.into())
-        }
+                        Ok(SpecifiedOperation::Perspective(d))
+                    },
+                    _ => Err(()),
+                };
+                result
+                    .map_err(|()| StyleParseError::UnexpectedFunction(function.clone()).into())
+            })
+        })?))
     }
 
     /// Parses `transform` property.
@@ -1272,8 +1202,6 @@ ${helpers.predefined_type("scroll-snap-coordinate",
 
         #[inline]
         fn to_computed_value(&self, context: &Context) -> computed_value::T {
-            use self::SpecifiedOperation::*;
-
             if self.0.is_empty() {
                 return computed_value::T(None)
             }
@@ -1281,7 +1209,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
             let mut result = vec!();
             for operation in &self.0 {
                 match *operation {
-                    Matrix { a, b, c, d, e, f } => {
+                    SpecifiedOperation::Matrix(Matrix { a, b, c, d, e, f }) => {
                         let mut comp = computed_value::ComputedMatrix::identity();
                         comp.m11 = a.to_computed_value(context);
                         comp.m12 = b.to_computed_value(context);
@@ -1291,7 +1219,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
                         comp.m42 = f.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Matrix(comp));
                     }
-                    PrefixedMatrix { a, b, c, d, ref e, ref f } => {
+                    SpecifiedOperation::PrefixedMatrix(Matrix { a, b, c, d, ref e, ref f }) => {
                         let mut comp = computed_value::ComputedMatrixWithPercents::identity();
                         comp.m11 = a.to_computed_value(context);
                         comp.m12 = b.to_computed_value(context);
@@ -1301,7 +1229,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
                         comp.m42 = lopon_to_lop(&f.to_computed_value(context));
                         result.push(computed_value::ComputedOperation::MatrixWithPercents(comp));
                     }
-                    Matrix3D {
+                    SpecifiedOperation::Matrix3D {
                         m11, m12, m13, m14,
                         m21, m22, m23, m24,
                         m31, m32, m33, m34,
@@ -1326,7 +1254,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
                             };
                         result.push(computed_value::ComputedOperation::Matrix(comp));
                     }
-                    PrefixedMatrix3D {
+                    SpecifiedOperation::PrefixedMatrix3D {
                         m11, m12, m13, m14,
                         m21, m22, m23, m24,
                         m31, m32, m33, m34,
@@ -1351,127 +1279,126 @@ ${helpers.predefined_type("scroll-snap-coordinate",
                             };
                         result.push(computed_value::ComputedOperation::MatrixWithPercents(comp));
                     }
-                    Translate(ref tx, None) => {
+                    SpecifiedOperation::Translate(ref tx, None) => {
                         let tx = tx.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Translate(
                             tx,
                             computed::length::LengthOrPercentage::zero(),
-                            computed::length::Length::new(0)));
+                            computed::length::Length::new(0.)));
                     }
-                    Translate(ref tx, Some(ref ty)) => {
+                    SpecifiedOperation::Translate(ref tx, Some(ref ty)) => {
                         let tx = tx.to_computed_value(context);
                         let ty = ty.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Translate(
                             tx,
                             ty,
-                            computed::length::Length::new(0)));
+                            computed::length::Length::new(0.)));
                     }
-                    TranslateX(ref tx) => {
+                    SpecifiedOperation::TranslateX(ref tx) => {
                         let tx = tx.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Translate(
                             tx,
                             computed::length::LengthOrPercentage::zero(),
-                            computed::length::Length::new(0)));
+                            computed::length::Length::new(0.)));
                     }
-                    TranslateY(ref ty) => {
+                    SpecifiedOperation::TranslateY(ref ty) => {
                         let ty = ty.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Translate(
                             computed::length::LengthOrPercentage::zero(),
                             ty,
-                            computed::length::Length::new(0)));
+                            computed::length::Length::new(0.)));
                     }
-                    TranslateZ(ref tz) => {
+                    SpecifiedOperation::TranslateZ(ref tz) => {
                         let tz = tz.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Translate(
                             computed::length::LengthOrPercentage::zero(),
                             computed::length::LengthOrPercentage::zero(),
                             tz));
                     }
-                    Translate3D(ref tx, ref ty, ref tz) => {
+                    SpecifiedOperation::Translate3D(ref tx, ref ty, ref tz) => {
                         let tx = tx.to_computed_value(context);
                         let ty = ty.to_computed_value(context);
                         let tz = tz.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Translate(tx, ty, tz));
                     }
-                    Scale(factor, None) => {
+                    SpecifiedOperation::Scale(factor, None) => {
                         let factor = factor.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Scale(factor, factor, 1.0));
                     }
-                    Scale(sx, Some(sy)) => {
+                    SpecifiedOperation::Scale(sx, Some(sy)) => {
                         let sx = sx.to_computed_value(context);
                         let sy = sy.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Scale(sx, sy, 1.0));
                     }
-                    ScaleX(sx) => {
+                    SpecifiedOperation::ScaleX(sx) => {
                         let sx = sx.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Scale(sx, 1.0, 1.0));
                     }
-                    ScaleY(sy) => {
+                    SpecifiedOperation::ScaleY(sy) => {
                         let sy = sy.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Scale(1.0, sy, 1.0));
                     }
-                    ScaleZ(sz) => {
+                    SpecifiedOperation::ScaleZ(sz) => {
                         let sz = sz.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Scale(1.0, 1.0, sz));
                     }
-                    Scale3D(sx, sy, sz) => {
+                    SpecifiedOperation::Scale3D(sx, sy, sz) => {
                         let sx = sx.to_computed_value(context);
                         let sy = sy.to_computed_value(context);
                         let sz = sz.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Scale(sx, sy, sz));
                     }
-                    Rotate(theta) => {
+                    SpecifiedOperation::Rotate(theta) => {
                         let theta = theta.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Rotate(0.0, 0.0, 1.0, theta));
                     }
-                    RotateX(theta) => {
+                    SpecifiedOperation::RotateX(theta) => {
                         let theta = theta.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Rotate(1.0, 0.0, 0.0, theta));
                     }
-                    RotateY(theta) => {
+                    SpecifiedOperation::RotateY(theta) => {
                         let theta = theta.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Rotate(0.0, 1.0, 0.0, theta));
                     }
-                    RotateZ(theta) => {
+                    SpecifiedOperation::RotateZ(theta) => {
                         let theta = theta.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Rotate(0.0, 0.0, 1.0, theta));
                     }
-                    Rotate3D(ax, ay, az, theta) => {
+                    SpecifiedOperation::Rotate3D(ax, ay, az, theta) => {
                         let ax = ax.to_computed_value(context);
                         let ay = ay.to_computed_value(context);
                         let az = az.to_computed_value(context);
                         let theta = theta.to_computed_value(context);
-                        let len = (ax * ax + ay * ay + az * az).sqrt();
-                        result.push(computed_value::ComputedOperation::Rotate(ax / len, ay / len, az / len, theta));
+                        result.push(computed_value::ComputedOperation::Rotate(ax, ay, az, theta));
                     }
-                    Skew(theta_x, None) => {
+                    SpecifiedOperation::Skew(theta_x, None) => {
                         let theta_x = theta_x.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Skew(theta_x, computed::Angle::zero()));
                     }
-                    Skew(theta_x, Some(theta_y)) => {
+                    SpecifiedOperation::Skew(theta_x, Some(theta_y)) => {
                         let theta_x = theta_x.to_computed_value(context);
                         let theta_y = theta_y.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Skew(theta_x, theta_y));
                     }
-                    SkewX(theta_x) => {
+                    SpecifiedOperation::SkewX(theta_x) => {
                         let theta_x = theta_x.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Skew(theta_x, computed::Angle::zero()));
                     }
-                    SkewY(theta_y) => {
+                    SpecifiedOperation::SkewY(theta_y) => {
                         let theta_y = theta_y.to_computed_value(context);
                         result.push(computed_value::ComputedOperation::Skew(computed::Angle::zero(), theta_y));
                     }
-                    Perspective(ref d) => {
+                    SpecifiedOperation::Perspective(ref d) => {
                         result.push(computed_value::ComputedOperation::Perspective(d.to_computed_value(context)));
                     }
-                    InterpolateMatrix { ref from_list, ref to_list, progress } => {
+                    SpecifiedOperation::InterpolateMatrix { ref from_list, ref to_list, progress } => {
                         result.push(computed_value::ComputedOperation::InterpolateMatrix {
                             from_list: from_list.to_computed_value(context),
                             to_list: to_list.to_computed_value(context),
                             progress: progress
                         });
                     }
-                    AccumulateMatrix { ref from_list, ref to_list, count } => {
+                    SpecifiedOperation::AccumulateMatrix { ref from_list, ref to_list, count } => {
                         result.push(computed_value::ComputedOperation::AccumulateMatrix {
                             from_list: from_list.to_computed_value(context),
                             to_list: to_list.to_computed_value(context),
@@ -1587,10 +1514,10 @@ ${helpers.predefined_type("scroll-snap-coordinate",
     }
 
     // Converts computed LengthOrPercentageOrNumber into computed
-    // LengthOrPercentage. Number maps into Length
+    // LengthOrPercentage. Number maps into Length (pixel unit)
     fn lopon_to_lop(value: &ComputedLoPoNumber) -> ComputedLoP {
         match *value {
-            Either::First(number) => ComputedLoP::Length(Au::from_f32_px(number)),
+            Either::First(number) => ComputedLoP::Length(ComputedLength::new(number)),
             Either::Second(length_or_percentage) => length_or_percentage,
         }
     }
@@ -1600,7 +1527,7 @@ ${helpers.predefined_type("scroll-snap-coordinate",
     fn lon_to_length(value: &ComputedLoN) -> ComputedLength {
         match *value {
             Either::First(length) => length,
-            Either::Second(number) => Au::from_f32_px(number),
+            Either::Second(number) => ComputedLength::new(number),
         }
     }
 </%helpers:longhand>
@@ -1659,10 +1586,15 @@ ${helpers.single_keyword("page-break-inside",
 // CSS Basic User Interface Module Level 3
 // http://dev.w3.org/csswg/css-ui
 // FIXME support logical values `block` and `inline` (https://drafts.csswg.org/css-logical-props/#resize)
+//
+// This is APPLIES_TO_PLACEHOLDER so we can override, in the UA sheet, the
+// 'resize' property we'd inherit from textarea otherwise.  Basically, just
+// makes the UA rules easier to write.
 ${helpers.single_keyword("resize",
                          "none both horizontal vertical",
                          products="gecko",
                          spec="https://drafts.csswg.org/css-ui/#propdef-resize",
+                         flags="APPLIES_TO_PLACEHOLDER",
                          animation_value_type="discrete")}
 
 
@@ -1718,21 +1650,19 @@ ${helpers.predefined_type("transform-origin",
 // FIXME: `size` and `content` values are not implemented and `strict` is implemented
 // like `content`(layout style paint) in gecko. We should implement `size` and `content`,
 // also update the glue once they are implemented in gecko.
-<%helpers:longhand name="contain" animation_value_type="discrete" products="gecko" need_clone="True"
+<%helpers:longhand name="contain" animation_value_type="discrete" products="gecko"
                    flags="FIXPOS_CB"
                    spec="https://drafts.csswg.org/css-contain/#contain-property">
     use std::fmt;
     use style_traits::ToCss;
-    use values::computed::ComputedValueAsSpecified;
-
-    impl ComputedValueAsSpecified for SpecifiedValue {}
-    no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
         pub type T = super::SpecifiedValue;
     }
 
     bitflags! {
+        #[derive(ToComputedValue)]
+        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
         #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
         pub flags SpecifiedValue: u8 {
             const LAYOUT = 0x01,
@@ -1791,7 +1721,7 @@ ${helpers.predefined_type("transform-origin",
             return Ok(result)
         }
 
-        while let Ok(name) = input.try(|input| input.expect_ident()) {
+        while let Ok(name) = input.try(|i| i.expect_ident_cloned()) {
             let flag = match_ignore_ascii_case! { &name,
                 "layout" => Some(LAYOUT),
                 "style" => Some(STYLE),
@@ -1800,7 +1730,7 @@ ${helpers.predefined_type("transform-origin",
             };
             let flag = match flag {
                 Some(flag) if !result.contains(flag) => flag,
-                _ => return Err(SelectorParseError::UnexpectedIdent(name).into())
+                _ => return Err(SelectorParseError::UnexpectedIdent(name.clone()).into())
             };
             result.insert(flag);
         }
@@ -1845,15 +1775,14 @@ ${helpers.single_keyword("-moz-appearance",
                          gecko_constant_prefix="ThemeWidgetType_NS_THEME",
                          products="gecko",
                          spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-appearance)",
-                         animation_value_type="none")}
+                         animation_value_type="discrete")}
 
 ${helpers.predefined_type("-moz-binding", "UrlOrNone", "Either::Second(None_)",
                           products="gecko",
                           boxed="True" if product == "gecko" else "False",
                           animation_value_type="none",
                           gecko_ffi_name="mBinding",
-                          spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-binding)",
-                          disable_when_testing="True")}
+                          spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-binding)")}
 
 ${helpers.single_keyword("-moz-orient",
                           "inline block horizontal vertical",
@@ -1861,24 +1790,20 @@ ${helpers.single_keyword("-moz-orient",
                           gecko_ffi_name="mOrient",
                           gecko_enum_prefix="StyleOrient",
                           spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-orient)",
-                          gecko_inexhaustive="True",
                           animation_value_type="discrete")}
 
-<%helpers:longhand name="will-change" products="gecko" animation_value_type="none"
+<%helpers:longhand name="will-change" products="gecko" animation_value_type="discrete"
                    spec="https://drafts.csswg.org/css-will-change/#will-change">
     use std::fmt;
     use style_traits::ToCss;
     use values::CustomIdent;
-    use values::computed::ComputedValueAsSpecified;
-
-    impl ComputedValueAsSpecified for SpecifiedValue {}
-    no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
         pub use super::SpecifiedValue as T;
     }
 
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Clone, Debug, PartialEq, ToComputedValue)]
+    #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
     #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
     pub enum SpecifiedValue {
         Auto,
@@ -1925,24 +1850,24 @@ ${helpers.single_keyword("-moz-orient",
     }
 </%helpers:longhand>
 
-${helpers.predefined_type("shape-outside", "basic_shape::FloatAreaShape",
-                          "generics::basic_shape::ShapeSource::None",
-                          products="gecko", boxed="True",
-                          animation_value_type="none",
-                          spec="https://drafts.csswg.org/css-shapes/#shape-outside-property")}
+${helpers.predefined_type(
+    "shape-outside",
+    "basic_shape::FloatAreaShape",
+    "generics::basic_shape::ShapeSource::None",
+    products="gecko",
+    boxed=True,
+    animation_value_type="ComputedValue",
+    flags="APPLIES_TO_FIRST_LETTER",
+    spec="https://drafts.csswg.org/css-shapes/#shape-outside-property",
+)}
 
 <%helpers:longhand name="touch-action"
                    products="gecko"
                    animation_value_type="discrete"
-                   disable_when_testing="True"
                    spec="https://compat.spec.whatwg.org/#touch-action">
     use gecko_bindings::structs;
     use std::fmt;
     use style_traits::ToCss;
-    use values::computed::ComputedValueAsSpecified;
-
-    impl ComputedValueAsSpecified for SpecifiedValue {}
-    no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
         pub use super::SpecifiedValue as T;
@@ -1950,6 +1875,8 @@ ${helpers.predefined_type("shape-outside", "basic_shape::FloatAreaShape",
 
     bitflags! {
         /// These constants match Gecko's `NS_STYLE_TOUCH_ACTION_*` constants.
+        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
+        #[derive(ToComputedValue)]
         pub flags SpecifiedValue: u8 {
             const TOUCH_ACTION_NONE = structs::NS_STYLE_TOUCH_ACTION_NONE as u8,
             const TOUCH_ACTION_AUTO = structs::NS_STYLE_TOUCH_ACTION_AUTO as u8,
@@ -1986,7 +1913,8 @@ ${helpers.predefined_type("shape-outside", "basic_shape::FloatAreaShape",
 
     pub fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
                          -> Result<SpecifiedValue, ParseError<'i>> {
-        try_match_ident_ignore_ascii_case! { input.expect_ident()?,
+        // FIXME: remove clone() when lifetimes are non-lexical
+        try_match_ident_ignore_ascii_case! { input.expect_ident()?.clone(),
             "auto" => Ok(TOUCH_ACTION_AUTO),
             "none" => Ok(TOUCH_ACTION_NONE),
             "manipulation" => Ok(TOUCH_ACTION_MANIPULATION),

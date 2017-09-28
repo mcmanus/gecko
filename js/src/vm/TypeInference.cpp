@@ -10,7 +10,6 @@
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/PodOperations.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Sprintf.h"
 
 #include "jsapi.h"
@@ -32,6 +31,7 @@
 #include "js/MemoryMetrics.h"
 #include "vm/HelperThreads.h"
 #include "vm/Opcodes.h"
+#include "vm/Printer.h"
 #include "vm/Shape.h"
 #include "vm/Time.h"
 #include "vm/UnboxedObject.h"
@@ -1316,10 +1316,8 @@ js::EnsureTrackPropertyTypes(JSContext* cx, JSObject* obj, jsid id)
         if (obj->hasLazyGroup()) {
             AutoEnterOOMUnsafeRegion oomUnsafe;
             RootedObject objRoot(cx, obj);
-            if (!JSObject::getGroup(cx, objRoot)) {
+            if (!JSObject::getGroup(cx, objRoot))
                 oomUnsafe.crash("Could not allocate ObjectGroup in EnsureTrackPropertyTypes");
-                return;
-            }
         }
         if (!obj->group()->unknownProperties() && !obj->group()->getProperty(cx, obj, id)) {
             MOZ_ASSERT(obj->group()->unknownProperties());
@@ -1489,7 +1487,6 @@ js::FinishCompilation(JSContext* cx, HandleScript script, CompilerConstraintList
         // after any future changes to the stack type sets.
         if (entry.script->hasFreezeConstraints())
             continue;
-        entry.script->setHasFreezeConstraints();
 
         size_t count = TypeScript::NumTypeSets(entry.script);
 
@@ -1498,6 +1495,9 @@ js::FinishCompilation(JSContext* cx, HandleScript script, CompilerConstraintList
             if (!array[i].addConstraint(cx, cx->typeLifoAlloc().new_<TypeConstraintFreezeStack>(entry.script), false))
                 succeeded = false;
         }
+
+        if (succeeded)
+            entry.script->setHasFreezeConstraints();
     }
 
     if (!succeeded || types.compilerOutputs->back().pendingInvalidation()) {
@@ -2521,7 +2521,6 @@ js::ClassCanHaveExtraProperties(const Class* clasp)
     if (clasp == &UnboxedPlainObject::class_ || clasp == &UnboxedArrayObject::class_)
         return false;
     return clasp->getResolve()
-        || clasp->getGetProperty()
         || clasp->getOpsLookupProperty()
         || clasp->getOpsGetProperty()
         || IsTypedArrayClass(clasp);
@@ -2556,7 +2555,7 @@ TypeZone::addPendingRecompile(JSContext* cx, const RecompileInfo& info)
     if (!co || !co->isValid() || co->pendingInvalidation())
         return;
 
-    InferSpew(ISpewOps, "addPendingRecompile: %p:%s:%" PRIuSIZE,
+    InferSpew(ISpewOps, "addPendingRecompile: %p:%s:%zu",
               co->script(), co->script()->filename(), co->script()->lineno());
 
     co->setPendingInvalidation();
@@ -2902,6 +2901,9 @@ ObjectGroup::markStateChange(JSContext* cx)
 void
 ObjectGroup::setFlags(JSContext* cx, ObjectGroupFlags flags)
 {
+    MOZ_ASSERT(!(flags & OBJECT_FLAG_UNKNOWN_PROPERTIES),
+               "Should use markUnknown to set unknownProperties");
+
     if (hasAllFlags(flags))
         return;
 
@@ -3011,7 +3013,7 @@ ObjectGroup::maybeClearNewScriptOnOOM()
 {
     MOZ_ASSERT(zone()->isGCSweepingOrCompacting());
 
-    if (!isMarked())
+    if (!isMarkedAny())
         return;
 
     TypeNewScript* newScript = anyNewScript();
@@ -3042,7 +3044,7 @@ ObjectGroup::clearNewScript(JSContext* cx, ObjectGroup* replacement /* = nullptr
         // Mark the constructing function as having its 'new' script cleared, so we
         // will not try to construct another one later.
         RootedFunction fun(cx, newScript->function());
-        if (!JSObject::setNewScriptCleared(cx, fun))
+        if (!NativeObject::setNewScriptCleared(cx, fun))
             cx->recoverFromOutOfMemory();
     }
 
@@ -3334,7 +3336,7 @@ js::TypeMonitorResult(JSContext* cx, JSScript* script, jsbytecode* pc, TypeSet::
     if (types->hasType(type))
         return;
 
-    InferSpew(ISpewOps, "bytecodeType: %p %05" PRIuSIZE ": %s",
+    InferSpew(ISpewOps, "bytecodeType: %p %05zu: %s",
               script, script->pcToOffset(pc), TypeSet::TypeString(type));
     types->addType(cx, type);
 }
@@ -3350,7 +3352,7 @@ js::TypeMonitorResult(JSContext* cx, JSScript* script, jsbytecode* pc, StackType
     MOZ_ASSERT(types == TypeScript::BytecodeTypes(script, pc));
     MOZ_ASSERT(!types->hasType(type));
 
-    InferSpew(ISpewOps, "bytecodeType: %p %05" PRIuSIZE ": %s",
+    InferSpew(ISpewOps, "bytecodeType: %p %05zu: %s",
               script, script->pcToOffset(pc), TypeSet::TypeString(type));
     types->addType(cx, type);
 }
@@ -3997,89 +3999,92 @@ TypeNewScript::rollbackPartiallyInitializedObjects(JSContext* cx, ObjectGroup* g
 
     RootedFunction function(cx, this->function());
     Vector<uint32_t, 32> pcOffsets(cx);
-    for (ScriptFrameIter iter(cx); !iter.done(); ++iter) {
-        {
-            AutoEnterOOMUnsafeRegion oomUnsafe;
-            if (!pcOffsets.append(iter.script()->pcToOffset(iter.pc())))
-                oomUnsafe.crash("rollbackPartiallyInitializedObjects");
-        }
+    JSRuntime::AutoProhibitActiveContextChange apacc(cx->runtime());
+    for (const CooperatingContext& target : cx->runtime()->cooperatingContexts()) {
+        for (AllScriptFramesIter iter(cx, target); !iter.done(); ++iter) {
+            {
+                AutoEnterOOMUnsafeRegion oomUnsafe;
+                if (!pcOffsets.append(iter.script()->pcToOffset(iter.pc())))
+                    oomUnsafe.crash("rollbackPartiallyInitializedObjects");
+            }
 
-        if (!iter.isConstructing() || !iter.matchCallee(cx, function))
-            continue;
+            if (!iter.isConstructing() || !iter.matchCallee(cx, function))
+                continue;
 
-        // Derived class constructors initialize their this-binding later and
-        // we shouldn't run the definite properties analysis on them.
-        MOZ_ASSERT(!iter.script()->isDerivedClassConstructor());
+            // Derived class constructors initialize their this-binding later and
+            // we shouldn't run the definite properties analysis on them.
+            MOZ_ASSERT(!iter.script()->isDerivedClassConstructor());
 
-        Value thisv = iter.thisArgument(cx);
-        if (!thisv.isObject() ||
-            thisv.toObject().hasLazyGroup() ||
-            thisv.toObject().group() != group)
-        {
-            continue;
-        }
+            Value thisv = iter.thisArgument(cx);
+            if (!thisv.isObject() ||
+                thisv.toObject().hasLazyGroup() ||
+                thisv.toObject().group() != group)
+            {
+                continue;
+            }
 
-        if (thisv.toObject().is<UnboxedPlainObject>()) {
-            AutoEnterOOMUnsafeRegion oomUnsafe;
-            if (!UnboxedPlainObject::convertToNative(cx, &thisv.toObject()))
-                oomUnsafe.crash("rollbackPartiallyInitializedObjects");
-        }
+            if (thisv.toObject().is<UnboxedPlainObject>()) {
+                AutoEnterOOMUnsafeRegion oomUnsafe;
+                if (!UnboxedPlainObject::convertToNative(cx, &thisv.toObject()))
+                    oomUnsafe.crash("rollbackPartiallyInitializedObjects");
+            }
 
-        // Found a matching frame.
-        RootedPlainObject obj(cx, &thisv.toObject().as<PlainObject>());
+            // Found a matching frame.
+            RootedPlainObject obj(cx, &thisv.toObject().as<PlainObject>());
 
-        // Whether all identified 'new' properties have been initialized.
-        bool finished = false;
+            // Whether all identified 'new' properties have been initialized.
+            bool finished = false;
 
-        // If not finished, number of properties that have been added.
-        uint32_t numProperties = 0;
+            // If not finished, number of properties that have been added.
+            uint32_t numProperties = 0;
 
-        // Whether the current SETPROP is within an inner frame which has
-        // finished entirely.
-        bool pastProperty = false;
+            // Whether the current SETPROP is within an inner frame which has
+            // finished entirely.
+            bool pastProperty = false;
 
-        // Index in pcOffsets of the outermost frame.
-        int callDepth = pcOffsets.length() - 1;
+            // Index in pcOffsets of the outermost frame.
+            int callDepth = pcOffsets.length() - 1;
 
-        // Index in pcOffsets of the frame currently being checked for a SETPROP.
-        int setpropDepth = callDepth;
+            // Index in pcOffsets of the frame currently being checked for a SETPROP.
+            int setpropDepth = callDepth;
 
-        for (Initializer* init = initializerList;; init++) {
-            if (init->kind == Initializer::SETPROP) {
-                if (!pastProperty && pcOffsets[setpropDepth] < init->offset) {
-                    // Have not yet reached this setprop.
+            for (Initializer* init = initializerList;; init++) {
+                if (init->kind == Initializer::SETPROP) {
+                    if (!pastProperty && pcOffsets[setpropDepth] < init->offset) {
+                        // Have not yet reached this setprop.
+                        break;
+                    }
+                    // This setprop has executed, reset state for the next one.
+                    numProperties++;
+                    pastProperty = false;
+                    setpropDepth = callDepth;
+                } else if (init->kind == Initializer::SETPROP_FRAME) {
+                    if (!pastProperty) {
+                        if (pcOffsets[setpropDepth] < init->offset) {
+                            // Have not yet reached this inner call.
+                            break;
+                        } else if (pcOffsets[setpropDepth] > init->offset) {
+                            // Have advanced past this inner call.
+                            pastProperty = true;
+                        } else if (setpropDepth == 0) {
+                            // Have reached this call but not yet in it.
+                            break;
+                        } else {
+                            // Somewhere inside this inner call.
+                            setpropDepth--;
+                        }
+                    }
+                } else {
+                    MOZ_ASSERT(init->kind == Initializer::DONE);
+                    finished = true;
                     break;
                 }
-                // This setprop has executed, reset state for the next one.
-                numProperties++;
-                pastProperty = false;
-                setpropDepth = callDepth;
-            } else if (init->kind == Initializer::SETPROP_FRAME) {
-                if (!pastProperty) {
-                    if (pcOffsets[setpropDepth] < init->offset) {
-                        // Have not yet reached this inner call.
-                        break;
-                    } else if (pcOffsets[setpropDepth] > init->offset) {
-                        // Have advanced past this inner call.
-                        pastProperty = true;
-                    } else if (setpropDepth == 0) {
-                        // Have reached this call but not yet in it.
-                        break;
-                    } else {
-                        // Somewhere inside this inner call.
-                        setpropDepth--;
-                    }
-                }
-            } else {
-                MOZ_ASSERT(init->kind == Initializer::DONE);
-                finished = true;
-                break;
             }
-        }
 
-        if (!finished) {
-            (void) NativeObject::rollbackProperties(cx, obj, numProperties);
-            found = true;
+            if (!finished) {
+                (void) NativeObject::rollbackProperties(cx, obj, numProperties);
+                found = true;
+            }
         }
     }
 
@@ -4421,6 +4426,8 @@ ObjectGroup::sweep(AutoClearTypeInferenceStateOnOOM* oom)
 /* static */ void
 JSScript::maybeSweepTypes(AutoClearTypeInferenceStateOnOOM* oom)
 {
+    MOZ_ASSERT(!TlsContext.get()->inUnsafeCallWithABI);
+
     if (!types_ || typesGeneration() == zone()->types.generation)
         return;
 
@@ -4490,6 +4497,7 @@ TypeScript::destroy()
 void
 Zone::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
                              size_t* typePool,
+                             size_t* regexpZone,
                              size_t* jitZone,
                              size_t* baselineStubsOptimized,
                              size_t* cachedCFG,
@@ -4498,6 +4506,7 @@ Zone::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
                              size_t* atomsMarkBitmaps)
 {
     *typePool += types.typeLifoAlloc().sizeOfExcludingThis(mallocSizeOf);
+    *regexpZone += regExps.sizeOfExcludingThis(mallocSizeOf);
     if (jitZone_)
         jitZone_->addSizeOfIncludingThis(mallocSizeOf, jitZone, baselineStubsOptimized, cachedCFG);
     *uniqueIdMap += uniqueIds().sizeOfExcludingThis(mallocSizeOf);
@@ -4602,6 +4611,7 @@ AutoClearTypeInferenceStateOnOOM::AutoClearTypeInferenceStateOnOOM(Zone* zone)
   : zone(zone), oom(false)
 {
     MOZ_RELEASE_ASSERT(CurrentThreadCanAccessZone(zone));
+    MOZ_ASSERT(!TlsContext.get()->inUnsafeCallWithABI);
     zone->types.setSweepingTypes(true);
 }
 
@@ -4629,6 +4639,7 @@ TypeScript::printTypes(JSContext* cx, HandleScript script) const
         return;
 
     AutoEnterAnalysis enter(nullptr, script->zone());
+    Fprinter out(stderr);
 
     if (script->functionNonDelazifying())
         fprintf(stderr, "Function");
@@ -4636,12 +4647,12 @@ TypeScript::printTypes(JSContext* cx, HandleScript script) const
         fprintf(stderr, "Eval");
     else
         fprintf(stderr, "Main");
-    fprintf(stderr, " %#" PRIxPTR " %s:%" PRIuSIZE " ",
+    fprintf(stderr, " %#" PRIxPTR " %s:%zu ",
             uintptr_t(script.get()), script->filename(), script->lineno());
 
     if (script->functionNonDelazifying()) {
         if (JSAtom* name = script->functionNonDelazifying()->explicitName())
-            name->dumpCharsNoNewline();
+            name->dumpCharsNoNewline(out);
     }
 
     fprintf(stderr, "\n    this:");

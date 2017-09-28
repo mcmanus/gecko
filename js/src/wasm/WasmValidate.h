@@ -35,11 +35,19 @@ namespace wasm {
 
 struct ModuleEnvironment
 {
-    ModuleKind                kind;
-    MemoryUsage               memoryUsage;
-    mozilla::Atomic<uint32_t> minMemoryLength;
-    Maybe<uint32_t>           maxMemoryLength;
+    // Constant parameters for the entire compilation:
+    const DebugEnabled        debug;
+    const ModuleKind          kind;
 
+    // Constant parameters determined no later than at the start of the code
+    // section:
+    CompileMode               mode_;
+    Tier                      tier_;
+
+    // Module fields filled out incrementally during decoding:
+    MemoryUsage               memoryUsage;
+    Atomic<uint32_t>          minMemoryLength;
+    Maybe<uint32_t>           maxMemoryLength;
     SigWithIdVector           sigs;
     SigWithIdPtrVector        funcSigs;
     Uint32Vector              funcImportGlobalDataOffsets;
@@ -54,12 +62,35 @@ struct ModuleEnvironment
     NameInBytecodeVector      funcNames;
     CustomSectionVector       customSections;
 
-    explicit ModuleEnvironment(ModuleKind kind = ModuleKind::Wasm)
-      : kind(kind),
+    static const CompileMode UnknownMode = (CompileMode)-1;
+    static const Tier        UnknownTier = (Tier)-1;
+
+    explicit ModuleEnvironment(CompileMode mode = CompileMode::Once,
+                               Tier tier = Tier::Ion,
+                               DebugEnabled debug = DebugEnabled::False,
+                               ModuleKind kind = ModuleKind::Wasm)
+      : debug(debug),
+        kind(kind),
+        mode_(mode),
+        tier_(tier),
         memoryUsage(MemoryUsage::None),
         minMemoryLength(0)
     {}
 
+    CompileMode mode() const {
+        MOZ_ASSERT(mode_ != UnknownMode);
+        return mode_;
+    }
+    Tier tier() const {
+        MOZ_ASSERT(tier_ != UnknownTier);
+        return tier_;
+    }
+    void setModeAndTier(CompileMode mode, Tier tier) {
+        MOZ_ASSERT(mode_ == UnknownMode);
+        MOZ_ASSERT(tier_ == UnknownTier);
+        mode_ = mode;
+        tier_ = tier;
+    }
     size_t numTables() const {
         return tables.length();
     }
@@ -91,6 +122,9 @@ struct ModuleEnvironment
     bool isAsmJS() const {
         return kind == ModuleKind::AsmJS;
     }
+    bool debugEnabled() const {
+        return debug == DebugEnabled::True;
+    }
     bool funcIsImport(uint32_t funcIndex) const {
         return funcIndex < funcImportGlobalDataOffsets.length();
     }
@@ -98,8 +132,6 @@ struct ModuleEnvironment
         return funcSigs[funcIndex] - sigs.begin();
     }
 };
-
-typedef UniquePtr<ModuleEnvironment> UniqueModuleEnvironment;
 
 // The Encoder class appends bytes to the Bytes object it is given during
 // construction. The client is responsible for the Bytes's lifetime and must
@@ -242,12 +274,15 @@ class Encoder
         return writeFixedU8(uint8_t(type));
     }
     MOZ_MUST_USE bool writeOp(Op op) {
-        static_assert(size_t(Op::Limit) <= 2 * UINT8_MAX, "fits");
+        static_assert(size_t(Op::Limit) == 256, "fits");
         MOZ_ASSERT(size_t(op) < size_t(Op::Limit));
-        if (size_t(op) < UINT8_MAX)
-            return writeFixedU8(uint8_t(op));
-        return writeFixedU8(UINT8_MAX) &&
-               writeFixedU8(size_t(op) - UINT8_MAX);
+        return writeFixedU8(uint8_t(op));
+    }
+    MOZ_MUST_USE bool writeOp(MozOp op) {
+        static_assert(size_t(MozOp::Limit) <= 256, "fits");
+        MOZ_ASSERT(size_t(op) < size_t(MozOp::Limit));
+        return writeFixedU8(uint8_t(Op::MozPrefix)) &&
+               writeFixedU8(uint8_t(op));
     }
 
     // Fixed-length encodings that allow back-patching.
@@ -496,18 +531,19 @@ class Decoder
         static_assert(size_t(TypeCode::Limit) <= UINT8_MAX, "fits");
         return readFixedU8(type);
     }
-    MOZ_MUST_USE bool readOp(uint16_t* op) {
-        static_assert(size_t(Op::Limit) <= 2 * UINT8_MAX, "fits");
+    MOZ_MUST_USE bool readOp(OpBytes* op) {
+        static_assert(size_t(Op::Limit) == 256, "fits");
         uint8_t u8;
         if (!readFixedU8(&u8))
             return false;
-        if (MOZ_LIKELY(u8 != UINT8_MAX)) {
-            *op = u8;
+        op->b0 = u8;
+        if (MOZ_LIKELY(!IsPrefixByte(u8)))
             return true;
-        }
-        if (!readFixedU8(&u8))
+        if (!readFixedU8(&u8)) {
+            op->b1 = 0;         // Make it sane
             return false;
-        *op = uint16_t(u8) + UINT8_MAX;
+        }
+        op->b1 = u8;
         return true;
     }
 
@@ -530,10 +566,15 @@ class Decoder
                                    ModuleEnvironment* env,
                                    uint32_t* sectionStart,
                                    uint32_t* sectionSize,
-                                   const char* sectionName);
+                                   const char* sectionName,
+                                   bool peeking = false);
     MOZ_MUST_USE bool finishSection(uint32_t sectionStart,
                                     uint32_t sectionSize,
                                     const char* sectionName);
+    MOZ_MUST_USE bool peekSectionSize(SectionId id,
+                                      ModuleEnvironment* env,
+                                      const char* sectionName,
+                                      uint32_t* sectionSize);
 
     // Custom sections do not cause validation errors unless the error is in
     // the section header itself.
@@ -615,7 +656,7 @@ class Decoder
         return (ValType)uncheckedReadFixedU8();
     }
     Op uncheckedReadOp() {
-        static_assert(size_t(Op::Limit) <= 2 * UINT8_MAX, "fits");
+        static_assert(size_t(Op::Limit) == 256, "fits");
         uint8_t u8 = uncheckedReadFixedU8();
         return u8 != UINT8_MAX
                ? Op(u8)

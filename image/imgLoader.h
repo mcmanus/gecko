@@ -201,7 +201,8 @@ public:
   uint32_t GetSize() const;
   void UpdateSize(int32_t diff);
   uint32_t GetNumElements() const;
-  typedef std::vector<RefPtr<imgCacheEntry> > queueContainer;
+  bool Contains(imgCacheEntry* aEntry) const;
+  typedef nsTArray<RefPtr<imgCacheEntry> > queueContainer;
   typedef queueContainer::iterator iterator;
   typedef queueContainer::const_iterator const_iterator;
 
@@ -290,6 +291,7 @@ public:
                                   nsIURI* aReferrerURI,
                                   ReferrerPolicy aReferrerPolicy,
                                   nsIPrincipal* aLoadingPrincipal,
+                                  uint64_t aRequestContextID,
                                   nsILoadGroup* aLoadGroup,
                                   imgINotificationObserver* aObserver,
                                   nsINode* aContext,
@@ -340,7 +342,16 @@ public:
   nsresult InitCache();
 
   bool RemoveFromCache(const ImageCacheKey& aKey);
-  bool RemoveFromCache(imgCacheEntry* entry);
+
+  // Enumeration describing if a given entry is in the cache queue or not.
+  // There are some cases we know the entry is definitely not in the queue.
+  enum class QueueState {
+    MaybeExists,
+    AlreadyRemoved
+  };
+
+  bool RemoveFromCache(imgCacheEntry* entry,
+                       QueueState aQueueState = QueueState::MaybeExists);
 
   bool PutIntoCache(const ImageCacheKey& aKey, imgCacheEntry* aEntry);
 
@@ -398,6 +409,7 @@ private: // methods
                      ReferrerPolicy aReferrerPolicy,
                      nsILoadGroup* aLoadGroup,
                      imgINotificationObserver* aObserver, nsISupports* aCX,
+                     nsIDocument* aLoadingDocument,
                      nsLoadFlags aLoadFlags,
                      nsContentPolicyType aContentPolicyType,
                      bool aCanMakeNewChannel,
@@ -411,7 +423,9 @@ private: // methods
                                      ReferrerPolicy aReferrerPolicy,
                                      nsILoadGroup* aLoadGroup,
                                      imgINotificationObserver* aObserver,
-                                     nsISupports* aCX, nsLoadFlags aLoadFlags,
+                                     nsISupports* aCX,
+                                     nsIDocument* aLoadingDocument,
+                                     nsLoadFlags aLoadFlags,
                                      nsContentPolicyType aContentPolicyType,
                                      imgRequestProxy** aProxyRequest,
                                      nsIPrincipal* aLoadingPrincipal,
@@ -419,6 +433,7 @@ private: // methods
 
   nsresult CreateNewProxyForRequest(imgRequest* aRequest,
                                     nsILoadGroup* aLoadGroup,
+                                    nsIDocument* aLoadingDocument,
                                     imgINotificationObserver* aObserver,
                                     nsLoadFlags aLoadFlags,
                                     imgRequestProxy** _retval);
@@ -541,7 +556,7 @@ public:
 
   void AddProxy(imgRequestProxy* aProxy);
 
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSITHREADRETARGETABLESTREAMLISTENER
   NS_DECL_NSISTREAMLISTENER
   NS_DECL_NSIREQUESTOBSERVER

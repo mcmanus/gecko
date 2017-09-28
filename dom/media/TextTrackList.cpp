@@ -23,7 +23,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(TextTrackList,
 
 NS_IMPL_ADDREF_INHERITED(TextTrackList, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(TextTrackList, DOMEventTargetHelper)
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(TextTrackList)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(TextTrackList)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 TextTrackList::TextTrackList(nsPIDOMWindowInner* aOwnerWindow)
@@ -141,7 +141,8 @@ class TrackEventRunner : public Runnable
 {
 public:
   TrackEventRunner(TextTrackList* aList, nsIDOMEvent* aEvent)
-    : mList(aList)
+    : Runnable("dom::TrackEventRunner")
+    , mList(aList)
     , mEvent(aEvent)
   {}
 
@@ -192,9 +193,7 @@ TextTrackList::CreateAndDispatchChangeEvent()
     event->SetTrusted(true);
 
     nsCOMPtr<nsIRunnable> eventRunner = new ChangeEventRunner(this, event);
-    nsGlobalWindow::Cast(win)->Dispatch(
-      "TextTrackList::CreateAndDispatchChangeEvent", TaskCategory::Other,
-      eventRunner.forget());
+    nsGlobalWindow::Cast(win)->Dispatch(TaskCategory::Other, eventRunner.forget());
   }
 }
 

@@ -6,7 +6,6 @@
 
 #include "jit/Recover.h"
 
-#include "mozilla/SizePrintfMacros.h"
 
 #include "jsapi.h"
 #include "jscntxt.h"
@@ -21,8 +20,8 @@
 
 #include "gc/Heap.h"
 
-#include "jit/JitFrameIterator.h"
 #include "jit/JitSpewer.h"
+#include "jit/JSJitFrameIter.h"
 #include "jit/MIR.h"
 #include "jit/MIRGraph.h"
 #include "jit/VMFunctions.h"
@@ -128,7 +127,7 @@ MResumePoint::writeRecoverData(CompactBufferWriter& writer) const
     uint32_t formalArgs = CountArgSlots(script, fun);
     uint32_t nallocs = formalArgs + script->nfixed() + exprStack;
 
-    JitSpew(JitSpew_IonSnapshots, "Starting frame; implicit %u, formals %u, fixed %" PRIuSIZE ", exprs %u",
+    JitSpew(JitSpew_IonSnapshots, "Starting frame; implicit %u, formals %u, fixed %zu, exprs %u",
             implicit, formalArgs - implicit, script->nfixed(), exprStack);
 
     uint32_t pcoff = script->pcToOffset(pc());
@@ -338,32 +337,32 @@ RUrsh::recover(JSContext* cx, SnapshotIterator& iter) const
 }
 
 bool
-MSignExtend::writeRecoverData(CompactBufferWriter& writer) const
+MSignExtendInt32::writeRecoverData(CompactBufferWriter& writer) const
 {
     MOZ_ASSERT(canRecoverOnBailout());
-    writer.writeUnsigned(uint32_t(RInstruction::Recover_SignExtend));
+    writer.writeUnsigned(uint32_t(RInstruction::Recover_SignExtendInt32));
     MOZ_ASSERT(Mode(uint8_t(mode_)) == mode_);
     writer.writeByte(uint8_t(mode_));
     return true;
 }
 
-RSignExtend::RSignExtend(CompactBufferReader& reader)
+RSignExtendInt32::RSignExtendInt32(CompactBufferReader& reader)
 {
     mode_ = reader.readByte();
 }
 
 bool
-RSignExtend::recover(JSContext* cx, SnapshotIterator& iter) const
+RSignExtendInt32::recover(JSContext* cx, SnapshotIterator& iter) const
 {
     RootedValue operand(cx, iter.read());
 
     int32_t result;
-    switch (MSignExtend::Mode(mode_)) {
-      case MSignExtend::Byte:
+    switch (MSignExtendInt32::Mode(mode_)) {
+      case MSignExtendInt32::Byte:
         if (!js::SignExtendOperation<int8_t>(cx, operand, &result))
             return false;
         break;
-      case MSignExtend::Half:
+      case MSignExtendInt32::Half:
         if (!js::SignExtendOperation<int16_t>(cx, operand, &result))
             return false;
         break;
@@ -1684,6 +1683,38 @@ RArrayState::recover(JSContext* cx, SnapshotIterator& iter) const
     }
 
     result.setObject(*object);
+    iter.storeInstructionResult(result);
+    return true;
+}
+
+bool
+MSetArrayLength::writeRecoverData(CompactBufferWriter& writer) const
+{
+    MOZ_ASSERT(canRecoverOnBailout());
+    // For simplicity, we capture directly the object instead of the elements
+    // pointer.
+    MOZ_ASSERT(elements()->type() != MIRType::Elements);
+    writer.writeUnsigned(uint32_t(RInstruction::Recover_SetArrayLength));
+    return true;
+}
+
+RSetArrayLength::RSetArrayLength(CompactBufferReader& reader)
+{
+}
+
+bool
+RSetArrayLength::recover(JSContext* cx, SnapshotIterator& iter) const
+{
+    RootedValue result(cx);
+    RootedArrayObject obj(cx, &iter.read().toObject().as<ArrayObject>());
+    RootedValue len(cx, iter.read());
+
+    RootedId id(cx, NameToId(cx->names().length));
+    ObjectOpResult error;
+    if (!ArraySetLength(cx, obj, id, JSPROP_PERMANENT, len, error))
+        return false;
+
+    result.setObject(*obj);
     iter.storeInstructionResult(result);
     return true;
 }

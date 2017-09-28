@@ -9,6 +9,9 @@ include('gyp_base.mozbuild')
 gyp_vars.update({
     'lsan': 0,
     'asan': 0,
+    'ubsan' : 0,
+    'fuzzing' : 1 if CONFIG['FUZZING'] else 0,
+    'libfuzzer' : 1 if CONFIG['LIBFUZZER'] else 0,
     'build_with_mozilla': 1,
     'build_with_chromium': 0,
     # 10.9 once we move to TC cross-compiles - bug 1270217
@@ -40,7 +43,6 @@ gyp_vars.update({
     'build_icu': 0,
     'build_opus': 0,
     'libyuv_dir': '/media/libyuv/libyuv',
-    'libevent_dir': '/ipc/chromium/src/third_party/libevent',
     'yuv_disable_avx2': 0 if CONFIG['HAVE_X86_AVX2'] else 1,
     # don't use openssl
     'use_openssl': 0,
@@ -58,7 +60,6 @@ gyp_vars.update({
     'arm_neon': 0,
     'arm_neon_optional': 1,
 
-    'moz_widget_toolkit_gonk': 0,
     'moz_webrtc_omx': 0,
     'moz_webrtc_mediacodec': 0,
 
@@ -85,6 +86,8 @@ gyp_vars.update({
     'include_pcm16b': 1,
 
     #'rtc_opus_variable_complexity': 1,
+
+    'apm_debug_dump': 1,
 })
 
 if os == 'Android':
@@ -119,3 +122,6 @@ if CONFIG['MACOS_SDK_DIR']:
 
 if not CONFIG['MOZ_SYSTEM_LIBVPX']:
     gyp_vars['libvpx_dir'] =  '/media/libvpx/libvpx'
+
+if not CONFIG['MOZ_SYSTEM_LIBEVENT']:
+    gyp_vars['libevent_dir'] = '/ipc/chromium/src/third_party/libevent' 

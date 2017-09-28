@@ -20,6 +20,7 @@
 #include "mozilla/dom/HTMLInputElementBinding.h"
 #include "nsGkAtoms.h"
 
+#include "mozilla/TextEditor.h"
 #include "nsTextEditorState.h"
 
 class nsIControllers;
@@ -67,7 +68,9 @@ public:
   // nsIDOMNSEditableElement
   NS_IMETHOD GetEditor(nsIEditor** aEditor) override
   {
-    return nsGenericHTMLElement::GetEditor(aEditor);
+    nsCOMPtr<nsIEditor> editor = GetEditor();
+    editor.forget(aEditor);
+    return NS_OK;
   }
   NS_IMETHOD SetUserInput(const nsAString& aInput) override;
 
@@ -86,7 +89,6 @@ public:
   NS_IMETHOD SetValueChanged(bool aValueChanged) override;
   NS_IMETHOD_(bool) IsSingleLineTextControl() const override;
   NS_IMETHOD_(bool) IsTextArea() const override;
-  NS_IMETHOD_(bool) IsPlainTextControl() const override;
   NS_IMETHOD_(bool) IsPasswordTextControl() const override;
   NS_IMETHOD_(int32_t) GetCols() override;
   NS_IMETHOD_(int32_t) GetWrapCols() override;
@@ -94,16 +96,14 @@ public:
   NS_IMETHOD_(void) GetDefaultValueFromContent(nsAString& aValue) override;
   NS_IMETHOD_(bool) ValueChanged() const override;
   NS_IMETHOD_(void) GetTextEditorValue(nsAString& aValue, bool aIgnoreWrap) const override;
-  NS_IMETHOD_(nsIEditor*) GetTextEditor() override;
+  NS_IMETHOD_(mozilla::TextEditor*) GetTextEditor() override;
   NS_IMETHOD_(nsISelectionController*) GetSelectionController() override;
   NS_IMETHOD_(nsFrameSelection*) GetConstFrameSelection() override;
   NS_IMETHOD BindToFrame(nsTextControlFrame* aFrame) override;
   NS_IMETHOD_(void) UnbindFromFrame(nsTextControlFrame* aFrame) override;
   NS_IMETHOD CreateEditor() override;
   NS_IMETHOD_(Element*) GetRootEditorNode() override;
-  NS_IMETHOD_(Element*) CreatePlaceholderNode() override;
   NS_IMETHOD_(Element*) GetPlaceholderNode() override;
-  NS_IMETHOD_(Element*) CreatePreviewNode() override;
   NS_IMETHOD_(Element*) GetPreviewNode() override;
   NS_IMETHOD_(void) UpdateOverlayTextVisibility(bool aNotify) override;
   NS_IMETHOD_(bool) GetPlaceholderVisibility() override;
@@ -165,6 +165,12 @@ public:
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLTextAreaElement,
                                            nsGenericHTMLFormElementWithState)
+
+  virtual already_AddRefed<nsITextControlElement> GetAsTextControlElement() override
+  {
+    nsCOMPtr<nsITextControlElement> txt = this;
+    return txt.forget();
+  }
 
   // nsIConstraintValidation
   bool     IsTooLong();
@@ -249,9 +255,9 @@ public:
   {
     SetHTMLBoolAttr(nsGkAtoms::readonly, aReadOnly, aError);
   }
-  bool Required()
+  bool Required() const
   {
-    return GetBoolAttr(nsGkAtoms::required);
+    return State().HasState(NS_EVENT_STATE_REQUIRED);
   }
 
   void SetRangeText(const nsAString& aReplacement, ErrorResult& aRv);
@@ -283,13 +289,11 @@ public:
   void SetDefaultValue(const nsAString& aDefaultValue, ErrorResult& aError);
   // XPCOM GetValue/SetValue are fine
   uint32_t GetTextLength();
-  // nsIConstraintValidation::WillValidate is fine.
-  // nsIConstraintValidation::Validity() is fine.
-  // nsIConstraintValidation::GetValidationMessage() is fine.
-  // nsIConstraintValidation::CheckValidity() is fine.
-  using nsIConstraintValidation::CheckValidity;
-  using nsIConstraintValidation::ReportValidity;
-  // nsIConstraintValidation::SetCustomValidity() is fine.
+
+  // Override SetCustomValidity so we update our state properly when it's called
+  // via bindings.
+  void SetCustomValidity(const nsAString& aError);
+
   // XPCOM Select is fine
   Nullable<uint32_t> GetSelectionStart(ErrorResult& aError);
   void SetSelectionStart(const Nullable<uint32_t>& aSelectionStart, ErrorResult& aError);
@@ -301,7 +305,7 @@ public:
   nsIControllers* GetControllers(ErrorResult& aError);
   nsIEditor* GetEditor()
   {
-    return mState.GetEditor();
+    return mState.GetTextEditor();
   }
 
 protected:
@@ -409,6 +413,7 @@ protected:
   void GetSelectionRange(uint32_t* aSelectionStart,
                          uint32_t* aSelectionEnd,
                          ErrorResult& aRv);
+
 private:
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
                                     GenericSpecifiedValues* aGenericData);

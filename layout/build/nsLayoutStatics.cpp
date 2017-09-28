@@ -67,7 +67,6 @@
 #include "CacheObserver.h"
 #include "DisplayItemClip.h"
 #include "ActiveLayerTracker.h"
-#include "CounterStyleManager.h"
 #include "FrameLayerBuilder.h"
 #include "AnimationCommon.h"
 #include "LayerAnimationInfo.h"
@@ -91,10 +90,6 @@
 
 #ifdef MOZ_WEBSPEECH
 #include "nsSynthVoiceRegistry.h"
-#endif
-
-#ifdef MOZ_ANDROID_OMX
-#include "AndroidMediaPluginHost.h"
 #endif
 
 #include "CubebUtils.h"
@@ -125,6 +120,7 @@
 #include "MediaPrefs.h"
 #include "mozilla/ServoBindings.h"
 #include "mozilla/StaticPresData.h"
+#include "mozilla/StylePrefs.h"
 #include "mozilla/dom/WebIDLGlobalNameHash.h"
 #include "mozilla/dom/ipc/IPCBlobInputStreamStorage.h"
 #include "mozilla/dom/U2FTokenManager.h"
@@ -238,7 +234,7 @@ nsLayoutStatics::Initialize()
     return rv;
   }
 
-  nsCSSParser::Startup();
+  StylePrefs::Init();
   nsCSSRuleProcessor::Startup();
 
 #ifdef MOZ_XUL
@@ -289,14 +285,12 @@ nsLayoutStatics::Initialize()
 
   CacheObserver::Init();
 
-  CounterStyleManager::InitializeBuiltinCounterStyles();
-
   IMEStateManager::Init();
 
   ServiceWorkerRegistrar::Initialize();
 
 #ifdef DEBUG
-  nsStyleContext::Initialize();
+  GeckoStyleContext::Initialize();
   mozilla::LayerAnimationInfo::Initialize();
 #endif
 
@@ -307,7 +301,9 @@ nsLayoutStatics::Initialize()
   mozilla::dom::WebCryptoThreadPool::Initialize();
 
 #ifdef MOZ_STYLO
-  InitializeServo();
+  if (XRE_IsParentProcess() || XRE_IsContentProcess()) {
+    InitializeServo();
+  }
 #endif
 
 #ifndef MOZ_WIDGET_ANDROID
@@ -329,8 +325,10 @@ nsLayoutStatics::Shutdown()
   // memory reporter manager.
 
 #ifdef MOZ_STYLO
-  ShutdownServo();
-  URLExtraData::ReleaseDummy();
+  if (XRE_IsParentProcess() || XRE_IsContentProcess()) {
+    ShutdownServo();
+    URLExtraData::ReleaseDummy();
+  }
 #endif
 
   nsMessageManagerScriptExecutor::Shutdown();
@@ -392,11 +390,6 @@ nsLayoutStatics::Shutdown()
   nsAutoCopyListener::Shutdown();
   FrameLayerBuilder::Shutdown();
 
-
-#ifdef MOZ_ANDROID_OMX
-  AndroidMediaPluginHost::Shutdown();
-#endif
-
   CubebUtils::ShutdownLibrary();
   AsyncLatencyLogger::ShutdownLogger();
   WebAudioUtils::Shutdown();
@@ -433,8 +426,6 @@ nsLayoutStatics::Shutdown()
   ContentParent::ShutDown();
 
   DisplayItemClip::Shutdown();
-
-  CustomElementRegistry::XPCOMShutdown();
 
   CacheObserver::Shutdown();
 

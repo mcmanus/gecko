@@ -38,6 +38,7 @@ GPUProcessHost::Launch()
 {
   MOZ_ASSERT(mLaunchPhase == LaunchPhase::Unlaunched);
   MOZ_ASSERT(!mGPUChild);
+  MOZ_ASSERT(!gfxPlatform::IsHeadless());
 
 #if defined(XP_WIN) && defined(MOZ_SANDBOX)
   mSandboxLevel = Preferences::GetInt("security.sandbox.gpu.level");
@@ -61,6 +62,12 @@ GPUProcessHost::WaitForLaunch()
   }
 
   int32_t timeoutMs = gfxPrefs::GPUProcessTimeoutMs();
+
+  // If one of the following environment variables are set we can effectively
+  // ignore the timeout - as we can guarantee the compositor process will be terminated
+  if (PR_GetEnv("MOZ_DEBUG_CHILD_PROCESS") || PR_GetEnv("MOZ_DEBUG_CHILD_PAUSE")) {
+    timeoutMs = 0;
+  }
 
   // Our caller expects the connection to be finished after we return, so we
   // immediately set up the IPDL actor and fire callbacks. The IO thread will

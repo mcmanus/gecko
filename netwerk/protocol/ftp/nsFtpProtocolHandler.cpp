@@ -1,21 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- *
- * This Original Code has been modified by IBM Corporation.
- * Modifications made by IBM described herein are
- * Copyright (c) International Business Machines
- * Corporation, 2000
- *
- * Modifications to Mozilla code or documentation
- * identified per MPL Section 3.3
- *
- * Date         Modified by     Description of modification
- * 03/27/2000   IBM Corp.       Added PR_CALLBACK for Optlink
- *                               use in OS2
- */
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/net/FTPChannelChild.h"
@@ -136,7 +122,7 @@ nsFtpProtocolHandler::Init()
     return NS_OK;
 }
 
-    
+
 //-----------------------------------------------------------------------------
 // nsIProtocolHandler methods:
 
@@ -150,7 +136,7 @@ nsFtpProtocolHandler::GetScheme(nsACString &result)
 NS_IMETHODIMP
 nsFtpProtocolHandler::GetDefaultPort(int32_t *result)
 {
-    *result = 21; 
+    *result = 21;
     return NS_OK;
 }
 
@@ -158,7 +144,7 @@ NS_IMETHODIMP
 nsFtpProtocolHandler::GetProtocolFlags(uint32_t *result)
 {
     *result = URI_STD | ALLOWS_PROXY | ALLOWS_PROXY_HTTP |
-        URI_LOADABLE_BY_ANYONE; 
+        URI_LOADABLE_BY_ANYONE;
     return NS_OK;
 }
 
@@ -249,7 +235,7 @@ nsFtpProtocolHandler::NewProxiedChannel(nsIURI* uri, nsIProxyInfo* proxyInfo,
                             result);
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsFtpProtocolHandler::AllowPort(int32_t port, const char *scheme, bool *_retval)
 {
     *_retval = (port == 21 || port == 22);
@@ -278,18 +264,18 @@ nsFtpProtocolHandler::RemoveConnection(nsIURI *aKey, nsFtpControlConnection* *_r
 {
     NS_ASSERTION(_retval, "null pointer");
     NS_ASSERTION(aKey, "null pointer");
-    
+
     *_retval = nullptr;
 
     nsAutoCString spec;
     aKey->GetPrePath(spec);
-    
+
     LOG(("FTP:removing connection for %s\n", spec.get()));
-   
+
     timerStruct* ts = nullptr;
     uint32_t i;
     bool found = false;
-    
+
     for (i=0;i<mRootConnectionList.Length();++i) {
         ts = mRootConnectionList[i];
         if (strcmp(spec.get(), ts->key) == 0) {
@@ -326,20 +312,22 @@ nsFtpProtocolHandler::InsertConnection(nsIURI *aKey, nsFtpControlConnection *aCo
     nsresult rv;
     nsCOMPtr<nsITimer> timer = do_CreateInstance("@mozilla.org/timer;1", &rv);
     if (NS_FAILED(rv)) return rv;
-    
+
     timerStruct* ts = new timerStruct();
     if (!ts)
         return NS_ERROR_OUT_OF_MEMORY;
 
-    rv = timer->InitWithFuncCallback(nsFtpProtocolHandler::Timeout,
-                                     ts,
-                                     mIdleTimeout*1000,
-                                     nsITimer::TYPE_REPEATING_SLACK);
+    rv = timer->InitWithNamedFuncCallback(
+      nsFtpProtocolHandler::Timeout,
+      ts,
+      mIdleTimeout * 1000,
+      nsITimer::TYPE_REPEATING_SLACK,
+      "nsFtpProtocolHandler::InsertConnection");
     if (NS_FAILED(rv)) {
         delete ts;
         return rv;
     }
-    
+
     ts->key = ToNewCString(spec);
     if (!ts->key) {
         delete ts;

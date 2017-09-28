@@ -38,7 +38,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_ADDREF_INHERITED(TCPServerSocket, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(TCPServerSocket, DOMEventTargetHelper)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(TCPServerSocket)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(TCPServerSocket)
   NS_INTERFACE_MAP_ENTRY(nsIServerSocketListener)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
@@ -148,10 +148,6 @@ TCPServerSocket::OnSocketAccepted(nsIServerSocket* aServer, nsISocketTransport* 
 {
   nsCOMPtr<nsIGlobalObject> global = GetOwnerGlobal();
   RefPtr<TCPSocket> socket = TCPSocket::CreateAcceptedSocket(global, aTransport, mUseArrayBuffers);
-  if (mServerBridgeParent) {
-    socket->SetAppIdAndBrowser(mServerBridgeParent->GetAppId(),
-                               mServerBridgeParent->GetInIsolatedMozBrowser());
-  }
   FireEvent(NS_LITERAL_STRING("connect"), socket);
   return NS_OK;
 }

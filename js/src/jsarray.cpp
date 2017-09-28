@@ -43,6 +43,7 @@
 #include "vm/ArgumentsObject-inl.h"
 #include "vm/ArrayObject-inl.h"
 #include "vm/Caches-inl.h"
+#include "vm/GeckoProfiler-inl.h"
 #include "vm/Interpreter-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/UnboxedObject-inl.h"
@@ -355,7 +356,7 @@ ElementAdder::append(JSContext* cx, HandleValue v)
         if (result == DenseElementResult::Failure)
             return false;
         if (result == DenseElementResult::Incomplete) {
-            if (!DefineElement(cx, resObj_, index_, v))
+            if (!DefineDataElement(cx, resObj_, index_, v))
                 return false;
         }
     } else {
@@ -403,11 +404,21 @@ js::GetElementsWithAdder(JSContext* cx, HandleObject obj, HandleObject receiver,
     return true;
 }
 
+static bool
+ObjectMayHaveExtraIndexedProperties(JSObject* obj);
+
+static inline bool
+IsPackedArrayOrNoExtraIndexedProperties(JSObject* obj, uint64_t length)
+{
+    return (IsPackedArray(obj) && obj->as<ArrayObject>().length() == length) ||
+           !ObjectMayHaveExtraIndexedProperties(obj);
+}
+
 template <JSValueType Type>
 DenseElementResult
 GetBoxedOrUnboxedDenseElements(JSObject* aobj, uint32_t length, Value* vp)
 {
-    MOZ_ASSERT(!ObjectMayHaveExtraIndexedProperties(aobj));
+    MOZ_ASSERT(IsPackedArrayOrNoExtraIndexedProperties(aobj, length));
 
     if (length > GetBoxedOrUnboxedInitializedLength<Type>(aobj))
         return DenseElementResult::Incomplete;
@@ -429,7 +440,7 @@ DefineBoxedOrUnboxedFunctor3(GetBoxedOrUnboxedDenseElements,
 bool
 js::GetElements(JSContext* cx, HandleObject aobj, uint32_t length, Value* vp)
 {
-    if (!ObjectMayHaveExtraIndexedProperties(aobj)) {
+    if (IsPackedArrayOrNoExtraIndexedProperties(aobj, length)) {
         GetBoxedOrUnboxedDenseElementsFunctor functor(aobj, length, vp);
         DenseElementResult result = CallBoxedOrUnboxedSpecialization(functor, aobj);
         if (result != DenseElementResult::Incomplete)
@@ -441,6 +452,14 @@ js::GetElements(JSContext* cx, HandleObject aobj, uint32_t length, Value* vp)
         if (!argsobj.hasOverriddenLength()) {
             if (argsobj.maybeGetElements(0, length, vp))
                 return true;
+        }
+    }
+
+    if (aobj->is<TypedArrayObject>()) {
+        TypedArrayObject* typedArray = &aobj->as<TypedArrayObject>();
+        if (typedArray->length() == length) {
+            typedArray->getElements(vp);
+            return true;
         }
     }
 
@@ -483,7 +502,7 @@ DefineArrayElement(JSContext* cx, HandleObject obj, uint64_t index, HandleValue 
     RootedId id(cx);
     if (!ToId(cx, index, &id))
         return false;
-    return DefineProperty(cx, obj, id, value);
+    return DefineDataProperty(cx, obj, id, value);
 }
 
 // Set the value of the property at the given index to v.
@@ -512,7 +531,8 @@ SetArrayElement(JSContext* cx, HandleObject obj, uint64_t index, HandleValue v)
 static bool
 DeleteArrayElement(JSContext* cx, HandleObject obj, uint64_t index, ObjectOpResult& result)
 {
-    if (obj->is<ArrayObject>() && !obj->isIndexed() &&
+    if (obj->is<ArrayObject>() &&
+        !obj->as<NativeObject>().isIndexed() &&
         !obj->as<NativeObject>().denseElementsAreFrozen())
     {
         ArrayObject* aobj = &obj->as<ArrayObject>();
@@ -558,11 +578,50 @@ DeletePropertyOrThrow(JSContext* cx, HandleObject obj, uint64_t index)
 }
 
 static bool
+DeletePropertiesOrThrow(JSContext* cx, HandleObject obj, uint64_t len, uint64_t finalLength)
+{
+    if (obj->is<ArrayObject>() &&
+        !obj->as<NativeObject>().isIndexed() &&
+        !obj->as<NativeObject>().denseElementsAreFrozen())
+    {
+        if (len <= UINT32_MAX) {
+            // Skip forward to the initialized elements of this array.
+            len = Min(uint32_t(len), obj->as<ArrayObject>().getDenseInitializedLength());
+        }
+    }
+
+    for (uint64_t k = len; k > finalLength; k--) {
+        if (!CheckForInterrupt(cx))
+            return false;
+
+        if (!DeletePropertyOrThrow(cx, obj, k - 1))
+            return false;
+    }
+    return true;
+}
+
+static bool
+SetArrayLengthProperty(JSContext* cx, HandleArrayObject obj, HandleValue value)
+{
+    RootedId id(cx, NameToId(cx->names().length));
+    ObjectOpResult result;
+    if (obj->lengthIsWritable()) {
+        if (!ArraySetLength(cx, obj, id, JSPROP_PERMANENT, value, result))
+            return false;
+    } else {
+        MOZ_ALWAYS_TRUE(result.fail(JSMSG_READ_ONLY));
+    }
+    return result.checkStrict(cx, obj, id);
+}
+
+static bool
 SetLengthProperty(JSContext* cx, HandleObject obj, uint64_t length)
 {
     MOZ_ASSERT(length < uint64_t(DOUBLE_INTEGRAL_PRECISION_LIMIT));
 
     RootedValue v(cx, NumberValue(length));
+    if (obj->is<ArrayObject>())
+        return SetArrayLengthProperty(cx, obj.as<ArrayObject>(), v);
     return SetProperty(cx, obj, cx->names().length, v);
 }
 
@@ -570,6 +629,8 @@ bool
 js::SetLengthProperty(JSContext* cx, HandleObject obj, uint32_t length)
 {
     RootedValue v(cx, NumberValue(length));
+    if (obj->is<ArrayObject>())
+        return SetArrayLengthProperty(cx, obj.as<ArrayObject>(), v);
     return SetProperty(cx, obj, cx->names().length, v);
 }
 
@@ -584,14 +645,13 @@ static bool
 array_length_setter(JSContext* cx, HandleObject obj, HandleId id, MutableHandleValue vp,
                     ObjectOpResult& result)
 {
+    MOZ_ASSERT(id == NameToId(cx->names().length));
+
     if (!obj->is<ArrayObject>()) {
         // This array .length property was found on the prototype
         // chain. Ideally the setter should not have been called, but since
         // we're here, do an impression of SetPropertyByDefining.
-        const Class* clasp = obj->getClass();
-        return DefineProperty(cx, obj, cx->names().length, vp,
-                              clasp->getGetProperty(), clasp->getSetProperty(),
-                              JSPROP_ENUMERATE, result);
+        return DefineDataProperty(cx, obj, id, vp, JSPROP_ENUMERATE, result);
     }
 
     Rooted<ArrayObject*> arr(cx, &obj->as<ArrayObject>());
@@ -930,10 +990,16 @@ array_addProperty(JSContext* cx, HandleObject obj, HandleId id, HandleValue v)
 static inline bool
 ObjectMayHaveExtraIndexedOwnProperties(JSObject* obj)
 {
-    return (!obj->isNative() && !obj->is<UnboxedArrayObject>()) ||
-           obj->isIndexed() ||
-           obj->is<TypedArrayObject>() ||
-           ClassMayResolveId(*obj->runtimeFromAnyThread()->commonNames,
+    if (!obj->isNative())
+        return !obj->is<UnboxedArrayObject>();
+
+    if (obj->as<NativeObject>().isIndexed())
+        return true;
+
+    if (obj->is<TypedArrayObject>())
+        return true;
+
+    return ClassMayResolveId(*obj->runtimeFromAnyThread()->commonNames,
                              obj->getClass(), INT_TO_JSID(0), obj);
 }
 
@@ -942,8 +1008,8 @@ ObjectMayHaveExtraIndexedOwnProperties(JSObject* obj)
  * elements. This includes other indexed properties in its shape hierarchy, and
  * indexed properties or elements along its prototype chain.
  */
-bool
-js::ObjectMayHaveExtraIndexedProperties(JSObject* obj)
+static bool
+ObjectMayHaveExtraIndexedProperties(JSObject* obj)
 {
     MOZ_ASSERT_IF(obj->hasDynamicPrototype(), !obj->isNative());
 
@@ -1192,7 +1258,7 @@ ArrayJoinDenseKernel(JSContext* cx, SeparatorOp sepOp, HandleObject obj, uint64_
             return DenseElementResult::Failure;
 
         // Step 7.b.
-        const Value& elem = GetBoxedOrUnboxedDenseElement<Type>(obj, *numProcessed);
+        Value elem = GetBoxedOrUnboxedDenseElement<Type>(obj, *numProcessed);
 
         // Steps 7.c-d.
         if (elem.isString()) {
@@ -1254,7 +1320,7 @@ ArrayJoinKernel(JSContext* cx, SeparatorOp sepOp, HandleObject obj, uint64_t len
     // Step 6.
     uint32_t numProcessed = 0;
 
-    if (!ObjectMayHaveExtraIndexedProperties(obj)) {
+    if (IsPackedArrayOrNoExtraIndexedProperties(obj, length)) {
         ArrayJoinDenseKernelFunctor<SeparatorOp> functor(cx, sepOp, obj, length, sb, &numProcessed);
         DenseElementResult result = CallBoxedOrUnboxedSpecialization(functor, obj);
         if (result == DenseElementResult::Failure)
@@ -1295,7 +1361,7 @@ js::array_join(JSContext* cx, unsigned argc, Value* vp)
     if (!CheckRecursionLimit(cx))
         return false;
 
-    AutoGeckoProfilerEntry pseudoFrame(cx->runtime(), "Array.prototype.join");
+    AutoGeckoProfilerEntry pseudoFrame(cx, "Array.prototype.join");
     CallArgs args = CallArgsFromVp(argc, vp);
 
     // Step 1.
@@ -1495,21 +1561,27 @@ ArrayReverseDenseKernel(JSContext* cx, HandleObject obj, uint32_t length)
         if (obj->as<NativeObject>().denseElementsAreFrozen())
             return DenseElementResult::Incomplete;
 
-        /*
-         * It's actually surprisingly complicated to reverse an array due to the
-         * orthogonality of array length and array capacity while handling
-         * leading and trailing holes correctly.  Reversing seems less likely to
-         * be a common operation than other array mass-mutation methods, so for
-         * now just take a probably-small memory hit (in the absence of too many
-         * holes in the array at its start) and ensure that the capacity is
-         * sufficient to hold all the elements in the array if it were full.
-         */
-        DenseElementResult result = obj->as<NativeObject>().ensureDenseElements(cx, length, 0);
-        if (result != DenseElementResult::Success)
-            return result;
+        if (!IsPackedArray(obj)) {
+            /*
+             * It's actually surprisingly complicated to reverse an array due
+             * to the orthogonality of array length and array capacity while
+             * handling leading and trailing holes correctly.  Reversing seems
+             * less likely to be a common operation than other array
+             * mass-mutation methods, so for now just take a probably-small
+             * memory hit (in the absence of too many holes in the array at
+             * its start) and ensure that the capacity is sufficient to hold
+             * all the elements in the array if it were full.
+             */
+            DenseElementResult result = obj->as<NativeObject>().ensureDenseElements(cx, length, 0);
+            if (result != DenseElementResult::Success)
+                return result;
 
-        /* Fill out the array's initialized length to its proper length. */
-        obj->as<NativeObject>().ensureDenseInitializedLength(cx, length, 0);
+            /* Fill out the array's initialized length to its proper length. */
+            obj->as<NativeObject>().ensureDenseInitializedLength(cx, length, 0);
+        } else {
+            if (!obj->as<NativeObject>().maybeCopyElementsForWrite(cx))
+                return DenseElementResult::Failure;
+        }
     } else {
         // Unboxed arrays can only be reversed here if their initialized length
         // matches their actual length. Otherwise the reversal will place holes
@@ -1549,7 +1621,7 @@ DefineBoxedOrUnboxedFunctor3(ArrayReverseDenseKernel,
 bool
 js::array_reverse(JSContext* cx, unsigned argc, Value* vp)
 {
-    AutoGeckoProfilerEntry pseudoFrame(cx->runtime(), "Array.prototype.reverse");
+    AutoGeckoProfilerEntry pseudoFrame(cx, "Array.prototype.reverse");
     CallArgs args = CallArgsFromVp(argc, vp);
 
     // Step 1.
@@ -1562,7 +1634,7 @@ js::array_reverse(JSContext* cx, unsigned argc, Value* vp)
     if (!GetLengthProperty(cx, obj, &len))
         return false;
 
-    if (!ObjectMayHaveExtraIndexedProperties(obj) && len <= UINT32_MAX) {
+    if (IsPackedArrayOrNoExtraIndexedProperties(obj, len) && len <= UINT32_MAX) {
         ArrayReverseDenseKernelFunctor functor(cx, obj, uint32_t(len));
         DenseElementResult result = CallBoxedOrUnboxedSpecialization(functor, obj);
         if (result != DenseElementResult::Incomplete) {
@@ -1830,16 +1902,12 @@ enum ComparatorMatchResult {
  * patterns: namely, |return x - y| and |return y - x|.
  */
 static ComparatorMatchResult
-MatchNumericComparator(JSContext* cx, const Value& v)
+MatchNumericComparator(JSContext* cx, JSObject* obj)
 {
-    if (!v.isObject())
+    if (!obj->is<JSFunction>())
         return Match_None;
 
-    JSObject& obj = v.toObject();
-    if (!obj.is<JSFunction>())
-        return Match_None;
-
-    RootedFunction fun(cx, &obj.as<JSFunction>());
+    RootedFunction fun(cx, &obj->as<JSFunction>());
     if (!fun->isInterpreted() || fun->isClassConstructor())
         return Match_None;
 
@@ -2042,48 +2110,41 @@ FillWithUndefined(JSContext* cx, HandleObject obj, uint32_t start, uint32_t coun
 }
 
 bool
-js::array_sort(JSContext* cx, unsigned argc, Value* vp)
+js::intrinsic_ArrayNativeSort(JSContext* cx, unsigned argc, Value* vp)
 {
+    // This function is called from the self-hosted Array.prototype.sort
+    // implementation. It returns |true| if the array was sorted, otherwise it
+    // returns |false| to notify the self-hosted code to perform the sorting.
     CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
 
-    RootedValue fval(cx);
+    HandleValue fval = args[0];
+    MOZ_ASSERT(fval.isUndefined() || IsCallable(fval));
 
-    if (args.hasDefined(0)) {
-        if (args[0].isPrimitive()) {
-            JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_BAD_SORT_ARG);
+    ComparatorMatchResult comp;
+    if (fval.isObject()) {
+        comp = MatchNumericComparator(cx, &fval.toObject());
+        if (comp == Match_Failure)
             return false;
+
+        if (comp == Match_None) {
+            // Non-optimized user supplied comparators perform much better when
+            // called from within a self-hosted sorting function.
+            args.rval().setBoolean(false);
+            return true;
         }
-        fval = args[0];     /* non-default compare function */
     } else {
-        fval.setNull();
+        comp = Match_None;
     }
 
-    RootedObject obj(cx, ToObject(cx, args.thisv()));
-    if (!obj)
-        return false;
-
-    ComparatorMatchResult comp = MatchNumericComparator(cx, fval);
-    if (comp == Match_Failure)
-        return false;
-
-    if (!fval.isNull() && comp == Match_None) {
-        /*
-         * Non-optimized user supplied comparators perform much better when
-         * called from within a self-hosted sorting function.
-         */
-        FixedInvokeArgs<1> args2(cx);
-        args2[0].set(fval);
-
-        RootedValue thisv(cx, ObjectValue(*obj));
-        return CallSelfHostedFunction(cx, cx->names().ArraySort, thisv, args2, args.rval());
-    }
+    RootedObject obj(cx, &args.thisv().toObject());
 
     uint64_t length;
     if (!GetLengthProperty(cx, obj, &length))
         return false;
     if (length < 2) {
         /* [] and [a] remain unchanged when sorted. */
-        args.rval().setObject(*obj);
+        args.rval().setBoolean(true);
         return true;
     }
 
@@ -2123,24 +2184,46 @@ js::array_sort(JSContext* cx, unsigned argc, Value* vp)
         undefs = 0;
         bool allStrings = true;
         bool allInts = true;
-        bool extraIndexed = ObjectMayHaveExtraIndexedProperties(obj);
+        bool extraIndexed;
         RootedValue v(cx);
-        for (uint32_t i = 0; i < len; i++) {
-            if (!CheckForInterrupt(cx))
-                return false;
+        if (IsPackedArray(obj)) {
+            HandleArrayObject array = obj.as<ArrayObject>();
+            extraIndexed = false;
 
-            bool hole;
-            if (!HasAndGetElement(cx, obj, i, &hole, &v))
-                return false;
-            if (hole)
-                continue;
-            if (v.isUndefined()) {
-                ++undefs;
-                continue;
+            for (uint32_t i = 0; i < len; i++) {
+                if (!CheckForInterrupt(cx))
+                    return false;
+
+                v.set(array->getDenseElement(i));
+                MOZ_ASSERT(!v.isMagic(JS_ELEMENTS_HOLE));
+                if (v.isUndefined()) {
+                    ++undefs;
+                    continue;
+                }
+                vec.infallibleAppend(v);
+                allStrings = allStrings && v.isString();
+                allInts = allInts && v.isInt32();
             }
-            vec.infallibleAppend(v);
-            allStrings = allStrings && v.isString();
-            allInts = allInts && v.isInt32();
+        } else {
+            extraIndexed = ObjectMayHaveExtraIndexedProperties(obj);
+
+            for (uint32_t i = 0; i < len; i++) {
+                if (!CheckForInterrupt(cx))
+                    return false;
+
+                bool hole;
+                if (!HasAndGetElement(cx, obj, i, &hole, &v))
+                    return false;
+                if (hole)
+                    continue;
+                if (v.isUndefined()) {
+                    ++undefs;
+                    continue;
+                }
+                vec.infallibleAppend(v);
+                allStrings = allStrings && v.isString();
+                allInts = allInts && v.isInt32();
+            }
         }
 
         /*
@@ -2149,12 +2232,12 @@ js::array_sort(JSContext* cx, unsigned argc, Value* vp)
          */
         n = vec.length();
         if (n == 0 && undefs == 0) {
-            args.rval().setObject(*obj);
+            args.rval().setBoolean(true);
             return true;
         }
 
         /* Here len == n + undefs + number_of_holes. */
-        if (fval.isNull()) {
+        if (comp == Match_None) {
             /*
              * Sort using the default comparator converting all elements to
              * strings.
@@ -2203,7 +2286,7 @@ js::array_sort(JSContext* cx, unsigned argc, Value* vp)
         if (!CheckForInterrupt(cx) || !DeletePropertyOrThrow(cx, obj, --len))
             return false;
     }
-    args.rval().setObject(*obj);
+    args.rval().setBoolean(true);
     return true;
 }
 
@@ -2232,7 +2315,7 @@ js::NewbornArrayPush(JSContext* cx, HandleObject obj, const Value& v)
 bool
 js::array_push(JSContext* cx, unsigned argc, Value* vp)
 {
-    AutoGeckoProfilerEntry pseudoFrame(cx->runtime(), "Array.prototype.push");
+    AutoGeckoProfilerEntry pseudoFrame(cx, "Array.prototype.push");
     CallArgs args = CallArgsFromVp(argc, vp);
 
     // Step 1.
@@ -2289,7 +2372,7 @@ js::array_push(JSContext* cx, unsigned argc, Value* vp)
 bool
 js::array_pop(JSContext* cx, unsigned argc, Value* vp)
 {
-    AutoGeckoProfilerEntry pseudoFrame(cx->runtime(), "Array.prototype.pop");
+    AutoGeckoProfilerEntry pseudoFrame(cx, "Array.prototype.pop");
     CallArgs args = CallArgsFromVp(argc, vp);
 
     // Step 1.
@@ -2349,6 +2432,7 @@ DefineBoxedOrUnboxedFunctor1(ShiftMoveBoxedOrUnboxedDenseElements, JSObject*);
 void
 js::ArrayShiftMoveElements(JSObject* obj)
 {
+    AutoUnsafeCallWithABI unsafe;
     MOZ_ASSERT_IF(obj->is<ArrayObject>(), obj->as<ArrayObject>().lengthIsWritable());
 
     ShiftMoveBoxedOrUnboxedDenseElementsFunctor functor(obj);
@@ -2359,7 +2443,7 @@ template <JSValueType Type>
 DenseElementResult
 ArrayShiftDenseKernel(JSContext* cx, HandleObject obj, MutableHandleValue rval)
 {
-    if (ObjectMayHaveExtraIndexedProperties(obj))
+    if (!IsPackedArray(obj) && ObjectMayHaveExtraIndexedProperties(obj))
         return DenseElementResult::Incomplete;
 
     if (MaybeInIteration(obj, cx))
@@ -2394,7 +2478,7 @@ DefineBoxedOrUnboxedFunctor3(ArrayShiftDenseKernel,
 bool
 js::array_shift(JSContext* cx, unsigned argc, Value* vp)
 {
-    AutoGeckoProfilerEntry pseudoFrame(cx->runtime(), "Array.prototype.shift");
+    AutoGeckoProfilerEntry pseudoFrame(cx, "Array.prototype.shift");
     CallArgs args = CallArgsFromVp(argc, vp);
 
     // Step 1.
@@ -2470,7 +2554,7 @@ js::array_shift(JSContext* cx, unsigned argc, Value* vp)
 bool
 js::array_unshift(JSContext* cx, unsigned argc, Value* vp)
 {
-    AutoGeckoProfilerEntry pseudoFrame(cx->runtime(), "Array.prototype.unshift");
+    AutoGeckoProfilerEntry pseudoFrame(cx, "Array.prototype.unshift");
     CallArgs args = CallArgsFromVp(argc, vp);
 
     // Step 1.
@@ -2502,6 +2586,8 @@ js::array_unshift(JSContext* cx, unsigned argc, Value* vp)
             if (MaybeInIteration(obj, cx))
                 break;
             NativeObject* nobj = &obj->as<NativeObject>();
+            if (nobj->denseElementsAreFrozen())
+                break;
             if (nobj->is<ArrayObject>() && !nobj->as<ArrayObject>().lengthIsWritable())
                 break;
             if (!nobj->tryUnshiftDenseElements(args.length())) {
@@ -2681,7 +2767,7 @@ CopyArrayElements(JSContext* cx, HandleObject obj, uint64_t begin, uint64_t coun
                         return false;
 
                     MOZ_ASSERT(edResult == DenseElementResult::Incomplete);
-                    if (!DefineElement(cx, nresult, index, value))
+                    if (!DefineDataElement(cx, nresult, index, value))
                         return false;
 
                     break;
@@ -2711,7 +2797,7 @@ CopyArrayElements(JSContext* cx, HandleObject obj, uint64_t begin, uint64_t coun
 static bool
 array_splice_impl(JSContext* cx, unsigned argc, Value* vp, bool returnValueIsUsed)
 {
-    AutoGeckoProfilerEntry pseudoFrame(cx->runtime(), "Array.prototype.splice");
+    AutoGeckoProfilerEntry pseudoFrame(cx, "Array.prototype.splice");
     CallArgs args = CallArgsFromVp(argc, vp);
 
     /* Step 1. */
@@ -2888,11 +2974,8 @@ array_splice_impl(JSContext* cx, unsigned argc, Value* vp, bool returnValueIsUse
             }
 
             /* Steps 15.c-d. */
-            for (uint64_t k = len; k > finalLength; k--) {
-                /* Steps 15.d.i-ii. */
-                if (!DeletePropertyOrThrow(cx, obj, k - 1))
-                    return false;
-            }
+            if (!DeletePropertiesOrThrow(cx, obj, len, finalLength))
+                return false;
         }
     } else if (itemCount > actualDeleteCount) {
         MOZ_ASSERT(actualDeleteCount <= UINT32_MAX);
@@ -3063,8 +3146,8 @@ GetIndexedPropertiesInRange(JSContext* cx, HandleObject obj, uint64_t begin, uin
         }
 
         // Append typed array elements.
-        if (pobj->is<TypedArrayObject>()) {
-            uint32_t len = pobj->as<TypedArrayObject>().length();
+        if (nativeObj->is<TypedArrayObject>()) {
+            uint32_t len = nativeObj->as<TypedArrayObject>().length();
             for (uint32_t i = begin; i < len && i < end; i++) {
                 if (!indexes.append(i))
                     return false;
@@ -3072,8 +3155,8 @@ GetIndexedPropertiesInRange(JSContext* cx, HandleObject obj, uint64_t begin, uin
         }
 
         // Append sparse elements.
-        if (pobj->isIndexed()) {
-            Shape::Range<NoGC> r(pobj->as<NativeObject>().lastProperty());
+        if (nativeObj->isIndexed()) {
+            Shape::Range<NoGC> r(nativeObj->lastProperty());
             for (; !r.empty(); r.popFront()) {
                 Shape& shape = r.front();
                 jsid id = shape.propid();
@@ -3144,7 +3227,7 @@ SliceSparse(JSContext* cx, HandleObject obj, uint64_t begin, uint64_t end, Handl
         if (!HasAndGetElement(cx, obj, index, &hole, &value))
             return false;
 
-        if (!hole && !DefineElement(cx, result, index - uint32_t(begin), value))
+        if (!hole && !DefineDataElement(cx, result, index - uint32_t(begin), value))
             return false;
     }
 
@@ -3203,7 +3286,7 @@ ArraySliceOrdinary(JSContext* cx, HandleObject obj, uint64_t begin, uint64_t end
         }
     }
 
-    if (obj->isNative() && obj->isIndexed() && count > 1000) {
+    if (obj->isNative() && obj->as<NativeObject>().isIndexed() && count > 1000) {
         if (!SliceSparse(cx, obj, begin, end, narr))
             return false;
     } else {
@@ -3219,7 +3302,7 @@ ArraySliceOrdinary(JSContext* cx, HandleObject obj, uint64_t begin, uint64_t end
 bool
 js::array_slice(JSContext* cx, unsigned argc, Value* vp)
 {
-    AutoGeckoProfilerEntry pseudoFrame(cx->runtime(), "Array.prototype.slice");
+    AutoGeckoProfilerEntry pseudoFrame(cx, "Array.prototype.slice");
     CallArgs args = CallArgsFromVp(argc, vp);
 
     /* Step 1. */
@@ -3404,7 +3487,7 @@ array_of(JSContext* cx, unsigned argc, Value* vp)
 
     // Step 8.
     for (unsigned k = 0; k < args.length(); k++) {
-        if (!DefineElement(cx, obj, k, args[k]))
+        if (!DefineDataElement(cx, obj, k, args[k]))
             return false;
     }
 
@@ -3436,7 +3519,7 @@ static const JSFunctionSpec array_methods[] = {
     /* Perl-ish methods. */
     JS_INLINABLE_FN("join",     array_join,         1,0, ArrayJoin),
     JS_FN("reverse",            array_reverse,      0,0),
-    JS_FN("sort",               array_sort,         1,0),
+    JS_SELF_HOSTED_FN("sort",   "ArraySort",        1,0),
     JS_INLINABLE_FN("push",     array_push,         1,0, ArrayPush),
     JS_INLINABLE_FN("pop",      array_pop,          0,0, ArrayPop),
     JS_INLINABLE_FN("shift",    array_shift,        0,0, ArrayShift),
@@ -3513,7 +3596,7 @@ ArrayConstructorImpl(JSContext* cx, CallArgs& args, bool isConstructor)
 {
     RootedObject proto(cx);
     if (isConstructor) {
-        if (!GetPrototypeFromCallableConstructor(cx, args, &proto))
+        if (!GetPrototypeFromBuiltinConstructor(cx, args, &proto))
             return false;
     } else {
         // We're emulating |new Array(n)| with |std_Array(n)| in self-hosted JS,
@@ -3632,28 +3715,26 @@ array_proto_finish(JSContext* cx, JS::HandleObject ctor, JS::HandleObject proto)
         return false;
 
     RootedValue value(cx, BooleanValue(true));
-    if (!DefineProperty(cx, unscopables, cx->names().copyWithin, value) ||
-        !DefineProperty(cx, unscopables, cx->names().entries, value) ||
-        !DefineProperty(cx, unscopables, cx->names().fill, value) ||
-        !DefineProperty(cx, unscopables, cx->names().find, value) ||
-        !DefineProperty(cx, unscopables, cx->names().findIndex, value) ||
-        !DefineProperty(cx, unscopables, cx->names().includes, value) ||
-        !DefineProperty(cx, unscopables, cx->names().keys, value) ||
-        !DefineProperty(cx, unscopables, cx->names().values, value))
+    if (!DefineDataProperty(cx, unscopables, cx->names().copyWithin, value) ||
+        !DefineDataProperty(cx, unscopables, cx->names().entries, value) ||
+        !DefineDataProperty(cx, unscopables, cx->names().fill, value) ||
+        !DefineDataProperty(cx, unscopables, cx->names().find, value) ||
+        !DefineDataProperty(cx, unscopables, cx->names().findIndex, value) ||
+        !DefineDataProperty(cx, unscopables, cx->names().includes, value) ||
+        !DefineDataProperty(cx, unscopables, cx->names().keys, value) ||
+        !DefineDataProperty(cx, unscopables, cx->names().values, value))
     {
         return false;
     }
 
     RootedId id(cx, SYMBOL_TO_JSID(cx->wellKnownSymbols().get(JS::SymbolCode::unscopables)));
     value.setObject(*unscopables);
-    return DefineProperty(cx, proto, id, value, nullptr, nullptr, JSPROP_READONLY);
+    return DefineDataProperty(cx, proto, id, value, JSPROP_READONLY);
 }
 
 static const ClassOps ArrayObjectClassOps = {
     array_addProperty,
     nullptr, /* delProperty */
-    nullptr, /* getProperty */
-    nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
@@ -4075,10 +4156,10 @@ bool
 js::ArrayInfo(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    JSObject* obj;
+    RootedObject obj(cx);
 
     for (unsigned i = 0; i < args.length(); i++) {
-        RootedValue arg(cx, args[i]);
+        HandleValue arg = args[i];
 
         UniqueChars bytes = DecompileValueGenerator(cx, JSDVG_SEARCH_STACK, arg, nullptr);
         if (!bytes)

@@ -209,7 +209,7 @@ class CFGTry : public CFGControlInstruction
     jsbytecode* catchStartPc_;
     CFGBlock* mergePoint_;
 
-    CFGTry(CFGBlock* successor, jsbytecode* catchStartPc, CFGBlock* mergePoint = nullptr)
+    CFGTry(CFGBlock* successor, jsbytecode* catchStartPc, CFGBlock* mergePoint)
       : tryBlock_(successor),
         catchStartPc_(catchStartPc),
         mergePoint_(mergePoint)
@@ -226,7 +226,7 @@ class CFGTry : public CFGControlInstruction
     }
 
     size_t numSuccessors() const final override {
-        return mergePoint_ ? 2 : 1;
+        return 2;
     }
     CFGBlock* getSuccessor(size_t i) const final override {
         MOZ_ASSERT(i < numSuccessors());
@@ -250,10 +250,6 @@ class CFGTry : public CFGControlInstruction
 
     CFGBlock* afterTryCatchBlock() const {
         return getSuccessor(1);
-    }
-
-    bool codeAfterTryCatchReachable() const {
-        return !!mergePoint_;
     }
 };
 
@@ -556,19 +552,23 @@ class CFGBackEdge : public CFGUnaryControlInstruction
 class CFGLoopEntry : public CFGUnaryControlInstruction
 {
     bool canOsr_;
+    bool isForIn_;
     size_t stackPhiCount_;
     jsbytecode* loopStopPc_;
 
     CFGLoopEntry(CFGBlock* block, size_t stackPhiCount)
       : CFGUnaryControlInstruction(block),
         canOsr_(false),
+        isForIn_(false),
         stackPhiCount_(stackPhiCount),
         loopStopPc_(nullptr)
     {}
 
-    CFGLoopEntry(CFGBlock* block, bool canOsr, size_t stackPhiCount, jsbytecode* loopStopPc)
+    CFGLoopEntry(CFGBlock* block, bool canOsr, bool isForIn, size_t stackPhiCount,
+                 jsbytecode* loopStopPc)
       : CFGUnaryControlInstruction(block),
         canOsr_(canOsr),
+        isForIn_(isForIn),
         stackPhiCount_(stackPhiCount),
         loopStopPc_(loopStopPc)
     {}
@@ -580,8 +580,8 @@ class CFGLoopEntry : public CFGUnaryControlInstruction
     static CFGLoopEntry* CopyWithNewTargets(TempAllocator& alloc, CFGLoopEntry* old,
                                             CFGBlock* loopEntry)
     {
-        return new(alloc) CFGLoopEntry(loopEntry, old->canOsr(), old->stackPhiCount(),
-                                       old->loopStopPc());
+        return new(alloc) CFGLoopEntry(loopEntry, old->canOsr(), old->isForIn(),
+                                       old->stackPhiCount(), old->loopStopPc());
     }
 
     void setCanOsr() {
@@ -590,6 +590,13 @@ class CFGLoopEntry : public CFGUnaryControlInstruction
 
     bool canOsr() const {
         return canOsr_;
+    }
+
+    void setIsForIn() {
+        isForIn_ = true;
+    }
+    bool isForIn() const {
+        return isForIn_;
     }
 
     size_t stackPhiCount() const {
@@ -809,13 +816,11 @@ class ControlFlowGenerator
     Vector<ControlFlowInfo, 4, JitAllocPolicy> loops_;
     Vector<ControlFlowInfo, 0, JitAllocPolicy> switches_;
     Vector<ControlFlowInfo, 2, JitAllocPolicy> labels_;
-    BytecodeAnalysis analysis_;
     bool aborted_;
+    bool checkedTryFinally_;
 
   public:
     ControlFlowGenerator(TempAllocator& alloc, JSScript* script);
-
-    MOZ_MUST_USE bool init();
 
     MOZ_MUST_USE bool traverseBytecode();
     MOZ_MUST_USE bool addBlock(CFGBlock* block);

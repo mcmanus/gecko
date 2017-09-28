@@ -71,10 +71,18 @@
   ${MigrateStartMenuShortcut}
 
   ; Update lastwritetime of the Start Menu shortcut to clear the tile cache.
+  ; Do this for both shell contexts in case the user has shortcuts in multiple
+  ; locations, then restore the previous context at the end.
   ${If} ${AtLeastWin8}
-  ${AndIf} ${FileExists} "$SMPROGRAMS\${BrandFullName}.lnk"
-    FileOpen $0 "$SMPROGRAMS\${BrandFullName}.lnk" a
-    FileClose $0
+    SetShellVarContext all
+    ${TouchStartMenuShortcut}
+    SetShellVarContext current
+    ${TouchStartMenuShortcut}
+    ${If} $TmpVal == "HKLM"
+      SetShellVarContext all
+    ${ElseIf} $TmpVal == "HKCU"
+      SetShellVarContext current
+    ${EndIf}
   ${EndIf}
 
   ; Adds a pinned Task Bar shortcut (see MigrateTaskBarShortcut for details).
@@ -83,6 +91,7 @@
   ${UpdateShortcutBranding}
 
   ${RemoveDeprecatedKeys}
+  ${Set32to64DidMigrateReg}
 
   ${SetAppKeys}
   ${FixClassKeys}
@@ -104,13 +113,11 @@
 
   RmDir /r /REBOOTOK "$INSTDIR\${TO_BE_DELETED}"
 
-  ; Register AccessibleHandler.dll with COM (this writes to HKLM)
+  ; Register AccessibleHandler.dll with COM (this requires write access to HKLM)
   ${RegisterAccessibleHandler}
 
-!ifndef HAVE_64BIT_BUILD
-  ; Clean up any IAccessible registry corruption
-  ${FixCorruptOleAccRegistration}
-!endif
+  ; Register AccessibleMarshal.dll with COM (this requires write access to HKLM)
+  ${RegisterAccessibleMarshal}
 
 !ifdef MOZ_MAINTENANCE_SERVICE
   Call IsUserAdmin
@@ -156,6 +163,22 @@
 !endif
 !macroend
 !define PostUpdate "!insertmacro PostUpdate"
+
+; Update the last modified time on the Start Menu shortcut, so that its icon
+; gets refreshed. Should be called on Win8+ after MigrateStartMenuShortcut.
+!macro TouchStartMenuShortcut
+  ${If} ${FileExists} "$SMPROGRAMS\${BrandFullName}.lnk"
+    FileOpen $0 "$SMPROGRAMS\${BrandFullName}.lnk" a
+    ${IfNot} ${Errors}
+      System::Call '*(i, i) p .r1'
+      System::Call 'kernel32::GetSystemTimeAsFileTime(p r1)'
+      System::Call 'kernel32::SetFileTime(p r0, i 0, i 0, p r1) i .r2'
+      System::Free $1
+      FileClose $0
+    ${EndIf}
+  ${EndIf}
+!macroend
+!define TouchStartMenuShortcut "!insertmacro TouchStartMenuShortcut"
 
 !macro SetAsDefaultAppGlobal
   ${RemoveDeprecatedKeys} ; Does not use SHCTX
@@ -598,6 +621,73 @@
 !macroend
 !define SetStartMenuInternet "!insertmacro SetStartMenuInternet"
 
+; Add registry keys to support the Firefox 32 bit to 64 bit migration. These
+; registry entries are not removed on uninstall at this time. After the Firefox
+; 32 bit to 64 bit migration effort is completed these registry entries can be
+; removed during install, post update, and uninstall.
+!macro Set32to64DidMigrateReg
+  ${GetLongPath} "$INSTDIR" $1
+  ; These registry keys are always in the 32 bit hive since they are never
+  ; needed by a Firefox 64 bit install unless it has been updated from Firefox
+  ; 32 bit.
+  SetRegView 32
+
+!ifdef HAVE_64BIT_BUILD
+
+  ; Running Firefox 64 bit on Windows 64 bit
+  ClearErrors
+  ReadRegDWORD $2 HKLM "Software\Mozilla\${AppName}\32to64DidMigrate" "$1"
+  ; If there were no errors then the system was updated from Firefox 32 bit to
+  ; Firefox 64 bit and if the value is already 1 then the registry value has
+  ; already been updated in the HKLM registry.
+  ${IfNot} ${Errors}
+  ${AndIf} $2 != 1
+    ClearErrors
+    WriteRegDWORD HKLM "Software\Mozilla\${AppName}\32to64DidMigrate" "$1" 1
+    ${If} ${Errors}
+      ; There was an error writing to HKLM so just write it to HKCU
+      WriteRegDWORD HKCU "Software\Mozilla\${AppName}\32to64DidMigrate" "$1" 1
+    ${Else}
+      ; This will delete the value from HKCU if it exists
+      DeleteRegValue HKCU "Software\Mozilla\${AppName}\32to64DidMigrate" "$1"
+    ${EndIf}
+  ${EndIf}
+
+  ClearErrors
+  ReadRegDWORD $2 HKCU "Software\Mozilla\${AppName}\32to64DidMigrate" "$1"
+  ; If there were no errors then the system was updated from Firefox 32 bit to
+  ; Firefox 64 bit and if the value is already 1 then the registry value has
+  ; already been updated in the HKCU registry.
+  ${IfNot} ${Errors}
+  ${AndIf} $2 != 1
+    WriteRegDWORD HKCU "Software\Mozilla\${AppName}\32to64DidMigrate" "$1" 1
+  ${EndIf}
+
+!else
+
+  ; Running Firefox 32 bit
+  ${If} ${RunningX64}
+    ; Running Firefox 32 bit on a Windows 64 bit system
+    ClearErrors
+    ReadRegDWORD $2 HKLM "Software\Mozilla\${AppName}\32to64DidMigrate" "$1"
+    ; If there were errors the value doesn't exist yet.
+    ${If} ${Errors}
+      ClearErrors
+      WriteRegDWORD HKLM "Software\Mozilla\${AppName}\32to64DidMigrate" "$1" 0
+      ; If there were errors write the value in HKCU.
+      ${If} ${Errors}
+        WriteRegDWORD HKCU "Software\Mozilla\${AppName}\32to64DidMigrate" "$1" 0
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+!endif
+
+  ClearErrors
+  SetRegView lastused
+!macroend
+!define Set32to64DidMigrateReg "!insertmacro Set32to64DidMigrateReg"
+
 ; The IconHandler reference for FirefoxHTML can end up in an inconsistent state
 ; due to changes not being detected by the IconHandler for side by side
 ; installs (see bug 268512). The symptoms can be either an incorrect icon or no
@@ -927,48 +1017,10 @@
 !macroend
 !define RegisterAccessibleHandler "!insertmacro RegisterAccessibleHandler"
 
-!ifndef HAVE_64BIT_BUILD
-!define IID_IAccessible "{618736E0-3C3D-11CF-810C-00AA00389B71}"
-!define CLSID_UniversalMarshaler "{00020404-0000-0000-C000-000000000046}"
-!define OleAccTypeLib "{1EA4DBF0-3C3B-11CF-810C-00AA00389B71}"
-!define OleAccTypeLibVersion "1.1"
-Function FixCorruptOleAccRegistration
-  Push $0
-
-  ; Read IAccessible's ProxyStubClsid32. If it is not CLSID_UniversalMarshaler
-  ; then we must be running Windows 10 Creators Update which does not use a
-  ; type library.
-  ReadRegStr $0 HKCR "Interface\${IID_IAccessible}\ProxyStubClsid32" ""
-  ${Unless} "$0" == "${CLSID_UniversalMarshaler}"
-    Pop $0
-    Return
-  ${EndIf}
-
-  Push $1
-
-  ; IAccessible is using the universal marshler, therefore we expect a valid
-  ; TypeLib key to exist
-  ClearErrors
-  ReadRegStr $0 HKCR "Interface\${IID_IAccessible}\TypeLib" ""
-  ReadRegStr $1 HKCR "Interface\${IID_IAccessible}\TypeLib" "Version"
-  ReadRegStr $0 HKCR "TypeLib\$0\$1\0\win32" ""
-  Pop $1
-  ${IfNot} ${Errors}
-  ${AndIf} ${FileExists} "$0"
-    Pop $0
-    Return
-  ${EndIf}
-
-  Pop $0
-
-  ; Some third-party code has previously overridden system typelibs
-  ; with their own but did not clean itself up during uninstall.
-  ; Revert to the system typelib.
-  WriteRegStr HKCR "Interface\${IID_IAccessible}\TypeLib" "" "${OleAccTypeLib}"
-  WriteRegStr HKCR "Interface\${IID_IAccessible}\TypeLib" "Version" "${OleAccTypeLibVersion}"
-FunctionEnd
-!define FixCorruptOleAccRegistration "Call FixCorruptOleAccRegistration"
-!endif
+!macro RegisterAccessibleMarshal
+  ${RegisterDLL} "$INSTDIR\AccessibleMarshal.dll"
+!macroend
+!define RegisterAccessibleMarshal "!insertmacro RegisterAccessibleMarshal"
 
 ; Removes various registry entries for reasons noted below (does not use SHCTX).
 !macro RemoveDeprecatedKeys
@@ -1572,11 +1624,11 @@ Function SetAsDefaultAppUser
     ${StrFilter} "${FileMainEXE}" "+" "" "" $R9
     ClearErrors
     ReadRegStr $0 HKCU "Software\Clients\StartMenuInternet\$R9\DefaultIcon" ""
-  ${EndIf}
-  ${If} ${Errors}
-  ${OrIf} ${AtMostWin2008R2}
-    ClearErrors
-    ReadRegStr $0 HKLM "Software\Clients\StartMenuInternet\$R9\DefaultIcon" ""
+    ${If} ${Errors}
+    ${OrIf} ${AtMostWin2008R2}
+      ClearErrors
+      ReadRegStr $0 HKLM "Software\Clients\StartMenuInternet\$R9\DefaultIcon" ""
+    ${EndIf}
   ${EndIf}
 
   ${Unless} ${Errors}

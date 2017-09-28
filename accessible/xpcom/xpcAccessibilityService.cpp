@@ -79,16 +79,19 @@ xpcAccessibilityService::Release(void)
   if (count == 1 && !mShutdownTimer) {
     mShutdownTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
     if (mShutdownTimer) {
-      mShutdownTimer->InitWithFuncCallback(ShutdownCallback, this, 100,
-                                           nsITimer::TYPE_ONE_SHOT);
+      mShutdownTimer->InitWithNamedFuncCallback(
+        ShutdownCallback,
+        this,
+        100,
+        nsITimer::TYPE_ONE_SHOT,
+        "xpcAccessibilityService::Release");
     }
   }
 
   return count;
 }
 
-NS_IMPL_QUERY_INTERFACE(xpcAccessibilityService, nsIAccessibilityService,
-                                                 nsIAccessibleRetrieval)
+NS_IMPL_QUERY_INTERFACE(xpcAccessibilityService, nsIAccessibilityService)
 
 NS_IMETHODIMP
 xpcAccessibilityService::GetApplicationAccessible(nsIAccessible** aAccessibleApplication)

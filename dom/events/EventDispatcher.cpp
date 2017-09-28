@@ -25,7 +25,6 @@
 #include "mozilla/dom/CloseEvent.h"
 #include "mozilla/dom/CustomEvent.h"
 #include "mozilla/dom/DeviceOrientationEvent.h"
-#include "mozilla/dom/ErrorEvent.h"
 #include "mozilla/dom/EventTarget.h"
 #include "mozilla/dom/FocusEvent.h"
 #include "mozilla/dom/HashChangeEvent.h"
@@ -36,7 +35,6 @@
 #include "mozilla/dom/NotifyPaintEvent.h"
 #include "mozilla/dom/PageTransitionEvent.h"
 #include "mozilla/dom/PointerEvent.h"
-#include "mozilla/dom/PopStateEvent.h"
 #include "mozilla/dom/RootedDictionary.h"
 #include "mozilla/dom/ScrollAreaEvent.h"
 #include "mozilla/dom/SimpleGestureEvent.h"
@@ -257,7 +255,7 @@ public:
   {
     return mFlags.mMayHaveManager;
   }
-  
+
   EventTarget* CurrentTarget()
   {
     return mTarget;
@@ -590,8 +588,7 @@ EventDispatcher::Dispatch(nsISupports* aTarget,
                           EventDispatchingCallback* aCallback,
                           nsTArray<EventTarget*>* aTargets)
 {
-  PROFILER_LABEL("EventDispatcher", "Dispatch",
-    js::ProfileEntry::Category::EVENTS);
+  AUTO_PROFILER_LABEL("EventDispatcher::Dispatch", EVENTS);
 
   NS_ASSERTION(aEvent, "Trying to dispatch without WidgetEvent!");
   NS_ENSURE_TRUE(!aEvent->mFlags.mIsBeingDispatched,
@@ -1063,18 +1060,6 @@ EventDispatcher::CreateEvent(EventTarget* aOwner,
     LOG_EVENT_CREATION(SCROLLAREAEVENT);
     return NS_NewDOMScrollAreaEvent(aOwner, aPresContext, nullptr);
   }
-  // XXXkhuey Chrome supports popstateevent here, even though it provides no
-  // initPopStateEvent method.  This is nuts ... but copying it is unlikely to
-  // break the web.
-  if (aEventType.LowerCaseEqualsLiteral("popstateevent")) {
-    LOG_EVENT_CREATION(POPSTATEEVENT);
-    AutoJSContext cx;
-    RootedDictionary<PopStateEventInit> init(cx);
-    RefPtr<Event> event =
-      PopStateEvent::Constructor(aOwner, EmptyString(), init);
-    event->MarkUninitialized();
-    return event.forget();
-  }
   if (aEventType.LowerCaseEqualsLiteral("touchevent") &&
       TouchEvent::PrefEnabled(nsContentUtils::GetDocShellForEventTarget(aOwner))) {
     LOG_EVENT_CREATION(TOUCHEVENT);
@@ -1099,11 +1084,8 @@ EventDispatcher::CreateEvent(EventTarget* aOwner,
     event->MarkUninitialized();
     return event.forget();
   }
-  if (aEventType.LowerCaseEqualsLiteral("errorevent")) {
-    LOG_EVENT_CREATION(ERROREVENT);
-    RootedDictionary<ErrorEventInit> init(RootingCx());
-    RefPtr<Event> event =
-      ErrorEvent::Constructor(aOwner, EmptyString(), init);
+  if (aEventType.LowerCaseEqualsLiteral("focusevent")) {
+    RefPtr<Event> event = NS_NewDOMFocusEvent(aOwner, aPresContext, nullptr);
     event->MarkUninitialized();
     return event.forget();
   }

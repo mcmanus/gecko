@@ -10,16 +10,14 @@
 namespace mozilla
 {
 
-MockMediaResource::MockMediaResource(const char* aFileName,
-                                     const MediaContainerType& aContainerType)
+MockMediaResource::MockMediaResource(const char* aFileName)
   : mFileHandle(nullptr)
   , mFileName(aFileName)
-  , mContainerType(aContainerType)
 {
 }
 
 nsresult
-MockMediaResource::Open(nsIStreamListener** aStreamListener)
+MockMediaResource::Open()
 {
   mFileHandle = fopen(mFileName, "rb");
   if (mFileHandle == nullptr) {

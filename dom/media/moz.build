@@ -53,9 +53,6 @@ DIRS += [
     'webvtt',
 ]
 
-if CONFIG['MOZ_ANDROID_OMX']:
-    DIRS += ['android']
-
 if CONFIG['MOZ_ANDROID_HLS_SUPPORT']:
     DIRS += ['hls']
 
@@ -80,6 +77,7 @@ if CONFIG['MOZ_WEBRTC']:
     WEBRTC_SIGNALLING_TEST_MANIFESTS += ['tests/mochitest/steeplechase_long/steeplechase_long.ini']
 
 XPIDL_SOURCES += [
+    'nsIAudioDeviceInfo.idl',
     'nsIDOMNavigatorUserMedia.idl',
     'nsIMediaManager.idl',
 ]
@@ -87,7 +85,6 @@ XPIDL_SOURCES += [
 XPIDL_MODULE = 'dom_media'
 
 EXPORTS += [
-    'AbstractMediaDecoder.h',
     'ADTSDecoder.h',
     'ADTSDemuxer.h',
     'AudioBufferUtils.h',
@@ -117,7 +114,6 @@ EXPORTS += [
     'MediaDataDemuxer.h',
     'MediaDecoder.h',
     'MediaDecoderOwner.h',
-    'MediaDecoderReader.h',
     'MediaDecoderStateMachine.h',
     'MediaEventSource.h',
     'MediaFormatReader.h',
@@ -151,6 +147,7 @@ EXPORTS += [
     'StreamTracks.h',
     'ThreadPoolCOMListener.h',
     'TimeUnits.h',
+    'TrackID.h',
     'TrackUnionStream.h',
     'VideoFrameContainer.h',
     'VideoLimits.h',
@@ -178,6 +175,7 @@ IPDL_SOURCES += [
 ]
 
 EXPORTS.mozilla.dom += [
+    'AudioDeviceInfo.h',
     'AudioStreamTrack.h',
     'AudioTrack.h',
     'AudioTrackList.h',
@@ -205,6 +203,7 @@ UNIFIED_SOURCES += [
     'AudioChannelFormat.cpp',
     'AudioCompactor.cpp',
     'AudioConverter.cpp',
+    'AudioDeviceInfo.cpp',
     'AudioSegment.cpp',
     'AudioStream.cpp',
     'AudioStreamTrack.cpp',
@@ -213,11 +212,14 @@ UNIFIED_SOURCES += [
     'Benchmark.cpp',
     'CanvasCaptureMediaStream.cpp',
     'ChannelMediaDecoder.cpp',
+    'ChannelMediaResource.cpp',
+    'CloneableWithRangeMediaResource.cpp',
     'CubebUtils.cpp',
     'DecoderDoctorDiagnostics.cpp',
     'DOMMediaStream.cpp',
     'EncodedBufferCache.cpp',
     'FileBlockCache.cpp',
+    'FileMediaResource.cpp',
     'GetUserMediaRequest.cpp',
     'GraphDriver.cpp',
     'Latency.cpp',
@@ -225,8 +227,6 @@ UNIFIED_SOURCES += [
     'MediaContainerType.cpp',
     'MediaData.cpp',
     'MediaDecoder.cpp',
-    'MediaDecoderReader.cpp',
-    'MediaDecoderReaderWrapper.cpp',
     'MediaDecoderStateMachine.cpp',
     'MediaDeviceInfo.cpp',
     'MediaDevices.cpp',
@@ -248,6 +248,7 @@ UNIFIED_SOURCES += [
     'MediaTrackList.cpp',
     'MemoryBlockCache.cpp',
     'QueueObject.cpp',
+    'ReaderProxy.cpp',
     'SeekJob.cpp',
     'StreamTracks.cpp',
     'TextTrack.cpp',
@@ -268,7 +269,15 @@ UNIFIED_SOURCES += [
 ]
 
 if CONFIG['OS_TARGET'] == 'WINNT':
-  SOURCES += [ 'ThreadPoolCOMListener.cpp' ]
+  EXPORTS.mozilla.audio += [
+      'AudioNotificationReceiver.h',
+      'AudioNotificationSender.h',
+  ]
+  SOURCES += [
+      'AudioNotificationReceiver.cpp',
+      'AudioNotificationSender.cpp',
+      'ThreadPoolCOMListener.cpp',
+  ]
 
 # DecoderTraits.cpp needs to be built separately because of Mac OS X headers.
 SOURCES += [
@@ -314,9 +323,6 @@ else:
 
 if CONFIG['ANDROID_VERSION'] > '15':
     DEFINES['MOZ_OMX_WEBM_DECODER'] = True
-
-if CONFIG['MOZ_GONK_MEDIACODEC']:
-    DEFINES['MOZ_GONK_MEDIACODEC'] = True
 
 if CONFIG['MOZ_ANDROID_HLS_SUPPORT']:
     DEFINES['MOZ_ANDROID_HLS_SUPPORT'] = True

@@ -65,8 +65,8 @@ public:
    * Collect the gradient parameters
    */
   void BuildWebRenderParameters(float aOpacity,
-                                WrGradientExtendMode& aMode,
-                                nsTArray<WrGradientStop>& aStops,
+                                wr::ExtendMode& aMode,
+                                nsTArray<wr::GradientStop>& aStops,
                                 LayoutDevicePoint& aLineStart,
                                 LayoutDevicePoint& aLineEnd,
                                 LayoutDeviceSize& aGradientRadius);
@@ -87,6 +87,7 @@ public:
                                   const nsRect& aFill,
                                   const nsSize& aRepeatSize,
                                   const mozilla::CSSIntRect& aSrc,
+                                  bool aIsBackfaceVisible,
                                   float aOpacity = 1.0);
 
 private:

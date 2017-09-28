@@ -4,26 +4,24 @@
 
 "use strict";
 
-const {Cc, Ci, Cu} = require("chrome");
-
 var WebConsoleUtils = require("devtools/client/webconsole/utils").Utils;
-var { extend } = require("sdk/core/heritage");
+const {extend} = require("devtools/shared/extend");
 var {TargetFactory} = require("devtools/client/framework/target");
+var {gDevToolsBrowser} = require("devtools/client/framework/devtools-browser");
 var {Tools} = require("devtools/client/definitions");
 const { Task } = require("devtools/shared/task");
 var promise = require("promise");
+const defer = require("devtools/shared/defer");
 var Services = require("Services");
-
 loader.lazyRequireGetter(this, "Telemetry", "devtools/client/shared/telemetry");
 loader.lazyRequireGetter(this, "WebConsoleFrame", "devtools/client/webconsole/webconsole", true);
+loader.lazyRequireGetter(this, "NewWebConsoleFrame", "devtools/client/webconsole/new-webconsole", true);
 loader.lazyRequireGetter(this, "gDevTools", "devtools/client/framework/devtools", true);
 loader.lazyRequireGetter(this, "DebuggerServer", "devtools/server/main", true);
 loader.lazyRequireGetter(this, "DebuggerClient", "devtools/shared/client/main", true);
 loader.lazyRequireGetter(this, "showDoorhanger", "devtools/client/shared/doorhanger", true);
 loader.lazyRequireGetter(this, "viewSource", "devtools/client/shared/view-source");
-
 const l10n = require("devtools/client/webconsole/webconsole-l10n");
-
 const BROWSER_CONSOLE_WINDOW_FEATURES = "chrome,titlebar,toolbar,centerscreen,resizable,dialog=no";
 
 // The preference prefix for all of the Browser Console filters.
@@ -49,6 +47,14 @@ HUD_SERVICE.prototype =
    * @type Map
    */
   consoles: null,
+
+  _browerConsoleSessionState: false,
+  storeBrowserConsoleSessionState() {
+    this._browerConsoleSessionState = !!this.getBrowserConsole();
+  },
+  getBrowserConsoleSessionState() {
+    return this._browerConsoleSessionState;
+  },
 
   /**
    * Assign a function to this property to listen for every request that
@@ -176,11 +182,11 @@ HUD_SERVICE.prototype =
       return this._browserConsoleDefer.promise;
     }
 
-    this._browserConsoleDefer = promise.defer();
+    this._browserConsoleDefer = defer();
 
     function connect()
     {
-      let deferred = promise.defer();
+      let deferred = defer();
 
       if (!DebuggerServer.initialized) {
         DebuggerServer.init();
@@ -192,9 +198,8 @@ HUD_SERVICE.prototype =
       return client.connect()
         .then(() => client.getProcess())
         .then(aResponse => {
-          // Set chrome:false in order to attach to the target
-          // (i.e. send an `attach` request to the chrome actor)
-          return { form: aResponse.form, client: client, chrome: false };
+          // Use a TabActor in order to ensure calling `attach` to the ChromeActor
+          return { form: aResponse.form, client, chrome: true, isTabActor: true };
         });
     }
 
@@ -203,26 +208,21 @@ HUD_SERVICE.prototype =
     {
       return TargetFactory.forRemoteTab(aConnection);
     }
-
     function openWindow(aTarget)
     {
       target = aTarget;
-
-      let deferred = promise.defer();
-
-      let win = Services.ww.openWindow(null, Tools.webConsole.url, "_blank",
+      let deferred = defer();
+      // Using the old frontend for now in the browser console.  This can be switched to
+      // Tools.webConsole.url to use whatever is preffed on.
+      let url = Tools.webConsole.oldWebConsoleURL;
+      let win = Services.ww.openWindow(null, url, "_blank",
                                        BROWSER_CONSOLE_WINDOW_FEATURES, null);
       win.addEventListener("DOMContentLoaded", function () {
-        // Set the correct Browser Console title.
-        let root = win.document.documentElement;
-        root.setAttribute("title", root.getAttribute("browserConsoleTitle"));
-
+          win.document.title = l10n.getStr("browserConsole.title");
         deferred.resolve(win);
       }, {once: true});
-
       return deferred.promise;
     }
-
     connect().then(getTarget).then(openWindow).then((aWindow) => {
       return this.openBrowserConsole(target, aWindow, aWindow)
         .then((aBrowserConsole) => {
@@ -286,17 +286,17 @@ function WebConsole(aTarget, aIframeWindow, aChromeWindow)
   this.chromeWindow = aChromeWindow;
   this.hudId = "hud_" + ++gHudId;
   this.target = aTarget;
-
   this.browserWindow = this.chromeWindow.top;
-
   let element = this.browserWindow.document.documentElement;
   if (element.getAttribute("windowtype") != gDevTools.chromeWindowType) {
     this.browserWindow = HUDService.currentContext();
   }
-
-  this.ui = new WebConsoleFrame(this);
+  if (aIframeWindow.location.href === Tools.webConsole.newWebConsoleURL) {
+    this.ui = new NewWebConsoleFrame(this);
+  } else {
+    this.ui = new WebConsoleFrame(this);
+  }
 }
-
 WebConsole.prototype = {
   iframeWindow: null,
   chromeWindow: null,
@@ -398,7 +398,8 @@ WebConsole.prototype = {
   _onClearButton: function WC__onClearButton()
   {
     if (this.target.isLocalTab) {
-      this.browserWindow.DeveloperToolbar.resetErrorsCount(this.target.tab);
+      gDevToolsBrowser.getDeveloperToolbar(this.browserWindow)
+        .resetErrorsCount(this.target.tab);
     }
   },
 
@@ -565,7 +566,7 @@ WebConsole.prototype = {
 
     HUDService.consoles.delete(this.hudId);
 
-    this._destroyer = promise.defer();
+    this._destroyer = defer();
 
     // The document may already be removed
     if (this.chromeUtilsWindow && this.mainPopupSet) {
@@ -644,6 +645,9 @@ BrowserConsole.prototype = extend(WebConsole.prototype, {
       return this._bc_init;
     }
 
+    // Only add the shutdown observer if we've opened a Browser Console window.
+    ShutdownObserver.init();
+
     this.ui._filterPrefsPrefix = BROWSER_CONSOLE_FILTER_PREFS_PREFIX;
 
     let window = this.iframeWindow;
@@ -685,7 +689,7 @@ BrowserConsole.prototype = extend(WebConsole.prototype, {
 
     this._telemetry.toolClosed("browserconsole");
 
-    this._bc_destroyer = promise.defer();
+    this._bc_destroyer = defer();
 
     let chromeWindow = this.chromeWindow;
     this.$destroy().then(() =>
@@ -700,16 +704,32 @@ BrowserConsole.prototype = extend(WebConsole.prototype, {
 });
 
 const HUDService = new HUD_SERVICE();
+exports.HUDService = HUDService;
 
-(() => {
-  let methods = ["openWebConsole", "openBrowserConsole",
-                 "toggleBrowserConsole", "getOpenWebConsole",
-                 "getBrowserConsole", "getHudByWindow",
-                 "openBrowserConsoleOrFocus", "getHudReferenceById"];
-  for (let method of methods) {
-    exports[method] = HUDService[method].bind(HUDService);
+/**
+ * The ShutdownObserver listens for app shutdown and saves the current state
+ * of the Browser Console for session restore.
+ */
+var ShutdownObserver = {
+  _initialized: false,
+  init() {
+    if (this._initialized) {
+      return;
+    }
+
+    Services.obs.addObserver(this, "quit-application-granted");
+
+    this._initialized = true;
+  },
+
+  observe(message, topic) {
+    if (topic == "quit-application-granted") {
+      HUDService.storeBrowserConsoleSessionState();
+      this.uninit();
+    }
+  },
+
+  uninit() {
+    Services.obs.removeObserver(this, "quit-application-granted");
   }
-
-  exports.consoles = HUDService.consoles;
-  exports.lastFinishedRequest = HUDService.lastFinishedRequest;
-})();
+};

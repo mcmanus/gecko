@@ -256,7 +256,7 @@ function test() {
 
       let requestItem = getSortedRequests(store.getState()).get(0);
 
-      is(requestItem.transferredSize, "12",
+      is(requestItem.transferredSize, "342",
         "The transferredSize data has an incorrect value.");
       is(requestItem.contentSize, "12",
         "The contentSize data has an incorrect value.");
@@ -287,7 +287,7 @@ function test() {
         {
           type: "plain",
           fullMimeType: "text/plain; charset=utf-8",
-          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 12),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 342),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 12),
         }
       );
@@ -327,6 +327,8 @@ function test() {
         "The eventTimings data has an incorrect |timings.blocked| property.");
       is(typeof requestItem.eventTimings.timings.dns, "number",
         "The eventTimings data has an incorrect |timings.dns| property.");
+      is(typeof requestItem.eventTimings.timings.ssl, "number",
+        "The eventTimings data has an incorrect |timings.ssl| property.");
       is(typeof requestItem.eventTimings.timings.connect, "number",
         "The eventTimings data has an incorrect |timings.connect| property.");
       is(typeof requestItem.eventTimings.timings.send, "number",

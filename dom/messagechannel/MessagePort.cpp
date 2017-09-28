@@ -53,7 +53,8 @@ class PostMessageRunnable final : public CancelableRunnable
 
 public:
   PostMessageRunnable(MessagePort* aPort, SharedMessagePortMessage* aData)
-    : mPort(aPort)
+    : CancelableRunnable("dom::PostMessageRunnable")
+    , mPort(aPort)
     , mData(aData)
   {
     MOZ_ASSERT(aPort);
@@ -136,6 +137,7 @@ private:
     }
 
     if (NS_WARN_IF(rv.Failed())) {
+      mPort->DispatchError();
       return rv.StealNSResult();
     }
 
@@ -147,6 +149,7 @@ private:
 
     Sequence<OwningNonNull<MessagePort>> ports;
     if (!mData->TakeTransferredPortsAsSequence(ports)) {
+      mPort->DispatchError();
       return NS_ERROR_OUT_OF_MEMORY;
     }
 
@@ -192,7 +195,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(MessagePort,
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mUnshippedEntangledPort);
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(MessagePort)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(MessagePort)
   NS_INTERFACE_MAP_ENTRY(nsIIPCBackgroundChildCreateCallback)
   NS_INTERFACE_MAP_ENTRY(nsIObserver)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
@@ -402,13 +405,13 @@ MessagePort::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
   // Here we want to check if the transerable object list contains
   // this port.
   for (uint32_t i = 0; i < aTransferable.Length(); ++i) {
-    JSObject* object = aTransferable[i];
+    JS::Rooted<JSObject*> object(aCx, aTransferable[i]);
     if (!object) {
       continue;
     }
 
     MessagePort* port = nullptr;
-    nsresult rv = UNWRAP_OBJECT(MessagePort, object, port);
+    nsresult rv = UNWRAP_OBJECT(MessagePort, &object, port);
     if (NS_SUCCEEDED(rv) && port == this) {
       aRv.Throw(NS_ERROR_DOM_DATA_CLONE_ERR);
       return;
@@ -561,7 +564,7 @@ MessagePort::Dispatch()
 
   nsCOMPtr<nsIGlobalObject> global = GetOwnerGlobal();
   if (NS_IsMainThread() && global) {
-    MOZ_ALWAYS_SUCCEEDS(global->Dispatch("MessagePortMessage", TaskCategory::Other, do_AddRef(mPostMessageRunnable)));
+    MOZ_ALWAYS_SUCCEEDS(global->Dispatch(TaskCategory::Other, do_AddRef(mPostMessageRunnable)));
     return;
   }
 
@@ -693,7 +696,7 @@ MessagePort::Entangled(nsTArray<ClonedMessageData>& aMessages)
   FallibleTArray<RefPtr<SharedMessagePortMessage>> data;
   if (NS_WARN_IF(!SharedMessagePortMessage::FromMessagesToSharedChild(aMessages,
                                                                       data))) {
-    // OOM, we cannot continue.
+    DispatchError();
     return;
   }
 
@@ -747,7 +750,7 @@ MessagePort::MessagesReceived(nsTArray<ClonedMessageData>& aMessages)
   FallibleTArray<RefPtr<SharedMessagePortMessage>> data;
   if (NS_WARN_IF(!SharedMessagePortMessage::FromMessagesToSharedChild(aMessages,
                                                                       data))) {
-    // OOM, We cannot continue.
+    DispatchError();
     return;
   }
 
@@ -1001,6 +1004,29 @@ MessagePort::RemoveDocFromBFCache()
 MessagePort::ForceClose(const MessagePortIdentifier& aIdentifier)
 {
   ForceCloseHelper::ForceClose(aIdentifier);
+}
+
+void
+MessagePort::DispatchError()
+{
+  nsCOMPtr<nsIGlobalObject> globalObject = GetParentObject();
+
+  AutoJSAPI jsapi;
+  if (!globalObject || !jsapi.Init(globalObject)) {
+    NS_WARNING("Failed to initialize AutoJSAPI object.");
+    return;
+  }
+
+  RootedDictionary<MessageEventInit> init(jsapi.cx());
+  init.mBubbles = false;
+  init.mCancelable = false;
+
+  RefPtr<Event> event =
+    MessageEvent::Constructor(this, NS_LITERAL_STRING("messageerror"), init);
+  event->SetTrusted(true);
+
+  bool dummy;
+  DispatchEvent(event, &dummy);
 }
 
 } // namespace dom

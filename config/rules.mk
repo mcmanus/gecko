@@ -68,7 +68,6 @@ ifdef COMPILE_ENVIRONMENT
 # through TestHarness.h, by modifying the list of includes and the libs against
 # which stuff links.
 SIMPLE_PROGRAMS += $(CPP_UNIT_TESTS)
-INCLUDES += -I$(ABS_DIST)/include/testing
 
 ifndef MOZ_PROFILE_GENERATE
 CPP_UNIT_TESTS_FILES = $(CPP_UNIT_TESTS)
@@ -130,7 +129,6 @@ HOST_LIBRARY		:= $(LIB_PREFIX)$(HOST_LIBRARY_NAME).$(LIB_SUFFIX)
 endif
 endif
 
-ifdef LIBRARY
 ifdef FORCE_SHARED_LIB
 ifdef MKSHLIB
 
@@ -142,7 +140,6 @@ EMBED_MANIFEST_AT=2
 
 endif # MKSHLIB
 endif # FORCE_SHARED_LIB
-endif # LIBRARY
 
 ifeq ($(OS_ARCH),WINNT)
 ifndef GNU_CC
@@ -568,6 +565,10 @@ alltags:
 	$(RM) TAGS
 	find $(topsrcdir) -name dist -prune -o \( -name '*.[hc]' -o -name '*.cp' -o -name '*.cpp' -o -name '*.idl' \) -print | $(TAG_PROGRAM)
 
+define EXPAND_CC_OR_CXX
+$(if $(PROG_IS_C_ONLY_$(1)),$(EXPAND_CC),$(EXPAND_CCC))
+endef
+
 #
 # PROGRAM = Foo
 # creates OBJS, links with LIBS to create Foo
@@ -597,7 +598,7 @@ ifdef MOZ_PROFILE_GENERATE
 	touch -t `date +%Y%m%d%H%M.%S -d 'now+5seconds'` pgo.relink
 endif
 else # !WINNT || GNU_CC
-	$(EXPAND_CCC) -o $@ $(CXXFLAGS) $(PROGOBJS) $(RESFILE) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(WRAP_LDFLAGS) $(STATIC_LIBS) $(MOZ_PROGRAM_LDFLAGS) $(SHARED_LIBS) $(EXTRA_LIBS) $(OS_LIBS) $(BIN_FLAGS) $(EXE_DEF_FILE)
+	$(call EXPAND_CC_OR_CXX,$@) -o $@ $(CXXFLAGS) $(PROGOBJS) $(RESFILE) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(WRAP_LDFLAGS) $(STATIC_LIBS) $(MOZ_PROGRAM_LDFLAGS) $(SHARED_LIBS) $(EXTRA_LIBS) $(OS_LIBS) $(BIN_FLAGS) $(EXE_DEF_FILE)
 	$(call CHECK_BINARY,$@)
 endif # WINNT && !GNU_CC
 
@@ -656,7 +657,7 @@ ifdef MSMANIFEST_TOOL
 	fi
 endif	# MSVC with manifest tool
 else
-	$(EXPAND_CCC) $(CXXFLAGS) -o $@ $< $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(WRAP_LDFLAGS) $(STATIC_LIBS) $(MOZ_PROGRAM_LDFLAGS) $(SHARED_LIBS) $(EXTRA_LIBS) $(OS_LIBS) $(BIN_FLAGS)
+	$(call EXPAND_CC_OR_CXX,$@) $(CXXFLAGS) -o $@ $< $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(WRAP_LDFLAGS) $(STATIC_LIBS) $(MOZ_PROGRAM_LDFLAGS) $(SHARED_LIBS) $(EXTRA_LIBS) $(OS_LIBS) $(BIN_FLAGS)
 	$(call CHECK_BINARY,$@)
 endif # WINNT && !GNU_CC
 
@@ -864,6 +865,16 @@ cargo_build_flags += --color=always
 endif
 endif
 
+# These flags are passed via `cargo rustc` and only apply to the final rustc
+# invocation (i.e., only the top-level crate, not its dependencies).
+cargo_rustc_flags = $(CARGO_RUSTCFLAGS)
+ifndef DEVELOPER_OPTIONS
+ifndef MOZ_DEBUG_RUST
+# Enable link-time optimization for release builds.
+cargo_rustc_flags += -C lto
+endif
+endif
+
 # Cargo currently supports only two interesting profiles for building:
 # development and release.  Those map (roughly) to --enable-debug and
 # --disable-debug in Gecko, respectively, but there's another axis that we'd
@@ -891,7 +902,7 @@ ifdef MOZ_MSVCBITS
 # to use the 64-bit linker for build.rs scripts. This conflict results
 # in a build failure (see bug 1350001). So we clear out the environment
 # variables that are actually relevant to 32- vs 64-bit builds.
-environment_cleaner = PATH='' LIB='' LIBPATH=''
+environment_cleaner = -u VCINSTALLDIR PATH='' LIB='' LIBPATH=''
 # The servo build needs to know where python is, and we're removing the PATH
 # so we tell it explicitly via the PYTHON env var.
 environment_cleaner += PYTHON='$(shell which $(PYTHON))'
@@ -908,6 +919,30 @@ ifdef MOZ_USING_SCCACHE
 sccache_wrap := RUSTC_WRAPPER='$(CCACHE)'
 endif
 
+# XXX hack to work around dsymutil failing on cross-OSX builds (bug 1380381)
+ifeq ($(HOST_OS_ARCH)-$(OS_ARCH),Linux-Darwin)
+default_rustflags += -C debuginfo=1
+else
+default_rustflags += -C debuginfo=2
+endif
+
+# We use the + prefix to pass down the jobserver fds to cargo, but we
+# don't use the prefix when make -n is used, so that cargo doesn't run
+# in that case)
+define RUN_CARGO
+$(if $(findstring n,$(filter-out --%, $(MAKEFLAGS))),,+)env $(environment_cleaner) $(rust_unlock_unstable) $(rustflags_override) $(sccache_wrap) \
+	CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) \
+	RUSTC=$(RUSTC) \
+	MOZ_SRC=$(topsrcdir) \
+	MOZ_DIST=$(ABS_DIST) \
+	LIBCLANG_PATH="$(MOZ_LIBCLANG_PATH)" \
+	CLANG_PATH="$(MOZ_CLANG_PATH)" \
+	PKG_CONFIG_ALLOW_CROSS=1 \
+	RUST_BACKTRACE=full \
+	MOZ_TOPOBJDIR=$(topobjdir) \
+	$(2) \
+	$(CARGO) $(1) $(cargo_build_flags)
+endef
 
 # This function is intended to be called by:
 #
@@ -917,18 +952,11 @@ endif
 #
 #   $(call CARGO_BUILD)
 define CARGO_BUILD
-env $(environment_cleaner) $(rust_unlock_unstable) $(rustflags_override) $(sccache_wrap) \
-	CARGO_TARGET_DIR=$(CARGO_TARGET_DIR) \
-	RUSTC=$(RUSTC) \
-	MOZ_SRC=$(topsrcdir) \
-	MOZ_DIST=$(ABS_DIST) \
-	LIBCLANG_PATH="$(MOZ_LIBCLANG_PATH)" \
-	CLANG_PATH="$(MOZ_CLANG_PATH)" \
-	PKG_CONFIG_ALLOW_CROSS=1 \
-	RUST_BACKTRACE=1 \
-	MOZ_TOPOBJDIR=$(topobjdir) \
-	$(1) \
-	$(CARGO) build $(cargo_build_flags)
+$(call RUN_CARGO,rustc,$(1))
+endef
+
+define CARGO_CHECK
+$(call RUN_CARGO,check,$(1))
 endef
 
 cargo_linker_env_var := CARGO_TARGET_$(RUST_TARGET_ENV_NAME)_LINKER
@@ -969,9 +997,15 @@ endif
 # build.
 force-cargo-library-build:
 	$(REPORT_BUILD)
-	$(call CARGO_BUILD,$(target_cargo_env_vars)) --lib $(cargo_target_flag) $(rust_features_flag)
+	$(call CARGO_BUILD,$(target_cargo_env_vars)) --lib $(cargo_target_flag) $(rust_features_flag) -- $(cargo_rustc_flags)
 
 $(RUST_LIBRARY_FILE): force-cargo-library-build
+
+force-cargo-library-check:
+	$(call CARGO_CHECK,$(target_cargo_env_vars)) --lib $(cargo_target_flag) $(rust_features_flag)
+else
+force-cargo-library-check:
+	@true
 endif # RUST_LIBRARY_FILE
 
 ifdef HOST_RUST_LIBRARY_FILE
@@ -985,6 +1019,12 @@ force-cargo-host-library-build:
 	$(call CARGO_BUILD) --lib $(cargo_host_flag) $(host_rust_features_flag)
 
 $(HOST_RUST_LIBRARY_FILE): force-cargo-host-library-build
+
+force-cargo-host-library-check:
+	$(call CARGO_CHECK) --lib $(cargo_host_flag) $(host_rust_features_flag)
+else
+force-cargo-host-library-check:
+	@true
 endif # HOST_RUST_LIBRARY_FILE
 
 ifdef RUST_PROGRAMS
@@ -993,6 +1033,12 @@ force-cargo-program-build:
 	$(call CARGO_BUILD,$(target_cargo_env_vars)) $(addprefix --bin ,$(RUST_CARGO_PROGRAMS)) $(cargo_target_flag)
 
 $(RUST_PROGRAMS): force-cargo-program-build
+
+force-cargo-program-check:
+	$(call CARGO_CHECK,$(target_cargo_env_vars)) $(addprefix --bin ,$(RUST_CARGO_PROGRAMS)) $(cargo_target_flag)
+else
+force-cargo-program-check:
+	@true
 endif # RUST_PROGRAMS
 ifdef HOST_RUST_PROGRAMS
 force-cargo-host-program-build:
@@ -1000,6 +1046,13 @@ force-cargo-host-program-build:
 	$(call CARGO_BUILD) $(addprefix --bin ,$(HOST_RUST_CARGO_PROGRAMS)) $(cargo_host_flag)
 
 $(HOST_RUST_PROGRAMS): force-cargo-host-program-build
+
+force-cargo-host-program-check:
+	$(REPORT_BUILD)
+	$(call CARGO_CHECK) $(addprefix --bin ,$(HOST_RUST_CARGO_PROGRAMS)) $(cargo_host_flag)
+else
+force-cargo-host-program-check:
+	@true
 endif # HOST_RUST_PROGRAMS
 
 $(SOBJS):

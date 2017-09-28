@@ -41,6 +41,7 @@ config = {
     'tooltool_bootstrap': 'setup.sh',
     'enable_count_ctors': False,
     'max_build_output_timeout': 60 * 80,
+    'perfherder_extra_options': ['static-analysis'],
     #########################################################################
 
 
@@ -66,7 +67,7 @@ config = {
     },
     "check_test_env": {
         'MINIDUMP_STACKWALK': '%(abs_tools_dir)s\\breakpad\\win64\\minidump_stackwalk.exe',
-        'MINIDUMP_SAVE_PATH': '%(base_work_dir)s\\minidumps',
+        'MINIDUMP_SAVE_PATH': os.path.join(os.getcwd(), 'public', 'build'),
     },
     'src_mozconfig': 'browser\\config\\mozconfigs\\win64\\clang',
     'artifact_flag_build_variant_in_try': None,

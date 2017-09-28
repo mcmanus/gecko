@@ -16,11 +16,11 @@
 #include "nsTArray.h"
 #include "nsIAtom.h"
 #include "nsCSSValue.h"
+#include "nsStringFwd.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/MediaList.h"
 
 class nsPresContext;
-class nsAString;
 struct nsMediaFeature;
 
 namespace mozilla {
@@ -217,7 +217,7 @@ public:
   void SetHasOnly()                     { mHasOnly = true; }
   void SetTypeOmitted()                 { mTypeOmitted = true; }
   void SetHadUnknownExpression()        { mHadUnknownExpression = true; }
-  void SetType(nsIAtom* aMediaType)     { 
+  void SetType(nsIAtom* aMediaType)     {
                                           NS_ASSERTION(aMediaType,
                                                        "expected non-null");
                                           mMediaType = aMediaType;

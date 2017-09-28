@@ -9,14 +9,16 @@
 use applicable_declarations::ApplicableDeclarationList;
 #[cfg(feature = "servo")]
 use heapsize::HeapSizeOf;
-use properties::{AnimationRules, Importance, LonghandIdSet, PropertyDeclarationBlock};
+#[cfg(feature = "gecko")]
+use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
+use properties::{Importance, LonghandIdSet, PropertyDeclarationBlock};
+use servo_arc::{Arc, ArcBorrow, NonZeroPtrMut};
 use shared_lock::{Locked, StylesheetGuards, SharedRwLockReadGuard};
 use smallvec::SmallVec;
 use std::io::{self, Write};
 use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-use stylearc::{Arc, NonZeroPtrMut};
 use stylesheets::StyleRule;
 use thread_state;
 
@@ -47,6 +49,30 @@ pub struct RuleTree {
     root: StrongRuleNode,
 }
 
+impl Drop for RuleTree {
+    fn drop(&mut self) {
+        // GC the rule tree.
+        unsafe { self.gc(); }
+
+        // After the GC, the free list should be empty.
+        debug_assert!(self.root.get().next_free.load(Ordering::Relaxed) == FREE_LIST_SENTINEL);
+
+        // Remove the sentinel. This indicates that GCs will no longer occur.
+        // Any further drops of StrongRuleNodes must occur on the main thread,
+        // and will trigger synchronous dropping of the Rule nodes.
+        self.root.get().next_free.store(ptr::null_mut(), Ordering::Relaxed);
+    }
+}
+
+#[cfg(feature = "gecko")]
+impl MallocSizeOf for RuleTree {
+    fn size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
+        let mut n = unsafe { ops.malloc_size_of(self.root.ptr()) };
+        n += self.root.get().size_of(ops);
+        n
+    }
+}
+
 /// A style source for the rule node. It can either be a CSS style rule or a
 /// declaration block.
 ///
@@ -54,7 +80,7 @@ pub struct RuleTree {
 /// could be enough to implement the rule tree, keeping the whole rule provides
 /// more debuggability, and also the ability of show those selectors to
 /// devtools.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum StyleSource {
     /// A style rule stable pointer.
     Style(Arc<Locked<StyleRule>>),
@@ -122,6 +148,10 @@ impl StyleSource {
 /// The root node doesn't have a null pointer in the free list, but this value.
 const FREE_LIST_SENTINEL: *mut RuleNode = 0x01 as *mut RuleNode;
 
+/// A second sentinel value for the free list, indicating that it's locked (i.e.
+/// another thread is currently adding an entry). We spin if we find this value.
+const FREE_LIST_LOCKED: *mut RuleNode = 0x02 as *mut RuleNode;
+
 impl RuleTree {
     /// Construct a new rule tree.
     pub fn new() -> Self {
@@ -131,13 +161,8 @@ impl RuleTree {
     }
 
     /// Get the root rule node.
-    pub fn root(&self) -> StrongRuleNode {
-        self.root.clone()
-    }
-
-    /// Returns true if there are no nodes in the tree aside from the rule node.
-    pub fn is_empty(&self) -> bool {
-        self.root.get().first_child.load(Ordering::Relaxed).is_null()
+    pub fn root(&self) -> &StrongRuleNode {
+        &self.root
     }
 
     fn dump<W: Write>(&self, guards: &StylesheetGuards, writer: &mut W) {
@@ -157,11 +182,13 @@ impl RuleTree {
     /// !important rules are detected and inserted into the appropriate position
     /// in the rule tree. This allows selector matching to ignore importance,
     /// while still maintaining the appropriate cascade order in the rule tree.
-    pub fn insert_ordered_rules_with_important<'a, I>(&self,
-                                                      iter: I,
-                                                      guards: &StylesheetGuards)
-                                                      -> StrongRuleNode
-        where I: Iterator<Item=(StyleSource, CascadeLevel)>,
+    pub fn insert_ordered_rules_with_important<'a, I>(
+        &self,
+        iter: I,
+        guards: &StylesheetGuards
+    ) -> StrongRuleNode
+    where
+        I: Iterator<Item=(StyleSource, CascadeLevel)>,
     {
         use self::CascadeLevel::*;
         let mut current = self.root.clone();
@@ -177,10 +204,11 @@ impl RuleTree {
         for (source, level) in iter {
             debug_assert!(last_level <= level, "Not really ordered");
             debug_assert!(!level.is_important(), "Important levels handled internally");
-            let (any_normal, any_important) = {
+            let any_important = {
                 let pdb = source.read(level.guard(guards));
-                (pdb.any_normal(), pdb.any_important())
+                pdb.any_important()
             };
+
             if any_important {
                 found_important = true;
                 match level {
@@ -194,16 +222,25 @@ impl RuleTree {
                     _ => {},
                 };
             }
-            if any_normal {
-                if matches!(level, Transitions) && found_important {
-                    // There can be at most one transition, and it will come at
-                    // the end of the iterator. Stash it and apply it after
-                    // !important rules.
-                    debug_assert!(transition.is_none());
-                    transition = Some(source);
-                } else {
-                    current = current.ensure_child(self.root.downgrade(), source, level);
-                }
+
+            // We don't optimize out empty rules, even though we could.
+            //
+            // Inspector relies on every rule being inserted in the normal level
+            // at least once, in order to return the rules with the correct
+            // specificity order.
+            //
+            // TODO(emilio): If we want to apply these optimizations without
+            // breaking inspector's expectations, we'd need to run
+            // selector-matching again at the inspector's request. That may or
+            // may not be a better trade-off.
+            if matches!(level, Transitions) && found_important {
+                // There can be at most one transition, and it will come at
+                // the end of the iterator. Stash it and apply it after
+                // !important rules.
+                debug_assert!(transition.is_none());
+                transition = Some(source);
+            } else {
+                current = current.ensure_child(self.root.downgrade(), source, level);
             }
             last_level = level;
         }
@@ -218,7 +255,7 @@ impl RuleTree {
         // followed by any transition rule.
         //
 
-        for source in important_author.into_iter() {
+        for source in important_author.drain() {
             current = current.ensure_child(self.root.downgrade(), source, AuthorImportant);
         }
 
@@ -226,11 +263,11 @@ impl RuleTree {
             current = current.ensure_child(self.root.downgrade(), source, StyleAttributeImportant);
         }
 
-        for source in important_user.into_iter() {
+        for source in important_user.drain() {
             current = current.ensure_child(self.root.downgrade(), source, UserImportant);
         }
 
-        for source in important_ua.into_iter() {
+        for source in important_ua.drain() {
             current = current.ensure_child(self.root.downgrade(), source, UAImportant);
         }
 
@@ -243,11 +280,11 @@ impl RuleTree {
 
     /// Given a list of applicable declarations, insert the rules and return the
     /// corresponding rule node.
-    pub fn compute_rule_node(&self,
-                             applicable_declarations: &mut ApplicableDeclarationList,
-                             guards: &StylesheetGuards)
-                             -> StrongRuleNode
-    {
+    pub fn compute_rule_node(
+        &self,
+        applicable_declarations: &mut ApplicableDeclarationList,
+        guards: &StylesheetGuards
+    ) -> StrongRuleNode {
         let rules = applicable_declarations.drain().map(|d| d.order_and_level());
         let rule_node = self.insert_ordered_rules_with_important(rules, guards);
         rule_node
@@ -292,17 +329,19 @@ impl RuleTree {
     /// the old path is still valid.
     pub fn update_rule_at_level(&self,
                                 level: CascadeLevel,
-                                pdb: Option<&Arc<Locked<PropertyDeclarationBlock>>>,
+                                pdb: Option<ArcBorrow<Locked<PropertyDeclarationBlock>>>,
                                 path: &StrongRuleNode,
-                                guards: &StylesheetGuards)
+                                guards: &StylesheetGuards,
+                                important_rules_changed: &mut bool)
                                 -> Option<StrongRuleNode> {
         debug_assert!(level.is_unique_per_element());
         // TODO(emilio): Being smarter with lifetimes we could avoid a bit of
         // the refcount churn.
         let mut current = path.clone();
+        *important_rules_changed = false;
 
         // First walk up until the first less-or-equally specific rule.
-        let mut children = vec![];
+        let mut children = SmallVec::<[_; 10]>::new();
         while current.get().level > level {
             children.push((current.get().source.clone(), current.get().level));
             current = current.parent().unwrap().clone();
@@ -319,6 +358,8 @@ impl RuleTree {
         // special cases, and replacing them for a `while` loop, avoiding the
         // optimizations).
         if current.get().level == level {
+            *important_rules_changed |= level.is_important();
+
             if let Some(pdb) = pdb {
                 // If the only rule at the level we're replacing is exactly the
                 // same as `pdb`, we're done, and `path` is still valid.
@@ -331,7 +372,7 @@ impl RuleTree {
                 // so let's skip it for now.
                 let is_here_already = match &current.get().source {
                     &StyleSource::Declarations(ref already_here) => {
-                        Arc::ptr_eq(pdb, already_here)
+                        pdb.with_arc(|arc| Arc::ptr_eq(arc, already_here))
                     },
                     _ => unreachable!("Replacing non-declarations style?"),
                 };
@@ -355,13 +396,13 @@ impl RuleTree {
             if level.is_important() {
                 if pdb.read_with(level.guard(guards)).any_important() {
                     current = current.ensure_child(self.root.downgrade(),
-                                                   StyleSource::Declarations(pdb.clone()),
+                                                   StyleSource::Declarations(pdb.clone_arc()),
                                                    level);
                 }
             } else {
                 if pdb.read_with(level.guard(guards)).any_normal() {
                     current = current.ensure_child(self.root.downgrade(),
-                                                   StyleSource::Declarations(pdb.clone()),
+                                                   StyleSource::Declarations(pdb.clone_arc()),
                                                    level);
                 }
             }
@@ -369,7 +410,9 @@ impl RuleTree {
 
         // Now the rule is in the relevant place, push the children as
         // necessary.
-        Some(self.insert_ordered_rules_from(current, children.into_iter().rev()))
+        let rule =
+            self.insert_ordered_rules_from(current, children.drain().rev());
+        Some(rule)
     }
 
     /// Returns new rule nodes without Transitions level rule.
@@ -392,7 +435,7 @@ impl RuleTree {
         let iter = path.self_and_ancestors().take_while(
             |node| node.cascade_level() >= CascadeLevel::SMILOverride);
         let mut last = path;
-        let mut children = vec![];
+        let mut children = SmallVec::<[_; 10]>::new();
         for node in iter {
             if !node.cascade_level().is_animation() {
                 children.push((node.get().source.clone(), node.cascade_level()));
@@ -400,7 +443,8 @@ impl RuleTree {
             last = node;
         }
 
-        self.insert_ordered_rules_from(last.parent().unwrap().clone(), children.into_iter().rev())
+        let rule = self.insert_ordered_rules_from(last.parent().unwrap().clone(), children.drain().rev());
+        rule
     }
 }
 
@@ -416,7 +460,7 @@ const RULE_TREE_GC_INTERVAL: usize = 300;
 ///
 /// [1]: https://drafts.csswg.org/css-cascade/#cascade-origin
 #[repr(u8)]
-#[derive(Eq, PartialEq, Copy, Clone, Debug, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
 pub enum CascadeLevel {
     /// Normal User-Agent rules.
@@ -562,11 +606,63 @@ pub struct RuleNode {
     prev_sibling_or_free_count: PrevSiblingOrFreeCount,
 
     /// The next item in the rule tree free list, that starts on the root node.
+    ///
+    /// When this is set to null, that means that the rule tree has been torn
+    /// down, and GCs will no longer occur. When this happens, StrongRuleNodes
+    /// may only be dropped on the main thread, and teardown happens
+    /// synchronously.
     next_free: AtomicPtr<RuleNode>,
 }
 
 unsafe impl Sync for RuleTree {}
 unsafe impl Send for RuleTree {}
+
+// On Gecko builds, hook into the leak checking machinery.
+#[cfg(feature = "gecko")]
+#[cfg(debug_assertions)]
+mod gecko_leak_checking {
+use std::mem::size_of;
+use std::os::raw::{c_char, c_void};
+use super::RuleNode;
+
+extern "C" {
+    pub fn NS_LogCtor(aPtr: *const c_void, aTypeName: *const c_char, aSize: u32);
+    pub fn NS_LogDtor(aPtr: *const c_void, aTypeName: *const c_char, aSize: u32);
+}
+
+static NAME: &'static [u8] = b"RuleNode\0";
+
+/// Logs the creation of a heap-allocated object to Gecko's leak-checking machinery.
+pub fn log_ctor(ptr: *const RuleNode) {
+    let s = NAME as *const [u8] as *const u8 as *const c_char;
+    unsafe {
+        NS_LogCtor(ptr as *const c_void, s, size_of::<RuleNode>() as u32);
+    }
+}
+
+/// Logs the destruction of a heap-allocated object to Gecko's leak-checking machinery.
+pub fn log_dtor(ptr: *const RuleNode) {
+    let s = NAME as *const [u8] as *const u8 as *const c_char;
+    unsafe {
+        NS_LogDtor(ptr as *const c_void, s, size_of::<RuleNode>() as u32);
+    }
+}
+
+}
+
+#[inline(always)]
+fn log_new(_ptr: *const RuleNode) {
+    #[cfg(feature = "gecko")]
+    #[cfg(debug_assertions)]
+    gecko_leak_checking::log_ctor(_ptr);
+}
+
+#[inline(always)]
+fn log_drop(_ptr: *const RuleNode) {
+    #[cfg(feature = "gecko")]
+    #[cfg(debug_assertions)]
+    gecko_leak_checking::log_dtor(_ptr);
+}
 
 impl RuleNode {
     fn new(root: WeakRuleNode,
@@ -705,13 +801,25 @@ impl RuleNode {
     }
 }
 
+#[cfg(feature = "gecko")]
+impl MallocSizeOf for RuleNode {
+    fn size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
+        let mut n = 0;
+        for child in self.iter_children() {
+            n += unsafe { ops.malloc_size_of(child.ptr()) };
+            n += unsafe { (*child.ptr()).size_of(ops) };
+        }
+        n
+    }
+}
+
 #[derive(Clone)]
 struct WeakRuleNode {
     p: NonZeroPtrMut<RuleNode>,
 }
 
 /// A strong reference to a rule node.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, Hash, PartialEq)]
 pub struct StrongRuleNode {
     p: NonZeroPtrMut<RuleNode>,
 }
@@ -727,6 +835,7 @@ impl StrongRuleNode {
         debug_assert!(n.parent.is_none() == !n.source.is_some());
 
         let ptr = Box::into_raw(n);
+        log_new(ptr);
 
         debug!("Creating rule node: {:p}", ptr);
 
@@ -877,11 +986,10 @@ impl StrongRuleNode {
         // That's... suspicious, but it's fine if it happens for the rule tree
         // case, so just don't crash in the case we're doing the final GC in
         // script.
-        if !cfg!(feature = "testing") {
-            debug_assert!(!thread_state::get().is_worker() &&
-                          (thread_state::get().is_layout() ||
-                           thread_state::get().is_script()));
-        }
+
+        debug_assert!(!thread_state::get().is_worker() &&
+                      (thread_state::get().is_layout() ||
+                       thread_state::get().is_script()));
 
         let current = me.next_free.load(Ordering::Relaxed);
         if current == FREE_LIST_SENTINEL {
@@ -908,7 +1016,7 @@ impl StrongRuleNode {
 
     unsafe fn assert_free_list_has_no_duplicates_or_null(&self) {
         assert!(cfg!(debug_assertions), "This is an expensive check!");
-        use std::collections::HashSet;
+        use hash::HashSet;
 
         let me = &*self.ptr();
         assert!(me.is_root());
@@ -945,6 +1053,7 @@ impl StrongRuleNode {
 
             debug!("GC'ing {:?}", weak.ptr());
             node.remove_from_child_list();
+            log_drop(weak.ptr());
             let _ = Box::from_raw(weak.ptr());
         }
 
@@ -1004,6 +1113,19 @@ impl StrongRuleNode {
             LonghandId::BorderTopRightRadius,
             LonghandId::BorderBottomRightRadius,
             LonghandId::BorderBottomLeftRadius,
+
+            LonghandId::BorderInlineStartColor,
+            LonghandId::BorderInlineStartStyle,
+            LonghandId::BorderInlineStartWidth,
+            LonghandId::BorderInlineEndColor,
+            LonghandId::BorderInlineEndStyle,
+            LonghandId::BorderInlineEndWidth,
+            LonghandId::BorderBlockStartColor,
+            LonghandId::BorderBlockStartStyle,
+            LonghandId::BorderBlockStartWidth,
+            LonghandId::BorderBlockEndColor,
+            LonghandId::BorderBlockEndStyle,
+            LonghandId::BorderBlockEndWidth,
         ];
 
         const PADDING_PROPS: &'static [LonghandId] = &[
@@ -1011,6 +1133,11 @@ impl StrongRuleNode {
             LonghandId::PaddingRight,
             LonghandId::PaddingBottom,
             LonghandId::PaddingLeft,
+
+            LonghandId::PaddingInlineStart,
+            LonghandId::PaddingInlineEnd,
+            LonghandId::PaddingBlockStart,
+            LonghandId::PaddingBlockEnd,
         ];
 
         // Inherited properties:
@@ -1055,6 +1182,10 @@ impl StrongRuleNode {
             LonghandId::BorderRightColor,
             LonghandId::BorderBottomColor,
             LonghandId::BorderLeftColor,
+            LonghandId::BorderInlineStartColor,
+            LonghandId::BorderInlineEndColor,
+            LonghandId::BorderBlockStartColor,
+            LonghandId::BorderBlockEndColor,
             LonghandId::TextShadow,
         ];
 
@@ -1089,15 +1220,15 @@ impl StrongRuleNode {
             for node in element_rule_node.self_and_ancestors() {
                 let source = node.style_source();
                 let declarations = if source.is_some() {
-                    source.read(node.cascade_level().guard(guards)).declarations()
+                    source.read(node.cascade_level().guard(guards)).declaration_importance_iter()
                 } else {
                     continue
                 };
 
                 // Iterate over declarations of the longhands we care about.
                 let node_importance = node.importance();
-                let longhands = declarations.iter().rev()
-                    .filter_map(|&(ref declaration, importance)| {
+                let longhands = declarations.rev()
+                    .filter_map(|(declaration, importance)| {
                         if importance != node_importance { return None }
                         match declaration.id() {
                             PropertyDeclarationId::Longhand(id) => {
@@ -1166,7 +1297,7 @@ impl StrongRuleNode {
             };
 
             let parent_data = element.mutate_data().unwrap();
-            let parent_rule_node = parent_data.styles().primary.rules.clone();
+            let parent_rule_node = parent_data.styles.primary().rules().clone();
             element_rule_node = Cow::Owned(parent_rule_node);
 
             properties = inherited_properties;
@@ -1207,9 +1338,8 @@ impl StrongRuleNode {
         let mut result = (LonghandIdSet::new(), false);
         for node in iter {
             let style = node.style_source();
-            for &(ref decl, important) in style.read(node.cascade_level().guard(guards))
-                                               .declarations()
-                                               .iter() {
+            for (decl, important) in style.read(node.cascade_level().guard(guards))
+                                               .declaration_importance_iter() {
                 // Although we are only iterating over cascade levels that
                 // override animations, in a given property declaration block we
                 // can have a mixture of !important and non-!important
@@ -1249,32 +1379,6 @@ impl StrongRuleNode {
             .take_while(|node| node.cascade_level() >= CascadeLevel::SMILOverride)
             .find(|node| node.cascade_level() == CascadeLevel::SMILOverride)
             .map(|node| node.get_animation_style())
-    }
-
-    /// Returns AnimationRules that has processed during animation-only restyles.
-    pub fn get_animation_rules(&self) -> AnimationRules {
-        if cfg!(feature = "servo") {
-            return AnimationRules(None, None);
-        }
-
-        let mut animation = None;
-        let mut transition = None;
-
-        for node in self.self_and_ancestors()
-                        .take_while(|node| node.cascade_level() >= CascadeLevel::Animations) {
-            match node.cascade_level() {
-                CascadeLevel::Animations => {
-                    debug_assert!(animation.is_none());
-                    animation = Some(node.get_animation_style())
-                },
-                CascadeLevel::Transitions => {
-                    debug_assert!(transition.is_none());
-                    transition = Some(node.get_animation_style())
-                },
-                _ => {},
-            }
-        }
-        AnimationRules(animation, transition)
     }
 }
 
@@ -1326,16 +1430,57 @@ impl Drop for StrongRuleNode {
                          ptr::null_mut());
         if node.parent.is_none() {
             debug!("Dropping root node!");
-            // NOTE: Calling this is fine, because the rule tree root
-            // destructor needs to happen from the layout thread, where the
-            // stylist, and hence, the rule tree, is held.
-            unsafe { self.gc() };
+            // The free list should be null by this point
+            debug_assert!(node.next_free.load(Ordering::Relaxed).is_null());
+            log_drop(self.ptr());
             let _ = unsafe { Box::from_raw(self.ptr()) };
             return;
         }
 
         let root = unsafe { &*node.root.as_ref().unwrap().ptr() };
         let free_list = &root.next_free;
+        let mut old_head = free_list.load(Ordering::Relaxed);
+
+        // If the free list is null, that means that the rule tree has been
+        // formally torn down, and the last standard GC has already occurred.
+        // We require that any callers using the rule tree at this point are
+        // on the main thread only, which lets us trigger a synchronous GC
+        // here to avoid leaking anything. We use the GC machinery, rather
+        // than just dropping directly, so that we benefit from the iterative
+        // destruction and don't trigger unbounded recursion during drop. See
+        // [1] and the associated crashtest.
+        //
+        // [1] https://bugzilla.mozilla.org/show_bug.cgi?id=439184
+        if old_head.is_null() {
+            debug_assert!(!thread_state::get().is_worker() &&
+                          (thread_state::get().is_layout() ||
+                           thread_state::get().is_script()));
+            // Add the node as the sole entry in the free list.
+            debug_assert!(node.next_free.load(Ordering::Relaxed).is_null());
+            node.next_free.store(FREE_LIST_SENTINEL, Ordering::Relaxed);
+            free_list.store(node as *const _ as *mut _, Ordering::Relaxed);
+
+            // Invoke the GC.
+            //
+            // Note that we need hold a strong reference to the root so that it
+            // doesn't go away during the GC (which would happen if we're freeing
+            // the last external reference into the rule tree). This is nicely
+            // enforced by having the gc() method live on StrongRuleNode rather than
+            // RuleNode.
+            let strong_root: StrongRuleNode = node.root.as_ref().unwrap().upgrade();
+            unsafe { strong_root.gc(); }
+
+            // Leave the free list null, like we found it, such that additional
+            // drops for straggling rule nodes will take this same codepath.
+            debug_assert_eq!(root.next_free.load(Ordering::Relaxed),
+                             FREE_LIST_SENTINEL);
+            root.next_free.store(ptr::null_mut(), Ordering::Relaxed);
+
+            // Return. If strong_root is the last strong reference to the root,
+            // this re-enter StrongRuleNode::drop, and take the root-dropping
+            // path earlier in this function.
+            return;
+        }
 
         // We're sure we're already in the free list, don't spinloop if we're.
         // Note that this is just a fast path, so it doesn't need to have an
@@ -1344,20 +1489,19 @@ impl Drop for StrongRuleNode {
             return;
         }
 
-        // Ensure we "lock" the free list head swapping it with a null pointer.
+        // Ensure we "lock" the free list head swapping it with FREE_LIST_LOCKED.
         //
         // Note that we use Acquire/Release semantics for the free list
         // synchronization, in order to guarantee that the next_free
         // reads/writes we do below are properly visible from multiple threads
         // racing.
-        let mut old_head = free_list.load(Ordering::Relaxed);
         loop {
             match free_list.compare_exchange_weak(old_head,
-                                                  ptr::null_mut(),
+                                                  FREE_LIST_LOCKED,
                                                   Ordering::Acquire,
                                                   Ordering::Relaxed) {
                 Ok(..) => {
-                    if !old_head.is_null() {
+                    if old_head != FREE_LIST_LOCKED {
                         break;
                     }
                 },

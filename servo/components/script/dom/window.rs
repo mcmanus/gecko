@@ -5,15 +5,12 @@
 use app_units::Au;
 use base64;
 use bluetooth_traits::BluetoothRequest;
+use canvas_traits::webgl::WebGLChan;
 use cssparser::{Parser, ParserInput};
 use devtools_traits::{ScriptToDevtoolsControlMsg, TimelineMarker, TimelineMarkerType};
 use dom::bindings::cell::DOMRefCell;
 use dom::bindings::codegen::Bindings::DocumentBinding::{DocumentMethods, DocumentReadyState};
-use dom::bindings::codegen::Bindings::EventHandlerBinding::EventHandlerNonNull;
-use dom::bindings::codegen::Bindings::EventHandlerBinding::OnBeforeUnloadEventHandlerNonNull;
-use dom::bindings::codegen::Bindings::EventHandlerBinding::OnErrorEventHandlerNonNull;
 use dom::bindings::codegen::Bindings::FunctionBinding::Function;
-use dom::bindings::codegen::Bindings::NodeBinding::NodeMethods;
 use dom::bindings::codegen::Bindings::PermissionStatusBinding::PermissionState;
 use dom::bindings::codegen::Bindings::RequestBinding::RequestInit;
 use dom::bindings::codegen::Bindings::WindowBinding::{self, FrameRequestCallback, WindowMethods};
@@ -62,6 +59,7 @@ use js::jsapi::{JS_GC, JS_GetRuntime};
 use js::jsval::UndefinedValue;
 use js::rust::Runtime;
 use layout_image::fetch_image_for_layout;
+use microtask::MicrotaskQueue;
 use msg::constellation_msg::{FrameType, PipelineId};
 use net_traits::{ResourceThreads, ReferrerPolicy};
 use net_traits::image_cache::{ImageCache, ImageResponder, ImageResponse};
@@ -78,10 +76,10 @@ use script_layout_interface::rpc::{ContentBoxResponse, ContentBoxesResponse, Lay
 use script_layout_interface::rpc::{MarginStyleResponse, NodeScrollRootIdResponse};
 use script_layout_interface::rpc::{ResolvedStyleResponse, TextIndexResponse};
 use script_runtime::{CommonScriptMsg, ScriptChan, ScriptPort, ScriptThreadEventCategory};
-use script_thread::{ImageCacheMsg, MainThreadScriptChan, MainThreadScriptMsg, Runnable};
-use script_thread::{RunnableWrapper, ScriptThread, SendableMainThreadScriptChan};
+use script_thread::{ImageCacheMsg, MainThreadScriptChan, MainThreadScriptMsg};
+use script_thread::{ScriptThread, SendableMainThreadScriptChan};
 use script_traits::{ConstellationControlMsg, DocumentState, LoadData, MozBrowserEvent};
-use script_traits::{ScriptMsg as ConstellationMsg, ScrollState, TimerEvent, TimerEventId};
+use script_traits::{ScriptToConstellationChan, ScriptMsg, ScrollState, TimerEvent, TimerEventId};
 use script_traits::{TimerSchedulerMsg, UntrustedNodeAddress, WindowSizeData, WindowSizeType};
 use script_traits::webdriver_msg::{WebDriverJSError, WebDriverJSResult};
 use selectors::attr::CaseSensitivity;
@@ -105,7 +103,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::mpsc::TryRecvError::{Disconnected, Empty};
 use style::context::ReflowGoal;
-use style::error_reporting::ParseErrorReporter;
 use style::media_queries;
 use style::parser::ParserContext as CssParserContext;
 use style::properties::PropertyId;
@@ -114,10 +111,12 @@ use style::selector_parser::PseudoElement;
 use style::str::HTML_SPACE_CHARACTERS;
 use style::stylesheets::CssRuleType;
 use style_traits::PARSING_MODE_DEFAULT;
+use task::TaskCanceller;
 use task_source::dom_manipulation::DOMManipulationTaskSource;
 use task_source::file_reading::FileReadingTaskSource;
 use task_source::history_traversal::HistoryTraversalTaskSource;
 use task_source::networking::NetworkingTaskSource;
+use task_source::performance_timeline::PerformanceTimelineTaskSource;
 use task_source::user_interaction::UserInteractionTaskSource;
 use time;
 use timers::{IsInterval, TimerCallback};
@@ -125,11 +124,11 @@ use timers::{IsInterval, TimerCallback};
 use tinyfiledialogs::{self, MessageBoxIcon};
 use url::Position;
 use webdriver_handlers::jsval_to_webdriver;
-use webrender_traits::ClipId;
+use webrender_api::ClipId;
 use webvr_traits::WebVRMsg;
 
 /// Current state of the window object
-#[derive(JSTraceable, Copy, Clone, Debug, PartialEq, HeapSizeOf)]
+#[derive(Clone, Copy, Debug, HeapSizeOf, JSTraceable, PartialEq)]
 enum WindowState {
     Alive,
     Zombie,     // Pipeline is closed, but the window hasn't been GCed yet.
@@ -153,6 +152,7 @@ pub enum ReflowReason {
     ImageLoaded,
     RequestAnimationFrame,
     WebFontLoaded,
+    WorkletLoaded,
     FramedContentChanged,
     IFrameLoadEvent,
     MissingExplicitReflow,
@@ -174,6 +174,8 @@ pub struct Window {
     history_traversal_task_source: HistoryTraversalTaskSource,
     #[ignore_heap_size_of = "task sources are hard"]
     file_reading_task_source: FileReadingTaskSource,
+    #[ignore_heap_size_of = "task sources are hard"]
+    performance_timeline_task_source: PerformanceTimelineTaskSource,
     navigator: MutNullableJS<Navigator>,
     #[ignore_heap_size_of = "Arc"]
     image_cache: Arc<ImageCache>,
@@ -181,11 +183,12 @@ pub struct Window {
     image_cache_chan: Sender<ImageCacheMsg>,
     window_proxy: MutNullableJS<WindowProxy>,
     document: MutNullableJS<Document>,
+    location: MutNullableJS<Location>,
     history: MutNullableJS<History>,
     custom_element_registry: MutNullableJS<CustomElementRegistry>,
     performance: MutNullableJS<Performance>,
-    navigation_start: u64,
-    navigation_start_precise: f64,
+    navigation_start: Cell<u64>,
+    navigation_start_precise: Cell<f64>,
     screen: MutNullableJS<Screen>,
     session_storage: MutNullableJS<Storage>,
     local_storage: MutNullableJS<Storage>,
@@ -264,7 +267,11 @@ pub struct Window {
 
     /// A handle for communicating messages to the webvr thread, if available.
     #[ignore_heap_size_of = "channels are hard"]
-    webvr_thread: Option<IpcSender<WebVRMsg>>,
+    webgl_chan: WebGLChan,
+
+    /// A handle for communicating messages to the webvr thread, if available.
+    #[ignore_heap_size_of = "channels are hard"]
+    webvr_chan: Option<IpcSender<WebVRMsg>>,
 
     /// A map for storing the previous permission state read results.
     permission_state_invocation_results: DOMRefCell<HashMap<String, PermissionState>>,
@@ -324,6 +331,10 @@ impl Window {
         self.file_reading_task_source.clone()
     }
 
+    pub fn performance_timeline_task_source(&self) -> PerformanceTimelineTaskSource {
+        self.performance_timeline_task_source.clone()
+    }
+
     pub fn main_thread_script_chan(&self) -> &Sender<MainThreadScriptMsg> {
         &self.script_chan.0
     }
@@ -346,8 +357,15 @@ impl Window {
         self.window_proxy.get().unwrap()
     }
 
-    pub fn maybe_window_proxy(&self) -> Option<Root<WindowProxy>> {
+    /// Returns the window proxy if it has not been discarded.
+    /// https://html.spec.whatwg.org/multipage/#a-browsing-context-is-discarded
+    pub fn undiscarded_window_proxy(&self) -> Option<Root<WindowProxy>> {
         self.window_proxy.get()
+            .and_then(|window_proxy| if window_proxy.is_browsing_context_discarded() {
+                None
+            } else {
+                Some(window_proxy)
+            })
     }
 
     pub fn bluetooth_thread(&self) -> IpcSender<BluetoothRequest> {
@@ -358,7 +376,7 @@ impl Window {
          &self.bluetooth_extra_permission_data
     }
 
-    pub fn css_error_reporter(&self) -> &ParseErrorReporter {
+    pub fn css_error_reporter(&self) -> &CSSErrorReporter {
         &self.error_reporter
     }
 
@@ -373,16 +391,17 @@ impl Window {
         self.current_viewport.clone().get()
     }
 
+    pub fn webgl_chan(&self) -> WebGLChan {
+        self.webgl_chan.clone()
+    }
+
     pub fn webvr_thread(&self) -> Option<IpcSender<WebVRMsg>> {
-        self.webvr_thread.clone()
+        self.webvr_chan.clone()
     }
 
     fn new_paint_worklet(&self) -> Root<Worklet> {
         debug!("Creating new paint worklet.");
-        let worklet = Worklet::new(self, WorkletGlobalScopeType::Paint);
-        let executor = Arc::new(worklet.executor());
-        let _ = self.layout_chan.send(Msg::SetPaintWorkletExecutor(executor));
-        worklet
+        Worklet::new(self, WorkletGlobalScopeType::Paint)
     }
 
     pub fn permission_state_invocation_results(&self) -> &DOMRefCell<HashMap<String, PermissionState>> {
@@ -511,11 +530,7 @@ impl WindowMethods for Window {
         }
 
         let (sender, receiver) = ipc::channel().unwrap();
-        let global_scope = self.upcast::<GlobalScope>();
-        global_scope
-            .constellation_chan()
-            .send(ConstellationMsg::Alert(global_scope.pipeline_id(), s.to_string(), sender))
-            .unwrap();
+        self.send_to_constellation(ScriptMsg::Alert(s.to_string(), sender));
 
         let should_display_alert_dialog = receiver.recv().unwrap();
         if should_display_alert_dialog {
@@ -554,7 +569,7 @@ impl WindowMethods for Window {
 
     // https://html.spec.whatwg.org/multipage/#dom-location
     fn Location(&self) -> Root<Location> {
-        self.Document().GetLocation().unwrap()
+        self.location.or_init(|| Location::new(self))
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-sessionstorage
@@ -586,7 +601,7 @@ impl WindowMethods for Window {
         };
         // Step 6.
         let container_doc = document_from_node(container);
-        let current_doc = GlobalScope::current().as_window().Document();
+        let current_doc = GlobalScope::current().expect("No current global object").as_window().Document();
         if !current_doc.origin().same_origin_domain(container_doc.origin()) {
             return None;
         }
@@ -671,13 +686,10 @@ impl WindowMethods for Window {
     // https://html.spec.whatwg.org/multipage/#dom-parent
     fn GetParent(&self) -> Option<Root<WindowProxy>> {
         // Steps 1-3.
-        let window_proxy = match self.maybe_window_proxy() {
+        let window_proxy = match self.undiscarded_window_proxy() {
             Some(window_proxy) => window_proxy,
             None => return None,
         };
-        if window_proxy.is_browsing_context_discarded() {
-            return None;
-        }
         // Step 4.
         if let Some(parent) = window_proxy.parent() {
             return Some(Root::from_ref(parent));
@@ -689,13 +701,10 @@ impl WindowMethods for Window {
     // https://html.spec.whatwg.org/multipage/#dom-top
     fn GetTop(&self) -> Option<Root<WindowProxy>> {
         // Steps 1-3.
-        let window_proxy = match self.maybe_window_proxy() {
+        let window_proxy = match self.undiscarded_window_proxy() {
             Some(window_proxy) => window_proxy,
             None => return None,
         };
-        if window_proxy.is_browsing_context_discarded() {
-            return None;
-        }
         // Steps 4-5.
         Some(Root::from_ref(window_proxy.top()))
     }
@@ -704,8 +713,9 @@ impl WindowMethods for Window {
     // NavigationTiming/Overview.html#sec-window.performance-attribute
     fn Performance(&self) -> Root<Performance> {
         self.performance.or_init(|| {
-            Performance::new(self, self.navigation_start,
-                             self.navigation_start_precise)
+            let global_scope = self.upcast::<GlobalScope>();
+            Performance::new(global_scope, self.navigation_start.get(),
+                             self.navigation_start_precise.get())
         })
     }
 
@@ -920,10 +930,7 @@ impl WindowMethods for Window {
         // Step 1
         //TODO determine if this operation is allowed
         let size = Size2D::new(x.to_u32().unwrap_or(1), y.to_u32().unwrap_or(1));
-        self.upcast::<GlobalScope>()
-            .constellation_chan()
-            .send(ConstellationMsg::ResizeTo(size))
-            .unwrap()
+        self.send_to_constellation(ScriptMsg::ResizeTo(size));
     }
 
     // https://drafts.csswg.org/cssom-view/#dom-window-resizeby
@@ -938,10 +945,7 @@ impl WindowMethods for Window {
         // Step 1
         //TODO determine if this operation is allowed
         let point = Point2D::new(x, y);
-        self.upcast::<GlobalScope>()
-            .constellation_chan()
-            .send(ConstellationMsg::MoveTo(point))
-            .unwrap()
+        self.send_to_constellation(ScriptMsg::MoveTo(point));
     }
 
     // https://drafts.csswg.org/cssom-view/#dom-window-moveby
@@ -1008,10 +1012,11 @@ impl WindowMethods for Window {
         let mut parser = Parser::new(&mut input);
         let url = self.get_url();
         let quirks_mode = self.Document().quirks_mode();
-        let context = CssParserContext::new_for_cssom(&url, self.css_error_reporter(), Some(CssRuleType::Media),
+        let context = CssParserContext::new_for_cssom(&url, Some(CssRuleType::Media),
                                                       PARSING_MODE_DEFAULT,
                                                       quirks_mode);
-        let media_query_list = media_queries::parse_media_query_list(&context, &mut parser);
+        let media_query_list = media_queries::parse_media_query_list(&context, &mut parser,
+                                                                     self.css_error_reporter());
         let document = self.Document();
         let mql = MediaQueryList::new(&document, media_query_list);
         self.media_query_lists.push(&*mql);
@@ -1035,8 +1040,8 @@ impl WindowMethods for Window {
 }
 
 impl Window {
-    pub fn get_runnable_wrapper(&self) -> RunnableWrapper {
-        RunnableWrapper {
+    pub fn task_canceller(&self) -> TaskCanceller {
+        TaskCanceller {
             cancelled: Some(self.ignore_further_async_events.borrow().clone()),
         }
     }
@@ -1126,8 +1131,11 @@ impl Window {
         //let document = self.Document();
         // Step 12
         let global_scope = self.upcast::<GlobalScope>();
-        self.perform_a_scroll(x.to_f32().unwrap_or(0.0f32),
-                              y.to_f32().unwrap_or(0.0f32),
+        let x = x.to_f32().unwrap_or(0.0f32);
+        let y = y.to_f32().unwrap_or(0.0f32);
+        self.update_viewport_for_scroll(x, y);
+        self.perform_a_scroll(x,
+                              y,
                               global_scope.pipeline_id().root_scroll_node(),
                               behavior,
                               None);
@@ -1158,12 +1166,8 @@ impl Window {
             scroll_offset: Vector2D::new(-x, -y),
         })).unwrap();
 
-        // TODO (farodin91): Raise an event to stop the current_viewport
-        self.update_viewport_for_scroll(x, y);
-
-        let global_scope = self.upcast::<GlobalScope>();
-        let message = ConstellationMsg::ScrollFragmentPoint(scroll_root_id, point, smooth);
-        global_scope.constellation_chan().send(message).unwrap();
+        let message = ScriptMsg::ScrollFragmentPoint(scroll_root_id, point, smooth);
+        self.send_to_constellation(message);
     }
 
     pub fn update_viewport_for_scroll(&self, x: f32, y: f32) {
@@ -1174,10 +1178,7 @@ impl Window {
 
     pub fn client_window(&self) -> (Size2D<u32>, Point2D<i32>) {
         let (send, recv) = ipc::channel::<(Size2D<u32>, Point2D<i32>)>().unwrap();
-        self.upcast::<GlobalScope>()
-            .constellation_chan()
-            .send(ConstellationMsg::GetClientWindow(send))
-            .unwrap();
+        self.send_to_constellation(ScriptMsg::GetClientWindow(send));
         recv.recv().unwrap_or((Size2D::zero(), Point2D::zero()))
     }
 
@@ -1240,7 +1241,8 @@ impl Window {
         }
 
         let document = self.Document();
-        let stylesheets_changed = document.get_and_reset_stylesheets_changed_since_reflow();
+
+        let stylesheets_changed = document.flush_stylesheets_for_reflow();
 
         // Send new document and relevant styles to layout.
         let reflow = ScriptReflow {
@@ -1249,11 +1251,10 @@ impl Window {
                 page_clip_rect: self.page_clip_rect.get(),
             },
             document: self.Document().upcast::<Node>().to_trusted_node_address(),
-            document_stylesheets: document.stylesheets(),
-            stylesheets_changed: stylesheets_changed,
-            window_size: window_size,
+            stylesheets_changed,
+            window_size,
+            query_type,
             script_join_chan: join_chan,
-            query_type: query_type,
             dom_count: self.Document().dom_count(),
         };
 
@@ -1373,9 +1374,8 @@ impl Window {
 
             let pending_images = self.pending_layout_images.borrow().is_empty();
             if ready_state == DocumentReadyState::Complete && !reftest_wait && pending_images {
-                let global_scope = self.upcast::<GlobalScope>();
-                let event = ConstellationMsg::SetDocumentState(global_scope.pipeline_id(), DocumentState::Idle);
-                global_scope.constellation_chan().send(event).unwrap();
+                let event = ScriptMsg::SetDocumentState(DocumentState::Idle);
+                self.send_to_constellation(event);
             }
         }
 
@@ -1450,33 +1450,32 @@ impl Window {
     }
 
     pub fn scroll_offset_query(&self, node: &Node) -> Vector2D<f32> {
-        let mut node = Root::from_ref(node);
-        loop {
-            if let Some(scroll_offset) = self.scroll_offsets
-                                             .borrow()
-                                             .get(&node.to_untrusted_node_address()) {
-                return *scroll_offset
-            }
-            node = match node.GetParentNode() {
-                Some(node) => node,
-                None => break,
-            }
+        if let Some(scroll_offset) = self.scroll_offsets
+                                         .borrow()
+                                         .get(&node.to_untrusted_node_address()) {
+            return *scroll_offset
         }
-        let vp_origin = self.current_viewport.get().origin;
-        Vector2D::new(vp_origin.x.to_f32_px(), vp_origin.y.to_f32_px())
+        Vector2D::new(0.0, 0.0)
     }
 
     // https://drafts.csswg.org/cssom-view/#dom-element-scroll
     pub fn scroll_node(&self,
-                       node: TrustedNodeAddress,
+                       node: &Node,
                        x_: f64,
                        y_: f64,
                        behavior: ScrollBehavior) {
         if !self.reflow(ReflowGoal::ForScriptQuery,
-                        ReflowQueryType::NodeScrollRootIdQuery(node),
+                        ReflowQueryType::NodeScrollRootIdQuery(node.to_trusted_node_address()),
                         ReflowReason::Query) {
             return;
         }
+
+        // The scroll offsets are immediatly updated since later calls
+        // to topScroll and others may access the properties before
+        // webrender has a chance to update the offsets.
+        self.scroll_offsets.borrow_mut().insert(node.to_untrusted_node_address(),
+                                                Vector2D::new(x_ as f32, y_ as f32));
+
         let NodeScrollRootIdResponse(scroll_root_id) = self.layout_rpc.node_scroll_root_id();
 
         // Step 12
@@ -1775,104 +1774,126 @@ impl Window {
     pub fn unminified_js_dir(&self) -> Option<String> {
         self.unminified_js_dir.borrow().clone()
     }
+
+    pub fn set_navigation_start(&self) {
+        let current_time = time::get_time();
+        let now = (current_time.sec * 1000 + current_time.nsec as i64 / 1000000) as u64;
+        self.navigation_start.set(now);
+        self.navigation_start_precise.set(time::precise_time_ns() as f64);
+    }
+
+    fn send_to_constellation(&self, msg: ScriptMsg) {
+        self.upcast::<GlobalScope>()
+            .script_to_constellation_chan()
+            .send(msg)
+            .unwrap();
+    }
 }
 
 impl Window {
     #[allow(unsafe_code)]
-    pub fn new(runtime: Rc<Runtime>,
-               script_chan: MainThreadScriptChan,
-               dom_task_source: DOMManipulationTaskSource,
-               user_task_source: UserInteractionTaskSource,
-               network_task_source: NetworkingTaskSource,
-               history_task_source: HistoryTraversalTaskSource,
-               file_task_source: FileReadingTaskSource,
-               image_cache_chan: Sender<ImageCacheMsg>,
-               image_cache: Arc<ImageCache>,
-               resource_threads: ResourceThreads,
-               bluetooth_thread: IpcSender<BluetoothRequest>,
-               mem_profiler_chan: MemProfilerChan,
-               time_profiler_chan: TimeProfilerChan,
-               devtools_chan: Option<IpcSender<ScriptToDevtoolsControlMsg>>,
-               constellation_chan: IpcSender<ConstellationMsg>,
-               control_chan: IpcSender<ConstellationControlMsg>,
-               scheduler_chan: IpcSender<TimerSchedulerMsg>,
-               timer_event_chan: IpcSender<TimerEvent>,
-               layout_chan: Sender<Msg>,
-               id: PipelineId,
-               parent_info: Option<(PipelineId, FrameType)>,
-               window_size: Option<WindowSizeData>,
-               origin: MutableOrigin,
-               webvr_thread: Option<IpcSender<WebVRMsg>>)
-               -> Root<Window> {
+    pub fn new(
+        runtime: Rc<Runtime>,
+        script_chan: MainThreadScriptChan,
+        dom_manipulation_task_source: DOMManipulationTaskSource,
+        user_interaction_task_source: UserInteractionTaskSource,
+        networking_task_source: NetworkingTaskSource,
+        history_traversal_task_source: HistoryTraversalTaskSource,
+        file_reading_task_source: FileReadingTaskSource,
+        performance_timeline_task_source: PerformanceTimelineTaskSource,
+        image_cache_chan: Sender<ImageCacheMsg>,
+        image_cache: Arc<ImageCache>,
+        resource_threads: ResourceThreads,
+        bluetooth_thread: IpcSender<BluetoothRequest>,
+        mem_profiler_chan: MemProfilerChan,
+        time_profiler_chan: TimeProfilerChan,
+        devtools_chan: Option<IpcSender<ScriptToDevtoolsControlMsg>>,
+        constellation_chan: ScriptToConstellationChan,
+        control_chan: IpcSender<ConstellationControlMsg>,
+        scheduler_chan: IpcSender<TimerSchedulerMsg>,
+        timer_event_chan: IpcSender<TimerEvent>,
+        layout_chan: Sender<Msg>,
+        pipelineid: PipelineId,
+        parent_info: Option<(PipelineId, FrameType)>,
+        window_size: Option<WindowSizeData>,
+        origin: MutableOrigin,
+        navigation_start: u64,
+        navigation_start_precise: f64,
+        webgl_chan: WebGLChan,
+        webvr_chan: Option<IpcSender<WebVRMsg>>,
+        microtask_queue: Rc<MicrotaskQueue>,
+    ) -> Root<Self> {
         let layout_rpc: Box<LayoutRPC + Send> = {
             let (rpc_send, rpc_recv) = channel();
             layout_chan.send(Msg::GetRPC(rpc_send)).unwrap();
             rpc_recv.recv().unwrap()
         };
         let error_reporter = CSSErrorReporter {
-            pipelineid: id,
+            pipelineid,
             script_chan: Arc::new(Mutex::new(control_chan)),
         };
-        let current_time = time::get_time();
-        let win = box Window {
-            globalscope:
-                GlobalScope::new_inherited(
-                    id,
-                    devtools_chan,
-                    mem_profiler_chan,
-                    time_profiler_chan,
-                    constellation_chan,
-                    scheduler_chan,
-                    resource_threads,
-                    timer_event_chan,
-                    origin),
-            script_chan: script_chan,
-            dom_manipulation_task_source: dom_task_source,
-            user_interaction_task_source: user_task_source,
-            networking_task_source: network_task_source,
-            history_traversal_task_source: history_task_source,
-            file_reading_task_source: file_task_source,
-            image_cache_chan: image_cache_chan,
-            image_cache: image_cache.clone(),
+        let win = box Self {
+            globalscope: GlobalScope::new_inherited(
+                pipelineid,
+                devtools_chan,
+                mem_profiler_chan,
+                time_profiler_chan,
+                constellation_chan,
+                scheduler_chan,
+                resource_threads,
+                timer_event_chan,
+                origin,
+                microtask_queue,
+            ),
+            script_chan,
+            dom_manipulation_task_source,
+            user_interaction_task_source,
+            networking_task_source,
+            history_traversal_task_source,
+            file_reading_task_source,
+            performance_timeline_task_source,
+            image_cache_chan,
+            image_cache,
             navigator: Default::default(),
+            location: Default::default(),
             history: Default::default(),
             custom_element_registry: Default::default(),
             window_proxy: Default::default(),
             document: Default::default(),
             performance: Default::default(),
-            navigation_start: (current_time.sec * 1000 + current_time.nsec as i64 / 1000000) as u64,
-            navigation_start_precise: time::precise_time_ns() as f64,
+            navigation_start: Cell::new(navigation_start),
+            navigation_start_precise: Cell::new(navigation_start_precise),
             screen: Default::default(),
             session_storage: Default::default(),
             local_storage: Default::default(),
             status: DOMRefCell::new(DOMString::new()),
-            parent_info: parent_info,
+            parent_info,
             dom_static: GlobalStaticData::new(),
             js_runtime: DOMRefCell::new(Some(runtime.clone())),
-            bluetooth_thread: bluetooth_thread,
+            bluetooth_thread,
             bluetooth_extra_permission_data: BluetoothExtraPermissionData::new(),
             page_clip_rect: Cell::new(max_rect()),
-            resize_event: Cell::new(None),
-            layout_chan: layout_chan,
-            layout_rpc: layout_rpc,
+            resize_event: Default::default(),
+            layout_chan,
+            layout_rpc,
             window_size: Cell::new(window_size),
             current_viewport: Cell::new(Rect::zero()),
             suppress_reflow: Cell::new(true),
-            pending_reflow_count: Cell::new(0),
+            pending_reflow_count: Default::default(),
             current_state: Cell::new(WindowState::Alive),
-
-            devtools_marker_sender: DOMRefCell::new(None),
-            devtools_markers: DOMRefCell::new(HashSet::new()),
-            webdriver_script_chan: DOMRefCell::new(None),
+            devtools_marker_sender: Default::default(),
+            devtools_markers: Default::default(),
+            webdriver_script_chan: Default::default(),
             ignore_further_async_events: Default::default(),
-            error_reporter: error_reporter,
-            scroll_offsets: DOMRefCell::new(HashMap::new()),
+            error_reporter,
+            scroll_offsets: Default::default(),
             media_query_lists: WeakMediaQueryListVec::new(),
             test_runner: Default::default(),
-            webvr_thread: webvr_thread,
-            permission_state_invocation_results: DOMRefCell::new(HashMap::new()),
-            pending_layout_images: DOMRefCell::new(HashMap::new()),
-            unminified_js_dir: DOMRefCell::new(None),
+            webgl_chan,
+            webvr_chan,
+            permission_state_invocation_results: Default::default(),
+            pending_layout_images: Default::default(),
+            unminified_js_dir: Default::default(),
             test_worklet: Default::default(),
             paint_worklet: Default::default(),
         };
@@ -1940,6 +1961,7 @@ fn debug_reflow_events(id: PipelineId, goal: &ReflowGoal, query_type: &ReflowQue
         ReflowReason::ImageLoaded => "\tImageLoaded",
         ReflowReason::RequestAnimationFrame => "\tRequestAnimationFrame",
         ReflowReason::WebFontLoaded => "\tWebFontLoaded",
+        ReflowReason::WorkletLoaded => "\tWorkletLoaded",
         ReflowReason::FramedContentChanged => "\tFramedContentChanged",
         ReflowReason::IFrameLoadEvent => "\tIFrameLoadEvent",
         ReflowReason::MissingExplicitReflow => "\tMissingExplicitReflow",
@@ -1949,58 +1971,50 @@ fn debug_reflow_events(id: PipelineId, goal: &ReflowGoal, query_type: &ReflowQue
     println!("{}", debug_msg);
 }
 
-struct PostMessageHandler {
-    destination: Trusted<Window>,
-    origin: Option<ImmutableOrigin>,
-    message: StructuredCloneData,
-}
-
-impl PostMessageHandler {
-    fn new(window: &Window,
-           origin: Option<ImmutableOrigin>,
-           message: StructuredCloneData) -> PostMessageHandler {
-        PostMessageHandler {
-            destination: Trusted::new(window),
-            origin: origin,
-            message: message,
-        }
-    }
-}
-
-impl Runnable for PostMessageHandler {
-    // https://html.spec.whatwg.org/multipage/#dom-window-postmessage steps 10-12.
-    fn handler(self: Box<PostMessageHandler>) {
-        let this = *self;
-        let window = this.destination.root();
-
-        // Step 10.
-        let doc = window.Document();
-        if let Some(source) = this.origin {
-            if !source.same_origin(doc.origin()) {
-                return;
-            }
-        }
-
-        let cx = window.get_cx();
-        let globalhandle = window.reflector().get_jsobject();
-        let _ac = JSAutoCompartment::new(cx, globalhandle.get());
-
-        rooted!(in(cx) let mut message = UndefinedValue());
-        this.message.read(window.upcast(), message.handle_mut());
-
-        // Step 11-12.
-        // TODO(#12719): set the other attributes.
-        MessageEvent::dispatch_jsval(window.upcast(),
-                                     window.upcast(),
-                                     message.handle());
-    }
-}
-
 impl Window {
-    pub fn post_message(&self, origin: Option<ImmutableOrigin>, data: StructuredCloneData) {
-        let runnable = PostMessageHandler::new(self, origin, data);
-        let msg = CommonScriptMsg::RunnableMsg(ScriptThreadEventCategory::DomEvent, box runnable);
+    // https://html.spec.whatwg.org/multipage/#dom-window-postmessage step 7.
+    pub fn post_message(
+        &self,
+        target_origin: Option<ImmutableOrigin>,
+        serialize_with_transfer_result: StructuredCloneData,
+    ) {
+        let this = Trusted::new(self);
+        let task = task!(post_serialised_message: move || {
+            let this = this.root();
+
+            // Step 7.1.
+            if let Some(target_origin) = target_origin {
+                if !target_origin.same_origin(this.Document().origin()) {
+                    return;
+                }
+            }
+
+            // Steps 7.2.-7.5.
+            let cx = this.get_cx();
+            let obj = this.reflector().get_jsobject();
+            let _ac = JSAutoCompartment::new(cx, obj.get());
+            rooted!(in(cx) let mut message_clone = UndefinedValue());
+            serialize_with_transfer_result.read(
+                this.upcast(),
+                message_clone.handle_mut(),
+            );
+
+            // Step 7.6.
+            // TODO: MessagePort array.
+
+            // Step 7.7.
+            // TODO(#12719): Set the other attributes.
+            MessageEvent::dispatch_jsval(
+                this.upcast(),
+                this.upcast(),
+                message_clone.handle(),
+            );
+        });
+        // FIXME(nox): Why are errors silenced here?
         // TODO(#12718): Use the "posted message task source".
-        let _ = self.script_chan.send(msg);
+        let _ = self.script_chan.send(CommonScriptMsg::Task(
+            ScriptThreadEventCategory::DomEvent,
+            box self.task_canceller().wrap_task(task),
+        ));
     }
 }

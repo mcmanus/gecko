@@ -42,31 +42,12 @@ class MOZ_STACK_CLASS WrapperOptions : public ProxyOptions {
     mozilla::Maybe<JS::RootedObject> proto_;
 };
 
-/*
- * A wrapper is a proxy with a target object to which it generally forwards
- * operations, but may restrict access to certain operations or augment those
- * operations in various ways.
- *
- * A wrapper can be "unwrapped" in C++, exposing the underlying object.
- * Callers should be careful to avoid unwrapping security wrappers in the wrong
- * context.
- *
- * Important: If you add a method implementation here, you probably also need
- * to add an override in CrossCompartmentWrapper. If you don't, you risk
- * compartment mismatches. See bug 945826 comment 0.
- */
-class JS_FRIEND_API(Wrapper) : public BaseProxyHandler
+// Base class for proxy handlers that want to forward all operations to an
+// object stored in the proxy's private slot.
+class JS_FRIEND_API(ForwardingProxyHandler) : public BaseProxyHandler
 {
-    unsigned mFlags;
-
   public:
-    explicit constexpr Wrapper(unsigned aFlags, bool aHasPrototype = false,
-                                   bool aHasSecurityPolicy = false)
-      : BaseProxyHandler(&family, aHasPrototype, aHasSecurityPolicy),
-        mFlags(aFlags)
-    { }
-
-    virtual bool finalizeInBackground(const Value& priv) const override;
+    using BaseProxyHandler::BaseProxyHandler;
 
     /* Standard internal methods. */
     virtual bool getOwnPropertyDescriptor(JSContext* cx, HandleObject proxy, HandleId id,
@@ -78,8 +59,7 @@ class JS_FRIEND_API(Wrapper) : public BaseProxyHandler
                                  AutoIdVector& props) const override;
     virtual bool delete_(JSContext* cx, HandleObject proxy, HandleId id,
                          ObjectOpResult& result) const override;
-    virtual bool enumerate(JSContext* cx, HandleObject proxy,
-                           MutableHandleObject objp) const override;
+    virtual JSObject* enumerate(JSContext* cx, HandleObject proxy) const override;
     virtual bool getPrototype(JSContext* cx, HandleObject proxy,
                               MutableHandleObject protop) const override;
     virtual bool setPrototype(JSContext* cx, HandleObject proxy, HandleObject proto,
@@ -116,16 +96,41 @@ class JS_FRIEND_API(Wrapper) : public BaseProxyHandler
                          JS::IsArrayAnswer* answer) const override;
     virtual const char* className(JSContext* cx, HandleObject proxy) const override;
     virtual JSString* fun_toString(JSContext* cx, HandleObject proxy,
-                                   unsigned indent) const override;
-    virtual bool regexp_toShared(JSContext* cx, HandleObject proxy,
-                                 MutableHandle<RegExpShared*> shared) const override;
+                                   bool isToSource) const override;
+    virtual RegExpShared* regexp_toShared(JSContext* cx, HandleObject proxy) const override;
     virtual bool boxedValue_unbox(JSContext* cx, HandleObject proxy,
                                   MutableHandleValue vp) const override;
     virtual bool isCallable(JSObject* obj) const override;
     virtual bool isConstructor(JSObject* obj) const override;
-    virtual JSObject* weakmapKeyDelegate(JSObject* proxy) const override;
+};
+
+/*
+ * A wrapper is a proxy with a target object to which it generally forwards
+ * operations, but may restrict access to certain operations or augment those
+ * operations in various ways.
+ *
+ * A wrapper can be "unwrapped" in C++, exposing the underlying object.
+ * Callers should be careful to avoid unwrapping security wrappers in the wrong
+ * context.
+ *
+ * Important: If you add a method implementation here, you probably also need
+ * to add an override in CrossCompartmentWrapper. If you don't, you risk
+ * compartment mismatches. See bug 945826 comment 0.
+ */
+class JS_FRIEND_API(Wrapper) : public ForwardingProxyHandler
+{
+    unsigned mFlags;
 
   public:
+    explicit constexpr Wrapper(unsigned aFlags, bool aHasPrototype = false,
+                               bool aHasSecurityPolicy = false)
+      : ForwardingProxyHandler(&family, aHasPrototype, aHasSecurityPolicy),
+        mFlags(aFlags)
+    { }
+
+    virtual bool finalizeInBackground(const Value& priv) const override;
+    virtual JSObject* weakmapKeyDelegate(JSObject* proxy) const override;
+
     using BaseProxyHandler::Action;
 
     enum Flags {
@@ -178,7 +183,7 @@ class JS_FRIEND_API(CrossCompartmentWrapper) : public Wrapper
                                  AutoIdVector& props) const override;
     virtual bool delete_(JSContext* cx, HandleObject wrapper, HandleId id,
                          ObjectOpResult& result) const override;
-    virtual bool enumerate(JSContext* cx, HandleObject wrapper, MutableHandleObject objp) const override;
+    virtual JSObject* enumerate(JSContext* cx, HandleObject wrapper) const override;
     virtual bool getPrototype(JSContext* cx, HandleObject proxy,
                               MutableHandleObject protop) const override;
     virtual bool setPrototype(JSContext* cx, HandleObject proxy, HandleObject proto,
@@ -211,9 +216,8 @@ class JS_FRIEND_API(CrossCompartmentWrapper) : public Wrapper
                              bool* bp) const override;
     virtual const char* className(JSContext* cx, HandleObject proxy) const override;
     virtual JSString* fun_toString(JSContext* cx, HandleObject wrapper,
-                                   unsigned indent) const override;
-    virtual bool regexp_toShared(JSContext* cx, HandleObject proxy,
-                                 MutableHandle<RegExpShared*> shared) const override;
+                                   bool isToSource) const override;
+    virtual RegExpShared* regexp_toShared(JSContext* cx, HandleObject proxy) const override;
     virtual bool boxedValue_unbox(JSContext* cx, HandleObject proxy, MutableHandleValue vp) const override;
 
     // Allocate CrossCompartmentWrappers in the nursery.
@@ -239,8 +243,7 @@ class JS_FRIEND_API(OpaqueCrossCompartmentWrapper) : public CrossCompartmentWrap
                                  AutoIdVector& props) const override;
     virtual bool delete_(JSContext* cx, HandleObject wrapper, HandleId id,
                          ObjectOpResult& result) const override;
-    virtual bool enumerate(JSContext* cx, HandleObject wrapper,
-                           MutableHandleObject objp) const override;
+    virtual JSObject* enumerate(JSContext* cx, HandleObject wrapper) const override;
     virtual bool getPrototype(JSContext* cx, HandleObject wrapper,
                               MutableHandleObject protop) const override;
     virtual bool setPrototype(JSContext* cx, HandleObject wrapper, HandleObject proto,
@@ -272,7 +275,8 @@ class JS_FRIEND_API(OpaqueCrossCompartmentWrapper) : public CrossCompartmentWrap
     virtual bool isArray(JSContext* cx, HandleObject obj,
                          JS::IsArrayAnswer* answer) const override;
     virtual const char* className(JSContext* cx, HandleObject wrapper) const override;
-    virtual JSString* fun_toString(JSContext* cx, HandleObject proxy, unsigned indent) const override;
+    virtual JSString* fun_toString(JSContext* cx, HandleObject proxy,
+                                   bool isToSource) const override;
 
     static const OpaqueCrossCompartmentWrapper singleton;
 };
@@ -311,8 +315,7 @@ class JS_FRIEND_API(SecurityWrapper) : public Base
                             const CallArgs& args) const override;
     virtual bool getBuiltinClass(JSContext* cx, HandleObject wrapper, ESClass* cls) const override;
     virtual bool isArray(JSContext* cx, HandleObject wrapper, JS::IsArrayAnswer* answer) const override;
-    virtual bool regexp_toShared(JSContext* cx, HandleObject proxy,
-                                 MutableHandle<RegExpShared*> shared) const override;
+    virtual RegExpShared* regexp_toShared(JSContext* cx, HandleObject proxy) const override;
     virtual bool boxedValue_unbox(JSContext* cx, HandleObject proxy, MutableHandleValue vp) const override;
 
     // Allow isCallable and isConstructor. They used to be class-level, and so could not be guarded

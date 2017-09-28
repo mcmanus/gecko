@@ -61,9 +61,9 @@ def fill_template(config, tasks):
         # up on level 3 at some point if most tasks use this as a common image
         # for a given context hash, a worker within Taskcluster does not need to contain
         # the same image per branch.
-        optimizations = [['index-search', '{}.level-{}.{}.hash.{}'.format(
-            INDEX_PREFIX, level, image_name, context_hash)]
-            for level in reversed(range(int(config.params['level']), 4))]
+        optimization = {'index-search': ['{}.level-{}.{}.hash.{}'.format(
+            INDEX_PREFIX, level, image_name, context_hash)
+            for level in reversed(range(int(config.params['level']), 4))]}
 
         # Adjust the zstandard compression level based on the execution level.
         # We use faster compression for level 1 because we care more about
@@ -80,7 +80,7 @@ def fill_template(config, tasks):
             'attributes': {'image_name': image_name},
             'expires-after': '1 year',
             'routes': routes,
-            'optimizations': optimizations,
+            'optimization': optimization,
             'scopes': ['secrets:get:project/taskcluster/gecko/hgfingerprint'],
             'treeherder': {
                 'symbol': job_symbol,
@@ -89,7 +89,8 @@ def fill_template(config, tasks):
                 'tier': 1,
             },
             'run-on-projects': [],
-            'worker-type': 'aws-provisioner-v1/gecko-images',
+            'worker-type': 'aws-provisioner-v1/gecko-{}-images'.format(
+                config.params['level']),
             # can't use {in-tree: ..} here, otherwise we might try to build
             # this image..
             'worker': {
@@ -99,15 +100,20 @@ def fill_template(config, tasks):
                 'caches': [{
                     'type': 'persistent',
                     'name': 'level-{}-imagebuilder-v1'.format(config.params['level']),
-                    'mount-point': '/home/worker/checkouts',
+                    'mount-point': '/builds/worker/checkouts',
                 }],
+                'volumes': [
+                    # Keep in sync with Dockerfile and TASKCLUSTER_VOLUMES
+                    '/builds/worker/checkouts',
+                    '/builds/worker/workspace',
+                ],
                 'artifacts': [{
                     'type': 'file',
-                    'path': '/home/worker/workspace/artifacts/image.tar.zst',
+                    'path': '/builds/worker/workspace/artifacts/image.tar.zst',
                     'name': 'public/image.tar.zst',
                 }],
                 'env': {
-                    'HG_STORE_PATH': '/home/worker/checkouts/hg-store',
+                    'HG_STORE_PATH': '/builds/worker/checkouts/hg-store',
                     'HASH': context_hash,
                     'PROJECT': config.params['project'],
                     'IMAGE_NAME': image_name,
@@ -115,11 +121,12 @@ def fill_template(config, tasks):
                     'GECKO_BASE_REPOSITORY': config.params['base_repository'],
                     'GECKO_HEAD_REPOSITORY': config.params['head_repository'],
                     'GECKO_HEAD_REV': config.params['head_rev'],
+                    'TASKCLUSTER_VOLUMES': '/builds/worker/checkouts;/builds/worker/workspace',
                 },
                 'chain-of-trust': True,
                 'docker-in-docker': True,
                 'taskcluster-proxy': True,
-                'max-run-time': 3600,
+                'max-run-time': 7200,
             },
         }
 

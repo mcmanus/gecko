@@ -28,7 +28,7 @@ namespace widget {
 class PDFViaEMFPrintHelper
 {
 public:
-  explicit PDFViaEMFPrintHelper(PRLibrary* aPDFiumLibrary);
+  PDFViaEMFPrintHelper();
   ~PDFViaEMFPrintHelper();
 
   /** Loads the specified PDF file. */
@@ -37,7 +37,7 @@ public:
   /** Releases document buffer. */
   void CloseDocument();
 
-  int GetPageCount() { return mPDFiumEngine->GetPageCount(mPDFDoc); }
+  int GetPageCount() const { return mPDFiumEngine->GetPageCount(mPDFDoc); }
 
   /** Convert specified PDF page to EMF and draw the EMF onto the given DC. */
   bool DrawPage(HDC aPrinterDC, unsigned int aPageIndex,
@@ -54,9 +54,8 @@ private:
   bool RenderPageToDC(HDC aDC, unsigned int aPageIndex,
                       int aPageWidth, int aPageHeight);
 
-  UniquePtr<PDFiumEngineShim> mPDFiumEngine;
+  RefPtr<PDFiumEngineShim>    mPDFiumEngine;
   FPDF_DOCUMENT               mPDFDoc;
-  PRLibrary*                  mPDFiumLibrary;
 };
 
 } // namespace widget

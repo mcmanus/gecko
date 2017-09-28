@@ -9,6 +9,7 @@
 #include "nsIDNSListener.h"
 #include "nsIDNSRecord.h"
 #include "nsIDNSService.h"
+#include "nsINamed.h"
 #include "nsThreadUtils.h"
 #include "nsIConsoleService.h"
 #include "nsIURLParser.h"
@@ -38,6 +39,17 @@ static const char *sPacUtils =
   "    return host.split('.').length - 1;\n"
   "}\n"
   ""
+  "function isValidIpAddress(ipchars) {\n"
+  "    var matches = /^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$/.exec(ipchars);\n"
+  "    if (matches == null) {\n"
+  "        return false;\n"
+  "    } else if (matches[1] > 255 || matches[2] > 255 || \n"
+  "               matches[3] > 255 || matches[4] > 255) {\n"
+  "        return false;\n"
+  "    }\n"
+  "    return true;\n"
+  "}\n"
+  ""
   "function convert_addr(ipchars) {\n"
   "    var bytes = ipchars.split('.');\n"
   "    var result = ((bytes[0] & 0xff) << 24) |\n"
@@ -48,14 +60,14 @@ static const char *sPacUtils =
   "}\n"
   ""
   "function isInNet(ipaddr, pattern, maskstr) {\n"
-  "    var test = /^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$/.exec(ipaddr);\n"
-  "    if (test == null) {\n"
+  "    if (!isValidIpAddress(pattern) || !isValidIpAddress(maskstr)) {\n"
+  "        return false;\n"
+  "    }\n"
+  "    if (!isValidIpAddress(ipaddr)) {\n"
   "        ipaddr = dnsResolve(ipaddr);\n"
-  "        if (ipaddr == null)\n"
+  "        if (ipaddr == null) {\n"
   "            return false;\n"
-  "    } else if (test[1] > 255 || test[2] > 255 || \n"
-  "               test[3] > 255 || test[4] > 255) {\n"
-  "        return false;    // not an IP address\n"
+  "        }\n"
   "    }\n"
   "    var host = convert_addr(ipaddr);\n"
   "    var pat  = convert_addr(pattern);\n"
@@ -265,12 +277,14 @@ static void SetRunning(ProxyAutoConfig *arg)
 // The PACResolver is used for dnsResolve()
 class PACResolver final : public nsIDNSListener
                         , public nsITimerCallback
+                        , public nsINamed
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
 
-  PACResolver()
+  explicit PACResolver(nsIEventTarget *aTarget)
     : mStatus(NS_ERROR_FAILURE)
+    , mMainThreadEventTarget(aTarget)
   {
   }
 
@@ -299,15 +313,23 @@ public:
     return NS_OK;
   }
 
-  nsresult                mStatus;
-  nsCOMPtr<nsICancelable> mRequest;
-  nsCOMPtr<nsIDNSRecord>  mResponse;
-  nsCOMPtr<nsITimer>      mTimer;
+  // nsINamed
+  NS_IMETHOD GetName(nsACString& aName) override
+  {
+    aName.AssignLiteral("PACResolver");
+    return NS_OK;
+  }
+
+  nsresult                 mStatus;
+  nsCOMPtr<nsICancelable>  mRequest;
+  nsCOMPtr<nsIDNSRecord>   mResponse;
+  nsCOMPtr<nsITimer>       mTimer;
+  nsCOMPtr<nsIEventTarget> mMainThreadEventTarget;
 
 private:
   ~PACResolver() {}
 };
-NS_IMPL_ISUPPORTS(PACResolver, nsIDNSListener, nsITimerCallback)
+NS_IMPL_ISUPPORTS(PACResolver, nsIDNSListener, nsITimerCallback, nsINamed)
 
 static
 void PACLogToConsole(nsString &aMessage)
@@ -405,7 +427,7 @@ ProxyAutoConfig::ResolveAddress(const nsCString &aHostName,
   if (!dns)
     return false;
 
-  RefPtr<PACResolver> helper = new PACResolver();
+  RefPtr<PACResolver> helper = new PACResolver(mMainThreadEventTarget);
   OriginAttributes attrs;
 
   if (NS_FAILED(dns->AsyncResolveNative(aHostName,
@@ -420,6 +442,7 @@ ProxyAutoConfig::ResolveAddress(const nsCString &aHostName,
     if (!mTimer)
       mTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
     if (mTimer) {
+      mTimer->SetTarget(mMainThreadEventTarget);
       mTimer->InitWithCallback(helper, aTimeout, nsITimer::TYPE_ONE_SHOT);
       helper->mTimer = mTimer;
     }
@@ -538,12 +561,12 @@ bool PACProxyAlert(JSContext *cx, unsigned int argc, JS::Value *vp)
 }
 
 static const JSFunctionSpec PACGlobalFunctions[] = {
-  JS_FS("dnsResolve", PACDnsResolve, 1, 0),
+  JS_FN("dnsResolve", PACDnsResolve, 1, 0),
 
   // a global "var pacUseMultihomedDNS = true;" will change behavior
   // of myIpAddress to actively use DNS
-  JS_FS("myIpAddress", PACMyIpAddress, 0, 0),
-  JS_FS("alert", PACProxyAlert, 1, 0),
+  JS_FN("myIpAddress", PACMyIpAddress, 0, 0),
+  JS_FN("alert", PACProxyAlert, 1, 0),
   JS_FS_END
 };
 
@@ -658,7 +681,7 @@ private:
 static const JSClassOps sJSContextWrapperGlobalClassOps = {
   nullptr, nullptr, nullptr, nullptr,
   nullptr, nullptr, nullptr, nullptr,
-  nullptr, nullptr, nullptr, nullptr,
+  nullptr, nullptr,
   JS_GlobalObjectTraceHook
 };
 
@@ -678,13 +701,15 @@ nsresult
 ProxyAutoConfig::Init(const nsCString &aPACURI,
                       const nsCString &aPACScript,
                       bool aIncludePath,
-                      uint32_t aExtraHeapSize)
+                      uint32_t aExtraHeapSize,
+                      nsIEventTarget *aEventTarget)
 {
   mPACURI = aPACURI;
   mPACScript = sPacUtils;
   mPACScript.Append(aPACScript);
   mIncludePath = aIncludePath;
   mExtraHeapSize = aExtraHeapSize;
+  mMainThreadEventTarget = aEventTarget;
 
   if (!GetRunning())
     return SetupJS();
@@ -847,6 +872,7 @@ ProxyAutoConfig::GC()
 ProxyAutoConfig::~ProxyAutoConfig()
 {
   MOZ_COUNT_DTOR(ProxyAutoConfig);
+  MOZ_ASSERT(mShutdown, "Shutdown must be called before dtor.");
   NS_ASSERTION(!mJSContext,
                "~ProxyAutoConfig leaking JS context that "
                "should have been deleted on pac thread");
@@ -857,8 +883,9 @@ ProxyAutoConfig::Shutdown()
 {
   MOZ_ASSERT(!NS_IsMainThread(), "wrong thread for shutdown");
 
-  if (GetRunning() || mShutdown)
+  if (NS_WARN_IF(GetRunning()) || mShutdown) {
     return;
+  }
 
   mShutdown = true;
   delete mJSContext;

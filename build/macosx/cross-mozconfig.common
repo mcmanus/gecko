@@ -20,7 +20,7 @@ CROSS_CCTOOLS_PATH=$topsrcdir/cctools
 #   tar -C $(dirname ${sdk_path}) -cHjf /tmp/$(basename ${sdk_path}).tar.bz2 $(basename ${sdk_path})
 # Upload the resulting tarball from /tmp to tooltool, and change the entry in
 # `browser/config/tooltool-manifests/macosx64/cross-releng.manifest`.
-CROSS_SYSROOT=$topsrcdir/MacOSX10.7.sdk
+CROSS_SYSROOT=$topsrcdir/MacOSX10.11.sdk
 CROSS_PRIVATE_FRAMEWORKS=$CROSS_SYSROOT/System/Library/PrivateFrameworks
 FLAGS="-target x86_64-apple-darwin11 -B $CROSS_CCTOOLS_PATH/bin -isysroot $CROSS_SYSROOT"
 
@@ -29,6 +29,7 @@ export CXX="$topsrcdir/clang/bin/clang++ $FLAGS"
 export CPP="$topsrcdir/clang/bin/clang $FLAGS -E"
 export LLVMCONFIG=$topsrcdir/clang/bin/llvm-config
 export LDFLAGS="-Wl,-syslibroot,$CROSS_SYSROOT -Wl,-dead_strip"
+export BINDGEN_CFLAGS="$FLAGS"
 export TOOLCHAIN_PREFIX=$CROSS_CCTOOLS_PATH/bin/x86_64-apple-darwin11-
 export DSYMUTIL=$topsrcdir/clang/bin/llvm-dsymutil
 export MKFSHFS=$topsrcdir/hfsplus-tools/newfs_hfs

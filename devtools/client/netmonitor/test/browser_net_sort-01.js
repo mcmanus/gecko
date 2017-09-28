@@ -117,15 +117,19 @@ add_task(function* () {
       if (header != target) {
         ok(!header.hasAttribute("data-sorted"),
           "The " + header.id + " header does not have a 'data-sorted' attribute.");
-        ok(!header.getAttribute("title"),
-          "The " + header.id + " header does not have a 'title' attribute.");
+        ok(!header.getAttribute("title").includes(L10N.getStr("networkMenu.sortedAsc")) &&
+          !header.getAttribute("title").includes(L10N.getStr("networkMenu.sortedDesc")),
+          "The " + header.id +
+          " header does not include any sorting in the 'title' attribute.");
       } else {
         is(header.getAttribute("data-sorted"), direction,
           "The " + header.id + " header has a correct 'data-sorted' attribute.");
-        is(header.getAttribute("title"), direction == "ascending"
+        const sorted = direction == "ascending"
           ? L10N.getStr("networkMenu.sortedAsc")
-          : L10N.getStr("networkMenu.sortedDesc"),
-          "The " + header.id + " header has a correct 'title' attribute.");
+          : L10N.getStr("networkMenu.sortedDesc");
+        ok(header.getAttribute("title").includes(sorted),
+          "The " + header.id +
+          " header includes the used sorting in the 'title' attribute.");
       }
     }
   }
@@ -163,7 +167,7 @@ add_task(function* () {
           statusText: "Meh",
           type: "1",
           fullMimeType: "text/1",
-          transferred: L10N.getStr("networkMenu.sizeUnavailable"),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 198),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 0),
           time: true
         });
@@ -179,7 +183,7 @@ add_task(function* () {
           statusText: "Meh",
           type: "2",
           fullMimeType: "text/2",
-          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 19),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 217),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 19),
           time: true
         });
@@ -195,7 +199,7 @@ add_task(function* () {
           statusText: "Meh",
           type: "3",
           fullMimeType: "text/3",
-          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 29),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 227),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 29),
           time: true
         });
@@ -211,7 +215,7 @@ add_task(function* () {
           statusText: "Meh",
           type: "4",
           fullMimeType: "text/4",
-          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 39),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 237),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 39),
           time: true
         });
@@ -227,7 +231,7 @@ add_task(function* () {
           statusText: "Meh",
           type: "5",
           fullMimeType: "text/5",
-          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 49),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 247),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 49),
           time: true
         });

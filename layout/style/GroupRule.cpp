@@ -223,8 +223,9 @@ GroupRule::GroupRule(uint32_t aLineNumber, uint32_t aColumnNumber)
 {
 }
 
-GroupRule::GroupRule(already_AddRefed<ServoCssRules> aRules)
-  : Rule(0, 0) // TODO
+GroupRule::GroupRule(already_AddRefed<ServoCssRules> aRules,
+                     uint32_t aLineNumber, uint32_t aColumnNumber)
+  : Rule(aLineNumber, aColumnNumber)
   , mInner(ServoGroupRuleRules(Move(aRules)))
 {
   mInner.as<ServoGroupRuleRules>().SetParentRule(this);
@@ -245,7 +246,7 @@ GroupRule::~GroupRule()
 NS_IMPL_ADDREF_INHERITED(GroupRule, Rule)
 NS_IMPL_RELEASE_INHERITED(GroupRule, Rule)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(GroupRule)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(GroupRule)
 NS_INTERFACE_MAP_END_INHERITING(Rule)
 
 bool

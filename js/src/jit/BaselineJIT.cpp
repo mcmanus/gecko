@@ -282,16 +282,10 @@ jit::BaselineCompile(JSContext* cx, JSScript* script, bool forceDebugInstrumenta
 
     script->ensureNonLazyCanonicalFunction();
 
-    LifoAlloc alloc(TempAllocator::PreferredLifoChunkSize);
-    TempAllocator* temp = alloc.new_<TempAllocator>(&alloc);
-    if (!temp) {
-        ReportOutOfMemory(cx);
-        return Method_Error;
-    }
+    TempAllocator temp(&cx->tempLifoAlloc());
+    JitContext jctx(cx, nullptr);
 
-    JitContext jctx(cx, temp);
-
-    BaselineCompiler compiler(cx, *temp, script);
+    BaselineCompiler compiler(cx, temp, script);
     if (!compiler.init()) {
         ReportOutOfMemory(cx);
         return Method_Error;
@@ -645,21 +639,19 @@ BaselineScript::icEntryFromReturnOffset(CodeOffset returnOffset)
     return icEntry(loc);
 }
 
-static inline size_t
-ComputeBinarySearchMid(BaselineScript* baseline, uint32_t pcOffset)
+static inline bool
+ComputeBinarySearchMid(BaselineScript* baseline, uint32_t pcOffset, size_t* loc)
 {
-    size_t loc;
-    BinarySearchIf(ICEntries(baseline), 0, baseline->numICEntries(),
-                   [pcOffset](BaselineICEntry& entry) {
-                       uint32_t entryOffset = entry.pcOffset();
-                       if (pcOffset < entryOffset)
-                           return -1;
-                       if (entryOffset < pcOffset)
-                           return 1;
-                       return 0;
-                   },
-                   &loc);
-    return loc;
+    return BinarySearchIf(ICEntries(baseline), 0, baseline->numICEntries(),
+                          [pcOffset](BaselineICEntry& entry) {
+                              uint32_t entryOffset = entry.pcOffset();
+                              if (pcOffset < entryOffset)
+                                  return -1;
+                              if (entryOffset < pcOffset)
+                                  return 1;
+                              return 0;
+                          },
+                          loc);
 }
 
 uint8_t*
@@ -668,29 +660,43 @@ BaselineScript::returnAddressForIC(const BaselineICEntry& ent)
     return method()->raw() + ent.returnOffset().offset();
 }
 
-BaselineICEntry&
-BaselineScript::icEntryFromPCOffset(uint32_t pcOffset)
+BaselineICEntry*
+BaselineScript::maybeICEntryFromPCOffset(uint32_t pcOffset)
 {
     // Multiple IC entries can have the same PC offset, but this method only looks for
     // those which have isForOp() set.
-    size_t mid = ComputeBinarySearchMid(this, pcOffset);
+    size_t mid;
+    if (!ComputeBinarySearchMid(this, pcOffset, &mid))
+        return nullptr;
+
+    MOZ_ASSERT(mid < numICEntries());
 
     // Found an IC entry with a matching PC offset.  Search backward, and then
     // forward from this IC entry, looking for one with the same PC offset which
     // has isForOp() set.
-    for (size_t i = mid; i < numICEntries() && icEntry(i).pcOffset() == pcOffset; i--) {
+    for (size_t i = mid; icEntry(i).pcOffset() == pcOffset; i--) {
         if (icEntry(i).isForOp())
-            return icEntry(i);
+            return &icEntry(i);
+        if (i == 0)
+            break;
     }
     for (size_t i = mid+1; i < numICEntries() && icEntry(i).pcOffset() == pcOffset; i++) {
         if (icEntry(i).isForOp())
-            return icEntry(i);
+            return &icEntry(i);
     }
-    MOZ_CRASH("Invalid PC offset for IC entry.");
+    return nullptr;
 }
 
 BaselineICEntry&
-BaselineScript::icEntryFromPCOffset(uint32_t pcOffset, BaselineICEntry* prevLookedUpEntry)
+BaselineScript::icEntryFromPCOffset(uint32_t pcOffset)
+{
+    BaselineICEntry* entry = maybeICEntryFromPCOffset(pcOffset);
+    MOZ_RELEASE_ASSERT(entry);
+    return *entry;
+}
+
+BaselineICEntry*
+BaselineScript::maybeICEntryFromPCOffset(uint32_t pcOffset, BaselineICEntry* prevLookedUpEntry)
 {
     // Do a linear forward search from the last queried PC offset, or fallback to a
     // binary search if the last offset is too far away.
@@ -702,14 +708,21 @@ BaselineScript::icEntryFromPCOffset(uint32_t pcOffset, BaselineICEntry* prevLook
         BaselineICEntry* curEntry = prevLookedUpEntry;
         while (curEntry >= firstEntry && curEntry <= lastEntry) {
             if (curEntry->pcOffset() == pcOffset && curEntry->isForOp())
-                break;
+                return curEntry;
             curEntry++;
         }
-        MOZ_ASSERT(curEntry->pcOffset() == pcOffset && curEntry->isForOp());
-        return *curEntry;
+        return nullptr;
     }
 
-    return icEntryFromPCOffset(pcOffset);
+    return maybeICEntryFromPCOffset(pcOffset);
+}
+
+BaselineICEntry&
+BaselineScript::icEntryFromPCOffset(uint32_t pcOffset, BaselineICEntry* prevLookedUpEntry)
+{
+    BaselineICEntry* entry = maybeICEntryFromPCOffset(pcOffset, prevLookedUpEntry);
+    MOZ_RELEASE_ASSERT(entry);
+    return *entry;
 }
 
 BaselineICEntry&
@@ -717,11 +730,15 @@ BaselineScript::callVMEntryFromPCOffset(uint32_t pcOffset)
 {
     // Like icEntryFromPCOffset, but only looks for the fake ICEntries
     // inserted by VM calls.
-    size_t mid = ComputeBinarySearchMid(this, pcOffset);
+    size_t mid;
+    MOZ_ALWAYS_TRUE(ComputeBinarySearchMid(this, pcOffset, &mid));
+    MOZ_ASSERT(mid < numICEntries());
 
-    for (size_t i = mid; i < numICEntries() && icEntry(i).pcOffset() == pcOffset; i--) {
+    for (size_t i = mid; icEntry(i).pcOffset() == pcOffset; i--) {
         if (icEntry(i).kind() == ICEntry::Kind_CallVM)
             return icEntry(i);
+        if (i == 0)
+            break;
     }
     for (size_t i = mid+1; i < numICEntries() && icEntry(i).pcOffset() == pcOffset; i++) {
         if (icEntry(i).kind() == ICEntry::Kind_CallVM)
@@ -1219,14 +1236,15 @@ jit::ToggleBaselineTraceLoggerEngine(JSRuntime* runtime, bool enable)
 static void
 MarkActiveBaselineScripts(JSContext* cx, const JitActivationIterator& activation)
 {
-    for (jit::JitFrameIterator iter(activation); !iter.done(); ++iter) {
-        switch (iter.type()) {
+    for (OnlyJSJitFrameIter iter(activation); !iter.done(); ++iter) {
+        const JSJitFrameIter& frame = iter.frame();
+        switch (frame.type()) {
           case JitFrame_BaselineJS:
-            iter.script()->baselineScript()->setActive();
+            frame.script()->baselineScript()->setActive();
             break;
           case JitFrame_Exit:
-            if (iter.exitFrame()->is<LazyLinkExitFrameLayout>()) {
-                LazyLinkExitFrameLayout* ll = iter.exitFrame()->as<LazyLinkExitFrameLayout>();
+            if (frame.exitFrame()->is<LazyLinkExitFrameLayout>()) {
+                LazyLinkExitFrameLayout* ll = frame.exitFrame()->as<LazyLinkExitFrameLayout>();
                 ScriptFromCalleeToken(ll->jsFrame()->calleeToken())->baselineScript()->setActive();
             }
             break;
@@ -1234,8 +1252,8 @@ MarkActiveBaselineScripts(JSContext* cx, const JitActivationIterator& activation
           case JitFrame_IonJS: {
             // Keep the baseline script around, since bailouts from the ion
             // jitcode might need to re-enter into the baseline jitcode.
-            iter.script()->baselineScript()->setActive();
-            for (InlineFrameIterator inlineIter(cx, &iter); inlineIter.more(); ++inlineIter)
+            frame.script()->baselineScript()->setActive();
+            for (InlineFrameIterator inlineIter(cx, &frame); inlineIter.more(); ++inlineIter)
                 inlineIter.script()->baselineScript()->setActive();
             break;
           }
@@ -1250,8 +1268,10 @@ jit::MarkActiveBaselineScripts(Zone* zone)
     if (zone->isAtomsZone())
         return;
     JSContext* cx = TlsContext.get();
-    for (JitActivationIterator iter(cx, zone->group()->ownerContext()); !iter.done(); ++iter) {
-        if (iter->compartment()->zone() == zone)
-            MarkActiveBaselineScripts(cx, iter);
+    for (const CooperatingContext& target : cx->runtime()->cooperatingContexts()) {
+        for (JitActivationIterator iter(cx, target); !iter.done(); ++iter) {
+            if (iter->compartment()->zone() == zone)
+                MarkActiveBaselineScripts(cx, iter);
+        }
     }
 }

@@ -29,6 +29,10 @@ XPCOMUtils.defineLazyModuleGetter(this, "CleanupManager",
                                   "resource://shield-recipe-client/lib/CleanupManager.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ActionSandboxManager",
                                   "resource://shield-recipe-client/lib/ActionSandboxManager.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "AddonStudies",
+                                  "resource://shield-recipe-client/lib/AddonStudies.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Uptake",
+                                  "resource://shield-recipe-client/lib/Uptake.jsm");
 
 Cu.importGlobalProperties(["fetch"]);
 
@@ -38,18 +42,25 @@ const log = LogManager.getLogger("recipe-runner");
 const prefs = Services.prefs.getBranch("extensions.shield-recipe-client.");
 const TIMER_NAME = "recipe-client-addon-run";
 const RUN_INTERVAL_PREF = "run_interval_seconds";
+const FIRST_RUN_PREF = "first_run";
+const PREF_CHANGED_TOPIC = "nsPref:changed";
 
 this.RecipeRunner = {
-  init() {
+  async init() {
     if (!this.checkPrefs()) {
       return;
     }
 
-    if (prefs.getBoolPref("dev_mode")) {
-      // Run right now in dev mode
-      this.run();
+    // Run immediately on first run, or if dev mode is enabled.
+    if (prefs.getBoolPref(FIRST_RUN_PREF) || prefs.getBoolPref("dev_mode")) {
+      await this.run();
+      prefs.setBoolPref(FIRST_RUN_PREF, false);
     }
 
+    this.registerTimer();
+  },
+
+  registerTimer() {
     this.updateRunInterval();
     CleanupManager.addCleanupHandler(() => timerManager.unregisterTimer(TIMER_NAME));
 
@@ -79,14 +90,22 @@ this.RecipeRunner = {
     return true;
   },
 
+  observe(subject, topic, data) {
+    switch (topic) {
+      case PREF_CHANGED_TOPIC:
+        this.observePrefChange(data);
+        break;
+    }
+  },
+
   /**
    * Watch for preference changes from Services.pref.addObserver.
    */
-  observe(changedPrefBranch, action, changedPref) {
-    if (action === "nsPref:changed" && changedPref === RUN_INTERVAL_PREF) {
+  observePrefChange(prefName) {
+    if (prefName === RUN_INTERVAL_PREF) {
       this.updateRunInterval();
     } else {
-      log.debug(`Observer fired with unexpected pref change: ${action} ${changedPref}`);
+      log.debug(`Observer fired with unexpected pref change: ${prefName}`);
     }
   },
 
@@ -102,7 +121,30 @@ this.RecipeRunner = {
     this.clearCaches();
     // Unless lazy classification is enabled, prep the classify cache.
     if (!Preferences.get("extensions.shield-recipe-client.experiments.lazy_classify", false)) {
-      await ClientEnvironment.getClientClassification();
+      try {
+        await ClientEnvironment.getClientClassification();
+      } catch (err) {
+        // Try to go on without this data; the filter expressions will
+        // gracefully fail without this info if they need it.
+      }
+    }
+
+    // Fetch recipes before execution in case we fail and exit early.
+    let recipes;
+    try {
+      recipes = await NormandyApi.fetchRecipes({enabled: true});
+    } catch (e) {
+      const apiUrl = prefs.getCharPref("api_url");
+      log.error(`Could not fetch recipes from ${apiUrl}: "${e}"`);
+
+      let status = Uptake.RUNNER_SERVER_ERROR;
+      if (/NetworkError/.test(e)) {
+        status = Uptake.RUNNER_NETWORK_ERROR;
+      } else if (e instanceof NormandyApi.InvalidSignatureError) {
+        status = Uptake.RUNNER_INVALID_SIGNATURE;
+      }
+      Uptake.reportRunner(status);
+      return;
     }
 
     const actionSandboxManagers = await this.loadActionSandboxManagers();
@@ -117,17 +159,8 @@ this.RecipeRunner = {
       } catch (err) {
         log.error(`Could not run pre-execution hook for ${actionName}:`, err.message);
         manager.disabled = true;
+        Uptake.reportAction(actionName, Uptake.ACTION_PRE_EXECUTION_ERROR);
       }
-    }
-
-    // Fetch recipes from the API
-    let recipes;
-    try {
-      recipes = await NormandyApi.fetchRecipes({enabled: true});
-    } catch (e) {
-      const apiUrl = prefs.getCharPref("api_url");
-      log.error(`Could not fetch recipes from ${apiUrl}: "${e}"`);
-      return;
     }
 
     // Evaluate recipe filters
@@ -144,23 +177,31 @@ this.RecipeRunner = {
     } else {
       for (const recipe of recipesToRun) {
         const manager = actionSandboxManagers[recipe.action];
+        let status;
         if (!manager) {
           log.error(
             `Could not execute recipe ${recipe.name}:`,
             `Action ${recipe.action} is either missing or invalid.`
           );
+          status = Uptake.RECIPE_INVALID_ACTION;
         } else if (manager.disabled) {
           log.warn(
             `Skipping recipe ${recipe.name} because ${recipe.action} failed during pre-execution.`
           );
+          status = Uptake.RECIPE_ACTION_DISABLED;
         } else {
           try {
             log.info(`Executing recipe "${recipe.name}" (action=${recipe.action})`);
             await manager.runAsyncCallback("action", recipe);
+            status = Uptake.RECIPE_SUCCESS;
           } catch (e) {
-            log.error(`Could not execute recipe ${recipe.name}:`, e);
+            log.error(`Could not execute recipe ${recipe.name}:`);
+            Cu.reportError(e);
+            status = Uptake.RECIPE_EXECUTION_ERROR;
           }
         }
+
+        Uptake.reportRecipe(recipe.id, status);
       }
     }
 
@@ -174,13 +215,20 @@ this.RecipeRunner = {
 
       try {
         await manager.runAsyncCallback("postExecution");
+        Uptake.reportAction(actionName, Uptake.ACTION_SUCCESS);
       } catch (err) {
         log.info(`Could not run post-execution hook for ${actionName}:`, err.message);
+        Uptake.reportAction(actionName, Uptake.ACTION_POST_EXECUTION_ERROR);
       }
     }
 
     // Nuke sandboxes
     Object.values(actionSandboxManagers).forEach(manager => manager.removeHold("recipeRunner"));
+
+    // Close storage connections
+    await AddonStudies.close();
+
+    Uptake.reportRunner(Uptake.RUNNER_SUCCESS);
   },
 
   async loadActionSandboxManagers() {
@@ -192,6 +240,12 @@ this.RecipeRunner = {
         actionSandboxManagers[action.name] = new ActionSandboxManager(implementation);
       } catch (err) {
         log.warn(`Could not fetch implementation for ${action.name}:`, err);
+
+        let status = Uptake.ACTION_SERVER_ERROR;
+        if (/NetworkError/.test(err)) {
+          status = Uptake.ACTION_NETWORK_ERROR;
+        }
+        Uptake.reportAction(action.name, status);
       }
     }
     return actionSandboxManagers;

@@ -19,7 +19,6 @@ const TOPIC_CONNECTION_CLOSED = "places-connection-closed";
 
 var EXPECTED_NOTIFICATIONS = [
   "places-shutdown",
-  "places-will-close-connection",
   "places-expiration-finished",
   "places-connection-closed"
 ];
@@ -39,10 +38,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "FormHistory",
                                   "resource://gre/modules/FormHistory.jsm");
 
 var timeInMicroseconds = Date.now() * 1000;
-
-function run_test() {
-  run_next_test();
-}
 
 add_task(async function test_execute() {
   do_print("Initialize browserglue before Places");

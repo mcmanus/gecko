@@ -158,7 +158,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(nsInProcessTabChildGlobal,
   tmp->UnlinkHostObjectURIs();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(nsInProcessTabChildGlobal)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsInProcessTabChildGlobal)
   NS_INTERFACE_MAP_ENTRY(nsIMessageListenerManager)
   NS_INTERFACE_MAP_ENTRY(nsIMessageSender)
   NS_INTERFACE_MAP_ENTRY(nsISyncMessageSender)
@@ -196,6 +196,14 @@ NS_IMETHODIMP
 nsInProcessTabChildGlobal::GetDocShell(nsIDocShell** aDocShell)
 {
   NS_IF_ADDREF(*aDocShell = mDocShell);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsInProcessTabChildGlobal::GetTabEventTarget(nsIEventTarget** aTarget)
+{
+  nsCOMPtr<nsIEventTarget> target = GetMainThreadEventTarget();
+  target.forget(aTarget);
   return NS_OK;
 }
 
@@ -309,9 +317,15 @@ nsInProcessTabChildGlobal::InitTabChildGlobal()
 class nsAsyncScriptLoad : public Runnable
 {
 public:
-    nsAsyncScriptLoad(nsInProcessTabChildGlobal* aTabChild, const nsAString& aURL,
-                      bool aRunInGlobalScope)
-      : mTabChild(aTabChild), mURL(aURL), mRunInGlobalScope(aRunInGlobalScope) {}
+  nsAsyncScriptLoad(nsInProcessTabChildGlobal* aTabChild,
+                    const nsAString& aURL,
+                    bool aRunInGlobalScope)
+    : mozilla::Runnable("nsAsyncScriptLoad")
+    , mTabChild(aTabChild)
+    , mURL(aURL)
+    , mRunInGlobalScope(aRunInGlobalScope)
+  {
+  }
 
   NS_IMETHOD Run() override
   {

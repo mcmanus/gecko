@@ -4,17 +4,15 @@
 "use strict";
 
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-Cu.importGlobalProperties(["fetch"]);
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-  "resource://gre/modules/Preferences.jsm");
+Cu.importGlobalProperties(["fetch"]);
 
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
   "resource://gre/modules/Services.jsm");
 
 const ACTIVITY_STREAM_ENABLED_PREF = "browser.newtabpage.activity-stream.enabled";
-const BROWSER_READY_NOTIFICATION = "browser-delayed-startup-finished";
+const BROWSER_READY_NOTIFICATION = "sessionstore-windows-restored";
+const PREF_CHANGED_TOPIC = "nsPref:changed";
 const REASON_SHUTDOWN_ON_PREF_CHANGE = "PREF_OFF";
 const REASON_STARTUP_ON_PREF_CHANGE = "PREF_ON";
 const RESOURCE_BASE = "resource://activity-stream";
@@ -62,7 +60,11 @@ function init(reason) {
   }
   const options = Object.assign({}, startupData || {}, ACTIVITY_STREAM_OPTIONS);
   activityStream = new ActivityStream(options);
-  activityStream.init(reason);
+  try {
+    activityStream.init(reason);
+  } catch (e) {
+    Cu.reportError(e);
+  }
 }
 
 /**
@@ -73,22 +75,55 @@ function init(reason) {
  * @param  {type} reason Reason for uninitialization. Could be uninstall, upgrade, or PREF_OFF
  */
 function uninit(reason) {
+  // Make sure to only uninit once in case both pref change and shutdown happen
   if (activityStream) {
     activityStream.uninit(reason);
+    activityStream = null;
   }
 }
 
 /**
  * onPrefChanged - handler for changes to ACTIVITY_STREAM_ENABLED_PREF
  *
- * @param  {bool} isEnabled Determines whether Activity Stream is enabled
  */
-function onPrefChanged(isEnabled) {
-  if (isEnabled) {
+function onPrefChanged() {
+  if (Services.prefs.getBoolPref(ACTIVITY_STREAM_ENABLED_PREF, false)) {
     init(REASON_STARTUP_ON_PREF_CHANGE);
   } else {
     uninit(REASON_SHUTDOWN_ON_PREF_CHANGE);
   }
+}
+
+/**
+ * Check if an old pref has a custom value to migrate. Clears the pref so that
+ * it's the default after migrating (to avoid future need to migrate).
+ *
+ * @param oldPrefName {string} Pref to check and migrate
+ * @param cbIfNotDefault {function} Callback that gets the current pref value
+ */
+function migratePref(oldPrefName, cbIfNotDefault) {
+  // Nothing to do if the user doesn't have a custom value
+  if (!Services.prefs.prefHasUserValue(oldPrefName)) {
+    return;
+  }
+
+  // Figure out what kind of pref getter to use
+  let prefGetter;
+  switch (Services.prefs.getPrefType(oldPrefName)) {
+    case Services.prefs.PREF_BOOL:
+      prefGetter = "getBoolPref";
+      break;
+    case Services.prefs.PREF_INT:
+      prefGetter = "getIntPref";
+      break;
+    case Services.prefs.PREF_STRING:
+      prefGetter = "getStringPref";
+      break;
+  }
+
+  // Give the callback the current value then clear the pref
+  cbIfNotDefault(Services.prefs[prefGetter](oldPrefName));
+  Services.prefs.clearUserPref(oldPrefName);
 }
 
 /**
@@ -98,12 +133,23 @@ function onBrowserReady() {
   waitingForBrowserReady = false;
 
   // Listen for changes to the pref that enables Activity Stream
-  Preferences.observe(ACTIVITY_STREAM_ENABLED_PREF, onPrefChanged);
+  Services.prefs.addObserver(ACTIVITY_STREAM_ENABLED_PREF, observe); // eslint-disable-line no-use-before-define
 
   // Only initialize if the pref is true
-  if (Preferences.get(ACTIVITY_STREAM_ENABLED_PREF)) {
+  if (Services.prefs.getBoolPref(ACTIVITY_STREAM_ENABLED_PREF, false)) {
     init(startupReason);
   }
+
+  // Do a one time migration of Tiles about:newtab prefs that have been modified
+  migratePref("browser.newtabpage.rows", rows => {
+    // Just disable top sites if rows are not desired
+    if (rows <= 0) {
+      Services.prefs.setBoolPref("browser.newtabpage.activity-stream.showTopSites", false);
+    } else {
+      // Assume we want a full row (6 sites per row)
+      Services.prefs.setIntPref("browser.newtabpage.activity-stream.topSitesCount", rows * 6);
+    }
+  });
 }
 
 /**
@@ -113,7 +159,13 @@ function observe(subject, topic, data) {
   switch (topic) {
     case BROWSER_READY_NOTIFICATION:
       Services.obs.removeObserver(observe, BROWSER_READY_NOTIFICATION);
-      onBrowserReady();
+      // Avoid running synchronously during this event that's used for timing
+      Services.tm.dispatchToMainThread(() => onBrowserReady());
+      break;
+    case PREF_CHANGED_TOPIC:
+      if (data === ACTIVITY_STREAM_ENABLED_PREF) {
+        onPrefChanged();
+      }
       break;
   }
 }
@@ -148,7 +200,7 @@ this.shutdown = function shutdown(data, reason) {
     Services.obs.removeObserver(observe, BROWSER_READY_NOTIFICATION);
   } else {
     // Stop listening to the pref that enables Activity Stream
-    Preferences.ignore(ACTIVITY_STREAM_ENABLED_PREF, onPrefChanged);
+    Services.prefs.removeObserver(ACTIVITY_STREAM_ENABLED_PREF, observe);
   }
 
   // Unload any add-on modules that might might have been imported

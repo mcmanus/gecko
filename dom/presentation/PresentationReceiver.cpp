@@ -135,10 +135,9 @@ PresentationReceiver::GetConnectionList(ErrorResult& aRv)
     }
 
     RefPtr<PresentationReceiver> self = this;
-    nsresult rv =
-      NS_DispatchToMainThread(NS_NewRunnableFunction([self] () -> void {
-        self->CreateConnectionList();
-      }));
+    nsresult rv = NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "dom::PresentationReceiver::GetConnectionList",
+      [self]() -> void { self->CreateConnectionList(); }));
     if (NS_FAILED(rv)) {
       aRv.Throw(rv);
       return nullptr;
@@ -146,6 +145,9 @@ PresentationReceiver::GetConnectionList(ErrorResult& aRv)
   }
 
   RefPtr<Promise> promise = mGetConnectionListPromise;
+  if (nsContentUtils::ShouldResistFingerprinting()) {
+    promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
+  }
   return promise.forget();
 }
 

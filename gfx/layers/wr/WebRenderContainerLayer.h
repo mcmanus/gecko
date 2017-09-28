@@ -27,9 +27,7 @@ public:
 protected:
   virtual ~WebRenderContainerLayer()
   {
-
-    if (gfxPrefs::WebRenderOMTAEnabled() &&
-        !GetAnimations().IsEmpty()) {
+    if (!GetAnimations().IsEmpty()) {
       mManager->AsWebRenderLayerManager()->
         AddCompositorAnimationsIdForDiscard(GetCompositorAnimationsId());
     }
@@ -43,9 +41,9 @@ protected:
 public:
   Layer* GetLayer() override { return this; }
   void RenderLayer(wr::DisplayListBuilder& aBuilder,
+                   wr::IpcResourceUpdateQueue& aResources,
                    const StackingContextHelper& aSc) override;
 
-  void ClearAnimations() override;
   virtual void ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransformToSurface) override
   {
     DefaultComputeEffectiveTransforms(aTransformToSurface);
@@ -70,6 +68,7 @@ protected:
 public:
   Layer* GetLayer() override { return this; }
   void RenderLayer(wr::DisplayListBuilder& aBuilder,
+                   wr::IpcResourceUpdateQueue& aResources,
                    const StackingContextHelper& aSc) override;
 
   virtual void ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransformToSurface) override

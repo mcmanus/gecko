@@ -30,15 +30,55 @@ let gWhitelist = [{
     type: "single-quote"
   }, {
     file: "phishing-afterload-warning-message.dtd",
-    key: "safeb.blocked.malwarePage.shortDesc",
+    key: "safeb.palm.advisory.desc2",
     type: "single-quote"
   }, {
     file: "phishing-afterload-warning-message.dtd",
-    key: "safeb.blocked.unwantedPage.shortDesc",
+    key: "safeb.blocked.malwarePage.errorDesc.override",
     type: "single-quote"
   }, {
     file: "phishing-afterload-warning-message.dtd",
-    key: "safeb.blocked.phishingPage.shortDesc2",
+    key: "safeb.blocked.malwarePage.errorDesc.noOverride",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.malwarePage.learnMore",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.unwantedPage.errorDesc.override",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.unwantedPage.errorDesc.noOverride",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.unwantedPage.learnMore",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.phishingPage.errorDesc.override",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.phishingPage.errorDesc.noOverride",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.phishingPage.learnMore",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.harmfulPage.errorDesc.override",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.harmfulPage.errorDesc.noOverride",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.harmfulPage.learnMore",
     type: "single-quote"
   }, {
     file: "mathfont.properties",
@@ -152,10 +192,10 @@ async function getAllTheFiles(extension) {
   let appDirGreD = Services.dirsvc.get("GreD", Ci.nsIFile);
   let appDirXCurProcD = Services.dirsvc.get("XCurProcD", Ci.nsIFile);
   if (appDirGreD.contains(appDirXCurProcD)) {
-    return await generateURIsFromDirTree(appDirGreD, [extension]);
+    return generateURIsFromDirTree(appDirGreD, [extension]);
   }
   if (appDirXCurProcD.contains(appDirGreD)) {
-    return await generateURIsFromDirTree(appDirXCurProcD, [extension]);
+    return generateURIsFromDirTree(appDirXCurProcD, [extension]);
   }
   let urisGreD = await generateURIsFromDirTree(appDirGreD, [extension]);
   let urisXCurProcD = await generateURIsFromDirTree(appDirXCurProcD, [extension]);

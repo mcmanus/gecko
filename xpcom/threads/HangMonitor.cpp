@@ -151,7 +151,7 @@ GetChromeHangReport(Telemetry::ProcessedStack& aStack,
 
   DWORD ret = ::SuspendThread(winMainThreadHandle);
   bool suspended = false;
-  if (ret != -1) {
+  if (ret != (DWORD)-1) {
     // SuspendThread is asynchronous, so the thread may still be running. Use
     // GetThreadContext to ensure it's really suspended.
     // See https://blogs.msdn.microsoft.com/oldnewthing/20150205-00/?p=44743.
@@ -163,17 +163,16 @@ GetChromeHangReport(Telemetry::ProcessedStack& aStack,
   }
 
   if (!suspended) {
-    if (ret != -1) {
+    if (ret != (DWORD)-1) {
       MOZ_ALWAYS_TRUE(::ResumeThread(winMainThreadHandle) != DWORD(-1));
     }
     return;
   }
 
-  MozStackWalk(ChromeStackWalker, /* skipFrames */ 0, /* maxFrames */ 0,
-               reinterpret_cast<void*>(&rawStack),
-               reinterpret_cast<uintptr_t>(winMainThreadHandle), nullptr);
+  MozStackWalkThread(ChromeStackWalker, /* skipFrames */ 0, /* maxFrames */ 0,
+                     &rawStack, winMainThreadHandle, nullptr);
   ret = ::ResumeThread(winMainThreadHandle);
-  if (ret == -1) {
+  if (ret == (DWORD)-1) {
     return;
   }
   aStack = Telemetry::GetStackAndModules(rawStack);
@@ -197,7 +196,7 @@ GetChromeHangReport(Telemetry::ProcessedStack& aStack,
 void
 ThreadMain(void*)
 {
-  AutoProfilerRegister registerThread("Hang Monitor");
+  AutoProfilerRegisterThread registerThread("Hang Monitor");
   NS_SetCurrentThreadName("Hang Monitor");
 
   MonitorAutoLock lock(*gMonitor);
@@ -212,7 +211,7 @@ ThreadMain(void*)
   Telemetry::ProcessedStack stack;
   int32_t systemUptime = -1;
   int32_t firefoxUptime = -1;
-  UniquePtr<HangAnnotations> annotations;
+  HangAnnotations annotations;
 #endif
 
   while (true) {

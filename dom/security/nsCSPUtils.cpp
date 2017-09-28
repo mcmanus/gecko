@@ -88,10 +88,10 @@ CSP_PercentDecodeStr(const nsAString& aEncStr, nsAString& outDecStr)
 }
 
 void
-CSP_GetLocalizedStr(const char16_t* aName,
+CSP_GetLocalizedStr(const char* aName,
                     const char16_t** aParams,
                     uint32_t aLength,
-                    char16_t** outResult)
+                    nsAString& outResult)
 {
   nsCOMPtr<nsIStringBundle> keyStringBundle;
   nsCOMPtr<nsIStringBundleService> stringBundleService =
@@ -106,7 +106,8 @@ CSP_GetLocalizedStr(const char16_t* aName,
   if (!keyStringBundle) {
     return;
   }
-  keyStringBundle->FormatStringFromName(aName, aParams, aLength, outResult);
+  keyStringBundle->FormatStringFromName(aName, aParams, aLength,
+                                        outResult);
 }
 
 void
@@ -141,7 +142,7 @@ CSP_LogMessage(const nsAString& aMessage,
 
   // Prepending CSP to the outgoing console message
   nsString cspMsg;
-  cspMsg.Append(NS_LITERAL_STRING("Content Security Policy: "));
+  cspMsg.AppendLiteral(u"Content Security Policy: ");
   cspMsg.Append(aMessage);
 
   // Currently 'aSourceLine' is not logged to the console, because similar
@@ -151,9 +152,9 @@ CSP_LogMessage(const nsAString& aMessage,
   // E.g. 'aSourceLine' might be: 'onclick attribute on DIV element'.
   // In such cases we append 'aSourceLine' directly to the error message.
   if (!aSourceLine.IsEmpty()) {
-    cspMsg.Append(NS_LITERAL_STRING(" Source: "));
+    cspMsg.AppendLiteral(" Source: ");
     cspMsg.Append(aSourceLine);
-    cspMsg.Append(NS_LITERAL_STRING("."));
+    cspMsg.AppendLiteral(u".");
   }
 
   nsresult rv;
@@ -181,7 +182,7 @@ CSP_LogMessage(const nsAString& aMessage,
  * Combines CSP_LogMessage and CSP_GetLocalizedStr into one call.
  */
 void
-CSP_LogLocalizedStr(const char16_t* aName,
+CSP_LogLocalizedStr(const char* aName,
                     const char16_t** aParams,
                     uint32_t aLength,
                     const nsAString& aSourceName,
@@ -192,8 +193,8 @@ CSP_LogLocalizedStr(const char16_t* aName,
                     const char* aCategory,
                     uint64_t aInnerWindowID)
 {
-  nsXPIDLString logMsg;
-  CSP_GetLocalizedStr(aName, aParams, aLength, getter_Copies(logMsg));
+  nsAutoString logMsg;
+  CSP_GetLocalizedStr(aName, aParams, aLength, logMsg);
   CSP_LogMessage(logMsg, aSourceName, aSourceLine,
                  aLineNumber, aColumnNumber, aFlags,
                  aCategory, aInnerWindowID);
@@ -279,6 +280,15 @@ CSP_CreateHostSrcFromSelfURI(nsIURI* aSelfURI)
   nsCString scheme;
   aSelfURI->GetScheme(scheme);
   hostsrc->setScheme(NS_ConvertUTF8toUTF16(scheme));
+
+  // An empty host (e.g. for data:) indicates it's effectively a unique origin.
+  // Please note that we still need to set the scheme on hostsrc (see above),
+  // because it's used for reporting.
+  if (host.EqualsLiteral("")) {
+    hostsrc->setIsUniqueOrigin();
+    // no need to query the port in that case.
+    return hostsrc;
+  }
 
   int32_t port;
   aSelfURI->GetPort(&port);
@@ -428,7 +438,7 @@ CSP_AppendCSPFromHeader(nsIContentSecurityPolicy* aCsp,
   nsresult rv = NS_OK;
   nsCharSeparatedTokenizer tokenizer(aHeaderValue, ',');
   while (tokenizer.hasMoreTokens()) {
-    const nsSubstring& policy = tokenizer.nextToken();
+    const nsAString& policy = tokenizer.nextToken();
     rv = aCsp->AppendPolicy(policy, aReportOnly, false);
     NS_ENSURE_SUCCESS(rv, rv);
     {
@@ -522,6 +532,7 @@ nsCSPSchemeSrc::toString(nsAString& outStr) const
 nsCSPHostSrc::nsCSPHostSrc(const nsAString& aHost)
   : mHost(aHost)
   , mGeneratedFromSelfKeyword(false)
+  , mIsUniqueOrigin(false)
   , mWithinFrameAncstorsDir(false)
 {
   ToLowerCase(mHost);
@@ -623,7 +634,7 @@ nsCSPHostSrc::permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected
                  aUri->GetSpecOrDefault().get()));
   }
 
-  if (mInvalidated) {
+  if (mInvalidated || mIsUniqueOrigin) {
     return false;
   }
 

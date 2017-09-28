@@ -74,6 +74,18 @@ def enable_tests(value):
 set_config('ENABLE_TESTS', enable_tests)
 set_define('ENABLE_TESTS', enable_tests)
 
+js_option(env='MOZILLA_OFFICIAL',
+          help='Build an official release')
+
+@depends('MOZILLA_OFFICIAL')
+def mozilla_official(official):
+    if official:
+        return True
+
+set_config('MOZILLA_OFFICIAL', mozilla_official)
+set_define('MOZILLA_OFFICIAL', mozilla_official)
+add_old_configure_assignment('MOZILLA_OFFICIAL', mozilla_official)
+
 @depends(enable_tests)
 def gtest_has_rtti(value):
     if value:
@@ -103,15 +115,14 @@ js_option('--enable-debug',
 add_old_configure_assignment('MOZ_DEBUG',
                              depends('--enable-debug')(lambda v: bool(v)))
 
-imply_option('--enable-rust-debug',
-             depends('--enable-debug')(lambda v: bool(v) or None))
-
 js_option('--enable-rust-debug',
           help='Build Rust code with debug assertions turned on.')
 
-@depends('--enable-rust-debug')
-def debug_rust(debug):
-    if debug:
+@depends('--enable-rust-debug', '--enable-debug')
+def debug_rust(value, debug):
+    if value.origin == 'default':
+        return bool(debug) or None
+    elif bool(value):
         return True
 
 set_config('MOZ_DEBUG_RUST', debug_rust)
@@ -131,73 +142,85 @@ include('build/moz.configure/headers.configure',
 include('build/moz.configure/warnings.configure',
         when='--enable-compile-environment')
 
-option(env='SO_VERSION', nargs=1, help='Shared library version for OpenBSD systems')
 
-@depends(target, target_is_windows, target_is_darwin, building_with_gcc, 'SO_VERSION')
-def library_name_info(target, is_windows, is_darwin, building_with_gcc, so_version):
-    dll_prefix = 'lib'
-    dll_suffix = '.so'
-    lib_prefix = 'lib'
-    lib_suffix = 'a'
-    rust_lib_prefix = 'lib'
-    rust_lib_suffix = 'a'
-    obj_suffix = 'o'
-    import_lib_suffix = ''
+@depends(target, host)
+def is_openbsd(target, host):
+    return target.kernel == 'OpenBSD' or host.kernel == 'OpenBSD'
 
-    if is_windows:
-        dll_prefix = ''
-        dll_suffix = '.dll'
+option(env='SO_VERSION', nargs=1, default='1.0', when=is_openbsd,
+       help='Shared library version for OpenBSD systems')
 
-        rust_lib_prefix = ''
-        rust_lib_suffix = 'lib'
+@depends('SO_VERSION', when=is_openbsd)
+def so_version(value):
+    return value
 
-        # It's OK if we're doing an artifact build and building_with_gcc is
-        # inaccurate.  Artifact builds with mingw ought to be pretty rare anyway.
-        if building_with_gcc:
-            import_lib_suffix = 'a'
+@template
+def library_name_info_template(host_or_target):
+    assert host_or_target in (host, target)
+    compiler = {
+        host: host_c_compiler,
+        target: c_compiler,
+    }[host_or_target]
+
+    @depends(host_or_target, compiler, so_version)
+    def library_name_info_impl(host_or_target, compiler, so_version):
+        if host_or_target.kernel == 'WINNT':
+            # There aren't artifacts for mingw builds, so it's OK that the
+            # results are inaccurate in that case.
+            if compiler and compiler.type not in ('msvc', 'clang-cl'):
+                return namespace(
+                    dll=namespace(prefix='', suffix='.dll'),
+                    lib=namespace(prefix='lib', suffix='a'),
+                    import_lib=namespace(prefix='lib', suffix='a'),
+                    rust_lib=namespace(prefix='', suffix='lib'),
+                    obj=namespace(prefix='', suffix='o'),
+                )
+
+            return namespace(
+                dll=namespace(prefix='', suffix='.dll'),
+                lib=namespace(prefix='', suffix='lib'),
+                import_lib=namespace(prefix='', suffix='lib'),
+                rust_lib=namespace(prefix='', suffix='lib'),
+                obj=namespace(prefix='', suffix='obj'),
+            )
+
+        elif host_or_target.kernel == 'Darwin':
+            return namespace(
+                dll=namespace(prefix='lib', suffix='.dylib'),
+                lib=namespace(prefix='lib', suffix='a'),
+                import_lib=namespace(prefix=None, suffix=''),
+                rust_lib=namespace(prefix='lib', suffix='a'),
+                obj=namespace(prefix='', suffix='o'),
+            )
+        elif so_version:
+            so = '.so.%s' % so_version
         else:
-            import_lib_suffix = 'lib'
-            lib_prefix = ''
-            lib_suffix = 'lib'
-            obj_suffix = 'obj'
-    elif is_darwin:
-        dll_suffix = '.dylib'
-    elif target.kernel == 'OpenBSD':
-        if so_version:
-            dll_suffix = '.so.%s' % so_version
-        else:
-            dll_suffix = '.so.1.0'
+            so = '.so'
 
-    assert dll_suffix[0] == '.'
-    assert obj_suffix[0] != '.'
-    assert lib_suffix[0] != '.'
-    assert rust_lib_suffix[0] != '.'
+        return namespace(
+            dll=namespace(prefix='lib', suffix=so),
+            lib=namespace(prefix='lib', suffix='a'),
+            import_lib=namespace(prefix=None, suffix=''),
+            rust_lib=namespace(prefix='lib', suffix='a'),
+            obj=namespace(prefix='', suffix='o'),
+        )
 
-    return namespace(
-        dll_prefix=dll_prefix,
-        dll_suffix=dll_suffix,
+    return library_name_info_impl
 
-        lib_prefix=lib_prefix,
-        lib_suffix=lib_suffix,
+host_library_name_info = library_name_info_template(host)
+library_name_info = library_name_info_template(target)
 
-        rust_lib_prefix=rust_lib_prefix,
-        rust_lib_suffix=rust_lib_suffix,
-
-        obj_suffix=obj_suffix,
-        import_lib_suffix=import_lib_suffix,
-    )
-
-set_config('DLL_PREFIX', library_name_info.dll_prefix)
-set_config('DLL_SUFFIX', library_name_info.dll_suffix)
-set_config('LIB_PREFIX', library_name_info.lib_prefix)
-set_config('LIB_SUFFIX', library_name_info.lib_suffix)
-set_config('RUST_LIB_PREFIX', library_name_info.rust_lib_prefix)
-set_config('RUST_LIB_SUFFIX', library_name_info.rust_lib_suffix)
-set_config('OBJ_SUFFIX', library_name_info.obj_suffix)
+set_config('DLL_PREFIX', library_name_info.dll.prefix)
+set_config('DLL_SUFFIX', library_name_info.dll.suffix)
+set_config('LIB_PREFIX', library_name_info.lib.prefix)
+set_config('LIB_SUFFIX', library_name_info.lib.suffix)
+set_config('RUST_LIB_PREFIX', library_name_info.rust_lib.prefix)
+set_config('RUST_LIB_SUFFIX', library_name_info.rust_lib.suffix)
+set_config('OBJ_SUFFIX', library_name_info.obj.suffix)
 # Lots of compilation tests depend on this variable being present.
-add_old_configure_assignment('OBJ_SUFFIX', library_name_info.obj_suffix)
-set_config('IMPORT_LIB_SUFFIX', library_name_info.import_lib_suffix)
-set_define('MOZ_DLL_SUFFIX', depends(library_name_info)(lambda lni: '"%s"' % lni.dll_suffix))
+add_old_configure_assignment('OBJ_SUFFIX', library_name_info.obj.suffix)
+set_config('IMPORT_LIB_SUFFIX', library_name_info.import_lib.suffix)
+set_define('MOZ_DLL_SUFFIX', depends(library_name_info.dll.suffix)(lambda s: '"%s"' % s))
 
 include(include_project_configure)
 
@@ -247,9 +270,9 @@ option('--disable-gtest-in-build',
 # on Desktop platforms with the exception of Windows PGO, where linking
 # xul-gtest.dll takes too long.
 @depends('MOZ_PGO', build_project, target, 'MOZ_AUTOMATION', '--disable-gtest-in-build',
-         when='--enable-compile-environment')
-def build_gtest(pgo, build_project, target, automation, enabled):
-    if not enabled:
+         enable_tests, when='--enable-compile-environment')
+def build_gtest(pgo, build_project, target, automation, enabled, enable_tests):
+    if not enable_tests or not enabled:
         return None
     if (automation and build_project == 'browser' and
         not (pgo and target.os == 'WINNT')):
@@ -341,6 +364,60 @@ def tup_progs(build_backends):
     return None
 
 tup = check_prog('TUP', tup_progs)
+
+# watchman detection
+# ==============================================================
+
+option(env='WATCHMAN', nargs=1, help='Path to the watchman program')
+
+@depends('WATCHMAN')
+@checking('for watchman', callback=lambda w: w.path if w else 'not found')
+def watchman(prog):
+    if not prog:
+        prog = find_program('watchman')
+
+    if not prog:
+        return
+
+    # `watchman version` will talk to the Watchman daemon service.
+    # This can hang due to permissions problems. e.g.
+    # https://github.com/facebook/watchman/issues/376. So use
+    # `watchman --version` to prevent a class of failures.
+    out = check_cmd_output(prog, '--version', onerror=lambda: None)
+    if out is None:
+        return
+
+    return namespace(path=prog, version=Version(out.strip()))
+
+@depends_if(watchman)
+@checking('for watchman version')
+def watchman_version(w):
+    return w.version
+
+set_config('WATCHMAN', watchman.path)
+
+@depends_all(hg_version, hg_config, watchman)
+@checking('for watchman Mercurial integration')
+@imports('os')
+def watchman_hg(hg_version, hg_config, watchman):
+    if hg_version < Version('3.8'):
+        return 'no (Mercurial 3.8+ required)'
+
+    ext_enabled = False
+    mode_disabled = False
+
+    for k in ('extensions.fsmonitor', 'extensions.hgext.fsmonitor'):
+        if k in hg_config and hg_config[k] != '!':
+            ext_enabled = True
+
+    mode_disabled = hg_config.get('fsmonitor.mode') == 'off'
+
+    if not ext_enabled:
+        return 'no (fsmonitor extension not enabled)'
+    if mode_disabled:
+        return 'no (fsmonitor.mode=off disables fsmonitor)'
+
+    return True
 
 # Miscellaneous programs
 # ==============================================================
@@ -445,6 +522,8 @@ def nsis_flags(host):
     return ''
 
 set_config('MAKENSISU_FLAGS', nsis_flags)
+
+check_prog('7Z', ('7z', '7za'), allow_missing=True, when=target_is_windows)
 
 # Fallthrough to autoconf-based configure
 include('build/moz.configure/old.configure')

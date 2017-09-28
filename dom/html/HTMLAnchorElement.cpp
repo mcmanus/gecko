@@ -58,14 +58,10 @@ HTMLAnchorElement::IsInteractiveHTMLContent(bool aIgnoreTabindex) const
          nsGenericHTMLElement::IsInteractiveHTMLContent(aIgnoreTabindex);
 }
 
-NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(HTMLAnchorElement)
-  NS_INTERFACE_TABLE_INHERITED(HTMLAnchorElement,
-                               nsIDOMHTMLAnchorElement,
-                               Link)
-NS_INTERFACE_TABLE_TAIL_INHERITING(nsGenericHTMLElement)
-
-NS_IMPL_ADDREF_INHERITED(HTMLAnchorElement, Element)
-NS_IMPL_RELEASE_INHERITED(HTMLAnchorElement, Element)
+NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(HTMLAnchorElement,
+                                             nsGenericHTMLElement,
+                                             nsIDOMHTMLAnchorElement,
+                                             Link)
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(HTMLAnchorElement)
 
@@ -320,7 +316,7 @@ IMPL_URI_PART(Hash)
 
 #undef IMPL_URI_PART
 
-NS_IMETHODIMP    
+NS_IMETHODIMP
 HTMLAnchorElement::GetText(nsAString& aText)
 {
   if(!nsContentUtils::GetNodeTextContent(this, true, aText, fallible)) {
@@ -329,7 +325,7 @@ HTMLAnchorElement::GetText(nsAString& aText)
   return NS_OK;
 }
 
-NS_IMETHODIMP    
+NS_IMETHODIMP
 HTMLAnchorElement::SetText(const nsAString& aText)
 {
   return nsContentUtils::SetNodeTextContent(this, aText, false);
@@ -405,11 +401,12 @@ HTMLAnchorElement::IntrinsicState() const
   return Link::LinkState() | nsGenericHTMLElement::IntrinsicState();
 }
 
-size_t
-HTMLAnchorElement::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
+void
+HTMLAnchorElement::AddSizeOfExcludingThis(nsWindowSizes& aSizes,
+                                          size_t* aNodeSize) const
 {
-  return nsGenericHTMLElement::SizeOfExcludingThis(aMallocSizeOf) +
-         Link::SizeOfExcludingThis(aMallocSizeOf);
+  nsGenericHTMLElement::AddSizeOfExcludingThis(aSizes, aNodeSize);
+  *aNodeSize += Link::SizeOfExcludingThis(aSizes.mState);
 }
 
 } // namespace dom

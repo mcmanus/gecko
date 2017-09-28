@@ -91,7 +91,6 @@ public:
                                nsEventStatus* aEventStatus) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   void PaintFocus(DrawTarget& aDrawTarget, nsPoint aPt);
@@ -233,7 +232,7 @@ protected:
   friend class nsResizeDropdownAtFinalPosition;
 
   // Utilities
-  void ReflowDropdown(nsPresContext*          aPresContext, 
+  void ReflowDropdown(nsPresContext*          aPresContext,
                       const ReflowInput& aReflowInput);
 
   enum DropDownPositionState {
@@ -253,12 +252,16 @@ protected:
   class RedisplayTextEvent : public mozilla::Runnable {
   public:
     NS_DECL_NSIRUNNABLE
-    explicit RedisplayTextEvent(nsComboboxControlFrame *c) : mControlFrame(c) {}
+    explicit RedisplayTextEvent(nsComboboxControlFrame* c)
+      : mozilla::Runnable("nsComboboxControlFrame::RedisplayTextEvent")
+      , mControlFrame(c)
+    {
+    }
     void Revoke() { mControlFrame = nullptr; }
   private:
     nsComboboxControlFrame *mControlFrame;
   };
-  
+
   /**
    * Show or hide the dropdown list.
    * @note This method might destroy |this|.
@@ -295,7 +298,7 @@ protected:
   // The inline size of our display area.  Used by that frame's reflow
   // to size to the full inline size except the drop-marker.
   nscoord mDisplayISize;
-  
+
   nsRevocableEventPtr<RedisplayTextEvent> mRedisplayTextEvent;
 
   int32_t               mRecentSelectedIndex;

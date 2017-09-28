@@ -1018,7 +1018,7 @@
      *   Operands: uint32_t nameIndex
      *   Stack: receiver, obj => obj[name]
      */ \
-    macro(JSOP_GETPROP_SUPER,   104, "getprop-super", NULL, 5,  2,  1, JOF_ATOM|JOF_PROP) \
+    macro(JSOP_GETPROP_SUPER,   104, "getprop-super", NULL, 5,  2,  1, JOF_ATOM|JOF_PROP|JOF_TYPESET) \
     /*
      * Pops the top three values on the stack as 'val' and 'obj', and 'receiver',
      * and performs 'obj.prop = val', pushing 'val' back onto the stack.
@@ -1279,9 +1279,9 @@
      *   Category: Literals
      *   Type: Object
      *   Operands:
-     *   Stack: receiver, obj, propval => obj[propval]
+     *   Stack: propval, receiver, obj => obj[propval]
      */ \
-    macro(JSOP_GETELEM_SUPER, 125, "getelem-super", NULL, 1,  3,  1, JOF_BYTE |JOF_ELEM|JOF_LEFTASSOC) \
+    macro(JSOP_GETELEM_SUPER, 125, "getelem-super", NULL, 1,  3,  1, JOF_BYTE|JOF_ELEM|JOF_TYPESET|JOF_LEFTASSOC) \
     /*
      * Pushes newly created array for a spread call onto the stack. This has
      * the same semantics as JSOP_NEWARRAY, but is distinguished to avoid
@@ -2269,8 +2269,16 @@
      *   Stack: => %BuiltinPrototype%
      */ \
     macro(JSOP_BUILTINPROTO, 221, "builtinproto", NULL, 2,  0,  1,  JOF_UINT8) \
-    macro(JSOP_UNUSED222,     222,"unused222",     NULL,  1,  0,  0,  JOF_BYTE) \
-    macro(JSOP_UNUSED223,     223,"unused223",     NULL,  1,  0,  0,  JOF_BYTE) \
+    \
+    /*
+     * NOP opcode to hint to IonBuilder that the value on top of the stack is
+     * the (likely string) key in a for-in loop.
+     *   Category: Other
+     *   Operands:
+     *   Stack: val => val
+     */ \
+    macro(JSOP_ITERNEXT,      222, "iternext",   NULL,  1,  1,  1,  JOF_BYTE) \
+    macro(JSOP_UNUSED223,     223, "unused223",  NULL,  1,  0,  0,  JOF_BYTE) \
     \
     /*
      * Creates rest parameter array for current function call, and pushes it

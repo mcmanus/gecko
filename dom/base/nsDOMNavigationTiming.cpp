@@ -80,7 +80,7 @@ nsDOMNavigationTiming::NotifyNavigationStart(DocShellState aDocShellState)
   mNavigationStartHighRes = (double)PR_Now() / PR_USEC_PER_MSEC;
   mNavigationStartTimeStamp = TimeStamp::Now();
   mDocShellHasBeenActiveSinceNavigationStart = (aDocShellState == DocShellState::eActive);
-  PROFILER_MARKER("Navigation::Start");
+  profiler_add_marker("Navigation::Start");
 }
 
 void
@@ -128,7 +128,7 @@ nsDOMNavigationTiming::NotifyLoadEventStart()
 
     profiler_tracing("Navigation", "Load", TRACING_INTERVAL_START);
 
-    if (IsTopLevelContentDocument()) {
+    if (IsTopLevelContentDocumentInContentProcess()) {
       Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_LOAD_EVENT_START_MS,
                                      mNavigationStartTimeStamp);
     }
@@ -144,7 +144,7 @@ nsDOMNavigationTiming::NotifyLoadEventEnd()
 
     profiler_tracing("Navigation", "Load", TRACING_INTERVAL_END);
 
-    if (IsTopLevelContentDocument()) {
+    if (IsTopLevelContentDocumentInContentProcess()) {
       Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_LOAD_EVENT_END_MS,
                                      mNavigationStartTimeStamp);
     }
@@ -169,12 +169,7 @@ nsDOMNavigationTiming::NotifyDOMLoading(nsIURI* aURI)
     mDOMLoading = DurationFromStart();
     mDOMLoadingSet = true;
 
-    PROFILER_MARKER("Navigation::DOMLoading");
-
-    if (IsTopLevelContentDocument()) {
-      Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_LOADING_MS,
-                                     mNavigationStartTimeStamp);
-    }
+    profiler_add_marker("Navigation::DOMLoading");
   }
 }
 
@@ -186,12 +181,7 @@ nsDOMNavigationTiming::NotifyDOMInteractive(nsIURI* aURI)
     mDOMInteractive = DurationFromStart();
     mDOMInteractiveSet = true;
 
-    PROFILER_MARKER("Navigation::DOMInteractive");
-
-    if (IsTopLevelContentDocument()) {
-      Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_INTERACTIVE_MS,
-                                     mNavigationStartTimeStamp);
-    }
+    profiler_add_marker("Navigation::DOMInteractive");
   }
 }
 
@@ -203,12 +193,7 @@ nsDOMNavigationTiming::NotifyDOMComplete(nsIURI* aURI)
     mDOMComplete = DurationFromStart();
     mDOMCompleteSet = true;
 
-    PROFILER_MARKER("Navigation::DOMComplete");
-
-    if (IsTopLevelContentDocument()) {
-      Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_COMPLETE_MS,
-                                     mNavigationStartTimeStamp);
-    }
+    profiler_add_marker("Navigation::DOMComplete");
   }
 }
 
@@ -222,7 +207,7 @@ nsDOMNavigationTiming::NotifyDOMContentLoadedStart(nsIURI* aURI)
 
     profiler_tracing("Navigation", "DOMContentLoaded", TRACING_INTERVAL_START);
 
-    if (IsTopLevelContentDocument()) {
+    if (IsTopLevelContentDocumentInContentProcess()) {
       Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_CONTENT_LOADED_START_MS,
                                      mNavigationStartTimeStamp);
     }
@@ -239,7 +224,7 @@ nsDOMNavigationTiming::NotifyDOMContentLoadedEnd(nsIURI* aURI)
 
     profiler_tracing("Navigation", "DOMContentLoaded", TRACING_INTERVAL_END);
 
-    if (IsTopLevelContentDocument()) {
+    if (IsTopLevelContentDocumentInContentProcess()) {
       Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_CONTENT_LOADED_END_MS,
                                      mNavigationStartTimeStamp);
     }
@@ -267,7 +252,7 @@ nsDOMNavigationTiming::NotifyNonBlankPaintForRootContentDocument()
     nsPrintfCString marker("Non-blank paint after %dms for URL %s, %s",
                            int(elapsed.ToMilliseconds()), spec.get(),
                            mDocShellHasBeenActiveSinceNavigationStart ? "foreground tab" : "this tab was inactive some of the time between navigation start and first non-blank paint");
-    PROFILER_MARKER(marker.get());
+    profiler_add_marker(marker.get());
   }
 
   if (mDocShellHasBeenActiveSinceNavigationStart) {
@@ -307,9 +292,12 @@ nsDOMNavigationTiming::GetUnloadEventEnd()
 }
 
 bool
-nsDOMNavigationTiming::IsTopLevelContentDocument() const
+nsDOMNavigationTiming::IsTopLevelContentDocumentInContentProcess() const
 {
   if (!mDocShell) {
+    return false;
+  }
+  if (!XRE_IsContentProcess()) {
     return false;
   }
   nsCOMPtr<nsIDocShellTreeItem> rootItem;

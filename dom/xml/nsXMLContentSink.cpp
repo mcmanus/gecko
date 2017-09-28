@@ -31,7 +31,6 @@
 #include "nsIContentViewer.h"
 #include "prtime.h"
 #include "mozilla/Logging.h"
-#include "prmem.h"
 #include "nsRect.h"
 #include "nsIWebNavigation.h"
 #include "nsIScriptElement.h"
@@ -133,7 +132,7 @@ nsXMLContentSink::Init(nsIDocument* aDoc,
   return NS_OK;
 }
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(nsXMLContentSink)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsXMLContentSink)
   NS_INTERFACE_MAP_ENTRY(nsIContentSink)
   NS_INTERFACE_MAP_ENTRY(nsIXMLContentSink)
   NS_INTERFACE_MAP_ENTRY(nsIExpatSink)
@@ -539,8 +538,7 @@ nsXMLContentSink::CloseElement(nsIContent* aContent)
         nodeInfo->NameAtom() == nsGkAtoms::textarea ||
         nodeInfo->NameAtom() == nsGkAtoms::video ||
         nodeInfo->NameAtom() == nsGkAtoms::audio ||
-        nodeInfo->NameAtom() == nsGkAtoms::object ||
-        nodeInfo->NameAtom() == nsGkAtoms::applet))
+        nodeInfo->NameAtom() == nsGkAtoms::object))
       || nodeInfo->NameAtom() == nsGkAtoms::title
       ) {
     aContent->DoneAddingChildren(HaveNotifiedForCurrentContent());
@@ -660,11 +658,12 @@ nsXMLContentSink::LoadXSLStyleSheet(nsIURI* aUrl)
 
 nsresult
 nsXMLContentSink::ProcessStyleLink(nsIContent* aElement,
-                                   const nsSubstring& aHref,
+                                   const nsAString& aHref,
                                    bool aAlternate,
-                                   const nsSubstring& aTitle,
-                                   const nsSubstring& aType,
-                                   const nsSubstring& aMedia)
+                                   const nsAString& aTitle,
+                                   const nsAString& aType,
+                                   const nsAString& aMedia,
+                                   const nsAString& aReferrerPolicy)
 {
   nsresult rv = NS_OK;
   mPrettyPrintXML = false;
@@ -709,8 +708,7 @@ nsXMLContentSink::ProcessStyleLink(nsIContent* aElement,
                                    type,
                                    nullptr,
                                    &decision,
-                                   nsContentUtils::GetContentPolicy(),
-                                   nsContentUtils::GetSecurityManager());
+                                   nsContentUtils::GetContentPolicy());
 
     NS_ENSURE_SUCCESS(rv, rv);
 
@@ -723,7 +721,7 @@ nsXMLContentSink::ProcessStyleLink(nsIContent* aElement,
 
   // Let nsContentSink deal with css.
   rv = nsContentSink::ProcessStyleLink(aElement, aHref, aAlternate,
-                                       aTitle, aType, aMedia);
+                                       aTitle, aType, aMedia, aReferrerPolicy);
 
   // nsContentSink::ProcessStyleLink handles the bookkeeping here wrt
   // pending sheets.
@@ -731,14 +729,12 @@ nsXMLContentSink::ProcessStyleLink(nsIContent* aElement,
   return rv;
 }
 
-NS_IMETHODIMP
-nsXMLContentSink::SetDocumentCharset(nsACString& aCharset)
+void
+nsXMLContentSink::SetDocumentCharset(NotNull<const Encoding*> aEncoding)
 {
   if (mDocument) {
-    mDocument->SetDocumentCharacterSet(aCharset);
+    mDocument->SetDocumentCharacterSet(aEncoding);
   }
-
-  return NS_OK;
 }
 
 nsISupports *
@@ -1102,8 +1098,7 @@ nsXMLContentSink::HandleEndElement(const char16_t *aName,
   if (content->IsSVGElement(nsGkAtoms::svg)) {
     FlushTags();
     nsCOMPtr<nsIRunnable> event = new nsHtml5SVGLoadDispatcher(content);
-    if (NS_FAILED(content->OwnerDoc()->Dispatch("nsHtml5SVGLoadDispatcher",
-                                                TaskCategory::Other,
+    if (NS_FAILED(content->OwnerDoc()->Dispatch(TaskCategory::Other,
                                                 event.forget()))) {
       NS_WARNING("failed to dispatch svg load dispatcher");
     }
@@ -1264,7 +1259,9 @@ nsXMLContentSink::HandleProcessingInstruction(const char16_t *aTarget,
       return DidProcessATokenImpl();
   }
 
-  rv = ProcessStyleLink(node, href, isAlternate, title, type, media);
+  // <?xml-stylesheet?> processing instructions don't have a referrerpolicy
+  // pseudo-attribute, so we pass in an empty string
+  rv = ProcessStyleLink(node, href, isAlternate, title, type, media, EmptyString());
   return NS_SUCCEEDED(rv) ? DidProcessATokenImpl() : rv;
 }
 
@@ -1468,7 +1465,7 @@ nsXMLContentSink::FlushPendingNotifications(FlushType aType)
         FlushText(false);
       }
     }
-    if (aType >= FlushType::InterruptibleLayout) {
+    if (aType >= FlushType::EnsurePresShellInitAndFrames) {
       // Make sure that layout has started so that the reflow flush
       // will actually happen.
       MaybeStartLayout(true);
@@ -1565,8 +1562,7 @@ nsXMLContentSink::IsMonolithicContainer(mozilla::dom::NodeInfo* aNodeInfo)
   return ((aNodeInfo->NamespaceID() == kNameSpaceID_XHTML &&
           (aNodeInfo->NameAtom() == nsGkAtoms::tr ||
            aNodeInfo->NameAtom() == nsGkAtoms::select ||
-           aNodeInfo->NameAtom() == nsGkAtoms::object ||
-           aNodeInfo->NameAtom() == nsGkAtoms::applet)) ||
+           aNodeInfo->NameAtom() == nsGkAtoms::object)) ||
           (aNodeInfo->NamespaceID() == kNameSpaceID_MathML &&
           (aNodeInfo->NameAtom() == nsGkAtoms::math))
           );
@@ -1583,8 +1579,10 @@ nsXMLContentSink::ContinueInterruptedParsingIfEnabled()
 void
 nsXMLContentSink::ContinueInterruptedParsingAsync()
 {
-  nsCOMPtr<nsIRunnable> ev = NewRunnableMethod(this,
-    &nsXMLContentSink::ContinueInterruptedParsingIfEnabled);
+  nsCOMPtr<nsIRunnable> ev =
+    NewRunnableMethod("nsXMLContentSink::ContinueInterruptedParsingIfEnabled",
+                      this,
+                      &nsXMLContentSink::ContinueInterruptedParsingIfEnabled);
 
   NS_DispatchToCurrentThread(ev);
 }

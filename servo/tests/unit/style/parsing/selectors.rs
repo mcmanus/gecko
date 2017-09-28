@@ -14,6 +14,7 @@ fn parse_selector<'i, 't>(input: &mut Parser<'i, 't>) -> Result<SelectorList<Sel
     let parser = SelectorParser {
         stylesheet_origin: Origin::UserAgent,
         namespaces: &ns,
+        url_data: None,
     };
     SelectorList::parse(&parser, input)
 }
@@ -23,5 +24,7 @@ fn test_selectors() {
     assert_roundtrip!(parse_selector, "div");
     assert_roundtrip!(parse_selector, "svg|circle");
     assert_roundtrip!(parse_selector, "p:before", "p::before");
-    assert_roundtrip!(parse_selector, "[border = \"0\"]:-servo-nonzero-border ~ ::-servo-details-summary");
+    assert_roundtrip!(parse_selector, "[border=\"0\"]:-servo-nonzero-border ~ ::-servo-details-summary");
+    assert_roundtrip!(parse_selector, "* > *");
+    assert_roundtrip!(parse_selector, "*|* + *", "* + *");
 }

@@ -64,6 +64,8 @@ using namespace mozilla::layers;
 unsigned GLContext::sCurrentGLContextTLS = -1;
 #endif
 
+MOZ_THREAD_LOCAL(GLContext*) GLContext::sCurrentContext;
+
 // If adding defines, don't forget to undefine symbols. See #undef block below.
 #define CORE_SYMBOL(x) { (PRFuncPtr*) &mSymbols.f##x, { #x, nullptr } }
 #define CORE_EXT_SYMBOL2(x,y,z) { (PRFuncPtr*) &mSymbols.f##x, { #x, #x #y, #x #z, nullptr } }
@@ -149,6 +151,7 @@ static const char* const sExtensionNames[] = {
     "GL_EXT_texture3D",
     "GL_EXT_texture_compression_dxt1",
     "GL_EXT_texture_compression_s3tc",
+    "GL_EXT_texture_compression_s3tc_srgb",
     "GL_EXT_texture_filter_anisotropic",
     "GL_EXT_texture_format_BGRA8888",
     "GL_EXT_texture_sRGB",
@@ -195,6 +198,15 @@ static const char* const sExtensionNames[] = {
     "GL_OES_texture_npot",
     "GL_OES_vertex_array_object"
 };
+
+static bool
+ShouldUseTLSIsCurrent(bool useTLSIsCurrent)
+{
+    if (gfxPrefs::UseTLSIsCurrent() == 0)
+        return useTLSIsCurrent;
+
+    return gfxPrefs::UseTLSIsCurrent() > 0;
+}
 
 static bool
 ParseVersion(const std::string& versionStr, uint32_t* const out_major,
@@ -254,9 +266,10 @@ ChooseDebugFlags(CreateContextFlags createFlags)
 }
 
 GLContext::GLContext(CreateContextFlags flags, const SurfaceCaps& caps,
-                     GLContext* sharedContext, bool isOffscreen)
+                     GLContext* sharedContext, bool isOffscreen, bool useTLSIsCurrent)
   : mIsOffscreen(isOffscreen),
     mContextLost(false),
+    mUseTLSIsCurrent(ShouldUseTLSIsCurrent(useTLSIsCurrent)),
     mVersion(0),
     mProfile(ContextProfile::Unknown),
     mShadingLanguageVersion(0),
@@ -278,11 +291,14 @@ GLContext::GLContext(CreateContextFlags flags, const SurfaceCaps& caps,
     mTextureAllocCrashesOnMapFailure(false),
     mNeedsCheckAfterAttachTextureToFb(false),
     mWorkAroundDriverBugs(true),
+    mSyncGLCallCount(0),
     mHeavyGLCallsSinceLastFlush(false)
 {
     mMaxViewportDims[0] = 0;
     mMaxViewportDims[1] = 0;
     mOwningThreadId = PlatformThread::CurrentId();
+    MOZ_ALWAYS_TRUE( sCurrentContext.init() );
+    sCurrentContext.set(nullptr);
 }
 
 GLContext::~GLContext() {
@@ -520,7 +536,9 @@ GLContext::InitWithPrefixImpl(const char* prefix, bool trygl)
 
     ////////////////
 
-    MakeCurrent();
+    if (!MakeCurrent()) {
+        return false;
+    }
 
     const std::string versionStr = (const char*)fGetString(LOCAL_GL_VERSION);
     if (versionStr.find("OpenGL ES") == 0) {
@@ -535,11 +553,8 @@ GLContext::InitWithPrefixImpl(const char* prefix, bool trygl)
     MOZ_ASSERT(majorVer < 10);
     MOZ_ASSERT(minorVer < 10);
     mVersion = majorVer*100 + minorVer*10;
-    if (mVersion < 200) {
-        // Mac OSX 10.6/10.7 machines with Intel GPUs claim only OpenGL 1.4 but
-        // have all the GL2+ extensions that we need.
-        mVersion = 200;
-    }
+    if (mVersion < 200)
+        return false;
 
     ////
 
@@ -1722,6 +1737,13 @@ GLContext::InitExtensions()
         {
             MarkExtensionUnsupported(EXT_texture_compression_s3tc);
         }
+
+        // OSX supports EXT_texture_sRGB in Legacy contexts, but not in Core contexts.
+        // Though EXT_texture_sRGB was included into GL2.1, it *excludes* the interactions
+        // with s3tc. Strictly speaking, you must advertize support for EXT_texture_sRGB
+        // in order to allow for srgb+s3tc on desktop GL. The omission of EXT_texture_sRGB
+        // in OSX Core contexts appears to be a bug.
+        MarkExtensionSupported(EXT_texture_sRGB);
 #endif
     }
 
@@ -2434,8 +2456,9 @@ GLContext::FlushIfHeavyGLCallsSinceLastFlush()
     if (!mHeavyGLCallsSinceLastFlush) {
         return;
     }
-    MakeCurrent();
-    fFlush();
+    if (MakeCurrent()) {
+        fFlush();
+    }
 }
 
 /*static*/ bool
@@ -2488,14 +2511,13 @@ SplitByChar(const nsACString& str, const char delim, std::vector<nsCString>* con
         out->push_back(nsCString(substr));
 
         start = end + 1;
-        continue;
     }
 
     nsDependentCSubstring substr(str, start);
     out->push_back(nsCString(substr));
 }
 
-void
+bool
 GLContext::Readback(SharedSurface* src, gfx::DataSourceSurface* dest)
 {
     MOZ_ASSERT(src && dest);
@@ -2503,7 +2525,9 @@ GLContext::Readback(SharedSurface* src, gfx::DataSourceSurface* dest)
     MOZ_ASSERT(dest->GetFormat() == (src->mHasAlpha ? SurfaceFormat::B8G8R8A8
                                                     : SurfaceFormat::B8G8R8X8));
 
-    MakeCurrent();
+    if (!MakeCurrent()) {
+        return false;
+    }
 
     SharedSurface* prev = GetLockedSurface();
 
@@ -2582,6 +2606,8 @@ GLContext::Readback(SharedSurface* src, gfx::DataSourceSurface* dest)
         if (prev)
             prev->LockProd();
     }
+
+    return true;
 }
 
 // Do whatever tear-down is necessary after drawing to our offscreen FBO,
@@ -2883,7 +2909,9 @@ GLContext::InitOffscreen(const gfx::IntSize& size, const SurfaceCaps& caps)
     if (!CreateScreenBuffer(size, caps))
         return false;
 
-    MakeCurrent();
+    if (!MakeCurrent()) {
+        return false;
+    }
     fBindFramebuffer(LOCAL_GL_FRAMEBUFFER, 0);
     fScissor(0, 0, size.width, size.height);
     fViewport(0, 0, size.width, size.height);
@@ -2996,6 +3024,51 @@ GetBytesPerTexel(GLenum format, GLenum type)
 
     gfxCriticalError() << "Unknown texture type " << type << " or format " << format;
     return 0;
+}
+
+bool GLContext::MakeCurrent(bool aForce)
+{
+    if (IsDestroyed())
+        return false;
+
+#ifdef MOZ_GL_DEBUG
+    PR_SetThreadPrivate(sCurrentGLContextTLS, this);
+
+    // XXX this assertion is disabled because it's triggering on Mac;
+    // we need to figure out why and reenable it.
+#if 0
+    // IsOwningThreadCurrent is a bit of a misnomer;
+    // the "owning thread" is the creation thread,
+    // and the only thread that can own this.  We don't
+    // support contexts used on multiple threads.
+    NS_ASSERTION(IsOwningThreadCurrent(),
+                 "MakeCurrent() called on different thread than this context was created on!");
+#endif
+#endif
+    if (mUseTLSIsCurrent && !aForce && sCurrentContext.get() == this) {
+        MOZ_ASSERT(IsCurrent());
+        return true;
+    }
+
+    if (!MakeCurrentImpl(aForce))
+        return false;
+
+    if (mUseTLSIsCurrent) {
+        sCurrentContext.set(this);
+    }
+
+    return true;
+}
+
+void
+GLContext::ResetSyncCallCount(const char* resetReason) const
+{
+    if (ShouldSpew()) {
+        printf_stderr("On %s, mSyncGLCallCount = %" PRIu64 "\n",
+                       resetReason, mSyncGLCallCount);
+    }
+
+    mSyncGLCallCount = 0;
 }
 
 } /* namespace gl */

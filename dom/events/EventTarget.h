@@ -99,6 +99,14 @@ public:
   // Called from AsyncEventDispatcher to notify it is running.
   virtual void AsyncEventRunning(AsyncEventDispatcher* aEvent) {}
 
+  // Used by APZ to determine whether this event target has non-chrome event
+  // listeners for untrusted key events.
+  bool HasNonSystemGroupListenersForUntrustedKeyEvents() const;
+
+  // Used by APZ to determine whether this event target has non-chrome and
+  // non-passive event listeners for untrusted key events.
+  bool HasNonPassiveNonSystemGroupListenersForUntrustedKeyEvents() const;
+
   virtual bool IsApzAware() const;
 
 protected:

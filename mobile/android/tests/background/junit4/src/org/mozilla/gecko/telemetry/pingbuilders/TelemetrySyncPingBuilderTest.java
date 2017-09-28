@@ -14,9 +14,13 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mozilla.gecko.background.testhelpers.TestRunner;
 import org.mozilla.gecko.sync.ExtendedJSONObject;
+import org.mozilla.gecko.sync.telemetry.TelemetryStageCollector;
+import org.mozilla.gecko.sync.validation.BookmarkValidationResults;
+import org.mozilla.gecko.sync.validation.ValidationResults;
 import org.mozilla.gecko.telemetry.TelemetryLocalPing;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 
 import static org.junit.Assert.*;
 
@@ -43,7 +47,6 @@ public class TelemetrySyncPingBuilderTest {
         assertEquals("uid", payload.getString("uid"));
         assertEquals(Long.valueOf(123L), payload.getLong("took"));
         assertEquals("device-id", payload.getString("deviceID"));
-        assertEquals(Integer.valueOf(1), payload.getIntegerSafely("version"));
         assertFalse(payload.containsKey("restarted"));
 
         localPing = builder
@@ -56,8 +59,58 @@ public class TelemetrySyncPingBuilderTest {
         assertEquals("uid", payload.getString("uid"));
         assertEquals(Long.valueOf(123L), payload.getLong("took"));
         assertEquals("device-id", payload.getString("deviceID"));
-        assertEquals(Integer.valueOf(1), payload.getIntegerSafely("version"));
+        assertTrue(payload.getLong("when") != null);
         assertEquals(true, payload.getBoolean("restarted"));
+    }
+
+    @Test
+    public void testStage() throws Exception {
+        HashMap<String, TelemetryStageCollector> stages = new HashMap<>();
+        TelemetryStageCollector stage = new TelemetryStageCollector(null);
+        stage.validation = new ExtendedJSONObject();
+        stage.validation.put("took", 1L);
+        stage.validation.put("checked", 0L);
+        stage.validation.put("problems", new JSONArray());
+
+        stage.error = new ExtendedJSONObject();
+        stage.error.put("name", "unexpectederror");
+        stage.error.put("error", "test");
+        stage.started = 100;
+        stage.finished = 105;
+        stage.inbound = 5;
+        stage.inboundStored = 3;
+        stage.inboundFailed = 1;
+        stage.reconciled = 1;
+
+
+        stages.put("testing", stage);
+        TelemetryLocalPing localPing = builder
+                .setStages(stages)
+                .build();
+        ExtendedJSONObject payload = localPing.getPayload();
+
+        assertEquals(1, payload.getArray("engines").size());
+        ExtendedJSONObject engine = (ExtendedJSONObject)payload.getArray("engines").get(0);
+
+        assertEquals("testing", engine.getString("name"));
+        assertEquals(Long.valueOf(5L), engine.getLong("took"));
+
+        ExtendedJSONObject inbound = engine.getObject("incoming");
+        assertEquals(Integer.valueOf(stage.inbound), inbound.getIntegerSafely("applied"));
+        assertEquals(Integer.valueOf(stage.inboundStored), inbound.getIntegerSafely("succeeded"));
+        assertEquals(Integer.valueOf(stage.inboundFailed), inbound.getIntegerSafely("failed"));
+        assertEquals(Integer.valueOf(stage.reconciled), inbound.getIntegerSafely("reconciled"));
+
+        // TODO: Test outbound once bug 1389233 is addressed
+
+        ExtendedJSONObject error = engine.getObject("failureReason");
+        assertEquals("unexpectederror", error.getString("name"));
+        assertEquals("test", error.getString("error"));
+
+        ExtendedJSONObject validation = engine.getObject("validation");
+        assertEquals(stage.validation.getLong("took"), validation.getLong("took"));
+        assertEquals(stage.validation.getLong("checked"), validation.getLong("checked"));
+        assertEquals(0, stage.validation.getArray("problems").size());
     }
 
     @Test
@@ -70,10 +123,8 @@ public class TelemetrySyncPingBuilderTest {
         ExtendedJSONObject payload = localPing.getPayload();
 
         // Empty list isn't part of the JSON.
-        assertEquals(
-                "{\"version\":1}",
-                payload.toString()
-        );
+        assertTrue(payload.containsKey("when"));
+        assertEquals(1, payload.keySet().size());
 
         Bundle device = new Bundle();
         device.putString("os", "Android");

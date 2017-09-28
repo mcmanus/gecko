@@ -154,7 +154,7 @@ public:
   /**
    * Our element had HTMLInputElement::Select() called on it.
    */
-  nsresult HandleSelectCall();
+  void HandleSelectCall();
 
   virtual Element* GetPseudoElement(CSSPseudoElementType aType) override;
 
@@ -174,7 +174,8 @@ private:
   {
   public:
     explicit SyncDisabledStateEvent(nsNumberControlFrame* aFrame)
-    : mFrame(aFrame)
+      : mozilla::Runnable("nsNumberControlFrame::SyncDisabledStateEvent")
+      , mFrame(aFrame)
     {}
 
     NS_IMETHOD Run() override

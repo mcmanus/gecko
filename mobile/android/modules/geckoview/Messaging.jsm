@@ -6,14 +6,18 @@
 const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 this.EXPORTED_SYMBOLS = ["sendMessageToJava", "Messaging", "EventDispatcher"];
 
-XPCOMUtils.defineLazyServiceGetter(this, "uuidgen",
+XPCOMUtils.defineLazyModuleGetter(this, "Task", "resource://gre/modules/Task.jsm");
+
+XPCOMUtils.defineLazyServiceGetter(this, "UUIDGen",
                                    "@mozilla.org/uuid-generator;1",
                                    "nsIUUIDGenerator");
+
+const IS_PARENT_PROCESS = (Services.appinfo.processType ==
+                           Services.appinfo.PROCESS_TYPE_DEFAULT);
 
 function sendMessageToJava(aMessage, aCallback) {
   Cu.reportError("sendMessageToJava is deprecated. Use EventDispatcher instead.");
@@ -27,8 +31,9 @@ function sendMessageToJava(aMessage, aCallback) {
   }
 }
 
-function DispatcherDelegate(dispatcher) {
-  this._dispatcher = dispatcher;
+function DispatcherDelegate(aDispatcher, aMessageManager) {
+  this._dispatcher = aDispatcher;
+  this._messageManager = aMessageManager;
 }
 
 DispatcherDelegate.prototype = {
@@ -38,7 +43,10 @@ DispatcherDelegate.prototype = {
    * @param listener Target listener implementing nsIAndroidEventListener.
    * @param events   String or array of strings of events to listen to.
    */
-  registerListener: function (listener, events) {
+  registerListener: function(listener, events) {
+    if (!this._dispatcher) {
+      throw new Error("Can only listen in parent process");
+    }
     this._dispatcher.registerListener(listener, events);
   },
 
@@ -48,7 +56,10 @@ DispatcherDelegate.prototype = {
    * @param listener Registered listener implementing nsIAndroidEventListener.
    * @param events   String or array of strings of events to stop listening to.
    */
-  unregisterListener: function (listener, events) {
+  unregisterListener: function(listener, events) {
+    if (!this._dispatcher) {
+      throw new Error("Can only listen in parent process");
+    }
     this._dispatcher.unregisterListener(listener, events);
   },
 
@@ -61,8 +72,36 @@ DispatcherDelegate.prototype = {
    * @param data     Optional object containing data for the event.
    * @param callback Optional callback implementing nsIAndroidEventCallback.
    */
-  dispatch: function (event, data, callback) {
-    this._dispatcher.dispatch(event, data, callback);
+  dispatch: function(event, data, callback) {
+    if (this._dispatcher) {
+      this._dispatcher.dispatch(event, data, callback);
+      return;
+    }
+
+    let mm = this._messageManager || Services.cpmm;
+    let forwardData = {
+      global: !this._messageManager,
+      event: event,
+      data: data,
+    };
+
+    if (callback) {
+      forwardData.uuid = UUIDGen.generateUUID().toString();
+      mm.addMessageListener("GeckoView:MessagingReply", function listener(msg) {
+        if (msg.data.uuid === forwardData.uuid) {
+          mm.removeMessageListener(msg.name, listener);
+          if (msg.data.type === "success") {
+            callback.onSuccess(msg.data.response);
+          } else if (msg.data.type === "error") {
+            callback.onError(msg.data.response);
+          } else {
+            throw new Error("invalid reply type");
+          }
+        }
+      });
+    }
+
+    mm.sendAsyncMessage("GeckoView:Messaging", forwardData);
   },
 
   /**
@@ -74,10 +113,10 @@ DispatcherDelegate.prototype = {
    *
    * @param msg Message to send; must be an object with a "type" property
    */
-  sendRequest: function (msg) {
+  sendRequest: function(msg, callback) {
     let type = msg.type;
     msg.type = undefined;
-    this.dispatch(type, msg);
+    this.dispatch(type, msg, callback);
   },
 
   /**
@@ -86,14 +125,14 @@ DispatcherDelegate.prototype = {
    * @param msg Message to send; must be an object with a "type" property
    * @returns A Promise resolving to the response
    */
-  sendRequestForResult: function (msg) {
+  sendRequestForResult: function(msg) {
     return new Promise((resolve, reject) => {
       let type = msg.type;
       msg.type = undefined;
 
       this.dispatch(type, msg, {
-        onSuccess: response => resolve(response),
-        onError: response => reject(response)
+        onSuccess: resolve,
+        onError: reject,
       });
     });
   },
@@ -128,7 +167,7 @@ DispatcherDelegate.prototype = {
    *                 (see example usage above).
    * @param event    Event name that this listener should observe.
    */
-  addListener: function (listener, event) {
+  addListener: function(listener, event) {
     if (this._requestHandler.listeners[event]) {
       throw new Error("Error in addListener: A listener already exists for event " + event);
     }
@@ -145,7 +184,7 @@ DispatcherDelegate.prototype = {
    *
    * @param event The event to stop listening for.
    */
-  removeListener: function (event) {
+  removeListener: function(event) {
     if (!this._requestHandler.listeners[event]) {
       throw new Error("Error in removeListener: There is no listener for event " + event);
     }
@@ -157,35 +196,95 @@ DispatcherDelegate.prototype = {
   _requestHandler: {
     listeners: {},
 
-    onEvent: Task.async(function* (event, data, callback) {
-      try {
-        let response = yield this.listeners[event](data.data);
+    onEvent: function(event, data, callback) {
+      let self = this;
+      Task.spawn(function* () {
+        return yield self.listeners[event](data.data);
+      }).then(response => {
         callback.onSuccess(response);
-
-      } catch (e) {
+      }, error => {
         Cu.reportError("Error in Messaging handler for " + event + ": " + e);
-
         callback.onError({
           message: e.message || (e && e.toString()),
           stack: e.stack || Components.stack.formattedStack,
         });
-      }
-    }),
+      });
+    },
   },
 };
 
 var EventDispatcher = {
-  instance: new DispatcherDelegate(Services.androidBridge),
+  instance: new DispatcherDelegate(IS_PARENT_PROCESS ? Services.androidBridge : undefined),
 
-  for: function (window) {
-    let view = window && window.arguments && window.arguments[0] &&
-        window.arguments[0].QueryInterface(Ci.nsIAndroidView);
+  /**
+   * Return an EventDispatcher instance for a chrome DOM window. In a content
+   * process, return a proxy through the message manager that automatically
+   * forwards events to the main process.
+   *
+   * To force using a message manager proxy (for example in a frame script
+   * environment), call forMessageManager.
+   *
+   * @param aWindow a chrome DOM window.
+   */
+  for: function(aWindow) {
+    let view = aWindow && aWindow.arguments && aWindow.arguments[0] &&
+               aWindow.arguments[0].QueryInterface(Ci.nsIAndroidView);
+
     if (!view) {
-      throw new Error("window is not a GeckoView-connected window");
+      let mm = !IS_PARENT_PROCESS && aWindow && aWindow.messageManager;
+      if (!mm) {
+        throw new Error("window is not a GeckoView-connected window and does" +
+                        " not have a message manager");
+      }
+      return this.forMessageManager(mm);
     }
+
     return new DispatcherDelegate(view);
   },
+
+  /**
+   * Return an EventDispatcher instance for a message manager associated with a
+   * window.
+   *
+   * @param aWindow a message manager.
+   */
+  forMessageManager: function(aMessageManager) {
+    return new DispatcherDelegate(null, aMessageManager);
+  },
+
+  receiveMessage: function(aMsg) {
+    // aMsg.data includes keys: global, event, data, uuid
+    let callback;
+    if (aMsg.data.uuid) {
+      let reply = (type, response) => {
+        let mm = aMsg.data.global ? aMsg.target : aMsg.target.messageManager;
+        mm.sendAsyncMessage("GeckoView:MessagingReply", {
+          type: type,
+          response: response,
+          uuid: aMsg.data.uuid,
+        });
+      };
+      callback = {
+        onSuccess: response => reply("success", response),
+        onError: error => reply("error", error),
+      };
+    }
+
+    if (aMsg.data.global) {
+      this.instance.dispatch(aMsg.data.event, aMsg.data.data.callback);
+      return;
+    }
+
+    let win = aMsg.target.ownerGlobal;
+    let dispatcher = win.WindowEventDispatcher || this.for(win);
+    dispatcher.dispatch(aMsg.data.event, aMsg.data.data, callback);
+  },
 };
+
+if (IS_PARENT_PROCESS) {
+  Services.mm.addMessageListener("GeckoView:Messaging", EventDispatcher);
+  Services.ppmm.addMessageListener("GeckoView:Messaging", EventDispatcher);
+}
 
 // For backwards compatibility.
 var Messaging = {};

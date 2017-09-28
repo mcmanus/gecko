@@ -1,8 +1,12 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#if defined(MOZILLA_INTERNAL_API)
+#include "mozilla/dom/ContentChild.h"
+#endif
 
 #if defined(ACCESSIBILITY)
 #include "mozilla/mscom/Registration.h"
@@ -11,11 +15,19 @@
 #endif
 #endif
 
+#include "mozilla/mscom/Objref.h"
 #include "mozilla/mscom/Utils.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/WindowsVersion.h"
 
 #include <objbase.h>
 #include <objidl.h>
+#include <shlwapi.h>
+#include <winnt.h>
+
+#if defined(_MSC_VER)
+extern "C" IMAGE_DOS_HEADER __ImageBase;
+#endif
 
 namespace mozilla {
 namespace mscom {
@@ -74,6 +86,143 @@ IsValidGUID(REFGUID aCheckGuid)
   BYTE version = HIBYTE(aCheckGuid.Data3) >> 4;
   // Other versions are specified in RFC4122 but these are the two used by COM.
   return version == 1 || version == 4;
+}
+
+uintptr_t
+GetContainingModuleHandle()
+{
+  HMODULE thisModule = nullptr;
+#if defined(_MSC_VER)
+  thisModule = reinterpret_cast<HMODULE>(&__ImageBase);
+#else
+  if (!GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                         GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCTSTR>(&GetContainingModuleHandle),
+                         &thisModule)) {
+    return 0;
+  }
+#endif
+  return reinterpret_cast<uintptr_t>(thisModule);
+}
+
+uint32_t
+CreateStream(const uint8_t* aInitBuf, const uint32_t aInitBufSize,
+             IStream** aOutStream)
+{
+  if (!aInitBufSize || !aOutStream) {
+    return E_INVALIDARG;
+  }
+
+  *aOutStream = nullptr;
+
+  HRESULT hr;
+  RefPtr<IStream> stream;
+
+  if (IsWin8OrLater()) {
+    // SHCreateMemStream is not safe for us to use until Windows 8. On older
+    // versions of Windows it is not thread-safe and it creates IStreams that do
+    // not support the full IStream API.
+
+    // If aInitBuf is null then initSize must be 0.
+    UINT initSize = aInitBuf ? aInitBufSize : 0;
+    stream = already_AddRefed<IStream>(::SHCreateMemStream(aInitBuf, initSize));
+    if (!stream) {
+      return E_OUTOFMEMORY;
+    }
+
+    if (!aInitBuf) {
+      // Now we'll set the required size
+      ULARGE_INTEGER newSize;
+      newSize.QuadPart = aInitBufSize;
+      hr = stream->SetSize(newSize);
+      if (FAILED(hr)) {
+        return hr;
+      }
+    }
+  } else {
+    HGLOBAL hglobal = ::GlobalAlloc(GMEM_MOVEABLE, aInitBufSize);
+    if (!hglobal) {
+      return HRESULT_FROM_WIN32(::GetLastError());
+    }
+
+    // stream takes ownership of hglobal if this call is successful
+    hr = ::CreateStreamOnHGlobal(hglobal, TRUE, getter_AddRefs(stream));
+    if (FAILED(hr)) {
+      ::GlobalFree(hglobal);
+      return hr;
+    }
+
+    // The default stream size is derived from ::GlobalSize(hglobal), which due
+    // to rounding may be larger than aInitBufSize. We forcibly set the correct
+    // stream size here.
+    ULARGE_INTEGER streamSize;
+    streamSize.QuadPart = aInitBufSize;
+    hr = stream->SetSize(streamSize);
+    if (FAILED(hr)) {
+      return hr;
+    }
+
+    if (aInitBuf) {
+      ULONG bytesWritten;
+      hr = stream->Write(aInitBuf, aInitBufSize, &bytesWritten);
+      if (FAILED(hr)) {
+        return hr;
+      }
+
+      if (bytesWritten != aInitBufSize) {
+        return E_UNEXPECTED;
+      }
+    }
+  }
+
+  // Ensure that the stream is rewound
+  LARGE_INTEGER streamOffset;
+  streamOffset.QuadPart = 0LL;
+  hr = stream->Seek(streamOffset, STREAM_SEEK_SET, nullptr);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  stream.forget(aOutStream);
+  return S_OK;
+}
+
+uint32_t
+CopySerializedProxy(IStream* aInStream, IStream** aOutStream)
+{
+  if (!aInStream || !aOutStream) {
+    return E_INVALIDARG;
+  }
+
+  *aOutStream = nullptr;
+
+  uint32_t desiredStreamSize = GetOBJREFSize(WrapNotNull(aInStream));
+  if (!desiredStreamSize) {
+    return E_INVALIDARG;
+  }
+
+  RefPtr<IStream> stream;
+  HRESULT hr = CreateStream(nullptr, desiredStreamSize, getter_AddRefs(stream));
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  ULARGE_INTEGER numBytesToCopy;
+  numBytesToCopy.QuadPart = desiredStreamSize;
+  hr = aInStream->CopyTo(stream, numBytesToCopy, nullptr, nullptr);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  LARGE_INTEGER seekTo;
+  seekTo.QuadPart = 0LL;
+  hr = stream->Seek(seekTo, STREAM_SEEK_SET, nullptr);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  stream.forget(aOutStream);
+  return S_OK;
 }
 
 #if defined(MOZILLA_INTERNAL_API)
@@ -142,6 +291,31 @@ IsVtableIndexFromParentInterface(REFIID aInterface, unsigned long aVtableIndex)
 }
 
 #if defined(MOZILLA_INTERNAL_API)
+
+bool
+IsCallerExternalProcess()
+{
+  MOZ_ASSERT(XRE_IsContentProcess());
+
+  /**
+   * CoGetCallerTID() gives us the caller's thread ID when that thread resides
+   * in a single-threaded apartment. Since our chrome main thread does live
+   * inside an STA, we will therefore be able to check whether the caller TID
+   * equals our chrome main thread TID. This enables us to distinguish
+   * between our chrome thread vs other out-of-process callers. We check for
+   * S_FALSE to ensure that the caller is a different process from ours, which
+   * is the only scenario that we care about.
+   */
+  DWORD callerTid;
+  if (::CoGetCallerTID(&callerTid) != S_FALSE) {
+    return false;
+  }
+
+  // Now check whether the caller is our parent process main thread.
+  const DWORD parentMainTid =
+    dom::ContentChild::GetSingleton()->GetChromeMainThreadId();
+  return callerTid != parentMainTid;
+}
 
 bool
 IsInterfaceEqualToOrInheritedFrom(REFIID aInterface, REFIID aFrom,

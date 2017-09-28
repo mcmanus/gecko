@@ -21,7 +21,7 @@ namespace dom {
 NS_IMPL_CYCLE_COLLECTION_INHERITED(BiquadFilterNode, AudioNode,
                                    mFrequency, mDetune, mQ, mGain)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(BiquadFilterNode)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(BiquadFilterNode)
 NS_INTERFACE_MAP_END_INHERITING(AudioNode)
 
 NS_IMPL_ADDREF_INHERITED(BiquadFilterNode, AudioNode)
@@ -159,9 +159,8 @@ public:
 
           RefPtr<PlayingRefChangeHandler> refchanged =
             new PlayingRefChangeHandler(aStream, PlayingRefChangeHandler::RELEASE);
-          aStream->Graph()->
-            DispatchToMainThreadAfterStreamStateUpdate(mAbstractMainThread,
-                                                       refchanged.forget());
+          aStream->Graph()->DispatchToMainThreadAfterStreamStateUpdate(
+            refchanged.forget());
         }
 
         aOutput->SetNull(WEBAUDIO_BLOCK_SIZE);
@@ -174,9 +173,8 @@ public:
       if (mBiquads.IsEmpty()) {
         RefPtr<PlayingRefChangeHandler> refchanged =
           new PlayingRefChangeHandler(aStream, PlayingRefChangeHandler::ADDREF);
-        aStream->Graph()->
-          DispatchToMainThreadAfterStreamStateUpdate(mAbstractMainThread,
-                                                     refchanged.forget());
+        aStream->Graph()->DispatchToMainThreadAfterStreamStateUpdate(
+          refchanged.forget());
       } else { // Help people diagnose bug 924718
         WebAudioUtils::LogToDeveloperConsole(mWindowID,
                                              "BiquadFilterChannelCountChangeWarning");
@@ -236,7 +234,7 @@ public:
   }
 
 private:
-  AudioNodeStream* mDestination;
+  RefPtr<AudioNodeStream> mDestination;
   BiquadFilterType mType;
   AudioParamTimeline mFrequency;
   AudioParamTimeline mDetune;

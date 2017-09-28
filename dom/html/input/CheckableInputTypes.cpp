@@ -8,10 +8,12 @@
 
 #include "mozilla/dom/HTMLInputElement.h"
 
+/* input type=checkbox */
+
 bool
 CheckboxInputType::IsValueMissing() const
 {
-  if (!mInputElement->HasAttr(kNameSpaceID_None, nsGkAtoms::required)) {
+  if (!mInputElement->IsRequired()) {
     return false;
   }
 
@@ -20,4 +22,22 @@ CheckboxInputType::IsValueMissing() const
   }
 
   return !mInputElement->Checked();
+}
+
+nsresult
+CheckboxInputType::GetValueMissingMessage(nsAString& aMessage)
+{
+  return nsContentUtils::GetLocalizedString(nsContentUtils::eDOM_PROPERTIES,
+                                            "FormValidationCheckboxMissing",
+                                            aMessage);
+}
+
+/* input type=radio */
+
+nsresult
+RadioInputType::GetValueMissingMessage(nsAString& aMessage)
+{
+  return nsContentUtils::GetLocalizedString(nsContentUtils::eDOM_PROPERTIES,
+                                            "FormValidationRadioMissing",
+                                            aMessage);
 }

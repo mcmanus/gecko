@@ -408,13 +408,14 @@ public:
              already_AddRefed<AbstractResult>& aDiscardedResult,
              const nsACString& aOperation,
              int32_t aOSError)
-    : mOnSuccess(aOnSuccess)
+    : Runnable("ErrorEvent")
+    , mOnSuccess(aOnSuccess)
     , mOnError(aOnError)
     , mDiscardedResult(aDiscardedResult)
     , mOSError(aOSError)
     , mOperation(aOperation)
-    {
-      MOZ_ASSERT(!NS_IsMainThread());
+  {
+    MOZ_ASSERT(!NS_IsMainThread());
     }
 
   NS_IMETHOD Run() override {
@@ -457,14 +458,16 @@ public:
    * we do not manipulate xpconnect refcounters off the main thread
    * (which is illegal).
    */
-  SuccessEvent(nsMainThreadPtrHandle<nsINativeOSFileSuccessCallback>& aOnSuccess,
-               nsMainThreadPtrHandle<nsINativeOSFileErrorCallback>& aOnError,
-               already_AddRefed<nsINativeOSFileResult>& aResult)
-    : mOnSuccess(aOnSuccess)
+  SuccessEvent(
+    nsMainThreadPtrHandle<nsINativeOSFileSuccessCallback>& aOnSuccess,
+    nsMainThreadPtrHandle<nsINativeOSFileErrorCallback>& aOnError,
+    already_AddRefed<nsINativeOSFileResult>& aResult)
+    : Runnable("SuccessEvent")
+    , mOnSuccess(aOnSuccess)
     , mOnError(aOnError)
     , mResult(aResult)
-    {
-      MOZ_ASSERT(!NS_IsMainThread());
+  {
+    MOZ_ASSERT(!NS_IsMainThread());
     }
 
   NS_IMETHOD Run() override {
@@ -497,9 +500,11 @@ public:
  */
 class AbstractDoEvent: public Runnable {
 public:
-  AbstractDoEvent(nsMainThreadPtrHandle<nsINativeOSFileSuccessCallback>& aOnSuccess,
-                  nsMainThreadPtrHandle<nsINativeOSFileErrorCallback>& aOnError)
-    : mOnSuccess(aOnSuccess)
+  AbstractDoEvent(
+    nsMainThreadPtrHandle<nsINativeOSFileSuccessCallback>& aOnSuccess,
+    nsMainThreadPtrHandle<nsINativeOSFileErrorCallback>& aOnError)
+    : Runnable("AbstractDoEvent")
+    , mOnSuccess(aOnSuccess)
     , mOnError(aOnError)
 #if defined(DEBUG)
     , mResolved(false)
@@ -525,7 +530,8 @@ public:
       // Last ditch attempt to release on the main thread - some of
       // the members of event are not thread-safe, so letting the
       // pointer go out of scope would cause a crash.
-      NS_ReleaseOnMainThread("AbstractDoEvent::ErrorEvent", event.forget());
+      NS_ReleaseOnMainThreadSystemGroup("AbstractDoEvent::ErrorEvent",
+                                        event.forget());
     }
   }
 
@@ -542,7 +548,8 @@ public:
       // Last ditch attempt to release on the main thread - some of
       // the members of event are not thread-safe, so letting the
       // pointer go out of scope would cause a crash.
-      NS_ReleaseOnMainThread("AbstractDoEvent::SuccessEvent", event.forget());
+      NS_ReleaseOnMainThreadSystemGroup("AbstractDoEvent::SuccessEvent",
+                                        event.forget());
     }
 
   }
@@ -743,7 +750,8 @@ public:
     if (!mResult) {
       return;
     }
-    NS_ReleaseOnMainThread("DoReadToTypedArrayEvent::mResult", mResult.forget());
+    NS_ReleaseOnMainThreadSystemGroup("DoReadToTypedArrayEvent::mResult",
+                                      mResult.forget());
   }
 
 protected:
@@ -780,7 +788,8 @@ public:
     if (!mResult) {
       return;
     }
-    NS_ReleaseOnMainThread("DoReadToStringEvent::mResult", mResult.forget());
+    NS_ReleaseOnMainThreadSystemGroup("DoReadToStringEvent::mResult",
+                                      mResult.forget());
   }
 
 protected:

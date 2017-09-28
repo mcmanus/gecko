@@ -17,7 +17,7 @@ use style::computed_values::{font_stretch, font_weight};
 /// to be expanded or refactored when we support more of the font styling parameters.
 ///
 /// NB: If you change this, you will need to update `style::properties::compute_font_hash()`.
-#[derive(Clone, Copy, Eq, Hash, Deserialize, Serialize, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Serialize)]
 pub struct FontTemplateDescriptor {
     pub weight: font_weight::T,
     pub stretch: font_stretch::T,
@@ -46,7 +46,7 @@ impl FontTemplateDescriptor {
             // A value higher than all weights.
             return 1000
         }
-        ((self.weight as i16) - (other.weight as i16)).abs() as u32
+        ((self.weight.0 as i16) - (other.weight.0 as i16)).abs() as u32
     }
 }
 

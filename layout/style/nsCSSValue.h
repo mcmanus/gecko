@@ -10,6 +10,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/ServoTypes.h"
 #include "mozilla/SheetType.h"
 #include "mozilla/StyleComplexColor.h"
 #include "mozilla/URLExtraData.h"
@@ -40,6 +41,7 @@ class nsIURI;
 class nsPresContext;
 template <class T>
 class nsPtrHashKey;
+struct RustString;
 
 namespace mozilla {
 class CSSStyleSheet;
@@ -104,9 +106,14 @@ protected:
   // aString and aExtraData.
   URLValueData(const nsAString& aString,
                already_AddRefed<URLExtraData> aExtraData);
+  URLValueData(ServoRawOffsetArc<RustString> aString,
+               already_AddRefed<URLExtraData> aExtraData);
   // Construct with the actual URI.
   URLValueData(already_AddRefed<PtrHolder<nsIURI>> aURI,
                const nsAString& aString,
+               already_AddRefed<URLExtraData> aExtraData);
+  URLValueData(already_AddRefed<PtrHolder<nsIURI>> aURI,
+               ServoRawOffsetArc<RustString> aString,
                already_AddRefed<URLExtraData> aExtraData);
 
 public:
@@ -156,27 +163,51 @@ public:
 
   bool EqualsExceptRef(nsIURI* aURI) const;
 
+  // Can only be called from the main thread. Returns this URL's UTF-16 representation,
+  // converting and caching its value if necessary.
+  const nsString& GetUTF16String() const;
+  // Returns this URL's UTF-16 representation, converting if necessary.
+  nsString GetUTF16StringForAnyThread() const;
+
+  bool IsStringEmpty() const;
+
 private:
   // mURI stores the lazily resolved URI.  This may be null if the URI is
   // invalid, even once resolved.
   mutable PtrHandle<nsIURI> mURI;
 public:
-  nsString mString;
   RefPtr<URLExtraData> mExtraData;
 private:
+  // Returns a substring based on mStrings.mRustString which should not be exposed
+  // to external consumers.
+  nsDependentCSubstring GetRustString() const;
+
   mutable bool mURIResolved;
   // mIsLocalRef is set when url starts with a U+0023 number sign(#) character.
   mutable Maybe<bool> mIsLocalRef;
   mutable Maybe<bool> mMightHaveRef;
 
+  mutable union RustOrGeckoString {
+    explicit RustOrGeckoString(const nsAString& aString)
+    : mString(aString) {}
+    explicit RustOrGeckoString(ServoRawOffsetArc<RustString> aString)
+    : mRustString(aString) {}
+    ~RustOrGeckoString() {}
+    nsString mString;
+    mozilla::ServoRawOffsetArc<RustString> mRustString;
+  } mStrings;
+  mutable bool mUsingRustString;
+
 protected:
-  virtual ~URLValueData() = default;
+  virtual ~URLValueData();
 
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
 private:
   URLValueData(const URLValueData& aOther) = delete;
   URLValueData& operator=(const URLValueData& aOther) = delete;
+
+  friend struct ImageValue;
 };
 
 struct URLValue final : public URLValueData
@@ -200,6 +231,8 @@ struct URLValue final : public URLValueData
 
 struct ImageValue final : public URLValueData
 {
+  static ImageValue* CreateFromURLValue(URLValue* url, nsIDocument* aDocument);
+
   // Not making the constructor and destructor inline because that would
   // force us to include imgIRequest.h, which leads to REQUIRES hell, since
   // this header is included all over.
@@ -209,9 +242,19 @@ struct ImageValue final : public URLValueData
              already_AddRefed<URLExtraData> aExtraData,
              nsIDocument* aDocument);
 
+  // This constructor is only safe to call from the main thread.
+  ImageValue(nsIURI* aURI, ServoRawOffsetArc<RustString> aString,
+             already_AddRefed<URLExtraData> aExtraData,
+             nsIDocument* aDocument);
+
   // This constructor is safe to call from any thread, but Initialize
   // must be called later for the object to be useful.
   ImageValue(const nsAString& aString,
+             already_AddRefed<URLExtraData> aExtraData);
+
+  // This constructor is safe to call from any thread, but Initialize
+  // must be called later for the object to be useful.
+  ImageValue(ServoRawOffsetArc<RustString> aURIString,
              already_AddRefed<URLExtraData> aExtraData);
 
   ImageValue(const ImageValue&) = delete;
@@ -219,18 +262,18 @@ struct ImageValue final : public URLValueData
 
   void Initialize(nsIDocument* aDocument);
 
-  // XXXheycam We should have our own SizeOfIncludingThis method.
+  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
 protected:
   ~ImageValue();
+
+private:
+  bool mLoadedImage = false;
 
 public:
   // Inherit Equals from URLValueData
 
   nsRefPtrHashtable<nsPtrHashKey<nsIDocument>, imgRequestProxy> mRequests;
-
-private:
-  bool mLoadedImage = false;
 };
 
 struct GridNamedArea {
@@ -615,15 +658,11 @@ public:
     return !(*this == aOther);
   }
 
-  // Enum for AppendToString's aValueSerialization argument.
-  enum Serialization { eNormalized, eAuthorSpecified };
-
   /**
    * Serialize |this| as a specified value for |aProperty| and append
    * it to |aResult|.
    */
-  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                      Serialization aValueSerialization) const;
+  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
   nsCSSUnit GetUnit() const { return mUnit; }
   bool      IsLengthUnit() const
@@ -635,18 +674,18 @@ public:
    * which we try to match based on the physical characteristics of an
    * output device.
    */
-  bool      IsFixedLengthUnit() const  
+  bool      IsFixedLengthUnit() const
     { return mUnit == eCSSUnit_PhysicalMillimeter; }
   /**
    * What the spec calls relative length units is, for us, split
    * between relative length units and pixel length units.
-   * 
+   *
    * A "relative" length unit is a multiple of some derived metric,
    * such as a font em-size, which itself was controlled by an input CSS
    * length. Relative length units should not be scaled by zooming, since
    * the underlying CSS length would already have been scaled.
    */
-  bool      IsRelativeLengthUnit() const  
+  bool      IsRelativeLengthUnit() const
     { return eCSSUnit_EM <= mUnit && mUnit <= eCSSUnit_RootEM; }
   /**
    * A "pixel" length unit is a some multiple of CSS pixels.
@@ -661,11 +700,11 @@ public:
     { return IsPercentLengthUnit(mUnit); }
   static bool IsFloatUnit(nsCSSUnit aUnit)
     { return eCSSUnit_Number <= aUnit; }
-  bool      IsAngularUnit() const  
+  bool      IsAngularUnit() const
     { return eCSSUnit_Degree <= mUnit && mUnit <= eCSSUnit_Turn; }
-  bool      IsFrequencyUnit() const  
+  bool      IsFrequencyUnit() const
     { return eCSSUnit_Hertz <= mUnit && mUnit <= eCSSUnit_Kilohertz; }
-  bool      IsTimeUnit() const  
+  bool      IsTimeUnit() const
     { return eCSSUnit_Seconds <= mUnit && mUnit <= eCSSUnit_Milliseconds; }
   bool      IsCalcUnit() const
     { return eCSSUnit_Calc <= mUnit && mUnit <= eCSSUnit_Calc_Divided; }
@@ -854,8 +893,8 @@ public:
     MOZ_ASSERT(mUnit == eCSSUnit_URL || mUnit == eCSSUnit_Image,
                "not a URL value");
     return mUnit == eCSSUnit_URL ?
-             mValue.mURL->mString.get() :
-             mValue.mImage->mString.get();
+             mValue.mURL->GetUTF16String().get() :
+             mValue.mImage->GetUTF16String().get();
   }
 
   // Not making this inline because that would force us to include
@@ -975,13 +1014,11 @@ public:
   static void
   AppendSidesShorthandToString(const nsCSSPropertyID aProperties[],
                                const nsCSSValue* aValues[],
-                               nsAString& aString,
-                               Serialization aSerialization);
+                               nsAString& aString);
   static void
   AppendBasicShapeRadiusToString(const nsCSSPropertyID aProperties[],
                                  const nsCSSValue* aValues[],
-                                 nsAString& aResult,
-                                 Serialization aValueSerialization);
+                                 nsAString& aResult);
   static void
   AppendAlignJustifyValueToString(int32_t aValue, nsAString& aResult);
 
@@ -990,21 +1027,16 @@ private:
     return static_cast<char16_t*>(aBuffer->Data());
   }
 
-  void AppendPolygonToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                             Serialization aValueSerialization) const;
+  void AppendPolygonToString(nsCSSPropertyID aProperty,
+                             nsAString& aResult) const;
   void AppendPositionCoordinateToString(const nsCSSValue& aValue,
                                         nsCSSPropertyID aProperty,
-                                        nsAString& aResult,
-                                        Serialization aSerialization) const;
+                                        nsAString& aResult) const;
   void AppendCircleOrEllipseToString(
            nsCSSKeyword aFunctionId,
-           nsCSSPropertyID aProperty, nsAString& aResult,
-           Serialization aValueSerialization) const;
-  void AppendBasicShapePositionToString(
-           nsAString& aResult,
-           Serialization aValueSerialization) const;
-  void AppendInsetToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                           Serialization aValueSerialization) const;
+           nsCSSPropertyID aProperty, nsAString& aResult) const;
+  void AppendBasicShapePositionToString(nsAString& aResult) const;
+  void AppendInsetToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 protected:
   nsCSSUnit mUnit;
   union {
@@ -1128,8 +1160,7 @@ struct nsCSSValueList {
 
   nsCSSValueList* Clone() const;  // makes a deep copy. Infallible.
   void CloneInto(nsCSSValueList* aList) const; // makes a deep copy into aList
-  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                      nsCSSValue::Serialization aValueSerialization) const;
+  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
   static bool Equal(const nsCSSValueList* aList1,
                     const nsCSSValueList* aList2);
@@ -1191,8 +1222,7 @@ private:
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(nsCSSValueSharedList)
 
-  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                      nsCSSValue::Serialization aValueSerialization) const;
+  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
   bool operator==(nsCSSValueSharedList const& aOther) const;
   bool operator!=(const nsCSSValueSharedList& aOther) const
@@ -1232,8 +1262,7 @@ struct nsCSSRect {
   nsCSSRect(const nsCSSRect& aCopy);
   ~nsCSSRect();
 
-  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                      nsCSSValue::Serialization aValueSerialization) const;
+  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
   bool operator==(const nsCSSRect& aOther) const {
     return mTop == aOther.mTop &&
@@ -1374,8 +1403,7 @@ struct nsCSSValuePair {
            mYValue.GetUnit() != eCSSUnit_Null;
   }
 
-  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                      nsCSSValue::Serialization aValueSerialization) const;
+  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
@@ -1413,8 +1441,8 @@ struct nsCSSValueTriplet {
     {
         MOZ_COUNT_CTOR(nsCSSValueTriplet);
     }
-    nsCSSValueTriplet(const nsCSSValue& aXValue, 
-                      const nsCSSValue& aYValue, 
+    nsCSSValueTriplet(const nsCSSValue& aXValue,
+                      const nsCSSValue& aYValue,
                       const nsCSSValue& aZValue)
         : mXValue(aXValue), mYValue(aYValue), mZValue(aZValue)
     {
@@ -1466,8 +1494,7 @@ struct nsCSSValueTriplet {
                mZValue.GetUnit() != eCSSUnit_Null;
     }
 
-    void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                        nsCSSValue::Serialization aValueSerialization) const;
+    void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
     nsCSSValue mXValue;
     nsCSSValue mYValue;
@@ -1530,8 +1557,7 @@ struct nsCSSValuePairList {
   ~nsCSSValuePairList();
 
   nsCSSValuePairList* Clone() const; // makes a deep copy. Infallible.
-  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
-                      nsCSSValue::Serialization aValueSerialization) const;
+  void AppendToString(nsCSSPropertyID aProperty, nsAString& aResult) const;
 
   static bool Equal(const nsCSSValuePairList* aList1,
                     const nsCSSValuePairList* aList2);
@@ -1755,6 +1781,9 @@ private:
 public:
   bool operator==(const nsCSSValueTokenStream& aOther) const
   {
+    // This is not safe to call OMT, due to the URI/Principal Equals calls.
+    MOZ_ASSERT(NS_IsMainThread());
+
     bool eq;
     return mPropertyID == aOther.mPropertyID &&
            mShorthandPropertyID == aOther.mShorthandPropertyID &&

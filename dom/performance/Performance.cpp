@@ -8,9 +8,7 @@
 
 #include "GeckoProfiler.h"
 #include "nsRFPService.h"
-#ifdef MOZ_GECKO_PROFILER
 #include "ProfilerMarkerPayload.h"
-#endif
 #include "PerformanceEntry.h"
 #include "PerformanceMainThread.h"
 #include "PerformanceMark.h"
@@ -29,11 +27,7 @@
 #include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
 
-#ifdef MOZ_WIDGET_GONK
-#define PERFLOG(msg, ...)  __android_log_print(ANDROID_LOG_INFO, "PerformanceTiming", msg, ##__VA_ARGS__)
-#else
 #define PERFLOG(msg, ...) printf_stderr(msg, ##__VA_ARGS__)
-#endif
 
 namespace mozilla {
 namespace dom {
@@ -41,27 +35,6 @@ namespace dom {
 using namespace workers;
 
 namespace {
-
-// Helper classes
-class MOZ_STACK_CLASS PerformanceEntryComparator final
-{
-public:
-  bool Equals(const PerformanceEntry* aElem1,
-              const PerformanceEntry* aElem2) const
-  {
-    MOZ_ASSERT(aElem1 && aElem2,
-               "Trying to compare null performance entries");
-    return aElem1->StartTime() == aElem2->StartTime();
-  }
-
-  bool LessThan(const PerformanceEntry* aElem1,
-                const PerformanceEntry* aElem2) const
-  {
-    MOZ_ASSERT(aElem1 && aElem2,
-               "Trying to compare null performance entries");
-    return aElem1->StartTime() < aElem2->StartTime();
-  }
-};
 
 class PrefEnabledRunnable final
   : public WorkerCheckAPIExposureOnMainThreadRunnable
@@ -93,7 +66,7 @@ private:
 
 } // anonymous namespace
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(Performance)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(Performance)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(Performance,
@@ -283,27 +256,20 @@ Performance::Mark(const nsAString& aName, ErrorResult& aRv)
     return;
   }
 
-  // Don't add the entry if the buffer is full. XXX should be removed by bug 1159003.
-  if (mUserEntries.Length() >= mResourceTimingBufferSize) {
-    return;
-  }
-
   if (IsPerformanceTimingAttribute(aName)) {
     aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
     return;
   }
 
   RefPtr<PerformanceMark> performanceMark =
-    new PerformanceMark(GetAsISupports(), aName, Now());
+    new PerformanceMark(GetParentObject(), aName, Now());
   InsertUserEntry(performanceMark);
 
-#ifdef MOZ_GECKO_PROFILER
   if (profiler_is_active()) {
-    PROFILER_MARKER_PAYLOAD(
+    profiler_add_marker(
       "UserTiming",
       MakeUnique<UserTimingMarkerPayload>(aName, TimeStamp::Now()));
   }
-#endif
 }
 
 void
@@ -352,12 +318,6 @@ Performance::Measure(const nsAString& aName,
     return;
   }
 
-  // Don't add the entry if the buffer is full. XXX should be removed by bug
-  // 1159003.
-  if (mUserEntries.Length() >= mResourceTimingBufferSize) {
-    return;
-  }
-
   DOMHighResTimeStamp startTime;
   DOMHighResTimeStamp endTime;
 
@@ -388,20 +348,18 @@ Performance::Measure(const nsAString& aName,
   }
 
   RefPtr<PerformanceMeasure> performanceMeasure =
-    new PerformanceMeasure(GetAsISupports(), aName, startTime, endTime);
+    new PerformanceMeasure(GetParentObject(), aName, startTime, endTime);
   InsertUserEntry(performanceMeasure);
 
-#ifdef MOZ_GECKO_PROFILER
   if (profiler_is_active()) {
     TimeStamp startTimeStamp = CreationTimeStamp() +
                                TimeDuration::FromMilliseconds(startTime);
     TimeStamp endTimeStamp = CreationTimeStamp() +
                              TimeDuration::FromMilliseconds(endTime);
-    PROFILER_MARKER_PAYLOAD(
+    profiler_add_marker(
       "UserTiming",
       MakeUnique<UserTimingMarkerPayload>(aName, startTimeStamp, endTimeStamp));
   }
-#endif
 }
 
 void
@@ -516,7 +474,8 @@ class NotifyObserversTask final : public CancelableRunnable
 {
 public:
   explicit NotifyObserversTask(Performance* aPerformance)
-    : mPerformance(aPerformance)
+    : CancelableRunnable("dom::NotifyObserversTask")
+    , mPerformance(aPerformance)
   {
     MOZ_ASSERT(mPerformance);
   }
@@ -585,6 +544,32 @@ Performance::IsObserverEnabled(JSContext* aCx, JSObject* aGlobal)
                             NS_LITERAL_CSTRING("dom.enable_performance_observer"));
 
   return runnable->Dispatch() && runnable->IsEnabled();
+}
+
+void
+Performance::MemoryPressure()
+{
+  mUserEntries.Clear();
+}
+
+size_t
+Performance::SizeOfUserEntries(mozilla::MallocSizeOf aMallocSizeOf) const
+{
+  size_t userEntries = 0;
+  for (const PerformanceEntry* entry : mUserEntries) {
+    userEntries += entry->SizeOfIncludingThis(aMallocSizeOf);
+  }
+  return userEntries;
+}
+
+size_t
+Performance::SizeOfResourceEntries(mozilla::MallocSizeOf aMallocSizeOf) const
+{
+  size_t resourceEntries = 0;
+  for (const PerformanceEntry* entry : mResourceEntries) {
+    resourceEntries += entry->SizeOfIncludingThis(aMallocSizeOf);
+  }
+  return resourceEntries;
 }
 
 } // dom namespace

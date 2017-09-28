@@ -36,7 +36,10 @@ ContentBridgeParent::ActorDestroy(ActorDestroyReason aWhy)
   if (os) {
     os->RemoveObserver(this, "content-child-shutdown");
   }
-  MessageLoop::current()->PostTask(NewRunnableMethod(this, &ContentBridgeParent::DeferredDestroy));
+  MessageLoop::current()->PostTask(
+    NewRunnableMethod("dom::ContentBridgeParent::DeferredDestroy",
+                      this,
+                      &ContentBridgeParent::DeferredDestroy));
 }
 
 /*static*/ ContentBridgeParent*
@@ -168,12 +171,31 @@ ContentBridgeParent::DeallocPBrowserParent(PBrowserParent* aParent)
   return nsIContentParent::DeallocPBrowserParent(aParent);
 }
 
+mozilla::ipc::IPCResult
+ContentBridgeParent::RecvPBrowserConstructor(PBrowserParent* actor,
+                                             const TabId& tabId,
+                                             const TabId& sameTabGroupAs,
+                                             const IPCTabContext& context,
+                                             const uint32_t& chromeFlags,
+                                             const ContentParentId& cpId,
+                                             const bool& isForBrowser)
+{
+  return nsIContentParent::RecvPBrowserConstructor(actor,
+                                                   tabId,
+                                                   sameTabGroupAs,
+                                                   context,
+                                                   chromeFlags,
+                                                   cpId,
+                                                   isForBrowser);
+}
+
 void
 ContentBridgeParent::NotifyTabDestroyed()
 {
   int32_t numLiveTabs = ManagedPBrowserParent().Count();
   if (numLiveTabs == 1) {
-    MessageLoop::current()->PostTask(NewRunnableMethod(this, &ContentBridgeParent::Close));
+    MessageLoop::current()->PostTask(NewRunnableMethod(
+      "dom::ContentBridgeParent::Close", this, &ContentBridgeParent::Close));
   }
 }
 

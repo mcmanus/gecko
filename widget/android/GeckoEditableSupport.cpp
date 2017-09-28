@@ -9,7 +9,6 @@
 #include "AndroidRect.h"
 #include "KeyEvent.h"
 #include "PuppetWidget.h"
-#include "android_npapi.h"
 #include "nsIContent.h"
 #include "nsISelection.h"
 
@@ -301,24 +300,6 @@ InitKeyEvent(WidgetKeyboardEvent& aEvent, int32_t aAction, int32_t aKeyCode,
 
     aEvent.mModifiers = nsWindow::GetModifiers(aMetaState);
     aEvent.mKeyCode = domKeyCode;
-
-    if (aEvent.mMessage != eKeyPress) {
-        ANPEvent pluginEvent;
-        pluginEvent.inSize = sizeof(pluginEvent);
-        pluginEvent.eventType = kKey_ANPEventType;
-        pluginEvent.data.key.action = (aEvent.mMessage == eKeyDown) ?
-                kDown_ANPKeyAction : kUp_ANPKeyAction;
-        pluginEvent.data.key.nativeCode = aKeyCode;
-        pluginEvent.data.key.virtualCode = domKeyCode;
-        pluginEvent.data.key.unichar = aDomPrintableKeyValue;
-        pluginEvent.data.key.modifiers =
-                (aMetaState & sdk::KeyEvent::META_SHIFT_MASK
-                        ? kShift_ANPKeyModifier : 0) |
-                (aMetaState & sdk::KeyEvent::META_ALT_MASK
-                        ? kAlt_ANPKeyModifier : 0);
-        pluginEvent.data.key.repeatCount = aRepeatCount;
-        aEvent.mPluginEvent.Copy(pluginEvent);
-    }
 
     aEvent.mIsRepeat =
         (aEvent.mMessage == eKeyDown || aEvent.mMessage == eKeyPress) &&
@@ -664,7 +645,11 @@ GeckoEditableSupport::FlushIMEChanges(FlushChangesFlag aFlags)
             FlushIMEText(FLUSH_FLAG_RECOVER);
         } else {
             // Give up because we've already tried.
+#ifdef RELEASE_OR_BETA
+            env->ExceptionClear();
+#else
             MOZ_CATCH_JNI_EXCEPTION(env);
+#endif
         }
         return true;
     };
@@ -1167,29 +1152,10 @@ GeckoEditableSupport::SetInputContext(const InputContext& aContext,
             aContext.mIMEState.mEnabled, aContext.mIMEState.mOpen,
             aAction.mCause, aAction.mFocusChange);
 
-    // Ensure that opening the virtual keyboard is allowed for this specific
-    // InputContext depending on the content.ime.strict.policy pref
-    if (aContext.mIMEState.mEnabled != IMEState::DISABLED &&
-        aContext.mIMEState.mEnabled != IMEState::PLUGIN &&
-        Preferences::GetBool("content.ime.strict_policy", false) &&
-        !aAction.ContentGotFocusByTrustedCause() &&
-        !aAction.UserMightRequestOpenVKB()) {
-        return;
-    }
-
-    IMEState::Enabled enabled = aContext.mIMEState.mEnabled;
-
-    // Only show the virtual keyboard for plugins if mOpen is set appropriately.
-    // This avoids showing it whenever a plugin is focused. Bug 747492
-    if (aContext.mIMEState.mEnabled == IMEState::PLUGIN &&
-        aContext.mIMEState.mOpen != IMEState::OPEN) {
-        enabled = IMEState::DISABLED;
-    }
-
     mInputContext = aContext;
-    mInputContext.mIMEState.mEnabled = enabled;
 
-    if (enabled == IMEState::ENABLED && aAction.UserMightRequestOpenVKB()) {
+    if (mInputContext.mIMEState.mEnabled == IMEState::ENABLED &&
+        aAction.UserMightRequestOpenVKB()) {
         // Don't reset keyboard when we should simply open the vkb
         mEditable->NotifyIME(GeckoEditableListener::NOTIFY_IME_OPEN_VKB);
         return;
@@ -1201,8 +1167,9 @@ GeckoEditableSupport::SetInputContext(const InputContext& aContext,
     mIMEUpdatingContext = true;
 
     RefPtr<GeckoEditableSupport> self(this);
+    bool isUserAction = aAction.IsUserAction();
 
-    nsAppShell::PostEvent([this, self] {
+    nsAppShell::PostEvent([this, self, isUserAction] {
         nsCOMPtr<nsIWidget> widget = GetWidget();
 
         mIMEUpdatingContext = false;
@@ -1212,7 +1179,9 @@ GeckoEditableSupport::SetInputContext(const InputContext& aContext,
         mEditable->NotifyIMEContext(mInputContext.mIMEState.mEnabled,
                                     mInputContext.mHTMLInputType,
                                     mInputContext.mHTMLInputInputmode,
-                                    mInputContext.mActionHint);
+                                    mInputContext.mActionHint,
+                                    mInputContext.mInPrivateBrowsing,
+                                    isUserAction);
     });
 }
 

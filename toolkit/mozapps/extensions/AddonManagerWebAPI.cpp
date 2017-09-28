@@ -20,6 +20,12 @@ using namespace mozilla::dom;
 
 static bool
 IsValidHost(const nsACString& host) {
+  // This hidden pref allows users to disable mozAddonManager entirely if they want
+  // for fingerprinting resistance. Someone like Tor browser will use this pref.
+  if (Preferences::GetBool("privacy.resistFingerprinting.block_mozAddonManager")) {
+    return false;
+  }
+
   // This is ugly, but Preferences.h doesn't have support
   // for default prefs or locked prefs
   nsCOMPtr<nsIPrefService> prefService (do_GetService(NS_PREFSERVICE_CONTRACTID));
@@ -36,9 +42,9 @@ IsValidHost(const nsACString& host) {
     }
   }
 
-  if (host.Equals("addons.mozilla.org") ||
-      host.Equals("discovery.addons.mozilla.org") ||
-      host.Equals("testpilot.firefox.com")) {
+  if (host.EqualsLiteral("addons.mozilla.org") ||
+      host.EqualsLiteral("discovery.addons.mozilla.org") ||
+      host.EqualsLiteral("testpilot.firefox.com")) {
     return true;
   }
 

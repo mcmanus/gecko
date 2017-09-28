@@ -74,7 +74,7 @@ QuicSession::QuicSession(const char *host, int32_t port, bool v4)
   }
 
   provider->AddToSocket(PR_AF_INET, host, port, nullptr,
-                        OriginAttributes(), 0, mPSMHelper,
+                        OriginAttributes(), 0, 0, mPSMHelper,
                         getter_AddRefs(mPSMHelperSecInfo));
     
   mPSMSSLSocketControl = do_QueryInterface(mPSMHelperSecInfo);
@@ -625,6 +625,12 @@ NS_IMETHODIMP QuicSession::IsAcceptableForHost(const nsACString & hostname, bool
 
 /* readonly attribute uint32_t providerFlags; */
 NS_IMETHODIMP QuicSession::GetProviderFlags(uint32_t *aProviderFlags)
+{
+    /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+/* readonly attribute uint32_t providerFlags; */
+NS_IMETHODIMP QuicSession::GetProviderTlsFlags(uint32_t *aProviderFlags)
 {
     /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
 }

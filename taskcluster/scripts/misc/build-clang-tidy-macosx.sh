@@ -4,7 +4,7 @@ set -x -e -v
 # This script is for building clang for Mac OS X on Linux.
 WORKSPACE=$HOME/workspace
 HOME_DIR=$WORKSPACE/build
-UPLOAD_DIR=$WORKSPACE/artifacts
+UPLOAD_DIR=$HOME/artifacts
 
 cd $HOME_DIR/src
 
@@ -14,7 +14,7 @@ cd $HOME_DIR/src
 export LD_LIBRARY_PATH=$HOME_DIR/src/clang/lib
 # these variables are used in build-clang.py
 export CROSS_CCTOOLS_PATH=$HOME_DIR/src/cctools
-export CROSS_SYSROOT=$HOME_DIR/src/MacOSX10.10.sdk
+export CROSS_SYSROOT=$HOME_DIR/src/MacOSX10.11.sdk
 # cmake doesn't allow us to specify a path to lipo on the command line.
 export PATH=$PATH:$CROSS_CCTOOLS_PATH/bin
 ln -sf $CROSS_CCTOOLS_PATH/bin/x86_64-apple-darwin11-lipo $CROSS_CCTOOLS_PATH/bin/lipo

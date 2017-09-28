@@ -30,18 +30,11 @@ NS_IMPL_RELEASE_INHERITED(HTMLSharedListElement, Element)
 
 // QueryInterface implementation for nsHTMLSharedListElement
 NS_INTERFACE_MAP_BEGIN(HTMLSharedListElement)
-  NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLOListElement, ol)
-  NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLUListElement, ul)
 NS_INTERFACE_MAP_END_INHERITING(nsGenericHTMLElement)
 
 
 NS_IMPL_ELEMENT_CLONE(HTMLSharedListElement)
 
-
-NS_IMPL_BOOL_ATTR(HTMLSharedListElement, Compact, compact)
-NS_IMPL_INT_ATTR_DEFAULT_VALUE(HTMLSharedListElement, Start, start, 1)
-NS_IMPL_STRING_ATTR(HTMLSharedListElement, Type, type)
-NS_IMPL_BOOL_ATTR(HTMLSharedListElement, Reversed, reversed)
 
 // Shared with nsHTMLSharedElement.cpp
 nsAttrValue::EnumTable kListTypeTable[] = {

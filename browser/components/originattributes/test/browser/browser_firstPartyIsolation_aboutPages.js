@@ -68,6 +68,11 @@ function frame_script() {
  * Check if data: URI inherits firstPartyDomain from about:blank correctly.
  */
 add_task(async function test_remote_window_open_data_uri() {
+  // allow top level data: URI navigations, otherwise
+  // <a href="data:" would fail.
+  await SpecialPowers.pushPrefEnv({
+    "set": [["security.data_uri.block_toplevel_data_uri_navigations", false]]
+  });
   let win = await BrowserTestUtils.openNewBrowserWindow({ remote: true });
   let browser = win.gBrowser.selectedBrowser;
   let mm = browser.messageManager;
@@ -83,11 +88,8 @@ add_task(async function test_remote_window_open_data_uri() {
     Assert.ok(content.document.nodePrincipal.isNullPrincipal,
               "The principal of data: document should be a NullPrincipal.");
 
-    let str = content.document.nodePrincipal.originNoSuffix;
-    let expectDomain = str.substring("moz-nullprincipal:{".length, str.length - 1) + ".mozilla";
-    Assert.equal(content.document.nodePrincipal.originAttributes.firstPartyDomain,
-                 expectDomain,
-                 "data: URI should have firstPartyDomain set to " + expectDomain);
+    Assert.ok(content.document.nodePrincipal.originAttributes.firstPartyDomain != "",
+              "data: URI should have firstPartyDomain set.");
   });
 
   win.close();
@@ -116,14 +118,11 @@ add_task(async function test_remote_window_open_data_uri2() {
     Assert.ok(content.document.nodePrincipal.isNullPrincipal,
               "The principal of data: document should be a NullPrincipal.");
 
-    let str = content.document.nodePrincipal.originNoSuffix;
-    let expectDomain = str.substring("moz-nullprincipal:{".length, str.length - 1) + ".mozilla";
-    Assert.equal(content.document.nodePrincipal.originAttributes.firstPartyDomain,
-                 expectDomain,
-                 "data: URI should have firstPartyDomain set to " + expectDomain);
+    Assert.ok(content.document.nodePrincipal.originAttributes.firstPartyDomain != "",
+              "data: URI should have firstPartyDomain set.");
 
     Assert.equal(iframe.contentDocument.nodePrincipal.originAttributes.firstPartyDomain,
-                 expectDomain,
+                 content.document.nodePrincipal.originAttributes.firstPartyDomain,
                  "iframe should inherit firstPartyDomain from parent document.");
     Assert.equal(iframe.contentDocument.cookie, "test2=foo", "iframe should have cookies");
   });
@@ -162,7 +161,9 @@ add_task(async function test_aboutURL() {
       // errors while loading.
       if ((flags & Ci.nsIAboutModule.URI_SAFE_FOR_UNTRUSTED_CONTENT) &&
           !(flags & Ci.nsIAboutModule.HIDE_FROM_ABOUTABOUT) &&
-          networkURLs.indexOf(aboutType) == -1) {
+          networkURLs.indexOf(aboutType) == -1 &&
+          // handle about:newtab in browser_firstPartyIsolation_about_newtab.js
+          aboutType !== "newtab") {
         aboutURLs.push(aboutType);
       }
     } catch (e) {

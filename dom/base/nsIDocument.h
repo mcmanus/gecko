@@ -21,6 +21,7 @@
 #include "nsIUUIDGenerator.h"
 #include "nsPIDOMWindow.h"               // for use in inline functions
 #include "nsPropertyTable.h"             // for member
+#include "nsStringFwd.h"
 #include "nsDataHashtable.h"             // for member
 #include "nsURIHashKey.h"                // for member
 #include "mozilla/net/ReferrerPolicy.h"  // for member
@@ -34,6 +35,7 @@
 #include "mozilla/CORSMode.h"
 #include "mozilla/dom/DispatcherTrait.h"
 #include "mozilla/LinkedList.h"
+#include "mozilla/NotNull.h"
 #include "mozilla/SegmentedVector.h"
 #include "mozilla/StyleBackendType.h"
 #include "mozilla/StyleSheet.h"
@@ -53,7 +55,6 @@ class ElementCreationOptionsOrString;
 
 class gfxUserFontSet;
 class imgIRequest;
-class nsAString;
 class nsBindingManager;
 class nsIDocShell;
 class nsDocShell;
@@ -104,6 +105,7 @@ struct nsCSSSelectorList;
 namespace mozilla {
 class AbstractThread;
 class CSSStyleSheet;
+class Encoding;
 class ErrorResult;
 class EventStates;
 class PendingAnimationTracker;
@@ -153,6 +155,7 @@ enum class OrientationType : uint8_t;
 class ProcessingInstruction;
 class Promise;
 class ScriptLoader;
+class Selection;
 class StyleSheetList;
 class SVGDocument;
 class SVGSVGElement;
@@ -210,6 +213,10 @@ class nsIDocument : public nsINode,
                     public mozilla::dom::DispatcherTrait
 {
   typedef mozilla::dom::GlobalObject GlobalObject;
+
+protected:
+  using Encoding = mozilla::Encoding;
+  template <typename T> using NotNull = mozilla::NotNull<T>;
 
 public:
   typedef mozilla::net::ReferrerPolicy ReferrerPolicyEnum;
@@ -439,9 +446,23 @@ public:
   }
 
   /**
-   * Set the principal responsible for this document.
+   * Set the principal responsible for this document.  Chances are,
+   * you do not want to be using this.
    */
   virtual void SetPrincipal(nsIPrincipal *aPrincipal) = 0;
+
+  /**
+   * Get the list of ancestor principals for a document.  This is the same as
+   * the ancestor list for the document's docshell the last time SetContainer()
+   * was called with a non-null argument. See the documentation for the
+   * corresponding getter in docshell for how this list is determined.  We store
+   * a copy of the list, because we may lose the ability to reach our docshell
+   * before people stop asking us for this information.
+   */
+  const nsTArray<nsCOMPtr<nsIPrincipal>>& AncestorPrincipals() const
+  {
+    return mAncestorPrincipals;
+  }
 
   /**
    * Return the LoadGroup for the document. May return null.
@@ -504,16 +525,15 @@ public:
   /**
    * Return a standard name for the document's character set.
    */
-  const nsCString& GetDocumentCharacterSet() const
+  NotNull<const Encoding*> GetDocumentCharacterSet() const
   {
     return mCharacterSet;
   }
 
   /**
-   * Set the document's character encoding. |aCharSetID| should be canonical.
-   * That is, callers are responsible for the charset alias resolution.
+   * Set the document's character encoding.
    */
-  virtual void SetDocumentCharacterSet(const nsACString& aCharSetID) = 0;
+  virtual void SetDocumentCharacterSet(NotNull<const Encoding*> aEncoding) = 0;
 
   int32_t GetDocumentCharacterSetSource() const
   {
@@ -526,16 +546,6 @@ public:
   {
     mCharacterSetSource = aCharsetSource;
   }
-
-  /**
-   * Add an observer that gets notified whenever the charset changes.
-   */
-  virtual nsresult AddCharSetObserver(nsIObserver* aObserver) = 0;
-
-  /**
-   * Remove a charset observer.
-   */
-  virtual void RemoveCharSetObserver(nsIObserver* aObserver) = 0;
 
   /**
    * This gets fired when the element that an id refers to changes.
@@ -831,6 +841,54 @@ public:
   }
 
   /**
+   * After calling this function, any CSP violation reports will be buffered up
+   * by the document (by calling BufferCSPViolation) instead of being sent
+   * immediately.
+   *
+   * This facility is used by the user font cache, which wants to pre-emptively
+   * check whether a given font load would violate CSP directives, and so
+   * shouldn't immediately send the report.
+   */
+  void StartBufferingCSPViolations()
+  {
+    MOZ_ASSERT(!mBufferingCSPViolations);
+    mBufferingCSPViolations = true;
+  }
+
+  /**
+   * Stops buffering CSP violation reports, and stores any buffered reports in
+   * aResult.
+   */
+  void StopBufferingCSPViolations(nsTArray<nsCOMPtr<nsIRunnable>>& aResult)
+  {
+    MOZ_ASSERT(mBufferingCSPViolations);
+    mBufferingCSPViolations = false;
+
+    aResult.SwapElements(mBufferedCSPViolations);
+    mBufferedCSPViolations.Clear();
+  }
+
+  /**
+   * Returns whether we are currently buffering CSP violation reports.
+   */
+  bool ShouldBufferCSPViolations() const
+  {
+    return mBufferingCSPViolations;
+  }
+
+  /**
+   * Called when a CSP violation is encountered that would generate a report
+   * while buffering is enabled.
+   */
+  void BufferCSPViolation(nsIRunnable* aReportingRunnable)
+  {
+    MOZ_ASSERT(mBufferingCSPViolations);
+
+    // Dropping the CSP violation report seems preferable to OOMing.
+    mBufferedCSPViolations.AppendElement(aReportingRunnable, mozilla::fallible);
+  }
+
+  /**
    * Access HTTP header data (this may also get set from other
    * sources, like HTML META tags).
    */
@@ -853,6 +911,11 @@ public:
   nsIPresShell* GetShell() const
   {
     return GetBFCacheEntry() ? nullptr : mPresShell;
+  }
+
+  bool HasShellOrBFCacheEntry() const
+  {
+    return mPresShell || mBFCacheEntry;
   }
 
   // Instead using this method, what you probably want is
@@ -932,6 +995,14 @@ public:
    * Return the root element for this document.
    */
   Element* GetRootElement() const;
+
+  mozilla::dom::Selection* GetSelection(mozilla::ErrorResult& aRv);
+
+  /**
+   * Gets the event target to dispatch key events to if there is no focused
+   * content in the document.
+   */
+  virtual nsIContent* GetUnfocusedKeyEventTarget();
 
   /**
    * Retrieve information about the viewport as a data structure.
@@ -1691,6 +1762,18 @@ public:
   }
 
   /**
+   * Checks if this document has no pres shell, and if so, clears any Servo
+   * element data stored on Elements in the document.
+   */
+  void ClearStaleServoDataFromDocument();
+
+  /**
+   * Returns true if there may be Servo element data on Elements in the document
+   * that were created for a pres shell that no longer exists.
+   */
+  bool MightHaveStaleServoData() const { return mMightHaveStaleServoData; }
+
+  /**
    * Create an element with the specified name, prefix and namespace ID.
    * Returns null if element name parsing failed.
    */
@@ -1992,6 +2075,34 @@ public:
   uint32_t GetMarkedCCGeneration()
   {
     return mMarkedCCGeneration;
+  }
+
+  /**
+   * Returns whether this document is cookie averse. See
+   * https://html.spec.whatwg.org/multipage/dom.html#cookie-averse-document-object
+   */
+  bool IsCookieAverse() const
+  {
+    // If we are a document that "has no browsing context."
+    if (!GetInnerWindow()) {
+      return true;
+    }
+
+    // If we are a document "whose URL's scheme is not a network scheme."
+    // NB: Explicitly allow file: URIs to store cookies.
+    nsCOMPtr<nsIURI> codebaseURI;
+    NodePrincipal()->GetURI(getter_AddRefs(codebaseURI));
+
+    if (!codebaseURI) {
+      return true;
+    }
+
+    nsAutoCString scheme;
+    codebaseURI->GetScheme(scheme);
+    return !scheme.EqualsLiteral("http") &&
+           !scheme.EqualsLiteral("https") &&
+           !scheme.EqualsLiteral("ftp") &&
+           !scheme.EqualsLiteral("file");
   }
 
   bool IsLoadedAsData()
@@ -2324,21 +2435,27 @@ public:
    * nesting and possible sources, which are used to inform URL selection
    * responsive <picture> or <img srcset> images.  Unset attributes are expected
    * to be marked void.
+   * If this image is for <picture> or <img srcset>, aIsImgSet will be set to
+   * true, false otherwise.
    */
   virtual already_AddRefed<nsIURI>
     ResolvePreloadImage(nsIURI *aBaseURI,
                         const nsAString& aSrcAttr,
                         const nsAString& aSrcsetAttr,
-                        const nsAString& aSizesAttr) = 0;
+                        const nsAString& aSizesAttr,
+                        bool *aIsImgSet) = 0;
   /**
    * Called by nsParser to preload images. Can be removed and code moved
    * to nsPreloadURIs::PreloadURIs() in file nsParser.cpp whenever the
    * parser-module is linked with gklayout-module.  aCrossOriginAttr should
    * be a void string if the attr is not present.
+   * aIsImgSet is the value got from calling ResolvePreloadImage, it is true
+   * when this image is for loading <picture> or <img srcset> images.
    */
   virtual void MaybePreLoadImage(nsIURI* uri,
                                  const nsAString& aCrossOriginAttr,
-                                 ReferrerPolicyEnum aReferrerPolicy) = 0;
+                                 ReferrerPolicyEnum aReferrerPolicy,
+                                 bool aIsImgSet) = 0;
 
   /**
    * Called by images to forget an image preload when they start doing
@@ -2351,7 +2468,8 @@ public:
    * parser if and when the parser is merged with libgklayout.  aCrossOriginAttr
    * should be a void string if the attr is not present.
    */
-  virtual void PreloadStyle(nsIURI* aURI, const nsAString& aCharset,
+  virtual void PreloadStyle(nsIURI* aURI,
+                            const mozilla::Encoding* aEncoding,
                             const nsAString& aCrossOriginAttr,
                             ReferrerPolicyEnum aReferrerPolicy,
                             const nsAString& aIntegrity) = 0;
@@ -2402,7 +2520,8 @@ public:
    * Doc_Theme_Neutral for any other theme. This is used to determine the state
    * of the pseudoclasses :-moz-lwtheme and :-moz-lwtheme-text.
    */
-  virtual int GetDocumentLWTheme() { return Doc_Theme_None; }
+  virtual DocumentTheme GetDocumentLWTheme() { return Doc_Theme_None; }
+  virtual DocumentTheme ThreadSafeGetDocumentLWTheme() const { return Doc_Theme_None; }
 
   /**
    * Returns the document state.
@@ -2540,11 +2659,11 @@ public:
   // SizeOfExcludingThis function.  However, because nsIDocument objects can
   // only appear at the top of the DOM tree, we have a specialized measurement
   // function which returns multiple sizes.
-  virtual void DocAddSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const;
+  virtual void DocAddSizeOfExcludingThis(nsWindowSizes& aWindowSizes) const;
   // DocAddSizeOfIncludingThis doesn't need to be overridden by sub-classes
   // because nsIDocument inherits from nsINode;  see the comment above the
   // declaration of nsINode::SizeOfIncludingThis.
-  virtual void DocAddSizeOfIncludingThis(nsWindowSizes* aWindowSizes) const;
+  virtual void DocAddSizeOfIncludingThis(nsWindowSizes& aWindowSizes) const;
 
   bool MayHaveDOMMutationObservers()
   {
@@ -2660,6 +2779,7 @@ public:
   already_AddRefed<mozilla::dom::DocumentFragment>
     CreateDocumentFragment() const;
   already_AddRefed<nsTextNode> CreateTextNode(const nsAString& aData) const;
+  already_AddRefed<nsTextNode> CreateEmptyTextNode() const;
   already_AddRefed<mozilla::dom::Comment>
     CreateComment(const nsAString& aData) const;
   already_AddRefed<mozilla::dom::ProcessingInstruction>
@@ -2832,6 +2952,7 @@ public:
   void ObsoleteSheet(const nsAString& aSheetURI, mozilla::ErrorResult& rv);
 
   already_AddRefed<mozilla::dom::Promise> BlockParsing(mozilla::dom::Promise& aPromise,
+                                                       const mozilla::dom::BlockParsingOptions& aOptions,
                                                        mozilla::ErrorResult& aRv);
 
   already_AddRefed<nsIURI> GetMozDocumentURIIfNotForErrorPages();
@@ -2925,8 +3046,7 @@ public:
   virtual void NotifyIntersectionObservers() = 0;
 
   // Dispatch a runnable related to the document.
-  virtual nsresult Dispatch(const char* aName,
-                            mozilla::TaskCategory aCategory,
+  virtual nsresult Dispatch(mozilla::TaskCategory aCategory,
                             already_AddRefed<nsIRunnable>&& aRunnable) override;
 
   virtual nsISerialEventTarget*
@@ -2947,6 +3067,28 @@ public:
   // toolkit/components/url-classifier/flash-block-lists.rst
   virtual mozilla::dom::FlashClassification DocumentFlashClassification() = 0;
   virtual bool IsThirdParty() = 0;
+
+  bool IsScopedStyleEnabled();
+
+  nsINode* GetServoRestyleRoot() const
+  {
+    return mServoRestyleRoot;
+  }
+
+  uint32_t GetServoRestyleRootDirtyBits() const
+  {
+    MOZ_ASSERT(mServoRestyleRoot);
+    MOZ_ASSERT(mServoRestyleRootDirtyBits);
+    return mServoRestyleRootDirtyBits;
+  }
+
+  void ClearServoRestyleRoot()
+  {
+    mServoRestyleRoot = nullptr;
+    mServoRestyleRootDirtyBits = 0;
+  }
+
+  inline void SetServoRestyleRoot(nsINode* aRoot, uint32_t aDirtyBits);
 
 protected:
   bool GetUseCounter(mozilla::UseCounter aUseCounter)
@@ -3059,7 +3201,7 @@ protected:
 
   mozilla::WeakPtr<nsDocShell> mDocumentContainer;
 
-  nsCString mCharacterSet;
+  NotNull<const Encoding*> mCharacterSet;
   int32_t mCharacterSetSource;
 
   // This is just a weak pointer; the parent document owns its children.
@@ -3079,9 +3221,10 @@ protected:
   // Tracking for images in the document.
   RefPtr<mozilla::dom::ImageTracker> mImageTracker;
 
-  // The set of all object, embed, applet, video/audio elements or
-  // nsIObjectLoadingContent or nsIDocumentActivity for which this is the
-  // owner document. (They might not be in the document.)
+  // The set of all object, embed, video/audio elements or
+  // nsIObjectLoadingContent or nsIDocumentActivity for which this is the owner
+  // document. (They might not be in the document.)
+  //
   // These are non-owning pointers, the elements are responsible for removing
   // themselves when they go away.
   nsAutoPtr<nsTHashtable<nsPtrHashKey<nsISupports> > > mActivityObservers;
@@ -3271,6 +3414,21 @@ protected:
 
   bool mIsContentDocument : 1;
 
+  // True if there may be Servo element data on Elements in the document that
+  // were created for a pres shell that no longer exists.
+  bool mMightHaveStaleServoData : 1;
+
+  // True if we have called BeginLoad and are expecting a paired EndLoad call.
+  bool mDidCallBeginLoad : 1;
+
+  // True if any CSP violation reports for this doucment will be buffered in
+  // mBufferedCSPViolations instead of being sent immediately.
+  bool mBufferingCSPViolations : 1;
+
+  // Whether <style scoped> support is enabled in this document.
+  enum { eScopedStyle_Unknown, eScopedStyle_Disabled, eScopedStyle_Enabled };
+  unsigned int mIsScopedStyleEnabled : 2;
+
   // Compatibility mode
   nsCompatibility mCompatMode;
 
@@ -3447,6 +3605,25 @@ protected:
   // calling NoteScriptTrackingStatus().  Currently we assume that a URL not
   // existing in the set means the corresponding script isn't a tracking script.
   nsTHashtable<nsCStringHashKey> mTrackingScripts;
+
+  // CSP violation reports that have been buffered up due to a call to
+  // StartBufferingCSPViolations.
+  nsTArray<nsCOMPtr<nsIRunnable>> mBufferedCSPViolations;
+
+  // List of ancestor principals.  This is set at the point a document
+  // is connected to a docshell and not mutated thereafter.
+  nsTArray<nsCOMPtr<nsIPrincipal>> mAncestorPrincipals;
+
+  // Restyle root for servo's style system.
+  //
+  // We store this as an nsINode, rather than as an Element, so that we can store
+  // the Document node as the restyle root if the entire document (along with all
+  // document-level native-anonymous content) needs to be restyled.
+  //
+  // We also track which "descendant" bits (normal/animation-only/lazy-fc) the
+  // root corresponds to.
+  nsCOMPtr<nsINode> mServoRestyleRoot;
+  uint32_t mServoRestyleRootDirtyBits;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsIDocument, NS_IDOCUMENT_IID)
@@ -3533,7 +3710,8 @@ NS_NewDOMDocument(nsIDOMDocument** aInstancePtrResult,
                   nsIPrincipal* aPrincipal,
                   bool aLoadedAsData,
                   nsIGlobalObject* aEventObject,
-                  DocumentFlavor aFlavor);
+                  DocumentFlavor aFlavor,
+                  mozilla::StyleBackendType aStyleBackend);
 
 // This is used only for xbl documents created from the startup cache.
 // Non-cached documents are created in the same manner as xml documents.
@@ -3541,7 +3719,8 @@ nsresult
 NS_NewXBLDocument(nsIDOMDocument** aInstancePtrResult,
                   nsIURI* aDocumentURI,
                   nsIURI* aBaseURI,
-                  nsIPrincipal* aPrincipal);
+                  nsIPrincipal* aPrincipal,
+                  mozilla::StyleBackendType aStyleBackend);
 
 nsresult
 NS_NewPluginDocument(nsIDocument** aInstancePtrResult);

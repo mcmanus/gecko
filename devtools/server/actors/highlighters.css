@@ -25,6 +25,8 @@
   letter-spacing: initial;
   word-spacing: initial;
   color: initial;
+  direction: initial;
+  writing-mode: initial;
 }
 
 :-moz-native-anonymous .highlighter-container {
@@ -612,4 +614,8 @@
 
 :-moz-native-anonymous .shapes-markers {
   fill: var(--highlighter-marker-color);
+}
+
+:-moz-native-anonymous .shapes-marker-hover {
+  fill: var(--highlighter-guide-color);
 }

@@ -12,6 +12,7 @@
 #include "mozilla/dom/Promise.h"
 #include "mozilla/ErrorResult.h"
 #include "nsWrapperCache.h"
+#include "PaymentRequestUpdateEvent.h"
 
 namespace mozilla {
 namespace dom {
@@ -35,22 +36,38 @@ public:
 
   static bool PrefEnabled(JSContext* aCx, JSObject* aObj);
 
-  static bool IsValidMethodData(const Sequence<PaymentMethodData>& aMethodData,
-                                nsAString& aErrorMsg);
+  static nsresult IsValidMethodData(JSContext* aCx,
+                                    const Sequence<PaymentMethodData>& aMethodData,
+                                    nsAString& aErrorMsg);
 
-  static bool
+  static nsresult
   IsValidNumber(const nsAString& aItem,
                 const nsAString& aStr,
                 nsAString& aErrorMsg);
-  static bool
-  IsPositiveNumber(const nsAString& aItem,
-                   const nsAString& aStr,
-                   nsAString& aErrorMsg);
+  static nsresult
+  IsNonNegativeNumber(const nsAString& aItem,
+                      const nsAString& aStr,
+                      nsAString& aErrorMsg);
 
-  static bool
+  static nsresult
+  IsValidCurrencyAmount(const nsAString& aItem,
+                        const PaymentCurrencyAmount& aAmount,
+                        const bool aIsTotalItem,
+                        nsAString& aErrorMsg);
+
+  static nsresult
+  IsValidCurrency(const nsAString& aItem,
+                  const nsAString& aCurrency,
+                  nsAString& aErrorMsg);
+
+  static nsresult
   IsValidDetailsInit(const PaymentDetailsInit& aDetails,
                      nsAString& aErrorMsg);
-  static bool
+
+  static nsresult
+  IsValidDetailsUpdate(const PaymentDetailsUpdate& aDetails);
+
+  static nsresult
   IsValidDetailsBase(const PaymentDetailsBase& aDetails,
                      nsAString& aErrorMsg);
 
@@ -65,13 +82,12 @@ public:
   void RespondCanMakePayment(bool aResult);
 
   already_AddRefed<Promise> Show(ErrorResult& aRv);
-  void RespondShowPayment(bool aAccept,
-                          const nsAString& aMethodName,
+  void RespondShowPayment(const nsAString& aMethodName,
                           const nsAString& aDetails,
                           const nsAString& aPayerName,
                           const nsAString& aPayerEmail,
                           const nsAString& aPayerPhone,
-                          nsresult aRv = NS_ERROR_DOM_ABORT_ERR);
+                          nsresult aRv);
   void RejectShowPayment(nsresult aRejectReason);
   void RespondComplete();
 
@@ -88,8 +104,28 @@ public:
   void SetUpdating(bool aUpdating);
 
   already_AddRefed<PaymentAddress> GetShippingAddress() const;
-  void GetShippingOption(nsAString& aRetVal) const;
+  // Update mShippingAddress and fire shippingaddresschange event
+  nsresult UpdateShippingAddress(const nsAString& aCountry,
+                                 const nsTArray<nsString>& aAddressLine,
+                                 const nsAString& aRegion,
+                                 const nsAString& aCity,
+                                 const nsAString& aDependentLocality,
+                                 const nsAString& aPostalCode,
+                                 const nsAString& aSortingCode,
+                                 const nsAString& aLanguageCode,
+                                 const nsAString& aOrganization,
+                                 const nsAString& aRecipient,
+                                 const nsAString& aPhone);
 
+
+  void SetShippingOption(const nsAString& aShippingOption);
+  void GetShippingOption(nsAString& aRetVal) const;
+  nsresult UpdateShippingOption(const nsAString& aShippingOption);
+
+  nsresult UpdatePayment(JSContext* aCx, const PaymentDetailsUpdate& aDetails);
+  void AbortUpdate(nsresult aRv);
+
+  void SetShippingType(const Nullable<PaymentShippingType>& aShippingType);
   Nullable<PaymentShippingType> GetShippingType() const;
 
   IMPL_EVENT_HANDLER(shippingaddresschange);
@@ -97,6 +133,8 @@ public:
 
 protected:
   ~PaymentRequest();
+
+  nsresult DispatchUpdateEvent(const nsAString& aType);
 
   PaymentRequest(nsPIDOMWindowInner* aWindow, const nsAString& aInternalId);
 
@@ -119,11 +157,13 @@ protected:
   // It is populated when the user chooses a shipping option.
   nsString mShippingOption;
 
+  Nullable<PaymentShippingType> mShippingType;
+
   // "true" when there is a pending updateWith() call to update the payment request
   // and "false" otherwise.
   bool mUpdating;
   // The error is set in AbortUpdate(). The value is NS_OK by default.
-  //nsresult mUpdateError;
+  nsresult mUpdateError;
 
   enum {
     eUnknown,

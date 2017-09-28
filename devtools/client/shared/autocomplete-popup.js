@@ -8,7 +8,7 @@
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const Services = require("Services");
 const {HTMLTooltip} = require("devtools/client/shared/widgets/tooltip/HTMLTooltip");
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 const {PrefObserver} = require("devtools/client/shared/prefs");
 
 let itemIdCounter = 0;
@@ -388,6 +388,7 @@ AutocompletePopup.prototype = {
     }
 
     // Update the clone content to match the current list content.
+    // eslint-disable-next-line no-unsanitized/property
     this._listClone.innerHTML = this._list.innerHTML;
 
     this._activeElement.setAttribute("aria-activedescendant", id);

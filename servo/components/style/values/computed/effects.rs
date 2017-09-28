@@ -4,59 +4,25 @@
 
 //! Computed types for CSS values related to effects.
 
-use values::computed::{Angle, Number};
-#[cfg(feature = "gecko")]
-use values::computed::color::Color;
-use values::computed::length::Length;
+#[cfg(not(feature = "gecko"))]
+use values::Impossible;
+use values::computed::{Angle, NonNegativeNumber};
+use values::computed::color::RGBAColor;
+use values::computed::length::{Length, NonNegativeLength};
+use values::generics::effects::BoxShadow as GenericBoxShadow;
 use values::generics::effects::Filter as GenericFilter;
-use values::generics::effects::FilterList as GenericFilterList;
+use values::generics::effects::SimpleShadow as GenericSimpleShadow;
 
-/// A computed value for the `filter` property.
-pub type FilterList = GenericFilterList<Filter>;
+/// A computed value for a single shadow of the `box-shadow` property.
+pub type BoxShadow = GenericBoxShadow<Option<RGBAColor>, Length, NonNegativeLength, Length>;
 
 /// A computed value for a single `filter`.
-pub type Filter = GenericFilter<
-    Angle,
-    // FIXME: Should be `NumberOrPercentage`.
-    Number,
-    Length,
-    DropShadow,
->;
-
-/// A computed value for the `drop-shadow()` filter.
-///
-/// Currently unsupported outside of Gecko.
-#[cfg(not(feature = "gecko"))]
-#[cfg_attr(feature = "servo", derive(Deserialize, HeapSizeOf, Serialize))]
-#[derive(Clone, Debug, PartialEq, ToCss)]
-pub enum DropShadow {}
-
-/// A computed value for the `drop-shadow()` filter.
-///
-/// Contrary to the canonical order from the spec, the color is serialised
-/// first, like in Gecko and Webkit.
 #[cfg(feature = "gecko")]
-#[derive(Clone, Debug, PartialEq, ToCss)]
-pub struct DropShadow {
-    /// Color.
-    pub color: Color,
-    /// Horizontal radius.
-    pub horizontal: Length,
-    /// Vertical radius.
-    pub vertical: Length,
-    /// Blur radius.
-    pub blur: Length,
-}
+pub type Filter = GenericFilter<Angle, NonNegativeNumber, NonNegativeLength, SimpleShadow>;
 
-impl FilterList {
-    /// Returns the resulting opacity of this filter pipeline.
-    pub fn opacity(&self) -> Number {
-        let mut opacity = 0.;
-        for filter in &*self.0 {
-            if let GenericFilter::Opacity(factor) = *filter {
-                opacity *= factor
-            }
-        }
-        opacity
-    }
-}
+/// A computed value for a single `filter`.
+#[cfg(not(feature = "gecko"))]
+pub type Filter = GenericFilter<Angle, NonNegativeNumber, NonNegativeLength, Impossible>;
+
+/// A computed value for the `drop-shadow()` filter.
+pub type SimpleShadow = GenericSimpleShadow<Option<RGBAColor>, Length, NonNegativeLength>;

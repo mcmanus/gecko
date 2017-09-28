@@ -1,7 +1,5 @@
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-  "resource://gre/modules/Promise.jsm");
 
 // This url must sync with the table, url in SafeBrowsing.jsm addMozEntries
 const PHISH_TABLE = "test-phish-simple";
@@ -88,7 +86,7 @@ function waitForDBInit(callback) {
   });
 }
 
-Services.prefs.setCharPref("urlclassifier.malwareTable", "test-malware-simple,test-unwanted-simple");
+Services.prefs.setCharPref("urlclassifier.malwareTable", "test-malware-simple,test-unwanted-simple,test-harmful.simple");
 Services.prefs.setCharPref("urlclassifier.phishTable", "test-phish-simple");
 Services.prefs.setCharPref("urlclassifier.blockedTable", "test-block-simple");
 SafeBrowsing.init();

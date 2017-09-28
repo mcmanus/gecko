@@ -20,6 +20,7 @@ EXPORTS += [
     'nsHtml5AttributeEntry.h',
     'nsHtml5AttributeName.h',
     'nsHtml5ByteReadable.h',
+    'nsHtml5ContentCreatorFunction.h',
     'nsHtml5DependentUTF16Buffer.h',
     'nsHtml5DocumentBuilder.h',
     'nsHtml5DocumentMode.h',
@@ -35,11 +36,11 @@ EXPORTS += [
     'nsHtml5Parser.h',
     'nsHtml5PlainTextUtils.h',
     'nsHtml5Portability.h',
-    'nsHtml5RefPtr.h',
     'nsHtml5Speculation.h',
     'nsHtml5SpeculativeLoad.h',
     'nsHtml5StreamListener.h',
     'nsHtml5StreamParser.h',
+    'nsHtml5StreamParserPtr.h',
     'nsHtml5String.h',
     'nsHtml5StringParser.h',
     'nsHtml5SVGLoadDispatcher.h',
@@ -98,7 +99,6 @@ LOCAL_INCLUDES += [
     '/dom/base',
 ]
 
-if CONFIG['GNU_CXX']:
-    CXXFLAGS += ['-Wno-error=shadow']
-    if CONFIG['CLANG_CXX']:
-        CXXFLAGS += ['-Wno-implicit-fallthrough']
+if CONFIG['GNU_CXX'] or CONFIG['CLANG_CXX']:
+    CXXFLAGS += ['-Wno-error=shadow',
+                 '-Wno-implicit-fallthrough']

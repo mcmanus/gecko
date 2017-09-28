@@ -23,8 +23,11 @@ const FRAME_SCRIPT_URL = ROOT_TEST_DIR + "doc_frame_script.js";
 const STYLE_INSPECTOR_L10N
       = new LocalizationHelper("devtools/shared/locales/styleinspector.properties");
 
+Services.prefs.setBoolPref("devtools.inspector.shapesHighlighter.enabled", true);
+
 registerCleanupFunction(() => {
   Services.prefs.clearUserPref("devtools.defaultColorUnit");
+  Services.prefs.clearUserPref("devtools.inspector.shapesHighlighter.enabled");
 });
 
 /**
@@ -54,8 +57,8 @@ addTab = function (url) {
  */
 function getStyle(testActor, selector, propName) {
   return testActor.eval(`
-    content.document.querySelector("${selector}")
-                    .style.getPropertyValue("${propName}");
+    document.querySelector("${selector}")
+            .style.getPropertyValue("${propName}");
   `);
 }
 
@@ -289,7 +292,7 @@ var addProperty = Task.async(function* (view, ruleIndex, name, value,
   // triggers a ruleview-changed event (see bug 1209295).
   let onPreview = view.once("ruleview-changed");
   editor.input.value = value;
-  view.throttle.flush();
+  view.debounce.flush();
   yield onPreview;
 
   let onValueAdded = view.once("ruleview-changed");
@@ -328,7 +331,7 @@ var setProperty = Task.async(function* (view, textProp, value,
   } else {
     EventUtils.sendString(value, view.styleWindow);
   }
-  view.throttle.flush();
+  view.debounce.flush();
   yield onPreview;
 
   let onValueDone = view.once("ruleview-changed");
@@ -532,4 +535,26 @@ function checkClassPanelContent(view, classes) {
     is(checkBoxNodeList[i].checked, classes[i].state,
        `Checkbox ${i} has the right state`);
   }
+}
+
+/**
+ * Opens the eyedropper from the colorpicker tooltip
+ * by selecting the colorpicker and then selecting the eyedropper icon
+ * @param {view} ruleView
+ * @param {swatch} color swatch of a particular property
+ */
+function* openEyedropper(view, swatch) {
+  let tooltip = view.tooltips.getTooltip("colorPicker").tooltip;
+
+  info("Click on the swatch");
+  let onColorPickerReady = view.tooltips.getTooltip("colorPicker").once("ready");
+  swatch.click();
+  yield onColorPickerReady;
+
+  let dropperButton = tooltip.container.querySelector("#eyedropper-button");
+
+  info("Click on the eyedropper icon");
+  let onOpened = tooltip.once("eyedropper-opened");
+  dropperButton.click();
+  yield onOpened;
 }

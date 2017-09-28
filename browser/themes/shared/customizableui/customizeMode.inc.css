@@ -8,133 +8,45 @@
   --drag-drop-transition-duration: .3s;
 }
 
-#main-window[customization-lwtheme] #tab-view-deck:-moz-lwtheme {
-  background-repeat: no-repeat;
-  background-position: right top;
-  background-attachment: fixed;
-  background-color: transparent;
-  background-image: -moz-image-rect(var(--lwt-header-image), 0, 100%,
-                      var(--toolbox-rect-height), 0),
-                    linear-gradient(to bottom,
-                      var(--lwt-accent-color) calc(var(--toolbox-rect-height-with-unit) - 1px),
-                      rgba(0,0,0,0.25) calc(var(--toolbox-rect-height-with-unit) - 1px),
-                      rgba(0,0,0,0.25) calc(var(--toolbox-rect-height-with-unit) + 1px),
-                      rgba(255,255,255,0.5) calc(var(--toolbox-rect-height-with-unit) + 1px),
-                      rgba(255,255,255,0.5) calc(var(--toolbox-rect-height-with-unit) + 2px),
-                      transparent calc(var(--toolbox-rect-height-with-unit) + 2px));
-}
-
-#main-window:-moz-any([customize-entering],[customize-entered]) #browser-bottombox {
-  margin-bottom: 2em;
-}
-
-#main-window:-moz-any([customize-entering],[customize-entered]) #content-deck,
-#main-window:-moz-any([customize-entering],[customize-entered]) #browser-bottombox,
-#main-window:-moz-any([customize-entering],[customize-entered]) #navigator-toolbox {
-  margin-left: 2em;
-  margin-right: 2em;
-}
-
-#main-window:-moz-any([customize-entering],[customize-exiting]) #tab-view-deck {
-  pointer-events: none;
-}
-
-#main-window[customize-entered] .customization-target:not(:-moz-any(#PanelUI-contents, #TabsToolbar, #toolbar-menubar))::before,
-#PanelUI-contents > .panel-customization-placeholder {
-  -moz-outline-radius: 2.5px;
-  outline: 1px dashed transparent;
-}
-
-#main-window[customize-entered] .customization-target:not(:-moz-any(#PanelUI-contents, #TabsToolbar, #toolbar-menubar))::before {
-  /* Prevent jumping of tabs when switching a window between inactive and active (bug 853415). */
-  -moz-box-ordinal-group: 0;
-  content: "";
-  display: -moz-box;
-  height: 100%;
-  left: 0;
-  outline-offset: -2px;
-  pointer-events: none;
-  position: absolute;
-  top: 0;
-  width: 100%;
-}
-
-/* Shift the TabsToolbar outline up 2px since the #nav-bar is shifted up by 1px and the
-   #TabsToolbar::after is a pixel higher to draw the bottom border of the tabstrip so this makes the
-   offset from the bottom effectively the same as other targets (-2px). */
-#main-window[customize-entered] #TabsToolbar.customization-target::before {
-  top: -2px;
-}
-
-/* The parents of the outline pseudo-elements need to be positioned so that the outline is positioned relative to it. */
-#main-window[customize-entered] .customization-target:not(:-moz-any(#PanelUI-contents, #TabsToolbar, #toolbar-menubar)):hover,
-#main-window[customize-entered] .customization-target[customizing-dragovertarget]:not(:-moz-any(#PanelUI-contents, #TabsToolbar, #toolbar-menubar)),
-#main-window[customize-entered] #nav-bar-customization-target.customization-target {
-  position: relative;
-}
-
-/* Most target outlines are shown on hover and drag over but the panel menu uses
-   placeholders instead. */
-#main-window[customize-entered] .customization-target:not(:-moz-any(#PanelUI-contents, #TabsToolbar, #toolbar-menubar)):hover::before,
-#main-window[customize-entered] .customization-target[customizing-dragovertarget]:not(:-moz-any(#PanelUI-contents, #TabsToolbar, #toolbar-menubar))::before,
-/* nav-bar and panel outlines are always shown */
-#nav-bar[showoutline=true] > #nav-bar-customization-target.customization-target::before {
-  outline-color: currentColor;
-}
-
-#nav-bar[showoutline=true] > #nav-bar-customization-target.customization-target::before {
-  transition: outline-color 250ms linear;
-}
-
-#PanelUI-contents[showoutline=true] > .panel-customization-placeholder {
-  transition: outline-color 250ms linear;
-  outline-color: var(--panel-separator-color);
-}
-
-#PanelUI-contents > .panel-customization-placeholder {
-  cursor: auto;
-  outline-offset: -5px;
-}
-
-#main-window[customizing] .customization-target:not(#PanelUI-contents) {
+#main-window[customizing] .customization-target:not(#PanelUI-contents):not(#widget-overflow-fixed-list) {
   min-width: 100px;
-  padding-left: 10px;
-  padding-right: 10px;
 }
 
 #customization-container {
-  background-color: -moz-field;
-  color: -moz-fieldText;
+  background-color: var(--toolbar-non-lwt-bgcolor);
+  background-image: var(--toolbar-non-lwt-bgimage);
+  color: var(--toolbar-non-lwt-textcolor);
   text-shadow: none;
+}
+
+#customization-container:-moz-lwtheme {
+  background-color: transparent;
+  background-image: linear-gradient(var(--toolbar-bgcolor), var(--toolbar-non-lwt-bgcolor) 45px);
 }
 
 #customization-palette,
 #customization-empty {
-  padding: 5px 25px 25px;
+  padding: 5px 20px 20px;
 }
 
 #customization-header {
-  font-size: 1.75em;
-  line-height: 1.75em;
-  color: GrayText;
-  font-weight: 200;
-  margin: 25px 25px 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid ThreeDLightShadow;
+  font-weight: 500;
+  font-size: 1.2em;
+  margin: 20px 20px 15px;
+}
+
+#customization-header:-moz-lwtheme {
+  text-shadow: 0 0 1em var(--toolbar-non-lwt-bgcolor),
+               0 0 1em var(--toolbar-non-lwt-bgcolor),
+               0 0 .5em var(--toolbar-non-lwt-bgcolor);
 }
 
 #customization-panel-container {
-  padding: 15px 25px 25px;
-  background-image: linear-gradient(to bottom, #3e86ce, #3878ba);
-}
-
-#main-window:-moz-any([customize-entering],[customize-entered]) #browser-bottombox,
-#customization-footer {
-  background-color: -moz-dialog;
+  padding: 0 20px 25px;
 }
 
 #customization-footer {
-  border-top: 1px solid ThreeDLightShadow;
+  border-top: 1px solid rgba(0,0,0,.15);
   padding: 10px;
 }
 
@@ -145,16 +57,19 @@
 
 .customizationmode-button {
   border: 1px solid #b1b1b1;
-  margin: 6px 10px;
-  padding: 2px 5px;
   background-color: #fcfcfd;
-  color: rgb(71,71,71);
   -moz-appearance: none;
 }
 
-.customizationmode-checkbox {
+.customizationmode-checkbox,
+.customizationmode-button {
   margin: 6px 10px;
   padding: 2px 5px;
+}
+
+.customizationmode-checkbox:not(:-moz-lwtheme),
+.customizationmode-button {
+  color: rgb(71, 71, 71);
 }
 
 #customization-reset-button,
@@ -201,7 +116,7 @@
 .customizationmode-button > .box-inherit > .button-menu-dropmarker {
   margin-inline-end: 0;
   padding-inline-end: 0;
-  list-style-image: url(chrome://browser/skin/arrow-dropdown.svg);
+  list-style-image: url(chrome://global/skin/icons/arrow-dropdown-16.svg);
 }
 
 .customizationmode-button:-moz-any(:focus,:active,:hover):not([disabled]),
@@ -227,29 +142,26 @@
   height: 16px;
 }
 
+#customization-uidensity-button > .box-inherit > .box-inherit > .button-text,
 #customization-lwtheme-button > .box-inherit > .box-inherit > .button-text {
   /* Sadly, button.css thinks its margins are perfect for everyone. */
   margin-inline-start: 6px !important;
 }
 
+#customization-uidensity-button > .box-inherit > .box-inherit > .button-icon,
 #customization-lwtheme-button > .box-inherit > .box-inherit > .button-icon {
   width: 16px;
   height: 16px;
   border-radius: 2px;
-  background-image: url("chrome://browser/content/default-theme-icon.svg");
   background-size: contain;
 }
 
-#main-window[customize-entered] #customization-panel-container {
-  background-image: url("chrome://browser/skin/customizableui/customizeMode-separatorHorizontal.png"),
-                    url("chrome://browser/skin/customizableui/customizeMode-separatorVertical.png"),
-                    url("chrome://browser/skin/customizableui/customizeMode-gridTexture.png"),
-                    url("chrome://browser/skin/customizableui/background-noise-toolbar.png"),
-                    linear-gradient(to bottom, #3e86ce, #3878ba);
-  background-position: center top, left center, left top, left top, left top;
-  background-repeat: no-repeat, no-repeat, repeat, repeat, no-repeat;
-  background-size: auto 12px, 12px 100%, auto, auto, auto;
-  background-attachment: scroll, scroll, fixed, fixed, scroll;
+#customization-lwtheme-button > .box-inherit > .box-inherit > .button-icon {
+  background-image: url("chrome://browser/content/default-theme-icon.svg");
+}
+
+#customization-uidensity-button > .box-inherit > .box-inherit > .button-icon {
+  background-image: url("chrome://browser/skin/customizableui/density-normal.svg");
 }
 
 #widget-overflow-fixed-list > toolbarpaletteitem[place="panel"],
@@ -318,7 +230,11 @@ toolbarpaletteitem[place="toolbar"] {
 }
 
 #customization-palette:not([hidden]) {
-  margin-bottom: 25px;
+  margin-bottom: 20px;
+}
+
+#customization-palette .toolbarbutton-1 {
+  fill: currentColor;
 }
 
 toolbarpaletteitem[place="palette"]:-moz-focusring,
@@ -340,27 +256,21 @@ toolbarpaletteitem[place="toolbar"]:not([mousedown="true"]):-moz-focusring {
   outline-offset: -5px;
 }
 
-#wrapper-edit-controls[place="palette"] > #edit-controls > toolbarbutton,
-#wrapper-edit-controls[place="palette"] > #edit-controls > separator,
-#wrapper-zoom-controls[place="palette"] > #zoom-controls > toolbarbutton,
-#wrapper-zoom-controls[place="palette"] > #zoom-controls > separator {
-  margin-top: 20px;
+toolbarpaletteitem[place=palette] > toolbarspring {
+  width: 7em;
+  min-width: 7em;
+  outline: 1px solid;
+  outline-offset: -8px;
+  opacity: .6;
+  height: 37px;
 }
 
-#wrapper-edit-controls[place="palette"] > #edit-controls > toolbarbutton,
-#wrapper-zoom-controls[place="palette"] > #zoom-controls > toolbarbutton {
-  margin-left: 0;
-  margin-right: 0;
-  max-width: 24px;
-  min-width: 24px;
-  max-height: 24px;
-  min-height: 24px;
-  padding: 4px;
-}
-
-#wrapper-edit-controls[place="palette"] > #edit-controls > toolbarbutton > .toolbarbutton-icon,
-#wrapper-zoom-controls[place="palette"] > #zoom-controls > toolbarbutton > .toolbarbutton-icon {
-  width: 16px;
+toolbarpaletteitem[place=toolbar] > toolbarspring {
+  outline: 1px solid;
+  outline-offset: -2px;
+  opacity: .6;
+  margin-top: 5px;
+  margin-bottom: 5px;
 }
 
 #wrapper-edit-controls > #edit-controls > toolbarbutton > .toolbarbutton-icon {
@@ -372,33 +282,45 @@ toolbarpaletteitem[place="toolbar"]:not([mousedown="true"]):-moz-focusring {
   display: none;
 }
 
-#wrapper-personal-bookmarks:not([place="toolbar"]) > #personal-bookmarks {
-  -moz-box-pack: center;
-  min-height: 48px;
-}
-
-#personal-bookmarks[cui-areatype="toolbar"]:not([overflowedItem=true]) > #bookmarks-toolbar-placeholder > .toolbarbutton-icon {
-  margin-inline-end: 5px;
-}
-
 #customization-palette > toolbarpaletteitem > label {
   text-align: center;
   margin-left: 0;
   margin-right: 0;
 }
 
+#customization-uidensity-touch-spacer {
+  border-top: 1px solid ThreeDLightShadow;
+  margin: 0 -10px 10px;
+}
+
+#customization-uidensity-autotouchmode-checkbox {
+  margin-bottom: 10px;
+}
+
+#customization-uidensity-menu > .panel-arrowcontainer > .panel-arrowcontent,
 #customization-lwtheme-menu > .panel-arrowcontainer > .panel-arrowcontent {
   -moz-box-orient: vertical;
+  font: menu;
+}
+
+#customization-lwtheme-menu > .panel-arrowcontainer > .panel-arrowcontent {
   /* Make the panel padding uniform across all platforms due to the
      styling of the section headers and footer. */
   padding: 10px;
 }
 
+#customization-uidensity-menu > .panel-arrowcontainer > .panel-arrowcontent {
+  padding: 5px 10px;
+}
+
+.customization-uidensity-menuitem > .menu-iconic-left > .menu-iconic-icon,
 .customization-lwtheme-menu-theme > .toolbarbutton-icon {
   width: 32px;
   height: 32px;
+  margin: 5px;
 }
 
+.customization-uidensity-menuitem,
 .customization-lwtheme-menu-theme {
   -moz-appearance: none;
   border: 1px solid transparent;
@@ -409,51 +331,72 @@ toolbarpaletteitem[place="toolbar"]:not([mousedown="true"]):-moz-focusring {
   padding-inline-start: 0;
 }
 
+.customization-uidensity-menuitem {
+  color: inherit;
+}
+
 .customization-lwtheme-menu-theme[defaulttheme] {
   list-style-image: url(chrome://browser/content/default-theme-icon.svg);
 }
 
+#customization-uidensity-menuitem-normal {
+  list-style-image: url("chrome://browser/skin/customizableui/density-normal.svg");
+}
+
+#customization-uidensity-menuitem-compact {
+  list-style-image: url("chrome://browser/skin/customizableui/density-compact.svg");
+}
+
+#customization-uidensity-menuitem-touch {
+  list-style-image: url("chrome://browser/skin/customizableui/density-touch.svg");
+}
+
+.customization-uidensity-menuitem[active="true"],
+.customization-uidensity-menuitem:hover,
 .customization-lwtheme-menu-theme[active="true"],
 .customization-lwtheme-menu-theme:hover {
   background-color: var(--arrowpanel-dimmed);
   border-color: var(--panel-separator-color);
 }
 
+.customization-uidensity-menuitem[active="true"],
+.customization-uidensity-menuitem:hover:active,
 .customization-lwtheme-menu-theme[active="true"],
 .customization-lwtheme-menu-theme:hover:active {
   background-color: var(--arrowpanel-dimmed-further);
 }
 
-.customization-lwtheme-menu-theme > .toolbarbutton-icon {
-  margin: 5px;
-}
-
+.customization-uidensity-menuitem > .menu-iconic-text,
 .customization-lwtheme-menu-theme > .toolbarbutton-text {
   text-align: start;
+}
+
+.customization-uidensity-menuitem > .menu-iconic-text {
+  font: menu;
 }
 
 #customization-lwtheme-menu-header,
 #customization-lwtheme-menu-recommended {
   padding: 10px;
   margin-bottom: 5px;
+  text-align: center;
+  font-weight: 500;
+  border-bottom: 1px solid var(--panel-separator-color);
 }
 
 #customization-lwtheme-menu-header,
 #customization-lwtheme-menu-recommended,
 #customization-lwtheme-menu-footer {
-  background-color: var(--arrowpanel-dimmed);
   margin-right: -10px;
   margin-left: -10px;
 }
 
 #customization-lwtheme-menu-header {
   margin-top: -10px;
-  border-bottom: 1px solid var(--arrowpanel-dimmed);
 }
 
 #customization-lwtheme-menu-recommended {
-  border-top: 1px solid var(--arrowpanel-dimmed);
-  border-bottom: 1px solid var(--arrowpanel-dimmed);
+  border-top: 1px solid var(--panel-separator-color);
 }
 
 #customization-lwtheme-menu-footer {
@@ -480,4 +423,110 @@ toolbarpaletteitem[place="toolbar"]:not([mousedown="true"]):-moz-focusring {
   border-inline-end: 1px solid var(--panel-separator-color);
 }
 
-%include customizeTip.inc.css
+#customization-panelWrapper > .panel-arrowcontent {
+  color: var(--arrowpanel-color);
+  background: var(--arrowpanel-background);
+  background-clip: padding-box;
+%ifdef XP_MACOSX
+  /* Native styling adds more 'oompf' to the popup box-shadow, so simulate that
+   * as best as we can here: */
+  border: 1px solid var(--arrowpanel-dimmed-even-further);
+  box-shadow: 0 4px 10px hsla(0,0%,0%,.3);
+  -moz-appearance: none;
+  border-radius: var(--arrowpanel-border-radius);
+%else
+  border: 1px solid var(--arrowpanel-border-color);
+  box-shadow: 0 0 4px hsla(0,0%,0%,.2);
+%endif
+}
+
+#customization-panelWrapper > .panel-arrowbox {
+  position: relative;
+  height: 10px;
+  margin-bottom: -1px;
+}
+
+/* The overflow button icon _looks_ disabled, but is also shown as [open]. */
+#nav-bar[customizing] > .overflow-button {
+  /* This color is the hard-coded #4c4c4c at 40% opacity as found in toolbarbutton-icons.inc.css */
+  fill: hsla(0,0%,30%,.4);
+}
+
+#nav-bar[customizing] > .overflow-button > .toolbarbutton-icon {
+  background-color: var(--toolbarbutton-active-background);
+  opacity: 1;
+}
+
+#customization-panelWrapper > .panel-arrowbox > .panel-arrow[side="top"] {
+%ifdef XP_MACOSX
+  list-style-image: var(--panel-arrow-image-vertical,
+                        url("chrome://global/skin/arrow/panelarrow-vertical.png"));
+  /* The OS X image is 2px narrower than the windows/linux one.
+   * Add padding to compensate: */
+  padding: 0 1px;
+  /* specify width for hidpi image to fit correctly */
+  width: 20px;
+%else
+  list-style-image: var(--panel-arrow-image-vertical,
+                        url("chrome://global/skin/arrow/panelarrow-vertical-themed.svg"));
+%endif
+  /* The arrow needs to point to the overflow button. The numbers involved
+   * are:
+   * overflow button width: (16px + 2 * 2px padding
+   * + 2 * toolbarbutton-inner-padding)
+   * hamburger button width: (16px + 2 * 5px padding
+   * + 2 * toolbarbutton-inner-padding)
+   * hamburger button border + margin: 1px + 2px
+   * The total desired offset from the right edge of the window is thus:
+   * 10px + 1 * toolbarbutton-inner-padding (center of overflow button) +
+   * 29px + 2 * toolbarbutton-inner-padding
+   * The #customization-panel-container has a 20px margin, so that leaves:
+   * 19px + 3 * toolbarbutton-inner-padding
+   * Finally, we need to center the arrow, which is 20px wide, so subtract
+   * 10px.
+   */
+  margin-inline-end: calc(9px + 3 * var(--toolbarbutton-inner-padding));
+  vertical-align: top;
+}
+
+%ifdef XP_MACOSX
+@media (min-resolution: 2dppx) {
+  #customization-panelWrapper > .panel-arrowbox > .panel-arrow[side="top"] {
+    list-style-image: var(--panel-arrow-image-vertical,
+                          url("chrome://global/skin/arrow/panelarrow-vertical@2x.png"));
+  }
+}
+%endif
+
+#customization-panelHolder > #widget-overflow-fixed-list:not(:empty) {
+  padding-bottom: 50px; /* Make sure there's always space to drop stuff. */
+}
+
+#customization-panelHolder > #widget-overflow-fixed-list:empty {
+  background-image: url("chrome://browser/skin/customizableui/empty-overflow-panel.png");
+  background-position: center top 10px;
+  background-size: 218px 134px;
+  background-repeat: no-repeat;
+}
+
+#customization-panelHolder > #widget-overflow-fixed-list:empty::after {
+  content: attr(emptylabel);
+  padding: 154px 10px 10px; /* 154 = 134 for the image, 10px space on either side. */
+  text-align: center;
+  display: block;
+}
+
+@media (min-resolution: 1.1dppx) {
+  #customization-panelHolder > #widget-overflow-fixed-list:empty {
+    background-image: url("chrome://browser/skin/customizableui/empty-overflow-panel@2x.png");
+  }
+}
+
+#downloads-button-autohide-panel > .panel-arrowcontainer > .panel-arrowcontent {
+  padding: 5px 12px;
+}
+
+#downloads-button-autohide-checkbox {
+  margin: 0;
+  padding: 0;
+}

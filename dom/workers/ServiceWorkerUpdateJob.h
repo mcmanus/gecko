@@ -8,6 +8,7 @@
 #define mozilla_dom_workers_serviceworkerupdatejob_h
 
 #include "ServiceWorkerJob.h"
+#include "ServiceWorkerRegistration.h"
 
 namespace mozilla {
 namespace dom {
@@ -28,7 +29,7 @@ public:
                          const nsACString& aScope,
                          const nsACString& aScriptSpec,
                          nsILoadGroup* aLoadGroup,
-                         nsLoadFlags aLoadFlags);
+                         ServiceWorkerUpdateViaCache aUpdateViaCache);
 
   already_AddRefed<ServiceWorkerRegistrationInfo>
   GetRegistration() const;
@@ -40,7 +41,7 @@ protected:
                          const nsACString& aScope,
                          const nsACString& aScriptSpec,
                          nsILoadGroup* aLoadGroup,
-                         nsLoadFlags aLoadFlags);
+                         ServiceWorkerUpdateViaCache aUpdateViaCache);
 
   virtual ~ServiceWorkerUpdateJob();
 
@@ -70,11 +71,8 @@ protected:
   void
   Update();
 
-  nsLoadFlags
-  GetLoadFlags() const;
-
-  void
-  SetLoadFlags(nsLoadFlags aLoadFlags);
+  ServiceWorkerUpdateViaCache
+  GetUpdateViaCache() const;
 
 private:
   class CompareCallback;
@@ -87,7 +85,8 @@ private:
   ComparisonResult(nsresult aStatus,
                    bool aInCacheAndEqual,
                    const nsAString& aNewCacheName,
-                   const nsACString& aMaxScope);
+                   const nsACString& aMaxScope,
+                   nsLoadFlags aLoadFlags);
 
   // Utility method called after evaluating the worker script.
   void
@@ -102,7 +101,7 @@ private:
   ContinueAfterInstallEvent(bool aInstallEventSuccess);
 
   nsCOMPtr<nsILoadGroup> mLoadGroup;
-  nsLoadFlags mLoadFlags;
+  ServiceWorkerUpdateViaCache mUpdateViaCache;
 
   RefPtr<ServiceWorkerRegistrationInfo> mRegistration;
 };

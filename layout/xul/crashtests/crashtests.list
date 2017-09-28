@@ -1,6 +1,6 @@
 load 131008-1.xul
 load 137216-1.xul
-load 140218-1.xml
+asserts-if(stylo,3) load 140218-1.xml
 load 151826-1.xul
 load 168724-1.xul
 load 189814-1.xul
@@ -63,7 +63,7 @@ load 404192.xhtml
 load 407152.xul
 load 408904-1.xul
 load 412479-1.xhtml
-asserts(4) asserts-if(gtkWidget&&browserIsRemote,6) asserts-if(stylo,4-6) load 415394-1.xhtml # Bug 163838, bug 1195474 # bug 1324651
+load 415394-1.xhtml
 load 417509.xul
 load 420424-1.xul
 load 430356-1.xhtml
@@ -77,7 +77,7 @@ load 434458-1.xul
 load 452185.html
 load 460900-1.xul
 load 464149-1.xul
-asserts-if(winWidget,1) asserts-if(Android,0-1) load 464407-1.xhtml # Bug 450974 on win, Bug 1267054 on Android
+asserts-if(winWidget,1) asserts-if(Android,0-1) asserts-if(stylo,0-1) load 464407-1.xhtml # Bug 450974 on win, Bug 1267054 on Android, bug 718883 for stylo
 load 467080.xul
 load 467481-1.xul
 load 470063-1.html

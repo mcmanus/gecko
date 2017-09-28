@@ -21,10 +21,9 @@
 #include "nsIComponentManager.h"
 #include "prio.h"
 #include "private/pprio.h"  // To get PR_ImportFile
-#include "prmem.h"
 #include "nsHashKeys.h"
 
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "nsReadableUtils.h"
 
 #include <direct.h>
@@ -40,7 +39,6 @@
 #include  <stdlib.h>
 #include  <mbstring.h>
 
-#include "nsXPIDLString.h"
 #include "prproces.h"
 #include "prlink.h"
 
@@ -114,6 +112,7 @@ class AsyncLocalFileWinDone : public Runnable
 {
 public:
   AsyncLocalFileWinDone() :
+    Runnable("AsyncLocalFileWinDone"),
     mWorkerThread(do_GetCurrentThread())
   {
     // Objects of this type must only be created on worker threads
@@ -143,7 +142,8 @@ class AsyncRevealOperation : public Runnable
 {
 public:
   explicit AsyncRevealOperation(const nsAString& aResolvedPath)
-    : mResolvedPath(aResolvedPath)
+    : Runnable("AsyncRevealOperation"),
+      mResolvedPath(aResolvedPath)
   {
   }
 
@@ -547,7 +547,7 @@ struct PRFilePrivate
 // copied from nsprpub/pr/src/{io/prfile.c | md/windows/w95io.c} :
 // PR_Open and _PR_MD_OPEN
 nsresult
-OpenFile(const nsAFlatString& aName,
+OpenFile(const nsString& aName,
          int aOsflags,
          int aMode,
          bool aShareDelete,
@@ -651,7 +651,7 @@ FileTimeToPRTime(const FILETIME* aFiletime, PRTime* aPrtm)
 // copied from nsprpub/pr/src/{io/prfile.c | md/windows/w95io.c} with some
 // changes : PR_GetFileInfo64, _PR_MD_GETFILEINFO64
 static nsresult
-GetFileInfo(const nsAFlatString& aName, PRFileInfo64* aInfo)
+GetFileInfo(const nsString& aName, PRFileInfo64* aInfo)
 {
   WIN32_FILE_ATTRIBUTE_DATA fileData;
 
@@ -692,7 +692,7 @@ struct nsDir
 };
 
 static nsresult
-OpenDir(const nsAFlatString& aName, nsDir** aDir)
+OpenDir(const nsString& aName, nsDir** aDir)
 {
   if (NS_WARN_IF(!aDir)) {
     return NS_ERROR_INVALID_ARG;
@@ -962,7 +962,6 @@ nsLocalFile::nsLocalFileConstructor(nsISupports* aOuter, const nsIID& aIID,
 //-----------------------------------------------------------------------------
 
 NS_IMPL_ISUPPORTS(nsLocalFile,
-                  nsILocalFile,
                   nsIFile,
                   nsILocalFileWin,
                   nsIHashable)
@@ -1016,7 +1015,7 @@ nsLocalFile::ResolveAndStat()
     return NS_OK;
   }
 
-  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
+  AUTO_PROFILER_LABEL("nsLocalFile::ResolveAndStat", OTHER);
   // we can't resolve/stat anything that isn't a valid NSPR addressable path
   if (mWorkingPath.IsEmpty()) {
     return NS_ERROR_FILE_INVALID_PATH;
@@ -1025,9 +1024,9 @@ nsLocalFile::ResolveAndStat()
   // this is usually correct
   mResolvedPath.Assign(mWorkingPath);
 
-  // slutty hack designed to work around bug 134796 until it is fixed
-  nsAutoString nsprPath(mWorkingPath.get());
-  if (mWorkingPath.Length() == 2 && mWorkingPath.CharAt(1) == L':') {
+  // Make sure root paths have a trailing slash.
+  nsAutoString nsprPath(mWorkingPath);
+  if (mWorkingPath.Length() == 2 && mWorkingPath.CharAt(1) == u':') {
     nsprPath.Append('\\');
   }
 
@@ -1114,7 +1113,7 @@ nsLocalFile::Resolve()
 }
 
 //-----------------------------------------------------------------------------
-// nsLocalFile::nsIFile,nsILocalFile
+// nsLocalFile::nsIFile
 //-----------------------------------------------------------------------------
 
 NS_IMETHODIMP
@@ -1205,7 +1204,7 @@ CleanupHandlerPath(nsString& aPath)
   aPath.Append(' ');
 
   // case insensitive
-  uint32_t index = aPath.Find(".exe ", true);
+  int32_t index = aPath.Find(".exe ", true);
   if (index == kNotFound)
     index = aPath.Find(".dll ", true);
   if (index == kNotFound)
@@ -1270,7 +1269,7 @@ nsLocalFile::CleanupCmdHandlerPath(nsAString& aCommandHandler)
 
   // Expand environment variables so we have full path strings.
   uint32_t bufLength = ::ExpandEnvironmentStringsW(handlerCommand.get(),
-                                                   L"", 0);
+                                                   nullptr, 0);
   if (bufLength == 0) // Error
     return false;
 
@@ -1467,7 +1466,7 @@ nsLocalFile::AppendRelativePath(const nsAString& aNode)
 
 
 nsresult
-nsLocalFile::AppendInternal(const nsAFlatString& aNode,
+nsLocalFile::AppendInternal(const nsString& aNode,
                             bool aMultipleComponents)
 {
   if (aNode.IsEmpty()) {

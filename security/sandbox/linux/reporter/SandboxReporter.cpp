@@ -48,7 +48,7 @@ SandboxReporter::Init()
 {
   int fds[2];
 
-  if (0 != socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds)) {
+  if (0 != socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, fds)) {
     SANDBOX_LOG_ERROR("SandboxReporter: socketpair failed: %s",
 		      strerror(errno));
     return false;
@@ -100,9 +100,8 @@ SandboxReporter::Singleton()
     // by that point (so it won't race by calling Singleton()), all
     // non-main XPCOM threads will also be shut down, and currently
     // the only other user is the main-thread-only Troubleshoot.jsm.
-    NS_DispatchToMainThread(NS_NewRunnableFunction([] {
-      ClearOnShutdown(&sSingleton);
-    }));
+    NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "SandboxReporter::Singleton", [] { ClearOnShutdown(&sSingleton); }));
   }
   return sSingleton.get();
 }
@@ -139,6 +138,9 @@ SubmitToTelemetry(const SandboxReport& aReport)
     break;
   case SandboxReport::ProcType::MEDIA_PLUGIN:
     key.AppendLiteral("gmp");
+    break;
+  case SandboxReport::ProcType::FILE:
+    key.AppendLiteral("file");
     break;
   default:
     MOZ_ASSERT(false);

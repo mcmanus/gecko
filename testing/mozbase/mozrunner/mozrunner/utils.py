@@ -82,7 +82,7 @@ def _raw_log():
 
 
 def test_environment(xrePath, env=None, crashreporter=True, debugger=False,
-                     dmdPath=None, lsanPath=None, log=None):
+                     dmdPath=None, lsanPath=None, ubsanPath=None, log=None):
     """
     populate OS environment variables for mochitest and reftests.
 
@@ -102,10 +102,7 @@ def test_environment(xrePath, env=None, crashreporter=True, debugger=False,
     envVar = None
     dmdLibrary = None
     preloadEnvVar = None
-    if 'toolkit' in mozinfo.info and mozinfo.info['toolkit'] == "gonk":
-        # Skip all of this, it's only valid for the host.
-        pass
-    elif mozinfo.isUnix:
+    if mozinfo.isUnix:
         envVar = "LD_LIBRARY_PATH"
         env['MOZILLA_FIVE_HOME'] = xrePath
         dmdLibrary = "libdmd.so"
@@ -157,8 +154,12 @@ def test_environment(xrePath, env=None, crashreporter=True, debugger=False,
     if asan:
         try:
             # Symbolizer support
+            if mozinfo.isMac:
+                llvmSymbolizerDir = ldLibraryPath
+            else:
+                llvmSymbolizerDir = xrePath
             llvmsym = os.path.join(
-                xrePath,
+                llvmSymbolizerDir,
                 "llvm-symbolizer" + mozinfo.info["bin_suffix"].encode('ascii'))
             if os.path.isfile(llvmsym):
                 env["ASAN_SYMBOLIZER_PATH"] = llvmsym
@@ -172,6 +173,8 @@ def test_environment(xrePath, env=None, crashreporter=True, debugger=False,
             if mozinfo.isWin:
                 totalMemory = int(
                     os.popen("wmic computersystem get TotalPhysicalMemory").readlines()[1]) / 1024
+            elif mozinfo.isMac:
+                totalMemory = int(os.popen("sysctl hw.memsize").readlines()[0].split()[1]) / 1024
             else:
                 totalMemory = int(os.popen("free").readlines()[1].split()[1])
 
@@ -226,6 +229,21 @@ def test_environment(xrePath, env=None, crashreporter=True, debugger=False,
         else:
             log.info("TEST-UNEXPECTED-FAIL | runtests.py | Failed to find TSan"
                      " symbolizer at %s" % llvmsym)
+
+    ubsan = bool(mozinfo.info.get("ubsan"))
+    if ubsan and (mozinfo.isLinux or mozinfo.isMac):
+        if ubsanPath:
+            log.info("UBSan enabled.")
+            ubsanOptions = []
+            suppressionsFile = os.path.join(
+                ubsanPath, 'ubsan_suppressions.txt')
+            if os.path.exists(suppressionsFile):
+                log.info("UBSan using suppression file " + suppressionsFile)
+                ubsanOptions.append("suppressions=" + suppressionsFile)
+            else:
+                log.info("WARNING | runtests.py | UBSan suppressions file"
+                         " does not exist! " + suppressionsFile)
+            env["UBSAN_OPTIONS"] = ':'.join(ubsanOptions)
 
     return env
 

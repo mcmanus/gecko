@@ -166,9 +166,10 @@ public:
   nsDisplayTextOverflowMarker(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
                               const nsRect& aRect, nscoord aAscent,
                               const nsStyleTextOverflowSide* aStyle,
+                              uint32_t aLineNumber,
                               uint32_t aIndex)
     : nsDisplayItem(aBuilder, aFrame), mRect(aRect),
-      mStyle(aStyle), mAscent(aAscent), mIndex(aIndex) {
+      mStyle(aStyle), mAscent(aAscent), mIndex((aLineNumber << 1) + aIndex) {
     MOZ_COUNT_CTOR(nsDisplayTextOverflowMarker);
   }
 #ifdef NS_BUILD_REFCNT_LOGGING
@@ -177,14 +178,15 @@ public:
   }
 #endif
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
-                           bool* aSnap) override {
+                           bool* aSnap) const override
+  {
     *aSnap = false;
     nsRect shadowRect =
       nsLayoutUtils::GetTextShadowRectsUnion(mRect, mFrame);
     return mRect.Union(shadowRect);
   }
 
-  virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder) override
+  virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder) const override
   {
     if (gfxPlatform::GetPlatform()->RespectsFontStyleSmoothing()) {
       // On OS X, web authors can turn off subpixel text rendering using the
@@ -201,8 +203,8 @@ public:
   virtual void Paint(nsDisplayListBuilder* aBuilder,
                      gfxContext* aCtx) override;
 
-  virtual uint32_t GetPerFrameKey() override { 
-    return (mIndex << nsDisplayItem::TYPE_BITS) | nsDisplayItem::GetPerFrameKey(); 
+  virtual uint32_t GetPerFrameKey() const override {
+    return (mIndex << TYPE_BITS) | nsDisplayItem::GetPerFrameKey();
   }
   void PaintTextToContext(gfxContext* aCtx,
                           nsPoint aOffsetFromRect);
@@ -335,7 +337,7 @@ TextOverflow::TextOverflow(nsDisplayListBuilder* aBuilder,
   // has overflow on that side.
 }
 
-/* static */ TextOverflow*
+/* static */ UniquePtr<TextOverflow>
 TextOverflow::WillProcessLines(nsDisplayListBuilder*   aBuilder,
                                nsIFrame*               aBlockFrame)
 {
@@ -350,7 +352,7 @@ TextOverflow::WillProcessLines(nsDisplayListBuilder*   aBuilder,
     // If the APZ is actively scrolling this, don't bother with markers.
     return nullptr;
   }
-  return new TextOverflow(aBuilder, aBlockFrame);
+  return MakeUnique<TextOverflow>(aBuilder, aBlockFrame);
 }
 
 void
@@ -562,7 +564,7 @@ TextOverflow::ExamineLineFrames(nsLineBox*      aLine,
     if (guessIEnd) {
       mIEnd.SetupString(mBlock);
     }
-    
+
     // If there is insufficient space for both markers then keep the one on the
     // end side per the block's 'direction'.
     nscoord istartMarkerISize = mIStart.mActive ? mIStart.mISize : 0;
@@ -656,7 +658,8 @@ TextOverflow::ExamineLineFrames(nsLineBox*      aLine,
 
 void
 TextOverflow::ProcessLine(const nsDisplayListSet& aLists,
-                          nsLineBox*              aLine)
+                          nsLineBox*              aLine,
+                          uint32_t                aLineNumber)
 {
   NS_ASSERTION(mIStart.mStyle->mType != NS_STYLE_TEXT_OVERFLOW_CLIP ||
                mIEnd.mStyle->mType != NS_STYLE_TEXT_OVERFLOW_CLIP,
@@ -705,7 +708,7 @@ TextOverflow::ProcessLine(const nsDisplayListSet& aLists,
   for (uint32_t i = 0; i < ArrayLength(lists); ++i) {
     PruneDisplayListContents(lists[i], framesToHide, insideMarkersArea);
   }
-  CreateMarkers(aLine, needIStart, needIEnd, insideMarkersArea, contentArea);
+  CreateMarkers(aLine, needIStart, needIEnd, insideMarkersArea, contentArea, aLineNumber);
 }
 
 void
@@ -718,7 +721,7 @@ TextOverflow::PruneDisplayListContents(nsDisplayList* aList,
   while ((item = aList->RemoveBottom())) {
     nsIFrame* itemFrame = item->Frame();
     if (IsFrameDescendantOfAny(itemFrame, aFramesToHide, mBlock)) {
-      item->~nsDisplayItem();
+      item->Destroy(mBuilder);
       continue;
     }
 
@@ -729,7 +732,7 @@ TextOverflow::PruneDisplayListContents(nsDisplayList* aList,
       }
     }
 
-    nsCharClipDisplayItem* charClip = itemFrame ? 
+    nsCharClipDisplayItem* charClip = itemFrame ?
       nsCharClipDisplayItem::CheckCast(item) : nullptr;
     if (charClip && GetSelfOrNearestBlock(itemFrame) == mBlock) {
       LogicalRect rect =
@@ -800,7 +803,8 @@ void
 TextOverflow::CreateMarkers(const nsLineBox* aLine,
                             bool aCreateIStart, bool aCreateIEnd,
                             const LogicalRect& aInsideMarkersArea,
-                            const LogicalRect& aContentArea)
+                            const LogicalRect& aContentArea,
+                            uint32_t aLineNumber)
 {
   if (aCreateIStart) {
     DisplayListClipState::AutoSaveRestore clipState(mBuilder);
@@ -815,7 +819,7 @@ TextOverflow::CreateMarkers(const nsLineBox* aLine,
                markerRect, clipState);
     nsDisplayItem* marker = new (mBuilder)
       nsDisplayTextOverflowMarker(mBuilder, mBlock, markerRect,
-                                  aLine->GetLogicalAscent(), mIStart.mStyle, 0);
+                                  aLine->GetLogicalAscent(), mIStart.mStyle, aLineNumber, 0);
     mMarkerList.AppendNewToTop(marker);
   }
 
@@ -832,7 +836,7 @@ TextOverflow::CreateMarkers(const nsLineBox* aLine,
                markerRect, clipState);
     nsDisplayItem* marker = new (mBuilder)
       nsDisplayTextOverflowMarker(mBuilder, mBlock, markerRect,
-                                  aLine->GetLogicalAscent(), mIEnd.mStyle, 1);
+                                  aLine->GetLogicalAscent(), mIEnd.mStyle, aLineNumber, 1);
     mMarkerList.AppendNewToTop(marker);
   }
 }

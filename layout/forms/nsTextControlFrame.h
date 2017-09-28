@@ -17,8 +17,8 @@
 class nsISelectionController;
 class EditorInitializerEntryTracker;
 class nsTextEditorState;
-class nsIEditor;
 namespace mozilla {
+class TextEditor;
 enum class CSSPseudoElementType : uint8_t;
 namespace dom {
 class Element;
@@ -87,7 +87,7 @@ public:
 
   virtual nsSize GetXULMinSize(nsBoxLayoutState& aBoxLayoutState) override;
   virtual bool IsXULCollapsed() override;
-  
+
 #ifdef ACCESSIBILITY
   virtual mozilla::a11y::AccType AccessibleType() override;
 #endif
@@ -125,7 +125,6 @@ public:
                                    nsFrameList&    aChildList) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual mozilla::dom::Element*
@@ -139,7 +138,7 @@ public:
 
 //==== NSITEXTCONTROLFRAME
 
-  NS_IMETHOD    GetEditor(nsIEditor **aEditor) override;
+  NS_IMETHOD_(already_AddRefed<mozilla::TextEditor>) GetTextEditor() override;
   NS_IMETHOD    SetSelectionRange(uint32_t aSelectionStart,
                                   uint32_t aSelectionEnd,
                                   SelectionDirection aDirection = eNone) override;
@@ -187,17 +186,23 @@ protected:
 
 public: //for methods who access nsTextControlFrame directly
   void SetValueChanged(bool aValueChanged);
-  
+
+  mozilla::dom::Element* GetRootNode() const {
+    return mRootNode;
+  }
+
+  mozilla::dom::Element* GetPlaceholderNode() const {
+    return mPlaceholderDiv;
+  }
+
+  mozilla::dom::Element* GetPreviewNode() const {
+    return mPreviewDiv;
+  }
+
   // called by the focus listener
   nsresult MaybeBeginSecureKeyboardInput();
   void MaybeEndSecureKeyboardInput();
 
-#define DEFINE_TEXTCTRL_FORWARDER(type, name)                                  \
-  type name() {                                                                \
-    nsCOMPtr<nsITextControlElement> txtCtrl = do_QueryInterface(GetContent()); \
-    NS_ASSERTION(txtCtrl, "Content not a text control element");               \
-    return txtCtrl->name();                                                    \
-  }
 #define DEFINE_TEXTCTRL_CONST_FORWARDER(type, name)                            \
   type name() const {                                                          \
     nsCOMPtr<nsITextControlElement> txtCtrl = do_QueryInterface(GetContent()); \
@@ -207,14 +212,12 @@ public: //for methods who access nsTextControlFrame directly
 
   DEFINE_TEXTCTRL_CONST_FORWARDER(bool, IsSingleLineTextControl)
   DEFINE_TEXTCTRL_CONST_FORWARDER(bool, IsTextArea)
-  DEFINE_TEXTCTRL_CONST_FORWARDER(bool, IsPlainTextControl)
   DEFINE_TEXTCTRL_CONST_FORWARDER(bool, IsPasswordTextControl)
   DEFINE_TEXTCTRL_CONST_FORWARDER(int32_t, GetCols)
   DEFINE_TEXTCTRL_CONST_FORWARDER(int32_t, GetWrapCols)
   DEFINE_TEXTCTRL_CONST_FORWARDER(int32_t, GetRows)
 
 #undef DEFINE_TEXTCTRL_CONST_FORWARDER
-#undef DEFINE_TEXTCTRL_FORWARDER
 
 protected:
   class EditorInitializer;
@@ -233,8 +236,11 @@ protected:
 
   class EditorInitializer : public mozilla::Runnable {
   public:
-    explicit EditorInitializer(nsTextControlFrame* aFrame) :
-      mFrame(aFrame) {}
+    explicit EditorInitializer(nsTextControlFrame* aFrame)
+      : mozilla::Runnable("nsTextControlFrame::EditorInitializer")
+      , mFrame(aFrame)
+    {
+    }
 
     NS_IMETHOD Run() override;
 
@@ -252,8 +258,11 @@ protected:
 
   class ScrollOnFocusEvent : public mozilla::Runnable {
   public:
-    explicit ScrollOnFocusEvent(nsTextControlFrame* aFrame) :
-      mFrame(aFrame) {}
+    explicit ScrollOnFocusEvent(nsTextControlFrame* aFrame)
+      : mozilla::Runnable("nsTextControlFrame::ScrollOnFocusEvent")
+      , mFrame(aFrame)
+    {
+    }
 
     NS_DECL_NSIRUNNABLE
 
@@ -329,18 +338,60 @@ private:
     DeleteProperty(TextControlInitializer());
   }
 
+  const nsAString& CachedValue() const
+  {
+    return mCachedValue;
+  }
+
+  void ClearCachedValue()
+  {
+    mCachedValue.SetIsVoid(true);
+  }
+
+  void CacheValue(const nsAString& aValue)
+  {
+    mCachedValue.Assign(aValue);
+  }
+
+  MOZ_MUST_USE bool
+  CacheValue(const nsAString& aValue, const mozilla::fallible_t& aFallible)
+  {
+    if (!mCachedValue.Assign(aValue, aFallible)) {
+      ClearCachedValue();
+      return false;
+    }
+    return true;
+  }
+
 private:
+  class nsAnonDivObserver;
+
+  nsresult CreateRootNode();
+  void CreatePlaceholderIfNeeded();
+  void CreatePreviewIfNeeded();
+  bool ShouldInitializeEagerly() const;
+  void InitializeEagerlyIfNeeded();
+
+  RefPtr<mozilla::dom::Element> mRootNode;
+  RefPtr<mozilla::dom::Element> mPlaceholderDiv;
+  RefPtr<mozilla::dom::Element> mPreviewDiv;
+  RefPtr<nsAnonDivObserver> mMutationObserver;
+  // Cache of the |.value| of <input> or <textarea> element without hard-wrap.
+  // If its IsVoid() returns true, it doesn't cache |.value|.
+  // Otherwise, it's cached when setting specific value or getting value from
+  // TextEditor.  Additionally, when contents in the anonymous <div> element
+  // is modified, this is cleared.
+  //
+  // FIXME(bug 1402545): Consider using an nsAutoString here.
+  nsString mCachedValue;
+
   // Our first baseline, or NS_INTRINSIC_WIDTH_UNKNOWN if we have a pending
   // Reflow.
   nscoord mFirstBaseline;
 
-  // these packed bools could instead use the high order bits on mState, saving 4 bytes 
+  // these packed bools could instead use the high order bits on mState, saving 4 bytes
   bool mEditorHasBeenInitialized;
   bool mIsProcessing;
-  // Keep track if we have asked a placeholder node creation.
-  bool mUsePlaceholder;
-  // Similarly for preview node creation.
-  bool mUsePreview;
 
 #ifdef DEBUG
   bool mInEditorInitialization;

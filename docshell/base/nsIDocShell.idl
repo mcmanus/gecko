@@ -11,8 +11,13 @@
 %{ C++
 #include "js/TypeDecls.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/NotNull.h"
 class nsPresContext;
 class nsIPresShell;
+namespace mozilla {
+class Encoding;
+class HTMLEditor;
+}
 %}
 
 /**
@@ -22,6 +27,7 @@ class nsIPresShell;
 [ptr] native nsPresContext(nsPresContext);
 [ptr] native nsIPresShell(nsIPresShell);
 [ref] native MaybeURI(mozilla::Maybe<nsCOMPtr<nsIURI>>);
+[ref] native Encoding(const mozilla::Encoding*);
 
 interface nsIURI;
 interface nsIChannel;
@@ -47,6 +53,7 @@ interface nsITabParent;
 interface nsITabChild;
 interface nsICommandManager;
 interface nsICommandParams;
+interface nsILoadURIDelegate;
 native TabChildRef(already_AddRefed<nsITabChild>);
 
 [scriptable, builtinclass, uuid(049234fe-da10-478b-bc5d-bc6f9a1ba63d)]
@@ -166,6 +173,8 @@ interface nsIDocShell : nsIDocShellTreeItem
    * @param aFileName            - Non-null when the link should be downloaded as
                                    the given filename.
    * @param aPostDataStream      - Post data stream (if POSTing)
+   * @param aPostDataStreamLength - Post data stream length. Use -1 if the length
+                                    of the stream is unknown.
    * @param aHeadersStream       - Stream containing "extra" request headers...
    * @param aLoadFlags           - Flags to modify load behaviour. Flags are defined
    *                               in nsIWebNavigation.
@@ -191,6 +200,7 @@ interface nsIDocShell : nsIDocShellTreeItem
                               in string aTypeHint,
                               in AString aFileName,
                               in nsIInputStream aPostDataStream,
+                              in long long aPostDataStreamLength,
                               in nsIInputStream aHeadersStream,
                               in unsigned long aLoadFlags,
                               in nsISHEntry aSHEntry,
@@ -458,6 +468,13 @@ interface nsIDocShell : nsIDocShellTreeItem
   attribute nsISecureBrowserUI securityUI;
 
   /**
+   * Object used to delegate URI loading to an upper context.
+   * Currently only set for GeckoView to allow handling of load requests
+   * at the application level.
+   */
+  attribute nsILoadURIDelegate loadURIDelegate;
+
+  /**
    * Cancel the XPCOM timers for each meta-refresh URI in this docshell,
    * and this docshell's children, recursively. The meta-refresh timers can be
    * restarted using resumeRefreshURIs().  If the timers are already suspended,
@@ -544,9 +561,10 @@ interface nsIDocShell : nsIDocShellTreeItem
   readonly attribute nsIChannel currentDocumentChannel;
 
   /**
-   * Set the offset of this child in its container.
+   * The original offset of this child in its container. This property is -1 for
+   * dynamically added docShells.
    */
-  [noscript] void setChildOffset(in unsigned long offset);
+  [noscript] attribute long childOffset;
 
   /**
    * Find out whether the docshell is currently in the middle of a page
@@ -713,11 +731,11 @@ interface nsIDocShell : nsIDocShellTreeItem
    * In a child docshell, this is the charset of the parent docshell
    */
   [noscript, notxpcom, nostdcall] void setParentCharset(
-    in ACString parentCharset,
+    in Encoding parentCharset,
     in int32_t parentCharsetSource,
     in nsIPrincipal parentCharsetPrincipal);
   [noscript, notxpcom, nostdcall] void getParentCharset(
-    out ACString parentCharset,
+    out Encoding parentCharset,
     out int32_t parentCharsetSource,
     out nsIPrincipal parentCharsetPrincipal);
 
@@ -1148,4 +1166,28 @@ interface nsIDocShell : nsIDocShellTreeItem
   * Fire a dummy location change event asynchronously.
   */
   [noscript] void dispatchLocationChangeEvent();
+
+%{C++
+  /**
+   * These methods call nsDocShell::GetHTMLEditorInternal() and
+   * nsDocShell::SetHTMLEditorInternal() with static_cast.
+   */
+  mozilla::HTMLEditor* GetHTMLEditor();
+  nsresult SetHTMLEditor(mozilla::HTMLEditor* aHTMLEditor);
+%}
+
+  /**
+   * Allowed CSS display modes. This needs to be kept in
+   * sync with similar values in nsStyleConsts.h
+   */
+  const unsigned long DISPLAY_MODE_BROWSER = 0;
+  const unsigned long DISPLAY_MODE_MINIMAL_UI = 1;
+  const unsigned long DISPLAY_MODE_STANDALONE = 2;
+  const unsigned long DISPLAY_MODE_FULLSCREEN = 3;
+
+  /**
+   * Display mode for this docshell. Defaults to DISPLAY_MODE_BROWSER.
+   * Media queries only look at the value in the top-most docshell.
+   */
+  attribute unsigned long displayMode;
 };

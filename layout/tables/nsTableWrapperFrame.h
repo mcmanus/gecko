@@ -57,11 +57,9 @@ public:
 #endif
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   void BuildDisplayListForInnerTable(nsDisplayListBuilder*   aBuilder,
-                                     const nsRect&           aDirtyRect,
                                      const nsDisplayListSet& aLists);
 
   virtual nscoord GetLogicalBaseline(mozilla::WritingMode aWritingMode) const override;
@@ -200,6 +198,7 @@ protected:
   virtual ~nsTableWrapperFrame();
 
   void InitChildReflowInput(nsPresContext&     aPresContext,
+                            const ReflowInput& aOuterRS,
                             ReflowInput& aReflowInput);
 
   // Get a NS_STYLE_CAPTION_SIDE_* value, or NO_SIDE if no caption is present.
@@ -212,7 +211,7 @@ protected:
     return captionSide == NS_STYLE_CAPTION_SIDE_LEFT ||
            captionSide == NS_STYLE_CAPTION_SIDE_RIGHT;
   }
-  
+
   uint8_t GetCaptionVerticalAlign();
 
   void SetDesiredSize(uint8_t                       aCaptionSide,
@@ -226,7 +225,7 @@ protected:
 
   nsresult   GetCaptionOrigin(uint32_t         aCaptionSide,
                               const mozilla::LogicalSize&    aContainBlockSize,
-                              const mozilla::LogicalSize&    aInnerSize, 
+                              const mozilla::LogicalSize&    aInnerSize,
                               const mozilla::LogicalMargin&  aInnerMargin,
                               const mozilla::LogicalSize&    aCaptionSize,
                               mozilla::LogicalMargin&        aCaptionMargin,
@@ -235,13 +234,13 @@ protected:
 
   nsresult   GetInnerOrigin(uint32_t         aCaptionSide,
                             const mozilla::LogicalSize&    aContainBlockSize,
-                            const mozilla::LogicalSize&    aCaptionSize, 
+                            const mozilla::LogicalSize&    aCaptionSize,
                             const mozilla::LogicalMargin&  aCaptionMargin,
                             const mozilla::LogicalSize&    aInnerSize,
                             mozilla::LogicalMargin&        aInnerMargin,
                             mozilla::LogicalPoint&         aOrigin,
                             mozilla::WritingMode           aWM);
-  
+
   // reflow the child (caption or innertable frame)
   void OuterBeginReflowChild(nsPresContext*                     aPresContext,
                              nsIFrame*                          aChildFrame,

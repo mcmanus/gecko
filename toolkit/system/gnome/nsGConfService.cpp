@@ -10,6 +10,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsISupportsPrimitives.h"
 #include "nsIMutableArray.h"
+#include "nsXULAppAPI.h"
 #include "prlink.h"
 
 #include <gconf/gconf-client.h>
@@ -75,6 +76,10 @@ nsGConfService::Init()
     GCONF_FUNCTIONS
   };
 #undef FUNC
+
+  if (NS_WARN_IF(XRE_IsContentProcess())) {
+    return NS_ERROR_SERVICE_NOT_AVAILABLE;
+  }
 
   if (!gconfLib) {
     gconfLib = PR_LoadLibrary("libgconf-2.so.4");
@@ -169,7 +174,7 @@ nsGConfService::GetStringList(const nsACString &aKey, nsIArray** aResult)
   nsCOMPtr<nsIMutableArray> items(do_CreateInstance(NS_ARRAY_CONTRACTID));
   if (!items)
     return NS_ERROR_OUT_OF_MEMORY;
-    
+
   GError* error = nullptr;
   GSList* list = gconf_client_get_list(mClient, PromiseFlatCString(aKey).get(),
                                        GCONF_VALUE_STRING, &error);
@@ -188,7 +193,7 @@ nsGConfService::GetStringList(const nsACString &aKey, nsIArray** aResult)
     items->AppendElement(obj, false);
     g_free(l->data);
   }
-  
+
   g_slist_free(list);
   items.forget(aResult);
   return NS_OK;

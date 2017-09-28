@@ -107,10 +107,9 @@ public:
 
 #if defined(DEBUG) || (defined(MOZ_REFLOW_PERF_DSP) && defined(MOZ_REFLOW_PERF))
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 #endif // DEBUG || (MOZ_REFLOW_PERF_DSP && MOZ_REFLOW_PERF)
-  
+
 #ifdef DEBUG_FRAME_DUMP
   void List(FILE* out = stderr, const char* aPrefix = "", uint32_t aFlags = 0) const override;
   virtual nsresult GetFrameName(nsAString& aResult) const override;
@@ -146,6 +145,9 @@ public:
 #endif
 
   nsStyleContext* GetParentStyleContextForOutOfFlow(nsIFrame** aProviderFrame) const;
+
+  // Like GetParentStyleContextForOutOfFlow, but ignores display:contents bits.
+  nsStyleContext* GetLayoutParentStyleForOutOfFlow(nsIFrame** aProviderFrame) const;
 
   bool RenumberFrameAndDescendants(int32_t* aOrdinal,
                                    int32_t aDepth,

@@ -67,31 +67,43 @@
   "emptySelectionErrorTitle": {
     "message": "Your selection is too small"
   },
+  "privateWindowErrorTitle": {
+    "message": "Screenshots is disabled in Private Browsing Mode"
+  },
+  "privateWindowErrorDetails": {
+    "message": "Sorry for the inconvenience. We are working on this feature for future releases."
+  },
   "genericErrorTitle": {
     "message": "Whoa! Firefox Screenshots went haywire."
   },
   "genericErrorDetails": {
     "message": "We’re not sure what just happened. Care to try again or take a shot of a different page?"
   },
-  "tourBodyOne": {
+  "tourBodyIntro": {
     "message": "Take, save, and share screenshots without leaving Firefox."
   },
-  "tourHeaderTwo": {
+  "tourHeaderPageAction": {
+    "message": "A new way to save"
+  },
+  "tourBodyPageAction": {
+    "message": "Expand the page actions menu in the address bar any time you want to take a screenshot."
+  },
+  "tourHeaderClickAndDrag": {
     "message": "Capture Just What You Want"
   },
-  "tourBodyTwo": {
+  "tourBodyClickAndDrag": {
     "message": "Click and drag to capture just a portion of a page. You can also hover to highlight your selection."
   },
-  "tourHeaderThree": {
+  "tourHeaderFullPage": {
     "message": "Capture Windows or Entire Pages"
   },
-  "tourBodyThree": {
+  "tourBodyFullPage": {
     "message": "Select the buttons in the upper right to capture the visible area in the window or to capture an entire page."
   },
-  "tourHeaderFour": {
+  "tourHeaderDownloadUpload": {
     "message": "As You Like It"
   },
-  "tourBodyFour": {
+  "tourBodyDownloadUpload": {
     "message": "Save your cropped shots to the web for easier sharing, or download them to your computer. You also can click on the My Shots button to find all the shots you’ve taken."
   },
   "tourSkip": {
@@ -106,7 +118,7 @@
   "tourDone": {
     "message": "Done"
   },
-  "termsAndPrivacyNoticeCloudServices": {
+  "termsAndPrivacyNotice2": {
     "message": "By using Firefox Screenshots, you agree to our $TERMSANDPRIVACYNOTICETERMSLINK$ and $TERMSANDPRIVACYNOTICEPRIVACYLINK$.",
     "placeholders": {
       "termsandprivacynoticetermslink": {
@@ -122,5 +134,8 @@
   },
   "termsAndPrivacyNoticyPrivacyLink": {
     "message": "Privacy Notice"
+  },
+  "libraryLabel": {
+    "message": "Screenshots"
   }
 }

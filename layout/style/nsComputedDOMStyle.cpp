@@ -353,7 +353,9 @@ nsComputedDOMStyle::GetLength(uint32_t* aLength)
   // properties.
   UpdateCurrentStyleSources(false);
   if (mStyleContext) {
-    length += StyleVariables()->mVariables.Count();
+    length += mStyleContext->IsServo()
+      ? Servo_GetCustomPropertiesCount(mStyleContext->AsServo())
+      : StyleVariables()->mVariables.Count();
   }
 
   *aLength = length;
@@ -391,15 +393,6 @@ nsComputedDOMStyle::GetPropertyValue(const nsAString& aPropertyName,
   }
 
   return NS_OK;
-}
-
-NS_IMETHODIMP
-nsComputedDOMStyle::GetAuthoredPropertyValue(const nsAString& aPropertyName,
-                                             nsAString& aReturn)
-{
-  // Authored style doesn't make sense to return from computed DOM style,
-  // so just return whatever GetPropertyValue() returns.
-  return GetPropertyValue(aPropertyName, aReturn);
 }
 
 /* static */
@@ -453,18 +446,18 @@ public:
     }
   }
 
-  already_AddRefed<nsStyleContext>
-  ResolveWithAnimation(StyleSetHandle aStyleSet,
+  already_AddRefed<GeckoStyleContext>
+  ResolveWithAnimation(nsStyleSet* aStyleSet,
                        Element* aElement,
                        CSSPseudoElementType aType,
-                       nsStyleContext* aParentContext,
+                       GeckoStyleContext* aParentContext,
                        nsComputedDOMStyle::StyleType aStyleType,
                        bool aInDocWithShell)
   {
     MOZ_ASSERT(mAnimationFlag == nsComputedDOMStyle::eWithAnimation,
       "AnimationFlag should be eWithAnimation");
 
-    RefPtr<nsStyleContext> result;
+    RefPtr<GeckoStyleContext> result;
 
     if (aType != CSSPseudoElementType::NotPseudo) {
       nsIFrame* frame = nsLayoutUtils::GetStyleFrame(aElement);
@@ -498,39 +491,35 @@ public:
         rules[i].swap(rules[length - i - 1]);
       }
 
-      result = aStyleSet->AsGecko()->ResolveStyleForRules(aParentContext,
-                                                          rules);
+      result = aStyleSet->ResolveStyleForRules(aParentContext, rules);
     }
     return result.forget();
   }
 
-  already_AddRefed<nsStyleContext>
-  ResolveWithoutAnimation(StyleSetHandle aStyleSet,
+  already_AddRefed<GeckoStyleContext>
+  ResolveWithoutAnimation(nsStyleSet* aStyleSet,
                           Element* aElement,
                           CSSPseudoElementType aType,
-                          nsStyleContext* aParentContext,
+                          GeckoStyleContext* aParentContext,
                           bool aInDocWithShell)
   {
-    MOZ_ASSERT(!aStyleSet->IsServo(),
-      "Servo backend should not use this function");
     MOZ_ASSERT(mAnimationFlag == nsComputedDOMStyle::eWithoutAnimation,
       "AnimationFlag should be eWithoutAnimation");
 
-    RefPtr<nsStyleContext> result;
+    RefPtr<GeckoStyleContext> result;
 
     if (aType != CSSPseudoElementType::NotPseudo) {
       nsIFrame* frame = nsLayoutUtils::GetStyleFrame(aElement);
       Element* pseudoElement =
         frame && aInDocWithShell ? frame->GetPseudoElement(aType) : nullptr;
       result =
-        aStyleSet->AsGecko()->ResolvePseudoElementStyleWithoutAnimation(
+        aStyleSet->ResolvePseudoElementStyleWithoutAnimation(
           aElement, aType,
           aParentContext,
           pseudoElement);
     } else {
       result =
-        aStyleSet->AsGecko()->ResolveStyleWithoutAnimation(aElement,
-                                                           aParentContext);
+        aStyleSet->ResolveStyleWithoutAnimation(aElement, aParentContext);
     }
     return result.forget();
   }
@@ -570,8 +559,8 @@ MustReresolveStyle(const nsStyleContext* aContext)
       return true;
     }
 
-    return aContext->GetParent() &&
-           aContext->GetParent()->HasPseudoElementData();
+    return aContext->AsGecko()->GetParent() &&
+           aContext->AsGecko()->GetParent()->HasPseudoElementData();
   }
 
   return false;
@@ -597,7 +586,26 @@ nsComputedDOMStyle::DoGetStyleContextNoFlush(Element* aElement,
     presShell = aPresShell;
     if (!presShell)
       return nullptr;
+
+    // In some edge cases, the caller document might be using a different style
+    // backend than the callee. This causes problems because the cached parsed
+    // style attributes in the callee document will be a different format than
+    // the caller expects. Supporting this would be a pain, and we're already
+    // in edge-case-squared, so we just return.
+    if (presShell->GetDocument()->GetStyleBackendType() !=
+        aElement->OwnerDoc()->GetStyleBackendType()) {
+      return nullptr;
+    }
   }
+
+  // We do this check to avoid having to add too much special casing of
+  // Servo functions we call to explicitly ignore any element data in
+  // the tree. (See comment in ServoStyleSet::ResolveStyleLazily.)
+  MOZ_RELEASE_ASSERT((aStyleType == eAll && aAnimationFlag == eWithAnimation) ||
+                     !aElement->OwnerDoc()->GetBFCacheEntry(),
+                     "nsComputedDOMStyle doesn't support getting styles without "
+                     "document rules or without animation for documents in the "
+                     "bfcache");
 
   auto pseudoType = CSSPseudoElementType::NotPseudo;
   if (aPseudo) {
@@ -636,13 +644,12 @@ nsComputedDOMStyle::DoGetStyleContextNoFlush(Element* aElement,
           if (presContext && presContext->StyleSet()->IsGecko()) {
             nsStyleSet* styleSet = presContext->StyleSet()->AsGecko();
             return styleSet->ResolveStyleByRemovingAnimation(
-                     aElement, result, eRestyle_AllHintsWithAnimations);
+                     aElement, result->AsGecko(),
+                     eRestyle_AllHintsWithAnimations);
           } else {
-            RefPtr<ServoComputedValues> baseComputedValues =
-              presContext->StyleSet()->AsServo()->
-                GetBaseComputedValuesForElement(aElement, pseudoType);
-            return NS_NewStyleContext(nullptr, presContext, aPseudo,
-                                      pseudoType, baseComputedValues.forget());
+            return presContext->StyleSet()->AsServo()->
+              GetBaseContextForElement(aElement, nullptr, presContext,
+                                       aPseudo, pseudoType, result->AsServo());
           }
         }
 
@@ -668,37 +675,38 @@ nsComputedDOMStyle::DoGetStyleContextNoFlush(Element* aElement,
     StyleRuleInclusion rules = aStyleType == eDefaultOnly
                                ? StyleRuleInclusion::DefaultOnly
                                : StyleRuleInclusion::All;
-    RefPtr<nsStyleContext> result =
-       servoSet->ResolveTransientStyle(aElement, aPseudo, pseudoType, rules);
+    RefPtr<ServoStyleContext> result =
+       servoSet->ResolveStyleLazily(aElement, pseudoType, aPseudo, rules);
     if (aAnimationFlag == eWithAnimation) {
       return result.forget();
     }
 
-    RefPtr<ServoComputedValues> baseComputedValues =
-      servoSet->GetBaseComputedValuesForElement(aElement, pseudoType);
-    return NS_NewStyleContext(nullptr, presContext, aPseudo,
-                              pseudoType, baseComputedValues.forget());
+    return servoSet->GetBaseContextForElement(aElement, nullptr, presContext,
+                                              aPseudo, pseudoType, result);
   }
 
-  RefPtr<nsStyleContext> parentContext;
+  RefPtr<GeckoStyleContext> parentContext;
   nsIContent* parent = aPseudo ? aElement : aElement->GetParent();
   // Don't resolve parent context for document fragments.
   if (parent && parent->IsElement()) {
-    parentContext = GetStyleContextNoFlush(parent->AsElement(), nullptr,
-                                           aPresShell, aStyleType);
+    RefPtr<nsStyleContext> p =
+      GetStyleContextNoFlush(parent->AsElement(), nullptr,
+                             aPresShell, aStyleType);
+    MOZ_ASSERT(p && p->IsGecko());
+    parentContext = GeckoStyleContext::TakeRef(p.forget());
   }
 
   StyleResolver styleResolver(presContext, aAnimationFlag);
 
   if (aAnimationFlag == eWithAnimation) {
-    return styleResolver.ResolveWithAnimation(styleSet,
+    return styleResolver.ResolveWithAnimation(styleSet->AsGecko(),
                                               aElement, pseudoType,
                                               parentContext,
                                               aStyleType,
                                               inDocWithShell);
   }
 
-  return styleResolver.ResolveWithoutAnimation(styleSet,
+  return styleResolver.ResolveWithoutAnimation(styleSet->AsGecko(),
                                                aElement, pseudoType,
                                                parentContext,
                                                inDocWithShell);
@@ -721,7 +729,7 @@ nsComputedDOMStyle::GetAdjustedValuesForBoxSizing()
 
 /* static */
 nsIPresShell*
-nsComputedDOMStyle::GetPresShellForContent(nsIContent* aContent)
+nsComputedDOMStyle::GetPresShellForContent(const nsIContent* aContent)
 {
   nsIDocument* composedDoc = aContent->GetComposedDoc();
   if (!composedDoc)
@@ -779,20 +787,24 @@ nsComputedDOMStyle::ClearStyleContext()
 }
 
 void
-nsComputedDOMStyle::SetResolvedStyleContext(RefPtr<nsStyleContext>&& aContext)
+nsComputedDOMStyle::SetResolvedStyleContext(RefPtr<nsStyleContext>&& aContext,
+                                            uint64_t aGeneration)
 {
   if (!mResolvedStyleContext) {
     mResolvedStyleContext = true;
     mContent->AddMutationObserver(this);
   }
   mStyleContext = aContext;
+  mStyleContextGeneration = aGeneration;
 }
 
 void
-nsComputedDOMStyle::SetFrameStyleContext(nsStyleContext* aContext)
+nsComputedDOMStyle::SetFrameStyleContext(nsStyleContext* aContext,
+                                         uint64_t aGeneration)
 {
   ClearStyleContext();
   mStyleContext = aContext;
+  mStyleContextGeneration = aGeneration;
 }
 
 void
@@ -820,11 +832,26 @@ nsComputedDOMStyle::UpdateCurrentStyleSources(bool aNeedsLayoutFlush)
     return;
   }
 
+  // We need to use GetUndisplayedRestyleGeneration instead of
+  // GetRestyleGeneration, because the caching of mStyleContext is an
+  // optimization that is useful only for displayed elements.
+  // For undisplayed elements we need to take into account any DOM changes that
+  // might cause a restyle, because Servo will not increase the generation for
+  // undisplayed elements.
+  // As for Gecko, GetUndisplayedRestyleGeneration is effectively equal to
+  // GetRestyleGeneration, since the generation is incremented whenever we
+  // process restyles.
   uint64_t currentGeneration =
-    mPresShell->GetPresContext()->GetRestyleGeneration();
+    mPresShell->GetPresContext()->GetUndisplayedRestyleGeneration();
 
   if (mStyleContext) {
-    if (mStyleContextGeneration == currentGeneration) {
+    // We can't rely on the undisplayed restyle generation if
+    // mContent is out-of-document, since that generation is not
+    // incremented for DOM changes on out-of-document elements.
+    // So we always need to update the style context to ensure it
+    // it up-to-date.
+    if (mStyleContextGeneration == currentGeneration
+        && mContent->IsInComposedDoc()) {
       // Our cached style context is still valid.
       return;
     }
@@ -864,7 +891,7 @@ nsComputedDOMStyle::UpdateCurrentStyleSources(bool aNeedsLayoutFlush)
                      "the inner table");
       }
 
-      SetFrameStyleContext(mInnerFrame->StyleContext());
+      SetFrameStyleContext(mInnerFrame->StyleContext(), currentGeneration);
       NS_ASSERTION(mStyleContext, "Frame without style context?");
     }
   }
@@ -878,7 +905,7 @@ nsComputedDOMStyle::UpdateCurrentStyleSources(bool aNeedsLayoutFlush)
       // with a pseudo-element that contains elements.  (We also allow
       // the element to be NAC, just in case some chrome JS calls
       // getComputedStyle on a NAC-implemented pseudo.)
-      nsStyleContext* topWithPseudoElementData = mStyleContext;
+      GeckoStyleContext* topWithPseudoElementData = mStyleContext->AsGecko();
       while (topWithPseudoElementData->GetParent()->HasPseudoElementData()) {
         topWithPseudoElementData = topWithPseudoElementData->GetParent();
       }
@@ -908,10 +935,10 @@ nsComputedDOMStyle::UpdateCurrentStyleSources(bool aNeedsLayoutFlush)
     // will flush, since we flushed style at the top of this function.
     NS_ASSERTION(mPresShell &&
                  currentGeneration ==
-                   mPresShell->GetPresContext()->GetRestyleGeneration(),
+                   mPresShell->GetPresContext()->GetUndisplayedRestyleGeneration(),
                  "why should we have flushed style again?");
 
-    SetResolvedStyleContext(Move(resolvedStyleContext));
+    SetResolvedStyleContext(Move(resolvedStyleContext), currentGeneration);
     NS_ASSERTION(mPseudo || !mStyleContext->HasPseudoElementData(),
                  "should not have pseudo-element data");
   }
@@ -923,8 +950,9 @@ nsComputedDOMStyle::UpdateCurrentStyleSources(bool aNeedsLayoutFlush)
     nsStyleSet* styleSet = mPresShell->StyleSet()->AsGecko();
     RefPtr<nsStyleContext> unanimatedStyleContext =
       styleSet->ResolveStyleByRemovingAnimation(
-        mContent->AsElement(), mStyleContext, eRestyle_AllHintsWithAnimations);
-    SetResolvedStyleContext(Move(unanimatedStyleContext));
+        mContent->AsElement(), mStyleContext->AsGecko(),
+        eRestyle_AllHintsWithAnimations);
+    SetResolvedStyleContext(Move(unanimatedStyleContext), currentGeneration);
   }
 
   // mExposeVisitedStyle is set to true only by testing APIs that
@@ -942,16 +970,17 @@ nsComputedDOMStyle::UpdateCurrentStyleSources(bool aNeedsLayoutFlush)
 void
 nsComputedDOMStyle::ClearCurrentStyleSources()
 {
+  // Release the current style context if we got it off the frame.
+  // For a style context we resolved, keep it around so that we
+  // can re-use it next time this object is queried, but not if it-s a
+  // re-resolved style context because we were inside a pseudo-element.
+  if (!mResolvedStyleContext || mOuterFrame) {
+    ClearStyleContext();
+  }
+
   mOuterFrame = nullptr;
   mInnerFrame = nullptr;
   mPresShell = nullptr;
-
-  // Release the current style context if we got it off the frame.
-  // For a style context we resolved, keep it around so that we
-  // can re-use it next time this object is queried.
-  if (!mResolvedStyleContext) {
-    mStyleContext = nullptr;
-  }
 }
 
 already_AddRefed<CSSValue>
@@ -1070,11 +1099,25 @@ nsComputedDOMStyle::IndexedGetter(uint32_t   aIndex,
     return;
   }
 
-  const nsStyleVariables* variables = StyleVariables();
-  if (aIndex - length < variables->mVariables.Count()) {
+  bool isServo = mStyleContext->IsServo();
+
+  const nsStyleVariables* variables = isServo
+    ? nullptr
+    : StyleVariables();
+
+  const uint32_t count = isServo
+    ? Servo_GetCustomPropertiesCount(mStyleContext->AsServo())
+    : variables->mVariables.Count();
+
+  const uint32_t index = aIndex - length;
+  if (index < count) {
     aFound = true;
     nsString varName;
-    variables->mVariables.GetVariableAt(aIndex - length, varName);
+    if (isServo) {
+      Servo_GetCustomPropertyNameAt(mStyleContext->AsServo(), index, &varName);
+    } else {
+      variables->mVariables.GetVariableAt(index, varName);
+    }
     aPropName.AssignLiteral("--");
     aPropName.Append(varName);
   } else {
@@ -1223,7 +1266,7 @@ nsComputedDOMStyle::DoGetColumnGap()
 
   const nsStyleColumn* column = StyleColumn();
   if (column->mColumnGap.GetUnit() == eStyleUnit_Normal) {
-    val->SetAppUnits(StyleFont()->mFont.size);
+    val->SetIdent(eCSSKeyword_normal);
   } else {
     SetValueToCoord(val, StyleColumn()->mColumnGap, true);
   }
@@ -1282,8 +1325,7 @@ AppendCounterStyle(CounterStyle* aStyle, nsAString& aString)
   AnonymousCounterStyle* anonymous = aStyle->AsAnonymous();
   if (!anonymous) {
     // want SetIdent
-    nsString type;
-    aStyle->GetStyleName(type);
+    nsDependentAtomString type(aStyle->GetStyleName());
     nsStyleUtil::AppendEscapedCSSIdent(type, aString);
   } else if (anonymous->IsSingleString()) {
     const nsTArray<nsString>& symbols = anonymous->GetSymbols();
@@ -1725,6 +1767,14 @@ nsComputedDOMStyle::DoGetOsxFontSmoothing()
 }
 
 already_AddRefed<CSSValue>
+nsComputedDOMStyle::DoGetFontSmoothingBackgroundColor()
+{
+  RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
+  SetToRGBAColor(val, StyleUserInterface()->mFontSmoothingBackgroundColor);
+  return val.forget();
+}
+
+already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetFontStretch()
 {
   RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
@@ -2104,8 +2154,9 @@ AppendCSSGradientToBoxPosition(const nsStyleGradient* aGradient,
   float xValue = aGradient->mBgPosX.GetPercentValue();
   float yValue = aGradient->mBgPosY.GetPercentValue();
 
-  if (yValue == 1.0f && xValue == 0.5f) {
-    // omit "to bottom"
+  if (xValue == 0.5f &&
+      yValue == (aGradient->mLegacySyntax ? 0.0f : 1.0f)) {
+    // omit "to bottom" in modern syntax, "top" in legacy syntax
     return;
   }
   NS_ASSERTION(yValue != 0.5f || xValue != 0.5f, "invalid box position");
@@ -2203,7 +2254,9 @@ nsComputedDOMStyle::GetCSSGradientString(const nsStyleGradient* aGradient,
     } else if (aGradient->mBgPosX.GetUnit() != eStyleUnit_Percent ||
                aGradient->mBgPosX.GetPercentValue() != 0.5f ||
                aGradient->mBgPosY.GetUnit() != eStyleUnit_Percent ||
-               aGradient->mBgPosY.GetPercentValue() != (isRadial ? 0.5f : 1.0f)) {
+               aGradient->mBgPosY.GetPercentValue() != (isRadial ? 0.5f : 0.0f)) {
+      // [-vendor-]radial-gradient or -moz-linear-gradient, with
+      // non-default box position, which we output here.
       if (isRadial && !aGradient->mLegacySyntax) {
         if (needSep) {
           aString.Append(' ');
@@ -3075,7 +3128,8 @@ nsComputedDOMStyle::DoGetGridTemplateColumns()
     info = gridFrame->GetComputedTemplateColumns();
   }
 
-  return GetGridTemplateColumnsRows(StylePosition()->mGridTemplateColumns, info);
+  return GetGridTemplateColumnsRows(
+    StylePosition()->GridTemplateColumns(), info);
 }
 
 already_AddRefed<CSSValue>
@@ -3091,7 +3145,7 @@ nsComputedDOMStyle::DoGetGridTemplateRows()
     info = gridFrame->GetComputedTemplateRows();
   }
 
-  return GetGridTemplateColumnsRows(StylePosition()->mGridTemplateRows, info);
+  return GetGridTemplateColumnsRows(StylePosition()->GridTemplateRows(), info);
 }
 
 already_AddRefed<CSSValue>
@@ -4662,8 +4716,7 @@ nsComputedDOMStyle::DoGetJustifyItems()
 {
   RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
   nsAutoString str;
-  auto justify =
-    StylePosition()->ComputedJustifyItems(mStyleContext->GetParentAllowServo());
+  auto justify = StylePosition()->mJustifyItems;
   nsCSSValue::AppendAlignJustifyValueToString(justify, str);
   val->SetString(str);
   return val.forget();
@@ -5371,7 +5424,6 @@ nsComputedDOMStyle::GetStickyOffset(mozilla::Side aSide)
 
 already_AddRefed<CSSValue>
 nsComputedDOMStyle::GetStaticOffset(mozilla::Side aSide)
-
 {
   RefPtr<nsROCSSPrimitiveValue> val = new nsROCSSPrimitiveValue;
   SetValueToCoord(val, StylePosition()->mOffset.Get(aSide), false);
@@ -5414,7 +5466,7 @@ nsComputedDOMStyle::GetLineHeightCoord(nscoord& aCoord)
   // lie about font size inflation since we lie about font size (since
   // the inflation only applies to text)
   aCoord = ReflowInput::CalcLineHeight(mContent, mStyleContext,
-                                             blockHeight, 1.0f);
+                                       blockHeight, 1.0f);
 
   // CalcLineHeight uses font->mFont.size, but we want to use
   // font->mSize as the font size.  Adjust for that.  Also adjust for
@@ -5438,19 +5490,14 @@ nsComputedDOMStyle::GetBorderColorsFor(mozilla::Side aSide)
   const nsStyleBorder *border = StyleBorder();
 
   if (border->mBorderColors) {
-    nsBorderColors* borderColors = border->mBorderColors[aSide];
-    if (borderColors) {
+    const nsTArray<nscolor>& borderColors = (*border->mBorderColors)[aSide];
+    if (!borderColors.IsEmpty()) {
       RefPtr<nsDOMCSSValueList> valueList = GetROCSSValueList(false);
-
-      do {
+      for (nscolor color : borderColors) {
         RefPtr<nsROCSSPrimitiveValue> primitive = new nsROCSSPrimitiveValue;
-
-        SetToRGBAColor(primitive, borderColors->mColor);
-
+        SetToRGBAColor(primitive, color);
         valueList->AppendCSSValue(primitive.forget());
-        borderColors = borderColors->mNext;
-      } while (borderColors);
-
+      }
       return valueList.forget();
     }
   }
@@ -6461,7 +6508,6 @@ nsComputedDOMStyle::DoGetMask()
   return val.forget();
 }
 
-#ifdef MOZ_ENABLE_MASK_AS_SHORTHAND
 already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetMaskClip()
 {
@@ -6539,7 +6585,6 @@ nsComputedDOMStyle::DoGetMaskSize()
   const nsStyleImageLayers& layers = StyleSVGReset()->mMask;
   return DoGetImageLayerSize(layers);
 }
-#endif
 
 already_AddRefed<CSSValue>
 nsComputedDOMStyle::DoGetMaskType()
@@ -6913,12 +6958,13 @@ nsComputedDOMStyle::DoGetCustomProperty(const nsAString& aPropertyName)
 {
   MOZ_ASSERT(nsCSSProps::IsCustomPropertyName(aPropertyName));
 
-  const nsStyleVariables* variables = StyleVariables();
-
   nsString variableValue;
   const nsAString& name = Substring(aPropertyName,
                                     CSS_CUSTOM_NAME_PREFIX_LENGTH);
-  if (!variables->mVariables.Get(name, variableValue)) {
+  bool present = mStyleContext->IsServo()
+    ? Servo_GetCustomPropertyValue(mStyleContext->AsServo(), &name, &variableValue)
+    : StyleVariables()->mVariables.Get(name, variableValue);
+  if (!present) {
     return nullptr;
   }
 

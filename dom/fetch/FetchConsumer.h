@@ -8,6 +8,10 @@
 #define mozilla_dom_FetchConsumer_h
 
 #include "Fetch.h"
+#include "mozilla/dom/AbortSignal.h"
+#include "mozilla/dom/MutableBlobStorage.h"
+#include "nsIObserver.h"
+#include "nsWeakReference.h"
 
 class nsIThread;
 
@@ -27,26 +31,24 @@ template <class Derived> class FetchBody;
 // In order to keep it alive all the time, we use a WorkerHolder, if created on
 // workers, plus a this consumer.
 template <class Derived>
-class FetchBodyConsumer final
+class FetchBodyConsumer final : public nsIObserver
+                              , public nsSupportsWeakReference
+                              , public AbortFollower
 {
 public:
-  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(FetchBodyConsumer<Derived>)
+  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_NSIOBSERVER
 
   static already_AddRefed<Promise>
   Create(nsIGlobalObject* aGlobal,
          nsIEventTarget* aMainThreadEventTarget,
          FetchBody<Derived>* aBody,
+         AbortSignal* aSignal,
          FetchConsumeType aType,
          ErrorResult& aRv);
 
   void
   ReleaseObject();
-
-  FetchBody<Derived>*
-  Body() const
-  {
-    return mBody;
-  }
 
   void
   BeginConsumeBodyMainThread();
@@ -58,7 +60,7 @@ public:
   ContinueConsumeBlobBody(BlobImpl* aBlobImpl);
 
   void
-  CancelPump();
+  ShutDownMainThreadConsuming();
 
   workers::WorkerPrivate*
   GetWorkerPrivate() const
@@ -66,10 +68,22 @@ public:
     return mWorkerPrivate;
   }
 
+  void
+  NullifyConsumeBodyPump()
+  {
+    mShuttingDown = true;
+    mConsumeBodyPump = nullptr;
+  }
+
+  // AbortFollower
+  void Abort() override;
+
 private:
   FetchBodyConsumer(nsIEventTarget* aMainThreadEventTarget,
+                    nsIGlobalObject* aGlobalObject,
                     workers::WorkerPrivate* aWorkerPrivate,
                     FetchBody<Derived>* aBody,
+                    nsIInputStream* aBodyStream,
                     Promise* aPromise,
                     FetchConsumeType aType);
 
@@ -79,29 +93,42 @@ private:
   AssertIsOnTargetThread() const;
 
   bool
-  RegisterWorkerHolder(workers::WorkerPrivate* aWorkerPrivate);
+  RegisterWorkerHolder();
 
   nsCOMPtr<nsIThread> mTargetThread;
   nsCOMPtr<nsIEventTarget> mMainThreadEventTarget;
+
+#ifdef DEBUG
+  // This is used only to check if the body has been correctly consumed.
   RefPtr<FetchBody<Derived>> mBody;
+#endif
+
+  nsCOMPtr<nsIInputStream> mBodyStream;
+  MutableBlobStorage::MutableBlobStorageType mBlobStorageType;
+  nsCString mBodyMimeType;
 
   // Set when consuming the body is attempted on a worker.
   // Unset when consumption is done/aborted.
   // This WorkerHolder keeps alive the consumer via a cycle.
   UniquePtr<workers::WorkerHolder> mWorkerHolder;
 
+  nsCOMPtr<nsIGlobalObject> mGlobal;
+
   // Always set whenever the FetchBodyConsumer is created on the worker thread.
   workers::WorkerPrivate* mWorkerPrivate;
 
-  nsMainThreadPtrHandle<nsIInputStreamPump> mConsumeBodyPump;
+  // Touched on the main-thread only.
+  nsCOMPtr<nsIInputStreamPump> mConsumeBodyPump;
 
   // Only ever set once, always on target thread.
   FetchConsumeType mConsumeType;
   RefPtr<Promise> mConsumePromise;
 
-#ifdef DEBUG
-  bool mReadDone;
-#endif
+  // touched only on the target thread.
+  bool mBodyConsumed;
+
+  // touched only on the main-thread.
+  bool mShuttingDown;
 };
 
 } // namespace dom

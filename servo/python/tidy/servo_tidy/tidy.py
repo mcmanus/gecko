@@ -79,6 +79,7 @@ WEBIDL_STANDARDS = [
     "//heycam.github.io/webidl",
     "//webbluetoothcg.github.io/web-bluetooth/",
     "//svgwg.org/svg2-draft",
+    "//wicg.github.io",
     # Not a URL
     "// This interface is entirely internal to Servo, and should not be" +
     " accessible to\n// web pages."
@@ -466,15 +467,6 @@ def check_rust(file_name, lines):
         prev_indent = indent
         indent = len(original_line) - len(line)
 
-        # Hack for components/selectors/build.rs
-        if multi_line_string:
-            if line.startswith('"#'):
-                multi_line_string = False
-            else:
-                continue
-        if line.endswith('r#"'):
-            multi_line_string = True
-
         is_attribute = re.search(r"#\[.*\]", line)
         is_comment = re.search(r"^//|^/\*|^\*", line)
 
@@ -493,6 +485,14 @@ def check_rust(file_name, lines):
             line = merged_lines + line
             merged_lines = ''
 
+        if multi_line_string:
+            line, count = re.subn(
+                r'^(\\.|[^"\\])*?"', '', line, count=1)
+            if count == 1:
+                multi_line_string = False
+            else:
+                continue
+
         # Ignore attributes, comments, and imports
         # Keep track of whitespace to enable checking for a merged import block
         if import_block:
@@ -503,9 +503,17 @@ def check_rust(file_name, lines):
                     import_block = False
 
         # get rid of strings and chars because cases like regex expression, keep attributes
-        if not is_attribute:
+        if not is_attribute and not is_comment:
             line = re.sub(r'"(\\.|[^\\"])*?"', '""', line)
-            line = re.sub(r"'(\\.|[^\\'])*?'", "''", line)
+            line = re.sub(
+                r"'(\\.|[^\\']|(\\x[0-9a-fA-F]{2})|(\\u{[0-9a-fA-F]{1,6}}))'",
+                "''", line)
+            # If, after parsing all single-line strings, we still have
+            # an odd number of double quotes, this line starts a
+            # multiline string
+            if line.count('"') % 2 == 1:
+                line = re.sub(r'"(\\.|[^\\"])*?$', '""', line)
+                multi_line_string = True
 
         # get rid of comments
         line = re.sub('//.*?$|/\*.*?$|^\*.*?$', '//', line)
@@ -584,6 +592,12 @@ def check_rust(file_name, lines):
             # -> () is unnecessary
             (r"-> \(\)", "encountered function signature with -> ()", no_filter),
         ]
+        keywords = ["if", "let", "mut", "extern", "as", "impl", "fn", "struct", "enum", "pub", "mod",
+                    "use", "in", "ref", "type", "where", "trait"]
+        extra_space_after = lambda key: (r"(?<![A-Za-z0-9\-_]){key}  ".format(key=key),
+                                         "extra space after {key}".format(key=key),
+                                         lambda match, line: not is_attribute)
+        regex_rules.extend(map(extra_space_after, keywords))
 
         for pattern, message, filter_func in regex_rules:
             for match in re.finditer(pattern, line):
@@ -684,6 +698,19 @@ def check_rust(file_name, lines):
         else:
             # we now erase previous entries
             prev_mod = {}
+
+        # derivable traits should be alphabetically ordered
+        if is_attribute:
+            # match the derivable traits filtering out macro expansions
+            match = re.search(r"#\[derive\(([a-zA-Z, ]*)", line)
+            if match:
+                derives = map(lambda w: w.strip(), match.group(1).split(','))
+                # sort, compare and report
+                sorted_derives = sorted(derives)
+                if sorted_derives != derives:
+                    yield(idx + 1, decl_message.format("derivable traits list")
+                              + decl_expected.format(", ".join(sorted_derives))
+                              + decl_found.format(", ".join(derives)))
 
 
 # Avoid flagging <Item=Foo> constructs

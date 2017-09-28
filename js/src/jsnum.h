@@ -81,16 +81,16 @@ Int32ToString(JSContext* cx, int32_t i);
 extern JSAtom*
 Int32ToAtom(JSContext* cx, int32_t si);
 
+// ES6 15.7.3.12
+extern bool
+IsInteger(const Value& val);
+
 /*
  * Convert an integer or double (contained in the given value) to a string and
  * append to the given buffer.
  */
 extern MOZ_MUST_USE bool JS_FASTCALL
 NumberValueToStringBuffer(JSContext* cx, const Value& v, StringBuffer& sb);
-
-/* Same as js_NumberToString, different signature. */
-extern JSFlatString*
-NumberToString(JSContext* cx, double d);
 
 extern JSFlatString*
 IndexToString(JSContext* cx, uint32_t index);

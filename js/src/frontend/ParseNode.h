@@ -11,6 +11,7 @@
 
 #include "builtin/ModuleObject.h"
 #include "frontend/TokenStream.h"
+#include "vm/Printer.h"
 
 namespace js {
 namespace frontend {
@@ -179,7 +180,7 @@ class ObjectBox;
  *
  * The long comment after this enum block describes the kinds in detail.
  */
-enum ParseNodeKind
+enum ParseNodeKind : uint16_t
 {
 #define EMIT_ENUM(name) PNK_##name,
     FOR_EACH_PARSE_NODE_KIND(EMIT_ENUM)
@@ -450,7 +451,11 @@ class PropertyAccess;
 
 class ParseNode
 {
-    uint16_t pn_type;   /* PNK_* type */
+    ParseNodeKind pn_type;   /* PNK_* type */
+    // pn_op and pn_arity are not declared as the correct enum types
+    // due to difficulties with MS bitfield layout rules and a GCC
+    // bug.  See https://bugzilla.mozilla.org/show_bug.cgi?id=1383157#c4 for
+    // details.
     uint8_t pn_op;      /* see JSOp enum and jsopcode.tbl */
     uint8_t pn_arity:4; /* see ParseNodeArity enum */
     bool pn_parens:1;   /* this expr was enclosed in parens */
@@ -494,7 +499,7 @@ class ParseNode
 
     ParseNodeKind getKind() const {
         MOZ_ASSERT(pn_type < PNK_LIMIT);
-        return ParseNodeKind(pn_type);
+        return pn_type;
     }
     void setKind(ParseNodeKind kind) {
         MOZ_ASSERT(kind < PNK_LIMIT);
@@ -814,8 +819,10 @@ class ParseNode
     }
 
 #ifdef DEBUG
+    // Debugger-friendly stderr printer.
     void dump();
-    void dump(int indent);
+    void dump(GenericPrinter& out);
+    void dump(GenericPrinter& out, int indent);
 #endif
 };
 
@@ -836,7 +843,7 @@ struct NullaryNode : public ParseNode
     }
 
 #ifdef DEBUG
-    void dump();
+    void dump(GenericPrinter& out);
 #endif
 };
 
@@ -849,7 +856,7 @@ struct UnaryNode : public ParseNode
     }
 
 #ifdef DEBUG
-    void dump(int indent);
+    void dump(GenericPrinter& out, int indent);
 #endif
 };
 
@@ -870,7 +877,7 @@ struct BinaryNode : public ParseNode
     }
 
 #ifdef DEBUG
-    void dump(int indent);
+    void dump(GenericPrinter& out, int indent);
 #endif
 };
 
@@ -896,7 +903,7 @@ struct TernaryNode : public ParseNode
     }
 
 #ifdef DEBUG
-    void dump(int indent);
+    void dump(GenericPrinter& out, int indent);
 #endif
 };
 
@@ -925,7 +932,7 @@ struct ListNode : public ParseNode
     }
 
 #ifdef DEBUG
-    void dump(int indent);
+    void dump(GenericPrinter& out, int indent);
 #endif
 };
 
@@ -945,7 +952,7 @@ struct CodeNode : public ParseNode
 
   public:
 #ifdef DEBUG
-    void dump(int indent);
+  void dump(GenericPrinter& out, int indent);
 #endif
 };
 
@@ -959,7 +966,7 @@ struct NameNode : public ParseNode
     }
 
 #ifdef DEBUG
-    void dump(int indent);
+    void dump(GenericPrinter& out, int indent);
 #endif
 };
 
@@ -977,7 +984,7 @@ struct LexicalScopeNode : public ParseNode
     }
 
 #ifdef DEBUG
-    void dump(int indent);
+    void dump(GenericPrinter& out, int indent);
 #endif
 };
 
@@ -1348,7 +1355,7 @@ struct ClassNode : public TernaryNode {
 };
 
 #ifdef DEBUG
-void DumpParseTree(ParseNode* pn, int indent = 0);
+void DumpParseTree(ParseNode* pn, GenericPrinter& out, int indent = 0);
 #endif
 
 class ParseNodeAllocator

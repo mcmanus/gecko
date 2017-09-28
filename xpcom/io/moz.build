@@ -19,7 +19,6 @@ XPIDL_SOURCES += [
     'nsIInputStreamTee.idl',
     'nsIIOUtil.idl',
     'nsILineInputStream.idl',
-    'nsILocalFile.idl',
     'nsILocalFileWin.idl',
     'nsIMultiplexInputStream.idl',
     'nsIObjectInputStream.idl',
@@ -61,6 +60,7 @@ else:
 XPIDL_MODULE = 'xpcom_io'
 
 EXPORTS += [
+    'FileDescriptorFile.h',
     'nsAnonymousTemporaryFile.h',
     'nsAppDirectoryServiceDefs.h',
     'nsDirectoryService.h',
@@ -92,6 +92,7 @@ EXPORTS.mozilla += [
 UNIFIED_SOURCES += [
     'Base64.cpp',
     'crc32c.c',
+    'FileDescriptorFile.cpp',
     'nsAnonymousTemporaryFile.cpp',
     'nsAppFileLocationProvider.cpp',
     'nsBinaryStream.cpp',

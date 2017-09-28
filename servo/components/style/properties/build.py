@@ -4,6 +4,7 @@
 
 import json
 import os.path
+import re
 import sys
 
 BASE = os.path.dirname(__file__.replace('\\', '/'))
@@ -16,19 +17,20 @@ from mako.template import Template
 
 import data
 
+RE_PYTHON_ADDR = re.compile(r'<.+? object at 0x[0-9a-fA-F]+>')
+
 
 def main():
-    usage = "Usage: %s [ servo | gecko ] [ style-crate | html ] [ testing | regular ]" % sys.argv[0]
-    if len(sys.argv) < 4:
+    usage = "Usage: %s [ servo | gecko ] [ style-crate | html ]" % sys.argv[0]
+    if len(sys.argv) < 3:
         abort(usage)
     product = sys.argv[1]
     output = sys.argv[2]
-    testing = sys.argv[3] == "testing"
 
     if product not in ["servo", "gecko"] or output not in ["style-crate", "geckolib", "html"]:
         abort(usage)
 
-    properties = data.PropertiesData(product=product, testing=testing)
+    properties = data.PropertiesData(product=product)
     template = os.path.join(BASE, "properties.mako.rs")
     rust = render(template, product=product, data=properties, __file__=template)
     if output == "style-crate":
@@ -68,7 +70,12 @@ def render(filename, **context):
 def write(directory, filename, content):
     if not os.path.exists(directory):
         os.makedirs(directory)
-    open(os.path.join(directory, filename), "wb").write(content)
+    full_path = os.path.join(directory, filename)
+    open(full_path, "wb").write(content)
+
+    python_addr = RE_PYTHON_ADDR.search(content)
+    if python_addr:
+        abort("Found \"{}\" in {} ({})".format(python_addr.group(0), filename, full_path))
 
 
 def write_html(properties):

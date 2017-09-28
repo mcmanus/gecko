@@ -1,5 +1,6 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 
 "use strict";
 
@@ -101,7 +102,3 @@ add_task(async function test_record() {
   Assert.ok(duration2 <= Math.ceil((t2 - t1) / 1000) + 1,
     "Duration is reasonable");
 });
-
-function run_test() {
-  run_next_test();
-}

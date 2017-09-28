@@ -135,10 +135,8 @@ EvaluationExceptionToNSResult(JSContext* aCx)
 nsJSUtils::ExecutionContext::ExecutionContext(JSContext* aCx,
                                               JS::Handle<JSObject*> aGlobal)
   :
-#ifdef MOZ_GECKO_PROFILER
     mAutoProfilerLabel("nsJSUtils::ExecutionContext", /* dynamicStr */ nullptr,
                        __LINE__, js::ProfileEntry::Category::JS),
-#endif
     mCx(aCx)
   , mCompartment(aCx, aGlobal)
   , mRetValue(aCx)
@@ -382,8 +380,7 @@ nsJSUtils::CompileModule(JSContext* aCx,
                        JS::CompileOptions &aCompileOptions,
                        JS::MutableHandle<JSObject*> aModule)
 {
-  PROFILER_LABEL("nsJSUtils", "CompileModule",
-    js::ProfileEntry::Category::JS);
+  AUTO_PROFILER_LABEL("nsJSUtils::CompileModule", JS);
 
   MOZ_ASSERT_IF(aCompileOptions.versionSet,
                 aCompileOptions.version != JSVERSION_UNKNOWN);
@@ -405,28 +402,9 @@ nsJSUtils::CompileModule(JSContext* aCx,
 }
 
 nsresult
-nsJSUtils::ModuleDeclarationInstantiation(JSContext* aCx, JS::Handle<JSObject*> aModule)
+nsJSUtils::ModuleInstantiate(JSContext* aCx, JS::Handle<JSObject*> aModule)
 {
-  PROFILER_LABEL("nsJSUtils", "ModuleDeclarationInstantiation",
-    js::ProfileEntry::Category::JS);
-
-  MOZ_ASSERT(aCx == nsContentUtils::GetCurrentJSContext());
-  MOZ_ASSERT(NS_IsMainThread());
-
-  NS_ENSURE_TRUE(xpc::Scriptability::Get(aModule).Allowed(), NS_OK);
-
-  if (!JS::ModuleDeclarationInstantiation(aCx, aModule)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  return NS_OK;
-}
-
-nsresult
-nsJSUtils::ModuleEvaluation(JSContext* aCx, JS::Handle<JSObject*> aModule)
-{
-  PROFILER_LABEL("nsJSUtils", "ModuleEvaluation",
-    js::ProfileEntry::Category::JS);
+  AUTO_PROFILER_LABEL("nsJSUtils::ModuleInstantiate", JS);
 
   MOZ_ASSERT(aCx == nsContentUtils::GetCurrentJSContext());
   MOZ_ASSERT(NS_IsMainThread());
@@ -434,7 +412,25 @@ nsJSUtils::ModuleEvaluation(JSContext* aCx, JS::Handle<JSObject*> aModule)
 
   NS_ENSURE_TRUE(xpc::Scriptability::Get(aModule).Allowed(), NS_OK);
 
-  if (!JS::ModuleEvaluation(aCx, aModule)) {
+  if (!JS::ModuleInstantiate(aCx, aModule)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  return NS_OK;
+}
+
+nsresult
+nsJSUtils::ModuleEvaluate(JSContext* aCx, JS::Handle<JSObject*> aModule)
+{
+  AUTO_PROFILER_LABEL("nsJSUtils::ModuleEvaluate", JS);
+
+  MOZ_ASSERT(aCx == nsContentUtils::GetCurrentJSContext());
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(nsContentUtils::IsInMicroTask());
+
+  NS_ENSURE_TRUE(xpc::Scriptability::Get(aModule).Allowed(), NS_OK);
+
+  if (!JS::ModuleEvaluate(aCx, aModule)) {
     return NS_ERROR_FAILURE;
   }
 

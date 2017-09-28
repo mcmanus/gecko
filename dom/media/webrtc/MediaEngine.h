@@ -30,8 +30,7 @@ enum {
  * Abstract interface for managing audio and video devices. Each platform
  * must implement a concrete class that will map these classes and methods
  * to the appropriate backend. For example, on Desktop platforms, these will
- * correspond to equivalent webrtc (GIPS) calls, and on B2G they will map to
- * a Gonk interface.
+ * correspond to equivalent webrtc (GIPS) calls.
  */
 class MediaEngineVideoSource;
 class MediaEngineAudioSource;
@@ -55,11 +54,8 @@ public:
   static const int DEFAULT_169_VIDEO_WIDTH = 1280;
   static const int DEFAULT_169_VIDEO_HEIGHT = 720;
 
-#ifndef MOZ_B2G
   static const int DEFAULT_SAMPLE_RATE = 32000;
-#else
-  static const int DEFAULT_SAMPLE_RATE = 16000;
-#endif
+
   // This allows using whatever rate the graph is using for the
   // MediaStreamTrack. This is useful for microphone data, we know it's already
   // at the correct rate for insertion in the MSG.
@@ -105,6 +101,7 @@ public:
     , mExtendedFilter(false)
     , mDelayAgnostic(false)
     , mFakeDeviceChangeEventOn(false)
+    , mChannels(0)
   {}
 
   int32_t mWidth;
@@ -123,6 +120,7 @@ public:
   bool mExtendedFilter;
   bool mDelayAgnostic;
   bool mFakeDeviceChangeEventOn;
+  int32_t mChannels;
 
   // mWidth and/or mHeight may be zero (=adaptive default), so use functions.
 
@@ -307,7 +305,6 @@ public:
 
   /* If implementation of MediaEngineSource supports TakePhoto(), the picture
    * should be return via aCallback object. Otherwise, it returns NS_ERROR_NOT_IMPLEMENTED.
-   * Currently, only Gonk MediaEngineSource implementation supports it.
    */
   virtual nsresult TakePhoto(MediaEnginePhotoCallback* aCallback) = 0;
 
@@ -352,7 +349,7 @@ public:
   void GetSettings(dom::MediaTrackSettings& aOutSettings)
   {
     MOZ_ASSERT(NS_IsMainThread());
-    aOutSettings = mSettings;
+    aOutSettings = *mSettings;
   }
 
 protected:
@@ -360,6 +357,7 @@ protected:
   explicit MediaEngineSource(MediaEngineState aState)
     : mState(aState)
     , mInShutdown(false)
+    , mSettings(MakeRefPtr<media::Refcountable<dom::MediaTrackSettings>>())
   {}
 
   /* UpdateSingleSource - Centralized abstract function to implement in those
@@ -446,8 +444,10 @@ protected:
   nsTArray<RefPtr<AllocationHandle>> mRegisteredHandles;
   bool mInShutdown;
 
-  // Main-thread only:
-  dom::MediaTrackSettings mSettings;
+  // The following is accessed on main-thread only. It has its own ref-count to
+  // avoid ref-counting MediaEngineSource itself in runnables.
+  // (MediaEngineSource subclasses balk on ref-counts too late during shutdown.)
+  RefPtr<media::Refcountable<dom::MediaTrackSettings>> mSettings;
 };
 
 class MediaEngineVideoSource : public MediaEngineSource

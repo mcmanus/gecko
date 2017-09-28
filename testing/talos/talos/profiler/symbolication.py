@@ -1,6 +1,7 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+from __future__ import absolute_import
 
 import cStringIO
 import hashlib
@@ -10,9 +11,10 @@ import subprocess
 import urllib2
 import zipfile
 from distutils import spawn
-from symFileManager import SymFileManager
-from symbolicationRequest import SymbolicationRequest
-from symLogging import LogMessage
+
+from .symFileManager import SymFileManager
+from .symLogging import LogMessage
+from .symbolicationRequest import SymbolicationRequest
 
 """
 Symbolication is broken when using type 'str' in python 2.7, so we use 'basestring'.
@@ -137,8 +139,10 @@ class ProfileSymbolicator:
             return None
 
     def integrate_symbol_zip_from_url(self, symbol_zip_url):
-        if self.have_integrated(symbol_zip_url):
+        if platform.system() not in self.options['platformsRequiringSymbols']\
+                or self.have_integrated(symbol_zip_url):
             return
+
         LogMessage("Retrieving symbol zip from {symbol_zip_url}...".format(
             symbol_zip_url=symbol_zip_url))
         try:

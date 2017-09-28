@@ -10,7 +10,7 @@ use servo_url::{ImmutableOrigin, ServoUrl};
 use std::default::Default;
 
 /// An [initiator](https://fetch.spec.whatwg.org/#concept-request-initiator)
-#[derive(Copy, Clone, PartialEq, HeapSizeOf)]
+#[derive(Clone, Copy, HeapSizeOf, PartialEq)]
 pub enum Initiator {
     None,
     Download,
@@ -20,7 +20,7 @@ pub enum Initiator {
 }
 
 /// A request [type](https://fetch.spec.whatwg.org/#concept-request-type)
-#[derive(Copy, Clone, PartialEq, Serialize, Deserialize, HeapSizeOf)]
+#[derive(Clone, Copy, Deserialize, HeapSizeOf, PartialEq, Serialize)]
 pub enum Type {
     None,
     Audio,
@@ -33,7 +33,7 @@ pub enum Type {
 }
 
 /// A request [destination](https://fetch.spec.whatwg.org/#concept-request-destination)
-#[derive(Copy, Clone, PartialEq, Serialize, Deserialize, HeapSizeOf)]
+#[derive(Clone, Copy, Deserialize, HeapSizeOf, PartialEq, Serialize)]
 pub enum Destination {
     None,
     Document,
@@ -53,14 +53,14 @@ pub enum Destination {
 }
 
 /// A request [origin](https://fetch.spec.whatwg.org/#concept-request-origin)
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize, HeapSizeOf)]
+#[derive(Clone, Debug, Deserialize, HeapSizeOf, PartialEq, Serialize)]
 pub enum Origin {
     Client,
     Origin(ImmutableOrigin),
 }
 
 /// A [referer](https://fetch.spec.whatwg.org/#concept-request-referrer)
-#[derive(Clone, PartialEq, Serialize, Deserialize, HeapSizeOf)]
+#[derive(Clone, Deserialize, HeapSizeOf, PartialEq, Serialize)]
 pub enum Referrer {
     NoReferrer,
     /// Default referrer if nothing is specified
@@ -69,7 +69,7 @@ pub enum Referrer {
 }
 
 /// A [request mode](https://fetch.spec.whatwg.org/#concept-request-mode)
-#[derive(Copy, Clone, PartialEq, Serialize, Deserialize, HeapSizeOf)]
+#[derive(Clone, Copy, Deserialize, HeapSizeOf, PartialEq, Serialize)]
 pub enum RequestMode {
     Navigate,
     SameOrigin,
@@ -79,7 +79,7 @@ pub enum RequestMode {
 }
 
 /// Request [credentials mode](https://fetch.spec.whatwg.org/#concept-request-credentials-mode)
-#[derive(Copy, Clone, PartialEq, Serialize, Deserialize, HeapSizeOf)]
+#[derive(Clone, Copy, Deserialize, HeapSizeOf, PartialEq, Serialize)]
 pub enum CredentialsMode {
     Omit,
     CredentialsSameOrigin,
@@ -87,7 +87,7 @@ pub enum CredentialsMode {
 }
 
 /// [Cache mode](https://fetch.spec.whatwg.org/#concept-request-cache-mode)
-#[derive(Copy, Clone, PartialEq, Serialize, Deserialize, HeapSizeOf)]
+#[derive(Clone, Copy, Deserialize, HeapSizeOf, PartialEq, Serialize)]
 pub enum CacheMode {
     Default,
     NoStore,
@@ -97,8 +97,16 @@ pub enum CacheMode {
     OnlyIfCached,
 }
 
+/// [Service-workers mode](https://fetch.spec.whatwg.org/#request-service-workers-mode)
+#[derive(Clone, Copy, Deserialize, HeapSizeOf, PartialEq, Serialize)]
+pub enum ServiceWorkersMode {
+    All,
+    Foreign,
+    None,
+}
+
 /// [Redirect mode](https://fetch.spec.whatwg.org/#concept-request-redirect-mode)
-#[derive(Copy, Clone, PartialEq, Serialize, Deserialize, HeapSizeOf)]
+#[derive(Clone, Copy, Deserialize, HeapSizeOf, PartialEq, Serialize)]
 pub enum RedirectMode {
     Follow,
     Error,
@@ -106,7 +114,7 @@ pub enum RedirectMode {
 }
 
 /// [Response tainting](https://fetch.spec.whatwg.org/#concept-request-response-tainting)
-#[derive(Copy, Clone, PartialEq, HeapSizeOf)]
+#[derive(Clone, Copy, HeapSizeOf, PartialEq)]
 pub enum ResponseTainting {
     Basic,
     CorsTainting,
@@ -114,20 +122,20 @@ pub enum ResponseTainting {
 }
 
 /// [Window](https://fetch.spec.whatwg.org/#concept-request-window)
-#[derive(Copy, Clone, PartialEq, HeapSizeOf)]
+#[derive(Clone, Copy, HeapSizeOf, PartialEq)]
 pub enum Window {
     NoWindow,
     Client, // TODO: Environmental settings object
 }
 
 /// [CORS settings attribute](https://html.spec.whatwg.org/multipage/#attr-crossorigin-anonymous)
-#[derive(Copy, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Deserialize, PartialEq, Serialize)]
 pub enum CorsSettings {
     Anonymous,
     UseCredentials,
 }
 
-#[derive(Serialize, Deserialize, Clone, HeapSizeOf)]
+#[derive(Clone, Deserialize, HeapSizeOf, Serialize)]
 pub struct RequestInit {
     #[serde(deserialize_with = "::hyper_serde::deserialize",
             serialize_with = "::hyper_serde::serialize")]
@@ -140,6 +148,7 @@ pub struct RequestInit {
     pub headers: Headers,
     pub unsafe_request: bool,
     pub body: Option<Vec<u8>>,
+    pub service_workers_mode: ServiceWorkersMode,
     // TODO: client object
     pub type_: Type,
     pub destination: Destination,
@@ -149,9 +158,7 @@ pub struct RequestInit {
     pub use_cors_preflight: bool,
     pub credentials_mode: CredentialsMode,
     pub use_url_credentials: bool,
-    // this should actually be set by fetch, but fetch
-    // doesn't have info about the client right now
-    pub origin: ServoUrl,
+    pub origin: ImmutableOrigin,
     // XXXManishearth these should be part of the client object
     pub referrer_url: Option<ServoUrl>,
     pub referrer_policy: Option<ReferrerPolicy>,
@@ -170,6 +177,7 @@ impl Default for RequestInit {
             headers: Headers::new(),
             unsafe_request: false,
             body: None,
+            service_workers_mode: ServiceWorkersMode::All,
             type_: Type::None,
             destination: Destination::None,
             synchronous: false,
@@ -178,7 +186,7 @@ impl Default for RequestInit {
             use_cors_preflight: false,
             credentials_mode: CredentialsMode::Omit,
             use_url_credentials: false,
-            origin: ServoUrl::parse("about:blank").unwrap(),
+            origin: ImmutableOrigin::new_opaque(),
             referrer_url: None,
             referrer_policy: None,
             pipeline_id: None,
@@ -208,12 +216,12 @@ pub struct Request {
     /// https://fetch.spec.whatwg.org/#concept-request-body
     pub body: Option<Vec<u8>>,
     // TODO: client object
-    pub is_service_worker_global_scope: bool,
     pub window: Window,
     // TODO: target browsing context
     /// https://fetch.spec.whatwg.org/#request-keepalive-flag
     pub keep_alive: bool,
-    pub skip_service_worker: bool,
+    /// https://fetch.spec.whatwg.org/#request-service-workers-mode
+    pub service_workers_mode: ServiceWorkersMode,
     /// https://fetch.spec.whatwg.org/#concept-request-initiator
     pub initiator: Initiator,
     /// https://fetch.spec.whatwg.org/#concept-request-type
@@ -257,7 +265,6 @@ pub struct Request {
 impl Request {
     pub fn new(url: ServoUrl,
                origin: Option<Origin>,
-               is_service_worker_global_scope: bool,
                pipeline_id: Option<PipelineId>)
                -> Request {
         Request {
@@ -267,10 +274,9 @@ impl Request {
             headers: Headers::new(),
             unsafe_request: false,
             body: None,
-            is_service_worker_global_scope: is_service_worker_global_scope,
             window: Window::Client,
             keep_alive: false,
-            skip_service_worker: false,
+            service_workers_mode: ServiceWorkersMode::All,
             initiator: Initiator::None,
             type_: Type::None,
             destination: Destination::None,
@@ -294,13 +300,13 @@ impl Request {
 
     pub fn from_init(init: RequestInit) -> Request {
         let mut req = Request::new(init.url.clone(),
-                                   Some(Origin::Origin(init.origin.origin())),
-                                   false,
+                                   Some(Origin::Origin(init.origin)),
                                    init.pipeline_id);
         req.method = init.method;
         req.headers = init.headers;
         req.unsafe_request = init.unsafe_request;
         req.body = init.body;
+        req.service_workers_mode = init.service_workers_mode;
         req.type_ = init.type_;
         req.destination = init.destination;
         req.synchronous = init.synchronous;

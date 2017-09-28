@@ -29,6 +29,26 @@
 		<dict>
 			<key>CFBundleTypeExtensions</key>
 			<array>
+				<string>json</string>
+			</array>
+			<key>CFBundleTypeIconFile</key>
+			<string>document.icns</string>
+			<key>CFBundleTypeMIMETypes</key>
+			<array>
+				<string>application/json</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>JSON File</string>
+			<key>CFBundleTypeOSTypes</key>
+			<array>
+				<string>TEXT</string>
+			</array>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+		</dict>
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>svg</string>
 			</array>
 			<key>CFBundleTypeIconFile</key>
@@ -220,5 +240,9 @@
 	</dict>
   <key>NSDisablePersistence</key>
   <true/>
+  <key>MozillaDeveloperRepoPath</key>
+  <string>%MOZ_DEVELOPER_REPO_PATH%</string>
+  <key>MozillaDeveloperObjPath</key>
+  <string>%MOZ_DEVELOPER_OBJ_PATH%</string>
 </dict>
 </plist>

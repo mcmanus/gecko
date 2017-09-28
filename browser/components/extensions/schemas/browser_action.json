@@ -22,6 +22,13 @@
                 "$ref": "IconPath",
                 "optional": true
               },
+              "theme_icons": {
+                "type": "array",
+                "optional": true,
+                "minItems": 1,
+                "items": { "$ref": "ThemeIcons" },
+                "description": "Specifies icons to use for dark and light themes"
+              },
               "default_popup": {
                 "type": "string",
                 "format": "relativeUrl",
@@ -144,7 +151,9 @@
                   { "$ref": "ImageDataType" },
                   {
                     "type": "object",
-                    "additionalProperties": {"$ref": "ImageDataType"}
+                    "patternProperties": {
+                      "^[1-9]\\d*$": {"$ref": "ImageDataType"}
+                    }
                   }
                 ],
                 "optional": true,
@@ -155,7 +164,9 @@
                   { "type": "string" },
                   {
                     "type": "object",
-                    "additionalProperties": {"type": "string"}
+                    "patternProperties": {
+                      "^[1-9]\\d*$": { "type": "string" }
+                    }
                   }
                 ],
                 "optional": true,
@@ -399,24 +410,10 @@
       {
         "name": "openPopup",
         "type": "function",
-        "description": "Opens the extension popup window in the active window but does not grant tab permissions.",
-        "unsupported": true,
-        "async": "callback",
-        "parameters": [
-          {
-            "type": "function",
-            "name": "callback",
-            "parameters": [
-              {
-                "name": "popupView",
-                "type": "object",
-                "optional": true,
-                "description": "JavaScript 'window' object for the popup window if it was succesfully opened.",
-                "additionalProperties": { "type": "any" }
-              }
-            ]
-          }
-        ]
+        "requireUserInput": true,
+        "description": "Opens the extension popup window in the active window.",
+        "async": true,
+        "parameters": []
       }
     ],
     "events": [

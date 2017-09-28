@@ -29,6 +29,7 @@ native nscolor(nscolor);
 [ptr] native gfxContext(gfxContext);
 typedef unsigned long long nsViewID;
 
+interface nsIArray;
 interface nsICycleCollectorListener;
 interface nsIDOMNode;
 interface nsIDOMNodeList;
@@ -258,7 +259,7 @@ interface nsIDOMWindowUtils : nsISupports {
    */
   attribute boolean isFirstPaint;
 
-  void getPresShellId(out uint32_t aPresShellId);
+  uint32_t getPresShellId();
 
   /**
    * Following modifiers are for sent*Event() except sendNative*Event().
@@ -530,8 +531,6 @@ interface nsIDOMWindowUtils : nsISupports {
    * @param aOptions           Set following flags.
    */
   const unsigned long WHEEL_EVENT_CAUSED_BY_NO_LINE_OR_PAGE_DELTA_DEVICE = 0x0001;
-  // @deprecated Use WHEEL_EVENT_CAUSED_BY_NO_LINE_OR_PAGE_DELTA_DEVICE.
-  const unsigned long WHEEL_EVENT_CAUSED_BY_PIXEL_ONLY_DEVICE            = 0x0001;
   const unsigned long WHEEL_EVENT_CAUSED_BY_MOMENTUM                     = 0x0002;
   const unsigned long WHEEL_EVENT_CUSTOMIZED_BY_USER_PREFS               = 0x0004;
   // If any of the following flags is specified this method will throw an
@@ -638,6 +637,12 @@ interface nsIDOMWindowUtils : nsISupports {
                            [optional] in nsIObserver aObserver);
 
   /**
+   * Suppress animations that are applied to a window by OS when
+   * resizing, moving, changing size mode, ...
+   */
+  void suppressAnimation(in boolean aSuppress);
+
+  /**
    * The values for sendNativeMouseScrollEvent's aAdditionalFlags.
    */
 
@@ -716,8 +721,7 @@ interface nsIDOMWindowUtils : nsISupports {
    * drag - msg1-n:TOUCH_CONTACT (moving), msgn+1:TOUCH_REMOVE
    * hover drag - msg1-n:TOUCH_HOVER (moving), msgn+1:TOUCH_REMOVE
    *
-   * Widget support: Windows 8.0+, Winrt/Win32. Gonk supports CONTACT, REMOVE,
-   * and CANCEL but no HOVER. Other widgets will throw.
+   * Widget support: Windows 8.0+, Winrt/Win32. Other widgets will throw.
    *
    * NOTE: The synthesized native event will be fired asynchronously, and upon
    * completion the observer, if provided, will be notified with a "touchpoint"
@@ -829,15 +833,8 @@ interface nsIDOMWindowUtils : nsISupports {
    * @param aListener listener that receives information about the CC graph
    *                  (see @mozilla.org/cycle-collector-logger;1 for a logger
    *                   component)
-   * @param aExtraForgetSkippableCalls indicates how many times
-   *                                   nsCycleCollector_forgetSkippable will
-   *                                   be called before running cycle collection.
-   *                                   -1 prevents the default
-   *                                   nsCycleCollector_forgetSkippable call
-   *                                   which happens after garbage collection.
    */
-  void garbageCollect([optional] in nsICycleCollectorListener aListener,
-                      [optional] in long aExtraForgetSkippableCalls);
+  void garbageCollect([optional] in nsICycleCollectorListener aListener);
 
   /**
    * Force a cycle collection without garbage collection.
@@ -848,15 +845,8 @@ interface nsIDOMWindowUtils : nsISupports {
    * @param aListener listener that receives information about the CC graph
    *                  (see @mozilla.org/cycle-collector-logger;1 for a logger
    *                   component)
-   * @param aExtraForgetSkippableCalls indicates how many times
-   *                                   nsCycleCollector_forgetSkippable will
-   *                                   be called before running cycle collection.
-   *                                   -1 prevents the default
-   *                                   nsCycleCollector_forgetSkippable call
-   *                                   which happens after garbage collection.
    */
-  void cycleCollect([optional] in nsICycleCollectorListener aListener,
-                    [optional] in long aExtraForgetSkippableCalls);
+  void cycleCollect([optional] in nsICycleCollectorListener aListener);
 
   /**
    * Trigger whichever GC or CC timer is currently active and waiting to fire.
@@ -1001,6 +991,15 @@ interface nsIDOMWindowUtils : nsISupports {
    * Returns the given element's bounds without flushing pending layout changes.
    */
   nsIDOMClientRect getBoundsWithoutFlushing(in nsIDOMElement aElement);
+
+  const long FLUSH_STYLE = 0;
+  const long FLUSH_LAYOUT = 1;
+  const long FLUSH_DISPLAY = 2;
+
+  /**
+   * Returns true if a flush of the given type is needed.
+   */
+  bool needsFlush(in long aFlushtype);
 
   /**
    * Returns the bounds of the window's currently loaded document. This will
@@ -1417,17 +1416,36 @@ interface nsIDOMWindowUtils : nsISupports {
   readonly attribute boolean layerManagerRemote;
 
   /**
-   * Returns a Promise that will be resolved with a string once the capabilities
-   * of the h264 decoder have been determined.
-   * Success does not mean that all h264 video decoding will be done
-   * in hardware.
+   * True if advanced layers is enabled on this window, false otherwise.
    */
-  readonly attribute jsval supportsHardwareH264Decoding;
+  readonly attribute boolean usingAdvancedLayers;
 
   /**
    * Returns the current audio backend as a free-form string.
    */
   readonly attribute AString currentAudioBackend;
+
+  /**
+   * Returns the max channel counts of the current audio device.
+   */
+  readonly attribute unsigned long currentMaxAudioChannels;
+
+  /**
+   * Returns the preferred channel layout of the current audio device.
+   */
+  readonly attribute AString currentPreferredChannelLayout;
+
+  /**
+   * Returns the preferred sample rate of the current audio device.
+   */
+  readonly attribute unsigned long currentPreferredSampleRate;
+
+  /**
+   * Returns all the audio input/output devices.
+   */
+  const unsigned short AUDIO_INPUT   = 0;
+  const unsigned short AUDIO_OUTPUT  = 1;
+  nsIArray audioDevices(in unsigned short aSide);
 
   /**
    * Record (and return) frame-intervals for frames which were presented
@@ -1459,12 +1477,6 @@ interface nsIDOMWindowUtils : nsISupports {
    * The DPI of the display
    */
   readonly attribute float displayDPI;
-
-  /**
-   * Return the outer window with the given ID, if any.  Can return null.
-   * @deprecated Use nsIWindowMediator.getOuterWindowWithId.  See bug 865664.
-   */
-  nsIDOMWindow getOuterWindowWithId(in unsigned long long aOuterWindowID);
 
   /**
    * Return this window's frame element.
@@ -2025,6 +2037,14 @@ interface nsIDOMWindowUtils : nsISupports {
    *         on the first-strong character found in the string.
    */
   long getDirectionFromText(in AString aString);
+
+  /**
+   * Calls FrameNeedsReflow on that root frame so that a layout flush
+   * will be necessary.
+   *
+   * This should only be used for testing.
+   */
+  void ensureDirtyRootFrame();
 
   /**
    * Whether the current document is styled by Servo's style engine.

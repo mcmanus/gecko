@@ -15,6 +15,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/UniquePtr.h"
 #include "nsAttrAndChildArray.h"          // member
 #include "nsCycleCollectionParticipant.h" // NS_DECL_CYCLE_*
 #include "nsIContent.h"                   // base class
@@ -22,6 +23,7 @@
 #include "nsNodeUtils.h"                  // class member nsNodeUtils::CloneNodeImpl
 #include "nsIHTMLCollection.h"
 #include "nsDataHashtable.h"
+#include "nsXBLBinding.h"
 
 class ContentUnbinder;
 class nsContentList;
@@ -51,7 +53,7 @@ class nsNodeWeakReference final : public nsIWeakReference
 {
 public:
   explicit nsNodeWeakReference(nsINode* aNode)
-    : mNode(aNode)
+    : nsIWeakReference(aNode)
   {
   }
 
@@ -61,17 +63,14 @@ public:
   // nsIWeakReference
   NS_DECL_NSIWEAKREFERENCE
   virtual size_t SizeOfOnlyThis(mozilla::MallocSizeOf aMallocSizeOf) const override;
-  virtual bool IsAlive() const override { return mNode != nullptr; }
 
   void NoticeNodeDestruction()
   {
-    mNode = nullptr;
+    mObject = nullptr;
   }
 
 private:
   ~nsNodeWeakReference();
-
-  nsINode* MOZ_NON_OWNING_REF mNode;
 };
 
 /**
@@ -116,12 +115,11 @@ public:
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
 
-  NS_DECL_SIZEOF_EXCLUDING_THIS
+  NS_DECL_ADDSIZEOFEXCLUDINGTHIS
 
   // nsINode interface methods
   virtual uint32_t GetChildCount() const override;
   virtual nsIContent *GetChildAt(uint32_t aIndex) const override;
-  virtual nsIContent * const * GetChildArray(uint32_t* aChildCount) const override;
   virtual int32_t IndexOf(const nsINode* aPossibleChild) const override;
   virtual nsresult InsertChildAt(nsIContent* aKid, uint32_t aIndex,
                                  bool aNotify) override;
@@ -241,8 +239,6 @@ protected:
   nsresult CopyInnerTo(FragmentOrElement* aDest, bool aPreallocateChildren);
 
 public:
-  // Because of a bug in MS C++ compiler nsDOMSlots must be declared public,
-  // otherwise nsXULElement::nsXULSlots doesn't compile.
   /**
    * There are a set of DOM- and scripting-specific instance variables
    * that may only be instantiated when a content object is accessed
@@ -251,29 +247,13 @@ public:
    * in a side structure that's only allocated when the content is
    * accessed through the DOM.
    */
-  class nsDOMSlots : public nsINode::nsSlots
+
+  class nsExtendedDOMSlots
   {
   public:
-    nsDOMSlots();
-    virtual ~nsDOMSlots();
+    nsExtendedDOMSlots();
 
-    void Traverse(nsCycleCollectionTraversalCallback &cb, bool aIsXUL);
-    void Unlink(bool aIsXUL);
-
-    size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
-
-    /**
-     * The .style attribute (an interface that forwards to the actual
-     * style rules)
-     * @see nsGenericHTMLElement::GetStyle
-     */
-    nsCOMPtr<nsICSSDeclaration> mStyle;
-
-    /**
-     * The .dataset attribute.
-     * @see nsGenericHTMLElement::GetDataset
-     */
-    nsDOMStringMap* mDataset; // [Weak]
+    ~nsExtendedDOMSlots();
 
     /**
      * SMIL Overridde style rules (for SMIL animation of CSS properties)
@@ -287,35 +267,17 @@ public:
     RefPtr<mozilla::DeclarationBlock> mSMILOverrideStyleDeclaration;
 
     /**
-     * An object implementing nsIDOMMozNamedAttrMap for this content (attributes)
-     * @see FragmentOrElement::GetAttributes
-     */
-    RefPtr<nsDOMAttributeMap> mAttributeMap;
-
-    union {
-      /**
-      * The nearest enclosing content node with a binding that created us.
-      * @see FragmentOrElement::GetBindingParent
-      */
-      nsIContent* mBindingParent;  // [Weak]
-
-      /**
-      * The controllers of the XUL Element.
-      */
-      nsIControllers* mControllers; // [OWNER]
-    };
+    * The nearest enclosing content node with a binding that created us.
+    * @see FragmentOrElement::GetBindingParent
+    */
+    nsIContent* mBindingParent;  // [Weak]
 
     /**
-     * An object implementing the .children property for this element.
-     */
-    RefPtr<nsContentList> mChildrenList;
+    * The controllers of the XUL Element.
+    */
+    nsCOMPtr<nsIControllers> mControllers;
 
     /**
-     * An object implementing the .classList property for this element.
-     */
-    RefPtr<nsDOMTokenList> mClassList;
-
-    /*
      * An object implementing the .labels property for this element.
      */
     RefPtr<nsLabelsNodeList> mLabelsList;
@@ -356,6 +318,55 @@ public:
      */
     nsDataHashtable<nsRefPtrHashKey<DOMIntersectionObserver>, int32_t>
       mRegisteredIntersectionObservers;
+
+    /**
+     * For XUL to hold either frameloader or opener.
+     */
+    nsCOMPtr<nsISupports> mFrameLoaderOrOpener;
+
+  };
+
+  class nsDOMSlots : public nsINode::nsSlots
+  {
+  public:
+    nsDOMSlots();
+    virtual ~nsDOMSlots();
+
+    void Traverse(nsCycleCollectionTraversalCallback &cb);
+    void Unlink();
+
+    size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
+
+    /**
+     * The .style attribute (an interface that forwards to the actual
+     * style rules)
+     * @see nsGenericHTMLElement::GetStyle
+     */
+    nsCOMPtr<nsICSSDeclaration> mStyle;
+
+    /**
+     * The .dataset attribute.
+     * @see nsGenericHTMLElement::GetDataset
+     */
+    nsDOMStringMap* mDataset; // [Weak]
+
+    /**
+     * An object implementing nsIDOMMozNamedAttrMap for this content (attributes)
+     * @see FragmentOrElement::GetAttributes
+     */
+    RefPtr<nsDOMAttributeMap> mAttributeMap;
+
+    /**
+     * An object implementing the .children property for this element.
+     */
+    RefPtr<nsContentList> mChildrenList;
+
+    /**
+     * An object implementing the .classList property for this element.
+     */
+    RefPtr<nsDOMTokenList> mClassList;
+
+    mozilla::UniquePtr<nsExtendedDOMSlots> mExtendedSlots;
   };
 
 protected:
@@ -373,6 +384,26 @@ protected:
   nsDOMSlots *GetExistingDOMSlots() const
   {
     return static_cast<nsDOMSlots*>(GetExistingSlots());
+  }
+
+  nsExtendedDOMSlots* ExtendedDOMSlots()
+  {
+    nsDOMSlots* slots = DOMSlots();
+    if (!slots->mExtendedSlots) {
+      slots->mExtendedSlots = MakeUnique<nsExtendedDOMSlots>();
+    }
+
+    return slots->mExtendedSlots.get();
+  }
+
+  nsExtendedDOMSlots* GetExistingExtendedDOMSlots() const
+  {
+    nsDOMSlots* slots = GetExistingDOMSlots();
+    if (slots) {
+      return slots->mExtendedSlots.get();
+    }
+
+    return nullptr;
   }
 
   /**

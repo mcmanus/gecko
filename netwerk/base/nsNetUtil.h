@@ -15,6 +15,7 @@
 #include "nsIRequest.h"
 #include "nsILoadInfo.h"
 #include "nsIIOService.h"
+#include "mozilla/NotNull.h"
 #include "mozilla/Services.h"
 #include "mozilla/Unused.h"
 #include "nsNetCID.h"
@@ -51,7 +52,10 @@ class nsIIncrementalStreamLoaderObserver;
 class nsIUnicharStreamLoader;
 class nsIUnicharStreamLoaderObserver;
 
-namespace mozilla { class OriginAttributes; }
+namespace mozilla {
+class Encoding;
+class OriginAttributes;
+}
 
 template <class> class nsCOMPtr;
 template <typename> struct already_AddRefed;
@@ -70,8 +74,20 @@ nsresult NS_NewURI(nsIURI **result,
                    nsIIOService *ioService = nullptr);     // pass in nsIIOService to optimize callers
 
 nsresult NS_NewURI(nsIURI **result,
+                   const nsACString &spec,
+                   mozilla::NotNull<const mozilla::Encoding*> encoding,
+                   nsIURI *baseURI = nullptr,
+                   nsIIOService *ioService = nullptr);     // pass in nsIIOService to optimize callers
+
+nsresult NS_NewURI(nsIURI **result,
                    const nsAString &spec,
                    const char *charset = nullptr,
+                   nsIURI *baseURI = nullptr,
+                   nsIIOService *ioService = nullptr);     // pass in nsIIOService to optimize callers
+
+nsresult NS_NewURI(nsIURI **result,
+                   const nsAString &spec,
+                   mozilla::NotNull<const mozilla::Encoding*> encoding,
                    nsIURI *baseURI = nullptr,
                    nsIIOService *ioService = nullptr);     // pass in nsIIOService to optimize callers
 
@@ -83,6 +99,9 @@ nsresult NS_NewURI(nsIURI **result,
 nsresult NS_NewFileURI(nsIURI **result,
                        nsIFile *spec,
                        nsIIOService *ioService = nullptr);     // pass in nsIIOService to optimize callers
+
+nsresult NS_GetSanitizedURIStringFromURI(nsIURI *aUri,
+                                         nsAString &aSanitizedSpec);
 
 /*
 * How to create a new Channel, using NS_NewChannel,
@@ -493,22 +512,6 @@ nsresult NS_NewLocalFileStream(nsIFileStream **result,
                                int32_t         perm          = -1,
                                int32_t         behaviorFlags = 0);
 
-// returns the input end of a pipe.  the output end of the pipe
-// is attached to the original stream.  data from the original
-// stream is read into the pipe on a background thread.
-nsresult NS_BackgroundInputStream(nsIInputStream **result,
-                                  nsIInputStream  *stream,
-                                  uint32_t         segmentSize  = 0,
-                                  uint32_t         segmentCount = 0);
-
-// returns the output end of a pipe.  the input end of the pipe
-// is attached to the original stream.  data written to the pipe
-// is copied to the original stream on a background thread.
-nsresult NS_BackgroundOutputStream(nsIOutputStream **result,
-                                   nsIOutputStream  *stream,
-                                   uint32_t          segmentSize  = 0,
-                                   uint32_t          segmentCount = 0);
-
 MOZ_MUST_USE nsresult
 NS_NewBufferedInputStream(nsIInputStream **result,
                           nsIInputStream  *str,
@@ -650,8 +653,8 @@ bool NS_HasBeenCrossOrigin(nsIChannel* aChannel, bool aReport = false);
 #define NECKO_UNKNOWN_APP_ID UINT32_MAX
 
 // Unique first-party domain for separating the safebrowsing cookie.
-// Note if this value is changed, code in test_cookiejars_safebrowsing.js
-// should also be changed.
+// Note if this value is changed, code in test_cookiejars_safebrowsing.js and
+// nsUrlClassifierHashCompleter.js should also be changed.
 #define NECKO_SAFEBROWSING_FIRST_PARTY_DOMAIN \
   "safebrowsing.86868755-6b82-4842-b301-72671a0db32e.mozilla"
 
@@ -951,11 +954,6 @@ nsresult NS_CompareLoadInfoAndLoadContext(nsIChannel *aChannel);
  * pref network.http.referer.userControlPolicy
  */
 uint32_t NS_GetDefaultReferrerPolicy();
-
-/**
- * Update the window id of the current focused top level content window.
- */
-nsresult NS_NotifyCurrentTopLevelOuterContentWindowId(uint64_t aWindowId);
 
 namespace mozilla {
 namespace net {

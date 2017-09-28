@@ -87,7 +87,8 @@ public:
   virtual bool DeallocPTextureParent(PTextureParent* actor) override;
 
   virtual mozilla::ipc::IPCResult RecvNewCompositable(const CompositableHandle& aHandle,
-                                                      const TextureInfo& aInfo) override;
+                                                      const TextureInfo& aInfo,
+                                                      const LayersBackend& aLayersBackend) override;
   virtual mozilla::ipc::IPCResult RecvReleaseCompositable(const CompositableHandle& aHandle) override;
 
   PMediaSystemResourceManagerParent* AllocPMediaSystemResourceManagerParent() override;
@@ -121,8 +122,6 @@ public:
   virtual bool IPCOpen() const override { return !mClosed; }
 
 protected:
-  void OnChannelConnected(int32_t pid) override;
-
   void Bind(Endpoint<PImageBridgeParent>&& aEndpoint);
 
 private:

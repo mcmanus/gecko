@@ -80,6 +80,9 @@ AnimationEffectReadOnly::SetSpecifiedTiming(const TimingParams& aTiming)
   mTiming->SetTimingParams(aTiming);
   if (mAnimation) {
     mAnimation->NotifyEffectTimingUpdated();
+    if (AsKeyframeEffect()) {
+      AsKeyframeEffect()->RequestRestyle(EffectCompositor::RestyleType::Layer);
+    }
   }
   // For keyframe effects, NotifyEffectTimingUpdated above will eventually cause
   // KeyframeEffectReadOnly::NotifyAnimationTimingUpdated to be called so it can
@@ -183,8 +186,9 @@ AnimationEffectReadOnly::GetComputedTimingAt(
   // Determine the 0-based index of the current iteration.
   // https://w3c.github.io/web-animations/#current-iteration
   result.mCurrentIteration =
-    IsInfinite(result.mIterations) &&
-      result.mPhase == ComputedTiming::AnimationPhase::After
+    (result.mIterations >= UINT64_MAX
+     && result.mPhase == ComputedTiming::AnimationPhase::After)
+    || overallProgress >= UINT64_MAX
     ? UINT64_MAX // In GetComputedTimingDictionary(),
                  // we will convert this into Infinity
     : static_cast<uint64_t>(overallProgress);

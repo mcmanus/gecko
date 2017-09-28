@@ -3,28 +3,26 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci} = Components;
-
-/**
- * Make sure that tabs are restored on demand as otherwise the tab will start
- * loading immediately and we can't check its icon and label.
- */
-add_task(function setup() {
-  Services.prefs.setBoolPref("browser.sessionstore.restore_on_demand", true);
-
-  registerCleanupFunction(() => {
-    Services.prefs.clearUserPref("browser.sessionstore.restore_on_demand");
-  });
-});
-
 /**
  * Ensure that a pending tab has label and icon correctly set.
  */
 add_task(async function test_label_and_icon() {
+  // Make sure that tabs are restored on demand as otherwise the tab will start
+  // loading immediately and we can't check its icon and label.
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.sessionstore.restore_on_demand", true]],
+  });
+
   // Create a new tab.
   let tab = BrowserTestUtils.addTab(gBrowser, "about:robots");
   let browser = tab.linkedBrowser;
   await promiseBrowserLoaded(browser);
+  // Because there is debounce logic in ContentLinkHandler.jsm to reduce the
+  // favicon loads, we have to wait some time before checking that icon was
+  // stored properly.
+  await BrowserTestUtils.waitForCondition(() => {
+    return gBrowser.getIcon(tab) != null;
+  }, "wait for favicon load to finish", 100, 5);
 
   // Retrieve the tab state.
   await TabStateFlusher.flush(browser);

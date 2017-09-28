@@ -14,8 +14,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "EventDispatcher",
 XPCOMUtils.defineLazyGetter(this, "WindowEventDispatcher",
   () => EventDispatcher.for(window));
 
-var dump = Cu.import("resource://gre/modules/AndroidLog.jsm", {})
-           .AndroidLog.d.bind(null, "View");
+XPCOMUtils.defineLazyGetter(this, "dump", () =>
+    Cu.import("resource://gre/modules/AndroidLog.jsm",
+              {}).AndroidLog.d.bind(null, "View"));
 
 // Creates and manages GeckoView modules.
 // A module must extend GeckoViewModule.
@@ -34,7 +35,7 @@ var ModuleManager = {
     let scope = {};
     Cu.import(aResource, scope);
     this.modules[aType] = new scope[aType](
-      window, this.browser, WindowEventDispatcher, ...aArgs
+      aType, window, this.browser, WindowEventDispatcher, ...aArgs
     );
   },
 
@@ -59,4 +60,12 @@ function startup() {
                     "GeckoViewContent");
   ModuleManager.add("resource://gre/modules/GeckoViewProgress.jsm",
                     "GeckoViewProgress");
+  ModuleManager.add("resource://gre/modules/GeckoViewScroll.jsm",
+                    "GeckoViewScroll");
+  ModuleManager.add("resource://gre/modules/GeckoViewTab.jsm",
+                    "GeckoViewTab");
+
+  // Move focus to the content window at the end of startup,
+  // so things like text selection can work properly.
+  document.getElementById("content").focus();
 }

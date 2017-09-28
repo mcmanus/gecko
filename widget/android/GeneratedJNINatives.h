@@ -7,8 +7,10 @@
 #ifndef GeneratedJNINatives_h
 #define GeneratedJNINatives_h
 
+#ifndef MOZ_PREPROCESSOR
 #include "GeneratedJNIWrappers.h"
 #include "mozilla/jni/Natives.h"
+#endif
 
 namespace mozilla {
 namespace java {
@@ -220,11 +222,15 @@ template<class Impl>
 class GeckoThread::Natives : public mozilla::jni::NativeImpl<GeckoThread, Impl>
 {
 public:
-    static const JNINativeMethod methods[6];
+    static const JNINativeMethod methods[7];
 };
 
 template<class Impl>
 const JNINativeMethod GeckoThread::Natives<Impl>::methods[] = {
+
+    mozilla::jni::MakeNativeMethod<GeckoThread::ForceQuit_t>(
+            mozilla::jni::NativeStub<GeckoThread::ForceQuit_t, Impl>
+            ::template Wrap<&Impl::ForceQuit>),
 
     mozilla::jni::MakeNativeMethod<GeckoThread::CreateServices_t>(
             mozilla::jni::NativeStub<GeckoThread::CreateServices_t, Impl>

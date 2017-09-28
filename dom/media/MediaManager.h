@@ -168,9 +168,13 @@ class ReleaseMediaOperationResource : public Runnable
 public:
   ReleaseMediaOperationResource(
     already_AddRefed<DOMMediaStream> aStream,
-    already_AddRefed<media::Refcountable<UniquePtr<OnTracksAvailableCallback>>> aOnTracksAvailableCallback):
-    mStream(aStream),
-    mOnTracksAvailableCallback(aOnTracksAvailableCallback) {}
+    already_AddRefed<media::Refcountable<UniquePtr<OnTracksAvailableCallback>>>
+      aOnTracksAvailableCallback)
+    : Runnable("ReleaseMediaOperationResource")
+    , mStream(aStream)
+    , mOnTracksAvailableCallback(aOnTracksAvailableCallback)
+  {
+  }
   NS_IMETHOD Run() override {return NS_OK;}
 private:
   RefPtr<DOMMediaStream> mStream;
@@ -330,6 +334,7 @@ private:
   media::CoatCheck<PledgeSourceSet> mOutstandingPledges;
   media::CoatCheck<PledgeChar> mOutstandingCharPledges;
   media::CoatCheck<PledgeVoid> mOutstandingVoidPledges;
+  nsTArray<nsString> mDeviceIDs;
 public:
   media::CoatCheck<media::Pledge<nsCString>> mGetPrincipalKeyPledges;
   RefPtr<media::Parent<media::NonE10s>> mNonE10sParent;

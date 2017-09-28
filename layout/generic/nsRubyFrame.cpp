@@ -106,11 +106,11 @@ nsRubyFrame::Reflow(nsPresContext* aPresContext,
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsRubyFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
-  
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
+
   if (!aReflowInput.mLineLayout) {
     NS_ASSERTION(aReflowInput.mLineLayout,
                  "No line layout provided to RubyFrame reflow method.");
-    aStatus.Reset();
     return;
   }
 
@@ -119,6 +119,29 @@ nsRubyFrame::Reflow(nsPresContext* aPresContext,
 
   // Clear leadings
   mLeadings.Reset();
+
+  // Since the ruby base container is going to reflow not only the ruby
+  // base frames, but also the ruby text frames, and then *afterwards*
+  // we're going to reflow the ruby text containers (which do not reflow
+  // their children), we need to transfer NS_FRAME_IS_DIRTY status from
+  // the ruby text containers to their child ruby texts now, both so
+  // that the ruby texts are marked dirty if needed, and so that the
+  // ruby text container doesn't mark the ruby text frames dirty *after*
+  // they're reflowed and leave dirty bits in a clean tree (suppressing
+  // future reflows, due to lack of a queued reflow to clean them).
+  for (nsIFrame* child : PrincipalChildList()) {
+    if (child->HasAnyStateBits(NS_FRAME_IS_DIRTY) &&
+        child->IsRubyTextContainerFrame()) {
+      for (nsIFrame* grandchild : child->PrincipalChildList()) {
+        grandchild->AddStateBits(NS_FRAME_IS_DIRTY);
+      }
+      // Replace NS_FRAME_IS_DIRTY with NS_FRAME_HAS_DIRTY_CHILDREN so
+      // we still have a dirty marking, but one that we won't transfer
+      // to children again.
+      child->RemoveStateBits(NS_FRAME_IS_DIRTY);
+      child->AddStateBits(NS_FRAME_HAS_DIRTY_CHILDREN);
+    }
+  }
 
   // Begin the span for the ruby frame
   WritingMode frameWM = aReflowInput.GetWritingMode();
@@ -137,7 +160,6 @@ nsRubyFrame::Reflow(nsPresContext* aPresContext,
   aReflowInput.mLineLayout->BeginSpan(this, &aReflowInput,
                                       startEdge, availableISize, &mBaseline);
 
-  aStatus.Reset();
   for (RubySegmentEnumerator e(this); !e.AtEnd(); e.Next()) {
     ReflowSegment(aPresContext, aReflowInput, e.GetBaseContainer(), aStatus);
 
@@ -292,11 +314,6 @@ nsRubyFrame::ReflowSegment(nsPresContext* aPresContext,
     ReflowOutput textMetrics(aReflowInput);
     ReflowInput textReflowInput(aPresContext, aReflowInput, textContainer,
                                       availSize.ConvertTo(rtcWM, lineWM));
-    // FIXME We probably shouldn't be using the same nsLineLayout for
-    //       the text containers. But it should be fine now as we are
-    //       not actually using this line layout to reflow something,
-    //       but just read the writing mode from it.
-    textReflowInput.mLineLayout = aReflowInput.mLineLayout;
     textContainer->Reflow(aPresContext, textMetrics,
                           textReflowInput, textReflowStatus);
     // Ruby text containers always return complete reflow status even when
@@ -327,7 +344,18 @@ nsRubyFrame::ReflowSegment(nsPresContext* aPresContext,
 
     LogicalPoint position(lineWM);
     if (side.isSome()) {
-      if (side.value() == eLogicalSideBStart) {
+      if (nsLayoutUtils::IsInterCharacterRubyEnabled() &&
+          rtcWM.IsVerticalRL() &&
+          lineWM.GetInlineDir() == WritingMode::eInlineLTR) {
+        // Inter-character ruby annotations are only supported for vertical-rl
+        // in ltr horizontal writing. Fall back to non-inter-character behavior
+        // otherwise.
+        LogicalPoint offset(lineWM, offsetRect.ISize(lineWM),
+          offsetRect.BSize(lineWM) > size.BSize(lineWM) ?
+          (offsetRect.BSize(lineWM) - size.BSize(lineWM)) / 2 : 0);
+        position = offsetRect.Origin(lineWM) + offset;
+        aReflowInput.mLineLayout->AdvanceICoord(size.ISize(lineWM));
+      } else if (side.value() == eLogicalSideBStart) {
         offsetRect.BStart(lineWM) -= size.BSize(lineWM);
         offsetRect.BSize(lineWM) += size.BSize(lineWM);
         position = offsetRect.Origin(lineWM);

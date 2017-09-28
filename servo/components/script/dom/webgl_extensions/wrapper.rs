@@ -20,13 +20,14 @@ pub trait WebGLExtensionWrapper: JSTraceable + HeapSizeOf {
                         ext: &WebGLExtensions)
                         -> NonZero<*mut JSObject>;
     fn is_supported(&self, &WebGLExtensions) -> bool;
+    fn is_enabled(&self) -> bool;
     fn enable(&self, ext: &WebGLExtensions);
     fn name(&self) -> &'static str;
     fn as_any(&self) -> &Any;
 }
 
 #[must_root]
-#[derive(JSTraceable, HeapSizeOf)]
+#[derive(HeapSizeOf, JSTraceable)]
 pub struct TypedWebGLExtensionWrapper<T: WebGLExtension> {
     extension: MutNullableJS<T::Extension>
 }
@@ -57,12 +58,16 @@ impl<T> WebGLExtensionWrapper for TypedWebGLExtensionWrapper<T>
             self.enable(ext);
         }
         unsafe {
-            NonZero::new(extension.reflector().get_jsobject().get())
+            NonZero::new_unchecked(extension.reflector().get_jsobject().get())
         }
     }
 
     fn is_supported(&self, ext: &WebGLExtensions) -> bool {
-        self.extension.get().is_some() || T::is_supported(ext)
+        self.is_enabled() || T::is_supported(ext)
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.extension.get().is_some()
     }
 
     fn enable(&self, ext: &WebGLExtensions) {

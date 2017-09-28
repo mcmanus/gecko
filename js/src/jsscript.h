@@ -240,6 +240,10 @@ typedef HashMap<JSScript*,
                 ScriptCounts*,
                 DefaultHasher<JSScript*>,
                 SystemAllocPolicy> ScriptCountsMap;
+typedef HashMap<JSScript*,
+                const char*,
+                DefaultHasher<JSScript*>,
+                SystemAllocPolicy> ScriptNameMap;
 
 class DebugScript
 {
@@ -430,12 +434,6 @@ class ScriptSource
     UniqueTwoByteChars sourceMapURL_;
     bool mutedErrors_;
 
-    // The start column of the source. Offsets kept for toString and the
-    // function source in LazyScripts are absolute positions within a
-    // ScriptSource buffer. To get their positions, they need to be offset
-    // with the starting column.
-    uint32_t startColumn_;
-
     // bytecode offset in caller script that generated this code.
     // This is present for eval-ed code, as well as "new Function(...)"-introduced
     // scripts.
@@ -489,6 +487,7 @@ class ScriptSource
     // possible to get source at all.
     bool sourceRetrievable_:1;
     bool hasIntroductionOffset_:1;
+    bool containsAsmJS_:1;
 
     const char16_t* chunkChars(JSContext* cx, UncompressedSourceCache::AutoHoldEntry& holder,
                                size_t chunk);
@@ -504,6 +503,10 @@ class ScriptSource
     void movePendingCompressedSource();
 
   public:
+    // When creating a JSString* from TwoByte source characters, we don't try to
+    // to deflate to Latin1 for longer strings, because this can be slow.
+    static const size_t SourceDeflateLimit = 100;
+
     explicit ScriptSource()
       : refs(0),
         data(SourceType(Missing())),
@@ -512,14 +515,14 @@ class ScriptSource
         displayURL_(nullptr),
         sourceMapURL_(nullptr),
         mutedErrors_(false),
-        startColumn_(0),
         introductionOffset_(0),
         parameterListEnd_(0),
         introducerFilename_(nullptr),
         introductionType_(nullptr),
         xdrEncoder_(nullptr),
         sourceRetrievable_(false),
-        hasIntroductionOffset_(false)
+        hasIntroductionOffset_(false),
+        containsAsmJS_(false)
     {
     }
 
@@ -566,6 +569,8 @@ class ScriptSource
 
     JSFlatString* substring(JSContext* cx, size_t start, size_t stop);
     JSFlatString* substringDontDeflate(JSContext* cx, size_t start, size_t stop);
+
+    MOZ_MUST_USE bool appendSubstring(JSContext* cx, js::StringBuffer& buf, size_t start, size_t stop);
 
     bool isFunctionBody() {
         return parameterListEnd_ != 0;
@@ -625,8 +630,6 @@ class ScriptSource
 
     bool mutedErrors() const { return mutedErrors_; }
 
-    uint32_t startColumn() const { return startColumn_; }
-
     bool hasIntroductionOffset() const { return hasIntroductionOffset_; }
     uint32_t introductionOffset() const {
         MOZ_ASSERT(hasIntroductionOffset());
@@ -637,6 +640,11 @@ class ScriptSource
         MOZ_ASSERT(offset <= (uint32_t)INT32_MAX);
         introductionOffset_ = offset;
         hasIntroductionOffset_ = true;
+    }
+
+    bool containsAsmJS() const { return containsAsmJS_; }
+    void setContainsAsmJS() {
+        containsAsmJS_ = true;
     }
 
     // Return wether an XDR encoder is present or not.
@@ -1417,6 +1425,7 @@ class JSScript : public js::gc::TenuredCell
     void setIsDefaultClassConstructor() { isDefaultClassConstructor_ = true; }
 
     bool hasScriptCounts() const { return hasScriptCounts_; }
+    bool hasScriptName();
 
     bool hasFreezeConstraints() const { return hasFreezeConstraints_; }
     void setHasFreezeConstraints() { hasFreezeConstraints_ = true; }
@@ -1654,7 +1663,8 @@ class JSScript : public js::gc::TenuredCell
     bool mayReadFrameArgsDirectly();
 
     static JSFlatString* sourceData(JSContext* cx, JS::HandleScript script);
-    static JSFlatString* sourceDataForToString(JSContext* cx, JS::HandleScript script);
+
+    MOZ_MUST_USE bool appendSourceDataForToString(JSContext* cx, js::StringBuffer& buf);
 
     static bool loadSource(JSContext* cx, js::ScriptSource* ss, bool* worked);
 
@@ -1780,7 +1790,9 @@ class JSScript : public js::gc::TenuredCell
 
   public:
     bool initScriptCounts(JSContext* cx);
+    bool initScriptName(JSContext* cx);
     js::ScriptCounts& getScriptCounts();
+    const char* getScriptName();
     js::PCCounts* maybeGetPCCounts(jsbytecode* pc);
     const js::PCCounts* maybeGetThrowCounts(jsbytecode* pc);
     js::PCCounts* getThrowCounts(jsbytecode* pc);
@@ -1790,6 +1802,7 @@ class JSScript : public js::gc::TenuredCell
     js::jit::IonScriptCounts* getIonCounts();
     void releaseScriptCounts(js::ScriptCounts* counts);
     void destroyScriptCounts(js::FreeOp* fop);
+    void destroyScriptName();
     // The entry should be removed after using this function.
     void takeOverScriptCountsMapEntry(js::ScriptCounts* entryValue);
 

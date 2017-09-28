@@ -14,9 +14,6 @@
 #include "mozilla/layers/KnowsCompositor.h"
 #include "mozilla/layers/SharedRGBImage.h"
 
-#ifdef MOZ_WIDGET_GONK
-#include <cutils/properties.h>
-#endif
 #include <stdint.h>
 
 #ifdef XP_WIN
@@ -33,6 +30,16 @@ using media::TimeUnit;
 
 const char* AudioData::sTypeName = "audio";
 const char* VideoData::sTypeName = "video";
+
+bool
+IsDataLoudnessHearable(const AudioDataValue aData)
+{
+  // We can transfer the digital value to dBFS via following formula. According
+  // to American SMPTE standard, 0 dBu equals -20 dBFS. In theory 0 dBu is still
+  // hearable, so we choose a smaller value as our threshold. If the loudness
+  // is under this threshold, it might not be hearable.
+  return 20.0f * std::log10(AudioSampleToFloat(aData)) > -100;
+}
 
 void
 AudioData::EnsureAudioBuffer()
@@ -69,7 +76,7 @@ AudioData::IsAudible() const
 
   for (uint32_t frame = 0; frame < mFrames; ++frame) {
     for (uint32_t channel = 0; channel < mChannels; ++channel) {
-      if (mAudioData[frame * mChannels + channel] != 0) {
+      if (IsDataLoudnessHearable(mAudioData[frame * mChannels + channel])) {
         return true;
       }
     }
@@ -97,10 +104,10 @@ AudioData::TransferAndUpdateTimestampAndDuration(AudioData* aOther,
 static bool
 ValidatePlane(const VideoData::YCbCrBuffer::Plane& aPlane)
 {
-  return aPlane.mWidth <= PlanarYCbCrImage::MAX_DIMENSION
-         && aPlane.mHeight <= PlanarYCbCrImage::MAX_DIMENSION
-         && aPlane.mWidth * aPlane.mHeight < MAX_VIDEO_WIDTH * MAX_VIDEO_HEIGHT
-         && aPlane.mStride > 0;
+  return aPlane.mWidth <= PlanarYCbCrImage::MAX_DIMENSION &&
+         aPlane.mHeight <= PlanarYCbCrImage::MAX_DIMENSION &&
+         aPlane.mWidth * aPlane.mHeight < MAX_VIDEO_WIDTH * MAX_VIDEO_HEIGHT &&
+         aPlane.mStride > 0;
 }
 
 static bool ValidateBufferAndPicture(const VideoData::YCbCrBuffer& aBuffer,
@@ -108,8 +115,8 @@ static bool ValidateBufferAndPicture(const VideoData::YCbCrBuffer& aBuffer,
 {
   // The following situation should never happen unless there is a bug
   // in the decoder
-  if (aBuffer.mPlanes[1].mWidth != aBuffer.mPlanes[2].mWidth
-      || aBuffer.mPlanes[1].mHeight != aBuffer.mPlanes[2].mHeight) {
+  if (aBuffer.mPlanes[1].mWidth != aBuffer.mPlanes[2].mWidth ||
+      aBuffer.mPlanes[1].mHeight != aBuffer.mPlanes[2].mHeight) {
     NS_ERROR("C planes with different sizes");
     return false;
   }
@@ -120,9 +127,9 @@ static bool ValidateBufferAndPicture(const VideoData::YCbCrBuffer& aBuffer,
     MOZ_ASSERT(false, "Empty picture rect");
     return false;
   }
-  if (!ValidatePlane(aBuffer.mPlanes[0])
-      || !ValidatePlane(aBuffer.mPlanes[1])
-      || !ValidatePlane(aBuffer.mPlanes[2])) {
+  if (!ValidatePlane(aBuffer.mPlanes[0]) ||
+      !ValidatePlane(aBuffer.mPlanes[1]) ||
+      !ValidatePlane(aBuffer.mPlanes[2])) {
     NS_WARNING("Invalid plane size");
     return false;
   }
@@ -131,11 +138,8 @@ static bool ValidateBufferAndPicture(const VideoData::YCbCrBuffer& aBuffer,
   // the frame we've been supplied without indexing out of bounds.
   CheckedUint32 xLimit = aPicture.x + CheckedUint32(aPicture.width);
   CheckedUint32 yLimit = aPicture.y + CheckedUint32(aPicture.height);
-  if (!xLimit.isValid()
-      || xLimit.value() > aBuffer.mPlanes[0].mStride
-      || !yLimit.isValid()
-      || yLimit.value() > aBuffer.mPlanes[0].mHeight)
-  {
+  if (!xLimit.isValid() || xLimit.value() > aBuffer.mPlanes[0].mStride ||
+      !yLimit.isValid() || yLimit.value() > aBuffer.mPlanes[0].mHeight) {
     // The specified picture dimensions can't be contained inside the video
     // frame, we'll stomp memory if we try to copy it. Fail.
     NS_WARNING("Overflowing picture rect");
@@ -143,31 +147,6 @@ static bool ValidateBufferAndPicture(const VideoData::YCbCrBuffer& aBuffer,
   }
   return true;
 }
-
-#ifdef MOZ_WIDGET_GONK
-static bool
-IsYV12Format(const VideoData::YCbCrBuffer::Plane& aYPlane,
-             const VideoData::YCbCrBuffer::Plane& aCbPlane,
-             const VideoData::YCbCrBuffer::Plane& aCrPlane)
-{
-  return
-    aYPlane.mWidth % 2 == 0
-    && aYPlane.mHeight % 2 == 0
-    && aYPlane.mWidth / 2 == aCbPlane.mWidth
-    && aYPlane.mHeight / 2 == aCbPlane.mHeight
-    && aCbPlane.mWidth == aCrPlane.mWidth
-    && aCbPlane.mHeight == aCrPlane.mHeight;
-}
-
-static bool
-IsInEmulator()
-{
-  char propQemu[PROPERTY_VALUE_MAX];
-  property_get("ro.kernel.qemu", propQemu, "");
-  return !strncmp(propQemu, "1", 1);
-}
-
-#endif
 
 VideoData::VideoData(int64_t aOffset,
                      const TimeUnit& aTime,
@@ -180,6 +159,7 @@ VideoData::VideoData(int64_t aOffset,
   , mDisplay(aDisplay)
   , mFrameID(aFrameID)
   , mSentToCompositor(false)
+  , mNextKeyFrameTime(TimeUnit::Invalid())
 {
   MOZ_ASSERT(!mDuration.IsNegative(), "Frame must have non-negative duration.");
   mKeyframe = aKeyframe;
@@ -334,19 +314,10 @@ VideoData::CreateAndCopyData(const VideoInfo& aInfo,
                                     aTimecode,
                                     aInfo.mDisplay,
                                     0));
-#ifdef MOZ_WIDGET_GONK
-  const YCbCrBuffer::Plane &Y = aBuffer.mPlanes[0];
-  const YCbCrBuffer::Plane &Cb = aBuffer.mPlanes[1];
-  const YCbCrBuffer::Plane &Cr = aBuffer.mPlanes[2];
-#endif
 
   // Currently our decoder only knows how to output to ImageFormat::PLANAR_YCBCR
   // format.
-#ifdef MOZ_WIDGET_GONK
-  if (IsYV12Format(Y, Cb, Cr) && !IsInEmulator()) {
-    v->mImage = new layers::GrallocImage();
-  }
-#elif XP_WIN
+#if XP_WIN
   if (aAllocator && aAllocator->GetCompositorBackendType()
                     == layers::LayersBackend::LAYERS_D3D11) {
     RefPtr<layers::D3D11YCbCrImage> d3d11Image = new layers::D3D11YCbCrImage();
@@ -377,20 +348,6 @@ VideoData::CreateAndCopyData(const VideoInfo& aInfo,
     return nullptr;
   }
 
-#ifdef MOZ_WIDGET_GONK
-  if (!videoImage->IsValid() && IsYV12Format(Y, Cb, Cr)) {
-    // Failed to allocate gralloc. Try fallback.
-    v->mImage = aContainer->CreatePlanarYCbCrImage();
-    if (!v->mImage) {
-      return nullptr;
-    }
-    videoImage = v->mImage->AsPlanarYCbCrImage();
-    if (!VideoData::SetVideoDataToImage(videoImage, aInfo, aBuffer, aPicture,
-                                        true /* aCopyData */)) {
-      return nullptr;
-    }
-  }
-#endif
   return v.forget();
 }
 

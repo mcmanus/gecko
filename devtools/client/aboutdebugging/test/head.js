@@ -2,14 +2,7 @@
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /* eslint-env browser */
-/* exported openAboutDebugging, changeAboutDebuggingHash, closeAboutDebugging,
-   installAddon, uninstallAddon, waitForMutation, waitForContentMutation, assertHasTarget,
-   getServiceWorkerList, getTabList, openPanel, waitForInitialAddonList,
-   waitForServiceWorkerRegistered, unregisterServiceWorker,
-   waitForDelayedStartupFinished, setupTestAboutDebuggingWebExtension,
-   waitForServiceWorkerActivation, enableServiceWorkerDebugging,
-   getServiceWorkerContainer, promiseAddonEvent, installAddonWithManager, getAddonByID,
-   tearDownAddon */
+/* eslint no-unused-vars: [2, {"vars": "local"}] */
 /* import-globals-from ../../framework/test/shared-head.js */
 
 "use strict";
@@ -272,6 +265,23 @@ function waitForInitialAddonList(document) {
   return result;
 }
 
+function waitForInstallMessages(target) {
+  return new Promise(resolve => {
+    let observer = new MutationObserver((mutations) => {
+      const messageAdded = mutations.some((mutation) => {
+        return [...mutation.addedNodes].some((node) => {
+          return node.classList.contains("addon-target-messages");
+        });
+      });
+      if (messageAdded) {
+        observer.disconnect();
+        resolve();
+      }
+    });
+    observer.observe(target, { childList: true });
+  });
+}
+
 /**
  * Returns a promise that will resolve after receiving a mutation matching the
  * provided mutation options on the provided target.
@@ -344,14 +354,25 @@ function waitForServiceWorkerRegistered(tab) {
  * @return {Promise} Resolves when the service worker is unregistered.
  */
 function* unregisterServiceWorker(tab, serviceWorkersElement) {
-  let onMutation = waitForMutation(serviceWorkersElement, { childList: true });
+  // Get the initial count of service worker registrations.
+  let registrations = serviceWorkersElement.querySelectorAll(".target-container");
+  let registrationCount = registrations.length;
+
+  // Wait until the registration count is decreased by one.
+  let isRemoved = waitUntil(() => {
+    registrations = serviceWorkersElement.querySelectorAll(".target-container");
+    return registrations.length === registrationCount - 1;
+  }, 100);
+
+  // Unregister the service worker from the content page
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
     // Retrieve the `sw` promise created in the html page
     let { sw } = content.wrappedJSObject;
     let registration = yield sw;
     yield registration.unregister();
   });
-  return onMutation;
+
+  return isRemoved;
 }
 
 /**

@@ -3,7 +3,7 @@ const {HistoryObserver, BookmarksObserver} = PlacesFeed;
 const {GlobalOverrider} = require("test/unit/utils");
 const {actionTypes: at} = require("common/Actions.jsm");
 
-const FAKE_BOOKMARK = {bookmarkGuid: "xi31", bookmarkTitle: "Foo", lastModified: 123214232, url: "foo.com"};
+const FAKE_BOOKMARK = {bookmarkGuid: "xi31", bookmarkTitle: "Foo", dateAdded: 123214232, url: "foo.com"};
 const TYPE_BOOKMARK = 0; // This is fake, for testing
 
 const BLOCKED_EVENT = "newtab-linkBlocked"; // The event dispatched in NewTabUtils when a link is blocked;
@@ -28,6 +28,17 @@ describe("PlacesFeed", () => {
       history: {addObserver: sandbox.spy(), removeObserver: sandbox.spy()},
       bookmarks: {TYPE_BOOKMARK, addObserver: sandbox.spy(), removeObserver: sandbox.spy()}
     });
+    globals.set("Pocket", {savePage: sandbox.spy()});
+    global.Components.classes["@mozilla.org/browser/nav-history-service;1"] = {
+      getService() {
+        return global.PlacesUtils.history;
+      }
+    };
+    global.Components.classes["@mozilla.org/browser/nav-bookmarks-service;1"] = {
+      getService() {
+        return global.PlacesUtils.bookmarks;
+      }
+    };
     sandbox.spy(global.Services.obs, "addObserver");
     sandbox.spy(global.Services.obs, "removeObserver");
     sandbox.spy(global.Components.utils, "reportError");
@@ -77,16 +88,71 @@ describe("PlacesFeed", () => {
       assert.calledWith(global.NewTabUtils.activityStreamLinks.blockURL, {url: "apple.com"});
     });
     it("should bookmark a url on BOOKMARK_URL", () => {
-      feed.onAction({type: at.BOOKMARK_URL, data: "pear.com"});
-      assert.calledWith(global.NewTabUtils.activityStreamLinks.addBookmark, "pear.com");
+      const data = {url: "pear.com", title: "A pear"};
+      const _target = {browser: {ownerGlobal() {}}};
+      feed.onAction({type: at.BOOKMARK_URL, data, _target});
+      assert.calledWith(global.NewTabUtils.activityStreamLinks.addBookmark, data, _target.browser);
     });
     it("should delete a bookmark on DELETE_BOOKMARK_BY_ID", () => {
       feed.onAction({type: at.DELETE_BOOKMARK_BY_ID, data: "g123kd"});
       assert.calledWith(global.NewTabUtils.activityStreamLinks.deleteBookmark, "g123kd");
     });
     it("should delete a history entry on DELETE_HISTORY_URL", () => {
-      feed.onAction({type: at.DELETE_HISTORY_URL, data: "guava.com"});
+      feed.onAction({type: at.DELETE_HISTORY_URL, data: {url: "guava.com", forceBlock: null}});
       assert.calledWith(global.NewTabUtils.activityStreamLinks.deleteHistoryEntry, "guava.com");
+      assert.notCalled(global.NewTabUtils.activityStreamLinks.blockURL);
+    });
+    it("should delete a history entry on DELETE_HISTORY_URL and force a site to be blocked if specified", () => {
+      feed.onAction({type: at.DELETE_HISTORY_URL, data: {url: "guava.com", forceBlock: "g123kd"}});
+      assert.calledWith(global.NewTabUtils.activityStreamLinks.deleteHistoryEntry, "guava.com");
+      assert.calledWith(global.NewTabUtils.activityStreamLinks.blockURL, {url: "guava.com"});
+    });
+    it("should call openNewWindow with the correct url on OPEN_NEW_WINDOW", () => {
+      sinon.stub(feed, "openNewWindow");
+      const openWindowAction = {type: at.OPEN_NEW_WINDOW, data: {url: "foo.com"}};
+      feed.onAction(openWindowAction);
+      assert.calledWith(feed.openNewWindow, openWindowAction);
+    });
+    it("should call openNewWindow with the correct url and privacy args on OPEN_PRIVATE_WINDOW", () => {
+      sinon.stub(feed, "openNewWindow");
+      const openWindowAction = {type: at.OPEN_PRIVATE_WINDOW, data: {url: "foo.com"}};
+      feed.onAction(openWindowAction);
+      assert.calledWith(feed.openNewWindow, openWindowAction, true);
+    });
+    it("should call openNewWindow with the correct url on OPEN_NEW_WINDOW", () => {
+      const openWindowAction = {
+        type: at.OPEN_NEW_WINDOW,
+        data: {url: "foo.com"},
+        _target: {browser: {ownerGlobal: {openLinkIn: () => {}}}}
+      };
+      sinon.stub(openWindowAction._target.browser.ownerGlobal, "openLinkIn");
+      feed.onAction(openWindowAction);
+      assert.calledOnce(openWindowAction._target.browser.ownerGlobal.openLinkIn);
+    });
+    it("should open link on OPEN_LINK", () => {
+      sinon.stub(feed, "openNewWindow");
+      const openLinkAction = {
+        type: at.OPEN_LINK,
+        data: {url: "foo.com", event: {where: "current"}},
+        _target: {browser: {ownerGlobal: {openLinkIn: sinon.spy(), whereToOpenLink: e => e.where}}}
+      };
+      feed.onAction(openLinkAction);
+      assert.calledWith(openLinkAction._target.browser.ownerGlobal.openLinkIn, openLinkAction.data.url, "current");
+    });
+    it("should open link with referrer on OPEN_LINK", () => {
+      globals.set("Services", {io: {newURI: url => `URI:${url}`}});
+      sinon.stub(feed, "openNewWindow");
+      const openLinkAction = {
+        type: at.OPEN_LINK,
+        data: {url: "foo.com", referrer: "foo.com/ref", event: {where: "tab"}},
+        _target: {browser: {ownerGlobal: {openLinkIn: sinon.spy(), whereToOpenLink: e => e.where}}}
+      };
+      feed.onAction(openLinkAction);
+      assert.calledWith(openLinkAction._target.browser.ownerGlobal.openLinkIn, openLinkAction.data.url, "tab", {referrerURI: `URI:${openLinkAction.data.referrer}`});
+    });
+    it("should save to Pocket on SAVE_TO_POCKET", () => {
+      feed.onAction({type: at.SAVE_TO_POCKET, data: {site: {url: "raspberry.com", title: "raspberry"}}, _target: {browser: {}}});
+      assert.calledWith(global.Pocket.savePage, {}, "raspberry.com", "raspberry");
     });
   });
 
@@ -124,6 +190,18 @@ describe("PlacesFeed", () => {
         assert.calledWith(dispatch, {type: at.PLACES_HISTORY_CLEARED});
       });
     });
+    describe("Other empty methods (to keep code coverage happy)", () => {
+      it("should have a various empty functions for xpconnect happiness", () => {
+        observer.onBeginUpdateBatch();
+        observer.onEndUpdateBatch();
+        observer.onVisit();
+        observer.onTitleChanged();
+        observer.onFrecencyChanged();
+        observer.onManyFrecenciesChanged();
+        observer.onPageChanged();
+        observer.onDeleteVisits();
+      });
+    });
   });
 
   describe("BookmarksObserver", () => {
@@ -138,27 +216,17 @@ describe("PlacesFeed", () => {
     });
     describe("#onItemAdded", () => {
       beforeEach(() => {
-        // Make sure getBookmark returns our fake bookmark if it is called with the expected guid
-        sandbox.stub(global.NewTabUtils.activityStreamProvider, "getBookmark")
-          .withArgs(FAKE_BOOKMARK.guid).returns(Promise.resolve(FAKE_BOOKMARK));
       });
       it("should dispatch a PLACES_BOOKMARK_ADDED action with the bookmark data", async () => {
         // Yes, onItemAdded has at least 8 arguments. See function definition for docs.
-        const args = [null, null, null, TYPE_BOOKMARK, null, null, null, FAKE_BOOKMARK.guid];
+        const args = [null, null, null, TYPE_BOOKMARK,
+          {spec: FAKE_BOOKMARK.url}, FAKE_BOOKMARK.bookmarkTitle,
+          FAKE_BOOKMARK.dateAdded,
+          FAKE_BOOKMARK.bookmarkGuid
+        ];
         await observer.onItemAdded(...args);
 
         assert.calledWith(dispatch, {type: at.PLACES_BOOKMARK_ADDED, data: FAKE_BOOKMARK});
-      });
-      it("should catch errors gracefully", async () => {
-        const e = new Error("test error");
-        global.NewTabUtils.activityStreamProvider.getBookmark.restore();
-        sandbox.stub(global.NewTabUtils.activityStreamProvider, "getBookmark")
-          .returns(Promise.reject(e));
-
-        const args = [null, null, null, TYPE_BOOKMARK, null, null, null, FAKE_BOOKMARK.guid];
-        await observer.onItemAdded(...args);
-
-        assert.calledWith(global.Components.utils.reportError, e);
       });
       it("should ignore events that are not of TYPE_BOOKMARK", async () => {
         const args = [null, null, null, "nottypebookmark"];
@@ -181,13 +249,17 @@ describe("PlacesFeed", () => {
         sandbox.stub(global.NewTabUtils.activityStreamProvider, "getBookmark")
           .withArgs(FAKE_BOOKMARK.guid).returns(Promise.resolve(FAKE_BOOKMARK));
       });
-      it("should dispatch a PLACES_BOOKMARK_CHANGED action with the bookmark data", async () => {
+      it("has an empty function to keep xpconnect happy", async () => {
+        await observer.onItemChanged();
+      });
+      // Disabled in Issue 3203, see observer.onItemChanged for more information.
+      it.skip("should dispatch a PLACES_BOOKMARK_CHANGED action with the bookmark data", async () => {
         const args = [null, "title", null, null, null, TYPE_BOOKMARK, null, FAKE_BOOKMARK.guid];
         await observer.onItemChanged(...args);
 
         assert.calledWith(dispatch, {type: at.PLACES_BOOKMARK_CHANGED, data: FAKE_BOOKMARK});
       });
-      it("should catch errors gracefully", async () => {
+      it.skip("should catch errors gracefully", async () => {
         const e = new Error("test error");
         global.NewTabUtils.activityStreamProvider.getBookmark.restore();
         sandbox.stub(global.NewTabUtils.activityStreamProvider, "getBookmark")
@@ -198,13 +270,21 @@ describe("PlacesFeed", () => {
 
         assert.calledWith(global.Components.utils.reportError, e);
       });
-      it("should ignore events that are not of TYPE_BOOKMARK", async () => {
+      it.skip("should ignore events that are not of TYPE_BOOKMARK", async () => {
         await observer.onItemChanged(null, "title", null, null, null, "nottypebookmark");
         assert.notCalled(dispatch);
       });
-      it("should ignore events that are not changes to uri/title", async () => {
+      it.skip("should ignore events that are not changes to uri/title", async () => {
         await observer.onItemChanged(null, "tags", null, null, null, TYPE_BOOKMARK);
         assert.notCalled(dispatch);
+      });
+    });
+    describe("Other empty methods (to keep code coverage happy)", () => {
+      it("should have a various empty functions for xpconnect happiness", () => {
+        observer.onBeginUpdateBatch();
+        observer.onEndUpdateBatch();
+        observer.onItemVisited();
+        observer.onItemMoved();
       });
     });
   });

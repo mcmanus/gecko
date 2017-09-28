@@ -33,13 +33,14 @@ QuicSocketProvider::~QuicSocketProvider()
 
 NS_IMETHODIMP
 QuicSocketProvider::NewSocket(int32_t family,
-                             const char *host,
-                             int32_t port,
-                             nsIProxyInfo *proxy,
-                             const OriginAttributes &aOriginAttributes,
-                             uint32_t flags,
-                             PRFileDesc **result,
-                             nsISupports **securityInfo)
+                              const char *host,
+                              int32_t port,
+                              nsIProxyInfo *proxy,
+                              const OriginAttributes &aOriginAttributes,
+                              uint32_t flags,
+                              uint32_t tlsflags,
+                              PRFileDesc **result,
+                              nsISupports **securityInfo)
 {
   // todo securityinfo - nsISSLSocketControl
   LOG(("QuicSocketProvider::NewSocket %p\n", this));
@@ -55,13 +56,14 @@ QuicSocketProvider::NewSocket(int32_t family,
 
 NS_IMETHODIMP
 QuicSocketProvider::AddToSocket(int32_t family,
-                               const char *host,
-                               int32_t port,
-                               nsIProxyInfo *proxy,
-                               const OriginAttributes &aOriginAttributes,
-                               uint32_t flags,
-                               PRFileDesc *sock,
-                               nsISupports **socksInfo)
+                                const char *host,
+                                int32_t port,
+                                nsIProxyInfo *proxy,
+                                const OriginAttributes &aOriginAttributes,
+                                uint32_t flags,
+                                uint32_t tlsflags,
+                                PRFileDesc *sock,
+                                nsISupports **socksInfo)
 {
   return NS_ERROR_SOCKET_CREATE_FAILED;
 }

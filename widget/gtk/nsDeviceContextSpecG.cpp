@@ -244,10 +244,10 @@ gboolean nsDeviceContextSpecGTK::PrinterEnumerator(GtkPrinter *aPrinter,
   nsDeviceContextSpecGTK *spec = (nsDeviceContextSpecGTK*)aData;
 
   // Find the printer whose name matches the one inside the settings.
-  nsXPIDLString printerName;
+  nsString printerName;
   nsresult rv =
     spec->mPrintSettings->GetPrinterName(getter_Copies(printerName));
-  if (NS_SUCCEEDED(rv) && printerName) {
+  if (NS_SUCCEEDED(rv) && !printerName.IsVoid()) {
     NS_ConvertUTF16toUTF8 requestedName(printerName);
     const char* currentName = gtk_printer_get_name(aPrinter);
     if (requestedName.Equals(currentName)) {
@@ -258,7 +258,10 @@ gboolean nsDeviceContextSpecGTK::PrinterEnumerator(GtkPrinter *aPrinter,
       // misunderstanding what the capabilities of the printer are due to a
       // GTK bug (https://bugzilla.gnome.org/show_bug.cgi?id=753041). We
       // sidestep this by deferring the print to the next tick.
-      NS_DispatchToCurrentThread(NewRunnableMethod(spec, &nsDeviceContextSpecGTK::StartPrintJob));
+      NS_DispatchToCurrentThread(
+        NewRunnableMethod("nsDeviceContextSpecGTK::StartPrintJob",
+                          spec,
+                          &nsDeviceContextSpecGTK::StartPrintJob));
       return TRUE;
     }
   }
@@ -316,11 +319,14 @@ NS_IMETHODIMP nsDeviceContextSpecGTK::EndDocument()
     } else {
       // We don't have a printer. We have to enumerate the printers and find
       // one with a matching name.
-      NS_DispatchToCurrentThread(NewRunnableMethod(this, &nsDeviceContextSpecGTK::EnumeratePrinters));
+      NS_DispatchToCurrentThread(
+        NewRunnableMethod("nsDeviceContextSpecGTK::EnumeratePrinters",
+                          this,
+                          &nsDeviceContextSpecGTK::EnumeratePrinters));
     }
   } else {
     // Handle print-to-file ourselves for the benefit of embedders
-    nsXPIDLString targetPath;
+    nsString targetPath;
     nsCOMPtr<nsIFile> destFile;
     mPrintSettings->GetToFileName(getter_Copies(targetPath));
 

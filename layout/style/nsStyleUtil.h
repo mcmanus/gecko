@@ -10,11 +10,11 @@
 #include "nsString.h"
 #include "nsTArrayForwardDeclare.h"
 #include "gfxFontFamilyList.h"
+#include "nsStringFwd.h"
 #include "nsStyleStruct.h"
 #include "nsCRT.h"
 
 class nsCSSValue;
-class nsStringComparator;
 class nsStyleCoord;
 class nsIContent;
 class nsIPrincipal;
@@ -31,8 +31,8 @@ public:
                                 const nsAString& aSelectorValue,
                                 const nsStringComparator& aComparator);
 
- static bool ValueIncludes(const nsSubstring& aValueList,
-                           const nsSubstring& aValue,
+ static bool ValueIncludes(const nsAString& aValueList,
+                           const nsAString& aValue,
                            const nsStringComparator& aComparator);
 
   // Append a quoted (with 'quoteChar') and escaped version of aString
@@ -192,7 +192,7 @@ public:
                                    nsIPrincipal* aPrincipal,
                                    nsIURI* aSourceURI,
                                    uint32_t aLineNumber,
-                                   const nsSubstring& aStyleText,
+                                   const nsAString& aStyleText,
                                    nsresult* aRv);
 
   template<size_t N>

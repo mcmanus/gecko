@@ -11,7 +11,7 @@
 #include "nsIServiceManager.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "nsMimeTypes.h"
 #include "nsMemory.h"
 #include "nsIStringStream.h"
@@ -39,7 +39,7 @@ nsIconChannel::nsIconChannel()
 nsIconChannel::~nsIconChannel()
 {
   if (mLoadInfo) {
-    NS_ReleaseOnMainThread(
+    NS_ReleaseOnMainThreadSystemGroup(
       "nsIconChannel::mLoadInfo", mLoadInfo.forget());
   }
 }
@@ -280,7 +280,7 @@ nsIconChannel::MakeInputStream(nsIInputStream** _retval,
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
-  nsXPIDLCString contentType;
+  nsCString contentType;
   nsAutoCString fileExt;
   nsCOMPtr<nsIFile> fileloc; // file we want an icon for
   uint32_t desiredImageSize;

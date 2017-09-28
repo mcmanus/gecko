@@ -1,7 +1,9 @@
-
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+// This file is loaded into the browser window scope.
+/* eslint-env mozilla/browser-window */
 
 /**
  * Tab previews utility, produces thumbnails
@@ -108,9 +110,9 @@ var tabPreviewPanelHelper = {
   },
   _generateHandler(host) {
     var self = this;
-    return function(event) {
+    return function listener(event) {
       if (event.target == host.panel) {
-        host.panel.removeEventListener(event.type, arguments.callee);
+        host.panel.removeEventListener(event.type, listener);
         self["_" + event.type](host);
       }
     };

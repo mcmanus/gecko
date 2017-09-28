@@ -70,11 +70,16 @@ void InputObserver::OnDeviceChange() {
 
 class DeliverFrameRunnable : public ::mozilla::Runnable {
 public:
-  DeliverFrameRunnable(CamerasParent *aParent, CaptureEngine aEngine,
-      uint32_t aStreamId, const webrtc::VideoFrame& aFrame,
-      const VideoFrameProperties& aProperties)
-      : mParent(aParent), mCapEngine(aEngine), mStreamId(aStreamId),
-      mProperties(aProperties)
+  DeliverFrameRunnable(CamerasParent* aParent,
+                       CaptureEngine aEngine,
+                       uint32_t aStreamId,
+                       const webrtc::VideoFrame& aFrame,
+                       const VideoFrameProperties& aProperties)
+    : Runnable("camera::DeliverFrameRunnable")
+    , mParent(aParent)
+    , mCapEngine(aEngine)
+    , mStreamId(aStreamId)
+    , mProperties(aProperties)
   {
     // No ShmemBuffer (of the right size) was available, so make an
     // extra buffer here.  We have no idea when we are going to run and
@@ -87,11 +92,17 @@ public:
                                            aProperties.bufferSize(), aFrame);
   }
 
-  DeliverFrameRunnable(CamerasParent* aParent, CaptureEngine aEngine,
-      uint32_t aStreamId, ShmemBuffer aBuffer, VideoFrameProperties& aProperties)
-      : mParent(aParent), mCapEngine(aEngine), mStreamId(aStreamId),
-      mBuffer(Move(aBuffer)), mProperties(aProperties)
-  {};
+  DeliverFrameRunnable(CamerasParent* aParent,
+                       CaptureEngine aEngine,
+                       uint32_t aStreamId,
+                       ShmemBuffer aBuffer,
+                       VideoFrameProperties& aProperties)
+    : Runnable("camera::DeliverFrameRunnable")
+    , mParent(aParent)
+    , mCapEngine(aEngine)
+    , mStreamId(aStreamId)
+    , mBuffer(Move(aBuffer))
+    , mProperties(aProperties){};
 
   NS_IMETHOD Run() override {
     if (mParent->IsShuttingDown()) {
@@ -684,8 +695,9 @@ CamerasParent::RecvAllocateCaptureDevice(const CaptureEngine& aCapEngine,
       bool allowed = HasCameraPermission(aPrincipalInfo);
       if (!allowed) {
         // Developer preference for turning off permission check.
-        if (Preferences::GetBool("media.navigator.permission.disabled", false)
-            || Preferences::GetBool("media.navigator.permission.fake")) {
+        if (Preferences::GetBool("media.navigator.permission.disabled",
+                                 false) ||
+            Preferences::GetBool("media.navigator.permission.fake")) {
           allowed = true;
           LOG(("No permission but checks are disabled or fake sources active"));
         } else {
@@ -796,7 +808,7 @@ CamerasParent::RecvStartCapture(const CaptureEngine& aCapEngine,
           new CallbackHelper(static_cast<CaptureEngine>(aCapEngine), capnum, self));
 
         engine = self->mEngines[aCapEngine];
-        engine->WithEntry(capnum, [capnum, &engine, &error, &ipcCaps, &cbh](VideoEngine::CaptureEntry& cap) {
+        engine->WithEntry(capnum, [&engine, &error, &ipcCaps, &cbh](VideoEngine::CaptureEntry& cap) {
           error = 0;
           webrtc::VideoCaptureCapability capability;
           capability.width = ipcCaps.width();
@@ -841,7 +853,7 @@ CamerasParent::StopCapture(const CaptureEngine& aCapEngine,
                            const int& capnum)
 {
   if (auto engine = EnsureInitialized(aCapEngine)) {
-    engine->WithEntry(capnum,[capnum](VideoEngine::CaptureEntry& cap){
+    engine->WithEntry(capnum,[](VideoEngine::CaptureEntry& cap){
       if (cap.VideoCapture()) {
         cap.VideoCapture()->StopCapture();
         cap.VideoCapture()->DeRegisterCaptureDataCallback();
@@ -849,10 +861,10 @@ CamerasParent::StopCapture(const CaptureEngine& aCapEngine,
     });
     // we're removing elements, iterate backwards
     for (size_t i = mCallbacks.Length(); i > 0; i--) {
-      if (mCallbacks[i-1]->mCapEngine == aCapEngine
-          && mCallbacks[i-1]->mStreamId == (uint32_t) capnum) {
-        delete mCallbacks[i-1];
-        mCallbacks.RemoveElementAt(i-1);
+      if (mCallbacks[i - 1]->mCapEngine == aCapEngine &&
+          mCallbacks[i - 1]->mStreamId == (uint32_t)capnum) {
+        delete mCallbacks[i - 1];
+        mCallbacks.RemoveElementAt(i - 1);
         break;
       }
     }

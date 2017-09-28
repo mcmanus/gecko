@@ -7,6 +7,7 @@
 #ifndef mozilla_layers_AsyncPanZoomAnimation_h_
 #define mozilla_layers_AsyncPanZoomAnimation_h_
 
+#include "APZUtils.h"
 #include "base/message_loop.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/TimeStamp.h"
@@ -18,6 +19,7 @@ namespace mozilla {
 namespace layers {
 
 class WheelScrollAnimation;
+class KeyboardScrollAnimation;
 class SmoothScrollAnimation;
 
 class AsyncPanZoomAnimation {
@@ -50,6 +52,9 @@ public:
     return Move(mDeferredTasks);
   }
 
+  virtual KeyboardScrollAnimation* AsKeyboardScrollAnimation() {
+    return nullptr;
+  }
   virtual WheelScrollAnimation* AsWheelScrollAnimation() {
     return nullptr;
   }
@@ -60,6 +65,8 @@ public:
   virtual bool WantsRepaints() {
     return true;
   }
+
+  virtual void Cancel(CancelAnimationFlags aFlags) {}
 
 protected:
   // Protected destructor, to discourage deletion outside of Release():
