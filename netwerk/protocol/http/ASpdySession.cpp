@@ -20,6 +20,7 @@
 #include "Http2Session.h"
 #include "MozQuic.h"
 #include "mozilla/Telemetry.h"
+#include "QuicSession.h"
 
 namespace mozilla {
 namespace net {
@@ -54,9 +55,10 @@ ASpdySession::NewSpdySession(uint32_t version,
   if (version == HTTP_VERSION_2) {
     return new Http2Session(aTransport, version, attemptingEarlyData);
   }
+
   MOZ_ASSERT(version == QUIC_EXPERIMENT_0);
-  
-  return new Http2Session(aTransport, version, attemptingEarlyData);
+//  return new Http2Session(aTransport, version, attemptingEarlyData);
+  return new QuicSession(aTransport, version, attemptingEarlyData);
 }
 
 SpdyInformation::SpdyInformation()

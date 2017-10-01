@@ -761,7 +761,9 @@ nsHttpConnectionMgr::FindCoalescableConnection(nsConnectionEntry *ent,
     BuildOriginFrameHashKey(newKey, ci, ci->GetOrigin(), ci->OriginPort());
     nsHttpConnection *conn =
         FindCoalescableConnectionByHashKey(ent, newKey, justKidding);
-    if (conn) {
+    if (conn &&
+        conn->ConnectionInfo()->RoutedPort() == ci->RoutedPort() &&
+        conn->ConnectionInfo()->GetRoutedHost().Equals(ci->GetRoutedHost())) {
         LOG(("FindCoalescableConnection(%s) match conn %p on frame key %s\n",
              ci->HashKey().get(), conn, newKey.get()));
         return conn;
@@ -772,7 +774,9 @@ nsHttpConnectionMgr::FindCoalescableConnection(nsConnectionEntry *ent,
     uint32_t keyLen = ent->mCoalescingKeys.Length();
     for (uint32_t i = 0; i < keyLen; ++i) {
         conn = FindCoalescableConnectionByHashKey(ent, ent->mCoalescingKeys[i], justKidding);
-        if (conn) {
+        if (conn &&
+            conn->ConnectionInfo()->RoutedPort() == ci->RoutedPort() &&
+            conn->ConnectionInfo()->GetRoutedHost().Equals(ci->GetRoutedHost())) {
             LOG(("FindCoalescableConnection(%s) match conn %p on dns key %s\n",
                  ci->HashKey().get(), conn, ent->mCoalescingKeys[i].get()));
             return conn;

@@ -36,6 +36,7 @@
 #include "nsICancelable.h"
 #include "TCPFastOpenLayer.h"
 #include <algorithm>
+#include "QuicSocket.h"
 
 #include "nsPrintfCString.h"
 #include "xpcpublic.h"
@@ -2956,6 +2957,16 @@ nsSocketTransport::OnLookupComplete(nsICancelable *request,
 NS_IMETHODIMP
 nsSocketTransport::GetInterface(const nsIID &iid, void **result)
 {
+    if (mQUIC && iid.Equals(NS_QUICSOCKET_IID)) {
+        {
+            PRFileDescAutoLock fd(this, false);
+            if (!fd.IsInitialized())
+                return NS_ERROR_NOT_CONNECTED;
+            *result = QuicSocket::GetFromFD(fd);
+        }
+        return NS_OK;
+    }
+
     if (iid.Equals(NS_GET_IID(nsIDNSRecord))) {
         return mDNSRecord ?
             mDNSRecord->QueryInterface(iid, result) : NS_ERROR_NO_INTERFACE;

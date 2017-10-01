@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Assertions.h"
+#include "MozQuic.h"
 #include "QuicSocket.h"
 #include "private/pprio.h"
 #include <sys/socket.h>
@@ -102,6 +103,24 @@ QuicSocket::QuicSocket(const char *host, int32_t port, bool v4)
                         true, true, 0, UINT32_MAX);
 }
 
+QuicSocket *
+QuicSocket::GetFromFD(PRFileDesc *fd)
+{
+  if (!quicInit) {
+    return nullptr;
+  }
+
+  if (fd->identity == quicIdentity) {
+    return reinterpret_cast<QuicSocket *>(fd->secret);
+  }
+
+  if (fd->lower) {
+    return GetFromFD(fd->lower);
+  }
+
+  return nullptr;
+}
+  
 QuicSocket::~QuicSocket()
 {
   if (mSession) {
@@ -118,6 +137,20 @@ QuicSocket::~QuicSocket()
     PR_Close(mPSMHelper);
     mPSMHelper = nullptr;
   }
+}
+
+mozquic_stream_t *
+QuicSocket::NewStream()
+{
+  if (!mSession) {
+    return nullptr;
+  }
+  mozquic_stream_t *stream;
+  int code = mozquic_start_new_stream(&stream, mSession, nullptr, 0, 0);
+  if (code != MOZQUIC_OK) {
+    return nullptr;
+  }
+  return stream;
 }
 
 NS_IMETHODIMP

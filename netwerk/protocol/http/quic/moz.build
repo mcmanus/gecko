@@ -9,13 +9,18 @@ with Files('**'):
 
 # todo make part of unified - but its faster right now as singletons
 SOURCES += [
+    'QuicSession.cpp',
     'QuicSocket.cpp',
     'QuicSocketProvider.cpp',
 ]
 
 LOCAL_INCLUDES += [
+    '..',
+    '../../../base',
     'mozquic',
 ]
+
+include('/ipc/chromium/chromium-config.mozbuild')
 
 FINAL_LIBRARY = 'xul'
 

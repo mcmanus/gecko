@@ -6,7 +6,6 @@
 #pragma once
 
 #include "nspr.h"
-#include "MozQuic.h"
 #include "nsISSLSocketControl.h"
 #include "nsIPipe.h"
 #include "nsCOMPtr.h"
@@ -17,6 +16,11 @@
 #include "sslexp.h"
 
 class nsIInterfaceRequestor;
+typedef void mozquic_connection_t;
+typedef void mozquic_stream_t;
+
+#define NS_QUICSOCKET_IID                                               \
+  { 0xdebeeac0, 0x45c3, 0x4379, { 0xb2, 0x3d, 0x93, 0x27, 0x3a, 0xfa, 0x1d, 0xb4 } }
 
 namespace mozilla { namespace net {
 
@@ -26,10 +30,15 @@ class QuicSocket final :
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSISSLSOCKETCONTROL
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_QUICSOCKET_IID)
 
   QuicSocket(const char *host, int32_t port, bool v4);
 
+  static QuicSocket *GetFromFD(PRFileDesc *fd);
+          
   PRFileDesc *GetFD() { return mFD; }
+  mozquic_stream_t *NewStream();
+
 private:
   ~QuicSocket();
 

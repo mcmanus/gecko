@@ -304,6 +304,7 @@ LOCAL_INCLUDES += [
     '/docshell/base',
     '/dom/base',
     '/netwerk/protocol/http',
+    '/netwerk/protocol/http/quic',
     '/netwerk/socket',
     '/security/pkix/include'
 ]

@@ -127,6 +127,7 @@ LOCAL_INCLUDES += [
     '/dom/base',
     '/netwerk/base',
     '/netwerk/cookie',
+    '/netwerk/protocol/http/quic',
     '/netwerk/protocol/http/quic/mozquic',
     '/netwerk/socket',
     '/security/pkix/include',
