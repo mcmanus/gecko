@@ -2803,14 +2803,11 @@ nsIFrame::BuildDisplayListForStackingContext(nsDisplayListBuilder* aBuilder,
     buildingDisplayList.SetReferenceFrameAndCurrentOffset(outerReferenceFrame,
       GetOffsetToCrossDoc(outerReferenceFrame));
 
-    if (!aBuilder->IsForGenerateGlyphMask() &&
-        !aBuilder->IsForPaintingSelectionBG()) {
-      nsDisplayTransform *transformItem =
-        new (aBuilder) nsDisplayTransform(aBuilder, this,
-                                          &resultList, dirtyRect, 0,
-                                          allowAsyncAnimation);
-      resultList.AppendNewToTop(transformItem);
-    }
+    nsDisplayTransform *transformItem =
+      new (aBuilder) nsDisplayTransform(aBuilder, this,
+                                        &resultList, dirtyRect, 0,
+                                        allowAsyncAnimation);
+    resultList.AppendNewToTop(transformItem);
 
     if (hasPerspective) {
       if (clipCapturedBy == ContainerItemType::ePerspective) {
@@ -6684,6 +6681,13 @@ nsIFrame::SchedulePaint(PaintType aType)
 {
   nsIFrame* displayRoot = nsLayoutUtils::GetDisplayRootFrame(this);
   InvalidateRenderingObservers(displayRoot, this);
+  SchedulePaintInternal(displayRoot, this, aType);
+}
+
+void
+nsIFrame::SchedulePaintWithoutInvalidatingObservers(PaintType aType)
+{
+  nsIFrame* displayRoot = nsLayoutUtils::GetDisplayRootFrame(this);
   SchedulePaintInternal(displayRoot, this, aType);
 }
 

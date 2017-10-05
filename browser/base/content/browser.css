@@ -10,6 +10,7 @@
   --lwt-additional-images: none;
   --lwt-background-alignment: right top;
   --lwt-background-tiling: no-repeat;
+  --tab-min-width: 50px;
 }
 
 :root:-moz-lwtheme {
@@ -90,12 +91,12 @@ panel[hidden] panelview {
   transition: transform var(--panelui-subview-transition-duration);
 }
 
-panelview:not([mainview]):not([current]) {
+panelview:not([mainview]):not([current]):not([in-transition]) {
   transition: visibility 0s linear var(--panelui-subview-transition-duration);
   visibility: collapse;
 }
 
-photonpanelmultiview panelview:not([current]) {
+photonpanelmultiview panelview:not([current]):not([in-transition]) {
   transition: none;
   visibility: collapse;
 }
@@ -114,9 +115,9 @@ tabbrowser {
 }
 
 #tabbrowser-tabs:not([overflow="true"]) ~ #alltabs-button,
-#tabbrowser-tabs:not([overflow="true"]) + #new-tab-button,
+#tabbrowser-tabs[hasadjacentnewtabbutton]:not([overflow="true"]) ~ #new-tab-button,
 #tabbrowser-tabs[overflow="true"] > .tabbrowser-arrowscrollbox > .tabs-newtab-button,
-#TabsToolbar[currentset]:not([currentset*="tabbrowser-tabs,new-tab-button"]) > #tabbrowser-tabs > .tabbrowser-arrowscrollbox > .tabs-newtab-button,
+#tabbrowser-tabs:not([hasadjacentnewtabbutton]) > .tabbrowser-arrowscrollbox > .tabs-newtab-button,
 #TabsToolbar[customizing="true"] > #tabbrowser-tabs > .tabbrowser-arrowscrollbox > .tabs-newtab-button {
   visibility: collapse;
 }
@@ -132,7 +133,7 @@ tabbrowser {
 .tabbrowser-tab:not([pinned]) {
   -moz-box-flex: 100;
   max-width: 225px;
-  min-width: 100px;
+  min-width: var(--tab-min-width);
   width: 0;
   transition: min-width 100ms ease-out,
               max-width 100ms ease-out;
@@ -240,6 +241,12 @@ window:not([chromehidden~="toolbar"]) #nav-bar[nonemptyoverflow] > .overflow-but
 
 
 %ifdef CAN_DRAW_IN_TITLEBAR
+%ifdef MENUBAR_CAN_AUTOHIDE
+#toolbar-menubar:not([autohide=true]) ~ #TabsToolbar > .titlebar-placeholder,
+%endif
+%ifndef MOZ_WIDGET_COCOA
+#main-window:not([sizemode=normal]) .titlebar-placeholder[type="pre-tabs"],
+%endif
 #main-window:not([chromemargin]) > #titlebar,
 #main-window[inFullscreen] > #titlebar,
 #main-window[inFullscreen] .titlebar-placeholder,
@@ -307,12 +314,6 @@ toolbarpaletteitem {
 #main-window[tabletmode] #titlebar-min,
 #main-window[tabletmode] #titlebar-max {
   display: none !important;
-}
-
-#main-window[tabsintitlebar] #TabsToolbar,
-#main-window[tabsintitlebar] #toolbar-menubar,
-#main-window[tabsintitlebar] #navigator-toolbox > toolbar:-moz-lwtheme {
-  -moz-window-dragging: drag;
 }
 %endif
 
@@ -1097,29 +1098,6 @@ html|*#gcli-output-frame,
   -moz-box-pack: center;
 }
 
-/* Responsive Mode */
-
-.browserContainer[responsivemode] {
-  overflow: auto;
-}
-
-.devtools-responsiveui-toolbar:-moz-locale-dir(rtl) {
-  -moz-box-pack: end;
-}
-
-.browserStack[responsivemode] {
-  transition-duration: 200ms;
-  transition-timing-function: linear;
-}
-
-.browserStack[responsivemode] {
-  transition-property: min-width, max-width, min-height, max-height;
-}
-
-.browserStack[responsivemode][notransition] {
-  transition: none;
-}
-
 /* Translation */
 notification[value="translation"] {
   -moz-binding: url("chrome://browser/content/translation-infobar.xml#translationbar");
@@ -1272,7 +1250,7 @@ toolbarpaletteitem[place="palette"] > #downloads-button[indicator] > #downloads-
 }
 
 #customization-panelHolder > #widget-overflow-fixed-list {
-  flex: 0 1 auto; /* Size to content, but allow ourselves to shrink */
+  flex: 1 1 auto; /* Grow within the available space, and allow ourselves to shrink */
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -1284,7 +1262,7 @@ toolbarpaletteitem[place="palette"] > #downloads-button[indicator] > #downloads-
 #customization-panelHolder {
   flex-direction: column;
   display: flex;
-  min-height: 0;
+  min-height: calc(174px + 8em);
 }
 
 #customization-panelWrapper {

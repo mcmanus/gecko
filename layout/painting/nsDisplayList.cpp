@@ -88,7 +88,6 @@
 #include "ClientLayerManager.h"
 #include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/WebRenderBridgeChild.h"
-#include "mozilla/layers/WebRenderDisplayItemLayer.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/layers/WebRenderMessages.h"
 #include "mozilla/layers/WebRenderScrollData.h"
@@ -2152,8 +2151,7 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
   nsIPresShell* presShell = presContext->PresShell();
   nsIDocument* document = presShell->GetDocument();
 
-  if (gfxPrefs::WebRenderLayersFree() &&
-      layerManager->GetBackendType() == layers::LayersBackend::LAYERS_WR) {
+  if (layerManager->GetBackendType() == layers::LayersBackend::LAYERS_WR) {
     if (doBeginTransaction) {
       if (aCtx) {
         if (!layerManager->BeginTransactionWithTarget(aCtx)) {
@@ -2187,7 +2185,7 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
       TriggerPendingAnimations(document, layerManager->GetAnimationReadyTime());
     }
 
-    if (wrManager->ShouldNotifyInvalidation()) {
+    if (presContext->RefreshDriver()->HasScheduleFlush()) {
       presContext->NotifyInvalidation(layerManager->GetLastTransactionId(), nsIntRect());
     }
 
@@ -2937,11 +2935,9 @@ nsDisplaySolidColor::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aB
                                              mozilla::layers::WebRenderLayerManager* aManager,
                                              nsDisplayListBuilder* aDisplayListBuilder)
 {
-  if (aManager->IsLayersFreeTransaction()) {
-    ContainerLayerParameters parameter;
-    if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
-      return false;
-    }
+  ContainerLayerParameters parameter;
+  if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
+    return false;
   }
 
   LayoutDeviceRect bounds = LayoutDeviceRect::FromAppUnits(
@@ -3259,7 +3255,8 @@ nsDisplayBackgroundImage::AppendBackgroundItemsToTop(nsDisplayListBuilder* aBuil
   // to create an item for hit testing.
   if ((drawBackgroundColor && color != NS_RGBA(0,0,0,0)) ||
       aBuilder->IsForEventDelivery()) {
-    DisplayListClipState::AutoSaveRestore clipState(aBuilder);
+    Maybe<DisplayListClipState::AutoSaveRestore> clipState;
+    nsRect bgColorRect = bgRect;
     if (bg && !aBuilder->IsForEventDelivery()) {
       // Disable the will-paint-border optimization for background
       // colors with no border-radius. Enabling it for background colors
@@ -3270,18 +3267,30 @@ nsDisplayBackgroundImage::AppendBackgroundItemsToTop(nsDisplayListBuilder* aBuil
       // artifacts along the rounded corners.
       bool useWillPaintBorderOptimization = willPaintBorder &&
           nsLayoutUtils::HasNonZeroCorner(borderStyle->mBorderRadius);
-      SetBackgroundClipRegion(clipState, aFrame, toRef,
-                              bg->BottomLayer(), bgRect,
-                              useWillPaintBorderOptimization);
+
+      nsCSSRendering::ImageLayerClipState clip;
+      nsCSSRendering::GetImageLayerClip(bg->BottomLayer(), aFrame, *aFrame->StyleBorder(),
+                                        bgRect, bgRect, useWillPaintBorderOptimization,
+                                        aFrame->PresContext()->AppUnitsPerDevPixel(),
+                                        &clip);
+
+      bgColorRect = bgColorRect.Intersect(clip.mBGClipArea);
+      if (clip.mHasAdditionalBGClipArea) {
+        bgColorRect = bgColorRect.Intersect(clip.mAdditionalBGClipArea);
+      }
+      if (clip.mHasRoundedCorners) {
+        clipState.emplace(aBuilder);
+        clipState->ClipContentDescendants(clip.mBGClipArea, clip.mRadii);
+      }
     }
     if (aSecondaryReferenceFrame) {
       bgItemList.AppendNewToTop(
-          new (aBuilder) nsDisplayTableBackgroundColor(aBuilder, aSecondaryReferenceFrame, bgRect, bg,
+          new (aBuilder) nsDisplayTableBackgroundColor(aBuilder, aSecondaryReferenceFrame, bgColorRect, bg,
                                                        drawBackgroundColor ? color : NS_RGBA(0, 0, 0, 0),
                                                        aFrame));
     } else {
       bgItemList.AppendNewToTop(
-          new (aBuilder) nsDisplayBackgroundColor(aBuilder, aFrame, bgRect, bg,
+          new (aBuilder) nsDisplayBackgroundColor(aBuilder, aFrame, bgColorRect, bg,
                                                   drawBackgroundColor ? color : NS_RGBA(0, 0, 0, 0)));
     }
   }
@@ -3631,11 +3640,9 @@ nsDisplayBackgroundImage::CreateWebRenderCommands(mozilla::wr::DisplayListBuilde
                                                   WebRenderLayerManager* aManager,
                                                   nsDisplayListBuilder* aDisplayListBuilder)
 {
-  if (aManager->IsLayersFreeTransaction()) {
-    ContainerLayerParameters parameter;
-    if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
-      return false;
-    }
+  ContainerLayerParameters parameter;
+  if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
+    return false;
   }
 
   if (aDisplayListBuilder) {
@@ -3649,7 +3656,7 @@ nsDisplayBackgroundImage::CreateWebRenderCommands(mozilla::wr::DisplayListBuilde
                                                   CompositionOp::OP_OVER);
   params.bgClipRect = &mBounds;
   DrawResult result =
-    nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayer(params, aBuilder, aResources, aSc, nullptr, aManager, this);
+    nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayer(params, aBuilder, aResources, aSc, aManager, this);
   nsDisplayBackgroundGeometry::UpdateDrawResult(this, result);
 
   return true;
@@ -4255,15 +4262,13 @@ nsDisplayBackgroundColor::CreateWebRenderCommands(mozilla::wr::DisplayListBuilde
                                                   mozilla::layers::WebRenderLayerManager* aManager,
                                                   nsDisplayListBuilder* aDisplayListBuilder)
 {
-  if (aManager->IsLayersFreeTransaction()) {
-    ContainerLayerParameters parameter;
-    if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
-      return false;
-    }
-  }
-
   if (mColor == Color()) {
     return true;
+  }
+
+  StyleGeometryBox clip = mBackgroundStyle->mImage.mLayers[0].mClip;
+  if (clip == StyleGeometryBox::Text) {
+    return false;
   }
 
   LayoutDeviceRect bounds = LayoutDeviceRect::FromAppUnits(
@@ -4476,11 +4481,9 @@ nsDisplayOutline::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuil
                                           mozilla::layers::WebRenderLayerManager* aManager,
                                           nsDisplayListBuilder* aDisplayListBuilder)
 {
-  if (aManager->IsLayersFreeTransaction()) {
-    ContainerLayerParameters parameter;
-    if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
-      return false;
-    }
+  ContainerLayerParameters parameter;
+  if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
+    return false;
   }
 
   mBorderRenderer->CreateWebRenderCommands(aBuilder, aResources, aSc);
@@ -4759,11 +4762,9 @@ nsDisplayCaret::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilde
                                         mozilla::layers::WebRenderLayerManager* aManager,
                                         nsDisplayListBuilder* aDisplayListBuilder)
 {
-  if (aManager->IsLayersFreeTransaction()) {
-    ContainerLayerParameters parameter;
-    if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
-      return false;
-    }
+  ContainerLayerParameters parameter;
+  if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
+    return false;
   }
 
   using namespace mozilla::layers;
@@ -5026,11 +5027,9 @@ nsDisplayBorder::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuild
                                          mozilla::layers::WebRenderLayerManager* aManager,
                                          nsDisplayListBuilder* aDisplayListBuilder)
 {
-  if (aManager->IsLayersFreeTransaction()) {
-    ContainerLayerParameters parameter;
-    if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
-      return false;
-    }
+  ContainerLayerParameters parameter;
+  if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
+    return false;
   }
 
   if (mBorderImageRenderer) {
@@ -5090,7 +5089,8 @@ nsDisplayBorder::CreateBorderImageWebRenderCommands(mozilla::wr::DisplayListBuil
       }
 
       gfx::IntSize size;
-      Maybe<wr::ImageKey> key = aManager->CreateImageKey(this, container, aBuilder, aResources, aSc, size);
+      Maybe<wr::ImageKey> key = aManager->CommandBuilder().CreateImageKey(this, container, aBuilder,
+                                                                          aResources, aSc, size);
       if (key.isNothing()) {
         return;
       }
@@ -5396,11 +5396,9 @@ nsDisplayBoxShadowOuter::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder
                                                  mozilla::layers::WebRenderLayerManager* aManager,
                                                  nsDisplayListBuilder* aDisplayListBuilder)
 {
-  if (aManager->IsLayersFreeTransaction()) {
-    ContainerLayerParameters parameter;
-    if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
-      return false;
-    }
+  ContainerLayerParameters parameter;
+  if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
+    return false;
   }
 
   int32_t appUnitsPerDevPixel = mFrame->PresContext()->AppUnitsPerDevPixel();
@@ -5657,11 +5655,9 @@ nsDisplayBoxShadowInner::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder
                                                  mozilla::layers::WebRenderLayerManager* aManager,
                                                  nsDisplayListBuilder* aDisplayListBuilder)
 {
-  if (aManager->IsLayersFreeTransaction()) {
-    ContainerLayerParameters parameter;
-    if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
-      return false;
-    }
+  ContainerLayerParameters parameter;
+  if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
+    return false;
   }
 
   bool snap;
@@ -5922,17 +5918,11 @@ nsDisplayWrapList::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBui
                                            mozilla::layers::WebRenderLayerManager* aManager,
                                            nsDisplayListBuilder* aDisplayListBuilder)
 {
-  // If this function is called in layers mode that means we created a
-  // WebRenderDisplayItemLayer for a display item that is a subclass of
-  // nsDisplayWrapList, but we didn't actually implement the overridden
-  // CreateWebRenderCommandsFromDisplayList on it. That doesn't seem correct.
-  MOZ_ASSERT(aManager->IsLayersFreeTransaction());
-
-  aManager->CreateWebRenderCommandsFromDisplayList(GetChildren(),
-                                                   aDisplayListBuilder,
-                                                   aSc,
-                                                   aBuilder,
-                                                   aResources);
+  aManager->CommandBuilder().CreateWebRenderCommandsFromDisplayList(GetChildren(),
+                                                                    aDisplayListBuilder,
+                                                                    aSc,
+                                                                    aBuilder,
+                                                                    aResources);
   return true;
 }
 
@@ -6263,7 +6253,7 @@ nsDisplayOpacity::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuil
 {
   float* opacityForSC = &mOpacity;
 
-  RefPtr<WebRenderAnimationData> animationData = aManager->CreateOrRecycleWebRenderUserData<WebRenderAnimationData>(this);
+  RefPtr<WebRenderAnimationData> animationData = aManager->CommandBuilder().CreateOrRecycleWebRenderUserData<WebRenderAnimationData>(this);
   AnimationInfo& animationInfo = animationData->GetAnimationInfo();
   AddAnimationsForProperty(Frame(), aDisplayListBuilder,
                            this, eCSSProperty_opacity,
@@ -6301,11 +6291,11 @@ nsDisplayOpacity::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuil
                            nullptr,
                            filters);
 
-  aManager->CreateWebRenderCommandsFromDisplayList(&mList,
-                                                   aDisplayListBuilder,
-                                                   sc,
-                                                   aBuilder,
-                                                   aResources);
+  aManager->CommandBuilder().CreateWebRenderCommandsFromDisplayList(&mList,
+                                                                    aDisplayListBuilder,
+                                                                    sc,
+                                                                    aBuilder,
+                                                                    aResources);
   return true;
 }
 
@@ -6583,7 +6573,7 @@ nsDisplayOwnLayer::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBui
   // APZ is enabled and this is a scroll thumb, so we need to create and
   // set an animation id. That way APZ can move this scrollthumb around as
   // needed.
-  RefPtr<WebRenderAnimationData> animationData = aManager->CreateOrRecycleWebRenderUserData<WebRenderAnimationData>(this);
+  RefPtr<WebRenderAnimationData> animationData = aManager->CommandBuilder().CreateOrRecycleWebRenderUserData<WebRenderAnimationData>(this);
   AnimationInfo& animationInfo = animationData->GetAnimationInfo();
   animationInfo.EnsureAnimationsId();
   mWrAnimationId = animationInfo.GetCompositorAnimationsId();
@@ -8031,7 +8021,7 @@ nsDisplayTransform::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBu
     transformForSC = nullptr;
   }
 
-  RefPtr<WebRenderAnimationData> animationData = aManager->CreateOrRecycleWebRenderUserData<WebRenderAnimationData>(this);
+  RefPtr<WebRenderAnimationData> animationData = aManager->CommandBuilder().CreateOrRecycleWebRenderUserData<WebRenderAnimationData>(this);
 
   AnimationInfo& animationInfo = animationData->GetAnimationInfo();
   AddAnimationsForProperty(Frame(), aDisplayListBuilder,
@@ -8063,15 +8053,13 @@ nsDisplayTransform::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBu
     animationsId = 0;
   }
 
-  gfx::Matrix4x4Typed<LayerPixel, LayerPixel> boundTransform = ViewAs<gfx::Matrix4x4Typed<LayerPixel, LayerPixel>>(newTransformMatrix);
-
   nsTArray<mozilla::wr::WrFilterOp> filters;
   StackingContextHelper sc(aSc,
                            aBuilder,
                            aDisplayListBuilder,
                            this,
                            mStoredList.GetChildren(),
-                           &boundTransform,
+                           &newTransformMatrix,
                            animationsId,
                            nullptr,
                            transformForSC,
@@ -8099,11 +8087,18 @@ already_AddRefed<Layer> nsDisplayTransform::BuildLayer(nsDisplayListBuilder *aBu
                                                        LayerManager *aManager,
                                                        const ContainerLayerParameters& aContainerParameters)
 {
+  // While generating a glyph mask, the transform vector of the root frame had
+  // been applied into the target context, so stop applying it again here.
+  const bool shouldSkipTransform =
+    (aBuilder->RootReferenceFrame() == mFrame) &&
+    (aBuilder->IsForGenerateGlyphMask() || aBuilder->IsForPaintingSelectionBG());
+
   /* For frames without transform, it would not be removed for
    * backface hidden here.  But, it would be removed by the init
    * function of nsDisplayTransform.
    */
-  const Matrix4x4& newTransformMatrix = GetTransformForRendering();
+  const Matrix4x4 newTransformMatrix =
+    shouldSkipTransform ? Matrix4x4(): GetTransformForRendering();
 
   uint32_t flags = FrameLayerBuilder::CONTAINER_ALLOW_PULL_BACKGROUND_COLOR;
   RefPtr<ContainerLayer> container = aManager->GetLayerBuilder()->
@@ -9181,8 +9176,9 @@ nsDisplayMask::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder
   LayerRect bounds = ViewAs<LayerPixel>(LayoutDeviceRect::FromAppUnits(displayBound, appUnitsPerDevPixel),
                                         PixelCastJustification::WebRenderHasUnitResolution);
 
-  Maybe<wr::WrImageMask> mask = aManager->BuildWrMaskImage(this, aBuilder, aResources,
-                                                           aSc, aDisplayListBuilder, bounds);
+  Maybe<wr::WrImageMask> mask = aManager->CommandBuilder().BuildWrMaskImage(this, aBuilder, aResources,
+                                                                            aSc, aDisplayListBuilder,
+                                                                            bounds);
   if (mask) {
     wr::WrClipId clipId = aBuilder.DefineClip(
         aSc.ToRelativeLayoutRect(bounds), nullptr, mask.ptr());
@@ -9400,12 +9396,10 @@ nsDisplayFilter::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuild
                                          mozilla::layers::WebRenderLayerManager* aManager,
                                          nsDisplayListBuilder* aDisplayListBuilder)
 {
-  if (aManager->IsLayersFreeTransaction()) {
-    ContainerLayerParameters parameter;
-    if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
-      // TODO: should have a fallback path to paint the child list
-      return false;
-    }
+  ContainerLayerParameters parameter;
+  if (GetLayerState(aDisplayListBuilder, aManager, parameter) != LAYER_ACTIVE) {
+    // TODO: should have a fallback path to paint the child list
+    return false;
   }
 
   nsTArray<mozilla::wr::WrFilterOp> wrFilters;

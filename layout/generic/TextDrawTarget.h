@@ -49,7 +49,7 @@ struct SelectionFragment {
 // For almost all nsTextFrames, there will be only one SelectedTextRunFragment.
 struct SelectedTextRunFragment {
   Maybe<SelectionFragment> selection;
-  nsTArray<wr::TextShadow> shadows;
+  nsTArray<wr::Shadow> shadows;
   nsTArray<TextRunFragment> text;
   nsTArray<wr::Line> beforeDecorations;
   nsTArray<wr::Line> afterDecorations;
@@ -160,23 +160,10 @@ public:
     size_t oldLength = glyphs.Length();
     glyphs.SetLength(oldLength + aBuffer.mNumGlyphs);
     PodCopy(glyphs.Elements() + oldLength, aBuffer.mGlyphs, aBuffer.mNumGlyphs);
-
-    // If there's a skew for synthetic italics we need to apply it, as the font
-    // code applies the inverse transformation to glyph positions in anticipation.
-    Matrix trans = GetTransform();
-    if (trans._21 != 0) {
-      Matrix skew = Matrix(1, trans._12,
-                           trans._21, 1,
-                           0, 0);
-      for (size_t i = oldLength; i < oldLength + aBuffer.mNumGlyphs; ++i) {
-        auto position = &glyphs[i].mPosition;
-        *position = skew.TransformPoint(*position);
-      }
-    }
   }
 
   void
-  AppendShadow(const wr::TextShadow& aShadow) {
+  AppendShadow(const wr::Shadow& aShadow) {
     mCurrentPart->shadows.AppendElement(aShadow);
   }
 
@@ -351,8 +338,8 @@ public:
   for (auto& part : GetParts()) {
     // WR takes the shadows in CSS-order (reverse of rendering order),
     // because the drawing of a shadow actually occurs when it's popped.
-    for (const wr::TextShadow& shadow : part.shadows) {
-      aBuilder.PushTextShadow(wrBoundsRect, wrClipRect, backfaceVisible, shadow);
+    for (const wr::Shadow& shadow : part.shadows) {
+      aBuilder.PushShadow(wrBoundsRect, wrClipRect, backfaceVisible, shadow);
     }
 
     for (const wr::Line& decoration : part.beforeDecorations) {
@@ -370,7 +357,7 @@ public:
     }
 
     for (size_t i = 0; i < part.shadows.Length(); ++i) {
-      aBuilder.PopTextShadow();
+      aBuilder.PopShadow();
     }
   }
 }

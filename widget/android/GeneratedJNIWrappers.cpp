@@ -235,6 +235,22 @@ auto GeckoAppShell::GetApplicationContext() -> mozilla::jni::Object::LocalRef
     return mozilla::jni::Method<GetApplicationContext_t>::Call(GeckoAppShell::Context(), nullptr);
 }
 
+constexpr char GeckoAppShell::GetAudioOutputFramesPerBuffer_t::name[];
+constexpr char GeckoAppShell::GetAudioOutputFramesPerBuffer_t::signature[];
+
+auto GeckoAppShell::GetAudioOutputFramesPerBuffer() -> int32_t
+{
+    return mozilla::jni::Method<GetAudioOutputFramesPerBuffer_t>::Call(GeckoAppShell::Context(), nullptr);
+}
+
+constexpr char GeckoAppShell::GetAudioOutputSampleRate_t::name[];
+constexpr char GeckoAppShell::GetAudioOutputSampleRate_t::signature[];
+
+auto GeckoAppShell::GetAudioOutputSampleRate() -> int32_t
+{
+    return mozilla::jni::Method<GetAudioOutputSampleRate_t>::Call(GeckoAppShell::Context(), nullptr);
+}
+
 constexpr char GeckoAppShell::GetConnection_t::name[];
 constexpr char GeckoAppShell::GetConnection_t::signature[];
 
@@ -539,14 +555,6 @@ constexpr char GeckoAppShell::ShowNotification_t::signature[];
 auto GeckoAppShell::ShowNotification(mozilla::jni::String::Param a0, mozilla::jni::String::Param a1, mozilla::jni::String::Param a2, mozilla::jni::String::Param a3, mozilla::jni::String::Param a4, mozilla::jni::String::Param a5, mozilla::jni::String::Param a6) -> void
 {
     return mozilla::jni::Method<ShowNotification_t>::Call(GeckoAppShell::Context(), nullptr, a0, a1, a2, a3, a4, a5, a6);
-}
-
-constexpr char GeckoAppShell::StartGeckoServiceChildProcess_t::name[];
-constexpr char GeckoAppShell::StartGeckoServiceChildProcess_t::signature[];
-
-auto GeckoAppShell::StartGeckoServiceChildProcess(mozilla::jni::String::Param a0, mozilla::jni::ObjectArray::Param a1, int32_t a2, int32_t a3) -> int32_t
-{
-    return mozilla::jni::Method<StartGeckoServiceChildProcess_t>::Call(GeckoAppShell::Context(), nullptr, a0, a1, a2, a3);
 }
 
 constexpr char GeckoAppShell::UnlockProfile_t::name[];
@@ -2454,6 +2462,14 @@ const char GeckoProcessManager::name[] =
 
 constexpr char GeckoProcessManager::GetEditableParent_t::name[];
 constexpr char GeckoProcessManager::GetEditableParent_t::signature[];
+
+constexpr char GeckoProcessManager::Start_t::name[];
+constexpr char GeckoProcessManager::Start_t::signature[];
+
+auto GeckoProcessManager::Start(mozilla::jni::String::Param a0, mozilla::jni::ObjectArray::Param a1, int32_t a2, int32_t a3) -> int32_t
+{
+    return mozilla::jni::Method<Start_t>::Call(GeckoProcessManager::Context(), nullptr, a0, a1, a2, a3);
+}
 
 const char GeckoServiceChildProcess::name[] =
         "org/mozilla/gecko/process/GeckoServiceChildProcess";

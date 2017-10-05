@@ -154,6 +154,7 @@
 #include "DOMIntersectionObserver.h"
 
 #include "nsISpeculativeConnect.h"
+#include "nsIIOService.h"
 
 #include "DOMMatrix.h"
 
@@ -728,19 +729,23 @@ Element::GetScrollFrame(nsIFrame **aStyledFrame, FlushType aFlushType)
 }
 
 void
-Element::ScrollIntoView()
+Element::ScrollIntoView(const BooleanOrScrollIntoViewOptions& aObject)
 {
-  ScrollIntoView(ScrollIntoViewOptions());
-}
-
-void
-Element::ScrollIntoView(bool aTop)
-{
-  ScrollIntoViewOptions options;
-  if (!aTop) {
-    options.mBlock = ScrollLogicalPosition::End;
+  if (aObject.IsScrollIntoViewOptions()) {
+    return ScrollIntoView(aObject.GetAsScrollIntoViewOptions());
   }
-  ScrollIntoView(options);
+
+  MOZ_DIAGNOSTIC_ASSERT(aObject.IsBoolean());
+
+  ScrollIntoViewOptions options;
+  if (aObject.GetAsBoolean()) {
+    options.mBlock = ScrollLogicalPosition::Start;
+    options.mInline = ScrollLogicalPosition::Nearest;
+  } else {
+    options.mBlock = ScrollLogicalPosition::End;
+    options.mInline = ScrollLogicalPosition::Nearest;
+  }
+  return ScrollIntoView(options);
 }
 
 void
@@ -757,9 +762,41 @@ Element::ScrollIntoView(const ScrollIntoViewOptions &aOptions)
     return;
   }
 
-  int16_t vpercent = (aOptions.mBlock == ScrollLogicalPosition::Start)
-                       ? nsIPresShell::SCROLL_TOP
-                       : nsIPresShell::SCROLL_BOTTOM;
+  int16_t vpercent = nsIPresShell::SCROLL_CENTER;
+  switch (aOptions.mBlock) {
+    case ScrollLogicalPosition::Start:
+      vpercent = nsIPresShell::SCROLL_TOP;
+      break;
+    case ScrollLogicalPosition::Center:
+      vpercent = nsIPresShell::SCROLL_CENTER;
+      break;
+    case ScrollLogicalPosition::End:
+      vpercent = nsIPresShell::SCROLL_BOTTOM;
+      break;
+    case ScrollLogicalPosition::Nearest:
+      vpercent = nsIPresShell::SCROLL_MINIMUM;
+      break;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Unexpected ScrollLogicalPosition value");
+  }
+
+  int16_t hpercent = nsIPresShell::SCROLL_CENTER;
+  switch (aOptions.mInline) {
+    case ScrollLogicalPosition::Start:
+      hpercent = nsIPresShell::SCROLL_LEFT;
+      break;
+    case ScrollLogicalPosition::Center:
+      hpercent = nsIPresShell::SCROLL_CENTER;
+      break;
+    case ScrollLogicalPosition::End:
+      hpercent = nsIPresShell::SCROLL_RIGHT;
+      break;
+    case ScrollLogicalPosition::Nearest:
+      hpercent = nsIPresShell::SCROLL_MINIMUM;
+      break;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Unexpected ScrollLogicalPosition value");
+  }
 
   uint32_t flags = nsIPresShell::SCROLL_OVERFLOW_HIDDEN;
   if (aOptions.mBehavior == ScrollBehavior::Smooth) {
@@ -772,7 +809,9 @@ Element::ScrollIntoView(const ScrollIntoViewOptions &aOptions)
                                    nsIPresShell::ScrollAxis(
                                      vpercent,
                                      nsIPresShell::SCROLL_ALWAYS),
-                                   nsIPresShell::ScrollAxis(),
+                                   nsIPresShell::ScrollAxis(
+                                     hpercent,
+                                     nsIPresShell::SCROLL_ALWAYS),
                                    flags);
 }
 
@@ -2005,6 +2044,9 @@ Element::UnbindFromTree(bool aDeep, bool aNullParent)
   // since the invariant we'd be breaking in that case is "HasServoData()
   // implies InComposedDoc()", which we rely on in various places.
   UnsetFlags(kAllServoDescendantBits);
+  if (document && document->GetServoRestyleRoot() == this) {
+    document->ClearServoRestyleRoot();
+  }
 }
 
 nsICSSDeclaration*
@@ -2648,8 +2690,8 @@ Element::SetAttrAndNotify(int32_t aNamespaceID,
           (ns.IsEmpty() ? VoidString() : ns)
         };
 
-        nsContentUtils::EnqueueLifecycleCallback(
-          nsIDocument::eAttributeChanged, this, &args, definition);
+        nsContentUtils::EnqueueLifecycleCallback(nsIDocument::eAttributeChanged,
+          this, &args, nullptr, definition);
       }
     }
   }
@@ -2943,8 +2985,8 @@ Element::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aName,
           (ns.IsEmpty() ? VoidString() : ns)
         };
 
-        nsContentUtils::EnqueueLifecycleCallback(
-          nsIDocument::eAttributeChanged, this, &args, definition);
+        nsContentUtils::EnqueueLifecycleCallback(nsIDocument::eAttributeChanged,
+          this, &args, nullptr, definition);
       }
     }
   }
@@ -3454,21 +3496,31 @@ Element::Closest(const nsAString& aSelector, ErrorResult& aResult)
 bool
 Element::Matches(const nsAString& aSelector, ErrorResult& aError)
 {
-  nsCSSSelectorList* selectorList = ParseSelectorList(aSelector, aError);
-  if (!selectorList) {
-    // Either we failed (and aError already has the exception), or this
-    // is a pseudo-element-only selector that matches nothing.
-    return false;
-  }
-
-  TreeMatchContext matchingContext(false,
-                                   nsRuleWalker::eRelevantLinkUnvisited,
-                                   OwnerDoc(),
-                                   TreeMatchContext::eNeverMatchVisited);
-  matchingContext.SetHasSpecifiedScope();
-  matchingContext.AddScopeElement(this);
-  return nsCSSRuleProcessor::SelectorListMatches(this, matchingContext,
-                                                 selectorList);
+  return WithSelectorList<bool>(
+    aSelector,
+    aError,
+    [&](const RawServoSelectorList* aList) {
+      if (!aList) {
+        return false;
+      }
+      return Servo_SelectorList_Matches(this, aList);
+    },
+    [&](nsCSSSelectorList* aList) {
+      if (!aList) {
+        // Either we failed (and aError already has the exception), or this
+        // is a pseudo-element-only selector that matches nothing.
+        return false;
+      }
+      TreeMatchContext matchingContext(false,
+                                       nsRuleWalker::eRelevantLinkUnvisited,
+                                       OwnerDoc(),
+                                       TreeMatchContext::eNeverMatchVisited);
+      matchingContext.SetHasSpecifiedScope();
+      matchingContext.AddScopeElement(this);
+      return nsCSSRuleProcessor::SelectorListMatches(this, matchingContext,
+                                                     aList);
+    }
+  );
 }
 
 static const nsAttrValue::EnumTable kCORSAttributeTable[] = {
@@ -4291,6 +4343,7 @@ BitsArePropagated(const Element* aElement, uint32_t aBits, nsINode* aRestyleRoot
     nsINode* parentNode = curr->GetParentNode();
     curr = curr->GetFlattenedTreeParentElementForStyle();
     MOZ_ASSERT_IF(!curr,
+                  !parentNode || // can only happen mid-unbind.
                   parentNode == aElement->OwnerDoc() ||
                   parentNode == parentNode->OwnerDoc()->GetRootElement());
   }
@@ -4382,7 +4435,6 @@ NoteDirtyElement(Element* aElement, uint32_t aBits)
     // Similarly, if our parent already has the bit we're propagating, we can
     // assume everything is already set up.
     if (parent->HasAllFlags(aBits)) {
-      MOZ_ASSERT(aElement->GetComposedDoc()->GetServoRestyleRoot());
       return;
     }
 
@@ -4453,7 +4505,10 @@ NoteDirtyElement(Element* aElement, uint32_t aBits)
     }
   }
 
+  // See the comment in nsIDocument::SetServoRestyleRoot about the !IsElement()
+  // check there. Same justification here.
   MOZ_ASSERT(aElement == doc->GetServoRestyleRoot() ||
+             !doc->GetServoRestyleRoot()->IsElement() ||
              nsContentUtils::ContentIsFlattenedTreeDescendantOfForStyle(
                aElement, doc->GetServoRestyleRoot()));
   MOZ_ASSERT(aElement == doc->GetServoRestyleRoot() ||

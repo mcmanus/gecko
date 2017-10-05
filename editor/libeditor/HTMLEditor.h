@@ -770,9 +770,6 @@ protected:
   nsIContent* GetPriorHTMLSibling(nsINode* aNode);
   nsresult GetPriorHTMLSibling(nsIDOMNode*inNode,
                                nsCOMPtr<nsIDOMNode>* outNode);
-  nsIContent* GetPriorHTMLSibling(nsINode* aParent, int32_t aOffset);
-  nsresult GetPriorHTMLSibling(nsIDOMNode* inParent, int32_t inOffset,
-                               nsCOMPtr<nsIDOMNode>* outNode);
 
   nsIContent* GetNextHTMLSibling(nsINode* aNode);
   nsresult GetNextHTMLSibling(nsIDOMNode* inNode,
@@ -1076,7 +1073,7 @@ private:
                                        const nsAString& aValue);
   typedef enum { eInserted, eAppended } InsertedOrAppended;
   void DoContentInserted(nsIDocument* aDocument, nsIContent* aContainer,
-                         nsIContent* aChild, int32_t aIndexInContainer,
+                         nsIContent* aChild,
                          InsertedOrAppended aInsertedOrAppended);
   already_AddRefed<Element> GetElementOrParentByTagName(
                               const nsAString& aTagName, nsINode* aNode);

@@ -818,20 +818,30 @@ MacroAssembler::freeListAllocate(Register result, Register temp, gc::AllocKind a
 void
 MacroAssembler::callMallocStub(size_t nbytes, Register result, Label* fail)
 {
-    // This register must match the one in JitRuntime::generateMallocStub.
-    const Register regNBytes = CallTempReg0;
+    // These registers must match the ones in JitRuntime::generateMallocStub.
+    const Register regReturn = CallTempReg0;
+    const Register regZone = CallTempReg0;
+    const Register regNBytes = CallTempReg1;
 
     MOZ_ASSERT(nbytes > 0);
     MOZ_ASSERT(nbytes <= INT32_MAX);
 
+    if (regZone != result)
+        push(regZone);
     if (regNBytes != result)
         push(regNBytes);
+
     move32(Imm32(nbytes), regNBytes);
+    movePtr(ImmPtr(GetJitContext()->compartment->zone()), regZone);
     call(GetJitContext()->runtime->jitRuntime()->mallocStub());
-    if (regNBytes != result) {
-        movePtr(regNBytes, result);
+    if (regReturn != result)
+        movePtr(regReturn, result);
+
+    if (regNBytes != result)
         pop(regNBytes);
-    }
+    if (regZone != result)
+        pop(regZone);
+
     branchTest32(Assembler::Zero, result, result, fail);
 }
 
@@ -2851,7 +2861,7 @@ void
 MacroAssembler::linkExitFrame(Register cxreg, Register scratch)
 {
     loadPtr(Address(cxreg, JSContext::offsetOfActivation()), scratch);
-    storeStackPtr(Address(scratch, JitActivation::offsetOfExitFP()));
+    storeStackPtr(Address(scratch, JitActivation::offsetOfPackedExitFP()));
 }
 
 void
@@ -3102,19 +3112,6 @@ MacroAssembler::wasmEmitTrapOutOfLineCode()
     breakpoint();
 
     trapSites().clear();
-}
-
-void
-MacroAssembler::wasmAssertNonExitInvariants(Register activation)
-{
-#ifdef DEBUG
-    // WasmActivation.exitFP should be null when outside any exit frame.
-    Label ok;
-    Address exitFP(activation, WasmActivation::offsetOfExitFP());
-    branchPtr(Assembler::Equal, exitFP, ImmWord(0), &ok);
-    breakpoint();
-    bind(&ok);
-#endif
 }
 
 void

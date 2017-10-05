@@ -39,6 +39,7 @@
 #include "mozilla/dom/WindowBinding.h"
 #include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/Nullable.h"
+#include "mozilla/dom/PointerEventHandler.h"
 #include "mozilla/UniquePtr.h"
 #include "Units.h"
 #include "DOMIntersectionObserver.h"
@@ -997,7 +998,7 @@ public:
   void SetPointerCapture(int32_t aPointerId, ErrorResult& aError)
   {
     bool activeState = false;
-    if (!nsIPresShell::GetPointerInfo(aPointerId, activeState)) {
+    if (!PointerEventHandler::GetPointerInfo(aPointerId, activeState)) {
       aError.Throw(NS_ERROR_DOM_INVALID_POINTER_ERR);
       return;
     }
@@ -1005,26 +1006,32 @@ public:
       aError.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
       return;
     }
+    if (OwnerDoc()->GetPointerLockElement()) {
+      // Throw an exception 'InvalidStateError' while the page has a locked
+      // element.
+      aError.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+      return;
+    }
     if (!activeState) {
       return;
     }
-    nsIPresShell::SetPointerCapturingContent(aPointerId, this);
+    PointerEventHandler::SetPointerCaptureById(aPointerId, this);
   }
   void ReleasePointerCapture(int32_t aPointerId, ErrorResult& aError)
   {
     bool activeState = false;
-    if (!nsIPresShell::GetPointerInfo(aPointerId, activeState)) {
+    if (!PointerEventHandler::GetPointerInfo(aPointerId, activeState)) {
       aError.Throw(NS_ERROR_DOM_INVALID_POINTER_ERR);
       return;
     }
     if (HasPointerCapture(aPointerId)) {
-      nsIPresShell::ReleasePointerCapturingContent(aPointerId);
+      PointerEventHandler::ReleasePointerCaptureById(aPointerId);
     }
   }
   bool HasPointerCapture(long aPointerId)
   {
-    nsIPresShell::PointerCaptureInfo* pointerCaptureInfo =
-      nsIPresShell::GetPointerCaptureInfo(aPointerId);
+    PointerCaptureInfo* pointerCaptureInfo =
+      PointerEventHandler::GetPointerCaptureInfo(aPointerId);
     if (pointerCaptureInfo && pointerCaptureInfo->mPendingContent == this) {
       return true;
     }
@@ -1079,9 +1086,10 @@ public:
     return slots ? slots->mShadowRoot.get() : nullptr;
   }
 
-  void ScrollIntoView();
-  void ScrollIntoView(bool aTop);
+private:
   void ScrollIntoView(const ScrollIntoViewOptions &aOptions);
+public:
+  void ScrollIntoView(const BooleanOrScrollIntoViewOptions& aObject);
   void Scroll(double aXScroll, double aYScroll);
   void Scroll(const ScrollToOptions& aOptions);
   void ScrollTo(double aXScroll, double aYScroll);

@@ -176,6 +176,24 @@ add_task(async function test_permissions() {
     result = await call("request", allOptional);
     equal(result.status, "success", "request() returned cleanly");
     equal(result.result, true, "request() returned true for accepted permissions");
+
+    // Verify that requesting a permission/origin in the wrong field fails
+    let originsAsPerms = {
+      permissions: OPTIONAL_ORIGINS,
+    };
+    let permsAsOrigins = {
+      origins: OPTIONAL_PERMISSIONS,
+    };
+
+    result = await call("request", originsAsPerms);
+    equal(result.status, "error", "Requesting an origin as a permission should fail");
+    ok(/Type error for parameter permissions \(Error processing permissions/.test(result.message),
+       "Error message for origin as permission is reasonable");
+
+    result = await call("request", permsAsOrigins);
+    equal(result.status, "error", "Requesting a permission as an origin should fail");
+    ok(/Type error for parameter permissions \(Error processing origins/.test(result.message),
+       "Error message for permission as origin is reasonable");
   });
 
   let allPermissions = {
@@ -266,7 +284,7 @@ add_task(async function test_startup() {
 
   // Restart everything, and force the permissions store to be
   // re-read on startup
-  ExtensionPermissions._uninit();
+  await ExtensionPermissions._uninit();
   await AddonTestUtils.promiseRestartManager();
   await extension1.awaitStartup();
   await extension2.awaitStartup();
@@ -337,7 +355,7 @@ add_task(async function test_alreadyGranted() {
 
   await withHandlingUserInput(extension, async () => {
     let url = await extension.awaitMessage("ready");
-    await ExtensionTestUtils.loadContentPage(url, {extension});
+    let page = await ExtensionTestUtils.loadContentPage(url, {extension});
     await extension.awaitMessage("page-ready");
 
     async function checkRequest(arg, expectPrompt, msg) {
@@ -372,6 +390,7 @@ add_task(async function test_alreadyGranted() {
                        "already granted optional wildcard origin");
     await checkRequest({origins: ["http://host.optional-domain.com/"]}, false,
                        "host matching optional wildcard origin");
+    await page.close();
   });
 
   await extension.unload();

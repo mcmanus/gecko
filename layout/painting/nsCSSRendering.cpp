@@ -60,7 +60,6 @@
 #include "nsRubyTextContainerFrame.h"
 #include <algorithm>
 #include "SVGImageContext.h"
-#include "mozilla/layers/WebRenderDisplayItemLayer.h"
 #include "TextDrawTarget.h"
 
 using namespace mozilla;
@@ -2000,7 +1999,6 @@ nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayer(const PaintBGParams
                                                              mozilla::wr::DisplayListBuilder& aBuilder,
                                                              mozilla::wr::IpcResourceUpdateQueue& aResources,
                                                              const mozilla::layers::StackingContextHelper& aSc,
-                                                             mozilla::layers::WebRenderDisplayItemLayer* aLayer,
                                                              mozilla::layers::WebRenderLayerManager* aManager,
                                                              nsDisplayItem* aItem)
 {
@@ -2026,7 +2024,7 @@ nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayer(const PaintBGParams
     sc = aParams.frame->StyleContext();
   }
   return BuildWebRenderDisplayItemsForStyleImageLayerWithSC(aParams, aBuilder, aResources, aSc,
-                                                            aLayer, aManager, aItem,
+                                                            aManager, aItem,
                                                             sc, *aParams.frame->StyleBorder());
 }
 
@@ -2153,11 +2151,6 @@ nsCSSRendering::GetImageLayerClip(const nsStyleImageLayers::Layer& aLayer,
                                   bool aWillPaintBorder, nscoord aAppUnitsPerPixel,
                                   /* out */ ImageLayerClipState* aClipState)
 {
-  aClipState->mHasRoundedCorners = false;
-  aClipState->mHasAdditionalBGClipArea = false;
-  aClipState->mAdditionalBGClipArea.SetEmpty();
-  aClipState->mCustomClip = false;
-
   StyleGeometryBox layerClip = ComputeBoxValue(aForFrame, aLayer.mClip);
   if (IsSVGStyleGeometryBox(layerClip)) {
     MOZ_ASSERT(aForFrame->IsFrameOfType(nsIFrame::eSVG) &&
@@ -2678,15 +2671,18 @@ nsCSSRendering::PaintStyleImageLayerWithSC(const PaintBGParams& aParams,
       bool isBottomLayer = (i == layers.mImageCount - 1);
       if (currentBackgroundClip != layer.mClip || isBottomLayer) {
         currentBackgroundClip = layer.mClip;
-        // For  the bottom layer, we already called GetImageLayerClip above
-        // and it stored its results in clipState.
-        if (!isBottomLayer) {
+        ImageLayerClipState currentLayerClipState;
+        if (isBottomLayer) {
+          currentLayerClipState = clipState;
+        } else {
+          // For the bottom layer, we already called GetImageLayerClip above
+          // and it stored its results in clipState.
           GetImageLayerClip(layer, aParams.frame,
                             aBorder, aParams.borderArea, aParams.dirtyRect,
                             (aParams.paintFlags & PAINTBG_WILL_PAINT_BORDER),
-                            appUnitsPerPixel, &clipState);
+                            appUnitsPerPixel, &currentLayerClipState);
         }
-        SetupImageLayerClip(clipState, &aRenderingCtx,
+        SetupImageLayerClip(currentLayerClipState, &aRenderingCtx,
                             appUnitsPerPixel, &autoSR);
         if (!clipBorderArea.IsEqualEdges(aParams.borderArea)) {
           // We're drawing the background for the joined continuation boxes
@@ -2749,7 +2745,6 @@ nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayerWithSC(const PaintBG
                                                                    mozilla::wr::DisplayListBuilder& aBuilder,
                                                                    mozilla::wr::IpcResourceUpdateQueue& aResources,
                                                                    const mozilla::layers::StackingContextHelper& aSc,
-                                                                   mozilla::layers::WebRenderDisplayItemLayer* aLayer,
                                                                    mozilla::layers::WebRenderLayerManager* aManager,
                                                                    nsDisplayItem* aItem,
                                                                    nsStyleContext *aBackgroundSC,
@@ -2792,7 +2787,7 @@ nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayerWithSC(const PaintBG
   if (!state.mFillArea.IsEmpty()) {
     return state.mImageRenderer.BuildWebRenderDisplayItemsForLayer(&aParams.presCtx,
                                      aBuilder, aResources, aSc,
-                                     aLayer, aManager, aItem,
+                                     aManager, aItem,
                                      state.mDestArea, state.mFillArea,
                                      state.mAnchor + paintBorderArea.TopLeft(),
                                      clipState.mDirtyRectInAppUnits,

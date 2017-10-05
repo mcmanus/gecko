@@ -1066,6 +1066,10 @@ public:
                                         const nscoord aRadii[8],
                                         const nsRect& aTestRect);
 
+  static bool MaybeCreateDisplayPortInFirstScrollFrameEncountered(
+    nsIFrame* aFrame, nsDisplayListBuilder& aBuilder);
+
+
   enum class PaintFrameFlags : uint32_t {
     PAINT_IN_TRANSFORM = 0x01,
     PAINT_SYNC_DECODE_IMAGES = 0x02,
@@ -2083,12 +2087,23 @@ public:
   GetDeviceContextForScreenInfo(nsPIDOMWindowOuter* aWindow);
 
   /**
-   * Some frames with 'position: fixed' (nsStylePosition::mDisplay ==
+   * Some frames with 'position: fixed' (nsStyleDisplay::mPosition ==
    * NS_STYLE_POSITION_FIXED) are not really fixed positioned, since
    * they're inside an element with -moz-transform.  This function says
    * whether such an element is a real fixed-pos element.
    */
-  static bool IsReallyFixedPos(nsIFrame* aFrame);
+  static bool IsReallyFixedPos(const nsIFrame* aFrame);
+
+  /**
+   * This function says whether `aFrame` would really be a fixed positioned
+   * frame if the frame was created with NS_STYLE_POSITION_FIXED.
+   *
+   * It is effectively the same as IsReallyFixedPos, but without asserting the
+   * position value. Use it only when you know what you're doing, like when
+   * tearing down the frame tree (where styles may have changed due to
+   * ::first-line reparenting and rule changes at the same time).
+   */
+  static bool MayBeReallyFixedPos(const nsIFrame* aFrame);
 
   /**
    * Obtain a SourceSurface from the given DOM element, if possible.
@@ -2814,10 +2829,15 @@ public:
    * displayport yet (as tracked by |aBuilder|), calculate and set a
    * displayport.
    *
-   * This is intended to be called during display list building.
+   * If this is called during display list building pass DoNotRepaint in
+   * aRepaintMode.
+   *
+   * Returns true if there is a displayport on an async scrollable scrollframe
+   * after this call, either because one was just added or it already existed.
    */
-  static void MaybeCreateDisplayPort(nsDisplayListBuilder& aBuilder,
-                                     nsIFrame* aScrollFrame);
+  static bool MaybeCreateDisplayPort(nsDisplayListBuilder& aBuilder,
+                                     nsIFrame* aScrollFrame,
+                                     RepaintMode aRepaintMode);
 
   static nsIScrollableFrame* GetAsyncScrollableAncestorFrame(nsIFrame* aTarget);
 

@@ -21,6 +21,7 @@
 #include "TimeRanges.h"
 #include "nsGenericHTMLElement.h"
 #include "nsAttrValueInlines.h"
+#include "nsDocShellLoadTypes.h"
 #include "nsPresContext.h"
 #include "nsIClassOfService.h"
 #include "nsIPresShell.h"
@@ -1527,10 +1528,9 @@ NS_IMPL_ENUM_ATTR_DEFAULT_VALUE(HTMLMediaElement, Preload, preload, nullptr)
 
 void
 HTMLMediaElement::ContentRemoved(nsIDocument* aDocument,
-                                 nsIContent*  aContainer,
-                                 nsIContent*  aChild,
-                                 int32_t /* aIndexInContainer */,
-                                 nsIContent*  aPreviousSibling)
+                                 nsIContent* aContainer,
+                                 nsIContent* aChild,
+                                 nsIContent* aPreviousSibling)
 {
   if (aChild == mSourcePointer) {
     mSourcePointer = aPreviousSibling;
@@ -2661,6 +2661,18 @@ HTMLMediaElement::FastSeek(double aTime, ErrorResult& aRv)
 already_AddRefed<Promise>
 HTMLMediaElement::SeekToNextFrame(ErrorResult& aRv)
 {
+  /* This will cause JIT code to be kept around longer, to help performance
+   * when using SeekToNextFrame to iterate through every frame of a video.
+   */
+  nsCOMPtr<nsIGlobalObject> global =
+    do_QueryInterface(OwnerDoc()->GetInnerWindow());
+
+  if (global) {
+    if (JSObject *obj = global->GetGlobalJSObject()) {
+      js::NotifyAnimationActivity(obj);
+    }
+  }
+
   return Seek(CurrentTime(), SeekTarget::NextFrame, aRv);
 }
 
@@ -2832,6 +2844,17 @@ HTMLMediaElement::Seek(double aTime,
   //       MediaDecoderReaders.
 
   mPlayingBeforeSeek = IsPotentiallyPlaying();
+
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
+  if (!mDecoder->IsMetadataLoaded()) {
+    // This is for debugging bug 1402584.
+    // We should reach here only after metadata loaded by the decoder.
+    MOZ_CRASH_UNSAFE_PRINTF(
+      "Metadata not loaded! readyState=%d networkState=%d",
+      static_cast<int>(mReadyState.Ref()),
+      static_cast<int>(mNetworkState));
+  }
+#endif
 
   // The media backend is responsible for dispatching the timeupdate
   // event if it changes the playback position as a result of the seek.
@@ -3727,7 +3750,7 @@ HTMLMediaElement::AddMediaElementToURITable()
 }
 
 void
-HTMLMediaElement::RemoveMediaElementFromURITable()
+HTMLMediaElement::RemoveMediaElementFromURITable(bool aFroceClearEntry)
 {
   if (!mDecoder || !mLoadingSrc || !gElementTable) {
     return;
@@ -3736,13 +3759,17 @@ HTMLMediaElement::RemoveMediaElementFromURITable()
   if (!entry) {
     return;
   }
-  entry->mElements.RemoveElement(this);
-  if (entry->mElements.IsEmpty()) {
+  if (aFroceClearEntry) {
     gElementTable->RemoveEntry(entry);
-    if (gElementTable->Count() == 0) {
-      delete gElementTable;
-      gElementTable = nullptr;
+  } else {
+    entry->mElements.RemoveElement(this);
+    if (entry->mElements.IsEmpty()) {
+      gElementTable->RemoveEntry(entry);
     }
+  }
+  if (gElementTable->Count() == 0) {
+    delete gElementTable;
+    gElementTable = nullptr;
   }
   NS_ASSERTION(MediaElementTableCount(this, mLoadingSrc) == 0,
     "After remove, should no longer have an entry in element table");
@@ -3834,6 +3861,106 @@ private:
 
 NS_IMPL_ISUPPORTS(HTMLMediaElement::ShutdownObserver, nsIObserver)
 
+class HTMLMediaElement::ForceReloadListener : public nsIWebProgressListener
+                                            , public nsSupportsWeakReference
+{
+public:
+  NS_DECL_ISUPPORTS
+
+  void Subscribe(HTMLMediaElement* aPtr, nsIWebProgress* aWebProgress)
+  {
+    MOZ_DIAGNOSTIC_ASSERT(!mWeak);
+    MOZ_DIAGNOSTIC_ASSERT(aWebProgress);
+    mWeak = aPtr;
+    aWebProgress->AddProgressListener(this,
+                                      nsIWebProgress::NOTIFY_STATE_NETWORK);
+  }
+  void Unsubscribe(nsIWebProgress* aWebProgress)
+  {
+    MOZ_DIAGNOSTIC_ASSERT(mWeak);
+    mWeak = nullptr;
+    if (aWebProgress) {
+      aWebProgress->RemoveProgressListener(this);
+    }
+  }
+
+  NS_IMETHODIMP OnStateChange(nsIWebProgress* aWebProgress,
+                              nsIRequest* aRequest,
+                              uint32_t aProgressStateFlags,
+                              nsresult aStatus) override
+  {
+    MOZ_DIAGNOSTIC_ASSERT(mWeak);
+    if ((aProgressStateFlags & STATE_IS_NETWORK) &&
+        (aProgressStateFlags & STATE_START)) {
+      // Query the LoadType to see if it's a ctrl+F5.
+      nsCOMPtr<nsIDocShell> shell(do_QueryInterface(aWebProgress));
+      if (shell) {
+        uint32_t loadType;
+        shell->GetLoadType(&loadType);
+        if (LOAD_RELOAD_BYPASS_PROXY_AND_CACHE == loadType && mWeak->mDecoder) {
+          mWeak->RemoveMediaElementFromURITable(true);
+          mWeak->ShutdownDecoder();
+        }
+      }
+    }
+    return NS_OK;
+  }
+
+  NS_IMETHODIMP
+  OnProgressChange(nsIWebProgress* aProgress,
+                   nsIRequest* aRequest,
+                   int32_t aCurSelfProgress,
+                   int32_t aMaxSelfProgress,
+                   int32_t aCurTotalProgress,
+                   int32_t aMaxTotalProgress) override
+  {
+    NS_NOTREACHED("notification excluded in AddProgressListener(...)");
+    return NS_OK;
+  }
+
+  NS_IMETHODIMP
+  OnLocationChange(nsIWebProgress* aWebProgress,
+                   nsIRequest* aRequest,
+                   nsIURI* aLocation,
+                   uint32_t aFlags) override
+  {
+    NS_NOTREACHED("notification excluded in AddProgressListener(...)");
+    return NS_OK;
+  }
+
+  NS_IMETHODIMP
+  OnStatusChange(nsIWebProgress* aWebProgress,
+                 nsIRequest* aRequest,
+                 nsresult aStatus,
+                 const char16_t* aMessage) override
+  {
+    NS_NOTREACHED("notification excluded in AddProgressListener(...)");
+    return NS_OK;
+  }
+
+  NS_IMETHODIMP
+  OnSecurityChange(nsIWebProgress* aWebProgress,
+                   nsIRequest* aRequest,
+                   uint32_t aState) override
+  {
+    NS_NOTREACHED("notification excluded in AddProgressListener(...)");
+    return NS_OK;
+  }
+
+protected:
+  virtual ~ForceReloadListener()
+  {
+    MOZ_DIAGNOSTIC_ASSERT(!mWeak);
+  }
+
+private:
+  HTMLMediaElement* mWeak = nullptr;
+};
+
+NS_IMPL_ISUPPORTS(HTMLMediaElement::ForceReloadListener,
+                  nsIWebProgressListener,
+                  nsISupportsWeakReference)
+
 HTMLMediaElement::HTMLMediaElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : nsGenericHTMLElement(aNodeInfo),
     mMainThreadEventTarget(OwnerDoc()->EventTargetFor(TaskCategory::Other)),
@@ -3917,14 +4044,33 @@ HTMLMediaElement::HTMLMediaElement(already_AddRefed<mozilla::dom::NodeInfo>& aNo
   mWatchManager.Watch(mReadyState, &HTMLMediaElement::UpdateReadyStateInternal);
 
   mShutdownObserver->Subscribe(this);
+  nsIDocShell* docShell = OwnerDoc()->GetDocShell();
+  if (docShell) {
+    nsCOMPtr<nsIDocShellTreeItem> root;
+    docShell->GetSameTypeRootTreeItem(getter_AddRefs(root));
+    nsCOMPtr<nsIWebProgress> webProgress = do_GetInterface(root);
+    if (webProgress) {
+      mForceReloadListener = new ForceReloadListener();
+      mForceReloadListener->Subscribe(this, webProgress);
+    }
+  }
 }
 
 HTMLMediaElement::~HTMLMediaElement()
 {
   NS_ASSERTION(!mHasSelfReference,
                "How can we be destroyed if we're still holding a self reference?");
-
   mShutdownObserver->Unsubscribe();
+  nsIDocShell* docShell = OwnerDoc()->GetDocShell();
+  nsCOMPtr<nsIWebProgress> webProgress;
+  if (docShell) {
+    nsCOMPtr<nsIDocShellTreeItem> root;
+    docShell->GetSameTypeRootTreeItem(getter_AddRefs(root));
+    webProgress = do_GetInterface(root);
+  }
+  if (mForceReloadListener) {
+    mForceReloadListener->Unsubscribe(webProgress);
+  }
 
   if (mVideoFrameContainer) {
     mVideoFrameContainer->ForgetElement();
@@ -5907,6 +6053,16 @@ void HTMLMediaElement::ChangeReadyState(nsMediaReadyState aState)
       mReadyState >= nsIDOMHTMLMediaElement::HAVE_ENOUGH_DATA) {
     DispatchAsyncEvent(NS_LITERAL_STRING("canplaythrough"));
   }
+
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
+  if (mReadyState >= nsIDOMHTMLMediaElement::HAVE_METADATA && mDecoder &&
+      !mDecoder->IsMetadataLoaded()) {
+    MOZ_CRASH_UNSAFE_PRINTF(
+      "Metadata not loaded! readyState=%d networkState=%d",
+      static_cast<int>(mReadyState.Ref()),
+      static_cast<int>(mNetworkState));
+  }
+#endif
 }
 
 static const char* const gNetworkStateToString[] = {

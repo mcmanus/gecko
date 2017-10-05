@@ -1785,8 +1785,8 @@ class MWasmFloatConstant : public MNullaryInstruction
 // Generic constructor of SIMD valuesX4.
 class MSimdValueX4
   : public MQuaternaryInstruction,
-    public Mix4Policy<SimdScalarPolicy<0>, SimdScalarPolicy<1>,
-                      SimdScalarPolicy<2>, SimdScalarPolicy<3> >::Data
+    public MixPolicy<SimdScalarPolicy<0>, SimdScalarPolicy<1>,
+                     SimdScalarPolicy<2>, SimdScalarPolicy<3> >::Data
 {
   protected:
     MSimdValueX4(MIRType type, MDefinition* x, MDefinition* y, MDefinition* z, MDefinition* w)
@@ -3834,9 +3834,9 @@ class MSimdUnbox
 // as dead code.
 class MNewDerivedTypedObject
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>,
-                      ObjectPolicy<1>,
-                      IntPolicy<2> >::Data
+    public MixPolicy<ObjectPolicy<0>,
+                     ObjectPolicy<1>,
+                     IntPolicy<2> >::Data
 {
   private:
     TypedObjectPrediction prediction_;
@@ -4110,7 +4110,7 @@ class MInitPropGetterSetter
 
 class MInitElem
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>, BoxPolicy<1>, BoxPolicy<2> >::Data
+    public MixPolicy<ObjectPolicy<0>, BoxPolicy<1>, BoxPolicy<2> >::Data
 {
     MInitElem(MDefinition* obj, MDefinition* id, MDefinition* value)
       : MTernaryInstruction(classOpcode, obj, id, value)
@@ -4130,7 +4130,7 @@ class MInitElem
 
 class MInitElemGetterSetter
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>, BoxPolicy<1>, ObjectPolicy<2> >::Data
+    public MixPolicy<ObjectPolicy<0>, BoxPolicy<1>, ObjectPolicy<2> >::Data
 {
     MInitElemGetterSetter(MDefinition* obj, MDefinition* id, MDefinition* value)
       : MTernaryInstruction(classOpcode, obj, id, value)
@@ -4341,7 +4341,7 @@ class MCallDOMNative : public MCall
 // fun.apply(self, arguments)
 class MApplyArgs
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>, IntPolicy<1>, BoxPolicy<2> >::Data
+    public MixPolicy<ObjectPolicy<0>, IntPolicy<1>, BoxPolicy<2> >::Data
 {
   protected:
     // Monomorphic cache of single target from TI, or nullptr.
@@ -4378,7 +4378,7 @@ class MApplyArgs
 // fun.apply(fn, array)
 class MApplyArray
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>, ObjectPolicy<1>, BoxPolicy<2> >::Data
+    public MixPolicy<ObjectPolicy<0>, ObjectPolicy<1>, BoxPolicy<2> >::Data
 {
   protected:
     // Monomorphic cache of single target from TI, or nullptr.
@@ -4560,9 +4560,9 @@ class MGetDynamicName
 
 class MCallDirectEval
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>,
-                      StringPolicy<1>,
-                      BoxPolicy<2> >::Data
+    public MixPolicy<ObjectPolicy<0>,
+                     StringPolicy<1>,
+                     BoxPolicy<2> >::Data
 {
   protected:
     MCallDirectEval(MDefinition* envChain, MDefinition* string,
@@ -5098,7 +5098,7 @@ class MCreateThisWithTemplate
 // Given a prototype operand, construct |this| for JSOP_NEW.
 class MCreateThisWithProto
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>, ObjectPolicy<1>, ObjectPolicy<2> >::Data
+    public MixPolicy<ObjectPolicy<0>, ObjectPolicy<1>, ObjectPolicy<2> >::Data
 {
     MCreateThisWithProto(MDefinition* callee, MDefinition* newTarget, MDefinition* prototype)
       : MTernaryInstruction(classOpcode, callee, newTarget, prototype)
@@ -8435,9 +8435,9 @@ class MRegExp : public MNullaryInstruction
 
 class MRegExpMatcher
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>,
-                      StringPolicy<1>,
-                      IntPolicy<2> >::Data
+    public MixPolicy<ObjectPolicy<0>,
+                     StringPolicy<1>,
+                     IntPolicy<2> >::Data
 {
   private:
 
@@ -8467,9 +8467,9 @@ class MRegExpMatcher
 
 class MRegExpSearcher
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>,
-                      StringPolicy<1>,
-                      IntPolicy<2> >::Data
+    public MixPolicy<ObjectPolicy<0>,
+                     StringPolicy<1>,
+                     IntPolicy<2> >::Data
 {
   private:
 
@@ -8498,9 +8498,9 @@ class MRegExpSearcher
 
 class MRegExpTester
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>,
-                      StringPolicy<1>,
-                      IntPolicy<2> >::Data
+    public MixPolicy<ObjectPolicy<0>,
+                     StringPolicy<1>,
+                     IntPolicy<2> >::Data
 {
   private:
 
@@ -8591,7 +8591,7 @@ class MGetFirstDollarIndex
 
 class MStringReplace
   : public MTernaryInstruction,
-    public Mix3Policy<StringPolicy<0>, StringPolicy<1>, StringPolicy<2> >::Data
+    public MixPolicy<StringPolicy<0>, StringPolicy<1>, StringPolicy<2> >::Data
 {
   private:
 
@@ -8647,7 +8647,7 @@ class MStringReplace
 
 class MSubstr
   : public MTernaryInstruction,
-    public Mix3Policy<StringPolicy<0>, IntPolicy<1>, IntPolicy<2>>::Data
+    public MixPolicy<StringPolicy<0>, IntPolicy<1>, IntPolicy<2>>::Data
 {
   private:
 
@@ -8766,7 +8766,7 @@ class MLambda
 
 class MLambdaArrow
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>, BoxPolicy<1>, ObjectPolicy<2>>::Data
+    public MixPolicy<ObjectPolicy<0>, BoxPolicy<1>, ObjectPolicy<2>>::Data
 {
     const LambdaFunctionInfo info_;
 
@@ -9578,9 +9578,8 @@ class MLoadElement
     ALLOW_CLONE(MLoadElement)
 };
 
-// Load a value from the elements vector for a dense native or unboxed array.
-// If the index is out-of-bounds, or the indexed slot has a hole, undefined is
-// returned instead.
+// Load a value from the elements vector of a native object. If the index is
+// out-of-bounds, or the indexed slot has a hole, undefined is returned instead.
 class MLoadElementHole
   : public MTernaryInstruction,
     public SingleObjectPolicy::Data
@@ -9831,10 +9830,10 @@ class MStoreElement
     ALLOW_CLONE(MStoreElement)
 };
 
-// Like MStoreElement, but supports indexes >= initialized length, and can
-// handle unboxed arrays. The downside is that we cannot hoist the elements
-// vector and bounds check, since this instruction may update the (initialized)
-// length and reallocate the elements vector.
+// Like MStoreElement, but supports indexes >= initialized length. The downside
+// is that we cannot hoist the elements vector and bounds check, since this
+// instruction may update the (initialized) length and reallocate the elements
+// vector.
 class MStoreElementHole
   : public MQuaternaryInstruction,
     public MStoreElementCommon,
@@ -10099,7 +10098,7 @@ class MArrayPush
 // Array.prototype.slice on a dense array.
 class MArraySlice
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>, IntPolicy<1>, IntPolicy<2>>::Data
+    public MixPolicy<ObjectPolicy<0>, IntPolicy<1>, IntPolicy<2>>::Data
 {
     CompilerObject templateObj_;
     gc::InitialHeap initialHeap_;
@@ -12034,7 +12033,7 @@ class MCallSetProperty
 
 class MSetPropertyCache
   : public MTernaryInstruction,
-    public Mix3Policy<SingleObjectPolicy, CacheIdPolicy<1>, NoFloatPolicy<2>>::Data
+    public MixPolicy<SingleObjectPolicy, CacheIdPolicy<1>, NoFloatPolicy<2>>::Data
 {
     bool strict_ : 1;
     bool needsPostBarrier_ : 1;
@@ -12155,7 +12154,7 @@ class MCallSetElement
 
 class MCallInitElementArray
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>, IntPolicy<1>, BoxPolicy<2> >::Data
+    public MixPolicy<ObjectPolicy<0>, IntPolicy<1>, BoxPolicy<2> >::Data
 {
     MCallInitElementArray(MDefinition* obj, MDefinition* index, MDefinition* val)
       : MTernaryInstruction(classOpcode, obj, index, val)
@@ -13148,27 +13147,22 @@ class MNewNamedLambdaObject : public MNullaryInstruction
     }
 };
 
-class MNewCallObjectBase : public MNullaryInstruction
+class MNewCallObjectBase : public MUnaryInstruction
+                         , public SingleObjectPolicy::Data
 {
-    CompilerGCPointer<CallObject*> templateObj_;
-
   protected:
-    MNewCallObjectBase(Opcode op, CallObject* templateObj)
-      : MNullaryInstruction(op),
-        templateObj_(templateObj)
+    MNewCallObjectBase(Opcode op, MConstant* templateObj)
+      : MUnaryInstruction(op, templateObj)
     {
         setResultType(MIRType::Object);
     }
 
   public:
-    CallObject* templateObject() {
-        return templateObj_;
+    CallObject* templateObject() const {
+        return &getOperand(0)->toConstant()->toObject().as<CallObject>();
     }
     AliasSet getAliasSet() const override {
         return AliasSet::None();
-    }
-    bool appendRoots(MRootList& roots) const override {
-        return roots.append(templateObj_);
     }
 };
 
@@ -13176,17 +13170,17 @@ class MNewCallObject : public MNewCallObjectBase
 {
   public:
     INSTRUCTION_HEADER(NewCallObject)
+    TRIVIAL_NEW_WRAPPERS
 
-    explicit MNewCallObject(CallObject* templateObj)
+    explicit MNewCallObject(MConstant* templateObj)
       : MNewCallObjectBase(classOpcode, templateObj)
     {
-        MOZ_ASSERT(!templateObj->isSingleton());
+        MOZ_ASSERT(!templateObject()->isSingleton());
     }
 
-    static MNewCallObject*
-    New(TempAllocator& alloc, CallObject* templateObj)
-    {
-        return new(alloc) MNewCallObject(templateObj);
+    MOZ_MUST_USE bool writeRecoverData(CompactBufferWriter& writer) const override;
+    bool canRecoverOnBailout() const override {
+        return true;
     }
 };
 
@@ -13194,16 +13188,11 @@ class MNewSingletonCallObject : public MNewCallObjectBase
 {
   public:
     INSTRUCTION_HEADER(NewSingletonCallObject)
+    TRIVIAL_NEW_WRAPPERS
 
-    explicit MNewSingletonCallObject(CallObject* templateObj)
+    explicit MNewSingletonCallObject(MConstant* templateObj)
       : MNewCallObjectBase(classOpcode, templateObj)
     {}
-
-    static MNewSingletonCallObject*
-    New(TempAllocator& alloc, CallObject* templateObj)
-    {
-        return new(alloc) MNewSingletonCallObject(templateObj);
-    }
 };
 
 class MNewStringObject :
@@ -13725,7 +13714,7 @@ public:
 
 class MCompareExchangeTypedArrayElement
   : public MQuaternaryInstruction,
-    public Mix4Policy<ObjectPolicy<0>, IntPolicy<1>, TruncateToInt32Policy<2>, TruncateToInt32Policy<3>>::Data
+    public MixPolicy<ObjectPolicy<0>, IntPolicy<1>, TruncateToInt32Policy<2>, TruncateToInt32Policy<3>>::Data
 {
     Scalar::Type arrayType_;
 
@@ -13760,7 +13749,7 @@ class MCompareExchangeTypedArrayElement
 
 class MAtomicExchangeTypedArrayElement
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>, IntPolicy<1>, TruncateToInt32Policy<2>>::Data
+    public MixPolicy<ObjectPolicy<0>, IntPolicy<1>, TruncateToInt32Policy<2>>::Data
 {
     Scalar::Type arrayType_;
 
@@ -13792,7 +13781,7 @@ class MAtomicExchangeTypedArrayElement
 
 class MAtomicTypedArrayElementBinop
   : public MTernaryInstruction,
-    public Mix3Policy< ObjectPolicy<0>, IntPolicy<1>, TruncateToInt32Policy<2> >::Data
+    public MixPolicy< ObjectPolicy<0>, IntPolicy<1>, TruncateToInt32Policy<2> >::Data
 {
   private:
     AtomicOp op_;
@@ -13932,7 +13921,7 @@ class MDebugCheckSelfHosted
 
 class MFinishBoundFunctionInit
   : public MTernaryInstruction,
-    public Mix3Policy<ObjectPolicy<0>, ObjectPolicy<1>, IntPolicy<2>>::Data
+    public MixPolicy<ObjectPolicy<0>, ObjectPolicy<1>, IntPolicy<2>>::Data
 {
     MFinishBoundFunctionInit(MDefinition* bound, MDefinition* target, MDefinition* argCount)
       : MTernaryInstruction(classOpcode, bound, target, argCount)

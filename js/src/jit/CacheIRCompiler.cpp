@@ -1529,7 +1529,11 @@ CacheIRCompiler::emitGuardNoDetachedTypedObjects()
     if (!addFailurePath(&failure))
         return false;
 
-    CheckForTypedObjectWithDetachedStorage(cx_, masm, failure->label());
+    // All stubs manipulating typed objects must check the compartment-wide
+    // flag indicating whether their underlying storage might be detached, to
+    // bail out if needed.
+    int32_t* address = &cx_->compartment()->detachedTypedObjects;
+    masm.branch32(Assembler::NotEqual, AbsoluteAddress(address), Imm32(0), failure->label());
     return true;
 }
 
@@ -2492,12 +2496,13 @@ CacheIRCompiler::emitMegamorphicLoadSlotByValueResult()
 }
 
 bool
-CacheIRCompiler::emitMegamorphicHasOwnResult()
+CacheIRCompiler::emitMegamorphicHasPropResult()
 {
     AutoOutputRegister output(*this);
 
     Register obj = allocator.useRegister(masm, reader.objOperandId());
     ValueOperand idVal = allocator.useValueRegister(masm, reader.valOperandId());
+    bool hasOwn = reader.readBool();
 
     AutoScratchRegisterMaybeOutput scratch(allocator, masm, output);
 
@@ -2520,7 +2525,10 @@ CacheIRCompiler::emitMegamorphicHasOwnResult()
     masm.passABIArg(scratch);
     masm.passABIArg(obj);
     masm.passABIArg(idVal.scratchReg());
-    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, HasOwnNativeDataProperty));
+    if (hasOwn)
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, HasNativeDataProperty<true>));
+    else
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, HasNativeDataProperty<false>));
     masm.mov(ReturnReg, scratch);
     masm.PopRegsInMask(volatileRegs);
 

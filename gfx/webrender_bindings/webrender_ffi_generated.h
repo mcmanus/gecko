@@ -63,6 +63,7 @@ enum class FontRenderMode : uint32_t {
   Mono = 0,
   Alpha = 1,
   Subpixel = 2,
+  Bitmap = 3,
 
   Sentinel /* this must be last for serialization purposes. */
 };
@@ -405,11 +406,13 @@ struct BorderRadius {
   }
 };
 
-struct WrComplexClipRegion {
+struct ComplexClipRegion {
+  // The boundaries of the rectangle.
   LayoutRect rect;
+  // Border radii of this rectangle.
   BorderRadius radii;
 
-  bool operator==(const WrComplexClipRegion& aOther) const {
+  bool operator==(const ComplexClipRegion& aOther) const {
     return rect == aOther.rect &&
            radii == aOther.radii;
   }
@@ -543,6 +546,18 @@ typedef TypedVector2D_f32__LayerPixel LayerVector2D;
 
 typedef LayerVector2D LayoutVector2D;
 
+struct Shadow {
+  LayoutVector2D offset;
+  ColorF color;
+  float blur_radius;
+
+  bool operator==(const Shadow& aOther) const {
+    return offset == aOther.offset &&
+           color == aOther.color &&
+           blur_radius == aOther.blur_radius;
+  }
+};
+
 struct WrFilterOp {
   WrFilterOpType filter_type;
   float argument;
@@ -582,18 +597,6 @@ struct GlyphOptions {
 
   bool operator==(const GlyphOptions& aOther) const {
     return render_mode == aOther.render_mode;
-  }
-};
-
-struct TextShadow {
-  LayoutVector2D offset;
-  ColorF color;
-  float blur_radius;
-
-  bool operator==(const TextShadow& aOther) const {
-    return offset == aOther.offset &&
-           color == aOther.color &&
-           blur_radius == aOther.blur_radius;
   }
 };
 
@@ -850,15 +853,9 @@ void wr_dec_ref_arc(const VecU8 *aArc)
 WR_FUNC;
 
 WR_INLINE
-void wr_dp_begin(WrState *aState,
-                 uint32_t aWidth,
-                 uint32_t aHeight)
-WR_FUNC;
-
-WR_INLINE
 uint64_t wr_dp_define_clip(WrState *aState,
                            LayoutRect aClipRect,
-                           const WrComplexClipRegion *aComplex,
+                           const ComplexClipRegion *aComplex,
                            size_t aComplexCount,
                            const WrImageMask *aMask)
 WR_FUNC;
@@ -880,10 +877,6 @@ uint64_t wr_dp_define_sticky_frame(WrState *aState,
 WR_FUNC;
 
 WR_INLINE
-void wr_dp_end(WrState *aState)
-WR_FUNC;
-
-WR_INLINE
 void wr_dp_pop_clip(WrState *aState)
 WR_FUNC;
 
@@ -896,11 +889,11 @@ void wr_dp_pop_scroll_layer(WrState *aState)
 WR_FUNC;
 
 WR_INLINE
-void wr_dp_pop_stacking_context(WrState *aState)
+void wr_dp_pop_shadow(WrState *aState)
 WR_FUNC;
 
 WR_INLINE
-void wr_dp_pop_text_shadow(WrState *aState)
+void wr_dp_pop_stacking_context(WrState *aState)
 WR_FUNC;
 
 WR_INLINE
@@ -1061,6 +1054,14 @@ void wr_dp_push_scroll_layer(WrState *aState,
 WR_FUNC;
 
 WR_INLINE
+void wr_dp_push_shadow(WrState *aState,
+                       LayoutRect aBounds,
+                       LayoutRect aClip,
+                       bool aIsBackfaceVisible,
+                       Shadow aShadow)
+WR_FUNC;
+
+WR_INLINE
 void wr_dp_push_stacking_context(WrState *aState,
                                  LayoutRect aBounds,
                                  uint64_t aAnimationId,
@@ -1084,14 +1085,6 @@ void wr_dp_push_text(WrState *aState,
                      const GlyphInstance *aGlyphs,
                      uint32_t aGlyphCount,
                      const GlyphOptions *aGlyphOptions)
-WR_FUNC;
-
-WR_INLINE
-void wr_dp_push_text_shadow(WrState *aState,
-                            LayoutRect aBounds,
-                            LayoutRect aClip,
-                            bool aIsBackfaceVisible,
-                            TextShadow aShadow)
 WR_FUNC;
 
 // Push a 2 planar NV12 image.
@@ -1314,7 +1307,8 @@ WR_DESTRUCTOR_SAFE_FUNC;
 
 WR_INLINE
 WrState *wr_state_new(WrPipelineId aPipelineId,
-                      LayoutSize aContentSize)
+                      LayoutSize aContentSize,
+                      size_t aCapacity)
 WR_FUNC;
 
 WR_INLINE

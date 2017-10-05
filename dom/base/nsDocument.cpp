@@ -1406,13 +1406,39 @@ nsIDocument::SelectorCache::~SelectorCache()
   AgeAllGenerations();
 }
 
+void
+nsIDocument::SelectorCache::SelectorList::Reset()
+{
+  if (mIsServo) {
+    if (mServo) {
+      Servo_SelectorList_Drop(mServo);
+      mServo = nullptr;
+    }
+  } else {
+    if (mGecko) {
+      delete mGecko;
+      mGecko = nullptr;
+    }
+  }
+}
+
 // CacheList takes ownership of aSelectorList.
 void nsIDocument::SelectorCache::CacheList(const nsAString& aSelector,
-                                           nsCSSSelectorList* aSelectorList)
+                                           mozilla::UniquePtr<nsCSSSelectorList>&& aSelectorList)
 {
   MOZ_ASSERT(NS_IsMainThread());
   SelectorCacheKey* key = new SelectorCacheKey(aSelector);
-  mTable.Put(key->mKey, aSelectorList);
+  mTable.Put(key->mKey, SelectorList(Move(aSelectorList)));
+  AddObject(key);
+}
+
+void nsIDocument::SelectorCache::CacheList(
+  const nsAString& aSelector,
+  UniquePtr<RawServoSelectorList>&& aSelectorList)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  SelectorCacheKey* key = new SelectorCacheKey(aSelector);
+  mTable.Put(key->mKey, SelectorList(Move(aSelectorList)));
   AddObject(key);
 }
 
@@ -2351,7 +2377,7 @@ nsDocument::ResetToURI(nsIURI *aURI, nsILoadGroup *aLoadGroup,
         // now-stale value.
         mCachedRootElement = nullptr;
       }
-      nsNodeUtils::ContentRemoved(this, content, i, previousSibling);
+      nsNodeUtils::ContentRemoved(this, content, previousSibling);
       content->UnbindFromTree();
     }
     MOZ_ASSERT(!mCachedRootElement,
@@ -7791,15 +7817,19 @@ nsDOMAttributeMap::BlastSubtreeToPieces(nsINode *aNode)
     Element *element = aNode->AsElement();
     const nsDOMAttributeMap *map = element->GetAttributeMap();
     if (map) {
-      // This non-standard style of iteration is presumably used because some
-      // of the code in the loop body can trigger element removal, which
-      // invalidates the iterator.
       while (true) {
-        auto iter = map->mAttributeCache.ConstIter();
-        if (iter.Done()) {
-          break;
+        nsCOMPtr<nsIAttribute> attr;
+        {
+          // Use an iterator to get an arbitrary attribute from the
+          // cache. The iterator must be destroyed before any other
+          // operations on mAttributeCache, to avoid hash table
+          // assertions.
+          auto iter = map->mAttributeCache.ConstIter();
+          if (iter.Done()) {
+            break;
+          }
+          attr = iter.UserData();
         }
-        nsCOMPtr<nsIAttribute> attr = iter.UserData();
         NS_ASSERTION(attr.get(),
                      "non-nsIAttribute somehow made it into the hashmap?!");
 
@@ -9535,7 +9565,6 @@ nsDocument::OnPageHide(bool aPersisted,
   mVisible = false;
 
   UpdateVisibilityState();
-
   EnumerateExternalResources(NotifyPageHide, &aPersisted);
   EnumerateActivityObservers(NotifyActivityChanged, nullptr);
 
@@ -13608,6 +13637,29 @@ nsIDocument::ReportHasScrollLinkedEffect()
                                   "ScrollLinkedEffectFound2");
 }
 
+#ifdef MOZ_STYLO
+// URL-based blacklist for stylo.
+static bool
+ShouldUseGeckoBackend(nsIURI* aDocumentURI)
+{
+  if (!aDocumentURI) {
+    return false;
+  }
+  bool isScheme = false;
+  if (NS_SUCCEEDED(aDocumentURI->SchemeIs("about", &isScheme))) {
+    nsAutoCString path;
+    aDocumentURI->GetFilePath(path);
+    // about:reader requires support of :scope pseudo-class so we have
+    // to use Gecko backend for now. See bug 1402094.
+    // This should be fixed by bug 1204818.
+    if (path.EqualsLiteral("reader")) {
+      return true;
+    }
+  }
+  return false;
+}
+#endif // MOZ_STYLO
+
 void
 nsIDocument::UpdateStyleBackendType()
 {
@@ -13626,7 +13678,7 @@ nsIDocument::UpdateStyleBackendType()
     // Note that, since tests can have XUL support, we still need to
     // explicitly exclude XUL documents here.
     if (!nsContentUtils::IsSystemPrincipal(NodePrincipal()) &&
-        !IsXULDocument()) {
+        !IsXULDocument() && !ShouldUseGeckoBackend(mDocumentURI)) {
       mStyleBackendType = StyleBackendType::Servo;
     }
   }

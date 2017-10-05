@@ -1728,7 +1728,6 @@ HTMLEditor::GetCSSBackgroundColorState(bool* aMixed,
 
   // get selection location
   nsCOMPtr<nsINode> parent = selection->GetRangeAt(0)->GetStartContainer();
-  int32_t offset = selection->GetRangeAt(0)->StartOffset();
   NS_ENSURE_TRUE(parent, NS_ERROR_NULL_POINTER);
 
   // is the selection collapsed?
@@ -1739,7 +1738,7 @@ HTMLEditor::GetCSSBackgroundColorState(bool* aMixed,
   } else {
     // otherwise we want to look at the first editable node after
     // {parent,offset} and its ancestors for divs with alignment on them
-    nodeToExamine = parent->GetChildAt(offset);
+    nodeToExamine = selection->GetRangeAt(0)->GetChildAtStartOffset();
     //GetNextNode(parent, offset, true, address_of(nodeToExamine));
   }
 
@@ -2237,7 +2236,7 @@ HTMLEditor::GetElementOrParentByTagName(const nsAString& aTagName,
 
     // Try to get the actual selected node
     if (anchorNode->HasChildNodes() && anchorNode->IsContent()) {
-      node = anchorNode->GetChildAt(selection->AnchorOffset());
+      node = selection->GetChildAtAnchorOffset();
     }
     // Anchor node is probably a text node - just use that
     if (!node) {
@@ -2350,16 +2349,15 @@ HTMLEditor::GetSelectedElement(const nsAString& aTagName,
   NS_ENSURE_STATE(range);
 
   nsCOMPtr<nsINode> startContainer = range->GetStartContainer();
-  uint32_t startOffset = range->StartOffset();
+  nsIContent* startNode = range->GetChildAtStartOffset();
 
   nsCOMPtr<nsINode> endContainer = range->GetEndContainer();
-  uint32_t endOffset = range->EndOffset();
+  nsIContent* endNode = range->GetChildAtEndOffset();
 
   // Optimization for a single selected element
   if (startContainer && startContainer == endContainer &&
-      endOffset - startOffset == 1) {
-    nsCOMPtr<nsINode> selectedNode =
-      startContainer->GetChildAt(static_cast<int32_t>(startOffset));
+      startNode && endNode && startNode->GetNextSibling() == endNode) {
+    nsCOMPtr<nsINode> selectedNode = startNode;
     if (selectedNode) {
       selectedNode->AsDOMNode()->GetNodeName(domTagName);
       ToLowerCase(domTagName);
@@ -2380,16 +2378,10 @@ HTMLEditor::GetSelectedElement(const nsAString& aTagName,
       //  found for any selection that is totally within a link,
       //  included a collapsed selection (just a caret in a link)
       nsCOMPtr<nsINode> anchorNode = selection->GetAnchorNode();
-      int32_t anchorOffset = -1;
-      if (anchorNode) {
-        anchorOffset = selection->AnchorOffset();
-      }
+      nsIContent* anchorChild = selection->GetChildAtAnchorOffset();
 
       nsCOMPtr<nsINode> focusNode = selection->GetFocusNode();
-      int32_t focusOffset = -1;
-      if (focusNode) {
-        focusOffset = selection->FocusOffset();
-      }
+      nsIContent* focusChild = selection->GetChildAtFocusOffset();
 
       // Link node must be the same for both ends of selection
       if (anchorNode) {
@@ -2420,12 +2412,11 @@ HTMLEditor::GetSelectedElement(const nsAString& aTagName,
             parentLinkOfAnchor.forget(aReturn);
             return NS_OK;
           }
-        } else if (anchorOffset >= 0) {
+        } else if (anchorChild && focusChild) {
           // Check if link node is the only thing selected
-          nsINode* anchorChild = anchorNode->GetChildAt(anchorOffset);
-          if (anchorChild && HTMLEditUtils::IsLink(anchorChild) &&
+          if (HTMLEditUtils::IsLink(anchorChild) &&
               anchorNode == focusNode &&
-              focusOffset == anchorOffset + 1) {
+              focusChild == anchorChild->GetNextSibling()) {
             selectedElement = do_QueryInterface(anchorChild);
             bNodeFound = true;
           }
@@ -3142,21 +3133,17 @@ HTMLEditor::InsertTextImpl(const nsAString& aStringToInsert,
 void
 HTMLEditor::ContentAppended(nsIDocument* aDocument,
                             nsIContent* aContainer,
-                            nsIContent* aFirstNewContent,
-                            int32_t aIndexInContainer)
+                            nsIContent* aFirstNewContent)
 {
-  DoContentInserted(aDocument, aContainer, aFirstNewContent, aIndexInContainer,
-                    eAppended);
+  DoContentInserted(aDocument, aContainer, aFirstNewContent, eAppended);
 }
 
 void
 HTMLEditor::ContentInserted(nsIDocument* aDocument,
                             nsIContent* aContainer,
-                            nsIContent* aChild,
-                            int32_t aIndexInContainer)
+                            nsIContent* aChild)
 {
-  DoContentInserted(aDocument, aContainer, aChild, aIndexInContainer,
-                    eInserted);
+  DoContentInserted(aDocument, aContainer, aChild, eInserted);
 }
 
 bool
@@ -3184,7 +3171,6 @@ void
 HTMLEditor::DoContentInserted(nsIDocument* aDocument,
                               nsIContent* aContainer,
                               nsIContent* aChild,
-                              int32_t /* aIndexInContainer */,
                               InsertedOrAppended aInsertedOrAppended)
 {
   MOZ_ASSERT(aChild);
@@ -3235,7 +3221,6 @@ void
 HTMLEditor::ContentRemoved(nsIDocument* aDocument,
                            nsIContent* aContainer,
                            nsIContent* aChild,
-                           int32_t aIndexInContainer,
                            nsIContent* aPreviousSibling)
 {
   if (!IsInObservedSubtree(aDocument, aContainer, aChild)) {
@@ -3835,40 +3820,6 @@ HTMLEditor::GetPriorHTMLSibling(nsIDOMNode* inNode,
   NS_ENSURE_TRUE(node, NS_ERROR_NULL_POINTER);
 
   *outNode = do_QueryInterface(GetPriorHTMLSibling(node));
-  return NS_OK;
-}
-
-/**
- * GetPriorHTMLSibling() returns the previous editable sibling, if there is
- * one within the parent.  just like above routine but takes a parent/offset
- * instead of a node.
- */
-nsIContent*
-HTMLEditor::GetPriorHTMLSibling(nsINode* aParent,
-                                int32_t aOffset)
-{
-  MOZ_ASSERT(aParent);
-
-  nsIContent* node = aParent->GetChildAt(aOffset - 1);
-  if (!node || IsEditable(node)) {
-    return node;
-  }
-
-  return GetPriorHTMLSibling(node);
-}
-
-nsresult
-HTMLEditor::GetPriorHTMLSibling(nsIDOMNode* inParent,
-                                int32_t inOffset,
-                                nsCOMPtr<nsIDOMNode>* outNode)
-{
-  NS_ENSURE_TRUE(outNode, NS_ERROR_NULL_POINTER);
-  *outNode = nullptr;
-
-  nsCOMPtr<nsINode> parent = do_QueryInterface(inParent);
-  NS_ENSURE_TRUE(parent, NS_ERROR_NULL_POINTER);
-
-  *outNode = do_QueryInterface(GetPriorHTMLSibling(parent, inOffset));
   return NS_OK;
 }
 
@@ -4492,7 +4443,7 @@ HTMLEditor::SetCSSBackgroundColor(const nsAString& aColor)
                                           (!startOffset && !endOffset))) {
         // A unique node is selected, let's also apply the background color to
         // the containing block, possibly the node itself
-        nsCOMPtr<nsIContent> selectedNode = startNode->GetChildAt(startOffset);
+        nsCOMPtr<nsIContent> selectedNode = range->GetChildAtStartOffset();
         nsCOMPtr<Element> blockParent = GetBlock(*selectedNode);
         if (blockParent && cachedBlockParent != blockParent) {
           cachedBlockParent = blockParent;

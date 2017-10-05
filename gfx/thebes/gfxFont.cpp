@@ -1923,14 +1923,16 @@ gfxFont::DrawGlyphs(const gfxShapedText      *aShapedText,
                     double advance = details->mAdvance;
 
                     if (glyphData->IsMissing()) {
-                        if (auto* textDrawer = aRunParams.context->GetTextDrawer()) {
-                            textDrawer->FoundUnsupportedFeature();
-                            return false;
-                        }
                         // Default-ignorable chars will have zero advance width;
                         // we don't have to draw the hexbox for them.
                         if (aRunParams.drawMode != DrawMode::GLYPH_PATH &&
                             advance > 0) {
+
+                            if (auto* textDrawer = aRunParams.context->GetTextDrawer()) {
+                                textDrawer->FoundUnsupportedFeature();
+                                return false;
+                            }
+
                             double glyphX = aPt->x;
                             double glyphY = aPt->y;
                             if (aRunParams.isRTL) {
@@ -2084,6 +2086,12 @@ gfxFont::Draw(const gfxTextRun *aTextRun, uint32_t aStart, uint32_t aEnd,
 
     gfxPoint origPt = *aPt;
     if (aRunParams.isVerticalRun && !fontParams.isVerticalFont) {
+
+        if (textDrawer) {
+            textDrawer->FoundUnsupportedFeature();
+            return;
+        }
+
         sideways = true;
         matrixRestore.SetContext(aRunParams.context);
         gfxPoint p(aPt->x * aRunParams.devPerApp,
@@ -2139,6 +2147,11 @@ gfxFont::Draw(const gfxTextRun *aTextRun, uint32_t aStart, uint32_t aEnd,
             // use as many strikes as needed for the the increased advance
             fontParams.extraStrikes =
                 std::max(1, NS_lroundf(GetSyntheticBoldOffset() / xscale));
+
+            if (textDrawer) {
+                textDrawer->FoundUnsupportedFeature();
+                return;
+            }
         }
     } else {
         fontParams.synBoldOnePixelOffset = 0;
@@ -2167,6 +2180,10 @@ gfxFont::Draw(const gfxTextRun *aTextRun, uint32_t aStart, uint32_t aEnd,
         cairo_matrix_t matrix;
         cairo_scaled_font_get_font_matrix(mScaledFont, &matrix);
         if (matrix.xy != 0) {
+            if (textDrawer) {
+                textDrawer->FoundUnsupportedFeature();
+            }
+
             // If this matrix applies a skew, which can happen when drawing
             // oblique fonts, we will set the DrawTarget matrix to apply the
             // skew. We'll need to move the glyphs by the inverse of the skew to
@@ -4051,3 +4068,17 @@ gfxFont::TryGetMathTable()
 
     return !!mMathTable;
 }
+
+/* static */ void
+SharedFontList::Initialize()
+{
+  sEmpty = new SharedFontList();
+}
+
+/* static */ void
+SharedFontList::Shutdown()
+{
+  sEmpty = nullptr;
+}
+
+StaticRefPtr<SharedFontList> SharedFontList::sEmpty;

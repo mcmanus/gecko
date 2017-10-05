@@ -2001,7 +2001,6 @@ IonBuilder::inspectOpcode(JSOp op)
         return jsop_newobject();
 
       case JSOP_NEWARRAY:
-      case JSOP_SPREADCALLARRAY:
         return jsop_newarray(GET_UINT32(pc));
 
       case JSOP_NEWARRAY_COPYONWRITE:
@@ -2239,7 +2238,7 @@ IonBuilder::inspectOpcode(JSOp op)
             // object; it does not matter for arguments analysis.
             pushConstant(ObjectValue(*info().getObject(pc)));
         } else {
-            JSObject* raw = script()->getObject(GET_UINT32_INDEX(pc) + 1);
+            ArrayObject* raw = &script()->getObject(GET_UINT32_INDEX(pc) + 1)->as<ArrayObject>();
             JSObject* obj = script()->compartment()->getExistingTemplateLiteralObject(raw);
             pushConstant(ObjectValue(*obj));
         }
@@ -2448,6 +2447,7 @@ IonBuilder::inspectOpcode(JSOp op)
         // Intentionally not implemented.
         break;
 
+      case JSOP_UNUSED126:
       case JSOP_UNUSED223:
       case JSOP_LIMIT:
         break;
@@ -4809,14 +4809,16 @@ IonBuilder::createCallObject(MDefinition* callee, MDefinition* env)
     // Get a template CallObject that we'll use to generate inline object
     // creation.
     CallObject* templateObj = inspector->templateCallObject();
+    MConstant* templateCst = MConstant::NewConstraintlessObject(alloc(), templateObj);
+    current->add(templateCst);
 
     // Allocate the object. Run-once scripts need a singleton type, so always do
     // a VM call in such cases.
     MNewCallObjectBase* callObj;
     if (script()->treatAsRunOnce() || templateObj->isSingleton())
-        callObj = MNewSingletonCallObject::New(alloc(), templateObj);
+        callObj = MNewSingletonCallObject::New(alloc(), templateCst);
     else
-        callObj = MNewCallObject::New(alloc(), templateObj);
+        callObj = MNewCallObject::New(alloc(), templateCst);
     current->add(callObj);
 
     // Initialize the object's reserved slots. No post barrier is needed here,
@@ -4963,7 +4965,7 @@ IonBuilder::createThisScriptedBaseline(MDefinition* callee)
         return nullptr;
 
     Shape* shape = target->lookupPure(compartment->runtime()->names().prototype);
-    if (!shape || !shape->hasDefaultGetter() || !shape->hasSlot())
+    if (!shape || !shape->isDataProperty())
         return nullptr;
 
     Value protov = target->getSlot(shape->slot());
@@ -5179,7 +5181,7 @@ IonBuilder::jsop_funapply(uint32_t argc)
 AbortReasonOr<Ok>
 IonBuilder::jsop_spreadcall()
 {
-    // The arguments array is constructed by a JSOP_SPREADCALLARRAY and not
+    // The arguments array is constructed by a JSOP_NEWARRAY and not
     // leaked to user. The complications of spread call iterator behaviour are
     // handled when the user objects are expanded and copied into this hidden
     // array.

@@ -383,15 +383,36 @@ void *_mmap(void *addr, size_t length, int prot, int flags,
 #define	RUN_MAX_OVRHD_RELAX	0x00001800U
 
 /*
- * When MALLOC_STATIC_SIZES is defined most of the parameters
- * controlling the malloc behavior are defined as compile-time constants
- * for best performance and cannot be altered at runtime.
+ * When MALLOC_STATIC_PAGESIZE is defined, the page size is fixed at
+ * compile-time for better performance, as opposed to determined at
+ * runtime. Some platforms can have different page sizes at runtime
+ * depending on kernel configuration, so they are opted out by default.
+ * Debug builds are opted out too, for test coverage.
  */
+#ifndef MOZ_DEBUG
 #if !defined(__ia64__) && !defined(__sparc__) && !defined(__mips__) && !defined(__aarch64__)
-#define MALLOC_STATIC_SIZES 1
+#define MALLOC_STATIC_PAGESIZE 1
+#endif
 #endif
 
-#ifdef MALLOC_STATIC_SIZES
+/* Various quantum-related settings. */
+
+#define QUANTUM_DEFAULT  (size_t(1) << QUANTUM_2POW_MIN)
+static const size_t quantum = QUANTUM_DEFAULT;
+static const size_t quantum_mask = QUANTUM_DEFAULT - 1;
+
+/* Various bin-related settings. */
+
+static const size_t small_min = (QUANTUM_DEFAULT >> 1) + 1;
+static const size_t small_max = size_t(SMALL_MAX_DEFAULT);
+
+/* Number of (2^n)-spaced tiny bins. */
+static const unsigned ntbins = unsigned(QUANTUM_2POW_MIN - TINY_MIN_2POW);
+
+ /* Number of quantum-spaced bins. */
+static const unsigned nqbins = unsigned(SMALL_MAX_DEFAULT >> QUANTUM_2POW_MIN);
+
+#ifdef MALLOC_STATIC_PAGESIZE
 
 /*
  * VM page size. It must divide the runtime CPU page size or the code
@@ -409,30 +430,13 @@ void *_mmap(void *addr, size_t length, int prot, int flags,
 #define pagesize (size_t(1) << pagesize_2pow)
 #define pagesize_mask (pagesize - 1)
 
-/* Various quantum-related settings. */
-
-#define QUANTUM_DEFAULT  (size_t(1) << QUANTUM_2POW_MIN)
-static const size_t quantum = QUANTUM_DEFAULT;
-static const size_t quantum_mask = QUANTUM_DEFAULT - 1;
-
-/* Various bin-related settings. */
-
-static const size_t small_min = (QUANTUM_DEFAULT >> 1) + 1;
-static const size_t small_max = size_t(SMALL_MAX_DEFAULT);
-
 /* Max size class for bins. */
 static const size_t bin_maxclass = pagesize >> 1;
-
- /* Number of (2^n)-spaced tiny bins. */
-static const unsigned ntbins = unsigned(QUANTUM_2POW_MIN - TINY_MIN_2POW);
-
- /* Number of quantum-spaced bins. */
-static const unsigned nqbins = unsigned(SMALL_MAX_DEFAULT >> QUANTUM_2POW_MIN);
 
 /* Number of (2^n)-spaced sub-page bins. */
 static const unsigned nsbins = unsigned(pagesize_2pow - SMALL_MAX_2POW_DEFAULT - 1);
 
-#else /* !MALLOC_STATIC_SIZES */
+#else /* !MALLOC_STATIC_PAGESIZE */
 
 /* VM page size. */
 static size_t pagesize;
@@ -441,16 +445,7 @@ static size_t pagesize_2pow;
 
 /* Various bin-related settings. */
 static size_t bin_maxclass; /* Max size class for bins. */
-static unsigned ntbins; /* Number of (2^n)-spaced tiny bins. */
-static unsigned nqbins; /* Number of quantum-spaced bins. */
 static unsigned nsbins; /* Number of (2^n)-spaced sub-page bins. */
-static size_t small_min;
-static size_t small_max;
-
-/* Various quantum-related settings. */
-static size_t quantum;
-static size_t quantum_mask; /* (quantum - 1). */
-
 #endif
 
 /* Various chunk-related settings. */
@@ -478,7 +473,7 @@ static size_t quantum_mask; /* (quantum - 1). */
  */
 #define CHUNK_RECYCLE_LIMIT 128
 
-#ifdef MALLOC_STATIC_SIZES
+#ifdef MALLOC_STATIC_PAGESIZE
 #define CHUNKSIZE_DEFAULT ((size_t) 1 << CHUNK_2POW_DEFAULT)
 static const size_t chunksize = CHUNKSIZE_DEFAULT;
 static const size_t chunksize_mask = CHUNKSIZE_DEFAULT - 1;
@@ -1094,12 +1089,7 @@ static size_t		base_committed;
  * Arenas.
  */
 
-/*
- * Arenas that are used to service external requests.  Not all elements of the
- * arenas array are necessarily used; arenas are created lazily as needed.
- */
-static arena_t** arenas;
-// A tree of arenas, arranged by id.
+// A tree of all available arenas, arranged by id.
 // TODO: Move into arena_t as a static member when rb_tree doesn't depend on
 // the type being defined anymore.
 static RedBlackTree<arena_t, ArenaTreeTrait> gArenaTree;
@@ -1118,6 +1108,10 @@ static MOZ_THREAD_LOCAL(arena_t*) thread_arena;
 static mozilla::detail::ThreadLocal<arena_t*, mozilla::detail::ThreadLocalKeyStorage> thread_arena;
 #endif
 
+// The main arena, which all threads default to until jemalloc_thread_local_arena
+// is called.
+static arena_t *gMainArena;
+
 /*******************************/
 /*
  * Runtime configuration options.
@@ -1134,15 +1128,6 @@ static const bool	opt_zero = false;
 #endif
 
 static size_t	opt_dirty_max = DIRTY_MAX_DEFAULT;
-#ifdef MALLOC_STATIC_SIZES
-#define opt_quantum_2pow	QUANTUM_2POW_MIN
-#define opt_small_max_2pow	SMALL_MAX_2POW_DEFAULT
-#define opt_chunk_2pow		CHUNK_2POW_DEFAULT
-#else
-static size_t	opt_quantum_2pow = QUANTUM_2POW_MIN;
-static size_t	opt_small_max_2pow = SMALL_MAX_2POW_DEFAULT;
-static size_t	opt_chunk_2pow = CHUNK_2POW_DEFAULT;
-#endif
 
 /******************************************************************************/
 /*
@@ -2340,9 +2325,7 @@ thread_local_arena(bool enabled)
      * with `false`, except maybe at shutdown. */
     arena = arenas_extend();
   } else {
-    malloc_spin_lock(&arenas_lock);
-    arena = arenas[0];
-    malloc_spin_unlock(&arenas_lock);
+    arena = gMainArena;
   }
   thread_arena.set(arena);
   return arena;
@@ -3216,12 +3199,12 @@ arena_t::MallocSmall(size_t aSize, bool aZero)
   } else if (aSize <= small_max) {
     /* Quantum-spaced. */
     aSize = QUANTUM_CEILING(aSize);
-    bin = &mBins[ntbins + (aSize >> opt_quantum_2pow) - 1];
+    bin = &mBins[ntbins + (aSize >> QUANTUM_2POW_MIN) - 1];
   } else {
     /* Sub-page. */
     aSize = pow2_ceil(aSize);
     bin = &mBins[ntbins + nqbins
-        + (ffs((int)(aSize >> opt_small_max_2pow)) - 2)];
+        + (ffs((int)(aSize >> SMALL_MAX_2POW_DEFAULT)) - 2)];
   }
   MOZ_DIAGNOSTIC_ASSERT(aSize == bin->reg_size);
 
@@ -3698,6 +3681,8 @@ arena_t::DallocSmall(arena_chunk_t* aChunk, void* aPtr, arena_chunk_map_t* aMapE
   MOZ_DIAGNOSTIC_ASSERT(run->magic == ARENA_RUN_MAGIC);
   bin = run->bin;
   size = bin->reg_size;
+  MOZ_DIAGNOSTIC_ASSERT(uintptr_t(aPtr) >= uintptr_t(run) + bin->reg0_offset);
+  MOZ_DIAGNOSTIC_ASSERT((uintptr_t(aPtr) - (uintptr_t(run) + bin->reg0_offset)) % size == 0);
 
   memset(aPtr, kAllocPoison, size);
 
@@ -3757,6 +3742,7 @@ arena_t::DallocSmall(arena_chunk_t* aChunk, void* aPtr, arena_chunk_map_t* aMapE
 void
 arena_t::DallocLarge(arena_chunk_t* aChunk, void* aPtr)
 {
+  MOZ_DIAGNOSTIC_ASSERT((uintptr_t(aPtr) & pagesize_mask) == 0);
   size_t pageind = (uintptr_t(aPtr) - uintptr_t(aChunk)) >> pagesize_2pow;
   size_t size = aChunk->map[pageind].bits & ~pagesize_mask;
 
@@ -3922,8 +3908,8 @@ arena_ralloc(void* aPtr, size_t aSize, size_t aOldSize, arena_t* aArena)
     }
   } else if (aSize <= small_max) {
     if (aOldSize >= small_min && aOldSize <= small_max &&
-        (QUANTUM_CEILING(aSize) >> opt_quantum_2pow) ==
-        (QUANTUM_CEILING(aOldSize) >> opt_quantum_2pow)) {
+        (QUANTUM_CEILING(aSize) >> QUANTUM_2POW_MIN) ==
+        (QUANTUM_CEILING(aOldSize) >> QUANTUM_2POW_MIN)) {
       goto IN_PLACE; /* Same size class. */
     }
   } else if (aSize <= bin_maxclass) {
@@ -4063,30 +4049,24 @@ arena_t::Init()
 static inline arena_t *
 arenas_fallback()
 {
-	/* Only reached if there is an OOM error. */
+  /* Only reached if there is an OOM error. */
 
-	/*
-	 * OOM here is quite inconvenient to propagate, since dealing with it
-	 * would require a check for failure in the fast path.  Instead, punt
-	 * by using arenas[0].
-	 * In practice, this is an extremely unlikely failure.
-	 */
-	_malloc_message(_getprogname(),
-	    ": (malloc) Error initializing arena\n");
+  /*
+   * OOM here is quite inconvenient to propagate, since dealing with it
+   * would require a check for failure in the fast path.  Instead, punt
+   * by using the first arena.
+   * In practice, this is an extremely unlikely failure.
+   */
+  _malloc_message(_getprogname(),
+      ": (malloc) Error initializing arena\n");
 
-	return arenas[0];
+  return gMainArena;
 }
 
 /* Create a new arena and return it. */
 static arena_t*
 arenas_extend()
 {
-  /*
-   * The list of arenas is first allocated to contain at most 16 elements,
-   * and when the limit is reached, the list is grown such that it can
-   * contain 16 more elements.
-   */
-  const size_t arenas_growth = 16;
   arena_t* ret;
 
   /* Allocate enough space for trailing bins. */
@@ -4099,31 +4079,8 @@ arenas_extend()
   malloc_spin_lock(&arenas_lock);
 
   // TODO: Use random Ids.
-  ret->mId = narenas;
+  ret->mId = narenas++;
   gArenaTree.Insert(ret);
-
-  /* Allocate and initialize arenas. */
-  if (narenas % arenas_growth == 0) {
-    size_t max_arenas = ((narenas + arenas_growth) / arenas_growth) * arenas_growth;
-    /*
-     * We're unfortunately leaking the previous allocation ;
-     * the base allocator doesn't know how to free things
-     */
-    arena_t** new_arenas = (arena_t**)base_alloc(sizeof(arena_t*) * max_arenas);
-    if (!new_arenas) {
-      ret = arenas ? arenas_fallback() : nullptr;
-      malloc_spin_unlock(&arenas_lock);
-      return ret;
-    }
-    memcpy(new_arenas, arenas, narenas * sizeof(arena_t*));
-    /*
-     * Zero the array.  In practice, this should always be pre-zeroed,
-     * since it was just mmap()ed, but let's be sure.
-     */
-    memset(new_arenas + narenas, 0, sizeof(arena_t*) * (max_arenas - narenas));
-    arenas = new_arenas;
-  }
-  arenas[narenas++] = ret;
 
   malloc_spin_unlock(&arenas_lock);
   return ret;
@@ -4410,7 +4367,7 @@ malloc_init_hard(void)
   result = GetKernelPageSize();
   /* We assume that the page size is a power of 2. */
   MOZ_ASSERT(((result - 1) & result) == 0);
-#ifdef MALLOC_STATIC_SIZES
+#ifdef MALLOC_STATIC_PAGESIZE
   if (pagesize % (size_t) result) {
     _malloc_message(_getprogname(),
         "Compile-time page size does not divide the runtime one.\n");
@@ -4464,43 +4421,6 @@ MALLOC_OUT:
           opt_junk = true;
           break;
 #endif
-#ifndef MALLOC_STATIC_SIZES
-        case 'k':
-          /*
-           * Chunks always require at least one
-           * header page, so chunks can never be
-           * smaller than two pages.
-           */
-          if (opt_chunk_2pow > pagesize_2pow + 1)
-            opt_chunk_2pow--;
-          break;
-        case 'K':
-          if (opt_chunk_2pow + 1 <
-              (sizeof(size_t) << 3))
-            opt_chunk_2pow++;
-          break;
-#endif
-#ifndef MALLOC_STATIC_SIZES
-        case 'q':
-          if (opt_quantum_2pow > QUANTUM_2POW_MIN)
-            opt_quantum_2pow--;
-          break;
-        case 'Q':
-          if (opt_quantum_2pow < pagesize_2pow -
-              1)
-            opt_quantum_2pow++;
-          break;
-        case 's':
-          if (opt_small_max_2pow >
-              QUANTUM_2POW_MIN)
-            opt_small_max_2pow--;
-          break;
-        case 'S':
-          if (opt_small_max_2pow < pagesize_2pow
-              - 1)
-            opt_small_max_2pow++;
-          break;
-#endif
 #ifdef MOZ_DEBUG
         case 'z':
           opt_zero = false;
@@ -4524,33 +4444,13 @@ MALLOC_OUT:
     }
   }
 
-#ifndef MALLOC_STATIC_SIZES
-  /* Set variables according to the value of opt_small_max_2pow. */
-  if (opt_small_max_2pow < opt_quantum_2pow) {
-    opt_small_max_2pow = opt_quantum_2pow;
-  }
-  small_max = (1U << opt_small_max_2pow);
-
+#ifndef MALLOC_STATIC_PAGESIZE
   /* Set bin-related variables. */
   bin_maxclass = (pagesize >> 1);
-  MOZ_ASSERT(opt_quantum_2pow >= TINY_MIN_2POW);
-  ntbins = opt_quantum_2pow - TINY_MIN_2POW;
-  MOZ_ASSERT(ntbins <= opt_quantum_2pow);
-  nqbins = (small_max >> opt_quantum_2pow);
-  nsbins = pagesize_2pow - opt_small_max_2pow - 1;
+  nsbins = pagesize_2pow - SMALL_MAX_2POW_DEFAULT - 1;
 
-  /* Set variables according to the value of opt_quantum_2pow. */
-  quantum = (1U << opt_quantum_2pow);
-  quantum_mask = quantum - 1;
-  if (ntbins > 0) {
-    small_min = (quantum >> 1) + 1;
-  } else {
-    small_min = 1;
-  }
-  MOZ_ASSERT(small_min <= quantum);
-
-  /* Set variables according to the value of opt_chunk_2pow. */
-  chunksize = (1LU << opt_chunk_2pow);
+  /* Set variables according to the value of CHUNK_2POW_DEFAULT. */
+  chunksize = (1LU << CHUNK_2POW_DEFAULT);
   chunksize_mask = chunksize - 1;
   chunk_npages = (chunksize >> pagesize_2pow);
 
@@ -4594,22 +4494,23 @@ MALLOC_OUT:
    */
   gArenaTree.Init();
   arenas_extend();
-  if (!arenas || !arenas[0]) {
+  gMainArena = gArenaTree.First();
+  if (!gMainArena) {
 #ifndef XP_WIN
     malloc_mutex_unlock(&init_lock);
 #endif
     return true;
   }
   /* arena_t::Init() sets this to a lower value for thread local arenas;
-   * reset to the default value for the main arenas */
-  arenas[0]->mMaxDirty = opt_dirty_max;
+   * reset to the default value for the main arena. */
+  gMainArena->mMaxDirty = opt_dirty_max;
 
   /*
    * Assign the initial arena to the initial thread.
    */
-  thread_arena.set(arenas[0]);
+  thread_arena.set(gMainArena);
 
-  chunk_rtree = malloc_rtree_new((SIZEOF_PTR << 3) - opt_chunk_2pow);
+  chunk_rtree = malloc_rtree_new((SIZEOF_PTR << 3) - CHUNK_2POW_DEFAULT);
   if (!chunk_rtree) {
     return true;
   }
@@ -4909,7 +4810,7 @@ MozJemalloc::malloc_usable_size(usable_ptr_t aPtr)
 template<> inline void
 MozJemalloc::jemalloc_stats(jemalloc_stats_t* aStats)
 {
-  size_t i, non_arena_mapped, chunk_header_size;
+  size_t non_arena_mapped, chunk_header_size;
 
   MOZ_ASSERT(aStats);
 
@@ -4954,8 +4855,7 @@ MozJemalloc::jemalloc_stats(jemalloc_stats_t* aStats)
 
   malloc_spin_lock(&arenas_lock);
   /* Iterate over arenas. */
-  for (i = 0; i < narenas; i++) {
-    arena_t* arena = arenas[i];
+  for (auto arena : gArenaTree.iter()) {
     size_t arena_mapped, arena_allocated, arena_committed, arena_dirty, j,
            arena_unused, arena_headers;
     arena_run_t* run;
@@ -5074,13 +4974,9 @@ arena_t::HardPurge()
 template<> inline void
 MozJemalloc::jemalloc_purge_freed_pages()
 {
-  size_t i;
   malloc_spin_lock(&arenas_lock);
-  for (i = 0; i < narenas; i++) {
-    arena_t* arena = arenas[i];
-    if (arena) {
-      arena->HardPurge();
-    }
+  for (auto arena : gArenaTree.iter()) {
+    arena->HardPurge();
   }
   malloc_spin_unlock(&arenas_lock);
 }
@@ -5099,16 +4995,11 @@ MozJemalloc::jemalloc_purge_freed_pages()
 template<> inline void
 MozJemalloc::jemalloc_free_dirty_pages(void)
 {
-  size_t i;
   malloc_spin_lock(&arenas_lock);
-  for (i = 0; i < narenas; i++) {
-    arena_t* arena = arenas[i];
-
-    if (arena) {
-      malloc_spin_lock(&arena->mLock);
-      arena->Purge(true);
-      malloc_spin_unlock(&arena->mLock);
-    }
+  for (auto arena : gArenaTree.iter()) {
+    malloc_spin_lock(&arena->mLock);
+    arena->Purge(true);
+    malloc_spin_unlock(&arena->mLock);
   }
   malloc_spin_unlock(&arenas_lock);
 }
@@ -5185,19 +5076,17 @@ static
 void
 _malloc_prefork(void)
 {
-	unsigned i;
+  /* Acquire all mutexes in a safe order. */
 
-	/* Acquire all mutexes in a safe order. */
+  malloc_spin_lock(&arenas_lock);
 
-	malloc_spin_lock(&arenas_lock);
-	for (i = 0; i < narenas; i++) {
-		if (arenas[i])
-			malloc_spin_lock(&arenas[i]->mLock);
-	}
+  for (auto arena : gArenaTree.iter()) {
+    malloc_spin_lock(&arena->mLock);
+  }
 
-	malloc_mutex_lock(&base_mtx);
+  malloc_mutex_lock(&base_mtx);
 
-	malloc_mutex_lock(&huge_mtx);
+  malloc_mutex_lock(&huge_mtx);
 }
 
 #ifndef XP_DARWIN
@@ -5206,19 +5095,16 @@ static
 void
 _malloc_postfork_parent(void)
 {
-	unsigned i;
+  /* Release all mutexes, now that fork() has completed. */
 
-	/* Release all mutexes, now that fork() has completed. */
+  malloc_mutex_unlock(&huge_mtx);
 
-	malloc_mutex_unlock(&huge_mtx);
+  malloc_mutex_unlock(&base_mtx);
 
-	malloc_mutex_unlock(&base_mtx);
-
-	for (i = 0; i < narenas; i++) {
-		if (arenas[i])
-			malloc_spin_unlock(&arenas[i]->mLock);
-	}
-	malloc_spin_unlock(&arenas_lock);
+  for (auto arena : gArenaTree.iter()) {
+    malloc_spin_unlock(&arena->mLock);
+  }
+  malloc_spin_unlock(&arenas_lock);
 }
 
 #ifndef XP_DARWIN
@@ -5227,19 +5113,16 @@ static
 void
 _malloc_postfork_child(void)
 {
-	unsigned i;
+  /* Reinitialize all mutexes, now that fork() has completed. */
 
-	/* Reinitialize all mutexes, now that fork() has completed. */
+  malloc_mutex_init(&huge_mtx);
 
-	malloc_mutex_init(&huge_mtx);
+  malloc_mutex_init(&base_mtx);
 
-	malloc_mutex_init(&base_mtx);
-
-	for (i = 0; i < narenas; i++) {
-		if (arenas[i])
-			malloc_spin_init(&arenas[i]->mLock);
-	}
-	malloc_spin_init(&arenas_lock);
+  for (auto arena : gArenaTree.iter()) {
+    malloc_spin_init(&arena->mLock);
+  }
+  malloc_spin_init(&arenas_lock);
 }
 
 /*

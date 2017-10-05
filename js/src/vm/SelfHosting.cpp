@@ -1651,7 +1651,7 @@ intrinsic_RegExpGetSubstitution(JSContext* cx, unsigned argc, Value* vp)
     CallArgs args = CallArgsFromVp(argc, vp);
     MOZ_ASSERT(args.length() == 5);
 
-    RootedObject matchResult(cx, &args[0].toObject());
+    RootedArrayObject matchResult(cx, &args[0].toObject().as<ArrayObject>());
 
     RootedLinearString string(cx, args[1].toString()->ensureLinear(cx));
     if (!string)
@@ -2959,7 +2959,7 @@ GetUnclonedValue(JSContext* cx, HandleNativeObject selfHostedObject,
 
     RootedShape shape(cx, selfHostedObject->lookupPure(id));
     MOZ_ASSERT(shape);
-    MOZ_ASSERT(shape->hasSlot() && shape->hasDefaultGetter());
+    MOZ_ASSERT(shape->isDataProperty());
     vp.set(selfHostedObject->getSlot(shape->slot()));
     return true;
 }

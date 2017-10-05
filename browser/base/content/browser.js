@@ -2214,6 +2214,7 @@ function BrowserGoHome(aEvent) {
   switch (where) {
   case "current":
     loadOneOrMoreURIs(homePage, Services.scriptSecurityManager.getSystemPrincipal());
+    gBrowser.selectedBrowser.focus();
     break;
   case "tabshifted":
   case "tab":
@@ -3724,16 +3725,8 @@ const DOMEventHandler = {
     let loadingPrincipal = aLoadingPrincipal ||
                            Services.scriptSecurityManager.getSystemPrincipal();
     if (aURL) {
-      try {
-        if (!(aURL instanceof Ci.nsIURI)) {
-          aURL = makeURI(aURL);
-        }
-        PlacesUIUtils.loadFavicon(aBrowser, loadingPrincipal, aURL, aRequestContextID);
-      } catch (ex) {
-        Components.utils.reportError(ex);
-      }
+      gBrowser.storeIcon(aBrowser, aURL, loadingPrincipal, aRequestContextID);
     }
-
     if (aCanUseForTab) {
       gBrowser.setIcon(tab, aURL, loadingPrincipal, aRequestContextID);
     }
@@ -4952,6 +4945,18 @@ var CombinedStopReload = {
     if (XULBrowserWindow.stopCommand.getAttribute("disabled") != "true")
       reload.setAttribute("displaystop", "true");
     stop.addEventListener("click", this);
+
+    // Removing attributes based on the observed command doesn't happen if the button
+    // is in the palette when the command's attribute is removed (cf. bug 309953)
+    for (let button of [stop, reload]) {
+      if (button.hasAttribute("disabled")) {
+        let command = document.getElementById(button.getAttribute("command"));
+        if (!command.hasAttribute("disabled")) {
+          button.removeAttribute("disabled");
+        }
+      }
+    }
+
     this.reload = reload;
     this.stop = stop;
     this.stopReloadContainer = this.reload.parentNode;
@@ -5054,8 +5059,7 @@ var CombinedStopReload = {
   },
 
   switchToReload(aRequest, aWebProgress) {
-    if (!this.ensureInitialized() || !this._shouldSwitch(aRequest, aWebProgress) ||
-        !this.reload.hasAttribute("displaystop")) {
+    if (!this.ensureInitialized() || !this.reload.hasAttribute("displaystop")) {
       return;
     }
 
@@ -5372,8 +5376,23 @@ nsBrowserAccess.prototype = {
     return newWindow;
   },
 
+  createContentWindowInFrame: function browser_createContentWindowInFrame(
+                              aURI, aParams, aWhere, aFlags, aNextTabParentId,
+                              aName) {
+    // Passing a null-URI to only create the content window.
+    return this.getContentWindowOrOpenURIInFrame(null, aParams, aWhere, aFlags,
+                                                 aNextTabParentId, aName);
+  },
+
   openURIInFrame: function browser_openURIInFrame(aURI, aParams, aWhere, aFlags,
                                                   aNextTabParentId, aName) {
+    return this.getContentWindowOrOpenURIInFrame(aURI, aParams, aWhere, aFlags,
+                                                 aNextTabParentId, aName);
+  },
+
+  getContentWindowOrOpenURIInFrame: function browser_getContentWindowOrOpenURIInFrame(
+                                    aURI, aParams, aWhere, aFlags,
+                                    aNextTabParentId, aName) {
     if (aWhere != Ci.nsIBrowserDOMWindow.OPEN_NEWTAB) {
       dump("Error: openURIInFrame can only open in new tabs");
       return null;
@@ -6127,7 +6146,7 @@ function stripUnsafeProtocolOnPaste(pasteData) {
   // LOAD_FLAGS_DISALLOW_INHERIT_PRINCIPAL for those.
   let changed = false;
   let pasteDataNoJS = pasteData.replace(/\r?\n/g, "")
-                               .replace(/^(?:\s*javascript:)+/i,
+                               .replace(/^(?:\W*javascript:)+/i,
                                         () => {
                                                 changed = true;
                                                 return "";
@@ -8230,6 +8249,8 @@ var gRemoteTabsUI = {
  *        - 'replaceQueryString' boolean property to be set to true to exclude query string
  *        matching when comparing URIs and overwrite the initial query string with
  *        the one from the new URI.
+ *        - 'adoptIntoActiveWindow' boolean property to be set to true to adopt the tab
+ *        into the current window.
  * @return True if an existing tab was found, false otherwise
  */
 function switchToTabHavingURI(aURI, aOpenNew, aOpenParams = {}) {
@@ -8242,12 +8263,16 @@ function switchToTabHavingURI(aURI, aOpenNew, aOpenParams = {}) {
   let ignoreFragment = aOpenParams.ignoreFragment;
   let ignoreQueryString = aOpenParams.ignoreQueryString;
   let replaceQueryString = aOpenParams.replaceQueryString;
+  let adoptIntoActiveWindow = aOpenParams.adoptIntoActiveWindow;
 
   // These properties are only used by switchToTabHavingURI and should
   // not be used as a parameter for the new load.
   delete aOpenParams.ignoreFragment;
   delete aOpenParams.ignoreQueryString;
   delete aOpenParams.replaceQueryString;
+  delete aOpenParams.adoptIntoActiveWindow;
+
+  let isBrowserWindow = !!window.gBrowser;
 
   // This will switch to the tab in aWindow having aURI, if present.
   function switchIfURIInWindow(aWindow) {
@@ -8290,11 +8315,28 @@ function switchToTabHavingURI(aURI, aOpenNew, aOpenParams = {}) {
       let browserCompare = cleanURL(
           browser.currentURI.displaySpec, ignoreQueryString || replaceQueryString, ignoreFragmentWhenComparing);
       if (requestedCompare == browserCompare) {
-        aWindow.focus();
+        // If adoptIntoActiveWindow is set, and this is a cross-window switch,
+        // adopt the tab into the current window, after the active tab.
+        let doAdopt = adoptIntoActiveWindow && isBrowserWindow && aWindow != window;
+
+        if (doAdopt) {
+          window.gBrowser.adoptTab(
+            aWindow.gBrowser.getTabForBrowser(browser),
+            window.gBrowser.tabContainer.selectedIndex + 1,
+            /* aSelectTab = */ true
+          );
+        } else {
+          aWindow.focus();
+        }
+
         if (ignoreFragment == "whenComparingAndReplace" || replaceQueryString) {
           browser.loadURI(aURI.spec);
         }
-        aWindow.gBrowser.tabContainer.selectedIndex = i;
+
+        if (!doAdopt) {
+          aWindow.gBrowser.tabContainer.selectedIndex = i;
+        }
+
         return true;
       }
     }
@@ -8304,8 +8346,6 @@ function switchToTabHavingURI(aURI, aOpenNew, aOpenParams = {}) {
   // This can be passed either nsIURI or a string.
   if (!(aURI instanceof Ci.nsIURI))
     aURI = Services.io.newURI(aURI);
-
-  let isBrowserWindow = !!window.gBrowser;
 
   // Prioritise this window.
   if (isBrowserWindow && switchIfURIInWindow(window))

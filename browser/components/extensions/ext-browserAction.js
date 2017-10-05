@@ -118,7 +118,17 @@ this.browserAction = class extends ExtensionAPI {
     this.tabContext = new TabContext(tab => Object.create(this.defaults),
                                      extension);
 
+    // eslint-disable-next-line mozilla/balanced-listeners
+    this.tabContext.on("location-change", this.handleLocationChange.bind(this));
+
     this.build();
+  }
+
+  handleLocationChange(eventType, tab, fromBrowse) {
+    if (fromBrowse) {
+      this.tabContext.clear(tab);
+      this.updateOnChange(tab);
+    }
   }
 
   onShutdown(reason) {
@@ -150,7 +160,7 @@ this.browserAction = class extends ExtensionAPI {
         view.setAttribute("flex", "1");
         view.setAttribute("extension", true);
 
-        document.getElementById("PanelUI-multiView").appendChild(view);
+        document.getElementById("appMenu-viewCache").appendChild(view);
 
         if (this.extension.hasPermission("menus") ||
             this.extension.hasPermission("contextMenus")) {

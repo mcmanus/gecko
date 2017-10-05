@@ -623,29 +623,18 @@ WebRenderAPI::RunOnRenderThread(UniquePtr<RendererEvent> aEvent)
 }
 
 DisplayListBuilder::DisplayListBuilder(PipelineId aId,
-                                       const wr::LayoutSize& aContentSize)
+                                       const wr::LayoutSize& aContentSize,
+                                       size_t aCapacity)
   : mMaskClipCount(0)
 {
   MOZ_COUNT_CTOR(DisplayListBuilder);
-  mWrState = wr_state_new(aId, aContentSize);
+  mWrState = wr_state_new(aId, aContentSize, aCapacity);
 }
 
 DisplayListBuilder::~DisplayListBuilder()
 {
   MOZ_COUNT_DTOR(DisplayListBuilder);
   wr_state_delete(mWrState);
-}
-
-void
-DisplayListBuilder::Begin(const LayerIntSize& aSize)
-{
-  wr_dp_begin(mWrState, aSize.width, aSize.height);
-}
-
-void
-DisplayListBuilder::End()
-{
-  wr_dp_end(mWrState);
 }
 
 void
@@ -695,7 +684,7 @@ DisplayListBuilder::PopStackingContext()
 
 wr::WrClipId
 DisplayListBuilder::DefineClip(const wr::LayoutRect& aClipRect,
-                               const nsTArray<wr::WrComplexClipRegion>* aComplex,
+                               const nsTArray<wr::ComplexClipRegion>* aComplex,
                                const wr::WrImageMask* aMask)
 {
   uint64_t clip_id = wr_dp_define_clip(mWrState, aClipRect,
@@ -1091,18 +1080,18 @@ DisplayListBuilder::PushLine(const wr::LayoutRect& aClip,
 }
 
 void
-DisplayListBuilder::PushTextShadow(const wr::LayoutRect& aRect,
-                                   const wr::LayoutRect& aClip,
-                                   bool aIsBackfaceVisible,
-                                   const wr::TextShadow& aShadow)
+DisplayListBuilder::PushShadow(const wr::LayoutRect& aRect,
+                               const wr::LayoutRect& aClip,
+                               bool aIsBackfaceVisible,
+                               const wr::Shadow& aShadow)
 {
-  wr_dp_push_text_shadow(mWrState, aRect, aClip, aIsBackfaceVisible, aShadow);
+  wr_dp_push_shadow(mWrState, aRect, aClip, aIsBackfaceVisible, aShadow);
 }
 
 void
-DisplayListBuilder::PopTextShadow()
+DisplayListBuilder::PopShadow()
 {
-  wr_dp_pop_text_shadow(mWrState);
+  wr_dp_pop_shadow(mWrState);
 }
 
 void

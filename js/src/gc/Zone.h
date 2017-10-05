@@ -252,7 +252,7 @@ struct Zone : public JS::shadow::Zone,
     }
 
     bool isCollecting() const {
-        MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtimeFromActiveCooperatingThread()));
+        MOZ_ASSERT(js::CurrentThreadCanAccessRuntime(runtimeFromActiveCooperatingThread()));
         return isCollectingFromAnyThread();
     }
 
@@ -435,25 +435,35 @@ struct Zone : public JS::shadow::Zone,
     bool triggerGCForTooMuchMalloc() {
         JSRuntime* rt = runtimeFromAnyThread();
 
-        if (CurrentThreadCanAccessRuntime(rt)) {
+        if (js::CurrentThreadCanAccessRuntime(rt)) {
             return rt->gc.triggerZoneGC(this, JS::gcreason::TOO_MUCH_MALLOC,
                                         gcMallocCounter.bytes(), gcMallocCounter.maxBytes());
         }
         return false;
     }
 
-    void resetGCMallocBytes() { gcMallocCounter.reset(); }
-    void setGCMaxMallocBytes(size_t value) { gcMallocCounter.setMax(value); }
-    void updateMallocCounter(size_t nbytes) { gcMallocCounter.update(this, nbytes); }
+    void updateGCMallocBytesOnGC(const js::AutoLockGC& lock) {
+        gcMallocCounter.updateOnGC(lock);
+    }
+    void setGCMaxMallocBytes(size_t value, const js::AutoLockGC& lock) {
+        gcMallocCounter.setMax(value, lock);
+    }
+    void updateMallocCounter(size_t nbytes) {
+        if (!runtime_->gc.updateMallocCounter(nbytes))
+            gcMallocCounter.update(this, nbytes);
+    }
+    void adoptMallocBytes(Zone* other) {
+        gcMallocCounter.adopt(other->gcMallocCounter);
+    }
     size_t GCMaxMallocBytes() const { return gcMallocCounter.maxBytes(); }
     size_t GCMallocBytes() const { return gcMallocCounter.bytes(); }
 
     void updateJitCodeMallocBytes(size_t size) { jitCodeCounter.update(this, size); }
 
-    // Resets all the memory counters.
-    void resetAllMallocBytes() {
-        resetGCMallocBytes();
-        jitCodeCounter.reset();
+    // Updates all the memory counters after GC.
+    void updateAllMallocBytesOnGC(const js::AutoLockGC& lock) {
+        updateGCMallocBytesOnGC(lock);
+        jitCodeCounter.updateOnGC(lock);
     }
     bool isTooMuchMalloc() const {
         return gcMallocCounter.isTooMuchMalloc() ||
@@ -620,7 +630,7 @@ struct Zone : public JS::shadow::Zone,
     void transferUniqueId(js::gc::Cell* tgt, js::gc::Cell* src) {
         MOZ_ASSERT(src != tgt);
         MOZ_ASSERT(!IsInsideNursery(tgt));
-        MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtimeFromActiveCooperatingThread()));
+        MOZ_ASSERT(js::CurrentThreadCanAccessRuntime(runtimeFromActiveCooperatingThread()));
         MOZ_ASSERT(js::CurrentThreadCanAccessZone(this));
         MOZ_ASSERT(!uniqueIds().has(tgt));
         uniqueIds().rekeyIfMoved(src, tgt);
@@ -658,6 +668,28 @@ struct Zone : public JS::shadow::Zone,
 
     // Delete an empty compartment after its contents have been merged.
     void deleteEmptyCompartment(JSCompartment* comp);
+
+    /*
+     * This variation of calloc will call the large-allocation-failure callback
+     * on OOM and retry the allocation.
+     */
+    template <typename T>
+    T* pod_callocCanGC(size_t numElems) {
+        T* p = pod_calloc<T>(numElems);
+        if (MOZ_LIKELY(!!p))
+            return p;
+        size_t bytes;
+        if (MOZ_UNLIKELY(!js::CalculateAllocSize<T>(numElems, &bytes))) {
+            reportAllocationOverflow();
+            return nullptr;
+        }
+        JSRuntime* rt = runtimeFromActiveCooperatingThread();
+        p = static_cast<T*>(rt->onOutOfMemoryCanGC(js::AllocFunction::Calloc, bytes));
+        if (!p)
+            return nullptr;
+        updateMallocCounter(bytes);
+        return p;
+    }
 
   private:
     js::ZoneGroupData<js::jit::JitZone*> jitZone_;
