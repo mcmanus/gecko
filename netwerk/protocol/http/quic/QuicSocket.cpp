@@ -19,6 +19,7 @@
 #include "QuicSocketUtil.h"
 #include "nsISSLStatusProvider.h"
 #include "nsISSLStatus.h"
+#include "nsHttpHandler.h"
 
 #include "ssl.h"
 #include "sslproto.h"
@@ -33,7 +34,7 @@ NS_IMPL_ISUPPORTS(QuicSocket, nsISSLSocketControl, nsISSLStatusProvider)
 
 QuicSocket::QuicSocket(const char *host, int32_t port, bool v4)
   : mClosed(false)
-  , mDestroyOnClose(true)
+  , mDestroyOnClose(false)
   , mQuicConnected(false)
   , mTransportParamsToWriteLen(0)
   , mHandshakeCompleteCode(MOZQUIC_ERR_GENERAL)
@@ -133,19 +134,27 @@ QuicSocket::GetFromFD(PRFileDesc *fd)
   
 QuicSocket::~QuicSocket()
 {
-  if (mSession) {
-    mozquic_destroy_connection(mSession);
+  fprintf(stderr,"QuicSocket::~QuicSocket %p\n", this);
+  if (!OnSocketThread()) {
+    fprintf (stderr,"todo shutdown leak\n");
     mSession = nullptr;
-  }
-
-  mDestroyOnClose = false;
-  if (mFD) {
-    PR_Close(mFD);
     mFD = nullptr;
-  }
-  if (mPSMHelper) {
-    PR_Close(mPSMHelper);
     mPSMHelper = nullptr;
+  } else {
+    if (mSession) {
+      mozquic_destroy_connection(mSession);
+      mSession = nullptr;
+    }
+
+    mDestroyOnClose = false;
+    if (mFD) {
+      PR_Close(mFD);
+      mFD = nullptr;
+    }
+    if (mPSMHelper) {
+      PR_Close(mPSMHelper);
+      mPSMHelper = nullptr;
+    }
   }
 }
 
@@ -263,6 +272,9 @@ QuicSocket::MozQuicEventCallback(void *closure, uint32_t event, void *param)
   }
   case MOZQUIC_EVENT_TRANSMIT:
   {
+    if (!self->mFD) {
+      return MOZQUIC_ERR_IO;
+    }
     struct mozquic_eventdata_transmit *input =
       reinterpret_cast<struct mozquic_eventdata_transmit *>(param);
     PR_Write(self->mFD->lower, input->pkt, input->len);
@@ -270,6 +282,9 @@ QuicSocket::MozQuicEventCallback(void *closure, uint32_t event, void *param)
   }
   case MOZQUIC_EVENT_RECV:
   {
+    if (!self->mFD) {
+      return MOZQUIC_ERR_IO;
+    }
     struct mozquic_eventdata_recv *input =
       reinterpret_cast<struct mozquic_eventdata_recv *>(param);
     int consumed = PR_Read(self->mFD->lower, input->pkt, input->avail);
@@ -439,6 +454,9 @@ QuicSocket::psmHelperWrite(PRFileDesc *fd, const void *aBuf, int32_t aAmount)
   // client handshake data has come from psm and needs to be written into mozquic library
   // to be placed onto the wire as quic stream 0
   QuicSocket *self = reinterpret_cast<QuicSocket *>(fd->secret);
+  if (!self->mFD || !self->mSession) {
+    return aAmount;
+  }
   mozquic_handshake_output(self->mSession, (unsigned char *)aBuf, aAmount);
   return aAmount;
 }
@@ -505,7 +523,9 @@ PRStatus
 QuicSocket::psmHelperClose(PRFileDesc *fd)
 {
   QuicSocket *self = reinterpret_cast<QuicSocket *>(fd->secret);
-  delete self;
+  if (self->mFD) {
+    delete self;
+  }
   return PR_SUCCESS;
 }
 

@@ -44,6 +44,8 @@ QuicSession::QuicSession(nsISocketTransport *aSocketTransport, uint32_t version,
 QuicSession::~QuicSession()
 {
   // need to cleanup mstreamtransactionhash
+  // todo
+  fprintf(stderr,"TODO QUICSESSION:~QUICSESSION() %p\n", this);
 }
 
 
@@ -75,9 +77,15 @@ QuicSession::AddStream(nsAHttpTransaction *aHttpTransaction,
                        bool aUseTunnel, nsIInterfaceRequestor *)
 {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
-  MOZ_ASSERT(!aUseTunnel); // todo.. interfacerequestor is for that
   MOZ_ASSERT(mSocket);
   // todo priority
+
+  if (aUseTunnel) {
+    fprintf(stderr,"TODO TUNNEL\n");
+    // should really assert, this transaction needs to be a tunnel,
+    // but we're going to send it directly to the proxy as a way to
+    // fake a route for demo purposes
+  }
 
   // integrity check
   if (mStreamTransactionHash.Get(aHttpTransaction)) {
@@ -200,7 +208,7 @@ void
 QuicSession::Close(nsresult aReason)
 {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
-  MOZ_ASSERT(false);
+  fprintf(stderr,"TODO QUICSESSION:CLOSE()\n");
   // todo
 }
 

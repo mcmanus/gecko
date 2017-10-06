@@ -81,7 +81,7 @@ private:
   PRFileDesc  *mFD;
   mozquic_connection_t *mSession;
   bool         mQuicConnected;
-  RefPtr<nsAHttpConnection> mConnection;
+  nsAHttpConnection *mConnection;
 
   UniquePtr<unsigned char[]> mTransportParamsToWrite;
   uint32_t                   mTransportParamsToWriteLen;
