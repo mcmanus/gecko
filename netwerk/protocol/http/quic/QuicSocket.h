@@ -7,6 +7,7 @@
 
 #include "nspr.h"
 #include "nsISSLSocketControl.h"
+#include "nsISSLStatusProvider.h"
 #include "nsIPipe.h"
 #include "nsCOMPtr.h"
 #include "nsString.h"
@@ -14,6 +15,7 @@
 #include "mozilla/UniquePtr.h"
 #include "ssl.h"
 #include "sslexp.h"
+#include "nsAHttpConnection.h"
 
 class nsIInterfaceRequestor;
 typedef void mozquic_connection_t;
@@ -24,12 +26,14 @@ typedef void mozquic_stream_t;
 
 namespace mozilla { namespace net {
 
-class QuicSocket final :
-  public nsISSLSocketControl      
+class QuicSocket final
+  : public nsISSLSocketControl
+  , public nsISSLStatusProvider
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSISSLSOCKETCONTROL
+  NS_DECL_NSISSLSTATUSPROVIDER
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_QUICSOCKET_IID)
 
   QuicSocket(const char *host, int32_t port, bool v4);
@@ -38,6 +42,8 @@ public:
           
   PRFileDesc *GetFD() { return mFD; }
   mozquic_stream_t *NewStream();
+  void IO();
+  void SetConnection(nsAHttpConnection *c) { mConnection = c; }
 
 private:
   ~QuicSocket();
@@ -75,6 +81,7 @@ private:
   PRFileDesc  *mFD;
   mozquic_connection_t *mSession;
   bool         mQuicConnected;
+  RefPtr<nsAHttpConnection> mConnection;
 
   UniquePtr<unsigned char[]> mTransportParamsToWrite;
   uint32_t                   mTransportParamsToWriteLen;

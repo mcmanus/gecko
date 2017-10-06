@@ -13,16 +13,13 @@
 
 class nsISocketTransport;
 
-typedef void mozquic_stream_t;
-
 namespace mozilla {
 namespace net {
 
 class QuicSocket;
+class QuicStream;
 class QuicSession final : public ASpdySession
-                         , public nsAHttpConnection
-                         , public nsAHttpSegmentReader
-                         , public nsAHttpSegmentWriter
+                        , public nsAHttpConnection
 {
   ~QuicSession();
 
@@ -30,8 +27,6 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSAHTTPTRANSACTION
   NS_DECL_NSAHTTPCONNECTION(mConnection)
-  NS_DECL_NSAHTTPSEGMENTREADER
-  NS_DECL_NSAHTTPSEGMENTWRITER
 
   QuicSession(nsISocketTransport *, uint32_t version, bool attemptingEarlyData);
 
@@ -48,8 +43,6 @@ public:
   void TransactionHasDataToWrite(nsAHttpTransaction *) override;
   void TransactionHasDataToRecv(nsAHttpTransaction *) override;
 
-  virtual MOZ_MUST_USE nsresult CommitToSegmentSize(uint32_t size,
-                                                    bool forceCommitment) override;
   void PrintDiagnostics (nsCString &log) override;
 
   void SendPing() override;
@@ -66,7 +59,7 @@ private:
   QuicSocket                *mSocket;
   RefPtr<nsAHttpConnection> mConnection;
 
-  nsDataHashtable<nsPtrHashKey<nsAHttpTransaction>, mozquic_stream_t *> mStreamTransactionHash;
+  nsDataHashtable<nsPtrHashKey<nsAHttpTransaction>, QuicStream *> mStreamTransactionHash;
 };
 
 } // namespace net

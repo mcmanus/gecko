@@ -16,6 +16,7 @@ namespace mozilla { namespace net {
 
 class nsHttpConnectionInfo;
 class nsHttpConnection;
+class nsHttpResponseHead;
 
 //-----------------------------------------------------------------------------
 // Abstract base class for a HTTP connection

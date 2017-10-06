@@ -29,6 +29,8 @@ static bool quicInit = false;
 static PRDescIdentity quicIdentity, psmHelperIdentity;
 static PRIOMethods quicMethods, psmHelperMethods;
 
+NS_IMPL_ISUPPORTS(QuicSocket, nsISSLSocketControl, nsISSLStatusProvider)
+
 QuicSocket::QuicSocket(const char *host, int32_t port, bool v4)
   : mClosed(false)
   , mDestroyOnClose(true)
@@ -103,6 +105,14 @@ QuicSocket::QuicSocket(const char *host, int32_t port, bool v4)
                         true, true, 0, UINT32_MAX);
 }
 
+void
+QuicSocket::IO()
+{
+  if (mSession) {
+    mozquic_IO(mSession);
+  }
+}
+
 QuicSocket *
 QuicSocket::GetFromFD(PRFileDesc *fd)
 {
@@ -151,6 +161,16 @@ QuicSocket::NewStream()
     return nullptr;
   }
   return stream;
+}
+
+NS_IMETHODIMP
+QuicSocket::GetSSLStatus(nsISSLStatus * *aSSLStatus)
+{
+  nsCOMPtr<nsISSLStatusProvider> sslprov = do_QueryInterface(mPSMHelperSecInfo);
+  if (sslprov) {
+    return sslprov->GetSSLStatus(aSSLStatus);
+  }
+  return NS_ERROR_FAILURE;
 }
 
 NS_IMETHODIMP
@@ -267,6 +287,11 @@ QuicSocket::MozQuicEventCallback(void *closure, uint32_t event, void *param)
   case MOZQUIC_EVENT_IO:
   case MOZQUIC_EVENT_LOG:
     break;
+
+  case MOZQUIC_EVENT_NEW_STREAM_DATA:
+    self->mConnection->ForceRecv();
+    break;
+
   default:
     MOZ_ASSERT(false);
   }
@@ -584,7 +609,7 @@ NS_IMETHODIMP QuicSocket::GetFailedVerification(bool *aFailedVerification)
 /* void proxyStartSSL (); */
 NS_IMETHODIMP QuicSocket::ProxyStartSSL()
 {
-    /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
+  return NS_OK;
 }
 
 /* void StartTLS (); */
@@ -667,8 +692,6 @@ NS_IMETHODIMP QuicSocket::GetProviderTlsFlags(uint32_t *aProviderFlags)
 {
     /* TODO PRM */ MOZ_ASSERT(false); return NS_ERROR_NOT_IMPLEMENTED;
 }
-
-NS_IMPL_ISUPPORTS(QuicSocket, nsISSLSocketControl)
 
 bool
 QuicSocketUtil::IsQuicSocket(PRFileDesc *fd)

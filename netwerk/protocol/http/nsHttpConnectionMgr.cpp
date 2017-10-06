@@ -3598,8 +3598,12 @@ nsHttpConnectionMgr::TimeoutTick()
     }
 
     if (mTimeoutTick) {
-        mTimeoutTickNext = std::max(mTimeoutTickNext, 1U);
-        mTimeoutTick->SetDelay(mTimeoutTickNext * 1000);
+        if (!mTimeoutTickNext) {
+            mTimeoutTick->SetDelay(1);
+        } else {
+            mTimeoutTickNext = std::max(mTimeoutTickNext, 1U);
+            mTimeoutTick->SetDelay(mTimeoutTickNext * 1000);
+        }
     }
 }
 

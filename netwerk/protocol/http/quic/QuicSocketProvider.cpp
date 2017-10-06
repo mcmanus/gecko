@@ -49,7 +49,8 @@ QuicSocketProvider::NewSocket(int32_t family,
   
   LOG(("QuicSocketProvider::NewSocket ok %p\n", this));
   *result = qSession->GetFD();
-  nsCOMPtr<nsISupports> secInfo(qSession);
+  nsCOMPtr<nsISSLSocketControl> socketControl(qSession);
+  nsCOMPtr<nsISupports> secInfo(socketControl);
   *securityInfo = secInfo.forget().take();
   return NS_OK;
 }

@@ -169,7 +169,7 @@ function doTest1()
 function doTest2()
 {
   dump("doTest2()\n");
-  var pac = 'data:text/plain, function FindProxyForURL(url, host) {return "QUIC localhost:4443";}';
+  var pac = 'data:text/plain, function FindProxyForURL(url, host) {return "QUIC foo.example.com:4433";}';
   origin = "https://foo.example.com:" + h2Port + "/quic-2";
   prefs.setIntPref("network.proxy.type", 2);
   prefs.setCharPref("network.proxy.autoconfig_url", pac);

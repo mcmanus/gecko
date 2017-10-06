@@ -17,6 +17,7 @@
 #include "QuicSocket.h"
 #include "nsHttpHandler.h"
 #include "nsISocketTransport.h"
+#include "MozQuic.h"
 
 namespace mozilla {
 namespace net {
@@ -42,7 +43,31 @@ QuicSession::QuicSession(nsISocketTransport *aSocketTransport, uint32_t version,
 
 QuicSession::~QuicSession()
 {
+  // need to cleanup mstreamtransactionhash
 }
+
+
+class QuicStream : public nsAHttpSegmentReader, public nsAHttpSegmentWriter
+{
+public:
+  NS_DECL_NSAHTTPSEGMENTREADER
+  NS_DECL_NSAHTTPSEGMENTWRITER
+
+  QuicStream(QuicSession *, nsAHttpTransaction *trans, mozquic_stream_t *stream)
+    : mState(0)
+    , mStream(stream)
+    , mTransaction(trans)
+    , mRecvdFin(false)
+  {
+  }
+  ~QuicStream() {}
+
+private:
+  uint32_t mState;
+  mozquic_stream_t *mStream;
+  nsAHttpTransaction *mTransaction;
+  bool mRecvdFin;
+};
 
 bool
 QuicSession::AddStream(nsAHttpTransaction *aHttpTransaction,
@@ -63,21 +88,26 @@ QuicSession::AddStream(nsAHttpTransaction *aHttpTransaction,
 
   if (!mConnection) {
     mConnection = aHttpTransaction->Connection();
+    mSocket->SetConnection(mConnection);
   }
   aHttpTransaction->SetConnection(this);
   aHttpTransaction->OnActivated(true);
 
   mozquic_stream_t *stream = mSocket->NewStream();
-  MOZ_ASSERT(stream); // todo flowcontrol
-  
-  mStreamTransactionHash.Put(aHttpTransaction, stream);
+  LOG3(("QuicSession::AddStream %p transaction %p ID %d\n", this, aHttpTransaction,
+        mozquic_get_streamid(stream)));
+
+  MOZ_ASSERT(stream);
+  QuicStream *qs = new QuicStream(this, aHttpTransaction, stream);
+
+  mStreamTransactionHash.Put(aHttpTransaction, qs);
   RefPtr<nsAHttpTransaction> foo(aHttpTransaction);
   nsAHttpTransaction *hm;
   foo.forget(&hm);
 
   if (!(aHttpTransaction->Caps() & NS_HTTP_ALLOW_KEEPALIVE) &&
       !aHttpTransaction->IsNullTransaction()) {
-    LOG3(("Http2Session::AddStream %p transaction %p forces keep-alive off.\n",
+    LOG3(("QuicSession::AddStream %p transaction %p forces keep-alive off.\n",
           this, aHttpTransaction));
     DontReuse();
   }
@@ -123,6 +153,9 @@ QuicSession::JoinConnection(const nsACString &hostname, int32_t port)
 uint32_t
 QuicSession::ReadTimeoutTick(PRIntervalTime now)
 {
+  mSocket->IO();
+  mConnection->ForceRecv();
+  return 0; // this is awful - need poll() integration
   return UINT32_MAX;
 }
 
@@ -142,13 +175,6 @@ void
 QuicSession::TransactionHasDataToRecv(nsAHttpTransaction *)
 {
   // todo
-}
-
-nsresult
-QuicSession::CommitToSegmentSize(uint32_t size,
-                                 bool forceCommitment)
-{
-  return NS_OK;
 }
 
 void
@@ -208,7 +234,7 @@ QuicSession::MaybeReTunnel(nsAHttpTransaction *)
 // converted to quic.
 
 nsresult
-QuicSession::ReadSegmentsAgain(nsAHttpSegmentReader *reader,
+QuicSession::ReadSegmentsAgain(nsAHttpSegmentReader *,
                                uint32_t count, uint32_t *countRead, bool *again)
 {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
@@ -218,8 +244,8 @@ QuicSession::ReadSegmentsAgain(nsAHttpSegmentReader *reader,
   // debt and iterate the hash
   for (auto iter = mStreamTransactionHash.Iter(); !iter.Done(); iter.Next()) {
     nsAHttpTransaction *trans = iter.Key();
-    mozquic_stream_t *stream = iter.Data();
-    nsresult rv = trans->ReadSegments(this, count, countRead);
+    QuicStream *stream = iter.Data();
+    nsresult rv = trans->ReadSegments(stream, count, countRead);
     if (rv == NS_BASE_STREAM_CLOSED) {
       iter.Remove();
       trans->Close(rv);
@@ -248,10 +274,13 @@ QuicSession::WriteSegmentsAgain(nsAHttpSegmentWriter *writer,
                                 bool *again)
 {
   *again = false;
+  // we need some structure like h2 has to know what to write, but
+  // maybe we can just merge with h2 later - so for now todo take the
+  // debt and iterate the hash
   for (auto iter = mStreamTransactionHash.Iter(); !iter.Done(); iter.Next()) {
     nsAHttpTransaction *trans = iter.Key();
-    mozquic_stream_t *stream = iter.Data();
-    nsresult rv = trans->WriteSegments(this, count, countWritten);
+    QuicStream *stream = iter.Data();
+    nsresult rv = trans->WriteSegments(stream, count, countWritten);
     if (rv == NS_BASE_STREAM_CLOSED) {
       iter.Remove();
       trans->Close(rv);
@@ -443,23 +472,62 @@ QuicSession::TopLevelOuterContentWindowIdChanged(uint64_t windowId)
 
 
 nsresult
-QuicSession::OnReadSegment(const char *buf,
-                            uint32_t count, uint32_t *countRead)
+QuicStream::OnReadSegment(const char *buf, uint32_t count, uint32_t *countRead)
 {
+  // state machine which stops sending stuff at space #2
+  // converts this to 0.9 :)
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
-  // todo
-  MOZ_ASSERT(false);
+  for (uint32_t i = 0 ; (i < count) && (mState < 2); i++ ) {
+    if (buf[i] == ' ') {
+      if (++mState == 2) {
+	mozquic_send(mStream, (void *)buf, i, 0);
+	mozquic_send(mStream, (void *)"\r\n", 2, 1);
+      }
+    }
+  }
+  if (mState < 2) {
+    mozquic_send(mStream, (void *)buf, count, 0);
+  }
+  *countRead = count;
   return NS_OK;
 }
 
 nsresult
-QuicSession::OnWriteSegment(char *buf,
-                             uint32_t count, uint32_t *countWritten)
+QuicStream::OnWriteSegment(char *buf, uint32_t count, uint32_t *countWritten)
 {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
-  MOZ_ASSERT(false);
-  // todo
-  return NS_OK;
+  *countWritten = 0;
+  if (mState == 2) {
+    // make up some response headers
+    MOZ_ASSERT(count > 300); // TODO not a true assumption
+    const char *tw = "HTTP/1.0 200 MEH\r\nX-Firefox-Spdy: hq-05\r\n\r\n";
+    memcpy(buf, tw, strlen(tw));
+    *countWritten = strlen(tw);
+    ++mState;
+    return NS_OK;
+  }
+
+  if (mRecvdFin) {
+    mTransaction->Close(NS_OK);
+    return NS_BASE_STREAM_CLOSED;
+  }
+  int fin;
+  mozquic_recv(mStream, buf, count, countWritten, &fin);
+  mRecvdFin = fin;
+  if (*countWritten) {
+    LOG3(("QuicSession::OnWriteSegment %p ok count=%d fin=%d\n",
+          this, *countWritten, mRecvdFin));
+    return NS_OK;
+  }
+
+  if (mRecvdFin) {
+    LOG3(("QuicSession::OnWriteSegment %p closed count=%d fin=%d\n",
+          this, *countWritten, mRecvdFin));
+    return NS_BASE_STREAM_CLOSED;
+  }
+  LOG3(("QuicSession::OnWriteSegment %p wouldblock count=%d fin=%d\n",
+        this, *countWritten, mRecvdFin));
+  return NS_BASE_STREAM_WOULD_BLOCK;
 }
 
 }
