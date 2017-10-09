@@ -8,6 +8,8 @@
 
 #if 0
 
+env MOZQUIC_LOG all:9 will turn on a lot of logging. add SSLTRACE 50 and it will be absurd.
+
   ./client -peer HOSTNAME to use non localhost peer
 
 Basic client connects to server, does a handshake and and waits 1 seconds.. then..
@@ -52,7 +54,7 @@ static int connEventCB(void *closure, uint32_t event, void *param)
         assert(code == MOZQUIC_OK);
         code = mozquic_send(stream, _argv[j+1], strlen(_argv[j+1]), 0);
         assert(code == MOZQUIC_OK);
-        code = mozquic_send(stream, "\r\n", 2, 0);
+        code = mozquic_send(stream, "\r\n", 2, 1);
         assert(code == MOZQUIC_OK);
         _getCount++;
         char pathname[1024];
