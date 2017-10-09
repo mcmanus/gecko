@@ -55,10 +55,9 @@ public:
   NS_DECL_NSAHTTPSEGMENTREADER
   NS_DECL_NSAHTTPSEGMENTWRITER
 
-  QuicStream(QuicSession *, nsAHttpTransaction *trans, mozquic_stream_t *stream)
+  QuicStream(QuicSession *,mozquic_stream_t *stream)
     : mState(0)
     , mStream(stream)
-    , mTransaction(trans)
     , mRecvdFin(false)
   {
   }
@@ -67,7 +66,7 @@ public:
 private:
   uint32_t mState;
   mozquic_stream_t *mStream;
-  nsAHttpTransaction *mTransaction;
+public:
   bool mRecvdFin;
 };
 
@@ -106,7 +105,7 @@ QuicSession::AddStream(nsAHttpTransaction *aHttpTransaction,
         mozquic_get_streamid(stream)));
 
   MOZ_ASSERT(stream);
-  QuicStream *qs = new QuicStream(this, aHttpTransaction, stream);
+  QuicStream *qs = new QuicStream(this, stream);
 
   mStreamTransactionHash.Put(aHttpTransaction, qs);
   RefPtr<nsAHttpTransaction> foo(aHttpTransaction);
@@ -289,7 +288,7 @@ QuicSession::WriteSegmentsAgain(nsAHttpSegmentWriter *writer,
     nsAHttpTransaction *trans = iter.Key();
     QuicStream *stream = iter.Data();
     nsresult rv = trans->WriteSegments(stream, count, countWritten);
-    if (rv == NS_BASE_STREAM_CLOSED) {
+    if (rv == NS_BASE_STREAM_CLOSED || stream->mRecvdFin) {
       iter.Remove();
       trans->Close(rv);
       trans->Release();
@@ -437,7 +436,8 @@ void
 QuicSession::CloseTransaction(nsAHttpTransaction *aTransaction,
                                nsresult aResult)
 {
-  MOZ_ASSERT(false);
+  LOG3(("QuicSession force close 3 %p\n", this));
+  aTransaction->Close(aResult);
   // todo
 }
 
@@ -512,11 +512,12 @@ QuicStream::OnWriteSegment(char *buf, uint32_t count, uint32_t *countWritten)
     memcpy(buf, tw, strlen(tw));
     *countWritten = strlen(tw);
     ++mState;
+    LOG3(("QuicSession::OnWriteSegment %p fake headers count=%d fin=%d\n",
+          this, *countWritten, mRecvdFin));
     return NS_OK;
   }
 
   if (mRecvdFin) {
-    mTransaction->Close(NS_OK);
     return NS_BASE_STREAM_CLOSED;
   }
   int fin;

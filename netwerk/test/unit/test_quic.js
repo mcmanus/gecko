@@ -95,6 +95,7 @@ Listener.prototype = {
   },
 
   onDataAvailable: function testOnDataAvailable(request, ctx, stream, off, cnt) {
+    dump("ondataavailable off " + off + " cnt " + cnt + "\n");
     read_stream(stream, cnt);
   },
 
@@ -170,7 +171,7 @@ function doTest2()
 {
   dump("doTest2()\n");
   var pac = 'data:text/plain, function FindProxyForURL(url, host) {return "QUIC foo.example.com:4433";}';
-  origin = "https://foo.example.com:" + h2Port + "/quic-2";
+  origin = "https://foo.example.com:" + h2Port + "/index.html";
   prefs.setIntPref("network.proxy.type", 2);
   prefs.setCharPref("network.proxy.autoconfig_url", pac);
   nextTest = testsDone;
