@@ -296,6 +296,7 @@ AddrInfo::AddrInfo(const char *host, const PRAddrInfo *prAddrInfo,
   : mHostName(nullptr)
   , mCanonicalName(nullptr)
   , ttl(NO_TTL_DATA)
+  , mFromTRR(false)
 {
   MOZ_ASSERT(prAddrInfo, "Cannot construct AddrInfo with a null prAddrInfo pointer!");
   const uint32_t nameCollisionAddr = htonl(0x7f003535); // 127.0.53.53
@@ -321,6 +322,15 @@ AddrInfo::AddrInfo(const char *host, const char *cname)
   , ttl(NO_TTL_DATA)
 {
   Init(host, cname);
+}
+
+AddrInfo::AddrInfo(const char *host, bool aTRR)
+  : mHostName(nullptr)
+  , mCanonicalName(nullptr)
+  , ttl(NO_TTL_DATA)
+  , mFromTRR(aTRR)
+{
+  Init(host, nullptr);
 }
 
 AddrInfo::~AddrInfo()

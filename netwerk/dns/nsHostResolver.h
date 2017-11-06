@@ -136,14 +136,12 @@ private:
     bool    resolving; /* true if this record is being resolved, which means
                         * that it is either on the pending queue or owned by
                         * one of the worker threads. */
-
+    int     mTRR;       /* number of outstanding TRR resolves */
+    mozilla::net::AddrInfo *mFirstTRR; /* temporary TRR storage */
     bool    onQueue;  /* true if pending and on the queue (not yet given to getaddrinfo())*/
     bool    usingAnyThread; /* true if off queue and contributing to mActiveAnyThreadCount */
     bool    mDoomed; /* explicitly expired */
-
-#if TTL_AVAILABLE
     bool    mGetTtl;
-#endif
 
     // The number of times ReportUnusable() has been called in the record's
     // lifetime.
@@ -303,6 +301,13 @@ public:
      */
     void FlushCache();
 
+    enum LookupStatus {
+      LOOKUP_OK,
+      LOOKUP_RESOLVEAGAIN,
+    };
+
+    LookupStatus OnLookupComplete(nsHostRecord *, nsresult, mozilla::net::AddrInfo *);
+
 private:
    explicit nsHostResolver(uint32_t maxCacheEntries,
                            uint32_t defaultCacheEntryLifetime,
@@ -310,15 +315,10 @@ private:
    ~nsHostResolver();
 
     nsresult Init();
+    nsresult TrrLookup(nsHostRecord *);
     nsresult IssueLookup(nsHostRecord *);
     bool     GetHostToLookup(nsHostRecord **m);
 
-    enum LookupStatus {
-      LOOKUP_OK,
-      LOOKUP_RESOLVEAGAIN,
-    };
-
-    LookupStatus OnLookupComplete(nsHostRecord *, nsresult, mozilla::net::AddrInfo *);
     void     DeQueue(PRCList &aQ, nsHostRecord **aResult);
     void     ClearPendingQueue(PRCList *aPendingQueue);
     nsresult ConditionallyCreateThread(nsHostRecord *rec);

@@ -140,6 +140,9 @@ public:
 
   // Creates a basic AddrInfo object (initialize only the host and the cname).
   AddrInfo(const char *host, const char *cname);
+
+  // Creates a basic AddrInfo object (initialize only the host and TRR status).
+  AddrInfo(const char *host, bool TRR);
   ~AddrInfo();
 
   void AddAddress(NetAddrElement *address);
@@ -152,8 +155,9 @@ public:
   static const uint32_t NO_TTL_DATA = (uint32_t) -1;
 
   LinkedList<NetAddrElement> mAddresses;
-
+  bool isTRR() { return mFromTRR; }
 private:
+  bool mFromTRR;
   void Init(const char *host, const char *cname);
 };
 

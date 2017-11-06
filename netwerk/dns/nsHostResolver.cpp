@@ -30,6 +30,7 @@
 #include "nsThreadUtils.h"
 #include "GetAddrInfo.h"
 #include "GeckoProfiler.h"
+#include "TRR.h"
 
 #include "mozilla/HashFunctions.h"
 #include "mozilla/TimeStamp.h"
@@ -169,12 +170,12 @@ nsHostRecord::nsHostRecord(const nsHostKey *key)
     , addr(nullptr)
     , negative(false)
     , resolving(false)
+    , mTRR(0)
+    , mFirstTRR(nullptr)
     , onQueue(false)
     , usingAnyThread(false)
     , mDoomed(false)
-#if TTL_AVAILABLE
     , mGetTtl(false)
-#endif
     , mBlacklistedCount(0)
     , mResolveAgain(false)
 {
@@ -232,6 +233,7 @@ nsHostRecord::~nsHostRecord()
 {
     Telemetry::Accumulate(Telemetry::DNS_BLACKLIST_COUNT, mBlacklistedCount);
     delete addr_info;
+    delete mFirstTRR;
 }
 
 bool
@@ -1056,10 +1058,44 @@ nsHostResolver::ConditionallyCreateThread(nsHostRecord *rec)
 }
 
 nsresult
+nsHostResolver::TrrLookup(nsHostRecord *rec)
+{
+    nsresult rv;
+
+    // If asking for AF_UNSPEC, first do IPv4 then IPv6.
+    // If asking for AF_INET6 or AF_INET, do only that single family
+    bool IPv6 = (rec->af == AF_INET6)?true:false;
+    bool sendAgain;
+    do {
+        sendAgain = false;
+        NS_ADDREF(rec);
+        fprintf(stderr, "++++++ TRR Resolve IPv%d\n", IPv6?6:4);
+        rv = NS_DispatchToMainThread(new TRR(this, rec, IPv6));
+        if (NS_FAILED(rv)) {
+            NS_RELEASE(rec);
+        } else {
+            NS_ADDREF(this); // hold the nsHostResolver object too
+            rec->mTRR++;
+            if ((rec->af == AF_UNSPEC) && !IPv6) {
+                IPv6 = true;
+                sendAgain = true;
+            }
+        }
+    } while (sendAgain);
+    return rv;
+}
+
+
+nsresult
 nsHostResolver::IssueLookup(nsHostRecord *rec)
 {
     nsresult rv = NS_OK;
     NS_ASSERTION(!rec->resolving, "record is already being resolved");
+
+    rv = TrrLookup(rec);
+    if (NS_FAILED(rv)) {
+        LOG(("  TRR lookup failed!\n"));
+    }
 
     // Add rec to one of the pending queues, possibly removing it from mEvictionQ.
     // If rec is on mEvictionQ, then we can just move the owning
@@ -1236,6 +1272,24 @@ nsHostResolver::PrepareRecordExpiration(nsHostRecord* rec) const
          LOG_HOST(rec->host, rec->netInterface), lifetime, grace));
 }
 
+static nsresult
+merge_rrset(AddrInfo *rrto, AddrInfo *rrfrom)
+{
+    if (!rrto || !rrfrom) {
+        return NS_ERROR_NULL_POINTER;
+    }
+
+    for (NetAddrElement *element = rrfrom->mAddresses.getFirst();
+         element; element = element->getNext()) {
+        char buf[128];
+        NetAddrToString(&element->mAddress, buf, 128);
+        fprintf(stderr, "----- merge %s\n", buf);
+        element->remove(); // unlist it
+        rrto->AddAddress(element);
+    }
+    return NS_OK;
+}
+
 static bool
 different_rrset(AddrInfo *rrset1, AddrInfo *rrset2)
 {
@@ -1294,6 +1348,36 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
     // get the list of pending callbacks for this lookup, and notify
     // them that the lookup is complete.
     PRCList cbs;
+
+    if (newRRSet->isTRR()) {
+        MutexAutoLock lock(mLock);
+        rec->mTRR--;
+        if (rec->mTRR) {
+            // When non-zero, there's another one TRR complete pending. Wait
+            // for it and keep the RRset around until then.
+            rec->mFirstTRR = newRRSet;
+        }
+        else {
+            // If mFirstTRR is set, merge those addresses into current set!
+            if (rec->mFirstTRR) {
+                merge_rrset(newRRSet, rec->mFirstTRR);
+                delete rec->mFirstTRR;
+                rec->mFirstTRR = nullptr;
+            }
+            if (rec->resolving) {
+                fprintf(stderr, "TRR was *FIRST*\n");
+            } else {
+                MutexAutoLock lock(rec->addr_info_lock);
+                if (different_rrset(rec->addr_info, newRRSet)) {
+                    fprintf(stderr, "TRR: different than getaddrinfo!\n");
+                }
+            }
+            delete newRRSet;
+        }
+        NS_RELEASE(rec);
+        return LOOKUP_OK;
+    }
+
     PR_INIT_CLIST(&cbs);
     {
         MutexAutoLock lock(mLock);
