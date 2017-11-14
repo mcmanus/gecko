@@ -136,6 +136,10 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsSerializationHelper)
 typedef mozilla::net::RedirectChannelRegistrar RedirectChannelRegistrar;
 NS_GENERIC_FACTORY_CONSTRUCTOR(RedirectChannelRegistrar)
 
+#include "TRRService.h"
+typedef mozilla::net::TRRService TRRService;
+NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(TRRService, Init)
+
 #include "CacheStorageService.h"
 typedef mozilla::net::CacheStorageService CacheStorageService;
 NS_GENERIC_FACTORY_CONSTRUCTOR(CacheStorageService)
@@ -782,6 +786,7 @@ NS_DEFINE_NAMED_CID(NS_CACHE_STORAGE_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_NSILOADCONTEXTINFOFACTORY_CID);
 NS_DEFINE_NAMED_CID(NS_NETWORKPREDICTOR_CID);
 NS_DEFINE_NAMED_CID(NS_CAPTIVEPORTAL_CID);
+NS_DEFINE_NAMED_CID(NS_TRR_CID);
 NS_DEFINE_NAMED_CID(NS_REQUESTCONTEXTSERVICE_CID);
 #ifdef BUILD_NETWORK_INFO_SERVICE
 NS_DEFINE_NAMED_CID(NETWORKINFOSERVICE_CID);
@@ -906,6 +911,7 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
     { &kNS_NSILOADCONTEXTINFOFACTORY_CID, false, nullptr, LoadContextInfoFactoryConstructor },
     { &kNS_NETWORKPREDICTOR_CID, false, nullptr, mozilla::net::Predictor::Create },
     { &kNS_CAPTIVEPORTAL_CID, false, nullptr, mozilla::net::CaptivePortalServiceConstructor },
+    { &kNS_TRR_CID, false, nullptr, mozilla::net::TRRServiceConstructor },
     { &kNS_REQUESTCONTEXTSERVICE_CID, false, nullptr, RequestContextServiceConstructor },
 #ifdef BUILD_NETWORK_INFO_SERVICE
     { &kNETWORKINFOSERVICE_CID, false, nullptr, nsNetworkInfoServiceConstructor },
@@ -1035,6 +1041,7 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
     { NS_NSILOADCONTEXTINFOFACTORY_CONTRACTID, &kNS_NSILOADCONTEXTINFOFACTORY_CID },
     { NS_NETWORKPREDICTOR_CONTRACTID, &kNS_NETWORKPREDICTOR_CID },
     { NS_CAPTIVEPORTAL_CONTRACTID, &kNS_CAPTIVEPORTAL_CID },
+    { NS_TRR_CONTRACTID, &kNS_TRR_CID },
     { NS_REQUESTCONTEXTSERVICE_CONTRACTID, &kNS_REQUESTCONTEXTSERVICE_CID },
 #ifdef BUILD_NETWORK_INFO_SERVICE
     { NETWORKINFOSERVICE_CONTRACT_ID, &kNETWORKINFOSERVICE_CID },

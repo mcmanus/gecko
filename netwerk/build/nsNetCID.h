@@ -491,6 +491,17 @@
   { 0x92, 0x05, 0xc3, 0x09, 0xce, 0xb2, 0xd6, 0x41 } \
 }
 
+// TRR service
+#define NS_TRR_CONTRACTID \
+    "@mozilla.org/network/TRR-service;1"
+#define NS_TRR_CID \
+{ /* fe951345-1cbd-4f5f-98b0-d26c1e21aec0 */ \
+    0xfe951345, \
+    0x1cbd, \
+    0x4f5f, \
+  { 0x98, 0xb0, 0xd2, 0x6c, 0x1e, 0x21, 0xae, 0xc0 } \
+}
+
 // service implementing nsIRequestContextService
 #define NS_REQUESTCONTEXTSERVICE_CONTRACTID \
     "@mozilla.org/network/request-context-service;1"
