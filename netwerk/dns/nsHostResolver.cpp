@@ -169,7 +169,7 @@ nsHostRecord::nsHostRecord(const nsHostKey *key)
     , addr_info(nullptr)
     , addr(nullptr)
     , negative(false)
-    , resolving(false)
+    , mNative(false)
     , mTRR(0)
     , mFirstTRR(nullptr)
     , onQueue(false)
@@ -381,7 +381,7 @@ nsHostRecord::GetPriority(uint16_t aFlags)
 bool
 nsHostRecord::RemoveOrRefresh()
 {
-    if (resolving) {
+    if (resolving && mNative) {
         if (!onQueue) {
             // The request has been passed to the OS resolver. The resultant DNS
             // record should be considered stale and not trusted; set a flag to
@@ -1066,10 +1066,13 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
     // If asking for AF_INET6 or AF_INET, do only that single family
     bool IPv6 = (rec->af == AF_INET6)?true:false;
     bool sendAgain;
+    rec->mTRR = 0;
+    rec->mTRRSuccess = 0; // bump for each successful TRR
+    rec->resolving = true;
     do {
         sendAgain = false;
         NS_ADDREF(rec);
-        fprintf(stderr, "++++++ TRR Resolve IPv%d\n", IPv6?6:4);
+        fprintf(stderr, "++++++ TRR Resolve %s IPv%d\n", rec->host, IPv6?6:4);
         rv = NS_DispatchToMainThread(new TRR(this, rec, IPv6));
         if (NS_FAILED(rv)) {
             NS_RELEASE(rec);
@@ -1122,7 +1125,7 @@ nsHostResolver::IssueLookup(nsHostRecord *rec)
     }
     mPendingCount++;
 
-    rec->resolving = true;
+    rec->mNative = true;
     rec->onQueue = true;
 
     rv = ConditionallyCreateThread(rec);
@@ -1278,14 +1281,13 @@ merge_rrset(AddrInfo *rrto, AddrInfo *rrfrom)
     if (!rrto || !rrfrom) {
         return NS_ERROR_NULL_POINTER;
     }
-
-    for (NetAddrElement *element = rrfrom->mAddresses.getFirst();
-         element; element = element->getNext()) {
+    NetAddrElement *element;
+    while ((element = rrfrom->mAddresses.getFirst())) {
         char buf[128];
-        NetAddrToString(&element->mAddress, buf, 128);
-        fprintf(stderr, "----- merge %s\n", buf);
-        element->remove(); // unlist it
-        rrto->AddAddress(element);
+        NetAddrToString(&element->mAddress, buf, sizeof(buf));
+        fprintf(stderr, "-- merge [%s] %s\n", rrto->mHostName, buf);
+        element->remove(); // unlist from old
+        rrto->AddAddress(element); // enlist on new
     }
     return NS_OK;
 }
@@ -1338,6 +1340,7 @@ different_rrset(AddrInfo *rrset1, AddrInfo *rrset2)
     return false;
 }
 
+static bool gTrrWorks = false;
 //
 // OnLookupComplete() checks if the resolving should be redone and if so it
 // returns LOOKUP_RESOLVEAGAIN, but only if 'status' is not NS_ERROR_ABORT.
@@ -1352,30 +1355,72 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
     if (newRRSet->isTRR()) {
         MutexAutoLock lock(mLock);
         rec->mTRR--;
+        fprintf(stderr, "TRR lookup %s(%d to go)\n",
+                NS_FAILED(status)?"FAILED ":"",  rec->mTRR);
+        if (NS_SUCCEEDED(status)) {
+            rec->mTRRSuccess++;
+        }
         if (rec->mTRR) {
-            // When non-zero, there's another one TRR complete pending. Wait
-            // for it and keep the RRset around until then.
-            rec->mFirstTRR = newRRSet;
+            if (NS_SUCCEEDED(status)) {
+                // There's another one TRR complete pending. Wait for it and keep
+                // this RRset around until then.
+                rec->mFirstTRR = newRRSet;
+            }
+            else {
+                delete newRRSet;
+            }
+
+            NS_RELEASE(rec);
+            return LOOKUP_OK;
         }
         else {
+            // no more outstanding TRRs
+            if (!rec->mTRRSuccess) {
+                // complete failure *
+                fprintf(stderr, "TRR failed to resolve\n");
+                gTrrWorks = false;
+            } else {
+                gTrrWorks = true;
+            }
+
             // If mFirstTRR is set, merge those addresses into current set!
             if (rec->mFirstTRR) {
-                merge_rrset(newRRSet, rec->mFirstTRR);
-                delete rec->mFirstTRR;
+                if (NS_SUCCEEDED(status)) {
+                    merge_rrset(newRRSet, rec->mFirstTRR);
+                    delete rec->mFirstTRR;
+                }
+                else {
+                    delete newRRSet;
+                    newRRSet = rec->mFirstTRR;
+                }
                 rec->mFirstTRR = nullptr;
             }
-            if (rec->resolving) {
-                fprintf(stderr, "TRR was *FIRST*\n");
-            } else {
+            if (!rec->resolving) {
                 MutexAutoLock lock(rec->addr_info_lock);
-                if (different_rrset(rec->addr_info, newRRSet)) {
-                    fprintf(stderr, "TRR: different than getaddrinfo!\n");
-                }
+                fprintf(stderr, "TRR was second and %s getaddrinfo!\n",
+                        different_rrset(rec->addr_info, newRRSet)?
+                        "different than": "same as");
+                delete newRRSet;
+                NS_RELEASE(rec);
+                return LOOKUP_OK;
+            } else {
+                fprintf(stderr, "TRR was *FIRST*\n");
             }
-            delete newRRSet;
+            // continue
         }
-        NS_RELEASE(rec);
-        return LOOKUP_OK;
+    } else {
+        // native resolve completed
+        MutexAutoLock lock(mLock);
+        rec->mNative = false;
+        if (!rec->resolving) {
+            // arrived as second, delete
+            fprintf(stderr, "Native-resolver ignored\n");
+            delete newRRSet;
+            NS_RELEASE(rec);
+            return LOOKUP_OK;
+        }
+        else
+            fprintf(stderr, "Native-resolver used\n");
     }
 
     PR_INIT_CLIST(&cbs);
@@ -1413,7 +1458,7 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
 
         rec->negative = !rec->addr_info;
         PrepareRecordExpiration(rec);
-        rec->resolving = false;
+        rec->resolving = false; // resolve phase is complete
 
         if (rec->usingAnyThread) {
             mActiveAnyThreadCount--;

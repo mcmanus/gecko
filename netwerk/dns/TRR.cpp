@@ -194,7 +194,7 @@ static uint16_t get16bit(nsCString &aData, int index)
         static_cast<uint8_t>(aData[index + 1]);
 }
 
-static uint16_t get32bit(nsCString &aData, int index)
+static uint32_t get32bit(nsCString &aData, int index)
 {
     return (static_cast<uint8_t>(aData[index]) << 24) |
         (static_cast<uint8_t>(aData[index+1])<<16) |
@@ -321,7 +321,16 @@ nsresult DOHListener::returnData()
     }
     ai->ttl = ttl;
     (void)mTrr->mHostResolver->OnLookupComplete(mTrr->mRec, NS_OK, ai);
-    LOG("********** TRR data sent to OnLookupComplete!\n");
+    return NS_OK;
+}
+
+nsresult DOHListener::failData()
+{
+    // create and populate an TRR AddrInfo instance to pass on to signal that
+    // this comes from TRR
+    AddrInfo *ai = new AddrInfo(mTrr->mHostname.get(), true);
+
+    (void)mTrr->mHostResolver->OnLookupComplete(mTrr->mRec, NS_ERROR_FAILURE, ai);
     return NS_OK;
 }
 
@@ -347,9 +356,10 @@ DOHListener::OnStopRequest(nsIRequest *aRequest,
                 // pass back the response data
                 returnData();
             }
+        } else {
+          // TRR failed
+          failData();
         }
-        // else
-        //   send error back
     }
     return NS_OK;
 }
@@ -381,7 +391,7 @@ nsresult DOHresp::Add(uint32_t TTL, nsCString &dns, int index, uint16_t len,
         // IPv4
         addr->inet.family = AF_INET;
         addr->inet.port = 0; // unknown
-        addr->inet.ip = get32bit(dns, index);
+        addr->inet.ip = ntohl(get32bit(dns, index));
         LOG("DOH: Add %s %u.%u.%u.%u\n", host.get(), static_cast<uint8_t>(dns[index]),
             static_cast<uint8_t>(dns[index+1]),
             static_cast<uint8_t>(dns[index+2]),

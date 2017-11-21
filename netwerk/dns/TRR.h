@@ -38,8 +38,6 @@ public:
         }
 #endif
         // Name resolve asynchronously by sending a GET over HTTPS using HTTP/2
-        fprintf(stderr, "TRRRRRRRRRRRRRRRRRRrr\n");
-
         DNSoverHTTPS();
         return NS_OK;
     }
@@ -92,6 +90,7 @@ private:
     nsCString mResponse;
     nsresult dohDecode();
     nsresult returnData();
+    nsresult failData();
     DOHresp mDNS;
 };
 

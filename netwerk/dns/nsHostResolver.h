@@ -133,10 +133,12 @@ private:
 
     PRCList callbacks; /* list of callbacks */
 
-    bool    resolving; /* true if this record is being resolved, which means
-                        * that it is either on the pending queue or owned by
-                        * one of the worker threads. */
+    bool    resolving;  /* true while this record is not yet resolved */
+    bool    mNative;    /* true if this record is being resolved "natively",
+                         * which means that it is either on the pending queue
+                         * or owned by one of the worker threads. */
     int     mTRR;       /* number of outstanding TRR resolves */
+    int     mTRRSuccess; /* number of successful TRR responses */
     mozilla::net::AddrInfo *mFirstTRR; /* temporary TRR storage */
     bool    onQueue;  /* true if pending and on the queue (not yet given to getaddrinfo())*/
     bool    usingAnyThread; /* true if off queue and contributing to mActiveAnyThreadCount */
