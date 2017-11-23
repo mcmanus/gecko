@@ -381,7 +381,11 @@ nsHostRecord::GetPriority(uint16_t aFlags)
 bool
 nsHostRecord::RemoveOrRefresh()
 {
-    if (resolving && mNative) {
+    // no need to flush TRRed names, they're not resolved "locally"
+    if (addr_info && addr_info->isTRR()) {
+        return false;
+    }
+    if (mNative) {
         if (!onQueue) {
             // The request has been passed to the OS resolver. The resultant DNS
             // record should be considered stale and not trusted; set a flag to
@@ -392,7 +396,7 @@ nsHostRecord::RemoveOrRefresh()
         // but is still pending to get resolved: just leave it in hash.
         return false;
     }
-    // Already resolved; not in a pending state; remove from cache.
+    // Already resolved; not in a pending state; remove from cache
     return true;
 }
 
@@ -1066,6 +1070,8 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
     // If asking for AF_INET6 or AF_INET, do only that single family
     bool IPv6 = (rec->af == AF_INET6)?true:false;
     bool sendAgain;
+
+    NS_ASSERTION(rec->mTRR == 0, "TRR still in use for this host record");
     rec->mTRR = 0;
     rec->mTRRSuccess = 0; // bump for each successful TRR
     rec->resolving = true;
@@ -1094,6 +1100,10 @@ nsHostResolver::IssueLookup(nsHostRecord *rec)
 {
     nsresult rv = NS_OK;
     NS_ASSERTION(!rec->resolving, "record is already being resolved");
+    if (rec->resolving) {
+        fprintf(stderr, "IssueLookup %s while already resolving\n",
+                rec->host);
+    }
 
     rv = TrrLookup(rec);
     if (NS_FAILED(rv)) {
@@ -1340,7 +1350,6 @@ different_rrset(AddrInfo *rrset1, AddrInfo *rrset2)
     return false;
 }
 
-static bool gTrrWorks = false;
 //
 // OnLookupComplete() checks if the resolving should be redone and if so it
 // returns LOOKUP_RESOLVEAGAIN, but only if 'status' is not NS_ERROR_ABORT.
@@ -1354,6 +1363,7 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
 
     if (newRRSet->isTRR()) {
         MutexAutoLock lock(mLock);
+        NS_ASSERTION((rec->mTRR >=0) && (rec->mTRR <= 2), "RR race!");
         rec->mTRR--;
         fprintf(stderr, "TRR lookup %s(%d to go)\n",
                 NS_FAILED(status)?"FAILED ":"",  rec->mTRR);
@@ -1376,11 +1386,8 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
         else {
             // no more outstanding TRRs
             if (!rec->mTRRSuccess) {
-                // complete failure *
+                // complete failure
                 fprintf(stderr, "TRR failed to resolve\n");
-                gTrrWorks = false;
-            } else {
-                gTrrWorks = true;
             }
 
             // If mFirstTRR is set, merge those addresses into current set!
