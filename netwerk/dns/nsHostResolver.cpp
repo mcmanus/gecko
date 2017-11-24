@@ -1376,14 +1376,19 @@ nsHostResolver::TRRDone(nsHostRecord *rec)
         // still resolving natively
         if (!rec->mTRRSuccess) {
             // TRR failed, reported first but wait for native
+            fprintf(stderr, "TRR %s was *FIRST* but failed, wait for native\n",
+                    rec->host);
             return true;
         } else {
             // First, and a positive result
+            fprintf(stderr, "TRR %s was *FIRST*, use it!\n",
+                    rec->host);
             return false;
         }
     }
     if (!rec->mTRRSuccess) {
         // TRR failed
+        fprintf(stderr, "TRR %s failed!\n", rec->host);
 
         // If not parallel-resolving, re-issue a native-only resolve
         if (mResolverMode == MODE_TRRFIRST) {
@@ -1400,12 +1405,16 @@ nsHostResolver::TRRDone(nsHostRecord *rec)
     return false;
 }
 
-void
+
+// NativeDone() returns true if the current incoming results should be discarded.
+bool
 nsHostResolver::NativeDone(nsHostRecord *rec)
 {
-    if ((mResolverMode == MODE_PARALLEL) && rec->mTRRCount) {
-        // still parallel-resolving TRR
-        return;
+    if (mResolverMode == MODE_PARALLEL) {
+        if (!rec->mTRRCount && rec->mTRRUsed) {
+            // TRR was faster, discard this
+            return true;
+        }
     } else if (mResolverMode == MODE_TRRFIRST) {
         // this is a completed backup resolve
 
@@ -1414,6 +1423,7 @@ nsHostResolver::NativeDone(nsHostRecord *rec)
             fprintf(stderr, "TRR blacklist: %s\n", rec->host);
         }
     }
+    return false;
 }
 
 //
@@ -1431,7 +1441,7 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
         MutexAutoLock lock(mLock);
         NS_ASSERTION((rec->mTRRCount >=0) && (rec->mTRRCount <= 2), "RR race!");
         rec->mTRRCount--;
-        fprintf(stderr, "TRR lookup %s(%d to go)\n",
+        fprintf(stderr, "TRR lookup %s(%d pending)\n",
                 NS_FAILED(status)?"FAILED ":"",  rec->mTRRCount);
         if (NS_SUCCEEDED(status)) {
             rec->mTRRSuccess++;
@@ -1463,18 +1473,6 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
                 }
                 rec->mFirstTRR = nullptr;
             }
-            if (!rec->resolving) {
-                MutexAutoLock lock(rec->addr_info_lock);
-                fprintf(stderr, "TRR was second and %s getaddrinfo!\n",
-                        different_rrset(rec->addr_info, newRRSet)?
-                        "different than": "same as");
-                delete newRRSet;
-                NS_RELEASE(rec);
-                return LOOKUP_OK;
-            } else {
-                fprintf(stderr, "TRR was *FIRST*\n");
-            }
-
             if (!rec->mTRRSuccess) {
                 // no TRR success
                 delete newRRSet;
@@ -1492,17 +1490,11 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
         MutexAutoLock lock(mLock);
         rec->mNative = false;
         rec->mNativeSuccess = newRRSet ? true : false;
-        if (!rec->resolving) {
-            // arrived as second, delete
-            fprintf(stderr, "Native-resolver ignored\n");
+        if (NativeDone(rec)) {
             delete newRRSet;
             NS_RELEASE(rec);
             return LOOKUP_OK;
         }
-        else
-            fprintf(stderr, "Native-resolver used\n");
-
-        NativeDone(rec);
     }
 
     PR_INIT_CLIST(&cbs);

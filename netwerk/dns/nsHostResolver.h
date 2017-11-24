@@ -324,7 +324,7 @@ private:
     nsresult NameLookup(nsHostRecord *);
     bool     GetHostToLookup(nsHostRecord **m);
     bool TRRDone(nsHostRecord *);
-    void NativeDone(nsHostRecord *);
+    bool NativeDone(nsHostRecord *);
 
     void     DeQueue(PRCList &aQ, nsHostRecord **aResult);
     void     ClearPendingQueue(PRCList *aPendingQueue);
