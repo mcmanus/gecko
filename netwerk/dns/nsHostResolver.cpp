@@ -1066,9 +1066,50 @@ nsHostResolver::ConditionallyCreateThread(nsHostRecord *rec)
     return NS_OK;
 }
 
+bool
+nsHostResolver::IsTRRBlacklisted(nsHostRecord *rec)
+{
+    fprintf(stderr, "Check %s in TRR blacklist\n", rec->host);
+
+    nsAutoCString host(rec->host);
+
+    if (!host.FindChar('.')) {
+        fprintf(stderr, "Host [%s] has no dot\n", rec->host);
+        return true;
+    }
+
+    for (uint32_t i = 0; i < mTRRBlacklist.Length(); i++) {
+        if (host.Equals(mTRRBlacklist[i])) {
+            fprintf(stderr, "Host [%s] is TRR blacklisted\n", rec->host);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void
+nsHostResolver::TRRBlacklist(nsHostRecord *rec)
+{
+    fprintf(stderr, "TRR blacklist %s\n", rec->host);
+    nsCString host(rec->host);
+    mTRRBlacklist.AppendElement(host);
+}
+
+
+// returns error if no TRR resolve is issued
 nsresult
 nsHostResolver::TrrLookup(nsHostRecord *rec)
 {
+    rec->mTRRCount = 0;   // bump for each outstanding TRR
+    rec->mTRRSuccess = 0; // bump for each successful TRR response
+
+    if (IsTRRBlacklisted(rec)) {
+        rec->mTRRUsed = false;
+        // not really an error but no TRR is issued
+        return NS_ERROR_UNKNOWN_HOST;
+    }
+
     nsresult rv;
 
     // If asking for AF_UNSPEC, first do IPv4 then IPv6.
@@ -1076,12 +1117,8 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
     bool IPv6 = (rec->af == AF_INET6)?true:false;
     bool sendAgain;
 
-    fprintf(stderr, "Check %s against TRR blacklist\n", rec->host);
-
     NS_ASSERTION(rec->mTRRCount == 0, "TRR still in use for this host record");
     rec->mTRRUsed = true; // this record gets TRR treatment
-    rec->mTRRCount = 0;   // bump for each outstanding TRR
-    rec->mTRRSuccess = 0; // bump for each successful TRR response
     rec->resolving = true;
     do {
         sendAgain = false;
@@ -1099,7 +1136,8 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
             }
         }
     } while (sendAgain);
-    return rv;
+
+    return rec->mTRRCount ? NS_OK : NS_ERROR_UNKNOWN_HOST;
 }
 
 
@@ -1158,11 +1196,11 @@ nsHostResolver::NameLookup(nsHostRecord *rec)
     }
 
     rv = TrrLookup(rec);
-    if (NS_FAILED(rv)) {
-        LOG(("  TRR lookup failed!\n"));
-    }
 
-    rv = NativeLookup(rec);
+    if ((mResolverMode == MODE_PARALLEL) ||
+        ((mResolverMode == MODE_TRRFIRST) && NS_FAILED(rv))) {
+        rv = NativeLookup(rec);
+    }
 
     return rv;
 }
@@ -1397,7 +1435,7 @@ nsHostResolver::TRRDone(nsHostRecord *rec)
         } else if (mResolverMode == MODE_PARALLEL) {
             if (rec->mNativeSuccess) {
                 // Native already completed successfully
-                fprintf(stderr, "TRR: blacklist(%s)\n", rec->host);
+                TRRBlacklist(rec);
             }
         }
         // If TRR-only, continue
@@ -1420,7 +1458,7 @@ nsHostResolver::NativeDone(nsHostRecord *rec)
 
         if (rec->mNativeSuccess && rec->mTRRUsed && !rec->mTRRSuccess) {
             // successful native resolve but a failed TRR, add to TRR-blacklist
-            fprintf(stderr, "TRR blacklist: %s\n", rec->host);
+            TRRBlacklist(rec);
         }
     }
     return false;

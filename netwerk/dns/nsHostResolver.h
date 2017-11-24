@@ -325,6 +325,8 @@ private:
     bool     GetHostToLookup(nsHostRecord **m);
     bool TRRDone(nsHostRecord *);
     bool NativeDone(nsHostRecord *);
+    bool IsTRRBlacklisted(nsHostRecord *);
+    void TRRBlacklist(nsHostRecord *);
 
     void     DeQueue(PRCList &aQ, nsHostRecord **aResult);
     void     ClearPendingQueue(PRCList *aPendingQueue);
@@ -377,6 +379,9 @@ private:
     mozilla::Atomic<uint32_t> mThreadCount;
     mozilla::Atomic<uint32_t> mActiveAnyThreadCount;
     mozilla::Atomic<uint32_t> mPendingCount;
+
+    // list of host names blacklisted from TRR resolves
+    nsTArray<nsCString> mTRRBlacklist;
 
     // Set the expiration time stamps appropriately.
     void PrepareRecordExpiration(nsHostRecord* rec) const;
