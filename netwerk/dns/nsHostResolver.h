@@ -137,8 +137,10 @@ private:
     bool    mNative;    /* true if this record is being resolved "natively",
                          * which means that it is either on the pending queue
                          * or owned by one of the worker threads. */
-    int     mTRR;       /* number of outstanding TRR resolves */
+    int     mTRRCount;   /* number of outstanding TRR resolves */
     int     mTRRSuccess; /* number of successful TRR responses */
+    bool    mTRRUsed;   /* TRR was used on this record */
+    int     mNativeSuccess; /* number of native lookup responses */
     mozilla::net::AddrInfo *mFirstTRR; /* temporary TRR storage */
     bool    onQueue;  /* true if pending and on the queue (not yet given to getaddrinfo())*/
     bool    usingAnyThread; /* true if off queue and contributing to mActiveAnyThreadCount */
@@ -318,8 +320,11 @@ private:
 
     nsresult Init();
     nsresult TrrLookup(nsHostRecord *);
-    nsresult IssueLookup(nsHostRecord *);
+    nsresult NativeLookup(nsHostRecord *);
+    nsresult NameLookup(nsHostRecord *);
     bool     GetHostToLookup(nsHostRecord **m);
+    bool TRRDone(nsHostRecord *);
+    void NativeDone(nsHostRecord *);
 
     void     DeQueue(PRCList &aQ, nsHostRecord **aResult);
     void     ClearPendingQueue(PRCList *aPendingQueue);
@@ -359,6 +364,13 @@ private:
     PRTime        mCreationTime;
     PRIntervalTime mLongIdleTimeout;
     PRIntervalTime mShortIdleTimeout;
+
+    enum ResolverMode {
+      MODE_PARALLEL,
+      MODE_TRRFIRST, // fallback to native on TRR failure
+      MODE_TRRONLY   // don't even fallback
+    };
+    enum ResolverMode mResolverMode;
 
     mozilla::Atomic<bool>     mShutdown;
     mozilla::Atomic<uint32_t> mNumIdleThreads;

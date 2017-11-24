@@ -169,8 +169,12 @@ nsHostRecord::nsHostRecord(const nsHostKey *key)
     , addr_info(nullptr)
     , addr(nullptr)
     , negative(false)
+    , resolving(false)
     , mNative(false)
-    , mTRR(0)
+    , mTRRCount(0)
+    , mTRRSuccess(0)
+    , mTRRUsed(false)
+    , mNativeSuccess(false)
     , mFirstTRR(nullptr)
     , onQueue(false)
     , usingAnyThread(false)
@@ -539,6 +543,7 @@ nsHostResolver::nsHostResolver(uint32_t maxCacheEntries,
     , mIdleThreadCV(mLock, "nsHostResolver.mIdleThreadCV")
     , mDB(&gHostDB_ops, sizeof(nsHostDBEnt), 0)
     , mEvictionQSize(0)
+    , mResolverMode(MODE_PARALLEL)
     , mShutdown(true)
     , mNumIdleThreads(0)
     , mThreadCount(0)
@@ -939,7 +944,7 @@ nsHostResolver::ResolveHost(const char             *host,
                     // Add callback to the list of pending callbacks.
                     PR_APPEND_LINK(callback, &he->rec->callbacks);
                     he->rec->flags = flags;
-                    rv = IssueLookup(he->rec);
+                    rv = NameLookup(he->rec);
                     Telemetry::Accumulate(Telemetry::DNS_LOOKUP_METHOD2,
                                           METHOD_NETWORK_FIRST);
                     if (NS_FAILED(rv)) {
@@ -1071,9 +1076,12 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
     bool IPv6 = (rec->af == AF_INET6)?true:false;
     bool sendAgain;
 
-    NS_ASSERTION(rec->mTRR == 0, "TRR still in use for this host record");
-    rec->mTRR = 0;
-    rec->mTRRSuccess = 0; // bump for each successful TRR
+    fprintf(stderr, "Check %s against TRR blacklist\n", rec->host);
+
+    NS_ASSERTION(rec->mTRRCount == 0, "TRR still in use for this host record");
+    rec->mTRRUsed = true; // this record gets TRR treatment
+    rec->mTRRCount = 0;   // bump for each outstanding TRR
+    rec->mTRRSuccess = 0; // bump for each successful TRR response
     rec->resolving = true;
     do {
         sendAgain = false;
@@ -1084,7 +1092,7 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
             NS_RELEASE(rec);
         } else {
             NS_ADDREF(this); // hold the nsHostResolver object too
-            rec->mTRR++;
+            rec->mTRRCount++;
             if ((rec->af == AF_UNSPEC) && !IPv6) {
                 IPv6 = true;
                 sendAgain = true;
@@ -1096,19 +1104,9 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
 
 
 nsresult
-nsHostResolver::IssueLookup(nsHostRecord *rec)
+nsHostResolver::NativeLookup(nsHostRecord *rec)
 {
     nsresult rv = NS_OK;
-    NS_ASSERTION(!rec->resolving, "record is already being resolved");
-    if (rec->resolving) {
-        fprintf(stderr, "IssueLookup %s while already resolving\n",
-                rec->host);
-    }
-
-    rv = TrrLookup(rec);
-    if (NS_FAILED(rv)) {
-        LOG(("  TRR lookup failed!\n"));
-    }
 
     // Add rec to one of the pending queues, possibly removing it from mEvictionQ.
     // If rec is on mEvictionQ, then we can just move the owning
@@ -1150,13 +1148,33 @@ nsHostResolver::IssueLookup(nsHostRecord *rec)
 }
 
 nsresult
+nsHostResolver::NameLookup(nsHostRecord *rec)
+{
+    nsresult rv = NS_OK;
+    NS_ASSERTION(!rec->resolving, "record is already being resolved");
+    if (rec->resolving) {
+        fprintf(stderr, "NameLookup %s while already resolving\n",
+                rec->host);
+    }
+
+    rv = TrrLookup(rec);
+    if (NS_FAILED(rv)) {
+        LOG(("  TRR lookup failed!\n"));
+    }
+
+    rv = NativeLookup(rec);
+
+    return rv;
+}
+
+nsresult
 nsHostResolver::ConditionallyRefreshRecord(nsHostRecord *rec, const char *host)
 {
     if ((rec->CheckExpiration(TimeStamp::NowLoRes()) != nsHostRecord::EXP_VALID
             || rec->negative) && !rec->resolving) {
         LOG(("  Using %s cache entry for host [%s] but starting async renewal.",
             rec->negative ? "negative" :"positive", host));
-        IssueLookup(rec);
+        NameLookup(rec);
 
         if (!rec->negative) {
             // negative entries are constantly being refreshed, only
@@ -1350,6 +1368,54 @@ different_rrset(AddrInfo *rrset1, AddrInfo *rrset2)
     return false;
 }
 
+// TRRdone() returns true if the current incoming results should be discarded.
+bool
+nsHostResolver::TRRDone(nsHostRecord *rec)
+{
+    if (rec->mNative && (mResolverMode == MODE_PARALLEL)) {
+        // still resolving natively
+        if (!rec->mTRRSuccess) {
+            // TRR failed, reported first but wait for native
+            return true;
+        } else {
+            // First, and a positive result
+            return false;
+        }
+    }
+    if (!rec->mTRRSuccess) {
+        // TRR failed
+
+        // If not parallel-resolving, re-issue a native-only resolve
+        if (mResolverMode == MODE_TRRFIRST) {
+            NativeLookup(rec);
+            return true;
+        } else if (mResolverMode == MODE_PARALLEL) {
+            if (rec->mNativeSuccess) {
+                // Native already completed successfully
+                fprintf(stderr, "TRR: blacklist(%s)\n", rec->host);
+            }
+        }
+        // If TRR-only, continue
+    }
+    return false;
+}
+
+void
+nsHostResolver::NativeDone(nsHostRecord *rec)
+{
+    if ((mResolverMode == MODE_PARALLEL) && rec->mTRRCount) {
+        // still parallel-resolving TRR
+        return;
+    } else if (mResolverMode == MODE_TRRFIRST) {
+        // this is a completed backup resolve
+
+        if (rec->mNativeSuccess && rec->mTRRUsed && !rec->mTRRSuccess) {
+            // successful native resolve but a failed TRR, add to TRR-blacklist
+            fprintf(stderr, "TRR blacklist: %s\n", rec->host);
+        }
+    }
+}
+
 //
 // OnLookupComplete() checks if the resolving should be redone and if so it
 // returns LOOKUP_RESOLVEAGAIN, but only if 'status' is not NS_ERROR_ABORT.
@@ -1363,14 +1429,14 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
 
     if (newRRSet->isTRR()) {
         MutexAutoLock lock(mLock);
-        NS_ASSERTION((rec->mTRR >=0) && (rec->mTRR <= 2), "RR race!");
-        rec->mTRR--;
+        NS_ASSERTION((rec->mTRRCount >=0) && (rec->mTRRCount <= 2), "RR race!");
+        rec->mTRRCount--;
         fprintf(stderr, "TRR lookup %s(%d to go)\n",
-                NS_FAILED(status)?"FAILED ":"",  rec->mTRR);
+                NS_FAILED(status)?"FAILED ":"",  rec->mTRRCount);
         if (NS_SUCCEEDED(status)) {
             rec->mTRRSuccess++;
         }
-        if (rec->mTRR) {
+        if (rec->mTRRCount) {
             if (NS_SUCCEEDED(status)) {
                 // There's another one TRR complete pending. Wait for it and keep
                 // this RRset around until then.
@@ -1385,11 +1451,6 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
         }
         else {
             // no more outstanding TRRs
-            if (!rec->mTRRSuccess) {
-                // complete failure
-                fprintf(stderr, "TRR failed to resolve\n");
-            }
-
             // If mFirstTRR is set, merge those addresses into current set!
             if (rec->mFirstTRR) {
                 if (NS_SUCCEEDED(status)) {
@@ -1413,12 +1474,24 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
             } else {
                 fprintf(stderr, "TRR was *FIRST*\n");
             }
+
+            if (!rec->mTRRSuccess) {
+                // no TRR success
+                delete newRRSet;
+                newRRSet = nullptr;
+            }
+            if (TRRDone(rec)) {
+                delete newRRSet;
+                NS_RELEASE(rec);
+                return LOOKUP_OK;
+            }
             // continue
         }
     } else {
         // native resolve completed
         MutexAutoLock lock(mLock);
         rec->mNative = false;
+        rec->mNativeSuccess = newRRSet ? true : false;
         if (!rec->resolving) {
             // arrived as second, delete
             fprintf(stderr, "Native-resolver ignored\n");
@@ -1428,6 +1501,8 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
         }
         else
             fprintf(stderr, "Native-resolver used\n");
+
+        NativeDone(rec);
     }
 
     PR_INIT_CLIST(&cbs);
@@ -1501,7 +1576,7 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
                      LOG_HOST(rec->host, rec->netInterface)));
                 rec->flags =
                   (rec->flags & ~RES_PRIORITY_MEDIUM) | RES_PRIORITY_LOW;
-                DebugOnly<nsresult> rv = IssueLookup(rec);
+                DebugOnly<nsresult> rv = NameLookup(rec);
                 NS_WARNING_ASSERTION(
                     NS_SUCCEEDED(rv),
                     "Could not issue second async lookup for TTL.");
