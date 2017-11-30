@@ -105,6 +105,19 @@ nsDNSRecord::GetCanonicalName(nsACString &result)
 }
 
 NS_IMETHODIMP
+nsDNSRecord::IsTRR(bool *retval)
+{
+    if (mHostRecord->addr_info) {
+        mHostRecord->addr_info_lock.Lock();
+        *retval =  mHostRecord->addr_info->isTRR();
+        mHostRecord->addr_info_lock.Unlock();
+    }
+    else {
+        *retval = false;
+    }
+    return NS_OK;
+}
+NS_IMETHODIMP
 nsDNSRecord::GetNextAddr(uint16_t port, NetAddr *addr)
 {
     if (mDone) {

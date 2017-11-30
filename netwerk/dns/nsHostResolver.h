@@ -126,6 +126,7 @@ public:
 
     bool RemoveOrRefresh(); // Mark records currently being resolved as needed
                             // to resolve again.
+    bool IsTRR() { return mTRRUsed; }
 
 private:
     friend class nsHostResolver;
@@ -295,7 +296,8 @@ public:
         //RES_DISABLE_IPV6 = nsIDNSService::RESOLVE_DISABLE_IPV6, // Not used
         RES_OFFLINE = nsIDNSService::RESOLVE_OFFLINE,
         //RES_DISABLE_IPv4 = nsIDNSService::RESOLVE_DISABLE_IPV4, // Not Used
-        RES_ALLOW_NAME_COLLISION = nsIDNSService::RESOLVE_ALLOW_NAME_COLLISION
+        RES_ALLOW_NAME_COLLISION = nsIDNSService::RESOLVE_ALLOW_NAME_COLLISION,
+        RES_DISABLE_TRR = nsIDNSService::RESOLVE_DISABLE_TRR
     };
 
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
