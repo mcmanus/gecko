@@ -24,6 +24,8 @@ public:
 
 private:
     virtual  ~TRRService();
+    nsresult ReadPrefs(const char *name);
+    void GetPrefBranch(nsIPrefBranch **result);
     bool      mStarted;
     bool      mInitialized;
     uint32_t  mMode;

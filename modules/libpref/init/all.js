@@ -5292,6 +5292,13 @@ pref("network.captive-portal-service.maxInterval", 1500000); // 25 minutes
 pref("network.captive-portal-service.backoffFactor", "5.0");
 pref("network.captive-portal-service.enabled", false);
 
+// 0 - off, 1 - parallel, 2 TRR first, 3 TRR only
+pref("network.trr.mode", 0);
+// DEBUG-only default URI
+pref("network.trr.uri", "https://daniel.haxx.se/dns/");
+// Wait for captive portal confirmation before enabling TRR
+pref("network.trr.wait-for-portal", true);
+
 pref("captivedetect.canonicalURL", "http://detectportal.firefox.com/success.txt");
 pref("captivedetect.canonicalContent", "success\n");
 pref("captivedetect.maxWaitingTime", 5000);

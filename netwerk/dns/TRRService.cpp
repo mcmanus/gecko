@@ -11,6 +11,9 @@
 static const char kCaptivePortalLoginSuccessEvent[] = "captive-portal-login-success";
 static const char kCaptivePortalLoginEvent[] = "captive-portal-login";
 
+#define TRR_PREF_PREFIX           "network.trr."
+#define TRR_PREF(x)               TRR_PREF_PREFIX x
+
 namespace mozilla {
 namespace net {
 
@@ -43,19 +46,43 @@ TRRService::Init()
         observerService->AddObserver(this, kCaptivePortalLoginEvent, true);
         observerService->AddObserver(this, kCaptivePortalLoginSuccessEvent, true);
     }
+    nsCOMPtr<nsIPrefBranch> prefBranch;
+    GetPrefBranch(getter_AddRefs(prefBranch));
+    if (prefBranch) {
+        prefBranch->AddObserver(TRR_PREF_PREFIX, this, true);
+    }
 
-    // 0 - parallel, 1 TRR first, 2 TRR only, ...
-    Preferences::GetUint("network.trr.mode", &mMode);
+    ReadPrefs(NULL);
 
-    // Base URI, appends "?body=..."
-    Preferences::GetCString("network.trr.uri", mUri);
-
-    // Wait for captive portal?
-    Preferences::GetBool("network.trr.wait-for-captive", &mWaitForCaptive);
     LOG(("Initialized TRRService\n"));
     return NS_OK;
 }
 
+void
+TRRService::GetPrefBranch(nsIPrefBranch **result)
+{
+    *result = nullptr;
+    CallGetService(NS_PREFSERVICE_CONTRACTID, result);
+}
+
+nsresult
+TRRService::ReadPrefs(const char *name)
+{
+    if (!name || !strcmp(name, TRR_PREF("mode"))) {
+        // 0 - off, 1 - parallel, 2 TRR first, 3 TRR only
+        Preferences::GetUint(TRR_PREF("mode"), &mMode);
+    }
+    if (!name || !strcmp(name, TRR_PREF("uri"))) {
+        // Base URI, appends "?body=..."
+        Preferences::GetCString(TRR_PREF("uri"), mUri);
+    }
+    if (!name || !strcmp(name, TRR_PREF("wait-for-portal"))) {
+        // Wait for captive portal?
+        Preferences::GetBool(TRR_PREF("wait-for-portal"), &mWaitForCaptive);
+    }
+
+    return NS_OK;
+}
 nsresult
 TRRService::Start()
 {
@@ -83,12 +110,15 @@ TRRService::Observe(nsISupports *aSubject,
                     const char16_t * aData)
 {
     LOG(("TRR::Observe() topic=%s\n", aTopic));
-    if (!strcmp(aTopic, kCaptivePortalLoginSuccessEvent)) {
-      // The user has successfully logged in. We have connectivity.
-      fprintf(stderr, "-=*) TRRservice captive portal is okay (*=-\n");
+    if (!strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
+        ReadPrefs(NS_ConvertUTF16toUTF8(aData).get());
+    }
+    else if (!strcmp(aTopic, kCaptivePortalLoginSuccessEvent)) {
+        // The user has successfully logged in. We have connectivity.
+        fprintf(stderr, "-=*) TRRservice captive portal is okay (*=-\n");
     } else if (!strcmp(aTopic, kCaptivePortalLoginEvent)) {
-      // The user is locked up behind a portal
-      fprintf(stderr, "-=*) TRRservice captive portal is LOCKED (*=-\n");
+        // The user is locked up behind a portal
+        fprintf(stderr, "-=*) TRRservice captive portal is LOCKED (*=-\n");
     }
     return NS_OK;
 }

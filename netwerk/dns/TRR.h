@@ -29,15 +29,6 @@ public:
     NS_IMETHOD Run() override
     {
         MOZ_ASSERT(NS_IsMainThread());
-#if 0
-        nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
-        if (obs) {
-            obs->NotifyObservers(nullptr,
-                                 "trr-resolution-request",
-                                 NS_ConvertUTF8toUTF16(mHostname).get());
-        }
-#endif
-        // Name resolve asynchronously by sending a GET over HTTPS using HTTP/2
         DNSoverHTTPS();
         return NS_OK;
     }
