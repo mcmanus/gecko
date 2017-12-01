@@ -31,6 +31,7 @@
 #include "GetAddrInfo.h"
 #include "GeckoProfiler.h"
 #include "TRR.h"
+#include "TRRService.h"
 
 #include "mozilla/HashFunctions.h"
 #include "mozilla/TimeStamp.h"
@@ -1070,6 +1071,11 @@ bool
 nsHostResolver::IsTRRBlacklisted(nsHostRecord *rec)
 {
     fprintf(stderr, "Check %s in TRR blacklist\n", rec->host);
+
+    if (!gTRRService || !gTRRService->Enabled()) {
+        fprintf(stderr, "... denied by TRRService\n");
+        return true;
+    }
 
     nsAutoCString host(rec->host);
 

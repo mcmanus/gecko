@@ -5,6 +5,7 @@
 #ifndef TRRService_h_
 #define TRRService_h_
 
+#include "nsIPrefService.h"
 #include "nsIObserver.h"
 
 namespace mozilla {
@@ -21,6 +22,7 @@ public:
     nsresult Init();
     nsresult Start();
     nsresult Stop();
+    bool Enabled();
 
 private:
     virtual  ~TRRService();
@@ -31,11 +33,14 @@ private:
     uint32_t  mMode;
     nsCString mUri;
     bool      mWaitForCaptive;
+    bool      mCaptiveIsPassed;
 };
 
 
 nsresult
 TRRServiceConstructor(nsISupports *aOuter, REFNSIID aIID, void **aResult);
+
+extern TRRService *gTRRService;
 
 } // namespace net
 } // namespace mozilla

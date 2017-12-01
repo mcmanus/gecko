@@ -58,6 +58,12 @@ TRRService::Init()
     return NS_OK;
 }
 
+bool
+TRRService::Enabled()
+{
+    return (!mWaitForCaptive || mCaptiveIsPassed);
+}
+
 void
 TRRService::GetPrefBranch(nsIPrefBranch **result)
 {
@@ -116,9 +122,11 @@ TRRService::Observe(nsISupports *aSubject,
     else if (!strcmp(aTopic, kCaptivePortalLoginSuccessEvent)) {
         // The user has successfully logged in. We have connectivity.
         fprintf(stderr, "-=*) TRRservice captive portal is okay (*=-\n");
+        mCaptiveIsPassed = true;
     } else if (!strcmp(aTopic, kCaptivePortalLoginEvent)) {
         // The user is locked up behind a portal
         fprintf(stderr, "-=*) TRRservice captive portal is LOCKED (*=-\n");
+        mCaptiveIsPassed = false;
     }
     return NS_OK;
 }
