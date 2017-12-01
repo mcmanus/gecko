@@ -32,6 +32,7 @@
 #include "nsProxyRelease.h"
 #include "nsIObserverService.h"
 #include "nsINetworkLinkService.h"
+#include "TRRService.h"
 
 #include "mozilla/Attributes.h"
 #include "mozilla/net/NeckoCommon.h"
@@ -498,6 +499,7 @@ nsDNSService::nsDNSService()
     , mNotifyResolution(false)
     , mOfflineLocalhost(false)
     , mForceResolveOn(false)
+    , mTrrService(nullptr)
 {
 }
 
@@ -653,6 +655,10 @@ nsDNSService::Init()
 
     RegisterWeakMemoryReporter(this);
 
+    mTrrService = new TRRService();
+    if (mTrrService && NS_SUCCEEDED(mTrrService->Init())) {
+        ;
+    }
     return rv;
 }
 

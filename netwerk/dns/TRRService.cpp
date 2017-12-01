@@ -8,6 +8,9 @@
 #include "nsIObserverService.h"
 #include "nsServiceManagerUtils.h"
 
+static const char kCaptivePortalLoginSuccessEvent[] = "captive-portal-login-success";
+static const char kCaptivePortalLoginEvent[] = "captive-portal-login";
+
 namespace mozilla {
 namespace net {
 
@@ -33,6 +36,23 @@ TRRService::Init()
     }
     mInitialized = true;
     gTRRService = this;
+
+    nsCOMPtr<nsIObserverService> observerService =
+      mozilla::services::GetObserverService();
+    if (observerService) {
+        observerService->AddObserver(this, kCaptivePortalLoginEvent, true);
+        observerService->AddObserver(this, kCaptivePortalLoginSuccessEvent, true);
+    }
+
+    // 0 - parallel, 1 TRR first, 2 TRR only, ...
+    Preferences::GetUint("network.trr.mode", &mMode);
+
+    // Base URI, appends "?body=..."
+    Preferences::GetCString("network.trr.uri", mUri);
+
+    // Wait for captive portal?
+    Preferences::GetBool("network.trr.wait-for-captive", &mWaitForCaptive);
+    LOG(("Initialized TRRService\n"));
     return NS_OK;
 }
 
@@ -62,6 +82,14 @@ TRRService::Observe(nsISupports *aSubject,
                     const char * aTopic,
                     const char16_t * aData)
 {
+    LOG(("TRR::Observe() topic=%s\n", aTopic));
+    if (!strcmp(aTopic, kCaptivePortalLoginSuccessEvent)) {
+      // The user has successfully logged in. We have connectivity.
+      fprintf(stderr, "-=*) TRRservice captive portal is okay (*=-\n");
+    } else if (!strcmp(aTopic, kCaptivePortalLoginEvent)) {
+      // The user is locked up behind a portal
+      fprintf(stderr, "-=*) TRRservice captive portal is LOCKED (*=-\n");
+    }
     return NS_OK;
 }
 

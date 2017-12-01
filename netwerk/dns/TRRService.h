@@ -23,9 +23,12 @@ public:
     nsresult Stop();
 
 private:
-    virtual ~TRRService();
-    bool     mStarted;
-    bool     mInitialized;
+    virtual  ~TRRService();
+    bool      mStarted;
+    bool      mInitialized;
+    uint32_t  mMode;
+    nsCString mUri;
+    bool      mWaitForCaptive;
 };
 
 
