@@ -1068,25 +1068,36 @@ nsHostResolver::ConditionallyCreateThread(nsHostRecord *rec)
 }
 
 bool
-nsHostResolver::IsTRRBlacklisted(nsHostRecord *rec)
+nsHostResolver::IsTRRBlacklisted(nsCString aHost,
+                                 bool aFullHost) // false if domain
 {
-    fprintf(stderr, "Check %s in TRR blacklist\n", rec->host);
+    fprintf(stderr, "Check %s in TRR blacklist\n", aHost.get());
 
     if (!gTRRService || !gTRRService->Enabled()) {
         fprintf(stderr, "... denied by TRRService\n");
         return true;
     }
 
-    nsAutoCString host(rec->host);
+    uint32_t dot = aHost.FindChar('.');
+    if (!dot && aFullHost) {
+        // only if a full host name, domains can be dotless to be able to
+        // blacklist entire TLDs
+        fprintf(stderr, "Host [%s] has no dot\n", aHost.get());
+        return true;
+    }
+    dot++;
+    nsDependentCSubstring domain = Substring(aHost, dot, aHost.Length() - dot);
+    nsAutoCString check(domain);
 
-    if (!host.FindChar('.')) {
-        fprintf(stderr, "Host [%s] has no dot\n", rec->host);
+    // recursively check the domain part of this name
+    if (IsTRRBlacklisted(check, false)) {
+        // the domain name of this name was TRR blacklisted
         return true;
     }
 
     for (uint32_t i = 0; i < mTRRBlacklist.Length(); i++) {
-        if (host.Equals(mTRRBlacklist[i])) {
-            fprintf(stderr, "Host [%s] is TRR blacklisted\n", rec->host);
+        if (aHost.Equals(mTRRBlacklist[i].mName)) {
+            fprintf(stderr, "Host [%s] is TRR blacklisted\n", aHost.get());
             return true;
         }
     }
@@ -1099,7 +1110,23 @@ nsHostResolver::TRRBlacklist(nsHostRecord *rec)
 {
     fprintf(stderr, "TRR blacklist %s\n", rec->host);
     nsCString host(rec->host);
-    mTRRBlacklist.AppendElement(host);
+    mTRRBlacklist.AppendElement(TRRBLentry(host));
+
+    int32_t dot = host.FindChar('.');
+    if (dot) {
+        // this has a domain to be checked
+        dot++;
+        nsDependentCSubstring domain = Substring(host, dot,
+                                                 host.Length() - dot);
+        nsAutoCString check(domain);
+        if (IsTRRBlacklisted(check, false)) {
+            // the domain part is already blacklisted, no need to add this
+            // entry
+            return;
+        }
+        // verify 'check' over TRR
+
+    }
 }
 
 
@@ -1110,7 +1137,8 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
     rec->mTRRCount = 0;   // bump for each outstanding TRR
     rec->mTRRSuccess = 0; // bump for each successful TRR response
 
-    if (IsTRRBlacklisted(rec)) {
+    nsAutoCString hostName(rec->host);
+    if (IsTRRBlacklisted(hostName, true)) {
         rec->mTRRUsed = false;
         // not really an error but no TRR is issued
         return NS_ERROR_UNKNOWN_HOST;

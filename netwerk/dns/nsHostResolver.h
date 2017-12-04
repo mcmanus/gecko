@@ -34,6 +34,21 @@ class nsResolveHostCallback;
 #define MAX_RESOLVER_THREADS (MAX_RESOLVER_THREADS_FOR_ANY_PRIORITY + \
                               MAX_RESOLVER_THREADS_FOR_HIGH_PRIORITY)
 
+// TRR Blacklist Entry
+class TRRBLentry {
+  public:
+    explicit TRRBLentry(nsCString aHost)
+      : mName(aHost)
+      , domain(false)
+      , age(0)
+    {
+    }
+
+    nsCString mName; // host or domain
+    bool domain;     // true if domain only
+    int age;         // TBD
+};
+
 struct nsHostKey
 {
     const char *host;
@@ -327,7 +342,7 @@ private:
     bool     GetHostToLookup(nsHostRecord **m);
     bool TRRDone(nsHostRecord *);
     bool NativeDone(nsHostRecord *);
-    bool IsTRRBlacklisted(nsHostRecord *);
+    bool IsTRRBlacklisted(nsCString host, bool fullhost);
     void TRRBlacklist(nsHostRecord *);
 
     void     DeQueue(PRCList &aQ, nsHostRecord **aResult);
@@ -383,7 +398,7 @@ private:
     mozilla::Atomic<uint32_t> mPendingCount;
 
     // list of host names blacklisted from TRR resolves
-    nsTArray<nsCString> mTRRBlacklist;
+    nsTArray<TRRBLentry> mTRRBlacklist;
 
     // Set the expiration time stamps appropriately.
     void PrepareRecordExpiration(nsHostRecord* rec) const;
