@@ -1146,9 +1146,9 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
 
     nsresult rv;
 
-    // If asking for AF_UNSPEC, first do IPv4 then IPv6.
-    // If asking for AF_INET6 or AF_INET, do only that single family
-    bool IPv6 = (rec->af == AF_INET6)?true:false;
+    // If asking for AF_UNSPEC, issue both A and AAAA.
+    // If asking for AF_INET6 or AF_INET, do only that single type
+    enum TrrType rectype = (rec->af == AF_INET6)?TRRTYPE_AAAA:TRRTYPE_A;
     bool sendAgain;
 
     NS_ASSERTION(rec->mTRRCount == 0, "TRR still in use for this host record");
@@ -1157,15 +1157,15 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
     do {
         sendAgain = false;
         NS_ADDREF(rec);
-        fprintf(stderr, "++++++ TRR Resolve %s IPv%d\n", rec->host, IPv6?6:4);
-        rv = NS_DispatchToMainThread(new TRR(this, rec, IPv6));
+        fprintf(stderr, "++++++ TRR Resolve %s type %d\n", rec->host, (int)rectype);
+        rv = NS_DispatchToMainThread(new TRR(this, rec, rectype));
         if (NS_FAILED(rv)) {
             NS_RELEASE(rec);
         } else {
             NS_ADDREF(this); // hold the nsHostResolver object too
             rec->mTRRCount++;
-            if ((rec->af == AF_UNSPEC) && !IPv6) {
-                IPv6 = true;
+            if ((rec->af == AF_UNSPEC) && (rectype == TRRTYPE_A)) {
+                rectype = TRRTYPE_AAAA;
                 sendAgain = true;
             }
         }

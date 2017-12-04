@@ -11,18 +11,25 @@
 
 namespace mozilla { namespace net {
 
+    // the values map to RFC1035 type identifiers
+    enum TrrType {
+      TRRTYPE_A = 1,
+      TRRTYPE_NS = 2,
+      TRRTYPE_AAAA = 28,
+    };
+
 class TRR: public Runnable
 {
 public:
     explicit TRR(nsHostResolver *aResolver,
                  nsHostRecord *aRec,
-                 bool aIPv6)
+                 enum TrrType aType)
       : mozilla::Runnable("TRR")
       , mRec(aRec)
       , mHostResolver(aResolver)
+      , mType(aType)
     {
         mHostname = aRec->host;
-        mAf = aIPv6 ? AF_INET6 : AF_INET;
         mResolverThread = NS_GetCurrentThread();
     }
 
@@ -38,7 +45,7 @@ public:
     nsHostResolver *mHostResolver;
 
 private:
-    uint16_t    mAf;
+    enum TrrType mType;
     nsCOMPtr<nsIEventTarget> mResolverThread;
     nsresult DNSoverHTTPS();
 };

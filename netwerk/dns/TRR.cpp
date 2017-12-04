@@ -49,14 +49,11 @@ NS_IMPL_ISUPPORTS(DOHListener,
 
 // convert a given host request to a DOH 'body'
 //
-// TODO: make it able to ask for both A and AAAA
 static nsresult dohEncode(nsCString aHost,
-                          bool aIpv6,
-                          nsAutoCString &body)
+                          enum TrrType aType,
+                          nsAutoCString &aBody)
 {
     nsAutoCString raw;
-    const uint8_t DNS_TYPE_AAAA = 28;
-    const uint8_t DNS_TYPE_A = 1;
     const uint8_t DNS_CLASS_IN = 1;
 
     // Header
@@ -108,11 +105,11 @@ static nsresult dohEncode(nsCString aHost,
     } while(1);
 
     raw += '\0'; // upper 8 bit TYPE
-    raw += aIpv6 ? DNS_TYPE_AAAA : DNS_TYPE_A;
+    raw += static_cast<uint8_t>(aType);
     raw += '\0'; // upper 8 bit CLASS
     raw += DNS_CLASS_IN;    // IN - "the Internet"
 
-    nsresult rv = Base64Encode(raw, body);
+    nsresult rv = Base64Encode(raw, aBody);
     if (NS_FAILED(rv)) {
         return rv;
     }
@@ -148,7 +145,7 @@ nsresult TRR::DNSoverHTTPS()
     nsAutoCString uri("https://daniel.haxx.se/dns/?body=");
     nsAutoCString body;
 
-    rv = dohEncode(mHostname, mAf == PR_AF_INET6, body);
+    rv = dohEncode(mHostname, mType, body);
     if (NS_FAILED(rv)) {
         return rv;
     }
