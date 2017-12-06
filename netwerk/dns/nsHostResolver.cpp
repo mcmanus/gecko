@@ -1106,29 +1106,35 @@ nsHostResolver::IsTRRBlacklisted(nsCString aHost,
 }
 
 void
-nsHostResolver::TRRBlacklist(nsCString aHostname)
+nsHostResolver::TRRBlacklist(nsCString aHost, bool aFullHost)
 {
-    fprintf(stderr, "TRR blacklist %s\n", aHostname.get());
-    nsCString host = aHostname;
-    mTRRBlacklist.AppendElement(TRRBLentry(host));
+    fprintf(stderr, "TRR blacklist %s\n", aHost.get());
+    mTRRBlacklist.AppendElement(TRRBLentry(aHost));
 
-    int32_t dot = host.FindChar('.');
-    if (dot) {
-        // this has a domain to be checked
-        dot++;
-        nsDependentCSubstring domain = Substring(host, dot,
-                                                 host.Length() - dot);
-        nsAutoCString check(domain);
-        if (IsTRRBlacklisted(check, false)) {
-            // the domain part is already blacklisted, no need to add this
-            // entry
-            return;
+    if (aFullHost) {
+        // when given a full host name, verify its domain as well
+        int32_t dot = aHost.FindChar('.');
+        if (dot) {
+            // this has a domain to be checked
+            dot++;
+            nsDependentCSubstring domain = Substring(aHost, dot, aHost.Length() - dot);
+            nsAutoCString check(domain);
+            if (IsTRRBlacklisted(check, false)) {
+                // the domain part is already blacklisted, no need to add this
+                // entry
+                return;
+            }
+            // verify 'check' over TRR
+            fprintf(stderr, "TRR: verify if '%s' resolves\n", check.get());
+
+            // check if there's an NS entry for this name
+            nsresult rv = NS_DispatchToMainThread(new TRR(this, check, TRRTYPE_NS));
+            if (NS_FAILED(rv)) {
+                // major problemo
+            }
         }
-        // verify 'check' over TRR
-        fprintf(stderr, "TRR: verify if '%s' resolves\n", check.get());
     }
 }
-
 
 // returns error if no TRR resolve is issued
 nsresult
@@ -1469,7 +1475,7 @@ nsHostResolver::TRRDone(nsHostRecord *rec)
         } else if (mResolverMode == MODE_PARALLEL) {
             if (rec->mNativeSuccess) {
                 // Native already completed successfully
-                TRRBlacklist(nsCString(rec->host));
+                TRRBlacklist(nsCString(rec->host), true);
             }
         }
         // If TRR-only, continue
@@ -1492,7 +1498,7 @@ nsHostResolver::NativeDone(nsHostRecord *rec)
 
         if (rec->mNativeSuccess && rec->mTRRUsed && !rec->mTRRSuccess) {
             // successful native resolve but a failed TRR, add to TRR-blacklist
-            TRRBlacklist(nsCString(rec->host));
+            TRRBlacklist(nsCString(rec->host), true);
         }
     }
     return false;
@@ -1508,6 +1514,18 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
     // get the list of pending callbacks for this lookup, and notify
     // them that the lookup is complete.
     PRCList cbs;
+
+    if (!rec) {
+        // when called without a host record, this is a domain name check response.
+        if (NS_SUCCEEDED(status)) {
+            fprintf(stderr, "TRR verified %s to be fine!\n", newRRSet->mHostName);
+            // whitelist?
+        } else {
+            fprintf(stderr, "TRR says %s doesn't resove!\n", newRRSet->mHostName);
+            TRRBlacklist(nsCString(newRRSet->mHostName), false);
+        }
+        return LOOKUP_OK;
+    }
 
     if (newRRSet->isTRR()) {
         MutexAutoLock lock(mLock);

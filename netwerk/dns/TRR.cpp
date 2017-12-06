@@ -145,13 +145,13 @@ nsresult TRR::DNSoverHTTPS()
     nsAutoCString uri("https://daniel.haxx.se/dns/?body=");
     nsAutoCString body;
 
-    rv = dohEncode(mHostname, mType, body);
+    rv = dohEncode(mHost, mType, body);
     if (NS_FAILED(rv)) {
         return rv;
     }
     uri.Append(body);
     //uri.Append("&host="); // send plain host too for the dummy server
-    //uri.Append(mHostname);
+    //uri.Append(mHost);
     NS_NewURI(getter_AddRefs(dnsURI), uri);
 
     // use GET
@@ -265,8 +265,17 @@ DOHListener::dohDecode()
                 LOG("TRR: move over %d bytes\n", 1 + length);
             } while (length);
         }
-        // skip type, class
-        index += 4;
+        // 16 bit TYPE
+        uint16_t TYPE = get16bit(mResponse, index);
+        index += 2;
+
+        // 16 bit class
+        uint16_t CLASS = get16bit(mResponse, index);
+        if (1 != CLASS) {
+            LOG("TRR bad CLASS (%u)\n", CLASS);
+            return NS_ERROR_UNEXPECTED;
+        }
+        index += 2;
 
         // 32 bit TTL (seconds)
         uint32_t TTL = get32bit(mResponse, index);
@@ -277,14 +286,32 @@ DOHListener::dohDecode()
         index += 2;
 
         // RDATA
-        // - IPv4 (TYPE 1):  4 bytes
-        // - IPv6 (TYPE 28): 16 bytes
+        // - A (TYPE 1):  4 bytes
+        // - AAAA (TYPE 28): 16 bytes
+        // - NS (TYPE 2): N bytes
 
-        if ((RDLENGTH != 4) && (RDLENGTH != 16)) {
-            LOG("TRR received strange RDATA (%u), aborting\n", RDLENGTH);
-            return NS_ERROR_UNEXPECTED;
+        switch(TYPE) {
+        case TRRTYPE_A:
+          if (RDLENGTH != 4) {
+              LOG("TRR bad lenght for A (%u)\n", RDLENGTH);
+              return NS_ERROR_UNEXPECTED;
+          }
+          mDNS.Add(TTL, mResponse, index, RDLENGTH, host);
+          break;
+        case TRRTYPE_AAAA:
+          if (RDLENGTH != 16) {
+              LOG("TRR bad length for AAAA (%u)\n", RDLENGTH);
+              return NS_ERROR_UNEXPECTED;
+          }
+          mDNS.Add(TTL, mResponse, index, RDLENGTH, host);
+          break;
+        case TRRTYPE_NS:
+          /* allow "any" size, ignore the field for the moment */
+          break;
+        default:
+          LOG("TRR unsupported TYPE (%u)\n", TYPE);
+          return NS_ERROR_UNEXPECTED;
         }
-        mDNS.Add(TTL, mResponse, index, RDLENGTH, host);
 
         index += RDLENGTH;
         records--;
@@ -301,7 +328,7 @@ DOHListener::dohDecode()
 nsresult DOHListener::returnData()
 {
     // create and populate an AddrInfo instance to pass on
-    AddrInfo *ai = new AddrInfo(mTrr->mHostname.get(), true);
+    AddrInfo *ai = new AddrInfo(mTrr->mHost.get(), true);
     DOHaddr *item;
     uint32_t ttl = AddrInfo::NO_TTL_DATA;
     while ((item = static_cast<DOHaddr*>(mDNS.mAddresses.popFirst()))) {
@@ -325,7 +352,7 @@ nsresult DOHListener::failData()
 {
     // create and populate an TRR AddrInfo instance to pass on to signal that
     // this comes from TRR
-    AddrInfo *ai = new AddrInfo(mTrr->mHostname.get(), true);
+    AddrInfo *ai = new AddrInfo(mTrr->mHost.get(), true);
 
     (void)mTrr->mHostResolver->OnLookupComplete(mTrr->mRec, NS_ERROR_FAILURE, ai);
     return NS_OK;

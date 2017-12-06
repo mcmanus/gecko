@@ -29,8 +29,19 @@ public:
       , mHostResolver(aResolver)
       , mType(aType)
     {
-        mHostname = aRec->host;
-        mResolverThread = NS_GetCurrentThread();
+        mHost = aRec->host;
+    }
+
+    explicit TRR(nsHostResolver *aResolver,
+                 nsCString aHost,
+                 enum TrrType aType)
+      : mozilla::Runnable("TRR")
+      , mHost(aHost)
+      , mRec(nullptr)
+      , mHostResolver(aResolver)
+      , mType(aType)
+    {
+
     }
 
     NS_IMETHOD Run() override
@@ -39,14 +50,12 @@ public:
         DNSoverHTTPS();
         return NS_OK;
     }
-    nsCOMPtr<nsIEventTarget> GetResolverThread() { return mResolverThread; }
-    nsCString   mHostname;
+    nsCString   mHost;
     nsHostRecord *mRec;
     nsHostResolver *mHostResolver;
 
 private:
     enum TrrType mType;
-    nsCOMPtr<nsIEventTarget> mResolverThread;
     nsresult DNSoverHTTPS();
 };
 

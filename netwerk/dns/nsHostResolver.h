@@ -343,7 +343,7 @@ private:
     bool TRRDone(nsHostRecord *);
     bool NativeDone(nsHostRecord *);
     bool IsTRRBlacklisted(nsCString host, bool fullhost);
-    void TRRBlacklist(nsCString host);
+    void TRRBlacklist(nsCString host, bool aFullname);
 
     void     DeQueue(PRCList &aQ, nsHostRecord **aResult);
     void     ClearPendingQueue(PRCList *aPendingQueue);
