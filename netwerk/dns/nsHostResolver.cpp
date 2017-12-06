@@ -1096,7 +1096,7 @@ nsHostResolver::IsTRRBlacklisted(nsCString aHost,
     }
 
     for (uint32_t i = 0; i < mTRRBlacklist.Length(); i++) {
-        if (aHost.Equals(mTRRBlacklist[i].mName)) {
+        if (aHost.EqualsIgnoreCase(mTRRBlacklist[i].mName.get())) {
             fprintf(stderr, "Host [%s] is TRR blacklisted\n", aHost.get());
             return true;
         }
@@ -1511,9 +1511,7 @@ nsHostResolver::NativeDone(nsHostRecord *rec)
 nsHostResolver::LookupStatus
 nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* newRRSet)
 {
-    // get the list of pending callbacks for this lookup, and notify
-    // them that the lookup is complete.
-    PRCList cbs;
+    MutexAutoLock lock(mLock);
 
     if (!rec) {
         // when called without a host record, this is a domain name check response.
@@ -1524,11 +1522,11 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
             fprintf(stderr, "TRR says %s doesn't resove!\n", newRRSet->mHostName);
             TRRBlacklist(nsCString(newRRSet->mHostName), false);
         }
+        delete newRRSet;
         return LOOKUP_OK;
     }
 
     if (newRRSet->isTRR()) {
-        MutexAutoLock lock(mLock);
         NS_ASSERTION((rec->mTRRCount >=0) && (rec->mTRRCount <= 2), "RR race!");
         rec->mTRRCount--;
         fprintf(stderr, "TRR lookup %s(%d pending)\n",
@@ -1577,7 +1575,6 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
         }
     } else {
         // native resolve completed
-        MutexAutoLock lock(mLock);
         rec->mNative = false;
         rec->mNativeSuccess = newRRSet ? true : false;
         if (NativeDone(rec)) {
@@ -1587,10 +1584,12 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
         }
     }
 
+    // get the list of pending callbacks for this lookup, and notify
+    // them that the lookup is complete.
+    PRCList cbs;
+
     PR_INIT_CLIST(&cbs);
     {
-        MutexAutoLock lock(mLock);
-
         if (rec->mResolveAgain && (status != NS_ERROR_ABORT)) {
             LOG(("nsHostResolver record %p resolve again due to flushcache\n", rec));
             rec->mResolveAgain = false;
