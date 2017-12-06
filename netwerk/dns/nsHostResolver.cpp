@@ -1091,7 +1091,7 @@ nsHostResolver::IsTRRBlacklisted(nsCString aHost,
 
     // recursively check the domain part of this name
     if (IsTRRBlacklisted(check, false)) {
-        // the domain name of this name was TRR blacklisted
+        // the domain name of this name is already TRR blacklisted
         return true;
     }
 
@@ -1106,10 +1106,10 @@ nsHostResolver::IsTRRBlacklisted(nsCString aHost,
 }
 
 void
-nsHostResolver::TRRBlacklist(nsHostRecord *rec)
+nsHostResolver::TRRBlacklist(nsCString aHostname)
 {
-    fprintf(stderr, "TRR blacklist %s\n", rec->host);
-    nsCString host(rec->host);
+    fprintf(stderr, "TRR blacklist %s\n", aHostname.get());
+    nsCString host = aHostname;
     mTRRBlacklist.AppendElement(TRRBLentry(host));
 
     int32_t dot = host.FindChar('.');
@@ -1125,7 +1125,7 @@ nsHostResolver::TRRBlacklist(nsHostRecord *rec)
             return;
         }
         // verify 'check' over TRR
-
+        fprintf(stderr, "TRR: verify if '%s' resolves\n", check.get());
     }
 }
 
@@ -1469,7 +1469,7 @@ nsHostResolver::TRRDone(nsHostRecord *rec)
         } else if (mResolverMode == MODE_PARALLEL) {
             if (rec->mNativeSuccess) {
                 // Native already completed successfully
-                TRRBlacklist(rec);
+                TRRBlacklist(nsCString(rec->host));
             }
         }
         // If TRR-only, continue
@@ -1492,7 +1492,7 @@ nsHostResolver::NativeDone(nsHostRecord *rec)
 
         if (rec->mNativeSuccess && rec->mTRRUsed && !rec->mTRRSuccess) {
             // successful native resolve but a failed TRR, add to TRR-blacklist
-            TRRBlacklist(rec);
+            TRRBlacklist(nsCString(rec->host));
         }
     }
     return false;
