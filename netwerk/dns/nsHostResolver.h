@@ -40,14 +40,12 @@ class TRRBLentry {
   public:
     explicit TRRBLentry(nsCString aHost)
       : mName(aHost)
-      , domain(false)
-      , age(0)
     {
+        mTimestamp = mozilla::TimeStamp::Now();
     }
 
-    nsCString mName; // host or domain
-    bool domain;     // true if domain only
-    int age;         // TBD
+    nsCString mName;      // host or domain
+    mozilla::TimeStamp mTimestamp;
 };
 
 struct nsHostKey
