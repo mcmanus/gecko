@@ -5298,6 +5298,8 @@ pref("network.trr.mode", 0);
 pref("network.trr.uri", "https://daniel.haxx.se/dns/");
 // Wait for captive portal confirmation before enabling TRR
 pref("network.trr.wait-for-portal", true);
+// Allow RFC1918 address in responses?
+pref("network.trr.allow-rfc1918", false);
 
 pref("captivedetect.canonicalURL", "http://detectportal.firefox.com/success.txt");
 pref("captivedetect.canonicalContent", "success\n");

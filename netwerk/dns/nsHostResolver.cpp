@@ -599,6 +599,10 @@ nsHostResolver::Init()
         res_ninit(&_res);
     }
 #endif
+
+    // seed the blacklist with the .local domain
+    TRRBlacklist(NS_LITERAL_CSTRING("local"), false);
+
     return NS_OK;
 }
 
@@ -1080,7 +1084,7 @@ nsHostResolver::IsTRRBlacklisted(nsCString aHost,
 
     uint32_t dot = aHost.FindChar('.');
     if (!dot && aFullHost) {
-        // only if a full host name, domains can be dotless to be able to
+        // Only if a full host name. Domains can be dotless to be able to
         // blacklist entire TLDs
         fprintf(stderr, "Host [%s] has no dot\n", aHost.get());
         return true;
