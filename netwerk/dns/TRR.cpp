@@ -296,14 +296,14 @@ DOHListener::dohDecode()
               LOG("TRR bad lenght for A (%u)\n", RDLENGTH);
               return NS_ERROR_UNEXPECTED;
           }
-          mDNS.Add(TTL, mResponse, index, RDLENGTH, host);
+          mDNS.Add(TTL, mResponse, index, RDLENGTH, mTrr->mTRRService->AllowRFC1918());
           break;
         case TRRTYPE_AAAA:
           if (RDLENGTH != 16) {
               LOG("TRR bad length for AAAA (%u)\n", RDLENGTH);
               return NS_ERROR_UNEXPECTED;
           }
-          mDNS.Add(TTL, mResponse, index, RDLENGTH, host);
+          mDNS.Add(TTL, mResponse, index, RDLENGTH, mTrr->mTRRService->AllowRFC1918());
           break;
         case TRRTYPE_NS:
           /* allow "any" size, ignore the field for the moment */
@@ -407,7 +407,7 @@ DOHListener::OnDataAvailable(nsIRequest *aRequest,
 }
 
 nsresult DOHresp::Add(uint32_t TTL, nsCString &dns, int index, uint16_t len,
-                      nsAutoCString & host)
+                      bool aLocalAllowed)
 {
     DOHaddr *doh = new DOHaddr;
     NetAddr *addr = &doh->mNet;
@@ -416,10 +416,6 @@ nsresult DOHresp::Add(uint32_t TTL, nsCString &dns, int index, uint16_t len,
         addr->inet.family = AF_INET;
         addr->inet.port = 0; // unknown
         addr->inet.ip = ntohl(get32bit(dns, index));
-        LOG("DOH: Add %s %u.%u.%u.%u\n", host.get(), static_cast<uint8_t>(dns[index]),
-            static_cast<uint8_t>(dns[index+1]),
-            static_cast<uint8_t>(dns[index+2]),
-            static_cast<uint8_t>(dns[index+3]));
     } else if (16 == len) {
         // IPv6
         addr->inet6.family = AF_INET6;
@@ -429,13 +425,12 @@ nsresult DOHresp::Add(uint32_t TTL, nsCString &dns, int index, uint16_t len,
         for(int i = 0; i < 16; i++, index++) {
             addr->inet6.ip.u8[i] = dns[index];
         }
-        LOG("DOH: Add %s AAAA entry\n", host.get());
     } else {
         return NS_ERROR_UNEXPECTED;
     }
 
-    if (!IsIPAddrLocal(addr)) {
-        // filter out RFC1918 names and IPv6 Uniques and Link Locals
+    if (!IsIPAddrLocal(addr) || aLocalAllowed) {
+        // not a local address OR local address allowed, add it
         doh->mTtl = TTL;
         mAddresses.insertBack(doh);
     }

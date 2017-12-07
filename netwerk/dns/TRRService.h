@@ -32,6 +32,7 @@ public:
     bool Enabled();
 
     ResolverMode Mode() { return static_cast<ResolverMode>(mMode); }
+    bool AllowRFC1918() { return mRfc1918; }
 
 private:
     virtual  ~TRRService();

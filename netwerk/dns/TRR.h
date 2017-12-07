@@ -27,6 +27,7 @@ public:
       : mozilla::Runnable("TRR")
       , mRec(aRec)
       , mHostResolver(aResolver)
+      , mTRRService(gTRRService)
       , mType(aType)
     {
         mHost = aRec->host;
@@ -39,6 +40,7 @@ public:
       , mHost(aHost)
       , mRec(nullptr)
       , mHostResolver(aResolver)
+      , mTRRService(gTRRService)
       , mType(aType)
     {
 
@@ -47,12 +49,14 @@ public:
     NS_IMETHOD Run() override
     {
         MOZ_ASSERT(NS_IsMainThread());
+        MOZ_ASSERT(mTRRService);
         DNSoverHTTPS();
         return NS_OK;
     }
     nsCString   mHost;
     nsHostRecord *mRec;
     nsHostResolver *mHostResolver;
+    TRRService *mTRRService;
 
 private:
     enum TrrType mType;
@@ -72,7 +76,7 @@ public:
 
     }
     nsresult Add(uint32_t TTL, nsCString & dns, int index, uint16_t len,
-                 nsAutoCString & host);
+                 bool aLocalAllowed);
     uint16_t mNumAddresses;
     LinkedList<DOHaddr> mAddresses;
 private:
