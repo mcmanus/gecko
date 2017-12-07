@@ -544,7 +544,6 @@ nsHostResolver::nsHostResolver(uint32_t maxCacheEntries,
     , mIdleThreadCV(mLock, "nsHostResolver.mIdleThreadCV")
     , mDB(&gHostDB_ops, sizeof(nsHostDBEnt), 0)
     , mEvictionQSize(0)
-    , mResolverMode(MODE_PARALLEL)
     , mShutdown(true)
     , mNumIdleThreads(0)
     , mThreadCount(0)
@@ -1082,23 +1081,24 @@ nsHostResolver::IsTRRBlacklisted(nsCString aHost,
         return true;
     }
 
-    uint32_t dot = aHost.FindChar('.');
-    if (!dot && aFullHost) {
+    int32_t dot = aHost.FindChar('.');
+    if ((dot == kNotFound) && aFullHost) {
         // Only if a full host name. Domains can be dotless to be able to
         // blacklist entire TLDs
         fprintf(stderr, "Host [%s] has no dot\n", aHost.get());
         return true;
-    }
-    dot++;
-    nsDependentCSubstring domain = Substring(aHost, dot, aHost.Length() - dot);
-    nsAutoCString check(domain);
+    } else if(dot != kNotFound) {
+        // there was a dot, check the parent first
+        dot++;
+        nsDependentCSubstring domain = Substring(aHost, dot, aHost.Length() - dot);
+        nsAutoCString check(domain);
 
-    // recursively check the domain part of this name
-    if (IsTRRBlacklisted(check, false)) {
-        // the domain name of this name is already TRR blacklisted
-        return true;
+        // recursively check the domain part of this name
+        if (IsTRRBlacklisted(check, false)) {
+            // the domain name of this name is already TRR blacklisted
+            return true;
+        }
     }
-
     for (uint32_t i = 0; i < mTRRBlacklist.Length(); i++) {
         if (aHost.EqualsIgnoreCase(mTRRBlacklist[i].mName.get())) {
             fprintf(stderr, "Host [%s] is TRR blacklisted\n", aHost.get());
@@ -1118,7 +1118,7 @@ nsHostResolver::TRRBlacklist(nsCString aHost, bool aFullHost)
     if (aFullHost) {
         // when given a full host name, verify its domain as well
         int32_t dot = aHost.FindChar('.');
-        if (dot) {
+        if (dot != kNotFound) {
             // this has a domain to be checked
             dot++;
             nsDependentCSubstring domain = Substring(aHost, dot, aHost.Length() - dot);
@@ -1229,6 +1229,16 @@ nsHostResolver::NativeLookup(nsHostRecord *rec)
     return rv;
 }
 
+ResolverMode
+nsHostResolver::Mode()
+{
+    if (gTRRService) {
+        return gTRRService->Mode();
+    }
+    return MODE_NATIVEONLY;
+}
+
+
 nsresult
 nsHostResolver::NameLookup(nsHostRecord *rec)
 {
@@ -1239,10 +1249,14 @@ nsHostResolver::NameLookup(nsHostRecord *rec)
                 rec->host);
     }
 
-    rv = TrrLookup(rec);
+    ResolverMode mode = rec->mResolverMode = Mode();
 
-    if ((mResolverMode == MODE_PARALLEL) ||
-        ((mResolverMode == MODE_TRRFIRST) && NS_FAILED(rv))) {
+    if (mode != MODE_NATIVEONLY) {
+        rv = TrrLookup(rec);
+    }
+
+    if ((mode == MODE_PARALLEL) ||
+        ((mode == MODE_TRRFIRST) && NS_FAILED(rv))) {
         rv = NativeLookup(rec);
     }
 
@@ -1454,7 +1468,7 @@ different_rrset(AddrInfo *rrset1, AddrInfo *rrset2)
 bool
 nsHostResolver::TRRDone(nsHostRecord *rec)
 {
-    if (rec->mNative && (mResolverMode == MODE_PARALLEL)) {
+    if (rec->mNative && (rec->mResolverMode == MODE_PARALLEL)) {
         // still resolving natively
         if (!rec->mTRRSuccess) {
             // TRR failed, reported first but wait for native
@@ -1473,10 +1487,10 @@ nsHostResolver::TRRDone(nsHostRecord *rec)
         fprintf(stderr, "TRR %s failed!\n", rec->host);
 
         // If not parallel-resolving, re-issue a native-only resolve
-        if (mResolverMode == MODE_TRRFIRST) {
+        if (rec->mResolverMode == MODE_TRRFIRST) {
             NativeLookup(rec);
             return true;
-        } else if (mResolverMode == MODE_PARALLEL) {
+        } else if (rec->mResolverMode == MODE_PARALLEL) {
             if (rec->mNativeSuccess) {
                 // Native already completed successfully
                 TRRBlacklist(nsCString(rec->host), true);
@@ -1492,12 +1506,12 @@ nsHostResolver::TRRDone(nsHostRecord *rec)
 bool
 nsHostResolver::NativeDone(nsHostRecord *rec)
 {
-    if (mResolverMode == MODE_PARALLEL) {
+    if (rec->mResolverMode == MODE_PARALLEL) {
         if (!rec->mTRRCount && rec->mTRRUsed) {
             // TRR was faster, discard this
             return true;
         }
-    } else if (mResolverMode == MODE_TRRFIRST) {
+    } else if (rec->mResolverMode == MODE_TRRFIRST) {
         // this is a completed backup resolve
 
         if (rec->mNativeSuccess && rec->mTRRUsed && !rec->mTRRSuccess) {

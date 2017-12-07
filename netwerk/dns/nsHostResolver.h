@@ -22,6 +22,7 @@
 #include "mozilla/net/DashboardTypes.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
+#include "TRRService.h"
 
 class nsHostResolver;
 class nsHostRecord;
@@ -142,6 +143,7 @@ public:
     bool RemoveOrRefresh(); // Mark records currently being resolved as needed
                             // to resolve again.
     bool IsTRR() { return mTRRUsed; }
+    mozilla::net::ResolverMode mResolverMode;
 
 private:
     friend class nsHostResolver;
@@ -336,6 +338,7 @@ private:
    ~nsHostResolver();
 
     nsresult Init();
+    mozilla::net::ResolverMode Mode();
     nsresult TrrLookup(nsHostRecord *);
     nsresult NativeLookup(nsHostRecord *);
     nsresult NameLookup(nsHostRecord *);
@@ -383,14 +386,6 @@ private:
     PRTime        mCreationTime;
     PRIntervalTime mLongIdleTimeout;
     PRIntervalTime mShortIdleTimeout;
-
-    enum ResolverMode {
-      MODE_NATIVEONLY, // TRR OFF
-      MODE_PARALLEL,   // use the first response
-      MODE_TRRFIRST,   // fallback to native on TRR failure
-      MODE_TRRONLY     // don't even fallback
-    };
-    enum ResolverMode mResolverMode;
 
     mozilla::Atomic<bool>     mShutdown;
     mozilla::Atomic<uint32_t> mNumIdleThreads;

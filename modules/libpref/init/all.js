@@ -5293,7 +5293,7 @@ pref("network.captive-portal-service.backoffFactor", "5.0");
 pref("network.captive-portal-service.enabled", false);
 
 // 0 - off, 1 - parallel, 2 TRR first, 3 TRR only
-pref("network.trr.mode", 0);
+pref("network.trr.mode", 1);
 // DEBUG-only default URI
 pref("network.trr.uri", "https://daniel.haxx.se/dns/");
 // Wait for captive portal confirmation before enabling TRR

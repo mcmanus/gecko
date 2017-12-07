@@ -11,6 +11,13 @@
 namespace mozilla {
 namespace net {
 
+enum ResolverMode {
+    MODE_NATIVEONLY, // TRR OFF
+    MODE_PARALLEL,   // use the first response
+    MODE_TRRFIRST,   // fallback to native on TRR failure
+    MODE_TRRONLY     // don't even fallback
+};
+
 class TRRService
   : public nsIObserver
 {
@@ -24,13 +31,15 @@ public:
     nsresult Stop();
     bool Enabled();
 
+    ResolverMode Mode() { return static_cast<ResolverMode>(mMode); }
+
 private:
     virtual  ~TRRService();
     nsresult ReadPrefs(const char *name);
     void GetPrefBranch(nsIPrefBranch **result);
     bool      mStarted;
     bool      mInitialized;
-    uint32_t  mMode;
+    uint32_t mMode;
     nsCString mUri;
     bool      mWaitForCaptive;
     bool      mRfc1918;        // allow RFC1918 addresses ?
