@@ -433,8 +433,11 @@ nsresult DOHresp::Add(uint32_t TTL, nsCString &dns, int index, uint16_t len,
     } else {
         return NS_ERROR_UNEXPECTED;
     }
-    doh->mTtl = TTL;
-    mAddresses.insertBack(doh);
 
+    if (!IsIPAddrLocal(addr)) {
+        // filter out RFC1918 names and IPv6 Uniques and Link Locals
+        doh->mTtl = TTL;
+        mAddresses.insertBack(doh);
+    }
     return NS_OK;
 }
