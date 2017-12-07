@@ -1242,7 +1242,7 @@ nsHostResolver::Mode()
 nsresult
 nsHostResolver::NameLookup(nsHostRecord *rec)
 {
-    nsresult rv = NS_OK;
+    nsresult rv = NS_ERROR_UNKNOWN_HOST;
     NS_ASSERTION(!rec->resolving, "record is already being resolved");
     if (rec->resolving) {
         fprintf(stderr, "NameLookup %s while already resolving\n",
@@ -1250,6 +1250,13 @@ nsHostResolver::NameLookup(nsHostRecord *rec)
     }
 
     ResolverMode mode = rec->mResolverMode = Mode();
+
+    if (rec->flags & RES_DISABLE_TRR) {
+        if (mode == MODE_TRRONLY) {
+            return rv;
+        }
+        mode = MODE_NATIVEONLY;
+    }
 
     if (mode != MODE_NATIVEONLY) {
         rv = TrrLookup(rec);
