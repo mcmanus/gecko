@@ -42,6 +42,7 @@ private:
     bool      mInitialized;
     uint32_t mMode;
     nsCString mUri;
+    nsCString mCred;
     bool      mWaitForCaptive;
     bool      mRfc1918;        // allow RFC1918 addresses ?
     bool      mCaptiveIsPassed;

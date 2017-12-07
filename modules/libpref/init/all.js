@@ -5296,6 +5296,8 @@ pref("network.captive-portal-service.enabled", false);
 pref("network.trr.mode", 1);
 // DEBUG-only default URI
 pref("network.trr.uri", "https://daniel.haxx.se/dns/");
+// credentials to pass to DOH end-point
+pref("network.trr.credentials", "");
 // Wait for captive portal confirmation before enabling TRR
 pref("network.trr.wait-for-portal", true);
 // Allow RFC1918 address in responses?

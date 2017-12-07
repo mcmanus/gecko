@@ -82,6 +82,9 @@ TRRService::ReadPrefs(const char *name)
         // Base URI, appends "?body=..."
         Preferences::GetCString(TRR_PREF("uri"), mUri);
     }
+    if (!name || !strcmp(name, TRR_PREF("credentials"))) {
+        Preferences::GetCString(TRR_PREF("credentials"), mCred);
+    }
     if (!name || !strcmp(name, TRR_PREF("wait-for-portal"))) {
         // Wait for captive portal?
         Preferences::GetBool(TRR_PREF("wait-for-portal"), &mWaitForCaptive);

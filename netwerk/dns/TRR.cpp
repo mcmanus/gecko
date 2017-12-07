@@ -322,6 +322,11 @@ DOHListener::dohDecode()
         // failed to parse 100%, do not continue
         return NS_ERROR_UNEXPECTED;
     }
+
+    if (mDNS.mAddresses.getFirst() == nullptr) {
+        // no entries were stored!
+        return NS_ERROR_FAILURE;
+    }
     return NS_OK;
 }
 
