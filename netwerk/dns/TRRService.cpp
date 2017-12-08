@@ -9,8 +9,7 @@
 #include "nsServiceManagerUtils.h"
 #include "nsICaptivePortalService.h"
 
-static const char kCaptivePortalLoginSuccessEvent[] = "captive-portal-login-success";
-static const char kCaptivePortalLoginEvent[] = "captive-portal-login";
+static const char kOpenCaptivePortalLoginEvent[] = "captive-portal-login";
 
 #define TRR_PREF_PREFIX           "network.trr."
 #define TRR_PREF(x)               TRR_PREF_PREFIX x
@@ -45,6 +44,7 @@ TRRService::Init()
       mozilla::services::GetObserverService();
     if (observerService) {
         observerService->AddObserver(this, NS_CAPTIVE_PORTAL_CONNECTIVITY, true);
+        observerService->AddObserver(this, kOpenCaptivePortalLoginEvent, true);
     }
     nsCOMPtr<nsIPrefBranch> prefBranch;
     GetPrefBranch(getter_AddRefs(prefBranch));
@@ -125,11 +125,15 @@ TRRService::Observe(nsISupports *aSubject,
     if (!strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
         ReadPrefs(NS_ConvertUTF16toUTF8(aData).get());
     }
+    else if (!strcmp(aTopic, kOpenCaptivePortalLoginEvent)) {
+        // We are in a captive portal
+        mCaptiveIsPassed = false;
+    }
     else if (!strcmp(aTopic, NS_CAPTIVE_PORTAL_CONNECTIVITY)) {
         nsAutoCString data = NS_ConvertUTF16toUTF8(aData);
-        fprintf(stderr, "-=*) TRRservice captive portal is %s (*=-\n",
+        fprintf(stderr, "-=*) TRRservice captive portal was %s (*=-\n",
                 data.get());
-        mCaptiveIsPassed = data.Equals("clear");
+        mCaptiveIsPassed = true;
     }
     return NS_OK;
 }
