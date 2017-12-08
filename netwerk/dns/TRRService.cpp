@@ -7,6 +7,7 @@
 #include "mozilla/Preferences.h"
 #include "nsIObserverService.h"
 #include "nsServiceManagerUtils.h"
+#include "nsICaptivePortalService.h"
 
 static const char kCaptivePortalLoginSuccessEvent[] = "captive-portal-login-success";
 static const char kCaptivePortalLoginEvent[] = "captive-portal-login";
@@ -43,8 +44,7 @@ TRRService::Init()
     nsCOMPtr<nsIObserverService> observerService =
       mozilla::services::GetObserverService();
     if (observerService) {
-        observerService->AddObserver(this, kCaptivePortalLoginEvent, true);
-        observerService->AddObserver(this, kCaptivePortalLoginSuccessEvent, true);
+        observerService->AddObserver(this, NS_CAPTIVE_PORTAL_CONNECTIVITY, true);
     }
     nsCOMPtr<nsIPrefBranch> prefBranch;
     GetPrefBranch(getter_AddRefs(prefBranch));
@@ -125,14 +125,11 @@ TRRService::Observe(nsISupports *aSubject,
     if (!strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
         ReadPrefs(NS_ConvertUTF16toUTF8(aData).get());
     }
-    else if (!strcmp(aTopic, kCaptivePortalLoginSuccessEvent)) {
-        // The user has successfully logged in. We have connectivity.
-        fprintf(stderr, "-=*) TRRservice captive portal is okay (*=-\n");
-        mCaptiveIsPassed = true;
-    } else if (!strcmp(aTopic, kCaptivePortalLoginEvent)) {
-        // The user is locked up behind a portal
-        fprintf(stderr, "-=*) TRRservice captive portal is LOCKED (*=-\n");
-        mCaptiveIsPassed = false;
+    else if (!strcmp(aTopic, NS_CAPTIVE_PORTAL_CONNECTIVITY)) {
+        nsAutoCString data = NS_ConvertUTF16toUTF8(aData);
+        fprintf(stderr, "-=*) TRRservice captive portal is %s (*=-\n",
+                data.get());
+        mCaptiveIsPassed = data.Equals("clear");
     }
     return NS_OK;
 }

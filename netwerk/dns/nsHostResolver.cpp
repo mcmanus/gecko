@@ -1077,7 +1077,7 @@ nsHostResolver::IsTRRBlacklisted(nsCString aHost,
     MOZ_ASSERT(gTRRService);
     fprintf(stderr, "Check %s in TRR blacklist\n", aHost.get());
 
-    if (!!gTRRService->Enabled()) {
+    if (!gTRRService->Enabled()) {
         fprintf(stderr, "... denied by TRRService\n");
         return true;
     }
@@ -1113,7 +1113,10 @@ nsHostResolver::IsTRRBlacklisted(nsCString aHost,
 void
 nsHostResolver::TRRBlacklist(nsCString aHost, bool aFullHost)
 {
-    MOZ_ASSERT(gTRRService);
+    if (!gTRRService) {
+        fprintf(stderr, "TRRBlacklist called before TRR service started?\n");
+        return;
+    }
     fprintf(stderr, "TRR blacklist %s\n", aHost.get());
     mTRRBlacklist.AppendElement(TRRBLentry(aHost));
 
