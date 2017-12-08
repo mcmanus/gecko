@@ -1113,14 +1113,11 @@ nsHostResolver::IsTRRBlacklisted(nsCString aHost,
 void
 nsHostResolver::TRRBlacklist(nsCString aHost, bool aFullHost)
 {
-    if (!gTRRService) {
-        fprintf(stderr, "TRRBlacklist called before TRR service started?\n");
-        return;
-    }
     fprintf(stderr, "TRR blacklist %s\n", aHost.get());
     mTRRBlacklist.AppendElement(TRRBLentry(aHost));
 
-    if (aFullHost) {
+    // We allow adding hosts before the TRRService is up
+    if (aFullHost && gTRRService) {
         // when given a full host name, verify its domain as well
         int32_t dot = aHost.FindChar('.');
         if (dot != kNotFound) {
