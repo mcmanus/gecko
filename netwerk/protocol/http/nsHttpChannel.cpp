@@ -3886,6 +3886,9 @@ nsHttpChannel::OpenCacheEntry(bool isHttps)
     if (mPostID) {
         extension.Append(nsPrintfCString("%d", mPostID));
     }
+    if (mLoadFlags & nsIRequest::LOAD_TRR) {
+        extension.Append("TRR");
+    }
 
     mCacheOpenWithPriority = cacheEntryOpenFlags & nsICacheStorage::OPEN_PRIORITY;
     mCacheQueueSizeWhenOpen = CacheStorageService::CacheQueueSize(mCacheOpenWithPriority);

@@ -220,4 +220,7 @@ interface nsIRequest : nsISupports
      * particularly HTTP persistent connections, should not be used.
      */
     const unsigned long LOAD_FRESH_CONNECTION = 1 << 15;
+
+    /* TRR data is loaded */
+    const unsigned long LOAD_TRR = 1 << 16;
 };
