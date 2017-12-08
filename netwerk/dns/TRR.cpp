@@ -290,20 +290,31 @@ DOHListener::dohDecode()
         // - AAAA (TYPE 28): 16 bytes
         // - NS (TYPE 2): N bytes
 
+        nsresult rv;
         switch(TYPE) {
         case TRRTYPE_A:
           if (RDLENGTH != 4) {
               LOG("TRR bad lenght for A (%u)\n", RDLENGTH);
               return NS_ERROR_UNEXPECTED;
           }
-          mDNS.Add(TTL, mResponse, index, RDLENGTH, mTrr->mTRRService->AllowRFC1918());
+          rv = mDNS.Add(TTL, mResponse, index, RDLENGTH,
+                        mTrr->mTRRService->AllowRFC1918());
+          if (NS_FAILED(rv)) {
+              LOG("TRR got local IPv4 address!\n");
+              return rv;
+          }
           break;
         case TRRTYPE_AAAA:
           if (RDLENGTH != 16) {
               LOG("TRR bad length for AAAA (%u)\n", RDLENGTH);
               return NS_ERROR_UNEXPECTED;
           }
-          mDNS.Add(TTL, mResponse, index, RDLENGTH, mTrr->mTRRService->AllowRFC1918());
+          rv = mDNS.Add(TTL, mResponse, index, RDLENGTH,
+                        mTrr->mTRRService->AllowRFC1918());
+          if (NS_FAILED(rv)) {
+              LOG("TRR got unique/local IPv6 address!\n");
+              return rv;
+          }
           break;
         case TRRTYPE_NS:
           /* allow "any" size, ignore the field for the moment */
@@ -434,10 +445,11 @@ nsresult DOHresp::Add(uint32_t TTL, nsCString &dns, int index, uint16_t len,
         return NS_ERROR_UNEXPECTED;
     }
 
-    if (!IsIPAddrLocal(addr) || aLocalAllowed) {
-        // not a local address OR local address allowed, add it
-        doh->mTtl = TTL;
-        mAddresses.insertBack(doh);
+    if (IsIPAddrLocal(addr) && !aLocalAllowed) {
+        return NS_ERROR_FAILURE;
     }
+    doh->mTtl = TTL;
+    mAddresses.insertBack(doh);
+
     return NS_OK;
 }
