@@ -395,11 +395,12 @@ DOHListener::OnStopRequest(nsIRequest *aRequest,
             if (NS_SUCCEEDED(rv)) {
                 // pass back the response data
                 returnData();
+                return NS_OK;
             }
-        } else {
-          // TRR failed
-          failData();
         }
+
+        // TRR failed
+        failData();
     }
     return NS_OK;
 }
