@@ -164,7 +164,8 @@ nsresult TRR::DNSoverHTTPS()
                   nsIContentPolicy::TYPE_OTHER,
                   nullptr, // aLoadGroup
                   nullptr, // aCallbacks
-                  nsIRequest::LOAD_NORMAL|nsIRequest::LOAD_ANONYMOUS|nsIRequest::LOAD_TRR,
+                  nsIRequest::LOAD_NORMAL|nsIRequest::LOAD_ANONYMOUS|
+                  nsIRequest::LOAD_TRR|nsIRequest::LOAD_FROM_CACHE,
                   ios);
 
     if (channel) {
