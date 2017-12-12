@@ -115,6 +115,12 @@ public:
     // but a request to refresh it will be made.
     mozilla::TimeStamp mGraceStart;
 
+    // When the lookups of this record started and their durations
+    mozilla::TimeStamp mTrrStart;
+    mozilla::TimeStamp mNativeStart;
+    mozilla::TimeDuration mTrrDuration;
+    mozilla::TimeDuration mNativeDuration;
+
     // Convenience function for setting the timestamps above (mValidStart,
     // mValidEnd, and mGraceStart). valid and grace are durations in seconds.
     void SetExpiration(const mozilla::TimeStamp& now, unsigned int valid,
@@ -368,6 +374,20 @@ private:
         METHOD_OVERFLOW = 5,
         METHOD_NETWORK_FIRST = 6,
         METHOD_NETWORK_SHARED = 7
+    };
+
+    // Options for Telemetry::DNS_TRR_RACE
+    enum {
+        DNS_RACE_TRR_WON = 0,
+        DNS_RACE_NATIVE_WON = 1,
+        DNS_RACE_TRR_UNUSED = 2,
+    };
+
+    // Options for Telemetry::DNS_NO_TRR_REASON
+    enum {
+        TRR_FAILED = 0,
+        TRR_HOST_BLACKLISTED = 1,
+        TRR_STS_DISABLED = 2
     };
 
     uint32_t      mMaxCacheEntries;

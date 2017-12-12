@@ -1151,10 +1151,13 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
 
     nsAutoCString hostName(rec->host);
     if (IsTRRBlacklisted(hostName, true)) {
+        Telemetry::Accumulate(Telemetry::DNS_NO_TRR_REASON, TRR_HOST_BLACKLISTED);
         rec->mTRRUsed = false;
         // not really an error but no TRR is issued
         return NS_ERROR_UNKNOWN_HOST;
     }
+
+    rec->mTrrStart = TimeStamp::Now();
 
     nsresult rv;
 
@@ -1191,6 +1194,8 @@ nsresult
 nsHostResolver::NativeLookup(nsHostRecord *rec)
 {
     nsresult rv = NS_OK;
+
+    rec->mNativeStart = TimeStamp::Now();
 
     // Add rec to one of the pending queues, possibly removing it from mEvictionQ.
     // If rec is on mEvictionQ, then we can just move the owning
@@ -1254,6 +1259,8 @@ nsHostResolver::NameLookup(nsHostRecord *rec)
     ResolverMode mode = rec->mResolverMode = Mode();
 
     if (rec->flags & RES_DISABLE_TRR) {
+        Telemetry::Accumulate(Telemetry::DNS_NO_TRR_REASON, TRR_STS_DISABLED);
+
         if (mode == MODE_TRRONLY) {
             return rv;
         }
@@ -1477,12 +1484,17 @@ different_rrset(AddrInfo *rrset1, AddrInfo *rrset2)
 bool
 nsHostResolver::TRRDone(nsHostRecord *rec)
 {
+    rec->mTrrDuration = TimeStamp::Now() - rec->mTrrStart;
+    uint32_t millis = static_cast<uint32_t>(rec->mTrrDuration.ToMilliseconds());
+    Telemetry::Accumulate(Telemetry::DNS_TRR_LOOKUP_TIME, millis);
+
     if (rec->mNative && (rec->mResolverMode == MODE_PARALLEL)) {
         // still resolving natively
         if (!rec->mTRRSuccess) {
             // TRR failed, reported first but wait for native
             fprintf(stderr, "TRR %s was *FIRST* but failed, wait for native\n",
                     rec->host);
+            Telemetry::Accumulate(Telemetry::DNS_NO_TRR_REASON, TRR_FAILED);
             return true;
         } else {
             // First, and a positive result
@@ -1515,10 +1527,21 @@ nsHostResolver::TRRDone(nsHostRecord *rec)
 bool
 nsHostResolver::NativeDone(nsHostRecord *rec)
 {
+    rec->mNativeDuration = TimeStamp::Now() - rec->mNativeStart;
+    uint32_t millis = static_cast<uint32_t>(rec->mNativeDuration.ToMilliseconds());
+    Telemetry::Accumulate(Telemetry::DNS_NATIVE_LOOKUP_TIME, millis);
+
     if (rec->mResolverMode == MODE_PARALLEL) {
         if (!rec->mTRRCount && rec->mTRRUsed) {
             // TRR was faster, discard this
+            Telemetry::Accumulate(Telemetry::DNS_TRR_RACE, DNS_RACE_TRR_WON);
             return true;
+        } else if(rec->mTRRUsed) {
+            // Native was faster
+            Telemetry::Accumulate(Telemetry::DNS_TRR_RACE, DNS_RACE_NATIVE_WON);
+        } else {
+            // TRR wasn't used
+            Telemetry::Accumulate(Telemetry::DNS_TRR_RACE, DNS_RACE_TRR_UNUSED);
         }
     } else if (rec->mResolverMode == MODE_TRRFIRST) {
         // this is a completed backup resolve
