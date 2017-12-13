@@ -22,6 +22,7 @@
 #include "mozilla/net/DashboardTypes.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/DataStorage.h"
 #include "TRRService.h"
 
 class nsHostResolver;
@@ -35,18 +36,7 @@ class nsResolveHostCallback;
 #define MAX_RESOLVER_THREADS (MAX_RESOLVER_THREADS_FOR_ANY_PRIORITY + \
                               MAX_RESOLVER_THREADS_FOR_HIGH_PRIORITY)
 
-// TRR Blacklist Entry
-class TRRBLentry {
-  public:
-    explicit TRRBLentry(nsCString aHost)
-      : mName(aHost)
-    {
-        mTimestamp = mozilla::TimeStamp::Now();
-    }
-
-    nsCString mName;      // host or domain
-    mozilla::TimeStamp mTimestamp;
-};
+const static uint32_t kTRRBlacklistExpireTime = 3600*24*3; // three days
 
 struct nsHostKey
 {
@@ -411,12 +401,10 @@ private:
     mozilla::Atomic<uint32_t> mActiveAnyThreadCount;
     mozilla::Atomic<uint32_t> mPendingCount;
 
-    // list of host names blacklisted from TRR resolves
-    nsTArray<TRRBLentry> mTRRBlacklist;
-
     // Set the expiration time stamps appropriately.
     void PrepareRecordExpiration(nsHostRecord* rec) const;
 
+    RefPtr<mozilla::DataStorage> mStorage;
 public:
     /*
      * Called by the networking dashboard via the DnsService2

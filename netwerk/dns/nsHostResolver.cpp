@@ -14,6 +14,7 @@
 
 #include <stdlib.h>
 #include <ctime>
+#include "prtime.h"
 #include "nsHostResolver.h"
 #include "nsError.h"
 #include "nsISupportsBase.h"
@@ -599,6 +600,14 @@ nsHostResolver::Init()
     }
 #endif
 
+    mStorage = DataStorage::Get(DataStorageClass::TRRBlacklist);
+    if (mStorage) {
+        bool storageWillPersist = false;
+        if (NS_FAILED(mStorage->Init(storageWillPersist))) {
+            mStorage = nullptr;
+        }
+    }
+
     // seed the blacklist with the .local domain
     TRRBlacklist(NS_LITERAL_CSTRING("local"), false);
 
@@ -1070,6 +1079,14 @@ nsHostResolver::ConditionallyCreateThread(nsHostRecord *rec)
     return NS_OK;
 }
 
+static inline uint32_t
+PRTimeToSeconds(PRTime t_usec)
+{
+    return uint32_t( t_usec / PR_USEC_PER_SEC );
+}
+
+#define NowInSeconds() PRTimeToSeconds(PR_Now())
+
 bool
 nsHostResolver::IsTRRBlacklisted(nsCString aHost,
                                  bool aFullHost) // false if domain
@@ -1100,13 +1117,26 @@ nsHostResolver::IsTRRBlacklisted(nsCString aHost,
             return true;
         }
     }
-    for (uint32_t i = 0; i < mTRRBlacklist.Length(); i++) {
-        if (aHost.EqualsIgnoreCase(mTRRBlacklist[i].mName.get())) {
+
+    // use a unified casing for the hashkey
+    nsAutoCString hashkey(aHost.get());
+    bool privateBrowsing = false;
+    nsCString val(mStorage->Get(hashkey, privateBrowsing ?
+                                DataStorage_Private : DataStorage_Persistent));
+
+    if (!val.IsEmpty()) {
+        nsresult code;
+        int32_t until = val.ToInteger(&code) + kTRRBlacklistExpireTime;
+        int32_t expire = NowInSeconds();
+        if (NS_SUCCEEDED(code) && (until > expire)) {
             fprintf(stderr, "Host [%s] is TRR blacklisted\n", aHost.get());
             return true;
+        } else {
+            // the blacklisted entry has expired
+            mStorage->Remove(hashkey, privateBrowsing ?
+                             DataStorage_Private : DataStorage_Persistent);
         }
     }
-
     return false;
 }
 
@@ -1114,7 +1144,14 @@ void
 nsHostResolver::TRRBlacklist(nsCString aHost, bool aFullHost)
 {
     fprintf(stderr, "TRR blacklist %s\n", aHost.get());
-    mTRRBlacklist.AppendElement(TRRBLentry(aHost));
+    nsAutoCString hashkey(aHost.get());
+    bool privateBrowsing = false;
+    nsAutoCString val;
+    val.AppendInt( NowInSeconds() ); // creation time
+
+    // this overwrites any existing entry
+    mStorage->Put(hashkey, val, privateBrowsing ?
+                  DataStorage_Private : DataStorage_Persistent);
 
     // We allow adding hosts before the TRRService is up
     if (aFullHost && gTRRService) {
