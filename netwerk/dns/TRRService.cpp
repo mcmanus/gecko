@@ -10,6 +10,7 @@
 #include "nsICaptivePortalService.h"
 
 static const char kOpenCaptivePortalLoginEvent[] = "captive-portal-login";
+static const char kClearPrivateData[] = "clear-private-data";
 
 #define TRR_PREF_PREFIX           "network.trr."
 #define TRR_PREF(x)               TRR_PREF_PREFIX x
@@ -45,6 +46,7 @@ TRRService::Init()
     if (observerService) {
         observerService->AddObserver(this, NS_CAPTIVE_PORTAL_CONNECTIVITY, true);
         observerService->AddObserver(this, kOpenCaptivePortalLoginEvent, true);
+        observerService->AddObserver(this, kClearPrivateData, false);
     }
     nsCOMPtr<nsIPrefBranch> prefBranch;
     GetPrefBranch(getter_AddRefs(prefBranch));
@@ -134,6 +136,9 @@ TRRService::Observe(nsISupports *aSubject,
         fprintf(stderr, "-=*) TRRservice captive portal was %s (*=-\n",
                 data.get());
         mCaptiveIsPassed = true;
+    }
+    else if (!strcmp(aTopic, kClearPrivateData)) {
+        // flush the TRR blacklist, both in-memory and on-disk
     }
     return NS_OK;
 }
