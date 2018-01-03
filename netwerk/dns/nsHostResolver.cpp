@@ -1095,7 +1095,7 @@ nsHostResolver::IsTRRBlacklisted(nsCString aHost,
     fprintf(stderr, "Check %s in TRR blacklist\n", aHost.get());
 
     if (!gTRRService->Enabled()) {
-        fprintf(stderr, "... denied by TRRService\n");
+        fprintf(stderr, "... TRRService not enabled\n");
         return true;
     }
 

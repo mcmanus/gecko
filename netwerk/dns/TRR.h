@@ -79,8 +79,6 @@ public:
                  bool aLocalAllowed);
     uint16_t mNumAddresses;
     LinkedList<DOHaddr> mAddresses;
-private:
-    int mIndex; // which entry to write
 };
 
 class DOHListener : public nsIStreamListener

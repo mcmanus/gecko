@@ -156,7 +156,6 @@ nsresult TRR::DNSoverHTTPS()
 
     // use GET
     // set "accept:" header
-    // make sure this is only done over HTTP/2
     NS_NewChannel(getter_AddRefs(channel),
                   dnsURI,
                   nsContentUtils::GetSystemPrincipal(),

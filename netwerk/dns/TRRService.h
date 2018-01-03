@@ -41,7 +41,6 @@ private:
     virtual  ~TRRService();
     nsresult ReadPrefs(const char *name);
     void GetPrefBranch(nsIPrefBranch **result);
-    bool      mStarted;
     bool      mInitialized;
     uint32_t mMode;
     nsCString mUri;
@@ -50,9 +49,6 @@ private:
     bool      mRfc1918;        // allow RFC1918 addresses ?
     bool      mCaptiveIsPassed;
 };
-
-nsresult
-TRRServiceConstructor(nsISupports *aOuter, REFNSIID aIID, void **aResult);
 
 extern TRRService *gTRRService;
 

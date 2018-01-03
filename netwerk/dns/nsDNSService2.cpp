@@ -657,7 +657,7 @@ nsDNSService::Init()
 
     mTrrService = new TRRService();
     if (mTrrService && NS_SUCCEEDED(mTrrService->Init())) {
-        ;
+        ; // TODO
     }
     return rv;
 }
