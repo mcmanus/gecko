@@ -154,8 +154,6 @@ nsresult TRR::DNSoverHTTPS()
     //uri.Append(mHost);
     NS_NewURI(getter_AddRefs(dnsURI), uri);
 
-    // use GET
-    // set "accept:" header
     NS_NewChannel(getter_AddRefs(channel),
                   dnsURI,
                   nsContentUtils::GetSystemPrincipal(),
@@ -167,13 +165,18 @@ nsresult TRR::DNSoverHTTPS()
                   nsIRequest::LOAD_TRR|nsIRequest::LOAD_FROM_CACHE,
                   ios);
 
-    if (channel) {
-        nsCOMPtr<nsIStreamListener> listener = new DOHListener(this);
-        if (NS_SUCCEEDED(channel->AsyncOpen2(listener))) {
-            return NS_OK;
+    nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(channel);
+    if (httpChannel) {
+        if (NS_SUCCEEDED(httpChannel->SetRequestMethod(NS_LITERAL_CSTRING("GET"))) &&
+            NS_SUCCEEDED(httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Accept"),
+                                                       NS_LITERAL_CSTRING("application/dns-udpwireformat"),
+                                                       false))) {
+            nsCOMPtr<nsIStreamListener> listener = new DOHListener(this);
+            if (NS_SUCCEEDED(httpChannel->AsyncOpen2(listener))) {
+                return NS_OK;
+            }
         }
     }
-
     return NS_ERROR_UNEXPECTED;
 }
 
