@@ -5,6 +5,8 @@
 #ifndef TRRService_h_
 #define TRRService_h_
 
+#include "nsCOMPtr.h"
+#include "nsWeakReference.h"
 #include "nsIPrefService.h"
 #include "nsIObserver.h"
 
@@ -20,6 +22,7 @@ enum ResolverMode {
 
 class TRRService
   : public nsIObserver
+  , public nsSupportsWeakReference
 {
 public:
     NS_DECL_ISUPPORTS
@@ -47,7 +50,6 @@ private:
     bool      mRfc1918;        // allow RFC1918 addresses ?
     bool      mCaptiveIsPassed;
 };
-
 
 nsresult
 TRRServiceConstructor(nsISupports *aOuter, REFNSIID aIID, void **aResult);

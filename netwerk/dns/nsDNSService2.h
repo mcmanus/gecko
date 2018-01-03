@@ -84,7 +84,7 @@ private:
     bool                                      mOfflineLocalhost;
     bool                                      mForceResolveOn;
     nsTHashtable<nsCStringHashKey>            mLocalDomains;
-    mozilla::net::TRRService                  *mTrrService;
+    RefPtr<mozilla::net::TRRService>          mTrrService;
 };
 
 #endif //nsDNSService2_h__

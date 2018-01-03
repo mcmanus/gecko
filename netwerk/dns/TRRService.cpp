@@ -24,7 +24,7 @@ static LazyLogModule gTRRLog("TRR");
 
 TRRService *gTRRService = nullptr;
 
-NS_IMPL_ISUPPORTS(TRRService, nsIObserver)
+NS_IMPL_ISUPPORTS(TRRService, nsIObserver, nsISupportsWeakReference)
 
 TRRService::TRRService()
 : mInitialized(false)
@@ -46,7 +46,7 @@ TRRService::Init()
     if (observerService) {
         observerService->AddObserver(this, NS_CAPTIVE_PORTAL_CONNECTIVITY, true);
         observerService->AddObserver(this, kOpenCaptivePortalLoginEvent, true);
-        observerService->AddObserver(this, kClearPrivateData, false);
+        observerService->AddObserver(this, kClearPrivateData, true);
     }
     nsCOMPtr<nsIPrefBranch> prefBranch;
     GetPrefBranch(getter_AddRefs(prefBranch));
@@ -126,18 +126,16 @@ TRRService::Observe(nsISupports *aSubject,
     LOG(("TRR::Observe() topic=%s\n", aTopic));
     if (!strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
         ReadPrefs(NS_ConvertUTF16toUTF8(aData).get());
-    }
-    else if (!strcmp(aTopic, kOpenCaptivePortalLoginEvent)) {
+    } else if (!strcmp(aTopic, kOpenCaptivePortalLoginEvent)) {
         // We are in a captive portal
+        fprintf(stderr,"TRRservice in captive portal\n");
         mCaptiveIsPassed = false;
-    }
-    else if (!strcmp(aTopic, NS_CAPTIVE_PORTAL_CONNECTIVITY)) {
+    } else if (!strcmp(aTopic, NS_CAPTIVE_PORTAL_CONNECTIVITY)) {
         nsAutoCString data = NS_ConvertUTF16toUTF8(aData);
         fprintf(stderr, "-=*) TRRservice captive portal was %s (*=-\n",
                 data.get());
         mCaptiveIsPassed = true;
-    }
-    else if (!strcmp(aTopic, kClearPrivateData)) {
+    } else if (!strcmp(aTopic, kClearPrivateData)) {
         // flush the TRR blacklist, both in-memory and on-disk
     }
     return NS_OK;
