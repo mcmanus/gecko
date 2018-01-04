@@ -73,9 +73,13 @@ static_assert(HighThreadThreshold <= MAX_RESOLVER_THREADS,
 
 //----------------------------------------------------------------------------
 
-static LazyLogModule gHostResolverLog("nsHostResolver");
-#define LOG(args) MOZ_LOG(gHostResolverLog, mozilla::LogLevel::Debug, args)
-#define LOG_ENABLED() MOZ_LOG_TEST(gHostResolverLog, mozilla::LogLevel::Debug)
+namespace mozilla {
+namespace net {
+LazyLogModule gHostResolverLog("nsHostResolver");
+#define LOG(args) MOZ_LOG(mozilla::net::gHostResolverLog, mozilla::LogLevel::Debug, args)
+#define LOG_ENABLED() MOZ_LOG_TEST(mozilla::net::gHostResolverLog, mozilla::LogLevel::Debug)
+}
+}
 
 #define LOG_HOST(host, interface) host,                                        \
                  (interface && interface[0] != '\0') ? " on interface " : "",  \
@@ -1986,3 +1990,6 @@ nsHostResolver::GetDNSCacheEntries(nsTArray<DNSCacheEntries> *args)
         args->AppendElement(info);
     }
 }
+
+#undef LOG
+#undef LOG_ENABLED

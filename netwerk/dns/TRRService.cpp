@@ -18,9 +18,9 @@ static const char kClearPrivateData[] = "clear-private-data";
 namespace mozilla {
 namespace net {
 
-static LazyLogModule gTRRLog("TRR");
+extern LazyLogModule gHostResolverLog;
 #undef LOG
-#define LOG(args) MOZ_LOG(gTRRLog, mozilla::LogLevel::Debug, args)
+#define LOG(args) MOZ_LOG(gHostResolverLog, mozilla::LogLevel::Debug, args)
 
 TRRService *gTRRService = nullptr;
 
@@ -147,6 +147,8 @@ TRRServiceConstructor(nsISupports *aOuter, REFNSIID aIID, void **aResult)
     fprintf(stderr, "\n\n---------------\n TRRServiceConstructor\n----------------\n\n");
     return NS_OK;
 }
+
+#undef LOG
 
 } // namespace net
 } // namespace mozilla
