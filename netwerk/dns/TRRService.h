@@ -1,3 +1,4 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -25,29 +26,29 @@ class TRRService
   , public nsSupportsWeakReference
 {
 public:
-    NS_DECL_ISUPPORTS
-    NS_DECL_NSIOBSERVER
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSIOBSERVER
 
-    TRRService();
-    nsresult Init();
-    nsresult Start();
-    nsresult Stop();
-    bool Enabled();
+  TRRService();
+  nsresult Init();
+  nsresult Start();
+  nsresult Stop();
+  bool Enabled();
 
-    ResolverMode Mode() { return static_cast<ResolverMode>(mMode); }
-    bool AllowRFC1918() { return mRfc1918; }
+  ResolverMode Mode() { return static_cast<ResolverMode>(mMode); }
+  bool AllowRFC1918() { return mRfc1918; }
 
 private:
-    virtual  ~TRRService();
-    nsresult ReadPrefs(const char *name);
-    void GetPrefBranch(nsIPrefBranch **result);
-    bool      mInitialized;
-    uint32_t mMode;
-    nsCString mUri;
-    nsCString mCred;
-    bool      mWaitForCaptive;
-    bool      mRfc1918;        // allow RFC1918 addresses ?
-    bool      mCaptiveIsPassed;
+  virtual  ~TRRService();
+  nsresult ReadPrefs(const char *name);
+  void GetPrefBranch(nsIPrefBranch **result);
+  bool      mInitialized;
+  uint32_t mMode;
+  nsCString mUri;
+  nsCString mCred;
+  bool      mWaitForCaptive;
+  bool      mRfc1918;        // allow RFC1918 addresses ?
+  bool      mCaptiveIsPassed;
 };
 
 extern TRRService *gTRRService;

@@ -11,98 +11,93 @@
 
 namespace mozilla { namespace net {
 
-    // the values map to RFC1035 type identifiers
-    enum TrrType {
-      TRRTYPE_A = 1,
-      TRRTYPE_NS = 2,
-      TRRTYPE_AAAA = 28,
-    };
+// the values map to RFC1035 type identifiers
+enum TrrType {
+  TRRTYPE_A = 1,
+  TRRTYPE_NS = 2,
+  TRRTYPE_AAAA = 28,
+};
 
 class TRR: public Runnable
 {
 public:
-    explicit TRR(nsHostResolver *aResolver,
-                 nsHostRecord *aRec,
-                 enum TrrType aType)
-      : mozilla::Runnable("TRR")
-      , mRec(aRec)
-      , mHostResolver(aResolver)
-      , mTRRService(gTRRService)
-      , mType(aType)
-    {
-        mHost = aRec->host;
-    }
+  explicit TRR(nsHostResolver *aResolver,
+               nsHostRecord *aRec,
+               enum TrrType aType)
+    : mozilla::Runnable("TRR")
+    , mRec(aRec)
+    , mHostResolver(aResolver)
+    , mTRRService(gTRRService)
+    , mType(aType)
+  {
+    mHost = aRec->host;
+  }
 
-    explicit TRR(nsHostResolver *aResolver,
-                 nsCString aHost,
-                 enum TrrType aType)
-      : mozilla::Runnable("TRR")
-      , mHost(aHost)
-      , mRec(nullptr)
-      , mHostResolver(aResolver)
-      , mTRRService(gTRRService)
-      , mType(aType)
-    {
+  explicit TRR(nsHostResolver *aResolver,
+               nsCString aHost,
+               enum TrrType aType)
+    : mozilla::Runnable("TRR")
+    , mHost(aHost)
+    , mRec(nullptr)
+    , mHostResolver(aResolver)
+    , mTRRService(gTRRService)
+    , mType(aType)
+  {
+  }
 
-    }
-
-    NS_IMETHOD Run() override
-    {
-        MOZ_ASSERT(NS_IsMainThread());
-        MOZ_ASSERT(mTRRService);
-        DNSoverHTTPS();
-        return NS_OK;
-    }
-    nsCString   mHost;
-    nsHostRecord *mRec;
-    nsHostResolver *mHostResolver;
-    TRRService *mTRRService;
+  NS_IMETHOD Run() override
+  {
+    MOZ_ASSERT(NS_IsMainThread());
+    MOZ_ASSERT(mTRRService);
+    DNSoverHTTPS();
+    return NS_OK;
+  }
+  nsCString   mHost;
+  nsHostRecord *mRec;
+  nsHostResolver *mHostResolver;
+  TRRService *mTRRService;
 
 private:
-    enum TrrType mType;
-    nsresult DNSoverHTTPS();
+  enum TrrType mType;
+  nsresult DNSoverHTTPS();
 };
-
 
 class DOHaddr : public LinkedListElement<DOHaddr> {
 public:
-    NetAddr mNet;
-    uint32_t mTtl;
+  NetAddr mNet;
+  uint32_t mTtl;
 };
 
 class DOHresp {
 public:
-    virtual ~DOHresp() {
-
-    }
-    nsresult Add(uint32_t TTL, nsCString & dns, int index, uint16_t len,
-                 bool aLocalAllowed);
-    uint16_t mNumAddresses;
-    LinkedList<DOHaddr> mAddresses;
+  virtual ~DOHresp() { }
+  nsresult Add(uint32_t TTL, nsCString & dns, int index, uint16_t len,
+               bool aLocalAllowed);
+  uint16_t mNumAddresses;
+  LinkedList<DOHaddr> mAddresses;
 };
 
 class DOHListener : public nsIStreamListener
 {
 public:
-    NS_DECL_ISUPPORTS
-    NS_DECL_NSIREQUESTOBSERVER
-    NS_DECL_NSISTREAMLISTENER
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSIREQUESTOBSERVER
+  NS_DECL_NSISTREAMLISTENER
 
-    DOHListener(TRR *aTrr)
-      : mTrr(aTrr)
-    { }
+  DOHListener(TRR *aTrr)
+    : mTrr(aTrr)
+  { }
 
 private:
-    virtual ~DOHListener() { }
-    RefPtr<TRR> mTrr;
-    TimeStamp mStartTime;
-    nsCString mResponse;
-    nsresult dohDecode();
-    nsresult returnData();
-    nsresult failData();
-    DOHresp mDNS;
+  virtual ~DOHListener() { }
+  RefPtr<TRR> mTrr;
+  TimeStamp mStartTime;
+  nsCString mResponse;
+  nsresult dohDecode();
+  nsresult returnData();
+  nsresult failData();
+  DOHresp mDNS;
 };
-
 
 } // namespace net
 } // namespace mozilla
