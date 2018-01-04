@@ -132,11 +132,7 @@ TRR::DNSoverHTTPS()
   if (NS_FAILED(rv)) {
     return rv;
   }
-  nsCOMPtr<nsIChannel> channel;
-  nsCOMPtr<nsIURI> dnsURI;
 
-  // :path = /.well-known/dns-query?  (no CR)
-  // content-type=application/dns-udpwireformat&  (no CR)
   // body=q80BAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB
 
   // the raw example 'body':
@@ -151,14 +147,17 @@ TRR::DNSoverHTTPS()
   if (NS_FAILED(rv)) {
     return rv;
   }
+
+  nsCOMPtr<nsIURI> dnsURI;
   {
     nsCString uri;
     mTRRService->GetURI(uri);
-    uri.Append(NS_LITERAL_CSTRING("?body="));
+    uri.Append(NS_LITERAL_CSTRING("?ct=application/udp-wireformat&body="));
     uri.Append(body);
     NS_NewURI(getter_AddRefs(dnsURI), uri);
   }
 
+  nsCOMPtr<nsIChannel> channel;
   NS_NewChannel(getter_AddRefs(channel),
                 dnsURI,
                 nsContentUtils::GetSystemPrincipal(),
