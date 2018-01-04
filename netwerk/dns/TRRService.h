@@ -6,6 +6,7 @@
 #ifndef TRRService_h_
 #define TRRService_h_
 
+#include "mozilla/Atomics.h"
 #include "nsCOMPtr.h"
 #include "nsWeakReference.h"
 #include "nsIPrefService.h"
@@ -35,20 +36,25 @@ public:
   nsresult Stop();
   bool Enabled();
 
-  ResolverMode Mode() { return static_cast<ResolverMode>(mMode); }
+  uint32_t Mode() { return mMode; }
   bool AllowRFC1918() { return mRfc1918; }
+  nsresult GetURI(nsCString &result);
+  nsresult GetCredentials(nsCString &result);
 
 private:
   virtual  ~TRRService();
   nsresult ReadPrefs(const char *name);
   void GetPrefBranch(nsIPrefBranch **result);
-  bool      mInitialized;
-  uint32_t mMode;
-  nsCString mUri;
-  nsCString mCred;
-  bool      mWaitForCaptive;
-  bool      mRfc1918;        // allow RFC1918 addresses ?
-  bool      mCaptiveIsPassed;
+  Atomic<bool, Relaxed>     mInitialized;
+  Atomic<uint32_t, Relaxed> mMode;
+
+  Mutex mLock; // protects mPrivate* string
+  nsCString mPrivateURI; // main thread only
+  nsCString mPrivateCred; // main thread only
+
+  Atomic<bool, Relaxed> mWaitForCaptive;
+  Atomic<bool, Relaxed> mRfc1918;
+  Atomic<bool, Relaxed> mCaptiveIsPassed;
 };
 
 extern TRRService *gTRRService;

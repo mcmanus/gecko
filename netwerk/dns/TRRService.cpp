@@ -29,12 +29,15 @@ NS_IMPL_ISUPPORTS(TRRService, nsIObserver, nsISupportsWeakReference)
 
 TRRService::TRRService()
   : mInitialized(false)
+  , mLock("trrservice")
 {
+  MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
 }
 
 nsresult
 TRRService::Init()
 {
+  MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
   if (mInitialized) {
     return NS_OK;
   }
@@ -69,6 +72,7 @@ TRRService::Enabled()
 void
 TRRService::GetPrefBranch(nsIPrefBranch **result)
 {
+  MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
   *result = nullptr;
   CallGetService(NS_PREFSERVICE_CONTRACTID, result);
 }
@@ -76,30 +80,55 @@ TRRService::GetPrefBranch(nsIPrefBranch **result)
 nsresult
 TRRService::ReadPrefs(const char *name)
 {
+  MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
   if (!name || !strcmp(name, TRR_PREF("mode"))) {
     // 0 - off, 1 - parallel, 2 TRR first, 3 TRR only
-    Preferences::GetUint(TRR_PREF("mode"), &mMode);
+    uint32_t tmp;
+    Preferences::GetUint(TRR_PREF("mode"), &tmp);
+    mMode = tmp;
   }
   if (!name || !strcmp(name, TRR_PREF("uri"))) {
     // Base URI, appends "?body=..."
-    Preferences::GetCString(TRR_PREF("uri"), mUri);
+    Preferences::GetCString(TRR_PREF("uri"), mPrivateURI);
   }
   if (!name || !strcmp(name, TRR_PREF("credentials"))) {
-    Preferences::GetCString(TRR_PREF("credentials"), mCred);
+    Preferences::GetCString(TRR_PREF("credentials"), mPrivateCred);
   }
   if (!name || !strcmp(name, TRR_PREF("wait-for-portal"))) {
     // Wait for captive portal?
-    Preferences::GetBool(TRR_PREF("wait-for-portal"), &mWaitForCaptive);
+    bool tmp;
+    Preferences::GetBool(TRR_PREF("wait-for-portal"), &tmp);
+    mWaitForCaptive = tmp;
   }
   if (!name || !strcmp(name, TRR_PREF("allow-rfc1918"))) {
-    Preferences::GetBool(TRR_PREF("allow-rfc1918"), &mRfc1918);
+    bool tmp;
+    Preferences::GetBool(TRR_PREF("allow-rfc1918"), &tmp);
+    mRfc1918 = tmp;
   }
 
   return NS_OK;
 }
+
+nsresult
+TRRService::GetURI(nsCString &result)
+{
+  MutexAutoLock lock(mLock);
+  result = mPrivateURI;
+  return NS_OK;
+}
+
+nsresult
+TRRService::GetCredentials(nsCString &result)
+{
+  MutexAutoLock lock(mLock);
+  result = mPrivateCred;
+  return NS_OK;
+}
+
 nsresult
 TRRService::Start()
 {
+  MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
   if (!mInitialized) {
     return NS_ERROR_NOT_INITIALIZED;
   }
@@ -109,11 +138,13 @@ TRRService::Start()
 nsresult
 TRRService::Stop()
 {
+  MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
   return NS_OK;
 }
 
 TRRService::~TRRService()
 {
+  MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
   LOG(("Exiting TRRService\n"));
   gTRRService = nullptr;
 }
@@ -123,6 +154,7 @@ TRRService::Observe(nsISupports *aSubject,
                     const char * aTopic,
                     const char16_t * aData)
 {
+  MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
   LOG(("TRR::Observe() topic=%s\n", aTopic));
   if (!strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
     ReadPrefs(NS_ConvertUTF16toUTF8(aData).get());
@@ -138,13 +170,6 @@ TRRService::Observe(nsISupports *aSubject,
   } else if (!strcmp(aTopic, kClearPrivateData)) {
     // flush the TRR blacklist, both in-memory and on-disk
   }
-  return NS_OK;
-}
-
-nsresult
-TRRServiceConstructor(nsISupports *aOuter, REFNSIID aIID, void **aResult)
-{
-  fprintf(stderr, "\n\n---------------\n TRRServiceConstructor\n----------------\n\n");
   return NS_OK;
 }
 

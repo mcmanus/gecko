@@ -1281,8 +1281,9 @@ ResolverMode
 nsHostResolver::Mode()
 {
     if (gTRRService) {
-        return gTRRService->Mode();
+        return static_cast<ResolverMode>(gTRRService->Mode());
     }
+
     return MODE_NATIVEONLY;
 }
 

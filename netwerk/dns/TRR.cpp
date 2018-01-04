@@ -145,17 +145,19 @@ TRR::DNSoverHTTPS()
   // 00000020  01                                                |.|
 
   // dummy URL for test
-  nsAutoCString uri("https://daniel.haxx.se/dns/?body=");
   nsAutoCString body;
 
   rv = dohEncode(mHost, mType, body);
   if (NS_FAILED(rv)) {
     return rv;
   }
-  uri.Append(body);
-  //uri.Append("&host="); // send plain host too for the dummy server
-  //uri.Append(mHost);
-  NS_NewURI(getter_AddRefs(dnsURI), uri);
+  {
+    nsCString uri;
+    mTRRService->GetURI(uri);
+    uri.Append(NS_LITERAL_CSTRING("?body="));
+    uri.Append(body);
+    NS_NewURI(getter_AddRefs(dnsURI), uri);
+  }
 
   NS_NewChannel(getter_AddRefs(channel),
                 dnsURI,
