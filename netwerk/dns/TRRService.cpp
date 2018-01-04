@@ -92,7 +92,7 @@ TRRService::ReadPrefs(const char *name)
     Preferences::GetBool(TRR_PREF("wait-for-portal"), &mWaitForCaptive);
   }
   if (!name || !strcmp(name, TRR_PREF("allow-rfc1918"))) {
-    Preferences::GetBool(TRR_PREF("allow-rfc1918"), mRfc1918);
+    Preferences::GetBool(TRR_PREF("allow-rfc1918"), &mRfc1918);
   }
 
   return NS_OK;
