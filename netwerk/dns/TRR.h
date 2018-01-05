@@ -94,9 +94,9 @@ private:
   RefPtr<TRR> mTrr;
   TimeStamp mStartTime;
   nsCString mResponse;
-  nsresult dohDecode();
-  nsresult returnData();
-  nsresult failData();
+  nsresult DohDecode();
+  nsresult ReturnData();
+  nsresult FailData();
   DOHresp mDNS;
 };
 

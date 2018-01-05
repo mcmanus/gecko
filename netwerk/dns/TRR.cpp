@@ -232,10 +232,10 @@ static uint32_t get32bit(nsCString &aData, int index)
     static_cast<uint8_t>(aData[index+3]);
 }
 //
-// dohDecode() collects the TTL and the IP addresses in the response
+// DohDecode() collects the TTL and the IP addresses in the response
 //
 nsresult
-DOHListener::dohDecode()
+DOHListener::DohDecode()
 {
   // The response has a 12 byte header followed by the question (returned)
   // and then the answer. The answer section itself contains the name, type
@@ -453,7 +453,8 @@ DOHListener::dohDecode()
   return NS_OK;
 }
 
-nsresult DOHListener::returnData()
+nsresult
+DOHListener::ReturnData()
 {
   // create and populate an AddrInfo instance to pass on
   AddrInfo *ai = new AddrInfo(mTrr->mHost.get(), true);
@@ -476,7 +477,8 @@ nsresult DOHListener::returnData()
   return NS_OK;
 }
 
-nsresult DOHListener::failData()
+nsresult
+DOHListener::FailData()
 {
   // create and populate an TRR AddrInfo instance to pass on to signal that
   // this comes from TRR
@@ -502,17 +504,17 @@ DOHListener::OnStopRequest(nsIRequest *aRequest,
     rv = httpChannel->GetResponseStatus(&httpStatus);
     if (NS_SUCCEEDED(rv) && httpStatus == 200) {
       // decode body and create an AddrInfo struct for the response
-      rv = dohDecode();
+      rv = DohDecode();
 
       if (NS_SUCCEEDED(rv)) {
         // pass back the response data
-        returnData();
+        ReturnData();
         return NS_OK;
       }
     }
 
     // TRR failed
-    failData();
+    FailData();
   }
   return NS_OK;
 }
