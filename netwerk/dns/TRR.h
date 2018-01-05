@@ -15,6 +15,7 @@ namespace mozilla { namespace net {
 enum TrrType {
   TRRTYPE_A = 1,
   TRRTYPE_NS = 2,
+  TRRTYPE_CNAME = 5,
   TRRTYPE_AAAA = 28,
 };
 

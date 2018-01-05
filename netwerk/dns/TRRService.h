@@ -38,6 +38,7 @@ public:
 
   uint32_t Mode() { return mMode; }
   bool AllowRFC1918() { return mRfc1918; }
+  bool UseGET() { return mUseGET; }
   nsresult GetURI(nsCString &result);
   nsresult GetCredentials(nsCString &result);
 
@@ -45,7 +46,7 @@ private:
   virtual  ~TRRService();
   nsresult ReadPrefs(const char *name);
   void GetPrefBranch(nsIPrefBranch **result);
-  Atomic<bool, Relaxed>     mInitialized;
+  bool                      mInitialized;
   Atomic<uint32_t, Relaxed> mMode;
 
   Mutex mLock; // protects mPrivate* string
@@ -55,6 +56,7 @@ private:
   Atomic<bool, Relaxed> mWaitForCaptive;
   Atomic<bool, Relaxed> mRfc1918;
   Atomic<bool, Relaxed> mCaptiveIsPassed;
+  Atomic<bool, Relaxed> mUseGET;
 };
 
 extern TRRService *gTRRService;

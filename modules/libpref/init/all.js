@@ -5292,6 +5292,7 @@ pref("network.captive-portal-service.maxInterval", 1500000); // 25 minutes
 pref("network.captive-portal-service.backoffFactor", "5.0");
 pref("network.captive-portal-service.enabled", false);
 
+// DNS Trusted Recursive Resolver
 // 0 - off, 1 - parallel, 2 TRR first, 3 TRR only
 pref("network.trr.mode", 1);
 // DEBUG-only default URI
@@ -5302,6 +5303,8 @@ pref("network.trr.credentials", "");
 pref("network.trr.wait-for-portal", true);
 // Allow RFC1918 address in responses?
 pref("network.trr.allow-rfc1918", false);
+// Use GET (rather than POST)
+pref("network.trr.useGET", false);
 
 pref("captivedetect.canonicalURL", "http://detectportal.firefox.com/success.txt");
 pref("captivedetect.canonicalContent", "success\n");

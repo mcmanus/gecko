@@ -29,7 +29,12 @@ NS_IMPL_ISUPPORTS(TRRService, nsIObserver, nsISupportsWeakReference)
 
 TRRService::TRRService()
   : mInitialized(false)
+  , mMode(0)
   , mLock("trrservice")
+  , mWaitForCaptive(true)
+  , mRfc1918(false)
+  , mCaptiveIsPassed(false)
+  , mUseGET(false)
 {
   MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
 }
@@ -84,11 +89,12 @@ TRRService::ReadPrefs(const char *name)
   if (!name || !strcmp(name, TRR_PREF("mode"))) {
     // 0 - off, 1 - parallel, 2 TRR first, 3 TRR only
     uint32_t tmp;
-    Preferences::GetUint(TRR_PREF("mode"), &tmp);
-    mMode = tmp;
+    if (NS_SUCCEEDED(Preferences::GetUint(TRR_PREF("mode"), &tmp))) {
+      mMode = tmp;
+    }
   }
   if (!name || !strcmp(name, TRR_PREF("uri"))) {
-    // Base URI, appends "?body=..."
+    // Base URI, appends "?ct&body=..."
     Preferences::GetCString(TRR_PREF("uri"), mPrivateURI);
   }
   if (!name || !strcmp(name, TRR_PREF("credentials"))) {
@@ -97,13 +103,21 @@ TRRService::ReadPrefs(const char *name)
   if (!name || !strcmp(name, TRR_PREF("wait-for-portal"))) {
     // Wait for captive portal?
     bool tmp;
-    Preferences::GetBool(TRR_PREF("wait-for-portal"), &tmp);
-    mWaitForCaptive = tmp;
+    if (NS_SUCCEEDED(Preferences::GetBool(TRR_PREF("wait-for-portal"), &tmp))) {
+      mWaitForCaptive = tmp;
+    }
   }
   if (!name || !strcmp(name, TRR_PREF("allow-rfc1918"))) {
     bool tmp;
-    Preferences::GetBool(TRR_PREF("allow-rfc1918"), &tmp);
-    mRfc1918 = tmp;
+    if (NS_SUCCEEDED(Preferences::GetBool(TRR_PREF("allow-rfc1918"), &tmp))) {
+      mRfc1918 = tmp;
+    }
+  }
+  if (!name || !strcmp(name, TRR_PREF("useGET"))) {
+    bool tmp;
+    if (NS_SUCCEEDED(Preferences::GetBool(TRR_PREF("useGET"), &tmp))) {
+      mUseGET = tmp;
+    }
   }
 
   return NS_OK;

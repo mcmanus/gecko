@@ -28,7 +28,9 @@
 #include "nsIIOService.h"
 #include "nsNetUtil.h"
 #include "nsIInputStream.h"
+#include "nsIUploadChannel2.h"
 #include "DNS.h"
+#include "nsStringStream.h"
 
 #include "mozilla/HashFunctions.h"
 #include "mozilla/Base64.h"
@@ -50,26 +52,27 @@ NS_IMPL_ISUPPORTS(DOHListener,
 
 // convert a given host request to a DOH 'body'
 //
-static nsresult dohEncode(nsCString aHost,
-                          enum TrrType aType,
-                          nsAutoCString &aBody)
+static nsresult
+dohEncode(nsCString aHost,
+          enum TrrType aType,
+          nsCString &aBody)
 {
-  nsAutoCString raw;
   const uint8_t DNS_CLASS_IN = 1;
 
+  aBody.Truncate();
   // Header
-  raw += '\0';
-  raw += '\0'; // 16 bit id
-  raw += '\0'; // |QR|   Opcode  |AA|TC|RD|
-  raw += '\0'; // |RA|   Z    |   RCODE   |
-  raw += '\0';
-  raw += 1;    // QDCOUNT (number of entries in the question section)
-  raw += '\0';
-  raw += '\0'; // ANCOUNT
-  raw += '\0';
-  raw += '\0'; // NSCOUNT
-  raw += '\0';
-  raw += '\0'; // ARCOUNT
+  aBody += '\0';
+  aBody += '\0'; // 16 bit id
+  aBody += '\0'; // |QR|   Opcode  |AA|TC|RD|
+  aBody += '\0'; // |RA|   Z    |   RCODE   |
+  aBody += '\0';
+  aBody += 1;    // QDCOUNT (number of entries in the question section)
+  aBody += '\0';
+  aBody += '\0'; // ANCOUNT
+  aBody += '\0';
+  aBody += '\0'; // NSCOUNT
+  aBody += '\0';
+  aBody += '\0'; // ARCOUNT
 
   // Question
 
@@ -95,25 +98,20 @@ static nsresult dohEncode(nsCString aHost,
       // too long label!
       return NS_ERROR_UNEXPECTED;
     }
-    raw += static_cast<unsigned char>(labelLength);
+    aBody += static_cast<unsigned char>(labelLength);
     nsDependentCSubstring label = Substring(aHost, offset, labelLength);
-    raw.Append(label);
+    aBody.Append(label);
     if(!dotFound) {
-      raw += '\0'; // terminate with a final zero
+      aBody += '\0'; // terminate with a final zero
       break;
     }
     offset += labelLength + 1; // move over label and dot
   } while(1);
 
-  raw += '\0'; // upper 8 bit TYPE
-  raw += static_cast<uint8_t>(aType);
-  raw += '\0'; // upper 8 bit CLASS
-  raw += DNS_CLASS_IN;    // IN - "the Internet"
-
-  nsresult rv = Base64Encode(raw, aBody);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
+  aBody += '\0'; // upper 8 bit TYPE
+  aBody += static_cast<uint8_t>(aType);
+  aBody += '\0'; // upper 8 bit CLASS
+  aBody += DNS_CLASS_IN;    // IN - "the Internet"
 
   return NS_OK;
 }
@@ -129,9 +127,7 @@ TRR::DNSoverHTTPS()
   //
   nsresult rv;
   nsCOMPtr<nsIIOService> ios(do_GetIOService(&rv));
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
+  NS_ENSURE_SUCCESS(rv, rv);
 
   // body=q80BAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB
 
@@ -140,20 +136,29 @@ TRR::DNSoverHTTPS()
   // 00000010  07 65 78 61 6d 70 6c 65  03 63 6f 6d 00 00 01 00  |.example.com....|
   // 00000020  01                                                |.|
 
-  // dummy URL for test
+  bool useGet = mTRRService->UseGET();
   nsAutoCString body;
-
-  rv = dohEncode(mHost, mType, body);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
   nsCOMPtr<nsIURI> dnsURI;
-  {
+
+  if (useGet) {
+    nsAutoCString tmp;
+    rv = dohEncode(mHost, mType, tmp);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    rv = Base64Encode(tmp, body);
+    NS_ENSURE_SUCCESS(rv, rv);
+
     nsCString uri;
     mTRRService->GetURI(uri);
     uri.Append(NS_LITERAL_CSTRING("?ct=application/udp-wireformat&body="));
     uri.Append(body);
+    NS_NewURI(getter_AddRefs(dnsURI), uri);
+  } else {
+    rv = dohEncode(mHost, mType, body);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    nsCString uri;
+    mTRRService->GetURI(uri);
     NS_NewURI(getter_AddRefs(dnsURI), uri);
   }
 
@@ -170,16 +175,37 @@ TRR::DNSoverHTTPS()
                 ios);
 
   nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(channel);
-  if (httpChannel) {
-    if (NS_SUCCEEDED(httpChannel->SetRequestMethod(NS_LITERAL_CSTRING("GET"))) &&
-        NS_SUCCEEDED(httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Accept"),
-                                                   NS_LITERAL_CSTRING("application/dns-udpwireformat"),
-                                                   false))) {
-      nsCOMPtr<nsIStreamListener> listener = new DOHListener(this);
-      if (NS_SUCCEEDED(httpChannel->AsyncOpen2(listener))) {
-        return NS_OK;
-      }
+  if (!httpChannel) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  rv = httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Accept"),
+                                     NS_LITERAL_CSTRING("application/dns-udpwireformat"),
+                                     false);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  if (useGet) {
+    rv = httpChannel->SetRequestMethod(NS_LITERAL_CSTRING("GET"));
+    NS_ENSURE_SUCCESS(rv, rv);
+  } else {
+    nsCOMPtr<nsIUploadChannel2> uploadChannel = do_QueryInterface(httpChannel);
+    if (!uploadChannel) {
+      return NS_ERROR_UNEXPECTED;
     }
+    nsCOMPtr<nsIInputStream> uploadStream;
+    rv = NS_NewCStringInputStream(getter_AddRefs(uploadStream), body);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    rv = uploadChannel->ExplicitSetUploadStream(uploadStream,
+                                                NS_LITERAL_CSTRING("application/dns-udpwireformat"),
+                                                body.Length(),
+                                                NS_LITERAL_CSTRING("POST"), false);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  nsCOMPtr<nsIStreamListener> listener = new DOHListener(this);
+  if (NS_SUCCEEDED(httpChannel->AsyncOpen2(listener))) {
+    return NS_OK;
   }
   return NS_ERROR_UNEXPECTED;
 }
@@ -233,27 +259,33 @@ DOHListener::dohDecode()
     return NS_ERROR_UNEXPECTED;
   }
 
-  // Figure out the number of answer records from ANCOUNT
-  uint16_t records = get16bit(mResponse, 6);
-
-  LOG("TRR Decode: %d records (%u bytes body)\n", records,
-      mResponse.Length());
-
-  // iterate over the single host name in question
-  do {
-    length = static_cast<uint8_t>(mResponse[index]);
-    if (length) {
-      if (host.Length()) {
-        host.Append(".");
+  uint16_t questionRecords = get16bit(mResponse, 4); // qdcount
+  // iterate over the single(?) host name in question
+  while (questionRecords) {
+    do {
+      length = static_cast<uint8_t>(mResponse[index]);
+      if (length) {
+        if (host.Length()) {
+          host.Append(".");
+        }
+        host.Append( Substring(mResponse, index + 1, length) );
       }
-      host.Append( Substring(mResponse, index + 1, length) );
-    }
-    index += 1 + length; // skip length byte + label
-  } while (length);
-  index += 4; // skip question's type, class
+      index += 1 + length; // skip length byte + label
+    } while (length);
+    index += 4; // skip question's type, class
+    questionRecords--;
+  }
+  
+  fprintf(stderr,"TRR Decode: index %u of %u\n",
+          index, mResponse.Length());
 
-  // ANSWER
-  while (records) {
+  // Figure out the number of answer records from ANCOUNT
+  uint16_t answerRecords = get16bit(mResponse, 6);
+
+  LOG("TRR Decode: %d answer records (%u bytes body) %s\n",
+      answerRecords, mResponse.Length(), host.get());
+
+  while (answerRecords) {
 
     length = static_cast<uint8_t>(mResponse[index]);
     if ((length & 0xc0) == 0xc0) {
@@ -263,8 +295,7 @@ DOHListener::dohDecode()
       // illegal length, bail out
       LOG("TRR: illegal label length byte (%x)\n", length);
       return NS_ERROR_UNEXPECTED;
-    }
-    else {
+    } else {
       // iterate over host name in answer
       do {
         length = static_cast<uint8_t>(mResponse[index]);
@@ -301,7 +332,7 @@ DOHListener::dohDecode()
     switch(TYPE) {
     case TRRTYPE_A:
       if (RDLENGTH != 4) {
-        LOG("TRR bad lenght for A (%u)\n", RDLENGTH);
+        LOG("TRR bad length for A (%u)\n", RDLENGTH);
         return NS_ERROR_UNEXPECTED;
       }
       rv = mDNS.Add(TTL, mResponse, index, RDLENGTH,
@@ -323,18 +354,92 @@ DOHListener::dohDecode()
         return rv;
       }
       break;
+
     case TRRTYPE_NS:
-      /* allow "any" size, ignore the field for the moment */
       break;
+    case TRRTYPE_CNAME:
+      break;
+
     default:
-      LOG("TRR unsupported TYPE (%u)\n", TYPE);
-      return NS_ERROR_UNEXPECTED;
+      // skip unknown record types
+      LOG("TRR unsupported TYPE (%u) RDLENGTH %u\n", TYPE, RDLENGTH);
+      break;
     }
 
     index += RDLENGTH;
-    records--;
+    LOG("done with record type %u len %u index now %u of %u\n",
+        TYPE, RDLENGTH, index, mResponse.Length());
+    answerRecords--;
   }
 
+  // NSCOUNT
+  uint16_t nsRecords = get16bit(mResponse, 8);
+  LOG("TRR Decode: %d ns records (%u bytes body)\n", nsRecords,
+      mResponse.Length());
+  while (nsRecords) {
+    length = static_cast<uint8_t>(mResponse[index]);
+    if ((length & 0xc0) == 0xc0) {
+      // name pointer, advance over it
+      index += 2;
+    } else if (length & 0xc0) {
+      // illegal length, bail out
+      LOG("TRR: illegal label length byte (%x)\n", length);
+      return NS_ERROR_UNEXPECTED;
+    } else {
+      // iterate over host name in answer
+      do {
+        length = static_cast<uint8_t>(mResponse[index]);
+        index += 1 + length;
+        LOG("TRR: move over %d bytes\n", 1 + length);
+      } while (length);
+    }
+
+    index += 2; // type
+    index += 2; // class
+    index += 4; // ttl
+
+    // 16 bit RDLENGTH
+    uint16_t RDLENGTH = get16bit(mResponse, index);
+    index += 2;
+    index += RDLENGTH;
+    LOG("done with nsRecord now %u of %u\n", index, mResponse.Length());
+    nsRecords--;
+  }
+
+  // additional resource records
+  uint16_t arRecords = get16bit(mResponse, 10);
+  LOG("TRR Decode: %d additional resource records (%u bytes body)\n",
+      arRecords, mResponse.Length());
+  while (arRecords) {
+    length = static_cast<uint8_t>(mResponse[index]);
+    if ((length & 0xc0) == 0xc0) {
+      // name pointer, advance over it
+      index += 2;
+    } else if (length & 0xc0) {
+      // illegal length, bail out
+      LOG("TRR: illegal label length byte (%x)\n", length);
+      return NS_ERROR_UNEXPECTED;
+    } else {
+      // iterate over host name in answer
+      do {
+        length = static_cast<uint8_t>(mResponse[index]);
+        index += 1 + length;
+        LOG("TRR: move over %d bytes\n", 1 + length);
+      } while (length);
+    }
+
+    index += 2; // type
+    index += 2; // class
+    index += 4; // ttl
+
+    // 16 bit RDLENGTH
+    uint16_t RDLENGTH = get16bit(mResponse, index);
+    index += 2;
+    index += RDLENGTH;
+    LOG("done with additional rr now %u of %u\n", index, mResponse.Length());
+    arRecords--;
+  }
+  
   if (index != mResponse.Length()) {
     LOG("TRRRRRR: bad DNS parser (%u != %d)!\n", index, (int)mResponse.Length());
     // failed to parse 100%, do not continue
