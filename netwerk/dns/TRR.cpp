@@ -184,6 +184,13 @@ TRR::DNSoverHTTPS()
                                      false);
   NS_ENSURE_SUCCESS(rv, rv);
 
+  nsCString cred;
+  mTRRService->GetCredentials(cred);
+  if (cred.Length()){
+    rv = httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Authorization"), cred, false);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  
   if (useGet) {
     rv = httpChannel->SetRequestMethod(NS_LITERAL_CSTRING("GET"));
     NS_ENSURE_SUCCESS(rv, rv);
