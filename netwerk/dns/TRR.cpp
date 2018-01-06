@@ -262,7 +262,7 @@ DOHListener::DohDecode()
   uint8_t length;
   nsAutoCString host;
 
-  if (mResponse[0] || mResponse[1] || (mResponse.Length() < 0x20)) {
+  if (mResponse.Length() < 12 || mResponse[0] || mResponse[1]) {
     LOG("TRR bad incoming DOH, eject!\n");
     return NS_ERROR_UNEXPECTED;
   }
@@ -271,15 +271,24 @@ DOHListener::DohDecode()
   // iterate over the single(?) host name in question
   while (questionRecords) {
     do {
+      if (mResponse.Length() < (index + 1)) {
+        return NS_ERROR_UNEXPECTED;
+      }
       length = static_cast<uint8_t>(mResponse[index]);
       if (length) {
         if (host.Length()) {
           host.Append(".");
         }
+        if (mResponse.Length() < (index + 1 + length)) {
+          return NS_ERROR_UNEXPECTED;
+        }
         host.Append( Substring(mResponse, index + 1, length) );
       }
       index += 1 + length; // skip length byte + label
     } while (length);
+    if (mResponse.Length() < (index + 4)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     index += 4; // skip question's type, class
     questionRecords--;
   }
@@ -295,9 +304,15 @@ DOHListener::DohDecode()
 
   while (answerRecords) {
 
+    if (mResponse.Length() < (index + 1)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     length = static_cast<uint8_t>(mResponse[index]);
     if ((length & 0xc0) == 0xc0) {
       // name pointer, advance over it
+      if (mResponse.Length() < (index + 2)) {
+        return NS_ERROR_UNEXPECTED;
+      }
       index += 2;
     } else if (length & 0xc0) {
       // illegal length, bail out
@@ -306,16 +321,28 @@ DOHListener::DohDecode()
     } else {
       // iterate over host name in answer
       do {
+        if (mResponse.Length() < (index + 1)) {
+          return NS_ERROR_UNEXPECTED;
+        }
         length = static_cast<uint8_t>(mResponse[index]);
+        if (mResponse.Length() < (index + 1 + length)) {
+          return NS_ERROR_UNEXPECTED;
+        }
         index += 1 + length;
         LOG("TRR: move over %d bytes\n", 1 + length);
       } while (length);
     }
     // 16 bit TYPE
+    if (mResponse.Length() < (index + 2)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     uint16_t TYPE = get16bit(mResponse, index);
     index += 2;
 
     // 16 bit class
+    if (mResponse.Length() < (index + 2)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     uint16_t CLASS = get16bit(mResponse, index);
     if (1 != CLASS) {
       LOG("TRR bad CLASS (%u)\n", CLASS);
@@ -324,12 +351,22 @@ DOHListener::DohDecode()
     index += 2;
 
     // 32 bit TTL (seconds)
+    if (mResponse.Length() < (index + 4)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     uint32_t TTL = get32bit(mResponse, index);
     index += 4;
 
     // 16 bit RDLENGTH
+    if (mResponse.Length() < (index + 2)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     uint16_t RDLENGTH = get16bit(mResponse, index);
     index += 2;
+
+    if (mResponse.Length() < (index + RDLENGTH)) {
+      return NS_ERROR_UNEXPECTED;
+    }
 
     // RDATA
     // - A (TYPE 1):  4 bytes
@@ -385,9 +422,15 @@ DOHListener::DohDecode()
   LOG("TRR Decode: %d ns records (%u bytes body)\n", nsRecords,
       mResponse.Length());
   while (nsRecords) {
+    if (mResponse.Length() < (index + 1)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     length = static_cast<uint8_t>(mResponse[index]);
     if ((length & 0xc0) == 0xc0) {
       // name pointer, advance over it
+      if (mResponse.Length() < (index + 2)) {
+        return NS_ERROR_UNEXPECTED;
+      }
       index += 2;
     } else if (length & 0xc0) {
       // illegal length, bail out
@@ -396,19 +439,34 @@ DOHListener::DohDecode()
     } else {
       // iterate over host name in answer
       do {
+        if (mResponse.Length() < (index + 1)) {
+          return NS_ERROR_UNEXPECTED;
+        }
         length = static_cast<uint8_t>(mResponse[index]);
+        if (mResponse.Length() < (index + 1 + length)) {
+          return NS_ERROR_UNEXPECTED;
+        }
         index += 1 + length;
         LOG("TRR: move over %d bytes\n", 1 + length);
       } while (length);
     }
 
+    if (mResponse.Length() < (index + 8)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     index += 2; // type
     index += 2; // class
     index += 4; // ttl
 
     // 16 bit RDLENGTH
+    if (mResponse.Length() < (index + 2)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     uint16_t RDLENGTH = get16bit(mResponse, index);
     index += 2;
+    if (mResponse.Length() < (index + RDLENGTH)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     index += RDLENGTH;
     LOG("done with nsRecord now %u of %u\n", index, mResponse.Length());
     nsRecords--;
@@ -419,9 +477,15 @@ DOHListener::DohDecode()
   LOG("TRR Decode: %d additional resource records (%u bytes body)\n",
       arRecords, mResponse.Length());
   while (arRecords) {
+    if (mResponse.Length() < (index + 1)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     length = static_cast<uint8_t>(mResponse[index]);
     if ((length & 0xc0) == 0xc0) {
       // name pointer, advance over it
+      if (mResponse.Length() < (index + 2)) {
+        return NS_ERROR_UNEXPECTED;
+      }
       index += 2;
     } else if (length & 0xc0) {
       // illegal length, bail out
@@ -430,19 +494,34 @@ DOHListener::DohDecode()
     } else {
       // iterate over host name in answer
       do {
+        if (mResponse.Length() < (index + 1)) {
+          return NS_ERROR_UNEXPECTED;
+        }
         length = static_cast<uint8_t>(mResponse[index]);
+        if (mResponse.Length() < (index + 1 + length)) {
+          return NS_ERROR_UNEXPECTED;
+        }
         index += 1 + length;
         LOG("TRR: move over %d bytes\n", 1 + length);
       } while (length);
     }
 
+    if (mResponse.Length() < (index + 8)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     index += 2; // type
     index += 2; // class
     index += 4; // ttl
 
     // 16 bit RDLENGTH
+    if (mResponse.Length() < (index + 2)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     uint16_t RDLENGTH = get16bit(mResponse, index);
     index += 2;
+    if (mResponse.Length() < (index + RDLENGTH)) {
+      return NS_ERROR_UNEXPECTED;
+    }
     index += RDLENGTH;
     LOG("done with additional rr now %u of %u\n", index, mResponse.Length());
     arRecords--;
