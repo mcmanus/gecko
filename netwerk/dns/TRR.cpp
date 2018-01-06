@@ -145,7 +145,8 @@ TRR::DNSoverHTTPS()
     rv = dohEncode(mHost, mType, tmp);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    rv = Base64Encode(tmp, body);
+    rv = Base64URLEncode(tmp.Length(), reinterpret_cast<const unsigned char *>(tmp.get()),
+                         Base64URLEncodePaddingPolicy::Omit, body);
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCString uri;
