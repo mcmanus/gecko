@@ -116,6 +116,18 @@ dohEncode(nsCString aHost,
   return NS_OK;
 }
 
+NS_IMETHODIMP
+TRR::Run()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(mTRRService);
+  if (NS_FAILED(DNSoverHTTPS())) {
+    FailData();
+    // The dtor will now be run
+  }
+  return NS_OK;
+}
+
 nsresult
 TRR::DNSoverHTTPS()
 {
@@ -587,6 +599,8 @@ TRR::OnStopRequest(nsIRequest *aRequest,
                    nsISupports *aContext,
                    nsresult aStatusCode)
 {
+  // The dtor will be run after the function returns
+
   // if status was "fine", parse the response and pass on the answer
   if (NS_OK == aStatusCode) {
     nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(aRequest);
@@ -606,10 +620,9 @@ TRR::OnStopRequest(nsIRequest *aRequest,
         return NS_OK;
       }
     }
-
-    // TRR failed
-    FailData();
   }
+
+  FailData();
   return NS_OK;
 }
 

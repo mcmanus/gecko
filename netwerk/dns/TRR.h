@@ -67,13 +67,7 @@ public:
   {
   }
 
-  NS_IMETHOD Run() override
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-    MOZ_ASSERT(mTRRService);
-    DNSoverHTTPS();
-    return NS_OK;
-  }
+  NS_IMETHOD Run() override;
   nsCString   mHost;
   nsHostRecord *mRec;
   nsHostResolver *mHostResolver;
