@@ -70,7 +70,7 @@ public:
   NS_IMETHOD Run() override;
   nsCString   mHost;
   nsHostRecord *mRec;
-  nsHostResolver *mHostResolver;
+  RefPtr<nsHostResolver> mHostResolver;
   TRRService *mTRRService;
 
 private:

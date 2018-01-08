@@ -133,7 +133,13 @@ TRR::DNSoverHTTPS()
 {
   // This is essentially the "run" method - created from nsHostResolver
   MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
-  //
+
+  if ((mType != TRRTYPE_A) && (mType != TRRTYPE_AAAA) && (mType != TRRTYPE_NS)) {
+    // limit the calling interface becase nsHostResolver has explicit slots for
+    // these types
+    return NS_ERROR_FAILURE;
+  }
+  
   // 'host' should be converted to a DNS query packet for QTYPE "A" or
   // "AAAA" (based on af), then base64url-encoded and inserted into the URL
   //
@@ -555,7 +561,7 @@ nsresult
 TRR::ReturnData()
 {
   // create and populate an AddrInfo instance to pass on
-  AddrInfo *ai = new AddrInfo(mHost.get(), true);
+  AddrInfo *ai = new AddrInfo(mHost.get(), mType);
   DOHaddr *item;
   uint32_t ttl = AddrInfo::NO_TTL_DATA;
   while ((item = static_cast<DOHaddr*>(mDNS.mAddresses.popFirst()))) {
@@ -587,7 +593,7 @@ TRR::FailData()
   }
   // create and populate an TRR AddrInfo instance to pass on to signal that
   // this comes from TRR
-  AddrInfo *ai = new AddrInfo(mHost.get(), true);
+  AddrInfo *ai = new AddrInfo(mHost.get(), mType);
 
   (void)mHostResolver->OnLookupComplete(mRec, NS_ERROR_FAILURE, ai);
   mHostResolver = nullptr;

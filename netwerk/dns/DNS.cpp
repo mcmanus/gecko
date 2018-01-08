@@ -324,7 +324,7 @@ AddrInfo::AddrInfo(const char *host, const char *cname)
   Init(host, cname);
 }
 
-AddrInfo::AddrInfo(const char *host, bool aTRR)
+AddrInfo::AddrInfo(const char *host, unsigned int aTRR)
   : mHostName(nullptr)
   , mCanonicalName(nullptr)
   , ttl(NO_TTL_DATA)

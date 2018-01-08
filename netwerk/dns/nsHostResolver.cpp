@@ -177,7 +177,6 @@ nsHostRecord::nsHostRecord(const nsHostKey *key)
     , negative(false)
     , resolving(false)
     , mNative(false)
-    , mTRRCount(0)
     , mTRRSuccess(0)
     , mTRRUsed(false)
     , mNativeSuccess(false)
@@ -1175,7 +1174,6 @@ nsHostResolver::TRRBlacklist(nsCString aHost, bool aFullHost)
             fprintf(stderr, "TRR: verify if '%s' resolves\n", check.get());
 
             // check if there's an NS entry for this name
-            // todo refcount to this problem..
             nsresult rv = NS_DispatchToMainThread(new TRR(this, check, TRRTYPE_NS));
             if (NS_FAILED(rv)) {
                 // major problemo todo
@@ -1184,11 +1182,13 @@ nsHostResolver::TRRBlacklist(nsCString aHost, bool aFullHost)
     }
 }
 
+#define TRROutstanding() ((rec->mTrrA || rec->mTrrAAAA || rec->mTrrNS))
+
 // returns error if no TRR resolve is issued
 nsresult
 nsHostResolver::TrrLookup(nsHostRecord *rec)
 {
-    rec->mTRRCount = 0;   // bump for each outstanding TRR
+    MOZ_ASSERT(!TRROutstanding());
     rec->mTRRSuccess = 0; // bump for each successful TRR response
 
     nsAutoCString hostName(rec->host);
@@ -1205,22 +1205,34 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
 
     // If asking for AF_UNSPEC, issue both A and AAAA.
     // If asking for AF_INET6 or AF_INET, do only that single type
-    enum TrrType rectype = (rec->af == AF_INET6)?TRRTYPE_AAAA:TRRTYPE_A;
+    enum TrrType rectype = (rec->af == AF_INET6)? TRRTYPE_AAAA : TRRTYPE_A;
     bool sendAgain;
 
-    NS_ASSERTION(rec->mTRRCount == 0, "TRR still in use for this host record");
     rec->mTRRUsed = true; // this record gets TRR treatment
     rec->resolving = true;
+    bool madeQuery = false;
     do {
         sendAgain = false;
         NS_ADDREF(rec);
         fprintf(stderr, "++++++ TRR Resolve %s type %d\n", rec->host, (int)rectype);
-        rv = NS_DispatchToMainThread(new TRR(this, rec, rectype));
+        RefPtr<TRR> trr = new TRR(this, rec, rectype);
+        rv = NS_DispatchToMainThread(trr);
         if (NS_FAILED(rv)) {
             NS_RELEASE(rec);
         } else {
-            NS_ADDREF(this); // hold the nsHostResolver object too todo release?
-            rec->mTRRCount++;
+            if (rectype == TRRTYPE_A) {
+                MOZ_ASSERT(!rec->mTrrA);
+                rec->mTrrA = trr;
+            } else if (rectype == TRRTYPE_AAAA) {
+                MOZ_ASSERT(!rec->mTrrAAAA);
+                rec->mTrrAAAA = trr;
+            } else if (rectype == TRRTYPE_NS) {
+                MOZ_ASSERT(!rec->mTrrNS);
+                rec->mTrrNS = trr;
+            } else {
+                MOZ_ASSERT(0);
+            }
+            madeQuery = true;
             if ((rec->af == AF_UNSPEC) && (rectype == TRRTYPE_A)) {
                 rectype = TRRTYPE_AAAA;
                 sendAgain = true;
@@ -1228,7 +1240,7 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
         }
     } while (sendAgain);
 
-    return rec->mTRRCount ? NS_OK : NS_ERROR_UNKNOWN_HOST;
+    return madeQuery ? NS_OK : NS_ERROR_UNKNOWN_HOST;
 }
 
 
@@ -1565,7 +1577,6 @@ nsHostResolver::TRRDone(nsHostRecord *rec)
     return false;
 }
 
-
 // NativeDone() returns true if the current incoming results should be discarded.
 bool
 nsHostResolver::NativeDone(nsHostRecord *rec)
@@ -1575,7 +1586,7 @@ nsHostResolver::NativeDone(nsHostRecord *rec)
     Telemetry::Accumulate(Telemetry::DNS_NATIVE_LOOKUP_TIME, millis);
 
     if (rec->mResolverMode == MODE_PARALLEL) {
-        if (!rec->mTRRCount && rec->mTRRUsed) {
+        if (rec->mTRRUsed && !TRROutstanding()) {
             // TRR was faster, discard this
             Telemetry::Accumulate(Telemetry::DNS_TRR_RACE, DNS_RACE_TRR_WON);
             return true;
@@ -1607,6 +1618,8 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
     MutexAutoLock lock(mLock);
 
     if (!rec) {
+        MOZ_ASSERT(false); // I don't think this is called todo
+        
         // when called without a host record, this is a domain name check response.
         if (NS_SUCCEEDED(status)) {
             fprintf(stderr, "TRR verified %s to be fine!\n", newRRSet->mHostName);
@@ -1620,14 +1633,26 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
     }
 
     if (newRRSet->isTRR()) {
-        NS_ASSERTION((rec->mTRRCount >=0) && (rec->mTRRCount <= 2), "RR race!");
-        rec->mTRRCount--;
-        fprintf(stderr, "TRR lookup %s(%d pending)\n",
-                NS_FAILED(status)?"FAILED ":"",  rec->mTRRCount);
+        fprintf(stderr, "TRR lookup %s %s\n",
+                newRRSet->mHostName, NS_SUCCEEDED(status) ? "OK" : "FAILED");
+        MOZ_ASSERT(TRROutstanding());
+        if (newRRSet->isTRR() == TRRTYPE_A) {
+            MOZ_ASSERT(rec->mTrrA);
+            rec->mTrrA = nullptr;
+        } else if (newRRSet->isTRR() == TRRTYPE_AAAA) {
+            MOZ_ASSERT(rec->mTrrAAAA);
+            rec->mTrrAAAA = nullptr;
+        } else if (newRRSet->isTRR() == TRRTYPE_NS) {
+            MOZ_ASSERT(rec->mTrrNS);
+            rec->mTrrNS = nullptr;
+        } else {
+            MOZ_ASSERT(0);
+        }        
         if (NS_SUCCEEDED(status)) {
             rec->mTRRSuccess++;
         }
-        if (rec->mTRRCount) {
+
+        if (TRROutstanding()) {
             if (NS_SUCCEEDED(status)) {
                 // There's another one TRR complete pending. Wait for it and keep
                 // this RRset around until then.
@@ -1639,8 +1664,7 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* n
 
             NS_RELEASE(rec);
             return LOOKUP_OK;
-        }
-        else {
+        } else {
             // no more outstanding TRRs
             // If mFirstTRR is set, merge those addresses into current set!
             if (rec->mFirstTRR) {

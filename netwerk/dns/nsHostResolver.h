@@ -15,7 +15,6 @@
 #include "nsISupportsImpl.h"
 #include "nsIDNSListener.h"
 #include "nsIDNSService.h"
-#include "nsString.h"
 #include "nsTArray.h"
 #include "GetAddrInfo.h"
 #include "mozilla/net/DNS.h"
@@ -28,6 +27,8 @@
 class nsHostResolver;
 class nsHostRecord;
 class nsResolveHostCallback;
+namespace mozilla { namespace net { class TRR; } }
+
 
 #define MAX_RESOLVER_THREADS_FOR_ANY_PRIORITY  3
 #define MAX_RESOLVER_THREADS_FOR_HIGH_PRIORITY 5
@@ -149,7 +150,6 @@ private:
     bool    mNative;    /* true if this record is being resolved "natively",
                          * which means that it is either on the pending queue
                          * or owned by one of the worker threads. */
-    int     mTRRCount;   /* number of outstanding TRR resolves */
     int     mTRRSuccess; /* number of successful TRR responses */
     bool    mTRRUsed;   /* TRR was used on this record */
     int     mNativeSuccess; /* number of native lookup responses */
@@ -158,6 +158,10 @@ private:
     bool    usingAnyThread; /* true if off queue and contributing to mActiveAnyThreadCount */
     bool    mDoomed; /* explicitly expired */
     bool    mGetTtl;
+
+    RefPtr<mozilla::net::TRR> mTrrA;
+    RefPtr<mozilla::net::TRR> mTrrAAAA;
+    RefPtr<mozilla::net::TRR> mTrrNS;
 
     // The number of times ReportUnusable() has been called in the record's
     // lifetime.
