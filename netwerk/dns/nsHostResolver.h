@@ -138,25 +138,35 @@ public:
     bool RemoveOrRefresh(); // Mark records currently being resolved as needed
                             // to resolve again.
     bool IsTRR() { return mTRRUsed; }
+    void Complete(nsHostResolver *);
+
     mozilla::net::ResolverMode mResolverMode;
 
 private:
+    // Options for Telemetry::DNS_TRR_RACE
+    enum {
+        DNS_RACE_TRR_WON = 0,
+        DNS_RACE_NATIVE_WON = 1,
+    };
+
     friend class nsHostResolver;
 
 
     PRCList callbacks; /* list of callbacks */
 
-    bool    resolving;  /* true while this record is not yet resolved */
+    int     mResolving;  /* counter of outstanding resolving calls */
     bool    mNative;    /* true if this record is being resolved "natively",
                          * which means that it is either on the pending queue
                          * or owned by one of the worker threads. */
     int     mTRRSuccess; /* number of successful TRR responses */
     bool    mTRRUsed;   /* TRR was used on this record */
+    bool    mNativeUsed;
     int     mNativeSuccess; /* number of native lookup responses */
     mozilla::net::AddrInfo *mFirstTRR; /* temporary TRR storage */
     bool    onQueue;  /* true if pending and on the queue (not yet given to getaddrinfo())*/
     bool    usingAnyThread; /* true if off queue and contributing to mActiveAnyThreadCount */
     bool    mDoomed; /* explicitly expired */
+    bool    mDidCallbacks;
     bool    mGetTtl;
 
     RefPtr<mozilla::net::TRR> mTrrA;
@@ -328,6 +338,7 @@ public:
     };
 
     LookupStatus OnLookupComplete(nsHostRecord *, nsresult, mozilla::net::AddrInfo *);
+    void TRRBlacklist(const nsCString &host, bool aFullname);
 
 private:
    explicit nsHostResolver(uint32_t maxCacheEntries,
@@ -341,10 +352,7 @@ private:
     nsresult NativeLookup(nsHostRecord *);
     nsresult NameLookup(nsHostRecord *);
     bool     GetHostToLookup(nsHostRecord **m);
-    bool TRRDone(nsHostRecord *);
-    bool NativeDone(nsHostRecord *);
     bool IsTRRBlacklisted(nsCString host, bool fullhost);
-    void TRRBlacklist(nsCString host, bool aFullname);
 
     void     DeQueue(PRCList &aQ, nsHostRecord **aResult);
     void     ClearPendingQueue(PRCList *aPendingQueue);
@@ -368,13 +376,6 @@ private:
         METHOD_OVERFLOW = 5,
         METHOD_NETWORK_FIRST = 6,
         METHOD_NETWORK_SHARED = 7
-    };
-
-    // Options for Telemetry::DNS_TRR_RACE
-    enum {
-        DNS_RACE_TRR_WON = 0,
-        DNS_RACE_NATIVE_WON = 1,
-        DNS_RACE_TRR_UNUSED = 2,
     };
 
     // Options for Telemetry::DNS_NO_TRR_REASON
