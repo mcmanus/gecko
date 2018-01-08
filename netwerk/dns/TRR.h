@@ -19,9 +19,30 @@ enum TrrType {
   TRRTYPE_AAAA = 28,
 };
 
-class TRR: public Runnable
+class DOHaddr : public LinkedListElement<DOHaddr> {
+public:
+  NetAddr mNet;
+  uint32_t mTtl;
+};
+
+class DOHresp {
+public:
+  virtual ~DOHresp() { }
+  nsresult Add(uint32_t TTL, nsCString & dns, int index, uint16_t len,
+               bool aLocalAllowed);
+  uint16_t mNumAddresses;
+  LinkedList<DOHaddr> mAddresses;
+};
+
+class TRR
+  : public Runnable
+  , public nsIStreamListener
 {
 public:
+  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_NSIREQUESTOBSERVER
+  NS_DECL_NSISTREAMLISTENER
+
   explicit TRR(nsHostResolver *aResolver,
                nsHostRecord *aRec,
                enum TrrType aType)
@@ -59,44 +80,15 @@ public:
   TRRService *mTRRService;
 
 private:
-  enum TrrType mType;
+  ~TRR() {}
   nsresult DNSoverHTTPS();
-};
-
-class DOHaddr : public LinkedListElement<DOHaddr> {
-public:
-  NetAddr mNet;
-  uint32_t mTtl;
-};
-
-class DOHresp {
-public:
-  virtual ~DOHresp() { }
-  nsresult Add(uint32_t TTL, nsCString & dns, int index, uint16_t len,
-               bool aLocalAllowed);
-  uint16_t mNumAddresses;
-  LinkedList<DOHaddr> mAddresses;
-};
-
-class DOHListener : public nsIStreamListener
-{
-public:
-  NS_DECL_ISUPPORTS
-  NS_DECL_NSIREQUESTOBSERVER
-  NS_DECL_NSISTREAMLISTENER
-
-  DOHListener(TRR *aTrr)
-    : mTrr(aTrr)
-  { }
-
-private:
-  virtual ~DOHListener() { }
-  RefPtr<TRR> mTrr;
-  TimeStamp mStartTime;
-  nsCString mResponse;
   nsresult DohDecode();
   nsresult ReturnData();
   nsresult FailData();
+
+  enum TrrType mType;
+  TimeStamp mStartTime;
+  nsCString mResponse;
   DOHresp mDNS;
 };
 

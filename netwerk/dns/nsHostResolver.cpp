@@ -1175,9 +1175,10 @@ nsHostResolver::TRRBlacklist(nsCString aHost, bool aFullHost)
             fprintf(stderr, "TRR: verify if '%s' resolves\n", check.get());
 
             // check if there's an NS entry for this name
+            // todo refcount to this problem..
             nsresult rv = NS_DispatchToMainThread(new TRR(this, check, TRRTYPE_NS));
             if (NS_FAILED(rv)) {
-                // major problemo
+                // major problemo todo
             }
         }
     }
@@ -1218,7 +1219,7 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
         if (NS_FAILED(rv)) {
             NS_RELEASE(rec);
         } else {
-            NS_ADDREF(this); // hold the nsHostResolver object too
+            NS_ADDREF(this); // hold the nsHostResolver object too todo release?
             rec->mTRRCount++;
             if ((rec->af == AF_UNSPEC) && (rectype == TRRTYPE_A)) {
                 rectype = TRRTYPE_AAAA;

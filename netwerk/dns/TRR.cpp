@@ -46,7 +46,7 @@
 namespace mozilla {
 namespace net {
 
-NS_IMPL_ISUPPORTS(DOHListener,
+NS_IMPL_ISUPPORTS(TRR,
                   nsIStreamListener,
                   nsIRequestObserver)
 
@@ -119,7 +119,7 @@ dohEncode(nsCString aHost,
 nsresult
 TRR::DNSoverHTTPS()
 {
-  // This is essentially the "run" method.
+  // This is essentially the "run" method - created from nsHostResolver
   MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
   //
   // 'host' should be converted to a DNS query packet for QTYPE "A" or
@@ -211,16 +211,15 @@ TRR::DNSoverHTTPS()
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  nsCOMPtr<nsIStreamListener> listener = new DOHListener(this);
-  if (NS_SUCCEEDED(httpChannel->AsyncOpen2(listener))) {
+  if (NS_SUCCEEDED(httpChannel->AsyncOpen2(this))) {
     return NS_OK;
   }
   return NS_ERROR_UNEXPECTED;
 }
 
 NS_IMETHODIMP
-DOHListener::OnStartRequest(nsIRequest *aRequest,
-                            nsISupports *aContext)
+TRR::OnStartRequest(nsIRequest *aRequest,
+                    nsISupports *aContext)
 {
   mStartTime = TimeStamp::Now();
   return NS_OK;
@@ -243,7 +242,7 @@ static uint32_t get32bit(nsCString &aData, int index)
 // DohDecode() collects the TTL and the IP addresses in the response
 //
 nsresult
-DOHListener::DohDecode()
+TRR::DohDecode()
 {
   // The response has a 12 byte header followed by the question (returned)
   // and then the answer. The answer section itself contains the name, type
@@ -381,7 +380,7 @@ DOHListener::DohDecode()
         return NS_ERROR_UNEXPECTED;
       }
       rv = mDNS.Add(TTL, mResponse, index, RDLENGTH,
-                    mTrr->mTRRService->AllowRFC1918());
+                    mTRRService->AllowRFC1918());
       if (NS_FAILED(rv)) {
         LOG("TRR got local IPv4 address!\n");
         return rv;
@@ -393,7 +392,7 @@ DOHListener::DohDecode()
         return NS_ERROR_UNEXPECTED;
       }
       rv = mDNS.Add(TTL, mResponse, index, RDLENGTH,
-                    mTrr->mTRRService->AllowRFC1918());
+                    mTRRService->AllowRFC1918());
       if (NS_FAILED(rv)) {
         LOG("TRR got unique/local IPv6 address!\n");
         return rv;
@@ -541,10 +540,10 @@ DOHListener::DohDecode()
 }
 
 nsresult
-DOHListener::ReturnData()
+TRR::ReturnData()
 {
   // create and populate an AddrInfo instance to pass on
-  AddrInfo *ai = new AddrInfo(mTrr->mHost.get(), true);
+  AddrInfo *ai = new AddrInfo(mHost.get(), true);
   DOHaddr *item;
   uint32_t ttl = AddrInfo::NO_TTL_DATA;
   while ((item = static_cast<DOHaddr*>(mDNS.mAddresses.popFirst()))) {
@@ -560,25 +559,33 @@ DOHListener::ReturnData()
     }
   }
   ai->ttl = ttl;
-  (void)mTrr->mHostResolver->OnLookupComplete(mTrr->mRec, NS_OK, ai);
+  if (!mHostResolver) {
+    return NS_ERROR_FAILURE;
+  }
+  (void)mHostResolver->OnLookupComplete(mRec, NS_OK, ai);
+  mHostResolver = nullptr;
   return NS_OK;
 }
 
 nsresult
-DOHListener::FailData()
+TRR::FailData()
 {
+  if (!mHostResolver) {
+    return NS_ERROR_FAILURE;
+  }
   // create and populate an TRR AddrInfo instance to pass on to signal that
   // this comes from TRR
-  AddrInfo *ai = new AddrInfo(mTrr->mHost.get(), true);
+  AddrInfo *ai = new AddrInfo(mHost.get(), true);
 
-  (void)mTrr->mHostResolver->OnLookupComplete(mTrr->mRec, NS_ERROR_FAILURE, ai);
+  (void)mHostResolver->OnLookupComplete(mRec, NS_ERROR_FAILURE, ai);
+  mHostResolver = nullptr;
   return NS_OK;
 }
 
 NS_IMETHODIMP
-DOHListener::OnStopRequest(nsIRequest *aRequest,
-                           nsISupports *aContext,
-                           nsresult aStatusCode)
+TRR::OnStopRequest(nsIRequest *aRequest,
+                   nsISupports *aContext,
+                   nsresult aStatusCode)
 {
   // if status was "fine", parse the response and pass on the answer
   if (NS_OK == aStatusCode) {
@@ -607,11 +614,11 @@ DOHListener::OnStopRequest(nsIRequest *aRequest,
 }
 
 NS_IMETHODIMP
-DOHListener::OnDataAvailable(nsIRequest *aRequest,
-                             nsISupports *aContext,
-                             nsIInputStream *aInputStream,
-                             uint64_t aOffset,
-                             const uint32_t aCount)
+TRR::OnDataAvailable(nsIRequest *aRequest,
+                     nsISupports *aContext,
+                     nsIInputStream *aInputStream,
+                     uint64_t aOffset,
+                     const uint32_t aCount)
 {
   // receive DNS response into the local buffer
 
