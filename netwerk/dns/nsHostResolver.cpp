@@ -1647,8 +1647,9 @@ nsHostResolver::OnLookupComplete(nsHostRecord *rec, nsresult status, AddrInfo *a
     rec->mResolving--;
 
     if (newRRSet && newRRSet->isTRR()) {
-        fprintf(stderr, "TRR lookup %s %s\n",
-                newRRSet->mHostName, NS_SUCCEEDED(status) ? "OK" : "FAILED");
+        fprintf(stderr, "TRR lookup (%d) %s %s\n",
+                newRRSet->isTRR(), newRRSet->mHostName,
+                NS_SUCCEEDED(status) ? "OK" : "FAILED");
         MOZ_ASSERT(TRROutstanding());
         if (newRRSet->isTRR() == TRRTYPE_A) {
             MOZ_ASSERT(rec->mTrrA);

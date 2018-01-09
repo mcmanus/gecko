@@ -181,19 +181,18 @@ TRR::DNSoverHTTPS()
     NS_NewURI(getter_AddRefs(dnsURI), uri);
   }
 
-  nsCOMPtr<nsIChannel> channel;
-  NS_NewChannel(getter_AddRefs(channel),
+  NS_NewChannel(getter_AddRefs(mChannel),
                 dnsURI,
                 nsContentUtils::GetSystemPrincipal(),
                 nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                 nsIContentPolicy::TYPE_OTHER,
                 nullptr, // aLoadGroup
                 nullptr, // aCallbacks
-                nsIRequest::LOAD_NORMAL|nsIRequest::LOAD_ANONYMOUS|
-                nsIRequest::LOAD_TRR|nsIRequest::LOAD_FROM_CACHE,
+                nsIRequest::LOAD_NORMAL | nsIRequest::LOAD_ANONYMOUS |
+                nsIRequest::LOAD_TRR | nsIRequest::LOAD_FROM_CACHE,
                 ios);
 
-  nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(channel);
+  nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(mChannel);
   if (!httpChannel) {
     return NS_ERROR_UNEXPECTED;
   }
@@ -232,6 +231,7 @@ TRR::DNSoverHTTPS()
   if (NS_SUCCEEDED(httpChannel->AsyncOpen2(this))) {
     return NS_OK;
   }
+  mChannel = nullptr;
   return NS_ERROR_UNEXPECTED;
 }
 
@@ -243,13 +243,13 @@ TRR::OnStartRequest(nsIRequest *aRequest,
   return NS_OK;
 }
 
-static uint16_t get16bit(nsCString &aData, int index)
+static uint16_t get16bit(unsigned char *aData, int index)
 {
   return (static_cast<uint8_t>(aData[index]) << 8) |
     static_cast<uint8_t>(aData[index + 1]);
 }
 
-static uint32_t get32bit(nsCString &aData, int index)
+static uint32_t get32bit(unsigned char *aData, int index)
 {
   return (static_cast<uint8_t>(aData[index]) << 24) |
     (static_cast<uint8_t>(aData[index+1])<<16) |
@@ -279,7 +279,9 @@ TRR::DohDecode()
   uint8_t length;
   nsAutoCString host;
 
-  if (mResponse.Length() < 12 || mResponse[0] || mResponse[1]) {
+  LOG("doh decode %s %d bytes\n", mHost.get(), mUsed);
+
+  if (mUsed < 12 || mResponse[0] || mResponse[1]) {
     LOG("TRR bad incoming DOH, eject!\n");
     return NS_ERROR_UNEXPECTED;
   }
@@ -288,7 +290,7 @@ TRR::DohDecode()
   // iterate over the single(?) host name in question
   while (questionRecords) {
     do {
-      if (mResponse.Length() < (index + 1)) {
+      if (mUsed < (index + 1)) {
         return NS_ERROR_UNEXPECTED;
       }
       length = static_cast<uint8_t>(mResponse[index]);
@@ -296,14 +298,14 @@ TRR::DohDecode()
         if (host.Length()) {
           host.Append(".");
         }
-        if (mResponse.Length() < (index + 1 + length)) {
+        if (mUsed < (index + 1 + length)) {
           return NS_ERROR_UNEXPECTED;
         }
-        host.Append( Substring(mResponse, index + 1, length) );
+        host.Append(((char *)mResponse) + index + 1, length);
       }
       index += 1 + length; // skip length byte + label
     } while (length);
-    if (mResponse.Length() < (index + 4)) {
+    if (mUsed < (index + 4)) {
       return NS_ERROR_UNEXPECTED;
     }
     index += 4; // skip question's type, class
@@ -311,23 +313,23 @@ TRR::DohDecode()
   }
   
   fprintf(stderr,"TRR Decode: index %u of %u\n",
-          index, mResponse.Length());
+          index, mUsed);
 
   // Figure out the number of answer records from ANCOUNT
   uint16_t answerRecords = get16bit(mResponse, 6);
 
   LOG("TRR Decode: %d answer records (%u bytes body) %s\n",
-      answerRecords, mResponse.Length(), host.get());
+      answerRecords, mUsed, host.get());
 
   while (answerRecords) {
 
-    if (mResponse.Length() < (index + 1)) {
+    if (mUsed < (index + 1)) {
       return NS_ERROR_UNEXPECTED;
     }
     length = static_cast<uint8_t>(mResponse[index]);
     if ((length & 0xc0) == 0xc0) {
       // name pointer, advance over it
-      if (mResponse.Length() < (index + 2)) {
+      if (mUsed < (index + 2)) {
         return NS_ERROR_UNEXPECTED;
       }
       index += 2;
@@ -338,11 +340,11 @@ TRR::DohDecode()
     } else {
       // iterate over host name in answer
       do {
-        if (mResponse.Length() < (index + 1)) {
+        if (mUsed < (index + 1)) {
           return NS_ERROR_UNEXPECTED;
         }
         length = static_cast<uint8_t>(mResponse[index]);
-        if (mResponse.Length() < (index + 1 + length)) {
+        if (mUsed < (index + 1 + length)) {
           return NS_ERROR_UNEXPECTED;
         }
         index += 1 + length;
@@ -350,14 +352,14 @@ TRR::DohDecode()
       } while (length);
     }
     // 16 bit TYPE
-    if (mResponse.Length() < (index + 2)) {
+    if (mUsed < (index + 2)) {
       return NS_ERROR_UNEXPECTED;
     }
     uint16_t TYPE = get16bit(mResponse, index);
     index += 2;
 
     // 16 bit class
-    if (mResponse.Length() < (index + 2)) {
+    if (mUsed < (index + 2)) {
       return NS_ERROR_UNEXPECTED;
     }
     uint16_t CLASS = get16bit(mResponse, index);
@@ -368,20 +370,20 @@ TRR::DohDecode()
     index += 2;
 
     // 32 bit TTL (seconds)
-    if (mResponse.Length() < (index + 4)) {
+    if (mUsed < (index + 4)) {
       return NS_ERROR_UNEXPECTED;
     }
     uint32_t TTL = get32bit(mResponse, index);
     index += 4;
 
     // 16 bit RDLENGTH
-    if (mResponse.Length() < (index + 2)) {
+    if (mUsed < (index + 2)) {
       return NS_ERROR_UNEXPECTED;
     }
     uint16_t RDLENGTH = get16bit(mResponse, index);
     index += 2;
 
-    if (mResponse.Length() < (index + RDLENGTH)) {
+    if (mUsed < (index + RDLENGTH)) {
       return NS_ERROR_UNEXPECTED;
     }
 
@@ -430,22 +432,22 @@ TRR::DohDecode()
 
     index += RDLENGTH;
     LOG("done with record type %u len %u index now %u of %u\n",
-        TYPE, RDLENGTH, index, mResponse.Length());
+        TYPE, RDLENGTH, index, mUsed);
     answerRecords--;
   }
 
   // NSCOUNT
   uint16_t nsRecords = get16bit(mResponse, 8);
   LOG("TRR Decode: %d ns records (%u bytes body)\n", nsRecords,
-      mResponse.Length());
+      mUsed);
   while (nsRecords) {
-    if (mResponse.Length() < (index + 1)) {
+    if (mUsed < (index + 1)) {
       return NS_ERROR_UNEXPECTED;
     }
     length = static_cast<uint8_t>(mResponse[index]);
     if ((length & 0xc0) == 0xc0) {
       // name pointer, advance over it
-      if (mResponse.Length() < (index + 2)) {
+      if (mUsed < (index + 2)) {
         return NS_ERROR_UNEXPECTED;
       }
       index += 2;
@@ -456,11 +458,11 @@ TRR::DohDecode()
     } else {
       // iterate over host name in answer
       do {
-        if (mResponse.Length() < (index + 1)) {
+        if (mUsed < (index + 1)) {
           return NS_ERROR_UNEXPECTED;
         }
         length = static_cast<uint8_t>(mResponse[index]);
-        if (mResponse.Length() < (index + 1 + length)) {
+        if (mUsed < (index + 1 + length)) {
           return NS_ERROR_UNEXPECTED;
         }
         index += 1 + length;
@@ -468,7 +470,7 @@ TRR::DohDecode()
       } while (length);
     }
 
-    if (mResponse.Length() < (index + 8)) {
+    if (mUsed < (index + 8)) {
       return NS_ERROR_UNEXPECTED;
     }
     index += 2; // type
@@ -476,31 +478,31 @@ TRR::DohDecode()
     index += 4; // ttl
 
     // 16 bit RDLENGTH
-    if (mResponse.Length() < (index + 2)) {
+    if (mUsed < (index + 2)) {
       return NS_ERROR_UNEXPECTED;
     }
     uint16_t RDLENGTH = get16bit(mResponse, index);
     index += 2;
-    if (mResponse.Length() < (index + RDLENGTH)) {
+    if (mUsed < (index + RDLENGTH)) {
       return NS_ERROR_UNEXPECTED;
     }
     index += RDLENGTH;
-    LOG("done with nsRecord now %u of %u\n", index, mResponse.Length());
+    LOG("done with nsRecord now %u of %u\n", index, mUsed);
     nsRecords--;
   }
 
   // additional resource records
   uint16_t arRecords = get16bit(mResponse, 10);
   LOG("TRR Decode: %d additional resource records (%u bytes body)\n",
-      arRecords, mResponse.Length());
+      arRecords, mUsed);
   while (arRecords) {
-    if (mResponse.Length() < (index + 1)) {
+    if (mUsed < (index + 1)) {
       return NS_ERROR_UNEXPECTED;
     }
     length = static_cast<uint8_t>(mResponse[index]);
     if ((length & 0xc0) == 0xc0) {
       // name pointer, advance over it
-      if (mResponse.Length() < (index + 2)) {
+      if (mUsed < (index + 2)) {
         return NS_ERROR_UNEXPECTED;
       }
       index += 2;
@@ -511,11 +513,11 @@ TRR::DohDecode()
     } else {
       // iterate over host name in answer
       do {
-        if (mResponse.Length() < (index + 1)) {
+        if (mUsed < (index + 1)) {
           return NS_ERROR_UNEXPECTED;
         }
         length = static_cast<uint8_t>(mResponse[index]);
-        if (mResponse.Length() < (index + 1 + length)) {
+        if (mUsed < (index + 1 + length)) {
           return NS_ERROR_UNEXPECTED;
         }
         index += 1 + length;
@@ -523,7 +525,7 @@ TRR::DohDecode()
       } while (length);
     }
 
-    if (mResponse.Length() < (index + 8)) {
+    if (mUsed < (index + 8)) {
       return NS_ERROR_UNEXPECTED;
     }
     index += 2; // type
@@ -531,21 +533,21 @@ TRR::DohDecode()
     index += 4; // ttl
 
     // 16 bit RDLENGTH
-    if (mResponse.Length() < (index + 2)) {
+    if (mUsed < (index + 2)) {
       return NS_ERROR_UNEXPECTED;
     }
     uint16_t RDLENGTH = get16bit(mResponse, index);
     index += 2;
-    if (mResponse.Length() < (index + RDLENGTH)) {
+    if (mUsed < (index + RDLENGTH)) {
       return NS_ERROR_UNEXPECTED;
     }
     index += RDLENGTH;
-    LOG("done with additional rr now %u of %u\n", index, mResponse.Length());
+    LOG("done with additional rr now %u of %u\n", index, mUsed);
     arRecords--;
   }
   
-  if (index != mResponse.Length()) {
-    LOG("TRRRRRR: bad DNS parser (%u != %d)!\n", index, (int)mResponse.Length());
+  if (index != mUsed) {
+    LOG("TRRRRRR: bad DNS parser (%u != %d)!\n", index, (int)mUsed);
     // failed to parse 100%, do not continue
     return NS_ERROR_UNEXPECTED;
   }
@@ -608,9 +610,13 @@ TRR::OnStopRequest(nsIRequest *aRequest,
                    nsresult aStatusCode)
 {
   // The dtor will be run after the function returns
+  LOG("TRR:OnStopRequest %s %d failed=%d code=%d\n",
+      mHost.get(), mType, mFailed, aStatusCode);
+  nsCOMPtr<nsIChannel> channel;
+  channel.swap(mChannel);
 
   // if status was "fine", parse the response and pass on the answer
-  if (NS_OK == aStatusCode) {
+  if (!mFailed && NS_SUCCEEDED(aStatusCode)) {
     nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(aRequest);
     if (!httpChannel) {
       return NS_ERROR_UNEXPECTED;
@@ -643,17 +649,24 @@ TRR::OnDataAvailable(nsIRequest *aRequest,
 {
   // receive DNS response into the local buffer
 
-  // make sure this is never a big response
-  char buf[aCount];
-  uint32_t count;
-  aInputStream->Read(buf, aCount, &count);
-  mResponse.AppendASCII(buf, count);
+  if (aCount + mUsed > kMaxSize) {
+    mFailed = true;
+    return NS_ERROR_FAILURE;
+  }
 
+  uint32_t count;
+  nsresult rv = aInputStream->Read((char *)mResponse + mUsed, aCount, &count);
+  if (NS_FAILED(rv)) {
+    mFailed = true;
+    return rv;
+  }
+  MOZ_ASSERT(count == aCount);
+  mUsed += aCount;
   return NS_OK;
 }
 
 nsresult
-DOHresp::Add(uint32_t TTL, nsCString &dns, int index, uint16_t len,
+DOHresp::Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
              bool aLocalAllowed)
 {
   DOHaddr *doh = new DOHaddr;

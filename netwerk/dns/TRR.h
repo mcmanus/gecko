@@ -7,6 +7,7 @@
 #ifndef mozilla_net_TRR_h
 #define mozilla_net_TRR_h
 
+#include "nsIChannel.h"
 #include "nsIStreamListener.h"
 
 namespace mozilla { namespace net {
@@ -28,7 +29,7 @@ public:
 class DOHresp {
 public:
   virtual ~DOHresp() { }
-  nsresult Add(uint32_t TTL, nsCString & dns, int index, uint16_t len,
+  nsresult Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
                bool aLocalAllowed);
   uint16_t mNumAddresses;
   LinkedList<DOHaddr> mAddresses;
@@ -43,6 +44,7 @@ public:
   NS_DECL_NSIREQUESTOBSERVER
   NS_DECL_NSISTREAMLISTENER
 
+  static const unsigned int kMaxSize = 3200;
   explicit TRR(nsHostResolver *aResolver,
                nsHostRecord *aRec,
                enum TrrType aType)
@@ -51,6 +53,8 @@ public:
     , mHostResolver(aResolver)
     , mTRRService(gTRRService)
     , mType(aType)
+    , mUsed(0)
+    , mFailed(false)
   {
     mHost = aRec->host;
   }
@@ -64,6 +68,8 @@ public:
     , mHostResolver(aResolver)
     , mTRRService(gTRRService)
     , mType(aType)
+    , mUsed(0)
+    , mFailed(false)
   { }
 
   NS_IMETHOD Run() override;
@@ -79,9 +85,12 @@ private:
   nsresult ReturnData();
   nsresult FailData();
 
+  nsCOMPtr<nsIChannel> mChannel;
   enum TrrType mType;
   TimeStamp mStartTime;
-  nsCString mResponse;
+  unsigned char mResponse[kMaxSize];
+  unsigned int mUsed;
+  bool mFailed;
   DOHresp mDNS;
 };
 
