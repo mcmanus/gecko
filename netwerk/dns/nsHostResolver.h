@@ -347,6 +347,7 @@ private:
    ~nsHostResolver();
 
     nsresult Init();
+    void AssertOnQ(nsHostRecord *, PRCList *);
     mozilla::net::ResolverMode Mode();
     nsresult TrrLookup(nsHostRecord *);
     nsresult NativeLookup(nsHostRecord *);

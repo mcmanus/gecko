@@ -582,6 +582,7 @@ TRR::ReturnData()
   }
   (void)mHostResolver->OnLookupComplete(mRec, NS_OK, ai);
   mHostResolver = nullptr;
+  mRec = nullptr;
   return NS_OK;
 }
 
@@ -597,6 +598,7 @@ TRR::FailData()
 
   (void)mHostResolver->OnLookupComplete(mRec, NS_ERROR_FAILURE, ai);
   mHostResolver = nullptr;
+  mRec = nullptr;
   return NS_OK;
 }
 

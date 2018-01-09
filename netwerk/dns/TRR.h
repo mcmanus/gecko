@@ -64,12 +64,11 @@ public:
     , mHostResolver(aResolver)
     , mTRRService(gTRRService)
     , mType(aType)
-  {
-  }
+  { }
 
   NS_IMETHOD Run() override;
   nsCString   mHost;
-  nsHostRecord *mRec;
+  RefPtr<nsHostRecord>   mRec;
   RefPtr<nsHostResolver> mHostResolver;
   TRRService *mTRRService;
 
