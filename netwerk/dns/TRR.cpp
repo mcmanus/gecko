@@ -31,6 +31,7 @@
 #include "nsIUploadChannel2.h"
 #include "DNS.h"
 #include "nsStringStream.h"
+#include "nsIHttpChannelInternal.h"
 
 #include "mozilla/HashFunctions.h"
 #include "mozilla/Base64.h"
@@ -205,7 +206,17 @@ TRR::DNSoverHTTPS()
     rv = httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Authorization"), cred, false);
     NS_ENSURE_SUCCESS(rv, rv);
   }
-  
+
+  nsCOMPtr<nsIHttpChannelInternal> internalChannel = do_QueryInterface(mChannel);
+  if (!internalChannel) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  // setting a small stream window means the h2 stack won't pipeline a window update
+  // with each HEADERS
+  rv = internalChannel->SetInitialRwin(kMaxSize + 1024);
+  NS_ENSURE_SUCCESS(rv, rv);
+
   if (useGet) {
     rv = httpChannel->SetRequestMethod(NS_LITERAL_CSTRING("GET"));
     NS_ENSURE_SUCCESS(rv, rv);
