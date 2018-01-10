@@ -1124,6 +1124,9 @@ nsHttpChannel::SetupTransaction()
 
     mUsedNetwork = 1;
 
+    if (mLoadFlags & nsIRequest::LOAD_TRR) {
+        mCaps |= NS_HTTP_LARGE_KEEPALIVE;
+    }
     if (!mAllowSpdy) {
         mCaps |= NS_HTTP_DISALLOW_SPDY;
     }
