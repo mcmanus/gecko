@@ -204,6 +204,23 @@ nsHostRecord::nsHostRecord(const nsHostKey *key)
     PR_INIT_CLIST(&callbacks);
 }
 
+void
+nsHostRecord::Cancel()
+{
+    if (mTrrA) {
+        mTrrA->Cancel();
+        mTrrA = nullptr;
+    }
+    if (mTrrAAAA) {
+        mTrrAAAA->Cancel();
+        mTrrAAAA = nullptr;
+    }
+    if (mTrrNS) {
+        mTrrNS->Cancel();
+        mTrrNS = nullptr;
+    }
+}
+
 nsresult
 nsHostRecord::Create(const nsHostKey *key, nsHostRecord **result)
 {
@@ -422,6 +439,7 @@ bool
 nsHostRecord::RemoveOrRefresh()
 {
     // no need to flush TRRed names, they're not resolved "locally"
+    Cancel();
     if (addr_info && addr_info->isTRR()) {
         return false;
     }
@@ -657,6 +675,7 @@ nsHostResolver::ClearPendingQueue(PRCList *aPendingQ)
         PRCList *node = aPendingQ->next;
         while (node != aPendingQ) {
             nsHostRecord *rec = static_cast<nsHostRecord *>(node);
+            rec->Cancel();
             node = node->next;
             OnLookupComplete(rec, NS_ERROR_ABORT, nullptr);
         }
@@ -685,6 +704,7 @@ nsHostResolver::FlushCache()
         PRCList *node = mEvictionQ.next;
         while (node != &mEvictionQ) {
             nsHostRecord *rec = static_cast<nsHostRecord *>(node);
+            rec->Cancel();
             node = node->next;
             PR_REMOVE_AND_INIT_LINK(rec);
             mDB.Remove((nsHostKey *) rec);
@@ -750,11 +770,16 @@ nsHostResolver::Shutdown()
         PRCList *node = evictionQ.next;
         while (node != &evictionQ) {
             nsHostRecord *rec = static_cast<nsHostRecord *>(node);
+            rec->Cancel();
             node = node->next;
             NS_RELEASE(rec);
         }
     }
 
+    for (auto iter = mDB.Iter(); !iter.Done(); iter.Next()) {
+        auto entry = static_cast<nsHostDBEnt *>(iter.Get());
+        entry->rec->Cancel();
+    }
 #ifdef NS_BUILD_REFCNT_LOGGING
 
     // Logically join the outstanding worker threads with a timeout.
@@ -1839,6 +1864,7 @@ nsHostResolver::CancelAsyncRequest(const char             *host,
 
         // If there are no more callbacks, remove the hash table entry
         if (recPtr && PR_CLIST_IS_EMPTY(&recPtr->callbacks)) {
+            recPtr->Cancel();
             mDB.Remove((nsHostKey *)recPtr);
             // If record is on a Queue, remove it and then deref it
             if (recPtr->next != recPtr) {

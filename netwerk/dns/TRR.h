@@ -73,6 +73,7 @@ public:
   { }
 
   NS_IMETHOD Run() override;
+  void Cancel();
   nsCString   mHost;
   RefPtr<nsHostRecord>   mRec;
   RefPtr<nsHostResolver> mHostResolver;

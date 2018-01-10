@@ -139,6 +139,7 @@ public:
                             // to resolve again.
     bool IsTRR() { return mTRRUsed; }
     void Complete(nsHostResolver *);
+    void Cancel();
 
     mozilla::net::ResolverMode mResolverMode;
 

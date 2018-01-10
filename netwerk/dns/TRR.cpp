@@ -698,6 +698,38 @@ DOHresp::Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
   return NS_OK;
 }
 
+class proxyCancel : public Runnable
+{
+public:
+  proxyCancel(TRR *aTRR)
+    : Runnable("proxyTrrCancel")
+    , mTRR(aTRR)
+  { }
+
+  NS_IMETHOD Run() override
+  {
+    mTRR->Cancel();
+    mTRR = nullptr;
+    return NS_OK;
+  }
+    
+private:
+  RefPtr<TRR> mTRR;
+};
+
+void
+TRR::Cancel()
+{
+  if (!NS_IsMainThread()) {
+    NS_DispatchToMainThread(new proxyCancel(this));
+    return;
+  }
+  if (mChannel) {
+    LOG("TRR: %p canceling Channel %p\n", this, mChannel.get());
+    mChannel->Cancel(NS_ERROR_ABORT);
+  }
+}
+    
 // namespace
 }
 }
