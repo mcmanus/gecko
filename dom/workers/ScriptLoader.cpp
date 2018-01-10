@@ -1083,6 +1083,20 @@ private:
       principal = parentWorker->GetPrincipal();
     }
 
+#ifdef DEBUG
+    if (IsMainWorkerScript()) {
+      nsCOMPtr<nsIPrincipal> loadingPrincipal =
+        mWorkerPrivate->GetLoadingPrincipal();
+      // if we are not in a ServiceWorker, and the principal is not null, then the
+      // loading principal must subsume the worker principal if it is not a
+      // nullPrincipal (sandbox).
+      MOZ_ASSERT(!loadingPrincipal ||
+                 loadingPrincipal->GetIsNullPrincipal() ||
+                 principal->GetIsNullPrincipal() ||
+                 loadingPrincipal->Subsumes(principal));
+    }
+#endif
+
     // We don't mute the main worker script becase we've already done
     // same-origin checks on them so we should be able to see their errors.
     // Note that for data: url, where we allow it through the same-origin check
@@ -1185,9 +1199,12 @@ private:
       // Store the channel info if needed.
       mWorkerPrivate->InitChannelInfo(channel);
 
-      // Our final channel principal should match the original principal
-      // in terms of the origin.
-      MOZ_DIAGNOSTIC_ASSERT(mWorkerPrivate->FinalChannelPrincipalIsValid(channel));
+      // Our final channel principal should match the loading principal
+      // in terms of the origin.  This used to be an assert, but it seems
+      // there are some rare cases where this check can fail in practice.
+      // Perhaps some browser script setting nsIChannel.owner, etc.
+      NS_ENSURE_TRUE(mWorkerPrivate->FinalChannelPrincipalIsValid(channel),
+                     NS_ERROR_FAILURE);
 
       // However, we must still override the principal since the nsIPrincipal
       // URL may be different due to same-origin redirects.  Unfortunately this
@@ -1838,8 +1855,10 @@ public:
     // before doing anything else.  Normally we do this in the WorkerPrivate
     // Constructor, but we can't do so off the main thread when creating
     // a nested worker.  So do it here instead.
-    mLoadInfo.mPrincipal = mWorkerPrivate->GetPrincipal();
-    MOZ_ASSERT(mLoadInfo.mPrincipal);
+    mLoadInfo.mLoadingPrincipal = mWorkerPrivate->GetPrincipal();
+    MOZ_DIAGNOSTIC_ASSERT(mLoadInfo.mLoadingPrincipal);
+
+    mLoadInfo.mPrincipal = mLoadInfo.mLoadingPrincipal;
 
     // Figure out our base URI.
     nsCOMPtr<nsIURI> baseURI = mWorkerPrivate->GetBaseURI();
@@ -1852,7 +1871,7 @@ public:
 
     nsCOMPtr<nsIChannel> channel;
     mResult =
-      scriptloader::ChannelFromScriptURLMainThread(mLoadInfo.mPrincipal,
+      scriptloader::ChannelFromScriptURLMainThread(mLoadInfo.mLoadingPrincipal,
                                                    baseURI, parentDoc,
                                                    mLoadInfo.mLoadGroup,
                                                    mScriptURL,

@@ -606,6 +606,8 @@ struct nsGridContainerFrame::GridItemInfo
 
   // Return true if we should apply Automatic Minimum Size to this item.
   // https://drafts.csswg.org/css-grid/#min-size-auto
+  // @note the caller should also check that the item spans at least one track
+  // that has a min track sizing function that is 'auto' before applying it.
   bool ShouldApplyAutoMinSize(WritingMode aContainerWM,
                               LogicalAxis aContainerAxis,
                               nscoord aPercentageBasis) const
@@ -664,6 +666,12 @@ nsGridContainerFrame::GridItemInfo::Dump() const
     printf("%s", aMsg);
     if (state & ItemState::eIsFlexing) {
       printf("flexing ");
+    }
+    if (state & ItemState::eApplyAutoMinSize) {
+      printf("auto-min-size ");
+    }
+    if (state & ItemState::eClampMarginBoxMinSize) {
+      printf("clamp ");
     }
     if (state & ItemState::eFirstBaseline) {
       printf("first baseline %s-alignment ",
@@ -1092,15 +1100,9 @@ struct nsGridContainerFrame::Tracks
                   nscoord                     aContentBoxSize);
 
   /**
-   * Return true if aRange spans at least one track with an intrinsic sizing
-   * function and does not span any tracks with a <flex> max-sizing function.
-   * @param aRange the span of tracks to check
-   * @param aState will be set to the union of the state bits of all the spanned
-   *               tracks, unless a flex track is found - then it only contains
-   *               the union of the tracks up to and including the flex track.
+   * Return the union of the state bits for the tracks in aRange.
    */
-  bool HasIntrinsicButNoFlexSizingInRange(const LineRange&      aRange,
-                                          TrackSize::StateBits* aState) const;
+   TrackSize::StateBits StateBitsForRange(const LineRange& aRange) const;
 
   // Some data we collect for aligning baseline-aligned items.
   struct ItemBaselineData
@@ -1631,12 +1633,6 @@ struct nsGridContainerFrame::Tracks
         if (aIndex < lineNameLists.Length()) {
           lineNames.AppendElements(lineNameLists[aIndex]);
         }
-        if (aIndex == repeatAutoEnd) {
-          uint32_t i = aIndex + 1;
-          if (i < lineNameLists.Length()) {
-            lineNames.AppendElements(lineNameLists[i]);
-          }
-        }
       }
       if (aIndex <= repeatAutoEnd && aIndex > repeatAutoStart) {
         lineNames.AppendElements(aGridTemplate.mRepeatAutoLineNameListAfter);
@@ -1644,7 +1640,7 @@ struct nsGridContainerFrame::Tracks
       if (aIndex < repeatAutoEnd && aIndex >= repeatAutoStart) {
         lineNames.AppendElements(aGridTemplate.mRepeatAutoLineNameListBefore);
       }
-      if (aIndex >= repeatAutoEnd && aIndex > repeatAutoStart) {
+      if (aIndex > repeatAutoEnd && aIndex > repeatAutoStart) {
         uint32_t i = aIndex - repeatEndDelta;
         if (i < lineNameLists.Length()) {
           lineNames.AppendElements(lineNameLists[i]);
@@ -3755,28 +3751,17 @@ nsGridContainerFrame::Tracks::CalculateSizes(
   }
 }
 
-bool
-nsGridContainerFrame::Tracks::HasIntrinsicButNoFlexSizingInRange(
-  const LineRange&      aRange,
-  TrackSize::StateBits* aState) const
+TrackSize::StateBits
+nsGridContainerFrame::Tracks::StateBitsForRange(const LineRange& aRange) const
 {
   MOZ_ASSERT(!aRange.IsAuto(), "must have a definite range");
+  TrackSize::StateBits state = TrackSize::StateBits(0);
   const uint32_t start = aRange.mStart;
   const uint32_t end = aRange.mEnd;
-  const TrackSize::StateBits selector =
-    TrackSize::eIntrinsicMinSizing | TrackSize::eIntrinsicMaxSizing;
-  bool foundIntrinsic = false;
   for (uint32_t i = start; i < end; ++i) {
-    TrackSize::StateBits state = mSizes[i].mState;
-    *aState |= state;
-    if (state & TrackSize::eFlexMaxSizing) {
-      return false;
-    }
-    if (state & selector) {
-      foundIntrinsic = true;
-    }
+    state |= mSizes[i].mState;
   }
-  return foundIntrinsic;
+  return state;
 }
 
 bool
@@ -3791,6 +3776,13 @@ nsGridContainerFrame::Tracks::ResolveIntrinsicSizeStep1(
   CachedIntrinsicSizes cache;
   TrackSize& sz = mSizes[aRange.mStart];
   WritingMode wm = aState.mWM;
+
+  // Check if we need to apply "Automatic Minimum Size" and cache it.
+  if ((sz.mState & TrackSize::eAutoMinSizing) &&
+      aGridItem.ShouldApplyAutoMinSize(wm, mAxis, aPercentageBasis)) {
+    aGridItem.mState[mAxis] |= ItemState::eApplyAutoMinSize;
+  }
+
   // Calculate data for "Automatic Minimum Size" clamping, if needed.
   bool needed = ((sz.mState & TrackSize::eIntrinsicMinSizing) ||
                  aConstraint == SizingConstraint::eNoConstraint) &&
@@ -4197,14 +4189,10 @@ nsGridContainerFrame::Tracks::ResolveIntrinsicSize(
   iter.Reset();
   for (; !iter.AtEnd(); iter.Next()) {
     auto& gridItem = aGridItems[iter.ItemIndex()];
-
-    // Check if we need to apply "Automatic Minimum Size" and cache it.
-    MOZ_ASSERT(!(gridItem.mState[mAxis] & ItemState::eApplyAutoMinSize),
-               "Why is eApplyAutoMinSize set already?");
-    if (gridItem.ShouldApplyAutoMinSize(wm, mAxis, aPercentageBasis)) {
-      gridItem.mState[mAxis] |= ItemState::eApplyAutoMinSize;
-    }
-
+    MOZ_ASSERT(!(gridItem.mState[mAxis] &
+                 (ItemState::eApplyAutoMinSize | ItemState::eIsFlexing |
+                  ItemState::eClampMarginBoxMinSize)),
+               "Why are any of these bits set already?");
     const GridArea& area = gridItem.mArea;
     const LineRange& lineRange = area.*aRange;
     uint32_t span = lineRange.Extent();
@@ -4215,8 +4203,17 @@ nsGridContainerFrame::Tracks::ResolveIntrinsicSize(
         gridItem.mState[mAxis] |= ItemState::eIsFlexing;
       }
     } else {
-      TrackSize::StateBits state = TrackSize::StateBits(0);
-      if (HasIntrinsicButNoFlexSizingInRange(lineRange, &state)) {
+      TrackSize::StateBits state = StateBitsForRange(lineRange);
+
+      // Check if we need to apply "Automatic Minimum Size" and cache it.
+      if ((state & TrackSize::eAutoMinSizing) &&
+          gridItem.ShouldApplyAutoMinSize(wm, mAxis, aPercentageBasis)) {
+        gridItem.mState[mAxis] |= ItemState::eApplyAutoMinSize;
+      }
+
+      if ((state & (TrackSize::eIntrinsicMinSizing |
+                    TrackSize::eIntrinsicMaxSizing)) &&
+          !(state & TrackSize::eFlexMaxSizing)) {
         // Collect data for Step 2.
         maxSpan = std::max(maxSpan, span);
         if (span >= stateBitsPerSpan.Length()) {
@@ -6238,10 +6235,22 @@ nsGridContainerFrame::Reflow(nsPresContext*           aPresContext,
 
       columnLineNames.AppendElement(explicitNames);
     }
+    // Get the explicit names that follow a repeat auto declaration.
+    nsTArray<nsString> colNamesFollowingRepeat;
+    if (gridColTemplate.HasRepeatAuto()) {
+      // The line name list after the repeatAutoIndex holds the line names
+      // for the first explicit line after the repeat auto declaration.
+      uint32_t repeatAutoEnd = gridColTemplate.mRepeatAutoIndex + 1;
+      MOZ_ASSERT(repeatAutoEnd < gridColTemplate.mLineNameLists.Length());
+      colNamesFollowingRepeat.AppendElements(
+        gridColTemplate.mLineNameLists[repeatAutoEnd]);
+    }
+
     ComputedGridLineInfo* columnLineInfo = new ComputedGridLineInfo(
       Move(columnLineNames),
       gridColTemplate.mRepeatAutoLineNameListBefore,
-      gridColTemplate.mRepeatAutoLineNameListAfter);
+      gridColTemplate.mRepeatAutoLineNameListAfter,
+      Move(colNamesFollowingRepeat));
     SetProperty(GridColumnLineInfo(), columnLineInfo);
 
     // Generate row lines next.
@@ -6259,10 +6268,22 @@ nsGridContainerFrame::Reflow(nsPresContext*           aPresContext,
 
       rowLineNames.AppendElement(explicitNames);
     }
+    // Get the explicit names that follow a repeat auto declaration.
+    nsTArray<nsString> rowNamesFollowingRepeat;
+    if (gridRowTemplate.HasRepeatAuto()) {
+      // The line name list after the repeatAutoIndex holds the line names
+      // for the first explicit line after the repeat auto declaration.
+      uint32_t repeatAutoEnd = gridRowTemplate.mRepeatAutoIndex + 1;
+      MOZ_ASSERT(repeatAutoEnd < gridRowTemplate.mLineNameLists.Length());
+      rowNamesFollowingRepeat.AppendElements(
+        gridRowTemplate.mLineNameLists[repeatAutoEnd]);
+    }
+
     ComputedGridLineInfo* rowLineInfo = new ComputedGridLineInfo(
       Move(rowLineNames),
       gridRowTemplate.mRepeatAutoLineNameListBefore,
-      gridRowTemplate.mRepeatAutoLineNameListAfter);
+      gridRowTemplate.mRepeatAutoLineNameListAfter,
+      Move(rowNamesFollowingRepeat));
     SetProperty(GridRowLineInfo(), rowLineInfo);
 
     // Generate area info for explicit areas. Implicit areas are handled

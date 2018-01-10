@@ -333,6 +333,10 @@ private:
   DECL_GFX_PREF(Live, "apz.overscroll.stop_distance_threshold", APZOverscrollStopDistanceThreshold, float, 5.0f);
   DECL_GFX_PREF(Live, "apz.paint_skipping.enabled",            APZPaintSkipping, bool, true);
   DECL_GFX_PREF(Live, "apz.peek_messages.enabled",             APZPeekMessages, bool, true);
+  DECL_GFX_PREF(Live, "apz.pinch_lock.mode",                   APZPinchLockMode, int32_t, 1);
+  DECL_GFX_PREF(Live, "apz.pinch_lock.scroll_lock_threshold",  APZPinchLockScrollLockThreshold, float, 1.0f / 32.0f);
+  DECL_GFX_PREF(Live, "apz.pinch_lock.span_breakout_threshold", APZPinchLockSpanBreakoutThreshold, float, 1.0f / 32.0f);
+  DECL_GFX_PREF(Live, "apz.pinch_lock.span_lock_threshold",    APZPinchLockSpanLockThreshold, float, 1.0f / 32.0f);
   DECL_GFX_PREF(Live, "apz.popups.enabled",                    APZPopupsEnabled, bool, false);
   DECL_GFX_PREF(Live, "apz.printtree",                         APZPrintTree, bool, false);
   DECL_GFX_PREF(Live, "apz.record_checkerboarding",            APZRecordCheckerboarding, bool, false);
@@ -363,8 +367,9 @@ private:
   DECL_GFX_PREF(Live, "dom.vr.controller_trigger_threshold",   VRControllerTriggerThreshold, float, 0.1f);
   DECL_GFX_PREF(Live, "dom.vr.navigation.timeout",             VRNavigationTimeout, int32_t, 1000);
   DECL_GFX_PREF(Once, "dom.vr.oculus.enabled",                 VROculusEnabled, bool, true);
-  DECL_GFX_PREF(Live, "dom.vr.oculus.present.timeout",         VROculusPresentTimeout, int32_t, 10000);
-  DECL_GFX_PREF(Live, "dom.vr.oculus.quit.timeout",            VROculusQuitTimeout, int32_t, 30000);
+  DECL_GFX_PREF(Live, "dom.vr.oculus.invisible.enabled",       VROculusInvisibleEnabled, bool, true);
+  DECL_GFX_PREF(Live, "dom.vr.oculus.present.timeout",         VROculusPresentTimeout, int32_t, 500);
+  DECL_GFX_PREF(Live, "dom.vr.oculus.quit.timeout",            VROculusQuitTimeout, int32_t, 10000);
   DECL_GFX_PREF(Once, "dom.vr.openvr.enabled",                 VROpenVREnabled, bool, false);
   DECL_GFX_PREF(Once, "dom.vr.osvr.enabled",                   VROSVREnabled, bool, false);
   DECL_GFX_PREF(Live, "dom.vr.controller.enumerate.interval",  VRControllerEnumerateInterval, int32_t, 1000);
@@ -548,7 +553,6 @@ private:
   DECL_OVERRIDE_PREF(Live, "layers.advanced.outline-layers",          LayersAllowOutlineLayers, gfxPrefs::OverrideBase_WebRender());
   DECL_GFX_PREF(Live, "layers.advanced.solid-color",                  LayersAllowSolidColorLayers, bool, false);
   DECL_GFX_PREF(Live, "layers.advanced.table",                        LayersAllowTable, bool, false);
-  DECL_OVERRIDE_PREF(Live, "layers.advanced.text-layers",             LayersAllowTextLayers, gfxPrefs::OverrideBase_WebRender());
   DECL_GFX_PREF(Once, "layers.amd-switchable-gfx.enabled",     LayersAMDSwitchableGfxEnabled, bool, false);
   DECL_GFX_PREF(Once, "layers.async-pan-zoom.enabled",         AsyncPanZoomEnabledDoNotUseDirectly, bool, true);
   DECL_GFX_PREF(Once, "layers.async-pan-zoom.separate-event-thread", AsyncPanZoomSeparateEventThread, bool, false);
@@ -655,6 +659,7 @@ private:
 
   DECL_GFX_PREF(Live, "layout.display-list.build-twice",       LayoutDisplayListBuildTwice, bool, false);
   DECL_GFX_PREF(Live, "layout.display-list.retain",            LayoutRetainDisplayList, bool, true);
+  DECL_GFX_PREF(Live, "layout.display-list.retain.chrome",     LayoutRetainDisplayListChrome, bool, false);
   DECL_GFX_PREF(Live, "layout.display-list.retain.verify",     LayoutVerifyRetainDisplayList, bool, false);
   DECL_GFX_PREF(Live, "layout.display-list.rebuild-frame-limit", LayoutRebuildFrameLimit, uint32_t, 500);
   DECL_GFX_PREF(Live, "layout.display-list.dump",              LayoutDumpDisplayList, bool, false);
@@ -745,11 +750,12 @@ private:
   DECL_GFX_PREF(Once, "webgl.force-layers-readback",           WebGLForceLayersReadback, bool, false);
   DECL_GFX_PREF(Live, "webgl.force-index-validation",          WebGLForceIndexValidation, int32_t, 0);
   DECL_GFX_PREF(Live, "webgl.lose-context-on-memory-pressure", WebGLLoseContextOnMemoryPressure, bool, false);
-  DECL_GFX_PREF(Once, "webgl.max-contexts",                    WebGLMaxContexts, uint32_t, 32);
-  DECL_GFX_PREF(Once, "webgl.max-contexts-per-principal",      WebGLMaxContextsPerPrincipal, uint32_t, 16);
+  DECL_GFX_PREF(Live, "webgl.max-contexts",                    WebGLMaxContexts, uint32_t, 32);
+  DECL_GFX_PREF(Live, "webgl.max-contexts-per-principal",      WebGLMaxContextsPerPrincipal, uint32_t, 16);
   DECL_GFX_PREF(Live, "webgl.max-warnings-per-context",        WebGLMaxWarningsPerContext, uint32_t, 32);
   DECL_GFX_PREF(Live, "webgl.min_capability_mode",             WebGLMinCapabilityMode, bool, false);
   DECL_GFX_PREF(Live, "webgl.msaa-force",                      WebGLForceMSAA, bool, false);
+  DECL_GFX_PREF(Live, "webgl.msaa-samples",                    WebGLMsaaSamples, uint32_t, 4);
   DECL_GFX_PREF(Live, "webgl.prefer-16bpp",                    WebGLPrefer16bpp, bool, false);
   DECL_GFX_PREF(Live, "webgl.restore-context-when-visible",    WebGLRestoreWhenVisible, bool, true);
   DECL_GFX_PREF(Live, "webgl.allow-immediate-queries",         WebGLImmediateQueries, bool, false);

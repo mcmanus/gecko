@@ -89,18 +89,16 @@ nsDNSRecord::GetCanonicalName(nsACString &result)
     NS_ENSURE_TRUE(mHostRecord->flags & nsHostResolver::RES_CANON_NAME,
                    NS_ERROR_NOT_AVAILABLE);
 
-    // if the record is for an IP address literal, then the canonical
-    // host name is the IP address literal.
-    const char *cname;
-    {
-        MutexAutoLock lock(mHostRecord->addr_info_lock);
-        if (mHostRecord->addr_info)
-            cname = mHostRecord->addr_info->mCanonicalName ?
-                mHostRecord->addr_info->mCanonicalName :
-                mHostRecord->addr_info->mHostName;
-        else
-            cname = mHostRecord->host;
+    MutexAutoLock lock(mHostRecord->addr_info_lock);
+    if (mHostRecord->addr_info) {
+        const char* cname = mHostRecord->addr_info->mCanonicalName ?
+            mHostRecord->addr_info->mCanonicalName :
+            mHostRecord->addr_info->mHostName;
         result.Assign(cname);
+    } else {
+        // if the record is for an IP address literal, then the canonical
+        // host name is the IP address literal.
+        result = mHostRecord->host;
     }
     return NS_OK;
 }
@@ -309,8 +307,6 @@ nsDNSRecord::ReportUnusable(uint16_t aPort)
 class nsDNSAsyncRequest final : public nsResolveHostCallback
                               , public nsICancelable
 {
-    ~nsDNSAsyncRequest() = default;
-
 public:
     NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSICANCELABLE
@@ -330,7 +326,7 @@ public:
         , mAF(af)
         , mNetworkInterface(netInterface) {}
 
-    void OnLookupComplete(nsHostResolver *, nsHostRecord *, nsresult) override;
+    void OnResolveHostComplete(nsHostResolver *, nsHostRecord *, nsresult) override;
     // Returns TRUE if the DNS listener arg is the same as the member listener
     // Used in Cancellations to remove DNS requests associated with a
     // particular hostname and nsIDNSListener
@@ -345,12 +341,16 @@ public:
     uint16_t                 mFlags;
     uint16_t                 mAF;
     nsCString                mNetworkInterface;
+private:
+    virtual ~nsDNSAsyncRequest() = default;
 };
 
+NS_IMPL_ISUPPORTS(nsDNSAsyncRequest, nsICancelable)
+
 void
-nsDNSAsyncRequest::OnLookupComplete(nsHostResolver *resolver,
-                                    nsHostRecord   *hostRecord,
-                                    nsresult        status)
+nsDNSAsyncRequest::OnResolveHostComplete(nsHostResolver *resolver,
+                                         nsHostRecord   *hostRecord,
+                                         nsresult        status)
 {
     // need to have an owning ref when we issue the callback to enable
     // the caller to be able to addref/release multiple times without
@@ -363,10 +363,6 @@ nsDNSAsyncRequest::OnLookupComplete(nsHostResolver *resolver,
 
     mListener->OnLookupComplete(this, rec, status);
     mListener = nullptr;
-
-    // release the reference to ourselves that was added before we were
-    // handed off to the host resolver.
-    NS_RELEASE_THIS();
 }
 
 bool
@@ -394,8 +390,6 @@ nsDNSAsyncRequest::SizeOfIncludingThis(MallocSizeOf mallocSizeOf) const
     return n;
 }
 
-NS_IMPL_ISUPPORTS(nsDNSAsyncRequest, nsICancelable)
-
 NS_IMETHODIMP
 nsDNSAsyncRequest::Cancel(nsresult reason)
 {
@@ -407,16 +401,17 @@ nsDNSAsyncRequest::Cancel(nsresult reason)
 
 //-----------------------------------------------------------------------------
 
-class nsDNSSyncRequest : public nsResolveHostCallback
+class nsDNSSyncRequest
+    : public nsResolveHostCallback
 {
+    NS_DECL_THREADSAFE_ISUPPORTS
 public:
     explicit nsDNSSyncRequest(PRMonitor *mon)
         : mDone(false)
         , mStatus(NS_OK)
         , mMonitor(mon) {}
-    virtual ~nsDNSSyncRequest() = default;
 
-    void OnLookupComplete(nsHostResolver *, nsHostRecord *, nsresult) override;
+    void OnResolveHostComplete(nsHostResolver *, nsHostRecord *, nsresult) override;
     bool EqualsAsyncListener(nsIDNSListener *aListener) override;
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf) const override;
 
@@ -425,13 +420,17 @@ public:
     RefPtr<nsHostRecord> mHostRecord;
 
 private:
+    virtual ~nsDNSSyncRequest() = default;
+
     PRMonitor             *mMonitor;
 };
 
+NS_IMPL_ISUPPORTS0(nsDNSSyncRequest)
+
 void
-nsDNSSyncRequest::OnLookupComplete(nsHostResolver *resolver,
-                                   nsHostRecord   *hostRecord,
-                                   nsresult        status)
+nsDNSSyncRequest::OnResolveHostComplete(nsHostResolver *resolver,
+                                        nsHostRecord   *hostRecord,
+                                        nsresult        status)
 {
     // store results, and wake up nsDNSService::Resolve to process results.
     PR_EnterMonitor(mMonitor);
@@ -817,7 +816,7 @@ NS_IMETHODIMP
 nsDNSService::AsyncResolveExtendedNative(const nsACString        &aHostname,
                                          uint32_t                 flags,
                                          const nsACString        &aNetworkInterface,
-                                         nsIDNSListener          *listener,
+                                         nsIDNSListener          *aListener,
                                          nsIEventTarget          *target_,
                                          const OriginAttributes  &aOriginAttributes,
                                          nsICancelable          **result)
@@ -827,6 +826,7 @@ nsDNSService::AsyncResolveExtendedNative(const nsACString        &aHostname,
     RefPtr<nsHostResolver> res;
     nsCOMPtr<nsIIDNService> idn;
     nsCOMPtr<nsIEventTarget> target = target_;
+    nsCOMPtr<nsIDNSListener> listener = aListener;
     bool localDomain = false;
     {
         MutexAutoLock lock(mLock);
@@ -869,21 +869,16 @@ nsDNSService::AsyncResolveExtendedNative(const nsACString        &aHostname,
 
     uint16_t af = GetAFForLookup(hostname, flags);
 
-    auto *req =
+    MOZ_ASSERT(listener);
+    RefPtr<nsDNSAsyncRequest> req =
         new nsDNSAsyncRequest(res, hostname, aOriginAttributes, listener, flags, af,
                               aNetworkInterface);
     if (!req)
         return NS_ERROR_OUT_OF_MEMORY;
-    NS_ADDREF(*result = req);
 
-    // addref for resolver; will be released when OnLookupComplete is called.
-    NS_ADDREF(req);
     rv = res->ResolveHost(req->mHost.get(), req->mOriginAttributes, flags, af,
                           req->mNetworkInterface.get(), req);
-    if (NS_FAILED(rv)) {
-        NS_RELEASE(req);
-        NS_RELEASE(*result);
-    }
+    req.forget(result);
     return rv;
 }
 
@@ -1074,25 +1069,23 @@ nsDNSService::ResolveInternal(const nsACString        &aHostname,
         return NS_ERROR_OUT_OF_MEMORY;
 
     PR_EnterMonitor(mon);
-    nsDNSSyncRequest syncReq(mon);
+    RefPtr<nsDNSSyncRequest> syncReq = new nsDNSSyncRequest(mon);
 
     uint16_t af = GetAFForLookup(hostname, flags);
 
-    rv = res->ResolveHost(hostname.get(), aOriginAttributes, flags, af, "", &syncReq);
+    rv = res->ResolveHost(hostname.get(), aOriginAttributes, flags, af, "", syncReq);
     if (NS_SUCCEEDED(rv)) {
         // wait for result
-        while (!syncReq.mDone)
+        while (!syncReq->mDone) {
             PR_Wait(mon, PR_INTERVAL_NO_TIMEOUT);
+        }
 
-        if (NS_FAILED(syncReq.mStatus))
-            rv = syncReq.mStatus;
-        else {
-            NS_ASSERTION(syncReq.mHostRecord, "no host record");
-            auto *rec = new nsDNSRecord(syncReq.mHostRecord);
-            if (!rec)
-                rv = NS_ERROR_OUT_OF_MEMORY;
-            else
-                NS_ADDREF(*result = rec);
+        if (NS_FAILED(syncReq->mStatus)) {
+            rv = syncReq->mStatus;
+        } else {
+            NS_ASSERTION(syncReq->mHostRecord, "no host record");
+            RefPtr<nsDNSRecord> rec = new nsDNSRecord(syncReq->mHostRecord);
+            rec.forget(result);
         }
     }
 

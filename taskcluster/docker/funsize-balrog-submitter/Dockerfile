@@ -1,4 +1,4 @@
-FROM ubuntu:vivid
+FROM ubuntu:xenial
 MAINTAINER Rail Aliiev <rail@mozilla.com>
 
 # Required software

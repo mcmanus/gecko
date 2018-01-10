@@ -12,6 +12,10 @@
 #include "mozilla/dom/ServiceWorkerDescriptor.h"
 #include "mozilla/Variant.h"
 
+#ifdef XP_WIN
+#undef PostMessage
+#endif
+
 class nsIDocShell;
 class nsISerialEventTarget;
 class nsPIDOMWindowInner;
@@ -19,11 +23,17 @@ class nsPIDOMWindowInner;
 namespace mozilla {
 namespace dom {
 
+class ClientClaimArgs;
 class ClientControlledArgs;
+class ClientFocusArgs;
+class ClientGetInfoAndStateArgs;
 class ClientManager;
+class ClientPostMessageArgs;
 class ClientSourceChild;
 class ClientSourceConstructorArgs;
 class ClientSourceExecutionReadyArgs;
+class ClientState;
+class ClientWindowState;
 class PClientManagerChild;
 
 namespace workers {
@@ -52,6 +62,12 @@ class ClientSource final : public ClientThing<ClientSourceChild>
 
   ClientInfo mClientInfo;
   Maybe<ServiceWorkerDescriptor> mController;
+
+  // Contained a de-duplicated list of ServiceWorker scope strings
+  // for which this client has called navigator.serviceWorker.register().
+  // Typically there will be either be zero or one scope strings, but
+  // there could be more.  We keep this list until the client is closed.
+  AutoTArray<nsCString, 1> mRegisteringScopeList;
 
   void
   Shutdown();
@@ -132,6 +148,15 @@ public:
   GetController() const;
 
   RefPtr<ClientOpPromise>
+  Focus(const ClientFocusArgs& aArgs);
+
+  RefPtr<ClientOpPromise>
+  PostMessage(const ClientPostMessageArgs& aArgs);
+
+  RefPtr<ClientOpPromise>
+  Claim(const ClientClaimArgs& aArgs);
+
+  RefPtr<ClientOpPromise>
   GetInfoAndState(const ClientGetInfoAndStateArgs& aArgs);
 
   nsresult
@@ -144,6 +169,12 @@ public:
   Traverse(nsCycleCollectionTraversalCallback& aCallback,
            const char* aName,
            uint32_t aFlags);
+
+  void
+  NoteCalledRegisterForServiceWorkerScope(const nsACString& aScope);
+
+  bool
+  CalledRegisterForServiceWorkerScope(const nsACString& aScope);
 };
 
 inline void

@@ -43,6 +43,7 @@
 #include "mozilla/dom/WakeLock.h"
 #include "mozilla/dom/power/PowerManagerService.h"
 #include "nsIDocShellTreeOwner.h"
+#include "nsIDocumentLoader.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIPermissionManager.h"
 #include "nsIScriptContext.h"
@@ -235,7 +236,6 @@
 #include "mozilla/dom/FunctionBinding.h"
 #include "mozilla/dom/HashChangeEvent.h"
 #include "mozilla/dom/IntlUtils.h"
-#include "mozilla/dom/MozSelfSupportBinding.h"
 #include "mozilla/dom/PopStateEvent.h"
 #include "mozilla/dom/PopupBlockedEvent.h"
 #include "mozilla/dom/PrimitiveConversions.h"
@@ -260,6 +260,7 @@
 
 #include "mozilla/dom/ClientManager.h"
 #include "mozilla/dom/ClientSource.h"
+#include "mozilla/dom/ClientState.h"
 
 // Apple system headers seem to have a check() macro.  <sigh>
 #ifdef check
@@ -1211,8 +1212,6 @@ nsGlobalWindowInner::CleanUp()
 
   mExternal = nullptr;
 
-  mMozSelfSupport = nullptr;
-
   mPerformance = nullptr;
 
 #ifdef MOZ_WEBSPEECH
@@ -1508,13 +1507,14 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGlobalWindowInner)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAudioWorklet)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPaintWorklet)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mExternal)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMozSelfSupport)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mIntlUtils)
 
   tmp->TraverseHostObjectURIs(cb);
 
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mChromeFields.mMessageManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mChromeFields.mGroupMessageManagers)
+
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPendingPromises)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGlobalWindowInner)
@@ -1586,7 +1586,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGlobalWindowInner)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mAudioWorklet)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mPaintWorklet)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mExternal)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mMozSelfSupport)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mIntlUtils)
 
   tmp->UnlinkHostObjectURIs();
@@ -1608,6 +1607,8 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGlobalWindowInner)
     tmp->DisconnectAndClearGroupMessageManagers();
     NS_IMPL_CYCLE_COLLECTION_UNLINK(mChromeFields.mGroupMessageManagers)
   }
+
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mPendingPromises)
 
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
@@ -1785,11 +1786,34 @@ nsGlobalWindowInner::EnsureClientSource()
     }
   }
 
+  // Verify the final ClientSource principal matches the final document
+  // principal.  The ClientChannelHelper handles things like network
+  // redirects, but there are other ways the document principal can change.
+  // For example, if something sets the nsIChannel.owner property, then
+  // the final channel principal can be anything.  Unfortunately there is
+  // no good way to detect this until after the channel completes loading.
+  //
+  // For now we handle this just by reseting the ClientSource.  This will
+  // result in a new ClientSource with the correct principal being created.
+  // To APIs like ServiceWorker and Clients API it will look like there was
+  // an initial content page created that was then immediately replaced.
+  // This is pretty close to what we are actually doing.
+  if (mClientSource) {
+    nsCOMPtr<nsIPrincipal> clientPrincipal(mClientSource->Info().GetPrincipal());
+    if (!clientPrincipal || !clientPrincipal->Equals(mDoc->NodePrincipal())) {
+      mClientSource.reset();
+    }
+  }
+
   // If we don't have a reserved client or an initial client, then create
   // one now.  This can happen in certain cases where we avoid preallocating
   // the client in the docshell.  This mainly occurs in situations where
   // the principal is not clearly inherited from the parent; e.g. sandboxed
   // iframes, window.open(), etc.
+  //
+  // We also do this late ClientSource creation if the final document ended
+  // up with a different principal.
+  //
   // TODO: We may not be marking initial about:blank documents created
   //       this way as controlled by a service worker properly.  The
   //       controller should be coming from the same place as the inheritted
@@ -1801,17 +1825,25 @@ nsGlobalWindowInner::EnsureClientSource()
     mClientSource = ClientManager::CreateSource(ClientType::Window,
                                                 EventTargetFor(TaskCategory::Other),
                                                 mDoc->NodePrincipal());
-    if (NS_WARN_IF(!mClientSource)) {
-      return NS_ERROR_FAILURE;
-    }
+    MOZ_DIAGNOSTIC_ASSERT(mClientSource);
     newClientSource = true;
+
+    // Note, we don't apply the loadinfo controller below if we create
+    // the ClientSource here.
   }
 
   // The load may have started controlling the Client as well.  If
   // so, mark it as controlled immediately here.  The actor may
   // or may not have been notified by the parent side about being
   // controlled yet.
-  if (loadInfo) {
+  //
+  // Note: We should be careful not to control a client that was created late.
+  //       These clients were not seen by the ServiceWorkerManager when it
+  //       marked the LoadInfo controlled and it won't know about them.  Its
+  //       also possible we are creating the client late due to the final
+  //       principal changing and these clients should definitely not be
+  //       controlled by a service worker with a different principal.
+  else if (loadInfo) {
     const Maybe<ServiceWorkerDescriptor> controller = loadInfo->GetController();
     if (controller.isSome()) {
       mClientSource->SetController(controller.ref());
@@ -1833,9 +1865,7 @@ nsGlobalWindowInner::EnsureClientSource()
         ClientManager::CreateSource(ClientType::Window,
                                     EventTargetFor(TaskCategory::Other),
                                     mDoc->NodePrincipal());
-      if (NS_WARN_IF(!mClientSource)) {
-        return NS_ERROR_FAILURE;
-      }
+      MOZ_DIAGNOSTIC_ASSERT(mClientSource);
       newClientSource = true;
     }
   }
@@ -1953,7 +1983,7 @@ nsGlobalWindowInner::GetEventTargetParent(EventChainPreVisitor& aVisitor)
     }
   }
 
-  aVisitor.mParentTarget = GetParentTarget();
+  aVisitor.SetParentTarget(GetParentTarget(), true);
 
   // Handle 'active' event.
   if (!mIdleObservers.IsEmpty() &&
@@ -2322,10 +2352,120 @@ nsPIDOMWindowInner::GetClientInfo() const
   return Move(nsGlobalWindowInner::Cast(this)->GetClientInfo());
 }
 
+Maybe<ClientState>
+nsPIDOMWindowInner::GetClientState() const
+{
+  return Move(nsGlobalWindowInner::Cast(this)->GetClientState());
+}
+
 Maybe<ServiceWorkerDescriptor>
 nsPIDOMWindowInner::GetController() const
 {
   return Move(nsGlobalWindowInner::Cast(this)->GetController());
+}
+
+void
+nsPIDOMWindowInner::NoteCalledRegisterForServiceWorkerScope(const nsACString& aScope)
+{
+  nsGlobalWindowInner::Cast(this)->NoteCalledRegisterForServiceWorkerScope(aScope);
+}
+
+bool
+nsGlobalWindowInner::ShouldReportForServiceWorkerScope(const nsAString& aScope)
+{
+  bool result = false;
+
+  nsPIDOMWindowOuter* topOuter = GetScriptableTop();
+  NS_ENSURE_TRUE(topOuter, false);
+
+  nsGlobalWindowInner* topInner =
+    nsGlobalWindowInner::Cast(topOuter->GetCurrentInnerWindow());
+  NS_ENSURE_TRUE(topInner, false);
+
+  topInner->ShouldReportForServiceWorkerScopeInternal(NS_ConvertUTF16toUTF8(aScope),
+                                                      &result);
+  return result;
+}
+
+nsGlobalWindowInner::CallState
+nsGlobalWindowInner::ShouldReportForServiceWorkerScopeInternal(const nsACString& aScope,
+                                                               bool* aResultOut)
+{
+  MOZ_DIAGNOSTIC_ASSERT(aResultOut);
+
+  // First check to see if this window is controlled.  If so, then we have
+  // found a match and are done.
+  const Maybe<ServiceWorkerDescriptor> swd = GetController();
+  if (swd.isSome() && swd.ref().Scope() == aScope) {
+    *aResultOut = true;
+    return CallState::Stop;
+  }
+
+  // Next, check to see if this window has called navigator.serviceWorker.register()
+  // for this scope.  If so, then treat this as a match so console reports
+  // appear in the devtools console.
+  if (mClientSource && mClientSource->CalledRegisterForServiceWorkerScope(aScope)) {
+    *aResultOut = true;
+    return CallState::Stop;
+  }
+
+  // Finally check the current docshell nsILoadGroup to see if there are any
+  // outstanding navigation requests.  If so, match the scope against the
+  // channel's URL.  We want to show console reports during the FetchEvent
+  // intercepting the navigation itself.
+  nsCOMPtr<nsIDocumentLoader> loader(do_QueryInterface(GetDocShell()));
+  if (loader) {
+    nsCOMPtr<nsILoadGroup> loadgroup;
+    Unused << loader->GetLoadGroup(getter_AddRefs(loadgroup));
+    if (loadgroup) {
+      nsCOMPtr<nsISimpleEnumerator> iter;
+      Unused << loadgroup->GetRequests(getter_AddRefs(iter));
+      if (iter) {
+        nsCOMPtr<nsISupports> tmp;
+        bool hasMore = true;
+        // Check each network request in the load group.
+        while (NS_SUCCEEDED(iter->HasMoreElements(&hasMore)) && hasMore) {
+          iter->GetNext(getter_AddRefs(tmp));
+          nsCOMPtr<nsIChannel> loadingChannel(do_QueryInterface(tmp));
+          // Ignore subresource requests.  Logging for a subresource
+          // FetchEvent should be handled above since the client is
+          // already controlled.
+          if (!loadingChannel ||
+              !nsContentUtils::IsNonSubresourceRequest(loadingChannel)) {
+            continue;
+          }
+          nsCOMPtr<nsIURI> loadingURL;
+          Unused << loadingChannel->GetURI(getter_AddRefs(loadingURL));
+          if (!loadingURL) {
+            continue;
+          }
+          nsAutoCString loadingSpec;
+          Unused << loadingURL->GetSpec(loadingSpec);
+          // Perform a simple substring comparison to match the scope
+          // against the channel URL.
+          if (StringBeginsWith(loadingSpec, aScope)) {
+            *aResultOut = true;
+            return CallState::Stop;
+          }
+        }
+      }
+    }
+  }
+
+  // The current window doesn't care about this service worker, but maybe
+  // one of our child frames does.
+  return CallOnChildren(&nsGlobalWindowInner::ShouldReportForServiceWorkerScopeInternal,
+                        aScope, aResultOut);
+}
+
+void
+nsGlobalWindowInner::NoteCalledRegisterForServiceWorkerScope(const nsACString& aScope)
+{
+  if (!mClientSource) {
+    return;
+  }
+
+  mClientSource->NoteCalledRegisterForServiceWorkerScope(aScope);
 }
 
 void
@@ -2587,21 +2727,6 @@ nsGlobalWindowInner::GetContent(JSContext* aCx,
 {
   FORWARD_TO_OUTER_OR_THROW(GetContentOuter,
                             (aCx, aRetval, aCallerType, aError), aError, );
-}
-
-MozSelfSupport*
-nsGlobalWindowInner::GetMozSelfSupport(ErrorResult& aError)
-{
-  if (mMozSelfSupport) {
-    return mMozSelfSupport;
-  }
-
-  // We're called from JS and want to use out existing JSContext (and,
-  // importantly, its compartment!) here.
-  AutoJSContext cx;
-  GlobalObject global(cx, FastGetGlobalJSObject());
-  mMozSelfSupport = MozSelfSupport::Constructor(global, cx, aError);
-  return mMozSelfSupport;
 }
 
 BarProp*
@@ -4947,6 +5072,19 @@ nsGlobalWindowInner::GetIndexedDB(ErrorResult& aError)
   return mIndexedDB;
 }
 
+void
+nsGlobalWindowInner::AddPendingPromise(mozilla::dom::Promise* aPromise)
+{
+  mPendingPromises.AppendElement(aPromise);
+}
+
+void
+nsGlobalWindowInner::RemovePendingPromise(mozilla::dom::Promise* aPromise)
+{
+  DebugOnly<bool> foundIt = mPendingPromises.RemoveElement(aPromise);
+  MOZ_ASSERT(foundIt, "tried to remove a non-existent element from mPendingPromises");
+}
+
 //*****************************************************************************
 // nsGlobalWindowInner::nsIInterfaceRequestor
 //*****************************************************************************
@@ -6114,16 +6252,18 @@ nsGlobalWindowInner::SyncStateFromParentWindow()
   }
 }
 
-template<typename Method>
-void
-nsGlobalWindowInner::CallOnChildren(Method aMethod)
+template<typename Method, typename... Args>
+nsGlobalWindowInner::CallState
+nsGlobalWindowInner::CallOnChildren(Method aMethod, Args& ...aArgs)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(IsCurrentInnerWindow());
 
+  CallState state = CallState::Continue;
+
   nsCOMPtr<nsIDocShell> docShell = GetDocShell();
   if (!docShell) {
-    return;
+    return state;
   }
 
   int32_t childCount = 0;
@@ -6149,8 +6289,19 @@ nsGlobalWindowInner::CallOnChildren(Method aMethod)
       continue;
     }
 
-    (inner->*aMethod)();
+    // Call the child method using our helper CallChild() template method.
+    // This allows us to handle both void returning methods and methods
+    // that return CallState explicitly.  For void returning methods we
+    // assume CallState::Continue.
+    typedef decltype((inner->*aMethod)(aArgs...)) returnType;
+    state = CallChild<returnType>(inner, aMethod, aArgs...);
+
+    if (state == CallState::Stop) {
+      return state;
+    }
   }
+
+  return state;
 }
 
 Maybe<ClientInfo>
@@ -6162,6 +6313,21 @@ nsGlobalWindowInner::GetClientInfo() const
     clientInfo.emplace(mClientSource->Info());
   }
   return Move(clientInfo);
+}
+
+Maybe<ClientState>
+nsGlobalWindowInner::GetClientState() const
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  Maybe<ClientState> clientState;
+  if (mClientSource) {
+    ClientState state;
+    nsresult rv = mClientSource->SnapshotState(&state);
+    if (NS_SUCCEEDED(rv)) {
+      clientState.emplace(state);
+    }
+  }
+  return Move(clientState);
 }
 
 Maybe<ServiceWorkerDescriptor>
@@ -6736,6 +6902,9 @@ nsGlobalWindowInner::AddSizeOfIncludingThis(nsWindowSizes& aWindowSizes) const
     aWindowSizes.mDOMPerformanceResourceEntries =
       mPerformance->SizeOfResourceEntries(aWindowSizes.mState.mMallocSizeOf);
   }
+
+  aWindowSizes.mDOMOtherSize +=
+    mPendingPromises.ShallowSizeOfExcludingThis(aWindowSizes.mState.mMallocSizeOf);
 }
 
 void
@@ -7276,7 +7445,7 @@ nsGlobalWindowInner::Orientation(CallerType aCallerType) const
 }
 #endif
 
-Console*
+already_AddRefed<Console>
 nsGlobalWindowInner::GetConsole(ErrorResult& aRv)
 {
   if (!mConsole) {
@@ -7286,7 +7455,8 @@ nsGlobalWindowInner::GetConsole(ErrorResult& aRv)
     }
   }
 
-  return mConsole;
+  RefPtr<Console> console = mConsole;
+  return console.forget();
 }
 
 bool

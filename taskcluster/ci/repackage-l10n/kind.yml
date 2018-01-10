@@ -8,11 +8,13 @@ transforms:
    - taskgraph.transforms.repackage_l10n:transforms
    - taskgraph.transforms.name_sanity:transforms
    - taskgraph.transforms.repackage:transforms
+   - taskgraph.transforms.use_toolchains:transforms
    - taskgraph.transforms.job:transforms
    - taskgraph.transforms.task:transforms
 
 kind-dependencies:
    - nightly-l10n-signing
+   - toolchain
 
 only-for-build-platforms:
    - linux-nightly/opt
@@ -20,3 +22,8 @@ only-for-build-platforms:
    - macosx64-nightly/opt
    - win32-nightly/opt
    - win64-nightly/opt
+   - linux-devedition-nightly/opt
+   - linux64-devedition-nightly/opt
+   - macosx64-devedition-nightly/opt
+   - win32-devedition-nightly/opt
+   - win64-devedition-nightly/opt

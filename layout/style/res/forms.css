@@ -107,7 +107,7 @@ input {
   text-indent: 0;
   -moz-user-select: text;
   text-shadow: none;
-  overflow-clip-box: content-box;
+  overflow-clip-box: padding-box content-box;
 }
 
 input > .anonymous-div,
@@ -185,6 +185,7 @@ input > .anonymous-div.inherit-overflow {
 textarea > .anonymous-div.inherit-scroll-behavior,
 input > .anonymous-div.inherit-scroll-behavior {
   scroll-behavior: inherit;
+  overscroll-behavior: inherit;
 }
 
 input::placeholder,

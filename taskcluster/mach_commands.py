@@ -51,7 +51,9 @@ class ShowTaskGraphSubCommand(SubCommand):
                             "index (a.k.a. optimize the graph)"),
             CommandArgument('--tasks-regex', '--tasks', default=None,
                             help="only return tasks with labels matching this regular "
-                            "expression.")
+                            "expression."),
+            CommandArgument('-F', '--fast', dest='fast', default=False, action='store_true',
+                            help="enable fast task generation for local debugging.")
 
         ]
         for arg in args:
@@ -316,6 +318,9 @@ class MachCommands(MachCommandBase):
         import taskgraph.parameters
         import taskgraph.target_tasks
         import taskgraph.generator
+        import taskgraph
+        if options['fast']:
+            taskgraph.fast = True
 
         try:
             self.setup_logging(quiet=options['quiet'], verbose=options['verbose'])
@@ -412,9 +417,9 @@ class TaskClusterImagesProvider(object):
         from taskgraph.docker import build_image, build_context
         try:
             if context_only is None:
-                build_image(image_name)
+                build_image(image_name, os.environ)
             else:
-                build_context(image_name, context_only)
+                build_context(image_name, context_only, os.environ)
         except Exception:
             traceback.print_exc()
             sys.exit(1)

@@ -10,6 +10,7 @@
 #include "OpusDecoder.h"
 #include "SourceBufferList.h"
 #include "VorbisDecoder.h"
+#include "VideoUtils.h"
 #include "nsPrintfCString.h"
 
 #include <algorithm>
@@ -66,6 +67,7 @@ MediaSourceDemuxer::AddSizeOfResources(
 
   nsresult rv = GetTaskQueue()->Dispatch(task.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 void MediaSourceDemuxer::NotifyInitDataArrived()
@@ -82,6 +84,7 @@ void MediaSourceDemuxer::NotifyInitDataArrived()
     });
   nsresult rv = GetTaskQueue()->Dispatch(task.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 bool
@@ -144,6 +147,7 @@ MediaSourceDemuxer::GetTrackDemuxer(TrackType aType, uint32_t aTrackNumber)
   }
   RefPtr<MediaSourceTrackDemuxer> e =
     new MediaSourceTrackDemuxer(this, aType, manager);
+  DDLINKCHILD("track demuxer", e.get());
   mDemuxers.AppendElement(e);
   return e.forget();
 }
@@ -174,6 +178,7 @@ MediaSourceDemuxer::AttachSourceBuffer(
     aSourceBuffer);
   nsresult rv = GetTaskQueue()->Dispatch(task.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 void
@@ -196,6 +201,7 @@ MediaSourceDemuxer::DetachSourceBuffer(
     aSourceBuffer);
   nsresult rv = GetTaskQueue()->Dispatch(task.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 void
@@ -370,6 +376,7 @@ MediaSourceTrackDemuxer::Reset()
     });
   nsresult rv = mParent->GetTaskQueue()->Dispatch(task.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 nsresult
@@ -411,6 +418,7 @@ MediaSourceTrackDemuxer::BreakCycles()
     });
   nsresult rv = mParent->GetTaskQueue()->Dispatch(task.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 RefPtr<MediaSourceTrackDemuxer::SeekPromise>

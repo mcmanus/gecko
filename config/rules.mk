@@ -591,7 +591,7 @@ endif
 $(HOST_PROGRAM): $(HOST_PROGOBJS) $(HOST_LIBS) $(HOST_EXTRA_DEPS) $(GLOBAL_DEPS)
 	$(REPORT_BUILD)
 ifeq (_WINNT,$(GNU_CC)_$(HOST_OS_ARCH))
-	$(EXPAND_LIBS_EXEC) -- $(LINK) -NOLOGO -OUT:$@ -PDB:$(HOST_PDBFILE) $(HOST_OBJS) $(WIN32_EXE_LDFLAGS) $(HOST_LDFLAGS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
+	$(EXPAND_LIBS_EXEC) -- $(LINKER) -NOLOGO -OUT:$@ -PDB:$(HOST_PDBFILE) $(HOST_OBJS) $(WIN32_EXE_LDFLAGS) $(HOST_LDFLAGS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
 ifdef MSMANIFEST_TOOL
 	@if test -f $@.manifest; then \
 		if test -f '$(srcdir)/$@.manifest'; then \
@@ -650,7 +650,7 @@ endif
 $(HOST_SIMPLE_PROGRAMS): host_%$(HOST_BIN_SUFFIX): host_%.$(OBJ_SUFFIX) $(HOST_LIBS) $(HOST_EXTRA_DEPS) $(GLOBAL_DEPS)
 	$(REPORT_BUILD)
 ifeq (WINNT_,$(HOST_OS_ARCH)_$(GNU_CC))
-	$(EXPAND_LIBS_EXEC) -- $(LINK) -NOLOGO -OUT:$@ -PDB:$(HOST_PDBFILE) $< $(WIN32_EXE_LDFLAGS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
+	$(EXPAND_LIBS_EXEC) -- $(LINKER) -NOLOGO -OUT:$@ -PDB:$(HOST_PDBFILE) $< $(WIN32_EXE_LDFLAGS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
 else
 ifneq (,$(HOST_CPPSRCS)$(USE_HOST_CXX))
 	$(EXPAND_LIBS_EXEC) -- $(HOST_CXX) $(HOST_OUTOPTION)$@ $(HOST_CXX_LDFLAGS) $< $(HOST_LIBS) $(HOST_EXTRA_LIBS)
@@ -799,7 +799,9 @@ endif
 define syms_template
 syms:: $(2)
 $(2): $(1)
+ifdef MOZ_CRASHREPORTER
 	$$(call py_action,dumpsymbols,$$(abspath $$<) $$(abspath $$@))
+endif
 endef
 
 ifndef MOZ_PROFILE_GENERATE
@@ -814,7 +816,15 @@ DUMP_SYMS_TARGETS :=
 endif
 endif
 
+ifdef MOZ_CRASHREPORTER
 $(foreach file,$(DUMP_SYMS_TARGETS),$(eval $(call syms_template,$(file),$(file)_syms.track)))
+else ifneq (,$(and $(LLVM_SYMBOLIZER),$(filter WINNT,$(OS_ARCH)),$(MOZ_AUTOMATION)))
+$(foreach file,$(DUMP_SYMS_TARGETS),$(eval $(call syms_template,$(file),$(addsuffix .pdb,$(basename $(file))))))
+PDB_FILES = $(addsuffix .pdb,$(basename $(DUMP_SYMS_TARGETS)))
+PDB_DEST ?= $(FINAL_TARGET)
+PDB_TARGET = target
+INSTALL_TARGETS += PDB
+endif
 
 cargo_host_flag := --target=$(RUST_HOST_TARGET)
 cargo_target_flag := --target=$(RUST_TARGET)

@@ -1947,18 +1947,6 @@ CanvasRenderingContext2D::TryBasicTarget(RefPtr<gfx::DrawTarget>& aOutDT,
   return true;
 }
 
-int32_t
-CanvasRenderingContext2D::GetWidth() const
-{
-  return mWidth;
-}
-
-int32_t
-CanvasRenderingContext2D::GetHeight() const
-{
-  return mHeight;
-}
-
 NS_IMETHODIMP
 CanvasRenderingContext2D::SetDimensions(int32_t aWidth, int32_t aHeight)
 {
@@ -5426,7 +5414,7 @@ CanvasRenderingContext2D::DrawDirectlyToCanvas(
          ImageRegion::Create(gfxRect(aSrc.x, aSrc.y, aSrc.width, aSrc.height)),
          aImage.mWhichFrame, SamplingFilter::GOOD, Some(svgContext), modifiedFlags, CurrentState().globalAlpha);
 
-  if (result != DrawResult::SUCCESS) {
+  if (result != ImgDrawResult::SUCCESS) {
     NS_WARNING("imgIContainer::Draw failed");
   }
 }

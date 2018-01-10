@@ -784,7 +784,16 @@ function canRunInSafeMode(aAddon) {
 function isDisabledLegacy(addon) {
   return (!AddonSettings.ALLOW_LEGACY_EXTENSIONS &&
           LEGACY_TYPES.has(addon.type) &&
+
+          // Legacy add-ons are allowed in the system location.
           !addon._installLocation.isSystem &&
+
+          // Legacy extensions may be installed temporarily in
+          // non-release builds.
+          !(AppConstants.MOZ_ALLOW_LEGACY_EXTENSIONS &&
+            addon._installLocation.name == KEY_APP_TEMPORARY) &&
+
+          // Properly signed legacy extensions are allowed.
           addon.signedState !== AddonManager.SIGNEDSTATE_PRIVILEGED);
 }
 
@@ -4215,10 +4224,12 @@ this.XPIProvider = {
 
     let principal = Cc["@mozilla.org/systemprincipal;1"].
                     createInstance(Ci.nsIPrincipal);
-    if (!aMultiprocessCompatible && Services.prefs.getBoolPref(PREF_INTERPOSITION_ENABLED, false)) {
-      let interposition = Cc["@mozilla.org/addons/multiprocess-shims;1"].
-        getService(Ci.nsIAddonInterposition);
-      Cu.setAddonInterposition(aId, interposition);
+    if (!aMultiprocessCompatible) {
+      if (Services.prefs.getBoolPref(PREF_INTERPOSITION_ENABLED, false)) {
+        let interposition = Cc["@mozilla.org/addons/multiprocess-shims;1"].
+          getService(Ci.nsIAddonInterposition);
+        Cu.setAddonInterposition(aId, interposition);
+      }
       Cu.allowCPOWsInAddon(aId, true);
     }
 
@@ -6372,7 +6383,7 @@ class BuiltInInstallLocation extends DirectoryInstallLocation {
     let manifest;
     try {
       let url = Services.io.newURI(BUILT_IN_ADDONS_URI);
-      let data = Cu.readURI(url);
+      let data = Cu.readUTF8URI(url);
       manifest = JSON.parse(data);
     } catch (e) {
       logger.warn("List of valid built-in add-ons could not be parsed.", e);

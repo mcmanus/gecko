@@ -18,6 +18,7 @@
 #include "nsILoadGroup.h"
 #include "nsIStringBundle.h"
 #include "nsIURI.h"
+#include "nsMemory.h"
 #include "XPathResult.h"
 #include "txExecutionState.h"
 #include "txMozillaTextOutput.h"
@@ -1261,6 +1262,11 @@ txMozillaXSLTProcessor::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenP
     return XSLTProcessorBinding::Wrap(aCx, this, aGivenProto);
 }
 
+DocGroup*
+txMozillaXSLTProcessor::GetDocGroup() const
+{
+    return mStylesheetDocument ? mStylesheetDocument->GetDocGroup() : nullptr;
+}
 
 /* static */ already_AddRefed<txMozillaXSLTProcessor>
 txMozillaXSLTProcessor::Constructor(const GlobalObject& aGlobal,

@@ -64,6 +64,11 @@ function logThreadEvents(dbg, event) {
   });
 }
 
+async function waitFor(condition) {
+  await BrowserTestUtils.waitForCondition(condition, "waitFor", 10, 500);
+  return condition();
+}
+
 // Wait until an action of `type` is dispatched. This is different
 // then `_afterDispatchDone` because it doesn't wait for async actions
 // to be done/errored. Use this if you want to listen for the "start"
@@ -203,7 +208,7 @@ function waitForSources(dbg, ...sources) {
       }
 
       if (!sourceExists(store.getState())) {
-        return waitForState(dbg, sourceExists);
+        return waitForState(dbg, sourceExists, `source ${url}`);
       }
     })
   );
@@ -308,8 +313,14 @@ function assertDebugLine(dbg, line) {
   );
 
   const debugLine =
-    findElementWithSelector(dbg, ".new-debug-line") ||
-    findElementWithSelector(dbg, ".new-debug-line-error");
+    findElement(dbg, "debugLine") || findElement(dbg, "debugErrorLine");
+
+  is(
+    findAllElements(dbg, "debugLine").length +
+      findAllElements(dbg, "debugErrorLine").length,
+    1,
+    "There is only one line"
+  );
 
   ok(isVisibleInEditor(dbg, debugLine), "debug line is visible");
 
@@ -337,11 +348,22 @@ function assertHighlightLocation(dbg, source, line) {
   source = findSource(dbg, source);
 
   // Check the selected source
-  is(getSelectedSource(getState()).get("url"), source.url);
+  is(
+    getSelectedSource(getState()).get("url"),
+    source.url,
+    "source url is correct"
+  );
 
   // Check the highlight line
   const lineEl = findElement(dbg, "highlightLine");
   ok(lineEl, "Line is highlighted");
+
+  is(
+    findAllElements(dbg, "highlightLine").length,
+    1,
+    "Only 1 line is highlighted"
+  );
+
   ok(isVisibleInEditor(dbg, lineEl), "Highlighted line is visible");
   ok(
     getCM(dbg)
@@ -491,12 +513,15 @@ function clearDebuggerPreferences() {
  * @return {Promise} dbg
  * @static
  */
-function initDebugger(url) {
-  return Task.spawn(function*() {
-    clearDebuggerPreferences();
-    const toolbox = yield openNewTabAndToolbox(EXAMPLE_URL + url, "jsdebugger");
-    return createDebuggerContext(toolbox);
-  });
+async function initDebugger(url) {
+  clearDebuggerPreferences();
+  const toolbox = await openNewTabAndToolbox(EXAMPLE_URL + url, "jsdebugger");
+  return createDebuggerContext(toolbox);
+}
+
+async function initPane(url, pane) {
+  clearDebuggerPreferences();
+  return openNewTabAndToolbox(EXAMPLE_URL + url, pane);
 }
 
 window.resumeTest = undefined;
@@ -578,7 +603,7 @@ function waitForLoadedSources(dbg) {
 function selectSource(dbg, url, line) {
   info(`Selecting source: ${url}`);
   const source = findSource(dbg, url);
-  return dbg.actions.selectSource(source.id, { location: { line } });
+  return dbg.actions.selectLocation({ sourceId: source.id, line });
 }
 
 function closeTab(dbg, url) {
@@ -916,6 +941,8 @@ const selectors = {
   pauseOnExceptions: ".pause-exceptions",
   breakpoint: ".CodeMirror-code > .new-breakpoint",
   highlightLine: ".CodeMirror-code > .highlight-line",
+  debugLine: ".new-debug-line",
+  debugErrorLine: ".new-debug-line-error",
   codeMirror: ".CodeMirror",
   resume: ".resume.active",
   sourceTabs: ".source-tabs",
@@ -933,7 +960,9 @@ const selectors = {
   resultItems: ".result-list .result-item",
   fileMatch: ".managed-tree .result",
   popup: ".popover",
-  tooltip: ".tooltip"
+  tooltip: ".tooltip",
+  outlineItem: i => `.outline-list__element:nth-child(${i})`,
+  outlineItems: ".outline-list__element"
 };
 
 function getSelector(elementName, ...args) {

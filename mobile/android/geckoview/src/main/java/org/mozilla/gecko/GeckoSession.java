@@ -16,6 +16,7 @@ import org.mozilla.gecko.mozglue.JNIObject;
 import org.mozilla.gecko.util.BundleEventListener;
 import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.GeckoBundle;
+import org.mozilla.gecko.util.ThreadUtils;
 
 import android.content.ContentResolver;
 import android.content.Context;
@@ -28,6 +29,7 @@ import android.os.IInterface;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.SystemClock;
+import android.support.annotation.NonNull;
 import android.util.AttributeSet;
 import android.util.DisplayMetrics;
 import android.util.Log;
@@ -64,6 +66,8 @@ public class GeckoSession extends LayerSession
 
     private final EventDispatcher mEventDispatcher =
         new EventDispatcher(mNativeQueue);
+
+    private final TextInputController mTextInput = new TextInputController(this, mNativeQueue);
 
     private final GeckoSessionHandler<ContentListener> mContentHandler =
         new GeckoSessionHandler<ContentListener>(
@@ -320,13 +324,18 @@ public class GeckoSession extends LayerSession
         private synchronized void onTransfer(final EventDispatcher dispatcher) {
             final NativeQueue nativeQueue = dispatcher.getNativeQueue();
             if (mNativeQueue != nativeQueue) {
+                // Set new queue to the same state as the old queue,
+                // then return the old queue to its initial state if applicable,
+                // because the old queue is no longer the active queue.
                 nativeQueue.setState(mNativeQueue.getState());
+                mNativeQueue.checkAndSetState(State.READY, State.INITIAL);
                 mNativeQueue = nativeQueue;
             }
         }
 
         @WrapForJNI(dispatchTo = "proxy")
-        public native void attach(GeckoView view);
+        public native void attachEditable(IGeckoEditableParent parent,
+                                          GeckoEditableChild child);
 
         @WrapForJNI(calledFrom = "gecko")
         private synchronized void onReady() {
@@ -393,11 +402,14 @@ public class GeckoSession extends LayerSession
                         GeckoBundle.class, mSettings.asBundle());
             }
         }
+
+        onWindowChanged();
     }
 
     /* package */ void transferFrom(final GeckoSession session) {
         transferFrom(session.mWindow, session.mSettings);
         session.mWindow = null;
+        session.onWindowChanged();
     }
 
     @Override // Parcelable
@@ -471,6 +483,8 @@ public class GeckoSession extends LayerSession
     }
 
     public void openWindow(final Context appContext) {
+        ThreadUtils.assertOnUiThread();
+
         if (isOpen()) {
             throw new IllegalStateException("Session is open");
         }
@@ -501,23 +515,17 @@ public class GeckoSession extends LayerSession
                 String.class, chromeUri,
                 screenId, isPrivate);
         }
-    }
 
-    public void attachView(final GeckoView view) {
-        if (view == null) {
-            return;
-        }
-
-        if (GeckoThread.isStateAtLeast(GeckoThread.State.PROFILE_READY)) {
-            mWindow.attach(view);
-        } else {
-            GeckoThread.queueNativeCallUntil(GeckoThread.State.PROFILE_READY,
-                    mWindow, "attach",
-                    GeckoView.class, view);
-        }
+        onWindowChanged();
     }
 
     public void closeWindow() {
+        ThreadUtils.assertOnUiThread();
+
+        if (!isOpen()) {
+            throw new IllegalStateException("Session is not open");
+        }
+
         if (GeckoThread.isStateAtLeast(GeckoThread.State.PROFILE_READY)) {
             mWindow.close();
             mWindow.disposeNative();
@@ -529,6 +537,23 @@ public class GeckoSession extends LayerSession
         }
 
         mWindow = null;
+        onWindowChanged();
+    }
+
+    private void onWindowChanged() {
+        if (mWindow != null) {
+            mTextInput.onWindowChanged(mWindow);
+        }
+    }
+
+    /**
+     * Get the TextInputController instance for this session.
+     *
+     * @return TextInputController instance.
+     */
+    public @NonNull TextInputController getTextInputController() {
+        // May be called on any thread.
+        return mTextInput;
     }
 
     /**

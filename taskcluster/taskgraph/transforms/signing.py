@@ -47,7 +47,7 @@ signing_description_schema = Schema({
     }],
 
     # depname is used in taskref's to identify the taskID of the unsigned things
-    Required('depname', default='build'): basestring,
+    Required('depname'): basestring,
 
     # unique label to describe this signing task, defaults to {dep.label}-signing
     Optional('label'): basestring,
@@ -59,16 +59,27 @@ signing_description_schema = Schema({
 
     # Routes specific to this task, if defined
     Optional('routes'): [basestring],
+
+    Optional('shipping-phase'): task_description_schema['shipping-phase'],
+    Optional('shipping-product'): task_description_schema['shipping-product'],
 })
+
+
+@transforms.add
+def set_defaults(config, jobs):
+    for job in jobs:
+        job.setdefault('depname', 'build')
+        yield job
 
 
 @transforms.add
 def validate(config, jobs):
     for job in jobs:
         label = job.get('dependent-task', object).__dict__.get('label', '?no-label?')
-        yield validate_schema(
+        validate_schema(
             signing_description_schema, job,
             "In signing ({!r} kind) task for {!r}:".format(config.kind, label))
+        yield job
 
 
 @transforms.add

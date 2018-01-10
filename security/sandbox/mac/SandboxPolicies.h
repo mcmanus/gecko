@@ -70,18 +70,18 @@ static const char contentSandboxRules[] = R"(
   ; Allow read access to standard system paths.
   (allow file-read*
     (require-all (file-mode #o0004)
-      (require-any (subpath "/Library/Filesystems/NetFSPlugins")
+      (require-any
+        (subpath "/Library/Filesystems/NetFSPlugins")
+        (subpath "/Library/GPUBundles")
         (subpath "/System")
         (subpath "/usr/lib")
         (subpath "/usr/share"))))
 
+  ; Top-level directory metadata access (bug 1404298)
+  (allow file-read-metadata (regex #"^/[^/]+$"))
+
   (allow file-read-metadata
-    (literal "/etc")
-    (literal "/tmp")
-    (literal "/var")
     (literal "/private/etc/localtime")
-    (literal "/home")
-    (literal "/net")
     (regex #"^/private/tmp/KSInstallAction\."))
 
   ; Allow read access to standard special files.
@@ -129,6 +129,7 @@ static const char contentSandboxRules[] = R"(
       (sysctl-name "hw.cpufrequency_max")
       (sysctl-name "hw.l2cachesize")
       (sysctl-name "hw.l3cachesize")
+      (sysctl-name "hw.cachelinesize")
       (sysctl-name "hw.cachelinesize_compat")
       (sysctl-name "hw.tbfrequency_compat")
       (sysctl-name "hw.vectorunit")
@@ -154,15 +155,6 @@ static const char contentSandboxRules[] = R"(
 
   (define (profile-subpath profile-relative-subpath)
     (subpath (string-append profileDir profile-relative-subpath)))
-
-  (define (allow-shared-preferences-read domain)
-        (begin
-          (if (defined? `user-preference-read)
-            (allow user-preference-read (preference-domain domain)))
-          (allow file-read*
-                 (home-literal (string-append "/Library/Preferences/" domain ".plist"))
-                 (home-regex (string-append "/Library/Preferences/ByHost/" (regex-quote domain) "\..*\.plist$")))
-          ))
 
   (define (allow-shared-list domain)
     (allow file-read*
@@ -196,10 +188,10 @@ static const char contentSandboxRules[] = R"(
      (iokit-user-client-class "IOAudioEngineUserClient"))
 
 ; depending on systems, the 1st, 2nd or both rules are necessary
-  (allow-shared-preferences-read "com.apple.HIToolbox")
+  (allow user-preference-read (preference-domain "com.apple.HIToolbox"))
   (allow file-read-data (literal "/Library/Preferences/com.apple.HIToolbox.plist"))
 
-  (allow-shared-preferences-read "com.apple.ATS")
+  (allow user-preference-read (preference-domain "com.apple.ATS"))
   (allow file-read-data (literal "/Library/Preferences/.GlobalPreferences.plist"))
 
   (allow file-read*
@@ -300,8 +292,8 @@ static const char contentSandboxRules[] = R"(
       (profile-subpath "/chrome")))
 
 ; accelerated graphics
-  (allow-shared-preferences-read "com.apple.opengl")
-  (allow-shared-preferences-read "com.nvidia.OpenGL")
+  (allow user-preference-read (preference-domain "com.apple.opengl"))
+  (allow user-preference-read (preference-domain "com.nvidia.OpenGL"))
   (allow mach-lookup
       (global-name "com.apple.cvmsServ"))
   (allow iokit-open

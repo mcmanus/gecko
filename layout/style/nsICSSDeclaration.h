@@ -33,6 +33,11 @@
 
 class nsINode;
 class nsIPrincipal;
+namespace mozilla {
+namespace dom {
+class DocGroup;
+} // namespace dom
+} // namespace mozilla
 
 // dbeabbfa-6cb3-4f5c-aec2-dd558d9d681f
 #define NS_ICSSDECLARATION_IID \
@@ -62,6 +67,7 @@ public:
                               nsIPrincipal* aSubjectPrincipal = nullptr) = 0;
 
   virtual nsINode *GetParentObject() = 0;
+  virtual mozilla::dom::DocGroup* GetDocGroup() const = 0;
 
   // Also have to declare all the nsIDOMCSSStyleDeclaration methods,
   // since we want to be able to call them from the WebIDL versions.
@@ -106,9 +112,9 @@ public:
   NS_IMETHOD GetParentRule(nsIDOMCSSRule * *aParentRule) override = 0;
 
   // WebIDL interface for CSSStyleDeclaration
-  void SetCssText(const nsAString& aString, nsIPrincipal& aSubjectPrincipal,
+  void SetCssText(const nsAString& aString, nsIPrincipal* aSubjectPrincipal,
                   mozilla::ErrorResult& rv) {
-    rv = SetCssText(aString, &aSubjectPrincipal);
+    rv = SetCssText(aString, aSubjectPrincipal);
   }
   void GetCssText(nsString& aString) {
     // Cast to nsAString& so we end up calling our virtual
@@ -135,9 +141,9 @@ public:
     GetPropertyPriority(aPropName, static_cast<nsAString&>(aPriority));
   }
   void SetProperty(const nsAString& aPropName, const nsAString& aValue,
-                   const nsAString& aPriority, nsIPrincipal& aSubjectPrincipal,
+                   const nsAString& aPriority, nsIPrincipal* aSubjectPrincipal,
                    mozilla::ErrorResult& rv) {
-    rv = SetProperty(aPropName, aValue, aPriority, &aSubjectPrincipal);
+    rv = SetProperty(aPropName, aValue, aPriority, aSubjectPrincipal);
   }
   void RemoveProperty(const nsAString& aPropName, nsString& aRetval,
                       mozilla::ErrorResult& rv) {

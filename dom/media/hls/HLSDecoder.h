@@ -47,9 +47,6 @@ public:
 private:
   friend class HLSResourceCallbacksSupport;
 
-  void PinForSeek() override {}
-  void UnpinForSeek() override {}
-
   MediaDecoderStateMachine* CreateStateMachine();
 
   bool CanPlayThroughImpl() override final
@@ -58,8 +55,6 @@ private:
     // For now we just return true for 'autoplay' can work.
     return true;
   }
-
-  bool IsLiveStream() override final { return false; }
 
   nsCOMPtr<nsIChannel> mChannel;
   nsCOMPtr<nsIURI> mURI;

@@ -19,6 +19,7 @@ const ENABLED_AUTOFILL_ADDRESSES_PREF = "extensions.formautofill.addresses.enabl
 const CREDITCARDS_USED_STATUS_PREF = "extensions.formautofill.creditCards.used";
 const AUTOFILL_CREDITCARDS_AVAILABLE_PREF = "extensions.formautofill.creditCards.available";
 const ENABLED_AUTOFILL_CREDITCARDS_PREF = "extensions.formautofill.creditCards.enabled";
+const DEFAULT_REGION_PREF = "browser.search.region";
 const SUPPORTED_COUNTRIES_PREF = "extensions.formautofill.supportedCountries";
 const MANAGE_ADDRESSES_KEYWORDS = ["manageAddressesTitle", "addNewAddressTitle"];
 const EDIT_ADDRESS_KEYWORDS = [
@@ -49,6 +50,7 @@ let AddressDataLoader = {
     country: false,
     level1: new Set(),
   },
+
   /**
    * Load address data and extension script into a sandbox from different paths.
    * @param   {string} path
@@ -77,11 +79,38 @@ let AddressDataLoader = {
     }
     return sandbox;
   },
+
+  /**
+   * Convert certain properties' string value into array. We should make sure
+   * the cached data is parsed.
+   * @param   {object} data Original metadata from addressReferences.
+   * @returns {object} parsed metadata with property value that converts to array.
+   */
+  _parse(data) {
+    if (!data) {
+      return null;
+    }
+
+    const properties = ["languages", "sub_keys", "sub_names", "sub_lnames"];
+    for (let key of properties) {
+      if (!data[key]) {
+        continue;
+      }
+      // No need to normalize data if the value is array already.
+      if (Array.isArray(data[key])) {
+        return data;
+      }
+
+      data[key] = data[key].split("~");
+    }
+    return data;
+  },
+
   /**
    * We'll cache addressData in the loader once the data loaded from scripts.
    * It'll become the example below after loading addressReferences with extension:
    * addressData: {
-                   "data/US": {"lang": "en", ...// Data defined in libaddressinput metadata
+   *               "data/US": {"lang": ["en"], ...// Data defined in libaddressinput metadata
    *                           "alternative_names": ... // Data defined in extension }
    *               "data/CA": {} // Other supported country metadata
    *               "data/TW": {} // Other supported country metadata
@@ -89,16 +118,16 @@ let AddressDataLoader = {
    *              }
    * @param   {string} country
    * @param   {string} level1
-   * @returns {object}
+   * @returns {object} Default locale metadata
    */
-  getData(country, level1 = null) {
+  _loadData(country, level1 = null) {
     // Load the addressData if needed
     if (!this._dataLoaded.country) {
       this._addressData = this._loadScripts(ADDRESS_METADATA_PATH).addressData;
       this._dataLoaded.country = true;
     }
     if (!level1) {
-      return this._addressData[`data/${country}`];
+      return this._parse(this._addressData[`data/${country}`]);
     }
     // If level1 is set, load addressReferences under country folder with specific
     // country/level 1 for level 2 information.
@@ -107,7 +136,30 @@ let AddressDataLoader = {
                     this._loadScripts(`${ADDRESS_METADATA_PATH}${country}/`).addressData);
       this._dataLoaded.level1.add(country);
     }
-    return this._addressData[`data/${country}/${level1}`];
+    return this._parse(this._addressData[`data/${country}/${level1}`]);
+  },
+
+  /**
+   * Return the region metadata with default locale and other locales (if exists).
+   * @param   {string} country
+   * @param   {string} level1
+   * @returns {object} Return default locale and other locales metadata.
+   */
+  getData(country, level1) {
+    let defaultLocale = this._loadData(country, level1);
+    if (!defaultLocale) {
+      return null;
+    }
+
+    let countryData = this._parse(this._addressData[`data/${country}`]);
+    let locales = [];
+    // TODO: Should be able to support multi-locale level 1/ level 2 metadata query
+    //      in Bug 1421886
+    if (countryData.languages) {
+      let list = countryData.languages.filter(key => key !== countryData.lang);
+      locales = list.map(key => this._parse(this._addressData[`${defaultLocale.id}--${key}`]));
+    }
+    return {defaultLocale, locales};
   },
 };
 
@@ -208,6 +260,84 @@ this.FormAutofillUtils = {
     return " ";
   },
 
+  /**
+   * Get credit card display label. It should display masked numbers and the
+   * cardholder's name, separated by a comma. If `showCreditCards` is set to
+   * true, decrypted credit card numbers are shown instead.
+   *
+   * @param  {object} creditCard
+   * @param  {boolean} showCreditCards [optional]
+   * @returns {string}
+   */
+  getCreditCardLabel(creditCard, showCreditCards = false) {
+    let parts = [];
+    let ccLabel;
+    let ccNumber = creditCard["cc-number"];
+    let decryptedCCNumber = creditCard["cc-number-decrypted"];
+
+    if (showCreditCards && decryptedCCNumber) {
+      ccLabel = decryptedCCNumber;
+    }
+    if (ccNumber && !ccLabel) {
+      if (this.isCCNumber(ccNumber)) {
+        ccLabel = "*".repeat(4) + " " + ccNumber.substr(-4);
+      } else {
+        let {affix, label} = this.fmtMaskedCreditCardLabel(ccNumber);
+        ccLabel = `${affix} ${label}`;
+      }
+    }
+
+    if (ccLabel) {
+      parts.push(ccLabel);
+    }
+    if (creditCard["cc-name"]) {
+      parts.push(creditCard["cc-name"]);
+    }
+    return parts.join(", ");
+  },
+
+  /**
+   * Get address display label. It should display up to two pieces of
+   * information, separated by a comma.
+   *
+   * @param  {object} address
+   * @returns {string}
+   */
+  getAddressLabel(address) {
+    // TODO: Implement a smarter way for deciding what to display
+    //       as option text. Possibly improve the algorithm in
+    //       ProfileAutoCompleteResult.jsm and reuse it here.
+    const fieldOrder = [
+      "name",
+      "-moz-street-address-one-line",  // Street address
+      "address-level2",  // City/Town
+      "organization",    // Company or organization name
+      "address-level1",  // Province/State (Standardized code if possible)
+      "country-name",    // Country name
+      "postal-code",     // Postal code
+      "tel",             // Phone number
+      "email",           // Email address
+    ];
+
+    address = {...address};
+    let parts = [];
+    if (address["street-address"]) {
+      address["-moz-street-address-one-line"] = this.toOneLineAddress(
+        address["street-address"]
+      );
+    }
+    for (const fieldName of fieldOrder) {
+      let string = address[fieldName];
+      if (string) {
+        parts.push(string);
+      }
+      if (parts.length == 2) {
+        break;
+      }
+    }
+    return parts.join(", ");
+  },
+
   toOneLineAddress(address, delimiter = "\n") {
     let array = typeof address == "string" ? address.split(delimiter) : address;
 
@@ -289,16 +419,18 @@ this.FormAutofillUtils = {
 
   /**
    * Get country address data and fallback to US if not found.
-   * See AddressDataLoader.getData for more details of addressData structure.
+   * See AddressDataLoader._loadData for more details of addressData structure.
    * @param {string} [country=FormAutofillUtils.DEFAULT_REGION]
    *        The country code for requesting specific country's metadata. It'll be
    *        default region if parameter is not set.
    * @param {string} [level1=null]
    *        Retrun address level 1/level 2 metadata if parameter is set.
-   * @returns {object}
-   *          Return the metadata of specific region.
+   * @returns {object|null}
+   *          Return metadata of specific region with default locale and other supported
+   *          locales. We need to return a deafult country metadata for layout format
+   *          and collator, but for sub-region metadata we'll just return null if not found.
    */
-  getCountryAddressData(country = FormAutofillUtils.DEFAULT_REGION, level1 = null) {
+  getCountryAddressRawData(country = FormAutofillUtils.DEFAULT_REGION, level1 = null) {
     let metadata = AddressDataLoader.getData(country, level1);
     if (!metadata) {
       if (level1) {
@@ -310,8 +442,35 @@ this.FormAutofillUtils = {
       }
     }
 
-    // Fallback to US if we couldn't get data from default region.
-    return metadata || AddressDataLoader.getData("US");
+    // TODO: Now we fallback to US if we couldn't get data from default region,
+    //       but it could be removed in bug 1423464 if it's not necessary.
+    if (!metadata) {
+      metadata = AddressDataLoader.getData("US");
+    }
+    return metadata;
+  },
+
+  /**
+   * Get country address data with default locale.
+   * @param {string} country
+   * @param {string} level1
+   * @returns {object|null} Return metadata of specific region with default locale.
+   */
+  getCountryAddressData(country, level1) {
+    let metadata = this.getCountryAddressRawData(country, level1);
+    return metadata && metadata.defaultLocale;
+  },
+
+  /**
+   * Get country address data with all locales.
+   * @param {string} country
+   * @param {string} level1
+   * @returns {array<object>|null}
+   *          Return metadata of specific region with all the locales.
+   */
+  getCountryAddressDataWithLocales(country, level1) {
+    let metadata = this.getCountryAddressRawData(country, level1);
+    return metadata && [metadata.defaultLocale, ...metadata.locales];
   },
 
   /**
@@ -327,7 +486,7 @@ this.FormAutofillUtils = {
 
     if (!this._collators[country]) {
       let dataset = this.getCountryAddressData(country);
-      let languages = dataset.languages ? dataset.languages.split("~") : [dataset.lang];
+      let languages = dataset.languages || [dataset.lang];
       this._collators[country] = languages.map(lang => new Intl.Collator(lang, {sensitivity: "base", ignorePunctuation: true}));
     }
     return this._collators[country];
@@ -438,33 +597,33 @@ this.FormAutofillUtils = {
     let values = Array.isArray(subregionValues) ? subregionValues : [subregionValues];
 
     let collators = this.getCollators(country);
-    let {sub_keys: subKeys, sub_names: subNames} = this.getCountryAddressData(country);
+    for (let metadata of this.getCountryAddressDataWithLocales(country)) {
+      let {sub_keys: subKeys, sub_names: subNames, sub_lnames: subLnames} = metadata;
+      // Apply sub_lnames if sub_names does not exist
+      subNames = subNames || subLnames;
 
-    if (!Array.isArray(subKeys)) {
-      subKeys = subKeys.split("~");
-    }
-    if (!Array.isArray(subNames)) {
-      subNames = subNames.split("~");
-    }
+      let speculatedSubIndexes = [];
+      for (const val of values) {
+        let identifiedValue = this.identifyValue(subKeys, subNames, val, collators);
+        if (identifiedValue) {
+          return identifiedValue;
+        }
 
-    let speculatedSubIndexes = [];
-    for (const val of values) {
-      let identifiedValue = this.identifyValue(subKeys, subNames, val, collators);
-      if (identifiedValue) {
-        return identifiedValue;
+        // Predict the possible state by partial-matching if no exact match.
+        [subKeys, subNames].forEach(sub => {
+          speculatedSubIndexes.push(sub.findIndex(token => {
+            let pattern = new RegExp("\\b" + this.escapeRegExp(token) + "\\b");
+
+            return pattern.test(val);
+          }));
+        });
       }
-
-      // Predict the possible state by partial-matching if no exact match.
-      [subKeys, subNames].forEach(sub => {
-        speculatedSubIndexes.push(sub.findIndex(token => {
-          let pattern = new RegExp("\\b" + this.escapeRegExp(token) + "\\b");
-
-          return pattern.test(val);
-        }));
-      });
+      let subKey = subKeys[speculatedSubIndexes.find(i => !!~i)];
+      if (subKey) {
+        return subKey;
+      }
     }
-
-    return subKeys[speculatedSubIndexes.find(i => !!~i)] || null;
+    return null;
   },
 
   /**
@@ -484,7 +643,6 @@ this.FormAutofillUtils = {
       return null;
     }
 
-    let dataset = this.getCountryAddressData(address.country);
     let collators = this.getCollators(address.country);
 
     for (let option of selectEl.options) {
@@ -496,29 +654,26 @@ this.FormAutofillUtils = {
 
     switch (fieldName) {
       case "address-level1": {
-        if (!Array.isArray(dataset.sub_keys)) {
-          dataset.sub_keys = dataset.sub_keys.split("~");
-        }
-        if (!Array.isArray(dataset.sub_names)) {
-          dataset.sub_names = dataset.sub_names.split("~");
-        }
-        let keys = dataset.sub_keys;
-        let names = dataset.sub_names;
-        let identifiedValue = this.identifyValue(keys, names, value, collators);
-
-        // No point going any further if we cannot identify value from address
+        let {country} = address;
+        let identifiedValue = this.getAbbreviatedSubregionName([value], country);
+        // No point going any further if we cannot identify value from address level 1
         if (!identifiedValue) {
           return null;
         }
+        for (let dataset of this.getCountryAddressDataWithLocales(country)) {
+          let keys = dataset.sub_keys;
+          // Apply sub_lnames if sub_names does not exist
+          let names = dataset.sub_names || dataset.sub_lnames;
 
-        // Go through options one by one to find a match.
-        // Also check if any option contain the address-level1 key.
-        let pattern = new RegExp("\\b" + this.escapeRegExp(identifiedValue) + "\\b", "i");
-        for (let option of selectEl.options) {
-          let optionValue = this.identifyValue(keys, names, option.value, collators);
-          let optionText = this.identifyValue(keys, names, option.text, collators);
-          if (identifiedValue === optionValue || identifiedValue === optionText || pattern.test(option.value)) {
-            return option;
+          // Go through options one by one to find a match.
+          // Also check if any option contain the address-level1 key.
+          let pattern = new RegExp("\\b" + this.escapeRegExp(identifiedValue) + "\\b", "i");
+          for (let option of selectEl.options) {
+            let optionValue = this.identifyValue(keys, names, option.value, collators);
+            let optionText = this.identifyValue(keys, names, option.text, collators);
+            if (identifiedValue === optionValue || identifiedValue === optionText || pattern.test(option.value)) {
+              return option;
+            }
           }
         }
         break;
@@ -684,10 +839,6 @@ this.FormAutofillUtils = {
   },
 };
 
-XPCOMUtils.defineLazyGetter(this.FormAutofillUtils, "DEFAULT_REGION", () => {
-  return Services.prefs.getCharPref("browser.search.region", "US");
-});
-
 this.log = null;
 this.FormAutofillUtils.defineLazyLogGetter(this, this.EXPORTED_SYMBOLS[0]);
 
@@ -699,6 +850,8 @@ XPCOMUtils.defineLazyGetter(FormAutofillUtils, "brandBundle", function() {
   return Services.strings.createBundle("chrome://branding/locale/brand.properties");
 });
 
+XPCOMUtils.defineLazyPreferenceGetter(this.FormAutofillUtils,
+                                      "DEFAULT_REGION", DEFAULT_REGION_PREF, "US");
 XPCOMUtils.defineLazyPreferenceGetter(this.FormAutofillUtils,
                                       "isAutofillAddressesEnabled", ENABLED_AUTOFILL_ADDRESSES_PREF);
 XPCOMUtils.defineLazyPreferenceGetter(this.FormAutofillUtils,

@@ -3,9 +3,6 @@
  /* import-globals-from browser_content_sandbox_utils.js */
  "use strict";
 
-var prefs = Cc["@mozilla.org/preferences-service;1"]
-            .getService(Ci.nsIPrefBranch);
-
 Services.scriptloader.loadSubScript("chrome://mochitests/content/browser/" +
     "security/sandbox/test/browser_content_sandbox_utils.js", this);
 
@@ -81,6 +78,19 @@ function readDir(path) {
 function readFile(path) {
   Components.utils.import("resource://gre/modules/osfile.jsm");
   let promise = OS.File.read(path).then(function (binaryData) {
+    return {ok: true};
+  }).catch(function (error) {
+    return {ok: false};
+  });
+  return promise;
+}
+
+// Does a stat of |path| and returns a promise that resolves if the
+// stat is successful. Returned object has boolean .ok to indicate
+// success or failure.
+function statPath(path) {
+  Components.utils.import("resource://gre/modules/osfile.jsm");
+  let promise = OS.File.stat(path).then(function (stat) {
     return {ok: true};
   }).catch(function (error) {
     return {ok: false};
@@ -177,7 +187,7 @@ add_task(async function() {
   // on Nightly at this time.
   // eslint-disable-next-line mozilla/use-default-preference-values
   try {
-    level = prefs.getIntPref("security.sandbox.content.level");
+    level = Services.prefs.getIntPref("security.sandbox.content.level");
   } catch (e) {
     prefExists = false;
   }
@@ -294,7 +304,7 @@ async function testFileAccess() {
 
   // Ensure that the file content process is enabled.
   let fileContentProcessEnabled =
-    prefs.getBoolPref("browser.tabs.remote.separateFileUriProcess");
+    Services.prefs.getBoolPref("browser.tabs.remote.separateFileUriProcess");
   ok(fileContentProcessEnabled, "separate file content process is enabled");
 
   // for tests that run in a file content process
@@ -308,7 +318,7 @@ async function testFileAccess() {
   }
 
   // Current level
-  let level = prefs.getIntPref("security.sandbox.content.level");
+  let level = Services.prefs.getIntPref("security.sandbox.content.level");
 
   // Directories/files to test accessing from content processes.
   // For directories, we test whether a directory listing is allowed
@@ -347,6 +357,7 @@ async function testFileAccess() {
         browser:  webBrowser,                   // browser to run test in
         file:     fontFile,                     // nsIFile object
         minLevel: minHomeReadSandboxLevel(),    // min level to enable test
+        func:     readFile,                     // the test function to use
       });
     }
     for (let fontPath of badFontTestPaths) {
@@ -360,6 +371,7 @@ async function testFileAccess() {
         browser:  webBrowser,                   // browser to run test in
         file:     fontFile,                     // nsIFile object
         minLevel: minHomeReadSandboxLevel(),    // min level to enable test
+        func:     readFile,                     // the test function to use
       });
     }
   }
@@ -375,6 +387,7 @@ async function testFileAccess() {
       browser:  webBrowser,                   // browser to run test in
       file:     profileDir,                   // nsIFile object
       minLevel: minProfileReadSandboxLevel(), // min level to enable test
+      func:     readDir,
     });
   }
   if (fileContentProcessEnabled) {
@@ -384,6 +397,7 @@ async function testFileAccess() {
       browser:  fileBrowser,
       file:     profileDir,
       minLevel: 0,
+      func:     readDir,
     });
   }
 
@@ -394,6 +408,7 @@ async function testFileAccess() {
     browser:  webBrowser,
     file:     homeDir,
     minLevel: minHomeReadSandboxLevel(),
+    func:     readDir,
   });
   if (fileContentProcessEnabled) {
     tests.push({
@@ -402,6 +417,7 @@ async function testFileAccess() {
       browser:  fileBrowser,
       file:     homeDir,
       minLevel: 0,
+      func:     readDir,
     });
   }
 
@@ -412,6 +428,7 @@ async function testFileAccess() {
     browser:  webBrowser,
     file:     sysExtDevDir,
     minLevel: 0,
+    func:     readDir,
   });
 
   if (isWin()) {
@@ -422,6 +439,7 @@ async function testFileAccess() {
       browser:    webBrowser,
       file:       extDir,
       minLevel:   minHomeReadSandboxLevel(),
+      func:       readDir,
     });
   }
 
@@ -445,6 +463,7 @@ async function testFileAccess() {
         browser:  webBrowser,
         file:     homeTempDir,
         minLevel,
+        func:     readDir,
       });
     }
   }
@@ -465,6 +484,7 @@ async function testFileAccess() {
       browser:  webBrowser,
       file:     varDir,
       minLevel: minHomeReadSandboxLevel(),
+      func:     readDir,
     });
     if (fileContentProcessEnabled) {
       tests.push({
@@ -473,6 +493,7 @@ async function testFileAccess() {
         browser:  fileBrowser,
         file:     varDir,
         minLevel: 0,
+        func:     readDir,
       });
     }
   }
@@ -493,6 +514,7 @@ async function testFileAccess() {
       browser:  webBrowser,
       file:     macTempDir,
       minLevel: minHomeReadSandboxLevel(),
+      func:     readDir,
     });
     if (fileContentProcessEnabled) {
       tests.push({
@@ -501,6 +523,7 @@ async function testFileAccess() {
         browser:  fileBrowser,
         file:     macTempDir,
         minLevel: 0,
+        func:     readDir,
       });
     }
 
@@ -512,6 +535,7 @@ async function testFileAccess() {
       browser:  webBrowser,
       file:     volumes,
       minLevel: minHomeReadSandboxLevel(),
+      func:     readDir,
     });
     // Test that we cannot read from /Network at level 3
     let network = GetDir("/Network");
@@ -521,6 +545,7 @@ async function testFileAccess() {
       browser:  webBrowser,
       file:     network,
       minLevel: minHomeReadSandboxLevel(),
+      func:     readDir,
     });
     // Test that we cannot read from /Users at level 3
     let users = GetDir("/Users");
@@ -530,6 +555,69 @@ async function testFileAccess() {
       browser:  webBrowser,
       file:     users,
       minLevel: minHomeReadSandboxLevel(),
+      func:     readDir,
+    });
+
+    // Test that we can stat /Users at level 3
+    tests.push({
+      desc:     "/Users",
+      ok:       true,
+      browser:  webBrowser,
+      file:     users,
+      minLevel: minHomeReadSandboxLevel(),
+      func:     statPath,
+    });
+
+    // Test that we can stat /Library at level 3, but can't
+    // stat something within /Library. This test uses "/Library"
+    // because it's a path that is expected to always be present
+    // and isn't something content processes have read access to
+    // (just read-metadata).
+    let libraryDir = GetDir("/Library");
+    tests.push({
+      desc:     "/Library",
+      ok:       true,
+      browser:  webBrowser,
+      file:     libraryDir,
+      minLevel: minHomeReadSandboxLevel(),
+      func:     statPath,
+    });
+    tests.push({
+      desc:     "/Library",
+      ok:       false,
+      browser:  webBrowser,
+      file:     libraryDir,
+      minLevel: minHomeReadSandboxLevel(),
+      func:     readDir,
+    });
+    let libraryWidgetsDir = GetDir("/Library/Widgets");
+    tests.push({
+      desc:     "/Library/Widgets",
+      ok:       false,
+      browser:  webBrowser,
+      file:     libraryWidgetsDir,
+      minLevel: minHomeReadSandboxLevel(),
+      func:     statPath,
+    });
+
+    // Similarly, test that we can stat /private, but not /private/etc.
+    let privateDir = GetDir("/private");
+    tests.push({
+      desc:     "/private",
+      ok:       true,
+      browser:  webBrowser,
+      file:     privateDir,
+      minLevel: minHomeReadSandboxLevel(),
+      func:     statPath,
+    });
+    let privateEtcDir = GetFile("/private/etc");
+    tests.push({
+      desc:     "/private/etc",
+      ok:       false,
+      browser:  webBrowser,
+      file:     privateEtcDir,
+      minLevel: minHomeReadSandboxLevel(),
+      func:     statPath,
     });
   }
 
@@ -541,6 +629,7 @@ async function testFileAccess() {
       browser:  webBrowser,
       file:     extensionsDir,
       minLevel: 0,
+      func:     readDir,
     });
   } else {
     ok(false, `${extensionsDir.path} is a valid dir`);
@@ -554,6 +643,7 @@ async function testFileAccess() {
       browser:  webBrowser,
       file:     chromeDir,
       minLevel: 0,
+      func:     readDir,
     });
   } else {
     ok(false, `${chromeDir.path} is valid dir`);
@@ -570,6 +660,7 @@ async function testFileAccess() {
         browser:  webBrowser,
         file:     cookiesFile,
         minLevel: minProfileReadSandboxLevel(),
+        func:     readFile,
       });
     }
     if (fileContentProcessEnabled) {
@@ -579,6 +670,7 @@ async function testFileAccess() {
         browser:  fileBrowser,
         file:     cookiesFile,
         minLevel: 0,
+        func:     readFile,
       });
     }
   } else {
@@ -589,12 +681,17 @@ async function testFileAccess() {
   tests = tests.filter((test) => (test.minLevel <= level));
 
   for (let test of tests) {
-    let testFunc = test.file.isDirectory() ? readDir : readFile;
     let okString = test.ok ? "allowed" : "blocked";
     let processType = test.browser === webBrowser ? "web" : "file";
 
+    // ensure the file/dir exists before we ask a content process to stat
+    // it so we know a failure is not due to a nonexistent file/dir
+    if (test.func === statPath) {
+      ok(test.file.exists(), `${test.file.path} exists`);
+    }
+
     let result = await ContentTask.spawn(test.browser, test.file.path,
-        testFunc);
+        test.func);
 
     ok(result.ok == test.ok,
         `reading ${test.desc} from a ${processType} process ` +
@@ -602,7 +699,7 @@ async function testFileAccess() {
 
     // if the directory is not expected to be readable,
     // ensure the listing has zero entries
-    if (test.file.isDirectory() && !test.ok) {
+    if (test.func === readDir && !test.ok) {
       ok(result.numEntries == 0, `directory list is empty (${test.file.path})`);
     }
   }

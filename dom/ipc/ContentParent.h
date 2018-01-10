@@ -606,6 +606,16 @@ public:
                                      const URIParams& aURI,
                                      const nsCString& aTables) override;
 
+  virtual PLoginReputationParent*
+  AllocPLoginReputationParent(const URIParams& aURI) override;
+
+  virtual mozilla::ipc::IPCResult
+  RecvPLoginReputationConstructor(PLoginReputationParent* aActor,
+                                  const URIParams& aURI) override;
+
+  virtual bool
+  DeallocPLoginReputationParent(PLoginReputationParent* aActor) override;
+
   virtual bool SendActivate(PBrowserParent* aTab) override
   {
     return PContentParent::SendActivate(aTab);
@@ -647,6 +657,8 @@ public:
   virtual bool
   DeallocPClientOpenWindowOpParent(PClientOpenWindowOpParent* aActor) override;
 
+  static hal::ProcessPriority GetInitialProcessPriority(Element* aFrameElement);
+
   // Control the priority of the IPC messages for input events.
   void SetInputPriorityEventEnabled(bool aEnabled);
   bool IsInputPriorityEventEnabled()
@@ -679,8 +691,6 @@ private:
   static nsTArray<ContentParent*>* sPrivateContent;
   static nsDataHashtable<nsUint32HashKey, ContentParent*> *sJSPluginContentParents;
   static StaticAutoPtr<LinkedList<ContentParent> > sContentParents;
-
-  static hal::ProcessPriority GetInitialProcessPriority(Element* aFrameElement);
 
   static ContentBridgeParent* CreateContentBridgeParent(const TabContext& aContext,
                                                         const hal::ProcessPriority& aPriority,
@@ -1094,6 +1104,9 @@ private:
 
   virtual mozilla::ipc::IPCResult
   RecvRequestAnonymousTemporaryFile(const uint64_t& aID) override;
+
+  virtual mozilla::ipc::IPCResult
+  RecvCreateAudioIPCConnection(CreateAudioIPCConnectionResolver&& aResolver) override;
 
   virtual mozilla::ipc::IPCResult
   RecvKeygenProcessValue(const nsString& oldValue, const nsString& challenge,

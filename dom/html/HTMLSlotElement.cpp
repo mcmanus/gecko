@@ -4,6 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/dom/DocGroup.h"
 #include "mozilla/dom/HTMLSlotElement.h"
 #include "mozilla/dom/HTMLSlotElementBinding.h"
 #include "mozilla/dom/HTMLUnknownElement.h"
@@ -16,7 +17,7 @@ NS_NewHTMLSlotElement(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
                       mozilla::dom::FromParser aFromParser)
 {
   RefPtr<mozilla::dom::NodeInfo> nodeInfo(aNodeInfo);
-  if (nsContentUtils::IsWebComponentsEnabled()) {
+  if (nsDocument::IsWebComponentsEnabled(nodeInfo->GetDocument())) {
     already_AddRefed<mozilla::dom::NodeInfo> nodeInfoArg(nodeInfo.forget());
     return new mozilla::dom::HTMLSlotElement(nodeInfoArg);
   }
@@ -178,6 +179,7 @@ HTMLSlotElement::AssignedNodes() const
 void
 HTMLSlotElement::InsertAssignedNode(uint32_t aIndex, nsINode* aNode)
 {
+  MOZ_ASSERT(!aNode->AsContent()->GetAssignedSlot(), "Losing track of a slot");
   mAssignedNodes.InsertElementAt(aIndex, aNode);
   aNode->AsContent()->SetAssignedSlot(this);
 }
@@ -185,6 +187,7 @@ HTMLSlotElement::InsertAssignedNode(uint32_t aIndex, nsINode* aNode)
 void
 HTMLSlotElement::AppendAssignedNode(nsINode* aNode)
 {
+  MOZ_ASSERT(!aNode->AsContent()->GetAssignedSlot(), "Losing track of a slot");
   mAssignedNodes.AppendElement(aNode);
   aNode->AsContent()->SetAssignedSlot(this);
 }
@@ -192,6 +195,10 @@ HTMLSlotElement::AppendAssignedNode(nsINode* aNode)
 void
 HTMLSlotElement::RemoveAssignedNode(nsINode* aNode)
 {
+  // This one runs from unlinking, so we can't guarantee that the slot pointer
+  // hasn't been cleared.
+  MOZ_ASSERT(!aNode->AsContent()->GetAssignedSlot() ||
+             aNode->AsContent()->GetAssignedSlot() == this, "How exactly?");
   mAssignedNodes.RemoveElement(aNode);
   aNode->AsContent()->SetAssignedSlot(nullptr);
 }
@@ -199,11 +206,33 @@ HTMLSlotElement::RemoveAssignedNode(nsINode* aNode)
 void
 HTMLSlotElement::ClearAssignedNodes()
 {
-  for (uint32_t i = 0; i < mAssignedNodes.Length(); i++) {
-    mAssignedNodes[i]->AsContent()->SetAssignedSlot(nullptr);
+  for (RefPtr<nsINode>& node : mAssignedNodes) {
+    MOZ_ASSERT(!node->AsContent()->GetAssignedSlot() ||
+               node->AsContent()->GetAssignedSlot() == this, "How exactly?");
+    node->AsContent()->SetAssignedSlot(nullptr);
   }
 
   mAssignedNodes.Clear();
+}
+
+void
+HTMLSlotElement::EnqueueSlotChangeEvent() const
+{
+  DocGroup* docGroup = OwnerDoc()->GetDocGroup();
+  if (!docGroup) {
+    return;
+  }
+
+  docGroup->SignalSlotChange(this);
+}
+
+void
+HTMLSlotElement::FireSlotChangeEvent()
+{
+  nsContentUtils::DispatchTrustedEvent(OwnerDoc(),
+                                       static_cast<nsIContent*>(this),
+                                       NS_LITERAL_STRING("slotchange"), true,
+                                       false);
 }
 
 JSObject*

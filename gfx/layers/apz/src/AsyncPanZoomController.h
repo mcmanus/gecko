@@ -70,6 +70,27 @@ public:
   virtual AndroidSpecificState* AsAndroidSpecificState() { return nullptr; }
 };
 
+/*
+ * Represents a transform from the ParentLayer coordinate space of an APZC
+ * to the ParentLayer coordinate space of its parent APZC.
+ * Each layer along the way contributes to the transform. We track whether
+ * one of these contributions is a perspective transform, as those require
+ * some special handling.
+ */
+struct AncestorTransform {
+  gfx::Matrix4x4 mTransform;
+  bool mContainsPerspectiveTransform;
+
+  friend AncestorTransform operator*(const AncestorTransform& aA,
+                                     const AncestorTransform& aB)
+  {
+    return AncestorTransform{
+      aA.mTransform * aB.mTransform,
+      aA.mContainsPerspectiveTransform || aB.mContainsPerspectiveTransform
+    };
+  }
+};
+
 /**
  * Controller for all panning and zooming logic. Any time a user input is
  * detected and it must be processed in some way to affect what the user sees,
@@ -635,6 +656,11 @@ protected:
   void HandlePanningUpdate(const ScreenPoint& aDelta);
 
   /**
+   * Set and update the pinch lock
+   */
+  void HandlePinchLocking(ScreenCoord spanDistance, ScreenPoint focusChange);
+
+  /**
    * Sets up anything needed for panning. This takes us out of the "TOUCHING"
    * state and starts actually panning us.
    */
@@ -702,6 +728,14 @@ protected:
   };
 
   static AxisLockMode GetAxisLockMode();
+
+  enum PinchLockMode {
+    PINCH_FREE,     /* No locking at all */
+    PINCH_STANDARD, /* Default pinch locking mode that remains locked until pinch gesture ends*/
+    PINCH_STICKY,   /* Allow lock to be broken, with hysteresis */
+  };
+
+  static PinchLockMode GetPinchLockMode();
 
   // Helper function for OnSingleTapUp(), OnSingleTapConfirmed(), and
   // OnLongPressUp().
@@ -778,6 +812,10 @@ private:
   // This flag is set to true when we are in a axis-locked pan as a result of
   // the touch-action CSS property.
   bool mPanDirRestricted;
+
+  // This flag is set to true when we are in a pinch-locked state. ie: user
+  // is performing a two-finger pan rather than a pinch gesture
+  bool mPinchLocked;
 
   // Most up-to-date constraints on zooming. These should always be reasonable
   // values; for example, allowing a min zoom of 0.0 can cause very bad things
@@ -1198,12 +1236,16 @@ private:
    * hit-testing to see which APZC instance should handle touch events.
    */
 public:
-  void SetAncestorTransform(const Matrix4x4& aTransformToLayer) {
-    mAncestorTransform = aTransformToLayer;
+  void SetAncestorTransform(const AncestorTransform& aAncestorTransform) {
+    mAncestorTransform = aAncestorTransform;
   }
 
   Matrix4x4 GetAncestorTransform() const {
-    return mAncestorTransform;
+    return mAncestorTransform.mTransform;
+  }
+
+  bool AncestorTransformContainsPerspective() const {
+    return mAncestorTransform.mContainsPerspectiveTransform;
   }
 
   // Returns whether or not this apzc contains the given screen point within
@@ -1220,7 +1262,7 @@ private:
   /* This is the cumulative CSS transform for all the layers from (and including)
    * the parent APZC down to (but excluding) this one, and excluding any
    * perspective transforms. */
-  Matrix4x4 mAncestorTransform;
+  AncestorTransform mAncestorTransform;
 
 
   /* ===================================================================

@@ -2952,19 +2952,18 @@ NS_IMETHODIMP
 TabParent::SetRenderLayers(bool aEnabled)
 {
   if (aEnabled == mRenderLayers) {
-    if (aEnabled == mHasLayers && mPreserveLayers) {
+    if (aEnabled && mHasLayers && mPreserveLayers) {
       // RenderLayers might be called when we've been preserving layers,
       // and already had layers uploaded. In that case, the MozLayerTreeReady
       // event will not naturally arrive, which can confuse the front-end
       // layer. So we fire the event here.
       RefPtr<TabParent> self = this;
-      bool epoch = mLayerTreeEpoch;
-      bool enabled = aEnabled;
+      uint64_t epoch = mLayerTreeEpoch;
       NS_DispatchToMainThread(NS_NewRunnableFunction(
         "dom::TabParent::RenderLayers",
-        [self, epoch, enabled] () {
+        [self, epoch] () {
           MOZ_ASSERT(NS_IsMainThread());
-          self->LayerTreeUpdate(epoch, enabled);
+          self->LayerTreeUpdate(epoch, true);
         }));
     }
 

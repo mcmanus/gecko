@@ -52,10 +52,13 @@ protected:
 
 public:
   ScriptLoadRequest(ScriptKind aKind,
+                    nsIURI* aURI,
                     nsIScriptElement* aElement,
                     ValidJSVersion aValidJSVersion,
                     mozilla::CORSMode aCORSMode,
-                    const mozilla::dom::SRIMetadata &aIntegrity);
+                    const SRIMetadata &aIntegrity,
+                    nsIURI* aReferrer,
+                    mozilla::net::ReferrerPolicy aReferrerPolicy);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(ScriptLoadRequest)
@@ -186,14 +189,15 @@ public:
   uint32_t mBytecodeOffset; // Offset of the bytecode in mScriptBytecode
 
   ValidJSVersion mValidJSVersion;
-  nsCOMPtr<nsIURI> mURI;
+  const nsCOMPtr<nsIURI> mURI;
   nsCOMPtr<nsIPrincipal> mTriggeringPrincipal;
   nsCOMPtr<nsIPrincipal> mOriginPrincipal;
   nsAutoCString mURL;     // Keep the URI's filename alive during off thread parsing.
   int32_t mLineNo;
   const mozilla::CORSMode mCORSMode;
-  const mozilla::dom::SRIMetadata mIntegrity;
-  mozilla::net::ReferrerPolicy mReferrerPolicy;
+  const SRIMetadata mIntegrity;
+  const nsCOMPtr<nsIURI> mReferrer;
+  const mozilla::net::ReferrerPolicy mReferrerPolicy;
 
   // Holds the Cache information, which is used to register the bytecode
   // on the cache entry, such that we can load it the next time.

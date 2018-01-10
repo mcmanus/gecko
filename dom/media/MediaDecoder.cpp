@@ -49,8 +49,8 @@ namespace mozilla {
 #undef DUMP
 
 LazyLogModule gMediaDecoderLog("MediaDecoder");
-#define LOG(x, ...) \
-  MOZ_LOG(gMediaDecoderLog, LogLevel::Debug, ("Decoder=%p " x, this, ##__VA_ARGS__))
+#define LOG(x, ...)                                                            \
+  DDMOZ_LOG(gMediaDecoderLog, LogLevel::Debug, x, ##__VA_ARGS__)
 
 #define DUMP(x, ...) printf_stderr(x "\n", ##__VA_ARGS__)
 
@@ -278,8 +278,6 @@ MediaDecoder::Shutdown()
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_DIAGNOSTIC_ASSERT(!IsShutdown());
   AbstractThread::AutoEnter context(AbstractMainThread());
-
-  UnpinForSeek();
 
   // Unwatch all watch targets to prevent further notifications.
   mWatchManager.Shutdown();
@@ -543,7 +541,6 @@ MediaDecoder::Seek(double aTime, SeekTarget::Type aSeekType)
   CallSeek(target);
 
   if (mPlayState == PLAY_STATE_ENDED) {
-    PinForSeek();
     ChangeState(GetOwner()->GetPaused() ? PLAY_STATE_PAUSED : PLAY_STATE_PLAYING);
   }
   return NS_OK;
@@ -564,11 +561,6 @@ MediaDecoder::CallSeek(const SeekTarget& aTarget)
   MOZ_ASSERT(NS_IsMainThread());
   AbstractThread::AutoEnter context(AbstractMainThread());
   DiscardOngoingSeekIfExists();
-
-  // Since we don't have a listener for changes in IsLiveStream, our best bet
-  // is to ensure IsLiveStream is uptodate when seek begins. This value will be
-  // checked when seek is completed.
-  mDecoderStateMachine->DispatchIsLiveStream(IsLiveStream());
 
   mDecoderStateMachine->InvokeSeek(aTarget)
   ->Then(mAbstractMainThread, __func__, this,
@@ -798,12 +790,7 @@ MediaDecoder::OnSeekResolved()
   AbstractThread::AutoEnter context(AbstractMainThread());
   mSeekRequest.Complete();
 
-  {
-    // An additional seek was requested while the current seek was
-    // in operation.
-    UnpinForSeek();
-    mLogicallySeeking = false;
-  }
+  mLogicallySeeking = false;
 
   // Ensure logical position is updated after seek.
   UpdateLogicalPositionInternal();
@@ -840,7 +827,9 @@ MediaDecoder::ChangeState(PlayState aState)
     mNextState = PLAY_STATE_PAUSED;
   }
 
-  LOG("ChangeState %s => %s", PlayStateStr(), ToPlayStateStr(aState));
+  if (mPlayState != aState) {
+    DDLOG(DDLogCategory::Property, "play_state", ToPlayStateStr(aState));
+  }
   mPlayState = aState;
 
   if (mPlayState == PLAY_STATE_PLAYING) {
@@ -862,6 +851,7 @@ MediaDecoder::UpdateLogicalPositionInternal()
   }
   bool logicalPositionChanged = mLogicalPosition != currentPosition;
   mLogicalPosition = currentPosition;
+  DDLOG(DDLogCategory::Property, "currentTime", mLogicalPosition);
 
   // Invalidate the frame so any video data is displayed.
   // Do this before the timeupdate event so that if that
@@ -1151,11 +1141,14 @@ MediaDecoder::SetStateMachine(MediaDecoderStateMachine* aStateMachine)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT_IF(aStateMachine, !mDecoderStateMachine);
-  mDecoderStateMachine = aStateMachine;
   if (aStateMachine) {
+    mDecoderStateMachine = aStateMachine;
+    DDLINKCHILD("decoder state machine", mDecoderStateMachine.get());
     ConnectMirrors(aStateMachine);
     UpdateVideoDecodeMode();
-  } else {
+  } else if (mDecoderStateMachine) {
+    DDUNLINKCHILD(mDecoderStateMachine.get());
+    mDecoderStateMachine = nullptr;
     DisconnectMirrors();
   }
 }
@@ -1223,6 +1216,7 @@ MediaDecoder::NotifyReaderDataArrived()
                       mReader.get(),
                       &MediaFormatReader::NotifyDataArrived));
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 // Provide access to the state machine object

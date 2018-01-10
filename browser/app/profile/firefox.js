@@ -43,13 +43,10 @@ pref("extensions.webextOptionalPermissionPrompts", true);
 
 // Preferences for AMO integration
 pref("extensions.getAddons.cache.enabled", true);
-pref("extensions.getAddons.maxResults", 15);
 pref("extensions.getAddons.get.url", "https://services.addons.mozilla.org/%LOCALE%/firefox/api/%API_VERSION%/search/guid:%IDS%?src=firefox&appOS=%OS%&appVersion=%VERSION%");
 pref("extensions.getAddons.getWithPerformance.url", "https://services.addons.mozilla.org/%LOCALE%/firefox/api/%API_VERSION%/search/guid:%IDS%?src=firefox&appOS=%OS%&appVersion=%VERSION%&tMain=%TIME_MAIN%&tFirstPaint=%TIME_FIRST_PAINT%&tSessionRestored=%TIME_SESSION_RESTORED%");
 pref("extensions.getAddons.search.browseURL", "https://addons.mozilla.org/%LOCALE%/firefox/search?q=%TERMS%&platform=%OS%&appver=%VERSION%");
-pref("extensions.getAddons.search.url", "https://services.addons.mozilla.org/%LOCALE%/firefox/api/%API_VERSION%/search/%TERMS%/all/%MAX_RESULTS%/%OS%/%VERSION%/%COMPATIBILITY_MODE%?src=firefox");
 pref("extensions.webservice.discoverURL", "https://discovery.addons.mozilla.org/%LOCALE%/firefox/discovery/pane/%VERSION%/%OS%/%COMPATIBILITY_MODE%");
-pref("extensions.getAddons.recommended.url", "https://services.addons.mozilla.org/%LOCALE%/%APP%/api/%API_VERSION%/list/recommended/all/%MAX_RESULTS%/%OS%/%VERSION%?src=firefox");
 pref("extensions.getAddons.link.url", "https://addons.mozilla.org/%LOCALE%/firefox/");
 pref("extensions.getAddons.themes.browseURL", "https://addons.mozilla.org/%LOCALE%/firefox/themes/?src=firefox");
 
@@ -396,9 +393,9 @@ pref("browser.search.geoSpecificDefaults", false);
 pref("browser.search.geoSpecificDefaults.url", "https://search.services.mozilla.com/1/%APP%/%VERSION%/%CHANNEL%/%LOCALE%/%REGION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%");
 
 // US specific default (used as a fallback if the geoSpecificDefaults request fails).
-pref("browser.search.defaultenginename.US",      "data:text/plain,browser.search.defaultenginename.US=Yahoo");
-pref("browser.search.order.US.1",                "data:text/plain,browser.search.order.US.1=Yahoo");
-pref("browser.search.order.US.2",                "data:text/plain,browser.search.order.US.2=Google");
+pref("browser.search.defaultenginename.US",      "data:text/plain,browser.search.defaultenginename.US=Google");
+pref("browser.search.order.US.1",                "data:text/plain,browser.search.order.US.1=Google");
+pref("browser.search.order.US.2",                "data:text/plain,browser.search.order.US.2=Yahoo");
 pref("browser.search.order.US.3",                "data:text/plain,browser.search.order.US.3=Bing");
 
 // search bar results always open in a new tab
@@ -520,16 +517,12 @@ pref("javascript.options.showInConsole",          true);
 pref("general.warnOnAboutConfig",                 false);
 #endif
 
-pref("intl.locale.requested", "@AB_CD@");
-
 // This is the pref to control the location bar, change this to true to
 // force this - this makes the origin of popup windows more obvious to avoid
 // spoofing. We would rather not do it by default because it affects UE for web
 // applications, but without it there isn't a really good way to prevent chrome
 // spoofing, see bug 337344
 pref("dom.disable_window_open_feature.location",  true);
-// prevent JS from setting status messages
-pref("dom.disable_window_status_change",          true);
 // allow JS to move and resize existing windows
 pref("dom.disable_window_move_resize",            false);
 // prevent JS from monkeying with window focus, etc
@@ -1528,6 +1521,8 @@ pref("toolkit.telemetry.newProfilePing.enabled", true);
 pref("toolkit.telemetry.updatePing.enabled", true);
 // Enables sending 'bhr' pings when the browser hangs.
 pref("toolkit.telemetry.bhrPing.enabled", true);
+// Enables using Hybrid Content Telemetry from Mozilla privileged pages.
+pref("toolkit.telemetry.hybridContent.enabled", true);
 
 // Telemetry experiments settings.
 pref("experiments.enabled", true);
@@ -1631,7 +1626,6 @@ pref("reader.errors.includeURLs", true);
 pref("view_source.tab", true);
 
 pref("dom.serviceWorkers.enabled", true);
-pref("dom.serviceWorkers.openWindow.enabled", true);
 
 // Enable Push API.
 pref("dom.push.enabled", true);
@@ -1699,7 +1693,7 @@ pref("browser.crashReports.unsubmittedCheck.enabled", false);
 // without a user choice before we suppress the notification for
 // some number of days.
 pref("browser.crashReports.unsubmittedCheck.chancesUntilSuppress", 4);
-pref("browser.crashReports.unsubmittedCheck.autoSubmit", false);
+pref("browser.crashReports.unsubmittedCheck.autoSubmit2", false);
 
 // Preferences for the form autofill system extension
 // The truthy values of "extensions.formautofill.available" are "on" and "detect",

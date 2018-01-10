@@ -5,7 +5,7 @@
 "use strict";
 /* global XPCNativeWrapper */
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
@@ -136,10 +136,7 @@ this.GeckoDriver = function(appId, server) {
   this.mainFrame = null;
   // chrome iframe that currently has focus
   this.curFrame = null;
-  this.mozBrowserClose = null;
   this.currentFrameElement = null;
-  // frame ID of the current remote frame, used for mozbrowserclose events
-  this.oopFrameId = null;
   this.observing = null;
   this._browserIds = new WeakMap();
 
@@ -149,11 +146,6 @@ this.GeckoDriver = function(appId, server) {
 
   this.sandboxes = new Sandboxes(() => this.getCurrentWindow());
   this.legacyactions = new legacyaction.Chain();
-
-  this.timer = null;
-  this.inactivityTimer = null;
-
-  this.testName = null;
 
   this.capabilities = new session.Capabilities();
 
@@ -285,6 +277,22 @@ GeckoDriver.prototype.QueryInterface = XPCOMUtils.generateQI([
   Ci.nsISupportsWeakReference,
 ]);
 
+GeckoDriver.prototype.init = function() {
+  this.mm.addMessageListener("Marionette:GetLogLevel", this);
+  this.mm.addMessageListener("Marionette:getVisibleCookies", this);
+  this.mm.addMessageListener("Marionette:listenersAttached", this);
+  this.mm.addMessageListener("Marionette:register", this);
+  this.mm.addMessageListener("Marionette:switchedToFrame", this);
+};
+
+GeckoDriver.prototype.uninit = function() {
+  this.mm.removeMessageListener("Marionette:GetLogLevel", this);
+  this.mm.removeMessageListener("Marionette:getVisibleCookies", this);
+  this.mm.removeMessageListener("Marionette:listenersAttached", this);
+  this.mm.removeMessageListener("Marionette:register", this);
+  this.mm.removeMessageListener("Marionette:switchedToFrame", this);
+};
+
 /**
  * Callback used to observe the creation of new modal or tab modal dialogs
  * during the session's lifetime.
@@ -299,39 +307,24 @@ GeckoDriver.prototype.globalModalDialogHandler = function(subject, topic) {
 };
 
 /**
- * Switches to the global ChromeMessageBroadcaster, potentially replacing
- * a frame-specific ChromeMessageSender.  Has no effect if the global
- * ChromeMessageBroadcaster is already in use.  If this replaces a
- * frame-specific ChromeMessageSender, it removes the message listeners
- * from that sender, and then puts the corresponding frame script "to
- * sleep", which removes most of the message listeners from it as well.
- */
-GeckoDriver.prototype.switchToGlobalMessageManager = function() {
-  if (this.curBrowser &&
-      this.curBrowser.frameManager.currentRemoteFrame !== null) {
-    this.curBrowser.frameManager.removeMessageManagerListeners(this.mm);
-    this.sendAsync("sleepSession");
-    this.curBrowser.frameManager.currentRemoteFrame = null;
-  }
-  this.mm = globalMessageManager;
-};
-
-/**
  * Helper method to send async messages to the content listener.
  * Correct usage is to pass in the name of a function in listener.js,
  * a serialisable object, and optionally the current command's ID
  * when not using the modern dispatching technique.
  *
  * @param {string} name
- *     Suffix of the targetted message listener
- *     <tt>Marionette:SUFFIX</tt>.
- * @param {Object=} msg
- *     Optional JSON serialisable object to send to the listener.
+ *     Suffix of the target message handler <tt>Marionette:SUFFIX</tt>.
+ * @param {Object=} data
+ *     Data that must be serialisable using {@link evaluate.toJSON}.
  * @param {number=} commandID
  *     Optional command ID to ensure synchronisity.
+ *
+ * @throws {JavaScriptError}
+ *     If <var>data</var> could not be marshaled.
+ * @throws {NoSuchWindowError}
+ *     If there is no current target frame.
  */
 GeckoDriver.prototype.sendAsync = function(name, data, commandID) {
-  name = "Marionette:" + name;
   let payload = evaluate.toJSON(data, this.seenEls);
 
   // TODO(ato): When proxy.AsyncMessageChannel
@@ -341,42 +334,15 @@ GeckoDriver.prototype.sendAsync = function(name, data, commandID) {
     payload.commandID = commandID;
   }
 
-  if (!this.curBrowser.frameManager.currentRemoteFrame) {
-    this.broadcastDelayedAsyncMessage_(name, payload);
-  } else {
-    this.sendTargettedAsyncMessage_(name, payload);
-  }
-};
-
-// eslint-disable-next-line
-GeckoDriver.prototype.broadcastDelayedAsyncMessage_ = function(name, payload) {
   this.curBrowser.executeWhenReady(() => {
     if (this.curBrowser.curFrameId) {
-      const target = name + this.curBrowser.curFrameId;
+      let target = `Marionette:${name}${this.curBrowser.curFrameId}`;
       this.mm.broadcastAsyncMessage(target, payload);
     } else {
       throw new NoSuchWindowError(
           "No such content frame; perhaps the listener was not registered?");
     }
   });
-};
-
-GeckoDriver.prototype.sendTargettedAsyncMessage_ = function(name, payload) {
-  const curRemoteFrame = this.curBrowser.frameManager.currentRemoteFrame;
-  const target = name + curRemoteFrame.targetFrameId;
-
-  try {
-    this.mm.sendAsyncMessage(target, payload);
-  } catch (e) {
-    switch (e.result) {
-      case Cr.NS_ERROR_FAILURE:
-      case Cr.NS_ERROR_NOT_INITIALIZED:
-        throw new NoSuchWindowError();
-
-      default:
-        throw new WebDriverError(e);
-    }
-  }
 };
 
 /**
@@ -433,7 +399,6 @@ GeckoDriver.prototype.addFrameCloseListener = function(action) {
   this.mozBrowserClose = e => {
     if (e.target.id == this.oopFrameId) {
       win.removeEventListener("mozbrowserclose", this.mozBrowserClose, true);
-      this.switchToGlobalMessageManager();
       throw new NoSuchWindowError("The window closed during action: " + action);
     }
   };
@@ -557,24 +522,6 @@ GeckoDriver.prototype.getVisibleText = function(el, lines) {
 GeckoDriver.prototype.registerBrowser = function(id, be) {
   let nullPrevious = this.curBrowser.curFrameId === null;
   let listenerWindow = Services.wm.getOuterWindowWithId(id);
-
-  // go in here if we're already in a remote frame
-  if (this.curBrowser.frameManager.currentRemoteFrame !== null &&
-      (!listenerWindow || this.mm == this.curBrowser.frameManager
-          .currentRemoteFrame.messageManager.get())) {
-    // The outerWindowID from an OOP frame will not be meaningful to
-    // the parent process here, since each process maintains its own
-    // independent window list.  So, it will either be null (!listenerWindow)
-    // if we're already in a remote frame, or it will point to some
-    // random window, which will hopefully cause an href mismatch.
-    // Currently this only happens in B2G for OOP frames registered in
-    // Marionette:switchToFrame, so we'll acknowledge the switchToFrame
-    // message here.
-    //
-    // TODO: Should have a better way of determining that this message
-    // is from a remote frame.
-    this.curBrowser.frameManager.currentRemoteFrame.targetFrameId = id;
-  }
 
   // We want to ignore frames that are XUL browsers that aren't in the "main"
   // tabbrowser, but accept things on Fennec (which doesn't have a
@@ -815,11 +762,9 @@ GeckoDriver.prototype.newSession = async function(cmd) {
     let win = this.getCurrentWindow();
     this.addBrowser(win);
     this.whenBrowserStarted(win, false);
-    this.mm.broadcastAsyncMessage("Marionette:restart", {});
   } else {
     throw new WebDriverError("Session already running");
   }
-  this.switchToGlobalMessageManager();
 
   await registerBrowsers;
   await browserListening;
@@ -1886,31 +1831,8 @@ GeckoDriver.prototype.switchToFrame = async function(cmd) {
     }
 
   } else if (this.context == Context.Content) {
-    if (!id && !byFrame &&
-        this.curBrowser.frameManager.currentRemoteFrame !== null) {
-      // We're currently using a ChromeMessageSender for a remote frame,
-      // so this request indicates we need to switch back to the top-level
-      // (parent) frame.  We'll first switch to the parent's (global)
-      // ChromeMessageBroadcaster, so we send the message to the right
-      // listener.
-      this.switchToGlobalMessageManager();
-    }
     cmd.commandID = cmd.id;
-
-    let res = await this.listener.switchToFrame(cmd.parameters);
-    if (res) {
-      let {win: winId, frame: frameId} = res;
-      this.mm = this.curBrowser.frameManager.getFrameMM(winId, frameId);
-
-      let registerBrowsers = this.registerPromise();
-      let browserListening = this.listeningPromise();
-
-      this.oopFrameId =
-          this.curBrowser.frameManager.switchToFrame(winId, frameId);
-
-      await registerBrowsers;
-      await browserListening;
-    }
+    await this.listener.switchToFrame(cmd.parameters);
   }
 };
 
@@ -1948,7 +1870,6 @@ GeckoDriver.prototype.singleTap = async function(cmd) {
           "Command 'singleTap' is not yet available in chrome context");
 
     case Context.Content:
-      this.addFrameCloseListener("tap");
       await this.listener.singleTap(webEl, x, y);
       break;
   }
@@ -2029,7 +1950,6 @@ GeckoDriver.prototype.actionChain = async function(cmd, resp) {
       break;
 
     case Context.Content:
-      this.addFrameCloseListener("action chain");
       resp.body.value = await this.listener.actionChain(chain, nextId);
       break;
   }
@@ -2056,8 +1976,6 @@ GeckoDriver.prototype.multiAction = async function(cmd) {
   this._assertAndDismissModal();
 
   let {value, max_length} = cmd.parameters; // eslint-disable-line camelcase
-
-  this.addFrameCloseListener("multi action chain");
   await this.listener.multiAction(value, max_length);
 };
 
@@ -2210,13 +2128,6 @@ GeckoDriver.prototype.clickElement = async function(cmd) {
       break;
 
     case Context.Content:
-      // We need to protect against the click causing an OOP frame
-      // to close.  This fires the mozbrowserclose event when it closes
-      // so we need to listen for it and then just send an error back.
-      // The person making the call should be aware something is not right
-      // and handle accordingly.
-      this.addFrameCloseListener("click");
-
       let click = this.listener.clickElement(
           {webElRef: webEl.toJSON(), pageTimeout: this.timeouts.pageLoad});
 
@@ -2829,10 +2740,6 @@ GeckoDriver.prototype.close = async function() {
     return [];
   }
 
-  if (this.mm != globalMessageManager) {
-    this.mm.removeDelayedFrameScript(FRAME_SCRIPT);
-  }
-
   await this.curBrowser.closeTab();
   return this.windowHandles.map(String);
 };
@@ -2868,10 +2775,6 @@ GeckoDriver.prototype.closeChromeWindow = async function() {
   // reset frame to the top-most frame
   this.curFrame = null;
 
-  if (this.mm != globalMessageManager) {
-    this.mm.removeDelayedFrameScript(FRAME_SCRIPT);
-  }
-
   await this.curBrowser.closeWindow();
   return this.chromeWindowHandles.map(String);
 };
@@ -2899,12 +2802,7 @@ GeckoDriver.prototype.deleteSession = function() {
             `Could not remove listener from page ${win.location.href}`);
       }
     }
-
-    this.curBrowser.frameManager.removeMessageManagerListeners(
-        globalMessageManager);
   }
-
-  this.switchToGlobalMessageManager();
 
   // reset frame to the top-most frame
   this.curFrame = null;
@@ -3425,28 +3323,6 @@ GeckoDriver.prototype.uninstallAddon = function(cmd) {
 /* eslint-disable consistent-return */
 GeckoDriver.prototype.receiveMessage = function(message) {
   switch (message.name) {
-    case "Marionette:ok":
-    case "Marionette:done":
-    case "Marionette:error":
-      // check if we need to remove the mozbrowserclose listener
-      if (this.mozBrowserClose !== null) {
-        let win = this.getCurrentWindow();
-        win.removeEventListener("mozbrowserclose", this.mozBrowserClose, true);
-        this.mozBrowserClose = null;
-      }
-      break;
-
-    case "Marionette:log":
-      // log server-side messages
-      logger.info(message.json.message);
-      break;
-
-    case "Marionette:switchToModalOrigin":
-      this.curBrowser.frameManager.switchToModalOrigin(message);
-      this.mm = this.curBrowser.frameManager
-          .currentRemoteFrame.messageManager.get();
-      break;
-
     case "Marionette:switchedToFrame":
       if (message.json.restorePrevious) {
         this.currentFrameElement = this.previousFrameElement;
@@ -3465,11 +3341,6 @@ GeckoDriver.prototype.receiveMessage = function(message) {
           this.currentFrameElement = null;
         }
       }
-      break;
-
-    case "Marionette:emitTouchEvent":
-      globalMessageManager.broadcastAsyncMessage(
-          "MarionetteMainListener:emitTouchEvent", message.json);
       break;
 
     case "Marionette:register":

@@ -24,24 +24,53 @@
     streams.forEach(stream => stream.getTracks().forEach(track => track.stop()));
   };
 
-  let setRemoteDescriptionReturnTrackEvents = async (pc, desc) => {
-    let trackEvents = [];
-    let listener = e => trackEvents.push(e);
-    pc.addEventListener("track", listener);
-    await pc.setRemoteDescription(desc);
-    pc.removeEventListener("track", listener);
+  let collectEvents = (target, name, check) => {
+    let events = [];
+    let handler = e => {
+      check(e);
+      events.push(e);
+    };
 
-    // basic sanity-check, simplifies testing elsewhere
-    for (let e of trackEvents) {
+    target.addEventListener(name, handler);
+
+    let finishCollecting = () => {
+      target.removeEventListener(name, handler);
+      return events;
+    };
+
+    return {finish: finishCollecting};
+  };
+
+  let collectTrackEvents = pc => {
+    let checkEvent = e => {
       ok(e.track, "Track is set on event");
       ok(e.receiver, "Receiver is set on event");
       ok(e.transceiver, "Transceiver is set on event");
       ok(e.streams, "Streams is set on event");
+      e.streams.forEach(stream => {
+        ok(stream.getTracks().includes(e.track),
+           "Each stream in event contains the track");
+      });
       is(e.receiver, e.transceiver.receiver, "Receiver belongs to transceiver");
       is(e.track, e.receiver.track, "Track belongs to receiver");
-    }
+    };
 
-    return trackEvents;
+    return collectEvents(pc, "track", checkEvent);
+  };
+
+  let setRemoteDescriptionReturnTrackEvents = async (pc, desc) => {
+    let trackEventCollector = collectTrackEvents(pc);
+    await pc.setRemoteDescription(desc);
+    return trackEventCollector.finish();
+  };
+
+  let offerAnswer = async (offerer, answerer) => {
+    let offer = await offerer.createOffer();
+    await answerer.setRemoteDescription(offer);
+    await offerer.setLocalDescription(offer);
+    let answer = await answerer.createAnswer();
+    await offerer.setRemoteDescription(answer);
+    await answerer.setLocalDescription(answer);
   };
 
   let trickle = (pc1, pc2) => {
@@ -77,6 +106,24 @@
 
   let negotiationNeeded = pc => {
     return new Promise(resolve => pc.onnegotiationneeded = resolve);
+  };
+
+  let countEvents = (target, name) => {
+    let result = {count: 0};
+    target.addEventListener(name, e => result.count++);
+    return result;
+  };
+
+  let gotMuteEvent = async track => {
+    await haveEvent(track, "mute");
+
+    ok(track.muted, "track should be muted after onmute");
+  };
+
+  let gotUnmuteEvent = async track => {
+    await haveEvent(track, "unmute");
+
+    ok(!track.muted, "track should not be muted after onunmute");
   };
 
   let logExpected = expected => {
@@ -115,6 +162,10 @@
 
     // If we are expecting an object, check its props
     if (typeof expected === "object" && expected !== null) {
+      if (observed === null) {
+        ok(false, "Expected non-null");
+        return false;
+      }
       let propsWeCareAbout = Object.getOwnPropertyNames(expected);
       for (let i in propsWeCareAbout) {
         let prop = propsWeCareAbout[i];
@@ -144,7 +195,7 @@
     hasProps(pc.getTransceivers(),
       [
         {
-          receiver: {track: {kind: "audio", readyState: "live"}},
+          receiver: {track: {kind: "audio", readyState: "live", muted: true}},
           sender: {track: null},
           direction: "sendrecv",
           mid: null,
@@ -152,7 +203,7 @@
           stopped: false
         },
         {
-          receiver: {track: {kind: "video", readyState: "live"}},
+          receiver: {track: {kind: "video", readyState: "live", muted: true}},
           sender: {track: null},
           direction: "sendrecv",
           mid: null,
@@ -305,14 +356,18 @@
   let checkAddTransceiverWithOfferToReceive = async kinds => {
     let pc = new RTCPeerConnection();
 
+    let propsToSet = kinds.map(kind => {
+      if (kind == "audio") {
+        return "offerToReceiveAudio";
+      } else if (kind == "video") {
+        return "offerToReceiveVideo";
+      }
+    });
+
     let options = {};
 
-    for (let kind of kinds) {
-      if (kind == "audio") {
-        options.offerToReceiveAudio = true;
-      } else if (kind == "video") {
-        options.offerToReceiveVideo = true;
-      }
+    for (let prop of propsToSet) {
+      options[prop] = true;
     }
 
     let offer = await pc.createOffer(options);
@@ -347,6 +402,35 @@
 
     hasProps(pc.getTransceivers(), expected);
 
+    // Test offerToReceive: false
+    for (let prop of propsToSet) {
+      options[prop] = false;
+    }
+
+    // Check that sendrecv goes to sendonly
+    for (let transceiver of pc.getTransceivers()) {
+      transceiver.direction = "sendrecv";
+    }
+
+    for (let transceiverCheck of expected) {
+      transceiverCheck.direction = "sendonly";
+    }
+
+    offer = await pc.createOffer(options);
+    hasProps(pc.getTransceivers(), expected);
+
+    // Check that recvonly goes to inactive
+    for (let transceiver of pc.getTransceivers()) {
+      transceiver.direction = "recvonly";
+    }
+
+    for (let transceiverCheck of expected) {
+      transceiverCheck.direction = "inactive";
+    }
+
+    offer = await pc.createOffer(options);
+    hasProps(pc.getTransceivers(), expected);
+
     pc.close();
   };
 
@@ -368,6 +452,7 @@
           streams: [{id: stream.id}]
         }
       ]);
+
 
     hasProps(pc2.getTransceivers(),
       [
@@ -423,11 +508,12 @@
       pc.addTransceiver("foo");
       ok(false, 'addTransceiver("foo") throws');
     }
-    catch (e if e instanceof TypeError) {
-      ok(true, 'addTransceiver("foo") throws a TypeError');
-    }
     catch (e) {
-      ok(false, 'addTransceiver("foo") throws a TypeError');
+      if (e instanceof TypeError) {
+        ok(true, 'addTransceiver("foo") throws a TypeError');
+      } else {
+        ok(false, 'addTransceiver("foo") throws a TypeError');
+      }
     }
 
     hasProps(pc.getTransceivers(), []);
@@ -603,7 +689,77 @@
 
     hasProps(pc2.getTransceivers(),
       [
-        {mid: "sdparta_0", sender: {track}}
+        {mid: "sdparta_0", sender: {track: null}}
+      ]);
+
+    pc1.close();
+    pc2.close();
+    stopTracks(stream);
+  };
+
+  let checkRemoveAndReadd = async () => {
+    let pc1 = new RTCPeerConnection();
+    let pc2 = new RTCPeerConnection();
+    let stream = await getUserMedia({audio: true});
+    let track = stream.getAudioTracks()[0];
+    pc1.addTrack(track, stream);
+
+    await offerAnswer(pc1, pc2);
+
+    pc1.removeTrack(pc1.getSenders()[0]);
+    pc1.addTrack(track, stream);
+
+    hasProps(pc1.getTransceivers(),
+      [
+        {
+          sender: {track: null},
+          direction: "recvonly"
+        },
+        {
+          sender: {track},
+          direction: "sendrecv"
+        }
+      ]);
+
+    // pc1 is offerer
+    await offerAnswer(pc1, pc2);
+
+    hasProps(pc2.getTransceivers(),
+      [
+        {currentDirection: "inactive"},
+        {currentDirection: "recvonly"}
+      ]);
+
+    pc1.removeTrack(pc1.getSenders()[1]);
+    pc1.addTrack(track, stream);
+
+    hasProps(pc1.getTransceivers(),
+      [
+        {
+          sender: {track: null},
+          direction: "recvonly"
+        },
+        {
+          sender: {track: null},
+          direction: "recvonly"
+        },
+        {
+          sender: {track},
+          direction: "sendrecv"
+        }
+      ]);
+
+    // pc1 is answerer. We need to create a new transceiver so pc1 will have
+    // something to attach the re-added track to
+    pc2.addTransceiver("audio");
+
+    await offerAnswer(pc2, pc1);
+
+    hasProps(pc2.getTransceivers(),
+      [
+        {currentDirection: "inactive"},
+        {currentDirection: "inactive"},
+        {currentDirection: "sendrecv"}
       ]);
 
     pc1.close();
@@ -687,7 +843,6 @@
     answer = await pc1.createAnswer();
     hasProps(pc1.getTransceivers(), [{currentDirection: "sendrecv"}]);
 
-    // TODO(bug 1400363): Check onmute/muted
     await pc1.setLocalDescription(answer);
     hasProps(pc1.getTransceivers(), [{currentDirection: "recvonly"}]);
 
@@ -712,7 +867,6 @@
     answer = await pc1.createAnswer();
     hasProps(pc1.getTransceivers(), [{currentDirection: "recvonly"}]);
 
-    // TODO(bug 1400363): Check onunmute/muted
     await pc1.setLocalDescription(answer);
     hasProps(pc1.getTransceivers(), [{currentDirection: "sendrecv"}]);
 
@@ -777,6 +931,220 @@
     pc1.close();
     pc2.close();
     stopTracks(stream);
+  };
+
+  let checkSendrecvWithTracklessStream = async () => {
+    let pc1 = new RTCPeerConnection();
+    let pc2 = new RTCPeerConnection();
+
+    let stream = new MediaStream();
+    pc1.addTransceiver("audio", {streams: [stream]});
+
+    let offer = await pc1.createOffer();
+
+    let trackEvents = await setRemoteDescriptionReturnTrackEvents(pc2, offer);
+    hasProps(trackEvents,
+      [
+        {
+          track: pc2.getTransceivers()[0].receiver.track,
+          streams: [{id: stream.id}]
+        }
+      ]);
+
+    pc1.close();
+    pc2.close();
+  };
+
+  let checkMute = async () => {
+    let pc1 = new RTCPeerConnection();
+    let stream1 = await getUserMedia({audio: true, video: true});
+    let audio1 = stream1.getAudioTracks()[0];
+    pc1.addTrack(audio1, stream1);
+    let countMuteAudio1 = countEvents(pc1.getTransceivers()[0].receiver.track, "mute");
+    let countUnmuteAudio1 = countEvents(pc1.getTransceivers()[0].receiver.track, "unmute");
+
+    let video1 = stream1.getVideoTracks()[0];
+    pc1.addTrack(video1, stream1);
+    let countMuteVideo1 = countEvents(pc1.getTransceivers()[1].receiver.track, "mute");
+    let countUnmuteVideo1 = countEvents(pc1.getTransceivers()[1].receiver.track, "unmute");
+
+    let pc2 = new RTCPeerConnection();
+    let stream2 = await getUserMedia({audio: true, video: true});
+    let audio2 = stream2.getAudioTracks()[0];
+    pc2.addTrack(audio2, stream2);
+    let countMuteAudio2 = countEvents(pc2.getTransceivers()[0].receiver.track, "mute");
+    let countUnmuteAudio2 = countEvents(pc2.getTransceivers()[0].receiver.track, "unmute");
+
+    let video2 = stream2.getVideoTracks()[0];
+    pc2.addTrack(video2, stream2);
+    let countMuteVideo2 = countEvents(pc2.getTransceivers()[1].receiver.track, "mute");
+    let countUnmuteVideo2 = countEvents(pc2.getTransceivers()[1].receiver.track, "unmute");
+
+
+    // Check that receive tracks start muted
+    hasProps(pc1.getTransceivers(),
+      [
+        {receiver: {track: {kind: "audio", muted: true}}},
+        {receiver: {track: {kind: "video", muted: true}}}
+      ]);
+
+    hasProps(pc1.getTransceivers(),
+      [
+        {receiver: {track: {kind: "audio", muted: true}}},
+        {receiver: {track: {kind: "video", muted: true}}}
+      ]);
+
+    let offer = await pc1.createOffer();
+    await pc2.setRemoteDescription(offer);
+    trickle(pc1, pc2);
+    await pc1.setLocalDescription(offer);
+    let answer = await pc2.createAnswer();
+    await pc1.setRemoteDescription(answer);
+    trickle(pc2, pc1);
+    await pc2.setLocalDescription(answer);
+
+    let gotUnmuteAudio1 = gotUnmuteEvent(pc1.getTransceivers()[0].receiver.track);
+    let gotUnmuteVideo1 = gotUnmuteEvent(pc1.getTransceivers()[1].receiver.track);
+
+    let gotUnmuteAudio2 = gotUnmuteEvent(pc2.getTransceivers()[0].receiver.track);
+    let gotUnmuteVideo2 = gotUnmuteEvent(pc2.getTransceivers()[1].receiver.track);
+
+    await iceConnected(pc1);
+    await iceConnected(pc2);
+
+    // Check that receive tracks are unmuted when RTP starts flowing
+    await gotUnmuteAudio1;
+    await gotUnmuteVideo1;
+    await gotUnmuteAudio2;
+    await gotUnmuteVideo2;
+
+    // Check whether disabling recv locally causes onmute
+    pc1.getTransceivers()[0].direction = "sendonly";
+    pc1.getTransceivers()[1].direction = "sendonly";
+    offer = await pc1.createOffer();
+    await pc2.setRemoteDescription(offer);
+    await pc1.setLocalDescription(offer);
+    answer = await pc2.createAnswer();
+    let gotMuteAudio1 = gotMuteEvent(pc1.getTransceivers()[0].receiver.track);
+    let gotMuteVideo1 = gotMuteEvent(pc1.getTransceivers()[1].receiver.track);
+    await pc1.setRemoteDescription(answer);
+    await pc2.setLocalDescription(answer);
+    await gotMuteAudio1;
+    await gotMuteVideo1;
+
+    // Check whether disabling on remote causes onmute
+    pc1.getTransceivers()[0].direction = "inactive";
+    pc1.getTransceivers()[1].direction = "inactive";
+    offer = await pc1.createOffer();
+    await pc2.setRemoteDescription(offer);
+    await pc1.setLocalDescription(offer);
+    answer = await pc2.createAnswer();
+    let gotMuteAudio2 = gotMuteEvent(pc2.getTransceivers()[0].receiver.track);
+    let gotMuteVideo2 = gotMuteEvent(pc2.getTransceivers()[1].receiver.track);
+    await pc1.setRemoteDescription(answer);
+    await pc2.setLocalDescription(answer);
+    await gotMuteAudio2;
+    await gotMuteVideo2;
+
+    // Check whether onunmute fires when we turn everything on again
+    pc1.getTransceivers()[0].direction = "sendrecv";
+    pc1.getTransceivers()[1].direction = "sendrecv";
+    offer = await pc1.createOffer();
+    await pc2.setRemoteDescription(offer);
+    await pc1.setLocalDescription(offer);
+    answer = await pc2.createAnswer();
+    gotUnmuteAudio1 = gotUnmuteEvent(pc1.getTransceivers()[0].receiver.track);
+    gotUnmuteVideo1 = gotUnmuteEvent(pc1.getTransceivers()[1].receiver.track);
+    gotUnmuteAudio2 = gotUnmuteEvent(pc2.getTransceivers()[0].receiver.track);
+    gotUnmuteVideo2 = gotUnmuteEvent(pc2.getTransceivers()[1].receiver.track);
+    await pc1.setRemoteDescription(answer);
+    await pc2.setLocalDescription(answer);
+    await gotUnmuteAudio1;
+    await gotUnmuteVideo1;
+    await gotUnmuteAudio2;
+    await gotUnmuteVideo2;
+
+    // Wait a little, just in case some stray events fire
+    await wait(100);
+
+    is(1, countMuteAudio1.count, "Got 1 mute event for pc1's audio track");
+    is(1, countMuteVideo1.count, "Got 1 mute event for pc1's video track");
+    is(1, countMuteAudio2.count, "Got 1 mute event for pc2's audio track");
+    is(1, countMuteVideo2.count, "Got 1 mute event for pc2's video track");
+    is(2, countUnmuteAudio1.count, "Got 2 unmute events for pc1's audio track");
+    is(2, countUnmuteVideo1.count, "Got 2 unmute events for pc1's video track");
+    is(2, countUnmuteAudio2.count, "Got 2 unmute events for pc2's audio track");
+    is(2, countUnmuteVideo2.count, "Got 2 unmute events for pc2's video track");
+
+    pc1.close();
+    pc2.close();
+    stopTracks(stream1);
+    stopTracks(stream2);
+  };
+
+  let checkOnAddStream = async () => {
+    let pc1 = new RTCPeerConnection();
+    let stream1 = await getUserMedia({audio: true, video: true});
+    let audio1 = stream1.getAudioTracks()[0];
+    pc1.addTrack(audio1, stream1);
+    let video1 = stream1.getVideoTracks()[0];
+    pc1.addTrack(video1, stream1);
+
+    let pc2 = new RTCPeerConnection();
+    let stream2 = await getUserMedia({audio: true, video: true});
+    let audio2 = stream2.getAudioTracks()[0];
+    pc2.addTrack(audio2, stream2);
+    let video2 = stream2.getVideoTracks()[0];
+    pc2.addTrack(video2, stream2);
+
+    let offer = await pc1.createOffer();
+
+    let trackEventCollector = collectTrackEvents(pc2);
+    let addstreamEventCollector = collectEvents(pc2, "addstream", e => {
+      hasProps(e, {stream: {id: stream1.id}});
+      is(e.stream.getAudioTracks().length, 1, "One audio track");
+      is(e.stream.getVideoTracks().length, 1, "One video track");
+    });
+
+    await pc2.setRemoteDescription(offer);
+
+    let addstreamEvents = addstreamEventCollector.finish();
+    is(addstreamEvents.length, 1, "Should have 1 addstream event");
+
+    let trackEvents = trackEventCollector.finish();
+
+    hasProps(trackEvents,
+      [
+        {streams: [addstreamEvents[0].stream]},
+        {streams: [addstreamEvents[0].stream]}
+      ]);
+
+    await pc1.setLocalDescription(offer);
+    let answer = await pc2.createAnswer();
+
+    trackEventCollector = collectTrackEvents(pc1);
+    addstreamEventCollector = collectEvents(pc1, "addstream", e => {
+      hasProps(e, {stream: {id: stream2.id}});
+      is(e.stream.getAudioTracks().length, 1, "One audio track");
+      is(e.stream.getVideoTracks().length, 1, "One video track");
+    });
+
+    await pc1.setRemoteDescription(answer);
+    addstreamEvents = addstreamEventCollector.finish();
+    is(addstreamEvents.length, 1, "Should have 1 addstream event");
+
+    trackEvents = trackEventCollector.finish();
+
+    hasProps(trackEvents,
+      [
+        {streams: [addstreamEvents[0].stream]},
+        {streams: [addstreamEvents[0].stream]}
+      ]);
+
+    pc1.close();
+    pc2.close();
+    stopTracks(stream1);
+    stopTracks(stream2);
   };
 
   let checkStop = async () => {
@@ -1683,12 +2051,16 @@
     await checkSetDirection();
     await checkCurrentDirection();
     await checkSendrecvWithNoSendTrack();
+    await checkSendrecvWithTracklessStream();
     await checkAddTransceiverNoTrackDoesntPair();
     await checkAddTransceiverWithTrackDoesntPair();
     await checkAddTransceiverThenReplaceTrackDoesntPair();
     await checkAddTransceiverThenAddTrackPairs();
     await checkAddTrackPairs();
     await checkReplaceTrackNullDoesntPreventPairing();
+    await checkRemoveAndReadd();
+    await checkMute();
+    await checkOnAddStream();
     await checkStop();
     await checkStopAfterCreateOffer();
     await checkStopAfterSetLocalOffer();

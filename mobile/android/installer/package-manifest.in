@@ -120,6 +120,9 @@
 @BINPATH@/components/dom.xpt
 @BINPATH@/components/dom_base.xpt
 @BINPATH@/components/dom_bindings.xpt
+#ifdef MOZ_DEBUG
+@BINPATH@/components/dom_bindings_test.xpt
+#endif
 @BINPATH@/components/dom_canvas.xpt
 @BINPATH@/components/dom_core.xpt
 @BINPATH@/components/dom_css.xpt
@@ -171,9 +174,6 @@
 @BINPATH@/components/jsdownloads.xpt
 @BINPATH@/components/jsinspector.xpt
 @BINPATH@/components/layout_base.xpt
-#ifdef MOZ_DEBUG
-@BINPATH@/components/layout_debug.xpt
-#endif
 #ifdef NS_PRINTING
 @BINPATH@/components/layout_printing.xpt
 #endif
@@ -246,7 +246,6 @@
 @BINPATH@/components/widget.xpt
 @BINPATH@/components/widget_android.xpt
 @BINPATH@/components/windowcreator.xpt
-@BINPATH@/components/windowds.xpt
 @BINPATH@/components/windowwatcher.xpt
 @BINPATH@/components/xpcom_base.xpt
 @BINPATH@/components/xpcom_system.xpt
@@ -258,7 +257,6 @@
 @BINPATH@/components/xpconnect.xpt
 @BINPATH@/components/xulapp.xpt
 @BINPATH@/components/xul.xpt
-@BINPATH@/components/xultmpl.xpt
 @BINPATH@/components/zipwriter.xpt
 
 ; JavaScript components

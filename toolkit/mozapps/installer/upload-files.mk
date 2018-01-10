@@ -152,6 +152,7 @@ ifeq ($(MOZ_PKG_FORMAT),RPM)
     $(PYTHON) -m mozbuild.action.preprocessor \
       -DMOZ_APP_NAME=$(MOZ_APP_NAME) \
       -DMOZ_APP_DISPLAYNAME='$(MOZ_APP_DISPLAYNAME)' \
+      -DMOZ_APP_REMOTINGNAME='$(MOZ_APP_REMOTINGNAME)' \
       $(RPM_INCIDENTALS)/mozilla.desktop \
       -o $(RPMBUILD_SOURCEDIR)/$(MOZ_APP_NAME).desktop && \
     rm -rf $(ABS_DIST)/$(TARGET_CPU) && \
@@ -215,8 +216,15 @@ ifeq ($(MOZ_PKG_FORMAT),DMG)
 
   _ABS_MOZSRCDIR = $(shell cd $(MOZILLA_DIR) && pwd)
   PKG_DMG_SOURCE = $(MOZ_PKG_DIR)
-  INNER_MAKE_PACKAGE	= $(call py_action,make_dmg,'$(PKG_DMG_SOURCE)' '$(PACKAGE)')
-  INNER_UNMAKE_PACKAGE	= \
+  INNER_MAKE_PACKAGE = \
+    $(call py_action,make_dmg, \
+        $(if $(MOZ_PKG_MAC_DSSTORE),--dsstore '$(MOZ_PKG_MAC_DSSTORE)') \
+        $(if $(MOZ_PKG_MAC_BACKGROUND),--background '$(MOZ_PKG_MAC_BACKGROUND)') \
+        $(if $(MOZ_PKG_MAC_ICON),--icon '$(MOZ_PKG_MAC_ICON)') \
+        --volume-name '$(MOZ_APP_DISPLAYNAME)' \
+        '$(PKG_DMG_SOURCE)' '$(PACKAGE)' \
+        )
+  INNER_UNMAKE_PACKAGE = \
     $(call py_action,unpack_dmg, \
         $(if $(MOZ_PKG_MAC_DSSTORE),--dsstore '$(MOZ_PKG_MAC_DSSTORE)') \
         $(if $(MOZ_PKG_MAC_BACKGROUND),--background '$(MOZ_PKG_MAC_BACKGROUND)') \
@@ -239,7 +247,7 @@ endif
 
 ifdef MOZ_SIGN_PREPARED_PACKAGE_CMD
   ifeq (Darwin, $(OS_ARCH))
-    MAKE_PACKAGE    = cd ./$(PKG_DMG_SOURCE) && $(MOZ_SIGN_PREPARED_PACKAGE_CMD) $(MOZ_MACBUNDLE_NAME) \
+    MAKE_PACKAGE    = cd ./$(PKG_DMG_SOURCE) && $(MOZ_SIGN_PREPARED_PACKAGE_CMD) '$(MOZ_MACBUNDLE_NAME)' \
                       && cd $(PACKAGE_BASE_DIR) && $(INNER_MAKE_PACKAGE)
   else
     MAKE_PACKAGE    = $(MOZ_SIGN_PREPARED_PACKAGE_CMD) $(MOZ_PKG_DIR) \

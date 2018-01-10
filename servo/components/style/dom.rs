@@ -78,14 +78,10 @@ where
 
     fn next(&mut self) -> Option<N> {
         loop {
-            match self.0.next() {
-                Some(n) => {
-                    // Filter out nodes that layout should ignore.
-                    if n.is_text_node() || n.is_element() {
-                        return Some(n)
-                    }
-                }
-                None => return None,
+            let n = self.0.next()?;
+            // Filter out nodes that layout should ignore.
+            if n.is_text_node() || n.is_element() {
+                return Some(n)
             }
         }
     }
@@ -100,13 +96,9 @@ where
     type Item = N;
 
     fn next(&mut self) -> Option<N> {
-        match self.0.take() {
-            Some(n) => {
-                self.0 = n.next_sibling();
-                Some(n)
-            }
-            None => None,
-        }
+        let n = self.0.take()?;
+        self.0 = n.next_sibling();
+        Some(n)
     }
 }
 
@@ -124,11 +116,7 @@ where
 
     #[inline]
     fn next(&mut self) -> Option<N> {
-        let prev = match self.previous.take() {
-            None => return None,
-            Some(n) => n,
-        };
-
+        let prev = self.previous.take()?;
         self.previous = prev.next_in_preorder(Some(self.scope));
         self.previous
     }
@@ -251,13 +239,6 @@ pub trait TNode : Sized + Copy + Clone + Debug + NodeInfo + PartialEq {
 
     /// Get this node as a document, if it's one.
     fn as_document(&self) -> Option<Self::ConcreteDocument>;
-
-    /// Whether this node can be fragmented. This is used for multicol, and only
-    /// for Servo.
-    fn can_be_fragmented(&self) -> bool;
-
-    /// Set whether this node can be fragmented.
-    unsafe fn set_can_be_fragmented(&self, value: bool);
 }
 
 /// Wrapper to output the subtree rather than the single node when formatting

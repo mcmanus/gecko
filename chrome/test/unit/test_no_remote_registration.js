@@ -178,13 +178,11 @@ function run_test() {
           break;
       }
       try {
-        let ios = Cc["@mozilla.org/network/io-service;1"].
-                  getService(Ci.nsIIOService);
-        sourceURI = ios.newURI(sourceURI);
+        sourceURI = Services.io.newURI(sourceURI);
         let uri;
         if (type == "resource") {
           // resources go about a slightly different way than everything else
-          let rph = ios.getProtocolHandler("resource").
+          let rph = Services.io.getProtocolHandler("resource").
                     QueryInterface(Ci.nsIResProtocolHandler);
           // this throws for packages that are not registered
           uri = rph.resolveURI(sourceURI);
@@ -194,11 +192,11 @@ function run_test() {
         }
 
         if (protocol.shouldRegister) {
-          do_check_eq(expectedURI, uri);
+          Assert.equal(expectedURI, uri);
         } else {
           // Overrides will not throw, so we'll get to here.  We want to make
           // sure that the two strings are not the same in this situation.
-          do_check_neq(expectedURI, uri);
+          Assert.notEqual(expectedURI, uri);
         }
       } catch (e) {
         if (protocol.shouldRegister) {

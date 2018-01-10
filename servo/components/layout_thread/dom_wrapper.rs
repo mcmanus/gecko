@@ -49,7 +49,7 @@ use script_layout_interface::{OpaqueStyleAndLayoutData, StyleData};
 use script_layout_interface::wrapper_traits::{DangerousThreadSafeLayoutNode, GetLayoutData, LayoutNode};
 use script_layout_interface::wrapper_traits::{PseudoElementType, ThreadSafeLayoutElement, ThreadSafeLayoutNode};
 use selectors::attr::{AttrSelectorOperation, NamespaceConstraint, CaseSensitivity};
-use selectors::matching::{ElementSelectorFlags, MatchingContext, QuirksMode, RelevantLinkStatus};
+use selectors::matching::{ElementSelectorFlags, MatchingContext, QuirksMode};
 use selectors::matching::VisitedHandlingMode;
 use selectors::sink::Push;
 use servo_arc::{Arc, ArcBorrow};
@@ -209,16 +209,8 @@ impl<'ln> TNode for ServoLayoutNode<'ln> {
         self.node.downcast().map(ServoLayoutDocument::from_layout_js)
     }
 
-    fn can_be_fragmented(&self) -> bool {
-        unsafe { self.node.get_flag(NodeFlags::CAN_BE_FRAGMENTED) }
-    }
-
     fn is_in_document(&self) -> bool {
         unsafe { self.node.get_flag(NodeFlags::IS_IN_DOC) }
-    }
-
-    unsafe fn set_can_be_fragmented(&self, value: bool) {
-        self.node.set_flag(NodeFlags::CAN_BE_FRAGMENTED, value)
     }
 }
 
@@ -718,7 +710,7 @@ impl<'le> ::selectors::Element for ServoLayoutElement<'le> {
         &self,
         pseudo_class: &NonTSPseudoClass,
         _: &mut MatchingContext<Self::Impl>,
-        _: &RelevantLinkStatus,
+        _: VisitedHandlingMode,
         _: &mut F,
     ) -> bool
     where
@@ -928,10 +920,6 @@ impl<'ln> ThreadSafeLayoutNode for ServoThreadSafeLayoutNode<'ln> {
 
     unsafe fn unsafe_get(self) -> Self::ConcreteNode {
         self.node
-    }
-
-    fn can_be_fragmented(&self) -> bool {
-        self.node.can_be_fragmented()
     }
 
     fn node_text_content(&self) -> String {
@@ -1233,7 +1221,7 @@ impl<'le> ::selectors::Element for ServoThreadSafeLayoutElement<'le> {
         &self,
         _: &NonTSPseudoClass,
         _: &mut MatchingContext<Self::Impl>,
-        _: &RelevantLinkStatus,
+        _: VisitedHandlingMode,
         _: &mut F,
     ) -> bool
     where

@@ -47,9 +47,7 @@ function logMsg(msg, file, line, flag, winID) {
   let scriptError = scriptErrorClass.createInstance(Ci.nsIScriptError);
   scriptError.initWithWindowID(msg, file, null, line, 0, flag,
                                "content javascript", winID);
-  let console = Cc["@mozilla.org/consoleservice;1"].
-  getService(Ci.nsIConsoleService);
-  console.logMessage(scriptError);
+  Services.console.logMessage(scriptError);
 }
 
 let setupPrototype = (_class, dict) => {
@@ -366,6 +364,8 @@ class RTCRtpSourceCache {
 class RTCPeerConnection {
   constructor() {
     this._receiveStreams = new Map();
+    // Used to fire onaddstream, remove when we don't do that anymore.
+    this._newStreams = [];
     this._transceivers = [];
 
     this._pc = null;
@@ -647,11 +647,9 @@ class RTCPeerConnection {
       }
     });
 
-    let ios = Cc["@mozilla.org/network/io-service;1"].getService(Ci.nsIIOService);
-
     let nicerNewURI = uriStr => {
       try {
-        return ios.newURI(uriStr);
+        return Services.io.newURI(uriStr);
       } catch (e) {
         if (e.result == Cr.NS_ERROR_MALFORMED_URI) {
           throw new this._win.DOMException(msg + " - malformed URI: " + uriStr,
@@ -829,21 +827,24 @@ class RTCPeerConnection {
       this._ensureOfferToReceive("video");
     }
 
-    if (options.offerToReceiveVideo === false) {
-      this.logWarning("offerToReceiveVideo: false is ignored now. If you " +
-                      "want to disallow a recv track, use " +
-                      "RTCRtpTransceiver.direction");
-    }
-
     if (options.offerToReceiveAudio) {
       this._ensureOfferToReceive("audio");
     }
 
-    if (options.offerToReceiveAudio === false) {
-      this.logWarning("offerToReceiveAudio: false is ignored now. If you " +
-                      "want to disallow a recv track, use " +
-                      "RTCRtpTransceiver.direction");
-    }
+    this._transceivers
+      .filter(transceiver => {
+        return (options.offerToReceiveVideo === false &&
+                transceiver.receiver.track.kind == "video") ||
+               (options.offerToReceiveAudio === false &&
+                transceiver.receiver.track.kind == "audio");
+      })
+      .forEach(transceiver => {
+        if (transceiver.direction == "sendrecv") {
+          transceiver.setDirectionInternal("sendonly");
+        } else if (transceiver.direction == "recvonly") {
+          transceiver.setDirectionInternal("inactive");
+        }
+      });
   }
 
   async _createOffer(options) {
@@ -981,6 +982,8 @@ class RTCPeerConnection {
         this._onSetLocalDescriptionFailure = reject;
         this._impl.setLocalDescription(action, sdp);
       });
+      this._negotiationNeeded = false;
+      this.updateNegotiationNeeded();
     });
   }
 
@@ -1060,6 +1063,8 @@ class RTCPeerConnection {
         await this._validateIdentity(sdp, origin);
       }
       await haveSetRemote;
+      this._negotiationNeeded = false;
+      this.updateNegotiationNeeded();
     });
   }
 
@@ -1318,13 +1323,20 @@ class RTCPeerConnection {
     });
   }
 
+  // TODO(Bug 1241291): Legacy event, remove eventually
+  _fireLegacyAddStreamEvents() {
+    for (let stream of this._newStreams) {
+      let ev = new this._win.MediaStreamEvent("addstream", { stream });
+      this.dispatchEvent(ev);
+    }
+    this._newStreams = [];
+  }
+
   _getOrCreateStream(id) {
     if (!this._receiveStreams.has(id)) {
       let stream = new this._win.MediaStream();
       stream.assignId(id);
-      // Legacy event, remove eventually
-      let ev = new this._win.MediaStreamEvent("addstream", { stream });
-      this.dispatchEvent(ev);
+      this._newStreams.push(stream);
       this._receiveStreams.set(id, stream);
     }
 
@@ -1638,15 +1650,12 @@ class PeerConnectionObserver {
 
   onSetLocalDescriptionSuccess() {
     this._dompc._syncTransceivers();
-    this._negotiationNeeded = false;
-    this._dompc.updateNegotiationNeeded();
     this._dompc._onSetLocalDescriptionSuccess();
   }
 
   onSetRemoteDescriptionSuccess() {
     this._dompc._syncTransceivers();
-    this._negotiationNeeded = false;
-    this._dompc.updateNegotiationNeeded();
+    this._dompc._fireLegacyAddStreamEvents();
     this._dompc._onSetRemoteDescriptionSuccess();
   }
 

@@ -90,6 +90,7 @@ browser/extensions/pocket/content/panels/js/tmpl.js
 browser/extensions/pocket/content/panels/js/vendor/**
 # generated or library files in activity-stream
 browser/extensions/activity-stream/data/content/activity-stream.bundle.js
+browser/extensions/activity-stream/test/**
 browser/extensions/activity-stream/vendor/**
 # The only file in browser/locales/ is pre-processed.
 browser/locales/**
@@ -220,6 +221,7 @@ dom/fetch/**
 dom/file/**
 dom/filehandle/**
 dom/filesystem/**
+dom/flex/**
 dom/flyweb/**
 dom/gamepad/**
 dom/geolocation/**
@@ -240,6 +242,7 @@ dom/network/**
 dom/notification/Notification*.*
 dom/notification/test/browser/**
 dom/notification/test/unit/**
+dom/notification/test/mochitest/**
 dom/offline/**
 dom/payments/**
 dom/performance/**
@@ -305,6 +308,7 @@ js/xpconnect/**
 js/src/devtools/**
 js/src/octane/**
 js/src/jit-test/**
+js/src/jsapi-tests/binast/**
 js/src/tests/**
 js/src/Y.js
 

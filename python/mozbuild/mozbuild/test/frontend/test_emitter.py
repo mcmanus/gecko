@@ -15,7 +15,6 @@ from mozbuild.frontend.context import (
 )
 from mozbuild.frontend.data import (
     AndroidResDirs,
-    BrandingFiles,
     ChromeManifestEntry,
     ComputedFlags,
     ConfigFileSubstitution,
@@ -114,7 +113,7 @@ class TestEmitterBasic(unittest.TestCase):
             self.assertTrue(os.path.isabs(o.context_main_path))
             self.assertEqual(len(o.context_all_paths), 1)
 
-        reldirs = [o.relativedir for o in objs]
+        reldirs = [o.relsrcdir for o in objs]
         self.assertEqual(reldirs, ['', 'foo', 'foo/biz', 'bar'])
 
         dirs = [[d.full_path for d in o.dirs] for o in objs]
@@ -134,11 +133,11 @@ class TestEmitterBasic(unittest.TestCase):
         for o in objs:
             self.assertIsInstance(o, DirectoryTraversal)
 
-        reldirs = set([o.relativedir for o in objs])
+        reldirs = set([o.relsrcdir for o in objs])
         self.assertEqual(reldirs, set(['', 'regular']))
 
         for o in objs:
-            reldir = o.relativedir
+            reldir = o.relsrcdir
 
             if reldir == '':
                 self.assertEqual([d.full_path for d in o.dirs], [
@@ -152,11 +151,11 @@ class TestEmitterBasic(unittest.TestCase):
         for o in objs:
             self.assertIsInstance(o, DirectoryTraversal)
 
-        reldirs = set([o.relativedir for o in objs])
+        reldirs = set([o.relsrcdir for o in objs])
         self.assertEqual(reldirs, set(['', 'regular', 'test']))
 
         for o in objs:
-            reldir = o.relativedir
+            reldir = o.relsrcdir
 
             if reldir == '':
                 self.assertEqual([d.full_path for d in o.dirs], [
@@ -640,22 +639,6 @@ class TestEmitterBasic(unittest.TestCase):
             'Cannot install files to the root of TEST_HARNESS_FILES'):
             self.read_topsrcdir(reader)
 
-    def test_branding_files(self):
-        reader = self.reader('branding-files')
-        objs = self.read_topsrcdir(reader)
-
-        self.assertEqual(len(objs), 1)
-        self.assertIsInstance(objs[0], BrandingFiles)
-
-        files = objs[0].files
-
-        self.assertEqual(files._strings, ['bar.ico', 'baz.png', 'foo.xpm'])
-
-        self.assertIn('icons', files._children)
-        icons = files._children['icons']
-
-        self.assertEqual(icons._strings, ['quux.icns'])
-
     def test_program(self):
         reader = self.reader('program')
         objs = self.read_topsrcdir(reader)
@@ -947,9 +930,9 @@ class TestEmitterBasic(unittest.TestCase):
         nonstatic_ipdls = []
         for o in objs:
             if isinstance(o, IPDLFile):
-                ipdls.append('%s/%s' % (o.relativedir, o.basename))
+                ipdls.append('%s/%s' % (o.relsrcdir, o.basename))
             elif isinstance(o, PreprocessedIPDLFile):
-                nonstatic_ipdls.append('%s/%s' % (o.relativedir, o.basename))
+                nonstatic_ipdls.append('%s/%s' % (o.relsrcdir, o.basename))
 
         expected = [
             'bar/bar.ipdl',

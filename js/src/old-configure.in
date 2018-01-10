@@ -206,12 +206,18 @@ case "$target" in
         AC_SUBST(MSVC_C_RUNTIME_DLL)
         AC_SUBST(MSVC_CXX_RUNTIME_DLL)
 
-        # Check linker version
-        _LD_FULL_VERSION=`"${LINK}" -v 2>&1 | sed -nre "$_MSVC_VER_FILTER"`
-        _LD_MAJOR_VERSION=`echo ${_LD_FULL_VERSION} | $AWK -F\. '{ print $1 }'`
-        if test "$_LD_MAJOR_VERSION" != "$_CC_SUITE"; then
-            AC_MSG_ERROR([The linker major version, $_LD_FULL_VERSION,  does not match the compiler suite version, $_CC_SUITE.])
-        fi
+        # Check linker version, except in lld builds
+        case "$LINKER" in
+        *lld*)
+            ;;
+        *)
+            _LD_FULL_VERSION=`"${LINKER}" -v 2>&1 | sed -nre "$_MSVC_VER_FILTER"`
+            _LD_MAJOR_VERSION=`echo ${_LD_FULL_VERSION} | $AWK -F\. '{ print $1 }'`
+            if test "$_LD_MAJOR_VERSION" != "$_CC_SUITE"; then
+                AC_MSG_ERROR([The linker major version, $_LD_FULL_VERSION,  does not match the compiler suite version, $_CC_SUITE.])
+            fi
+            ;;
+        esac
 
         INCREMENTAL_LINKER=1
 
@@ -356,21 +362,6 @@ XCFLAGS="$X_CFLAGS"
 
 fi # COMPILE_ENVIRONMENT
 
-dnl ==============================================================
-dnl Get mozilla version from central milestone file
-dnl ==============================================================
-MOZILLA_VERSION=`$PYTHON $srcdir/python/mozbuild/mozbuild/milestone.py --topsrcdir $srcdir`
-MOZILLA_UAVERSION=`$PYTHON $srcdir/python/mozbuild/mozbuild/milestone.py --topsrcdir $srcdir --uaversion`
-MOZILLA_SYMBOLVERSION=`$PYTHON $srcdir/python/mozbuild/mozbuild/milestone.py --topsrcdir $srcdir --symbolversion`
-if test -z "$MOZILLA_VERSION"; then
-  AC_MSG_ERROR([failed to read version info from milestone file])
-fi
-
-AC_DEFINE_UNQUOTED(MOZILLA_VERSION,"$MOZILLA_VERSION")
-AC_DEFINE_UNQUOTED(MOZILLA_VERSION_U,$MOZILLA_VERSION)
-AC_DEFINE_UNQUOTED(MOZILLA_UAVERSION,"$MOZILLA_UAVERSION")
-AC_SUBST(MOZILLA_SYMBOLVERSION)
-
 # Separate version into components for use in shared object naming etc
 changequote(,)
 MOZJS_MAJOR_VERSION=`echo $MOZILLA_VERSION | sed "s|\(^[0-9]*\)\.[0-9]*.*|\1|"`
@@ -412,7 +403,6 @@ AS_BIN=$AS
 AR_EXTRACT='$(AR) x'
 AS='$(CC)'
 AS_DASH_C_FLAG='-c'
-DIRENT_INO=d_ino
 MOZ_USER_DIR=".mozilla"
 
 MOZ_FIX_LINK_PATHS="-Wl,-rpath-link,${DIST}/bin -Wl,-rpath-link,${prefix}/lib"
@@ -691,8 +681,8 @@ case "$target" in
         RANLIB='echo not_ranlib'
         STRIP='echo not_strip'
         PKG_SKIP_STRIP=1
-        MKSHLIB='$(LINK) -NOLOGO -DLL -OUT:$@ -PDB:$(LINK_PDBFILE) $(DSO_LDOPTS)'
-        MKCSHLIB='$(LINK) -NOLOGO -DLL -OUT:$@ -PDB:$(LINK_PDBFILE) $(DSO_LDOPTS)'
+        MKSHLIB='$(LINKER) -NOLOGO -DLL -OUT:$@ -PDB:$(LINK_PDBFILE) $(DSO_LDOPTS)'
+        MKCSHLIB='$(LINKER) -NOLOGO -DLL -OUT:$@ -PDB:$(LINK_PDBFILE) $(DSO_LDOPTS)'
         WIN32_SUBSYSTEM_VERSION=6.01
         WIN32_CONSOLE_EXE_LDFLAGS=-SUBSYSTEM:CONSOLE,$WIN32_SUBSYSTEM_VERSION
         WIN32_GUI_EXE_LDFLAGS=-SUBSYSTEM:WINDOWS,$WIN32_SUBSYSTEM_VERSION
@@ -882,10 +872,6 @@ esac
 if test -z "$MOZ_OPTIMIZE_FLAGS"; then
 	MOZ_OPTIMIZE_FLAGS="-O"
 fi
-
-dnl Only one oddball right now (QNX), but this gives us flexibility
-dnl if any other platforms need to override this in the future.
-AC_DEFINE_UNQUOTED(D_INO,$DIRENT_INO)
 
 if test -z "$COMPILE_ENVIRONMENT"; then
     SKIP_COMPILER_CHECKS=1
@@ -1415,15 +1401,6 @@ dnl ========================================================
 MOZ_ARG_HEADER(Components and Features)
 
 dnl ========================================================
-dnl = Localization
-dnl ========================================================
-MOZ_ARG_ENABLE_STRING(ui-locale,
-[  --enable-ui-locale=ab-CD
-                          Select the user interface locale (default: en-US)],
-    MOZ_UI_LOCALE=$enableval )
-AC_SUBST(MOZ_UI_LOCALE)
-
-dnl ========================================================
 dnl =
 dnl = Module specific options
 dnl =
@@ -1509,19 +1486,6 @@ if test "$MOZ_MEMORY"; then
 fi
 AC_SUBST(MOZ_GLUE_IN_PROGRAM)
 AC_SUBST_LIST(MOZ_GLUE_WRAP_LDFLAGS)
-
-dnl ========================================================
-dnl = Use a smaller chunk size for GC chunks
-dnl ========================================================
-dnl Use large (1MB) chunks by default.  For B2G this option is used to give
-dnl smaller (currently 256K) chunks.
-MOZ_ARG_ENABLE_BOOL(small-chunk-size,
-[  --enable-small-chunk-size  Allocate memory for JS GC things in smaller chunks],
-    JS_GC_SMALL_CHUNK_SIZE=1,
-    JS_GC_SMALL_CHUNK_SIZE= )
-if test -n "$JS_GC_SMALL_CHUNK_SIZE"; then
-    AC_DEFINE(JS_GC_SMALL_CHUNK_SIZE)
-fi
 
 dnl ========================================================
 dnl = Use Valgrind
@@ -1859,9 +1823,13 @@ COMPILE_CXXFLAGS=`echo \
     $COMPILE_CXXFLAGS`
 
 HOST_CFLAGS=`echo \
+    $_WARNINGS_HOST_CFLAGS \
+    $_COMPILATION_HOST_CFLAGS \
     $HOST_CFLAGS`
 
 HOST_CXXFLAGS=`echo \
+    $_WARNINGS_HOST_CXXFLAGS \
+    $_COMPILATION_HOST_CXXFLAGS \
     $HOST_CXXFLAGS`
 
 AC_SUBST(_DEPEND_CFLAGS)
@@ -1930,8 +1898,6 @@ dnl ========================================================
 MOZ_CHECK_ALLOCATOR
 
 AC_CHECK_FUNCS(setlocale localeconv)
-
-AC_SUBST(MOZILLA_VERSION)
 
 AC_SUBST(ac_configure_args)
 

@@ -3,19 +3,20 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 /* import-globals-from ../../../../framework/test/shared-head.js */
-/* import-globals-from ../../../../netmonitor/test/shared-head.js */
 /* eslint no-unused-vars: [2, {"vars": "local"}] */
 
 "use strict";
+
+// Import helpers registering the test-actor in remote targets
+Services.scriptloader.loadSubScript(
+  "chrome://mochitests/content/browser/devtools/client/shared/test/test-actor-registry.js",
+  this);
 
 // shared-head.js handles imports, constants, and utility functions
 // Load the shared-head file first.
 Services.scriptloader.loadSubScript(
   "chrome://mochitests/content/browser/devtools/client/framework/test/shared-head.js",
   this);
-
-Services.scriptloader.loadSubScript(
-  "chrome://mochitests/content/browser/devtools/client/netmonitor/test/shared-head.js", this);
 
 var {HUDService} = require("devtools/client/webconsole/hudservice");
 var WCUL10n = require("devtools/client/webconsole/webconsole-l10n");
@@ -211,10 +212,8 @@ function hideContextMenu(hud) {
 }
 
 function loadDocument(url, browser = gBrowser.selectedBrowser) {
-  return new Promise(resolve => {
-    browser.addEventListener("load", resolve, {capture: true, once: true});
-    BrowserTestUtils.loadURI(browser, url);
-  });
+  BrowserTestUtils.loadURI(browser, url);
+  return BrowserTestUtils.browserLoaded(browser);
 }
 
 /**

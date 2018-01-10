@@ -12,15 +12,19 @@ function* testBody(url, expecting) {
   yield enableServiceWorkerDebugging();
   let { tab, document } = yield openAboutDebugging("workers");
 
-  let swTab = yield addTab(url);
+  let swTab = yield addTab(url, {background: true});
 
   let serviceWorkersElement = getServiceWorkerList(document);
-  yield waitForMutation(serviceWorkersElement, { childList: true });
 
-  let fetchFlags =
-    [...document.querySelectorAll("#service-workers .service-worker-fetch-flag")];
-  fetchFlags = fetchFlags.map(element => element.textContent);
-  ok(fetchFlags.includes(expecting), "Found correct fetch flag.");
+  info("Wait for fetch flag.");
+  yield waitUntil(() => {
+    let fetchFlags =
+      [...document.querySelectorAll("#service-workers .service-worker-fetch-flag")];
+    fetchFlags = fetchFlags.map(element => element.textContent);
+    return fetchFlags.includes(expecting);
+  }, 100);
+
+  info("Found correct fetch flag.");
 
   try {
     yield unregisterServiceWorker(swTab, serviceWorkersElement);

@@ -303,7 +303,7 @@ OrientedImage::OrientationMatrix(const nsIntSize& aSize,
   return builder.Build();
 }
 
-NS_IMETHODIMP_(DrawResult)
+NS_IMETHODIMP_(ImgDrawResult)
 OrientedImage::Draw(gfxContext* aContext,
                     const nsIntSize& aSize,
                     const ImageRegion& aRegion,
@@ -395,10 +395,10 @@ OrientedImage::GetImageSpaceInvalidationRect(const nsIntRect& aRect)
 
   // Transform the invalidation rect into the correct orientation.
   gfxMatrix matrix(OrientationMatrix(innerSize));
-  gfxRect invalidRect(matrix.TransformBounds(gfxRect(rect.x, rect.y,
+  gfxRect invalidRect(matrix.TransformBounds(gfxRect(rect.X(), rect.Y(),
                                                      rect.Width(), rect.Height())));
 
-  return IntRect::RoundOut(invalidRect.x, invalidRect.y,
+  return IntRect::RoundOut(invalidRect.X(), invalidRect.Y(),
                            invalidRect.Width(), invalidRect.Height());
 }
 

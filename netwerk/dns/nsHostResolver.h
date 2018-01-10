@@ -19,6 +19,7 @@
 #include "GetAddrInfo.h"
 #include "mozilla/net/DNS.h"
 #include "mozilla/net/DashboardTypes.h"
+#include "mozilla/LinkedList.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/DataStorage.h"
@@ -41,11 +42,24 @@ const static uint32_t kTRRBlacklistExpireTime = 3600*24*3; // three days
 
 struct nsHostKey
 {
-    const char *host;
-    uint16_t    flags;
-    uint16_t    af;
-    const char *netInterface;
-    const char *originSuffix;
+    const nsCString host;
+    uint16_t flags;
+    uint16_t af;
+    const nsCString netInterface;
+    const nsCString originSuffix;
+
+    nsHostKey(const nsACString& host, uint16_t flags,
+              uint16_t af, const nsACString& netInterface,
+              const nsACString& originSuffix)
+        : host(host)
+        , flags(flags)
+        , af(af)
+        , netInterface(netInterface)
+        , originSuffix(originSuffix) {
+    }
+
+    bool operator==(const nsHostKey& other) const;
+    size_t SizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
 };
 
 /**
@@ -74,7 +88,7 @@ public:
      * are mutable and accessed by the resolver worker thread and the
      * nsDNSService2 class.  |addr| doesn't change after it has been
      * assigned a value.  only the resolver worker thread modifies
-     * nsHostRecord (and only in nsHostResolver::OnLookupComplete);
+     * nsHostRecord (and only in nsHostResolver::CompleteLookup);
      * the other threads just read it.  therefore the resolver worker
      * thread doesn't need to lock when reading |addr_info|.
      */
@@ -152,8 +166,8 @@ private:
 
     friend class nsHostResolver;
 
-
-    PRCList callbacks; /* list of callbacks */
+    explicit nsHostRecord(const nsHostKey& key);
+    mozilla::LinkedList<RefPtr<nsResolveHostCallback>> mCallbacks;
 
     int     mResolving;  /* counter of outstanding resolving calls */
     bool    mNative;    /* true if this record is being resolved "natively",
@@ -192,14 +206,17 @@ private:
 };
 
 /**
- * ResolveHost callback object.  It's PRCList members are used by
- * the nsHostResolver and should not be used by anything else.
+ * This class is used to notify listeners when a ResolveHost operation is
+ * complete. Classes that derive it must implement threadsafe nsISupports
+ * to be able to use RefPtr with this class.
  */
-class NS_NO_VTABLE nsResolveHostCallback : public PRCList
+class nsResolveHostCallback
+    : public mozilla::LinkedListElement<RefPtr<nsResolveHostCallback>>
+    , public nsISupports
 {
 public:
     /**
-     * OnLookupComplete
+     * OnResolveHostComplete
      *
      * this function is called to complete a host lookup initiated by
      * nsHostResolver::ResolveHost.  it may be invoked recursively from
@@ -215,9 +232,9 @@ public:
      * @param status
      *        if successful, |record| contains non-null results
      */
-    virtual void OnLookupComplete(nsHostResolver *resolver,
-                                  nsHostRecord   *record,
-                                  nsresult        status) = 0;
+    virtual void OnResolveHostComplete(nsHostResolver *resolver,
+                                       nsHostRecord   *record,
+                                       nsresult        status) = 0;
     /**
      * EqualsAsyncListener
      *
@@ -234,6 +251,8 @@ public:
     virtual bool EqualsAsyncListener(nsIDNSListener *aListener) = 0;
 
     virtual size_t SizeOfIncludingThis(mozilla::MallocSizeOf) const = 0;
+protected:
+    virtual ~nsResolveHostCallback() = default;
 };
 
 /**
@@ -338,7 +357,7 @@ public:
       LOOKUP_RESOLVEAGAIN,
     };
 
-    LookupStatus OnLookupComplete(nsHostRecord *, nsresult, mozilla::net::AddrInfo *);
+    LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *);
     void TRRBlacklist(const nsCString &host, bool aFullname);
 
 private:

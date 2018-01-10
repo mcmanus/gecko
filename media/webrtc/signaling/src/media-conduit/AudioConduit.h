@@ -17,6 +17,7 @@
 
 // Audio Engine Includes
 #include "webrtc/common_types.h"
+#include "webrtc/modules/audio_device/include/fake_audio_device.h"
 #include "webrtc/voice_engine/include/voe_base.h"
 #include "webrtc/voice_engine/include/voe_volume_control.h"
 #include "webrtc/voice_engine/include/voe_codec.h"
@@ -139,6 +140,7 @@ public:
    * @param speechData [in]: Pointer to a array to which a 10ms frame of audio will be copied
    * @param samplingFreqHz [in]: Frequency of the sampling for playback in Hertz (16000, 32000,..)
    * @param capture_delay [in]: Estimated Time between reading of the samples to rendering/playback
+   * @param lengthSamples [in]: Contain maximum length of speechData array.
    * @param lengthSamples [out]: Will contain length of the audio frame in samples at return.
                                  Ex: A value of 160 implies 160 samples each of 16-bits was copied
                                      into speechData
@@ -174,6 +176,7 @@ public:
 
   explicit WebrtcAudioConduit():
                       mVoiceEngine(nullptr),
+                      mFakeAudioDevice(new webrtc::FakeAudioDeviceModule()),
                       mTransportMonitor("WebrtcAudioConduit"),
                       mTransmitterTransport(nullptr),
                       mReceiverTransport(nullptr),
@@ -265,6 +268,9 @@ public:
                                              int64_t aTimestamp,
                                              bool aHasLevel,
                                              uint8_t aLevel);
+
+  bool IsSamplingFreqSupported(int freq) const override;
+
 private:
   WebrtcAudioConduit(const WebrtcAudioConduit& other) = delete;
   void operator=(const WebrtcAudioConduit& other) = delete;
@@ -275,9 +281,6 @@ private:
   //Function to convert between WebRTC and Conduit codec structures
   bool CodecConfigToWebRTCCodec(const AudioCodecConfig* codecInfo,
                                 webrtc::CodecInst& cinst);
-
-  //Checks if given sampling frequency is supported
-  bool IsSamplingFreqSupported(int freq) const;
 
   //Generate block size in sample lenght for a given sampling frequency
   unsigned int GetNum10msSamplesForFrequency(int samplingFreqHz) const;
@@ -297,6 +300,7 @@ private:
   void DumpCodecDB() const;
 
   webrtc::VoiceEngine* mVoiceEngine;
+  UniquePtr<webrtc::FakeAudioDeviceModule> mFakeAudioDevice;
   mozilla::ReentrantMonitor mTransportMonitor;
   RefPtr<TransportInterface> mTransmitterTransport;
   RefPtr<TransportInterface> mReceiverTransport;
@@ -333,6 +337,8 @@ private:
   int32_t mCaptureDelay;
 
   uint32_t mLastTimestamp;
+
+  webrtc::AudioFrame mAudioFrame; // for output pulls
 
   uint32_t mSamples;
   uint32_t mLastSyncLog;

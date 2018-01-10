@@ -493,7 +493,8 @@ nsTextControlFrame::CreatePlaceholderIfNeeded()
 
   // Do we need a placeholder node?
   nsAutoString placeholderTxt;
-  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::placeholder, placeholderTxt);
+  mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::placeholder,
+                                 placeholderTxt);
   if (IsTextArea()) { // <textarea>s preserve newlines...
     nsContentUtils::PlatformToDOMLineBreaks(placeholderTxt);
   } else { // ...<input>s don't
@@ -946,13 +947,15 @@ nsTextControlFrame::SelectAllOrCollapseToEndOfText(bool aSelect)
   if (numChildren > 0) {
     // We never want to place the selection after the last
     // br under the root node!
-    nsIContent *child = rootContent->GetChildAt(numChildren - 1);
+    nsIContent *child = rootContent->GetLastChild();
     if (child) {
-      if (child->IsHTMLElement(nsGkAtoms::br))
+      if (child->IsHTMLElement(nsGkAtoms::br)) {
+        child = child->GetPreviousSibling();
         --numChildren;
+      }
     }
     if (!aSelect && numChildren) {
-      child = rootContent->GetChildAt(numChildren - 1);
+      child = child->GetPreviousSibling();
       if (child && child->IsNodeOfType(nsINode::eTEXT)) {
         rootNode = do_QueryInterface(child);
         const nsTextFragment* fragment = child->GetText();
@@ -1269,7 +1272,7 @@ nsTextControlFrame::UpdateValueDisplay(bool aNotify,
   NS_PRECONDITION(!mEditorHasBeenInitialized,
                   "Do not call this after editor has been initialized");
 
-  nsIContent* textContent = mRootNode->GetChildAt(0);
+  nsIContent* textContent = mRootNode->GetFirstChild();
   if (!textContent) {
     // Set up a textnode with our value
     RefPtr<nsTextNode> textNode =
@@ -1303,7 +1306,7 @@ nsTextControlFrame::UpdateValueDisplay(bool aNotify,
   }
 
   if (aBeforeEditorInit && value.IsEmpty()) {
-    mRootNode->RemoveChildAt(0, true);
+    mRootNode->RemoveChildAt_Deprecated(0, true);
     return NS_OK;
   }
 

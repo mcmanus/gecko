@@ -979,28 +979,33 @@ class StopRequestEvent : public NeckoTargetChannelEvent<HttpChannelChild>
  public:
   StopRequestEvent(HttpChannelChild* child,
                    const nsresult& channelStatus,
-                   const ResourceTimingStruct& timing)
+                   const ResourceTimingStruct& timing,
+                   const nsHttpHeaderArray& aResponseTrailers)
   : NeckoTargetChannelEvent<HttpChannelChild>(child)
   , mChannelStatus(channelStatus)
-  , mTiming(timing) {}
+  , mTiming(timing)
+  , mResponseTrailers(aResponseTrailers) {}
 
-  void Run() { mChild->OnStopRequest(mChannelStatus, mTiming); }
+  void Run() { mChild->OnStopRequest(mChannelStatus, mTiming, mResponseTrailers); }
 
  private:
   nsresult mChannelStatus;
   ResourceTimingStruct mTiming;
+  nsHttpHeaderArray mResponseTrailers;
 };
 
 void
 HttpChannelChild::ProcessOnStopRequest(const nsresult& aChannelStatus,
-                                       const ResourceTimingStruct& aTiming)
+                                       const ResourceTimingStruct& aTiming,
+                                       const nsHttpHeaderArray& aResponseTrailers)
 {
   LOG(("HttpChannelChild::ProcessOnStopRequest [this=%p]\n", this));
   MOZ_ASSERT(OnSocketThread());
   MOZ_RELEASE_ASSERT(!mFlushedForDiversion,
     "Should not be receiving any more callbacks from parent!");
 
-  mEventQ->RunOrEnqueue(new StopRequestEvent(this, aChannelStatus, aTiming),
+  mEventQ->RunOrEnqueue(new StopRequestEvent(this, aChannelStatus,
+                                             aTiming, aResponseTrailers),
                         mDivertingToParent);
 }
 
@@ -1036,7 +1041,8 @@ HttpChannelChild::MaybeDivertOnStop(const nsresult& aChannelStatus)
 
 void
 HttpChannelChild::OnStopRequest(const nsresult& channelStatus,
-                                const ResourceTimingStruct& timing)
+                                const ResourceTimingStruct& timing,
+                                const nsHttpHeaderArray& aResponseTrailers)
 {
   LOG(("HttpChannelChild::OnStopRequest [this=%p status=%" PRIx32 "]\n",
        this, static_cast<uint32_t>(channelStatus)));
@@ -1089,6 +1095,8 @@ HttpChannelChild::OnStopRequest(const nsresult& channelStatus,
   mCacheReadStart = timing.cacheReadStart;
   mCacheReadEnd = timing.cacheReadEnd;
 
+  mResponseTrailers = new nsHttpHeaderArray(aResponseTrailers);
+
   DoPreOnStopRequest(channelStatus);
 
   { // We must flush the queue before we Send__delete__
@@ -1098,6 +1106,19 @@ HttpChannelChild::OnStopRequest(const nsresult& channelStatus,
 
     DoOnStopRequest(this, channelStatus, mListenerContext);
     // DoOnStopRequest() calls ReleaseListeners()
+  }
+
+  // If unknownDecoder is involved and the received content is short we will
+  // know whether we need to divert to parent only after OnStopRequest of the
+  // listeners chain is called in DoOnStopRequest. At that moment
+  // unknownDecoder will call OnStartRequest of the real listeners of the
+  // channel including the OnStopRequest of UrlLoader which decides whether we
+  // need to divert to parent.
+  // If we are diverting to parent we should not do a cleanup.
+  if (mDivertingToParent) {
+    LOG(("HttpChannelChild::OnStopRequest  - We are diverting to parent, "
+         "postpone cleaning up."));
+    return;
   }
 
   CleanupBackgroundChannel();
@@ -2828,6 +2849,13 @@ HttpChannelChild::SetEmptyRequestHeader(const nsACString& aHeader)
 
 NS_IMETHODIMP
 HttpChannelChild::RedirectTo(nsIURI *newURI)
+{
+  // disabled until/unless addons run in child or something else needs this
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+HttpChannelChild::UpgradeToSecure()
 {
   // disabled until/unless addons run in child or something else needs this
   return NS_ERROR_NOT_IMPLEMENTED;

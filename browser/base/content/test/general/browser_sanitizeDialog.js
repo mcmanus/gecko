@@ -715,7 +715,7 @@ WindowHelper.prototype = {
     var cb = this.win.document.querySelectorAll("#itemList > [preference]");
     ok(cb.length > 1, "found checkboxes for preferences");
     for (var i = 0; i < cb.length; ++i) {
-      var pref = this.win.document.getElementById(cb[i].getAttribute("preference"));
+      var pref = this.win.Preferences.get(cb[i].getAttribute("preference"));
       if (!!pref.value ^ check)
         cb[i].click();
     }
@@ -965,7 +965,7 @@ async function blankSlate() {
  *        Passed to is()
  */
 function boolPrefIs(aPrefName, aExpectedVal, aMsg) {
-  is(gPrefService.getBoolPref("privacy." + aPrefName), aExpectedVal, aMsg);
+  is(Services.prefs.getBoolPref("privacy." + aPrefName), aExpectedVal, aMsg);
 }
 
 /**
@@ -1008,7 +1008,7 @@ async function ensureDownloadsClearedState(aDownloadIDs, aShouldBeCleared) {
  *        Passed to is()
  */
 function intPrefIs(aPrefName, aExpectedVal, aMsg) {
-  is(gPrefService.getIntPref("privacy." + aPrefName), aExpectedVal, aMsg);
+  is(Services.prefs.getIntPref("privacy." + aPrefName), aExpectedVal, aMsg);
 }
 
 /**

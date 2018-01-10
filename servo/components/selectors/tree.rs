@@ -6,7 +6,8 @@
 //! between layout and style.
 
 use attr::{AttrSelectorOperation, NamespaceConstraint, CaseSensitivity};
-use matching::{ElementSelectorFlags, MatchingContext, RelevantLinkStatus};
+use context::VisitedHandlingMode;
+use matching::{ElementSelectorFlags, MatchingContext};
 use parser::SelectorImpl;
 use servo_arc::NonZeroPtrMut;
 use std::fmt::Debug;
@@ -68,7 +69,7 @@ pub trait Element: Sized + Clone + Debug {
         &self,
         pc: &<Self::Impl as SelectorImpl>::NonTSPseudoClass,
         context: &mut MatchingContext<Self::Impl>,
-        relevant_link: &RelevantLinkStatus,
+        visited_handling: VisitedHandlingMode,
         flags_setter: &mut F,
     ) -> bool
     where
@@ -82,6 +83,13 @@ pub trait Element: Sized + Clone + Debug {
 
     /// Whether this element is a `link`.
     fn is_link(&self) -> bool;
+
+    /// Returns the assigned <slot> element this element is assigned to.
+    ///
+    /// Necessary for the `::slotted` pseudo-class.
+    fn assigned_slot(&self) -> Option<Self> {
+        None
+    }
 
     fn has_id(&self,
               id: &<Self::Impl as SelectorImpl>::Identifier,

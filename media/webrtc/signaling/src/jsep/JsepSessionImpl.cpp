@@ -38,7 +38,7 @@ MOZ_MTLOG_MODULE("jsep")
     std::ostringstream os;                                                     \
     os << error;                                                               \
     mLastError = os.str();                                                     \
-    MOZ_MTLOG(ML_ERROR, mLastError);                                           \
+    MOZ_MTLOG(ML_ERROR, "[" << mName << "]: " <<  mLastError);                  \
   } while (0);
 
 static std::bitset<128> GetForbiddenSdpPayloadTypes() {
@@ -72,7 +72,7 @@ nsresult
 JsepSessionImpl::AddTransceiver(RefPtr<JsepTransceiver> transceiver)
 {
   mLastError.clear();
-  MOZ_MTLOG(ML_DEBUG, "Adding transceiver.");
+  MOZ_MTLOG(ML_DEBUG, "[" << mName << "]: Adding transceiver.");
 
   if (transceiver->GetMediaType() != SdpMediaSection::kApplication) {
     // Make sure we have an ssrc. Might already be set.
@@ -357,6 +357,53 @@ JsepSessionImpl::GetRemoteIds(const Sdp& sdp,
 }
 
 nsresult
+JsepSessionImpl::RemoveDuplicateTrackIds(Sdp* sdp)
+{
+  std::set<std::string> trackIds;
+
+  for (size_t i = 0; i < sdp->GetMediaSectionCount(); ++i) {
+    SdpMediaSection& msection(sdp->GetMediaSection(i));
+
+    if (mSdpHelper.MsectionIsDisabled(msection)) {
+      continue;
+    }
+
+    std::vector<std::string> streamIds;
+    std::string trackId;
+    nsresult rv = mSdpHelper.GetIdsFromMsid(*sdp,
+                                            msection,
+                                            &streamIds,
+                                            &trackId);
+
+    if (NS_SUCCEEDED(rv)) {
+      if (trackIds.count(trackId)) {
+        // Re-set trackId
+        if (!mUuidGen->Generate(&trackId)) {
+          JSEP_SET_ERROR("Tried to replace duplicate track id in SDP, but "
+                         "failed to generate a UUID.");
+          return NS_ERROR_FAILURE;
+        }
+
+        auto& mediaAttrs = msection.GetAttributeList();
+        UniquePtr<SdpMsidAttributeList> newMsids(
+            new SdpMsidAttributeList(mediaAttrs.GetMsid()));
+        for (auto& msid : newMsids->mMsids) {
+          msid.appdata = trackId;
+        }
+
+        mediaAttrs.SetAttribute(newMsids.release());
+      }
+      trackIds.insert(trackId);
+    } else if (rv != NS_ERROR_NOT_AVAILABLE) {
+      // Error has already been set
+      return rv;
+    }
+  }
+
+  return NS_OK;
+}
+
+nsresult
 JsepSessionImpl::CreateOffer(const JsepOfferOptions& options,
                              std::string* offer)
 {
@@ -387,6 +434,9 @@ JsepSessionImpl::CreateOffer(const JsepOfferOptions& options,
   }
 
   SetupBundle(sdp.get());
+
+  rv = RemoveDuplicateTrackIds(sdp.get());
+  NS_ENSURE_SUCCESS(rv, rv);
 
   if (mCurrentLocalDescription) {
     rv = CopyPreviousTransportParams(*GetAnswer(),
@@ -518,6 +568,9 @@ JsepSessionImpl::CreateAnswer(const JsepAnswerOptions& options,
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
+  rv = RemoveDuplicateTrackIds(sdp.get());
+  NS_ENSURE_SUCCESS(rv, rv);
+
   if (mCurrentLocalDescription) {
     // per discussion with bwc, 3rd parm here should be offer, not *sdp. (mjf)
     rv = CopyPreviousTransportParams(*GetAnswer(),
@@ -636,8 +689,8 @@ JsepSessionImpl::SetLocalDescription(JsepSdpType type, const std::string& sdp)
 {
   mLastError.clear();
 
-  MOZ_MTLOG(ML_DEBUG, "SetLocalDescription type=" << type << "\nSDP=\n"
-                                                  << sdp);
+  MOZ_MTLOG(ML_DEBUG, "[" << mName << "]: SetLocalDescription type=" << type
+                      << "\nSDP=\n" << sdp);
 
   if (type == kJsepSdpRollback) {
     if (mState != kJsepStateHaveLocalOffer) {
@@ -680,6 +733,19 @@ JsepSessionImpl::SetLocalDescription(JsepSdpType type, const std::string& sdp)
 
   // Check that content hasn't done anything unsupported with the SDP
   rv = ValidateLocalDescription(*parsed);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  switch (type) {
+    case kJsepSdpOffer:
+      rv = ValidateOffer(*parsed);
+      break;
+    case kJsepSdpAnswer:
+    case kJsepSdpPranswer:
+      rv = ValidateAnswer(*mPendingRemoteDescription, *parsed);
+      break;
+    case kJsepSdpRollback:
+      MOZ_CRASH(); // Handled above
+  }
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (type == kJsepSdpOffer) {
@@ -734,12 +800,8 @@ JsepSessionImpl::SetLocalDescriptionAnswer(JsepSdpType type,
   MOZ_ASSERT(mState == kJsepStateHaveRemoteOffer);
   mPendingLocalDescription = Move(answer);
 
-  nsresult rv = ValidateAnswer(*mPendingRemoteDescription,
-                               *mPendingLocalDescription);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  rv = HandleNegotiatedSession(mPendingLocalDescription,
-                               mPendingRemoteDescription);
+  nsresult rv = HandleNegotiatedSession(mPendingLocalDescription,
+                                        mPendingRemoteDescription);
   NS_ENSURE_SUCCESS(rv, rv);
 
   mCurrentRemoteDescription = Move(mPendingRemoteDescription);
@@ -756,8 +818,8 @@ JsepSessionImpl::SetRemoteDescription(JsepSdpType type, const std::string& sdp)
 {
   mLastError.clear();
 
-  MOZ_MTLOG(ML_DEBUG, "SetRemoteDescription type=" << type << "\nSDP=\n"
-                                                   << sdp);
+  MOZ_MTLOG(ML_DEBUG, "[" << mName << "]: SetRemoteDescription type=" << type
+                      << "\nSDP=\n" << sdp);
 
   if (type == kJsepSdpRollback) {
     if (mState != kJsepStateHaveRemoteOffer) {
@@ -802,6 +864,19 @@ JsepSessionImpl::SetRemoteDescription(JsepSdpType type, const std::string& sdp)
   NS_ENSURE_SUCCESS(rv, rv);
 
   rv = ValidateRemoteDescription(*parsed);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  switch (type) {
+    case kJsepSdpOffer:
+      rv = ValidateOffer(*parsed);
+      break;
+    case kJsepSdpAnswer:
+    case kJsepSdpPranswer:
+      rv = ValidateAnswer(*mPendingLocalDescription, *parsed);
+      break;
+    case kJsepSdpRollback:
+      MOZ_CRASH(); // Handled above
+  }
   NS_ENSURE_SUCCESS(rv, rv);
 
   bool iceLite =
@@ -970,7 +1045,7 @@ JsepSessionImpl::MakeNegotiatedTransceiver(const SdpMediaSection& remote,
     }
   }
 
-  MOZ_MTLOG(ML_DEBUG, "Negotiated m= line"
+  MOZ_MTLOG(ML_DEBUG, "[" << mName << "]: Negotiated m= line"
                           << " index=" << local.GetLevel()
                           << " type=" << local.GetMediaType()
                           << " sending=" << sending
@@ -1017,15 +1092,16 @@ JsepSessionImpl::MakeNegotiatedTransceiver(const SdpMediaSection& remote,
       // TODO(bug 1105005): Once we have urn:ietf:params:rtp-hdrext:sdes:mid
       // support, we should only fire this warning if that extension was not
       // negotiated.
-      MOZ_MTLOG(ML_ERROR, "Bundled m-section has no ssrc attributes. "
-                          "This may cause media packets to be dropped.");
+      MOZ_MTLOG(ML_ERROR, "[" << mName << "]: Bundled m-section has no ssrc "
+                          "attributes. This may cause media packets to be "
+                          "dropped.");
     }
   }
 
   if (transceiver->mTransport->mComponents == 2) {
     // RTCP MUX or not.
     // TODO(bug 1095743): verify that the PTs are consistent with mux.
-    MOZ_MTLOG(ML_DEBUG, "RTCP-MUX is off");
+    MOZ_MTLOG(ML_DEBUG, "[" << mName << "]: RTCP-MUX is off");
   }
 
   if (local.GetMediaType() != SdpMediaSection::kApplication) {
@@ -1204,8 +1280,6 @@ JsepSessionImpl::ParseSdp(const std::string& sdp, UniquePtr<Sdp>* parsedp)
     return NS_ERROR_INVALID_ARG;
   }
 
-  std::set<std::string> trackIds;
-
   for (size_t i = 0; i < parsed->GetMediaSectionCount(); ++i) {
     if (mSdpHelper.MsectionIsDisabled(parsed->GetMediaSection(i))) {
       // Disabled, let this stuff slide.
@@ -1246,26 +1320,6 @@ JsepSessionImpl::ParseSdp(const std::string& sdp, UniquePtr<Sdp>* parsedp)
       return NS_ERROR_INVALID_ARG;
     }
 
-    std::vector<std::string> streamIds;
-    std::string trackId;
-    nsresult rv = mSdpHelper.GetIdsFromMsid(*parsed,
-                                            parsed->GetMediaSection(i),
-                                            &streamIds,
-                                            &trackId);
-
-    if (NS_SUCCEEDED(rv)) {
-      if (trackIds.count(trackId)) {
-        JSEP_SET_ERROR("track id:" << trackId
-                       << " appears in more than one m-section at level " << i);
-        return NS_ERROR_INVALID_ARG;
-      }
-
-      trackIds.insert(trackId);
-    } else if (rv != NS_ERROR_NOT_AVAILABLE) {
-      // Error has already been set
-      return rv;
-    }
-
     static const std::bitset<128> forbidden = GetForbiddenSdpPayloadTypes();
     if (msection.GetMediaType() == SdpMediaSection::kAudio ||
         msection.GetMediaType() == SdpMediaSection::kVideo) {
@@ -1291,6 +1345,9 @@ JsepSessionImpl::ParseSdp(const std::string& sdp, UniquePtr<Sdp>* parsedp)
     }
   }
 
+  nsresult rv = RemoveDuplicateTrackIds(parsed.get());
+  NS_ENSURE_SUCCESS(rv, rv);
+
   *parsedp = Move(parsed);
   return NS_OK;
 }
@@ -1299,9 +1356,6 @@ nsresult
 JsepSessionImpl::SetRemoteDescriptionOffer(UniquePtr<Sdp> offer)
 {
   MOZ_ASSERT(mState == kJsepStateStable);
-
-  nsresult rv = ValidateOffer(*offer);
-  NS_ENSURE_SUCCESS(rv, rv);
 
   mPendingRemoteDescription = Move(offer);
 
@@ -1318,12 +1372,8 @@ JsepSessionImpl::SetRemoteDescriptionAnswer(JsepSdpType type,
 
   mPendingRemoteDescription = Move(answer);
 
-  nsresult rv = ValidateAnswer(*mPendingLocalDescription,
-                               *mPendingRemoteDescription);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  rv = HandleNegotiatedSession(mPendingLocalDescription,
-                               mPendingRemoteDescription);
+  nsresult rv = HandleNegotiatedSession(mPendingLocalDescription,
+                                        mPendingRemoteDescription);
   NS_ENSURE_SUCCESS(rv, rv);
 
   mCurrentRemoteDescription = Move(mPendingRemoteDescription);
@@ -1789,9 +1839,9 @@ JsepSessionImpl::ValidateAnswer(const Sdp& offer, const Sdp& answer)
               // FIXME we do not return an error here, because Chrome up to
               // version 57 is actually tripping over this if they are the
               // answerer. See bug 1355010 for details.
-              MOZ_MTLOG(ML_WARNING, "Answer has inconsistent direction on extmap "
-                             "attribute at level " << i << " ("
-                             << ansExt.extensionname << "). Offer had "
+              MOZ_MTLOG(ML_WARNING, "[" << mName << "]: Answer has inconsistent"
+                             " direction on extmap attribute at level " << i
+                             << " (" << ansExt.extensionname << "). Offer had "
                              << offExt.direction << ", answer had "
                              << ansExt.direction << ".");
               // return NS_ERROR_INVALID_ARG;
@@ -1801,10 +1851,10 @@ JsepSessionImpl::ValidateAnswer(const Sdp& offer, const Sdp& answer)
               // FIXME we do not return an error here, because Cisco Spark
               // actually does respond with different extension ID's then we
               // offer. See bug 1361206 for details.
-              MOZ_MTLOG(ML_WARNING, "Answer changed id for extmap attribute at"
-                        " level " << i << " (" << offExt.extensionname << ") "
-                        "from " << offExt.entry << " to "
-                        << ansExt.entry << ".");
+              MOZ_MTLOG(ML_WARNING, "[" << mName << "]: Answer changed id for "
+                        "extmap attribute at level " << i << " ("
+                        << offExt.extensionname << ") from " << offExt.entry
+                        << " to " << ansExt.entry << ".");
               // return NS_ERROR_INVALID_ARG;
             }
 

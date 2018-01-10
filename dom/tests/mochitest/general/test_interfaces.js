@@ -27,7 +27,7 @@ var ecmaGlobals =
   [
     "Array",
     "ArrayBuffer",
-    "Atomics",
+    {name: "Atomics", disabled: true},
     "Boolean",
     {name: "ByteLengthQueuingStrategy", disabled: !SpecialPowers.Cu.getJSTestingFunctions().streamsAreEnabled()},
     {name: "CountQueuingStrategy", disabled: !SpecialPowers.Cu.getJSTestingFunctions().streamsAreEnabled()},
@@ -61,7 +61,7 @@ var ecmaGlobals =
     "Reflect",
     "RegExp",
     "Set",
-    "SharedArrayBuffer",
+    {name: "SharedArrayBuffer", disabled: true},
     {name: "SIMD", nightly: true},
     "String",
     "Symbol",
@@ -507,7 +507,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLSelectElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "HTMLSlotElement",
+    {name: "HTMLSlotElement", disabled: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLSourceElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -749,7 +749,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PluginArray",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "PointerEvent", nightly: true, desktop: true, android: false},
+    {name: "PointerEvent", android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PopStateEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -829,7 +829,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ScrollAreaEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "SecurityPolicyViolationEvent",
+    {name: "SecurityPolicyViolationEvent", release: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Selection",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -843,7 +843,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "ScopedCredentialInfo", disabled: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "ShadowRoot", // Bogus, but the test harness forces it on.  See bug 1159768.
+    {name: "ShadowRoot", disabled: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "SharedWorker",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1278,14 +1278,6 @@ var interfaceNamesInGlobalScope =
     {name: "XULElement", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "XULLabeledControlElement", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "XULPopupElement", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "XULTemplateBuilder", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "XULTreeBuilder", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "XULTreeBuilderObserver", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
   ];
 // IMPORTANT: Do not change the list above without review from a DOM peer!

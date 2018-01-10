@@ -24,6 +24,7 @@
 #include "nsPresState.h"
 #include "nsView.h"
 #include "nsViewManager.h"
+#include "nsIContentInlines.h"
 #include "nsIDOMEventListener.h"
 #include "nsIDOMNode.h"
 #include "nsISelectControlFrame.h"
@@ -1574,7 +1575,7 @@ nsComboboxControlFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       if ((!IsThemed(disp) ||
            !presContext->GetTheme()->ThemeDrawsFocusForWidget(disp->mAppearance)) &&
           mDisplayFrame && IsVisibleForPainting(aBuilder)) {
-        aLists.Content()->AppendNewToTop(
+        aLists.Content()->AppendToTop(
           new (aBuilder) nsDisplayComboboxFocus(aBuilder, this));
       }
     }

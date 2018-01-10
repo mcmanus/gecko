@@ -1656,20 +1656,6 @@ VARIABLES = {
         them correctly.
         """),
 
-    'BRANDING_FILES': (ContextDerivedTypedHierarchicalStringList(Path), list,
-        """List of files to be installed into the branding directory.
-
-        ``BRANDING_FILES`` will copy (or symlink, if the platform supports it)
-        the contents of its files to the ``dist/branding`` directory. Files that
-        are destined for a subdirectory can be specified by accessing a field.
-        For example, to export ``foo.png`` to the top-level directory and
-        ``bar.png`` to the directory ``images/subdir``, append to
-        ``BRANDING_FILES`` like so::
-
-           BRANDING_FILES += ['foo.png']
-           BRANDING_FILES.images.subdir += ['bar.png']
-        """),
-
     'SIMPLE_PROGRAMS': (StrictOrderingOnAppendList, list,
         """Compile a list of executable names.
 
@@ -2040,6 +2026,24 @@ VARIABLES = {
                 (...)
             }
             (...)
+        """),
+
+    'GN_DIRS': (StrictOrderingOnAppendListWithFlagsFactory({
+            'variables': dict,
+            'sandbox_vars': dict,
+            'non_unified_sources': StrictOrderingOnAppendList,
+            'mozilla_flags': list,
+        }), list,
+        """List of dirs containing gn files describing targets to build. Attributes:
+            - variables, a dictionary containing variables and values to pass
+              to `gn gen`.
+            - sandbox_vars, a dictionary containing variables and values to
+              pass to the mozbuild processor on top of those derived from gn.
+            - non_unified_sources, a list containing sources files, relative to
+              the current moz.build, that should be excluded from source file
+              unification.
+            - mozilla_flags, a set of flags that if present in the gn config
+              will be mirrored to the resulting mozbuild configuration.
         """),
 
     'SPHINX_TREES': (dict, dict,

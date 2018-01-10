@@ -339,12 +339,7 @@ impl PropertyAnimation {
             longhand,
             old_style,
             new_style,
-        );
-
-        let animated_property = match animated_property {
-            Some(p) => p,
-            None => return None,
-        };
+        )?;
 
         let property_animation = PropertyAnimation {
             property: animated_property,
@@ -490,6 +485,7 @@ fn compute_style_for_animation_step(context: &SharedStyleContext,
                 properties::apply_declarations(context.stylist.device(),
                                                /* pseudo = */ None,
                                                previous_style.rules(),
+                                               &context.guards,
                                                iter,
                                                Some(previous_style),
                                                Some(previous_style),

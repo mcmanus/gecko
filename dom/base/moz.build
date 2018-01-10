@@ -162,6 +162,7 @@ EXPORTS.mozilla.dom += [
     'DispatcherTrait.h',
     'DocGroup.h',
     'DocumentFragment.h',
+    'DocumentOrShadowRoot.h',
     'DocumentType.h',
     'DOMCursor.h',
     'DOMError.h',
@@ -240,6 +241,7 @@ UNIFIED_SOURCES += [
     'DispatcherTrait.cpp',
     'DocGroup.cpp',
     'DocumentFragment.cpp',
+    'DocumentOrShadowRoot.cpp',
     'DocumentType.cpp',
     'DOMCursor.cpp',
     'DOMError.cpp',
@@ -485,5 +487,5 @@ counterlist = GENERATED_FILES['UseCounterList.h']
 counterlist.script = 'gen-usecounters.py:use_counter_list'
 counterlist.inputs = ['UseCounters.conf']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

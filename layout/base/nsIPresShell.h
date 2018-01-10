@@ -40,6 +40,7 @@
 #include "nsIImageLoadingContent.h"
 #include "nsMargin.h"
 #include "nsFrameState.h"
+#include "nsStubDocumentObserver.h"
 #include "Units.h"
 
 class gfxContext;
@@ -128,10 +129,10 @@ typedef struct CapturingContentInfo {
   mozilla::StaticRefPtr<nsIContent> mContent;
 } CapturingContentInfo;
 
-// a75573d6-34c8-4485-8fb7-edcb6fc70e12
+// b7b89561-4f03-44b3-9afa-b47e7f313ffb
 #define NS_IPRESSHELL_IID \
-{ 0xa75573d6, 0x34c8, 0x4485, \
-  { 0x8f, 0xb7, 0xed, 0xcb, 0x6f, 0xc7, 0x0e, 0x12 } }
+  { 0xb7b89561, 0x4f03, 0x44b3, \
+    { 0x9a, 0xfa, 0xb4, 0x7e, 0x7f, 0x31, 0x3f, 0xfb } }
 
 // debug VerifyReflow flags
 #define VERIFY_REFLOW_ON                    0x01
@@ -164,7 +165,7 @@ enum nsRectVisibility {
  * frame.
  */
 
-class nsIPresShell : public nsISupports
+class nsIPresShell : public nsStubDocumentObserver
 {
 public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_IPRESSHELL_IID)
@@ -336,12 +337,15 @@ public:
    */
   const nsFrameSelection* ConstFrameSelection() const { return mSelection; }
 
-  // Make shell be a document observer.  If called after Destroy() has
-  // been called on the shell, this will be ignored.
-  virtual void BeginObservingDocument() = 0;
+  // Start receiving notifications from our document. If called after Destroy,
+  // this will be ignored.
+  void BeginObservingDocument();
 
-  // Make shell stop being a document observer
-  virtual void EndObservingDocument() = 0;
+  // Stop receiving notifications from our document. If called after Destroy,
+  // this will be ignored.
+  void EndObservingDocument();
+
+  bool IsObservingDocument() const { return mIsObservingDocument; }
 
   /**
    * Return whether Initialize() was previously called.
@@ -891,7 +895,9 @@ public:
                                  mozilla::WidgetEvent* aEvent,
                                  nsIFrame* aFrame,
                                  nsIContent* aContent,
-                                 nsEventStatus* aStatus) = 0;
+                                 nsEventStatus* aStatus,
+                                 bool aIsHandlingNativeEvent = false,
+                                 nsIContent** aTargetContent = nullptr) = 0;
 
   /**
    * Dispatch event to content only (NOT full processing)
@@ -1440,8 +1446,7 @@ public:
   virtual nsresult HandleEvent(nsIFrame* aFrame,
                                mozilla::WidgetGUIEvent* aEvent,
                                bool aDontRetargetEvents,
-                               nsEventStatus* aEventStatus,
-                               nsIContent** aTargetContent = nullptr) = 0;
+                               nsEventStatus* aEventStatus) = 0;
   virtual bool ShouldIgnoreInvalidation() = 0;
   /**
    * Notify that we're going to call Paint with PAINT_LAYERS
@@ -1576,10 +1581,12 @@ public:
    */
   virtual bool HasHandledUserInput() const = 0;
 
+  virtual void FireResizeEvent() = 0;
+
+protected:
   /**
    * Refresh observer management.
    */
-protected:
   void DoObserveStyleFlushes();
   void DoObserveLayoutFlushes();
 
@@ -1734,6 +1741,11 @@ protected:
   bool                      mDidInitialize : 1;
   bool                      mIsDestroying : 1;
   bool                      mIsReflowing : 1;
+  bool                      mIsObservingDocument : 1;
+
+  // We've been disconnected from the document.  We will refuse to paint the
+  // document until either our timer fires or all frames are constructed.
+  bool                      mIsDocumentGone : 1;
 
   // For all documents we initially lock down painting.
   bool                      mPaintingSuppressed : 1;

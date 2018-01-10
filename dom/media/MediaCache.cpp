@@ -16,8 +16,8 @@
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/ErrorNames.h"
 #include "mozilla/Logging.h"
+#include "mozilla/Monitor.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/ReentrantMonitor.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/SystemGroup.h"
@@ -142,8 +142,7 @@ MediaCacheFlusher::UnregisterMediaCache(MediaCache* aMediaCache)
 
 class MediaCache
 {
-  using AutoLock = ReentrantMonitorAutoEnter;
-  using AutoUnlock = ReentrantMonitorAutoExit;
+  using AutoLock = MonitorAutoLock;
 
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaCache)
@@ -189,7 +188,7 @@ public:
   // Add aStream to the list of streams.
   void OpenStream(AutoLock&, MediaCacheStream* aStream, bool aIsClone = false);
   // Remove aStream from the list of streams.
-  void ReleaseStream(MediaCacheStream* aStream);
+  void ReleaseStream(AutoLock&, MediaCacheStream* aStream);
   // Free all blocks belonging to aStream.
   void ReleaseStreamBlocks(AutoLock&, MediaCacheStream* aStream);
   // Find a cache entry for this data, and write the data into it
@@ -248,12 +247,16 @@ public:
   void Verify(AutoLock&) {}
 #endif
 
-  ReentrantMonitor& Monitor() { return mMonitor; }
+  mozilla::Monitor& Monitor()
+  {
+    MOZ_DIAGNOSTIC_ASSERT(!NS_IsMainThread());
+    return mMonitor;
+  }
 
   /**
    * An iterator that makes it easy to iterate through all streams that
    * have a given resource ID and are not closed.
-   * Can be used on the main thread or while holding the media cache lock.
+   * Must be used while holding the media cache lock.
    */
   class ResourceStreamIterator
   {
@@ -263,13 +266,14 @@ public:
       , mResourceID(aResourceID)
       , mNext(0)
     {
+      aMediaCache->mMonitor.AssertCurrentThreadOwns();
     }
-    MediaCacheStream* Next()
+    MediaCacheStream* Next(AutoLock& aLock)
     {
       while (mNext < mMediaCache->mStreams.Length()) {
         MediaCacheStream* stream = mMediaCache->mStreams[mNext];
         ++mNext;
-        if (stream->GetResourceID() == mResourceID && !stream->IsClosed())
+        if (stream->GetResourceID() == mResourceID && !stream->IsClosed(aLock))
           return stream;
       }
       return nullptr;
@@ -442,9 +446,8 @@ protected:
   // The monitor protects all the data members here. Also, off-main-thread
   // readers that need to block will Wait() on this monitor. When new
   // data becomes available in the cache, we NotifyAll() on this monitor.
-  ReentrantMonitor mMonitor;
-  // This is only written while on the main thread and the monitor is held.
-  // Thus, it can be safely read from the main thread or while holding the monitor.
+  mozilla::Monitor mMonitor;
+  // This must always be accessed when the monitor is held.
   nsTArray<MediaCacheStream*> mStreams;
   // The Blocks describing the cache entries.
   nsTArray<Block> mIndex;
@@ -517,7 +520,6 @@ size_t MediaCacheStream::SizeOfExcludingThis(
 {
   // Looks like these are not owned:
   // - mClient
-  // - mPrincipal
   size_t size = mBlocks.ShallowSizeOfExcludingThis(aMallocSizeOf);
   size += mReadaheadBlocks.SizeOfExcludingThis(aMallocSizeOf);
   size += mMetadataBlocks.SizeOfExcludingThis(aMallocSizeOf);
@@ -725,11 +727,18 @@ void
 MediaCache::CloseStreamsForPrivateBrowsing()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  for (MediaCacheStream* s : mStreams) {
-    if (s->mIsPrivateBrowsing) {
-      s->mClient->Close();
-    }
-  }
+  sThread->Dispatch(NS_NewRunnableFunction(
+    "MediaCache::CloseStreamsForPrivateBrowsing",
+    [self = RefPtr<MediaCache>(this)]() {
+      AutoLock lock(self->mMonitor);
+      // Copy mStreams since CloseInternal() will change the array.
+      nsTArray<MediaCacheStream*> streams(self->mStreams);
+      for (MediaCacheStream* s : streams) {
+        if (s->mIsPrivateBrowsing) {
+          s->CloseInternal(lock);
+        }
+      }
+    }));
 }
 
 /* static */ RefPtr<MediaCache>
@@ -807,17 +816,10 @@ MediaCache::ReadCacheFile(AutoLock&,
                           int32_t aLength,
                           int32_t* aBytes)
 {
-  RefPtr<MediaBlockCacheBase> blockCache = mBlockCache;
-  if (!blockCache) {
+  if (!mBlockCache) {
     return NS_ERROR_FAILURE;
   }
-  {
-    // Since the monitor might be acquired on the main thread, we need to drop
-    // the monitor while doing IO in order not to block the main thread.
-    AutoUnlock unlock(mMonitor);
-    return blockCache->Read(
-      aOffset, reinterpret_cast<uint8_t*>(aData), aLength, aBytes);
-  }
+  return mBlockCache->Read(aOffset, reinterpret_cast<uint8_t*>(aData), aLength, aBytes);
 }
 
 // Allowed range is whatever can be accessed with an int32_t block index.
@@ -1579,7 +1581,7 @@ MediaCache::Update()
   // Notify streams about the suspended status changes.
   for (uint32_t i = 0; i < mSuspendedStatusToNotify.Length(); ++i) {
     MediaCache::ResourceStreamIterator iter(this, mSuspendedStatusToNotify[i]);
-    while (MediaCacheStream* stream = iter.Next()) {
+    while (MediaCacheStream* stream = iter.Next(lock)) {
       stream->mClient->CacheClientNotifySuspendedStatusChanged(
         stream->AreAllStreamsForResourceSuspended(lock));
     }
@@ -1702,7 +1704,7 @@ MediaCache::AllocateAndWriteBlock(AutoLock& aLock,
 
   // Remove all cached copies of this block
   ResourceStreamIterator iter(this, aStream->mResourceID);
-  while (MediaCacheStream* stream = iter.Next()) {
+  while (MediaCacheStream* stream = iter.Next(aLock)) {
     while (aStreamBlockIndex >= int32_t(stream->mBlocks.Length())) {
       stream->mBlocks.AppendElement(-1);
     }
@@ -1734,7 +1736,7 @@ MediaCache::AllocateAndWriteBlock(AutoLock& aLock,
         aStreamBlockIndex * BLOCK_SIZE);
 
     ResourceStreamIterator iter(this, aStream->mResourceID);
-    while (MediaCacheStream* stream = iter.Next()) {
+    while (MediaCacheStream* stream = iter.Next(aLock)) {
       BlockOwner* bo = block->mOwners.AppendElement();
       if (!bo) {
         // Roll back mOwners if any allocation fails.
@@ -1800,8 +1802,6 @@ MediaCache::OpenStream(AutoLock& aLock,
                        MediaCacheStream* aStream,
                        bool aIsClone)
 {
-  NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
-
   LOG("Stream %p opened", aStream);
   mStreams.AppendElement(aStream);
 
@@ -1819,18 +1819,12 @@ MediaCache::OpenStream(AutoLock& aLock,
 }
 
 void
-MediaCache::ReleaseStream(MediaCacheStream* aStream)
+MediaCache::ReleaseStream(AutoLock&, MediaCacheStream* aStream)
 {
-  NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
-
-  AutoLock lock(mMonitor);
+  MOZ_ASSERT(OwnerThread()->IsOnCurrentThread());
   LOG("Stream %p closed", aStream);
   mStreams.RemoveElement(aStream);
-
-  // Update MediaCache again for |mStreams| is changed.
-  // We need to re-run Update() to ensure streams reading from the same resource
-  // as the removed stream get a chance to continue reading.
-  QueueUpdate(lock);
+  // The caller needs to call QueueUpdate() to re-run Update().
 }
 
 void
@@ -2038,19 +2032,6 @@ MediaCacheStream::NotifyDataStartedInternal(uint32_t aLoadID,
 }
 
 void
-MediaCacheStream::UpdatePrincipal(nsIPrincipal* aPrincipal)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  MediaCache::ResourceStreamIterator iter(mMediaCache, mResourceID);
-  while (MediaCacheStream* stream = iter.Next()) {
-    if (nsContentUtils::CombineResourcePrincipals(&stream->mPrincipal,
-                                                  aPrincipal)) {
-      stream->mClient->CacheClientNotifyPrincipalChanged();
-    }
-  }
-}
-
-void
 MediaCacheStream::NotifyDataStarted(uint32_t aLoadID,
                                     int64_t aOffset,
                                     bool aSeekable,
@@ -2135,7 +2116,7 @@ MediaCacheStream::NotifyDataReceived(uint32_t aLoadID,
   }
 
   MediaCache::ResourceStreamIterator iter(mMediaCache, mResourceID);
-  while (MediaCacheStream* stream = iter.Next()) {
+  while (MediaCacheStream* stream = iter.Next(lock)) {
     if (stream->mStreamLength >= 0) {
       // The stream is at least as long as what we've read
       stream->mStreamLength = std::max(stream->mStreamLength, mChannelOffset);
@@ -2267,7 +2248,7 @@ MediaCacheStream::NotifyDataEndedInternal(uint32_t aLoadID,
   FlushPartialBlockInternal(lock, true);
 
   MediaCache::ResourceStreamIterator iter(mMediaCache, mResourceID);
-  while (MediaCacheStream* stream = iter.Next()) {
+  while (MediaCacheStream* stream = iter.Next(lock)) {
     // We read the whole stream, so remember the true length
     stream->mStreamLength = mChannelOffset;
     if (!stream->mDidNotifyDataEnded) {
@@ -2314,15 +2295,36 @@ MediaCacheStream::NotifyClientSuspended(bool aSuspended)
   OwnerThread()->Dispatch(r.forget());
 }
 
+void
+MediaCacheStream::NotifyResume()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction(
+    "MediaCacheStream::NotifyResume",
+    [ this, client = RefPtr<ChannelMediaResource>(mClient) ]() {
+      AutoLock lock(mMediaCache->Monitor());
+      if (mClosed) {
+        return;
+      }
+      // Don't resume download if we are already at the end of the stream for
+      // seek will fail and be wasted anyway.
+      int64_t offset = mSeekTarget != -1 ? mSeekTarget : mChannelOffset;
+      if (mStreamLength < 0 || offset < mStreamLength) {
+        mClient->CacheClientSeek(offset, false);
+        // DownloadResumed() will be notified when a new channel is opened.
+      }
+      // The channel remains dead. If we want to read some other data in the
+      // future, CacheClientSeek() will be called to reopen the channel.
+    });
+  OwnerThread()->Dispatch(r.forget());
+}
+
 MediaCacheStream::~MediaCacheStream()
 {
-  NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
-  NS_ASSERTION(!mPinCount, "Unbalanced Pin");
-
-  if (mMediaCache) {
-    NS_ASSERTION(mClosed, "Stream was not closed");
-    mMediaCache->ReleaseStream(this);
-  }
+  MOZ_ASSERT(NS_IsMainThread(), "Only call on main thread");
+  MOZ_ASSERT(!mPinCount, "Unbalanced Pin");
+  MOZ_ASSERT(!mMediaCache || mClosed);
 
   uint32_t lengthKb = uint32_t(
     std::min(std::max(mStreamLength, int64_t(0)) / 1024, int64_t(UINT32_MAX)));
@@ -2342,7 +2344,7 @@ MediaCacheStream::AreAllStreamsForResourceSuspended(AutoLock& aLock)
   MediaCache::ResourceStreamIterator iter(mMediaCache, mResourceID);
   // Look for a stream that's able to read the data we need
   int64_t dataOffset = -1;
-  while (MediaCacheStream* stream = iter.Next()) {
+  while (MediaCacheStream* stream = iter.Next(aLock)) {
     if (stream->mCacheSuspended || stream->mChannelEnded || stream->mClosed) {
       continue;
     }
@@ -2362,34 +2364,46 @@ MediaCacheStream::AreAllStreamsForResourceSuspended(AutoLock& aLock)
 void
 MediaCacheStream::Close()
 {
-  NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
-
-  if (!mMediaCache || mClosed) {
+  MOZ_ASSERT(NS_IsMainThread());
+  if (!mMediaCache) {
     return;
   }
+  OwnerThread()->Dispatch(NS_NewRunnableFunction(
+    "MediaCacheStream::Close",
+    [ this, client = RefPtr<ChannelMediaResource>(mClient) ]() {
+      AutoLock lock(mMediaCache->Monitor());
+      CloseInternal(lock);
+    }));
+}
 
-  AutoLock lock(mMediaCache->Monitor());
+void
+MediaCacheStream::CloseInternal(AutoLock& aLock)
+{
+  MOZ_ASSERT(OwnerThread()->IsOnCurrentThread());
+
+  if (mClosed) {
+    return;
+  }
 
   // Closing a stream will change the return value of
   // MediaCacheStream::AreAllStreamsForResourceSuspended as well as
   // ChannelMediaResource::IsSuspendedByCache. Let's notify it.
-  mMediaCache->QueueSuspendedStatusUpdate(lock, mResourceID);
+  mMediaCache->QueueSuspendedStatusUpdate(aLock, mResourceID);
 
   mClosed = true;
-  mMediaCache->ReleaseStreamBlocks(lock, this);
+  mMediaCache->ReleaseStreamBlocks(aLock, this);
+  mMediaCache->ReleaseStream(aLock, this);
   // Wake up any blocked readers
-  lock.NotifyAll();
+  aLock.NotifyAll();
 
-  // Queue an Update since we may have created more free space. Don't do
-  // it from CloseInternal since that gets called by Update() itself
-  // sometimes, and we try to not to queue updates from Update().
-  mMediaCache->QueueUpdate(lock);
+  // Queue an Update since we may have created more free space.
+  mMediaCache->QueueUpdate(aLock);
 }
 
 void
 MediaCacheStream::Pin()
 {
-  // TODO: Assert non-main thread.
+  MOZ_ASSERT(!NS_IsMainThread());
   AutoLock lock(mMediaCache->Monitor());
   ++mPinCount;
   // Queue an Update since we may no longer want to read more into the
@@ -2400,7 +2414,7 @@ MediaCacheStream::Pin()
 void
 MediaCacheStream::Unpin()
 {
-  // TODO: Assert non-main thread.
+  MOZ_ASSERT(!NS_IsMainThread());
   AutoLock lock(mMediaCache->Monitor());
   NS_ASSERTION(mPinCount > 0, "Unbalanced Unpin");
   --mPinCount;
@@ -2412,17 +2426,9 @@ MediaCacheStream::Unpin()
 int64_t
 MediaCacheStream::GetLength()
 {
-  // TODO: Assert non-main thread.
+  MOZ_ASSERT(!NS_IsMainThread());
   AutoLock lock(mMediaCache->Monitor());
   return mStreamLength;
-}
-
-int64_t
-MediaCacheStream::GetOffset() const
-{
-  // TODO: Assert non-main thread.
-  AutoLock lock(mMediaCache->Monitor());
-  return mChannelOffset;
 }
 
 int64_t
@@ -2436,7 +2442,7 @@ MediaCacheStream::GetNextCachedData(int64_t aOffset)
 int64_t
 MediaCacheStream::GetCachedDataEnd(int64_t aOffset)
 {
-  // TODO: Assert non-main thread.
+  MOZ_ASSERT(!NS_IsMainThread());
   AutoLock lock(mMediaCache->Monitor());
   return GetCachedDataEndInternal(lock, aOffset);
 }
@@ -2542,18 +2548,14 @@ MediaCacheStream::SetReadMode(ReadMode aMode)
 void
 MediaCacheStream::SetPlaybackRate(uint32_t aBytesPerSecond)
 {
+  MOZ_ASSERT(!NS_IsMainThread());
   MOZ_ASSERT(aBytesPerSecond > 0, "Zero playback rate not allowed");
 
-  nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction(
-    "MediaCacheStream::SetPlaybackRate",
-    [ =, client = RefPtr<ChannelMediaResource>(mClient) ]() {
-      AutoLock lock(mMediaCache->Monitor());
-      if (!mClosed && mPlaybackBytesPerSecond != aBytesPerSecond) {
-        mPlaybackBytesPerSecond = aBytesPerSecond;
-        mMediaCache->QueueUpdate(lock);
-      }
-    });
-  OwnerThread()->Dispatch(r.forget());
+  AutoLock lock(mMediaCache->Monitor());
+  if (!mClosed && mPlaybackBytesPerSecond != aBytesPerSecond) {
+    mPlaybackBytesPerSecond = aBytesPerSecond;
+    mMediaCache->QueueUpdate(lock);
+  }
 }
 
 nsresult
@@ -2670,10 +2672,9 @@ MediaCacheStream::ReadBlockFromCache(AutoLock& aLock,
 }
 
 nsresult
-MediaCacheStream::Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
+MediaCacheStream::Read(AutoLock& aLock, char* aBuffer, uint32_t aCount, uint32_t* aBytes)
 {
   MOZ_ASSERT(!NS_IsMainThread());
-  AutoLock lock(mMediaCache->Monitor());
 
   // Cache the offset in case it is changed again when we are waiting for the
   // monitor to be notified to avoid reading at the wrong position.
@@ -2688,11 +2689,6 @@ MediaCacheStream::Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
       return NS_ERROR_ABORT;
     }
 
-    if (mDidNotifyDataEnded && NS_FAILED(mNotifyDataEndedStatus)) {
-      // Abort reading since download ends abnormally.
-      return NS_ERROR_FAILURE;
-    }
-
     if (!IsOffsetAllowed(streamOffset)) {
       LOGE("Stream %p invalid offset=%" PRId64, this, streamOffset);
       return NS_ERROR_ILLEGAL_VALUE;
@@ -2704,7 +2700,7 @@ MediaCacheStream::Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
     }
 
     Result<uint32_t, nsresult> rv = ReadBlockFromCache(
-      lock, streamOffset, buffer, true /* aNoteBlockUsage */);
+      aLock, streamOffset, buffer, true /* aNoteBlockUsage */);
     if (rv.isErr()) {
       return rv.unwrapErr();
     }
@@ -2722,11 +2718,11 @@ MediaCacheStream::Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
     // that is reaching EOS.
     bool foundDataInPartialBlock = false;
     MediaCache::ResourceStreamIterator iter(mMediaCache, mResourceID);
-    while (MediaCacheStream* stream = iter.Next()) {
+    while (MediaCacheStream* stream = iter.Next(aLock)) {
       if (OffsetToBlockIndexUnchecked(stream->mChannelOffset) ==
             OffsetToBlockIndexUnchecked(streamOffset) &&
           stream->mChannelOffset == stream->mStreamLength) {
-        uint32_t bytes = stream->ReadPartialBlock(lock, streamOffset, buffer);
+        uint32_t bytes = stream->ReadPartialBlock(aLock, streamOffset, buffer);
         streamOffset += bytes;
         buffer = buffer.From(bytes);
         foundDataInPartialBlock = true;
@@ -2738,15 +2734,25 @@ MediaCacheStream::Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
       break;
     }
 
+    if (mDidNotifyDataEnded && NS_FAILED(mNotifyDataEndedStatus)) {
+      // Since download ends abnormally, there is no point in waiting for new
+      // data to come. We will check the partial block to read as many bytes as
+      // possible before exiting this function.
+      bytes = ReadPartialBlock(aLock, streamOffset, buffer);
+      streamOffset += bytes;
+      buffer = buffer.From(bytes);
+      break;
+    }
+
     if (mStreamOffset != streamOffset) {
       // Update mStreamOffset before we drop the lock. We need to run
       // Update() again since stream reading strategy might have changed.
       mStreamOffset = streamOffset;
-      mMediaCache->QueueUpdate(lock);
+      mMediaCache->QueueUpdate(aLock);
     }
 
     // No data to read, so block
-    lock.Wait();
+    aLock.Wait();
     continue;
   }
 
@@ -2758,7 +2764,7 @@ MediaCacheStream::Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
 
   // Some data was read, so queue an update since block priorities may
   // have changed
-  mMediaCache->QueueUpdate(lock);
+  mMediaCache->QueueUpdate(aLock);
 
   LOG("Stream %p Read at %" PRId64 " count=%d", this, streamOffset-count, count);
   mStreamOffset = streamOffset;
@@ -2773,7 +2779,7 @@ MediaCacheStream::ReadAt(int64_t aOffset, char* aBuffer,
   AutoLock lock(mMediaCache->Monitor());
   nsresult rv = Seek(lock, aOffset);
   if (NS_FAILED(rv)) return rv;
-  return Read(aBuffer, aCount, aBytes);
+  return Read(lock, aBuffer, aCount, aBytes);
 }
 
 nsresult
@@ -2850,52 +2856,50 @@ MediaCacheStream::Init(int64_t aContentLength)
     return NS_ERROR_FAILURE;
   }
 
-  AutoLock lock(mMediaCache->Monitor());
-  mMediaCache->OpenStream(lock, this);
+  OwnerThread()->Dispatch(NS_NewRunnableFunction(
+    "MediaCacheStream::Init",
+    [ this, res = RefPtr<ChannelMediaResource>(mClient) ]() {
+      AutoLock lock(mMediaCache->Monitor());
+      mMediaCache->OpenStream(lock, this);
+    }));
+
   return NS_OK;
 }
 
-nsresult
+void
 MediaCacheStream::InitAsClone(MediaCacheStream* aOriginal)
 {
-  MOZ_ASSERT(aOriginal->IsAvailableForSharing());
   MOZ_ASSERT(!mMediaCache, "Has been initialized.");
   MOZ_ASSERT(aOriginal->mMediaCache, "Don't clone an uninitialized stream.");
 
-  AutoLock lock(aOriginal->mMediaCache->Monitor());
-
-  if (aOriginal->mDidNotifyDataEnded &&
-      NS_FAILED(aOriginal->mNotifyDataEndedStatus)) {
-    // Streams that ended abnormally are ineligible for cloning.
-    return NS_ERROR_FAILURE;
-  }
-
-  // This needs to be done before OpenStream() to avoid data race.
-  mClientSuspended = true;
-
   // Use the same MediaCache as our clone.
   mMediaCache = aOriginal->mMediaCache;
+  OwnerThread()->Dispatch(
+    NS_NewRunnableFunction("MediaCacheStream::InitAsClone", [
+      this,
+      aOriginal,
+      r1 = RefPtr<ChannelMediaResource>(mClient),
+      r2 = RefPtr<ChannelMediaResource>(aOriginal->mClient)
+    ]() { InitAsCloneInternal(aOriginal); }));
+}
 
+void
+MediaCacheStream::InitAsCloneInternal(MediaCacheStream* aOriginal)
+{
+  MOZ_ASSERT(OwnerThread()->IsOnCurrentThread());
+  AutoLock lock(mMediaCache->Monitor());
+
+  // Download data and notify events if necessary. Note the order is important
+  // in order to mimic the behavior of data being downloaded from the channel.
+
+  // Step 1: copy/download data from the original stream.
   mResourceID = aOriginal->mResourceID;
-
-  // Grab cache blocks from aOriginal as readahead blocks for our stream
-  mPrincipal = aOriginal->mPrincipal;
   mStreamLength = aOriginal->mStreamLength;
   mIsTransportSeekable = aOriginal->mIsTransportSeekable;
   mDownloadStatistics = aOriginal->mDownloadStatistics;
   mDownloadStatistics.Stop();
 
-  // Cloned streams are initially suspended, since there is no channel open
-  // initially for a clone.
-  mCacheSuspended = true;
-  mChannelEnded = true;
-
-  if (aOriginal->mDidNotifyDataEnded) {
-    mNotifyDataEndedStatus = aOriginal->mNotifyDataEndedStatus;
-    mDidNotifyDataEnded = true;
-    mClient->CacheClientNotifyDataEnded(mNotifyDataEndedStatus);
-  }
-
+  // Grab cache blocks from aOriginal as readahead blocks for our stream
   for (uint32_t i = 0; i < aOriginal->mBlocks.Length(); ++i) {
     int32_t cacheBlockIndex = aOriginal->mBlocks[i];
     if (cacheBlockIndex < 0)
@@ -2909,9 +2913,34 @@ MediaCacheStream::InitAsClone(MediaCacheStream* aOriginal)
     mMediaCache->AddBlockOwnerAsReadahead(lock, cacheBlockIndex, this, i);
   }
 
-  mMediaCache->OpenStream(lock, this, true /* aIsClone */);
+  // Copy the partial block.
+  mChannelOffset = aOriginal->mChannelOffset;
+  memcpy(mPartialBlockBuffer.get(),
+         aOriginal->mPartialBlockBuffer.get(),
+         BLOCK_SIZE);
 
-  return NS_OK;
+  // Step 2: notify the client that we have new data so the decoder has a chance
+  // to compute 'canplaythrough' and buffer ranges.
+  mClient->CacheClientNotifyDataReceived();
+
+  // Step 3: notify download ended if necessary.
+  if (aOriginal->mDidNotifyDataEnded &&
+      NS_SUCCEEDED(aOriginal->mNotifyDataEndedStatus)) {
+    mNotifyDataEndedStatus = aOriginal->mNotifyDataEndedStatus;
+    mDidNotifyDataEnded = true;
+    mClient->CacheClientNotifyDataEnded(mNotifyDataEndedStatus);
+  }
+
+  // Step 4: notify download is suspended by the cache.
+  mClientSuspended = true;
+  mCacheSuspended = true;
+  mChannelEnded = true;
+  mClient->CacheClientSuspend();
+
+  // Step 5: add the stream to be managed by the cache.
+  mMediaCache->OpenStream(lock, this, true /* aIsClone */);
+  // Wake up the reader which is waiting for the cloned data.
+  lock.NotifyAll();
 }
 
 nsIEventTarget*
@@ -2947,7 +2976,7 @@ nsresult MediaCacheStream::GetCachedRanges(MediaByteRangeSet& aRanges)
 double
 MediaCacheStream::GetDownloadRate(bool* aIsReliable)
 {
-  // TODO: Assert non-main thread.
+  MOZ_ASSERT(!NS_IsMainThread());
   AutoLock lock(mMediaCache->Monitor());
   return mDownloadStatistics.GetRate(aIsReliable);
 }

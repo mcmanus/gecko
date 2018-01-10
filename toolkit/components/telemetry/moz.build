@@ -11,6 +11,7 @@ include('/ipc/chromium/chromium-config.mozbuild')
 FINAL_LIBRARY = 'xul'
 
 DIRS = [
+    'hybrid-content',
     'pingsender',
 ]
 
@@ -23,7 +24,7 @@ LOCAL_INCLUDES += [
 
 SPHINX_TREES['telemetry'] = 'docs'
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']
 
 if CONFIG['ENABLE_TESTS']:

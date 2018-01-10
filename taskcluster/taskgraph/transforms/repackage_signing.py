@@ -25,6 +25,8 @@ repackage_signing_description_schema = Schema({
     Required('depname', default='repackage'): basestring,
     Optional('label'): basestring,
     Optional('treeherder'): task_description_schema['treeherder'],
+    Optional('shipping-product'): task_description_schema['shipping-product'],
+    Optional('shipping-phase'): task_description_schema['shipping-phase'],
 })
 
 
@@ -32,9 +34,10 @@ repackage_signing_description_schema = Schema({
 def validate(config, jobs):
     for job in jobs:
         label = job.get('dependent-task', object).__dict__.get('label', '?no-label?')
-        yield validate_schema(
+        validate_schema(
             repackage_signing_description_schema, job,
             "In repackage-signing ({!r} kind) task for {!r}:".format(config.kind, label))
+        yield job
 
 
 @transforms.add

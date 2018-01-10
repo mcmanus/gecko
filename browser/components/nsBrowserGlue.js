@@ -39,6 +39,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   FileUtils: "resource://gre/modules/FileUtils.jsm",
   FileSource: "resource://gre/modules/L10nRegistry.jsm",
   FormValidationHandler: "resource:///modules/FormValidationHandler.jsm",
+  HybridContentTelemetry: "resource://gre/modules/HybridContentTelemetry.jsm",
   Integration: "resource://gre/modules/Integration.jsm",
   L10nRegistry: "resource://gre/modules/L10nRegistry.jsm",
   LanguagePrompt: "resource://gre/modules/LanguagePrompt.jsm",
@@ -148,7 +149,6 @@ const listeners = {
     "FormValidation:ShowPopup": ["FormValidationHandler"],
     "FormValidation:HidePopup": ["FormValidationHandler"],
     "Prompt:Open": ["RemotePrompt"],
-    "Reader:ArticleGet": ["ReaderParent"],
     "Reader:FaviconRequest": ["ReaderParent"],
     "Reader:UpdateReaderButton": ["ReaderParent"],
     // PLEASE KEEP THIS LIST IN SYNC WITH THE MOBILE LISTENERS IN BrowserCLH.js
@@ -1116,10 +1116,9 @@ BrowserGlue.prototype = {
       SafeBrowsing.init();
 
       // Login reputation depends on the Safe Browsing API.
-      if (Services.prefs.getBoolPref("browser.safebrowsing.passwords.enabled")) {
-        Cc["@mozilla.org/reputationservice/login-reputation-service;1"]
-        .getService(Ci.ILoginReputationService);
-      }
+      let reputationService = Cc["@mozilla.org/reputationservice/login-reputation-service;1"]
+        .getService(Ci.nsILoginReputationService);
+      reputationService.init();
     }, 5000);
 
     if (AppConstants.MOZ_CRASHREPORTER) {
@@ -1746,6 +1745,35 @@ BrowserGlue.prototype = {
     this.AlertsService.showAlertNotification(null, title, body, true, null, clickCallback);
   },
 
+  /**
+   * Uncollapses PersonalToolbar if its collapsed status is not
+   * persisted, and user customized it or changed default bookmarks.
+   *
+   * If the user does not have a persisted value for the toolbar's
+   * "collapsed" attribute, try to determine whether it's customized.
+   */
+  _maybeToggleBookmarkToolbarVisibility() {
+    const BROWSER_DOCURL = "chrome://browser/content/browser.xul";
+    const NUM_TOOLBAR_BOOKMARKS_TO_UNHIDE = 3;
+    let xulStore = Cc["@mozilla.org/xul/xulstore;1"].getService(Ci.nsIXULStore);
+
+    if (!xulStore.hasValue(BROWSER_DOCURL, "PersonalToolbar", "collapsed")) {
+      // We consider the toolbar customized if it has more than NUM_TOOLBAR_BOOKMARKS_TO_UNHIDE
+      // children, or if it has a persisted currentset value.
+      let toolbarIsCustomized = xulStore.hasValue(BROWSER_DOCURL, "PersonalToolbar", "currentset");
+      let getToolbarFolderCount = () => {
+        let toolbarFolder = PlacesUtils.getFolderContents(PlacesUtils.toolbarFolderId).root;
+        let toolbarChildCount = toolbarFolder.childCount;
+        toolbarFolder.containerOpen = false;
+        return toolbarChildCount;
+      };
+
+      if (toolbarIsCustomized || getToolbarFolderCount() > NUM_TOOLBAR_BOOKMARKS_TO_UNHIDE) {
+        xulStore.setValue(BROWSER_DOCURL, "PersonalToolbar", "collapsed", "false");
+      }
+    }
+  },
+
   // eslint-disable-next-line complexity
   _migrateUI: function BG__migrateUI() {
     const UI_VERSION = 59;
@@ -1757,6 +1785,15 @@ BrowserGlue.prototype = {
     } else {
       // This is a new profile, nothing to migrate.
       Services.prefs.setIntPref("browser.migration.version", UI_VERSION);
+
+      try {
+        // New profiles may have existing bookmarks (imported from another browser or
+        // copied into the profile) and we want to show the bookmark toolbar for them
+        // in some cases.
+        this._maybeToggleBookmarkToolbarVisibility();
+      } catch (ex) {
+        Cu.reportError(ex);
+      }
       return;
     }
 
@@ -1834,17 +1871,6 @@ BrowserGlue.prototype = {
     if (currentUIVersion < 20) {
       // Remove persisted collapsed state from TabsToolbar.
       xulStore.removeValue(BROWSER_DOCURL, "TabsToolbar", "collapsed");
-    }
-
-    if (currentUIVersion < 23) {
-      const kSelectedEnginePref = "browser.search.selectedEngine";
-      if (Services.prefs.prefHasUserValue(kSelectedEnginePref)) {
-        try {
-          let name = Services.prefs.getComplexValue(kSelectedEnginePref,
-                                                    Ci.nsIPrefLocalizedString).data;
-          Services.search.currentEngine = Services.search.getEngineByName(name);
-        } catch (ex) {}
-      }
     }
 
     if (currentUIVersion < 24) {
@@ -2198,7 +2224,11 @@ BrowserGlue.prototype = {
         let currentEngine = Services.search.currentEngine.wrappedJSObject;
         // Only reset the current engine if it wasn't set by a WebExtension
         // and it is not one of the default engines.
-        if (currentEngine._extensionID || currentEngine._isDefault)
+        // If the original default is not a default, the user has a weird
+        // configuration probably involving langpacks, it's not worth
+        // attempting to reset their settings.
+        if (currentEngine._extensionID || currentEngine._isDefault ||
+            !Services.search.originalDefaultEngine.wrappedJSObject._isDefault)
           return;
 
         if (currentEngine._loadPath.startsWith("[https]")) {
@@ -3042,4 +3072,11 @@ this.NSGetFactory = XPCOMUtils.generateNSGetFactory(components);
 var globalMM = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
 globalMM.addMessageListener("UITour:onPageEvent", function(aMessage) {
   UITour.onPageEvent(aMessage, aMessage.data);
+});
+
+// Listen for HybridContentTelemetry messages.
+// Do it here instead of HybridContentTelemetry.init() so that
+// the module can be lazily loaded on the first message.
+globalMM.addMessageListener("HybridContentTelemetry:onTelemetryMessage", aMessage => {
+  HybridContentTelemetry.onTelemetryMessage(aMessage, aMessage.data);
 });

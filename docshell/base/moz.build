@@ -95,6 +95,8 @@ UNIFIED_SOURCES += [
     'nsDocShellTransferableHooks.cpp',
     'nsDocShellTreeOwner.cpp',
     'nsDSURIContentListener.cpp',
+    'nsPingListener.cpp',
+    'nsRefreshTimer.cpp',
     'nsWebNavigationInfo.cpp',
     'PendingGlobalHistoryEntry.cpp',
     'SerializedLoadContext.cpp',
@@ -122,5 +124,5 @@ LOCAL_INCLUDES += [
 if CONFIG['MOZ_TOOLKIT_SEARCH']:
     DEFINES['MOZ_TOOLKIT_SEARCH'] = True
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

@@ -62,8 +62,12 @@ ReaderProxy::OnAudioDataRequestCompleted(RefPtr<AudioData> aAudio)
   int64_t offset =
     StartTime().ToMicroseconds() - mLoopingOffset.ToMicroseconds();
   aAudio->AdjustForStartTime(offset);
-  mLastAudioEndTime = aAudio->mTime;
-  return AudioDataPromise::CreateAndResolve(aAudio.forget(), __func__);
+  if (aAudio->mTime.IsValid()) {
+    mLastAudioEndTime = aAudio->mTime;
+    return AudioDataPromise::CreateAndResolve(aAudio.forget(), __func__);
+  }
+  return AudioDataPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
+                                           __func__);
 }
 
 RefPtr<ReaderProxy::AudioDataPromise>
@@ -149,8 +153,11 @@ ReaderProxy::RequestVideoData(const media::TimeUnit& aTimeThreshold)
            __func__,
            [startTime](RefPtr<VideoData> aVideo) {
              aVideo->AdjustForStartTime(startTime);
-             return VideoDataPromise::CreateAndResolve(aVideo.forget(),
-                                                       __func__);
+             return aVideo->mTime.IsValid()
+                      ? VideoDataPromise::CreateAndResolve(aVideo.forget(),
+                                                           __func__)
+                      : VideoDataPromise::CreateAndReject(
+                          NS_ERROR_DOM_MEDIA_OVERFLOW_ERR, __func__);
            },
            [](const MediaResult& aError) {
              return VideoDataPromise::CreateAndReject(aError, __func__);
@@ -204,6 +211,7 @@ ReaderProxy::ReleaseResources()
                       &MediaFormatReader::ReleaseResources);
   nsresult rv = mReader->OwnerThread()->Dispatch(r.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 void
@@ -217,6 +225,7 @@ ReaderProxy::ResetDecode(TrackSet aTracks)
                                 aTracks);
   nsresult rv = mReader->OwnerThread()->Dispatch(r.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 RefPtr<ShutdownPromise>
@@ -264,6 +273,7 @@ ReaderProxy::SetVideoBlankDecode(bool aIsBlankDecode)
                             aIsBlankDecode);
   nsresult rv = mReader->OwnerThread()->Dispatch(r.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 void
@@ -287,6 +297,7 @@ ReaderProxy::SetCanonicalDuration(
     });
   nsresult rv = mReader->OwnerThread()->Dispatch(r.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 void

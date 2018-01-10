@@ -575,8 +575,9 @@ ensure you put this in your [mozconfig]:
 
 	ac_add_options --enable-geckodriver
 
-The _geckodriver_ binary will appear in `${objdir}/dist/bin/geckodriver`
-alongside _firefox-bin_.
+You build geckodriver with the `./mach build testing/geckodriver`
+command, run tests with `./mach test testing/geckodriver`, and run
+the built executable with `./mach geckodriver -- --other --flags`.
 
 [Rust]: https://www.rust-lang.org/
 [Mozilla]: https://www.mozilla.org/en-US/

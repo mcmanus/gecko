@@ -21,6 +21,7 @@
 #include "mozilla/UniquePtr.h"
 #include "mozilla/WeakPtr.h"
 #include "mozilla/dom/BindingUtils.h"
+#include "mozilla/dom/ClientHandle.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ServiceWorkerCommon.h"
 #include "mozilla/dom/ServiceWorkerRegistrar.h"
@@ -46,7 +47,6 @@ class ServiceWorkerRegistrationListener;
 
 namespace workers {
 
-class ServiceWorkerClientInfo;
 class ServiceWorkerInfo;
 class ServiceWorkerJobQueue;
 class ServiceWorkerManagerChild;
@@ -106,6 +106,21 @@ public:
 
   nsRefPtrHashtable<nsISupportsHashKey, ServiceWorkerRegistrationInfo> mControlledDocuments;
 
+  struct ControlledClientData
+  {
+    RefPtr<ClientHandle> mClientHandle;
+    RefPtr<ServiceWorkerRegistrationInfo> mRegistrationInfo;
+
+    ControlledClientData(ClientHandle* aClientHandle,
+                         ServiceWorkerRegistrationInfo* aRegistrationInfo)
+      : mClientHandle(aClientHandle)
+      , mRegistrationInfo(aRegistrationInfo)
+    {
+    }
+  };
+
+  nsClassHashtable<nsIDHashKey, ControlledClientData> mControlledClients;
+
   // Track all documents that have attempted to register a service worker for a
   // given scope.
   typedef nsTArray<nsCOMPtr<nsIWeakReference>> WeakDocumentList;
@@ -125,9 +140,6 @@ public:
 
   bool
   IsAvailable(nsIPrincipal* aPrincipal, nsIURI* aURI);
-
-  bool
-  IsControlled(nsIDocument* aDocument, ErrorResult& aRv);
 
   // Return true if the given content process could potentially be executing
   // service worker code with the given principal.  At the current time, this
@@ -151,7 +163,6 @@ public:
   void
   DispatchFetchEvent(const OriginAttributes& aOriginAttributes,
                      nsIDocument* aDoc,
-                     const nsAString& aDocumentIdForTopLevelNavigation,
                      nsIInterceptedChannel* aChannel,
                      bool aIsReload,
                      bool aIsSubresourceLoad,
@@ -273,24 +284,13 @@ public:
               uint32_t aFlags,
               JSExnType aExnType);
 
-  UniquePtr<ServiceWorkerClientInfo>
-  GetClient(nsIPrincipal* aPrincipal,
-            const nsAString& aClientId,
-            ErrorResult& aRv);
-
-  void
-  GetAllClients(nsIPrincipal* aPrincipal,
-                const nsCString& aScope,
-                uint64_t aServiceWorkerID,
-                bool aIncludeUncontrolled,
-                nsTArray<ServiceWorkerClientInfo>& aDocuments);
-
-  void
+  already_AddRefed<GenericPromise>
   MaybeClaimClient(nsIDocument* aDocument,
                    ServiceWorkerRegistrationInfo* aWorkerRegistration);
 
-  nsresult
-  ClaimClients(nsIPrincipal* aPrincipal, const nsCString& aScope, uint64_t aId);
+  already_AddRefed<GenericPromise>
+  MaybeClaimClient(nsIDocument* aDoc,
+                   const ServiceWorkerDescriptor& aServiceWorker);
 
   void
   SetSkipWaitingFlag(nsIPrincipal* aPrincipal, const nsCString& aScope,
@@ -320,7 +320,7 @@ public:
                                   ServiceWorkerRegistrationListener* aListener);
 
   void
-  MaybeCheckNavigationUpdate(nsIDocument* aDoc);
+  MaybeCheckNavigationUpdate(const ClientInfo& aClientInfo);
 
   nsresult
   SendPushEvent(const nsACString& aOriginAttributes,
@@ -344,6 +344,13 @@ private:
   void
   Init(ServiceWorkerRegistrar* aRegistrar);
 
+  RefPtr<GenericPromise>
+  StartControllingClient(const ClientInfo& aClientInfo,
+                         ServiceWorkerRegistrationInfo* aRegistrationInfo);
+
+  void
+  StopControllingClient(const ClientInfo& aClientInfo);
+
   void
   MaybeStartShutdown();
 
@@ -365,8 +372,8 @@ private:
   Update(ServiceWorkerRegistrationInfo* aRegistration);
 
   nsresult
-  GetDocumentRegistration(nsIDocument* aDoc,
-                          ServiceWorkerRegistrationInfo** aRegistrationInfo);
+  GetClientRegistration(const ClientInfo& aClientInfo,
+                        ServiceWorkerRegistrationInfo** aRegistrationInfo);
 
   nsresult
   GetServiceWorkerForScope(nsPIDOMWindowInner* aWindow,
@@ -391,13 +398,12 @@ private:
   void
   NotifyServiceWorkerRegistrationRemoved(ServiceWorkerRegistrationInfo* aRegistration);
 
-  RefPtr<GenericPromise>
+  void
   StartControllingADocument(ServiceWorkerRegistrationInfo* aRegistration,
-                            nsIDocument* aDoc,
-                            const nsAString& aDocumentId);
+                            nsIDocument* aDoc);
 
   void
-  StopControllingADocument(ServiceWorkerRegistrationInfo* aRegistration);
+  StopControllingRegistration(ServiceWorkerRegistrationInfo* aRegistration);
 
   already_AddRefed<ServiceWorkerRegistrationInfo>
   GetServiceWorkerRegistrationInfo(nsPIDOMWindowInner* aWindow);
@@ -441,7 +447,7 @@ private:
   FireUpdateFoundOnServiceWorkerRegistrations(ServiceWorkerRegistrationInfo* aRegistration);
 
   void
-  FireControllerChange(ServiceWorkerRegistrationInfo* aRegistration);
+  UpdateClientControllers(ServiceWorkerRegistrationInfo* aRegistration);
 
   void
   StorePendingReadyPromise(nsPIDOMWindowInner* aWindow, nsIURI* aURI,

@@ -490,7 +490,7 @@ function do_test(testcases, testFn) {
     (function() {
       let testcase = tc;
       add_task(async function() {
-        do_print("Starting testcase: " + testcase.description);
+        info("Starting testcase: " + testcase.description);
         let ccNumber = testcase.profileData["cc-number"];
         if (ccNumber) {
           testcase.profileData["cc-number-encrypted"] = await MasterPassword.encrypt(ccNumber);
@@ -512,7 +512,7 @@ function do_test(testcases, testFn) {
             if (e.result != Cr.NS_ERROR_ABORT) {
               throw e;
             }
-            do_print("User canceled master password entry");
+            info("User canceled master password entry");
           }
           return string;
         };
@@ -537,7 +537,8 @@ function do_test(testcases, testFn) {
         });
 
         let focusedInput = doc.getElementById(testcase.focusedInputId);
-        let [adaptedProfile] = handler.getAdaptedProfiles([testcase.profileData], focusedInput);
+        handler.focusedInput = focusedInput;
+        let [adaptedProfile] = handler.activeSection.getAdaptedProfiles([testcase.profileData]);
         await handler.autofillFormFields(adaptedProfile, focusedInput);
         Assert.equal(handlerInfo.filledRecordGUID, testcase.profileData.guid,
                      "Check if filledRecordGUID is set correctly");

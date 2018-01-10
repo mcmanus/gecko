@@ -76,7 +76,7 @@ use selector_parser::{AttrValue, Direction, PseudoClassStringArg};
 use selectors::{Element, OpaqueElement};
 use selectors::attr::{AttrSelectorOperation, AttrSelectorOperator, CaseSensitivity, NamespaceConstraint};
 use selectors::matching::{ElementSelectorFlags, MatchingContext};
-use selectors::matching::{RelevantLinkStatus, VisitedHandlingMode};
+use selectors::matching::VisitedHandlingMode;
 use selectors::sink::Push;
 use servo_arc::{Arc, ArcBorrow, RawOffsetArc};
 use shared_lock::Locked;
@@ -236,13 +236,23 @@ impl<'ln> GeckoNode<'ln> {
 
     #[inline]
     fn flattened_tree_parent(&self) -> Option<Self> {
-        let fast_path = self.flattened_tree_parent_is_parent();
-        debug_assert!(fast_path == unsafe { bindings::Gecko_FlattenedTreeParentIsParent(self.0) });
-        if fast_path {
-            unsafe { self.0.mParent.as_ref().map(GeckoNode) }
-        } else {
-            unsafe { bindings::Gecko_GetFlattenedTreeParentNode(self.0).map(GeckoNode) }
+        // TODO(emilio): Measure and consider not doing this fast-path and take
+        // always the common path, it's only a function call and from profiles
+        // it seems that keeping this fast path makes the compiler not inline
+        // `flattened_tree_parent`.
+        if self.flattened_tree_parent_is_parent() {
+            debug_assert_eq!(
+                unsafe { bindings::Gecko_GetFlattenedTreeParentNode(self.0).map(GeckoNode) },
+                self.parent_node(),
+                "Fast path stopped holding!"
+            );
+
+            return self.parent_node();
         }
+
+        // NOTE(emilio): If this call is too expensive, we could manually
+        // inline more aggressively.
+        unsafe { bindings::Gecko_GetFlattenedTreeParentNode(self.0).map(GeckoNode) }
     }
 
     #[inline]
@@ -335,18 +345,6 @@ impl<'ln> TNode for GeckoNode<'ln> {
             None
         }
     }
-
-    #[inline]
-    fn can_be_fragmented(&self) -> bool {
-        // FIXME(SimonSapin): Servo uses this to implement CSS multicol / fragmentation
-        // Maybe this isn’t useful for Gecko?
-        false
-    }
-
-    unsafe fn set_can_be_fragmented(&self, _value: bool) {
-        // FIXME(SimonSapin): Servo uses this to implement CSS multicol / fragmentation
-        // Maybe this isn’t useful for Gecko?
-    }
 }
 
 /// A wrapper on top of two kind of iterators, depending on the parent being
@@ -428,10 +426,7 @@ impl<'lb> GeckoXBLBinding<'lb> {
             if !binding.anon_content().is_null() {
                 return Some(binding);
             }
-            binding = match binding.base_binding() {
-                Some(b) => b,
-                None => return None,
-            };
+            binding = binding.base_binding()?;
         }
     }
 
@@ -539,8 +534,9 @@ impl<'le> GeckoElement<'le> {
     fn get_extended_slots(
         &self,
     ) -> Option<&structs::FragmentOrElement_nsExtendedDOMSlots> {
-        self.get_dom_slots()
-            .and_then(|s| unsafe { s.mExtendedSlots.mPtr.as_ref() })
+        self.get_dom_slots().and_then(|s| unsafe {
+            (s._base.mExtendedSlots.mPtr as *const structs::FragmentOrElement_nsExtendedDOMSlots).as_ref()
+        })
     }
 
     #[inline]
@@ -595,7 +591,7 @@ impl<'le> GeckoElement<'le> {
     fn get_non_xul_xbl_binding_parent_raw_content(&self) -> *mut nsIContent {
         debug_assert!(!self.is_xul_element());
         self.get_extended_slots()
-            .map_or(ptr::null_mut(), |slots| slots.mBindingParent)
+            .map_or(ptr::null_mut(), |slots| slots._base.mBindingParent)
     }
 
     fn has_xbl_binding_parent(&self) -> bool {
@@ -1006,20 +1002,14 @@ impl<'le> TElement for GeckoElement<'le> {
 
     fn closest_non_native_anonymous_ancestor(&self) -> Option<Self> {
         debug_assert!(self.is_native_anonymous());
-        let mut parent = match self.traversal_parent() {
-            Some(e) => e,
-            None => return None,
-        };
+        let mut parent = self.traversal_parent()?;
 
         loop {
             if !parent.is_native_anonymous() {
                 return Some(parent);
             }
 
-            parent = match parent.traversal_parent() {
-                Some(p) => p,
-                None => return None,
-            };
+            parent = parent.traversal_parent()?;
         }
     }
 
@@ -1054,16 +1044,10 @@ impl<'le> TElement for GeckoElement<'le> {
 
     fn get_smil_override(&self) -> Option<ArcBorrow<Locked<PropertyDeclarationBlock>>> {
         unsafe {
-            let slots = match self.get_extended_slots() {
-                Some(s) => s,
-                None => return None,
-            };
+            let slots = self.get_extended_slots()?;
 
             let base_declaration: &structs::DeclarationBlock =
-                match slots.mSMILOverrideStyleDeclaration.mRawPtr.as_ref() {
-                    Some(decl) => decl,
-                    None => return None,
-                };
+                slots.mSMILOverrideStyleDeclaration.mRawPtr.as_ref()?;
 
             assert_eq!(base_declaration.mType, structs::StyleBackendType_Servo);
             let declaration: &structs::ServoDeclarationBlock =
@@ -1074,11 +1058,7 @@ impl<'le> TElement for GeckoElement<'le> {
                 base_declaration as *const structs::DeclarationBlock
             );
 
-            let raw: &structs::RawServoDeclarationBlock =
-                match declaration.mRaw.mRawPtr.as_ref() {
-                    Some(decl) => decl,
-                    None => return None,
-                };
+            let raw: &structs::RawServoDeclarationBlock = declaration.mRaw.mRawPtr.as_ref()?;
 
             Some(Locked::<PropertyDeclarationBlock>::as_arc(
                 &*(&raw as *const &structs::RawServoDeclarationBlock)
@@ -1795,7 +1775,7 @@ impl<'le> Eq for GeckoElement<'le> {}
 impl<'le> Hash for GeckoElement<'le> {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.0 as *const _).hash(state);
+        (self.0 as *const RawGeckoElement).hash(state);
     }
 }
 
@@ -1977,7 +1957,7 @@ impl<'le> ::selectors::Element for GeckoElement<'le> {
         &self,
         pseudo_class: &NonTSPseudoClass,
         context: &mut MatchingContext<Self::Impl>,
-        relevant_link: &RelevantLinkStatus,
+        visited_handling: VisitedHandlingMode,
         flags_setter: &mut F,
     ) -> bool
     where
@@ -2037,8 +2017,12 @@ impl<'le> ::selectors::Element for GeckoElement<'le> {
                 self.get_state().intersects(pseudo_class.state_flag())
             },
             NonTSPseudoClass::AnyLink => self.is_link(),
-            NonTSPseudoClass::Link => relevant_link.is_unvisited(self, context),
-            NonTSPseudoClass::Visited => relevant_link.is_visited(self, context),
+            NonTSPseudoClass::Link => {
+                self.is_link() && visited_handling.matches_unvisited()
+            }
+            NonTSPseudoClass::Visited => {
+                self.is_link() && visited_handling.matches_visited()
+            }
             NonTSPseudoClass::MozFirstNode => {
                 flags_setter(self, ElementSelectorFlags::HAS_EDGE_CHILD_SELECTOR);
                 let mut elem = self.as_node();

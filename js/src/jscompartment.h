@@ -624,7 +624,6 @@ struct JSCompartment
     bool                         isSelfHosting;
     bool                         marked;
     bool                         warnedAboutExprClosure : 1;
-    bool                         warnedAboutForEach : 1;
     uint32_t                     warnedAboutStringGenericsMethods;
 
 #ifdef DEBUG
@@ -725,6 +724,8 @@ struct JSCompartment
     int64_t                      lastAnimationTime;
 
     js::RegExpCompartment        regExps;
+
+    js::ArraySpeciesLookup       arraySpeciesLookup;
 
     using IteratorCache = js::HashSet<js::PropertyIteratorObject*,
                                       js::IteratorHashPolicy,

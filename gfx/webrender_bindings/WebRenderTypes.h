@@ -8,6 +8,7 @@
 #define GFX_WEBRENDERTYPES_H
 
 #include "FrameMetrics.h"
+#include "ImageTypes.h"
 #include "mozilla/webrender/webrender_ffi.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/gfx/Matrix.h"
@@ -312,8 +313,8 @@ static inline wr::LayoutVector2D ToLayoutVector2D(const mozilla::LayoutDeviceInt
 static inline wr::LayoutRect ToLayoutRect(const mozilla::LayoutDeviceRect& rect)
 {
   wr::LayoutRect r;
-  r.origin.x = rect.x;
-  r.origin.y = rect.y;
+  r.origin.x = rect.X();
+  r.origin.y = rect.Y();
   r.size.width = rect.Width();
   r.size.height = rect.Height();
   return r;
@@ -322,8 +323,8 @@ static inline wr::LayoutRect ToLayoutRect(const mozilla::LayoutDeviceRect& rect)
 static inline wr::LayoutRect ToLayoutRect(const gfxRect& rect)
 {
   wr::LayoutRect r;
-  r.origin.x = rect.x;
-  r.origin.y = rect.y;
+  r.origin.x = rect.X();
+  r.origin.y = rect.Y();
   r.size.width = rect.Width();
   r.size.height = rect.Height();
   return r;
@@ -332,10 +333,10 @@ static inline wr::LayoutRect ToLayoutRect(const gfxRect& rect)
 static inline wr::DeviceUintRect ToDeviceUintRect(const mozilla::ImageIntRect& rect)
 {
   wr::DeviceUintRect r;
-  r.origin.x = rect.x;
-  r.origin.y = rect.y;
-  r.size.width = rect.width;
-  r.size.height = rect.height;
+  r.origin.x = rect.X();
+  r.origin.y = rect.Y();
+  r.size.width = rect.Width();
+  r.size.height = rect.Height();
   return r;
 }
 
@@ -460,7 +461,7 @@ static inline wr::BorderWidths ToBorderWidths(float top, float right, float bott
 }
 
 static inline wr::NinePatchDescriptor ToNinePatchDescriptor(uint32_t width, uint32_t height,
-                                                            const wr::SideOffsets2D_u32& slice)
+                                                            const wr::SideOffsets2D<uint32_t>& slice)
 {
   NinePatchDescriptor patch;
   patch.width = width;
@@ -469,9 +470,9 @@ static inline wr::NinePatchDescriptor ToNinePatchDescriptor(uint32_t width, uint
   return patch;
 }
 
-static inline wr::SideOffsets2D_u32 ToSideOffsets2D_u32(uint32_t top, uint32_t right, uint32_t bottom, uint32_t left)
+static inline wr::SideOffsets2D<uint32_t> ToSideOffsets2D_u32(uint32_t top, uint32_t right, uint32_t bottom, uint32_t left)
 {
-  SideOffsets2D_u32 offset;
+  SideOffsets2D<uint32_t> offset;
   offset.top = top;
   offset.right = right;
   offset.bottom = bottom;
@@ -479,9 +480,9 @@ static inline wr::SideOffsets2D_u32 ToSideOffsets2D_u32(uint32_t top, uint32_t r
   return offset;
 }
 
-static inline wr::SideOffsets2D_f32 ToSideOffsets2D_f32(float top, float right, float bottom, float left)
+static inline wr::SideOffsets2D<float> ToSideOffsets2D_f32(float top, float right, float bottom, float left)
 {
-  SideOffsets2D_f32 offset;
+  SideOffsets2D<float> offset;
   offset.top = top;
   offset.right = right;
   offset.bottom = bottom;
@@ -489,16 +490,16 @@ static inline wr::SideOffsets2D_f32 ToSideOffsets2D_f32(float top, float right, 
   return offset;
 }
 
-static inline wr::RepeatMode ToRepeatMode(uint8_t repeatMode)
+static inline wr::RepeatMode ToRepeatMode(mozilla::StyleBorderImageRepeat repeatMode)
 {
   switch (repeatMode) {
-  case NS_STYLE_BORDER_IMAGE_REPEAT_STRETCH:
+  case mozilla::StyleBorderImageRepeat::Stretch:
     return wr::RepeatMode::Stretch;
-  case NS_STYLE_BORDER_IMAGE_REPEAT_REPEAT:
+  case mozilla::StyleBorderImageRepeat::Repeat:
     return wr::RepeatMode::Repeat;
-  case NS_STYLE_BORDER_IMAGE_REPEAT_ROUND:
+  case mozilla::StyleBorderImageRepeat::Round:
     return wr::RepeatMode::Round;
-  case NS_STYLE_BORDER_IMAGE_REPEAT_SPACE:
+  case mozilla::StyleBorderImageRepeat::Space:
     return wr::RepeatMode::Space;
   default:
     MOZ_ASSERT(false);
@@ -570,21 +571,29 @@ inline mozilla::Range<uint8_t> MutByteSliceToRange(wr::MutByteSlice aWrSlice) {
   return mozilla::Range<uint8_t>(aWrSlice.buffer, aWrSlice.len);
 }
 
-struct Vec_u8 {
+void Assign_WrVecU8(wr::WrVecU8& aVec, mozilla::ipc::ByteBuf&& aOther);
+
+template<typename T>
+struct Vec;
+
+template<>
+struct Vec<uint8_t> {
   wr::WrVecU8 inner;
-  Vec_u8() {
+  Vec() {
     SetEmpty();
   }
-  Vec_u8(Vec_u8&) = delete;
-  Vec_u8(Vec_u8&& src) {
+  Vec(Vec&) = delete;
+  Vec(Vec&& src) {
     inner = src.inner;
     src.SetEmpty();
   }
 
-  explicit Vec_u8(mozilla::ipc::ByteBuf&& aSrc);
+  explicit Vec(mozilla::ipc::ByteBuf&& aSrc) {
+    Assign_WrVecU8(inner, std::move(aSrc));
+  }
 
-  Vec_u8&
-  operator=(Vec_u8&& src) {
+  Vec&
+  operator=(Vec&& src) {
     inner = src.inner;
     src.SetEmpty();
     return *this;
@@ -611,7 +620,7 @@ struct Vec_u8 {
     wr_vec_u8_push_bytes(&inner, RangeToByteSlice(aBytes));
   }
 
-  ~Vec_u8() {
+  ~Vec() {
     if (inner.data) {
       wr_vec_u8_free(inner);
     }
@@ -729,6 +738,8 @@ static inline wr::WrFilterOpType ToWrFilterOpType(uint32_t type) {
       return wr::WrFilterOpType::Saturate;
     case NS_STYLE_FILTER_SEPIA:
       return wr::WrFilterOpType::Sepia;
+    case NS_STYLE_FILTER_DROP_SHADOW:
+      return wr::WrFilterOpType::DropShadow;
   }
   MOZ_ASSERT_UNREACHABLE("Tried to convert unknown filter type.");
   return wr::WrFilterOpType::Grayscale;
@@ -765,6 +776,18 @@ enum class WebRenderError : int8_t {
 
   Sentinel /* this must be last for serialization purposes. */
 };
+
+static inline wr::WrYuvColorSpace ToWrYuvColorSpace(YUVColorSpace aYUVColorSpace) {
+  switch (aYUVColorSpace) {
+    case YUVColorSpace::BT601:
+      return wr::WrYuvColorSpace::Rec601;
+    case YUVColorSpace::BT709:
+      return wr::WrYuvColorSpace::Rec709;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Tried to convert invalid YUVColorSpace.");
+  }
+  return wr::WrYuvColorSpace::Rec601;
+}
 
 } // namespace wr
 } // namespace mozilla

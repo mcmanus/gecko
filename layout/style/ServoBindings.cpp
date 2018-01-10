@@ -58,12 +58,14 @@
 #include "mozilla/GeckoStyleContext.h"
 #include "mozilla/Keyframe.h"
 #include "mozilla/Mutex.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/ServoElementSnapshot.h"
 #include "mozilla/ServoRestyleManager.h"
 #include "mozilla/SizeOfState.h"
 #include "mozilla/StyleAnimationValue.h"
 #include "mozilla/SystemGroup.h"
 #include "mozilla/ServoMediaList.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/RWLock.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ElementInlines.h"
@@ -121,21 +123,35 @@ AssertIsMainThreadOrServoLangFontPrefsCacheLocked()
   MOZ_ASSERT(NS_IsMainThread() || sServoFFILock->LockedForWritingByCurrentThread());
 }
 
+
+void
+Gecko_RecordTraversalStatistics(uint32_t total, uint32_t parallel,
+                                uint32_t total_t, uint32_t parallel_t,
+                                uint32_t total_s, uint32_t parallel_s)
+{
+
+#ifdef NIGHTLY_BUILD
+  // we ignore cases where a page just didn't restyle a lot
+  if (total > 30) {
+    uint32_t percent = parallel * 100 / total;
+    Telemetry::Accumulate(Telemetry::STYLO_PARALLEL_RESTYLE_FRACTION, percent);
+  }
+  if (total_t > 0) {
+    uint32_t percent = parallel_t * 100 / total_t;
+    Telemetry::Accumulate(Telemetry::STYLO_PARALLEL_RESTYLE_FRACTION_WEIGHTED_TRAVERSED, percent);
+  }
+  if (total_s > 0) {
+    uint32_t percent = parallel_s * 100 / total_s;
+    Telemetry::Accumulate(Telemetry::STYLO_PARALLEL_RESTYLE_FRACTION_WEIGHTED_STYLED, percent);
+  }
+#endif
+}
+
 bool
 Gecko_IsInDocument(RawGeckoNodeBorrowed aNode)
 {
   return aNode->IsInComposedDoc();
 }
-
-#ifdef MOZ_DEBUG_RUST
-bool
-Gecko_FlattenedTreeParentIsParent(RawGeckoNodeBorrowed aNode)
-{
-  // Servo calls this in debug builds to verify the result of its own
-  // flattened_tree_parent_is_parent() function.
-  return FlattenedTreeParentIsParent<nsIContent::eForStyle>(aNode);
-}
-#endif
 
 /*
  * Does this child count as significant for selector matching?
@@ -160,11 +176,7 @@ Gecko_GetLastChild(RawGeckoNodeBorrowed aNode)
 RawGeckoNodeBorrowedOrNull
 Gecko_GetFlattenedTreeParentNode(RawGeckoNodeBorrowed aNode)
 {
-  MOZ_ASSERT(!FlattenedTreeParentIsParent<nsIContent::eForStyle>(aNode),
-             "Should have taken the inline path");
-  MOZ_ASSERT(aNode->IsContent(), "Slow path only applies to content");
-  const nsIContent* c = aNode->AsContent();
-  return c->GetFlattenedTreeParentNodeInternal(nsIContent::eForStyle);
+  return aNode->GetFlattenedTreeParentNodeForStyle();
 }
 
 RawGeckoElementBorrowedOrNull
@@ -1059,7 +1071,7 @@ template <typename Implementor>
 static uint32_t
 ClassOrClassList(Implementor* aElement, nsAtom** aClass, nsAtom*** aClassList)
 {
-  const nsAttrValue* attr = aElement->GetClasses();
+  const nsAttrValue* attr = aElement->DoGetClasses();
   if (!attr) {
     return 0;
   }
@@ -1790,19 +1802,25 @@ Gecko_EnsureImageLayersLength(nsStyleImageLayers* aLayers, size_t aLen,
   }
 }
 
+template <typename StyleType>
+static void
+EnsureStyleAutoArrayLength(StyleType* aArray, size_t aLen)
+{
+  size_t oldLength = aArray->Length();
+
+  aArray->EnsureLengthAtLeast(aLen);
+
+  for (size_t i = oldLength; i < aLen; ++i) {
+    (*aArray)[i].SetInitialValues();
+  }
+}
+
 void
 Gecko_EnsureStyleAnimationArrayLength(void* aArray, size_t aLen)
 {
   auto base =
     static_cast<nsStyleAutoArray<StyleAnimation>*>(aArray);
-
-  size_t oldLength = base->Length();
-
-  base->EnsureLengthAtLeast(aLen);
-
-  for (size_t i = oldLength; i < aLen; ++i) {
-    (*base)[i].SetInitialValues();
-  }
+  EnsureStyleAutoArrayLength(base, aLen);
 }
 
 void
@@ -1810,14 +1828,7 @@ Gecko_EnsureStyleTransitionArrayLength(void* aArray, size_t aLen)
 {
   auto base =
     reinterpret_cast<nsStyleAutoArray<StyleTransition>*>(aArray);
-
-  size_t oldLength = base->Length();
-
-  base->EnsureLengthAtLeast(aLen);
-
-  for (size_t i = oldLength; i < aLen; ++i) {
-    (*base)[i].SetInitialValues();
-  }
+  EnsureStyleAutoArrayLength(base, aLen);
 }
 
 void
@@ -2831,4 +2842,11 @@ Gecko_GetElementsWithId(const nsIDocument* aDocument, nsAtom* aId)
   MOZ_ASSERT(aId);
 
   return aDocument->GetAllElementsForId(nsDependentAtomString(aId));
+}
+
+bool
+Gecko_GetBoolPrefValue(const char* aPrefName)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  return Preferences::GetBool(aPrefName);
 }

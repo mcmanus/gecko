@@ -183,12 +183,13 @@ class EventStateManager;
 
 namespace dom {
 
+struct CustomElementDefinition;
 class Animation;
 class CustomElementRegistry;
 class Link;
 class DOMRect;
 class DOMRectList;
-class DestinationInsertionPointList;
+class Flex;
 class Grid;
 
 // IID for the dom::Element interface
@@ -264,6 +265,30 @@ public:
    * Set tabIndex value to this element.
    */
   void SetTabIndex(int32_t aTabIndex, mozilla::ErrorResult& aError);
+
+  /**
+   * Sets or unsets an XBL binding for this element. Setting a
+   * binding on an element that already has a binding will remove the
+   * old binding.
+   *
+   * @param aBinding The binding to bind to this content. If nullptr is
+   *        provided as the argument, then existing binding will be
+   *        removed.
+   *
+   * @param aOldBindingManager The old binding manager that contains
+   *                           this content if this content was adopted
+   *                           to another document.
+   */
+  void SetXBLBinding(nsXBLBinding* aBinding,
+                     nsBindingManager* aOldBindingManager = nullptr);
+
+  /**
+   * Sets the ShadowRoot binding for this element. The contents of the
+   * binding is rendered in place of this node's children.
+   *
+   * @param aShadowRoot The ShadowRoot to be bound to this element.
+   */
+  void SetShadowRoot(ShadowRoot* aShadowRoot);
 
   /**
    * Make focus on this element.
@@ -430,6 +455,11 @@ public:
   virtual nsChangeHint GetAttributeChangeHint(const nsAtom* aAttribute,
                                               int32_t aModType) const;
 
+  NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker)
+  {
+    return NS_OK;
+  }
+
   inline Directionality GetDirectionality() const {
     if (HasFlag(NODE_HAS_DIRECTION_RTL)) {
       return eDir_RTL;
@@ -546,12 +576,10 @@ public:
    */
   inline CustomElementData* GetCustomElementData() const
   {
-    nsExtendedDOMSlots* slots = GetExistingExtendedDOMSlots();
-    if (slots) {
-      return slots->mCustomElementData;
-    }
-    return nullptr;
+    const nsExtendedDOMSlots* slots = GetExistingExtendedDOMSlots();
+    return slots ? slots->mCustomElementData.get() : nullptr;
   }
+
 
   /**
    * Sets the custom element data, ownership of the
@@ -697,8 +725,6 @@ public:
   already_AddRefed<mozilla::dom::NodeInfo>
   GetExistingAttrNameFromQName(const nsAString& aStr) const;
 
-  using nsIContent::SetAttr;
-
   /**
    * Helper for SetAttr/SetParsedAttr. This method will return true if aNotify
    * is true or there are mutation listeners that must be triggered, the
@@ -758,38 +784,171 @@ public:
    */
   nsresult SetSingleClassFromParser(nsAtom* aSingleClassName);
 
-  virtual nsresult SetAttr(int32_t aNameSpaceID, nsAtom* aName, nsAtom* aPrefix,
-                           const nsAString& aValue, nsIPrincipal* aSubjectPrincipal,
-                           bool aNotify) override;
   // aParsedValue receives the old value of the attribute. That's useful if
   // either the input or output value of aParsedValue is StoresOwnData.
   nsresult SetParsedAttr(int32_t aNameSpaceID, nsAtom* aName, nsAtom* aPrefix,
                          nsAttrValue& aParsedValue, bool aNotify);
-  // GetAttr is not inlined on purpose, to keep down codesize from all
-  // the inlined nsAttrValue bits for C++ callers.
-  bool GetAttr(int32_t aNameSpaceID, nsAtom* aName,
-               nsAString& aResult) const;
+  /**
+   * Get the current value of the attribute. This returns a form that is
+   * suitable for passing back into SetAttr.
+   *
+   * @param aNameSpaceID the namespace of the attr
+   * @param aName the name of the attr
+   * @param aResult the value (may legitimately be the empty string) [OUT]
+   * @returns true if the attribute was set (even when set to empty string)
+   *          false when not set.
+   * GetAttr is not inlined on purpose, to keep down codesize from all the
+   * inlined nsAttrValue bits for C++ callers.
+   */
+  bool GetAttr(int32_t aNameSpaceID, nsAtom* aName, nsAString& aResult) const;
+
+  /**
+   * Determine if an attribute has been set (empty string or otherwise).
+   *
+   * @param aNameSpaceId the namespace id of the attribute
+   * @param aAttr the attribute name
+   * @return whether an attribute exists
+   */
   inline bool HasAttr(int32_t aNameSpaceID, nsAtom* aName) const;
-  // aCaseSensitive == eIgnoreCaase means ASCII case-insensitive matching.
+  /**
+   * Test whether this Element's given attribute has the given value.  If the
+   * attribute is not set at all, this will return false.
+   *
+   * @param aNameSpaceID The namespace ID of the attribute.  Must not
+   *                     be kNameSpaceID_Unknown.
+   * @param aName The name atom of the attribute.  Must not be null.
+   * @param aValue The value to compare to.
+   * @param aCaseSensitive Whether to do a case-sensitive compare on the value.
+   */
   inline bool AttrValueIs(int32_t aNameSpaceID, nsAtom* aName,
                           const nsAString& aValue,
                           nsCaseTreatment aCaseSensitive) const;
-  inline bool AttrValueIs(int32_t aNameSpaceID, nsAtom* aName,
-                          nsAtom* aValue,
-                          nsCaseTreatment aCaseSensitive) const;
-  virtual int32_t FindAttrValueIn(int32_t aNameSpaceID,
+
+  /**
+   * Test whether this Element's given attribute has the given value.  If the
+   * attribute is not set at all, this will return false.
+   *
+   * @param aNameSpaceID The namespace ID of the attribute.  Must not
+   *                     be kNameSpaceID_Unknown.
+   * @param aName The name atom of the attribute.  Must not be null.
+   * @param aValue The value to compare to.  Must not be null.
+   * @param aCaseSensitive Whether to do a case-sensitive compare on the value.
+   */
+  bool AttrValueIs(int32_t aNameSpaceID,
+                   nsAtom* aName,
+                   nsAtom* aValue,
+                   nsCaseTreatment aCaseSensitive) const;
+
+  enum {
+    ATTR_MISSING = -1,
+    ATTR_VALUE_NO_MATCH = -2
+  };
+  /**
+   * Check whether this Element's given attribute has one of a given list of
+   * values. If there is a match, we return the index in the list of the first
+   * matching value. If there was no attribute at all, then we return
+   * ATTR_MISSING. If there was an attribute but it didn't match, we return
+   * ATTR_VALUE_NO_MATCH. A non-negative result always indicates a match.
+   *
+   * @param aNameSpaceID The namespace ID of the attribute.  Must not
+   *                     be kNameSpaceID_Unknown.
+   * @param aName The name atom of the attribute.  Must not be null.
+   * @param aValues a nullptr-terminated array of pointers to atom values to test
+   *                against.
+   * @param aCaseSensitive Whether to do a case-sensitive compare on the values.
+   * @return ATTR_MISSING, ATTR_VALUE_NO_MATCH or the non-negative index
+   * indicating the first value of aValues that matched
+   */
+  typedef nsStaticAtom* const* const AttrValuesArray;
+  int32_t FindAttrValueIn(int32_t aNameSpaceID,
                                   nsAtom* aName,
                                   AttrValuesArray* aValues,
-                                  nsCaseTreatment aCaseSensitive) const override;
-  virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsAtom* aAttribute,
-                             bool aNotify) override;
+                                  nsCaseTreatment aCaseSensitive) const;
 
-  virtual const nsAttrName* GetAttrNameAt(uint32_t aIndex) const final override
+  /**
+   * Set attribute values. All attribute values are assumed to have a
+   * canonical string representation that can be used for these
+   * methods. The SetAttr method is assumed to perform a translation
+   * of the canonical form into the underlying content specific
+   * form.
+   *
+   * @param aNameSpaceID the namespace of the attribute
+   * @param aName the name of the attribute
+   * @param aValue the value to set
+   * @param aNotify specifies how whether or not the document should be
+   *        notified of the attribute change.
+   */
+  nsresult SetAttr(int32_t aNameSpaceID, nsAtom* aName,
+                   const nsAString& aValue, bool aNotify)
+  {
+    return SetAttr(aNameSpaceID, aName, nullptr, aValue, aNotify);
+  }
+  nsresult SetAttr(int32_t aNameSpaceID, nsAtom* aName, nsAtom* aPrefix,
+                   const nsAString& aValue, bool aNotify)
+  {
+    return SetAttr(aNameSpaceID, aName, aPrefix, aValue, nullptr, aNotify);
+  }
+  nsresult SetAttr(int32_t aNameSpaceID, nsAtom* aName, const nsAString& aValue,
+                   nsIPrincipal* aTriggeringPrincipal, bool aNotify)
+  {
+    return SetAttr(aNameSpaceID, aName, nullptr, aValue, aTriggeringPrincipal, aNotify);
+  }
+
+  /**
+   * Set attribute values. All attribute values are assumed to have a
+   * canonical String representation that can be used for these
+   * methods. The SetAttr method is assumed to perform a translation
+   * of the canonical form into the underlying content specific
+   * form.
+   *
+   * @param aNameSpaceID the namespace of the attribute
+   * @param aName the name of the attribute
+   * @param aPrefix the prefix of the attribute
+   * @param aValue the value to set
+   * @param aMaybeScriptedPrincipal the principal of the scripted caller responsible
+   *        for setting the attribute, or null if no scripted caller can be
+   *        determined. A null value here does not guarantee that there is no
+   *        scripted caller, but a non-null value does guarantee that a scripted
+   *        caller with the given principal is directly responsible for the
+   *        attribute change.
+   * @param aNotify specifies how whether or not the document should be
+   *        notified of the attribute change.
+   */
+  nsresult SetAttr(int32_t aNameSpaceID, nsAtom* aName,
+                   nsAtom* aPrefix, const nsAString& aValue,
+                   nsIPrincipal* aMaybeScriptedPrincipal,
+                   bool aNotify);
+
+  /**
+   * Remove an attribute so that it is no longer explicitly specified.
+   *
+   * @param aNameSpaceID the namespace id of the attribute
+   * @param aAttr the name of the attribute to unset
+   * @param aNotify specifies whether or not the document should be
+   * notified of the attribute change
+   */
+  nsresult UnsetAttr(int32_t aNameSpaceID, nsAtom* aAttribute, bool aNotify);
+
+  /**
+   * Get the namespace / name / prefix of a given attribute.
+   *
+   * @param   aIndex the index of the attribute name
+   * @returns The name at the given index, or null if the index is
+   *          out-of-bounds.
+   * @note    The document returned by NodeInfo()->GetDocument() (if one is
+   *          present) is *not* necessarily the owner document of the element.
+   * @note    The pointer returned by this function is only valid until the
+   *          next call of either GetAttrNameAt or SetAttr on the element.
+   */
+  const nsAttrName* GetAttrNameAt(uint32_t aIndex) const
   {
     return mAttrsAndChildren.GetSafeAttrNameAt(aIndex);
   }
 
-  virtual BorrowedAttrInfo GetAttrInfoAt(uint32_t aIndex) const final override
+  /**
+   * Gets the attribute info (name and value) for this element at a given index.
+   */
+  BorrowedAttrInfo GetAttrInfoAt(uint32_t aIndex) const
   {
     if (aIndex >= mAttrsAndChildren.AttrCount()) {
       return BorrowedAttrInfo(nullptr, nullptr);
@@ -798,7 +957,12 @@ public:
     return mAttrsAndChildren.AttrInfoAt(aIndex);
   }
 
-  virtual uint32_t GetAttrCount() const final override
+  /**
+   * Get the number of all specified attributes.
+   *
+   * @return the number of attributes
+   */
+  uint32_t GetAttrCount() const
   {
     return mAttrsAndChildren.AttrCount();
   }
@@ -815,6 +979,25 @@ public:
       return DoGetClasses();
     }
     return nullptr;
+  }
+
+  /**
+   * Hook for implementing GetClasses. This should only be called if the
+   * ElementMayHaveClass flag is set.
+   *
+   * Public only because Servo needs to call it too, and it ensures the
+   * precondition before calling this.
+   */
+  const nsAttrValue* DoGetClasses() const
+  {
+    MOZ_ASSERT(MayHaveClass(), "Unexpected call");
+    if (IsSVGElement()) {
+      if (const nsAttrValue* value = GetSVGAnimatedClass()) {
+        return value;
+      }
+    }
+
+    return GetParsedAttr(nsGkAtoms::_class);
   }
 
 #ifdef DEBUG
@@ -867,8 +1050,7 @@ protected:
     NS_ASSERTION(nullptr != aName, "must have attribute name");
     NS_ASSERTION(aNameSpaceID != kNameSpaceID_Unknown,
                  "must have a real namespace ID!");
-    MOZ_ASSERT(aResult.HasStringBuffer() && aResult.StringBufferLength() == 0,
-               "Should have empty string coming in");
+    MOZ_ASSERT(aResult.IsEmpty(), "Should have empty string coming in");
     const nsAttrValue* val = mAttrsAndChildren.GetAttr(aName, aNameSpaceID);
     if (val) {
       val->ToString(aResult);
@@ -883,8 +1065,7 @@ public:
 
   inline bool GetAttr(const nsAString& aName, DOMString& aResult) const
   {
-    MOZ_ASSERT(aResult.HasStringBuffer() && aResult.StringBufferLength() == 0,
-               "Should have empty string coming in");
+    MOZ_ASSERT(aResult.IsEmpty(), "Should have empty string coming in");
     const nsAttrValue* val = mAttrsAndChildren.GetAttr(aName);
     if (val) {
       val->ToString(aResult);
@@ -1133,11 +1314,10 @@ public:
 
   // [deprecated] Shadow DOM v0
   already_AddRefed<ShadowRoot> CreateShadowRoot(ErrorResult& aError);
-  already_AddRefed<DestinationInsertionPointList> GetDestinationInsertionPoints();
 
-  ShadowRoot *FastGetShadowRoot() const
+  ShadowRoot* GetShadowRoot() const
   {
-    nsExtendedDOMSlots* slots = GetExistingExtendedDOMSlots();
+    const nsExtendedDOMSlots* slots = GetExistingExtendedDOMSlots();
     return slots ? slots->mShadowRoot.get() : nullptr;
   }
 
@@ -1206,6 +1386,7 @@ public:
            0;
   }
 
+  already_AddRefed<Flex> GetAsFlexContainer();
   void GetGridFragments(nsTArray<RefPtr<Grid>>& aResult);
 
   already_AddRefed<DOMMatrixReadOnly> GetTransformToAncestor(Element& aAncestor);
@@ -1237,7 +1418,7 @@ public:
                                     nsTArray<RefPtr<Animation>>& aAnimations);
 
   NS_IMETHOD GetInnerHTML(nsAString& aInnerHTML);
-  virtual void SetInnerHTML(const nsAString& aInnerHTML, nsIPrincipal& aSubjectPrincipal, ErrorResult& aError);
+  virtual void SetInnerHTML(const nsAString& aInnerHTML, nsIPrincipal* aSubjectPrincipal, ErrorResult& aError);
   void GetOuterHTML(nsAString& aOuterHTML);
   void SetOuterHTML(const nsAString& aOuterHTML, ErrorResult& aError);
   void InsertAdjacentHTML(const nsAString& aPosition, const nsAString& aText,
@@ -1320,9 +1501,9 @@ public:
    *
    * @return existing attribute map or nullptr.
    */
-  nsDOMAttributeMap *GetAttributeMap()
+  nsDOMAttributeMap* GetAttributeMap()
   {
-    nsDOMSlots *slots = GetExistingDOMSlots();
+    nsDOMSlots* slots = GetExistingDOMSlots();
 
     return slots ? slots->mAttributeMap.get() : nullptr;
   }
@@ -1464,9 +1645,9 @@ public:
     aError = SetAttr(kNameSpaceID_None, aAttr, aValue, true);
   }
 
-  void SetAttr(nsAtom* aAttr, const nsAString& aValue, nsIPrincipal& aTriggeringPrincipal, ErrorResult& aError)
+  void SetAttr(nsAtom* aAttr, const nsAString& aValue, nsIPrincipal* aTriggeringPrincipal, ErrorResult& aError)
   {
-    aError = nsIContent::SetAttr(kNameSpaceID_None, aAttr, aValue, &aTriggeringPrincipal, true);
+    aError = SetAttr(kNameSpaceID_None, aAttr, aValue, aTriggeringPrincipal, true);
   }
 
   /**
@@ -1817,10 +1998,9 @@ protected:
 
 private:
   /**
-   * Hook for implementing GetClasses.  This is guaranteed to only be
-   * called if the NODE_MAY_HAVE_CLASS flag is set.
+   * Slow path for DoGetClasses, this should only be called for SVG elements.
    */
-  const nsAttrValue* DoGetClasses() const;
+  const nsAttrValue* GetSVGAnimatedClass() const;
 
   /**
    * Get this element's client area rect in app units.
@@ -1854,30 +2034,6 @@ private:
   RefPtr<nsBindingManager> mManager;
   RefPtr<nsIContent> mContent;
   nsCOMPtr<nsIDocument> mDoc;
-};
-
-class DestinationInsertionPointList : public nsINodeList
-{
-public:
-  explicit DestinationInsertionPointList(Element* aElement);
-
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(DestinationInsertionPointList)
-
-  // nsIDOMNodeList
-  NS_DECL_NSIDOMNODELIST
-
-  // nsINodeList
-  virtual nsIContent* Item(uint32_t aIndex) override;
-  virtual int32_t IndexOf(nsIContent* aContent) override;
-  virtual nsINode* GetParentObject() override { return mParent; }
-  virtual uint32_t Length() const;
-  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
-protected:
-  virtual ~DestinationInsertionPointList();
-
-  RefPtr<Element> mParent;
-  nsCOMArray<nsIContent> mDestinationPoints;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(Element, NS_ELEMENT_IID)

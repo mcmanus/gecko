@@ -60,6 +60,17 @@ bool is_glcontext_egl(void* glcontext_ptr)
   return glcontext->GetContextType() == mozilla::gl::GLContextType::EGL;
 }
 
+bool is_glcontext_angle(void* glcontext_ptr)
+{
+  MOZ_ASSERT(glcontext_ptr);
+
+  mozilla::gl::GLContext* glcontext = reinterpret_cast<mozilla::gl::GLContext*>(glcontext_ptr);
+  if (!glcontext) {
+    return false;
+  }
+  return glcontext->IsANGLE();
+}
+
 bool gfx_use_wrench()
 {
   return gfxEnv::EnableWebRenderRecording();
@@ -278,7 +289,7 @@ WebRenderBridgeParent::UpdateResources(const nsTArray<OpUpdateResource>& aResour
     switch (cmd.type()) {
       case OpUpdateResource::TOpAddImage: {
         const auto& op = cmd.get_OpAddImage();
-        wr::Vec_u8 bytes;
+        wr::Vec<uint8_t> bytes;
         if (!reader.Read(op.bytes(), bytes)) {
           return false;
         }
@@ -287,7 +298,7 @@ WebRenderBridgeParent::UpdateResources(const nsTArray<OpUpdateResource>& aResour
       }
       case OpUpdateResource::TOpUpdateImage: {
         const auto& op = cmd.get_OpUpdateImage();
-        wr::Vec_u8 bytes;
+        wr::Vec<uint8_t> bytes;
         if (!reader.Read(op.bytes(), bytes)) {
           return false;
         }
@@ -296,7 +307,7 @@ WebRenderBridgeParent::UpdateResources(const nsTArray<OpUpdateResource>& aResour
       }
       case OpUpdateResource::TOpAddBlobImage: {
         const auto& op = cmd.get_OpAddBlobImage();
-        wr::Vec_u8 bytes;
+        wr::Vec<uint8_t> bytes;
         if (!reader.Read(op.bytes(), bytes)) {
           return false;
         }
@@ -305,7 +316,7 @@ WebRenderBridgeParent::UpdateResources(const nsTArray<OpUpdateResource>& aResour
       }
       case OpUpdateResource::TOpUpdateBlobImage: {
         const auto& op = cmd.get_OpUpdateBlobImage();
-        wr::Vec_u8 bytes;
+        wr::Vec<uint8_t> bytes;
         if (!reader.Read(op.bytes(), bytes)) {
           return false;
         }
@@ -321,7 +332,7 @@ WebRenderBridgeParent::UpdateResources(const nsTArray<OpUpdateResource>& aResour
       }
       case OpUpdateResource::TOpAddRawFont: {
         const auto& op = cmd.get_OpAddRawFont();
-        wr::Vec_u8 bytes;
+        wr::Vec<uint8_t> bytes;
         if (!reader.Read(op.bytes(), bytes)) {
           return false;
         }
@@ -330,7 +341,7 @@ WebRenderBridgeParent::UpdateResources(const nsTArray<OpUpdateResource>& aResour
       }
       case OpUpdateResource::TOpAddFontDescriptor: {
         const auto& op = cmd.get_OpAddFontDescriptor();
-        wr::Vec_u8 bytes;
+        wr::Vec<uint8_t> bytes;
         if (!reader.Read(op.bytes(), bytes)) {
           return false;
         }
@@ -339,7 +350,7 @@ WebRenderBridgeParent::UpdateResources(const nsTArray<OpUpdateResource>& aResour
       }
       case OpUpdateResource::TOpAddFontInstance: {
         const auto& op = cmd.get_OpAddFontInstance();
-        wr::Vec_u8 variations;
+        wr::Vec<uint8_t> variations;
         if (!reader.Read(op.variations(), variations)) {
             return false;
         }
@@ -429,7 +440,7 @@ WebRenderBridgeParent::AddExternalImage(wr::ExternalImageId aExtId, wr::ImageKey
 
   IntSize size = dSurf->GetSize();
   wr::ImageDescriptor descriptor(size, map.mStride, dSurf->GetFormat());
-  wr::Vec_u8 data;
+  wr::Vec<uint8_t> data;
   data.PushBytes(Range<uint8_t>(map.mData, size.height * map.mStride));
   aResources.AddImage(keys[0], descriptor, data);
   dSurf->Unmap();
@@ -600,7 +611,7 @@ WebRenderBridgeParent::RecvSetDisplayList(const gfx::IntSize& aSize,
   }
 
 
-  wr::Vec_u8 dlData(Move(dl));
+  wr::Vec<uint8_t> dlData(Move(dl));
 
   // If id namespaces do not match, it means the command is obsolete, probably
   // because the tab just moved to a new window.

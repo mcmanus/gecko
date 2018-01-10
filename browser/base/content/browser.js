@@ -31,7 +31,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   CustomizableUI: "resource:///modules/CustomizableUI.jsm",
   Deprecated: "resource://gre/modules/Deprecated.jsm",
   DownloadsCommon: "resource:///modules/DownloadsCommon.jsm",
-  E10SUtils: "resource:///modules/E10SUtils.jsm",
+  E10SUtils: "resource://gre/modules/E10SUtils.jsm",
   ExtensionsUI: "resource:///modules/ExtensionsUI.jsm",
   FormValidationHandler: "resource:///modules/FormValidationHandler.jsm",
   LanguagePrompt: "resource://gre/modules/LanguagePrompt.jsm",
@@ -147,10 +147,6 @@ XPCOMUtils.defineLazyGetter(this, "gCustomizeMode", function() {
   let scope = {};
   Cu.import("resource:///modules/CustomizeMode.jsm", scope);
   return new scope.CustomizeMode(window);
-});
-
-XPCOMUtils.defineLazyGetter(this, "gPrefService", function() {
-  return Services.prefs;
 });
 
 XPCOMUtils.defineLazyGetter(this, "InlineSpellCheckerUI", function() {
@@ -606,7 +602,7 @@ var gPopupBlockerObserver = {
     // notifications are per-browser, we don't need to worry about re-adding
     // it.
     if (!gBrowser.selectedBrowser.blockedPopups.reported) {
-      if (gPrefService.getBoolPref("privacy.popups.showBrowserMessage")) {
+      if (Services.prefs.getBoolPref("privacy.popups.showBrowserMessage")) {
         var brandBundle = document.getElementById("bundle_brand");
         var brandShortName = brandBundle.getString("brandShortName");
         var popupCount = gBrowser.selectedBrowser.blockedPopups.length;
@@ -699,7 +695,7 @@ var gPopupBlockerObserver = {
       blockedPopupAllowSite.removeAttribute("disabled");
 
     let blockedPopupDontShowMessage = document.getElementById("blockedPopupDontShowMessage");
-    let showMessage = gPrefService.getBoolPref("privacy.popups.showBrowserMessage");
+    let showMessage = Services.prefs.getBoolPref("privacy.popups.showBrowserMessage");
     blockedPopupDontShowMessage.setAttribute("checked", !showMessage);
     blockedPopupDontShowMessage.setAttribute("label", gNavigatorBundle.getString("popupWarningDontShowFromMessage"));
 
@@ -817,8 +813,8 @@ var gPopupBlockerObserver = {
   },
 
   dontShowMessage() {
-    var showMessage = gPrefService.getBoolPref("privacy.popups.showBrowserMessage");
-    gPrefService.setBoolPref("privacy.popups.showBrowserMessage", !showMessage);
+    var showMessage = Services.prefs.getBoolPref("privacy.popups.showBrowserMessage");
+    Services.prefs.setBoolPref("privacy.popups.showBrowserMessage", !showMessage);
     gBrowser.getNotificationBox().removeCurrentNotification();
   }
 };
@@ -1042,12 +1038,12 @@ function _loadURIWithFlags(browser, uri, params) {
 
   let mustChangeProcess = requiredRemoteType != currentRemoteType;
   let newFrameloader = false;
-  if (browser.getAttribute("isPreloadBrowser") == "true" && uri != "about:newtab") {
+  if (browser.getAttribute("preloadedState") === "consumed" && uri != "about:newtab") {
     // Leaving about:newtab from a used to be preloaded browser should run the process
     // selecting algorithm again.
     mustChangeProcess = true;
     newFrameloader = true;
-    browser.removeAttribute("isPreloadBrowser");
+    browser.removeAttribute("preloadedState");
   }
 
   // !requiredRemoteType means we're loading in the parent/this process.
@@ -1129,8 +1125,8 @@ function LoadInOtherProcess(browser, loadOptions, historyIndex = -1) {
 // Called when a docshell has attempted to load a page in an incorrect process.
 // This function is responsible for loading the page in the correct process.
 function RedirectLoad({ target: browser, data }) {
-  if (browser.getAttribute("isPreloadBrowser") == "true") {
-    browser.removeAttribute("isPreloadBrowser");
+  if (browser.getAttribute("preloadedState") === "consumed") {
+    browser.removeAttribute("preloadedState");
     data.loadOptions.newFrameloader = true;
   }
 
@@ -1217,6 +1213,25 @@ var gBrowserInit = {
       initBrowser.removeAttribute("blank");
     }
 
+    // Set a sane starting width/height for all resolutions on new profiles.
+    if (Services.prefs.getBoolPref("privacy.resistFingerprinting")) {
+      // When the fingerprinting resistance is enabled, making sure that we don't
+      // have a maximum window to interfere with generating rounded window dimensions.
+      document.documentElement.setAttribute("sizemode", "normal");
+    } else if (!document.documentElement.hasAttribute("width")) {
+      const TARGET_WIDTH = 1280;
+      const TARGET_HEIGHT = 1040;
+      let width = Math.min(screen.availWidth * .9, TARGET_WIDTH);
+      let height = Math.min(screen.availHeight * .9, TARGET_HEIGHT);
+
+      document.documentElement.setAttribute("width", width);
+      document.documentElement.setAttribute("height", height);
+
+      if (width < TARGET_WIDTH && height < TARGET_HEIGHT) {
+        document.documentElement.setAttribute("sizemode", "maximized");
+      }
+    }
+
     gBrowser.updateBrowserRemoteness(initBrowser, isRemote, {
       remoteType, sameProcessAsFrameLoader
     });
@@ -1248,6 +1263,7 @@ var gBrowserInit = {
     mm.loadFrameScript("chrome://browser/content/tab-content.js", true);
     mm.loadFrameScript("chrome://browser/content/content.js", true);
     mm.loadFrameScript("chrome://browser/content/content-UITour.js", true);
+    mm.loadFrameScript("chrome://global/content/content-HybridContentTelemetry.js", true);
     mm.loadFrameScript("chrome://global/content/manifestMessages.js", true);
 
     window.messageManager.addMessageListener("Browser:LoadURI", RedirectLoad);
@@ -1277,27 +1293,6 @@ var gBrowserInit = {
 
     if (AppConstants.CAN_DRAW_IN_TITLEBAR) {
       gDragSpaceObserver.init();
-    }
-
-    let isResistFingerprintingEnabled = gPrefService.getBoolPref("privacy.resistFingerprinting");
-
-    // Set a sane starting width/height for all resolutions on new profiles.
-    if (isResistFingerprintingEnabled) {
-      // When the fingerprinting resistance is enabled, making sure that we don't
-      // have a maximum window to interfere with generating rounded window dimensions.
-      document.documentElement.setAttribute("sizemode", "normal");
-    } else if (!document.documentElement.hasAttribute("width")) {
-      const TARGET_WIDTH = 1280;
-      const TARGET_HEIGHT = 1040;
-      let width = Math.min(screen.availWidth * .9, TARGET_WIDTH);
-      let height = Math.min(screen.availHeight * .9, TARGET_HEIGHT);
-
-      document.documentElement.setAttribute("width", width);
-      document.documentElement.setAttribute("height", height);
-
-      if (width < TARGET_WIDTH && height < TARGET_HEIGHT) {
-        document.documentElement.setAttribute("sizemode", "maximized");
-      }
     }
 
     if (!window.toolbar.visible) {
@@ -1352,6 +1347,8 @@ var gBrowserInit = {
     this._uriToLoadPromise.then(uriToLoad => {
       if (uriToLoad == "about:home") {
         gBrowser.setIcon(gBrowser.selectedTab, "chrome://branding/content/icon32.png");
+      } else if (uriToLoad == "about:privatebrowsing") {
+        gBrowser.setIcon(gBrowser.selectedTab, "chrome://browser/skin/privatebrowsing/favicon.svg");
       }
     });
 
@@ -1445,7 +1442,7 @@ var gBrowserInit = {
     BookmarkingUI.init();
     AutoShowBookmarksToolbar.init();
 
-    gPrefService.addObserver(gHomeButton.prefDomain, gHomeButton);
+    Services.prefs.addObserver(gHomeButton.prefDomain, gHomeButton);
 
     var homeButton = document.getElementById("home-button");
     gHomeButton.updateTooltip(homeButton);
@@ -1476,7 +1473,7 @@ var gBrowserInit = {
     PlacesToolbarHelper.init();
 
     ctrlTab.readPref();
-    gPrefService.addObserver(ctrlTab.prefName, ctrlTab);
+    Services.prefs.addObserver(ctrlTab.prefName, ctrlTab);
 
     // The object handling the downloads indicator is initialized here in the
     // delayed startup function, but the actual indicator element is not loaded
@@ -1832,7 +1829,7 @@ var gBrowserInit = {
       if (Win7Features)
         Win7Features.onCloseWindow();
 
-      gPrefService.removeObserver(ctrlTab.prefName, ctrlTab);
+      Services.prefs.removeObserver(ctrlTab.prefName, ctrlTab);
       ctrlTab.uninit();
       gBrowserThumbnails.uninit();
       FullZoom.destroy();
@@ -1852,7 +1849,7 @@ var gBrowserInit = {
       window.messageManager.removeMessageListener("Browser:LoadURI", RedirectLoad);
 
       try {
-        gPrefService.removeObserver(gHomeButton.prefDomain, gHomeButton);
+        Services.prefs.removeObserver(gHomeButton.prefDomain, gHomeButton);
       } catch (ex) {
         Cu.reportError(ex);
       }
@@ -2085,7 +2082,7 @@ function BrowserBack(aEvent) {
 }
 
 function BrowserHandleBackspace() {
-  switch (gPrefService.getIntPref("browser.backspace_action")) {
+  switch (Services.prefs.getIntPref("browser.backspace_action")) {
   case 0:
     BrowserBack();
     break;
@@ -2096,7 +2093,7 @@ function BrowserHandleBackspace() {
 }
 
 function BrowserHandleShiftBackspace() {
-  switch (gPrefService.getIntPref("browser.backspace_action")) {
+  switch (Services.prefs.getIntPref("browser.backspace_action")) {
   case 0:
     BrowserForward();
     break;
@@ -2292,8 +2289,8 @@ var gLastOpenDirectory = {
   get path() {
     if (!this._lastDir || !this._lastDir.exists()) {
       try {
-        this._lastDir = gPrefService.getComplexValue("browser.open.lastDir",
-                                                     Ci.nsIFile);
+        this._lastDir = Services.prefs.getComplexValue("browser.open.lastDir",
+                                                       Ci.nsIFile);
         if (!this._lastDir.exists())
           this._lastDir = null;
       } catch (e) {}
@@ -2311,8 +2308,8 @@ var gLastOpenDirectory = {
 
     // Don't save the last open directory pref inside the Private Browsing mode
     if (!PrivateBrowsingUtils.isWindowPrivate(window))
-      gPrefService.setComplexValue("browser.open.lastDir", Ci.nsIFile,
-                                   this._lastDir);
+      Services.prefs.setComplexValue("browser.open.lastDir", Ci.nsIFile,
+                                     this._lastDir);
   },
   reset() {
     this._lastDir = null;
@@ -2878,7 +2875,7 @@ function UpdatePopupNotificationsVisibility() {
 }
 
 function PageProxyClickHandler(aEvent) {
-  if (aEvent.button == 1 && gPrefService.getBoolPref("middlemouse.paste"))
+  if (aEvent.button == 1 && Services.prefs.getBoolPref("middlemouse.paste"))
     middleMousePaste(aEvent);
 }
 
@@ -3085,7 +3082,7 @@ var BrowserOnClick = {
         getMeOutOfHere();
         break;
       case "ignore_warning_link":
-        if (gPrefService.getBoolPref("browser.safebrowsing.allowOverride")) {
+        if (Services.prefs.getBoolPref("browser.safebrowsing.allowOverride")) {
           if (sendTelemetry) {
             secHistogram.add(nsISecTel[bucketName + "IGNORE_WARNING"]);
           }
@@ -3517,7 +3514,7 @@ var homeButtonObserver = {
     },
 
   onDragOver(aEvent) {
-      if (gPrefService.prefIsLocked("browser.startup.homepage")) {
+      if (Services.prefs.prefIsLocked("browser.startup.homepage")) {
         return;
       }
       browserDragAndDrop.dragOver(aEvent);
@@ -3542,7 +3539,7 @@ function openHomeDialog(aURL) {
 
   if (pressedVal == 0) {
     try {
-      gPrefService.setStringPref("browser.startup.homepage", aURL);
+      Services.prefs.setStringPref("browser.startup.homepage", aURL);
     } catch (ex) {
       dump("Failed to set the home page.\n" + ex + "\n");
     }
@@ -3846,7 +3843,7 @@ const BrowserSearch = {
   },
 
   loadAddEngines: function BrowserSearch_loadAddEngines() {
-    var newWindowPref = gPrefService.getIntPref("browser.link.open_newwindow");
+    var newWindowPref = Services.prefs.getIntPref("browser.link.open_newwindow");
     var where = newWindowPref == 3 ? "tab" : "window";
     openUILinkIn(this.searchEnginesURL, where);
   },
@@ -5146,7 +5143,7 @@ nsBrowserAccess.prototype = {
       return win.gBrowser.selectedBrowser;
     }
 
-    let loadInBackground = gPrefService.getBoolPref("browser.tabs.loadDivertedInBackground");
+    let loadInBackground = Services.prefs.getBoolPref("browser.tabs.loadDivertedInBackground");
 
     let tab = win.gBrowser.loadOneTab(aURI ? aURI.spec : "about:blank", {
                                       triggeringPrincipal: aTriggeringPrincipal,
@@ -5208,10 +5205,10 @@ nsBrowserAccess.prototype = {
 
     if (aWhere == Ci.nsIBrowserDOMWindow.OPEN_DEFAULTWINDOW) {
       if (isExternal &&
-          gPrefService.prefHasUserValue("browser.link.open_newwindow.override.external"))
-        aWhere = gPrefService.getIntPref("browser.link.open_newwindow.override.external");
+          Services.prefs.prefHasUserValue("browser.link.open_newwindow.override.external"))
+        aWhere = Services.prefs.getIntPref("browser.link.open_newwindow.override.external");
       else
-        aWhere = gPrefService.getIntPref("browser.link.open_newwindow");
+        aWhere = Services.prefs.getIntPref("browser.link.open_newwindow");
     }
 
     let referrer = aOpener ? makeURI(aOpener.location.href) : null;
@@ -5268,7 +5265,7 @@ nsBrowserAccess.prototype = {
                                     referrerPolicy,
                                     });
         }
-        if (!gPrefService.getBoolPref("browser.tabs.loadDivertedInBackground"))
+        if (!Services.prefs.getBoolPref("browser.tabs.loadDivertedInBackground"))
           window.focus();
     }
     return newWindow;
@@ -5552,11 +5549,11 @@ var gDragSpaceObserver = {
 
   init() {
     this.update();
-    gPrefService.addObserver(this.pref, this);
+    Services.prefs.addObserver(this.pref, this);
   },
 
   uninit() {
-    gPrefService.removeObserver(this.pref, this);
+    Services.prefs.removeObserver(this.pref, this);
   },
 
   observe(aSubject, aTopic, aPrefName) {
@@ -5568,7 +5565,7 @@ var gDragSpaceObserver = {
   },
 
   update() {
-    if (gPrefService.getBoolPref(this.pref)) {
+    if (Services.prefs.getBoolPref(this.pref)) {
       document.documentElement.setAttribute("extradragspace", "true");
     } else {
       document.documentElement.removeAttribute("extradragspace");
@@ -5587,13 +5584,13 @@ var gUIDensity = {
 
   init() {
     this.update();
-    gPrefService.addObserver(this.uiDensityPref, this);
-    gPrefService.addObserver(this.autoTouchModePref, this);
+    Services.prefs.addObserver(this.uiDensityPref, this);
+    Services.prefs.addObserver(this.autoTouchModePref, this);
   },
 
   uninit() {
-    gPrefService.removeObserver(this.uiDensityPref, this);
-    gPrefService.removeObserver(this.autoTouchModePref, this);
+    Services.prefs.removeObserver(this.uiDensityPref, this);
+    Services.prefs.removeObserver(this.autoTouchModePref, this);
   },
 
   observe(aSubject, aTopic, aPrefName) {
@@ -5610,14 +5607,14 @@ var gUIDensity = {
     // Automatically override the uidensity to touch in Windows tablet mode.
     if (AppConstants.isPlatformAndVersionAtLeast("win", "10") &&
         WindowsUIUtils.inTabletMode &&
-        gPrefService.getBoolPref(this.autoTouchModePref)) {
+        Services.prefs.getBoolPref(this.autoTouchModePref)) {
       return { mode: this.MODE_TOUCH, overridden: true };
     }
-    return { mode: gPrefService.getIntPref(this.uiDensityPref), overridden: false };
+    return { mode: Services.prefs.getIntPref(this.uiDensityPref), overridden: false };
   },
 
   setCurrentMode(mode) {
-    gPrefService.setIntPref(this.uiDensityPref, mode);
+    Services.prefs.setIntPref(this.uiDensityPref, mode);
   },
 
   update(mode) {
@@ -5680,8 +5677,8 @@ var gHomeButton = {
   getHomePage() {
     var url;
     try {
-      url = gPrefService.getComplexValue(this.prefDomain,
-                                Components.interfaces.nsIPrefLocalizedString).data;
+      url = Services.prefs.getComplexValue(this.prefDomain,
+                                  Components.interfaces.nsIPrefLocalizedString).data;
     } catch (e) {
     }
 
@@ -5789,6 +5786,7 @@ function asyncOpenWebPanel(event) {
   if (gWebPanelURI && SidebarUI.browser.contentDocument &&
       SidebarUI.browser.contentDocument.getElementById("web-panels-browser")) {
     SidebarUI.browser.contentWindow.loadWebPanel(gWebPanelURI);
+    SidebarUI.setWebPageIcon(gWebPanelURI);
   }
   gWebPanelURI = "";
   SidebarUI.browser.removeEventListener("load", asyncOpenWebPanel, true);
@@ -5866,8 +5864,8 @@ function contentAreaClick(event, isPanelClick) {
   if (!href) {
     // Not a link, handle middle mouse navigation.
     if (event.button == 1 &&
-        gPrefService.getBoolPref("middlemouse.contentLoadURL") &&
-        !gPrefService.getBoolPref("general.autoScroll")) {
+        Services.prefs.getBoolPref("middlemouse.contentLoadURL") &&
+        !Services.prefs.getBoolPref("general.autoScroll")) {
       middleMousePaste(event);
       event.preventDefault();
     }
@@ -6055,14 +6053,18 @@ function middleMousePaste(event) {
 function stripUnsafeProtocolOnPaste(pasteData) {
   // Don't allow pasting javascript URIs since we don't support
   // LOAD_FLAGS_DISALLOW_INHERIT_PRINCIPAL for those.
-  let changed = false;
-  let pasteDataNoJS = pasteData.replace(/\r?\n/g, "")
-                               .replace(/^(?:\W*javascript:)+/i,
-                                        () => {
-                                                changed = true;
-                                                return "";
-                                              });
-  return changed ? pasteDataNoJS : pasteData;
+  while (true) {
+    let scheme = "";
+    try {
+      scheme = Services.io.extractScheme(pasteData);
+    } catch (ex) { }
+    if (scheme != "javascript") {
+      break;
+    }
+
+    pasteData = pasteData.substring(pasteData.indexOf(":") + 1);
+  }
+  return pasteData;
 }
 
 // handleDroppedLink has the following 2 overloads:
@@ -6340,7 +6342,7 @@ var BrowserOffline = {
 
   _uiElement: null,
   _updateOfflineUI(aOffline) {
-    var offlineLocked = gPrefService.prefIsLocked("network.online");
+    var offlineLocked = Services.prefs.prefIsLocked("network.online");
     if (offlineLocked)
       this._uiElement.setAttribute("disabled", "true");
 
@@ -6612,7 +6614,7 @@ var CanvasPermissionPromptHelper = {
     let message = gNavigatorBundle.getFormattedString("canvas.siteprompt", [ uri.asciiHost ]);
 
     function setCanvasPermission(aURI, aPerm, aPersistent) {
-      Services.perms.add(aURI, "canvas/extractData", aPerm,
+      Services.perms.add(aURI, "canvas", aPerm,
                           aPersistent ? Ci.nsIPermissionManager.EXPIRE_NEVER
                                       : Ci.nsIPermissionManager.EXPIRE_SESSION);
     }
@@ -8166,7 +8168,7 @@ function getBrowser() {
 const gAccessibilityServiceIndicator = {
   init() {
     // Pref to enable accessibility service indicator.
-    gPrefService.addObserver("accessibility.indicator.enabled", this);
+    Services.prefs.addObserver("accessibility.indicator.enabled", this);
     // Accessibility service init/shutdown event.
     Services.obs.addObserver(this, "a11y-init-or-shutdown");
     this.update(Services.appinfo.accessibilityEnabled);
@@ -8201,7 +8203,7 @@ const gAccessibilityServiceIndicator = {
   },
 
   get enabled() {
-    return gPrefService.getBoolPref("accessibility.indicator.enabled");
+    return Services.prefs.getBoolPref("accessibility.indicator.enabled");
   },
 
   handleEvent({ key, type }) {
@@ -8215,7 +8217,7 @@ const gAccessibilityServiceIndicator = {
   },
 
   uninit() {
-    gPrefService.removeObserver("accessibility.indicator.enabled", this);
+    Services.prefs.removeObserver("accessibility.indicator.enabled", this);
     Services.obs.removeObserver(this, "a11y-init-or-shutdown");
     this.update();
   }
@@ -8547,17 +8549,16 @@ var TabContextMenu = {
     document.getElementById("context_unpinTab").hidden = !this.contextTab.pinned;
 
     // Disable "Close Tabs to the Right" if there are no tabs
-    // following it and hide it when the user rightclicked on a pinned
-    // tab.
+    // following it.
     document.getElementById("context_closeTabsToTheEnd").disabled =
       gBrowser.getTabsToTheEndFrom(this.contextTab).length == 0;
-    document.getElementById("context_closeTabsToTheEnd").hidden = this.contextTab.pinned;
 
-    // Disable "Close other Tabs" if there is only one unpinned tab and
-    // hide it when the user rightclicked on a pinned tab.
-    let unpinnedTabs = gBrowser.visibleTabs.length - gBrowser._numPinnedTabs;
-    document.getElementById("context_closeOtherTabs").disabled = unpinnedTabs <= 1;
-    document.getElementById("context_closeOtherTabs").hidden = this.contextTab.pinned;
+    // Disable "Close other Tabs" if there are no unpinned tabs.
+    let unpinnedTabsToClose = gBrowser.visibleTabs.length - gBrowser._numPinnedTabs;
+    if (!this.contextTab.pinned) {
+      unpinnedTabsToClose--;
+    }
+    document.getElementById("context_closeOtherTabs").disabled = unpinnedTabsToClose < 1;
 
     // Hide "Bookmark All Tabs" for a pinned tab.  Update its state if visible.
     let bookmarkAllTabs = document.getElementById("context_bookmarkAllTabs");

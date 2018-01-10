@@ -364,10 +364,10 @@ VRDisplayOpenVR::SubmitFrame(void* aTextureHandle,
   tex.eColorSpace = ::vr::EColorSpace::ColorSpace_Auto;
 
   ::vr::VRTextureBounds_t bounds;
-  bounds.uMin = aLeftEyeRect.x;
-  bounds.vMin = 1.0 - aLeftEyeRect.y;
-  bounds.uMax = aLeftEyeRect.x + aLeftEyeRect.Width();
-  bounds.vMax = 1.0 - aLeftEyeRect.y - aLeftEyeRect.Height();
+  bounds.uMin = aLeftEyeRect.X();
+  bounds.vMin = 1.0 - aLeftEyeRect.Y();
+  bounds.uMax = aLeftEyeRect.XMost();
+  bounds.vMax = 1.0 - aLeftEyeRect.YMost();
 
   ::vr::EVRCompositorError err;
   err = mVRCompositor->Submit(::vr::EVREye::Eye_Left, &tex, &bounds);
@@ -375,10 +375,10 @@ VRDisplayOpenVR::SubmitFrame(void* aTextureHandle,
     printf_stderr("OpenVR Compositor Submit() failed.\n");
   }
 
-  bounds.uMin = aRightEyeRect.x;
-  bounds.vMin = 1.0 - aRightEyeRect.y;
-  bounds.uMax = aRightEyeRect.x + aRightEyeRect.Width();
-  bounds.vMax = 1.0 - aRightEyeRect.y - aRightEyeRect.Height();
+  bounds.uMin = aRightEyeRect.X();
+  bounds.vMin = 1.0 - aRightEyeRect.Y();
+  bounds.uMax = aRightEyeRect.XMost();
+  bounds.vMax = 1.0 - aRightEyeRect.YMost();
 
   err = mVRCompositor->Submit(::vr::EVREye::Eye_Right, &tex, &bounds);
   if (err != ::vr::EVRCompositorError::VRCompositorError_None) {
@@ -445,11 +445,7 @@ VRControllerOpenVR::VRControllerOpenVR(dom::GamepadHand aHand, uint32_t aDisplay
 
 VRControllerOpenVR::~VRControllerOpenVR()
 {
-  if (mVibrateThread) {
-    mVibrateThread->Shutdown();
-    mVibrateThread = nullptr;
-  }
-
+  ShutdownVibrateHapticThread();
   MOZ_COUNT_DTOR_INHERITED(VRControllerOpenVR, VRControllerHost);
 }
 
@@ -583,6 +579,16 @@ void
 VRControllerOpenVR::StopVibrateHaptic()
 {
   mIsVibrateStopped = true;
+}
+
+void
+VRControllerOpenVR::ShutdownVibrateHapticThread()
+{
+  StopVibrateHaptic();
+  if (mVibrateThread) {
+    mVibrateThread->Shutdown();
+    mVibrateThread = nullptr;
+  }
 }
 
 VRSystemManagerOpenVR::VRSystemManagerOpenVR()
@@ -1182,6 +1188,13 @@ VRSystemManagerOpenVR::ScanForControllers()
       openVRController->SetTrackedIndex(trackedDevice);
       mOpenVRController.AppendElement(openVRController);
 
+      // If the Windows MR controller doesn't has the amount
+      // of buttons or axes as our expectation, switching off
+      // the workaround for Windows MR.
+      if (mIsWindowsMR && (numAxes < 4 || numButtons < 5)) {
+        mIsWindowsMR = false;
+        NS_WARNING("OpenVR - Switching off Windows MR mode.");
+      }
       // Not already present, add it.
       AddGamepad(openVRController->GetControllerInfo());
       ++mControllerCount;
@@ -1194,6 +1207,7 @@ VRSystemManagerOpenVR::RemoveControllers()
 {
   // The controller count is changed, removing the existing gamepads first.
   for (uint32_t i = 0; i < mOpenVRController.Length(); ++i) {
+    mOpenVRController[i]->ShutdownVibrateHapticThread();
     RemoveGamepad(i);
   }
   mOpenVRController.Clear();
@@ -1209,7 +1223,7 @@ VRSystemManagerOpenVR::GetControllerDeviceId(::vr::ETrackedDeviceClass aDeviceTy
     {
       ::vr::ETrackedPropertyError err;
       uint32_t requiredBufferLen;
-      bool founded = false;
+      bool isFound = false;
       char charBuf[128];
       requiredBufferLen = mVRSystem->GetStringTrackedDeviceProperty(aDeviceIndex,
                           ::vr::Prop_RenderModelName_String, charBuf, 128, &err);
@@ -1220,7 +1234,7 @@ VRSystemManagerOpenVR::GetControllerDeviceId(::vr::ETrackedDeviceClass aDeviceTy
       nsCString deviceId(charBuf);
       if (deviceId.Find("knuckles") != kNotFound) {
         aId.AssignLiteral("OpenVR Knuckles");
-        founded = true;
+        isFound = true;
       }
       requiredBufferLen = mVRSystem->GetStringTrackedDeviceProperty(aDeviceIndex,
         ::vr::Prop_SerialNumber_String, charBuf, 128, &err);
@@ -1232,9 +1246,9 @@ VRSystemManagerOpenVR::GetControllerDeviceId(::vr::ETrackedDeviceClass aDeviceTy
       if (deviceId.Find("MRSOURCE") != kNotFound) {
         aId.AssignLiteral("Spatial Controller (Spatial Interaction Source) ");
         mIsWindowsMR = true;
-        founded = true;
+        isFound = true;
       }
-      if (!founded) {
+      if (!isFound) {
         aId.AssignLiteral("OpenVR Gamepad");
       }
       break;

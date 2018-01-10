@@ -7,6 +7,7 @@
 #ifndef MediaCache_h_
 #define MediaCache_h_
 
+#include "DecoderDoctorLogger.h"
 #include "Intervals.h"
 #include "mozilla/Result.h"
 #include "mozilla/UniquePtr.h"
@@ -25,7 +26,7 @@ namespace mozilla {
 class ChannelMediaResource;
 typedef media::IntervalSet<int64_t> MediaByteRangeSet;
 class MediaResource;
-class ReentrantMonitorAutoEnter;
+class MonitorAutoLock;
 
 /**
  * Media applications want fast, "on demand" random access to media data,
@@ -181,14 +182,17 @@ class ReentrantMonitorAutoEnter;
  */
 class MediaCache;
 
+DDLoggedTypeDeclName(MediaCacheStream);
+
 /**
  * If the cache fails to initialize then Init will fail, so nonstatic
  * methods of this class can assume gMediaCache is non-null.
  *
  * This class can be directly embedded as a value.
  */
-class MediaCacheStream {
-  using AutoLock = ReentrantMonitorAutoEnter;
+class MediaCacheStream : public DecoderDoctorLifeLogger<MediaCacheStream>
+{
+  using AutoLock = MonitorAutoLock;
 
 public:
   // This needs to be a power of two
@@ -214,7 +218,7 @@ public:
   // as the aOriginal stream.
   // Exactly one of InitAsClone or Init must be called before any other method
   // on this class.
-  nsresult InitAsClone(MediaCacheStream* aOriginal);
+  void InitAsClone(MediaCacheStream* aOriginal);
 
   nsIEventTarget* OwnerThread() const;
 
@@ -223,14 +227,10 @@ public:
   // used to create this MediaCacheStream is deleted.
   void Close();
   // This returns true when the stream has been closed.
-  // Must be used on the main thread or while holding the cache lock.
-  bool IsClosed() const { return mClosed; }
+  bool IsClosed(AutoLock&) const { return mClosed; }
   // Returns true when this stream is can be shared by a new resource load.
   // Called on the main thread only.
-  bool IsAvailableForSharing() const { return !mClosed && !mIsPrivateBrowsing; }
-  // Get the principal for this stream. Anything accessing the contents of
-  // this stream must have a principal that subsumes this principal.
-  nsIPrincipal* GetCurrentPrincipal() { return mPrincipal; }
+  bool IsAvailableForSharing() const { return !mIsPrivateBrowsing; }
 
   // These callbacks are called on the main thread by the client
   // when data has been received via the channel.
@@ -288,6 +288,9 @@ public:
   // Main thread only.
   void NotifyClientSuspended(bool aSuspended);
 
+  // Notifies the stream to resume download at the current offset.
+  void NotifyResume();
+
   // These methods can be called on any thread.
   // Cached blocks associated with this stream will not be evicted
   // while the stream is pinned.
@@ -300,8 +303,6 @@ public:
   // If we've successfully read data beyond the originally reported length,
   // we return the end of the data we've read.
   int64_t GetLength();
-  // Return the offset where next channel data will write to. Main thread only.
-  int64_t GetOffset() const;
   // Returns the unique resource ID. Call only on the main thread or while
   // holding the media cache lock.
   int64_t GetResourceID() { return mResourceID; }
@@ -349,7 +350,7 @@ public:
   // be less than aCount. If the first byte of data is not in the cache,
   // this will block until the data is available or the stream is
   // closed, otherwise it won't block.
-  nsresult Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes);
+  nsresult Read(AutoLock&, char* aBuffer, uint32_t aCount, uint32_t* aBytes);
   // Seeks to aOffset in the stream then performs a Read operation. See
   // 'Read' for argument and return details.
   nsresult ReadAt(int64_t aOffset, char* aBuffer,
@@ -358,10 +359,6 @@ public:
   void ThrottleReadahead(bool bThrottle);
 
   size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const;
-
-  // Update mPrincipal for all streams of the same resource given that data has
-  // been received from aPrincipal
-  void UpdatePrincipal(nsIPrincipal* aPrincipal);
 
   nsCString GetDebugInfo();
 
@@ -468,13 +465,13 @@ private:
 
   void UpdateDownloadStatistics(AutoLock&);
 
+  void CloseInternal(AutoLock&);
+  void InitAsCloneInternal(MediaCacheStream* aOriginal);
+
   // Instance of MediaCache to use with this MediaCacheStream.
   RefPtr<MediaCache> mMediaCache;
 
   ChannelMediaResource* const mClient;
-
-  // These fields are main-thread-only.
-  nsCOMPtr<nsIPrincipal> mPrincipal;
 
   // The following fields must be written holding the cache's monitor and
   // only on the main thread, thus can be read either on the main thread

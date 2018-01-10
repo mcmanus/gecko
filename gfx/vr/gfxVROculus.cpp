@@ -309,18 +309,16 @@ VROculusSession::StopPresentation()
 VROculusSession::~VROculusSession()
 {
   mSubmitThread = nullptr;
-  Uninitialize(true);
+  Uninitialize();
 }
 
 void
-VROculusSession::Uninitialize(bool aUnloadLib)
+VROculusSession::Uninitialize()
 {
   StopRendering();
   StopSession();
   StopLib();
-  if (aUnloadLib) {
-    UnloadOvrLib();
-  }
+  UnloadOvrLib();
 }
 
 void
@@ -366,12 +364,15 @@ VROculusSession::Refresh(bool aForceRefresh)
   }
 
   if (!mRequestTracking) {
-    Uninitialize(true);
+    Uninitialize();
     return;
   }
 
   ovrInitFlags flags = (ovrInitFlags)(ovrInit_RequestVersion | ovrInit_MixedRendering);
   bool bInvisible = true;
+  if (!gfxPrefs::VROculusInvisibleEnabled()) {
+    bInvisible = false;
+  }
   if (mRequestPresentation) {
     bInvisible = false;
   } else if (!mLastPresentationEnd.IsNull()) {
@@ -389,14 +390,14 @@ VROculusSession::Refresh(bool aForceRefresh)
       if (mSession && mTextureSet) {
         if (!aForceRefresh) {
           // VROculusSession didn't start submitting frames yet.
-          if (!mSubmitThread) {
+          // Or, the VR thread has been shut down already.
+          if (!mSubmitThread || !mSubmitThread->IsActive()) {
             return;
           }
           // ovr_SubmitFrame is running at VR Submit thread,
           // so we post this task to VR Submit thread and let it paint
           // a black frame.
           mDrawBlack = true;
-          MOZ_ASSERT(mSubmitThread->IsActive());
           mSubmitThread->PostTask(NewRunnableMethod<bool>(
             "gfx::VROculusSession::Refresh",
             this,
@@ -417,14 +418,14 @@ VROculusSession::Refresh(bool aForceRefresh)
   }
 
   if (mInitFlags != flags) {
-    Uninitialize(false);
+    Uninitialize();
   }
 
   if(!Initialize(flags)) {
     // If we fail to initialize, ensure the Oculus libraries
     // are unloaded, as we can't poll for ovrSessionStatus::ShouldQuit
     // without an active ovrSession.
-    Uninitialize(true);
+    Uninitialize();
   }
 
   if (mSession) {
@@ -434,7 +435,7 @@ VROculusSession::Refresh(bool aForceRefresh)
       mIsMounted = status.HmdMounted;
       if (status.ShouldQuit) {
         mLastShouldQuit = TimeStamp::Now();
-        Uninitialize(true);
+        Uninitialize();
       }
     } else {
       mIsConnected = false;
@@ -1244,12 +1245,12 @@ VRDisplayOculus::SubmitFrame(ID3D11Texture2D* aSource,
   layer.ColorTexture[1] = nullptr;
   layer.Fov[0] = mFOVPort[0];
   layer.Fov[1] = mFOVPort[1];
-  layer.Viewport[0].Pos.x = aSize.width * aLeftEyeRect.x;
-  layer.Viewport[0].Pos.y = aSize.height * aLeftEyeRect.y;
+  layer.Viewport[0].Pos.x = aSize.width * aLeftEyeRect.X();
+  layer.Viewport[0].Pos.y = aSize.height * aLeftEyeRect.Y();
   layer.Viewport[0].Size.w = aSize.width * aLeftEyeRect.Width();
   layer.Viewport[0].Size.h = aSize.height * aLeftEyeRect.Height();
-  layer.Viewport[1].Pos.x = aSize.width * aRightEyeRect.x;
-  layer.Viewport[1].Pos.y = aSize.height * aRightEyeRect.y;
+  layer.Viewport[1].Pos.x = aSize.width * aRightEyeRect.X();
+  layer.Viewport[1].Pos.y = aSize.height * aRightEyeRect.Y();
   layer.Viewport[1].Size.w = aSize.width * aRightEyeRect.Width();
   layer.Viewport[1].Size.h = aSize.height * aRightEyeRect.Height();
 
@@ -1374,6 +1375,7 @@ VRControllerOculus::SetHandTrigger(float aValue)
 
 VRControllerOculus::~VRControllerOculus()
 {
+  ShutdownVibrateHapticThread();
   MOZ_COUNT_DTOR_INHERITED(VRControllerOculus, VRControllerHost);
 }
 
@@ -1516,6 +1518,16 @@ VRControllerOculus::StopVibrateHaptic()
   mIsVibrateStopped = true;
 }
 
+void
+VRControllerOculus::ShutdownVibrateHapticThread()
+{
+  StopVibrateHaptic();
+  if (mVibrateThread) {
+    mVibrateThread->Shutdown();
+    mVibrateThread = nullptr;
+  }
+}
+
 /*static*/ already_AddRefed<VRSystemManagerOculus>
 VRSystemManagerOculus::Create()
 {
@@ -1570,6 +1582,9 @@ VRSystemManagerOculus::NotifyVSync()
   if (!mSession->IsTrackingReady()) {
     // No HMD connected
     mDisplay = nullptr;
+    // Prevent enumeration from continuously running
+    // after the headset is disconnected.
+    mSession->StopTracking();
   }
 }
 
@@ -1606,6 +1621,11 @@ VRSystemManagerOculus::Enumerate()
   if (mDisplay == nullptr && mSession->IsTrackingReady()) {
     // HMD Detected
     mDisplay = new VRDisplayOculus(mSession);
+  }
+  if (mDisplay == nullptr) {
+    // Prevent enumeration from continuously running
+    // when a headset was not found.
+    mSession->StopTracking();
   }
 }
 
@@ -1983,6 +2003,7 @@ VRSystemManagerOculus::RemoveControllers()
 {
   // controller count is changed, removing the existing gamepads first.
   for (uint32_t i = 0; i < mOculusController.Length(); ++i) {
+    mOculusController[i]->ShutdownVibrateHapticThread();
     RemoveGamepad(i);
   }
 

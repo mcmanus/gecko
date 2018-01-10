@@ -92,10 +92,6 @@
 #include "GLContextProvider.h"
 #include "mozilla/gfx/Logging.h"
 
-#ifdef MOZ_WIDGET_ANDROID
-#include "TexturePoolOGL.h"
-#endif
-
 #ifdef USE_SKIA
 # ifdef __GNUC__
 #  pragma GCC diagnostic push
@@ -615,6 +611,8 @@ WebRenderDebugPrefChangeCallback(const char* aPrefName, void*)
   GFX_WEBRENDER_DEBUG(".gpu-time-queries",   1 << 4)
   GFX_WEBRENDER_DEBUG(".gpu-sample-queries", 1 << 5)
   GFX_WEBRENDER_DEBUG(".disable-batching",   1 << 6)
+  GFX_WEBRENDER_DEBUG(".epochs",             1 << 7)
+  GFX_WEBRENDER_DEBUG(".compact-profiler",   1 << 8)
 #undef GFX_WEBRENDER_DEBUG
 
   gfx::gfxVars::SetWebRenderDebugFlags(flags);
@@ -820,11 +818,6 @@ gfxPlatform::Init()
 
     GLContext::PlatformStartup();
 
-#ifdef MOZ_WIDGET_ANDROID
-    // Texture pool init
-    TexturePoolOGL::Init();
-#endif
-
     Preferences::RegisterCallbackAndCall(RecordingPrefChanged, "gfx.2d.recording");
 
     CreateCMSOutputProfile();
@@ -976,11 +969,6 @@ gfxPlatform::Shutdown()
     }
 
     gPlatform->mVsyncSource = nullptr;
-
-#ifdef MOZ_WIDGET_ANDROID
-    // Shut down the texture pool
-    TexturePoolOGL::Shutdown();
-#endif
 
     // Shut down the default GL context provider.
     GLContextProvider::Shutdown();
@@ -2472,10 +2460,23 @@ gfxPlatform::InitCompositorAccelerationPrefs()
   }
 }
 
+/*static*/ bool
+gfxPlatform::WebRenderPrefEnabled()
+{
+  return Preferences::GetBool("gfx.webrender.enabled", false);
+}
+
+/*static*/ bool
+gfxPlatform::WebRenderEnvvarEnabled()
+{
+  const char* env = PR_GetEnv("MOZ_WEBRENDER");
+  return (env && *env == '1');
+}
+
 void
 gfxPlatform::InitWebRenderConfig()
 {
-  bool prefEnabled = Preferences::GetBool("gfx.webrender.enabled", false);
+  bool prefEnabled = WebRenderPrefEnabled();
 
   ScopedGfxFeatureReporter reporter("WR", prefEnabled);
   if (!XRE_IsParentProcess()) {
@@ -2497,11 +2498,8 @@ gfxPlatform::InitWebRenderConfig()
 
   if (prefEnabled) {
     featureWebRender.UserEnable("Enabled by pref");
-  } else {
-    const char* env = PR_GetEnv("MOZ_WEBRENDER");
-    if (env && *env == '1') {
-      featureWebRender.UserEnable("Enabled by envvar");
-    }
+  } else if (WebRenderEnvvarEnabled()) {
+    featureWebRender.UserEnable("Enabled by envvar");
   }
 
   // HW_COMPOSITING being disabled implies interfacing with the GPU might break
@@ -2602,8 +2600,8 @@ gfxPlatform::InitOMTPConfig()
   if (InSafeMode()) {
     omtp.ForceDisable(FeatureStatus::Blocked, "OMTP blocked by safe-mode",
                       NS_LITERAL_CSTRING("FEATURE_FAILURE_COMP_SAFEMODE"));
-  } else if (gfxPrefs::LayersTilesEnabled()) {
-    omtp.ForceDisable(FeatureStatus::Blocked, "OMTP does not yet support tiling",
+  } else if (gfxPrefs::LayersTilesEnabled() && gfxPrefs::TileEdgePaddingEnabled()) {
+    omtp.ForceDisable(FeatureStatus::Blocked, "OMTP does not yet support tiling with edge padding",
                       NS_LITERAL_CSTRING("FEATURE_FAILURE_OMTP_TILING"));
   }
 

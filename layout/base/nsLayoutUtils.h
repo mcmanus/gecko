@@ -156,7 +156,7 @@ class nsLayoutUtils
   typedef mozilla::gfx::Matrix4x4 Matrix4x4;
   typedef mozilla::gfx::RectCornerRadii RectCornerRadii;
   typedef mozilla::gfx::StrokeOptions StrokeOptions;
-  typedef mozilla::image::DrawResult DrawResult;
+  typedef mozilla::image::ImgDrawResult ImgDrawResult;
 
 public:
   typedef mozilla::layers::FrameMetrics FrameMetrics;
@@ -1806,7 +1806,7 @@ public:
    *   @param aImageFlags       Image flags of the imgIContainer::FLAG_* variety.
    *   @param aExtendMode       How to extend the image over the dest rect.
    */
-  static DrawResult DrawBackgroundImage(gfxContext&         aContext,
+  static ImgDrawResult DrawBackgroundImage(gfxContext&         aContext,
                                         nsIFrame*           aForFrame,
                                         nsPresContext*      aPresContext,
                                         imgIContainer*      aImage,
@@ -1839,7 +1839,7 @@ public:
    *   @param aDirty            Pixels outside this area may be skipped.
    *   @param aImageFlags       Image flags of the imgIContainer::FLAG_* variety
    */
-  static DrawResult DrawImage(gfxContext&         aContext,
+  static ImgDrawResult DrawImage(gfxContext&         aContext,
                               nsStyleContext*     aStyleContext,
                               nsPresContext*      aPresContext,
                               imgIContainer*      aImage,
@@ -1867,7 +1867,7 @@ public:
    *                            in appunits. For best results it should
    *                            be aligned with image pixels.
    */
-  static DrawResult DrawSingleUnscaledImage(gfxContext&          aContext,
+  static ImgDrawResult DrawSingleUnscaledImage(gfxContext&          aContext,
                                             nsPresContext*       aPresContext,
                                             imgIContainer*       aImage,
                                             const SamplingFilter aSamplingFilter,
@@ -1902,7 +1902,7 @@ public:
    *                            in appunits. For best results it should
    *                            be aligned with image pixels.
    */
-  static DrawResult DrawSingleImage(gfxContext&         aContext,
+  static ImgDrawResult DrawSingleImage(gfxContext&         aContext,
                                     nsPresContext*      aPresContext,
                                     imgIContainer*      aImage,
                                     const SamplingFilter aSamplingFilter,
@@ -2251,8 +2251,8 @@ public:
    *  <body><p contenteditable="true"></p></body>
    *    returns nullptr because <body> isn't editable.
    */
-  static nsIContent*
-    GetEditableRootContentByContentEditable(nsIDocument* aDocument);
+  static mozilla::dom::Element*
+  GetEditableRootContentByContentEditable(nsIDocument* aDocument);
 
   static void AddExtraBackgroundItems(nsDisplayListBuilder& aBuilder,
                                       nsDisplayList& aList,
@@ -2338,6 +2338,11 @@ public:
    * Checks if we should warn about animations that can't be async
    */
   static bool IsAnimationLoggingEnabled();
+
+  /**
+   * Checks if retained display lists are enabled.
+   */
+  static bool AreRetainedDisplayListsEnabled();
 
   /**
    * Find a suitable scale for a element (aFrame's content) over the course of any
@@ -3257,14 +3262,14 @@ void StrokeLineWithSnapping(const nsPoint& aP1, const nsPoint& aP2,
 class nsSetAttrRunnable : public mozilla::Runnable
 {
 public:
-  nsSetAttrRunnable(nsIContent* aContent, nsAtom* aAttrName,
+  nsSetAttrRunnable(mozilla::dom::Element* aElement, nsAtom* aAttrName,
                     const nsAString& aValue);
-  nsSetAttrRunnable(nsIContent* aContent, nsAtom* aAttrName,
+  nsSetAttrRunnable(mozilla::dom::Element* aElement, nsAtom* aAttrName,
                     int32_t aValue);
 
   NS_DECL_NSIRUNNABLE
 
-  nsCOMPtr<nsIContent> mContent;
+  RefPtr<Element> mElement;
   RefPtr<nsAtom> mAttrName;
   nsAutoString mValue;
 };
@@ -3272,11 +3277,11 @@ public:
 class nsUnsetAttrRunnable : public mozilla::Runnable
 {
 public:
-  nsUnsetAttrRunnable(nsIContent* aContent, nsAtom* aAttrName);
+  nsUnsetAttrRunnable(mozilla::dom::Element* aElement, nsAtom* aAttrName);
 
   NS_DECL_NSIRUNNABLE
 
-  nsCOMPtr<nsIContent> mContent;
+  RefPtr<Element> mElement;
   RefPtr<nsAtom> mAttrName;
 };
 

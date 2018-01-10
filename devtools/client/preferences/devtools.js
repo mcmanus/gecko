@@ -48,6 +48,10 @@ pref("devtools.inspector.enabled", true);
 // What was the last active sidebar in the inspector
 pref("devtools.inspector.activeSidebar", "ruleview");
 pref("devtools.inspector.remote", false);
+// Enable the split rule view sidebar toggle in the inspector
+pref("devtools.inspector.split-sidebar-toggle", false);
+// Enable the split rule view in the inspector
+pref("devtools.inspector.split-rule-enabled", false);
 // Collapse pseudo-elements by default in the rule-view
 pref("devtools.inspector.show_pseudo_elements", false);
 // The default size for image preview tooltips in the rule-view/computed-view/markup-view
@@ -68,7 +72,6 @@ pref("devtools.changesview.enabled", false);
 pref("devtools.eventsview.enabled", false);
 // Enable the Flexbox Inspector panel
 pref("devtools.flexboxinspector.enabled", false);
-
 // Enable the new Animation Inspector
 pref("devtools.new-animationinspector.enabled", false);
 
@@ -78,7 +81,6 @@ pref("devtools.gridinspector.gridOutlineMaxRows", 50);
 pref("devtools.gridinspector.showGridAreas", false);
 pref("devtools.gridinspector.showGridLineNumbers", false);
 pref("devtools.gridinspector.showInfiniteLines", false);
-pref("devtools.gridinspector.showNegativeLineNumbers", false);
 
 // Whether or not the box model panel is opened in the computed view
 pref("devtools.computed.boxmodel.opened", true);

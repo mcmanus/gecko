@@ -123,9 +123,17 @@ CodeGeneratorX86::visitUnbox(LUnbox* unbox)
     // inputs.
     MUnbox* mir = unbox->mir();
 
+    JSValueTag tag = MIRTypeToTag(mir->type());
     if (mir->fallible()) {
-        masm.cmp32(ToOperand(unbox->type()), Imm32(MIRTypeToTag(mir->type())));
+        masm.cmp32(ToOperand(unbox->type()), Imm32(tag));
         bailoutIf(Assembler::NotEqual, unbox->snapshot());
+    } else {
+#ifdef DEBUG
+        Label ok;
+        masm.branch32(Assembler::Equal, ToOperand(unbox->type()), Imm32(tag), &ok);
+        masm.assumeUnreachable("Infallible unbox type mismatch");
+        masm.bind(&ok);
+#endif
     }
 }
 
@@ -862,7 +870,7 @@ CodeGeneratorX86::visitOutOfLineTruncate(OutOfLineTruncate* ool)
             masm.callWithABI(BitwiseCast<void*, int32_t(*)(double)>(JS::ToInt32), MoveOp::GENERAL,
                              CheckUnsafeCallWithABI::DontCheckOther);
         }
-        masm.storeCallWordResult(output);
+        masm.storeCallInt32Result(output);
 
         restoreVolatile(output);
     }
@@ -954,7 +962,7 @@ CodeGeneratorX86::visitOutOfLineTruncateFloat32(OutOfLineTruncateFloat32* ool)
                              CheckUnsafeCallWithABI::DontCheckOther);
         }
 
-        masm.storeCallWordResult(output);
+        masm.storeCallInt32Result(output);
         masm.Pop(input);
 
         restoreVolatile(output);

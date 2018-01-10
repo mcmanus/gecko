@@ -245,7 +245,7 @@ nsHtml5TreeOperation::Detach(nsIContent* aNode, nsHtml5DocumentBuilder* aBuilder
         aBuilder->GetDocument());
     int32_t pos = parent->IndexOf(aNode);
     NS_ASSERTION((pos >= 0), "Element not found as child of its parent");
-    parent->RemoveChildAt(pos, true);
+    parent->RemoveChildAt_Deprecated(pos, true);
   }
 }
 
@@ -262,7 +262,7 @@ nsHtml5TreeOperation::AppendChildrenToNewParent(nsIContent* aNode,
   bool didAppend = false;
   while (aNode->HasChildren()) {
     nsCOMPtr<nsIContent> child = aNode->GetFirstChild();
-    aNode->RemoveChildAt(0, true);
+    aNode->RemoveChildAt_Deprecated(0, true);
     nsresult rv = aParent->AppendChildTo(child, false);
     NS_ENSURE_SUCCESS(rv, rv);
     didAppend = true;
@@ -656,7 +656,7 @@ nsHtml5TreeOperation::SetFormElement(nsIContent* aNode, nsIContent* aParent)
   NS_ASSERTION(formElement, "The form element doesn't implement nsIDOMHTMLFormElement.");
   // avoid crashing on <keygen>
   if (formControl &&
-      !aNode->HasAttr(kNameSpaceID_None, nsGkAtoms::form)) {
+      !aNode->AsElement()->HasAttr(kNameSpaceID_None, nsGkAtoms::form)) {
     formControl->SetForm(formElement);
   } else if (domImageElement) {
     domImageElement->SetForm(formElement);
@@ -1081,23 +1081,23 @@ nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
       return NS_OK;
     }
     case eTreeOpAddClass: {
-      nsIContent* node = *(mOne.node);
+      Element* element = (*(mOne.node))->AsElement();
       char16_t* str = mTwo.unicharPtr;
       nsDependentString depStr(str);
       // See viewsource.css for the possible classes
       nsAutoString klass;
-      node->GetAttr(kNameSpaceID_None, nsGkAtoms::_class, klass);
+      element->GetAttr(kNameSpaceID_None, nsGkAtoms::_class, klass);
       if (!klass.IsEmpty()) {
         klass.Append(' ');
         klass.Append(depStr);
-        node->SetAttr(kNameSpaceID_None, nsGkAtoms::_class, klass, true);
+        element->SetAttr(kNameSpaceID_None, nsGkAtoms::_class, klass, true);
       } else {
-        node->SetAttr(kNameSpaceID_None, nsGkAtoms::_class, depStr, true);
+        element->SetAttr(kNameSpaceID_None, nsGkAtoms::_class, depStr, true);
       }
       return NS_OK;
     }
     case eTreeOpAddViewSourceHref: {
-      nsIContent* node = *mOne.node;
+      Element* element = (*mOne.node)->AsElement();
       char16_t* buffer = mTwo.unicharPtr;
       int32_t length = mFour.integer;
 
@@ -1149,7 +1149,7 @@ nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
       nsAutoString utf16;
       CopyUTF8toUTF16(viewSourceUrl, utf16);
 
-      node->SetAttr(kNameSpaceID_None, nsGkAtoms::href, utf16, true);
+      element->SetAttr(kNameSpaceID_None, nsGkAtoms::href, utf16, true);
       return NS_OK;
     }
     case eTreeOpAddViewSourceBase: {
@@ -1160,21 +1160,21 @@ nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
       return NS_OK;
     }
     case eTreeOpAddError: {
-      nsIContent* node = *(mOne.node);
+      Element* element = (*(mOne.node))->AsElement();
       char* msgId = mTwo.charPtr;
       RefPtr<nsAtom> atom = Reget(mThree.atom);
       RefPtr<nsAtom> otherAtom = Reget(mFour.atom);
       // See viewsource.css for the possible classes in addition to "error".
       nsAutoString klass;
-      node->GetAttr(kNameSpaceID_None, nsGkAtoms::_class, klass);
+      element->GetAttr(kNameSpaceID_None, nsGkAtoms::_class, klass);
       if (!klass.IsEmpty()) {
         klass.AppendLiteral(" error");
-        node->SetAttr(kNameSpaceID_None, nsGkAtoms::_class, klass, true);
+        element->SetAttr(kNameSpaceID_None, nsGkAtoms::_class, klass, true);
       } else {
-        node->SetAttr(kNameSpaceID_None,
-                      nsGkAtoms::_class,
-                      NS_LITERAL_STRING("error"),
-                      true);
+        element->SetAttr(kNameSpaceID_None,
+                         nsGkAtoms::_class,
+                         NS_LITERAL_STRING("error"),
+                         true);
       }
 
       nsresult rv;
@@ -1197,22 +1197,22 @@ nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
       }
 
       nsAutoString title;
-      node->GetAttr(kNameSpaceID_None, nsGkAtoms::title, title);
+      element->GetAttr(kNameSpaceID_None, nsGkAtoms::title, title);
       if (!title.IsEmpty()) {
         title.Append('\n');
         title.Append(message);
-        node->SetAttr(kNameSpaceID_None, nsGkAtoms::title, title, true);
+        element->SetAttr(kNameSpaceID_None, nsGkAtoms::title, title, true);
       } else {
-        node->SetAttr(kNameSpaceID_None, nsGkAtoms::title, message, true);
+        element->SetAttr(kNameSpaceID_None, nsGkAtoms::title, message, true);
       }
       return rv;
     }
     case eTreeOpAddLineNumberId: {
-      nsIContent* node = *(mOne.node);
+      Element* element = (*(mOne.node))->AsElement();
       int32_t lineNumber = mFour.integer;
       nsAutoString val(NS_LITERAL_STRING("line"));
       val.AppendInt(lineNumber);
-      node->SetAttr(kNameSpaceID_None, nsGkAtoms::id, val, true);
+      element->SetAttr(kNameSpaceID_None, nsGkAtoms::id, val, true);
       return NS_OK;
     }
     case eTreeOpStartLayout: {

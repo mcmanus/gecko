@@ -2072,7 +2072,6 @@ intrinsic_CreateNamespaceBinding(JSContext* cx, unsigned argc, Value* vp)
     // the slot directly.
     RootedShape shape(cx, environment->lookup(cx, name));
     MOZ_ASSERT(shape);
-    MOZ_ASSERT(environment->getSlot(shape->slot()).isMagic(JS_UNINITIALIZED_LEXICAL));
     environment->setSlot(shape->slot(), args[2]);
     args.rval().setUndefined();
     return true;
@@ -2983,8 +2982,7 @@ CloneObject(JSContext* cx, HandleNativeObject selfHostedObject)
         RegExpObject& reobj = selfHostedObject->as<RegExpObject>();
         RootedAtom source(cx, reobj.getSource());
         MOZ_ASSERT(source->isPermanentAtom());
-        clone = RegExpObject::create(cx, source, reobj.getFlags(),
-                                     nullptr, nullptr, cx->tempLifoAlloc(),
+        clone = RegExpObject::create(cx, source, reobj.getFlags(), cx->tempLifoAlloc(),
                                      TenuredObject);
     } else if (selfHostedObject->is<DateObject>()) {
         clone = JS::NewDateObject(cx, selfHostedObject->as<DateObject>().clippedTime());

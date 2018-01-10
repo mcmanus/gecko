@@ -375,7 +375,7 @@ option('--enable-av1',
 def av1(value, target, milestone):
     enabled = bool(value)
     if value.origin == 'default' and milestone.is_nightly:
-        enabled = target.os != 'Android' and target.cpu != 'x86'
+        enabled = target.os != 'Android'
     if enabled:
         return True
 
@@ -514,16 +514,6 @@ def check_places_and_android_history(places, android_history):
     if places and android_history:
         die('Cannot use MOZ_ANDROID_HISTORY alongside MOZ_PLACES.')
 
-# Permissions system
-# ==============================================================
-option(name='--disable-permissions',
-       help='Disable permissions (popup and cookie blocking)')
-
-moz_permissions = depends_if('--disable-permissions')(lambda _: True)
-
-set_config('MOZ_PERMISSIONS', moz_permissions)
-set_define('MOZ_PERMISSIONS', moz_permissions)
-
 # gpsd support
 # ==============================================================
 option('--enable-gpsd', env='MOZ_GPSD',
@@ -544,6 +534,7 @@ set_config('MOZ_GPSD', depends_if(system_gpsd)(lambda _: True))
 check_prog('TAR', ('gnutar', 'gtar', 'tar'))
 check_prog('UNZIP', ('unzip',))
 check_prog('ZIP', ('zip',))
+check_prog('GN', ('gn',), allow_missing=True)
 
 # Key files
 # ==============================================================

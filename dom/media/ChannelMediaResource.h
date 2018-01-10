@@ -53,6 +53,8 @@ private:
   bool mIsChannelSuspended = false;
 };
 
+DDLoggedTypeDeclNameAndBase(ChannelMediaResource, BaseMediaResource);
+
 /**
  * This is the MediaResource implementation that wraps Necko channels.
  * Much of its functionality is actually delegated to MediaCache via
@@ -61,8 +63,22 @@ private:
  * All synchronization is performed by MediaCacheStream; all off-main-
  * thread operations are delegated directly to that object.
  */
-class ChannelMediaResource : public BaseMediaResource
+class ChannelMediaResource
+  : public BaseMediaResource
+  , public DecoderDoctorLifeLogger<ChannelMediaResource>
 {
+  // Store information shared among resources. Main thread only.
+  struct SharedInfo
+  {
+    NS_INLINE_DECL_REFCOUNTING(SharedInfo);
+    nsCOMPtr<nsIPrincipal> mPrincipal;
+    nsTArray<ChannelMediaResource*> mResources;
+
+  private:
+    ~SharedInfo() = default;
+  };
+  RefPtr<SharedInfo> mSharedInfo;
+
 public:
   ChannelMediaResource(MediaResourceCallback* aDecoder,
                        nsIChannel* aChannel,
@@ -129,6 +145,7 @@ public:
   int64_t GetCachedDataEnd(int64_t aOffset) override;
   bool    IsDataCachedToEndOfResource(int64_t aOffset) override;
   bool    IsTransportSeekable() override;
+  bool    IsLiveStream() const override { return mIsLiveStream; }
 
   size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const override {
     // Might be useful to track in the future:
@@ -208,8 +225,6 @@ protected:
   // Update the principal for the resource. Main thread only.
   void UpdatePrincipal();
 
-  int64_t GetOffset() const;
-
   // Parses 'Content-Range' header and returns results via parameters.
   // Returns error if header is not available, values are not parse-able or
   // values are out of range.
@@ -239,9 +254,7 @@ protected:
   RefPtr<Listener> mListener;
   // A mono-increasing integer to uniquely identify the channel we are loading.
   uint32_t mLoadID = 0;
-  // Used by the cache to store the offset to seek to when we are resumed.
-  // -1 means no seek initiated by the cache is waiting.
-  int64_t mPendingSeekOffset = -1;
+  bool mIsLiveStream = false;
 
   // Any thread access
   MediaCacheStream mCacheStream;

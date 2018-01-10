@@ -24,6 +24,9 @@
 #ifdef MOZ_X11
 #include <gdk/gdkx.h>
 #endif /* MOZ_X11 */
+#ifdef MOZ_WAYLAND
+#include <gdk/gdkwayland.h>
+#endif
 
 #include "mozilla/widget/WindowSurface.h"
 #include "mozilla/widget/WindowSurfaceProvider.h"
@@ -348,8 +351,13 @@ public:
                                                 nsIObserver* aObserver) override;
 #endif
 
+
 #ifdef MOZ_X11
     Display* XDisplay() { return mXDisplay; }
+#endif
+#ifdef MOZ_WAYLAND
+    wl_display* GetWaylandDisplay();
+    wl_surface* GetWaylandSurface();
 #endif
     virtual void GetCompositorWidgetInitData(mozilla::widget::CompositorWidgetInitData* aInitData) override;
 
@@ -435,6 +443,7 @@ private:
     nsWindow          *GetContainerWindow();
     void               SetUrgencyHint(GtkWidget *top_window, bool state);
     void               SetDefaultIcon(void);
+    void               SetWindowDecoration(nsBorderStyle aStyle);
     void               InitButtonEvent(mozilla::WidgetMouseEvent& aEvent,
                                        GdkEventButton* aGdkEvent);
     bool               DispatchCommandEvent(nsAtom* aCommand);
@@ -452,7 +461,6 @@ private:
     void               ClearCachedResources();
     nsIWidgetListener* GetListener();
     bool               IsComposited() const;
-
 
     GtkWidget          *mShell;
     MozContainer       *mContainer;

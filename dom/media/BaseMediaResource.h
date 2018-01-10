@@ -17,7 +17,11 @@ class nsIPrincipal;
 
 namespace mozilla {
 
-class BaseMediaResource : public MediaResource
+DDLoggedTypeDeclNameAndBase(BaseMediaResource, MediaResource);
+
+class BaseMediaResource
+  : public MediaResource
+  , public DecoderDoctorLifeLogger<BaseMediaResource>
 {
 public:
   /**
@@ -93,7 +97,7 @@ public:
   }
 
   // Returns true if the resource is a live stream.
-  bool IsLiveStream() { return GetLength() == -1; }
+  virtual bool IsLiveStream() const { return false; }
 
   virtual size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
   {
@@ -128,10 +132,6 @@ protected:
   // load group, the request is removed from the group, the flags are set, and
   // then the request is added back to the load group.
   void ModifyLoadFlags(nsLoadFlags aFlags);
-
-  // Dispatches an event to call MediaDecoder::NotifyBytesConsumed(aNumBytes, aOffset)
-  // on the main thread. This is called automatically after every read.
-  void DispatchBytesConsumed(int64_t aNumBytes, int64_t aOffset);
 
   RefPtr<MediaResourceCallback> mCallback;
 

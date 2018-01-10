@@ -96,6 +96,7 @@ IPDL_SOURCES += [
     'PCycleCollectWithLogs.ipdl',
     'PDocumentRenderer.ipdl',
     'PFilePicker.ipdl',
+    'PLoginReputation.ipdl',
     'PPluginWidget.ipdl',
     'PProcessHangMonitor.ipdl',
     'PTabContext.ipdlh',
@@ -173,5 +174,5 @@ MOCHITEST_MANIFESTS += ['tests/mochitest.ini']
 
 CXXFLAGS += CONFIG['TK_CFLAGS']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

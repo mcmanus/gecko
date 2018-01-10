@@ -28,6 +28,7 @@
 #include "gc/Marking-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/Stack-inl.h"
+#include "vm/TypeInference-inl.h"
 
 using namespace js;
 using namespace js::gc;
@@ -493,10 +494,8 @@ ModuleEnvironmentObject::createImportBinding(JSContext* cx, HandleAtom importNam
     RootedId importNameId(cx, AtomToId(importName));
     RootedId localNameId(cx, AtomToId(localName));
     RootedModuleEnvironmentObject env(cx, &module->initialEnvironment());
-    if (!importBindings().putNew(cx, importNameId, env, localNameId)) {
-        ReportOutOfMemory(cx);
+    if (!importBindings().put(cx, importNameId, env, localNameId))
         return false;
-    }
 
     return true;
 }
@@ -1506,7 +1505,8 @@ class DebugEnvironmentProxyHandler : public BaseProxyHandler
             CallObject& callobj = env->as<CallObject>();
             RootedFunction fun(cx, &callobj.callee());
             RootedScript script(cx, JSFunction::getOrCreateScript(cx, fun));
-            if (!script->ensureHasTypes(cx) || !script->ensureHasAnalyzedArgsUsage(cx))
+            AutoKeepTypeScripts keepTypes(cx);
+            if (!script->ensureHasTypes(cx, keepTypes) || !script->ensureHasAnalyzedArgsUsage(cx))
                 return false;
 
             BindingIter bi(script);

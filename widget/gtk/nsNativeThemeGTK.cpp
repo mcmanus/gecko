@@ -358,8 +358,9 @@ nsNativeThemeGTK::GetGtkWidgetAndState(uint8_t aWidgetType, nsIFrame* aFrame,
         if (aWidgetType == NS_THEME_CHECKMENUITEM ||
             aWidgetType == NS_THEME_RADIOMENUITEM) {
           *aWidgetFlags = 0;
-          if (aFrame && aFrame->GetContent()) {
-            *aWidgetFlags = aFrame->GetContent()->
+          if (aFrame && aFrame->GetContent() &&
+              aFrame->GetContent()->IsElement()) {
+            *aWidgetFlags = aFrame->GetContent()->AsElement()->
               AttrValueIs(kNameSpaceID_None, nsGkAtoms::checked,
                           nsGkAtoms::_true, eIgnoreCase);
           }
@@ -1378,6 +1379,10 @@ nsNativeThemeGTK::GetWidgetPadding(nsDeviceContext* aContext,
   switch (aWidgetType) {
     case NS_THEME_BUTTON_FOCUS:
     case NS_THEME_TOOLBARBUTTON:
+    case NS_THEME_WINDOW_BUTTON_CLOSE:
+    case NS_THEME_WINDOW_BUTTON_MINIMIZE:
+    case NS_THEME_WINDOW_BUTTON_MAXIMIZE:
+    case NS_THEME_WINDOW_BUTTON_RESTORE:
     case NS_THEME_DUALBUTTON:
     case NS_THEME_TAB_SCROLL_ARROW_BACK:
     case NS_THEME_TAB_SCROLL_ARROW_FORWARD:

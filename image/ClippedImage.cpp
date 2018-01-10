@@ -43,7 +43,7 @@ public:
                             const Maybe<SVGImageContext>& aSVGContext,
                             float aFrame,
                             uint32_t aFlags,
-                            DrawResult aDrawResult)
+                            ImgDrawResult aDrawResult)
     : mSurface(aSurface)
     , mSize(aSize)
     , mSVGContext(aSVGContext)
@@ -71,15 +71,15 @@ public:
     return surf.forget();
   }
 
-  DrawResult GetDrawResult() const
+  ImgDrawResult GetDrawResult() const
   {
     return mDrawResult;
   }
 
   bool NeedsRedraw() const
   {
-    return mDrawResult != DrawResult::SUCCESS &&
-           mDrawResult != DrawResult::BAD_IMAGE;
+    return mDrawResult != ImgDrawResult::SUCCESS &&
+           mDrawResult != ImgDrawResult::BAD_IMAGE;
   }
 
 private:
@@ -88,7 +88,7 @@ private:
   Maybe<SVGImageContext> mSVGContext;
   const float            mFrame;
   const uint32_t         mFlags;
-  const DrawResult       mDrawResult;
+  const ImgDrawResult    mDrawResult;
 };
 
 class DrawSingleTileCallback : public gfxDrawingCallback
@@ -105,7 +105,7 @@ public:
     , mSVGContext(aSVGContext)
     , mWhichFrame(aWhichFrame)
     , mFlags(aFlags)
-    , mDrawResult(DrawResult::NOT_READY)
+    , mDrawResult(ImgDrawResult::NOT_READY)
     , mOpacity(aOpacity)
   {
     MOZ_ASSERT(mImage, "Must have an image to clip");
@@ -130,7 +130,7 @@ public:
     return true;
   }
 
-  DrawResult GetDrawResult() { return mDrawResult; }
+  ImgDrawResult GetDrawResult() { return mDrawResult; }
 
 private:
   RefPtr<ClippedImage>        mImage;
@@ -138,7 +138,7 @@ private:
   const Maybe<SVGImageContext>& mSVGContext;
   const uint32_t                mWhichFrame;
   const uint32_t                mFlags;
-  DrawResult                    mDrawResult;
+  ImgDrawResult                 mDrawResult;
   float                         mOpacity;
 };
 
@@ -260,7 +260,7 @@ NS_IMETHODIMP_(already_AddRefed<SourceSurface>)
 ClippedImage::GetFrame(uint32_t aWhichFrame,
                        uint32_t aFlags)
 {
-  DrawResult result;
+  ImgDrawResult result;
   RefPtr<SourceSurface> surface;
   Tie(result, surface) = GetFrameInternal(mClip.Size(), Nothing(), aWhichFrame, aFlags, 1.0);
   return surface.forget();
@@ -276,7 +276,7 @@ ClippedImage::GetFrameAtSize(const IntSize& aSize,
   return GetFrame(aWhichFrame, aFlags);
 }
 
-Pair<DrawResult, RefPtr<SourceSurface>>
+Pair<ImgDrawResult, RefPtr<SourceSurface>>
 ClippedImage::GetFrameInternal(const nsIntSize& aSize,
                                const Maybe<SVGImageContext>& aSVGContext,
                                uint32_t aWhichFrame,
@@ -285,7 +285,7 @@ ClippedImage::GetFrameInternal(const nsIntSize& aSize,
 {
   if (!ShouldClip()) {
     RefPtr<SourceSurface> surface = InnerImage()->GetFrame(aWhichFrame, aFlags);
-    return MakePair(surface ? DrawResult::SUCCESS : DrawResult::NOT_READY,
+    return MakePair(surface ? ImgDrawResult::SUCCESS : ImgDrawResult::NOT_READY,
                     Move(surface));
   }
 
@@ -299,7 +299,7 @@ ClippedImage::GetFrameInternal(const nsIntSize& aSize,
                                        SurfaceFormat::B8G8R8A8);
     if (!target || !target->IsValid()) {
       NS_ERROR("Could not create a DrawTarget");
-      return MakePair(DrawResult::TEMPORARY_ERROR, RefPtr<SourceSurface>());
+      return MakePair(ImgDrawResult::TEMPORARY_ERROR, RefPtr<SourceSurface>());
     }
 
     RefPtr<gfxContext> ctx = gfxContext::CreateOrNull(target);
@@ -401,7 +401,7 @@ MustCreateSurface(gfxContext* aContext,
   return willTile || willResample;
 }
 
-NS_IMETHODIMP_(DrawResult)
+NS_IMETHODIMP_(ImgDrawResult)
 ClippedImage::Draw(gfxContext* aContext,
                    const nsIntSize& aSize,
                    const ImageRegion& aRegion,
@@ -421,12 +421,12 @@ ClippedImage::Draw(gfxContext* aContext,
   if (MustCreateSurface(aContext, aSize, aRegion, aFlags)) {
     // Create a temporary surface containing a single tile of this image.
     // GetFrame will call DrawSingleTile internally.
-    DrawResult result;
+    ImgDrawResult result;
     RefPtr<SourceSurface> surface;
     Tie(result, surface) =
       GetFrameInternal(aSize, aSVGContext, aWhichFrame, aFlags, aOpacity);
     if (!surface) {
-      MOZ_ASSERT(result != DrawResult::SUCCESS);
+      MOZ_ASSERT(result != ImgDrawResult::SUCCESS);
       return result;
     }
 
@@ -446,7 +446,7 @@ ClippedImage::Draw(gfxContext* aContext,
                         aSamplingFilter, aSVGContext, aFlags, aOpacity);
 }
 
-DrawResult
+ImgDrawResult
 ClippedImage::DrawSingleTile(gfxContext* aContext,
                              const nsIntSize& aSize,
                              const ImageRegion& aRegion,
@@ -459,7 +459,7 @@ ClippedImage::DrawSingleTile(gfxContext* aContext,
   MOZ_ASSERT(!MustCreateSurface(aContext, aSize, aRegion, aFlags),
              "Shouldn't need to create a surface");
 
-  gfxRect clip(mClip.x, mClip.y, mClip.Width(), mClip.Height());
+  gfxRect clip(mClip.X(), mClip.Y(), mClip.Width(), mClip.Height());
   nsIntSize size(aSize), innerSize(aSize);
   bool needScale = false;
   if (mSVGViewportSize && !mSVGViewportSize->IsEmpty()) {
@@ -486,11 +486,11 @@ ClippedImage::DrawSingleTile(gfxContext* aContext,
   // We restrict our drawing to only the clipping region, and translate so that
   // the clipping region is placed at the position the caller expects.
   ImageRegion region(aRegion);
-  region.MoveBy(clip.x, clip.y);
+  region.MoveBy(clip.X(), clip.Y());
   region = region.Intersect(clip);
 
   gfxContextMatrixAutoSaveRestore saveMatrix(aContext);
-  aContext->Multiply(gfxMatrix::Translation(-clip.x, -clip.y));
+  aContext->Multiply(gfxMatrix::Translation(-clip.X(), -clip.Y()));
 
   auto unclipViewport = [&](const SVGImageContext& aOldContext) {
     // Map the viewport to the inner image. Note that we don't take the aSize
@@ -601,7 +601,7 @@ ClippedImage::GetImageSpaceInvalidationRect(const nsIntRect& aRect)
 
   nsIntRect rect(InnerImage()->GetImageSpaceInvalidationRect(aRect));
   rect = rect.Intersect(mClip);
-  rect.MoveBy(-mClip.x, -mClip.y);
+  rect.MoveBy(-mClip.X(), -mClip.Y());
   return rect;
 }
 

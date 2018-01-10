@@ -12,7 +12,7 @@ use webrender::{ReadPixelsFormat, Renderer, RendererOptions, ThreadListener};
 use webrender::{ExternalImage, ExternalImageHandler, ExternalImageSource};
 use webrender::DebugFlags;
 use webrender::{ApiRecordingReceiver, BinaryRecorder};
-use webrender::ProgramCache;
+use webrender::{ProgramCache, UploadMethod, VertexUsageHint};
 use thread_profiler::register_thread_with_profiler;
 use moz2d_renderer::Moz2dImageRenderer;
 use app_units::Au;
@@ -359,13 +359,16 @@ pub enum WrFilterOpType {
   Opacity = 6,
   Saturate = 7,
   Sepia = 8,
+  DropShadow = 9,
 }
 
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct WrFilterOp {
     filter_type: WrFilterOpType,
-    argument: c_float,
+    argument: c_float, // holds radius for DropShadow; value for other filters
+    offset: LayoutVector2D, // only used for DropShadow
+    color: ColorF, // only used for DropShadow
 }
 
 /// cbindgen:derive-eq=false
@@ -417,6 +420,7 @@ extern "C" {
     fn is_in_render_thread() -> bool;
     fn is_in_main_thread() -> bool;
     fn is_glcontext_egl(glcontext_ptr: *mut c_void) -> bool;
+    fn is_glcontext_angle(glcontext_ptr: *mut c_void) -> bool;
     // Enables binary recording that can be used with `wrench replay`
     // Outputs a wr-record-*.bin file for each window that is shown
     // Note: wrench will panic if external images are used, they can
@@ -718,6 +722,12 @@ pub extern "C" fn wr_window_new(window_id: WrWindowId,
         Arc::clone(&(*thread_pool).0)
     };
 
+    let upload_method = if unsafe { is_glcontext_angle(gl_context) } {
+        UploadMethod::Immediate
+    } else {
+        UploadMethod::PixelBuffer(VertexUsageHint::Dynamic)
+    };
+
     let opts = RendererOptions {
         enable_aa: true,
         enable_subpixel_aa: true,
@@ -738,6 +748,7 @@ pub extern "C" fn wr_window_new(window_id: WrWindowId,
             }
         },
         renderer_id: Some(window_id.0),
+        upload_method,
         ..Default::default()
     };
 
@@ -1285,6 +1296,9 @@ pub extern "C" fn wr_dp_push_stacking_context(state: &mut WrState,
             WrFilterOpType::Opacity => FilterOp::Opacity(PropertyBinding::Value(c_filter.argument), c_filter.argument),
             WrFilterOpType::Saturate => FilterOp::Saturate(c_filter.argument),
             WrFilterOpType::Sepia => FilterOp::Sepia(c_filter.argument),
+            WrFilterOpType::DropShadow => FilterOp::DropShadow(c_filter.offset,
+                                                               c_filter.argument,
+                                                               c_filter.color),
         }
     }).collect();
 

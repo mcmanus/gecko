@@ -42,6 +42,7 @@
 #include "nsDirectoryServiceUtils.h"
 
 #include "nsWindowsDllInterceptor.h"
+#include "mozilla/WindowsVersion.h"
 #elif defined(XP_MACOSX)
 #include "breakpad-client/mac/crash_generation/client_info.h"
 #include "breakpad-client/mac/crash_generation/crash_generation_server.h"
@@ -498,7 +499,11 @@ void AnnotateTexturesSize(size_t size)
 
 #ifndef XP_WIN
 // Like Windows CopyFile for *nix
-static bool
+//
+// This function is not declared static even though it's not used outside of
+// this file because of an issue in Fennec which prevents breakpad's exception
+// handler from invoking the MinidumpCallback function. See bug 1424304.
+bool
 copy_file(const char* from, const char* to)
 {
   const int kBufSize = 4096;
@@ -876,7 +881,13 @@ LaunchCrashReporterActivity(XP_CHAR* aProgramPath, XP_CHAR* aMinidumpPath,
 
 #endif
 
-static bool
+// Callback invoked from breakpad's exception handler, this writes out the
+// last annotations after a crash occurs and launches the crash reporter client.
+//
+// This function is not declared static even though it's not used outside of
+// this file because of an issue in Fennec which prevents breakpad's exception
+// handler from invoking it. See bug 1424304.
+bool
 MinidumpCallback(
 #ifdef XP_LINUX
                       const MinidumpDescriptor& descriptor,
@@ -1400,6 +1411,15 @@ GetMinidumpType()
   minidump_type = static_cast<MINIDUMP_TYPE>(minidump_type |
       MiniDumpWithUnloadedModules |
       MiniDumpWithProcessThreadData);
+
+  // dbghelp.dll on Win7 can't handle overlapping memory regions so we only
+  // enable this feature on Win8 or later.
+  if (IsWin8OrLater()) {
+    minidump_type = static_cast<MINIDUMP_TYPE>(minidump_type |
+      // This allows us to examine heap objects referenced from stack objects
+      // at the cost of further doubling the size of minidumps.
+      MiniDumpWithIndirectlyReferencedMemory);
+  }
 #endif
 
   const char* e = PR_GetEnv("MOZ_CRASHREPORTER_FULLDUMP");

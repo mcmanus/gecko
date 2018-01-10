@@ -59,14 +59,30 @@ using namespace mozilla::media;
 #undef SLOGE
 
 #define FMT(x, ...) "Decoder=%p " x, mDecoderID, ##__VA_ARGS__
-#define LOG(x, ...) MOZ_LOG(gMediaDecoderLog, LogLevel::Debug,   (FMT(x, ##__VA_ARGS__)))
-#define LOGV(x, ...) MOZ_LOG(gMediaDecoderLog, LogLevel::Verbose, (FMT(x, ##__VA_ARGS__)))
+#define LOG(x, ...)                                                            \
+  DDMOZ_LOG(gMediaDecoderLog,                                                  \
+            LogLevel::Debug,                                                   \
+            "Decoder=%p " x,                                                   \
+            mDecoderID,                                                        \
+            ##__VA_ARGS__)
+#define LOGV(x, ...)                                                           \
+  DDMOZ_LOG(gMediaDecoderLog,                                                  \
+            LogLevel::Verbose,                                                 \
+            "Decoder=%p " x,                                                   \
+            mDecoderID,                                                        \
+            ##__VA_ARGS__)
 #define LOGW(x, ...) NS_WARNING(nsPrintfCString(FMT(x, ##__VA_ARGS__)).get())
 #define LOGE(x, ...) NS_DebugBreak(NS_DEBUG_WARNING, nsPrintfCString(FMT(x, ##__VA_ARGS__)).get(), nullptr, __FILE__, __LINE__)
 
 // Used by StateObject and its sub-classes
 #define SFMT(x, ...) "Decoder=%p state=%s " x, mMaster->mDecoderID, ToStateStr(GetState()), ##__VA_ARGS__
-#define SLOG(x, ...) MOZ_LOG(gMediaDecoderLog, LogLevel::Debug, (SFMT(x, ##__VA_ARGS__)))
+#define SLOG(x, ...)                                                           \
+  DDMOZ_LOGEX(mMaster,                                                         \
+              gMediaDecoderLog,                                                \
+              LogLevel::Debug,                                                 \
+              "state=%s " x,                                                   \
+              ToStateStr(GetState()),                                          \
+              ##__VA_ARGS__)
 #define SLOGW(x, ...) NS_WARNING(nsPrintfCString(SFMT(x, ##__VA_ARGS__)).get())
 #define SLOGE(x, ...) NS_DebugBreak(NS_DEBUG_WARNING, nsPrintfCString(SFMT(x, ##__VA_ARGS__)).get(), nullptr, __FILE__, __LINE__)
 
@@ -817,15 +833,6 @@ public:
     mSeekJob = Move(aSeekJob);
     mVisibility = aVisibility;
 
-    // Always switch off the blank decoder otherwise we might become visible
-    // in the middle of seeking and won't have a valid video frame to show
-    // when seek is done.
-    if (mMaster->mVideoDecodeSuspended) {
-      mMaster->mVideoDecodeSuspended = false;
-      mMaster->mOnPlaybackEvent.Notify(MediaPlaybackEvent::ExitVideoSuspend);
-      Reader()->SetVideoBlankDecode(false);
-    }
-
     // Suppressed visibility comes from two cases: (1) leaving dormant state,
     // and (2) resuming suspended video decoder. We want both cases to be
     // transparent to the user. So we only notify the change when the seek
@@ -868,8 +875,7 @@ public:
 
   void HandleResumeVideoDecoding(const TimeUnit&) override
   {
-    // We set mVideoDecodeSuspended to false in Enter().
-    MOZ_ASSERT(false, "Shouldn't have suspended video decoding.");
+    // Do nothing. We will resume video decoding in the decoding state.
   }
 
 protected:
@@ -1487,6 +1493,7 @@ public:
     RefPtr<Runnable> r = mAsyncSeekTask = new AysncNextFrameSeekTask(this);
     nsresult rv = OwnerThread()->Dispatch(r.forget());
     MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
   }
 
 private:
@@ -1931,6 +1938,10 @@ public:
       if (mMaster->mDuration.Ref()->IsInfinite()) {
         // We have a finite duration when playback reaches the end.
         mMaster->mDuration = Some(clockTime);
+        DDLOGEX(mMaster,
+                DDLogCategory::Property,
+                "duration_us",
+                mMaster->mDuration.Ref()->ToMicroseconds());
       }
       mMaster->UpdatePlaybackPosition(clockTime);
 
@@ -2096,6 +2107,10 @@ StateObject::HandleResumeVideoDecoding(const TimeUnit& aTarget)
 {
   MOZ_ASSERT(mMaster->mVideoDecodeSuspended);
 
+  mMaster->mVideoDecodeSuspended = false;
+  mMaster->mOnPlaybackEvent.Notify(MediaPlaybackEvent::ExitVideoSuspend);
+  Reader()->SetVideoBlankDecode(false);
+
   // Start counting recovery time from right now.
   TimeStamp start = TimeStamp::Now();
 
@@ -2172,6 +2187,11 @@ DecodeMetadataState::OnMetadataRead(MetadataHolder&& aMetadata)
   if (mMaster->mDuration.Ref().isNothing()) {
     mMaster->mDuration = Some(TimeUnit::FromInfinity());
   }
+
+  DDLOGEX(mMaster,
+          DDLogCategory::Property,
+          "duration_us",
+          mMaster->mDuration.Ref()->ToMicroseconds());
 
   if (mMaster->HasVideo()) {
     SLOG("Video decode HWAccel=%d videoQueueSize=%d",
@@ -2252,6 +2272,12 @@ MediaDecoderStateMachine::
 DecodingState::Enter()
 {
   MOZ_ASSERT(mMaster->mSentFirstFrameLoadedEvent);
+
+  if (mMaster->mVideoDecodeSuspended &&
+      mMaster->mVideoDecodeMode == VideoDecodeMode::Normal) {
+    StateObject::HandleResumeVideoDecoding(mMaster->GetMediaTime());
+    return;
+  }
 
   if (mMaster->mVideoDecodeMode == VideoDecodeMode::Suspend &&
       !mMaster->mVideoDecodeSuspendTimer.IsScheduled() &&
@@ -2687,6 +2713,8 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
   NS_ASSERTION(NS_IsMainThread(), "Should be on main thread.");
 
   InitVideoQueuePrefs();
+
+  DDLINKCHILD("reader", aReader);
 }
 
 #undef INIT_WATCHABLE
@@ -2961,7 +2989,12 @@ MediaDecoderStateMachine::UpdatePlaybackPositionInternal(const TimeUnit& aTime)
   mCurrentPosition = aTime;
   NS_ASSERTION(mCurrentPosition.Ref() >= TimeUnit::Zero(),
                "CurrentTime should be positive!");
-  mDuration = Some(std::max(mDuration.Ref().ref(), mCurrentPosition.Ref()));
+  if (mDuration.Ref().ref() < mCurrentPosition.Ref()) {
+    mDuration = Some(mCurrentPosition.Ref());
+    DDLOG(DDLogCategory::Property,
+          "duration_us",
+          mDuration.Ref()->ToMicroseconds());
+  }
 }
 
 void
@@ -3114,6 +3147,9 @@ void MediaDecoderStateMachine::BufferedRangeUpdated()
   if (mDuration.Ref().isNothing() || mDuration.Ref()->IsInfinite() ||
       end > mDuration.Ref().ref()) {
     mDuration = Some(end);
+    DDLOG(DDLogCategory::Property,
+          "duration_us",
+          mDuration.Ref()->ToMicroseconds());
   }
 }
 
@@ -3575,6 +3611,7 @@ MediaDecoderStateMachine::ScheduleStateMachine()
                         this,
                         &MediaDecoderStateMachine::RunStateMachine));
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 void
@@ -3819,6 +3856,7 @@ MediaDecoderStateMachine::RequestDebugInfo()
       [self, p]() { p->Resolve(self->GetDebugInfo(), __func__); }),
     AbstractThread::TailDispatch);
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
   return p.forget();
 }
 
@@ -3835,6 +3873,7 @@ void MediaDecoderStateMachine::AddOutputStream(ProcessedMediaStream* aStream,
                             true);
   nsresult rv = OwnerThread()->Dispatch(r.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  Unused << rv;
 }
 
 void MediaDecoderStateMachine::RemoveOutputStream(MediaStream* aStream)
@@ -3850,6 +3889,7 @@ void MediaDecoderStateMachine::RemoveOutputStream(MediaStream* aStream)
                               false);
     nsresult rv = OwnerThread()->Dispatch(r.forget());
     MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
   }
 }
 
