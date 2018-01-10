@@ -52,10 +52,8 @@ NS_IMPL_ISUPPORTS(TRR,
 
 // convert a given host request to a DOH 'body'
 //
-static nsresult
-dohEncode(nsCString aHost,
-          enum TrrType aType,
-          nsCString &aBody)
+nsresult
+TRR::DohEncode(nsCString &aBody)
 {
   const uint8_t DNS_CLASS_IN = 1;
 
@@ -87,19 +85,19 @@ dohEncode(nsCString aHost,
   do {
     bool dotFound = false;
     PRInt32 labelLength;
-    index = aHost.FindChar('.', offset);
+    index = mHost.FindChar('.', offset);
     if (kNotFound != index) {
       dotFound = true;
       labelLength = index - offset;
     } else {
-      labelLength = aHost.Length() - offset;
+      labelLength = mHost.Length() - offset;
     }
     if (labelLength > 63) {
       // too long label!
       return NS_ERROR_UNEXPECTED;
     }
     aBody += static_cast<unsigned char>(labelLength);
-    nsDependentCSubstring label = Substring(aHost, offset, labelLength);
+    nsDependentCSubstring label = Substring(mHost, offset, labelLength);
     aBody.Append(label);
     if(!dotFound) {
       aBody += '\0'; // terminate with a final zero
@@ -109,7 +107,7 @@ dohEncode(nsCString aHost,
   } while(1);
 
   aBody += '\0'; // upper 8 bit TYPE
-  aBody += static_cast<uint8_t>(aType);
+  aBody += static_cast<uint8_t>(mType);
   aBody += '\0'; // upper 8 bit CLASS
   aBody += DNS_CLASS_IN;    // IN - "the Internet"
 
@@ -160,7 +158,7 @@ TRR::DNSoverHTTPS()
 
   if (useGet) {
     nsAutoCString tmp;
-    rv = dohEncode(mHost, mType, tmp);
+    rv = DohEncode(tmp);
     NS_ENSURE_SUCCESS(rv, rv);
 
     rv = Base64URLEncode(tmp.Length(), reinterpret_cast<const unsigned char *>(tmp.get()),
@@ -173,7 +171,7 @@ TRR::DNSoverHTTPS()
     uri.Append(body);
     NS_NewURI(getter_AddRefs(dnsURI), uri);
   } else {
-    rv = dohEncode(mHost, mType, body);
+    rv = DohEncode(body);
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCString uri;

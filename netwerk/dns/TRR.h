@@ -81,6 +81,7 @@ public:
 private:
   ~TRR() {}
   nsresult DNSoverHTTPS();
+  nsresult DohEncode(nsCString &target);
   nsresult DohDecode();
   nsresult ReturnData();
   nsresult FailData();
