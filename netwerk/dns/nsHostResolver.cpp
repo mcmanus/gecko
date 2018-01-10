@@ -272,11 +272,11 @@ nsHostRecord::Complete(nsHostResolver *hostResolver)
     if (mTRRUsed && mNativeUsed) { // race!
         if (mTrrDuration <= mNativeDuration) {
             Telemetry::Accumulate(Telemetry::DNS_TRR_RACE, DNS_RACE_TRR_WON);
-            LOG(("nsHostRecord::Complete %s Dns Race: TRR\n", host));
-            fprintf(stderr,"nsHostRecord::Complete %s Dns Race: TRR\n", host);
+            LOG(("nsHostRecord::Complete %s Dns Race: TRR\n", host.get()));
+            fprintf(stderr,"nsHostRecord::Complete %s Dns Race: TRR\n", host.get());
         } else {
             Telemetry::Accumulate(Telemetry::DNS_TRR_RACE, DNS_RACE_NATIVE_WON);
-            fprintf(stderr, "nsHostRecord::Complete %s Dns Race: NATIVE\n", host);
+            fprintf(stderr, "nsHostRecord::Complete %s Dns Race: NATIVE\n", host.get());
         }
     }
     
@@ -1304,7 +1304,7 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
     bool madeQuery = false;
     do {
         sendAgain = false;
-        fprintf(stderr, "++++++ TRR Resolve %s type %d\n", rec->host, (int)rectype);
+        fprintf(stderr, "++++++ TRR Resolve %s type %d\n", rec->host.get(), (int)rectype);
         RefPtr<TRR> trr = new TRR(this, rec, rectype);
         if (NS_SUCCEEDED(NS_DispatchToMainThread(trr))) {
             rec->mResolving++;
@@ -1410,7 +1410,7 @@ nsHostResolver::NameLookup(nsHostRecord *rec)
 {
     nsresult rv = NS_ERROR_UNKNOWN_HOST;
     if (rec->mResolving) {
-        fprintf(stderr, "NameLookup %s while already resolving\n", rec->host);
+        fprintf(stderr, "NameLookup %s while already resolving\n", rec->host.get());
         return NS_OK;
     }
 
