@@ -286,7 +286,7 @@ function promisePanelElementHidden(win, aPanel) {
     function onPanelClose(e) {
       aPanel.removeEventListener("popuphidden", onPanelClose);
       win.clearTimeout(timeoutId);
-      resolve();
+      executeSoon(resolve);
     }
     aPanel.addEventListener("popuphidden", onPanelClose);
   });
@@ -401,7 +401,7 @@ function promiseTabHistoryNavigation(aDirection = -1, aConditionFn) {
     }
     gBrowser.addEventListener("pageshow", listener, true);
 
-    content.history.go(aDirection);
+    gBrowser.contentWindowAsCPOW.history.go(aDirection);
 
   });
 }

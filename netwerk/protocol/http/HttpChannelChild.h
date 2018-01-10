@@ -96,6 +96,7 @@ public:
                               bool aMerge) override;
   NS_IMETHOD SetEmptyRequestHeader(const nsACString& aHeader) override;
   NS_IMETHOD RedirectTo(nsIURI *newURI) override;
+  NS_IMETHOD UpgradeToSecure() override;
   NS_IMETHOD GetProtocolVersion(nsACString& aProtocolVersion) override;
   // nsIHttpChannelInternal
   NS_IMETHOD SetupFallbackChannel(const char *aFallbackKey) override;
@@ -241,7 +242,8 @@ private:
                                  const uint32_t& aCount,
                                  const nsCString& aData);
   void ProcessOnStopRequest(const nsresult& aStatusCode,
-                            const ResourceTimingStruct& aTiming);
+                            const ResourceTimingStruct& aTiming,
+                            const nsHttpHeaderArray& aResponseTrailers);
   void ProcessOnProgress(const int64_t& aProgress, const int64_t& aProgressMax);
   void ProcessOnStatus(const nsresult& aStatus);
   void ProcessFlushedForDiversion();
@@ -414,7 +416,9 @@ private:
                           const uint64_t& offset,
                           const uint32_t& count,
                           const nsCString& data);
-  void OnStopRequest(const nsresult& channelStatus, const ResourceTimingStruct& timing);
+  void OnStopRequest(const nsresult& channelStatus,
+                     const ResourceTimingStruct& timing,
+                     const nsHttpHeaderArray& aResponseTrailers);
   void MaybeDivertOnStop(const nsresult& aChannelStatus);
   void OnProgress(const int64_t& progress, const int64_t& progressMax);
   void OnStatus(const nsresult& status);

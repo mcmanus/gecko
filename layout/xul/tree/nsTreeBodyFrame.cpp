@@ -43,7 +43,6 @@
 #include "nsIDocument.h"
 #include "mozilla/css/StyleRule.h"
 #include "nsCSSRendering.h"
-#include "nsIXULTemplateBuilder.h"
 #include "nsString.h"
 #include "nsContainerFrame.h"
 #include "nsView.h"
@@ -187,7 +186,7 @@ nsTreeBodyFrame::GetXULMinSize(nsBoxLayoutState& aBoxLayoutState)
 {
   EnsureView();
 
-  nsIContent* baseElement = GetBaseElement();
+  Element* baseElement = GetBaseElement();
 
   nsSize min(0,0);
   int32_t desiredRows;
@@ -207,8 +206,7 @@ nsTreeBodyFrame::GetXULMinSize(nsBoxLayoutState& aBoxLayoutState)
     else {
       desiredRows = 1;
     }
-  }
-  else {
+  } else {
     // tree
     nsAutoString rows;
     baseElement->GetAttr(kNameSpaceID_None, nsGkAtoms::rows, rows);
@@ -426,14 +424,15 @@ nsTreeBodyFrame::ReflowFinished()
     ScrollParts parts = GetScrollParts();
     mHorzWidth = CalcHorzWidth(parts);
     if (!mHasFixedRowCount) {
-      mPageLength = mInnerBox.height / mRowHeight;
+      mPageLength =
+        (mRowHeight > 0) ? (mInnerBox.height / mRowHeight) : mRowCount;
     }
 
     int32_t lastPageTopRow = std::max(0, mRowCount - mPageLength);
     if (mTopRowIndex > lastPageTopRow)
       ScrollToRowInternal(parts, lastPageTopRow);
 
-    nsIContent *treeContent = GetBaseElement();
+    Element* treeContent = GetBaseElement();
     if (treeContent &&
         treeContent->AttrValueIs(kNameSpaceID_None,
                                  nsGkAtoms::keepcurrentinview,
@@ -836,12 +835,12 @@ nsTreeBodyFrame::ScrollParts nsTreeBodyFrame::GetScrollParts()
     if (result.mHScrollbar) {
       result.mHScrollbar->SetScrollbarMediatorContent(GetContent());
       nsIFrame* f = do_QueryFrame(result.mHScrollbar);
-      result.mHScrollbarContent = f->GetContent();
+      result.mHScrollbarContent = f->GetContent()->AsElement();
     }
     if (result.mVScrollbar) {
       result.mVScrollbar->SetScrollbarMediatorContent(GetContent());
       nsIFrame* f = do_QueryFrame(result.mVScrollbar);
-      result.mVScrollbarContent = f->GetContent();
+      result.mVScrollbarContent = f->GetContent()->AsElement();
     }
   }
   return result;
@@ -1288,6 +1287,9 @@ nsTreeBodyFrame::GetCoordsForCellItem(int32_t aRow, nsITreeColumn* aCol, const n
 int32_t
 nsTreeBodyFrame::GetRowAt(int32_t aX, int32_t aY)
 {
+  if (mRowHeight <= 0)
+    return -1;
+
   // Now just mod by our total inner box height and add to our top row index.
   int32_t row = (aY/mRowHeight)+mTopRowIndex;
 
@@ -2003,7 +2005,7 @@ nsTreeBodyFrame::PrefillPropertyArray(int32_t aRowIndex, nsTreeColumn* aCol)
     else
       mScratchArray.AppendElement(nsGkAtoms::even);
 
-    nsIContent* baseContent = GetBaseElement();
+    Element* baseContent = GetBaseElement();
     if (baseContent && baseContent->HasAttr(kNameSpaceID_None, nsGkAtoms::editing))
       mScratchArray.AppendElement(nsGkAtoms::editing);
 
@@ -2042,13 +2044,17 @@ nsTreeBodyFrame::PrefillPropertyArray(int32_t aRowIndex, nsTreeColumn* aCol)
     }
 
     // Read special properties from attributes on the column content node
-    if (aCol->mContent->AttrValueIs(kNameSpaceID_None,
-                                    nsGkAtoms::insertbefore,
-                                    nsGkAtoms::_true, eCaseMatters))
+    if (aCol->mContent->IsElement() &&
+        aCol->mContent->AsElement()->AttrValueIs(kNameSpaceID_None,
+                                                 nsGkAtoms::insertbefore,
+                                                 nsGkAtoms::_true,
+                                                 eCaseMatters))
       mScratchArray.AppendElement(nsGkAtoms::insertbefore);
-    if (aCol->mContent->AttrValueIs(kNameSpaceID_None,
-                                    nsGkAtoms::insertafter,
-                                    nsGkAtoms::_true, eCaseMatters))
+    if (aCol->mContent->IsElement() &&
+        aCol->mContent->AsElement()->AttrValueIs(kNameSpaceID_None,
+                                                 nsGkAtoms::insertafter,
+                                                 nsGkAtoms::_true,
+                                                 eCaseMatters))
       mScratchArray.AppendElement(nsGkAtoms::insertafter);
   }
 }
@@ -2816,7 +2822,7 @@ public:
     DrawTargetAutoDisableSubpixelAntialiasing disable(aCtx->GetDrawTarget(),
                                                       mDisableSubpixelAA);
 
-    DrawResult result = static_cast<nsTreeBodyFrame*>(mFrame)
+    ImgDrawResult result = static_cast<nsTreeBodyFrame*>(mFrame)
       ->PaintTreeBody(*aCtx, mVisibleRect, ToReferenceFrame(), aBuilder);
 
     nsDisplayItemGenericImageGeometry::UpdateDrawResult(this, result);
@@ -2899,7 +2905,7 @@ nsTreeBodyFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 #endif
 }
 
-DrawResult
+ImgDrawResult
 nsTreeBodyFrame::PaintTreeBody(gfxContext& aRenderingContext,
                                const nsRect& aDirtyRect, nsPoint aPt,
                                nsDisplayListBuilder* aBuilder)
@@ -2915,7 +2921,7 @@ nsTreeBodyFrame::PaintTreeBody(gfxContext& aRenderingContext,
                         *drawTarget));
   int32_t oldPageCount = mPageLength;
   if (!mHasFixedRowCount)
-    mPageLength = mInnerBox.height/mRowHeight;
+    mPageLength = (mRowHeight > 0) ? (mInnerBox.height/mRowHeight) : mRowCount;
 
   if (oldPageCount != mPageLength || mHorzWidth != CalcHorzWidth(GetScrollParts())) {
     // Schedule a ResizeReflow that will update our info properly.
@@ -2928,7 +2934,7 @@ nsTreeBodyFrame::PaintTreeBody(gfxContext& aRenderingContext,
   NS_WARNING_ASSERTION(mRowCount == rowCount, "row count changed unexpectedly");
 #endif
 
-  DrawResult result = DrawResult::SUCCESS;
+  ImgDrawResult result = ImgDrawResult::SUCCESS;
 
   // Loop through our columns and paint them (e.g., for sorting).  This is only
   // relevant when painting backgrounds, since columns contain no content.  Content
@@ -2983,7 +2989,7 @@ nsTreeBodyFrame::PaintTreeBody(gfxContext& aRenderingContext,
 
 
 
-DrawResult
+ImgDrawResult
 nsTreeBodyFrame::PaintColumn(nsTreeColumn*        aColumn,
                              const nsRect&        aColumnRect,
                              nsPresContext*      aPresContext,
@@ -3013,7 +3019,7 @@ nsTreeBodyFrame::PaintColumn(nsTreeColumn*        aColumn,
                               colRect, aDirtyRect);
 }
 
-DrawResult
+ImgDrawResult
 nsTreeBodyFrame::PaintRow(int32_t               aRowIndex,
                           const nsRect&         aRowRect,
                           nsPresContext*        aPresContext,
@@ -3027,7 +3033,7 @@ nsTreeBodyFrame::PaintRow(int32_t               aRowIndex,
 
   // Without a view, we have no data. Check for this up front.
   if (!mView) {
-    return DrawResult::SUCCESS;
+    return ImgDrawResult::SUCCESS;
   }
 
   nsresult rv;
@@ -3051,7 +3057,7 @@ nsTreeBodyFrame::PaintRow(int32_t               aRowIndex,
   rowContext->StyleMargin()->GetMargin(rowMargin);
   rowRect.Deflate(rowMargin);
 
-  DrawResult result = DrawResult::SUCCESS;
+  ImgDrawResult result = ImgDrawResult::SUCCESS;
 
   // Paint our borders and background for our row rect.
   nsITheme* theme = nullptr;
@@ -3173,7 +3179,7 @@ nsTreeBodyFrame::PaintRow(int32_t               aRowIndex,
   return result;
 }
 
-DrawResult
+ImgDrawResult
 nsTreeBodyFrame::PaintSeparator(int32_t              aRowIndex,
                                 const nsRect&        aSeparatorRect,
                                 nsPresContext*      aPresContext,
@@ -3191,7 +3197,7 @@ nsTreeBodyFrame::PaintSeparator(int32_t              aRowIndex,
       useTheme = true;
   }
 
-  DrawResult result = DrawResult::SUCCESS;
+  ImgDrawResult result = ImgDrawResult::SUCCESS;
 
   // use -moz-appearance if provided.
   if (useTheme) {
@@ -3230,7 +3236,7 @@ nsTreeBodyFrame::PaintSeparator(int32_t              aRowIndex,
   return result;
 }
 
-DrawResult
+ImgDrawResult
 nsTreeBodyFrame::PaintCell(int32_t               aRowIndex,
                            nsTreeColumn*         aColumn,
                            const nsRect&         aCellRect,
@@ -3264,7 +3270,7 @@ nsTreeBodyFrame::PaintCell(int32_t               aRowIndex,
   cellRect.Deflate(cellMargin);
 
   // Paint our borders and background for our row rect.
-  DrawResult result = PaintBackgroundLayer(cellContext, aPresContext,
+  ImgDrawResult result = PaintBackgroundLayer(cellContext, aPresContext,
                                            aRenderingContext, cellRect,
                                            aDirtyRect);
 
@@ -3435,7 +3441,7 @@ nsTreeBodyFrame::PaintCell(int32_t               aRowIndex,
   return result;
 }
 
-DrawResult
+ImgDrawResult
 nsTreeBodyFrame::PaintTwisty(int32_t              aRowIndex,
                              nsTreeColumn*        aColumn,
                              const nsRect&        aTwistyRect,
@@ -3482,7 +3488,7 @@ nsTreeBodyFrame::PaintTwisty(int32_t              aRowIndex,
   if (!isRTL)
     aCurrX += copyRect.width;
 
-  DrawResult result = DrawResult::SUCCESS;
+  ImgDrawResult result = ImgDrawResult::SUCCESS;
 
   if (shouldPaint) {
     // Paint our borders and background for our image rect.
@@ -3536,7 +3542,7 @@ nsTreeBodyFrame::PaintTwisty(int32_t              aRowIndex,
   return result;
 }
 
-DrawResult
+ImgDrawResult
 nsTreeBodyFrame::PaintImage(int32_t               aRowIndex,
                             nsTreeColumn*         aColumn,
                             const nsRect&         aImageRect,
@@ -3572,7 +3578,7 @@ nsTreeBodyFrame::PaintImage(int32_t               aRowIndex,
   // Get the image destination size.
   nsSize imageDestSize = GetImageDestSize(imageContext, useImageRegion, image);
   if (!imageDestSize.width || !imageDestSize.height) {
-    return DrawResult::SUCCESS;
+    return ImgDrawResult::SUCCESS;
   }
 
   // Get the borders and padding.
@@ -3609,7 +3615,7 @@ nsTreeBodyFrame::PaintImage(int32_t               aRowIndex,
     }
   }
 
-  DrawResult result = DrawResult::SUCCESS;
+  ImgDrawResult result = ImgDrawResult::SUCCESS;
 
   if (image) {
     if (isRTL)
@@ -3720,7 +3726,7 @@ nsTreeBodyFrame::PaintImage(int32_t               aRowIndex,
 #ifdef _MSC_VER
 # pragma optimize("g", off)
 #endif
-DrawResult
+ImgDrawResult
 nsTreeBodyFrame::PaintText(int32_t              aRowIndex,
                            nsTreeColumn*        aColumn,
                            const nsRect&        aTextRect,
@@ -3745,7 +3751,7 @@ nsTreeBodyFrame::PaintText(int32_t              aRowIndex,
   // necessary
   CheckTextForBidi(text);
 
-  DrawResult result = DrawResult::SUCCESS;
+  ImgDrawResult result = ImgDrawResult::SUCCESS;
 
   if (text.Length() == 0) {
     // Don't paint an empty string. XXX What about background/borders? Still paint?
@@ -3855,7 +3861,7 @@ nsTreeBodyFrame::PaintText(int32_t              aRowIndex,
 # pragma optimize("", on)
 #endif
 
-DrawResult
+ImgDrawResult
 nsTreeBodyFrame::PaintCheckbox(int32_t              aRowIndex,
                                nsTreeColumn*        aColumn,
                                const nsRect&        aCheckboxRect,
@@ -3888,7 +3894,7 @@ nsTreeBodyFrame::PaintCheckbox(int32_t              aRowIndex,
     checkboxRect.x = rightEdge - checkboxRect.width;
 
   // Paint our borders and background for our image rect.
-  DrawResult result = PaintBackgroundLayer(checkboxContext, aPresContext,
+  ImgDrawResult result = PaintBackgroundLayer(checkboxContext, aPresContext,
                                            aRenderingContext, checkboxRect,
                                            aDirtyRect);
 
@@ -3924,7 +3930,7 @@ nsTreeBodyFrame::PaintCheckbox(int32_t              aRowIndex,
   return result;
 }
 
-DrawResult
+ImgDrawResult
 nsTreeBodyFrame::PaintProgressMeter(int32_t               aRowIndex,
                                     nsTreeColumn*         aColumn,
                                     const nsRect&         aProgressMeterRect,
@@ -3948,7 +3954,7 @@ nsTreeBodyFrame::PaintProgressMeter(int32_t               aRowIndex,
   meterRect.Deflate(meterMargin);
 
   // Paint our borders and background for our progress meter rect.
-  DrawResult result = PaintBackgroundLayer(meterContext, aPresContext,
+  ImgDrawResult result = PaintBackgroundLayer(meterContext, aPresContext,
                                            aRenderingContext, meterRect,
                                            aDirtyRect);
 
@@ -4028,7 +4034,7 @@ nsTreeBodyFrame::PaintProgressMeter(int32_t               aRowIndex,
 }
 
 
-DrawResult
+ImgDrawResult
 nsTreeBodyFrame::PaintDropFeedback(const nsRect&        aDropFeedbackRect,
                                    nsPresContext*      aPresContext,
                                    gfxContext&          aRenderingContext,
@@ -4059,7 +4065,7 @@ nsTreeBodyFrame::PaintDropFeedback(const nsRect&        aDropFeedbackRect,
   // Resolve the style to use for the drop feedback.
   nsStyleContext* feedbackContext = GetPseudoStyleContext(nsCSSAnonBoxes::mozTreeDropFeedback);
 
-  DrawResult result = DrawResult::SUCCESS;
+  ImgDrawResult result = ImgDrawResult::SUCCESS;
 
   // Paint only if it is visible.
   if (feedbackContext->StyleVisibility()->IsVisibleOrCollapsed()) {
@@ -4137,7 +4143,7 @@ nsTreeBodyFrame::PaintDropFeedback(const nsRect&        aDropFeedbackRect,
   return result;
 }
 
-DrawResult
+ImgDrawResult
 nsTreeBodyFrame::PaintBackgroundLayer(nsStyleContext*      aStyleContext,
                                       nsPresContext*      aPresContext,
                                       gfxContext&          aRenderingContext,
@@ -4149,7 +4155,7 @@ nsTreeBodyFrame::PaintBackgroundLayer(nsStyleContext*      aStyleContext,
     nsCSSRendering::PaintBGParams::ForAllLayers(*aPresContext,
                                                 aDirtyRect, aRect, this,
                                                 nsCSSRendering::PAINTBG_SYNC_DECODE_IMAGES);
-  DrawResult result =
+  ImgDrawResult result =
     nsCSSRendering::PaintStyleImageLayerWithSC(params, aRenderingContext, aStyleContext,
                                                *myBorder);
 
@@ -4452,7 +4458,7 @@ nsTreeBodyFrame::ThumbMoved(nsScrollbarFrame* aScrollbar,
   if (parts.mVScrollbar == aScrollbar) {
     nscoord rh = nsPresContext::AppUnitsToIntCSSPixels(mRowHeight);
     nscoord newIndex = nsPresContext::AppUnitsToIntCSSPixels(aNewPos);
-    nscoord newrow = newIndex/rh;
+    nscoord newrow = (rh > 0) ? (newIndex/rh) : 0;
     ScrollInternal(parts, newrow);
   // Horizontal Scrollbar
   } else if (parts.mHScrollbar == aScrollbar) {
@@ -4473,7 +4479,7 @@ nsTreeBodyFrame::GetPseudoStyleContext(nsICSSAnonBoxPseudo* aPseudoElement)
                                      mScratchArray);
 }
 
-nsIContent*
+Element*
 nsTreeBodyFrame::GetBaseElement()
 {
   nsIFrame* parent = GetParent();
@@ -4485,7 +4491,7 @@ nsTreeBodyFrame::GetBaseElement()
       if (ni->Equals(nsGkAtoms::tree, kNameSpaceID_XUL) ||
           (ni->Equals(nsGkAtoms::select) &&
            content->IsHTMLElement()))
-        return content;
+        return content->AsElement();
     }
 
     parent = parent->GetParent();

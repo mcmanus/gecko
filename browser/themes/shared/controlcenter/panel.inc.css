@@ -11,6 +11,12 @@
   display: none;
 }
 
+/* This is used by screenshots tests to hide intermittently different
+ * identity popup shadows (see bug 1425253). */
+#identity-popup.no-shadow {
+  -moz-window-shadow: none;
+}
+
 /* Show the right elements for the right connection states. */
 #identity-popup[connection=not-secure] [when-connection~=not-secure],
 #identity-popup[connection=secure-cert-user-overridden] [when-connection~=secure-cert-user-overridden],
@@ -78,6 +84,9 @@
   background-repeat: no-repeat;
   background-position: 1em 1em;
   background-size: 24px auto;
+  -moz-context-properties: fill, fill-opacity;
+  fill: currentColor;
+  fill-opacity: .6;
   padding: 0.5em 0 1em;
   /* .identity-popup-host depends on this width */
   padding-inline-start: calc(2em + 24px);

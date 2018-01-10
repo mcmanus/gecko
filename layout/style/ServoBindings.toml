@@ -168,6 +168,7 @@ rusty-enums = [
     "StyleBasicShapeType",
     "nsStyleImageLayers_Size_DimensionType",
     "StyleStackSizing",
+    "StyleBorderImageRepeat",
     "StyleBoxPack",
     "StyleBoxOrient",
     "StyleBoxAlign",
@@ -211,6 +212,7 @@ whitelist-vars = [
     "kGenericFont_.*",
     "kPresContext_.*",
     "nsContentUtils_.*",
+    "GECKO_IS_NIGHTLY",
 ]
 whitelist-types = [
     "RawGecko.*",

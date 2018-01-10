@@ -72,7 +72,6 @@
 #include "mozilla/dom/SelectionBinding.h"
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/Telemetry.h"
-#include "mozilla/layers/ScrollInputMethods.h"
 #include "nsViewManager.h"
 
 #include "nsFocusManager.h"
@@ -80,7 +79,6 @@
 
 using namespace mozilla;
 using namespace mozilla::dom;
-using mozilla::layers::ScrollInputMethod;
 
 //#define DEBUG_TABLE 1
 
@@ -603,7 +601,7 @@ Selection::GetTableCellLocationFromRange(nsRange* aRange,
   if (!content)
     return NS_ERROR_FAILURE;
 
-  nsCOMPtr<nsIContent> child = content->GetChildAt(aRange->StartOffset());
+  nsCOMPtr<nsIContent> child = content->GetChildAt_Deprecated(aRange->StartOffset());
   if (!child)
     return NS_ERROR_FAILURE;
 
@@ -710,7 +708,7 @@ Selection::GetTableSelectionType(nsIDOMRange* aDOMRange,
   }
   else //check to see if we are selecting a table or row (column and all cells not done yet)
   {
-    nsIContent *child = startNode->GetChildAt(startOffset);
+    nsIContent *child = startNode->GetChildAt_Deprecated(startOffset);
     if (!child)
       return NS_ERROR_FAILURE;
 
@@ -778,6 +776,18 @@ Selection::GetParentObject() const
   return nullptr;
 }
 
+DocGroup*
+Selection::GetDocGroup() const
+{
+  nsIPresShell* shell = GetPresShell();
+  if (!shell) {
+    return nullptr;
+  }
+
+  nsIDocument* doc = shell->GetDocument();
+  return doc ? doc->GetDocGroup() : nullptr;
+}
+
 NS_IMPL_CYCLE_COLLECTION_CLASS(Selection)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Selection)
@@ -816,6 +826,35 @@ NS_INTERFACE_MAP_END
 NS_IMPL_CYCLE_COLLECTING_ADDREF(Selection)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(Selection)
 
+const RangeBoundary&
+Selection::AnchorRef()
+{
+  if (!mAnchorFocusRange) {
+    static RangeBoundary sEmpty;
+    return sEmpty;
+  }
+
+  if (GetDirection() == eDirNext) {
+    return mAnchorFocusRange->StartRef();
+  }
+
+  return mAnchorFocusRange->EndRef();
+}
+
+const RangeBoundary&
+Selection::FocusRef()
+{
+  if (!mAnchorFocusRange) {
+    static RangeBoundary sEmpty;
+    return sEmpty;
+  }
+
+  if (GetDirection() == eDirNext){
+    return mAnchorFocusRange->EndRef();
+  }
+
+  return mAnchorFocusRange->StartRef();
+}
 
 NS_IMETHODIMP
 Selection::GetAnchorNode(nsIDOMNode** aAnchorNode)
@@ -827,19 +866,6 @@ Selection::GetAnchorNode(nsIDOMNode** aAnchorNode)
 
   *aAnchorNode = nullptr;
   return NS_OK;
-}
-
-nsINode*
-Selection::GetAnchorNode()
-{
-  if (!mAnchorFocusRange)
-    return nullptr;
-
-  if (GetDirection() == eDirNext) {
-    return mAnchorFocusRange->GetStartContainer();
-  }
-
-  return mAnchorFocusRange->GetEndContainer();
 }
 
 NS_IMETHODIMP
@@ -862,19 +888,6 @@ Selection::GetFocusNode(nsIDOMNode** aFocusNode)
   return NS_OK;
 }
 
-nsINode*
-Selection::GetFocusNode()
-{
-  if (!mAnchorFocusRange)
-    return nullptr;
-
-  if (GetDirection() == eDirNext){
-    return mAnchorFocusRange->GetEndContainer();
-  }
-
-  return mAnchorFocusRange->GetStartContainer();
-}
-
 NS_IMETHODIMP
 Selection::GetFocusOffset(int32_t* aFocusOffset)
 {
@@ -894,60 +907,6 @@ Selection::SetAnchorFocusRange(int32_t indx)
   else{
     mAnchorFocusRange = mRanges[indx].mRange;
   }
-}
-
-uint32_t
-Selection::AnchorOffset()
-{
-  if (!mAnchorFocusRange)
-    return 0;
-
-  if (GetDirection() == eDirNext){
-    return mAnchorFocusRange->StartOffset();
-  }
-
-  return mAnchorFocusRange->EndOffset();
-}
-
-uint32_t
-Selection::FocusOffset()
-{
-  if (!mAnchorFocusRange)
-    return 0;
-
-  if (GetDirection() == eDirNext){
-    return mAnchorFocusRange->EndOffset();
-  }
-
-  return mAnchorFocusRange->StartOffset();
-}
-
-nsIContent*
-Selection::GetChildAtAnchorOffset()
-{
-  if (!mAnchorFocusRange) {
-    return nullptr;
-  }
-
-  if (GetDirection() == eDirNext) {
-    return mAnchorFocusRange->GetChildAtStartOffset();
-  }
-
-  return mAnchorFocusRange->GetChildAtEndOffset();
-}
-
-nsIContent*
-Selection::GetChildAtFocusOffset()
-{
-  if (!mAnchorFocusRange) {
-    return nullptr;
-  }
-
-  if (GetDirection() == eDirNext){
-    return mAnchorFocusRange->GetChildAtEndOffset();
-  }
-
-  return mAnchorFocusRange->GetChildAtStartOffset();
 }
 
 static nsresult
@@ -3714,11 +3673,6 @@ Selection::ScrollIntoView(SelectionRegion aRegion,
   }
   if (aFlags & Selection::SCROLL_OVERFLOW_HIDDEN) {
     flags |= nsIPresShell::SCROLL_OVERFLOW_HIDDEN;
-  }
-
-  if (aFlags & Selection::SCROLL_FOR_CARET_MOVE) {
-    mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
-        (uint32_t) ScrollInputMethod::MainThreadScrollCaretIntoView);
   }
 
   presShell->ScrollFrameRectIntoView(frame, rect, aVertical, aHorizontal,

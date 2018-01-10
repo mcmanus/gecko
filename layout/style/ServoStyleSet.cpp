@@ -373,10 +373,6 @@ ServoStyleSet::PreTraverseSync()
 
   LookAndFeel::NativeInit();
 
-  // This is lazily computed and pseudo matching needs to access
-  // it so force computation early.
-  mPresContext->Document()->GetDocumentState();
-
   if (gfxUserFontSet* userFontSet = mPresContext->Document()->GetUserFontSet()) {
     // Ensure that the @font-face data is not stale
     uint64_t generation = userFontSet->GetGeneration();
@@ -841,7 +837,7 @@ ServoStyleSet::AddDocStyleSheet(ServoStyleSheet* aSheet,
   RemoveSheetOfType(SheetType::Doc, aSheet);
 
   size_t index =
-    aDocument->FindDocStyleSheetInsertionPoint(mSheets[SheetType::Doc], aSheet);
+    aDocument->FindDocStyleSheetInsertionPoint(mSheets[SheetType::Doc], *aSheet);
 
   if (index < mSheets[SheetType::Doc].Length()) {
     // This case is insert before.
@@ -1036,6 +1032,10 @@ ServoStyleSet::StyleNewSubtree(Element* aRoot)
 void
 ServoStyleSet::MarkOriginsDirty(OriginFlags aChangedOrigins)
 {
+  if (MOZ_UNLIKELY(!mRawSet)) {
+    return;
+  }
+
   SetStylistStyleSheetsDirty();
   Servo_StyleSet_NoteStyleSheetsChanged(mRawSet.get(),
                                         mAuthorStyleDisabled,

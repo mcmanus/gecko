@@ -178,7 +178,7 @@ nsListControlFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     // XXX Because we have an opaque widget and we get called to paint with
     // this frame as the root of a stacking context we need make sure to draw
     // some opaque color over the whole widget. (Bug 511323)
-    aLists.BorderBackground()->AppendNewToBottom(
+    aLists.BorderBackground()->AppendToBottom(
       new (aBuilder) nsDisplaySolidColor(aBuilder,
         this, nsRect(aBuilder->ToReferenceFrame(this), GetSize()),
         mLastDropdownBackstopColor));
@@ -475,8 +475,7 @@ nsListControlFrame::Reflow(nsPresContext*           aPresContext,
   // of the reflow protocol, but things seem to work fine without it...
   // Is that just an implementation detail of nsHTMLScrollFrame that
   // we're depending on?
-  nsHTMLScrollFrame::DidReflow(aPresContext, &state,
-                               nsDidReflowStatus::FINISHED);
+  nsHTMLScrollFrame::DidReflow(aPresContext, &state);
 
   // Now compute the block size we want to have
   nscoord computedBSize = CalcIntrinsicBSize(BSizeOfARow(), length);
@@ -558,8 +557,7 @@ nsListControlFrame::ReflowAsDropdown(nsPresContext*           aPresContext,
   // of the reflow protocol, but things seem to work fine without it...
   // Is that just an implementation detail of nsHTMLScrollFrame that
   // we're depending on?
-  nsHTMLScrollFrame::DidReflow(aPresContext, &state,
-                               nsDidReflowStatus::FINISHED);
+  nsHTMLScrollFrame::DidReflow(aPresContext, &state);
 
   // Now compute the block size we want to have.
   // Note: no need to apply min/max constraints, since we have no such
@@ -1506,13 +1504,12 @@ nsListControlFrame::AboutToRollup()
 
 void
 nsListControlFrame::DidReflow(nsPresContext*           aPresContext,
-                              const ReflowInput* aReflowInput,
-                              nsDidReflowStatus        aStatus)
+                              const ReflowInput* aReflowInput)
 {
   bool wasInterrupted = !mHasPendingInterruptAtStartOfReflow &&
                           aPresContext->HasPendingInterrupt();
 
-  nsHTMLScrollFrame::DidReflow(aPresContext, aReflowInput, aStatus);
+  nsHTMLScrollFrame::DidReflow(aPresContext, aReflowInput);
 
   if (mNeedToReset && !wasInterrupted) {
     mNeedToReset = false;

@@ -21,7 +21,11 @@ class MediaSource;
 
 } // namespace dom
 
-class MediaSourceDecoder : public MediaDecoder
+DDLoggedTypeDeclNameAndBase(MediaSourceDecoder, MediaDecoder);
+
+class MediaSourceDecoder
+  : public MediaDecoder
+  , public DecoderDoctorLifeLogger<MediaSourceDecoder>
 {
 public:
   explicit MediaSourceDecoder(MediaDecoderInit& aInit);
@@ -69,13 +73,10 @@ public:
   void NotifyDataArrived();
 
 private:
-  void PinForSeek() override {}
-  void UnpinForSeek() override {}
   MediaDecoderStateMachine* CreateStateMachine();
   void DoSetMediaSourceDuration(double aDuration);
   media::TimeInterval ClampIntervalToEnd(const media::TimeInterval& aInterval);
   bool CanPlayThroughImpl() override;
-  bool IsLiveStream() override final { return !mEnded; }
 
   RefPtr<nsIPrincipal> mPrincipal;
 

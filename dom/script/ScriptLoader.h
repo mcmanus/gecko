@@ -242,7 +242,7 @@ public:
                             ScriptLoadRequest* aRequest,
                             nsresult aChannelStatus,
                             nsresult aSRIStatus,
-                            mozilla::dom::SRICheckDataVerifier* aSRIDataVerifier);
+                            SRICheckDataVerifier* aSRIDataVerifier);
 
   /**
    * Returns wether any request is queued, and not executed yet.
@@ -340,10 +340,12 @@ private:
   virtual ~ScriptLoader();
 
   ScriptLoadRequest* CreateLoadRequest(ScriptKind aKind,
+                                       nsIURI* aURI,
                                        nsIScriptElement* aElement,
                                        ValidJSVersion aValidJSVersion,
                                        mozilla::CORSMode aCORSMode,
-                                       const mozilla::dom::SRIMetadata& aIntegrity);
+                                       const SRIMetadata& aIntegrity,
+                                       mozilla::net::ReferrerPolicy aReferrerPolicy);
 
   /**
    * Unblocks the creator parser of the parser-blocking scripts.
@@ -376,6 +378,8 @@ private:
    * success, as this error code is used to abort the input stream.
    */
   nsresult RestartLoad(ScriptLoadRequest* aRequest);
+
+  void HandleLoadError(ScriptLoadRequest *aRequest, nsresult aResult);
 
   /**
    * Process any pending requests asynchronously (i.e. off an event) if there
@@ -410,6 +414,16 @@ private:
   {
     return mEnabled && !mBlockerCount;
   }
+
+  nsresult VerifySRI(ScriptLoadRequest *aRequest,
+                     nsIIncrementalStreamLoader* aLoader,
+                     nsresult aSRIStatus,
+                     SRICheckDataVerifier* aSRIDataVerifier) const;
+
+  nsresult SaveSRIHash(ScriptLoadRequest *aRequest,
+                       SRICheckDataVerifier* aSRIDataVerifier) const;
+
+  void ReportErrorToConsole(ScriptLoadRequest *aRequest, nsresult aResult) const;
 
   nsresult AttemptAsyncScriptCompile(ScriptLoadRequest* aRequest);
   nsresult ProcessRequest(ScriptLoadRequest* aRequest);
@@ -471,8 +485,8 @@ private:
 
   bool IsFetchingModule(ModuleLoadRequest* aRequest) const;
 
-  bool ModuleMapContainsModule(ModuleLoadRequest* aRequest) const;
-  RefPtr<mozilla::GenericPromise> WaitForModuleFetch(ModuleLoadRequest* aRequest);
+  bool ModuleMapContainsURL(nsIURI* aURL) const;
+  RefPtr<mozilla::GenericPromise> WaitForModuleFetch(nsIURI* aURL);
   ModuleScript* GetFetchedModule(nsIURI* aURL) const;
 
   friend bool
@@ -488,10 +502,11 @@ private:
   void CheckModuleDependenciesLoaded(ModuleLoadRequest* aRequest);
   void ProcessLoadedModuleTree(ModuleLoadRequest* aRequest);
   bool InstantiateModuleTree(ModuleLoadRequest* aRequest);
+  JS::Value FindFirstParseError(ModuleLoadRequest* aRequest);
   void StartFetchingModuleDependencies(ModuleLoadRequest* aRequest);
 
   RefPtr<mozilla::GenericPromise>
-  StartFetchingModuleAndDependencies(ModuleLoadRequest* aRequest, nsIURI* aURI);
+  StartFetchingModuleAndDependencies(ModuleLoadRequest* aParent, nsIURI* aURI);
 
   nsIDocument* mDocument;                   // [WEAK]
   nsCOMArray<nsIScriptLoaderObserver> mObservers;

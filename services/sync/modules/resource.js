@@ -31,12 +31,17 @@ Cu.importGlobalProperties(["fetch"]);
  */
 this.Resource = function Resource(uri) {
   this._log = Log.repository.getLogger(this._logName);
-  this._log.level = Log.Level[Svc.Prefs.get("log.logger.network.resources")];
+  this._log.manageLevelFromPref("services.sync.log.logger.network.resources");
   this.uri = uri;
   this._headers = {};
 };
 // (static) Caches the latest server timestamp (X-Weave-Timestamp header).
 Resource.serverTime = null;
+
+XPCOMUtils.defineLazyPreferenceGetter(Resource,
+                                      "SEND_VERSION_INFO",
+                                      "services.sync.sendVersionInfo",
+                                      true);
 Resource.prototype = {
   _logName: "Sync.Resource",
 
@@ -91,7 +96,7 @@ Resource.prototype = {
   _buildHeaders(method) {
     const headers = new Headers(this._headers);
 
-    if (Svc.Prefs.get("sendVersionInfo", true)) {
+    if (Resource.SEND_VERSION_INFO) {
       headers.append("user-agent", Utils.userAgent);
     }
 
@@ -171,6 +176,7 @@ Resource.prototype = {
     try {
       response = await responsePromise;
     } catch (e) {
+      this._log.warn(`${method} request to ${this.uri.spec} failed`, e);
       if (!didTimeout) {
         throw e;
       }

@@ -370,8 +370,7 @@ MinorGC(JSContext* cx, unsigned argc, Value* vp)
     _("allocationThreshold",        JSGC_ALLOCATION_THRESHOLD,           true)  \
     _("minEmptyChunkCount",         JSGC_MIN_EMPTY_CHUNK_COUNT,          true)  \
     _("maxEmptyChunkCount",         JSGC_MAX_EMPTY_CHUNK_COUNT,          true)  \
-    _("compactingEnabled",          JSGC_COMPACTING_ENABLED,             true)  \
-    _("refreshFrameSlicesEnabled",  JSGC_REFRESH_FRAME_SLICES_ENABLED,   true)
+    _("compactingEnabled",          JSGC_COMPACTING_ENABLED,             true)
 
 static const struct ParamInfo {
     const char*     name;
@@ -3101,6 +3100,17 @@ HelperThreadCount(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
+static bool
+EnableShapeConsistencyChecks(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+#ifdef DEBUG
+    NativeObject::enableShapeConsistencyChecks();
+#endif
+    args.rval().setUndefined();
+    return true;
+}
+
 #ifdef JS_TRACE_LOGGING
 static bool
 EnableTraceLogger(JSContext* cx, unsigned argc, Value* vp)
@@ -4322,7 +4332,7 @@ GetModuleEnvironmentNames(JSContext* cx, unsigned argc, Value* vp)
     }
 
     RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
-    if (module->status() == MODULE_STATUS_ERRORED) {
+    if (module->hadEvaluationError()) {
         JS_ReportErrorASCII(cx, "Module environment unavailable");
         return false;
     }
@@ -4365,7 +4375,7 @@ GetModuleEnvironmentValue(JSContext* cx, unsigned argc, Value* vp)
     }
 
     RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
-    if (module->status() == MODULE_STATUS_ERRORED) {
+    if (module->hadEvaluationError()) {
         JS_ReportErrorASCII(cx, "Module environment unavailable");
         return false;
     }
@@ -5352,6 +5362,10 @@ gc::ZealModeHelpText),
     JS_FN_HELP("helperThreadCount", HelperThreadCount, 0, 0,
 "helperThreadCount()",
 "  Returns the number of helper threads available for off-thread tasks."),
+
+    JS_FN_HELP("enableShapeConsistencyChecks", EnableShapeConsistencyChecks, 0, 0,
+"enableShapeConsistencyChecks()",
+"  Enable some slow Shape assertions.\n"),
 
 #ifdef JS_TRACE_LOGGING
     JS_FN_HELP("startTraceLogger", EnableTraceLogger, 0, 0,

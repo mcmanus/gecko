@@ -11,6 +11,7 @@ const env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironmen
 const APPLY_CONFIG_TIMEOUT_MS = 60 * 1000;
 const HOME_PAGE = "chrome://mozscreenshots/content/lib/mozscreenshots.html";
 
+Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
@@ -34,6 +35,7 @@ this.TestRunner = {
 
   init(extensionPath) {
     this._extensionPath = extensionPath;
+    this.setupOS();
   },
 
   /**
@@ -46,6 +48,28 @@ this.TestRunner = {
     this.mochitestScope = mochitestScope;
   },
 
+  setupOS() {
+    switch (AppConstants.platform) {
+      case "macosx": {
+        this.disableNotificationCenter();
+        break;
+      }
+    }
+  },
+
+  disableNotificationCenter() {
+    let killall = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+    killall.initWithPath("/bin/bash");
+
+    let killallP = Cc["@mozilla.org/process/util;1"].createInstance(Ci.nsIProcess);
+    killallP.init(killall);
+    let ncPlist = "/System/Library/LaunchAgents/com.apple.notificationcenterui.plist";
+    let killallArgs = ["-c",
+                       `/bin/launchctl unload -w ${ncPlist} && ` +
+                       "/usr/bin/killall -v NotificationCenter"];
+    killallP.run(true, killallArgs, killallArgs.length);
+  },
+
   /**
    * Load specified sets, execute all combinations of them, and capture screenshots.
    */
@@ -55,11 +79,14 @@ this.TestRunner = {
     let screenshotPath = FileUtils.getFile("TmpD", subDirs).path;
 
     const MOZ_UPLOAD_DIR = env.get("MOZ_UPLOAD_DIR");
-    if (MOZ_UPLOAD_DIR) {
+    const GECKO_HEAD_REPOSITORY = env.get("GECKO_HEAD_REPOSITORY");
+    // We don't want to upload images (from MOZ_UPLOAD_DIR) on integration
+    // branches in order to reduce bandwidth/storage.
+    if (MOZ_UPLOAD_DIR && !GECKO_HEAD_REPOSITORY.includes("/integration/")) {
       screenshotPath = MOZ_UPLOAD_DIR;
     }
 
-    this.mochitestScope.info("Saving screenshots to:", screenshotPath);
+    this.mochitestScope.info(`Saving screenshots to: ${screenshotPath}`);
 
     let screenshotPrefix = Services.appinfo.appBuildID;
     if (jobName) {
@@ -74,7 +101,7 @@ this.TestRunner = {
 
     let sets = this.loadSets(setNames);
 
-    this.mochitestScope.info(sets.length + " sets:", setNames);
+    this.mochitestScope.info(`${sets.length} sets: ${setNames}`);
     this.combos = new LazyProduct(sets);
     this.mochitestScope.info(this.combos.length + " combinations");
 
@@ -205,9 +232,10 @@ this.TestRunner = {
     windowType = windowType || "navigator:browser";
     let browserWindow = Services.wm.getMostRecentWindow(windowType);
     // Scale for high-density displays
-    const scale = browserWindow.QueryInterface(Ci.nsIInterfaceRequestor)
-                        .getInterface(Ci.nsIDocShell).QueryInterface(Ci.nsIBaseWindow)
-                        .devicePixelsPerDesktopPixel;
+    const scale = Cc["@mozilla.org/gfx/screenmanager;1"]
+                    .getService(Ci.nsIScreenManager)
+                    .screenForRect(browserWindow.screenX, browserWindow.screenY, 1, 1)
+                    .defaultCSSScaleFactor;
 
     const windowLeft = browserWindow.screenX * scale;
     const windowTop = browserWindow.screenY * scale;
@@ -376,6 +404,9 @@ this.TestRunner = {
         canvas.width = bounds.width;
         canvas.height = bounds.height;
         const ctx = canvas.getContext("2d");
+
+        ctx.fillStyle = "hotpink";
+        ctx.fillRect(0, 0, bounds.width, bounds.height);
 
         for (const rect of rects) {
           rect.left = Math.max(0, rect.left);

@@ -31,6 +31,9 @@ beetmover_checksums_description_schema = Schema({
     Optional('label'): basestring,
     Optional('treeherder'): task_description_schema['treeherder'],
     Optional('locale'): basestring,
+    Optional('shipping-phase'): task_description_schema['shipping-phase'],
+    Optional('shipping-product'): task_description_schema['shipping-product'],
+    Optional('notifications'): task_description_schema['notifications'],
 })
 
 
@@ -38,9 +41,10 @@ beetmover_checksums_description_schema = Schema({
 def validate(config, jobs):
     for job in jobs:
         label = job.get('dependent-task', object).__dict__.get('label', '?no-label?')
-        yield validate_schema(
+        validate_schema(
             beetmover_checksums_description_schema, job,
             "In checksums-signing ({!r} kind) task for {!r}:".format(config.kind, label))
+        yield job
 
 
 @transforms.add
@@ -104,6 +108,15 @@ def make_beetmover_checksums_description(config, jobs):
             'treeherder': treeherder,
             'extra': extra,
         }
+
+        if 'shipping-phase' in job:
+            task['shipping-phase'] = job['shipping-phase']
+
+        if 'shipping-product' in job:
+            task['shipping-product'] = job['shipping-product']
+
+        if 'notifications' in job:
+            task['notifications'] = job['notifications']
 
         yield task
 

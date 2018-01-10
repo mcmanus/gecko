@@ -840,7 +840,7 @@ nsScriptSecurityManager::CheckLoadURIFlags(nsIURI *aSourceURI,
 
     // Check for chrome target URI
     bool hasFlags = false;
-    rv = NS_URIChainHasFlags(aTargetBaseURI,
+    rv = NS_URIChainHasFlags(aTargetURI,
                              nsIProtocolHandler::URI_IS_UI_RESOURCE,
                              &hasFlags);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -897,7 +897,7 @@ nsScriptSecurityManager::CheckLoadURIFlags(nsIURI *aSourceURI,
                 if (accessAllowed) {
                     return NS_OK;
                 }
-            } else {
+            } else if (targetScheme.EqualsLiteral("chrome")) {
                 // Allow the load only if the chrome package is whitelisted.
                 nsCOMPtr<nsIXULChromeRegistry> reg(
                         do_GetService(NS_CHROMEREGISTRY_CONTRACTID));

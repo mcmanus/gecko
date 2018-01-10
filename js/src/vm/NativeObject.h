@@ -550,6 +550,10 @@ class NativeObject : public ShapedObject
     static inline JS::Result<NativeObject*, JS::OOM&>
     createWithTemplate(JSContext* cx, js::gc::InitialHeap heap, HandleObject templateObject);
 
+#ifdef DEBUG
+    static void enableShapeConsistencyChecks();
+#endif
+
   protected:
 #ifdef DEBUG
     friend class js::AutoCheckShapeConsistency;
@@ -1242,6 +1246,7 @@ class NativeObject : public ShapedObject
     inline void initDenseElements(NativeObject* src, uint32_t srcStart, uint32_t count);
     inline void moveDenseElements(uint32_t dstStart, uint32_t srcStart, uint32_t count);
     inline void moveDenseElementsNoPreBarrier(uint32_t dstStart, uint32_t srcStart, uint32_t count);
+    inline void reverseDenseElementsNoPreBarrier(uint32_t length);
 
     inline DenseElementResult
     setOrExtendDenseElements(JSContext* cx, uint32_t start, const Value* vp, uint32_t count,

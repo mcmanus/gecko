@@ -123,7 +123,7 @@ D3D11YCbCrImage::SetData(KnowsCompositor* aAllocator,
 }
 
 IntSize
-D3D11YCbCrImage::GetSize()
+D3D11YCbCrImage::GetSize() const
 {
   return mPictureRect.Size();
 }
@@ -253,8 +253,8 @@ D3D11YCbCrImage::GetAsSourceSurface()
 
   MOZ_ASSERT(mapCb.RowPitch == mapCr.RowPitch);
 
-  data.mPicX = mPictureRect.x;
-  data.mPicY = mPictureRect.y;
+  data.mPicX = mPictureRect.X();
+  data.mPicY = mPictureRect.Y();
   data.mPicSize = mPictureRect.Size();
   data.mStereoMode = StereoMode::MONO;
   data.mYUVColorSpace = mColorSpace;

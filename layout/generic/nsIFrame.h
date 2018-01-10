@@ -37,7 +37,7 @@
 #include "nsITheme.h"
 #include "nsLayoutUtils.h"
 #include "nsQueryFrame.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsStyleContext.h"
 #include "nsStyleStruct.h"
 #include "Visibility.h"
@@ -389,14 +389,6 @@ operator<<(std::ostream& aStream, const nsReflowStatus& aStatus);
 #endif
 
 //----------------------------------------------------------------------
-
-/**
- * DidReflow status values.
- */
-enum class nsDidReflowStatus : uint32_t {
-  NOT_FINISHED,
-  FINISHED
-};
 
 /**
  * When there is no scrollable overflow rect, the visual overflow rect
@@ -2578,8 +2570,7 @@ public:
    * a given reflow?
    */
   virtual void DidReflow(nsPresContext*           aPresContext,
-                         const ReflowInput* aReflowInput,
-                         nsDidReflowStatus        aStatus) = 0;
+                         const ReflowInput* aReflowInput) = 0;
 
   /**
    * Updates the overflow areas of the frame. This can be called if an
@@ -4558,11 +4549,6 @@ public:
   void DumpFrameTreeLimited() const;
 
   virtual nsresult  GetFrameName(nsAString& aResult) const = 0;
-#endif
-
-#ifdef DEBUG
-public:
-  virtual nsFrameState  GetDebugStateBits() const = 0;
 #endif
 };
 

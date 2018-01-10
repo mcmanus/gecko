@@ -160,7 +160,6 @@ using namespace mozilla::layers;
 using namespace mozilla::layout;
 using namespace mozilla::gfx;
 
-#define GRID_ENABLED_PREF_NAME "layout.css.grid.enabled"
 #define WEBKIT_PREFIXES_ENABLED_PREF_NAME "layout.css.prefixes.webkit"
 #define TEXT_ALIGN_UNSAFE_ENABLED_PREF_NAME "layout.css.text-align-unsafe-value.enabled"
 #define FLOAT_LOGICAL_VALUES_ENABLED_PREF_NAME "layout.css.float-logical-values.enabled"
@@ -212,51 +211,6 @@ static ContentMap& GetContentMap() {
     sContentMap = new ContentMap();
   }
   return *sContentMap;
-}
-
-// When the pref "layout.css.grid.enabled" changes, this function is invoked
-// to let us update kDisplayKTable, to selectively disable or restore the
-// entries for "grid" and "inline-grid" in that table.
-static void
-GridEnabledPrefChangeCallback(const char* aPrefName, void* aClosure)
-{
-  MOZ_ASSERT(strncmp(aPrefName, GRID_ENABLED_PREF_NAME,
-                     ArrayLength(GRID_ENABLED_PREF_NAME)) == 0,
-             "We only registered this callback for a single pref, so it "
-             "should only be called for that pref");
-
-  static int32_t sIndexOfGridInDisplayTable;
-  static int32_t sIndexOfInlineGridInDisplayTable;
-  static bool sAreGridKeywordIndicesInitialized; // initialized to false
-
-  bool isGridEnabled =
-    Preferences::GetBool(GRID_ENABLED_PREF_NAME, false);
-  if (!sAreGridKeywordIndicesInitialized) {
-    // First run: find the position of "grid" and "inline-grid" in
-    // kDisplayKTable.
-    sIndexOfGridInDisplayTable =
-      nsCSSProps::FindIndexOfKeyword(eCSSKeyword_grid,
-                                     nsCSSProps::kDisplayKTable);
-    MOZ_ASSERT(sIndexOfGridInDisplayTable >= 0,
-               "Couldn't find grid in kDisplayKTable");
-    sIndexOfInlineGridInDisplayTable =
-      nsCSSProps::FindIndexOfKeyword(eCSSKeyword_inline_grid,
-                                     nsCSSProps::kDisplayKTable);
-    MOZ_ASSERT(sIndexOfInlineGridInDisplayTable >= 0,
-               "Couldn't find inline-grid in kDisplayKTable");
-    sAreGridKeywordIndicesInitialized = true;
-  }
-
-  // OK -- now, stomp on or restore the "grid" entries in kDisplayKTable,
-  // depending on whether the grid pref is enabled vs. disabled.
-  if (sIndexOfGridInDisplayTable >= 0) {
-    nsCSSProps::kDisplayKTable[sIndexOfGridInDisplayTable].mKeyword =
-      isGridEnabled ? eCSSKeyword_grid : eCSSKeyword_UNKNOWN;
-  }
-  if (sIndexOfInlineGridInDisplayTable >= 0) {
-    nsCSSProps::kDisplayKTable[sIndexOfInlineGridInDisplayTable].mKeyword =
-      isGridEnabled ? eCSSKeyword_inline_grid : eCSSKeyword_UNKNOWN;
-  }
 }
 
 // When the pref "layout.css.prefixes.webkit" changes, this function is invoked
@@ -679,6 +633,16 @@ nsLayoutUtils::IsAnimationLoggingEnabled()
   }
 
   return sShouldLog;
+}
+
+bool
+nsLayoutUtils::AreRetainedDisplayListsEnabled()
+{
+  if (XRE_IsContentProcess()) {
+    return gfxPrefs::LayoutRetainDisplayList();
+  } else {
+    return gfxPrefs::LayoutRetainDisplayListChrome();
+  }
 }
 
 bool
@@ -3666,9 +3630,7 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
   const bool isForPainting = (aFlags & PaintFrameFlags::PAINT_WIDGET_LAYERS) &&
     aBuilderMode == nsDisplayListBuilderMode::PAINTING;
 
-  // Retained display list builder is currently only used for content processes.
-  const bool retainingEnabled = isForPainting &&
-    gfxPrefs::LayoutRetainDisplayList() && XRE_IsContentProcess();
+  const bool retainingEnabled = isForPainting && AreRetainedDisplayListsEnabled();
 
   RetainedDisplayListBuilder* retainedBuilder =
     GetOrCreateRetainedDisplayListBuilder(aFrame, retainingEnabled, buildCaret);
@@ -3885,6 +3847,10 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
             ss << "\n\n*** after-merge retained display items:";
             afterMergeChecker.Dump(ss);
             fprintf(stderr, "%s\n\n", ss.str().c_str());
+#ifdef DEBUG_FRAME_DUMP
+            fprintf(stderr, "*** Frame tree:\n");
+            aFrame->DumpFrameTree();
+#endif
           }
         }
       }
@@ -6930,7 +6896,7 @@ ComputeSnappedImageDrawingParameters(gfxContext*     aCtx,
                                                   svgViewportSize.height));
 }
 
-static DrawResult
+static ImgDrawResult
 DrawImageInternal(gfxContext&            aContext,
                   nsPresContext*         aPresContext,
                   imgIContainer*         aImage,
@@ -6944,7 +6910,7 @@ DrawImageInternal(gfxContext&            aContext,
                   ExtendMode             aExtendMode = ExtendMode::CLAMP,
                   float                  aOpacity = 1.0)
 {
-  DrawResult result = DrawResult::SUCCESS;
+  ImgDrawResult result = ImgDrawResult::SUCCESS;
 
   aImageFlags |= imgIContainer::FLAG_ASYNC_NOTIFY;
 
@@ -6989,7 +6955,7 @@ DrawImageInternal(gfxContext&            aContext,
   return result;
 }
 
-/* static */ DrawResult
+/* static */ ImgDrawResult
 nsLayoutUtils::DrawSingleUnscaledImage(gfxContext&          aContext,
                                        nsPresContext*       aPresContext,
                                        imgIContainer*       aImage,
@@ -7004,7 +6970,7 @@ nsLayoutUtils::DrawSingleUnscaledImage(gfxContext&          aContext,
   aImage->GetHeight(&imageSize.height);
   if (imageSize.width < 1 || imageSize.height < 1) {
     NS_WARNING("Image width or height is non-positive");
-    return DrawResult::TEMPORARY_ERROR;
+    return ImgDrawResult::TEMPORARY_ERROR;
   }
 
   nsSize size(CSSPixel::ToAppUnits(imageSize));
@@ -7027,7 +6993,7 @@ nsLayoutUtils::DrawSingleUnscaledImage(gfxContext&          aContext,
                            /* no SVGImageContext */ Nothing(), aImageFlags);
 }
 
-/* static */ DrawResult
+/* static */ ImgDrawResult
 nsLayoutUtils::DrawSingleImage(gfxContext&            aContext,
                                nsPresContext*         aPresContext,
                                imgIContainer*         aImage,
@@ -7044,7 +7010,7 @@ nsLayoutUtils::DrawSingleImage(gfxContext&            aContext,
   if (pixelImageSize.width < 1 || pixelImageSize.height < 1) {
     NS_ASSERTION(pixelImageSize.width >= 0 && pixelImageSize.height >= 0,
                  "Image width or height is negative");
-    return DrawResult::SUCCESS;  // no point in drawing a zero size image
+    return ImgDrawResult::SUCCESS;  // no point in drawing a zero size image
   }
 
   nsSize imageSize(CSSPixel::ToAppUnits(pixelImageSize));
@@ -7234,7 +7200,7 @@ nsLayoutUtils::GetBackgroundFirstTilePos(const nsPoint& aDest,
          aDest;
 }
 
-/* static */ DrawResult
+/* static */ ImgDrawResult
 nsLayoutUtils::DrawBackgroundImage(gfxContext&         aContext,
                                    nsIFrame*           aForFrame,
                                    nsPresContext*      aPresContext,
@@ -7267,20 +7233,20 @@ nsLayoutUtils::DrawBackgroundImage(gfxContext&         aContext,
   for (int32_t i = firstTilePos.x; i < aFill.XMost(); i += aRepeatSize.width) {
     for (int32_t j = firstTilePos.y; j < aFill.YMost(); j += aRepeatSize.height) {
       nsRect dest(i, j, aDest.width, aDest.height);
-      DrawResult result = DrawImageInternal(aContext, aPresContext, aImage, aSamplingFilter,
+      ImgDrawResult result = DrawImageInternal(aContext, aPresContext, aImage, aSamplingFilter,
                                             dest, dest, aAnchor, aDirty, svgContext,
                                             aImageFlags, ExtendMode::CLAMP,
                                             aOpacity);
-      if (result != DrawResult::SUCCESS) {
+      if (result != ImgDrawResult::SUCCESS) {
         return result;
       }
     }
   }
 
-  return DrawResult::SUCCESS;
+  return ImgDrawResult::SUCCESS;
 }
 
-/* static */ DrawResult
+/* static */ ImgDrawResult
 nsLayoutUtils::DrawImage(gfxContext&         aContext,
                          nsStyleContext*     aStyleContext,
                          nsPresContext*      aPresContext,
@@ -7930,7 +7896,7 @@ nsLayoutUtils::SurfaceFromElement(dom::Element* aElement,
 }
 
 /* static */
-nsIContent*
+Element*
 nsLayoutUtils::GetEditableRootContentByContentEditable(nsIDocument* aDocument)
 {
   // If the document is in designMode we should return nullptr.
@@ -7956,7 +7922,7 @@ nsLayoutUtils::GetEditableRootContentByContentEditable(nsIDocument* aDocument)
   // Note that the body element could be <frameset> element.
   nsCOMPtr<nsIDOMHTMLElement> body;
   nsresult rv = domHTMLDoc->GetBody(getter_AddRefs(body));
-  nsCOMPtr<nsIContent> content = do_QueryInterface(body);
+  nsCOMPtr<Element> content = do_QueryInterface(body);
   if (NS_SUCCEEDED(rv) && content && content->IsEditable()) {
     return content;
   }
@@ -8155,8 +8121,6 @@ struct PrefCallbacks
   PrefChangedFunc func;
 };
 static const PrefCallbacks kPrefCallbacks[] = {
-  { GRID_ENABLED_PREF_NAME,
-    GridEnabledPrefChangeCallback },
   { WEBKIT_PREFIXES_ENABLED_PREF_NAME,
     WebkitPrefixEnabledPrefChangeCallback },
   { TEXT_ALIGN_UNSAFE_ENABLED_PREF_NAME,
@@ -8478,47 +8442,47 @@ nsLayoutUtils::PostRestyleEvent(Element* aElement,
   }
 }
 
-nsSetAttrRunnable::nsSetAttrRunnable(nsIContent* aContent,
+nsSetAttrRunnable::nsSetAttrRunnable(Element* aElement,
                                      nsAtom* aAttrName,
                                      const nsAString& aValue)
   : mozilla::Runnable("nsSetAttrRunnable")
-  , mContent(aContent)
+  , mElement(aElement)
   , mAttrName(aAttrName)
   , mValue(aValue)
 {
-  NS_ASSERTION(aContent && aAttrName, "Missing stuff, prepare to crash");
+  NS_ASSERTION(aElement && aAttrName, "Missing stuff, prepare to crash");
 }
 
-nsSetAttrRunnable::nsSetAttrRunnable(nsIContent* aContent,
+nsSetAttrRunnable::nsSetAttrRunnable(Element* aElement,
                                      nsAtom* aAttrName,
                                      int32_t aValue)
   : mozilla::Runnable("nsSetAttrRunnable")
-  , mContent(aContent)
+  , mElement(aElement)
   , mAttrName(aAttrName)
 {
-  NS_ASSERTION(aContent && aAttrName, "Missing stuff, prepare to crash");
+  NS_ASSERTION(aElement && aAttrName, "Missing stuff, prepare to crash");
   mValue.AppendInt(aValue);
 }
 
 NS_IMETHODIMP
 nsSetAttrRunnable::Run()
 {
-  return mContent->SetAttr(kNameSpaceID_None, mAttrName, mValue, true);
+  return mElement->SetAttr(kNameSpaceID_None, mAttrName, mValue, true);
 }
 
-nsUnsetAttrRunnable::nsUnsetAttrRunnable(nsIContent* aContent,
+nsUnsetAttrRunnable::nsUnsetAttrRunnable(Element* aElement,
                                          nsAtom* aAttrName)
   : mozilla::Runnable("nsUnsetAttrRunnable")
-  , mContent(aContent)
+  , mElement(aElement)
   , mAttrName(aAttrName)
 {
-  NS_ASSERTION(aContent && aAttrName, "Missing stuff, prepare to crash");
+  NS_ASSERTION(aElement && aAttrName, "Missing stuff, prepare to crash");
 }
 
 NS_IMETHODIMP
 nsUnsetAttrRunnable::Run()
 {
-  return mContent->UnsetAttr(kNameSpaceID_None, mAttrName, true);
+  return mElement->UnsetAttr(kNameSpaceID_None, mAttrName, true);
 }
 
 /**

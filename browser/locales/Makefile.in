@@ -62,9 +62,6 @@ $(list-json): $(call mkdir_deps,$(SEARCHPLUGINS_PATH)) $(if $(IS_LANGUAGE_REPACK
 	$(call py_action,generate_searchjson,$(srcdir)/search/list.json $(AB_CD) $(list-json))
 searchplugins:: $(list-json)
 
-$(DIST)/branding:
-	$(NSINSTALL) -D $@
-
 DEFINES += -DBOOKMARKS_INCLUDE_DIR=$(dir $(call MERGE_FILE,profile/bookmarks.inc))
 
 libs-%: AB_CD=$*
@@ -155,10 +152,10 @@ endif
 ident:
 	@printf 'fx_revision '
 	@$(PYTHON) $(topsrcdir)/config/printconfigsetting.py \
-	    $(STAGEDIST)/application.ini App SourceStamp
+	    '$(STAGEDIST)'/application.ini App SourceStamp
 	@printf 'buildid '
 	@$(PYTHON) $(topsrcdir)/config/printconfigsetting.py \
-	    $(STAGEDIST)/application.ini App BuildID
+	    '$(STAGEDIST)'/application.ini App BuildID
 
 # test target, depends on make package
 # try to repack x-test, with just toolkit/defines.inc being there

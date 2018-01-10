@@ -98,13 +98,6 @@ add_task(async function() {
                          inRange(r.x1, width * .75, width * .9)
         },
 
-        {name: "bug 1394914 - sidebar toolbar icon should be visible at first paint",
-         condition: r => r.h == 13 && inRange(r.w, 14, 16) && // icon size
-                         inRange(r.y1, 40, 80) && // in the toolbar
-                         // near the right end of screen
-                         inRange(r.x1, width - 100, width - 50)
-        },
-
         {name: "bug 1403648 - urlbar should be focused at first paint",
          condition: r => inRange(r.y2, 60, 80) && // in the toolbar
                          // taking 50% to 75% of the window width
@@ -117,7 +110,10 @@ add_task(async function() {
          condition: r => r.h == 13 && inRange(r.w, 14, 16) && // icon size
                          inRange(r.y1, 40, 80) && // in the toolbar
                          // near the left side of the screen
-                         inRange(r.x1, 65, 100)
+                         // The reload icon is shifted on devedition builds
+                         // where there's an additional devtools toolbar icon.
+                         AppConstants.MOZ_DEV_EDITION ? inRange(r.x1, 100, 120) :
+                                                        inRange(r.x1, 65, 100)
         },
 
         {name: "bug 1401955 - about:home favicon should be visible at first paint",

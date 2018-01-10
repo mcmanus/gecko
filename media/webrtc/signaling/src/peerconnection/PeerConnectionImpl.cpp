@@ -413,20 +413,6 @@ PeerConnectionImpl::~PeerConnectionImpl()
   // to release off a timer (and XPCOM Shutdown) to avoid churn
 }
 
-OwningNonNull<DOMMediaStream>
-PeerConnectionImpl::MakeMediaStream()
-{
-  MediaStreamGraph* graph =
-    MediaStreamGraph::GetInstance(MediaStreamGraph::AUDIO_THREAD_DRIVER, GetWindow());
-
-  RefPtr<DOMMediaStream> stream =
-    DOMMediaStream::CreateSourceStreamAsInput(GetWindow(), graph);
-
-  CSFLogDebug(LOGTAG, "Created media stream %p, inner: %p", stream.get(), stream->GetInputStream());
-
-  return *stream;
-}
-
 /**
  * In JS, an RTCConfiguration looks like this:
  *
@@ -1216,13 +1202,13 @@ PeerConnectionImpl::CreateTransceiverImpl(
     aSendTrack->AddPrincipalChangeObserver(this);
   }
 
-  OwningNonNull<DOMMediaStream> receiveStream =
-    CreateReceiveStreamWithTrack(aJsepTransceiver->GetMediaType());
+  OwningNonNull<dom::MediaStreamTrack> receiveTrack =
+    CreateReceiveTrack(aJsepTransceiver->GetMediaType());
 
   RefPtr<TransceiverImpl> transceiverImpl;
 
   aRv = mMedia->AddTransceiver(aJsepTransceiver,
-                               *receiveStream,
+                               *receiveTrack,
                                aSendTrack,
                                &transceiverImpl);
 
@@ -1983,6 +1969,9 @@ public:
     mIceCandidateStats.Construct();
     mCodecStats.Construct();
     mTimestamp.Construct(now);
+    mTrickledIceCandidateStats.Construct();
+    mRawLocalCandidates.Construct();
+    mRawRemoteCandidates.Construct();
   }
 };
 
@@ -2050,6 +2039,7 @@ PeerConnectionImpl::AddIceCandidate(const char* aCandidate, const char* aMid, un
     // the remote SDP.
     if (mSignalingState == PCImplSignalingState::SignalingStable) {
       mMedia->AddIceCandidate(aCandidate, aMid, aLevel);
+      mRawTrickledCandidates.push_back(aCandidate);
     }
     pco->OnAddIceCandidateSuccess(rv);
   } else {
@@ -2269,6 +2259,7 @@ PeerConnectionImpl::InsertAudioLevelForContributingSource(
       break;
     }
   }
+
   return NS_OK;
 }
 
@@ -2345,8 +2336,8 @@ PeerConnectionImpl::RemoveTrack(MediaStreamTrack& aTrack) {
     if (transceiver->HasSendTrack(&aTrack)) {
       // TODO(bug 1401983): Move DTMF stuff to TransceiverImpl
       for (size_t i = 0; i < mDTMFStates.Length(); ++i) {
-        if (mDTMFStates[i].mTransceiver.get() == transceiver.get()) {
-          mDTMFStates[i].mSendTimer->Cancel();
+        if (mDTMFStates[i]->mTransceiver.get() == transceiver.get()) {
+          mDTMFStates[i]->mSendTimer->Cancel();
           mDTMFStates.RemoveElementAt(i);
           break;
         }
@@ -2381,11 +2372,21 @@ static int GetDTMFToneCode(uint16_t c)
   return i - DTMF_TONECODES;
 }
 
-OwningNonNull<DOMMediaStream>
-PeerConnectionImpl::CreateReceiveStreamWithTrack(
-    SdpMediaSection::MediaType type) {
+OwningNonNull<dom::MediaStreamTrack>
+PeerConnectionImpl::CreateReceiveTrack(SdpMediaSection::MediaType type)
+{
+  bool audio = (type == SdpMediaSection::MediaType::kAudio);
 
-  OwningNonNull<DOMMediaStream> stream = MakeMediaStream();
+  MediaStreamGraph* graph = MediaStreamGraph::GetInstance(
+      audio ?
+        MediaStreamGraph::AUDIO_THREAD_DRIVER :
+        MediaStreamGraph::SYSTEM_THREAD_DRIVER,
+      GetWindow());
+
+  RefPtr<DOMMediaStream> stream =
+    DOMMediaStream::CreateSourceStreamAsInput(GetWindow(), graph);
+
+  CSFLogDebug(LOGTAG, "Created media stream %p, inner: %p", stream.get(), stream->GetInputStream());
 
   // Set the principal used for creating the tracks. This makes the stream
   // data (audio/video samples) accessible to the receiving page. We're
@@ -2402,27 +2403,25 @@ PeerConnectionImpl::CreateReceiveStreamWithTrack(
   }
 
   RefPtr<MediaStreamTrack> track;
-  switch (type) {
-    case SdpMediaSection::MediaType::kAudio:
-      track = stream->CreateDOMTrack(
-          kAudioTrack,
-          MediaSegment::AUDIO,
-          new RemoteTrackSource(principal,
-                                NS_ConvertASCIItoUTF16("remote audio")));
-      break;
-    case SdpMediaSection::MediaType::kVideo:
-      track = stream->CreateDOMTrack(
-          kVideoTrack,
-          MediaSegment::VIDEO,
-          new RemoteTrackSource(principal,
-                                NS_ConvertASCIItoUTF16("remote video")));
-      break;
-    default:
-      MOZ_ASSERT(false, "Bad media kind; our JS passed some garbage");
+  if (audio) {
+    track = stream->CreateDOMTrack(
+        kAudioTrack,
+        MediaSegment::AUDIO,
+        new RemoteTrackSource(principal,
+                              NS_ConvertASCIItoUTF16("remote audio")));
+  } else {
+    track = stream->CreateDOMTrack(
+        kVideoTrack,
+        MediaSegment::VIDEO,
+        new RemoteTrackSource(principal,
+                              NS_ConvertASCIItoUTF16("remote video")));
   }
-  stream->AddTrackInternal(track);
 
-  return stream;
+  stream->AddTrackInternal(track);
+  // Spec says remote tracks start out muted.
+  track->MutedChanged(true);
+
+  return OwningNonNull<dom::MediaStreamTrack>(*track);
 }
 
 NS_IMETHODIMP
@@ -2440,17 +2439,17 @@ PeerConnectionImpl::InsertDTMF(TransceiverImpl& transceiver,
 
   // TODO(bug 1401983): Move DTMF stuff to TransceiverImpl
   // Attempt to locate state for the DTMFSender
-  DTMFState* state = nullptr;
+  RefPtr<DTMFState> state;
   for (auto& dtmfState : mDTMFStates) {
-    if (dtmfState.mTransceiver.get() == &transceiver) {
-      state = &dtmfState;
+    if (dtmfState->mTransceiver.get() == &transceiver) {
+      state = dtmfState;
       break;
     }
   }
 
   // No state yet, create a new one
   if (!state) {
-    state = mDTMFStates.AppendElement();
+    state = *mDTMFStates.AppendElement(new DTMFState);
     state->mPCObserver = mPCObserver;
     state->mTransceiver = &transceiver;
     state->mSendTimer = NS_NewTimer();
@@ -2461,9 +2460,7 @@ PeerConnectionImpl::InsertDTMF(TransceiverImpl& transceiver,
   state->mDuration = duration;
   state->mInterToneGap = interToneGap;
   if (!state->mTones.IsEmpty()) {
-    state->mSendTimer->InitWithNamedFuncCallback(DTMFSendTimerCallback_m, state, 0,
-                                                 nsITimer::TYPE_ONE_SHOT,
-                                                 "DTMFSendTimerCallback_m");
+    state->mSendTimer->InitWithCallback(state, 0, nsITimer::TYPE_ONE_SHOT);
   }
   return NS_OK;
 }
@@ -2486,8 +2483,8 @@ PeerConnectionImpl::GetDTMFToneBuffer(mozilla::dom::RTCRtpSender& sender,
   // TODO(bug 1401983): Move DTMF stuff to TransceiverImpl
   // Attempt to locate state for the DTMFSender
   for (auto& dtmfState : mDTMFStates) {
-    if (dtmfState.mTransceiver->HasSendTrack(mst)) {
-      outToneBuffer = dtmfState.mTones;
+    if (dtmfState->mTransceiver->HasSendTrack(mst)) {
+      outToneBuffer = dtmfState->mTones;
       break;
     }
   }
@@ -2515,8 +2512,8 @@ PeerConnectionImpl::ReplaceTrackNoRenegotiation(TransceiverImpl& aTransceiver,
 
   // TODO(bug 1401983): Move DTMF stuff to TransceiverImpl
   for (size_t i = 0; i < mDTMFStates.Length(); ++i) {
-    if (mDTMFStates[i].mTransceiver.get() == &aTransceiver) {
-      mDTMFStates[i].mSendTimer->Cancel();
+    if (mDTMFStates[i]->mTransceiver.get() == &aTransceiver) {
+      mDTMFStates[i]->mSendTimer->Cancel();
       mDTMFStates.RemoveElementAt(i);
       break;
     }
@@ -2805,7 +2802,7 @@ PeerConnectionImpl::CloseInt()
 
   // TODO(bug 1401983): Move DTMF stuff to TransceiverImpl
   for (auto& dtmfState : mDTMFStates) {
-    dtmfState.mSendTimer->Cancel();
+    dtmfState->mSendTimer->Cancel();
   }
 
   // We do this at the end of the call because we want to make sure we've waited
@@ -3344,6 +3341,10 @@ PeerConnectionImpl::BuildStatsQuery_m(
       query->report->mRemoteSdp.Construct(
           NS_ConvertASCIItoUTF16(remoteDescription.c_str()));
       query->report->mOfferer.Construct(mJsepSession->IsOfferer());
+      for (const auto& candidate : mRawTrickledCandidates) {
+        query->report->mRawRemoteCandidates.Value().AppendElement(
+            NS_ConvertASCIItoUTF16(candidate.c_str()), fallible);
+      }
     }
   }
 
@@ -3385,6 +3386,9 @@ static void ToRTCIceCandidateStats(
           NS_ConvertASCIItoUTF16(candidate.local_addr.transport.c_str()));
     }
     report->mIceCandidateStats.Value().AppendElement(cand, fallible);
+    if (candidate.trickled) {
+      report->mTrickledIceCandidateStats.Value().AppendElement(cand, fallible);
+    }
   }
 }
 
@@ -3437,6 +3441,11 @@ static void RecordIceStats_s(
                            transportId,
                            now,
                            report);
+    // add the local candidates unparsed string to a sequence
+    for (const auto& candidate : candidates) {
+      report->mRawLocalCandidates.Value().AppendElement(
+          NS_ConvertASCIItoUTF16(candidate.label.c_str()), fallible);
+    }
   }
   candidates.clear();
 
@@ -3446,6 +3455,11 @@ static void RecordIceStats_s(
                            transportId,
                            now,
                            report);
+    // add the remote candidates unparsed string to a sequence
+    for (const auto& candidate : candidates) {
+      report->mRawRemoteCandidates.Value().AppendElement(
+          NS_ConvertASCIItoUTF16(candidate.label.c_str()), fallible);
+    }
   }
 }
 
@@ -3474,8 +3488,8 @@ PeerConnectionImpl::ExecuteStatsQuery_s(RTCStatsQuery *query) {
     // TODO(@@NG):ssrcs handle Conduits having multiple stats at the same level
     // This is pending spec work
     // Gather pipeline stats.
-    switch (mp.direction()) {
-      case MediaPipeline::TRANSMIT: {
+    switch (mp.Direction()) {
+      case MediaPipeline::DirectionType::TRANSMIT: {
         nsString localId = NS_LITERAL_STRING("outbound_rtp_") + idstr;
         nsString remoteId;
         nsString ssrc;
@@ -3532,8 +3546,8 @@ PeerConnectionImpl::ExecuteStatsQuery_s(RTCStatsQuery *query) {
           s.mMediaType.Construct(mediaType);
           s.mRemoteId.Construct(remoteId);
           s.mIsRemote = false;
-          s.mPacketsSent.Construct(mp.rtp_packets_sent());
-          s.mBytesSent.Construct(mp.rtp_bytes_sent());
+          s.mPacketsSent.Construct(mp.RtpPacketsSent());
+          s.mBytesSent.Construct(mp.RtpBytesSent());
 
           // Fill in packet type statistics
           webrtc::RtcpPacketTypeCounter counters;
@@ -3573,7 +3587,7 @@ PeerConnectionImpl::ExecuteStatsQuery_s(RTCStatsQuery *query) {
         }
         break;
       }
-      case MediaPipeline::RECEIVE: {
+      case MediaPipeline::DirectionType::RECEIVE: {
         nsString localId = NS_LITERAL_STRING("inbound_rtp_") + idstr;
         nsString remoteId;
         nsString ssrc;
@@ -3623,8 +3637,8 @@ PeerConnectionImpl::ExecuteStatsQuery_s(RTCStatsQuery *query) {
           s.mRemoteId.Construct(remoteId);
         }
         s.mIsRemote = false;
-        s.mPacketsReceived.Construct(mp.rtp_packets_received());
-        s.mBytesReceived.Construct(mp.rtp_bytes_received());
+        s.mPacketsReceived.Construct(mp.RtpPacketsReceived());
+        s.mBytesReceived.Construct(mp.RtpBytesReceived());
 
         if (query->internalStats && isAudio) {
           int32_t jitterBufferDelay;
@@ -3782,55 +3796,59 @@ PeerConnectionImpl::startCallTelem() {
   Telemetry::Accumulate(Telemetry::WEBRTC_CALL_COUNT_2, 1);
 }
 
-void
-PeerConnectionImpl::DTMFSendTimerCallback_m(nsITimer* timer, void* closure)
+nsresult
+PeerConnectionImpl::DTMFState::Notify(nsITimer* timer)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  auto state = static_cast<DTMFState*>(closure);
-
   nsString eventTone;
-  if (!state->mTones.IsEmpty()) {
-    uint16_t toneChar = state->mTones.CharAt(0);
+  if (!mTones.IsEmpty()) {
+    uint16_t toneChar = mTones.CharAt(0);
     int tone = GetDTMFToneCode(toneChar);
 
     eventTone.Assign(toneChar);
 
-    state->mTones.Cut(0, 1);
+    mTones.Cut(0, 1);
 
     if (tone == -1) {
-      state->mSendTimer->InitWithNamedFuncCallback(DTMFSendTimerCallback_m, state,
-                                                   2000, nsITimer::TYPE_ONE_SHOT,
-                                                   "DTMFSendTimerCallback_m");
+      mSendTimer->InitWithCallback(this, 2000, nsITimer::TYPE_ONE_SHOT);
     } else {
       // Reset delay if necessary
-      state->mSendTimer->InitWithNamedFuncCallback(DTMFSendTimerCallback_m, state,
-                                                   state->mDuration + state->mInterToneGap,
-                                                   nsITimer::TYPE_ONE_SHOT,
-                                                   "DTMFSendTimerCallback_m");
+      mSendTimer->InitWithCallback(this,
+                                   mDuration + mInterToneGap,
+                                   nsITimer::TYPE_ONE_SHOT);
 
-      state->mTransceiver->InsertDTMFTone(tone, state->mDuration);
+      mTransceiver->InsertDTMFTone(tone, mDuration);
     }
   } else {
-    state->mSendTimer->Cancel();
+    mSendTimer->Cancel();
   }
 
-  RefPtr<PeerConnectionObserver> pco = do_QueryObjectReferent(state->mPCObserver);
+  RefPtr<PeerConnectionObserver> pco = do_QueryObjectReferent(mPCObserver);
   if (!pco) {
     NS_WARNING("Failed to dispatch the RTCDTMFToneChange event!");
-    return;
+    return NS_OK; // Return is ignored anyhow
+  }
+
+  RefPtr<dom::MediaStreamTrack> sendTrack = mTransceiver->GetSendTrack();
+  if (!sendTrack) {
+    NS_WARNING("Failed to dispatch the RTCDTMFToneChange event!");
+    return NS_OK; // Return is ignored anyhow
   }
 
   JSErrorResult jrv;
-  pco->OnDTMFToneChange(*state->mTransceiver->GetSendTrack(), eventTone, jrv);
+  pco->OnDTMFToneChange(*sendTrack, eventTone, jrv);
 
   if (jrv.Failed()) {
     NS_WARNING("Failed to dispatch the RTCDTMFToneChange event!");
-    return;
   }
+
+  return NS_OK;
 }
 
 PeerConnectionImpl::DTMFState::DTMFState() = default;
 PeerConnectionImpl::DTMFState::~DTMFState() = default;
+
+NS_IMPL_ISUPPORTS(PeerConnectionImpl::DTMFState, nsITimerCallback)
 
 }  // end mozilla namespace

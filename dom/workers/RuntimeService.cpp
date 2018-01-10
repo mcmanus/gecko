@@ -44,6 +44,7 @@
 #include "mozilla/dom/FetchUtil.h"
 #include "mozilla/dom/MessageChannel.h"
 #include "mozilla/dom/MessageEventBinding.h"
+#include "mozilla/dom/PerformanceService.h"
 #include "mozilla/dom/WorkerBinding.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/IndexedDatabaseManager.h"
@@ -552,15 +553,6 @@ LoadJSGCMemoryOptions(const char* aPrefName, void* /* aClosure */)
       continue;
     }
 
-    matchName.RebindLiteral(PREF_MEM_OPTIONS_PREFIX "gc_refresh_frame_slices_enabled");
-    if (memPrefName == matchName ||
-        (gRuntimeServiceDuringInit && index == 15)) {
-      bool prefValue = GetWorkerPref(matchName, false);
-      UpdateOtherJSGCMemoryOption(rts, JSGC_REFRESH_FRAME_SLICES_ENABLED,
-                                 prefValue ? 0 : 1);
-      continue;
-    }
-
 #ifdef DEBUG
     nsAutoCString message("Workers don't support the 'mem.");
     message.Append(memPrefName);
@@ -992,6 +984,8 @@ public:
     // The CC is shut down, and the superclass destructor will GC, so make sure
     // we don't try to CC again.
     mWorkerPrivate = nullptr;
+
+    CycleCollectedJSRuntime::Shutdown(cx);
   }
 
   ~WorkerJSRuntime()
@@ -2022,6 +2016,9 @@ RuntimeService::Init()
     return NS_ERROR_UNEXPECTED;
   }
 
+  // PerformanceService must be initialized on the main-thread.
+  PerformanceService::GetOrCreate();
+
   return NS_OK;
 }
 
@@ -2451,6 +2448,31 @@ RuntimeService::CreateSharedWorker(const GlobalObject& aGlobal,
   nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal.GetAsSupports());
   MOZ_ASSERT(window);
 
+  // If the window is blocked from accessing storage, do not allow it
+  // to connect to a SharedWorker.  This would potentially allow it
+  // to communicate with other windows that do have storage access.
+  // Allow private browsing, however, as we handle that isolation
+  // via the principal.
+  auto storageAllowed = nsContentUtils::StorageAllowedForWindow(window);
+  if (storageAllowed != nsContentUtils::StorageAccess::eAllow &&
+      storageAllowed != nsContentUtils::StorageAccess::ePrivateBrowsing) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  // Assert that the principal private browsing state matches the
+  // StorageAccess value.
+#ifdef  MOZ_DIAGNOSTIC_ASSERT_ENABLED
+  if (storageAllowed == nsContentUtils::StorageAccess::ePrivateBrowsing) {
+    nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
+    nsCOMPtr<nsIPrincipal> principal = doc ? doc->NodePrincipal() : nullptr;
+    uint32_t privateBrowsingId = 0;
+    if (principal) {
+      MOZ_ALWAYS_SUCCEEDS(principal->GetPrivateBrowsingId(&privateBrowsingId));
+    }
+    MOZ_DIAGNOSTIC_ASSERT(privateBrowsingId != 0);
+  }
+#endif // MOZ_DIAGNOSTIC_ASSERT_ENABLED
+
   JSContext* cx = aGlobal.Context();
 
   WorkerLoadInfo loadInfo;
@@ -2483,7 +2505,7 @@ RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
     nsresult rv = aLoadInfo->mResolvedScriptURI->GetSpec(scriptSpec);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    MOZ_ASSERT(aLoadInfo->mPrincipal);
+    MOZ_DIAGNOSTIC_ASSERT(aLoadInfo->mPrincipal && aLoadInfo->mLoadingPrincipal);
 
     WorkerDomainInfo* domainInfo;
     if (mDomainMap.Get(aLoadInfo->mDomain, &domainInfo)) {
@@ -2491,9 +2513,9 @@ RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
         if (data->mScriptSpec == scriptSpec &&
             data->mName == aName &&
             // We want to be sure that the window's principal subsumes the
-            // SharedWorker's principal and vice versa.
-            aLoadInfo->mPrincipal->Subsumes(data->mWorkerPrivate->GetPrincipal()) &&
-            data->mWorkerPrivate->GetPrincipal()->Subsumes(aLoadInfo->mPrincipal)) {
+            // SharedWorker's loading principal and vice versa.
+            aLoadInfo->mLoadingPrincipal->Subsumes(data->mWorkerPrivate->GetLoadingPrincipal()) &&
+            data->mWorkerPrivate->GetLoadingPrincipal()->Subsumes(aLoadInfo->mLoadingPrincipal)) {
           workerPrivate = data->mWorkerPrivate;
           break;
         }

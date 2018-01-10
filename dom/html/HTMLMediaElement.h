@@ -442,7 +442,7 @@ public:
 
   MediaError* GetError() const;
 
-  void SetSrc(const nsAString& aSrc, nsIPrincipal& aTriggeringPrincipal, ErrorResult& aRv)
+  void SetSrc(const nsAString& aSrc, nsIPrincipal* aTriggeringPrincipal, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::src, aSrc, aTriggeringPrincipal, aRv);
   }
@@ -630,6 +630,13 @@ public:
   // Returns a promise which will be resolved after collecting debugging
   // data from decoder/reader/MDSM. Used for debugging purposes.
   already_AddRefed<Promise> MozRequestDebugInfo(ErrorResult& aRv);
+
+  // Enables DecoderDoctorLogger logging. Used for debugging purposes.
+  static void MozEnableDebugLog(const GlobalObject&);
+
+  // Returns a promise which will be resolved after collecting debugging
+  // log associated with this element. Used for debugging purposes.
+  already_AddRefed<Promise> MozRequestDebugLog(ErrorResult& aRv);
 
   already_AddRefed<Promise> MozDumpDebugInfo();
 
@@ -1063,7 +1070,7 @@ protected:
    * during the resource selection algorithm. Stores the return value in
    * mSourceLoadCandidate before returning.
    */
-  nsIContent* GetNextSource();
+  Element* GetNextSource();
 
   /**
    * Changes mDelayingLoadEvent, and will call BlockOnLoad()/UnblockOnLoad()

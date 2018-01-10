@@ -9,6 +9,7 @@ way, and certainly anything using mozharness should use this approach.
 """
 
 from __future__ import absolute_import, print_function, unicode_literals
+import json
 import slugid
 
 from textwrap import dedent
@@ -52,13 +53,16 @@ mozharness_run_schema = Schema({
     # --custom-build-variant-cfg value
     Optional('custom-build-variant-cfg'): basestring,
 
+    # Extra configuration options to pass to mozharness.
+    Optional('extra-config'): dict,
+
     # Extra metadata to use toward the workspace caching.
     # Only supported on docker-worker
     Optional('extra-workspace-cache-key'): basestring,
 
     # If not false, tooltool downloads will be enabled via relengAPIProxy
     # for either just public files, or all files.  Not supported on Windows
-    Required('tooltool-downloads', default=False): Any(
+    Required('tooltool-downloads'): Any(
         False,
         'public',
         'internal',
@@ -69,39 +73,53 @@ mozharness_run_schema = Schema({
     # this will enable any worker features required and set the task's scopes
     # appropriately.  `true` here means ['*'], all secrets.  Not supported on
     # Windows
-    Required('secrets', default=False): Any(bool, [basestring]),
+    Required('secrets'): Any(bool, [basestring]),
 
     # If true, taskcluster proxy will be enabled; note that it may also be enabled
     # automatically e.g., for secrets support.  Not supported on Windows.
-    Required('taskcluster-proxy', default=False): bool,
+    Required('taskcluster-proxy'): bool,
 
     # If true, the build scripts will start Xvfb.  Not supported on Windows.
-    Required('need-xvfb', default=False): bool,
+    Required('need-xvfb'): bool,
 
     # If false, indicate that builds should skip producing artifacts.  Not
     # supported on Windows.
-    Required('keep-artifacts', default=True): bool,
+    Required('keep-artifacts'): bool,
 
     # If specified, use the in-tree job script specified.
     Optional('job-script'): basestring,
 
-    Required('requires-signed-builds', default=False): bool,
+    Required('requires-signed-builds'): bool,
 
     # If false, don't set MOZ_SIMPLE_PACKAGE_NAME
     # Only disableable on windows
-    Required('use-simple-package', default=True): bool,
+    Required('use-simple-package'): bool,
 
     # If false don't pass --branch or --skip-buildbot-actions to mozharness script
     # Only disableable on windows
-    Required('use-magic-mh-args', default=True): bool,
+    Required('use-magic-mh-args'): bool,
 
     # if true, perform a checkout of a comm-central based branch inside the
     # gecko checkout
-    Required('comm-checkout', default=False): bool,
+    Required('comm-checkout'): bool,
 })
 
 
-@run_job_using("docker-worker", "mozharness", schema=mozharness_run_schema)
+mozharness_defaults = {
+    'tooltool-downloads': False,
+    'secrets': False,
+    'taskcluster-proxy': False,
+    'need-xvfb': False,
+    'keep-artifacts': True,
+    'requires-signed-builds': False,
+    'use-simple-package': True,
+    'use-magic-mh-args': True,
+    'comm-checkout': False,
+}
+
+
+@run_job_using("docker-worker", "mozharness", schema=mozharness_run_schema,
+               defaults=mozharness_defaults)
 def mozharness_on_docker_worker_setup(config, job, taskdesc):
     run = job['run']
 
@@ -151,6 +169,9 @@ def mozharness_on_docker_worker_setup(config, job, taskdesc):
     if 'custom-build-variant-cfg' in run:
         env['MH_CUSTOM_BUILD_VARIANT_CFG'] = run['custom-build-variant-cfg']
 
+    if 'extra-config' in run:
+        env['EXTRA_MOZHARNESS_CONFIG'] = json.dumps(run['extra-config'])
+
     if 'job-script' in run:
         env['JOB_SCRIPT'] = run['job-script']
 
@@ -196,7 +217,8 @@ def mozharness_on_docker_worker_setup(config, job, taskdesc):
     worker['command'] = command
 
 
-@run_job_using("generic-worker", "mozharness", schema=mozharness_run_schema)
+@run_job_using("generic-worker", "mozharness", schema=mozharness_run_schema,
+               defaults=mozharness_defaults)
 def mozharness_on_generic_worker(config, job, taskdesc):
     assert job['worker']['os'] == 'windows', 'only supports windows right now'
 
@@ -228,6 +250,9 @@ def mozharness_on_generic_worker(config, job, taskdesc):
     })
     if run['use-simple-package']:
         env.update({'MOZ_SIMPLE_PACKAGE_NAME': 'target'})
+
+    if 'extra-config' in run:
+        env['EXTRA_MOZHARNESS_CONFIG'] = json.dumps(run['extra-config'])
 
     # The windows generic worker uses batch files to pass environment variables
     # to commands.  Setting a variable to empty in a batch file unsets, so if
@@ -326,7 +351,8 @@ def mozharness_on_generic_worker(config, job, taskdesc):
     ])
 
 
-@run_job_using('buildbot-bridge', 'mozharness', schema=mozharness_run_schema)
+@run_job_using('buildbot-bridge', 'mozharness', schema=mozharness_run_schema,
+               defaults=mozharness_defaults)
 def mozharness_on_buildbot_bridge(config, job, taskdesc):
     run = job['run']
     worker = taskdesc['worker']

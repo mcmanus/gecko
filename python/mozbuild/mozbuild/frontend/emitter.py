@@ -27,8 +27,8 @@ from .data import (
     AndroidExtraPackages,
     AndroidExtraResDirs,
     AndroidResDirs,
+    BaseRustProgram,
     BaseSources,
-    BrandingFiles,
     ChromeManifestEntry,
     ComputedFlags,
     ConfigFileSubstitution,
@@ -42,6 +42,7 @@ from .data import (
     GeneratedFile,
     GeneratedSources,
     GeneratedWebIDLFile,
+    GnProjectData,
     ExampleWebIDLInterface,
     ExternalStaticLibrary,
     ExternalSharedLibrary,
@@ -298,100 +299,124 @@ class TreeMetadataEmitter(LoggingMixin):
         'target': 'LIBRARY_NAME',
     }
 
+    LIBSTDCXX_VAR = {
+        'host': 'MOZ_LIBSTDCXX_HOST_VERSION',
+        'target': 'MOZ_LIBSTDCXX_TARGET_VERSION',
+    }
+
+    STDCXXCOMPAT_NAME = {
+        'host': 'host_stdc++compat',
+        'target': 'stdc++compat',
+    }
+
     def _link_libraries(self, context, obj, variable):
         """Add linkage declarations to a given object."""
         assert isinstance(obj, Linkable)
 
         for path in context.get(variable, []):
-            force_static = path.startswith('static:') and obj.KIND == 'target'
-            if force_static:
-                path = path[7:]
-            name = mozpath.basename(path)
-            dir = mozpath.dirname(path)
-            candidates = [l for l in self._libs[name] if l.KIND == obj.KIND]
-            if dir:
-                if dir.startswith('/'):
-                    dir = mozpath.normpath(
-                        mozpath.join(obj.topobjdir, dir[1:]))
-                else:
-                    dir = mozpath.normpath(
-                        mozpath.join(obj.objdir, dir))
-                dir = mozpath.relpath(dir, obj.topobjdir)
-                candidates = [l for l in candidates if l.relobjdir == dir]
-                if not candidates:
-                    # If the given directory is under one of the external
-                    # (third party) paths, use a fake library reference to
-                    # there.
-                    for d in self._external_paths:
-                        if dir.startswith('%s/' % d):
-                            candidates = [self._get_external_library(dir, name,
-                                force_static)]
-                            break
-
-                if not candidates:
-                    raise SandboxValidationError(
-                        '%s contains "%s", but there is no "%s" %s in %s.'
-                        % (variable, path, name,
-                        self.LIBRARY_NAME_VAR[obj.KIND], dir), context)
-
-            if len(candidates) > 1:
-                # If there's more than one remaining candidate, it could be
-                # that there are instances for the same library, in static and
-                # shared form.
-                libs = {}
-                for l in candidates:
-                    key = mozpath.join(l.relobjdir, l.basename)
-                    if force_static:
-                        if isinstance(l, StaticLibrary):
-                            libs[key] = l
-                    else:
-                        if key in libs and isinstance(l, SharedLibrary):
-                            libs[key] = l
-                        if key not in libs:
-                            libs[key] = l
-                candidates = libs.values()
-                if force_static and not candidates:
-                    if dir:
-                        raise SandboxValidationError(
-                            '%s contains "static:%s", but there is no static '
-                            '"%s" %s in %s.' % (variable, path, name,
-                            self.LIBRARY_NAME_VAR[obj.KIND], dir), context)
-                    raise SandboxValidationError(
-                        '%s contains "static:%s", but there is no static "%s" '
-                        '%s in the tree' % (variable, name, name,
-                        self.LIBRARY_NAME_VAR[obj.KIND]), context)
-
-            if not candidates:
-                raise SandboxValidationError(
-                    '%s contains "%s", which does not match any %s in the tree.'
-                    % (variable, path, self.LIBRARY_NAME_VAR[obj.KIND]),
-                    context)
-
-            elif len(candidates) > 1:
-                paths = (mozpath.join(l.relativedir, 'moz.build')
-                    for l in candidates)
-                raise SandboxValidationError(
-                    '%s contains "%s", which matches a %s defined in multiple '
-                    'places:\n    %s' % (variable, path,
-                    self.LIBRARY_NAME_VAR[obj.KIND],
-                    '\n    '.join(paths)), context)
-
-            elif force_static and not isinstance(candidates[0], StaticLibrary):
-                raise SandboxValidationError(
-                    '%s contains "static:%s", but there is only a shared "%s" '
-                    'in %s. You may want to add FORCE_STATIC_LIB=True in '
-                    '%s/moz.build, or remove "static:".' % (variable, path,
-                    name, candidates[0].relobjdir, candidates[0].relobjdir),
-                    context)
-
-            elif isinstance(obj, StaticLibrary) and isinstance(candidates[0],
-                    SharedLibrary):
-                self._static_linking_shared.add(obj)
-            obj.link_library(candidates[0])
+            self._link_library(context, obj, variable, path)
 
         # Link system libraries from OS_LIBS/HOST_OS_LIBS.
         for lib in context.get(variable.replace('USE', 'OS'), []):
             obj.link_system_library(lib)
+
+        # We have to wait for all the self._link_library calls above to have
+        # happened for obj.cxx_link to be final.
+        if not isinstance(obj, (StaticLibrary, HostLibrary,
+                                BaseRustProgram)) and obj.cxx_link:
+            if context.config.substs.get(self.LIBSTDCXX_VAR[obj.KIND]):
+                self._link_library(context, obj, variable,
+                                   self.STDCXXCOMPAT_NAME[obj.KIND])
+            if obj.KIND == 'target':
+                for lib in context.config.substs.get('STLPORT_LIBS', []):
+                    obj.link_system_library(lib)
+
+    def _link_library(self, context, obj, variable, path):
+        force_static = path.startswith('static:') and obj.KIND == 'target'
+        if force_static:
+            path = path[7:]
+        name = mozpath.basename(path)
+        dir = mozpath.dirname(path)
+        candidates = [l for l in self._libs[name] if l.KIND == obj.KIND]
+        if dir:
+            if dir.startswith('/'):
+                dir = mozpath.normpath(
+                    mozpath.join(obj.topobjdir, dir[1:]))
+            else:
+                dir = mozpath.normpath(
+                    mozpath.join(obj.objdir, dir))
+            dir = mozpath.relpath(dir, obj.topobjdir)
+            candidates = [l for l in candidates if l.relobjdir == dir]
+            if not candidates:
+                # If the given directory is under one of the external
+                # (third party) paths, use a fake library reference to
+                # there.
+                for d in self._external_paths:
+                    if dir.startswith('%s/' % d):
+                        candidates = [self._get_external_library(dir, name,
+                            force_static)]
+                        break
+
+            if not candidates:
+                raise SandboxValidationError(
+                    '%s contains "%s", but there is no "%s" %s in %s.'
+                    % (variable, path, name,
+                    self.LIBRARY_NAME_VAR[obj.KIND], dir), context)
+
+        if len(candidates) > 1:
+            # If there's more than one remaining candidate, it could be
+            # that there are instances for the same library, in static and
+            # shared form.
+            libs = {}
+            for l in candidates:
+                key = mozpath.join(l.relobjdir, l.basename)
+                if force_static:
+                    if isinstance(l, StaticLibrary):
+                        libs[key] = l
+                else:
+                    if key in libs and isinstance(l, SharedLibrary):
+                        libs[key] = l
+                    if key not in libs:
+                        libs[key] = l
+            candidates = libs.values()
+            if force_static and not candidates:
+                if dir:
+                    raise SandboxValidationError(
+                        '%s contains "static:%s", but there is no static '
+                        '"%s" %s in %s.' % (variable, path, name,
+                        self.LIBRARY_NAME_VAR[obj.KIND], dir), context)
+                raise SandboxValidationError(
+                    '%s contains "static:%s", but there is no static "%s" '
+                    '%s in the tree' % (variable, name, name,
+                    self.LIBRARY_NAME_VAR[obj.KIND]), context)
+
+        if not candidates:
+            raise SandboxValidationError(
+                '%s contains "%s", which does not match any %s in the tree.'
+                % (variable, path, self.LIBRARY_NAME_VAR[obj.KIND]),
+                context)
+
+        elif len(candidates) > 1:
+            paths = (mozpath.join(l.relsrcdir, 'moz.build')
+                for l in candidates)
+            raise SandboxValidationError(
+                '%s contains "%s", which matches a %s defined in multiple '
+                'places:\n    %s' % (variable, path,
+                self.LIBRARY_NAME_VAR[obj.KIND],
+                '\n    '.join(paths)), context)
+
+        elif force_static and not isinstance(candidates[0], StaticLibrary):
+            raise SandboxValidationError(
+                '%s contains "static:%s", but there is only a shared "%s" '
+                'in %s. You may want to add FORCE_STATIC_LIB=True in '
+                '%s/moz.build, or remove "static:".' % (variable, path,
+                name, candidates[0].relobjdir, candidates[0].relobjdir),
+                context)
+
+        elif isinstance(obj, StaticLibrary) and isinstance(candidates[0],
+                SharedLibrary):
+            self._static_linking_shared.add(obj)
+        obj.link_library(candidates[0])
 
     @memoize
     def _get_external_library(self, dir, name, force_static):
@@ -532,6 +557,26 @@ class TreeMetadataEmitter(LoggingMixin):
                    features, cargo_target_dir, **static_args)
 
 
+    def _handle_gn_dirs(self, context):
+        for target_dir in context.get('GN_DIRS', []):
+            context['DIRS'] += [target_dir]
+            gn_dir = context['GN_DIRS'][target_dir]
+            for v in ('variables',):
+                if not getattr(gn_dir, 'variables'):
+                    raise SandboxValidationError('Missing value for '
+                                                 'GN_DIRS["%s"].%s' % (target_dir, v), context)
+
+            non_unified_sources = set()
+            for s in gn_dir.non_unified_sources:
+                source = SourcePath(context, s)
+                if not os.path.exists(source.full_path):
+                    raise SandboxValidationError('Cannot find %s.' % source,
+                                                 context)
+                non_unified_sources.add(mozpath.join(context.relsrcdir, s))
+
+            yield GnProjectData(context, target_dir, gn_dir, non_unified_sources)
+
+
     def _handle_linkables(self, context, passthru, generated_files):
         linkables = []
         host_linkables = []
@@ -546,7 +591,7 @@ class TreeMetadataEmitter(LoggingMixin):
                 raise SandboxValidationError(
                     'Cannot use "%s" as %s name, '
                     'because it is already used in %s' % (program, kind,
-                    self._binaries[program].relativedir), context)
+                    self._binaries[program].relsrcdir), context)
         for kind, cls in [('PROGRAM', Program), ('HOST_PROGRAM', HostProgram)]:
             program = context.get(kind)
             if program:
@@ -597,7 +642,7 @@ class TreeMetadataEmitter(LoggingMixin):
                     raise SandboxValidationError(
                         'Cannot use "%s" in %s, '
                         'because it is already used in %s' % (program, kind,
-                        self._binaries[program].relativedir), context)
+                        self._binaries[program].relsrcdir), context)
                 self._binaries[program] = cls(context, program,
                     is_unit_test=kind == 'CPP_UNIT_TESTS')
                 self._linkage.append((context, self._binaries[program],
@@ -937,6 +982,9 @@ class TreeMetadataEmitter(LoggingMixin):
         if any(k in context for k in ('FINAL_TARGET', 'XPI_NAME', 'DIST_SUBDIR')):
             yield InstallationTarget(context)
 
+        for obj in self._handle_gn_dirs(context):
+            yield obj
+
         # We always emit a directory traversal descriptor. This is needed by
         # the recursive make backend.
         for o in self._emit_directory_traversal_from_context(context): yield o
@@ -1093,7 +1141,6 @@ class TreeMetadataEmitter(LoggingMixin):
 
         components = []
         for var, cls in (
-            ('BRANDING_FILES', BrandingFiles),
             ('EXPORTS', Exports),
             ('FINAL_TARGET_FILES', FinalTargetFiles),
             ('FINAL_TARGET_PP_FILES', FinalTargetPreprocessedFiles),

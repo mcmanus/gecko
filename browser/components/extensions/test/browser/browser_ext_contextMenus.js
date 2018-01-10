@@ -282,7 +282,7 @@ add_task(async function() {
   extensionMenuRoot = await openExtensionContextMenu();
 
   // Check some menu items
-  items = extensionMenuRoot.getElementsByAttribute("label", "selection is: 'just some text 123456789012345678901234567890...'");
+  items = extensionMenuRoot.getElementsByAttribute("label", "selection is: 'just some text 12345678901234567890123456789012\u2026'");
   is(items.length, 1, "contextMenu item for selection was found (context=selection)");
   let selectionItem = items[0];
 
@@ -318,7 +318,7 @@ add_task(async function() {
   extensionMenuRoot = await openExtensionContextMenu("#longtext");
 
   // Check some menu items
-  items = extensionMenuRoot.getElementsByAttribute("label", "selection is: 'Sed ut perspiciatis unde omnis iste natus err...'");
+  items = extensionMenuRoot.getElementsByAttribute("label", "selection is: 'Sed ut perspiciatis unde omnis iste natus error\u2026'");
   is(items.length, 1, `contextMenu item for longtext selection was found (context=selection)`);
   await closeExtensionContextMenu(items[0]);
 
@@ -486,7 +486,8 @@ add_task(async function test_bookmark_contextmenu() {
   });
   await extension.startup();
   await extension.awaitMessage("bookmark-created");
-  let menu = await openChromeContextMenu("placesContext",
+  let menu = await openChromeContextMenu(
+    "placesContext",
     "#PersonalToolbar .bookmark-item:last-child");
 
   let menuItem = menu.getElementsByAttribute("label", "Get bookmark")[0];
@@ -515,11 +516,12 @@ add_task(async function test_bookmark_context_requires_permission() {
   });
   await extension.startup();
   await extension.awaitMessage("bookmark-created");
-  let menu = await openChromeContextMenu("placesContext",
+  let menu = await openChromeContextMenu(
+    "placesContext",
     "#PersonalToolbar .bookmark-item:last-child");
 
   Assert.equal(menu.getElementsByAttribute("label", "Get bookmark").length, 0,
-    "bookmark context menu not created with `bookmarks` permission.");
+               "bookmark context menu not created with `bookmarks` permission.");
 
   closeChromeContextMenu("placesContext");
 

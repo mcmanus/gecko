@@ -43,6 +43,7 @@
 #include "nsCRT.h"
 #include "nsDataHashtable.h"
 #include "nsDirectoryServiceDefs.h"
+#include "nsHashKeys.h"
 #include "nsICategoryManager.h"
 #include "nsIConsoleService.h"
 #include "nsIDirectoryService.h"
@@ -766,21 +767,6 @@ IsEarlyPref(const char* aPrefName)
   return BinarySearchIf(list, 0, prefsLen, StringComparator(aPrefName), &found);
 }
 
-static bool gInstallingCallback = false;
-
-class AutoInstallingCallback
-{
-public:
-  AutoInstallingCallback() { gInstallingCallback = true; }
-  ~AutoInstallingCallback() { gInstallingCallback = false; }
-};
-
-#define AUTO_INSTALLING_CALLBACK() AutoInstallingCallback installingRAII
-
-#else // DEBUG
-
-#define AUTO_INSTALLING_CALLBACK()
-
 #endif // DEBUG
 
 static Pref*
@@ -791,20 +777,15 @@ pref_HashTableLookup(const char* aPrefName)
 #ifdef DEBUG
   if (!XRE_IsParentProcess()) {
     if (gPhase == ContentProcessPhase::eNoPrefsSet) {
-      MOZ_CRASH_UNSAFE_PRINTF(
-        "accessing pref %s before early prefs are set", aPrefName);
+      MOZ_CRASH_UNSAFE_PRINTF("accessing pref %s before early prefs are set",
+                              aPrefName);
     }
 
-    if (gPhase == ContentProcessPhase::eEarlyPrefsSet && !gInstallingCallback &&
+    if (gPhase == ContentProcessPhase::eEarlyPrefsSet &&
         !IsEarlyPref(aPrefName)) {
       // If you hit this crash, you have an early access of a non-early pref.
       // Consider moving the access later or add the pref to the whitelist of
       // early prefs in ContentPrefs.cpp and get review from a DOM peer.
-      //
-      // Note that accesses of non-early prefs that happen while
-      // installing a callback (e.g. VarCache) are considered acceptable. These
-      // accesses will fail, but once the proper pref value is set the callback
-      // will be immediately called, so things should work out.
       MOZ_CRASH_UNSAFE_PRINTF(
         "accessing non-early pref %s before late prefs are set", aPrefName);
     }
@@ -939,6 +920,15 @@ NotifyCallbacks(const char* aPrefName)
 // Prefs parsing
 //===========================================================================
 
+struct TelemetryLoadData
+{
+  uint32_t mFileLoadSize_B;
+  uint32_t mFileLoadNumPrefs;
+  uint32_t mFileLoadTime_us;
+};
+
+static nsDataHashtable<nsCStringHashKey, TelemetryLoadData>* gTelemetryLoadData;
+
 class Parser
 {
 public:
@@ -963,7 +953,10 @@ public:
 
   ~Parser() { free(mLb); }
 
-  bool Parse(const char* aBuf, int aBufLen);
+  bool Parse(const nsCString& aName,
+             const TimeStamp& aStartTime,
+             const char* aBuf,
+             size_t aBufLen);
 
   bool GrowBuf();
 
@@ -1122,10 +1115,15 @@ Parser::ReportProblem(const char* aMessage, int aLine, bool aError)
 // bcomment-line = <bourne-shell style comment line>
 //
 bool
-Parser::Parse(const char* aBuf, int aBufLen)
+Parser::Parse(const nsCString& aName,
+              const TimeStamp& aStartTime,
+              const char* aBuf,
+              size_t aBufLen)
 {
   // The line number is currently only used for the error/warning reporting.
   int lineNum = 0;
+
+  uint32_t numPrefs = 0;
 
   State state = mState;
   for (const char* end = aBuf + aBufLen; aBuf != end; ++aBuf) {
@@ -1524,6 +1522,7 @@ Parser::Parse(const char* aBuf, int aBufLen)
 
           // We've extracted a complete name/value pair.
           HandleValue(mLb, *mVtype, value, mIsDefault, mIsSticky);
+          numPrefs++;
 
           state = State::eInit;
         } else if (c == '/') {
@@ -1548,7 +1547,34 @@ Parser::Parse(const char* aBuf, int aBufLen)
     }
   }
   mState = state;
+
+  uint32_t loadTime_us = (TimeStamp::Now() - aStartTime).ToMicroseconds();
+
+  // Most prefs files are read before telemetry initializes, so we have to save
+  // these measurements now and send them to telemetry later.
+  TelemetryLoadData loadData = { uint32_t(aBufLen), numPrefs, loadTime_us };
+  gTelemetryLoadData->Put(aName, loadData);
+
   return true;
+}
+
+void
+SendTelemetryLoadData()
+{
+  for (auto iter = gTelemetryLoadData->Iter(); !iter.Done(); iter.Next()) {
+    const nsCString& filename = PromiseFlatCString(iter.Key());
+    const TelemetryLoadData& data = iter.Data();
+    Telemetry::Accumulate(
+      Telemetry::PREFERENCES_FILE_LOAD_SIZE_B, filename, data.mFileLoadSize_B);
+    Telemetry::Accumulate(Telemetry::PREFERENCES_FILE_LOAD_NUM_PREFS,
+                          filename,
+                          data.mFileLoadNumPrefs);
+    Telemetry::Accumulate(Telemetry::PREFERENCES_FILE_LOAD_TIME_US,
+                          filename,
+                          data.mFileLoadTime_us);
+  }
+
+  gTelemetryLoadData->Clear();
 }
 
 //===========================================================================
@@ -3299,6 +3325,9 @@ Preferences::GetInstanceForService()
   gHashTable = new PLDHashTable(
     &pref_HashTableOps, sizeof(Pref), PREF_HASHTABLE_INITIAL_LENGTH);
 
+  gTelemetryLoadData =
+    new nsDataHashtable<nsCStringHashKey, TelemetryLoadData>();
+
   Result<Ok, const char*> res = InitInitialObjects();
   if (res.isErr()) {
     sPreferences = nullptr;
@@ -3423,6 +3452,10 @@ Preferences::~Preferences()
 
   delete gHashTable;
   gHashTable = nullptr;
+
+  delete gTelemetryLoadData;
+  gTelemetryLoadData = nullptr;
+
   gPrefNameArena.Clear();
 }
 
@@ -3442,11 +3475,12 @@ Preferences::SetEarlyPreferences(const nsTArray<dom::Pref>* aDomPrefs)
 {
   MOZ_ASSERT(!XRE_IsParentProcess());
 
+  gEarlyDomPrefs = new InfallibleTArray<dom::Pref>(mozilla::Move(*aDomPrefs));
+
 #ifdef DEBUG
   MOZ_ASSERT(gPhase == ContentProcessPhase::eNoPrefsSet);
   gPhase = ContentProcessPhase::eEarlyPrefsSet;
 #endif
-  gEarlyDomPrefs = new InfallibleTArray<dom::Pref>(mozilla::Move(*aDomPrefs));
 }
 
 /* static */ void
@@ -3454,13 +3488,14 @@ Preferences::SetLatePreferences(const nsTArray<dom::Pref>* aDomPrefs)
 {
   MOZ_ASSERT(!XRE_IsParentProcess());
 
+  for (unsigned int i = 0; i < aDomPrefs->Length(); i++) {
+    Preferences::SetPreference(aDomPrefs->ElementAt(i));
+  }
+
 #ifdef DEBUG
   MOZ_ASSERT(gPhase == ContentProcessPhase::eEarlyPrefsSet);
   gPhase = ContentProcessPhase::eEarlyAndLatePrefsSet;
 #endif
-  for (unsigned int i = 0; i < aDomPrefs->Length(); i++) {
-    Preferences::SetPreference(aDomPrefs->ElementAt(i));
-  }
 }
 
 /* static */ void
@@ -3483,6 +3518,10 @@ Preferences::InitializeUserPrefs()
   sPreferences->mCurrentFile = prefsFile.forget();
 
   sPreferences->NotifyServiceObservers(NS_PREFSERVICE_READ_TOPIC_ID);
+
+  // At this point all the prefs files have been read and telemetry has been
+  // initialized. Send all the file load measurements to telemetry.
+  SendTelemetryLoadData();
 }
 
 NS_IMETHODIMP
@@ -3953,11 +3992,17 @@ Preferences::WritePrefFile(nsIFile* aFile, SaveMethod aSaveMethod)
 static nsresult
 openPrefFile(nsIFile* aFile)
 {
+  TimeStamp startTime = TimeStamp::Now();
+
   nsCString data;
   MOZ_TRY_VAR(data, URLPreloader::ReadFile(aFile));
 
+  nsAutoString filenameUtf16;
+  aFile->GetLeafName(filenameUtf16);
+  NS_ConvertUTF16toUTF8 filename(filenameUtf16);
+
   Parser parser;
-  if (!parser.Parse(data.get(), data.Length())) {
+  if (!parser.Parse(filename, startTime, data.get(), data.Length())) {
     return NS_ERROR_FILE_CORRUPTED;
   }
 
@@ -4084,12 +4129,17 @@ pref_LoadPrefsInDir(nsIFile* aDir,
 static nsresult
 pref_ReadPrefFromJar(nsZipArchive* aJarReader, const char* aName)
 {
+  TimeStamp startTime = TimeStamp::Now();
+
   nsCString manifest;
   MOZ_TRY_VAR(manifest,
               URLPreloader::ReadZip(aJarReader, nsDependentCString(aName)));
 
+  nsDependentCString name(aName);
   Parser parser;
-  parser.Parse(manifest.get(), manifest.Length());
+  if (!parser.Parse(name, startTime, manifest.get(), manifest.Length())) {
+    return NS_ERROR_FILE_CORRUPTED;
+  }
 
   return NS_OK;
 }
@@ -4729,7 +4779,6 @@ Preferences::RegisterCallbackAndCall(PrefChangedFunc aCallback,
   MOZ_ASSERT(aCallback);
   nsresult rv = RegisterCallback(aCallback, aPref, aClosure, aMatchKind);
   if (NS_SUCCEEDED(rv)) {
-    AUTO_INSTALLING_CALLBACK();
     (*aCallback)(aPref, aClosure);
   }
   return rv;
@@ -4799,10 +4848,7 @@ Preferences::AddBoolVarCache(bool* aCache, const char* aPref, bool aDefault)
 #ifdef DEBUG
   AssertNotAlreadyCached("bool", aPref, aCache);
 #endif
-  {
-    AUTO_INSTALLING_CALLBACK();
-    *aCache = GetBool(aPref, aDefault);
-  }
+  *aCache = GetBool(aPref, aDefault);
   CacheData* data = new CacheData();
   data->mCacheLocation = aCache;
   data->mDefaultValueBool = aDefault;
@@ -4834,10 +4880,7 @@ Preferences::AddAtomicBoolVarCache(Atomic<bool, Order>* aCache,
 #ifdef DEBUG
   AssertNotAlreadyCached("bool", aPref, aCache);
 #endif
-  {
-    AUTO_INSTALLING_CALLBACK();
-    *aCache = Preferences::GetBool(aPref, aDefault);
-  }
+  *aCache = Preferences::GetBool(aPref, aDefault);
   CacheData* data = new CacheData();
   data->mCacheLocation = aCache;
   data->mDefaultValueBool = aDefault;
@@ -4867,10 +4910,7 @@ Preferences::AddIntVarCache(int32_t* aCache,
 #ifdef DEBUG
   AssertNotAlreadyCached("int", aPref, aCache);
 #endif
-  {
-    AUTO_INSTALLING_CALLBACK();
-    *aCache = Preferences::GetInt(aPref, aDefault);
-  }
+  *aCache = Preferences::GetInt(aPref, aDefault);
   CacheData* data = new CacheData();
   data->mCacheLocation = aCache;
   data->mDefaultValueInt = aDefault;
@@ -4899,10 +4939,7 @@ Preferences::AddAtomicIntVarCache(Atomic<int32_t, Order>* aCache,
 #ifdef DEBUG
   AssertNotAlreadyCached("int", aPref, aCache);
 #endif
-  {
-    AUTO_INSTALLING_CALLBACK();
-    *aCache = Preferences::GetInt(aPref, aDefault);
-  }
+  *aCache = Preferences::GetInt(aPref, aDefault);
   CacheData* data = new CacheData();
   data->mCacheLocation = aCache;
   data->mDefaultValueUint = aDefault;
@@ -4932,10 +4969,7 @@ Preferences::AddUintVarCache(uint32_t* aCache,
 #ifdef DEBUG
   AssertNotAlreadyCached("uint", aPref, aCache);
 #endif
-  {
-    AUTO_INSTALLING_CALLBACK();
-    *aCache = Preferences::GetUint(aPref, aDefault);
-  }
+  *aCache = Preferences::GetUint(aPref, aDefault);
   CacheData* data = new CacheData();
   data->mCacheLocation = aCache;
   data->mDefaultValueUint = aDefault;
@@ -4967,10 +5001,7 @@ Preferences::AddAtomicUintVarCache(Atomic<uint32_t, Order>* aCache,
 #ifdef DEBUG
   AssertNotAlreadyCached("uint", aPref, aCache);
 #endif
-  {
-    AUTO_INSTALLING_CALLBACK();
-    *aCache = Preferences::GetUint(aPref, aDefault);
-  }
+  *aCache = Preferences::GetUint(aPref, aDefault);
   CacheData* data = new CacheData();
   data->mCacheLocation = aCache;
   data->mDefaultValueUint = aDefault;
@@ -5014,10 +5045,7 @@ Preferences::AddFloatVarCache(float* aCache, const char* aPref, float aDefault)
 #ifdef DEBUG
   AssertNotAlreadyCached("float", aPref, aCache);
 #endif
-  {
-    AUTO_INSTALLING_CALLBACK();
-    *aCache = Preferences::GetFloat(aPref, aDefault);
-  }
+  *aCache = Preferences::GetFloat(aPref, aDefault);
   CacheData* data = new CacheData();
   data->mCacheLocation = aCache;
   data->mDefaultValueFloat = aDefault;

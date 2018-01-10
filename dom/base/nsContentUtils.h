@@ -34,6 +34,8 @@
 #include "mozilla/dom/BindingDeclarations.h" // For CallerType
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/FloatingPoint.h"
+#include "mozilla/intl/LineBreaker.h"
+#include "mozilla/intl/WordBreaker.h"
 #include "mozilla/net/ReferrerPolicy.h"
 #include "mozilla/Logging.h"
 #include "mozilla/NotNull.h"
@@ -80,7 +82,6 @@ class nsIFrame;
 class nsIImageLoadingContent;
 class nsIInterfaceRequestor;
 class nsIIOService;
-class nsILineBreaker;
 class nsILoadInfo;
 class nsILoadGroup;
 class nsIMessageBroadcaster;
@@ -100,7 +101,6 @@ class nsISupportsHashKey;
 class nsIURI;
 class nsIUUIDGenerator;
 class nsIWidget;
-class nsIWordBreaker;
 class nsIXPConnect;
 class nsNodeInfoManager;
 class nsPIDOMWindowInner;
@@ -752,14 +752,14 @@ public:
   // Returns true if aDoc1 and aDoc2 have equal NodePrincipal()s.
   static bool HaveEqualPrincipals(nsIDocument* aDoc1, nsIDocument* aDoc2);
 
-  static nsILineBreaker* LineBreaker()
+  static mozilla::intl::LineBreaker* LineBreaker()
   {
-    return sLineBreaker;
+    return sLineBreaker.get();
   }
 
-  static nsIWordBreaker* WordBreaker()
+  static mozilla::intl::WordBreaker* WordBreaker()
   {
-    return sWordBreaker;
+    return sWordBreaker.get();
   }
 
   /**
@@ -1090,6 +1090,8 @@ public:
                                   uint32_t aLineNumber = 0,
                                   uint32_t aColumnNumber = 0);
 
+  static void ReportEmptyGetElementByIdArg(const nsIDocument* aDoc);
+
   static void LogMessageToConsole(const char* aMsg);
 
   /**
@@ -1134,6 +1136,14 @@ public:
 
   static bool PrefetchPreloadEnabled(nsIDocShell* aDocShell);
 
+  static void
+  ExtractErrorValues(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                     nsAString& aSourceSpecOut, uint32_t *aLineOut,
+                     uint32_t *aColumnOut, nsString& aMessageOut);
+
+  // Variant on `ExtractErrorValues` with a `nsACString`. This
+  // method is provided for backwards compatibility. Prefer the
+  // faster method above for your code.
   static void
   ExtractErrorValues(JSContext* aCx, JS::Handle<JS::Value> aValue,
                      nsACString& aSourceSpecOut, uint32_t *aLineOut,
@@ -2397,11 +2407,6 @@ public:
   }
 
   /**
-   * Return true if this doc is controlled by a ServiceWorker.
-   */
-  static bool IsControlledByServiceWorker(nsIDocument* aDocument);
-
-  /**
    * Fire mutation events for changes caused by parsing directly into a
    * context node.
    *
@@ -2708,18 +2713,6 @@ public:
   static mozilla::LogModule* DOMDumpLog();
 
   /**
-   * Returns whether a content is an insertion point for XBL
-   * bindings or web components ShadowRoot. In web components,
-   * this corresponds to a <content> element that participates
-   * in node distribution. In XBL this corresponds to an
-   * <xbl:children> element in anonymous content.
-   *
-   * @param aContent The content to test for being an insertion point.
-   */
-  static bool IsContentInsertionPoint(nsIContent* aContent);
-
-
-  /**
    * Returns whether the children of the provided content are
    * nodes that are distributed to Shadow DOM insertion points.
    */
@@ -2944,6 +2937,11 @@ public:
     return sCookiesBehavior;
   }
 
+  static uint32_t CookiesLifetimePolicy()
+  {
+    return sCookiesLifetimePolicy;
+  }
+
   // The order of these entries matters, as we use std::min for total ordering
   // of permissions. Private Browsing is considered to be more limiting
   // then session scoping
@@ -2957,6 +2955,8 @@ public:
     eSessionScoped = 2,
     // Allow access to the storage
     eAllow = 3,
+    // Keep this at the end.  Used for serialization, but not a valid value.
+    eNumValues = 4,
   };
 
   /*
@@ -3392,8 +3392,8 @@ private:
   static nsIContentPolicy* sContentPolicyService;
   static bool sTriedToGetContentPolicy;
 
-  static nsILineBreaker* sLineBreaker;
-  static nsIWordBreaker* sWordBreaker;
+  static RefPtr<mozilla::intl::LineBreaker> sLineBreaker;
+  static RefPtr<mozilla::intl::WordBreaker> sWordBreaker;
 
   static nsIBidiKeyboard* sBidiKeyboard;
 

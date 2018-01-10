@@ -39,10 +39,13 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(ScriptLoadRequest)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 ScriptLoadRequest::ScriptLoadRequest(ScriptKind aKind,
+                                     nsIURI* aURI,
                                      nsIScriptElement* aElement,
                                      ValidJSVersion aValidJSVersion,
                                      mozilla::CORSMode aCORSMode,
-                                     const mozilla::dom::SRIMetadata& aIntegrity)
+                                     const SRIMetadata& aIntegrity,
+                                     nsIURI* aReferrer,
+                                     mozilla::net::ReferrerPolicy aReferrerPolicy)
   : mKind(aKind)
   , mElement(aElement)
   , mScriptFromHead(false)
@@ -64,10 +67,12 @@ ScriptLoadRequest::ScriptLoadRequest(ScriptKind aKind,
   , mScriptBytecode()
   , mBytecodeOffset(0)
   , mValidJSVersion(aValidJSVersion)
+  , mURI(aURI)
   , mLineNo(1)
   , mCORSMode(aCORSMode)
   , mIntegrity(aIntegrity)
-  , mReferrerPolicy(mozilla::net::RP_Unset)
+  , mReferrer(aReferrer)
+  , mReferrerPolicy(aReferrerPolicy)
 {
 }
 

@@ -1,7 +1,8 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
 
 const Ci = Components.interfaces;
@@ -1447,13 +1448,23 @@ class StringType extends Type {
   }
 }
 
+class NullType extends Type {
+  normalize(value, context) {
+    return this.normalizeBase("null", value, context);
+  }
+
+  checkBaseType(baseType) {
+    return baseType == "null";
+  }
+}
+
 let FunctionEntry;
 let Event;
 let SubModuleType;
 
 class ObjectType extends Type {
   static get EXTRA_PROPERTIES() {
-    return ["properties", "patternProperties", ...super.EXTRA_PROPERTIES];
+    return ["properties", "patternProperties", "$import", ...super.EXTRA_PROPERTIES];
   }
 
   static parseSchema(schema, path, extraProperties = []) {
@@ -1466,6 +1477,17 @@ class ObjectType extends Type {
       extraProperties = ["additionalProperties", "isInstanceOf", ...extraProperties];
     }
     this.checkSchemaProperties(schema, path, extraProperties);
+
+    let imported = null;
+    if ("$import" in schema) {
+      let importPath = schema.$import;
+      let idx = importPath.indexOf(".");
+      if (idx === -1) {
+        imported = [path[0], importPath];
+      } else {
+        imported = [importPath.slice(0, idx), importPath.slice(idx + 1)];
+      }
+    }
 
     let parseProperty = (schema, extraProps = []) => {
       return {
@@ -1511,15 +1533,33 @@ class ObjectType extends Type {
       additionalProperties = Schemas.parseSchema(type, path);
     }
 
-    return new this(schema, properties, additionalProperties, patternProperties, schema.isInstanceOf || null);
+    return new this(schema, properties, additionalProperties, patternProperties, schema.isInstanceOf || null, imported);
   }
 
-  constructor(schema, properties, additionalProperties, patternProperties, isInstanceOf) {
+  constructor(schema, properties, additionalProperties, patternProperties, isInstanceOf, imported) {
     super(schema);
     this.properties = properties;
     this.additionalProperties = additionalProperties;
     this.patternProperties = patternProperties;
     this.isInstanceOf = isInstanceOf;
+
+    if (imported) {
+      let [ns, path] = imported;
+      ns = Schemas.getNamespace(ns);
+      let importedType = ns.get(path);
+      if (!importedType) {
+        throw new Error(`Internal error: imported type ${path} not found`);
+      }
+
+      if (DEBUG && !(importedType instanceof ObjectType)) {
+        throw new Error(`Internal error: cannot import non-object type ${path}`);
+      }
+
+      this.properties = Object.assign({}, importedType.properties, this.properties);
+      this.patternProperties = [...importedType.patternProperties,
+                                ...this.patternProperties];
+      this.additionalProperties = importedType.additionalProperties || this.additionalProperties;
+    }
   }
 
   extend(type) {
@@ -1656,8 +1696,7 @@ class ObjectType extends Type {
 
       if (this.additionalProperties) {
         for (let prop of remainingProps) {
-          let type = this.additionalProperties;
-          let r = context.withPath(prop, () => type.normalize(properties[prop], context));
+          let r = context.withPath(prop, () => this.additionalProperties.normalize(properties[prop], context));
           if (r.error) {
             return r;
           }
@@ -2169,7 +2208,8 @@ FunctionEntry = class FunctionEntry extends CallEntry {
     }
 
     return new this(schema, path, schema.name,
-                    Schemas.parseSchema(schema, path,
+                    Schemas.parseSchema(
+                      schema, path,
                       ["name", "unsupported", "returns",
                        "permissions",
                        "allowAmbiguousOptionalArguments"]),
@@ -2361,6 +2401,7 @@ const TYPES = Object.freeze(Object.assign(Object.create(null), {
   boolean: BooleanType,
   function: FunctionType,
   integer: IntegerType,
+  null: NullType,
   number: NumberType,
   object: ObjectType,
   string: StringType,

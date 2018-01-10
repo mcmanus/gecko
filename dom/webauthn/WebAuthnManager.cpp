@@ -42,8 +42,6 @@ namespace {
 static mozilla::LazyLogModule gWebAuthnManagerLog("webauthnmanager");
 }
 
-NS_NAMED_LITERAL_STRING(kVisibilityChange, "visibilitychange");
-
 NS_IMPL_ISUPPORTS(WebAuthnManager, nsIDOMEventListener);
 
 /***********************************************************************
@@ -145,43 +143,9 @@ RelaxSameOrigin(nsPIDOMWindowInner* aParent,
   return NS_OK;
 }
 
-void
-WebAuthnManager::ListenForVisibilityEvents()
-{
-  nsCOMPtr<nsIDocument> doc = mParent->GetExtantDoc();
-  if (NS_WARN_IF(!doc)) {
-    return;
-  }
-
-  nsresult rv = doc->AddSystemEventListener(kVisibilityChange, this,
-                                            /* use capture */ true,
-                                            /* wants untrusted */ false);
-  Unused << NS_WARN_IF(NS_FAILED(rv));
-}
-
-void
-WebAuthnManager::StopListeningForVisibilityEvents()
-{
-  nsCOMPtr<nsIDocument> doc = mParent->GetExtantDoc();
-  if (NS_WARN_IF(!doc)) {
-    return;
-  }
-
-  nsresult rv = doc->RemoveSystemEventListener(kVisibilityChange, this,
-                                               /* use capture */ true);
-  Unused << NS_WARN_IF(NS_FAILED(rv));
-}
-
 /***********************************************************************
  * WebAuthnManager Implementation
  **********************************************************************/
-
-WebAuthnManager::WebAuthnManager(nsPIDOMWindowInner* aParent)
-  : mParent(aParent)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(aParent);
-}
 
 void
 WebAuthnManager::ClearTransaction()
@@ -229,34 +193,6 @@ WebAuthnManager::~WebAuthnManager()
   }
 }
 
-bool
-WebAuthnManager::MaybeCreateBackgroundActor()
-{
-  MOZ_ASSERT(NS_IsMainThread());
-
-  if (mChild) {
-    return true;
-  }
-
-  PBackgroundChild* actor = BackgroundChild::GetOrCreateForCurrentThread();
-  if (NS_WARN_IF(!actor)) {
-    return false;
-  }
-
-  RefPtr<WebAuthnTransactionChild> mgr(new WebAuthnTransactionChild(this));
-  PWebAuthnTransactionChild* constructedMgr =
-    actor->SendPWebAuthnTransactionConstructor(mgr);
-
-  if (NS_WARN_IF(!constructedMgr)) {
-    return false;
-  }
-
-  MOZ_ASSERT(constructedMgr == mgr);
-  mChild = mgr.forget();
-
-  return true;
-}
-
 already_AddRefed<Promise>
 WebAuthnManager::MakeCredential(const MakePublicKeyCredentialOptions& aOptions,
                                 const Optional<OwningNonNull<AbortSignal>>& aSignal)
@@ -289,12 +225,12 @@ WebAuthnManager::MakeCredential(const MakePublicKeyCredentialOptions& aOptions,
     return promise.forget();
   }
 
-  // Enforce 4.4.3 User Account Parameters for Credential Generation
-  if (aOptions.mUser.mId.WasPassed()) {
-    // When we add UX, we'll want to do more with this value, but for now
-    // we just have to verify its correctness.
+  // Enforce 5.4.3 User Account Parameters for Credential Generation
+  // When we add UX, we'll want to do more with this value, but for now
+  // we just have to verify its correctness.
+  {
     CryptoBuffer userId;
-    userId.Assign(aOptions.mUser.mId.Value());
+    userId.Assign(aOptions.mUser.mId);
     if (userId.Length() > 64) {
       promise->MaybeReject(NS_ERROR_DOM_TYPE_ERR);
       return promise.forget();
@@ -888,45 +824,10 @@ WebAuthnManager::RequestAborted(const uint64_t& aTransactionId,
   }
 }
 
-NS_IMETHODIMP
-WebAuthnManager::HandleEvent(nsIDOMEvent* aEvent)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(aEvent);
-
-  nsAutoString type;
-  aEvent->GetType(type);
-  if (!type.Equals(kVisibilityChange)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  nsCOMPtr<nsIDocument> doc =
-    do_QueryInterface(aEvent->InternalDOMEvent()->GetTarget());
-  if (NS_WARN_IF(!doc)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  if (doc->Hidden()) {
-    MOZ_LOG(gWebAuthnManagerLog, LogLevel::Debug,
-            ("Visibility change: WebAuthn window is hidden, cancelling job."));
-
-    CancelTransaction(NS_ERROR_ABORT);
-  }
-
-  return NS_OK;
-}
-
 void
 WebAuthnManager::Abort()
 {
   CancelTransaction(NS_ERROR_DOM_ABORT_ERR);
-}
-
-void
-WebAuthnManager::ActorDestroyed()
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  mChild = nullptr;
 }
 
 }

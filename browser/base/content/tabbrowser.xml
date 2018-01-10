@@ -801,7 +801,16 @@
 
                   // Ignore initial about:blank to prevent flickering.
                   if (!this.mBrowser.mIconURL && !ignoreBlank) {
-                    this.mTabBrowser.useDefaultIcon(this.mTab);
+                    // Don't switch to the default icon on about:home or about:newtab,
+                    // since these pages get their favicon set in browser code to
+                    // improve perceived performance.
+                    let isNewTab = originalLocation &&
+                      (originalLocation.spec == "about:newtab" ||
+                       originalLocation.spec == "about:privatebrowsing" ||
+                       originalLocation.spec == "about:home");
+                    if (!isNewTab) {
+                      this.mTabBrowser.useDefaultIcon(this.mTab);
+                    }
                   }
                 }
 
@@ -2127,8 +2136,11 @@
             // Also, we do not need to take care of attaching nsIFormFillControllers
             // in the case that the browser is remote, as remote browsers take
             // care of that themselves.
-            if (browser && this.hasAttribute("autocompletepopup")) {
-              browser.setAttribute("autocompletepopup", this.getAttribute("autocompletepopup"));
+            if (browser) {
+              browser.setAttribute("preloadedState", "consumed");
+              if (this.hasAttribute("autocompletepopup")) {
+                browser.setAttribute("autocompletepopup", this.getAttribute("autocompletepopup"));
+              }
             }
 
             return browser;
@@ -2230,8 +2242,23 @@
               b.setAttribute("autocompletepopup", this.getAttribute("autocompletepopup"));
             }
 
+            /*
+             * This attribute is meant to describe if the browser is the
+             * preloaded browser. There are 2 defined states: "preloaded" or
+             * "consumed". The order of events goes as follows:
+             *   1. The preloaded browser is created and the 'preloadedState'
+             *      attribute for that browser is set to "preloaded".
+             *   2. When a new tab is opened and it is time to show that
+             *      preloaded browser, the 'preloadedState' attribute for that
+             *      browser is set to "consumed"
+             *   3. When we then navigate away from about:newtab, the "consumed"
+             *      browsers will attempt to switch to a new content process,
+             *      therefore the 'preloadedState' attribute is removed from
+             *      that browser altogether
+             * See more details on Bug 1420285.
+             */
             if (aParams.isPreloadBrowser) {
-              b.setAttribute("isPreloadBrowser", "true");
+              b.setAttribute("preloadedState", "preloaded");
             }
 
             if (this.hasAttribute("selectmenulist"))
@@ -2813,8 +2840,10 @@
 
             // Hack to ensure that the about:newtab favicon is loaded
             // instantaneously, to avoid flickering and improve perceived performance.
-            if (aURI == BROWSER_NEW_TAB_URL) {
+            if (aURI == "about:newtab") {
               this.setIcon(t, "chrome://branding/content/icon32.png");
+            } else if (aURI == "about:privatebrowsing") {
+              this.setIcon(t, "chrome://browser/skin/privatebrowsing/favicon.svg");
             }
 
             // Dispatch a new tab notification.  We do this once we're
@@ -2971,9 +3000,12 @@
         <parameter name="aTab"/>
         <body>
           <![CDATA[
-            var tabsToEnd = [];
+            let tabsToEnd = [];
             let tabs = this.visibleTabs;
-            for (let i = tabs.length - 1; tabs[i] != aTab && i >= 0; --i) {
+            for (let i = tabs.length - 1; i >= 0; --i) {
+              if (tabs[i] == aTab || tabs[i].pinned) {
+                break;
+              }
               tabsToEnd.push(tabs[i]);
             }
             return tabsToEnd;
@@ -3015,9 +3047,9 @@
         <parameter name="aTab"/>
         <body>
           <![CDATA[
-            if (aTab.pinned ||
-                !this.warnAboutClosingTabs(this.closingTabsEnum.OTHER))
+            if (!this.warnAboutClosingTabs(this.closingTabsEnum.OTHER)) {
               return;
+            }
 
             let tabs = this.visibleTabs.reverse();
             this.selectedTab = aTab;
@@ -4301,10 +4333,10 @@
 
             // Auxilliary state variables:
 
-            visibleTab: this.selectedTab,   // Tab that's on screen.
-            spinnerTab: null,               // Tab showing a spinner.
-            blankTab: null,                 // Tab showing blank.
-            originalTab: this.selectedTab,  // Tab that we started on.
+            visibleTab: this.selectedTab,      // Tab that's on screen.
+            spinnerTab: null,                  // Tab showing a spinner.
+            blankTab: null,                    // Tab showing blank.
+            lastPrimaryTab: this.selectedTab,  // Tab with primary="true"
 
             tabbrowser: this,  // Reference to gBrowser.
             loadTimer: null,   // TAB_SWITCH_TIMEOUT nsITimer instance.
@@ -4363,8 +4395,20 @@
             getTabState(tab) {
               let state = this.tabState.get(tab);
               if (state === undefined) {
-                return this.STATE_UNLOADED;
+                state = this.STATE_UNLOADED;
+
+                if (tab && tab.linkedPanel) {
+                  let b = tab.linkedBrowser;
+                  if (b.renderLayers && b.hasLayers) {
+                    state = this.STATE_LOADED;
+                  } else if (b.renderLayers && !b.hasLayers) {
+                    state = this.STATE_LOADING;
+                  } else if (!b.renderLayers && b.hasLayers) {
+                    state = this.STATE_UNLOADING;
+                  }
+                }
               }
+
               return state;
             },
 
@@ -4437,29 +4481,28 @@
               window.addEventListener("EndSwapDocShells", this, true);
 
               let initialTab = this.requestedTab;
+              let initialBrowser = initialTab.linkedBrowser;
 
-              for (let tab of this.tabbrowser.tabs) {
-                if (tab == initialTab && this.minimizedOrFullyOccluded) {
-                  continue;
-                }
+              let tabIsLoaded = !initialBrowser.isRemoteBrowser ||
+                                initialBrowser.frameLoader.tabParent.hasLayers;
 
-                if (tab.linkedPanel) {
-                  let b = tab.linkedBrowser;
-                  let state;
-                  if (b.renderLayers && b.hasLayers) {
-                    state = this.STATE_LOADED;
-                  } else if (b.renderLayers && !b.hasLayers) {
-                    state = this.STATE_LOADING;
-                  } else if (!b.renderLayers && b.hasLayers) {
-                    state = this.STATE_UNLOADING;
-                  } else {
-                    state = this.STATE_UNLOADED;
-                  }
+              // If we minimized the window before the switcher was activated,
+              // we might have set  the preserveLayers flag for the current
+              // browser. Let's clear it.
+              initialBrowser.preserveLayers(false);
 
-                  this.setTabState(tab, state);
-                }
+              if (!this.minimizedOrFullyOccluded) {
+                this.log("Initial tab is loaded?: " + tabIsLoaded);
+                this.setTabState(initialTab, tabIsLoaded ? this.STATE_LOADED
+                                                         : this.STATE_LOADING);
               }
-              this.logState("Tab states initialized");
+
+              for (let ppBrowser of this.tabbrowser._printPreviewBrowsers) {
+                let ppTab = this.tabbrowser.getTabForBrowser(ppBrowser);
+                let state = ppBrowser.hasLayers ? this.STATE_LOADED
+                                                : this.STATE_LOADING;
+                this.setTabState(ppTab, state);
+              }
             },
 
             destroy() {
@@ -4503,17 +4546,6 @@
                           this.getTabState(this.requestedTab) == this.STATE_LOADED);
 
               this.destroy();
-
-              let toBrowser = this.requestedTab.linkedBrowser;
-              toBrowser.setAttribute("primary", "true");
-
-              let fromBrowser = this.originalTab.linkedBrowser;
-              // It's possible that the tab we're switching from closed
-              // before we were able to finalize, in which case, fromBrowser
-              // doesn't exist.
-              if (fromBrowser) {
-                fromBrowser.removeAttribute("primary");
-              }
 
               document.commandDispatcher.unlock();
 
@@ -4716,6 +4748,9 @@
 
               if (this.lastVisibleTab && !this.lastVisibleTab.linkedBrowser) {
                 this.lastVisibleTab = null;
+              }
+              if (this.lastPrimaryTab && !this.lastPrimaryTab.linkedBrowser) {
+                this.lastPrimaryTab = null;
               }
               if (this.blankTab && !this.blankTab.linkedBrowser) {
                 this.blankTab = null;
@@ -4957,8 +4992,9 @@
                 }
                 this.loadingTab = null;
               } else {
-                // Do nothing. We'll automatically start loading the requested tab in
-                // postActions.
+                // We're no longer minimized or occluded. This means we might want
+                // to activate the current tab's docShell.
+                this.maybeActivateDocShell(gBrowser.selectedTab);
               }
             },
 
@@ -5106,6 +5142,12 @@
               this.startTabSwitch();
 
               this.requestedTab = tab;
+
+              tab.linkedBrowser.setAttribute("primary", "true");
+              if (this.lastPrimaryTab && this.lastPrimaryTab != tab) {
+                this.lastPrimaryTab.linkedBrowser.removeAttribute("primary");
+              }
+              this.lastPrimaryTab = tab;
 
               this.suppressDisplayPortAndQueueUnload(this.requestedTab, this.UNLOAD_DELAY);
               this._requestingTab = false;

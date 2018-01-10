@@ -680,6 +680,18 @@ typedef void
 using JSExternalStringSizeofCallback =
     size_t (*)(JSString* str, mozilla::MallocSizeOf mallocSizeOf);
 
+/**
+ * Callback used to intercept JavaScript errors.
+ */
+struct JSErrorInterceptor {
+    /**
+     * This method is called whenever an error has been raised from JS code.
+     *
+     * This method MUST be infallible.
+     */
+    virtual void interceptError(JSContext* cx, const JS::Value& error) = 0;
+};
+
 /************************************************************************/
 
 static MOZ_ALWAYS_INLINE JS::Value
@@ -1096,7 +1108,6 @@ class JS_PUBLIC_API(ContextOptions) {
         werror_(false),
         strictMode_(false),
         extraWarnings_(false),
-        forEachStatement_(false),
         streams_(false)
 #ifdef FUZZING
         , fuzzing_(false)
@@ -1248,12 +1259,6 @@ class JS_PUBLIC_API(ContextOptions) {
         return *this;
     }
 
-    bool forEachStatement() const { return forEachStatement_; }
-    ContextOptions& setForEachStatement(bool flag) {
-        forEachStatement_ = flag;
-        return *this;
-    }
-
 #ifdef FUZZING
     bool fuzzing() const { return fuzzing_; }
     ContextOptions& setFuzzing(bool flag) {
@@ -1288,7 +1293,6 @@ class JS_PUBLIC_API(ContextOptions) {
     bool werror_ : 1;
     bool strictMode_ : 1;
     bool extraWarnings_ : 1;
-    bool forEachStatement_: 1;
     bool streams_: 1;
 #ifdef FUZZING
     bool fuzzing_ : 1;
@@ -1334,6 +1338,33 @@ JS_SetWrapObjectCallbacks(JSContext* cx, const JSWrapObjectCallbacks* callbacks)
 
 extern JS_PUBLIC_API(void)
 JS_SetExternalStringSizeofCallback(JSContext* cx, JSExternalStringSizeofCallback callback);
+
+#if defined(NIGHTLY_BUILD)
+
+// Set a callback that will be called whenever an error
+// is thrown in this runtime. This is designed as a mechanism
+// for logging errors. Note that the VM makes no attempt to sanitize
+// the contents of the error (so it may contain private data)
+// or to sort out among errors (so it may not be the error you
+// are interested in or for the component in which you are
+// interested).
+//
+// If the callback sets a new error, this new error
+// will replace the original error.
+//
+// May be `nullptr`.
+extern JS_PUBLIC_API(void)
+JS_SetErrorInterceptorCallback(JSRuntime*, JSErrorInterceptor* callback);
+
+extern JS_PUBLIC_API(JSErrorInterceptor*)
+JS_GetErrorInterceptorCallback(JSRuntime*);
+
+// Examine a value to determine if it is one of the built-in Error types.
+// If so, return the error type.
+extern JS_PUBLIC_API(mozilla::Maybe<JSExnType>)
+JS_GetErrorType(const JS::Value& val);
+
+#endif // defined(NIGHTLY_BUILD)
 
 extern JS_PUBLIC_API(void)
 JS_SetCompartmentPrivate(JSCompartment* compartment, void* data);
@@ -3632,7 +3663,6 @@ class JS_FRIEND_API(TransitiveCompileOptions)
         canLazilyParse(true),
         strictOption(false),
         extraWarningsOption(false),
-        forEachStatementOption(false),
         werrorOption(false),
         asmJSOption(AsmJSOption::Disabled),
         throwOnAsmJSValidationFailureOption(false),
@@ -3667,7 +3697,6 @@ class JS_FRIEND_API(TransitiveCompileOptions)
     bool canLazilyParse;
     bool strictOption;
     bool extraWarningsOption;
-    bool forEachStatementOption;
     bool werrorOption;
     AsmJSOption asmJSOption;
     bool throwOnAsmJSValidationFailureOption;
@@ -4266,12 +4295,6 @@ GetRequestedModuleSpecifier(JSContext* cx, JS::HandleValue requestedModuleObject
 extern JS_PUBLIC_API(void)
 GetRequestedModuleSourcePos(JSContext* cx, JS::HandleValue requestedModuleObject,
                             uint32_t* lineNumber, uint32_t* columnNumber);
-
-extern JS_PUBLIC_API(bool)
-IsModuleErrored(JSObject* moduleRecord);
-
-extern JS_PUBLIC_API(JS::Value)
-GetModuleError(JSObject* moduleRecord);
 
 } /* namespace JS */
 

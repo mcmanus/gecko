@@ -192,6 +192,9 @@
 @RESPATH@/components/dom.xpt
 @RESPATH@/components/dom_base.xpt
 @RESPATH@/components/dom_bindings.xpt
+#ifdef MOZ_DEBUG
+@RESPATH@/components/dom_bindings_test.xpt
+#endif
 @RESPATH@/components/dom_file.xpt
 @RESPATH@/components/dom_system.xpt
 @RESPATH@/components/dom_canvas.xpt
@@ -326,7 +329,6 @@
 @RESPATH@/components/widget_cocoa.xpt
 #endif
 @RESPATH@/components/windowcreator.xpt
-@RESPATH@/components/windowds.xpt
 @RESPATH@/components/windowwatcher.xpt
 @RESPATH@/components/xpcom_base.xpt
 @RESPATH@/components/xpcom_system.xpt
@@ -338,7 +340,6 @@
 @RESPATH@/components/xpconnect.xpt
 @RESPATH@/components/xulapp.xpt
 @RESPATH@/components/xul.xpt
-@RESPATH@/components/xultmpl.xpt
 @RESPATH@/components/zipwriter.xpt
 @RESPATH@/components/telemetry.xpt
 
@@ -490,10 +491,6 @@
 @RESPATH@/components/nsINIProcessor.js
 @RESPATH@/components/nsPrompter.manifest
 @RESPATH@/components/nsPrompter.js
-#ifdef MOZ_SERVICES_HEALTHREPORT
-@RESPATH@/browser/components/SelfSupportService.manifest
-@RESPATH@/browser/components/SelfSupportService.js
-#endif
 @RESPATH@/components/SyncComponents.manifest
 @RESPATH@/components/Weave.js
 @RESPATH@/components/FxAccountsComponents.manifest
@@ -557,7 +554,7 @@
 @RESPATH@/components/TestInterfaceJSMaplike.js
 #endif
 
-#if defined(MOZ_DEBUG) || defined(NIGHTLY_BUILD)
+#if defined(MOZ_DEBUG) || defined(MOZ_DEV_EDITION) || defined(NIGHTLY_BUILD)
 @RESPATH@/browser/components/testComponents.manifest
 @RESPATH@/browser/components/startupRecorder.js
 #endif

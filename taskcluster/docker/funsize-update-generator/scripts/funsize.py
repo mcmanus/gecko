@@ -1,25 +1,27 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from __future__ import absolute_import, print_function, unicode_literals
+from __future__ import absolute_import, division, print_function
 
-import ConfigParser
+import configparser
 import argparse
-import functools
 import hashlib
 import json
 import logging
 import os
 import shutil
 import tempfile
+import time
 import requests
 import sh
 
 import redo
 from mardor.reader import MarReader
 from mardor.signing import get_keysize
+
+from datadog import initialize, ThreadStats
 
 
 log = logging.getLogger(__name__)
@@ -54,6 +56,19 @@ def is_lzma_compressed_mar(mar):
     else:
         log.info("%s is not lzma compressed", mar)
     return result
+
+
+@redo.retriable()
+def get_secret(secret_name):
+    secrets_url = "http://taskcluster/secrets/v1/secret/{}"
+    log.debug("Fetching {}".format(secret_name))
+    r = requests.get(secrets_url.format(secret_name))
+    # 403: If unauthorized, just give up.
+    if r.status_code == 403:
+        log.info("Unable to get secret key")
+        return {}
+    r.raise_for_status()
+    return r.json().get('secret', {})
 
 
 @redo.retriable()
@@ -108,7 +123,7 @@ def get_option(directory, filename, section, option):
     log.debug("Exctracting [%s]: %s from %s/**/%s", section, option, directory,
               filename)
     f = find_file(directory, filename)
-    config = ConfigParser.ConfigParser()
+    config = configparser.ConfigParser()
     config.read(f)
     rv = config.get(section, option)
     log.debug("Found %s", rv)
@@ -137,8 +152,7 @@ def generate_partial(work_env, from_dir, to_dir, dest_mar, channel_ids,
 def get_hash(path, hash_type="sha512"):
     h = hashlib.new(hash_type)
     with open(path, "rb") as f:
-        for chunk in iter(functools.partial(f.read, 4096), ''):
-            h.update(chunk)
+        h.update(f.read())
     return h.hexdigest()
 
 
@@ -193,6 +207,9 @@ def verify_allowed_url(mar):
 
 
 def main():
+
+    start = time.time()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifacts-dir", required=True)
     parser.add_argument("--sha1-signing-cert", required=True)
@@ -208,8 +225,8 @@ def main():
                         default=logging.DEBUG)
     args = parser.parse_args()
 
-    logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s",
-                        level=args.log_level)
+    logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s")
+    log.setLevel(args.log_level)
     task = json.load(args.task_definition)
     # TODO: verify task["extra"]["funsize"]["partials"] with jsonschema
 
@@ -221,6 +238,26 @@ def main():
     assert(get_keysize(signing_certs['sha1']) == 2048)
     assert(get_keysize(signing_certs['sha384']) == 4096)
 
+    # Intended for local testing.
+    dd_api_key = os.environ.get('DATADOG_API_KEY')
+    # Intended for Taskcluster.
+    if not dd_api_key and os.environ.get('DATADOG_API_SECRET'):
+        dd_api_key = get_secret(os.environ.get('DATADOG_API_SECRET')).get('key')
+
+    # Create this even when not sending metrics, so the context manager
+    # statements work.
+    ddstats = ThreadStats(namespace='releng.releases.partials')
+
+    if dd_api_key:
+        dd_options = {
+            'api_key': dd_api_key,
+        }
+        log.info("Starting metric collection")
+        initialize(**dd_options)
+        ddstats.start(flush_interval=1)
+    else:
+        log.info("No metric collection")
+
     if args.no_freshclam:
         log.info("Skipping freshclam")
     else:
@@ -231,6 +268,7 @@ def main():
             log.info("Done.")
         except sh.ErrorReturnCode:
             log.warning("Freshclam failed, skipping DB update")
+
     manifest = []
     for e in task["extra"]["funsize"]["partials"]:
         for mar in (e["from_mar"], e["to_mar"]):
@@ -244,12 +282,14 @@ def main():
         for mar_type, f in (("from", e["from_mar"]), ("to", e["to_mar"])):
             dest = os.path.join(work_env.workdir, "{}.mar".format(mar_type))
             unpack_dir = os.path.join(work_env.workdir, mar_type)
-            download(f, dest)
+            with ddstats.timer('mar.download.time'):
+                download(f, dest)
             if not os.getenv("MOZ_DISABLE_MAR_CERT_VERIFICATION"):
                 verify_signature(dest, signing_certs)
             complete_mars["%s_size" % mar_type] = os.path.getsize(dest)
             complete_mars["%s_hash" % mar_type] = get_hash(dest)
-            unpack(work_env, dest, unpack_dir)
+            with ddstats.timer('mar.unpack.time'):
+                unpack(work_env, dest, unpack_dir)
             if mar_type == 'from':
                 version = get_option(unpack_dir, filename="application.ini",
                                      section="App", option="Version")
@@ -260,7 +300,11 @@ def main():
                     use_old_format = True
                     log.info("Forcing BZ2 compression for %s", f)
             log.info("AV-scanning %s ...", unpack_dir)
-            sh.clamscan("-r", unpack_dir, _timeout=600, _err_to_out=True)
+            metric_tags = [
+                "platform:{}".format(e['platform']),
+            ]
+            with ddstats.timer('mar.clamscan.time', tags=metric_tags):
+                sh.clamscan("-r", unpack_dir, _timeout=600, _err_to_out=True)
             log.info("Done.")
 
         path = os.path.join(work_env.workdir, "to")
@@ -309,19 +353,49 @@ def main():
         # TODO: download these once
         work_env.download_buildsystem_bits(repo=mar_data["repo"],
                                            revision=mar_data["revision"])
-        generate_partial(work_env, from_path, path, dest_mar,
-                         mar_data["ACCEPTED_MAR_CHANNEL_IDS"],
-                         mar_data["version"],
-                         use_old_format)
+
+        metric_tags = [
+            "branch:{}".format(mar_data['branch']),
+            "platform:{}".format(mar_data['platform']),
+            # If required. Shouldn't add much useful info, but increases
+            # cardinality of metrics substantially, so avoided.
+            # "locale:{}".format(mar_data['locale']),
+        ]
+
+        with ddstats.timer('generate_partial.time', tags=metric_tags):
+            generate_partial(work_env, from_path, path, dest_mar,
+                             mar_data["ACCEPTED_MAR_CHANNEL_IDS"],
+                             mar_data["version"],
+                             use_old_format)
+
         mar_data["size"] = os.path.getsize(dest_mar)
+        metric_tags.append("unit:bytes")
+        # Allows us to find out how many releases there were between the two,
+        # making buckets of the file sizes easier.
+        metric_tags.append("update_number:{}".format(mar_data.get('update_number', 0)))
+        ddstats.gauge('partial_mar_size', mar_data['size'], tags=metric_tags)
+
         mar_data["hash"] = get_hash(dest_mar)
 
         shutil.copy(dest_mar, args.artifacts_dir)
         work_env.cleanup()
         manifest.append(mar_data)
+
     manifest_file = os.path.join(args.artifacts_dir, "manifest.json")
     with open(manifest_file, "w") as fp:
         json.dump(manifest, fp, indent=2, sort_keys=True)
+
+    # Warning: Assumption that one partials task will always be for one branch.
+    metric_tags = [
+        "branch:{}".format(mar_data['branch']),
+    ]
+
+    ddstats.timing('task_duration', time.time() - start,
+                   start, tags=metric_tags)
+    # Wait for all the metrics to flush. If the program ends before
+    # they've been sent, they'll be dropped.
+    # Should be more than the flush_interval for the ThreadStats object
+    time.sleep(10)
 
 
 if __name__ == '__main__':

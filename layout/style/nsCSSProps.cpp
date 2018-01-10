@@ -1004,10 +1004,10 @@ const KTableEntry nsCSSProps::kBorderCollapseKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kBorderImageRepeatKTable[] = {
-  { eCSSKeyword_stretch, NS_STYLE_BORDER_IMAGE_REPEAT_STRETCH },
-  { eCSSKeyword_repeat, NS_STYLE_BORDER_IMAGE_REPEAT_REPEAT },
-  { eCSSKeyword_round, NS_STYLE_BORDER_IMAGE_REPEAT_ROUND },
-  { eCSSKeyword_space, NS_STYLE_BORDER_IMAGE_REPEAT_SPACE },
+  { eCSSKeyword_stretch, StyleBorderImageRepeat::Stretch },
+  { eCSSKeyword_repeat, StyleBorderImageRepeat::Repeat },
+  { eCSSKeyword_round, StyleBorderImageRepeat::Round },
+  { eCSSKeyword_space, StyleBorderImageRepeat::Space },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -1301,7 +1301,6 @@ KTableEntry nsCSSProps::kDisplayKTable[] = {
   { eCSSKeyword_ruby_base_container, StyleDisplay::RubyBaseContainer },
   { eCSSKeyword_ruby_text,           StyleDisplay::RubyText },
   { eCSSKeyword_ruby_text_container, StyleDisplay::RubyTextContainer },
-  // The next two entries are controlled by the layout.css.grid.enabled pref.
   { eCSSKeyword_grid,                StyleDisplay::Grid },
   { eCSSKeyword_inline_grid,         StyleDisplay::InlineGrid },
   // The next 4 entries are controlled by the layout.css.prefixes.webkit pref.

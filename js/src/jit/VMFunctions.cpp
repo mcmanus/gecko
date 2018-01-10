@@ -653,7 +653,8 @@ CreateThis(JSContext* cx, HandleObject callee, HandleObject newTarget, MutableHa
         RootedFunction fun(cx, &callee->as<JSFunction>());
         if (fun->isInterpreted() && fun->isConstructor()) {
             JSScript* script = JSFunction::getOrCreateScript(cx, fun);
-            if (!script || !script->ensureHasTypes(cx))
+            AutoKeepTypeScripts keepTypes(cx);
+            if (!script || !script->ensureHasTypes(cx, keepTypes))
                 return false;
             if (!js::CreateThis(cx, fun, script, newTarget, GenericObject, rval))
                 return false;
@@ -1841,6 +1842,45 @@ HasNativeDataProperty<true>(JSContext* cx, JSObject* obj, Value* vp);
 
 template bool
 HasNativeDataProperty<false>(JSContext* cx, JSObject* obj, Value* vp);
+
+
+bool
+HasNativeElement(JSContext* cx, NativeObject* obj, int32_t index, Value* vp)
+{
+    AutoUnsafeCallWithABI unsafe;
+
+    MOZ_ASSERT(obj->getClass()->isNative());
+    MOZ_ASSERT(!obj->getOpsHasProperty());
+    MOZ_ASSERT(!obj->getOpsLookupProperty());
+    MOZ_ASSERT(!obj->getOpsGetOwnPropertyDescriptor());
+
+    if (MOZ_UNLIKELY(index < 0))
+        return false;
+
+    if (obj->containsDenseElement(index)) {
+        vp[0].setBoolean(true);
+        return true;
+    }
+
+    jsid id = INT_TO_JSID(index);
+    if (obj->lastProperty()->search(cx, id)) {
+        vp[0].setBoolean(true);
+        return true;
+    }
+
+    // Fail if there's a resolve hook, unless the mayResolve hook tells
+    // us the resolve hook won't define a property with this id.
+    if (MOZ_UNLIKELY(ClassMayResolveId(cx->names(), obj->getClass(), id, obj)))
+        return false;
+    // TypedArrayObject are also native and contain indexed properties.
+    if (MOZ_UNLIKELY(obj->is<TypedArrayObject>())) {
+        vp[0].setBoolean(uint32_t(index) < obj->as<TypedArrayObject>().length());
+        return true;
+    }
+
+    vp[0].setBoolean(false);
+    return true;
+}
 
 JSString*
 TypeOfObject(JSObject* obj, JSRuntime* rt)

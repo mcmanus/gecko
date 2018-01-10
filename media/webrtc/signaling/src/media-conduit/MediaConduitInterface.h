@@ -385,13 +385,14 @@ public:
    * NOTE: ConfigureSendMediaCodec() MUST be called before this function can be invoked
    *       This ensures the inserted video-frames can be transmitted by the conduit
    */
-  virtual MediaConduitErrorCode SendVideoFrame(unsigned char* video_frame,
+  virtual MediaConduitErrorCode SendVideoFrame(const unsigned char* video_frame,
                                                unsigned int video_frame_length,
                                                unsigned short width,
                                                unsigned short height,
                                                VideoType video_type,
                                                uint64_t capture_time) = 0;
-  virtual MediaConduitErrorCode SendVideoFrame(webrtc::VideoFrame& frame) = 0;
+  virtual MediaConduitErrorCode SendVideoFrame(
+    const webrtc::VideoFrame& frame) = 0;
 
   virtual MediaConduitErrorCode ConfigureCodecMode(webrtc::VideoCodecMode) = 0;
   /**
@@ -517,6 +518,12 @@ public:
                                               int32_t samplingFreqHz,
                                               int32_t capture_delay,
                                               int& lengthSamples) = 0;
+
+  /**
+   * Checks if given sampling frequency is supported
+   * @param freq: Sampling rate (in Hz) to check
+   */
+  virtual bool IsSamplingFreqSupported(int freq) const = 0;
 
    /**
     * Function to configure send codec for the audio session

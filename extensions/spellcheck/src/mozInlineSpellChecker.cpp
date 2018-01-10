@@ -977,8 +977,7 @@ mozInlineSpellChecker::AddWordToDictionary(const nsAString &word)
 {
   NS_ENSURE_TRUE(mSpellCheck, NS_ERROR_NOT_INITIALIZED);
 
-  nsAutoString wordstr(word);
-  nsresult rv = mSpellCheck->AddWordToDictionary(wordstr.get());
+  nsresult rv = mSpellCheck->AddWordToDictionary(word);
   NS_ENSURE_SUCCESS(rv, rv);
 
   auto status = MakeUnique<mozInlineSpellStatus>(this);
@@ -994,8 +993,7 @@ mozInlineSpellChecker::RemoveWordFromDictionary(const nsAString &word)
 {
   NS_ENSURE_TRUE(mSpellCheck, NS_ERROR_NOT_INITIALIZED);
 
-  nsAutoString wordstr(word);
-  nsresult rv = mSpellCheck->RemoveWordFromDictionary(wordstr.get());
+  nsresult rv = mSpellCheck->RemoveWordFromDictionary(word);
   NS_ENSURE_SUCCESS(rv, rv);
 
   auto status = MakeUnique<mozInlineSpellStatus>(this);
@@ -1011,8 +1009,7 @@ mozInlineSpellChecker::IgnoreWord(const nsAString &word)
 {
   NS_ENSURE_TRUE(mSpellCheck, NS_ERROR_NOT_INITIALIZED);
 
-  nsAutoString wordstr(word);
-  nsresult rv = mSpellCheck->IgnoreWordAllOccurrences(wordstr.get());
+  nsresult rv = mSpellCheck->IgnoreWordAllOccurrences(word);
   NS_ENSURE_SUCCESS(rv, rv);
 
   auto status = MakeUnique<mozInlineSpellStatus>(this);
@@ -1031,7 +1028,8 @@ mozInlineSpellChecker::IgnoreWords(const char16_t **aWordsToIgnore,
 
   // add each word to the ignore list and then recheck the document
   for (uint32_t index = 0; index < aCount; index++)
-    mSpellCheck->IgnoreWordAllOccurrences(aWordsToIgnore[index]);
+    mSpellCheck->IgnoreWordAllOccurrences(
+                   nsDependentString(aWordsToIgnore[index]));
 
   auto status = MakeUnique<mozInlineSpellStatus>(this);
   nsresult rv = status->InitForSelection();
@@ -1054,16 +1052,17 @@ mozInlineSpellChecker::DidCreateNode(const nsAString& aTag,
   return NS_OK;
 }
 
-NS_IMETHODIMP mozInlineSpellChecker::WillInsertNode(nsIDOMNode *aNode, nsIDOMNode *aParent,
-                                                    int32_t aPosition)
+NS_IMETHODIMP
+mozInlineSpellChecker::WillInsertNode(nsIDOMNode* aNode,
+                                      nsIDOMNode* aNextSiblingOfNewNode)
 {
   return NS_OK;
 }
 
-NS_IMETHODIMP mozInlineSpellChecker::DidInsertNode(nsIDOMNode *aNode, nsIDOMNode *aParent,
-                                                   int32_t aPosition, nsresult aResult)
+NS_IMETHODIMP
+mozInlineSpellChecker::DidInsertNode(nsIDOMNode* aNode,
+                                     nsresult aResult)
 {
-
   return NS_OK;
 }
 
@@ -1253,17 +1252,17 @@ mozInlineSpellChecker::ShouldSpellCheckNode(TextEditor* aTextEditor,
     nsIContent *parent = content->GetParent();
     while (parent) {
       if (parent->IsHTMLElement(nsGkAtoms::blockquote) &&
-          parent->AttrValueIs(kNameSpaceID_None,
-                              nsGkAtoms::type,
-                              nsGkAtoms::cite,
-                              eIgnoreCase)) {
+          parent->AsElement()->AttrValueIs(kNameSpaceID_None,
+                                           nsGkAtoms::type,
+                                           nsGkAtoms::cite,
+                                           eIgnoreCase)) {
         return false;
       }
       if (parent->IsHTMLElement(nsGkAtoms::pre) &&
-          parent->AttrValueIs(kNameSpaceID_None,
-                              nsGkAtoms::_class,
-                              nsGkAtoms::mozsignature,
-                              eIgnoreCase)) {
+          parent->AsElement()->AttrValueIs(kNameSpaceID_None,
+                                           nsGkAtoms::_class,
+                                           nsGkAtoms::mozsignature,
+                                           eIgnoreCase)) {
         return false;
       }
 
@@ -1492,23 +1491,17 @@ nsresult mozInlineSpellChecker::DoSpellCheck(mozInlineSpellWordUtil& aWordUtil,
   PRTime beginTime = PR_Now();
 
   nsAutoString wordText;
-  RefPtr<nsRange> wordRange;
+  NodeOffsetRange wordNodeOffsetRange;
   bool dontCheckWord;
-  while (NS_SUCCEEDED(aWordUtil.GetNextWord(wordText,
-                                            getter_AddRefs(wordRange),
+  while (NS_SUCCEEDED(aWordUtil.GetNextWord(wordText, &wordNodeOffsetRange,
                                             &dontCheckWord)) &&
-         wordRange) {
+         !wordNodeOffsetRange.Empty()) {
 
     // get the range for the current word.
-    nsINode *beginNode;
-    nsINode *endNode;
-    int32_t beginOffset, endOffset;
-
-    ErrorResult erv;
-    beginNode = wordRange->GetStartContainer(erv);
-    endNode = wordRange->GetEndContainer(erv);
-    beginOffset = wordRange->GetStartOffset(erv);
-    endOffset = wordRange->GetEndOffset(erv);
+    nsINode* beginNode = wordNodeOffsetRange.Begin().mNode;
+    nsINode* endNode = wordNodeOffsetRange.End().mNode;
+    int32_t beginOffset = wordNodeOffsetRange.Begin().mOffset;
+    int32_t endOffset = wordNodeOffsetRange.End().mOffset;
 
     // see if we've done enough words in this round and run out of time.
     if (wordsChecked >= INLINESPELL_MINIMUM_WORDS_BEFORE_TIMEOUT &&
@@ -1536,6 +1529,7 @@ nsresult mozInlineSpellChecker::DoSpellCheck(mozInlineSpellWordUtil& aWordUtil,
     printf("\n");
 #endif
 
+    ErrorResult erv;
     // see if there is a spellcheck range that already intersects the word
     // and remove it. We only need to remove old ranges, so don't bother if
     // there were no ranges when we started out.
@@ -1577,20 +1571,25 @@ nsresult mozInlineSpellChecker::DoSpellCheck(mozInlineSpellWordUtil& aWordUtil,
     // check spelling and add to selection if misspelled
     bool isMisspelled;
     aWordUtil.NormalizeWord(wordText);
-    nsresult rv = mSpellCheck->CheckCurrentWordNoSuggest(wordText.get(), &isMisspelled);
+    nsresult rv = mSpellCheck->CheckCurrentWordNoSuggest(wordText,
+                                                         &isMisspelled);
     if (NS_FAILED(rv))
       continue;
 
     wordsChecked++;
-
     if (isMisspelled) {
       // misspelled words count extra toward the max
-      AddRange(aSpellCheckSelection, wordRange);
-
-      aStatus->mWordCount ++;
-      if (aStatus->mWordCount >= mMaxMisspellingsPerCheck ||
-          SpellCheckSelectionIsFull()) {
-        break;
+      RefPtr<nsRange> wordRange;
+      // If we somehow can't make a range for this word, just ignore it.
+      if(NS_SUCCEEDED(aWordUtil.MakeRange(wordNodeOffsetRange.Begin(),
+                                          wordNodeOffsetRange.End(),
+                                          getter_AddRefs(wordRange)))) {
+        AddRange(aSpellCheckSelection, wordRange);
+        aStatus->mWordCount++;
+        if (aStatus->mWordCount >= mMaxMisspellingsPerCheck ||
+            SpellCheckSelectionIsFull()) {
+          break;
+        }
       }
     }
   }

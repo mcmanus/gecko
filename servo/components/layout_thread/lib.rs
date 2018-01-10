@@ -54,7 +54,7 @@ mod dom_wrapper;
 use app_units::Au;
 use dom_wrapper::{ServoLayoutElement, ServoLayoutDocument, ServoLayoutNode};
 use dom_wrapper::drop_style_and_layout_data;
-use euclid::{Point2D, Rect, Size2D, ScaleFactor, TypedSize2D};
+use euclid::{Point2D, Rect, Size2D, TypedScale, TypedSize2D};
 use fnv::FnvHashMap;
 use gfx::display_list::{OpaqueNode, WebRenderImageInfo};
 use gfx::font;
@@ -69,8 +69,8 @@ use layout::context::LayoutContext;
 use layout::context::RegisteredPainter;
 use layout::context::RegisteredPainters;
 use layout::context::malloc_size_of_persistent_local_context;
-use layout::display_list_builder::ToGfxColor;
-use layout::flow::{self, Flow, ImmutableFlowUtils, MutableOwnedFlowUtils};
+use layout::display_list::{ToGfxColor, WebRenderDisplayListConverter};
+use layout::flow::{Flow, GetBaseFlow, ImmutableFlowUtils, MutableOwnedFlowUtils};
 use layout::flow_ref::FlowRef;
 use layout::incremental::{LayoutDamageComputation, RelayoutMode, SpecialRestyleDamage};
 use layout::layout_debug;
@@ -81,7 +81,6 @@ use layout::query::{process_node_geometry_request, process_node_scroll_area_requ
 use layout::query::{process_node_scroll_root_id_request, process_offset_parent_query};
 use layout::sequential;
 use layout::traversal::{ComputeStackingRelativePositions, PreorderFlowTraversal, RecalcStyleAndConstructFlows};
-use layout::webrender_helpers::WebRenderDisplayListConverter;
 use layout::wrapper::LayoutNodeLayoutData;
 use layout_traits::LayoutThreadFactory;
 use libc::c_void;
@@ -100,8 +99,8 @@ use script_layout_interface::rpc::{LayoutRPC, MarginStyleResponse, NodeOverflowR
 use script_layout_interface::rpc::TextIndexResponse;
 use script_layout_interface::wrapper_traits::LayoutNode;
 use script_traits::{ConstellationControlMsg, LayoutControlMsg, LayoutMsg as ConstellationMsg};
+use script_traits::{DrawAPaintImageResult, PaintWorkletError};
 use script_traits::{ScrollState, UntrustedNodeAddress};
-use script_traits::DrawAPaintImageResult;
 use script_traits::Painter;
 use selectors::Element;
 use servo_arc::Arc as ServoArc;
@@ -455,8 +454,8 @@ impl LayoutThread {
         // but it will be set correctly when the initial reflow takes place.
         let device = Device::new(
             MediaType::screen(),
-            opts::get().initial_window_size.to_f32() * ScaleFactor::new(1.0),
-            ScaleFactor::new(opts::get().device_pixels_per_px.unwrap_or(1.0)));
+            opts::get().initial_window_size.to_f32() * TypedScale::new(1.0),
+            TypedScale::new(opts::get().device_pixels_per_px.unwrap_or(1.0)));
 
         let configuration =
             rayon::Configuration::new().num_threads(layout_threads)
@@ -956,22 +955,22 @@ impl LayoutThread {
                                               layout_root: &mut Flow,
                                               layout_context: &mut LayoutContext,
                                               rw_data: &mut LayoutThreadData) {
-        let writing_mode = flow::base(layout_root).writing_mode;
+        let writing_mode = layout_root.base().writing_mode;
         let (metadata, sender) = (self.profiler_metadata(), self.time_profiler_chan.clone());
         profile(time::ProfilerCategory::LayoutDispListBuild,
                 metadata.clone(),
                 sender.clone(),
                 || {
-            flow::mut_base(layout_root).stacking_relative_position =
+            layout_root.mut_base().stacking_relative_position =
                 LogicalPoint::zero(writing_mode).to_physical(writing_mode,
                                                              self.viewport_size).to_vector();
 
-            flow::mut_base(layout_root).clip = data.page_clip_rect;
+            layout_root.mut_base().clip = data.page_clip_rect;
 
             let traversal = ComputeStackingRelativePositions { layout_context: layout_context };
             traversal.traverse(layout_root);
 
-            if flow::base(layout_root).restyle_damage.contains(ServoRestyleDamage::REPAINT) ||
+            if layout_root.base().restyle_damage.contains(ServoRestyleDamage::REPAINT) ||
                     rw_data.display_list.is_none() {
                 if reflow_goal.needs_display_list() {
                     let mut build_state =
@@ -980,7 +979,7 @@ impl LayoutThread {
                     debug!("Done building display list.");
 
                     let root_size = {
-                        let root_flow = flow::base(layout_root);
+                        let root_flow = layout_root.base();
                         if self.stylist.viewport_constraints().is_some() {
                             root_flow.position.size.to_physical(root_flow.writing_mode)
                         } else {
@@ -1564,7 +1563,7 @@ impl LayoutThread {
 
         // Perform the primary layout passes over the flow tree to compute the locations of all
         // the boxes.
-        if flow::base(&**root_flow).restyle_damage.intersects(ServoRestyleDamage::REFLOW |
+        if root_flow.base().restyle_damage.intersects(ServoRestyleDamage::REFLOW |
                                                               ServoRestyleDamage::REFLOW_OUT_OF_FLOW) {
             profile(time::ProfilerCategory::LayoutMain,
                     self.profiler_metadata(),
@@ -1630,12 +1629,12 @@ impl LayoutThread {
 
     fn reflow_all_nodes(flow: &mut Flow) {
         debug!("reflowing all nodes!");
-        flow::mut_base(flow)
+        flow.mut_base()
             .restyle_damage
             .insert(ServoRestyleDamage::REPAINT | ServoRestyleDamage::STORE_OVERFLOW |
                     ServoRestyleDamage::REFLOW | ServoRestyleDamage::REPOSITION);
 
-        for child in flow::child_iter_mut(flow) {
+        for child in flow.mut_base().child_iter_mut() {
             LayoutThread::reflow_all_nodes(child);
         }
     }
@@ -1784,10 +1783,10 @@ impl RegisteredSpeculativePainter for RegisteredPainterImpl {
 impl Painter for RegisteredPainterImpl {
     fn draw_a_paint_image(&self,
                           size: TypedSize2D<f32, CSSPixel>,
-                          device_pixel_ratio: ScaleFactor<f32, CSSPixel, DevicePixel>,
+                          device_pixel_ratio: TypedScale<f32, CSSPixel, DevicePixel>,
                           properties: Vec<(Atom, String)>,
                           arguments: Vec<String>)
-                          -> DrawAPaintImageResult
+                          -> Result<DrawAPaintImageResult, PaintWorkletError>
     {
         self.painter.draw_a_paint_image(size, device_pixel_ratio, properties, arguments)
     }

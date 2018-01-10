@@ -20,6 +20,7 @@
 #include "mozilla/Services.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/intl/LocaleService.h"
+#include "nsNativeCharsetUtils.h"
 
 #include "nsAppRunner.h"
 #include "mozilla/XREAppData.h"
@@ -159,6 +160,7 @@
 #ifdef XP_WIN
 #include <process.h>
 #include <shlobj.h>
+#include "mozilla/WindowsDllServices.h"
 #include "nsThreadUtils.h"
 #include <comdef.h>
 #include <wbemidl.h>
@@ -901,9 +903,10 @@ SYNC_ENUMS(CONTENT, Content)
 SYNC_ENUMS(IPDLUNITTEST, IPDLUnitTest)
 SYNC_ENUMS(GMPLUGIN, GMPlugin)
 SYNC_ENUMS(GPU, GPU)
+SYNC_ENUMS(PDFIUM, PDFium)
 
 // .. and ensure that that is all of them:
-static_assert(GeckoProcessType_GPU + 1 == GeckoProcessType_End,
+static_assert(GeckoProcessType_PDFium + 1 == GeckoProcessType_End,
               "Did not find the final GeckoProcessType");
 
 NS_IMETHODIMP
@@ -1013,12 +1016,18 @@ nsXULAppInfo::GetAccessibilityInstantiator(nsAString &aInstantiator)
     aInstantiator = NS_LITERAL_STRING("");
     return NS_OK;
   }
-  nsAutoString oopClientInfo, ipClientInfo;
+  nsAutoString ipClientInfo;
   a11y::Compatibility::GetHumanReadableConsumersStr(ipClientInfo);
   aInstantiator.Append(ipClientInfo);
   aInstantiator.AppendLiteral("|");
-  a11y::GetInstantiator(oopClientInfo);
-  aInstantiator.Append(oopClientInfo);
+
+  nsCOMPtr<nsIFile> oopClientExe;
+  if (a11y::GetInstantiator(getter_AddRefs(oopClientExe))) {
+    nsAutoString oopClientInfo;
+    if (NS_SUCCEEDED(oopClientExe->GetPath(oopClientInfo))) {
+      aInstantiator.Append(oopClientInfo);
+    }
+  }
 #else
   aInstantiator = NS_LITERAL_STRING("");
 #endif
@@ -1653,6 +1662,40 @@ ScopedXPCOMStartup::CreateAppSupport(nsISupports* aOuter, REFNSIID aIID, void** 
 }
 
 nsINativeAppSupport* ScopedXPCOMStartup::gNativeAppSupport;
+
+#if defined(XP_WIN)
+
+class DllNotifications : public mozilla::DllServices
+{
+public:
+  DllNotifications()
+  {
+    Enable();
+  }
+
+private:
+  ~DllNotifications() = default;
+
+  void NotifyDllLoad(const bool aIsMainThread, const nsString& aDllName) override;
+};
+
+void
+DllNotifications::NotifyDllLoad(const bool aIsMainThread,
+                                const nsString& aDllName)
+{
+  const char* topic;
+
+  if (aIsMainThread) {
+    topic = "dll-loaded-main-thread";
+  } else {
+    topic = "dll-loaded-non-main-thread";
+  }
+
+  nsCOMPtr<nsIObserverService> obsServ(mozilla::services::GetObserverService());
+  obsServ->NotifyObservers(nullptr, topic, aDllName.get());
+}
+
+#endif // defined(XP_WIN)
 
 static void DumpArbitraryHelp()
 {
@@ -4302,6 +4345,13 @@ XREMain::XRE_mainRun()
   nsresult rv = NS_OK;
   NS_ASSERTION(mScopedXPCOM, "Scoped xpcom not initialized.");
 
+#if defined(XP_WIN)
+  RefPtr<DllNotifications> dllNotifications(new DllNotifications());
+  auto dllNotificationsDisable = MakeScopeExit([&dllNotifications]() {
+    dllNotifications->Disable();
+  });
+#endif // defined(XP_WIN)
+
 #ifdef NS_FUNCTION_TIMER
   // initialize some common services, so we don't pay the cost for these at odd times later on;
   // SetWindowCreator -> ChromeRegistry -> IOService -> SocketTransportService -> (nspr wspm init), Prefs
@@ -4467,6 +4517,16 @@ XREMain::XRE_mainRun()
     }
   }
 
+  if (NS_IsNativeUTF8()) {
+    nsCOMPtr<nsIFile> profileDir;
+    nsAutoCString path;
+    rv = mDirProvider.GetProfileStartupDir(getter_AddRefs(profileDir));
+    if (NS_SUCCEEDED(rv) && NS_SUCCEEDED(profileDir->GetNativePath(path)) && !IsUTF8(path)) {
+      PR_fprintf(PR_STDERR, "Error: The profile path is not valid UTF-8. Unable to continue.\n");
+      return NS_ERROR_FAILURE;
+    }
+  }
+
   // Initialize user preferences before notifying startup observers so they're
   // ready in time for early consumers, such as the component loader.
   mDirProvider.InitializeUserPrefs();
@@ -4528,9 +4588,9 @@ XREMain::XRE_mainRun()
   }
 
 #if defined(MOZ_SANDBOX)
-  // Call SandboxBroker to cache directories needed for policy rules, this must
-  // be called after mDirProvider.DoStartup as it needs the profile dir.
-  SandboxBroker::CacheRulesDirectories();
+  // Call SandboxBroker to initialize things that depend on Gecko machinery like
+  // the directory provider.
+  SandboxBroker::GeckoDependentInitialize();
 #endif
 #endif
 

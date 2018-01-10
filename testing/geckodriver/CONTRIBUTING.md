@@ -126,8 +126,7 @@ When you have, you are ready to start off your first build:
 
 	% ./mach build testing/geckodriver
 
-The geckodriver executable will appear in `${objdir}/dist/bin/geckodriver`
-alongside firefox-bin.  To run it you can use mach:
+To run the executable from the objdir:
 
 	% ./mach geckodriver -- --version
 	 0:00.27 /home/ato/src/gecko/obj-x86_64-pc-linux-gnu/dist/bin/geckodriver --version --binary /home/ato/src/gecko/obj-x86_64-pc-linux-gnu/dist/bin/firefox
@@ -154,18 +153,17 @@ a set of conformance tests with other browser vendors through the
 compatibility between _different_ WebDriver implementations for
 different browsers.
 
-In addition to the WPT tests, geckodriver and libwebdriver has
-unit tests.  At the moment there is no way to run Rust unit tests
-through mach, although this is being worked on.  For the moment
-you need to kick off a separate build using [cargo]:
+In addition to the WPT tests, geckodriver and webdriver have unit tests.
+You can use a mach command to run them:
 
-	% cd testing/geckodriver
-	   Compiling geckodriver v0.19.0 (file:///home/ato/src/gecko/testing/geckodriver)
-	…
-	test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+	% ./mach test testing/geckodriver
 
-Because the unit tests _are not_ currently run in the [Firefox CI],
-hopefully you will find that they all pass. (-:
+The webdriver crate tests are unfortunately not yet runnable through mach.
+Work to make this possible is tracked in [[https://bugzil.la/1424369]].
+For the moment you must run them manually through `cargo`:
+
+	% cd testing/webdriver
+	% cargo test
 
 To run the more extensive WPT tests you can use mach, but first
 make sure you have a build of Firefox:

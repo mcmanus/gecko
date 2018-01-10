@@ -223,8 +223,8 @@ panel[photon] > .panel-arrowcontainer > .panel-arrowcontent {
   padding: 0;
 }
 
-#wrapper-edit-controls:-moz-any([place="palette"],[place="panel"]) > #edit-controls,
-#wrapper-zoom-controls:-moz-any([place="palette"],[place="panel"]) > #zoom-controls {
+#wrapper-edit-controls:-moz-any([place="palette"],[place="menu-panel"]) > #edit-controls,
+#wrapper-zoom-controls:-moz-any([place="palette"],[place="menu-panel"]) > #zoom-controls {
   margin-inline-start: 0;
 }
 
@@ -402,7 +402,7 @@ panel[photon] > .panel-arrowcontainer > .panel-arrowcontent {
   }
 }
 
-toolbarpaletteitem[place=panel] > .toolbarbutton-1 {
+toolbarpaletteitem[place="menu-panel"] > .toolbarbutton-1 {
   -moz-box-flex: 1;
 }
 
@@ -718,6 +718,7 @@ toolbarbutton[constrain-size="true"][cui-areatype="menu-panel"] > .toolbarbutton
 */
 #PanelUI-remotetabs[mainview] #PanelUI-remotetabs-setupsync,
 #PanelUI-remotetabs[mainview] #PanelUI-remotetabs-reauthsync,
+#PanelUI-remotetabs[mainview] #PanelUI-remotetabs-unverified,
 #PanelUI-remotetabs[mainview] #PanelUI-remotetabs-nodevicespane,
 #PanelUI-remotetabs[mainview] #PanelUI-remotetabs-tabsdisabledpane {
   min-height: calc(var(--panel-ui-sync-illustration-height) +
@@ -906,6 +907,7 @@ panelview .toolbarbutton-1,
 
 .subviewbutton[checked="true"] {
   list-style-image: url(chrome://browser/skin/check.svg);
+  -moz-context-properties: fill;
   fill: currentColor;
 }
 
@@ -1164,7 +1166,7 @@ toolbarpaletteitem[place="palette"] > #search-container {
 }
 
 /* In customize mode, extend the buttons *only* in the panel, just to make them not look stupid */
-toolbarpaletteitem[place=panel] > .toolbaritem-combined-buttons > toolbarbutton {
+toolbarpaletteitem[place="menu-panel"] > .toolbaritem-combined-buttons > toolbarbutton {
   min-width: calc(@menuPanelButtonWidth@ - 1px);
   max-width: calc(@menuPanelButtonWidth@ - 1px);
 }
@@ -1258,7 +1260,7 @@ toolbaritem[overflowedItem=true],
     float: right;
 }
 
-toolbarpaletteitem[place=panel] > .subviewbutton-nav::after {
+toolbarpaletteitem[place="menu-panel"] > .subviewbutton-nav::after {
   opacity: 0.5;
 }
 
@@ -1487,18 +1489,18 @@ menuitem[checked="true"].subviewbutton > .menu-iconic-left {
   text-align: center;
 }
 
-.PanelUI-subView .panel-header > .subviewbutton-back {
+.panel-header > .subviewbutton-back {
   -moz-context-properties: fill;
   fill: var(--arrowpanel-color);
   list-style-image: url(chrome://browser/skin/arrow-left.svg);
   padding: 8px;
 }
 
-.panel-header > .subviewbutton-back:-moz-locale-dir(rtl) {
+.subviewbutton-back:-moz-locale-dir(rtl) {
   transform: scaleX(-1);
 }
 
-.panel-header > .subviewbutton-back > .toolbarbutton-text {
+.subviewbutton-back > .toolbarbutton-text {
   /* !important to override .cui-widget-panel toolbarbutton:not([wrap]) > .toolbarbutton-text
    * selector further down. */
   display: none !important;

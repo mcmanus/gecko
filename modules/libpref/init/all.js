@@ -496,7 +496,7 @@ pref("media.peerconnection.ice.no_host", false);
 pref("media.peerconnection.ice.default_address_only", false);
 pref("media.peerconnection.ice.proxy_only", false);
 
-// These values (aec, agc, and noice) are from media/webrtc/trunk/webrtc/common_types.h
+// These values (aec, agc, and noise) are from media/webrtc/trunk/webrtc/common_types.h
 // kXxxUnchanged = 0, kXxxDefault = 1, and higher values are specific to each
 // setting (for Xxx = Ec, Agc, or Ns).  Defaults are all set to kXxxDefault here.
 pref("media.peerconnection.turn.disable", false);
@@ -510,7 +510,7 @@ pref("media.getusermedia.noise_enabled", true);
 pref("media.getusermedia.aec_extended_filter", true);
 pref("media.getusermedia.noise", 1);
 pref("media.getusermedia.agc_enabled", false);
-pref("media.getusermedia.agc", 1);
+pref("media.getusermedia.agc", 3); // kAgcAdaptiveDigital
 // capture_delay: Adjustments for OS-specific input delay (lower bound)
 // playout_delay: Adjustments for OS-specific AudioStream+cubeb+output delay (lower bound)
 // full_duplex: enable cubeb full-duplex capture/playback
@@ -710,6 +710,10 @@ pref("apz.overscroll.stretch_factor", "0.35");
 pref("apz.paint_skipping.enabled", true);
 // Fetch displayport updates early from the message queue
 pref("apz.peek_messages.enabled", true);
+pref("apz.pinch_lock.mode", 1);
+pref("apz.pinch_lock.scoll_lock_threshold", "0.03125");  // 1/32 inches
+pref("apz.pinch_lock.span_breakout_threshold", "0.03125");  // 1/32 inches
+pref("apz.pinch_lock.span_lock_threshold", "0.03125");  // 1/32 inches
 pref("apz.popups.enabled", false);
 
 // Whether to print the APZC tree for debugging
@@ -877,6 +881,7 @@ pref("gfx.webrender.program-binary", true);
 
 pref("gfx.webrender.highlight-painted-layers", false);
 pref("gfx.webrender.blob-images", false);
+pref("gfx.webrender.hit-test", false);
 
 // WebRender debugging utilities.
 pref("gfx.webrender.debug.texture-cache", false);
@@ -886,6 +891,8 @@ pref("gfx.webrender.debug.profiler", false);
 pref("gfx.webrender.debug.gpu-time-queries", false);
 pref("gfx.webrender.debug.gpu-sample-queries", false);
 pref("gfx.webrender.debug.disable-batching", false);
+pref("gfx.webrender.debug.epochs", false);
+pref("gfx.webrender.debug.compact-profiler", false);
 
 pref("accessibility.browsewithcaret", false);
 pref("accessibility.warn_on_browsewithcaret", true);
@@ -1235,7 +1242,6 @@ pref("editor.use_div_for_default_newlines",  false);
 pref("dom.disable_beforeunload",            false);
 pref("dom.disable_window_flip",             false);
 pref("dom.disable_window_move_resize",      false);
-pref("dom.disable_window_status_change",    false);
 
 pref("dom.disable_window_open_feature.titlebar",    false);
 pref("dom.disable_window_open_feature.close",       false);
@@ -1383,11 +1389,7 @@ pref("privacy.trackingprotection.lower_network_priority", false);
 pref("dom.event.contextmenu.enabled",       true);
 pref("dom.event.clipboardevents.enabled",   true);
 pref("dom.event.highrestimestamp.enabled",  true);
-#ifdef NIGHTLY_BUILD
 pref("dom.event.coalesce_mouse_move",       true);
-#else
-pref("dom.event.coalesce_mouse_move",       false);
-#endif
 
 pref("dom.webcomponents.enabled",           false);
 pref("dom.webcomponents.customelements.enabled", false);
@@ -1488,9 +1490,6 @@ pref("javascript.options.mem.gc_dynamic_heap_growth", true);
 // Override SpiderMonkey default (false).
 pref("javascript.options.mem.gc_dynamic_mark_slice", true);
 
-// JSGC_REFRESH_FRAME_SLICES_ENABLED
-pref("javascript.options.mem.gc_refresh_frame_slices_enabled", true);
-
 // JSGC_ALLOCATION_THRESHOLD
 pref("javascript.options.mem.gc_allocation_threshold_mb", 30);
 
@@ -1508,7 +1507,7 @@ pref("javascript.options.mem.gc_max_empty_chunk_count", 30);
 
 pref("javascript.options.showInConsole", false);
 
-pref("javascript.options.shared_memory", true);
+pref("javascript.options.shared_memory", false);
 
 pref("javascript.options.throw_on_debuggee_would_run", false);
 pref("javascript.options.dump_stack_on_debuggee_would_run", false);
@@ -2188,7 +2187,12 @@ pref("network.auth.subresource-http-auth-allow", 2);
 // false - it is not allowed.
 // If network.auth.subresource-http-auth-allow has values 0 or 1 this pref does not
 // have any effect.
-pref("network.auth.subresource-img-cross-origin-http-auth-allow", true);
+pref("network.auth.subresource-img-cross-origin-http-auth-allow", false);
+
+// Resources that are triggered by some non-web-content:
+// true - they are allow to present http auth. dialog
+// false - they are not allow to present http auth. dialog.
+pref("network.auth.non-web-content-triggered-resources-http-auth-allow", false);
 
 // This preference controls whether to allow sending default credentials (SSO) to
 // NTLM/Negotiate servers allowed in the "trusted uri" list when navigating them
@@ -2205,16 +2209,25 @@ pref("network.auth.private-browsing-sso", false);
 // Control how throttling of http responses works - number of ms that each
 // suspend and resume period lasts (prefs named appropriately)
 pref("network.http.throttle.enable", true);
+pref("network.http.throttle.version", 1);
+
+// V1 prefs
 pref("network.http.throttle.suspend-for", 900);
 pref("network.http.throttle.resume-for", 100);
+
+// V2 prefs
+pref("network.http.throttle.read-limit-bytes", 8000);
+pref("network.http.throttle.read-interval-ms", 500);
+
+// Common prefs
 // Delay we resume throttled background responses after the last unthrottled
 // response has finished.  Prevents resuming too soon during an active page load
 // at which sub-resource reqeusts quickly come and go.
-pref("network.http.throttle.resume-background-in", 1000);
+pref("network.http.throttle.hold-time-ms", 800);
 // After the last transaction activation or last data chunk response we only
 // throttle for this period of time.  This prevents comet and unresponsive
 // http requests to engage long-standing throttling.
-pref("network.http.throttle.time-window", 3000);
+pref("network.http.throttle.max-time-ms", 500);
 
 // Give higher priority to requests resulting from a user interaction event
 // like click-to-play, image fancy-box zoom, navigation.
@@ -2542,7 +2555,7 @@ pref("security.notification_enable_delay", 500);
 pref("security.csp.enable", true);
 pref("security.csp.experimentalEnabled", false);
 pref("security.csp.enableStrictDynamic", true);
-#ifdef EARLY_BETA_OR_EARLIER
+#ifdef NIGHTLY_BUILD
 pref("security.csp.enable_violation_events", true);
 #else
 pref("security.csp.enable_violation_events", false);
@@ -2956,6 +2969,13 @@ pref("layout.css.frames-timing.enabled", false);
 pref("layout.css.frames-timing.enabled", true);
 #endif
 
+// Are we emulating -moz-{inline}-box layout using CSS flexbox?
+// (This pref only takes effect in prerelease builds, so we only
+// bother specifying a default in prerelease builds as well.)
+#ifndef RELEASE_OR_BETA
+pref("layout.css.emulate-moz-box-with-flex", false);
+#endif
+
 // Are sets of prefixed properties supported?
 pref("layout.css.prefixes.border-image", true);
 pref("layout.css.prefixes.transforms", true);
@@ -3008,9 +3028,6 @@ pref("layout.css.all-shorthand.enabled", true);
 
 // Is support for CSS overflow-clip-box enabled for non-UA sheets?
 pref("layout.css.overflow-clip-box.enabled", false);
-
-// Is support for CSS grid enabled?
-pref("layout.css.grid.enabled", true);
 
 // Is support for CSS "grid-template-{columns,rows}: subgrid X" enabled?
 pref("layout.css.grid-template-subgrid-value.enabled", false);
@@ -3106,6 +3123,7 @@ pref("layout.display-list.retain", true);
 #else
 pref("layout.display-list.retain", false);
 #endif
+pref("layout.display-list.retain.chrome", false);
 
 // Set the maximum amount of modified frames allowed before doing a full
 // display list rebuild.
@@ -3853,8 +3871,32 @@ pref("plugin.mousewheel.enabled", true);
 // Switch the keyboard layout per window
 pref("intl.keyboard.per_window_layout", false);
 
+// Whether Gecko sets input scope of the URL bar to IS_DEFAULT when black
+// listed IMEs are active.  If you use tablet mode mainly and you want to
+// use touch keyboard for URL when you set focus to the URL bar, you can
+// set this to false.  Then, you'll see, e.g., ".com" key on the keyboard.
+// However, if you set this to false, such IMEs set its open state to "closed"
+// when you set focus to the URL bar.  I.e., input mode is automatically
+// changed to English input mode.
+// Black listed IMEs:
+//   - Microsoft IME for Japanese
+//   - Google Japanese Input
+//   - Microsoft Bopomofo
+//   - Microsoft ChangJie
+//   - Microsoft Phonetic
+//   - Microsoft Quick
+//   - Microsoft New ChangJie
+//   - Microsoft New Phonetic
+//   - Microsoft New Quick
+//   - Microsoft Pinyin
+//   - Microsoft Pinyin New Experience Input Style
+//   - Microsoft Wubi
+//   - Microsoft IME for Korean (except on Win7)
+//   - Microsoft Old Hangul
+pref("intl.ime.hack.set_input_scope_of_url_bar_to_default", true);
+
 #ifdef NS_ENABLE_TSF
-// Enable/Disable TSF support on Vista or later.
+// Enable/Disable TSF support.
 pref("intl.tsf.enable", true);
 
 // Support IMEs implemented with IMM in TSF mode.
@@ -4761,8 +4803,22 @@ pref("network.tcp.keepalive.retry_interval", 1); // seconds
 pref("network.tcp.keepalive.probe_count", 4);
 #endif
 
+#if defined(XP_WIN) || defined(XP_MACOSX)
+pref("network.tcp.tcp_fastopen_enable", true);
+#else
 pref("network.tcp.tcp_fastopen_enable", false);
+#endif
 pref("network.tcp.tcp_fastopen_consecutive_failure_limit", 5);
+// We are trying to detect stalled tcp connections that use TFO and TLS
+// (bug 1395494).
+// This is only happening if a connection is idle for more than 10s, but we
+// will make this a pref. If tcp_fastopen_http_stalls_limit of stalls are
+// detected the TCP fast open will be disabled.
+// If tcp_fastopen_http_check_for_stalls_only_if_idle_for is set to 0 the
+// check will not be performed.
+pref("network.tcp.tcp_fastopen_http_check_for_stalls_only_if_idle_for", 10);
+pref("network.tcp.tcp_fastopen_http_stalls_limit", 3);
+pref("network.tcp.tcp_fastopen_http_stalls_timeout", 20);
 
 // Whether to disable acceleration for all widgets.
 pref("layers.acceleration.disabled", false);
@@ -5088,7 +5144,7 @@ pref("dom.w3c_touch_events.enabled", 2);
 #endif
 
 // W3C draft pointer events
-#if !defined(ANDROID) && defined(NIGHTLY_BUILD)
+#if !defined(ANDROID)
 pref("dom.w3c_pointer_events.enabled", true);
 #else
 pref("dom.w3c_pointer_events.enabled", false);
@@ -5155,7 +5211,7 @@ pref("dom.idle-observers-api.fuzz_time.disabled", true);
 // no notifications). The delay is the same for both download and upload, though
 // they are handled separately. This pref is only read once at startup:
 // a restart is required to enable a new value.
-pref("network.activity.blipIntervalMilliseconds", 0);
+pref("network.activity.intervalMilliseconds", 0);
 
 // If true, reuse the same global for (almost) everything loaded by the component
 // loader (JS components, JSMs, etc). This saves memory, but makes it possible
@@ -5208,14 +5264,21 @@ pref("dom.vr.oculus.enabled", false);
 // interface through the Oculus HUD without waiting this duration)
 // If this value is too low, the Oculus Home interface may be visible
 // momentarily during VR link navigation.
-pref("dom.vr.oculus.present.timeout", 10000);
+pref("dom.vr.oculus.present.timeout", 500);
 // Minimum number of milliseconds that the browser will wait before
 // reloading the Oculus OVR library after seeing a "ShouldQuit" flag set.
 // Oculus requests that we shut down and unload the OVR library, by setting
 // a "ShouldQuit" flag.  To ensure that we don't interfere with
 // Oculus software auto-updates, we will not attempt to re-load the
 // OVR library until this timeout has elapsed.
-pref("dom.vr.oculus.quit.timeout", 30000);
+pref("dom.vr.oculus.quit.timeout", 10000);
+// When enabled, Oculus sessions may be created with the ovrInit_Invisible
+// flag if a page is using tracking but not presenting.  When a page
+// begins presenting VR frames, the session will be re-initialized without
+// the flag.  This eliminates the "Firefox not responding" warnings in
+// the headset, but might not be compatible with all versions of the Oculus
+// runtime.
+pref("dom.vr.oculus.invisible.enabled", true);
 // OSVR device
 pref("dom.vr.osvr.enabled", false);
 // OpenVR device
@@ -5843,10 +5906,16 @@ pref("layers.advanced.image-layers", 2);
 pref("layers.advanced.outline-layers", 2);
 pref("layers.advanced.solid-color", false);
 pref("layers.advanced.table", false);
-pref("layers.advanced.text-layers", 2);
 
 // Enable lowercased response header name
 pref("dom.xhr.lowercase_header.enabled", false);
+
+// Control whether clients.openWindow() opens windows in the same process
+// that called the API vs following our normal multi-process selection
+// algorithm.  Restricting openWindow to same process improves service worker
+// web compat in the short term.  Once the SW multi-e10s refactor is complete
+// this can be removed.
+pref("dom.clients.openwindow_favors_same_process", true);
 
 // When a crash happens, whether to include heap regions of the crash context
 // in the minidump. Enabled by default on nightly and aurora.
@@ -5859,7 +5928,7 @@ pref("toolkit.crashreporter.include_context_heap", true);
 // Open noopener links in a new process
 pref("dom.noopener.newprocess.enabled", true);
 
-#ifdef XP_WIN
+#if defined(XP_WIN) || defined(XP_MACOSX)
 pref("layers.omtp.enabled", true);
 #else
 pref("layers.omtp.enabled", false);

@@ -9,6 +9,7 @@
 #include "jsapi.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/dom/BindingDeclarations.h"
+#include "mozilla/dom/Clients.h"
 #include "mozilla/dom/Console.h"
 #include "mozilla/dom/DedicatedWorkerGlobalScopeBinding.h"
 #include "mozilla/dom/Fetch.h"
@@ -44,7 +45,6 @@
 #include "ScriptLoader.h"
 #include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
-#include "ServiceWorkerClients.h"
 #include "ServiceWorkerManager.h"
 #include "ServiceWorkerRegistration.h"
 
@@ -136,7 +136,7 @@ WorkerGlobalScope::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
   MOZ_CRASH("We should never get here!");
 }
 
-Console*
+already_AddRefed<Console>
 WorkerGlobalScope::GetConsole(ErrorResult& aRv)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
@@ -148,7 +148,8 @@ WorkerGlobalScope::GetConsole(ErrorResult& aRv)
     }
   }
 
-  return mConsole;
+  RefPtr<Console> console = mConsole;
+  return console.forget();
 }
 
 Crypto*
@@ -634,14 +635,15 @@ ServiceWorkerGlobalScope::WrapGlobalObject(JSContext* aCx,
                                                true, aReflector);
 }
 
-ServiceWorkerClients*
-ServiceWorkerGlobalScope::Clients()
+already_AddRefed<Clients>
+ServiceWorkerGlobalScope::GetClients()
 {
   if (!mClients) {
-    mClients = new ServiceWorkerClients(this);
+    mClients = new Clients(this);
   }
 
-  return mClients;
+  RefPtr<Clients> ref = mClients;
+  return ref.forget();
 }
 
 ServiceWorkerRegistration*
@@ -848,15 +850,6 @@ ServiceWorkerGlobalScope::SkipWaiting(ErrorResult& aRv)
   return promise.forget();
 }
 
-bool
-ServiceWorkerGlobalScope::OpenWindowEnabled(JSContext* aCx, JSObject* aObj)
-{
-  WorkerPrivate* worker = GetCurrentThreadWorkerPrivate();
-  MOZ_ASSERT(worker);
-  worker->AssertIsOnWorkerThread();
-  return worker->OpenWindowEnabled();
-}
-
 WorkerDebuggerGlobalScope::WorkerDebuggerGlobalScope(
                                                   WorkerPrivate* aWorkerPrivate)
 : mWorkerPrivate(aWorkerPrivate)
@@ -1053,7 +1046,7 @@ WorkerDebuggerGlobalScope::SetConsoleEventHandler(JSContext* aCx,
   console->SetConsoleEventHandler(aHandler);
 }
 
-Console*
+already_AddRefed<Console>
 WorkerDebuggerGlobalScope::GetConsole(ErrorResult& aRv)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
@@ -1066,7 +1059,8 @@ WorkerDebuggerGlobalScope::GetConsole(ErrorResult& aRv)
     }
   }
 
-  return mConsole;
+  RefPtr<Console> console = mConsole;
+  return console.forget();
 }
 
 void

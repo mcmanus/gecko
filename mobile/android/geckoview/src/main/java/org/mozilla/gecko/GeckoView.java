@@ -46,7 +46,6 @@ public class GeckoView extends FrameLayout {
 
     protected SurfaceView mSurfaceView;
 
-    private InputConnectionListener mInputConnectionListener;
     private boolean mIsResettingFocus;
 
     private static class SavedState extends BaseSavedState {
@@ -81,38 +80,36 @@ public class GeckoView extends FrameLayout {
         };
     }
 
-    private class Display implements GeckoDisplay,
-                                     SurfaceHolder.Callback {
+    private class Display implements SurfaceHolder.Callback {
         private final int[] mOrigin = new int[2];
 
-        private Listener mListener;
+        private GeckoDisplay mDisplay;
         private boolean mValid;
 
-        @Override // GeckoDisplay
-        public Listener getListener() {
-            return mListener;
-        }
+        public void acquire(final GeckoDisplay display) {
+            mDisplay = display;
 
-        @Override // GeckoDisplay
-        public void setListener(final Listener listener) {
-            if (mValid && mListener != null) {
-                // Tell old listener the surface is gone.
-                mListener.surfaceDestroyed();
-            }
-
-            mListener = listener;
-
-            if (!mValid || listener == null) {
+            if (!mValid) {
                 return;
             }
 
-            // Tell new listener there is already a surface.
+            // Tell display there is already a surface.
             onGlobalLayout();
             if (GeckoView.this.mSurfaceView != null) {
                 final SurfaceHolder holder = GeckoView.this.mSurfaceView.getHolder();
                 final Rect frame = holder.getSurfaceFrame();
-                listener.surfaceChanged(holder.getSurface(), frame.right, frame.bottom);
+                mDisplay.surfaceChanged(holder.getSurface(), frame.right, frame.bottom);
             }
+        }
+
+        public GeckoDisplay release() {
+            if (mValid) {
+                mDisplay.surfaceDestroyed();
+            }
+
+            final GeckoDisplay display = mDisplay;
+            mDisplay = null;
+            return display;
         }
 
         @Override // SurfaceHolder.Callback
@@ -122,27 +119,27 @@ public class GeckoView extends FrameLayout {
         @Override // SurfaceHolder.Callback
         public void surfaceChanged(final SurfaceHolder holder, final int format,
                                    final int width, final int height) {
-            if (mListener != null) {
-                mListener.surfaceChanged(holder.getSurface(), width, height);
+            if (mDisplay != null) {
+                mDisplay.surfaceChanged(holder.getSurface(), width, height);
             }
             mValid = true;
         }
 
         @Override // SurfaceHolder.Callback
         public void surfaceDestroyed(final SurfaceHolder holder) {
-            if (mListener != null) {
-                mListener.surfaceDestroyed();
+            if (mDisplay != null) {
+                mDisplay.surfaceDestroyed();
             }
             mValid = false;
         }
 
         public void onGlobalLayout() {
-            if (mListener == null) {
+            if (mDisplay == null) {
                 return;
             }
             if (GeckoView.this.mSurfaceView != null) {
                 GeckoView.this.mSurfaceView.getLocationOnScreen(mOrigin);
-                mListener.screenOriginChanged(mOrigin[0], mOrigin[1]);
+                mDisplay.screenOriginChanged(mOrigin[0], mOrigin[1]);
             }
         }
     }
@@ -198,10 +195,10 @@ public class GeckoView extends FrameLayout {
         }
 
         if (mSession != null) {
-            mSession.removeDisplay(mDisplay);
+            mSession.releaseDisplay(mDisplay.release());
         }
         if (session != null) {
-            session.addDisplay(mDisplay);
+            mDisplay.acquire(session.acquireDisplay());
         }
 
         final Context context = getContext();
@@ -265,7 +262,8 @@ public class GeckoView extends FrameLayout {
         if (!mSession.isOpen()) {
             mSession.openWindow(getContext().getApplicationContext());
         }
-        mSession.attachView(this);
+
+        mSession.getTextInputController().setView(this);
 
         super.onAttachedToWindow();
     }
@@ -273,6 +271,8 @@ public class GeckoView extends FrameLayout {
     @Override
     public void onDetachedFromWindow() {
         super.onDetachedFromWindow();
+
+        mSession.getTextInputController().setView(this);
 
         if (mStateSaved) {
             // If we saved state earlier, we don't want to close the window.
@@ -320,10 +320,6 @@ public class GeckoView extends FrameLayout {
         }
     }
 
-    /* package */ void setInputConnectionListener(final InputConnectionListener icl) {
-        mInputConnectionListener = icl;
-    }
-
     @Override
     public void onFocusChanged(boolean gainFocus, int direction, Rect previouslyFocusedRect) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect);
@@ -368,18 +364,18 @@ public class GeckoView extends FrameLayout {
 
     @Override
     public Handler getHandler() {
-        if (mInputConnectionListener != null) {
-            return mInputConnectionListener.getHandler(super.getHandler());
+        if (Build.VERSION.SDK_INT >= 24 || mSession == null) {
+            return super.getHandler();
         }
-        return super.getHandler();
+        return mSession.getTextInputController().getHandler(super.getHandler());
     }
 
     @Override
-    public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
-        if (mInputConnectionListener != null) {
-            return mInputConnectionListener.onCreateInputConnection(outAttrs);
+    public InputConnection onCreateInputConnection(final EditorInfo outAttrs) {
+        if (mSession == null) {
+            return null;
         }
-        return null;
+        return mSession.getTextInputController().onCreateInputConnection(outAttrs);
     }
 
     @Override
@@ -387,8 +383,8 @@ public class GeckoView extends FrameLayout {
         if (super.onKeyPreIme(keyCode, event)) {
             return true;
         }
-        return mInputConnectionListener != null &&
-                mInputConnectionListener.onKeyPreIme(keyCode, event);
+        return mSession != null &&
+               mSession.getTextInputController().onKeyPreIme(keyCode, event);
     }
 
     @Override
@@ -396,8 +392,8 @@ public class GeckoView extends FrameLayout {
         if (super.onKeyUp(keyCode, event)) {
             return true;
         }
-        return mInputConnectionListener != null &&
-                mInputConnectionListener.onKeyUp(keyCode, event);
+        return mSession != null &&
+               mSession.getTextInputController().onKeyUp(keyCode, event);
     }
 
     @Override
@@ -405,8 +401,8 @@ public class GeckoView extends FrameLayout {
         if (super.onKeyDown(keyCode, event)) {
             return true;
         }
-        return mInputConnectionListener != null &&
-                mInputConnectionListener.onKeyDown(keyCode, event);
+        return mSession != null &&
+               mSession.getTextInputController().onKeyDown(keyCode, event);
     }
 
     @Override
@@ -414,8 +410,8 @@ public class GeckoView extends FrameLayout {
         if (super.onKeyLongPress(keyCode, event)) {
             return true;
         }
-        return mInputConnectionListener != null &&
-                mInputConnectionListener.onKeyLongPress(keyCode, event);
+        return mSession != null &&
+               mSession.getTextInputController().onKeyLongPress(keyCode, event);
     }
 
     @Override
@@ -423,8 +419,8 @@ public class GeckoView extends FrameLayout {
         if (super.onKeyMultiple(keyCode, repeatCount, event)) {
             return true;
         }
-        return mInputConnectionListener != null &&
-                mInputConnectionListener.onKeyMultiple(keyCode, repeatCount, event);
+        return mSession != null &&
+               mSession.getTextInputController().onKeyMultiple(keyCode, repeatCount, event);
     }
 
     @Override

@@ -18,7 +18,7 @@ menulist > menupopup {
 /* ::::: Variables ::::: */
 :root {
   --arrowpanel-padding: 16px;
-  --arrowpanel-background: linear-gradient(hsla(0,0%,99%,1), hsla(0,0%,99%,.975) 10%, hsla(0,0%,98%,.975));
+  --arrowpanel-background: hsla(0,0%,99%,.975);
   --arrowpanel-color: hsl(0,0%,10%);
   --arrowpanel-border-color: hsla(210,4%,10%,.05);
   --arrowpanel-border-radius: 3.5px;
@@ -30,19 +30,11 @@ menulist > menupopup {
 window,
 page,
 dialog,
-wizard,
-prefwindow {
+wizard {
   -moz-appearance: dialog;
   background-color: #FFFFFF;
   color: -moz-DialogText;
   font: message-box;
-}
-
-prefwindow[type="child"] {
-  padding-top: 18px;
-  padding-bottom: 15px;
-  padding-inline-start: 18px;
-  padding-inline-end: 20px;
 }
 
 /* deprecated */

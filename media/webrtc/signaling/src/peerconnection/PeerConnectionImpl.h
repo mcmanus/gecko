@@ -68,8 +68,6 @@ class NrIceTurnServer;
 class MediaPipeline;
 class TransceiverImpl;
 
-class DOMMediaStream;
-
 namespace dom {
 class RTCCertificate;
 struct RTCConfiguration;
@@ -116,7 +114,6 @@ using mozilla::dom::PeerConnectionObserver;
 using mozilla::dom::RTCConfiguration;
 using mozilla::dom::RTCIceServer;
 using mozilla::dom::RTCOfferOptions;
-using mozilla::DOMMediaStream;
 using mozilla::NrIceCtx;
 using mozilla::NrIceMediaStream;
 using mozilla::DtlsIdentity;
@@ -258,7 +255,6 @@ public:
   static already_AddRefed<PeerConnectionImpl>
       Constructor(const mozilla::dom::GlobalObject& aGlobal, ErrorResult& rv);
   static PeerConnectionImpl* CreatePeerConnection();
-  OwningNonNull<DOMMediaStream> MakeMediaStream();
 
   nsresult CreateRemoteSourceStreamInfo(RefPtr<RemoteSourceStreamInfo>* aInfo,
                                         const std::string& aId);
@@ -410,7 +406,7 @@ public:
       dom::MediaStreamTrack* aSendTrack,
       ErrorResult& rv);
 
-  OwningNonNull<DOMMediaStream> CreateReceiveStreamWithTrack(
+  OwningNonNull<dom::MediaStreamTrack> CreateReceiveTrack(
       SdpMediaSection::MediaType type);
 
   bool CheckNegotiationNeeded(ErrorResult &rv);
@@ -831,27 +827,33 @@ private:
   uint16_t mMaxSending[SdpMediaSection::kMediaTypes];
 
   // DTMF
-  struct DTMFState {
-    DTMFState();
-    ~DTMFState();
-    nsWeakPtr mPCObserver;
-    RefPtr<TransceiverImpl> mTransceiver;
-    nsCOMPtr<nsITimer> mSendTimer;
-    nsString mTones;
-    uint32_t mDuration;
-    uint32_t mInterToneGap;
+  class DTMFState : public nsITimerCallback {
+      virtual ~DTMFState();
+    public:
+      DTMFState();
+
+      NS_DECL_NSITIMERCALLBACK
+      NS_DECL_THREADSAFE_ISUPPORTS
+
+      nsWeakPtr mPCObserver;
+      RefPtr<TransceiverImpl> mTransceiver;
+      nsCOMPtr<nsITimer> mSendTimer;
+      nsString mTones;
+      uint32_t mDuration;
+      uint32_t mInterToneGap;
   };
 
-  static void
-  DTMFSendTimerCallback_m(nsITimer* timer, void*);
-
   // TODO(bug 1401983): Move DTMF stuff to TransceiverImpl
-  nsTArray<DTMFState> mDTMFStates;
+  nsTArray<RefPtr<DTMFState>> mDTMFStates;
 
   std::vector<unsigned> mSendPacketDumpFlags;
   std::vector<unsigned> mRecvPacketDumpFlags;
   Atomic<bool> mPacketDumpEnabled;
   mutable Mutex mPacketDumpFlagsMutex;
+
+  // used to store the raw trickle candidate string for display
+  // on the about:webrtc raw candidates table.
+  std::vector<std::string> mRawTrickledCandidates;
 
 public:
   //these are temporary until the DataChannel Listen/Connect API is removed

@@ -385,11 +385,10 @@ server.TCPListener = class {
     }
     this.alteredPrefs.clear();
 
-    Services.obs.notifyObservers(this, NOTIFY_RUNNING);
-
     // Shutdown server socket, and no longer listen for new connections
     this.acceptConnections = false;
 
+    Services.obs.notifyObservers(this, NOTIFY_RUNNING);
     this.alive = false;
   }
 
@@ -444,6 +443,7 @@ server.TCPConnection = class {
     this.lastID = 0;
 
     this.driver = driverFactory();
+    this.driver.init();
 
     // lookup of commands sent by server to client by message ID
     this.commands_ = new Map();
@@ -455,6 +455,7 @@ server.TCPConnection = class {
    */
   onClosed() {
     this.driver.deleteSession();
+    this.driver.uninit();
     if (this.onclose) {
       this.onclose(this);
     }

@@ -1967,7 +1967,7 @@ MacroAssembler::convertValueToFloatingPoint(ValueOperand value, FloatRegister ou
     jump(&done);
 
     bind(&isDouble);
-    FloatRegister tmp = output;
+    FloatRegister tmp = output.asDouble();
     if (outputType == MIRType::Float32 && hasMultiAlias())
         tmp = ScratchDoubleReg;
 
@@ -2114,7 +2114,7 @@ MacroAssembler::outOfLineTruncateSlow(FloatRegister src, Register dest, bool wid
         callWithABI(mozilla::BitwiseCast<void*, int32_t(*)(double)>(JS::ToInt32),
                     MoveOp::GENERAL, CheckUnsafeCallWithABI::DontCheckOther);
     }
-    storeCallWordResult(dest);
+    storeCallInt32Result(dest);
 
 #if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64) || \
     defined(JS_CODEGEN_MIPS32) || defined(JS_CODEGEN_MIPS64)

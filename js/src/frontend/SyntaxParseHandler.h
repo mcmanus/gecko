@@ -15,6 +15,7 @@
 #include "jscntxt.h"
 
 #include "frontend/ParseNode.h"
+#include "js/GCAnnotations.h"
 
 namespace js {
 
@@ -35,6 +36,18 @@ class SyntaxParseHandler
     // Remember the last encountered name or string literal during syntax parses.
     JSAtom* lastAtom;
     TokenPos lastStringPos;
+
+    // WARNING: Be careful about adding fields to this function, that might be
+    //          GC things (like JSAtom*).  The JS_HAZ_ROOTED causes the GC
+    //          analysis to *ignore* anything that might be a rooting hazard in
+    //          this class.  The |lastAtom| field above is safe because
+    //          SyntaxParseHandler only appears as a field in
+    //          PerHandlerParser<SyntaxParseHandler>, and that class inherits
+    //          from ParserBase which contains an AutoKeepAtoms field that
+    //          prevents atoms from being moved around while the AutoKeepAtoms
+    //          lives -- which is as long as ParserBase lives, which is longer
+    //          than the PerHandlerParser<SyntaxParseHandler> that inherits
+    //          from it will live.
 
   public:
     enum Node {
@@ -313,7 +326,7 @@ class SyntaxParseHandler
     }
 
     Node newThrowStatement(Node expr, const TokenPos& pos) { return NodeThrow; }
-    Node newTryStatement(uint32_t begin, Node body, Node catchList, Node finallyBlock) {
+    Node newTryStatement(uint32_t begin, Node body, Node catchScope, Node finallyBlock) {
         return NodeGeneric;
     }
     Node newDebuggerStatement(const TokenPos& pos) { return NodeGeneric; }
@@ -325,8 +338,9 @@ class SyntaxParseHandler
 
     Node newPropertyByValue(Node pn, Node kid, uint32_t end) { return NodeElement; }
 
-    MOZ_MUST_USE bool addCatchBlock(Node catchList, Node letBlock, Node catchName,
-                                    Node catchGuard, Node catchBody) { return true; }
+    MOZ_MUST_USE bool setupCatchScope(Node letBlock, Node catchName, Node catchBody) {
+        return true;
+    }
 
     MOZ_MUST_USE bool setLastFunctionFormalParameterDefault(Node funcpn, Node pn) { return true; }
 
@@ -347,7 +361,7 @@ class SyntaxParseHandler
         return node == NodeFunctionExpressionClosure;
     }
 
-    void setFunctionFormalParametersAndBody(Node pn, Node kid) {}
+    void setFunctionFormalParametersAndBody(Node funcNode, Node kid) {}
     void setFunctionBody(Node pn, Node kid) {}
     void setFunctionBox(Node pn, FunctionBox* funbox) {}
     void addFunctionFormalParameter(Node pn, Node argpn) {}
@@ -382,9 +396,9 @@ class SyntaxParseHandler
     }
 
     Node newList(ParseNodeKind kind, const TokenPos& pos) {
-        MOZ_ASSERT(kind != PNK_VAR);
-        MOZ_ASSERT(kind != PNK_LET);
-        MOZ_ASSERT(kind != PNK_CONST);
+        MOZ_ASSERT(kind != ParseNodeKind::Var);
+        MOZ_ASSERT(kind != ParseNodeKind::Let);
+        MOZ_ASSERT(kind != ParseNodeKind::Const);
         return NodeGeneric;
     }
 
@@ -393,9 +407,9 @@ class SyntaxParseHandler
     }
 
     Node newDeclarationList(ParseNodeKind kind, const TokenPos& pos) {
-        if (kind == PNK_VAR)
+        if (kind == ParseNodeKind::Var)
             return NodeVarDeclaration;
-        MOZ_ASSERT(kind == PNK_LET || kind == PNK_CONST);
+        MOZ_ASSERT(kind == ParseNodeKind::Let || kind == ParseNodeKind::Const);
         return NodeLexicalDeclaration;
     }
 
@@ -405,10 +419,6 @@ class SyntaxParseHandler
 
     // This method should only be called from parsers using FullParseHandler.
     Node singleBindingFromDeclaration(Node decl) = delete;
-
-    Node newCatchList(const TokenPos& pos) {
-        return NodeGeneric;
-    }
 
     Node newCommaExpressionList(Node kid) {
         return NodeGeneric;
@@ -428,7 +438,7 @@ class SyntaxParseHandler
     }
 
     Node newAssignment(ParseNodeKind kind, Node lhs, Node rhs) {
-        return kind == PNK_ASSIGN ? NodeUnparenthesizedAssignment : NodeGeneric;
+        return kind == ParseNodeKind::Assign ? NodeUnparenthesizedAssignment : NodeGeneric;
     }
 
     bool isUnparenthesizedAssignment(Node node) {
@@ -539,7 +549,7 @@ class SyntaxParseHandler
     }
 
     void adjustGetToSet(Node node) {}
-};
+} JS_HAZ_ROOTED; // See the top of SyntaxParseHandler for why this is safe.
 
 } // namespace frontend
 } // namespace js

@@ -150,7 +150,6 @@
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIIOService.h"
-#include "nsILineBreaker.h"
 #include "nsILoadContext.h"
 #include "nsILoadGroup.h"
 #include "nsIMemoryReporter.h"
@@ -181,10 +180,8 @@
 #include "nsIURL.h"
 #include "nsIWebNavigation.h"
 #include "nsIWindowMediator.h"
-#include "nsIWordBreaker.h"
 #include "nsIXPConnect.h"
 #include "nsJSUtils.h"
-#include "nsLWBrkCIID.h"
 #include "nsMappedAttributes.h"
 #include "nsNetCID.h"
 #include "nsNetUtil.h"
@@ -267,8 +264,8 @@ nsIStringBundleService *nsContentUtils::sStringBundleService;
 nsIStringBundle *nsContentUtils::sStringBundles[PropertiesFile_COUNT];
 nsIContentPolicy *nsContentUtils::sContentPolicyService;
 bool nsContentUtils::sTriedToGetContentPolicy = false;
-nsILineBreaker *nsContentUtils::sLineBreaker;
-nsIWordBreaker *nsContentUtils::sWordBreaker;
+RefPtr<mozilla::intl::LineBreaker> nsContentUtils::sLineBreaker;
+RefPtr<mozilla::intl::WordBreaker> nsContentUtils::sWordBreaker;
 nsIBidiKeyboard *nsContentUtils::sBidiKeyboard = nullptr;
 uint32_t nsContentUtils::sScriptBlockerCount = 0;
 uint32_t nsContentUtils::sDOMNodeRemovedSuppressCount = 0;
@@ -607,11 +604,9 @@ nsContentUtils::Init()
     sIOService = nullptr;
   }
 
-  rv = CallGetService(NS_LBRK_CONTRACTID, &sLineBreaker);
-  NS_ENSURE_SUCCESS(rv, rv);
+  sLineBreaker = mozilla::intl::LineBreaker::Create();
 
-  rv = CallGetService(NS_WBRK_CONTRACTID, &sWordBreaker);
-  NS_ENSURE_SUCCESS(rv, rv);
+  sWordBreaker = mozilla::intl::WordBreaker::Create();
 
   if (!InitializeEventTable())
     return NS_ERROR_FAILURE;
@@ -1984,28 +1979,6 @@ nsContentUtils::ParseLegacyFontSize(const nsAString& aValue)
 }
 
 /* static */
-bool
-nsContentUtils::IsControlledByServiceWorker(nsIDocument* aDocument)
-{
-  if (nsContentUtils::IsInPrivateBrowsing(aDocument)) {
-    return false;
-  }
-
-  RefPtr<workers::ServiceWorkerManager> swm =
-    workers::ServiceWorkerManager::GetInstance();
-  MOZ_ASSERT(swm);
-
-  ErrorResult rv;
-  bool controlled = swm->IsControlled(aDocument, rv);
-  if (NS_WARN_IF(rv.Failed())) {
-    rv.SuppressException();
-    return false;
-  }
-
-  return controlled;
-}
-
-/* static */
 void
 nsContentUtils::GetOfflineAppManifest(nsIDocument *aDocument, nsIURI **aURI)
 {
@@ -2013,7 +1986,7 @@ nsContentUtils::GetOfflineAppManifest(nsIDocument *aDocument, nsIURI **aURI)
   MOZ_ASSERT(aDocument);
   *aURI = nullptr;
 
-  if (IsControlledByServiceWorker(aDocument)) {
+  if (aDocument->GetController().isSome()) {
     return;
   }
 
@@ -2120,8 +2093,8 @@ nsContentUtils::Shutdown()
   NS_IF_RELEASE(sNullSubjectPrincipal);
   NS_IF_RELEASE(sIOService);
   NS_IF_RELEASE(sUUIDGenerator);
-  NS_IF_RELEASE(sLineBreaker);
-  NS_IF_RELEASE(sWordBreaker);
+  sLineBreaker = nullptr;
+  sWordBreaker = nullptr;
   NS_IF_RELEASE(sBidiKeyboard);
 
   delete sAtomEventTable;
@@ -3048,10 +3021,13 @@ static inline void KeyAppendInt(int32_t aInt, nsACString& aKey)
   aKey.Append(nsPrintfCString("%d", aInt));
 }
 
-static inline bool IsAutocompleteOff(const nsIContent* aElement)
+static inline bool IsAutocompleteOff(const nsIContent* aContent)
 {
-  return aElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::autocomplete,
-                               NS_LITERAL_STRING("off"), eIgnoreCase);
+  return aContent->IsElement() &&
+    aContent->AsElement()->AttrValueIs(kNameSpaceID_None,
+                                       nsGkAtoms::autocomplete,
+                                       NS_LITERAL_STRING("off"),
+                                       eIgnoreCase);
 }
 
 /*static*/ nsresult
@@ -3170,7 +3146,7 @@ nsContentUtils::GenerateStateKey(nsIContent* aContent,
 
       // Append the control name
       nsAutoString name;
-      aContent->GetAttr(kNameSpaceID_None, nsGkAtoms::name, name);
+      aContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::name, name);
       KeyAppendString(name, aKey);
     }
   }
@@ -3850,8 +3826,10 @@ nsContentUtils::ContentIsDraggable(nsIContent* aContent)
     if (draggable)
       return true;
 
-    if (aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::draggable,
-                              nsGkAtoms::_false, eIgnoreCase))
+    if (aContent->AsElement()->AttrValueIs(kNameSpaceID_None,
+                                           nsGkAtoms::draggable,
+                                           nsGkAtoms::_false,
+                                           eIgnoreCase))
       return false;
   }
 
@@ -4135,6 +4113,14 @@ nsContentUtils::ReportToConsole(uint32_t aErrorFlags,
                                      aLineNumber, aColumnNumber);
 }
 
+/* static */ void
+nsContentUtils::ReportEmptyGetElementByIdArg(const nsIDocument* aDoc)
+{
+  ReportToConsole(nsIScriptError::warningFlag,
+                  NS_LITERAL_CSTRING("DOM"), aDoc,
+                  nsContentUtils::eDOM_PROPERTIES,
+                  "EmptyGetElementByIdParam");
+}
 
 /* static */ nsresult
 nsContentUtils::ReportToConsoleNonLocalized(const nsAString& aErrorText,
@@ -4722,12 +4708,14 @@ nsContentUtils::UnregisterShutdownObserver(nsIObserver* aObserver)
 
 /* static */
 bool
-nsContentUtils::HasNonEmptyAttr(const nsIContent* aContent, int32_t aNameSpaceID,
+nsContentUtils::HasNonEmptyAttr(const nsIContent* aContent,
+                                int32_t aNameSpaceID,
                                 nsAtom* aName)
 {
-  static nsIContent::AttrValuesArray strings[] = {&nsGkAtoms::_empty, nullptr};
-  return aContent->FindAttrValueIn(aNameSpaceID, aName, strings, eCaseMatters)
-    == nsIContent::ATTR_VALUE_NO_MATCH;
+  static Element::AttrValuesArray strings[] = {&nsGkAtoms::_empty, nullptr};
+  return aContent->IsElement() &&
+    aContent->AsElement()->FindAttrValueIn(aNameSpaceID, aName, strings, eCaseMatters)
+      == Element::ATTR_VALUE_NO_MATCH;
 }
 
 /* static */
@@ -5058,13 +5046,13 @@ nsContentUtils::CreateContextualFragment(nsINode* aContextNode,
     tagName = content->NodeInfo()->QualifiedName();
 
     // see if we need to add xmlns declarations
-    uint32_t count = content->GetAttrCount();
+    uint32_t count = content->AsElement()->GetAttrCount();
     bool setDefaultNamespace = false;
     if (count > 0) {
       uint32_t index;
 
       for (index = 0; index < count; index++) {
-        const BorrowedAttrInfo info = content->GetAttrInfoAt(index);
+        const BorrowedAttrInfo info = content->AsElement()->GetAttrInfoAt(index);
         const nsAttrName* name = info.mName;
         if (name->NamespaceEquals(kNameSpaceID_XMLNS)) {
           info.mValue->ToString(uriStr);
@@ -5318,7 +5306,7 @@ nsContentUtils::SetNodeTextContent(nsIContent* aContent,
     uint32_t removeIndex = 0;
 
     for (uint32_t i = 0; i < childCount; ++i) {
-      nsIContent* child = aContent->GetChildAt(removeIndex);
+      nsIContent* child = aContent->GetChildAt_Deprecated(removeIndex);
       if (removeIndex == 0 && child && child->IsNodeOfType(nsINode::eTEXT)) {
         nsresult rv = child->SetText(aValue, true);
         NS_ENSURE_SUCCESS(rv, rv);
@@ -5326,7 +5314,7 @@ nsContentUtils::SetNodeTextContent(nsIContent* aContent,
         removeIndex = 1;
       }
       else {
-        aContent->RemoveChildAt(removeIndex, true);
+        aContent->RemoveChildAt_Deprecated(removeIndex, true);
       }
     }
 
@@ -5337,7 +5325,7 @@ nsContentUtils::SetNodeTextContent(nsIContent* aContent,
   else {
     mb.Init(aContent, true, false);
     for (uint32_t i = 0; i < childCount; ++i) {
-      aContent->RemoveChildAt(0, true);
+      aContent->RemoveChildAt_Deprecated(0, true);
     }
   }
   mb.RemovalDone();
@@ -5450,17 +5438,7 @@ nsContentUtils::IsInSameAnonymousTree(const nsINode* aNode,
     return aContent->GetBindingParent() == nullptr;
   }
 
-  const nsIContent* nodeAsContent = static_cast<const nsIContent*>(aNode);
-
-  // For nodes in a shadow tree, it is insufficient to simply compare
-  // the binding parent because a node may host multiple ShadowRoots,
-  // thus nodes in different shadow tree may have the same binding parent.
-  if (aNode->IsInShadowTree()) {
-    return nodeAsContent->GetContainingShadow() ==
-      aContent->GetContainingShadow();
-  }
-
-  return nodeAsContent->GetBindingParent() == aContent->GetBindingParent();
+  return aNode->AsContent()->GetBindingParent() == aContent->GetBindingParent();
 }
 
 /* static */
@@ -5574,7 +5552,7 @@ nsContentUtils::TriggerLink(nsIContent *aContent, nsPresContext *aPresContext,
     if ((!aContent->IsHTMLElement(nsGkAtoms::a) &&
          !aContent->IsHTMLElement(nsGkAtoms::area) &&
          !aContent->IsSVGElement(nsGkAtoms::a)) ||
-        !aContent->GetAttr(kNameSpaceID_None, nsGkAtoms::download, fileName) ||
+        !aContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::download, fileName) ||
         NS_FAILED(aContent->NodePrincipal()->CheckMayLoad(aLinkURI, false, true))) {
       fileName.SetIsVoid(true); // No actionable download attribute was found.
     }
@@ -7527,24 +7505,11 @@ nsContentUtils::GetHTMLEditor(nsPresContext* aPresContext)
   return docShell->GetHTMLEditor();
 }
 
-bool
-nsContentUtils::IsContentInsertionPoint(nsIContent* aContent)
-{
-  // Check if the content is a XBL insertion point.
-  if (aContent->IsActiveChildrenElement()) {
-    return true;
-  }
-
-  // Check if the content is a web components content insertion point.
-  // XXX handle <slot>?
-  return false;
-}
-
 // static
 bool
 nsContentUtils::HasDistributedChildren(nsIContent* aContent)
 {
-  if (!aContent) {
+  if (!aContent || !nsDocument::IsWebComponentsEnabled(aContent)) {
     return false;
   }
 
@@ -9138,7 +9103,17 @@ nsContentUtils::InternalStorageAllowedForPrincipal(nsIPrincipal* aPrincipal,
 
   uint32_t lifetimePolicy;
   uint32_t behavior;
-  GetCookieBehaviorForPrincipal(aPrincipal, &lifetimePolicy, &behavior);
+
+  // WebExtensions principals always get BEHAVIOR_ACCEPT as cookieBehavior
+  // and ACCEPT_NORMALLY as lifetimePolicy (See Bug 1406675 for rationale).
+  auto policy = BasePrincipal::Cast(aPrincipal)->AddonPolicy();
+
+  if (policy) {
+    behavior = nsICookieService::BEHAVIOR_ACCEPT;
+    lifetimePolicy = nsICookieService::ACCEPT_NORMALLY;
+  } else {
+    GetCookieBehaviorForPrincipal(aPrincipal, &lifetimePolicy, &behavior);
+  }
 
   // Check if we should only allow storage for the session, and record that fact
   if (lifetimePolicy == nsICookieService::ACCEPT_SESSION) {
@@ -10583,8 +10558,11 @@ nsContentUtils::QueryTriggeringPrincipal(nsIContent* aLoadingNode,
   }
 
   nsAutoString loadingStr;
-  aLoadingNode->GetAttr(kNameSpaceID_None, nsGkAtoms::triggeringprincipal,
-                        loadingStr);
+  if (aLoadingNode->IsElement()) {
+    aLoadingNode->AsElement()->GetAttr(kNameSpaceID_None,
+				       nsGkAtoms::triggeringprincipal,
+				       loadingStr);
+  }
 
   // Fall back if 'triggeringprincipal' isn't specified,
   if (loadingStr.IsEmpty()) {
@@ -10622,8 +10600,11 @@ nsContentUtils::GetContentPolicyTypeForUIImageLoading(nsIContent* aLoadingNode,
     aContentPolicyType = nsIContentPolicy::TYPE_INTERNAL_IMAGE_FAVICON;
 
     nsAutoString requestContextID;
-    aLoadingNode->GetAttr(kNameSpaceID_None, nsGkAtoms::requestcontextid,
-                          requestContextID);
+    if (aLoadingNode->IsElement()) {
+      aLoadingNode->AsElement()->GetAttr(kNameSpaceID_None,
+                                         nsGkAtoms::requestcontextid,
+                                         requestContextID);
+    }
     nsresult rv;
     int64_t val  = requestContextID.ToInteger64(&rv);
     *aRequestContextID = NS_SUCCEEDED(rv)
@@ -11032,7 +11013,7 @@ template <prototypes::ID PrototypeID, class NativeType, typename T>
 static Result<Ok, nsresult>
 ExtractExceptionValues(JSContext* aCx,
                        JS::HandleObject aObj,
-                       nsACString& aSourceSpecOut,
+                       nsAString& aSourceSpecOut,
                        uint32_t* aLineOut,
                        uint32_t* aColumnOut,
                        nsString& aMessageOut)
@@ -11040,10 +11021,8 @@ ExtractExceptionValues(JSContext* aCx,
   RefPtr<T> exn;
   MOZ_TRY((UnwrapObject<PrototypeID, NativeType>(aObj, exn)));
 
-  nsAutoString filename;
-  exn->GetFilename(aCx, filename);
-  if (!filename.IsEmpty()) {
-    CopyUTF16toUTF8(filename, aSourceSpecOut);
+  exn->GetFilename(aCx, aSourceSpecOut);
+  if (!aSourceSpecOut.IsEmpty()) {
     *aLineOut = exn->LineNumber(aCx);
     *aColumnOut = exn->ColumnNumber();
   }
@@ -11061,6 +11040,19 @@ ExtractExceptionValues(JSContext* aCx,
 nsContentUtils::ExtractErrorValues(JSContext* aCx,
                                    JS::Handle<JS::Value> aValue,
                                    nsACString& aSourceSpecOut,
+                                   uint32_t* aLineOut,
+                                   uint32_t* aColumnOut,
+                                   nsString& aMessageOut)
+{
+  nsAutoString sourceSpec;
+  ExtractErrorValues(aCx, aValue, sourceSpec, aLineOut, aColumnOut, aMessageOut);
+  CopyUTF16toUTF8(sourceSpec, aSourceSpecOut);
+}
+
+/* static */ void
+nsContentUtils::ExtractErrorValues(JSContext* aCx,
+                                   JS::Handle<JS::Value> aValue,
+                                   nsAString& aSourceSpecOut,
                                    uint32_t* aLineOut,
                                    uint32_t* aColumnOut,
                                    nsString& aMessageOut)
@@ -11085,7 +11077,7 @@ nsContentUtils::ExtractErrorValues(JSContext* aCx,
                    0);          // window ID
 
       if (!report->mFileName.IsEmpty()) {
-        CopyUTF16toUTF8(report->mFileName, aSourceSpecOut);
+        aSourceSpecOut = report->mFileName;
         *aLineOut = report->mLineNumber;
         *aColumnOut = report->mColumn;
       }
@@ -11138,9 +11130,16 @@ nsContentUtils::DevToolsEnabled(JSContext* aCx)
 /* static */ bool
 nsContentUtils::ContentIsLink(nsIContent* aContent)
 {
-  return aContent && (aContent->IsHTMLElement(nsGkAtoms::a) ||
-                      aContent->AttrValueIs(kNameSpaceID_XLink, nsGkAtoms::type,
-                                            nsGkAtoms::simple, eCaseMatters));
+  if (!aContent || !aContent->IsElement()) {
+    return false;
+  }
+
+  if (aContent->IsHTMLElement(nsGkAtoms::a)) {
+    return true;
+  }
+
+  return aContent->AsElement()->AttrValueIs(
+      kNameSpaceID_XLink, nsGkAtoms::type, nsGkAtoms::simple, eCaseMatters);
 }
 
 /* static */ already_AddRefed<EventTarget>

@@ -256,13 +256,6 @@ public:
     template<typename Functor>
     static void OnNativeCall(Functor&& aCall)
     {
-        if (aCall.IsTarget(&Open) && NS_IsMainThread()) {
-            // Gecko state probably just switched to PROFILE_READY, and the
-            // event loop is not running yet. Skip the event loop here so we
-            // can get a head start on opening our window.
-            return aCall();
-        }
-
         NS_DispatchToMainThread(new WindowEvent<Functor>(mozilla::Move(aCall)));
     }
 
@@ -304,9 +297,9 @@ public:
                   jni::Object::Param aDispatcher,
                   jni::Object::Param aSettings);
 
-    // Reattach this nsWindow to a new GeckoView.
-    void Attach(const GeckoSession::Window::LocalRef& inst,
-                jni::Object::Param aView);
+    void AttachEditable(const GeckoSession::Window::LocalRef& inst,
+                        jni::Object::Param aEditableParent,
+                        jni::Object::Param aEditableChild);
 
     void EnableEventDispatcher();
 };
@@ -441,6 +434,7 @@ public:
             return;
         }
         uiThread->Dispatch(NewRunnableFunction(
+                "OnDetachRunnable",
                 static_cast<void(*)(const NPZCRef&)>(callDestroy),
                 mozilla::Move(npzc)), nsIThread::DISPATCH_NORMAL);
     }
@@ -1234,10 +1228,10 @@ EGLSurface nsWindow::PMPMSupport::sSurface;
 nsWindow::GeckoViewSupport::~GeckoViewSupport()
 {
     // Disassociate our GeckoEditable instance with our native object.
-    MOZ_ASSERT(window.mEditableSupport && window.mEditable);
-    window.mEditableSupport.Detach();
-    window.mEditable->OnViewChange(nullptr);
-    window.mEditable = nullptr;
+    if (window.mEditableSupport) {
+        window.mEditableSupport.Detach();
+        window.mEditableParent = nullptr;
+    }
 
     if (window.mNPZCSupport) {
         window.mNPZCSupport.Detach();
@@ -1309,13 +1303,6 @@ nsWindow::GeckoViewSupport::Open(const jni::Class::LocalRef& aCls,
     window->mGeckoViewSupport->Transfer(
             sessionWindow, aCompositor, aDispatcher, aSettings);
 
-    // Attach a new GeckoEditable support object to the new window.
-    auto editable = GeckoEditable::New();
-    auto editableChild = GeckoEditableChild::New(editable);
-    editable->SetDefaultEditableChild(editableChild);
-    window->mEditable = editable;
-    window->mEditableSupport.Attach(editableChild, window, editableChild);
-
     if (window->mWidgetListener) {
         nsCOMPtr<nsIXULWindow> xulWindow(
                 window->mWidgetListener->GetXULWindow());
@@ -1382,12 +1369,19 @@ nsWindow::GeckoViewSupport::Transfer(const GeckoSession::Window::LocalRef& inst,
 }
 
 void
-nsWindow::GeckoViewSupport::Attach(const GeckoSession::Window::LocalRef& inst,
-                                   jni::Object::Param aView)
+nsWindow::GeckoViewSupport::AttachEditable(const GeckoSession::Window::LocalRef& inst,
+                                           jni::Object::Param aEditableParent,
+                                           jni::Object::Param aEditableChild)
 {
-    // Associate our previous GeckoEditable with the new GeckoView.
-    MOZ_ASSERT(window.mEditable);
-    window.mEditable->OnViewChange(aView);
+    java::GeckoEditableChild::LocalRef editableChild(inst.Env());
+    editableChild = java::GeckoEditableChild::Ref::From(aEditableChild);
+
+    if (window.mEditableSupport) {
+        window.mEditableSupport.Detach();
+    }
+
+    window.mEditableSupport.Attach(editableChild, &window, editableChild);
+    window.mEditableParent = aEditableParent;
 }
 
 void
@@ -1399,6 +1393,8 @@ nsWindow::InitNatives()
     if (jni::IsFennec()) {
         nsWindow::PMPMSupport::Init();
     }
+
+    GeckoEditableSupport::Init();
 }
 
 nsWindow*

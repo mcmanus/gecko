@@ -138,9 +138,11 @@ add_task(async function() {
   await promiseTabLoadEvent(tab1, "data:text/html," + escape(testPage1));
   await promiseTabLoadEvent(tab2, "data:text/html," + escape(testPage2));
 
-  var childFocusScript = "data:,(" + escape(focusInChild.toString()) + ")();";
-  browser1.messageManager.loadFrameScript(childFocusScript, true);
-  browser2.messageManager.loadFrameScript(childFocusScript, true);
+  if (gMultiProcessBrowser) {
+    var childFocusScript = "data:,(" + escape(focusInChild.toString()) + ")();";
+    browser1.messageManager.loadFrameScript(childFocusScript, true);
+    browser2.messageManager.loadFrameScript(childFocusScript, true);
+  }
 
   gURLBar.focus();
   await SimpleTest.promiseFocus();
@@ -329,9 +331,7 @@ add_task(async function() {
   gURLBar.focus();
 
   await new Promise((resolve, reject) => {
-    window.addEventListener("pageshow", function(event) {
-      resolve();
-    }, {capture: true, once: true});
+    BrowserTestUtils.waitForContentEvent(window.gBrowser.selectedBrowser, "pageshow", true).then(() => resolve());
     document.getElementById("Browser:Back").doCommand();
   });
 

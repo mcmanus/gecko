@@ -5,7 +5,6 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/dom/U2F.h"
-#include "mozilla/dom/Event.h"
 #include "mozilla/dom/WebCryptoCommon.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/ipc/BackgroundChild.h"
@@ -33,7 +32,6 @@ namespace dom {
 
 static mozilla::LazyLogModule gU2FLog("u2fmanager");
 
-NS_NAMED_LITERAL_STRING(kVisibilityChange, "visibilitychange");
 NS_NAMED_LITERAL_STRING(kFinishEnrollment, "navigator.id.finishEnrollment");
 NS_NAMED_LITERAL_STRING(kGetAssertion, "navigator.id.getAssertion");
 
@@ -160,6 +158,23 @@ EvaluateAppID(nsPIDOMWindowInner* aParent, const nsString& aOrigin,
     return ErrorCode::BAD_REQUEST;
   }
 
+  nsAutoCString appIdHost;
+  if (NS_FAILED(appIdUri->GetAsciiHost(appIdHost))) {
+    return ErrorCode::BAD_REQUEST;
+  }
+
+  // Allow localhost.
+  if (appIdHost.EqualsLiteral("localhost")) {
+    nsAutoCString facetHost;
+    if (NS_FAILED(facetUri->GetAsciiHost(facetHost))) {
+      return ErrorCode::BAD_REQUEST;
+    }
+
+    if (facetHost.EqualsLiteral("localhost")) {
+      return ErrorCode::OK;
+    }
+  }
+
   // Run the HTML5 algorithm to relax the same-origin policy, copied from W3C
   // Web Authentication. See Bug 1244959 comment #8 for context on why we are
   // doing this instead of implementing the external-fetch FacetID logic.
@@ -182,10 +197,6 @@ EvaluateAppID(nsPIDOMWindowInner* aParent, const nsString& aOrigin,
 
   nsAutoCString lowestFacetHost;
   if (NS_FAILED(tldService->GetBaseDomain(facetUri, 0, lowestFacetHost))) {
-    return ErrorCode::BAD_REQUEST;
-  }
-  nsAutoCString appIdHost;
-  if (NS_FAILED(appIdUri->GetAsciiHost(appIdHost))) {
     return ErrorCode::BAD_REQUEST;
   }
 
@@ -253,36 +264,9 @@ BuildTransactionHashes(const nsCString& aRpId,
   return NS_OK;
 }
 
-template<typename T, typename C>
-static void
-ExecuteCallback(T& aResp, Maybe<nsMainThreadPtrHandle<C>>& aCb)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  if (aCb.isNothing()) {
-    return;
-  }
-
-  // reset callback earlier to allow reentry from callback.
-  nsMainThreadPtrHandle<C> callback(aCb.ref());
-  aCb.reset();
-  MOZ_ASSERT(aCb.isNothing());
-  MOZ_ASSERT(!!callback);
-
-  ErrorResult error;
-  callback->Call(aResp, error);
-  NS_WARNING_ASSERTION(!error.Failed(), "dom::U2F::Promise callback failed");
-  error.SuppressException(); // Useful exceptions already emitted
-}
-
 /***********************************************************************
  * U2F JavaScript API Implementation
  **********************************************************************/
-
-U2F::U2F(nsPIDOMWindowInner* aParent)
-  : mParent(aParent)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-}
 
 U2F::~U2F()
 {
@@ -297,9 +281,6 @@ U2F::~U2F()
     mChild.swap(c);
     c->Disconnect();
   }
-
-  mRegisterCallback.reset();
-  mSignCallback.reset();
 }
 
 void
@@ -332,6 +313,23 @@ U2F::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
   return U2FBinding::Wrap(aCx, this, aGivenProto);
 }
 
+template<typename T, typename C>
+void
+U2F::ExecuteCallback(T& aResp, nsMainThreadPtrHandle<C>& aCb)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aCb);
+
+  // Assert that mTransaction was cleared before before we were called to allow
+  // reentrancy from microtask checkpoints.
+  MOZ_ASSERT(mTransaction.isNothing());
+
+  ErrorResult error;
+  aCb->Call(aResp, error);
+  NS_WARNING_ASSERTION(!error.Failed(), "dom::U2F::Promise callback failed");
+  error.SuppressException(); // Useful exceptions already emitted
+}
+
 void
 U2F::Register(const nsAString& aAppId,
               const Sequence<RegisterRequest>& aRegisterRequests,
@@ -346,12 +344,14 @@ U2F::Register(const nsAString& aAppId,
     CancelTransaction(NS_ERROR_ABORT);
   }
 
-  MOZ_ASSERT(mRegisterCallback.isNothing());
-  mRegisterCallback = Some(nsMainThreadPtrHandle<U2FRegisterCallback>(
-                        new nsMainThreadPtrHolder<U2FRegisterCallback>(
-                            "U2F::Register::callback", &aCallback)));
+  nsMainThreadPtrHandle<U2FRegisterCallback> callback(
+    new nsMainThreadPtrHolder<U2FRegisterCallback>("U2F::Register::callback",
+                                                   &aCallback));
 
-  uint32_t adjustedTimeoutMillis = AdjustedTimeoutMillis(opt_aTimeoutSeconds);
+  // Ensure we have a callback.
+  if (NS_WARN_IF(!callback)) {
+    return;
+  }
 
   // Evaluate the AppID
   nsString adjustedAppId;
@@ -360,7 +360,7 @@ U2F::Register(const nsAString& aAppId,
   if (appIdResult != ErrorCode::OK) {
     RegisterResponse response;
     response.mErrorCode.Construct(static_cast<uint32_t>(appIdResult));
-    ExecuteCallback(response, mRegisterCallback);
+    ExecuteCallback(response, callback);
     return;
   }
 
@@ -387,7 +387,7 @@ U2F::Register(const nsAString& aAppId,
   if (clientDataJSON.IsEmpty()) {
     RegisterResponse response;
     response.mErrorCode.Construct(static_cast<uint32_t>(ErrorCode::BAD_REQUEST));
-    ExecuteCallback(response, mRegisterCallback);
+    ExecuteCallback(response, callback);
     return;
   }
 
@@ -403,14 +403,14 @@ U2F::Register(const nsAString& aAppId,
                                        rpIdHash, clientDataHash))) {
     RegisterResponse response;
     response.mErrorCode.Construct(static_cast<uint32_t>(ErrorCode::OTHER_ERROR));
-    ExecuteCallback(response, mRegisterCallback);
+    ExecuteCallback(response, callback);
     return;
   }
 
   if (!MaybeCreateBackgroundActor()) {
     RegisterResponse response;
     response.mErrorCode.Construct(static_cast<uint32_t>(ErrorCode::OTHER_ERROR));
-    ExecuteCallback(response, mRegisterCallback);
+    ExecuteCallback(response, callback);
     return;
   }
 
@@ -424,6 +424,8 @@ U2F::Register(const nsAString& aAppId,
                                                false /* requireUserVerification */,
                                                false /* requirePlatformAttachment */);
 
+  uint32_t adjustedTimeoutMillis = AdjustedTimeoutMillis(opt_aTimeoutSeconds);
+
   WebAuthnMakeCredentialInfo info(rpIdHash,
                                   clientDataHash,
                                   adjustedTimeoutMillis,
@@ -432,7 +434,7 @@ U2F::Register(const nsAString& aAppId,
                                   authSelection);
 
   MOZ_ASSERT(mTransaction.isNothing());
-  mTransaction = Some(U2FTransaction(clientData));
+  mTransaction = Some(U2FTransaction(clientData, Move(AsVariant(callback))));
   mChild->SendRequestRegister(mTransaction.ref().mId, info);
 }
 
@@ -444,6 +446,11 @@ U2F::FinishMakeCredential(const uint64_t& aTransactionId,
 
   // Check for a valid transaction.
   if (mTransaction.isNothing() || mTransaction.ref().mId != aTransactionId) {
+    return;
+  }
+
+  if (NS_WARN_IF(!mTransaction.ref().HasRegisterCallback())) {
+    RejectTransaction(NS_ERROR_ABORT);
     return;
   }
 
@@ -477,8 +484,12 @@ U2F::FinishMakeCredential(const uint64_t& aTransactionId,
   response.mRegistrationData.Construct(registrationDataBase64);
   response.mErrorCode.Construct(static_cast<uint32_t>(ErrorCode::OK));
 
-  ExecuteCallback(response, mRegisterCallback);
+  // Keep the callback pointer alive.
+  nsMainThreadPtrHandle<U2FRegisterCallback> callback(
+    mTransaction.ref().GetRegisterCallback());
+
   ClearTransaction();
+  ExecuteCallback(response, callback);
 }
 
 void
@@ -495,12 +506,14 @@ U2F::Sign(const nsAString& aAppId,
     CancelTransaction(NS_ERROR_ABORT);
   }
 
-  MOZ_ASSERT(mSignCallback.isNothing());
-  mSignCallback = Some(nsMainThreadPtrHandle<U2FSignCallback>(
-                    new nsMainThreadPtrHolder<U2FSignCallback>(
-                        "U2F::Sign::callback", &aCallback)));
+  nsMainThreadPtrHandle<U2FSignCallback> callback(
+    new nsMainThreadPtrHolder<U2FSignCallback>("U2F::Sign::callback",
+                                               &aCallback));
 
-  uint32_t adjustedTimeoutMillis = AdjustedTimeoutMillis(opt_aTimeoutSeconds);
+  // Ensure we have a callback.
+  if (NS_WARN_IF(!callback)) {
+    return;
+  }
 
   // Evaluate the AppID
   nsString adjustedAppId;
@@ -509,7 +522,7 @@ U2F::Sign(const nsAString& aAppId,
   if (appIdResult != ErrorCode::OK) {
     SignResponse response;
     response.mErrorCode.Construct(static_cast<uint32_t>(appIdResult));
-    ExecuteCallback(response, mSignCallback);
+    ExecuteCallback(response, callback);
     return;
   }
 
@@ -522,7 +535,7 @@ U2F::Sign(const nsAString& aAppId,
   if (NS_WARN_IF(NS_FAILED(rv))) {
     SignResponse response;
     response.mErrorCode.Construct(static_cast<uint32_t>(ErrorCode::BAD_REQUEST));
-    ExecuteCallback(response, mSignCallback);
+    ExecuteCallback(response, callback);
     return;
   }
 
@@ -538,14 +551,14 @@ U2F::Sign(const nsAString& aAppId,
                                        rpIdHash, clientDataHash))) {
     SignResponse response;
     response.mErrorCode.Construct(static_cast<uint32_t>(ErrorCode::OTHER_ERROR));
-    ExecuteCallback(response, mSignCallback);
+    ExecuteCallback(response, callback);
     return;
   }
 
   if (!MaybeCreateBackgroundActor()) {
     SignResponse response;
     response.mErrorCode.Construct(static_cast<uint32_t>(ErrorCode::OTHER_ERROR));
-    ExecuteCallback(response, mSignCallback);
+    ExecuteCallback(response, callback);
     return;
   }
 
@@ -554,6 +567,8 @@ U2F::Sign(const nsAString& aAppId,
   // Always blank for U2F
   nsTArray<WebAuthnExtension> extensions;
 
+  uint32_t adjustedTimeoutMillis = AdjustedTimeoutMillis(opt_aTimeoutSeconds);
+
   WebAuthnGetAssertionInfo info(rpIdHash,
                                 clientDataHash,
                                 adjustedTimeoutMillis,
@@ -561,7 +576,7 @@ U2F::Sign(const nsAString& aAppId,
                                 extensions);
 
   MOZ_ASSERT(mTransaction.isNothing());
-  mTransaction = Some(U2FTransaction(clientData));
+  mTransaction = Some(U2FTransaction(clientData, Move(AsVariant(callback))));
   mChild->SendRequestSign(mTransaction.ref().mId, info);
 }
 
@@ -574,6 +589,11 @@ U2F::FinishGetAssertion(const uint64_t& aTransactionId,
 
   // Check for a valid transaction.
   if (mTransaction.isNothing() || mTransaction.ref().mId != aTransactionId) {
+    return;
+  }
+
+  if (NS_WARN_IF(!mTransaction.ref().HasSignCallback())) {
+    RejectTransaction(NS_ERROR_ABORT);
     return;
   }
 
@@ -615,8 +635,12 @@ U2F::FinishGetAssertion(const uint64_t& aTransactionId,
   response.mSignatureData.Construct(signatureDataBase64);
   response.mErrorCode.Construct(static_cast<uint32_t>(ErrorCode::OK));
 
-  ExecuteCallback(response, mSignCallback);
+  // Keep the callback pointer alive.
+  nsMainThreadPtrHandle<U2FSignCallback> callback(
+    mTransaction.ref().GetSignCallback());
+
   ClearTransaction();
+  ExecuteCallback(response, callback);
 }
 
 void
@@ -632,23 +656,31 @@ U2F::ClearTransaction()
 void
 U2F::RejectTransaction(const nsresult& aError)
 {
-  if (!NS_WARN_IF(mTransaction.isNothing())) {
-    ErrorCode code = ConvertNSResultToErrorCode(aError);
-
-    if (mRegisterCallback.isSome()) {
-      RegisterResponse response;
-      response.mErrorCode.Construct(static_cast<uint32_t>(code));
-      ExecuteCallback(response, mRegisterCallback);
-    }
-
-    if (mSignCallback.isSome()) {
-      SignResponse response;
-      response.mErrorCode.Construct(static_cast<uint32_t>(code));
-      ExecuteCallback(response, mSignCallback);
-    }
+  if (NS_WARN_IF(mTransaction.isNothing())) {
+    return;
   }
 
-  ClearTransaction();
+  StopListeningForVisibilityEvents();
+
+  // Clear out mTransaction before calling ExecuteCallback() below to allow
+  // reentrancy from microtask checkpoints.
+  Maybe<U2FTransaction> maybeTransaction(Move(mTransaction));
+  MOZ_ASSERT(mTransaction.isNothing() && maybeTransaction.isSome());
+
+  U2FTransaction& transaction = maybeTransaction.ref();
+  ErrorCode code = ConvertNSResultToErrorCode(aError);
+
+  if (transaction.HasRegisterCallback()) {
+    RegisterResponse response;
+    response.mErrorCode.Construct(static_cast<uint32_t>(code));
+    ExecuteCallback(response, transaction.GetRegisterCallback());
+  }
+
+  if (transaction.HasSignCallback()) {
+    SignResponse response;
+    response.mErrorCode.Construct(static_cast<uint32_t>(code));
+    ExecuteCallback(response, transaction.GetSignCallback());
+  }
 }
 
 void
@@ -669,105 +701,6 @@ U2F::RequestAborted(const uint64_t& aTransactionId, const nsresult& aError)
   if (mTransaction.isSome() && mTransaction.ref().mId == aTransactionId) {
     RejectTransaction(aError);
   }
-}
-
-/***********************************************************************
- * Event Handling
- **********************************************************************/
-
-void
-U2F::ListenForVisibilityEvents()
-{
-  nsCOMPtr<nsIDocument> doc = mParent->GetExtantDoc();
-  if (NS_WARN_IF(!doc)) {
-    return;
-  }
-
-  nsresult rv = doc->AddSystemEventListener(kVisibilityChange, this,
-                                            /* use capture */ true,
-                                            /* wants untrusted */ false);
-  Unused << NS_WARN_IF(NS_FAILED(rv));
-}
-
-void
-U2F::StopListeningForVisibilityEvents()
-{
-  nsCOMPtr<nsIDocument> doc = mParent->GetExtantDoc();
-  if (NS_WARN_IF(!doc)) {
-    return;
-  }
-
-  nsresult rv = doc->RemoveSystemEventListener(kVisibilityChange, this,
-                                               /* use capture */ true);
-  Unused << NS_WARN_IF(NS_FAILED(rv));
-}
-
-
-NS_IMETHODIMP
-U2F::HandleEvent(nsIDOMEvent* aEvent)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(aEvent);
-
-  nsAutoString type;
-  aEvent->GetType(type);
-  if (!type.Equals(kVisibilityChange)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  nsCOMPtr<nsIDocument> doc =
-    do_QueryInterface(aEvent->InternalDOMEvent()->GetTarget());
-  if (NS_WARN_IF(!doc)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  if (doc->Hidden()) {
-    MOZ_LOG(gU2FLog, LogLevel::Debug,
-            ("Visibility change: U2F window is hidden, cancelling job."));
-
-    CancelTransaction(NS_ERROR_ABORT);
-  }
-
-  return NS_OK;
-}
-
-/***********************************************************************
- * IPC Protocol Implementation
- **********************************************************************/
-
-bool
-U2F::MaybeCreateBackgroundActor()
-{
-  MOZ_ASSERT(NS_IsMainThread());
-
-  if (mChild) {
-    return true;
-  }
-
-  PBackgroundChild* actorChild = BackgroundChild::GetOrCreateForCurrentThread();
-  if (NS_WARN_IF(!actorChild)) {
-    return false;
-  }
-
-  RefPtr<WebAuthnTransactionChild> mgr(new WebAuthnTransactionChild(this));
-  PWebAuthnTransactionChild* constructedMgr =
-    actorChild->SendPWebAuthnTransactionConstructor(mgr);
-
-  if (NS_WARN_IF(!constructedMgr)) {
-    return false;
-  }
-
-  MOZ_ASSERT(constructedMgr == mgr);
-  mChild = mgr.forget();
-
-  return true;
-}
-
-void
-U2F::ActorDestroyed()
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  mChild = nullptr;
 }
 
 } // namespace dom

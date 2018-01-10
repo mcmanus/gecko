@@ -1089,7 +1089,7 @@ nsContainerFrame::FinishReflowChild(nsIFrame*                  aKidFrame,
     }
   }
 
-  aKidFrame->DidReflow(aPresContext, aReflowInput, nsDidReflowStatus::FINISHED);
+  aKidFrame->DidReflow(aPresContext, aReflowInput);
 }
 
 //XXX temporary: hold on to a copy of the old physical version of
@@ -1128,7 +1128,7 @@ nsContainerFrame::FinishReflowChild(nsIFrame*                  aKidFrame,
     }
   }
 
-  aKidFrame->DidReflow(aPresContext, aReflowInput, nsDidReflowStatus::FINISHED);
+  aKidFrame->DidReflow(aPresContext, aReflowInput);
 }
 
 void
@@ -1805,7 +1805,7 @@ nsContainerFrame::RenumberList()
   int32_t ordinal = 1;
   int32_t increment;
   if (mContent->IsHTMLElement(nsGkAtoms::ol) &&
-      mContent->HasAttr(kNameSpaceID_None, nsGkAtoms::reversed)) {
+      mContent->AsElement()->HasAttr(kNameSpaceID_None, nsGkAtoms::reversed)) {
     increment = -1;
   } else {
     increment = 1;

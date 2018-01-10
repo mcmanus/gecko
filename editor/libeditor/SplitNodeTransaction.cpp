@@ -17,6 +17,16 @@ namespace mozilla {
 
 using namespace dom;
 
+// static
+already_AddRefed<SplitNodeTransaction>
+SplitNodeTransaction::Create(EditorBase& aEditorBase,
+                             const EditorRawDOMPoint& aStartOfRightNode)
+{
+  RefPtr<SplitNodeTransaction> transaction =
+    new SplitNodeTransaction(aEditorBase, aStartOfRightNode);
+  return transaction.forget();
+}
+
 SplitNodeTransaction::SplitNodeTransaction(
                         EditorBase& aEditorBase,
                         const EditorRawDOMPoint& aStartOfRightNode)
@@ -24,7 +34,7 @@ SplitNodeTransaction::SplitNodeTransaction(
   , mStartOfRightNode(aStartOfRightNode)
 {
   MOZ_DIAGNOSTIC_ASSERT(aStartOfRightNode.IsSet());
-  MOZ_DIAGNOSTIC_ASSERT(aStartOfRightNode.Container()->IsContent());
+  MOZ_DIAGNOSTIC_ASSERT(aStartOfRightNode.GetContainerAsContent());
 }
 
 SplitNodeTransaction::~SplitNodeTransaction()
@@ -55,7 +65,7 @@ SplitNodeTransaction::DoTransaction()
   ErrorResult error;
   // Don't use .downcast directly because AsContent has an assertion we want
   nsCOMPtr<nsINode> clone =
-    mStartOfRightNode.Container()->CloneNode(false, error);
+    mStartOfRightNode.GetContainer()->CloneNode(false, error);
   if (NS_WARN_IF(error.Failed())) {
     return error.StealNSResult();
   }
@@ -63,10 +73,10 @@ SplitNodeTransaction::DoTransaction()
     return NS_ERROR_UNEXPECTED;
   }
   mNewLeftNode = dont_AddRef(clone.forget().take()->AsContent());
-  mEditorBase->MarkNodeDirty(mStartOfRightNode.Container()->AsDOMNode());
+  mEditorBase->MarkNodeDirty(mStartOfRightNode.GetContainerAsDOMNode());
 
   // Get the parent node
-  mParent = mStartOfRightNode.Container()->GetParentNode();
+  mParent = mStartOfRightNode.GetContainer()->GetParentNode();
   if (NS_WARN_IF(!mParent)) {
     return NS_ERROR_FAILURE;
   }
@@ -90,7 +100,8 @@ SplitNodeTransaction::DoTransaction()
       error.SuppressException();
     }
     MOZ_ASSERT(mStartOfRightNode.Offset() == mNewLeftNode->Length());
-    EditorRawDOMPoint atEndOfLeftNode(mNewLeftNode, mNewLeftNode->Length());
+    EditorRawDOMPoint atEndOfLeftNode;
+    atEndOfLeftNode.SetToEndOf(mNewLeftNode);
     selection->Collapse(atEndOfLeftNode, error);
   }
 
@@ -113,8 +124,8 @@ SplitNodeTransaction::UndoTransaction()
   // This assumes Do inserted the new node in front of the prior existing node
   // XXX Perhaps, we should reset mStartOfRightNode with current first child
   //     of the right node.
-  return mEditorBase->JoinNodesImpl(mStartOfRightNode.Container(), mNewLeftNode,
-                                    mParent);
+  return mEditorBase->JoinNodesImpl(mStartOfRightNode.GetContainer(),
+                                    mNewLeftNode, mParent);
 }
 
 /* Redo cannot simply resplit the right node, because subsequent transactions
@@ -131,8 +142,8 @@ SplitNodeTransaction::RedoTransaction()
   }
 
   // First, massage the existing node so it is in its post-split state
-  if (mStartOfRightNode.Container()->IsNodeOfType(nsINode::eTEXT)) {
-    Text* rightNodeAsText = mStartOfRightNode.Container()->GetAsText();
+  if (mStartOfRightNode.IsInTextNode()) {
+    Text* rightNodeAsText = mStartOfRightNode.GetContainerAsText();
     MOZ_DIAGNOSTIC_ASSERT(rightNodeAsText);
     nsresult rv =
       rightNodeAsText->DeleteData(0, mStartOfRightNode.Offset());
@@ -140,11 +151,12 @@ SplitNodeTransaction::RedoTransaction()
       return rv;
     }
   } else {
-    nsCOMPtr<nsIContent> child = mStartOfRightNode.Container()->GetFirstChild();
+    nsCOMPtr<nsIContent> child =
+      mStartOfRightNode.GetContainer()->GetFirstChild();
     nsCOMPtr<nsIContent> nextSibling;
     for (uint32_t i = 0; i < mStartOfRightNode.Offset(); i++) {
       // XXX This must be bad behavior.  Perhaps, we should work with
-      //     mStartOfRightNode::GetChildAtOffset().  Even if some children
+      //     mStartOfRightNode::GetChild().  Even if some children
       //     before the right node have been inserted or removed, we should
       //     move all children before the right node because user must focus
       //     on the right node, so, it must be the expected behavior.
@@ -153,7 +165,7 @@ SplitNodeTransaction::RedoTransaction()
       }
       nextSibling = child->GetNextSibling();
       ErrorResult error;
-      mStartOfRightNode.Container()->RemoveChild(*child, error);
+      mStartOfRightNode.GetContainer()->RemoveChild(*child, error);
       if (NS_WARN_IF(error.Failed())) {
         return error.StealNSResult();
       }
@@ -166,7 +178,7 @@ SplitNodeTransaction::RedoTransaction()
   }
   // Second, re-insert the left node into the tree
   ErrorResult error;
-  mParent->InsertBefore(*mNewLeftNode, mStartOfRightNode.Container(), error);
+  mParent->InsertBefore(*mNewLeftNode, mStartOfRightNode.GetContainer(), error);
   if (NS_WARN_IF(error.Failed())) {
     return error.StealNSResult();
   }

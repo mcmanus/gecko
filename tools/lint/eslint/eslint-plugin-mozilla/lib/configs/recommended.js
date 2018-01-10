@@ -34,7 +34,6 @@ module.exports = {
     "MatchPatternSet": false,
     "MenuBoxObject": false,
     // Specific to Firefox (Chrome code only).
-    "MozSelfSupport": false,
     "SharedArrayBuffer": false,
     "SimpleGestureEvent": false,
     // Note: StopIteration will likely be removed as part of removing legacy
@@ -63,6 +62,13 @@ module.exports = {
     "rules": {
       "mozilla/use-services": "off"
     }
+  }, {
+    // Turn off browser env for all *.jsm files, and turn on the jsm environment.
+    "env": {
+      "browser": false,
+      "mozilla/jsm": true
+    },
+    "files": "**/*.jsm"
   }],
 
   "parserOptions": {
