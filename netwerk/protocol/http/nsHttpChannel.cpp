@@ -1124,7 +1124,7 @@ nsHttpChannel::SetupTransaction()
 
     mUsedNetwork = 1;
 
-    if (mLoadFlags & nsIRequest::LOAD_TRR) {
+    if (mTRR) {
         mCaps |= NS_HTTP_LARGE_KEEPALIVE;
     }
     if (!mAllowSpdy) {
@@ -3889,7 +3889,7 @@ nsHttpChannel::OpenCacheEntry(bool isHttps)
     if (mPostID) {
         extension.Append(nsPrintfCString("%d", mPostID));
     }
-    if (mLoadFlags & nsIRequest::LOAD_TRR) {
+    if (mTRR) {
         extension.Append("TRR");
     }
 

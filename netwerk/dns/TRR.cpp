@@ -187,8 +187,7 @@ TRR::DNSoverHTTPS()
                 nsIContentPolicy::TYPE_OTHER,
                 nullptr, // aLoadGroup
                 nullptr, // aCallbacks
-                nsIRequest::LOAD_ANONYMOUS | nsIRequest::LOAD_TRR,
-                ios);
+                nsIRequest::LOAD_ANONYMOUS, ios);
 
   nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(mChannel);
   if (!httpChannel) {
@@ -215,6 +214,8 @@ TRR::DNSoverHTTPS()
   // setting a small stream window means the h2 stack won't pipeline a window update
   // with each HEADERS
   rv = internalChannel->SetInitialRwin(kMaxSize + 1024);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = internalChannel->SetTrr(true);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (useGet) {
