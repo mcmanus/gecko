@@ -3,12 +3,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/net/TRRService.h"
-#include "mozilla/Services.h"
-#include "mozilla/Preferences.h"
-#include "nsIObserverService.h"
-#include "nsServiceManagerUtils.h"
 #include "nsICaptivePortalService.h"
+#include "nsIObserverService.h"
+#include "TRRService.h"
+
+#include "mozilla/Preferences.h"
 
 static const char kOpenCaptivePortalLoginEvent[] = "captive-portal-login";
 static const char kClearPrivateData[] = "clear-private-data";

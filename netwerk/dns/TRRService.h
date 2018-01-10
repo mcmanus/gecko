@@ -7,10 +7,10 @@
 #define TRRService_h_
 
 #include "mozilla/Atomics.h"
-#include "nsCOMPtr.h"
 #include "nsWeakReference.h"
-#include "nsIPrefService.h"
 #include "nsIObserver.h"
+
+class nsIPrefBranch;
 
 namespace mozilla {
 namespace net {
