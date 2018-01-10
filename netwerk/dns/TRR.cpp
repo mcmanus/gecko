@@ -19,6 +19,7 @@
 #include "nsStringStream.h"
 #include "nsURLHelper.h"
 #include "TRR.h"
+#include "TRRService.h"
 
 #include "mozilla/Base64.h"
 #include "mozilla/DebugOnly.h"

@@ -257,7 +257,7 @@ nsHostRecord::CopyExpirationTimesAndFlagsFrom(const nsHostRecord *aFromHostRecor
 }
 
 void
-nsHostRecord::Complete(nsHostResolver *hostResolver)
+nsHostRecord::Complete()
 {
     if (mNativeUsed) {
         uint32_t millis = static_cast<uint32_t>(mNativeDuration.ToMilliseconds());
@@ -280,8 +280,8 @@ nsHostRecord::Complete(nsHostResolver *hostResolver)
         }
     }
     
-    if (mTRRUsed && !mTRRSuccess && mNativeSuccess && hostResolver) {
-        hostResolver->TRRBlacklist(nsCString(host), true);
+    if (mTRRUsed && !mTRRSuccess && mNativeSuccess && gTRRService) {
+        gTRRService->TRRBlacklist(nsCString(host), true);
     }
 }
 
@@ -329,6 +329,10 @@ nsHostRecord::ReportUnusable(NetAddr *aAddress)
     // must call locked
     LOG(("Adding address to blacklist for host [%s%s%s], host record [%p].\n",
          LOG_HOST(host.get(), netInterface.get()), this));
+
+    if (mTRRSuccess && gTRRService) {
+        gTRRService->TRRBlacklist(nsCString(host), false);
+    }
 
     ++mBlacklistedCount;
 
@@ -583,6 +587,8 @@ static void DnsPrefChanged(const char* aPref, void* aClosure)
 }
 #endif
 
+NS_IMPL_ISUPPORTS0(nsHostResolver)
+
 nsHostResolver::nsHostResolver(uint32_t maxCacheEntries,
                                uint32_t defaultCacheEntryLifetime,
                                uint32_t defaultGracePeriod)
@@ -648,17 +654,6 @@ nsHostResolver::Init()
         res_ninit(&_res);
     }
 #endif
-
-    mStorage = DataStorage::Get(DataStorageClass::TRRBlacklist);
-    if (mStorage) {
-        bool storageWillPersist = false;
-        if (NS_FAILED(mStorage->Init(storageWillPersist))) {
-            mStorage = nullptr;
-        }
-    }
-
-    // seed the blacklist with the .local domain
-    TRRBlacklist(NS_LITERAL_CSTRING("local"), false);
 
     return NS_OK;
 }
@@ -1136,132 +1131,6 @@ nsHostResolver::ConditionallyCreateThread(nsHostRecord *rec)
     return NS_OK;
 }
 
-static inline uint32_t
-PRTimeToSeconds(PRTime t_usec)
-{
-    return uint32_t( t_usec / PR_USEC_PER_SEC );
-}
-
-#define NowInSeconds() PRTimeToSeconds(PR_Now())
-
-bool
-nsHostResolver::IsTRRBlacklisted(nsCString aHost,
-                                 bool aFullHost) // false if domain
-{
-    MOZ_ASSERT(gTRRService);
-    fprintf(stderr, "Check %s in TRR blacklist\n", aHost.get());
-
-    if (!gTRRService->Enabled()) {
-        fprintf(stderr, "... TRRService not enabled\n");
-        return true;
-    }
-
-    int32_t dot = aHost.FindChar('.');
-    if ((dot == kNotFound) && aFullHost) {
-        // Only if a full host name. Domains can be dotless to be able to
-        // blacklist entire TLDs
-        fprintf(stderr, "Host [%s] has no dot\n", aHost.get());
-        return true;
-    } else if(dot != kNotFound) {
-        // there was a dot, check the parent first
-        dot++;
-        nsDependentCSubstring domain = Substring(aHost, dot, aHost.Length() - dot);
-        nsAutoCString check(domain);
-
-        // recursively check the domain part of this name
-        if (IsTRRBlacklisted(check, false)) {
-            // the domain name of this name is already TRR blacklisted
-            return true;
-        }
-    }
-
-    // use a unified casing for the hashkey
-    nsAutoCString hashkey(aHost.get());
-    bool privateBrowsing = false;
-    nsCString val(mStorage->Get(hashkey, privateBrowsing ?
-                                DataStorage_Private : DataStorage_Persistent));
-
-    if (!val.IsEmpty()) {
-        nsresult code;
-        int32_t until = val.ToInteger(&code) + kTRRBlacklistExpireTime;
-        int32_t expire = NowInSeconds();
-        if (NS_SUCCEEDED(code) && (until > expire)) {
-            fprintf(stderr, "Host [%s] is TRR blacklisted\n", aHost.get());
-            return true;
-        } else {
-            // the blacklisted entry has expired
-            mStorage->Remove(hashkey, privateBrowsing ?
-                             DataStorage_Private : DataStorage_Persistent);
-        }
-    }
-    return false;
-}
-
-class proxyBlacklist : public Runnable
-{
-public:
-  proxyBlacklist(nsHostResolver *aHostResolver, const nsCString &aHost, bool aFullHost)
-    : mozilla::Runnable("proxyBlackList")
-    , mHostResolver(aHostResolver), mHost(aHost), mFullHost(aFullHost)
-    { }
-
-    NS_IMETHOD Run() override
-    {
-        mHostResolver->TRRBlacklist(mHost, mFullHost);
-        mHostResolver = nullptr;
-        return NS_OK;
-    }
-    
-private:
-    RefPtr<nsHostResolver> mHostResolver;
-    nsCString mHost;
-    bool      mFullHost;
-};
-
-
-void
-nsHostResolver::TRRBlacklist(const nsCString &aHost, bool aFullHost)
-{
-    if (!NS_IsMainThread()) {
-        NS_DispatchToMainThread(new proxyBlacklist(this, aHost, aFullHost));
-        return;
-    }
-
-    fprintf(stderr, "TRR blacklist %s\n", aHost.get());
-    nsAutoCString hashkey(aHost.get());
-    bool privateBrowsing = false;
-    nsAutoCString val;
-    val.AppendInt( NowInSeconds() ); // creation time
-
-    // this overwrites any existing entry
-    mStorage->Put(hashkey, val, privateBrowsing ?
-                  DataStorage_Private : DataStorage_Persistent);
-
-    // We allow adding hosts before the TRRService is up
-    if (aFullHost && gTRRService) {
-        // when given a full host name, verify its domain as well
-        int32_t dot = aHost.FindChar('.');
-        if (dot != kNotFound) {
-            // this has a domain to be checked
-            dot++;
-            nsDependentCSubstring domain = Substring(aHost, dot, aHost.Length() - dot);
-            nsAutoCString check(domain);
-            if (IsTRRBlacklisted(check, false)) {
-                // the domain part is already blacklisted, no need to add this
-                // entry
-                return;
-            }
-            // verify 'check' over TRR
-            fprintf(stderr, "TRR: verify if '%s' resolves\n", check.get());
-
-            // the created trr needs to be stuck somewhere todo for cancel
-            // check if there's an NS entry for this name
-            RefPtr<TRR> trr = new TRR(this, check, TRRTYPE_NS);
-            NS_DispatchToMainThread(trr);
-        }
-    }
-}
-
 #define TRROutstanding() ((rec->mTrrA || rec->mTrrAAAA || rec->mTrrNS))
 
 // returns error if no TRR resolve is issued
@@ -1285,7 +1154,7 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
     rec->mTRRSuccess = 0; // bump for each successful TRR response
 
     nsAutoCString hostName(rec->host);
-    if (IsTRRBlacklisted(hostName, true)) {
+    if (gTRRService && gTRRService->IsTRRBlacklisted(hostName, true)) {
         Telemetry::Accumulate(Telemetry::DNS_NO_TRR_REASON, TRR_HOST_BLACKLISTED);
         MOZ_ASSERT(!rec->mTRRUsed);
         // not really an error but no TRR is issued
@@ -1403,7 +1272,6 @@ nsHostResolver::Mode()
 
     return MODE_NATIVEONLY;
 }
-
 
 nsresult
 nsHostResolver::NameLookup(nsHostRecord *rec)
@@ -1667,7 +1535,9 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
             // whitelist?
         } else {
             fprintf(stderr, "TRR says %s doesn't resove!\n", newRRSet->mHostName);
-            TRRBlacklist(nsCString(newRRSet->mHostName), false);
+            if (gTRRService) {
+                gTRRService->TRRBlacklist(nsCString(newRRSet->mHostName), false);
+            }
         }
         return LOOKUP_OK;
     }
@@ -1779,7 +1649,7 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
     rec->mDidCallbacks = true;
 
     if (!rec->mResolving && !mShutdown) {
-        rec->Complete(this);
+        rec->Complete();
 
         // add to mEvictionQ
         MOZ_ASSERT(rec->next == rec && rec->prev == rec); // not on a queue
@@ -1986,7 +1856,7 @@ nsHostResolver::Create(uint32_t maxCacheEntries,
                        nsHostResolver **result)
 {
     auto *res = new nsHostResolver(maxCacheEntries, defaultCacheEntryLifetime,
-                                             defaultGracePeriod);
+                                   defaultGracePeriod);
     NS_ADDREF(res);
 
     nsresult rv = res->Init();

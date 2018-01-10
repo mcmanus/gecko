@@ -7,6 +7,8 @@
 #define TRRService_h_
 
 #include "mozilla/Atomics.h"
+#include "mozilla/DataStorage.h"
+#include "nsHostResolver.h"
 #include "nsWeakReference.h"
 #include "nsIObserver.h"
 
@@ -15,19 +17,13 @@ class nsIPrefBranch;
 namespace mozilla {
 namespace net {
 
-enum ResolverMode {
-  MODE_NATIVEONLY, // TRR OFF
-  MODE_PARALLEL,   // use the first response
-  MODE_TRRFIRST,   // fallback to native on TRR failure
-  MODE_TRRONLY     // don't even fallback
-};
-
 class TRRService
   : public nsIObserver
   , public nsSupportsWeakReference
+  , public AHostResolver
 {
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIOBSERVER
 
   TRRService();
@@ -41,6 +37,10 @@ public:
   bool UseGET() { return mUseGET; }
   nsresult GetURI(nsCString &result);
   nsresult GetCredentials(nsCString &result);
+
+  LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *) override;
+  void TRRBlacklist(const nsCString &host, bool aParentsToo);
+  bool IsTRRBlacklisted(nsCString host, bool fullhost);
 
 private:
   virtual  ~TRRService();
@@ -57,6 +57,9 @@ private:
   Atomic<bool, Relaxed> mRfc1918;
   Atomic<bool, Relaxed> mCaptiveIsPassed;
   Atomic<bool, Relaxed> mUseGET;
+
+  RefPtr<DataStorage> mStorage;
+
 };
 
 extern TRRService *gTRRService;

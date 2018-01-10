@@ -5,12 +5,14 @@
 
 #include "nsICaptivePortalService.h"
 #include "nsIObserverService.h"
+#include "TRR.h"
 #include "TRRService.h"
 
 #include "mozilla/Preferences.h"
 
 static const char kOpenCaptivePortalLoginEvent[] = "captive-portal-login";
 static const char kClearPrivateData[] = "clear-private-data";
+const static uint32_t kTRRBlacklistExpireTime = 3600*24*3; // three days
 
 #define TRR_PREF_PREFIX           "network.trr."
 #define TRR_PREF(x)               TRR_PREF_PREFIX x
@@ -46,7 +48,6 @@ TRRService::Init()
     return NS_OK;
   }
   mInitialized = true;
-  gTRRService = this;
 
   nsCOMPtr<nsIObserverService> observerService =
     mozilla::services::GetObserverService();
@@ -62,6 +63,19 @@ TRRService::Init()
   }
 
   ReadPrefs(NULL);
+
+  mStorage = DataStorage::Get(DataStorageClass::TRRBlacklist);
+  if (mStorage) {
+    bool storageWillPersist = false;
+    if (NS_FAILED(mStorage->Init(storageWillPersist))) {
+      mStorage = nullptr;
+    }
+  }
+
+  // seed the blacklist with the .local domain
+  TRRBlacklist(NS_LITERAL_CSTRING("local"), false);
+
+  gTRRService = this;
 
   LOG(("Initialized TRRService\n"));
   return NS_OK;
@@ -184,6 +198,120 @@ TRRService::Observe(nsISupports *aSubject,
     // flush the TRR blacklist, both in-memory and on-disk
   }
   return NS_OK;
+}
+
+bool
+TRRService::IsTRRBlacklisted(nsCString aHost,
+                             bool aParentsToo) // false if domain
+{
+  fprintf(stderr, "Check %s in TRR blacklist\n", aHost.get());
+
+  if (!Enabled()) {
+    fprintf(stderr, "... TRRService not enabled\n");
+    return true;
+  }
+
+  int32_t dot = aHost.FindChar('.');
+  if ((dot == kNotFound) && aParentsToo) {
+    // Only if a full host name. Domains can be dotless to be able to
+    // blacklist entire TLDs
+    fprintf(stderr, "Host [%s] has no dot\n", aHost.get());
+    return true;
+  } else if(dot != kNotFound) {
+    // there was a dot, check the parent first
+    dot++;
+    nsDependentCSubstring domain = Substring(aHost, dot, aHost.Length() - dot);
+    nsAutoCString check(domain);
+
+    // recursively check the domain part of this name
+    if (IsTRRBlacklisted(check, false)) {
+      // the domain name of this name is already TRR blacklisted
+      return true;
+    }
+  }
+
+  MutexAutoLock lock(mLock);
+  // use a unified casing for the hashkey
+  nsAutoCString hashkey(aHost.get());
+  bool privateBrowsing = false;
+  nsCString val(mStorage->Get(hashkey, privateBrowsing ?
+                              DataStorage_Private : DataStorage_Persistent));
+
+  if (!val.IsEmpty()) {
+    nsresult code;
+    int32_t until = val.ToInteger(&code) + kTRRBlacklistExpireTime;
+    int32_t expire = NowInSeconds();
+    if (NS_SUCCEEDED(code) && (until > expire)) {
+      fprintf(stderr, "Host [%s] is TRR blacklisted\n", aHost.get());
+      return true;
+    } else {
+      // the blacklisted entry has expired
+      mStorage->Remove(hashkey, privateBrowsing ?
+                       DataStorage_Private : DataStorage_Persistent);
+    }
+  }
+  return false;
+}
+
+void
+TRRService::TRRBlacklist(const nsCString &aHost, bool aParentsToo)
+{
+  fprintf(stderr, "TRR blacklist %s\n", aHost.get());
+  nsAutoCString hashkey(aHost.get());
+  bool privateBrowsing = false;
+  nsAutoCString val;
+  val.AppendInt( NowInSeconds() ); // creation time
+
+  // this overwrites any existing entry
+  {
+    MutexAutoLock lock(mLock);
+    mStorage->Put(hashkey, val, privateBrowsing ?
+                  DataStorage_Private : DataStorage_Persistent);
+  }
+
+  if (aParentsToo) {
+    // when given a full host name, verify its domain as well
+    int32_t dot = aHost.FindChar('.');
+    if (dot != kNotFound) {
+      // this has a domain to be checked
+      dot++;
+      nsDependentCSubstring domain = Substring(aHost, dot, aHost.Length() - dot);
+      nsAutoCString check(domain);
+      if (IsTRRBlacklisted(check, false)) {
+        // the domain part is already blacklisted, no need to add this
+        // entry
+        return;
+      }
+      // verify 'check' over TRR
+      fprintf(stderr, "TRR: verify if '%s' resolves\n", check.get());
+
+      // check if there's an NS entry for this name
+      RefPtr<TRR> trr = new TRR(this, check, TRRTYPE_NS);
+      NS_DispatchToMainThread(trr);
+    }
+  }
+}
+
+AHostResolver::LookupStatus
+TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRSet)
+{
+  // this is an NS check for the TRR blacklist
+
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!rec);
+
+  nsAutoPtr<AddrInfo> newRRSet(aNewRRSet);
+  MOZ_ASSERT(newRRSet && newRRSet->isTRR() == TRRTYPE_NS);
+
+  // when called without a host record, this is a domain name check response.
+  if (NS_SUCCEEDED(status)) {
+    fprintf(stderr, "TRR verified %s to be fine!\n", newRRSet->mHostName);
+    // whitelist?
+  } else {
+    fprintf(stderr, "TRR says %s doesn't resove!\n", newRRSet->mHostName);
+    TRRBlacklist(nsCString(newRRSet->mHostName), false);
+  }
+  return LOOKUP_OK;
 }
 
 #undef LOG

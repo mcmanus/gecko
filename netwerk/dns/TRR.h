@@ -26,6 +26,9 @@ public:
   uint32_t mTtl;
 };
 
+class TRRService;
+extern TRRService *gTRRService;
+
 class DOHresp {
 public:
   virtual ~DOHresp() { }
@@ -45,7 +48,7 @@ public:
   NS_DECL_NSISTREAMLISTENER
 
   static const unsigned int kMaxSize = 3200;
-  explicit TRR(nsHostResolver *aResolver,
+  explicit TRR(AHostResolver *aResolver,
                nsHostRecord *aRec,
                enum TrrType aType)
     : mozilla::Runnable("TRR")
@@ -59,7 +62,7 @@ public:
     mHost = aRec->host;
   }
 
-  explicit TRR(nsHostResolver *aResolver,
+  explicit TRR(AHostResolver *aResolver,
                nsCString aHost,
                enum TrrType aType)
     : mozilla::Runnable("TRR")
@@ -76,7 +79,7 @@ public:
   void Cancel();
   nsCString   mHost;
   RefPtr<nsHostRecord>   mRec;
-  RefPtr<nsHostResolver> mHostResolver;
+  RefPtr<AHostResolver> mHostResolver;
   TRRService *mTRRService;
 
 private:

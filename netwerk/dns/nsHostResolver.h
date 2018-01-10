@@ -22,14 +22,18 @@
 #include "mozilla/LinkedList.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
-#include "mozilla/DataStorage.h"
-#include "TRRService.h"
 
 class nsHostResolver;
-class nsHostRecord;
 class nsResolveHostCallback;
-namespace mozilla { namespace net { class TRR; } }
-
+namespace mozilla { namespace net {
+class TRR;
+enum ResolverMode {
+  MODE_NATIVEONLY, // TRR OFF
+  MODE_PARALLEL,   // use the first response
+  MODE_TRRFIRST,   // fallback to native on TRR failure
+  MODE_TRRONLY     // don't even fallback
+};
+} }
 
 #define MAX_RESOLVER_THREADS_FOR_ANY_PRIORITY  3
 #define MAX_RESOLVER_THREADS_FOR_HIGH_PRIORITY 5
@@ -37,8 +41,6 @@ namespace mozilla { namespace net { class TRR; } }
 
 #define MAX_RESOLVER_THREADS (MAX_RESOLVER_THREADS_FOR_ANY_PRIORITY + \
                               MAX_RESOLVER_THREADS_FOR_HIGH_PRIORITY)
-
-const static uint32_t kTRRBlacklistExpireTime = 3600*24*3; // three days
 
 struct nsHostKey
 {
@@ -152,7 +154,7 @@ public:
     bool RemoveOrRefresh(); // Mark records currently being resolved as needed
                             // to resolve again.
     bool IsTRR() { return mTRRUsed; }
-    void Complete(nsHostResolver *);
+    void Complete();
     void Cancel();
 
     mozilla::net::ResolverMode mResolverMode;
@@ -255,19 +257,31 @@ protected:
     virtual ~nsResolveHostCallback() = default;
 };
 
+class AHostResolver
+{
+public:
+    AHostResolver() {}
+    virtual ~AHostResolver() {}
+    NS_INLINE_DECL_PURE_VIRTUAL_REFCOUNTING
+
+     enum LookupStatus {
+        LOOKUP_OK,
+        LOOKUP_RESOLVEAGAIN,
+    };
+
+    virtual LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *) = 0;
+};
+
 /**
  * nsHostResolver - an asynchronous host name resolver.
  */
-class nsHostResolver
+class nsHostResolver : public nsISupports, public AHostResolver
 {
     typedef mozilla::CondVar CondVar;
     typedef mozilla::Mutex Mutex;
 
 public:
-    /**
-     * host resolver instances are reference counted.
-     */
-    NS_INLINE_DECL_THREADSAFE_REFCOUNTING(nsHostResolver)
+    NS_DECL_THREADSAFE_ISUPPORTS
 
     /**
      * creates an addref'd instance of a nsHostResolver object.
@@ -352,19 +366,13 @@ public:
      */
     void FlushCache();
 
-    enum LookupStatus {
-      LOOKUP_OK,
-      LOOKUP_RESOLVEAGAIN,
-    };
-
-    LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *);
-    void TRRBlacklist(const nsCString &host, bool aFullname);
+    LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *) override;
 
 private:
    explicit nsHostResolver(uint32_t maxCacheEntries,
                            uint32_t defaultCacheEntryLifetime,
                            uint32_t defaultGracePeriod);
-   ~nsHostResolver();
+   virtual ~nsHostResolver();
 
     nsresult Init();
     void AssertOnQ(nsHostRecord *, PRCList *);
@@ -373,7 +381,6 @@ private:
     nsresult NativeLookup(nsHostRecord *);
     nsresult NameLookup(nsHostRecord *);
     bool     GetHostToLookup(nsHostRecord **m);
-    bool IsTRRBlacklisted(nsCString host, bool fullhost);
 
     void     DeQueue(PRCList &aQ, nsHostRecord **aResult);
     void     ClearPendingQueue(PRCList *aPendingQueue);
@@ -430,7 +437,6 @@ private:
     // Set the expiration time stamps appropriately.
     void PrepareRecordExpiration(nsHostRecord* rec) const;
 
-    RefPtr<mozilla::DataStorage> mStorage;
 public:
     /*
      * Called by the networking dashboard via the DnsService2
