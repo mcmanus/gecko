@@ -188,8 +188,7 @@ TRR::DNSoverHTTPS()
                 nsIContentPolicy::TYPE_OTHER,
                 nullptr, // aLoadGroup
                 nullptr, // aCallbacks
-                nsIRequest::LOAD_NORMAL | nsIRequest::LOAD_ANONYMOUS |
-                nsIRequest::LOAD_TRR | nsIRequest::LOAD_FROM_CACHE,
+                nsIRequest::LOAD_ANONYMOUS | nsIRequest::LOAD_TRR,
                 ios);
 
   nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(mChannel);
@@ -213,6 +212,9 @@ TRR::DNSoverHTTPS()
     rv = httpChannel->SetRequestMethod(NS_LITERAL_CSTRING("GET"));
     NS_ENSURE_SUCCESS(rv, rv);
   } else {
+    rv = httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Cache-Control"),
+                                       NS_LITERAL_CSTRING("no-store"), false);
+    NS_ENSURE_SUCCESS(rv, rv);
     nsCOMPtr<nsIUploadChannel2> uploadChannel = do_QueryInterface(httpChannel);
     if (!uploadChannel) {
       return NS_ERROR_UNEXPECTED;

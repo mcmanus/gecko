@@ -142,6 +142,11 @@ interface nsIRequest : nsISupports
      */
 
     /**
+     * This flag places data for the request in a cache segment specific to TRR
+     */
+    const unsigned long LOAD_TRR = 1 << 6;
+
+    /**
      * This flag prevents caching of any kind.  It does not, however, prevent
      * cached content from being used to satisfy this request.
      */
@@ -220,7 +225,4 @@ interface nsIRequest : nsISupports
      * particularly HTTP persistent connections, should not be used.
      */
     const unsigned long LOAD_FRESH_CONNECTION = 1 << 15;
-
-    /* TRR data is loaded */
-    const unsigned long LOAD_TRR = 1 << 16;
 };
