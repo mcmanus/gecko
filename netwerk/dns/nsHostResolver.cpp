@@ -209,15 +209,12 @@ nsHostRecord::Cancel()
 {
     if (mTrrA) {
         mTrrA->Cancel();
-        mTrrA = nullptr;
     }
     if (mTrrAAAA) {
         mTrrAAAA->Cancel();
-        mTrrAAAA = nullptr;
     }
     if (mTrrNS) {
         mTrrNS->Cancel();
-        mTrrNS = nullptr;
     }
 }
 

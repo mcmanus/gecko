@@ -610,7 +610,7 @@ TRR::OnStopRequest(nsIRequest *aRequest,
                    nsresult aStatusCode)
 {
   // The dtor will be run after the function returns
-  LOG("TRR:OnStopRequest %s %d failed=%d code=%d\n",
+  LOG("TRR:OnStopRequest %s %d failed=%d code=%X\n",
       mHost.get(), mType, mFailed, aStatusCode);
   nsCOMPtr<nsIChannel> channel;
   channel.swap(mChannel);
@@ -725,7 +725,8 @@ TRR::Cancel()
     return;
   }
   if (mChannel) {
-    LOG("TRR: %p canceling Channel %p\n", this, mChannel.get());
+    LOG("TRR: %p canceling Channel %p %s %d\n", this,
+        mChannel.get(), mHost.get(), mType);
     mChannel->Cancel(NS_ERROR_ABORT);
   }
 }
