@@ -38,6 +38,7 @@ TRRService::TRRService()
   , mRfc1918(false)
   , mCaptiveIsPassed(false)
   , mUseGET(false)
+  , mClearStorage(false)
 {
   MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
 }
@@ -100,7 +101,12 @@ TRRService::ReadPrefs(const char *name)
   }
   if (!name || !strcmp(name, TRR_PREF("uri"))) {
     // Base URI, appends "?ct&body=..."
+    nsCString old(mPrivateURI);
     Preferences::GetCString(TRR_PREF("uri"), mPrivateURI);
+    if (old.Length() && !mPrivateURI.Equals(old)) {
+      mClearStorage = true;
+      LOG(("TRRService clearing blacklist because of change is uri service\n"));
+    }
   }
   if (!name || !strcmp(name, TRR_PREF("credentials"))) {
     Preferences::GetCString(TRR_PREF("credentials"), mPrivateCred);
@@ -191,6 +197,10 @@ TRRService::Observe(nsISupports *aSubject,
         if (NS_FAILED(mStorage->Init(storageWillPersist))) {
           mStorage = nullptr;
         }
+        if (mClearStorage) {
+          mStorage->Clear();
+          mClearStorage = false;
+        }
       }
     }
     
@@ -210,6 +220,11 @@ bool
 TRRService::IsTRRBlacklisted(const nsCString &aHost, bool privateBrowsing,
                              bool aParentsToo) // false if domain
 {
+  if (mClearStorage) {
+    mStorage->Clear();
+    mClearStorage = false;
+  }
+
   // hardcode these so as to not worry about expiration
   if (StringEndsWith(aHost, NS_LITERAL_CSTRING(".local")) ||
       aHost.Equals(NS_LITERAL_CSTRING("localhost"))) {

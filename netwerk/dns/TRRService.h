@@ -59,7 +59,7 @@ private:
   Atomic<bool, Relaxed> mUseGET;
 
   RefPtr<DataStorage> mStorage;
-
+  bool                mClearStorage;
 };
 
 extern TRRService *gTRRService;
