@@ -223,9 +223,6 @@ nsHostRecord::Cancel()
     if (mTrrAAAA) {
         mTrrAAAA->Cancel();
     }
-    if (mTrrNS) {
-        mTrrNS->Cancel();
-    }
 }
 
 nsresult
@@ -1131,7 +1128,7 @@ nsHostResolver::ConditionallyCreateThread(nsHostRecord *rec)
     return NS_OK;
 }
 
-#define TRROutstanding() ((rec->mTrrA || rec->mTrrAAAA || rec->mTrrNS))
+#define TRROutstanding() ((rec->mTrrA || rec->mTrrAAAA))
 
 // returns error if no TRR resolve is issued
 // it is impt this is not called while a native lookup is going on
@@ -1183,9 +1180,6 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
             } else if (rectype == TRRTYPE_AAAA) {
                 MOZ_ASSERT(!rec->mTrrAAAA);
                 rec->mTrrAAAA = trr;
-            } else if (rectype == TRRTYPE_NS) {
-                MOZ_ASSERT(!rec->mTrrNS);
-                rec->mTrrNS = trr;
             } else {
                 MOZ_ASSERT(0);
             }
@@ -1540,9 +1534,6 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         } else if (newRRSet->isTRR() == TRRTYPE_AAAA) {
             MOZ_ASSERT(rec->mTrrAAAA);
             rec->mTrrAAAA = nullptr;
-        } else if (newRRSet->isTRR() == TRRTYPE_NS) {
-            MOZ_ASSERT(rec->mTrrNS);
-            rec->mTrrNS = nullptr;
         } else {
             MOZ_ASSERT(0);
         }

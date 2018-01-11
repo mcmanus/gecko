@@ -190,7 +190,6 @@ private:
 
     RefPtr<mozilla::net::TRR> mTrrA;
     RefPtr<mozilla::net::TRR> mTrrAAAA;
-    RefPtr<mozilla::net::TRR> mTrrNS;
 
     // The number of times ReportUnusable() has been called in the record's
     // lifetime.
