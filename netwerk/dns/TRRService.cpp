@@ -12,6 +12,9 @@
 
 static const char kOpenCaptivePortalLoginEvent[] = "captive-portal-login";
 static const char kClearPrivateData[] = "clear-private-data";
+static const char kPurge[] = "browser:purge-session-history";
+static const char kLastPB[] = "last-pb-context-exited";
+
 const static uint32_t kTRRBlacklistExpireTime = 3600*24*3; // three days
 
 #define TRR_PREF_PREFIX           "network.trr."
@@ -55,6 +58,8 @@ TRRService::Init()
     observerService->AddObserver(this, NS_CAPTIVE_PORTAL_CONNECTIVITY, true);
     observerService->AddObserver(this, kOpenCaptivePortalLoginEvent, true);
     observerService->AddObserver(this, kClearPrivateData, true);
+    observerService->AddObserver(this, kPurge, true);
+    observerService->AddObserver(this, kLastPB, true);
   }
   nsCOMPtr<nsIPrefBranch> prefBranch;
   GetPrefBranch(getter_AddRefs(prefBranch));
@@ -194,8 +199,13 @@ TRRService::Observe(nsISupports *aSubject,
     
     mCaptiveIsPassed = true;
 
-  } else if (!strcmp(aTopic, kClearPrivateData)) {
+  } else if (!strcmp(aTopic, kClearPrivateData) ||
+             !strcmp(aTopic, kPurge) ||
+             !strcmp(aTopic, kLastPB)) {
     // flush the TRR blacklist, both in-memory and on-disk
+    if (mStorage) {
+      mStorage->Clear();
+    }
   }
   return NS_OK;
 }
