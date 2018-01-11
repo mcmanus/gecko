@@ -266,7 +266,7 @@ nsHostRecord::Complete()
         Telemetry::Accumulate(Telemetry::DNS_TRR_LOOKUP_TIME, millis);
     }
 
-    if (mTRRUsed && mNativeUsed) { // race!
+    if (mTRRUsed && mNativeUsed) { // race or shadow!
         if (mTrrDuration <= mNativeDuration) {
             Telemetry::Accumulate(Telemetry::DNS_TRR_RACE, DNS_RACE_TRR_WON);
             LOG(("nsHostRecord::Complete %s Dns Race: TRR\n", host.get()));
@@ -1296,7 +1296,9 @@ nsHostResolver::NameLookup(nsHostRecord *rec)
         rv = TrrLookup(rec);
     }
 
-    if ((mode == MODE_PARALLEL) || (mode == MODE_NATIVEONLY) ||
+    if ((mode == MODE_PARALLEL) ||
+        (mode == MODE_NATIVEONLY) ||
+        (mode == MODE_SHADOW) ||
         ((mode == MODE_TRRFIRST) && NS_FAILED(rv))) {
         rv = NativeLookup(rec);
     }
@@ -1412,6 +1414,7 @@ void
 nsHostResolver::PrepareRecordExpiration(nsHostRecord* rec) const
 {
     MOZ_ASSERT(((bool)rec->addr_info) != rec->negative);
+    mLock.AssertCurrentThreadOwns();
     if (!rec->addr_info) {
         rec->SetExpiration(TimeStamp::NowLoRes(),
                            NEGATIVE_RECORD_LIFETIME, 0);
@@ -1522,7 +1525,9 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
     MOZ_ASSERT(rec->mResolving);
     rec->mResolving--;
 
-    if (newRRSet && newRRSet->isTRR()) {
+    bool trrResult = newRRSet && newRRSet->isTRR();
+
+    if (trrResult) {
         LOG(("TRR lookup Complete (%d) %s %s\n",
              newRRSet->isTRR(), newRRSet->mHostName,
              NS_SUCCEEDED(status) ? "OK" : "FAILED"));
@@ -1542,7 +1547,7 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
 
         if (TRROutstanding()) {
             if (NS_SUCCEEDED(status)) {
-                // There's another one TRR complete pending. Wait for it and keep
+                // There's another TRR complete pending. Wait for it and keep
                 // this RRset around until then.
                 MOZ_ASSERT(!rec->mFirstTRR && newRRSet);
                 rec->mFirstTRR = newRRSet; // autoPtr.swap()
@@ -1585,7 +1590,9 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         rec->mNativeDuration = TimeStamp::Now() - rec->mNativeStart;
     }
 
-    MOZ_ASSERT(rec->mResolverMode == MODE_PARALLEL || !rec->mDidCallbacks);
+    MOZ_ASSERT(rec->mResolverMode == MODE_PARALLEL ||
+               rec->mResolverMode == MODE_SHADOW ||
+               !rec->mDidCallbacks);
     LOG(("nsHostResolver record %p calling back dns users\n", rec));
 
     if (rec->mResolveAgain && (status != NS_ERROR_ABORT)) {
@@ -1594,13 +1601,11 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         return LOOKUP_RESOLVEAGAIN;
     }
 
-    // get the list of pending callbacks for this lookup, and notify
-    // them that the lookup is complete.
-    mozilla::LinkedList<RefPtr<nsResolveHostCallback>> cbs = mozilla::Move(rec->mCallbacks);
-
     // update record fields.  We might have a rec->addr_info already if a
     // previous lookup result expired and we're reresolving it..
-    if (!rec->mDidCallbacks && !mShutdown) {
+    // note that we don't update the addr_info if this is trr shadow results
+    if (!rec->mDidCallbacks && !mShutdown &&
+        !(trrResult && rec->mResolverMode == MODE_SHADOW)) {
         MutexAutoLock lock(rec->addr_info_lock);
         nsAutoPtr<AddrInfo> old_addr_info;
         if (different_rrset(rec->addr_info, newRRSet)) {
@@ -1618,10 +1623,25 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         PrepareRecordExpiration(rec);
     }
 
-    for (nsResolveHostCallback* c = cbs.getFirst(); c; c = c->removeAndGetNext()) {
-        c->OnResolveHostComplete(this, rec, status);
+    bool doCallbacks = true;
+
+    if (trrResult && (rec->mResolverMode == MODE_SHADOW) && !rec->mDidCallbacks) {
+        // don't report result based only on suppressed TRR info
+        doCallbacks = false;
+        LOG(("nsHostResolver Suppressing TRR %s because it is first shadow result\n",
+             rec->host.get()));
     }
-    rec->mDidCallbacks = true;
+
+    if (doCallbacks) {
+        // get the list of pending callbacks for this lookup, and notify
+        // them that the lookup is complete.
+        mozilla::LinkedList<RefPtr<nsResolveHostCallback>> cbs = mozilla::Move(rec->mCallbacks);
+
+        for (nsResolveHostCallback* c = cbs.getFirst(); c; c = c->removeAndGetNext()) {
+            c->OnResolveHostComplete(this, rec, status);
+        }
+        rec->mDidCallbacks = true;
+    }
 
     if (!rec->mResolving && !mShutdown) {
         rec->Complete();

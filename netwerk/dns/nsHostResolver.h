@@ -29,9 +29,10 @@ namespace mozilla { namespace net {
 class TRR;
 enum ResolverMode {
   MODE_NATIVEONLY, // TRR OFF
-  MODE_PARALLEL,   // use the first response
+  MODE_PARALLEL,   // race and use the first response
   MODE_TRRFIRST,   // fallback to native on TRR failure
-  MODE_TRRONLY     // don't even fallback
+  MODE_TRRONLY,    // don't even fallback
+  MODE_SHADOW      // race for stats, but always use native result
 };
 } }
 

@@ -5356,7 +5356,7 @@ pref("network.captive-portal-service.backoffFactor", "5.0");
 pref("network.captive-portal-service.enabled", false);
 
 // DNS Trusted Recursive Resolver
-// 0 - off, 1 - parallel, 2 TRR first, 3 TRR only
+// 0 - off, 1 - race, 2 TRR first, 3 TRR only, 4 shadow
 pref("network.trr.mode", 0);
 // DEBUG-only default URI
 pref("network.trr.uri", "");
