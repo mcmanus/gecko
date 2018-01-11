@@ -287,7 +287,6 @@ nsHostRecord::~nsHostRecord()
 
     Telemetry::Accumulate(Telemetry::DNS_BLACKLIST_COUNT, mBlacklistedCount);
     delete addr_info;
-    delete mFirstTRR;
 }
 
 bool
@@ -1545,7 +1544,9 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
             if (NS_SUCCEEDED(status)) {
                 // There's another one TRR complete pending. Wait for it and keep
                 // this RRset around until then.
-                rec->mFirstTRR = newRRSet.forget();
+                MOZ_ASSERT(!rec->mFirstTRR && newRRSet);
+                rec->mFirstTRR = newRRSet; // autoPtr.swap()
+                MOZ_ASSERT(rec->mFirstTRR && !newRRSet);
             }
             return LOOKUP_OK;
         } else {
@@ -1554,10 +1555,9 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
             if (rec->mFirstTRR) {
                 if (NS_SUCCEEDED(status)) {
                     merge_rrset(newRRSet, rec->mFirstTRR);
-                    delete rec->mFirstTRR;
                 }
                 else {
-                    newRRSet = rec->mFirstTRR;
+                    newRRSet = rec->mFirstTRR; // transfers
                 }
                 rec->mFirstTRR = nullptr;
             }

@@ -181,7 +181,7 @@ private:
     bool    mTRRUsed;   /* TRR was used on this record */
     bool    mNativeUsed;
     int     mNativeSuccess; /* number of native lookup responses */
-    mozilla::net::AddrInfo *mFirstTRR; /* temporary TRR storage */
+    nsAutoPtr<mozilla::net::AddrInfo> mFirstTRR; /* partial TRR storage */
     bool    onQueue;  /* true if pending and on the queue (not yet given to getaddrinfo())*/
     bool    usingAnyThread; /* true if off queue and contributing to mActiveAnyThreadCount */
     bool    mDoomed; /* explicitly expired */
