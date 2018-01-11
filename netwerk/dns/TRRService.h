@@ -40,7 +40,7 @@ public:
 
   LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *) override;
   void TRRBlacklist(const nsCString &host, bool aParentsToo);
-  bool IsTRRBlacklisted(nsCString host, bool fullhost);
+  bool IsTRRBlacklisted(const nsCString &host, bool fullhost);
 
 private:
   virtual  ~TRRService();

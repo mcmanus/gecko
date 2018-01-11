@@ -327,12 +327,9 @@ void
 nsHostRecord::ReportUnusable(NetAddr *aAddress)
 {
     // must call locked
-    LOG(("Adding address to blacklist for host [%s%s%s], host record [%p].\n",
-         LOG_HOST(host.get(), netInterface.get()), this));
-
-    if (mTRRSuccess && gTRRService) {
-        gTRRService->TRRBlacklist(nsCString(host), false);
-    }
+    LOG(("Adding address to blacklist for host [%s%s%s], host record [%p]."
+         "used trr=%d\n", LOG_HOST(host.get(), netInterface.get()),
+         this, mTRRSuccess));
 
     ++mBlacklistedCount;
 
