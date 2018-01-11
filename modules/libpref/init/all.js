@@ -5357,9 +5357,9 @@ pref("network.captive-portal-service.enabled", false);
 
 // DNS Trusted Recursive Resolver
 // 0 - off, 1 - parallel, 2 TRR first, 3 TRR only
-pref("network.trr.mode", 1);
+pref("network.trr.mode", 0);
 // DEBUG-only default URI
-pref("network.trr.uri", "https://daniel.haxx.se/dns/");
+pref("network.trr.uri", "");
 // credentials to pass to DOH end-point
 pref("network.trr.credentials", "");
 // Wait for captive portal confirmation before enabling TRR
