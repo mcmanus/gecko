@@ -1524,6 +1524,8 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
 
     MOZ_ASSERT(rec->mResolving);
     rec->mResolving--;
+    LOG(("nsHostResolver::CompleteLookup %s %p %X trr=%d\n",
+         rec->host.get(), aNewRRSet, status, aNewRRSet ? aNewRRSet->isTRR() : 0));
 
     bool trrResult = newRRSet && newRRSet->isTRR();
 
@@ -1576,6 +1578,7 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
                 MOZ_ASSERT(!rec->mResolving);
                 NativeLookup(rec);
                 MOZ_ASSERT(rec->mResolving);
+                return LOOKUP_OK;
             }
             // continue
         }
