@@ -273,10 +273,9 @@ nsHostRecord::Complete()
         if (mTrrDuration <= mNativeDuration) {
             Telemetry::Accumulate(Telemetry::DNS_TRR_RACE, DNS_RACE_TRR_WON);
             LOG(("nsHostRecord::Complete %s Dns Race: TRR\n", host.get()));
-            fprintf(stderr,"nsHostRecord::Complete %s Dns Race: TRR\n", host.get());
         } else {
             Telemetry::Accumulate(Telemetry::DNS_TRR_RACE, DNS_RACE_NATIVE_WON);
-            fprintf(stderr, "nsHostRecord::Complete %s Dns Race: NATIVE\n", host.get());
+            LOG(("nsHostRecord::Complete %s Dns Race: NATIVE\n", host.get()));
         }
     }
     
@@ -1174,7 +1173,7 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
     bool madeQuery = false;
     do {
         sendAgain = false;
-        fprintf(stderr, "++++++ TRR Resolve %s type %d\n", rec->host.get(), (int)rectype);
+        LOG(("TRR Resolve %s type %d\n", rec->host.get(), (int)rectype));
         RefPtr<TRR> trr = new TRR(this, rec, rectype);
         if (NS_SUCCEEDED(NS_DispatchToMainThread(trr))) {
             rec->mResolving++;
@@ -1279,7 +1278,7 @@ nsHostResolver::NameLookup(nsHostRecord *rec)
 {
     nsresult rv = NS_ERROR_UNKNOWN_HOST;
     if (rec->mResolving) {
-        fprintf(stderr, "NameLookup %s while already resolving\n", rec->host.get());
+        LOG(("NameLookup %s while already resolving\n", rec->host.get()));
         return NS_OK;
     }
 
@@ -1458,7 +1457,6 @@ merge_rrset(AddrInfo *rrto, AddrInfo *rrfrom)
     while ((element = rrfrom->mAddresses.getFirst())) {
         char buf[128];
         NetAddrToString(&element->mAddress, buf, sizeof(buf));
-        fprintf(stderr, "-- merge [%s] %s\n", rrto->mHostName, buf);
         element->remove(); // unlist from old
         rrto->AddAddress(element); // enlist on new
     }
@@ -1532,9 +1530,9 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
     rec->mResolving--;
 
     if (newRRSet && newRRSet->isTRR()) {
-        fprintf(stderr, "TRR lookup (%d) %s %s\n",
-                newRRSet->isTRR(), newRRSet->mHostName,
-                NS_SUCCEEDED(status) ? "OK" : "FAILED");
+        LOG(("TRR lookup Complete (%d) %s %s\n",
+             newRRSet->isTRR(), newRRSet->mHostName,
+             NS_SUCCEEDED(status) ? "OK" : "FAILED"));
         MOZ_ASSERT(TRROutstanding());
         if (newRRSet->isTRR() == TRRTYPE_A) {
             MOZ_ASSERT(rec->mTrrA);

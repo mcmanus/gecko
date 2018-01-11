@@ -22,8 +22,8 @@ const static uint32_t kTRRBlacklistExpireTime = 3600*24*3; // three days
 namespace mozilla {
 namespace net {
 
-extern LazyLogModule gHostResolverLog;
 #undef LOG
+extern mozilla::LazyLogModule gHostResolverLog;
 #define LOG(args) MOZ_LOG(gHostResolverLog, mozilla::LogLevel::Debug, args)
 
 TRRService *gTRRService = nullptr;
@@ -179,12 +179,11 @@ TRRService::Observe(nsISupports *aSubject,
     ReadPrefs(NS_ConvertUTF16toUTF8(aData).get());
   } else if (!strcmp(aTopic, kOpenCaptivePortalLoginEvent)) {
     // We are in a captive portal
-    fprintf(stderr,"TRRservice in captive portal\n");
+    LOG(("TRRservice in captive portal\n"));
     mCaptiveIsPassed = false;
   } else if (!strcmp(aTopic, NS_CAPTIVE_PORTAL_CONNECTIVITY)) {
     nsAutoCString data = NS_ConvertUTF16toUTF8(aData);
-    fprintf(stderr, "-=*) TRRservice captive portal was %s (*=-\n",
-            data.get());
+    LOG(("TRRservice captive portal was %s\n", data.get()));
     if (!mStorage) {
       mStorage = DataStorage::Get(DataStorageClass::TRRBlacklist);
       if (mStorage) {
@@ -211,8 +210,6 @@ bool
 TRRService::IsTRRBlacklisted(const nsCString &aHost, bool privateBrowsing,
                              bool aParentsToo) // false if domain
 {
-  fprintf(stderr, "Check %s in TRR blacklist\n", aHost.get());
-
   // hardcode these so as to not worry about expiration
   if (StringEndsWith(aHost, NS_LITERAL_CSTRING(".local")) ||
       aHost.Equals(NS_LITERAL_CSTRING("localhost"))) {
@@ -220,7 +217,6 @@ TRRService::IsTRRBlacklisted(const nsCString &aHost, bool privateBrowsing,
   }
     
   if (!Enabled()) {
-    fprintf(stderr, "... TRRService not enabled\n");
     return true;
   }
   if (!mStorage) {
@@ -231,7 +227,6 @@ TRRService::IsTRRBlacklisted(const nsCString &aHost, bool privateBrowsing,
   if ((dot == kNotFound) && aParentsToo) {
     // Only if a full host name. Domains can be dotless to be able to
     // blacklist entire TLDs
-    fprintf(stderr, "Host [%s] has no dot\n", aHost.get());
     return true;
   } else if(dot != kNotFound) {
     // there was a dot, check the parent first
@@ -257,7 +252,7 @@ TRRService::IsTRRBlacklisted(const nsCString &aHost, bool privateBrowsing,
     int32_t until = val.ToInteger(&code) + kTRRBlacklistExpireTime;
     int32_t expire = NowInSeconds();
     if (NS_SUCCEEDED(code) && (until > expire)) {
-      fprintf(stderr, "Host [%s] is TRR blacklisted\n", aHost.get());
+      LOG(("Host [%s] is TRR blacklisted\n", aHost.get()));
       return true;
     } else {
       // the blacklisted entry has expired
@@ -303,7 +298,7 @@ TRRService::TRRBlacklist(const nsCString &aHost, bool privateBrowsing, bool aPar
     return;
   }
 
-  fprintf(stderr, "TRR blacklist %s\n", aHost.get());
+  LOG(("TRR blacklist %s\n", aHost.get()));
   nsAutoCString hashkey(aHost.get());
   nsAutoCString val;
   val.AppendInt( NowInSeconds() ); // creation time
@@ -328,7 +323,7 @@ TRRService::TRRBlacklist(const nsCString &aHost, bool privateBrowsing, bool aPar
         return;
       }
       // verify 'check' over TRR
-      fprintf(stderr, "TRR: verify if '%s' resolves\n", check.get());
+      LOG(("TRR: verify if '%s' resolves as NS\n", check.get()));
 
       // check if there's an NS entry for this name
       RefPtr<TRR> trr = new TRR(this, check, TRRTYPE_NS, privateBrowsing);
@@ -350,10 +345,10 @@ TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRS
 
   // when called without a host record, this is a domain name check response.
   if (NS_SUCCEEDED(status)) {
-    fprintf(stderr, "TRR verified %s to be fine!\n", newRRSet->mHostName);
+    LOG(("TRR verified %s to be fine!\n", newRRSet->mHostName));
     // whitelist?
   } else {
-    fprintf(stderr, "TRR says %s doesn't resove!\n", newRRSet->mHostName);
+    LOG(("TRR says %s doesn't resove as NS!\n", newRRSet->mHostName));
     TRRBlacklist(nsCString(newRRSet->mHostName), pb, false);
   }
   return LOOKUP_OK;

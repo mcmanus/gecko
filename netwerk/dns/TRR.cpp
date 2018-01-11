@@ -28,11 +28,12 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/TimeStamp.h"
 
-#undef LOG
-#define LOG(...) fprintf(stderr, __VA_ARGS__)
-
 namespace mozilla {
 namespace net {
+
+#undef LOG
+extern mozilla::LazyLogModule gHostResolverLog;
+#define LOG(args) MOZ_LOG(gHostResolverLog, mozilla::LogLevel::Debug, args)
 
 NS_IMPL_ISUPPORTS(TRR,
                   nsIStreamListener,
@@ -238,6 +239,7 @@ NS_IMETHODIMP
 TRR::OnStartRequest(nsIRequest *aRequest,
                     nsISupports *aContext)
 {
+  LOG(("TRR::OnStartRequest %p %s %d\n", this, mHost.get(), mType));
   mStartTime = TimeStamp::Now();
   return NS_OK;
 }
@@ -278,10 +280,10 @@ TRR::DohDecode()
   uint8_t length;
   nsAutoCString host;
 
-  LOG("doh decode %s %d bytes\n", mHost.get(), mUsed);
+  LOG(("doh decode %s %d bytes\n", mHost.get(), mUsed));
 
   if (mUsed < 12 || mResponse[0] || mResponse[1]) {
-    LOG("TRR bad incoming DOH, eject!\n");
+    LOG(("TRR bad incoming DOH, eject!\n"));
     return NS_ERROR_UNEXPECTED;
   }
 
@@ -311,14 +313,11 @@ TRR::DohDecode()
     questionRecords--;
   }
   
-  fprintf(stderr,"TRR Decode: index %u of %u\n",
-          index, mUsed);
-
   // Figure out the number of answer records from ANCOUNT
   uint16_t answerRecords = get16bit(mResponse, 6);
 
-  LOG("TRR Decode: %d answer records (%u bytes body) %s\n",
-      answerRecords, mUsed, host.get());
+  LOG(("TRR Decode: %d answer records (%u bytes body) %s index=%u\n",
+       answerRecords, mUsed, host.get(), index));
 
   while (answerRecords) {
 
@@ -334,7 +333,7 @@ TRR::DohDecode()
       index += 2;
     } else if (length & 0xc0) {
       // illegal length, bail out
-      LOG("TRR: illegal label length byte (%x)\n", length);
+      LOG(("TRR: illegal label length byte (%x)\n", length));
       return NS_ERROR_UNEXPECTED;
     } else {
       // iterate over host name in answer
@@ -347,7 +346,7 @@ TRR::DohDecode()
           return NS_ERROR_UNEXPECTED;
         }
         index += 1 + length;
-        LOG("TRR: move over %d bytes\n", 1 + length);
+        LOG(("TRR: move over %d bytes\n", 1 + length));
       } while (length);
     }
     // 16 bit TYPE
@@ -363,7 +362,7 @@ TRR::DohDecode()
     }
     uint16_t CLASS = get16bit(mResponse, index);
     if (1 != CLASS) {
-      LOG("TRR bad CLASS (%u)\n", CLASS);
+      LOG(("TRR bad CLASS (%u)\n", CLASS));
       return NS_ERROR_UNEXPECTED;
     }
     index += 2;
@@ -395,25 +394,25 @@ TRR::DohDecode()
     switch(TYPE) {
     case TRRTYPE_A:
       if (RDLENGTH != 4) {
-        LOG("TRR bad length for A (%u)\n", RDLENGTH);
+        LOG(("TRR bad length for A (%u)\n", RDLENGTH));
         return NS_ERROR_UNEXPECTED;
       }
       rv = mDNS.Add(TTL, mResponse, index, RDLENGTH,
                     mTRRService->AllowRFC1918());
       if (NS_FAILED(rv)) {
-        LOG("TRR got local IPv4 address!\n");
+        LOG(("TRR got local IPv4 address!\n"));
         return rv;
       }
       break;
     case TRRTYPE_AAAA:
       if (RDLENGTH != 16) {
-        LOG("TRR bad length for AAAA (%u)\n", RDLENGTH);
+        LOG(("TRR bad length for AAAA (%u)\n", RDLENGTH));
         return NS_ERROR_UNEXPECTED;
       }
       rv = mDNS.Add(TTL, mResponse, index, RDLENGTH,
                     mTRRService->AllowRFC1918());
       if (NS_FAILED(rv)) {
-        LOG("TRR got unique/local IPv6 address!\n");
+        LOG(("TRR got unique/local IPv6 address!\n"));
         return rv;
       }
       break;
@@ -425,20 +424,19 @@ TRR::DohDecode()
 
     default:
       // skip unknown record types
-      LOG("TRR unsupported TYPE (%u) RDLENGTH %u\n", TYPE, RDLENGTH);
+      LOG(("TRR unsupported TYPE (%u) RDLENGTH %u\n", TYPE, RDLENGTH));
       break;
     }
 
     index += RDLENGTH;
-    LOG("done with record type %u len %u index now %u of %u\n",
-        TYPE, RDLENGTH, index, mUsed);
+    LOG(("done with record type %u len %u index now %u of %u\n",
+         TYPE, RDLENGTH, index, mUsed));
     answerRecords--;
   }
 
   // NSCOUNT
   uint16_t nsRecords = get16bit(mResponse, 8);
-  LOG("TRR Decode: %d ns records (%u bytes body)\n", nsRecords,
-      mUsed);
+  LOG(("TRR Decode: %d ns records (%u bytes body)\n", nsRecords, mUsed));
   while (nsRecords) {
     if (mUsed < (index + 1)) {
       return NS_ERROR_UNEXPECTED;
@@ -452,7 +450,7 @@ TRR::DohDecode()
       index += 2;
     } else if (length & 0xc0) {
       // illegal length, bail out
-      LOG("TRR: illegal label length byte (%x)\n", length);
+      LOG(("TRR: illegal label length byte (%x)\n", length));
       return NS_ERROR_UNEXPECTED;
     } else {
       // iterate over host name in answer
@@ -465,7 +463,7 @@ TRR::DohDecode()
           return NS_ERROR_UNEXPECTED;
         }
         index += 1 + length;
-        LOG("TRR: move over %d bytes\n", 1 + length);
+        LOG(("TRR: move over %d bytes\n", 1 + length));
       } while (length);
     }
 
@@ -486,14 +484,14 @@ TRR::DohDecode()
       return NS_ERROR_UNEXPECTED;
     }
     index += RDLENGTH;
-    LOG("done with nsRecord now %u of %u\n", index, mUsed);
+    LOG(("done with nsRecord now %u of %u\n", index, mUsed));
     nsRecords--;
   }
 
   // additional resource records
   uint16_t arRecords = get16bit(mResponse, 10);
-  LOG("TRR Decode: %d additional resource records (%u bytes body)\n",
-      arRecords, mUsed);
+  LOG(("TRR Decode: %d additional resource records (%u bytes body)\n",
+       arRecords, mUsed));
   while (arRecords) {
     if (mUsed < (index + 1)) {
       return NS_ERROR_UNEXPECTED;
@@ -507,7 +505,7 @@ TRR::DohDecode()
       index += 2;
     } else if (length & 0xc0) {
       // illegal length, bail out
-      LOG("TRR: illegal label length byte (%x)\n", length);
+      LOG(("TRR: illegal label length byte (%x)\n", length));
       return NS_ERROR_UNEXPECTED;
     } else {
       // iterate over host name in answer
@@ -520,7 +518,7 @@ TRR::DohDecode()
           return NS_ERROR_UNEXPECTED;
         }
         index += 1 + length;
-        LOG("TRR: move over %d bytes\n", 1 + length);
+        LOG(("TRR: move over %d bytes\n", 1 + length));
       } while (length);
     }
 
@@ -541,12 +539,12 @@ TRR::DohDecode()
       return NS_ERROR_UNEXPECTED;
     }
     index += RDLENGTH;
-    LOG("done with additional rr now %u of %u\n", index, mUsed);
+    LOG(("done with additional rr now %u of %u\n", index, mUsed));
     arRecords--;
   }
   
   if (index != mUsed) {
-    LOG("TRRRRRR: bad DNS parser (%u != %d)!\n", index, (int)mUsed);
+    LOG(("TRRRRRR: bad DNS parser (%u != %d)!\n", index, (int)mUsed));
     // failed to parse 100%, do not continue
     return NS_ERROR_UNEXPECTED;
   }
@@ -609,8 +607,8 @@ TRR::OnStopRequest(nsIRequest *aRequest,
                    nsresult aStatusCode)
 {
   // The dtor will be run after the function returns
-  LOG("TRR:OnStopRequest %s %d failed=%d code=%X\n",
-      mHost.get(), mType, mFailed, aStatusCode);
+  LOG(("TRR:OnStopRequest %p %s %d failed=%d code=%X\n",
+       this, mHost.get(), mType, mFailed, aStatusCode));
   nsCOMPtr<nsIChannel> channel;
   channel.swap(mChannel);
 
@@ -724,12 +722,14 @@ TRR::Cancel()
     return;
   }
   if (mChannel) {
-    LOG("TRR: %p canceling Channel %p %s %d\n", this,
-        mChannel.get(), mHost.get(), mType);
+    LOG(("TRR: %p canceling Channel %p %s %d\n", this,
+         mChannel.get(), mHost.get(), mType));
     mChannel->Cancel(NS_ERROR_ABORT);
   }
 }
-    
+
+#undef LOG
+
 // namespace
 }
 }
