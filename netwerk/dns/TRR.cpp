@@ -581,7 +581,7 @@ TRR::ReturnData()
   if (!mHostResolver) {
     return NS_ERROR_FAILURE;
   }
-  (void)mHostResolver->CompleteLookup(mRec, NS_OK, ai);
+  (void)mHostResolver->CompleteLookup(mRec, NS_OK, ai, mPB);
   mHostResolver = nullptr;
   mRec = nullptr;
   return NS_OK;
@@ -597,7 +597,7 @@ TRR::FailData()
   // this comes from TRR
   AddrInfo *ai = new AddrInfo(mHost.get(), mType);
 
-  (void)mHostResolver->CompleteLookup(mRec, NS_ERROR_FAILURE, ai);
+  (void)mHostResolver->CompleteLookup(mRec, NS_ERROR_FAILURE, ai, mPB);
   mHostResolver = nullptr;
   mRec = nullptr;
   return NS_OK;

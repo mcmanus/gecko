@@ -47,15 +47,17 @@ struct nsHostKey
     const nsCString host;
     uint16_t flags;
     uint16_t af;
+    bool     pb;
     const nsCString netInterface;
     const nsCString originSuffix;
 
     nsHostKey(const nsACString& host, uint16_t flags,
-              uint16_t af, const nsACString& netInterface,
+              uint16_t af, bool pb, const nsACString& netInterface,
               const nsACString& originSuffix)
         : host(host)
         , flags(flags)
         , af(af)
+        , pb(pb)
         , netInterface(netInterface)
         , originSuffix(originSuffix) {
     }
@@ -269,7 +271,7 @@ public:
         LOOKUP_RESOLVEAGAIN,
     };
 
-    virtual LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *) = 0;
+    virtual LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *, bool pb) = 0;
 };
 
 /**
@@ -366,7 +368,7 @@ public:
      */
     void FlushCache();
 
-    LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *) override;
+    LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *, bool pb) override;
 
 private:
    explicit nsHostResolver(uint32_t maxCacheEntries,

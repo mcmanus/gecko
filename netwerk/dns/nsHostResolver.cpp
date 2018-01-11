@@ -281,7 +281,7 @@ nsHostRecord::Complete()
     }
     
     if (mTRRUsed && !mTRRSuccess && mNativeSuccess && gTRRService) {
-        gTRRService->TRRBlacklist(nsCString(host), true);
+        gTRRService->TRRBlacklist(nsCString(host), pb, true);
     }
 }
 
@@ -665,7 +665,7 @@ nsHostResolver::ClearPendingQueue(PRCList *aPendingQ)
             nsHostRecord *rec = static_cast<nsHostRecord *>(node);
             rec->Cancel();
             node = node->next;
-            CompleteLookup(rec, NS_ERROR_ABORT, nullptr);
+            CompleteLookup(rec, NS_ERROR_ABORT, nullptr, rec->pb);
         }
     }
 }
@@ -844,7 +844,9 @@ nsHostResolver::ResolveHost(const char             *host,
             nsAutoCString originSuffix;
             aOriginAttributes.CreateSuffix(originSuffix);
 
-            nsHostKey key(nsCString(host), flags, af, nsCString(netInterface),
+            nsHostKey key(nsCString(host), flags, af,
+                          (aOriginAttributes.mPrivateBrowsingId > 0),
+                          nsCString(netInterface),
                           originSuffix);
             auto he = static_cast<nsHostDBEnt*>(mDB.Add(&key, fallible));
 
@@ -917,6 +919,7 @@ nsHostResolver::ResolveHost(const char             *host,
                     ((af == PR_AF_INET) || (af == PR_AF_INET6))) {
                     // First, search for an entry with AF_UNSPEC
                     const nsHostKey unspecKey(nsCString(host), flags, PR_AF_UNSPEC,
+                                              (aOriginAttributes.mPrivateBrowsingId > 0),
                                               nsCString(netInterface), originSuffix);
                     auto unspecHe =
                         static_cast<nsHostDBEnt*>(mDB.Search(&unspecKey));
@@ -1072,8 +1075,9 @@ nsHostResolver::DetachCallback(const char             *host,
         nsAutoCString originSuffix;
         aOriginAttributes.CreateSuffix(originSuffix);
 
-        nsHostKey key(nsCString(host), flags, af, nsCString(netInterface),
-                      originSuffix);
+        nsHostKey key(nsCString(host), flags, af,
+                      (aOriginAttributes.mPrivateBrowsingId > 0),
+                      nsCString(netInterface), originSuffix);
         auto he = static_cast<nsHostDBEnt*>(mDB.Search(&key));
         if (he) {
             // walk list looking for |callback|... we cannot assume
@@ -1151,7 +1155,7 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
     rec->mTRRSuccess = 0; // bump for each successful TRR response
 
     nsAutoCString hostName(rec->host);
-    if (gTRRService && gTRRService->IsTRRBlacklisted(hostName, true)) {
+    if (gTRRService && gTRRService->IsTRRBlacklisted(hostName, rec->pb, true)) {
         Telemetry::Accumulate(Telemetry::DNS_NO_TRR_REASON, TRR_HOST_BLACKLISTED);
         MOZ_ASSERT(!rec->mTRRUsed);
         // not really an error but no TRR is issued
@@ -1514,30 +1518,15 @@ different_rrset(AddrInfo *rrset1, AddrInfo *rrset2)
 // returns LOOKUP_RESOLVEAGAIN, but only if 'status' is not NS_ERROR_ABORT.
 // takes ownership of AddrInfo parameter
 nsHostResolver::LookupStatus
-nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNewRRSet)
+nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNewRRSet, bool pb)
 {
     MutexAutoLock lock(mLock);
+    MOZ_ASSERT(rec);
+    MOZ_ASSERT(rec->pb == pb);
 
     // newRRSet needs to be taken into the hostrecord (which will then own it)
     // or deleted on early return.
     nsAutoPtr<AddrInfo> newRRSet(aNewRRSet);
-
-    if (!rec) {
-        // this is an NS check for the TRR blacklist
-        MOZ_ASSERT(newRRSet && newRRSet->isTRR() == TRRTYPE_NS);
-        
-        // when called without a host record, this is a domain name check response.
-        if (NS_SUCCEEDED(status)) {
-            fprintf(stderr, "TRR verified %s to be fine!\n", newRRSet->mHostName);
-            // whitelist?
-        } else {
-            fprintf(stderr, "TRR says %s doesn't resove!\n", newRRSet->mHostName);
-            if (gTRRService) {
-                gTRRService->TRRBlacklist(nsCString(newRRSet->mHostName), false);
-            }
-        }
-        return LOOKUP_OK;
-    }
 
     MOZ_ASSERT(rec->mResolving);
     rec->mResolving--;
@@ -1702,8 +1691,9 @@ nsHostResolver::CancelAsyncRequest(const char             *host,
     aOriginAttributes.CreateSuffix(originSuffix);
 
     // Lookup the host record associated with host, flags & address family
-    nsHostKey key(nsCString(host), flags, af, nsCString(netInterface),
-                  originSuffix);
+    nsHostKey key(nsCString(host), flags, af,
+                  (aOriginAttributes.mPrivateBrowsingId > 0),
+                  nsCString(netInterface), originSuffix);
     auto he = static_cast<nsHostDBEnt*>(mDB.Search(&key));
     if (he) {
         nsHostRecord* recPtr = nullptr;
@@ -1832,7 +1822,7 @@ nsHostResolver::ThreadFunc(void *arg)
              LOG_HOST(rec->host.get(), rec->netInterface.get()),
              ai ? "success" : "failure: unknown host"));
 
-        if (LOOKUP_RESOLVEAGAIN == resolver->CompleteLookup(rec, status, ai)) {
+        if (LOOKUP_RESOLVEAGAIN == resolver->CompleteLookup(rec, status, ai, rec->pb)) {
             // leave 'rec' assigned and loop to make a renewed host resolve
             LOG(("DNS lookup thread - Re-resolving host [%s%s%s].\n",
                  LOG_HOST(rec->host.get(), rec->netInterface.get())));

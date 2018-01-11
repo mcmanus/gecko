@@ -38,9 +38,9 @@ public:
   nsresult GetURI(nsCString &result);
   nsresult GetCredentials(nsCString &result);
 
-  LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *) override;
-  void TRRBlacklist(const nsCString &host, bool aParentsToo);
-  bool IsTRRBlacklisted(const nsCString &host, bool fullhost);
+  LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *, bool pb) override;
+  void TRRBlacklist(const nsCString &host, bool privateBrowsing, bool aParentsToo);
+  bool IsTRRBlacklisted(const nsCString &host, bool privateBrowsing, bool fullhost);
 
 private:
   virtual  ~TRRService();

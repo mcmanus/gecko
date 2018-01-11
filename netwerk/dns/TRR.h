@@ -60,11 +60,13 @@ public:
     , mFailed(false)
   {
     mHost = aRec->host;
+    mPB = aRec->pb;
   }
 
   explicit TRR(AHostResolver *aResolver,
                nsCString aHost,
-               enum TrrType aType)
+               enum TrrType aType,
+               bool aPB)
     : mozilla::Runnable("TRR")
     , mHost(aHost)
     , mRec(nullptr)
@@ -73,6 +75,7 @@ public:
     , mType(aType)
     , mUsed(0)
     , mFailed(false)
+    , mPB(aPB)
   { }
 
   NS_IMETHOD Run() override;
@@ -96,6 +99,7 @@ private:
   unsigned char mResponse[kMaxSize];
   unsigned int mUsed;
   bool mFailed;
+  bool mPB;
   DOHresp mDNS;
 };
 

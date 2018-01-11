@@ -13,7 +13,6 @@
 static const char kOpenCaptivePortalLoginEvent[] = "captive-portal-login";
 static const char kClearPrivateData[] = "clear-private-data";
 static const char kPurge[] = "browser:purge-session-history";
-static const char kLastPB[] = "last-pb-context-exited";
 
 const static uint32_t kTRRBlacklistExpireTime = 3600*24*3; // three days
 
@@ -59,7 +58,6 @@ TRRService::Init()
     observerService->AddObserver(this, kOpenCaptivePortalLoginEvent, true);
     observerService->AddObserver(this, kClearPrivateData, true);
     observerService->AddObserver(this, kPurge, true);
-    observerService->AddObserver(this, kLastPB, true);
   }
   nsCOMPtr<nsIPrefBranch> prefBranch;
   GetPrefBranch(getter_AddRefs(prefBranch));
@@ -200,8 +198,7 @@ TRRService::Observe(nsISupports *aSubject,
     mCaptiveIsPassed = true;
 
   } else if (!strcmp(aTopic, kClearPrivateData) ||
-             !strcmp(aTopic, kPurge) ||
-             !strcmp(aTopic, kLastPB)) {
+             !strcmp(aTopic, kPurge)) {
     // flush the TRR blacklist, both in-memory and on-disk
     if (mStorage) {
       mStorage->Clear();
@@ -211,7 +208,7 @@ TRRService::Observe(nsISupports *aSubject,
 }
 
 bool
-TRRService::IsTRRBlacklisted(const nsCString &aHost,
+TRRService::IsTRRBlacklisted(const nsCString &aHost, bool privateBrowsing,
                              bool aParentsToo) // false if domain
 {
   fprintf(stderr, "Check %s in TRR blacklist\n", aHost.get());
@@ -243,7 +240,7 @@ TRRService::IsTRRBlacklisted(const nsCString &aHost,
     nsAutoCString check(domain);
 
     // recursively check the domain part of this name
-    if (IsTRRBlacklisted(check, false)) {
+    if (IsTRRBlacklisted(check, privateBrowsing, false)) {
       // the domain name of this name is already TRR blacklisted
       return true;
     }
@@ -252,7 +249,6 @@ TRRService::IsTRRBlacklisted(const nsCString &aHost,
   MutexAutoLock lock(mLock);
   // use a unified casing for the hashkey
   nsAutoCString hashkey(aHost.get());
-  bool privateBrowsing = false;
   nsCString val(mStorage->Get(hashkey, privateBrowsing ?
                               DataStorage_Private : DataStorage_Persistent));
 
@@ -275,14 +271,14 @@ TRRService::IsTRRBlacklisted(const nsCString &aHost,
 class proxyBlacklist : public Runnable
 {
 public:
-  proxyBlacklist(TRRService *service, const nsCString &aHost, bool aParentsToo)
+  proxyBlacklist(TRRService *service, const nsCString &aHost, bool pb, bool aParentsToo)
     : mozilla::Runnable("proxyBlackList")
-    , mService(service), mHost(aHost), mParentsToo(aParentsToo)
+    , mService(service), mHost(aHost), mPB(pb), mParentsToo(aParentsToo)
   { }
 
   NS_IMETHOD Run() override
   {
-    mService->TRRBlacklist(mHost, mParentsToo);
+    mService->TRRBlacklist(mHost, mPB, mParentsToo);
     mService = nullptr;
     return NS_OK;
   }
@@ -290,24 +286,25 @@ public:
 private:
   RefPtr<TRRService> mService;
   nsCString mHost;
+  bool      mPB;
   bool      mParentsToo;
 };
 
 void
-TRRService::TRRBlacklist(const nsCString &aHost, bool aParentsToo)
+TRRService::TRRBlacklist(const nsCString &aHost, bool privateBrowsing, bool aParentsToo)
 {
   if (!mStorage) {
     return;
   }
 
   if (!NS_IsMainThread()) {
-    NS_DispatchToMainThread(new proxyBlacklist(this, aHost, aParentsToo));
+    NS_DispatchToMainThread(new proxyBlacklist(this, aHost,
+                                               privateBrowsing, aParentsToo));
     return;
   }
 
   fprintf(stderr, "TRR blacklist %s\n", aHost.get());
   nsAutoCString hashkey(aHost.get());
-  bool privateBrowsing = false;
   nsAutoCString val;
   val.AppendInt( NowInSeconds() ); // creation time
 
@@ -326,7 +323,7 @@ TRRService::TRRBlacklist(const nsCString &aHost, bool aParentsToo)
       dot++;
       nsDependentCSubstring domain = Substring(aHost, dot, aHost.Length() - dot);
       nsAutoCString check(domain);
-      if (IsTRRBlacklisted(check, false)) {
+      if (IsTRRBlacklisted(check, privateBrowsing, false)) {
         // the domain part is already blacklisted, no need to add this entry
         return;
       }
@@ -334,14 +331,14 @@ TRRService::TRRBlacklist(const nsCString &aHost, bool aParentsToo)
       fprintf(stderr, "TRR: verify if '%s' resolves\n", check.get());
 
       // check if there's an NS entry for this name
-      RefPtr<TRR> trr = new TRR(this, check, TRRTYPE_NS);
+      RefPtr<TRR> trr = new TRR(this, check, TRRTYPE_NS, privateBrowsing);
       NS_DispatchToMainThread(trr);
     }
   }
 }
 
 AHostResolver::LookupStatus
-TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRSet)
+TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRSet, bool pb)
 {
   // this is an NS check for the TRR blacklist
 
@@ -357,7 +354,7 @@ TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRS
     // whitelist?
   } else {
     fprintf(stderr, "TRR says %s doesn't resove!\n", newRRSet->mHostName);
-    TRRBlacklist(nsCString(newRRSet->mHostName), false);
+    TRRBlacklist(nsCString(newRRSet->mHostName), pb, false);
   }
   return LOOKUP_OK;
 }
