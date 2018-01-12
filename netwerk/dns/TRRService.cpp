@@ -34,6 +34,7 @@ TRRService::TRRService()
   : mInitialized(false)
   , mMode(0)
   , mLock("trrservice")
+  , mConfirmationNS(NS_LITERAL_CSTRING("example.com"))
   , mWaitForCaptive(true)
   , mRfc1918(false)
   , mCaptiveIsPassed(false)
@@ -107,6 +108,7 @@ TRRService::ReadPrefs(const char *name)
   }
   if (!name || !strcmp(name, TRR_PREF("uri"))) {
     // Base URI, appends "?ct&body=..."
+    MutexAutoLock lock(mLock);
     nsCString old(mPrivateURI);
     Preferences::GetCString(TRR_PREF("uri"), mPrivateURI);
     if (old.Length() && !mPrivateURI.Equals(old)) {
@@ -115,7 +117,12 @@ TRRService::ReadPrefs(const char *name)
     }
   }
   if (!name || !strcmp(name, TRR_PREF("credentials"))) {
+    MutexAutoLock lock(mLock);
     Preferences::GetCString(TRR_PREF("credentials"), mPrivateCred);
+  }
+  if (!name || !strcmp(name, TRR_PREF("confirmationNS"))) {
+    MutexAutoLock lock(mLock);
+    Preferences::GetCString(TRR_PREF("confirmationNS"), mConfirmationNS);
   }
   if (!name || !strcmp(name, TRR_PREF("wait-for-portal"))) {
     // Wait for captive portal?
@@ -230,8 +237,12 @@ TRRService::MaybeConfirm()
   if (mConfirmer || mConfirmationState != 1) {
     return;
   }
-  mConfirmer = new TRR(this, NS_LITERAL_CSTRING("mozilla.org"),
-                       TRRTYPE_NS, false);
+  nsCString host;
+  {
+    MutexAutoLock lock(mLock);
+    host = mConfirmationNS;
+  }
+  mConfirmer = new TRR(this, host, TRRTYPE_NS, false);
   NS_DispatchToMainThread(mConfirmer);
 }
 
@@ -377,7 +388,8 @@ TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRS
   nsAutoPtr<AddrInfo> newRRSet(aNewRRSet);
   MOZ_ASSERT(newRRSet && newRRSet->isTRR() == TRRTYPE_NS);
 
-  if (!strcmp(newRRSet->mHostName, "mozilla.org")) {
+  MOZ_ASSERT(!mConfirmer || (mConfirmationState == 1));
+  if (mConfirmationState == 1) {
     MOZ_ASSERT(mConfirmer);
     mConfirmationState = NS_SUCCEEDED(status) ? 2 : 3;
     mConfirmer = nullptr;

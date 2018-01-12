@@ -54,6 +54,7 @@ private:
   Mutex mLock; // protects mPrivate* string
   nsCString mPrivateURI; // main thread only
   nsCString mPrivateCred; // main thread only
+  nsCString mConfirmationNS;
 
   Atomic<bool, Relaxed> mWaitForCaptive;
   Atomic<bool, Relaxed> mRfc1918;
