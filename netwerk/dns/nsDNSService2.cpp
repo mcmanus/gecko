@@ -655,9 +655,10 @@ nsDNSService::Init()
     RegisterWeakMemoryReporter(this);
 
     mTrrService = new TRRService();
-    if (mTrrService && NS_SUCCEEDED(mTrrService->Init())) {
-        ; // TODO
+    if (mTrrService && NS_FAILED(mTrrService->Init())) {
+        mTrrService = nullptr;
     }
+
     return rv;
 }
 
@@ -727,6 +728,11 @@ nsDNSService::PreprocessHostname(bool              aLocalDomain,
 
     if (aLocalDomain) {
         aACE.AssignLiteral("localhost");
+        return NS_OK;
+    }
+
+    if (mTrrService &&
+        mTrrService->MaybeBootstrap(aInput, aACE)) {
         return NS_OK;
     }
 

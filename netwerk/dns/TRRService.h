@@ -39,9 +39,11 @@ public:
   nsresult GetCredentials(nsCString &result);
 
   LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *, bool pb) override;
-  void TRRBlacklist(const nsCString &host, bool privateBrowsing, bool aParentsToo);
-  bool IsTRRBlacklisted(const nsCString &host, bool privateBrowsing, bool fullhost);
+  void TRRBlacklist(const nsACString &host, bool privateBrowsing, bool aParentsToo);
+  bool IsTRRBlacklisted(const nsACString &host, bool privateBrowsing, bool fullhost);
 
+  bool MaybeBootstrap(const nsACString &possible, nsACString &result);
+  
 private:
   virtual  ~TRRService();
   nsresult ReadPrefs(const char *name);
@@ -55,6 +57,7 @@ private:
   nsCString mPrivateURI; // main thread only
   nsCString mPrivateCred; // main thread only
   nsCString mConfirmationNS;
+  nsCString mBootstrapAddr;
 
   Atomic<bool, Relaxed> mWaitForCaptive;
   Atomic<bool, Relaxed> mRfc1918;

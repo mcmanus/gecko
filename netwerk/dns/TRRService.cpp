@@ -5,6 +5,7 @@
 
 #include "nsICaptivePortalService.h"
 #include "nsIObserverService.h"
+#include "nsStandardURL.h"
 #include "TRR.h"
 #include "TRRService.h"
 
@@ -79,12 +80,15 @@ TRRService::Init()
 bool
 TRRService::Enabled()
 {
+  if (mConfirmationState == 0 && !mWaitForCaptive) {
+    mConfirmationState = 1;
+  }
+    
   if (mConfirmationState == 1) {
     MaybeConfirm();
-    return false;
   }
 
-  return (!mWaitForCaptive || mCaptiveIsPassed);
+  return (mConfirmationState == 2);
 }
 
 void
@@ -123,6 +127,10 @@ TRRService::ReadPrefs(const char *name)
   if (!name || !strcmp(name, TRR_PREF("confirmationNS"))) {
     MutexAutoLock lock(mLock);
     Preferences::GetCString(TRR_PREF("confirmationNS"), mConfirmationNS);
+  }
+  if (!name || !strcmp(name, TRR_PREF("bootstrapAddress"))) {
+    MutexAutoLock lock(mLock);
+    Preferences::GetCString(TRR_PREF("bootstrapAddress"), mBootstrapAddr);
   }
   if (!name || !strcmp(name, TRR_PREF("wait-for-portal"))) {
     // Wait for captive portal?
@@ -196,6 +204,14 @@ TRRService::Observe(nsISupports *aSubject,
   LOG(("TRR::Observe() topic=%s\n", aTopic));
   if (!strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
     ReadPrefs(NS_ConvertUTF16toUTF8(aData).get());
+
+    if ((mConfirmationState == 0) &&
+        mBootstrapAddr.Length() &&
+        (mMode == MODE_TRRONLY)) {
+      mConfirmationState = 1;
+      MaybeConfirm();
+    }
+
   } else if (!strcmp(aTopic, kOpenCaptivePortalLoginEvent)) {
     // We are in a captive portal
     LOG(("TRRservice in captive portal\n"));
@@ -234,7 +250,7 @@ TRRService::Observe(nsISupports *aSubject,
 void
 TRRService::MaybeConfirm()
 {
-  if (mConfirmer || mConfirmationState != 1) {
+  if ((mMode == MODE_NATIVEONLY) || mConfirmer || mConfirmationState != 1) {
     return;
   }
   nsCString host;
@@ -249,7 +265,31 @@ TRRService::MaybeConfirm()
 }
 
 bool
-TRRService::IsTRRBlacklisted(const nsCString &aHost, bool privateBrowsing,
+TRRService::MaybeBootstrap(const nsACString &aPossible, nsACString &aResult)
+{
+  if (mConfirmationState != 1) {
+    return false;
+  }
+
+  MutexAutoLock lock(mLock);
+  if (!mBootstrapAddr.Length()) {
+    return false;
+  }
+  
+  RefPtr<nsStandardURL> url = new nsStandardURL();
+  url->Init(nsIStandardURL::URLTYPE_AUTHORITY, 443,
+            mPrivateURI, nullptr, nullptr);
+  nsAutoCString host;
+  url->GetHost(host);
+  if (!aPossible.Equals(host)) {
+    return false;
+  }
+  aResult = mBootstrapAddr;
+  return true;
+}
+
+bool
+TRRService::IsTRRBlacklisted(const nsACString &aHost, bool privateBrowsing,
                              bool aParentsToo) // false if domain
 {
   if (mClearStorage) {
@@ -257,6 +297,10 @@ TRRService::IsTRRBlacklisted(const nsCString &aHost, bool privateBrowsing,
     mClearStorage = false;
   }
 
+  if (mMode == MODE_TRRONLY) {
+    return false; // might as well try
+  }
+  
   // hardcode these so as to not worry about expiration
   if (StringEndsWith(aHost, NS_LITERAL_CSTRING(".local")) ||
       aHost.Equals(NS_LITERAL_CSTRING("localhost"))) {
@@ -290,7 +334,7 @@ TRRService::IsTRRBlacklisted(const nsCString &aHost, bool privateBrowsing,
 
   MutexAutoLock lock(mLock);
   // use a unified casing for the hashkey
-  nsAutoCString hashkey(aHost.get());
+  nsAutoCString hashkey(aHost);
   nsCString val(mStorage->Get(hashkey, privateBrowsing ?
                               DataStorage_Private : DataStorage_Persistent));
 
@@ -299,7 +343,7 @@ TRRService::IsTRRBlacklisted(const nsCString &aHost, bool privateBrowsing,
     int32_t until = val.ToInteger(&code) + kTRRBlacklistExpireTime;
     int32_t expire = NowInSeconds();
     if (NS_SUCCEEDED(code) && (until > expire)) {
-      LOG(("Host [%s] is TRR blacklisted\n", aHost.get()));
+      LOG(("Host [%s] is TRR blacklisted\n", nsCString(aHost).get()));
       return true;
     } else {
       // the blacklisted entry has expired
@@ -313,7 +357,7 @@ TRRService::IsTRRBlacklisted(const nsCString &aHost, bool privateBrowsing,
 class proxyBlacklist : public Runnable
 {
 public:
-  proxyBlacklist(TRRService *service, const nsCString &aHost, bool pb, bool aParentsToo)
+  proxyBlacklist(TRRService *service, const nsACString &aHost, bool pb, bool aParentsToo)
     : mozilla::Runnable("proxyBlackList")
     , mService(service), mHost(aHost), mPB(pb), mParentsToo(aParentsToo)
   { }
@@ -333,7 +377,7 @@ private:
 };
 
 void
-TRRService::TRRBlacklist(const nsCString &aHost, bool privateBrowsing, bool aParentsToo)
+TRRService::TRRBlacklist(const nsACString &aHost, bool privateBrowsing, bool aParentsToo)
 {
   if (!mStorage) {
     return;
@@ -345,8 +389,8 @@ TRRService::TRRBlacklist(const nsCString &aHost, bool privateBrowsing, bool aPar
     return;
   }
 
-  LOG(("TRR blacklist %s\n", aHost.get()));
-  nsAutoCString hashkey(aHost.get());
+  LOG(("TRR blacklist %s\n", nsCString(aHost).get()));
+  nsAutoCString hashkey(aHost);
   nsAutoCString val;
   val.AppendInt( NowInSeconds() ); // creation time
 
