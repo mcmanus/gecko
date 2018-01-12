@@ -286,6 +286,11 @@ TRR::DohDecode()
     LOG(("TRR bad incoming DOH, eject!\n"));
     return NS_ERROR_UNEXPECTED;
   }
+  uint8_t rcode = mResponse[3] & 0x0F;
+  if (rcode) {
+    LOG(("TRR Decode %s RCODE %d\n", mHost.get(), rcode));
+    return NS_ERROR_FAILURE;
+  }
 
   uint16_t questionRecords = get16bit(mResponse, 4); // qdcount
   // iterate over the single(?) host name in question
@@ -549,7 +554,7 @@ TRR::DohDecode()
     return NS_ERROR_UNEXPECTED;
   }
 
-  if (mDNS.mAddresses.getFirst() == nullptr) {
+  if (mType != TRRTYPE_NS && !mDNS.mAddresses.getFirst()) {
     // no entries were stored!
     return NS_ERROR_FAILURE;
   }
