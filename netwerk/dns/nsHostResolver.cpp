@@ -1138,6 +1138,11 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
     MOZ_ASSERT(!TRROutstanding());
     MOZ_ASSERT(!rec->mResolving);
 
+    if (!gTRRService || !gTRRService->Enabled()) {
+        LOG(("TrrLookup:: %s service not enabled\n", rec->host.get()));
+        return NS_ERROR_UNKNOWN_HOST;
+    }
+
     if (rec->next != rec) {
         // we're already on the eviction queue. This is a renewal
         MOZ_ASSERT(mEvictionQSize);
@@ -1149,8 +1154,7 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
         
     rec->mTRRSuccess = 0; // bump for each successful TRR response
 
-    nsAutoCString hostName(rec->host);
-    if (gTRRService && gTRRService->IsTRRBlacklisted(hostName, rec->pb, true)) {
+    if (gTRRService && gTRRService->IsTRRBlacklisted(rec->host, rec->pb, true)) {
         Telemetry::Accumulate(Telemetry::DNS_NO_TRR_REASON, TRR_HOST_BLACKLISTED);
         MOZ_ASSERT(!rec->mTRRUsed);
         // not really an error but no TRR is issued

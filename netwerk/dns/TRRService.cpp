@@ -79,7 +79,7 @@ TRRService::Init()
 bool
 TRRService::Enabled()
 {
-  if (mConfirmationState != 2) {
+  if (mConfirmationState == 1) {
     MaybeConfirm();
     return false;
   }
@@ -242,6 +242,8 @@ TRRService::MaybeConfirm()
     MutexAutoLock lock(mLock);
     host = mConfirmationNS;
   }
+  LOG(("TRRService starting confirmation test %s %s\n",
+       mPrivateURI.get(), host.get()));
   mConfirmer = new TRR(this, host, TRRTYPE_NS, false);
   NS_DispatchToMainThread(mConfirmer);
 }
@@ -392,6 +394,8 @@ TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRS
   if (mConfirmationState == 1) {
     MOZ_ASSERT(mConfirmer);
     mConfirmationState = NS_SUCCEEDED(status) ? 2 : 3;
+    LOG(("TRRService finishing confirmation test %s %d %X\n",
+         mPrivateURI.get(), (int)mConfirmationState, status));
     mConfirmer = nullptr;
     return LOOKUP_OK;
   }
