@@ -39,6 +39,7 @@ TRRService::TRRService()
   , mCaptiveIsPassed(false)
   , mUseGET(false)
   , mClearStorage(false)
+  , mConfirmationState(0)
 {
   MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
 }
@@ -77,6 +78,11 @@ TRRService::Init()
 bool
 TRRService::Enabled()
 {
+  if (mConfirmationState != 2) {
+    MaybeConfirm();
+    return false;
+  }
+
   return (!mWaitForCaptive || mCaptiveIsPassed);
 }
 
@@ -203,7 +209,9 @@ TRRService::Observe(nsISupports *aSubject,
         }
       }
     }
-    
+
+    mConfirmationState = 1;
+    MaybeConfirm();
     mCaptiveIsPassed = true;
 
   } else if (!strcmp(aTopic, kClearPrivateData) ||
@@ -214,6 +222,17 @@ TRRService::Observe(nsISupports *aSubject,
     }
   }
   return NS_OK;
+}
+
+void
+TRRService::MaybeConfirm()
+{
+  if (mConfirmer || mConfirmationState != 1) {
+    return;
+  }
+  mConfirmer = new TRR(this, NS_LITERAL_CSTRING("mozilla.org"),
+                       TRRTYPE_NS, false);
+  NS_DispatchToMainThread(mConfirmer);
 }
 
 bool
@@ -357,6 +376,13 @@ TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRS
 
   nsAutoPtr<AddrInfo> newRRSet(aNewRRSet);
   MOZ_ASSERT(newRRSet && newRRSet->isTRR() == TRRTYPE_NS);
+
+  if (!strcmp(newRRSet->mHostName, "mozilla.org")) {
+    MOZ_ASSERT(mConfirmer);
+    mConfirmationState = NS_SUCCEEDED(status) ? 2 : 3;
+    mConfirmer = nullptr;
+    return LOOKUP_OK;
+  }
 
   // when called without a host record, this is a domain name check response.
   if (NS_SUCCEEDED(status)) {

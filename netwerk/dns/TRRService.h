@@ -46,6 +46,8 @@ private:
   virtual  ~TRRService();
   nsresult ReadPrefs(const char *name);
   void GetPrefBranch(nsIPrefBranch **result);
+  void MaybeConfirm();
+
   bool                      mInitialized;
   Atomic<uint32_t, Relaxed> mMode;
 
@@ -60,6 +62,10 @@ private:
 
   RefPtr<DataStorage> mStorage;
   bool                mClearStorage;
+
+  // 0 = init, 1 = trying, 2 = ok, 3 = failed
+  Atomic<int, Relaxed>  mConfirmationState;
+  RefPtr<TRR>           mConfirmer;
 };
 
 extern TRRService *gTRRService;
