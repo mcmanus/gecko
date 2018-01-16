@@ -5,6 +5,7 @@
 
 #include "nsICaptivePortalService.h"
 #include "nsIObserverService.h"
+#include "nsNetUtil.h"
 #include "nsStandardURL.h"
 #include "TRR.h"
 #include "TRRService.h"
@@ -115,6 +116,20 @@ TRRService::ReadPrefs(const char *name)
     MutexAutoLock lock(mLock);
     nsCString old(mPrivateURI);
     Preferences::GetCString(TRR_PREF("uri"), mPrivateURI);
+    nsCOMPtr<nsIURI> dnsURI;
+    NS_NewURI(getter_AddRefs(dnsURI), mPrivateURI);
+    nsAutoCString scheme;
+    if (dnsURI) {
+      dnsURI->GetScheme(scheme);
+    }
+    if (mPrivateURI.Length() && !scheme.Equals("https")) {
+      LOG(("TRRService TRR URI %s is not https. Not used.\n",
+           mPrivateURI.get()));
+      mPrivateURI.Truncate();
+    }
+    if (mPrivateURI.Length()) {
+      LOG(("TRRService TRR URI %s\n", mPrivateURI.get()));
+    }
     if (old.Length() && !mPrivateURI.Equals(old)) {
       mClearStorage = true;
       LOG(("TRRService clearing blacklist because of change is uri service\n"));
