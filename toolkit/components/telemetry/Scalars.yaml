@@ -269,7 +269,7 @@ browser.usage:
       - 1331915
     description: >
       The number of times a graphite2 font has been loaded.
-    expires: "60"
+    expires: "65"
     kind: uint
     notification_emails:
       - tom@mozilla.com
@@ -927,7 +927,7 @@ devtools.aboutdevtools:
       - 1412029
     description: >
       Number of times about:devtools was opened.
-    expires: "60"
+    expires: "63"
     kind: uint
     notification_emails:
       - dev-developer-tools@lists.mozilla.org, jdescottes@mozilla.com
@@ -938,7 +938,7 @@ devtools.aboutdevtools:
       - 1412029
     description: >
       Number of times devtools were enabled/installed in about:devtools.
-    expires: "60"
+    expires: "63"
     kind: uint
     notification_emails:
       - dev-developer-tools@lists.mozilla.org, jdescottes@mozilla.com
@@ -949,7 +949,7 @@ devtools.aboutdevtools:
       - 1412029
     description: >
       Number of times the user left about:devtools without enabling devtools.
-    expires: "60"
+    expires: "63"
     kind: uint
     notification_emails:
       - dev-developer-tools@lists.mozilla.org, jdescottes@mozilla.com
@@ -962,7 +962,7 @@ devtools.onboarding:
       - 1408339
     description: >
       How many users are flagged as existing devtools users.
-    expires: "60"
+    expires: "63"
     kind: boolean
     notification_emails:
       - dev-developer-tools@lists.mozilla.org, jdescottes@mozilla.com
@@ -1029,7 +1029,7 @@ telemetry.discarded:
       - telemetry-client-dev@mozilla.com
     release_channel_collection: opt-out
     record_in_processes:
-      - 'all_childs'
+      - 'all_children'
   keyed_accumulations:
     bug_numbers:
       - 1369041
@@ -1041,7 +1041,7 @@ telemetry.discarded:
       - telemetry-client-dev@mozilla.com
     release_channel_collection: opt-out
     record_in_processes:
-      - 'all_childs'
+      - 'all_children'
   scalar_actions:
     bug_numbers:
       - 1369041
@@ -1053,7 +1053,7 @@ telemetry.discarded:
       - telemetry-client-dev@mozilla.com
     release_channel_collection: opt-out
     record_in_processes:
-      - 'all_childs'
+      - 'all_children'
   keyed_scalar_actions:
     bug_numbers:
       - 1369041
@@ -1065,7 +1065,7 @@ telemetry.discarded:
       - telemetry-client-dev@mozilla.com
     release_channel_collection: opt-out
     record_in_processes:
-      - 'all_childs'
+      - 'all_children'
   child_events:
     bug_numbers:
       - 1369041
@@ -1077,7 +1077,7 @@ telemetry.discarded:
       - telemetry-client-dev@mozilla.com
     release_channel_collection: opt-out
     record_in_processes:
-      - 'all_childs'
+      - 'all_children'
 
 # The following section contains graphics-related scalars.
 gfx.advanced.layers:
@@ -1264,21 +1264,6 @@ screenshots:
       - ibicking@mozilla.com
       - clouserw@mozilla.com
     release_channel_collection: opt-out
-    record_in_processes:
-      - 'main'
-
-network.http:
-  backup_conn_won:
-    bug_numbers:
-      - 1402811
-    description: >
-      For connection where TFO has not be use, collect telemetry on whether the
-      backup connection or the primary connection was faster.
-    expires: "61"
-    kind: boolean
-    notification_emails:
-      - necko@mozilla.com
-      - ddamjanovic@mozilla.com
     record_in_processes:
       - 'main'
 
@@ -1552,7 +1537,7 @@ telemetry.test:
     notification_emails:
       - telemetry-client-dev@mozilla.com
     record_in_processes:
-      - 'all_childs'
+      - 'all_children'
 
 # NOTE: Please don't add new definitions below this point. Consider adding
 # them earlier in the file and leave the telemetry.test category as the last

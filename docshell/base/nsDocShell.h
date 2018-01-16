@@ -524,6 +524,7 @@ private: // member functions
                      bool aLoadReplace,
                      bool aLoadFromExternal,
                      bool aForceAllowDataURI,
+                     bool aOriginalFrameSrc,
                      nsIURI* aReferrer,
                      bool aSendReferrer,
                      uint32_t aReferrerPolicy,
@@ -792,10 +793,8 @@ private: // member functions
   // controlled.  The caller must still consult either the parent controller
   // or the ServiceWorkerManager to determine if a service worker should
   // actually control the window.
-  //
-  // A nullptr URL is considered to be an about:blank window and will not
-  // trigger 3rd party iframe checks.
-  bool ServiceWorkerAllowedToControlWindow(nsIURI* aURI);
+  bool ServiceWorkerAllowedToControlWindow(nsIPrincipal* aPrincipal,
+                                           nsIURI* aURI);
 
   // Return the ClientInfo for the initial about:blank window, if it exists
   // or we have speculatively created a ClientSource in

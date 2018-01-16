@@ -42,6 +42,7 @@ public:
 
   virtual bool IsTiledDrawTarget() const override { return true; }
 
+  virtual bool IsCaptureDT() const override { return mTiles[0].mDrawTarget->IsCaptureDT(); }
   virtual DrawTargetType GetType() const override { return mTiles[0].mDrawTarget->GetType(); }
   virtual BackendType GetBackendType() const override { return mTiles[0].mDrawTarget->GetBackendType(); }
   virtual already_AddRefed<SourceSurface> Snapshot() override;
@@ -202,6 +203,10 @@ public:
   virtual already_AddRefed<DataSourceSurface> GetDataSurface()
   {
     RefPtr<DataSourceSurface> surf = Factory::CreateDataSourceSurface(GetSize(), GetFormat());
+    if (!surf) {
+      gfxCriticalError() << "DrawTargetTiled::GetDataSurface failed to allocate surface";
+      return nullptr;
+    }
 
     DataSourceSurface::MappedSurface mappedSurf;
     if (!surf->Map(DataSourceSurface::MapType::WRITE, &mappedSurf)) {

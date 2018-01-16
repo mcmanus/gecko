@@ -31,10 +31,13 @@
 #include "mozilla/dom/BlobBinding.h"
 #include "mozilla/dom/cache/CacheStorage.h"
 #include "mozilla/dom/CSSBinding.h"
+#include "mozilla/dom/CSSRuleBinding.h"
 #include "mozilla/dom/DirectoryBinding.h"
+#include "mozilla/dom/DOMPrefs.h"
 #include "mozilla/dom/IndexedDatabaseManager.h"
 #include "mozilla/dom/Fetch.h"
 #include "mozilla/dom/FileBinding.h"
+#include "mozilla/dom/InspectorUtilsBinding.h"
 #include "mozilla/dom/MessageChannelBinding.h"
 #include "mozilla/dom/MessagePortBinding.h"
 #include "mozilla/dom/PromiseBinding.h"
@@ -114,7 +117,7 @@ xpc::NewSandboxConstructor()
 static bool
 SandboxDump(JSContext* cx, unsigned argc, Value* vp)
 {
-    if (!nsContentUtils::DOMWindowDumpEnabled()) {
+    if (!DOMPrefs::DumpEnabled()) {
         return true;
     }
 
@@ -908,6 +911,8 @@ xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj)
             return false;
         if (!strcmp(name.ptr(), "CSS")) {
             CSS = true;
+        } else if (!strcmp(name.ptr(), "CSSRule")) {
+            CSSRule = true;
         } else if (!strcmp(name.ptr(), "indexedDB")) {
             indexedDB = true;
         } else if (!strcmp(name.ptr(), "XMLHttpRequest")) {
@@ -944,6 +949,8 @@ xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj)
             fileReader = true;
         } else if (!strcmp(name.ptr(), "MessageChannel")) {
             messageChannel = true;
+        } else if (!strcmp(name.ptr(), "InspectorUtils")) {
+            inspectorUtils = true;
         } else {
             JS_ReportErrorUTF8(cx, "Unknown property name: %s", name.ptr());
             return false;
@@ -962,6 +969,9 @@ xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj)
     // to be requested either in |Cu.importGlobalProperties| or
     // |wantGlobalProperties| of a sandbox.
     if (CSS && !dom::CSSBinding::GetConstructorObject(cx))
+        return false;
+
+    if (CSSRule && !dom::CSSRuleBinding::GetConstructorObject(cx))
         return false;
 
     if (XMLHttpRequest &&
@@ -1024,6 +1034,10 @@ xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj)
     if (messageChannel &&
         (!dom::MessageChannelBinding::GetConstructorObject(cx) ||
          !dom::MessagePortBinding::GetConstructorObject(cx)))
+        return false;
+
+    if (inspectorUtils &&
+        !dom::InspectorUtilsBinding::GetConstructorObject(cx))
         return false;
 
     return true;

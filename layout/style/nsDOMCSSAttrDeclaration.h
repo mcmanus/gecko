@@ -15,6 +15,7 @@
 
 namespace mozilla {
 namespace dom {
+class DomGroup;
 class Element;
 } // namespace dom
 } // namespace mozilla
@@ -36,10 +37,10 @@ public:
                                         nsIPrincipal* aSubjectPrincipal) override;
   nsDOMCSSDeclaration::ServoCSSParsingEnvironment
   GetServoCSSParsingEnvironment(nsIPrincipal* aSubjectPrincipal) const final;
-  NS_IMETHOD GetParentRule(nsIDOMCSSRule **aParent) override;
+  mozilla::css::Rule* GetParentRule() override;
 
   virtual nsINode* GetParentObject() override;
-  virtual DocGroup* GetDocGroup() const override;
+  virtual mozilla::dom::DocGroup* GetDocGroup() const override;
 
   NS_IMETHOD SetPropertyValue(const nsCSSPropertyID aPropID,
                               const nsAString& aValue,

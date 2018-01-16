@@ -89,7 +89,7 @@ interface NavigatorContentUtils {
 
 [SecureContext, NoInterfaceObject, Exposed=(Window,Worker)]
 interface NavigatorStorage {
-  [Func="mozilla::dom::StorageManager::PrefEnabled"]
+  [Func="mozilla::dom::DOMPrefs::StorageManagerEnabled"]
   readonly attribute StorageManager storage;
 };
 
@@ -198,12 +198,6 @@ partial interface Navigator {
    */
   [Throws, ChromeOnly]
   void removeIdleObserver(MozIdleObserver aIdleObserver);
-};
-
-// nsIDOMNavigatorDesktopNotification
-partial interface Navigator {
-  [Throws, Pref="notification.feature.enabled", UnsafeInPrerendering]
-  readonly attribute DesktopNotificationCenter mozNotification;
 };
 
 // NetworkInformation

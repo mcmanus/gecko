@@ -24,6 +24,7 @@
 #include "nsHttpHandler.h"
 #include "nsHttpRequestHead.h"
 #include "nsHttpResponseHead.h"
+#include "nsIClassOfService.h"
 #include "nsIOService.h"
 #include "nsISocketTransport.h"
 #include "nsSocketTransportService2.h"
@@ -55,6 +56,8 @@ nsHttpConnection::nsHttpConnection()
     , mTotalBytesRead(0)
     , mTotalBytesWritten(0)
     , mContentBytesWritten(0)
+    , mUrgentStartPreferred(false)
+    , mUrgentStartPreferredKnown(false)
     , mConnectedTransport(false)
     , mKeepAlive(true) // assume to keep-alive by default
     , mKeepAliveMask(true)
@@ -631,6 +634,7 @@ nsHttpConnection::Activate(nsAHttpTransaction *trans, uint32_t caps, int32_t pri
         nsHttpTransaction *hTrans = trans->QueryHttpTransaction();
         if (hTrans) {
             hTrans->BootstrapTimings(mBootstrappedTimings);
+            SetUrgentStartPreferred(hTrans->ClassOfService() & nsIClassOfService::UrgentStart);
         }
         mBootstrappedTimings = TimingStruct();
     }
@@ -731,7 +735,7 @@ nsHttpConnection::Activate(nsAHttpTransaction *trans, uint32_t caps, int32_t pri
         mTransaction = mTLSFilter;
     }
 
-    trans->OnActivated(false);
+    trans->OnActivated();
 
     rv = OnOutputStreamReady(mSocketOut);
 
@@ -1080,6 +1084,17 @@ nsHttpConnection::IsAlive()
 #endif
 
     return alive;
+}
+
+void
+nsHttpConnection::SetUrgentStartPreferred(bool urgent)
+{
+  if (mExperienced && !mUrgentStartPreferredKnown) {
+    // Set only according the first ever dispatched non-null transaction
+    mUrgentStartPreferredKnown = true;
+    mUrgentStartPreferred = urgent;
+    LOG(("nsHttpConnection::SetUrgentStartPreferred [this=%p urgent=%d]", this, urgent));
+  }
 }
 
 //----------------------------------------------------------------------------
@@ -2478,7 +2493,13 @@ nsHttpConnection::SetFastOpen(bool aFastOpen)
     if (!mFastOpen &&
         mTransaction &&
         !mTransaction->IsNullTransaction()) {
+
         mExperienced = true;
+
+        nsHttpTransaction *hTrans = mTransaction->QueryHttpTransaction();
+        if (hTrans) {
+            SetUrgentStartPreferred(hTrans->ClassOfService() & nsIClassOfService::UrgentStart);
+        }
     }
 }
 

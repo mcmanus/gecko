@@ -136,6 +136,7 @@
 #include "nsIUploadChannel.h"
 #include "nsIURIFixup.h"
 #include "nsIURILoader.h"
+#include "nsIURIMutator.h"
 #include "nsIURL.h"
 #include "nsIViewSourceChannel.h"
 #include "nsIWebBrowserChrome.h"
@@ -694,6 +695,7 @@ nsDocShell::LoadURI(nsIURI* aURI,
   nsString target;
   nsAutoString srcdoc;
   bool forceAllowDataURI = false;
+  bool originalFrameSrc = false;
   nsCOMPtr<nsIDocShell> sourceDocShell;
   nsCOMPtr<nsIURI> baseURI;
 
@@ -731,6 +733,7 @@ nsDocShell::LoadURI(nsIURI* aURI,
     aLoadInfo->GetSourceDocShell(getter_AddRefs(sourceDocShell));
     aLoadInfo->GetBaseURI(getter_AddRefs(baseURI));
     aLoadInfo->GetForceAllowDataURI(&forceAllowDataURI);
+    aLoadInfo->GetOriginalFrameSrc(&originalFrameSrc);
   }
 
   MOZ_LOG(gDocShellLeakLog, LogLevel::Debug,
@@ -998,6 +1001,10 @@ nsDocShell::LoadURI(nsIURI* aURI,
     flags |= INTERNAL_LOAD_FLAGS_FORCE_ALLOW_DATA_URI;
   }
 
+  if (originalFrameSrc) {
+    flags |= INTERNAL_LOAD_FLAGS_ORIGINAL_FRAME_SRC;
+  }
+
   return InternalLoad(aURI,
                       originalURI,
                       resultPrincipalURI,
@@ -1041,13 +1048,11 @@ nsDocShell::LoadStream(nsIInputStream* aStream, nsIURI* aURI,
   if (!uri) {
     // HACK ALERT
     nsresult rv = NS_OK;
-    uri = do_CreateInstance(NS_SIMPLEURI_CONTRACTID, &rv);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
     // Make sure that the URI spec "looks" like a protocol and path...
     // For now, just use a bogus protocol called "internal"
-    rv = uri->SetSpec(NS_LITERAL_CSTRING("internal:load-stream"));
+    rv = NS_MutateURI(NS_SIMPLEURIMUTATOR_CONTRACTID)
+           .SetSpec(NS_LITERAL_CSTRING("internal:load-stream"))
+           .Finalize(uri);
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -2835,10 +2840,14 @@ nsDocShell::MaybeCreateInitialClientSource(nsIPrincipal* aPrincipal)
     return;
   }
 
+  nsCOMPtr<nsIURI> uri;
+  MOZ_ALWAYS_SUCCEEDS(
+    NS_NewURI(getter_AddRefs(uri), NS_LITERAL_CSTRING("about:blank")));
+
   // We're done if there is no parent controller or if this docshell
   // is not permitted to control for some reason.
   Maybe<ServiceWorkerDescriptor> controller(parentInner->GetController());
-  if (controller.isNothing() || !ServiceWorkerAllowedToControlWindow(nullptr)) {
+  if (controller.isNothing() || !ServiceWorkerAllowedToControlWindow(principal, uri)) {
     return;
   }
 
@@ -5565,8 +5574,7 @@ nsDocShell::GetDevicePixelsPerDesktopPixel(double* aScale)
 NS_IMETHODIMP
 nsDocShell::SetPosition(int32_t aX, int32_t aY)
 {
-  mBounds.x = aX;
-  mBounds.y = aY;
+  mBounds.MoveTo(aX, aY);
 
   if (mContentViewer) {
     NS_ENSURE_SUCCESS(mContentViewer->Move(aX, aY), NS_ERROR_FAILURE);
@@ -5613,10 +5621,7 @@ NS_IMETHODIMP
 nsDocShell::SetPositionAndSize(int32_t aX, int32_t aY, int32_t aWidth,
                                int32_t aHeight, uint32_t aFlags)
 {
-  mBounds.x = aX;
-  mBounds.y = aY;
-  mBounds.width = aWidth;
-  mBounds.height = aHeight;
+  mBounds.SetRect(aX, aY, aWidth, aHeight);
 
   // Hold strong ref, since SetBounds can make us null out mContentViewer
   nsCOMPtr<nsIContentViewer> viewer = mContentViewer;
@@ -5638,7 +5643,7 @@ nsDocShell::GetPositionAndSize(int32_t* aX, int32_t* aY, int32_t* aWidth,
   if (mParentWidget) {
     // ensure size is up-to-date if window has changed resolution
     LayoutDeviceIntRect r = mParentWidget->GetClientBounds();
-    SetPositionAndSize(mBounds.x, mBounds.y, r.width, r.height, 0);
+    SetPositionAndSize(mBounds.X(), mBounds.Y(), r.Width(), r.Height(), 0);
   }
 
   // We should really consider just getting this information from
@@ -5661,16 +5666,16 @@ nsDocShell::DoGetPositionAndSize(int32_t* aX, int32_t* aY, int32_t* aWidth,
                                  int32_t* aHeight)
 {
   if (aX) {
-    *aX = mBounds.x;
+    *aX = mBounds.X();
   }
   if (aY) {
-    *aY = mBounds.y;
+    *aY = mBounds.Y();
   }
   if (aWidth) {
-    *aWidth = mBounds.width;
+    *aWidth = mBounds.Width();
   }
   if (aHeight) {
-    *aHeight = mBounds.height;
+    *aHeight = mBounds.Height();
   }
 }
 
@@ -9554,27 +9559,6 @@ nsDocShell::InternalLoad(nsIURI* aURI,
 
       return NS_ERROR_CONTENT_BLOCKED;
     }
-
-    // If HSTS priming was set by nsMixedContentBlocker::ShouldLoad, and we
-    // would block due to mixed content, go ahead and block here. If we try to
-    // proceed with priming, we will error out later on.
-    nsCOMPtr<nsIDocShell> docShell = NS_CP_GetDocShellFromContext(requestingContext);
-    // When loading toplevel windows, requestingContext can be null.  We don't
-    // really care about HSTS in that situation, though; loads in toplevel
-    // windows should all be browser UI.
-    if (docShell) {
-      nsIDocument* document = docShell->GetDocument();
-      NS_ENSURE_TRUE(document, NS_OK);
-
-      HSTSPrimingState state = document->GetHSTSPrimingStateForLocation(aURI);
-      if (state == HSTSPrimingState::eHSTS_PRIMING_BLOCK) {
-        // HSTS Priming currently disabled for InternalLoad, so we need to clear
-        // the location that was added by nsMixedContentBlocker::ShouldLoad
-        // Bug 1269815 will address images loaded via InternalLoad
-        document->ClearHSTSPrimingLocation(aURI);
-        return NS_ERROR_CONTENT_BLOCKED;
-      }
-    }
   }
 
   nsCOMPtr<nsIPrincipal> principalToInherit = aPrincipalToInherit;
@@ -10405,6 +10389,7 @@ nsDocShell::InternalLoad(nsIURI* aURI,
   rv = DoURILoad(aURI, aOriginalURI, aResultPrincipalURI, aLoadReplace,
                  loadFromExternal,
                  (aFlags & INTERNAL_LOAD_FLAGS_FORCE_ALLOW_DATA_URI),
+                 (aFlags & INTERNAL_LOAD_FLAGS_ORIGINAL_FRAME_SRC),
                  aReferrer,
                  !(aFlags & INTERNAL_LOAD_FLAGS_DONT_SEND_REFERRER),
                  aReferrerPolicy,
@@ -10544,6 +10529,7 @@ nsDocShell::DoURILoad(nsIURI* aURI,
                       bool aLoadReplace,
                       bool aLoadFromExternal,
                       bool aForceAllowDataURI,
+                      bool aOriginalFrameSrc,
                       nsIURI* aReferrerURI,
                       bool aSendReferrer,
                       uint32_t aReferrerPolicy,
@@ -10725,6 +10711,7 @@ nsDocShell::DoURILoad(nsIURI* aURI,
   }
   loadInfo->SetLoadTriggeredFromExternal(aLoadFromExternal);
   loadInfo->SetForceAllowDataURI(aForceAllowDataURI);
+  loadInfo->SetOriginalFrameSrcLoad(aOriginalFrameSrc);
 
   // We have to do this in case our OriginAttributes are different from the
   // OriginAttributes of the parent document. Or in case there isn't a
@@ -11353,6 +11340,20 @@ nsDocShell::ScrollToAnchor(bool aCurHasRef, bool aNewHasRef,
     if (!uStr.IsEmpty()) {
       rv = shell->GoToAnchor(uStr, scroll,
                              nsIPresShell::SCROLL_SMOOTH_AUTO);
+    }
+
+    if (NS_FAILED(rv)) {
+      char* str = ToNewCString(aNewHash);
+      if (!str) {
+        return NS_ERROR_OUT_OF_MEMORY;
+      }
+      nsUnescape(str);
+      NS_ConvertUTF8toUTF16 utf16Str(str);
+      if (!utf16Str.IsEmpty()) {
+        rv = shell->GoToAnchor(utf16Str, scroll,
+                               nsIPresShell::SCROLL_SMOOTH_AUTO);
+      }
+      free(str);
     }
 
     // Above will fail if the anchor name is not UTF-8.  Need to
@@ -14099,51 +14100,26 @@ nsDocShell::CanSetOriginAttributes()
 }
 
 bool
-nsDocShell::ServiceWorkerAllowedToControlWindow(nsIURI* aURI)
+nsDocShell::ServiceWorkerAllowedToControlWindow(nsIPrincipal* aPrincipal,
+                                                nsIURI* aURI)
 {
-  // NOTE: Ideally this method would call one of the
-  //       nsContentUtils::StorageAllowed*() methods to determine if the
-  //       interception is allowed.  Unfortunately we cannot safely do this
-  //       before the first window loads in the child process because the
-  //       permission manager might not have all its data yet.  Therefore,
-  //       we use this somewhat lame alternate implementation here.  Once
-  //       interception is moved to the parent process we should switch
-  //       to calling nsContentUtils::StorageAllowed*().  See bug 1428130.
+  MOZ_ASSERT(aPrincipal);
+  MOZ_ASSERT(aURI);
 
   if (UsePrivateBrowsing() || mSandboxFlags) {
     return false;
   }
 
-  uint32_t cookieBehavior = nsContentUtils::CookiesBehavior();
-  uint32_t lifetimePolicy = nsContentUtils::CookiesLifetimePolicy();
-  if (cookieBehavior == nsICookieService::BEHAVIOR_REJECT ||
-      lifetimePolicy == nsICookieService::ACCEPT_SESSION) {
-    return false;
-  }
-
-  if (!aURI || cookieBehavior == nsICookieService::BEHAVIOR_ACCEPT) {
-    return true;
-  }
-
   nsCOMPtr<nsIDocShellTreeItem> parent;
   GetSameTypeParent(getter_AddRefs(parent));
-  nsCOMPtr<nsPIDOMWindowOuter> parentWindow = parent ? parent->GetWindow()
-                                                     : nullptr;
-  if (parentWindow) {
-    nsresult rv = NS_OK;
-    nsCOMPtr<mozIThirdPartyUtil> thirdPartyUtil =
-      do_GetService(THIRDPARTYUTIL_CONTRACTID, &rv);
-    if (thirdPartyUtil) {
-      bool isThirdPartyURI = true;
-      rv = thirdPartyUtil->IsThirdPartyWindow(parentWindow, aURI,
-                                              &isThirdPartyURI);
-      if (NS_SUCCEEDED(rv) && isThirdPartyURI) {
-        return false;
-      }
-    }
-  }
+  nsPIDOMWindowOuter* parentOuter = parent ? parent->GetWindow() : nullptr;
+  nsPIDOMWindowInner* parentInner =
+    parentOuter ? parentOuter->GetCurrentInnerWindow() : nullptr;
 
-  return true;
+  nsContentUtils::StorageAccess storage =
+    nsContentUtils::StorageAllowedForNewWindow(aPrincipal, aURI, parentInner);
+
+  return storage == nsContentUtils::StorageAccess::eAllow;
 }
 
 nsresult
@@ -14370,9 +14346,12 @@ nsDocShell::ShouldPrepareForIntercept(nsIURI* aURI, bool aIsNonSubresourceReques
     return NS_OK;
   }
 
+  nsCOMPtr<nsIPrincipal> principal =
+    BasePrincipal::CreateCodebasePrincipal(aURI, mOriginAttributes);
+
   // For navigations, first check to see if we are allowed to control a
   // window with the given URL.
-  if (!ServiceWorkerAllowedToControlWindow(aURI)) {
+  if (!ServiceWorkerAllowedToControlWindow(principal, aURI)) {
     return NS_OK;
   }
 
@@ -14383,8 +14362,6 @@ nsDocShell::ShouldPrepareForIntercept(nsIURI* aURI, bool aIsNonSubresourceReques
 
   // We're allowed to control a window, so check with the ServiceWorkerManager
   // for a matching service worker.
-  nsCOMPtr<nsIPrincipal> principal =
-    BasePrincipal::CreateCodebasePrincipal(aURI, mOriginAttributes);
   *aShouldIntercept = swm->IsAvailable(principal, aURI);
   return NS_OK;
 }
