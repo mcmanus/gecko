@@ -42,7 +42,7 @@ class TestDownloadListener {
     if (!this.stoppedOnce) {
       Assert.equal(aStatus, Cr.NS_NET_STATUS_WAITING_FOR,
                    "the download status" + MSG_SHOULD_EQUAL);
-      do_execute_soon(() => gAUS.pauseDownload());
+      executeSoon(() => gAUS.pauseDownload());
     }
   }
 
@@ -56,14 +56,19 @@ class TestDownloadListener {
                    "the update state" + MSG_SHOULD_EQUAL);
       Assert.equal(aStatus, Cr.NS_BINDING_ABORTED,
                    "the download status" + MSG_SHOULD_EQUAL);
-      do_execute_soon(resumeDownload);
+      executeSoon(resumeDownload);
     } else {
       // The second time we stop, it should be because the download is done.
       Assert.equal(gBestUpdate.state, STATE_PENDING,
                    "the update state" + MSG_SHOULD_EQUAL);
       Assert.equal(aStatus, Cr.NS_OK,
                    "the download status" + MSG_SHOULD_EQUAL);
-      do_execute_soon(finish_test);
+
+      // Cleaning up the active update along with reloading the update manager
+      // in doTestFinish will prevent writing the update xml files during
+      // shutdown.
+      gUpdateManager.cleanupActiveUpdate();
+      executeSoon(waitForUpdateXMLFiles);
     }
   }
 
@@ -99,4 +104,11 @@ function resumeDownload() {
 
   // Resuming creates a new Downloader, and thus drops registered listeners.
   gAUS.addDownloadListener(gListener);
+}
+
+/**
+ * Called after the call to waitForUpdateXMLFiles finishes.
+ */
+function waitForUpdateXMLFilesFinished() {
+  stop_httpserver(doTestFinish);
 }

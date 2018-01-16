@@ -78,7 +78,7 @@ class CodeGeneratorShared : public LElementVisitor
     LBlock* current;
     SnapshotWriter snapshots_;
     RecoverWriter recovers_;
-    JitCode* deoptTable_;
+    mozilla::Maybe<TrampolinePtr> deoptTable_;
 #ifdef DEBUG
     uint32_t pushedArgs_;
 #endif
@@ -454,8 +454,8 @@ class CodeGeneratorShared : public LElementVisitor
         return masm.PushWithPatch(t);
     }
 
-    void storeResultTo(Register reg) {
-        masm.storeCallWordResult(reg);
+    void storePointerResultTo(Register reg) {
+        masm.storeCallPointerResult(reg);
     }
 
     void storeFloatResultTo(FloatRegister reg) {
@@ -503,8 +503,8 @@ class CodeGeneratorShared : public LElementVisitor
 #endif
 
     template <class T>
-    wasm::TrapDesc trap(T* mir, wasm::Trap trap) {
-        return wasm::TrapDesc(mir->bytecodeOffset(), trap, masm.framePushed());
+    wasm::OldTrapDesc oldTrap(T* mir, wasm::Trap trap) {
+        return wasm::OldTrapDesc(mir->bytecodeOffset(), trap, masm.framePushed());
     }
 
   private:
@@ -725,7 +725,9 @@ class StoreRegisterTo
     { }
 
     inline void generate(CodeGeneratorShared* codegen) const {
-        codegen->storeResultTo(out_);
+        // It's okay to use storePointerResultTo here - the VMFunction wrapper
+        // ensures the upper bytes are zero for bool/int32 return values.
+        codegen->storePointerResultTo(out_);
     }
     inline LiveRegisterSet clobbered() const {
         LiveRegisterSet set;

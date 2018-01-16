@@ -1244,7 +1244,7 @@ DXVA2Manager::IsUnsupportedResolution(const uint32_t& aWidth,
   // AMD cards with UVD3 or earlier perform poorly trying to decode 1080p60 in
   // hardware, so use software instead. Pick 45 as an arbitrary upper bound for
   // the framerate we can handle.
-  return mIsAMDPreUVD4 &&
+  return !gfxPrefs::PDMWMFAMDHighResEnabled() && mIsAMDPreUVD4 &&
          (aWidth >= 1920 || aHeight >= 1088) &&
          aFramerate > 45;
 }
@@ -1265,7 +1265,7 @@ DXVA2Manager::IsNV12Supported(uint32_t aVendorID,
     // AMD driver earlier than 21.19.411.0 have bugs in their handling of NV12
     // surfaces.
     uint64_t driverVersion;
-    if (widget::ParseDriverVersion(aDriverVersionString, &driverVersion) &&
+    if (!widget::ParseDriverVersion(aDriverVersionString, &driverVersion) ||
         driverVersion < widget::V(21, 19, 411, 0)) {
       return false;
     }

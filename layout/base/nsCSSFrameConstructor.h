@@ -16,7 +16,6 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/RestyleManager.h"
-#include "mozilla/RestyleManager.h"
 
 #include "nsCOMPtr.h"
 #include "nsILayoutHistoryState.h"
@@ -68,7 +67,7 @@ public:
   }
 
   // get the alternate text for a content node
-  static void GetAlternateTextFor(nsIContent* aContent,
+  static void GetAlternateTextFor(mozilla::dom::Element* aContent,
                                   nsAtom* aTag,  // content object's tag
                                   nsAString& aAltText);
 
@@ -134,8 +133,7 @@ private:
   // [aStartChild, aEndChild).
   void IssueSingleInsertNofications(nsIContent* aContainer,
                                     nsIContent* aStartChild,
-                                    nsIContent* aEndChild,
-                                    InsertionKind);
+                                    nsIContent* aEndChild);
 
   /**
    * Data that represents an insertion point for some child content.
@@ -143,11 +141,15 @@ private:
   struct InsertionPoint
   {
     InsertionPoint()
-      : mParentFrame(nullptr), mContainer(nullptr), mMultiple(false) {}
-    InsertionPoint(nsContainerFrame* aParentFrame, nsIContent* aContainer,
-                   bool aMultiple = false)
-      : mParentFrame(aParentFrame), mContainer(aContainer),
-        mMultiple(aMultiple) {}
+      : mParentFrame(nullptr)
+      , mContainer(nullptr)
+    {}
+
+    InsertionPoint(nsContainerFrame* aParentFrame, nsIContent* aContainer)
+      : mParentFrame(aParentFrame)
+      , mContainer(aContainer)
+    {}
+
     /**
      * The parent frame to use if the inserted children needs to create
      * frame(s).  May be null, which signals that  we shouldn't try to
@@ -162,12 +164,14 @@ private:
      * It's undefined if mParentFrame is null.
      */
     nsIContent* mContainer;
+
     /**
-     * If true then there are multiple insertion points, which means consumers
-     * should insert children individually into the node's flattened tree parent.
+     * Whether it is required to insert children one-by-one instead of as a
+     * range.
      */
-    bool mMultiple;
+    bool IsMultiple() const;
   };
+
   /**
    * Checks if the children of aContainer in the range [aStartChild, aEndChild)
    * can be inserted/appended to one insertion point together. If so, returns
@@ -177,8 +181,7 @@ private:
    */
   InsertionPoint GetRangeInsertionPoint(nsIContent* aContainer,
                                         nsIContent* aStartChild,
-                                        nsIContent* aEndChild,
-                                        InsertionKind);
+                                        nsIContent* aEndChild);
 
   // Returns true if parent was recreated due to frameset child, false otherwise.
   bool MaybeRecreateForFrameset(nsIFrame* aParentFrame,
@@ -360,9 +363,15 @@ public:
   nsresult ReplicateFixedFrames(nsPageContentFrame* aParentFrame);
 
   /**
-   * Get the XBL insertion point for aChild in aContainer.
+   * Get the insertion point for aChild.
    */
-  InsertionPoint GetInsertionPoint(nsIContent* aContainer, nsIContent* aChild);
+  InsertionPoint GetInsertionPoint(nsIContent* aChild);
+
+  /**
+   * Return the insertion frame of the primary frame of aContent, or its nearest
+   * ancestor that isn't display:contents.
+   */
+  nsContainerFrame* GetContentInsertionFrameFor(nsIContent* aContent);
 
   void CreateListBoxContent(nsContainerFrame* aParentFrame,
                             nsIFrame*         aPrevFrame,
@@ -471,7 +480,7 @@ private:
    * @param [out] aNewContent the content node we create
    * @param [out] aNewFrame the new frame we create
    */
-  void CreateAttributeContent(nsIContent* aParentContent,
+  void CreateAttributeContent(mozilla::dom::Element* aParentContent,
                               nsIFrame* aParentFrame,
                               int32_t aAttrNamespace,
                               nsAtom* aAttrName,
@@ -499,14 +508,14 @@ private:
    * @param aContentIndex is the index of the content item to create
    */
   already_AddRefed<nsIContent> CreateGeneratedContent(nsFrameConstructorState& aState,
-                                                      nsIContent*     aParentContent,
+                                                      mozilla::dom::Element* aParentContent,
                                                       nsStyleContext* aStyleContext,
                                                       uint32_t        aContentIndex);
 
   // aFrame may be null; this method doesn't use it directly in any case.
   void CreateGeneratedContentItem(nsFrameConstructorState&   aState,
                                   nsContainerFrame*          aFrame,
-                                  nsIContent*                aContent,
+                                  mozilla::dom::Element*     aContent,
                                   nsStyleContext*            aStyleContext,
                                   CSSPseudoElementType       aPseudoElement,
                                   FrameConstructionItemList& aItems);
@@ -720,7 +729,8 @@ private:
      induce a line break boundary before and after itself. */
 #define FCDATA_IS_LINE_BREAK 0x4000
   /* If FCDATA_ALLOW_BLOCK_STYLES is set, allow block styles when processing
-     children.  This should not be used with FCDATA_FUNC_IS_FULL_CTOR. */
+     children of a block (i.e. allow ::first-letter/line).
+     This should not be used with FCDATA_FUNC_IS_FULL_CTOR. */
 #define FCDATA_ALLOW_BLOCK_STYLES 0x8000
   /* If FCDATA_USE_CHILD_ITEMS is set, then use the mChildItems in the relevant
      FrameConstructionItem instead of trying to process the content's children.
@@ -739,10 +749,6 @@ private:
   /* If FCDATA_IS_SVG_TEXT is set, then this text frame is a descendant of
      an SVG text frame. */
 #define FCDATA_IS_SVG_TEXT 0x80000
-  /**
-   * display:contents
-   */
-#define FCDATA_IS_CONTENTS 0x100000
   /**
    * When FCDATA_CREATE_BLOCK_WRAPPER_FOR_ALL_KIDS is set, this bit says
    * if we should create a grid/flex/columnset container instead of
@@ -833,16 +839,21 @@ private:
                   const FrameConstructionDataByInt* aDataPtr,
                   uint32_t aDataLength);
 
-  /* A function that takes a tag, content, style context, and array of
-     FrameConstructionDataByTags and finds the appropriate frame construction
-     data to use and returns it.  This can return null if none of the tags
-     match or if the matching tag has a FrameConstructionDataGetter that
-     returns null. */
+  /**
+   * A function that takes a tag, content, style context, and array of
+   * FrameConstructionDataByTags and finds the appropriate frame construction
+   * data to use and returns it.
+   *
+   * This can return null if none of the tags match or if the matching tag has a
+   * FrameConstructionDataGetter that returns null. In the case that the tags
+   * actually match, aTagFound will be true, even if the return value is null.
+   */
   static const FrameConstructionData*
     FindDataByTag(nsAtom* aTag, Element* aElement,
                   nsStyleContext* aStyleContext,
                   const FrameConstructionDataByTag* aDataPtr,
-                  uint32_t aDataLength);
+                  uint32_t aDataLength,
+                  bool* aTagFound = nullptr);
 
   /* A class representing a list of FrameConstructionItems.  Instances of this
      class are only created as AutoFrameConstructionItemList, or as a member
@@ -2101,13 +2112,6 @@ private:
                              nsContainerFrame*        aBlockFrame,
                              nsFrameItems&            aFrameItems);
 
-  void InsertFirstLineFrames(nsFrameConstructorState& aState,
-                             nsIContent*              aContent,
-                             nsIFrame*                aBlockFrame,
-                             nsContainerFrame**       aParentFrame,
-                             nsIFrame*                aPrevSibling,
-                             nsFrameItems&            aFrameItems);
-
   /**
    * When aFrameItems is being inserted into aParentFrame, and aParentFrame has
    * pseudo-element-affected styles, it's possible that we're inserting under a
@@ -2187,12 +2191,6 @@ private:
                                     bool* aIsRangeInsertSafe,
                                     nsIContent* aStartSkipChild = nullptr,
                                     nsIContent *aEndSkipChild = nullptr);
-
-  /**
-   * Return the insertion frame of the primary frame of aContent, or its nearest
-   * ancestor that isn't display:contents.
-   */
-  nsContainerFrame* GetContentInsertionFrameFor(nsIContent* aContent);
 
   // see if aContent and aSibling are legitimate siblings due to restrictions
   // imposed by table columns

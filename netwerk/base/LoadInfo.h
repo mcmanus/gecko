@@ -15,6 +15,8 @@
 #include "nsTArray.h"
 
 #include "mozilla/BasePrincipal.h"
+#include "mozilla/dom/ClientInfo.h"
+#include "mozilla/dom/ServiceWorkerDescriptor.h"
 
 class nsINode;
 class nsPIDOMWindowOuter;
@@ -103,6 +105,7 @@ private:
            bool aUpgradeInsecureRequests,
            bool aVerifySignedContent,
            bool aEnforceSRI,
+           bool aForceAllowDataURI,
            bool aForceInheritPrincipalDropped,
            uint64_t aInnerWindowID,
            uint64_t aOuterWindowID,
@@ -121,10 +124,7 @@ private:
            bool aForcePreflight,
            bool aIsPreflight,
            bool aLoadTriggeredFromExternal,
-           bool aForceHSTSPriming,
-           bool aMixedContentWouldBlock,
-           bool aIsHSTSPriming,
-           bool aIsHSTSPrimingUpgrade);
+           bool aServiceWorkerTaintingSynthesized);
   LoadInfo(const LoadInfo& rhs);
 
   NS_IMETHOD GetRedirects(JSContext* aCx, JS::MutableHandle<JS::Value> aRedirects,
@@ -151,6 +151,13 @@ private:
   nsCOMPtr<nsIPrincipal>           mPrincipalToInherit;
   nsCOMPtr<nsIPrincipal>           mSandboxedLoadingPrincipal;
   nsCOMPtr<nsIURI>                 mResultPrincipalURI;
+
+  Maybe<mozilla::dom::ClientInfo>               mClientInfo;
+  UniquePtr<mozilla::dom::ClientSource>         mReservedClientSource;
+  Maybe<mozilla::dom::ClientInfo>               mReservedClientInfo;
+  Maybe<mozilla::dom::ClientInfo>               mInitialClientInfo;
+  Maybe<mozilla::dom::ServiceWorkerDescriptor>  mController;
+
   nsWeakPtr                        mLoadingContext;
   nsWeakPtr                        mContextForTopLevelLoad;
   nsSecurityFlags                  mSecurityFlags;
@@ -159,6 +166,8 @@ private:
   bool                             mUpgradeInsecureRequests;
   bool                             mVerifySignedContent;
   bool                             mEnforceSRI;
+  bool                             mForceAllowDataURI;
+  bool                             mOriginalFrameSrcLoad;
   bool                             mForceInheritPrincipalDropped;
   uint64_t                         mInnerWindowID;
   uint64_t                         mOuterWindowID;
@@ -177,11 +186,7 @@ private:
   bool                             mForcePreflight;
   bool                             mIsPreflight;
   bool                             mLoadTriggeredFromExternal;
-
-  bool                             mForceHSTSPriming : 1;
-  bool                             mMixedContentWouldBlock : 1;
-  bool                             mIsHSTSPriming: 1;
-  bool                             mIsHSTSPrimingUpgrade: 1;
+  bool                             mServiceWorkerTaintingSynthesized;
 };
 
 } // namespace net

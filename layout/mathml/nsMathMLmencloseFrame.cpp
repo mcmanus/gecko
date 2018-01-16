@@ -151,13 +151,14 @@ nsresult nsMathMLmencloseFrame::AddNotation(const nsAString& aNotation)
  */
 void nsMathMLmencloseFrame::InitNotations()
 {
+  MarkNeedsDisplayItemRebuild();
   mNotationsToDraw.clear();
   mLongDivCharIndex = mRadicalCharIndex = -1;
   mMathMLChar.Clear();
 
   nsAutoString value;
 
-  if (mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::notation_, value)) {
+  if (mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::notation_, value)) {
     // parse the notation attribute
     nsWhitespaceTokenizer tokenizer(value);
 
@@ -872,6 +873,6 @@ nsMathMLmencloseFrame::DisplayNotation(nsDisplayListBuilder* aBuilder,
       aThickness <= 0)
     return;
 
-  aLists.Content()->AppendNewToTop(new (aBuilder)
+  aLists.Content()->AppendToTop(new (aBuilder)
     nsDisplayNotation(aBuilder, aFrame, aRect, aThickness, aType));
 }

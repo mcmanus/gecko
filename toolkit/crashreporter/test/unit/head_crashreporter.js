@@ -1,8 +1,9 @@
-var {utils: Cu} = Components;
+var {utils: Cu, classes: Cc, interfaces: Ci} = Components;
 
 Cu.import("resource://gre/modules/osfile.jsm");
 Cu.import("resource://gre/modules/Services.jsm", this);
 Cu.import("resource://testing-common/AppData.jsm", this);
+Cu.import("resource://gre/modules/AppConstants.jsm");
 
 function getEventDir() {
   return OS.Path.join(do_get_tempdir().path, "crash-events");
@@ -24,27 +25,27 @@ function getEventDir() {
  *
  * @param callback
  *        A JavaScript function to be called after the subprocess
- *        crashes. It will be passed (minidump, extra), where
- *         minidump is an nsIFile of the minidump file produced,
- *         and extra is an object containing the key,value pairs from
- *         the .extra file.
+ *        crashes. It will be passed (minidump, extra, extrafile), where
+ *         - minidump is an nsIFile of the minidump file produced,
+ *         - extra is an object containing the key,value pairs from
+ *           the .extra file.
+ *         - extrafile is an nsIFile of the extra file
  *
  * @param canReturnZero
  *       If true, the subprocess may return with a zero exit code.
  *       Certain types of crashes may not cause the process to
  *       exit with an error.
+ *
  */
 function do_crash(setup, callback, canReturnZero) {
   // get current process filename (xpcshell)
-  let ds = Components.classes["@mozilla.org/file/directory_service;1"]
-    .getService(Components.interfaces.nsIProperties);
-  let bin = ds.get("XREExeF", Components.interfaces.nsIFile);
+  let bin = Services.dirsvc.get("XREExeF", Components.interfaces.nsIFile);
   if (!bin.exists()) {
     // weird, can't find xpcshell binary?
     do_throw("Can't find xpcshell binary!");
   }
   // get Gre dir (GreD)
-  let greD = ds.get("GreD", Components.interfaces.nsIFile);
+  let greD = Services.dirsvc.get("GreD", Components.interfaces.nsIFile);
   let headfile = do_get_file("crasher_subprocess_head.js");
   let tailfile = do_get_file("crasher_subprocess_tail.js");
   // run xpcshell -g GreD -f head -e "some setup code" -f tail
@@ -82,7 +83,7 @@ function do_crash(setup, callback, canReturnZero) {
 
   if (!canReturnZero) {
     // should exit with an error (should have crashed)
-    do_check_neq(process.exitValue, 0);
+    Assert.notEqual(process.exitValue, 0);
   }
 
   handleMinidump(callback);
@@ -100,6 +101,30 @@ function getMinidump() {
   return null;
 }
 
+function runMinidumpAnalyzer(dumpFile, additionalArgs) {
+  if (AppConstants.platform !== "win") {
+    return;
+  }
+
+  // find minidump-analyzer executable.
+  let bin = Services.dirsvc.get("XREExeF", Ci.nsIFile);
+  ok(bin && bin.exists());
+  bin = bin.parent;
+  ok(bin && bin.exists());
+  bin.append("minidump-analyzer.exe");
+  ok(bin.exists());
+
+  let process = Cc["@mozilla.org/process/util;1"]
+                  .createInstance(Ci.nsIProcess);
+  process.init(bin);
+  let args = [];
+  if (additionalArgs) {
+    args = args.concat(additionalArgs);
+  }
+  args.push(dumpFile.path);
+  process.run(true /* blocking */, args, args.length);
+}
+
 function handleMinidump(callback) {
   // find minidump
   let minidump = getMinidump();
@@ -115,7 +140,7 @@ function handleMinidump(callback) {
   memoryfile.leafName = memoryfile.leafName.slice(0, -4) + ".memory.json.gz";
 
   // Just in case, don't let these files linger.
-  do_register_cleanup(function() {
+  registerCleanupFunction(function() {
     if (minidump.exists()) {
       minidump.remove(false);
     }
@@ -127,11 +152,11 @@ function handleMinidump(callback) {
     }
   });
 
-  do_check_true(extrafile.exists());
+  Assert.ok(extrafile.exists());
   let extra = parseKeyValuePairsFromFile(extrafile);
 
   if (callback) {
-    callback(minidump, extra);
+    callback(minidump, extra, extrafile);
   }
 
   if (minidump.exists()) {
@@ -192,7 +217,7 @@ function do_content_crash(setup, callback) {
     sendCommand("load(\"" + headfile.path.replace(/\\/g, "/") + "\");", () =>
       sendCommand(setup, () =>
         sendCommand("load(\"" + tailfile.path.replace(/\\/g, "/") + "\");", () =>
-          do_execute_soon(handleCrash)
+          executeSoon(handleCrash)
         )
       )
     );
@@ -242,7 +267,7 @@ function do_triggered_content_crash(trigger, callback) {
   makeFakeAppDir().then(() => {
     sendCommand("load(\"" + headfile.path.replace(/\\/g, "/") + "\");", () =>
       sendCommand(trigger, () =>
-        do_execute_soon(handleCrash)
+        executeSoon(handleCrash)
       )
     );
   });

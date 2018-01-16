@@ -42,8 +42,7 @@ nsButtonBoxFrame::nsButtonBoxListener::HandleEvent(nsIDOMEvent* aEvent)
     return NS_OK;
   }
 
-  NS_ABORT();
-
+  MOZ_ASSERT_UNREACHABLE("Unexpected eventType");
   return NS_OK;
 }
 
@@ -202,8 +201,8 @@ void
 nsButtonBoxFrame::DoMouseClick(WidgetGUIEvent* aEvent, bool aTrustEvent)
 {
   // Don't execute if we're disabled.
-  if (mContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::disabled,
-                            nsGkAtoms::_true, eCaseMatters))
+  if (mContent->AsElement()->AttrValueIs(kNameSpaceID_None, nsGkAtoms::disabled,
+                                         nsGkAtoms::_true, eCaseMatters))
     return;
 
   // Execute the oncommand event handler.

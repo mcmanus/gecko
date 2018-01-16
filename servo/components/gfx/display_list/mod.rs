@@ -33,8 +33,8 @@ use style::values::computed::Filter;
 use style_traits::cursor::Cursor;
 use text::TextRun;
 use text::glyph::ByteIndex;
-use webrender_api::{self, ClipId, ColorF, GradientStop, LocalClip, MixBlendMode, ScrollPolicy};
-use webrender_api::{ScrollSensitivity, StickyOffsetBounds, TransformStyle};
+use webrender_api::{self, BoxShadowClipMode, ClipId, ColorF, GradientStop, LocalClip, MixBlendMode};
+use webrender_api::{ScrollPolicy, ScrollSensitivity, StickyOffsetBounds, TransformStyle};
 
 pub use style::dom::OpaqueNode;
 
@@ -720,6 +720,16 @@ pub struct GradientDisplayItem {
 
     /// Contains all gradient data. Included start, end point and color stops.
     pub gradient: Gradient,
+
+    /// The size of a single gradient tile.
+    ///
+    /// The gradient may fill an entire element background
+    /// but it can be composed from many smaller copys of
+    /// the same gradient.
+    ///
+    /// Without tiles, the tile will be the same size as the background.
+    pub tile: Size2D<Au>,
+    pub tile_spacing: Size2D<Au>,
 }
 
 /// Paints a radial gradient.
@@ -745,6 +755,16 @@ pub struct RadialGradientDisplayItem {
 
     /// Contains all gradient data.
     pub gradient: RadialGradient,
+
+    /// The size of a single gradient tile.
+    ///
+    /// The gradient may fill an entire element background
+    /// but it can be composed from many smaller copys of
+    /// the same gradient.
+    ///
+    /// Without tiles, the tile will be the same size as the background.
+    pub tile: Size2D<Au>,
+    pub tile_spacing: Size2D<Au>,
 }
 
 /// A normal border, supporting CSS border styles.
@@ -757,8 +777,6 @@ pub struct NormalBorder {
     pub style: SideOffsets2D<border_style::T>,
 
     /// Border radii.
-    ///
-    /// TODO(pcwalton): Elliptical radii.
     pub radius: BorderRadii<Au>,
 }
 
@@ -827,8 +845,6 @@ pub struct BorderDisplayItem {
 }
 
 /// Information about the border radii.
-///
-/// TODO(pcwalton): Elliptical radii.
 #[derive(Clone, Copy, Debug, Deserialize, MallocSizeOf, PartialEq, Serialize)]
 pub struct BorderRadii<T> {
     pub top_left: Size2D<T>,
@@ -928,6 +944,7 @@ pub struct BoxShadowDisplayItem {
     pub border_radius: BorderRadii<Au>,
 
     /// How we should clip the result.
+    #[ignore_malloc_size_of = "enum type in webrender"]
     pub clip_mode: BoxShadowClipMode,
 }
 
@@ -980,17 +997,6 @@ pub struct DefineClipScrollNodeItem {
 
     /// The scroll root that this item starts.
     pub node_index: ClipScrollNodeIndex,
-}
-
-/// How a box shadow should be clipped.
-#[derive(Clone, Copy, Debug, Deserialize, MallocSizeOf, PartialEq, Serialize)]
-pub enum BoxShadowClipMode {
-    /// The area inside `box_bounds` should be clipped out. Corresponds to the normal CSS
-    /// `box-shadow`.
-    Outset,
-    /// The area outside `box_bounds` should be clipped out. Corresponds to the `inset` flag on CSS
-    /// `box-shadow`.
-    Inset,
 }
 
 impl DisplayItem {

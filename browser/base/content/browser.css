@@ -68,40 +68,24 @@ toolbar[customizable="true"] {
 }
 
 panelmultiview {
+  -moz-box-align: start;
   -moz-binding: url("chrome://browser/content/customizableui/panelUI.xml#panelmultiview");
 }
 
-photonpanelmultiview {
-  -moz-binding: url("chrome://browser/content/customizableui/panelUI.xml#photonpanelmultiview");
-}
-
 panelview {
-  -moz-binding: url("chrome://browser/content/customizableui/panelUI.xml#panelview");
   -moz-box-orient: vertical;
 }
 
-panel[hidden] panelmultiview,
-panel[hidden] photonpanelmultiview,
-panel[hidden] panelview {
+panel[hidden] panelmultiview {
   -moz-binding: none;
 }
 
-.panel-mainview {
-  transition: transform var(--panelui-subview-transition-duration);
-}
-
-panelview:not([mainview]):not([current]):not([in-transition]) {
-  transition: visibility 0s linear var(--panelui-subview-transition-duration);
+panelview:not([current]):not([in-transition]) {
   visibility: collapse;
 }
 
-photonpanelmultiview panelview:not([current]):not([in-transition]) {
-  transition: none;
-  visibility: collapse;
-}
-
-panelview[mainview] > .panel-header,
-panelview:not([title]) > .panel-header {
+/* Hide the header when a subview is reused as a main view. */
+panelview[mainview] > .panel-header {
   display: none;
 }
 
@@ -150,6 +134,7 @@ tabbrowser {
 }
 
 .tab-close-button,
+.tabbrowser-tab::after,
 .tab-background {
   /* Explicitly set the visibility to override the value (collapsed)
    * we inherit from #TabsToolbar[collapsed] upon opening a browser window. */
@@ -157,12 +142,14 @@ tabbrowser {
 }
 
 .tab-close-button[fadein],
+.tabbrowser-tab[fadein]::after,
 .tab-background[fadein] {
   /* This transition is only wanted for opening tabs. */
   transition: visibility 0ms 25ms;
 }
 
 .tab-close-button:not([fadein]),
+.tabbrowser-tab:not([fadein])::after,
 .tab-background:not([fadein]) {
   visibility: hidden;
 }
@@ -422,7 +409,7 @@ toolbarpaletteitem[removable="false"] {
 
 %ifndef XP_MACOSX
 toolbarpaletteitem[place="palette"],
-toolbarpaletteitem[place="panel"],
+toolbarpaletteitem[place="menu-panel"],
 toolbarpaletteitem[place="toolbar"] {
   -moz-user-focus: normal;
 }
@@ -652,14 +639,6 @@ html|input.urlbar-input[textoverflow]:not([focused]) {
   -moz-binding: url("chrome://browser/content/search/search.xml#browser-search-autocomplete-result-popup");
 }
 
-/* Overlay a badge on top of the icon of additional open search providers
-   in the search panel. */
-.addengine-item > .button-box > .button-icon,
-.addengine-item[type="menu"] > .button-box > .box-inherit > .button-icon {
-  -moz-binding: url("chrome://browser/content/search/search.xml#addengine-icon");
-  display: -moz-stack;
-}
-
 #PopupAutoCompleteRichResult {
   -moz-binding: url("chrome://browser/content/urlbarBindings.xml#urlbar-rich-result-popup");
 }
@@ -779,10 +758,6 @@ html|input.urlbar-input[textoverflow]:not([focused]) {
 
 #identity-box.verifiedIdentity > #identity-icon-labels > #identity-icon-label {
   margin-inline-end: 0.25em !important;
-}
-
-#main-window[customizing] :-moz-any(#urlbar, .searchbar-textbox) > .autocomplete-textbox-container > .textbox-input-box {
-  visibility: hidden;
 }
 
 /* Flexible spacer sizing (matching url bar) */
@@ -929,35 +904,6 @@ html|*#fullscreen-exit-button {
 
 /* ::::: Ctrl-Tab Panel ::::: */
 
-.ctrlTab-preview > html|img,
-.ctrlTab-preview > html|canvas {
-  min-width: inherit;
-  max-width: inherit;
-  min-height: inherit;
-  max-height: inherit;
-}
-
-.ctrlTab-favicon-container {
-  -moz-box-align: start;
-%ifdef XP_MACOSX
-  -moz-box-pack: end;
-%else
-  -moz-box-pack: start;
-%endif
-}
-
-.ctrlTab-favicon {
-  width: 16px;
-  height: 16px;
-}
-
-/* Apply crisp rendering for favicons at exactly 2dppx resolution */
-@media (resolution: 2dppx) {
-  .ctrlTab-favicon {
-    image-rendering: -moz-crisp-edges;
-  }
-}
-
 .ctrlTab-preview {
   -moz-binding: url("chrome://browser/content/browser-tabPreviews.xml#ctrlTab-preview");
 }
@@ -1072,12 +1018,6 @@ html|*#gcli-output-frame,
 /* Translation */
 notification[value="translation"] {
   -moz-binding: url("chrome://browser/content/translation-infobar.xml#translationbar");
-}
-
-/** See bug 872317 for why the following rule is necessary. */
-
-#downloads-button {
-  -moz-binding: url("chrome://browser/content/downloads/download.xml#download-toolbarbutton");
 }
 
 /*** Visibility of downloads indicator controls ***/
@@ -1418,6 +1358,27 @@ toolbarpaletteitem[place="palette"][hidden] {
   .urlbar-page-action {
     list-style-image: var(--pageAction-image-32px, inherit);
   }
+}
+
+/* Page action context menu */
+#pageActionContextMenu > .pageActionContextMenuItem {
+  visibility: collapse;
+}
+#pageActionContextMenu[state=builtInPinned] > .pageActionContextMenuItem.builtInPinned,
+#pageActionContextMenu[state=builtInUnpinned] > .pageActionContextMenuItem.builtInUnpinned,
+#pageActionContextMenu[state=extensionPinned] > .pageActionContextMenuItem.extensionPinned,
+#pageActionContextMenu[state=extensionUnpinned] > .pageActionContextMenuItem.extensionUnpinned {
+  visibility: visible;
+}
+
+
+/* Favicon in Open Bookmark in Sidebar */
+#sidebar-box[sidebarcommand="viewWebPanelsSidebar"] > #sidebar-header > #sidebar-switcher-target > #sidebar-icon {
+  list-style-image: var(--sidebar-webpage-icon, url(chrome://mozapps/skin/places/defaultFavicon.svg) );
+  -moz-context-properties: fill;
+  fill: currentColor;
+  width: 16px;
+  height: 16px;
 }
 
 /* WebExtension Sidebars */

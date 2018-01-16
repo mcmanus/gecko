@@ -90,7 +90,12 @@ public:
   {
     mStyleSheet = nullptr;
     mParentRule = nullptr;
-    DropAllRules();
+    for (css::Rule* rule : mRules) {
+      if (rule) {
+        rule->SetStyleSheet(nullptr);
+        rule->SetParentRule(nullptr);
+      }
+    }
   }
 
   size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
@@ -103,15 +108,16 @@ public:
   }
 
 private:
-  virtual ~ServoKeyframeList() {}
+  virtual ~ServoKeyframeList() {
+    MOZ_ASSERT(!mParentRule, "Backpointer should have been cleared");
+    MOZ_ASSERT(!mStyleSheet, "Backpointer should have been cleared");
+    DropAllRules();
+  }
 
   void DropAllRules()
   {
-    for (css::Rule* rule : mRules) {
-      if (rule) {
-        rule->SetStyleSheet(nullptr);
-        rule->SetParentRule(nullptr);
-      }
+    if (mParentRule || mStyleSheet) {
+      DropReference();
     }
     mRules.Clear();
     mRawRule = nullptr;
@@ -163,6 +169,9 @@ ServoKeyframesRule::ServoKeyframesRule(RefPtr<RawServoKeyframesRule> aRawRule,
 
 ServoKeyframesRule::~ServoKeyframesRule()
 {
+  if (mKeyframeList) {
+    mKeyframeList->DropReference();
+  }
 }
 
 NS_IMPL_ADDREF_INHERITED(ServoKeyframesRule, dom::CSSKeyframesRule)
@@ -243,43 +252,38 @@ ServoKeyframesRule::UpdateRule(Func aCallback)
   aCallback();
 
   if (StyleSheet* sheet = GetStyleSheet()) {
-    // FIXME sheet->AsGecko()->SetModifiedByChildRule();
-    if (doc) {
-      doc->StyleRuleChanged(sheet, this);
-    }
+    sheet->RuleChanged(this);
   }
 }
 
-NS_IMETHODIMP
-ServoKeyframesRule::GetName(nsAString& aName)
+void
+ServoKeyframesRule::GetName(nsAString& aName) const
 {
   nsAtom* name = Servo_KeyframesRule_GetName(mRawRule);
   aName = nsDependentAtomString(name);
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 ServoKeyframesRule::SetName(const nsAString& aName)
 {
   RefPtr<nsAtom> name = NS_Atomize(aName);
   nsAtom* oldName = Servo_KeyframesRule_GetName(mRawRule);
   if (name == oldName) {
-    return NS_OK;
+    return;
   }
 
   UpdateRule([this, &name]() {
     Servo_KeyframesRule_SetName(mRawRule, name.forget().take());
   });
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 ServoKeyframesRule::AppendRule(const nsAString& aRule)
 {
   StyleSheet* sheet = GetStyleSheet();
   if (!sheet) {
     // We cannot parse the rule if we don't have a stylesheet.
-    return NS_OK;
+    return;
   }
 
   NS_ConvertUTF16toUTF8 rule(aRule);
@@ -290,15 +294,14 @@ ServoKeyframesRule::AppendRule(const nsAString& aRule)
       mKeyframeList->AppendRule();
     }
   });
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 ServoKeyframesRule::DeleteRule(const nsAString& aKey)
 {
   auto index = FindRuleIndexForKey(aKey);
   if (index == kRuleNotFound) {
-    return NS_OK;
+    return;
   }
 
   UpdateRule([this, index]() {
@@ -307,7 +310,6 @@ ServoKeyframesRule::DeleteRule(const nsAString& aKey)
       mKeyframeList->RemoveRule(index);
     }
   });
-  return NS_OK;
 }
 
 /* virtual */ void

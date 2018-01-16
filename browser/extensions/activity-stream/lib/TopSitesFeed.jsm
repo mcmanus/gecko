@@ -27,17 +27,19 @@ const DEFAULT_SITES_PREF = "default.sites";
 const DEFAULT_TOP_SITES = [];
 const FRECENCY_THRESHOLD = 100 + 1; // 1 visit (skip first-run/one-time pages)
 const MIN_FAVICON_SIZE = 96;
+const CACHED_LINK_PROPS_TO_MIGRATE = ["screenshot"];
+const PINNED_FAVICON_PROPS_TO_MIGRATE = ["favicon", "faviconRef", "faviconSize"];
 
 this.TopSitesFeed = class TopSitesFeed {
   constructor() {
     this._tippyTopProvider = new TippyTopProvider();
     this.dedupe = new Dedupe(this._dedupeKey);
     this.frecentCache = new LinksCache(NewTabUtils.activityStreamLinks,
-      "getTopSites", ["screenshot"], (oldOptions, newOptions) =>
+      "getTopSites", CACHED_LINK_PROPS_TO_MIGRATE, (oldOptions, newOptions) =>
         // Refresh if no old options or requesting more items
         !(oldOptions.numItems >= newOptions.numItems));
     this.pinnedCache = new LinksCache(NewTabUtils.pinnedLinks, "links",
-      ["favicon", "faviconSize", "screenshot"]);
+      [...CACHED_LINK_PROPS_TO_MIGRATE, ...PINNED_FAVICON_PROPS_TO_MIGRATE]);
     PageThumbs.addExpirationFilter(this);
   }
 
@@ -92,18 +94,21 @@ this.TopSitesFeed = class TopSitesFeed {
 
       // Copy all properties from a frecent link and add more
       const finder = other => other.url === link.url;
-      const copy = Object.assign({}, frecent.find(finder) || {}, link, {
-        hostname: shortURL(link),
-        isDefault: !!notBlockedDefaultSites.find(finder)
-      });
+
+      // If the link is a frecent site, do not copy over 'isDefault', else check
+      // if the site is a default site
+      const copy = Object.assign({}, frecent.find(finder) ||
+        {isDefault: !!notBlockedDefaultSites.find(finder)}, link, {hostname: shortURL(link)});
 
       // Add in favicons if we don't already have it
       if (!copy.favicon) {
         try {
           NewTabUtils.activityStreamProvider._faviconBytesToDataURI(await
             NewTabUtils.activityStreamProvider._addFavicons([copy]));
-          copy.__sharedCache.updateLink("favicon", copy.favicon);
-          copy.__sharedCache.updateLink("faviconSize", copy.faviconSize);
+
+          for (const prop of PINNED_FAVICON_PROPS_TO_MIGRATE) {
+            copy.__sharedCache.updateLink(prop, copy[prop]);
+          }
         } catch (e) {
           // Some issue with favicon, so just continue without one
         }
@@ -161,11 +166,22 @@ this.TopSitesFeed = class TopSitesFeed {
    * Get an image for the link preferring tippy top, rich favicon, screenshots.
    */
   async _fetchIcon(link) {
-    // Check for tippy top icon or a rich icon.
+    // Nothing to do if we already have a rich icon from the page
+    if (link.favicon && link.faviconSize >= MIN_FAVICON_SIZE) {
+      return;
+    }
+
+    // Nothing more to do if we can use a default tippy top icon
     this._tippyTopProvider.processSite(link);
-    if (!link.tippyTopIcon &&
-        (!link.favicon || link.faviconSize < MIN_FAVICON_SIZE) &&
-        !link.screenshot) {
+    if (link.tippyTopIcon) {
+      return;
+    }
+
+    // Make a request for a better icon
+    this._requestRichIcon(link.url);
+
+    // Also request a screenshot if we don't have one yet
+    if (!link.screenshot) {
       const {url} = link;
       await Screenshots.maybeCacheScreenshot(link, url, "screenshot",
         screenshot => this.store.dispatch(ac.BroadcastToContent({
@@ -173,6 +189,13 @@ this.TopSitesFeed = class TopSitesFeed {
           type: at.SCREENSHOT_UPDATED
         })));
     }
+  }
+
+  _requestRichIcon(url) {
+    this.store.dispatch({
+      type: at.RICH_ICON_MISSING,
+      data: {url}
+    });
   }
 
   /**
@@ -219,6 +242,13 @@ this.TopSitesFeed = class TopSitesFeed {
    * Insert a site to pin at a position shifting over any other pinned sites.
    */
   _insertPin(site, index) {
+    // Don't insert any pins past the end of the visible top sites. Otherwise,
+    // we can end up with a bunch of pinned sites that can never be unpinned again
+    // from the UI.
+    if (index >= this.store.getState().Prefs.values.topSitesCount) {
+      return;
+    }
+
     // For existing sites, recursively push it and others to the next positions
     let pinned = NewTabUtils.pinnedLinks.links;
     if (pinned.length > index && pinned[index]) {
@@ -228,12 +258,12 @@ this.TopSitesFeed = class TopSitesFeed {
   }
 
   /**
-   * Handle an add action of a site.
+   * Handle an insert (drop/add) action of a site.
    */
-  add(action) {
-    // Adding a top site pins it in the first slot, pushing over any link already
-    // pinned in the slot.
-    this._insertPin(action.data.site, 0);
+  insert(action) {
+    // Inserting a top site pins it in the specified slot, pushing over any link already
+    // pinned in the slot (unless it's the last slot, then it replaces).
+    this._insertPin(action.data.site, action.data.index || 0);
     this._broadcastPinnedSitesUpdated();
   }
 
@@ -271,8 +301,8 @@ this.TopSitesFeed = class TopSitesFeed {
       case at.TOP_SITES_UNPIN:
         this.unpin(action);
         break;
-      case at.TOP_SITES_ADD:
-        this.add(action);
+      case at.TOP_SITES_INSERT:
+        this.insert(action);
         break;
       case at.UNINIT:
         this.uninit();

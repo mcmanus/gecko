@@ -5,7 +5,9 @@
 
 let ReactDOM = require("devtools/client/shared/vendor/react-dom");
 let React = require("devtools/client/shared/vendor/react");
-var TestUtils = React.addons.TestUtils;
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const { createElement } = React;
+const TestUtils = ReactDOM.TestUtils;
 
 const actions = require("devtools/client/webconsole/new-console-output/actions/index");
 const { configureStore } = require("devtools/client/webconsole/new-console-output/store");
@@ -24,39 +26,50 @@ function setupActions() {
   const wrappedActions = Object.assign({}, actions);
 
   const idGenerator = new IdGenerator();
-  wrappedActions.messageAdd = (packet) => {
-    return actions.messageAdd(packet, idGenerator);
+  wrappedActions.messagesAdd = (packets) => {
+    return actions.messagesAdd(packets, idGenerator);
   };
 
-  return wrappedActions;
+  return {
+    ...actions,
+    messagesAdd: packets => actions.messagesAdd(packets, idGenerator)
+  };
 }
 
 /**
  * Prepare the store for use in testing.
  */
-function setupStore(input = [], hud, options) {
+function setupStore(input = [], hud, options, wrappedActions) {
+  if (!hud) {
+    hud = {
+      proxy: {
+        releaseActor: () => {}
+      }
+    };
+  }
   const store = configureStore(hud, options);
 
   // Add the messages from the input commands to the store.
-  input.forEach((cmd) => {
-    store.dispatch(actions.messageAdd(stubPackets.get(cmd)));
-  });
+  const messagesAdd = wrappedActions
+    ? wrappedActions.messagesAdd
+    : actions.messagesAdd;
+  store.dispatch(messagesAdd(input.map(cmd => stubPackets.get(cmd))));
 
   return store;
 }
 
 function renderComponent(component, props) {
-  const el = React.createElement(component, props, {});
+  const el = createElement(component, props, {});
   // By default, renderIntoDocument() won't work for stateless components, but
   // it will work if the stateless component is wrapped in a stateful one.
   // See https://github.com/facebook/react/issues/4839
-  const wrappedEl = React.DOM.span({}, [el]);
+  const wrappedEl = dom.span({}, [el]);
   const renderedComponent = TestUtils.renderIntoDocument(wrappedEl);
   return ReactDOM.findDOMNode(renderedComponent).children[0];
 }
 
 function shallowRenderComponent(component, props) {
-  const el = React.createElement(component, props);
+  const el = createElement(component, props);
   const renderer = TestUtils.createRenderer();
   renderer.render(el, {});
   return renderer.getRenderOutput();
@@ -81,9 +94,32 @@ function getMessageAt(state, index) {
   return messages.get([...messages.keys()][index]);
 }
 
+/**
+ * Return the first message in the store.
+ *
+ * @param {object} state - The redux state of the console.
+ * @return {Message} - The last message, or undefined if there are no message in store.
+ */
+function getFirstMessage(state) {
+  return getMessageAt(state, 0);
+}
+
+/**
+ * Return the last message in the store.
+ *
+ * @param {object} state - The redux state of the console.
+ * @return {Message} - The last message, or undefined if there are no message in store.
+ */
+function getLastMessage(state) {
+  const lastIndex = getAllMessagesById(state).size - 1;
+  return getMessageAt(state, lastIndex);
+}
+
 module.exports = {
   clonePacket,
   getMessageAt,
+  getFirstMessage,
+  getLastMessage,
   renderComponent,
   setupActions,
   setupStore,

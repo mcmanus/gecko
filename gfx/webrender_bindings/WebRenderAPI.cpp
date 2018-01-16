@@ -11,11 +11,11 @@
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/widget/CompositorWidget.h"
-#include "mozilla/widget/CompositorWidget.h"
 #include "mozilla/layers/SynchronousTask.h"
 
 #define WRDL_LOG(...)
 //#define WRDL_LOG(...) printf_stderr("WRDL(%p): " __VA_ARGS__)
+//#define WRDL_LOG(...) if (XRE_IsContentProcess()) printf_stderr("WRDL(%p): " __VA_ARGS__)
 
 namespace mozilla {
 namespace wr {
@@ -91,6 +91,9 @@ public:
     if (wrRenderer && renderer) {
       wr::WrExternalImageHandler handler = renderer->GetExternalImageHandler();
       wr_renderer_set_external_image_handler(wrRenderer, &handler);
+      if (gfx::gfxVars::UseWebRenderProgramBinary()) {
+        wr_renderer_update_program_cache(wrRenderer, aRenderThread.ProgramCache()->Raw());
+      }
     }
 
     if (renderer) {
@@ -138,9 +141,21 @@ private:
   layers::SynchronousTask* mTask;
 };
 
+/*static*/ void
+WebRenderAPI::InitExternalLogHandler()
+{
+  // Redirect the webrender's log to gecko's log system.
+  // The current log level is "error".
+  mozilla::wr::wr_init_external_log_handler(wr::LogLevelFilter::Error);
+}
 
-//static
-already_AddRefed<WebRenderAPI>
+/*static*/ void
+WebRenderAPI::ShutdownExternalLogHandler()
+{
+  mozilla::wr::wr_shutdown_external_log_handler();
+}
+
+/*static*/ already_AddRefed<WebRenderAPI>
 WebRenderAPI::Create(layers::CompositorBridgeParentBase* aBridge,
                      RefPtr<widget::CompositorWidget>&& aWidget,
                      LayoutDeviceIntSize aSize)
@@ -193,6 +208,9 @@ WebRenderAPI::GetNamespace() {
 WebRenderAPI::~WebRenderAPI()
 {
   if (!mRootApi) {
+
+    RenderThread::Get()->SetDestroyed(GetId());
+
     layers::SynchronousTask task("Destroy WebRenderAPI");
     auto event = MakeUnique<RemoveRenderer>(&task);
     RunOnRenderThread(Move(event));
@@ -208,6 +226,18 @@ WebRenderAPI::UpdateScrollPosition(const wr::WrPipelineId& aPipelineId,
                                    const wr::LayoutPoint& aScrollPosition)
 {
   wr_scroll_layer_with_id(mDocHandle, aPipelineId, aScrollId, aScrollPosition);
+}
+
+bool
+WebRenderAPI::HitTest(const wr::WorldPoint& aPoint,
+                      wr::WrPipelineId& aOutPipelineId,
+                      layers::FrameMetrics::ViewID& aOutScrollId,
+                      gfx::CompositorHitTestInfo& aOutHitInfo)
+{
+  static_assert(sizeof(gfx::CompositorHitTestInfo) == sizeof(uint16_t),
+                "CompositorHitTestInfo should be u16-sized");
+  return wr_api_hit_test(mDocHandle, aPoint,
+          &aOutPipelineId, &aOutScrollId, (uint16_t*)&aOutHitInfo);
 }
 
 void
@@ -236,8 +266,7 @@ WebRenderAPI::SetDisplayList(gfx::Color aBgColor,
                              wr::WrPipelineId pipeline_id,
                              const LayoutSize& content_size,
                              wr::BuiltDisplayListDescriptor dl_descriptor,
-                             uint8_t *dl_data,
-                             size_t dl_size,
+                             wr::Vec<uint8_t>& dl_data,
                              ResourceUpdateQueue& aResources)
 {
   wr_api_set_display_list(mDocHandle,
@@ -247,8 +276,7 @@ WebRenderAPI::SetDisplayList(gfx::Color aBgColor,
                           pipeline_id,
                           content_size,
                           dl_descriptor,
-                          dl_data,
-                          dl_size,
+                          &dl_data.inner,
                           aResources.Raw());
 }
 
@@ -427,6 +455,12 @@ WebRenderAPI::SetRootPipeline(PipelineId aPipeline)
 }
 
 void
+WebRenderAPI::RemovePipeline(PipelineId aPipeline)
+{
+  wr_api_remove_pipeline(mDocHandle, aPipeline);
+}
+
+void
 WebRenderAPI::UpdateResources(ResourceUpdateQueue& aUpdates)
 {
   wr_api_update_resources(mDocHandle, aUpdates.Raw());
@@ -472,7 +506,7 @@ ResourceUpdateQueue::Clear()
 
 void
 ResourceUpdateQueue::AddImage(ImageKey key, const ImageDescriptor& aDescriptor,
-                              wr::Vec_u8& aBytes)
+                              wr::Vec<uint8_t>& aBytes)
 {
   wr_resource_updates_add_image(mUpdates,
                                 key,
@@ -482,7 +516,7 @@ ResourceUpdateQueue::AddImage(ImageKey key, const ImageDescriptor& aDescriptor,
 
 void
 ResourceUpdateQueue::AddBlobImage(ImageKey key, const ImageDescriptor& aDescriptor,
-                                  wr::Vec_u8& aBytes)
+                                  wr::Vec<uint8_t>& aBytes)
 {
   wr_resource_updates_add_blob_image(mUpdates,
                                      key,
@@ -519,7 +553,7 @@ ResourceUpdateQueue::AddExternalImageBuffer(ImageKey aKey,
 void
 ResourceUpdateQueue::UpdateImageBuffer(ImageKey aKey,
                                        const ImageDescriptor& aDescriptor,
-                                       wr::Vec_u8& aBytes)
+                                       wr::Vec<uint8_t>& aBytes)
 {
   wr_resource_updates_update_image(mUpdates,
                                    aKey,
@@ -530,7 +564,7 @@ ResourceUpdateQueue::UpdateImageBuffer(ImageKey aKey,
 void
 ResourceUpdateQueue::UpdateBlobImage(ImageKey aKey,
                                      const ImageDescriptor& aDescriptor,
-                                     wr::Vec_u8& aBytes,
+                                     wr::Vec<uint8_t>& aBytes,
                                      const wr::DeviceUintRect& aDirtyRect)
 {
   wr_resource_updates_update_blob_image(mUpdates,
@@ -562,13 +596,13 @@ ResourceUpdateQueue::DeleteImage(ImageKey aKey)
 }
 
 void
-ResourceUpdateQueue::AddRawFont(wr::FontKey aKey, wr::Vec_u8& aBytes, uint32_t aIndex)
+ResourceUpdateQueue::AddRawFont(wr::FontKey aKey, wr::Vec<uint8_t>& aBytes, uint32_t aIndex)
 {
   wr_resource_updates_add_raw_font(mUpdates, aKey, &aBytes.inner, aIndex);
 }
 
 void
-ResourceUpdateQueue::AddFontDescriptor(wr::FontKey aKey, wr::Vec_u8& aBytes, uint32_t aIndex)
+ResourceUpdateQueue::AddFontDescriptor(wr::FontKey aKey, wr::Vec<uint8_t>& aBytes, uint32_t aIndex)
 {
   wr_resource_updates_add_font_descriptor(mUpdates, aKey, &aBytes.inner, aIndex);
 }
@@ -585,7 +619,7 @@ ResourceUpdateQueue::AddFontInstance(wr::FontInstanceKey aKey,
                                      float aGlyphSize,
                                      const wr::FontInstanceOptions* aOptions,
                                      const wr::FontInstancePlatformOptions* aPlatformOptions,
-                                     wr::Vec_u8& aVariations)
+                                     wr::Vec<uint8_t>& aVariations)
 {
   wr_resource_updates_add_font_instance(mUpdates, aKey, aFontKey, aGlyphSize,
                                         aOptions, aPlatformOptions,
@@ -655,6 +689,7 @@ DisplayListBuilder::~DisplayListBuilder()
 void DisplayListBuilder::Save() { wr_dp_save(mWrState); }
 void DisplayListBuilder::Restore() { wr_dp_restore(mWrState); }
 void DisplayListBuilder::ClearSave() { wr_dp_clear_save(mWrState); }
+void DisplayListBuilder::Dump() { wr_dump_display_list(mWrState); }
 
 void
 DisplayListBuilder::Finalize(wr::LayoutSize& aOutContentSize,
@@ -668,7 +703,7 @@ DisplayListBuilder::Finalize(wr::LayoutSize& aOutContentSize,
 
 void
 DisplayListBuilder::PushStackingContext(const wr::LayoutRect& aBounds,
-                                        const uint64_t& aAnimationId,
+                                        const WrAnimationProperty* aAnimation,
                                         const float* aOpacity,
                                         const gfx::Matrix4x4* aTransform,
                                         wr::TransformStyle aTransformStyle,
@@ -689,7 +724,7 @@ DisplayListBuilder::PushStackingContext(const wr::LayoutRect& aBounds,
   const wr::LayoutTransform* maybePerspective = aPerspective ? &perspective : nullptr;
   WRDL_LOG("PushStackingContext b=%s t=%s\n", mWrState, Stringify(aBounds).c_str(),
       aTransform ? Stringify(*aTransform).c_str() : "none");
-  wr_dp_push_stacking_context(mWrState, aBounds, aAnimationId, aOpacity,
+  wr_dp_push_stacking_context(mWrState, aBounds, aAnimation, aOpacity,
                               maybeTransform, aTransformStyle, maybePerspective,
                               aMixBlendMode, aFilters.Elements(), aFilters.Length(), aIsBackfaceVisible);
 }
@@ -811,11 +846,13 @@ DisplayListBuilder::DefineStickyFrame(const wr::LayoutRect& aContentRect,
                                       const float* aBottomMargin,
                                       const float* aLeftMargin,
                                       const StickyOffsetBounds& aVerticalBounds,
-                                      const StickyOffsetBounds& aHorizontalBounds)
+                                      const StickyOffsetBounds& aHorizontalBounds,
+                                      const wr::LayoutVector2D& aAppliedOffset)
 {
   uint64_t id = wr_dp_define_sticky_frame(mWrState, aContentRect, aTopMargin,
-      aRightMargin, aBottomMargin, aLeftMargin, aVerticalBounds, aHorizontalBounds);
-  WRDL_LOG("DefineSticky id=%" PRIu64 " c=%s t=%s r=%s b=%s l=%s v=%s h=%s\n",
+      aRightMargin, aBottomMargin, aLeftMargin, aVerticalBounds, aHorizontalBounds,
+      aAppliedOffset);
+  WRDL_LOG("DefineSticky id=%" PRIu64 " c=%s t=%s r=%s b=%s l=%s v=%s h=%s a=%s\n",
       mWrState, id,
       Stringify(aContentRect).c_str(),
       aTopMargin ? Stringify(*aTopMargin).c_str() : "none",
@@ -823,7 +860,8 @@ DisplayListBuilder::DefineStickyFrame(const wr::LayoutRect& aContentRect,
       aBottomMargin ? Stringify(*aBottomMargin).c_str() : "none",
       aLeftMargin ? Stringify(*aLeftMargin).c_str() : "none",
       Stringify(aVerticalBounds).c_str(),
-      Stringify(aHorizontalBounds).c_str());
+      Stringify(aHorizontalBounds).c_str(),
+      Stringify(aAppliedOffset).c_str());
   return wr::WrStickyId { id };
 }
 
@@ -1094,7 +1132,7 @@ DisplayListBuilder::PushBorderImage(const wr::LayoutRect& aBounds,
                                     const wr::BorderWidths& aWidths,
                                     wr::ImageKey aImage,
                                     const wr::NinePatchDescriptor& aPatch,
-                                    const wr::SideOffsets2D_f32& aOutset,
+                                    const wr::SideOffsets2D<float>& aOutset,
                                     const wr::RepeatMode& aRepeatHorizontal,
                                     const wr::RepeatMode& aRepeatVertical)
 {
@@ -1112,7 +1150,7 @@ DisplayListBuilder::PushBorderGradient(const wr::LayoutRect& aBounds,
                                        const wr::LayoutPoint& aEndPoint,
                                        const nsTArray<wr::GradientStop>& aStops,
                                        wr::ExtendMode aExtendMode,
-                                       const wr::SideOffsets2D_f32& aOutset)
+                                       const wr::SideOffsets2D<float>& aOutset)
 {
   wr_dp_push_border_gradient(mWrState, aBounds, aClip, aIsBackfaceVisible,
                              aWidths, aStartPoint, aEndPoint,
@@ -1129,7 +1167,7 @@ DisplayListBuilder::PushBorderRadialGradient(const wr::LayoutRect& aBounds,
                                              const wr::LayoutSize& aRadius,
                                              const nsTArray<wr::GradientStop>& aStops,
                                              wr::ExtendMode aExtendMode,
-                                             const wr::SideOffsets2D_f32& aOutset)
+                                             const wr::SideOffsets2D<float>& aOutset)
 {
   wr_dp_push_border_radial_gradient(
     mWrState, aBounds, aClip, aIsBackfaceVisible, aWidths, aCenter,
@@ -1225,6 +1263,21 @@ DisplayListBuilder::TopmostIsClip()
     return false;
   }
   return mClipStack.back().is<wr::WrClipId>();
+}
+
+void
+DisplayListBuilder::SetHitTestInfo(const layers::FrameMetrics::ViewID& aScrollId,
+                                   gfx::CompositorHitTestInfo aHitInfo)
+{
+  static_assert(sizeof(gfx::CompositorHitTestInfo) == sizeof(uint16_t),
+                "CompositorHitTestInfo should be u16-sized");
+  wr_set_item_tag(mWrState, aScrollId, static_cast<uint16_t>(aHitInfo));
+}
+
+void
+DisplayListBuilder::ClearHitTestInfo()
+{
+  wr_clear_item_tag(mWrState);
 }
 
 } // namespace wr

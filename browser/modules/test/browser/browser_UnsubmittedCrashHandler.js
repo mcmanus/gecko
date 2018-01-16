@@ -284,8 +284,8 @@ add_task(async function test_other_ignored() {
   Assert.ok(notification, "There should be a notification");
 
   // Dismiss notification, creating the .dmp.ignore file
-  let anonyNodes = document.getAnonymousNodes(notification)[0];
-  let closeButton = anonyNodes.querySelector(".close-icon");
+  let closeButton =
+    document.getAnonymousElementByAttribute(notification, "anonid", "close-button");
   closeButton.click();
   gNotificationBox.removeNotification(notification, true);
   await waitForIgnoredReports(toIgnore);
@@ -404,7 +404,7 @@ add_task(async function test_can_submit_several() {
  * and sends the pending crash reports.
  */
 add_task(async function test_can_submit_always() {
-  let pref = "browser.crashReports.unsubmittedCheck.autoSubmit";
+  let pref = "browser.crashReports.unsubmittedCheck.autoSubmit2";
   Assert.equal(Services.prefs.getBoolPref(pref), false,
                "We should not be auto-submitting by default");
 
@@ -448,7 +448,7 @@ add_task(async function test_can_submit_always() {
  */
 add_task(async function test_can_auto_submit() {
   await SpecialPowers.pushPrefEnv({ set: [
-    ["browser.crashReports.unsubmittedCheck.autoSubmit", true],
+    ["browser.crashReports.unsubmittedCheck.autoSubmit2", true],
   ]});
 
   let reportIDs = await createPendingCrashReports(3);
@@ -476,8 +476,8 @@ add_task(async function test_can_ignore() {
   Assert.ok(notification, "There should be a notification");
 
   // Dismiss the notification by clicking on the "X" button.
-  let anonyNodes = document.getAnonymousNodes(notification)[0];
-  let closeButton = anonyNodes.querySelector(".close-icon");
+  let closeButton =
+    document.getAnonymousElementByAttribute(notification, "anonid", "close-button");
   closeButton.click();
   // We'll not wait for the notification to finish its transition -
   // we'll just remove it right away.
@@ -550,8 +550,8 @@ add_task(async function test_shutdown_while_not_showing() {
   Assert.ok(notification, "There should be a notification");
 
   // Dismiss the notification by clicking on the "X" button.
-  let anonyNodes = document.getAnonymousNodes(notification)[0];
-  let closeButton = anonyNodes.querySelector(".close-icon");
+  let closeButton =
+    document.getAnonymousElementByAttribute(notification, "anonid", "close-button");
   closeButton.click();
   // We'll not wait for the notification to finish its transition -
   // we'll just remove it right away.

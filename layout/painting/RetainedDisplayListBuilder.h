@@ -8,13 +8,13 @@
 #define RETAINEDDISPLAYLISTBUILDER_H_
 
 #include "nsDisplayList.h"
+#include "mozilla/Maybe.h"
 
 struct RetainedDisplayListBuilder {
   RetainedDisplayListBuilder(nsIFrame* aReferenceFrame,
                              nsDisplayListBuilderMode aMode,
                              bool aBuildCaret)
     : mBuilder(aReferenceFrame, aMode, aBuildCaret, true)
-    , mList(&mBuilder)
   {}
   ~RetainedDisplayListBuilder()
   {
@@ -27,6 +27,14 @@ struct RetainedDisplayListBuilder {
 
   bool AttemptPartialUpdate(nscolor aBackstop);
 
+  /**
+   * Iterates through the display list builder reference frame document and
+   * subdocuments, and clears the modified frame lists from the root frames.
+   * Also clears the frame properties set by RetainedDisplayListBuilder for all
+   * the frames in the modified frame lists.
+   */
+  void ClearModifiedFrameProps();
+
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(Cached, RetainedDisplayListBuilder)
 
 private:
@@ -34,7 +42,8 @@ private:
 
   void MergeDisplayLists(nsDisplayList* aNewList,
                          nsDisplayList* aOldList,
-                         nsDisplayList* aOutList);
+                         nsDisplayList* aOutList,
+                         mozilla::Maybe<const mozilla::ActiveScrolledRoot*>& aOutContainerASR);
 
   bool ComputeRebuildRegion(nsTArray<nsIFrame*>& aModifiedFrames,
                             nsRect* aOutDirty,

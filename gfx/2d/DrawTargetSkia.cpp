@@ -50,6 +50,8 @@
 #include "ScaledFontDWrite.h"
 #endif
 
+using namespace std;
+
 namespace mozilla {
 namespace gfx {
 
@@ -200,7 +202,7 @@ VerifyRGBXCorners(uint8_t* aData, const IntSize &aSize, const int32_t aStride, S
   const int pixelSize = 4;
   MOZ_ASSERT(aSize.width * pixelSize <= aStride);
 
-  const int translation = bounds.y * aStride + bounds.x * pixelSize;
+  const int translation = bounds.Y() * aStride + bounds.X() * pixelSize;
   const int topLeft = translation;
   const int topRight = topLeft + (width - 1) * pixelSize;
   const int bottomLeft = translation + (height - 1) * aStride;
@@ -218,7 +220,7 @@ VerifyRGBXCorners(uint8_t* aData, const IntSize &aSize, const int32_t aStride, S
         int column = (offset % aStride) / pixelSize;
         gfxCriticalError() << "RGBX corner pixel at (" << column << "," << row << ") in "
                            << aSize.width << "x" << aSize.height << " surface, bounded by "
-                           << "(" << bounds.x << "," << bounds.y << "," << width << ","
+                           << "(" << bounds.X() << "," << bounds.Y() << "," << width << ","
                            << height << ") is not opaque: "
                            << int(aData[offset]) << ","
                            << int(aData[offset+1]) << ","
@@ -276,6 +278,7 @@ GetSkImageForSurface(SourceSurface* aSurface, const Rect* aBounds = nullptr, con
 
 DrawTargetSkia::DrawTargetSkia()
   : mSnapshot(nullptr)
+  , mSnapshotLock{"DrawTargetSkia::mSnapshotLock"}
 #ifdef MOZ_WIDGET_COCOA
   , mCG(nullptr)
   , mColorSpace(nullptr)
@@ -288,6 +291,12 @@ DrawTargetSkia::DrawTargetSkia()
 
 DrawTargetSkia::~DrawTargetSkia()
 {
+  if (mSnapshot) {
+    MutexAutoLock lock(mSnapshotLock);
+    // We're going to go away, hand our SkSurface to the SourceSurface.
+    mSnapshot->GiveSurface(mSurface);
+  }
+
 #ifdef MOZ_WIDGET_COCOA
   if (mCG) {
     CGContextRelease(mCG);
@@ -304,6 +313,9 @@ DrawTargetSkia::~DrawTargetSkia()
 already_AddRefed<SourceSurface>
 DrawTargetSkia::Snapshot()
 {
+  // Without this lock, this could cause us to get out a snapshot and race with
+  // Snapshot::~Snapshot() actually destroying itself.
+  MutexAutoLock lock(mSnapshotLock);
   RefPtr<SourceSurfaceSkia> snapshot = mSnapshot;
   if (mSurface && !snapshot) {
     snapshot = new SourceSurfaceSkia();
@@ -515,7 +527,7 @@ SetPaintPattern(SkPaint& aPaint, const Pattern& aPattern, Float aAlpha = 1.0, Po
 
       if (!pat.mSamplingRect.IsEmpty()) {
         image = ExtractSubset(image, pat.mSamplingRect);
-        mat.preTranslate(pat.mSamplingRect.x, pat.mSamplingRect.y);
+        mat.preTranslate(pat.mSamplingRect.X(), pat.mSamplingRect.Y());
       }
 
       SkShader::TileMode xTileMode = ExtendModeToTileMode(pat.mExtendMode, Axis::X_AXIS);
@@ -860,16 +872,16 @@ ShrinkClippedStrokedRect(const Rect &aStrokedRect, const IntRect &aDeviceClip,
   Rect userSpaceStrokeClip =
     UserSpaceStrokeClip(aDeviceClip, aTransform, aStrokeOptions);
   RectDouble strokedRectDouble(
-    aStrokedRect.x, aStrokedRect.y, aStrokedRect.Width(), aStrokedRect.Height());
+    aStrokedRect.X(), aStrokedRect.Y(), aStrokedRect.Width(), aStrokedRect.Height());
   RectDouble intersection =
-    strokedRectDouble.Intersect(RectDouble(userSpaceStrokeClip.x,
-                                           userSpaceStrokeClip.y,
+    strokedRectDouble.Intersect(RectDouble(userSpaceStrokeClip.X(),
+                                           userSpaceStrokeClip.Y(),
                                            userSpaceStrokeClip.Width(),
                                            userSpaceStrokeClip.Height()));
   Double dashPeriodLength = DashPeriodLength(aStrokeOptions);
   if (intersection.IsEmpty() || dashPeriodLength == 0.0f) {
-    return Rect(
-      intersection.x, intersection.y, intersection.Width(), intersection.Height());
+    return Rect(intersection.X(), intersection.Y(),
+                intersection.Width(), intersection.Height());
   }
 
   // Reduce the rectangle side lengths in multiples of the dash period length
@@ -881,8 +893,8 @@ ShrinkClippedStrokedRect(const Rect &aStrokedRect, const IntRect &aDeviceClip,
   insetBy.left = RoundDownToMultiple(insetBy.left, dashPeriodLength);
 
   strokedRectDouble.Deflate(insetBy);
-  return Rect(strokedRectDouble.x,
-              strokedRectDouble.y,
+  return Rect(strokedRectDouble.X(),
+              strokedRectDouble.Y(),
               strokedRectDouble.Width(),
               strokedRectDouble.Height());
 }
@@ -1552,7 +1564,7 @@ DrawTarget::Draw3DTransformedSurface(SourceSurface* aSurface, const Matrix4x4& a
     return true;
   }
   // Offset the matrix by the transformed origin.
-  fullMat.PostTranslate(-xformBounds.x, -xformBounds.y, 0);
+  fullMat.PostTranslate(-xformBounds.X(), -xformBounds.Y(), 0);
 
   // Read in the source data.
   sk_sp<SkImage> srcImage = GetSkImageForSurface(aSurface);
@@ -1570,12 +1582,14 @@ DrawTarget::Draw3DTransformedSurface(SourceSurface* aSurface, const Matrix4x4& a
   if (!dstSurf) {
     return false;
   }
+
+  DataSourceSurface::ScopedMap map(dstSurf, DataSourceSurface::READ_WRITE);
   std::unique_ptr<SkCanvas> dstCanvas(
     SkCanvas::MakeRasterDirect(
                         SkImageInfo::Make(xformBounds.Width(), xformBounds.Height(),
                         GfxFormatToSkiaColorType(dstSurf->GetFormat()),
                         kPremul_SkAlphaType),
-      dstSurf->GetData(), dstSurf->Stride()));
+      map.GetData(), map.GetStride()));
   if (!dstCanvas) {
     return false;
   }
@@ -1743,13 +1757,14 @@ DrawTargetSkia::OptimizeSourceSurfaceForUnknownAlpha(SourceSurface *aSurface) co
   }
 
   RefPtr<DataSourceSurface> dataSurface = aSurface->GetDataSurface();
+  DataSourceSurface::ScopedMap map(dataSurface, DataSourceSurface::READ_WRITE);
 
   // For plugins, GDI can sometimes just write 0 to the alpha channel
   // even for RGBX formats. In this case, we have to manually write
   // the alpha channel to make Skia happy with RGBX and in case GDI
   // writes some bad data. Luckily, this only happens on plugins.
-  WriteRGBXFormat(dataSurface->GetData(), dataSurface->GetSize(),
-                  dataSurface->Stride(), dataSurface->GetFormat());
+  WriteRGBXFormat(map.GetData(), dataSurface->GetSize(),
+                  map.GetStride(), dataSurface->GetFormat());
   return dataSurface.forget();
 }
 
@@ -1772,8 +1787,11 @@ DrawTargetSkia::OptimizeSourceSurface(SourceSurface *aSurface) const
   // to trigger any required readback so that it only happens
   // once.
   RefPtr<DataSourceSurface> dataSurface = aSurface->GetDataSurface();
-  MOZ_ASSERT(VerifyRGBXFormat(dataSurface->GetData(), dataSurface->GetSize(),
-                              dataSurface->Stride(), dataSurface->GetFormat()));
+#ifdef DEBUG
+  DataSourceSurface::ScopedMap map(dataSurface, DataSourceSurface::READ);
+  MOZ_ASSERT(VerifyRGBXFormat(map.GetData(), dataSurface->GetSize(),
+                              map.GetStride(), dataSurface->GetFormat()));
+#endif
   return dataSurface.forget();
 }
 
@@ -1835,7 +1853,7 @@ DrawTargetSkia::CopySurface(SourceSurface *aSurface,
   if (SkImageIsMask(image)) {
     mCanvas->clear(SK_ColorTRANSPARENT);
   }
-  mCanvas->drawImage(image, -SkIntToScalar(aSourceRect.x), -SkIntToScalar(aSourceRect.y), &paint);
+  mCanvas->drawImage(image, -SkIntToScalar(aSourceRect.X()), -SkIntToScalar(aSourceRect.Y()), &paint);
   mCanvas->restore();
 }
 
@@ -2214,7 +2232,17 @@ DrawTargetSkia::CreateFilter(FilterType aType)
 void
 DrawTargetSkia::MarkChanged()
 {
+  // I'm not entirely certain whether this lock is needed, as multiple threads
+  // should never modify the DrawTarget at the same time anyway, but this seems
+  // like the safest.
+  MutexAutoLock lock(mSnapshotLock);
   if (mSnapshot) {
+    if (mSnapshot->hasOneRef()) {
+      // No owners outside of this DrawTarget's own reference. Just dump it.
+      mSnapshot = nullptr;
+      return;
+    }
+
     mSnapshot->DrawTargetWillChange();
     mSnapshot = nullptr;
 
@@ -2223,12 +2251,6 @@ DrawTargetSkia::MarkChanged()
       mSurface->notifyContentWillChange(SkSurface::kRetain_ContentChangeMode);
     }
   }
-}
-
-void
-DrawTargetSkia::SnapshotDestroyed()
-{
-  mSnapshot = nullptr;
 }
 
 } // namespace gfx

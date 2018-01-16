@@ -15,11 +15,10 @@
 #include "nsPrintfCString.h"
 #include "nsReadableUtils.h"
 #include "nsStringEnumerator.h"
-#include "nsIServiceManager.h" 
+#include "nsIServiceManager.h"
 #include "nsThreadUtils.h"
 
 #include "nsPSPrinters.h"
-#include "nsPaperPS.h"  /* Paper size list */
 
 #include "nsPrintSettingsGTK.h"
 
@@ -110,7 +109,7 @@ already_AddRefed<PrintTarget> nsDeviceContextSpecGTK::MakePrintTarget()
   width  /= TWIPS_PER_POINT_FLOAT;
   height /= TWIPS_PER_POINT_FLOAT;
 
-  DO_PR_DEBUG_LOG(("\"%s\", %f, %f\n", mPath, width, height));
+  DO_PR_DEBUG_LOG(("Making PrintTarget: width = %f, height = %f\n", width, height));
   nsresult rv;
 
   // We shouldn't be attempting to get a surface if we've already got a spool
@@ -148,8 +147,8 @@ already_AddRefed<PrintTarget> nsDeviceContextSpecGTK::MakePrintTarget()
   // Determine the real format with some GTK magic
   if (format == nsIPrintSettings::kOutputFormatNative) {
     if (mIsPPreview) {
-      // There is nothing to detect on Print Preview, use PS.
-      format = nsIPrintSettings::kOutputFormatPS;
+      // There is nothing to detect on Print Preview, use PDF.
+      format = nsIPrintSettings::kOutputFormatPDF;
     } else {
       return nullptr;
     }
@@ -223,7 +222,7 @@ NS_IMETHODIMP nsDeviceContextSpecGTK::Init(nsIWidget *aWidget,
 }
 
 static void
-#if (MOZ_WIDGET_GTK == 3)
+#ifdef MOZ_WIDGET_GTK
 print_callback(GtkPrintJob *aJob, gpointer aData, const GError *aError) {
 #else
 print_callback(GtkPrintJob *aJob, gpointer aData, GError *aError) {
@@ -371,7 +370,7 @@ NS_IMETHODIMP nsPrinterEnumeratorGTK::GetPrinterNameList(nsIStringEnumerator **a
 {
   NS_ENSURE_ARG_POINTER(aPrinterNameList);
   *aPrinterNameList = nullptr;
-  
+
   nsresult rv = GlobalPrinters::GetInstance()->InitializeGlobalPrinters();
   if (NS_FAILED(rv)) {
     return rv;
@@ -383,7 +382,7 @@ NS_IMETHODIMP nsPrinterEnumeratorGTK::GetPrinterNameList(nsIStringEnumerator **a
     GlobalPrinters::GetInstance()->FreeGlobalPrinters();
     return NS_ERROR_OUT_OF_MEMORY;
   }
-  
+
   uint32_t count = 0;
   while( count < numPrinters )
   {
@@ -412,24 +411,30 @@ nsPrinterEnumeratorGTK::InitPrintSettingsFromPrinter(const nsAString& aPrinterNa
 
   NS_ENSURE_ARG_POINTER(aPrintSettings);
 
-  /* Set filename */
-  nsAutoCString filename;
-  const char *path;
-  
-  if (!(path = PR_GetEnv("PWD")))
-    path = PR_GetEnv("HOME");
-  
-  if (path)
-    filename = nsPrintfCString("%s/mozilla.pdf", path);
-  else
-    filename.AssignLiteral("mozilla.pdf");
+  // Set a default file name.
+  nsAutoString filename;
+  nsresult rv = aPrintSettings->GetToFileName(filename);
+  if (NS_FAILED(rv) || filename.IsEmpty()) {
+    const char* path = PR_GetEnv("PWD");
+    if (!path) {
+      path = PR_GetEnv("HOME");
+    }
 
-  DO_PR_DEBUG_LOG(("Setting default filename to '%s'\n", filename.get()));
-  aPrintSettings->SetToFileName(NS_ConvertUTF8toUTF16(filename));
+    if (path) {
+      CopyUTF8toUTF16(path, filename);
+      filename.AppendLiteral("/mozilla.pdf");
+    } else {
+      filename.AssignLiteral("mozilla.pdf");
+    }
+
+    DO_PR_DEBUG_LOG(("Setting default filename to '%s'\n",
+                     NS_ConvertUTF16toUTF8(filename).get()));
+    aPrintSettings->SetToFileName(filename);
+  }
 
   aPrintSettings->SetIsInitializedFromPrinter(true);
 
-  return NS_OK;    
+  return NS_OK;
 }
 
 //----------------------------------------------------------------------
@@ -473,16 +478,16 @@ void GlobalPrinters::FreeGlobalPrinters()
   if (mGlobalPrinterList) {
     delete mGlobalPrinterList;
     mGlobalPrinterList = nullptr;
-  }  
+  }
 }
 
-void 
+void
 GlobalPrinters::GetDefaultPrinterName(nsAString& aDefaultPrinterName)
 {
   aDefaultPrinterName.Truncate();
-  
+
   bool allocate = !GlobalPrinters::GetInstance()->PrintersAreAllocated();
-  
+
   if (allocate) {
     nsresult rv = GlobalPrinters::GetInstance()->InitializeGlobalPrinters();
     if (NS_FAILED(rv)) {
@@ -493,11 +498,11 @@ GlobalPrinters::GetDefaultPrinterName(nsAString& aDefaultPrinterName)
 
   if (GlobalPrinters::GetInstance()->GetNumPrinters() == 0)
     return;
-  
+
   aDefaultPrinterName = *GlobalPrinters::GetInstance()->GetStringAt(0);
 
-  if (allocate) {  
+  if (allocate) {
     GlobalPrinters::GetInstance()->FreeGlobalPrinters();
-  }  
+  }
 }
 

@@ -9,17 +9,17 @@
 
 use std::fmt;
 use style_traits::ToCss;
-use values::computed::{LengthOrPercentage, ComputedUrl};
+use values::computed::{LengthOrPercentage, ComputedUrl, Image};
 use values::generics::basic_shape::{BasicShape as GenericBasicShape};
 use values::generics::basic_shape::{Circle as GenericCircle, ClippingShape as GenericClippingShape};
 use values::generics::basic_shape::{Ellipse as GenericEllipse, FloatAreaShape as GenericFloatAreaShape};
 use values::generics::basic_shape::{InsetRect as GenericInsetRect, ShapeRadius as GenericShapeRadius};
 
-/// A specified clipping shape.
+/// A computed clipping shape.
 pub type ClippingShape = GenericClippingShape<BasicShape, ComputedUrl>;
 
-/// A specified float area shape.
-pub type FloatAreaShape = GenericFloatAreaShape<BasicShape, ComputedUrl>;
+/// A computed float area shape.
+pub type FloatAreaShape = GenericFloatAreaShape<BasicShape, Image>;
 
 /// A computed basic shape.
 pub type BasicShape = GenericBasicShape<LengthOrPercentage, LengthOrPercentage, LengthOrPercentage>;

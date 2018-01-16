@@ -108,11 +108,10 @@ public:
                       double aHeight,
                       bool   aRepaint) override
   {
-    if (mBounds.x != aX || mBounds.y != aY) {
+    if (!mBounds.IsEqualXY(aX, aY)) {
       NotifyWindowMoved(aX, aY);
     }
-    mBounds.x = aX;
-    mBounds.y = aY;
+    mBounds.MoveTo(aX, aY);
     return Resize(aWidth, aHeight, aRepaint);
   }
 
@@ -140,7 +139,7 @@ public:
   { return NS_ERROR_UNEXPECTED; }
 
   virtual LayoutDeviceIntPoint WidgetToScreenOffset() override
-  { return LayoutDeviceIntPoint::FromUnknownPoint(GetWindowPosition() + GetChromeDimensions()); }
+  { return GetWindowPosition() + GetChromeOffset(); }
 
   int32_t RoundsWidgetCoordinatesTo() override;
 
@@ -235,11 +234,11 @@ public:
 
   nsIntSize GetScreenDimensions();
 
-  // Get the size of the chrome of the window that this tab belongs to.
-  nsIntPoint GetChromeDimensions();
+  // Get the offset to the chrome of the window that this tab belongs to.
+  LayoutDeviceIntPoint GetChromeOffset();
 
   // Get the screen position of the application window.
-  nsIntPoint GetWindowPosition();
+  LayoutDeviceIntPoint GetWindowPosition();
 
   virtual LayoutDeviceIntRect GetScreenBounds() override;
 
@@ -411,6 +410,14 @@ protected:
 
 private:
   bool mNeedIMEStateInit;
+  // When remote process requests to commit/cancel a composition, the
+  // composition may have already been committed in the main process.  In such
+  // case, this will receive remaining composition events for the old
+  // composition even after requesting to commit/cancel the old composition
+  // but the TextComposition for the old composition has already been destroyed.
+  // So, until this meets new eCompositionStart, following composition events
+  // should be ignored if this is set to true.
+  bool mIgnoreCompositionEvents;
 };
 
 class PuppetScreen : public nsBaseScreen

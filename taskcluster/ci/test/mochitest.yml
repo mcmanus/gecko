@@ -39,6 +39,7 @@ mochitest:
             linux.*/debug: 16
             linux64-asan/opt: 10
             linux64-.*cov/opt: 10
+            windows10-64-ccov/debug: 10
             default: 5
     e10s:
         by-test-platform:
@@ -74,7 +75,7 @@ mochitest-a11y:
     e10s: false
     run-on-projects:
         by-test-platform:
-            linux64-qr/.*: ['mozilla-central', 'try']
+            .*-qr/.*: ['mozilla-central', 'try']
             default: built-projects
     mozharness:
         mochitest-flavor: a11y
@@ -103,7 +104,8 @@ mochitest-browser-chrome:
             default: true
     max-run-time:
         by-test-platform:
-            linux64-*cov/opt: 7200
+            linux64-.*cov/opt: 7200
+            windows10-64-ccov/debug: 7200
             linux.*/debug: 5400
             default: 3600
     mozharness:
@@ -120,6 +122,21 @@ mochitest-browser-chrome:
             windows10-64-asan.*: 3
             default: default
 
+browser-instrumentation:
+    description: "Extra instrumentation for a browser-chrome run (XUL, XBL, etc)"
+    suite: mochitest/browser-chrome-instrumentation
+    treeherder-symbol: tc-M(inst)
+    loopback-video: true
+    tier: 3
+    run-on-projects:
+        by-test-platform:
+            windows.*-nightly/.*: ["mozilla-central"]
+            default: []
+    max-run-time: 14400
+    mozharness:
+        mochitest-flavor: browser
+    allow-software-gl-layers: false
+
 browser-screenshots:
     description: "Browser Screenshots"
     suite: mochitest/browser-chrome-screenshots
@@ -127,11 +144,11 @@ browser-screenshots:
     loopback-video: true
     run-on-projects:
         by-test-platform:
-            windows.*/opt: ['mozilla-central']
-            linux64/opt: ['mozilla-central']
-            macosx.*/opt: ['mozilla-central']
-            windows7-32-devedition/opt: []
-            windows10-64-devedition/opt: []
+            # We don't want debug, pgo, devedition or nightly builds
+            windows7-32/opt: ['mozilla-central', 'integration']
+            windows10-64/opt: ['mozilla-central', 'integration']
+            linux64/opt: ['mozilla-central', 'integration']
+            macosx64/opt: ['mozilla-central', 'integration']
             default: []
     max-run-time: 3600
     mozharness:
@@ -179,13 +196,7 @@ mochitest-clipboard:
     suite: mochitest/clipboard
     treeherder-symbol: tc-M(cl)
     loopback-video: true
-    virtualization: hardware
     instance-size: xlarge
-    worker-type:
-        by-test-platform:
-            windows7-32.*: buildbot-bridge/buildbot-bridge
-            windows10-64.*: buildbot-bridge/buildbot-bridge
-            default: null
     e10s:
         by-test-platform:
             windows7-32/debug: both
@@ -203,6 +214,10 @@ mochitest-clipboard:
                     - --test-suite=mochitest-plain-clipboard
                 default:
                     - --mochitest-suite=plain-clipboard,chrome-clipboard,browser-chrome-clipboard
+    tier:
+        by-test-platform:
+            windows10-64-asan.*: 3
+            default: default
 
 mochitest-devtools-chrome:
     description: "Mochitest devtools-chrome run"
@@ -224,7 +239,7 @@ mochitest-devtools-chrome:
         chunked: true
     instance-size:
         by-test-platform:
-            linux64-asan/opt: xlarge # runs out of memory on default/m3.large
+            linux64-asan/opt: xlarge  # runs out of memory on default/m3.large
             default: default
     # Bug 1296086: high number of intermittents observed with software GL and large instances
     allow-software-gl-layers: false
@@ -237,7 +252,15 @@ mochitest-gpu:
     description: "Mochitest GPU run"
     suite: mochitest/gpu
     treeherder-symbol: tc-M(gpu)
+    run-on-projects:
+        by-test-platform:
+            .*-qr/.*: ['mozilla-central', 'autoland', 'mozilla-inbound', 'try']  # exclude beta and project branches
+            default: built-projects
     loopback-video: true
+    instance-size:
+        by-test-platform:
+            android.*: xlarge
+            default: default
     virtualization: virtual-with-gpu
     e10s:
         by-test-platform:
@@ -327,6 +350,10 @@ mochitest-webgl:
     description: "Mochitest webgl run"
     suite: mochitest/mochitest-gl
     treeherder-symbol: tc-M(gl)
+    run-on-projects:
+        by-test-platform:
+            windows10-64-ccov/.*: []  # Do not run on Windows ccov, see bug 1419475.
+            default: built-projects
     virtualization: virtual-with-gpu
     chunks:
         by-test-platform:

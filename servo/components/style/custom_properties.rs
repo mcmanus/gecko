@@ -14,7 +14,7 @@ use selector_map::{PrecomputedHashSet, PrecomputedHashMap};
 use selectors::parser::SelectorParseErrorKind;
 use servo_arc::Arc;
 use smallvec::SmallVec;
-use std::ascii::AsciiExt;
+#[allow(unused_imports)] use std::ascii::AsciiExt;
 use std::borrow::{Borrow, Cow};
 use std::cmp;
 use std::fmt;
@@ -153,10 +153,7 @@ where
         K: Borrow<Q>,
         Q: PrecomputedHash + Hash + Eq,
     {
-        let index = match self.index.iter().position(|k| k.borrow() == key) {
-            Some(p) => p,
-            None => return None,
-        };
+        let index = self.index.iter().position(|k| k.borrow() == key)?;
         self.index.remove(index);
         self.values.remove(key)
     }
@@ -194,10 +191,7 @@ where
     type Item = (&'a K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let key = match self.inner.index.get(self.pos) {
-            Some(k) => k,
-            None => return None,
-        };
+        let key = self.inner.index.get(self.pos)?;
 
         self.pos += 1;
         let value = &self.inner.values[key];

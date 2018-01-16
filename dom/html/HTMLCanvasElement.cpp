@@ -642,6 +642,7 @@ bool
 HTMLCanvasElement::ParseAttribute(int32_t aNamespaceID,
                                   nsAtom* aAttribute,
                                   const nsAString& aValue,
+                                  nsIPrincipal* aMaybeScriptedPrincipal,
                                   nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None &&
@@ -650,7 +651,7 @@ HTMLCanvasElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 
@@ -961,20 +962,15 @@ HTMLCanvasElement::MozGetAsFileImpl(const nsAString& aName,
   NS_ENSURE_SUCCESS(rv, rv);
 
   uint64_t imgSize;
-  rv = stream->Available(&imgSize);
-  NS_ENSURE_SUCCESS(rv, rv);
-  NS_ENSURE_TRUE(imgSize <= UINT32_MAX, NS_ERROR_FILE_TOO_BIG);
-
   void* imgData = nullptr;
-  rv = NS_ReadInputStreamToBuffer(stream, &imgData, (uint32_t)imgSize);
+  rv = NS_ReadInputStreamToBuffer(stream, &imgData, -1, &imgSize);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(OwnerDoc()->GetScopeObject());
 
   // The File takes ownership of the buffer
   RefPtr<File> file =
-    File::CreateMemoryFile(win, imgData, (uint32_t)imgSize, aName, type,
-                           PR_Now());
+    File::CreateMemoryFile(win, imgData, imgSize, aName, type, PR_Now());
 
   file.forget(aResult);
   return NS_OK;

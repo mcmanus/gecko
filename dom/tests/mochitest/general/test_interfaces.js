@@ -27,7 +27,7 @@ var ecmaGlobals =
   [
     "Array",
     "ArrayBuffer",
-    "Atomics",
+    {name: "Atomics", disabled: true},
     "Boolean",
     {name: "ByteLengthQueuingStrategy", disabled: !SpecialPowers.Cu.getJSTestingFunctions().streamsAreEnabled()},
     {name: "CountQueuingStrategy", disabled: !SpecialPowers.Cu.getJSTestingFunctions().streamsAreEnabled()},
@@ -61,7 +61,7 @@ var ecmaGlobals =
     "Reflect",
     "RegExp",
     "Set",
-    "SharedArrayBuffer",
+    {name: "SharedArrayBuffer", disabled: true},
     {name: "SIMD", nightly: true},
     "String",
     "Symbol",
@@ -145,6 +145,12 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "AudioStreamTrack",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "AuthenticatorAssertionResponse", isSecureContext:true, nightly: true},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "AuthenticatorAttestationResponse", isSecureContext:true, nightly: true},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "AuthenticatorResponse", isSecureContext:true, nightly: true},
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "BarProp",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "BaseAudioContext",
@@ -200,6 +206,10 @@ var interfaceNamesInGlobalScope =
     "ConstantSourceNode",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ConvolverNode",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "Credential", isSecureContext:true, nightly: true},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "CredentialsContainer", isSecureContext:true, nightly: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Crypto",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -271,10 +281,6 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "DelayNode",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "DesktopNotification",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    "DesktopNotificationCenter",
-// IMPORTANT: Do not change this list without review from a DOM peer!
     "DeviceLightEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "DeviceMotionEvent",
@@ -343,8 +349,6 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "EventTarget",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "External",
-// IMPORTANT: Do not change this list without review from a DOM peer!
     "File",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "FileList",
@@ -412,8 +416,6 @@ var interfaceNamesInGlobalScope =
     "HTMLCanvasElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLCollection",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    "HTMLContentElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLDataElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -511,7 +513,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLSelectElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "HTMLSlotElement",
+    {name: "HTMLSlotElement", disabled: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLSourceElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -753,7 +755,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PluginArray",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "PointerEvent", nightly: true, desktop: true, android: false},
+    {name: "PointerEvent", android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PopStateEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -780,6 +782,8 @@ var interfaceNamesInGlobalScope =
     "ProcessingInstruction",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ProgressEvent",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "PublicKeyCredential", isSecureContext:true, nightly: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PushManager",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -817,6 +821,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "RTCRtpSender",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "RTCRtpTransceiver",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "RTCSessionDescription",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "RTCStatsReport",
@@ -831,6 +837,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ScrollAreaEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "SecurityPolicyViolationEvent", release: false},
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "Selection",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ServiceWorker",
@@ -843,7 +851,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "ScopedCredentialInfo", disabled: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "ShadowRoot", // Bogus, but the test harness forces it on.  See bug 1159768.
+    {name: "ShadowRoot", disabled: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "SharedWorker",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1191,7 +1199,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "VTTCue",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VTTRegion", disabled: true},
+    "VTTRegion",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "WaveShaperNode",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1278,14 +1286,6 @@ var interfaceNamesInGlobalScope =
     {name: "XULElement", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "XULLabeledControlElement", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "XULPopupElement", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "XULTemplateBuilder", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "XULTreeBuilder", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "XULTreeBuilderObserver", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
   ];
 // IMPORTANT: Do not change the list above without review from a DOM peer!

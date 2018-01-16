@@ -495,8 +495,12 @@ AccessibleWrap::get_accRole(
 
   if (content->IsElement()) {
     nsAutoString roleString;
-    if (msaaRole != ROLE_SYSTEM_CLIENT &&
-        !content->GetAttr(kNameSpaceID_None, nsGkAtoms::role, roleString)) {
+    // Try the role attribute.
+    content->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::role, roleString);
+
+    if (roleString.IsEmpty()) {
+      // No role attribute (or it is an empty string).
+      // Use the tag name.
       nsIDocument * document = content->GetUncomposedDoc();
       if (!document)
         return E_FAIL;
@@ -1432,6 +1436,19 @@ GetProxiedAccessibleInSubtree(const DocAccessibleParent* aDoc,
   return disp.forget();
 }
 
+bool
+AccessibleWrap::IsRootForHWND()
+{
+  if (IsRoot()) {
+    return true;
+  }
+  HWND thisHwnd = GetHWNDFor(this);
+  AccessibleWrap* parent = static_cast<AccessibleWrap*>(Parent());
+  MOZ_ASSERT(parent);
+  HWND parentHwnd = GetHWNDFor(parent);
+  return thisHwnd != parentHwnd;
+}
+
 already_AddRefed<IAccessible>
 AccessibleWrap::GetIAccessibleFor(const VARIANT& aVarChild, bool* aIsDefunct)
 {
@@ -1476,7 +1493,18 @@ AccessibleWrap::GetIAccessibleFor(const VARIANT& aVarChild, bool* aIsDefunct)
   // accessible is part of the chrome process and is part of the xul browser
   // window and the child id points in the content documents. Thus we need to
   // make sure that it is never called on proxies.
-  if (XRE_IsParentProcess() && !IsProxy() && !sIDGen.IsChromeID(varChild.lVal)) {
+  // Bug 1422674: We must only handle remote ids here (< 0), not child indices.
+  // Child indices (> 0) are handled below for both local and remote children.
+  if (XRE_IsParentProcess() && !IsProxy() &&
+      varChild.lVal < 0 && !sIDGen.IsChromeID(varChild.lVal)) {
+    if (!IsRootForHWND()) {
+      // Bug 1422201, 1424657: accChild with a remote id is only valid on the
+      // root accessible for an HWND.
+      // Otherwise, we might return remote accessibles which aren't descendants
+      // of this accessible. This would confuse clients which use accChild to
+      // check whether something is a descendant of a document.
+      return nullptr;
+    }
     return GetRemoteIAccessibleFor(varChild);
   }
 
@@ -1545,7 +1573,7 @@ AccessibleWrap::GetIAccessibleFor(const VARIANT& aVarChild, bool* aIsDefunct)
 already_AddRefed<IAccessible>
 AccessibleWrap::GetRemoteIAccessibleFor(const VARIANT& aVarChild)
 {
-  DocAccessible* doc = Document();
+  a11y::RootAccessible* root = RootAccessible();
   const nsTArray<DocAccessibleParent*>* remoteDocs =
     DocManager::TopLevelRemoteDocs();
   if (!remoteDocs) {
@@ -1570,7 +1598,7 @@ AccessibleWrap::GetRemoteIAccessibleFor(const VARIANT& aVarChild)
       continue;
     }
 
-    if (outerDoc->Document() != doc) {
+    if (outerDoc->RootAccessible() != root) {
       continue;
     }
 

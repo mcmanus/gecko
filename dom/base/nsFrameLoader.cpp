@@ -179,6 +179,7 @@ nsFrameLoader::nsFrameLoader(Element* aOwner, nsPIDOMWindowOuter* aOpener,
   , mInShow(false)
   , mHideCalled(false)
   , mNetworkCreated(aNetworkCreated)
+  , mLoadingOriginalSrc(false)
   , mRemoteBrowserShown(false)
   , mRemoteFrame(false)
   , mClipSubdocument(true)
@@ -234,16 +235,16 @@ nsFrameLoader::Create(Element* aOwner, nsPIDOMWindowOuter* aOpener, bool aNetwor
 }
 
 void
-nsFrameLoader::LoadFrame(ErrorResult& aRv)
+nsFrameLoader::LoadFrame(bool aOriginalSrc, ErrorResult& aRv)
 {
-  nsresult rv = LoadFrame();
+  nsresult rv = LoadFrame(aOriginalSrc);
   if (NS_FAILED(rv)) {
     aRv.Throw(rv);
   }
 }
 
 NS_IMETHODIMP
-nsFrameLoader::LoadFrame()
+nsFrameLoader::LoadFrame(bool aOriginalSrc)
 {
   NS_ENSURE_TRUE(mOwnerContent, NS_ERROR_NOT_INITIALIZED);
 
@@ -296,7 +297,7 @@ nsFrameLoader::LoadFrame()
   }
 
   if (NS_SUCCEEDED(rv)) {
-    rv = LoadURI(uri, principal);
+    rv = LoadURI(uri, principal, aOriginalSrc);
   }
 
   if (NS_FAILED(rv)) {
@@ -322,26 +323,29 @@ nsFrameLoader::FireErrorEvent()
 }
 
 void
-nsFrameLoader::LoadURI(nsIURI* aURI, ErrorResult& aRv)
+nsFrameLoader::LoadURI(nsIURI* aURI, bool aOriginalSrc, ErrorResult& aRv)
 {
-  nsresult rv = LoadURI(aURI);
+  nsresult rv = LoadURI(aURI, aOriginalSrc);
   if (NS_FAILED(rv)) {
     aRv.Throw(rv);
   }
 }
 
 NS_IMETHODIMP
-nsFrameLoader::LoadURI(nsIURI* aURI)
+nsFrameLoader::LoadURI(nsIURI* aURI, bool aOriginalSrc)
 {
-  return LoadURI(aURI, nullptr);
+  return LoadURI(aURI, nullptr, aOriginalSrc);
 }
 
 nsresult
-nsFrameLoader::LoadURI(nsIURI* aURI, nsIPrincipal* aTriggeringPrincipal)
+nsFrameLoader::LoadURI(nsIURI* aURI, nsIPrincipal* aTriggeringPrincipal,
+                       bool aOriginalSrc)
 {
   if (!aURI)
     return NS_ERROR_INVALID_POINTER;
   NS_ENSURE_STATE(!mDestroyCalled && mOwnerContent);
+
+  mLoadingOriginalSrc = aOriginalSrc;
 
   nsCOMPtr<nsIDocument> doc = mOwnerContent->OwnerDoc();
 
@@ -900,8 +904,9 @@ nsFrameLoader::ReallyStartLoadingInternal()
     // FIXME get error codes from child
     mRemoteBrowser->LoadURL(mURIToLoad);
 
-    if (!mRemoteBrowserShown && !ShowRemoteFrame(ScreenIntSize(0, 0))) {
-      NS_WARNING("[nsFrameLoader] ReallyStartLoadingInternal tried but couldn't show remote browser.\n");
+    if (!mRemoteBrowserShown) {
+      // This can fail if it's too early to show the frame, we will retry later.
+      Unused << ShowRemoteFrame(ScreenIntSize(0, 0));
     }
 
     return NS_OK;
@@ -921,6 +926,9 @@ nsFrameLoader::ReallyStartLoadingInternal()
   nsCOMPtr<nsIDocShellLoadInfo> loadInfo;
   mDocShell->CreateLoadInfo(getter_AddRefs(loadInfo));
   NS_ENSURE_TRUE(loadInfo, NS_ERROR_FAILURE);
+
+  loadInfo->SetOriginalFrameSrc(mLoadingOriginalSrc);
+  mLoadingOriginalSrc = false;
 
   // If this frame is sandboxed with respect to origin we will set it up with
   // a null principal later in nsDocShell::DoURILoad.
@@ -1122,15 +1130,8 @@ nsFrameLoader::AddTreeItemToTreeOwner(nsIDocShellTreeItem* aItem,
   NS_PRECONDITION(mOwnerContent, "Must have owning content");
 
   nsAutoString value;
-  bool isContent = false;
-  mOwnerContent->GetAttr(kNameSpaceID_None, TypeAttrName(), value);
-
-  // we accept "content" and "content-xxx" values.
-  // We ignore anything that comes after 'content-'.
-  isContent = value.LowerCaseEqualsLiteral("content") ||
-    StringBeginsWith(value, NS_LITERAL_STRING("content-"),
-                     nsCaseInsensitiveStringComparator());
-
+  bool isContent = mOwnerContent->AttrValueIs(
+    kNameSpaceID_None, TypeAttrName(), nsGkAtoms::content, eIgnoreCase);
 
   // Force mozbrowser frames to always be typeContent, even if the
   // mozbrowser interfaces are disabled.
@@ -1602,7 +1603,7 @@ nsFrameLoader::SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
 #ifdef XP_WIN
   // Native plugin windows used by this remote content need to be reparented.
   if (nsPIDOMWindowOuter* newWin = ourDoc->GetWindow()) {
-    RefPtr<nsIWidget> newParent = nsGlobalWindow::Cast(newWin)->GetMainWidget();
+    RefPtr<nsIWidget> newParent = nsGlobalWindowOuter::Cast(newWin)->GetMainWidget();
     const ManagedContainer<mozilla::plugins::PPluginWidgetParent>& plugins =
       aOther->mRemoteBrowser->ManagedPPluginWidgetParent();
     for (auto iter = plugins.ConstIter(); !iter.Done(); iter.Next()) {
@@ -3030,16 +3031,16 @@ nsFrameLoader::SetClipSubdocument(bool aClip)
   nsIFrame* frame = GetPrimaryFrameOfOwningContent();
   if (frame) {
     frame->InvalidateFrame();
-    frame->PresContext()->PresShell()->
+    frame->PresShell()->
       FrameNeedsReflow(frame, nsIPresShell::eResize, NS_FRAME_IS_DIRTY);
     nsSubDocumentFrame* subdocFrame = do_QueryFrame(frame);
     if (subdocFrame) {
       nsIFrame* subdocRootFrame = subdocFrame->GetSubdocumentRootFrame();
       if (subdocRootFrame) {
-        nsIFrame* subdocRootScrollFrame = subdocRootFrame->PresContext()->PresShell()->
+        nsIFrame* subdocRootScrollFrame = subdocRootFrame->PresShell()->
           GetRootScrollFrame();
         if (subdocRootScrollFrame) {
-          frame->PresContext()->PresShell()->
+          frame->PresShell()->
             FrameNeedsReflow(frame, nsIPresShell::eResize, NS_FRAME_IS_DIRTY);
         }
       }
@@ -3067,7 +3068,7 @@ nsFrameLoader::SetClampScrollPosition(bool aClamp)
     if (subdocFrame) {
       nsIFrame* subdocRootFrame = subdocFrame->GetSubdocumentRootFrame();
       if (subdocRootFrame) {
-        nsIScrollableFrame* subdocRootScrollFrame = subdocRootFrame->PresContext()->PresShell()->
+        nsIScrollableFrame* subdocRootScrollFrame = subdocRootFrame->PresShell()->
           GetRootScrollFrameAsScrollable();
         if (subdocRootScrollFrame) {
           subdocRootScrollFrame->ScrollTo(subdocRootScrollFrame->GetScrollPosition(), nsIScrollableFrame::INSTANT);
@@ -3174,12 +3175,8 @@ nsFrameLoader::TryRemoteBrowser()
       return false;
     }
 
-    nsAutoString value;
-    mOwnerContent->GetAttr(kNameSpaceID_None, nsGkAtoms::type, value);
-
-    if (!value.LowerCaseEqualsLiteral("content") &&
-        !StringBeginsWith(value, NS_LITERAL_STRING("content-"),
-                          nsCaseInsensitiveStringComparator())) {
+    if (!mOwnerContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+                                    nsGkAtoms::content, eIgnoreCase)) {
       return false;
     }
 
@@ -3740,13 +3737,7 @@ nsFrameLoader::AttributeChanged(nsIDocument* aDocument,
 #endif
 
   parentTreeOwner->ContentShellRemoved(mDocShell);
-
-  nsAutoString value;
-  aElement->GetAttr(kNameSpaceID_None, TypeAttrName(), value);
-
-  if (value.LowerCaseEqualsLiteral("content") ||
-      StringBeginsWith(value, NS_LITERAL_STRING("content-"),
-                       nsCaseInsensitiveStringComparator())) {
+  if (aElement->AttrValueIs(kNameSpaceID_None, TypeAttrName(), nsGkAtoms::content, eIgnoreCase)) {
     parentTreeOwner->ContentShellAdded(mDocShell, is_primary);
   }
 }
@@ -3840,8 +3831,8 @@ nsFrameLoader::Print(uint64_t aOuterWindowID,
     return success ? NS_OK : NS_ERROR_FAILURE;
   }
 
-  nsGlobalWindow* outerWindow =
-    nsGlobalWindow::GetOuterWindowWithId(aOuterWindowID);
+  nsGlobalWindowOuter* outerWindow =
+    nsGlobalWindowOuter::GetOuterWindowWithId(aOuterWindowID);
   if (NS_WARN_IF(!outerWindow)) {
     return NS_ERROR_FAILURE;
   }

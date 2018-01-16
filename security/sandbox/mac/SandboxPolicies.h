@@ -56,7 +56,6 @@ static const char contentSandboxRules[] = R"(
   (define hasProfileDir (param "HAS_SANDBOXED_PROFILE"))
   (define profileDir (param "PROFILE_DIR"))
   (define home-path (param "HOME_PATH"))
-  (define hasFilePrivileges (param "HAS_FILE_PRIVILEGES"))
   (define debugWriteDir (param "DEBUG_WRITE_DIR"))
   (define testingReadPath1 (param "TESTING_READ_PATH1"))
   (define testingReadPath2 (param "TESTING_READ_PATH2"))
@@ -71,18 +70,18 @@ static const char contentSandboxRules[] = R"(
   ; Allow read access to standard system paths.
   (allow file-read*
     (require-all (file-mode #o0004)
-      (require-any (subpath "/Library/Filesystems/NetFSPlugins")
+      (require-any
+        (subpath "/Library/Filesystems/NetFSPlugins")
+        (subpath "/Library/GPUBundles")
         (subpath "/System")
         (subpath "/usr/lib")
         (subpath "/usr/share"))))
 
+  ; Top-level directory metadata access (bug 1404298)
+  (allow file-read-metadata (regex #"^/[^/]+$"))
+
   (allow file-read-metadata
-    (literal "/etc")
-    (literal "/tmp")
-    (literal "/var")
     (literal "/private/etc/localtime")
-    (literal "/home")
-    (literal "/net")
     (regex #"^/private/tmp/KSInstallAction\."))
 
   ; Allow read access to standard special files.
@@ -130,6 +129,7 @@ static const char contentSandboxRules[] = R"(
       (sysctl-name "hw.cpufrequency_max")
       (sysctl-name "hw.l2cachesize")
       (sysctl-name "hw.l3cachesize")
+      (sysctl-name "hw.cachelinesize")
       (sysctl-name "hw.cachelinesize_compat")
       (sysctl-name "hw.tbfrequency_compat")
       (sysctl-name "hw.vectorunit")
@@ -155,15 +155,6 @@ static const char contentSandboxRules[] = R"(
 
   (define (profile-subpath profile-relative-subpath)
     (subpath (string-append profileDir profile-relative-subpath)))
-
-  (define (allow-shared-preferences-read domain)
-        (begin
-          (if (defined? `user-preference-read)
-            (allow user-preference-read (preference-domain domain)))
-          (allow file-read*
-                 (home-literal (string-append "/Library/Preferences/" domain ".plist"))
-                 (home-regex (string-append "/Library/Preferences/ByHost/" (regex-quote domain) "\..*\.plist$")))
-          ))
 
   (define (allow-shared-list domain)
     (allow file-read*
@@ -197,10 +188,10 @@ static const char contentSandboxRules[] = R"(
      (iokit-user-client-class "IOAudioEngineUserClient"))
 
 ; depending on systems, the 1st, 2nd or both rules are necessary
-  (allow-shared-preferences-read "com.apple.HIToolbox")
+  (allow user-preference-read (preference-domain "com.apple.HIToolbox"))
   (allow file-read-data (literal "/Library/Preferences/com.apple.HIToolbox.plist"))
 
-  (allow-shared-preferences-read "com.apple.ATS")
+  (allow user-preference-read (preference-domain "com.apple.ATS"))
   (allow file-read-data (literal "/Library/Preferences/.GlobalPreferences.plist"))
 
   (allow file-read*
@@ -220,6 +211,7 @@ static const char contentSandboxRules[] = R"(
       (home-subpath "/Library/Input Methods")
       (home-subpath "/Library/Spelling")
       (home-subpath "/Library/Application Support/Adobe/CoreSync/plugins/livetype")
+      (home-subpath "/Library/Application Support/FontAgent")
 
       (subpath appdir-path)
 
@@ -292,9 +284,6 @@ static const char contentSandboxRules[] = R"(
   ; level 3: Does not have any of it's own rules. The global rules provide:
   ;          no global read/write access,
   ;          read access permitted to $PROFILE/{extensions,chrome}
-  (if (string=? hasFilePrivileges "TRUE")
-    ; This process has blanket file read privileges
-    (allow file-read*))
 
   (if (string=? hasProfileDir "TRUE")
     ; we have a profile dir
@@ -303,8 +292,8 @@ static const char contentSandboxRules[] = R"(
       (profile-subpath "/chrome")))
 
 ; accelerated graphics
-  (allow-shared-preferences-read "com.apple.opengl")
-  (allow-shared-preferences-read "com.nvidia.OpenGL")
+  (allow user-preference-read (preference-domain "com.apple.opengl"))
+  (allow user-preference-read (preference-domain "com.nvidia.OpenGL"))
   (allow mach-lookup
       (global-name "com.apple.cvmsServ"))
   (allow iokit-open
@@ -345,7 +334,21 @@ static const char contentSandboxRules[] = R"(
   ; bug 1404919
   ; Read access (recursively) within directories ending in .fontvault
   (allow file-read* (regex #"\.fontvault/"))
+
+  ; bug 1429133
+  ; Read access to the default FontExplorer font directory
+  (allow file-read* (home-subpath "/FontExplorer X/Font Library"))
 )";
+
+static const char fileContentProcessAddend[] = R"(
+  ; This process has blanket file read privileges
+  (allow file-read*)
+
+  ; File content processes need access to iconservices to draw file icons in
+  ; directory listings
+  (allow mach-lookup (global-name "com.apple.iconservices"))
+)";
+
 
 }
 

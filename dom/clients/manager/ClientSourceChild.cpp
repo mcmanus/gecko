@@ -6,6 +6,7 @@
 
 #include "ClientSourceChild.h"
 
+#include "ClientSource.h"
 #include "ClientSourceOpChild.h"
 #include "mozilla/dom/ClientIPCTypes.h"
 #include "mozilla/Unused.h"
@@ -60,15 +61,21 @@ ClientSourceChild::SetOwner(ClientThing<ClientSourceChild>* aThing)
 {
   MOZ_DIAGNOSTIC_ASSERT(aThing);
   MOZ_DIAGNOSTIC_ASSERT(!mSource);
-  mSource = aThing;
+  mSource = static_cast<ClientSource*>(aThing);
 }
 
 void
 ClientSourceChild::RevokeOwner(ClientThing<ClientSourceChild>* aThing)
 {
   MOZ_DIAGNOSTIC_ASSERT(mSource);
-  MOZ_DIAGNOSTIC_ASSERT(mSource == aThing);
+  MOZ_DIAGNOSTIC_ASSERT(mSource == static_cast<ClientSource*>(aThing));
   mSource = nullptr;
+}
+
+ClientSource*
+ClientSourceChild::GetSource() const
+{
+  return mSource;
 }
 
 void

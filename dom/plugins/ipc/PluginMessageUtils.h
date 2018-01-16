@@ -9,6 +9,7 @@
 
 #include "ipc/IPCMessageUtils.h"
 #include "base/message_loop.h"
+#include "base/shared_memory.h"
 
 #include "mozilla/ipc/CrossProcessMutex.h"
 #include "mozilla/ipc/MessageChannel.h"
@@ -22,10 +23,9 @@
 #include "nsString.h"
 #include "nsTArray.h"
 #include "mozilla/Logging.h"
+#include "nsExceptionHandler.h"
 #include "nsHashKeys.h"
-#ifdef MOZ_CRASHREPORTER
-#  include "nsExceptionHandler.h"
-#endif
+
 #ifdef XP_MACOSX
 #include "PluginInterposeOSX.h"
 #else
@@ -374,30 +374,11 @@ struct ParamTraits<NPRect>
 };
 
 template <>
-struct ParamTraits<NPWindowType>
-{
-  typedef NPWindowType paramType;
-
-  static void Write(Message* aMsg, const paramType& aParam)
-  {
-    aMsg->WriteInt16(int16_t(aParam));
-  }
-
-  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
-  {
-    int16_t result;
-    if (aMsg->ReadInt16(aIter, &result)) {
-      *aResult = paramType(result);
-      return true;
-    }
-    return false;
-  }
-
-  static void Log(const paramType& aParam, std::wstring* aLog)
-  {
-    aLog->append(StringPrintf(L"%d", int16_t(aParam)));
-  }
-};
+struct ParamTraits<NPWindowType> :
+  public ContiguousEnumSerializerInclusive<NPWindowType,
+                                           NPWindowType::NPWindowTypeWindow,
+                                           NPWindowType::NPWindowTypeDrawable>
+{};
 
 template <>
 struct ParamTraits<mozilla::plugins::NPRemoteWindow>
@@ -671,76 +652,26 @@ struct ParamTraits<mozilla::plugins::IPCByteRange>
 };
 
 template <>
-struct ParamTraits<NPNVariable>
-{
-  typedef NPNVariable paramType;
+struct ParamTraits<NPNVariable> :
+  public ContiguousEnumSerializer<NPNVariable,
+                                  NPNVariable::NPNVxDisplay,
+                                  NPNVariable::NPNVLast>
+{};
 
-  static void Write(Message* aMsg, const paramType& aParam)
-  {
-    WriteParam(aMsg, int(aParam));
-  }
-
-  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
-  {
-    int intval;
-    if (ReadParam(aMsg, aIter, &intval)) {
-      *aResult = paramType(intval);
-      return true;
-    }
-    return false;
-  }
-};
+// The only accepted value is NPNURLVariable::NPNURLVProxy
+template<>
+struct ParamTraits<NPNURLVariable> :
+  public ContiguousEnumSerializerInclusive<NPNURLVariable,
+                                           NPNURLVariable::NPNURLVProxy,
+                                           NPNURLVariable::NPNURLVProxy>
+{};
 
 template<>
-struct ParamTraits<NPNURLVariable>
-{
-  typedef NPNURLVariable paramType;
-
-  static void Write(Message* aMsg, const paramType& aParam)
-  {
-    WriteParam(aMsg, int(aParam));
-  }
-
-  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
-  {
-    int intval;
-    if (ReadParam(aMsg, aIter, &intval) &&
-        intval == NPNURLVProxy) {
-      *aResult = paramType(intval);
-      return true;
-    }
-    return false;
-  }
-};
-
-
-template<>
-struct ParamTraits<NPCoordinateSpace>
-{
-  typedef NPCoordinateSpace paramType;
-
-  static void Write(Message* aMsg, const paramType& aParam)
-  {
-    WriteParam(aMsg, int32_t(aParam));
-  }
-
-  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
-  {
-    int32_t intval;
-    if (ReadParam(aMsg, aIter, &intval)) {
-      switch (intval) {
-      case NPCoordinateSpacePlugin:
-      case NPCoordinateSpaceWindow:
-      case NPCoordinateSpaceFlippedWindow:
-      case NPCoordinateSpaceScreen:
-      case NPCoordinateSpaceFlippedScreen:
-        *aResult = paramType(intval);
-        return true;
-      }
-    }
-    return false;
-  }
-};
+struct ParamTraits<NPCoordinateSpace> :
+  public ContiguousEnumSerializerInclusive<NPCoordinateSpace,
+                                           NPCoordinateSpace::NPCoordinateSpacePlugin,
+                                           NPCoordinateSpace::NPCoordinateSpaceFlippedScreen>
+{};
 
 template <>
 struct ParamTraits<mozilla::plugins::NPAudioDeviceChangeDetailsIPC>
@@ -872,31 +803,11 @@ struct ParamTraits<mozilla::plugins::_OpenFileNameRetIPC>
 };
 
 template <>
-struct ParamTraits<mozilla::plugins::GetFileNameFunc>
-{
-  typedef mozilla::plugins::GetFileNameFunc paramType;
-
-  static void Write(Message* aMsg, const paramType& aParam)
-  {
-    WriteParam(aMsg, static_cast<uint32_t>(aParam));
-  }
-
-  static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
-  {
-    uint32_t result;
-    if (ReadParam(aMsg, aIter, &result)) {
-      *aResult = static_cast<paramType>(result);
-      return true;
-    }
-    return false;
-  }
-
-  static void Log(const paramType& aParam, std::wstring* aLog)
-  {
-    aLog->append(StringPrintf(L"[%S]",
-                 aParam == mozilla::plugins::OPEN_FUNC ? "GetOpenFileName" : "GetSaveFileName"));
-  }
-};
+struct ParamTraits<mozilla::plugins::GetFileNameFunc> :
+  public ContiguousEnumSerializerInclusive<mozilla::plugins::GetFileNameFunc,
+                                           mozilla::plugins::OPEN_FUNC,
+                                           mozilla::plugins::SAVE_FUNC>
+{};
 #endif  // XP_WIN
 
 } /* namespace IPC */

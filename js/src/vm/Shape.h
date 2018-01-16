@@ -235,6 +235,7 @@ class ShapeTable {
   public:
     friend class NativeObject;
     friend class BaseShape;
+    friend class Shape;
     static const uint32_t MIN_ENTRIES   = 11;
 
     class Entry {
@@ -635,7 +636,7 @@ struct StackBaseShape : public DefaultHasher<ReadBarriered<UnownedBaseShape*>>
         clasp(base->clasp_)
     {}
 
-    inline StackBaseShape(JSContext* cx, const Class* clasp, uint32_t objectFlags);
+    inline StackBaseShape(const Class* clasp, uint32_t objectFlags);
     explicit inline StackBaseShape(Shape* shape);
 
     struct Lookup
@@ -761,7 +762,8 @@ class Shape : public gc::TenuredCell
     template<MaybeAdding Adding = MaybeAdding::NotAdding>
     static inline MOZ_MUST_USE bool search(JSContext* cx, Shape* start, jsid id,
                                            const AutoKeepShapeTables&,
-                                           Shape** pshape, ShapeTable::Entry** pentry);
+                                           Shape** pshape, ShapeTable** ptable,
+                                           ShapeTable::Entry** pentry);
 
     static inline Shape* searchNoHashify(Shape* start, jsid id);
 
@@ -800,6 +802,9 @@ class Shape : public gc::TenuredCell
     bool makeOwnBaseShape(JSContext* cx);
 
     MOZ_ALWAYS_INLINE MOZ_MUST_USE bool maybeCreateTableForLookup(JSContext* cx);
+
+    MOZ_ALWAYS_INLINE void updateDictionaryTable(ShapeTable* table, ShapeTable::Entry* entry,
+                                                 const AutoKeepShapeTables& keep);
 
   public:
     bool hasTable() const { return base()->hasTable(); }
@@ -990,17 +995,15 @@ class Shape : public gc::TenuredCell
         return flags & OVERWRITTEN;
     }
 
-    void update(GetterOp getter, SetterOp setter, uint8_t attrs);
-
     bool matches(const Shape* other) const {
         return propid_.get() == other->propid_.get() &&
-               matchesParamsAfterId(other->base(), other->maybeSlot(), other->attrs, other->flags,
+               matchesParamsAfterId(other->base(), other->maybeSlot(), other->attrs,
                                     other->getter(), other->setter());
     }
 
     inline bool matches(const StackShape& other) const;
 
-    bool matchesParamsAfterId(BaseShape* base, uint32_t aslot, unsigned aattrs, unsigned aflags,
+    bool matchesParamsAfterId(BaseShape* base, uint32_t aslot, unsigned aattrs,
                               GetterOp rawGetter, SetterOp rawSetter) const
     {
         return base->unowned() == this->base()->unowned() &&
@@ -1147,6 +1150,7 @@ class Shape : public gc::TenuredCell
 
 #ifdef DEBUG
     void dump(js::GenericPrinter& out) const;
+    void dump() const;
     void dumpSubtree(int level, js::GenericPrinter& out) const;
 #endif
 
@@ -1443,14 +1447,14 @@ struct StackShape
     uint8_t flags;
 
     explicit StackShape(UnownedBaseShape* base, jsid propid, uint32_t slot,
-                        unsigned attrs, unsigned flags)
+                        unsigned attrs)
       : base(base),
         propid(propid),
         rawGetter(nullptr),
         rawSetter(nullptr),
         slot_(slot),
         attrs(uint8_t(attrs)),
-        flags(uint8_t(flags))
+        flags(0)
     {
         MOZ_ASSERT(base);
         MOZ_ASSERT(!JSID_IS_VOID(propid));
@@ -1623,7 +1627,7 @@ inline bool
 Shape::matches(const StackShape& other) const
 {
     return propid_.get() == other.propid &&
-           matchesParamsAfterId(other.base, other.slot_, other.attrs, other.flags,
+           matchesParamsAfterId(other.base, other.slot_, other.attrs,
                                 other.rawGetter, other.rawSetter);
 }
 

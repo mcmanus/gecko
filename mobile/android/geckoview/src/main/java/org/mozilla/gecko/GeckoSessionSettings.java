@@ -84,12 +84,6 @@ public final class GeckoSessionSettings implements Parcelable {
     public static final Key<Boolean> USE_REMOTE_DEBUGGER =
         new Key<Boolean>("useRemoteDebugger");
 
-    public static final Key<String> DEBUGGER_SOCKET_DIR =
-        new Key<String>("debuggerSocketDir");
-
-    /* package */ static final Key<String> DATA_DIR =
-        new Key<String>("dataDir", /* initOnly */ true, /* values */ null);
-
     private final GeckoSession mSession;
     private final GeckoBundle mBundle;
 
@@ -108,7 +102,6 @@ public final class GeckoSessionSettings implements Parcelable {
         mBundle.putBoolean(USE_MULTIPROCESS.name, true);
         mBundle.putInt(DISPLAY_MODE.name, DISPLAY_MODE_BROWSER);
         mBundle.putBoolean(USE_REMOTE_DEBUGGER.name, false);
-        mBundle.putString(DEBUGGER_SOCKET_DIR.name, null);
     }
 
     /* package */ GeckoSessionSettings(final GeckoSessionSettings settings,
@@ -164,6 +157,11 @@ public final class GeckoSessionSettings implements Parcelable {
 
     /* package */ GeckoBundle asBundle() {
         return mBundle;
+    }
+
+    @Override
+    public String toString() {
+        return mBundle.toString();
     }
 
     private <T> boolean valueChangedLocked(final Key<T> key, T value) {

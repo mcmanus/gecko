@@ -4,8 +4,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "ImageLogging.h"
 #include "imgRequestProxy.h"
+
+#include "ImageLogging.h"
 #include "imgLoader.h"
 #include "Image.h"
 #include "ImageOps.h"
@@ -14,8 +15,10 @@
 #include "imgINotificationObserver.h"
 #include "mozilla/dom/TabGroup.h"       // for TabGroup
 #include "mozilla/dom/DocGroup.h"       // for DocGroup
+#include "mozilla/Move.h"
 #include "mozilla/Telemetry.h"          // for Telemetry
 
+using namespace mozilla;
 using namespace mozilla::image;
 
 // The split of imgRequestProxy and imgRequestProxyStatic means that
@@ -515,12 +518,18 @@ imgRequestProxy::CancelAndForgetObserver(nsresult aStatus)
   LOG_SCOPE(gImgLog, "imgRequestProxy::CancelAndForgetObserver");
 
   mCanceled = true;
+  mForceDispatchLoadGroup = true;
 
-  if (GetOwner()) {
-    GetOwner()->RemoveProxy(this, aStatus);
+  imgRequest* owner = GetOwner();
+  if (owner) {
+    imgCacheValidator* validator = owner->GetValidator();
+    if (validator) {
+      validator->RemoveProxy(this);
+    }
+
+    owner->RemoveProxy(this, aStatus);
   }
 
-  mForceDispatchLoadGroup = true;
   RemoveFromLoadGroup();
   mForceDispatchLoadGroup = false;
 
@@ -736,13 +745,13 @@ imgRequestProxy::GetURI(nsIURI** aURI)
 }
 
 nsresult
-imgRequestProxy::GetCurrentURI(nsIURI** aURI)
+imgRequestProxy::GetFinalURI(nsIURI** aURI)
 {
   if (!GetOwner()) {
     return NS_ERROR_FAILURE;
   }
 
-  return GetOwner()->GetCurrentURI(aURI);
+  return GetOwner()->GetFinalURI(aURI);
 }
 
 nsresult

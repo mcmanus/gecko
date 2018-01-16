@@ -17,7 +17,7 @@ interface HTMLMediaElement : HTMLElement {
   readonly attribute MediaError? error;
 
   // network state
-  [CEReactions, NeedsSubjectPrincipal, SetterThrows]
+  [CEReactions, SetterNeedsSubjectPrincipal=NonSystem, SetterThrows]
            attribute DOMString src;
   readonly attribute DOMString currentSrc;
 
@@ -107,13 +107,17 @@ partial interface HTMLMediaElement {
   [Func="HasDebuggerOrTabsPrivilege", NewObject]
   Promise<DOMString> mozRequestDebugInfo();
 
+  [Func="HasDebuggerOrTabsPrivilege", NewObject]
+  static void mozEnableDebugLog();
+  [Func="HasDebuggerOrTabsPrivilege", NewObject]
+  Promise<DOMString> mozRequestDebugLog();
+
   [Pref="media.test.dumpDebugInfo"]
   Promise<void> mozDumpDebugInfo();
 
   attribute MediaStream? srcObject;
 
   attribute boolean mozPreservesPitch;
-  readonly attribute boolean mozAutoplayEnabled;
 
   // NB: for internal use with the video controls:
   [Func="IsChromeOrXBL"] attribute boolean mozAllowCasting;

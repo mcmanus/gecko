@@ -137,6 +137,7 @@ bool
 HTMLFrameSetElement::ParseAttribute(int32_t aNamespaceID,
                                     nsAtom* aAttribute,
                                     const nsAString& aValue,
+                                    nsIPrincipal* aMaybeScriptedPrincipal,
                                     nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -152,7 +153,7 @@ HTMLFrameSetElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 nsChangeHint
@@ -319,7 +320,7 @@ HTMLFrameSetElement::IsEventAttributeNameInternal(nsAtom *aName)
   HTMLFrameSetElement::GetOn##name_()                                          \
   {                                                                            \
     if (nsPIDOMWindowInner* win = OwnerDoc()->GetInnerWindow()) {              \
-      nsGlobalWindow* globalWin = nsGlobalWindow::Cast(win);                   \
+      nsGlobalWindowInner* globalWin = nsGlobalWindowInner::Cast(win);         \
       return globalWin->GetOn##name_();                                        \
     }                                                                          \
     return nullptr;                                                            \
@@ -332,7 +333,7 @@ HTMLFrameSetElement::IsEventAttributeNameInternal(nsAtom *aName)
       return;                                                                  \
     }                                                                          \
                                                                                \
-    nsGlobalWindow* globalWin = nsGlobalWindow::Cast(win);                     \
+    nsGlobalWindowInner* globalWin = nsGlobalWindowInner::Cast(win);           \
     return globalWin->SetOn##name_(handler);                                   \
   }
 #define WINDOW_EVENT(name_, id_, type_, struct_)                               \

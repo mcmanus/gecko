@@ -9,11 +9,6 @@ Cu.import("resource://services-sync/engines/bookmarks.js");
 Cu.import("resource://services-sync/service.js");
 
 const kDBName = "places.sqlite";
-const storageSvc = Cc["@mozilla.org/storage/service;1"]
-                     .getService(Ci.mozIStorageService);
-
-const fxuri = CommonUtils.makeURI("http://getfirefox.com/");
-const tburi = CommonUtils.makeURI("http://getthunderbird.com/");
 
 function setPlacesDatabase(aFileName) {
   removePlacesDatabase();
@@ -46,17 +41,17 @@ add_test(function test_initial_state() {
   // it to be.
   let dbFile = gSyncProfile.clone();
   dbFile.append(kDBName);
-  let db = storageSvc.openUnsharedDatabase(dbFile);
+  let db = Services.storage.openUnsharedDatabase(dbFile);
 
   let stmt = db.createStatement("PRAGMA journal_mode");
-  do_check_true(stmt.executeStep());
+  Assert.ok(stmt.executeStep());
   // WAL journal mode should have been unset this database when it was migrated
   // down to v10.
-  do_check_neq(stmt.getString(0).toLowerCase(), "wal");
+  Assert.notEqual(stmt.getString(0).toLowerCase(), "wal");
   stmt.finalize();
 
-  do_check_true(db.indexExists("moz_bookmarks_guid_uniqueindex"));
-  do_check_true(db.indexExists("moz_places_guid_uniqueindex"));
+  Assert.ok(db.indexExists("moz_bookmarks_guid_uniqueindex"));
+  Assert.ok(db.indexExists("moz_places_guid_uniqueindex"));
 
   // There should be a non-zero amount of bookmarks without a guid.
   stmt = db.createStatement(
@@ -64,8 +59,8 @@ add_test(function test_initial_state() {
   + "FROM moz_bookmarks "
   + "WHERE guid IS NULL "
   );
-  do_check_true(stmt.executeStep());
-  do_check_neq(stmt.getInt32(0), 0);
+  Assert.ok(stmt.executeStep());
+  Assert.notEqual(stmt.getInt32(0), 0);
   stmt.finalize();
 
   // There should be a non-zero amount of places without a guid.
@@ -74,12 +69,12 @@ add_test(function test_initial_state() {
   + "FROM moz_places "
   + "WHERE guid IS NULL "
   );
-  do_check_true(stmt.executeStep());
-  do_check_neq(stmt.getInt32(0), 0);
+  Assert.ok(stmt.executeStep());
+  Assert.notEqual(stmt.getInt32(0), 0);
   stmt.finalize();
 
   // Check our schema version to make sure it is actually at 10.
-  do_check_eq(db.schemaVersion, 10);
+  Assert.equal(db.schemaVersion, 10);
 
   db.close();
 
@@ -93,26 +88,26 @@ add_task(async function test_history_guids() {
 
   let places = [
     {
-      uri: fxuri,
+      url: "http://getfirefox.com/",
       title: "Get Firefox!",
       visits: [{
-        visitDate: Date.now() * 1000,
-        transitionType: Ci.nsINavHistoryService.TRANSITION_LINK
+        date: new Date(),
+        transition: Ci.nsINavHistoryService.TRANSITION_LINK
       }]
     },
     {
-      uri: tburi,
+      url: "http://getthunderbird.com/",
       title: "Get Thunderbird!",
       visits: [{
-        visitDate: Date.now() * 1000,
-        transitionType: Ci.nsINavHistoryService.TRANSITION_LINK
+        date: new Date(),
+        transition: Ci.nsINavHistoryService.TRANSITION_LINK
       }]
     }
   ];
 
   async function onVisitAdded() {
-    let fxguid = await store.GUIDForUri(fxuri, true);
-    let tbguid = await store.GUIDForUri(tburi, true);
+    let fxguid = await store.GUIDForUri("http://getfirefox.com/", true);
+    let tbguid = await store.GUIDForUri("http://getthunderbird.com/", true);
     dump("fxguid: " + fxguid + "\n");
     dump("tbguid: " + tbguid + "\n");
 
@@ -122,85 +117,74 @@ add_task(async function test_history_guids() {
       "SELECT id FROM moz_places WHERE guid = :guid",
       {guid: fxguid}
     );
-    do_check_eq(result.length, 1);
+    Assert.equal(result.length, 1);
 
     result = await db.execute(
       "SELECT id FROM moz_places WHERE guid = :guid",
       {guid: tbguid}
     );
-    do_check_eq(result.length, 1);
+    Assert.equal(result.length, 1);
 
     _("History: Verify GUIDs weren't added to annotations.");
     result = await db.execute(
       "SELECT a.content AS guid FROM moz_annos a WHERE guid = :guid",
       {guid: fxguid}
     );
-    do_check_eq(result.length, 0);
+    Assert.equal(result.length, 0);
 
     result = await db.execute(
       "SELECT a.content AS guid FROM moz_annos a WHERE guid = :guid",
       {guid: tbguid}
     );
-    do_check_eq(result.length, 0);
+    Assert.equal(result.length, 0);
   }
 
-  await new Promise((resolve, reject) => {
-    PlacesUtils.asyncHistory.updatePlaces(places, {
-      handleError: function handleError() {
-        do_throw("Unexpected error in adding visit.");
-      },
-      handleResult: function handleResult() {},
-      handleCompletion: () => { onVisitAdded().then(resolve, reject); },
-    });
-  });
+  await PlacesUtils.history.insertMany(places);
+  await onVisitAdded();
 });
 
 add_task(async function test_bookmark_guids() {
-  let engine = new BookmarksEngine(Service);
-  let store = engine._store;
-
-  let fxid = PlacesUtils.bookmarks.insertBookmark(
-    PlacesUtils.bookmarks.toolbarFolder,
-    fxuri,
-    PlacesUtils.bookmarks.DEFAULT_INDEX,
-    "Get Firefox!");
-  let tbid = PlacesUtils.bookmarks.insertBookmark(
-    PlacesUtils.bookmarks.toolbarFolder,
-    tburi,
-    PlacesUtils.bookmarks.DEFAULT_INDEX,
-    "Get Thunderbird!");
-
-  let fxguid = await store.GUIDForId(fxid);
-  let tbguid = await store.GUIDForId(tbid);
+  let fx = await PlacesUtils.bookmarks.insert({
+    parentGuid: PlacesUtils.bookmarks.toolbarGuid,
+    url: "http://getfirefox.com/",
+    title: "Get Firefox!",
+  });
+  let fxid = await PlacesUtils.promiseItemId(fx.guid);
+  let tb = await PlacesUtils.bookmarks.insert({
+    parentGuid: PlacesUtils.bookmarks.toolbarGuid,
+    url: "http://getthunderbird.com/",
+    title: "Get Thunderbird!",
+  });
+  let tbid = await PlacesUtils.promiseItemId(tb.guid);
 
   _("Bookmarks: Verify GUIDs are added to the guid column.");
   let db = await PlacesUtils.promiseDBConnection();
   let result = await db.execute(
     "SELECT id FROM moz_bookmarks WHERE guid = :guid",
-    {guid: fxguid}
+    {guid: fx.guid}
   );
-  do_check_eq(result.length, 1);
-  do_check_eq(result[0].getResultByName("id"), fxid);
+  Assert.equal(result.length, 1);
+  Assert.equal(result[0].getResultByName("id"), fxid);
 
   result = await db.execute(
     "SELECT id FROM moz_bookmarks WHERE guid = :guid",
-    {guid: tbguid}
+    {guid: tb.guid}
   );
-  do_check_eq(result.length, 1);
-  do_check_eq(result[0].getResultByName("id"), tbid);
+  Assert.equal(result.length, 1);
+  Assert.equal(result[0].getResultByName("id"), tbid);
 
   _("Bookmarks: Verify GUIDs weren't added to annotations.");
   result = await db.execute(
     "SELECT a.content AS guid FROM moz_items_annos a WHERE guid = :guid",
-    {guid: fxguid}
+    {guid: fx.guid}
   );
-  do_check_eq(result.length, 0);
+  Assert.equal(result.length, 0);
 
   result = await db.execute(
     "SELECT a.content AS guid FROM moz_items_annos a WHERE guid = :guid",
-    {guid: tbguid}
+    {guid: tb.guid}
   );
-  do_check_eq(result.length, 0);
+  Assert.equal(result.length, 0);
 });
 
 function run_test() {

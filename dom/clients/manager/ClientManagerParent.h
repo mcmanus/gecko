@@ -11,8 +11,12 @@
 namespace mozilla {
 namespace dom {
 
+class ClientManagerService;
+
 class ClientManagerParent final : public PClientManagerParent
 {
+  RefPtr<ClientManagerService> mService;
+
   // PClientManagerParent interface
   mozilla::ipc::IPCResult
   RecvTeardown() override;
@@ -52,9 +56,16 @@ class ClientManagerParent final : public PClientManagerParent
   bool
   DeallocPClientSourceParent(PClientSourceParent* aActor) override;
 
+  mozilla::ipc::IPCResult
+  RecvPClientSourceConstructor(PClientSourceParent* aActor,
+                               const ClientSourceConstructorArgs& aArgs) override;
+
 public:
   ClientManagerParent();
   ~ClientManagerParent();
+
+  void
+  Init();
 };
 
 } // namespace dom

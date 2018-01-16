@@ -410,7 +410,7 @@ private:
   IMENotification mPendingLayoutChange;
   IMENotification mPendingCompositionUpdate;
 
-#ifdef MOZ_CRASHREPORTER
+#if MOZ_DIAGNOSTIC_ASSERT_ENABLED
   // Log of event messages to be output to crash report.
   nsTArray<EventMessage> mDispatchedEventMessages;
   nsTArray<EventMessage> mReceivedEventMessages;
@@ -450,7 +450,7 @@ private:
   }
   nsTArray<RequestIMEToCommitCompositionResult>
     mRequestIMEToCommitCompositionResults;
-#endif // #ifdef MOZ_CRASHREPORTER
+#endif // MOZ_DIAGNOSTIC_ASSERT_ENABLED
 
   // mTabParent is owner of the instance.
   dom::TabParent& MOZ_NON_OWNING_REF mTabParent;
@@ -478,14 +478,17 @@ private:
   // mPendingCompositionCount is number of compositions which started in widget
   // but not yet handled in the child process.
   uint8_t mPendingCompositionCount;
+  // mPendingCommitCount is number of eCompositionCommit(AsIs) events which
+  // were sent to the child process but not yet handled in it.
+  uint8_t mPendingCommitCount;
   // mWidgetHasComposition is true when the widget in this process thinks that
   // IME has composition.  So, this is set to true when eCompositionStart is
   // dispatched and set to false when eCompositionCommit(AsIs) is dispatched.
   bool mWidgetHasComposition;
-  // mIsPendingLastCommitEvent is true only when this sends
-  // eCompositionCommit(AsIs) event to the remote process but it's not handled
-  // in the remote process yet.
-  bool mIsPendingLastCommitEvent;
+  // mIsChildIgnoringCompositionEvents is set to true if the child process
+  // requests commit composition whose commit has already been sent to it.
+  // Then, set to false when the child process ignores the commit event.
+  bool mIsChildIgnoringCompositionEvents;
 
   ContentCacheInParent() = delete;
 
@@ -507,7 +510,7 @@ private:
 
   void FlushPendingNotifications(nsIWidget* aWidget);
 
-#ifdef MOZ_CRASHREPORTER
+#if MOZ_DIAGNOSTIC_ASSERT_ENABLED
   /**
    * Remove unnecessary messages from mDispatchedEventMessages and
    * mReceivedEventMessages.
@@ -518,7 +521,7 @@ private:
    * Append event message log to aLog.
    */
   void AppendEventMessageLog(nsACString& aLog) const;
-#endif // #ifdef MOZ_CRASHREPORTER
+#endif // #if MOZ_DIAGNOSTIC_ASSERT_ENABLED
 };
 
 } // namespace mozilla

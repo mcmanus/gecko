@@ -103,10 +103,6 @@ function removeCustomToolbars() {
   gAddedToolbars.clear();
 }
 
-function getToolboxCustomToolbarId(toolbarName) {
-  return "__customToolbar_" + toolbarName.replace(" ", "_");
-}
-
 function resetCustomization() {
   return CustomizableUI.reset();
 }
@@ -123,10 +119,6 @@ function removeNonReleaseButtons(areaPanelPlacements) {
 
 function removeNonOriginalButtons() {
   CustomizableUI.removeWidgetFromArea("sync-button");
-}
-
-function restoreNonOriginalButtons() {
-  CustomizableUI.addWidgetToArea("sync-button", CustomizableUI.AREA_PANEL);
 }
 
 function assertAreaPlacements(areaId, expectedPlacements) {
@@ -290,7 +282,7 @@ function promisePanelElementHidden(win, aPanel) {
     function onPanelClose(e) {
       aPanel.removeEventListener("popuphidden", onPanelClose);
       win.clearTimeout(timeoutId);
-      resolve();
+      executeSoon(resolve);
     }
     aPanel.addEventListener("popuphidden", onPanelClose);
   });
@@ -405,7 +397,7 @@ function promiseTabHistoryNavigation(aDirection = -1, aConditionFn) {
     }
     gBrowser.addEventListener("pageshow", listener, true);
 
-    content.history.go(aDirection);
+    gBrowser.contentWindowAsCPOW.history.go(aDirection);
 
   });
 }

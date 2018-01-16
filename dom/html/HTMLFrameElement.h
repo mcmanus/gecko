@@ -31,6 +31,7 @@ public:
   virtual bool ParseAttribute(int32_t aNamespaceID,
                               nsAtom* aAttribute,
                               const nsAString& aValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
                               nsAttrValue& aResult) override;
   virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
                          bool aPreallocateChildren) const override;
@@ -99,11 +100,11 @@ public:
     SetHTMLAttr(nsGkAtoms::scrolling, aScrolling, aError);
   }
 
-  void GetSrc(nsString& aSrc, nsIPrincipal&)
+  void GetSrc(nsString& aSrc)
   {
     GetURIAttr(nsGkAtoms::src, nullptr, aSrc);
   }
-  void SetSrc(const nsAString& aSrc, nsIPrincipal& aTriggeringPrincipal, ErrorResult& aError)
+  void SetSrc(const nsAString& aSrc, nsIPrincipal* aTriggeringPrincipal, ErrorResult& aError)
   {
     SetHTMLAttr(nsGkAtoms::src, aSrc, aTriggeringPrincipal, aError);
   }

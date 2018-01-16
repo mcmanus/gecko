@@ -24,11 +24,13 @@ impl Example for App {
         _api: &RenderApi,
         builder: &mut DisplayListBuilder,
         _resources: &mut ResourceUpdates,
-        layout_size: LayoutSize,
+        _framebuffer_size: DeviceUintSize,
         _pipeline_id: PipelineId,
         _document_id: DocumentId,
     ) {
-        let info = LayoutPrimitiveInfo::new(LayoutRect::new(LayoutPoint::zero(), layout_size));
+        let info = LayoutPrimitiveInfo::new(
+            LayoutRect::new(LayoutPoint::zero(), builder.content_size())
+        );
         builder.push_stacking_context(
             &info,
             ScrollPolicy::Scrollable,
@@ -111,7 +113,8 @@ impl Example for App {
                 (50, 350).by(50, 50),
                 SideOffsets2D::new(Some(10.0), None, Some(10.0), None),
                 StickyOffsetBounds::new(-40.0, 60.0),
-                StickyOffsetBounds::new(0.0, 0.0)
+                StickyOffsetBounds::new(0.0, 0.0),
+                LayoutVector2D::new(0.0, 0.0)
             );
 
             builder.push_clip_id(sticky_id);

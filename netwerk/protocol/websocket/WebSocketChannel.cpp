@@ -25,7 +25,7 @@
 #include "nsIDNSRecord.h"
 #include "nsIDNSService.h"
 #include "nsIStreamConverterService.h"
-#include "nsIIOService2.h"
+#include "nsIIOService.h"
 #include "nsIProtocolProxyService.h"
 #include "nsIProxyInfo.h"
 #include "nsIProxiedChannel.h"
@@ -1047,13 +1047,6 @@ public:
   {
     MOZ_ASSERT(mMsgType == kMsgTypeStream, "Not a stream!");
 
-#ifdef DEBUG
-    // Make sure we got correct length from Blob
-    uint64_t bytes;
-    mMsg.pStream->Available(&bytes);
-    NS_ASSERTION(bytes == mLength, "Stream length != blob length!");
-#endif
-
     nsAutoPtr<nsCString> temp(new nsCString());
     nsresult rv = NS_ReadInputStreamToString(mMsg.pStream, *temp, mLength);
 
@@ -2058,6 +2051,10 @@ WebSocketChannel::PrimeNewOutgoingMessage()
   if (!mCurrentOut)
     return;
 
+  auto cleanupAfterFailure = MakeScopeExit([&] {
+    DeleteCurrentOutGoingMessage();
+  });
+
   WsMsgType msgType = mCurrentOut->GetMsgType();
 
   LOG(("WebSocketChannel::PrimeNewOutgoingMessage "
@@ -2077,6 +2074,7 @@ WebSocketChannel::PrimeNewOutgoingMessage()
     if (mClientClosed) {
       DeleteCurrentOutGoingMessage();
       PrimeNewOutgoingMessage();
+      cleanupAfterFailure.release();
       return;
     }
 
@@ -2265,6 +2263,8 @@ WebSocketChannel::PrimeNewOutgoingMessage()
   // mCurrentOut->Length() bytes from mCurrentOut. The latter may be
   // coaleseced into the former for small messages or as the result of the
   // compression process.
+
+  cleanupAfterFailure.release();
 }
 
 void
@@ -3475,15 +3475,9 @@ WebSocketChannel::AsyncOpen(nsIURI *aURI,
     return rv;
   }
 
-  nsCOMPtr<nsIIOService2> io2 = do_QueryInterface(ioService, &rv);
-  if (NS_FAILED(rv)) {
-    NS_WARNING("WebSocketChannel: unable to continue without ioservice2");
-    return rv;
-  }
-
   // Ideally we'd call newChannelFromURIWithLoadInfo here, but that doesn't
   // allow setting proxy uri/flags
-  rv = io2->NewChannelFromURIWithProxyFlags2(
+  rv = ioService->NewChannelFromURIWithProxyFlags2(
               localURI,
               mURI,
               nsIProtocolProxyService::RESOLVE_PREFER_HTTPS_PROXY |

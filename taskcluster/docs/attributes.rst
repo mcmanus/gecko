@@ -186,3 +186,20 @@ optimization even if the ``optimize_target_tasks`` parameter is False.
 This is meant to be used for tasks which a developer would almost always want to
 run. Typically these tasks will be short running and have a high risk of causing
 a backout. For example ``lint`` or ``python-unittest`` tasks.
+
+shipping_product
+================
+For release promotion jobs, this is the product we are shipping.
+
+shipping_phase
+==============
+For release promotion jobs, this is the shipping phase (build, promote, push, ship).
+During the build phase, we build and sign shippable builds. During the promote phase,
+we generate l10n repacks and push to the candidates directory. During the push phase,
+we push to the releases directory. During the ship phase, we update bouncer, push to
+Google Play, version bump, mark as shipped in ship-it.
+
+Using the "snowman model", we depend on previous graphs if they're defined. So if we
+ask for a ``push`` (the head of the snowman) and point at the body and base, we only
+build the head. If we don't point at the body and base, we build the whole snowman
+(build, promote, push).

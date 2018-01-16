@@ -74,8 +74,6 @@ this.BrowserUtils = {
    * safe mode if it is already in safe mode.
    */
   restartApplication() {
-    let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"]
-                       .getService(Ci.nsIAppStartup);
     let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
                        .createInstance(Ci.nsISupportsPRBool);
     Services.obs.notifyObservers(cancelQuit, "quit-application-requested", "restart");
@@ -84,10 +82,10 @@ this.BrowserUtils = {
     }
     // if already in safe mode restart in safe mode
     if (Services.appinfo.inSafeMode) {
-      appStartup.restartInSafeMode(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
+      Services.startup.restartInSafeMode(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
       return undefined;
     }
-    appStartup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
+    Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
     return undefined;
   },
 
@@ -492,8 +490,6 @@ this.BrowserUtils = {
     let selectionStr = selection.toString();
     let fullText;
 
-    let collapsed = selection.isCollapsed;
-
     let url;
     let linkText;
 
@@ -503,9 +499,12 @@ this.BrowserUtils = {
       if (ChromeUtils.getClassName(focusedElement) === "HTMLTextAreaElement" ||
           (focusedElement instanceof Ci.nsIDOMHTMLInputElement &&
            focusedElement.mozIsTextField(true))) {
-        selectionStr = focusedElement.editor.selection.toString();
+        selection = focusedElement.editor.selection;
+        selectionStr = selection.toString();
       }
     }
+
+    let collapsed = selection.isCollapsed;
 
     if (selectionStr) {
       // Have some text, let's figure out if it looks like a URL that isn't
@@ -550,10 +549,8 @@ this.BrowserUtils = {
         }
 
         if (delimitedAtStart && delimitedAtEnd) {
-          let uriFixup = Cc["@mozilla.org/docshell/urifixup;1"]
-                           .getService(Ci.nsIURIFixup);
           try {
-            url = uriFixup.createFixupURI(linkText, uriFixup.FIXUP_FLAG_NONE);
+            url = Services.uriFixup.createFixupURI(linkText, Services.uriFixup.FIXUP_FLAG_NONE);
           } catch (ex) {}
         }
       }

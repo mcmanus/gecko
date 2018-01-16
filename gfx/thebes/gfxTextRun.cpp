@@ -29,8 +29,6 @@
 #include "gfxWindowsPlatform.h"
 #endif
 
-#include "cairo.h"
-
 using namespace mozilla;
 using namespace mozilla::gfx;
 using namespace mozilla::unicode;
@@ -814,14 +812,11 @@ gfxTextRun::AccumulatePartialLigatureMetrics(gfxFont *aFont, Range aRange,
     // Where we are going to start "drawing" relative to our left baseline origin
     gfxFloat origin = IsRightToLeft() ? metrics.mAdvanceWidth - data.mPartAdvance : 0;
     ClipPartialLigature(this, &bboxLeft, &bboxRight, origin, &data);
-    metrics.mBoundingBox.x = bboxLeft;
-    metrics.mBoundingBox.width = bboxRight - bboxLeft;
+    metrics.mBoundingBox.SetBoxX(bboxLeft, bboxRight);
 
     // mBoundingBox is now relative to the left baseline origin for the entire
     // ligature. Shift it left.
-    metrics.mBoundingBox.x -=
-        IsRightToLeft() ? metrics.mAdvanceWidth - (data.mPartAdvance + data.mPartWidth)
-            : data.mPartAdvance;
+    metrics.mBoundingBox.MoveByX(-(IsRightToLeft() ? metrics.mAdvanceWidth - (data.mPartAdvance + data.mPartWidth) : data.mPartAdvance));
     metrics.mAdvanceWidth = data.mPartWidth;
 
     aMetrics->CombineWith(metrics, IsRightToLeft());
@@ -1658,8 +1653,8 @@ gfxTextRun::SetSpaceGlyphIfSimple(gfxFont* aFont, uint32_t aCharIndex,
 
     AddGlyphRun(aFont, gfxTextRange::kFontGroup, aCharIndex, false,
                 aOrientation);
-    CompressedGlyph g;
-    g.SetSimpleGlyph(spaceWidthAppUnits, spaceGlyph);
+    CompressedGlyph g =
+        CompressedGlyph::MakeSimpleGlyph(spaceWidthAppUnits, spaceGlyph);
     if (aSpaceChar == ' ') {
         g.SetIsSpace();
     }
@@ -1688,7 +1683,6 @@ gfxTextRun::FetchGlyphExtents(DrawTarget* aRefDrawTarget)
         uint32_t start = run.mCharacterOffset;
         uint32_t end = i + 1 < runCount ?
             glyphRuns[i + 1].mCharacterOffset : GetLength();
-        bool fontIsSetup = false;
         uint32_t j;
         gfxGlyphExtents *extents = font->GetOrCreateGlyphExtents(mAppUnitsPerDevUnit);
 
@@ -1700,13 +1694,6 @@ gfxTextRun::FetchGlyphExtents(DrawTarget* aRefDrawTarget)
                 if (needsGlyphExtents) {
                     uint32_t glyphIndex = glyphData->GetSimpleGlyph();
                     if (!extents->IsGlyphKnown(glyphIndex)) {
-                        if (!fontIsSetup) {
-                            if (!font->SetupCairoFont(aRefDrawTarget)) {
-                                NS_WARNING("failed to set up font for glyph extents");
-                                break;
-                            }
-                            fontIsSetup = true;
-                        }
 #ifdef DEBUG_TEXT_RUN_STORAGE_METRICS
                         ++gGlyphExtentsSetupEagerSimple;
 #endif
@@ -1726,13 +1713,6 @@ gfxTextRun::FetchGlyphExtents(DrawTarget* aRefDrawTarget)
                 for (uint32_t k = 0; k < glyphCount; ++k, ++details) {
                     uint32_t glyphIndex = details->mGlyphID;
                     if (!extents->IsGlyphKnownWithTightExtents(glyphIndex)) {
-                        if (!fontIsSetup) {
-                            if (!font->SetupCairoFont(aRefDrawTarget)) {
-                                NS_WARNING("failed to set up font for glyph extents");
-                                break;
-                            }
-                            fontIsSetup = true;
-                        }
 #ifdef DEBUG_TEXT_RUN_STORAGE_METRICS
                         ++gGlyphExtentsSetupEagerTight;
 #endif
@@ -2756,8 +2736,8 @@ gfxFontGroup::InitScriptRun(DrawTarget* aDrawTarget,
                             gfxTextRun::DetailedGlyph detailedGlyph;
                             detailedGlyph.mGlyphID = mainFont->GetSpaceGlyph();
                             detailedGlyph.mAdvance = advance;
-                            gfxShapedText::CompressedGlyph g;
-                            g.SetComplex(true, true, 1);
+                            CompressedGlyph g =
+                                CompressedGlyph::MakeComplex(true, true, 1);
                             aTextRun->SetGlyphs(aOffset + index,
                                                 g, &detailedGlyph);
                         }
@@ -3073,7 +3053,7 @@ gfxFontGroup::FindFontForChar(uint32_t aCh, uint32_t aPrevCh, uint32_t aNextCh,
         return nullptr;
 
     // 2. search pref fonts
-    gfxFont* font = WhichPrefFontSupportsChar(aCh);
+    gfxFont* font = WhichPrefFontSupportsChar(aCh, aNextCh);
     if (font) {
         *aMatchType = gfxTextRange::kPrefsFallback;
         return font;
@@ -3354,12 +3334,22 @@ gfxFontGroup::ContainsUserFont(const gfxUserFontEntry* aUserFont)
 }
 
 gfxFont*
-gfxFontGroup::WhichPrefFontSupportsChar(uint32_t aCh)
+gfxFontGroup::WhichPrefFontSupportsChar(uint32_t aCh, uint32_t aNextCh)
 {
-    // get the pref font list if it hasn't been set up already
-    uint32_t unicodeRange = FindCharUnicodeRange(aCh);
+    eFontPrefLang charLang;
     gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
-    eFontPrefLang charLang = pfl->GetFontPrefLangFor(unicodeRange);
+
+    EmojiPresentation emoji = GetEmojiPresentation(aCh);
+    if ((emoji != EmojiPresentation::TextOnly &&
+         (aNextCh == kVariationSelector16 ||
+          (emoji == EmojiPresentation::EmojiDefault &&
+           aNextCh != kVariationSelector15)))) {
+        charLang = eFontPrefLang_Emoji;
+    } else {
+        // get the pref font list if it hasn't been set up already
+        uint32_t unicodeRange = FindCharUnicodeRange(aCh);
+        charLang = pfl->GetFontPrefLangFor(unicodeRange);
+    }
 
     // if the last pref font was the first family in the pref list, no need to recheck through a list of families
     if (mLastPrefFont && charLang == mLastPrefLang &&

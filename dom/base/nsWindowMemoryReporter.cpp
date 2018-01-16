@@ -10,7 +10,6 @@
 #include "nsGlobalWindow.h"
 #include "nsIDocument.h"
 #include "nsIDOMWindowCollection.h"
-#include "nsIEffectiveTLDService.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
@@ -49,7 +48,7 @@ NS_IMPL_ISUPPORTS(nsWindowMemoryReporter, nsIMemoryReporter, nsIObserver,
                   nsISupportsWeakReference)
 
 static nsresult
-AddNonJSSizeOfWindowAndItsDescendents(nsGlobalWindow* aWindow,
+AddNonJSSizeOfWindowAndItsDescendents(nsGlobalWindowOuter* aWindow,
                                       nsTabSizes* aSizes)
 {
   // Measure the window.
@@ -58,8 +57,7 @@ AddNonJSSizeOfWindowAndItsDescendents(nsGlobalWindow* aWindow,
   aWindow->AddSizeOfIncludingThis(windowSizes);
 
   // Measure the inner window, if there is one.
-  nsGlobalWindow* inner = aWindow->IsOuterWindow() ? aWindow->GetCurrentInnerWindowInternal()
-                                                   : nullptr;
+  nsGlobalWindowInner* inner = aWindow->GetCurrentInnerWindowInternal();
   if (inner) {
     inner->AddSizeOfIncludingThis(windowSizes);
   }
@@ -79,7 +77,7 @@ AddNonJSSizeOfWindowAndItsDescendents(nsGlobalWindow* aWindow,
       NS_ENSURE_SUCCESS(rv, rv);
       NS_ENSURE_STATE(child);
 
-      nsGlobalWindow* childWin = nsGlobalWindow::Cast(child);
+      nsGlobalWindowOuter* childWin = nsGlobalWindowOuter::Cast(child);
 
       rv = AddNonJSSizeOfWindowAndItsDescendents(childWin, aSizes);
       NS_ENSURE_SUCCESS(rv, rv);
@@ -90,7 +88,7 @@ AddNonJSSizeOfWindowAndItsDescendents(nsGlobalWindow* aWindow,
 static nsresult
 NonJSSizeOfTab(nsPIDOMWindowOuter* aWindow, size_t* aDomSize, size_t* aStyleSize, size_t* aOtherSize)
 {
-  nsGlobalWindow* window = nsGlobalWindow::Cast(aWindow);
+  nsGlobalWindowOuter* window = nsGlobalWindowOuter::Cast(aWindow);
 
   nsTabSizes sizes;
   nsresult rv = AddNonJSSizeOfWindowAndItsDescendents(window, &sizes);
@@ -131,7 +129,7 @@ nsWindowMemoryReporter::Get()
 }
 
 static already_AddRefed<nsIURI>
-GetWindowURI(nsGlobalWindow* aWindow)
+GetWindowURI(nsGlobalWindowInner* aWindow)
 {
   NS_ENSURE_TRUE(aWindow, nullptr);
 
@@ -162,8 +160,16 @@ GetWindowURI(nsGlobalWindow* aWindow)
   return uri.forget();
 }
 
+// Forward to the inner window if we need to when getting the window's URI.
+static already_AddRefed<nsIURI>
+GetWindowURI(nsGlobalWindowOuter* aWindow)
+{
+  NS_ENSURE_TRUE(aWindow, nullptr);
+  return GetWindowURI(aWindow->GetCurrentInnerWindowInternal());
+}
+
 static void
-AppendWindowURI(nsGlobalWindow *aWindow, nsACString& aStr, bool aAnonymize)
+AppendWindowURI(nsGlobalWindowInner *aWindow, nsACString& aStr, bool aAnonymize)
 {
   nsCOMPtr<nsIURI> uri = GetWindowURI(aWindow);
 
@@ -233,7 +239,7 @@ ReportCount(const nsCString& aBasePath, const char* aPathTail,
 }
 
 static void
-CollectWindowReports(nsGlobalWindow *aWindow,
+CollectWindowReports(nsGlobalWindowInner *aWindow,
                      amIAddonManager *addonManager,
                      nsWindowSizes *aWindowTotalSizes,
                      nsTHashtable<nsUint64HashKey> *aGhostWindowIDs,
@@ -247,7 +253,7 @@ CollectWindowReports(nsGlobalWindow *aWindow,
 
   // Avoid calling aWindow->GetTop() if there's no outer window.  It will work
   // just fine, but will spew a lot of warnings.
-  nsGlobalWindow *top = nullptr;
+  nsGlobalWindowOuter *top = nullptr;
   nsCOMPtr<nsIURI> location;
   if (aWindow->GetOuterWindow()) {
     // Our window should have a null top iff it has a null docshell.
@@ -276,7 +282,7 @@ CollectWindowReports(nsGlobalWindow *aWindow,
 
   if (top) {
     windowPath += NS_LITERAL_CSTRING("top(");
-    AppendWindowURI(top, windowPath, aAnonymize);
+    AppendWindowURI(top->GetCurrentInnerWindowInternal(), windowPath, aAnonymize);
     windowPath.AppendPrintf(", id=%" PRIu64 ")", top->WindowID());
 
     aTopWindowPaths->Put(aWindow->WindowID(), windowPath);
@@ -538,14 +544,14 @@ CollectWindowReports(nsGlobalWindow *aWindow,
 #undef REPORT_COUNT
 }
 
-typedef nsTArray< RefPtr<nsGlobalWindow> > WindowArray;
+typedef nsTArray< RefPtr<nsGlobalWindowInner> > WindowArray;
 
 NS_IMETHODIMP
 nsWindowMemoryReporter::CollectReports(nsIHandleReportCallback* aHandleReport,
                                        nsISupports* aData, bool aAnonymize)
 {
-  nsGlobalWindow::WindowByIdTable* windowsById =
-    nsGlobalWindow::GetWindowsTable();
+  nsGlobalWindowInner::InnerWindowByIdTable* windowsById =
+    nsGlobalWindowInner::GetWindowsTable();
   NS_ENSURE_TRUE(windowsById, NS_OK);
 
   // Hold on to every window in memory so that window objects can't be
@@ -560,14 +566,14 @@ nsWindowMemoryReporter::CollectReports(nsIHandleReportCallback* aHandleReport,
   nsTHashtable<nsUint64HashKey> ghostWindows;
   CheckForGhostWindows(&ghostWindows);
   for (auto iter = ghostWindows.ConstIter(); !iter.Done(); iter.Next()) {
-    nsGlobalWindow::WindowByIdTable* windowsById =
-      nsGlobalWindow::GetWindowsTable();
+    nsGlobalWindowInner::InnerWindowByIdTable* windowsById =
+      nsGlobalWindowInner::GetWindowsTable();
     if (!windowsById) {
       NS_WARNING("Couldn't get window-by-id hashtable?");
       continue;
     }
 
-    nsGlobalWindow* window = windowsById->Get(iter.Get()->GetKey());
+    nsGlobalWindowInner* window = windowsById->Get(iter.Get()->GetKey());
     if (!window) {
       NS_WARNING("Could not look up window?");
       continue;
@@ -591,8 +597,8 @@ nsWindowMemoryReporter::CollectReports(nsIHandleReportCallback* aHandleReport,
     "ghost-windows", KIND_OTHER, UNITS_COUNT, ghostWindows.Count(),
 "The number of ghost windows present (the number of nodes underneath "
 "explicit/window-objects/top(none)/ghost, modulo race conditions).  A ghost "
-"window is not shown in any tab, does not share a domain with any non-detached "
-"windows, and has met these criteria for at least "
+"window is not shown in any tab, is not in a tab group with any "
+"non-detached windows, and has met these criteria for at least "
 "memory.ghost_window_timeout_seconds, or has survived a round of "
 "about:memory's minimize memory usage button.\n\n"
 "Ghost windows can happen legitimately, but they are often indicative of "
@@ -784,7 +790,7 @@ nsWindowMemoryReporter::Observe(nsISupports *aSubject, const char *aTopic,
 }
 
 void
-nsWindowMemoryReporter::ObserveDOMWindowDetached(nsGlobalWindow* aWindow)
+nsWindowMemoryReporter::ObserveDOMWindowDetached(nsGlobalWindowInner* aWindow)
 {
   nsWeakPtr weakWindow = do_GetWeakReference(static_cast<nsIDOMEventTarget*>(aWindow));
   if (!weakWindow) {
@@ -874,15 +880,8 @@ void
 nsWindowMemoryReporter::CheckForGhostWindows(
   nsTHashtable<nsUint64HashKey> *aOutGhostIDs /* = nullptr */)
 {
-  nsCOMPtr<nsIEffectiveTLDService> tldService = do_GetService(
-    NS_EFFECTIVETLDSERVICE_CONTRACTID);
-  if (!tldService) {
-    NS_WARNING("Couldn't get TLDService.");
-    return;
-  }
-
-  nsGlobalWindow::WindowByIdTable *windowsById =
-    nsGlobalWindow::GetWindowsTable();
+  nsGlobalWindowInner::InnerWindowByIdTable *windowsById =
+    nsGlobalWindowInner::GetWindowsTable();
   if (!windowsById) {
     NS_WARNING("GetWindowsTable returned null");
     return;
@@ -891,30 +890,19 @@ nsWindowMemoryReporter::CheckForGhostWindows(
   mLastCheckForGhostWindows = TimeStamp::NowLoRes();
   KillCheckTimer();
 
-  nsTHashtable<nsCStringHashKey> nonDetachedWindowDomains;
-  nsDataHashtable<nsISupportsHashKey, nsCString> domainMap;
+  nsTHashtable<nsPtrHashKey<TabGroup>> nonDetachedTabGroups;
 
-  // Populate nonDetachedWindowDomains.
+  // Populate nonDetachedTabGroups.
   for (auto iter = windowsById->Iter(); !iter.Done(); iter.Next()) {
     // Null outer window implies null top, but calling GetTop() when there's no
     // outer window causes us to spew debug warnings.
-    nsGlobalWindow* window = iter.UserData();
+    nsGlobalWindowInner* window = iter.UserData();
     if (!window->GetOuterWindow() || !window->GetTopInternal()) {
-      // This window is detached, so we don't care about its domain.
+      // This window is detached, so we don't care about its tab group.
       continue;
     }
 
-    nsCOMPtr<nsIURI> uri = GetWindowURI(window);
-    nsAutoCString domain;
-    if (uri) {
-      domain = domainMap.LookupForAdd(uri).OrInsert([&]() {
-        nsCString d;
-        tldService->GetBaseDomain(uri, 0, d);
-        return d;
-      });
-    }
-
-    nonDetachedWindowDomains.PutEntry(domain);
+    nonDetachedTabGroups.PutEntry(window->TabGroup());
   }
 
   // Update mDetachedWindows and write the ghost window IDs into aOutGhostIDs,
@@ -948,24 +936,15 @@ nsWindowMemoryReporter::CheckForGhostWindows(
       continue;
     }
 
-    nsCOMPtr<nsIURI> uri = GetWindowURI(nsGlobalWindow::Cast(window));
-
-    nsAutoCString domain;
-    if (uri) {
-      // GetBaseDomain works fine if |uri| is null, but it outputs a warning
-      // which ends up overrunning the mochitest logs.
-      tldService->GetBaseDomain(uri, 0, domain);
-    }
-
     TimeStamp& timeStamp = iter.Data();
 
-    if (nonDetachedWindowDomains.Contains(domain)) {
-      // This window shares a domain with a non-detached window, so reset its
-      // clock.
+    if (nonDetachedTabGroups.GetEntry(window->TabGroup())) {
+      // This window is in the same tab group as a non-detached
+      // window, so reset its clock.
       timeStamp = TimeStamp();
     } else {
-      // This window does not share a domain with a non-detached window, so it
-      // meets ghost criterion (2).
+      // This window is not in the same tab group as a non-detached
+      // window, so it meets ghost criterion (2).
       if (timeStamp.IsNull()) {
         // This may become a ghost window later; start its clock.
         timeStamp = now;
@@ -1004,8 +983,8 @@ nsWindowMemoryReporter::UnlinkGhostWindows()
     return;
   }
 
-  nsGlobalWindow::WindowByIdTable* windowsById =
-    nsGlobalWindow::GetWindowsTable();
+  nsGlobalWindowInner::InnerWindowByIdTable* windowsById =
+    nsGlobalWindowInner::GetWindowsTable();
   if (!windowsById) {
     return;
   }
@@ -1021,13 +1000,13 @@ nsWindowMemoryReporter::UnlinkGhostWindows()
   nsTHashtable<nsUint64HashKey> ghostWindows;
   sWindowReporter->CheckForGhostWindows(&ghostWindows);
   for (auto iter = ghostWindows.ConstIter(); !iter.Done(); iter.Next()) {
-    nsGlobalWindow::WindowByIdTable* windowsById =
-      nsGlobalWindow::GetWindowsTable();
+    nsGlobalWindowInner::InnerWindowByIdTable* windowsById =
+      nsGlobalWindowInner::GetWindowsTable();
     if (!windowsById) {
       continue;
     }
 
-    RefPtr<nsGlobalWindow> window = windowsById->Get(iter.Get()->GetKey());
+    RefPtr<nsGlobalWindowInner> window = windowsById->Get(iter.Get()->GetKey());
     if (window) {
       window->RiskyUnlink();
     }

@@ -7,13 +7,14 @@
 #include "ServiceWorkerRegistration.h"
 
 #include "ipc/ErrorIPCUtils.h"
+#include "mozilla/dom/DOMPrefs.h"
 #include "mozilla/dom/Notification.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/dom/PromiseWindowProxy.h"
 #include "mozilla/dom/PromiseWorkerProxy.h"
 #include "mozilla/dom/PushManagerBinding.h"
 #include "mozilla/dom/PushManager.h"
 #include "mozilla/dom/ServiceWorkerRegistrationBinding.h"
-#include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/Unused.h"
 #include "nsCycleCollectionParticipant.h"
@@ -36,38 +37,6 @@ using namespace mozilla::dom::workers;
 
 namespace mozilla {
 namespace dom {
-
-/* static */ bool
-ServiceWorkerRegistration::Visible(JSContext* aCx, JSObject* aObj)
-{
-  if (NS_IsMainThread()) {
-    return Preferences::GetBool("dom.serviceWorkers.enabled", false);
-  }
-
-  // Otherwise check the pref via the work private helper
-  WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
-  if (!workerPrivate) {
-    return false;
-  }
-
-  return workerPrivate->ServiceWorkersEnabled();
-}
-
-/* static */ bool
-ServiceWorkerRegistration::NotificationAPIVisible(JSContext* aCx, JSObject* aObj)
-{
-  if (NS_IsMainThread()) {
-    return Preferences::GetBool("dom.webnotifications.serviceworker.enabled", false);
-  }
-
-  // Otherwise check the pref via the work private helper
-  WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
-  if (!workerPrivate) {
-    return false;
-  }
-
-  return workerPrivate->DOMServiceWorkerNotificationEnabled();
-}
 
 ////////////////////////////////////////////////////
 // Main Thread implementation
@@ -220,7 +189,6 @@ ServiceWorkerRegistrationMainThread::ServiceWorkerRegistrationMainThread(nsPIDOM
 {
   AssertIsOnMainThread();
   MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(aWindow->IsInnerWindow());
   StartListeningForEvents();
 }
 
@@ -414,14 +382,15 @@ UpdateInternal(nsIPrincipal* aPrincipal,
 
 class MainThreadUpdateCallback final : public ServiceWorkerUpdateFinishCallback
 {
-  RefPtr<Promise> mPromise;
+  PromiseWindowProxy mPromise;
 
   ~MainThreadUpdateCallback()
   { }
 
 public:
-  explicit MainThreadUpdateCallback(Promise* aPromise)
-    : mPromise(aPromise)
+  explicit MainThreadUpdateCallback(nsPIDOMWindowInner* aWindow,
+                                    Promise* aPromise)
+    : mPromise(aWindow, aPromise)
   {
     AssertIsOnMainThread();
   }
@@ -429,13 +398,17 @@ public:
   void
   UpdateSucceeded(ServiceWorkerRegistrationInfo* aRegistration) override
   {
-    mPromise->MaybeResolveWithUndefined();
+    if (RefPtr<Promise> promise = mPromise.Get()) {
+      promise->MaybeResolveWithUndefined();
+    }
   }
 
   void
   UpdateFailed(ErrorResult& aStatus) override
   {
-    mPromise->MaybeReject(aStatus);
+    if (RefPtr<Promise> promise = mPromise.Get()) {
+      promise->MaybeReject(aStatus);
+    }
   }
 };
 
@@ -571,22 +544,25 @@ private:
 
 class UnregisterCallback final : public nsIServiceWorkerUnregisterCallback
 {
-  RefPtr<Promise> mPromise;
+  PromiseWindowProxy mPromise;
 
 public:
   NS_DECL_ISUPPORTS
 
-  explicit UnregisterCallback(Promise* aPromise)
-    : mPromise(aPromise)
+  explicit UnregisterCallback(nsPIDOMWindowInner* aWindow,
+                              Promise* aPromise)
+    : mPromise(aWindow, aPromise)
   {
-    MOZ_ASSERT(mPromise);
+    MOZ_ASSERT(aPromise);
   }
 
   NS_IMETHOD
   UnregisterSucceeded(bool aState) override
   {
     AssertIsOnMainThread();
-    mPromise->MaybeResolve(aState);
+    if (RefPtr<Promise> promise = mPromise.Get()) {
+      promise->MaybeResolve(aState);
+    }
     return NS_OK;
   }
 
@@ -595,7 +571,9 @@ public:
   {
     AssertIsOnMainThread();
 
-    mPromise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
+    if (RefPtr<Promise> promise = mPromise.Get()) {
+      promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
+    }
     return NS_OK;
   }
 
@@ -765,7 +743,7 @@ ServiceWorkerRegistrationMainThread::Update(ErrorResult& aRv)
   MOZ_ASSERT(doc);
 
   RefPtr<MainThreadUpdateCallback> cb =
-    new MainThreadUpdateCallback(promise);
+    new MainThreadUpdateCallback(GetOwner(), promise);
   UpdateInternal(doc->NodePrincipal(), mScope, cb);
 
   return promise.forget();
@@ -823,7 +801,7 @@ ServiceWorkerRegistrationMainThread::Unregister(ErrorResult& aRv)
     return nullptr;
   }
 
-  RefPtr<UnregisterCallback> cb = new UnregisterCallback(promise);
+  RefPtr<UnregisterCallback> cb = new UnregisterCallback(GetOwner(), promise);
 
   NS_ConvertUTF8toUTF16 scope(uriSpec);
   aRv = swm->Unregister(documentPrincipal, cb, scope);
@@ -1121,6 +1099,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 ServiceWorkerRegistrationWorkerThread::ServiceWorkerRegistrationWorkerThread(WorkerPrivate* aWorkerPrivate,
                                                                              const nsAString& aScope)
   : ServiceWorkerRegistration(nullptr, aScope)
+  , WorkerHolder("ServiceWorkerRegistrationWorkerThread")
   , mWorkerPrivate(aWorkerPrivate)
 {
   InitListener();

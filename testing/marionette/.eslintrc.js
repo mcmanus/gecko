@@ -4,7 +4,7 @@ module.exports = {
   "rules": {
     "camelcase": "error",
     "comma-dangle": ["error", "always-multiline"],
-    "indent": ["error", 2, {
+    "indent-legacy": ["error", 2, {
       "CallExpression": {"arguments": 2},
       "FunctionExpression": {"body": 1, "parameters": 2},
       "MemberExpression": 2,
@@ -12,6 +12,7 @@ module.exports = {
     }],
     "max-len": ["error", 78, {
       "ignoreStrings": true,
+      "ignoreTemplateLiterals": true,
       "ignoreUrls": true,
     }],
     "no-fallthrough": "error",

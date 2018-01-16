@@ -18,7 +18,7 @@
 #include "nsCSSFrameConstructor.h"
 #include "nsDisplayList.h"
 
-#include "nsCellMap.h"//table cell navigation
+#include "nsCellMap.h" //table cell navigation
 #include <algorithm>
 
 using namespace mozilla;
@@ -1163,7 +1163,7 @@ nsTableRowGroupFrame::SplitRowGroup(nsPresContext*           aPresContext,
         ReflowChild(rowFrame, aPresContext, rowMetrics, rowReflowInput,
                     0, 0, NS_FRAME_NO_MOVE_FRAME, aStatus);
         rowFrame->SetSize(nsSize(rowMetrics.Width(), rowMetrics.Height()));
-        rowFrame->DidReflow(aPresContext, nullptr, nsDidReflowStatus::FINISHED);
+        rowFrame->DidReflow(aPresContext, nullptr);
         rowFrame->DidResize();
 
         if (!aRowForcedPageBreak && !aStatus.IsFullyComplete() &&
@@ -1489,9 +1489,8 @@ nsTableRowGroupFrame::AppendFrames(ChildListID     aListID,
   if (rows.Length() > 0) {
     nsTableFrame* tableFrame = GetTableFrame();
     tableFrame->AppendRows(this, rowIndex, rows);
-    PresContext()->PresShell()->
-      FrameNeedsReflow(this, nsIPresShell::eTreeChange,
-                       NS_FRAME_HAS_DIRTY_CHILDREN);
+    PresShell()->FrameNeedsReflow(this, nsIPresShell::eTreeChange,
+                                  NS_FRAME_HAS_DIRTY_CHILDREN);
     tableFrame->SetGeometryDirty();
   }
 }
@@ -1539,9 +1538,8 @@ nsTableRowGroupFrame::InsertFrames(ChildListID     aListID,
     int32_t rowIndex = (prevRow) ? prevRow->GetRowIndex() + 1 : startRowIndex;
     tableFrame->InsertRows(this, rows, rowIndex, true);
 
-    PresContext()->PresShell()->
-      FrameNeedsReflow(this, nsIPresShell::eTreeChange,
-                       NS_FRAME_HAS_DIRTY_CHILDREN);
+    PresShell()->FrameNeedsReflow(this, nsIPresShell::eTreeChange,
+                                  NS_FRAME_HAS_DIRTY_CHILDREN);
     tableFrame->SetGeometryDirty();
   }
 }
@@ -1561,9 +1559,8 @@ nsTableRowGroupFrame::RemoveFrame(ChildListID     aListID,
     // remove the rows from the table (and flag a rebalance)
     tableFrame->RemoveRows(*rowFrame, 1, true);
 
-    PresContext()->PresShell()->
-      FrameNeedsReflow(this, nsIPresShell::eTreeChange,
-                       NS_FRAME_HAS_DIRTY_CHILDREN);
+    PresShell()->FrameNeedsReflow(this, nsIPresShell::eTreeChange,
+                                  NS_FRAME_HAS_DIRTY_CHILDREN);
     tableFrame->SetGeometryDirty();
   }
   mFrames.DestroyFrame(aOldFrame);
@@ -1995,7 +1992,9 @@ void
 nsTableRowGroupFrame::InvalidateFrame(uint32_t aDisplayItemKey)
 {
   nsIFrame::InvalidateFrame(aDisplayItemKey);
-  GetParent()->InvalidateFrameWithRect(GetVisualOverflowRect() + GetPosition(), aDisplayItemKey);
+  if (GetTableFrame()->IsBorderCollapse() && StyleBorder()->HasBorder()) {
+    GetParent()->InvalidateFrameWithRect(GetVisualOverflowRect() + GetPosition(), aDisplayItemKey);
+  }
 }
 
 void

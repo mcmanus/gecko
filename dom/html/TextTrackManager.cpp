@@ -634,11 +634,11 @@ void
 TextTrackManager::DispatchUpdateCueDisplay()
 {
   if (!mUpdateCueDisplayDispatched && !IsShutdown() &&
-      (mMediaElement->GetHasUserInteraction() || mMediaElement->IsCurrentlyPlaying())) {
+      mMediaElement->IsCurrentlyPlaying()) {
     WEBVTT_LOG("DispatchUpdateCueDisplay");
     nsPIDOMWindowInner* win = mMediaElement->OwnerDoc()->GetInnerWindow();
     if (win) {
-      nsGlobalWindow::Cast(win)->Dispatch(
+      nsGlobalWindowInner::Cast(win)->Dispatch(
         TaskCategory::Other,
         NewRunnableMethod("dom::TextTrackManager::UpdateCueDisplay",
                           this,
@@ -656,11 +656,11 @@ TextTrackManager::DispatchTimeMarchesOn()
   // through its usual monotonic increase during normal playback; current
   // executing call upon completion will check queue for further 'work'.
   if (!mTimeMarchesOnDispatched && !IsShutdown() &&
-      (mMediaElement->GetHasUserInteraction() || mMediaElement->IsCurrentlyPlaying())) {
+      mMediaElement->IsCurrentlyPlaying()) {
     WEBVTT_LOG("DispatchTimeMarchesOn");
     nsPIDOMWindowInner* win = mMediaElement->OwnerDoc()->GetInnerWindow();
     if (win) {
-      nsGlobalWindow::Cast(win)->Dispatch(
+      nsGlobalWindowInner::Cast(win)->Dispatch(
         TaskCategory::Other,
         NewRunnableMethod("dom::TextTrackManager::TimeMarchesOn",
                           this,

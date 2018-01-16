@@ -24,6 +24,9 @@
 #ifdef MOZ_X11
 #include <gdk/gdkx.h>
 #endif /* MOZ_X11 */
+#ifdef MOZ_WAYLAND
+#include <gdk/gdkwayland.h>
+#endif
 
 #include "mozilla/widget/WindowSurface.h"
 #include "mozilla/widget/WindowSurfaceProvider.h"
@@ -172,11 +175,7 @@ public:
     GdkRectangle DevicePixelsToGdkRectRoundOut(LayoutDeviceIntRect aRect);
 
     // event callbacks
-#if (MOZ_WIDGET_GTK == 2)
-    gboolean           OnExposeEvent(GdkEventExpose *aEvent);
-#else
     gboolean           OnExposeEvent(cairo_t *cr);
-#endif
     gboolean           OnConfigureEvent(GtkWidget *aWidget,
                                         GdkEventConfigure *aEvent);
     void               OnContainerUnrealize();
@@ -245,6 +244,8 @@ private:
 
     void               UpdateClientOffset();
 
+    void               DispatchContextMenuEventFromMouseEvent(uint16_t domButton,
+                                                              GdkEventButton *aEvent);
 public:
     void               ThemeChanged(void);
     void               OnDPIChanged(void);
@@ -313,10 +314,6 @@ public:
    nsresult            UpdateTranslucentWindowAlphaInternal(const nsIntRect& aRect,
                                                             uint8_t* aAlphas, int32_t aStride);
 
-#if (MOZ_WIDGET_GTK == 2)
-    static already_AddRefed<DrawTarget> GetDrawTargetForGdkDrawable(GdkDrawable* aDrawable,
-                                                                    const mozilla::gfx::IntSize& aSize);
-#endif
     virtual void       ReparentNativeWidget(nsIWidget* aNewParent) override;
 
     virtual nsresult SynthesizeNativeMouseEvent(LayoutDeviceIntPoint aPoint,
@@ -346,11 +343,17 @@ public:
                                                 nsIObserver* aObserver) override;
 #endif
 
+
 #ifdef MOZ_X11
     Display* XDisplay() { return mXDisplay; }
 #endif
+#ifdef MOZ_WAYLAND
+    wl_display* GetWaylandDisplay();
+    wl_surface* GetWaylandSurface();
+#endif
     virtual void GetCompositorWidgetInitData(mozilla::widget::CompositorWidgetInitData* aInitData) override;
 
+    virtual nsresult SetNonClientMargins(LayoutDeviceIntMargin& aMargins) override;
     void SetDrawsInTitlebar(bool aState) override;
 
     // HiDPI scale conversion
@@ -371,6 +374,18 @@ public:
     virtual bool WidgetTypeSupportsAcceleration() override;
 
     bool DoDrawTitlebar() const;
+
+    typedef enum { CSD_SUPPORT_FULL,    // CSD including shadows
+                   CSD_SUPPORT_FLAT,    // CSD without shadows
+                   CSD_SUPPORT_NONE,    // WM does not support CSD at all
+                   CSD_SUPPORT_UNKNOWN
+    } CSDSupportLevel;
+    /**
+     * Get the support of Client Side Decoration by checking
+     * the XDG_CURRENT_DESKTOP environment variable.
+     */
+    static CSDSupportLevel GetCSDSupportLevel();
+
 protected:
     virtual ~nsWindow();
 
@@ -420,6 +435,7 @@ private:
     nsWindow          *GetContainerWindow();
     void               SetUrgencyHint(GtkWidget *top_window, bool state);
     void               SetDefaultIcon(void);
+    void               SetWindowDecoration(nsBorderStyle aStyle);
     void               InitButtonEvent(mozilla::WidgetMouseEvent& aEvent,
                                        GdkEventButton* aGdkEvent);
     bool               DispatchCommandEvent(nsAtom* aCommand);
@@ -437,7 +453,6 @@ private:
     void               ClearCachedResources();
     nsIWidgetListener* GetListener();
     bool               IsComposited() const;
-
 
     GtkWidget          *mShell;
     MozContainer       *mContainer;
@@ -575,16 +590,6 @@ private:
     RefPtr<mozilla::widget::IMContextWrapper> mIMContext;
 
     mozilla::UniquePtr<mozilla::CurrentX11TimeGetter> mCurrentTimeGetter;
-    typedef enum { CSD_SUPPORT_FULL,    // CSD including shadows
-                   CSD_SUPPORT_FLAT,    // CSD without shadows
-                   CSD_SUPPORT_NONE,    // WM does not support CSD at all
-                   CSD_SUPPORT_UNKNOWN
-    } CSDSupportLevel;
-    /**
-     * Get the support of Client Side Decoration by checking
-     * the XDG_CURRENT_DESKTOP environment variable.
-     */
-    static CSDSupportLevel GetCSDSupportLevel();
     static CSDSupportLevel sCSDSupportLevel;
 };
 

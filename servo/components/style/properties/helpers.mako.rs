@@ -356,7 +356,7 @@
                             let computed = specified_value.to_computed_value(context);
                             % endif
                             % if property.ident == "font_size":
-                                 longhands::font_size::cascade_specified_font_size(
+                                 specified::FontSize::cascade_specified_font_size(
                                      context,
                                      &specified_value,
                                      computed,
@@ -373,7 +373,7 @@
                         % endif
                         CSSWideKeyword::Initial => {
                             % if property.ident == "font_size":
-                                longhands::font_size::cascade_initial_font_size(context);
+                                computed::FontSize::cascade_initial_font_size(context);
                             % else:
                                 context.builder.reset_${property.ident}();
                             % endif
@@ -386,7 +386,7 @@
                                 context.rule_cache_conditions.borrow_mut().set_uncacheable();
                             % endif
                             % if property.ident == "font_size":
-                                longhands::font_size::cascade_inherit_font_size(context);
+                                computed::FontSize::cascade_inherit_font_size(context);
                             % else:
                                 context.builder.inherit_${property.ident}();
                             % endif
@@ -394,7 +394,9 @@
                     }
                 }
 
-                % if property.custom_cascade:
+                % if property.custom_cascade and property.custom_cascade_function:
+                    ${property.custom_cascade_function}(declaration, context);
+                % elif property.custom_cascade:
                     cascade_property_custom(declaration, context);
                 % endif
             % else:
@@ -402,22 +404,19 @@
             % endif
         }
         % if not property.derived_from:
-            pub fn parse_specified<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                % if property.boxed:
-                                   -> Result<Box<SpecifiedValue>, ParseError<'i>> {
-                    parse(context, input).map(|result| Box::new(result))
+            pub fn parse_declared<'i, 't>(
+                context: &ParserContext,
+                input: &mut Parser<'i, 't>,
+            ) -> Result<PropertyDeclaration, ParseError<'i>> {
+                % if property.allow_quirks:
+                    parse_quirky(context, input, specified::AllowQuirks::Yes)
                 % else:
-                                   -> Result<SpecifiedValue, ParseError<'i>> {
-                    % if property.allow_quirks:
-                        parse_quirky(context, input, specified::AllowQuirks::Yes)
-                    % else:
-                        parse(context, input)
-                    % endif
+                    parse(context, input)
                 % endif
-            }
-            pub fn parse_declared<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                                          -> Result<PropertyDeclaration, ParseError<'i>> {
-                parse_specified(context, input).map(PropertyDeclaration::${property.camel_case})
+                % if property.boxed:
+                    .map(Box::new)
+                % endif
+                    .map(PropertyDeclaration::${property.camel_case})
             }
         % endif
     }
@@ -442,7 +441,7 @@
             use style_traits::ParseError;
             define_css_keyword_enum! { T:
                 % for value in keyword.values_for(product):
-                    "${value}" => ${to_rust_ident(value)},
+                    "${value}" => ${to_camel_case(value)},
                 % endfor
             }
 
@@ -487,11 +486,11 @@
 
         #[inline]
         pub fn get_initial_value() -> computed_value::T {
-            computed_value::T::${to_rust_ident(values.split()[0])}
+            computed_value::T::${to_camel_case(values.split()[0])}
         }
         #[inline]
         pub fn get_initial_specified_value() -> SpecifiedValue {
-            SpecifiedValue::Keyword(computed_value::T::${to_rust_ident(values.split()[0])})
+            SpecifiedValue::Keyword(computed_value::T::${to_camel_case(values.split()[0])})
         }
 
         impl SpecifiedValue {
@@ -511,6 +510,8 @@
 
 <%def name="single_keyword(name, values, vector=False, **kwargs)">
     <%call expr="single_keyword_computed(name, values, vector, **kwargs)">
+        // FIXME(emilio): WTF is this even trying to do? Those are no-ops,
+        // should be derived instead!
         impl ToComputedValue for SpecifiedValue {
             type ComputedValue = computed_value::T;
 
@@ -518,7 +519,7 @@
             fn to_computed_value(&self, _context: &Context) -> computed_value::T {
                 match *self {
                     % for value in data.longhands_by_name[name].keyword.values_for(product):
-                        SpecifiedValue::${to_rust_ident(value)} => computed_value::T::${to_rust_ident(value)},
+                        SpecifiedValue::${to_camel_case(value)} => computed_value::T::${to_camel_case(value)},
                     % endfor
                 }
             }
@@ -526,7 +527,7 @@
             fn from_computed_value(computed: &computed_value::T) -> Self {
                 match *computed {
                     % for value in data.longhands_by_name[name].keyword.values_for(product):
-                        computed_value::T::${to_rust_ident(value)} => SpecifiedValue::${to_rust_ident(value)},
+                        computed_value::T::${to_camel_case(value)} => SpecifiedValue::${to_camel_case(value)},
                     % endfor
                 }
             }
@@ -555,7 +556,7 @@
             % endfor
             match kw ${maybe_cast} {
                 % for value in values:
-                    ${to_rust_ident(value).upper()} => ${type}::${to_rust_ident(value)},
+                    ${to_rust_ident(value).upper()} => ${type}::${to_camel_case(value)},
                 % endfor
                 x => panic!("Found unexpected value in style struct for ${keyword.name} property: {:?}", x),
             }
@@ -617,12 +618,12 @@
             define_css_keyword_enum! { SpecifiedValue:
                 values {
                     % for value in keyword.values_for(product) + (extra_specified or "").split():
-                        "${value}" => ${to_rust_ident(value)},
+                        "${value}" => ${to_camel_case(value)},
                     % endfor
                 }
                 aliases {
                     % for alias, value in keyword.aliases_for(product).iteritems():
-                        "${alias}" => ${to_rust_ident(value)},
+                        "${alias}" => ${to_camel_case(value)},
                     % endfor
                 }
             }
@@ -632,17 +633,17 @@
         pub mod computed_value {
             define_css_keyword_enum! { T:
                 % for value in data.longhands_by_name[name].keyword.values_for(product):
-                    "${value}" => ${to_rust_ident(value)},
+                    "${value}" => ${to_camel_case(value)},
                 % endfor
             }
         }
         #[inline]
         pub fn get_initial_value() -> computed_value::T {
-            computed_value::T::${to_rust_ident(values.split()[0])}
+            computed_value::T::${to_camel_case(values.split()[0])}
         }
         #[inline]
         pub fn get_initial_specified_value() -> SpecifiedValue {
-            SpecifiedValue::${to_rust_ident(values.split()[0])}
+            SpecifiedValue::${to_camel_case(values.split()[0])}
         }
         #[inline]
         pub fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
@@ -681,10 +682,9 @@
     % endif
 </%def>
 
-<%def name="shorthand(name, sub_properties, experimental=False, derive_serialize=False, **kwargs)">
+<%def name="shorthand(name, sub_properties, derive_serialize=False, **kwargs)">
 <%
-    shorthand = data.declare_shorthand(name, sub_properties.split(), experimental=experimental,
-                                       **kwargs)
+    shorthand = data.declare_shorthand(name, sub_properties.split(), **kwargs)
 %>
     % if shorthand:
     /// ${shorthand.spec}
@@ -930,6 +930,8 @@
 
 // Define property that supports prefixed intrinsic size keyword values for gecko.
 // E.g. -moz-max-content, -moz-min-content, etc.
+//
+// FIXME(emilio): This feels a lot like a huge hack, get rid of this.
 <%def name="gecko_size_type(name, length_type, initial_value, logical, **kwargs)">
     <%call expr="longhand(name,
                           predefined_type=length_type,
@@ -974,20 +976,32 @@
             use values::computed::${length_type};
             ${length_type}::${initial_value}
         }
-        fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
-                         -> Result<SpecifiedValue, ParseError<'i>> {
-            % if logical:
-            let ret = ${length_type}::parse(context, input);
-            % else:
-            let ret = ${length_type}::parse_quirky(context, input, AllowQuirks::Yes);
-            % endif
-            // Keyword values don't make sense in the block direction; don't parse them
-            % if "block" in name:
-                if let Ok(${length_type}::ExtremumLength(..)) = ret {
-                    return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
-                }
-            % endif
-            ret.map(SpecifiedValue)
+
+        impl Parse for SpecifiedValue {
+            fn parse<'i, 't>(
+                context: &ParserContext,
+                input: &mut Parser<'i, 't>,
+            ) -> Result<SpecifiedValue, ParseError<'i>> {
+                % if logical:
+                let ret = ${length_type}::parse(context, input);
+                % else:
+                let ret = ${length_type}::parse_quirky(context, input, AllowQuirks::Yes);
+                % endif
+                // Keyword values don't make sense in the block direction; don't parse them
+                % if "block" in name:
+                    if let Ok(${length_type}::ExtremumLength(..)) = ret {
+                        return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
+                    }
+                % endif
+                ret.map(SpecifiedValue)
+            }
+        }
+
+        fn parse<'i, 't>(
+            context: &ParserContext,
+            input: &mut Parser<'i, 't>,
+        ) -> Result<SpecifiedValue, ParseError<'i>> {
+            SpecifiedValue::parse(context, input)
         }
 
         impl ToComputedValue for SpecifiedValue {

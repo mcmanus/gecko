@@ -9,35 +9,33 @@
 #include "nsAppDirectoryServiceDefs.h"
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/Omnijar.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/css/Loader.h"
 #include "mozilla/dom/SRIMetadata.h"
 #include "MainThreadUtils.h"
 #include "nsColor.h"
-#include "nsIConsoleService.h"
-#include "nsIFile.h"
-#include "nsNetUtil.h"
-#include "nsIObserverService.h"
-#include "nsServiceManagerUtils.h"
-#include "nsIXULRuntime.h"
-#include "nsPresContext.h"
-#include "nsPrintfCString.h"
-#include "nsXULAppAPI.h"
-
-// Includes for the crash report annotation in ErrorLoadingSheet.
-#ifdef MOZ_CRASHREPORTER
-#include "mozilla/Omnijar.h"
-#include "nsDirectoryService.h"
 #include "nsDirectoryServiceDefs.h"
+#include "nsDirectoryService.h"
 #include "nsExceptionHandler.h"
 #include "nsIChromeRegistry.h"
+#include "nsIConsoleService.h"
+#include "nsIFile.h"
+#include "nsIObserverService.h"
 #include "nsISimpleEnumerator.h"
 #include "nsISubstitutingProtocolHandler.h"
-#include "zlib.h"
+#include "nsIXULRuntime.h"
+#include "nsNetUtil.h"
+#include "nsPresContext.h"
+#include "nsPrintfCString.h"
+#include "nsServiceManagerUtils.h"
+#include "nsXULAppAPI.h"
 #include "nsZipArchive.h"
-#endif
+
+#include "zlib.h"
 
 using namespace mozilla;
 using namespace mozilla::css;
@@ -409,8 +407,6 @@ nsLayoutStylesheetCache::For(StyleBackendType aType)
     // style sheets will be re-parsed.
     // Preferences::RegisterCallback(&DependentPrefChanged,
     //                               "layout.css.example-pref.enabled");
-    Preferences::RegisterCallback(&DependentPrefChanged,
-                                  "layout.css.grid.enabled");
   }
 
   return cache;
@@ -444,6 +440,12 @@ nsLayoutStylesheetCache::InitFromProfile()
 
   LoadSheetFile(contentFile, &mUserContentSheet, eUserSheetFeatures, eLogToConsole);
   LoadSheetFile(chromeFile, &mUserChromeSheet, eUserSheetFeatures, eLogToConsole);
+
+  if (XRE_IsParentProcess()) {
+    // We're interested specifically in potential chrome customizations,
+    // so we only need data points from the parent process
+    Telemetry::Accumulate(Telemetry::USER_CHROME_CSS_LOADED, mUserChromeSheet != nullptr);
+  }
 }
 
 void
@@ -477,7 +479,6 @@ nsLayoutStylesheetCache::LoadSheetFile(nsIFile* aFile,
   LoadSheet(uri, aSheet, aParsingMode, aFailureAction);
 }
 
-#ifdef MOZ_CRASHREPORTER
 static inline nsresult
 ComputeCRC32(nsIFile* aFile, uint32_t* aResult)
 {
@@ -754,7 +755,6 @@ AnnotateCrashReport(nsIURI* aURI)
   CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("SheetLoadFailure"),
                                      NS_ConvertUTF16toUTF8(annotation));
 }
-#endif
 
 static void
 ErrorLoadingSheet(nsIURI* aURI, const char* aMsg, FailureAction aFailureAction)
@@ -770,10 +770,7 @@ ErrorLoadingSheet(nsIURI* aURI, const char* aMsg, FailureAction aFailureAction)
     }
   }
 
-#ifdef MOZ_CRASHREPORTER
   AnnotateCrashReport(aURI);
-#endif
-
   MOZ_CRASH_UNSAFE_OOL(errorMessage.get());
 }
 
@@ -800,9 +797,8 @@ nsLayoutStylesheetCache::LoadSheet(nsIURI* aURI,
     }
   }
 
-#ifdef MOZ_CRASHREPORTER
   nsZipArchive::sFileCorruptedReason = nullptr;
-#endif
+
   nsresult rv = loader->LoadSheetSync(aURI, aParsingMode, true, aSheet);
   if (NS_FAILED(rv)) {
     ErrorLoadingSheet(aURI,
@@ -867,7 +863,7 @@ nsLayoutStylesheetCache::DependentPrefChanged(const char* aPref, void* aData)
   InvalidateSheet(gStyleCache_Gecko ? &gStyleCache_Gecko->sheet_ : nullptr, \
                   gStyleCache_Servo ? &gStyleCache_Servo->sheet_ : nullptr);
 
-  INVALIDATE(mUASheet);  // for layout.css.grid.enabled
+  // INVALIDATE(mUASheet);  // for layout.css.example-pref.enabled
 
 #undef INVALIDATE
 }

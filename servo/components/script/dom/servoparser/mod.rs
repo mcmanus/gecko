@@ -46,7 +46,6 @@ use script_traits::DocumentActivity;
 use servo_config::prefs::PREFS;
 use servo_config::resource_files::read_resource_file;
 use servo_url::ServoUrl;
-use std::ascii::AsciiExt;
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::mem;
@@ -103,6 +102,10 @@ enum LastChunkState {
 }
 
 impl ServoParser {
+    pub fn parser_is_not_active(&self) -> bool {
+        self.can_write() || self.tokenizer.try_borrow_mut().is_ok()
+    }
+
     pub fn parse_html_document(document: &Document, input: DOMString, url: ServoUrl) {
         let parser = if PREFS.get("dom.servoparser.async_html_tokenizer.enabled").as_boolean().unwrap() {
             ServoParser::new(document,
@@ -139,7 +142,8 @@ impl ServoParser {
                                      DocumentSource::FromParser,
                                      loader,
                                      None,
-                                     None);
+                                     None,
+                                     Default::default());
 
         // Step 2.
         document.set_quirks_mode(context_document.quirks_mode());
@@ -653,13 +657,11 @@ impl FetchResponseListener for ParserContext {
                     parser.parse_sync();
                 }
             },
-            Some(ContentType(Mime(TopLevel::Text, SubLevel::Xml, _))) => {}, // Handle text/xml
+            Some(ContentType(Mime(TopLevel::Text, SubLevel::Xml, _))) | // Handle text/xml, application/xml
+            Some(ContentType(Mime(TopLevel::Application, SubLevel::Xml, _))) => {},
+            Some(ContentType(Mime(TopLevel::Application, SubLevel::Ext(ref sub), _)))
+                if sub.as_str() == "xhtml+xml".to_owned() => {}, // Handle xhtml (application/xhtml+xml)
             Some(ContentType(Mime(toplevel, sublevel, _))) => {
-                if toplevel.as_str() == "application" && sublevel.as_str() == "xhtml+xml" {
-                    // Handle xhtml (application/xhtml+xml).
-                    return;
-                }
-
                 // Show warning page for unknown mime types.
                 let page = format!("<html><body><p>Unknown content type ({}/{}).</p></body></html>",
                                    toplevel.as_str(),

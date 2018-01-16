@@ -150,7 +150,10 @@ public:
         // family" names to add to the font list. This is used to avoid
         // a recursive search when using FindFamily to find a potential base
         // family name for a styled variant.
-        eNoSearchForLegacyFamilyNames = 1 << 1
+        eNoSearchForLegacyFamilyNames = 1 << 1,
+
+        // If set, FindAndAddFamilies will not add a missing entry to mOtherNamesMissed
+        eNoAddToNamesMissedWhenSearching = 1 << 2
     };
 
     // Find family(ies) matching aFamily and append to the aOutput array
@@ -280,9 +283,7 @@ public:
     // Returns true if the font family whitelist is not empty.
     bool IsFontFamilyWhitelistActive();
 
-    static void FontWhitelistPrefChanged(const char *aPref, void *aClosure) {
-        gfxPlatformFontList::PlatformFontList()->UpdateFontList();
-    }
+    static void FontWhitelistPrefChanged(const char *aPref, void *aClosure);
 
     bool AddWithLegacyFamilyName(const nsAString& aLegacyName,
                                  gfxFontEntry* aFontEntry);
@@ -496,6 +497,15 @@ protected:
                             eFontPrefLang aPrefLang,
                             nsTArray<RefPtr<gfxFontFamily>>* aGenericFamilies);
 
+    void
+    ResolveEmojiFontNames(nsTArray<RefPtr<gfxFontFamily>>* aGenericFamilies);
+
+    void
+    GetFontFamiliesFromGenericFamilies(
+        nsTArray<nsString>& aGenericFamilies,
+        nsAtom* aLangGroup,
+        nsTArray<RefPtr<gfxFontFamily>>* aFontFamilies);
+
     virtual nsresult InitFontListForPlatform() = 0;
 
     void ApplyWhitelist();
@@ -561,6 +571,7 @@ protected:
     mozilla::RangedArray<PrefFontsForLangGroup,
                          eFontPrefLang_First,
                          eFontPrefLang_Count> mLangGroupPrefFonts;
+    mozilla::UniquePtr<PrefFontList> mEmojiPrefFont;
 
     // when system-wide font lookup fails for a character, cache it to skip future searches
     gfxSparseBitSet mCodepointsWithNoFonts;

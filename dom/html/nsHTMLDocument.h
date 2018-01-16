@@ -10,7 +10,7 @@
 #include "nsDocument.h"
 #include "nsIHTMLDocument.h"
 #include "nsIDOMHTMLDocument.h"
-#include "nsIDOMHTMLCollection.h"
+#include "nsIHTMLCollection.h"
 #include "nsIScriptElement.h"
 #include "nsTArray.h"
 
@@ -156,11 +156,7 @@ public:
                          bool aPreallocateChildren) const override;
 
   virtual void RemovedFromDocShell() override;
-
-  virtual mozilla::dom::Element *GetElementById(const nsAString& aElementId) override
-  {
-    return nsDocument::GetElementById(aElementId);
-  }
+  using mozilla::dom::DocumentOrShadowRoot::GetElementById;
 
   virtual void DocAddSizeOfExcludingThis(nsWindowSizes& aWindowSizes) const override;
   // DocAddSizeOfIncludingThis is inherited from nsIDocument.
@@ -193,14 +189,6 @@ public:
     return nsHTMLDocument::GetForms();
   }
   nsIHTMLCollection* Scripts();
-  already_AddRefed<nsContentList> GetElementsByName(const nsAString & aName)
-  {
-    return GetFuncStringContentList<nsCachableElementsByNameNodeList>(this,
-                                                                      MatchNameAttribute,
-                                                                      nullptr,
-                                                                      UseExistingNameString,
-                                                                      aName);
-  }
   already_AddRefed<nsIDocument> Open(JSContext* cx,
                                      const nsAString& aType,
                                      const nsAString& aReplace,
@@ -217,11 +205,7 @@ public:
              mozilla::ErrorResult& rv);
   void Writeln(JSContext* cx, const mozilla::dom::Sequence<nsString>& aText,
                mozilla::ErrorResult& rv);
-  void GetDesignMode(nsAString& aDesignMode,
-                     nsIPrincipal& aSubjectPrincipal)
-  {
-    GetDesignMode(aDesignMode);
-  }
+  // XPCOM GetDesignMode is fine.
   void SetDesignMode(const nsAString& aDesignMode,
                      nsIPrincipal& aSubjectPrincipal,
                      mozilla::ErrorResult& rv);
@@ -280,10 +264,6 @@ protected:
                          nsAtom* aAtom, void* aData);
   static bool MatchAnchors(mozilla::dom::Element* aElement, int32_t aNamespaceID,
                            nsAtom* aAtom, void* aData);
-  static bool MatchNameAttribute(mozilla::dom::Element* aElement,
-                                 int32_t aNamespaceID,
-                                 nsAtom* aAtom, void* aData);
-  static void* UseExistingNameString(nsINode* aRootNode, const nsString* aName);
 
   static void DocumentWriteTerminationFunc(nsISupports *aRef);
 
@@ -374,8 +354,8 @@ protected:
                         int32_t& charsetSource,
                         NotNull<const Encoding*>& aEncoding);
   void TryTLD(int32_t& aCharsetSource, NotNull<const Encoding*>& aCharset);
-  static void TryFallback(int32_t& aCharsetSource,
-                          NotNull<const Encoding*>& aEncoding);
+  void TryFallback(int32_t& aCharsetSource,
+                   NotNull<const Encoding*>& aEncoding);
 
   // Override so we can munge the charset on our wyciwyg channel as needed.
   virtual void

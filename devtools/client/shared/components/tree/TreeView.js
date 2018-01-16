@@ -7,8 +7,11 @@
 
 // Make this available to both AMD and CJS environments
 define(function (require, exports, module) {
-  const { cloneElement, Component, createFactory, DOM: dom, PropTypes } =
+  const { cloneElement, Component, createFactory } =
     require("devtools/client/shared/vendor/react");
+  const { findDOMNode } = require("devtools/client/shared/vendor/react-dom");
+  const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
+  const dom = require("devtools/client/shared/vendor/react-dom-factories");
 
   // Reps
   const { ObjectProvider } = require("./ObjectProvider");
@@ -129,7 +132,6 @@ define(function (require, exports, module) {
       this.toggle = this.toggle.bind(this);
       this.isExpanded = this.isExpanded.bind(this);
       this.onKeyDown = this.onKeyDown.bind(this);
-      this.onKeyUp = this.onKeyUp.bind(this);
       this.onClickRow = this.onClickRow.bind(this);
       this.getSelectedRow = this.getSelectedRow.bind(this);
       this.selectRow = this.selectRow.bind(this);
@@ -153,7 +155,7 @@ define(function (require, exports, module) {
         // TODO: Do better than just selecting the first row again. We want to
         // select (in order) previous, next or parent in case when selected
         // row is removed.
-        this.selectRow(this.rows[0].props.member.path);
+        this.selectRow(this.rows[0]);
       }
     }
 
@@ -227,13 +229,10 @@ define(function (require, exports, module) {
     // Event Handlers
 
     onKeyDown(event) {
-      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(
-        event.key)) {
-        event.preventDefault();
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+        return;
       }
-    }
 
-    onKeyUp(event) {
       let row = this.getSelectedRow(this.rows);
       if (!row) {
         return;
@@ -255,17 +254,15 @@ define(function (require, exports, module) {
         case "ArrowDown":
           let nextRow = this.rows[index + 1];
           if (nextRow) {
-            this.selectRow(nextRow.props.member.path);
+            this.selectRow(nextRow);
           }
           break;
         case "ArrowUp":
           let previousRow = this.rows[index - 1];
           if (previousRow) {
-            this.selectRow(previousRow.props.member.path);
+            this.selectRow(previousRow);
           }
           break;
-        default:
-          return;
       }
 
       event.preventDefault();
@@ -277,7 +274,7 @@ define(function (require, exports, module) {
       if (cell && cell.classList.contains("treeLabelCell")) {
         this.toggle(nodePath);
       }
-      this.selectRow(nodePath);
+      this.selectRow(event.currentTarget);
     }
 
     getSelectedRow(rows) {
@@ -287,10 +284,12 @@ define(function (require, exports, module) {
       return rows.find(row => this.isSelected(row.props.member.path));
     }
 
-    selectRow(nodePath) {
+    selectRow(row) {
+      row = findDOMNode(row);
       this.setState(Object.assign({}, this.state, {
-        selected: nodePath
+        selected: row.id
       }));
+      row.scrollIntoView({block: "nearest"});
     }
 
     isSelected(nodePath) {
@@ -468,7 +467,6 @@ define(function (require, exports, module) {
           role: "tree",
           tabIndex: 0,
           onKeyDown: this.onKeyDown,
-          onKeyUp: this.onKeyUp,
           "aria-label": this.props.label || "",
           "aria-activedescendant": this.state.selected,
           cellPadding: 0,

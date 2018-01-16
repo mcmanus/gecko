@@ -130,7 +130,7 @@ user_pref("media.gmp-manager.url.override", "http://localhost/dummy-gmp-manager.
 user_pref("media.gmp-manager.updateEnabled", false);
 
 // A fake bool pref for "@supports -moz-bool-pref" sanify test.
-user_pref("testing.supports.moz-bool-pref", true);
+user_pref("testing.supports.moz-bool-pref", false);
 
 // Reftests load a lot of URLs very quickly. This puts avoidable and
 // unnecessary I/O pressure on the Places DB (measured to be in the
@@ -148,9 +148,10 @@ user_pref("media.openUnsupportedTypeWithExternalApp", false);
 // consumer automation; not vendor testing.
 user_pref("marionette.prefs.recommended", false);
 
-// Make sure we don't reach out to the network with pocket or snippets
+// Make sure we don't reach out to the network for activity stream services
 user_pref("browser.newtabpage.activity-stream.feeds.section.topstories", false);
 user_pref("browser.newtabpage.activity-stream.feeds.snippets", false);
+user_pref("browser.newtabpage.activity-stream.tippyTop.service.endpoint", "");
 
 // Don't forcibly kill content processes after a timeout
 user_pref("dom.ipc.tabs.shutdownTimeoutSecs", 0);

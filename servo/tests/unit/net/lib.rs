@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#![cfg(test)]
+
 extern crate cookie as cookie_rs;
 extern crate devtools_traits;
 extern crate flate2;
@@ -19,24 +21,24 @@ extern crate time;
 extern crate unicase;
 extern crate url;
 
-#[cfg(test)] mod chrome_loader;
-#[cfg(test)] mod cookie;
-#[cfg(test)] mod cookie_http_state;
-#[cfg(test)] mod data_loader;
-#[cfg(test)] mod file_loader;
-#[cfg(test)] mod fetch;
-#[cfg(test)] mod mime_classifier;
-#[cfg(test)] mod resource_thread;
-#[cfg(test)] mod hsts;
-#[cfg(test)] mod http_loader;
-#[cfg(test)] mod filemanager_thread;
-#[cfg(test)] mod subresource_integrity;
+mod chrome_loader;
+mod cookie;
+mod cookie_http_state;
+mod data_loader;
+mod fetch;
+mod file_loader;
+mod filemanager_thread;
+mod hsts;
+mod http_loader;
+mod mime_classifier;
+mod resource_thread;
+mod subresource_integrity;
 
 use devtools_traits::DevtoolsControlMsg;
 use hyper::server::{Handler, Listening, Server};
 use net::connector::create_ssl_client;
 use net::fetch::cors_cache::CorsCache;
-use net::fetch::methods::{self, FetchContext};
+use net::fetch::methods::{self, CancellationListener, FetchContext};
 use net::filemanager_thread::FileManager;
 use net::test::HttpState;
 use net_traits::FetchTaskTarget;
@@ -44,7 +46,7 @@ use net_traits::request::Request;
 use net_traits::response::Response;
 use servo_config::resource_files::resources_dir_path;
 use servo_url::ServoUrl;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Sender, channel};
 
 const DEFAULT_USER_AGENT: &'static str = "Such Browser. Very Layout. Wow.";
@@ -61,6 +63,7 @@ fn new_fetch_context(dc: Option<Sender<DevtoolsControlMsg>>) -> FetchContext {
         user_agent: DEFAULT_USER_AGENT.into(),
         devtools_chan: dc,
         filemanager: FileManager::new(),
+        cancellation_listener: Arc::new(Mutex::new(CancellationListener::new(None))),
     }
 }
 impl FetchTaskTarget for FetchResponseCollector {
@@ -102,7 +105,7 @@ fn fetch_with_cors_cache(request: &mut Request, cache: &mut CorsCache) -> Respon
 
 fn make_server<H: Handler + 'static>(handler: H) -> (Listening, ServoUrl) {
     // this is a Listening server because of handle_threads()
-    let server = Server::http("0.0.0.0:0").unwrap().handle_threads(handler, 1).unwrap();
+    let server = Server::http("0.0.0.0:0").unwrap().handle_threads(handler, 2).unwrap();
     let url_string = format!("http://localhost:{}", server.socket.port());
     let url = ServoUrl::parse(&url_string).unwrap();
     (server, url)

@@ -96,7 +96,6 @@ import org.mozilla.gecko.extensions.ExtensionPermissionsHelper;
 import org.mozilla.gecko.firstrun.FirstrunAnimationContainer;
 import org.mozilla.gecko.gfx.DynamicToolbarAnimator;
 import org.mozilla.gecko.gfx.DynamicToolbarAnimator.PinReason;
-import org.mozilla.gecko.gfx.ImmutableViewportMetrics;
 import org.mozilla.gecko.home.BrowserSearch;
 import org.mozilla.gecko.home.HomeBanner;
 import org.mozilla.gecko.home.HomeConfig;
@@ -164,6 +163,7 @@ import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.IntentUtils;
 import org.mozilla.gecko.util.MenuUtils;
 import org.mozilla.gecko.util.PrefUtils;
+import org.mozilla.gecko.util.ShortcutUtils;
 import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.util.WindowUtil;
@@ -195,7 +195,6 @@ public class BrowserApp extends GeckoApp
                                    BookmarkEditFragment.Callbacks,
                                    BrowserSearch.OnEditSuggestionListener,
                                    BrowserSearch.OnSearchListener,
-                                   DynamicToolbarAnimator.MetricsListener,
                                    DynamicToolbarAnimator.ToolbarChromeProxy,
                                    LayoutInflater.Factory,
                                    LightweightTheme.OnChangeListener,
@@ -436,7 +435,6 @@ public class BrowserApp extends GeckoApp
             case PAGE_SHOW:
                 tab.loadFavicon();
                 break;
-
             case UNSELECTED:
                 // We receive UNSELECTED immediately after the SELECTED listeners run
                 // so we are ensured that the unselectedTabEditingText has not changed.
@@ -444,6 +442,9 @@ public class BrowserApp extends GeckoApp
                     // Copy to avoid constructing new objects.
                     tab.getEditingState().copyFrom(mLastTabEditingState);
                 }
+                break;
+            case START_EDITING:
+                enterEditingMode();
                 break;
         }
 
@@ -621,8 +622,13 @@ public class BrowserApp extends GeckoApp
         final Context appContext = getApplicationContext();
 
         showSplashScreen = true;
-        GeckoLoader.loadMozGlue(appContext);
-        if (!HardwareUtils.isSupportedSystem() || !GeckoLoader.neonCompatible()) {
+
+        boolean supported = HardwareUtils.isSupportedSystem();
+        if (supported) {
+            GeckoLoader.loadMozGlue(appContext);
+            supported = GeckoLoader.neonCompatible();
+        }
+        if (!supported) {
             // This build does not support the Android version of the device; Exit early.
             super.onCreate(savedInstanceState);
             return;
@@ -1664,7 +1670,6 @@ public class BrowserApp extends GeckoApp
         mDoorHangerPopup.setOnVisibilityChangeListener(this);
 
         if (mLayerView != null) {
-            mLayerView.getDynamicToolbarAnimator().addMetricsListener(this);
             mLayerView.getDynamicToolbarAnimator().setToolbarChromeProxy(this);
         }
         setDynamicToolbarEnabled(mDynamicToolbar.isEnabled());
@@ -1683,17 +1688,6 @@ public class BrowserApp extends GeckoApp
     public void onDoorHangerShow() {
         mDynamicToolbar.setVisible(true, VisibilityTransition.ANIMATE);
         super.onDoorHangerShow();
-    }
-
-    @Override
-    public void onMetricsChanged(ImmutableViewportMetrics aMetrics) {
-        if (isHomePagerVisible() || mBrowserChrome == null) {
-            return;
-        }
-
-        if (mFormAssistPopup != null) {
-            mFormAssistPopup.onMetricsChanged(aMetrics);
-        }
     }
 
     // ToolbarChromeProxy inteface
@@ -1746,7 +1740,7 @@ public class BrowserApp extends GeckoApp
 
         if (mLayerView != null && height != mToolbarHeight) {
             mToolbarHeight = height;
-            mLayerView.setMaxToolbarHeight(height);
+            mLayerView.getDynamicToolbarAnimator().setMaxToolbarHeight(height);
             mDynamicToolbar.setVisible(true, VisibilityTransition.IMMEDIATE);
         }
     }
@@ -2136,7 +2130,7 @@ public class BrowserApp extends GeckoApp
                  *
                  * This depends on the current channel: Release and Beta both direct to
                  * the Google Play Store. If updating is enabled, Aurora, Nightly, and
-                 * custom builds open about:, which provides an update interface.
+                 * custom builds open about:firefox, which provides an update interface.
                  *
                  * If updating is not enabled, this simply logs an error.
                  */
@@ -2148,7 +2142,7 @@ public class BrowserApp extends GeckoApp
                 }
 
                 if (AppConstants.MOZ_UPDATER) {
-                    Tabs.getInstance().loadUrlInTab(AboutPages.UPDATER);
+                    Tabs.getInstance().loadUrlInTab(AboutPages.FIREFOX);
                     break;
                 }
 
@@ -2445,14 +2439,14 @@ public class BrowserApp extends GeckoApp
             return false;
         }
 
+        final boolean isPrivate = mBrowserToolbar.isPrivateMode();
         final Tabs tabs = Tabs.getInstance();
-        final Tab selectedTab = tabs.getSelectedTab();
         final Tab tab;
 
         if (AboutPages.isAboutReader(url)) {
-            tab = tabs.getFirstReaderTabForUrl(url, selectedTab.isPrivate());
+            tab = tabs.getFirstReaderTabForUrl(url, isPrivate);
         } else {
-            tab = tabs.getFirstTabForUrl(url, selectedTab.isPrivate());
+            tab = tabs.getFirstTabForUrl(url, isPrivate);
         }
 
         if (tab == null) {
@@ -3147,10 +3141,20 @@ public class BrowserApp extends GeckoApp
             return;
         }
 
+        final Tab selectedTab = Tabs.getInstance().getSelectedTab();
+        final String panelId;
+        final Bundle panelData;
+        if (selectedTab != null) {
+            panelId = selectedTab.getMostRecentHomePanel();
+            panelData = selectedTab.getMostRecentHomePanelData();
+        } else {
+            panelId = null;
+            panelData = null;
+        }
+
         // To prevent overdraw, the HomePager is hidden when BrowserSearch is displayed:
         // reverse that.
-        showHomePager(Tabs.getInstance().getSelectedTab().getMostRecentHomePanel(),
-                Tabs.getInstance().getSelectedTab().getMostRecentHomePanelData());
+        showHomePager(panelId, panelData);
 
         mBrowserSearchContainer.setVisibility(View.INVISIBLE);
 
@@ -3658,7 +3662,8 @@ public class BrowserApp extends GeckoApp
         MenuUtils.safeSetEnabled(aMenu, R.id.page, !isAboutHome(tab));
         MenuUtils.safeSetEnabled(aMenu, R.id.subscribe, tab.hasFeeds());
         MenuUtils.safeSetEnabled(aMenu, R.id.add_search_engine, tab.hasOpenSearch());
-        MenuUtils.safeSetEnabled(aMenu, R.id.add_to_launcher, !isAboutHome(tab));
+        MenuUtils.safeSetEnabled(aMenu, R.id.add_to_launcher,
+            !isAboutHome(tab) && ShortcutUtils.isPinShortcutSupported());
         MenuUtils.safeSetEnabled(aMenu, R.id.set_as_homepage, !isAboutHome(tab));
         onPrepareOptionsMenuPinToTopSites(aMenu, tab);
 
@@ -4142,7 +4147,7 @@ public class BrowserApp extends GeckoApp
         if (AppConstants.MOZ_ANDROID_BEAM && NfcAdapter.ACTION_NDEF_DISCOVERED.equals(action)) {
             final GeckoBundle data = new GeckoBundle(2);
             data.putString("uri", intent.getDataString());
-            data.putInt("flags", LOAD_NEW_TAB);
+            data.putString("flags", "OPEN_NEWTAB");
             getAppEventDispatcher().dispatch("Tab:OpenUri", data);
         }
 
@@ -4315,7 +4320,7 @@ public class BrowserApp extends GeckoApp
         // Don't store searches that happen in private tabs. This assumes the user can only
         // perform a search inside the currently selected tab, which is true for searches
         // that come from SearchEngineRow.
-        if (!Tabs.getInstance().getSelectedTab().isPrivate()) {
+        if (!mBrowserToolbar.isPrivateMode()) {
             storeSearchQuery(text);
         }
 
@@ -4366,7 +4371,7 @@ public class BrowserApp extends GeckoApp
 
             // If the toolbar is dynamic and not currently showing, just show the real toolbar
             // and keep the animated snapshot hidden
-            if (mDynamicToolbar.isEnabled() && toolbar.getCurrentToolbarHeight() == 0) {
+            if (mDynamicToolbar.isEnabled() && !isToolbarChromeVisible()) {
                 toggleToolbarChrome(true);
                 mShowingToolbarChromeForActionBar = true;
             }

@@ -161,6 +161,9 @@ AsyncCanvasRenderer::CopyFromTextureClient(TextureClient* aTextureClient)
   {
     uint32_t stride = gfx::GetAlignedStride<8>(size.width, BytesPerPixel(format));
     mSurfaceForBasic = gfx::Factory::CreateDataSourceSurfaceWithStride(size, format, stride);
+    if (!mSurfaceForBasic) {
+      return;
+    }
   }
 
   MappedTextureData mapped;
@@ -238,12 +241,16 @@ AsyncCanvasRenderer::GetSurface()
   MutexAutoLock lock(mMutex);
   if (mSurfaceForBasic) {
     // Since SourceSurface isn't thread-safe, we need copy to a new SourceSurface.
+    gfx::DataSourceSurface::ScopedMap srcMap(mSurfaceForBasic, gfx::DataSourceSurface::READ);
+
     RefPtr<gfx::DataSourceSurface> result =
       gfx::Factory::CreateDataSourceSurfaceWithStride(mSurfaceForBasic->GetSize(),
                                                       mSurfaceForBasic->GetFormat(),
-                                                      mSurfaceForBasic->Stride());
+                                                      srcMap.GetStride());
+    if (NS_WARN_IF(!result)) {
+      return nullptr;
+    }
 
-    gfx::DataSourceSurface::ScopedMap srcMap(mSurfaceForBasic, gfx::DataSourceSurface::READ);
     gfx::DataSourceSurface::ScopedMap dstMap(result, gfx::DataSourceSurface::WRITE);
 
     if (NS_WARN_IF(!srcMap.IsMapped()) ||
@@ -271,8 +278,10 @@ AsyncCanvasRenderer::GetInputStream(const char *aMimeType,
     return NS_ERROR_FAILURE;
   }
 
+  gfx::DataSourceSurface::ScopedMap map(surface, gfx::DataSourceSurface::READ);
+
   // Handle y flip.
-  RefPtr<gfx::DataSourceSurface> dataSurf = gl::YInvertImageSurface(surface);
+  RefPtr<gfx::DataSourceSurface> dataSurf = gl::YInvertImageSurface(surface, map.GetStride());
 
   return gfxUtils::GetInputStream(dataSurf, false, aMimeType, aEncoderOptions, aStream);
 }

@@ -205,7 +205,7 @@ public:
     bool TryGetSVGData(gfxFont* aFont);
     bool HasSVGGlyph(uint32_t aGlyphId);
     bool GetSVGGlyphExtents(DrawTarget* aDrawTarget, uint32_t aGlyphId,
-                            gfxRect *aResult);
+                            gfxFloat aSize, gfxRect* aResult);
     void RenderSVGGlyph(gfxContext *aContext, uint32_t aGlyphId,
                         mozilla::SVGContextPaint* aContextPaint);
     // Call this when glyph geometry or rendering has changed
@@ -349,7 +349,6 @@ public:
 
     uint8_t          mStyle       : 2; // italic/oblique
     bool             mFixedPitch  : 1;
-    bool             mIsValid     : 1;
     bool             mIsBadUnderlineFont : 1;
     bool             mIsUserFontContainer : 1; // userfont entry
     bool             mIsDataUserFont : 1;      // platform font entry (data)

@@ -10,7 +10,7 @@
 #include "mozilla/TimeStamp.h"
 #include "mozilla/StartupTimeline.h"
 #include "nsTArray.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsXULAppAPI.h"
 
 #include "mozilla/TelemetryHistogramEnums.h"
@@ -57,6 +57,13 @@ void Init();
  * @param sample - value to record.
  */
 void Accumulate(HistogramID id, uint32_t sample);
+
+/**
+ * Adds an array of samples to a histogram defined in TelemetryHistograms.h
+ * @param id - histogram id
+ * @param samples - values to record.
+ */
+void Accumulate(HistogramID id, const nsTArray<uint32_t>& samples);
 
 /**
  * Adds sample to a keyed histogram defined in TelemetryHistogramEnums.h
@@ -257,6 +264,21 @@ bool CanRecordBase();
  * to guard calls to Accumulate when the statistic being recorded is expensive to compute.
  */
 bool CanRecordExtended();
+
+/**
+ * Indicates whether Telemetry release data recording is turned on. Usually true.
+ *
+ * @see nsITelemetry.canRecordReleaseData
+ */
+bool CanRecordReleaseData();
+
+/**
+ * Indicates whether Telemetry pre-release data recording is turned on. Tends
+ * to be true on pre-release channels.
+ *
+ * @see nsITelemetry.canRecordPrereleaseData
+ */
+bool CanRecordPrereleaseData();
 
 /**
  * Records slow SQL statements for Telemetry reporting.

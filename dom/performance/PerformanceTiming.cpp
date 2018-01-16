@@ -26,7 +26,7 @@ PerformanceTiming::PerformanceTiming(Performance* aPerformance,
                                      DOMHighResTimeStamp aZeroTime)
   : mPerformance(aPerformance),
     mFetchStart(0.0),
-    mZeroTime(aZeroTime),
+    mZeroTime(nsRFPService::ReduceTimePrecisionAsMSecs(aZeroTime)),
     mRedirectCount(0),
     mTimingAllowed(true),
     mAllRedirectsSameOrigin(true),
@@ -52,6 +52,23 @@ PerformanceTiming::PerformanceTiming(Performance* aPerformance,
     mReportCrossOriginRedirect = mTimingAllowed && redirectsPassCheck;
   }
 
+  mSecureConnection = false;
+  nsCOMPtr<nsIURI> uri;
+  if (aHttpChannel) {
+    aHttpChannel->GetURI(getter_AddRefs(uri));
+  } else {
+    nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(aChannel);
+    if (httpChannel) {
+      httpChannel->GetURI(getter_AddRefs(uri));
+    }
+  }
+
+  if (uri) {
+    nsresult rv = uri->SchemeIs("https", &mSecureConnection);
+    if (NS_FAILED(rv)) {
+      mSecureConnection = false;
+    }
+  }
   InitializeTimingInfo(aChannel);
 
   // Non-null aHttpChannel implies that this PerformanceTiming object is being
@@ -118,7 +135,8 @@ PerformanceTiming::InitializeTimingInfo(nsITimedChannel* aChannel)
         mConnectStart = *clampTime;
       }
 
-      if (!mSecureConnectionStart.IsNull() && mSecureConnectionStart < *clampTime) {
+      if (mSecureConnection && !mSecureConnectionStart.IsNull() &&
+          mSecureConnectionStart < *clampTime) {
         mSecureConnectionStart = *clampTime;
       }
 
@@ -144,14 +162,14 @@ PerformanceTiming::FetchStartHighRes()
     MOZ_ASSERT(!mAsyncOpen.IsNull(), "The fetch start time stamp should always be "
         "valid if the performance timing is enabled");
     if (!mAsyncOpen.IsNull()) {
-      if (!mWorkerStart.IsNull() && mWorkerStart > mAsyncOpen) {
-        mFetchStart = TimeStampToDOMHighRes(mWorkerStart);
+      if (!mWorkerRequestStart.IsNull() && mWorkerRequestStart > mAsyncOpen) {
+        mFetchStart = TimeStampToDOMHighRes(mWorkerRequestStart);
       } else {
         mFetchStart = TimeStampToDOMHighRes(mAsyncOpen);
       }
     }
   }
-  return mFetchStart;
+  return nsRFPService::ReduceTimePrecisionAsMSecs(mFetchStart);
 }
 
 DOMTimeMilliSec
@@ -230,7 +248,7 @@ PerformanceTiming::AsyncOpenHighRes()
       nsContentUtils::ShouldResistFingerprinting() || mAsyncOpen.IsNull()) {
     return mZeroTime;
   }
-  return TimeStampToDOMHighRes(mAsyncOpen);
+  return nsRFPService::ReduceTimePrecisionAsMSecs(TimeStampToDOMHighRes(mAsyncOpen));
 }
 
 DOMHighResTimeStamp
@@ -240,7 +258,7 @@ PerformanceTiming::WorkerStartHighRes()
       nsContentUtils::ShouldResistFingerprinting() || mWorkerStart.IsNull()) {
     return mZeroTime;
   }
-  return TimeStampToDOMHighRes(mWorkerStart);
+  return nsRFPService::ReduceTimePrecisionAsMSecs(TimeStampToDOMHighRes(mWorkerStart));
 }
 
 /**
@@ -260,7 +278,8 @@ PerformanceTiming::RedirectStartHighRes()
       nsContentUtils::ShouldResistFingerprinting()) {
     return mZeroTime;
   }
-  return TimeStampToDOMHighResOrFetchStart(mRedirectStart);
+  return nsRFPService::ReduceTimePrecisionAsMSecs(
+    TimeStampToDOMHighResOrFetchStart(mRedirectStart));
 }
 
 DOMTimeMilliSec
@@ -294,7 +313,8 @@ PerformanceTiming::RedirectEndHighRes()
       nsContentUtils::ShouldResistFingerprinting()) {
     return mZeroTime;
   }
-  return TimeStampToDOMHighResOrFetchStart(mRedirectEnd);
+  return nsRFPService::ReduceTimePrecisionAsMSecs(
+    TimeStampToDOMHighResOrFetchStart(mRedirectEnd));
 }
 
 DOMTimeMilliSec
@@ -318,7 +338,8 @@ PerformanceTiming::DomainLookupStartHighRes()
       nsContentUtils::ShouldResistFingerprinting()) {
     return mZeroTime;
   }
-  return TimeStampToDOMHighResOrFetchStart(mDomainLookupStart);
+  return nsRFPService::ReduceTimePrecisionAsMSecs(
+    TimeStampToDOMHighResOrFetchStart(mDomainLookupStart));
 }
 
 DOMTimeMilliSec
@@ -336,7 +357,8 @@ PerformanceTiming::DomainLookupEndHighRes()
   }
   // Bug 1155008 - nsHttpTransaction is racy. Return DomainLookupStart when null
   return mDomainLookupEnd.IsNull() ? DomainLookupStartHighRes()
-                                   : TimeStampToDOMHighRes(mDomainLookupEnd);
+                                   : nsRFPService::ReduceTimePrecisionAsMSecs(
+                                       TimeStampToDOMHighRes(mDomainLookupEnd));
 }
 
 DOMTimeMilliSec
@@ -353,7 +375,8 @@ PerformanceTiming::ConnectStartHighRes()
     return mZeroTime;
   }
   return mConnectStart.IsNull() ? DomainLookupEndHighRes()
-                                : TimeStampToDOMHighRes(mConnectStart);
+                                : nsRFPService::ReduceTimePrecisionAsMSecs(
+                                    TimeStampToDOMHighRes(mConnectStart));
 }
 
 DOMTimeMilliSec
@@ -369,8 +392,12 @@ PerformanceTiming::SecureConnectionStartHighRes()
       nsContentUtils::ShouldResistFingerprinting()) {
     return mZeroTime;
   }
-  return mSecureConnectionStart.IsNull() ? mZeroTime
-                                         : TimeStampToDOMHighRes(mSecureConnectionStart);
+  return !mSecureConnection
+    ? 0 // We use 0 here, because mZeroTime is sometimes set to the navigation
+        // start time.
+    : (mSecureConnectionStart.IsNull() ? mZeroTime
+                                       : nsRFPService::ReduceTimePrecisionAsMSecs(
+                                           TimeStampToDOMHighRes(mSecureConnectionStart)));
 }
 
 DOMTimeMilliSec
@@ -388,7 +415,8 @@ PerformanceTiming::ConnectEndHighRes()
   }
   // Bug 1155008 - nsHttpTransaction is racy. Return ConnectStart when null
   return mConnectEnd.IsNull() ? ConnectStartHighRes()
-                              : TimeStampToDOMHighRes(mConnectEnd);
+                              : nsRFPService::ReduceTimePrecisionAsMSecs(
+                                  TimeStampToDOMHighRes(mConnectEnd));
 }
 
 DOMTimeMilliSec
@@ -409,7 +437,8 @@ PerformanceTiming::RequestStartHighRes()
     mRequestStart = mWorkerRequestStart;
   }
 
-  return TimeStampToDOMHighResOrFetchStart(mRequestStart);
+  return nsRFPService::ReduceTimePrecisionAsMSecs(
+    TimeStampToDOMHighResOrFetchStart(mRequestStart));
 }
 
 DOMTimeMilliSec
@@ -434,7 +463,8 @@ PerformanceTiming::ResponseStartHighRes()
       (!mRequestStart.IsNull() && mResponseStart < mRequestStart)) {
     mResponseStart = mRequestStart;
   }
-  return TimeStampToDOMHighResOrFetchStart(mResponseStart);
+  return nsRFPService::ReduceTimePrecisionAsMSecs(
+    TimeStampToDOMHighResOrFetchStart(mResponseStart));
 }
 
 DOMTimeMilliSec
@@ -459,7 +489,8 @@ PerformanceTiming::ResponseEndHighRes()
   }
   // Bug 1155008 - nsHttpTransaction is racy. Return ResponseStart when null
   return mResponseEnd.IsNull() ? ResponseStartHighRes()
-                               : TimeStampToDOMHighRes(mResponseEnd);
+                               : nsRFPService::ReduceTimePrecisionAsMSecs(
+                                   TimeStampToDOMHighRes(mResponseEnd));
 }
 
 DOMTimeMilliSec

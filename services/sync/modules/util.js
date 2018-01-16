@@ -23,6 +23,18 @@ XPCOMUtils.defineLazyGetter(this, "FxAccountsCommon", function() {
   return FxAccountsCommon;
 });
 
+XPCOMUtils.defineLazyServiceGetter(this, "cryptoSDR",
+                                   "@mozilla.org/login-manager/crypto/SDR;1",
+                                   "nsILoginManagerCrypto");
+
+XPCOMUtils.defineLazyPreferenceGetter(this, "localDeviceName",
+                                      "services.sync.client.name",
+                                      "");
+
+XPCOMUtils.defineLazyPreferenceGetter(this, "localDeviceType",
+                                      "services.sync.client.type",
+                                      DEVICE_TYPE_DESKTOP);
+
 /*
  * Custom exception types.
  */
@@ -76,7 +88,7 @@ this.Utils = {
         Services.appinfo.appBuildID + ".";                        // Build.
       /* eslint-enable no-multi-spaces */
     }
-    return this._userAgent + Svc.Prefs.get("client.type", "desktop");
+    return this._userAgent + localDeviceType;
   },
 
   /**
@@ -364,6 +376,42 @@ this.Utils = {
   },
 
   /**
+   * Helper utility function to fit an array of records so that when serialized,
+   * they will be within payloadSizeMaxBytes. Returns a new array without the
+   * items.
+   */
+  tryFitItems(records, payloadSizeMaxBytes) {
+    // Copy this so that callers don't have to do it in advance.
+    records = records.slice();
+    let encoder = Utils.utf8Encoder;
+    const computeSerializedSize = () =>
+      encoder.encode(JSON.stringify(records)).byteLength;
+    // Figure out how many records we can pack into a payload.
+    // We use byteLength here because the data is not encrypted in ascii yet.
+    let size = computeSerializedSize();
+    // See bug 535326 comment 8 for an explanation of the estimation
+    const maxSerializedSize = payloadSizeMaxBytes / 4 * 3 - 1500;
+    if (maxSerializedSize < 0) {
+      // This is probably due to a test, but it causes very bad behavior if a
+      // test causes this accidentally. We could throw, but there's an obvious/
+      // natural way to handle it, so we do that instead (otherwise we'd have a
+      // weird lower bound of ~1125b on the max record payload size).
+      return [];
+    }
+    if (size > maxSerializedSize) {
+      // Estimate a little more than the direct fraction to maximize packing
+      let cutoff = Math.ceil(records.length * maxSerializedSize / size);
+      records = records.slice(0, cutoff + 1);
+
+      // Keep dropping off the last entry until the data fits.
+      while (computeSerializedSize() > maxSerializedSize) {
+        records.pop();
+      }
+    }
+    return records;
+  },
+
+  /**
    * Move a json file in the profile directory. Will fail if a file exists at the
    * destination.
    *
@@ -481,35 +529,20 @@ this.Utils = {
   },
 
   /**
-   * Is there a master password configured, regardless of current lock state?
-   */
-  mpEnabled: function mpEnabled() {
-    let tokenDB = Cc["@mozilla.org/security/pk11tokendb;1"]
-                    .getService(Ci.nsIPK11TokenDB);
-    let token = tokenDB.getInternalKeyToken();
-    return token.hasPassword;
-  },
-
-  /**
    * Is there a master password configured and currently locked?
    */
-  mpLocked: function mpLocked() {
-    let tokenDB = Cc["@mozilla.org/security/pk11tokendb;1"]
-                    .getService(Ci.nsIPK11TokenDB);
-    let token = tokenDB.getInternalKeyToken();
-    return token.hasPassword && !token.isLoggedIn();
+  mpLocked() {
+    return !cryptoSDR.isLoggedIn;
   },
 
   // If Master Password is enabled and locked, present a dialog to unlock it.
   // Return whether the system is unlocked.
-  ensureMPUnlocked: function ensureMPUnlocked() {
-    if (!Utils.mpLocked()) {
-      return true;
+  ensureMPUnlocked() {
+    if (cryptoSDR.uiBusy) {
+      return false;
     }
-    let sdr = Cc["@mozilla.org/security/sdr;1"]
-                .getService(Ci.nsISecretDecoderRing);
     try {
-      sdr.encryptString("bacon");
+      cryptoSDR.encrypt("bacon");
       return true;
     } catch (e) {}
     return false;
@@ -591,7 +624,7 @@ this.Utils = {
     }
     let system =
       // 'device' is defined on unix systems
-      Cc["@mozilla.org/system-info;1"].getService(Ci.nsIPropertyBag2).get("device") ||
+      Services.sysinfo.get("device") ||
       hostname ||
       // fall back on ua info string
       Cc["@mozilla.org/network/protocol;1?name=http"].getService(Ci.nsIHttpProtocolHandler).oscpu;
@@ -601,17 +634,60 @@ this.Utils = {
   },
 
   getDeviceName() {
-    const deviceName = Svc.Prefs.get("client.name", "");
+    let deviceName = localDeviceName;
 
     if (deviceName === "") {
-      return this.getDefaultDeviceName();
+      deviceName = this.getDefaultDeviceName();
+      Svc.Prefs.set("client.name", deviceName);
     }
 
     return deviceName;
   },
 
+  /**
+   * Helper to implement a more efficient version of fairly common pattern:
+   *
+   * Utils.defineLazyIDProperty(this, "syncID", "services.sync.client.syncID")
+   *
+   * is equivalent to (but more efficient than) the following:
+   *
+   * Foo.prototype = {
+   *   ...
+   *   get syncID() {
+   *     let syncID = Svc.Prefs.get("client.syncID", "");
+   *     return syncID == "" ? this.syncID = Utils.makeGUID() : syncID;
+   *   },
+   *   set syncID(value) {
+   *     Svc.Prefs.set("client.syncID", value);
+   *   },
+   *   ...
+   * };
+   */
+  defineLazyIDProperty(object, propName, prefName) {
+    // An object that exists to be the target of the lazy pref getter.
+    // We can't use `object` (at least, not using `propName`) since XPCOMUtils
+    // will stomp on any setter we define.
+    const storage = {};
+    XPCOMUtils.defineLazyPreferenceGetter(storage, "value", prefName, "");
+    Object.defineProperty(object, propName, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        let value = storage.value;
+        if (!value) {
+          value = Utils.makeGUID();
+          Services.prefs.setStringPref(prefName, value);
+        }
+        return value;
+      },
+      set(value) {
+        Services.prefs.setStringPref(prefName, value);
+      }
+    });
+  },
+
   getDeviceType() {
-    return Svc.Prefs.get("client.type", DEVICE_TYPE_DESKTOP);
+    return localDeviceType;
   },
 
   formatTimestamp(date) {
@@ -633,6 +709,9 @@ XPCOMUtils.defineLazyGetter(Utils, "_utf8Converter", function() {
   converter.charset = "UTF-8";
   return converter;
 });
+
+XPCOMUtils.defineLazyGetter(Utils, "utf8Encoder", () =>
+  new TextEncoder("utf-8"));
 
 /*
  * Commonly-used services

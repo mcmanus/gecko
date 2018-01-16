@@ -495,7 +495,6 @@ public:
   }
 
 private:
-  // Lives in nsCSSParser.cpp for the macros it depends on.
   static const uint32_t kParserVariantTable[eCSSProperty_COUNT_no_shorthands];
 
 public:
@@ -633,12 +632,10 @@ public:
   static bool IsEnabled(nsCSSPropertyID aProperty) {
     MOZ_ASSERT(0 <= aProperty && aProperty < eCSSProperty_COUNT_with_aliases,
                "out of range");
-    // We don't have useful pref init phases in the parent process.  But in the
-    // child process, assert that we're not trying to parse stylesheets before
-    // we've gotten all our prefs.
-    MOZ_ASSERT(XRE_IsParentProcess() ||
-               mozilla::Preferences::InitPhase() == END_ALL_PREFS,
-               "Checking style preferences before they have been set");
+    // In the child process, assert that we're not trying to parse stylesheets
+    // before we've gotten all our prefs.
+    MOZ_ASSERT_IF(!XRE_IsParentProcess(),
+                  mozilla::Preferences::AreAllPrefsSetInContentProcess());
     return gPropertyEnabled[aProperty];
   }
 
@@ -837,6 +834,7 @@ public:
   static const KTableEntry kRubyAlignKTable[];
   static const KTableEntry kRubyPositionKTable[];
   static const KTableEntry kScrollBehaviorKTable[];
+  static const KTableEntry kOverscrollBehaviorKTable[];
   static const KTableEntry kScrollSnapTypeKTable[];
   static const KTableEntry kSpeakKTable[];
   static const KTableEntry kSpeakHeaderKTable[];

@@ -50,24 +50,6 @@ PatternFromState::operator mozilla::gfx::Pattern&()
     return *state.pattern->GetPattern(mContext->mDT, state.patternTransformChanged ? &state.patternTransform : nullptr);
   }
 
-  if (state.sourceSurface) {
-    Matrix transform = state.surfTransform;
-
-    if (state.patternTransformChanged) {
-      Matrix mat = mContext->GetDTTransform();
-      if (!mat.Invert()) {
-        mPattern = new (mColorPattern.addr())
-        ColorPattern(Color()); // transparent black to paint nothing
-        return *mPattern;
-      }
-      transform = transform * state.patternTransform * mat;
-    }
-
-    mPattern = new (mSurfacePattern.addr())
-    SurfacePattern(state.sourceSurface, ExtendMode::CLAMP, transform);
-    return *mPattern;
-  }
-
   mPattern = new (mColorPattern.addr())
   ColorPattern(state.color);
   return *mPattern;
@@ -112,7 +94,7 @@ gfxContext::CreatePreservingTransformOrNull(DrawTarget* aTarget)
 
   Matrix transform = aTarget->GetTransform();
   RefPtr<gfxContext> result = new gfxContext(aTarget);
-  result->SetMatrix(ThebesMatrix(transform));
+  result->SetMatrix(transform);
   return result.forget();
 }
 
@@ -318,16 +300,28 @@ gfxContext::Multiply(const gfxMatrix& matrix)
 }
 
 void
-gfxContext::SetMatrix(const gfxMatrix& matrix)
+gfxContext::SetMatrix(const gfx::Matrix& matrix)
 {
   CURRENTSTATE_CHANGED()
-  ChangeTransform(ToMatrix(matrix));
+  ChangeTransform(matrix);
+}
+
+void
+gfxContext::SetMatrixDouble(const gfxMatrix& matrix)
+{
+  SetMatrix(ToMatrix(matrix));
+}
+
+gfx::Matrix
+gfxContext::CurrentMatrix() const
+{
+  return mTransform;
 }
 
 gfxMatrix
-gfxContext::CurrentMatrix() const
+gfxContext::CurrentMatrixDouble() const
 {
-  return ThebesMatrix(mTransform);
+  return ThebesMatrix(CurrentMatrix());
 }
 
 gfxPoint
@@ -609,7 +603,7 @@ gfxContext::GetClipExtents(ClipExtentsSpace aSpace) const
 {
   Rect rect = GetAzureDeviceSpaceClipBounds();
 
-  if (rect.width == 0 || rect.height == 0) {
+  if (rect.IsZeroArea()) {
     return gfxRect(0, 0, 0, 0);
   }
 
@@ -681,8 +675,6 @@ gfxContext::SetColor(const Color& aColor)
 {
   CURRENTSTATE_CHANGED()
   CurrentState().pattern = nullptr;
-  CurrentState().sourceSurfCairo = nullptr;
-  CurrentState().sourceSurface = nullptr;
   CurrentState().color = ToDeviceColor(aColor);
 }
 
@@ -691,17 +683,12 @@ gfxContext::SetDeviceColor(const Color& aColor)
 {
   CURRENTSTATE_CHANGED()
   CurrentState().pattern = nullptr;
-  CurrentState().sourceSurfCairo = nullptr;
-  CurrentState().sourceSurface = nullptr;
   CurrentState().color = aColor;
 }
 
 bool
 gfxContext::GetDeviceColor(Color& aColorOut)
 {
-  if (CurrentState().sourceSurface) {
-    return false;
-  }
   if (CurrentState().pattern) {
     return CurrentState().pattern->GetSolidColor(aColorOut);
   }
@@ -711,26 +698,9 @@ gfxContext::GetDeviceColor(Color& aColorOut)
 }
 
 void
-gfxContext::SetSource(gfxASurface *surface, const gfxPoint& offset)
-{
-  CURRENTSTATE_CHANGED()
-  CurrentState().surfTransform = Matrix(1.0f, 0, 0, 1.0f, Float(offset.x), Float(offset.y));
-  CurrentState().pattern = nullptr;
-  CurrentState().patternTransformChanged = false;
-  // Keep the underlying cairo surface around while we keep the
-  // sourceSurface.
-  CurrentState().sourceSurfCairo = surface;
-  CurrentState().sourceSurface =
-  gfxPlatform::GetPlatform()->GetSourceSurfaceForSurface(mDT, surface);
-  CurrentState().color = Color(0, 0, 0, 0);
-}
-
-void
 gfxContext::SetPattern(gfxPattern *pattern)
 {
   CURRENTSTATE_CHANGED()
-  CurrentState().sourceSurfCairo = nullptr;
-  CurrentState().sourceSurface = nullptr;
   CurrentState().patternTransformChanged = false;
   CurrentState().pattern = pattern;
 }
@@ -743,8 +713,6 @@ gfxContext::GetPattern()
   AzureState &state = CurrentState();
   if (state.pattern) {
     pat = state.pattern;
-  } else if (state.sourceSurface) {
-    NS_ASSERTION(false, "Ugh, this isn't good.");
   } else {
     pat = new gfxPattern(state.color);
   }
@@ -779,28 +747,6 @@ gfxContext::Paint(gfxFloat alpha)
 {
   AUTO_PROFILER_LABEL("gfxContext::Paint", GRAPHICS);
 
-  AzureState &state = CurrentState();
-
-  if (state.sourceSurface && !state.sourceSurfCairo &&
-      !state.patternTransformChanged)
-  {
-    // This is the case where a PopGroupToSource has been done and this
-    // paint is executed without changing the transform or the source.
-    Matrix oldMat = mDT->GetTransform();
-
-    IntSize surfSize = state.sourceSurface->GetSize();
-
-    mDT->SetTransform(Matrix::Translation(-state.deviceOffset.x,
-                                          -state.deviceOffset.y));
-
-    mDT->DrawSurface(state.sourceSurface,
-                     Rect(state.sourceSurfaceDeviceOffset, Size(surfSize.width, surfSize.height)),
-                     Rect(Point(), Size(surfSize.width, surfSize.height)),
-                     DrawSurfaceOptions(), DrawOptions(alpha, GetOp()));
-    mDT->SetTransform(oldMat);
-    return;
-  }
-
   Matrix mat = mDT->GetTransform();
   mat.Invert();
   Rect paintRect = mat.TransformBounds(Rect(Point(0, 0), Size(mDT->GetSize())));
@@ -822,7 +768,7 @@ gfxContext::PushGroupAndCopyBackground(gfxContentType content, Float aOpacity, S
   if (mDT->GetFormat() != SurfaceFormat::B8G8R8X8) {
     gfxRect clipRect = GetClipExtents(gfxContext::eDeviceSpace);
     clipRect.RoundOut();
-    clipExtents = IntRect::Truncate(clipRect.x, clipRect.y, clipRect.width, clipRect.height);
+    clipExtents = IntRect::Truncate(clipRect.X(), clipRect.Y(), clipRect.Width(), clipRect.Height());
   }
   bool pushOpaqueWithCopiedBG = (mDT->GetFormat() == SurfaceFormat::B8G8R8X8 ||
                                  mDT->GetOpaqueRect().Contains(clipExtents)) &&
@@ -980,12 +926,6 @@ gfxContext::GetOp()
     } else {
       return CompositionOp::OP_SOURCE;
     }
-  } else if (state.sourceSurface) {
-    if (state.sourceSurface->GetFormat() == SurfaceFormat::B8G8R8X8) {
-      return CompositionOp::OP_OVER;
-    } else {
-      return CompositionOp::OP_SOURCE;
-    }
   } else {
     if (state.color.a > 0.999) {
       return CompositionOp::OP_OVER;
@@ -1011,7 +951,7 @@ gfxContext::ChangeTransform(const Matrix &aNewMatrix, bool aUpdatePatternTransfo
 {
   AzureState &state = CurrentState();
 
-  if (aUpdatePatternTransform && (state.pattern || state.sourceSurface)
+  if (aUpdatePatternTransform && (state.pattern)
       && !state.patternTransformChanged) {
     state.patternTransform = GetDTTransform();
     state.patternTransformChanged = true;

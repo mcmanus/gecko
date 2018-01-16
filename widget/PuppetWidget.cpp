@@ -93,6 +93,7 @@ PuppetWidget::PuppetWidget(TabChild* aTabChild)
   , mDefaultScale(-1)
   , mCursorHotspotX(0)
   , mCursorHotspotY(0)
+  , mIgnoreCompositionEvents(false)
 {
   // Setting 'Unknown' means "not yet cached".
   mInputContext.mIMEState.mEnabled = IMEState::UNKNOWN;
@@ -133,7 +134,7 @@ PuppetWidget::InfallibleCreate(nsIWidget* aParent,
     mLayerManager = parent->GetLayerManager();
   }
   else {
-    Resize(mBounds.x, mBounds.y, mBounds.width, mBounds.height, false);
+    Resize(mBounds.X(), mBounds.Y(), mBounds.Width(), mBounds.Height(), false);
   }
   nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
   if (obs) {
@@ -223,7 +224,7 @@ PuppetWidget::Show(bool aState)
     // of no use anymore (and is actually actively harmful - see
     // bug 1323586).
     mPreviouslyAttachedWidgetListener = nullptr;
-    Resize(mBounds.width, mBounds.height, false);
+    Resize(mBounds.Width(), mBounds.Height(), false);
     Invalidate(mBounds);
   }
 }
@@ -256,9 +257,9 @@ PuppetWidget::Resize(double aWidth,
   if (!oldBounds.IsEqualEdges(mBounds) && mAttachedWidgetListener) {
     if (GetCurrentWidgetListener() &&
         GetCurrentWidgetListener() != mAttachedWidgetListener) {
-      GetCurrentWidgetListener()->WindowResized(this, mBounds.width, mBounds.height);
+      GetCurrentWidgetListener()->WindowResized(this, mBounds.Width(), mBounds.Height());
     }
-    mAttachedWidgetListener->WindowResized(this, mBounds.width, mBounds.height);
+    mAttachedWidgetListener->WindowResized(this, mBounds.Width(), mBounds.Height());
   }
 }
 
@@ -273,11 +274,11 @@ PuppetWidget::ConfigureChildren(const nsTArray<Configuration>& aConfigurations)
     w->SetWindowClipRegion(configuration.mClipRegion, true);
     LayoutDeviceIntRect bounds = w->GetBounds();
     if (bounds.Size() != configuration.mBounds.Size()) {
-      w->Resize(configuration.mBounds.x, configuration.mBounds.y,
-                configuration.mBounds.width, configuration.mBounds.height,
+      w->Resize(configuration.mBounds.X(), configuration.mBounds.Y(),
+                configuration.mBounds.Width(), configuration.mBounds.Height(),
                 true);
     } else if (bounds.TopLeft() != configuration.mBounds.TopLeft()) {
-      w->Move(configuration.mBounds.x, configuration.mBounds.y);
+      w->Move(configuration.mBounds.X(), configuration.mBounds.Y());
     }
     w->SetWindowClipRegion(configuration.mClipRegion, false);
   }
@@ -345,6 +346,20 @@ PuppetWidget::DispatchEvent(WidgetGUIEvent* aEvent, nsEventStatus& aStatus)
     "before dispatched");
 
   if (aEvent->mClass == eCompositionEventClass) {
+    // If we've already requested to commit/cancel the latest composition,
+    // TextComposition for the old composition has been destroyed.  Then,
+    // the DOM tree needs to listen to next eCompositionStart and its
+    // following events.  So, until we meet new eCompositionStart, let's
+    // discard all unnecessary composition events here.
+    if (mIgnoreCompositionEvents) {
+      if (aEvent->mMessage != eCompositionStart) {
+        aStatus = nsEventStatus_eIgnore;
+        return NS_OK;
+      }
+      // Now, we receive new eCompositionStart.  Let's restart to handle
+      // composition in this process.
+      mIgnoreCompositionEvents = false;
+    }
     // Store the latest native IME context of parent process's widget or
     // TextEventDispatcher if it's in this process.
     WidgetCompositionEvent* compositionEvent = aEvent->AsCompositionEvent();
@@ -645,12 +660,26 @@ PuppetWidget::RequestIMEToCommitComposition(bool aCancel)
     return NS_OK;
   }
 
+  // We've already requested to commit/cancel composition.
+  if (NS_WARN_IF(mIgnoreCompositionEvents)) {
+#ifdef DEBUG
+    RefPtr<TextComposition> composition =
+      IMEStateManager::GetTextCompositionFor(this);
+    MOZ_ASSERT(!composition);
+#endif // #ifdef DEBUG
+    return NS_OK;
+  }
+
   RefPtr<TextComposition> composition =
     IMEStateManager::GetTextCompositionFor(this);
   // This method shouldn't be called when there is no text composition instance.
   if (NS_WARN_IF(!composition)) {
     return NS_OK;
   }
+
+  MOZ_DIAGNOSTIC_ASSERT(composition->IsRequestingCommitOrCancelComposition(),
+    "Requesting commit or cancel composition should be requested via "
+    "TextComposition instance");
 
   bool isCommitted = false;
   nsAutoString committedString;
@@ -671,6 +700,16 @@ PuppetWidget::RequestIMEToCommitComposition(bool aCancel)
   compositionCommitEvent.mData = committedString;
   nsEventStatus status = nsEventStatus_eIgnore;
   DispatchEvent(&compositionCommitEvent, status);
+
+#ifdef DEBUG
+  RefPtr<TextComposition> currentComposition =
+    IMEStateManager::GetTextCompositionFor(this);
+  MOZ_ASSERT(!currentComposition);
+#endif // #ifdef DEBUG
+
+  // Ignore the following composition events until we receive new
+  // eCompositionStart event.
+  mIgnoreCompositionEvents = true;
 
   Unused <<
     mTabChild->SendOnEventNeedingAckHandled(eCompositionCommitRequestHandled);
@@ -803,7 +842,7 @@ PuppetWidget::NotifyIMEOfFocusChange(const IMENotification& aIMENotification)
     [self] (IMENotificationRequests aRequests) {
       self->mIMENotificationRequestsOfParent = aRequests;
     },
-    [self] (mozilla::ipc::PromiseRejectReason aReason) {
+    [self] (mozilla::ipc::ResponseRejectReason aReason) {
       NS_WARNING("SendNotifyIMEFocus got rejected.");
     });
 
@@ -1212,26 +1251,26 @@ PuppetWidget::SetNativeData(uint32_t aDataType, uintptr_t aVal)
 }
 #endif
 
-nsIntPoint
-PuppetWidget::GetChromeDimensions()
+LayoutDeviceIntPoint
+PuppetWidget::GetChromeOffset()
 {
   if (!GetOwningTabChild()) {
     NS_WARNING("PuppetWidget without Tab does not have chrome information.");
-    return nsIntPoint();
+    return LayoutDeviceIntPoint();
   }
-  return GetOwningTabChild()->GetChromeDisplacement().ToUnknownPoint();
+  return GetOwningTabChild()->GetChromeOffset();
 }
 
-nsIntPoint
+LayoutDeviceIntPoint
 PuppetWidget::GetWindowPosition()
 {
   if (!GetOwningTabChild()) {
-    return nsIntPoint();
+    return LayoutDeviceIntPoint();
   }
 
   int32_t winX, winY, winW, winH;
-  NS_ENSURE_SUCCESS(GetOwningTabChild()->GetDimensions(0, &winX, &winY, &winW, &winH), nsIntPoint());
-  return nsIntPoint(winX, winY) + GetOwningTabChild()->GetClientOffset().ToUnknownPoint();
+  NS_ENSURE_SUCCESS(GetOwningTabChild()->GetDimensions(0, &winX, &winY, &winW, &winH), LayoutDeviceIntPoint());
+  return LayoutDeviceIntPoint(winX, winY) + GetOwningTabChild()->GetClientOffset();
 }
 
 LayoutDeviceIntRect
@@ -1275,7 +1314,7 @@ nsIntSize
 PuppetWidget::GetScreenDimensions()
 {
   nsIntRect r = ScreenConfig().rect();
-  return nsIntSize(r.width, r.height);
+  return nsIntSize(r.Width(), r.Height());
 }
 
 NS_IMETHODIMP
@@ -1283,10 +1322,7 @@ PuppetScreen::GetRect(int32_t *outLeft,  int32_t *outTop,
                       int32_t *outWidth, int32_t *outHeight)
 {
   nsIntRect r = ScreenConfig().rect();
-  *outLeft = r.x;
-  *outTop = r.y;
-  *outWidth = r.width;
-  *outHeight = r.height;
+  r.GetRect(outLeft, outTop, outWidth, outHeight);
   return NS_OK;
 }
 

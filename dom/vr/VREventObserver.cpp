@@ -22,12 +22,12 @@ using namespace gfx;
  * window.onvrdisplaydeactivate, window.onvrdisplayconnected,
  * window.onvrdisplaydisconnected, and window.onvrdisplaypresentchange.
  */
-VREventObserver::VREventObserver(nsGlobalWindow* aGlobalWindow)
+VREventObserver::VREventObserver(nsGlobalWindowInner* aGlobalWindow)
   : mWindow(aGlobalWindow)
   , mIs2DView(true)
   , mHasReset(false)
 {
-  MOZ_ASSERT(aGlobalWindow && aGlobalWindow->IsInnerWindow());
+  MOZ_ASSERT(aGlobalWindow);
 
   UpdateSpentTimeIn2DTelemetry(false);
   VRManagerChild* vmc = VRManagerChild::Get();
@@ -74,6 +74,15 @@ VREventObserver::UpdateSpentTimeIn2DTelemetry(bool aUpdate)
   } else if (!aUpdate) {
     mSpendTimeIn2DView = TimeStamp::Now();
     mHasReset = true;
+  }
+}
+
+void
+VREventObserver::NotifyAfterLoad()
+{
+  if (VRManagerChild::IsCreated()) {
+    VRManagerChild* vmc = VRManagerChild::Get();
+    vmc->FireDOMVRDisplayConnectEventsForLoad(this);
   }
 }
 

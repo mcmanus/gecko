@@ -356,7 +356,7 @@ CompositorBridgeParent::InitSameProcess(widget::CompositorWidget* aWidget,
   mWidget = aWidget;
   mRootLayerTreeID = aLayerTreeId;
   if (mOptions.UseAPZ()) {
-    mApzcTreeManager = new APZCTreeManager();
+    mApzcTreeManager = new APZCTreeManager(mRootLayerTreeID);
   }
 
   Initialize();
@@ -382,10 +382,12 @@ CompositorBridgeParent::Initialize()
   // can destroy this instance is initialized on the compositor thread after
   // this task has been processed.
   MOZ_ASSERT(CompositorLoop());
-  CompositorLoop()->PostTask(NewRunnableFunction(&AddCompositor,
+  CompositorLoop()->PostTask(NewRunnableFunction("AddCompositorRunnable",
+                                                 &AddCompositor,
                                                  this, &mCompositorBridgeID));
 
-  CompositorLoop()->PostTask(NewRunnableFunction(SetThreadPriority));
+  CompositorLoop()->PostTask(NewRunnableFunction("SetThreadPriorityRunnable",
+                                                 SetThreadPriority));
 
 
   { // scope lock
@@ -904,7 +906,11 @@ CompositorBridgeParent::ScheduleComposition()
     return;
   }
 
-  mCompositorScheduler->ScheduleComposition();
+  if (mWrBridge) {
+    mWrBridge->ScheduleGenerateFrame();
+  } else {
+    mCompositorScheduler->ScheduleComposition();
+  }
 }
 
 // Go down the composite layer tree, setting properties to match their
@@ -1127,7 +1133,7 @@ CompositorBridgeParent::AllocPAPZCTreeManagerParent(const uint64_t& aLayersId)
 
   // This message doubles as initialization
   MOZ_ASSERT(!mApzcTreeManager);
-  mApzcTreeManager = new APZCTreeManager();
+  mApzcTreeManager = new APZCTreeManager(mRootLayerTreeID);
 
   MonitorAutoLock lock(*sIndirectLayerTreesLock);
   CompositorBridgeParent::LayerTreeState& state = sIndirectLayerTrees[mRootLayerTreeID];
@@ -1659,7 +1665,8 @@ CompositorBridgeParent::RecvAdoptChild(const uint64_t& child)
       ScheduleComposition();
     }
     if (mWrBridge && sIndirectLayerTrees[child].mWrBridge) {
-      RefPtr<wr::WebRenderAPI> api = mWrBridge->GetWebRenderAPI()->Clone();
+      RefPtr<wr::WebRenderAPI> api = mWrBridge->GetWebRenderAPI();
+      api = api->Clone();
       sIndirectLayerTrees[child].mWrBridge->UpdateWebRender(mWrBridge->CompositorScheduler(),
                                                             api,
                                                             mWrBridge->AsyncImageManager(),
@@ -1783,7 +1790,8 @@ CompositorBridgeParent::DeallocateLayerTreeId(uint64_t aId)
     gfxCriticalError() << "Attempting to post to a invalid Compositor Loop";
     return;
   }
-  CompositorLoop()->PostTask(NewRunnableFunction(&EraseLayerState, aId));
+  CompositorLoop()->PostTask(NewRunnableFunction("EraseLayerStateRunnable",
+                                                 &EraseLayerState, aId));
 }
 
 static void
@@ -1820,7 +1828,8 @@ CompositorBridgeParent::SetControllerForLayerTree(uint64_t aLayersId,
 {
   // This ref is adopted by UpdateControllerForLayersId().
   aController->AddRef();
-  CompositorLoop()->PostTask(NewRunnableFunction(&UpdateControllerForLayersId,
+  CompositorLoop()->PostTask(NewRunnableFunction("UpdateControllerForLayersIdRunnable",
+                                                 &UpdateControllerForLayersId,
                                                  aLayersId,
                                                  aController));
 }
@@ -1860,7 +1869,8 @@ CompositorBridgeParent::PostInsertVsyncProfilerMarker(TimeStamp aVsyncTimestamp)
   // Called in the vsync thread
   if (profiler_is_active() && CompositorThreadHolder::IsActive()) {
     CompositorLoop()->PostTask(
-      NewRunnableFunction(InsertVsyncProfilerMarker, aVsyncTimestamp));
+      NewRunnableFunction("InsertVsyncProfilerMarkerRunnable", InsertVsyncProfilerMarker,
+                          aVsyncTimestamp));
   }
 #endif
 }

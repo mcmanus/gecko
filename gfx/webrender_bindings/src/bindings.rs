@@ -2,15 +2,17 @@ use std::ffi::{CStr, CString};
 use std::{mem, slice};
 use std::path::PathBuf;
 use std::ptr;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::os::raw::{c_void, c_char, c_float};
 use gleam::gl;
 
-use webrender_api::*;
-use webrender::{ReadPixelsFormat, Renderer, RendererOptions};
+use webrender::api::*;
+use webrender::{ReadPixelsFormat, Renderer, RendererOptions, ThreadListener};
 use webrender::{ExternalImage, ExternalImageHandler, ExternalImageSource};
 use webrender::DebugFlags;
 use webrender::{ApiRecordingReceiver, BinaryRecorder};
+use webrender::{ProgramCache, UploadMethod, VertexUsageHint};
 use thread_profiler::register_thread_with_profiler;
 use moz2d_renderer::Moz2dImageRenderer;
 use app_units::Au;
@@ -25,8 +27,6 @@ use dwrote::{FontDescriptor, FontWeight, FontStretch, FontStyle};
 use core_foundation::string::CFString;
 #[cfg(target_os = "macos")]
 use core_graphics::font::CGFont;
-
-extern crate webrender_api;
 
 /// cbindgen:field-names=[mNamespace, mHandle]
 type WrExternalImageBufferType = ExternalImageType;
@@ -44,6 +44,7 @@ type WrIdNamespace = IdNamespace;
 /// cbindgen:field-names=[mNamespace, mHandle]
 type WrPipelineId = PipelineId;
 /// cbindgen:field-names=[mNamespace, mHandle]
+/// cbindgen:derive-neq=true
 type WrImageKey = ImageKey;
 /// cbindgen:field-names=[mNamespace, mHandle]
 pub type WrFontKey = FontKey;
@@ -77,7 +78,8 @@ pub struct DocumentHandle {
 
 impl DocumentHandle {
     pub fn new(api: RenderApi, size: DeviceUintSize) -> DocumentHandle {
-        let doc = api.add_document(size);
+        let layer = 0; //TODO
+        let doc = api.add_document(size, layer);
         DocumentHandle {
             api: api,
             document_id: doc
@@ -266,8 +268,9 @@ impl Into<WrExternalImageId> for ExternalImageId {
 #[repr(u32)]
 #[allow(dead_code)]
 enum WrExternalImageType {
-    NativeTexture,
     RawData,
+    NativeTexture,
+    Invalid,
 }
 
 #[repr(C)]
@@ -323,6 +326,15 @@ impl ExternalImageHandler for WrExternalImageHandler {
                     source: ExternalImageSource::RawData(make_slice(image.buff, image.size)),
                 }
             },
+            WrExternalImageType::Invalid => {
+                ExternalImage {
+                    u0: image.u0,
+                    v0: image.v0,
+                    u1: image.u1,
+                    v1: image.v1,
+                    source: ExternalImageSource::Invalid,
+                }
+            },
         }
     }
 
@@ -331,6 +343,18 @@ impl ExternalImageHandler for WrExternalImageHandler {
               channel_index: u8) {
         (self.unlock_func)(self.external_image_obj, id.into(), channel_index);
     }
+}
+
+#[repr(u32)]
+pub enum WrAnimationType {
+    Transform = 0,
+    Opacity = 1,
+}
+
+#[repr(C)]
+pub struct WrAnimationProperty {
+    effect_type: WrAnimationType,
+    id: u64,
 }
 
 #[repr(u32)]
@@ -345,13 +369,16 @@ pub enum WrFilterOpType {
   Opacity = 6,
   Saturate = 7,
   Sepia = 8,
+  DropShadow = 9,
 }
 
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct WrFilterOp {
     filter_type: WrFilterOpType,
-    argument: c_float,
+    argument: c_float, // holds radius for DropShadow; value for other filters
+    offset: LayoutVector2D, // only used for DropShadow
+    color: ColorF, // only used for DropShadow
 }
 
 /// cbindgen:derive-eq=false
@@ -403,6 +430,7 @@ extern "C" {
     fn is_in_render_thread() -> bool;
     fn is_in_main_thread() -> bool;
     fn is_glcontext_egl(glcontext_ptr: *mut c_void) -> bool;
+    fn is_glcontext_angle(glcontext_ptr: *mut c_void) -> bool;
     // Enables binary recording that can be used with `wrench replay`
     // Outputs a wr-record-*.bin file for each window that is shown
     // Note: wrench will panic if external images are used, they can
@@ -433,23 +461,29 @@ extern "C" {
                                   raw_event: usize);
 }
 
-impl webrender_api::RenderNotifier for CppNotifier {
-    fn clone(&self) -> Box<webrender_api::RenderNotifier> {
+impl RenderNotifier for CppNotifier {
+    fn clone(&self) -> Box<RenderNotifier> {
         Box::new(CppNotifier {
             window_id: self.window_id,
         })
     }
 
-    fn new_frame_ready(&self) {
+    fn wake_up(&self) {
         unsafe {
             wr_notifier_new_frame_ready(self.window_id);
         }
     }
 
-    fn new_scroll_frame_ready(&self,
-                              composite_needed: bool) {
+    fn new_document_ready(&self,
+                          _: DocumentId,
+                          scrolled: bool,
+                          composite_needed: bool) {
         unsafe {
-            wr_notifier_new_scroll_frame_ready(self.window_id, composite_needed);
+            if scrolled {
+                wr_notifier_new_scroll_frame_ready(self.window_id, composite_needed);
+            } else {
+                wr_notifier_new_frame_ready(self.window_id);
+            }
         }
     }
 
@@ -486,7 +520,7 @@ pub extern "C" fn wr_renderer_render(renderer: &mut Renderer,
                                      width: u32,
                                      height: u32) -> bool {
     match renderer.render(DeviceUintSize::new(width, height)) {
-        Ok(()) => true,
+        Ok(_) => true,
         Err(errors) => {
             for e in errors {
                 println!(" Failed to render: {:?}", e);
@@ -587,14 +621,48 @@ pub unsafe extern "C" fn wr_rendered_epochs_delete(pipeline_epochs: *mut WrRende
     Box::from_raw(pipeline_epochs);
 }
 
+extern "C" {
+    fn gecko_profiler_register_thread(name: *const ::std::os::raw::c_char);
+    fn gecko_profiler_unregister_thread();
+}
+
+struct GeckoProfilerThreadListener {}
+
+impl GeckoProfilerThreadListener {
+    pub fn new() -> GeckoProfilerThreadListener {
+        GeckoProfilerThreadListener{}
+    }
+}
+
+impl ThreadListener for GeckoProfilerThreadListener {
+    fn thread_started(&self, thread_name: &str) {
+        let name = CString::new(thread_name).unwrap();
+        unsafe {
+            // gecko_profiler_register_thread copies the passed name here.
+            gecko_profiler_register_thread(name.as_ptr());
+        }
+    }
+
+    fn thread_stopped(&self, _: &str) {
+        unsafe {
+            gecko_profiler_unregister_thread();
+        }
+    }
+}
+
 pub struct WrThreadPool(Arc<rayon::ThreadPool>);
 
 #[no_mangle]
 pub unsafe extern "C" fn wr_thread_pool_new() -> *mut WrThreadPool {
     let worker_config = rayon::Configuration::new()
-        .thread_name(|idx|{ format!("WebRender:Worker#{}", idx) })
+        .thread_name(|idx|{ format!("WRWorker#{}", idx) })
         .start_handler(|idx| {
-            register_thread_with_profiler(format!("WebRender:Worker#{}", idx));
+            let name = format!("WRWorker#{}", idx);
+            register_thread_with_profiler(name.clone());
+            gecko_profiler_register_thread(CString::new(name).unwrap().as_ptr());
+        })
+        .exit_handler(|_idx| {
+            gecko_profiler_unregister_thread();
         });
 
     let workers = Arc::new(rayon::ThreadPool::new(worker_config).unwrap());
@@ -606,6 +674,26 @@ pub unsafe extern "C" fn wr_thread_pool_new() -> *mut WrThreadPool {
 #[no_mangle]
 pub unsafe extern "C" fn wr_thread_pool_delete(thread_pool: *mut WrThreadPool) {
     Box::from_raw(thread_pool);
+}
+
+pub struct WrProgramCache(Rc<ProgramCache>);
+
+#[no_mangle]
+pub unsafe extern "C" fn wr_program_cache_new() -> *mut WrProgramCache {
+    let program_cache = ProgramCache::new();
+    Box::into_raw(Box::new(WrProgramCache(program_cache)))
+}
+
+/// cbindgen:postfix=WR_DESTRUCTOR_SAFE_FUNC
+#[no_mangle]
+pub unsafe extern "C" fn wr_program_cache_delete(program_cache: *mut WrProgramCache) {
+    Rc::from_raw(program_cache);
+}
+
+#[no_mangle]
+pub extern "C" fn wr_renderer_update_program_cache(renderer: &mut Renderer, program_cache: &mut WrProgramCache) {
+    let program_cache = Rc::clone(&program_cache.0);
+    renderer.update_program_cache(program_cache);
 }
 
 // Call MakeCurrent before this.
@@ -644,12 +732,19 @@ pub extern "C" fn wr_window_new(window_id: WrWindowId,
         Arc::clone(&(*thread_pool).0)
     };
 
+    let upload_method = if unsafe { is_glcontext_angle(gl_context) } {
+        UploadMethod::Immediate
+    } else {
+        UploadMethod::PixelBuffer(VertexUsageHint::Dynamic)
+    };
+
     let opts = RendererOptions {
         enable_aa: true,
         enable_subpixel_aa: true,
         recorder: recorder,
         blob_image_renderer: Some(Box::new(Moz2dImageRenderer::new(workers.clone()))),
         workers: Some(workers.clone()),
+        thread_listener: Some(Box::new(GeckoProfilerThreadListener::new())),
         enable_render_on_scroll: false,
         resource_override_path: unsafe {
             let override_charptr = gfx_wr_resource_path_override();
@@ -662,6 +757,8 @@ pub extern "C" fn wr_window_new(window_id: WrWindowId,
                 }
             }
         },
+        renderer_id: Some(window_id.0),
+        upload_method,
         ..Default::default()
     };
 
@@ -856,6 +953,12 @@ pub extern "C" fn wr_api_set_root_pipeline(dh: &mut DocumentHandle,
 }
 
 #[no_mangle]
+pub extern "C" fn wr_api_remove_pipeline(dh: &mut DocumentHandle,
+                                         pipeline_id: WrPipelineId) {
+    dh.api.remove_pipeline(dh.document_id, pipeline_id);
+}
+
+#[no_mangle]
 pub extern "C" fn wr_api_set_window_parameters(dh: &mut DocumentHandle,
                                                width: i32,
                                                height: i32) {
@@ -876,8 +979,7 @@ pub unsafe extern "C" fn wr_api_set_display_list(
     pipeline_id: WrPipelineId,
     content_size: LayoutSize,
     dl_descriptor: BuiltDisplayListDescriptor,
-    dl_data: *mut u8,
-    dl_size: usize,
+    dl_data: &mut WrVecU8,
     resources: &mut ResourceUpdates,
 ) {
     let resource_updates = mem::replace(resources, ResourceUpdates::new());
@@ -889,10 +991,7 @@ pub unsafe extern "C" fn wr_api_set_display_list(
     // but I suppose it is a good default.
     let preserve_frame_state = true;
 
-    let dl_slice = make_slice(dl_data, dl_size);
-    let mut dl_vec = Vec::new();
-    // XXX: see if we can get rid of the copy here
-    dl_vec.extend_from_slice(dl_slice);
+    let dl_vec = dl_data.flush_into_vec();
     let dl = BuiltDisplayList::from_data(dl_vec, dl_descriptor);
 
     dh.api.set_display_list(
@@ -1111,7 +1210,7 @@ pub unsafe extern "C" fn wr_api_get_namespace(dh: &mut DocumentHandle) -> WrIdNa
 
 pub struct WebRenderFrameBuilder {
     pub root_pipeline_id: WrPipelineId,
-    pub dl_builder: webrender_api::DisplayListBuilder,
+    pub dl_builder: DisplayListBuilder,
 }
 
 impl WebRenderFrameBuilder {
@@ -1119,7 +1218,7 @@ impl WebRenderFrameBuilder {
                content_size: LayoutSize) -> WebRenderFrameBuilder {
         WebRenderFrameBuilder {
             root_pipeline_id: root_pipeline_id,
-            dl_builder: webrender_api::DisplayListBuilder::new(root_pipeline_id, content_size),
+            dl_builder: DisplayListBuilder::new(root_pipeline_id, content_size),
         }
     }
     pub fn with_capacity(root_pipeline_id: WrPipelineId,
@@ -1127,7 +1226,7 @@ impl WebRenderFrameBuilder {
                capacity: usize) -> WebRenderFrameBuilder {
         WebRenderFrameBuilder {
             root_pipeline_id: root_pipeline_id,
-            dl_builder: webrender_api::DisplayListBuilder::with_capacity(root_pipeline_id, content_size, capacity),
+            dl_builder: DisplayListBuilder::with_capacity(root_pipeline_id, content_size, capacity),
         }
     }
 
@@ -1136,6 +1235,7 @@ impl WebRenderFrameBuilder {
 pub struct WrState {
     pipeline_id: WrPipelineId,
     frame_builder: WebRenderFrameBuilder,
+    current_tag: Option<ItemTag>,
 }
 
 #[no_mangle]
@@ -1149,6 +1249,7 @@ pub extern "C" fn wr_state_new(pipeline_id: WrPipelineId,
                              frame_builder: WebRenderFrameBuilder::with_capacity(pipeline_id,
                                                                                  content_size,
                                                                                  capacity),
+                             current_tag: None,
                          });
 
     Box::into_raw(state)
@@ -1182,7 +1283,7 @@ pub extern "C" fn wr_dp_clear_save(state: &mut WrState) {
 #[no_mangle]
 pub extern "C" fn wr_dp_push_stacking_context(state: &mut WrState,
                                               bounds: LayoutRect,
-                                              animation_id: u64,
+                                              animation: *const WrAnimationProperty,
                                               opacity: *const f32,
                                               transform: *const LayoutTransform,
                                               transform_style: TransformStyle,
@@ -1202,31 +1303,36 @@ pub extern "C" fn wr_dp_push_stacking_context(state: &mut WrState,
             WrFilterOpType::Grayscale => FilterOp::Grayscale(c_filter.argument),
             WrFilterOpType::HueRotate => FilterOp::HueRotate(c_filter.argument),
             WrFilterOpType::Invert => FilterOp::Invert(c_filter.argument),
-            WrFilterOpType::Opacity => FilterOp::Opacity(PropertyBinding::Value(c_filter.argument)),
+            WrFilterOpType::Opacity => FilterOp::Opacity(PropertyBinding::Value(c_filter.argument), c_filter.argument),
             WrFilterOpType::Saturate => FilterOp::Saturate(c_filter.argument),
             WrFilterOpType::Sepia => FilterOp::Sepia(c_filter.argument),
+            WrFilterOpType::DropShadow => FilterOp::DropShadow(c_filter.offset,
+                                                               c_filter.argument,
+                                                               c_filter.color),
         }
     }).collect();
 
-    let opacity = unsafe { opacity.as_ref() };
-    if let Some(opacity) = opacity {
+    let opacity_ref = unsafe { opacity.as_ref() };
+    if let Some(opacity) = opacity_ref {
         if *opacity < 1.0 {
-            filters.push(FilterOp::Opacity(PropertyBinding::Value(*opacity)));
-        }
-    } else {
-        if animation_id > 0 {
-            filters.push(FilterOp::Opacity(PropertyBinding::Binding(PropertyBindingKey::new(animation_id))));
+            filters.push(FilterOp::Opacity(PropertyBinding::Value(*opacity), *opacity));
         }
     }
 
-    let transform = unsafe { transform.as_ref() };
-    let transform_binding = match animation_id {
-        0 => match transform {
-            Some(transform) => Some(PropertyBinding::Value(transform.clone())),
-            None => None,
-        },
-        _ => Some(PropertyBinding::Binding(PropertyBindingKey::new(animation_id))),
+    let transform_ref = unsafe { transform.as_ref() };
+    let mut transform_binding = match transform_ref {
+        Some(transform) => Some(PropertyBinding::Value(transform.clone())),
+        None => None,
     };
+
+    let anim = unsafe { animation.as_ref() };
+    if let Some(anim) = anim {
+        debug_assert!(anim.id > 0);
+        match anim.effect_type {
+            WrAnimationType::Opacity => filters.push(FilterOp::Opacity(PropertyBinding::Binding(PropertyBindingKey::new(anim.id)), 1.0)),
+            WrAnimationType::Transform => transform_binding = Some(PropertyBinding::Binding(PropertyBindingKey::new(anim.id))),
+        }
+    }
 
     let perspective_ref = unsafe { perspective.as_ref() };
     let perspective = match perspective_ref {
@@ -1236,11 +1342,12 @@ pub extern "C" fn wr_dp_push_stacking_context(state: &mut WrState,
 
     let mut prim_info = LayoutPrimitiveInfo::new(bounds);
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
 
     state.frame_builder
          .dl_builder
          .push_stacking_context(&prim_info,
-                                webrender_api::ScrollPolicy::Scrollable,
+                                ScrollPolicy::Scrollable,
                                 transform_binding,
                                 transform_style,
                                 perspective,
@@ -1331,7 +1438,8 @@ pub extern "C" fn wr_dp_define_sticky_frame(state: &mut WrState,
                                             bottom_margin: *const f32,
                                             left_margin: *const f32,
                                             vertical_bounds: StickyOffsetBounds,
-                                            horizontal_bounds: StickyOffsetBounds)
+                                            horizontal_bounds: StickyOffsetBounds,
+                                            applied_offset: LayoutVector2D)
                                             -> u64 {
     assert!(unsafe { is_in_main_thread() });
     let clip_id = state.frame_builder.dl_builder.define_sticky_frame(
@@ -1341,7 +1449,7 @@ pub extern "C" fn wr_dp_define_sticky_frame(state: &mut WrState,
             unsafe { bottom_margin.as_ref() }.cloned(),
             unsafe { left_margin.as_ref() }.cloned()
         ),
-        vertical_bounds, horizontal_bounds);
+        vertical_bounds, horizontal_bounds, applied_offset);
     match clip_id {
         ClipId::Clip(id, pipeline_id) => {
             assert!(pipeline_id == state.pipeline_id);
@@ -1425,6 +1533,7 @@ pub extern "C" fn wr_dp_push_iframe(state: &mut WrState,
 
     let mut prim_info = LayoutPrimitiveInfo::new(rect);
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder.dl_builder.push_iframe(&prim_info, pipeline_id);
 }
 
@@ -1438,6 +1547,7 @@ pub extern "C" fn wr_dp_push_rect(state: &mut WrState,
 
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(rect, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder.dl_builder.push_rect(&prim_info,
                                              color);
 }
@@ -1464,6 +1574,7 @@ pub extern "C" fn wr_dp_push_image(state: &mut WrState,
 
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(bounds, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_image(&prim_info,
@@ -1488,6 +1599,7 @@ pub extern "C" fn wr_dp_push_yuv_planar_image(state: &mut WrState,
 
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(bounds, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_yuv_image(&prim_info,
@@ -1510,6 +1622,7 @@ pub extern "C" fn wr_dp_push_yuv_NV12_image(state: &mut WrState,
 
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(bounds, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_yuv_image(&prim_info,
@@ -1531,6 +1644,7 @@ pub extern "C" fn wr_dp_push_yuv_interleaved_image(state: &mut WrState,
 
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(bounds, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_yuv_image(&prim_info,
@@ -1555,6 +1669,7 @@ pub extern "C" fn wr_dp_push_text(state: &mut WrState,
 
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(bounds, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_text(&prim_info,
@@ -1574,6 +1689,7 @@ pub extern "C" fn wr_dp_push_shadow(state: &mut WrState,
 
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(bounds, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder.dl_builder.push_shadow(&prim_info, shadow.into());
 }
 
@@ -1597,6 +1713,7 @@ pub extern "C" fn wr_dp_push_line(state: &mut WrState,
 
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(*bounds, (*clip).into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_line(&prim_info,
@@ -1629,6 +1746,7 @@ pub extern "C" fn wr_dp_push_border(state: &mut WrState,
                                                });
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(rect, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_border(&prim_info,
@@ -1659,6 +1777,7 @@ pub extern "C" fn wr_dp_push_border_image(state: &mut WrState,
                              });
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(rect, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_border(&prim_info,
@@ -1695,6 +1814,7 @@ pub extern "C" fn wr_dp_push_border_gradient(state: &mut WrState,
                                                  });
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(rect, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_border(&prim_info,
@@ -1732,6 +1852,7 @@ pub extern "C" fn wr_dp_push_border_radial_gradient(state: &mut WrState,
                                       });
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(rect, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_border(&prim_info,
@@ -1764,6 +1885,7 @@ pub extern "C" fn wr_dp_push_linear_gradient(state: &mut WrState,
                                          extend_mode.into());
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(rect, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_gradient(&prim_info,
@@ -1797,6 +1919,7 @@ pub extern "C" fn wr_dp_push_radial_gradient(state: &mut WrState,
                                                 extend_mode.into());
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(rect, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_radial_gradient(&prim_info,
@@ -1821,6 +1944,7 @@ pub extern "C" fn wr_dp_push_box_shadow(state: &mut WrState,
 
     let mut prim_info = LayoutPrimitiveInfo::with_clip_rect(rect, clip.into());
     prim_info.is_backface_visible = is_backface_visible;
+    prim_info.tag = state.current_tag;
     state.frame_builder
          .dl_builder
          .push_box_shadow(&prim_info,
@@ -1831,6 +1955,13 @@ pub extern "C" fn wr_dp_push_box_shadow(state: &mut WrState,
                           spread_radius,
                           border_radius,
                           clip_mode);
+}
+
+#[no_mangle]
+pub extern "C" fn wr_dump_display_list(state: &mut WrState) {
+    state.frame_builder
+         .dl_builder
+         .print_display_list();
 }
 
 #[no_mangle]
@@ -1846,6 +1977,38 @@ pub unsafe extern "C" fn wr_api_finalize_builder(state: &mut WrState,
     let (data, descriptor) = dl.into_data();
     *dl_data = WrVecU8::from_vec(data);
     *dl_descriptor = descriptor;
+}
+
+#[no_mangle]
+pub extern "C" fn wr_set_item_tag(state: &mut WrState,
+                                  scroll_id: u64,
+                                  hit_info: u16) {
+    state.current_tag = Some((scroll_id, hit_info));
+}
+
+#[no_mangle]
+pub extern "C" fn wr_clear_item_tag(state: &mut WrState) {
+    state.current_tag = None;
+}
+
+#[no_mangle]
+pub extern "C" fn wr_api_hit_test(dh: &mut DocumentHandle,
+                                  point: WorldPoint,
+                                  out_pipeline_id: &mut WrPipelineId,
+                                  out_scroll_id: &mut u64,
+                                  out_hit_info: &mut u16) -> bool {
+    let result = dh.api.hit_test(dh.document_id, None, point, HitTestFlags::empty());
+    for item in &result.items {
+        // For now we should never be getting results back for which the tag is
+        // 0 (== CompositorHitTestInfo::eInvisibleToHitTest). In the future if
+        // we allow this, we'll want to |continue| on the loop in this scenario.
+        debug_assert!(item.tag.1 != 0);
+        *out_pipeline_id = item.pipeline;
+        *out_scroll_id = item.tag.0;
+        *out_hit_info = item.tag.1;
+        return true;
+    }
+    return false;
 }
 
 pub type VecU8 = Vec<u8>;

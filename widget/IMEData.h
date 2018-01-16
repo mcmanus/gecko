@@ -8,7 +8,7 @@
 
 #include "nsPoint.h"
 #include "nsRect.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsXULAppAPI.h"
 #include "Units.h"
 
@@ -275,6 +275,7 @@ struct InputContext final
   InputContext()
     : mOrigin(XRE_IsParentProcess() ? ORIGIN_MAIN : ORIGIN_CONTENT)
     , mMayBeIMEUnaware(false)
+    , mHasHandledUserInput(false)
     , mInPrivateBrowsing(false)
   {
   }
@@ -324,6 +325,11 @@ struct InputContext final
    * composiion events. This enables a key-events-only mode on Android for
    * compatibility with webapps relying on key listeners. */
   bool mMayBeIMEUnaware;
+
+  /**
+   * True if the document has ever received user input
+   */
+  bool mHasHandledUserInput;
 
   /* Whether the owning document of the input element has been loaded
    * in private browsing mode. */
@@ -654,10 +660,7 @@ struct IMENotification final
 
     void Set(const nsIntRect& aRect)
     {
-      mX = aRect.x;
-      mY = aRect.y;
-      mWidth = aRect.Width();
-      mHeight = aRect.Height();
+      aRect.GetRect(&mX, &mY, &mWidth, &mHeight);
     }
     nsIntRect AsIntRect() const
     {

@@ -29,6 +29,7 @@
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/StructuredCloneTags.h"
 #include "mozilla/dom/WindowBinding.h"
+#include "mozilla/Scheduler.h"
 #include "nsZipArchive.h"
 #include "nsIDOMFileList.h"
 #include "nsWindowMemoryReporter.h"
@@ -2118,7 +2119,7 @@ nsXPCComponents_Utils::ReportError(HandleValue error, JSContext* cx)
     if (!console)
         return NS_OK;
 
-    nsGlobalWindow* globalWin = CurrentWindowOrNull(cx);
+    nsGlobalWindowInner* globalWin = CurrentWindowOrNull(cx);
     nsPIDOMWindowInner* win = globalWin ? globalWin->AsInner() : nullptr;
     const uint64_t innerWindowID = win ? win->WindowID() : 0;
 
@@ -2210,24 +2211,7 @@ nsXPCComponents_Utils::EvalInSandbox(const nsAString& source,
     if (!JS_ValueToObject(cx, sandboxVal, &sandbox) || !sandbox)
         return NS_ERROR_INVALID_ARG;
 
-    // Optional third argument: JS version, as a string.
-    JSVersion jsVersion = JSVERSION_DEFAULT;
-    if (optionalArgc >= 1) {
-        JSString* jsVersionStr = ToString(cx, version);
-        if (!jsVersionStr)
-            return NS_ERROR_INVALID_ARG;
-
-        JSAutoByteString bytes(cx, jsVersionStr);
-        if (!bytes)
-            return NS_ERROR_INVALID_ARG;
-
-        // Treat non-default version designation as default.
-        if (JS_StringToVersion(bytes.ptr()) == JSVERSION_UNKNOWN &&
-            strcmp(bytes.ptr(), "latest"))
-        {
-            return NS_ERROR_INVALID_ARG;
-        }
-    }
+    // Optional third argument: JS version, as a string, is unused.
 
     // Optional fourth and fifth arguments: filename and line number.
     int32_t lineNo = (optionalArgc >= 3) ? lineNumber : 1;
@@ -2235,13 +2219,8 @@ nsXPCComponents_Utils::EvalInSandbox(const nsAString& source,
     if (!filenameArg.IsVoid()) {
         filename.Assign(filenameArg);
     } else {
-        // Get the current source info from xpc.
-        nsresult rv;
-        nsCOMPtr<nsIXPConnect> xpc = do_GetService(nsIXPConnect::GetCID(), &rv);
-        NS_ENSURE_SUCCESS(rv, rv);
-
-        nsCOMPtr<nsIStackFrame> frame;
-        xpc->GetCurrentJSStack(getter_AddRefs(frame));
+        // Get the current source info.
+        nsCOMPtr<nsIStackFrame> frame = dom::GetCurrentJSStack();
         if (frame) {
             nsString frameFile;
             frame->GetFilename(cx, frameFile);
@@ -2250,8 +2229,7 @@ nsXPCComponents_Utils::EvalInSandbox(const nsAString& source,
         }
     }
 
-    return xpc::EvalInSandbox(cx, sandbox, source, filename, lineNo,
-                              jsVersion, retval);
+    return xpc::EvalInSandbox(cx, sandbox, source, filename, lineNo, retval);
 }
 
 NS_IMETHODIMP
@@ -2343,7 +2321,7 @@ nsXPCComponents_Utils::ImportGlobalProperties(HandleValue aPropertyList,
     MOZ_ASSERT(global);
 
     // Don't allow doing this if the global is a Window
-    nsGlobalWindow* win;
+    nsGlobalWindowInner* win;
     if (NS_SUCCEEDED(UNWRAP_OBJECT(Window, &global, win))) {
         return NS_ERROR_NOT_AVAILABLE;
     }
@@ -3192,7 +3170,7 @@ nsXPCComponents_Utils::AllowCPOWsInAddon(const nsACString& addonIdStr,
 }
 
 NS_IMETHODIMP
-nsXPCComponents_Utils::ReadFile(nsIFile* aFile, nsACString& aResult)
+nsXPCComponents_Utils::ReadUTF8File(nsIFile* aFile, nsACString& aResult)
 {
     NS_ENSURE_TRUE(aFile, NS_ERROR_INVALID_ARG);
 
@@ -3201,7 +3179,7 @@ nsXPCComponents_Utils::ReadFile(nsIFile* aFile, nsACString& aResult)
 }
 
 NS_IMETHODIMP
-nsXPCComponents_Utils::ReadURI(nsIURI* aURI, nsACString& aResult)
+nsXPCComponents_Utils::ReadUTF8URI(nsIURI* aURI, nsACString& aResult)
 {
     NS_ENSURE_TRUE(aURI, NS_ERROR_INVALID_ARG);
 
@@ -3214,6 +3192,20 @@ nsXPCComponents_Utils::Now(double* aRetval)
 {
     TimeStamp start = TimeStamp::ProcessCreation();
     *aRetval = (TimeStamp::Now() - start).ToMilliseconds();
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXPCComponents_Utils::BlockThreadedExecution(nsIBlockThreadedExecutionCallback* aCallback)
+{
+    Scheduler::BlockThreadedExecution(aCallback);
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXPCComponents_Utils::UnblockThreadedExecution()
+{
+    Scheduler::UnblockThreadedExecution();
     return NS_OK;
 }
 
@@ -3294,12 +3286,11 @@ nsXPCComponentsBase::IsSuccessCode(nsresult result, bool* out)
 }
 
 NS_IMETHODIMP
-nsXPCComponents::GetStack(nsIStackFrame * *aStack)
+nsXPCComponents::GetStack(nsIStackFrame** aStack)
 {
-    nsresult rv;
-    nsXPConnect* xpc = nsXPConnect::XPConnect();
-    rv = xpc->GetCurrentJSStack(aStack);
-    return rv;
+    nsCOMPtr<nsIStackFrame> frame = dom::GetCurrentJSStack();
+    frame.forget(aStack);
+    return NS_OK;
 }
 
 NS_IMETHODIMP

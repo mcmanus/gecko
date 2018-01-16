@@ -21,6 +21,16 @@
 #include <cairo.h>
 #include <cairo-ft.h>
 
+#ifdef MOZ_CONTENT_SANDBOX
+#include "mozilla/SandboxBroker.h"
+#endif
+
+namespace mozilla {
+    namespace dom {
+        class SystemFontListEntry;
+    };
+};
+
 template <>
 class nsAutoRefTraits<FcPattern> : public nsPointerRefTraits<FcPattern>
 {
@@ -86,6 +96,7 @@ public:
                                     int16_t aStretch,
                                     uint8_t aStyle,
                                     const uint8_t *aData,
+                                    uint32_t aLength,
                                     FT_Face aFace);
 
     // used for @font-face local system fonts with explicit patterns
@@ -101,6 +112,8 @@ public:
 
     nsresult ReadCMAP(FontInfoData *aFontInfoData = nullptr) override;
     bool TestCharacterMap(uint32_t aCh) override;
+
+    FT_Face GetFTFace();
 
     hb_blob_t* GetFontTable(uint32_t aTableTag) override;
 
@@ -151,6 +164,7 @@ protected:
 
     // data font
     const uint8_t* mFontData;
+    uint32_t       mLength;
 
     class UnscaledFontCache
     {
@@ -181,6 +195,9 @@ public:
         mHasNonScalableFaces(false),
         mForceScalable(false)
     { }
+
+    template<typename Func>
+    void AddFacesToFontList(Func aAddPatternFunc);
 
     void FindStyleVariations(FontInfoData *aFontInfoData = nullptr) override;
 
@@ -254,6 +271,8 @@ public:
                      const nsACString& aGenericFamily,
                      nsTArray<nsString>& aListOfFonts) override;
 
+    void ReadSystemFontList(
+        InfallibleTArray<mozilla::dom::SystemFontListEntry>* retValue);
 
     gfxFontEntry*
     LookupLocalFont(const nsAString& aFontName, uint16_t aWeight,
@@ -294,9 +313,23 @@ public:
 protected:
     virtual ~gfxFcPlatformFontList();
 
+#ifdef MOZ_CONTENT_SANDBOX
+    typedef mozilla::SandboxBroker::Policy SandboxPolicy;
+#else
+    // Dummy type just so we can still have a SandboxPolicy* parameter.
+    struct SandboxPolicy {};
+#endif
+
     // Add all the font families found in a font set.
     // aAppFonts indicates whether this is the system or application fontset.
-    void AddFontSetFamilies(FcFontSet* aFontSet, bool aAppFonts);
+    void AddFontSetFamilies(FcFontSet* aFontSet, const SandboxPolicy* aPolicy,
+                            bool aAppFonts);
+
+    // Helper for above, to add a single font pattern.
+    void AddPatternToFontList(FcPattern* aFont, FcChar8*& aLastFamilyName,
+                              nsAString& aFamilyName,
+                              RefPtr<gfxFontconfigFontFamily>& aFontFamily,
+                              bool aAppFonts);
 
     // figure out which families fontconfig maps a generic to
     // (aGeneric assumed already lowercase)

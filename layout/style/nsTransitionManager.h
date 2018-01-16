@@ -139,8 +139,9 @@ public:
   void GetTransitionProperty(nsString& aRetVal) const;
 
   // Animation interface overrides
-  virtual AnimationPlayState PlayStateFromJS() const override;
-  virtual void PlayFromJS(ErrorResult& aRv) override;
+  AnimationPlayState PlayStateFromJS() const override;
+  bool PendingFromJS() const override;
+  void PlayFromJS(ErrorResult& aRv) override;
 
   // A variant of Play() that avoids posting style updates since this method
   // is expected to be called whilst already updating style.
@@ -429,7 +430,7 @@ protected:
   // aElementTransitions is the collection of current transitions, and it
   // could be a nullptr if we don't have any transitions.
   template<typename StyleType> bool
-  DoUpdateTransitions(const nsStyleDisplay* aDisp,
+  DoUpdateTransitions(const nsStyleDisplay& aDisp,
                       mozilla::dom::Element* aElement,
                       mozilla::CSSPseudoElementType aPseudoType,
                       CSSTransitionCollection*& aElementTransitions,
@@ -438,7 +439,8 @@ protected:
 
   template<typename StyleType> void
   ConsiderInitiatingTransition(nsCSSPropertyID aProperty,
-                               const mozilla::StyleTransition& aTransition,
+                               const nsStyleDisplay& aStyleDisplay,
+                               uint32_t transitionIdx,
                                mozilla::dom::Element* aElement,
                                mozilla::CSSPseudoElementType aPseudoType,
                                CSSTransitionCollection*& aElementTransitions,

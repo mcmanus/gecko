@@ -1,3 +1,5 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -83,6 +85,11 @@ class NoCloneSpreadArgs {
   }
 }
 
+/**
+ * Base class for WebExtension APIs.  Each API creates a new class
+ * that inherits from this class, the derived class is instantiated
+ * once for each extension that uses the API.
+ */
 class ExtensionAPI extends ExtensionUtils.EventEmitter {
   constructor(extension) {
     super();
@@ -175,6 +182,13 @@ var ExtensionAPIs = {
   },
 };
 
+/**
+ * This class contains the information we have about an individual
+ * extension.  It is never instantiated directly, instead subclasses
+ * for each type of process extend this class and add members that are
+ * relevant for that process.
+ * @abstract
+ */
 class BaseContext {
   constructor(envType, extension) {
     this.envType = envType;
@@ -1265,7 +1279,7 @@ class SchemaAPIManager extends EventEmitter {
       sandboxName: `Namespace of ext-*.js scripts for ${this.processType} (from: resource://gre/modules/ExtensionCommon.jsm)`,
     });
 
-    Object.assign(global, {global, Cc, Ci, Cu, Cr, XPCOMUtils, ChromeUtils, ChromeWorker, ExtensionAPI, ExtensionCommon, MatchPattern, MatchPatternSet, StructuredCloneHolder, extensions: this});
+    Object.assign(global, {global, Cc, Ci, Cu, Cr, XPCOMUtils, ChromeUtils, ChromeWorker, ExtensionAPI, ExtensionCommon, MatchPattern, MatchPatternSet, MatchGlob, StructuredCloneHolder, extensions: this});
 
     Cu.import("resource://gre/modules/AppConstants.jsm", global);
 
@@ -1518,27 +1532,38 @@ defineLazyGetter(LocaleData.prototype, "availableLocales", function() {
                  .filter(locale => this.messages.has(locale)));
 });
 
-// This is a generic class for managing event listeners. Example usage:
-//
-// new EventManager(context, "api.subAPI", fire => {
-//   let listener = (...) => {
-//     // Fire any listeners registered with addListener.
-//     fire.async(arg1, arg2);
-//   };
-//   // Register the listener.
-//   SomehowRegisterListener(listener);
-//   return () => {
-//     // Return a way to unregister the listener.
-//     SomehowUnregisterListener(listener);
-//   };
-// }).api()
-//
-// The result is an object with addListener, removeListener, and
-// hasListener methods. |context| is an add-on scope (either an
-// ExtensionContext in the chrome process or ExtensionContext in a
-// content process). |name| is for debugging. |register| is a function
-// to register the listener. |register| should return an
-// unregister function that will unregister the listener.
+/**
+* This is a generic class for managing event listeners.
+ *
+ * @example
+ * new EventManager(context, "api.subAPI", fire => {
+ *   let listener = (...) => {
+ *     // Fire any listeners registered with addListener.
+ *     fire.async(arg1, arg2);
+ *   };
+ *   // Register the listener.
+ *   SomehowRegisterListener(listener);
+ *   return () => {
+ *     // Return a way to unregister the listener.
+ *     SomehowUnregisterListener(listener);
+ *   };
+ * }).api()
+ *
+ * The result is an object with addListener, removeListener, and
+ * hasListener methods. `context` is an add-on scope (either an
+ * ExtensionContext in the chrome process or ExtensionContext in a
+ * content process). `name` is for debugging. `register` is a function
+ * to register the listener. `register` should return an
+ * unregister function that will unregister the listener.
+ * @constructor
+ *
+ * @param {BaseContext} context
+ *        An object representing the extension instance using this event.
+ * @param {string} name
+ *        A name used only for debugging.
+ * @param {functon} register
+ *        A function called whenever a new listener is added.
+ */
 function EventManager(context, name, register) {
   this.context = context;
   this.name = name;
@@ -1652,9 +1677,7 @@ function ignoreEvent(context, name) {
       scriptError.init(msg, frame.filename, null, frame.lineNumber,
                        frame.columnNumber, Ci.nsIScriptError.warningFlag,
                        "content javascript");
-      let consoleService = Cc["@mozilla.org/consoleservice;1"]
-        .getService(Ci.nsIConsoleService);
-      consoleService.logMessage(scriptError);
+      Services.console.logMessage(scriptError);
     },
     removeListener: function(callback) {},
     hasListener: function(callback) {},

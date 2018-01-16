@@ -303,7 +303,7 @@ WorkerRunnable::Run()
   } else {
     kungFuDeathGrip = mWorkerPrivate;
     if (isMainThread) {
-      globalObject = nsGlobalWindow::Cast(mWorkerPrivate->GetWindow());
+      globalObject = nsGlobalWindowInner::Cast(mWorkerPrivate->GetWindow());
     } else {
       globalObject = mWorkerPrivate->GetParent()->GlobalScope();
     }
@@ -764,6 +764,10 @@ WorkerProxyToMainThreadRunnable::HoldWorker()
   class SimpleWorkerHolder final : public WorkerHolder
   {
   public:
+    SimpleWorkerHolder()
+      : WorkerHolder("WorkerProxyToMainThreadRunnable::SimpleWorkerHolder")
+    {}
+
     bool Notify(Status aStatus) override
     {
       // We don't care about the notification. We just want to keep the

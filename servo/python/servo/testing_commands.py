@@ -14,13 +14,16 @@ import re
 import sys
 import os
 import os.path as path
+import platform
 import copy
 from collections import OrderedDict
 from time import time
 import json
 import urllib2
+import urllib
 import base64
 import shutil
+import subprocess
 
 from mach.registrar import Registrar
 from mach.decorators import (
@@ -31,7 +34,7 @@ from mach.decorators import (
 
 from servo.command_base import (
     BuildNotFound, CommandBase,
-    call, cd, check_call, set_osmesa_env,
+    call, check_call, set_osmesa_env,
 )
 from servo.util import host_triple
 
@@ -56,9 +59,6 @@ TEST_SUITES = OrderedDict([
     ("unit", {"kwargs": {},
               "paths": [path.abspath(path.join("tests", "unit"))],
               "include_arg": "test_name"}),
-    ("compiletest", {"kwargs": {"release": False},
-                     "paths": [path.abspath(path.join("tests", "compiletest"))],
-                     "include_arg": "test_name"})
 ])
 
 TEST_SUITES_BY_PREFIX = {path: k for k, v in TEST_SUITES.iteritems() if "paths" in v for path in v["paths"]}
@@ -68,7 +68,7 @@ def create_parser_wpt():
     parser = wptcommandline.create_parser()
     parser.add_argument('--release', default=False, action="store_true",
                         help="Run with a release build of servo")
-    parser.add_argument('--chaos', default=False, action="store_true",
+    parser.add_argument('--rr-chaos', default=False, action="store_true",
                         help="Run under chaos mode in rr until a failure is captured")
     parser.add_argument('--pref', default=[], action="append", dest="prefs",
                         help="Pass preferences to servo")
@@ -114,7 +114,6 @@ class MachCommands(CommandBase):
                                     "stylo": False}
         suites["wpt"]["kwargs"] = {"release": release}
         suites["unit"]["kwargs"] = {}
-        suites["compiletest"]["kwargs"] = {"release": release}
 
         selected_suites = OrderedDict()
 
@@ -170,21 +169,23 @@ class MachCommands(CommandBase):
     @Command('test-perf',
              description='Run the page load performance test',
              category='testing')
-    @CommandArgument('--submit', default=False, action="store_true",
+    @CommandArgument('--base', default=None,
+                     help="the base URL for testcases")
+    @CommandArgument('--date', default=None,
+                     help="the datestamp for the data")
+    @CommandArgument('--submit', '-a', default=False, action="store_true",
                      help="submit the data to perfherder")
-    def test_perf(self, submit=False):
+    def test_perf(self, base=None, date=None, submit=False):
         self.set_software_rendering_env(True)
 
         self.ensure_bootstrapped()
         env = self.build_env()
         cmd = ["bash", "test_perf.sh"]
+        if base:
+            cmd += ["--base", base]
+        if date:
+            cmd += ["--date", date]
         if submit:
-            if not ("TREEHERDER_CLIENT_ID" in os.environ and
-                    "TREEHERDER_CLIENT_SECRET" in os.environ):
-                print("Please set the environment variable \"TREEHERDER_CLIENT_ID\""
-                      " and \"TREEHERDER_CLIENT_SECRET\" to submit the performance"
-                      " test result to perfherder")
-                return 1
             cmd += ["--submit"]
         return call(cmd,
                     env=env,
@@ -254,7 +255,7 @@ class MachCommands(CommandBase):
 
         packages.discard('stylo')
 
-        env = self.build_env()
+        env = self.build_env(test_unit=True)
         env["RUST_BACKTRACE"] = "1"
 
         if "msvc" in host_triple():
@@ -264,7 +265,7 @@ class MachCommands(CommandBase):
 
         features = self.servo_features()
         if len(packages) > 0:
-            args = ["cargo", "bench" if bench else "test"]
+            args = ["cargo", "bench" if bench else "test", "--manifest-path", self.servo_manifest()]
             for crate in packages:
                 args += ["-p", "%s_tests" % crate]
             for crate in in_crate_packages:
@@ -277,7 +278,7 @@ class MachCommands(CommandBase):
             if nocapture:
                 args += ["--", "--nocapture"]
 
-            err = call(args, env=env, cwd=self.servo_crate())
+            err = self.call_rustup_run(args, env=env)
             if err is not 0:
                 return err
 
@@ -289,74 +290,19 @@ class MachCommands(CommandBase):
     @CommandArgument('--release', default=False, action="store_true",
                      help="Run with a release build of servo")
     def test_stylo(self, release=False, test_name=None):
-        self.set_use_stable_rust()
+        self.set_use_geckolib_toolchain()
         self.ensure_bootstrapped()
 
         env = self.build_env()
         env["RUST_BACKTRACE"] = "1"
         env["CARGO_TARGET_DIR"] = path.join(self.context.topdir, "target", "geckolib").encode("UTF-8")
 
-        args = (["cargo", "test", "-p", "stylo_tests"] +
-                (["--release"] if release else []) + (test_name or []))
-        with cd(path.join("ports", "geckolib")):
-            return call(args, env=env)
-
-    @Command('test-compiletest',
-             description='Run compiletests',
-             category='testing')
-    @CommandArgument('--package', '-p', default=None, help="Specific package to test")
-    @CommandArgument('test_name', nargs=argparse.REMAINDER,
-                     help="Only run tests that match this pattern or file path")
-    @CommandArgument('--release', default=False, action="store_true",
-                     help="Run with a release build of servo")
-    def test_compiletest(self, test_name=None, package=None, release=False):
-        if test_name is None:
-            test_name = []
-
-        self.ensure_bootstrapped()
-
-        if package:
-            packages = {package}
-        else:
-            packages = set()
-
-        test_patterns = []
-        for test in test_name:
-            # add package if 'tests/compiletest/<package>'
-            match = re.search("tests/compiletest/(\\w+)/?$", test)
-            if match:
-                packages.add(match.group(1))
-            # add package & test if '<package>/<test>', 'tests/compiletest/<package>/<test>.rs', or similar
-            elif re.search("\\w/\\w", test):
-                tokens = test.split("/")
-                packages.add(tokens[-2])
-                test_prefix = tokens[-1]
-                if test_prefix.endswith(".rs"):
-                    test_prefix = test_prefix[:-3]
-                test_prefix += "::"
-                test_patterns.append(test_prefix)
-            # add test as-is otherwise
-            else:
-                test_patterns.append(test)
-
-        if not packages:
-            packages = set(os.listdir(path.join(self.context.topdir, "tests", "compiletest"))) - set(['.DS_Store'])
-
-        packages.remove("helper")
-
-        args = ["cargo", "test"]
-        for crate in packages:
-            args += ["-p", "%s_compiletest" % crate]
-        args += test_patterns
-
-        env = self.build_env()
-        if release:
-            env["BUILD_MODE"] = "release"
-            args += ["--release"]
-        else:
-            env["BUILD_MODE"] = "debug"
-
-        return call(args, env=env, cwd=self.servo_crate())
+        args = (
+            ["cargo", "test", "--manifest-path", self.geckolib_manifest(), "-p", "stylo_tests"] +
+            (["--release"] if release else []) +
+            (test_name or [])
+        )
+        return self.call_rustup_run(args, env=env)
 
     @Command('test-content',
              description='Run the content tests',
@@ -464,7 +410,7 @@ class MachCommands(CommandBase):
 
         os.environ["RUST_BACKTRACE"] = "1"
         kwargs["debug"] = not kwargs["release"]
-        if kwargs.pop("chaos"):
+        if kwargs.pop("rr_chaos"):
             kwargs["debugger"] = "rr"
             kwargs["debugger_args"] = "record --chaos"
             kwargs["repeat_until_unexpected"] = True
@@ -517,9 +463,11 @@ class MachCommands(CommandBase):
                      help='Print intermittents to file')
     @CommandArgument('--auth', default=None,
                      help='File containing basic authorization credentials for Github API (format `username:password`)')
-    @CommandArgument('--use-tracker', default=False, action='store_true',
-                     help='Use https://www.joshmatthews.net/intermittent-tracker')
-    def filter_intermittents(self, summary, log_filteredsummary, log_intermittents, auth, use_tracker):
+    @CommandArgument('--tracker-api', default=None, action='store',
+                     help='The API endpoint for tracking known intermittent failures.')
+    @CommandArgument('--reporter-api', default=None, action='store',
+                     help='The API endpoint for reporting tracked intermittent failures.')
+    def filter_intermittents(self, summary, log_filteredsummary, log_intermittents, auth, tracker_api, reporter_api):
         encoded_auth = None
         if auth:
             with open(auth, "r") as file:
@@ -533,9 +481,14 @@ class MachCommands(CommandBase):
         actual_failures = []
         intermittents = []
         for failure in failures:
-            if use_tracker:
+            if tracker_api:
+                if tracker_api == 'default':
+                    tracker_api = "http://build.servo.org/intermittent-tracker"
+                elif tracker_api.endswith('/'):
+                    tracker_api = tracker_api[0:-1]
+
                 query = urllib2.quote(failure['test'], safe='')
-                request = urllib2.Request("http://build.servo.org/intermittent-tracker/query.py?name=%s" % query)
+                request = urllib2.Request("%s/query.py?name=%s" % (tracker_api, query))
                 search = urllib2.urlopen(request)
                 data = json.load(search)
                 if len(data) == 0:
@@ -555,6 +508,39 @@ class MachCommands(CommandBase):
                     actual_failures += [failure]
                 else:
                     intermittents += [failure]
+
+        if reporter_api:
+            if reporter_api == 'default':
+                reporter_api = "http://build.servo.org/intermittent-failure-tracker"
+            if reporter_api.endswith('/'):
+                reporter_api = reporter_api[0:-1]
+            reported = set()
+
+            proc = subprocess.Popen(
+                ["git", "log", "--merges", "--oneline", "-1"],
+                stdout=subprocess.PIPE)
+            (last_merge, _) = proc.communicate()
+
+            # Extract the issue reference from "abcdef Auto merge of #NNN"
+            pull_request = int(last_merge.split(' ')[4][1:])
+
+            for intermittent in intermittents:
+                if intermittent['test'] in reported:
+                    continue
+                reported.add(intermittent['test'])
+
+                data = {
+                    'test_file': intermittent['test'],
+                    'platform': platform.system(),
+                    'builder': os.environ.get('BUILDER_NAME', 'BUILDER NAME MISSING'),
+                    'number': pull_request,
+                }
+                request = urllib2.Request("%s/record.py" % reporter_api, urllib.urlencode(data))
+                request.add_header('Accept', 'application/json')
+                response = urllib2.urlopen(request)
+                data = json.load(response)
+                if data['status'] != "success":
+                    print('Error reporting test failure: ' + data['error'])
 
         if log_intermittents:
             with open(log_intermittents, "w") as intermittents_file:

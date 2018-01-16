@@ -1,5 +1,5 @@
 {
-    "llvm_revision": "311608",
+    "llvm_revision": "317840",
     "stages": "3",
     "build_libcxx": false,
     "build_type": "Release",
@@ -13,6 +13,9 @@
     "cxx": "cl.exe",
     "ml": "ml64.exe",
     "patches": [
-      "build/src/build/build-clang/loosen-msvc-detection.patch"
+      "r318309.patch",
+      "loosen-msvc-detection.patch",
+      "hide-gcda-profiling-symbols.patch",
+      "fflush-before-unlocking.patch"
     ]
 }

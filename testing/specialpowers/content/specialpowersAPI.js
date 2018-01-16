@@ -30,7 +30,7 @@ Cu.import("resource://gre/modules/NetUtil.jsm");
 // but this whole file is in strict mode.  So instead fall back on
 // returning "this" from indirect eval, which returns the global.
 if (!(function() { var e = eval; return e("this"); })().File) { // eslint-disable-line no-eval
-    Cu.importGlobalProperties(["File"]);
+    Cu.importGlobalProperties(["File", "InspectorUtils"]);
 }
 
 // Allow stuff from this scope to be accessed from non-privileged scopes. This
@@ -360,7 +360,7 @@ function wrapCallback(cb) {
   return function SpecialPowersCallbackWrapper() {
     var args = Array.prototype.map.call(arguments, wrapIfUnwrapped);
     return cb.apply(this, args);
-  }
+  };
 }
 
 function wrapCallbackObject(obj) {
@@ -669,6 +669,8 @@ SpecialPowersAPI.prototype = {
 
     return bindDOMWindowUtils(aWindow);
   },
+
+  get InspectorUtils() { return wrapPrivileged(InspectorUtils); },
 
   waitForCrashes(aExpectingProcessCrash) {
     return new Promise((resolve, reject) => {
@@ -1010,7 +1012,7 @@ SpecialPowersAPI.prototype = {
         self._applyingPermissions = false;
         // Now apply any permissions that may have been queued while we were applying
         self._applyPermissions();
-    }
+    };
 
     for (var idx in pendingActions) {
       var perm = pendingActions[idx];
@@ -1552,7 +1554,7 @@ SpecialPowersAPI.prototype = {
         } else if (cb) {
           cb();
         }
-      }
+      };
     }
 
     Cu.schedulePreciseGC(genGCCallback(callback));
@@ -1645,7 +1647,7 @@ SpecialPowersAPI.prototype = {
                  "fireDone", "fireDetailedError"];
     for (var i in props) {
       let prop = props[i];
-      res[prop] = function() { return serv[prop].apply(serv, arguments) };
+      res[prop] = function() { return serv[prop].apply(serv, arguments); };
     }
     return res;
   },

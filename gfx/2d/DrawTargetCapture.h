@@ -33,6 +33,8 @@ public:
   virtual DrawTargetType GetType() const override { return mRefDT->GetType(); }
   virtual bool IsCaptureDT() const override { return true; }
   virtual already_AddRefed<SourceSurface> Snapshot() override;
+  virtual already_AddRefed<SourceSurface> IntoLuminanceSource(LuminanceType aLuminanceType,
+                                                              float aOpacity) override;
   virtual void SetPermitSubpixelAA(bool aPermitSubpixelAA) override;
   virtual void DetachAllSnapshots() override;
   virtual IntSize GetSize() override { return mSize; }
@@ -141,10 +143,7 @@ public:
   {
     return mRefDT->CreateGradientStops(aStops, aNumStops, aExtendMode);
   }
-  virtual already_AddRefed<FilterNode> CreateFilter(FilterType aType) override
-  {
-    return mRefDT->CreateFilter(aType);
-  }
+  virtual already_AddRefed<FilterNode> CreateFilter(FilterType aType) override;
 
   void ReplayToDrawTarget(DrawTarget* aDT, const Matrix& aTransform);
 

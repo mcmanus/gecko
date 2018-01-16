@@ -1782,7 +1782,8 @@ class IDLNamespace(IDLInterfaceOrNamespace):
                 if not attr.hasValue():
                     raise WebIDLError("[%s] must have a value" % identifier,
                                       [attr.location])
-            elif identifier == "ProtoObjectHack":
+            elif (identifier == "ProtoObjectHack" or
+                  identifier == "ChromeOnly"):
                 if not attr.noArguments():
                     raise WebIDLError("[%s] must not have arguments" % identifier,
                                       [attr.location])
@@ -4149,7 +4150,8 @@ class IDLAttribute(IDLInterfaceMember):
 
     def handleExtendedAttribute(self, attr):
         identifier = attr.identifier()
-        if ((identifier == "SetterThrows" or identifier == "SetterCanOOM")
+        if ((identifier == "SetterThrows" or identifier == "SetterCanOOM" or
+             identifier == "SetterNeedsSubjectPrincipal")
             and self.readonly):
             raise WebIDLError("Readonly attributes must not be flagged as "
                               "[%s]" % identifier,
@@ -4351,6 +4353,8 @@ class IDLAttribute(IDLInterfaceMember):
               identifier == "NewObject" or
               identifier == "UnsafeInPrerendering" or
               identifier == "NeedsSubjectPrincipal" or
+              identifier == "SetterNeedsSubjectPrincipal" or
+              identifier == "GetterNeedsSubjectPrincipal" or
               identifier == "NeedsCallerType" or
               identifier == "ReturnValueNeedsContainsHack" or
               identifier == "BinaryName" or
@@ -4987,7 +4991,9 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
         if (identifier == "GetterThrows" or
             identifier == "SetterThrows" or
             identifier == "GetterCanOOM" or
-            identifier == "SetterCanOOM"):
+            identifier == "SetterCanOOM" or
+            identifier == "SetterNeedsSubjectPrincipal" or
+            identifier == "GetterNeedsSubjectPrincipal"):
             raise WebIDLError("Methods must not be flagged as "
                               "[%s]" % identifier,
                               [attr.location, self.location])

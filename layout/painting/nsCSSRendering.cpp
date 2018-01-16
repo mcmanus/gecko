@@ -626,7 +626,7 @@ nsCSSRendering::ComputePixelRadii(const nscoord *aAppUnitsRadii,
                                radii[eCornerBottomLeftY]);
 }
 
-DrawResult
+ImgDrawResult
 nsCSSRendering::PaintBorder(nsPresContext* aPresContext,
                             gfxContext& aRenderingContext,
                             nsIFrame* aForFrame,
@@ -749,10 +749,10 @@ nsCSSRendering::CreateWebRenderCommandsForBorder(nsDisplayItem* aItem,
     return false;
   }
 
-  if (styleBorder->mBorderImageRepeatH == NS_STYLE_BORDER_IMAGE_REPEAT_ROUND ||
-      styleBorder->mBorderImageRepeatH == NS_STYLE_BORDER_IMAGE_REPEAT_SPACE ||
-      styleBorder->mBorderImageRepeatV == NS_STYLE_BORDER_IMAGE_REPEAT_ROUND ||
-      styleBorder->mBorderImageRepeatV == NS_STYLE_BORDER_IMAGE_REPEAT_SPACE) {
+  if (styleBorder->mBorderImageRepeatH == StyleBorderImageRepeat::Round ||
+      styleBorder->mBorderImageRepeatH == StyleBorderImageRepeat::Space ||
+      styleBorder->mBorderImageRepeatV == StyleBorderImageRepeat::Round ||
+      styleBorder->mBorderImageRepeatV == StyleBorderImageRepeat::Space) {
     return false;
   }
 
@@ -762,7 +762,7 @@ nsCSSRendering::CreateWebRenderCommandsForBorder(nsDisplayItem* aItem,
     flags |= nsImageRenderer::FLAG_SYNC_DECODE_IMAGES;
   }
 
-  image::DrawResult result;
+  image::ImgDrawResult result;
   Maybe<nsCSSBorderImageRenderer> bir =
     nsCSSBorderImageRenderer::CreateBorderImageRenderer(aForFrame->PresContext(),
                                                         aForFrame,
@@ -886,7 +886,7 @@ ConstructBorderRenderer(nsPresContext* aPresContext,
 }
 
 
-DrawResult
+ImgDrawResult
 nsCSSRendering::PaintBorderWithStyleBorder(nsPresContext* aPresContext,
                                            gfxContext& aRenderingContext,
                                            nsIFrame* aForFrame,
@@ -910,12 +910,12 @@ nsCSSRendering::PaintBorderWithStyleBorder(nsPresContext* aPresContext,
     if (theme &&
         theme->ThemeSupportsWidget(aPresContext, aForFrame,
                                    displayData->mAppearance)) {
-      return DrawResult::SUCCESS; // Let the theme handle it.
+      return ImgDrawResult::SUCCESS; // Let the theme handle it.
     }
   }
 
   if (!aStyleBorder.mBorderImageSource.IsEmpty()) {
-    DrawResult result = DrawResult::SUCCESS;
+    ImgDrawResult result = ImgDrawResult::SUCCESS;
 
     uint32_t irFlags = 0;
     if (aFlags & PaintBorderFlags::SYNC_DECODE_IMAGES) {
@@ -931,19 +931,19 @@ nsCSSRendering::PaintBorderWithStyleBorder(nsPresContext* aPresContext,
     // renderer was created successfully, which means border image is ready to
     // be used.
     if (renderer) {
-      MOZ_ASSERT(result == DrawResult::SUCCESS);
+      MOZ_ASSERT(result == ImgDrawResult::SUCCESS);
       return renderer->DrawBorderImage(aPresContext, aRenderingContext,
                                        aForFrame, aDirtyRect);
     }
   }
 
-  DrawResult result = DrawResult::SUCCESS;
+  ImgDrawResult result = ImgDrawResult::SUCCESS;
 
   // If we had a border-image, but it wasn't loaded, then we should return
-  // DrawResult::NOT_READY; we'll want to try again if we do a paint with sync
+  // ImgDrawResult::NOT_READY; we'll want to try again if we do a paint with sync
   // decoding enabled.
   if (aStyleBorder.mBorderImageSource.GetType() != eStyleImageType_Null) {
-    result = DrawResult::NOT_READY;
+    result = ImgDrawResult::NOT_READY;
   }
 
   nsMargin border = aStyleBorder.GetComputedBorder();
@@ -1460,7 +1460,7 @@ nsCSSRendering::FindBackgroundFrame(nsIFrame* aForFrame,
                                     nsIFrame** aBackgroundFrame)
 {
   nsIFrame* rootElementFrame =
-    aForFrame->PresContext()->PresShell()->FrameConstructor()->GetRootElementStyleFrame();
+    aForFrame->PresShell()->FrameConstructor()->GetRootElementStyleFrame();
   if (IsCanvasFrame(aForFrame)) {
     *aBackgroundFrame = FindCanvasBackgroundFrame(aForFrame, rootElementFrame);
     return true;
@@ -1685,8 +1685,8 @@ nsCSSRendering::PaintBoxShadowOuter(nsPresContext* aPresContext,
         nsLayoutUtils::PointToGfxPoint(nsPoint(shadowItem->mXOffset,
                                                shadowItem->mYOffset),
                                        aPresContext->AppUnitsPerDevPixel());
-      shadowContext->SetMatrix(
-        shadowContext->CurrentMatrix().PreTranslate(devPixelOffset));
+      shadowContext->SetMatrixDouble(
+        shadowContext->CurrentMatrixDouble().PreTranslate(devPixelOffset));
 
       nsRect nativeRect = aDirtyRect;
       nativeRect.MoveBy(-nsPoint(shadowItem->mXOffset, shadowItem->mYOffset));
@@ -2018,7 +2018,7 @@ nsCSSRendering::PaintBGParams::ForSingleLayer(nsPresContext& aPresCtx,
   return result;
 }
 
-DrawResult
+ImgDrawResult
 nsCSSRendering::PaintStyleImageLayer(const PaintBGParams& aParams,
                                      gfxContext& aRenderingCtx)
 {
@@ -2035,12 +2035,12 @@ nsCSSRendering::PaintStyleImageLayer(const PaintBGParams& aParams,
     // draw the background. The canvas really should be drawing the
     // bg, but there's no way to hook that up via css.
     if (!aParams.frame->StyleDisplay()->mAppearance) {
-      return DrawResult::SUCCESS;
+      return ImgDrawResult::SUCCESS;
     }
 
     nsIContent* content = aParams.frame->GetContent();
     if (!content || content->GetParent()) {
-      return DrawResult::SUCCESS;
+      return ImgDrawResult::SUCCESS;
     }
 
     sc = aParams.frame->StyleContext();
@@ -2103,7 +2103,7 @@ nsCSSRendering::CanBuildWebRenderDisplayItemsForStyleImageLayer(LayerManager* aM
   return false;
 }
 
-DrawResult
+ImgDrawResult
 nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayer(const PaintBGParams& aParams,
                                                              mozilla::wr::DisplayListBuilder& aBuilder,
                                                              mozilla::wr::IpcResourceUpdateQueue& aResources,
@@ -2122,12 +2122,12 @@ nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayer(const PaintBGParams
     // draw the background. The canvas really should be drawing the
     // bg, but there's no way to hook that up via css.
     if (!aParams.frame->StyleDisplay()->mAppearance) {
-      return DrawResult::SUCCESS;
+      return ImgDrawResult::SUCCESS;
     }
 
     nsIContent* content = aParams.frame->GetContent();
     if (!content || content->GetParent()) {
-      return DrawResult::SUCCESS;
+      return ImgDrawResult::SUCCESS;
     }
 
     sc = aParams.frame->StyleContext();
@@ -2612,7 +2612,7 @@ DetermineCompositionOp(const nsCSSRendering::PaintBGParams& aParams,
   return nsCSSRendering::GetGFXBlendMode(layer.mBlendMode);
 }
 
-DrawResult
+ImgDrawResult
 nsCSSRendering::PaintStyleImageLayerWithSC(const PaintBGParams& aParams,
                                            gfxContext& aRenderingCtx,
                                            nsStyleContext *aBackgroundSC,
@@ -2643,7 +2643,7 @@ nsCSSRendering::PaintStyleImageLayerWithSC(const PaintBGParams& aParams,
       theme->DrawWidgetBackground(&aRenderingCtx, aParams.frame,
                                   displayData->mAppearance, aParams.borderArea,
                                   drawing);
-      return DrawResult::SUCCESS;
+      return ImgDrawResult::SUCCESS;
     }
   }
 
@@ -2681,7 +2681,7 @@ nsCSSRendering::PaintStyleImageLayerWithSC(const PaintBGParams& aParams,
   // true if and only if we are actually supposed to paint an image or
   // color into aDirtyRect, respectively.
   if (!drawBackgroundImage && !drawBackgroundColor)
-    return DrawResult::SUCCESS;
+    return ImgDrawResult::SUCCESS;
 
   // The 'bgClipArea' (used only by the image tiling logic, far below)
   // is the caller-provided aParams.bgClipRect if any, or else the area
@@ -2719,13 +2719,13 @@ nsCSSRendering::PaintStyleImageLayerWithSC(const PaintBGParams& aParams,
     if (!isCanvasFrame) {
       DrawBackgroundColor(clipState, &aRenderingCtx, appUnitsPerPixel);
     }
-    return DrawResult::SUCCESS;
+    return ImgDrawResult::SUCCESS;
   }
 
   if (layers.mImageCount < 1) {
     // Return if there are no background layers, all work from this point
     // onwards happens iteratively on these.
-    return DrawResult::SUCCESS;
+    return ImgDrawResult::SUCCESS;
   }
 
   MOZ_ASSERT((aParams.layer < 0) ||
@@ -2762,7 +2762,7 @@ nsCSSRendering::PaintStyleImageLayerWithSC(const PaintBGParams& aParams,
     ::BoxDecorationRectForBorder(aParams.frame, aParams.borderArea,
                                  skipSides, &aBorder);
 
-  DrawResult result = DrawResult::SUCCESS;
+  ImgDrawResult result = ImgDrawResult::SUCCESS;
   StyleGeometryBox currentBackgroundClip = StyleGeometryBox::BorderBox;
   uint32_t count = drawAllLayers
     ? layers.mImageCount                  // iterate all image layers.
@@ -2849,7 +2849,7 @@ nsCSSRendering::PaintStyleImageLayerWithSC(const PaintBGParams& aParams,
   return result;
 }
 
-DrawResult
+ImgDrawResult
 nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayerWithSC(const PaintBGParams& aParams,
                                                                    mozilla::wr::DisplayListBuilder& aBuilder,
                                                                    mozilla::wr::IpcResourceUpdateQueue& aResources,
@@ -2884,10 +2884,10 @@ nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayerWithSC(const PaintBG
   // Skip the following layer painting code if we found the dirty region is
   // empty or the current layer is not selected for drawing.
   if (clipState.mDirtyRectInDevPx.IsEmpty()) {
-    return DrawResult::SUCCESS;
+    return ImgDrawResult::SUCCESS;
   }
 
-  DrawResult result = DrawResult::SUCCESS;
+  ImgDrawResult result = ImgDrawResult::SUCCESS;
   nsBackgroundLayerState state =
     PrepareImageLayer(&aParams.presCtx, aParams.frame,
                       aParams.paintFlags, paintBorderArea,
@@ -4479,7 +4479,7 @@ nsContextBoxBlur::Init(const nsRect& aRect, nscoord aSpreadRadius,
     nsLayoutUtils::RectToGfxRect(aDirtyRect, aAppUnitsPerDevPixel);
   dirtyRect.RoundOut();
 
-  gfxMatrix transform = aDestinationCtx->CurrentMatrix();
+  gfxMatrix transform = aDestinationCtx->CurrentMatrixDouble();
   rect = transform.TransformBounds(rect);
 
   mPreTransformed = !transform.IsIdentity();
@@ -4516,7 +4516,7 @@ nsContextBoxBlur::DoPaint()
   gfxContextMatrixAutoSaveRestore saveMatrix(mDestinationCtx);
 
   if (mPreTransformed) {
-    mDestinationCtx->SetMatrix(gfxMatrix());
+    mDestinationCtx->SetMatrix(Matrix());
   }
 
   mAlphaBoxBlur.Paint(mDestinationCtx);
@@ -4577,12 +4577,12 @@ nsContextBoxBlur::BlurRectangle(gfxContext* aDestinationCtx,
   // Do blurs in device space when possible.
   // Chrome/Skia always does the blurs in device space
   // and will sometimes get incorrect results (e.g. rotated blurs)
-  gfxMatrix transform = aDestinationCtx->CurrentMatrix();
+  gfxMatrix transform = aDestinationCtx->CurrentMatrixDouble();
   // XXX: we could probably handle negative scales but for now it's easier just to fallback
   if (!transform.HasNonAxisAlignedTransform() && transform._11 > 0.0 && transform._22 > 0.0) {
     scaleX = transform._11;
     scaleY = transform._22;
-    aDestinationCtx->SetMatrix(gfxMatrix());
+    aDestinationCtx->SetMatrix(Matrix());
   } else {
     transform = gfxMatrix();
   }
@@ -4677,13 +4677,13 @@ nsContextBoxBlur::InsetBoxBlur(gfxContext* aDestinationCtx,
   // input data to the blur. This way, we don't have to scale the min
   // inset blur to the invert of the dest context, then rescale it back
   // when we draw to the destination surface.
-  gfxSize scale = aDestinationCtx->CurrentMatrix().ScaleFactors(true);
-  Matrix transform = ToMatrix(aDestinationCtx->CurrentMatrix());
+  gfx::Size scale = aDestinationCtx->CurrentMatrix().ScaleFactors(true);
+  Matrix transform = aDestinationCtx->CurrentMatrix();
 
   // XXX: we could probably handle negative scales but for now it's easier just to fallback
   if (!transform.HasNonAxisAlignedTransform() && transform._11 > 0.0 && transform._22 > 0.0) {
     // If we don't have a rotation, we're pre-transforming all the rects.
-    aDestinationCtx->SetMatrix(gfxMatrix());
+    aDestinationCtx->SetMatrix(Matrix());
   } else {
     // Don't touch anything, we have a rotation.
     transform = Matrix();

@@ -180,6 +180,8 @@ public:
         mCheckOTLTables = gfxPrefs::ValidateOTLTables();
         // Whether to preserve Variation tables in downloaded fonts
         mKeepVariationTables = gfxPrefs::KeepVariationTables();
+        // Whether to preserve color bitmap glyphs
+        mKeepColorBitmaps = gfxPrefs::KeepColorBitmaps();
     }
 
     virtual ots::TableAction GetTableAction(uint32_t aTag) override {
@@ -199,7 +201,11 @@ public:
               aTag == TRUETYPE_TAG('V', 'V', 'A', 'R'))) ||
             aTag == TRUETYPE_TAG('S', 'V', 'G', ' ') ||
             aTag == TRUETYPE_TAG('C', 'O', 'L', 'R') ||
-            aTag == TRUETYPE_TAG('C', 'P', 'A', 'L')) {
+            aTag == TRUETYPE_TAG('C', 'P', 'A', 'L') ||
+            (mKeepColorBitmaps &&
+             (aTag == TRUETYPE_TAG('C', 'B', 'D', 'T') ||
+              aTag == TRUETYPE_TAG('C', 'B', 'L', 'C'))) ||
+            false) {
             return ots::TABLE_ACTION_PASSTHRU;
         }
         return ots::TABLE_ACTION_DEFAULT;
@@ -232,6 +238,7 @@ private:
     nsTHashtable<nsCStringHashKey> mWarningsIssued;
     bool mCheckOTLTables;
     bool mKeepVariationTables;
+    bool mKeepColorBitmaps;
 };
 
 // Call the OTS library to sanitize an sfnt before attempting to use it.
@@ -712,7 +719,7 @@ gfxUserFontEntry::LoadPlatformFont(const uint8_t* aFontData, uint32_t& aLength)
 
     // Because platform font activation code may replace the name table
     // in the font with a synthetic one, we save the original name so that
-    // it can be reported via the nsIDOMFontFace API.
+    // it can be reported via the InspectorUtils API.
     nsAutoString originalFullName;
 
     // Call the OTS sanitizer; this will also decode WOFF to sfnt
@@ -778,7 +785,7 @@ gfxUserFontEntry::LoadPlatformFont(const uint8_t* aFontData, uint32_t& aLength)
     if (fe) {
         fe->mComputedSizeOfUserFont = computedSize;
 
-        // Save a copy of the metadata block (if present) for nsIDOMFontFace
+        // Save a copy of the metadata block (if present) for InspectorUtils
         // to use if required. Ownership of the metadata block will be passed
         // to the gfxUserFontData record below.
         FallibleTArray<uint8_t> metadata;

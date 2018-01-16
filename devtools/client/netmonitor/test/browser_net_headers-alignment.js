@@ -10,7 +10,7 @@
 add_task(function* () {
   requestLongerTimeout(4);
 
-  let { monitor } = yield initNetMonitor(INFINITE_GET_URL, true);
+  let { tab, monitor } = yield initNetMonitor(INFINITE_GET_URL, true);
   let { document, windowRequire, store } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
 
@@ -40,6 +40,11 @@ add_task(function* () {
     );
   }
 
+  // Stop doing requests.
+  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
+    content.wrappedJSObject.stopRequests();
+  });
+
   // Done: clean up.
   return teardown(monitor);
 
@@ -53,8 +58,6 @@ add_task(function* () {
     while (true) {
       info("Waiting for one network request");
       yield waitForNetworkEvents(monitor, 1);
-      console.log(requestsContainer.scrollHeight);
-      console.log(requestsContainer.clientHeight);
       if (requestsContainer.scrollHeight > requestsContainer.clientHeight) {
         info("The list is long enough, returning");
         return;

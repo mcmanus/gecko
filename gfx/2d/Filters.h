@@ -22,7 +22,8 @@ class SourceSurface;
 enum FilterBackend {
   FILTER_BACKEND_SOFTWARE = 0,
   FILTER_BACKEND_DIRECT2D1_1,
-  FILTER_BACKEND_RECORDING
+  FILTER_BACKEND_RECORDING,
+  FILTER_BACKEND_CAPTURE
 };
 
 enum TransformFilterAtts
@@ -475,7 +476,7 @@ enum UnpremultiplyInputs
   IN_UNPREMULTIPLY_IN = 0
 };
 
-class FilterNode : public RefCounted<FilterNode>
+class FilterNode : public external::AtomicRefCounted<FilterNode>
 {
 public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(FilterNode)

@@ -64,7 +64,7 @@ static NS_DEFINE_CID(kFrameTraversalCID, NS_FRAMETRAVERSAL_CID);
 #include "nsIDOMDocument.h"
 #include "nsIDocument.h"
 
-#include "nsISelectionController.h"//for the enums
+#include "nsISelectionController.h" //for the enums
 #include "nsAutoCopyListener.h"
 #include "SelectionChangeListener.h"
 #include "nsCopySupport.h"
@@ -81,14 +81,12 @@ static NS_DEFINE_CID(kFrameTraversalCID, NS_FRAMETRAVERSAL_CID);
 #include "mozilla/dom/SelectionBinding.h"
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/Telemetry.h"
-#include "mozilla/layers/ScrollInputMethods.h"
 
 #include "nsFocusManager.h"
 #include "nsPIDOMWindow.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
-using mozilla::layers::ScrollInputMethod;
 
 //#define DEBUG_TABLE 1
 
@@ -305,21 +303,6 @@ nsFrameSelection::nsFrameSelection()
     mDomSelections[i] = new Selection(this);
     mDomSelections[i]->SetType(kPresentSelectionTypes[i]);
   }
-  mBatching = 0;
-  mChangesDuringBatching = false;
-  mNotifyFrames = true;
-
-  mMouseDoubleDownState = false;
-  mDesiredPosSet = false;
-  mAccessibleCaretEnabled = false;
-
-  mHint = CARET_ASSOCIATE_BEFORE;
-  mCaretBidiLevel = BIDI_LEVEL_UNDEFINED;
-  mKbdBidiLevel = NSBIDI_LTR;
-
-  mDragSelectingCells = false;
-  mSelectingTableCellMode = 0;
-  mSelectedCellIndex = 0;
 
   nsAutoCopyListener *autoCopy = nullptr;
   // On macOS, cache the current selection to send to osx service menu.
@@ -339,16 +322,6 @@ nsFrameSelection::nsFrameSelection()
       autoCopy->Listen(mDomSelections[index]);
     }
   }
-
-  mDisplaySelection = nsISelectionController::SELECTION_OFF;
-  mSelectionChangeReason = nsISelectionListener::NO_REASON;
-
-  mDelayedMouseEventValid = false;
-  // These values are not used since they are only valid when
-  // mDelayedMouseEventValid is true, and setting mDelayedMouseEventValid
-  //alwaysoverrides these values.
-  mDelayedMouseEventIsShift = false;
-  mDelayedMouseEventClickCount = 0;
 }
 
 nsFrameSelection::~nsFrameSelection()
@@ -449,10 +422,10 @@ nsFrameSelection::SetDesiredPos(nsPoint aPos)
 }
 
 nsresult
-nsFrameSelection::ConstrainFrameAndPointToAnchorSubtree(nsIFrame  *aFrame,
-                                                        nsPoint&   aPoint,
-                                                        nsIFrame **aRetFrame,
-                                                        nsPoint&   aRetPoint)
+nsFrameSelection::ConstrainFrameAndPointToAnchorSubtree(nsIFrame* aFrame,
+                                                        const nsPoint& aPoint,
+                                                        nsIFrame** aRetFrame,
+                                                        nsPoint& aRetPoint)
 {
   //
   // The whole point of this method is to return a frame and point that
@@ -542,7 +515,7 @@ nsFrameSelection::ConstrainFrameAndPointToAnchorSubtree(nsIFrame  *aFrame,
 
       // If the mouse cursor in on a frame which is descendant of same
       // selection root, we can expand the selection to the frame.
-      if (cursorFrame && cursorFrame->PresContext()->PresShell() == mShell)
+      if (cursorFrame && cursorFrame->PresShell() == mShell)
       {
         nsIContent* cursorContent = cursorFrame->GetContent();
         NS_ENSURE_TRUE(cursorContent, NS_ERROR_FAILURE);
@@ -1267,7 +1240,7 @@ nsFrameSelection::HandleClick(nsIContent*        aNewFocus,
 }
 
 void
-nsFrameSelection::HandleDrag(nsIFrame *aFrame, nsPoint aPoint)
+nsFrameSelection::HandleDrag(nsIFrame* aFrame, const nsPoint& aPoint)
 {
   if (!aFrame || !mShell)
     return;
@@ -1336,8 +1309,8 @@ nsFrameSelection::HandleDrag(nsIFrame *aFrame, nsPoint aPoint)
 }
 
 nsresult
-nsFrameSelection::StartAutoScrollTimer(nsIFrame *aFrame,
-                                       nsPoint   aPoint,
+nsFrameSelection::StartAutoScrollTimer(nsIFrame* aFrame,
+                                       const nsPoint& aPoint,
                                        uint32_t  aDelay)
 {
   int8_t index = GetIndexFromSelectionType(SelectionType::eNormal);
@@ -1664,7 +1637,7 @@ nsFrameSelection::GetFrameForNodeOffset(nsIContent*        aNode,
       }
 
       if (childIndex > 0 || numChildren > 0) {
-        nsCOMPtr<nsIContent> childNode = theNode->GetChildAt(childIndex);
+        nsCOMPtr<nsIContent> childNode = theNode->GetChildAt_Deprecated(childIndex);
 
         if (!childNode) {
           break;
@@ -1705,7 +1678,7 @@ nsFrameSelection::GetFrameForNodeOffset(nsIContent*        aNode,
               aHint == CARET_ASSOCIATE_BEFORE ? childIndex - 1 : childIndex + 1;
 
             if (newChildIndex >= 0 && newChildIndex < numChildren) {
-              nsCOMPtr<nsIContent> newChildNode = aNode->GetChildAt(newChildIndex);
+              nsCOMPtr<nsIContent> newChildNode = aNode->GetChildAt_Deprecated(newChildIndex);
               if (!newChildNode) {
                 return nullptr;
               }
@@ -1726,10 +1699,8 @@ nsFrameSelection::GetFrameForNodeOffset(nsIContent*        aNode,
     // If the node is a ShadowRoot, the frame needs to be adjusted,
     // because a ShadowRoot does not get a frame. Its children are rendered
     // as children of the host.
-    mozilla::dom::ShadowRoot* shadowRoot =
-      mozilla::dom::ShadowRoot::FromNode(theNode);
-    if (shadowRoot) {
-      theNode = shadowRoot->GetHost();
+    if (ShadowRoot* shadow = ShadowRoot::FromNode(theNode)) {
+      theNode = shadow->GetHost();
     }
 
     returnFrame = theNode->GetPrimaryFrame();
@@ -1823,8 +1794,6 @@ nsFrameSelection::CommonPageMove(bool aForward,
     return;
 
   // scroll one page
-  mozilla::Telemetry::Accumulate(mozilla::Telemetry::SCROLL_INPUT_METHODS,
-      (uint32_t) ScrollInputMethod::MainThreadScrollPage);
   aScrollableFrame->ScrollBy(nsIntPoint(0, aForward ? 1 : -1),
                              nsIScrollableFrame::PAGES,
                              nsIScrollableFrame::SMOOTH);
@@ -2092,7 +2061,7 @@ GetFirstSelectedContent(nsRange* aRange)
   NS_PRECONDITION(aRange->GetStartContainer()->IsElement(),
                   "Unexpected parent");
 
-  return aRange->GetStartContainer()->GetChildAt(aRange->StartOffset());
+  return aRange->GetStartContainer()->GetChildAt_Deprecated(aRange->StartOffset());
 }
 
 // Table selection support.
@@ -2115,7 +2084,7 @@ nsFrameSelection::HandleTableSelection(nsINode* aParentContent,
 
   nsresult result = NS_OK;
 
-  nsIContent *childContent = aParentContent->GetChildAt(aContentOffset);
+  nsIContent *childContent = aParentContent->GetChildAt_Deprecated(aContentOffset);
 
   // When doing table selection, always set the direction to next so
   // we can be sure that anchorNode's offset always points to the
@@ -2377,7 +2346,7 @@ printf("HandleTableSelection: Unselecting mUnselectCellOnMouseUp; rangeCount=%d\
 
           int32_t offset = range->StartOffset();
           // Be sure previous selection is a table cell
-          nsIContent* child = container->GetChildAt(offset);
+          nsIContent* child = container->GetChildAt_Deprecated(offset);
           if (child && IsCell(child)) {
             previousCellParent = container;
           }
@@ -2729,7 +2698,7 @@ nsFrameSelection::GetFirstCellNodeInRange(nsRange *aRange) const
 
   int32_t offset = aRange->StartOffset();
 
-  nsIContent* childContent = startContainer->GetChildAt(offset);
+  nsIContent* childContent = startContainer->GetChildAt_Deprecated(offset);
   if (!childContent)
     return nullptr;
   // Don't return node if not a cell

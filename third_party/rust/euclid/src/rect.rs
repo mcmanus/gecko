@@ -9,13 +9,12 @@
 
 use super::UnknownUnit;
 use length::Length;
-use scale_factor::ScaleFactor;
+use scale::TypedScale;
 use num::*;
 use point::TypedPoint2D;
 use vector::TypedVector2D;
 use size::TypedSize2D;
 
-use heapsize::HeapSizeOf;
 use num_traits::NumCast;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::PartialOrd;
@@ -32,12 +31,6 @@ pub struct TypedRect<T, U = UnknownUnit> {
 
 /// The default rectangle type with no unit.
 pub type Rect<T> = TypedRect<T, UnknownUnit>;
-
-impl<T: HeapSizeOf, U> HeapSizeOf for TypedRect<T, U> {
-    fn heap_size_of_children(&self) -> usize {
-        self.origin.heap_size_of_children() + self.size.heap_size_of_children()
-    }
-}
 
 impl<'de, T: Copy + Deserialize<'de>, U> Deserialize<'de> for TypedRect<T, U> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -167,7 +160,7 @@ where T: Copy + Clone + Zero + PartialOrd + PartialEq + Add<T, Output=T> + Sub<T
 
     /// Returns the same rectangle, translated by a vector.
     #[inline]
-    #[must_use]
+    #[cfg_attr(feature = "unstable", must_use)]
     pub fn translate(&self, by: &TypedVector2D<T, U>) -> Self {
         Self::new(self.origin + *by, self.size)
     }
@@ -192,7 +185,7 @@ where T: Copy + Clone + Zero + PartialOrd + PartialEq + Add<T, Output=T> + Sub<T
     }
 
     #[inline]
-    #[must_use]
+    #[cfg_attr(feature = "unstable", must_use)]
     pub fn inflate(&self, width: T, height: T) -> Self {
         TypedRect::new(
             TypedPoint2D::new(self.origin.x - width, self.origin.y - height),
@@ -201,7 +194,7 @@ where T: Copy + Clone + Zero + PartialOrd + PartialEq + Add<T, Output=T> + Sub<T
     }
 
     #[inline]
-    #[must_use]
+    #[cfg_attr(feature = "unstable", must_use)]
     pub fn inflate_typed(&self, width: Length<T, U>, height: Length<T, U>) -> Self {
         self.inflate(width.get(), height.get())
     }
@@ -222,7 +215,7 @@ where T: Copy + Clone + Zero + PartialOrd + PartialEq + Add<T, Output=T> + Sub<T
     }
 
     #[inline]
-    #[must_use]
+    #[cfg_attr(feature = "unstable", must_use)]
     pub fn translate_by_size(&self, size: &TypedSize2D<T, U>) -> Self {
         self.translate(&size.to_vector())
     }
@@ -293,8 +286,9 @@ where T: Copy + Clone + PartialOrd + Add<T, Output=T> + Sub<T, Output=T> + Zero 
 
 impl<T, U> TypedRect<T, U> {
     #[inline]
-    pub fn scale<Scale: Copy>(&self, x: Scale, y: Scale) -> Self
-        where T: Copy + Clone + Mul<Scale, Output=T> {
+    pub fn scale<S: Copy>(&self, x: S, y: S) -> Self
+        where T: Copy + Clone + Mul<S, Output=T>
+    {
         TypedRect::new(
             TypedPoint2D::new(self.origin.x * x, self.origin.y * y),
             TypedSize2D::new(self.size.width * x, self.size.height * y)
@@ -342,18 +336,18 @@ impl<T: Copy + Div<T, Output=T>, U> Div<T> for TypedRect<T, U> {
     }
 }
 
-impl<T: Copy + Mul<T, Output=T>, U1, U2> Mul<ScaleFactor<T, U1, U2>> for TypedRect<T, U1> {
+impl<T: Copy + Mul<T, Output=T>, U1, U2> Mul<TypedScale<T, U1, U2>> for TypedRect<T, U1> {
     type Output = TypedRect<T, U2>;
     #[inline]
-    fn mul(self, scale: ScaleFactor<T, U1, U2>) -> TypedRect<T, U2> {
+    fn mul(self, scale: TypedScale<T, U1, U2>) -> TypedRect<T, U2> {
         TypedRect::new(self.origin * scale, self.size * scale)
     }
 }
 
-impl<T: Copy + Div<T, Output=T>, U1, U2> Div<ScaleFactor<T, U1, U2>> for TypedRect<T, U2> {
+impl<T: Copy + Div<T, Output=T>, U1, U2> Div<TypedScale<T, U1, U2>> for TypedRect<T, U2> {
     type Output = TypedRect<T, U1>;
     #[inline]
-    fn div(self, scale: ScaleFactor<T, U1, U2>) -> TypedRect<T, U1> {
+    fn div(self, scale: TypedScale<T, U1, U2>) -> TypedRect<T, U1> {
         TypedRect::new(self.origin / scale, self.size / scale)
     }
 }
@@ -394,7 +388,7 @@ impl<T: Floor + Ceil + Round + Add<T, Output=T> + Sub<T, Output=T>, U> TypedRect
     /// avoid pixel rounding errors.
     /// Note that this is *not* rounding to nearest integer if the values are negative.
     /// They are always rounding as floor(n + 0.5).
-    #[must_use]
+    #[cfg_attr(feature = "unstable", must_use)]
     pub fn round(&self) -> Self {
         let origin = self.origin.round();
         let size = self.origin.add_size(&self.size).round() - origin;
@@ -403,7 +397,7 @@ impl<T: Floor + Ceil + Round + Add<T, Output=T> + Sub<T, Output=T>, U> TypedRect
 
     /// Return a rectangle with edges rounded to integer coordinates, such that
     /// the original rectangle contains the resulting rectangle.
-    #[must_use]
+    #[cfg_attr(feature = "unstable", must_use)]
     pub fn round_in(&self) -> Self {
         let origin = self.origin.ceil();
         let size = self.origin.add_size(&self.size).floor() - origin;
@@ -412,7 +406,7 @@ impl<T: Floor + Ceil + Round + Add<T, Output=T> + Sub<T, Output=T>, U> TypedRect
 
     /// Return a rectangle with edges rounded to integer coordinates, such that
     /// the original rectangle is contained in the resulting rectangle.
-    #[must_use]
+    #[cfg_attr(feature = "unstable", must_use)]
     pub fn round_out(&self) -> Self {
         let origin = self.origin.floor();
         let size = self.origin.add_size(&self.size).ceil() - origin;
@@ -424,6 +418,11 @@ impl<T: Floor + Ceil + Round + Add<T, Output=T> + Sub<T, Output=T>, U> TypedRect
 impl<T: NumCast + Copy, Unit> TypedRect<T, Unit> {
     /// Cast into an `f32` rectangle.
     pub fn to_f32(&self) -> TypedRect<f32, Unit> {
+        self.cast().unwrap()
+    }
+
+    /// Cast into an `f64` rectangle.
+    pub fn to_f64(&self) -> TypedRect<f64, Unit> {
         self.cast().unwrap()
     }
 

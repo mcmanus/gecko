@@ -13,7 +13,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/BasicEvents.h"
 
-class nsGlobalWindow;
+class nsGlobalWindowOuter;
 class nsIPresShell;
 class nsIWidget;
 class nsPresContext;
@@ -62,7 +62,7 @@ class nsDOMWindowUtils final : public nsIDOMWindowUtils,
   typedef mozilla::widget::TextEventDispatcher
     TextEventDispatcher;
 public:
-  explicit nsDOMWindowUtils(nsGlobalWindow *aWindow);
+  explicit nsDOMWindowUtils(nsGlobalWindowOuter *aWindow);
   NS_DECL_ISUPPORTS
   NS_DECL_NSIDOMWINDOWUTILS
 
@@ -99,26 +99,6 @@ protected:
                                   bool aIsDOMEventSynthesized,
                                   bool aIsWidgetEventSynthesized,
                                   int32_t aButtons);
-
-  NS_IMETHOD SendPointerEventCommon(const nsAString& aType,
-                                    float aX,
-                                    float aY,
-                                    int32_t aButton,
-                                    int32_t aClickCount,
-                                    int32_t aModifiers,
-                                    bool aIgnoreRootScrollFrame,
-                                    float aPressure,
-                                    unsigned short aInputSourceArg,
-                                    int32_t aPointerId,
-                                    int32_t aWidth,
-                                    int32_t aHeight,
-                                    int32_t aTiltX,
-                                    int32_t aTiltY,
-                                    bool aIsPrimary,
-                                    bool aIsSynthesized,
-                                    uint8_t aOptionalArgCount,
-                                    bool aToWindow,
-                                    bool* aPreventDefault);
 
   NS_IMETHOD SendTouchEventCommon(const nsAString& aType,
                                   uint32_t* aIdentifiers,

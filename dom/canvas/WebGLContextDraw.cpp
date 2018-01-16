@@ -6,6 +6,7 @@
 #include "WebGLContext.h"
 
 #include "GeckoProfiler.h"
+#include "MozFramebuffer.h"
 #include "GLContext.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/UniquePtrExtensions.h"
@@ -99,23 +100,10 @@ ScopedResolveTexturesForDraw::ScopedResolveTexturesForDraw(WebGLContext* webgl,
 {
     MOZ_ASSERT(mWebGL->gl->IsCurrent());
 
-    if (!mWebGL->mActiveProgramLinkInfo) {
-        mWebGL->ErrorInvalidOperation("%s: The current program is not linked.", funcName);
-        *out_error = true;
-        return;
-    }
-
     const std::vector<const WebGLFBAttachPoint*>* attachList = nullptr;
     const auto& fb = mWebGL->mBoundDrawFramebuffer;
     if (fb) {
-        if (!fb->ValidateAndInitAttachments(funcName)) {
-            *out_error = true;
-            return;
-        }
-
         attachList = &(fb->ResolvedCompleteData()->texDrawBuffers);
-    } else {
-        webgl->ClearBackbufferIfNeeded();
     }
 
     MOZ_ASSERT(mWebGL->mActiveProgramLinkInfo);
@@ -255,6 +243,11 @@ public:
     {
         MOZ_ASSERT(mWebGL->gl->IsCurrent());
 
+        if (!mWebGL->BindCurFBForDraw(funcName)) {
+            *out_error = true;
+            return;
+        }
+
         if (!mWebGL->ValidateDrawModeEnum(mode, funcName)) {
             *out_error = true;
             return;
@@ -265,21 +258,15 @@ public:
             return;
         }
 
-        ////
-
-        if (mWebGL->mBoundDrawFramebuffer) {
-            if (!mWebGL->mBoundDrawFramebuffer->ValidateAndInitAttachments(funcName)) {
-                *out_error = true;
-                return;
-            }
-        } else {
-            mWebGL->ClearBackbufferIfNeeded();
+        if (!mWebGL->mActiveProgramLinkInfo) {
+            mWebGL->ErrorInvalidOperation("%s: The current program is not linked.", funcName);
+            *out_error = true;
+            return;
         }
+        const auto& linkInfo = mWebGL->mActiveProgramLinkInfo;
 
         ////
         // Check UBO sizes.
-
-        const auto& linkInfo = mWebGL->mActiveProgramLinkInfo;
 
         for (const auto& cur : linkInfo->uniformBlocks) {
             const auto& dataSize = cur->mDataSize;
@@ -337,6 +324,10 @@ public:
                     *out_error = true;
                     return;
                 }
+
+                // Technically we don't know that this will be updated yet, but we can
+                // speculatively mark it.
+                buffer->ResetLastUpdateFenceId();
             }
         }
 
@@ -469,6 +460,13 @@ public:
     }
 };
 
+static bool
+HasInstancedDrawing(const WebGLContext& webgl)
+{
+    return webgl.IsWebGL2() ||
+           webgl.IsExtensionEnabled(WebGLExtensionID::ANGLE_instanced_arrays);
+}
+
 ////////////////////////////////////////
 
 bool
@@ -507,69 +505,26 @@ WebGLContext::DrawArrays_check(const char* const funcName, const GLint first,
 }
 
 void
-WebGLContext::DrawArrays(GLenum mode, GLint first, GLsizei vertCount)
-{
-    AUTO_PROFILER_LABEL("WebGLContext::DrawArrays", GRAPHICS);
-    const char funcName[] = "drawArrays";
-    if (IsContextLost())
-        return;
-
-    MakeContextCurrent();
-
-    bool error = false;
-    ScopedResolveTexturesForDraw scopedResolve(this, funcName, &error);
-    if (error)
-        return;
-
-    const GLsizei instanceCount = 1;
-    Maybe<uint32_t> lastVert;
-    if (!DrawArrays_check(funcName, first, vertCount, instanceCount, &lastVert))
-        return;
-
-    const ScopedDrawHelper scopedHelper(this, funcName, mode, lastVert, instanceCount,
-                                        &error);
-    if (error)
-        return;
-
-    const ScopedDrawWithTransformFeedback scopedTF(this, funcName, mode, vertCount,
-                                                   instanceCount, &error);
-    if (error)
-        return;
-
-    {
-        ScopedDrawCallWrapper wrapper(*this);
-        if (vertCount) {
-            AUTO_PROFILER_LABEL("glDrawArrays", GRAPHICS);
-            gl->fDrawArrays(mode, first, vertCount);
-        }
-    }
-
-    Draw_cleanup(funcName);
-    scopedTF.Advance();
-}
-
-void
 WebGLContext::DrawArraysInstanced(GLenum mode, GLint first, GLsizei vertCount,
-                                  GLsizei instanceCount)
+                                  GLsizei instanceCount, const char* const funcName)
 {
     AUTO_PROFILER_LABEL("WebGLContext::DrawArraysInstanced", GRAPHICS);
-    const char funcName[] = "drawArraysInstanced";
     if (IsContextLost())
         return;
 
-    MakeContextCurrent();
-
-    bool error = false;
-    ScopedResolveTexturesForDraw scopedResolve(this, funcName, &error);
-    if (error)
-        return;
+    const gl::GLContext::TlsScope inTls(gl);
 
     Maybe<uint32_t> lastVert;
     if (!DrawArrays_check(funcName, first, vertCount, instanceCount, &lastVert))
         return;
 
+    bool error = false;
     const ScopedDrawHelper scopedHelper(this, funcName, mode, lastVert, instanceCount,
                                         &error);
+    if (error)
+        return;
+
+    const ScopedResolveTexturesForDraw scopedResolve(this, funcName, &error);
     if (error)
         return;
 
@@ -582,7 +537,12 @@ WebGLContext::DrawArraysInstanced(GLenum mode, GLint first, GLsizei vertCount,
         ScopedDrawCallWrapper wrapper(*this);
         if (vertCount && instanceCount) {
             AUTO_PROFILER_LABEL("glDrawArraysInstanced", GRAPHICS);
-            gl->fDrawArraysInstanced(mode, first, vertCount, instanceCount);
+            if (HasInstancedDrawing(*this)) {
+                gl->fDrawArraysInstanced(mode, first, vertCount, instanceCount);
+            } else {
+                MOZ_ASSERT(instanceCount == 1);
+                gl->fDrawArrays(mode, first, vertCount);
+            }
         }
     }
 
@@ -702,75 +662,15 @@ HandleDrawElementsErrors(WebGLContext* webgl, const char* funcName,
 }
 
 void
-WebGLContext::DrawElements(GLenum mode, GLsizei indexCount, GLenum type,
-                           WebGLintptr byteOffset, const char* funcName)
-{
-    AUTO_PROFILER_LABEL("WebGLContext::DrawElements", GRAPHICS);
-    if (!funcName) {
-        funcName = "drawElements";
-    }
-    if (IsContextLost())
-        return;
-
-    MakeContextCurrent();
-
-    bool error = false;
-    ScopedResolveTexturesForDraw scopedResolve(this, funcName, &error);
-    if (error)
-        return;
-
-    const GLsizei instanceCount = 1;
-    Maybe<uint32_t> lastVert;
-    if (!DrawElements_check(funcName, indexCount, type, byteOffset, instanceCount,
-                            &lastVert))
-    {
-        return;
-    }
-
-    const ScopedDrawHelper scopedHelper(this, funcName, mode, lastVert, instanceCount,
-                                        &error);
-    if (error)
-        return;
-
-    {
-        ScopedDrawCallWrapper wrapper(*this);
-        {
-            UniquePtr<gl::GLContext::LocalErrorScope> errorScope;
-
-            if (gl->IsANGLE()) {
-                errorScope.reset(new gl::GLContext::LocalErrorScope(*gl));
-            }
-
-            if (indexCount) {
-                AUTO_PROFILER_LABEL("glDrawElements", GRAPHICS);
-                gl->fDrawElements(mode, indexCount, type,
-                                  reinterpret_cast<GLvoid*>(byteOffset));
-            }
-
-            if (errorScope) {
-                HandleDrawElementsErrors(this, funcName, *errorScope);
-            }
-        }
-    }
-
-    Draw_cleanup(funcName);
-}
-
-void
 WebGLContext::DrawElementsInstanced(GLenum mode, GLsizei indexCount, GLenum type,
-                                    WebGLintptr byteOffset, GLsizei instanceCount)
+                                    WebGLintptr byteOffset, GLsizei instanceCount,
+                                    const char* const funcName)
 {
     AUTO_PROFILER_LABEL("WebGLContext::DrawElementsInstanced", GRAPHICS);
-    const char funcName[] = "drawElementsInstanced";
     if (IsContextLost())
         return;
 
-    MakeContextCurrent();
-
-    bool error = false;
-    ScopedResolveTexturesForDraw scopedResolve(this, funcName, &error);
-    if (error)
-        return;
+    const gl::GLContext::TlsScope inTls(gl);
 
     Maybe<uint32_t> lastVert;
     if (!DrawElements_check(funcName, indexCount, type, byteOffset, instanceCount,
@@ -779,8 +679,13 @@ WebGLContext::DrawElementsInstanced(GLenum mode, GLsizei indexCount, GLenum type
         return;
     }
 
+    bool error = false;
     const ScopedDrawHelper scopedHelper(this, funcName, mode, lastVert, instanceCount,
                                         &error);
+    if (error)
+        return;
+
+    const ScopedResolveTexturesForDraw scopedResolve(this, funcName, &error);
     if (error)
         return;
 
@@ -795,9 +700,15 @@ WebGLContext::DrawElementsInstanced(GLenum mode, GLsizei indexCount, GLenum type
 
             if (indexCount && instanceCount) {
                 AUTO_PROFILER_LABEL("glDrawElementsInstanced", GRAPHICS);
-                gl->fDrawElementsInstanced(mode, indexCount, type,
-                                           reinterpret_cast<GLvoid*>(byteOffset),
-                                           instanceCount);
+                if (HasInstancedDrawing(*this)) {
+                    gl->fDrawElementsInstanced(mode, indexCount, type,
+                                               reinterpret_cast<GLvoid*>(byteOffset),
+                                               instanceCount);
+                } else {
+                    MOZ_ASSERT(instanceCount == 1);
+                    gl->fDrawElements(mode, indexCount, type,
+                                      reinterpret_cast<GLvoid*>(byteOffset));
+                }
             }
 
             if (errorScope) {
@@ -839,8 +750,8 @@ WebGLContext::Draw_cleanup(const char* funcName)
             break;
         }
     } else {
-        destWidth = mWidth;
-        destHeight = mHeight;
+        destWidth = mDefaultFB->mSize.width;
+        destHeight = mDefaultFB->mSize.height;
     }
 
     if (mViewportWidth > int32_t(destWidth) ||
@@ -1079,7 +990,6 @@ WebGLContext::FakeBlackTexture::FakeBlackTexture(gl::GLContext* gl)
 
 WebGLContext::FakeBlackTexture::~FakeBlackTexture()
 {
-    mGL->MakeCurrent();
     mGL->fDeleteTextures(1, &mGLName);
 }
 

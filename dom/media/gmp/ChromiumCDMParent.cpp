@@ -18,8 +18,8 @@
 #include "mozilla/gmp/GMPTypes.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/Unused.h"
-#include "mp4_demuxer/AnnexB.h"
-#include "mp4_demuxer/H264.h"
+#include "AnnexB.h"
+#include "H264.h"
 
 #define NS_DispatchToMainThread(...) CompileError_UseAbstractMainThreadInstead
 
@@ -186,6 +186,25 @@ ChromiumCDMParent::RemoveSession(const nsCString& aSessionId,
   }
 }
 
+void
+ChromiumCDMParent::GetStatusForPolicy(uint32_t aPromiseId,
+                                      const nsCString& aMinHdcpVersion)
+{
+  GMP_LOG("ChromiumCDMParent::GetStatusForPolicy(this=%p)", this);
+  if (mIsShutdown) {
+    RejectPromise(aPromiseId,
+                  NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("CDM is shutdown."));
+    return;
+  }
+  if (!SendGetStatusForPolicy(aPromiseId, aMinHdcpVersion)) {
+    RejectPromise(
+      aPromiseId,
+      NS_ERROR_DOM_INVALID_STATE_ERR,
+      NS_LITERAL_CSTRING("Failed to send getStatusForPolicy to CDM process"));
+  }
+}
+
 bool
 ChromiumCDMParent::InitCDMInputBuffer(gmp::CDMInputBuffer& aBuffer,
                                       MediaRawData* aSample)
@@ -271,6 +290,24 @@ ChromiumCDMParent::Recv__delete__()
     mContentParent->ChromiumCDMDestroyed(this);
     mContentParent = nullptr;
   }
+  return IPC_OK();
+}
+
+ipc::IPCResult
+ChromiumCDMParent::RecvOnResolvePromiseWithKeyStatus(const uint32_t& aPromiseId,
+                                                     const uint32_t& aKeyStatus)
+{
+  GMP_LOG("ChromiumCDMParent::RecvOnResolvePromiseWithKeyStatus(this=%p, pid=%u, "
+          "keystatus=%u)",
+          this,
+          aPromiseId,
+          aKeyStatus);
+  if (!mCDMCallback || mIsShutdown) {
+    return IPC_OK();
+  }
+
+  mCDMCallback->ResolvePromiseWithKeyStatus(aPromiseId, aKeyStatus);
+
   return IPC_OK();
 }
 
@@ -884,8 +921,8 @@ ChromiumCDMParent::InitializeVideoDecoder(
 
   mMaxRefFrames =
     (aConfig.mCodec() == cdm::VideoDecoderConfig::kCodecH264)
-      ? mp4_demuxer::H264::HasSPS(aInfo.mExtraData)
-          ? mp4_demuxer::H264::ComputeMaxRefFrames(aInfo.mExtraData)
+      ? H264::HasSPS(aInfo.mExtraData)
+          ? H264::ComputeMaxRefFrames(aInfo.mExtraData)
           : 16
       : 0;
 

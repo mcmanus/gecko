@@ -23,44 +23,12 @@ WebRenderLayerScrollData::WebRenderLayerScrollData()
   , mEventRegionsOverride(EventRegionsOverride::NoOverride)
   , mScrollbarAnimationId(0)
   , mScrollbarTargetContainerId(FrameMetrics::NULL_SCROLL_ID)
-  , mIsScrollbarContainer(false)
   , mFixedPosScrollContainerId(FrameMetrics::NULL_SCROLL_ID)
 {
 }
 
 WebRenderLayerScrollData::~WebRenderLayerScrollData()
 {
-}
-
-void
-WebRenderLayerScrollData::Initialize(WebRenderScrollData& aOwner,
-                                     Layer* aLayer,
-                                     int32_t aDescendantCount)
-{
-  MOZ_ASSERT(aDescendantCount >= 0); // Ensure value is valid
-  MOZ_ASSERT(mDescendantCount == -1); // Don't allow re-setting an already set value
-  mDescendantCount = aDescendantCount;
-
-  MOZ_ASSERT(aLayer);
-  for (uint32_t i = 0; i < aLayer->GetScrollMetadataCount(); i++) {
-    mScrollIds.AppendElement(aOwner.AddMetadata(aLayer->GetScrollMetadata(i)));
-  }
-
-  mTransform = aLayer->GetTransform();
-  mTransformIsPerspective = aLayer->GetTransformIsPerspective();
-  mEventRegions = aLayer->GetEventRegions();
-  mVisibleRegion = aLayer->GetVisibleRegion();
-  mReferentId = aLayer->AsRefLayer()
-      ? Some(aLayer->AsRefLayer()->GetReferentId())
-      : Nothing();
-  mEventRegionsOverride = aLayer->AsContainerLayer()
-      ? aLayer->AsContainerLayer()->GetEventRegionsOverride()
-      : EventRegionsOverride::NoOverride;
-  mScrollThumbData = aLayer->GetScrollThumbData();
-  mScrollbarAnimationId = aLayer->GetCompositorAnimationsId();
-  mScrollbarTargetContainerId = aLayer->GetScrollbarTargetContainerId();
-  mIsScrollbarContainer = aLayer->IsScrollbarContainer();
-  mFixedPosScrollContainerId = aLayer->GetFixedPositionScrollContainerId();
 }
 
 void
@@ -85,11 +53,17 @@ WebRenderLayerScrollData::Initialize(WebRenderScrollData& aOwner,
        asr && asr != aStopAtAsr;
        asr = asr->mParent) {
     MOZ_ASSERT(aOwner.GetManager());
-    Maybe<ScrollMetadata> metadata = asr->mScrollableFrame->ComputeScrollMetadata(
-        nullptr, aOwner.GetManager(), aItem->ReferenceFrame(),
-        ContainerLayerParameters(), nullptr);
-    MOZ_ASSERT(metadata);
-    mScrollIds.AppendElement(aOwner.AddMetadata(metadata.ref()));
+    FrameMetrics::ViewID scrollId = asr->GetViewId();
+    if (Maybe<size_t> index = aOwner.HasMetadataFor(scrollId)) {
+      mScrollIds.AppendElement(index.ref());
+    } else {
+      Maybe<ScrollMetadata> metadata = asr->mScrollableFrame->ComputeScrollMetadata(
+          nullptr, aOwner.GetManager(), aItem->ReferenceFrame(),
+          ContainerLayerParameters(), nullptr);
+      MOZ_ASSERT(metadata);
+      MOZ_ASSERT(metadata->GetMetrics().GetScrollId() == scrollId);
+      mScrollIds.AppendElement(aOwner.AddMetadata(metadata.ref()));
+    }
   }
 }
 
@@ -139,11 +113,11 @@ WebRenderLayerScrollData::Dump(const WebRenderScrollData& aOwner) const
     Stringify(mVisibleRegion).c_str());
   printf_stderr("  event regions: %s override: 0x%x\n",
     Stringify(mEventRegions).c_str(), mEventRegionsOverride);
-  printf_stderr("  ref layers id: %" PRIu64 "\n", mReferentId.valueOr(0));
+  printf_stderr("  ref layers id: 0x%" PRIx64 "\n", mReferentId.valueOr(0));
   //printf_stderr("  scroll thumb: %s animation: %" PRIu64 "\n",
   //  Stringify(mScrollThumbData).c_str(), mScrollbarAnimationId);
   printf_stderr("  scroll container: %d target: %" PRIu64 "\n",
-    mIsScrollbarContainer, mScrollbarTargetContainerId);
+    mScrollbarContainerDirection.isSome(), mScrollbarTargetContainerId);
   printf_stderr("  fixed pos container: %" PRIu64 "\n",
     mFixedPosScrollContainerId);
 }
@@ -186,14 +160,6 @@ WebRenderScrollData::AddMetadata(const ScrollMetadata& aMetadata)
 }
 
 size_t
-WebRenderScrollData::AddNewLayerData()
-{
-  size_t len = mLayerScrollData.Length();
-  Unused << mLayerScrollData.AppendElement();
-  return len;
-}
-
-size_t
 WebRenderScrollData::AddLayerData(const WebRenderLayerScrollData& aData)
 {
   mLayerScrollData.AppendElement(aData);
@@ -204,15 +170,6 @@ size_t
 WebRenderScrollData::GetLayerCount() const
 {
   return mLayerScrollData.Length();
-}
-
-WebRenderLayerScrollData*
-WebRenderScrollData::GetLayerDataMutable(size_t aIndex)
-{
-  if (aIndex >= mLayerScrollData.Length()) {
-    return nullptr;
-  }
-  return &(mLayerScrollData.ElementAt(aIndex));
 }
 
 const WebRenderLayerScrollData*
@@ -231,10 +188,11 @@ WebRenderScrollData::GetScrollMetadata(size_t aIndex) const
   return mScrollMetadatas[aIndex];
 }
 
-bool
+Maybe<size_t>
 WebRenderScrollData::HasMetadataFor(const FrameMetrics::ViewID& aScrollId) const
 {
-  return mScrollIdMap.find(aScrollId) != mScrollIdMap.end();
+  auto it = mScrollIdMap.find(aScrollId);
+  return (it == mScrollIdMap.end() ? Nothing() : Some(it->second));
 }
 
 void

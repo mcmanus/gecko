@@ -21,6 +21,7 @@ job-defaults:
         requires-signed-builds:
             by-test-platform:
                 windows10-64-asan/opt: false    # No XPCShell on ASAN yet
+                windows10-64-ccov/debug: false  # TODO: Sign build.
                 windows.*: true
                 default: false
 
@@ -33,7 +34,7 @@ xpcshell:
     treeherder-symbol: tc-X(X)
     run-on-projects:
         by-test-platform:
-            linux64-qr/.*: ['mozilla-central', 'try']
+            .*-qr/.*: ['mozilla-central', 'try']
             windows10-64-asan/opt: []  # No XPCShell on ASAN yet
             default: built-projects
     chunks:
@@ -43,6 +44,7 @@ xpcshell:
             android-4.2-x86/opt: 6
             macosx.*: 1
             windows.*: 1
+            windows10-64-ccov/debug: 8
             default: 8
     instance-size:
         by-test-platform:

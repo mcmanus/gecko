@@ -46,11 +46,9 @@ DEFAULTS = dict(
         userready=False,
         testeventmap=[],
         base_vs_ref=False,
-        tpnoisy=True,
         tppagecycles=1,
         tploadnocache=False,
         tpscrolltest=False,
-        tprender=False,
         win_counters=[],
         w7_counters=[],
         linux_counters=[],
@@ -58,6 +56,7 @@ DEFAULTS = dict(
         xperf_counters=[],
         setup=None,
         cleanup=None,
+        preferences={},
     ),
     # default preferences to run with
     # these are updated with --extraPrefs from the commandline
@@ -103,6 +102,7 @@ DEFAULTS = dict(
         'take_over_this_computer': True,
         'browser.newtabpage.activity-stream.default.sites': '',
         'browser.newtabpage.activity-stream.telemetry': False,
+        'browser.newtabpage.activity-stream.tippyTop.service.endpoint': '',
         'browser.newtabpage.activity-stream.feeds.section.topstories': False,
         'browser.newtabpage.activity-stream.feeds.snippets': False,
         'browser.newtabpage.directory.source':
@@ -135,6 +135,7 @@ DEFAULTS = dict(
         'privacy.trackingprotection.pbmode.enabled': False,
         'browser.search.isUS': True,
         'browser.search.countryCode': 'US',
+        'browser.search.geoip.url': '',
         'browser.urlbar.userMadeSearchSuggestionsChoice': True,
         'extensions.update.url':
             'http://127.0.0.1/extensions-dummy/updateURL',
@@ -148,7 +149,6 @@ DEFAULTS = dict(
         'extensions.update.enabled': False,
         'extensions.webservice.discoverURL':
             'http://127.0.0.1/extensions-dummy/discoveryURL',
-        'extensions.getAddons.maxResults': 0,
         'extensions.getAddons.get.url':
             'http://127.0.0.1/extensions-dummy/repositoryGetURL',
         'extensions.getAddons.getWithPerformance.url':
@@ -156,8 +156,6 @@ DEFAULTS = dict(
             '/repositoryGetWithPerformanceURL',
         'extensions.getAddons.search.browseURL':
             'http://127.0.0.1/extensions-dummy/repositoryBrowseURL',
-        'extensions.getAddons.search.url':
-            'http://127.0.0.1/extensions-dummy/repositorySearchURL',
         'media.gmp-manager.url':
             'http://127.0.0.1/gmpmanager-dummy/update.xml',
         'media.gmp-manager.updateEnabled': False,
@@ -180,8 +178,6 @@ DEFAULTS = dict(
         'browser.contentHandlers.types.4.uri': 'http://127.0.0.1/rss?url=%s',
         'browser.contentHandlers.types.5.uri': 'http://127.0.0.1/rss?url=%s',
         'identity.fxaccounts.auth.uri': 'https://127.0.0.1/fxa-dummy/',
-        'datareporting.healthreport.about.reportUrl':
-            'http://127.0.0.1/abouthealthreport/',
         'datareporting.healthreport.documentServerURI':
             'http://127.0.0.1/healthreport/',
         'datareporting.policy.dataSubmissionPolicyBypassNotification': True,
@@ -215,9 +211,7 @@ GLOBAL_OVERRIDES = (
     'gecko_profile',
     'gecko_profile_interval',
     'gecko_profile_entries',
-    'shutdown',
     'tpcycles',
-    'tpdelay',
     'tppagecycles',
     'tpmanifest',
     'tptimeout',
@@ -332,16 +326,6 @@ def get_global_overrides(config):
         if key != 'gecko_profile':
             config.pop(key)
 
-    # add noChrome to global overrides (HACK)
-    noChrome = config.pop('noChrome')
-    if noChrome:
-        global_overrides['tpchrome'] = False
-
-    # HACK: currently xperf tests post results to graph server and
-    # we want to ensure we don't publish shutdown numbers
-    # This is also hacked because "--noShutdown -> shutdown:True"
-    if config['xperf_path']:
-        global_overrides['shutdown'] = False
     return global_overrides
 
 
@@ -430,6 +414,9 @@ def get_browser_config(config):
     optional = {'bcontroller_config': '${talos}/bcontroller.json',
                 'branch_name': '',
                 'child_process': 'plugin-container',
+                'debug': False,
+                'debugger': None,
+                'debugger_args': None,
                 'develop': False,
                 'process': '',
                 'framework': 'talos',

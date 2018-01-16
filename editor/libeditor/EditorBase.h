@@ -122,6 +122,7 @@ class InsertTextTransaction;
 class JoinNodeTransaction;
 class PlaceholderTransaction;
 class RemoveStyleSheetTransaction;
+class SplitNodeResult;
 class SplitNodeTransaction;
 class TextComposition;
 class TextEditor;
@@ -210,6 +211,22 @@ private:
 #define kMOZEditorBogusNodeValue NS_LITERAL_STRING("TRUE")
 
 /**
+ * SplitAtEdges is for EditorBase::SplitNodeDeep(),
+ * HTMLEditor::InsertNodeAtPoint()
+ */
+enum class SplitAtEdges
+{
+  // EditorBase::SplitNodeDeep() won't split container element nodes at
+  // their edges.  I.e., when split point is start or end of container,
+  // it won't be split.
+  eDoNotCreateEmptyContainer,
+  // EditorBase::SplitNodeDeep() always splits containers even if the split
+  // point is at edge of a container.  E.g., if split point is start of an
+  // inline element, empty inline element is created as a new left node.
+  eAllowToCreateEmptyContainer
+};
+
+/**
  * Implementation of an editor object.  it will be the controller/focal point
  * for the main editor services. i.e. the GUIManager, publishing, transaction
  * manager, event interfaces. the idea for the event interfaces is to have them
@@ -286,11 +303,32 @@ public:
 public:
   virtual bool IsModifiableNode(nsINode* aNode);
 
-  virtual nsresult InsertTextImpl(const nsAString& aStringToInsert,
-                                  nsCOMPtr<nsINode>* aInOutNode,
-                                  nsCOMPtr<nsIContent>* aInOutChildAtOffset,
-                                  int32_t* aInOutOffset,
-                                  nsIDocument* aDoc);
+  /**
+   * InsertTextImpl() inserts aStringToInsert to aPointToInsert or better
+   * insertion point around it.  If aPointToInsert isn't in a text node,
+   * this method looks for the nearest point in a text node with
+   * FindBetterInsertionPoint().  If there is no text node, this creates
+   * new text node and put aStringToInsert to it.
+   *
+   * @param aDocument       The document of this editor.
+   * @param aStringToInsert The string to insert.
+   * @param aPointToInser   The point to insert aStringToInsert.
+   *                        Must be valid DOM point.
+   * @param aPointAfterInsertedString
+   *                        The point after inserted aStringToInsert.
+   *                        So, when this method actually inserts string,
+   *                        this is set to a point in the text node.
+   *                        Otherwise, this may be set to aPointToInsert.
+   * @return                When this succeeds to insert the string or
+   *                        does nothing during composition, returns NS_OK.
+   *                        Otherwise, an error code.
+   */
+  virtual nsresult
+  InsertTextImpl(nsIDocument& aDocument,
+                 const nsAString& aStringToInsert,
+                 const EditorRawDOMPoint& aPointToInsert,
+                 EditorRawDOMPoint* aPointAfterInsertedString = nullptr);
+
   nsresult InsertTextIntoTextNodeImpl(const nsAString& aStringToInsert,
                                       Text& aTextNode, int32_t aOffset,
                                       bool aSuppressIME = false);
@@ -308,7 +346,21 @@ public:
    * Helper routines for node/parent manipulations.
    */
   nsresult DeleteNode(nsINode* aNode);
-  nsresult InsertNode(nsIContent& aNode, nsINode& aParent, int32_t aPosition);
+
+  /**
+   * InsertNode() inserts aContentToInsert before the child specified by
+   * aPointToInsert.
+   *
+   * @param aContentToInsert    The node to be inserted.
+   * @param aPointToInsert      The insertion point of aContentToInsert.
+   *                            If this refers end of the container, the
+   *                            transaction will append the node to the
+   *                            container.  Otherwise, will insert the node
+   *                            before child node referred by this.
+   */
+  nsresult InsertNode(nsIContent& aContentToInsert,
+                      const EditorRawDOMPoint& aPointToInsert);
+
   enum ECloneAttributes { eDontCloneAttributes, eCloneAttributes };
   already_AddRefed<Element> ReplaceContainer(Element* aOldContainer,
                                              nsAtom* aNodeType,
@@ -324,10 +376,81 @@ public:
                                                  nsAtom* aAttribute = nullptr,
                                                  const nsAString* aValue =
                                                  nullptr);
-  nsIContent* SplitNode(nsIContent& aNode, int32_t aOffset,
-                        ErrorResult& aResult);
+
+  /**
+   * SplitNode() creates a transaction to create a new node (left node)
+   * identical to an existing node (right node), and split the contents
+   * between the same point in both nodes, then, execute the transaction.
+   *
+   * @param aStartOfRightNode   The point to split.  Its container will be
+   *                            the right node, i.e., become the new node's
+   *                            next sibling.  And the point will be start
+   *                            of the right node.
+   * @param aError              If succeed, returns no error.  Otherwise, an
+   *                            error.
+   */
+  already_AddRefed<nsIContent>
+  SplitNode(const EditorRawDOMPoint& aStartOfRightNode,
+            ErrorResult& aResult);
+
   nsresult JoinNodes(nsINode& aLeftNode, nsINode& aRightNode);
   nsresult MoveNode(nsIContent* aNode, nsINode* aParent, int32_t aOffset);
+
+  /**
+   * MoveAllChildren() moves all children of aContainer to before
+   * aPointToInsert.GetChild().
+   * See explanation of MoveChildren() for the detail of the behavior.
+   *
+   * @param aContainer          The container node whose all children should
+   *                            be moved.
+   * @param aPointToInsert      The insertion point.  The container must not
+   *                            be a data node like a text node.
+   * @param aError              The result.  If this succeeds to move children,
+   *                            returns NS_OK.  Otherwise, an error.
+   */
+  void MoveAllChildren(nsINode& aContainer,
+                       const EditorRawDOMPoint& aPointToInsert,
+                       ErrorResult& aError);
+
+  /**
+   * MovePreviousSiblings() moves all siblings before aChild (i.e., aChild
+   * won't be moved) to before aPointToInsert.GetChild().
+   * See explanation of MoveChildren() for the detail of the behavior.
+   *
+   * @param aChild              The node which is next sibling of the last
+   *                            node to be moved.
+   * @param aPointToInsert      The insertion point.  The container must not
+   *                            be a data node like a text node.
+   * @param aError              The result.  If this succeeds to move children,
+   *                            returns NS_OK.  Otherwise, an error.
+   */
+  void MovePreviousSiblings(nsIContent& aChild,
+                            const EditorRawDOMPoint& aPointToInsert,
+                            ErrorResult& aError);
+
+  /**
+   * MoveChildren() moves all children between aFirstChild and aLastChild to
+   * before aPointToInsert.GetChild().
+   * If some children are moved to different container while this method
+   * moves other children, they are just ignored.
+   * If the child node referred by aPointToInsert is moved to different
+   * container while this method moves children, returns error.
+   *
+   * @param aFirstChild         The first child which should be moved to
+   *                            aPointToInsert.
+   * @param aLastChild          The last child which should be moved.  This
+   *                            must be a sibling of aFirstChild and it should
+   *                            be positioned after aFirstChild in the DOM tree
+   *                            order.
+   * @param aPointToInsert      The insertion point.  The container must not
+   *                            be a data node like a text node.
+   * @param aError              The result.  If this succeeds to move children,
+   *                            returns NS_OK.  Otherwise, an error.
+   */
+  void MoveChildren(nsIContent& aFirstChild,
+                    nsIContent& aLastChild,
+                    const EditorRawDOMPoint& aPointToInsert,
+                    ErrorResult& aError);
 
   nsresult CloneAttribute(nsAtom* aAttribute, Element* aDestElement,
                           Element* aSourceElement);
@@ -374,50 +497,29 @@ public:
 
   void SwitchTextDirectionTo(uint32_t aDirection);
 
+  RangeUpdater& RangeUpdaterRef() { return mRangeUpdater; }
+
 protected:
   nsresult DetermineCurrentDirection();
   void FireInputEvent();
 
   /**
-   * Create a transaction for setting aAttribute to aValue on aElement.  Never
-   * returns null.
+   * Create an element node whose name is aTag at before aPointToInsert.  When
+   * this succeed to create an element node, this sets aPointToInsert to the
+   * new element because the relation of child and offset may be broken.
+   * If the caller needs to collapse the selection to next to the new element
+   * node, it should call |aPointToInsert.AdvanceOffset()| after calling this.
+   *
+   * @param aTag            The element name to create.
+   * @param aPointToInsert  The insertion point of new element.  If this refers
+   *                        end of the container or after, the transaction
+   *                        will append the element to the container.
+   *                        Otherwise, will insert the element before the
+   *                        child node referred by this.
+   * @return                The created new element node.
    */
-  already_AddRefed<ChangeAttributeTransaction>
-    CreateTxnForSetAttribute(Element& aElement, nsAtom& aAttribute,
-                             const nsAString& aValue);
-
-  /**
-   * Create a transaction for removing aAttribute on aElement.  Never returns
-   * null.
-   */
-  already_AddRefed<ChangeAttributeTransaction>
-    CreateTxnForRemoveAttribute(Element& aElement, nsAtom& aAttribute);
-
-  /**
-   * Create a transaction for creating a new child node of aParent of type aTag.
-   */
-  already_AddRefed<CreateElementTransaction>
-    CreateTxnForCreateElement(nsAtom& aTag,
-                              nsINode& aParent,
-                              int32_t aPosition,
-                              nsIContent* aChildAtPosition);
-
-  already_AddRefed<Element> CreateNode(nsAtom* aTag, nsINode* aParent,
-                                       int32_t aPosition,
-                                       nsIContent* aChildAtPosition = nullptr);
-
-  /**
-   * Create a transaction for inserting aNode as a child of aParent.
-   */
-  already_AddRefed<InsertNodeTransaction>
-    CreateTxnForInsertNode(nsIContent& aNode, nsINode& aParent,
-                           int32_t aOffset);
-
-  /**
-   * Create a transaction for removing aNode from its parent.
-   */
-  already_AddRefed<DeleteNodeTransaction>
-    CreateTxnForDeleteNode(nsINode* aNode);
+  already_AddRefed<Element> CreateNode(nsAtom* aTag,
+                                       const EditorRawDOMPoint& aPointToInsert);
 
   /**
    * Create an aggregate transaction for delete selection.  The result may
@@ -458,48 +560,8 @@ protected:
                             int32_t* aOffset,
                             int32_t* aLength);
 
-  /**
-   * Create a transaction for inserting aStringToInsert into aTextNode.  Never
-   * returns null.
-   */
-  already_AddRefed<mozilla::InsertTextTransaction>
-    CreateTxnForInsertText(const nsAString& aStringToInsert, Text& aTextNode,
-                           int32_t aOffset);
-
-  /**
-   * Never returns null.
-   */
-  already_AddRefed<mozilla::CompositionTransaction>
-    CreateTxnForComposition(const nsAString& aStringToInsert);
-
-  /**
-   * Create a transaction for adding a style sheet.
-   */
-  already_AddRefed<mozilla::AddStyleSheetTransaction>
-    CreateTxnForAddStyleSheet(StyleSheet* aSheet);
-
-  /**
-   * Create a transaction for removing a style sheet.
-   */
-  already_AddRefed<mozilla::RemoveStyleSheetTransaction>
-    CreateTxnForRemoveStyleSheet(StyleSheet* aSheet);
-
   nsresult DeleteText(nsGenericDOMDataNode& aElement,
                       uint32_t aOffset, uint32_t aLength);
-
-  already_AddRefed<DeleteTextTransaction>
-    CreateTxnForDeleteText(nsGenericDOMDataNode& aElement,
-                           uint32_t aOffset, uint32_t aLength);
-
-  already_AddRefed<DeleteTextTransaction>
-    CreateTxnForDeleteCharacter(nsGenericDOMDataNode& aData, uint32_t aOffset,
-                                EDirection aDirection);
-
-  already_AddRefed<SplitNodeTransaction>
-    CreateTxnForSplitNode(nsIContent& aNode, uint32_t aOffset);
-
-  already_AddRefed<JoinNodeTransaction>
-    CreateTxnForJoinNode(nsINode& aLeftNode, nsINode& aRightNode);
 
   /**
    * This method first deletes the selection, if it's not collapsed.  Then if
@@ -564,11 +626,60 @@ protected:
   virtual bool IsBlockNode(nsINode* aNode);
 
   /**
-   * Helper for GetPriorNode() and GetNextNode().
+   * Helper for GetPreviousNodeInternal() and GetNextNodeInternal().
    */
   nsIContent* FindNextLeafNode(nsINode* aCurrentNode,
                                bool aGoForward,
                                bool bNoBlockCrossing);
+  nsIContent* FindNode(nsINode* aCurrentNode,
+                       bool aGoForward,
+                       bool aEditableNode,
+                       bool bNoBlockCrossing);
+
+  /**
+   * Get the node immediately previous node of aNode.
+   * @param atNode               The node from which we start the search.
+   * @param aFindEditableNode    If true, only return an editable node.
+   * @param aNoBlockCrossing     If true, don't move across "block" nodes,
+   *                             whatever that means.
+   * @return                     The node that occurs before aNode in
+   *                             the tree, skipping non-editable nodes if
+   *                             aFindEditableNode is true.  If there is no
+   *                             previous node, returns nullptr.
+   */
+  nsIContent* GetPreviousNodeInternal(nsINode& aNode,
+                                      bool aFindEditableNode,
+                                      bool aNoBlockCrossing);
+
+  /**
+   * And another version that takes a point in DOM tree rather than a node.
+   */
+  nsIContent* GetPreviousNodeInternal(const EditorRawDOMPoint& aPoint,
+                                      bool aFindEditableNode,
+                                      bool aNoBlockCrossing);
+
+  /**
+   * Get the node immediately next node of aNode.
+   * @param aNode                The node from which we start the search.
+   * @param aFindEditableNode    If true, only return an editable node.
+   * @param aNoBlockCrossing     If true, don't move across "block" nodes,
+   *                             whatever that means.
+   * @return                     The node that occurs after aNode in the
+   *                             tree, skipping non-editable nodes if
+   *                             aFindEditableNode is true.  If there is no
+   *                             next node, returns nullptr.
+   */
+  nsIContent* GetNextNodeInternal(nsINode& aNode,
+                                  bool aFindEditableNode,
+                                  bool bNoBlockCrossing);
+
+  /**
+   * And another version that takes a point in DOM tree rather than a node.
+   */
+  nsIContent* GetNextNodeInternal(const EditorRawDOMPoint& aPoint,
+                                  bool aFindEditableNode,
+                                  bool aNoBlockCrossing);
+
 
   virtual nsresult InstallEventListeners();
   virtual void CreateEventListeners();
@@ -639,18 +750,27 @@ public:
   void StopPreservingSelection();
 
   /**
-   * SplitNode() creates a new node identical to an existing node, and split
-   * the contents between the two nodes
-   * @param aExistingRightNode  The node to split.  It will become the new
-   *                            node's next sibling.
-   * @param aOffset             The offset of aExistingRightNode's
-   *                            content|children to do the split at
-   * @param aNewLeftNode        The new node resulting from the split, becomes
-   *                            aExistingRightNode's previous sibling.
+   * SplitNodeImpl() creates a new node (left node) identical to an existing
+   * node (right node), and split the contents between the same point in both
+   * nodes.
+   *
+   * @param aStartOfRightNode   The point to split.  Its container will be
+   *                            the right node, i.e., become the new node's
+   *                            next sibling.  And the point will be start
+   *                            of the right node.
+   * @param aNewLeftNode        The new node called as left node, so, this
+   *                            becomes the container of aPointToSplit's
+   *                            previous sibling.
+   * @param aError              Must have not already failed.
+   *                            If succeed to insert aLeftNode before the
+   *                            right node and remove unnecessary contents
+   *                            (and collapse selection at end of the left
+   *                            node if necessary), returns no error.
+   *                            Otherwise, an error.
    */
-  nsresult SplitNodeImpl(nsIContent& aExistingRightNode,
-                         int32_t aOffset,
-                         nsIContent& aNewLeftNode);
+  void SplitNodeImpl(const EditorDOMPoint& aStartOfRightNode,
+                     nsIContent& aNewLeftNode,
+                     ErrorResult& aError);
 
   /**
    * JoinNodes() takes 2 nodes and merge their content|children.
@@ -694,58 +814,102 @@ public:
   static nsresult GetLengthOfDOMNode(nsIDOMNode *aNode, uint32_t &aCount);
 
   /**
-   * Get the node immediately prior to aCurrentNode.
-   * @param aCurrentNode   the node from which we start the search
-   * @param aEditableNode  if true, only return an editable node
-   * @param aResultNode    [OUT] the node that occurs before aCurrentNode in
-   *                             the tree, skipping non-editable nodes if
-   *                             aEditableNode is true.  If there is no prior
-   *                             node, aResultNode will be nullptr.
-   * @param bNoBlockCrossing If true, don't move across "block" nodes,
-   *                         whatever that means.
+   * Get the previous node.
    */
-  nsIContent* GetPriorNode(nsINode* aCurrentNode, bool aEditableNode,
-                           bool aNoBlockCrossing = false);
+  nsIContent* GetPreviousNode(const EditorRawDOMPoint& aPoint)
+  {
+    return GetPreviousNodeInternal(aPoint, false, false);
+  }
+  nsIContent* GetPreviousEditableNode(const EditorRawDOMPoint& aPoint)
+  {
+    return GetPreviousNodeInternal(aPoint, true, false);
+  }
+  nsIContent* GetPreviousNodeInBlock(const EditorRawDOMPoint& aPoint)
+  {
+    return GetPreviousNodeInternal(aPoint, false, true);
+  }
+  nsIContent* GetPreviousEditableNodeInBlock(
+                const EditorRawDOMPoint& aPoint)
+  {
+    return GetPreviousNodeInternal(aPoint, true, true);
+  }
+  nsIContent* GetPreviousNode(nsINode& aNode)
+  {
+    return GetPreviousNodeInternal(aNode, false, false);
+  }
+  nsIContent* GetPreviousEditableNode(nsINode& aNode)
+  {
+    return GetPreviousNodeInternal(aNode, true, false);
+  }
+  nsIContent* GetPreviousNodeInBlock(nsINode& aNode)
+  {
+    return GetPreviousNodeInternal(aNode, false, true);
+  }
+  nsIContent* GetPreviousEditableNodeInBlock(nsINode& aNode)
+  {
+    return GetPreviousNodeInternal(aNode, true, true);
+  }
 
   /**
-   * And another version that takes a {parent,offset} pair rather than a node.
+   * Get the next node.
+   *
+   * Note that methods taking EditorRawDOMPoint behavior includes the
+   * child at offset as search target.  E.g., following code causes infinite
+   * loop.
+   *
+   * EditorRawDOMPoint point(aEditableNode);
+   * while (nsIContent* content = GetNextEditableNode(point)) {
+   *   // Do something...
+   *   point.Set(content);
+   * }
+   *
+   * Following code must be you expected:
+   *
+   * while (nsIContent* content = GetNextEditableNode(point)) {
+   *   // Do something...
+   *   DebugOnly<bool> advanced = point.Advanced();
+   *   MOZ_ASSERT(advanced);
+   *   point.Set(point.GetChild());
+   * }
+   *
+   * On the other hand, the methods taking nsINode behavior must be what
+   * you want.  They start to search the result from next node of the given
+   * node.
    */
-  nsIContent* GetPriorNode(nsINode* aParentNode,
-                           int32_t aOffset,
-                           nsINode* aChildAtOffset,
-                           bool aEditableNode,
-                           bool aNoBlockCrossing = false);
+  nsIContent* GetNextNode(const EditorRawDOMPoint& aPoint)
+  {
+    return GetNextNodeInternal(aPoint, false, false);
+  }
+  nsIContent* GetNextEditableNode(const EditorRawDOMPoint& aPoint)
+  {
+    return GetNextNodeInternal(aPoint, true, false);
+  }
+  nsIContent* GetNextNodeInBlock(const EditorRawDOMPoint& aPoint)
+  {
+    return GetNextNodeInternal(aPoint, false, true);
+  }
+  nsIContent* GetNextEditableNodeInBlock(
+                const EditorRawDOMPoint& aPoint)
+  {
+    return GetNextNodeInternal(aPoint, true, true);
+  }
+  nsIContent* GetNextNode(nsINode& aNode)
+  {
+    return GetNextNodeInternal(aNode, false, false);
+  }
+  nsIContent* GetNextEditableNode(nsINode& aNode)
+  {
+    return GetNextNodeInternal(aNode, true, false);
+  }
+  nsIContent* GetNextNodeInBlock(nsINode& aNode)
+  {
+    return GetNextNodeInternal(aNode, false, true);
+  }
+  nsIContent* GetNextEditableNodeInBlock(nsINode& aNode)
+  {
+    return GetNextNodeInternal(aNode, true, true);
+  }
 
-
-  /**
-   * Get the node immediately after to aCurrentNode.
-   * @param aCurrentNode   the node from which we start the search
-   * @param aEditableNode  if true, only return an editable node
-   * @param aResultNode    [OUT] the node that occurs after aCurrentNode in the
-   *                             tree, skipping non-editable nodes if
-   *                             aEditableNode is true.  If there is no prior
-   *                             node, aResultNode will be nullptr.
-   */
-  nsIContent* GetNextNode(nsINode* aCurrentNode,
-                          bool aEditableNode,
-                          bool bNoBlockCrossing = false);
-
-  /**
-   * And another version that takes a {parent,offset} pair rather than a node.
-   */
-  nsIContent* GetNextNode(nsINode* aParentNode,
-                          int32_t aOffset,
-                          nsINode* aChildAtOffset,
-                          bool aEditableNode,
-                          bool aNoBlockCrossing = false);
-
-  /**
-   * Helper for GetNextNode() and GetPriorNode().
-   */
-  nsIContent* FindNode(nsINode* aCurrentNode,
-                       bool aGoForward,
-                       bool aEditableNode,
-                       bool bNoBlockCrossing);
   /**
    * Get the rightmost child of aCurrentNode;
    * return nullptr if aCurrentNode has no children.
@@ -794,7 +958,6 @@ public:
    * Returns true if aNode is a container.
    */
   virtual bool IsContainer(nsINode* aNode);
-  virtual bool IsContainer(nsIDOMNode* aNode);
 
   /**
    * returns true if aNode is an editable node.
@@ -905,12 +1068,14 @@ public:
   static nsresult GetStartNodeAndOffset(Selection* aSelection,
                                         nsINode** aStartContainer,
                                         int32_t* aStartOffset);
+  static EditorRawDOMPoint GetStartPoint(Selection* aSelection);
   static nsresult GetEndNodeAndOffset(Selection* aSelection,
                                       nsIDOMNode** outEndNode,
                                       int32_t* outEndOffset);
   static nsresult GetEndNodeAndOffset(Selection* aSelection,
                                       nsINode** aEndContainer,
                                       int32_t* aEndOffset);
+  static EditorRawDOMPoint GetEndPoint(Selection* aSelection);
 
   static nsresult GetEndChildNode(Selection* aSelection,
                                   nsIContent** aEndNode);
@@ -956,15 +1121,28 @@ public:
 
   nsresult IsPreformatted(nsIDOMNode* aNode, bool* aResult);
 
-  enum class EmptyContainers { no, yes };
-  int32_t SplitNodeDeep(nsIContent& aNode, nsIContent& aSplitPointParent,
-                        int32_t aSplitPointOffset,
-                        EmptyContainers aEmptyContainers =
-                          EmptyContainers::yes,
-                        nsIContent** outLeftNode = nullptr,
-                        nsIContent** outRightNode = nullptr,
-                        nsCOMPtr<nsIContent>* ioChildAtSplitPointOffset =
-                          nullptr);
+  /**
+   * SplitNodeDeep() splits aMostAncestorToSplit deeply.
+   *
+   * @param aMostAncestorToSplit        The most ancestor node which should be
+   *                                    split.
+   * @param aStartOfDeepestRightNode    The start point of deepest right node.
+   *                                    This point must be descendant of
+   *                                    aMostAncestorToSplit.
+   * @param aSplitAtEdges               Whether the caller allows this to
+   *                                    create empty container element when
+   *                                    split point is start or end of an
+   *                                    element.
+   * @return                            SplitPoint() returns split point in
+   *                                    aMostAncestorToSplit.  The point must
+   *                                    be good to insert something if the
+   *                                    caller want to do it.
+   */
+  SplitNodeResult
+  SplitNodeDeep(nsIContent& aMostAncestorToSplit,
+                const EditorRawDOMPoint& aDeepestStartOfRightNode,
+                SplitAtEdges aSplitAtEdges);
+
   EditorDOMPoint JoinNodeDeep(nsIContent& aLeftNode,
                               nsIContent& aRightNode);
 
@@ -979,14 +1157,14 @@ public:
 
   nsresult HandleInlineSpellCheck(EditAction action,
                                   Selection* aSelection,
-                                  nsIDOMNode* previousSelectedNode,
-                                  int32_t previousSelectedOffset,
-                                  nsIDOMNode* aStartContainer,
-                                  int32_t aStartOffset,
-                                  nsIDOMNode* aEndContainer,
-                                  int32_t aEndOffset);
+                                  nsINode* previousSelectedNode,
+                                  uint32_t previousSelectedOffset,
+                                  nsINode* aStartContainer,
+                                  uint32_t aStartOffset,
+                                  nsINode* aEndContainer,
+                                  uint32_t aEndOffset);
 
-  virtual already_AddRefed<dom::EventTarget> GetDOMEventTarget() = 0;
+  virtual dom::EventTarget* GetDOMEventTarget() = 0;
 
   /**
    * Fast non-refcounting editor root element accessor
@@ -1166,7 +1344,7 @@ public:
   /**
    * Get the focused content, if we're focused.  Returns null otherwise.
    */
-  virtual already_AddRefed<nsIContent> GetFocusedContent();
+  virtual nsIContent* GetFocusedContent();
 
   /**
    * Get the focused content for the argument of some IMEStateManager's
@@ -1236,22 +1414,11 @@ public:
    * FindBetterInsertionPoint() tries to look for better insertion point which
    * is typically the nearest text node and offset in it.
    *
-   * @param aNode in/out param, on input set to the node to use to start the search,
-   *              on output set to the node found as the better insertion point.
-   * @param aOffset in/out param, on input set to the offset to use to start the
-   *                search, on putput set to the offset found as the better insertion
-   *                point.
-   * @param aSelChild in/out param, on input, can be set to nullptr if the caller
-   *                  doesn't want to pass this in, or set to a pointer to an nsCOMPtr
-   *                  pointing to the child at the input node and offset, and on output
-   *                  the method will make it point to the child at the output node and
-   *                  offset returned in aNode and aOffset.
+   * @param aPoint      Insertion point which the callers found.
+   * @return            Better insertion point if there is.  If not returns
+   *                    same point as aPoint.
    */
-  void FindBetterInsertionPoint(nsCOMPtr<nsIDOMNode>& aNode,
-                                int32_t& aOffset);
-  void FindBetterInsertionPoint(nsCOMPtr<nsINode>& aNode,
-                                int32_t& aOffset,
-                                nsCOMPtr<nsIContent>* aSelChild);
+  EditorRawDOMPoint FindBetterInsertionPoint(const EditorRawDOMPoint& aPoint);
 
   /**
    * HideCaret() hides caret with nsCaret::AddForceHide() or may show carent
@@ -1280,8 +1447,6 @@ protected:
   RefPtr<nsTransactionManager> mTxnMgr;
   // Cached root node.
   nsCOMPtr<Element> mRootElement;
-  // Current IME text node.
-  RefPtr<Text> mIMETextNode;
   // The form field as an event receiver.
   nsCOMPtr<dom::EventTarget> mEventTarget;
   nsCOMPtr<nsIDOMEventListener> mEventListener;
@@ -1324,12 +1489,6 @@ protected:
   int32_t mPlaceholderBatch;
   // The current editor action.
   EditAction mAction;
-
-  // Offset in text node where IME comp string begins.
-  uint32_t mIMETextOffset;
-  // The Length of the composition string or commit string.  If this is length
-  // of commit string, the length is truncated by maxlength attribute.
-  uint32_t mIMETextLength;
 
   // The current direction of editor action.
   EDirection mDirection;

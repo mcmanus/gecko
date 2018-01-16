@@ -73,7 +73,7 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(MaskParams& aParams)
     nsSVGUtils::ConvertToSurfaceSize(maskSurfaceRect.Size(), &resultOverflows);
 
   if (resultOverflows || maskSurfaceSize.IsEmpty()) {
-    // Return value other then DrawResult::SUCCESS, so the caller can skip
+    // Return value other then ImgDrawResult::SUCCESS, so the caller can skip
     // painting the masked frame(aParams.maskedFrame).
     return nullptr;
   }
@@ -99,8 +99,8 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(MaskParams& aParams)
     return nullptr;
   }
 
-  gfxMatrix maskSurfaceMatrix =
-    context->CurrentMatrix() * gfxMatrix::Translation(-maskSurfaceRect.TopLeft());
+  Matrix maskSurfaceMatrix =
+    context->CurrentMatrix() * ToMatrix(gfxMatrix::Translation(-maskSurfaceRect.TopLeft()));
 
   RefPtr<gfxContext> tmpCtx = gfxContext::CreateOrNull(maskDT);
   MOZ_ASSERT(tmpCtx); // already checked the draw target above
@@ -153,7 +153,7 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(MaskParams& aParams)
     return nullptr;
   }
 
-  *aParams.maskTransform = ToMatrix(maskSurfaceMatrix);
+  *aParams.maskTransform = maskSurfaceMatrix;
   return surface.forget();
 }
 

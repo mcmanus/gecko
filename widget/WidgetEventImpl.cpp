@@ -85,6 +85,32 @@ ToString(CodeNameIndex aCodeNameIndex)
   return NS_ConvertUTF16toUTF8(codeName);
 }
 
+const char*
+ToChar(Command aCommand)
+{
+  if (aCommand == CommandDoNothing) {
+    return "CommandDoNothing";
+  }
+
+  switch (aCommand) {
+
+#define NS_DEFINE_COMMAND(aName, aCommandStr) \
+    case Command##aName: \
+      return "Command" #aName;
+#define NS_DEFINE_COMMAND_NO_EXEC_COMMAND(aName) \
+    case Command##aName: \
+      return "Command" #aName;
+
+#include "mozilla/CommandList.h"
+
+#undef NS_DEFINE_COMMAND
+#undef NS_DEFINE_COMMAND_NO_EXEC_COMMAND
+
+    default:
+      return "illegal command value";
+  }
+}
+
 const nsCString
 GetDOMKeyCodeName(uint32_t aKeyCode)
 {
@@ -541,6 +567,35 @@ WidgetEvent::PreventDefault(bool aCalledByDefaultHandler,
   mFlags.PreventDefault(aCalledByDefaultHandler);
 }
 
+bool
+WidgetEvent::IsUserAction() const
+{
+  if (!IsTrusted()) {
+    return false;
+  }
+  // FYI: eMouseScrollEventClass and ePointerEventClass represent
+  //      user action but they are synthesized events.
+  switch (mClass) {
+    case eKeyboardEventClass:
+    case eCompositionEventClass:
+    case eMouseScrollEventClass:
+    case eWheelEventClass:
+    case eGestureNotifyEventClass:
+    case eSimpleGestureEventClass:
+    case eTouchEventClass:
+    case eCommandEventClass:
+    case eContentCommandEventClass:
+    case ePluginEventClass:
+      return true;
+    case eMouseEventClass:
+    case eDragEventClass:
+    case ePointerEventClass:
+      return AsMouseEvent()->IsReal();
+    default:
+      return false;
+  }
+}
+
 /******************************************************************************
  * mozilla::WidgetInputEvent
  ******************************************************************************/
@@ -880,8 +935,9 @@ WidgetKeyboardEvent::GetAccessKeyCandidates(nsTArray<uint32_t>& aCandidates) con
   // the priority of the charCodes are:
   //   0: charCode, 1: unshiftedCharCodes[0], 2: shiftedCharCodes[0]
   //   3: unshiftedCharCodes[1], 4: shiftedCharCodes[1],...
-  if (mCharCode) {
-    uint32_t ch = mCharCode;
+  uint32_t pseudoCharCode = PseudoCharCode();
+  if (pseudoCharCode) {
+    uint32_t ch = pseudoCharCode;
     if (IS_IN_BMP(ch)) {
       ch = ToLowerCase(static_cast<char16_t>(ch));
     }
@@ -898,7 +954,7 @@ WidgetKeyboardEvent::GetAccessKeyCandidates(nsTArray<uint32_t>& aCandidates) con
       if (IS_IN_BMP(ch[j])) {
         ch[j] = ToLowerCase(static_cast<char16_t>(ch[j]));
       }
-      // Don't append the mCharCode that was already appended.
+      // Don't append the charcode that was already appended.
       if (aCandidates.IndexOf(ch[j]) == aCandidates.NoIndex) {
         aCandidates.AppendElement(ch[j]);
       }
@@ -910,7 +966,7 @@ WidgetKeyboardEvent::GetAccessKeyCandidates(nsTArray<uint32_t>& aCandidates) con
   // press.  However, if the space key is assigned to a function key, it
   // shouldn't work as a space key.
   if (mKeyNameIndex == KEY_NAME_INDEX_USE_STRING &&
-      mCodeNameIndex == CODE_NAME_INDEX_Space && mCharCode != ' ') {
+      mCodeNameIndex == CODE_NAME_INDEX_Space && pseudoCharCode != ' ') {
     aCandidates.AppendElement(' ');
   }
 }
@@ -1112,11 +1168,13 @@ WidgetKeyboardEvent::GetCodeNameIndex(const nsAString& aCodeValue)
 WidgetKeyboardEvent::GetCommandStr(Command aCommand)
 {
 #define NS_DEFINE_COMMAND(aName, aCommandStr) , #aCommandStr
+#define NS_DEFINE_COMMAND_NO_EXEC_COMMAND(aName)
   static const char* const kCommands[] = {
     "" // CommandDoNothing
 #include "mozilla/CommandList.h"
   };
 #undef NS_DEFINE_COMMAND
+#undef NS_DEFINE_COMMAND_NO_EXEC_COMMAND
 
   MOZ_RELEASE_ASSERT(static_cast<size_t>(aCommand) < ArrayLength(kCommands),
                      "Illegal command enumeration value");

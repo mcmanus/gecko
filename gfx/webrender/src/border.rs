@@ -2,14 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use api::{BorderSide, BorderStyle, BorderWidths, ClipAndScrollInfo, ColorF, LayerPoint, LayerRect};
+use api::{BorderRadius, BorderSide, BorderStyle, BorderWidths, ClipAndScrollInfo, ColorF};
+use api::{LayerPoint, LayerRect};
 use api::{LayerPrimitiveInfo, LayerSize, NormalBorder, RepeatMode};
 use clip::ClipSource;
 use ellipse::Ellipse;
 use frame_builder::FrameBuilder;
 use gpu_cache::GpuDataRequest;
-use prim_store::{BorderPrimitiveCpu, RectangleContent, PrimitiveContainer, TexelRect};
-use tiling::PrimitiveFlags;
+use prim_store::{BorderPrimitiveCpu, BrushSegment, BrushSegmentDescriptor};
+use prim_store::{BrushClipMaskKind, EdgeAaSegmentMask, PrimitiveContainer, TexelRect};
 use util::{lerp, pack_as_float};
 
 #[repr(u8)]
@@ -226,6 +227,51 @@ impl NormalBorderHelpers for NormalBorder {
     }
 }
 
+pub fn ensure_no_corner_overlap(
+    radius: &mut BorderRadius,
+    rect: &LayerRect,
+) {
+    let mut ratio = 1.0;
+    let top_left_radius = &mut radius.top_left;
+    let top_right_radius = &mut radius.top_right;
+    let bottom_right_radius = &mut radius.bottom_right;
+    let bottom_left_radius = &mut radius.bottom_left;
+
+    let sum = top_left_radius.width + bottom_left_radius.width;
+    if rect.size.width < sum {
+        ratio = f32::min(ratio, rect.size.width / sum);
+    }
+
+    let sum = top_right_radius.width + bottom_right_radius.width;
+    if rect.size.width < sum {
+        ratio = f32::min(ratio, rect.size.width / sum);
+    }
+
+    let sum = top_left_radius.height + bottom_left_radius.height;
+    if rect.size.height < sum {
+        ratio = f32::min(ratio, rect.size.height / sum);
+    }
+
+    let sum = top_right_radius.height + bottom_right_radius.height;
+    if rect.size.height < sum {
+        ratio = f32::min(ratio, rect.size.height / sum);
+    }
+
+    if ratio < 1. {
+        top_left_radius.width *= ratio;
+        top_left_radius.height *= ratio;
+
+        top_right_radius.width *= ratio;
+        top_right_radius.height *= ratio;
+
+        bottom_left_radius.width *= ratio;
+        bottom_left_radius.height *= ratio;
+
+        bottom_right_radius.width *= ratio;
+        bottom_right_radius.height *= ratio;
+    }
+}
+
 impl FrameBuilder {
     fn add_normal_border_primitive(
         &mut self,
@@ -309,6 +355,9 @@ impl FrameBuilder {
         // out more often on CI (the actual cause is simply too many Servo processes and
         // threads being run on CI at once).
 
+        let mut border = *border;
+        ensure_no_corner_overlap(&mut border.radius, &info.rect);
+
         let radius = &border.radius;
         let left = &border.left;
         let right = &border.right;
@@ -374,58 +423,89 @@ impl FrameBuilder {
 
         if has_no_curve && all_corners_simple && all_edges_simple {
             let p0 = info.rect.origin;
-            let p1 = info.rect.bottom_right();
-            let rect_width = info.rect.size.width;
-            let rect_height = info.rect.size.height;
+            let p1 = LayerPoint::new(
+                info.rect.origin.x + left_len,
+                info.rect.origin.y + top_len,
+            );
+            let p2 = LayerPoint::new(
+                info.rect.origin.x + info.rect.size.width - right_len,
+                info.rect.origin.y + info.rect.size.height - bottom_len,
+            );
+            let p3 = info.rect.bottom_right();
+
+            let segment = |x0, y0, x1, y1| BrushSegment::new(
+                LayerPoint::new(x0, y0),
+                LayerSize::new(x1-x0, y1-y0),
+                false,
+                EdgeAaSegmentMask::all() // Note: this doesn't seem right, needs revision
+            );
 
             // Add a solid rectangle for each visible edge/corner combination.
             if top_edge == BorderEdgeKind::Solid {
-                let mut info = info.clone();
-                info.rect = LayerRect::new(p0, LayerSize::new(rect_width, top_len));
+                let descriptor = BrushSegmentDescriptor {
+                    segments: vec![
+                        segment(p0.x, p0.y, p1.x, p1.y),
+                        segment(p2.x, p0.y, p3.x, p1.y),
+                        segment(p1.x, p0.y, p2.x, p1.y),
+                    ],
+                    clip_mask_kind: BrushClipMaskKind::Unknown,
+                };
+
                 self.add_solid_rectangle(
                     clip_and_scroll,
                     &info,
-                    &RectangleContent::Fill(border.top.color),
-                    PrimitiveFlags::None,
+                    border.top.color,
+                    Some(descriptor),
                 );
             }
+
             if left_edge == BorderEdgeKind::Solid {
-                let mut info = info.clone();
-                info.rect = LayerRect::new(
-                    LayerPoint::new(p0.x, p0.y + top_len),
-                    LayerSize::new(left_len, rect_height - top_len - bottom_len),
-                );
+                let descriptor = BrushSegmentDescriptor {
+                    segments: vec![
+                        segment(p0.x, p1.y, p1.x, p2.y),
+                    ],
+                    clip_mask_kind: BrushClipMaskKind::Unknown,
+                };
+
                 self.add_solid_rectangle(
                     clip_and_scroll,
                     &info,
-                    &RectangleContent::Fill(border.left.color),
-                    PrimitiveFlags::None,
+                    border.left.color,
+                    Some(descriptor),
                 );
             }
+
             if right_edge == BorderEdgeKind::Solid {
-                let mut info = info.clone();
-                info.rect = LayerRect::new(
-                    LayerPoint::new(p1.x - right_len, p0.y + top_len),
-                    LayerSize::new(right_len, rect_height - top_len - bottom_len),
-                );
+                let descriptor = BrushSegmentDescriptor {
+                    segments: vec![
+                        segment(p2.x, p1.y, p3.x, p2.y),
+                    ],
+                    clip_mask_kind: BrushClipMaskKind::Unknown,
+                };
+
                 self.add_solid_rectangle(
                     clip_and_scroll,
                     &info,
-                    &RectangleContent::Fill(border.right.color),
-                    PrimitiveFlags::None,
+                    border.right.color,
+                    Some(descriptor),
                 );
             }
+
             if bottom_edge == BorderEdgeKind::Solid {
-                let mut info = info.clone();
-                info.rect = LayerRect::new(
-                    LayerPoint::new(p0.x, p1.y - bottom_len),
-                    LayerSize::new(rect_width, bottom_len),
-                );
+                let descriptor = BrushSegmentDescriptor {
+                    segments: vec![
+                        segment(p1.x, p2.y, p2.x, p3.y),
+                        segment(p2.x, p2.y, p3.x, p3.y),
+                        segment(p0.x, p2.y, p1.x, p3.y),
+                    ],
+                    clip_mask_kind: BrushClipMaskKind::Unknown,
+                };
+
                 self.add_solid_rectangle(
                     clip_and_scroll,
                     &info,
-                    &RectangleContent::Fill(border.bottom.color),
-                    PrimitiveFlags::None,
+                    border.bottom.color,
+                    Some(descriptor),
                 );
             }
         } else {
@@ -452,7 +532,7 @@ impl FrameBuilder {
 
             self.add_normal_border_primitive(
                 info,
-                border,
+                &border,
                 widths,
                 clip_and_scroll,
                 corner_instances,
@@ -555,7 +635,7 @@ impl BorderCornerClipSource {
             BorderCornerClipKind::Dot => {
                 // The centers of dots follow an ellipse along the middle of the
                 // border radius.
-                let inner_radius = corner_radius - widths * 0.5;
+                let inner_radius = (corner_radius - widths * 0.5).abs();
                 let ellipse = Ellipse::new(inner_radius);
 
                 // Allocate a "worst case" number of dot clips. This can be

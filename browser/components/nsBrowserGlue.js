@@ -32,6 +32,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   BrowserUsageTelemetry: "resource:///modules/BrowserUsageTelemetry.jsm",
   ContentClick: "resource:///modules/ContentClick.jsm",
   ContextualIdentityService: "resource://gre/modules/ContextualIdentityService.jsm",
+  CustomizableUI: "resource:///modules/CustomizableUI.jsm",
   DateTimePickerHelper: "resource://gre/modules/DateTimePickerHelper.jsm",
   DirectoryLinksProvider: "resource:///modules/DirectoryLinksProvider.jsm",
   ExtensionsUI: "resource:///modules/ExtensionsUI.jsm",
@@ -39,8 +40,10 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   FileUtils: "resource://gre/modules/FileUtils.jsm",
   FileSource: "resource://gre/modules/L10nRegistry.jsm",
   FormValidationHandler: "resource:///modules/FormValidationHandler.jsm",
+  HybridContentTelemetry: "resource://gre/modules/HybridContentTelemetry.jsm",
   Integration: "resource://gre/modules/Integration.jsm",
   L10nRegistry: "resource://gre/modules/L10nRegistry.jsm",
+  LanguagePrompt: "resource://gre/modules/LanguagePrompt.jsm",
   LightweightThemeManager: "resource://gre/modules/LightweightThemeManager.jsm",
   LoginHelper: "resource://gre/modules/LoginHelper.jsm",
   LoginManagerParent: "resource://gre/modules/LoginManagerParent.jsm",
@@ -147,7 +150,6 @@ const listeners = {
     "FormValidation:ShowPopup": ["FormValidationHandler"],
     "FormValidation:HidePopup": ["FormValidationHandler"],
     "Prompt:Open": ["RemotePrompt"],
-    "Reader:ArticleGet": ["ReaderParent"],
     "Reader:FaviconRequest": ["ReaderParent"],
     "Reader:UpdateReaderButton": ["ReaderParent"],
     // PLEASE KEEP THIS LIST IN SYNC WITH THE MOBILE LISTENERS IN BrowserCLH.js
@@ -437,6 +439,8 @@ BrowserGlue.prototype = {
           if (this._placesBrowserInitComplete) {
             Services.obs.notifyObservers(null, "places-browser-init-complete");
           }
+        } else if (data == "migrateMatchBucketsPrefForUIVersion60") {
+          this._migrateMatchBucketsPrefForUIVersion60();
         }
         break;
       case "initial-migration-will-import-default-bookmarks":
@@ -642,30 +646,28 @@ BrowserGlue.prototype = {
 
     SessionStore.init();
 
-    if (AppConstants.INSTALL_COMPACT_THEMES) {
-      let vendorShortName = gBrandBundle.GetStringFromName("vendorShortName");
+    let vendorShortName = gBrandBundle.GetStringFromName("vendorShortName");
 
-      LightweightThemeManager.addBuiltInTheme({
-        id: "firefox-compact-light@mozilla.org",
-        name: gBrowserBundle.GetStringFromName("lightTheme.name"),
-        description: gBrowserBundle.GetStringFromName("lightTheme.description"),
-        headerURL: "resource:///chrome/browser/content/browser/defaultthemes/compact.header.png",
-        iconURL: "resource:///chrome/browser/content/browser/defaultthemes/light.icon.svg",
-        textcolor: "black",
-        accentcolor: "white",
-        author: vendorShortName,
-      });
-      LightweightThemeManager.addBuiltInTheme({
-        id: "firefox-compact-dark@mozilla.org",
-        name: gBrowserBundle.GetStringFromName("darkTheme.name"),
-        description: gBrowserBundle.GetStringFromName("darkTheme.description"),
-        headerURL: "resource:///chrome/browser/content/browser/defaultthemes/compact.header.png",
-        iconURL: "resource:///chrome/browser/content/browser/defaultthemes/dark.icon.svg",
-        textcolor: "white",
-        accentcolor: "black",
-        author: vendorShortName,
-      });
-    }
+    LightweightThemeManager.addBuiltInTheme({
+      id: "firefox-compact-light@mozilla.org",
+      name: gBrowserBundle.GetStringFromName("lightTheme.name"),
+      description: gBrowserBundle.GetStringFromName("lightTheme.description"),
+      headerURL: "resource:///chrome/browser/content/browser/defaultthemes/compact.header.png",
+      iconURL: "resource:///chrome/browser/content/browser/defaultthemes/light.icon.svg",
+      textcolor: "black",
+      accentcolor: "white",
+      author: vendorShortName,
+    });
+    LightweightThemeManager.addBuiltInTheme({
+      id: "firefox-compact-dark@mozilla.org",
+      name: gBrowserBundle.GetStringFromName("darkTheme.name"),
+      description: gBrowserBundle.GetStringFromName("darkTheme.description"),
+      headerURL: "resource:///chrome/browser/content/browser/defaultthemes/compact.header.png",
+      iconURL: "resource:///chrome/browser/content/browser/defaultthemes/dark.icon.svg",
+      textcolor: "white",
+      accentcolor: "black",
+      author: vendorShortName,
+    });
 
 
     // Initialize the default l10n resource sources for L10nRegistry.
@@ -1115,12 +1117,6 @@ BrowserGlue.prototype = {
     // early, so we use a maximum timeout for it.
     Services.tm.idleDispatchToMainThread(() => {
       SafeBrowsing.init();
-
-      // Login reputation depends on the Safe Browsing API.
-      if (Services.prefs.getBoolPref("browser.safebrowsing.passwords.enabled")) {
-        Cc["@mozilla.org/reputationservice/login-reputation-service;1"]
-        .getService(Ci.ILoginReputationService);
-      }
     }, 5000);
 
     if (AppConstants.MOZ_CRASHREPORTER) {
@@ -1168,6 +1164,10 @@ BrowserGlue.prototype = {
         JawsScreenReaderVersionCheck.onWindowsRestored();
       });
     }
+
+    Services.tm.idleDispatchToMainThread(() => {
+      LanguagePrompt.init();
+    });
   },
 
   /**
@@ -1743,9 +1743,38 @@ BrowserGlue.prototype = {
     this.AlertsService.showAlertNotification(null, title, body, true, null, clickCallback);
   },
 
+  /**
+   * Uncollapses PersonalToolbar if its collapsed status is not
+   * persisted, and user customized it or changed default bookmarks.
+   *
+   * If the user does not have a persisted value for the toolbar's
+   * "collapsed" attribute, try to determine whether it's customized.
+   */
+  _maybeToggleBookmarkToolbarVisibility() {
+    const BROWSER_DOCURL = "chrome://browser/content/browser.xul";
+    const NUM_TOOLBAR_BOOKMARKS_TO_UNHIDE = 3;
+    let xulStore = Cc["@mozilla.org/xul/xulstore;1"].getService(Ci.nsIXULStore);
+
+    if (!xulStore.hasValue(BROWSER_DOCURL, "PersonalToolbar", "collapsed")) {
+      // We consider the toolbar customized if it has more than NUM_TOOLBAR_BOOKMARKS_TO_UNHIDE
+      // children, or if it has a persisted currentset value.
+      let toolbarIsCustomized = xulStore.hasValue(BROWSER_DOCURL, "PersonalToolbar", "currentset");
+      let getToolbarFolderCount = () => {
+        let toolbarFolder = PlacesUtils.getFolderContents(PlacesUtils.toolbarFolderId).root;
+        let toolbarChildCount = toolbarFolder.childCount;
+        toolbarFolder.containerOpen = false;
+        return toolbarChildCount;
+      };
+
+      if (toolbarIsCustomized || getToolbarFolderCount() > NUM_TOOLBAR_BOOKMARKS_TO_UNHIDE) {
+        xulStore.setValue(BROWSER_DOCURL, "PersonalToolbar", "collapsed", "false");
+      }
+    }
+  },
+
   // eslint-disable-next-line complexity
   _migrateUI: function BG__migrateUI() {
-    const UI_VERSION = 57;
+    const UI_VERSION = 61;
     const BROWSER_DOCURL = "chrome://browser/content/browser.xul";
 
     let currentUIVersion;
@@ -1754,6 +1783,15 @@ BrowserGlue.prototype = {
     } else {
       // This is a new profile, nothing to migrate.
       Services.prefs.setIntPref("browser.migration.version", UI_VERSION);
+
+      try {
+        // New profiles may have existing bookmarks (imported from another browser or
+        // copied into the profile) and we want to show the bookmark toolbar for them
+        // in some cases.
+        this._maybeToggleBookmarkToolbarVisibility();
+      } catch (ex) {
+        Cu.reportError(ex);
+      }
       return;
     }
 
@@ -1831,17 +1869,6 @@ BrowserGlue.prototype = {
     if (currentUIVersion < 20) {
       // Remove persisted collapsed state from TabsToolbar.
       xulStore.removeValue(BROWSER_DOCURL, "TabsToolbar", "collapsed");
-    }
-
-    if (currentUIVersion < 23) {
-      const kSelectedEnginePref = "browser.search.selectedEngine";
-      if (Services.prefs.prefHasUserValue(kSelectedEnginePref)) {
-        try {
-          let name = Services.prefs.getComplexValue(kSelectedEnginePref,
-                                                    Ci.nsIPrefLocalizedString).data;
-          Services.search.currentEngine = Services.search.getEngineByName(name);
-        } catch (ex) {}
-      }
     }
 
     if (currentUIVersion < 24) {
@@ -2170,6 +2197,79 @@ BrowserGlue.prototype = {
       }
     }
 
+    if (currentUIVersion < 58) {
+      // With Firefox 57, we are doing a one time reset of the geo prefs due to bug 1413652
+      Services.prefs.clearUserPref("browser.search.countryCode");
+      Services.prefs.clearUserPref("browser.search.region");
+      Services.prefs.clearUserPref("browser.search.isUS");
+    }
+
+    if (currentUIVersion < 59) {
+      let searchInitializedPromise = new Promise(resolve => {
+        if (Services.search.isInitialized) {
+          resolve();
+        }
+        const SEARCH_SERVICE_TOPIC = "browser-search-service";
+        Services.obs.addObserver(function observer(subject, topic, data) {
+          if (data != "init-complete") {
+            return;
+          }
+          Services.obs.removeObserver(observer, SEARCH_SERVICE_TOPIC);
+          resolve();
+        }, SEARCH_SERVICE_TOPIC);
+      });
+      searchInitializedPromise.then(() => {
+        let currentEngine = Services.search.currentEngine.wrappedJSObject;
+        // Only reset the current engine if it wasn't set by a WebExtension
+        // and it is not one of the default engines.
+        // If the original default is not a default, the user has a weird
+        // configuration probably involving langpacks, it's not worth
+        // attempting to reset their settings.
+        if (currentEngine._extensionID || currentEngine._isDefault ||
+            !Services.search.originalDefaultEngine.wrappedJSObject._isDefault)
+          return;
+
+        if (currentEngine._loadPath.startsWith("[https]")) {
+          Services.prefs.setCharPref("browser.search.reset.status", "pending");
+        } else {
+          Services.search.resetToOriginalDefaultEngine();
+          Services.prefs.setCharPref("browser.search.reset.status", "silent");
+        }
+      });
+
+      // Migrate the old requested locales prefs to use the new model
+      const SELECTED_LOCALE_PREF = "general.useragent.locale";
+      const MATCHOS_LOCALE_PREF = "intl.locale.matchOS";
+
+      if (Services.prefs.prefHasUserValue(MATCHOS_LOCALE_PREF) ||
+          Services.prefs.prefHasUserValue(SELECTED_LOCALE_PREF)) {
+        if (Services.prefs.getBoolPref(MATCHOS_LOCALE_PREF, false)) {
+          Services.locale.setRequestedLocales([]);
+        } else {
+          let locale = Services.prefs.getComplexValue(SELECTED_LOCALE_PREF,
+            Ci.nsIPrefLocalizedString);
+          if (locale) {
+            try {
+              Services.locale.setRequestedLocales([locale.data]);
+            } catch (e) { /* Don't panic if the value is not a valid locale code. */ }
+          }
+        }
+        Services.prefs.clearUserPref(SELECTED_LOCALE_PREF);
+        Services.prefs.clearUserPref(MATCHOS_LOCALE_PREF);
+      }
+    }
+
+    if (currentUIVersion < 60) {
+      // Set whether search suggestions or history results come first in the
+      // urlbar results.
+      this._migrateMatchBucketsPrefForUIVersion60();
+    }
+
+    if (currentUIVersion < 61) {
+      // Remove persisted toolbarset from navigator toolbox
+      xulStore.removeValue(BROWSER_DOCURL, "navigator-toolbox", "toolbarset");
+    }
+
     // Update the migration version.
     Services.prefs.setIntPref("browser.migration.version", UI_VERSION);
   },
@@ -2249,6 +2349,26 @@ BrowserGlue.prototype = {
     if (willPrompt) {
       DefaultBrowserCheck.prompt(RecentWindow.getMostRecentBrowserWindow());
     }
+  },
+
+  _migrateMatchBucketsPrefForUIVersion60() {
+    let prefName = "browser.urlbar.matchBuckets";
+    let pref = Services.prefs.getCharPref(prefName, "");
+    if (!pref) {
+      // Set the pref based on the search bar's current placement.  If it's
+      // placed (the urlbar and search bar are not unified), then set the pref
+      // (so that history results will come before search suggestions).  If it's
+      // not placed (the urlbar and search bar are unified), then leave the pref
+      // cleared so that UnifiedComplete.js uses the default value (so that
+      // search suggestions will come before history results).
+      if (CustomizableUI.getPlacementOfWidget("search-container")) {
+        Services.prefs.setCharPref(prefName, "general:5,suggestion:Infinity");
+      }
+    }
+    // Else, the pref has already been set.  Normally this pref does not exist.
+    // Either the user customized it, or they were enrolled in the Shield study
+    // in Firefox 57 that effectively already migrated the pref.  Either way,
+    // leave it at its current value.
   },
 
   // ------------------------------
@@ -2981,4 +3101,11 @@ this.NSGetFactory = XPCOMUtils.generateNSGetFactory(components);
 var globalMM = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
 globalMM.addMessageListener("UITour:onPageEvent", function(aMessage) {
   UITour.onPageEvent(aMessage, aMessage.data);
+});
+
+// Listen for HybridContentTelemetry messages.
+// Do it here instead of HybridContentTelemetry.init() so that
+// the module can be lazily loaded on the first message.
+globalMM.addMessageListener("HybridContentTelemetry:onTelemetryMessage", aMessage => {
+  HybridContentTelemetry.onTelemetryMessage(aMessage, aMessage.data);
 });

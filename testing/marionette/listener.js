@@ -14,7 +14,6 @@ const winUtil = content.QueryInterface(Ci.nsIInterfaceRequestor)
 
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
 Cu.import("chrome://marionette/content/accessibility.js");
@@ -27,7 +26,6 @@ const {
 } = Cu.import("chrome://marionette/content/element.js", {});
 const {
   ElementNotInteractableError,
-  error,
   InsecureCertificateError,
   InvalidArgumentError,
   InvalidElementStateError,
@@ -49,9 +47,15 @@ Cu.import("chrome://marionette/content/session.js");
 
 Cu.importGlobalProperties(["URL"]);
 
-let listenerId = null; // unique ID of this listener
+let outerWindowID = null;
 let curContainer = {frame: content, shadowRoot: null};
-let previousContainer = null;
+
+// Listen for click event to indicate one click has happened, so actions
+// code can send dblclick event, also resetClick and cancelTimer
+// after dblclick has happened.
+addEventListener("click", event.DoubleClickTracker.setClick);
+addEventListener("dblclick", event.DoubleClickTracker.resetClick);
+addEventListener("dblclick", event.DoubleClickTracker.cancelTimer);
 
 const seenEls = new element.Store();
 const SUPPORTED_STRATEGIES = new Set([
@@ -65,16 +69,24 @@ const SUPPORTED_STRATEGIES = new Set([
   element.Strategy.XPath,
 ]);
 
-let capabilities;
+Object.defineProperty(this, "capabilities", {
+  get() {
+    let payload = sendSyncMessage("Marionette:WebDriver:GetCapabilities");
+    return session.Capabilities.fromJSON(payload[0]);
+  },
+  configurable: true,
+});
 
-let legacyactions = new legacyaction.Chain(checkForInterrupted);
+let legacyactions = new legacyaction.Chain();
 
 // last touch for each fingerId
 let multiLast = {};
 
+// TODO: Log.jsm is not e10s compatible (see https://bugzil.la/1411513),
+// query the main process for the current log level
 const logger = Log.repository.getLogger("Marionette");
-// Append only once to avoid duplicated output after listener.js gets reloaded
 if (logger.ownAppenders.length == 0) {
+  logger.level = sendSyncMessage("Marionette:GetLogLevel");
   logger.addAppender(new Log.DumpAppender());
 }
 
@@ -150,7 +162,6 @@ const loadListener = {
       let readyState = content.document.readyState;
       let documentURI = content.document.documentURI;
       logger.debug(`Check readyState "${readyState} for "${documentURI}"`);
-
       // If the page load has already finished, don't setup listeners and
       // timers but return immediatelly.
       if (this.handleReadyState(readyState, documentURI)) {
@@ -437,20 +448,24 @@ const loadListener = {
  * an ID, we start the listeners. Otherwise, nothing happens.
  */
 function registerSelf() {
-  let msg = {value: winUtil.outerWindowID};
-  logger.debug(`Register listener.js for window ${msg.value}`);
+  outerWindowID = winUtil.outerWindowID;
+  logger.debug(`Register listener.js for window ${outerWindowID}`);
+
+  sandboxes.clear();
+  curContainer = {
+    frame: content,
+    shadowRoot: null,
+  };
+  legacyactions.mouseEventsOnly = false;
+  action.inputStateMap = new Map();
+  action.inputsToCancel = [];
 
   // register will have the ID and a boolean describing if this is the
   // main process or not
-  let register = sendSyncMessage("Marionette:register", msg);
-  if (register[0]) {
-    listenerId = register[0][0];
-    capabilities = session.Capabilities.fromJSON(register[0][1]);
-    if (typeof listenerId != "undefined") {
-      startListeners();
-      sendAsyncMessage("Marionette:listenersAttached",
-          {"listenerId": listenerId});
-    }
+  let register = sendSyncMessage("Marionette:Register", {outerWindowID});
+  if (register[0].outerWindowID === outerWindowID) {
+    startListeners();
+    sendAsyncMessage("Marionette:ListenersAttached", {outerWindowID});
   }
 }
 
@@ -481,22 +496,8 @@ function dispatch(fn) {
     });
 
     req.then(rv => sendResponse(rv, id), err => sendError(err, id))
-        .catch(error.report);
+        .catch(err => sendError(err, id));
   };
-}
-
-/**
- * Add a message listener that's tied to our listenerId.
- */
-function addMessageListenerId(messageName, handler) {
-  addMessageListener(messageName + listenerId, handler);
-}
-
-/**
- * Remove a message listener that's tied to our listenerId.
- */
-function removeMessageListenerId(messageName, handler) {
-  removeMessageListener(messageName + listenerId, handler);
 }
 
 let getPageSourceFn = dispatch(getPageSource);
@@ -525,134 +526,81 @@ let executeInSandboxFn = dispatch(executeInSandbox);
 let sendKeysToElementFn = dispatch(sendKeysToElement);
 let reftestWaitFn = dispatch(reftestWait);
 
-/**
- * Start all message listeners
- */
 function startListeners() {
-  addMessageListenerId("Marionette:newSession", newSession);
-  addMessageListenerId("Marionette:execute", executeFn);
-  addMessageListenerId("Marionette:executeInSandbox", executeInSandboxFn);
-  addMessageListenerId("Marionette:singleTap", singleTapFn);
-  addMessageListenerId("Marionette:performActions", performActionsFn);
-  addMessageListenerId("Marionette:releaseActions", releaseActionsFn);
-  addMessageListenerId("Marionette:actionChain", actionChainFn);
-  addMessageListenerId("Marionette:multiAction", multiActionFn);
-  addMessageListenerId("Marionette:get", get);
-  addMessageListenerId("Marionette:waitForPageLoaded", waitForPageLoaded);
-  addMessageListenerId("Marionette:cancelRequest", cancelRequest);
-  addMessageListenerId("Marionette:getPageSource", getPageSourceFn);
-  addMessageListenerId("Marionette:goBack", goBack);
-  addMessageListenerId("Marionette:goForward", goForward);
-  addMessageListenerId("Marionette:refresh", refresh);
-  addMessageListenerId("Marionette:findElementContent", findElementContentFn);
-  addMessageListenerId(
-      "Marionette:findElementsContent", findElementsContentFn);
-  addMessageListenerId("Marionette:getActiveElement", getActiveElementFn);
-  addMessageListenerId("Marionette:clickElement", clickElement);
-  addMessageListenerId(
-      "Marionette:getElementAttribute", getElementAttributeFn);
-  addMessageListenerId("Marionette:getElementProperty", getElementPropertyFn);
-  addMessageListenerId("Marionette:getElementText", getElementTextFn);
-  addMessageListenerId("Marionette:getElementTagName", getElementTagNameFn);
-  addMessageListenerId("Marionette:isElementDisplayed", isElementDisplayedFn);
-  addMessageListenerId(
-      "Marionette:getElementValueOfCssProperty",
-      getElementValueOfCssPropertyFn);
-  addMessageListenerId("Marionette:getElementRect", getElementRectFn);
-  addMessageListenerId("Marionette:isElementEnabled", isElementEnabledFn);
-  addMessageListenerId("Marionette:isElementSelected", isElementSelectedFn);
-  addMessageListenerId("Marionette:sendKeysToElement", sendKeysToElementFn);
-  addMessageListenerId("Marionette:clearElement", clearElementFn);
-  addMessageListenerId("Marionette:switchToFrame", switchToFrame);
-  addMessageListenerId("Marionette:switchToParentFrame", switchToParentFrame);
-  addMessageListenerId("Marionette:switchToShadowRoot", switchToShadowRootFn);
-  addMessageListenerId("Marionette:deleteSession", deleteSession);
-  addMessageListenerId("Marionette:sleepSession", sleepSession);
-  addMessageListenerId("Marionette:takeScreenshot", takeScreenshotFn);
-  addMessageListenerId("Marionette:reftestWait", reftestWaitFn);
+  addMessageListener("Marionette:actionChain", actionChainFn);
+  addMessageListener("Marionette:cancelRequest", cancelRequest);
+  addMessageListener("Marionette:clearElement", clearElementFn);
+  addMessageListener("Marionette:clickElement", clickElement);
+  addMessageListener("Marionette:Deregister", deregister);
   addMessageListener("Marionette:DOM:AddEventListener", domAddEventListener);
   addMessageListener("Marionette:DOM:RemoveEventListener", domRemoveEventListener);
+  addMessageListener("Marionette:execute", executeFn);
+  addMessageListener("Marionette:executeInSandbox", executeInSandboxFn);
+  addMessageListener("Marionette:findElementContent", findElementContentFn);
+  addMessageListener("Marionette:findElementsContent", findElementsContentFn);
+  addMessageListener("Marionette:getActiveElement", getActiveElementFn);
+  addMessageListener("Marionette:getElementAttribute", getElementAttributeFn);
+  addMessageListener("Marionette:getElementProperty", getElementPropertyFn);
+  addMessageListener("Marionette:getElementRect", getElementRectFn);
+  addMessageListener("Marionette:getElementTagName", getElementTagNameFn);
+  addMessageListener("Marionette:getElementText", getElementTextFn);
+  addMessageListener("Marionette:getElementValueOfCssProperty", getElementValueOfCssPropertyFn);
+  addMessageListener("Marionette:get", get);
+  addMessageListener("Marionette:getPageSource", getPageSourceFn);
+  addMessageListener("Marionette:goBack", goBack);
+  addMessageListener("Marionette:goForward", goForward);
+  addMessageListener("Marionette:isElementDisplayed", isElementDisplayedFn);
+  addMessageListener("Marionette:isElementEnabled", isElementEnabledFn);
+  addMessageListener("Marionette:isElementSelected", isElementSelectedFn);
+  addMessageListener("Marionette:multiAction", multiActionFn);
+  addMessageListener("Marionette:performActions", performActionsFn);
+  addMessageListener("Marionette:refresh", refresh);
+  addMessageListener("Marionette:reftestWait", reftestWaitFn);
+  addMessageListener("Marionette:releaseActions", releaseActionsFn);
+  addMessageListener("Marionette:sendKeysToElement", sendKeysToElementFn);
+  addMessageListener("Marionette:singleTap", singleTapFn);
+  addMessageListener("Marionette:switchToFrame", switchToFrame);
+  addMessageListener("Marionette:switchToParentFrame", switchToParentFrame);
+  addMessageListener("Marionette:switchToShadowRoot", switchToShadowRootFn);
+  addMessageListener("Marionette:takeScreenshot", takeScreenshotFn);
+  addMessageListener("Marionette:waitForPageLoaded", waitForPageLoaded);
 }
 
-/**
- * Called when we start a new session. It registers the
- * current environment, and resets all values
- */
-function newSession(msg) {
-  capabilities = session.Capabilities.fromJSON(msg.json);
-  resetValues();
-}
-
-/**
- * Puts the current session to sleep, so all listeners are removed except
- * for the 'restart' listener.
- */
-function sleepSession() {
-  deleteSession();
-  addMessageListener("Marionette:restart", restart);
-}
-
-/**
- * Restarts all our listeners after this listener was put to sleep
- */
-function restart() {
-  removeMessageListener("Marionette:restart", restart);
-  registerSelf();
-}
-
-/**
- * Removes all listeners
- */
-function deleteSession() {
-  removeMessageListenerId("Marionette:newSession", newSession);
-  removeMessageListenerId("Marionette:execute", executeFn);
-  removeMessageListenerId("Marionette:executeInSandbox", executeInSandboxFn);
-  removeMessageListenerId("Marionette:singleTap", singleTapFn);
-  removeMessageListenerId("Marionette:performActions", performActionsFn);
-  removeMessageListenerId("Marionette:releaseActions", releaseActionsFn);
-  removeMessageListenerId("Marionette:actionChain", actionChainFn);
-  removeMessageListenerId("Marionette:multiAction", multiActionFn);
-  removeMessageListenerId("Marionette:get", get);
-  removeMessageListenerId("Marionette:waitForPageLoaded", waitForPageLoaded);
-  removeMessageListenerId("Marionette:cancelRequest", cancelRequest);
-  removeMessageListenerId("Marionette:getPageSource", getPageSourceFn);
-  removeMessageListenerId("Marionette:goBack", goBack);
-  removeMessageListenerId("Marionette:goForward", goForward);
-  removeMessageListenerId("Marionette:refresh", refresh);
-  removeMessageListenerId(
-      "Marionette:findElementContent", findElementContentFn);
-  removeMessageListenerId(
-      "Marionette:findElementsContent", findElementsContentFn);
-  removeMessageListenerId("Marionette:getActiveElement", getActiveElementFn);
-  removeMessageListenerId("Marionette:clickElement", clickElement);
-  removeMessageListenerId(
-      "Marionette:getElementAttribute", getElementAttributeFn);
-  removeMessageListenerId(
-      "Marionette:getElementProperty", getElementPropertyFn);
-  removeMessageListenerId(
-      "Marionette:getElementText", getElementTextFn);
-  removeMessageListenerId(
-      "Marionette:getElementTagName", getElementTagNameFn);
-  removeMessageListenerId(
-      "Marionette:isElementDisplayed", isElementDisplayedFn);
-  removeMessageListenerId(
-      "Marionette:getElementValueOfCssProperty",
-      getElementValueOfCssPropertyFn);
-  removeMessageListenerId("Marionette:getElementRect", getElementRectFn);
-  removeMessageListenerId("Marionette:isElementEnabled", isElementEnabledFn);
-  removeMessageListenerId(
-      "Marionette:isElementSelected", isElementSelectedFn);
-  removeMessageListenerId(
-      "Marionette:sendKeysToElement", sendKeysToElementFn);
-  removeMessageListenerId("Marionette:clearElement", clearElementFn);
-  removeMessageListenerId("Marionette:switchToFrame", switchToFrame);
-  removeMessageListenerId(
-      "Marionette:switchToParentFrame", switchToParentFrame);
-  removeMessageListenerId(
-      "Marionette:switchToShadowRoot", switchToShadowRootFn);
-  removeMessageListenerId("Marionette:deleteSession", deleteSession);
-  removeMessageListenerId("Marionette:sleepSession", sleepSession);
-  removeMessageListenerId("Marionette:takeScreenshot", takeScreenshotFn);
+function deregister() {
+  removeMessageListener("Marionette:actionChain", actionChainFn);
+  removeMessageListener("Marionette:cancelRequest", cancelRequest);
+  removeMessageListener("Marionette:clearElement", clearElementFn);
+  removeMessageListener("Marionette:clickElement", clickElement);
+  removeMessageListener("Marionette:Deregister", deregister);
+  removeMessageListener("Marionette:execute", executeFn);
+  removeMessageListener("Marionette:executeInSandbox", executeInSandboxFn);
+  removeMessageListener("Marionette:findElementContent", findElementContentFn);
+  removeMessageListener("Marionette:findElementsContent", findElementsContentFn);
+  removeMessageListener("Marionette:getActiveElement", getActiveElementFn);
+  removeMessageListener("Marionette:getElementAttribute", getElementAttributeFn);
+  removeMessageListener("Marionette:getElementProperty", getElementPropertyFn);
+  removeMessageListener("Marionette:getElementRect", getElementRectFn);
+  removeMessageListener("Marionette:getElementTagName", getElementTagNameFn);
+  removeMessageListener("Marionette:getElementText", getElementTextFn);
+  removeMessageListener("Marionette:getElementValueOfCssProperty", getElementValueOfCssPropertyFn);
+  removeMessageListener("Marionette:get", get);
+  removeMessageListener("Marionette:getPageSource", getPageSourceFn);
+  removeMessageListener("Marionette:goBack", goBack);
+  removeMessageListener("Marionette:goForward", goForward);
+  removeMessageListener("Marionette:isElementDisplayed", isElementDisplayedFn);
+  removeMessageListener("Marionette:isElementEnabled", isElementEnabledFn);
+  removeMessageListener("Marionette:isElementSelected", isElementSelectedFn);
+  removeMessageListener("Marionette:multiAction", multiActionFn);
+  removeMessageListener("Marionette:performActions", performActionsFn);
+  removeMessageListener("Marionette:refresh", refresh);
+  removeMessageListener("Marionette:releaseActions", releaseActionsFn);
+  removeMessageListener("Marionette:sendKeysToElement", sendKeysToElementFn);
+  removeMessageListener("Marionette:singleTap", singleTapFn);
+  removeMessageListener("Marionette:switchToFrame", switchToFrame);
+  removeMessageListener("Marionette:switchToParentFrame", switchToParentFrame);
+  removeMessageListener("Marionette:switchToShadowRoot", switchToShadowRootFn);
+  removeMessageListener("Marionette:takeScreenshot", takeScreenshotFn);
+  removeMessageListener("Marionette:waitForPageLoaded", waitForPageLoaded);
 
   seenEls.clear();
   // reset container frame to the top-most frame
@@ -679,9 +627,7 @@ function deleteSession() {
  *     an empty dictionary.
  */
 function sendToServer(uuid, data = undefined) {
-  let channel = new proxy.AsyncMessageChannel(
-      () => this,
-      sendAsyncMessage.bind(this));
+  let channel = new proxy.AsyncMessageChannel(sendAsyncMessage.bind(this));
   channel.reply(uuid, data);
 }
 
@@ -720,45 +666,6 @@ function sendError(err, uuid) {
   sendToServer(uuid, err);
 }
 
-/**
- * Clear test values after completion of test
- */
-function resetValues() {
-  sandboxes.clear();
-  curContainer = {frame: content, shadowRoot: null};
-  legacyactions.mouseEventsOnly = false;
-  action.inputStateMap = new Map();
-  action.inputsToCancel = [];
-}
-
-function wasInterrupted() {
-  if (previousContainer) {
-    let element = content.document.elementFromPoint(
-        (content.innerWidth / 2), (content.innerHeight / 2));
-    if (element.id.indexOf("modal-dialog") == -1) {
-      return true;
-    }
-    return false;
-  }
-  return sendSyncMessage("MarionetteFrame:getInterruptedState", {})[0].value;
-}
-
-function checkForInterrupted() {
-  if (wasInterrupted()) {
-    // if previousContainer is set, then we're in a single process
-    // environment
-    if (previousContainer) {
-      curContainer = legacyactions.container = previousContainer;
-      previousContainer = null;
-    // else we're in OOP environment, so we'll switch to the original
-    // OOP frame
-    } else {
-      sendSyncMessage("Marionette:switchToModalOrigin");
-    }
-    sendSyncMessage("Marionette:switchedToFrame", {restorePrevious: true});
-  }
-}
-
 async function execute(script, args, timeout, opts) {
   opts.timeout = timeout;
   let sb = sandbox.createMutable(curContainer.frame);
@@ -772,58 +679,49 @@ async function executeInSandbox(script, args, timeout, opts) {
 }
 
 function emitTouchEvent(type, touch) {
-  if (!wasInterrupted()) {
-    logger.info(`Emitting Touch event of type ${type} ` +
-        `to element with id: ${touch.target.id} ` +
-        `and tag name: ${touch.target.tagName} ` +
-        `at coordinates (${touch.clientX}), ` +
-        `${touch.clientY}) relative to the viewport`);
+  logger.info(`Emitting Touch event of type ${type} ` +
+      `to element with id: ${touch.target.id} ` +
+      `and tag name: ${touch.target.tagName} ` +
+      `at coordinates (${touch.clientX}), ` +
+      `${touch.clientY}) relative to the viewport`);
 
-    const win = curContainer.frame;
-    let docShell = win.QueryInterface(Ci.nsIInterfaceRequestor)
-        .getInterface(Ci.nsIWebNavigation)
-        .QueryInterface(Ci.nsIDocShell);
-    if (docShell.asyncPanZoomEnabled && legacyactions.scrolling) {
-      // if we're in APZ and we're scrolling, we must use
-      // sendNativeTouchPoint to dispatch our touchmove events
-      let index = sendSyncMessage("MarionetteFrame:getCurrentFrameId");
-
-      // only call emitTouchEventForIFrame if we're inside an iframe.
-      if (index != null) {
-        let ev = {
-          index,
-          type,
-          id: touch.identifier,
-          clientX: touch.clientX,
-          clientY: touch.clientY,
-          screenX: touch.screenX,
-          screenY: touch.screenY,
-          radiusX: touch.radiusX,
-          radiusY: touch.radiusY,
-          rotation: touch.rotationAngle,
-          force: touch.force,
-        };
-        sendSyncMessage("Marionette:emitTouchEvent", ev);
-        return;
-      }
-    }
-
-    // we get here if we're not in asyncPacZoomEnabled land, or if we're
-    // the main process
-    let domWindowUtils = win.QueryInterface(Ci.nsIInterfaceRequestor)
-        .getInterface(Ci.nsIDOMWindowUtils);
-    domWindowUtils.sendTouchEvent(
-        type,
-        [touch.identifier],
-        [touch.clientX],
-        [touch.clientY],
-        [touch.radiusX],
-        [touch.radiusY],
-        [touch.rotationAngle],
-        [touch.force],
-        1,
-        0);
+  const win = curContainer.frame;
+  let docShell = win.QueryInterface(Ci.nsIInterfaceRequestor)
+      .getInterface(Ci.nsIWebNavigation)
+      .QueryInterface(Ci.nsIDocShell);
+  if (docShell.asyncPanZoomEnabled && legacyactions.scrolling) {
+    let ev = {
+      index: 0,
+      type,
+      id: touch.identifier,
+      clientX: touch.clientX,
+      clientY: touch.clientY,
+      screenX: touch.screenX,
+      screenY: touch.screenY,
+      radiusX: touch.radiusX,
+      radiusY: touch.radiusY,
+      rotation: touch.rotationAngle,
+      force: touch.force,
+    };
+    sendSyncMessage("Marionette:emitTouchEvent", ev);
+    return;
   }
+
+  // we get here if we're not in asyncPacZoomEnabled land, or if we're
+  // the main process
+  let domWindowUtils = win.QueryInterface(Ci.nsIInterfaceRequestor)
+      .getInterface(Ci.nsIDOMWindowUtils);
+  domWindowUtils.sendTouchEvent(
+      type,
+      [touch.identifier],
+      [touch.clientX],
+      [touch.clientY],
+      [touch.radiusX],
+      [touch.radiusY],
+      [touch.rotationAngle],
+      [touch.force],
+      1,
+      0);
 }
 
 /**
@@ -1272,9 +1170,22 @@ async function findElementsContent(strategy, selector, opts = {}) {
   return webEls;
 }
 
-/** Find and return the active element on the page. */
+/**
+ * Return the active element in the document.
+ *
+ * @return {WebElement}
+ *     Active element of the current browsing context's document
+ *     element, if the document element is non-null.
+ *
+ * @throws {NoSuchElementError}
+ *     If the document does not have an active element, i.e. if
+ *     its document element has been deleted.
+ */
 function getActiveElement() {
   let el = curContainer.frame.document.activeElement;
+  if (!el) {
+    throw new NoSuchElementError();
+  }
   return evaluate.toJSON(el, seenEls);
 }
 
@@ -1404,15 +1315,11 @@ function isElementSelected(el) {
 }
 
 async function sendKeysToElement(el, val) {
-  if (el.type == "file") {
-    await interaction.uploadFile(el, val);
-  } else if ((el.type == "date" || el.type == "time") &&
-      Preferences.get("dom.forms.datetime")) {
-    interaction.setFormControlValue(el, val);
-  } else {
-    await interaction.sendKeysToElement(
-        el, val, false, capabilities.get("moz:accessibilityChecks"));
-  }
+  await interaction.sendKeysToElement(
+      el, val,
+      capabilities.get("moz:accessibilityChecks"),
+      capabilities.get("moz:webdriverClick"),
+  );
 }
 
 /** Clear the text of an element. */
@@ -1485,22 +1392,13 @@ function switchToParentFrame(msg) {
 function switchToFrame(msg) {
   let commandID = msg.json.commandID;
   let foundFrame = null;
-  let frames = [];
-  let parWindow = null;
 
-  // Check of the curContainer.frame reference is dead
+  // check if curContainer.frame reference is dead
+  let frames = [];
   try {
     frames = curContainer.frame.frames;
-    // Until Bug 761935 lands, we won't have multiple nested OOP
-    // iframes. We will only have one.  parWindow will refer to the iframe
-    // above the nested OOP frame.
-    parWindow = curContainer.frame.QueryInterface(Ci.nsIInterfaceRequestor)
-        .getInterface(Ci.nsIDOMWindowUtils).outerWindowID;
   } catch (e) {
-    // We probably have a dead compartment so accessing it is going to
-    // make Firefox very upset. Let's now try redirect everything to the
-    // top frame even if the user has given us a frame since search doesnt
-    // look up.
+    // dead comparment, redirect to top frame
     msg.json.id = null;
     msg.json.element = null;
   }
@@ -1609,22 +1507,12 @@ function switchToFrame(msg) {
   let frameWebEl = seenEls.add(curContainer.frame.wrappedJSObject);
   sendSyncMessage("Marionette:switchedToFrame", {"frameValue": frameWebEl.uuid});
 
-  if (curContainer.frame.contentWindow === null) {
-    // The frame we want to switch to is a remote/OOP frame;
-    // notify our parent to handle the switch
-    curContainer.frame = content;
-    let rv = {win: parWindow, frame: foundFrame};
-    sendResponse(rv, commandID);
-
-  } else {
-    curContainer.frame = curContainer.frame.contentWindow;
-
-    if (msg.json.focus) {
-      curContainer.frame.focus();
-    }
-
-    sendOk(commandID);
+  curContainer.frame = curContainer.frame.contentWindow;
+  if (msg.json.focus) {
+    curContainer.frame.focus();
   }
+
+  sendOk(commandID);
 }
 
 /**

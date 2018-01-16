@@ -11,16 +11,16 @@
 #include "nsTArray.h"
 #include "mozilla/gfx/gfxVars.h"
 
-#if (MOZ_WIDGET_GTK == 2)
-extern "C" {
-    typedef struct _GdkDrawable GdkDrawable;
-}
-#endif
-
 #ifdef MOZ_X11
 struct _XDisplay;
 typedef struct _XDisplay Display;
 #endif // MOZ_X11
+
+namespace mozilla {
+    namespace dom {
+        class SystemFontListEntry;
+    };
+};
 
 class gfxPlatformGtk : public gfxPlatform {
 public:
@@ -30,6 +30,9 @@ public:
     static gfxPlatformGtk *GetPlatform() {
         return (gfxPlatformGtk*) gfxPlatform::GetPlatform();
     }
+
+    void ReadSystemFontList(
+        InfallibleTArray<mozilla::dom::SystemFontListEntry>* retValue) override;
 
     virtual already_AddRefed<gfxASurface>
       CreateOffscreenSurface(const IntSize& aSize,
@@ -85,12 +88,6 @@ public:
 
     FT_Library GetFTLibrary() override;
 
-#if (MOZ_WIDGET_GTK == 2)
-    static void SetGdkDrawable(cairo_surface_t *target,
-                               GdkDrawable *drawable);
-    static GdkDrawable *GetGdkDrawable(cairo_surface_t *target);
-#endif
-
     static int32_t GetFontScaleDPI();
     static double  GetFontScaleFactor();
 
@@ -118,9 +115,7 @@ public:
       return true;
     }
 
-    bool AccelerateLayersByDefault() override {
-      return false;
-    }
+    bool AccelerateLayersByDefault() override;
 
 #ifdef GL_PROVIDER_GLX
     already_AddRefed<mozilla::gfx::VsyncSource> CreateHardwareVsyncSource() override;

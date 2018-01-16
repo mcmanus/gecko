@@ -31,6 +31,7 @@
 #include "mozilla/layers/UiCompositorControllerParent.h"
 #include "mozilla/layers/MemoryReportingMLGPU.h"
 #include "mozilla/webrender/RenderThread.h"
+#include "mozilla/webrender/WebRenderAPI.h"
 #include "nsDebugImpl.h"
 #include "nsThreadManager.h"
 #include "prenv.h"
@@ -99,10 +100,8 @@ GPUParent::Init(base::ProcessId aParentPid,
   // versions.
   GetIPCChannel()->SendBuildID();
 
-#ifdef MOZ_CRASHREPORTER
   // Init crash reporter support.
   CrashReporterClient::InitSingleton(this);
-#endif
 
   // Ensure gfxPrefs are initialized.
   gfxPrefs::GetSingleton();
@@ -213,10 +212,21 @@ GPUParent::RecvInit(nsTArray<GfxPrefSetting>&& prefs,
   } else {
     gtk_init(nullptr, nullptr);
   }
+
+  // Ensure we have an FT library for font instantiation.
+  // This would normally be set by gfxPlatform::Init().
+  // Since we bypass that, we must do it here instead.
+  if (gfxVars::UseWebRender()) {
+    FT_Library library = Factory::NewFTLibrary();
+    MOZ_ASSERT(library);
+    Factory::SetFTLibrary(library);
+  }
 #endif
 
   // Make sure to do this *after* we update gfxVars above.
   if (gfxVars::UseWebRender()) {
+    wr::WebRenderAPI::InitExternalLogHandler();
+
     wr::RenderThread::Start();
   }
 
@@ -448,6 +458,8 @@ GPUParent::ActorDestroy(ActorDestroyReason aWhy)
   VRListenerThreadHolder::Shutdown();
   if (gfxVars::UseWebRender()) {
     wr::RenderThread::ShutDown();
+
+    wr::WebRenderAPI::ShutdownExternalLogHandler();
   }
   Factory::ShutDown();
 #if defined(XP_WIN)
@@ -457,9 +469,7 @@ GPUParent::ActorDestroy(ActorDestroyReason aWhy)
   gfxVars::Shutdown();
   gfxConfig::Shutdown();
   gfxPrefs::DestroySingleton();
-#ifdef MOZ_CRASHREPORTER
   CrashReporterClient::DestroySingleton();
-#endif
   XRE_ShutdownChildProcess();
 }
 

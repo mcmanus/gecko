@@ -1,13 +1,11 @@
 Cu.import("resource://gre/modules/FormHistory.jsm");
 Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/PlacesSyncUtils.jsm");
 Cu.import("resource://services-sync/service.js");
 Cu.import("resource://services-sync/engines/bookmarks.js");
 Cu.import("resource://services-sync/engines/history.js");
 Cu.import("resource://services-sync/engines/forms.js");
 Cu.import("resource://services-sync/engines/passwords.js");
 Cu.import("resource://services-sync/engines/prefs.js");
-Cu.import("resource://testing-common/services/sync/utils.js");
 
 const LoginInfo = Components.Constructor(
   "@mozilla.org/login-manager/loginInfo;1", Ci.nsILoginInfo, "init");
@@ -395,7 +393,7 @@ add_task(async function test_bookmark_change_during_sync() {
     // because the bookmarks engine will automatically schedule a follow-up
     // sync for us.
     _("Perform first sync and immediate follow-up sync");
-    Service.sync(["bookmarks"]);
+    Service.sync({engines: ["bookmarks"]});
 
     let pings = await pingsPromise;
     equal(pings.length, 2, "Should submit two pings");

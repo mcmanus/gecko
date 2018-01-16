@@ -22,6 +22,12 @@ class nsIFrame;
 class nsIContent;
 struct nsRect;
 
+namespace mozilla {
+namespace dom {
+class HTMLAreaElement;
+}
+}
+
 class nsImageMap final : public nsStubMutationObserver,
                          public nsIDOMEventListener
 {
@@ -76,24 +82,32 @@ public:
   nsresult GetBoundsForAreaContent(nsIContent *aContent,
                                    nsRect& aBounds);
 
+  using AreaList = AutoTArray<mozilla::UniquePtr<Area>, 8>;
+
 protected:
   virtual ~nsImageMap();
 
   void FreeAreas();
 
   void UpdateAreas();
-  void SearchForAreas(nsIContent* aParent,
-                      bool& aFoundArea,
-                      bool& aFoundAnchor);
 
-  void AddArea(nsIContent* aArea);
+  void SearchForAreas(nsIContent* aParent);
+
+  void AddArea(mozilla::dom::HTMLAreaElement* aArea);
+  void AreaRemoved(mozilla::dom::HTMLAreaElement* aArea);
 
   void MaybeUpdateAreas(nsIContent *aContent);
 
   nsImageFrame* mImageFrame;  // the frame that owns us
   nsCOMPtr<nsIContent> mMap;
-  AutoTArray<Area*, 8> mAreas; // almost always has some entries
-  bool mContainsBlockContents;
+
+  // almost always has some entries
+  AreaList mAreas;
+
+  // This is set when we search for all area children and tells us whether we
+  // should consider the whole subtree or just direct children when we get
+  // content notifications about changes inside the map subtree.
+  bool mConsiderWholeSubtree;
 };
 
 #endif /* nsImageMap_h */

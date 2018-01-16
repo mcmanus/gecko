@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsExceptionHandler.h"
+#include "nsExceptionHandlerUtils.h"
 
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsDirectoryServiceDefs.h"
@@ -41,6 +42,7 @@
 #include "nsDirectoryServiceUtils.h"
 
 #include "nsWindowsDllInterceptor.h"
+#include "mozilla/WindowsVersion.h"
 #elif defined(XP_MACOSX)
 #include "breakpad-client/mac/crash_generation/client_info.h"
 #include "breakpad-client/mac/crash_generation/crash_generation_server.h"
@@ -87,7 +89,6 @@ using mozilla::InjectCrashRunnable;
 #include <map>
 #include <vector>
 
-#include "mozilla/double-conversion.h"
 #include "mozilla/IOInterposer.h"
 #include "mozilla/mozalloc_oom.h"
 #include "mozilla/WindowsDllBlocklist.h"
@@ -206,9 +207,6 @@ static char* currentSessionId = nullptr;
 // If this is false, we don't launch the crash reporter
 static bool doReport = true;
 
-// If this is true, we don't have a crash reporter
-static bool headlessClient = false;
-
 // if this is true, we pass the exception on to the OS crash reporter
 static bool showOSCrashReporter = false;
 
@@ -216,15 +214,6 @@ static bool showOSCrashReporter = false;
 static time_t lastCrashTime = 0;
 // The pathname of a file to store the crash time in
 static XP_CHAR lastCrashTimeFilename[XP_PATH_MAX] = {0};
-
-// A marker file to hold the path to the last dump written, which
-// will be checked on startup.
-static XP_CHAR crashMarkerFilename[XP_PATH_MAX] = {0};
-
-// Whether we've already looked for the marker file.
-static bool lastRunCrashID_checked = false;
-// The minidump ID contained in the marker file.
-static nsString* lastRunCrashID = nullptr;
 
 #if defined(MOZ_WIDGET_ANDROID)
 // on Android 4.2 and above there is a user serial number associated
@@ -425,54 +414,6 @@ typedef std::map<uint32_t,google_breakpad::MappingList> MappingMap;
 #endif
 }
 
-// Format a non-negative double to a string, without using C-library functions,
-// which need to be avoided (.e.g. bug 1240160, comment 10).  Leave the utility
-// non-file static so that we can gtest it.  Return false if we failed to
-// get the formatting done correctly.
-bool SimpleNoCLibDtoA(double aValue, char* aBuffer, int aBufferLength)
-{
-  // aBufferLength is the size of the buffer.  Be paranoid.
-  aBuffer[aBufferLength-1] = '\0';
-
-  if (aValue < 0) {
-    return false;
-  }
-
-  int length, point, i;
-  bool sign;
-  bool ok = true;
-  double_conversion::DoubleToStringConverter::DoubleToAscii(
-                                     aValue,
-                                     double_conversion::DoubleToStringConverter::SHORTEST,
-                                     8,
-                                     aBuffer,
-                                     aBufferLength,
-                                     &sign,
-                                     &length,
-                                     &point);
-
-  // length does not account for the 0 terminator.
-  if (length > point && (length+1) < (aBufferLength-1)) {
-    // We have to insert a decimal point.  Not worried about adding a leading zero
-    // in the < 1 (point == 0) case.
-    aBuffer[length+1] = '\0';
-    for (i=length; i>point; i-=1) {
-      aBuffer[i] = aBuffer[i-1];
-    }
-    aBuffer[i] = '.'; // Not worried about locales
-  } else if (length < point) {
-    // Trailing zeros scenario
-    for (i=length; i<point; i+=1) {
-      if (i >= aBufferLength-2) {
-        ok = false;
-      }
-      aBuffer[i] = '0';
-    }
-    aBuffer[i] = '\0';
-  }
-  return ok;
-}
-
 namespace CrashReporter {
 
 #ifdef XP_LINUX
@@ -558,7 +499,11 @@ void AnnotateTexturesSize(size_t size)
 
 #ifndef XP_WIN
 // Like Windows CopyFile for *nix
-static bool
+//
+// This function is not declared static even though it's not used outside of
+// this file because of an issue in Fennec which prevents breakpad's exception
+// handler from invoking the MinidumpCallback function. See bug 1424304.
+bool
 copy_file(const char* from, const char* to)
 {
   const int kBufSize = 4096;
@@ -936,7 +881,13 @@ LaunchCrashReporterActivity(XP_CHAR* aProgramPath, XP_CHAR* aMinidumpPath,
 
 #endif
 
-static bool
+// Callback invoked from breakpad's exception handler, this writes out the
+// last annotations after a crash occurs and launches the crash reporter client.
+//
+// This function is not declared static even though it's not used outside of
+// this file because of an issue in Fennec which prevents breakpad's exception
+// handler from invoking it. See bug 1424304.
+bool
 MinidumpCallback(
 #ifdef XP_LINUX
                       const MinidumpDescriptor& descriptor,
@@ -983,17 +934,6 @@ MinidumpCallback(
     CopyFile(memoryReportPath, memoryReportLocalPath, false);
 #else
     copy_file(memoryReportPath, memoryReportLocalPath);
-#endif
-  }
-
-  if (headlessClient) {
-    // Leave a marker indicating that there was a crash.
-    PlatformWriter markerFile(crashMarkerFilename);
-#if defined(XP_WIN)
-    markerFile.WriteBuffer(reinterpret_cast<const char*>(minidumpPath),
-                           2*wcslen(minidumpPath));
-#elif defined(XP_UNIX)
-    markerFile.WriteBuffer(minidumpPath, my_strlen(minidumpPath));
 #endif
   }
 
@@ -1471,6 +1411,15 @@ GetMinidumpType()
   minidump_type = static_cast<MINIDUMP_TYPE>(minidump_type |
       MiniDumpWithUnloadedModules |
       MiniDumpWithProcessThreadData);
+
+  // dbghelp.dll on Win7 can't handle overlapping memory regions so we only
+  // enable this feature on Win8 or later.
+  if (IsWin8OrLater()) {
+    minidump_type = static_cast<MINIDUMP_TYPE>(minidump_type |
+      // This allows us to examine heap objects referenced from stack objects
+      // at the cost of further doubling the size of minidumps.
+      MiniDumpWithIndirectlyReferencedMemory);
+  }
 #endif
 
   const char* e = PR_GetEnv("MOZ_CRASHREPORTER_FULLDUMP");
@@ -1593,29 +1542,28 @@ nsresult SetExceptionHandler(nsIFile* aXREDirectory,
   notesField = new nsCString();
   NS_ENSURE_TRUE(notesField, NS_ERROR_OUT_OF_MEMORY);
 
-  if (!headlessClient) {
 #if !defined(MOZ_WIDGET_ANDROID)
-    // Locate the crash reporter executable
-    nsAutoString crashReporterPath_temp;
-    nsresult rv = LocateExecutable(aXREDirectory,
-                                   NS_LITERAL_CSTRING(CRASH_REPORTER_FILENAME),
-                                   crashReporterPath_temp);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+  // Locate the crash reporter executable
+  nsAutoString crashReporterPath_temp;
+  nsresult rv = LocateExecutable(aXREDirectory,
+                                 NS_LITERAL_CSTRING(CRASH_REPORTER_FILENAME),
+                                 crashReporterPath_temp);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
 
 #ifdef XP_MACOSX
-    nsCOMPtr<nsIFile> libPath;
-    rv = aXREDirectory->Clone(getter_AddRefs(libPath));
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
-    }
+  nsCOMPtr<nsIFile> libPath;
+  rv = aXREDirectory->Clone(getter_AddRefs(libPath));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+  }
 
-    nsAutoString libraryPath_temp;
-    rv = libPath->GetPath(libraryPath_temp);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
-    }
+  nsAutoString libraryPath_temp;
+  rv = libPath->GetPath(libraryPath_temp);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+  }
 #endif // XP_MACOSX
 
 #ifdef XP_WIN32
@@ -1628,20 +1576,19 @@ nsresult SetExceptionHandler(nsIFile* aXREDirectory,
 #endif
 #endif // XP_WIN32
 #else
-    // On Android, we launch using the application package name instead of a
-    // filename, so use the dynamically set MOZ_ANDROID_PACKAGE_NAME, or fall
-    // back to the static ANDROID_PACKAGE_NAME.
-    const char* androidPackageName = PR_GetEnv("MOZ_ANDROID_PACKAGE_NAME");
-    if (androidPackageName != nullptr) {
-      nsCString package(androidPackageName);
-      package.AppendLiteral("/org.mozilla.gecko.CrashReporter");
-      crashReporterPath = ToNewCString(package);
-    } else {
-      nsCString package(ANDROID_PACKAGE_NAME "/org.mozilla.gecko.CrashReporter");
-      crashReporterPath = ToNewCString(package);
-    }
-#endif // !defined(MOZ_WIDGET_ANDROID)
+  // On Android, we launch using the application package name instead of a
+  // filename, so use the dynamically set MOZ_ANDROID_PACKAGE_NAME, or fall
+  // back to the static ANDROID_PACKAGE_NAME.
+  const char* androidPackageName = PR_GetEnv("MOZ_ANDROID_PACKAGE_NAME");
+  if (androidPackageName != nullptr) {
+    nsCString package(androidPackageName);
+    package.AppendLiteral("/org.mozilla.gecko.CrashReporter");
+    crashReporterPath = ToNewCString(package);
+  } else {
+    nsCString package(ANDROID_PACKAGE_NAME "/org.mozilla.gecko.CrashReporter");
+    crashReporterPath = ToNewCString(package);
   }
+#endif // !defined(MOZ_WIDGET_ANDROID)
 
   // get temp path to use for minidump path
 #if defined(XP_WIN32)
@@ -2041,34 +1988,6 @@ nsresult SetupExtraData(nsIFile* aAppDataDirectory, const nsACString& aBuildID)
     strncpy(lastCrashTimeFilename, filename.get(), filename.Length());
 #endif
 
-  if (headlessClient) {
-    nsCOMPtr<nsIFile> markerFile;
-    rv = dataDirectory->Clone(getter_AddRefs(markerFile));
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    rv = markerFile->AppendNative(NS_LITERAL_CSTRING("LastCrashFilename"));
-    NS_ENSURE_SUCCESS(rv, rv);
-    memset(crashMarkerFilename, 0, sizeof(crashMarkerFilename));
-
-#if defined(XP_WIN32)
-    nsAutoString markerFilename;
-    rv = markerFile->GetPath(markerFilename);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    if (markerFilename.Length() < XP_PATH_MAX)
-      wcsncpy(crashMarkerFilename, markerFilename.get(),
-              markerFilename.Length());
-#else
-    nsAutoCString markerFilename;
-    rv = markerFile->GetNativePath(markerFilename);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    if (markerFilename.Length() < XP_PATH_MAX)
-      strncpy(crashMarkerFilename, markerFilename.get(),
-              markerFilename.Length());
-#endif
-  }
-
   return NS_OK;
 }
 
@@ -2107,9 +2026,6 @@ nsresult UnsetExceptionHandler()
 
   delete notesField;
   notesField = nullptr;
-
-  delete lastRunCrashID;
-  lastRunCrashID = nullptr;
 
   if (pendingDirectory) {
     free(pendingDirectory);
@@ -3621,83 +3537,6 @@ UnregisterInjectorCallback(DWORD processID)
 }
 
 #endif // MOZ_CRASHREPORTER_INJECTOR
-
-static bool
-CheckForLastRunCrash()
-{
-  if (lastRunCrashID)
-    return true;
-
-  // The exception handler callback leaves the filename of the
-  // last minidump in a known file.
-  nsCOMPtr<nsIFile> lastCrashFile;
-  CreateFileFromPath(crashMarkerFilename,
-                     getter_AddRefs(lastCrashFile));
-
-  bool exists;
-  if (NS_FAILED(lastCrashFile->Exists(&exists)) || !exists) {
-    return false;
-  }
-
-  nsAutoCString lastMinidump_contents;
-  if (NS_FAILED(GetFileContents(lastCrashFile, lastMinidump_contents))) {
-    return false;
-  }
-  lastCrashFile->Remove(false);
-
-#ifdef XP_WIN
-  // Ugly but effective.
-  nsDependentString lastMinidump(
-      reinterpret_cast<const char16_t*>(lastMinidump_contents.get()));
-#else
-  nsAutoCString lastMinidump = lastMinidump_contents;
-#endif
-  nsCOMPtr<nsIFile> lastMinidumpFile;
-  CreateFileFromPath(lastMinidump.get(),
-                     getter_AddRefs(lastMinidumpFile));
-
-  if (!lastMinidumpFile || NS_FAILED(lastMinidumpFile->Exists(&exists)) || !exists) {
-    return false;
-  }
-
-  nsCOMPtr<nsIFile> lastExtraFile;
-  if (!GetExtraFileForMinidump(lastMinidumpFile,
-                               getter_AddRefs(lastExtraFile))) {
-    return false;
-  }
-
-  nsCOMPtr<nsIFile> memoryReportFile;
-  nsresult rv = GetDefaultMemoryReportFile(getter_AddRefs(memoryReportFile));
-  if (NS_FAILED(rv) || NS_FAILED(memoryReportFile->Exists(&exists)) || !exists) {
-    memoryReportFile = nullptr;
-  }
-
-  FindPendingDir();
-
-  // Move {dump,extra,memory} to pending folder
-  if (!MoveToPending(lastMinidumpFile, lastExtraFile, memoryReportFile)) {
-    return false;
-  }
-
-  lastRunCrashID = new nsString();
-  return GetIDFromMinidump(lastMinidumpFile, *lastRunCrashID);
-}
-
-bool
-GetLastRunCrashID(nsAString& id)
-{
-  if (!lastRunCrashID_checked) {
-    CheckForLastRunCrash();
-    lastRunCrashID_checked = true;
-  }
-
-  if (!lastRunCrashID) {
-    return false;
-  }
-
-  id = *lastRunCrashID;
-  return true;
-}
 
 #if defined(XP_WIN) || defined(XP_MACOSX)
 void

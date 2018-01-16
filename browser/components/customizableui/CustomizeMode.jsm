@@ -12,7 +12,6 @@ const kPrefCustomizationDebug = "browser.uiCustomization.debug";
 const kPaletteId = "customization-palette";
 const kDragDataTypePrefix = "text/toolbarwrapper-id/";
 const kSkipSourceNodePref = "browser.uiCustomization.skipSourceNodeCheck";
-const kToolbarVisibilityBtn = "customization-toolbar-visibility-button";
 const kDrawInTitlebarPref = "browser.tabs.drawInTitlebar";
 const kExtraDragSpacePref = "browser.tabs.extraDragSpace";
 const kMaxTransitionDurationMs = 2000;
@@ -279,14 +278,6 @@ CustomizeMode.prototype = {
         });
       }
 
-      let toolbarVisibilityBtn = document.getElementById(kToolbarVisibilityBtn);
-      let togglableToolbars = window.getTogglableToolbars();
-      if (togglableToolbars.length == 0) {
-        toolbarVisibilityBtn.setAttribute("hidden", "true");
-      } else {
-        toolbarVisibilityBtn.removeAttribute("hidden");
-      }
-
       this.updateLWTStyling();
 
       CustomizableUI.dispatchToolboxEvent("beforecustomization", {}, window);
@@ -396,8 +387,6 @@ CustomizeMode.prototype = {
     }
 
     this._handler.isExitingCustomizeMode = true;
-
-    this._removeExtraToolbarsIfEmpty();
 
     this._teardownDownloadAutoHideToggle();
 
@@ -608,9 +597,19 @@ CustomizeMode.prototype = {
         resolve();
       }
 
-      animationNode.classList.add("animate-out");
-      animationNode.ownerGlobal.gNavToolbox.addEventListener("customizationending", cleanupCustomizationExit);
-      animationNode.addEventListener("animationend", cleanupWidgetAnimationEnd);
+      // Wait until the next frame before setting the class to ensure
+      // we do start the animation. We cannot use promiseLayoutFlushed
+      // here because callback is only invoked when any actual reflow
+      // happens, while that may not happen soonish enough. If we have
+      // an observer for style flush, we may be able to replace the
+      // nested rAFs with that.
+      this.window.requestAnimationFrame(() => {
+        this.window.requestAnimationFrame(() => {
+          animationNode.classList.add("animate-out");
+          animationNode.ownerGlobal.gNavToolbox.addEventListener("customizationending", cleanupCustomizationExit);
+          animationNode.addEventListener("animationend", cleanupWidgetAnimationEnd);
+        });
+      });
     });
   },
 
@@ -893,16 +892,12 @@ CustomizeMode.prototype = {
       wrapper.setAttribute("flex", aNode.getAttribute("flex"));
     }
 
-    if (aPlace == "panel") {
-      if (aNode.classList.contains(CustomizableUI.WIDE_PANEL_CLASS)) {
-        wrapper.setAttribute("haswideitem", "true");
-      } else if (wrapper.hasAttribute("haswideitem")) {
-        wrapper.removeAttribute("haswideitem");
-      }
-    }
-
     let removable = aPlace == "palette" || CustomizableUI.isWidgetRemovable(aNode);
     wrapper.setAttribute("removable", removable);
+
+    // Allow touch events to initiate dragging in customize mode.
+    // This is only supported on Windows for now.
+    wrapper.setAttribute("touchdownstartsdrag", "true");
 
     let contextMenuAttrName = "";
     if (aNode.getAttribute("context")) {
@@ -911,7 +906,7 @@ CustomizeMode.prototype = {
       contextMenuAttrName = "contextmenu";
     }
     let currentContextMenu = aNode.getAttribute(contextMenuAttrName);
-    let contextMenuForPlace = aPlace == "panel" ?
+    let contextMenuForPlace = aPlace == "menu-panel" ?
                                 kPanelItemContextMenu :
                                 kPaletteItemContextMenu;
     if (aPlace != "toolbar") {
@@ -995,7 +990,7 @@ CustomizeMode.prototype = {
       toolbarItem.setAttribute(contextAttrName, wrappedContext);
       toolbarItem.removeAttribute("wrapped-contextAttrName");
       toolbarItem.removeAttribute("wrapped-context");
-    } else if (place == "panel") {
+    } else if (place == "menu-panel") {
       toolbarItem.setAttribute("context", kPanelItemContextMenu);
     }
 
@@ -1101,18 +1096,6 @@ CustomizeMode.prototype = {
       }
       this.areas.clear();
     })().catch(log.error);
-  },
-
-  _removeExtraToolbarsIfEmpty() {
-    let toolbox = this.window.gNavToolbox;
-    for (let child of toolbox.children) {
-      if (child.hasAttribute("customindex")) {
-        let placements = CustomizableUI.getWidgetIdsInArea(child.id);
-        if (!placements.length) {
-          CustomizableUI.removeExtraToolbar(child.id);
-        }
-      }
-    }
   },
 
   persistCurrentSets(aSetBeforePersisting) {
@@ -1763,7 +1746,7 @@ CustomizeMode.prototype = {
       if (this._customizing && !this._transitioning) {
         item.hidden = true;
         DragPositionManager.start(this.window);
-        let canUsePrevSibling = placeForItem == "toolbar" || placeForItem == "panel";
+        let canUsePrevSibling = placeForItem == "toolbar" || placeForItem == "menu-panel";
         if (item.nextSibling) {
           this._setDragActive(item.nextSibling, "before", draggedItem.id, placeForItem);
           this._dragOverItem = item.nextSibling;
@@ -1819,7 +1802,7 @@ CustomizeMode.prototype = {
       return;
     }
 
-    let targetAreaType = CustomizableUI.getAreaType(targetArea.id);
+    let targetAreaType = CustomizableUI.getPlaceForItem(targetArea);
     let targetNode = this._getDragOverNode(aEvent, targetArea, targetAreaType, draggedItemId);
 
     // We need to determine the place that the widget is being dropped in
@@ -2164,11 +2147,6 @@ CustomizeMode.prototype = {
       return;
     }
 
-    // getPlaceForItem and getAreaType return different things. Hack-around
-    // rather than having to update every. single. consumer. (and break add-ons)
-    if (aAreaType == "panel") {
-      aAreaType = "menu-panel";
-    }
     if (aItem.getAttribute("dragover") != aValue) {
       aItem.setAttribute("dragover", aValue);
 
@@ -2256,8 +2234,7 @@ CustomizeMode.prototype = {
     let originArea = this._getCustomizableParent(draggedWrapper);
     let positionManager = DragPositionManager.getManagerForArea(targetArea);
     let draggedSize = this._getDragItemSize(aDragOverNode, aDraggedItem);
-    let isWide = aDraggedItem.classList.contains(CustomizableUI.WIDE_PANEL_CLASS);
-    positionManager.insertPlaceholder(targetArea, aDragOverNode, isWide, draggedSize,
+    positionManager.insertPlaceholder(targetArea, aDragOverNode, draggedSize,
                                       originArea == targetArea);
   },
 
@@ -2367,7 +2344,7 @@ CustomizeMode.prototype = {
       dragX -= bounds.left;
       dragY -= bounds.top;
       // Find the closest node:
-      targetNode = positionManager.find(aAreaElement, dragX, dragY, aDraggedItemId);
+      targetNode = positionManager.find(aAreaElement, dragX, dragY);
     }
     return targetNode || aEvent.target;
   },
@@ -2584,7 +2561,12 @@ CustomizeMode.prototype = {
 
     function updatePlayers() {
       if (keydown) {
-        p1 += (keydown == 37 ? -1 : 1) * 10 * keydownAdj;
+        let p1Adj = 1;
+        if ((keydown == 37 && !isRTL) ||
+            (keydown == 39 && isRTL)) {
+          p1Adj = -1;
+        }
+        p1 += p1Adj * 10 * keydownAdj;
       }
 
       let sign = Math.sign(ballDxDy[0]);
@@ -2616,15 +2598,16 @@ CustomizeMode.prototype = {
     }
 
     function draw() {
-      elements.player1.style.transform = "translate(" + p1 + "px, -37px)";
-      elements.player2.style.transform = "translate(" + p2 + "px, 300px)";
-      elements.ball.style.transform = "translate(" + ball[0] + "px, " + ball[1] + "px)";
-      elements.score.textContent = score;
-      elements.lives.setAttribute("lives", lives);
+      let xAdj = isRTL ? -1 : 1;
+      elements["wp-player1"].style.transform = "translate(" + (xAdj * p1) + "px, -37px)";
+      elements["wp-player2"].style.transform = "translate(" + (xAdj * p2) + "px, " + gameSide + "px)";
+      elements["wp-ball"].style.transform = "translate(" + (xAdj * ball[0]) + "px, " + ball[1] + "px)";
+      elements["wp-score"].textContent = score;
+      elements["wp-lives"].setAttribute("lives", lives);
       if (score >= winScore) {
         let arena = elements.arena;
         let image = "url(chrome://browser/skin/customizableui/whimsy.png)";
-        let position = `${ball[0] - 10}px ${ball[1] - 10}px`;
+        let position = `${(isRTL ? gameSide : 0) + (xAdj * ball[0]) - 10}px ${ball[1] - 10}px`;
         let repeat = "no-repeat";
         let size = "20px";
         if (arena.style.backgroundImage) {
@@ -2645,6 +2628,22 @@ CustomizeMode.prototype = {
     }
 
     function onkeydown(event) {
+      keys.push(event.which);
+      if (keys.length > 10) {
+        keys.shift();
+        let codeEntered = true;
+        for (let i = 0; i < keys.length; i++) {
+          if (keys[i] != keysCode[i]) {
+            codeEntered = false;
+            break;
+          }
+        }
+        if (codeEntered) {
+          elements.arena.setAttribute("kcode", "true");
+          let spacer = document.querySelector("#customization-palette > toolbarpaletteitem");
+          spacer.setAttribute("kcode", "true");
+        }
+      }
       if (event.which == 37 /* left */ ||
           event.which == 39 /* right */) {
         keydown = event.which;
@@ -2671,10 +2670,13 @@ CustomizeMode.prototype = {
       }
       arena.removeAttribute("score");
       arena.removeAttribute("lives");
+      arena.removeAttribute("kcode");
       arena.style.removeProperty("background-image");
       arena.style.removeProperty("background-position");
       arena.style.removeProperty("background-repeat");
       arena.style.removeProperty("background-size");
+      let spacer = document.querySelector("#customization-palette > toolbarpaletteitem");
+      spacer.removeAttribute("kcode");
       elements = null;
       document = null;
       quit = true;
@@ -2696,6 +2698,8 @@ CustomizeMode.prototype = {
     let paddleWidth = 84;
     let keydownAdj = 1;
     let keydown = 0;
+    let keys = [];
+    let keysCode = [38, 38, 40, 40, 37, 39, 37, 39, 66, 65];
     let lives = 5;
     let winScore = 11;
     let quit = false;
@@ -2704,18 +2708,19 @@ CustomizeMode.prototype = {
     let elements = {
       arena: document.getElementById("customization-pong-arena")
     };
+    let isRTL = document.documentElement.matches(":-moz-locale-dir(rtl)");
 
     document.addEventListener("keydown", onkeydown);
     document.addEventListener("keyup", onkeyup);
 
     for (let id of ["player1", "player2", "ball", "score", "lives"]) {
       let el = document.createElement("box");
-      el.id = id;
-      elements[id] = elements.arena.appendChild(el);
+      el.id = "wp-" + id;
+      elements[el.id] = elements.arena.appendChild(el);
     }
 
     let spacer = this.visiblePalette.querySelector("toolbarpaletteitem");
-    for (let player of ["#player1", "#player2"]) {
+    for (let player of ["#wp-player1", "#wp-player2"]) {
       let val = "-moz-element(#" + spacer.id + ") no-repeat";
       elements.arena.querySelector(player).style.background = val;
     }
@@ -2725,8 +2730,8 @@ CustomizeMode.prototype = {
       update();
       draw();
       if (quit) {
-        elements.score.textContent = score;
-        elements.lives && elements.lives.setAttribute("lives", lives);
+        elements["wp-score"].textContent = score;
+        elements["wp-lives"] && elements["wp-lives"].setAttribute("lives", lives);
         elements.arena.setAttribute("score", score);
         elements.arena.setAttribute("lives", lives);
       } else {

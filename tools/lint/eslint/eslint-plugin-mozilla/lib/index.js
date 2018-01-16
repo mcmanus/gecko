@@ -23,6 +23,7 @@ module.exports = {
     "browser-window": require("../lib/environments/browser-window.js"),
     "chrome-worker": require("../lib/environments/chrome-worker.js"),
     "frame-script": require("../lib/environments/frame-script.js"),
+    "jsm": require("../lib/environments/jsm.js"),
     "places-overlay": require("../lib/environments/places-overlay.js"),
     "simpletest": require("../lib/environments/simpletest.js")
   },
@@ -32,8 +33,6 @@ module.exports = {
   rules: {
     "avoid-Date-timing": require("../lib/rules/avoid-Date-timing"),
     "avoid-removeChild": require("../lib/rules/avoid-removeChild"),
-    "avoid-nsISupportsString-preferences":
-      require("../lib/rules/avoid-nsISupportsString-preferences"),
     "balanced-listeners": require("../lib/rules/balanced-listeners"),
     "import-browser-window-globals":
       require("../lib/rules/import-browser-window-globals"),
@@ -66,7 +65,6 @@ module.exports = {
   rulesConfig: {
     "avoid-Date-timing": "off",
     "avoid-removeChild": "off",
-    "avoid-nsISupportsString-preferences": "off",
     "balanced-listeners": "off",
     "import-browser-window-globals": "off",
     "import-content-task-globals": "off",

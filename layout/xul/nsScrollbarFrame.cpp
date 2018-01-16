@@ -155,7 +155,7 @@ nsScrollbarFrame::GetScrollbarMediator()
   }
   sbm = do_QueryFrame(f);
   if (f && !sbm) {
-    f = f->PresContext()->PresShell()->GetRootScrollFrame();
+    f = f->PresShell()->GetRootScrollFrame();
     if (f && f->GetContent() == mScrollbarMediator) {
       return do_QueryFrame(f);
     }
@@ -237,7 +237,7 @@ int32_t
 nsScrollbarFrame::MoveToNewPosition()
 {
   // get the scrollbar's content node
-  nsCOMPtr<nsIContent> content = GetContent();
+  RefPtr<Element> content = GetContent()->AsElement();
 
   // get the current pos
   int32_t curpos = nsSliderFrame::GetCurrentPosition(content);

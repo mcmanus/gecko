@@ -954,8 +954,6 @@ HttpChannelParent::RecvRedirect2Verify(const nsresult& result,
                                        const OptionalURIParams& aReferrerURI,
                                        const OptionalURIParams& aAPIRedirectURI,
                                        const OptionalCorsPreflightArgs& aCorsPreflightArgs,
-                                       const bool& aForceHSTSPriming,
-                                       const bool& aMixedContentWouldBlock,
                                        const bool& aChooseAppcache)
 {
   LOG(("HttpChannelParent::RecvRedirect2Verify [this=%p result=%" PRIx32 "]\n",
@@ -996,14 +994,6 @@ HttpChannelParent::RecvRedirect2Verify(const nsresult& result,
         MOZ_RELEASE_ASSERT(newInternalChannel);
         const CorsPreflightArgs& args = aCorsPreflightArgs.get_CorsPreflightArgs();
         newInternalChannel->SetCorsPreflightParameters(args.unsafeHeaders());
-      }
-
-      if (aForceHSTSPriming) {
-        nsCOMPtr<nsILoadInfo> newLoadInfo;
-        rv = newHttpChannel->GetLoadInfo(getter_AddRefs(newLoadInfo));
-        if (NS_SUCCEEDED(rv) && newLoadInfo) {
-          newLoadInfo->SetHSTSPriming(aMixedContentWouldBlock);
-        }
       }
 
       nsCOMPtr<nsIURI> referrerUri = DeserializeURI(aReferrerURI);
@@ -1596,12 +1586,16 @@ HttpChannelParent::OnStopRequest(nsIRequest *aRequest,
     httpChannelImpl->SetWarningReporter(nullptr);
   }
 
+  nsHttpHeaderArray *responseTrailer = mChannel->GetResponseTrailers();
+
   // Either IPC channel is closed or background channel
   // is ready to send OnStopRequest.
   MOZ_ASSERT(mIPCClosed || mBgParent);
 
   if (mIPCClosed ||
-      !mBgParent || !mBgParent->OnStopRequest(aStatusCode, timing)) {
+      !mBgParent ||
+      !mBgParent->OnStopRequest(aStatusCode, timing,
+                                responseTrailer ? *responseTrailer : nsHttpHeaderArray())) {
     return NS_ERROR_UNEXPECTED;
   }
 
@@ -2004,6 +1998,16 @@ HttpChannelParent::ResumeMessageDiversion()
   LOG(("HttpChannelParent::SuspendMessageDiversion [this=%p]", this));
   // This only needs to resumes message queue.
   mEventQ->Resume();
+  return NS_OK;
+}
+
+nsresult
+HttpChannelParent::CancelDiversion()
+{
+  LOG(("HttpChannelParent::CancelDiversion [this=%p]", this));
+  if (!mIPCClosed) {
+    Unused << SendCancelDiversion();
+  }
   return NS_OK;
 }
 

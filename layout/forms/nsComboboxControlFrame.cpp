@@ -24,6 +24,7 @@
 #include "nsPresState.h"
 #include "nsView.h"
 #include "nsViewManager.h"
+#include "nsIContentInlines.h"
 #include "nsIDOMEventListener.h"
 #include "nsIDOMNode.h"
 #include "nsISelectControlFrame.h"
@@ -552,7 +553,7 @@ public:
         static_cast<nsComboboxControlFrame*>(mFrame.GetFrame());
       static_cast<nsListControlFrame*>(combo->mDropdownFrame)->
         SetSuppressScrollbarUpdate(true);
-      nsCOMPtr<nsIPresShell> shell = mFrame->PresContext()->PresShell();
+      nsCOMPtr<nsIPresShell> shell = mFrame->PresShell();
       shell->FrameNeedsReflow(combo->mDropdownFrame, nsIPresShell::eResize,
                               NS_FRAME_IS_DIRTY);
       shell->FlushPendingNotifications(FlushType::Layout);
@@ -744,6 +745,15 @@ static void printSize(char * aDesc, nscoord aSize)
 //-- Main Reflow for the Combobox
 //-------------------------------------------------------------------
 
+bool
+nsComboboxControlFrame::HasDropDownButton() const
+{
+  const nsStyleDisplay* disp = StyleDisplay();
+  return disp->mAppearance == NS_THEME_MENULIST &&
+    (!IsThemed(disp) ||
+     PresContext()->GetTheme()->ThemeNeedsComboboxDropmarker());
+}
+
 nscoord
 nsComboboxControlFrame::GetIntrinsicISize(gfxContext* aRenderingContext,
                                           nsLayoutUtils::IntrinsicISizeType aType)
@@ -789,10 +799,7 @@ nsComboboxControlFrame::GetIntrinsicISize(gfxContext* aRenderingContext,
   }
 
   // add room for the dropmarker button if there is one
-  const nsStyleDisplay* disp = StyleDisplay();
-  if ((!IsThemed(disp) ||
-       presContext->GetTheme()->ThemeNeedsComboboxDropmarker()) &&
-      disp->mAppearance != NS_THEME_NONE) {
+  if (HasDropDownButton()) {
     displayISize += scrollbarWidth;
   }
 
@@ -864,9 +871,7 @@ nsComboboxControlFrame::Reflow(nsPresContext*          aPresContext,
   // size of the dropdown button.
   WritingMode wm = aReflowInput.GetWritingMode();
   nscoord buttonISize;
-  const nsStyleDisplay *disp = StyleDisplay();
-  if ((IsThemed(disp) && !aPresContext->GetTheme()->ThemeNeedsComboboxDropmarker()) ||
-      StyleDisplay()->mAppearance == NS_THEME_NONE) {
+  if (!HasDropDownButton()) {
     buttonISize = 0;
   }
   else {
@@ -1046,7 +1051,7 @@ nsComboboxControlFrame::HandleRedisplayTextEvent()
 
   ActuallyDisplayText(true);
   // XXXbz This should perhaps be eResize.  Check.
-  PresContext()->PresShell()->FrameNeedsReflow(mDisplayFrame,
+  PresShell()->FrameNeedsReflow(mDisplayFrame,
                                                nsIPresShell::eStyleChange,
                                                NS_FRAME_IS_DIRTY);
 
@@ -1364,7 +1369,7 @@ nsComboboxControlFrame::CreateFrameForDisplayNode()
   MOZ_ASSERT(mDisplayContent);
 
   // Get PresShell
-  nsIPresShell *shell = PresContext()->PresShell();
+  nsIPresShell *shell = PresShell();
   StyleSetHandle styleSet = shell->StyleSet();
 
   // create the style contexts for the anonymous block frame and text frame
@@ -1574,7 +1579,7 @@ nsComboboxControlFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       if ((!IsThemed(disp) ||
            !presContext->GetTheme()->ThemeDrawsFocusForWidget(disp->mAppearance)) &&
           mDisplayFrame && IsVisibleForPainting(aBuilder)) {
-        aLists.Content()->AppendNewToTop(
+        aLists.Content()->AppendToTop(
           new (aBuilder) nsDisplayComboboxFocus(aBuilder, this));
       }
     }

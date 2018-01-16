@@ -20,13 +20,18 @@ namespace mozilla {
 struct RoundedRect {
     typedef mozilla::gfx::RectCornerRadii RectCornerRadii;
 
-    RoundedRect(gfxRect &aRect, RectCornerRadii &aCorners) : rect(aRect), corners(aCorners) { }
+    RoundedRect(const gfxRect& aRect, const RectCornerRadii& aCorners)
+      : rect(aRect)
+      , corners(aCorners)
+    {
+    }
+
     void Deflate(gfxFloat aTopWidth, gfxFloat aBottomWidth, gfxFloat aLeftWidth, gfxFloat aRightWidth) {
         // deflate the internal rect
-        rect.x += aLeftWidth;
-        rect.y += aTopWidth;
-        rect.SetWidth(std::max(0., rect.Width() - aLeftWidth - aRightWidth));
-        rect.SetHeight(std::max(0., rect.Height() - aTopWidth - aBottomWidth));
+        rect.SetRect(rect.X() + aLeftWidth,
+                     rect.Y() + aTopWidth,
+                     std::max(0., rect.Width() - aLeftWidth - aRightWidth),
+                     std::max(0., rect.Height() - aTopWidth - aBottomWidth));
 
         corners.radii[mozilla::eCornerTopLeft].width =
             std::max(0., corners.radii[mozilla::eCornerTopLeft].width - aLeftWidth);

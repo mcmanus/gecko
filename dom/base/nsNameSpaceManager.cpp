@@ -110,7 +110,7 @@ nsNameSpaceManager::RegisterNameSpace(const nsAString& aURI,
     }
   }
 
-  NS_POSTCONDITION(aNameSpaceID >= -1, "Bogus namespace ID");
+  MOZ_ASSERT(aNameSpaceID >= -1, "Bogus namespace ID");
 
   return rv;
 }
@@ -159,11 +159,11 @@ nsNameSpaceManager::GetNameSpaceID(nsAtom* aURI,
       && mDisabledURIToIDTable.Get(aURI, &nameSpaceID)
       && ((mMathMLDisabled && kNameSpaceID_disabled_MathML == nameSpaceID) ||
       (mSVGDisabled && kNameSpaceID_disabled_SVG == nameSpaceID))) {
-    NS_POSTCONDITION(nameSpaceID >= 0, "Bogus namespace ID");
+    MOZ_ASSERT(nameSpaceID >= 0, "Bogus namespace ID");
     return nameSpaceID;
   }
   if (mURIToIDTable.Get(aURI, &nameSpaceID)) {
-    NS_POSTCONDITION(nameSpaceID >= 0, "Bogus namespace ID");
+    MOZ_ASSERT(nameSpaceID >= 0, "Bogus namespace ID");
     return nameSpaceID;
   }
 
@@ -183,7 +183,7 @@ NS_NewElement(Element** aResult,
   }
 #ifdef MOZ_XUL
   if (ns == kNameSpaceID_XUL) {
-    return NS_NewXULElement(aResult, ni.forget());
+    return NS_NewXULElement(aResult, ni.forget(), aFromParser);
   }
 #endif
   if (ns == kNameSpaceID_MathML) {

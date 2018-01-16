@@ -55,22 +55,21 @@ if CONFIG['MOZ_X11']:
     UNIFIED_SOURCES += [
         'CompositorWidgetChild.cpp',
         'CompositorWidgetParent.cpp',
-        'InProcessX11CompositorWidget.cpp',
+        'GtkCompositorWidget.cpp',
+        'InProcessGtkCompositorWidget.cpp',
         'nsIdleServiceGTK.cpp',
-        'X11CompositorWidget.cpp',
     ]
     EXPORTS.mozilla.widget += [
         'CompositorWidgetChild.h',
         'CompositorWidgetParent.h',
-        'InProcessX11CompositorWidget.h',
-        'X11CompositorWidget.h',
+        'GtkCompositorWidget.h',
+        'InProcessGtkCompositorWidget.h',
     ]
 
 if CONFIG['NS_PRINTING']:
     UNIFIED_SOURCES += [
         'nsCUPSShim.cpp',
         'nsDeviceContextSpecG.cpp',
-        'nsPaperPS.cpp',
         'nsPrintDialogGTK.cpp',
         'nsPrintOptionsGTK.cpp',
         'nsPrintSettingsGTK.cpp',
@@ -80,6 +79,7 @@ if CONFIG['NS_PRINTING']:
 if CONFIG['MOZ_X11']:
     UNIFIED_SOURCES += [
         'nsClipboard.cpp',
+        'nsClipboardX11.cpp',
         'nsDragService.cpp',
         'WindowSurfaceProvider.cpp',
         'WindowSurfaceX11.cpp',
@@ -88,6 +88,11 @@ if CONFIG['MOZ_X11']:
     ]
     EXPORTS.mozilla.widget += [
         'WindowSurfaceProvider.h',
+    ]
+
+if CONFIG['MOZ_WAYLAND']:
+    UNIFIED_SOURCES += [
+        'WindowSurfaceWayland.cpp',
     ]
 
 if CONFIG['ACCESSIBILITY']:

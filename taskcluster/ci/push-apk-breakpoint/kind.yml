@@ -5,11 +5,11 @@
 loader: taskgraph.loader.push_apk:loader
 
 transforms:
-   - taskgraph.transforms.push_apk_breakpoint:transforms
-   - taskgraph.transforms.task:transforms
+    - taskgraph.transforms.push_apk_breakpoint:transforms
+    - taskgraph.transforms.task:transforms
 
 kind-dependencies:
-  - build-signing
+    - build-signing
 
 jobs:
     android-push-apk-breakpoint/opt:
@@ -17,7 +17,9 @@ jobs:
         attributes:
             build_platform: android-nightly
             nightly: true
-        worker-type: # see transforms
+        shipping-phase: ship
+        shipping-product: fennec
+        worker-type:  # see transforms
         worker:
             implementation: push-apk-breakpoint
         treeherder:

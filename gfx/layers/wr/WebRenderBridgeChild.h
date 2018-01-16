@@ -88,6 +88,8 @@ public:
   // KnowsCompositor
   TextureForwarder* GetTextureForwarder() override;
   LayersIPCActor* GetLayersIPCActor() override;
+  void SyncWithCompositor() override;
+  ActiveResourceTracker* GetActiveResourceTracker() override { return mActiveResourceTracker.get(); }
 
   void AddPipelineIdForAsyncCompositable(const wr::PipelineId& aPipelineId,
                                          const CompositableHandle& aHandlee);
@@ -96,7 +98,7 @@ public:
   void RemovePipelineIdForCompositable(const wr::PipelineId& aPipelineId);
 
   wr::ExternalImageId AllocExternalImageIdForCompositable(CompositableClient* aCompositable);
-  void DeallocExternalImageId(wr::ExternalImageId& aImageId);
+  void DeallocExternalImageId(const wr::ExternalImageId& aImageId);
 
   /**
    * Clean this up, finishing with SendShutDown() which will cause __delete__
@@ -128,7 +130,7 @@ public:
     return wr::WrImageKey{ GetNamespace(), GetNextResourceId() };
   }
 
-  void PushGlyphs(wr::DisplayListBuilder& aBuilder, const nsTArray<wr::GlyphInstance>& aGlyphs,
+  void PushGlyphs(wr::DisplayListBuilder& aBuilder, Range<const wr::GlyphInstance> aGlyphs,
                   gfx::ScaledFont* aFont, const wr::ColorF& aColor,
                   const StackingContextHelper& aSc,
                   const wr::LayerRect& aBounds, const wr::LayerRect& aClip,
@@ -148,10 +150,14 @@ public:
 
   ipc::IShmemAllocator* GetShmemAllocator();
 
+  virtual bool IsThreadSafe() const override { return false; }
+
+  virtual RefPtr<KnowsCompositor> GetForMedia() override;
+
 private:
   friend class CompositorBridgeChild;
 
-  ~WebRenderBridgeChild() {}
+  ~WebRenderBridgeChild();
 
   wr::ExternalImageId GetNextExternalImageId();
 
@@ -179,7 +185,9 @@ private:
 
   void ActorDestroy(ActorDestroyReason why) override;
 
-  virtual mozilla::ipc::IPCResult RecvWrUpdated(const wr::IdNamespace& aNewIdNamespace) override;
+  void DoDestroy();
+
+  mozilla::ipc::IPCResult RecvWrUpdated(const wr::IdNamespace& aNewIdNamespace) override;
 
   void AddIPDLReference() {
     MOZ_ASSERT(mIPCOpen == false);
@@ -214,6 +222,8 @@ private:
 
   uint32_t mFontInstanceKeysDeleted;
   nsDataHashtable<ScaledFontHashKey, wr::FontInstanceKey> mFontInstanceKeys;
+
+  UniquePtr<ActiveResourceTracker> mActiveResourceTracker;
 };
 
 } // namespace layers

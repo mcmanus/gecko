@@ -27,6 +27,7 @@ class MacIOSurface;
 #endif
 namespace mozilla {
 namespace gfx {
+class VRThread;
 class VRLayerParent;
 
 class VRDisplayHost {
@@ -41,7 +42,7 @@ public:
   virtual void ZeroSensor() = 0;
   virtual void StartPresentation() = 0;
   virtual void StopPresentation() = 0;
-  virtual void NotifyVSync();
+  void NotifyVSync();
 
   void StartFrame();
   void SubmitFrame(VRLayerParent* aLayer,
@@ -85,18 +86,28 @@ protected:
                            const IntSize& aSize,
                            const gfx::Rect& aLeftEyeRect,
                            const gfx::Rect& aRightEyeRect) = 0;
+#elif defined(MOZ_ANDROID_GOOGLE_VR)
+  virtual bool SubmitFrame(const mozilla::layers::EGLImageDescriptor* aDescriptor,
+                           const gfx::Rect& aLeftEyeRect,
+                           const gfx::Rect& aRightEyeRect) = 0;
 #endif
 
   VRDisplayInfo mDisplayInfo;
 
-  nsTArray<RefPtr<VRLayerParent>> mLayers;
+  nsTArray<VRLayerParent *> mLayers;
   // Weak reference to mLayers entries are cleared in
   // VRLayerParent destructor
 
 protected:
   virtual VRHMDSensorState GetSensorState() = 0;
 
+  RefPtr<VRThread> mSubmitThread;
 private:
+  void SubmitFrameInternal(const layers::SurfaceDescriptor& aTexture,
+                           uint64_t aFrameId,
+                           const gfx::Rect& aLeftEyeRect,
+                           const gfx::Rect& aRightEyeRect);
+
   VRDisplayInfo mLastUpdateDisplayInfo;
   TimeStamp mLastFrameStart;
   bool mFrameStarted;

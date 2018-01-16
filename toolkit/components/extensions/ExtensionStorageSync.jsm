@@ -1,11 +1,12 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+"use strict";
 
 // TODO:
 // * find out how the Chrome implementation deals with conflicts
-
-"use strict";
 
 /* exported extensionIdToCollectionId */
 
@@ -47,7 +48,6 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
-  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
   BulkKeyBundle: "resource://services-sync/keys.js",
   CollectionKeyManager: "resource://services-sync/record.js",
   CommonUtils: "resource://services-common/utils.js",
@@ -277,7 +277,8 @@ class KeyRingEncryptionRemoteTransformer extends EncryptionRemoteTransformer {
       let kB = CommonUtils.hexToBytes(user.kB);
 
       let keyMaterial = CryptoUtils.hkdf(kB, undefined,
-                                       "identity.mozilla.com/picl/v1/chrome.storage.sync", 2 * 32);
+                                         "identity.mozilla.com/picl/v1/chrome.storage.sync",
+                                         2 * 32);
       let bundle = new BulkKeyBundle();
       // [encryptionKey, hmacKey]
       bundle.keyPair = [keyMaterial.slice(0, 32), keyMaterial.slice(32, 64)];
@@ -338,19 +339,27 @@ global.KeyRingEncryptionRemoteTransformer = KeyRingEncryptionRemoteTransformer;
  */
 async function storageSyncInit() {
   // Memoize the result to share the connection.
-  if (storageSyncInit.result === undefined) {
+  if (storageSyncInit.promise === undefined) {
     const path = "storage-sync.sqlite";
-    const connection = await FirefoxAdapter.openConnection({path});
-    storageSyncInit.result = {
-      connection,
-      kinto: new Kinto({
-        adapter: FirefoxAdapter,
-        adapterOptions: {sqliteHandle: connection},
-        timeout: KINTO_REQUEST_TIMEOUT,
-      }),
-    };
+    storageSyncInit.promise = FirefoxAdapter.openConnection({path})
+    .then(connection => {
+      return {
+        connection,
+        kinto: new Kinto({
+          adapter: FirefoxAdapter,
+          adapterOptions: {sqliteHandle: connection},
+          timeout: KINTO_REQUEST_TIMEOUT,
+          retry: 0,
+        }),
+      };
+    }).catch(e => {
+      // Ensure one failure doesn't break us forever.
+      Cu.reportError(e);
+      storageSyncInit.promise = undefined;
+      throw e;
+    });
   }
-  return storageSyncInit.result;
+  return storageSyncInit.promise;
 }
 
 // Kinto record IDs have two condtions:

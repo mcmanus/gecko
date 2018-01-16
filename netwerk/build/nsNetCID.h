@@ -11,7 +11,7 @@
  * netwerk/base/ classes
  */
 
-// service implementing nsIIOService and nsIIOService2.
+// service implementing nsIIOService
 #define NS_IOSERVICE_CONTRACTID \
     "@mozilla.org/network/io-service;1"
 #define NS_IOSERVICE_CID                             \
@@ -81,6 +81,16 @@
      {0x8c, 0xd0, 0x00, 0x60, 0xb0, 0xfc, 0x14, 0xa3} \
 }
 
+#define NS_SIMPLEURIMUTATOR_CONTRACTID \
+    "@mozilla.org/network/simple-uri-mutator;1"
+#define NS_SIMPLEURIMUTATOR_CID                       \
+{ /* 2be14592-28d4-4a83-8fe9-08e778849f6e */          \
+     0x2be14592,                                      \
+     0x28d4,                                          \
+     0x4a83,                                          \
+     {0x8f, 0xe9, 0x08, 0xe7, 0x78, 0x84, 0x9f, 0x6e} \
+}
+
 // component inheriting from the simple URI component and also
 // implementing nsINestedURI.
 #define NS_SIMPLENESTEDURI_CID                           \
@@ -113,16 +123,14 @@
     {0x93, 0x99, 0x00, 0x10, 0x4b, 0xa0, 0xfd, 0x40} \
 }
 
-// compoenent implementing nsIStandardURL, nsIURI, nsIURL
-// future replacement for nsStandardURL
-#define NS_RUSTURL_CONTRACTID \
-    "@mozilla.org/network/rust-url;1"
-#define NS_RUSTURL_CID                               \
-{ /* fd2d9f76-b34a-459e-b80e-447b03a1283a */         \
-    0xfd2d9f76,                                      \
-    0xb34a,                                          \
-    0x459e,                                          \
-    {0xb8, 0x0e, 0x44, 0x7b, 0x03, 0xa1, 0x28, 0x3a} \
+#define NS_STANDARDURLMUTATOR_CONTRACTID \
+    "@mozilla.org/network/standard-url-mutator;1"
+#define NS_STANDARDURLMUTATOR_CID                    \
+{ /* ce7d7da0-fb28-44a3-8c7b-000c165918f4 */         \
+    0xce7d7da0,                                      \
+    0xfb28,                                          \
+    0x44a3,                                          \
+    {0x8c, 0x7b, 0x00, 0x0c, 0x16, 0x59, 0x18, 0xf4} \
 }
 
 // service implementing nsIURLParser that assumes the URL will NOT contain an
@@ -481,6 +489,17 @@
     0xfc3d, \
     0x4f7b, \
   { 0x92, 0x05, 0xc3, 0x09, 0xce, 0xb2, 0xd6, 0x41 } \
+}
+
+// TRR service
+#define NS_TRR_CONTRACTID \
+    "@mozilla.org/network/TRR-service;1"
+#define NS_TRR_CID \
+{ /* fe951345-1cbd-4f5f-98b0-d26c1e21aec0 */ \
+    0xfe951345, \
+    0x1cbd, \
+    0x4f5f, \
+  { 0x98, 0xb0, 0xd2, 0x6c, 0x1e, 0x21, 0xae, 0xc0 } \
 }
 
 // service implementing nsIRequestContextService

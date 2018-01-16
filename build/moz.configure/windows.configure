@@ -228,10 +228,12 @@ def valid_ucrt_sdk_dir(windows_sdk_dir, windows_sdk_dir_env):
                               'Please install it.')
 
     version, sdk = sdks[valid_sdks[0]]
-    minimum_ucrt_version = Version('10.0.10586.0')
+    minimum_ucrt_version = Version('10.0.14393.0')
     if version < minimum_ucrt_version:
         raise FatalCheckError('Latest Universal CRT SDK version found %s'
-                              ' and minimum required is %s.'
+                              ' and minimum required is %s. This or a later'
+                              ' version can be installed using the Visual'
+                              ' Studio installer.'
                               % (version, minimum_ucrt_version))
 
     return namespace(
@@ -260,7 +262,7 @@ def vc_path(c_compiler):
         result = next
         if p.lower() == 'bin':
             break
-    return result
+    return os.path.normpath(result)
 
 
 @depends(vc_path, c_compiler)
@@ -427,9 +429,9 @@ def valid_mt(path):
 set_config('MSMANIFEST_TOOL', depends(valid_mt)(lambda x: bool(x)))
 
 
-link = check_prog('LINK', ('link.exe',), paths=vc_compiler_path)
+link = check_prog('LINKER', ('link.exe',), paths=vc_compiler_path)
 
-add_old_configure_assignment('LINK', link)
+add_old_configure_assignment('LINKER', link)
 
 
 # Normally, we'd just have CC, etc. set to absolute paths, but the build system
@@ -447,28 +449,3 @@ def alter_path(sdk_bin_path):
 set_config('PATH', alter_path)
 
 check_prog('MAKECAB', ('makecab.exe',))
-
-
-@depends(c_compiler, using_sccache)
-def need_showincludes_prefix(info, using_sccache):
-    # sccache does its own -showIncludes prefix checking.
-    if info.type in ('clang-cl', 'msvc') and not using_sccache:
-        return True
-
-
-@depends(c_compiler, when=need_showincludes_prefix)
-@imports(_from='re', _import='compile', _as='re_compile')
-def msvc_showincludes_prefix(c_compiler):
-    pattern = re_compile(br'^([^:]*:.*[ :] )(.*\\stdio.h)$')
-    output = try_invoke_compiler([c_compiler.compiler], 'C', '#include <stdio.h>\n',
-                                 ['-nologo', '-c', '-Fonul', '-showIncludes'])
-    for line in output.splitlines():
-        if line.endswith(b'\\stdio.h'):
-            m = pattern.match(line)
-            if m:
-                return m.group(1)
-    # We should have found the prefix and returned earlier
-    die('Cannot find cl -showIncludes prefix.')
-
-
-set_config('CL_INCLUDES_PREFIX', msvc_showincludes_prefix)

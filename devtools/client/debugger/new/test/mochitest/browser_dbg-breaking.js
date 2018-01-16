@@ -11,17 +11,18 @@ add_task(async function() {
   // reload.
   await addBreakpoint(dbg, "scripts.html", 18);
   reload(dbg);
+
+  await waitForDispatch(dbg, "NAVIGATE");
+  await waitForSelectedSource(dbg, "doc-scripts.html");
   await waitForPaused(dbg);
-  await waitForLoadedSource(dbg, "doc-scripts.html");
+
   assertPausedLocation(dbg);
   await resume(dbg);
 
-  const paused = waitForPaused(dbg);
-
   // Create an eval script that pauses itself.
   invokeInTab("doEval");
+  await waitForPaused(dbg);
 
-  await paused;
   await resume(dbg);
   const source = getSelectedSource(getState()).toJS();
   ok(!source.url, "It is an eval source");

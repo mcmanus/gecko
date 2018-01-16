@@ -6,9 +6,9 @@
 //!
 //! [calc]: https://drafts.csswg.org/css-values/#calc-notation
 
-use cssparser::{Parser, Token};
+use cssparser::{Parser, Token, NumberOrPercentage, AngleOrNumber};
 use parser::ParserContext;
-use std::ascii::AsciiExt;
+#[allow(unused_imports)] use std::ascii::AsciiExt;
 use std::fmt;
 use style_traits::{ToCss, ParseError, StyleParseErrorKind};
 use style_traits::values::specified::AllowedNumericType;
@@ -63,6 +63,10 @@ pub enum CalcUnit {
 }
 
 /// A struct to hold a simplified `<length>` or `<percentage>` expression.
+///
+/// In some cases, e.g. DOMMatrix, we support calc(), but reject all the relative lengths, and
+/// to_computed_pixel_length_without_context() handles this case. Therefore, if you want to add a
+/// new field, please make sure this function work properly.
 #[derive(Clone, Copy, Debug, Default, MallocSizeOf, PartialEq)]
 #[allow(missing_docs)]
 pub struct CalcLengthOrPercentage {
@@ -77,8 +81,6 @@ pub struct CalcLengthOrPercentage {
     pub ch: Option<CSSFloat>,
     pub rem: Option<CSSFloat>,
     pub percentage: Option<computed::Percentage>,
-    #[cfg(feature = "gecko")]
-    pub mozmm: Option<CSSFloat>,
 }
 
 impl ToCss for CalcLengthOrPercentage {
@@ -142,14 +144,7 @@ impl ToCss for CalcLengthOrPercentage {
         serialize!(ch);
         serialize_abs!(Cm);
         serialize!(em, ex);
-        serialize_abs!(In);
-
-        #[cfg(feature = "gecko")]
-        {
-            serialize!(mozmm);
-        }
-
-        serialize_abs!(Mm, Pc, Pt, Px, Q);
+        serialize_abs!(In, Mm, Pc, Pt, Px, Q);
         serialize!(rem, vh, vmax, vmin, vw);
 
         dest.write_str(")")
@@ -207,9 +202,8 @@ impl CalcNode {
     fn parse<'i, 't>(
         context: &ParserContext,
         input: &mut Parser<'i, 't>,
-        expected_unit: CalcUnit)
-        -> Result<Self, ParseError<'i>>
-    {
+        expected_unit: CalcUnit,
+    ) -> Result<Self, ParseError<'i>> {
         let mut root = Self::parse_product(context, input, expected_unit)?;
 
         loop {
@@ -398,10 +392,6 @@ impl CalcNode {
                         }
                     }
                     NoCalcLength::ServoCharacterWidth(..) => unreachable!(),
-                    #[cfg(feature = "gecko")]
-                    NoCalcLength::Physical(physical) => {
-                        ret.mozmm = Some(ret.mozmm.unwrap_or(0.) + physical.0 * factor);
-                    }
                 }
             }
             CalcNode::Sub(ref a, ref b) => {
@@ -621,5 +611,40 @@ impl CalcNode {
         Self::parse(context, input, CalcUnit::Time)?
             .to_time()
             .map_err(|()| input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
+    }
+
+    /// Convenience parsing function for `<number>` or `<percentage>`.
+    pub fn parse_number_or_percentage<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>
+    ) -> Result<NumberOrPercentage, ParseError<'i>> {
+        let node = Self::parse(context, input, CalcUnit::Percentage)?;
+
+        if let Ok(value) = node.to_number() {
+            return Ok(NumberOrPercentage::Number { value })
+        }
+
+        match node.to_percentage() {
+            Ok(unit_value) => Ok(NumberOrPercentage::Percentage { unit_value }),
+            Err(()) => Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError)),
+        }
+    }
+
+    /// Convenience parsing function for `<number>` or `<angle>`.
+    pub fn parse_angle_or_number<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>
+    ) -> Result<AngleOrNumber, ParseError<'i>> {
+        let node = Self::parse(context, input, CalcUnit::Angle)?;
+
+        if let Ok(angle) = node.to_angle() {
+            let degrees = angle.degrees();
+            return Ok(AngleOrNumber::Angle { degrees })
+        }
+
+        match node.to_number() {
+            Ok(value) => Ok(AngleOrNumber::Number { value }),
+            Err(()) => Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError)),
+        }
     }
 }

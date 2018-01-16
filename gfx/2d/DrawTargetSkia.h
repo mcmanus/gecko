@@ -160,7 +160,6 @@ public:
 
 private:
   friend class SourceSurfaceSkia;
-  void SnapshotDestroyed();
 
   void MarkChanged();
 
@@ -205,7 +204,8 @@ private:
   IntSize mSize;
   sk_sp<SkSurface> mSurface;
   SkCanvas* mCanvas;
-  SourceSurfaceSkia* mSnapshot;
+  RefPtr<SourceSurfaceSkia> mSnapshot;
+  Mutex mSnapshotLock;
 
 #ifdef MOZ_WIDGET_COCOA
   friend class BorrowedCGContext;

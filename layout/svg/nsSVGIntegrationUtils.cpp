@@ -419,7 +419,7 @@ public:
     basic->SetTarget(&aContext);
 
     gfxContextMatrixAutoSaveRestore autoSR(&aContext);
-    aContext.SetMatrix(aContext.CurrentMatrix().PreTranslate(-mUserSpaceToFrameSpaceOffset));
+    aContext.SetMatrixDouble(aContext.CurrentMatrixDouble().PreTranslate(-mUserSpaceToFrameSpaceOffset));
 
     mLayerManager->EndTransaction(FrameLayerBuilder::DrawPaintedLayer, mBuilder);
     basic->SetTarget(oldCtx);
@@ -440,7 +440,7 @@ static void
 PaintMaskSurface(const PaintFramesParams& aParams,
                  DrawTarget* aMaskDT, float aOpacity, nsStyleContext* aSC,
                  const nsTArray<nsSVGMaskFrame*>& aMaskFrames,
-                 const gfxMatrix& aMaskSurfaceMatrix,
+                 const Matrix& aMaskSurfaceMatrix,
                  const nsPoint& aOffsetToUserSpace)
 {
   MOZ_ASSERT(aMaskFrames.Length() > 0);
@@ -504,7 +504,7 @@ PaintMaskSurface(const PaintFramesParams& aParams,
         nsCSSRendering::PaintStyleImageLayerWithSC(params, *maskContext, aSC,
                                               *aParams.frame->StyleBorder());
     } else {
-      aParams.imgParams.result &= DrawResult::NOT_READY;
+      aParams.imgParams.result &= ImgDrawResult::NOT_READY;
     }
   }
 }
@@ -573,15 +573,15 @@ CreateAndPaintMaskSurface(const PaintFramesParams& aParams,
 
   // Set context's matrix on maskContext, offset by the maskSurfaceRect's
   // position. This makes sure that we combine the masks in device space.
-  gfxMatrix maskSurfaceMatrix =
-    ctx.CurrentMatrix() * gfxMatrix::Translation(-aParams.maskRect.TopLeft());
+  Matrix maskSurfaceMatrix =
+    ctx.CurrentMatrix() * Matrix::Translation(-aParams.maskRect.TopLeft());
 
   PaintMaskSurface(aParams, maskDT,
                    paintResult.opacityApplied ? aOpacity : 1.0,
                    aSC, aMaskFrames, maskSurfaceMatrix,
                    aOffsetToUserSpace);
 
-  if (aParams.imgParams.result != DrawResult::SUCCESS) {
+  if (aParams.imgParams.result != ImgDrawResult::SUCCESS) {
     // Now we know the status of mask resource since we used it while painting.
     // According to the return value of PaintMaskSurface, we know whether mask
     // resource is resolvable or not.
@@ -604,7 +604,7 @@ CreateAndPaintMaskSurface(const PaintFramesParams& aParams,
     return paintResult;
   }
 
-  paintResult.maskTransform = ToMatrix(maskSurfaceMatrix);
+  paintResult.maskTransform = maskSurfaceMatrix;
   if (!paintResult.maskTransform.Invert()) {
     return paintResult;
   }
@@ -711,8 +711,8 @@ MoveContextOriginToUserSpace(nsIFrame* aFrame, const PaintFramesParams& aParams)
 {
   EffectOffsets offset = ComputeEffectOffset(aFrame, aParams);
 
-  aParams.ctx.SetMatrix(
-    aParams.ctx.CurrentMatrix().PreTranslate(offset.offsetToUserSpaceInDevPx));
+  aParams.ctx.SetMatrixDouble(
+    aParams.ctx.CurrentMatrixDouble().PreTranslate(offset.offsetToUserSpaceInDevPx));
 
   return offset;
 }
@@ -852,7 +852,7 @@ nsSVGIntegrationUtils::PaintMask(const PaintFramesParams& aParams)
       maskUsage.shouldGenerateMaskLayer ? maskTarget->Snapshot() : nullptr;
     clipPathFrame->PaintClipMask(ctx, frame, cssPxToDevPxMatrix,
                                    &clipMaskTransform, maskSurface,
-                                   ToMatrix(ctx.CurrentMatrix()));
+                                   ctx.CurrentMatrix());
   }
 }
 

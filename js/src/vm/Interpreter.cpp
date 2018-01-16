@@ -46,6 +46,7 @@
 #include "vm/Scope.h"
 #include "vm/Shape.h"
 #include "vm/Stopwatch.h"
+#include "vm/StringBuffer.h"
 #include "vm/TraceLogging.h"
 
 #include "jsatominlines.h"
@@ -464,9 +465,9 @@ js::InternalCallOrConstruct(JSContext* cx, const CallArgs& args, MaybeConstruct 
     if (fun->isNative()) {
         MOZ_ASSERT_IF(construct, !fun->isConstructor());
         JSNative native = fun->native();
-        if (!construct && args.ignoresReturnValue()) {
+        if (!construct && args.ignoresReturnValue() && fun->hasJitInfo()) {
             const JSJitInfo* jitInfo = fun->jitInfo();
-            if (jitInfo && jitInfo->type() == JSJitInfo::IgnoresReturnValueNative)
+            if (jitInfo->type() == JSJitInfo::IgnoresReturnValueNative)
                 native = jitInfo->ignoresReturnValueMethod;
         }
         return CallJSNative(cx, native, args);
@@ -510,7 +511,7 @@ InternalCall(JSContext* cx, const AnyInvokeArgs& args)
         HandleValue fval = args.calleev();
         if (!fval.isObject() || !fval.toObject().is<JSFunction>() ||
             !fval.toObject().as<JSFunction>().isNative() ||
-            !fval.toObject().as<JSFunction>().jitInfo() ||
+            !fval.toObject().as<JSFunction>().hasJitInfo() ||
             fval.toObject().as<JSFunction>().jitInfo()->needsOuterizedThisObject())
         {
             JSObject* thisObj = &args.thisv().toObject();
@@ -1683,6 +1684,40 @@ class ReservedRooted : public RootedBase<T, ReservedRooted<T>>
     DECLARE_POINTER_ASSIGN_OPS(ReservedRooted, T)
 };
 
+void
+js::ReportInNotObjectError(JSContext* cx, HandleValue lref, int lindex,
+                           HandleValue rref, int rindex)
+{
+    auto uniqueCharsFromString = [](JSContext* cx, HandleValue ref) -> UniqueChars {
+        static const size_t MAX_STRING_LENGTH = 16;
+        RootedString str(cx, ref.toString());
+        if (str->length() > MAX_STRING_LENGTH) {
+            StringBuffer buf(cx);
+            if (!buf.appendSubstring(str, 0, MAX_STRING_LENGTH))
+                return nullptr;
+            if (!buf.append("..."))
+                return nullptr;
+            str = buf.finishString();
+            if (!str)
+                return nullptr;
+        }
+        return UniqueChars(JS_EncodeString(cx, str));
+    };
+
+    UniqueChars lbytes = lref.isString()
+                       ? uniqueCharsFromString(cx, lref)
+                       : DecompileValueGenerator(cx, lindex, lref, nullptr);
+    if (!lbytes)
+        return;
+    UniqueChars rbytes = rref.isString()
+                       ? uniqueCharsFromString(cx, rref)
+                       : DecompileValueGenerator(cx, rindex, rref, nullptr);
+    if (!rbytes)
+        return;
+    JS_ReportErrorNumberLatin1(cx, GetErrorMessage, nullptr, JSMSG_IN_NOT_OBJECT,
+                               lbytes.get(), rbytes.get());
+}
+
 static MOZ_NEVER_INLINE bool
 Interpret(JSContext* cx, RunState& state)
 {
@@ -1978,6 +2013,7 @@ CASE(JSOP_NOP)
 CASE(JSOP_NOP_DESTRUCTURING)
 CASE(JSOP_TRY_DESTRUCTURING_ITERCLOSE)
 CASE(JSOP_UNUSED126)
+CASE(JSOP_UNUSED206)
 CASE(JSOP_UNUSED223)
 CASE(JSOP_CONDSWITCH)
 {
@@ -2205,7 +2241,8 @@ CASE(JSOP_IN)
 {
     HandleValue rref = REGS.stackHandleAt(-1);
     if (!rref.isObject()) {
-        ReportValueError(cx, JSMSG_IN_NOT_OBJECT, -1, rref, nullptr);
+        HandleValue lref = REGS.stackHandleAt(-2);
+        ReportInNotObjectError(cx, lref, -2, rref, -1);
         goto error;
     }
     bool found;
@@ -2239,10 +2276,8 @@ END_CASE(JSOP_HASOWN)
 CASE(JSOP_ITER)
 {
     MOZ_ASSERT(REGS.stackDepth() >= 1);
-    uint8_t flags = GET_UINT8(REGS.pc);
     HandleValue val = REGS.stackHandleAt(-1);
-    ReservedRooted<JSObject*> iter(&rootObject0);
-    iter.set(ValueToIterator(cx, flags, val));
+    JSObject* iter = ValueToIterator(cx, val);
     if (!iter)
         goto error;
     REGS.sp[-1].setObject(*iter);
@@ -2615,7 +2650,7 @@ CASE(JSOP_NEG)
 {
     ReservedRooted<Value> val(&rootValue0, REGS.sp[-1]);
     MutableHandleValue res = REGS.stackHandleAt(-1);
-    if (!NegOperation(cx, script, REGS.pc, val, res))
+    if (!NegOperation(cx, val, res))
         goto error;
 }
 END_CASE(JSOP_NEG)
@@ -2695,7 +2730,7 @@ CASE(JSOP_TOID)
      */
     ReservedRooted<Value> idval(&rootValue1, REGS.sp[-1]);
     MutableHandleValue res = REGS.stackHandleAt(-1);
-    if (!ToIdOperation(cx, script, REGS.pc, idval, res))
+    if (!ToIdOperation(cx, idval, res))
         goto error;
 }
 END_CASE(JSOP_TOID)
@@ -2758,7 +2793,7 @@ END_CASE(JSOP_CHECKTHIS)
 CASE(JSOP_CHECKTHISREINIT)
 {
     if (!REGS.sp[-1].isMagic(JS_UNINITIALIZED_LEXICAL)) {
-        MOZ_ALWAYS_FALSE(ThrowInitializedThis(cx, REGS.fp()));
+        MOZ_ALWAYS_FALSE(ThrowInitializedThis(cx));
         goto error;
     }
 }
@@ -3348,7 +3383,7 @@ CASE(JSOP_TABLESWITCH)
     pc2 += JUMP_OFFSET_LEN;
     int32_t high = GET_JUMP_OFFSET(pc2);
 
-    i -= low;
+    i = uint32_t(i) - uint32_t(low);
     if ((uint32_t)i < (uint32_t)(high - low + 1)) {
         pc2 += JUMP_OFFSET_LEN + JUMP_OFFSET_LEN * i;
         int32_t off = (int32_t) GET_JUMP_OFFSET(pc2);
@@ -4099,15 +4134,6 @@ CASE(JSOP_FINALYIELDRVAL)
     GeneratorObject::finalSuspend(cx, gen);
     goto successful_return_continuation;
 }
-
-CASE(JSOP_ARRAYPUSH)
-{
-    ReservedRooted<JSObject*> obj(&rootObject0, &REGS.sp[-1].toObject());
-    if (!NewbornArrayPush(cx, obj, REGS.sp[-2]))
-        goto error;
-    REGS.sp -= 2;
-}
-END_CASE(JSOP_ARRAYPUSH)
 
 CASE(JSOP_CHECKCLASSHERITAGE)
 {
@@ -5230,7 +5256,7 @@ js::SuperFunOperation(JSContext* cx, HandleObject callee)
 }
 
 bool
-js::ThrowInitializedThis(JSContext* cx, AbstractFramePtr frame)
+js::ThrowInitializedThis(JSContext* cx)
 {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_REINIT_THIS);
     return false;

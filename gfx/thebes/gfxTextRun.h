@@ -842,6 +842,7 @@ private:
 class gfxFontGroup final : public gfxTextRunFactory {
 public:
     typedef mozilla::unicode::Script Script;
+    typedef gfxShapedText::CompressedGlyph CompressedGlyph;
 
     static void Shutdown(); // platform must call this to release the languageAtomService
 
@@ -1000,7 +1001,8 @@ public:
 
 protected:
     // search through pref fonts for a character, return nullptr if no matching pref font
-    gfxFont* WhichPrefFontSupportsChar(uint32_t aCh);
+    gfxFont* WhichPrefFontSupportsChar(uint32_t aCh,
+                                       uint32_t aNextCh);
 
     gfxFont* WhichSystemFontSupportsChar(uint32_t aCh, uint32_t aNextCh,
                                          Script aRunScript);

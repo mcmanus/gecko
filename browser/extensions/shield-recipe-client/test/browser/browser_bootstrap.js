@@ -31,12 +31,10 @@ const experimentPref3 = "test.initExperimentPrefs3";
 const experimentPref4 = "test.initExperimentPrefs4";
 
 decorate_task(
-  withPrefEnv({
-    clear: [[initPref1], [initPref2], [initPref3]],
-  }),
   withBootstrap,
   async function testInitShieldPrefs(Bootstrap) {
     const defaultBranch = Services.prefs.getDefaultBranch("");
+
     const prefDefaults = {
       [initPref1]: true,
       [initPref2]: 2,
@@ -74,6 +72,8 @@ decorate_task(
         `Pref ${pref} doesn't have a user value after being initialized.`,
       );
     }
+
+    defaultBranch.deleteBranch("test.");
   },
 );
 
@@ -250,5 +250,21 @@ decorate_task(
       }],
       "finishStartup should record original values of the prefs initExperimentPrefs changed",
     );
+  },
+);
+
+// Test that startup prefs are handled correctly when there is a value on the user branch but not the default branch.
+decorate_task(
+  withPrefEnv({
+    set: [
+      ["extensions.shield-recipe-client.startupExperimentPrefs.testing.does-not-exist", "foo"],
+      ["testing.does-not-exist", "foo"],
+    ],
+  }),
+  withBootstrap,
+  withStub(PreferenceExperiments, "recordOriginalValues"),
+  async function testInitExperimentPrefsNoDefaultValue(Bootstrap) {
+    Bootstrap.initExperimentPrefs();
+    ok(true, "initExperimentPrefs should not throw for non-existant prefs");
   },
 );

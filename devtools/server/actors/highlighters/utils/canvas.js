@@ -35,6 +35,31 @@ const { getViewportDimensions } = require("devtools/shared/layout/utils");
 // Using a fixed value should also solve bug 1348293.
 const CANVAS_SIZE = 4096;
 
+// The default color used for the canvas' font, fill and stroke colors.
+const DEFAULT_COLOR = "#9400FF";
+
+/**
+ * Draws a rect to the context given and applies a transformation matrix if passed.
+ * The coordinates are the start and end points of the rectangle's diagonal.
+ *
+ * @param  {CanvasRenderingContext2D} ctx
+ *         The 2D canvas context.
+ * @param  {Number} x1
+ *         The x-axis coordinate of the rectangle's diagonal start point.
+ * @param  {Number} y1
+ *         The y-axis coordinate of the rectangle's diagonal start point.
+ * @param  {Number} x2
+ *         The x-axis coordinate of the rectangle's diagonal end point.
+ * @param  {Number} y2
+ *         The y-axis coordinate of the rectangle's diagonal end point.
+ * @param  {Array} [matrix=identity()]
+ *         The transformation matrix to apply.
+ */
+function clearRect(ctx, x1, y1, x2, y2, matrix = identity()) {
+  let p = getPointsFromDiagonal(x1, y1, x2, y2, matrix);
+  ctx.clearRect(p[0].x, p[0].y, p[1].x - p[0].x, p[3].y - p[0].y);
+}
+
 /**
  * Draws an arrow-bubble rectangle in the provided canvas context.
  *
@@ -331,7 +356,7 @@ function getPointsFromDiagonal(x1, y1, x2, y2, matrix = identity()) {
 
 /**
  * Updates the <canvas> element's style in accordance with the current window's
- * devicePixelRatio, and the position calculated in `getCanvasPosition`. It also
+ * device pixel ratio, and the position calculated in `getCanvasPosition`. It also
  * clears the drawing context. This is called on canvas update after a scroll event where
  * `getCanvasPosition` updates the new canvasPosition.
  *
@@ -426,6 +451,8 @@ function updateCanvasPosition(canvasPosition, scrollPosition, window, windowDime
 }
 
 exports.CANVAS_SIZE = CANVAS_SIZE;
+exports.DEFAULT_COLOR = DEFAULT_COLOR;
+exports.clearRect = clearRect;
 exports.drawBubbleRect = drawBubbleRect;
 exports.drawLine = drawLine;
 exports.drawRect = drawRect;

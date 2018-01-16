@@ -209,7 +209,7 @@ public:
   // returned.
   void NotifyCompositorSessionLost(mozilla::layers::CompositorSession* aSession);
 
-  mozilla::CompositorVsyncDispatcher* GetCompositorVsyncDispatcher();
+  already_AddRefed<mozilla::CompositorVsyncDispatcher> GetCompositorVsyncDispatcher();
   void            CreateCompositorVsyncDispatcher();
   virtual void            CreateCompositor();
   virtual void            CreateCompositor(int aWidth, int aHeight);
@@ -416,6 +416,12 @@ public:
   void UpdateRootFrameMetrics(const ScreenPoint& aScrollOffset, const CSSToScreenScale& aZoom) override {};
   void RecvScreenPixels(mozilla::ipc::Shmem&& aMem, const ScreenIntSize& aSize) override {};
 #endif
+
+  /**
+   * Whether context menus should only appear on mouseup instead of mousedown,
+   * on OSes where they normally appear on mousedown (macOS, *nix).
+   */
+  static bool ShowContextMenuAfterMouseUp();
 
 protected:
   // These are methods for CompositorWidgetWrapper, and should only be

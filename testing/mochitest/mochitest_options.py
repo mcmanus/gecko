@@ -434,12 +434,6 @@ class MochitestArguments(ArgumentContainer):
           "default": False,
           "help": "Run tests with DMD active.",
           }],
-        [["--dmd-path"],
-         {"default": None,
-          "dest": "dmdPath",
-          "help": "Specifies the path to the directory containing the shared library for DMD.",
-          "suppress": True,
-          }],
         [["--dump-output-directory"],
          {"default": None,
           "dest": "dumpOutputDirectory",
@@ -701,16 +695,6 @@ class MochitestArguments(ArgumentContainer):
         if options.profilePath:
             options.profilePath = self.get_full_path(options.profilePath, parser.oldcwd)
 
-        if options.dmdPath:
-            options.dmdPath = self.get_full_path(options.dmdPath, parser.oldcwd)
-
-        if options.dmd and not options.dmdPath:
-            if build_obj:
-                options.dmdPath = build_obj.bindir
-            else:
-                parser.error(
-                    "could not find dmd libraries, specify them with --dmd-path")
-
         if options.utilityPath:
             options.utilityPath = self.get_full_path(options.utilityPath, parser.oldcwd)
 
@@ -831,10 +815,14 @@ class MochitestArguments(ArgumentContainer):
 
         options.leakThresholds = {
             "default": options.defaultLeakThreshold,
-            "tab": 3000,  # See dependencies of bug 1401764.
+            "tab": options.defaultLeakThreshold,
             # GMP rarely gets a log, but when it does, it leaks a little.
             "geckomediaplugin": 20000,
         }
+
+        # See the dependencies of bug 1401764.
+        if mozinfo.isWin:
+            options.leakThresholds["tab"] = 1000
 
         # XXX We can't normalize test_paths in the non build_obj case here,
         # because testRoot depends on the flavor, which is determined by the
@@ -1015,9 +1003,7 @@ class AndroidArguments(ArgumentContainer):
 
             if not options.robocopApk and build_obj:
                 if build_obj.substs.get('MOZ_BUILD_MOBILE_ANDROID_WITH_GRADLE'):
-                    options.robocopApk = os.path.join(build_obj.topobjdir, 'gradle', 'build',
-                                                      'mobile', 'android', 'app', 'outputs', 'apk',
-                                                      'app-official-photon-debug-androidTest.apk')
+                    options.robocopApk = build_obj.substs.get('GRADLE_ANDROID_APP_ANDROIDTEST_APK')
                 else:
                     options.robocopApk = os.path.join(build_obj.topobjdir, 'mobile', 'android',
                                                       'tests', 'browser',

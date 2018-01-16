@@ -29,7 +29,6 @@ interface HTMLDocument : Document {
   readonly attribute HTMLCollection forms;
   [Pure]
   readonly attribute HTMLCollection scripts;
-  NodeList getElementsByName(DOMString elementName);
 
   // dynamic markup insertion
   [CEReactions, Throws]
@@ -43,7 +42,7 @@ interface HTMLDocument : Document {
   [CEReactions, Throws]
   void writeln(DOMString... text);
 
-  [CEReactions, SetterThrows, NeedsSubjectPrincipal]
+  [CEReactions, SetterThrows, SetterNeedsSubjectPrincipal]
            attribute DOMString designMode;
   [CEReactions, Throws, NeedsSubjectPrincipal]
   boolean execCommand(DOMString commandId, optional boolean showUI = false,

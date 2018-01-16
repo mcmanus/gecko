@@ -11,6 +11,7 @@
 /* import-globals-from sync.js */
 /* import-globals-from findInPage.js */
 /* import-globals-from ../../../base/content/utilityOverlay.js */
+/* import-globals-from ../../../../toolkit/content/preferencesBindings.js */
 
 "use strict";
 
@@ -27,6 +28,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "ExtensionSettingsStore",
                                   "resource://gre/modules/ExtensionSettingsStore.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
                                   "resource://gre/modules/AddonManager.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "formAutofillParent",
+                                  "resource://formautofill/FormAutofillParent.jsm");
 
 var gLastHash = "";
 
@@ -55,7 +58,7 @@ function register_module(categoryName, categoryObject) {
 document.addEventListener("DOMContentLoaded", init_all, {once: true});
 
 function init_all() {
-  document.documentElement.instantApply = true;
+  Preferences.forceEnableInstantApply();
 
   gSubDialog.init();
   register_module("paneGeneral", gMainPane);
@@ -174,17 +177,19 @@ function gotoPref(aCategory) {
     categories.clearSelection();
   }
   window.history.replaceState(category, document.title);
-  search(category, "data-category", subcategory, "data-subcategory");
+  search(category, "data-category");
 
   let mainContent = document.querySelector(".main-content");
   mainContent.scrollTop = 0;
+
+  spotlight(subcategory);
 
   Services.telemetry
           .getHistogramById("FX_PREFERENCES_CATEGORY_OPENED_V2")
           .add(telemetryBucketForCategory(friendlyName));
 }
 
-function search(aQuery, aAttribute, aSubquery, aSubAttribute) {
+function search(aQuery, aAttribute) {
   let mainPrefPane = document.getElementById("mainPrefPane");
   let elements = mainPrefPane.children;
   for (let element of elements) {
@@ -196,14 +201,7 @@ function search(aQuery, aAttribute, aSubquery, aSubAttribute) {
         element.getAttribute("data-subpanel") == "true") {
       let attributeValue = element.getAttribute(aAttribute);
       if (attributeValue == aQuery) {
-        if (!element.classList.contains("header") &&
-            element.localName !== "preferences" &&
-            aSubquery && aSubAttribute) {
-          let subAttributeValue = element.getAttribute(aSubAttribute);
-          element.hidden = subAttributeValue != aSubquery;
-        } else {
-          element.hidden = false;
-        }
+        element.hidden = false;
       } else {
         element.hidden = true;
       }
@@ -221,12 +219,104 @@ function search(aQuery, aAttribute, aSubquery, aSubAttribute) {
   }
 }
 
-function helpButtonCommand() {
-  let pane = history.state;
-  let categories = document.getElementById("categories");
-  let helpTopic = categories.querySelector(".category[value=" + pane + "]")
-                            .getAttribute("helpTopic");
-  openHelpLink(helpTopic);
+async function spotlight(subcategory) {
+  let highlightedElements = document.querySelectorAll(".spotlight");
+  if (highlightedElements.length) {
+    for (let element of highlightedElements) {
+      element.classList.remove("spotlight");
+    }
+  }
+  if (subcategory) {
+    if (!gSearchResultsPane.categoriesInitialized) {
+      await waitForSystemAddonInjectionsFinished([{
+        isGoingToInject: formAutofillParent.initialized,
+        elementId: "formAutofillGroup",
+      }]);
+    }
+    scrollAndHighlight(subcategory);
+  }
+
+  /**
+   * Wait for system addons finished their dom injections.
+   * @param {Array} addons - The system addon information array.
+   * For example, the element is looked like
+   * { isGoingToInject: true, elementId: "formAutofillGroup" }.
+   * The `isGoingToInject` means the system addon will be visible or not,
+   * and the `elementId` means the id of the element will be injected into the dom
+   * if the `isGoingToInject` is true.
+   * @returns {Promise} Will resolve once all injections are finished.
+   */
+  function waitForSystemAddonInjectionsFinished(addons) {
+    return new Promise(resolve => {
+      let elementIdSet = new Set();
+      for (let addon of addons) {
+        if (addon.isGoingToInject) {
+          elementIdSet.add(addon.elementId);
+        }
+      }
+      if (elementIdSet.size) {
+        let observer = new MutationObserver(mutations => {
+          for (let mutation of mutations) {
+            for (let node of mutation.addedNodes) {
+              elementIdSet.delete(node.id);
+              if (elementIdSet.size === 0) {
+                observer.disconnect();
+                resolve();
+              }
+            }
+          }
+        });
+        let mainContent = document.querySelector(".main-content");
+        observer.observe(mainContent, {childList: true, subtree: true});
+        // Disconnect the mutation observer once there is any user input.
+        mainContent.addEventListener("scroll", disconnectMutationObserver);
+        window.addEventListener("mousedown", disconnectMutationObserver);
+        window.addEventListener("keydown", disconnectMutationObserver);
+        function disconnectMutationObserver() {
+          mainContent.removeEventListener("scroll", disconnectMutationObserver);
+          window.removeEventListener("mousedown", disconnectMutationObserver);
+          window.removeEventListener("keydown", disconnectMutationObserver);
+          observer.disconnect();
+        }
+      } else {
+        resolve();
+      }
+    });
+  }
+}
+
+function scrollAndHighlight(subcategory) {
+  let element = document.querySelector(`[data-subcategory="${subcategory}"]`);
+  if (element) {
+    let header = getClosestDisplayedHeader(element);
+    scrollContentTo(header);
+    element.classList.add("spotlight");
+  }
+}
+
+/**
+ * If there is no visible second level header it will return first level header,
+ * otherwise return second level header.
+ * @returns {Element} - The closest displayed header.
+ */
+function getClosestDisplayedHeader(element) {
+  let header = element.closest("groupbox");
+  let searchHeader = header.querySelector("caption.search-header");
+  if (searchHeader && searchHeader.hidden &&
+      header.previousSibling.classList.contains("subcategory")) {
+    header = header.previousSibling;
+  }
+  return header;
+}
+
+function scrollContentTo(element) {
+  const SEARCH_CONTAINER_HEIGHT = document.querySelector(".search-container").clientHeight;
+  let mainContent = document.querySelector(".main-content");
+  let top = element.getBoundingClientRect().top - SEARCH_CONTAINER_HEIGHT;
+  mainContent.scroll({
+    top,
+    behavior: "smooth",
+  });
 }
 
 function friendlyPrefCategoryNameToInternalName(aName) {
@@ -335,6 +425,8 @@ let extensionControlledContentIds = {
   "defaultSearch": "browserDefaultSearchExtensionContent",
 };
 
+let extensionControlledIds = {};
+
 /**
   * Check if a pref is being managed by an extension.
   */
@@ -358,9 +450,15 @@ async function handleControllingExtension(type, settingName) {
   // then we should treat the setting as not being controlled.
   // See https://bugzilla.mozilla.org/show_bug.cgi?id=1411046 for an example.
   if (addon) {
+    extensionControlledIds[settingName] = info.id;
     showControllingExtension(settingName, addon);
   } else {
-    hideControllingExtension(settingName);
+    if (extensionControlledIds[settingName] && !document.hidden) {
+      showEnableExtensionMessage(settingName);
+    } else {
+      hideControllingExtension(settingName);
+    }
+    delete extensionControlledIds[settingName];
   }
 
   return !!addon;
@@ -404,6 +502,26 @@ function hideControllingExtension(settingName) {
   getControllingExtensionEl(settingName).hidden = true;
 }
 
+function showEnableExtensionMessage(settingName) {
+  let extensionControlledContent = getControllingExtensionEl(settingName);
+  extensionControlledContent.classList.add("extension-controlled-disabled");
+  let icon = url => `<image src="${url}" class="extension-controlled-icon"/>`;
+  let addonIcon = icon("chrome://mozapps/skin/extensions/extensionGeneric-16.svg");
+  let toolbarIcon = icon("chrome://browser/skin/menu.svg");
+  let message = document
+    .getElementById("bundlePreferences")
+    .getFormattedString("extensionControlled.enable", [addonIcon, toolbarIcon]);
+  let description = extensionControlledContent.querySelector("description");
+  // eslint-disable-next-line no-unsanitized/property
+  description.innerHTML = message;
+  let dismissButton = document.createElement("image");
+  dismissButton.setAttribute("class", "extension-controlled-icon close-icon");
+  dismissButton.addEventListener("click", function dismissHandler() {
+    hideControllingExtension(settingName);
+    dismissButton.removeEventListener("click", dismissHandler);
+  });
+  description.appendChild(dismissButton);
+}
 
 function makeDisableControllingExtension(type, settingName) {
   return async function disableExtension() {

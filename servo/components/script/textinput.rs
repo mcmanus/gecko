@@ -21,7 +21,7 @@ pub enum Selection {
     NotSelected
 }
 
-#[derive(Clone, Copy, JSTraceable, MallocSizeOf, PartialEq)]
+#[derive(Clone, Copy, Debug, JSTraceable, MallocSizeOf, PartialEq)]
 pub enum SelectionDirection {
     Forward,
     Backward,
@@ -754,11 +754,27 @@ impl<T: ClipboardProvider> TextInput<T> {
         DOMString::from(content)
     }
 
+    /// Get a reference to the contents of a single-line text input. Panics if self is a multiline input.
+    pub fn single_line_content(&self) -> &DOMString {
+        assert!(!self.multiline);
+        &self.lines[0]
+    }
+
+    /// Get a mutable reference to the contents of a single-line text input. Panics if self is a multiline input.
+    pub fn single_line_content_mut(&mut self) -> &mut DOMString {
+        assert!(!self.multiline);
+        &mut self.lines[0]
+    }
+
     /// Set the current contents of the text input. If this is control supports multiple lines,
     /// any \n encountered will be stripped and force a new logical line.
     pub fn set_content(&mut self, content: DOMString) {
         self.lines = if self.multiline {
-            content.split('\n').map(DOMString::from).collect()
+            // https://html.spec.whatwg.org/multipage/#textarea-line-break-normalisation-transformation
+            content.replace("\r\n", "\n")
+                   .split(|c| c == '\n' || c == '\r')
+                   .map(DOMString::from)
+                   .collect()
         } else {
             vec!(content)
         };
@@ -809,7 +825,7 @@ impl<T: ClipboardProvider> TextInput<T> {
         }
     }
 
-    pub fn set_selection_range(&mut self, start: u32, end: u32) {
+    pub fn set_selection_range(&mut self, start: u32, end: u32, direction: SelectionDirection) {
         let mut start = start as usize;
         let mut end = end as usize;
         let text_end = self.get_content().len();
@@ -821,7 +837,9 @@ impl<T: ClipboardProvider> TextInput<T> {
             start = end;
         }
 
-        match self.selection_direction {
+        self.selection_direction = direction;
+
+        match direction {
             SelectionDirection::None |
             SelectionDirection::Forward => {
                 self.selection_begin = Some(self.get_text_point_for_absolute_point(start));

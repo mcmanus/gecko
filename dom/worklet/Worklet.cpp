@@ -130,7 +130,7 @@ public:
     }
 
     nsCOMPtr<nsIInputStreamPump> pump;
-    rv = NS_NewInputStreamPump(getter_AddRefs(pump), inputStream);
+    rv = NS_NewInputStreamPump(getter_AddRefs(pump), inputStream.forget());
     if (NS_WARN_IF(NS_FAILED(rv))) {
       RejectPromises(rv);
       return;
@@ -201,10 +201,11 @@ public:
 
     (void) new XPCWrappedNativeScope(cx, globalObj);
 
+    NS_ConvertUTF16toUTF8 url(mURL);
+
     JS::CompileOptions compileOptions(cx);
     compileOptions.setIntroductionType("Worklet");
-    compileOptions.setFileAndLine(NS_ConvertUTF16toUTF8(mURL).get(), 0);
-    compileOptions.setVersion(JSVERSION_DEFAULT);
+    compileOptions.setFileAndLine(url.get(), 0);
     compileOptions.setIsRunOnce(true);
     compileOptions.setNoScriptRval(true);
 

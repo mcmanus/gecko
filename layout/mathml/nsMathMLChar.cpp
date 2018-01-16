@@ -588,9 +588,9 @@ nsOpenTypeTable::MakeTextRun(DrawTarget*        aDrawTarget,
     NSToCoordRound(aAppUnitsPerDevPixel *
                    aFontGroup->GetFirstValidFont()->
                    GetGlyphHAdvance(aDrawTarget, aGlyph.glyphID));
-  gfxShapedText::CompressedGlyph g;
-  g.SetComplex(true, true, 1);
-  textRun->SetGlyphs(0, g, &detailedGlyph);
+  textRun->SetGlyphs(0,
+                     gfxShapedText::CompressedGlyph::MakeComplex(true, true, 1),
+                     &detailedGlyph);
 
   return textRun.forget();
 }
@@ -1953,7 +1953,7 @@ void nsDisplayMathMLCharDebug::Paint(nsDisplayListBuilder* aBuilder,
                          : PaintBorderFlags();
 
   // Since this is used only for debugging, we don't need to worry about
-  // tracking the DrawResult.
+  // tracking the ImgDrawResult.
   Unused <<
     nsCSSRendering::PaintBorder(presContext, *aCtx, mFrame, mVisibleRect,
                                 rect, styleContext, flags, skipSides);
@@ -1988,7 +1988,7 @@ nsMathMLChar::Display(nsDisplayListBuilder*   aBuilder,
   // purposes. Normally, users will set the background on the container frame.
   // paint the selection background -- beware MathML frames overlap a lot
   if (aSelectedRect && !aSelectedRect->IsEmpty()) {
-    aLists.BorderBackground()->AppendNewToTop(new (aBuilder)
+    aLists.BorderBackground()->AppendToTop(new (aBuilder)
       nsDisplayMathMLSelectionRect(aBuilder, aForFrame, *aSelectedRect));
   }
   else if (mRect.width && mRect.height) {
@@ -2008,7 +2008,7 @@ nsMathMLChar::Display(nsDisplayListBuilder*   aBuilder,
       nsDisplayMathMLCharDebug(aBuilder, aForFrame, mRect));
 #endif
   }
-  aLists.Content()->AppendNewToTop(new (aBuilder)
+  aLists.Content()->AppendToTop(new (aBuilder)
     nsDisplayMathMLCharForeground(aBuilder, aForFrame, this,
                                   aIndex,
                                   aSelectedRect &&
@@ -2025,16 +2025,16 @@ nsMathMLChar::ApplyTransforms(gfxContext* aThebesContext,
     nsPoint pt = r.TopRight();
     gfxPoint devPixelOffset(NSAppUnitsToFloatPixels(pt.x, aAppUnitsPerGfxUnit),
                             NSAppUnitsToFloatPixels(pt.y, aAppUnitsPerGfxUnit));
-    aThebesContext->SetMatrix(
-      aThebesContext->CurrentMatrix().PreTranslate(devPixelOffset).
-                                      PreScale(-mScaleX, mScaleY));
+    aThebesContext->SetMatrixDouble(
+      aThebesContext->CurrentMatrixDouble().PreTranslate(devPixelOffset).
+                                            PreScale(-mScaleX, mScaleY));
   } else {
     nsPoint pt = r.TopLeft();
     gfxPoint devPixelOffset(NSAppUnitsToFloatPixels(pt.x, aAppUnitsPerGfxUnit),
                             NSAppUnitsToFloatPixels(pt.y, aAppUnitsPerGfxUnit));
-    aThebesContext->SetMatrix(
-      aThebesContext->CurrentMatrix().PreTranslate(devPixelOffset).
-                                      PreScale(mScaleX, mScaleY));
+    aThebesContext->SetMatrixDouble(
+      aThebesContext->CurrentMatrixDouble().PreTranslate(devPixelOffset).
+                                            PreScale(mScaleX, mScaleY));
   }
 
   // update the bounding rectangle.

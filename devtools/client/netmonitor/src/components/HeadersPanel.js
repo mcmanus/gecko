@@ -4,12 +4,9 @@
 
 "use strict";
 
-const {
-  Component,
-  createFactory,
-  DOM,
-  PropTypes,
-} = require("devtools/client/shared/vendor/react");
+const { Component, createFactory } = require("devtools/client/shared/vendor/react");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
 const {
   getFormattedIPAndPort,
   getFormattedSize,
@@ -19,16 +16,27 @@ const {
   getHeadersURL,
   getHTTPStatusCodeURL,
 } = require("../utils/mdn-utils");
-const { writeHeaderText } = require("../utils/request-utils");
+const {
+  fetchNetworkUpdatePacket,
+  writeHeaderText,
+} = require("../utils/request-utils");
 const { sortObjectKeys } = require("../utils/sort-utils");
 
 // Components
-const { REPS, MODE } = require("devtools/client/shared/components/reps/reps");
-const MDNLink = createFactory(require("./MdnLink"));
 const PropertiesView = createFactory(require("./PropertiesView"));
 
-const { Rep } = REPS;
-const { button, div, input, textarea, span } = DOM;
+loader.lazyGetter(this, "MDNLink", function () {
+  return createFactory(require("./MdnLink"));
+});
+
+loader.lazyGetter(this, "Rep", function () {
+  return require("devtools/client/shared/components/reps/reps").REPS.Rep;
+});
+loader.lazyGetter(this, "MODE", function () {
+  return require("devtools/client/shared/components/reps/reps").MODE;
+});
+
+const { button, div, input, textarea, span } = dom;
 
 const EDIT_AND_RESEND = L10N.getStr("netmonitor.summary.editAndResend");
 const RAW_HEADERS = L10N.getStr("netmonitor.summary.rawHeaders");
@@ -52,6 +60,7 @@ const SUMMARY_VERSION = L10N.getStr("netmonitor.summary.version");
 class HeadersPanel extends Component {
   static get propTypes() {
     return {
+      connector: PropTypes.object.isRequired,
       cloneSelectedRequest: PropTypes.func.isRequired,
       request: PropTypes.object.isRequired,
       renderValue: PropTypes.func,
@@ -70,6 +79,24 @@ class HeadersPanel extends Component {
     this.toggleRawHeaders = this.toggleRawHeaders.bind(this);
     this.renderSummary = this.renderSummary.bind(this);
     this.renderValue = this.renderValue.bind(this);
+  }
+
+  componentDidMount() {
+    let { request, connector } = this.props;
+    fetchNetworkUpdatePacket(connector.requestData, request, [
+      "requestHeaders",
+      "responseHeaders",
+      "requestPostData",
+    ]);
+  }
+
+  componentWillReceiveProps(nextProps) {
+    let { request, connector } = nextProps;
+    fetchNetworkUpdatePacket(connector.requestData, request, [
+      "requestHeaders",
+      "responseHeaders",
+      "requestPostData",
+    ]);
   }
 
   getProperties(headers, title) {
@@ -170,8 +197,9 @@ class HeadersPanel extends Component {
       this.getProperties(uploadHeaders, REQUEST_HEADERS_FROM_UPLOAD),
     );
 
+    // not showing #hash in url
     let summaryUrl = urlDetails.unicodeUrl ?
-      this.renderSummary(SUMMARY_URL, new URL(urlDetails.unicodeUrl).origin) : null;
+      this.renderSummary(SUMMARY_URL, urlDetails.unicodeUrl.split("#")[0]) : null;
 
     let summaryMethod = method ?
       this.renderSummary(SUMMARY_METHOD, method) : null;
@@ -235,6 +263,8 @@ class HeadersPanel extends Component {
 
     let summaryVersion = httpVersion ?
       this.renderSummary(SUMMARY_VERSION, httpVersion) : null;
+    // display Status-Line above other response headers
+    let statusLine = `${httpVersion} ${status} ${statusText}\n`;
 
     let summaryRawHeaders;
     if (this.state.rawHeadersOpened) {
@@ -251,7 +281,7 @@ class HeadersPanel extends Component {
             div({ className: "raw-headers" },
               div({ className: "tabpanel-summary-label" }, RAW_HEADERS_RESPONSE),
               textarea({
-                value: writeHeaderText(responseHeaders.headers),
+                value: statusLine + writeHeaderText(responseHeaders.headers),
                 readOnly: true,
               }),
             ),

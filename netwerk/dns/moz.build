@@ -29,11 +29,13 @@ EXPORTS.mozilla.net += [
     'DNSRequestChild.h',
     'DNSRequestParent.h',
     'PDNSParams.h',
+    'TRRService.h',
 ]
 
 SOURCES += [
     'nsEffectiveTLDService.cpp', # Excluded from UNIFIED_SOURCES due to special build flags.
     'nsHostResolver.cpp', # Redefines LOG
+    'TRR.cpp',
 ]
 
 UNIFIED_SOURCES += [
@@ -46,6 +48,7 @@ UNIFIED_SOURCES += [
     'nsDNSService2.cpp',
     'nsIDNService.cpp',
     'punycode.c',
+    'TRRService.cpp',
 ]
 
 IPDL_SOURCES = [
@@ -71,5 +74,5 @@ LOCAL_INCLUDES += [
 
 USE_LIBS += ['icu']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

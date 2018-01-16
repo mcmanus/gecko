@@ -40,9 +40,9 @@ interface Element : Node {
   DOMString? getAttribute(DOMString name);
   [Pure]
   DOMString? getAttributeNS(DOMString? namespace, DOMString localName);
-  [CEReactions, NeedsSubjectPrincipal, Throws]
+  [CEReactions, NeedsSubjectPrincipal=NonSystem, Throws]
   void setAttribute(DOMString name, DOMString value);
-  [CEReactions, NeedsSubjectPrincipal, Throws]
+  [CEReactions, NeedsSubjectPrincipal=NonSystem, Throws]
   void setAttributeNS(DOMString? namespace, DOMString name, DOMString value);
   [CEReactions, Throws]
   void removeAttribute(DOMString name);
@@ -69,6 +69,8 @@ interface Element : Node {
   HTMLCollection getElementsByTagNameNS(DOMString? namespace, DOMString localName);
   [Pure]
   HTMLCollection getElementsByClassName(DOMString classNames);
+  [ChromeOnly, Pure]
+  sequence<Element> getElementsWithGrid();
 
   [CEReactions, Throws, Pure]
   Element? insertAdjacentElement(DOMString where, Element element); // historical
@@ -117,7 +119,7 @@ interface Element : Node {
    * called. If retargetToElement is true, then all events are targetted at
    * this element. If false, events can also fire at descendants of this
    * element.
-   * 
+   *
    */
   void setCapture(optional boolean retargetToElement = false);
 
@@ -152,8 +154,17 @@ interface Element : Node {
    */
   boolean scrollByNoFlush(long dx, long dy);
 
-  // Support reporting of Grid properties
+  // Support reporting of Flexbox properties
+  /**
+   * If this element has a display:flex or display:inline-flex style,
+   * this property returns an object with computed values for flex
+   * properties, as well as a property that exposes the flex lines
+   * in this container.
+   */
+  [ChromeOnly, Pure]
+  Flex? getAsFlexContainer();
 
+  // Support reporting of Grid properties
   /**
    * If this element has a display:grid or display:inline-grid style,
    * this property returns an object with computed values for grid
@@ -189,7 +200,7 @@ partial interface Element {
            attribute long scrollLeft;  // scroll on setting
   readonly attribute long scrollWidth;
   readonly attribute long scrollHeight;
-  
+
   void scroll(unrestricted double x, unrestricted double y);
   void scroll(optional ScrollToOptions options);
   void scrollTo(unrestricted double x, unrestricted double y);
@@ -219,7 +230,7 @@ partial interface Element {
 
 // http://domparsing.spec.whatwg.org/#extensions-to-the-element-interface
 partial interface Element {
-  [CEReactions, Pure,SetterThrows,TreatNullAs=EmptyString]
+  [CEReactions, SetterNeedsSubjectPrincipal=NonSystem, Pure, SetterThrows, TreatNullAs=EmptyString]
   attribute DOMString innerHTML;
   [CEReactions, Pure,SetterThrows,TreatNullAs=EmptyString]
   attribute DOMString outerHTML;
@@ -243,20 +254,18 @@ dictionary ShadowRootInit {
 // https://dom.spec.whatwg.org/#element
 partial interface Element {
   // Shadow DOM v1
-  [Throws, Pref="dom.webcomponents.enabled"]
+  [Throws, Func="nsDocument::IsWebComponentsEnabled"]
   ShadowRoot attachShadow(ShadowRootInit shadowRootInitDict);
-  [Pref="dom.webcomponents.enabled"]
+  [BinaryName="shadowRootByMode", Func="nsDocument::IsWebComponentsEnabled"]
   readonly attribute ShadowRoot? shadowRoot;
-  [Pref="dom.webcomponents.enabled"]
+  [BinaryName="assignedSlotByMode", Func="nsDocument::IsWebComponentsEnabled"]
   readonly attribute HTMLSlotElement? assignedSlot;
-  [CEReactions, Unscopable, SetterThrows, Pref="dom.webcomponents.enabled"]
+  [CEReactions, Unscopable, SetterThrows, Func="nsDocument::IsWebComponentsEnabled"]
            attribute DOMString slot;
 
   // [deprecated] Shadow DOM v0
-  [Throws, Pref="dom.webcomponents.enabled"]
+  [Throws, Func="nsDocument::IsWebComponentsEnabled"]
   ShadowRoot createShadowRoot();
-  [Pref="dom.webcomponents.enabled"]
-  NodeList getDestinationInsertionPoints();
 };
 
 Element implements ChildNode;

@@ -172,9 +172,6 @@ class MessageLogger(object):
         # Message buffering
         self.buffered_messages = []
 
-        # Failures reporting, after the end of the tests execution
-        self.errors = []
-
     def validate(self, obj):
         """Tests whether the given object is a valid structured message
         (only does a superficial validation)"""
@@ -245,8 +242,6 @@ class MessageLogger(object):
         # manually dump 'TEST-UNEXPECTED-FAIL'.
         if ('expected' in message or (message['action'] == 'log' and message[
                 'message'].startswith('TEST-UNEXPECTED'))):
-            # Saving errors/failures to be shown at the end of the test run
-            self.errors.append(message)
             self.restore_buffering = self.restore_buffering or self.buffering
             self.buffering = False
             if self.buffered_messages:
@@ -328,10 +323,29 @@ def call(*args, **kwargs):
 
 def killPid(pid, log):
     # see also https://bugzilla.mozilla.org/show_bug.cgi?id=911249#c58
-    try:
-        os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
-    except Exception as e:
-        log.info("Failed to kill process %d: %s" % (pid, str(e)))
+
+    if HAVE_PSUTIL:
+        # Kill a process tree (including grandchildren) with signal.SIGTERM
+        if pid == os.getpid():
+            raise RuntimeError("Error: trying to kill ourselves, not another process")
+        try:
+            parent = psutil.Process(pid)
+            children = parent.children(recursive=True)
+            children.append(parent)
+            for p in children:
+                p.send_signal(signal.SIGTERM)
+            gone, alive = psutil.wait_procs(children, timeout=30)
+            for p in gone:
+                log.info('psutil found pid %s dead' % p.pid)
+            for p in alive:
+                log.info('failed to kill pid %d after 30s' % p.pid)
+        except Exception as e:
+            log.info("Error: Failed to kill process %d: %s" % (pid, str(e)))
+    else:
+        try:
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        except Exception as e:
+            log.info("Failed to kill process %d: %s" % (pid, str(e)))
 
 
 if mozinfo.isWin:
@@ -439,8 +453,6 @@ class MochitestServer(object):
         args = [
             "-g",
             self._xrePath,
-            "-v",
-            "170",
             "-f",
             os.path.join(
                 self._httpdPath,
@@ -848,10 +860,13 @@ class MochitestDesktop(object):
         self.start_script_kwargs = {}
         self.urlOpts = []
 
-        commandline.log_formatters["tbpl"] = (
-            MochitestFormatter,
-            "Mochitest specific tbpl formatter")
-        self.log = commandline.setup_logging("mochitest", logger_options, {"tbpl": sys.stdout})
+        if logger_options.get('log'):
+            self.log = logger_options['log']
+        else:
+            commandline.log_formatters["tbpl"] = (
+                MochitestFormatter,
+                "Mochitest specific tbpl formatter")
+            self.log = commandline.setup_logging("mochitest", logger_options, {"tbpl": sys.stdout})
 
         self.message_logger = MessageLogger(
                 logger=self.log, buffering=quiet, structured=True)
@@ -1326,7 +1341,7 @@ toolbar#nav-bar {
     def logPreamble(self, tests):
         """Logs a suite_start message and test_start/test_end at the beginning of a run.
         """
-        self.log.suite_start(self.tests_by_manifest)
+        self.log.suite_start(self.tests_by_manifest, name='mochitest-{}'.format(self.flavor))
         for test in tests:
             if 'disabled' in test:
                 self.log.test_start(test['path'])
@@ -1484,7 +1499,7 @@ toolbar#nav-bar {
             self.tests_by_manifest[manifest_relpath].append(tp)
             self.prefs_by_manifest[manifest_relpath].add(test.get('prefs'))
 
-            if 'prefs' in test and not options.runByManifest:
+            if 'prefs' in test and not options.runByManifest and 'disabled' not in test:
                 self.log.error("parsing {}: runByManifest mode must be enabled to "
                                "set the `prefs` key".format(manifest_relpath))
                 sys.exit(1)
@@ -1605,7 +1620,6 @@ toolbar#nav-bar {
             xrePath=options.xrePath,
             env=env,
             debugger=debugger,
-            dmdPath=options.dmdPath,
             lsanPath=lsanPath,
             ubsanPath=ubsanPath)
 
@@ -1616,6 +1630,9 @@ toolbar#nav-bar {
 
         if options.headless:
             browserEnv["MOZ_HEADLESS"] = '1'
+
+        if options.dmd:
+            browserEnv["DMD"] = os.environ.get('DMD', '1')
 
         # These variables are necessary for correct application startup; change
         # via the commandline at your own risk.
@@ -1672,7 +1689,8 @@ toolbar#nav-bar {
                             killPid(proc.pid, self.log)
                         else:
                             self.log.info("NOT killing %s (not an orphan?)" % procd)
-                except:
+                except Exception as e:
+                    self.log.info("Warning: Unable to kill process %s: %s" % (pname, str(e)))
                     # may not be able to access process info for all processes
                     continue
         else:
@@ -1832,7 +1850,9 @@ toolbar#nav-bar {
            '5.1' in platform.version() and options.e10s:
             prefs['layers.acceleration.disabled'] = True
 
-        sandbox_whitelist_paths = [SCRIPT_DIR] + options.sandboxReadWhitelist
+        # Whitelist the _tests directory (../..) so that TESTING_JS_MODULES work
+        tests_dir = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+        sandbox_whitelist_paths = [tests_dir] + options.sandboxReadWhitelist
         if (platform.system() == "Linux" or
             platform.system() in ("Windows", "Microsoft")):
             # Trailing slashes are needed to indicate directories on Linux and Windows
@@ -1981,18 +2001,23 @@ toolbar#nav-bar {
         If parent_pid is provided, and psutil is available, returns children of
         parent_pid according to psutil.
         """
-        if parent_pid and HAVE_PSUTIL:
-            self.log.info("Determining child pids from psutil")
-            return [p.pid for p in psutil.Process(parent_pid).children()]
-
         rv = []
+        if parent_pid and HAVE_PSUTIL:
+            self.log.info("Determining child pids from psutil...")
+            try:
+                rv = [p.pid for p in psutil.Process(parent_pid).children()]
+                self.log.info(str(rv))
+            except psutil.NoSuchProcess:
+                self.log.warning("Failed to lookup children of pid %d" % parent_pid)
+
+        rv = set(rv)
         pid_re = re.compile(r'==> process \d+ launched child process (\d+)')
         with open(process_log) as fd:
             for line in fd:
                 self.log.info(line.rstrip())
                 m = pid_re.search(line)
                 if m:
-                    rv.append(int(m.group(1)))
+                    rv.add(int(m.group(1)))
         return rv
 
     def checkForZombies(self, processLog, utilityPath, debuggerInfo):
@@ -2026,6 +2051,24 @@ toolbar#nav-bar {
                     dump_screen=not debuggerInfo)
 
         return foundZombie
+
+    def checkForRunningBrowsers(self):
+        firefoxes = ""
+        if HAVE_PSUTIL:
+            attrs = ['pid', 'ppid', 'name', 'cmdline', 'username']
+            for proc in psutil.process_iter():
+                try:
+                    if 'firefox' in proc.name():
+                        firefoxes = "%s%s\n" % (firefoxes, proc.as_dict(attrs=attrs))
+                except:
+                    # may not be able to access process info for all processes
+                    continue
+        if len(firefoxes) > 0:
+            # In automation, this warning is unexpected and should be investigated.
+            # In local testing, this is probably okay, as long as the browser is not
+            # running a marionette server.
+            self.log.warning("Found 'firefox' running before starting test browser!")
+            self.log.warning(firefoxes)
 
     def runApp(self,
                testUrl,
@@ -2149,6 +2192,8 @@ toolbar#nav-bar {
                          'onTimeout': [timeoutHandler]}
             kp_kwargs['processOutputLine'] = [outputHandler]
 
+            self.checkForRunningBrowsers()
+
             # create mozrunner instance and start the system under test process
             self.lastTestSeen = self.test_name
             startTime = datetime.now()
@@ -2210,7 +2255,12 @@ toolbar#nav-bar {
             # https://github.com/mozilla/mozbase/blob/master/mozrunner/mozrunner/runner.py#L61
             # until bug 913970 is fixed regarding mozrunner `wait` not returning status
             # see https://bugzilla.mozilla.org/show_bug.cgi?id=913970
+            self.log.info("runtests.py | Waiting for browser...")
             status = proc.wait()
+            if status is None:
+                self.log.warning("runtests.py | Failed to get app exit code - running/crashed?")
+                # must report an integer to process_exit()
+                status = 0
             self.log.process_exit("Main app process", status)
             runner.process_handler = None
 
@@ -2511,7 +2561,7 @@ toolbar#nav-bar {
 
         # code for --run-by-manifest
         manifests = set(t['manifest'] for t in tests)
-        result = 1  # default value, if no tests are run.
+        result = 0
         origPrefs = options.extraPrefs[:]
         for m in sorted(manifests):
             self.log.info("Running manifest: {}".format(m))
@@ -2528,12 +2578,13 @@ toolbar#nav-bar {
             # by the user, since we need to create a new directory for each run. We would face
             # problems if we use the directory provided by the user.
             tests_in_manifest = [t['path'] for t in tests if t['manifest'] == m]
-            result = self.runMochitests(options, tests_in_manifest)
+            res = self.runMochitests(options, tests_in_manifest)
+            result = result or res
 
             # Dump the logging buffer
             self.message_logger.dump_buffered()
 
-            if result == -1:
+            if res == -1:
                 break
 
         e10s_mode = "e10s" if options.e10s else "non-e10s"
@@ -2554,6 +2605,10 @@ toolbar#nav-bar {
             print("3 INFO Todo:    %s" % self.counttodo)
             print("4 INFO Mode:    %s" % e10s_mode)
             print("5 INFO SimpleTest FINISHED")
+
+        if not result and not self.countpass:
+            # either tests failed or no tests run
+            result = 1
 
         return result
 
@@ -2768,11 +2823,28 @@ toolbar#nav-bar {
         self.log.info('Found child pids: %s' % child_pids)
 
         if HAVE_PSUTIL:
-            child_procs = [psutil.Process(pid) for pid in child_pids]
+            try:
+                browser_proc = [psutil.Process(browser_pid)]
+            except:
+                self.log.info('Failed to get proc for pid %d' % browser_pid)
+                browser_proc = []
+            try:
+                child_procs = [psutil.Process(pid) for pid in child_pids]
+            except:
+                self.log.info('Failed to get child procs')
+                child_procs = []
             for pid in child_pids:
                 self.killAndGetStack(pid, utilityPath, debuggerInfo,
                                      dump_screen=not debuggerInfo)
             gone, alive = psutil.wait_procs(child_procs, timeout=30)
+            for p in gone:
+                self.log.info('psutil found pid %s dead' % p.pid)
+            for p in alive:
+                self.log.warning('failed to kill pid %d after 30s' %
+                                 p.pid)
+            self.killAndGetStack(browser_pid, utilityPath, debuggerInfo,
+                                 dump_screen=not debuggerInfo)
+            gone, alive = psutil.wait_procs(browser_proc, timeout=30)
             for p in gone:
                 self.log.info('psutil found pid %s dead' % p.pid)
             for p in alive:
@@ -2788,8 +2860,8 @@ toolbar#nav-bar {
             if child_pids:
                 time.sleep(30)
 
-        self.killAndGetStack(browser_pid, utilityPath, debuggerInfo,
-                             dump_screen=not debuggerInfo)
+            self.killAndGetStack(browser_pid, utilityPath, debuggerInfo,
+                                 dump_screen=not debuggerInfo)
 
     class OutputHandler(object):
 
@@ -2865,10 +2937,10 @@ toolbar#nav-bar {
 
         def finish(self):
             if self.shutdownLeaks:
-                self.shutdownLeaks.process()
+                self.harness.countfail += self.shutdownLeaks.process()
 
             if self.lsanLeaks:
-                self.lsanLeaks.process()
+                self.harness.countfail += self.lsanLeaks.process()
 
         # output message handlers:
         # these take a message and return a message
@@ -2981,17 +3053,7 @@ def run_test_harness(parser, options):
                 logzip.write(logfile)
                 os.remove(logfile)
             logzip.close()
-
-    # don't dump failures if running from automation as treeherder already displays them
-    if build_obj:
-        if runner.message_logger.errors:
-            result = 1
-            runner.message_logger.logger.warning("The following tests failed:")
-            for error in runner.message_logger.errors:
-                runner.message_logger.logger.log_raw(error)
-
     runner.message_logger.finish()
-
     return result
 
 

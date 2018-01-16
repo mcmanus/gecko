@@ -25,8 +25,8 @@
 #include "nsAttrName.h"
 #include "nsEventShell.h"
 #include "nsIURI.h"
+#include "nsTextFormatter.h"
 #include "OuterDocAccessible.h"
-#include "Platform.h"
 #include "Role.h"
 #ifdef MOZ_ACCESSIBILITY_ATK
 #include "RootAccessibleWrap.h"
@@ -53,10 +53,7 @@
 #include "Logging.h"
 #endif
 
-#ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
-#endif
-
 #include "nsImageFrame.h"
 #include "nsINamed.h"
 #include "nsIObserverService.h"
@@ -95,6 +92,15 @@ using namespace mozilla;
 using namespace mozilla::a11y;
 using namespace mozilla::dom;
 
+/**
+ * Accessibility service force enable/disable preference.
+ * Supported values:
+ *   Accessibility is force enabled (accessibility should always be enabled): -1
+ *   Accessibility is enabled (will be started upon a request, default value): 0
+ *   Accessibility is force disabled (never enable accessibility):             1
+ */
+#define PREF_ACCESSIBILITY_FORCE_DISABLED "accessibility.force_disabled"
+
 ////////////////////////////////////////////////////////////////////////////////
 // Statics
 ////////////////////////////////////////////////////////////////////////////////
@@ -108,20 +114,22 @@ MustBeAccessible(nsIContent* aContent, DocAccessible* aDocument)
   if (aContent->GetPrimaryFrame()->IsFocusable())
     return true;
 
-  uint32_t attrCount = aContent->GetAttrCount();
-  for (uint32_t attrIdx = 0; attrIdx < attrCount; attrIdx++) {
-    const nsAttrName* attr = aContent->GetAttrNameAt(attrIdx);
-    if (attr->NamespaceEquals(kNameSpaceID_None)) {
-      nsAtom* attrAtom = attr->Atom();
-      nsDependentAtomString attrStr(attrAtom);
-      if (!StringBeginsWith(attrStr, NS_LITERAL_STRING("aria-")))
-        continue; // not ARIA
+  if (aContent->IsElement()) {
+    uint32_t attrCount = aContent->AsElement()->GetAttrCount();
+    for (uint32_t attrIdx = 0; attrIdx < attrCount; attrIdx++) {
+      const nsAttrName* attr = aContent->AsElement()->GetAttrNameAt(attrIdx);
+      if (attr->NamespaceEquals(kNameSpaceID_None)) {
+        nsAtom* attrAtom = attr->Atom();
+        nsDependentAtomString attrStr(attrAtom);
+        if (!StringBeginsWith(attrStr, NS_LITERAL_STRING("aria-")))
+          continue; // not ARIA
 
-      // A global state or a property and in case of token defined.
-      uint8_t attrFlags = aria::AttrCharacteristicsFor(attrAtom);
-      if ((attrFlags & ATTR_GLOBAL) && (!(attrFlags & ATTR_VALTOKEN) ||
-           nsAccUtils::HasDefinedARIAToken(aContent, attrAtom))) {
-        return true;
+        // A global state or a property and in case of token defined.
+        uint8_t attrFlags = aria::AttrCharacteristicsFor(attrAtom);
+        if ((attrFlags & ATTR_GLOBAL) && (!(attrFlags & ATTR_VALTOKEN) ||
+             nsAccUtils::HasDefinedARIAToken(aContent, attrAtom))) {
+          return true;
+        }
       }
     }
   }
@@ -201,13 +209,26 @@ static Accessible* New_HTMLLabel(nsIContent* aContent, Accessible* aContext)
 
 static Accessible* New_HTMLInput(nsIContent* aContent, Accessible* aContext)
 {
-  if (aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
-                            nsGkAtoms::checkbox, eIgnoreCase)) {
+  if (!aContent->IsElement()) {
+    return nullptr;
+  }
+
+  Element* element = aContent->AsElement();
+  if (element->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+                           nsGkAtoms::checkbox, eIgnoreCase)) {
     return new HTMLCheckboxAccessible(aContent, aContext->Document());
   }
-  if (aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
-                            nsGkAtoms::radio, eIgnoreCase)) {
+  if (element->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+                           nsGkAtoms::radio, eIgnoreCase)) {
     return new HTMLRadioButtonAccessible(aContent, aContext->Document());
+  }
+  if (element->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+                           nsGkAtoms::time, eIgnoreCase)) {
+    return new EnumRoleAccessible<roles::GROUPING>(aContent, aContext->Document());
+  }
+  if (element->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+                           nsGkAtoms::date, eIgnoreCase)) {
+    return new EnumRoleAccessible<roles::DATE_EDITOR>(aContent, aContext->Document());
   }
   return nullptr;
 }
@@ -245,7 +266,8 @@ static Accessible*
 New_HTMLTableHeaderCellIfScope(nsIContent* aContent, Accessible* aContext)
 {
   if (aContext->IsTableRow() && aContext->GetContent() == aContent->GetParent() &&
-      aContent->HasAttr(kNameSpaceID_None, nsGkAtoms::scope))
+      aContent->IsElement() &&
+      aContent->AsElement()->HasAttr(kNameSpaceID_None, nsGkAtoms::scope))
     return new HTMLTableHeaderCellAccessibleWrap(aContent, aContext->Document());
   return nullptr;
 }
@@ -255,18 +277,32 @@ static Accessible*
 New_MaybeImageOrToolbarButtonAccessible(nsIContent* aContent,
                                         Accessible* aContext)
 {
-  if (aContent->HasAttr(kNameSpaceID_None, nsGkAtoms::onclick)) {
+  if (aContent->IsElement() &&
+      aContent->AsElement()->HasAttr(kNameSpaceID_None, nsGkAtoms::onclick)) {
     return new XULToolbarButtonAccessible(aContent, aContext->Document());
   }
 
   // Don't include nameless images in accessible tree.
-  if (!aContent->HasAttr(kNameSpaceID_None, nsGkAtoms::tooltiptext)) {
+  if (!aContent->IsElement() ||
+      !aContent->AsElement()->HasAttr(kNameSpaceID_None, nsGkAtoms::tooltiptext)) {
     return nullptr;
   }
 
   return new ImageAccessibleWrap(aContent, aContext->Document());
 }
+static Accessible*
+New_MenuSeparator(nsIContent* aContent, Accessible* aContext)
+  { return new XULMenuSeparatorAccessible(aContent, aContext->Document()); }
+
+static Accessible*
+New_StatusBarAccessible(nsIContent* aContent, Accessible* aContext)
+  { return new XULStatusBarAccessible(aContent, aContext->Document()); }
 #endif
+
+/**
+ * Cached value of the PREF_ACCESSIBILITY_FORCE_DISABLED preference.
+ */
+static int32_t sPlatformDisabledState = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Markup maps array.
@@ -697,7 +733,7 @@ nsAccessibilityService::UpdateListBullet(nsIPresShell* aPresShell,
 void
 nsAccessibilityService::UpdateImageMap(nsImageFrame* aImageFrame)
 {
-  nsIPresShell* presShell = aImageFrame->PresContext()->PresShell();
+  nsIPresShell* presShell = aImageFrame->PresShell();
   DocAccessible* document = GetDocAccessible(presShell);
   if (document) {
     Accessible* accessible =
@@ -1355,11 +1391,9 @@ nsAccessibilityService::Init()
   NS_ADDREF(gApplicationAccessible); // will release in Shutdown()
   gApplicationAccessible->Init();
 
-#ifdef MOZ_CRASHREPORTER
   CrashReporter::
     AnnotateCrashReport(NS_LITERAL_CSTRING("Accessibility"),
                         NS_LITERAL_CSTRING("Active"));
-#endif
 
 #ifdef XP_WIN
   sPendingPlugins = new nsTArray<nsCOMPtr<nsIContent> >;
@@ -1384,8 +1418,7 @@ nsAccessibilityService::Shutdown()
   // if someone will try to operate with it.
 
   MOZ_ASSERT(gConsumers, "Accessibility was shutdown already");
-
-  gConsumers = 0;
+  UnsetConsumers(eXPCOM | eMainProcess | ePlatformAPI);
 
   // Remove observers.
   nsCOMPtr<nsIObserverService> observerService =
@@ -1522,24 +1555,20 @@ nsAccessibilityService::CreateAccessibleByType(nsIContent* aContent,
 
     accessible = new XULMenupopupAccessible(aContent, aDoc);
 
-  } else if(role.EqualsLiteral("xul:menuseparator")) {
-    accessible = new XULMenuSeparatorAccessible(aContent, aDoc);
-
   } else if(role.EqualsLiteral("xul:pane")) {
     accessible = new EnumRoleAccessible<roles::PANE>(aContent, aDoc);
 
   } else if (role.EqualsLiteral("xul:panel")) {
-    if (aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::noautofocus,
-                              nsGkAtoms::_true, eCaseMatters))
+    if (aContent->IsElement() &&
+        aContent->AsElement()->AttrValueIs(kNameSpaceID_None,
+                                           nsGkAtoms::noautofocus,
+                                           nsGkAtoms::_true, eCaseMatters))
       accessible = new XULAlertAccessible(aContent, aDoc);
     else
       accessible = new EnumRoleAccessible<roles::PANE>(aContent, aDoc);
 
   } else if (role.EqualsLiteral("xul:progressmeter")) {
     accessible = new XULProgressMeterAccessible(aContent, aDoc);
-
-  } else if (role.EqualsLiteral("xul:statusbar")) {
-    accessible = new XULStatusBarAccessible(aContent, aDoc);
 
   } else if (role.EqualsLiteral("xul:scale")) {
     accessible = new XULSliderAccessible(aContent, aDoc);
@@ -1746,15 +1775,22 @@ nsAccessibilityService::MarkupAttributes(const nsIContent* aContent,
 
     if (info->DOMAttrName) {
       if (info->DOMAttrValue) {
-        if (aContent->AttrValueIs(kNameSpaceID_None, *info->DOMAttrName,
-                                  *info->DOMAttrValue, eCaseMatters)) {
+        if (aContent->IsElement() &&
+            aContent->AsElement()->AttrValueIs(kNameSpaceID_None,
+                                               *info->DOMAttrName,
+                                               *info->DOMAttrValue,
+                                               eCaseMatters)) {
           nsAccUtils::SetAccAttr(aAttributes, *info->name, *info->DOMAttrValue);
         }
         continue;
       }
 
       nsAutoString value;
-      aContent->GetAttr(kNameSpaceID_None, *info->DOMAttrName, value);
+
+      if (aContent->IsElement()) {
+        aContent->AsElement()->GetAttr(kNameSpaceID_None, *info->DOMAttrName, value);
+      }
+
       if (!value.IsEmpty())
         nsAccUtils::SetAccAttr(aAttributes, *info->name, value);
 
@@ -1843,9 +1879,63 @@ nsAccessibilityService::CreateAccessibleForXULTree(nsIContent* aContent,
 }
 #endif
 
+void
+nsAccessibilityService::SetConsumers(uint32_t aConsumers) {
+  if (gConsumers & aConsumers) {
+    return;
+  }
+
+  gConsumers |= aConsumers;
+  NotifyOfConsumersChange();
+}
+
+void
+nsAccessibilityService::UnsetConsumers(uint32_t aConsumers) {
+  if (!(gConsumers & aConsumers)) {
+    return;
+  }
+
+  gConsumers &= ~aConsumers;
+  NotifyOfConsumersChange();
+}
+
+void
+nsAccessibilityService::GetConsumers(nsAString& aString)
+{
+  const char16_t* kJSONFmt =
+    u"{ \"XPCOM\": %s, \"MainProcess\": %s, \"PlatformAPI\": %s }";
+  nsString json;
+  nsTextFormatter::ssprintf(json, kJSONFmt,
+    gConsumers & eXPCOM ? "true" : "false",
+    gConsumers & eMainProcess ? "true" : "false",
+    gConsumers & ePlatformAPI ? "true" : "false");
+  aString.Assign(json);
+}
+
+void
+nsAccessibilityService::NotifyOfConsumersChange()
+{
+  nsCOMPtr<nsIObserverService> observerService =
+    mozilla::services::GetObserverService();
+
+  if (!observerService) {
+    return;
+  }
+
+  nsAutoString consumers;
+  GetConsumers(consumers);
+  observerService->NotifyObservers(
+    nullptr, "a11y-consumers-changed", consumers.get());
+}
+
 nsAccessibilityService*
 GetOrCreateAccService(uint32_t aNewConsumer)
 {
+  // Do not initialize accessibility if it is force disabled.
+  if (PlatformDisabledState() == ePlatformIsDisabled) {
+    return nullptr;
+  }
+
   if (!nsAccessibilityService::gAccessibilityService) {
     RefPtr<nsAccessibilityService> service = new nsAccessibilityService();
     if (!service->Init()) {
@@ -1856,7 +1946,7 @@ GetOrCreateAccService(uint32_t aNewConsumer)
 
   MOZ_ASSERT(nsAccessibilityService::gAccessibilityService,
              "Accessible service is not initialized.");
-  nsAccessibilityService::gConsumers |= aNewConsumer;
+  nsAccessibilityService::gAccessibilityService->SetConsumers(aNewConsumer);
   return nsAccessibilityService::gAccessibilityService;
 }
 
@@ -1874,14 +1964,15 @@ MaybeShutdownAccService(uint32_t aFormerConsumer)
       xpcAccessibilityService::IsInUse() ||
       accService->HasXPCDocuments()) {
     // Still used by XPCOM
-    nsAccessibilityService::gConsumers =
-      (nsAccessibilityService::gConsumers & ~aFormerConsumer) |
-      nsAccessibilityService::eXPCOM;
+    if (aFormerConsumer != nsAccessibilityService::eXPCOM) {
+      // Only unset non-XPCOM consumers.
+      accService->UnsetConsumers(aFormerConsumer);
+    }
     return;
   }
 
   if (nsAccessibilityService::gConsumers & ~aFormerConsumer) {
-    nsAccessibilityService::gConsumers &= ~aFormerConsumer;
+    accService->UnsetConsumers(aFormerConsumer);
   } else {
     accService->Shutdown(); // Will unset all nsAccessibilityService::gConsumers
   }
@@ -1928,17 +2019,39 @@ XPCApplicationAcc()
 EPlatformDisabledState
 PlatformDisabledState()
 {
-  static int disabledState = 0xff;
-
-  if (disabledState == 0xff) {
-    disabledState = Preferences::GetInt("accessibility.force_disabled", 0);
-    if (disabledState < ePlatformIsForceEnabled)
-      disabledState = ePlatformIsForceEnabled;
-    else if (disabledState > ePlatformIsDisabled)
-      disabledState = ePlatformIsDisabled;
+  static bool platformDisabledStateCached = false;
+  if (platformDisabledStateCached) {
+    return static_cast<EPlatformDisabledState>(sPlatformDisabledState);
   }
 
-  return (EPlatformDisabledState)disabledState;
+  platformDisabledStateCached = true;
+  Preferences::RegisterCallback(PrefChanged, PREF_ACCESSIBILITY_FORCE_DISABLED);
+  return ReadPlatformDisabledState();
+}
+
+EPlatformDisabledState
+ReadPlatformDisabledState()
+{
+  sPlatformDisabledState = Preferences::GetInt(PREF_ACCESSIBILITY_FORCE_DISABLED, 0);
+  if (sPlatformDisabledState < ePlatformIsForceEnabled) {
+    sPlatformDisabledState = ePlatformIsForceEnabled;
+  } else if (sPlatformDisabledState > ePlatformIsDisabled){
+    sPlatformDisabledState = ePlatformIsDisabled;
+  }
+
+  return static_cast<EPlatformDisabledState>(sPlatformDisabledState);
+}
+
+void
+PrefChanged(const char* aPref, void* aClosure)
+{
+  if (ReadPlatformDisabledState() == ePlatformIsDisabled) {
+    // Force shut down accessibility.
+    nsAccessibilityService* accService = nsAccessibilityService::gAccessibilityService;
+    if (accService && !accService->IsShutdown()) {
+      accService->Shutdown();
+    }
+  }
 }
 
 }

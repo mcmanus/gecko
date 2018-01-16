@@ -10,6 +10,8 @@ use element_state::ElementState;
 use fallible::FallibleVec;
 use hashglobe::FailedAllocationError;
 use selector_map::{MaybeCaseInsensitiveHashMap, SelectorMap, SelectorMapEntry};
+#[cfg(feature = "gecko")]
+use selector_parser::Direction;
 use selector_parser::SelectorImpl;
 use selectors::attr::NamespaceConstraint;
 use selectors::parser::{Combinator, Component};
@@ -19,21 +21,15 @@ use smallvec::SmallVec;
 
 #[cfg(feature = "gecko")]
 /// Gets the element state relevant to the given `:dir` pseudo-class selector.
-pub fn dir_selector_to_state(s: &[u16]) -> ElementState {
-    use element_state::ElementState;
-
-    // Jump through some hoops to deal with our Box<[u16]> thing.
-    const LTR: [u16; 4] = [b'l' as u16, b't' as u16, b'r' as u16, 0];
-    const RTL: [u16; 4] = [b'r' as u16, b't' as u16, b'l' as u16, 0];
-
-    if LTR == *s {
-        ElementState::IN_LTR_STATE
-    } else if RTL == *s {
-        ElementState::IN_RTL_STATE
-    } else {
-        // :dir(something-random) is a valid selector, but shouldn't
-        // match anything.
-        ElementState::empty()
+pub fn dir_selector_to_state(dir: &Direction) -> ElementState {
+    match *dir {
+        Direction::Ltr => ElementState::IN_LTR_STATE,
+        Direction::Rtl => ElementState::IN_RTL_STATE,
+        Direction::Other(_) => {
+            // :dir(something-random) is a valid selector, but shouldn't
+            // match anything.
+            ElementState::empty()
+        },
     }
 }
 
@@ -67,6 +63,25 @@ pub struct Dependency {
     pub selector_offset: usize,
 }
 
+/// The kind of elements down the tree this dependency may affect.
+#[derive(Debug, Eq, PartialEq)]
+pub enum DependencyInvalidationKind {
+    /// This dependency may affect the element that changed itself.
+    Element,
+    /// This dependency affects the style of the element itself, and also the
+    /// style of its descendants.
+    ///
+    /// TODO(emilio): Each time this feels more of a hack for eager pseudos...
+    ElementAndDescendants,
+    /// This dependency may affect descendants down the tree.
+    Descendants,
+    /// This dependency may affect siblings to the right of the element that
+    /// changed.
+    Siblings,
+    /// This dependency may affect slotted elements of the element that changed.
+    SlottedElements,
+}
+
 impl Dependency {
     /// Returns the combinator to the right of the partial selector this
     /// dependency represents.
@@ -80,28 +95,19 @@ impl Dependency {
         Some(self.selector.combinator_at_match_order(self.selector_offset - 1))
     }
 
-    /// Whether this dependency affects the style of the element.
-    ///
-    /// NOTE(emilio): pseudo-elements need to be here to account for eager
-    /// pseudos, since they just grab the style from the originating element.
-    ///
-    /// TODO(emilio): We could look at the selector itself to see if it's an
-    /// eager pseudo, and return false here if not.
-    pub fn affects_self(&self) -> bool {
-        matches!(self.combinator(), None | Some(Combinator::PseudoElement))
-    }
-
-    /// Whether this dependency may affect style of any of our descendants.
-    pub fn affects_descendants(&self) -> bool {
-        matches!(self.combinator(), Some(Combinator::PseudoElement) |
-                                    Some(Combinator::Child) |
-                                    Some(Combinator::Descendant))
-    }
-
-    /// Whether this dependency may affect style of any of our later siblings.
-    pub fn affects_later_siblings(&self) -> bool {
-        matches!(self.combinator(), Some(Combinator::NextSibling) |
-                                    Some(Combinator::LaterSibling))
+    /// The kind of invalidation that this would generate.
+    pub fn invalidation_kind(&self) -> DependencyInvalidationKind {
+        match self.combinator() {
+            None => DependencyInvalidationKind::Element,
+            Some(Combinator::Child) |
+            Some(Combinator::Descendant) => DependencyInvalidationKind::Descendants,
+            Some(Combinator::LaterSibling) |
+            Some(Combinator::NextSibling) => DependencyInvalidationKind::Siblings,
+            // TODO(emilio): We could look at the selector itself to see if it's
+            // an eager pseudo, and return only Descendants here if not.
+            Some(Combinator::PseudoElement) => DependencyInvalidationKind::ElementAndDescendants,
+            Some(Combinator::SlotAssignment) => DependencyInvalidationKind::SlottedElements,
+        }
     }
 }
 
@@ -342,8 +348,8 @@ impl SelectorVisitor for CompoundSelectorDependencyCollector {
                 self.other_attributes |= pc.is_attr_based();
                 self.state |= match *pc {
                     #[cfg(feature = "gecko")]
-                    NonTSPseudoClass::Dir(ref s) => {
-                        dir_selector_to_state(s)
+                    NonTSPseudoClass::Dir(ref dir) => {
+                        dir_selector_to_state(dir)
                     }
                     _ => pc.state_flag(),
                 };

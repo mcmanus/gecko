@@ -9,11 +9,11 @@
 
 use super::UnknownUnit;
 use length::Length;
-use scale_factor::ScaleFactor;
+use scale::TypedScale;
 use vector::{TypedVector2D, vec2};
 use num::*;
 
-use num_traits::NumCast;
+use num_traits::{NumCast, Signed};
 use std::fmt;
 use std::ops::{Add, Div, Mul, Sub};
 use std::marker::PhantomData;
@@ -155,18 +155,18 @@ impl<T: Copy + Div<T, Output=T>, U> Div<T> for TypedSize2D<T, U> {
     }
 }
 
-impl<T: Copy + Mul<T, Output=T>, U1, U2> Mul<ScaleFactor<T, U1, U2>> for TypedSize2D<T, U1> {
+impl<T: Copy + Mul<T, Output=T>, U1, U2> Mul<TypedScale<T, U1, U2>> for TypedSize2D<T, U1> {
     type Output = TypedSize2D<T, U2>;
     #[inline]
-    fn mul(self, scale: ScaleFactor<T, U1, U2>) -> TypedSize2D<T, U2> {
+    fn mul(self, scale: TypedScale<T, U1, U2>) -> TypedSize2D<T, U2> {
         TypedSize2D::new(self.width * scale.get(), self.height * scale.get())
     }
 }
 
-impl<T: Copy + Div<T, Output=T>, U1, U2> Div<ScaleFactor<T, U1, U2>> for TypedSize2D<T, U2> {
+impl<T: Copy + Div<T, Output=T>, U1, U2> Div<TypedScale<T, U1, U2>> for TypedSize2D<T, U2> {
     type Output = TypedSize2D<T, U1>;
     #[inline]
-    fn div(self, scale: ScaleFactor<T, U1, U2>) -> TypedSize2D<T, U1> {
+    fn div(self, scale: TypedScale<T, U1, U2>) -> TypedSize2D<T, U1> {
         TypedSize2D::new(self.width / scale.get(), self.height / scale.get())
     }
 }
@@ -217,6 +217,11 @@ impl<T: NumCast + Copy, Unit> TypedSize2D<T, Unit> {
         self.cast().unwrap()
     }
 
+    /// Cast into an `f64` size.
+    pub fn to_f64(&self) -> TypedSize2D<f64, Unit> {
+        self.cast().unwrap()
+    }
+
     /// Cast into an `uint` size, truncating decimals if any.
     ///
     /// When casting from floating point sizes, it is worth considering whether
@@ -242,6 +247,17 @@ impl<T: NumCast + Copy, Unit> TypedSize2D<T, Unit> {
     /// the desired conversion behavior.
     pub fn to_i64(&self) -> TypedSize2D<i64, Unit> {
         self.cast().unwrap()
+    }
+}
+
+impl<T, U> TypedSize2D<T, U>
+where T: Signed {
+    pub fn abs(&self) -> Self {
+        size2(self.width.abs(), self.height.abs())
+    }
+
+    pub fn is_positive(&self) -> bool {
+        self.width.is_positive() && self.height.is_positive()
     }
 }
 

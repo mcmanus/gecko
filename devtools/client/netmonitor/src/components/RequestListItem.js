@@ -4,39 +4,100 @@
 
 "use strict";
 
+const { Component, createFactory } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const { div } = dom;
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 const {
-  Component,
-  createFactory,
-  DOM,
-  PropTypes,
-} = require("devtools/client/shared/vendor/react");
-const I = require("devtools/client/shared/vendor/immutable");
-const { propertiesEqual } = require("../utils/request-utils");
+  fetchNetworkUpdatePacket,
+  propertiesEqual,
+} = require("../utils/request-utils");
 const { RESPONSE_HEADERS } = require("../constants");
 
 // Components
-const RequestListColumnCause = createFactory(require("./RequestListColumnCause"));
-const RequestListColumnContentSize = createFactory(require("./RequestListColumnContentSize"));
-const RequestListColumnCookies = createFactory(require("./RequestListColumnCookies"));
-const RequestListColumnDomain = createFactory(require("./RequestListColumnDomain"));
-const RequestListColumnDuration = createFactory(require("./RequestListColumnDuration"));
-const RequestListColumnEndTime = createFactory(require("./RequestListColumnEndTime"));
-const RequestListColumnFile = createFactory(require("./RequestListColumnFile"));
-const RequestListColumnLatency = createFactory(require("./RequestListColumnLatency"));
-const RequestListColumnMethod = createFactory(require("./RequestListColumnMethod"));
-const RequestListColumnProtocol = createFactory(require("./RequestListColumnProtocol"));
-const RequestListColumnRemoteIP = createFactory(require("./RequestListColumnRemoteIp"));
-const RequestListColumnResponseHeader = createFactory(require("./RequestListColumnResponseHeader"));
-const RequestListColumnResponseTime = createFactory(require("./RequestListColumnResponseTime"));
-const RequestListColumnScheme = createFactory(require("./RequestListColumnScheme"));
-const RequestListColumnSetCookies = createFactory(require("./RequestListColumnSetCookies"));
-const RequestListColumnStartTime = createFactory(require("./RequestListColumnStartTime"));
-const RequestListColumnStatus = createFactory(require("./RequestListColumnStatus"));
-const RequestListColumnTransferredSize = createFactory(require("./RequestListColumnTransferredSize"));
-const RequestListColumnType = createFactory(require("./RequestListColumnType"));
-const RequestListColumnWaterfall = createFactory(require("./RequestListColumnWaterfall"));
+/* global
+  RequestListColumnCause,
+  RequestListColumnContentSize,
+  RequestListColumnCookies,
+  RequestListColumnDomain,
+  RequestListColumnDuration,
+  RequestListColumnEndTime,
+  RequestListColumnFile,
+  RequestListColumnLatency,
+  RequestListColumnMethod,
+  RequestListColumnProtocol,
+  RequestListColumnRemoteIP,
+  RequestListColumnResponseHeader,
+  RequestListColumnResponseTime,
+  RequestListColumnScheme,
+  RequestListColumnSetCookies,
+  RequestListColumnStartTime,
+  RequestListColumnStatus,
+  RequestListColumnTransferredSize,
+  RequestListColumnType,
+  RequestListColumnWaterfall
+*/
 
-const { div } = DOM;
+loader.lazyGetter(this, "RequestListColumnCause", function () {
+  return createFactory(require("./RequestListColumnCause"));
+});
+loader.lazyGetter(this, "RequestListColumnContentSize", function () {
+  return createFactory(require("./RequestListColumnContentSize"));
+});
+loader.lazyGetter(this, "RequestListColumnCookies", function () {
+  return createFactory(require("./RequestListColumnCookies"));
+});
+loader.lazyGetter(this, "RequestListColumnDomain", function () {
+  return createFactory(require("./RequestListColumnDomain"));
+});
+loader.lazyGetter(this, "RequestListColumnDuration", function () {
+  return createFactory(require("./RequestListColumnDuration"));
+});
+loader.lazyGetter(this, "RequestListColumnEndTime", function () {
+  return createFactory(require("./RequestListColumnEndTime"));
+});
+loader.lazyGetter(this, "RequestListColumnFile", function () {
+  return createFactory(require("./RequestListColumnFile"));
+});
+loader.lazyGetter(this, "RequestListColumnLatency", function () {
+  return createFactory(require("./RequestListColumnLatency"));
+});
+loader.lazyGetter(this, "RequestListColumnMethod", function () {
+  return createFactory(require("./RequestListColumnMethod"));
+});
+loader.lazyGetter(this, "RequestListColumnProtocol", function () {
+  return createFactory(require("./RequestListColumnProtocol"));
+});
+loader.lazyGetter(this, "RequestListColumnRemoteIP", function () {
+  return createFactory(require("./RequestListColumnRemoteIP"));
+});
+loader.lazyGetter(this, "RequestListColumnResponseHeader", function () {
+  return createFactory(require("./RequestListColumnResponseHeader"));
+});
+loader.lazyGetter(this, "RequestListColumnResponseTime", function () {
+  return createFactory(require("./RequestListColumnResponseTime"));
+});
+loader.lazyGetter(this, "RequestListColumnScheme", function () {
+  return createFactory(require("./RequestListColumnScheme"));
+});
+loader.lazyGetter(this, "RequestListColumnSetCookies", function () {
+  return createFactory(require("./RequestListColumnSetCookies"));
+});
+loader.lazyGetter(this, "RequestListColumnStartTime", function () {
+  return createFactory(require("./RequestListColumnStartTime"));
+});
+loader.lazyGetter(this, "RequestListColumnStatus", function () {
+  return createFactory(require("./RequestListColumnStatus"));
+});
+loader.lazyGetter(this, "RequestListColumnTransferredSize", function () {
+  return createFactory(require("./RequestListColumnTransferredSize"));
+});
+loader.lazyGetter(this, "RequestListColumnType", function () {
+  return createFactory(require("./RequestListColumnType"));
+});
+loader.lazyGetter(this, "RequestListColumnWaterfall", function () {
+  return createFactory(require("./RequestListColumnWaterfall"));
+});
 
 /**
  * Used by shouldComponentUpdate: compare two items, and compare only properties
@@ -48,7 +109,6 @@ const UPDATED_REQ_ITEM_PROPS = [
   "mimeType",
   "eventTimings",
   "securityState",
-  "responseContentDataUri",
   "status",
   "statusText",
   "fromCache",
@@ -61,12 +121,17 @@ const UPDATED_REQ_ITEM_PROPS = [
   "transferredSize",
   "startedMillis",
   "totalTime",
+  "requestCookies",
+  "requestHeaders",
+  "responseCookies",
+  "responseHeaders",
 ];
 
 const UPDATED_REQ_PROPS = [
   "firstRequestStartedMillis",
   "index",
   "isSelected",
+  "requestFilterTypes",
   "waterfallWidth",
 ];
 
@@ -76,6 +141,7 @@ const UPDATED_REQ_PROPS = [
 class RequestListItem extends Component {
   static get propTypes() {
     return {
+      connector: PropTypes.object.isRequired,
       columns: PropTypes.object.isRequired,
       item: PropTypes.object.isRequired,
       index: PropTypes.number.isRequired,
@@ -87,8 +153,8 @@ class RequestListItem extends Component {
       onFocusedNodeChange: PropTypes.func,
       onMouseDown: PropTypes.func.isRequired,
       onSecurityIconMouseDown: PropTypes.func.isRequired,
-      onThumbnailMouseDown: PropTypes.func.isRequired,
       onWaterfallMouseDown: PropTypes.func.isRequired,
+      requestFilterTypes: PropTypes.string.isRequired,
       waterfallWidth: PropTypes.number,
     };
   }
@@ -97,12 +163,32 @@ class RequestListItem extends Component {
     if (this.props.isSelected) {
       this.refs.listItem.focus();
     }
+
+    let { connector, item, requestFilterTypes } = this.props;
+    // Filtering XHR & WS require to lazily fetch requestHeaders & responseHeaders
+    if (requestFilterTypes.xhr || requestFilterTypes.ws) {
+      fetchNetworkUpdatePacket(connector.requestData, item, [
+        "requestHeaders",
+        "responseHeaders",
+      ]);
+    }
+  }
+
+  componentWillReceiveProps(nextProps) {
+    let { connector, item, requestFilterTypes } = nextProps;
+    // Filtering XHR & WS require to lazily fetch requestHeaders & responseHeaders
+    if (requestFilterTypes.xhr || requestFilterTypes.ws) {
+      fetchNetworkUpdatePacket(connector.requestData, item, [
+        "requestHeaders",
+        "responseHeaders",
+      ]);
+    }
   }
 
   shouldComponentUpdate(nextProps) {
     return !propertiesEqual(UPDATED_REQ_ITEM_PROPS, this.props.item, nextProps.item) ||
       !propertiesEqual(UPDATED_REQ_PROPS, this.props, nextProps) ||
-      !I.is(this.props.columns, nextProps.columns);
+      this.props.columns !== nextProps.columns;
   }
 
   componentDidUpdate(prevProps) {
@@ -116,6 +202,7 @@ class RequestListItem extends Component {
 
   render() {
     let {
+      connector,
       columns,
       item,
       index,
@@ -126,7 +213,6 @@ class RequestListItem extends Component {
       onMouseDown,
       onCauseBadgeMouseDown,
       onSecurityIconMouseDown,
-      onThumbnailMouseDown,
       onWaterfallMouseDown,
     } = this.props;
 
@@ -143,32 +229,32 @@ class RequestListItem extends Component {
         onContextMenu,
         onMouseDown,
       },
-        columns.get("status") && RequestListColumnStatus({ item }),
-        columns.get("method") && RequestListColumnMethod({ item }),
-        columns.get("file") && RequestListColumnFile({ item, onThumbnailMouseDown }),
-        columns.get("protocol") && RequestListColumnProtocol({ item }),
-        columns.get("scheme") && RequestListColumnScheme({ item }),
-        columns.get("domain") && RequestListColumnDomain({ item,
-                                                           onSecurityIconMouseDown }),
-        columns.get("remoteip") && RequestListColumnRemoteIP({ item }),
-        columns.get("cause") && RequestListColumnCause({ item, onCauseBadgeMouseDown }),
-        columns.get("type") && RequestListColumnType({ item }),
-        columns.get("cookies") && RequestListColumnCookies({ item }),
-        columns.get("setCookies") && RequestListColumnSetCookies({ item }),
-        columns.get("transferred") && RequestListColumnTransferredSize({ item }),
-        columns.get("contentSize") && RequestListColumnContentSize({ item }),
-        columns.get("startTime") &&
+        columns.status && RequestListColumnStatus({ item }),
+        columns.method && RequestListColumnMethod({ item }),
+        columns.file && RequestListColumnFile({ item }),
+        columns.protocol && RequestListColumnProtocol({ item }),
+        columns.scheme && RequestListColumnScheme({ item }),
+        columns.domain && RequestListColumnDomain({ item,
+                                                    onSecurityIconMouseDown }),
+        columns.remoteip && RequestListColumnRemoteIP({ item }),
+        columns.cause && RequestListColumnCause({ item, onCauseBadgeMouseDown }),
+        columns.type && RequestListColumnType({ item }),
+        columns.cookies && RequestListColumnCookies({ connector, item }),
+        columns.setCookies && RequestListColumnSetCookies({ connector, item }),
+        columns.transferred && RequestListColumnTransferredSize({ item }),
+        columns.contentSize && RequestListColumnContentSize({ item }),
+        columns.startTime &&
           RequestListColumnStartTime({ item, firstRequestStartedMillis }),
-        columns.get("endTime") &&
+        columns.endTime &&
           RequestListColumnEndTime({ item, firstRequestStartedMillis }),
-        columns.get("responseTime") &&
+        columns.responseTime &&
           RequestListColumnResponseTime({ item, firstRequestStartedMillis }),
-        columns.get("duration") && RequestListColumnDuration({ item }),
-        columns.get("latency") && RequestListColumnLatency({ item }),
-        ...RESPONSE_HEADERS.filter(header => columns.get(header)).map(
+        columns.duration && RequestListColumnDuration({ item }),
+        columns.latency && RequestListColumnLatency({ item }),
+        ...RESPONSE_HEADERS.filter(header => columns[header]).map(
           header => RequestListColumnResponseHeader({ item, header }),
         ),
-        columns.get("waterfall") &&
+        columns.waterfall &&
           RequestListColumnWaterfall({ item, firstRequestStartedMillis,
                                        onWaterfallMouseDown }),
       )

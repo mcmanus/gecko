@@ -54,7 +54,7 @@ void
 MouseEvent::InitMouseEvent(const nsAString& aType,
                            bool aCanBubble,
                            bool aCancelable,
-                           nsGlobalWindow* aView,
+                           nsGlobalWindowInner* aView,
                            int32_t aDetail,
                            int32_t aScreenX,
                            int32_t aScreenY,
@@ -79,7 +79,7 @@ MouseEvent::InitMouseEvent(const nsAString& aType,
     case ePointerEventClass:
     case eSimpleGestureEventClass: {
       WidgetMouseEventBase* mouseEventBase = mEvent->AsMouseEventBase();
-      mouseEventBase->relatedTarget = aRelatedTarget;
+      mouseEventBase->mRelatedTarget = aRelatedTarget;
       mouseEventBase->button = aButton;
       mouseEventBase->InitBasicModifiers(aCtrlKey, aAltKey, aShiftKey, aMetaKey);
       mClientPoint.x = aClientX;
@@ -116,7 +116,7 @@ MouseEvent::InitMouseEvent(const nsAString& aType,
                            nsIDOMEventTarget* aRelatedTarget)
 {
   MouseEvent::InitMouseEvent(aType, aCanBubble, aCancelable,
-                             nsGlobalWindow::Cast(aView), aDetail,
+                             nsGlobalWindowInner::Cast(aView), aDetail,
                              aScreenX, aScreenY,
                              aClientX, aClientY,
                              aCtrlKey, aAltKey, aShiftKey,
@@ -130,7 +130,7 @@ void
 MouseEvent::InitMouseEvent(const nsAString& aType,
                            bool aCanBubble,
                            bool aCancelable,
-                           nsGlobalWindow* aView,
+                           nsGlobalWindowInner* aView,
                            int32_t aDetail,
                            int32_t aScreenX,
                            int32_t aScreenY,
@@ -199,7 +199,7 @@ void
 MouseEvent::InitNSMouseEvent(const nsAString& aType,
                              bool aCanBubble,
                              bool aCancelable,
-                             nsGlobalWindow* aView,
+                             nsGlobalWindowInner* aView,
                              int32_t aDetail,
                              int32_t aScreenX,
                              int32_t aScreenY,
@@ -295,8 +295,7 @@ MouseEvent::GetRelatedTarget()
     case eDragEventClass:
     case ePointerEventClass:
     case eSimpleGestureEventClass:
-      relatedTarget =
-        do_QueryInterface(mEvent->AsMouseEventBase()->relatedTarget);
+      relatedTarget = mEvent->AsMouseEventBase()->mRelatedTarget;
       break;
     default:
       break;

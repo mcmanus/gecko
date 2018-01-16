@@ -22,6 +22,7 @@ from taskgraph.util.schema import (
 )
 from taskgraph.util.treeherder import split_symbol, join_symbol
 from taskgraph.transforms.job import job_description_schema
+from taskgraph.transforms.task import task_description_schema
 from voluptuous import (
     Any,
     Optional,
@@ -41,6 +42,7 @@ taskref_or_string = Any(
 # Voluptuous uses marker objects as dictionary *keys*, but they are not
 # comparable, so we cast all of the keys back to regular strings
 job_description_schema = {str(k): v for k, v in job_description_schema.schema.iteritems()}
+task_description_schema = {str(k): v for k, v in task_description_schema.schema.iteritems()}
 
 l10n_description_schema = Schema({
     # Name for this job, inferred from the dependent job before validation
@@ -63,11 +65,19 @@ l10n_description_schema = Schema({
         # Config files passed to the mozharness script
         Required('config'): _by_platform([basestring]),
 
+        # Additional paths to look for mozharness configs in. These should be
+        # relative to the base of the source checkout
+        Optional('config-paths'): _by_platform([basestring]),
+
         # Options to pass to the mozharness script
         Required('options'): _by_platform([basestring]),
 
         # Action commands to provide to mozharness script
         Required('actions'): _by_platform([basestring]),
+
+        # if true, perform a checkout of a comm-central based branch inside the
+        # gecko checkout
+        Required('comm-checkout', default=False): bool,
     },
     # Items for the taskcluster index
     Optional('index'): {
@@ -144,6 +154,13 @@ l10n_description_schema = Schema({
     # passed through directly to the job description
     Optional('attributes'): job_description_schema['attributes'],
     Optional('extra'): job_description_schema['extra'],
+
+    # Shipping product and phase
+    Optional('shipping-product'): task_description_schema['shipping-product'],
+    Optional('shipping-phase'): task_description_schema['shipping-phase'],
+
+    # Notifications
+    Optional('notifications'): task_description_schema['notifications'],
 })
 
 transforms = TransformSequence()
@@ -219,8 +236,9 @@ def copy_in_useful_magic(config, jobs):
 @transforms.add
 def validate_early(config, jobs):
     for job in jobs:
-        yield validate_schema(l10n_description_schema, job,
-                              "In job {!r}:".format(job.get('name', 'unknown')))
+        validate_schema(l10n_description_schema, job,
+                        "In job {!r}:".format(job.get('name', 'unknown')))
+        yield job
 
 
 @transforms.add
@@ -283,7 +301,7 @@ def handle_keyed_by(config, jobs):
 @transforms.add
 def all_locales_attribute(config, jobs):
     for job in jobs:
-        locales_platform = job['attributes']['build_platform'].rstrip("-nightly")
+        locales_platform = job['attributes']['build_platform'].replace("-nightly", "")
         locales_with_changesets = _parse_locales_file(job["locales-file"],
                                                       platform=locales_platform)
         locales_with_changesets = _remove_locales(locales_with_changesets,
@@ -293,6 +311,8 @@ def all_locales_attribute(config, jobs):
         attributes = job.setdefault('attributes', {})
         attributes["all_locales"] = locales
         attributes["all_locales_with_changesets"] = locales_with_changesets
+        if job.get('shipping-product'):
+            attributes["shipping_product"] = job['shipping-product']
         yield job
 
 
@@ -375,26 +395,24 @@ def chain_of_trust(config, jobs):
 @transforms.add
 def validate_again(config, jobs):
     for job in jobs:
-        yield validate_schema(l10n_description_schema, job,
-                              "In job {!r}:".format(job.get('name', 'unknown')))
+        validate_schema(l10n_description_schema, job,
+                        "In job {!r}:".format(job.get('name', 'unknown')))
+        yield job
 
 
 @transforms.add
 def make_job_description(config, jobs):
     for job in jobs:
+        job['mozharness'].update({
+            'using': 'mozharness',
+            'job-script': 'taskcluster/scripts/builder/build-l10n.sh',
+            'secrets': job['secrets'],
+        })
         job_description = {
             'name': job['name'],
             'worker-type': job['worker-type'],
             'description': job['description'],
-            'run': {
-                'using': 'mozharness',
-                'job-script': 'taskcluster/scripts/builder/build-l10n.sh',
-                'config': job['mozharness']['config'],
-                'script': job['mozharness']['script'],
-                'actions': job['mozharness']['actions'],
-                'options': job['mozharness']['options'],
-                'secrets': job['secrets'],
-            },
+            'run': job['mozharness'],
             'attributes': job['attributes'],
             'treeherder': {
                 'kind': 'build',
@@ -444,4 +462,14 @@ def make_job_description(config, jobs):
             job_description.setdefault('when', {})
             job_description['when']['files-changed'] = \
                 [job['locales-file']] + job['when']['files-changed']
+
+        if 'shipping-phase' in job:
+            job_description['shipping-phase'] = job['shipping-phase']
+
+        if 'shipping-product' in job:
+            job_description['shipping-product'] = job['shipping-product']
+
+        if 'notifications' in job:
+            job_description['notifications'] = job['notifications']
+
         yield job_description

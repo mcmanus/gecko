@@ -31,6 +31,8 @@ const {
   FIRST_ORDERED_NODE_TYPE,
   ORDERED_NODE_ITERATOR_TYPE,
 } = Ci.nsIDOMXPathResult;
+const ELEMENT_NODE = 1;
+const DOCUMENT_NODE = 9;
 
 const XBLNS = "http://www.mozilla.org/xbl";
 const XULNS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
@@ -103,7 +105,6 @@ element.Strategy = {
 element.Store = class {
   constructor() {
     this.els = {};
-    this.timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
   }
 
   clear() {
@@ -932,8 +933,7 @@ element.isInView = function(el) {
 element.isVisible = function(el, x = undefined, y = undefined) {
   let win = el.ownerGlobal;
 
-  // Bug 1094246: webdriver's isShown doesn't work with content xul
-  if (!element.isXULElement(el) && !atom.isElementDisplayed(el, win)) {
+  if (!atom.isElementDisplayed(el, win)) {
     return false;
   }
 
@@ -1091,7 +1091,7 @@ element.isDOMElement = function(node) {
   return typeof node == "object" &&
       node !== null &&
       "nodeType" in node &&
-      node.nodeType === node.ELEMENT_NODE &&
+      [ELEMENT_NODE, DOCUMENT_NODE].includes(node.nodeType) &&
       !element.isXULElement(node);
 };
 

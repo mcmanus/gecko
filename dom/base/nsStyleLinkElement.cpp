@@ -25,7 +25,6 @@
 #include "nsIDocument.h"
 #include "nsIDOMComment.h"
 #include "nsIDOMNode.h"
-#include "nsIDOMStyleSheet.h"
 #include "nsUnicharUtils.h"
 #include "nsCRT.h"
 #include "nsXPCOMCIDInternal.h"
@@ -353,7 +352,7 @@ IsScopedStyleElement(nsIContent* aContent)
   // if it is scoped.
   return (aContent->IsHTMLElement(nsGkAtoms::style) ||
           aContent->IsSVGElement(nsGkAtoms::style)) &&
-         aContent->HasAttr(kNameSpaceID_None, nsGkAtoms::scoped) &&
+         aContent->AsElement()->HasAttr(kNameSpaceID_None, nsGkAtoms::scoped) &&
          aContent->OwnerDoc()->IsScopedStyleEnabled();
 }
 
@@ -538,21 +537,25 @@ nsStyleLinkElement::DoUpdateStyleSheet(nsIDocument* aOldDocument,
 
     MOZ_ASSERT(thisContent->NodeInfo()->NameAtom() != nsGkAtoms::link,
                "<link> is not 'inline', and needs different CSP checks");
-    if (!nsStyleUtil::CSPAllowsInlineStyle(thisContent,
+    MOZ_ASSERT(thisContent->IsElement());
+    if (!nsStyleUtil::CSPAllowsInlineStyle(thisContent->AsElement(),
                                            thisContent->NodePrincipal(),
+                                           triggeringPrincipal,
                                            doc->GetDocumentURI(),
                                            mLineNumber, text, &rv))
       return rv;
 
     // Parse the style sheet.
     rv = doc->CSSLoader()->
-      LoadInlineStyle(thisContent, text, mLineNumber, title, media,
-                      referrerPolicy, scopeElement, aObserver, &doneLoading,
-                      &isAlternate);
-  }
-  else {
+      LoadInlineStyle(thisContent, text, triggeringPrincipal, mLineNumber,
+                      title, media, referrerPolicy, scopeElement,
+                      aObserver, &doneLoading, &isAlternate);
+  } else {
     nsAutoString integrity;
-    thisContent->GetAttr(kNameSpaceID_None, nsGkAtoms::integrity, integrity);
+    if (thisContent->IsElement()) {
+      thisContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::integrity,
+                                        integrity);
+    }
     if (!integrity.IsEmpty()) {
       MOZ_LOG(SRILogHelper::GetSriLog(), mozilla::LogLevel::Debug,
               ("nsStyleLinkElement::DoUpdateStyleSheet, integrity=%s",

@@ -20,6 +20,7 @@
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/Logging.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ServoCSSParser.h"
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/ServoUtils.h"
 #include "mozilla/Sprintf.h"
@@ -43,6 +44,7 @@
 #include "nsNetUtil.h"
 #include "nsIProtocolHandler.h"
 #include "nsIInputStream.h"
+#include "nsLayoutUtils.h"
 #include "nsPresContext.h"
 #include "nsPrintfCString.h"
 #include "nsStyleSet.h"
@@ -205,6 +207,22 @@ FontFaceSet::ParseFontShorthandForMatching(
                             uint8_t& aStyle,
                             ErrorResult& aRv)
 {
+  if (mDocument->IsStyledByServo()) {
+    nsCSSValue style;
+    nsCSSValue stretch;
+    nsCSSValue weight;
+    RefPtr<URLExtraData> url = ServoCSSParser::GetURLExtraData(mDocument);
+    if (!ServoCSSParser::ParseFontShorthandForMatching(
+          aFont, url, aFamilyList, style, stretch, weight)) {
+      aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+      return;
+    }
+    aWeight = weight.GetIntValue();
+    aStretch = stretch.GetIntValue();
+    aStyle = style.GetIntValue();
+    return;
+  }
+
   // Parse aFont as a 'font' property value.
   RefPtr<Declaration> declaration = new Declaration;
   declaration->InitializeEmpty();
@@ -983,7 +1001,7 @@ FontFaceSet::InsertRuleFontFace(FontFace* aFontFace, SheetType aSheetType,
   mUserFontSet->AddUserFontEntry(fontfamily, entry);
 }
 
-already_AddRefed<gfxUserFontEntry>
+/* static */ already_AddRefed<gfxUserFontEntry>
 FontFaceSet::FindOrCreateUserFontEntryFromFontFace(FontFace* aFontFace)
 {
   nsAutoString fontfamily;
@@ -997,11 +1015,13 @@ FontFaceSet::FindOrCreateUserFontEntryFromFontFace(FontFace* aFontFace)
                                                SheetType::Doc);
 }
 
-already_AddRefed<gfxUserFontEntry>
+/* static */ already_AddRefed<gfxUserFontEntry>
 FontFaceSet::FindOrCreateUserFontEntryFromFontFace(const nsAString& aFamilyName,
                                                    FontFace* aFontFace,
                                                    SheetType aSheetType)
 {
+  FontFaceSet* set = aFontFace->GetPrimaryFontFaceSet();
+
   nsCSSValue val;
   nsCSSUnit unit;
 
@@ -1067,7 +1087,7 @@ FontFaceSet::FindOrCreateUserFontEntryFromFontFace(const nsAString& aFamilyName,
   if (unit == eCSSUnit_Normal) {
     // empty list of features
   } else if (unit == eCSSUnit_PairList || unit == eCSSUnit_PairListDep) {
-    nsRuleNode::ComputeFontFeatures(val.GetPairListValue(), featureSettings);
+    nsLayoutUtils::ComputeFontFeatures(val.GetPairListValue(), featureSettings);
   } else {
     NS_ASSERTION(unit == eCSSUnit_Null,
                  "@font-face font-feature-settings has unexpected unit");
@@ -1081,7 +1101,7 @@ FontFaceSet::FindOrCreateUserFontEntryFromFontFace(const nsAString& aFamilyName,
   } else if (unit == eCSSUnit_String) {
     nsString stringValue;
     val.GetStringValue(stringValue);
-    languageOverride = nsRuleNode::ParseFontLanguageOverride(stringValue);
+    languageOverride = nsLayoutUtils::ParseFontLanguageOverride(stringValue);
   } else {
     NS_ASSERTION(unit == eCSSUnit_Null,
                  "@font-face font-language-override has unexpected unit");
@@ -1130,7 +1150,7 @@ FontFaceSet::FindOrCreateUserFontEntryFromFontFace(const nsAString& aFamilyName,
           face->mURI = uri ? new gfxFontSrcURI(uri) : nullptr;
           URLValue* url = val.GetURLStructValue();
           face->mReferrer = url->mExtraData->GetReferrer();
-          face->mReferrerPolicy = mDocument->GetReferrerPolicy();
+          face->mReferrerPolicy = set->mDocument->GetReferrerPolicy();
           face->mOriginPrincipal =
             new gfxFontSrcPrincipal(url->mExtraData->GetPrincipal());
           NS_ASSERTION(face->mOriginPrincipal, "null origin principal in @font-face rule");
@@ -1197,11 +1217,11 @@ FontFaceSet::FindOrCreateUserFontEntryFromFontFace(const nsAString& aFamilyName,
   }
 
   RefPtr<gfxUserFontEntry> entry =
-    mUserFontSet->FindOrCreateUserFontEntry(aFamilyName, srcArray, weight,
-                                            stretch, italicStyle,
-                                            featureSettings,
-                                            languageOverride,
-                                            unicodeRanges, fontDisplay);
+    set->mUserFontSet->FindOrCreateUserFontEntry(aFamilyName, srcArray, weight,
+                                                 stretch, italicStyle,
+                                                 featureSettings,
+                                                 languageOverride,
+                                                 unicodeRanges, fontDisplay);
   return entry.forget();
 }
 
@@ -1296,12 +1316,10 @@ FontFaceSet::LogMessage(gfxUserFontEntry* aUserFontEntry,
   nsCSSFontFaceRule* rule = FindRuleForUserFontEntry(aUserFontEntry);
   nsString href;
   nsString text;
-  nsresult rv;
   uint32_t line = 0;
   uint32_t column = 0;
   if (rule) {
-    rv = rule->GetCssText(text);
-    NS_ENSURE_SUCCESS(rv, rv);
+    rule->GetCssText(text);
     StyleSheet* sheet = rule->GetStyleSheet();
     // if the style sheet is removed while the font is loading can be null
     if (sheet) {
@@ -1315,6 +1333,7 @@ FontFaceSet::LogMessage(gfxUserFontEntry* aUserFontEntry,
     column = rule->GetColumnNumber();
   }
 
+  nsresult rv;
   nsCOMPtr<nsIScriptError> scriptError =
     do_CreateInstance(NS_SCRIPTERROR_CONTRACTID, &rv);
   NS_ENSURE_SUCCESS(rv, rv);

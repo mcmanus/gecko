@@ -81,6 +81,7 @@ class CodeSegment
     uint8_t*        interruptCode_;
     uint8_t*        outOfBoundsCode_;
     uint8_t*        unalignedAccessCode_;
+    uint8_t*        trapCode_;
 
     bool            registered_;
 
@@ -108,6 +109,7 @@ class CodeSegment
         interruptCode_(nullptr),
         outOfBoundsCode_(nullptr),
         unalignedAccessCode_(nullptr),
+        trapCode_(nullptr),
         registered_(false)
     {}
 
@@ -130,7 +132,7 @@ class CodeSegment
         code_ = code;
     }
 
-    const Code* code() const { MOZ_ASSERT(code_); return code_; }
+    const Code& code() const { MOZ_ASSERT(code_); return *code_; }
     Tier tier() const { return tier_; }
 
     uint8_t* base() const { return bytes_.get(); }
@@ -139,6 +141,7 @@ class CodeSegment
     uint8_t* interruptCode() const { return interruptCode_; }
     uint8_t* outOfBoundsCode() const { return outOfBoundsCode_; }
     uint8_t* unalignedAccessCode() const { return unalignedAccessCode_; }
+    uint8_t* trapCode() const { return trapCode_; }
 
     bool containsCodePC(const void* pc) const {
         return pc >= base() && pc < (base() + length_);
@@ -167,7 +170,7 @@ class FuncExport
     MOZ_INIT_OUTSIDE_CTOR struct CacheablePod {
         uint32_t funcIndex_;
         uint32_t codeRangeIndex_;
-        uint32_t entryOffset_;      // Machine code offset
+        uint32_t interpEntryOffset_; // Machine code offset
     } pod;
 
   public:
@@ -177,11 +180,11 @@ class FuncExport
     {
         pod.funcIndex_ = funcIndex;
         pod.codeRangeIndex_ = UINT32_MAX;
-        pod.entryOffset_ = UINT32_MAX;
+        pod.interpEntryOffset_ = UINT32_MAX;
     }
-    void initEntryOffset(uint32_t entryOffset) {
-        MOZ_ASSERT(pod.entryOffset_ == UINT32_MAX);
-        pod.entryOffset_ = entryOffset;
+    void initInterpEntryOffset(uint32_t entryOffset) {
+        MOZ_ASSERT(pod.interpEntryOffset_ == UINT32_MAX);
+        pod.interpEntryOffset_ = entryOffset;
     }
     void initCodeRangeIndex(uint32_t codeRangeIndex) {
         MOZ_ASSERT(pod.codeRangeIndex_ == UINT32_MAX);
@@ -198,9 +201,9 @@ class FuncExport
         MOZ_ASSERT(pod.codeRangeIndex_ != UINT32_MAX);
         return pod.codeRangeIndex_;
     }
-    uint32_t entryOffset() const {
-        MOZ_ASSERT(pod.entryOffset_ != UINT32_MAX);
-        return pod.entryOffset_;
+    uint32_t interpEntryOffset() const {
+        MOZ_ASSERT(pod.interpEntryOffset_ != UINT32_MAX);
+        return pod.interpEntryOffset_;
     }
 
     WASM_DECLARE_SERIALIZABLE(FuncExport)
@@ -272,12 +275,6 @@ enum class MemoryUsage
     Unshared = 1,
     Shared = 2
 };
-
-static inline bool
-UsesMemory(MemoryUsage memoryUsage)
-{
-    return bool(memoryUsage);
-}
 
 // NameInBytecode represents a name that is embedded in the wasm bytecode.
 // The presence of NameInBytecode implies that bytecode has been kept.
@@ -357,6 +354,7 @@ struct MetadataTier
     MemoryAccessVector    memoryAccesses;
     CodeRangeVector       codeRanges;
     CallSiteVector        callSites;
+    TrapSiteVectorArray   trapSites;
     FuncImportVector      funcImports;
     FuncExportVector      funcExports;
 
@@ -418,8 +416,8 @@ class Metadata : public ShareableBase<Metadata>, public MetadataCacheablePod
     FuncReturnTypesVector debugFuncReturnTypes;
     ModuleHash            debugHash;
 
-    bool usesMemory() const { return UsesMemory(memoryUsage); }
-    bool hasSharedMemory() const { return memoryUsage == MemoryUsage::Shared; }
+    bool usesMemory() const { return memoryUsage != MemoryUsage::None; }
+    bool usesSharedMemory() const { return memoryUsage == MemoryUsage::Shared; }
 
     // AsmJSMetadata derives Metadata iff isAsmJS(). Mostly this distinction is
     // encapsulated within AsmJS.cpp, but the additional virtual functions allow
@@ -494,6 +492,7 @@ class Code : public ShareableBase<Code>
     const CodeRange* lookupRange(void* pc) const;
     const MemoryAccess* lookupMemoryAccess(void* pc) const;
     bool containsCodePC(const void* pc) const;
+    bool lookupTrap(void* pc, Trap* trap, BytecodeOffset* bytecode) const;
 
     // To save memory, profilingLabels_ are generated lazily when profiling mode
     // is enabled.

@@ -1283,9 +1283,11 @@ protected:
    * index in the layer, if any.
    */
   struct MaskLayerKey;
-  already_AddRefed<ImageLayer>
-  CreateOrRecycleMaskImageLayerFor(const MaskLayerKey& aKey,
-                                   void(*aSetUserData)(Layer* aLayer));
+  template<typename UserData>
+  already_AddRefed<ImageLayer> CreateOrRecycleMaskImageLayerFor(
+      const MaskLayerKey& aKey,
+      UserData* (*aGetUserData)(Layer* aLayer),
+      void (*aSetDefaultUserData)(Layer* aLayer));
   /**
    * Grabs all PaintedLayers and ColorLayers from the ContainerLayer and makes them
    * available for recycling.
@@ -1297,7 +1299,8 @@ protected:
    * aItem in that layer.
    */
   void InvalidateForLayerChange(nsDisplayItem* aItem,
-                                PaintedLayer* aNewLayer);
+                                PaintedLayer* aNewLayer,
+                                DisplayItemData* aData);
   /**
    * Returns true if aItem's opaque area (in aOpaque) covers the entire
    * scrollable area of its presshell.
@@ -1765,15 +1768,6 @@ private:
   RefPtr<TextureClient> mTextureClient;
 };
 
-/**
-  * Helper functions for getting user data and casting it to the correct type.
-  * aLayer is the layer where the user data is stored.
-  */
-MaskLayerUserData* GetMaskLayerUserData(Layer* aLayer)
-{
-  return static_cast<MaskLayerUserData*>(aLayer->GetUserData(&gMaskLayerUserData));
-}
-
 PaintedDisplayItemLayerUserData* GetPaintedDisplayItemLayerUserData(Layer* aLayer)
 {
   return static_cast<PaintedDisplayItemLayerUserData*>(
@@ -2067,20 +2061,14 @@ FrameLayerBuilder::HasRetainedDataFor(nsIFrame* aFrame, uint32_t aDisplayItemKey
       return true;
     }
   }
-  return false;
-}
-
-void
-FrameLayerBuilder::IterateRetainedDataFor(nsIFrame* aFrame, DisplayItemDataCallback aCallback)
-{
-  const SmallPointerArray<DisplayItemData>& array = aFrame->DisplayItemData();
-
-  for (uint32_t i = 0; i < array.Length(); i++) {
-    DisplayItemData* data = DisplayItemData::AssertDisplayItemData(array.ElementAt(i));
-    if (data->mDisplayItemKey != 0) {
-      aCallback(aFrame, data);
+  if (auto userDataTable =
+       aFrame->GetProperty(nsIFrame::WebRenderUserDataProperty())) {
+    RefPtr<WebRenderUserData> data = userDataTable->Get(aDisplayItemKey);
+    if (data) {
+      return true;
     }
   }
+  return false;
 }
 
 DisplayItemData*
@@ -2119,18 +2107,6 @@ FrameLayerBuilder::GetOldLayerFor(nsDisplayItem* aItem,
   }
 
   return nullptr;
-}
-
-void
-FrameLayerBuilder::ClearCachedGeometry(nsDisplayItem* aItem)
-{
-  uint32_t key = aItem->GetPerFrameKey();
-  nsIFrame* frame = aItem->Frame();
-
-  DisplayItemData* oldData = GetOldLayerForFrame(frame, key);
-  if (oldData) {
-    oldData->mGeometry = nullptr;
-  }
 }
 
 /* static */ DisplayItemData*
@@ -2205,21 +2181,26 @@ ContainerState::CreateOrRecycleImageLayer(PaintedLayer *aPainted)
   return layer.forget();
 }
 
+template<typename UserData>
 already_AddRefed<ImageLayer>
-ContainerState::CreateOrRecycleMaskImageLayerFor(const MaskLayerKey& aKey,
-                                                 void(*aSetUserData)(Layer* aLayer))
+ContainerState::CreateOrRecycleMaskImageLayerFor(
+    const MaskLayerKey& aKey,
+    UserData* (*aGetUserData)(Layer* aLayer),
+    void (*aSetDefaultUserData)(Layer* aLayer))
 {
   RefPtr<ImageLayer> result = mRecycledMaskImageLayers.Get(aKey);
-  if (result) {
+
+  if (result && aGetUserData(result.get())) {
     mRecycledMaskImageLayers.Remove(aKey);
     aKey.mLayer->ClearExtraDumpInfo();
     // XXX if we use clip on mask layers, null it out here
   } else {
     // Create a new layer
     result = mManager->CreateImageLayer();
-    if (!result)
+    if (!result) {
       return nullptr;
-    aSetUserData(result);
+    }
+    aSetDefaultUserData(result);
   }
 
   return result.forget();
@@ -2771,7 +2752,7 @@ PaintedLayerDataNode::FindPaintedLayerFor(const nsIntRect& aVisibleRect,
       }
       if (data.mBackfaceHidden == aBackfaceHidden &&
           data.mASR == aASR &&
-          DisplayItemClipChain::Equal(data.mClipChain, aClipChain)) {
+          data.mClipChain == aClipChain) {
         lowestUsableLayer = &data;
       }
       // Also check whether the event-regions intersect the visible rect,
@@ -3160,10 +3141,13 @@ void ContainerState::FinishPaintedLayerData(PaintedLayerData& aData, FindOpaqueB
   for (auto& item : data->mAssignedDisplayItems) {
     MOZ_ASSERT(item.mItem->GetType() != DisplayItemType::TYPE_LAYER_EVENT_REGIONS);
 
-    InvalidateForLayerChange(item.mItem, data->mLayer);
+    DisplayItemData* oldData =
+      mLayerBuilder->GetOldLayerForFrame(item.mItem->Frame(), item.mItem->GetPerFrameKey());
+    InvalidateForLayerChange(item.mItem, data->mLayer, oldData);
     mLayerBuilder->AddPaintedDisplayItem(data, item.mItem, item.mClip,
                                          *this, item.mLayerState,
-                                         data->mAnimatedGeometryRootOffset);
+                                         data->mAnimatedGeometryRootOffset,
+                                         oldData);
   }
 
   NewLayerEntry* newLayerEntry = &mNewChildLayers[data->mNewChildLayersIndex];
@@ -3684,8 +3668,8 @@ PaintInactiveLayer(nsDisplayListBuilder* aBuilder,
         gfxDevCrash(LogReason::InvalidContext) << "PaintInactive context problem " << gfx::hexa(tempDT);
         return;
       }
-      context->SetMatrix(gfxMatrix::Translation(-itemVisibleRect.x,
-                                                -itemVisibleRect.y));
+      context->SetMatrix(Matrix::Translation(-itemVisibleRect.x,
+                                             -itemVisibleRect.y));
     }
   }
 #endif
@@ -3858,9 +3842,21 @@ GetASRForPerspective(const ActiveScrolledRoot* aASR, nsIFrame* aPerspectiveFrame
   return nullptr;
 }
 
+CSSMaskLayerUserData*
+GetCSSMaskLayerUserData(Layer* aMaskLayer)
+{
+  if (!aMaskLayer) {
+    return nullptr;
+  }
+
+  return static_cast<CSSMaskLayerUserData*>(aMaskLayer->GetUserData(&gCSSMaskLayerUserData));
+}
+
 void
 SetCSSMaskLayerUserData(Layer* aMaskLayer)
 {
+  MOZ_ASSERT(aMaskLayer);
+
   aMaskLayer->SetUserData(&gCSSMaskLayerUserData,
                           new CSSMaskLayerUserData());
 }
@@ -3871,10 +3867,10 @@ ContainerState::SetupMaskLayerForCSSMask(Layer* aLayer,
 {
   RefPtr<ImageLayer> maskLayer =
     CreateOrRecycleMaskImageLayerFor(MaskLayerKey(aLayer, Nothing()),
+                                     GetCSSMaskLayerUserData,
                                      SetCSSMaskLayerUserData);
-
-  CSSMaskLayerUserData* oldUserData =
-    static_cast<CSSMaskLayerUserData*>(maskLayer->GetUserData(&gCSSMaskLayerUserData));
+  CSSMaskLayerUserData* oldUserData = GetCSSMaskLayerUserData(maskLayer.get());
+  MOZ_ASSERT(oldUserData);
 
   bool snap;
   nsRect bounds = aMaskItem->GetBounds(mBuilder, &snap);
@@ -3914,7 +3910,7 @@ ContainerState::SetupMaskLayerForCSSMask(Layer* aLayer,
   }
 
   RefPtr<gfxContext> maskCtx = gfxContext::CreateOrNull(dt);
-  maskCtx->SetMatrix(gfxMatrix::Translation(-itemRect.TopLeft()));
+  maskCtx->SetMatrix(Matrix::Translation(-itemRect.TopLeft()));
   maskCtx->Multiply(gfxMatrix::Scaling(mParameters.mXScale, mParameters.mYScale));
 
   bool isPaintFinished = aMaskItem->PaintMask(mBuilder, maskCtx);
@@ -4143,7 +4139,9 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList)
       // InvalidateForLayerChange doesn't need the new layer pointer.
       // We also need to check the old data now, because BuildLayer
       // can overwrite it.
-      InvalidateForLayerChange(item, nullptr);
+      DisplayItemData* oldData =
+        mLayerBuilder->GetOldLayerForFrame(item->Frame(), item->GetPerFrameKey());
+      InvalidateForLayerChange(item, nullptr, oldData);
 
       // If the item would have its own layer but is invisible, just hide it.
       // Note that items without their own layers can't be skipped this
@@ -4441,7 +4439,9 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList)
        * No need to allocate geometry for items that aren't
        * part of a PaintedLayer.
        */
-      mLayerBuilder->AddLayerDisplayItem(ownLayer, item, layerState, nullptr);
+      oldData =
+        mLayerBuilder->GetOldLayerForFrame(item->Frame(), item->GetPerFrameKey());
+      mLayerBuilder->AddLayerDisplayItem(ownLayer, item, layerState, nullptr, oldData);
     } else {
       PaintedLayerData* paintedLayerData =
         mPaintedLayerDataTree.FindPaintedLayerFor(animatedGeometryRoot, itemASR, layerClipChain,
@@ -4487,18 +4487,18 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList)
 }
 
 void
-ContainerState::InvalidateForLayerChange(nsDisplayItem* aItem, PaintedLayer* aNewLayer)
+ContainerState::InvalidateForLayerChange(nsDisplayItem* aItem,
+                                         PaintedLayer* aNewLayer,
+                                         DisplayItemData* aData)
 {
   NS_ASSERTION(aItem->GetPerFrameKey(),
                "Display items that render using Thebes must have a key");
-  nsDisplayItemGeometry* oldGeometry = nullptr;
-  DisplayItemClip* oldClip = nullptr;
-  Layer* oldLayer = mLayerBuilder->GetOldLayerFor(aItem, &oldGeometry, &oldClip);
+  Layer* oldLayer = aData ? aData->mLayer.get() : nullptr;
   if (aNewLayer != oldLayer && oldLayer) {
     // The item has changed layers.
     // Invalidate the old bounds in the old layer and new bounds in the new layer.
     PaintedLayer* t = oldLayer->AsPaintedLayer();
-    if (t && oldGeometry) {
+    if (t && aData->mGeometry) {
       // Note that whenever the layer's scale changes, we invalidate the whole thing,
       // so it doesn't matter whether we are using the old scale at last paint
       // or a new scale here
@@ -4508,13 +4508,13 @@ ContainerState::InvalidateForLayerChange(nsDisplayItem* aItem, PaintedLayer* aNe
       }
 #endif
       InvalidatePostTransformRegion(t,
-          oldGeometry->ComputeInvalidationRegion(),
-          *oldClip,
+          aData->mGeometry->ComputeInvalidationRegion(),
+          aData->mClip,
           mLayerBuilder->GetLastPaintOffset(t));
     }
     // Clear the old geometry so that invalidation thinks the item has been
     // added this paint.
-    mLayerBuilder->ClearCachedGeometry(aItem);
+    aData->mGeometry = nullptr;
     aItem->NotifyRenderingChanged();
   }
 }
@@ -4643,7 +4643,8 @@ FrameLayerBuilder::AddPaintedDisplayItem(PaintedLayerData* aLayerData,
                                         const DisplayItemClip& aClip,
                                         ContainerState& aContainerState,
                                         LayerState aLayerState,
-                                        const nsPoint& aTopLeft)
+                                        const nsPoint& aTopLeft,
+                                        DisplayItemData* aData)
 {
   PaintedLayer* layer = aLayerData->mLayer;
   PaintedDisplayItemLayerUserData* paintedData =
@@ -4676,7 +4677,7 @@ FrameLayerBuilder::AddPaintedDisplayItem(PaintedLayerData* aLayerData,
     }
   }
 
-  AddLayerDisplayItem(layer, aItem, aLayerState, tempManager);
+  AddLayerDisplayItem(layer, aItem, aLayerState, tempManager, aData);
 
   PaintedLayerItemsEntry* entry = mPaintedLayerItems.PutEntry(layer);
   if (entry) {
@@ -4729,7 +4730,8 @@ FrameLayerBuilder::AddPaintedDisplayItem(PaintedLayerData* aLayerData,
           (tempManager->GetUserData(&gLayerManagerUserData));
         lmd->mParent = parentLmd;
 #endif
-        layerBuilder->StoreDataForFrame(aItem, tmpLayer, LAYER_ACTIVE);
+        DisplayItemData* data = layerBuilder->GetDisplayItemDataForManager(aItem, tempManager);
+        layerBuilder->StoreDataForFrame(aItem, tmpLayer, LAYER_ACTIVE, data);
       }
 
       tempManager->SetRoot(tmpLayer);
@@ -4783,14 +4785,14 @@ FrameLayerBuilder::AddPaintedDisplayItem(PaintedLayerData* aLayerData,
 }
 
 DisplayItemData*
-FrameLayerBuilder::StoreDataForFrame(nsDisplayItem* aItem, Layer* aLayer, LayerState aState)
+FrameLayerBuilder::StoreDataForFrame(nsDisplayItem* aItem, Layer* aLayer,
+                                     LayerState aState, DisplayItemData* aData)
 {
-  DisplayItemData* oldData = GetDisplayItemDataForManager(aItem, mRetainingManager);
-  if (oldData) {
-    if (!oldData->mUsed) {
-      oldData->BeginUpdate(aLayer, aState, mContainerLayerGeneration, aItem);
+  if (aData) {
+    if (!aData->mUsed) {
+      aData->BeginUpdate(aLayer, aState, mContainerLayerGeneration, aItem);
     }
-    return oldData;
+    return aData;
   }
 
   LayerManagerData* lmd = static_cast<LayerManagerData*>
@@ -4867,12 +4869,13 @@ void
 FrameLayerBuilder::AddLayerDisplayItem(Layer* aLayer,
                                        nsDisplayItem* aItem,
                                        LayerState aLayerState,
-                                       BasicLayerManager* aManager)
+                                       BasicLayerManager* aManager,
+                                       DisplayItemData* aData)
 {
   if (aLayer->Manager() != mRetainingManager)
     return;
 
-  DisplayItemData *data = StoreDataForFrame(aItem, aLayer, aLayerState);
+  DisplayItemData *data = StoreDataForFrame(aItem, aLayer, aLayerState, aData);
   data->mInactiveManager = aManager;
 }
 
@@ -5027,7 +5030,7 @@ FixUpFixedPositionLayer(Layer* aLayer,
   if (compositorASR && aTargetASR != compositorASR) {
     // Mark this layer as fixed with respect to the child scroll frame of aTargetASR.
     aLayer->SetFixedPositionData(
-      nsLayoutUtils::ViewIDForASR(FindDirectChildASR(aTargetASR, compositorASR)),
+      FindDirectChildASR(aTargetASR, compositorASR)->GetViewId(),
       aLayer->GetFixedPositionAnchor(),
       aLayer->GetFixedPositionSides());
   } else {
@@ -5343,12 +5346,7 @@ ContainerState::Finish(uint32_t* aTextContentFlags,
   *aTextContentFlags = textContentFlags;
 }
 
-static inline gfxSize RoundToFloatPrecision(const gfxSize& aSize)
-{
-  return gfxSize(float(aSize.width), float(aSize.height));
-}
-
-static void RestrictScaleToMaxLayerSize(gfxSize& aScale,
+static void RestrictScaleToMaxLayerSize(Size& aScale,
                                         const nsRect& aVisibleRect,
                                         nsIFrame* aContainerFrame,
                                         Layer* aContainerLayer)
@@ -5444,7 +5442,7 @@ ChooseScaleAndSetTransform(FrameLayerBuilder* aLayerBuilder,
   }
 
   bool canDraw2D = transform.CanDraw2D(&transform2d);
-  gfxSize scale;
+  Size scale;
   // XXX Should we do something for 3D transforms?
   if (canDraw2D &&
       !aContainerFrame->Combines3DTransformWithAncestors() &&
@@ -5456,10 +5454,11 @@ ChooseScaleAndSetTransform(FrameLayerBuilder* aLayerBuilder,
         EffectCompositor::HasAnimationsForCompositor(
           aContainerFrame, eCSSProperty_transform)) {
       nsSize displaySize = ComputeDesiredDisplaySizeForAnimation(aContainerFrame);
-      // compute scale using the animation on the container (ignoring
-      // its ancestors)
+      // compute scale using the animation on the container, taking ancestors in to account
+      nsSize scaledVisibleSize = nsSize(aVisibleRect.Width() * aIncomingScale.mXScale,
+                                        aVisibleRect.Height() * aIncomingScale.mYScale);
       scale = nsLayoutUtils::ComputeSuitableScaleForAnimation(
-                aContainerFrame, aVisibleRect.Size(),
+                aContainerFrame, scaledVisibleSize,
                 displaySize);
       // multiply by the scale inherited from ancestors--we use a uniform
       // scale factor to prevent blurring when the layer is rotated.
@@ -5468,7 +5467,7 @@ ChooseScaleAndSetTransform(FrameLayerBuilder* aLayerBuilder,
       scale.height *= incomingScale;
     } else {
       // Scale factors are normalized to a power of 2 to reduce the number of resolution changes
-      scale = RoundToFloatPrecision(ThebesMatrix(transform2d).ScaleFactors(true));
+      scale = transform2d.ScaleFactors(true);
       // For frames with a changing scale transform round scale factors up to
       // nearest power-of-2 boundary so that we don't keep having to redraw
       // the content as it scales up and down. Rounding up to nearest
@@ -5499,7 +5498,7 @@ ChooseScaleAndSetTransform(FrameLayerBuilder* aLayerBuilder,
     // If the scale factors are too small, just use 1.0. The content is being
     // scaled out of sight anyway.
     if (fabs(scale.width) < 1e-8 || fabs(scale.height) < 1e-8) {
-      scale = gfxSize(1.0, 1.0);
+      scale = Size(1.0, 1.0);
     }
     // If this is a transform container layer, then pre-rendering might
     // mean we try render a layer bigger than the max texture size. If we have
@@ -5510,13 +5509,13 @@ ChooseScaleAndSetTransform(FrameLayerBuilder* aLayerBuilder,
       RestrictScaleToMaxLayerSize(scale, aVisibleRect, aContainerFrame, aLayer);
     }
   } else {
-    scale = gfxSize(1.0, 1.0);
+    scale = Size(1.0, 1.0);
   }
 
   // Store the inverse of our resolution-scale on the layer
   aLayer->SetBaseTransform(transform);
-  aLayer->SetPreScale(1.0f/float(scale.width),
-                      1.0f/float(scale.height));
+  aLayer->SetPreScale(1.0f/scale.width,
+                      1.0f/scale.height);
   aLayer->SetInheritedScale(aIncomingScale.mXScale,
                             aIncomingScale.mYScale);
 
@@ -5642,7 +5641,8 @@ FrameLayerBuilder::BuildContainerLayerFor(nsDisplayListBuilder* aBuilder,
 
   if (mRetainingManager) {
     if (aContainerItem) {
-      StoreDataForFrame(aContainerItem, containerLayer, LAYER_ACTIVE);
+      DisplayItemData* data = GetDisplayItemDataForManager(aContainerItem, mRetainingManager);
+      StoreDataForFrame(aContainerItem, containerLayer, LAYER_ACTIVE, data);
     } else {
       StoreDataForFrame(aContainerFrame, containerDisplayItemKey, containerLayer, LAYER_ACTIVE);
     }
@@ -5889,7 +5889,7 @@ static void DebugPaintItem(DrawTarget& aDrawTarget,
     gfxDevCrash(LogReason::InvalidContext) << "DebugPaintItem context problem " << gfx::hexa(tempDT);
     return;
   }
-  context->SetMatrix(gfxMatrix::Translation(-bounds.x, -bounds.y));
+  context->SetMatrix(Matrix::Translation(-bounds.x, -bounds.y));
 
   aItem->Paint(aBuilder, context);
   RefPtr<SourceSurface> surface = tempDT->Snapshot();
@@ -6177,9 +6177,9 @@ FrameLayerBuilder::DrawPaintedLayer(PaintedLayer* aLayer,
       // Apply the residual transform if it has been enabled, to ensure that
       // snapping when we draw into aContext exactly matches the ideal transform.
       // See above for why this is OK.
-      aContext->SetMatrix(
-        aContext->CurrentMatrix().PreTranslate(aLayer->GetResidualTranslation() - gfxPoint(offset.x, offset.y)).
-                                  PreScale(userData->mXScale, userData->mYScale));
+      aContext->SetMatrixDouble(
+        aContext->CurrentMatrixDouble().PreTranslate(aLayer->GetResidualTranslation() - gfxPoint(offset.x, offset.y)).
+                                        PreScale(userData->mXScale, userData->mYScale));
 
       layerBuilder->PaintItems(entry->mItems, iterRect, aContext,
                                builder, presContext,
@@ -6193,9 +6193,9 @@ FrameLayerBuilder::DrawPaintedLayer(PaintedLayer* aLayer,
     // Apply the residual transform if it has been enabled, to ensure that
     // snapping when we draw into aContext exactly matches the ideal transform.
     // See above for why this is OK.
-    aContext->SetMatrix(
-      aContext->CurrentMatrix().PreTranslate(aLayer->GetResidualTranslation() - gfxPoint(offset.x, offset.y)).
-                                PreScale(userData->mXScale,userData->mYScale));
+    aContext->SetMatrixDouble(
+      aContext->CurrentMatrixDouble().PreTranslate(aLayer->GetResidualTranslation() - gfxPoint(offset.x, offset.y)).
+                                      PreScale(userData->mXScale,userData->mYScale));
 
     layerBuilder->PaintItems(entry->mItems, aRegionToDraw.GetBounds(), aContext,
                              builder, presContext,
@@ -6274,6 +6274,12 @@ FrameLayerBuilder::GetMostRecentGeometry(nsDisplayItem* aItem)
       return data->GetGeometry();
     }
   }
+  if (auto userDataTable =
+       aItem->Frame()->GetProperty(nsIFrame::WebRenderUserDataProperty())) {
+    if (RefPtr<WebRenderUserData> data = userDataTable->Get(itemPerFrameKey)) {
+      return data->GetGeometry();
+    }
+  }
 
   return nullptr;
 }
@@ -6332,9 +6338,21 @@ ContainerState::SetupMaskLayer(Layer *aLayer,
   SetClipCount(paintedData, aRoundedRectClipCount);
 }
 
+MaskLayerUserData*
+GetMaskLayerUserData(Layer* aMaskLayer)
+{
+  if (!aMaskLayer) {
+    return nullptr;
+  }
+
+  return static_cast<MaskLayerUserData*>(aMaskLayer->GetUserData(&gMaskLayerUserData));
+}
+
 void
 SetMaskLayerUserData(Layer* aMaskLayer)
 {
+  MOZ_ASSERT(aMaskLayer);
+
   aMaskLayer->SetUserData(&gMaskLayerUserData,
                           new MaskLayerUserData());
 }
@@ -6353,10 +6371,11 @@ ContainerState::CreateMaskLayer(Layer *aLayer,
              "A layer contains round clips should not have css-mask on it.");
 
   // check if we can re-use the mask layer
-  MaskLayerKey recycleKey(aLayer, aForAncestorMaskLayer);
   RefPtr<ImageLayer> maskLayer =
-    CreateOrRecycleMaskImageLayerFor(recycleKey, SetMaskLayerUserData);
-  MaskLayerUserData* userData = GetMaskLayerUserData(maskLayer);
+      CreateOrRecycleMaskImageLayerFor(MaskLayerKey(aLayer, aForAncestorMaskLayer),
+                                       GetMaskLayerUserData,
+                                       SetMaskLayerUserData);
+  MaskLayerUserData* userData = GetMaskLayerUserData(maskLayer.get());
 
   int32_t A2D = mContainerFrame->PresContext()->AppUnitsPerDevPixel();
   MaskLayerUserData newData(aClip, aRoundedRectClipCount, A2D, mParameters);

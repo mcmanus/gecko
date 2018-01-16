@@ -784,7 +784,6 @@ nsSocketTransport::nsSocketTransport()
     , mResolving(false)
     , mNetAddrIsSet(false)
     , mSelfAddrIsSet(false)
-    , mNetAddrPreResolved(false)
     , mLock("nsSocketTransport.mLock")
     , mFD(this)
     , mFDref(0)
@@ -800,7 +799,7 @@ nsSocketTransport::nsSocketTransport()
     , mKeepaliveProbeCount(-1)
     , mFastOpenCallback(nullptr)
     , mFastOpenLayerHasBufferedData(false)
-    , mFastOpenStatus(TFO_NOT_TRIED)
+    , mFastOpenStatus(TFO_NOT_SET)
     , mFirstRetryError(NS_OK)
     , mDoNotRetryToConnect(false)
 {
@@ -928,23 +927,6 @@ nsSocketTransport::Init(const char **types, uint32_t typeCount,
     }
 
     return NS_OK;
-}
-
-nsresult
-nsSocketTransport::InitPreResolved(const char **socketTypes, uint32_t typeCount,
-                                   const nsACString &host, uint16_t port,
-                                   const nsACString &hostRoute, uint16_t portRoute,
-                                   nsIProxyInfo *proxyInfo,
-                                   const mozilla::net::NetAddr* addr)
-{
-  nsresult rv = Init(socketTypes, typeCount, host, port, hostRoute, portRoute, proxyInfo);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  mNetAddr = *addr;
-  mNetAddrPreResolved = true;
-  return NS_OK;
 }
 
 nsresult
@@ -1088,11 +1070,6 @@ nsSocketTransport::ResolveHost()
 
     nsresult rv;
 
-    if (mNetAddrPreResolved) {
-        mState = STATE_RESOLVING;
-        return PostEvent(MSG_DNS_LOOKUP_COMPLETE, NS_OK, nullptr);
-    }
-
     if (!mProxyHost.IsEmpty()) {
         if (!mProxyTransparent || mProxyTransparentResolvesHost) {
 #if defined(XP_UNIX)
@@ -1135,6 +1112,8 @@ nsSocketTransport::ResolveHost()
         dnsFlags |= nsIDNSService::RESOLVE_DISABLE_IPV6;
     if (mConnectionFlags & nsSocketTransport::DISABLE_IPV4)
         dnsFlags |= nsIDNSService::RESOLVE_DISABLE_IPV4;
+    if (mConnectionFlags & nsSocketTransport::DISABLE_TRR)
+        dnsFlags |= nsIDNSService::RESOLVE_DISABLE_TRR;
 
     NS_ASSERTION(!(dnsFlags & nsIDNSService::RESOLVE_DISABLE_IPV6) ||
                  !(dnsFlags & nsIDNSService::RESOLVE_DISABLE_IPV4),
@@ -1280,7 +1259,8 @@ nsSocketTransport::BuildSocket(PRFileDesc *&fd, bool &proxyTransparent, bool &us
             SOCKET_LOG(("  error pushing io layer [%u:%s rv=%" PRIx32 "]\n", i, mTypes[i],
                         static_cast<uint32_t>(rv)));
             if (fd) {
-                CloseSocket(fd, mSocketTransportService); 
+                CloseSocket(fd,
+                    mSocketTransportService->IsTelemetryEnabledAndNotSleepPhase()); 
             }
         }
     }
@@ -1474,7 +1454,8 @@ nsSocketTransport::InitiateSocket()
     // inform socket transport about this newly created socket...
     rv = mSocketTransportService->AttachSocket(fd, this);
     if (NS_FAILED(rv)) {
-        CloseSocket(fd, mSocketTransportService);
+        CloseSocket(fd,
+            mSocketTransportService->IsTelemetryEnabledAndNotSleepPhase());
         return rv;
     }
     mAttached = true;
@@ -1821,6 +1802,17 @@ nsSocketTransport::RecoverFromError()
                 mState = STATE_CLOSED;
                 mConnectionFlags &= ~(DISABLE_IPV6 | DISABLE_IPV4);
                 tryAgain = true;
+            } else if (!(mConnectionFlags & DISABLE_TRR)) {
+                bool trrEnabled;
+                mDNSRecord->IsTRR( &trrEnabled);
+                if (trrEnabled) {
+                    // Drop state to closed.  This will trigger a new round of
+                    // DNS resolving.
+                    SOCKET_LOG(("  failed to connect with TRR enabled, try w/o\n"));
+                    mState = STATE_CLOSED;
+                    mConnectionFlags |= DISABLE_TRR;
+                    tryAgain = true;
+                }
             }
         }
     }
@@ -2001,7 +1993,8 @@ public:
 
   NS_IMETHOD Run() override
   {
-    nsSocketTransport::CloseSocket(mFD, gSocketTransportService);
+    nsSocketTransport::CloseSocket(mFD,
+      gSocketTransportService->IsTelemetryEnabledAndNotSleepPhase());
     return NS_OK;
   }
 private:
@@ -2035,7 +2028,8 @@ nsSocketTransport::ReleaseFD_Locked(PRFileDesc *fd)
           SOCKET_LOG(("Intentional leak"));
         } else if (OnSocketThread()) {
             SOCKET_LOG(("nsSocketTransport: calling PR_Close [this=%p]\n", this));
-            CloseSocket(mFD, mSocketTransportService);
+            CloseSocket(mFD,
+                mSocketTransportService->IsTelemetryEnabledAndNotSleepPhase());
         } else {
             // Can't PR_Close() a socket off STS thread. Thunk it to STS to die
             STS_PRCloseOnSocketTransport(mFD);
@@ -2233,9 +2227,9 @@ nsSocketTransport::OnSocketReady(PRFileDesc *fd, int16_t outFlags)
             BOOL option = 0;
             int len = sizeof(option);
             PRInt32 rv = getsockopt((SOCKET)osfd, IPPROTO_TCP, TCP_FASTOPEN, (char*)&option, &len);
-            if ((rv != 0) && !option) {
+            if (!rv && !option) {
                 // On error, I will let the normal necko paths pickup the error.
-                mFastOpenCallback->SetFastOpenStatus(TFO_NOT_TRIED);
+                mFastOpenCallback->SetFastOpenStatus(TFO_DATA_COOKIE_NOT_ACCEPTED);
             }
         }
 #endif
@@ -3486,10 +3480,8 @@ nsSocketTransport::PRFileDescAutoLock::SetKeepaliveVals(bool aEnabled,
 }
 
 void
-nsSocketTransport::CloseSocket(PRFileDesc *aFd, nsSocketTransportService *aSTS)
+nsSocketTransport::CloseSocket(PRFileDesc *aFd, bool aTelemetryEnabled)
 {
-    bool telemetryEnabled = aSTS->IsTelemetryEnabledAndNotSleepPhase();
-
 #if defined(XP_WIN)
     AttachShutdownLayer(aFd);
 #endif
@@ -3498,67 +3490,14 @@ nsSocketTransport::CloseSocket(PRFileDesc *aFd, nsSocketTransportService *aSTS)
     // nsIOService::LastOfflineStateChange time and
     // nsIOService::LastConectivityChange time to be atomic.
     PRIntervalTime closeStarted;
-    if (telemetryEnabled) {
+    if (aTelemetryEnabled) {
         closeStarted = PR_IntervalNow();
     }
 
-#if defined(_WIN64) && defined(WIN95)
-    bool canClose = false;
-    if (aSTS->HasFileDesc2PlatformOverlappedIOHandleFunc()) {
-      LPOVERLAPPED ol = nullptr;
-      if (aSTS->CallFileDesc2PlatformOverlappedIOHandleFunc(aFd, (void**)&ol) == PR_SUCCESS) {
-        SOCKET_LOG(("nsSocketTransport::CloseSocket - we have an overlapped "
-                    "structure=%p aFd=%p\n", ol, aFd));
-        PROsfd osfd = PR_FileDesc2NativeHandle(aFd);
-        if (telemetryEnabled) {
-            Telemetry::ScalarAdd(Telemetry::ScalarID::NETWORK_TCP_OVERLAPPED_IO_CANCELED_BEFORE_FINISHED, 1);
-        }
-        if (CancelIo((HANDLE) osfd) == TRUE) {
-            SOCKET_LOG(("nsSocketTransport::CloseSocket - "
-                        "CancelIo succeeded\n"));
-        } else {
-            int err = WSAGetLastError();
-            SOCKET_LOG(("nsSocketTransport::CloseSocket - "
-                        "CancelIo failed err=%x\n", err));
-        }
-
-        DWORD rvSent;
-        if (GetOverlappedResult((HANDLE) osfd, ol, &rvSent, FALSE) == TRUE) {
-            SOCKET_LOG(("nsSocketTransport::CloseSocket - "
-                        "GetOverlappedResult done\n"));
-            canClose = true;
-        } else {
-            int err = WSAGetLastError();
-            SOCKET_LOG(("nsSocketTransport::CloseSocket - "
-                        "GetOverlappedResult err=%x\n", err));
-            if (err != ERROR_IO_INCOMPLETE) {
-                canClose = true;
-            }
-        }
-
-      } else {
-        SOCKET_LOG(("nsSocketTransport::CloseSocket - no overlapped struct\n"));
-        canClose = true;
-      }
-    } else {
-      SOCKET_LOG(("nsSocketTransport::CloseSocket - there is no "
-                  "PR_EXPERIMENTAL_ONLY_IN_4_17_GetOverlappedIOHandle function.\n"));
-      canClose = true;
-    }
-
-    if (canClose) {
-        PR_Close(aFd);
-    } else {
-        if (telemetryEnabled) {
-            Telemetry::ScalarAdd(Telemetry::ScalarID::NETWORK_TCP_OVERLAPPED_RESULT_DELAYED, 1);
-        }
-        aSTS->AddOverlappedPendingSocket(aFd);
-    }
-#else
     PR_Close(aFd);
-#endif
 
-    if (telemetryEnabled) {
+
+    if (aTelemetryEnabled) {
         SendPRBlockingTelemetry(closeStarted,
             Telemetry::PRCLOSE_TCP_BLOCKING_TIME_NORMAL,
             Telemetry::PRCLOSE_TCP_BLOCKING_TIME_SHUTDOWN,

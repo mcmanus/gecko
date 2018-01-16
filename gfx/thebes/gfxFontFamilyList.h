@@ -40,6 +40,7 @@ enum FontFamilyType : uint32_t {
   // special
   eFamily_moz_variable,
   eFamily_moz_fixed,
+  eFamily_moz_emoji,
 
   eFamily_generic_first = eFamily_serif,
   eFamily_generic_last = eFamily_fantasy,
@@ -444,6 +445,11 @@ protected:
 inline bool
 operator==(const FontFamilyList& a, const FontFamilyList& b) {
     return a.Equals(b);
+}
+
+inline bool
+operator!=(const FontFamilyList& a, const FontFamilyList& b) {
+    return !a.Equals(b);
 }
 
 } // namespace mozilla

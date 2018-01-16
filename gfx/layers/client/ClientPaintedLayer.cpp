@@ -66,13 +66,7 @@ ClientPaintedLayer::CanRecordLayer(ReadbackProcessor* aReadback)
     return false;
   }
 
-  // If we have mask layers, we have to render those first
-  // In this case, don't record for now.
-  if (GetMaskLayer()) {
-    return false;
-  }
-
-  return GetAncestorMaskLayerCount() == 0;
+  return true;
 }
 
 void
@@ -181,6 +175,28 @@ ClientPaintedLayer::PaintThebes(nsTArray<ReadbackProcessor::Update>* aReadbackUp
   }
 }
 
+class MOZ_RAII AutoQueuedAsyncPaint
+{
+public:
+  explicit AutoQueuedAsyncPaint(ClientLayerManager* aLayerManager)
+    : mLayerManager(aLayerManager)
+    , mQueuedAsyncPaints(false)
+  { }
+
+  void Queue() { mQueuedAsyncPaints = true; }
+
+  ~AutoQueuedAsyncPaint()
+  {
+    if (mQueuedAsyncPaints) {
+      mLayerManager->SetQueuedAsyncPaints();
+    }
+  }
+
+private:
+  ClientLayerManager* mLayerManager;
+  bool mQueuedAsyncPaints;
+};
+
 /***
  * If we can, let's paint this ClientPaintedLayer's contents off the main thread.
  * The essential idea is that we ask the ContentClient for a DrawTarget and record
@@ -204,14 +220,21 @@ ClientPaintedLayer::PaintThebes(nsTArray<ReadbackProcessor::Update>* aReadbackUp
  *     but block the main thread while the paint thread paints. Async OMTP doesn't block
  *     the main thread. Sync OMTP is only meant to be used as a debugging tool.
  */
-bool
+void
 ClientPaintedLayer::PaintOffMainThread()
 {
-  uint32_t flags = GetPaintFlags();
+  AutoQueuedAsyncPaint asyncPaints(ClientManager());
 
+  uint32_t flags = GetPaintFlags();
   PaintState state = mContentClient->BeginPaint(this, flags | ContentClient::PAINT_ASYNC);
+
+  if (state.mBufferState && state.mBufferState->HasOperations()) {
+    PaintThread::Get()->PrepareBuffer(state.mBufferState);
+    asyncPaints.Queue();
+  }
+
   if (!UpdatePaintRegion(state)) {
-    return false;
+    return;
   }
 
   bool didUpdate = false;
@@ -256,6 +279,7 @@ ClientPaintedLayer::PaintOffMainThread()
 
     mContentClient->ReturnDrawTarget(target);
 
+    asyncPaints.Queue();
     didUpdate = true;
   }
 
@@ -264,9 +288,7 @@ ClientPaintedLayer::PaintOffMainThread()
 
   if (didUpdate) {
     UpdateContentClient(state);
-    ClientManager()->SetQueuedAsyncPaints();
   }
-  return true;
 }
 
 void
@@ -279,9 +301,8 @@ ClientPaintedLayer::RenderLayerWithReadback(ReadbackProcessor *aReadback)
   }
 
   if (CanRecordLayer(aReadback)) {
-    if (PaintOffMainThread()) {
-      return;
-    }
+    PaintOffMainThread();
+    return;
   }
 
   nsTArray<ReadbackProcessor::Update> readbackUpdates;
@@ -303,13 +324,7 @@ already_AddRefed<PaintedLayer>
 ClientLayerManager::CreatePaintedLayerWithHint(PaintedLayerCreationHint aHint)
 {
   NS_ASSERTION(InConstruction(), "Only allowed in construction phase");
-  // The non-tiling ContentClient requires CrossProcessSemaphore which
-  // isn't implemented for OSX.
-#ifdef XP_MACOSX
-  if (true) {
-#else
-  if (gfxPrefs::LayersTilesEnabled()) {
-#endif
+  if (gfxPlatform::GetPlatform()->UsesTiling()) {
     RefPtr<ClientTiledPaintedLayer> layer = new ClientTiledPaintedLayer(this, aHint);
     CREATE_SHADOW(Painted);
     return layer.forget();

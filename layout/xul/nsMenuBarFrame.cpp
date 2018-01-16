@@ -162,11 +162,8 @@ nsMenuBarFrame::FindMenuWithShortcut(nsIDOMKeyEvent* aKeyEvent)
     return nullptr; // no character was pressed so just return
 
   // Enumerate over our list of frames.
-  auto insertion = PresContext()->PresShell()->FrameConstructor()->
-    GetInsertionPoint(GetContent(), nullptr);
-  nsContainerFrame* immediateParent = insertion.mParentFrame;
-  if (!immediateParent)
-    immediateParent = this;
+  nsContainerFrame* immediateParent =
+    nsXULPopupManager::ImmediateParentFrame(this);
 
   // Find a most preferred accesskey which should be returned.
   nsIFrame* foundMenu = nullptr;
@@ -180,7 +177,10 @@ nsMenuBarFrame::FindMenuWithShortcut(nsIDOMKeyEvent* aKeyEvent)
     if (nsXULPopupManager::IsValidMenuItem(current, false)) {
       // Get the shortcut attribute.
       nsAutoString shortcutKey;
-      current->GetAttr(kNameSpaceID_None, nsGkAtoms::accesskey, shortcutKey);
+      if (current->IsElement()) {
+        current->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::accesskey,
+                                      shortcutKey);
+      }
       if (!shortcutKey.IsEmpty()) {
         ToLowerCase(shortcutKey);
         const char16_t* start = shortcutKey.BeginReading();

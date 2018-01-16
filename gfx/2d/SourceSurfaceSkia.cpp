@@ -13,6 +13,8 @@
 #include "skia/include/core/SkData.h"
 #include "mozilla/CheckedInt.h"
 
+using namespace std;
+
 namespace mozilla {
 namespace gfx {
 
@@ -24,10 +26,6 @@ SourceSurfaceSkia::SourceSurfaceSkia()
 
 SourceSurfaceSkia::~SourceSurfaceSkia()
 {
-  if (mDrawTarget) {
-    mDrawTarget->SnapshotDestroyed();
-    mDrawTarget = nullptr;
-  }
 }
 
 IntSize

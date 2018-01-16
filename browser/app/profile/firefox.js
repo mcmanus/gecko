@@ -43,13 +43,10 @@ pref("extensions.webextOptionalPermissionPrompts", true);
 
 // Preferences for AMO integration
 pref("extensions.getAddons.cache.enabled", true);
-pref("extensions.getAddons.maxResults", 15);
 pref("extensions.getAddons.get.url", "https://services.addons.mozilla.org/%LOCALE%/firefox/api/%API_VERSION%/search/guid:%IDS%?src=firefox&appOS=%OS%&appVersion=%VERSION%");
 pref("extensions.getAddons.getWithPerformance.url", "https://services.addons.mozilla.org/%LOCALE%/firefox/api/%API_VERSION%/search/guid:%IDS%?src=firefox&appOS=%OS%&appVersion=%VERSION%&tMain=%TIME_MAIN%&tFirstPaint=%TIME_FIRST_PAINT%&tSessionRestored=%TIME_SESSION_RESTORED%");
 pref("extensions.getAddons.search.browseURL", "https://addons.mozilla.org/%LOCALE%/firefox/search?q=%TERMS%&platform=%OS%&appver=%VERSION%");
-pref("extensions.getAddons.search.url", "https://services.addons.mozilla.org/%LOCALE%/firefox/api/%API_VERSION%/search/%TERMS%/all/%MAX_RESULTS%/%OS%/%VERSION%/%COMPATIBILITY_MODE%?src=firefox");
 pref("extensions.webservice.discoverURL", "https://discovery.addons.mozilla.org/%LOCALE%/firefox/discovery/pane/%VERSION%/%OS%/%COMPATIBILITY_MODE%");
-pref("extensions.getAddons.recommended.url", "https://services.addons.mozilla.org/%LOCALE%/%APP%/api/%API_VERSION%/list/recommended/all/%MAX_RESULTS%/%OS%/%VERSION%?src=firefox");
 pref("extensions.getAddons.link.url", "https://addons.mozilla.org/%LOCALE%/firefox/");
 pref("extensions.getAddons.themes.browseURL", "https://addons.mozilla.org/%LOCALE%/firefox/themes/?src=firefox");
 
@@ -224,7 +221,6 @@ pref("browser.uitour.surveyDuration", 7200);
 pref("keyword.enabled", true);
 pref("browser.fixup.domainwhitelist.localhost", true);
 
-pref("general.useragent.locale", "@AB_CD@");
 pref("general.skins.selectedSkin", "classic/1.0");
 
 pref("general.smoothScroll", true);
@@ -397,9 +393,9 @@ pref("browser.search.geoSpecificDefaults", false);
 pref("browser.search.geoSpecificDefaults.url", "https://search.services.mozilla.com/1/%APP%/%VERSION%/%CHANNEL%/%LOCALE%/%REGION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%");
 
 // US specific default (used as a fallback if the geoSpecificDefaults request fails).
-pref("browser.search.defaultenginename.US",      "data:text/plain,browser.search.defaultenginename.US=Yahoo");
-pref("browser.search.order.US.1",                "data:text/plain,browser.search.order.US.1=Yahoo");
-pref("browser.search.order.US.2",                "data:text/plain,browser.search.order.US.2=Google");
+pref("browser.search.defaultenginename.US",      "data:text/plain,browser.search.defaultenginename.US=Google");
+pref("browser.search.order.US.1",                "data:text/plain,browser.search.order.US.1=Google");
+pref("browser.search.order.US.2",                "data:text/plain,browser.search.order.US.2=Yahoo");
 pref("browser.search.order.US.3",                "data:text/plain,browser.search.order.US.3=Bing");
 
 // search bar results always open in a new tab
@@ -429,6 +425,7 @@ pref("permissions.default.camera", 0);
 pref("permissions.default.microphone", 0);
 pref("permissions.default.geo", 0);
 pref("permissions.default.desktop-notification", 0);
+pref("permissions.default.shortcuts", 0);
 
 // handle links targeting new windows
 // 1=current window/tab, 2=new window, 3=new tab in most recent window
@@ -526,8 +523,6 @@ pref("general.warnOnAboutConfig",                 false);
 // applications, but without it there isn't a really good way to prevent chrome
 // spoofing, see bug 337344
 pref("dom.disable_window_open_feature.location",  true);
-// prevent JS from setting status messages
-pref("dom.disable_window_status_change",          true);
 // allow JS to move and resize existing windows
 pref("dom.disable_window_move_resize",            false);
 // prevent JS from monkeying with window focus, etc
@@ -580,6 +575,12 @@ pref("privacy.panicButton.enabled",         true);
 
 // Time until temporary permissions expire, in ms
 pref("privacy.temporary_permission_expire_time_ms",  3600000);
+
+// If Accept-Language should be spoofed by en-US
+// 0 - will prompt
+// 1 - don't spoof
+// 2 - spoof
+pref("privacy.spoof_english", 0);
 
 pref("network.proxy.share_proxy_settings",  false); // use the same proxy settings for all protocols
 
@@ -1046,9 +1047,9 @@ pref("dom.ipc.plugins.sandbox-level.flash", 0);
 // See - security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
 // SetSecurityLevelForContentProcess() for what the different settings mean.
 #if defined(NIGHTLY_BUILD)
-pref("security.sandbox.content.level", 4);
+pref("security.sandbox.content.level", 5);
 #else
-pref("security.sandbox.content.level", 3);
+pref("security.sandbox.content.level", 4);
 #endif
 
 // This controls the depth of stack trace that is logged when Windows sandbox
@@ -1218,6 +1219,9 @@ pref("services.sync.prefs.sync.privacy.donottrackheader.enabled", true);
 pref("services.sync.prefs.sync.privacy.sanitize.sanitizeOnShutdown", true);
 pref("services.sync.prefs.sync.privacy.trackingprotection.enabled", true);
 pref("services.sync.prefs.sync.privacy.trackingprotection.pbmode.enabled", true);
+pref("services.sync.prefs.sync.privacy.resistFingerprinting", true);
+pref("services.sync.prefs.sync.privacy.reduceTimerPrecision", true);
+pref("services.sync.prefs.sync.privacy.resistFingerprinting.reduceTimerPrecision.microseconds", true);
 pref("services.sync.prefs.sync.security.OCSP.enabled", true);
 pref("services.sync.prefs.sync.security.OCSP.require", true);
 pref("services.sync.prefs.sync.security.default_personal_cert", true);
@@ -1329,6 +1333,10 @@ pref("security.insecure_password.ui.enabled", true);
 // Show in-content login form warning UI for insecure login fields
 pref("security.insecure_field_warning.contextual.enabled", true);
 
+// Show degraded UI for http pages; disabled for now
+pref("security.insecure_connection_icon.enabled", false);
+pref("security.insecure_connection_icon.pbmode.enabled", false);
+
 // 1 = allow MITM for certificate pinning checks.
 pref("security.cert_pinning.enforcement_level", 1);
 
@@ -1429,6 +1437,8 @@ pref("identity.fxaccounts.remote.oauth.uri", "https://oauth.accounts.firefox.com
 // Token server used by the FxA Sync identity.
 pref("identity.sync.tokenserver.uri", "https://token.services.mozilla.com/1.0/sync/1.5");
 
+// The URL to a page that explains how to connect another device to Sync.
+pref("identity.fxaccounts.remote.connectdevice.uri", "https://accounts.firefox.com/connect_another_device?service=sync&context=fx_desktop_v3");
 // URLs for promo links to mobile browsers. Note that consumers are expected to
 // append a value for utm_campaign.
 pref("identity.mobilepromo.android", "https://www.mozilla.org/firefox/android/?utm_source=firefox-browser&utm_medium=firefox-browser&utm_campaign=");
@@ -1466,6 +1476,8 @@ pref("media.eme.vp9-in-mp4.enabled", true);
 #else
 pref("media.eme.vp9-in-mp4.enabled", false);
 #endif
+
+pref("media.eme.hdcp-policy-check.enabled", false);
 
 // Whether we should run a test-pattern through EME GMPs before assuming they'll
 // decode H.264.
@@ -1511,6 +1523,8 @@ pref("toolkit.telemetry.newProfilePing.enabled", true);
 pref("toolkit.telemetry.updatePing.enabled", true);
 // Enables sending 'bhr' pings when the browser hangs.
 pref("toolkit.telemetry.bhrPing.enabled", true);
+// Enables using Hybrid Content Telemetry from Mozilla privileged pages.
+pref("toolkit.telemetry.hybridContent.enabled", true);
 
 // Telemetry experiments settings.
 pref("experiments.enabled", true);
@@ -1614,7 +1628,6 @@ pref("reader.errors.includeURLs", true);
 pref("view_source.tab", true);
 
 pref("dom.serviceWorkers.enabled", true);
-pref("dom.serviceWorkers.openWindow.enabled", true);
 
 // Enable Push API.
 pref("dom.push.enabled", true);
@@ -1666,7 +1679,7 @@ pref("print.use_simplify_page", true);
 
 // Space separated list of URLS that are allowed to send objects (instead of
 // only strings) through webchannels. This list is duplicated in mobile/android/app/mobile.js
-pref("webchannel.allowObject.urlWhitelist", "https://accounts.firefox.com https://content.cdn.mozilla.net https://input.mozilla.org https://support.mozilla.org https://install.mozilla.org");
+pref("webchannel.allowObject.urlWhitelist", "https://content.cdn.mozilla.net https://input.mozilla.org https://support.mozilla.org https://install.mozilla.org");
 
 // Whether or not the browser should scan for unsubmitted
 // crash reports, and then show a notification for submitting
@@ -1682,7 +1695,7 @@ pref("browser.crashReports.unsubmittedCheck.enabled", false);
 // without a user choice before we suppress the notification for
 // some number of days.
 pref("browser.crashReports.unsubmittedCheck.chancesUntilSuppress", 4);
-pref("browser.crashReports.unsubmittedCheck.autoSubmit", false);
+pref("browser.crashReports.unsubmittedCheck.autoSubmit2", false);
 
 // Preferences for the form autofill system extension
 // The truthy values of "extensions.formautofill.available" are "on" and "detect",
@@ -1690,21 +1703,30 @@ pref("browser.crashReports.unsubmittedCheck.autoSubmit", false);
 // "detect" means it's enabled if conditions defined in the extension are met.
 #ifdef NIGHTLY_BUILD
 pref("extensions.formautofill.available", "on");
+pref("extensions.formautofill.creditCards.available", true);
 #elif MOZ_UPDATE_CHANNEL == release
 pref("extensions.formautofill.available", "staged-rollout");
+pref("extensions.formautofill.creditCards.available", false);
 #else
 pref("extensions.formautofill.available", "detect");
+pref("extensions.formautofill.creditCards.available", true);
 #endif
 pref("extensions.formautofill.addresses.enabled", true);
-#ifdef NIGHTLY_BUILD
-pref("extensions.formautofill.creditCards.available", true);
-#else
-pref("extensions.formautofill.creditCards.available", false);
-#endif
 pref("extensions.formautofill.creditCards.enabled", true);
+// Pref for shield/heartbeat to recognize users who have used Credit Card
+// Autofill. The valid values can be:
+// 0: none
+// 1: submitted a manually-filled credit card form (but didn't see the doorhanger
+//    because of a duplicate profile in the storage)
+// 2: saw the doorhanger
+// 3: submitted an autofill'ed credit card form
+pref("extensions.formautofill.creditCards.used", 0);
 pref("extensions.formautofill.firstTimeUse", true);
 pref("extensions.formautofill.heuristics.enabled", true);
+pref("extensions.formautofill.section.enabled", true);
 pref("extensions.formautofill.loglevel", "Warn");
+// Comma separated list of countries Form Autofill supports
+pref("extensions.formautofill.supportedCountries", "US,CA,DE");
 
 // Whether or not to restore a session with lazy-browser tabs.
 pref("browser.sessionstore.restore_tabs_lazily", true);

@@ -11,10 +11,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 
 import org.mozilla.gecko.annotation.WrapForJNI;
+import org.mozilla.gecko.gfx.LayerSession;
 import org.mozilla.gecko.mozglue.JNIObject;
 import org.mozilla.gecko.util.BundleEventListener;
 import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.GeckoBundle;
+import org.mozilla.gecko.util.ThreadUtils;
 
 import android.content.ContentResolver;
 import android.content.Context;
@@ -27,11 +29,13 @@ import android.os.IInterface;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.SystemClock;
+import android.support.annotation.NonNull;
 import android.util.AttributeSet;
 import android.util.DisplayMetrics;
 import android.util.Log;
 
-public class GeckoSession implements Parcelable {
+public class GeckoSession extends LayerSession
+                          implements Parcelable {
     private static final String LOGTAG = "GeckoSession";
     private static final boolean DEBUG = false;
 
@@ -62,6 +66,8 @@ public class GeckoSession implements Parcelable {
 
     private final EventDispatcher mEventDispatcher =
         new EventDispatcher(mNativeQueue);
+
+    private final TextInputController mTextInput = new TextInputController(this, mNativeQueue);
 
     private final GeckoSessionHandler<ContentListener> mContentHandler =
         new GeckoSessionHandler<ContentListener>(
@@ -290,7 +296,7 @@ public class GeckoSession implements Parcelable {
         }
 
         @Override // IInterface
-        public IBinder asBinder() {
+        public Binder asBinder() {
             if (mBinder == null) {
                 mBinder = new Binder();
                 mBinder.attachInterface(this, Window.class.getName());
@@ -299,30 +305,51 @@ public class GeckoSession implements Parcelable {
         }
 
         @WrapForJNI(dispatchTo = "proxy")
-        static native void open(Window instance, EventDispatcher dispatcher,
-                                GeckoBundle settings, String chromeUri,
-                                int screenId, boolean privateMode);
+        public static native void open(Window instance, Compositor compositor,
+                                       EventDispatcher dispatcher,
+                                       GeckoBundle settings, String chromeUri,
+                                       int screenId, boolean privateMode);
+
+        @Override // JNIObject
+        protected void disposeNative() {
+            // Detach ourselves from the binder as well, to prevent this window from being
+            // read from any parcels.
+            asBinder().attachInterface(null, Window.class.getName());
+
+            if (GeckoThread.isStateAtLeast(GeckoThread.State.PROFILE_READY)) {
+                nativeDisposeNative();
+            } else {
+                GeckoThread.queueNativeCallUntil(GeckoThread.State.PROFILE_READY,
+                        this, "nativeDisposeNative");
+            }
+        }
+
+        @WrapForJNI(dispatchTo = "proxy", stubName = "DisposeNative")
+        private native void nativeDisposeNative();
 
         @WrapForJNI(dispatchTo = "proxy")
-        @Override protected native void disposeNative();
+        public native void close();
 
         @WrapForJNI(dispatchTo = "proxy")
-        native void close();
-
-        @WrapForJNI(dispatchTo = "proxy")
-        native void transfer(EventDispatcher dispatcher, GeckoBundle settings);
+        public native void transfer(Compositor compositor, EventDispatcher dispatcher,
+                                    GeckoBundle settings);
 
         @WrapForJNI(calledFrom = "gecko")
         private synchronized void onTransfer(final EventDispatcher dispatcher) {
             final NativeQueue nativeQueue = dispatcher.getNativeQueue();
             if (mNativeQueue != nativeQueue) {
+                // Set new queue to the same state as the old queue,
+                // then return the old queue to its initial state if applicable,
+                // because the old queue is no longer the active queue.
                 nativeQueue.setState(mNativeQueue.getState());
+                mNativeQueue.checkAndSetState(State.READY, State.INITIAL);
                 mNativeQueue = nativeQueue;
             }
         }
 
         @WrapForJNI(dispatchTo = "proxy")
-        native void attach(GeckoView view, Object compositor);
+        public native void attachEditable(IGeckoEditableParent parent,
+                                          GeckoEditableChild child);
 
         @WrapForJNI(calledFrom = "gecko")
         private synchronized void onReady() {
@@ -380,19 +407,23 @@ public class GeckoSession implements Parcelable {
 
         if (mWindow != null) {
             if (GeckoThread.isStateAtLeast(GeckoThread.State.PROFILE_READY)) {
-                mWindow.transfer(mEventDispatcher, mSettings.asBundle());
+                mWindow.transfer(mCompositor, mEventDispatcher, mSettings.asBundle());
             } else {
                 GeckoThread.queueNativeCallUntil(GeckoThread.State.PROFILE_READY,
                         mWindow, "transfer",
+                        Compositor.class, mCompositor,
                         EventDispatcher.class, mEventDispatcher,
                         GeckoBundle.class, mSettings.asBundle());
             }
         }
+
+        onWindowChanged();
     }
 
     /* package */ void transferFrom(final GeckoSession session) {
         transferFrom(session.mWindow, session.mSettings);
         session.mWindow = null;
+        session.onWindowChanged();
     }
 
     @Override // Parcelable
@@ -466,6 +497,8 @@ public class GeckoSession implements Parcelable {
     }
 
     public void openWindow(final Context appContext) {
+        ThreadUtils.assertOnUiThread();
+
         if (isOpen()) {
             throw new IllegalStateException("Session is open");
         }
@@ -476,11 +509,6 @@ public class GeckoSession implements Parcelable {
             preload(appContext, /* geckoArgs */ null, multiprocess);
         }
 
-        if (mSettings.getString(GeckoSessionSettings.DATA_DIR) == null) {
-            mSettings.setString(GeckoSessionSettings.DATA_DIR,
-                                appContext.getApplicationInfo().dataDir);
-        }
-
         final String chromeUri = mSettings.getString(GeckoSessionSettings.CHROME_URI);
         final int screenId = mSettings.getInt(GeckoSessionSettings.SCREEN_ID);
         final boolean isPrivate = mSettings.getBoolean(GeckoSessionSettings.USE_PRIVATE_MODE);
@@ -488,47 +516,56 @@ public class GeckoSession implements Parcelable {
         mWindow = new Window(mNativeQueue);
 
         if (GeckoThread.isStateAtLeast(GeckoThread.State.PROFILE_READY)) {
-            Window.open(mWindow, mEventDispatcher, mSettings.asBundle(),
-                        chromeUri, screenId, isPrivate);
+            Window.open(mWindow, mCompositor, mEventDispatcher,
+                        mSettings.asBundle(), chromeUri, screenId, isPrivate);
         } else {
             GeckoThread.queueNativeCallUntil(
                 GeckoThread.State.PROFILE_READY,
                 Window.class, "open",
                 Window.class, mWindow,
+                Compositor.class, mCompositor,
                 EventDispatcher.class, mEventDispatcher,
                 GeckoBundle.class, mSettings.asBundle(),
                 String.class, chromeUri,
                 screenId, isPrivate);
         }
-    }
 
-    public void attachView(final GeckoView view) {
-        if (view == null) {
-            return;
-        }
-
-        if (GeckoThread.isStateAtLeast(GeckoThread.State.PROFILE_READY)) {
-            mWindow.attach(view, view.getCompositor());
-        } else {
-            GeckoThread.queueNativeCallUntil(GeckoThread.State.PROFILE_READY,
-                    mWindow, "attach",
-                    GeckoView.class, view,
-                    Object.class, view.getCompositor());
-        }
+        onWindowChanged();
     }
 
     public void closeWindow() {
+        ThreadUtils.assertOnUiThread();
+
+        if (!isOpen()) {
+            throw new IllegalStateException("Session is not open");
+        }
+
         if (GeckoThread.isStateAtLeast(GeckoThread.State.PROFILE_READY)) {
             mWindow.close();
-            mWindow.disposeNative();
         } else {
             GeckoThread.queueNativeCallUntil(GeckoThread.State.PROFILE_READY,
                     mWindow, "close");
-            GeckoThread.queueNativeCallUntil(GeckoThread.State.PROFILE_READY,
-                    mWindow, "disposeNative");
         }
 
+        mWindow.disposeNative();
         mWindow = null;
+        onWindowChanged();
+    }
+
+    private void onWindowChanged() {
+        if (mWindow != null) {
+            mTextInput.onWindowChanged(mWindow);
+        }
+    }
+
+    /**
+     * Get the TextInputController instance for this session.
+     *
+     * @return TextInputController instance.
+     */
+    public @NonNull TextInputController getTextInputController() {
+        // May be called on any thread.
+        return mTextInput;
     }
 
     /**

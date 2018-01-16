@@ -8,7 +8,7 @@
 #include "nsSVGForeignObjectFrame.h"
 
 // Keep others in (case-insensitive) order:
-#include "DrawResult.h"
+#include "ImgDrawResult.h"
 #include "gfxContext.h"
 #include "nsDisplayList.h"
 #include "nsGkAtoms.h"
@@ -440,7 +440,7 @@ nsSVGForeignObjectFrame::NotifySVGChanged(uint32_t aFlags)
   // PresShell and prevent it from reflowing us properly in future. Besides
   // that, nsSVGOuterSVGFrame::DidReflow will take care of reflowing us
   // synchronously, so there's no need.
-  if (needReflow && !PresContext()->PresShell()->IsReflowLocked()) {
+  if (needReflow && !PresShell()->IsReflowLocked()) {
     RequestReflow(nsIPresShell::eResize);
   }
 
@@ -503,7 +503,7 @@ void nsSVGForeignObjectFrame::RequestReflow(nsIPresShell::IntrinsicDirty aType)
   if (!kid)
     return;
 
-  PresContext()->PresShell()->FrameNeedsReflow(kid, aType, NS_FRAME_IS_DIRTY);
+  PresShell()->FrameNeedsReflow(kid, aType, NS_FRAME_IS_DIRTY);
 }
 
 void

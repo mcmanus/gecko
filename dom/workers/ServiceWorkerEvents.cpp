@@ -24,13 +24,13 @@
 #include "nsNetUtil.h"
 #include "nsSerializationHelper.h"
 #include "nsQueryObject.h"
-#include "ServiceWorkerClient.h"
 #include "ServiceWorkerManager.h"
 
 #include "mozilla/ErrorResult.h"
 #include "mozilla/LoadInfo.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/BodyUtil.h"
+#include "mozilla/dom/Client.h"
 #include "mozilla/dom/FetchEventBinding.h"
 #include "mozilla/dom/MessagePort.h"
 #include "mozilla/dom/PromiseNativeHandler.h"
@@ -337,13 +337,37 @@ public:
     auto castLoadInfo = static_cast<LoadInfo*>(loadInfo.get());
     castLoadInfo->SynthesizeServiceWorkerTainting(mInternalResponse->GetTainting());
 
-    nsCOMPtr<nsIInputStream> body;
-    mInternalResponse->GetUnfilteredBody(getter_AddRefs(body));
+    // Get the preferred alternative data type of outter channel
+    nsAutoCString preferredAltDataType(EmptyCString());
+    nsCOMPtr<nsICacheInfoChannel> outerChannel = do_QueryInterface(underlyingChannel);
+    if (outerChannel) {
+      outerChannel->GetPreferredAlternativeDataType(preferredAltDataType);
+    }
+
+    // Get the alternative data type saved in the InternalResponse
+    nsAutoCString altDataType;
+    nsCOMPtr<nsICacheInfoChannel> cacheInfoChannel =
+      mInternalResponse->TakeCacheInfoChannel().get();
+    if (cacheInfoChannel) {
+      cacheInfoChannel->GetAlternativeDataType(altDataType);
+    }
+
+     nsCOMPtr<nsIInputStream> body;
+    if (preferredAltDataType.Equals(altDataType)) {
+      body = mInternalResponse->TakeAlternativeBody();
+    }
+    if (!body) {
+      mInternalResponse->GetUnfilteredBody(getter_AddRefs(body));
+    } else {
+      Telemetry::ScalarAdd(Telemetry::ScalarID::SW_ALTERNATIVE_BODY_USED_COUNT, 1);
+    }
+
     RefPtr<BodyCopyHandle> copyHandle;
     copyHandle = new BodyCopyHandle(Move(mClosure));
 
-    rv = mChannel->StartSynthesizedResponse(body, copyHandle,
-                                            mResponseURLSpec);
+    rv = mChannel->StartSynthesizedResponse(body, copyHandle, cacheInfoChannel,
+                                            mResponseURLSpec,
+                                            mInternalResponse->IsRedirected());
     if (NS_WARN_IF(NS_FAILED(rv))) {
       mChannel->CancelInterception(NS_ERROR_INTERCEPTION_FAILED);
       return NS_OK;
@@ -658,15 +682,38 @@ RespondWithHandler::ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValu
   if (NS_WARN_IF(!ir)) {
     return;
   }
-  // When an opaque response is encountered, we need the original channel's principal
-  // to reflect the final URL. Non-opaque responses are either same-origin or CORS-enabled
-  // cross-origin responses, which are treated as same-origin by consumers.
+
+  // An extra safety check to make sure our invariant that opaque and cors
+  // responses always have a URL does not break.
+  if (NS_WARN_IF((response->Type() == ResponseType::Opaque ||
+                  response->Type() == ResponseType::Cors) &&
+                 ir->GetUnfilteredURL().IsEmpty())) {
+    MOZ_DIAGNOSTIC_ASSERT(false, "Cors or opaque Response without a URL");
+    return;
+  }
+
+  Telemetry::ScalarAdd(Telemetry::ScalarID::SW_SYNTHESIZED_RES_COUNT, 1);
+
+  if (mRequestMode == RequestMode::Same_origin &&
+      response->Type() == ResponseType::Cors) {
+    Telemetry::ScalarAdd(Telemetry::ScalarID::SW_CORS_RES_FOR_SO_REQ_COUNT, 1);
+
+    // XXXtt: Will have a pref to enable the quirk response in bug 1419684.
+    // The variadic template provided by StringArrayAppender requires exactly
+    // an nsString.
+    NS_ConvertUTF8toUTF16 responseURL(ir->GetUnfilteredURL());
+    autoCancel.SetCancelMessage(
+      NS_LITERAL_CSTRING("CorsResponseForSameOriginRequest"), mRequestURL,
+      responseURL);
+    return;
+  }
+
+  // Propagate the URL to the content if the request mode is not "navigate".
+  // Note that, we only reflect the final URL if the response.redirected is
+  // false. We propagate all the URLs if the response.redirected is true.
   nsCString responseURL;
-  if (response->Type() == ResponseType::Opaque) {
+  if (mRequestMode != RequestMode::Navigate) {
     responseURL = ir->GetUnfilteredURL();
-    if (NS_WARN_IF(responseURL.IsEmpty())) {
-      return;
-    }
   }
 
   UniquePtr<RespondWithClosure> closure(new RespondWithClosure(mInterceptedChannel,

@@ -84,7 +84,7 @@ void
 TouchEvent::InitTouchEvent(const nsAString& aType,
                            bool aCanBubble,
                            bool aCancelable,
-                           nsGlobalWindow* aView,
+                           nsGlobalWindowInner* aView,
                            int32_t aDetail,
                            bool aCtrlKey,
                            bool aAltKey,
@@ -171,7 +171,7 @@ TouchEvent::PrefEnabled(JSContext* aCx, JSObject* aGlobal)
 {
   nsIDocShell* docShell = nullptr;
   if (aGlobal) {
-    nsGlobalWindow* win = xpc::WindowOrNull(aGlobal);
+    nsGlobalWindowInner* win = xpc::WindowOrNull(aGlobal);
     if (win) {
       docShell = win->GetDocShell();
     }
@@ -206,7 +206,7 @@ TouchEvent::PrefEnabled(nsIDocShell* aDocShell)
 #if defined(MOZ_WIDGET_ANDROID)
       // Touch support is always enabled on B2G and android.
       enabled = true;
-#elif defined(XP_WIN) || MOZ_WIDGET_GTK == 3
+#elif defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
       static bool sDidCheckTouchDeviceSupport = false;
       static bool sIsTouchDeviceSupportPresent = false;
       // On Windows and GTK3 we auto-detect based on device support.

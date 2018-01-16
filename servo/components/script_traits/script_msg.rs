@@ -16,7 +16,7 @@ use canvas_traits::canvas::CanvasMsg;
 use devtools_traits::{ScriptToDevtoolsControlMsg, WorkerId};
 use euclid::{Point2D, Size2D, TypedSize2D};
 use gfx_traits::Epoch;
-use ipc_channel::ipc::IpcSender;
+use ipc_channel::ipc::{IpcReceiver, IpcSender};
 use msg::constellation_msg::{BrowsingContextId, FrameType, PipelineId, TraversalDirection};
 use msg::constellation_msg::{Key, KeyModifiers, KeyState};
 use net_traits::CoreResourceMsg;
@@ -71,7 +71,7 @@ pub enum LogEntry {
 pub enum ScriptMsg {
     /// Requests are sent to constellation and fetches are checked manually
     /// for cross-origin loads
-    InitiateNavigateRequest(RequestInit),
+    InitiateNavigateRequest(RequestInit, /* cancellation_chan */ IpcReceiver<()>),
     /// Broadcast a storage event to every same-origin pipeline.
     /// The strings are key, old value and new value.
     BroadcastStorageEvent(StorageType, ServoUrl, Option<String>, Option<String>, Option<String>),
@@ -157,6 +157,10 @@ pub enum ScriptMsg {
     RegisterServiceWorker(ScopeThings, ServoUrl),
     /// Enter or exit fullscreen
     SetFullscreenState(bool),
+    /// Get the screen size (pixel)
+    GetScreenSize(IpcSender<(Size2D<u32>)>),
+    /// Get the available screen size (pixel)
+    GetScreenAvailSize(IpcSender<(Size2D<u32>)>),
     /// Requests that the compositor shut down.
     Exit,
 }

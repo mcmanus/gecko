@@ -33,6 +33,7 @@ import org.mozilla.gecko.ActivityHandlerHelper;
 import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.BrowserApp;
 import org.mozilla.gecko.DoorHangerPopup;
+import org.mozilla.gecko.FormAssistPopup;
 import org.mozilla.gecko.GeckoAccessibility;
 import org.mozilla.gecko.GeckoScreenOrientation;
 import org.mozilla.gecko.GeckoSession;
@@ -61,6 +62,8 @@ public class WebAppActivity extends AppCompatActivity
 
     private GeckoSession mGeckoSession;
     private GeckoView mGeckoView;
+    private FormAssistPopup mFormAssistPopup;
+
     private PromptService mPromptService;
     private DoorHangerPopup mDoorHangerPopup;
 
@@ -93,8 +96,9 @@ public class WebAppActivity extends AppCompatActivity
         }
 
         super.onCreate(savedInstanceState);
+        setContentView(R.layout.webapp_activity);
+        mGeckoView = (GeckoView) findViewById(R.id.pwa_gecko_view);
 
-        mGeckoView = new GeckoView(this);
         mGeckoSession = new GeckoSession();
         mGeckoView.setSession(mGeckoSession);
 
@@ -116,18 +120,20 @@ public class WebAppActivity extends AppCompatActivity
             GeckoSharedPrefs.forApp(this).getBoolean(
                 GeckoPreferences.PREFS_DEVTOOLS_REMOTE_USB_ENABLED, false));
 
-        mManifest = WebAppManifest.fromFile(getIntent().getStringExtra(MANIFEST_URL),
-                                            getIntent().getStringExtra(MANIFEST_PATH));
-
-        if (mManifest == null) {
+        try {
+            mManifest = WebAppManifest.fromFile(getIntent().getStringExtra(MANIFEST_URL),
+                                                getIntent().getStringExtra(MANIFEST_PATH));
+        } catch (Exception e) {
             Log.w(LOGTAG, "Cannot retrieve manifest, launching in Firefox");
             try {
                 Intent intent = new Intent(this, BrowserApp.class);
                 intent.setAction(Intent.ACTION_VIEW);
-                intent.setData(getIntent().getData());
-                intent.setPackage(getPackageName());
-                startActivity(intent);
-            } catch (Exception e) {
+                if (getIntent().getData() != null) {
+                    intent.setData(getIntent().getData());
+                    intent.setPackage(getPackageName());
+                    startActivity(intent);
+                }
+            } catch (Exception e2) {
                 Log.e(LOGTAG, "Failed to fall back to launching in Firefox");
             }
             finish();
@@ -138,7 +144,11 @@ public class WebAppActivity extends AppCompatActivity
 
         mGeckoSession.loadUri(mManifest.getStartUri().toString());
 
-        setContentView(mGeckoView);
+        mFormAssistPopup = (FormAssistPopup) findViewById(R.id.pwa_form_assist_popup);
+        mFormAssistPopup.create(mGeckoView);
+
+
+
     }
 
     @Override
@@ -158,7 +168,7 @@ public class WebAppActivity extends AppCompatActivity
         mTextSelection.destroy();
         mDoorHangerPopup.destroy();
         mPromptService.destroy();
-
+        mFormAssistPopup.destroy();
         super.onDestroy();
     }
 
@@ -319,6 +329,11 @@ public class WebAppActivity extends AppCompatActivity
         if (mManifest.isInScope(uri) && where != TargetWindow.NEW) {
             // This is in scope and wants to load in the same frame, so
             // let Gecko handle it.
+            return false;
+        }
+
+        if ("javascript".equals(uri.getScheme())) {
+            // These URIs will fail the scope check but should still be loaded in the PWA.
             return false;
         }
 

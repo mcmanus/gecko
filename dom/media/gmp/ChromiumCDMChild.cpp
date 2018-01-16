@@ -226,7 +226,13 @@ ChromiumCDMChild::CallOnMessageLoopThread(const char* const aName,
 void
 ChromiumCDMChild::OnResolveKeyStatusPromise(uint32_t aPromiseId,
                                             cdm::KeyStatus aKeyStatus) {
-  //TODO: The callback of GetStatusForPolicy, will implement it in Bug 1404230.
+  GMP_LOG("ChromiumCDMChild::OnResolveKeyStatusPromise(pid=%" PRIu32 "keystatus=%d)",
+          aPromiseId,
+          aKeyStatus);
+  CallOnMessageLoopThread("gmp::ChromiumCDMChild::OnResolveKeyStatusPromise",
+                          &ChromiumCDMChild::SendOnResolvePromiseWithKeyStatus,
+                          aPromiseId,
+                          static_cast<uint32_t>(aKeyStatus));
 }
 
 bool
@@ -454,7 +460,7 @@ ChromiumCDMChild::OnLegacySessionError(const char* aSessionId,
   CallOnMessageLoopThread("gmp::ChromiumCDMChild::OnLegacySessionError",
                           &ChromiumCDMChild::SendOnLegacySessionError,
                           nsCString(aSessionId, aSessionIdLength),
-                          static_cast<uint32_t>(aError),
+                          ConvertCDMErrorToCDMException(aError),
                           aSystemCode,
                           nsCString(aErrorMessage, aErrorMessageLength));
 }
@@ -560,6 +566,7 @@ ChromiumCDMChild::RecvLoadSession(const uint32_t& aPromiseId,
                                   const uint32_t& aSessionType,
                                   const nsCString& aSessionId)
 {
+  MOZ_ASSERT(IsOnMessageLoopThread());
   GMP_LOG("ChromiumCDMChild::RecvLoadSession(pid=%u, type=%u, sessionId=%s)",
           aPromiseId,
           aSessionType,
@@ -619,6 +626,64 @@ ChromiumCDMChild::RecvRemoveSession(const uint32_t& aPromiseId,
           aSessionId.get());
   if (mCDM) {
     mCDM->RemoveSession(aPromiseId, aSessionId.get(), aSessionId.Length());
+  }
+  return IPC_OK();
+}
+
+// See https://cs.chromium.org/chromium/src/media/blink/webcontentdecryptionmodule_impl.cc?rcl=9d4e17194fbae2839d269e0b625520eac09efa9b&l=40
+static cdm::HdcpVersion
+ToCDMHdcpVersion(const nsCString& aMinHdcpVersion)
+{
+  // String compare with ignoring case.
+  if (aMinHdcpVersion.IsEmpty()) {
+    return cdm::HdcpVersion::kHdcpVersionNone;
+  }
+  if (aMinHdcpVersion.EqualsIgnoreCase("hdcp-1.0")) {
+    return cdm::HdcpVersion::kHdcpVersion1_0;
+  }
+  if (aMinHdcpVersion.EqualsIgnoreCase("hdcp-1.1")) {
+    return cdm::HdcpVersion::kHdcpVersion1_1;
+  }
+  if (aMinHdcpVersion.EqualsIgnoreCase("hdcp-1.2")) {
+    return cdm::HdcpVersion::kHdcpVersion1_2;
+  }
+  if (aMinHdcpVersion.EqualsIgnoreCase("hdcp-1.3")) {
+    return cdm::HdcpVersion::kHdcpVersion1_3;
+  }
+  if (aMinHdcpVersion.EqualsIgnoreCase("hdcp-1.4")) {
+    return cdm::HdcpVersion::kHdcpVersion1_4;
+  }
+  if (aMinHdcpVersion.EqualsIgnoreCase("hdcp-2.0")) {
+    return cdm::HdcpVersion::kHdcpVersion2_0;
+  }
+  if (aMinHdcpVersion.EqualsIgnoreCase("hdcp-2.1")) {
+    return cdm::HdcpVersion::kHdcpVersion2_1;
+  }
+  if (aMinHdcpVersion.EqualsIgnoreCase("hdcp-2.2")) {
+    return cdm::HdcpVersion::kHdcpVersion2_2;
+  }
+
+  // Invalid hdcp version string.
+  return cdm::HdcpVersion::kHdcpVersionNone;
+}
+
+mozilla::ipc::IPCResult
+ChromiumCDMChild::RecvGetStatusForPolicy(const uint32_t& aPromiseId,
+                                         const nsCString& aMinHdcpVersion)
+{
+  MOZ_ASSERT(IsOnMessageLoopThread());
+  GMP_LOG("ChromiumCDMChild::RecvGetStatusForPolicy(pid=%" PRIu32 ", MinHdcpVersion=%s)",
+          aPromiseId,
+          aMinHdcpVersion.get());
+  if (mCDM) {
+    cdm::Policy policy;
+    // We didn't check the return value of ToCDMHdcpVersion.
+    // Let CDM to handle the cdm::HdcpVersion::kHdcpVersionNone case.
+    // ChromiumCDM8BackwardsCompat::GetStatusForPolicy will reject the promise
+    // since this API is only supported by CDM version 9.
+    // CDM will callback by OnResolveKeyStatusPromise when it successfully executes.
+    policy.min_hdcp_version = ToCDMHdcpVersion(aMinHdcpVersion);
+    mCDM->GetStatusForPolicy(aPromiseId, policy);
   }
   return IPC_OK();
 }
@@ -737,6 +802,11 @@ ChromiumCDMChild::RecvInitializeVideoDecoder(
 {
   MOZ_ASSERT(IsOnMessageLoopThread());
   MOZ_ASSERT(!mDecoderInitialized);
+  if (!mCDM) {
+    GMP_LOG("ChromiumCDMChild::RecvInitializeVideoDecoder() no CDM");
+    Unused << SendOnDecoderInitDone(cdm::kInitializationError);
+    return IPC_OK();
+  }
   cdm::VideoDecoderConfig config;
   config.codec =
     static_cast<cdm::VideoDecoderConfig::VideoCodec>(aConfig.mCodec());
@@ -761,10 +831,10 @@ ChromiumCDMChild::RecvDeinitializeVideoDecoder()
   MOZ_ASSERT(IsOnMessageLoopThread());
   GMP_LOG("ChromiumCDMChild::RecvDeinitializeVideoDecoder()");
   MOZ_ASSERT(mDecoderInitialized);
-  if (mDecoderInitialized) {
-    mDecoderInitialized = false;
+  if (mDecoderInitialized && mCDM) {
     mCDM->DeinitializeDecoder(cdm::kStreamTypeVideo);
   }
+  mDecoderInitialized = false;
   PurgeShmems();
   return IPC_OK();
 }
@@ -774,7 +844,7 @@ ChromiumCDMChild::RecvResetVideoDecoder()
 {
   MOZ_ASSERT(IsOnMessageLoopThread());
   GMP_LOG("ChromiumCDMChild::RecvResetVideoDecoder()");
-  if (mDecoderInitialized) {
+  if (mDecoderInitialized && mCDM) {
     mCDM->ResetDecoder(cdm::kStreamTypeVideo);
   }
   Unused << SendResetVideoDecoderComplete();
@@ -788,6 +858,12 @@ ChromiumCDMChild::RecvDecryptAndDecodeFrame(const CDMInputBuffer& aBuffer)
   GMP_LOG("ChromiumCDMChild::RecvDecryptAndDecodeFrame() t=%" PRId64 ")",
           aBuffer.mTimestamp());
   MOZ_ASSERT(mDecoderInitialized);
+
+  if (!mCDM) {
+    GMP_LOG("ChromiumCDMChild::RecvDecryptAndDecodeFrame() no CDM");
+    Unused << SendDecodeFailed(cdm::kDecodeError);
+    return IPC_OK();
+  }
 
   RefPtr<ChromiumCDMChild> self = this;
   auto autoDeallocateShmem = MakeScopeExit([&, self] {
@@ -882,6 +958,11 @@ mozilla::ipc::IPCResult
 ChromiumCDMChild::RecvDrain()
 {
   MOZ_ASSERT(IsOnMessageLoopThread());
+  if (!mCDM) {
+    GMP_LOG("ChromiumCDMChild::RecvDrain() no CDM");
+    Unused << SendDrainComplete();
+    return IPC_OK();
+  }
   WidevineVideoFrame frame;
   cdm::InputBuffer sample;
   cdm::Status rv = mCDM->DecryptAndDecodeFrame(sample, &frame);

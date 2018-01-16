@@ -46,6 +46,7 @@
 #include "mozilla/dom/HTMLEmbedElement.h"
 #include "mozilla/dom/HTMLElementBinding.h"
 #include "mozilla/dom/HTMLEmbedElementBinding.h"
+#include "mozilla/dom/XULElementBinding.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ResolveSystemBinding.h"
 #include "mozilla/dom/WebIDLGlobalNameHash.h"
@@ -57,6 +58,7 @@
 #include "ipc/ErrorIPCUtils.h"
 #include "mozilla/UseCounter.h"
 #include "mozilla/dom/DocGroup.h"
+#include "nsXULElement.h"
 
 namespace mozilla {
 namespace dom {
@@ -144,7 +146,7 @@ ThrowInvalidThis(JSContext* aCx, const JS::CallArgs& aArgs,
                              MSG_METHOD_THIS_DOES_NOT_IMPLEMENT_INTERFACE;
   MOZ_RELEASE_ASSERT(GetErrorArgCount(errorNumber) <= 2);
   JS_ReportErrorNumberUC(aCx, GetErrorMessage, nullptr,
-                         static_cast<const unsigned>(errorNumber),
+                         static_cast<unsigned>(errorNumber),
                          funcNameStr.get(), ifaceName.get());
   return false;
 }
@@ -251,7 +253,7 @@ TErrorResult<CleanupPolicy>::SetPendingExceptionWithMessage(JSContext* aCx)
   args[argCount] = nullptr;
 
   JS_ReportErrorNumberUCArray(aCx, dom::GetErrorMessage, nullptr,
-                              static_cast<const unsigned>(message->mErrorNumber),
+                              static_cast<unsigned>(message->mErrorNumber),
                               argCount > 0 ? args : nullptr);
 
   ClearMessage();
@@ -2497,6 +2499,37 @@ InterfaceHasInstance(JSContext* cx, int prototypeID, int depth,
 }
 
 bool
+InterfaceIsInstance(JSContext* cx, unsigned argc, JS::Value* vp,
+                    prototypes::ID prototypeID, int depth)
+{
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+  if (MOZ_UNLIKELY(args.length() < 1)) {
+    nsPrintfCString message("%s.isInstance",
+                            NamesOfInterfacesWithProtos(prototypeID));
+    return ThrowErrorMessage(cx, MSG_MISSING_ARGUMENTS, message.get());
+  }
+
+  if (!args[0].isObject()) {
+    nsPrintfCString message("Argument 1 of %s.isInstance",
+                            NamesOfInterfacesWithProtos(prototypeID));
+    return ThrowErrorMessage(cx, MSG_NOT_OBJECT, message.get());
+  }
+
+  JS::Rooted<JSObject*> instance(cx, &args[0].toObject());
+
+  const DOMJSClass* domClass =
+    GetDOMClass(js::UncheckedUnwrap(instance, /* stopAtWindowProxy = */ false));
+
+  if (domClass && domClass->mInterfaceChain[depth] == prototypeID) {
+    args.rval().setBoolean(true);
+    return true;
+  }
+
+  args.rval().setBoolean(false);
+  return true;
+}
+
+bool
 ReportLenientThisUnwrappingFailure(JSContext* cx, JSObject* obj)
 {
   JS::Rooted<JSObject*> rootedObj(cx, obj);
@@ -2860,7 +2893,7 @@ EnforceNotInPrerendering(JSContext* aCx, JSObject* aObj)
     // Without a this object, we cannot check the safety.
     return true;
   }
-  nsGlobalWindow* window = xpc::WindowGlobalOrNull(thisObj);
+  nsGlobalWindowInner* window = xpc::WindowGlobalOrNull(thisObj);
   if (!window) {
     // Without a window, we cannot check the safety.
     return true;
@@ -3151,7 +3184,7 @@ ConvertExceptionToPromise(JSContext* cx,
 
 /* static */
 void
-CreateGlobalOptions<nsGlobalWindow>::TraceGlobal(JSTracer* aTrc, JSObject* aObj)
+CreateGlobalOptions<nsGlobalWindowInner>::TraceGlobal(JSTracer* aTrc, JSObject* aObj)
 {
   xpc::TraceXPCGlobal(aTrc, aObj);
 }
@@ -3181,8 +3214,8 @@ RegisterDOMNames()
 
 /* static */
 bool
-CreateGlobalOptions<nsGlobalWindow>::PostCreateGlobal(JSContext* aCx,
-                                                      JS::Handle<JSObject*> aGlobal)
+CreateGlobalOptions<nsGlobalWindowInner>::PostCreateGlobal(JSContext* aCx,
+                                                           JS::Handle<JSObject*> aGlobal)
 {
   nsresult rv = RegisterDOMNames();
   if (NS_FAILED(rv)) {
@@ -3525,32 +3558,10 @@ GetDesiredProto(JSContext* aCx, const JS::CallArgs& aCallArgs,
   return true;
 }
 
-CustomElementReactionsStack*
-GetCustomElementReactionsStack(JS::Handle<JSObject*> aObj)
-{
-  // This might not be the right object, if there are wrappers. Unwrap if we can.
-  JSObject* obj = js::CheckedUnwrap(aObj);
-  if (!obj) {
-    return nullptr;
-  }
-
-  nsGlobalWindow* window = xpc::WindowGlobalOrNull(obj);
-  if (!window) {
-    return nullptr;
-  }
-
-  DocGroup* docGroup = window->AsInner()->GetDocGroup();
-  if (!docGroup) {
-    return nullptr;
-  }
-
-  return docGroup->CustomElementReactionsStack();
-}
-
 // https://html.spec.whatwg.org/multipage/dom.html#htmlconstructor
-already_AddRefed<nsGenericHTMLElement>
-CreateHTMLElement(const GlobalObject& aGlobal, const JS::CallArgs& aCallArgs,
-                  JS::Handle<JSObject*> aGivenProto, ErrorResult& aRv)
+already_AddRefed<Element>
+CreateXULOrHTMLElement(const GlobalObject& aGlobal, const JS::CallArgs& aCallArgs,
+                       JS::Handle<JSObject*> aGivenProto, ErrorResult& aRv)
 {
   // Step 1.
   nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal.GetAsSupports());
@@ -3563,6 +3574,11 @@ CreateHTMLElement(const GlobalObject& aGlobal, const JS::CallArgs& aCallArgs,
   if (!doc) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
+  }
+
+  int32_t ns = doc->GetDefaultNamespaceID();
+  if (ns != kNameSpaceID_XUL) {
+    ns = kNameSpaceID_XHTML;
   }
 
   RefPtr<mozilla::dom::CustomElementRegistry> registry(window->CustomElements());
@@ -3597,8 +3613,14 @@ CreateHTMLElement(const GlobalObject& aGlobal, const JS::CallArgs& aCallArgs,
   if (!definition->IsCustomBuiltIn()) {
     // Step 4.
     // If the definition is for an autonomous custom element, the active
-    // function should be HTMLElement.
-    JS::Rooted<JSObject*> constructor(cx, HTMLElementBinding::GetConstructorObject(cx));
+    // function should be HTMLElement or XULElement
+    JS::Rooted<JSObject*> constructor(cx);
+    if (ns == kNameSpaceID_XUL) {
+      constructor = XULElementBinding::GetConstructorObject(cx);
+    } else {
+      constructor = HTMLElementBinding::GetConstructorObject(cx);
+    }
+
     if (!constructor) {
       aRv.NoteJSContextException(cx);
       return nullptr;
@@ -3612,6 +3634,13 @@ CreateHTMLElement(const GlobalObject& aGlobal, const JS::CallArgs& aCallArgs,
     // Step 5.
     // If the definition is for a customized built-in element, the localName
     // should be defined in the specification.
+
+    // Customized built-in elements are not supported for XUL yet.
+    if (ns == kNameSpaceID_XUL) {
+      aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
+      return nullptr;
+    }
+
     tag = nsHTMLTags::CaseSensitiveAtomTagToId(definition->mLocalName);
     if (tag == eHTMLTag_userdefined) {
       aRv.ThrowTypeError<MSG_ILLEGAL_CONSTRUCTOR>();
@@ -3643,7 +3672,7 @@ CreateHTMLElement(const GlobalObject& aGlobal, const JS::CallArgs& aCallArgs,
   RefPtr<mozilla::dom::NodeInfo> nodeInfo =
     doc->NodeInfoManager()->GetNodeInfo(definition->mLocalName,
                                         nullptr,
-                                        kNameSpaceID_XHTML,
+                                        ns,
                                         nsIDOMNode::ELEMENT_NODE);
   if (!nodeInfo) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
@@ -3652,16 +3681,20 @@ CreateHTMLElement(const GlobalObject& aGlobal, const JS::CallArgs& aCallArgs,
 
   // Step 6 and Step 7 are in the code output by CGClassConstructor.
   // Step 8.
-  nsTArray<RefPtr<nsGenericHTMLElement>>& constructionStack =
+  nsTArray<RefPtr<Element>>& constructionStack =
     definition->mConstructionStack;
   if (constructionStack.IsEmpty()) {
-    RefPtr<nsGenericHTMLElement> newElement;
-    if (tag == eHTMLTag_userdefined) {
-      // Autonomous custom element.
-      newElement = NS_NewHTMLElement(nodeInfo.forget());
+    RefPtr<Element> newElement;
+    if (ns == kNameSpaceID_XUL) {
+      newElement = new nsXULElement(nodeInfo.forget());
     } else {
-      // Customized built-in element.
-      newElement = CreateHTMLElement(tag, nodeInfo.forget(), NOT_FROM_PARSER);
+      if (tag == eHTMLTag_userdefined) {
+        // Autonomous custom element.
+        newElement = NS_NewHTMLElement(nodeInfo.forget());
+      } else {
+        // Customized built-in element.
+        newElement = CreateHTMLElement(tag, nodeInfo.forget(), NOT_FROM_PARSER);
+      }
     }
 
     newElement->SetCustomElementData(
@@ -3673,7 +3706,7 @@ CreateHTMLElement(const GlobalObject& aGlobal, const JS::CallArgs& aCallArgs,
   }
 
   // Step 9.
-  RefPtr<nsGenericHTMLElement>& element = constructionStack.LastElement();
+  RefPtr<Element>& element = constructionStack.LastElement();
 
   // Step 10.
   if (element == ALEADY_CONSTRUCTED_MARKER) {
@@ -3732,7 +3765,7 @@ AssertReflectorHasGivenProto(JSContext* aCx, JSObject* aReflector,
 void
 SetDocumentAndPageUseCounter(JSObject* aObject, UseCounter aUseCounter)
 {
-  nsGlobalWindow* win = xpc::WindowGlobalOrNull(js::UncheckedUnwrap(aObject));
+  nsGlobalWindowInner* win = xpc::WindowGlobalOrNull(js::UncheckedUnwrap(aObject));
   if (win && win->GetDocument()) {
     win->GetDocument()->SetDocumentAndPageUseCounter(aUseCounter);
   }

@@ -38,20 +38,26 @@ add_task(async function test_get_current() {
       };
 
       function testTheme1(returnedTheme) {
-        browser.test.assertTrue(returnedTheme.images.headerURL.includes("image1.png"),
+        browser.test.assertTrue(
+          returnedTheme.images.headerURL.includes("image1.png"),
           "Theme 1 header URL should be applied");
-        browser.test.assertEq(ACCENT_COLOR_1, returnedTheme.colors.accentcolor,
+        browser.test.assertEq(
+          ACCENT_COLOR_1, returnedTheme.colors.accentcolor,
           "Theme 1 accent color should be applied");
-        browser.test.assertEq(TEXT_COLOR_1, returnedTheme.colors.textcolor,
+        browser.test.assertEq(
+          TEXT_COLOR_1, returnedTheme.colors.textcolor,
           "Theme 1 text color should be applied");
       }
 
       function testTheme2(returnedTheme) {
-        browser.test.assertTrue(returnedTheme.images.headerURL.includes("image2.png"),
+        browser.test.assertTrue(
+          returnedTheme.images.headerURL.includes("image2.png"),
           "Theme 2 header URL should be applied");
-        browser.test.assertEq(ACCENT_COLOR_2, returnedTheme.colors.accentcolor,
+        browser.test.assertEq(
+          ACCENT_COLOR_2, returnedTheme.colors.accentcolor,
           "Theme 2 accent color should be applied");
-        browser.test.assertEq(TEXT_COLOR_2, returnedTheme.colors.textcolor,
+        browser.test.assertEq(
+          TEXT_COLOR_2, returnedTheme.colors.textcolor,
           "Theme 2 text color should be applied");
       }
 
@@ -117,9 +123,14 @@ add_task(async function test_get_current() {
       testEmptyTheme(await browser.theme.getCurrent());
       testEmptyTheme(await browser.theme.getCurrent(firstWin.id));
 
-      browser.test.log("Testing getCurrent() with invalid window ID");
+      browser.test.log("Testing update calls with invalid window ID");
       await browser.test.assertRejects(
-        browser.theme.getCurrent(secondWin.id),
+        browser.theme.reset(secondWin.id),
+        /Invalid window/,
+        "Invalid window should throw",
+      );
+      await browser.test.assertRejects(
+        browser.theme.update(secondWin.id, theme2),
         /Invalid window/,
         "Invalid window should throw",
       );

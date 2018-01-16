@@ -79,7 +79,7 @@
           ]
         };
 
-        testAccessibleTree(gRootAcc, accTree)
+        testAccessibleTree(gRootAcc, accTree);
 
         gDialogDoc = gDialog.document;
         ok(isAccessibleInCache(gDialogDoc),
@@ -92,7 +92,10 @@
     function closeDialogWnd() {
       this.eventSeq = [ new invokerChecker(EVENT_FOCUS, getAccessible(document)) ];
 
-      this.invoke = () => gDialog.close();
+      this.invoke = () => {
+        gDialog.close();
+        window.focus();
+      };
 
       this.finalCheck = () => {
         ok(!isAccessibleInCache(gDialogDoc),
@@ -109,7 +112,7 @@
 
     function doTests() {
       const gQueue = new eventQueue();
-      gQueue.push(new openDialogWnd("about:"));
+      gQueue.push(new openDialogWnd("about:about"));
       gQueue.push(new closeDialogWnd());
       gQueue.invoke(); // Will call SimpleTest.finish();
     }

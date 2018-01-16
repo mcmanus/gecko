@@ -14,8 +14,7 @@ XPCOMUtils.defineLazyGetter(this, "Utils", () => {
   return Cu.import("resource://services-sync/util.js", {}).Utils;
 });
 
-const SYNC_PREFS_BRANCH = "services.sync.";
-
+XPCOMUtils.defineLazyPreferenceGetter(this, "syncUsername", "services.sync.username");
 
 /**
  * Sync's XPCOM service.
@@ -113,7 +112,6 @@ WeaveService.prototype = {
         let getHistogramById = Services.telemetry.getHistogramById;
         getHistogramById("WEAVE_CONFIGURED").add(isConfigured);
         if (isConfigured) {
-          getHistogramById("WEAVE_CONFIGURED_MASTER_PASSWORD").add(Utils.mpEnabled());
           this.ensureLoaded();
         }
       }
@@ -129,8 +127,7 @@ WeaveService.prototype = {
    * For that, you'll want to check Weave.Status.checkSetup().
    */
   get enabled() {
-    let prefs = Services.prefs.getBranch(SYNC_PREFS_BRANCH);
-    return prefs.prefHasUserValue("username");
+    return !!syncUsername;
   }
 };
 
@@ -156,9 +153,8 @@ AboutWeaveLog.prototype = {
     // view. That way links to files can be opened. make sure we use the correct
     // origin attributes when creating the principal for accessing the
     // about:sync-log data.
-    let ssm = Cc["@mozilla.org/scriptsecuritymanager;1"]
-                .getService(Ci.nsIScriptSecurityManager);
-    let principal = ssm.createCodebasePrincipal(uri, aLoadInfo.originAttributes);
+    let principal = Services.scriptSecurityManager.createCodebasePrincipal(uri,
+      aLoadInfo.originAttributes);
 
     channel.owner = principal;
     return channel;

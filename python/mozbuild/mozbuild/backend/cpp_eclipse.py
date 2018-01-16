@@ -71,7 +71,7 @@ class CppEclipseBackend(CommonBackend):
         return os.path.join(srcdir_parent, workspace_dirname)
 
     def consume_object(self, obj):
-        reldir = getattr(obj, 'relativedir', None)
+        reldir = getattr(obj, 'relsrcdir', None)
 
         # Note that unlike VS, Eclipse' indexer seem to crawl the headers and
         # isn't picky about the local includes.
@@ -740,6 +740,8 @@ org.eclipse.cdt.core.formatter.use_tabs_only_for_leading_indentations=false
 """
 
 STATIC_CDT_UI_PREFS="""eclipse.preferences.version=1
+buildConsoleLines=10000
+Console.limitConsoleOutput=false
 ensureNewlineAtEOF=false
 formatter_profile=_Mozilla
 formatter_settings_version=1

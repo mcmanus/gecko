@@ -71,8 +71,7 @@ public:
   void OnDeferredInitializationDone(cdm::StreamType aStreamType,
                                     cdm::Status aDecoderStatus) override {}
   // cdm::Host_9 interface
-  // TODO: sync with unpstream, the interface has changed.
-  void RequestStorageId() override {}
+  void RequestStorageId(uint32_t aVersion) override {}
   cdm::FileIO* CreateFileIO(cdm::FileIOClient* aClient) override;
 
   // cdm::Host_8 implementation
@@ -128,6 +127,8 @@ protected:
                                   const nsCString& aSessionId) override;
   ipc::IPCResult RecvRemoveSession(const uint32_t& aPromiseId,
                                    const nsCString& aSessionId) override;
+  ipc::IPCResult RecvGetStatusForPolicy(const uint32_t& aPromiseId,
+                                        const nsCString& aMinHdcpVersion) override;
   ipc::IPCResult RecvDecrypt(const uint32_t& aId,
                              const CDMInputBuffer& aBuffer) override;
   ipc::IPCResult RecvInitializeVideoDecoder(

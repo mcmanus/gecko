@@ -55,6 +55,21 @@ class KeyboardShortcut;
 #define NS_PHASE_TARGET             2
 #define NS_PHASE_BUBBLING           3
 
+// Values of the reserved attribute. When unset, the default value depends on
+// the permissions.default.shortcuts preference.
+enum XBLReservedKey : uint8_t
+{
+  XBLReservedKey_False = 0,
+  XBLReservedKey_True = 1,
+  XBLReservedKey_Unset = 2,
+};
+
+namespace mozilla {
+namespace dom {
+class Element;
+}
+}
+
 class nsXBLPrototypeHandler
 {
   typedef mozilla::IgnoreModifierState IgnoreModifierState;
@@ -74,7 +89,7 @@ public:
                         uint32_t aLineNumber);
 
   // This constructor is used only by XUL key handlers (e.g., <key>)
-  explicit nsXBLPrototypeHandler(nsIContent* aKeyElement, bool aReserved);
+  explicit nsXBLPrototypeHandler(mozilla::dom::Element* aKeyElement, XBLReservedKey aReserved);
 
   // This constructor is used for handlers loaded from the cache
   explicit nsXBLPrototypeHandler(nsXBLPrototypeBinding* aBinding);
@@ -112,13 +127,13 @@ public:
     return MouseEventMatched(aEvent);
   }
 
-  already_AddRefed<nsIContent> GetHandlerElement();
+  already_AddRefed<mozilla::dom::Element> GetHandlerElement();
 
   void AppendHandlerText(const nsAString& aText);
 
   uint8_t GetPhase() { return mPhase; }
   uint8_t GetType() { return mType; }
-  bool GetIsReserved() { return mReserved; }
+  XBLReservedKey GetIsReserved() { return mReserved; }
 
   nsXBLPrototypeHandler* GetNextHandler() { return mNextHandler; }
   void SetNextHandler(nsXBLPrototypeHandler* aHandler) { mNextHandler = aHandler; }
@@ -171,7 +186,7 @@ protected:
   already_AddRefed<nsIController> GetController(mozilla::dom::EventTarget* aTarget);
 
   inline int32_t GetMatchingKeyCode(const nsAString& aKeyName);
-  void ConstructPrototype(nsIContent* aKeyElement,
+  void ConstructPrototype(mozilla::dom::Element* aKeyElement,
                           const char16_t* aEvent=nullptr, const char16_t* aPhase=nullptr,
                           const char16_t* aAction=nullptr, const char16_t* aCommand=nullptr,
                           const char16_t* aKeyCode=nullptr, const char16_t* aCharCode=nullptr,
@@ -180,7 +195,7 @@ protected:
                           const char16_t* aPreventDefault=nullptr,
                           const char16_t* aAllowUntrusted=nullptr);
 
-  void ReportKeyConflict(const char16_t* aKey, const char16_t* aModifiers, nsIContent* aElement, const char *aMessageName);
+  void ReportKeyConflict(const char16_t* aKey, const char16_t* aModifiers, mozilla::dom::Element* aElement, const char *aMessageName);
   void GetEventType(nsAString& type);
   bool ModifiersMatchMask(nsIDOMUIEvent* aEvent,
                           const IgnoreModifierState& aIgnoreModifierState);
@@ -233,7 +248,7 @@ protected:
                              // stores whether or not we're a key code or char code.
                              // For mouse events, stores the clickCount.
 
-  bool mReserved;            // <key> is reserved for chrome. Not used by handlers.
+  XBLReservedKey mReserved;  // <key> is reserved for chrome. Not used by handlers.
 
   int32_t mKeyMask;          // Which modifier keys this event handler expects to have down
                              // in order to be matched.

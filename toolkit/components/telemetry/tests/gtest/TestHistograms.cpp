@@ -8,66 +8,10 @@
 #include "nsITelemetry.h"
 #include "Telemetry.h"
 #include "TelemetryFixture.h"
+#include "TelemetryTestHelpers.h"
 
 using namespace mozilla;
-
-namespace {
-
-void
-GetAndClearHistogram(JSContext* cx, nsCOMPtr<nsITelemetry> mTelemetry,
-                     const nsACString &name, bool is_keyed)
-{
-  JS::RootedValue testHistogram(cx);
-  nsresult rv = is_keyed ? mTelemetry->GetKeyedHistogramById(name, cx, &testHistogram)
-                         : mTelemetry->GetHistogramById(name, cx, &testHistogram);
-
-  ASSERT_EQ(rv, NS_OK) << "Cannot fetch histogram";
-
-  // Clear the stored value
-  JS::RootedObject testHistogramObj(cx, &testHistogram.toObject());
-  JS::RootedValue rval(cx);
-  ASSERT_TRUE(JS_CallFunctionName(cx, testHistogramObj, "clear",
-                  JS::HandleValueArray::empty(), &rval)) << "Cannot clear histogram";
-}
-
-void
-GetProperty(JSContext* cx, const char* name, JS::HandleValue valueIn,
-            JS::MutableHandleValue valueOut)
-{
-  JS::RootedValue property(cx);
-  JS::RootedObject valueInObj(cx, &valueIn.toObject());
-  ASSERT_TRUE(JS_GetProperty(cx, valueInObj, name, &property))
-    << "Cannot get property '" << name << "'";
-  valueOut.set(property);
-}
-
-void
-GetElement(JSContext* cx, uint32_t index, JS::HandleValue valueIn,
-           JS::MutableHandleValue valueOut)
-{
-  JS::RootedValue element(cx);
-  JS::RootedObject valueInObj(cx, &valueIn.toObject());
-  ASSERT_TRUE(JS_GetElement(cx, valueInObj, index, &element))
-    << "Cannot get element at index '" << index << "'";
-  valueOut.set(element);
-}
-
-void
-GetSnapshots(JSContext* cx, nsCOMPtr<nsITelemetry> mTelemetry,
-             const char* name, JS::MutableHandleValue valueOut, bool is_keyed)
-{
-  JS::RootedValue snapshots(cx);
-  nsresult rv = is_keyed ? mTelemetry->SnapshotKeyedHistograms(nsITelemetry::DATASET_RELEASE_CHANNEL_OPTIN, false, false, cx, &snapshots)
-                         : mTelemetry->SnapshotHistograms(nsITelemetry::DATASET_RELEASE_CHANNEL_OPTIN, false, false, cx, &snapshots);
-
-  JS::RootedValue snapshot(cx);
-  GetProperty(cx, "parent", snapshots, &snapshot);
-
-  ASSERT_EQ(rv, NS_OK) << "Cannot call histogram snapshots";
-  valueOut.set(snapshot);
-}
-
-}
+using namespace TelemetryTestHelpers;
 
 TEST_F(TelemetryTestFixture, AccumulateCountHistogram)
 {
@@ -181,6 +125,16 @@ TEST_F(TelemetryTestFixture, TestKeyedKeysHistogram)
   GetProperty(cx.GetJSContext(), "not-allowed", histogram,  &expectedKeyData);
   ASSERT_TRUE(expectedKeyData.isUndefined())
     << "Unallowed keys must not be recorded in the histogram data";
+
+  // The 'not-allowed' key accumulation for 'TELEMETRY_TESTED_KEYED_KEYS' was
+  // attemtped twice, so we expect the count of
+  // 'telemetry.accumulate_unknown_histogram_keys' to be 2
+  const uint32_t expectedAccumulateUnknownCount = 2;
+  JS::RootedValue scalarsSnapshot(cx.GetJSContext());
+  GetScalarsSnapshot(true, cx.GetJSContext(),&scalarsSnapshot);
+  CheckKeyedUintScalar("telemetry.accumulate_unknown_histogram_keys",
+                       "TELEMETRY_TEST_KEYED_KEYS", cx.GetJSContext(),
+                       scalarsSnapshot, expectedAccumulateUnknownCount);
 }
 
 TEST_F(TelemetryTestFixture, AccumulateCategoricalHistogram)
@@ -283,4 +237,115 @@ TEST_F(TelemetryTestFixture, AccumulateKeyedCategoricalHistogram)
   uint32_t uOtherValue = 0;
   JS::ToUint32(cx.GetJSContext(), otherValue, &uOtherValue);
   ASSERT_EQ(uOtherValue, kOtherSampleExpectedValue) << "The other-sample histogram is not returning expected value";
+}
+
+TEST_F(TelemetryTestFixture, AccumulateCountHistogram_MultipleSamples)
+{
+  nsTArray<uint32_t> samples({4,4,4});
+  const uint32_t kExpectedSum = 12;
+
+  AutoJSContextWithGlobal cx(mCleanGlobal);
+
+  GetAndClearHistogram(cx.GetJSContext(), mTelemetry, NS_LITERAL_CSTRING("TELEMETRY_TEST_COUNT"),
+                        false);
+
+  // Accumulate in histogram
+  Telemetry::Accumulate(Telemetry::TELEMETRY_TEST_COUNT, samples);
+
+  // Get a snapshot of all the histograms
+  JS::RootedValue snapshot(cx.GetJSContext());
+  GetSnapshots(cx.GetJSContext(), mTelemetry, "TELEMETRY_TEST_COUNT", &snapshot, false);
+
+  // Get histogram from snapshot
+  JS::RootedValue histogram(cx.GetJSContext());
+  GetProperty(cx.GetJSContext(), "TELEMETRY_TEST_COUNT", snapshot, &histogram);
+
+  // Get "sum" from histogram
+  JS::RootedValue sum(cx.GetJSContext());
+  GetProperty(cx.GetJSContext(), "sum", histogram, &sum);
+
+  // Check that sum matches with aValue
+  uint32_t uSum = 0;
+  JS::ToUint32(cx.GetJSContext(), sum, &uSum);
+  ASSERT_EQ(uSum, kExpectedSum) << "This histogram is not returning expected value";
+}
+
+TEST_F(TelemetryTestFixture, AccumulateLinearHistogram_MultipleSamples)
+{
+  nsTArray<uint32_t> samples({4,4,4});
+  const uint32_t kExpectedCount = 3;
+
+  AutoJSContextWithGlobal cx(mCleanGlobal);
+
+  GetAndClearHistogram(cx.GetJSContext(), mTelemetry, NS_LITERAL_CSTRING("TELEMETRY_TEST_LINEAR"),
+                        false);
+
+  // Accumulate in the histogram
+  Telemetry::Accumulate(Telemetry::TELEMETRY_TEST_LINEAR, samples);
+
+  // Get a snapshot of all the histograms
+  JS::RootedValue snapshot(cx.GetJSContext());
+  GetSnapshots(cx.GetJSContext(), mTelemetry, "TELEMETRY_TEST_LINEAR", &snapshot, false);
+
+  // Get histogram from snapshot
+  JS::RootedValue histogram(cx.GetJSContext());
+  GetProperty(cx.GetJSContext(), "TELEMETRY_TEST_LINEAR", snapshot, &histogram);
+
+  // Get "counts" array from histogram
+  JS::RootedValue counts(cx.GetJSContext());
+  GetProperty(cx.GetJSContext(), "counts", histogram, &counts);
+
+  // Index 0 is only for values less than 'low'. Values within range start at index 1
+  JS::RootedValue count(cx.GetJSContext());
+  const uint32_t index = 1;
+  GetElement(cx.GetJSContext(), index, counts, &count);
+
+  // Check that this count matches with nSamples
+  uint32_t uCount = 0;
+  JS::ToUint32(cx.GetJSContext(), count, &uCount);
+  ASSERT_EQ(uCount, kExpectedCount) << "The histogram did not accumulate the correct number of values";
+}
+
+TEST_F(TelemetryTestFixture, AccumulateLinearHistogram_DifferentSamples)
+{
+  nsTArray<uint32_t> samples({4, 8, 2147483646});
+
+  AutoJSContextWithGlobal cx(mCleanGlobal);
+
+  GetAndClearHistogram(cx.GetJSContext(), mTelemetry, NS_LITERAL_CSTRING("TELEMETRY_TEST_LINEAR"),
+                        false);
+
+  // Accumulate in histogram
+  Telemetry::Accumulate(Telemetry::TELEMETRY_TEST_LINEAR, samples);
+
+  // Get a snapshot of all histograms
+  JS::RootedValue snapshot(cx.GetJSContext());
+  GetSnapshots(cx.GetJSContext(), mTelemetry, "TELEMETRY_TEST_LINEAR", &snapshot, false);
+
+  // Get histogram from snapshot
+  JS::RootedValue histogram(cx.GetJSContext());
+  GetProperty(cx.GetJSContext(), "TELEMETRY_TEST_LINEAR", snapshot, &histogram);
+
+  // Get counts array from histogram
+  JS::RootedValue counts(cx.GetJSContext());
+  GetProperty(cx.GetJSContext(), "counts", histogram, &counts);
+
+  // Get counts in first and last buckets
+  JS::RootedValue countFirst(cx.GetJSContext());
+  JS::RootedValue countLast(cx.GetJSContext());
+  const uint32_t firstIndex = 1;
+  const uint32_t lastIndex = 9;
+  GetElement(cx.GetJSContext(), firstIndex, counts, &countFirst);
+  GetElement(cx.GetJSContext(), lastIndex, counts, &countLast);
+
+  // Check that the counts match
+  uint32_t uCountFirst = 0;
+  uint32_t uCountLast = 0;
+  JS::ToUint32(cx.GetJSContext(), countFirst, &uCountFirst);
+  JS::ToUint32(cx.GetJSContext(), countLast, &uCountLast);
+
+  const uint32_t kExpectedCountFirst = 2;
+  const uint32_t kExpectedCountLast = 1;
+  ASSERT_EQ(uCountFirst, kExpectedCountFirst) << "The first bucket did not accumulate the correct number of values";
+  ASSERT_EQ(uCountLast, kExpectedCountLast) << "The last bucket did not accumulate the correct number of values";
 }

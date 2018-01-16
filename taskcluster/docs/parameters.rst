@@ -138,6 +138,19 @@ Optimization
    Any tasks in the graph matching one of the labels will use the previously-run
    taskId rather than submitting a new task.
 
+Release Promotion
+-----------------
+
+``build_number``
+   Specify the release promotion build number.
+
+``next_version``
+   Specify the next version for version bump tasks.
+
+``desktop_release_type``
+   The type of desktop release being promoted. One of "beta", "devedition", "esr", "rc",
+   or "release".
+
 Comm Push Information
 ---------------------
 

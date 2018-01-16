@@ -10,6 +10,8 @@
 #include <stdint.h>
 #include <windows.h>
 
+#include "build/build_config.h"
+#include "mozilla/ipc/EnvironmentMap.h"
 #include "nsXULAppAPI.h"
 
 namespace sandbox {
@@ -27,13 +29,14 @@ public:
   static void Initialize(sandbox::BrokerServices* aBrokerServices);
 
   /**
-   * Cache directory paths for use in policy rules. Must be called on main
-   * thread.
+   * Do initialization that depends on parts of the Gecko machinery having been
+   * created first.
    */
-  static void CacheRulesDirectories();
+  static void GeckoDependentInitialize();
 
   bool LaunchApp(const wchar_t *aPath,
                  const wchar_t *aArguments,
+                 base::EnvironmentMap& aEnvironment,
                  GeckoProcessType aProcessType,
                  const bool aEnableLogging,
                  void **aProcessHandle);
@@ -48,6 +51,9 @@ public:
   void SetSecurityLevelForGPUProcess(int32_t aSandboxLevel);
 
   bool SetSecurityLevelForPluginProcess(int32_t aSandboxLevel);
+#ifdef MOZ_ENABLE_SKIA_PDF
+  bool SetSecurityLevelForPDFiumProcess();
+#endif
   enum SandboxLevel {
     LockDown,
     Restricted

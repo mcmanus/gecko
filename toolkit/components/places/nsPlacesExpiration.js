@@ -235,7 +235,7 @@ const EXPIRATION_QUERIES = {
   // Hosts accumulated during the places delete are updated through a trigger
   // (see nsPlacesTriggers.h).
   QUERY_UPDATE_HOSTS: {
-    sql: `DELETE FROM moz_updatehosts_temp`,
+    sql: `DELETE FROM moz_updatehostsdelete_temp`,
     actions: ACTION.TIMED | ACTION.TIMED_OVERLIMIT | ACTION.SHUTDOWN_DIRTY |
              ACTION.IDLE_DIRTY | ACTION.IDLE_DAILY | ACTION.DEBUG
   },
@@ -420,9 +420,7 @@ function nsPlacesExpiration() {
                                      "@mozilla.org/widget/idleservice;1",
                                      "nsIIdleService");
 
-  this._prefBranch = Cc["@mozilla.org/preferences-service;1"].
-                     getService(Ci.nsIPrefService).
-                     getBranch(PREF_BRANCH);
+  this._prefBranch = Services.prefs.getBranch(PREF_BRANCH);
 
   this._loadPrefsPromise = this._loadPrefs().then(() => {
     // Observe our preferences branch for changes.
@@ -538,7 +536,7 @@ nsPlacesExpiration.prototype = {
     this.status = STATUS.CLEAN;
   },
 
-  onVisit() {},
+  onVisits() {},
   onTitleChanged() {},
   onDeleteURI() {},
   onPageChanged() {},

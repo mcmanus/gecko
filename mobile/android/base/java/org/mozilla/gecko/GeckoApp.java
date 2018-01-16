@@ -10,8 +10,6 @@ import org.mozilla.gecko.GeckoProfileDirectories.NoMozillaDirectoryException;
 import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.annotation.WrapForJNI;
 import org.mozilla.gecko.db.BrowserDB;
-import org.mozilla.gecko.gfx.FullScreenState;
-import org.mozilla.gecko.gfx.LayerView;
 import org.mozilla.gecko.health.HealthRecorder;
 import org.mozilla.gecko.health.SessionInformation;
 import org.mozilla.gecko.health.StubbedHealthRecorder;
@@ -160,10 +158,6 @@ public abstract class GeckoApp extends GeckoActivity
     // Length of time in ms during which crashes are classified as startup crashes
     // for crash loop detection purposes.
     private static final int STARTUP_PHASE_DURATION_MS = 30 * 1000;
-
-    protected static final int LOAD_DEFAULT = 0;
-    protected static final int LOAD_NEW_TAB = 1;
-    protected static final int LOAD_SWITCH_TAB = 2;
 
     private static boolean sAlreadyLoaded;
 
@@ -331,6 +325,7 @@ public abstract class GeckoApp extends GeckoActivity
     private boolean mRestartOnShutdown;
 
     private boolean mWasFirstTabShownAfterActivityUnhidden;
+    private boolean mIsFullscreen;
 
     abstract public int getLayout();
 
@@ -531,7 +526,7 @@ public abstract class GeckoApp extends GeckoActivity
     @Override
     public boolean onMenuOpened(int featureId, Menu menu) {
         // exit full-screen mode whenever the menu is opened
-        if (mLayerView != null && mLayerView.isFullScreen()) {
+        if (mIsFullscreen) {
             EventDispatcher.getInstance().dispatch("FullScreen:Exit", null);
         }
 
@@ -688,19 +683,10 @@ public abstract class GeckoApp extends GeckoActivity
             DevToolsAuthHelper.scan(this, callback);
 
         } else if ("DOMFullScreen:Start".equals(event)) {
-            // Local ref to layerView for thread safety
-            LayerView layerView = mLayerView;
-            if (layerView != null) {
-                layerView.setFullScreenState(message.getBoolean("rootElement")
-                        ? FullScreenState.ROOT_ELEMENT : FullScreenState.NON_ROOT_ELEMENT);
-            }
+            mIsFullscreen = true;
 
         } else if ("DOMFullScreen:Stop".equals(event)) {
-            // Local ref to layerView for thread safety
-            LayerView layerView = mLayerView;
-            if (layerView != null) {
-                layerView.setFullScreenState(FullScreenState.NONE);
-            }
+            mIsFullscreen = false;
 
         } else if ("Locale:Set".equals(event)) {
             setLocale(message.getString("locale"));
@@ -854,10 +840,6 @@ public abstract class GeckoApp extends GeckoActivity
         return inSampleSize;
     }
 
-    public void requestRender() {
-        mLayerView.requestRender();
-    }
-
     @Override // GeckoSession.ContentListener
     public void onTitleChange(final GeckoSession session, final String title) {
     }
@@ -918,11 +900,12 @@ public abstract class GeckoApp extends GeckoActivity
             enableStrictMode();
         }
 
-        // Mozglue should already be loaded by BrowserApp.onCreate() in Fennec, but in
-        // custom tabs it may not be.
-        GeckoLoader.loadMozGlue(getApplicationContext());
-
-        if (!HardwareUtils.isSupportedSystem() || !GeckoLoader.neonCompatible()) {
+        boolean supported = HardwareUtils.isSupportedSystem();
+        if (supported) {
+            GeckoLoader.loadMozGlue(getApplicationContext());
+            supported = GeckoLoader.neonCompatible();
+        }
+        if (!supported) {
             // This build does not support the Android version of the device: Show an error and finish the app.
             mIsAbortingAppLaunch = true;
             super.onCreate(savedInstanceState);
@@ -1057,11 +1040,11 @@ public abstract class GeckoApp extends GeckoActivity
         GeckoAccessibility.setDelegate(mLayerView);
 
         getAppEventDispatcher().registerGeckoThreadListener(this,
-            "Accessibility:Event",
             "Locale:Set",
             null);
 
         getAppEventDispatcher().registerUiThreadListener(this,
+            "Accessibility:Event",
             "Contact:Add",
             "DevToolsAuth:Scan",
             "DOMFullScreen:Start",
@@ -1428,8 +1411,10 @@ public abstract class GeckoApp extends GeckoActivity
 
         final String passedUri = getIntentURI(intent);
 
-        final boolean isExternalURL = passedUri != null;
-        final boolean isAboutHomeURL = isExternalURL && AboutPages.isAboutHome(passedUri);
+        final boolean intentHasURL = passedUri != null;
+        final boolean isAboutHomeURL = intentHasURL && AboutPages.isAboutHome(passedUri);
+        final boolean isAssistIntent = Intent.ACTION_ASSIST.equals(action);
+        final boolean needsNewForegroundTab = intentHasURL || isAssistIntent;
 
         // Start migrating as early as possible, can do this in
         // parallel with Gecko load.
@@ -1455,14 +1440,16 @@ public abstract class GeckoApp extends GeckoActivity
             handleSelectTabIntent(intent);
         // External URLs and new tab from widget should always be loaded regardless of whether Gecko is
         // already running.
-        } else if (isExternalURL) {
+        } else if (needsNewForegroundTab) {
             // Restore tabs before opening an external URL so that the new tab
             // is animated properly.
             Tabs.getInstance().notifyListeners(null, Tabs.TabEvents.RESTORED);
             processActionViewIntent(new Runnable() {
                 @Override
                 public void run() {
-                    if (isAboutHomeURL) {
+                    if (isAssistIntent) {
+                        Tabs.getInstance().addTab(Tabs.LOADURL_START_EDITING | Tabs.LOADURL_EXTERNAL);
+                    } else if (isAboutHomeURL) {
                         // respect the user preferences for about:home from external intent calls
                         loadStartupTab(Tabs.LOADURL_NEW_TAB, action);
                     } else {
@@ -1797,15 +1784,18 @@ public abstract class GeckoApp extends GeckoActivity
                     Tabs.getInstance().loadUrlWithIntentExtras(url, intent, flags);
                 }
             });
+        } else if (Intent.ACTION_ASSIST.equals(action)) {
+            Tabs.getInstance().addTab(Tabs.LOADURL_START_EDITING | Tabs.LOADURL_EXTERNAL);
+            autoHideTabs();
         } else if (ACTION_HOMESCREEN_SHORTCUT.equals(action)) {
             final GeckoBundle data = new GeckoBundle(2);
             data.putString("uri", uri);
-            data.putInt("flags", LOAD_SWITCH_TAB);
+            data.putString("flags", "OPEN_SWITCHTAB");
             getAppEventDispatcher().dispatch("Tab:OpenUri", data);
         } else if (Intent.ACTION_SEARCH.equals(action)) {
             final GeckoBundle data = new GeckoBundle(2);
             data.putString("uri", uri);
-            data.putInt("flags", LOAD_NEW_TAB);
+            data.putString("flags", "OPEN_NEWTAB");
             getAppEventDispatcher().dispatch("Tab:OpenUri", data);
         } else if (NotificationHelper.HELPER_BROADCAST_ACTION.equals(action)) {
             NotificationHelper.getInstance(getApplicationContext()).handleNotificationIntent(intent);
@@ -2056,11 +2046,11 @@ public abstract class GeckoApp extends GeckoActivity
             null);
 
         getAppEventDispatcher().unregisterGeckoThreadListener(this,
-            "Accessibility:Event",
             "Locale:Set",
             null);
 
         getAppEventDispatcher().unregisterUiThreadListener(this,
+            "Accessibility:Event",
             "Contact:Add",
             "DevToolsAuth:Scan",
             "DOMFullScreen:Start",
@@ -2254,7 +2244,7 @@ public abstract class GeckoApp extends GeckoActivity
             return;
         }
 
-        if (mLayerView != null && mLayerView.isFullScreen()) {
+        if (mIsFullscreen) {
             EventDispatcher.getInstance().dispatch("FullScreen:Exit", null);
             return;
         }

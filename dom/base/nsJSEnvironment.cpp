@@ -253,7 +253,7 @@ FindExceptionStackForConsoleReport(nsPIDOMWindowInner* win,
 
   JS::RootingContext* rcx = RootingCx();
   JS::RootedObject exceptionObject(rcx, &exceptionValue.toObject());
-  JSObject* stackObject = ExceptionStackOrNull(exceptionObject);
+  JSObject* stackObject = JS::ExceptionStackOrNull(exceptionObject);
   if (stackObject) {
     return stackObject;
   }
@@ -411,7 +411,7 @@ NS_HandleScriptError(nsIScriptGlobalObject *aScriptGlobal,
       // Dispatch() must be synchronous for the recursion block
       // (errorDepth) to work.
       RefPtr<ErrorEvent> event =
-        ErrorEvent::Constructor(nsGlobalWindow::Cast(win),
+        ErrorEvent::Constructor(nsGlobalWindowInner::Cast(win),
                                 NS_LITERAL_STRING("error"),
                                 aErrorEventInit);
       event->SetTrusted(true);
@@ -472,7 +472,7 @@ public:
       }
 
       RefPtr<ErrorEvent> event =
-        ErrorEvent::Constructor(nsGlobalWindow::Cast(win),
+        ErrorEvent::Constructor(nsGlobalWindowInner::Cast(win),
                                 NS_LITERAL_STRING("error"), init);
       event->SetTrusted(true);
 
@@ -514,14 +514,15 @@ DispatchScriptErrorEvent(nsPIDOMWindowInner *win, JS::RootingContext* rootingCx,
 
 #ifdef DEBUG
 // A couple of useful functions to call when you're debugging.
-nsGlobalWindow *
+nsGlobalWindowInner *
 JSObject2Win(JSObject *obj)
 {
   return xpc::WindowOrNull(obj);
 }
 
+template<typename T>
 void
-PrintWinURI(nsGlobalWindow *win)
+PrintWinURI(T *win)
 {
   if (!win) {
     printf("No window passed in.\n");
@@ -544,7 +545,20 @@ PrintWinURI(nsGlobalWindow *win)
 }
 
 void
-PrintWinCodebase(nsGlobalWindow *win)
+PrintWinURIInner(nsGlobalWindowInner* aWin)
+{
+  return PrintWinURI(aWin);
+}
+
+void
+PrintWinURIOuter(nsGlobalWindowOuter* aWin)
+{
+  return PrintWinURI(aWin);
+}
+
+template<typename T>
+void
+PrintWinCodebase(T *win)
 {
   if (!win) {
     printf("No window passed in.\n");
@@ -565,6 +579,18 @@ PrintWinCodebase(nsGlobalWindow *win)
   }
 
   printf("%s\n", uri->GetSpecOrDefault().get());
+}
+
+void
+PrintWinCodebaseInner(nsGlobalWindowInner* aWin)
+{
+  return PrintWinCodebase(aWin);
+}
+
+void
+PrintWinCodebaseOuter(nsGlobalWindowOuter* aWin)
+{
+  return PrintWinCodebase(aWin);
 }
 
 void
@@ -1610,6 +1636,10 @@ nsJSContext::BeginCycleCollectionCallback()
 
   MOZ_ASSERT(!sICCRunner, "Tried to create a new ICC timer when one already existed.");
 
+  if (sShuttingDown) {
+    return;
+  }
+
   // Create an ICC timer even if ICC is globally disabled, because we could be manually triggering
   // an incremental collection, and we want to be sure to finish it.
   sICCRunner = IdleTaskRunner::Create(ICCRunnerFired,
@@ -1837,6 +1867,11 @@ void
 GCTimerFired(nsITimer *aTimer, void *aClosure)
 {
   nsJSContext::KillGCTimer();
+  nsJSContext::KillInterSliceGCRunner();
+  if (sShuttingDown) {
+    return;
+  }
+
   // Now start the actual GC after initial timer has fired.
   sInterSliceGCRunner = IdleTaskRunner::Create([aClosure](TimeStamp aDeadline) {
     return InterSliceGCRunnerFired(aDeadline, aClosure);
@@ -2692,10 +2727,6 @@ nsJSContext::EnsureStatics()
   Preferences::RegisterCallbackAndCall(SetMemoryPrefChangedCallbackBool,
                                        "javascript.options.mem.gc_dynamic_mark_slice",
                                        (void *)JSGC_DYNAMIC_MARK_SLICE);
-
-  Preferences::RegisterCallbackAndCall(SetMemoryPrefChangedCallbackBool,
-                                       "javascript.options.mem.gc_refresh_frame_slices_enabled",
-                                       (void *)JSGC_REFRESH_FRAME_SLICES_ENABLED);
 
   Preferences::RegisterCallbackAndCall(SetMemoryPrefChangedCallbackBool,
                                        "javascript.options.mem.gc_dynamic_heap_growth",

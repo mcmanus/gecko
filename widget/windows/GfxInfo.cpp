@@ -18,15 +18,13 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/gfx/DeviceManagerDx.h"
 #include "mozilla/gfx/Logging.h"
+#include "nsExceptionHandler.h"
+#include "nsICrashReporter.h"
 #include "nsPrintfCString.h"
 #include "jsapi.h"
 #include <intrin.h>
 
-#if defined(MOZ_CRASHREPORTER)
-#include "nsExceptionHandler.h"
-#include "nsICrashReporter.h"
 #define NS_CRASHREPORTER_CONTRACTID "@mozilla.org/toolkit/crash-reporter;1"
-#endif
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -854,7 +852,6 @@ GfxInfo::GetIsGPU2Active(bool* aIsGPU2Active)
   return NS_OK;
 }
 
-#if defined(MOZ_CRASHREPORTER)
 /* Cisco's VPN software can cause corruption of the floating point state.
  * Make a note of this in our crash reports so that some weird crashes
  * make more sense */
@@ -869,12 +866,10 @@ CheckForCiscoVPN() {
     CrashReporter::AppendAppNotesToCrashReport(NS_LITERAL_CSTRING("Cisco VPN\n"));
   }
 }
-#endif
 
 void
 GfxInfo::AddCrashReportAnnotations()
 {
-#if defined(MOZ_CRASHREPORTER)
   CheckForCiscoVPN();
 
   if (mHasDriverVersionMismatch) {
@@ -954,8 +949,6 @@ GfxInfo::AddCrashReportAnnotations()
     note.Append(NS_LossyConvertUTF16toASCII(adapterDriverVersionString2));
   }
   CrashReporter::AppendAppNotesToCrashReport(note);
-
-#endif
 }
 
 static OperatingSystem
@@ -1372,6 +1365,12 @@ GfxInfo::GetGfxDriverInfo()
       nsIGfxInfo::FEATURE_D3D11_KEYED_MUTEX, nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
       DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions, "FEATURE_FAILURE_BUG_1359416");
 
+    // bug 1419264
+    APPEND_TO_DRIVER_BLOCKLIST(OperatingSystem::Windows7,
+      (nsAString&) GfxDriverInfo::GetDeviceVendor(VendorNVIDIA), GfxDriverInfo::allDevices,
+      nsIGfxInfo::FEATURE_ADVANCED_LAYERS, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
+      DRIVER_GREATER_THAN_OR_EQUAL, V(23,21,13,8813),
+      "FEATURE_FAILURE_BUG_1419264", "Windows 10");
   }
   return *mDriverInfo;
 }
@@ -1410,6 +1409,7 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
         !adapterVendorID.Equals(GfxDriverInfo::GetDeviceVendor(VendorAMD), nsCaseInsensitiveStringComparator()) &&
         !adapterVendorID.Equals(GfxDriverInfo::GetDeviceVendor(VendorATI), nsCaseInsensitiveStringComparator()) &&
         !adapterVendorID.Equals(GfxDriverInfo::GetDeviceVendor(VendorMicrosoft), nsCaseInsensitiveStringComparator()) &&
+        !adapterVendorID.Equals(GfxDriverInfo::GetDeviceVendor(VendorParallels), nsCaseInsensitiveStringComparator()) &&
         // FIXME - these special hex values are currently used in xpcshell tests introduced by
         // bug 625160 patch 8/8. Maybe these tests need to be adjusted now that we're only whitelisting
         // intel/ati/nvidia.

@@ -44,7 +44,6 @@
 #include "nsIScriptSecurityManager.h"
 #include "nsIWindowWatcher.h"
 #include "nsIURI.h"
-#include "nsIDOMCSSStyleDeclaration.h"
 #include "nsAppShellCID.h"
 #include "nsReadableUtils.h"
 #include "nsStyleConsts.h"
@@ -902,14 +901,6 @@ NS_IMETHODIMP nsXULWindow::SetTitle(const nsAString& aTitle)
   mTitle.Assign(aTitle);
   mTitle.StripCRLF();
   NS_ENSURE_SUCCESS(mWindow->SetTitle(mTitle), NS_ERROR_FAILURE);
-
-  // Tell the window mediator that a title has changed
-  nsCOMPtr<nsIWindowMediator> windowMediator(do_GetService(NS_WINDOWMEDIATOR_CONTRACTID));
-  if (!windowMediator)
-    return NS_OK;
-
-  windowMediator->UpdateWindowTitle(static_cast<nsIXULWindow*>(this), aTitle);
-
   return NS_OK;
 }
 
@@ -1989,11 +1980,9 @@ NS_IMETHODIMP nsXULWindow::CreateNewContentWindow(int32_t aChromeFlags,
     nsCOMPtr<nsIDocShell> docShell;
     xulWin->GetDocShell(getter_AddRefs(docShell));
     MOZ_ASSERT(docShell);
-    nsCOMPtr<nsIDOMChromeWindow> chromeWindow =
-      do_QueryInterface(docShell->GetWindow());
-    MOZ_ASSERT(chromeWindow);
-
-    chromeWindow->SetOpenerForInitialContentBrowser(aOpener);
+    nsCOMPtr<nsPIDOMWindowOuter> window = docShell->GetWindow();
+    MOZ_ASSERT(window);
+    window->SetOpenerForInitialContentBrowser(nsPIDOMWindowOuter::From(aOpener));
   }
 
   xulWin->LockUntilChromeLoad();

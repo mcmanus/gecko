@@ -1163,13 +1163,34 @@ bool
 CanvasRenderingContext2D::ParseColor(const nsAString& aString,
                                      nscolor* aColor)
 {
-  nsIDocument* document = mCanvasElement
-                          ? mCanvasElement->OwnerDoc()
-                          : nullptr;
+  nsIDocument* document = mCanvasElement ? mCanvasElement->OwnerDoc() : nullptr;
+  css::Loader* loader = document ? document->CSSLoader() : nullptr;
+
+  // FIXME(bug 1420026).
+  if (false) {
+    nsCOMPtr<nsIPresShell> presShell = GetPresShell();
+    ServoStyleSet* set = presShell ? presShell->StyleSet()->AsServo() : nullptr;
+
+    // First, try computing the color without handling currentcolor.
+    bool wasCurrentColor = false;
+    if (!ServoCSSParser::ComputeColor(set, NS_RGB(0, 0, 0), aString, aColor,
+                                      &wasCurrentColor, loader)) {
+      return false;
+    }
+
+    if (wasCurrentColor) {
+      // Otherwise, get the value of the color property, flushing style
+      // if necessary.
+      RefPtr<nsStyleContext> canvasStyle =
+        nsComputedDOMStyle::GetStyleContext(mCanvasElement, nullptr, presShell);
+      *aColor = canvasStyle->StyleColor()->mColor;
+    }
+    return true;
+  }
 
   // Pass the CSS Loader object to the parser, to allow parser error
   // reports to include the outer window ID.
-  nsCSSParser parser(document ? document->CSSLoader() : nullptr);
+  nsCSSParser parser(loader);
   nsCSSValue value;
   if (!parser.ParseColorString(aString, nullptr, 0, value)) {
     return false;
@@ -1884,7 +1905,9 @@ CanvasRenderingContext2D::TrySharedTarget(RefPtr<gfx::DrawTarget>& aOutDT,
     return false;
   }
 
-  if (mBufferProvider && mBufferProvider->GetType() == LayersBackend::LAYERS_CLIENT) {
+  if (mBufferProvider &&
+      (mBufferProvider->GetType() == LayersBackend::LAYERS_CLIENT ||
+       mBufferProvider->GetType() == LayersBackend::LAYERS_WR)) {
     // we are already using a shared buffer provider, we are allocating a new one
     // because the current one failed so let's just fall back to the basic provider.
     return false;
@@ -1922,18 +1945,6 @@ CanvasRenderingContext2D::TryBasicTarget(RefPtr<gfx::DrawTarget>& aOutDT,
 
   aOutProvider = new PersistentBufferProviderBasic(aOutDT);
   return true;
-}
-
-int32_t
-CanvasRenderingContext2D::GetWidth() const
-{
-  return mWidth;
-}
-
-int32_t
-CanvasRenderingContext2D::GetHeight() const
-{
-  return mHeight;
 }
 
 NS_IMETHODIMP
@@ -2819,15 +2830,11 @@ CreateDeclarationForServo(nsCSSPropertyID aProperty,
                      aDocument->GetDocumentURI(),
                      aDocument->NodePrincipal());
 
-  NS_ConvertUTF16toUTF8 value(aPropertyValue);
-
+  ServoCSSParser::ParsingEnvironment env(data,
+                                         aDocument->GetCompatibilityMode(),
+                                         aDocument->CSSLoader());
   RefPtr<RawServoDeclarationBlock> servoDeclarations =
-    Servo_ParseProperty(aProperty,
-                        &value,
-                        data,
-                        ParsingMode::Default,
-                        aDocument->GetCompatibilityMode(),
-                        aDocument->CSSLoader()).Consume();
+    ServoCSSParser::ParseProperty(aProperty, aPropertyValue, env);
 
   if (!servoDeclarations) {
     // We got a syntax error.  The spec says this value must be ignored.
@@ -5370,9 +5377,7 @@ CanvasRenderingContext2D::DrawDirectlyToCanvas(
   // Get any existing transforms on the context, including transformations used
   // for context shadow.
   Matrix matrix = tempTarget->GetTransform();
-  gfxMatrix contextMatrix;
-  contextMatrix = gfxMatrix(matrix._11, matrix._12, matrix._21,
-                            matrix._22, matrix._31, matrix._32);
+  gfxMatrix contextMatrix = ThebesMatrix(matrix);
   gfxSize contextScale(contextMatrix.ScaleFactors(true));
 
   // Scale the dest rect to include the context scale.
@@ -5393,10 +5398,10 @@ CanvasRenderingContext2D::DrawDirectlyToCanvas(
     gfxDevCrash(LogReason::InvalidContext) << "Canvas context problem";
     return;
   }
-  context->SetMatrix(contextMatrix.
-                       PreScale(1.0 / contextScale.width,
-                                1.0 / contextScale.height).
-                       PreTranslate(aDest.x - aSrc.x, aDest.y - aSrc.y));
+  context->SetMatrixDouble(contextMatrix.
+                           PreScale(1.0 / contextScale.width,
+                                    1.0 / contextScale.height).
+                           PreTranslate(aDest.x - aSrc.x, aDest.y - aSrc.y));
 
   // FLAG_CLAMP is added for increased performance, since we never tile here.
   uint32_t modifiedFlags = aImage.mDrawingFlags | imgIContainer::FLAG_CLAMP;
@@ -5409,7 +5414,7 @@ CanvasRenderingContext2D::DrawDirectlyToCanvas(
          ImageRegion::Create(gfxRect(aSrc.x, aSrc.y, aSrc.width, aSrc.height)),
          aImage.mWhichFrame, SamplingFilter::GOOD, Some(svgContext), modifiedFlags, CurrentState().globalAlpha);
 
-  if (result != DrawResult::SUCCESS) {
+  if (result != ImgDrawResult::SUCCESS) {
     NS_WARNING("imgIContainer::Draw failed");
   }
 }
@@ -5501,13 +5506,11 @@ CanvasRenderingContext2D::GetGlobalCompositeOperation(nsAString& aOp,
 }
 
 void
-CanvasRenderingContext2D::DrawWindow(nsGlobalWindow& aWindow, double aX,
+CanvasRenderingContext2D::DrawWindow(nsGlobalWindowInner& aWindow, double aX,
                                      double aY, double aW, double aH,
                                      const nsAString& aBgColor,
                                      uint32_t aFlags, ErrorResult& aError)
 {
-  MOZ_ASSERT(aWindow.IsInnerWindow());
-
   if (int32_t(aW) == 0 || int32_t(aH) == 0) {
     return;
   }
@@ -5598,13 +5601,14 @@ CanvasRenderingContext2D::DrawWindow(nsGlobalWindow& aWindow, double aX,
     }
   }
   if (op == CompositionOp::OP_OVER &&
-      (!mBufferProvider || mBufferProvider->GetType() != LayersBackend::LAYERS_CLIENT))
+      (!mBufferProvider ||
+       (mBufferProvider->GetType() != LayersBackend::LAYERS_CLIENT &&
+        mBufferProvider->GetType() != LayersBackend::LAYERS_WR)))
   {
     thebes = gfxContext::CreateOrNull(mTarget);
     MOZ_ASSERT(thebes); // already checked the draw target above
                         // (in SupportsAzureContentForDrawTarget)
-    thebes->SetMatrix(gfxMatrix(matrix._11, matrix._12, matrix._21,
-                                matrix._22, matrix._31, matrix._32));
+    thebes->SetMatrix(matrix);
   } else {
     IntSize dtSize = IntSize::Ceil(sw, sh);
     if (!Factory::AllowedSurfaceSize(dtSize)) {
@@ -5621,7 +5625,7 @@ CanvasRenderingContext2D::DrawWindow(nsGlobalWindow& aWindow, double aX,
 
     thebes = gfxContext::CreateOrNull(drawDT);
     MOZ_ASSERT(thebes); // alrady checked the draw target above
-    thebes->SetMatrix(gfxMatrix::Scaling(matrix._11, matrix._22));
+    thebes->SetMatrix(Matrix::Scaling(matrix._11, matrix._22));
   }
 
   nsCOMPtr<nsIPresShell> shell = presContext->PresShell();
@@ -6015,6 +6019,7 @@ CanvasRenderingContext2D::PutImageData_explicit(int32_t aX, int32_t aY, uint32_t
     return NS_ERROR_FAILURE;
   }
 
+  DataSourceSurface::MappedSurface map;
   RefPtr<DataSourceSurface> sourceSurface;
   uint8_t* lockedBits = nullptr;
   uint8_t* dstData;
@@ -6036,11 +6041,15 @@ CanvasRenderingContext2D::PutImageData_explicit(int32_t aX, int32_t aY, uint32_t
     if (!sourceSurface) {
       return NS_ERROR_FAILURE;
     }
-    dstData = sourceSurface->GetData();
+    if (!sourceSurface->Map(DataSourceSurface::READ_WRITE, &map)) {
+      return NS_ERROR_FAILURE;
+    }
+
+    dstData = map.mData;
     if (!dstData) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
-    dstStride = sourceSurface->Stride();
+    dstStride = map.mStride;
     dstFormat = sourceSurface->GetFormat();
   }
 
@@ -6055,6 +6064,7 @@ CanvasRenderingContext2D::PutImageData_explicit(int32_t aX, int32_t aY, uint32_t
   if (lockedBits) {
     mTarget->ReleaseBits(lockedBits);
   } else if (sourceSurface) {
+    sourceSurface->Unmap();
     mTarget->CopySurface(sourceSurface, dirtyRect - dirtyRect.TopLeft(), dirtyRect.TopLeft());
   }
 

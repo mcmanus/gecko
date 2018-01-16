@@ -356,7 +356,7 @@ class BaseMarionetteArguments(ArgumentParser):
                           dest='e10s',
                           default=True,
                           help='Disable e10s when running marionette tests.')
-        self.add_argument("--headless",
+        self.add_argument("-z", "--headless",
                           action="store_true",
                           dest="headless",
                           default=os.environ.get("MOZ_HEADLESS", False),
@@ -804,11 +804,26 @@ class BaseMarionetteTestRunner(object):
         filename = os.path.basename(filename)
         return self.filename_pattern.match(filename)
 
+    def _fix_test_path(self, path):
+        """Normalize a logged test path from the test package."""
+        test_path_prefixes = [
+            "tests{}".format(os.path.sep),
+        ]
+
+        for prefix in test_path_prefixes:
+            if path.startswith(prefix):
+                path = path[len(prefix):]
+                break
+        return path
+
     def _log_skipped_tests(self):
         for test in self.manifest_skipped_tests:
-            name = os.path.basename(test['path'])
-            self.logger.test_start(name)
-            self.logger.test_end(name,
+            rel_path = None
+            if os.path.exists(test['path']):
+                rel_path = self._fix_test_path(os.path.relpath(test['path']))
+
+            self.logger.test_start(rel_path)
+            self.logger.test_end(rel_path,
                                  'SKIP',
                                  message=test['disabled'])
             self.todo += 1
@@ -869,6 +884,7 @@ class BaseMarionetteTestRunner(object):
             tests_by_group[test['group']].append(test['filepath'])
 
         self.logger.suite_start(tests_by_group,
+                                name='marionette-test',
                                 version_info=self.version_info,
                                 device_info=device_info)
 

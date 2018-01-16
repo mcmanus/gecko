@@ -210,6 +210,12 @@ DevToolsStartup.prototype = {
       // Only top level Firefox Windows fire a browser-delayed-startup-finished event
       Services.obs.addObserver(this.onWindowReady, "browser-delayed-startup-finished");
 
+      if (AppConstants.MOZ_DEV_EDITION) {
+        // On DevEdition, the developer toggle is displayed by default in the navbar area
+        // and should be created before the first paint.
+        this.hookDeveloperToggle();
+      }
+
       // Update menu items when devtools.enabled changes.
       Services.prefs.addObserver(DEVTOOLS_ENABLED_PREF, this.onEnabledPrefChanged);
     }
@@ -248,14 +254,40 @@ DevToolsStartup.prototype = {
       this.initDevTools();
     }
 
-    if (this.devtoolsFlag) {
-      this.handleDevToolsFlag(window);
-      // This listener is called for all Firefox windows, but we want to execute
-      // that command only once.
-      this.devtoolsFlag = false;
+    // This listener is called for all Firefox windows, but we want to execute some code
+    // only once.
+    if (!this._firstWindowReadyReceived) {
+      this.onFirstWindowReady(window);
+      this._firstWindowReadyReceived = true;
     }
 
     JsonView.initialize();
+  },
+
+  onFirstWindowReady(window) {
+    if (this.devtoolsFlag) {
+      this.handleDevToolsFlag(window);
+    }
+
+    // Wait until we get a window before sending a ping to telemetry to avoid slowing down
+    // the startup phase.
+    this.pingOnboardingTelemetry();
+  },
+
+  /**
+   * Check if the user is being flagged as DevTools users or not. This probe should only
+   * be logged once per profile.
+   */
+  pingOnboardingTelemetry() {
+    // Only ping telemetry once per profile.
+    let alreadyLoggedPref = "devtools.onboarding.telemetry.logged";
+    if (Services.prefs.getBoolPref(alreadyLoggedPref)) {
+      return;
+    }
+
+    let scalarId = "devtools.onboarding.is_devtools_user";
+    Services.telemetry.scalarSet(scalarId, this.isDevToolsUser());
+    Services.prefs.setBoolPref(alreadyLoggedPref, true);
   },
 
   /**
@@ -271,10 +303,7 @@ DevToolsStartup.prototype = {
     // In some situations (e.g. starting Firefox with --jsconsole) DevTools will be
     // initialized before the first browser-delayed-startup-finished event is received.
     // We use a dedicated flag because we still need to hook the developer toggle.
-    if (!this.developerToggleCreated) {
-      this.hookDeveloperToggle();
-      this.developerToggleCreated = true;
-    }
+    this.hookDeveloperToggle();
 
     // The developer menu hook only needs to be added if devtools have not been
     // initialized yet.
@@ -303,6 +332,10 @@ DevToolsStartup.prototype = {
    * initDevTools, from onViewShowing is also calling browser-menu.
    */
   hookDeveloperToggle() {
+    if (this.developerToggleCreated) {
+      return;
+    }
+
     let id = "developer-button";
     let widget = CustomizableUI.getWidget(id);
     if (widget && widget.provider == CustomizableUI.PROVIDER_API) {
@@ -314,9 +347,6 @@ DevToolsStartup.prototype = {
       viewId: "PanelUI-developer",
       shortcutId: "key_toggleToolbox",
       tooltiptext: "developer-button.tooltiptext2",
-      defaultArea: AppConstants.MOZ_DEV_EDITION ?
-                     CustomizableUI.AREA_NAVBAR :
-                     CustomizableUI.AREA_PANEL,
       onViewShowing: (event) => {
         if (Services.prefs.getBoolPref(DEVTOOLS_ENABLED_PREF)) {
           // If DevTools are enabled, initialize DevTools to create all menuitems in the
@@ -348,7 +378,12 @@ DevToolsStartup.prototype = {
         // it right away.
         this.onBeforeCreated(anchor.ownerDocument);
       },
-      onBeforeCreated(doc) {
+      onBeforeCreated: (doc) => {
+        // The developer toggle needs the "key_toggleToolbox" <key> element.
+        // In DEV EDITION, the toggle is added before 1st paint and hookKeyShortcuts() is
+        // not called yet when CustomizableUI creates the widget.
+        this.hookKeyShortcuts(doc.defaultView);
+
         // Bug 1223127, CUI should make this easier to do.
         if (doc.getElementById("PanelUI-developerItems")) {
           return;
@@ -363,6 +398,8 @@ DevToolsStartup.prototype = {
     };
     CustomizableUI.createWidget(item);
     CustomizableWidgets.push(item);
+
+    this.developerToggleCreated = true;
   },
 
   /*
@@ -429,6 +466,17 @@ DevToolsStartup.prototype = {
   },
 
   /**
+   * Check if the user is a DevTools user by looking at our selfxss pref.
+   * This preference is incremented everytime the console is used (up to 5).
+   *
+   * @return {Boolean} true if the user can be considered as a devtools user.
+   */
+  isDevToolsUser() {
+    let selfXssCount = Services.prefs.getIntPref("devtools.selfxss.count", 0);
+    return selfXssCount > 0;
+  },
+
+  /**
    * Depending on some runtime parameters (command line arguments as well as existing
    * preferences), the DEVTOOLS_ENABLED_PREF might be forced to true.
    *
@@ -436,19 +484,48 @@ DevToolsStartup.prototype = {
    *        true if any DevTools command line argument was passed when starting Firefox.
    */
   setupEnabledPref(hasDevToolsFlag) {
+    // Read the current experiment state.
+    let experimentState = Services.prefs.getCharPref("devtools.onboarding.experiment");
+    let isRegularExperiment = experimentState == "on";
+    let isForcedExperiment = experimentState == "force";
+    let isInExperiment = isRegularExperiment || isForcedExperiment;
+
+    // Force devtools.enabled to true for users that are not part of the experiment.
+    if (!isInExperiment) {
+      Services.prefs.setBoolPref(DEVTOOLS_ENABLED_PREF, true);
+      return;
+    }
+
+    // Force devtools.enabled to false once for each experiment user.
+    if (!Services.prefs.getBoolPref("devtools.onboarding.experiment.flipped")) {
+      Services.prefs.setBoolPref(DEVTOOLS_ENABLED_PREF, false);
+      Services.prefs.setBoolPref("devtools.onboarding.experiment.flipped", true);
+    }
+
     if (Services.prefs.getBoolPref(DEVTOOLS_ENABLED_PREF)) {
       // Nothing to do if DevTools are already enabled.
       return;
     }
 
+    // We only consider checking the actual isDevToolsUser() if the user is in the
+    // "regular" experiment group.
+    let isDevToolsUser = isRegularExperiment && this.isDevToolsUser();
+
     let hasToolbarPref = Services.prefs.getBoolPref(TOOLBAR_VISIBLE_PREF, false);
-    if (hasDevToolsFlag || hasToolbarPref) {
+    if (hasDevToolsFlag || hasToolbarPref || isDevToolsUser) {
       Services.prefs.setBoolPref(DEVTOOLS_ENABLED_PREF, true);
     }
   },
 
   hookKeyShortcuts(window) {
     let doc = window.document;
+
+    // hookKeyShortcuts can be called both from hookWindow and from the developer toggle
+    // onBeforeCreated. Make sure shortcuts are only added once per window.
+    if (doc.getElementById("devtoolsKeyset")) {
+      return;
+    }
+
     let keyset = doc.createElement("keyset");
     keyset.setAttribute("id", "devtoolsKeyset");
 
@@ -465,14 +542,15 @@ DevToolsStartup.prototype = {
   },
 
   onKey(window, key) {
-    // Record the timing at which this event started in order to compute later in
-    // gDevTools.showToolbox, the complete time it takes to open the toolbox.
-    // i.e. especially take `initDevTools` into account.
-
-    let startTime = window.performance.now();
-    let require = this.initDevTools("KeyShortcut");
-    if (require) {
-      // require might be null if initDevTools was called while DevTools are disabled.
+    if (!Services.prefs.getBoolPref(DEVTOOLS_ENABLED_PREF)) {
+      let id = key.toolId || key.id;
+      this.openInstallPage("KeyShortcut", id);
+    } else {
+      // Record the timing at which this event started in order to compute later in
+      // gDevTools.showToolbox, the complete time it takes to open the toolbox.
+      // i.e. especially take `initDevTools` into account.
+      let startTime = window.performance.now();
+      let require = this.initDevTools("KeyShortcut");
       let { gDevToolsBrowser } = require("devtools/client/framework/devtools-browser");
       gDevToolsBrowser.onKeyShortcut(window, key, startTime);
     }
@@ -528,7 +606,17 @@ DevToolsStartup.prototype = {
     return require;
   },
 
-  openInstallPage: function (reason) {
+  /**
+   * Open about:devtools to start the onboarding flow.
+   *
+   * @param {String} reason
+   *        One of "KeyShortcut", "SystemMenu", "HamburgerMenu", "ContextMenu",
+   *        "CommandLine".
+   * @param {String} keyId
+   *        Optional. If the onboarding flow was triggered by a keyboard shortcut, pass
+   *        the shortcut key id (or toolId) to about:devtools.
+   */
+  openInstallPage: function (reason, keyId) {
     let { gBrowser } = Services.wm.getMostRecentWindow("navigator:browser");
 
     // Focus about:devtools tab if there is already one opened in the current window.
@@ -554,6 +642,10 @@ DevToolsStartup.prototype = {
     let selectedBrowser = gBrowser.selectedBrowser;
     if (selectedBrowser) {
       params.push("tabid=" + selectedBrowser.outerWindowID);
+    }
+
+    if (keyId) {
+      params.push("keyid=" + keyId);
     }
 
     if (params.length > 0) {
@@ -695,7 +787,7 @@ DevToolsStartup.prototype = {
       let { DebuggerServer: debuggerServer } =
         serverLoader.require("devtools/server/main");
       debuggerServer.init();
-      debuggerServer.addBrowserActors();
+      debuggerServer.registerAllActors();
       debuggerServer.allowChromeProcess = true;
 
       let listener = debuggerServer.createListener();

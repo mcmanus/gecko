@@ -87,9 +87,13 @@ FormAutofillPreferences.prototype = {
     addressAutofill.id = "addressAutofill";
     addressAutofillLearnMore.id = "addressAutofillLearnMore";
 
+    addressAutofill.setAttribute("data-subcategory", "address-autofill");
     addressAutofillLearnMore.setAttribute("value", this.bundle.GetStringFromName("learnMoreLabel"));
     addressAutofillCheckbox.setAttribute("label", this.bundle.GetStringFromName("autofillAddressesCheckbox"));
     savedAddressesBtn.setAttribute("label", this.bundle.GetStringFromName("savedAddressesBtnLabel"));
+    // Align the start to keep the savedAddressesBtn as original size
+    // when addressAutofillCheckboxGroup's height is changed by a longer l10n string
+    savedAddressesBtnWrapper.setAttribute("align", "start");
 
     addressAutofillLearnMore.setAttribute("href", learnMoreURL);
 
@@ -130,9 +134,13 @@ FormAutofillPreferences.prototype = {
       creditCardAutofill.id = "creditCardAutofill";
       creditCardAutofillLearnMore.id = "creditCardAutofillLearnMore";
 
+      creditCardAutofill.setAttribute("data-subcategory", "credit-card-autofill");
       creditCardAutofillLearnMore.setAttribute("value", this.bundle.GetStringFromName("learnMoreLabel"));
       creditCardAutofillCheckbox.setAttribute("label", this.bundle.GetStringFromName("autofillCreditCardsCheckbox"));
       savedCreditCardsBtn.setAttribute("label", this.bundle.GetStringFromName("savedCreditCardsBtnLabel"));
+      // Align the start to keep the savedCreditCardsBtn as original size
+      // when creditCardAutofillCheckboxGroup's height is changed by a longer l10n string
+      savedCreditCardsBtnWrapper.setAttribute("align", "start");
 
       creditCardAutofillLearnMore.setAttribute("href", learnMoreURL);
 

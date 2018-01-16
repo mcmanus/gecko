@@ -218,8 +218,8 @@ nsTableRowFrame::AppendFrames(ChildListID  aListID,
     tableFrame->AppendCell(static_cast<nsTableCellFrame&>(*childFrame), GetRowIndex());
   }
 
-  PresContext()->PresShell()->FrameNeedsReflow(this, nsIPresShell::eTreeChange,
-                                               NS_FRAME_HAS_DIRTY_CHILDREN);
+  PresShell()->FrameNeedsReflow(this, nsIPresShell::eTreeChange,
+                                NS_FRAME_HAS_DIRTY_CHILDREN);
   tableFrame->SetGeometryDirty();
 }
 
@@ -264,8 +264,8 @@ nsTableRowFrame::InsertFrames(ChildListID  aListID,
   }
   tableFrame->InsertCells(cellChildren, GetRowIndex(), colIndex);
 
-  PresContext()->PresShell()->FrameNeedsReflow(this, nsIPresShell::eTreeChange,
-                                               NS_FRAME_HAS_DIRTY_CHILDREN);
+  PresShell()->FrameNeedsReflow(this, nsIPresShell::eTreeChange,
+                                NS_FRAME_HAS_DIRTY_CHILDREN);
   tableFrame->SetGeometryDirty();
 }
 
@@ -284,9 +284,8 @@ nsTableRowFrame::RemoveFrame(ChildListID aListID,
   // Remove the frame and destroy it
   mFrames.DestroyFrame(aOldFrame);
 
-  PresContext()->PresShell()->
-    FrameNeedsReflow(this, nsIPresShell::eTreeChange,
-                     NS_FRAME_HAS_DIRTY_CHILDREN);
+  PresShell()->FrameNeedsReflow(this, nsIPresShell::eTreeChange,
+                                NS_FRAME_HAS_DIRTY_CHILDREN);
 
   tableFrame->SetGeometryDirty();
 }
@@ -550,7 +549,7 @@ nsTableRowFrame::CalcBSize(const ReflowInput& aReflowInput)
   const nsStylePosition* position = StylePosition();
   const nsStyleCoord& bsizeStyleCoord = position->BSize(wm);
   if (bsizeStyleCoord.ConvertsToLength()) {
-    SetFixedBSize(nsRuleNode::ComputeCoordPercentCalc(bsizeStyleCoord, 0));
+    SetFixedBSize(bsizeStyleCoord.ComputeCoordPercentCalc(0));
   }
   else if (eStyleUnit_Percent == bsizeStyleCoord.GetUnit()) {
     SetPctBSize(bsizeStyleCoord.GetPercentValue());
@@ -634,7 +633,7 @@ nsTableRowFrame::CalculateCellActualBSize(nsTableCellFrame* aCellFrame,
       // Because of this historic anomaly, we do not use quirk.css
       // (since we can't specify one value of box-sizing for isize and another
       // for bsize)
-      specifiedBSize = nsRuleNode::ComputeCoordPercentCalc(bsizeStyleCoord, 0);
+      specifiedBSize = bsizeStyleCoord.ComputeCoordPercentCalc(0);
       if (PresContext()->CompatibilityMode() != eCompatibility_NavQuirks &&
           position->mBoxSizing == StyleBoxSizing::Content) {
         specifiedBSize +=
@@ -787,7 +786,7 @@ nsTableRowFrame::ReflowChildren(nsPresContext*           aPresContext,
       ReflowOutput desiredSize(aReflowInput);
       nsReflowStatus  status;
       ReflowChild(kidFrame, aPresContext, desiredSize, kidReflowInput, 0, 0, 0, status);
-      kidFrame->DidReflow(aPresContext, nullptr, nsDidReflowStatus::FINISHED);
+      kidFrame->DidReflow(aPresContext, nullptr);
 
       continue;
     }
@@ -942,12 +941,13 @@ nsTableRowFrame::ReflowChildren(nsPresContext*           aPresContext,
         // be merged into the else below if we can.)
         nsMargin* computedOffsetProp =
           kidFrame->GetProperty(nsIFrame::ComputedOffsetProperty());
-        // Bug 975644: a position:sticky kid can end up with a null
-        // property value here.
-        LogicalMargin computedOffsets(wm, computedOffsetProp ?
-                                            *computedOffsetProp : nsMargin());
-        ReflowInput::ApplyRelativePositioning(kidFrame, wm, computedOffsets,
-                                                    &kidPosition, containerSize);
+
+        // On our fist reflow sticky children may not have the property yet (we
+        // need to reflow the children first to size the scroll frame).
+        LogicalMargin computedOffsets(
+          wm, computedOffsetProp ? *computedOffsetProp : nsMargin());
+        ReflowInput::ApplyRelativePositioning(
+            kidFrame, wm, computedOffsets, &kidPosition, containerSize);
       }
 
       // In vertical-rl mode, we are likely to have containerSize.width = 0
@@ -1152,7 +1152,7 @@ nsTableRowFrame::ReflowCellFrame(nsPresContext*           aPresContext,
                                      aCellFrame->
                                        HasAnyStateBits(NS_FRAME_FIRST_REFLOW));
 
-  aCellFrame->DidReflow(aPresContext, nullptr, nsDidReflowStatus::FINISHED);
+  aCellFrame->DidReflow(aPresContext, nullptr);
 
   return desiredSize.BSize(wm);
 }
@@ -1444,7 +1444,9 @@ void
 nsTableRowFrame::InvalidateFrame(uint32_t aDisplayItemKey)
 {
   nsIFrame::InvalidateFrame(aDisplayItemKey);
-  GetParent()->InvalidateFrameWithRect(GetVisualOverflowRect() + GetPosition(), aDisplayItemKey);
+  if (GetTableFrame()->IsBorderCollapse() && StyleBorder()->HasBorder()) {
+    GetParent()->InvalidateFrameWithRect(GetVisualOverflowRect() + GetPosition(), aDisplayItemKey);
+  }
 }
 
 void

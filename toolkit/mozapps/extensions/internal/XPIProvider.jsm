@@ -57,6 +57,10 @@ XPCOMUtils.defineLazyServiceGetters(this, {
   aomStartup: ["@mozilla.org/addons/addon-manager-startup;1", "amIAddonManagerStartup"],
 });
 
+XPCOMUtils.defineLazyGetter(this, "gTextDecoder", () => {
+  return new TextDecoder();
+});
+
 Cu.importGlobalProperties(["URL"]);
 
 const nsIFile = Components.Constructor("@mozilla.org/file/local;1", "nsIFile",
@@ -780,7 +784,16 @@ function canRunInSafeMode(aAddon) {
 function isDisabledLegacy(addon) {
   return (!AddonSettings.ALLOW_LEGACY_EXTENSIONS &&
           LEGACY_TYPES.has(addon.type) &&
+
+          // Legacy add-ons are allowed in the system location.
           !addon._installLocation.isSystem &&
+
+          // Legacy extensions may be installed temporarily in
+          // non-release builds.
+          !(AppConstants.MOZ_ALLOW_LEGACY_EXTENSIONS &&
+            addon._installLocation.name == KEY_APP_TEMPORARY) &&
+
+          // Properly signed legacy extensions are allowed.
           addon.signedState !== AddonManager.SIGNEDSTATE_PRIVILEGED);
 }
 
@@ -2087,8 +2100,7 @@ this.XPIProvider = {
       this.installs = new Set();
       this.installLocations = [];
       this.installLocationsByName = {};
-      // Hook for tests to detect when saving database at shutdown time fails
-      this._shutdownError = null;
+
       // Clear this at startup for xpcshell test restarts
       this._telemetryDetails = {};
       // Register our details structure with AddonManager
@@ -2198,8 +2210,7 @@ this.XPIProvider = {
         Services.obs.notifyObservers(null, "chrome-flush-caches");
       }
 
-      if ("nsICrashReporter" in Ci &&
-          Services.appinfo instanceof Ci.nsICrashReporter) {
+      if (AppConstants.MOZ_CRASHREPORTER) {
         // Annotate the crash report with relevant add-on information.
         try {
           Services.appinfo.annotateCrashReport("Theme", this.currentSkin);
@@ -2375,11 +2386,7 @@ this.XPIProvider = {
     this.extensionsActive = false;
     this._addonFileMap.clear();
 
-    try {
-      await XPIDatabase.shutdown();
-    } catch (err) {
-      this._shutdownError = err;
-    }
+    await XPIDatabase.shutdown();
   },
 
   cleanupTemporaryAddons() {
@@ -2764,14 +2771,16 @@ this.XPIProvider = {
    * Adds a list of currently active add-ons to the next crash report.
    */
   addAddonsToCrashReporter() {
-    if (!("nsICrashReporter" in Ci) ||
-        !(Services.appinfo instanceof Ci.nsICrashReporter))
+    if (!(Services.appinfo instanceof Ci.nsICrashReporter) ||
+        !AppConstants.MOZ_CRASHREPORTER) {
       return;
+    }
 
     // In safe mode no add-ons are loaded so we should not include them in the
     // crash report
-    if (Services.appinfo.inSafeMode)
+    if (Services.appinfo.inSafeMode) {
       return;
+    }
 
     let data = Array.from(XPIStates.enabledAddons(),
                           a => encoded`${a.id}:${a.version}`).join(",");
@@ -2920,12 +2929,11 @@ this.XPIProvider = {
           logger.debug("Found updated metadata for " + id + " in " + location.name);
           let fis = Cc["@mozilla.org/network/file-input-stream;1"].
                        createInstance(Ci.nsIFileInputStream);
-          let json = Cc["@mozilla.org/dom/json;1"].
-                     createInstance(Ci.nsIJSON);
-
           try {
             fis.init(jsonfile, -1, 0, 0);
-            let metadata = json.decodeFromStream(fis, jsonfile.fileSize);
+
+            let bytes = NetUtil.readInputStream(fis, jsonfile.fileSize);
+            let metadata = JSON.parse(gTextDecoder.decode(bytes));
             addon.importMetadata(metadata);
 
             // Pass this through to addMetadata so it knows this add-on was
@@ -3722,8 +3730,10 @@ this.XPIProvider = {
           // The thing with experiments is an ugly hack but we want
           // Experiments.jsm to use this interface instead of getAddonsByTypes.
           // They'll go away at some point and we can forget this ever happened.
-          resolve(addons.filter(addon => addon.isActive ||
-                                       (addon.type == "experiment" && !addon.appDisabled)));
+          resolve({addons: addons.filter(addon => addon.isActive ||
+                                       (addon.type == "experiment" && !addon.appDisabled)),
+                   fullData: true
+          });
         });
       });
     }
@@ -3756,7 +3766,7 @@ this.XPIProvider = {
       });
     }
 
-    return Promise.resolve(result);
+    return Promise.resolve({addons: result, fullData: false});
   },
 
 
@@ -4214,10 +4224,12 @@ this.XPIProvider = {
 
     let principal = Cc["@mozilla.org/systemprincipal;1"].
                     createInstance(Ci.nsIPrincipal);
-    if (!aMultiprocessCompatible && Services.prefs.getBoolPref(PREF_INTERPOSITION_ENABLED, false)) {
-      let interposition = Cc["@mozilla.org/addons/multiprocess-shims;1"].
-        getService(Ci.nsIAddonInterposition);
-      Cu.setAddonInterposition(aId, interposition);
+    if (!aMultiprocessCompatible) {
+      if (Services.prefs.getBoolPref(PREF_INTERPOSITION_ENABLED, false)) {
+        let interposition = Cc["@mozilla.org/addons/multiprocess-shims;1"].
+          getService(Ci.nsIAddonInterposition);
+        Cu.setAddonInterposition(aId, interposition);
+      }
       Cu.allowCPOWsInAddon(aId, true);
     }
 
@@ -5285,9 +5297,6 @@ AddonWrapper.prototype = {
       return addon.optionsURL;
     }
 
-    if (this.hasResource("options.xul"))
-      return this.getResourceURI("options.xul").spec;
-
     return null;
   },
 
@@ -5296,27 +5305,16 @@ AddonWrapper.prototype = {
       return null;
 
     let addon = addonFor(this);
-    let hasOptionsXUL = this.hasResource("options.xul");
     let hasOptionsURL = !!this.optionsURL;
 
     if (addon.optionsType) {
       switch (parseInt(addon.optionsType, 10)) {
-      case AddonManager.OPTIONS_TYPE_DIALOG:
       case AddonManager.OPTIONS_TYPE_TAB:
-        return hasOptionsURL ? addon.optionsType : null;
-      case AddonManager.OPTIONS_TYPE_INLINE:
-      case AddonManager.OPTIONS_TYPE_INLINE_INFO:
       case AddonManager.OPTIONS_TYPE_INLINE_BROWSER:
-        return (hasOptionsXUL || hasOptionsURL) ? addon.optionsType : null;
+        return hasOptionsURL ? addon.optionsType : null;
       }
       return null;
     }
-
-    if (hasOptionsXUL)
-      return AddonManager.OPTIONS_TYPE_INLINE;
-
-    if (hasOptionsURL)
-      return AddonManager.OPTIONS_TYPE_DIALOG;
 
     return null;
   },
@@ -6385,7 +6383,7 @@ class BuiltInInstallLocation extends DirectoryInstallLocation {
     let manifest;
     try {
       let url = Services.io.newURI(BUILT_IN_ADDONS_URI);
-      let data = Cu.readURI(url);
+      let data = Cu.readUTF8URI(url);
       manifest = JSON.parse(data);
     } catch (e) {
       logger.warn("List of valid built-in add-ons could not be parsed.", e);

@@ -195,6 +195,7 @@ public:
   NS_IMETHOD GetResponseStatusText(nsACString& aValue) override;
   NS_IMETHOD GetRequestSucceeded(bool *aValue) override;
   NS_IMETHOD RedirectTo(nsIURI *newURI) override;
+  NS_IMETHOD UpgradeToSecure() override;
   NS_IMETHOD GetRequestContextID(uint64_t *aRCID) override;
   NS_IMETHOD GetTransferSize(uint64_t *aTransferSize) override;
   NS_IMETHOD GetDecodedBodySize(uint64_t *aDecodedBodySize) override;
@@ -235,6 +236,8 @@ public:
   NS_IMETHOD SetAllowAltSvc(bool aAllowAltSvc) override;
   NS_IMETHOD GetBeConservative(bool *aBeConservative) override;
   NS_IMETHOD SetBeConservative(bool aBeConservative) override;
+  NS_IMETHOD GetTrr(bool *aTRR) override;
+  NS_IMETHOD SetTrr(bool aTRR) override;
   NS_IMETHOD GetTlsFlags(uint32_t *aTlsFlags) override;
   NS_IMETHOD SetTlsFlags(uint32_t aTlsFlags) override;
   NS_IMETHOD GetApiRedirectToURI(nsIURI * *aApiRedirectToURI) override;
@@ -338,6 +341,7 @@ public:
 
     nsHttpResponseHead * GetResponseHead() const { return mResponseHead; }
     nsHttpRequestHead * GetRequestHead() { return &mRequestHead; }
+    nsHttpHeaderArray * GetResponseTrailers() const { return mResponseTrailers; }
 
     const NetAddr& GetSelfAddr() { return mSelfAddr; }
     const NetAddr& GetPeerAddr() { return mPeerAddr; }
@@ -347,6 +351,10 @@ public:
 public: /* Necko internal use only... */
     int64_t GetAltDataLength() { return mAltDataLength; }
     bool IsNavigation();
+
+    static bool IsReferrerSchemeAllowed(nsIURI *aReferrer);
+
+    static void PropagateReferenceIfNeeded(nsIURI *aURI, nsIURI *aRedirectURI);
 
     // Return whether upon a redirect code of httpStatus for method, the
     // request method should be rewritten to GET.
@@ -498,6 +506,8 @@ private:
   // Proxy release all members above on main thread.
   void ReleaseMainThreadOnlyReferences();
 
+  bool IsCrossOriginWithReferrer();
+
 protected:
   // Use Release-Acquire ordering to ensure the OMT ODA is ignored while channel
   // is canceled on main thread.
@@ -513,6 +523,7 @@ protected:
   nsCOMPtr<nsIInputStream>          mUploadStream;
   nsCOMPtr<nsIRunnable>             mUploadCloneableCallback;
   nsAutoPtr<nsHttpResponseHead>     mResponseHead;
+  nsAutoPtr<nsHttpHeaderArray>      mResponseTrailers;
   RefPtr<nsHttpConnectionInfo>      mConnectionInfo;
   nsCOMPtr<nsIProxyInfo>            mProxyInfo;
   nsCOMPtr<nsISupports>             mSecurityInfo;
@@ -540,6 +551,7 @@ protected:
   int16_t                           mPriority;
   uint8_t                           mRedirectionLimit;
 
+  uint32_t                          mUpgradeToSecure            : 1;
   uint32_t                          mApplyConversion            : 1;
   uint32_t                          mIsPending                  : 1;
   uint32_t                          mWasOpened                  : 1;
@@ -556,9 +568,11 @@ protected:
   uint32_t                          mTracingEnabled             : 1;
   // True if timing collection is enabled
   uint32_t                          mTimingEnabled              : 1;
+  uint32_t                          mReportTiming               : 1;
   uint32_t                          mAllowSpdy                  : 1;
   uint32_t                          mAllowAltSvc                : 1;
   uint32_t                          mBeConservative             : 1;
+  uint32_t                          mTRR                        : 1;
   uint32_t                          mResponseTimeoutEnabled     : 1;
   // A flag that should be false only if a cross-domain redirect occurred
   uint32_t                          mAllRedirectsSameOrigin     : 1;
@@ -643,6 +657,10 @@ protected:
   // OnStopRequest more than once.
   bool mOnStartRequestCalled;
   bool mOnStopRequestCalled;
+
+  // Defaults to true.  This is set to false when it is no longer possible
+  // to upgrade the request to a secure channel.
+  uint32_t                          mUpgradableToSecure : 1;
 
   // Defaults to false. Is set to true at the begining of OnStartRequest.
   // Used to ensure methods can't be called before OnStartRequest.

@@ -197,27 +197,39 @@ BuildHandlerChain(nsIContent* aContent, nsXBLPrototypeHandler** aResult)
   for (nsIContent* key = aContent->GetLastChild();
        key;
        key = key->GetPreviousSibling()) {
-
-    if (key->NodeInfo()->Equals(nsGkAtoms::key, kNameSpaceID_XUL)) {
-      // Check whether the key element has empty value at key/char attribute.
-      // Such element is used by localizers for alternative shortcut key
-      // definition on the locale. See bug 426501.
-      nsAutoString valKey, valCharCode, valKeyCode;
-      bool attrExists =
-        key->GetAttr(kNameSpaceID_None, nsGkAtoms::key, valKey) ||
-        key->GetAttr(kNameSpaceID_None, nsGkAtoms::charcode, valCharCode) ||
-        key->GetAttr(kNameSpaceID_None, nsGkAtoms::keycode, valKeyCode);
-      if (attrExists &&
-          valKey.IsEmpty() && valCharCode.IsEmpty() && valKeyCode.IsEmpty())
-        continue;
-
-      bool reserved = key->AttrValueIs(kNameSpaceID_None, nsGkAtoms::reserved,
-                                       nsGkAtoms::_true, eCaseMatters);
-      nsXBLPrototypeHandler* handler = new nsXBLPrototypeHandler(key, reserved);
-
-      handler->SetNextHandler(*aResult);
-      *aResult = handler;
+    if (!key->NodeInfo()->Equals(nsGkAtoms::key, kNameSpaceID_XUL)) {
+      continue;
     }
+
+    Element* keyElement = key->AsElement();
+    // Check whether the key element has empty value at key/char attribute.
+    // Such element is used by localizers for alternative shortcut key
+    // definition on the locale. See bug 426501.
+    nsAutoString valKey, valCharCode, valKeyCode;
+    bool attrExists =
+      keyElement->GetAttr(kNameSpaceID_None, nsGkAtoms::key, valKey) ||
+      keyElement->GetAttr(kNameSpaceID_None, nsGkAtoms::charcode, valCharCode) ||
+      keyElement->GetAttr(kNameSpaceID_None, nsGkAtoms::keycode, valKeyCode);
+    if (attrExists &&
+        valKey.IsEmpty() && valCharCode.IsEmpty() && valKeyCode.IsEmpty())
+      continue;
+
+    // reserved="pref" is the default for <key> elements.
+    XBLReservedKey reserved = XBLReservedKey_Unset;
+    if (keyElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::reserved,
+                                nsGkAtoms::_true, eCaseMatters)) {
+      reserved = XBLReservedKey_True;
+    } else if (keyElement->AttrValueIs(kNameSpaceID_None,
+                                       nsGkAtoms::reserved,
+                                       nsGkAtoms::_false, eCaseMatters)) {
+      reserved = XBLReservedKey_False;
+    }
+
+    nsXBLPrototypeHandler* handler =
+      new nsXBLPrototypeHandler(keyElement, reserved);
+
+    handler->SetNextHandler(*aResult);
+    *aResult = handler;
   }
 }
 
@@ -725,11 +737,6 @@ nsXBLWindowKeyHandler::WalkHandlersAndExecute(
       continue;
     }
 
-    bool isReserved = handler->GetIsReserved();
-    if (aOutReservedForChrome) {
-      *aOutReservedForChrome = isReserved;
-    }
-
     if (commandElement) {
       if (aExecute && !IsExecutableElement(commandElement)) {
         continue;
@@ -738,23 +745,37 @@ nsXBLWindowKeyHandler::WalkHandlersAndExecute(
 
     if (!aExecute) {
       if (handler->EventTypeEquals(aEventType)) {
+        if (aOutReservedForChrome) {
+          *aOutReservedForChrome = IsReservedKey(widgetKeyboardEvent, handler);
+        }
+
         return true;
       }
+
       // If the command is reserved and the event is keydown, check also if
       // the handler is for keypress because if following keypress event is
       // reserved, we shouldn't dispatch the event into web contents.
-      if (isReserved &&
-          aEventType == nsGkAtoms::keydown &&
+      if (aEventType == nsGkAtoms::keydown &&
           handler->EventTypeEquals(nsGkAtoms::keypress)) {
-        return true;
+        if (IsReservedKey(widgetKeyboardEvent, handler)) {
+          if (aOutReservedForChrome) {
+            *aOutReservedForChrome = true;
+          }
+
+          return true;
+        }
       }
       // Otherwise, we've not found a handler for the event yet.
       continue;
     }
 
+    // This should only be assigned when aExecute is false.
+    MOZ_ASSERT(!aOutReservedForChrome);
+
     // If it's not reserved and the event is a key event on a plugin,
     // the handler shouldn't be executed.
-    if (!isReserved && widgetKeyboardEvent->IsKeyEventOnPlugin()) {
+    if (widgetKeyboardEvent->IsKeyEventOnPlugin() &&
+        !IsReservedKey(widgetKeyboardEvent, handler)) {
       return false;
     }
 
@@ -789,6 +810,25 @@ nsXBLWindowKeyHandler::WalkHandlersAndExecute(
 #endif
 
   return false;
+}
+
+bool
+nsXBLWindowKeyHandler::IsReservedKey(WidgetKeyboardEvent* aKeyEvent,
+                                     nsXBLPrototypeHandler* aHandler)
+{
+  XBLReservedKey reserved = aHandler->GetIsReserved();
+  // reserved="true" means that the key is always reserved. reserved="false"
+  // means that the key is never reserved. Otherwise, we check site-specific
+  // permissions.
+  if (reserved == XBLReservedKey_False) {
+    return false;
+  }
+
+  if (reserved == XBLReservedKey_True) {
+    return true;
+  }
+
+  return nsContentUtils::ShouldBlockReservedKeys(aKeyEvent);
 }
 
 bool
@@ -834,7 +874,7 @@ nsXBLWindowKeyHandler::GetElementForHandler(nsXBLPrototypeHandler* aHandler,
   MOZ_ASSERT(aElementForHandler);
   *aElementForHandler = nullptr;
 
-  nsCOMPtr<nsIContent> keyContent = aHandler->GetHandlerElement();
+  RefPtr<Element> keyContent = aHandler->GetHandlerElement();
   if (!keyContent) {
     return true; // XXX Even though no key element?
   }

@@ -43,22 +43,28 @@ class GeckoViewRemoteDebugger extends GeckoViewModule {
   }
 
   register() {
-    if (!DebuggerServer.initialized) {
-      DebuggerServer.init();
-      DebuggerServer.addBrowserActors("navigator:geckoview");
-      DebuggerServer.registerModule(
-        "resource://gre/modules/dbg-browser-actors.js");
-      DebuggerServer.allowChromeProcess = true;
-    }
-    this._isEnabled = true;
-    this._usbDebugger.stop();
+    DebuggerServer.init();
+    DebuggerServer.registerAllActors();
+    DebuggerServer.registerModule("resource://gre/modules/dbg-browser-actors.js");
+    DebuggerServer.allowChromeProcess = true;
+    DebuggerServer.chromeWindowType = "navigator:geckoview";
 
     let windowId = this.window.QueryInterface(Ci.nsIInterfaceRequestor)
                               .getInterface(Ci.nsIDOMWindowUtils)
                               .outerWindowID;
-    let portOrPath = (this.settings.debuggerSocketDir || this.settings.dataDir) +
-                     "/firefox-debugger-socket-" +
-                     windowId;
+    let env = Cc["@mozilla.org/process/environment;1"]
+              .getService(Ci.nsIEnvironment);
+    let dataDir = env.get("MOZ_ANDROID_DATA_DIR");
+
+    if (!dataDir) {
+      debug("Missing env MOZ_ANDROID_DATA_DIR - aborting debugger server start");
+      return;
+    }
+
+    this._isEnabled = true;
+    this._usbDebugger.stop();
+
+    let portOrPath = dataDir + "/firefox-debugger-socket-" + windowId;
     this._usbDebugger.start(portOrPath);
   }
 

@@ -188,7 +188,7 @@ public class ActionBarPresenter {
         @SuppressWarnings("deprecation")
         final Drawable icon = mActionBar.getThemedContext()
                 .getResources()
-                .getDrawable(R.drawable.ic_close_light);
+                .getDrawable(R.drawable.close);
 
         Drawable wrapped = DrawableCompat.wrap(icon);
         DrawableCompat.setTint(wrapped, mTextPrimaryColor);
@@ -219,7 +219,7 @@ public class ActionBarPresenter {
             }
 
             mIconView.setVisibility(View.VISIBLE);
-            mIconView.setImageLevel(SecurityModeUtil.getImageLevel(icon));
+            mIconView.setImageLevel(icon.getImageLevel());
             mIdentityPopup.setSecurityInformation(security);
 
             if (icon == SecurityModeUtil.IconType.LOCK_SECURE) {

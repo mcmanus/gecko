@@ -7,7 +7,7 @@ function test() {
   ok(gIdentityHandler, "gIdentityHandler should exist");
 
   BrowserTestUtils.openNewForegroundTab(gBrowser, "about:blank", true).then(() => {
-    gBrowser.selectedBrowser.addEventListener("load", checkResult, true);
+    BrowserTestUtils.addContentEventListener(gBrowser.selectedBrowser, "load", checkResult, true);
     nextTest();
   });
 }
@@ -79,7 +79,6 @@ function nextTest() {
     }
 
     if (gCurrentTestIndex == -1) {
-      gBrowser.selectedBrowser.removeEventListener("load", checkResult, true);
       gBrowser.removeCurrentTab();
       finish();
       return;
@@ -103,11 +102,13 @@ function nextTest() {
       gPopupHidden = BrowserTestUtils.waitForEvent(gIdentityHandler._identityPopup, "popuphidden");
       gIdentityHandler._identityBox.click();
       info("Waiting for the Control Center to be shown");
-      popupShown.then(() => {
+      popupShown.then(async () => {
         ok(!is_hidden(gIdentityHandler._identityPopup), "Control Center is visible");
         // Show the subview, which is an easy way in automation to reproduce
         // Bug 1207542, where the CC wouldn't close on navigation.
+        let promiseViewShown = BrowserTestUtils.waitForEvent(gIdentityHandler._identityPopup, "ViewShown");
         gBrowser.ownerDocument.querySelector("#identity-popup-security-expander").click();
+        await promiseViewShown;
         BrowserTestUtils.loadURI(gBrowser.selectedBrowser, gCurrentTest.location);
       });
     }
@@ -121,8 +122,8 @@ function nextTest() {
   }
 }
 
-function checkResult(event) {
-  if (event.target.URL == "about:blank")
+function checkResult() {
+  if (gBrowser.selectedBrowser.currentURI.spec == "about:blank")
     return;
 
   // Sanity check other values, and the value of gIdentityHandler.getEffectiveHost()

@@ -747,11 +747,13 @@ var PlacesProvider = {
     }
   },
 
-  onVisit(aURI, aVisitId, aTime, aSessionId, aReferrerVisitId, aTransitionType,
-          aGuid, aHidden, aVisitCount, aTyped, aLastKnownTitle) {
-    // For new visits, if we're not batch processing, notify for a title // update
-    if (!this._batchProcessingDepth && aVisitCount == 1 && aLastKnownTitle) {
-      this.onTitleChanged(aURI, aLastKnownTitle, aGuid);
+  onVisits(aVisits) {
+    if (!this._batchProcessingDepth) {
+      for (let visit of aVisits) {
+        if (visit.visitCount == 1 && visit.lastKnownTitle) {
+          this.onTitleChanged(visit.uri, visit.lastKnownTitle, visit.guid);
+        }
+      }
     }
   },
 
@@ -933,7 +935,7 @@ var ActivityStreamProvider = {
       aUri,
       // Package up the icon data in an object if we have it; otherwise null
       (iconUri, faviconLength, favicon, mimeType, faviconSize) =>
-        resolve(iconUri ? {favicon, faviconLength, faviconSize, mimeType} : null),
+        resolve(iconUri ? {favicon, faviconLength, faviconRef: iconUri.ref, faviconSize, mimeType} : null),
       preferredWidth));
   },
 

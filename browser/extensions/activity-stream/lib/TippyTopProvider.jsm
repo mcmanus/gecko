@@ -10,16 +10,16 @@ const TIPPYTOP_JSON_PATH = "resource://activity-stream/data/content/tippytop/top
 const TIPPYTOP_URL_PREFIX = "resource://activity-stream/data/content/tippytop/images/";
 
 function getDomain(url) {
-  let domain = new URL(url).hostname;
+  let domain;
+  try {
+    domain = new URL(url).hostname;
+  } catch (ex) {}
   if (domain && domain.startsWith("www.")) {
     domain = domain.slice(4);
   }
   return domain;
 }
-
-function getPath(url) {
-  return new URL(url).pathname;
-}
+this.getDomain = getDomain;
 
 this.TippyTopProvider = class TippyTopProvider {
   constructor() {
@@ -42,15 +42,6 @@ this.TippyTopProvider = class TippyTopProvider {
     }
   }
   processSite(site) {
-    // Skip URLs with a path that isn't the root path /
-    let path;
-    try {
-      path = getPath(site.url);
-    } catch (e) {}
-    if (path !== "/") {
-      return site;
-    }
-
     const tippyTop = this._sitesByDomain.get(getDomain(site.url));
     if (tippyTop) {
       site.tippyTopIcon = TIPPYTOP_URL_PREFIX + tippyTop.image_url;
@@ -60,4 +51,4 @@ this.TippyTopProvider = class TippyTopProvider {
   }
 };
 
-this.EXPORTED_SYMBOLS = ["TippyTopProvider"];
+this.EXPORTED_SYMBOLS = ["TippyTopProvider", "getDomain"];

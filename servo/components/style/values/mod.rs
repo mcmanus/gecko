@@ -12,7 +12,7 @@ use Atom;
 pub use cssparser::{RGBA, Token, Parser, serialize_identifier, CowRcStr, SourceLocation};
 use parser::{Parse, ParserContext};
 use selectors::parser::SelectorParseErrorKind;
-use std::ascii::AsciiExt;
+#[allow(unused_imports)] use std::ascii::AsciiExt;
 use std::fmt::{self, Debug};
 use std::hash;
 use style_traits::{ToCss, ParseError, StyleParseErrorKind};
@@ -39,14 +39,6 @@ pub fn serialize_percentage<W>(value: CSSFloat, dest: &mut W)
 {
     (value * 100.).to_css(dest)?;
     dest.write_str("%")
-}
-
-/// Serialize a value with given unit into dest.
-pub fn serialize_dimension<W>(value: CSSFloat, unit: &str, dest: &mut W)
-    -> fmt::Result where W: fmt::Write
-{
-    value.to_css(dest)?;
-    dest.write_str(unit)
 }
 
 /// Convenience void type to disable some properties and values through types.
@@ -179,11 +171,10 @@ impl hash::Hash for KeyframesName {
 impl Parse for KeyframesName {
     fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
         let location = input.current_source_location();
-        match input.next() {
-            Ok(&Token::Ident(ref s)) => Ok(KeyframesName::Ident(CustomIdent::from_ident(location, s, &["none"])?)),
-            Ok(&Token::QuotedString(ref s)) => Ok(KeyframesName::QuotedString(Atom::from(s.as_ref()))),
-            Ok(t) => Err(location.new_unexpected_token_error(t.clone())),
-            Err(e) => Err(e.into()),
+        match *input.next()? {
+            Token::Ident(ref s) => Ok(KeyframesName::Ident(CustomIdent::from_ident(location, s, &["none"])?)),
+            Token::QuotedString(ref s) => Ok(KeyframesName::QuotedString(Atom::from(s.as_ref()))),
+            ref t => Err(location.new_unexpected_token_error(t.clone())),
         }
     }
 }

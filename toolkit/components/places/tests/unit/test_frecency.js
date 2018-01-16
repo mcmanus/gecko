@@ -89,17 +89,17 @@ async function ensure_results_internal(uris, searchTerm) {
   var numSearchesStarted = 0;
   input.onSearchBegin = function() {
     numSearchesStarted++;
-    do_check_eq(numSearchesStarted, 1);
+    Assert.equal(numSearchesStarted, 1);
   };
 
   let promise = new Promise(resolve => {
     input.onSearchComplete = function() {
-      do_check_eq(numSearchesStarted, 1);
-      do_check_eq(controller.searchStatus,
-                  Ci.nsIAutoCompleteController.STATUS_COMPLETE_MATCH);
-      do_check_eq(controller.matchCount, uris.length);
+      Assert.equal(numSearchesStarted, 1);
+      Assert.equal(controller.searchStatus,
+                   Ci.nsIAutoCompleteController.STATUS_COMPLETE_MATCH);
+      Assert.equal(controller.matchCount, uris.length);
       for (var i = 0; i < controller.matchCount; i++) {
-        do_check_eq(controller.getValueAt(i), uris[i].spec);
+        Assert.equal(controller.getValueAt(i), uris[i].spec);
       }
 
       resolve();
@@ -266,14 +266,11 @@ async function() {
 add_task(async function test_frecency() {
   // Disable autoFill for this test.
   Services.prefs.setBoolPref("browser.urlbar.autoFill", false);
-  do_register_cleanup(() => Services.prefs.clearUserPref("browser.urlbar.autoFill"));
+  registerCleanupFunction(() => Services.prefs.clearUserPref("browser.urlbar.autoFill"));
   // always search in history + bookmarks, no matter what the default is
-  var prefs = Cc["@mozilla.org/preferences-service;1"].
-              getService(Ci.nsIPrefBranch);
-
-  prefs.setBoolPref("browser.urlbar.suggest.history", true);
-  prefs.setBoolPref("browser.urlbar.suggest.bookmark", true);
-  prefs.setBoolPref("browser.urlbar.suggest.openpage", false);
+  Services.prefs.setBoolPref("browser.urlbar.suggest.history", true);
+  Services.prefs.setBoolPref("browser.urlbar.suggest.bookmark", true);
+  Services.prefs.setBoolPref("browser.urlbar.suggest.openpage", false);
   for (let test of tests) {
     await PlacesUtils.bookmarks.eraseEverything();
     await PlacesTestUtils.clearHistory();
@@ -281,6 +278,6 @@ add_task(async function test_frecency() {
     await test();
   }
   for (let type of ["history", "bookmark", "openpage"]) {
-    prefs.clearUserPref("browser.urlbar.suggest." + type);
+    Services.prefs.clearUserPref("browser.urlbar.suggest." + type);
   }
 });

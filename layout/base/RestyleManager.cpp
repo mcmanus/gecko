@@ -728,21 +728,22 @@ RecomputePosition(nsIFrame* aFrame)
     return false;
   }
 
+  // Flexbox and Grid layout supports CSS Align and the optimizations below
+  // don't support that yet.
+  if (aFrame->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW)) {
+    nsIFrame* ph = aFrame->GetPlaceholderFrame();
+    if (ph && ph->HasAnyStateBits(PLACEHOLDER_STATICPOS_NEEDS_CSSALIGN)) {
+      StyleChangeReflow(aFrame, nsChangeHint_NeedReflow);
+      return false;
+    }
+  }
+
   aFrame->SchedulePaint();
 
   // For relative positioning, we can simply update the frame rect
   if (display->IsRelativelyPositionedStyle()) {
     // Move the frame
     if (display->mPosition == NS_STYLE_POSITION_STICKY) {
-      if (display->IsInnerTableStyle()) {
-        // We don't currently support sticky positioning of inner table
-        // elements (bug 975644). Bail.
-        //
-        // When this is fixed, remove the null-check for the computed
-        // offsets in nsTableRowFrame::ReflowChildren.
-        return true;
-      }
-
       // Update sticky positioning for an entire element at once, starting with
       // the first continuation or ib-split sibling.
       // It's rare that the frame we already have isn't already the first
@@ -797,7 +798,7 @@ RecomputePosition(nsIFrame* aFrame)
   // doesn't need to change, we can simply update the frame position. Otherwise
   // we fall back to a reflow.
   RefPtr<gfxContext> rc =
-    aFrame->PresContext()->PresShell()->CreateReferenceRenderingContext();
+    aFrame->PresShell()->CreateReferenceRenderingContext();
 
   // Construct a bogus parent reflow state so that there's a usable
   // containing block reflow state.
@@ -1235,7 +1236,7 @@ StyleChangeReflow(nsIFrame* aFrame, nsChangeHint aHint)
   }
 
   do {
-    aFrame->PresContext()->PresShell()->FrameNeedsReflow(
+    aFrame->PresShell()->FrameNeedsReflow(
       aFrame, dirtyType, dirtyBits, rootHandling);
     aFrame = nsLayoutUtils::GetNextContinuationOrIBSplitSibling(aFrame);
   } while (aFrame);

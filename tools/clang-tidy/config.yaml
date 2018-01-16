@@ -6,15 +6,21 @@ target: obj-x86_64-pc-linux-gnu
 clang_checkers:
  - name: -*
    publish: !!bool no
+ - name: bugprone-forward-declaration-namespace
+   publish: !!bool yes
  - name: clang-analyzer-deadcode.DeadStores
    publish: !!bool yes
  - name: clang-analyzer-security.*
    publish: !!bool no
+ - name: misc-argument-comment
+   publish: !!bool yes
  - name: misc-assert-side-effect
    publish: !!bool yes
  - name: misc-suspicious-missing-comma
    publish: !!bool yes
  - name: misc-suspicious-semicolon
+   publish: !!bool yes
+ - name: misc-unused-using-decls
    publish: !!bool yes
  - name: modernize-avoid-bind
    publish: !!bool yes
@@ -33,7 +39,8 @@ clang_checkers:
  - name: modernize-use-nullptr
    publish: !!bool yes
  - name: modernize-use-override
-   publish: !!bool yes
+   # Too noisy because of the way how we implement NS_IMETHOD. See Bug 1420366.
+   publish: !!bool no
  - name: mozilla-*
    publish: !!bool yes
  - name: performance-*
@@ -48,6 +55,8 @@ clang_checkers:
    publish: !!bool yes
  - name: readability-redundant-smartptr-get
    publish: !!bool no
+ - name: readability-static-accessed-through-instance
+   publish: !!bool yes
  - name: readability-uniqueptr-delete-release
    publish: !!bool yes
  - name: modernize-use-auto

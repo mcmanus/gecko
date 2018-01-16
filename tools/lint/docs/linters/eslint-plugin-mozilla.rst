@@ -36,6 +36,11 @@ frame-script
 
 Defines the environment for frame scripts.
 
+jsm
+---
+
+Defines the environment for jsm files (javascript modules).
+
 Rules
 =====
 
@@ -58,11 +63,6 @@ avoid-removeChild
 
 Rejects using element.parentNode.removeChild(element) when element.remove()
 can be used instead.
-
-avoid-nsISupportsString-preferences
------------------------------------
-
-Rejects using getComplexValue and setComplexValue with nsISupportsString.
 
 balanced-listeners
 ------------------

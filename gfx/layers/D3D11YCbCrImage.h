@@ -32,9 +32,8 @@ public:
   {
   }
 
-  ID3D11Device* GetDevice() { return mDevice; }
-  KnowsCompositor* GetAllocator() { return mSurfaceAllocator; }
-  void SetSizes(const gfx::IntSize& aYSize, const gfx::IntSize& aCbCrSize);
+  ID3D11Device* GetDevice() const { return mDevice; }
+  KnowsCompositor* GetAllocator() const { return mSurfaceAllocator; }
 
 protected:
   already_AddRefed<TextureClient>
@@ -45,8 +44,6 @@ protected:
            TextureAllocationFlags aAllocFlags) override;
 
   RefPtr<ID3D11Device> mDevice;
-  Maybe<gfx::IntSize> mYSize;
-  Maybe<gfx::IntSize> mCbCrSize;
 };
 
 class D3D11YCbCrImage : public Image
@@ -62,13 +59,13 @@ public:
                ImageContainer* aContainer,
                const PlanarYCbCrData& aData);
 
-  gfx::IntSize GetSize() override;
+  gfx::IntSize GetSize() const override;
 
   already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() override;
 
   TextureClient* GetTextureClient(KnowsCompositor* aForwarder) override;
 
-  gfx::IntRect GetPictureRect() override { return mPictureRect; }
+  gfx::IntRect GetPictureRect() const override { return mPictureRect; }
 
 private:
   const DXGIYCbCrTextureData* GetData() const;

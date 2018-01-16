@@ -262,9 +262,11 @@ static bool
 intrinsic_OwnPropertyKeys(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
     MOZ_ASSERT(args[0].isObject());
-    MOZ_ASSERT(args[1].isInt32());
-    return GetOwnPropertyKeys(cx, args, args[1].toInt32());
+    RootedObject obj(cx, &args[0].toObject());
+    return GetOwnPropertyKeys(cx, obj, JSITER_OWNONLY | JSITER_HIDDEN | JSITER_SYMBOLS,
+                              args.rval());
 }
 
 static void
@@ -1791,6 +1793,7 @@ static bool
 intrinsic_RuntimeDefaultLocale(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 0);
 
     const char* locale = cx->runtime()->getDefaultLocale();
     if (!locale) {
@@ -1803,6 +1806,45 @@ intrinsic_RuntimeDefaultLocale(JSContext* cx, unsigned argc, Value* vp)
         return false;
 
     args.rval().setString(jslocale);
+    return true;
+}
+
+static bool
+intrinsic_IsRuntimeDefaultLocale(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+    MOZ_ASSERT(args[0].isString() || args[0].isUndefined());
+
+    // |undefined| is the default value when the Intl runtime caches haven't
+    // yet been initialized. Handle it the same way as a cache miss.
+    if (args[0].isUndefined()) {
+        args.rval().setBoolean(false);
+        return true;
+    }
+
+    const char* locale = cx->runtime()->getDefaultLocale();
+    if (!locale) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_DEFAULT_LOCALE_ERROR);
+        return false;
+    }
+
+    JSLinearString* str = args[0].toString()->ensureLinear(cx);
+    if (!str)
+        return false;
+
+    bool equals;
+    if (str->length() == strlen(locale)) {
+        JS::AutoCheckCannotGC nogc;
+        const Latin1Char* latin1Locale = reinterpret_cast<const Latin1Char*>(locale);
+        equals = str->hasLatin1Chars()
+                 ? EqualChars(str->latin1Chars(nogc), latin1Locale, str->length())
+                 : EqualChars(str->twoByteChars(nogc), latin1Locale, str->length());
+    } else {
+        equals = false;
+    }
+
+    args.rval().setBoolean(equals);
     return true;
 }
 
@@ -1872,6 +1914,21 @@ intrinsic_WarnDeprecatedStringMethod(JSContext* cx, unsigned argc, Value* vp)
 
     args.rval().setUndefined();
     return true;
+}
+
+static bool
+intrinsic_ThrowArgTypeNotObject(JSContext* cx, unsigned argc ,Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc,vp);
+    MOZ_ASSERT(args.length() == 2);
+    MOZ_ASSERT(args[0].isNumber());
+    MOZ_ASSERT(!args[1].isObject());
+    if (args[0].toNumber() == NOT_OBJECT_KIND_DESCRIPTOR)
+        ReportNotObjectWithName(cx, "descriptor", args[1]);
+    else
+        MOZ_CRASH("unexpected kind");
+
+    return false;
 }
 
 static bool
@@ -1988,17 +2045,6 @@ intrinsic_HostResolveImportedModule(JSContext* cx, unsigned argc, Value* vp)
 }
 
 static bool
-intrinsic_CreateModuleEnvironment(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    MOZ_ASSERT(args.length() == 1);
-    RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
-    module->createEnvironment();
-    args.rval().setUndefined();
-    return true;
-}
-
-static bool
 intrinsic_CreateImportBinding(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -2026,7 +2072,6 @@ intrinsic_CreateNamespaceBinding(JSContext* cx, unsigned argc, Value* vp)
     // the slot directly.
     RootedShape shape(cx, environment->lookup(cx, name));
     MOZ_ASSERT(shape);
-    MOZ_ASSERT(environment->getSlot(shape->slot()).isMagic(JS_UNINITIALIZED_LEXICAL));
     environment->setSlot(shape->slot(), args[2]);
     args.rval().setUndefined();
     return true;
@@ -2093,100 +2138,17 @@ intrinsic_ModuleNamespaceExports(JSContext* cx, unsigned argc, Value* vp)
 }
 
 static bool
-intrinsic_CreatePendingPromise(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    MOZ_ASSERT(args.length() == 0);
-    JSObject* promise = PromiseObject::createSkippingExecutor(cx);
-    if (!promise)
-        return false;
-    args.rval().setObject(*promise);
-    return true;
-}
-
-static bool
-intrinsic_CreatePromiseResolvedWith(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    MOZ_ASSERT(args.length() == 1);
-    JSObject* promise = PromiseObject::unforgeableResolve(cx, args[0]);
-    if (!promise)
-        return false;
-    args.rval().setObject(*promise);
-    return true;
-}
-
-static bool
-intrinsic_CreatePromiseRejectedWith(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    MOZ_ASSERT(args.length() == 1);
-    JSObject* promise = PromiseObject::unforgeableReject(cx, args[0]);
-    if (!promise)
-        return false;
-    args.rval().setObject(*promise);
-    return true;
-}
-
-static bool
-intrinsic_ResolvePromise(JSContext* cx, unsigned argc, Value* vp)
+intrinsic_PromiseResolve(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     MOZ_ASSERT(args.length() == 2);
-    Rooted<PromiseObject*> promise(cx, &args[0].toObject().as<PromiseObject>());
-    if (!PromiseObject::resolve(cx, promise, args[1]))
+
+    RootedObject constructor(cx, &args[0].toObject());
+    JSObject* promise = js::PromiseResolve(cx, constructor, args[1]);
+    if (!promise)
         return false;
-    args.rval().setUndefined();
-    return true;
-}
 
-static bool
-intrinsic_RejectPromise(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    MOZ_ASSERT(args.length() == 2);
-    Rooted<PromiseObject*> promise(cx, &args[0].toObject().as<PromiseObject>());
-    if (!PromiseObject::reject(cx, promise, args[1]))
-        return false;
-    args.rval().setUndefined();
-    return true;
-}
-
-static bool
-intrinsic_CallOriginalPromiseThen(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    MOZ_ASSERT(args.length() >= 2);
-
-    RootedObject promise(cx, &args[0].toObject());
-    Value val = args[1];
-    RootedObject onResolvedObj(cx, val.isUndefined() ? nullptr : val.toObjectOrNull());
-    val = args.get(2);
-    RootedObject onRejectedObj(cx, val.isUndefined() ? nullptr : val.toObjectOrNull());
-
-    JSObject* resultPromise = JS::CallOriginalPromiseThen(cx, promise, onResolvedObj,
-                                                          onRejectedObj);
-    if (!resultPromise)
-        return false;
-    args.rval().setObject(*resultPromise);
-    return true;
-}
-
-static bool
-intrinsic_AddPromiseReactions(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    MOZ_ASSERT(args.length() >= 2);
-
-    RootedObject promise(cx, &args[0].toObject());
-    Value val = args[1];
-    RootedObject onResolvedObj(cx, val.isUndefined() ? nullptr : val.toObjectOrNull());
-    val = args.get(2);
-    RootedObject onRejectedObj(cx, val.isUndefined() ? nullptr : val.toObjectOrNull());
-
-    if (!JS::AddPromiseReactions(cx, promise, onResolvedObj, onRejectedObj))
-        return false;
-    args.rval().setUndefined();
+    args.rval().setObject(*promise);
     return true;
 }
 
@@ -2311,6 +2273,7 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_INLINABLE_FN("_FinishBoundFunctionInit", intrinsic_FinishBoundFunctionInit, 3,0,
                     IntrinsicFinishBoundFunctionInit),
     JS_FN("RuntimeDefaultLocale",    intrinsic_RuntimeDefaultLocale,    0,0),
+    JS_FN("IsRuntimeDefaultLocale",  intrinsic_IsRuntimeDefaultLocale,  1,0),
     JS_FN("AddContentTelemetry",     intrinsic_AddContentTelemetry,     2,0),
     JS_FN("_DefineDataProperty",     intrinsic_DefineDataProperty,      4,0),
     JS_FN("_DefineProperty",         intrinsic_DefineProperty,          6,0),
@@ -2514,6 +2477,7 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("intl_defaultCalendar", intl_defaultCalendar, 1,0),
     JS_FN("intl_defaultTimeZone", intl_defaultTimeZone, 0,0),
     JS_FN("intl_defaultTimeZoneOffset", intl_defaultTimeZoneOffset, 0,0),
+    JS_FN("intl_isDefaultTimeZone", intl_isDefaultTimeZone, 1,0),
     JS_FN("intl_FormatDateTime", intl_FormatDateTime, 2,0),
     JS_FN("intl_FormatNumber", intl_FormatNumber, 2,0),
     JS_FN("intl_GetCalendarInfo", intl_GetCalendarInfo, 1,0),
@@ -2588,6 +2552,7 @@ static const JSFunctionSpec intrinsic_functions[] = {
                     IntrinsicStringSplitString),
     JS_FN("StringSplitStringLimit", intrinsic_StringSplitStringLimit, 3, 0),
     JS_FN("WarnDeprecatedStringMethod", intrinsic_WarnDeprecatedStringMethod, 2, 0),
+    JS_FN("ThrowArgTypeNotObject", intrinsic_ThrowArgTypeNotObject, 2, 0),
 
     // See builtin/RegExp.h for descriptions of the regexp_* functions.
     JS_FN("regexp_exec_no_statics", regexp_exec_no_statics, 2,0),
@@ -2599,7 +2564,6 @@ static const JSFunctionSpec intrinsic_functions[] = {
           CallNonGenericSelfhostedMethod<Is<ModuleObject>>, 2, 0),
     JS_FN("HostResolveImportedModule", intrinsic_HostResolveImportedModule, 2, 0),
     JS_FN("IsModuleEnvironment", intrinsic_IsInstanceOfBuiltin<ModuleEnvironmentObject>, 1, 0),
-    JS_FN("CreateModuleEnvironment", intrinsic_CreateModuleEnvironment, 1, 0),
     JS_FN("CreateImportBinding", intrinsic_CreateImportBinding, 4, 0),
     JS_FN("CreateNamespaceBinding", intrinsic_CreateNamespaceBinding, 3, 0),
     JS_FN("InstantiateModuleFunctionDeclarations",
@@ -2609,13 +2573,9 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("AddModuleNamespaceBinding", intrinsic_AddModuleNamespaceBinding, 4, 0),
     JS_FN("ModuleNamespaceExports", intrinsic_ModuleNamespaceExports, 1, 0),
 
-    JS_FN("CreatePendingPromise", intrinsic_CreatePendingPromise, 0, 0),
-    JS_FN("CreatePromiseResolvedWith", intrinsic_CreatePromiseResolvedWith, 1, 0),
-    JS_FN("CreatePromiseRejectedWith", intrinsic_CreatePromiseRejectedWith, 1, 0),
-    JS_FN("ResolvePromise", intrinsic_ResolvePromise, 2, 0),
-    JS_FN("RejectPromise", intrinsic_RejectPromise, 2, 0),
-    JS_FN("AddPromiseReactions", intrinsic_AddPromiseReactions, 3, 0),
-    JS_FN("CallOriginalPromiseThen", intrinsic_CallOriginalPromiseThen, 3, 0),
+    JS_FN("IsPromiseObject", intrinsic_IsInstanceOfBuiltin<PromiseObject>, 1, 0),
+    JS_FN("CallPromiseMethodIfWrapped", CallNonGenericSelfhostedMethod<Is<PromiseObject>>, 2, 0),
+    JS_FN("PromiseResolve", intrinsic_PromiseResolve, 2, 0),
 
     JS_FS_END
 };
@@ -2641,7 +2601,6 @@ js::FillSelfHostingCompileOptions(CompileOptions& options)
     options.setFileAndLine("self-hosted", 1);
     options.setSelfHostingMode(true);
     options.setCanLazilyParse(false);
-    options.setVersion(JSVERSION_DEFAULT);
     options.werrorOption = true;
     options.strictOption = true;
 
@@ -3023,8 +2982,7 @@ CloneObject(JSContext* cx, HandleNativeObject selfHostedObject)
         RegExpObject& reobj = selfHostedObject->as<RegExpObject>();
         RootedAtom source(cx, reobj.getSource());
         MOZ_ASSERT(source->isPermanentAtom());
-        clone = RegExpObject::create(cx, source, reobj.getFlags(),
-                                     nullptr, nullptr, cx->tempLifoAlloc(),
+        clone = RegExpObject::create(cx, source, reobj.getFlags(), cx->tempLifoAlloc(),
                                      TenuredObject);
     } else if (selfHostedObject->is<DateObject>()) {
         clone = JS::NewDateObject(cx, selfHostedObject->as<DateObject>().clippedTime());

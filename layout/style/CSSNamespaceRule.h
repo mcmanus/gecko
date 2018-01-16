@@ -27,14 +27,17 @@ public:
   int32_t GetType() const final {
     return Rule::NAMESPACE_RULE;
   }
-  using Rule::GetType;
 
   virtual nsAtom* GetPrefix() const = 0;
   virtual void GetURLSpec(nsString& aURLSpec) const = 0;
 
   // WebIDL interfaces
-  uint16_t Type() const final {
-    return nsIDOMCSSRule::NAMESPACE_RULE;
+  uint16_t Type() const final { return CSSRuleBinding::NAMESPACE_RULE; }
+  void GetNamespaceURI(nsString& aNamespaceURI) {
+    GetURLSpec(aNamespaceURI);
+  }
+  void GetPrefix(DOMString& aPrefix) {
+    aPrefix.SetKnownLiveAtom(GetPrefix(), DOMString::eTreatNullAsEmpty);
   }
 
   size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const = 0;

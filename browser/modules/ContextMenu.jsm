@@ -16,7 +16,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
-  E10SUtils: "resource:///modules/E10SUtils.jsm",
+  E10SUtils: "resource://gre/modules/E10SUtils.jsm",
   CastingApps: "resource:///modules/CastingApps.jsm",
   BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
   PlacesUIUtils: "resource:///modules/PlacesUIUtils.jsm",
@@ -105,7 +105,8 @@ const messageListeners = {
   },
 
   "ContextMenu:ReloadFrame": function(aMessage) {
-    this.getTarget(aMessage).ownerDocument.location.reload();
+    let forceReload = aMessage.objects && aMessage.objects.forceReload;
+    this.getTarget(aMessage).ownerDocument.location.reload(forceReload);
   },
 
   "ContextMenu:ReloadImage": function(aMessage) {
@@ -234,10 +235,8 @@ class ContextMenu {
     this.global = global;
     this.content = global.content;
 
-    Cc["@mozilla.org/eventlistenerservice;1"]
-      .getService(Ci.nsIEventListenerService)
-      .addSystemEventListener(global, "contextmenu",
-                              this._handleContentContextMenu.bind(this), false);
+    Services.els.addSystemEventListener(global, "contextmenu",
+                                        this._handleContentContextMenu.bind(this), false);
 
     Object.keys(messageListeners).forEach(key =>
       global.addMessageListener(key, messageListeners[key].bind(this))
@@ -540,13 +539,13 @@ class ContextMenu {
     let contentDisposition = null;
     if (aEvent.target.nodeType == Ci.nsIDOMNode.ELEMENT_NODE &&
         aEvent.target instanceof Ci.nsIImageLoadingContent &&
-        aEvent.target.currentURI) {
+        aEvent.target.currentRequestFinalURI) {
       disableSetDesktopBg = this._disableSetDesktopBackground(aEvent.target);
 
       try {
         let imageCache = Cc["@mozilla.org/image/tools;1"].getService(Ci.imgITools)
                                                          .getImgCacheForDocument(doc);
-        let props = imageCache.findEntryProperties(aEvent.target.currentURI, doc);
+        let props = imageCache.findEntryProperties(aEvent.target.currentRequestFinalURI, doc);
 
         try {
           contentType = props.get("type", Ci.nsISupportsCString).data;
@@ -809,7 +808,7 @@ class ContextMenu {
     // nsDocumentViewer::GetInImage. Make sure to update both if this is
     // changed.
     if (context.target instanceof Ci.nsIImageLoadingContent &&
-        context.target.currentURI) {
+        context.target.currentRequestFinalURI) {
       context.onImage = true;
 
       context.imageInfo = {
@@ -831,7 +830,7 @@ class ContextMenu {
         context.onCompletedImage = true;
       }
 
-      context.mediaURL = context.target.currentURI.spec;
+      context.mediaURL = context.target.currentRequestFinalURI.spec;
 
       const descURL = context.target.getAttribute("longdesc");
 

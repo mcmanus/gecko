@@ -66,7 +66,7 @@ ViewportFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     BuildDisplayListForChild(aBuilder, kid, aLists);
   }
 
-  nsDisplayList topLayerList(aBuilder);
+  nsDisplayList topLayerList;
   BuildDisplayListForTopLayer(aBuilder, &topLayerList);
   if (!topLayerList.IsEmpty()) {
     // Wrap the whole top layer in a single item with maximum z-index,
@@ -75,7 +75,7 @@ ViewportFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       new (aBuilder) nsDisplayWrapList(aBuilder, this, &topLayerList);
     wrapList->SetOverrideZIndex(
       std::numeric_limits<decltype(wrapList->ZIndex())>::max());
-    aLists.PositionedDescendants()->AppendNewToTop(wrapList);
+    aLists.PositionedDescendants()->AppendToTop(wrapList);
   }
 }
 
@@ -110,8 +110,7 @@ BuildDisplayListForTopLayerFrame(nsDisplayListBuilder* aBuilder,
   nsDisplayListBuilder::OutOfFlowDisplayData*
     savedOutOfFlowData = nsDisplayListBuilder::GetOutOfFlowData(aFrame);
   if (savedOutOfFlowData) {
-    visible = savedOutOfFlowData->mVisibleRect;
-    dirty = savedOutOfFlowData->mDirtyRect;
+    visible = savedOutOfFlowData->GetVisibleRectForFrame(aBuilder, aFrame, &dirty);
     // This function is called after we've finished building display items for
     // the root scroll frame. That means that the content clip from the root
     // scroll frame is no longer on aBuilder. However, we need to make sure
@@ -130,7 +129,7 @@ BuildDisplayListForTopLayerFrame(nsDisplayListBuilder* aBuilder,
     buildingForChild(aBuilder, aFrame, visible, dirty,
                      aBuilder->IsAtRootOfPseudoStackingContext());
 
-  nsDisplayList list(aBuilder);
+  nsDisplayList list;
   aFrame->BuildDisplayListForStackingContext(aBuilder, &list);
   aList->AppendToTop(&list);
 }
@@ -169,6 +168,9 @@ ViewportFrame::BuildDisplayListForTopLayer(nsDisplayListBuilder* aBuilder,
       if (nsIFrame* backdropPh =
           frame->GetChildList(kBackdropList).FirstChild()) {
         MOZ_ASSERT(backdropPh->IsPlaceholderFrame());
+        MOZ_ASSERT(!backdropPh->GetNextSibling(), "more than one ::backdrop?");
+        MOZ_ASSERT(backdropPh->HasAnyStateBits(NS_FRAME_FIRST_REFLOW),
+                   "did you intend to reflow ::backdrop placeholders?");
         nsIFrame* backdropFrame =
           static_cast<nsPlaceholderFrame*>(backdropPh)->GetOutOfFlowFrame();
         MOZ_ASSERT(backdropFrame);
@@ -178,7 +180,7 @@ ViewportFrame::BuildDisplayListForTopLayer(nsDisplayListBuilder* aBuilder,
     }
   }
 
-  nsIPresShell* shell = PresContext()->PresShell();
+  nsIPresShell* shell = PresShell();
   if (nsCanvasFrame* canvasFrame = shell->GetCanvasFrame()) {
     if (Element* container = canvasFrame->GetCustomContentContainer()) {
       if (nsIFrame* frame = container->GetPrimaryFrame()) {
@@ -279,7 +281,7 @@ ViewportFrame::AdjustReflowInputAsContainingBlock(ReflowInput* aReflowInput) con
   // If a scroll position clamping scroll-port size has been set, layout
   // fixed position elements to this size instead of the computed size.
   nsRect rect(0, 0, aReflowInput->ComputedWidth(), aReflowInput->ComputedHeight());
-  nsIPresShell* ps = PresContext()->PresShell();
+  nsIPresShell* ps = PresShell();
   if (ps->IsScrollPositionClampingScrollPortSizeSet()) {
     rect.SizeTo(ps->GetScrollPositionClampingScrollPortSize());
   }
@@ -399,7 +401,7 @@ ViewportFrame::Reflow(nsPresContext*           aPresContext,
     nsSubDocumentFrame* container = static_cast<nsSubDocumentFrame*>
       (nsLayoutUtils::GetCrossDocParentFrame(this));
     if (container && !container->ShouldClipSubdocument()) {
-      container->PresContext()->PresShell()->
+      container->PresShell()->
         FrameNeedsReflow(container, nsIPresShell::eResize, NS_FRAME_IS_DIRTY);
     }
   }
@@ -412,7 +414,7 @@ bool
 ViewportFrame::ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas)
 {
   nsIScrollableFrame* rootScrollFrame =
-    PresContext()->PresShell()->GetRootScrollFrameAsScrollable();
+    PresShell()->GetRootScrollFrameAsScrollable();
   if (rootScrollFrame && !rootScrollFrame->IsIgnoringViewportClipping()) {
     return false;
   }

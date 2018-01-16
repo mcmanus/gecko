@@ -8,6 +8,9 @@ use {GlyphOptions, LayoutVector2D, PipelineId, PropertyBinding};
 use euclid::{SideOffsets2D, TypedRect};
 use std::ops::Not;
 
+#[cfg(feature = "debug-serialization")]
+use GlyphInstance;
+
 // NOTE: some of these structs have an "IMPLICIT" comment.
 // This indicates that the BuiltDisplayList will have serialized
 // a list of values nearby that this item consumes. The traversal
@@ -43,15 +46,21 @@ impl ClipAndScrollInfo {
 /// is missing then the item doesn't take part in hit testing at all. This
 /// is composed of two numbers. In Servo, the first is an identifier while the
 /// second is used to select the cursor that should be used during mouse
-/// movement.
-pub type ItemTag = (u64, u8);
+/// movement. In Gecko, the first is a scrollframe identifier, while the second
+/// is used to store various flags that APZ needs to properly process input
+/// events.
+pub type ItemTag = (u64, u16);
 
+/// The DI is generic over the specifics, while allows to use
+/// the "complete" version of it for convenient serialization.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
-pub struct DisplayItem {
-    pub item: SpecificDisplayItem,
+pub struct GenericDisplayItem<T> {
+    pub item: T,
     pub clip_and_scroll: ClipAndScrollInfo,
     pub info: LayoutPrimitiveInfo,
 }
+
+pub type DisplayItem = GenericDisplayItem<SpecificDisplayItem>;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PrimitiveInfo<T> {
@@ -66,9 +75,10 @@ impl LayerPrimitiveInfo {
         Self::with_clip_rect(rect, rect)
     }
 
-    pub fn with_clip_rect(rect: TypedRect<f32, LayerPixel>,
-                          clip_rect: TypedRect<f32, LayerPixel>)
-                          -> Self {
+    pub fn with_clip_rect(
+        rect: TypedRect<f32, LayerPixel>,
+        clip_rect: TypedRect<f32, LayerPixel>,
+    ) -> Self {
         Self::with_clip(rect, LocalClip::from(clip_rect))
     }
 
@@ -85,6 +95,7 @@ impl LayerPrimitiveInfo {
 pub type LayoutPrimitiveInfo = PrimitiveInfo<LayoutPixel>;
 pub type LayerPrimitiveInfo = PrimitiveInfo<LayerPixel>;
 
+#[repr(u8)]
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub enum SpecificDisplayItem {
     Clip(ClipDisplayItem),
@@ -104,6 +115,33 @@ pub enum SpecificDisplayItem {
     PushStackingContext(PushStackingContextDisplayItem),
     PopStackingContext,
     SetGradientStops,
+    PushShadow(Shadow),
+    PopAllShadows,
+}
+
+/// This is a "complete" version of the DI specifics,
+/// containing the auxiliary data within the corresponding
+/// enumeration variants, to be used for debug serialization.
+#[cfg(feature = "debug-serialization")]
+#[derive(Deserialize, Serialize)]
+pub enum CompletelySpecificDisplayItem {
+    Clip(ClipDisplayItem, Vec<ComplexClipRegion>),
+    ScrollFrame(ScrollFrameDisplayItem, Vec<ComplexClipRegion>),
+    StickyFrame(StickyFrameDisplayItem),
+    Rectangle(RectangleDisplayItem),
+    ClearRectangle,
+    Line(LineDisplayItem),
+    Text(TextDisplayItem, Vec<GlyphInstance>),
+    Image(ImageDisplayItem),
+    YuvImage(YuvImageDisplayItem),
+    Border(BorderDisplayItem),
+    BoxShadow(BoxShadowDisplayItem),
+    Gradient(GradientDisplayItem),
+    RadialGradient(RadialGradientDisplayItem),
+    Iframe(IframeDisplayItem),
+    PushStackingContext(PushStackingContextDisplayItem, Vec<FilterOp>),
+    PopStackingContext,
+    SetGradientStops(Vec<GradientStop>),
     PushShadow(Shadow),
     PopAllShadows,
 }
@@ -155,6 +193,13 @@ pub struct StickyFrameDisplayItem {
     /// position is scrolled out of view. Constraints specify a maximum and minimum offset from the
     /// original position relative to non-sticky content within the same scrolling frame.
     pub horizontal_offset_bounds: StickyOffsetBounds,
+
+    /// The amount of offset that has already been applied to the sticky frame. A positive y
+    /// component this field means that a top-sticky item was in a scrollframe that has been
+    /// scrolled down, such that the sticky item's position needed to be offset downwards by
+    /// `previously_applied_offset.y`. A negative y component corresponds to the upward offset
+    /// applied due to bottom-stickiness. The x-axis works analogously.
+    pub previously_applied_offset: LayoutVector2D,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -318,7 +363,7 @@ pub enum BorderStyle {
 }
 
 #[repr(u32)]
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum BoxShadowClipMode {
     Outset = 0,
     Inset = 1,
@@ -445,9 +490,10 @@ pub enum FilterOp {
     Grayscale(f32),
     HueRotate(f32),
     Invert(f32),
-    Opacity(PropertyBinding<f32>),
+    Opacity(PropertyBinding<f32>, f32),
     Saturate(f32),
     Sepia(f32),
+    DropShadow(LayoutVector2D, f32, ColorF),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -676,7 +722,7 @@ impl ComplexClipRegion {
         rect: LayoutRect,
         radii: BorderRadius,
         mode: ClipMode,
-    ) -> ComplexClipRegion {
+    ) -> Self {
         ComplexClipRegion { rect, radii, mode }
     }
 }

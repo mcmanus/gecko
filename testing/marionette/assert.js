@@ -13,6 +13,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 const {
   InvalidArgumentError,
   InvalidSessionIDError,
+  JavaScriptError,
   NoSuchWindowError,
   UnexpectedAlertOpenError,
   UnsupportedOperationError,
@@ -31,6 +32,30 @@ const isFirefox = () =>
  * @namespace
  */
 this.assert = {};
+
+/**
+ * Asserts that an arbitrary object, <var>obj</var> is not acyclic.
+ *
+ * @param {*} obj
+ *     Object test.  This assertion is only meaningful if passed
+ *     an actual object or array.
+ * @param {Error=} [error=JavaScriptError] error
+ *     Error to throw if assertion fails.
+ * @param {string=} message
+ *     Message to use for <var>error</var> if assertion fails.  By default
+ *     it will use the error message provided by
+ *     <code>JSON.stringify</code>.
+ *
+ * @throws {JavaScriptError}
+ *     If <var>obj</var> is cyclic.
+ */
+assert.acyclic = function(obj, msg = "", error = JavaScriptError) {
+  try {
+    JSON.stringify(obj);
+  } catch (e) {
+    throw new error(msg || e);
+  }
+};
 
 /**
  * Asserts that Marionette has a session.
@@ -233,7 +258,7 @@ assert.callable = function(obj, msg = "") {
  */
 assert.integer = function(obj, msg = "") {
   msg = msg || pprint`Expected ${obj} to be an integer`;
-  return assert.that(Number.isInteger, msg)(obj);
+  return assert.that(Number.isSafeInteger, msg)(obj);
 };
 
 /**

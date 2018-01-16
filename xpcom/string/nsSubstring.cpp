@@ -297,14 +297,6 @@ nsStringBuffer::Realloc(nsStringBuffer* aHdr, size_t aSize)
 }
 
 nsStringBuffer*
-nsStringBuffer::FromData(void* aData)
-{
-  nsStringBuffer* str = reinterpret_cast<nsStringBuffer*>(aData) - 1;
-  CHECK_STRING_BUFFER_CANARY(str->mCanary);
-  return str;
-}
-
-nsStringBuffer*
 nsStringBuffer::FromString(const nsAString& aStr)
 {
   const nsAStringAccessor* accessor =
@@ -379,6 +371,14 @@ nsStringBuffer::SizeOfIncludingThisEvenIfShared(mozilla::MallocSizeOf aMallocSiz
 {
   return aMallocSizeOf(this);
 }
+
+#ifdef STRING_BUFFER_CANARY
+void
+nsStringBuffer::FromDataCanaryCheckFailed() const
+{
+  MOZ_CRASH_UNSAFE_PRINTF("Bad canary value %d in FromData", mCanary);
+}
+#endif
 
 // ---------------------------------------------------------------------------
 

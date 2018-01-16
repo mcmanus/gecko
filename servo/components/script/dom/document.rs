@@ -91,13 +91,14 @@ use dom::windowproxy::WindowProxy;
 use dom_struct::dom_struct;
 use encoding_rs::{Encoding, UTF_8};
 use euclid::Point2D;
+use fetch::FetchCanceller;
 use html5ever::{LocalName, Namespace, QualName};
 use hyper::header::{Header, SetCookie};
 use hyper_serde::Serde;
 use ipc_channel::ipc::{self, IpcSender};
 use js::jsapi::{JSContext, JSRuntime};
 use js::jsapi::JS_GetRuntime;
-use metrics::{InteractiveFlag, InteractiveMetrics, InteractiveWindow, ProfilerMetadataFactory};
+use metrics::{InteractiveFlag, InteractiveMetrics, InteractiveWindow, ProfilerMetadataFactory, ProgressiveWebMetric};
 use msg::constellation_msg::{BrowsingContextId, Key, KeyModifiers, KeyState, TopLevelBrowsingContextId};
 use net_traits::{FetchResponseMsg, IpcSend, ReferrerPolicy};
 use net_traits::CookieSource::NonHTTP;
@@ -117,7 +118,6 @@ use servo_arc::Arc;
 use servo_atoms::Atom;
 use servo_config::prefs::PREFS;
 use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
-use std::ascii::AsciiExt;
 use std::borrow::ToOwned;
 use std::cell::{Cell, Ref, RefMut};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -322,6 +322,7 @@ pub struct Document {
     dom_content_loaded_event_start: Cell<u64>,
     dom_content_loaded_event_end: Cell<u64>,
     dom_complete: Cell<u64>,
+    top_level_dom_complete: Cell<u64>,
     load_event_start: Cell<u64>,
     load_event_end: Cell<u64>,
     /// <https://html.spec.whatwg.org/multipage/#concept-document-https-state>
@@ -361,6 +362,8 @@ pub struct Document {
     form_id_listener_map: DomRefCell<HashMap<Atom, HashSet<Dom<Element>>>>,
     interactive_time: DomRefCell<InteractiveMetrics>,
     tti_window: DomRefCell<InteractiveWindow>,
+    /// RAII canceller for Fetch
+    canceller: FetchCanceller,
 }
 
 #[derive(JSTraceable, MallocSizeOf)]
@@ -574,8 +577,14 @@ impl Document {
         self.encoding.set(encoding);
     }
 
-    pub fn content_and_heritage_changed(&self, node: &Node, damage: NodeDamage) {
-        node.dirty(damage);
+    pub fn content_and_heritage_changed(&self, node: &Node) {
+        if node.is_in_doc() {
+            node.note_dirty_descendants();
+        }
+
+        // FIXME(emilio): This is very inefficient, ideally the flag above would
+        // be enough and incremental layout could figure out from there.
+        node.dirty(NodeDamage::OtherNodeDamage);
     }
 
     /// Reflows and disarms the timer if the reflow timer has expired.
@@ -1619,6 +1628,12 @@ impl Document {
         // asap_in_order_script_loaded.
 
         let loader = self.loader.borrow();
+
+        // Servo measures when the top-level content (not iframes) is loaded.
+        if (self.top_level_dom_complete.get() == 0) && loader.is_only_blocked_by_iframes() {
+            update_with_current_time_ms(&self.top_level_dom_complete);
+        }
+
         if loader.is_blocked() || loader.events_inhibited() {
             // Step 6.
             return;
@@ -1877,6 +1892,13 @@ impl Document {
         self.current_parser.get()
     }
 
+    pub fn can_invoke_script(&self) -> bool {
+        match self.get_current_parser() {
+            Some(parser) => parser.parser_is_not_active(),
+            None => true,
+        }
+    }
+
     /// Iterate over all iframes in the document.
     pub fn iter_iframes(&self) -> impl Iterator<Item=DomRoot<HTMLIFrameElement>> {
         self.upcast::<Node>()
@@ -1912,6 +1934,10 @@ impl Document {
         self.dom_interactive.get()
     }
 
+    pub fn set_navigation_start(&self, navigation_start: u64) {
+        self.interactive_time.borrow_mut().set_navigation_start(navigation_start);
+    }
+
     pub fn get_interactive_metrics(&self) -> Ref<InteractiveMetrics> {
         self.interactive_time.borrow()
     }
@@ -1932,6 +1958,10 @@ impl Document {
         self.dom_complete.get()
     }
 
+    pub fn get_top_level_dom_complete(&self) -> u64 {
+        self.top_level_dom_complete.get()
+    }
+
     pub fn get_load_event_start(&self) -> u64 {
         self.load_event_start.get()
     }
@@ -1941,7 +1971,9 @@ impl Document {
     }
 
     pub fn start_tti(&self) {
-        self.tti_window.borrow_mut().start_window();
+        if self.get_interactive_metrics().needs_tti() {
+            self.tti_window.borrow_mut().start_window();
+        }
     }
 
     /// check tti for this document
@@ -1949,7 +1981,6 @@ impl Document {
     /// main thread available and try to set tti
     pub fn record_tti_if_necessary(&self) {
         if self.has_recorded_tti_metric() { return; }
-
         if self.tti_window.borrow().needs_check() {
             self.get_interactive_metrics().maybe_set_tti(self,
                 InteractiveFlag::TimeToInteractive(self.tti_window.borrow().get_start()));
@@ -2155,7 +2186,8 @@ impl Document {
                          source: DocumentSource,
                          doc_loader: DocumentLoader,
                          referrer: Option<String>,
-                         referrer_policy: Option<ReferrerPolicy>)
+                         referrer_policy: Option<ReferrerPolicy>,
+                         canceller: FetchCanceller)
                          -> Document {
         let url = url.unwrap_or_else(|| ServoUrl::parse("about:blank").unwrap());
 
@@ -2165,7 +2197,7 @@ impl Document {
             (DocumentReadyState::Complete, true)
         };
 
-        let interactive_time = InteractiveMetrics::new(window.time_profiler_chan().clone());
+        let interactive_time = InteractiveMetrics::new(window.time_profiler_chan().clone(), url.clone());
 
         Document {
             node: Node::new_document_node(),
@@ -2244,6 +2276,7 @@ impl Document {
             dom_content_loaded_event_start: Cell::new(Default::default()),
             dom_content_loaded_event_end: Cell::new(Default::default()),
             dom_complete: Cell::new(Default::default()),
+            top_level_dom_complete: Cell::new(Default::default()),
             load_event_start: Cell::new(Default::default()),
             load_event_end: Cell::new(Default::default()),
             https_state: Cell::new(HttpsState::None),
@@ -2260,6 +2293,7 @@ impl Document {
             form_id_listener_map: Default::default(),
             interactive_time: DomRefCell::new(interactive_time),
             tti_window: DomRefCell::new(InteractiveWindow::new()),
+            canceller: canceller,
         }
     }
 
@@ -2278,7 +2312,8 @@ impl Document {
                          DocumentSource::NotFromParser,
                          docloader,
                          None,
-                         None))
+                         None,
+                         Default::default()))
     }
 
     pub fn new(window: &Window,
@@ -2292,7 +2327,8 @@ impl Document {
                source: DocumentSource,
                doc_loader: DocumentLoader,
                referrer: Option<String>,
-               referrer_policy: Option<ReferrerPolicy>)
+               referrer_policy: Option<ReferrerPolicy>,
+               canceller: FetchCanceller)
                -> DomRoot<Document> {
         let document = reflect_dom_object(
             Box::new(Document::new_inherited(
@@ -2307,7 +2343,8 @@ impl Document {
                 source,
                 doc_loader,
                 referrer,
-                referrer_policy
+                referrer_policy,
+                canceller
             )),
             window,
             DocumentBinding::Wrap
@@ -2464,7 +2501,8 @@ impl Document {
                                         DocumentSource::NotFromParser,
                                         DocumentLoader::new(&self.loader()),
                                         None,
-                                        None);
+                                        None,
+                                        Default::default());
             new_doc.appropriate_template_contents_owner_document.set(Some(&new_doc));
             new_doc
         })

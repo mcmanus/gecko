@@ -16,17 +16,6 @@
 #include <fontconfig/fcfreetype.h>
 
 namespace mozilla {
-namespace wr {
-  enum {
-    FONT_FORCE_AUTOHINT  = 1 << 0,
-    FONT_NO_AUTOHINT     = 1 << 1,
-    FONT_EMBEDDED_BITMAP = 1 << 2,
-    FONT_EMBOLDEN        = 1 << 3,
-    FONT_VERTICAL_LAYOUT = 1 << 4,
-    FONT_SUBPIXEL_BGR    = 1 << 5
-  };
-}
-
 namespace gfx {
 
 // On Linux and Android our "platform" font is a cairo_scaled_font_t and we use
@@ -36,9 +25,11 @@ namespace gfx {
 ScaledFontFontconfig::ScaledFontFontconfig(cairo_scaled_font_t* aScaledFont,
                                            FcPattern* aPattern,
                                            const RefPtr<UnscaledFont>& aUnscaledFont,
-                                           Float aSize)
-  : ScaledFontBase(aUnscaledFont, aSize),
-    mPattern(aPattern)
+                                           Float aSize,
+                                           bool aNeedsOblique)
+  : ScaledFontBase(aUnscaledFont, aSize)
+  , mPattern(aPattern)
+  , mNeedsOblique(aNeedsOblique)
 {
   SetCairoScaledFont(aScaledFont);
   FcPatternReference(aPattern);
@@ -252,25 +243,28 @@ ScaledFontFontconfig::GetWRFontInstanceOptions(Maybe<wr::FontInstanceOptions>* a
   wr::FontInstanceOptions options;
   options.render_mode = wr::FontRenderMode::Alpha;
   options.subpx_dir = wr::SubpixelDirection::Horizontal;
-  options.synthetic_italics = false;
+  options.flags = 0;
   options.bg_color = wr::ToColorU(Color());
 
   wr::FontInstancePlatformOptions platformOptions;
-  platformOptions.flags = 0;
   platformOptions.lcd_filter = wr::FontLCDFilter::Legacy;
   platformOptions.hinting = wr::FontHinting::Normal;
 
+  if (mNeedsOblique) {
+    options.flags |= wr::FontInstanceFlags::SYNTHETIC_ITALICS;
+  }
+
   FcBool autohint;
   if (FcPatternGetBool(mPattern, FC_AUTOHINT, 0, &autohint) == FcResultMatch && autohint) {
-    platformOptions.flags |= wr::FONT_FORCE_AUTOHINT;
+    options.flags |= wr::FontInstanceFlags::FORCE_AUTOHINT;
   }
   FcBool embolden;
   if (FcPatternGetBool(mPattern, FC_EMBOLDEN, 0, &embolden) == FcResultMatch && embolden) {
-    platformOptions.flags |= wr::FONT_EMBOLDEN;
+    options.flags |= wr::FontInstanceFlags::SYNTHETIC_BOLD;
   }
   FcBool vertical;
   if (FcPatternGetBool(mPattern, FC_VERTICAL_LAYOUT, 0, &vertical) == FcResultMatch && vertical) {
-    platformOptions.flags |= wr::FONT_VERTICAL_LAYOUT;
+    options.flags |= wr::FontInstanceFlags::VERTICAL_LAYOUT;
   }
 
   FcBool antialias;
@@ -288,7 +282,7 @@ ScaledFontFontconfig::GetWRFontInstanceOptions(Maybe<wr::FontInstanceOptions>* a
             }
             platformOptions.hinting = wr::FontHinting::LCD;
             if (rgba == FC_RGBA_BGR || rgba == FC_RGBA_VBGR) {
-                platformOptions.flags |= wr::FONT_SUBPIXEL_BGR;
+                options.flags |= wr::FontInstanceFlags::SUBPIXEL_BGR;
             }
             break;
         case FC_RGBA_NONE:
@@ -323,13 +317,13 @@ ScaledFontFontconfig::GetWRFontInstanceOptions(Maybe<wr::FontInstanceOptions>* a
     // Otherwise, disable embedded bitmaps unless explicitly enabled.
     FcBool bitmap;
     if (FcPatternGetBool(mPattern, FC_EMBEDDED_BITMAP, 0, &bitmap) == FcResultMatch && bitmap) {
-      platformOptions.flags |= wr::FONT_EMBEDDED_BITMAP;
+      options.flags |= wr::FontInstanceFlags::EMBEDDED_BITMAPS;
     }
   } else {
     options.render_mode = wr::FontRenderMode::Mono;
     options.subpx_dir = wr::SubpixelDirection::None;
     platformOptions.hinting = wr::FontHinting::Mono;
-    platformOptions.flags |= wr::FONT_EMBEDDED_BITMAP;
+    options.flags |= wr::FontInstanceFlags::EMBEDDED_BITMAPS;
   }
 
   FcBool hinting;
@@ -399,8 +393,9 @@ ScaledFontFontconfig::CreateFromInstanceData(const InstanceData& aInstanceData,
     gfxWarning() << "Failing initializing Fontconfig pattern for scaled font";
     return nullptr;
   }
-  if (aUnscaledFont->GetFace()) {
-    FcPatternAddFTFace(pattern, FC_FT_FACE, aUnscaledFont->GetFace());
+  FT_Face face = aUnscaledFont->GetFace();
+  if (face) {
+    FcPatternAddFTFace(pattern, FC_FT_FACE, face);
   } else {
     FcPatternAddString(pattern, FC_FILE, reinterpret_cast<const FcChar8*>(aUnscaledFont->GetFile()));
     FcPatternAddInteger(pattern, FC_INDEX, aUnscaledFont->GetIndex());
@@ -408,7 +403,7 @@ ScaledFontFontconfig::CreateFromInstanceData(const InstanceData& aInstanceData,
   FcPatternAddDouble(pattern, FC_PIXEL_SIZE, aSize);
   aInstanceData.SetupPattern(pattern);
 
-  cairo_font_face_t* font = cairo_ft_font_face_create_for_pattern(pattern);
+  cairo_font_face_t* font = cairo_ft_font_face_create_for_pattern(pattern, nullptr, 0);
   if (cairo_font_face_status(font) != CAIRO_STATUS_SUCCESS) {
     gfxWarning() << "Failed creating Cairo font face for Fontconfig pattern";
     FcPatternDestroy(pattern);
@@ -420,10 +415,17 @@ ScaledFontFontconfig::CreateFromInstanceData(const InstanceData& aInstanceData,
     // was freed. To prevent this, we must bind the NativeFontResource to the font face so that
     // it stays alive at least as long as the font face.
     aNativeFontResource->AddRef();
-    if (cairo_font_face_set_user_data(font,
-                                      &sNativeFontResourceKey,
-                                      aNativeFontResource,
-                                      ReleaseNativeFontResource) != CAIRO_STATUS_SUCCESS) {
+    // Bug 1412545 - Setting Cairo font user data is not thread-safe. If Fontconfig patterns match,
+    // cairo_ft_font_face_create_for_pattern may share Cairo faces. We need to lock setting user data
+    // to prevent races if multiple threads are thus sharing the same Cairo face.
+    FT_Library library = face ? face->glyph->library : Factory::GetFTLibrary();
+    Factory::LockFTLibrary(library);
+    cairo_status_t err = cairo_font_face_set_user_data(font,
+                                                       &sNativeFontResourceKey,
+                                                       aNativeFontResource,
+                                                       ReleaseNativeFontResource);
+    Factory::UnlockFTLibrary(library);
+    if (err != CAIRO_STATUS_SUCCESS) {
       gfxWarning() << "Failed binding NativeFontResource to Cairo font face";
       aNativeFontResource->Release();
       cairo_font_face_destroy(font);

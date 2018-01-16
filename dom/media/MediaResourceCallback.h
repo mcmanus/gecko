@@ -7,14 +7,18 @@
 #ifndef MediaResourceCallback_h_
 #define MediaResourceCallback_h_
 
+#include "DecoderDoctorLogger.h"
 #include "nsError.h"
 #include "nsISupportsImpl.h"
+#include "MediaResult.h"
 
 namespace mozilla {
 
 class AbstractThread;
 class MediaDecoderOwner;
 class MediaResource;
+
+DDLoggedTypeDeclName(MediaResourceCallback);
 
 /**
  * A callback used by MediaResource (sub-classes like FileMediaResource,
@@ -25,7 +29,9 @@ class MediaResource;
  * gtests for the readers without using a mock MediaResource when you don't
  * care about the events notified by the MediaResource.
  */
-class MediaResourceCallback {
+class MediaResourceCallback
+  : public DecoderDoctorLifeLogger<MediaResourceCallback>
+{
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaResourceCallback);
 
@@ -36,7 +42,7 @@ public:
   virtual MediaDecoderOwner* GetMediaOwner() const { return nullptr; }
 
   // Notify that a network error is encountered.
-  virtual void NotifyNetworkError() {}
+  virtual void NotifyNetworkError(const MediaResult& aError) {}
 
   // Notify that data arrives on the stream and is read into the cache.
   virtual void NotifyDataArrived() {}
@@ -51,9 +57,6 @@ public:
 
   // Notify that the "cache suspended" status of MediaResource changes.
   virtual void NotifySuspendedStatusChanged(bool aSuspendedByCache) {}
-
-  // Notify the number of bytes read from the resource.
-  virtual void NotifyBytesConsumed(int64_t aBytes, int64_t aOffset) {}
 
 protected:
   virtual ~MediaResourceCallback() {}

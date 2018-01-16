@@ -373,7 +373,7 @@ nsTableFrame::RowOrColSpanChanged(nsTableCellFrame* aCellFrame)
 
       // XXX Should this use eStyleChange?  It currently doesn't need
       // to, but it might given more optimization.
-      PresContext()->PresShell()->
+      PresShell()->
         FrameNeedsReflow(this, nsIPresShell::eTreeChange, NS_FRAME_IS_DIRTY);
     }
   }
@@ -726,7 +726,7 @@ nsTableFrame::AppendAnonymousColFrames(nsTableColGroupFrame* aColGroupFrame,
   NS_PRECONDITION(aColType != eColAnonymousCol, "Shouldn't happen");
   MOZ_ASSERT(aNumColsToAdd > 0, "We should be adding _something_.");
 
-  nsIPresShell *shell = PresContext()->PresShell();
+  nsIPresShell *shell = PresShell();
 
   // Get the last col frame
   nsFrameList newColFrames;
@@ -1219,7 +1219,7 @@ nsDisplayItemGeometry*
 nsDisplayTableItem::AllocateGeometry(nsDisplayListBuilder* aBuilder)
 {
   return new nsDisplayTableItemGeometry(this, aBuilder,
-      mFrame->GetOffsetTo(mFrame->PresContext()->PresShell()->GetRootFrame()));
+      mFrame->GetOffsetTo(mFrame->PresShell()->GetRootFrame()));
 }
 
 void
@@ -1233,7 +1233,7 @@ nsDisplayTableItem::ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
   bool invalidateForAttachmentFixed = false;
   if (mDrawsBackground && mPartHasFixedBackground) {
     nsPoint frameOffsetToViewport = mFrame->GetOffsetTo(
-        mFrame->PresContext()->PresShell()->GetRootFrame());
+        mFrame->PresShell()->GetRootFrame());
     invalidateForAttachmentFixed =
         frameOffsetToViewport != geometry->mFrameOffsetToViewport;
   }
@@ -1533,7 +1533,7 @@ nsTableFrame::DisplayGenericTablePart(nsDisplayListBuilder* aBuilder,
 
     // Paint the outset box-shadows for the table frames
     if (aFrame->StyleEffects()->mBoxShadow) {
-      aLists.BorderBackground()->AppendNewToTop(
+      aLists.BorderBackground()->AppendToTop(
         new (aBuilder) nsDisplayBoxShadowOuter(aBuilder, aFrame));
     }
   }
@@ -1601,7 +1601,7 @@ nsTableFrame::DisplayGenericTablePart(nsDisplayListBuilder* aBuilder,
 
     // Paint the inset box-shadows for the table frames
     if (aFrame->StyleEffects()->mBoxShadow) {
-      aLists.BorderBackground()->AppendNewToTop(
+      aLists.BorderBackground()->AppendToTop(
         new (aBuilder) nsDisplayBoxShadowInner(aBuilder, aFrame));
     }
   }
@@ -1616,13 +1616,13 @@ nsTableFrame::DisplayGenericTablePart(nsDisplayListBuilder* aBuilder,
       // In the collapsed border model, overlay all collapsed borders.
       if (table->IsBorderCollapse()) {
         if (table->HasBCBorders()) {
-          aLists.BorderBackground()->AppendNewToTop(
+          aLists.BorderBackground()->AppendToTop(
             new (aBuilder) nsDisplayTableBorderCollapse(aBuilder, table));
         }
       } else {
         const nsStyleBorder* borderStyle = aFrame->StyleBorder();
         if (borderStyle->HasBorder()) {
-          aLists.BorderBackground()->AppendNewToTop(
+          aLists.BorderBackground()->AppendToTop(
             new (aBuilder) nsDisplayBorder(aBuilder, table));
         }
       }
@@ -2577,8 +2577,8 @@ nsTableFrame::AppendFrames(ChildListID     aListID,
   printf("=== TableFrame::AppendFrames\n");
   Dump(true, true, true);
 #endif
-  PresContext()->PresShell()->FrameNeedsReflow(this, nsIPresShell::eTreeChange,
-                                               NS_FRAME_HAS_DIRTY_CHILDREN);
+  PresShell()->FrameNeedsReflow(this, nsIPresShell::eTreeChange,
+                                NS_FRAME_HAS_DIRTY_CHILDREN);
   SetGeometryDirty();
 }
 
@@ -2749,8 +2749,8 @@ nsTableFrame::HomogenousInsertFrames(ChildListID     aListID,
     return;
   }
 
-  PresContext()->PresShell()->FrameNeedsReflow(this, nsIPresShell::eTreeChange,
-                                               NS_FRAME_HAS_DIRTY_CHILDREN);
+  PresShell()->FrameNeedsReflow(this, nsIPresShell::eTreeChange,
+                                NS_FRAME_HAS_DIRTY_CHILDREN);
   SetGeometryDirty();
 #ifdef DEBUG_TABLE_CELLMAP
   printf("=== TableFrame::InsertFrames\n");
@@ -2838,7 +2838,7 @@ nsTableFrame::RemoveFrame(ChildListID     aListID,
                mozilla::StyleDisplay::TableColumnGroup !=
                  aOldFrame->StyleDisplay()->mDisplay,
                "Wrong list name; use kColGroupList iff colgroup");
-  nsIPresShell* shell = PresContext()->PresShell();
+  nsIPresShell* shell = PresShell();
   nsTableFrame* lastParent = nullptr;
   while (aOldFrame) {
     nsIFrame* oldFrameNextContinuation = aOldFrame->GetNextContinuation();
@@ -6453,13 +6453,15 @@ nsTableFrame::CalcBCBorders()
         gotRowBorder = true;
       }
     }
-
-    // see if the cell to the iEnd side had a rowspan and its bEnd-iStart border
-    // needs be joined with this one's bEnd
-    // if  there is a cell to the iEnd and the cell to iEnd side was a rowspan
-    if ((info.mNumTableCols != info.GetCellEndColIndex() + 1) &&
-        (lastBEndBorders[info.GetCellEndColIndex() + 1].rowSpan > 1)) {
-      BCCornerInfo& corner = bEndCorners[info.GetCellEndColIndex() + 1];
+    // In the function, we try to join two cells' BEnd.
+    // We normally do this work when processing the cell on the iEnd side,
+    // but when the cell on the iEnd side has a rowspan, the cell on the
+    // iStart side gets processed later (now), so we have to do this work now.
+    const auto nextColIndex = info.GetCellEndColIndex() + 1;
+    if ((info.mNumTableCols != nextColIndex) &&
+        (lastBEndBorders[nextColIndex].rowSpan > 1) &&
+        (lastBEndBorders[nextColIndex].rowIndex == info.GetCellEndRowIndex() + 1)) {
+      BCCornerInfo& corner = bEndCorners[nextColIndex];
       if (!IsBlock(LogicalSide(corner.ownerSide))) {
         // not a block-dir owner
         BCCellBorder& thisBorder = lastBEndBorder;
@@ -6471,8 +6473,9 @@ nsTableFrame::CalcBCBorders()
           // new segment
           if (iter.mCellMap) {
             tableCellMap->ResetBStartStart(eLogicalSideBEnd, *iter.mCellMap,
+                                           iter.mRowGroupStart,
                                            info.GetCellEndRowIndex(),
-                                           info.GetCellEndColIndex() + 1);
+                                           nextColIndex);
           }
         }
       }

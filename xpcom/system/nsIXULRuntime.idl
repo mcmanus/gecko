@@ -76,6 +76,7 @@ interface nsIXULRuntime : nsISupports
   const unsigned long PROCESS_TYPE_IPDLUNITTEST = 3;
   const unsigned long PROCESS_TYPE_GMPLUGIN = 4;
   const unsigned long PROCESS_TYPE_GPU = 5;
+  const unsigned long PROCESS_TYPE_PDFIUM = 6;
 
   /**
    * The type of the caller's process.  Returns one of the values above.
@@ -167,12 +168,6 @@ interface nsIXULRuntime : nsISupports
    * closed cleanly. This is set to 0 if there was no existing profile lock.
    */
   readonly attribute PRTime replacedLockTime;
-
-  /**
-   * Local ID of the minidump generated when the process crashed
-   * on the previous run. Can be passed directly to CrashSubmit.submit.
-   */
-  readonly attribute DOMString lastRunCrashID;
 
   /**
    * True if this is RELEASE_OR_BETA.

@@ -16,8 +16,12 @@ EXTRA_COMPONENTS += [
 
 JAR_MANIFESTS += ['jar.mn']
 
+MOCHITEST_MANIFESTS += ['test/mochitest/mochitest.ini']
+
 SPHINX_TREES['docs'] = 'docs'
 
 TESTING_JS_MODULES += [
     'test/PaymentTestUtils.jsm',
 ]
+
+XPCSHELL_TESTS_MANIFESTS += ['test/unit/xpcshell.ini']

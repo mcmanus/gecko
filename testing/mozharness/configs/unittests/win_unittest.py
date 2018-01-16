@@ -175,6 +175,7 @@ config = {
         "browser-chrome-chunked": ["--flavor=browser", "--chunk-by-runtime"],
         "browser-chrome-addons": ["--flavor=browser", "--chunk-by-runtime", "--tag=addons"],
         "browser-chrome-screenshots": ["--flavor=browser", "--subsuite=screenshots"],
+        "browser-chrome-instrumentation": ["--flavor=browser"],
         "mochitest-gl": ["--subsuite=webgl"],
         "mochitest-devtools-chrome": ["--flavor=browser", "--subsuite=devtools"],
         "mochitest-devtools-chrome-chunked": ["--flavor=browser", "--subsuite=devtools", "--chunk-by-runtime"],
@@ -188,7 +189,8 @@ config = {
             'tests': ["tests/reftest/tests/testing/crashtest/crashtests.list"]
         },
         "jsreftest": {
-            'options':["--extra-profile-file=tests/jsreftest/tests/user.js"],
+            'options':["--extra-profile-file=tests/jsreftest/tests/user.js",
+                       "--suite=jstestbrowser"],
             'tests': ["tests/jsreftest/tests/jstests.list"]
         },
         "reftest": {

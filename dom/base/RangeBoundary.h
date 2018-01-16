@@ -11,9 +11,10 @@
 #include "nsIContent.h"
 #include "mozilla/Maybe.h"
 
-class nsRange;
-
 namespace mozilla {
+
+template<typename T, typename U>
+class EditorDOMPointBase;
 
 // This class will maintain a reference to the child immediately
 // before the boundary's offset. We try to avoid computing the
@@ -44,10 +45,8 @@ class RangeBoundaryBase
 {
   template<typename T, typename U>
   friend class RangeBoundaryBase;
-
-  // nsRange needs to use InvalidOffset() which requires mRef initialized
-  // before it's called.
-  friend class ::nsRange;
+  template<typename T, typename U>
+  friend class EditorDOMPointBase;
 
   friend void ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback&,
                                           RangeBoundary&, const char*,
@@ -73,28 +72,22 @@ public:
     , mRef(nullptr)
     , mOffset(mozilla::Some(aOffset))
   {
-    if (!mParent) {
-      mOffset.reset();
+    if (mParent && mParent->IsContainerNode()) {
+      // Find a reference node
+      if (aOffset == static_cast<int32_t>(aContainer->GetChildCount())) {
+        mRef = aContainer->GetLastChild();
+      } else if (aOffset != 0) {
+        mRef = mParent->GetChildAt_Deprecated(aOffset - 1);
+      }
+
+      NS_WARNING_ASSERTION(mRef || aOffset == 0,
+                           "Constructing RangeBoundary with invalid value");
     }
+
+    NS_WARNING_ASSERTION(!mRef || mRef->GetParentNode() == mParent,
+                         "Constructing RangeBoundary with invalid value");
   }
 
-protected:
-  RangeBoundaryBase(nsINode* aContainer, nsIContent* aRef, int32_t aOffset)
-    : mParent(aContainer)
-    , mRef(aRef)
-    , mOffset(mozilla::Some(aOffset))
-  {
-    MOZ_RELEASE_ASSERT(aContainer,
-      "This constructor shouldn't be used when pointing nowhere");
-    if (!mRef) {
-      MOZ_ASSERT(mOffset.value() == 0);
-      return;
-    }
-    MOZ_ASSERT(mOffset.value() > 0);
-    MOZ_ASSERT(mParent->GetChildAt(mOffset.value() - 1) == mRef);
-  }
-
-public:
   RangeBoundaryBase()
     : mParent(nullptr)
     , mRef(nullptr)
@@ -113,7 +106,6 @@ public:
   nsIContent*
   Ref() const
   {
-    EnsureRef();
     return mRef;
   }
 
@@ -129,12 +121,11 @@ public:
     if (!mParent || !mParent->IsContainerNode()) {
       return nullptr;
     }
-    EnsureRef();
     if (!mRef) {
       MOZ_ASSERT(Offset() == 0, "invalid RangeBoundary");
       return mParent->GetFirstChild();
     }
-    MOZ_ASSERT(mParent->GetChildAt(Offset()) == mRef->GetNextSibling());
+    MOZ_ASSERT(mParent->GetChildAt_Deprecated(Offset()) == mRef->GetNextSibling());
     return mRef->GetNextSibling();
   }
 
@@ -149,7 +140,6 @@ public:
     if (NS_WARN_IF(!mParent) || NS_WARN_IF(!mParent->IsContainerNode())) {
       return nullptr;
     }
-    EnsureRef();
     if (NS_WARN_IF(!mRef->GetNextSibling())) {
       // Already referring the end of the container.
       return nullptr;
@@ -168,7 +158,6 @@ public:
     if (NS_WARN_IF(!mParent) || NS_WARN_IF(!mParent->IsContainerNode())) {
       return nullptr;
     }
-    EnsureRef();
     if (NS_WARN_IF(!mRef)) {
       // Already referring the start of the container.
       return nullptr;
@@ -182,117 +171,57 @@ public:
     if (mOffset.isSome()) {
       return mOffset.value();
     }
+
     if (!mParent) {
-      MOZ_ASSERT(!mRef);
       return 0;
     }
-    MOZ_ASSERT(mParent->IsContainerNode(),
-      "If the container cannot have children, mOffset.isSome() should be true");
+
     MOZ_ASSERT(mRef);
     MOZ_ASSERT(mRef->GetParentNode() == mParent);
-    if (!mRef->GetPreviousSibling()) {
-      mOffset = mozilla::Some(1);
-      return mOffset.value();
-    }
-    if (!mRef->GetNextSibling()) {
-      mOffset = mozilla::Some(mParent->GetChildCount());
-      return mOffset.value();
-    }
-    // Use nsINode::IndexOf() as the last resort due to being expensive.
     mOffset = mozilla::Some(mParent->IndexOf(mRef) + 1);
+
     return mOffset.value();
+  }
+
+  void
+  InvalidateOffset()
+  {
+    MOZ_ASSERT(mParent);
+    MOZ_ASSERT(mParent->IsContainerNode(), "Range is positioned on a text node!");
+
+    if (!mRef) {
+      MOZ_ASSERT(mOffset.isSome() && mOffset.value() == 0,
+                 "Invalidating offset of invalid RangeBoundary?");
+      return;
+    }
+    mOffset.reset();
   }
 
   void
   Set(nsINode* aContainer, int32_t aOffset)
   {
     mParent = aContainer;
-    mRef = nullptr;
-    mOffset = mozilla::Some(aOffset);
-  }
-
-  /**
-   * AdvanceOffset() tries to reference next sibling of mRef if its container
-   * can have children or increments offset if the container is a text node or
-   * something.
-   * If the container can have children and there is no next sibling, this
-   * outputs warning and does nothing.  So, callers need to check if there is
-   * next sibling which you need to refer.
-   */
-  void
-  AdvanceOffset()
-  {
-    if (NS_WARN_IF(!mParent)) {
-      return;
-    }
-    EnsureRef();
-    if (!mRef) {
-      if (!mParent->IsContainerNode()) {
-        // In text node or something, just increment the offset.
-        MOZ_ASSERT(mOffset.isSome());
-        if (NS_WARN_IF(mOffset.value() == mParent->Length())) {
-          // Already referring the end of the node.
-          return;
-        }
-        mOffset = mozilla::Some(mOffset.value() + 1);
-        return;
-      }
-      mRef = mParent->GetFirstChild();
-      if (NS_WARN_IF(!mRef)) {
-        // No children in the container.
-        mOffset = mozilla::Some(0);
+    if (mParent && mParent->IsContainerNode()) {
+      // Find a reference node
+      if (aOffset == static_cast<int32_t>(aContainer->GetChildCount())) {
+        mRef = aContainer->GetLastChild();
+      } else if (aOffset == 0) {
+        mRef = nullptr;
       } else {
-        mOffset = mozilla::Some(1);
+        mRef = mParent->GetChildAt_Deprecated(aOffset - 1);
+        MOZ_ASSERT(mRef);
       }
-      return;
+
+      NS_WARNING_ASSERTION(mRef || aOffset == 0,
+                           "Setting RangeBoundary to invalid value");
+    } else {
+      mRef = nullptr;
     }
 
-    nsIContent* nextSibling = mRef->GetNextSibling();
-    if (NS_WARN_IF(!nextSibling)) {
-      // Already referring the end of the container.
-      return;
-    }
-    mRef = nextSibling;
-    if (mOffset.isSome()) {
-      mOffset = mozilla::Some(mOffset.value() + 1);
-    }
-  }
+    mOffset = mozilla::Some(aOffset);
 
-  /**
-   * RewindOffset() tries to reference next sibling of mRef if its container
-   * can have children or decrements offset if the container is a text node or
-   * something.
-   * If the container can have children and there is no next previous, this
-   * outputs warning and does nothing.  So, callers need to check if there is
-   * previous sibling which you need to refer.
-   */
-  void
-  RewindOffset()
-  {
-    if (NS_WARN_IF(!mParent)) {
-      return;
-    }
-    EnsureRef();
-    if (!mRef) {
-      if (NS_WARN_IF(mParent->IsContainerNode())) {
-        // Already referring the start of the container
-        mOffset = mozilla::Some(0);
-        return;
-      }
-      // In text node or something, just decrement the offset.
-      MOZ_ASSERT(mOffset.isSome());
-      if (NS_WARN_IF(mOffset.value() == 0)) {
-        // Already referring the start of the node.
-        return;
-      }
-      mOffset = mozilla::Some(mOffset.value() - 1);
-      return;
-    }
-
-    mRef = mRef->GetPreviousSibling();
-    if (mOffset.isSome()) {
-      mOffset = mozilla::Some(mOffset.value() - 1);
-    }
+    NS_WARNING_ASSERTION(!mRef || mRef->GetParentNode() == mParent,
+                         "Setting RangeBoundary to invalid value");
   }
 
   void
@@ -320,13 +249,10 @@ public:
       return false;
     }
 
-    if (mRef && mRef->GetParentNode() != mParent) {
-      return false;
+    if (Ref()) {
+      return Ref()->GetParentNode() == Container();
     }
-    if (mOffset.isSome() && mOffset.value() > mParent->Length()) {
-      return false;
-    }
-    return true;
+    return Offset() <= Container()->Length();
   }
 
   bool
@@ -361,8 +287,14 @@ public:
   template<typename A, typename B>
   RangeBoundaryBase& operator=(const RangeBoundaryBase<A,B>& aOther)
   {
-    mParent = aOther.mParent;
-    mRef = aOther.mRef;
+    // mParent and mRef can be strong pointers, so better to try to avoid any
+    // extra AddRef/Release calls.
+    if (mParent != aOther.mParent) {
+      mParent = aOther.mParent;
+    }
+    if (mRef != aOther.mRef) {
+      mRef = aOther.mRef;
+    }
     mOffset = aOther.mOffset;
     return *this;
   }
@@ -380,50 +312,9 @@ public:
     return !(*this == aOther);
   }
 
-protected:
-  /**
-   * InvalidOffset() is error prone method, unfortunately.  If somebody
-   * needs to call this method, it needs to call EnsureRef() before changing
-   * the position of the referencing point.
-   */
-  void
-  InvalidateOffset()
-  {
-    MOZ_ASSERT(mParent);
-    MOZ_ASSERT(mParent->IsContainerNode(),
-               "Range is positioned on a text node!");
-    MOZ_ASSERT(mRef || (mOffset.isSome() && mOffset.value() == 0),
-               "mRef should be computed before a call of InvalidateOffset()");
-
-    if (!mRef) {
-      return;
-    }
-    mOffset.reset();
-  }
-
-  void
-  EnsureRef() const
-  {
-    if (mRef) {
-      return;
-    }
-    if (!mParent) {
-      MOZ_ASSERT(!mOffset.isSome());
-      return;
-    }
-    MOZ_ASSERT(mOffset.isSome());
-    MOZ_ASSERT(mOffset.value() <= mParent->Length());
-    if (!mParent->IsContainerNode() ||
-        mOffset.value() == 0) {
-      return;
-    }
-    mRef = mParent->GetChildAt(mOffset.value() - 1);
-    MOZ_ASSERT(mRef);
-  }
-
 private:
   ParentType mParent;
-  mutable RefType mRef;
+  RefType mRef;
 
   mutable mozilla::Maybe<uint32_t> mOffset;
 };

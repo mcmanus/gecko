@@ -162,6 +162,7 @@ EXPORTS.mozilla.dom += [
     'DispatcherTrait.h',
     'DocGroup.h',
     'DocumentFragment.h',
+    'DocumentOrShadowRoot.h',
     'DocumentType.h',
     'DOMCursor.h',
     'DOMError.h',
@@ -171,6 +172,8 @@ EXPORTS.mozilla.dom += [
     'DOMMatrix.h',
     'DOMParser.h',
     'DOMPoint.h',
+    'DOMPrefs.h',
+    'DOMPrefsInternal.h',
     'DOMQuad.h',
     'DOMRect.h',
     'DOMRequest.h',
@@ -216,7 +219,6 @@ EXPORTS.mozilla.dom += [
     'TimeoutManager.h',
     'TreeWalker.h',
     'WebKitCSSMatrix.h',
-    'WebSocket.h',
     'WindowOrientationObserver.h',
 ]
 
@@ -241,6 +243,7 @@ UNIFIED_SOURCES += [
     'DispatcherTrait.cpp',
     'DocGroup.cpp',
     'DocumentFragment.cpp',
+    'DocumentOrShadowRoot.cpp',
     'DocumentType.cpp',
     'DOMCursor.cpp',
     'DOMError.cpp',
@@ -249,6 +252,7 @@ UNIFIED_SOURCES += [
     'DOMMatrix.cpp',
     'DOMParser.cpp',
     'DOMPoint.cpp',
+    'DOMPrefs.cpp',
     'DOMQuad.cpp',
     'DOMRect.cpp',
     'DOMRequest.cpp',
@@ -364,7 +368,7 @@ UNIFIED_SOURCES += [
     'TimeoutManager.cpp',
     'TreeWalker.cpp',
     'WebKitCSSMatrix.cpp',
-    'WebSocket.cpp',
+    'WindowDestroyedEvent.cpp',
     'WindowNamedPropertiesHandler.cpp',
     'WindowOrientationObserver.cpp',
     'XPathGenerator.cpp',
@@ -390,8 +394,9 @@ SOURCES += [
     'nsDOMWindowUtils.cpp',
     # Conflicts with windows.h's definition of SendMessage.
     'nsFrameMessageManager.cpp',
-    # This file has a #error "Never include windows.h in this file!"
-    'nsGlobalWindow.cpp',
+    # These files have a #error "Never include windows.h in this file!"
+    'nsGlobalWindowInner.cpp',
+    'nsGlobalWindowOuter.cpp',
     # Conflicts with windows.h's definition of LoadImage.
     'nsImageLoadingContent.cpp',
     # Because of OS X headers.
@@ -485,5 +490,5 @@ counterlist = GENERATED_FILES['UseCounterList.h']
 counterlist.script = 'gen-usecounters.py:use_counter_list'
 counterlist.inputs = ['UseCounters.conf']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

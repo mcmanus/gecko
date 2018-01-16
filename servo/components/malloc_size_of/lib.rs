@@ -48,7 +48,7 @@ extern crate cssparser;
 extern crate euclid;
 extern crate hashglobe;
 #[cfg(feature = "servo")]
-extern crate js;
+extern crate mozjs as js;
 extern crate servo_arc;
 extern crate smallbitvec;
 extern crate smallvec;
@@ -582,7 +582,7 @@ impl<T: MallocSizeOf, Unit> MallocSizeOf for euclid::Length<T, Unit> {
     }
 }
 
-impl<T: MallocSizeOf, Src, Dst> MallocSizeOf for euclid::ScaleFactor<T, Src, Dst> {
+impl<T: MallocSizeOf, Src, Dst> MallocSizeOf for euclid::TypedScale<T, Src, Dst> {
     fn size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
         self.0.size_of(ops)
     }

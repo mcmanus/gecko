@@ -379,6 +379,17 @@ public:
   virtual bool IsValid() const { return true; }
 
   /**
+   * This returns true if it is the same underlying surface data, even if
+   * the objects are different (e.g. indirection due to
+   * DataSourceSurfaceWrapper).
+   */
+  virtual bool Equals(SourceSurface* aOther, bool aSymmetric = true)
+  {
+    return this == aOther ||
+           (aSymmetric && aOther && aOther->Equals(this, false));
+  }
+
+  /**
    * This function will return true if the surface type matches that of a
    * DataSourceSurface and if GetDataSurface will return the same object.
    */
@@ -557,6 +568,18 @@ public:
   {
     return true;
   }
+
+  /**
+   * Indicates how many times the surface has been invalidated.
+   */
+  virtual int32_t Invalidations() const {
+    return -1;
+  }
+
+  /**
+   * Increment the invalidation counter.
+   */
+  virtual void Invalidate() { }
 
 protected:
   bool mIsMapped;
@@ -1543,13 +1566,15 @@ public:
 #ifdef MOZ_WIDGET_GTK
   static already_AddRefed<ScaledFont>
     CreateScaledFontForFontconfigFont(cairo_scaled_font_t* aScaledFont, FcPattern* aPattern,
-                                      const RefPtr<UnscaledFont>& aUnscaledFont, Float aSize);
+                                      const RefPtr<UnscaledFont>& aUnscaledFont, Float aSize,
+                                      bool aNeedsOblique = false);
 #endif
 
 #ifdef XP_DARWIN
   static already_AddRefed<ScaledFont>
     CreateScaledFontForMacFont(CGFontRef aCGFont, const RefPtr<UnscaledFont>& aUnscaledFont, Float aSize,
-                               const Color& aFontSmoothingBackgroundColor, bool aUseFontSmoothing = true);
+                               const Color& aFontSmoothingBackgroundColor, bool aUseFontSmoothing = true,
+                               bool aApplySyntheticBold = false, bool aNeedsOblique = false);
 #endif
 
   /**
@@ -1715,6 +1740,7 @@ public:
                                   Float aSize,
                                   bool aUseEmbeddedBitmap,
                                   bool aForceGDIMode,
+                                  bool aNeedsOblique,
                                   IDWriteRenderingParams *aParams,
                                   Float aGamma,
                                   Float aContrast);

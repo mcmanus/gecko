@@ -8,7 +8,7 @@ use NestedEventLoopListener;
 use compositing::compositor_thread::EventLoopWaker;
 use compositing::windowing::{AnimationState, MouseWindowEvent};
 use compositing::windowing::{WebRenderDebugOption, WindowEvent, WindowMethods};
-use euclid::{Point2D, Size2D, TypedPoint2D, TypedVector2D, ScaleFactor, TypedSize2D};
+use euclid::{Point2D, Size2D, TypedPoint2D, TypedVector2D, TypedScale, TypedSize2D};
 #[cfg(target_os = "windows")]
 use gdi32;
 use gleam::gl;
@@ -210,15 +210,15 @@ pub struct Window {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn window_creation_scale_factor() -> ScaleFactor<f32, DeviceIndependentPixel, DevicePixel> {
-    ScaleFactor::new(1.0)
+fn window_creation_scale_factor() -> TypedScale<f32, DeviceIndependentPixel, DevicePixel> {
+    TypedScale::new(1.0)
 }
 
 #[cfg(target_os = "windows")]
-fn window_creation_scale_factor() -> ScaleFactor<f32, DeviceIndependentPixel, DevicePixel> {
+fn window_creation_scale_factor() -> TypedScale<f32, DeviceIndependentPixel, DevicePixel> {
         let hdc = unsafe { user32::GetDC(::std::ptr::null_mut()) };
         let ppi = unsafe { gdi32::GetDeviceCaps(hdc, winapi::wingdi::LOGPIXELSY) };
-        ScaleFactor::new(ppi as f32 / 96.0)
+        TypedScale::new(ppi as f32 / 96.0)
 }
 
 
@@ -351,11 +351,10 @@ impl Window {
         }
     }
 
-    fn nested_window_resize(width: u32, height: u32) {
+    fn nested_window_resize(_width: u32, _height: u32) {
         unsafe {
             if let Some(listener) = G_NESTED_EVENT_LOOP_LISTENER {
-                (*listener).handle_event_from_nested_event_loop(
-                    WindowEvent::Resize(TypedSize2D::new(width, height)));
+                (*listener).handle_event_from_nested_event_loop(WindowEvent::Resize);
             }
         }
     }
@@ -485,8 +484,8 @@ impl Window {
             Event::KeyboardInput(_, _, None) => {
                 debug!("Keyboard input without virtual key.");
             }
-            Event::Resized(width, height) => {
-                self.event_queue.borrow_mut().push(WindowEvent::Resize(TypedSize2D::new(width, height)));
+            Event::Resized(..) => {
+                self.event_queue.borrow_mut().push(WindowEvent::Resize);
             }
             Event::MouseInput(element_state, mouse_button, pos) => {
                 if mouse_button == MouseButton::Left ||
@@ -1034,6 +1033,31 @@ impl WindowMethods for Window {
 
     }
 
+    fn screen_size(&self, _: BrowserId) -> Size2D<u32> {
+        match self.kind {
+            WindowKind::Window(_) => {
+                let (width, height) = glutin::get_primary_monitor().get_dimensions();
+                Size2D::new(width, height)
+            }
+            WindowKind::Headless(ref context) => {
+                Size2D::new(context.width, context.height)
+            }
+        }
+    }
+
+    fn screen_avail_size(&self, _: BrowserId) -> Size2D<u32> {
+        // FIXME: Glutin doesn't have API for available size. Fallback to screen size
+        match self.kind {
+            WindowKind::Window(_) => {
+                let (width, height) = glutin::get_primary_monitor().get_dimensions();
+                Size2D::new(width, height)
+            }
+            WindowKind::Headless(ref context) => {
+                Size2D::new(context.width, context.height)
+            }
+        }
+    }
+
     fn set_animation_state(&self, state: AnimationState) {
         self.animation_state.set(state);
     }
@@ -1100,22 +1124,22 @@ impl WindowMethods for Window {
     }
 
     #[cfg(not(target_os = "windows"))]
-    fn hidpi_factor(&self) -> ScaleFactor<f32, DeviceIndependentPixel, DevicePixel> {
+    fn hidpi_factor(&self) -> TypedScale<f32, DeviceIndependentPixel, DevicePixel> {
         match self.kind {
             WindowKind::Window(ref window) => {
-                ScaleFactor::new(window.hidpi_factor())
+                TypedScale::new(window.hidpi_factor())
             }
             WindowKind::Headless(..) => {
-                ScaleFactor::new(1.0)
+                TypedScale::new(1.0)
             }
         }
     }
 
     #[cfg(target_os = "windows")]
-    fn hidpi_factor(&self) -> ScaleFactor<f32, DeviceIndependentPixel, DevicePixel> {
+    fn hidpi_factor(&self) -> TypedScale<f32, DeviceIndependentPixel, DevicePixel> {
         let hdc = unsafe { user32::GetDC(::std::ptr::null_mut()) };
         let ppi = unsafe { gdi32::GetDeviceCaps(hdc, winapi::wingdi::LOGPIXELSY) };
-        ScaleFactor::new(ppi as f32 / 96.0)
+        TypedScale::new(ppi as f32 / 96.0)
     }
 
     fn set_page_title(&self, _: BrowserId, title: Option<String>) {

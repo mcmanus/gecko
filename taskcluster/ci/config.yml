@@ -1,3 +1,4 @@
+trust-domain: gecko
 treeherder:
     group-names:
         'cram': 'Cram tests'
@@ -40,6 +41,7 @@ treeherder:
         'tc-rs': 'Repackage signing executed by Taskcluster'
         'tc-BMcs': 'Beetmover checksums, executed by Taskcluster'
         'Aries': 'Aries Device Image'
+        'Deb7': 'Packages for Debian 7'
         'Nexus 5-L': 'Nexus 5-L Device Image'
         'I': 'Docker Image Builds'
         'TL': 'Toolchain builds for Linux 64-bits'
@@ -47,11 +49,22 @@ treeherder:
         'TMW': 'Toolchain builds for Windows MinGW'
         'TW32': 'Toolchain builds for Windows 32-bits'
         'TW64': 'Toolchain builds for Windows 64-bits'
+        'Searchfox': 'Searchfox builds'
         'SM-tc': 'Spidermonkey builds'
         'pub': 'APK publishing'
         'p': 'Partial generation'
         'ps': 'Partials signing'
         'Rel': 'Release promotion'
+        'Snap': 'Snap image generation'
+
+index:
+    products:
+        - 'firefox'
+        - 'fennec'
+        - 'mobile'
+        - 'static-analysis'
+        - 'devedition'
+        - 'source'
 
 try:
     # We have a few platforms for which we want to do some "extra" builds, or at
@@ -63,21 +76,23 @@ try:
             - 'android-api-16-l10n'
         'linux':
             - 'linux-l10n'
+            - 'sm-arm-sim-linux32'
         'linux64':
             - 'linux64-l10n'
-            - 'sm-plain'
-            - 'sm-nonunified'
-            - 'sm-arm-sim'
-            - 'sm-arm64-sim'
-            - 'sm-compacting'
-            - 'sm-rootanalysis'
-            - 'sm-package'
-            - 'sm-tsan'
-            - 'sm-asan'
-            - 'sm-mozjs-sys'
-            - 'sm-msan'
-            - 'sm-fuzzing'
-            - 'sm-rust-bindings'
+            - 'sm-plain-linux64'
+            - 'sm-nojit-linux64'
+            - 'sm-nonunified-linux64'
+            - 'sm-arm-sim-linux32'
+            - 'sm-arm64-sim-linux64'
+            - 'sm-compacting-linux64'
+            - 'sm-rootanalysis-linux64'
+            - 'sm-package-linux64'
+            - 'sm-tsan-linux64'
+            - 'sm-asan-linux64'
+            - 'sm-mozjs-sys-linux64'
+            - 'sm-msan-linux64'
+            - 'sm-fuzzing-linux64'
+            - 'sm-rust-bindings-linux64'
         'win32':
-            - 'sm-plain'
-            - 'sm-compacting'
+            - 'sm-plain-win32'
+            - 'sm-compacting-win32'

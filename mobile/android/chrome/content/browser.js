@@ -115,6 +115,8 @@ XPCOMUtils.defineLazyServiceGetter(this, "FontEnumerator",
   "@mozilla.org/gfx/fontenumerator;1",
   "nsIFontEnumerator");
 
+XPCOMUtils.defineLazyModuleGetter(this, "Utils", "resource://gre/modules/sessionstore/Utils.jsm");
+
 var GlobalEventDispatcher = EventDispatcher.instance;
 var WindowEventDispatcher = EventDispatcher.for(window);
 
@@ -259,12 +261,6 @@ XPCOMUtils.defineLazyServiceGetter(this, "Haptic",
 XPCOMUtils.defineLazyServiceGetter(this, "ParentalControls",
   "@mozilla.org/parental-controls-service;1", "nsIParentalControlsService");
 
-XPCOMUtils.defineLazyServiceGetter(this, "DOMUtils",
-  "@mozilla.org/inspector/dom-utils;1", "inIDOMUtils");
-
-XPCOMUtils.defineLazyServiceGetter(window, "URIFixup",
-  "@mozilla.org/docshell/urifixup;1", "nsIURIFixup");
-
 XPCOMUtils.defineLazyModuleGetter(this, "Log",
   "resource://gre/modules/AndroidLog.jsm", "AndroidLog");
 
@@ -364,6 +360,7 @@ var BrowserApp = {
     Services.androidBridge.browserApp = this;
 
     WindowEventDispatcher.registerListener(this, [
+      "GeckoView:ZoomToInput",
       "Session:Restore",
       "Tab:Load",
       "Tab:Selected",
@@ -383,7 +380,6 @@ var BrowserApp = {
       "Passwords:Init",
       "Sanitize:ClearData",
       "SaveAs:PDF",
-      "ScrollTo:FocusedInput",
       "Session:Back",
       "Session:Forward",
       "Session:GetHistory",
@@ -848,10 +844,6 @@ var BrowserApp = {
       selector: NativeWindow.contextmenus._disableRestricted("SHARE", NativeWindow.contextmenus.imageShareableContext),
       order: NativeWindow.contextmenus.DEFAULT_HTML5_ORDER - 1, // Show above HTML5 menu items
       showAsActions: function(aTarget) {
-        let doc = aTarget.ownerDocument;
-        let imageCache = Cc["@mozilla.org/image/tools;1"].getService(Ci.imgITools)
-                                                         .getImgCacheForDocument(doc);
-        let props = imageCache.findEntryProperties(aTarget.currentURI, doc);
         let src = aTarget.src;
         return {
           title: src,
@@ -881,7 +873,7 @@ var BrowserApp = {
                 return;
             }
 
-            ContentAreaUtils.saveImageURL(aTarget.currentURI.spec, null, "SaveImageTitle",
+            ContentAreaUtils.saveImageURL(aTarget.currentRequestFinalURI.spec, null, "SaveImageTitle",
                                           false, true, aTarget.ownerDocument.documentURIObject,
                                           aTarget.ownerDocument);
         });
@@ -1284,6 +1276,9 @@ var BrowserApp = {
       }
     }
 
+    // Retrieve updated tabIndex again for the removal because the index could
+    // be changed if a new tab is added by the event listener.
+    tabIndex = this._tabs.indexOf(aTab);
     aTab.destroy();
     this._tabs.splice(tabIndex, 1);
   },
@@ -1610,49 +1605,49 @@ var BrowserApp = {
     return null;
   },
 
-  scrollToFocusedInput: function(aBrowser, aAllowZoom = true) {
+  scrollToFocusedInput: function(aBrowser) {
     let formHelperMode = Services.prefs.getIntPref("formhelper.mode");
-    if (formHelperMode == kFormHelperModeDisabled)
+    if (formHelperMode == kFormHelperModeDisabled) {
       return;
+    }
 
-    let dwu = aBrowser.contentWindow.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
+    let dwu = aBrowser.contentWindow.QueryInterface(Ci.nsIInterfaceRequestor)
+                                    .getInterface(Ci.nsIDOMWindowUtils);
     if (!dwu) {
       return;
     }
 
-    let apzFlushDone = function() {
-      Services.obs.removeObserver(apzFlushDone, "apz-repaints-flushed");
-      dwu.zoomToFocusedInput();
-    };
-
-    let paintDone = function() {
-      window.removeEventListener("MozAfterPaint", paintDone);
-      if (dwu.flushApzRepaints()) {
-        Services.obs.addObserver(apzFlushDone, "apz-repaints-flushed");
-      } else {
-        apzFlushDone();
-      }
-    };
-
-    let gotResizeWindow = false;
-    let resizeWindow = function(e) {
-      gotResizeWindow = true;
-      aBrowser.contentWindow.removeEventListener("resize", resizeWindow);
-      if (dwu.isMozAfterPaintPending) {
-        window.addEventListener("MozAfterPaint", paintDone);
-      } else {
-        paintDone();
-      }
-    }
-
-    aBrowser.contentWindow.addEventListener("resize", resizeWindow);
-
-    // The "resize" event sometimes fails to fire, so set a timer to catch that case
-    // and unregister the event listener. See Bug 1253469
-    setTimeout(function(e) {
-    if (!gotResizeWindow) {
-        aBrowser.contentWindow.removeEventListener("resize", resizeWindow);
+    let zoomToFocusedInput = function() {
+      if (!dwu.flushApzRepaints()) {
         dwu.zoomToFocusedInput();
+        return;
+      }
+      Services.obs.addObserver(function apzFlushDone() {
+        Services.obs.removeObserver(apzFlushDone, "apz-repaints-flushed");
+        dwu.zoomToFocusedInput();
+      }, "apz-repaints-flushed");
+    };
+
+    let gotResize = false;
+    let onResize = function() {
+      gotResize = true;
+      if (dwu.isMozAfterPaintPending) {
+        addEventListener("MozAfterPaint", zoomToFocusedInput, {once: true});
+      } else {
+        zoomToFocusedInput();
+      }
+    };
+
+    aBrowser.contentWindow.addEventListener("resize", onResize);
+
+    // When the keyboard is displayed, we can get one resize event, multiple
+    // resize events, or none at all. Try to handle all these cases by allowing
+    // resizing within a set interval, and still zoom to input if there is no
+    // resize event at the end of the interval.
+    setTimeout(function(e) {
+      aBrowser.contentWindow.removeEventListener("resize", onResize);
+      if (!gotResize) {
+        onResize();
       }
     }, 500);
   },
@@ -1769,10 +1764,10 @@ var BrowserApp = {
         this.saveAsPDF(browser);
         break;
 
-      case "ScrollTo:FocusedInput": {
+      case "GeckoView:ZoomToInput": {
         // these messages come from a change in the viewable area and not user interaction
         // we allow scrolling to the selected input, but not zooming the page
-        this.scrollToFocusedInput(browser, false);
+        this.scrollToFocusedInput(browser);
         break;
       }
 
@@ -1930,8 +1925,11 @@ var BrowserApp = {
       }
 
       case "Tab:OpenUri":
-        window.browserDOMWindow.openURI(data.uri, null, data.flags,
-                                        Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL);
+        window.browserDOMWindow.openURI(Services.io.newURI(data.uri),
+                                        /* opener */ null,
+                                        Ci.nsIBrowserDOMWindow[data.flags],
+                                        Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL,
+                                        /* triggeringPrincipal */ null);
         break;
 
       case "Tab:Selected":
@@ -1992,9 +1990,7 @@ var BrowserApp = {
           // Crash reporter submit pref must be fetched from nsICrashReporter
           // service.
           case "datareporting.crashreporter.submitEnabled":
-            let crashReporterBuilt = "nsICrashReporter" in Ci &&
-                Services.appinfo instanceof Ci.nsICrashReporter;
-            if (crashReporterBuilt) {
+            if (AppConstants.MOZ_CRASHREPORTER) {
               aSubject.setAsBool(Services.appinfo.submitReports);
             }
             break;
@@ -2047,9 +2043,7 @@ var BrowserApp = {
 
           // Crash reporter preference is in a service; set and return.
           case "datareporting.crashreporter.submitEnabled":
-            let crashReporterBuilt = "nsICrashReporter" in Ci &&
-                Services.appinfo instanceof Ci.nsICrashReporter;
-            if (crashReporterBuilt) {
+            if (AppConstants.MOZ_CRASHREPORTER) {
               Services.appinfo.submitReports = value;
               aSubject.setAsEmpty();
             }
@@ -2697,40 +2691,6 @@ var NativeWindow = {
       return this.defaultContext = Strings.browser.GetStringFromName("browser.menu.context.default");
     },
 
-    /* Gets menuitems for an arbitrary node
-     * Parameters:
-     *   element - The element to look at. If this element has a contextmenu attribute, the
-     *             corresponding contextmenu will be used.
-     */
-    _getHTMLContextMenuItemsForElement: function(element) {
-      let htmlMenu = element.contextMenu;
-      if (!htmlMenu) {
-        return [];
-      }
-
-      htmlMenu.sendShowEvent();
-
-      return this._getHTMLContextMenuItemsForMenu(htmlMenu, element);
-    },
-
-    /* Add a menuitem for an HTML <menu> node
-     * Parameters:
-     *   menu - The <menu> element to iterate through for menuitems
-     *   target - The target element these context menu items are attached to
-     */
-    _getHTMLContextMenuItemsForMenu: function(menu, target) {
-      let items = [];
-      for (let i = 0; i < menu.childNodes.length; i++) {
-        let elt = menu.childNodes[i];
-        if (!elt.label)
-          continue;
-
-        items.push(new HTMLContextMenuItem(elt, target));
-      }
-
-      return items;
-    },
-
     // Searches the current list of menuitems to show for any that match this id
     _findMenuItem: function(aId) {
       if (!this.menus) {
@@ -2894,14 +2854,8 @@ var NativeWindow = {
       while (element) {
         let context = this._getContextType(element);
 
-        // First check for any html5 context menus that might exist...
-        var items = this._getHTMLContextMenuItemsForElement(element);
-        if (items.length > 0) {
-          this._addMenuItems(items, context);
-        }
-
-        // then check for any context menu items registered in the ui.
-        items = this._getNativeContextMenuItems(element, x, y);
+        // Check for any context menu items registered in the ui.
+        let items = this._getNativeContextMenuItems(element, x, y);
         if (items.length > 0) {
           this._addMenuItems(items, context);
         }
@@ -3694,7 +3648,8 @@ Tab.prototype = {
     this.browser.__SS_data = {
       entries: [{
         url: uri,
-        title: truncate(title, MAX_TITLE_LENGTH)
+        title: truncate(title, MAX_TITLE_LENGTH),
+        triggeringPrincipal_base64: Utils.SERIALIZED_SYSTEMPRINCIPAL
       }],
       index: 1,
       desktopMode: this.desktopMode,
@@ -4080,18 +4035,6 @@ Tab.prototype = {
         if (target != this.browser.contentDocument)
           return;
 
-        // Sample the background color of the page and pass it along. (This is used to draw the
-        // checkerboard.) Right now we don't detect changes in the background color after this
-        // event fires; it's not clear that doing so is worth the effort.
-        var backgroundColor = null;
-        try {
-          let { contentDocument, contentWindow } = this.browser;
-          let computedStyle = contentWindow.getComputedStyle(contentDocument.body);
-          backgroundColor = computedStyle.backgroundColor;
-        } catch (e) {
-          // Ignore. Catching and ignoring exceptions here ensures that Talos succeeds.
-        }
-
         let docURI = target.documentURI;
         let errorType = "";
         if (docURI.startsWith("about:certerror")) {
@@ -4135,7 +4078,6 @@ Tab.prototype = {
         GlobalEventDispatcher.sendRequest({
           type: "Content:DOMContentLoaded",
           tabID: this.id,
-          bgColor: backgroundColor,
           errorType: errorType,
           metadata: this.metatags,
         });
@@ -4444,12 +4386,14 @@ Tab.prototype = {
 
     let fixedURI = aLocationURI;
     try {
-      fixedURI = URIFixup.createExposableURI(aLocationURI);
+      fixedURI = Services.uriFixup.createExposableURI(aLocationURI);
     } catch (ex) { }
 
     // In restricted profiles, we refuse to let you open various urls.
     if (!ParentalControls.isAllowed(ParentalControls.BROWSE, fixedURI)) {
-      aRequest.cancel(Cr.NS_BINDING_ABORTED);
+      if (aRequest) {
+        aRequest.cancel(Cr.NS_BINDING_ABORTED);
+      }
 
       this.browser.docShell.displayLoadError(Cr.NS_ERROR_UNKNOWN_PROTOCOL, fixedURI, null);
     }
@@ -4493,14 +4437,20 @@ Tab.prototype = {
       let originHost = "";
       try {
         originHost = Services.io.newURI(appOrigin).host;
-      } catch (e if (e.result == Cr.NS_ERROR_FAILURE)) {
+      } catch (e) {
+        if (e.result != Cr.NS_ERROR_FAILURE) {
+          throw e;
+        }
         // NS_ERROR_FAILURE can be thrown by nsIURI.host if the URI scheme does not possess a host -
         // in this case we just act as if we have an empty host.
       }
       let locationHost = "";
       try {
         locationHost = aLocationURI.host;
-      } catch (e if (e.result == Cr.NS_ERROR_FAILURE)) {
+      } catch (e) {
+        if (e.result != Cr.NS_ERROR_FAILURE) {
+          throw e;
+        }
         // Ditto.
       }
       if (originHost != locationHost || originHost == "") {
@@ -4514,7 +4464,7 @@ Tab.prototype = {
       ExternalApps.updatePageActionUri(fixedURI);
     }
 
-    if (Components.isSuccessCode(aRequest.status) &&
+    if ((!aRequest || Components.isSuccessCode(aRequest.status)) &&
         !fixedURI.displaySpec.startsWith("about:neterror") && !this.isSearch) {
       // If this won't end up in an error page and the user isn't searching,
       // don't retain the typed entry.
@@ -5549,8 +5499,7 @@ var IdentityHandler = {
       return this.IDENTITY_MODE_IDENTIFIED;
     }
 
-    // We also allow "about:" by allowing the selector to be empty (i.e. '(|.....|...|...)'
-    let whitelist = /^about:($|about|accounts|addons|buildconfig|cache|config|crashes|devices|downloads|fennec|firefox|feedback|healthreport|home|license|logins|logo|memory|mozilla|networking|privatebrowsing|rights|serviceworkers|support|telemetry|webrtc)($|\?)/i;
+    let whitelist = /^about:(about|accounts|addons|buildconfig|cache|config|crashes|devices|downloads|fennec|firefox|feedback|home|license|logins|logo|memory|mozilla|networking|privatebrowsing|rights|serviceworkers|support|telemetry|webrtc)($|\?)/i;
     if (uri.schemeIs("about") && whitelist.test(uri.spec)) {
         return this.IDENTITY_MODE_CHROMEUI;
     }
@@ -6740,80 +6689,3 @@ ContextMenuItem.prototype = {
     };
   }
 }
-
-function HTMLContextMenuItem(elt, target) {
-  ContextMenuItem.call(this, { });
-
-  this.menuElementRef = Cu.getWeakReference(elt);
-  this.targetElementRef = Cu.getWeakReference(target);
-}
-
-HTMLContextMenuItem.prototype = Object.create(ContextMenuItem.prototype, {
-  order: {
-    value: NativeWindow.contextmenus.DEFAULT_HTML5_ORDER
-  },
-
-  matches: {
-    value: function(target) {
-      let t = this.targetElementRef.get();
-      return t === target;
-    },
-  },
-
-  callback: {
-    value: function(target) {
-      let elt = this.menuElementRef.get();
-      if (!elt) {
-        return;
-      }
-
-      // If this is a menu item, show a new context menu with the submenu in it
-      if (elt instanceof HTMLMenuElement) {
-        try {
-          NativeWindow.contextmenus.menus = {};
-
-          let elt = this.menuElementRef.get();
-          let target = this.targetElementRef.get();
-          if (!elt) {
-            return;
-          }
-
-          var items = NativeWindow.contextmenus._getHTMLContextMenuItemsForMenu(elt, target);
-          // This menu will always only have one context, but we still make sure its the "right" one.
-          var context = NativeWindow.contextmenus._getContextType(target);
-          if (items.length > 0) {
-            NativeWindow.contextmenus._addMenuItems(items, context);
-          }
-
-        } catch(ex) {
-          Cu.reportError(ex);
-        }
-      } else {
-        // otherwise just click the menu item
-        elt.click();
-      }
-    },
-  },
-
-  getValue: {
-    value: function(target) {
-      let elt = this.menuElementRef.get();
-      if (!elt) {
-        return null;
-      }
-
-      if (elt.hasAttribute("hidden")) {
-        return null;
-      }
-
-      return {
-        id: this.id,
-        icon: elt.icon,
-        label: elt.label,
-        disabled: elt.disabled,
-        menu: elt instanceof HTMLMenuElement
-      };
-    }
-  },
-});
-

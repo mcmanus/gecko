@@ -88,7 +88,7 @@
     impl Parse for computed_value::Keyword {
         fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
                          -> Result<computed_value::Keyword, ParseError<'i>> {
-            use std::ascii::AsciiExt;
+            #[allow(unused_imports)] use std::ascii::AsciiExt;
             use style_traits::cursor::Cursor;
             let location = input.current_source_location();
             let ident = input.expect_ident()?;
@@ -177,7 +177,7 @@ ${helpers.predefined_type(
     "Either::Second(Auto)",
     spec="https://drafts.csswg.org/css-ui/#caret-color",
     animation_value_type="Either<AnimatedColor, Auto>",
-    boxed=True,
+    boxed=not RUSTC_HAS_PR45225,
     ignored_when_colors_disabled=True,
     products="gecko",
 )}

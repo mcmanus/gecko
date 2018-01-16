@@ -207,6 +207,7 @@ function openUILinkIn(url, where, aAllowThirdPartyFixup, aPostData, aReferrerURI
   openLinkIn(url, where, params);
 }
 
+/* eslint-disable complexity */
 function openLinkIn(url, where, params) {
   if (!where || !url)
     return;
@@ -222,6 +223,7 @@ function openLinkIn(url, where, params) {
       params.referrerPolicy : Ci.nsIHttpChannel.REFERRER_POLICY_UNSET);
   var aRelatedToCurrent     = params.relatedToCurrent;
   var aAllowMixedContent    = params.allowMixedContent;
+  var aForceAllowDataURI    = params.forceAllowDataURI;
   var aInBackground         = params.inBackground;
   var aDisallowInheritPrincipal = params.disallowInheritPrincipal;
   var aInitiatingDoc        = params.initiatingDoc;
@@ -433,6 +435,9 @@ function openLinkIn(url, where, params) {
     if (aIndicateErrorPageLoad) {
       flags |= Ci.nsIWebNavigation.LOAD_FLAGS_ERROR_LOAD_CHANGES_RV;
     }
+    if (aForceAllowDataURI) {
+      flags |= Ci.nsIWebNavigation.LOAD_FLAGS_FORCE_ALLOW_DATA_URI;
+    }
 
     let {URI_INHERITS_SECURITY_CONTEXT} = Ci.nsIProtocolHandler;
     if (aForceAboutBlankViewerInCurrent &&
@@ -461,7 +466,8 @@ function openLinkIn(url, where, params) {
     loadInBackground = !loadInBackground;
     // fall through
   case "tab":
-    focusUrlBar = !loadInBackground && w.isBlankPageURL(url);
+    focusUrlBar = !loadInBackground && w.isBlankPageURL(url)
+      && !aboutNewTabService.willNotifyUser;
 
     let tabUsedForLoad = w.gBrowser.loadOneTab(url, {
       referrerURI: aReferrerURI,
@@ -813,20 +819,10 @@ function openTroubleshootingPage() {
 }
 
 /**
- * Opens the troubleshooting information (about:support) page for this version
- * of the application.
- */
-function openHealthReport() {
-  openUILinkIn("about:healthreport", "tab");
-}
-
-/**
  * Opens the feedback page for this version of the application.
  */
 function openFeedbackPage() {
-  var url = Components.classes["@mozilla.org/toolkit/URLFormatterService;1"]
-                      .getService(Components.interfaces.nsIURLFormatter)
-                      .formatURLPref("app.feedback.baseURL");
+  var url = Services.urlFormatter.formatURLPref("app.feedback.baseURL");
   openUILinkIn(url, "tab");
 }
 
@@ -920,9 +916,7 @@ function openNewWindowWith(aURL, aDocument, aPostData, aAllowThirdPartyFixup,
 }
 
 function getHelpLinkURL(aHelpTopic) {
-  var url = Components.classes["@mozilla.org/toolkit/URLFormatterService;1"]
-                      .getService(Components.interfaces.nsIURLFormatter)
-                      .formatURLPref("app.support.baseURL");
+  var url = Services.urlFormatter.formatURLPref("app.support.baseURL");
   return url + aHelpTopic;
 }
 
@@ -941,7 +935,7 @@ function openPrefsHelp() {
   // since its probably behind the window.
   var instantApply = getBoolPref("browser.preferences.instantApply");
 
-  var helpTopic = document.getElementsByTagName("prefwindow")[0].currentPane.helpTopic;
+  var helpTopic = document.documentElement.getAttribute("helpTopic");
   openHelpLink(helpTopic, !instantApply);
 }
 

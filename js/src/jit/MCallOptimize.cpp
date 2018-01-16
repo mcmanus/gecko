@@ -55,7 +55,7 @@ IonBuilder::inlineNativeCall(CallInfo& callInfo, JSFunction* target)
         return InliningStatus_NotInlined;
     }
 
-    if (!target->jitInfo() || target->jitInfo()->type() != JSJitInfo::InlinableNative) {
+    if (!target->hasJitInfo() || target->jitInfo()->type() != JSJitInfo::InlinableNative) {
         // Reaching here means we tried to inline a native for which there is no
         // Ion specialization.
         trackOptimizationOutcome(TrackedOutcome::CantInlineNativeNoSpecialization);
@@ -846,7 +846,7 @@ IonBuilder::inlineArrayPush(CallInfo& callInfo)
 
         // Restore the stack, such that resume points are created with the stack
         // as it was before the call.
-        MOZ_TRY(callInfo.pushFormals(this, current));
+        MOZ_TRY(callInfo.pushPriorCallStack(this, current));
     }
 
     MInstruction* ins = nullptr;
@@ -858,8 +858,13 @@ IonBuilder::inlineArrayPush(CallInfo& callInfo)
             value = valueDouble;
         }
 
-        if (needsPostBarrier(value))
-            current->add(MPostWriteBarrier::New(alloc(), obj, value));
+        if (needsPostBarrier(value)) {
+            MInstruction* elements = MElements::New(alloc(), obj);
+            current->add(elements);
+            MInstruction* initLength = MInitializedLength::New(alloc(), elements);
+            current->add(initLength);
+            current->add(MPostWriteElementBarrier::New(alloc(), obj, value, initLength));
+        }
 
         ins = MArrayPush::New(alloc(), obj, value);
         current->add(ins);
@@ -874,7 +879,7 @@ IonBuilder::inlineArrayPush(CallInfo& callInfo)
 
     if (callInfo.argc() > 1) {
         // Fix the stack to represent the state after the call execution.
-        callInfo.popFormals(current);
+        callInfo.popPriorCallStack(current);
     }
     current->push(ins);
 
@@ -972,7 +977,7 @@ IonBuilder::inlineArraySlice(CallInfo& callInfo)
         current->add(end->toInstruction());
     }
 
-    MArraySlice* ins = MArraySlice::New(alloc(), constraints(),
+    MArraySlice* ins = MArraySlice::New(alloc(),
                                         obj, begin, end,
                                         templateObj,
                                         templateObj->group()->initialHeap(constraints()));
@@ -3503,7 +3508,7 @@ IonBuilder::atomicsMeetsPreconditions(CallInfo& callInfo, Scalar::Type* arrayTyp
     if (!arg0Types)
         return false;
 
-    TemporaryTypeSet::TypedArraySharedness sharedness;
+    TemporaryTypeSet::TypedArraySharedness sharedness = TemporaryTypeSet::UnknownSharedness;
     *arrayType = arg0Types->getTypedArrayType(constraints(), &sharedness);
     *requiresTagCheck = sharedness != TemporaryTypeSet::KnownShared;
     switch (*arrayType) {
@@ -3602,9 +3607,7 @@ IonBuilder::inlineSimd(CallInfo& callInfo, JSFunction* target, SimdType type)
     }
 
     JSNative native = target->native();
-    const JSJitInfo* jitInfo = target->jitInfo();
-    MOZ_ASSERT(jitInfo && jitInfo->type() == JSJitInfo::InlinableNative);
-    SimdOperation simdOp = SimdOperation(jitInfo->nativeOp);
+    SimdOperation simdOp = SimdOperation(target->jitInfo()->nativeOp);
 
     switch(simdOp) {
       case SimdOperation::Constructor:

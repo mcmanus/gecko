@@ -736,6 +736,7 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "ct.search.yahoo.com", false, true, false, -1, &kPinset_yahoo },
   { "de.search.yahoo.com", false, true, false, -1, &kPinset_yahoo },
   { "dev.twitter.com", true, false, false, -1, &kPinset_twitterCom },
+  { "developer.android.com", true, false, false, -1, &kPinset_google_root_pems },
   { "developers.facebook.com", true, false, false, -1, &kPinset_facebook },
   { "dist.torproject.org", true, false, false, -1, &kPinset_tor },
   { "dk.search.yahoo.com", false, true, false, -1, &kPinset_yahoo },
@@ -1084,6 +1085,7 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "security.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "services.mozilla.com", true, false, true, 6, &kPinset_mozilla_services },
   { "sg.search.yahoo.com", false, true, false, -1, &kPinset_yahoo },
+  { "sirburton.com", true, false, false, -1, &kPinset_ncsccs },
   { "sites.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "spideroak.com", true, false, false, -1, &kPinset_spideroak },
   { "spreadsheets.google.com", true, false, false, -1, &kPinset_google_root_pems },
@@ -1154,8 +1156,8 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "zh.search.yahoo.com", false, true, false, -1, &kPinset_yahoo },
 };
 
-// Pinning Preload List Length = 480;
+// Pinning Preload List Length = 482;
 
 static const int32_t kUnknownId = -1;
 
-static const PRTime kPreloadPKPinsExpirationTime = INT64_C(1518464018329000);
+static const PRTime kPreloadPKPinsExpirationTime = INT64_C(1524165675769000);

@@ -31,7 +31,7 @@
 #include "Layers.h"
 #include "nsBidi.h"
 
-class nsGlobalWindow;
+class nsGlobalWindowInner;
 class nsXULElement;
 
 namespace mozilla {
@@ -408,7 +408,7 @@ public:
     }
   }
 
-  void DrawWindow(nsGlobalWindow& aWindow, double aX, double aY,
+  void DrawWindow(nsGlobalWindowInner& aWindow, double aX, double aY,
                   double aW, double aH,
                   const nsAString& aBgColor, uint32_t aFlags,
                   mozilla::ErrorResult& aError);
@@ -426,9 +426,9 @@ public:
 
   nsresult Redraw();
 
-  virtual int32_t GetWidth() const override;
-  virtual int32_t GetHeight() const override;
   gfx::IntSize GetSize() const { return gfx::IntSize(mWidth, mHeight); }
+  virtual int32_t GetWidth() override { return GetSize().width; }
+  virtual int32_t GetHeight() override { return GetSize().height; }
 
   // nsICanvasRenderingContextInternal
   /**

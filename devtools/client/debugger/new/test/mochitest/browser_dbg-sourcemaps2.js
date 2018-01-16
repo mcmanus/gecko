@@ -1,11 +1,14 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-
 function assertBpInGutter(dbg, lineNumber) {
   const el = findElement(dbg, "breakpoint");
   const bpLineNumber = +el.querySelector(".CodeMirror-linenumber").innerText;
-  is(bpLineNumber, lineNumber);
+  is(
+    bpLineNumber,
+    lineNumber,
+    "Breakpoint is on the correct line in the gutter"
+  );
 }
 
 // Tests loading sourcemapped sources, setting breakpoints, and
@@ -39,4 +42,12 @@ add_task(async function() {
 
   await waitForPaused(dbg);
   assertPausedLocation(dbg);
+
+  // Tests the existence of the sourcemap link in the original source.
+  ok(findElement(dbg, "sourceMapLink"), "Sourcemap link in original source");
+  await selectSource(dbg, "main.min.js");
+  ok(
+    !findElement(dbg, "sourceMapLink"),
+    "No Sourcemap link exists in generated source"
+  );
 });

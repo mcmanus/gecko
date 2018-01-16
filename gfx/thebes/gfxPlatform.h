@@ -64,7 +64,7 @@ BackendTypeBit(BackendType b)
 
 } // namespace gfx
 namespace dom {
-class FontFamilyListEntry;
+class SystemFontListEntry;
 }
 } // namespace mozilla
 
@@ -260,16 +260,6 @@ public:
                               bool aUninitialized = false);
 
     /**
-     * Returns true if rendering to data surfaces produces the same results as
-     * rendering to offscreen surfaces on this platform, making it safe to
-     * render content to data surfaces. This is generally false on platforms
-     * which use different backends for each type of DrawTarget.
-     */
-    virtual bool CanRenderContentToDataSurface() const {
-      return false;
-    }
-
-    /**
      * Returns true if we should use Azure to render content with aTarget. For
      * example, it is possible that we are using Direct2D for rendering and thus
      * using Azure. But we want to render to a CairoDrawTarget, in which case
@@ -337,12 +327,12 @@ public:
                                  nsTArray<nsString>& aListOfFonts);
 
     /**
-     * Fill aFontFamilies with a list of FontFamilyListEntry records for the
+     * Fill aFontList with a list of SystemFontListEntry records for the
      * available fonts on the platform; used to pass the list from chrome to
-     * content process. Currently implemented only on MacOSX.
+     * content process. Currently implemented only on MacOSX and Linux.
      */
-    virtual void GetSystemFontFamilyList(
-      InfallibleTArray<mozilla::dom::FontFamilyListEntry>* aFontFamilies)
+    virtual void ReadSystemFontList(
+      InfallibleTArray<mozilla::dom::SystemFontListEntry>* aFontList)
     { }
 
     /**
@@ -590,6 +580,8 @@ public:
     virtual gfxImageFormat GetOffscreenFormat()
     { return mozilla::gfx::SurfaceFormat::X8R8G8B8_UINT32; }
 
+    virtual bool UsesTiling() const;
+
     /**
      * Returns a logger if one is available and logging is enabled
      */
@@ -719,6 +711,11 @@ public:
     virtual FT_Library GetFTLibrary() {
       return nullptr;
     }
+
+    // you probably want to use gfxVars::UseWebRender() instead of this
+    static bool WebRenderPrefEnabled();
+    // you probably want to use gfxVars::UseWebRender() instead of this
+    static bool WebRenderEnvvarEnabled();
 
 protected:
     gfxPlatform();

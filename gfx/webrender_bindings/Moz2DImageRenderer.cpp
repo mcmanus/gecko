@@ -5,9 +5,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "gfxUtils.h"
+#include "mozilla/Mutex.h"
 #include "mozilla/Range.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/InlineTranslator.h"
+#include "mozilla/gfx/Logging.h"
 #include "mozilla/gfx/RecordedEvent.h"
 #include "WebRenderTypes.h"
 #include "webrender_ffi.h"
@@ -19,8 +21,7 @@
 #include "mozilla/gfx/UnscaledFontMac.h"
 #elif defined(XP_WIN)
 #include "mozilla/gfx/UnscaledFontDWrite.h"
-#elif defined(MOZ_ENABLE_FREETYPE)
-#include "mozilla/ThreadLocal.h"
+#else
 #include "mozilla/gfx/UnscaledFontFreeType.h"
 #endif
 
@@ -43,10 +44,6 @@ using namespace gfx;
 
 namespace wr {
 
-#ifdef MOZ_ENABLE_FREETYPE
-static MOZ_THREAD_LOCAL(FT_Library) sFTLibrary;
-#endif
-
 struct FontTemplate {
   const uint8_t *mData;
   size_t mSize;
@@ -55,12 +52,13 @@ struct FontTemplate {
   RefPtr<UnscaledFont> mUnscaledFont;
 };
 
-// we need to do special things for linux so that we have fonts per backend
+StaticMutex sFontDataTableLock;
 std::unordered_map<FontKey, FontTemplate> sFontDataTable;
 
 extern "C" {
 void
 AddFontData(WrFontKey aKey, const uint8_t *aData, size_t aSize, uint32_t aIndex, const ArcVecU8 *aVec) {
+  StaticMutexAutoLock lock(sFontDataTableLock);
   auto i = sFontDataTable.find(aKey);
   if (i == sFontDataTable.end()) {
     FontTemplate font;
@@ -74,6 +72,7 @@ AddFontData(WrFontKey aKey, const uint8_t *aData, size_t aSize, uint32_t aIndex,
 
 void
 AddNativeFontHandle(WrFontKey aKey, void* aHandle, uint32_t aIndex) {
+  StaticMutexAutoLock lock(sFontDataTableLock);
   auto i = sFontDataTable.find(aKey);
   if (i == sFontDataTable.end()) {
     FontTemplate font;
@@ -96,6 +95,7 @@ AddNativeFontHandle(WrFontKey aKey, void* aHandle, uint32_t aIndex) {
 
 void
 DeleteFontData(WrFontKey aKey) {
+  StaticMutexAutoLock lock(sFontDataTableLock);
   auto i = sFontDataTable.find(aKey);
   if (i != sFontDataTable.end()) {
     if (i->second.mVec) {
@@ -108,8 +108,13 @@ DeleteFontData(WrFontKey aKey) {
 
 RefPtr<UnscaledFont>
 GetUnscaledFont(Translator *aTranslator, wr::FontKey key) {
-  MOZ_ASSERT(sFontDataTable.find(key) != sFontDataTable.end());
-  auto &data = sFontDataTable[key];
+  StaticMutexAutoLock lock(sFontDataTableLock);
+  auto i = sFontDataTable.find(key);
+  if (i == sFontDataTable.end()) {
+    gfxDevCrash(LogReason::UnscaledFontNotFound) << "Failed to get UnscaledFont entry for FontKey " << key.mHandle;
+    return nullptr;
+  }
+  auto &data = i->second;
   if (data.mUnscaledFont) {
     return data.mUnscaledFont;
   }
@@ -130,10 +135,15 @@ GetUnscaledFont(Translator *aTranslator, wr::FontKey key) {
                                                                               type,
                                                                               aTranslator->GetFontContext());
   RefPtr<UnscaledFont> unscaledFont;
-  if (fontResource) {
+  if (!fontResource) {
+    gfxDevCrash(LogReason::NativeFontResourceNotFound) << "Failed to create NativeFontResource for FontKey " << key.mHandle;
+  } else {
     // Instance data is only needed for GDI fonts which webrender does not
     // support.
     unscaledFont = fontResource->CreateUnscaledFont(data.mIndex, nullptr, 0);
+    if (!unscaledFont) {
+      gfxDevCrash(LogReason::UnscaledFontNotFound) << "Failed to create UnscaledFont for FontKey " << key.mHandle;
+    }
   }
   data.mUnscaledFont = unscaledFont;
   return unscaledFont;
@@ -156,21 +166,6 @@ static bool Moz2DRenderCallback(const Range<const uint8_t> aBlob,
   if (aOutput.length() < static_cast<size_t>(aSize.height * stride)) {
     return false;
   }
-
-  void* fontContext = nullptr;
-#ifdef MOZ_ENABLE_FREETYPE
-  if (!sFTLibrary.init()) {
-    return false;
-  }
-  if (!sFTLibrary.get()) {
-    FT_Library library = gfx::Factory::NewFTLibrary();
-    if (!library) {
-      return false;
-    }
-    sFTLibrary.set(library);
-  }
-  fontContext = sFTLibrary.get();
-#endif
 
   // In bindings.rs we allocate a buffer filled with opaque white.
   bool uninitialized = false;
@@ -225,7 +220,7 @@ static bool Moz2DRenderCallback(const Range<const uint8_t> aBlob,
     size_t end = reader.ReadSize();
     size_t extra_end = reader.ReadSize();
 
-    gfx::InlineTranslator translator(dt, fontContext);
+    gfx::InlineTranslator translator(dt);
 
     size_t count = *(size_t*)(aBlob.begin().get() + end);
     for (size_t i = 0; i < count; i++) {

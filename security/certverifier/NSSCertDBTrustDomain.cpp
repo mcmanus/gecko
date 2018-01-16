@@ -19,7 +19,6 @@
 #include "mozilla/Casting.h"
 #include "mozilla/Move.h"
 #include "mozilla/PodOperations.h"
-#include "mozilla/Preferences.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Unused.h"
 #include "nsCRTGlue.h"
@@ -412,6 +411,17 @@ NSSCertDBTrustDomain::CheckRevocation(EndEntityOrCA endEntityOrCA,
       mOCSPStaplingStatus = CertVerifier::OCSP_STAPLING_EXPIRED;
       MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
              ("NSSCertDBTrustDomain: expired stapled OCSP response"));
+    } else if (stapledOCSPResponseResult ==
+                 Result::ERROR_OCSP_TRY_SERVER_LATER ||
+               stapledOCSPResponseResult ==
+                 Result::ERROR_OCSP_INVALID_SIGNING_CERT) {
+      // Stapled OCSP response present but invalid for a small number of reasons
+      // CAs/servers commonly get wrong. This will be treated similarly to an
+      // expired stapled response.
+      mOCSPStaplingStatus = CertVerifier::OCSP_STAPLING_INVALID;
+      MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
+              ("NSSCertDBTrustDomain: stapled OCSP response: "
+               "failure (whitelisted for compatibility)"));
     } else {
       // stapled OCSP response present but invalid for some reason
       mOCSPStaplingStatus = CertVerifier::OCSP_STAPLING_INVALID;
@@ -480,13 +490,13 @@ NSSCertDBTrustDomain::CheckRevocation(EndEntityOrCA endEntityOrCA,
     return Result::FATAL_ERROR_LIBRARY_FAILURE;
   }
 
-  // TODO: We still need to handle the fallback for expired responses. But,
-  // if/when we disable OCSP fetching by default, it would be ambiguous whether
-  // security.OCSP.enable==0 means "I want the default" or "I really never want
-  // you to ever fetch OCSP."
-
+  // TODO: We still need to handle the fallback for invalid stapled responses.
+  // But, if/when we disable OCSP fetching by default, it would be ambiguous
+  // whether security.OCSP.enable==0 means "I want the default" or "I really
+  // never want you to ever fetch OCSP."
+  // Additionally, this doesn't properly handle OCSP-must-staple when OCSP
+  // fetching is disabled.
   Duration shortLifetime(mCertShortLifetimeInDays * Time::ONE_DAY_IN_SECONDS);
-
   if ((mOCSPFetching == NeverFetchOCSP) ||
       (validityDuration < shortLifetime) ||
       (endEntityOrCA == EndEntityOrCA::MustBeCA &&
@@ -614,7 +624,7 @@ NSSCertDBTrustDomain::CheckRevocation(EndEntityOrCA endEntityOrCA,
     }
     if (stapledOCSPResponseResult != Success) {
       MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
-             ("NSSCertDBTrustDomain: returning SECFailure from expired "
+             ("NSSCertDBTrustDomain: returning SECFailure from expired/invalid "
               "stapled response after OCSP request failure"));
       return stapledOCSPResponseResult;
     }
@@ -645,8 +655,8 @@ NSSCertDBTrustDomain::CheckRevocation(EndEntityOrCA endEntityOrCA,
   }
   if (stapledOCSPResponseResult != Success) {
     MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
-           ("NSSCertDBTrustDomain: returning SECFailure from expired stapled "
-            "response after OCSP request verification failure"));
+           ("NSSCertDBTrustDomain: returning SECFailure from expired/invalid "
+            "stapled response after OCSP request verification failure"));
     return stapledOCSPResponseResult;
   }
 
@@ -1052,14 +1062,7 @@ InitializeNSS(const nsACString& dir, bool readOnly, bool loadPKCS11Modules)
   if (!loadPKCS11Modules) {
     flags |= NSS_INIT_NOMODDB;
   }
-  bool useSQLDB = Preferences::GetBool("security.use_sqldb", false);
-  nsAutoCString dbTypeAndDirectory;
-  // Don't change any behavior if the user has specified an alternative database
-  // location with MOZPSM_NSSDBDIR_OVERRIDE.
-  const char* dbDirOverride = getenv("MOZPSM_NSSDBDIR_OVERRIDE");
-  if (useSQLDB && (!dbDirOverride || strlen(dbDirOverride) == 0)) {
-    dbTypeAndDirectory.Append("sql:");
-  }
+  nsAutoCString dbTypeAndDirectory("sql:");
   dbTypeAndDirectory.Append(dir);
   MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
           ("InitializeNSS(%s, %d, %d)", dbTypeAndDirectory.get(), readOnly,

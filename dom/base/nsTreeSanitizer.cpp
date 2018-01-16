@@ -7,16 +7,17 @@
 #include "nsTreeSanitizer.h"
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/DeclarationBlock.h"
 #include "mozilla/ServoDeclarationBlock.h"
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/css/Declaration.h"
 #include "mozilla/css/StyleRule.h"
 #include "mozilla/css/Rule.h"
 #include "mozilla/dom/CSSRuleList.h"
+#include "mozilla/dom/SRIMetadata.h"
 #include "nsCSSParser.h"
 #include "nsCSSPropertyID.h"
 #include "nsUnicharInputStream.h"
-#include "nsIDOMCSSRule.h"
 #include "nsAttrName.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsNetUtil.h"
@@ -28,6 +29,7 @@
 #include "nsQueryObject.h"
 
 using namespace mozilla;
+using namespace mozilla::dom;
 
 //
 // Thanks to Mark Pilgrim and Sam Ruby for the initial whitelist
@@ -172,6 +174,7 @@ nsStaticAtom** const kAttributesHTML[] = {
   &nsGkAtoms::contextmenu,
   &nsGkAtoms::controls,
   &nsGkAtoms::coords,
+  &nsGkAtoms::crossorigin,
   &nsGkAtoms::datetime,
   &nsGkAtoms::dir,
   &nsGkAtoms::disabled,
@@ -188,6 +191,7 @@ nsStaticAtom** const kAttributesHTML[] = {
   &nsGkAtoms::hreflang,
   &nsGkAtoms::icon,
   &nsGkAtoms::id,
+  &nsGkAtoms::integrity,
   &nsGkAtoms::ismap,
   &nsGkAtoms::itemid,
   &nsGkAtoms::itemprop,
@@ -1133,13 +1137,8 @@ nsTreeSanitizer::SanitizeStyleSheet(const nsAString& aOriginal,
       case mozilla::css::Rule::FONT_FACE_RULE: {
         // Append @namespace and @font-face rules verbatim.
         nsAutoString cssText;
-        nsCOMPtr<nsIDOMCSSRule> styleRule = do_QueryInterface(rule);
-        if (styleRule) {
-          rv = styleRule->GetCssText(cssText);
-          if (NS_SUCCEEDED(rv)) {
-            aSanitized.Append(cssText);
-          }
-        }
+        rule->GetCssText(cssText);
+        aSanitized.Append(cssText);
         break;
       }
       case mozilla::css::Rule::STYLE_RULE: {
@@ -1182,9 +1181,10 @@ nsTreeSanitizer::SanitizeAttributes(mozilla::dom::Element* aElement,
         aElement->GetAttr(attrNs, attrLocal, value);
         nsIDocument* document = aElement->OwnerDoc();
         if (document->IsStyledByServo()) {
+          RefPtr<URLExtraData> urlExtra(aElement->GetURLDataForStyleAttr());
           decl = ServoDeclarationBlock::FromCssText(
               value,
-              aElement->GetURLDataForStyleAttr(),
+              urlExtra,
               document->GetCompatibilityMode(),
               document->CSSLoader());
         } else {
@@ -1395,10 +1395,12 @@ nsTreeSanitizer::SanitizeChildren(nsINode* aRoot)
       int32_t ns = nodeInfo->NamespaceID();
 
       if (MustPrune(ns, localName, elt)) {
-        RemoveAllAttributes(node);
+        RemoveAllAttributes(elt);
         nsIContent* descendant = node;
         while ((descendant = descendant->GetNextNode(node))) {
-          RemoveAllAttributes(descendant);
+          if (descendant->IsElement()) {
+            RemoveAllAttributes(descendant->AsElement());
+          }
         }
         nsIContent* next = node->GetNextNonChildNode(aRoot);
         node->RemoveFromParent();
@@ -1444,7 +1446,7 @@ nsTreeSanitizer::SanitizeChildren(nsINode* aRoot)
         continue;
       }
       if (MustFlatten(ns, localName)) {
-        RemoveAllAttributes(node);
+        RemoveAllAttributes(elt);
         nsCOMPtr<nsIContent> next = node->GetNextNode(aRoot);
         nsCOMPtr<nsIContent> parent = node->GetParent();
         nsCOMPtr<nsIContent> child; // Must keep the child alive during move
@@ -1499,7 +1501,7 @@ nsTreeSanitizer::SanitizeChildren(nsINode* aRoot)
 }
 
 void
-nsTreeSanitizer::RemoveAllAttributes(nsIContent* aElement)
+nsTreeSanitizer::RemoveAllAttributes(Element* aElement)
 {
   const nsAttrName* attrName;
   while ((attrName = aElement->GetAttrNameAt(0))) {

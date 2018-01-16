@@ -185,8 +185,8 @@ function getElRect(selector, win) {
  * the rect of the dragged element as it was before drag.
  */
 function dragElementBy(selector, x, y, win) {
-  let React = win.require("devtools/client/shared/vendor/react");
-  let { Simulate } = React.addons.TestUtils;
+  let ReactDOM = win.require("devtools/client/shared/vendor/react-dom");
+  let { Simulate } = ReactDOM.TestUtils;
   let rect = getElRect(selector, win);
   let startPoint = {
     clientX: Math.floor(rect.left + rect.width / 2),
@@ -222,8 +222,8 @@ function* testViewportResize(ui, selector, moveBy,
 
 function openDeviceModal({ toolWindow }) {
   let { document } = toolWindow;
-  let React = toolWindow.require("devtools/client/shared/vendor/react");
-  let { Simulate } = React.addons.TestUtils;
+  let ReactDOM = toolWindow.require("devtools/client/shared/vendor/react-dom");
+  let { Simulate } = ReactDOM.TestUtils;
   let select = document.querySelector(".viewport-device-selector");
   let modal = document.querySelector("#device-modal-wrapper");
 
@@ -240,8 +240,8 @@ function openDeviceModal({ toolWindow }) {
 
 function changeSelectValue({ toolWindow }, selector, value) {
   let { document } = toolWindow;
-  let React = toolWindow.require("devtools/client/shared/vendor/react");
-  let { Simulate } = React.addons.TestUtils;
+  let ReactDOM = toolWindow.require("devtools/client/shared/vendor/react-dom");
+  let { Simulate } = ReactDOM.TestUtils;
 
   info(`Selecting ${value} in ${selector}.`);
 
@@ -260,8 +260,8 @@ const selectDevice = (ui, value) => Promise.all([
   changeSelectValue(ui, ".viewport-device-selector", value)
 ]);
 
-const selectDPR = (ui, value) =>
-  changeSelectValue(ui, "#global-dpr-selector > select", value);
+const selectDevicePixelRatio = (ui, value) =>
+  changeSelectValue(ui, "#global-device-pixel-ratio-selector", value);
 
 const selectNetworkThrottling = (ui, value) => Promise.all([
   once(ui, "network-throttling-changed"),
@@ -301,12 +301,7 @@ function waitForPageShow(browser) {
 }
 
 function waitForViewportLoad(ui) {
-  return new Promise(resolve => {
-    let browser = ui.getViewportBrowser();
-    browser.addEventListener("mozbrowserloadend", () => {
-      resolve();
-    }, { once: true });
-  });
+  return BrowserTestUtils.waitForContentEvent(ui.getViewportBrowser(), "load", true);
 }
 
 function load(browser, url) {
@@ -337,14 +332,10 @@ function addDeviceForTest(device) {
   });
 }
 
-function waitForClientClose(ui) {
-  return new Promise(resolve => {
-    info("Waiting for RDM debugger client to close");
-    ui.client.addOneTimeListener("closed", () => {
-      info("RDM's debugger client is now closed");
-      resolve();
-    });
-  });
+async function waitForClientClose(ui) {
+  info("Waiting for RDM debugger client to close");
+  await ui.client.addOneTimeListener("closed");
+  info("RDM's debugger client is now closed");
 }
 
 function* testTouchEventsOverride(ui, expected) {
@@ -375,8 +366,12 @@ function* toggleTouchSimulation(ui) {
   yield Promise.all([ changed, loaded ]);
 }
 
-function* testUserAgent(ui, expected) {
-  let ua = yield ContentTask.spawn(ui.getViewportBrowser(), {}, function* () {
+function testUserAgent(ui, expected) {
+  testUserAgentFromBrowser(ui.getViewportBrowser(), expected);
+}
+
+async function testUserAgentFromBrowser(browser, expected) {
+  let ua = await ContentTask.spawn(browser, {}, function* () {
     return content.navigator.userAgent;
   });
   is(ua, expected, `UA should be set to ${expected}`);
@@ -387,10 +382,9 @@ function* testUserAgent(ui, expected) {
  * function adds `device` via the form, saves it, and waits for it to appear in the store.
  */
 function addDeviceInModal(ui, device) {
-  let { toolWindow } = ui;
+  let ReactDOM = ui.toolWindow.require("devtools/client/shared/vendor/react-dom");
+  let { Simulate } = ReactDOM.TestUtils;
   let { store, document } = ui.toolWindow;
-  let React = toolWindow.require("devtools/client/shared/vendor/react");
-  let { Simulate } = React.addons.TestUtils;
 
   let nameInput = document.querySelector("#device-adder-name input");
   let [ widthInput, heightInput ] = document.querySelectorAll("#device-adder-size input");

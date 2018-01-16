@@ -1,7 +1,8 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
 
 this.EXPORTED_SYMBOLS = ["ExtensionContent"];
@@ -492,7 +493,7 @@ class ContentScriptContextChild extends BaseContext {
       throw new Error("Cannot inject extension API into non-extension window");
     }
 
-    // This is an iframe with content script API enabled (bug 1214658)
+    // This is an iframe with content script API enabled (See Bug 1214658)
     Schemas.exportLazyGetter(this.contentWindow,
                              "browser", () => this.chromeObj);
     Schemas.exportLazyGetter(this.contentWindow,
@@ -518,7 +519,7 @@ class ContentScriptContextChild extends BaseContext {
       }
 
       // Overwrite the content script APIs with an empty object if the APIs objects are still
-      // defined in the content window (bug 1214658).
+      // defined in the content window (See Bug 1214658).
       if (this.isExtensionPage) {
         Cu.createObjectIn(this.contentWindow, {defineAs: "browser"});
         Cu.createObjectIn(this.contentWindow, {defineAs: "chrome"});

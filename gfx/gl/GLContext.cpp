@@ -60,11 +60,7 @@ namespace gl {
 using namespace mozilla::gfx;
 using namespace mozilla::layers;
 
-#ifdef MOZ_GL_DEBUG
-unsigned GLContext::sCurrentGLContextTLS = -1;
-#endif
-
-MOZ_THREAD_LOCAL(GLContext*) GLContext::sCurrentContext;
+MOZ_THREAD_LOCAL(uintptr_t) GLContext::sCurrentContext;
 
 // If adding defines, don't forget to undefine symbols. See #undef block below.
 #define CORE_SYMBOL(x) { (PRFuncPtr*) &mSymbols.f##x, { #x, nullptr } }
@@ -267,9 +263,10 @@ ChooseDebugFlags(CreateContextFlags createFlags)
 
 GLContext::GLContext(CreateContextFlags flags, const SurfaceCaps& caps,
                      GLContext* sharedContext, bool isOffscreen, bool useTLSIsCurrent)
-  : mIsOffscreen(isOffscreen),
-    mContextLost(false),
+  : mImplicitMakeCurrent(false),
     mUseTLSIsCurrent(ShouldUseTLSIsCurrent(useTLSIsCurrent)),
+    mIsOffscreen(isOffscreen),
+    mContextLost(false),
     mVersion(0),
     mProfile(ContextProfile::Unknown),
     mShadingLanguageVersion(0),
@@ -299,7 +296,7 @@ GLContext::GLContext(CreateContextFlags flags, const SurfaceCaps& caps,
     mMaxViewportDims[1] = 0;
     mOwningThreadId = PlatformThread::CurrentId();
     MOZ_ALWAYS_TRUE( sCurrentContext.init() );
-    sCurrentContext.set(nullptr);
+    sCurrentContext.set(0);
 }
 
 GLContext::~GLContext() {
@@ -757,6 +754,30 @@ GLContext::InitWithPrefixImpl(const char* prefix, bool trygl)
             MarkUnsupported(GLFeature::depth_texture);
         }
 #endif
+        if (IsSupported(GLFeature::frag_color_float)) {
+            float was[4] = {};
+            fGetFloatv(LOCAL_GL_COLOR_CLEAR_VALUE, was);
+
+            const float test[4] = {-1.0, 0, 2.0, 255.0};
+            fClearColor(test[0], test[1], test[2], test[3]);
+
+            float now[4] = {};
+            fGetFloatv(LOCAL_GL_COLOR_CLEAR_VALUE, now);
+
+            fClearColor(was[0], was[1], was[2], was[3]);
+
+            const bool unclamped = now[0] == test[0] && now[1] == test[1] &&
+                                   now[2] == test[2] && now[3] == test[3];
+            if (!unclamped) {
+                printf_stderr("COLOR_CLEAR_VALUE: now{%f,%f,%f,%f} != test{%f,%f,%f,%f}\n",
+                              test[0], test[1], test[2], test[3],
+                              now[0], now[1], now[2], now[3]);
+                gfxCriticalNote << "GLFeature::frag_color_float failed support probe,"
+                                << " disabling. (RENDERER: "
+                                << (const char*)fGetString(LOCAL_GL_RENDERER) << ")";
+                MarkUnsupported(GLFeature::frag_color_float);
+            }
+        }
     }
 
     if (IsExtensionSupported(GLContext::ARB_pixel_buffer_object)) {
@@ -960,6 +981,8 @@ GLContext::InitWithPrefixImpl(const char* prefix, bool trygl)
     if (IsSupported(GLFeature::framebuffer_multisample)) {
         fGetIntegerv(LOCAL_GL_MAX_SAMPLES, (GLint*)&mMaxSamples);
     }
+
+    mMaxTexOrRbSize = std::min(mMaxTextureSize, mMaxRenderbufferSize);
 
     ////////////////////////////////////////////////////////////////////////////
 
@@ -1633,28 +1656,31 @@ GLContext::InitExtensions()
 
     std::vector<nsCString> driverExtensionList;
 
-    if (mSymbols.fGetStringi) {
-        GLuint count = 0;
-        GetUIntegerv(LOCAL_GL_NUM_EXTENSIONS, &count);
-        for (GLuint i = 0; i < count; i++) {
-            // This is UTF-8.
-            const char* rawExt = (const char*)fGetStringi(LOCAL_GL_EXTENSIONS, i);
+    [&]() {
+        if (mSymbols.fGetStringi) {
+            GLuint count = 0;
+            if (GetPotentialInteger(LOCAL_GL_NUM_EXTENSIONS, (GLint*)&count)) {
+                for (GLuint i = 0; i < count; i++) {
+                    // This is UTF-8.
+                    const char* rawExt = (const char*)fGetStringi(LOCAL_GL_EXTENSIONS, i);
 
-            // We CANNOT use nsDependentCString here, because the spec doesn't guarantee
-            // that the pointers returned are different, only that their contents are.
-            // On Flame, each of these index string queries returns the same address.
-            driverExtensionList.push_back(nsCString(rawExt));
+                    // We CANNOT use nsDependentCString here, because the spec doesn't guarantee
+                    // that the pointers returned are different, only that their contents are.
+                    // On Flame, each of these index string queries returns the same address.
+                    driverExtensionList.push_back(nsCString(rawExt));
+                }
+                return;
+            }
         }
-    } else {
-        MOZ_ALWAYS_TRUE(!fGetError());
-        const char* rawExts = (const char*)fGetString(LOCAL_GL_EXTENSIONS);
-        MOZ_ALWAYS_TRUE(!fGetError());
 
+        const char* rawExts = (const char*)fGetString(LOCAL_GL_EXTENSIONS);
         if (rawExts) {
             nsDependentCString exts(rawExts);
             SplitByChar(exts, ' ', &driverExtensionList);
         }
-    }
+    }();
+    const auto err = fGetError();
+    MOZ_ALWAYS_TRUE(!err);
 
     const bool shouldDumpExts = ShouldDumpExts();
     if (shouldDumpExts) {
@@ -2523,8 +2549,6 @@ GLContext::Readback(SharedSurface* src, gfx::DataSourceSurface* dest)
 {
     MOZ_ASSERT(src && dest);
     MOZ_ASSERT(dest->GetSize() == src->mSize);
-    MOZ_ASSERT(dest->GetFormat() == (src->mHasAlpha ? SurfaceFormat::B8G8R8A8
-                                                    : SurfaceFormat::B8G8R8X8));
 
     if (!MakeCurrent()) {
         return false;
@@ -3028,37 +3052,29 @@ GetBytesPerTexel(GLenum format, GLenum type)
     return 0;
 }
 
-bool GLContext::MakeCurrent(bool aForce)
+bool
+GLContext::MakeCurrent(bool aForce) const
 {
-    if (IsDestroyed())
+    if (MOZ_UNLIKELY( IsDestroyed() ))
         return false;
 
-#ifdef MOZ_GL_DEBUG
-    PR_SetThreadPrivate(sCurrentGLContextTLS, this);
-
-    // XXX this assertion is disabled because it's triggering on Mac;
-    // we need to figure out why and reenable it.
-#if 0
-    // IsOwningThreadCurrent is a bit of a misnomer;
-    // the "owning thread" is the creation thread,
-    // and the only thread that can own this.  We don't
-    // support contexts used on multiple threads.
-    NS_ASSERTION(IsOwningThreadCurrent(),
-                 "MakeCurrent() called on different thread than this context was created on!");
-#endif
-#endif
-    if (mUseTLSIsCurrent && !aForce && sCurrentContext.get() == this) {
-        MOZ_ASSERT(IsCurrent());
-        return true;
+    if (MOZ_LIKELY( !aForce )) {
+        bool isCurrent;
+        if (mUseTLSIsCurrent) {
+            isCurrent = (sCurrentContext.get() == reinterpret_cast<uintptr_t>(this));
+        } else {
+            isCurrent = IsCurrentImpl();
+        }
+        if (MOZ_LIKELY( isCurrent )) {
+            MOZ_ASSERT(IsCurrentImpl());
+            return true;
+        }
     }
 
-    if (!MakeCurrentImpl(aForce))
+    if (!MakeCurrentImpl())
         return false;
 
-    if (mUseTLSIsCurrent) {
-        sCurrentContext.set(this);
-    }
-
+    sCurrentContext.set(reinterpret_cast<uintptr_t>(this));
     return true;
 }
 
@@ -3071,6 +3087,57 @@ GLContext::ResetSyncCallCount(const char* resetReason) const
     }
 
     mSyncGLCallCount = 0;
+}
+
+// --
+
+void
+GLContext::BeforeGLCall_Debug(const char* const funcName) const
+{
+    MOZ_ASSERT(mDebugFlags);
+
+    FlushErrors();
+
+    if (mDebugFlags & DebugFlagTrace) {
+        printf_stderr("[gl:%p] > %s\n", this, funcName);
+    }
+}
+
+void
+GLContext::AfterGLCall_Debug(const char* const funcName) const
+{
+    MOZ_ASSERT(mDebugFlags);
+
+    // calling fFinish() immediately after every GL call makes sure that if this GL command crashes,
+    // the stack trace will actually point to it. Otherwise, OpenGL being an asynchronous API, stack traces
+    // tend to be meaningless
+    mSymbols.fFinish();
+    GLenum err = FlushErrors();
+
+    if (mDebugFlags & DebugFlagTrace) {
+        printf_stderr("[gl:%p] < %s [%s (0x%04x)]\n", this, funcName,
+                      GLErrorToString(err), err);
+    }
+
+    if (err != LOCAL_GL_NO_ERROR &&
+        !mLocalErrorScopeStack.size())
+    {
+        printf_stderr("[gl:%p] %s: Generated unexpected %s error."
+                      " (0x%04x)\n", this, funcName,
+                      GLErrorToString(err), err);
+
+        if (mDebugFlags & DebugFlagAbortOnError) {
+            MOZ_CRASH("Unexpected error with MOZ_GL_DEBUG_ABORT_ON_ERROR. (Run"
+                      " with MOZ_GL_DEBUG_ABORT_ON_ERROR=0 to disable)");
+        }
+    }
+}
+
+/*static*/ void
+GLContext::OnImplicitMakeCurrentFailure(const char* const funcName)
+{
+    gfxCriticalError() << "Ignoring call to " << funcName << " with failed"
+                       << " mImplicitMakeCurrent.";
 }
 
 } /* namespace gl */

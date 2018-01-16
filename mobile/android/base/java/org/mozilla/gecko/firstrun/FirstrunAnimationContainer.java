@@ -18,6 +18,7 @@ import org.mozilla.gecko.R;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.Experiments;
+import org.mozilla.gecko.mma.MmaDelegate;
 import org.mozilla.gecko.preferences.GeckoPreferences;
 
 /**
@@ -61,15 +62,14 @@ public class FirstrunAnimationContainer extends LinearLayout {
     }
 
     public void hide() {
+
+        MmaDelegate.track(MmaDelegate.DISMISS_ONBOARDING);
+
         visible = false;
         if (onFinishListener != null) {
             onFinishListener.onFinish();
         }
         animateHide();
-
-        // Stop all versions of firstrun A/B sessions.
-        Telemetry.stopUISession(TelemetryContract.Session.EXPERIMENT, Experiments.ONBOARDING3_B);
-        Telemetry.stopUISession(TelemetryContract.Session.EXPERIMENT, Experiments.ONBOARDING3_C);
     }
 
     private void animateHide() {

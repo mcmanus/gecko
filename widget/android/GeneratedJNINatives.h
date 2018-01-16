@@ -228,9 +228,9 @@ public:
 template<class Impl>
 const JNINativeMethod GeckoSession::Window::Natives<Impl>::methods[] = {
 
-    mozilla::jni::MakeNativeMethod<GeckoSession::Window::Attach_t>(
-            mozilla::jni::NativeStub<GeckoSession::Window::Attach_t, Impl>
-            ::template Wrap<&Impl::Attach>),
+    mozilla::jni::MakeNativeMethod<GeckoSession::Window::AttachEditable_t>(
+            mozilla::jni::NativeStub<GeckoSession::Window::AttachEditable_t, Impl>
+            ::template Wrap<&Impl::AttachEditable>),
 
     mozilla::jni::MakeNativeMethod<GeckoSession::Window::Close_t>(
             mozilla::jni::NativeStub<GeckoSession::Window::Close_t, Impl>
@@ -286,6 +286,29 @@ const JNINativeMethod GeckoThread::Natives<Impl>::methods[] = {
     mozilla::jni::MakeNativeMethod<GeckoThread::WaitOnGecko_t>(
             mozilla::jni::NativeStub<GeckoThread::WaitOnGecko_t, Impl>
             ::template Wrap<&Impl::WaitOnGecko>)
+};
+
+template<class Impl>
+class GeckoVRManager::Natives : public mozilla::jni::NativeImpl<GeckoVRManager, Impl>
+{
+public:
+    static const JNINativeMethod methods[3];
+};
+
+template<class Impl>
+const JNINativeMethod GeckoVRManager::Natives<Impl>::methods[] = {
+
+    mozilla::jni::MakeNativeMethod<GeckoVRManager::CleanupGVRNonPresentingContext_t>(
+            mozilla::jni::NativeStub<GeckoVRManager::CleanupGVRNonPresentingContext_t, Impl>
+            ::template Wrap<&Impl::CleanupGVRNonPresentingContext>),
+
+    mozilla::jni::MakeNativeMethod<GeckoVRManager::SetGVRPaused_t>(
+            mozilla::jni::NativeStub<GeckoVRManager::SetGVRPaused_t, Impl>
+            ::template Wrap<&Impl::SetGVRPaused>),
+
+    mozilla::jni::MakeNativeMethod<GeckoVRManager::SetGVRPresentingContext_t>(
+            mozilla::jni::NativeStub<GeckoVRManager::SetGVRPresentingContext_t, Impl>
+            ::template Wrap<&Impl::SetGVRPresentingContext>)
 };
 
 template<class Impl>
@@ -354,69 +377,65 @@ const JNINativeMethod SurfaceTextureListener::Natives<Impl>::methods[] = {
 };
 
 template<class Impl>
-class LayerView::Compositor::Natives : public mozilla::jni::NativeImpl<Compositor, Impl>
+class LayerSession::Compositor::Natives : public mozilla::jni::NativeImpl<Compositor, Impl>
 {
 public:
-    static const JNINativeMethod methods[14];
+    static const JNINativeMethod methods[13];
 };
 
 template<class Impl>
-const JNINativeMethod LayerView::Compositor::Natives<Impl>::methods[] = {
+const JNINativeMethod LayerSession::Compositor::Natives<Impl>::methods[] = {
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::AttachToJava_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::AttachToJava_t, Impl>
-            ::template Wrap<&Impl::AttachToJava>),
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::AttachNPZC_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::AttachNPZC_t, Impl>
+            ::template Wrap<&Impl::AttachNPZC>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::CreateCompositor_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::CreateCompositor_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::CreateCompositor_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::CreateCompositor_t, Impl>
             ::template Wrap<&Impl::CreateCompositor>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::DisposeNative_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::DisposeNative_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::DisposeNative_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::DisposeNative_t, Impl>
             ::template Wrap<&Impl::DisposeNative>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::EnableLayerUpdateNotifications_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::EnableLayerUpdateNotifications_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::EnableLayerUpdateNotifications_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::EnableLayerUpdateNotifications_t, Impl>
             ::template Wrap<&Impl::EnableLayerUpdateNotifications>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::OnSizeChanged_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::OnSizeChanged_t, Impl>
-            ::template Wrap<&Impl::OnSizeChanged>),
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::OnBoundsChanged_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::OnBoundsChanged_t, Impl>
+            ::template Wrap<&Impl::OnBoundsChanged>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::RequestScreenPixels_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::RequestScreenPixels_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::RequestScreenPixels_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::RequestScreenPixels_t, Impl>
             ::template Wrap<&Impl::RequestScreenPixels>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::SendToolbarAnimatorMessage_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::SendToolbarAnimatorMessage_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SendToolbarAnimatorMessage_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SendToolbarAnimatorMessage_t, Impl>
             ::template Wrap<&Impl::SendToolbarAnimatorMessage>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::SendToolbarPixelsToCompositor_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::SendToolbarPixelsToCompositor_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SendToolbarPixelsToCompositor_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SendToolbarPixelsToCompositor_t, Impl>
             ::template Wrap<&Impl::SendToolbarPixelsToCompositor>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::SetDefaultClearColor_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::SetDefaultClearColor_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SetDefaultClearColor_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SetDefaultClearColor_t, Impl>
             ::template Wrap<&Impl::SetDefaultClearColor>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::SetMaxToolbarHeight_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::SetMaxToolbarHeight_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SetMaxToolbarHeight_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SetMaxToolbarHeight_t, Impl>
             ::template Wrap<&Impl::SetMaxToolbarHeight>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::SetPinned_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::SetPinned_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SetPinned_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SetPinned_t, Impl>
             ::template Wrap<&Impl::SetPinned>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::SyncInvalidateAndScheduleComposite_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::SyncInvalidateAndScheduleComposite_t, Impl>
-            ::template Wrap<&Impl::SyncInvalidateAndScheduleComposite>),
-
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::SyncPauseCompositor_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::SyncPauseCompositor_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SyncPauseCompositor_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SyncPauseCompositor_t, Impl>
             ::template Wrap<&Impl::SyncPauseCompositor>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::SyncResumeResizeCompositor_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::SyncResumeResizeCompositor_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SyncResumeResizeCompositor_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SyncResumeResizeCompositor_t, Impl>
             ::template Wrap<&Impl::SyncResumeResizeCompositor>)
 };
 

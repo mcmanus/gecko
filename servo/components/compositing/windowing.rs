@@ -6,7 +6,7 @@
 
 use compositor_thread::EventLoopWaker;
 use euclid::{Point2D, Size2D};
-use euclid::{ScaleFactor, TypedPoint2D, TypedSize2D};
+use euclid::{TypedScale, TypedPoint2D, TypedSize2D};
 use gleam::gl;
 use ipc_channel::ipc::IpcSender;
 use msg::constellation_msg::{Key, KeyModifiers, KeyState, TopLevelBrowsingContextId, TraversalDirection};
@@ -49,7 +49,7 @@ pub enum WindowEvent {
     /// message, the window must make the same GL context as in `PrepareRenderingEvent` current.
     Refresh,
     /// Sent when the window is resized.
-    Resize(DeviceUintSize),
+    Resize,
     /// Touchpad Pressure
     TouchpadPressure(TypedPoint2D<f32, DevicePixel>, f32, TouchpadPressurePhase),
     /// Sent when a new URL is to be loaded.
@@ -93,7 +93,7 @@ impl Debug for WindowEvent {
         match *self {
             WindowEvent::Idle => write!(f, "Idle"),
             WindowEvent::Refresh => write!(f, "Refresh"),
-            WindowEvent::Resize(..) => write!(f, "Resize"),
+            WindowEvent::Resize => write!(f, "Resize"),
             WindowEvent::TouchpadPressure(..) => write!(f, "TouchpadPressure"),
             WindowEvent::KeyEvent(..) => write!(f, "Key"),
             WindowEvent::LoadUrl(..) => write!(f, "LoadUrl"),
@@ -133,6 +133,10 @@ pub trait WindowMethods {
 
     /// Return the size of the window with head and borders and position of the window values
     fn client_window(&self, ctx: TopLevelBrowsingContextId) -> (Size2D<u32>, Point2D<i32>);
+    /// Return the size of the screen (pixel)
+    fn screen_size(&self, ctx: TopLevelBrowsingContextId) -> Size2D<u32>;
+    /// Return the available size of the screen (pixel)
+    fn screen_avail_size(&self, ctx: TopLevelBrowsingContextId) -> Size2D<u32>;
     /// Set the size inside of borders and head
     fn set_inner_size(&self, ctx: TopLevelBrowsingContextId, size: Size2D<u32>);
     /// Set the window position
@@ -158,7 +162,7 @@ pub trait WindowMethods {
     fn history_changed(&self, ctx: TopLevelBrowsingContextId, Vec<LoadData>, usize);
 
     /// Returns the scale factor of the system (device pixels / device independent pixels).
-    fn hidpi_factor(&self) -> ScaleFactor<f32, DeviceIndependentPixel, DevicePixel>;
+    fn hidpi_factor(&self) -> TypedScale<f32, DeviceIndependentPixel, DevicePixel>;
 
     /// Returns a thread-safe object to wake up the window's event loop.
     fn create_event_loop_waker(&self) -> Box<EventLoopWaker>;

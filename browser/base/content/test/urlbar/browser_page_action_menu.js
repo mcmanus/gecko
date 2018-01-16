@@ -157,8 +157,8 @@ add_task(async function copyURLFromURLBar() {
   await BrowserTestUtils.withNewTab(url, async () => {
     // Add action to URL bar.
     let action = PageActions._builtInActions.find(a => a.id == "copyURL");
-    action.shownInUrlbar = true;
-    registerCleanupFunction(() => action.shownInUrlbar = false);
+    action.pinnedToUrlbar = true;
+    registerCleanupFunction(() => action.pinnedToUrlbar = false);
 
     let copyURLButton =
       document.getElementById("pageAction-urlbar-copyURL");
@@ -174,34 +174,27 @@ add_task(async function copyURLFromURLBar() {
 });
 
 add_task(async function sendToDevice_nonSendable() {
-  // Open a tab that's not sendable.  An about: page like about:home is
-  // convenient.
-  await BrowserTestUtils.withNewTab("about:home", async () => {
-    // ... but the page actions should be hidden on about:home, including the
-    // main button.  (It's not easy to load a page that's both actionable and
-    // not sendable.)  So first check that that's the case, and then unhide the
-    // main button so that this test can continue.
-    Assert.equal(
-      window.getComputedStyle(BrowserPageActions.mainButtonNode).display,
-      "none",
-      "Main button should be hidden on about:home"
-    );
-    BrowserPageActions.mainButtonNode.style.display = "-moz-box";
+  // Open a tab that's not sendable but where the page action buttons still
+  // appear.  about:about is convenient.
+  await BrowserTestUtils.withNewTab("about:about", async () => {
     await promiseSyncReady();
     // Open the panel.  Send to Device should be disabled.
     await promisePageActionPanelOpen();
-    Assert.equal(BrowserPageActions.mainButtonNode.getAttribute("open"),
-      "true", "Main button has 'open' attribute");
-    let sendToDeviceButton =
-      document.getElementById("pageAction-panel-sendToDevice");
-    Assert.ok(sendToDeviceButton.disabled);
+    Assert.equal(BrowserPageActions.mainButtonNode.getAttribute("open"), "true",
+                 "Main button has 'open' attribute");
+    let panelButton =
+      BrowserPageActions.panelButtonNodeForActionID("sendToDevice");
+    Assert.equal(panelButton.disabled, true,
+                 "The panel button should be disabled");
     let hiddenPromise = promisePageActionPanelHidden();
     BrowserPageActions.panelNode.hidePopup();
     await hiddenPromise;
     Assert.ok(!BrowserPageActions.mainButtonNode.hasAttribute("open"),
-      "Main button no longer has 'open' attribute");
-    // Remove the `display` style set above.
-    BrowserPageActions.mainButtonNode.style.removeProperty("display");
+              "Main button no longer has 'open' attribute");
+    // The urlbar button shouldn't exist.
+    let urlbarButton =
+      BrowserPageActions.urlbarButtonNodeForActionID("sendToDevice");
+    Assert.equal(urlbarButton, null, "The urlbar button shouldn't exist");
   });
 });
 
@@ -445,6 +438,11 @@ add_task(async function sendToDevice_noDevices() {
       null,
       {
         attrs: {
+          label: "Connect Another Device..."
+        }
+      },
+      {
+        attrs: {
           label: "Learn About Sending Tabs..."
         }
       }
@@ -544,13 +542,15 @@ add_task(async function sendToDevice_inUrlbar() {
 
     // Add Send to Device to the urlbar.
     let action = PageActions.actionForID("sendToDevice");
-    action.shownInUrlbar = true;
+    action.pinnedToUrlbar = true;
 
     // Click it to open its panel.
     let urlbarButton = document.getElementById(
       BrowserPageActions.urlbarButtonNodeIDForActionID(action.id)
     );
-    Assert.ok(!urlbarButton.disabled);
+    Assert.notEqual(urlbarButton, null, "The urlbar button should exist");
+    Assert.ok(!urlbarButton.disabled,
+              "The urlbar button should not be disabled");
     let panelPromise =
       promisePanelShown(BrowserPageActions._activatedActionPanelID);
     EventUtils.synthesizeMouseAtCenter(urlbarButton, {});
@@ -622,7 +622,7 @@ add_task(async function sendToDevice_inUrlbar() {
     await promisePanelHidden(BrowserPageActionFeedback.panelNode.id);
 
     // Remove Send to Device from the urlbar.
-    action.shownInUrlbar = false;
+    action.pinnedToUrlbar = false;
 
     cleanUp();
   });
@@ -642,14 +642,14 @@ add_task(async function contextMenu() {
     });
     await contextMenuPromise;
 
-    // The context menu should show "Remove from Address Bar".  Click it.
-    let contextMenuNode = document.getElementById("pageActionContextMenu");
-    Assert.equal(contextMenuNode.childNodes.length, 1,
+    // The context menu should show the "remove" item.  Click it.
+    let menuItems = collectContextMenuItems();
+    Assert.equal(menuItems.length, 1,
                  "Context menu has one child");
-    Assert.equal(contextMenuNode.childNodes[0].label, "Remove from Address Bar",
+    Assert.equal(menuItems[0].label, "Remove from Address Bar",
                  "Context menu is in the 'remove' state");
     contextMenuPromise = promisePanelHidden("pageActionContextMenu");
-    EventUtils.synthesizeMouseAtCenter(contextMenuNode.childNodes[0], {});
+    EventUtils.synthesizeMouseAtCenter(menuItems[0], {});
     await contextMenuPromise;
 
     // The action should be removed from the urlbar.  In this case, the bookmark
@@ -668,13 +668,14 @@ add_task(async function contextMenu() {
     });
     await contextMenuPromise;
 
-    // The context menu should show "Add to Address Bar".  Click it.
-    Assert.equal(contextMenuNode.childNodes.length, 1,
+    // The context menu should show the "add" item.  Click it.
+    menuItems = collectContextMenuItems();
+    Assert.equal(menuItems.length, 1,
                  "Context menu has one child");
-    Assert.equal(contextMenuNode.childNodes[0].label, "Add to Address Bar",
+    Assert.equal(menuItems[0].label, "Add to Address Bar",
                  "Context menu is in the 'add' state");
     contextMenuPromise = promisePanelHidden("pageActionContextMenu");
-    EventUtils.synthesizeMouseAtCenter(contextMenuNode.childNodes[0], {});
+    EventUtils.synthesizeMouseAtCenter(menuItems[0], {});
     await contextMenuPromise;
 
     // The action should be added to the urlbar.
@@ -690,13 +691,14 @@ add_task(async function contextMenu() {
     });
     await contextMenuPromise;
 
-    // The context menu should show "Remove from Address Bar".  Click it.
-    Assert.equal(contextMenuNode.childNodes.length, 1,
+    // The context menu should show the "remove" item.  Click it.
+    menuItems = collectContextMenuItems();
+    Assert.equal(menuItems.length, 1,
                  "Context menu has one child");
-    Assert.equal(contextMenuNode.childNodes[0].label, "Remove from Address Bar",
+    Assert.equal(menuItems[0].label, "Remove from Address Bar",
                  "Context menu is in the 'remove' state");
     contextMenuPromise = promisePanelHidden("pageActionContextMenu");
-    EventUtils.synthesizeMouseAtCenter(contextMenuNode.childNodes[0], {});
+    EventUtils.synthesizeMouseAtCenter(menuItems[0], {});
     await contextMenuPromise;
 
     // The action should be removed from the urlbar.
@@ -713,12 +715,14 @@ add_task(async function contextMenu() {
       button: 2,
     });
     await contextMenuPromise;
-    Assert.equal(contextMenuNode.childNodes.length, 1,
+
+    menuItems = collectContextMenuItems();
+    Assert.equal(menuItems.length, 1,
                  "Context menu has one child");
-    Assert.equal(contextMenuNode.childNodes[0].label, "Add to Address Bar",
+    Assert.equal(menuItems[0].label, "Add to Address Bar",
                  "Context menu is in the 'add' state");
     contextMenuPromise = promisePanelHidden("pageActionContextMenu");
-    EventUtils.synthesizeMouseAtCenter(contextMenuNode.childNodes[0], {});
+    EventUtils.synthesizeMouseAtCenter(menuItems[0], {});
     await contextMenuPromise;
     await BrowserTestUtils.waitForCondition(() => {
       return !starButtonBox.hidden;
@@ -774,4 +778,11 @@ function checkSendToDeviceItems(expectedItems, forUrlbar = false) {
       }
     }
   }
+}
+
+function collectContextMenuItems() {
+  let contextMenu = document.getElementById("pageActionContextMenu");
+  return Array.filter(contextMenu.childNodes, node => {
+    return window.getComputedStyle(node).visibility == "visible";
+  });
 }

@@ -2,6 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import socket
 import time
 
 from marionette_driver import errors
@@ -19,16 +20,16 @@ class TestMarionette(MarionetteTestCase):
             func=self.test_correct_test_name.__name__,
         )
 
-        self.assertEqual(self.marionette.test_name, expected_test_name)
+        self.assertIn(expected_test_name, self.marionette.test_name)
 
     @run_if_manage_instance("Only runnable if Marionette manages the instance")
     @skip_if_mobile("Bug 1322993 - Missing temporary folder")
-    def test_wait_for_port_non_existing_process(self):
-        """Test that wait_for_port doesn't run into a timeout if instance is not running."""
+    def test_raise_for_port_non_existing_process(self):
+        """Test that raise_for_port doesn't run into a timeout if instance is not running."""
         self.marionette.quit()
         self.assertIsNotNone(self.marionette.instance.runner.returncode)
         start_time = time.time()
-        self.assertFalse(self.marionette.wait_for_port(timeout=5))
+        self.assertRaises(socket.timeout, self.marionette.raise_for_port, timeout=5)
         self.assertLess(time.time() - start_time, 5)
 
     def test_disable_enable_new_connections(self):
@@ -42,14 +43,21 @@ class TestMarionette(MarionetteTestCase):
 
             # but only new connection attempts
             marionette = Marionette(host=self.marionette.host, port=self.marionette.port)
-            self.assertFalse(marionette.wait_for_port(timeout=1.0),
-                             "Unexpected connection with acceptConnections=false")
+            self.assertRaises(socket.timeout, marionette.raise_for_port, timeout=1.0)
 
             self.marionette._send_message("acceptConnections", {"value": True})
-            marionette.wait_for_port(timeout=1.0)
+            marionette.raise_for_port(timeout=1.0)
 
         finally:
             self.marionette._send_message("acceptConnections", {"value": True})
+
+    def test_client_socket_uses_expected_socket_timeout(self):
+        current_socket_timeout = self.marionette.socket_timeout
+
+        self.assertEqual(current_socket_timeout,
+                         self.marionette.client.socket_timeout)
+        self.assertEqual(current_socket_timeout,
+                         self.marionette.client._sock.gettimeout())
 
 
 class TestContext(MarionetteTestCase):

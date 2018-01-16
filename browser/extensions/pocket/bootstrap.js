@@ -94,7 +94,7 @@ var PocketPageAction = {
       this.pageAction = PageActions.addAction(new PageActions.Action({
         id,
         title: gPocketBundle.GetStringFromName("saveToPocketCmd.label"),
-        shownInUrlbar: true,
+        pinnedToUrlbar: true,
         wantsIframe: true,
         urlbarIDOverride: "pocket-button-box",
         anchorIDOverride: "pocket-button",
@@ -139,7 +139,7 @@ var PocketPageAction = {
         onPlacedInPanel(panelNode, urlbarNode) {
           PocketOverlay.onWindowOpened(panelNode.ownerGlobal);
         },
-        onIframeShown(iframe, panel) {
+        onIframeShowing(iframe, panel) {
           Pocket.onShownInPhotonPageActionPanel(panel, iframe);
 
           let doc = panel.ownerDocument;

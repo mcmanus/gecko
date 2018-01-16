@@ -13,7 +13,7 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "E10SUtils",
-  "resource:///modules/E10SUtils.jsm");
+  "resource://gre/modules/E10SUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
   "resource://gre/modules/BrowserUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Utils",
@@ -995,7 +995,7 @@ var RefreshBlocker = {
 
       let URI = Services.io.newURI(data.URI);
 
-      refreshURI.forceRefreshURI(URI, data.delay, true);
+      refreshURI.forceRefreshURI(URI, null, data.delay, true);
     }
   },
 

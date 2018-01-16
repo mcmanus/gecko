@@ -3,6 +3,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import imp
+import os
 import re
 import sys
 import time
@@ -18,8 +19,8 @@ from unittest.case import (
 )
 
 from marionette_driver.errors import (
-    MarionetteException,
     TimeoutException,
+    UnresponsiveInstanceException
 )
 from mozlog import get_default_logger
 
@@ -137,7 +138,7 @@ class CommonTestCase(unittest.TestCase):
                     self.setUp()
             except SkipTest as e:
                 self._addSkip(result, str(e))
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, UnresponsiveInstanceException) as e:
                 raise
             except _ExpectedFailure as e:
                 expected_failure(result, e.exc_info)
@@ -157,7 +158,7 @@ class CommonTestCase(unittest.TestCase):
                 except self.failureException:
                     self._enter_pm()
                     result.addFailure(self, sys.exc_info())
-                except KeyboardInterrupt:
+                except (KeyboardInterrupt, UnresponsiveInstanceException) as e:
                     raise
                 except _ExpectedFailure as e:
                     expected_failure(result, e.exc_info)
@@ -185,7 +186,7 @@ class CommonTestCase(unittest.TestCase):
                             raise _ExpectedFailure(sys.exc_info())
                     else:
                         self.tearDown()
-                except KeyboardInterrupt:
+                except (KeyboardInterrupt, UnresponsiveInstanceException) as e:
                     raise
                 except _ExpectedFailure as e:
                     expected_failure(result, e.exc_info)
@@ -225,9 +226,13 @@ class CommonTestCase(unittest.TestCase):
 
     @property
     def test_name(self):
-        return '{0}.py {1}.{2}'.format(self.__class__.__module__,
-                                       self.__class__.__name__,
-                                       self._testMethodName)
+        rel_path = None
+        if os.path.exists(self.filepath):
+            rel_path = self._fix_test_path(os.path.relpath(self.filepath))
+
+        return '{0} {1}.{2}'.format(rel_path,
+                                    self.__class__.__name__,
+                                    self._testMethodName)
 
     def id(self):
         # TBPL starring requires that the "test name" field of a failure message
@@ -262,6 +267,18 @@ class CommonTestCase(unittest.TestCase):
                 # Gecko has crashed?
                 pass
         self.marionette = None
+
+    def _fix_test_path(self, path):
+        """Normalize a logged test path from the test package."""
+        test_path_prefixes = [
+            "tests{}".format(os.path.sep),
+        ]
+
+        for prefix in test_path_prefixes:
+            if path.startswith(prefix):
+                path = path[len(prefix):]
+                break
+        return path
 
 
 class MarionetteTestCase(CommonTestCase):
@@ -311,9 +328,6 @@ class MarionetteTestCase(CommonTestCase):
     def setUp(self):
         super(MarionetteTestCase, self).setUp()
         self.marionette.test_name = self.test_name
-        self.marionette.execute_script(r"dump('TEST-START: {0}\n')"
-                                       .format(self.test_name),
-                                       sandbox="simpletest")
 
     def tearDown(self):
         # In the case no session is active (eg. the application was quit), start
@@ -321,16 +335,7 @@ class MarionetteTestCase(CommonTestCase):
         if not self.marionette.session:
             self.marionette.start_session()
 
-        if not self.marionette.crashed:
-            try:
-                self.marionette.execute_script(r"dump('TEST-END: {0}\n')"
-                                               .format(self.test_name),
-                                               sandbox="simpletest")
-                self.marionette.test_name = None
-            except (MarionetteException, IOError):
-                # We have tried to log the test end when there is no listener
-                # object that we can access
-                pass
+        self.marionette.test_name = None
 
         super(MarionetteTestCase, self).tearDown()
 

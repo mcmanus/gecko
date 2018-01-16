@@ -21,7 +21,7 @@
 #include "mozilla/MemoryReporting.h"
 #include "nsIIPCSerializableURI.h"
 #include "nsISensitiveInfoHiddenURI.h"
-#include "RustURL.h"
+#include "nsIURIMutator.h"
 
 #ifdef NS_BUILD_REFCNT_LOGGING
 #define DEBUG_DUMP_URLS_AT_SHUTDOWN
@@ -312,10 +312,21 @@ public:
     void PrintSpec() const { printf("  %s\n", mSpec.get()); }
 #endif
 
-#ifdef MOZ_RUST_URLPARSE
-    static Atomic<bool>                gRustEnabled;
-    RefPtr<RustURL>                    mRustURL;
-#endif
+public:
+    class Mutator
+        : public nsIURIMutator
+        , public BaseURIMutator<nsStandardURL>
+    {
+        NS_DECL_ISUPPORTS
+        NS_FORWARD_SAFE_NSIURISETTERS_RET(mURI)
+        NS_DEFINE_NSIMUTATOR_COMMON
+
+        explicit Mutator() { }
+    private:
+        virtual ~Mutator() { }
+
+        friend class nsStandardURL;
+    };
 };
 
 #define NS_THIS_STANDARDURL_IMPL_CID                 \

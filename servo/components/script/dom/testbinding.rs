@@ -38,6 +38,7 @@ use dom_struct::dom_struct;
 use js::jsapi::{HandleObject, HandleValue, Heap, JSContext, JSObject};
 use js::jsapi::{JS_NewPlainObject, JS_NewUint8ClampedArray};
 use js::jsval::{JSVal, NullValue};
+use js::rust::CustomAutoRooterGuard;
 use script_traits::MsDuration;
 use servo_config::prefs::PREFS;
 use std::borrow::ToOwned;
@@ -390,6 +391,7 @@ impl TestBindingMethods for TestBinding {
             octetValue: None,
             requiredValue: true,
             seqDict: None,
+            elementSequence: None,
             shortValue: None,
             stringValue: None,
             type_: Some(DOMString::from("success")),
@@ -448,6 +450,14 @@ impl TestBindingMethods for TestBinding {
     fn PassCallbackFunction(&self, _: Rc<Function>) {}
     fn PassCallbackInterface(&self, _: Rc<EventListener>) {}
     fn PassSequence(&self, _: Vec<i32>) {}
+    #[allow(unsafe_code)]
+    unsafe fn PassAnySequence(&self, _: *mut JSContext, _: CustomAutoRooterGuard<Vec<JSVal>>) {}
+    #[allow(unsafe_code)]
+    unsafe fn AnySequencePassthrough(&self, _: *mut JSContext, seq: CustomAutoRooterGuard<Vec<JSVal>>) -> Vec<JSVal> {
+        (*seq).clone()
+    }
+    #[allow(unsafe_code)]
+    unsafe fn PassObjectSequence(&self, _: *mut JSContext, _: CustomAutoRooterGuard<Vec<*mut JSObject>>) {}
     fn PassStringSequence(&self, _: Vec<DOMString>) {}
     fn PassInterfaceSequence(&self, _: Vec<DomRoot<Blob>>) {}
 
@@ -600,6 +610,8 @@ impl TestBindingMethods for TestBinding {
     fn PassOptionalNullableStringWithNonNullDefault(&self, _: Option<DOMString>) {}
     fn PassOptionalNullableUsvstringWithNonNullDefault(&self, _: Option<USVString>) {}
     // fn PassOptionalNullableEnumWithNonNullDefault(self, _: Option<TestEnum>) {}
+    fn PassOptionalOverloaded(&self, a: &TestBinding, _: u32, _: u32) -> DomRoot<TestBinding> { DomRoot::from_ref(a) }
+    fn PassOptionalOverloaded_(&self, _: &Blob,  _: u32) { }
 
     fn PassVariadicBoolean(&self, _: Vec<bool>) {}
     fn PassVariadicBooleanAndDefault(&self, _: bool, _: Vec<bool>) {}

@@ -37,12 +37,13 @@
 #include "nsITheme.h"
 #include "nsLayoutUtils.h"
 #include "nsQueryFrame.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsStyleContext.h"
 #include "nsStyleStruct.h"
 #include "Visibility.h"
 #include "nsChangeHint.h"
 #include "nsStyleContextInlines.h"
+#include "mozilla/gfx/CompositorHitTestInfo.h"
 #include "mozilla/gfx/MatrixFwd.h"
 #include "nsDisplayItemTypes.h"
 
@@ -390,14 +391,6 @@ operator<<(std::ostream& aStream, const nsReflowStatus& aStatus);
 //----------------------------------------------------------------------
 
 /**
- * DidReflow status values.
- */
-enum class nsDidReflowStatus : uint32_t {
-  NOT_FINISHED,
-  FINISHED
-};
-
-/**
  * When there is no scrollable overflow rect, the visual overflow rect
  * may be stored as four 1-byte deltas each strictly LESS THAN 0xff, for
  * the four edges of the rectangle, or the four bytes may be read as a
@@ -633,12 +626,18 @@ public:
     , mMayHaveWillChangeBudget(false)
     , mBuiltBlendContainer(false)
     , mIsPrimaryFrame(false)
+    , mMayHaveTransformAnimation(false)
+    , mMayHaveOpacityAnimation(false)
   {
     mozilla::PodZero(&mOverflow);
   }
 
   nsPresContext* PresContext() const {
     return StyleContext()->PresContext();
+  }
+
+  nsIPresShell* PresShell() const {
+    return PresContext()->PresShell();
   }
 
   /**
@@ -659,6 +658,22 @@ public:
                     nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow) = 0;
 
+  using PostDestroyData = mozilla::layout::PostFrameDestroyData;
+  struct MOZ_RAII AutoPostDestroyData
+  {
+    explicit AutoPostDestroyData(nsPresContext* aPresContext)
+      : mPresContext(aPresContext) {}
+    ~AutoPostDestroyData() {
+      for (auto& content : mozilla::Reversed(mData.mAnonymousContent)) {
+        nsIFrame::DestroyAnonymousContent(mPresContext, content.forget());
+      }
+      for (auto& content : mozilla::Reversed(mData.mGeneratedContent)) {
+        content->UnbindFromTree();
+      }
+    }
+    nsPresContext* mPresContext;
+    PostDestroyData mData;
+  };
   /**
    * Destroys this frame and each of its child frames (recursively calls
    * Destroy() for each child). If this frame is a first-continuation, this
@@ -667,18 +682,10 @@ public:
    * If the frame is a placeholder, it also ensures the out-of-flow frame's
    * removal and destruction.
    */
-  using PostDestroyData = mozilla::layout::PostFrameDestroyData;
   void Destroy() {
-    nsPresContext* presContext = PresContext();
-    PostDestroyData data;
-    DestroyFrom(this, data);
+    AutoPostDestroyData data(PresContext());
+    DestroyFrom(this, data.mData);
     // Note that |this| is deleted at this point.
-    for (auto& content : mozilla::Reversed(data.mAnonymousContent)) {
-      DestroyAnonymousContent(presContext, content.forget());
-    }
-    for (auto& content : mozilla::Reversed(data.mGeneratedContent)) {
-      content->UnbindFromTree();
-    }
   }
 
   /** Flags for PeekOffsetCharacter, PeekOffsetNoAmount, PeekOffsetWord return values.
@@ -715,6 +722,8 @@ public:
   };
 
 protected:
+  friend class nsBlockFrame; // for access to DestroyFrom
+
   /**
    * Return true if the frame is part of a Selection.
    * Helper method to implement the public IsSelected() API.
@@ -879,7 +888,7 @@ public:
    * Gets the parent of a frame, using the parent of the placeholder for
    * out-of-flow frames.
    */
-  inline nsContainerFrame* GetInFlowParent();
+  inline nsContainerFrame* GetInFlowParent() const;
 
   /**
    * Gets the primary frame of the Content's flattened tree
@@ -1257,7 +1266,7 @@ public:
   NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(IBaselinePadProperty, nscoord)
   NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(BBaselinePadProperty, nscoord)
 
-  NS_DECLARE_FRAME_PROPERTY_DELETABLE(ModifiedFrameList, std::vector<WeakFrame>)
+  NS_DECLARE_FRAME_PROPERTY_DELETABLE(ModifiedFrameList, nsTArray<nsIFrame*>)
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(DisplayItems, DisplayItemArray)
 
   NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(BidiDataProperty, mozilla::FrameBidiData)
@@ -1749,29 +1758,23 @@ public:
    *
    * @param aStyleDisplay:  If the caller has this->StyleDisplay(), providing
    *   it here will improve performance.
-   * @param aEffectSet: This function may need to look up EffectSet property.
-   *   If a caller already have one, pass it in can save property look up
-   *   time; otherwise, just left it as nullptr.
    */
-  bool IsTransformed(const nsStyleDisplay* aStyleDisplay, mozilla::EffectSet* aEffectSet = nullptr) const;
-  bool IsTransformed(mozilla::EffectSet* aEffectSet = nullptr) const {
-    return IsTransformed(StyleDisplay(), aEffectSet);
+  bool IsTransformed(const nsStyleDisplay* aStyleDisplay) const;
+  bool IsTransformed() const {
+    return IsTransformed(StyleDisplay());
   }
 
   /**
    * Same as IsTransformed, except that it doesn't take SVG transforms
    * into account.
    */
-  bool IsCSSTransformed(const nsStyleDisplay* aStyleDisplay, mozilla::EffectSet* aEffectSet = nullptr) const;
+  bool IsCSSTransformed(const nsStyleDisplay* aStyleDisplay) const;
 
   /**
    * True if this frame has any animation of transform in effect.
    *
-   * @param aEffectSet: This function may need to look up EffectSet property.
-   *   If a caller already have one, pass it in can save property look up
-   *   time; otherwise, just left it as nullptr.
    */
-  bool HasAnimationOfTransform(mozilla::EffectSet* aEffectSet = nullptr) const;
+  bool HasAnimationOfTransform() const;
 
   /**
    * Returns true if the frame is translucent or the frame has opacity
@@ -1842,14 +1845,10 @@ public:
    *
    * @param aStyleDisplay:  If the caller has this->StyleDisplay(), providing
    *   it here will improve performance.
-   * @param aEffectSet: This function may need to look up EffectSet property.
-   *   If a caller already have one, pass it in can save property look up
-   *   time; otherwise, just left it as nullptr.
    */
-  bool Combines3DTransformWithAncestors(const nsStyleDisplay* aStyleDisplay,
-                                        mozilla::EffectSet* aEffectSet = nullptr) const;
-  bool Combines3DTransformWithAncestors(mozilla::EffectSet* aEffectSet = nullptr) const {
-    return Combines3DTransformWithAncestors(StyleDisplay(), aEffectSet);
+  bool Combines3DTransformWithAncestors(const nsStyleDisplay* aStyleDisplay) const;
+  bool Combines3DTransformWithAncestors() const {
+    return Combines3DTransformWithAncestors(StyleDisplay());
   }
 
   /**
@@ -1857,11 +1856,8 @@ public:
    * Extend3DContext(). This is useful because in some cases the hidden
    * backface can safely be ignored if it could not be visible anyway.
    *
-   * @param aEffectSet: This function may need to look up EffectSet property.
-   *   If a caller already have one, pass it in can save property look up
-   *   time; otherwise, just left it as nullptr.
    */
-  bool In3DContextAndBackfaceIsHidden(mozilla::EffectSet* aEffectSet = nullptr) const;
+  bool In3DContextAndBackfaceIsHidden() const;
 
   bool IsPreserve3DLeaf(const nsStyleDisplay* aStyleDisplay,
                         mozilla::EffectSet* aEffectSet = nullptr) const {
@@ -1872,10 +1868,9 @@ public:
     return IsPreserve3DLeaf(StyleDisplay(), aEffectSet);
   }
 
-  bool HasPerspective(const nsStyleDisplay* aStyleDisplay,
-                      mozilla::EffectSet* aEffectSet = nullptr) const;
-  bool HasPerspective(mozilla::EffectSet* aEffectSet = nullptr) const {
-    return HasPerspective(StyleDisplay(), aEffectSet);
+  bool HasPerspective(const nsStyleDisplay* aStyleDisplay) const;
+  bool HasPerspective() const {
+    return HasPerspective(StyleDisplay());
   }
 
   bool ChildrenHavePerspective(const nsStyleDisplay* aStyleDisplay) const {
@@ -1892,8 +1887,7 @@ public:
    */
   void ComputePreserve3DChildrenOverflow(nsOverflowAreas& aOverflowAreas);
 
-  void RecomputePerspectiveChildrenOverflow(const nsIFrame* aStartFrame,
-                                            mozilla::EffectSet* aEffectSet = nullptr);
+  void RecomputePerspectiveChildrenOverflow(const nsIFrame* aStartFrame);
 
   /**
    * Returns the number of ancestors between this and the root of our frame tree
@@ -1964,10 +1958,10 @@ public:
    * for frame lists other than the primary one.
    * @param aPoint point relative to this frame
    */
-  ContentOffsets GetContentOffsetsFromPoint(nsPoint aPoint,
+  ContentOffsets GetContentOffsetsFromPoint(const nsPoint& aPoint,
                                             uint32_t aFlags = 0);
 
-  virtual ContentOffsets GetContentOffsetsFromPointExternal(nsPoint aPoint,
+  virtual ContentOffsets GetContentOffsetsFromPointExternal(const nsPoint& aPoint,
                                                             uint32_t aFlags = 0)
   { return GetContentOffsetsFromPoint(aPoint, aFlags); }
 
@@ -1984,10 +1978,10 @@ public:
    */
   struct MOZ_STACK_CLASS Cursor {
     nsCOMPtr<imgIContainer> mContainer;
-    int32_t                 mCursor;
-    bool                    mHaveHotspot;
-    bool                    mLoading;
-    float                   mHotspotX, mHotspotY;
+    int32_t mCursor = NS_STYLE_CURSOR_AUTO;
+    bool mHaveHotspot = false;
+    bool mLoading = false;
+    float mHotspotX = 0.0f, mHotspotY = 0.0f;
   };
   /**
    * Get the cursor for a given frame.
@@ -2576,8 +2570,7 @@ public:
    * a given reflow?
    */
   virtual void DidReflow(nsPresContext*           aPresContext,
-                         const ReflowInput* aReflowInput,
-                         nsDidReflowStatus        aStatus) = 0;
+                         const ReflowInput* aReflowInput) = 0;
 
   /**
    * Updates the overflow areas of the frame. This can be called if an
@@ -3904,7 +3897,7 @@ public:
    *   a pointer to this frame and its distance to aPoint, if this frame
    *   is indeed closer than the current distance in aCurrentBestFrame.
    */
-  virtual void FindCloserFrameForSelection(nsPoint aPoint,
+  virtual void FindCloserFrameForSelection(const nsPoint& aPoint,
                                            FrameWithDistance* aCurrentBestFrame);
 
   /**
@@ -4084,6 +4077,19 @@ public:
     mIsWrapperBoxNeedingRestyle = aNeedsRestyle;
   }
 
+  bool MayHaveTransformAnimation() const {
+    return mMayHaveTransformAnimation;
+  }
+  void SetMayHaveTransformAnimation() {
+    mMayHaveTransformAnimation = true;
+  }
+  bool MayHaveOpacityAnimation() const {
+    return mMayHaveOpacityAnimation;
+  }
+  void SetMayHaveOpacityAnimation() {
+    mMayHaveOpacityAnimation = true;
+  }
+
   /**
    * If this returns true, the frame it's called on should get the
    * NS_FRAME_HAS_DIRTY_CHILDREN bit set on it by the caller; either directly
@@ -4130,6 +4136,15 @@ public:
 
   bool BuiltBlendContainer() { return mBuiltBlendContainer; }
   void SetBuiltBlendContainer(bool aBuilt) { mBuiltBlendContainer = aBuilt; }
+
+  /**
+   * Returns the set of flags indicating the properties of the frame that the
+   * compositor might care about for hit-testing purposes. Note that this function
+   * must be called during Gecko display list construction time (i.e while the
+   * frame tree is being traversed) because that is when the display list builder
+   * has the necessary state set up correctly.
+   */
+  mozilla::gfx::CompositorHitTestInfo GetCompositorHitTestInfo(nsDisplayListBuilder* aBuilder);
 
 protected:
   static void DestroyAnonymousContent(nsPresContext* aPresContext,
@@ -4331,9 +4346,12 @@ private:
    */
   bool mIsPrimaryFrame : 1;
 
+  bool mMayHaveTransformAnimation : 1;
+  bool mMayHaveOpacityAnimation : 1;
+
 protected:
 
-  // There is a 3-bit gap left here.
+  // There is a 1-bit gap left here.
 
   // Helpers
   /**
@@ -4531,11 +4549,6 @@ public:
   void DumpFrameTreeLimited() const;
 
   virtual nsresult  GetFrameName(nsAString& aResult) const = 0;
-#endif
-
-#ifdef DEBUG
-public:
-  virtual nsFrameState  GetDebugStateBits() const = 0;
 #endif
 };
 

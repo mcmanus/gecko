@@ -282,6 +282,7 @@ Attr::GetTextContentInternal(nsAString& aTextContent,
 
 void
 Attr::SetTextContentInternal(const nsAString& aTextContent,
+                             nsIPrincipal* aSubjectPrincipal,
                              ErrorResult& aError)
 {
   SetNodeValueInternal(aTextContent, aError);
@@ -307,7 +308,7 @@ Attr::GetChildCount() const
 }
 
 nsIContent *
-Attr::GetChildAt(uint32_t aIndex) const
+Attr::GetChildAt_Deprecated(uint32_t aIndex) const
 {
   return nullptr;
 }
@@ -326,7 +327,7 @@ Attr::InsertChildAt(nsIContent* aKid, uint32_t aIndex,
 }
 
 void
-Attr::RemoveChildAt(uint32_t aIndex, bool aNotify)
+Attr::RemoveChildAt_Deprecated(uint32_t aIndex, bool aNotify)
 {
 }
 

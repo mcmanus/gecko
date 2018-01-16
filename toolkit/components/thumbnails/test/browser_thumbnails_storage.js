@@ -6,9 +6,7 @@ const URL_COPY = URL + "#copy";
 
 XPCOMUtils.defineLazyGetter(this, "Sanitizer", function() {
   let tmp = {};
-  Cc["@mozilla.org/moz/jssubscript-loader;1"]
-    .getService(Ci.mozIJSSubScriptLoader)
-    .loadSubScript("chrome://browser/content/sanitize.js", tmp);
+  Services.scriptloader.loadSubScript("chrome://browser/content/sanitize.js", tmp);
   return tmp.Sanitizer;
 });
 
@@ -77,7 +75,7 @@ function promiseClearHistory(aUseRange) {
   let s = new Sanitizer();
   s.prefDomain = "privacy.cpd.";
 
-  let prefs = gPrefService.getBranch(s.prefDomain);
+  let prefs = Services.prefs.getBranch(s.prefDomain);
   prefs.setBoolPref("history", true);
   prefs.setBoolPref("downloads", false);
   prefs.setBoolPref("cache", false);

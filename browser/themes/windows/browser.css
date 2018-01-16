@@ -329,7 +329,7 @@
   -moz-appearance: -moz-window-button-close;
 }
 
-@media not all and (-moz-windows-classic) {
+@media (-moz-windows-classic: 0) {
   #titlebar-min {
     margin-inline-end: 2px;
   }
@@ -524,13 +524,9 @@ menuitem.bookmark-item {
 }
 
 html|*.urlbar-input:-moz-lwtheme::placeholder,
-.searchbar-textbox:-moz-lwtheme > .autocomplete-textbox-container > .textbox-input-box > html|*.textbox-input::placeholder {
+.searchbar-textbox:-moz-lwtheme > .urlbar-textbox-container > .textbox-input-box > html|*.textbox-input::placeholder {
   opacity: 1.0;
   color: #777;
-}
-
-.urlbar-textbox-container {
-  -moz-box-align: stretch;
 }
 
 /* ::::: URL Bar Zoom Reset Button ::::: */
@@ -791,12 +787,6 @@ html|span.ac-emphasize-text-url {
   list-style-image: url(chrome://browser/skin/tabbrowser/tabDragIndicator.png);
   margin-bottom: -9px;
   z-index: 3;
-}
-
-/* Tab close button */
-.tab-close-button {
-  -moz-appearance: none;
-  border: none;
 }
 
 /* All tabs menupopup */
@@ -1171,14 +1161,6 @@ panel[touchmode] .PanelUI-subView #appMenu-zoom-controls > .subviewbutton-iconic
 
 .contentSelectDropdown-ingroup > .menu-iconic-text {
   padding-inline-start: 20px;
-}
-
-#ContentSelectDropdown > menupopup {
-  background-color: -moz-field;
-  -moz-border-top-colors: GrayText;
-  -moz-border-right-colors: GrayText;
-  -moz-border-bottom-colors: GrayText;
-  -moz-border-left-colors: GrayText;
 }
 
 #ContentSelectDropdown > menupopup > menucaption,

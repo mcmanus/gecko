@@ -404,8 +404,8 @@ public:
   {
     MOZ_ASSERT(IsValid());
 
-    if (mLayer->AsContainerLayer()) {
-      return mLayer->AsContainerLayer()->GetEventRegionsOverride();
+    if (mLayer->AsRefLayer()) {
+      return mLayer->AsRefLayer()->GetEventRegionsOverride();
     }
     return EventRegionsOverride::NoOverride;
   }
@@ -433,10 +433,10 @@ public:
     return mLayer->GetScrollbarTargetContainerId();
   }
 
-  bool IsScrollbarContainer() const
+  Maybe<ScrollDirection> GetScrollbarContainerDirection() const
   {
     MOZ_ASSERT(IsValid());
-    return mLayer->IsScrollbarContainer();
+    return mLayer->GetScrollbarContainerDirection();
   }
 
   FrameMetrics::ViewID GetFixedPositionScrollContainerId() const

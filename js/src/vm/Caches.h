@@ -13,7 +13,6 @@
 #include "jsobj.h"
 #include "jsscript.h"
 
-#include "ds/FixedSizeHash.h"
 #include "frontend/SourceNotes.h"
 #include "gc/Tracer.h"
 #include "js/RootingAPI.h"
@@ -72,7 +71,6 @@ struct EvalCacheLookup
     explicit EvalCacheLookup(JSContext* cx) : str(cx), callerScript(cx) {}
     RootedLinearString str;
     RootedScript callerScript;
-    JSVersion version;
     jsbytecode* pc;
 };
 
@@ -85,33 +83,6 @@ struct EvalCacheHashPolicy
 };
 
 typedef HashSet<EvalCacheEntry, EvalCacheHashPolicy, SystemAllocPolicy> EvalCache;
-
-struct LazyScriptHashPolicy
-{
-    struct Lookup {
-        JSContext* cx;
-        LazyScript* lazy;
-
-        Lookup(JSContext* cx, LazyScript* lazy)
-          : cx(cx), lazy(lazy)
-        {}
-    };
-
-    static const size_t NumHashes = 3;
-
-    static void hash(const Lookup& lookup, HashNumber hashes[NumHashes]);
-    static bool match(JSScript* script, const Lookup& lookup);
-
-    // Alternate methods for use when removing scripts from the hash without an
-    // explicit LazyScript lookup.
-    static void hash(JSScript* script, HashNumber hashes[NumHashes]);
-    static bool match(JSScript* script, JSScript* lookup) { return script == lookup; }
-
-    static void clear(JSScript** pscript) { *pscript = nullptr; }
-    static bool isCleared(JSScript* script) { return !script; }
-};
-
-typedef FixedSizeHashSet<JSScript*, LazyScriptHashPolicy, 769> LazyScriptCache;
 
 /*
  * Cache for speeding up repetitive creation of objects in the VM.
@@ -256,7 +227,6 @@ class RuntimeCaches
     js::NewObjectCache newObjectCache;
     js::UncompressedSourceCache uncompressedSourceCache;
     js::EvalCache evalCache;
-    LazyScriptCache lazyScriptCache;
 
     bool init();
 

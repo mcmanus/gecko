@@ -216,7 +216,7 @@ nsBindingManager::RemovedFromDocumentInternal(nsIContent* aContent,
       binding->ChangeDocument(aOldDocument, nullptr);
     }
 
-    aContent->SetXBLBinding(nullptr, this);
+    aContent->AsElement()->SetXBLBinding(nullptr, this);
   }
 
   // Clear out insertion point and content lists.
@@ -1095,44 +1095,6 @@ nsBindingManager::HandleChildInsertion(nsIContent* aContainer,
 
     parent = newParent;
   }
-}
-
-
-nsIContent*
-nsBindingManager::FindNestedInsertionPoint(nsIContent* aContainer,
-                                           nsIContent* aChild)
-{
-  NS_PRECONDITION(aChild->GetParent() == aContainer,
-                  "Wrong container");
-
-  nsIContent* parent = aContainer;
-  if (aContainer->IsActiveChildrenElement()) {
-    if (static_cast<XBLChildrenElement*>(aContainer)->
-          HasInsertedChildren()) {
-      return nullptr;
-    }
-    parent = aContainer->GetParent();
-  }
-
-  while (parent) {
-    nsXBLBinding* binding = GetBindingWithContent(parent);
-    if (!binding) {
-      break;
-    }
-
-    XBLChildrenElement* point = binding->FindInsertionPointFor(aChild);
-    if (!point) {
-      return nullptr;
-    }
-
-    nsIContent* newParent = point->GetParent();
-    if (newParent == parent) {
-      break;
-    }
-    parent = newParent;
-  }
-
-  return parent;
 }
 
 nsIContent*

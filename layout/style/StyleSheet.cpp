@@ -136,7 +136,7 @@ StyleSheet::TraverseInner(nsCycleCollectionTraversalCallback &cb)
   StyleSheet* childSheet = GetFirstChild();
   while (childSheet) {
     NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "child sheet");
-    cb.NoteXPCOMChild(NS_ISUPPORTS_CAST(nsIDOMCSSStyleSheet*, childSheet));
+    cb.NoteXPCOMChild(childSheet);
     childSheet = childSheet->mNext;
   }
 }
@@ -145,8 +145,7 @@ StyleSheet::TraverseInner(nsCycleCollectionTraversalCallback &cb)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(StyleSheet)
   NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
   NS_INTERFACE_MAP_ENTRY(nsICSSLoaderObserver)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMStyleSheet)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMCSSStyleSheet)
+  NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(StyleSheet)
@@ -314,110 +313,40 @@ StyleSheet::ChildSheetListBuilder::ReparentChildList(StyleSheet* aPrimarySheet,
   }
 }
 
-// nsIDOMStyleSheet interface
-
-NS_IMETHODIMP
+void
 StyleSheet::GetType(nsAString& aType)
 {
   aType.AssignLiteral("text/css");
-  return NS_OK;
 }
 
-NS_IMETHODIMP
-StyleSheet::GetDisabled(bool* aDisabled)
-{
-  *aDisabled = Disabled();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
+void
 StyleSheet::SetDisabled(bool aDisabled)
 {
   // DOM method, so handle BeginUpdate/EndUpdate
   MOZ_AUTO_DOC_UPDATE(mDocument, UPDATE_STYLE, true);
   SetEnabled(!aDisabled);
-  return NS_OK;
 }
 
-NS_IMETHODIMP
-StyleSheet::GetOwnerNode(nsIDOMNode** aOwnerNode)
-{
-  nsCOMPtr<nsIDOMNode> ownerNode = do_QueryInterface(GetOwnerNode());
-  ownerNode.forget(aOwnerNode);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-StyleSheet::GetHref(nsAString& aHref)
+void
+StyleSheet::GetHref(nsAString& aHref, ErrorResult& aRv)
 {
   if (nsIURI* sheetURI = SheetInfo().mOriginalSheetURI) {
     nsAutoCString str;
     nsresult rv = sheetURI->GetSpec(str);
-    NS_ENSURE_SUCCESS(rv, rv);
+    if (NS_FAILED(rv)) {
+      aRv.Throw(rv);
+      return;
+    }
     CopyUTF8toUTF16(str, aHref);
   } else {
     SetDOMStringToNull(aHref);
   }
-  return NS_OK;
 }
 
-NS_IMETHODIMP
+void
 StyleSheet::GetTitle(nsAString& aTitle)
 {
   aTitle.Assign(mTitle);
-  return NS_OK;
-}
-
-// nsIDOMStyleSheet interface
-
-NS_IMETHODIMP
-StyleSheet::GetParentStyleSheet(nsIDOMStyleSheet** aParentStyleSheet)
-{
-  NS_ENSURE_ARG_POINTER(aParentStyleSheet);
-  NS_IF_ADDREF(*aParentStyleSheet = GetParentStyleSheet());
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-StyleSheet::GetMedia(nsIDOMMediaList** aMedia)
-{
-  NS_ADDREF(*aMedia = Media());
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-StyleSheet::GetOwnerRule(nsIDOMCSSRule** aOwnerRule)
-{
-  NS_IF_ADDREF(*aOwnerRule = GetDOMOwnerRule());
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-StyleSheet::GetCssRules(nsIDOMCSSRuleList** aCssRules)
-{
-  ErrorResult rv;
-  nsCOMPtr<nsIDOMCSSRuleList> rules =
-    GetCssRules(*nsContentUtils::SubjectPrincipal(), rv);
-  rules.forget(aCssRules);
-  return rv.StealNSResult();
-}
-
-NS_IMETHODIMP
-StyleSheet::InsertRule(const nsAString& aRule, uint32_t aIndex,
-                       uint32_t* aReturn)
-{
-  ErrorResult rv;
-  *aReturn =
-    InsertRule(aRule, aIndex, *nsContentUtils::SubjectPrincipal(), rv);
-  return rv.StealNSResult();
-}
-
-NS_IMETHODIMP
-StyleSheet::DeleteRule(uint32_t aIndex)
-{
-  ErrorResult rv;
-  DeleteRule(aIndex, *nsContentUtils::SubjectPrincipal(), rv);
-  return rv.StealNSResult();
 }
 
 void
@@ -454,12 +383,18 @@ StyleSheet::EnsureUniqueInner()
     // already unique
     return;
   }
+
   // If this stylesheet is for XBL with Servo, don't bother cloning
   // it, as it may break ServoStyleRuleMap. XBL stylesheets are not
   // supposed to change anyway.
+  //
   // The mDocument check is used as a fast reject path because no
   // XBL stylesheets would have associated document, but in normal
   // cases, content stylesheets should usually have one.
+  //
+  // FIXME(emilio): Shadow DOM definitely modifies stylesheets! Right now all of
+  // them are unique anyway because we don't support <link>, but that needs to
+  // change.
   if (!mDocument && IsServo() &&
       mStyleSets.Length() == 1 &&
       mStyleSets[0]->AsServo()->IsForXBL()) {
@@ -603,14 +538,51 @@ StyleSheet::DeleteRuleFromGroup(css::GroupRule* aGroup, uint32_t aIndex)
   NS_ENSURE_SUCCESS(result, result);
 
   rule->SetStyleSheet(nullptr);
+  RuleRemoved(*rule);
+  return NS_OK;
+}
 
+#define NOTIFY_STYLE_SETS(function_, args_) do {          \
+  StyleSheet* current = this;                             \
+  do {                                                    \
+    for (StyleSetHandle handle : current->mStyleSets) {   \
+      handle->function_ args_;                            \
+    }                                                     \
+    current = current->mParent;                           \
+  } while (current);                                      \
+} while (0)
+
+void
+StyleSheet::RuleAdded(css::Rule& aRule)
+{
   DidDirty();
+  NOTIFY_STYLE_SETS(RuleAdded, (*this, aRule));
 
   if (mDocument) {
-    mDocument->StyleRuleRemoved(this, rule);
+    mDocument->StyleRuleAdded(this, &aRule);
   }
+}
 
-  return NS_OK;
+void
+StyleSheet::RuleRemoved(css::Rule& aRule)
+{
+  DidDirty();
+  NOTIFY_STYLE_SETS(RuleRemoved, (*this, aRule));
+
+  if (mDocument) {
+    mDocument->StyleRuleRemoved(this, &aRule);
+  }
+}
+
+void
+StyleSheet::RuleChanged(css::Rule* aRule)
+{
+  DidDirty();
+  NOTIFY_STYLE_SETS(RuleChanged, (*this, aRule));
+
+  if (mDocument) {
+    mDocument->StyleRuleChanged(this, aRule);
+  }
 }
 
 nsresult
@@ -636,12 +608,7 @@ StyleSheet::InsertRuleIntoGroup(const nsAString& aRule,
     result = AsServo()->InsertRuleIntoGroupInternal(aRule, aGroup, aIndex);
   }
   NS_ENSURE_SUCCESS(result, result);
-
-  DidDirty();
-
-  if (mDocument) {
-    mDocument->StyleRuleAdded(this, aGroup->GetStyleRuleAt(aIndex));
-  }
+  RuleAdded(*aGroup->GetStyleRuleAt(aIndex));
 
   return NS_OK;
 }
@@ -871,6 +838,9 @@ StyleSheet::List(FILE* out, int32_t aIndent) const
 void
 StyleSheet::SetMedia(dom::MediaList* aMedia)
 {
+  if (aMedia) {
+    aMedia->SetStyleSheet(this);
+  }
   mMedia = aMedia;
 }
 

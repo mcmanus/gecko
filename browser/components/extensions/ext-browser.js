@@ -14,6 +14,8 @@
 
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
+                                  "resource:///modules/RecentWindow.jsm");
 
 var {
   ExtensionError,
@@ -35,7 +37,8 @@ const getSender = (extension, target, sender) => {
     // page-open listener below).
     tabId = sender.tabId;
     delete sender.tabId;
-  } else if (target instanceof Ci.nsIDOMXULElement) {
+  } else if (target instanceof Ci.nsIDOMXULElement ||
+             ExtensionUtils.instanceOf(target, "HTMLIFrameElement")) {
     tabId = tabTracker.getBrowserData(target).tabId;
   }
 
@@ -171,6 +174,17 @@ class WindowTracker extends WindowTrackerBase {
 
   removeProgressListener(window, listener) {
     window.gBrowser.removeTabsProgressListener(listener);
+  }
+
+  /**
+   * @property {DOMWindow|null} topNormalWindow
+   *        The currently active, or topmost, browser window, or null if no
+   *        browser window is currently open.
+   *        Will return the topmost "normal" (i.e., not popup) window.
+   *        @readonly
+   */
+  get topNormalWindow() {
+    return RecentWindow.getMostRecentBrowserWindow({allowPopups: false});
   }
 }
 

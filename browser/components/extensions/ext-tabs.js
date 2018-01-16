@@ -328,7 +328,7 @@ this.tabs = class extends ExtensionAPI {
           return new Promise((resolve, reject) => {
             let window = createProperties.windowId !== null ?
               windowTracker.getWindow(createProperties.windowId, context) :
-              windowTracker.topWindow;
+              windowTracker.topNormalWindow;
 
             if (!window.gBrowser) {
               let obs = (finishedWindow, topic, data) => {
@@ -532,13 +532,19 @@ this.tabs = class extends ExtensionAPI {
         },
 
         async query(queryInfo) {
-          if (queryInfo.url !== null) {
-            if (!extension.hasPermission("tabs")) {
-              return Promise.reject({message: 'The "tabs" permission is required to use the query API with the "url" parameter'});
+          if (!extension.hasPermission("tabs")) {
+            if (queryInfo.url !== null || queryInfo.title !== null) {
+              return Promise.reject({message: 'The "tabs" permission is required to use the query API with the "url" or "title" parameters'});
             }
+          }
 
-            queryInfo = Object.assign({}, queryInfo);
+          queryInfo = Object.assign({}, queryInfo);
+
+          if (queryInfo.url !== null) {
             queryInfo.url = new MatchPatternSet([].concat(queryInfo.url));
+          }
+          if (queryInfo.title !== null) {
+            queryInfo.title = new MatchGlob(queryInfo.title);
           }
 
           return Array.from(tabManager.query(queryInfo, context),
@@ -610,6 +616,12 @@ this.tabs = class extends ExtensionAPI {
             // If the window is not specified, use the window from the tab.
             let window = destinationWindow || nativeTab.ownerGlobal;
             let gBrowser = window.gBrowser;
+
+            // If we are not moving the tab to a different window, and the window
+            // only has one tab, do nothing.
+            if (nativeTab.ownerGlobal == window && gBrowser.tabs.length === 1) {
+              continue;
+            }
 
             let insertionPoint = indexMap.get(window) || moveProperties.index;
             // If the index is -1 it should go to the end of the tabs.

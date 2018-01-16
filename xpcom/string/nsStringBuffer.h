@@ -95,12 +95,16 @@ public:
    * This method returns the string buffer corresponding to the given data
    * pointer.  The data pointer must have been returned previously by a
    * call to the nsStringBuffer::Data method.
-   *
-   * This method is normally defined here in the header file for inlining into
-   * callers.  It has been outlined temporarily to make the canary checking code
-   * simpler WRT header include order.
    */
-  static nsStringBuffer* FromData(void* aData);
+  static nsStringBuffer* FromData(void* aData)
+  {
+    nsStringBuffer* sb = reinterpret_cast<nsStringBuffer*>(aData) - 1;
+#ifdef STRING_BUFFER_CANARY
+    if (MOZ_UNLIKELY(sb->mCanary != CANARY_OK))
+      sb->FromDataCanaryCheckFailed();
+#endif
+    return sb;
+  }
 
   /**
    * This method returns the data pointer for this string buffer.
@@ -196,6 +200,15 @@ public:
    * double-counting.
    */
   size_t SizeOfIncludingThisEvenIfShared(mozilla::MallocSizeOf aMallocSizeOf) const;
+
+#ifdef STRING_BUFFER_CANARY
+  /*
+   * Called by FromData if the canary check failed.  This is out-of-line in
+   * nsSubstring.cpp so that MOZ_CRASH_UNSAFE_PRINTF is available via #includes.
+   * It is not available in FromData due to #include-order.
+   */
+  void FromDataCanaryCheckFailed() const;
+#endif
 };
 
 #endif /* !defined(nsStringBuffer_h__ */

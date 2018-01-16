@@ -115,7 +115,7 @@ NextEnvironmentShape(JSContext* cx, HandleAtom name, BindingKind bindKind, uint3
     }
 
     jsid id = NameToId(name->asPropertyName());
-    Rooted<StackShape> child(cx, StackShape(base, id, slot, attrs, 0));
+    Rooted<StackShape> child(cx, StackShape(base, id, slot, attrs));
     return cx->zone()->propertyTree().getChild(cx, shape, child);
 }
 
@@ -128,7 +128,7 @@ CreateEnvironmentShape(JSContext* cx, BindingIter& bi, const Class* cls,
         return nullptr;
 
     RootedAtom name(cx);
-    StackBaseShape stackBase(cx, cls, baseShapeFlags);
+    StackBaseShape stackBase(cls, baseShapeFlags);
     for (; bi; bi++) {
         BindingLocation loc = bi.location();
         if (loc.kind() == BindingLocation::Kind::Environment) {

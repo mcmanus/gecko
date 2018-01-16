@@ -922,12 +922,12 @@ class AssemblerX86Shared : public AssemblerShared
     void j(Condition cond, RepatchLabel* label) { jSrc(cond, label); }
     void jmp(RepatchLabel* label) { jmpSrc(label); }
 
-    void j(Condition cond, wasm::TrapDesc target) {
+    void j(Condition cond, wasm::OldTrapDesc target) {
         Label l;
         j(cond, &l);
         bindLater(&l, target);
     }
-    void jmp(wasm::TrapDesc target) {
+    void jmp(wasm::OldTrapDesc target) {
         Label l;
         jmp(&l);
         bindLater(&l, target);
@@ -963,11 +963,11 @@ class AssemblerX86Shared : public AssemblerShared
         }
         label->bind(dst.offset());
     }
-    void bindLater(Label* label, wasm::TrapDesc target) {
+    void bindLater(Label* label, wasm::OldTrapDesc target) {
         if (label->used()) {
             JmpSrc jmp(label->offset());
             do {
-                append(wasm::TrapSite(target, jmp.offset()));
+                append(wasm::OldTrapSite(target, jmp.offset()));
             } while (masm.nextJump(jmp, &jmp));
         }
         label->reset();
@@ -1100,6 +1100,11 @@ class AssemblerX86Shared : public AssemblerShared
 
     void breakpoint() {
         masm.int3();
+    }
+    CodeOffset ud2() {
+        CodeOffset off(masm.currentOffset());
+        masm.ud2();
+        return off;
     }
 
     static bool HasSSE2() { return CPUInfo::IsSSE2Present(); }
@@ -1999,6 +2004,21 @@ class AssemblerX86Shared : public AssemblerShared
             break;
           case Operand::MEM_SCALE:
             masm.cmpxchgl(src.encoding(), mem.disp(), mem.base(), mem.index(), mem.scale());
+            break;
+          default:
+            MOZ_CRASH("unexpected operand kind");
+        }
+    }
+    void lock_cmpxchg8b(Register srcHi, Register srcLo, Register newHi, Register newLo, const Operand& mem) {
+        masm.prefix_lock();
+        switch (mem.kind()) {
+          case Operand::MEM_REG_DISP:
+            masm.cmpxchg8b(srcHi.encoding(), srcLo.encoding(), newHi.encoding(), newLo.encoding(),
+                           mem.disp(), mem.base());
+            break;
+          case Operand::MEM_SCALE:
+            masm.cmpxchg8b(srcHi.encoding(), srcLo.encoding(), newHi.encoding(), newLo.encoding(),
+                           mem.disp(), mem.base(), mem.index(), mem.scale());
             break;
           default:
             MOZ_CRASH("unexpected operand kind");

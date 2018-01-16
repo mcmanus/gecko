@@ -59,12 +59,6 @@ function makeLivemark(p, mintGUID) {
   return b;
 }
 
-add_task(async function setup() {
-  initTestLogging("Trace");
-  Log.repository.getLogger("Sync.Engine.Bookmarks").level = Log.Level.Trace;
-  Log.repository.getLogger("Sync.Store.Bookmarks").level  = Log.Level.Trace;
-});
-
 add_task(async function test_livemark_descriptions() {
   let engine = new BookmarksEngine(Service);
   await engine.initialize();
@@ -86,7 +80,7 @@ add_task(async function test_livemark_descriptions() {
   await doRecord(makeLivemark(record));
 
   // Attempt to provoke an error by adding a bad description anno.
-  let id = await store.idForGUID(record.id);
+  let id = await PlacesUtils.promiseItemId(record.id);
   PlacesUtils.annotations.setItemAnnotation(id, DESCRIPTION_ANNO, "", 0,
                                             PlacesUtils.annotations.EXPIRE_NEVER);
 
@@ -102,29 +96,27 @@ add_task(async function test_livemark_invalid() {
 
   _("Parent is unknown. Will be set to unfiled.");
   let lateParentRec = makeLivemark(record631361.payload, true);
-  let parentGUID = Utils.makeGUID();
-  lateParentRec.parentid = parentGUID;
-  do_check_eq(-1, (await store.idForGUID(parentGUID)));
+  lateParentRec.parentid = Utils.makeGUID();
 
   await store.create(lateParentRec);
-  let recID = await store.idForGUID(lateParentRec.id, true);
-  do_check_true(recID > 0);
-  do_check_eq(PlacesUtils.bookmarks.getFolderIdForItem(recID),
-              PlacesUtils.bookmarks.unfiledBookmarksFolder);
+  let recInfo = await PlacesUtils.bookmarks.fetch(lateParentRec.id);
+  Assert.equal(recInfo.parentGuid, PlacesUtils.bookmarks.unfiledGuid);
 
   _("No feed URI, which is invalid. Will be skipped.");
   let noFeedURIRec = makeLivemark(record631361.payload, true);
   delete noFeedURIRec.cleartext.feedUri;
   await store.create(noFeedURIRec);
   // No exception, but no creation occurs.
-  do_check_eq(-1, (await store.idForGUID(noFeedURIRec.id, true)));
+  let noFeedURIItem = await PlacesUtils.bookmarks.fetch(noFeedURIRec.id);
+  Assert.equal(null, noFeedURIItem);
 
   _("Parent is a Livemark. Will be skipped.");
   let lmParentRec = makeLivemark(record631361.payload, true);
-  lmParentRec.parentid = await store.GUIDForId(recID);
+  lmParentRec.parentid = recInfo.guid;
   await store.create(lmParentRec);
   // No exception, but no creation occurs.
-  do_check_eq(-1, (await store.idForGUID(lmParentRec.id, true)));
+  let lmParentItem = await PlacesUtils.bookmarks.fetch(lmParentRec.id);
+  Assert.equal(null, lmParentItem);
 
   await engine.finalize();
 });

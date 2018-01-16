@@ -3205,7 +3205,7 @@ jit::ExtractLinearSum(MDefinition* ins, MathSpace space)
     if (ins->isAdd()) {
         int32_t constant;
         if (space == MathSpace::Modulo)
-            constant = lsum.constant + rsum.constant;
+            constant = uint32_t(lsum.constant) + uint32_t(rsum.constant);
         else if (!SafeAdd(lsum.constant, rsum.constant, &constant))
             return SimpleLinearSum(ins, 0);
         return SimpleLinearSum(lsum.term ? lsum.term : rsum.term, constant);
@@ -3216,7 +3216,7 @@ jit::ExtractLinearSum(MDefinition* ins, MathSpace space)
     if (lsum.term) {
         int32_t constant;
         if (space == MathSpace::Modulo)
-            constant = lsum.constant - rsum.constant;
+            constant = uint32_t(lsum.constant) - uint32_t(rsum.constant);
         else if (!SafeSub(lsum.constant, rsum.constant, &constant))
             return SimpleLinearSum(ins, 0);
         return SimpleLinearSum(lsum.term, constant);
@@ -4080,7 +4080,7 @@ AnalyzePoppedThis(JSContext* cx, ObjectGroup* group,
         // Add the property to the object, being careful not to update type information.
         DebugOnly<unsigned> slotSpan = baseobj->slotSpan();
         MOZ_ASSERT(!baseobj->containsPure(id));
-        if (!NativeObject::addDataProperty(cx, baseobj, id, baseobj->slotSpan(), JSPROP_ENUMERATE))
+        if (!NativeObject::addDataProperty(cx, baseobj, id, SHAPE_INVALID_SLOT, JSPROP_ENUMERATE))
             return false;
         MOZ_ASSERT(baseobj->slotSpan() != slotSpan);
         MOZ_ASSERT(!baseobj->inDictionaryMode());
@@ -4430,7 +4430,8 @@ jit::AnalyzeArgumentsUsage(JSContext* cx, JSScript* scriptArg)
     if (script->length() > MAX_SCRIPT_SIZE)
         return true;
 
-    if (!script->ensureHasTypes(cx))
+    AutoKeepTypeScripts keepTypes(cx);
+    if (!script->ensureHasTypes(cx, keepTypes))
         return false;
 
     TraceLoggerThread* logger = TraceLoggerForCurrentThread(cx);

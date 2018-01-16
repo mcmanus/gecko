@@ -524,7 +524,7 @@ Layer::CalculateScissorRect(const RenderTargetIntRect& aCurrentScissorRect)
     // See DefaultComputeEffectiveTransforms below
     NS_ASSERTION(is2D && matrix.PreservesAxisAlignedRectangles(),
                  "Non preserves axis aligned transform with clipped child should have forced intermediate surface");
-    gfx::Rect r(scissor.x, scissor.y, scissor.Width(), scissor.Height());
+    gfx::Rect r(scissor.X(), scissor.Y(), scissor.Width(), scissor.Height());
     gfxRect trScissor = gfx::ThebesRect(matrix.TransformBounds(r));
     trScissor.Round();
     IntRect tmp;
@@ -840,8 +840,7 @@ ContainerLayer::ContainerLayer(LayerManager* aManager, void* aImplData)
     mUseIntermediateSurface(false),
     mSupportsComponentAlphaChildren(false),
     mMayHaveReadbackChild(false),
-    mChildrenChanged(false),
-    mEventRegionsOverride(EventRegionsOverride::NoOverride)
+    mChildrenChanged(false)
 {
 }
 
@@ -1035,8 +1034,7 @@ ContainerLayer::FillSpecificAttributes(SpecificLayerAttributes& aAttrs)
 {
   aAttrs = ContainerLayerAttributes(mPreXScale, mPreYScale,
                                     mInheritedXScale, mInheritedYScale,
-                                    mPresShellResolution, mScaleToResolution,
-                                    mEventRegionsOverride);
+                                    mPresShellResolution, mScaleToResolution);
 }
 
 bool
@@ -1814,15 +1812,16 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   if (Is3DContextLeaf()) {
     aStream << " [is3DContextLeaf]";
   }
-  if (IsScrollbarContainer()) {
+  if (GetScrollbarContainerDirection().isSome()) {
     aStream << " [scrollbar]";
   }
-  ScrollDirection thumbDirection = GetScrollThumbData().mDirection;
-  if (thumbDirection == ScrollDirection::VERTICAL) {
-    aStream << nsPrintfCString(" [vscrollbar=%" PRIu64 "]", GetScrollbarTargetContainerId()).get();
-  }
-  if (thumbDirection == ScrollDirection::HORIZONTAL) {
-    aStream << nsPrintfCString(" [hscrollbar=%" PRIu64 "]", GetScrollbarTargetContainerId()).get();
+  if (Maybe<ScrollDirection> thumbDirection = GetScrollThumbData().mDirection) {
+    if (*thumbDirection == ScrollDirection::eVertical) {
+      aStream << nsPrintfCString(" [vscrollbar=%" PRIu64 "]", GetScrollbarTargetContainerId()).get();
+    }
+    if (*thumbDirection == ScrollDirection::eHorizontal) {
+      aStream << nsPrintfCString(" [hscrollbar=%" PRIu64 "]", GetScrollbarTargetContainerId()).get();
+    }
   }
   if (GetIsFixedPosition()) {
     LayerPoint anchor = GetFixedPositionAnchor();
@@ -1835,12 +1834,12 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
     aStream << nsPrintfCString(" [isStickyPosition scrollId=%" PRIu64 " outer=(%.3f,%.3f)-(%.3f,%.3f) "
                      "inner=(%.3f,%.3f)-(%.3f,%.3f)]",
                      GetStickyScrollContainerId(),
-                     GetStickyScrollRangeOuter().x,
-                     GetStickyScrollRangeOuter().y,
+                     GetStickyScrollRangeOuter().X(),
+                     GetStickyScrollRangeOuter().Y(),
                      GetStickyScrollRangeOuter().XMost(),
                      GetStickyScrollRangeOuter().YMost(),
-                     GetStickyScrollRangeInner().x,
-                     GetStickyScrollRangeInner().y,
+                     GetStickyScrollRangeInner().X(),
+                     GetStickyScrollRangeInner().Y(),
                      GetStickyScrollRangeInner().XMost(),
                      GetStickyScrollRangeInner().YMost()).get();
   }
@@ -1891,8 +1890,8 @@ static void
 DumpRect(layerscope::LayersPacket::Layer::Rect* aLayerRect,
          const BaseRect<T, Sub, Point, SizeT, MarginT>& aRect)
 {
-  aLayerRect->set_x(aRect.x);
-  aLayerRect->set_y(aRect.y);
+  aLayerRect->set_x(aRect.X());
+  aLayerRect->set_y(aRect.Y());
   aLayerRect->set_w(aRect.Width());
   aLayerRect->set_h(aRect.Height());
 }
@@ -1967,9 +1966,8 @@ Layer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
   // Component alpha
   layer->set_calpha(static_cast<bool>(GetContentFlags() & CONTENT_COMPONENT_ALPHA));
   // Vertical or horizontal bar
-  ScrollDirection thumbDirection = GetScrollThumbData().mDirection;
-  if (thumbDirection != ScrollDirection::NONE) {
-    layer->set_direct(thumbDirection == ScrollDirection::VERTICAL ?
+  if (Maybe<ScrollDirection> thumbDirection = GetScrollThumbData().mDirection) {
+    layer->set_direct(*thumbDirection == ScrollDirection::eVertical ?
                       LayersPacket::Layer::VERTICAL :
                       LayersPacket::Layer::HORIZONTAL);
     layer->set_barid(GetScrollbarTargetContainerId());
@@ -2062,12 +2060,6 @@ ContainerLayer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   if (mScaleToResolution) {
     aStream << nsPrintfCString(" [presShellResolution=%g]", mPresShellResolution).get();
   }
-  if (mEventRegionsOverride & EventRegionsOverride::ForceDispatchToContent) {
-    aStream << " [force-dtc]";
-  }
-  if (mEventRegionsOverride & EventRegionsOverride::ForceEmptyHitRegion) {
-    aStream << " [force-ehr]";
-  }
 }
 
 void
@@ -2125,23 +2117,6 @@ ColorLayer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
   LayersPacket::Layer* layer = aPacket->mutable_layer(aPacket->layer_size()-1);
   layer->set_type(LayersPacket::Layer::ColorLayer);
   layer->set_color(mColor.ToABGR());
-}
-
-void
-TextLayer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
-{
-  Layer::PrintInfo(aStream, aPrefix);
-  AppendToString(aStream, mBounds, " [bounds=", "]");
-}
-
-void
-TextLayer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
-{
-  Layer::DumpPacket(aPacket, aParent);
-  // Get this layer data
-  using namespace layerscope;
-  LayersPacket::Layer* layer = aPacket->mutable_layer(aPacket->layer_size()-1);
-  layer->set_type(LayersPacket::Layer::TextLayer);
 }
 
 void
@@ -2243,6 +2218,12 @@ RefLayer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   ContainerLayer::PrintInfo(aStream, aPrefix);
   if (0 != mId) {
     AppendToString(aStream, mId, " [id=", "]");
+  }
+  if (mEventRegionsOverride & EventRegionsOverride::ForceDispatchToContent) {
+    aStream << " [force-dtc]";
+  }
+  if (mEventRegionsOverride & EventRegionsOverride::ForceEmptyHitRegion) {
+    aStream << " [force-ehr]";
   }
 }
 
@@ -2471,7 +2452,7 @@ SetAntialiasingFlags(Layer* aLayer, DrawTarget* aTarget)
   }
 
   const IntRect& bounds = aLayer->GetVisibleRegion().ToUnknownRegion().GetBounds();
-  gfx::Rect transformedBounds = aTarget->GetTransform().TransformBounds(gfx::Rect(Float(bounds.x), Float(bounds.y),
+  gfx::Rect transformedBounds = aTarget->GetTransform().TransformBounds(gfx::Rect(Float(bounds.X()), Float(bounds.Y()),
                                                                                   Float(bounds.Width()), Float(bounds.Height())));
   transformedBounds.RoundOut();
   IntRect intTransformedBounds;
@@ -2484,22 +2465,7 @@ SetAntialiasingFlags(Layer* aLayer, DrawTarget* aTarget)
 IntRect
 ToOutsideIntRect(const gfxRect &aRect)
 {
-  return IntRect::RoundOut(aRect.x, aRect.y, aRect.Width(), aRect.Height());
-}
-
-TextLayer::TextLayer(LayerManager* aManager, void* aImplData)
-  : Layer(aManager, aImplData)
-{}
-
-TextLayer::~TextLayer()
-{}
-
-void
-TextLayer::SetGlyphs(nsTArray<GlyphArray>&& aGlyphs)
-{
-  MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) Glyphs", this));
-  mGlyphs = Move(aGlyphs);
-  Mutated();
+  return IntRect::RoundOut(aRect.X(), aRect.Y(), aRect.Width(), aRect.Height());
 }
 
 } // namespace layers

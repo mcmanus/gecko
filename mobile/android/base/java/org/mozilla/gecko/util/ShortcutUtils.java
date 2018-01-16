@@ -23,7 +23,6 @@ import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.db.UrlAnnotations;
-import org.mozilla.gecko.gfx.BitmapUtils;
 
 import java.lang.reflect.Constructor;
 
@@ -112,6 +111,29 @@ public class ShortcutUtils {
         //     .build();
 
         // mgr.requestPinShortcut(info, null);
+    }
+
+    public static boolean isPinShortcutSupported() {
+        if (Versions.feature26Plus) {
+            return isPinShortcutSupported26();
+        }
+        return true;
+    }
+
+    @TargetApi(26)
+    private static boolean isPinShortcutSupported26() {
+        final Context context = GeckoAppShell.getApplicationContext();
+        try {
+            final Class<?> mgrCls = Class.forName("android.content.pm.ShortcutManager");
+            final Object mgr = context.getSystemService(mgrCls);
+
+            final boolean supported = (boolean)
+                mgrCls.getDeclaredMethod("isRequestPinShortcutSupported")
+                .invoke(mgr);
+            return supported;
+        } catch (final Exception e) {
+            return false;
+        }
     }
 
     private static Bitmap getLauncherIcon(Bitmap aSource, int size) {

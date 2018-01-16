@@ -3,11 +3,14 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 /* import-globals-from ../../../../framework/test/shared-head.js */
-/* exported WCUL10n, openNewTabAndConsole, waitForMessages, waitFor, findMessage,
-   openContextMenu, hideContextMenu, loadDocument, hasFocus,
-   waitForNodeMutation, testOpenInDebugger, checkClickOnNode */
+/* eslint no-unused-vars: [2, {"vars": "local"}] */
 
 "use strict";
+
+// Import helpers registering the test-actor in remote targets
+Services.scriptloader.loadSubScript(
+  "chrome://mochitests/content/browser/devtools/client/shared/test/test-actor-registry.js",
+  this);
 
 // shared-head.js handles imports, constants, and utility functions
 // Load the shared-head file first.
@@ -17,6 +20,9 @@ Services.scriptloader.loadSubScript(
 
 var {HUDService} = require("devtools/client/webconsole/hudservice");
 var WCUL10n = require("devtools/client/webconsole/webconsole-l10n");
+const DOCS_GA_PARAMS = "?utm_source=mozilla" +
+                       "&utm_medium=firefox-console-errors" +
+                       "&utm_campaign=default";
 
 Services.prefs.setBoolPref("devtools.webconsole.new-frontend-enabled", true);
 registerCleanupFunction(function* () {
@@ -69,12 +75,12 @@ async function openNewTabAndConsole(url, clearJstermHistory = true) {
  *        - hud: the webconsole
  *        - messages: Array[Object]. An array of messages to match.
             Current supported options:
- *            - text: Exact text match in .message-body
+ *            - text: Partial text match in .message-body
  */
 function waitForMessages({ hud, messages }) {
   return new Promise(resolve => {
-    let numMatched = 0;
-    let receivedLog = hud.ui.on("new-messages",
+    const matchedMessages = [];
+    hud.ui.on("new-messages",
       function messagesReceived(e, newMessages) {
         for (let message of messages) {
           if (message.matched) {
@@ -84,22 +90,36 @@ function waitForMessages({ hud, messages }) {
           for (let newMessage of newMessages) {
             let messageBody = newMessage.node.querySelector(".message-body");
             if (messageBody.textContent.includes(message.text)) {
-              numMatched++;
+              matchedMessages.push(newMessage);
               message.matched = true;
-              info("Matched a message with text: " + message.text +
-                ", still waiting for " + (messages.length - numMatched) + " messages");
+              const messagesLeft = messages.length - matchedMessages.length;
+              info(`Matched a message with text: "${message.text}", ` + (messagesLeft > 0
+                ? `still waiting for ${messagesLeft} messages.`
+                : `all messages received.`)
+              );
               break;
             }
           }
 
-          if (numMatched === messages.length) {
+          if (matchedMessages.length === messages.length) {
             hud.ui.off("new-messages", messagesReceived);
-            resolve(receivedLog);
+            resolve(matchedMessages);
             return;
           }
         }
       });
   });
+}
+
+/**
+ * Wait for a single message in the web console output, resolving once it is received.
+ *
+ * @param {Object} hud : the webconsole
+ * @param {String} text : text included in .message-body
+ */
+async function waitForMessage(hud, text) {
+  const messages = await waitForMessages({hud, messages: [{text}]});
+  return messages[0];
 }
 
 /**
@@ -192,10 +212,8 @@ function hideContextMenu(hud) {
 }
 
 function loadDocument(url, browser = gBrowser.selectedBrowser) {
-  return new Promise(resolve => {
-    browser.addEventListener("load", resolve, {capture: true, once: true});
-    BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
-  });
+  BrowserTestUtils.loadURI(browser, url);
+  return BrowserTestUtils.browserLoaded(browser);
 }
 
 /**
@@ -270,4 +288,209 @@ async function checkClickOnNode(hud, toolbox, frameLinkNode) {
 function hasFocus(node) {
   return node.ownerDocument.activeElement == node
     && node.ownerDocument.hasFocus();
+}
+
+/**
+ * Set the value of the JsTerm and its caret position, and fire a completion request.
+ *
+ * @param {JsTerm} jsterm
+ * @param {String} value : The value to set the jsterm to.
+ * @param {Integer} caretIndexOffset : A number that will be added to value.length
+ *                  when setting the caret. A negative number will place the caret
+ *                  in (end - offset) position. Default to 0 (caret set at the end)
+ * @param {Integer} completionType : One of the following jsterm property
+ *                   - COMPLETE_FORWARD
+ *                   - COMPLETE_BACKWARD
+ *                   - COMPLETE_HINT_ONLY
+ *                   - COMPLETE_PAGEUP
+ *                   - COMPLETE_PAGEDOWN
+ *                  Will default to COMPLETE_HINT_ONLY.
+ * @returns {Promise} resolves when the jsterm is completed.
+ */
+function jstermSetValueAndComplete(jsterm, value, caretIndexOffset = 0, completionType) {
+  const {inputNode} = jsterm;
+  inputNode.value = value;
+  let index = value.length + caretIndexOffset;
+  inputNode.setSelectionRange(index, index);
+
+  return jstermComplete(jsterm, completionType);
+}
+
+/**
+ * Fires a completion request on the jsterm with the specified completionType
+ *
+ * @param {JsTerm} jsterm
+ * @param {Integer} completionType : One of the following jsterm property
+ *                   - COMPLETE_FORWARD
+ *                   - COMPLETE_BACKWARD
+ *                   - COMPLETE_HINT_ONLY
+ *                   - COMPLETE_PAGEUP
+ *                   - COMPLETE_PAGEDOWN
+ *                  Will default to COMPLETE_HINT_ONLY.
+ * @returns {Promise} resolves when the jsterm is completed.
+ */
+function jstermComplete(jsterm, completionType = jsterm.COMPLETE_HINT_ONLY) {
+  const updated = jsterm.once("autocomplete-updated");
+  jsterm.complete(completionType);
+  return updated;
+}
+
+/**
+ * Open the JavaScript debugger.
+ *
+ * @param object options
+ *        Options for opening the debugger:
+ *        - tab: the tab you want to open the debugger for.
+ * @return object
+ *         A promise that is resolved once the debugger opens, or rejected if
+ *         the open fails. The resolution callback is given one argument, an
+ *         object that holds the following properties:
+ *         - target: the Target object for the Tab.
+ *         - toolbox: the Toolbox instance.
+ *         - panel: the jsdebugger panel instance.
+ */
+async function openDebugger(options = {}) {
+  if (!options.tab) {
+    options.tab = gBrowser.selectedTab;
+  }
+
+  let target = TargetFactory.forTab(options.tab);
+  let toolbox = gDevTools.getToolbox(target);
+  let dbgPanelAlreadyOpen = toolbox && toolbox.getPanel("jsdebugger");
+  if (dbgPanelAlreadyOpen) {
+    await toolbox.selectTool("jsdebugger");
+
+    return {
+      target,
+      toolbox,
+      panel: toolbox.getCurrentPanel()
+    };
+  }
+
+  toolbox = await gDevTools.showToolbox(target, "jsdebugger");
+  let panel = toolbox.getCurrentPanel();
+
+  // Do not clear VariableView lazily so it doesn't disturb test ending.
+  panel._view.Variables.lazyEmpty = false;
+
+  await panel.panelWin.DebuggerController.waitForSourcesLoaded();
+  return {target, toolbox, panel};
+}
+
+/**
+ * Open the Web Console for the given tab, or the current one if none given.
+ *
+ * @param nsIDOMElement tab
+ *        Optional tab element for which you want open the Web Console.
+ *        Defaults to current selected tab.
+ * @return Promise
+ *         A promise that is resolved with the console hud once the web console is open.
+ */
+async function openConsole(tab) {
+  let target = TargetFactory.forTab(tab || gBrowser.selectedTab);
+  const toolbox = await gDevTools.showToolbox(target, "webconsole");
+  return toolbox.getCurrentPanel().hud;
+}
+
+/**
+ * Close the Web Console for the given tab.
+ *
+ * @param nsIDOMElement [tab]
+ *        Optional tab element for which you want close the Web Console.
+ *        Defaults to current selected tab.
+ * @return object
+ *         A promise that is resolved once the web console is closed.
+ */
+async function closeConsole(tab = gBrowser.selectedTab) {
+  let target = TargetFactory.forTab(tab);
+  let toolbox = gDevTools.getToolbox(target);
+  if (toolbox) {
+    await toolbox.destroy();
+  }
+}
+
+/**
+ * Fake clicking a link and return the URL we would have navigated to.
+ * This function should be used to check external links since we can't access
+ * network in tests.
+ *
+ * @param ElementNode element
+ *        The <a> element we want to simulate click on.
+ * @returns Promise
+ *          A Promise that resolved when the link clik simulation occured.
+ */
+function simulateLinkClick(element) {
+  return new Promise((resolve) => {
+    // Override openUILinkIn to prevent navigating.
+    let oldOpenUILinkIn = window.openUILinkIn;
+    window.openUILinkIn = function (link) {
+      window.openUILinkIn = oldOpenUILinkIn;
+      resolve(link);
+    };
+
+    // Click on the link.
+    element.click();
+  });
+}
+
+/**
+ * Open a new browser window and return a promise that resolves when the new window has
+ * fired the "browser-delayed-startup-finished" event.
+ *
+ * @returns Promise
+ *          A Promise that resolves when the window is ready.
+ */
+function openNewBrowserWindow() {
+  let win = OpenBrowserWindow();
+  return new Promise(resolve => {
+    Services.obs.addObserver(function observer(subject, topic) {
+      if (win == subject) {
+        Services.obs.removeObserver(observer, topic);
+        resolve(win);
+      }
+    }, "browser-delayed-startup-finished");
+  });
+}
+
+/**
+ * Open a network request logged in the webconsole in the netmonitor panel.
+ *
+ * @param {Object} toolbox
+ * @param {Object} hud
+ * @param {String} url
+ *        URL of the request as logged in the netmonitor.
+ * @param {String} urlInConsole
+ *        (optional) Use if the logged URL in webconsole is different from the real URL.
+ */
+async function openMessageInNetmonitor(toolbox, hud, url, urlInConsole) {
+  // By default urlInConsole should be the same as the complete url.
+  urlInConsole = urlInConsole || url;
+
+  let message = await waitFor(() => findMessage(hud, urlInConsole));
+
+  let onNetmonitorSelected = toolbox.once("netmonitor-selected", (event, panel) => {
+    return panel;
+  });
+
+  let menuPopup = await openContextMenu(hud, message);
+  let openInNetMenuItem = menuPopup.querySelector("#console-menu-open-in-network-panel");
+  ok(openInNetMenuItem, "open in network panel item is enabled");
+  openInNetMenuItem.click();
+
+  const {panelWin} = await onNetmonitorSelected;
+  ok(true, "The netmonitor panel is selected when clicking on the network message");
+
+  let { store, windowRequire } = panelWin;
+  let actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  let { getSelectedRequest } =
+    windowRequire("devtools/client/netmonitor/src/selectors/index");
+
+  store.dispatch(actions.batchEnable(false));
+
+  await waitUntil(() => {
+    const selected = getSelectedRequest(store.getState());
+    return selected && selected.url === url;
+  });
+
+  ok(true, "The attached url is correct.");
 }

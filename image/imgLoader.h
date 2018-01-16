@@ -41,6 +41,8 @@ class ImageURL;
 class imgCacheEntry
 {
 public:
+  static uint32_t SecondsFromPRTime(PRTime prTime);
+
   imgCacheEntry(imgLoader* loader, imgRequest* request,
                 bool aForcePrincipalCheck);
   ~imgCacheEntry();
@@ -555,6 +557,7 @@ public:
                     bool forcePrincipalCheckForCacheEntry);
 
   void AddProxy(imgRequestProxy* aProxy);
+  void RemoveProxy(imgRequestProxy* aProxy);
 
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSITHREADRETARGETABLESTREAMLISTENER

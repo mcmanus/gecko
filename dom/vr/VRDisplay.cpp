@@ -100,7 +100,7 @@ VRDisplay::UpdateVRDisplays(nsTArray<RefPtr<VRDisplay>>& aDisplays, nsPIDOMWindo
       RefPtr<gfx::VRDisplayClient> display = updatedDisplays[i];
       bool isNewDisplay = true;
       for (size_t j = 0; j < aDisplays.Length(); j++) {
-        if (aDisplays[j]->GetClient()->GetDisplayInfo() == display->GetDisplayInfo()) {
+        if (aDisplays[j]->GetClient()->GetDisplayInfo().GetDisplayID() == display->GetDisplayInfo().GetDisplayID()) {
           displays.AppendElement(aDisplays[j]);
           isNewDisplay = false;
         }
@@ -657,6 +657,11 @@ void
 VRDisplay::SubmitFrame()
 {
   AUTO_PROFILER_TRACING("VR", "SubmitFrameAtVRDisplay");
+
+  if (mClient && !mClient->IsPresentationGenerationCurrent()) {
+    mPresentation = nullptr;
+    mClient->MakePresentationGenerationCurrent();
+  }
 
   if (mPresentation) {
     mPresentation->SubmitFrame();

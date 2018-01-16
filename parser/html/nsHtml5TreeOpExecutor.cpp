@@ -16,6 +16,7 @@
 #include "nsIDocShellTreeItem.h"
 #include "nsIDocShell.h"
 #include "nsIDOMDocument.h"
+#include "nsINestedURI.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsIWebShellServices.h"
 #include "nsContentUtils.h"
@@ -509,10 +510,17 @@ nsHtml5TreeOpExecutor::RunFlushLoop()
         }
       }
 
+      if (MOZ_UNLIKELY(!mParser)) {
+        // The parse ended during an update pause.
+        return;
+      }
+      if (streamEnded) {
+        GetParser()->PermanentlyUndefineInsertionPoint();
+      }
     } // end autoFlush
 
     if (MOZ_UNLIKELY(!mParser)) {
-      // The parse ended already.
+      // Ending the doc update caused a call to nsIParser::Terminate().
       return;
     }
 
@@ -586,12 +594,9 @@ nsHtml5TreeOpExecutor::FlushDocumentWrite()
     // autoFlush clears mOpQueue in its destructor.
     nsHtml5AutoFlush autoFlush(this);
 
-
-  nsHtml5TreeOperation* start = mOpQueue.Elements();
-  nsHtml5TreeOperation* end = start + mOpQueue.Length();
-  for (nsHtml5TreeOperation* iter = start;
-       iter < end;
-       ++iter) {
+    nsHtml5TreeOperation* start = mOpQueue.Elements();
+    nsHtml5TreeOperation* end = start + mOpQueue.Length();
+    for (nsHtml5TreeOperation* iter = start; iter < end; ++iter) {
       if (MOZ_UNLIKELY(!mParser)) {
         // The previous tree op caused a call to nsIParser::Terminate().
         return rv;
@@ -605,6 +610,14 @@ nsHtml5TreeOpExecutor::FlushDocumentWrite()
       }
     }
 
+    if (MOZ_UNLIKELY(!mParser)) {
+      // The parse ended during an update pause.
+      return rv;
+    }
+    if (streamEnded) {
+      // This should be redundant but let's do it just in case.
+      GetParser()->PermanentlyUndefineInsertionPoint();
+    }
   } // autoFlush
 
   if (MOZ_UNLIKELY(!mParser)) {
@@ -637,16 +650,11 @@ nsHtml5TreeOpExecutor::IsScriptEnabled()
   // Note that if we have no document or no docshell or no global or whatnot we
   // want to claim script _is_ enabled, so we don't parse the contents of
   // <noscript> tags!
-  if (!mDocument || !mDocShell)
+  if (!mDocument || !mDocShell) {
     return true;
-  nsCOMPtr<nsIScriptGlobalObject> globalObject = do_QueryInterface(mDocument->GetInnerWindow());
-  // Getting context is tricky if the document hasn't had its
-  // GlobalObject set yet
-  if (!globalObject) {
-    globalObject = mDocShell->GetScriptGlobalObject();
   }
-  NS_ENSURE_TRUE(globalObject && globalObject->GetGlobalJSObject(), true);
-  return xpc::Scriptability::Get(globalObject->GetGlobalJSObject()).Allowed();
+
+  return mDocument->IsScriptEnabled();
 }
 
 void

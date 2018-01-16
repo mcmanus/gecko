@@ -15,18 +15,12 @@ function expandNode(dbg, index) {
   return onLoadProperties;
 }
 
-function toggleScopes(dbg) {
-  return findElement(dbg, "scopesHeader").click();
-}
-
 function onLoadObjectProperties(dbg) {
   return waitForDispatch(dbg, "LOAD_OBJECT_PROPERTIES");
 }
 
 add_task(async function() {
   const dbg = await initDebugger("doc-script-mutate.html");
-
-  toggleScopes(dbg);
 
   let onPaused = waitForPaused(dbg);
   invokeInTab("mutate");
@@ -78,10 +72,8 @@ add_task(async function() {
     'The "lastName" element has the expected "Doe" value'
   );
 
-  info("Resuming");
-  onPaused = waitForPaused(dbg);
   await resume(dbg);
-  await onPaused;
+  await waitForPaused(dbg);
 
   is(
     getScopeNodeLabel(dbg, 2),

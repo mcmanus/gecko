@@ -21,6 +21,10 @@ VSWINPATH="$(cd ${MSVC_DIR} && pwd)"
 
 echo vswinpath ${VSWINPATH}
 
+# LLVM_ENABLE_DIA_SDK is set if the directory "$ENV{VSINSTALLDIR}DIA SDK"
+# exists.
+export VSINSTALLDIR="${VSWINPATH}/"
+
 export WINDOWSSDKDIR="${VSWINPATH}/SDK"
 export WIN32_REDIST_DIR="${VSWINPATH}/VC/redist/x86/Microsoft.VC141.CRT"
 export WIN_UCRT_REDIST_DIR="${VSWINPATH}/SDK/Redist/ucrt/DLLs/x86"
@@ -47,11 +51,13 @@ EOF
 set +x
 
 BUILD_CLANG_DIR=build/src/build/build-clang
-MOZCONFIG=${MOZCONFIG} build/src/mach python ${BUILD_CLANG_DIR}/build-clang.py -c ${BUILD_CLANG_DIR}/${1}
+cd ${BUILD_CLANG_DIR}
+MOZCONFIG=${MOZCONFIG} ../../mach python ./build-clang.py -c ./${1}
+cd -
 
 set -x
 
 # Put a tarball in the artifacts dir
 UPLOAD_PATH=public/build
 mkdir -p ${UPLOAD_PATH}
-cp clang*.tar.* ${UPLOAD_PATH}
+cp ${BUILD_CLANG_DIR}/clang*.tar.* ${UPLOAD_PATH}

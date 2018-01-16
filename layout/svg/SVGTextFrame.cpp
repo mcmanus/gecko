@@ -2943,7 +2943,7 @@ SVGTextDrawPathCallbacks::HandleTextGeometry()
   } else {
     // Normal painting.
     gfxContextMatrixAutoSaveRestore saveMatrix(&mContext);
-    mContext.SetMatrix(mCanvasTM);
+    mContext.SetMatrixDouble(mCanvasTM);
 
     FillAndStrokeGeometry();
   }
@@ -3202,7 +3202,7 @@ SVGTextFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
     return;
   }
   DisplayOutline(aBuilder, aLists);
-  aLists.Content()->AppendNewToTop(
+  aLists.Content()->AppendToTop(
     new (aBuilder) nsDisplaySVGText(aBuilder, this));
 }
 
@@ -3331,7 +3331,7 @@ SVGTextFrame::ScheduleReflowSVGNonDisplayText(nsIPresShell::IntrinsicDirty aReas
 
   MOZ_ASSERT(f, "should have found an ancestor frame to reflow");
 
-  PresContext()->PresShell()->FrameNeedsReflow(f, aReason, NS_FRAME_IS_DIRTY);
+  PresShell()->FrameNeedsReflow(f, aReason, NS_FRAME_IS_DIRTY);
 }
 
 NS_IMPL_ISUPPORTS(SVGTextFrame::MutationObserver, nsIMutationObserver)
@@ -3423,9 +3423,8 @@ SVGTextFrame::HandleAttributeChangeInDescendant(Element* aElement,
 }
 
 void
-SVGTextFrame::FindCloserFrameForSelection(
-                                 nsPoint aPoint,
-                                 nsIFrame::FrameWithDistance* aCurrentBestFrame)
+SVGTextFrame::FindCloserFrameForSelection(const nsPoint& aPoint,
+                                          FrameWithDistance* aCurrentBestFrame)
 {
   if (GetStateBits() & NS_FRAME_IS_NONDISPLAY) {
     return;
@@ -3589,7 +3588,7 @@ SVGTextFrame::PaintSVG(gfxContext& aContext,
 
   nsPresContext* presContext = PresContext();
 
-  gfxMatrix initialMatrix = aContext.CurrentMatrix();
+  gfxMatrix initialMatrix = aContext.CurrentMatrixDouble();
 
   if (mState & NS_FRAME_IS_NONDISPLAY) {
     // If we are in a canvas DrawWindow call that used the
@@ -3650,7 +3649,7 @@ SVGTextFrame::PaintSVG(gfxContext& aContext,
   gfxContextMatrixAutoSaveRestore matSR(&aContext);
   aContext.NewPath();
   aContext.Multiply(canvasTMForChildren);
-  gfxMatrix currentMatrix = aContext.CurrentMatrix();
+  gfxMatrix currentMatrix = aContext.CurrentMatrixDouble();
 
   RefPtr<nsCaret> caret = presContext->PresShell()->GetCaret();
   nsRect caretRect;
@@ -3687,7 +3686,7 @@ SVGTextFrame::PaintSVG(gfxContext& aContext,
     gfxMatrix runTransform =
       run.GetTransformFromUserSpaceForPainting(presContext, item) *
       currentMatrix;
-    aContext.SetMatrix(runTransform);
+    aContext.SetMatrixDouble(runTransform);
 
     if (drawMode != DrawMode(0)) {
       bool paintSVGGlyphs;
@@ -4213,7 +4212,7 @@ SVGTextFrame::GetSubStringLengthSlowFallback(nsIContent* aContent,
   // but we would still need to resort to full reflow for percentage
   // positioning attributes.  For now we just do a full reflow regardless since
   // the cases that would cause us to be called are relatively uncommon.
-  PresContext()->PresShell()->FlushPendingNotifications(FlushType::Layout);
+  PresShell()->FlushPendingNotifications(FlushType::Layout);
 
   UpdateGlyphPositioning();
 
@@ -4581,15 +4580,22 @@ SVGTextFrame::ResolvePositionsForNode(nsIContent* aContent,
   }
 
   if (aContent->IsSVGElement(nsGkAtoms::textPath)) {
-    // <textPath> elements are as if they are specified with x="0" y="0", but
-    // only if they actually have some text content.
+    // <textPath> elements behave as if they have x="0" y="0" on them, but only
+    // if there is not a value for the coordinates that got inherited from a
+    // parent.  We skip this if there is no text content, so that empty
+    // <textPath>s don't interrupt the layout of text in the parent element.
     if (HasTextContent(aContent)) {
       if (MOZ_UNLIKELY(aIndex >= mPositions.Length())) {
         MOZ_ASSERT_UNREACHABLE("length of mPositions does not match characters "
                                "found by iterating content");
         return false;
       }
-      mPositions[aIndex].mPosition = gfxPoint();
+      if (!mPositions[aIndex].IsXSpecified()) {
+        mPositions[aIndex].mPosition.x = 0.0;
+      }
+      if (!mPositions[aIndex].IsYSpecified()) {
+        mPositions[aIndex].mPosition.y = 0.0;
+      }
       mPositions[aIndex].mStartOfChunk = true;
     }
   } else if (!aContent->IsSVGElement(nsGkAtoms::a)) {
@@ -5531,7 +5537,7 @@ SVGTextFrame::DoReflow()
                "does not get styled");
 
   kid->Reflow(presContext, desiredSize, reflowInput, status);
-  kid->DidReflow(presContext, &reflowInput, nsDidReflowStatus::FINISHED);
+  kid->DidReflow(presContext, &reflowInput);
   kid->SetSize(wm, desiredSize.Size(wm));
 
   RemoveStateBits(NS_STATE_SVG_TEXT_IN_REFLOW);

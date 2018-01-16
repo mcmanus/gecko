@@ -6,6 +6,7 @@
 
 #include "mozilla/dom/cache/FileUtils.h"
 
+#include "DBSchema.h"
 #include "mozilla/dom/InternalResponse.h"
 #include "mozilla/dom/quota/FileStreams.h"
 #include "mozilla/dom/quota/QuotaManager.h"
@@ -25,9 +26,6 @@
 namespace mozilla {
 namespace dom {
 namespace cache {
-
-#define PADDING_FILE_NAME ".padding"
-#define PADDING_TMP_FILE_NAME ".padding-tmp"
 
 using mozilla::dom::quota::FileInputStream;
 using mozilla::dom::quota::FileOutputStream;
@@ -299,6 +297,8 @@ BodyMaybeUpdatePaddingSize(const QuotaInfo& aQuotaInfo, nsIFile* aBaseDir,
                                  aQuotaInfo.mOrigin, bodyFile, &fileSize);
   MOZ_DIAGNOSTIC_ASSERT(quotaObject);
   MOZ_DIAGNOSTIC_ASSERT(fileSize >= 0);
+  // XXXtt: bug: https://bugzilla.mozilla.org/show_bug.cgi?id=1422815
+  if (!quotaObject) { return NS_ERROR_UNEXPECTED; }
 
   if (*aPaddingSizeOut == InternalResponse::UNKNOWN_PADDING_SIZE) {
     *aPaddingSizeOut = BodyGeneratePadding(fileSize, aPaddingInfo);

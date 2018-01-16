@@ -18,6 +18,7 @@
 #include "nsAutoPtr.h"
 #include "nsNetUtil.h"
 
+#include "nsExceptionHandler.h"
 #include "nsIMemoryInfoDumper.h"
 #include "nsIMemoryReporter.h"
 #include "nsIObserverService.h"
@@ -59,10 +60,6 @@
 #include "nsIInputStream.h"
 #include "nsIXULRuntime.h"
 #include "nsJSPrincipals.h"
-
-#ifdef MOZ_CRASHREPORTER
-#include "nsExceptionHandler.h"
-#endif
 
 #ifdef XP_WIN
 #include <windows.h>
@@ -531,18 +528,18 @@ CompilationScope()
     return XPCJSRuntime::Get()->CompilationScope();
 }
 
-nsGlobalWindow*
+nsGlobalWindowInner*
 WindowOrNull(JSObject* aObj)
 {
     MOZ_ASSERT(aObj);
     MOZ_ASSERT(!js::IsWrapper(aObj));
 
-    nsGlobalWindow* win = nullptr;
+    nsGlobalWindowInner* win = nullptr;
     UNWRAP_NON_WRAPPER_OBJECT(Window, aObj, win);
     return win;
 }
 
-nsGlobalWindow*
+nsGlobalWindowInner*
 WindowGlobalOrNull(JSObject* aObj)
 {
     MOZ_ASSERT(aObj);
@@ -551,7 +548,7 @@ WindowGlobalOrNull(JSObject* aObj)
     return WindowOrNull(glob);
 }
 
-nsGlobalWindow*
+nsGlobalWindowInner*
 AddonWindowOrNull(JSObject* aObj)
 {
     if (!IsInAddonScope(aObj))
@@ -571,7 +568,7 @@ AddonWindowOrNull(JSObject* aObj)
     return WindowOrNull(mainGlobal);
 }
 
-nsGlobalWindow*
+nsGlobalWindowInner*
 CurrentWindowOrNull(JSContext* cx)
 {
     JSObject* glob = JS::CurrentGlobalOrNull(cx);
@@ -655,9 +652,7 @@ void XPCJSRuntime::TraceNativeBlackRoots(JSTracer* trc)
             roots->TraceJSAll(trc);
     }
 
-    JSContext* cx = XPCJSContext::Get()->Context();
-    dom::TraceBlackJS(trc, JS_GetGCParameter(cx, JSGC_NUMBER),
-                      nsXPConnect::XPConnect()->IsShuttingDown());
+    dom::TraceBlackJS(trc, nsXPConnect::XPConnect()->IsShuttingDown());
 }
 
 void XPCJSRuntime::TraceAdditionalNativeGrayRoots(JSTracer* trc)
@@ -754,9 +749,7 @@ XPCJSRuntime::GCSliceCallback(JSContext* cx,
     if (!self)
         return;
 
-#ifdef MOZ_CRASHREPORTER
     CrashReporter::SetGarbageCollecting(progress == JS::GC_CYCLE_BEGIN);
-#endif
 
     if (self->mPrevGCSliceCallback)
         (*self->mPrevGCSliceCallback)(cx, progress, desc);
@@ -2238,7 +2231,7 @@ class XPCJSRuntimeStats : public JS::RuntimeStats
         extras->pathPrefix.AssignLiteral("explicit/js-non-window/zones/");
         RootedObject global(cx, JS::GetRealmGlobalOrNull(realm));
         if (global) {
-            RefPtr<nsGlobalWindow> window;
+            RefPtr<nsGlobalWindowInner> window;
             if (NS_SUCCEEDED(UNWRAP_OBJECT(Window, global, window))) {
                 // The global is a |window| object.  Use the path prefix that
                 // we should have already created for it.
@@ -2278,7 +2271,7 @@ class XPCJSRuntimeStats : public JS::RuntimeStats
         Rooted<Realm*> realm(cx, JS::GetRealmForCompartment(c));
         RootedObject global(cx, JS::GetRealmGlobalOrNull(realm));
         if (global) {
-            RefPtr<nsGlobalWindow> window;
+            RefPtr<nsGlobalWindowInner> window;
             if (NS_SUCCEEDED(UNWRAP_OBJECT(Window, global, window))) {
                 // The global is a |window| object.  Use the path prefix that
                 // we should have already created for it.
@@ -2662,9 +2655,6 @@ AccumulateTelemetryCallback(int id, uint32_t sample, const char* key)
         break;
       case JS_TELEMETRY_DEPRECATED_LANGUAGE_EXTENSIONS_IN_CONTENT:
         Telemetry::Accumulate(Telemetry::JS_DEPRECATED_LANGUAGE_EXTENSIONS_IN_CONTENT, sample);
-        break;
-      case JS_TELEMETRY_DEPRECATED_LANGUAGE_EXTENSIONS_IN_ADDONS:
-        Telemetry::Accumulate(Telemetry::JS_DEPRECATED_LANGUAGE_EXTENSIONS_IN_ADDONS, sample);
         break;
       case JS_TELEMETRY_ADDON_EXCEPTIONS:
         Telemetry::Accumulate(Telemetry::JS_TELEMETRY_ADDON_EXCEPTIONS, nsDependentCString(key), sample);

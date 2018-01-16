@@ -8,9 +8,11 @@ Transform the beetmover-cdns task into a task description.
 from __future__ import absolute_import, print_function, unicode_literals
 
 from taskgraph.transforms.base import TransformSequence
-from taskgraph.util.schema import validate_schema, Schema
+from taskgraph.util.schema import (
+    optionally_keyed_by, resolve_keyed_by, validate_schema, Schema
+)
 from taskgraph.util.scriptworker import (
-    get_beetmover_bucket_scope, get_beetmover_action_scope
+    get_beetmover_bucket_scope, get_beetmover_action_scope,
 )
 from taskgraph.transforms.job import job_description_schema
 from taskgraph.transforms.task import task_description_schema
@@ -35,11 +37,13 @@ beetmover_cdns_description_schema = Schema({
     Optional('job-from'): task_description_schema['job-from'],
     Optional('run'): {basestring: object},
     Optional('run-on-projects'): task_description_schema['run-on-projects'],
-    Required('worker-type'): Any(
-        job_description_schema['worker-type'],
-        {'by-project': {basestring: job_description_schema['worker-type']}},
-    ),
+    Required('worker-type'): optionally_keyed_by('project', basestring),
     Optional('dependencies'): {basestring: taskref_or_string},
+    Optional('index'): {basestring: basestring},
+    Optional('routes'): [basestring],
+    Required('shipping-phase'): task_description_schema['shipping-phase'],
+    Required('shipping-product'): task_description_schema['shipping-product'],
+    Optional('notifications'): task_description_schema['notifications'],
 })
 
 
@@ -47,9 +51,10 @@ beetmover_cdns_description_schema = Schema({
 def validate(config, jobs):
     for job in jobs:
         label = job['name']
-        yield validate_schema(
+        validate_schema(
             beetmover_cdns_description_schema, job,
             "In cdns-signing ({!r} kind) task for {!r}:".format(config.kind, label))
+        yield job
 
 
 @transforms.add
@@ -68,19 +73,27 @@ def make_beetmover_cdns_description(config, jobs):
             )
         )
 
+        resolve_keyed_by(
+            job, 'worker-type', item_name=job['name'],
+            project=config.params['project']
+        )
+
         bucket_scope = get_beetmover_bucket_scope(config)
         action_scope = get_beetmover_action_scope(config)
 
         task = {
             'label': label,
             'description': description,
-            'worker-type': 'scriptworker-prov-v1/beetmoverworker-dev',
+            'worker-type': job['worker-type'],
             'scopes': [bucket_scope, action_scope],
             'product': job['product'],
             'dependencies': job['dependencies'],
             'attributes': job.get('attributes', {}),
             'run-on-projects': job.get('run-on-projects'),
             'treeherder': treeherder,
+            'shipping-phase': job.get('shipping-phase', 'push'),
+            'shipping-product': job.get('shipping-product'),
+            'notifications': job.get('notifications'),
         }
 
         yield task

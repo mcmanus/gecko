@@ -1,4 +1,5 @@
 "use strict";
+/* global PanelUI */
 
 /**
  * WHOA THERE: We should never be adding new things to
@@ -28,18 +29,18 @@ const EXPECTED_APPMENU_OPEN_REFLOWS = [
   {
     stack: [
       "get_alignmentPosition@chrome://global/content/bindings/popup.xml",
+      "_calculateMaxHeight@resource:///modules/PanelMultiView.jsm",
       "handleEvent@resource:///modules/PanelMultiView.jsm",
-      "openPopup@chrome://global/content/bindings/popup.xml",
     ],
   },
 
   {
     stack: [
+      "_calculateMaxHeight@resource:///modules/PanelMultiView.jsm",
       "handleEvent@resource:///modules/PanelMultiView.jsm",
-      "openPopup@chrome://global/content/bindings/popup.xml",
     ],
 
-    times: 7, // This number should only ever go down - never up.
+    times: 6, // This number should only ever go down - never up.
   },
 ];
 
@@ -51,7 +52,8 @@ const EXPECTED_APPMENU_SUBVIEW_REFLOWS = [
    * correct. Unfortunately this requires 2 sync reflows.
    *
    * If we add more views where this is necessary, we may need to duplicate
-   * these expected reflows further.
+   * these expected reflows further. Bug 1392340 is on file to remove the
+   * reflows completely when opening subviews.
    */
   {
     stack: [
@@ -59,7 +61,16 @@ const EXPECTED_APPMENU_SUBVIEW_REFLOWS = [
       "hideAllViewsExcept@resource:///modules/PanelMultiView.jsm",
     ],
 
-    times: 2, // This number should only ever go down - never up.
+    times: 1, // This number should only ever go down - never up.
+  },
+
+  {
+    stack: [
+      "descriptionHeightWorkaround@resource:///modules/PanelMultiView.jsm",
+      "_transitionViews@resource:///modules/PanelMultiView.jsm",
+    ],
+
+    times: 3, // This number should only ever go down - never up.
   },
 
   /**
@@ -72,10 +83,10 @@ add_task(async function() {
 
   // First, open the appmenu.
   await withReflowObserver(async function() {
-    let popupPositioned =
-      BrowserTestUtils.waitForEvent(PanelUI.panel, "popuppositioned");
+    let popupShown =
+      BrowserTestUtils.waitForEvent(PanelUI.panel, "popupshown");
     await PanelUI.show();
-    await popupPositioned;
+    await popupShown;
   }, EXPECTED_APPMENU_OPEN_REFLOWS);
 
   // Now open a series of subviews, and then close the appmenu. We

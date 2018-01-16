@@ -4,11 +4,14 @@
 
 #![cfg_attr(feature = "unstable", feature(core_intrinsics))]
 #![cfg_attr(feature = "unstable", feature(on_unimplemented))]
+#![feature(ascii_ctype)]
 #![feature(conservative_impl_trait)]
 #![feature(const_fn)]
 #![feature(mpsc_select)]
 #![feature(plugin)]
 #![feature(proc_macro)]
+#![feature(splice)]
+#![feature(string_retain)]
 
 #![deny(unsafe_code)]
 #![allow(non_snake_case)]
@@ -28,6 +31,7 @@ extern crate bluetooth_traits;
 extern crate byteorder;
 extern crate canvas_traits;
 extern crate caseless;
+extern crate chrono;
 extern crate cookie as cookie_rs;
 #[macro_use] extern crate cssparser;
 #[macro_use] extern crate deny_public_fields;
@@ -38,6 +42,9 @@ extern crate domobject_derive;
 extern crate encoding_rs;
 extern crate euclid;
 extern crate fnv;
+#[allow(unused_extern_crates)]
+#[cfg(all(any(target_os = "macos", target_os = "linux"), not(any(target_arch = "arm", target_arch = "aarch64"))))]
+extern crate gecko_media;
 extern crate gleam;
 extern crate half;
 #[macro_use] extern crate html5ever;
@@ -46,8 +53,6 @@ extern crate hyper;
 extern crate hyper_serde;
 extern crate image;
 extern crate ipc_channel;
-#[macro_use]
-extern crate js;
 #[macro_use]
 extern crate jstraceable_derive;
 #[macro_use]
@@ -62,6 +67,8 @@ extern crate metrics;
 extern crate mime;
 extern crate mime_guess;
 extern crate mitochondria;
+#[macro_use]
+extern crate mozjs as js;
 extern crate msg;
 extern crate net_traits;
 extern crate nonzero;

@@ -42,6 +42,7 @@
 #include "nsICacheStorage.h"
 #include "CacheControlParser.h"
 #include "LoadContextInfo.h"
+#include "TCPFastOpenLayer.h"
 
 namespace mozilla {
 namespace net {
@@ -119,6 +120,8 @@ Http2Session::Http2Session(nsISocketTransport *aSocketTransport, uint32_t versio
   , mAttemptingEarlyData(attemptingEarlyData)
   , mOriginFrameActivated(false)
   , mTlsHandshakeFinished(false)
+  , mCheckNetworkStallsWithTFO(false)
+  , mLastRequestBytesSentTime(0)
 {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
@@ -269,8 +272,19 @@ Http2Session::ReadTimeoutTick(PRIntervalTime now)
   LOG3(("Http2Session::ReadTimeoutTick %p delta since last read %ds\n",
        this, PR_IntervalToSeconds(now - mLastReadEpoch)));
 
+  uint32_t nextTick = UINT32_MAX;
+  if (mCheckNetworkStallsWithTFO && mLastRequestBytesSentTime) {
+    PRIntervalTime initialResponseDelta = now - mLastRequestBytesSentTime;
+    if (initialResponseDelta >= gHttpHandler->FastOpenStallsTimeout()) {
+      gHttpHandler->IncrementFastOpenStallsCounter();
+      mCheckNetworkStallsWithTFO = false;
+    } else {
+      nextTick = PR_IntervalToSeconds(gHttpHandler->FastOpenStallsTimeout()) -
+                 PR_IntervalToSeconds(initialResponseDelta);
+    }
+  }
   if (!mPingThreshold)
-    return UINT32_MAX;
+    return nextTick;
 
   if ((now - mLastReadEpoch) < mPingThreshold) {
     // recent activity means ping is not an issue
@@ -283,8 +297,8 @@ Http2Session::ReadTimeoutTick(PRIntervalTime now)
       }
     }
 
-    return PR_IntervalToSeconds(mPingThreshold) -
-      PR_IntervalToSeconds(now - mLastReadEpoch);
+    return std::min(nextTick, PR_IntervalToSeconds(mPingThreshold) -
+                              PR_IntervalToSeconds(now - mLastReadEpoch));
   }
 
   if (mPingSentEpoch) {
@@ -373,6 +387,20 @@ Http2Session::RegisterStreamID(Http2Stream *stream, uint32_t aNewID)
   }
 
   mStreamIDHash.Put(aNewID, stream);
+
+  // If TCP fast Open has been used and conection was idle for some time
+  // we will be cautious and watch out for bug 1395494.
+  if (!mCheckNetworkStallsWithTFO && mConnection) {
+    RefPtr<nsHttpConnection> conn = mConnection->HttpConnection();
+    if (conn && (conn->GetFastOpenStatus() == TFO_DATA_SENT) &&
+        gHttpHandler->CheckIfConnectionIsStalledOnlyIfIdleForThisAmountOfSeconds() &&
+        IdleTime() >= gHttpHandler->CheckIfConnectionIsStalledOnlyIfIdleForThisAmountOfSeconds()) {
+      // If a connection was using the TCP FastOpen and it was idle for a
+      // long time we should check for stalls like bug 1395494.
+      mCheckNetworkStallsWithTFO = true;
+      mLastRequestBytesSentTime = PR_IntervalNow();
+    }
+  }
   return aNewID;
 }
 
@@ -417,7 +445,7 @@ Http2Session::AddStream(nsAHttpTransaction *aHttpTransaction,
   }
 
   aHttpTransaction->SetConnection(this);
-  aHttpTransaction->OnActivated(true);
+  aHttpTransaction->OnActivated();
 
   if (aUseTunnel) {
     LOG3(("Http2Session::AddStream session=%p trans=%p OnTunnel",
@@ -512,8 +540,10 @@ Http2Session::NetworkRead(nsAHttpSegmentWriter *writer, char *buf,
   }
 
   nsresult rv = writer->OnWriteSegment(buf, count, countWritten);
-  if (NS_SUCCEEDED(rv) && *countWritten > 0)
+  if (NS_SUCCEEDED(rv) && *countWritten > 0) {
     mLastReadEpoch = PR_IntervalNow();
+    mCheckNetworkStallsWithTFO = false;
+  }
   return rv;
 }
 
@@ -3250,7 +3280,9 @@ Http2Session::WriteSegmentsAgain(nsAHttpSegmentWriter *writer,
             "stream->writeSegments returning code %" PRIx32 "\n",
             this, streamID, mNeedsCleanup, static_cast<uint32_t>(rv)));
       MOZ_ASSERT(!mNeedsCleanup || mNeedsCleanup->StreamID() == streamID);
-      CleanupStream(streamID, NS_OK, CANCEL_ERROR);
+      CleanupStream(streamID,
+                    (rv == NS_BINDING_RETARGETED) ? NS_BINDING_RETARGETED : NS_OK,
+                    CANCEL_ERROR);
       mNeedsCleanup = nullptr;
       *again = false;
       rv = ResumeRecv();
@@ -3284,8 +3316,9 @@ Http2Session::WriteSegmentsAgain(nsAHttpSegmentWriter *writer,
     char trash[4096];
     uint32_t discardCount = std::min(mInputFrameDataSize - mInputFrameDataRead,
                                      4096U);
-    LOG3(("Http2Session::WriteSegments %p trying to discard %d bytes of data",
-          this, discardCount));
+    LOG3(("Http2Session::WriteSegments %p trying to discard %d bytes of %s",
+          this, discardCount,
+          mDownstreamState == DISCARDING_DATA_FRAME ? "data" : "padding"));
 
     if (!discardCount && mDownstreamState == DISCARDING_DATA_FRAME) {
       // Only do this short-cirtuit if we're not discarding a pure padding
@@ -3317,9 +3350,15 @@ Http2Session::WriteSegmentsAgain(nsAHttpSegmentWriter *writer,
         streamToCleanup = mInputFrameDataStream;
       }
 
+      bool discardedPadding = (mDownstreamState == DISCARDING_DATA_FRAME_PADDING);
       ResetDownstreamState();
 
       if (streamToCleanup) {
+        if (discardedPadding && !(streamToCleanup->StreamID() & 1)) {
+          // Pushed streams are special on padding-only final data frames.
+          // See bug 1409570 comments 6-8 for details.
+          streamToCleanup->SetPushComplete();
+        }
         CleanupStream(streamToCleanup, NS_OK, CANCEL_ERROR);
       }
     }

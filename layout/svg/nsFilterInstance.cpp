@@ -11,7 +11,7 @@
 #include "mozilla/UniquePtr.h"
 
 // Keep others in (case-insensitive) order:
-#include "DrawResult.h"
+#include "ImgDrawResult.h"
 #include "gfx2DGlue.h"
 #include "gfxContext.h"
 #include "gfxPlatform.h"
@@ -71,7 +71,7 @@ nsFilterInstance::PaintFilteredFrame(nsIFrame *aFilteredFrame,
   UniquePtr<UserSpaceMetrics> metrics = UserSpaceMetricsForFrame(aFilteredFrame);
 
   gfxContextMatrixAutoSaveRestore autoSR(aCtx);
-  gfxSize scaleFactors = aCtx->CurrentMatrix().ScaleFactors(true);
+  gfxSize scaleFactors = aCtx->CurrentMatrixDouble().ScaleFactors(true);
   if (scaleFactors.IsEmpty()) {
     return;
   }
@@ -85,7 +85,7 @@ nsFilterInstance::PaintFilteredFrame(nsIFrame *aFilteredFrame,
   MOZ_ASSERT(invertible);
   // Pull scale vector out of aCtx's transform, put all scale factors, which
   // includes css and css-to-dev-px scale, into scaleMatrixInDevUnits.
-  aCtx->SetMatrix(reverseScaleMatrix * aCtx->CurrentMatrix());
+  aCtx->SetMatrixDouble(reverseScaleMatrix * aCtx->CurrentMatrixDouble());
 
   gfxMatrix scaleMatrixInDevUnits =
     scaleMatrix * nsSVGUtils::GetCSSPxToDevPxMatrix(aFilteredFrame);
@@ -414,8 +414,8 @@ nsFilterInstance::BuildSourcePaint(SourceInfo *aSource,
   MOZ_ASSERT(ctx); // already checked the draw target above
   gfxContextAutoSaveRestore saver(ctx);
 
-  ctx->SetMatrix(mPaintTransform *
-                 gfxMatrix::Translation(-neededRect.TopLeft()));
+  ctx->SetMatrixDouble(mPaintTransform *
+                       gfxMatrix::Translation(-neededRect.TopLeft()));
   GeneralPattern pattern;
   if (aSource == &mFillPaint) {
     nsSVGUtils::MakeFillPatternFor(mTargetFrame, ctx, &pattern, aImgParams);
@@ -483,8 +483,8 @@ nsFilterInstance::BuildSourceImage(DrawTarget *aDest, imgDrawingParams& aImgPara
   gfxMatrix devPxToCssPxTM = nsSVGUtils::GetCSSPxToDevPxMatrix(mTargetFrame);
   DebugOnly<bool> invertible = devPxToCssPxTM.Invert();
   MOZ_ASSERT(invertible);
-  ctx->SetMatrix(devPxToCssPxTM * mPaintTransform *
-                 gfxMatrix::Translation(-neededRect.TopLeft()));
+  ctx->SetMatrixDouble(devPxToCssPxTM * mPaintTransform *
+                       gfxMatrix::Translation(-neededRect.TopLeft()));
 
   mPaintCallback->Paint(*ctx, mTargetFrame, mPaintTransform, &dirty, aImgParams);
 

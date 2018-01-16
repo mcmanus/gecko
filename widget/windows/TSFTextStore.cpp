@@ -1097,12 +1097,21 @@ public:
   DECL_AND_IMPL_IS_TIP_ACTIVE(IsATOK2015Active)
   DECL_AND_IMPL_IS_TIP_ACTIVE(IsATOK2016Active)
 
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSBopomofoActive)
   DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSChangJieActive)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSPhoneticActive)
   DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSQuickActive)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSNewChangJieActive)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSNewPhoneticActive)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSNewQuickActive)
   DECL_AND_IMPL_IS_TIP_ACTIVE(IsFreeChangJieActive)
 
   DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSPinyinActive)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSPinyinNewExperienceInputStyleActive)
   DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSWubiActive)
+
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSKoreanIMEActive)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSOldHangulActive)
 
 #undef DECL_AND_IMPL_IS_TIP_ACTIVE
 
@@ -1238,12 +1247,32 @@ private:
    * Traditional Chinese TIP
    ****************************************************************************/
 
+  bool IsMSBopomofoActiveInternal() const
+  {
+    // {B2F9C502-1742-11D4-9790-0080C882687E} (Win8.1, Win10)
+    static const GUID kGUID = {
+      0xB2F9C502, 0x1742, 0x11D4,
+        { 0x97, 0x90, 0x00, 0x80, 0xC8, 0x82, 0x68, 0x7E }
+    };
+    return mActiveTIPGUID == kGUID;
+  }
+
   bool IsMSChangJieActiveInternal() const
   {
     // {4BDF9F03-C7D3-11D4-B2AB-0080C882687E} (Win7, Win8.1, Win10)
     static const GUID kGUID = {
       0x4BDF9F03, 0xC7D3, 0x11D4,
         { 0xB2, 0xAB, 0x00, 0x80, 0xC8, 0x82, 0x68, 0x7E }
+    };
+    return mActiveTIPGUID == kGUID;
+  }
+
+  bool IsMSPhoneticActiveInternal() const
+  {
+    // {761309DE-317A-11D4-9B5D-0080C882687E} (Win7)
+    static const GUID kGUID = {
+      0x761309DE, 0x317A, 0x11D4,
+        { 0x9B, 0x5D, 0x00, 0x80, 0xC8, 0x82, 0x68, 0x7E }
     };
     return mActiveTIPGUID == kGUID;
   }
@@ -1258,21 +1287,41 @@ private:
     return mActiveTIPGUID == kGUID;
   }
 
+  bool IsMSNewChangJieActiveInternal() const
+  {
+    // {F3BA907A-6C7E-11D4-97FA-0080C882687E} (Win7)
+    static const GUID kGUID = {
+      0xF3BA907A, 0x6C7E, 0x11D4,
+        { 0x97, 0xFA, 0x00, 0x80, 0xC8, 0x82, 0x68, 0x7E }
+    };
+    return mActiveTIPGUID == kGUID;
+  }
+
+  bool IsMSNewPhoneticActiveInternal() const
+  {
+    // {B2F9C502-1742-11D4-9790-0080C882687E} (Win7)
+    static const GUID kGUID = {
+      0xB2F9C502, 0x1742, 0x11D4,
+        { 0x97, 0x90, 0x00, 0x80, 0xC8, 0x82, 0x68, 0x7E }
+    };
+    return mActiveTIPGUID == kGUID;
+  }
+
+  bool IsMSNewQuickActiveInternal() const
+  {
+    // {0B883BA0-C1C7-11D4-87F9-0080C882687E} (Win7)
+    static const GUID kGUID = {
+      0x0B883BA0, 0xC1C7, 0x11D4,
+        { 0x87, 0xF9, 0x00, 0x80, 0xC8, 0x82, 0x68, 0x7E }
+    };
+    return mActiveTIPGUID == kGUID;
+  }
+
   // NOTE: There are some other Traditional Chinese TIPs installed in Windows:
-  // * Microsoft Bopomofo
-  //   - {B2F9C502-1742-11D4-9790-0080C882687E} (Win8.1, Win10)
   // * Chinese Traditional Array (version 6.0)
   //   - {D38EFF65-AA46-4FD5-91A7-67845FB02F5B} (Win7, Win8.1)
   // * Chinese Traditional DaYi (version 6.0)
   //   - {037B2C25-480C-4D7F-B027-D6CA6B69788A} (Win7, Win8.1)
-  // * Phonetic
-  //   - {761309DE-317A-11D4-9B5D-0080C882687E} (Win7)
-  // * New ChangJie
-  //   - {F3BA907A-6C7E-11D4-97FA-0080C882687E} (Win7)
-  // * New Phonetic
-  //   - {B2F9C502-1742-11D4-9790-0080C882687E} (Win7)
-  // * New Quick
-  //   - {0B883BA0-C1C7-11D4-87F9-0080C882687E} (Win7)
 
   bool IsFreeChangJieActiveInternal() const
   {
@@ -1301,6 +1350,16 @@ private:
     return mActiveTIPGUID == kGUID;
   }
 
+  bool IsMSPinyinNewExperienceInputStyleActiveInternal() const
+  {
+    // {F3BA9077-6C7E-11D4-97FA-0080C882687E} (Win7)
+    static const GUID kGUID = {
+      0xF3BA9077, 0x6C7E, 0x11D4,
+        { 0x97, 0xFA, 0x00, 0x80, 0xC8, 0x82, 0x68, 0x7E }
+    };
+    return mActiveTIPGUID == kGUID;
+  }
+
   bool IsMSWubiActiveInternal() const
   {
     // {82590C13-F4DD-44F4-BA1D-8667246FDF8E} (Win8.1, Win10)
@@ -1320,8 +1379,34 @@ private:
   //   - {EF63706D-31C4-490E-9DBB-BD150ADC454B} (Win8.1)
   // * Microsoft Pinyin ABC Input Style
   //   - {FCA121D2-8C6D-41FB-B2DE-A2AD110D4820} (Win7)
-  // * Microsoft Pinyin New Experience Input Style
-  //   - {F3BA9077-6C7E-11D4-97FA-0080C882687E} (Win7)
+
+  /****************************************************************************
+   * Korean TIP
+   ****************************************************************************/
+
+  bool IsMSKoreanIMEActiveInternal() const
+  {
+    // {B5FE1F02-D5F2-4445-9C03-C568F23C99A1} (Win7, Win8.1, Win10)
+    static const GUID kGUID = {
+      0xB5FE1F02, 0xD5F2, 0x4445,
+        { 0x9C, 0x03, 0xC5, 0x68, 0xF2, 0x3C, 0x99, 0xA1 }
+    };
+    return mActiveTIPGUID == kGUID;
+  }
+
+  bool IsMSOldHangulActiveInternal() const
+  {
+    // {B60AF051-257A-46BC-B9D3-84DAD819BAFB} (Win8.1, Win10)
+    static const GUID kGUID = {
+      0xB60AF051, 0x257A, 0x46BC,
+        { 0xB9, 0xD3, 0x84, 0xDA, 0xD8, 0x19, 0xBA, 0xFB }
+    };
+    return mActiveTIPGUID == kGUID;
+  }
+
+  // NOTE: There is the other Korean TIP installed in Windows:
+  // * Microsoft IME 2010
+  //   - {48878C45-93F9-4aaf-A6A1-272CD863C4F5} (Win7)
 
 public: // ITfInputProcessorProfileActivationSink
   STDMETHODIMP OnActivated(DWORD, LANGID, REFCLSID, REFGUID, REFGUID,
@@ -1604,6 +1689,9 @@ public:
     return s ## aName ## Value;                                                \
   }
 
+  DECL_AND_IMPL_BOOL_PREF(
+    "intl.ime.hack.set_input_scope_of_url_bar_to_default",
+    ShouldSetInputScopeOfURLBarToDefault, true)
   DECL_AND_IMPL_BOOL_PREF(
     "intl.tsf.hack.atok.create_native_caret",
     NeedToCreateNativeCaretForLegacyATOK, true)
@@ -3619,6 +3707,34 @@ TSFTextStore::InsertEmbedded(DWORD dwFlags,
   return E_NOTIMPL;
 }
 
+// static
+bool
+TSFTextStore::ShouldSetInputScopeOfURLBarToDefault()
+{
+  // FYI: Google Japanese Input may be an IMM-IME.  If it's installed on
+  //      Win7, it's always IMM-IME.  Otherwise, basically, it's a TIP.
+  //      However, if it's installed on Win7 and has not been updated yet
+  //      after the OS is upgraded to Win8 or later, it's still an IMM-IME.
+  //      Therefore, we also need to check with IMMHandler here.
+  return TSFPrefs::ShouldSetInputScopeOfURLBarToDefault() &&
+         (IMMHandler::IsGoogleJapaneseInputActive() ||
+          (!TSFTextStore::IsIMM_IMEActive() &&
+           (TSFStaticSink::IsMSJapaneseIMEActive() ||
+            TSFStaticSink::IsGoogleJapaneseInputActive() ||
+            TSFStaticSink::IsMSBopomofoActive() ||
+            TSFStaticSink::IsMSChangJieActive() ||
+            TSFStaticSink::IsMSPhoneticActive() ||
+            TSFStaticSink::IsMSQuickActive() ||
+            TSFStaticSink::IsMSNewChangJieActive() ||
+            TSFStaticSink::IsMSNewPhoneticActive() ||
+            TSFStaticSink::IsMSNewQuickActive() ||
+            TSFStaticSink::IsMSPinyinActive() ||
+            TSFStaticSink::IsMSPinyinNewExperienceInputStyleActive() ||
+            (IsWin8OrLater() && TSFStaticSink::IsMSKoreanIMEActive()) ||
+            TSFStaticSink::IsMSOldHangulActive() ||
+            TSFStaticSink::IsMSWubiActive())));
+}
+
 void
 TSFTextStore::SetInputScope(const nsString& aHTMLInputType,
                             const nsString& aHTMLInputInputMode)
@@ -3632,20 +3748,13 @@ TSFTextStore::SetInputScope(const nsString& aHTMLInputType,
       // However, on-screen keyboard for URL should be shown because it has
       // some useful additional keys like ".com" and they are not hindrances
       // even when inputting non-URL text, e.g., words to search something in
-      // the web.  On the other hand, MS-IME for Japanese and Google Japanese
-      // Input make their open state "closed" automatically if we notify them
-      // of URL as the input scope.  However, this is very annoying for the
-      // users when they try to input some words to search the web or
+      // the web.  On the other hand, a lot of Microsoft's IMEs and Google
+      // Japanese Input make their open state "closed" automatically if we
+      // notify them of URL as the input scope.  However, this is very annoying
+      // for the users when they try to input some words to search the web or
       // bookmark/history items.  Therefore, if they are active, we need to
       // notify them of the default input scope for avoiding this issue.
-      // FYI: Google Japanese Input may be an IMM-IME.  If it's installed on
-      //      Win7, it's always IMM-IME.  Otherwise, basically, it's a TIP.
-      //      However, if it's installed on Win7 and has not been updated yet
-      //      after the OS is upgraded to Win8 or later, it's still an IMM-IME.
-      //      Therefore, we also need to check with IMMHandler here.
-      if (TSFStaticSink::IsMSJapaneseIMEActive() ||
-          TSFStaticSink::IsGoogleJapaneseInputActive() ||
-          IMMHandler::IsGoogleJapaneseInputActive()) {
+      if (TSFTextStore::ShouldSetInputScopeOfURLBarToDefault()) {
         return;
       }
       // Don't append IS_SEARCH here for showing on-screen keyboard for URL.
@@ -4371,10 +4480,10 @@ TSFTextStore::GetTextExt(TsViewCookie vcView,
   }
 
   // IMEs don't like empty rects, fix here
-  if (event.mReply.mRect.width <= 0)
-    event.mReply.mRect.width = 1;
-  if (event.mReply.mRect.height <= 0)
-    event.mReply.mRect.height = 1;
+  if (event.mReply.mRect.Width() <= 0)
+    event.mReply.mRect.SetWidth(1);
+  if (event.mReply.mRect.Height() <= 0)
+    event.mReply.mRect.SetHeight(1);
 
   // convert to unclipped screen rect
   nsWindow* refWindow = static_cast<nsWindow*>(
@@ -4400,7 +4509,7 @@ TSFTextStore::GetTextExt(TsViewCookie vcView,
 
   // clip text rect to bounding rect
   RECT textRect;
-  ::SetRect(&textRect, event.mReply.mRect.x, event.mReply.mRect.y,
+  ::SetRect(&textRect, event.mReply.mRect.X(), event.mReply.mRect.Y(),
             event.mReply.mRect.XMost(), event.mReply.mRect.YMost());
   if (!::IntersectRect(prc, prc, &textRect))
     // Text is not visible
@@ -4512,7 +4621,7 @@ TSFTextStore::GetScreenExtInternal(RECT& aScreenExt)
   boundRect.IntersectRect(event.mReply.mRect, boundRect);
   if (!boundRect.IsEmpty()) {
     boundRect.MoveBy(refWindow->WidgetToScreenOffset());
-    ::SetRect(&aScreenExt, boundRect.x, boundRect.y,
+    ::SetRect(&aScreenExt, boundRect.X(), boundRect.Y(),
               boundRect.XMost(), boundRect.YMost());
   } else {
     ::SetRectEmpty(&aScreenExt);
@@ -5832,9 +5941,9 @@ TSFTextStore::OnMouseButtonEventInternal(
   nsIntPoint cursorPos =
     aIMENotification.mMouseButtonEventData.mCursorPos.AsIntPoint();
   ULONG quadrant = 1;
-  if (charRect.width > 0) {
-    int32_t cursorXInChar = cursorPos.x - charRect.x;
-    quadrant = cursorXInChar * 4 / charRect.width;
+  if (charRect.Width() > 0) {
+    int32_t cursorXInChar = cursorPos.x - charRect.X();
+    quadrant = cursorXInChar * 4 / charRect.Width();
     quadrant = (quadrant + 2) % 4;
   }
   ULONG edge = quadrant < 2 ? offset + 1 : offset;
@@ -5929,7 +6038,7 @@ TSFTextStore::CreateNativeCaret()
 
   LayoutDeviceIntRect& caretRect = queryCaretRect.mReply.mRect;
   mNativeCaretIsCreated = ::CreateCaret(mWidget->GetWindowHandle(), nullptr,
-                                        caretRect.width, caretRect.height);
+                                        caretRect.Width(), caretRect.Height());
   if (!mNativeCaretIsCreated) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("0x%p   TSFTextStore::CreateNativeCaret() FAILED due to "
@@ -5951,7 +6060,7 @@ TSFTextStore::CreateNativeCaret()
     caretRect.MoveBy(-window->WidgetToScreenOffset());
   }
 
-  ::SetCaretPos(caretRect.x, caretRect.y);
+  ::SetCaretPos(caretRect.X(), caretRect.Y());
 }
 
 void

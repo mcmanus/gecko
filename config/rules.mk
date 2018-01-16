@@ -185,6 +185,8 @@ HOST_PDBFILE=$(basename $(@F)).pdb
 HOST_PDB_FLAG ?= -Fd$(HOST_PDBFILE)
 HOST_CFLAGS += $(HOST_PDB_FLAG)
 HOST_CXXFLAGS += $(HOST_PDB_FLAG)
+HOST_C_LDFLAGS += $(HOST_PDB_FLAG)
+HOST_CXX_LDFLAGS += $(HOST_PDB_FLAG)
 endif
 
 # Don't build SIMPLE_PROGRAMS during the MOZ_PROFILE_GENERATE pass, and do not
@@ -240,7 +242,7 @@ ALL_TRASH = \
 	$(filter-out $(ASFILES),$(OBJS:.$(OBJ_SUFFIX)=.s)) $(OBJS:.$(OBJ_SUFFIX)=.ii) \
 	$(OBJS:.$(OBJ_SUFFIX)=.i) $(OBJS:.$(OBJ_SUFFIX)=.i_o) \
 	$(HOST_PROGOBJS) $(HOST_OBJS) $(IMPORT_LIBRARY) \
-	$(EXE_DEF_FILE) so_locations _gen _stubs $(wildcard *.res) $(wildcard *.RES) \
+	so_locations _gen _stubs $(wildcard *.res) $(wildcard *.RES) \
 	$(wildcard *.pdb) $(CODFILE) $(IMPORT_LIBRARY) \
 	$(SHARED_LIBRARY:$(DLL_SUFFIX)=.exp) $(wildcard *.ilk) \
 	$(PROGRAM:$(BIN_SUFFIX)=.exp) $(SIMPLE_PROGRAMS:$(BIN_SUFFIX)=.exp) \
@@ -336,16 +338,6 @@ ifneq (,$(filter layout/%,$(relativesrcdir)))
 OS_CFLAGS += -Wa,-xgot
 OS_CXXFLAGS += -Wa,-xgot
 endif
-endif
-endif
-
-#
-# Linux: add -Bsymbolic flag for components
-#
-ifeq ($(OS_ARCH),Linux)
-ifdef LD_VERSION_SCRIPT
-EXTRA_DSO_LDOPTS += -Wl,--version-script,$(LD_VERSION_SCRIPT)
-EXTRA_DEPS += $(LD_VERSION_SCRIPT)
 endif
 endif
 
@@ -560,11 +552,11 @@ endef
 # PROGRAM = Foo
 # creates OBJS, links with LIBS to create Foo
 #
-$(PROGRAM): $(PROGOBJS) $(STATIC_LIBS_DEPS) $(EXTRA_DEPS) $(EXE_DEF_FILE) $(RESFILE) $(GLOBAL_DEPS)
+$(PROGRAM): $(PROGOBJS) $(STATIC_LIBS_DEPS) $(EXTRA_DEPS) $(RESFILE) $(GLOBAL_DEPS)
 	$(REPORT_BUILD)
 	@$(RM) $@.manifest
 ifeq (_WINNT,$(GNU_CC)_$(OS_ARCH))
-	$(EXPAND_LINK) -NOLOGO -OUT:$@ -PDB:$(LINK_PDBFILE) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(MOZ_PROGRAM_LDFLAGS) $(PROGOBJS) $(RESFILE) $(STATIC_LIBS) $(SHARED_LIBS) $(EXTRA_LIBS) $(OS_LIBS)
+	$(EXPAND_LINK) -NOLOGO -OUT:$@ -PDB:$(LINK_PDBFILE) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(MOZ_PROGRAM_LDFLAGS) $(PROGOBJS) $(RESFILE) $(STATIC_LIBS) $(SHARED_LIBS) $(OS_LIBS)
 ifdef MSMANIFEST_TOOL
 	@if test -f $@.manifest; then \
 		if test -f '$(srcdir)/$@.manifest'; then \
@@ -585,7 +577,7 @@ ifdef MOZ_PROFILE_GENERATE
 	touch -t `date +%Y%m%d%H%M.%S -d 'now+5seconds'` pgo.relink
 endif
 else # !WINNT || GNU_CC
-	$(call EXPAND_CC_OR_CXX,$@) -o $@ $(COMPUTED_CXX_LDFLAGS) $(PGO_CFLAGS) $(PROGOBJS) $(RESFILE) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(WRAP_LDFLAGS) $(STATIC_LIBS) $(MOZ_PROGRAM_LDFLAGS) $(SHARED_LIBS) $(EXTRA_LIBS) $(OS_LIBS) $(BIN_FLAGS) $(EXE_DEF_FILE)
+	$(call EXPAND_CC_OR_CXX,$@) -o $@ $(COMPUTED_CXX_LDFLAGS) $(PGO_CFLAGS) $(PROGOBJS) $(RESFILE) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(STATIC_LIBS) $(MOZ_PROGRAM_LDFLAGS) $(SHARED_LIBS) $(OS_LIBS)
 	$(call CHECK_BINARY,$@)
 endif # WINNT && !GNU_CC
 
@@ -599,7 +591,7 @@ endif
 $(HOST_PROGRAM): $(HOST_PROGOBJS) $(HOST_LIBS) $(HOST_EXTRA_DEPS) $(GLOBAL_DEPS)
 	$(REPORT_BUILD)
 ifeq (_WINNT,$(GNU_CC)_$(HOST_OS_ARCH))
-	$(EXPAND_LIBS_EXEC) -- $(LINK) -NOLOGO -OUT:$@ -PDB:$(HOST_PDBFILE) $(HOST_OBJS) $(WIN32_EXE_LDFLAGS) $(HOST_LDFLAGS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
+	$(EXPAND_LIBS_EXEC) -- $(LINKER) -NOLOGO -OUT:$@ -PDB:$(HOST_PDBFILE) $(HOST_OBJS) $(WIN32_EXE_LDFLAGS) $(HOST_LDFLAGS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
 ifdef MSMANIFEST_TOOL
 	@if test -f $@.manifest; then \
 		if test -f '$(srcdir)/$@.manifest'; then \
@@ -616,9 +608,9 @@ ifdef MSMANIFEST_TOOL
 endif	# MSVC with manifest tool
 else
 ifeq ($(HOST_CPP_PROG_LINK),1)
-	$(EXPAND_LIBS_EXEC) -- $(HOST_CXX) -o $@ $(HOST_CXXFLAGS) $(HOST_LDFLAGS) $(HOST_PROGOBJS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
+	$(EXPAND_LIBS_EXEC) -- $(HOST_CXX) -o $@ $(HOST_CXX_LDFLAGS) $(HOST_LDFLAGS) $(HOST_PROGOBJS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
 else
-	$(EXPAND_LIBS_EXEC) -- $(HOST_CC) -o $@ $(HOST_CFLAGS) $(HOST_LDFLAGS) $(HOST_PROGOBJS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
+	$(EXPAND_LIBS_EXEC) -- $(HOST_CC) -o $@ $(HOST_C_LDFLAGS) $(HOST_LDFLAGS) $(HOST_PROGOBJS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
 endif # HOST_CPP_PROG_LINK
 endif
 ifndef CROSS_COMPILE
@@ -636,7 +628,7 @@ endif
 $(SIMPLE_PROGRAMS): %$(BIN_SUFFIX): %.$(OBJ_SUFFIX) $(STATIC_LIBS_DEPS) $(EXTRA_DEPS) $(GLOBAL_DEPS)
 	$(REPORT_BUILD)
 ifeq (_WINNT,$(GNU_CC)_$(OS_ARCH))
-	$(EXPAND_LINK) -nologo -out:$@ -pdb:$(LINK_PDBFILE) $< $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(MOZ_PROGRAM_LDFLAGS) $(STATIC_LIBS) $(SHARED_LIBS) $(EXTRA_LIBS) $(OS_LIBS)
+	$(EXPAND_LINK) -nologo -out:$@ -pdb:$(LINK_PDBFILE) $< $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(MOZ_PROGRAM_LDFLAGS) $(STATIC_LIBS) $(SHARED_LIBS) $(OS_LIBS)
 ifdef MSMANIFEST_TOOL
 	@if test -f $@.manifest; then \
 		$(MT) -NOLOGO -MANIFEST $@.manifest -OUTPUTRESOURCE:$@\;1; \
@@ -644,7 +636,7 @@ ifdef MSMANIFEST_TOOL
 	fi
 endif	# MSVC with manifest tool
 else
-	$(call EXPAND_CC_OR_CXX,$@) $(COMPUTED_CXX_LDFLAGS) $(PGO_CFLAGS) -o $@ $< $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(WRAP_LDFLAGS) $(STATIC_LIBS) $(MOZ_PROGRAM_LDFLAGS) $(SHARED_LIBS) $(EXTRA_LIBS) $(OS_LIBS) $(BIN_FLAGS)
+	$(call EXPAND_CC_OR_CXX,$@) $(COMPUTED_CXX_LDFLAGS) $(PGO_CFLAGS) -o $@ $< $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(STATIC_LIBS) $(MOZ_PROGRAM_LDFLAGS) $(SHARED_LIBS) $(OS_LIBS)
 	$(call CHECK_BINARY,$@)
 endif # WINNT && !GNU_CC
 
@@ -658,29 +650,29 @@ endif
 $(HOST_SIMPLE_PROGRAMS): host_%$(HOST_BIN_SUFFIX): host_%.$(OBJ_SUFFIX) $(HOST_LIBS) $(HOST_EXTRA_DEPS) $(GLOBAL_DEPS)
 	$(REPORT_BUILD)
 ifeq (WINNT_,$(HOST_OS_ARCH)_$(GNU_CC))
-	$(EXPAND_LIBS_EXEC) -- $(LINK) -NOLOGO -OUT:$@ -PDB:$(HOST_PDBFILE) $< $(WIN32_EXE_LDFLAGS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
+	$(EXPAND_LIBS_EXEC) -- $(LINKER) -NOLOGO -OUT:$@ -PDB:$(HOST_PDBFILE) $< $(WIN32_EXE_LDFLAGS) $(HOST_LIBS) $(HOST_EXTRA_LIBS)
 else
 ifneq (,$(HOST_CPPSRCS)$(USE_HOST_CXX))
-	$(EXPAND_LIBS_EXEC) -- $(HOST_CXX) $(HOST_OUTOPTION)$@ $(HOST_CXXFLAGS) $(INCLUDES) $< $(HOST_LIBS) $(HOST_EXTRA_LIBS)
+	$(EXPAND_LIBS_EXEC) -- $(HOST_CXX) $(HOST_OUTOPTION)$@ $(HOST_CXX_LDFLAGS) $< $(HOST_LIBS) $(HOST_EXTRA_LIBS)
 else
-	$(EXPAND_LIBS_EXEC) -- $(HOST_CC) $(HOST_OUTOPTION)$@ $(HOST_CFLAGS) $(INCLUDES) $< $(HOST_LIBS) $(HOST_EXTRA_LIBS)
+	$(EXPAND_LIBS_EXEC) -- $(HOST_CC) $(HOST_OUTOPTION)$@ $(HOST_C_LDFLAGS) $< $(HOST_LIBS) $(HOST_EXTRA_LIBS)
 endif
 endif
 ifndef CROSS_COMPILE
 	$(call CHECK_STDCXX,$@)
 endif
 
-$(filter %.$(LIB_SUFFIX),$(LIBRARY)): $(OBJS) $(STATIC_LIBS_DEPS) $(filter %.$(LIB_SUFFIX),$(EXTRA_LIBS)) $(EXTRA_DEPS) $(GLOBAL_DEPS)
+$(filter %.$(LIB_SUFFIX),$(LIBRARY)): $(OBJS) $(STATIC_LIBS_DEPS) $(EXTRA_DEPS) $(GLOBAL_DEPS)
 	$(REPORT_BUILD)
 # Always remove both library and library descriptor
 	$(RM) $(REAL_LIBRARY) $(REAL_LIBRARY).$(LIBS_DESC_SUFFIX)
-	$(EXPAND_AR) $(AR_FLAGS) $(OBJS) $(STATIC_LIBS) $(filter %.$(LIB_SUFFIX),$(EXTRA_LIBS))
+	$(EXPAND_AR) $(AR_FLAGS) $(OBJS) $(STATIC_LIBS)
 
-$(filter-out %.$(LIB_SUFFIX),$(LIBRARY)): $(filter %.$(LIB_SUFFIX),$(LIBRARY)) $(OBJS) $(STATIC_LIBS_DEPS) $(filter %.$(LIB_SUFFIX),$(EXTRA_LIBS)) $(EXTRA_DEPS) $(GLOBAL_DEPS)
+$(filter-out %.$(LIB_SUFFIX),$(LIBRARY)): $(filter %.$(LIB_SUFFIX),$(LIBRARY)) $(OBJS) $(STATIC_LIBS_DEPS) $(EXTRA_DEPS) $(GLOBAL_DEPS)
 # When we only build a library descriptor, blow out any existing library
 	$(REPORT_BUILD)
 	$(if $(filter %.$(LIB_SUFFIX),$(LIBRARY)),,$(RM) $(REAL_LIBRARY))
-	$(EXPAND_LIBS_GEN) -o $@ $(OBJS) $(STATIC_LIBS) $(filter %.$(LIB_SUFFIX),$(EXTRA_LIBS))
+	$(EXPAND_LIBS_GEN) -o $@ $(OBJS) $(STATIC_LIBS)
 
 ifeq ($(OS_ARCH),WINNT)
 # Import libraries are created by the rules creating shared libraries.
@@ -708,7 +700,7 @@ $(SHARED_LIBRARY): $(OBJS) $(RESFILE) $(RUST_STATIC_LIB_FOR_SHARED_LIB) $(STATIC
 ifndef INCREMENTAL_LINKER
 	$(RM) $@
 endif
-	$(EXPAND_MKSHLIB) $(SHLIB_LDSTARTFILE) $(OBJS) $(SUB_SHLOBJS) $(RESFILE) $(LDFLAGS) $(WRAP_LDFLAGS) $(STATIC_LIBS) $(RUST_STATIC_LIB_FOR_SHARED_LIB) $(SHARED_LIBS) $(EXTRA_DSO_LDOPTS) $(MOZ_GLUE_LDFLAGS) $(EXTRA_LIBS) $(OS_LIBS) $(SHLIB_LDENDFILE)
+	$(EXPAND_MKSHLIB) $(OBJS) $(RESFILE) $(LDFLAGS) $(STATIC_LIBS) $(RUST_STATIC_LIB_FOR_SHARED_LIB) $(SHARED_LIBS) $(EXTRA_DSO_LDOPTS) $(MOZ_GLUE_LDFLAGS) $(OS_LIBS)
 	$(call CHECK_BINARY,$@)
 
 ifeq (_WINNT,$(GNU_CC)_$(OS_ARCH))
@@ -762,20 +754,20 @@ $(OBJS) $(HOST_OBJS) $(PROGOBJS) $(HOST_PROGOBJS): $(GLOBAL_DEPS)
 # Rules for building native targets must come first because of the host_ prefix
 $(HOST_COBJS):
 	$(REPORT_BUILD_VERBOSE)
-	$(ELOG) $(HOST_CC) $(HOST_OUTOPTION)$@ -c $(HOST_CPPFLAGS) $(HOST_CFLAGS) $(INCLUDES) $(NSPR_CFLAGS) $(_VPATH_SRCS)
+	$(ELOG) $(HOST_CC) $(HOST_OUTOPTION)$@ -c $(HOST_CPPFLAGS) $(HOST_CFLAGS) $(NSPR_CFLAGS) $(_VPATH_SRCS)
 
 $(HOST_CPPOBJS):
 	$(REPORT_BUILD_VERBOSE)
 	$(call BUILDSTATUS,OBJECT_FILE $@)
-	$(ELOG) $(HOST_CXX) $(HOST_OUTOPTION)$@ -c $(HOST_CPPFLAGS) $(HOST_CXXFLAGS) $(INCLUDES) $(NSPR_CFLAGS) $(_VPATH_SRCS)
+	$(ELOG) $(HOST_CXX) $(HOST_OUTOPTION)$@ -c $(HOST_CPPFLAGS) $(HOST_CXXFLAGS) $(NSPR_CFLAGS) $(_VPATH_SRCS)
 
 $(HOST_CMOBJS):
 	$(REPORT_BUILD_VERBOSE)
-	$(ELOG) $(HOST_CC) $(HOST_OUTOPTION)$@ -c $(HOST_CPPFLAGS) $(HOST_CFLAGS) $(HOST_CMFLAGS) $(INCLUDES) $(NSPR_CFLAGS) $(_VPATH_SRCS)
+	$(ELOG) $(HOST_CC) $(HOST_OUTOPTION)$@ -c $(HOST_CPPFLAGS) $(HOST_CFLAGS) $(HOST_CMFLAGS) $(NSPR_CFLAGS) $(_VPATH_SRCS)
 
 $(HOST_CMMOBJS):
 	$(REPORT_BUILD_VERBOSE)
-	$(ELOG) $(HOST_CXX) $(HOST_OUTOPTION)$@ -c $(HOST_CPPFLAGS) $(HOST_CXXFLAGS) $(HOST_CMMFLAGS) $(INCLUDES) $(NSPR_CFLAGS) $(_VPATH_SRCS)
+	$(ELOG) $(HOST_CXX) $(HOST_OUTOPTION)$@ -c $(HOST_CPPFLAGS) $(HOST_CXXFLAGS) $(HOST_CMMFLAGS) $(NSPR_CFLAGS) $(_VPATH_SRCS)
 
 $(COBJS):
 	$(REPORT_BUILD_VERBOSE)
@@ -807,7 +799,9 @@ endif
 define syms_template
 syms:: $(2)
 $(2): $(1)
+ifdef MOZ_CRASHREPORTER
 	$$(call py_action,dumpsymbols,$$(abspath $$<) $$(abspath $$@))
+endif
 endef
 
 ifndef MOZ_PROFILE_GENERATE
@@ -822,7 +816,15 @@ DUMP_SYMS_TARGETS :=
 endif
 endif
 
+ifdef MOZ_CRASHREPORTER
 $(foreach file,$(DUMP_SYMS_TARGETS),$(eval $(call syms_template,$(file),$(file)_syms.track)))
+else ifneq (,$(and $(LLVM_SYMBOLIZER),$(filter WINNT,$(OS_ARCH)),$(MOZ_AUTOMATION)))
+$(foreach file,$(DUMP_SYMS_TARGETS),$(eval $(call syms_template,$(file),$(addsuffix .pdb,$(basename $(file))))))
+PDB_FILES = $(addsuffix .pdb,$(basename $(DUMP_SYMS_TARGETS)))
+PDB_DEST ?= $(FINAL_TARGET)
+PDB_TARGET = target
+INSTALL_TARGETS += PDB
+endif
 
 cargo_host_flag := --target=$(RUST_HOST_TARGET)
 cargo_target_flag := --target=$(RUST_TARGET)
@@ -1032,7 +1034,7 @@ endif # HOST_RUST_PROGRAMS
 
 $(SOBJS):
 	$(REPORT_BUILD)
-	$(AS) -o $@ $(DEFINES) $(ASFLAGS) $($(notdir $<)_FLAGS) $(LOCAL_INCLUDES) -c $<
+	$(AS) -o $@ $(SFLAGS) $($(notdir $<)_FLAGS) -c $<
 
 $(CPPOBJS):
 	$(REPORT_BUILD_VERBOSE)

@@ -200,6 +200,8 @@ exports.CSS_PROPERTIES = {
       "-moz-mac-source-list-selection",
       "-moz-mac-vibrancy-dark",
       "-moz-mac-vibrancy-light",
+      "-moz-mac-vibrant-titlebar-dark",
+      "-moz-mac-vibrant-titlebar-light",
       "-moz-win-borderless-glass",
       "-moz-win-browsertabbar-toolbox",
       "-moz-win-communications-toolbox",
@@ -234,6 +236,7 @@ exports.CSS_PROPERTIES = {
       "groupbox",
       "inherit",
       "initial",
+      "inner-spin-button",
       "listbox",
       "listitem",
       "menuarrow",
@@ -346,20 +349,6 @@ exports.CSS_PROPERTIES = {
       "none",
       "unset",
       "url"
-    ]
-  },
-  "-moz-border-bottom-colors": {
-    "isInherited": false,
-    "subproperties": [
-      "-moz-border-bottom-colors"
-    ],
-    "supports": [
-      2
-    ],
-    "values": [
-      "inherit",
-      "initial",
-      "unset"
     ]
   },
   "-moz-border-end": {
@@ -501,34 +490,6 @@ exports.CSS_PROPERTIES = {
       "url"
     ]
   },
-  "-moz-border-left-colors": {
-    "isInherited": false,
-    "subproperties": [
-      "-moz-border-left-colors"
-    ],
-    "supports": [
-      2
-    ],
-    "values": [
-      "inherit",
-      "initial",
-      "unset"
-    ]
-  },
-  "-moz-border-right-colors": {
-    "isInherited": false,
-    "subproperties": [
-      "-moz-border-right-colors"
-    ],
-    "supports": [
-      2
-    ],
-    "values": [
-      "inherit",
-      "initial",
-      "unset"
-    ]
-  },
   "-moz-border-start": {
     "isInherited": false,
     "subproperties": [
@@ -625,20 +586,6 @@ exports.CSS_PROPERTIES = {
       "medium",
       "thick",
       "thin",
-      "unset"
-    ]
-  },
-  "-moz-border-top-colors": {
-    "isInherited": false,
-    "subproperties": [
-      "-moz-border-top-colors"
-    ],
-    "supports": [
-      2
-    ],
-    "values": [
-      "inherit",
-      "initial",
       "unset"
     ]
   },
@@ -3106,7 +3053,8 @@ exports.CSS_PROPERTIES = {
       "-moz-outline-radius-topright",
       "outline-style",
       "outline-width",
-      "overflow-clip-box",
+      "overflow-clip-box-block",
+      "overflow-clip-box-inline",
       "overflow-x",
       "overflow-y",
       "padding-block-end",
@@ -3131,12 +3079,15 @@ exports.CSS_PROPERTIES = {
       "ruby-align",
       "ruby-position",
       "scroll-behavior",
+      "overscroll-behavior-x",
+      "overscroll-behavior-y",
       "scroll-snap-coordinate",
       "scroll-snap-destination",
       "scroll-snap-points-x",
       "scroll-snap-points-y",
       "scroll-snap-type-x",
       "scroll-snap-type-y",
+      "shape-image-threshold",
       "shape-outside",
       "shape-rendering",
       "-moz-stack-sizing",
@@ -3258,6 +3209,8 @@ exports.CSS_PROPERTIES = {
       "-moz-mac-source-list-selection",
       "-moz-mac-vibrancy-dark",
       "-moz-mac-vibrancy-light",
+      "-moz-mac-vibrant-titlebar-dark",
+      "-moz-mac-vibrant-titlebar-light",
       "-moz-max-content",
       "-moz-middle-with-baseline",
       "-moz-min-content",
@@ -3420,6 +3373,7 @@ exports.CSS_PROPERTIES = {
       "geometricprecision",
       "grab",
       "grabbing",
+      "grayscale",
       "grid",
       "groove",
       "groupbox",
@@ -3452,6 +3406,7 @@ exports.CSS_PROPERTIES = {
       "inline-grid",
       "inline-start",
       "inline-table",
+      "inner-spin-button",
       "inset",
       "inside",
       "inter-character",
@@ -4269,10 +4224,6 @@ exports.CSS_PROPERTIES = {
       "border-right-color",
       "border-bottom-color",
       "border-left-color",
-      "-moz-border-top-colors",
-      "-moz-border-right-colors",
-      "-moz-border-bottom-colors",
-      "-moz-border-left-colors",
       "border-image-source",
       "border-image-slice",
       "border-image-width",
@@ -8309,6 +8260,52 @@ exports.CSS_PROPERTIES = {
       "visible"
     ]
   },
+  "overscroll-behavior": {
+    "isInherited": false,
+    "subproperties": [
+      "overscroll-behavior-x",
+      "overscroll-behavior-y"
+    ],
+    "supports": [],
+    "values": [
+      "auto",
+      "contain",
+      "inherit",
+      "initial",
+      "none",
+      "unset"
+    ]
+  },
+  "overscroll-behavior-x": {
+    "isInherited": false,
+    "subproperties": [
+      "overscroll-behavior-x"
+    ],
+    "supports": [],
+    "values": [
+      "auto",
+      "contain",
+      "inherit",
+      "initial",
+      "none",
+      "unset"
+    ]
+  },
+  "overscroll-behavior-y": {
+    "isInherited": false,
+    "subproperties": [
+      "overscroll-behavior-y"
+    ],
+    "supports": [],
+    "values": [
+      "auto",
+      "contain",
+      "inherit",
+      "initial",
+      "none",
+      "unset"
+    ]
+  },
   "padding": {
     "isInherited": false,
     "subproperties": [
@@ -9863,78 +9860,6 @@ exports.PREFERENCES = [
     "layout.css.font-variations.enabled"
   ],
   [
-    "grid",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-area",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-auto-columns",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-auto-flow",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-auto-rows",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-column",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-column-end",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-column-gap",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-column-start",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-gap",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-row",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-row-end",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-row-gap",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-row-start",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-template",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-template-areas",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-template-columns",
-    "layout.css.grid.enabled"
-  ],
-  [
-    "grid-template-rows",
-    "layout.css.grid.enabled"
-  ],
-  [
     "initial-letter",
     "layout.css.initial-letter.enabled"
   ],
@@ -9959,12 +9884,32 @@ exports.PREFERENCES = [
     "layout.css.overflow-clip-box.enabled"
   ],
   [
+    "overflow-clip-box-block",
+    "layout.css.overflow-clip-box.enabled"
+  ],
+  [
+    "overflow-clip-box-inline",
+    "layout.css.overflow-clip-box.enabled"
+  ],
+  [
     "paint-order",
     "svg.paint-order.enabled"
   ],
   [
     "scroll-behavior",
     "layout.css.scroll-behavior.property-enabled"
+  ],
+  [
+    "overscroll-behavior",
+    "layout.css.overscroll-behavior.enabled"
+  ],
+  [
+    "overscroll-behavior-x",
+    "layout.css.overscroll-behavior.enabled"
+  ],
+  [
+    "overscroll-behavior-y",
+    "layout.css.overscroll-behavior.enabled"
   ],
   [
     "scroll-snap-coordinate",
@@ -9993,6 +9938,10 @@ exports.PREFERENCES = [
   [
     "scroll-snap-type-y",
     "layout.css.scroll-snap.enabled"
+  ],
+  [
+    "shape-image-threshold",
+    "layout.css.shape-outside.enabled"
   ],
   [
     "shape-outside",
@@ -10125,6 +10074,10 @@ exports.PREFERENCES = [
   [
     "-moz-font-language-override",
     "layout.css.prefixes.font-features"
+  ],
+  [
+    "-moz-column-span",
+    "layout.css.column-span.enabled"
   ],
   [
     "-webkit-animation",

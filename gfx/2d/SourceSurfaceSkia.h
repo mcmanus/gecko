@@ -18,6 +18,7 @@ namespace mozilla {
 namespace gfx {
 
 class DrawTargetSkia;
+class SnapshotLock;
 
 class SourceSurfaceSkia : public DataSourceSurface
 {
@@ -29,6 +30,12 @@ public:
   virtual SurfaceType GetType() const { return SurfaceType::SKIA; }
   virtual IntSize GetSize() const;
   virtual SurfaceFormat GetFormat() const;
+
+  // This is only ever called by the DT destructor, which can only ever happen
+  // from one place at a time. Therefore it doesn't need to hold the ChangeMutex
+  // as mSurface is never read to directly and is just there to keep the object
+  // alive, which itself is refcounted in a thread-safe manner.
+  void GiveSurface(sk_sp<SkSurface> &aSurface) { mSurface = aSurface; mDrawTarget = nullptr; }
 
   sk_sp<SkImage> GetImage();
 
@@ -58,10 +65,12 @@ private:
   void DrawTargetWillChange();
 
   sk_sp<SkImage> mImage;
+  // This keeps a surface alive if needed because its DrawTarget has gone away.
+  sk_sp<SkSurface> mSurface;
   SurfaceFormat mFormat;
   IntSize mSize;
   int32_t mStride;
-  RefPtr<DrawTargetSkia> mDrawTarget;
+  DrawTargetSkia* mDrawTarget;
   Mutex mChangeMutex;
 };
 

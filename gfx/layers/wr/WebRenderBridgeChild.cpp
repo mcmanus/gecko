@@ -7,6 +7,7 @@
 #include "mozilla/layers/WebRenderBridgeChild.h"
 
 #include "gfxPlatform.h"
+#include "mozilla/dom/TabGroup.h"
 #include "mozilla/layers/CompositableClient.h"
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/ImageDataSerializer.h"
@@ -36,16 +37,20 @@ WebRenderBridgeChild::WebRenderBridgeChild(const wr::PipelineId& aPipelineId)
 {
 }
 
+WebRenderBridgeChild::~WebRenderBridgeChild()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(mDestroyed);
+}
+
 void
 WebRenderBridgeChild::Destroy(bool aIsSync)
 {
   if (!IPCOpen()) {
     return;
   }
-  // mDestroyed is used to prevent calling Send__delete__() twice.
-  // When this function is called from CompositorBridgeChild::Destroy().
-  mDestroyed = true;
-  mManager = nullptr;
+
+  DoDestroy();
 
   if (aIsSync) {
     SendShutdownSync();
@@ -57,6 +62,16 @@ WebRenderBridgeChild::Destroy(bool aIsSync)
 void
 WebRenderBridgeChild::ActorDestroy(ActorDestroyReason why)
 {
+  DoDestroy();
+}
+
+void
+WebRenderBridgeChild::DoDestroy()
+{
+  // mDestroyed is used to prevent calling Send__delete__() twice.
+  // When this function is called from CompositorBridgeChild::Destroy().
+  // mActiveResourceTracker is not cleared here, since it is
+  // used by PersistentBufferProviderShared.
   mDestroyed = true;
   mManager = nullptr;
 }
@@ -129,7 +144,9 @@ WebRenderBridgeChild::EndTransaction(const wr::LayoutSize& aContentSize,
   MOZ_ASSERT(!mDestroyed);
   MOZ_ASSERT(mIsInTransaction);
 
-  ByteBuffer dlData(Move(aDL.dl));
+  ByteBuf dlData(aDL.dl.inner.data, aDL.dl.inner.length, aDL.dl.inner.capacity);
+  aDL.dl.inner.capacity = 0;
+  aDL.dl.inner.data = nullptr;
 
   TimeStamp fwdTime;
 #if defined(ENABLE_FRAME_LATENCY_LOG)
@@ -231,7 +248,7 @@ WebRenderBridgeChild::AllocExternalImageIdForCompositable(CompositableClient* aC
 }
 
 void
-WebRenderBridgeChild::DeallocExternalImageId(wr::ExternalImageId& aImageId)
+WebRenderBridgeChild::DeallocExternalImageId(const wr::ExternalImageId& aImageId)
 {
   if (mDestroyed) {
     // This can happen if the IPC connection was torn down, because, e.g.
@@ -271,13 +288,12 @@ WriteFontDescriptor(const uint8_t* aData, uint32_t aLength, uint32_t aIndex,
 }
 
 void
-WebRenderBridgeChild::PushGlyphs(wr::DisplayListBuilder& aBuilder, const nsTArray<wr::GlyphInstance>& aGlyphs,
+WebRenderBridgeChild::PushGlyphs(wr::DisplayListBuilder& aBuilder, Range<const wr::GlyphInstance> aGlyphs,
                                  gfx::ScaledFont* aFont, const wr::ColorF& aColor, const StackingContextHelper& aSc,
                                  const wr::LayerRect& aBounds, const wr::LayerRect& aClip, bool aBackfaceVisible,
                                  const wr::GlyphOptions* aGlyphOptions)
 {
   MOZ_ASSERT(aFont);
-  MOZ_ASSERT(!aGlyphs.IsEmpty());
 
   wr::WrFontInstanceKey key = GetFontKeyForScaledFont(aFont);
   MOZ_ASSERT(key.mNamespace.mHandle && key.mHandle);
@@ -287,7 +303,7 @@ WebRenderBridgeChild::PushGlyphs(wr::DisplayListBuilder& aBuilder, const nsTArra
                     aBackfaceVisible,
                     aColor,
                     key,
-                    Range<const wr::GlyphInstance>(aGlyphs.Elements(), aGlyphs.Length()),
+                    aGlyphs,
                     aGlyphOptions);
 }
 
@@ -399,6 +415,15 @@ LayersIPCActor*
 WebRenderBridgeChild::GetLayersIPCActor()
 {
   return static_cast<LayersIPCActor*>(GetCompositorBridgeChild());
+}
+
+void
+WebRenderBridgeChild::SyncWithCompositor()
+{
+  auto compositorBridge = GetCompositorBridgeChild();
+  if (compositorBridge && compositorBridge->IPCOpen()) {
+    compositorBridge->SendSyncWithCompositor();
+  }
 }
 
 void
@@ -586,14 +611,30 @@ WebRenderBridgeChild::EndClearCachedResources()
 void
 WebRenderBridgeChild::SetWebRenderLayerManager(WebRenderLayerManager* aManager)
 {
-  MOZ_ASSERT(aManager);
+  MOZ_ASSERT(aManager && !mManager);
   mManager = aManager;
+
+  nsCOMPtr<nsIEventTarget> eventTarget = nullptr;
+  if (dom::TabGroup* tabGroup = mManager->GetTabGroup()) {
+    eventTarget = tabGroup->EventTargetFor(TaskCategory::Other);
+  }
+  MOZ_ASSERT(eventTarget || !XRE_IsContentProcess());
+  mActiveResourceTracker = MakeUnique<ActiveResourceTracker>(
+    1000, "CompositableForwarder", eventTarget);
 }
 
 ipc::IShmemAllocator*
 WebRenderBridgeChild::GetShmemAllocator()
 {
   return static_cast<CompositorBridgeChild*>(Manager());
+}
+
+
+RefPtr<KnowsCompositor>
+WebRenderBridgeChild::GetForMedia()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  return MakeAndAddRef<KnowsCompositorMediaProxy>(GetTextureFactoryIdentifier());
 }
 
 } // namespace layers

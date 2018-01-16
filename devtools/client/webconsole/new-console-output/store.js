@@ -18,6 +18,7 @@ const {
 const {
   MESSAGE_ADD,
   MESSAGE_OPEN,
+  MESSAGES_ADD,
   MESSAGES_CLEAR,
   REMOVED_ACTORS_CLEAR,
   NETWORK_MESSAGE_UPDATE,
@@ -42,9 +43,11 @@ function configureStore(hud, options = {}) {
   const logLimit = options.logLimit
     || Math.max(Services.prefs.getIntPref("devtools.hud.loglimit"), 1);
 
+  const sidebarToggle = Services.prefs.getBoolPref(PREFS.UI.SIDEBAR_TOGGLE);
+
   const initialState = {
-    prefs: new PrefState({ logLimit }),
-    filters: new FilterState({
+    prefs: PrefState({ logLimit, sidebarToggle }),
+    filters: FilterState({
       error: Services.prefs.getBoolPref(PREFS.FILTER.ERROR),
       warn: Services.prefs.getBoolPref(PREFS.FILTER.WARN),
       info: Services.prefs.getBoolPref(PREFS.FILTER.INFO),
@@ -54,7 +57,7 @@ function configureStore(hud, options = {}) {
       net: Services.prefs.getBoolPref(PREFS.FILTER.NET),
       netxhr: Services.prefs.getBoolPref(PREFS.FILTER.NETXHR),
     }),
-    ui: new UiState({
+    ui: UiState({
       filterBarVisible: Services.prefs.getBoolPref(PREFS.UI.FILTER_BAR),
       networkMessageActiveTabId: "headers",
       persistLogs: Services.prefs.getBoolPref(PREFS.UI.PERSIST),
@@ -130,7 +133,7 @@ function enableActorReleaser(hud) {
 
       let type = action.type;
       let proxy = hud ? hud.proxy : null;
-      if (proxy && (type == MESSAGE_ADD || type == MESSAGES_CLEAR)) {
+      if (proxy && ([MESSAGE_ADD, MESSAGES_ADD, MESSAGES_CLEAR].includes(type))) {
         releaseActors(state.messages.removedActors, proxy);
 
         // Reset `removedActors` in message reducer.
@@ -177,6 +180,13 @@ function enableNetProvider(hud) {
           actions,
           webConsoleClient: proxy.webConsoleClient
         });
+
+        // /!\ This is terrible, but it allows ResponsePanel to be able to call
+        // `dataProvider.requestData` to fetch response content lazily.
+        // `proxy.networkDataProvider` is put by NewConsoleOutputWrapper on
+        // `serviceContainer` which allow NetworkEventMessage to expose requestData on
+        // the fake `connector` object it hands over to ResponsePanel.
+        proxy.networkDataProvider = dataProvider;
       }
 
       let type = action.type;
@@ -188,25 +198,9 @@ function enableNetProvider(hud) {
       // received. The rest of updates will be handled below, see:
       // NETWORK_MESSAGE_UPDATE action handler.
       if (type == MESSAGE_OPEN) {
-        let message = getMessage(state, action.id);
-        if (!message.openedOnce && message.source == "network") {
-          let updates = getAllNetworkMessagesUpdateById(newState);
-
-          // If there is no network request update received for this
-          // request-log, it's likely that it comes from cache.
-          // I.e. it's been executed before the console panel started
-          // listening from network events. Let fix that by updating
-          // the reducer now.
-          // Executing the reducer means that the `networkMessagesUpdateById`
-          // is updated (a actor key created). The key is needed for proper
-          // handling NETWORK_UPDATE_REQUEST event (in the same reducer).
-          if (!updates[action.id]) {
-            newState = reducer(newState, {
-              type: NETWORK_MESSAGE_UPDATE,
-              message: message,
-            });
-          }
-
+        let updates = getAllNetworkMessagesUpdateById(newState);
+        let message = updates[action.id];
+        if (message && !message.openedOnce && message.source == "network") {
           dataProvider.onNetworkEvent(null, message);
           message.updates.forEach(updateType => {
             dataProvider.onNetworkEventUpdate(null, {
@@ -217,12 +211,23 @@ function enableNetProvider(hud) {
         }
       }
 
-      // Process all incoming HTTP details packets.
+      // Process all incoming HTTP details packets. Note that
+      // Network event update packets are sent in batches from:
+      // `NewConsoleOutputWrapper.dispatchMessageUpdate` using
+      // NETWORK_MESSAGE_UPDATE action.
+      // Make sure to call `dataProvider.onNetworkEventUpdate`
+      // to fetch data from the backend.
       if (type == NETWORK_MESSAGE_UPDATE) {
         let actor = action.response.networkInfo.actor;
         let open = getAllMessagesUiById(state).includes(actor);
         if (open) {
-          dataProvider.onNetworkEventUpdate(null, action.response);
+          let message = getMessage(state, actor);
+          message.updates.forEach(updateType => {
+            dataProvider.onNetworkEventUpdate(null, {
+              packet: { updateType },
+              networkInfo: message,
+            });
+          });
         }
       }
 

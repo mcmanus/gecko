@@ -512,8 +512,8 @@ UploadImageDataToTexture(GLContext* gl,
             TexSubImage2DHelper(gl,
                                 aTextureTarget,
                                 0,
-                                rect.x,
-                                rect.y,
+                                rect.X(),
+                                rect.Y(),
                                 rect.Width(),
                                 rect.Height(),
                                 aStride,
@@ -539,10 +539,10 @@ UploadSurfaceToTexture(GLContext* gl,
                        GLenum aTextureUnit,
                        GLenum aTextureTarget)
 {
-
-    int32_t stride = aSurface->Stride();
+    DataSourceSurface::ScopedMap map(aSurface, DataSourceSurface::READ);
+    int32_t stride = map.GetStride();
     SurfaceFormat format = aSurface->GetFormat();
-    unsigned char* data = aSurface->GetData() +
+    unsigned char* data = map.GetData() +
         DataOffset(aSrcPoint, stride, format);
 
     return UploadImageDataToTexture(gl, data, stride, format,

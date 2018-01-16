@@ -59,10 +59,11 @@ NS_NewMathMLElement(mozilla::dom::Element** aResult,
 #ifdef MOZ_XUL
 nsresult
 NS_NewXULElement(mozilla::dom::Element** aResult,
-                 already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
+                 already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
+                 mozilla::dom::FromParser aFromParser);
 
 void
-NS_TrustedNewXULElement(nsIContent** aResult,
+NS_TrustedNewXULElement(mozilla::dom::Element** aResult,
                         already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
 #endif
 

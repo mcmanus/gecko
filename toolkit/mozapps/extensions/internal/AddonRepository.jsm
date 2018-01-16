@@ -9,24 +9,19 @@ const Ci = Components.interfaces;
 const Cu = Components.utils;
 const Cr = Components.results;
 
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/AddonManager.jsm");
-/* globals AddonManagerPrivate*/
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-                                  "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "DeferredSave",
-                                  "resource://gre/modules/DeferredSave.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AddonRepository_SQLiteMigrator",
-                                  "resource://gre/modules/addons/AddonRepository_SQLiteMigrator.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ServiceRequest",
-                                  "resource://gre/modules/ServiceRequest.jsm");
-
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AddonManager: "resource://gre/modules/AddonManager.jsm",
+  AddonManagerPrivate: "resource://gre/modules/AddonManager.jsm",
+  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
+  DeferredTask: "resource://gre/modules/DeferredTask.jsm",
+  Services: "resource://gre/modules/Services.jsm",
+  ServiceRequest: "resource://gre/modules/ServiceRequest.jsm",
+  NetUtil: "resource://gre/modules/NetUtil.jsm",
+  OS: "resource://gre/modules/osfile.jsm",
+  Preferences: "resource://gre/modules/Preferences.jsm",
+});
 
 this.EXPORTED_SYMBOLS = [ "AddonRepository" ];
 
@@ -36,10 +31,7 @@ const PREF_GETADDONS_CACHE_ID_ENABLED    = "extensions.%ID%.getAddons.cache.enab
 const PREF_GETADDONS_BROWSEADDONS        = "extensions.getAddons.browseAddons";
 const PREF_GETADDONS_BYIDS               = "extensions.getAddons.get.url";
 const PREF_GETADDONS_BYIDS_PERFORMANCE   = "extensions.getAddons.getWithPerformance.url";
-const PREF_GETADDONS_BROWSERECOMMENDED   = "extensions.getAddons.recommended.browseURL";
-const PREF_GETADDONS_GETRECOMMENDED      = "extensions.getAddons.recommended.url";
 const PREF_GETADDONS_BROWSESEARCHRESULTS = "extensions.getAddons.search.browseURL";
-const PREF_GETADDONS_GETSEARCHRESULTS    = "extensions.getAddons.search.url";
 const PREF_GETADDONS_DB_SCHEMA           = "extensions.getAddons.databaseSchema";
 
 const PREF_METADATA_LASTUPDATE           = "extensions.getAddons.cache.lastUpdate";
@@ -699,15 +691,6 @@ this.AddonRepository = {
   },
 
   /**
-   * The url that can be visited to see recommended add-ons in this repository.
-   * If the corresponding preference is not defined, defaults to about:blank.
-   */
-  getRecommendedURL() {
-    let url = this._formatURLPref(PREF_GETADDONS_BROWSERECOMMENDED, {});
-    return (url != null) ? url : "about:blank";
-  },
-
-  /**
    * Retrieves the url that can be visited to see search results for the given
    * terms. If the corresponding preference is not defined, defaults to
    * about:blank.
@@ -777,9 +760,7 @@ this.AddonRepository = {
       if (type == Services.prefs.PREF_STRING) {
         pref = PREF_GETADDONS_BYIDS_PERFORMANCE;
 
-        let startupInfo = Cc["@mozilla.org/toolkit/app-startup;1"].
-                          getService(Ci.nsIAppStartup).
-                          getStartupInfo();
+        let startupInfo = Services.startup.getStartupInfo();
 
         params.TIME_MAIN = "";
         params.TIME_FIRST_PAINT = "";
@@ -863,70 +844,6 @@ this.AddonRepository = {
    */
   backgroundUpdateCheck() {
     return this._repopulateCacheInternal(true);
-  },
-
-  /**
-   * Begins a search for recommended add-ons in this repository. Results will
-   * be passed to the given callback.
-   *
-   * @param  aMaxResults
-   *         The maximum number of results to return
-   * @param  aCallback
-   *         The callback to pass results to
-   */
-  retrieveRecommendedAddons(aMaxResults, aCallback) {
-    let url = this._formatURLPref(PREF_GETADDONS_GETRECOMMENDED, {
-      API_VERSION,
-
-      // Get twice as many results to account for potential filtering
-      MAX_RESULTS: 2 * aMaxResults
-    });
-
-    let handleResults = (aElements, aTotalResults) => {
-      this._getLocalAddonIds(aLocalAddonIds => {
-        // aTotalResults irrelevant
-        this._parseAddons(aElements, -1, aLocalAddonIds);
-      });
-    };
-
-    this._beginSearch(url, aMaxResults, aCallback, handleResults);
-  },
-
-  /**
-   * Begins a search for add-ons in this repository. Results will be passed to
-   * the given callback.
-   *
-   * @param  aSearchTerms
-   *         The terms to search for
-   * @param  aMaxResults
-   *         The maximum number of results to return
-   * @param  aCallback
-   *         The callback to pass results to
-   */
-  searchAddons(aSearchTerms, aMaxResults, aCallback) {
-    let compatMode = "normal";
-    if (!AddonManager.checkCompatibility)
-      compatMode = "ignore";
-    else if (AddonManager.strictCompatibility)
-      compatMode = "strict";
-
-    let substitutions = {
-      API_VERSION,
-      TERMS: encodeURIComponent(aSearchTerms),
-      // Get twice as many results to account for potential filtering
-      MAX_RESULTS: 2 * aMaxResults,
-      COMPATIBILITY_MODE: compatMode,
-    };
-
-    let url = this._formatURLPref(PREF_GETADDONS_GETSEARCHRESULTS, substitutions);
-
-    let handleResults = (aElements, aTotalResults) => {
-      this._getLocalAddonIds(aLocalAddonIds => {
-        this._parseAddons(aElements, aTotalResults, aLocalAddonIds);
-      });
-    };
-
-    this._beginSearch(url, aMaxResults, aCallback, handleResults);
   },
 
   // Posts results to the callback
@@ -1460,29 +1377,6 @@ this.AddonRepository = {
     this._request.send(null);
   },
 
-  // Gets the id's of local add-ons, and the sourceURI's of local installs,
-  // passing the results to aCallback
-  _getLocalAddonIds(aCallback) {
-    let localAddonIds = {ids: null, sourceURIs: null};
-
-    AddonManager.getAllAddons(function(aAddons) {
-      localAddonIds.ids = aAddons.map(a => a.id);
-      if (localAddonIds.sourceURIs)
-        aCallback(localAddonIds);
-    });
-
-    AddonManager.getAllInstalls(function(aInstalls) {
-      localAddonIds.sourceURIs = [];
-      for (let install of aInstalls) {
-        if (install.state != AddonManager.STATE_AVAILABLE)
-          localAddonIds.sourceURIs.push(install.sourceURI.spec);
-      }
-
-      if (localAddonIds.ids)
-        aCallback(localAddonIds);
-    });
-  },
-
   // Create url from preference, returning null if preference does not exist
   _formatURLPref(aPreference, aSubstitutions) {
     let url = Services.prefs.getCharPref(aPreference, "");
@@ -1529,6 +1423,9 @@ this.AddonRepository = {
 
 var AddonDatabase = {
   connectionPromise: null,
+  _saveTask: null,
+  _blockerAdded: false,
+
   // the in-memory database
   DB: BLANK_DB(),
 
@@ -1578,20 +1475,7 @@ var AddonDatabase = {
          }
 
          // Create a blank addons.json file
-         this._saveDBToDisk();
-
-         let dbSchema = Services.prefs.getIntPref(PREF_GETADDONS_DB_SCHEMA, 0);
-
-         if (dbSchema < DB_MIN_JSON_SCHEMA) {
-           let results = await new Promise((resolve, reject) => {
-             AddonRepository_SQLiteMigrator.migrate(resolve);
-           });
-
-           if (results.length) {
-             await this._insertAddons(results);
-           }
-
-         }
+         this.save();
 
          Services.prefs.setIntPref(PREF_GETADDONS_DB_SCHEMA, DB_SCHEMA);
          return this.DB;
@@ -1614,13 +1498,6 @@ var AddonDatabase = {
   },
 
   /**
-   * A lazy getter for the database connection.
-   */
-  get connection() {
-    return this.openConnection();
-  },
-
-  /**
    * Asynchronously shuts down the database connection and releases all
    * cached objects
    *
@@ -1637,10 +1514,13 @@ var AddonDatabase = {
 
     this.connectionPromise = null;
 
-    if (aSkipFlush) {
+    if (aSkipFlush || !this._saveTask) {
       return Promise.resolve();
     }
-    return this.Writer.flush();
+
+    let promise = this._saveTask.finalize();
+    this._saveTask = null;
+    return promise;
   },
 
   /**
@@ -1654,10 +1534,13 @@ var AddonDatabase = {
   delete(aCallback) {
     this.DB = BLANK_DB();
 
-    this._deleting = this.Writer.flush()
-      .catch(() => {})
-      // shutdown(true) never rejects
-      .then(() => this.shutdown(true))
+    if (this._saveTask) {
+      this._saveTask.disarm();
+      this._saveTask = null;
+    }
+
+    // shutdown(true) never rejects
+    this._deleting = this.shutdown(true)
       .then(() => OS.File.remove(this.jsonFile, {}))
       .catch(error => logger.error("Unable to delete Addon Repository file " +
                                  this.jsonFile, error))
@@ -1666,7 +1549,7 @@ var AddonDatabase = {
     return this._deleting;
   },
 
-  toJSON() {
+  async _saveNow() {
     let json = {
       schema: this.DB.schema,
       addons: []
@@ -1675,22 +1558,28 @@ var AddonDatabase = {
     for (let [, value] of this.DB.addons)
       json.addons.push(value);
 
-    return json;
+    await OS.File.writeAtomic(this.jsonFile, JSON.stringify(json),
+                              {tmpPath: `${this.jsonFile}.tmp`});
   },
 
-  /*
-   * This is a deferred task writer that is used
-   * to batch operations done within 50ms of each
-   * other and thus generating only one write to disk
-   */
-  get Writer() {
-    delete this.Writer;
-    this.Writer = new DeferredSave(
-      this.jsonFile,
-      () => { return JSON.stringify(this); },
-      DB_BATCH_TIMEOUT_MS
-    );
-    return this.Writer;
+  save() {
+    if (!this._saveTask) {
+      this._saveTask = new DeferredTask(() => this._saveNow(), DB_BATCH_TIMEOUT_MS);
+
+      if (!this._blockerAdded) {
+        AsyncShutdown.profileBeforeChange.addBlocker(
+          "Flush AddonRepository",
+          async () => {
+            if (!this._saveTask) {
+              return;
+            }
+            await this._saveTask.finalize();
+            this._saveTask = null;
+          });
+        this._blockerAdded = true;
+      }
+    }
+    this._saveTask.arm();
   },
 
   /**
@@ -1703,7 +1592,14 @@ var AddonDatabase = {
     if (this._deleting) {
       return this._deleting;
     }
-    return this.Writer.flush();
+
+    if (this._saveTask) {
+      let promise = this._saveTask.finalize();
+      this._saveTask = null;
+      return promise;
+    }
+
+    return Promise.resolve();
   },
 
   /**
@@ -1745,15 +1641,12 @@ var AddonDatabase = {
    */
   async insertAddons(aAddons, aCallback) {
     await this.openConnection();
-    await this._insertAddons(aAddons, aCallback);
-  },
 
-  async _insertAddons(aAddons, aCallback) {
     for (let addon of aAddons) {
       this._insertAddon(addon);
     }
 
-    await this._saveDBToDisk();
+    this.save();
     aCallback && aCallback();
   },
 
@@ -1887,18 +1780,6 @@ var AddonDatabase = {
     }
 
     return addon;
-  },
-
-  /**
-   * Write the in-memory DB to disk, after waiting for
-   * the DB_BATCH_TIMEOUT_MS timeout.
-   *
-   * @return Promise A promise that resolves after the
-   *                 write to disk has completed.
-   */
-  _saveDBToDisk() {
-    return this.Writer.saveChanges().catch(
-      e => logger.error("SaveDBToDisk failed", e));
   },
 
   /**

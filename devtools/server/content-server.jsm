@@ -29,17 +29,17 @@ function setupServer(mm) {
   gLoader.invisibleToDebugger = true;
   let { DebuggerServer } = gLoader.require("devtools/server/main");
 
-  if (!DebuggerServer.initialized) {
-    DebuggerServer.init();
-  }
+  DebuggerServer.init();
   // For browser content toolbox, we do need a regular root actor and all tab
   // actors, but don't need all the "browser actors" that are only useful when
   // debugging the parent process via the browser toolbox.
-  DebuggerServer.registerActors({ browser: false, root: true, tab: true });
+  DebuggerServer.registerActors({ root: true, tab: true });
 
   // Clean up things when the client disconnects
   mm.addMessageListener("debug:content-process-destroy", function onDestroy() {
     mm.removeMessageListener("debug:content-process-destroy", onDestroy);
+
+    Cu.unblockThreadedExecution();
 
     DebuggerServer.destroy();
     gLoader.destroy();
@@ -54,23 +54,32 @@ function init(msg) {
   mm.QueryInterface(Ci.nsISyncMessageSender);
   let prefix = msg.data.prefix;
 
-  // Setup a server if none started yet
-  let loader = setupServer(mm);
+  // Using the JS debugger causes problems when we're trying to
+  // schedule those zone groups across different threads. Calling
+  // blockThreadedExecution causes Gecko to switch to a simpler
+  // single-threaded model until unblockThreadedExecution is called
+  // later. We cannot start the debugger until the callback passed to
+  // blockThreadedExecution has run, signaling that we're running
+  // single-threaded.
+  Cu.blockThreadedExecution(() => {
+    // Setup a server if none started yet
+    let loader = setupServer(mm);
 
-  // Connect both parent/child processes debugger servers RDP via message
-  // managers
-  let { DebuggerServer } = loader.require("devtools/server/main");
-  let conn = DebuggerServer.connectToParent(prefix, mm);
-  conn.parentMessageManager = mm;
+    // Connect both parent/child processes debugger servers RDP via message
+    // managers
+    let { DebuggerServer } = loader.require("devtools/server/main");
+    let conn = DebuggerServer.connectToParent(prefix, mm);
+    conn.parentMessageManager = mm;
 
-  let { ChildProcessActor } =
-    loader.require("devtools/server/actors/child-process");
-  let { ActorPool } = loader.require("devtools/server/main");
-  let actor = new ChildProcessActor(conn);
-  let actorPool = new ActorPool(conn);
-  actorPool.addActor(actor);
-  conn.addActorPool(actorPool);
+    let { ChildProcessActor } =
+        loader.require("devtools/server/actors/child-process");
+    let { ActorPool } = loader.require("devtools/server/main");
+    let actor = new ChildProcessActor(conn);
+    let actorPool = new ActorPool(conn);
+    actorPool.addActor(actor);
+    conn.addActorPool(actorPool);
 
-  let response = { actor: actor.form() };
-  mm.sendAsyncMessage("debug:content-process-actor", response);
+    let response = { actor: actor.form() };
+    mm.sendAsyncMessage("debug:content-process-actor", response);
+  });
 }

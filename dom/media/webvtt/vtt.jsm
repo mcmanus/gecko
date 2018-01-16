@@ -127,9 +127,10 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
       for (var n = 0; n < a.length; ++n) {
         if (v === a[n]) {
           this.set(k, v);
-          break;
+          return true;
         }
       }
+      return false;
     },
     // Accept a setting if its a valid digits value (int or float)
     digitsValue: function(k, v) {
@@ -150,7 +151,13 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
         }
       }
       return false;
-    }
+    },
+    // Delete a setting
+    del: function (k) {
+      if (this.has(k)) {
+        delete this.values[k];
+      }
+    },
   };
 
   // Helper function to parse input into groups separated by 'groupDelim', and
@@ -189,7 +196,6 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
     // 4.4.2 WebVTT cue settings
     function consumeCueSettings(input, cue) {
       var settings = new Settings();
-
       parseOptions(input, function (k, v) {
         switch (k) {
         case "region":
@@ -216,9 +222,14 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
           break;
         case "position":
           vals = v.split(",");
-          settings.percent(k, vals[0]);
-          if (vals.length === 2) {
-            settings.alt("positionAlign", vals[1], ["line-left", "center", "line-right", "auto"]);
+          if (settings.percent(k, vals[0])) {
+            if (vals.length === 2) {
+              if (!settings.alt("positionAlign", vals[1], ["line-left", "center", "line-right"])) {
+                // Remove the "position" value because the "positionAlign" is not expected value.
+                // It will be set to default value below.
+                settings.del(k);
+              }
+            }
           }
           break;
         case "size":
@@ -228,9 +239,10 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
           settings.alt(k, v, ["start", "center", "end", "left", "right"]);
           break;
         }
-      }, /:/, /\s/);
+      }, /:/, /\t|\n|\f|\r| /); // groupDelim is ASCII whitespace
 
       // Apply default values for any missing fields.
+      // https://w3c.github.io/webvtt/#collect-a-webvtt-block step 11.4.1.3
       cue.region = settings.get("region", null);
       cue.vertical = settings.get("vertical", "");
       cue.line = settings.get("line", "auto");
@@ -239,7 +251,7 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
       cue.size = settings.get("size", 100);
       cue.align = settings.get("align", "center");
       cue.position = settings.get("position", "auto");
-      cue.positionAlign = settings.get("positionAlign", "center");
+      cue.positionAlign = settings.get("positionAlign", "auto");
     }
 
     function skipWhitespace() {
@@ -305,8 +317,14 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
     rt: "ruby"
   };
 
+  const PARSE_CONTENT_MODE = {
+    NORMAL_CUE: "normal_cue",
+    PSUEDO_CUE: "pseudo_cue",
+    DOCUMENT_FRAGMENT: "document_fragment",
+    REGION_CUE: "region_cue",
+  }
   // Parse content into a document fragment.
-  function parseContent(window, input, bReturnFrag) {
+  function parseContent(window, input, mode) {
     function nextToken() {
       // Check for end-of-string.
       if (!input) {
@@ -384,16 +402,20 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
       return hours + ':' + minutes + ':' + seconds + '.' + f;
     }
 
-    var isFirefoxSupportPseudo = (/firefox/i.test(window.navigator.userAgent))
-          && Services.prefs.getBoolPref("media.webvtt.pseudo.enabled");
     var root;
-    if (bReturnFrag) {
-      root = window.document.createDocumentFragment();
-    } else if (isFirefoxSupportPseudo) {
-      root = window.document.createElement("div", {pseudo: "::cue"});
-    } else {
-      root = window.document.createElement("div");
+    switch (mode) {
+      case PARSE_CONTENT_MODE.PSUEDO_CUE:
+        root = window.document.createElement("div", {pseudo: "::cue"});
+        break;
+      case PARSE_CONTENT_MODE.NORMAL_CUE:
+      case PARSE_CONTENT_MODE.REGION_CUE:
+        root = window.document.createElement("div");
+        break;
+      case PARSE_CONTENT_MODE.DOCUMENT_FRAGMENT:
+        root = window.document.createDocumentFragment();
+        break;
     }
+
     var current = root,
         t,
         tagStack = [];
@@ -494,7 +516,11 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
 
     // Parse our cue's text into a DOM tree rooted at 'cueDiv'. This div will
     // have inline positioning and will function as the cue background box.
-    this.cueDiv = parseContent(window, cue.text, false);
+    if (isFirefoxSupportPseudo) {
+      this.cueDiv = parseContent(window, cue.text, PARSE_CONTENT_MODE.PSUEDO_CUE);
+    } else {
+      this.cueDiv = parseContent(window, cue.text, PARSE_CONTENT_MODE.NORMAL_CUE);
+    }
     var styles = {
       color: color,
       backgroundColor: backgroundColor,
@@ -585,6 +611,79 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
   }
   CueStyleBox.prototype = _objCreate(StyleBox.prototype);
   CueStyleBox.prototype.constructor = CueStyleBox;
+
+  function RegionNodeBox(window, region, container) {
+    StyleBox.call(this);
+
+    var boxLineHeight = container.height * 0.0533 // 0.0533vh ? 5.33vh
+    var boxHeight = boxLineHeight * region.lines;
+    var boxWidth = container.width * region.width / 100; // convert percentage to px
+
+    var regionNodeStyles = {
+      position: "absolute",
+      height: boxHeight + "px",
+      width: boxWidth + "px",
+      top: (region.viewportAnchorY * container.height / 100) - (region.regionAnchorY * boxHeight / 100) + "px",
+      left: (region.viewportAnchorX * container.width / 100) - (region.regionAnchorX * boxWidth / 100) + "px",
+      lineHeight: boxLineHeight + "px",
+      writingMode: "horizontal-tb",
+      backgroundColor: "rgba(0, 0, 0, 0.8)",
+      wordWrap: "break-word",
+      overflowWrap: "break-word",
+      font: (boxLineHeight/1.3) + "px sans-serif",
+      color: "rgba(255, 255, 255, 1)",
+      overflow: "hidden",
+      minHeight: "0px",
+      maxHeight: boxHeight + "px",
+      display: "inline-flex",
+      flexFlow: "column",
+      justifyContent: "flex-end",
+    };
+
+    this.div = window.document.createElement("div");
+    this.div.id = region.id; // useless?
+    this.applyStyles(regionNodeStyles);
+  }
+  RegionNodeBox.prototype = _objCreate(StyleBox.prototype);
+  RegionNodeBox.prototype.constructor = RegionNodeBox;
+
+  function RegionCueStyleBox(window, cue) {
+    StyleBox.call(this);
+    this.cueDiv = parseContent(window, cue.text, PARSE_CONTENT_MODE.REGION_CUE);
+
+    var regionCueStyles = {
+      position: "relative",
+      writingMode: "horizontal-tb",
+      unicodeBidi: "plaintext",
+      width: "auto",
+      height: "auto",
+      textAlign: cue.align,
+    };
+    // TODO: fix me, LTR and RTL ? using margin replace the "left/right"
+    // 6.1.14.3.3
+    var offset = cue.computedPosition * cue.region.width / 100;
+    // 6.1.14.3.4
+    switch (cue.align) {
+      case "start":
+      case "left":
+        regionCueStyles.left = offset + "%";
+        regionCueStyles.right = "auto";
+        break;
+      case "end":
+      case "right":
+        regionCueStyles.left = "auto";
+        regionCueStyles.right = offset + "%";
+        break;
+      case "middle":
+        break;
+    }
+
+    this.div = window.document.createElement("div");
+    this.applyStyles(regionCueStyles);
+    this.div.appendChild(this.cueDiv);
+  }
+  RegionCueStyleBox.prototype = _objCreate(StyleBox.prototype);
+  RegionCueStyleBox.prototype.constructor = RegionCueStyleBox;
 
   // Represents the co-ordinates of an Element in a way that we can easily
   // compute things with such as if it overlaps or intersects with another Element.
@@ -896,7 +995,7 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
     if (!window) {
       return null;
     }
-    return parseContent(window, cuetext, true);
+    return parseContent(window, cuetext, PARSE_CONTENT_MODE.DOCUMENT_FRAGMENT);
   };
 
   var FONT_SIZE_PERCENT = 0.05;
@@ -962,29 +1061,66 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
     };
 
     (function() {
-      var styleBox, cue;
+      var styleBox, cue, controlBarBox;
 
       if (controlBarShown) {
+        controlBarBox = BoxPosition.getSimpleBoxPosition(controlBar);
         // Add an empty output box that cover the same region as video control bar.
-        boxPositions.push(BoxPosition.getSimpleBoxPosition(controlBar));
+        boxPositions.push(controlBarBox);
       }
+
+      // https://w3c.github.io/webvtt/#processing-model 6.1.12.1
+      // Create regionNode
+      var regionNodeBoxes = {};
+      var regionNodeBox;
 
       for (var i = 0; i < cues.length; i++) {
         cue = cues[i];
+        if (cue.region != null) {
+         // 6.1.14.1
+          styleBox = new RegionCueStyleBox(window, cue);
 
-        // Compute the intial position and styles of the cue div.
-        styleBox = new CueStyleBox(window, cue, styleOptions);
-        styleBox.cueDiv.style.setProperty("--cue-font-size", fontSize + "px");
-        rootOfCues.appendChild(styleBox.div);
+          if (!regionNodeBoxes[cue.region.id]) {
+            // create regionNode
+            // Adjust the container hieght to exclude the controlBar
+            var adjustContainerBox = BoxPosition.getSimpleBoxPosition(rootOfCues);
+            if (controlBarShown) {
+              adjustContainerBox.height -= controlBarBox.height;
+              adjustContainerBox.bottom += controlBarBox.height;
+            }
+            regionNodeBox = new RegionNodeBox(window, cue.region, adjustContainerBox);
+            regionNodeBoxes[cue.region.id] = regionNodeBox;
+          }
+          // 6.1.14.3
+          var currentRegionBox = regionNodeBoxes[cue.region.id];
+          var currentRegionNodeDiv = currentRegionBox.div;
+          // 6.1.14.3.2
+          // TODO: fix me, it looks like the we need to set/change "top" attribute at the styleBox.div
+          // to do the "scroll up", however, we do not implement it yet?
+          if (cue.region.scroll == "up" && currentRegionNodeDiv.childElementCount > 0) {
+            styleBox.div.style.transitionProperty = "top";
+            styleBox.div.style.transitionDuration = "0.433s";
+          }
 
-        // Move the cue div to it's correct line position.
-        moveBoxToLinePosition(window, styleBox, containerBox, boxPositions);
+          currentRegionNodeDiv.appendChild(styleBox.div);
+          rootOfCues.appendChild(currentRegionNodeDiv);
+          cue.displayState = styleBox.div;
+          boxPositions.push(BoxPosition.getSimpleBoxPosition(currentRegionBox));
+        } else {
+          // Compute the intial position and styles of the cue div.
+          styleBox = new CueStyleBox(window, cue, styleOptions);
+          styleBox.cueDiv.style.setProperty("--cue-font-size", fontSize + "px");
+          rootOfCues.appendChild(styleBox.div);
 
-        // Remember the computed div so that we don't have to recompute it later
-        // if we don't have too.
-        cue.displayState = styleBox.div;
+          // Move the cue div to it's correct line position.
+          moveBoxToLinePosition(window, styleBox, containerBox, boxPositions);
 
-        boxPositions.push(BoxPosition.getSimpleBoxPosition(styleBox));
+          // Remember the computed div so that we don't have to recompute it later
+          // if we don't have too.
+          cue.displayState = styleBox.div;
+
+          boxPositions.push(BoxPosition.getSimpleBoxPosition(styleBox));
+        }
       }
     })();
   };
@@ -1034,7 +1170,12 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
         }
         self.buffer = buffer.substr(pos);
         // Spec defined replacement.
-        return line.replace(/[\u0000]/g, "\uFFFD");
+        line = line.replace(/[\u0000]/g, "\uFFFD");
+
+        if (/^NOTE($|[ \t])/.test(line)) {
+          line = null;
+        }
+        return line;
       }
 
       function createCueIfNeeded() {
@@ -1046,7 +1187,7 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
       // Parsing cue identifier and the identifier should be unique.
       // Return true if the input is a cue identifier.
       function parseCueIdentifier(input) {
-        if (maybeIsTimeStampFormat(line)) {
+        if (maybeIsTimeStampFormat(input)) {
           self.state = "CUE";
           return false;
         }
@@ -1076,7 +1217,6 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
       // 3.4 WebVTT region and WebVTT region settings syntax
       function parseRegion(input) {
         var settings = new Settings();
-
         parseOptions(input, function (k, v) {
           switch (k) {
           case "id":
@@ -1109,13 +1249,15 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
             settings.alt(k, v, ["up"]);
             break;
           }
-        }, /=/, /\s/);
+        }, /:/, /\t|\n|\f|\r| /); // groupDelim is ASCII whitespace
+        // https://infra.spec.whatwg.org/#ascii-whitespace, U+0009 TAB, U+000A LF, U+000C FF, U+000D CR, U+0020 SPACE
 
         // Create the region, using default values for any values that were not
         // specified.
         if (settings.has("id")) {
           try {
             var region = new self.window.VTTRegion();
+            region.id = settings.get("id", "");
             region.width = settings.get("width", 100);
             region.lines = settings.get("lines", 3);
             region.regionAnchorX = settings.get("regionanchorX", 0);
@@ -1150,6 +1292,16 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
         }
       }
 
+      function parseRegionOrStyle(input) {
+        switch (self.substate) {
+          case "REGION":
+            parseRegion(input);
+          break;
+          case "STYLE":
+            // TODO : not supported yet.
+          break;
+        }
+      }
       // Parsing the region and style information.
       // See spec, https://w3c.github.io/webvtt/#collect-a-webvtt-block
       //
@@ -1165,33 +1317,46 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
         let line = null;
         while (self.buffer && self.state === "HEADER") {
           line = collectNextLine();
+          var tempStr = "";
+          if (/^REGION|^STYLE/.test(line)) {
+            self.substate = /^REGION/.test(line) ? "REGION" : "STYLE";
 
-          if (/^REGION|^STYLE/i.test(line)) {
-            parseOptions(line, function (k, v) {
-              switch (k.toUpperCase()) {
-              case "REGION":
-                parseRegion(v);
+            while (true) {
+              line = collectNextLine();
+              if (!line || maybeIsTimeStampFormat(line) || onlyContainsWhiteSpaces(line) || containsTimeDirectionSymbol(line)) {
+                // parse the tempStr and break the while loop.
+                parseRegionOrStyle(tempStr);
                 break;
-              case "STYLE":
-                // TODO : not supported yet.
-                break;
+              } else if (/^REGION|^STYLE/.test(line)) {
+                // The line is another REGION/STYLE, parse tempStr then reset tempStr.
+                // Don't break the while loop to parse the next REGION/STYLE.
+                parseRegionOrStyle(tempStr);
+                self.substate = /^REGION/.test(line) ? "REGION" : "STYLE";
+                tempStr = "";
+              } else {
+                tempStr = tempStr + " " + line;
               }
-            }, ":");
+            }
+          }
+
+          if (!line || onlyContainsWhiteSpaces(line)) {
+            // empty line, whitespaces
+            continue;
           } else if (maybeIsTimeStampFormat(line)) {
             self.state = "CUE";
             break;
-          } else if (!line ||
-                     onlyContainsWhiteSpaces(line) ||
-                     containsTimeDirectionSymbol(line)) {
-            // empty line, whitespaces or string contains "-->"
+          } else if (containsTimeDirectionSymbol(line)) {
+            // string contains "-->"
+            break;
+          } else {
+            //It is an ID.
             break;
           }
-        }
+        } // self.state === "HEADER"
 
         // End parsing header part and doesn't see the timestamp.
         if (self.state === "HEADER") {
           self.state = "ID";
-          line = null
         }
         return line;
       }
@@ -1221,13 +1386,9 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
 
           switch (self.state) {
           case "ID":
-            // Ignore NOTE and line terminator
-            if (/^NOTE($|[ \t])/.test(line) || !line) {
-              break;
-            }
             // If there is no cue identifier, keep the line and reuse this line
             // in next iteration.
-            if (!parseCueIdentifier(line)) {
+            if (!line || !parseCueIdentifier(line)) {
               nextIteration = true;
               continue;
             }
@@ -1253,8 +1414,9 @@ const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
             break;
           case "BADCUE": // BADCUE
             // 54-62 - Collect and discard the remaining cue.
-            if (!line) {
-              self.state = "ID";
+            self.state = "ID";
+            if (line) { // keep this line to ID state.
+              continue;
             }
             break;
           }

@@ -7,15 +7,21 @@ Components.utils.import("resource:///modules/SitePermissions.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 
 const STORAGE_MANAGER_ENABLED = Services.prefs.getBoolPref("browser.storageManager.enabled");
+const RESIST_FINGERPRINTING_ENABLED = Services.prefs.getBoolPref("privacy.resistFingerprinting");
 
 add_task(async function testPermissionsListing() {
   let expectedPermissions = ["camera", "cookie", "desktop-notification", "focus-tab-by-prompt",
-     "geo", "image", "install", "microphone", "popup", "screen"];
+     "geo", "image", "install", "microphone", "popup", "screen", "shortcuts"];
   if (STORAGE_MANAGER_ENABLED) {
     // The persistent-storage permission is still only pref-on on Nightly
     // so we add it only when it's pref-on.
     // Should remove this checking and add it as default after it is fully pref-on.
     expectedPermissions.push("persistent-storage");
+  }
+  if (RESIST_FINGERPRINTING_ENABLED) {
+    // Canvas permission should be hidden unless privacy.resistFingerprinting
+    // is true.
+    expectedPermissions.push("canvas");
   }
   Assert.deepEqual(SitePermissions.listPermissions().sort(), expectedPermissions.sort(),
     "Correct list of all permissions");
@@ -58,6 +64,18 @@ add_task(async function testGetAllByURI() {
   SitePermissions.set(uri, "addon", SitePermissions.BLOCK);
   Assert.deepEqual(SitePermissions.getAllByURI(uri), []);
   SitePermissions.remove(uri, "addon");
+
+  Assert.equal(Services.prefs.getIntPref("permissions.default.shortcuts"), 0);
+  SitePermissions.set(uri, "shortcuts", SitePermissions.BLOCK);
+
+  // Customized preference should have been enabled, but the default should not.
+  Assert.equal(Services.prefs.getIntPref("permissions.default.shortcuts"), 0);
+  Assert.deepEqual(SitePermissions.getAllByURI(uri), [
+      { id: "shortcuts", state: SitePermissions.BLOCK, scope: SitePermissions.SCOPE_PERSISTENT },
+  ]);
+
+  SitePermissions.remove(uri, "shortcuts");
+  Services.prefs.clearUserPref("permissions.default.shortcuts");
 });
 
 add_task(async function testGetAvailableStates() {
@@ -96,7 +114,12 @@ add_task(async function testExactHostMatch() {
     // Should remove this checking and add it as default after it is fully pref-on.
     exactHostMatched.push("persistent-storage");
   }
-  let nonExactHostMatched = ["image", "cookie", "popup", "install"];
+  if (RESIST_FINGERPRINTING_ENABLED) {
+    // Canvas permission should be hidden unless privacy.resistFingerprinting
+    // is true.
+    exactHostMatched.push("canvas");
+  }
+  let nonExactHostMatched = ["image", "cookie", "popup", "install", "shortcuts"];
 
   let permissions = SitePermissions.listPermissions();
   for (let permission of permissions) {
@@ -126,7 +149,7 @@ add_task(async function testExactHostMatch() {
 });
 
 add_task(function* testDefaultPrefs() {
-  let uri = Services.io.newURI("https://example.com")
+  let uri = Services.io.newURI("https://example.com");
 
   // Check that without a pref the default return value is UNKNOWN.
   Assert.deepEqual(SitePermissions.get(uri, "camera"), {
@@ -174,5 +197,25 @@ add_task(function* testDefaultPrefs() {
     state: SitePermissions.UNKNOWN,
     scope: SitePermissions.SCOPE_PERSISTENT,
   });
+});
+
+add_task(async function testCanvasPermission() {
+  let resistFingerprinting = Services.prefs.getBoolPref("privacy.resistFingerprinting", false);
+  let uri = Services.io.newURI("https://example.com");
+
+  SitePermissions.set(uri, "canvas", SitePermissions.ALLOW);
+
+  // Canvas permission is hidden when privacy.resistFingerprinting is false.
+  Services.prefs.setBoolPref("privacy.resistFingerprinting", false);
+  Assert.equal(SitePermissions.listPermissions().indexOf("canvas"), -1);
+  Assert.equal(SitePermissions.getAllByURI(uri).filter(permission => permission.id === "canvas").length, 0);
+
+  // Canvas permission is visible when privacy.resistFingerprinting is true.
+  Services.prefs.setBoolPref("privacy.resistFingerprinting", true);
+  Assert.notEqual(SitePermissions.listPermissions().indexOf("canvas"), -1);
+  Assert.notEqual(SitePermissions.getAllByURI(uri).filter(permission => permission.id === "canvas").length, 0);
+
+  SitePermissions.remove(uri, "canvas");
+  Services.prefs.setBoolPref("privacy.resistFingerprinting", resistFingerprinting);
 });
 

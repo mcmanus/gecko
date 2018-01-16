@@ -12,6 +12,7 @@
 #include "jsprf.h"
 #include "MainThreadUtils.h"
 #include "mozilla/Assertions.h"
+#include "nsContentUtils.h"
 #include "nsGlobalWindow.h"
 #include "nsNetUtil.h"
 #include "nsPIDOMWindow.h"
@@ -60,8 +61,8 @@ nsScriptErrorBase::InitializeOnMainThread()
     MOZ_ASSERT(!mInitializedOnMainThread);
 
     if (mInnerWindowID) {
-        nsGlobalWindow* window =
-          nsGlobalWindow::GetInnerWindowWithId(mInnerWindowID);
+        nsGlobalWindowInner* window =
+          nsGlobalWindowInner::GetInnerWindowWithId(mInnerWindowID);
         if (window) {
             nsPIDOMWindowOuter* outer = window->GetOuterWindow();
             if (outer)
@@ -318,7 +319,7 @@ ToStringHelper(const char* aSeverity, const nsString& aMessage,
     static const char format2[] =
         "[%s: \"%s\"]";
 
-    UniqueChars temp;
+    JS::UniqueChars temp;
     char* tempMessage = nullptr;
     char* tempSourceName = nullptr;
     char* tempSourceLine = nullptr;

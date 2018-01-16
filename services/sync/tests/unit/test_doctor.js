@@ -4,8 +4,6 @@
 const { Doctor, REPAIR_ADVANCE_PERIOD } = Cu.import("resource://services-sync/doctor.js", {});
 Cu.import("resource://gre/modules/Services.jsm");
 
-initTestLogging("Trace");
-
 function mockDoctor(mocks) {
   // Clone the object and put mocks in that.
   return Object.assign({}, Doctor, mocks);
@@ -166,7 +164,7 @@ add_task(async function test_repairs_skip_if_cant_vaidate() {
   };
   let requestor = {
     async startRepairs(validationInfo, flowID) {
-      assert.ok(false, "Never should start repairs");
+      ok(false, "Never should start repairs");
     },
     tryServerOnlyRepairs() {
       return false;

@@ -663,10 +663,114 @@ class DesktopUnittest(TestingMixin, MercurialScript, BlobUploadMixin, MozbaseMix
                                                     'resources',
                                                     module))
 
+    def _kill_proc_tree(self, pid):
+        # Kill a process tree (including grandchildren) with signal.SIGTERM
+        try:
+            import signal
+            import psutil
+            if pid == os.getpid():
+                return (None, None)
+
+            parent = psutil.Process(pid)
+            children = parent.children(recursive=True)
+            children.append(parent)
+
+            for p in children:
+                p.send_signal(signal.SIGTERM)
+
+            # allow for 60 seconds to kill procs
+            timeout = 60
+            gone, alive = psutil.wait_procs(children, timeout=timeout)
+            for p in gone:
+                self.info('psutil found pid %s dead' % p.pid)
+            for p in alive:
+                self.error('failed to kill pid %d after %d' % (p.pid, timeout))
+
+            return (gone, alive)
+        except Exception as e:
+            self.error('Exception while trying to kill process tree: %s' % str(e))
+
+    def _kill_named_proc(self, pname):
+        try:
+            import psutil
+        except Exception as e:
+            self.info("Error importing psutil, not killing process %s: %s" % pname, str(e))
+            return
+
+        for proc in psutil.process_iter():
+            try:
+                if proc.name() == pname:
+                    procd = proc.as_dict(attrs=['pid', 'ppid', 'name', 'username'])
+                    self.info("in _kill_named_proc, killing %s" % procd)
+                    self._kill_proc_tree(proc.pid)
+            except Exception as e:
+                self.info("Warning: Unable to kill process %s: %s" % (pname, str(e)))
+                # may not be able to access process info for all processes
+                continue
+
+    def _remove_xen_clipboard(self):
+        """
+            When running on a Windows 7 VM, we have XenDPriv.exe running which
+            interferes with the clipboard, lets terminate this process and remove
+            the binary so it doesn't restart
+        """
+        if not self._is_windows():
+            return
+
+        self._kill_named_proc('XenDPriv.exe')
+        xenpath = os.path.join(os.environ['ProgramFiles'],
+                               'Citrix',
+                               'XenTools',
+                               'XenDPriv.exe')
+        try:
+            if os.path.isfile(xenpath):
+                os.remove(xenpath)
+        except Exception as e:
+            self.error("Error: Failure to remove file %s: %s" % (xenpath, str(e)))
+
+    def _report_system_info(self):
+        """
+           Create the system-info.log artifact file, containing a variety of
+           system information that might be useful in diagnosing test failures.
+        """
+        try:
+            import psutil
+            dir = self.query_abs_dirs()['abs_blob_upload_dir']
+            self.mkdir_p(dir)
+            path = os.path.join(dir, "system-info.log")
+            with open(path, "w") as f:
+                f.write("System info collected at %s\n\n" % datetime.now())
+                f.write("\nBoot time %s\n" % datetime.fromtimestamp(psutil.boot_time()))
+                f.write("\nVirtual memory: %s\n" % str(psutil.virtual_memory()))
+                f.write("\nDisk partitions: %s\n" % str(psutil.disk_partitions()))
+                f.write("\nDisk usage (/): %s\n" % str(psutil.disk_usage(os.path.sep)))
+                if not self._is_windows():
+                    # bug 1417189: frequent errors querying users on Windows
+                    f.write("\nUsers: %s\n" % str(psutil.users()))
+                f.write("\nNetwork connections:\n")
+                try:
+                    for nc in psutil.net_connections():
+                        f.write("  %s\n" % str(nc))
+                except:
+                    f.write("Exception getting network info: %s\n" % sys.exc_info()[0])
+                f.write("\nProcesses:\n")
+                try:
+                    for p in psutil.process_iter():
+                        ctime = str(datetime.fromtimestamp(p.create_time()))
+                        f.write("  PID %d %s %s created at %s\n" %
+                                (p.pid, p.name(), str(p.cmdline()), ctime))
+                except:
+                    f.write("Exception getting process info: %s\n" % sys.exc_info()[0])
+        except:
+            # psutil throws a variety of intermittent exceptions
+            self.info("Unable to complete system-info.log: %s" % sys.exc_info()[0])
+
     # pull defined in VCSScript.
     # preflight_run_tests defined in TestingMixin.
 
     def run_tests(self):
+        self._remove_xen_clipboard()
+        self._report_system_info()
         self.start_time = datetime.now()
         for category in SUITE_CATEGORIES:
             if not self._run_category_suites(category):
@@ -701,7 +805,9 @@ class DesktopUnittest(TestingMixin, MercurialScript, BlobUploadMixin, MozbaseMix
                     'abs_res_dir': abs_res_dir,
                 }
                 options_list = []
-                env = {}
+                env = {
+                    'TEST_SUITE': suite
+                }
                 if isinstance(suites[suite], dict):
                     options_list = suites[suite].get('options', [])
                     if self.config.get('verify') is True:

@@ -96,6 +96,7 @@ IPDL_SOURCES += [
     'PCycleCollectWithLogs.ipdl',
     'PDocumentRenderer.ipdl',
     'PFilePicker.ipdl',
+    'PLoginReputation.ipdl',
     'PPluginWidget.ipdl',
     'PProcessHangMonitor.ipdl',
     'PTabContext.ipdlh',
@@ -159,7 +160,7 @@ if CONFIG['OS_ARCH'] != 'WINNT':
 
 DEFINES['BIN_SUFFIX'] = '"%s"' % CONFIG['BIN_SUFFIX']
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2'):
+if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
     DEFINES['MOZ_ENABLE_FREETYPE'] = True
 
 if CONFIG['MOZ_TOOLKIT_SEARCH']:
@@ -173,5 +174,5 @@ MOCHITEST_MANIFESTS += ['tests/mochitest.ini']
 
 CXXFLAGS += CONFIG['TK_CFLAGS']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

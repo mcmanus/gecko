@@ -248,7 +248,7 @@ nsSVGUtils::ScheduleReflowSVG(nsIFrame *aFrame)
   nsFrameState dirtyBit =
     (outerSVGFrame == aFrame ? NS_FRAME_IS_DIRTY : NS_FRAME_HAS_DIRTY_CHILDREN);
 
-  aFrame->PresContext()->PresShell()->FrameNeedsReflow(
+  aFrame->PresShell()->FrameNeedsReflow(
     outerSVGFrame, nsIPresShell::eResize, dirtyBit);
 }
 
@@ -579,7 +579,7 @@ public:
     mTargetCtx = gfxContext::CreateOrNull(targetDT);
     MOZ_ASSERT(mTargetCtx); // already checked the draw target above
     mTargetCtx->SetMatrix(mSourceCtx->CurrentMatrix() *
-                          gfxMatrix::Translation(-drawRect.TopLeft()));
+                          Matrix::Translation(-drawRect.TopLeft()));
 
     mTargetOffset = drawRect.TopLeft();
 
@@ -595,7 +595,7 @@ public:
     RefPtr<SourceSurface> targetSurf = mTargetCtx->GetDrawTarget()->Snapshot();
 
     gfxContextAutoSaveRestore save(mSourceCtx);
-    mSourceCtx->SetMatrix(gfxMatrix()); // This will be restored right after.
+    mSourceCtx->SetMatrix(Matrix()); // This will be restored right after.
     RefPtr<gfxPattern> pattern =
       new gfxPattern(targetSurf,
                      Matrix::Translation(mTargetOffset.x, mTargetOffset.y));
@@ -854,8 +854,8 @@ nsSVGUtils::PaintFrameWithEffects(nsIFrame *aFrame,
     // have to adjust the scale.
     gfxMatrix reverseScaleMatrix = nsSVGUtils::GetCSSPxToDevPxMatrix(aFrame);
     DebugOnly<bool> invertible = reverseScaleMatrix.Invert();
-    target->SetMatrix(reverseScaleMatrix * aTransform *
-                      target->CurrentMatrix());
+    target->SetMatrixDouble(reverseScaleMatrix * aTransform *
+                            target->CurrentMatrixDouble());
 
     SVGPaintCallback paintCallback;
     nsFilterInstance::PaintFilteredFrame(aFrame, target, &paintCallback,
@@ -1188,6 +1188,7 @@ nsSVGUtils::GetBBox(nsIFrame* aFrame, uint32_t aFlags,
         } else if (aFrame->IsSVGForeignObjectFrame()) {
           matrix = gfxMatrix();
         }
+        matrix = clipContent->PrependLocalTransformsTo(matrix, eUserSpaceToParent);
         bbox =
           clipPathFrame->GetBBoxForClipPathFrame(bbox, matrix).ToThebesRect();
       }
@@ -1509,7 +1510,7 @@ nsSVGUtils::MakeFillPatternFor(nsIFrame* aFrame,
 
   if (ps) {
     RefPtr<gfxPattern> pattern =
-      ps->GetPaintServerPattern(aFrame, dt, aContext->CurrentMatrix(),
+      ps->GetPaintServerPattern(aFrame, dt, aContext->CurrentMatrixDouble(),
                                 &nsStyleSVG::mFill, fillOpacity, aImgParams);
     if (pattern) {
       pattern->CacheColorStops(dt);
@@ -1524,12 +1525,12 @@ nsSVGUtils::MakeFillPatternFor(nsIFrame* aFrame,
     case eStyleSVGPaintType_ContextFill:
       pattern =
         aContextPaint->GetFillPattern(dt, fillOpacity,
-                                      aContext->CurrentMatrix(), aImgParams);
+                                      aContext->CurrentMatrixDouble(), aImgParams);
       break;
     case eStyleSVGPaintType_ContextStroke:
       pattern =
         aContextPaint->GetStrokePattern(dt, fillOpacity,
-                                        aContext->CurrentMatrix(), aImgParams);
+                                        aContext->CurrentMatrixDouble(), aImgParams);
       break;
     default:
       ;
@@ -1585,7 +1586,7 @@ nsSVGUtils::MakeStrokePatternFor(nsIFrame* aFrame,
 
   if (ps) {
     RefPtr<gfxPattern> pattern =
-      ps->GetPaintServerPattern(aFrame, dt, aContext->CurrentMatrix(),
+      ps->GetPaintServerPattern(aFrame, dt, aContext->CurrentMatrixDouble(),
                                 &nsStyleSVG::mStroke, strokeOpacity, aImgParams);
     if (pattern) {
       pattern->CacheColorStops(dt);
@@ -1600,12 +1601,12 @@ nsSVGUtils::MakeStrokePatternFor(nsIFrame* aFrame,
     case eStyleSVGPaintType_ContextFill:
       pattern =
         aContextPaint->GetFillPattern(dt, strokeOpacity,
-                                      aContext->CurrentMatrix(), aImgParams);
+                                      aContext->CurrentMatrixDouble(), aImgParams);
       break;
     case eStyleSVGPaintType_ContextStroke:
       pattern =
         aContextPaint->GetStrokePattern(dt, strokeOpacity,
-                                        aContext->CurrentMatrix(), aImgParams);
+                                        aContext->CurrentMatrixDouble(), aImgParams);
       break;
     default:
       ;

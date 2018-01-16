@@ -36,7 +36,6 @@ using namespace mozilla::dom;
 nsWindowRoot::nsWindowRoot(nsPIDOMWindowOuter* aWindow)
 {
   mWindow = aWindow;
-  MOZ_ASSERT(mWindow->IsOuterWindow());
 
   // Keyboard indicators are not shown on Mac by default.
 #if defined(XP_MACOSX)
@@ -175,7 +174,7 @@ nsWindowRoot::GetEventTargetParent(EventChainPreVisitor& aVisitor)
   aVisitor.mForceContentDispatch = true; //FIXME! Bug 329119
   // To keep mWindow alive
   aVisitor.mItemData = static_cast<nsISupports *>(mWindow);
-  aVisitor.mParentTarget = mParent;
+  aVisitor.SetParentTarget(mParent, false);
   return NS_OK;
 }
 
@@ -295,7 +294,7 @@ nsWindowRoot::GetControllerForCommand(const char* aCommand,
     }
 
     // XXXndeakin P3 is this casting safe?
-    nsGlobalWindow *win = nsGlobalWindow::Cast(focusedWindow);
+    nsGlobalWindowOuter *win = nsGlobalWindowOuter::Cast(focusedWindow);
     focusedWindow = win->GetPrivateParent();
   }
 
@@ -367,7 +366,7 @@ nsWindowRoot::GetEnabledDisabledCommands(nsTArray<nsCString>& aEnabledCommands,
                                                aEnabledCommands, aDisabledCommands);
     }
 
-    nsGlobalWindow* win = nsGlobalWindow::Cast(focusedWindow);
+    nsGlobalWindowOuter* win = nsGlobalWindowOuter::Cast(focusedWindow);
     focusedWindow = win->GetPrivateParent();
   }
 }

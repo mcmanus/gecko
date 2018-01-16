@@ -43,9 +43,7 @@ function onLoadPermission(uri, principal) {
 
     for (var i of gPermissions)
       initRow(i);
-    var os = Components.classes["@mozilla.org/observer-service;1"]
-                       .getService(Components.interfaces.nsIObserverService);
-    os.addObserver(permissionObserver, "perm-changed");
+    Services.obs.addObserver(permissionObserver, "perm-changed");
     onUnloadRegistry.push(onUnloadPermission);
     permTab.hidden = false;
   } else
@@ -53,9 +51,7 @@ function onLoadPermission(uri, principal) {
 }
 
 function onUnloadPermission() {
-  var os = Components.classes["@mozilla.org/observer-service;1"]
-                     .getService(Components.interfaces.nsIObserverService);
-  os.removeObserver(permissionObserver, "perm-changed");
+  Services.obs.removeObserver(permissionObserver, "perm-changed");
 
   if (gUsageRequest) {
     gUsageRequest.cancel();
@@ -183,6 +179,8 @@ function fillInPluginPermissionTemplate(aPluginName, aPermissionString) {
     [ ".permPluginTemplateRadioDefault", "id", aPermissionString + "#0" ],
     [ ".permPluginTemplateRadioAsk", "id", aPermissionString + "#3" ],
     [ ".permPluginTemplateRadioAllow", "id", aPermissionString + "#1" ],
+    // #8 comes from Ci.nsIObjectLoadingContent.PLUGIN_PERMISSION_PROMPT_ACTION_QUIET
+    [ ".permPluginTemplateRadioHide", "id", aPermissionString + "#8"],
     [ ".permPluginTemplateRadioBlock", "id", aPermissionString + "#2" ]
   ];
 

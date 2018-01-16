@@ -12,7 +12,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
-import android.graphics.Canvas;
 import android.net.Uri;
 import android.os.Environment;
 import android.os.Process;
@@ -31,7 +30,6 @@ import org.mozilla.gecko.db.BrowserContract;
 import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.db.LocalBrowserDB;
 import org.mozilla.gecko.distribution.Distribution;
-import org.mozilla.gecko.gfx.BitmapUtils;
 import org.mozilla.gecko.home.HomePanelsManager;
 import org.mozilla.gecko.icons.IconCallback;
 import org.mozilla.gecko.icons.IconResponse;
@@ -39,14 +37,14 @@ import org.mozilla.gecko.icons.Icons;
 import org.mozilla.gecko.lwt.LightweightTheme;
 import org.mozilla.gecko.mdns.MulticastDNSManager;
 import org.mozilla.gecko.media.AudioFocusAgent;
-import org.mozilla.gecko.media.RemoteManager;
 import org.mozilla.gecko.notifications.NotificationClient;
 import org.mozilla.gecko.notifications.NotificationHelper;
 import org.mozilla.gecko.permissions.Permissions;
 import org.mozilla.gecko.preferences.DistroSharedPrefsImport;
-import org.mozilla.gecko.util.ActivityUtils;
+import org.mozilla.gecko.pwa.PwaUtils;
 import org.mozilla.gecko.telemetry.TelemetryBackgroundReceiver;
 import org.mozilla.gecko.util.ActivityResultHandler;
+import org.mozilla.gecko.util.BitmapUtils;
 import org.mozilla.gecko.util.BundleEventListener;
 import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.GeckoBundle;
@@ -54,7 +52,6 @@ import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.PRNGFixes;
 import org.mozilla.gecko.util.ShortcutUtils;
 import org.mozilla.gecko.util.ThreadUtils;
-import org.mozilla.gecko.util.UIAsyncTask;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -365,12 +362,6 @@ public class GeckoApplication extends Application
         GeckoAccessibility.setAccessibilityManagerListeners(this);
 
         AudioFocusAgent.getInstance().attachToContext(this);
-
-        RemoteManager.setCrashReporter(new RemoteManager.ICrashReporter() {
-            public void reportDecodingProcessCrash() {
-                Telemetry.addToHistogram(MEDIA_DECODING_PROCESS_CRASH, 1);
-            }
-        });
     }
 
     private class EventListener implements BundleEventListener
@@ -575,7 +566,22 @@ public class GeckoApplication extends Application
         final String manifestUrl = selectedTab.getManifestUrl();
 
         if (manifestUrl != null) {
-            // If a page has associated manifest, lets install it
+            // If a page has associated manifest, lets install it (PWA A2HS)
+            // At this time, this page must be a secure page.
+            // Please hide PWA badge UI in front end side.
+            final boolean safeForPwa = PwaUtils.shouldAddPwaShortcut(selectedTab);
+            if (!safeForPwa) {
+                final String message = "This page is not safe for PWA";
+                // For release and beta, we record an error message
+                if (AppConstants.RELEASE_OR_BETA) {
+                    Log.e(LOG_TAG, message);
+                } else {
+                    // For nightly and local build, we'll throw an exception here.
+                    throw new IllegalStateException(message);
+                }
+
+            }
+
             final GeckoBundle message = new GeckoBundle();
             message.putInt("iconSize", GeckoAppShell.getPreferredIconSize());
             message.putString("manifestUrl", manifestUrl);

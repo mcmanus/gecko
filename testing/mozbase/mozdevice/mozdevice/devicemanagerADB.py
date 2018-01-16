@@ -38,6 +38,7 @@ class DeviceManagerADB(DeviceManager):
     _tempDir = None
     _adb_version = None
     _sdk_version = None
+    _noDevicesOutput = "no devices/emulators found"
     connected = False
 
     def __init__(self, host=None, port=5555, retryLimit=5, packageName='fennec',
@@ -538,7 +539,17 @@ class DeviceManagerADB(DeviceManager):
                 localDir = os.path.join(tempParent, remoteName)
             else:
                 localDir = '/'.join(localDir.rstrip('/').split('/')[:-1])
-        self._runCmd(["pull", remoteDir, localDir]).wait()
+        cmd = ["pull", remoteDir, localDir]
+        proc = self._runCmd(cmd)
+        if proc.returncode != 0:
+            # Raise a DMError when the device is missing, but not when the
+            # directory is empty or missing.
+            output = ''.join(proc.output)
+            if (self._noDevicesOutput in output or
+                ("pulled" not in output and
+                 "does not exist" not in output)):
+                raise DMError("getDirectory() failed to pull %s: %s" %
+                              (remoteDir, proc.output))
         if copyRequired:
             dir_util.copy_tree(localDir, originalLocal)
             mozfile.remove(tempParent)
@@ -633,11 +644,13 @@ class DeviceManagerADB(DeviceManager):
         if directive == "systime" or directive == "all":
             ret["systime"] = self.shellCheckOutput(["date"], timeout=self.short_timeout)
         if directive == "memtotal" or directive == "all":
-            meminfo = {}
-            for line in self.pullFile("/proc/meminfo").splitlines():
-                key, value = line.split(":")
-                meminfo[key] = value.strip()
-            ret["memtotal"] = meminfo["MemTotal"]
+            out = self.shellCheckOutput(["cat", "/proc/meminfo"], timeout=self.short_timeout)
+            out = out.replace('\r\n', '\n').splitlines(True)
+            for line in out:
+                parts = line.split(":")
+                if len(parts) == 2 and parts[0] == "MemTotal":
+                    ret["memtotal"] = parts[1].strip()
+                    break
         if directive == "disk" or directive == "all":
             data = self.shellCheckOutput(
                 ["df", "/data", "/system", "/sdcard"], timeout=self.short_timeout)
@@ -678,16 +691,20 @@ class DeviceManagerADB(DeviceManager):
             self._logger.error("Timeout exceeded for _runCmd call '%s'" % ' '.join(finalArgs))
 
         retries = 0
+        proc = None
         while retries < retryLimit:
             proc = ProcessHandler(finalArgs, storeOutput=True,
                                   processOutputLine=self._log, onTimeout=_timeout)
             proc.run(timeout=timeout)
             proc.returncode = proc.wait()
-            if proc.returncode is None:
-                proc.kill()
-                retries += 1
-            else:
-                return proc
+            if proc.returncode is not None:
+                break
+            proc.kill()
+            self._logger.warning("_runCmd failed for '%s'" % ' '.join(finalArgs))
+            retries += 1
+        if retries >= retryLimit:
+            self._logger.warning("_runCmd exceeded all retries")
+        return proc
 
     # timeout is specified in seconds, and if no timeout is given,
     # we will run until we hit the default_timeout specified in the __init__
@@ -730,6 +747,9 @@ class DeviceManagerADB(DeviceManager):
                 if ret_code != 0:
                     self._logger.error("Non-zero return code (%d) from %s" % (ret_code, finalArgs))
                     self._logger.error("Output: %s" % proc.output)
+                output = ''.join(proc.output)
+                if self._noDevicesOutput in output:
+                    raise DMError(self._noDevicesOutput)
                 return ret_code
 
         raise DMError("Timeout exceeded for _checkCmd call after %d retries." % retries)

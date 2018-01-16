@@ -59,7 +59,7 @@ public:
 
   void GetType(mozilla::dom::DOMString& aRetVal) const
   {
-    aRetVal.SetOwnedAtom(mType, mozilla::dom::DOMString::eNullNotExpected);
+    aRetVal.SetKnownLiveAtom(mType, mozilla::dom::DOMString::eNullNotExpected);
   }
 
   nsINode* GetTarget() const
@@ -83,17 +83,18 @@ public:
 
   void GetAttributeName(mozilla::dom::DOMString& aRetVal) const
   {
-    aRetVal.SetOwnedAtom(mAttrName, mozilla::dom::DOMString::eTreatNullAsNull);
+    aRetVal.SetKnownLiveAtom(mAttrName,
+                             mozilla::dom::DOMString::eTreatNullAsNull);
   }
 
   void GetAttributeNamespace(mozilla::dom::DOMString& aRetVal) const
   {
-    aRetVal.SetOwnedString(mAttrNamespace);
+    aRetVal.SetKnownLiveString(mAttrNamespace);
   }
 
   void GetOldValue(mozilla::dom::DOMString& aRetVal) const
   {
-    aRetVal.SetOwnedString(mPrevValue);
+    aRetVal.SetKnownLiveString(mPrevValue);
   }
 
   void GetAddedAnimations(AnimationArray& aRetVal) const
@@ -575,12 +576,9 @@ public:
   }
 
   // static methods
-  static void HandleMutations(mozilla::AutoSlowOperation& aAso)
-  {
-    if (sScheduledMutationObservers) {
-      HandleMutationsInternal(aAso);
-    }
-  }
+  static void QueueMutationObserverMicroTask();
+
+  static void HandleMutations(mozilla::AutoSlowOperation& aAso);
 
   static bool AllScheduledMutationObserversAreSuppressed()
   {
@@ -626,7 +624,7 @@ protected:
 
   bool Suppressed()
   {
-    return mOwner && nsGlobalWindow::Cast(mOwner)->IsInSyncOperation();
+    return mOwner && nsGlobalWindowInner::Cast(mOwner)->IsInSyncOperation();
   }
 
   static void HandleMutationsInternal(mozilla::AutoSlowOperation& aAso);

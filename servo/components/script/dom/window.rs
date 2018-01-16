@@ -86,7 +86,6 @@ use servo_config::opts;
 use servo_config::prefs::PREFS;
 use servo_geometry::{f32_rect_to_au_rect, max_rect};
 use servo_url::{Host, MutableOrigin, ImmutableOrigin, ServoUrl};
-use std::ascii::AsciiExt;
 use std::borrow::ToOwned;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
@@ -1049,6 +1048,10 @@ impl Window {
         self.navigation_start_precise.get()
     }
 
+    pub fn has_document(&self) -> bool {
+        self.document.get().is_some()
+    }
+
     /// Cancels all the tasks associated with that window.
     ///
     /// This sets the current `ignore_further_async_events` sentinel value to
@@ -1419,7 +1422,7 @@ impl Window {
         Vector2D::new(0.0, 0.0)
     }
 
-    // https://drafts.csswg.org/cssom-view/#dom-element-scroll
+    // https://drafts.csswg.org/cssom-view/#element-scrolling-members
     pub fn scroll_node(&self,
                        node: &Node,
                        x_: f64,

@@ -24,6 +24,8 @@ const actionTypes = {
   PERSIST_TOGGLE: "PERSIST_TOGGLE",
   REMOVED_ACTORS_CLEAR: "REMOVED_ACTORS_CLEAR",
   SELECT_NETWORK_MESSAGE_TAB: "SELECT_NETWORK_MESSAGE_TAB",
+  SIDEBAR_CLOSE: "SIDEBAR_CLOSE",
+  SHOW_OBJECT_IN_SIDEBAR: "SHOW_OBJECT_IN_SIDEBAR",
   TIMESTAMPS_TOGGLE: "TIMESTAMPS_TOGGLE",
 };
 
@@ -42,6 +44,7 @@ const prefs = {
     UI: {
       FILTER_BAR: "devtools.webconsole.ui.filterbar",
       PERSIST: "devtools.webconsole.persistlog",
+      SIDEBAR_TOGGLE: "devtools.webconsole.sidebarToggle",
     }
   }
 };

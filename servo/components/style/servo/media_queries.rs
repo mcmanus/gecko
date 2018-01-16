@@ -7,17 +7,17 @@
 use app_units::Au;
 use context::QuirksMode;
 use cssparser::{Parser, RGBA};
-use euclid::{ScaleFactor, Size2D, TypedSize2D};
+use euclid::{TypedScale, Size2D, TypedSize2D};
 use media_queries::MediaType;
 use parser::ParserContext;
 use properties::ComputedValues;
-use properties::longhands::font_size;
 use selectors::parser::SelectorParseErrorKind;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use style_traits::{CSSPixel, DevicePixel, ToCss, ParseError};
 use style_traits::viewport::ViewportConstraints;
 use values::computed::{self, ToComputedValue};
+use values::computed::font::FontSize;
 use values::specified;
 
 /// A device is a structure that represents the current media a given document
@@ -31,7 +31,7 @@ pub struct Device {
     /// The current viewport size, in CSS pixels.
     viewport_size: TypedSize2D<f32, CSSPixel>,
     /// The current device pixel ratio, from CSS pixels to device pixels.
-    device_pixel_ratio: ScaleFactor<f32, CSSPixel, DevicePixel>,
+    device_pixel_ratio: TypedScale<f32, CSSPixel, DevicePixel>,
 
     /// The font size of the root element
     /// This is set when computing the style of the root
@@ -57,14 +57,14 @@ impl Device {
     pub fn new(
         media_type: MediaType,
         viewport_size: TypedSize2D<f32, CSSPixel>,
-        device_pixel_ratio: ScaleFactor<f32, CSSPixel, DevicePixel>
+        device_pixel_ratio: TypedScale<f32, CSSPixel, DevicePixel>
     ) -> Device {
         Device {
             media_type,
             viewport_size,
             device_pixel_ratio,
             // FIXME(bz): Seems dubious?
-            root_font_size: AtomicIsize::new(font_size::get_initial_value().size().0 as isize),
+            root_font_size: AtomicIsize::new(FontSize::medium().size().0 as isize),
             used_root_font_size: AtomicBool::new(false),
             used_viewport_units: AtomicBool::new(false),
         }
@@ -121,7 +121,7 @@ impl Device {
     }
 
     /// Returns the device pixel ratio.
-    pub fn device_pixel_ratio(&self) -> ScaleFactor<f32, CSSPixel, DevicePixel> {
+    pub fn device_pixel_ratio(&self) -> TypedScale<f32, CSSPixel, DevicePixel> {
         self.device_pixel_ratio
     }
 

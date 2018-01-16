@@ -17,7 +17,7 @@ const MS_PER_SEC = 1000;
 
 /* The recommended minimum precision to use for time values[1].
  *
- * [1] https://w3c.github.io/web-animations/#precision-of-time-values
+ * [1] https://drafts.csswg.org/web-animations/#precision-of-time-values
  */
 var TIME_PRECISION = 0.0005; // ms
 
@@ -212,6 +212,24 @@ function waitForFrame() {
 }
 
 /**
+ * Waits for a requestAnimationFrame callback in the next refresh driver tick.
+ * Note that 'dom.animations-api.core.enabled' pref should be true to use this
+ * function.
+ */
+function waitForNextFrame() {
+  const timeAtStart = document.timeline.currentTime;
+  return new Promise(resolve => {
+    window.requestAnimationFrame(() => {
+      if (timeAtStart === document.timeline.currentTime) {
+        window.requestAnimationFrame(resolve);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
+/**
  * Returns a Promise that is resolved after the given number of consecutive
  * animation frames have occured (using requestAnimationFrame callbacks).
  *
@@ -219,12 +237,14 @@ function waitForFrame() {
  * @param onFrame  An optional function to be processed in each animation frame.
  */
 function waitForAnimationFrames(frameCount, onFrame) {
+  const timeAtStart = document.timeline.currentTime;
   return new Promise(function(resolve, reject) {
     function handleFrame() {
       if (onFrame && typeof onFrame === 'function') {
         onFrame();
       }
-      if (--frameCount <= 0) {
+      if (timeAtStart != document.timeline.currentTime &&
+          --frameCount <= 0) {
         resolve();
       } else {
         window.requestAnimationFrame(handleFrame); // wait another frame
@@ -306,9 +326,24 @@ function waitForDocumentLoad() {
  * Enters test refresh mode, and restores the mode when |t| finishes.
  */
 function useTestRefreshMode(t) {
-  SpecialPowers.DOMWindowUtils.advanceTimeAndRefresh(0);
-  t.add_cleanup(() => {
-    SpecialPowers.DOMWindowUtils.restoreNormalRefresh();
+  function ensureNoSuppressedPaints() {
+    return new Promise(resolve => {
+      function checkSuppressedPaints() {
+        if (!SpecialPowers.DOMWindowUtils.paintingSuppressed) {
+          resolve();
+        } else {
+          window.requestAnimationFrame(checkSuppressedPaints);
+        }
+      }
+      checkSuppressedPaints();
+    });
+  }
+
+  return ensureNoSuppressedPaints().then(() => {
+    SpecialPowers.DOMWindowUtils.advanceTimeAndRefresh(0);
+    t.add_cleanup(() => {
+      SpecialPowers.DOMWindowUtils.restoreNormalRefresh();
+    });
   });
 }
 

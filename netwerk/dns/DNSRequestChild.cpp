@@ -82,6 +82,14 @@ ChildDNSRecord::GetCanonicalName(nsACString &result)
 }
 
 NS_IMETHODIMP
+ChildDNSRecord::IsTRR(bool *retval)
+{
+    fprintf(stderr, "TODO: ChildDNSRecord::IsTRR doesn't know!\n");
+    *retval = false;
+    return NS_OK;
+}
+
+NS_IMETHODIMP
 ChildDNSRecord::GetNextAddr(uint16_t port, NetAddr *addr)
 {
   if (mCurrent >= mLength) {

@@ -807,6 +807,24 @@ var snapshotFormatters = {
       }
     }
   },
+
+  intl: function intl(data) {
+    $("intl-locale-requested").textContent =
+      JSON.stringify(data.localeService.requested);
+    $("intl-locale-available").textContent =
+      JSON.stringify(data.localeService.available);
+    $("intl-locale-supported").textContent =
+      JSON.stringify(data.localeService.supported);
+    $("intl-locale-regionalprefs").textContent =
+      JSON.stringify(data.localeService.regionalPrefs);
+    $("intl-locale-default").textContent =
+      JSON.stringify(data.localeService.defaultLocale);
+
+    $("intl-osprefs-systemlocales").textContent =
+      JSON.stringify(data.osPrefs.systemLocales);
+    $("intl-osprefs-regionalprefs").textContent =
+      JSON.stringify(data.osPrefs.regionalPrefsLocales);
+  }
 };
 
 var $ = document.getElementById.bind(document);
@@ -883,9 +901,7 @@ function copyRawDataToClipboard(button) {
       transferable.init(getLoadContext());
       transferable.addDataFlavor("text/unicode");
       transferable.setTransferData("text/unicode", str, str.data.length * 2);
-      Cc["@mozilla.org/widget/clipboard;1"].
-        getService(Ci.nsIClipboard).
-        setData(transferable, null, Ci.nsIClipboard.kGlobalClipboard);
+      Services.clipboard.setData(transferable, null, Ci.nsIClipboard.kGlobalClipboard);
       if (AppConstants.platform == "android") {
         // Present a toast notification.
         let message = {
@@ -935,9 +951,7 @@ function copyContentsToClipboard() {
   transferable.setTransferData("text/unicode", ssText, dataText.length * 2);
 
   // Store the data into the clipboard.
-  let clipboard = Cc["@mozilla.org/widget/clipboard;1"]
-                    .getService(Ci.nsIClipboard);
-  clipboard.setData(transferable, null, clipboard.kGlobalClipboard);
+  Services.clipboard.setData(transferable, null, Services.clipboard.kGlobalClipboard);
 
   if (AppConstants.platform == "android") {
     // Present a toast notification.
@@ -1194,10 +1208,15 @@ function setupEventListeners() {
     });
     $("verify-place-integrity-button").addEventListener("click", function(event) {
       PlacesDBUtils.checkAndFixDatabase().then((tasksStatusMap) => {
-        let msg = PlacesDBUtils.getLegacyLog(tasksStatusMap).join("\n");
+        let logs = [];
+        for (let [key, value] of tasksStatusMap) {
+          logs.push(`> Task: ${key}`);
+          let prefix = value.succeeded ? "+ " : "- ";
+          logs = logs.concat(value.logs.map(m => `${prefix}${m}`));
+        }
         $("verify-place-result").style.display = "block";
         $("verify-place-result").classList.remove("no-copy");
-        $("verify-place-result").textContent = msg;
+        $("verify-place-result").textContent = logs.join("\n");
       });
     });
   }

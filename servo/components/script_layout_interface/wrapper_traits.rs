@@ -17,7 +17,7 @@ use servo_arc::Arc;
 use servo_url::ServoUrl;
 use std::fmt::Debug;
 use style::attr::AttrValue;
-use style::computed_values::display;
+use style::computed_values::display::T as Display;
 use style::context::SharedStyleContext;
 use style::data::ElementData;
 use style::dom::{LayoutIterator, NodeInfo, TNode};
@@ -197,7 +197,7 @@ pub trait ThreadSafeLayoutNode: Clone + Copy + Debug + GetLayoutData + NodeInfo 
     fn as_element(&self) -> Option<Self::ConcreteThreadSafeLayoutElement>;
 
     #[inline]
-    fn get_pseudo_element_type(&self) -> PseudoElementType<Option<display::T>> {
+    fn get_pseudo_element_type(&self) -> PseudoElementType<Option<Display>> {
         self.as_element().map_or(PseudoElementType::Normal, |el| el.get_pseudo_element_type())
     }
 
@@ -239,8 +239,6 @@ pub trait ThreadSafeLayoutNode: Clone + Copy + Debug + GetLayoutData + NodeInfo 
     /// We need this because the implementation of some methods need to access the layout
     /// data flags, and we have this annoying trait separation between script and layout :-(
     unsafe fn unsafe_get(self) -> Self::ConcreteNode;
-
-    fn can_be_fragmented(&self) -> bool;
 
     fn node_text_content(&self) -> String;
 
@@ -304,7 +302,7 @@ pub trait ThreadSafeLayoutElement
 
     /// Creates a new `ThreadSafeLayoutElement` for the same `LayoutElement`
     /// with a different pseudo-element type.
-    fn with_pseudo(&self, pseudo: PseudoElementType<Option<display::T>>) -> Self;
+    fn with_pseudo(&self, pseudo: PseudoElementType<Option<Display>>) -> Self;
 
     /// Returns the type ID of this node.
     /// Returns `None` if this is a pseudo-element; otherwise, returns `Some`.
@@ -327,7 +325,7 @@ pub trait ThreadSafeLayoutElement
     fn style_data(&self) -> AtomicRef<ElementData>;
 
     #[inline]
-    fn get_pseudo_element_type(&self) -> PseudoElementType<Option<display::T>>;
+    fn get_pseudo_element_type(&self) -> PseudoElementType<Option<Display>>;
 
     #[inline]
     fn get_before_pseudo(&self) -> Option<Self> {
@@ -364,7 +362,7 @@ pub trait ThreadSafeLayoutElement
             let display = if self.get_attr(&ns!(), &local_name!("open")).is_some() {
                 None // Specified by the stylesheet
             } else {
-                Some(display::T::none)
+                Some(Display::None)
             };
             Some(self.with_pseudo(PseudoElementType::DetailsContent(display)))
         } else {
@@ -400,22 +398,20 @@ pub trait ThreadSafeLayoutElement
                             &style_pseudo,
                             Some(data.styles.primary()),
                             CascadeFlags::empty(),
-                            &ServoMetricsProvider)
-                            .clone()
+                            &ServoMetricsProvider,
+                        )
                     }
                     PseudoElementCascadeType::Lazy => {
-                        context.stylist
-                               .lazily_compute_pseudo_element_style(
-                                   &context.guards,
-                                   unsafe { &self.unsafe_get() },
-                                   &style_pseudo,
-                                   RuleInclusion::All,
-                                   data.styles.primary(),
-                                   /* is_probe = */ false,
-                                   &ServoMetricsProvider,
-                                   /* matching_func = */ None)
-                               .unwrap()
-                               .clone()
+                        context.stylist.lazily_compute_pseudo_element_style(
+                           &context.guards,
+                           unsafe { self.unsafe_get() },
+                           &style_pseudo,
+                           RuleInclusion::All,
+                           data.styles.primary(),
+                           /* is_probe = */ false,
+                           &ServoMetricsProvider,
+                           /* matching_func = */ None,
+                        ).unwrap()
                     }
                 }
             }
@@ -426,7 +422,7 @@ pub trait ThreadSafeLayoutElement
     fn selected_style(&self) -> Arc<ComputedValues> {
         let data = self.style_data();
         data.styles.pseudos
-            .get(&PseudoElement::Selection).map(|s| s)
+            .get(&PseudoElement::Selection)
             .unwrap_or(data.styles.primary())
             .clone()
     }

@@ -9,6 +9,7 @@
 #include "CompositableHost.h"
 #include "gfxEnv.h"
 #include "mozilla/gfx/gfxVars.h"
+#include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/WebRenderImageHost.h"
 #include "mozilla/layers/WebRenderTextureHost.h"
 #include "mozilla/webrender/WebRenderAPI.h"
@@ -30,6 +31,7 @@ AsyncImagePipelineManager::AsyncImagePipelineManager(already_AddRefed<wr::WebRen
  , mIdNamespace(mApi->GetNamespace())
  , mResourceId(0)
  , mAsyncImageEpoch(0)
+ , mWillGenerateFrame(false)
  , mDestroyed(false)
 {
   MOZ_COUNT_CTOR(AsyncImagePipelineManager);
@@ -46,6 +48,24 @@ AsyncImagePipelineManager::Destroy()
   MOZ_ASSERT(!mDestroyed);
   mApi = nullptr;
   mDestroyed = true;
+}
+
+void
+AsyncImagePipelineManager::SetWillGenerateFrame()
+{
+  MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
+
+  mWillGenerateFrame = true;
+}
+
+bool
+AsyncImagePipelineManager::GetAndResetWillGenerateFrame()
+{
+  MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
+
+  bool ret = mWillGenerateFrame;
+  mWillGenerateFrame = false;
+  return ret;
 }
 
 void
@@ -137,12 +157,11 @@ AsyncImagePipelineManager::UpdateAsyncImagePipeline(const wr::PipelineId& aPipel
     return;
   }
   pipeline->mInitialised = true;
-  pipeline->mIsChanged = true;
-  pipeline->mScBounds = aScBounds;
-  pipeline->mScTransform = aScTransform;
-  pipeline->mScaleToSize = aScaleToSize;
-  pipeline->mFilter = aFilter;
-  pipeline->mMixBlendMode = aMixBlendMode;
+  pipeline->Update(aScBounds,
+                   aScTransform,
+                   aScaleToSize,
+                   aFilter,
+                   aMixBlendMode);
 }
 
 Maybe<TextureHost::ResourceUpdateOp>
@@ -182,6 +201,7 @@ AsyncImagePipelineManager::UpdateImageKeys(wr::ResourceUpdateQueue& aResources,
   // If we already had a texture and the format hasn't changed, better to reuse the image keys
   // than create new ones.
   bool canUpdate = !!previousTexture
+                   && previousTexture->GetSize() == texture->GetSize()
                    && previousTexture->GetFormat() == texture->GetFormat()
                    && aPipeline->mKeys.Length() == numKeys;
 
@@ -232,7 +252,7 @@ AsyncImagePipelineManager::UpdateWithoutExternalImage(wr::ResourceUpdateQueue& a
   wr::ImageDescriptor descriptor(size, map.mStride, dSurf->GetFormat());
 
   // Costly copy right here...
-  wr::Vec_u8 bytes;
+  wr::Vec<uint8_t> bytes;
   bytes.PushBytes(Range<uint8_t>(map.mData, size.height * map.mStride));
 
   if (aOp == TextureHost::UPDATE_IMAGE) {
@@ -270,6 +290,11 @@ AsyncImagePipelineManager::ApplyAsyncImages()
                              (pipeline->mIsChanged || op == Some(TextureHost::ADD_IMAGE)) &&
                              !!pipeline->mCurrentTexture;
 
+    // Request to generate frame if there is an update.
+    if (updateDisplayList || !op.isNothing()) {
+      SetWillGenerateFrame();
+    }
+
     if (!updateDisplayList) {
       // We don't need to update the display list, either because we can't or because
       // the previous one is still up to date.
@@ -290,7 +315,7 @@ AsyncImagePipelineManager::ApplyAsyncImages()
 
     float opacity = 1.0f;
     builder.PushStackingContext(wr::ToLayoutRect(pipeline->mScBounds),
-                                0,
+                                nullptr,
                                 &opacity,
                                 pipeline->mScTransform.IsIdentity() ? nullptr : &pipeline->mScTransform,
                                 wr::TransformStyle::Flat,
@@ -328,7 +353,7 @@ AsyncImagePipelineManager::ApplyAsyncImages()
     builder.Finalize(builderContentSize, dl);
     mApi->SetDisplayList(gfx::Color(0.f, 0.f, 0.f, 0.f), epoch, LayerSize(pipeline->mScBounds.Width(), pipeline->mScBounds.Height()),
                          pipelineId, builderContentSize,
-                         dl.dl_desc, dl.dl.inner.data, dl.dl.inner.length,
+                         dl.dl_desc, dl.dl,
                          resourceUpdates);
   }
 }

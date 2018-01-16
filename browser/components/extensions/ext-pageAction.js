@@ -40,8 +40,15 @@ this.pageAction = class extends ExtensionAPI {
 
     this.tabManager = extension.tabManager;
 
+    // If <all_urls> is present, the default is to show the page action.
+    let show = options.show_matches && options.show_matches.includes("<all_urls>");
+    let showMatches = new MatchPatternSet(options.show_matches || []);
+    let hideMatches = new MatchPatternSet(options.hide_matches || []);
+
     this.defaults = {
-      show: false,
+      show,
+      showMatches,
+      hideMatches,
       title: options.default_title || extension.name,
       popup: options.default_popup || "",
     };
@@ -66,10 +73,11 @@ this.pageAction = class extends ExtensionAPI {
     if (!this.browserPageAction) {
       this.browserPageAction = PageActions.addAction(new PageActions.Action({
         id: widgetId,
+        extensionID: extension.id,
         title: this.defaults.title,
         iconURL: this.getIconData(this.defaults.icon),
-        shownInUrlbar: true,
-        disabled: true,
+        pinnedToUrlbar: true,
+        disabled: !this.defaults.show,
         onCommand: (event, buttonNode) => {
           this.handleClick(event.target.ownerGlobal);
         },
@@ -91,7 +99,11 @@ this.pageAction = class extends ExtensionAPI {
 
     this.tabContext.shutdown();
 
-    if (this.browserPageAction) {
+    // Removing the browser page action causes PageActions to forget about it
+    // across app restarts, so don't remove it on app shutdown, but do remove
+    // it on all other shutdowns since there's no guarantee the action will be
+    // coming back.
+    if (reason != "APP_SHUTDOWN" && this.browserPageAction) {
       this.browserPageAction.remove();
       this.browserPageAction = null;
     }
@@ -221,6 +233,12 @@ this.pageAction = class extends ExtensionAPI {
     if (fromBrowse) {
       this.tabContext.clear(tab);
     }
+
+    // Set show via pattern matching.
+    let context = this.tabContext.get(tab);
+    let uri = tab.linkedBrowser.currentURI;
+    context.show = (context.show || context.showMatches.matches(uri)) && !context.hideMatches.matches(uri);
+
     this.updateButton(tab.ownerGlobal);
   }
 

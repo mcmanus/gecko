@@ -9,8 +9,10 @@ function LOG(str) {
 
 const Ci = Components.interfaces;
 const Cc = Components.classes;
+const Cu = Components.utils;
 const Cr = Components.results;
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 const FP_CONTRACTID = "@mozilla.org/feed-processor;1";
 const FP_CLASSID = Components.ID("{26acb1f0-28fc-43bc-867a-a46aabc85dd4}");
@@ -43,7 +45,6 @@ const SAX_CONTRACTID = "@mozilla.org/saxparser/xmlreader;1";
 const PARSERUTILS_CONTRACTID = "@mozilla.org/parserutils;1";
 
 const gMimeService = Cc["@mozilla.org/mime;1"].getService(Ci.nsIMIMEService);
-var gIoService = null;
 
 const XMLNS = "http://www.w3.org/XML/1998/namespace";
 const RSS090NS = "http://my.netscape.com/rdf/simple/0.9/";
@@ -51,10 +52,8 @@ const RSS090NS = "http://my.netscape.com/rdf/simple/0.9/";
 /** *** Some general utils *****/
 function strToURI(link, base) {
   base = base || null;
-  if (!gIoService)
-    gIoService = Cc[IO_CONTRACTID].getService(Ci.nsIIOService);
   try {
-    return gIoService.newURI(link, null, base);
+    return Services.io.newURI(link, null, base);
   } catch (e) {
     return null;
   }
@@ -935,10 +934,6 @@ XHTMLHandler.prototype = {
   characters: function XH_characters(data) {
     this._buf += xmlEscape(data);
   },
-  startPrefixMapping: function XH_startPrefixMapping(prefix, uri) {
-  },
-  endPrefixMapping: function FP_endPrefixMapping(prefix) {
-  },
   processingInstruction: function XH_processingInstruction() {
   },
 };
@@ -992,10 +987,6 @@ ExtensionHandler.prototype = {
   characters: function EH_characters(data) {
     if (!this._hasChildElements)
       this._buf += data;
-  },
-  startPrefixMapping: function EH_startPrefixMapping() {
-  },
-  endPrefixMapping: function EH_endPrefixMapping() {
   },
   processingInstruction: function EH_processingInstruction() {
   },
@@ -1465,14 +1456,6 @@ FeedProcessor.prototype = {
   // opening element.
   characters: function FP_characters(data) {
     this._buf += data;
-  },
-  // TODO: It would be nice to check new prefixes here, and if they
-  // don't conflict with the ones we've defined, throw them in a
-  // dictionary to check.
-  startPrefixMapping: function FP_startPrefixMapping(prefix, uri) {
-  },
-
-  endPrefixMapping: function FP_endPrefixMapping(prefix) {
   },
 
   processingInstruction: function FP_processingInstruction(target, data) {

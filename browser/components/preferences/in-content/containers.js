@@ -17,8 +17,10 @@ let gContainersPane = {
   init() {
     this._list = document.getElementById("containersView");
 
-    document.getElementById("backContainersLink").addEventListener("click", function() {
-      gotoPref("general");
+    document.getElementById("backContainersLink").addEventListener("click", function(event) {
+      if (event.button == 0) {
+        gotoPref("general");
+      }
     });
 
     this._rebuildView();
@@ -40,7 +42,7 @@ let gContainersPane = {
     }
   },
 
-  async onRemoveClick(button) {
+  async onRemoveCommand(button) {
     let userContextId = parseInt(button.getAttribute("value"), 10);
 
     let count = ContextualIdentityService.countContainerTabs(userContextId);
@@ -69,11 +71,11 @@ let gContainersPane = {
     this._rebuildView();
   },
 
-  onPreferenceClick(button) {
+  onPreferenceCommand(button) {
     this.openPreferenceDialog(button.getAttribute("value"));
   },
 
-  onAddButtonClick(button) {
+  onAddButtonCommand(button) {
     this.openPreferenceDialog(null);
   },
 

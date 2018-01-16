@@ -131,7 +131,7 @@ nsSVGOuterSVGFrame::Init(nsIContent*       aContent,
           // has had its first reflow, and that its size depends on our
           // intrinsic size.  We need it to resize itself to use our (now
           // available) intrinsic size:
-          embeddingFrame->PresContext()->PresShell()->
+          embeddingFrame->PresShell()->
             FrameNeedsReflow(embeddingFrame, nsIPresShell::eStyleChange, NS_FRAME_IS_DIRTY);
         }
       }
@@ -507,14 +507,13 @@ nsSVGOuterSVGFrame::Reflow(nsPresContext*           aPresContext,
 
 void
 nsSVGOuterSVGFrame::DidReflow(nsPresContext*   aPresContext,
-                              const ReflowInput*  aReflowInput,
-                              nsDidReflowStatus aStatus)
+                              const ReflowInput*  aReflowInput)
 {
-  nsSVGDisplayContainerFrame::DidReflow(aPresContext,aReflowInput,aStatus);
+  nsSVGDisplayContainerFrame::DidReflow(aPresContext,aReflowInput);
 
   // Make sure elements styled by :hover get updated if script/animation moves
   // them under or out from under the pointer:
-  PresContext()->PresShell()->SynthesizeMouseMove(false);
+  PresShell()->SynthesizeMouseMove(false);
 }
 
 /* virtual */ void
@@ -716,14 +715,14 @@ nsSVGOuterSVGFrame::AttributeChanged(int32_t  aNameSpaceID,
         if (DependsOnIntrinsicSize(embeddingFrame)) {
           // Tell embeddingFrame's presShell it needs to be reflowed (which takes
           // care of reflowing us too).
-          embeddingFrame->PresContext()->PresShell()->
+          embeddingFrame->PresShell()->
             FrameNeedsReflow(embeddingFrame, nsIPresShell::eStyleChange, NS_FRAME_IS_DIRTY);
         }
         // else our width and height is overridden - don't reflow anything
       } else {
         // We are not embedded by reference, so our 'width' and 'height'
         // attributes are not overridden - we need to reflow.
-        PresContext()->PresShell()->
+        PresShell()->
           FrameNeedsReflow(this, nsIPresShell::eStyleChange, NS_FRAME_IS_DIRTY);
       }
     }
@@ -783,13 +782,13 @@ nsSVGOuterSVGFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
        NS_SVGDisplayListHitTestingEnabled()) ||
       (!aBuilder->IsForEventDelivery() &&
        NS_SVGDisplayListPaintingEnabled())) {
-    nsDisplayList newList(aBuilder);
+    nsDisplayList newList;
     nsDisplayListSet set(&newList, &newList, &newList,
                          &newList, &newList, &newList);
     BuildDisplayListForNonBlockChildren(aBuilder, set);
-    aLists.Content()->AppendNewToTop(new (aBuilder) nsDisplaySVGWrapper(aBuilder, this, &newList));
+    aLists.Content()->AppendToTop(new (aBuilder) nsDisplaySVGWrapper(aBuilder, this, &newList));
   } else if (IsVisibleForPainting(aBuilder) || !aBuilder->IsForPainting()) {
-    aLists.Content()->AppendNewToTop(
+    aLists.Content()->AppendToTop(
       new (aBuilder) nsDisplayOuterSVG(aBuilder, this));
   }
 }

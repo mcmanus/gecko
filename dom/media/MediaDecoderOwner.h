@@ -8,6 +8,10 @@
 
 #include "mozilla/UniquePtr.h"
 #include "MediaInfo.h"
+#include "MediaSegment.h"
+#include "nsSize.h"
+
+class nsIDocument;
 
 namespace mozilla {
 
@@ -59,7 +63,7 @@ public:
   // when the resource has a network error during loading.
   // The decoder owner should call Shutdown() on the decoder and drop the
   // reference to the decoder to prevent further calls into the decoder.
-  virtual void NetworkError() = 0;
+  virtual void NetworkError(const MediaResult& aError) = 0;
 
   // Called by the decoder object, on the main thread, when the
   // resource has a decode error during metadata loading or decoding.
@@ -173,6 +177,19 @@ public:
   {
     return nullptr;
   }
+
+  // Called by the frame container to notify the layout engine that the
+  // size of the image has changed, or the video needs to be be repainted
+  // for some other reason.
+  virtual void Invalidate(bool aImageSizeChanged,
+                          Maybe<nsIntSize>& aNewIntrinsicSize,
+                          bool aForceInvalidate) {}
+
+  // Called after the MediaStream we're playing rendered a frame to aContainer
+  // with a different principalHandle than the previous frame.
+  virtual void PrincipalHandleChangedForVideoFrameContainer(
+    VideoFrameContainer* aContainer,
+    const PrincipalHandle& aNewPrincipalHandle) {}
 
   /*
    * Servo only methods go here. Please provide default implementations so they

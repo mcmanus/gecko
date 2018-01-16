@@ -18,6 +18,7 @@
 #include "nsTArray.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/VsyncDispatcher.h"
+#include "nsUnicodeProperties.h"
 #include "qcms.h"
 #include "gfx2DGlue.h"
 
@@ -29,8 +30,9 @@
 
 using namespace mozilla;
 using namespace mozilla::gfx;
+using namespace mozilla::unicode;
 
-using mozilla::dom::FontFamilyListEntry;
+using mozilla::dom::SystemFontListEntry;
 
 // cribbed from CTFontManager.h
 enum {
@@ -101,6 +103,14 @@ gfxPlatformMac::~gfxPlatformMac()
     gfxCoreTextShaper::Shutdown();
 }
 
+bool
+gfxPlatformMac::UsesTiling() const
+{
+    // The non-tiling ContentClient requires CrossProcessSemaphore which
+    // isn't implemented for OSX.
+    return true;
+}
+
 gfxPlatformFontList*
 gfxPlatformMac::CreatePlatformFontList()
 {
@@ -113,11 +123,10 @@ gfxPlatformMac::CreatePlatformFontList()
 }
 
 void
-gfxPlatformMac::GetSystemFontFamilyList(
-    InfallibleTArray<FontFamilyListEntry>* aFontFamilies)
+gfxPlatformMac::ReadSystemFontList(
+    InfallibleTArray<SystemFontListEntry>* aFontList)
 {
-    gfxMacPlatformFontList::PlatformFontList()->
-        GetSystemFontFamilyList(aFontFamilies);
+    gfxMacPlatformFontList::PlatformFontList()->ReadSystemFontList(aFontList);
 }
 
 already_AddRefed<gfxASurface>
@@ -192,23 +201,24 @@ gfxPlatformMac::GetCommonFallbackFonts(uint32_t aCh, uint32_t aNextCh,
                                        Script aRunScript,
                                        nsTArray<const char*>& aFontList)
 {
-    if (aNextCh == 0xfe0f) {
-        aFontList.AppendElement(kFontAppleColorEmoji);
+    EmojiPresentation emoji = GetEmojiPresentation(aCh);
+    if (emoji != EmojiPresentation::TextOnly) {
+        if (aNextCh == kVariationSelector16 ||
+           (aNextCh != kVariationSelector15 &&
+            emoji == EmojiPresentation::EmojiDefault)) {
+            // if char is followed by VS16, try for a color emoji glyph
+            aFontList.AppendElement(kFontAppleColorEmoji);
+        }
     }
 
     aFontList.AppendElement(kFontLucidaGrande);
 
     if (!IS_IN_BMP(aCh)) {
         uint32_t p = aCh >> 16;
-        uint32_t b = aCh >> 8;
         if (p == 1) {
-            if (b >= 0x1f0 && b < 0x1f7) {
-                aFontList.AppendElement(kFontAppleColorEmoji);
-            } else {
-                aFontList.AppendElement(kFontAppleSymbols);
-                aFontList.AppendElement(kFontSTIXGeneral);
-                aFontList.AppendElement(kFontGeneva);
-            }
+            aFontList.AppendElement(kFontAppleSymbols);
+            aFontList.AppendElement(kFontSTIXGeneral);
+            aFontList.AppendElement(kFontGeneva);
         } else if (p == 2) {
             // OSX installations with MS Office may have these fonts
             aFontList.AppendElement(kFontMingLiUExtB);

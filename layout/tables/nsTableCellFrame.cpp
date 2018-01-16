@@ -66,7 +66,7 @@ public:
                                mozilla::layers::WebRenderLayerManager* aManager,
                                nsDisplayListBuilder* aDisplayListBuilder) override
   {
-    RefPtr<nsFrameSelection> frameSelection = mFrame->PresContext()->PresShell()->FrameSelection();
+    RefPtr<nsFrameSelection> frameSelection = mFrame->PresShell()->FrameSelection();
     if (frameSelection->GetTableCellSelection()) {
       return false;
     }
@@ -218,7 +218,7 @@ nsTableCellFrame::AttributeChanged(int32_t         aNameSpaceID,
   // BasicTableLayoutStrategy
   if (aNameSpaceID == kNameSpaceID_None && aAttribute == nsGkAtoms::nowrap &&
       PresContext()->CompatibilityMode() == eCompatibility_NavQuirks) {
-    PresContext()->PresShell()->
+    PresShell()->
       FrameNeedsReflow(this, nsIPresShell::eTreeChange, NS_FRAME_IS_DIRTY);
   }
 
@@ -366,7 +366,7 @@ nsTableCellFrame::DecorateForSelection(DrawTarget* aDrawTarget, nsPoint aPt)
   }
 }
 
-DrawResult
+ImgDrawResult
 nsTableCellFrame::PaintBackground(gfxContext&          aRenderingContext,
                                   const nsRect&        aDirtyRect,
                                   nsPoint              aPt,
@@ -391,7 +391,7 @@ nsTableCellFrame::ProcessBorders(nsTableFrame* aFrame,
 
   if (!GetContentEmpty() ||
       StyleTableBorder()->mEmptyCells == NS_STYLE_TABLE_EMPTY_CELLS_SHOW) {
-    aLists.BorderBackground()->AppendNewToTop(new (aBuilder)
+    aLists.BorderBackground()->AppendToTop(new (aBuilder)
                                               nsDisplayBorder(aBuilder, this));
   }
 
@@ -426,7 +426,7 @@ public:
 void nsDisplayTableCellBackground::Paint(nsDisplayListBuilder* aBuilder,
                                          gfxContext* aCtx)
 {
-  DrawResult result = static_cast<nsTableCellFrame*>(mFrame)->
+  ImgDrawResult result = static_cast<nsTableCellFrame*>(mFrame)->
     PaintBackground(*aCtx, mVisibleRect, ToReferenceFrame(),
                     aBuilder->GetBackgroundPaintFlags());
 
@@ -445,7 +445,9 @@ nsDisplayTableCellBackground::GetBounds(nsDisplayListBuilder* aBuilder,
 void nsTableCellFrame::InvalidateFrame(uint32_t aDisplayItemKey)
 {
   nsIFrame::InvalidateFrame(aDisplayItemKey);
-  GetParent()->InvalidateFrameWithRect(GetVisualOverflowRect() + GetPosition(), aDisplayItemKey);
+  if (GetTableFrame()->IsBorderCollapse() && StyleBorder()->HasBorder()) {
+    GetParent()->InvalidateFrameWithRect(GetVisualOverflowRect() + GetPosition(), aDisplayItemKey);
+  }
 }
 
 void nsTableCellFrame::InvalidateFrameWithRect(const nsRect& aRect, uint32_t aDisplayItemKey)
@@ -493,7 +495,7 @@ nsTableCellFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     // display outset box-shadows if we need to.
     bool hasBoxShadow = !!StyleEffects()->mBoxShadow;
     if (hasBoxShadow) {
-      aLists.BorderBackground()->AppendNewToTop(
+      aLists.BorderBackground()->AppendToTop(
         new (aBuilder) nsDisplayBoxShadowOuter(aBuilder, this));
     }
 
@@ -509,7 +511,7 @@ nsTableCellFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
     // display inset box-shadows if we need to.
     if (hasBoxShadow) {
-      aLists.BorderBackground()->AppendNewToTop(
+      aLists.BorderBackground()->AppendToTop(
         new (aBuilder) nsDisplayBoxShadowInner(aBuilder, this));
     }
 
@@ -518,7 +520,7 @@ nsTableCellFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
     // and display the selection border if we need to
     if (IsSelected()) {
-      aLists.BorderBackground()->AppendNewToTop(new (aBuilder)
+      aLists.BorderBackground()->AppendToTop(new (aBuilder)
         nsDisplayTableCellSelection(aBuilder, this));
     }
   }
@@ -1171,7 +1173,7 @@ nsBCTableCellFrame::GetBorderOverflow()
   return halfBorder.GetPhysicalMargin(wm);
 }
 
-DrawResult
+ImgDrawResult
 nsBCTableCellFrame::PaintBackground(gfxContext&          aRenderingContext,
                                     const nsRect&        aDirtyRect,
                                     nsPoint              aPt,

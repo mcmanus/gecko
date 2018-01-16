@@ -3,7 +3,7 @@
 set -e
 set -x
 
-make_flags='-j12'
+make_flags="-j$(nproc)"
 
 . $data_dir/download-tools.sh
 
@@ -49,7 +49,7 @@ prepare() {
     mpc-*.tar.*)
       # If download_prerequisites wants 0.8.1, use 0.8.2 instead.
       file=${file/0.8.1/0.8.2}
-      download_and_check http://www.multiprecision.org/mpc/download $file.asc
+      download_and_check http://www.multiprecision.org/downloads $file.asc
       ;;
     *)
       download $(dirname $url) $file
@@ -67,7 +67,8 @@ prepare() {
 }
 
 prepare_mingw() {
-  export install_dir=$root_dir/tools/gcc/
+  export prefix=/tools/mingw32
+  export install_dir=$root_dir$prefix
   mkdir -p $install_dir
   export PATH=$PATH:$install_dir/bin/
 
@@ -96,25 +97,27 @@ build_binutils() {
   then
     # gold is disabled because we don't use it on automation, and also we ran into
     # some issues with it using this script in build-clang.py.
-    binutils_configure_flags="--disable-gold --enable-plugins --disable-nls"
+    binutils_configure_flags="--disable-gold --enable-plugins --disable-nls --with-sysroot=/"
   fi
 
   mkdir $root_dir/binutils-objdir
   pushd $root_dir/binutils-objdir
-  ../binutils-$binutils_version/configure --prefix /tools/gcc/ $binutils_configure_flags
+  ../binutils-$binutils_version/configure --prefix=${prefix-/tools/gcc}/ $binutils_configure_flags
   make $make_flags
   make install $make_flags DESTDIR=$root_dir
+  export PATH=$root_dir/${prefix-/tools/gcc}/bin:$PATH
   popd
 }
 
 build_gcc() {
   mkdir $root_dir/gcc-objdir
   pushd $root_dir/gcc-objdir
-  ../gcc-$gcc_version/configure --prefix=/tools/gcc --enable-languages=c,c++  --disable-nls --disable-gnu-unique-object --enable-__cxa_atexit --with-arch-32=pentiumpro
+  ../gcc-$gcc_version/configure --prefix=${prefix-/tools/gcc} --enable-languages=c,c++  --disable-nls --disable-gnu-unique-object --enable-__cxa_atexit --with-arch-32=pentiumpro --disable-initfini-array --with-sysroot=/
   make $make_flags
   make $make_flags install DESTDIR=$root_dir
 
   cd $root_dir/tools
+  ln -s gcc gcc/bin/cc
   tar caf $root_dir/gcc.tar.xz gcc/
   popd
 }
@@ -159,7 +162,7 @@ build_gcc_and_mingw() {
   make install
   popd
 
-  pushd $root_dir/tools
-  tar caf $root_dir/mingw32.tar.xz gcc/
+  pushd $(dirname $install_dir)
+  tar caf $root_dir/mingw32.tar.xz $(basename $install_dir)/
   popd
 }

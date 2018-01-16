@@ -80,7 +80,6 @@ ViewSourceChrome.prototype = {
     "ViewSource:SourceUnloaded",
     "ViewSource:Close",
     "ViewSource:OpenURL",
-    "ViewSource:UpdateStatus",
     "ViewSource:ContextMenuOpening",
   ]),
 
@@ -159,9 +158,6 @@ ViewSourceChrome.prototype = {
         break;
       case "ViewSource:OpenURL":
         this.openURL(data.URL);
-        break;
-      case "ViewSource:UpdateStatus":
-        this.updateStatus(data.label);
         break;
       case "ViewSource:ContextMenuOpening":
         this.onContextMenuOpening(data.isLink, data.isEmail, data.href);
@@ -531,10 +527,7 @@ ViewSourceChrome.prototype = {
         event.preventDefault();
     }
 
-    let linkHandler = Cc["@mozilla.org/content/dropped-link-handler;1"]
-                        .getService(Ci.nsIDroppedLinkHandler);
-
-    if (linkHandler.canDropLink(event, false)) {
+    if (Services.droppedLinkHandler.canDropLink(event, false)) {
       event.preventDefault();
     }
   },
@@ -547,12 +540,10 @@ ViewSourceChrome.prototype = {
       return;
 
     let name = { };
-    let linkHandler = Cc["@mozilla.org/content/dropped-link-handler;1"]
-                        .getService(Ci.nsIDroppedLinkHandler);
     let uri;
     try {
       // Pass true to prevent the dropping of javascript:/data: URIs
-      uri = linkHandler.dropLink(event, name, true);
+      uri = Services.droppedLinkHandler.dropLink(event, name, true);
     } catch (e) {
       return;
     }
@@ -608,32 +599,6 @@ ViewSourceChrome.prototype = {
     } else {
       forwardBroadcaster.setAttribute("disabled", "true");
     }
-  },
-
-  /**
-   * Updates the status displayed in the status bar of the view source window.
-   *
-   * @param label
-   *        The string to be displayed in the statusbar-lin-col element.
-   */
-  updateStatus(label) {
-    let statusBarField = document.getElementById("statusbar-line-col");
-    if (statusBarField) {
-      statusBarField.label = label;
-    }
-  },
-
-  /**
-   * Called when the frame script reports that a line was successfully gotten
-   * to.
-   *
-   * @param lineNumber
-   *        The line number that we successfully got to.
-   */
-  onGoToLineSuccess(lineNumber) {
-    ViewSourceBrowser.prototype.onGoToLineSuccess.call(this, lineNumber);
-    document.getElementById("statusbar-line-col").label =
-      gViewSourceBundle.getFormattedString("statusBarLineCol", [lineNumber, 1]);
   },
 
   /**

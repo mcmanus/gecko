@@ -48,6 +48,7 @@
                     spec="https://drafts.csswg.org/css-flexbox/#flex-property">
     use parser::Parse;
     use values::specified::NonNegativeNumber;
+    use properties::longhands::flex_basis::SpecifiedValue as FlexBasis;
 
     fn parse_flexibility<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
                                  -> Result<(NonNegativeNumber, Option<NonNegativeNumber>),ParseError<'i>> {
@@ -66,7 +67,7 @@
             return Ok(expanded! {
                 flex_grow: NonNegativeNumber::new(0.0),
                 flex_shrink: NonNegativeNumber::new(0.0),
-                flex_basis: longhands::flex_basis::SpecifiedValue::auto(),
+                flex_basis: FlexBasis::auto(),
             })
         }
         loop {
@@ -78,7 +79,7 @@
                 }
             }
             if basis.is_none() {
-                if let Ok(value) = input.try(|input| longhands::flex_basis::parse_specified(context, input)) {
+                if let Ok(value) = input.try(|input| FlexBasis::parse(context, input)) {
                     basis = Some(value);
                     continue
                 }
@@ -96,7 +97,7 @@
             // browsers currently agree on using `0%`. This is a spec
             // change which hasn't been adopted by browsers:
             // https://github.com/w3c/csswg-drafts/commit/2c446befdf0f686217905bdd7c92409f6bd3921b
-            flex_basis: basis.unwrap_or(longhands::flex_basis::SpecifiedValue::zero_percent()),
+            flex_basis: basis.unwrap_or(FlexBasis::zero_percent()),
         })
     }
 </%helpers:shorthand>
@@ -241,12 +242,12 @@
                     spec="https://drafts.csswg.org/css-grid/#propdef-grid-template"
                     products="gecko">
     use parser::Parse;
-    use properties::longhands::grid_template_areas::TemplateAreas;
     use values::{Either, None_};
     use values::generics::grid::{LineNameList, TrackSize, TrackList, TrackListType};
     use values::generics::grid::{TrackListValue, concat_serialize_idents};
     use values::specified::{GridTemplateComponent, GenericGridTemplateComponent};
     use values::specified::grid::parse_line_names;
+    use values::specified::position::TemplateAreas;
 
     /// Parsing for `<grid-template>` shorthand (also used by `grid` shorthand).
     pub fn parse_grid_template<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
@@ -464,10 +465,10 @@
                     products="gecko">
     use parser::Parse;
     use properties::longhands::{grid_auto_columns, grid_auto_rows, grid_auto_flow};
-    use properties::longhands::grid_auto_flow::computed_value::{AutoFlow, T as SpecifiedAutoFlow};
     use values::{Either, None_};
     use values::generics::grid::{GridTemplateComponent, TrackListType};
     use values::specified::{GenericGridTemplateComponent, TrackSize};
+    use values::specified::position::{AutoFlow, GridAutoFlow};
 
     pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
                                -> Result<Longhands, ParseError<'i>> {
@@ -479,7 +480,7 @@
         let mut flow = grid_auto_flow::get_initial_value();
 
         fn parse_auto_flow<'i, 't>(input: &mut Parser<'i, 't>, is_row: bool)
-                                   -> Result<SpecifiedAutoFlow, ParseError<'i>> {
+                                   -> Result<GridAutoFlow, ParseError<'i>> {
             let mut auto_flow = None;
             let mut dense = false;
             for _ in 0..2 {
@@ -497,7 +498,7 @@
             }
 
             auto_flow.map(|flow| {
-                SpecifiedAutoFlow {
+                GridAutoFlow {
                     autoflow: flow,
                     dense: dense,
                 }

@@ -12,7 +12,7 @@
 #include "mozilla/FileUtils.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/StaticPtr.h"
-#include "mozilla/Sprintf.h"
+#include "mozilla/Printf.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/UniquePtrExtensions.h"
@@ -363,6 +363,8 @@ public:
   void Print(const char* aName, LogLevel aLevel, const char* aFmt, va_list aArgs)
     MOZ_FORMAT_PRINTF(4, 0)
   {
+    // We don't do nuwa-style forking anymore, so our pid can't change.
+    static long pid = static_cast<long>(base::GetCurrentProcId());
     const size_t kBuffSize = 1024;
     char buff[kBuffSize];
 
@@ -426,18 +428,18 @@ public:
 
     if (!mAddTimestamp) {
       fprintf_stderr(out,
-                     "[%s]: %s/%s %s%s",
-                     currentThreadName, ToLogStr(aLevel),
+                     "[%ld:%s]: %s/%s %s%s",
+                     pid, currentThreadName, ToLogStr(aLevel),
                      aName, buffToWrite, newline);
     } else {
       PRExplodedTime now;
       PR_ExplodeTime(PR_Now(), PR_GMTParameters, &now);
       fprintf_stderr(
           out,
-          "%04d-%02d-%02d %02d:%02d:%02d.%06d UTC - [%s]: %s/%s %s%s",
+          "%04d-%02d-%02d %02d:%02d:%02d.%06d UTC - [%ld:%s]: %s/%s %s%s",
           now.tm_year, now.tm_month + 1, now.tm_mday,
           now.tm_hour, now.tm_min, now.tm_sec, now.tm_usec,
-          currentThreadName, ToLogStr(aLevel),
+          pid, currentThreadName, ToLogStr(aLevel),
           aName, buffToWrite, newline);
     }
 

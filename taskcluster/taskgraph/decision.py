@@ -41,6 +41,7 @@ PER_PROJECT_PARAMETERS = {
 
     'try-comm-central': {
         'target_tasks_method': 'try_tasks',
+        'include_nightly': True,
     },
 
     'ash': {
@@ -63,13 +64,13 @@ PER_PROJECT_PARAMETERS = {
 
     'mozilla-beta': {
         'target_tasks_method': 'mozilla_beta_tasks',
-        'optimize_target_tasks': False,
+        'optimize_target_tasks': True,
         'include_nightly': True,
     },
 
     'mozilla-release': {
         'target_tasks_method': 'mozilla_release_tasks',
-        'optimize_target_tasks': False,
+        'optimize_target_tasks': True,
         'include_nightly': True,
     },
 
@@ -86,6 +87,25 @@ PER_PROJECT_PARAMETERS = {
         'include_nightly': False,
     }
 }
+
+
+def full_task_graph_to_runnable_jobs(full_task_json):
+    runnable_jobs = {}
+    for label, node in full_task_json.iteritems():
+        if not ('extra' in node['task'] and 'treeherder' in node['task']['extra']):
+            continue
+
+        th = node['task']['extra']['treeherder']
+        runnable_jobs[label] = {
+            'symbol': th['symbol']
+        }
+
+        for i in ('groupName', 'groupSymbol', 'collection'):
+            if i in th:
+                runnable_jobs[label][i] = th[i]
+        if th.get('machine', {}).get('platform'):
+            runnable_jobs[label]['platform'] = th['machine']['platform']
+    return runnable_jobs
 
 
 def taskgraph_decision(options, parameters=None):
@@ -116,6 +136,9 @@ def taskgraph_decision(options, parameters=None):
     # write out the full graph for reference
     full_task_json = tgg.full_task_graph.to_json()
     write_artifact('full-task-graph.json', full_task_json)
+
+    # write out the public/runnable-jobs.json.gz file
+    write_artifact('runnable-jobs.json.gz', full_task_graph_to_runnable_jobs(full_task_json))
 
     # this is just a test to check whether the from_json() function is working
     _, _ = TaskGraph.from_json(full_task_json)
@@ -169,6 +192,9 @@ def get_decision_parameters(options):
     ]
     parameters['existing_tasks'] = {}
     parameters['do_not_optimize'] = []
+    parameters['build_number'] = 1
+    parameters['next_version'] = None
+    parameters['desktop_release_type'] = ''
 
     # owner must be an email, but sometimes (e.g., for ffxbld) it is not, in which
     # case, fake it
@@ -201,13 +227,17 @@ def get_decision_parameters(options):
     if 'nightly' in parameters.get('target_tasks_method', ''):
         parameters['release_history'] = populate_release_history('Firefox', project)
 
-    # if try_task_config.json is present, load it
-    task_config_file = os.path.join(os.getcwd(), 'try_task_config.json')
+    if options.get('try_task_config_file'):
+        task_config_file = os.path.abspath(options.get('try_task_config_file'))
+    else:
+        # if try_task_config.json is present, load it
+        task_config_file = os.path.join(os.getcwd(), 'try_task_config.json')
 
     # load try settings
     if 'try' in project:
         parameters['try_mode'] = None
         if os.path.isfile(task_config_file):
+            logger.info("using try tasks from {}".format(task_config_file))
             parameters['try_mode'] = 'try_task_config'
             with open(task_config_file, 'r') as fh:
                 parameters['try_task_config'] = json.load(fh)
@@ -236,7 +266,9 @@ def get_decision_parameters(options):
         parameters['try_task_config'] = None
         parameters['try_options'] = None
 
-    return Parameters(**parameters)
+    result = Parameters(**parameters)
+    result.check()
+    return result
 
 
 def write_artifact(filename, data):
@@ -250,5 +282,9 @@ def write_artifact(filename, data):
     elif filename.endswith('.json'):
         with open(path, 'w') as f:
             json.dump(data, f, sort_keys=True, indent=2, separators=(',', ': '))
+    elif filename.endswith('.gz'):
+        import gzip
+        with gzip.open(path, 'wb') as f:
+            f.write(json.dumps(data))
     else:
         raise TypeError("Don't know how to write to {}".format(filename))

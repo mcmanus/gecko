@@ -123,7 +123,8 @@ partial interface Document {
   //(HTML only)readonly attribute HTMLCollection links;
   //(HTML only)readonly attribute HTMLCollection forms;
   //(HTML only)readonly attribute HTMLCollection scripts;
-  //(HTML only)NodeList getElementsByName(DOMString elementName);
+  [Pure]
+  NodeList getElementsByName(DOMString elementName);
   //(Not implemented)readonly attribute DOMElementMap cssElementMap;
 
   // dynamic markup insertion
@@ -263,13 +264,6 @@ partial interface Document {
   attribute EventHandler onpointerlockerror;
 };
 
-//http://dvcs.w3.org/hg/webcomponents/raw-file/tip/spec/custom/index.html#dfn-document-register
-partial interface Document {
-    // this is deprecated from CustomElements v0
-    [Throws, Func="CustomElementRegistry::IsCustomElementEnabled"]
-    object registerElement(DOMString name, optional ElementRegistrationOptions options);
-};
-
 // http://dvcs.w3.org/hg/webperf/raw-file/tip/specs/PageVisibility/Overview.html#sec-document-interface
 // https://w3c.github.io/page-visibility/#extensions-to-the-document-interface
 partial interface Document {
@@ -310,7 +304,7 @@ partial interface Document {
   //(Not implemented)NodeList  findAll(DOMString selectors, optional (Element or sequence<Node>)? refNodes);
 };
 
-// http://w3c.github.io/web-animations/#extensions-to-the-document-interface
+// https://drafts.csswg.org/web-animations/#extensions-to-the-document-interface
 partial interface Document {
   [Func="nsDocument::IsWebAnimationsEnabled"]
   readonly attribute DocumentTimeline timeline;

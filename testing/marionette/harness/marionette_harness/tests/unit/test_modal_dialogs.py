@@ -204,15 +204,26 @@ class TestTabModalAlerts(BaseAlertTestCase):
         with self.assertRaises(errors.UnexpectedAlertOpen):
             self.marionette.find_element(By.ID, "click-result")
 
+    def test_modal_is_dismissed_after_unexpected_alert(self):
+        self.marionette.find_element(By.ID, "tab-modal-alert").click()
+        self.wait_for_alert()
+        with self.assertRaises(errors.UnexpectedAlertOpen):
+            self.marionette.find_element(By.ID, "click-result")
+
+        assert not self.alert_present()
+
 
 class TestModalAlerts(BaseAlertTestCase):
 
     def setUp(self):
         super(TestModalAlerts, self).setUp()
+        self.marionette.set_pref("network.auth.non-web-content-triggered-resources-http-auth-allow",
+                                 True)
 
     def tearDown(self):
         # Ensure to close a possible remaining modal dialog
         self.close_all_windows()
+        self.marionette.clear_pref("network.auth.non-web-content-triggered-resources-http-auth-allow")
 
         super(TestModalAlerts, self).tearDown()
 

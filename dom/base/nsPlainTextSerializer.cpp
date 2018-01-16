@@ -11,7 +11,6 @@
  */
 
 #include "nsPlainTextSerializer.h"
-#include "nsLWBrkCIID.h"
 #include "nsIServiceManager.h"
 #include "nsGkAtoms.h"
 #include "nsNameSpaceManager.h"
@@ -388,6 +387,7 @@ nsPlainTextSerializer::ScanElementForPreformat(Element* aElement)
 NS_IMETHODIMP
 nsPlainTextSerializer::ForgetElementForPreformat(Element* aElement)
 {
+  MOZ_RELEASE_ASSERT(!mPreformatStack.empty(), "Tried to pop without previous push.");
   mPreformatStack.pop();
   return NS_OK;
 }
@@ -1253,7 +1253,7 @@ static bool
 IsSpaceStuffable(const char16_t *s)
 {
   if (s[0] == '>' || s[0] == ' ' || s[0] == kNBSP ||
-      nsCRT::strncmp(s, u"From ", 5) == 0)
+      NS_strncmp(s, u"From ", 5) == 0)
     return true;
   else
     return false;

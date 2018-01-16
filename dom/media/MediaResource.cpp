@@ -5,9 +5,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "MediaResource.h"
-#include "mozilla/DebugOnly.h"
 #include "MediaPrefs.h"
+#include "mozilla/DebugOnly.h"
 #include "mozilla/Logging.h"
+#include "mozilla/MathAlgorithms.h"
 #include "mozilla/SystemGroup.h"
 #include "mozilla/ErrorNames.h"
 
@@ -18,9 +19,8 @@ using mozilla::media::TimeUnit;
 mozilla::LazyLogModule gMediaResourceIndexLog("MediaResourceIndex");
 // Debug logging macro with object pointer and class name.
 #define ILOG(msg, ...)                                                         \
-  MOZ_LOG(gMediaResourceIndexLog,                                              \
-          mozilla::LogLevel::Debug,                                            \
-          ("%p " msg, this, ##__VA_ARGS__))
+  DDMOZ_LOG(                                                                   \
+    gMediaResourceIndexLog, mozilla::LogLevel::Debug, msg, ##__VA_ARGS__)
 
 namespace mozilla {
 
@@ -42,16 +42,21 @@ MediaResource::Destroy()
 NS_IMPL_ADDREF(MediaResource)
 NS_IMPL_RELEASE_WITH_DESTROY(MediaResource, Destroy())
 
+static const uint32_t kMediaResourceIndexCacheSize = 8192;
+static_assert(IsPowerOfTwo(kMediaResourceIndexCacheSize),
+              "kMediaResourceIndexCacheSize cache size must be a power of 2");
+
 MediaResourceIndex::MediaResourceIndex(MediaResource* aResource)
   : mResource(aResource)
   , mOffset(0)
   , mCacheBlockSize(aResource->ShouldCacheReads()
-                      ? SelectCacheSize(MediaPrefs::MediaResourceIndexCache())
+                      ? kMediaResourceIndexCacheSize
                       : 0)
   , mCachedOffset(0)
   , mCachedBytes(0)
   , mCachedBlock(MakeUnique<char[]>(mCacheBlockSize))
 {
+  DDLINKCHILD("resource", aResource);
 }
 
 nsresult
@@ -414,34 +419,14 @@ MediaResourceIndex::UncachedReadAt(int64_t aOffset,
                                    uint32_t aCount,
                                    uint32_t* aBytes) const
 {
-  *aBytes = 0;
   if (aOffset < 0) {
     return NS_ERROR_ILLEGAL_VALUE;
   }
-  if (aCount != 0) {
-    for (;;) {
-      uint32_t bytesRead = 0;
-      nsresult rv = mResource->ReadAt(aOffset, aBuffer, aCount, &bytesRead);
-      if (NS_FAILED(rv)) {
-        return rv;
-      }
-      if (bytesRead == 0) {
-        break;
-      }
-      *aBytes += bytesRead;
-      aCount -= bytesRead;
-      if (aCount == 0) {
-        break;
-      }
-      aOffset += bytesRead;
-      if (aOffset < 0) {
-        // Very unlikely overflow.
-        return NS_ERROR_FAILURE;
-      }
-      aBuffer += bytesRead;
-    }
+  if (aCount == 0) {
+    *aBytes = 0;
+    return NS_OK;
   }
-  return NS_OK;
+  return mResource->ReadAt(aOffset, aBuffer, aCount, aBytes);
 }
 
 nsresult
@@ -451,36 +436,15 @@ MediaResourceIndex::UncachedRangedReadAt(int64_t aOffset,
                                          uint32_t aExtraCount,
                                          uint32_t* aBytes) const
 {
-  *aBytes = 0;
   uint32_t count = aRequestedCount + aExtraCount;
   if (aOffset < 0 || count < aRequestedCount) {
     return NS_ERROR_ILLEGAL_VALUE;
   }
-  if (count != 0) {
-    for (;;) {
-      uint32_t bytesRead = 0;
-      nsresult rv = mResource->ReadAt(aOffset, aBuffer, count, &bytesRead);
-      if (NS_FAILED(rv)) {
-        return rv;
-      }
-      if (bytesRead == 0) {
-        break;
-      }
-      *aBytes += bytesRead;
-      count -= bytesRead;
-      if (count <= aExtraCount) {
-        // We have read at least aRequestedCount, don't loop anymore.
-        break;
-      }
-      aOffset += bytesRead;
-      if (aOffset < 0) {
-        // Very unlikely overflow.
-        return NS_ERROR_FAILURE;
-      }
-      aBuffer += bytesRead;
-    }
+  if (count == 0) {
+    *aBytes = 0;
+    return NS_OK;
   }
-  return NS_OK;
+  return mResource->ReadAt(aOffset, aBuffer, count, aBytes);
 }
 
 nsresult
@@ -516,30 +480,17 @@ MediaResourceIndex::Seek(int32_t aWhence, int64_t aOffset)
 already_AddRefed<MediaByteBuffer>
 MediaResourceIndex::MediaReadAt(int64_t aOffset, uint32_t aCount) const
 {
+  NS_ENSURE_TRUE(aOffset >= 0, nullptr);
   RefPtr<MediaByteBuffer> bytes = new MediaByteBuffer();
-  if (aOffset < 0) {
-    return bytes.forget();
-  }
   bool ok = bytes->SetLength(aCount, fallible);
   NS_ENSURE_TRUE(ok, nullptr);
-  char* curr = reinterpret_cast<char*>(bytes->Elements());
-  const char* start = curr;
-  while (aCount > 0) {
-    uint32_t bytesRead;
-    nsresult rv = mResource->ReadAt(aOffset, curr, aCount, &bytesRead);
-    NS_ENSURE_SUCCESS(rv, nullptr);
-    if (!bytesRead) {
-      break;
-    }
-    aOffset += bytesRead;
-    if (aOffset < 0) {
-      // Very unlikely overflow.
-      break;
-    }
-    aCount -= bytesRead;
-    curr += bytesRead;
-  }
-  bytes->SetLength(curr - start);
+
+  uint32_t bytesRead = 0;
+  nsresult rv = mResource->ReadAt(
+    aOffset, reinterpret_cast<char*>(bytes->Elements()), aCount, &bytesRead);
+  NS_ENSURE_SUCCESS(rv, nullptr);
+
+  bytes->SetLength(bytesRead);
   return bytes.forget();
 }
 
@@ -565,32 +516,6 @@ int64_t
 MediaResourceIndex::GetLength() const
 {
   return mResource->GetLength();
-}
-
-// Select the next power of 2 (in range 32B-128KB, or 0 -> no cache)
-/* static */
-uint32_t
-MediaResourceIndex::SelectCacheSize(uint32_t aHint)
-{
-  if (aHint == 0) {
-    return 0;
-  }
-  if (aHint <= 32) {
-    return 32;
-  }
-  if (aHint > 64 * 1024) {
-    return 128 * 1024;
-  }
-  // 32-bit next power of 2, from:
-  // http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
-  aHint--;
-  aHint |= aHint >> 1;
-  aHint |= aHint >> 2;
-  aHint |= aHint >> 4;
-  aHint |= aHint >> 8;
-  aHint |= aHint >> 16;
-  aHint++;
-  return aHint;
 }
 
 uint32_t

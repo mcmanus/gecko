@@ -246,7 +246,7 @@ nsDisplayRangeFocusRing::Paint(nsDisplayListBuilder* aBuilder,
                          ? PaintBorderFlags::SYNC_DECODE_IMAGES
                          : PaintBorderFlags();
 
-  DrawResult result =
+  ImgDrawResult result =
     nsCSSRendering::PaintBorder(mFrame->PresContext(), *aCtx, mFrame,
                                 mVisibleRect, GetBounds(aBuilder, &unused),
                                 styleContext, flags);
@@ -304,7 +304,7 @@ nsRangeFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     return; // the native theme displays its own visual indication of focus
   }
 
-  aLists.Content()->AppendNewToTop(
+  aLists.Content()->AppendToTop(
     new (aBuilder) nsDisplayRangeFocusRing(aBuilder, this));
 }
 
@@ -630,7 +630,7 @@ nsRangeFrame::UpdateForValueChange()
 #ifdef ACCESSIBILITY
   nsAccessibilityService* accService = nsIPresShell::AccService();
   if (accService) {
-    accService->RangeValueChanged(PresContext()->PresShell(), mContent);
+    accService->RangeValueChanged(PresShell(), mContent);
   }
 #endif
 
@@ -760,8 +760,8 @@ nsRangeFrame::AttributeChanged(int32_t  aNameSpaceID,
         UpdateForValueChange();
       }
     } else if (aAttribute == nsGkAtoms::orient) {
-      PresContext()->PresShell()->FrameNeedsReflow(this, nsIPresShell::eResize,
-                                                   NS_FRAME_IS_DIRTY);
+      PresShell()->FrameNeedsReflow(this, nsIPresShell::eResize,
+                                    NS_FRAME_IS_DIRTY);
     }
   }
 

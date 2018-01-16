@@ -43,7 +43,10 @@ GetActionType(nsIContent* aContent)
   nsAutoString value;
 
   if (aContent) {
-    if (!aContent->GetAttr(kNameSpaceID_None, nsGkAtoms::actiontype_, value))
+    if (!aContent->IsElement() ||
+        !aContent->AsElement()->GetAttr(kNameSpaceID_None,
+                                        nsGkAtoms::actiontype_,
+                                        value))
       return NS_MATHML_ACTION_TYPE_NONE;
   }
 
@@ -131,7 +134,7 @@ nsMathMLmactionFrame::GetSelectedFrame()
     return mSelectedFrame;
   }
 
-  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::selection_, value);
+  mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::selection_, value);
   if (!value.IsEmpty()) {
     nsresult errorCode;
     selection = value.ToInteger(&errorCode);
@@ -226,7 +229,7 @@ nsMathMLmactionFrame::AttributeChanged(int32_t  aNameSpaceID,
   }
 
   if (needsReflow) {
-    PresContext()->PresShell()->
+    PresShell()->
       FrameNeedsReflow(this, nsIPresShell::eTreeChange, NS_FRAME_IS_DIRTY);
   }
 
@@ -274,7 +277,7 @@ nsMathMLmactionFrame::MouseListener::HandleEvent(nsIDOMEvent* aEvent)
     mOwner->MouseOut();
   }
   else {
-    NS_ABORT();
+    MOZ_ASSERT_UNREACHABLE("Unexpected eventType");
   }
 
   return NS_OK;
@@ -330,10 +333,11 @@ nsMathMLmactionFrame::MouseClick()
       nsAutoString value;
       value.AppendInt(selection);
       bool notify = false; // don't yet notify the document
-      mContent->SetAttr(kNameSpaceID_None, nsGkAtoms::selection_, value, notify);
+      mContent->AsElement()->SetAttr(kNameSpaceID_None, nsGkAtoms::selection_,
+                                     value, notify);
 
       // Now trigger a content-changed reflow...
-      PresContext()->PresShell()->
+      PresShell()->
         FrameNeedsReflow(mSelectedFrame, nsIPresShell::eTreeChange,
                          NS_FRAME_IS_DIRTY);
     }

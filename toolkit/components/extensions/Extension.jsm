@@ -1,7 +1,8 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
 
 this.EXPORTED_SYMBOLS = ["Extension", "ExtensionData", "Langpack"];
@@ -36,11 +37,8 @@ const Cc = Components.classes;
 const Cu = Components.utils;
 const Cr = Components.results;
 
-Cu.importGlobalProperties(["TextEncoder"]);
-
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.importGlobalProperties(["fetch"]);
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   AddonManager: "resource://gre/modules/AddonManager.jsm",
@@ -101,39 +99,6 @@ XPCOMUtils.defineLazyGetter(this, "LocaleData", () => ExtensionCommon.LocaleData
 
 // The maximum time to wait for extension shutdown blockers to complete.
 const SHUTDOWN_BLOCKER_MAX_MS = 8000;
-
-// The list of properties that themes are allowed to contain.
-XPCOMUtils.defineLazyGetter(this, "allowedThemeProperties", () => {
-  Cu.import("resource://gre/modules/ExtensionParent.jsm");
-  let propertiesInBaseManifest = ExtensionParent.baseManifestProperties;
-
-  // The properties found in the base manifest contain all of the properties that
-  // themes are allowed to have. However, the list also contains several properties
-  // that aren't allowed, so we need to filter them out first before the list can
-  // be used to validate themes.
-  return propertiesInBaseManifest.filter(prop => {
-    const propertiesToRemove = ["background", "content_scripts", "permissions"];
-    return !propertiesToRemove.includes(prop);
-  });
-});
-
-/**
- * Validates a theme to ensure it only contains static resources.
- *
- * @param {Array<string>} manifestProperties The list of top-level keys found in the
- *    the extension's manifest.
- * @returns {Array<string>} A list of invalid properties or an empty list
- *    if none are found.
- */
-function validateThemeManifest(manifestProperties) {
-  let invalidProps = [];
-  for (let propName of manifestProperties) {
-    if (propName != "theme" && !allowedThemeProperties.includes(propName)) {
-      invalidProps.push(propName);
-    }
-  }
-  return invalidProps;
-}
 
 /**
  * Classify an individual permission from a webextension manifest
@@ -221,13 +186,6 @@ var UUIDMap = {
   },
 };
 
-// This is the old interface that UUIDMap replaced, to be removed when
-// the references listed in bug 1291399 are updated.
-/* exported getExtensionUUID */
-function getExtensionUUID(id) {
-  return UUIDMap.get(id, true);
-}
-
 // For extensions that have called setUninstallURL(), send an event
 // so the browser can display the URL.
 var UninstallObserver = {
@@ -289,15 +247,17 @@ var UninstallObserver = {
 
 UninstallObserver.init();
 
-// Represents the data contained in an extension, contained either
-// in a directory or a zip file, which may or may not be installed.
-// This class implements the functionality of the Extension class,
-// primarily related to manifest parsing and localization, which is
-// useful prior to extension installation or initialization.
-//
-// No functionality of this class is guaranteed to work before
-// |loadManifest| has been called, and completed.
-this.ExtensionData = class {
+/**
+ * Represents the data contained in an extension, contained either
+ * in a directory or a zip file, which may or may not be installed.
+ * This class implements the functionality of the Extension class,
+ * primarily related to manifest parsing and localization, which is
+ * useful prior to extension installation or initialization.
+ *
+ * No functionality of this class is guaranteed to work before
+ * `loadManifest` has been called, and completed.
+ */
+class ExtensionData {
   constructor(rootURI) {
     this.rootURI = rootURI;
     this.resourceURL = rootURI.spec;
@@ -328,11 +288,18 @@ this.ExtensionData = class {
     return Log.repository.getLogger(LOGGER_ID_BASE + id);
   }
 
-  // Report an error about the extension's manifest file.
+  /**
+   * Report an error about the extension's manifest file.
+   * @param {string} message The error message
+   */
   manifestError(message) {
     this.packagingError(`Reading manifest: ${message}`);
   }
 
+  /**
+   * Report a warning about the extension's manifest file.
+   * @param {string} message The warning message
+   */
   manifestWarning(message) {
     this.packagingWarning(`Reading manifest: ${message}`);
   }
@@ -524,15 +491,7 @@ this.ExtensionData = class {
     let manifestType = "manifest.WebExtensionManifest";
     if (this.manifest.theme) {
       this.type = "theme";
-      // XXX create a separate manifest type for themes
-      let invalidProps = validateThemeManifest(Object.getOwnPropertyNames(this.manifest));
-
-      if (invalidProps.length) {
-        let message = `Themes defined in the manifest may only contain static resources. ` +
-          `If you would like to use additional properties, please use the "theme" permission instead. ` +
-          `(the invalid properties found are: ${invalidProps})`;
-        this.manifestError(message);
-      }
+      manifestType = "manifest.ThemeManifest";
     } else if (this.manifest.langpack_id) {
       this.type = "langpack";
       manifestType = "manifest.WebExtensionLangpackManifest";
@@ -851,7 +810,10 @@ this.ExtensionData = class {
         allUrls = true;
         break;
       }
-      let match = /^[htps*]+:\/\/([^/]+)\//.exec(permission);
+      if (permission.startsWith("moz-extension:")) {
+        continue;
+      }
+      let match = /^[a-z*]+:\/\/([^/]+)\//.exec(permission);
       if (!match) {
         Cu.reportError(`Unparseable host permission ${permission}`);
         continue;
@@ -967,7 +929,7 @@ this.ExtensionData = class {
 
     return result;
   }
-};
+}
 
 const PROXIED_EVENTS = new Set(["test-harness-message", "add-permissions", "remove-permissions"]);
 
@@ -980,10 +942,11 @@ class BootstrapScope {
   }
 
   update(data, reason) {
-    Management.emit("update", {id: data.id});
+    Management.emit("update", {id: data.id, resourceURI: data.resourceURI});
   }
 
   startup(data, reason) {
+    // eslint-disable-next-line no-use-before-define
     this.extension = new Extension(data, this.BOOTSTRAP_REASON_TO_STRING_MAP[reason]);
     return this.extension.startup();
   }
@@ -1014,6 +977,7 @@ class LangpackBootstrapScope {
   uninstall(data, reason) {}
 
   startup(data, reason) {
+    // eslint-disable-next-line no-use-before-define
     this.langpack = new Langpack(data);
     return this.langpack.startup();
   }
@@ -1024,9 +988,12 @@ class LangpackBootstrapScope {
   }
 }
 
-// We create one instance of this class per extension. |addonData|
-// comes directly from bootstrap.js when initializing.
-this.Extension = class extends ExtensionData {
+/**
+ * This class is the main representation of an active WebExtension
+ * in the main process.
+ * @extends ExtensionData
+ */
+class Extension extends ExtensionData {
   constructor(addonData, startupReason) {
     super(addonData.resourceURI);
 
@@ -1118,6 +1085,13 @@ this.Extension = class extends ExtensionData {
     });
     /* eslint-enable mozilla/balanced-listeners */
   }
+
+  // Some helpful properties added elsewhere:
+  /**
+   * An object used to map between extension-visible tab ids and
+   * native Tab object
+   * @property {TabManager} tabManager
+   */
 
   static getBootstrapScope(id, file) {
     return new BootstrapScope();
@@ -1280,6 +1254,7 @@ this.Extension = class extends ExtensionData {
       resourceURL: this.resourceURL,
       baseURL: this.baseURI.spec,
       contentScripts: this.contentScripts,
+      registeredContentScripts: new Map(),
       webAccessibleResources: this.webAccessibleResources.map(res => res.glob),
       whiteListedHosts: this.whiteListedHosts.patterns.map(pat => pat.pattern),
       localeData: this.localeData.serialize(),
@@ -1341,7 +1316,15 @@ this.Extension = class extends ExtensionData {
     if (!data["Extension:Extensions"]) {
       data["Extension:Extensions"] = [];
     }
+
     let serial = this.serialize();
+
+    // Map of the programmatically registered content script definitions
+    // (by string scriptId), used in ext-contentScripts.js to propagate
+    // the registered content scripts to the child content processes
+    // (e.g. when a new content process starts after a content process crash).
+    this.registeredContentScripts = serial.registeredContentScripts;
+
     data["Extension:Extensions"].push(serial);
 
     return this.broadcast("Extension:Startup", serial).then(() => {
@@ -1349,6 +1332,15 @@ this.Extension = class extends ExtensionData {
     });
   }
 
+  /**
+   * Call the close() method on the given object when this extension
+   * is shut down.  This can happen during browser shutdown, or when
+   * an extension is manually disabled or uninstalled.
+   *
+   * @param {object} obj
+   *        An object on which to call the close() method when this
+   *        extension is shut down.
+   */
   callOnClose(obj) {
     this.onShutdown.add(obj);
   }
@@ -1648,9 +1640,9 @@ this.Extension = class extends ExtensionData {
     }
     return this._optionalOrigins;
   }
-};
+}
 
-this.Langpack = class extends ExtensionData {
+class Langpack extends ExtensionData {
   constructor(addonData, startupReason) {
     super(addonData.resourceURI);
     this.startupData = addonData.startupData;
@@ -1751,4 +1743,4 @@ this.Langpack = class extends ExtensionData {
 
     resourceProtocol.setSubstitution(this.langpackId, null);
   }
-};
+}

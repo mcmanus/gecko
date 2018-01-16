@@ -129,9 +129,6 @@ nsGenericHTMLFrameElement::GetContentWindow()
     return nullptr;
   }
 
-  NS_ASSERTION(win->IsOuterWindow(),
-               "Uh, this window should always be an outer window!");
-
   return win.forget();
 }
 
@@ -248,7 +245,9 @@ nsGenericHTMLFrameElement::LoadSrc()
     return NS_OK;
   }
 
-  nsresult rv = mFrameLoader->LoadFrame();
+  bool origSrc = !mSrcLoadHappened;
+  mSrcLoadHappened = true;
+  nsresult rv = mFrameLoader->LoadFrame(origSrc);
 #ifdef DEBUG
   if (NS_FAILED(rv)) {
     NS_WARNING("failed to load URL");

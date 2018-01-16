@@ -10,8 +10,6 @@
 #include "nsListControlFrame.h"
 #include "nsCheckboxRadioFrame.h" // for COMPARE macro
 #include "nsGkAtoms.h"
-#include "nsIDOMHTMLSelectElement.h"
-#include "nsIDOMHTMLOptionElement.h"
 #include "nsComboboxControlFrame.h"
 #include "nsIPresShell.h"
 #include "nsIDOMMouseEvent.h"
@@ -180,7 +178,7 @@ nsListControlFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     // XXX Because we have an opaque widget and we get called to paint with
     // this frame as the root of a stacking context we need make sure to draw
     // some opaque color over the whole widget. (Bug 511323)
-    aLists.BorderBackground()->AppendNewToBottom(
+    aLists.BorderBackground()->AppendToBottom(
       new (aBuilder) nsDisplaySolidColor(aBuilder,
         this, nsRect(aBuilder->ToReferenceFrame(this), GetSize()),
         mLastDropdownBackstopColor));
@@ -232,12 +230,9 @@ void nsListControlFrame::PaintFocus(DrawTarget* aDrawTarget, nsPoint aPt)
   fRect += aPt;
 
   bool lastItemIsSelected = false;
-  if (focusedContent) {
-    nsCOMPtr<nsIDOMHTMLOptionElement> domOpt =
-      do_QueryInterface(focusedContent);
-    if (domOpt) {
-      domOpt->GetSelected(&lastItemIsSelected);
-    }
+  HTMLOptionElement* domOpt = HTMLOptionElement::FromContentOrNull(focusedContent);
+  if (domOpt) {
+    lastItemIsSelected = domOpt->Selected();
   }
 
   // set up back stop colors and then ask L&F service for the real colors
@@ -480,8 +475,7 @@ nsListControlFrame::Reflow(nsPresContext*           aPresContext,
   // of the reflow protocol, but things seem to work fine without it...
   // Is that just an implementation detail of nsHTMLScrollFrame that
   // we're depending on?
-  nsHTMLScrollFrame::DidReflow(aPresContext, &state,
-                               nsDidReflowStatus::FINISHED);
+  nsHTMLScrollFrame::DidReflow(aPresContext, &state);
 
   // Now compute the block size we want to have
   nscoord computedBSize = CalcIntrinsicBSize(BSizeOfARow(), length);
@@ -563,8 +557,7 @@ nsListControlFrame::ReflowAsDropdown(nsPresContext*           aPresContext,
   // of the reflow protocol, but things seem to work fine without it...
   // Is that just an implementation detail of nsHTMLScrollFrame that
   // we're depending on?
-  nsHTMLScrollFrame::DidReflow(aPresContext, &state,
-                               nsDidReflowStatus::FINISHED);
+  nsHTMLScrollFrame::DidReflow(aPresContext, &state);
 
   // Now compute the block size we want to have.
   // Note: no need to apply min/max constraints, since we have no such
@@ -1054,10 +1047,9 @@ nsListControlFrame::ResetList(bool aAllowScrolling)
     // Scroll to the selected index
     int32_t indexToSelect = kNothingSelected;
 
-    nsCOMPtr<nsIDOMHTMLSelectElement> selectElement(do_QueryInterface(mContent));
-    NS_ASSERTION(selectElement, "No select element!");
+    HTMLSelectElement* selectElement = HTMLSelectElement::FromContent(mContent);
     if (selectElement) {
-      selectElement->GetSelectedIndex(&indexToSelect);
+      indexToSelect = selectElement->SelectedIndex();
       AutoWeakFrame weakFrame(this);
       ScrollToIndex(indexToSelect);
       if (!weakFrame.IsAlive()) {
@@ -1512,13 +1504,12 @@ nsListControlFrame::AboutToRollup()
 
 void
 nsListControlFrame::DidReflow(nsPresContext*           aPresContext,
-                              const ReflowInput* aReflowInput,
-                              nsDidReflowStatus        aStatus)
+                              const ReflowInput* aReflowInput)
 {
   bool wasInterrupted = !mHasPendingInterruptAtStartOfReflow &&
                           aPresContext->HasPendingInterrupt();
 
-  nsHTMLScrollFrame::DidReflow(aPresContext, aReflowInput, aStatus);
+  nsHTMLScrollFrame::DidReflow(aPresContext, aReflowInput);
 
   if (mNeedToReset && !wasInterrupted) {
     mNeedToReset = false;
@@ -1859,7 +1850,8 @@ nsListControlFrame::MouseDown(nsIDOMEvent* aMouseEvent)
       if (mComboboxFrame->IsOpenInParentProcess()) {
         nsCOMPtr<nsIDOMEventTarget> etarget;
         aMouseEvent->GetTarget(getter_AddRefs(etarget));
-        nsCOMPtr<nsIDOMHTMLOptionElement> option = do_QueryInterface(etarget);
+        nsCOMPtr<nsIContent> econtent = do_QueryInterface(etarget);
+        HTMLOptionElement* option = HTMLOptionElement::FromContentOrNull(econtent);
         if (option) {
           return NS_OK;
         }
@@ -1984,7 +1976,7 @@ nsListControlFrame::ScrollToFrame(dom::HTMLOptionElement& aOptElement)
   // otherwise we find the content's frame and scroll to it
   nsIFrame* childFrame = aOptElement.GetPrimaryFrame();
   if (childFrame) {
-    PresContext()->PresShell()->
+    PresShell()->
       ScrollFrameRectIntoView(childFrame,
                               nsRect(nsPoint(0, 0), childFrame->GetSize()),
                               nsIPresShell::ScrollAxis(), nsIPresShell::ScrollAxis(),
@@ -2455,11 +2447,11 @@ nsListControlFrame::KeyPress(nsIDOMEvent* aKeyEvent)
     }
 
     nsAutoString text;
-    if (NS_FAILED(optionElement->GetText(text)) ||
-        !StringBeginsWith(
-           nsContentUtils::TrimWhitespace<
-             nsContentUtils::IsHTMLWhitespaceOrNBSP>(text, false),
-           incrementalString, nsCaseInsensitiveStringComparator())) {
+    optionElement->GetText(text);
+    if (!StringBeginsWith(
+          nsContentUtils::TrimWhitespace<
+          nsContentUtils::IsHTMLWhitespaceOrNBSP>(text, false),
+          incrementalString, nsCaseInsensitiveStringComparator())) {
       continue;
     }
 
@@ -2569,6 +2561,6 @@ nsListEventListener::HandleEvent(nsIDOMEvent* aEvent)
     return mFrame->nsListControlFrame::MouseMove(aEvent);
   }
 
-  NS_ABORT();
+  MOZ_ASSERT_UNREACHABLE("Unexpected eventType");
   return NS_OK;
 }

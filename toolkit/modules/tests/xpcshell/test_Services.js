@@ -16,9 +16,9 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
 function checkService(service, interface) {
-  do_print("Checking that Services." + service + " is an " + interface);
-  do_check_true(service in Services);
-  do_check_true(Services[service] instanceof interface);
+  info("Checking that Services." + service + " is an " + interface);
+  Assert.ok(service in Services);
+  Assert.ok(Services[service] instanceof interface);
 }
 
 // Tests
@@ -43,7 +43,6 @@ function run_test() {
   checkService("eTLD", Ci.nsIEffectiveTLDService);
   checkService("focus", Ci.nsIFocusManager);
   checkService("io", Ci.nsIIOService);
-  checkService("io", Ci.nsIIOService2);
   checkService("intl", Ci.mozIMozIntl);
   checkService("locale", Ci.mozILocaleService);
   checkService("logins", Ci.nsILoginManager);

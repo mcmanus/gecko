@@ -29,6 +29,7 @@ const NOTIFY_INITIATING_MANUAL_RESTORE = "sessionstore-initiating-manual-restore
 const NOTIFY_CLOSED_OBJECTS_CHANGED = "sessionstore-closed-objects-changed";
 
 const NOTIFY_TAB_RESTORED = "sessionstore-debug-tab-restored"; // WARNING: debug-only
+const NOTIFY_DOMWINDOWCLOSED_HANDLED = "sessionstore-debug-domwindowclosed-handled"; // WARNING: debug-only
 
 // Maximum number of tabs to restore simultaneously. Previously controlled by
 // the browser.sessionstore.max_concurrent_tabs pref.
@@ -772,6 +773,9 @@ var SessionStoreInternal = {
         this.onClose(aSubject).then(() => {
           this._notifyOfClosedObjectsChange();
         });
+        if (gDebuggingEnabled) {
+          Services.obs.notifyObservers(null, NOTIFY_DOMWINDOWCLOSED_HANDLED);
+        }
         break;
       case "quit-application-granted":
         let syncShutdown = aData == "syncShutdown";
@@ -3279,7 +3283,7 @@ var SessionStoreInternal = {
       tabMap.set(tab, tabData);
       tabsData.push(tabData);
     }
-    winData.selected = tabbrowser.mTabBox.selectedIndex + 1;
+    winData.selected = tabbrowser.tabbox.selectedIndex + 1;
 
     this._updateWindowFeatures(aWindow);
 
@@ -3350,9 +3354,9 @@ var SessionStoreInternal = {
     var tabs = [];
 
     // disable smooth scrolling while adding, moving, removing and selecting tabs
-    let tabstrip = tabbrowser.tabContainer.mTabstrip;
-    let smoothScroll = tabstrip.smoothScroll;
-    tabstrip.smoothScroll = false;
+    let arrowScrollbox = tabbrowser.tabContainer.arrowScrollbox;
+    let smoothScroll = arrowScrollbox.smoothScroll;
+    arrowScrollbox.smoothScroll = false;
 
     // We need to keep track of the initially open tabs so that they
     // can be moved to the end of the restored tabs.
@@ -3494,7 +3498,7 @@ var SessionStoreInternal = {
     }
 
     // set smoothScroll back to the original value
-    tabstrip.smoothScroll = smoothScroll;
+    arrowScrollbox.smoothScroll = smoothScroll;
 
     TelemetryStopwatch.finish("FX_SESSION_RESTORE_RESTORE_WINDOW_MS");
     if (Services.prefs.getIntPref("browser.tabs.restorebutton") != 0 ) {

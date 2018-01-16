@@ -1,6 +1,9 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+"use strict";
 
 /**
  * @fileOverview
@@ -8,17 +11,13 @@
  * from the child process.
  */
 
-"use strict";
-
 this.EXPORTED_SYMBOLS = ["ExtensionChildDevToolsUtils"];
 
 const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
+Cu.import("resource://gre/modules/EventEmitter.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "EventEmitter",
-                                  "resource://gre/modules/EventEmitter.jsm");
 
 // Create a variable to hold the cached ThemeChangeObserver which does not
 // get created until a devtools context has been created.

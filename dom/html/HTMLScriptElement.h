@@ -7,7 +7,6 @@
 #ifndef mozilla_dom_HTMLScriptElement_h
 #define mozilla_dom_HTMLScriptElement_h
 
-#include "nsIDOMHTMLScriptElement.h"
 #include "nsGenericHTMLElement.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/ScriptElement.h"
@@ -16,7 +15,6 @@ namespace mozilla {
 namespace dom {
 
 class HTMLScriptElement final : public nsGenericHTMLElement,
-                                public nsIDOMHTMLScriptElement,
                                 public ScriptElement
 {
 public:
@@ -31,16 +29,14 @@ public:
 
   NS_IMETHOD GetInnerHTML(nsAString& aInnerHTML) override;
   virtual void SetInnerHTML(const nsAString& aInnerHTML,
+                            nsIPrincipal* aSubjectPrincipal,
                             mozilla::ErrorResult& aError) override;
-
-  // nsIDOMHTMLScriptElement
-  NS_DECL_NSIDOMHTMLSCRIPTELEMENT
 
   // nsIScriptElement
   virtual bool GetScriptType(nsAString& type) override;
   virtual void GetScriptText(nsAString& text) override;
   virtual void GetScriptCharset(nsAString& charset) override;
-  virtual void FreezeUriAsyncDefer() override;
+  virtual void FreezeExecutionAttrs(nsIDocument* aOwnerDoc) override;
   virtual CORSMode GetCORSMode() const override;
 
   // nsIContent
@@ -50,6 +46,7 @@ public:
   virtual bool ParseAttribute(int32_t aNamespaceID,
                               nsAtom* aAttribute,
                               const nsAString& aValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
                               nsAttrValue& aResult) override;
 
   virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
@@ -63,18 +60,85 @@ public:
                                 bool aNotify) override;
 
   // WebIDL
-  void SetText(const nsAString& aValue, ErrorResult& rv);
-  void SetCharset(const nsAString& aCharset, ErrorResult& rv);
-  void SetDefer(bool aDefer, ErrorResult& rv);
-  bool Defer();
-  void SetSrc(const nsAString& aSrc, nsIPrincipal& aTriggeringPrincipal, ErrorResult& rv);
-  void GetSrc(nsString& aSrc, nsIPrincipal&)
+  void GetText(nsAString& aValue, ErrorResult& aRv);
+
+  void SetText(const nsAString& aValue, ErrorResult& aRv);
+
+  void GetCharset(nsAString& aCharset)
   {
-    GetSrc(aSrc);
-  };
-  void SetType(const nsAString& aType, ErrorResult& rv);
-  void SetHtmlFor(const nsAString& aHtmlFor, ErrorResult& rv);
-  void SetEvent(const nsAString& aEvent, ErrorResult& rv);
+    GetHTMLAttr(nsGkAtoms::charset, aCharset);
+  }
+  void SetCharset(const nsAString& aCharset, ErrorResult& aRv)
+  {
+    SetHTMLAttr(nsGkAtoms::charset, aCharset, aRv);
+  }
+
+  bool Defer()
+  {
+    return GetBoolAttr(nsGkAtoms::defer);
+  }
+  void SetDefer(bool aDefer, ErrorResult& aRv)
+  {
+    SetHTMLBoolAttr(nsGkAtoms::defer, aDefer, aRv);
+  }
+
+  void GetSrc(nsAString& aSrc)
+  {
+    GetURIAttr(nsGkAtoms::src, nullptr, aSrc);
+  }
+  void SetSrc(const nsAString& aSrc, nsIPrincipal* aTriggeringPrincipal, ErrorResult& aRv)
+  {
+    SetHTMLAttr(nsGkAtoms::src, aSrc, aTriggeringPrincipal, aRv);
+  }
+
+  void GetType(nsAString& aType)
+  {
+    GetHTMLAttr(nsGkAtoms::type, aType);
+  }
+  void SetType(const nsAString& aType, ErrorResult& aRv)
+  {
+    SetHTMLAttr(nsGkAtoms::type, aType, aRv);
+  }
+
+  void GetHtmlFor(nsAString& aHtmlFor)
+  {
+    GetHTMLAttr(nsGkAtoms::_for, aHtmlFor);
+  }
+  void SetHtmlFor(const nsAString& aHtmlFor, ErrorResult& aRv)
+  {
+    SetHTMLAttr(nsGkAtoms::_for, aHtmlFor, aRv);
+  }
+
+  void GetEvent(nsAString& aEvent)
+  {
+    GetHTMLAttr(nsGkAtoms::event, aEvent);
+  }
+  void SetEvent(const nsAString& aEvent, ErrorResult& aRv)
+  {
+    SetHTMLAttr(nsGkAtoms::event, aEvent, aRv);
+  }
+
+  bool Async()
+  {
+    return mForceAsync || GetBoolAttr(nsGkAtoms::async);
+  }
+
+  void SetAsync(bool aValue, ErrorResult& aRv)
+  {
+    mForceAsync = false;
+    SetHTMLBoolAttr(nsGkAtoms::async, aValue, aRv);
+  }
+
+  bool NoModule()
+  {
+    return GetBoolAttr(nsGkAtoms::nomodule);
+  }
+
+  void SetNoModule(bool aValue, ErrorResult& aRv)
+  {
+    SetHTMLBoolAttr(nsGkAtoms::nomodule, aValue, aRv);
+  }
+
   void GetCrossOrigin(nsAString& aResult)
   {
     // Null for both missing and invalid defaults is ok, since we
@@ -90,17 +154,18 @@ public:
   {
     GetHTMLAttr(nsGkAtoms::integrity, aIntegrity);
   }
-  void SetIntegrity(const nsAString& aIntegrity, ErrorResult& rv)
+  void SetIntegrity(const nsAString& aIntegrity, ErrorResult& aRv)
   {
-    SetHTMLAttr(nsGkAtoms::integrity, aIntegrity, rv);
+    SetHTMLAttr(nsGkAtoms::integrity, aIntegrity, aRv);
   }
-  bool Async();
-  void SetAsync(bool aValue, ErrorResult& rv);
-  bool NoModule();
-  void SetNoModule(bool aValue, ErrorResult& rv);
 
 protected:
   virtual ~HTMLScriptElement();
+
+  virtual bool GetAsyncState() override
+  {
+    return Async();
+  }
 
   virtual JSObject* WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
 

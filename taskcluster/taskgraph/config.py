@@ -8,9 +8,16 @@ from .util.schema import validate_schema, Schema
 from voluptuous import Required
 
 graph_config_schema = Schema({
+    # The trust-domain for this graph.
+    # (See https://firefox-source-docs.mozilla.org/taskcluster/taskcluster/taskgraph.html#taskgraph-trust-domain)  # noqa
+    Required('trust-domain'): basestring,
     Required('treeherder'): {
         # Mapping of treeherder group symbols to descriptive names
         Required('group-names'): {basestring: basestring}
+    },
+    Required('index'): {
+
+        Required('products'): [basestring],
     },
     Required('try'): {
         # We have a few platforms for which we want to do some "extra" builds, or at

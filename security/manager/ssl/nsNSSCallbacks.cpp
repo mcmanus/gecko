@@ -24,12 +24,14 @@
 #include "nsITokenDialogs.h"
 #include "nsIUploadChannel.h"
 #include "nsIWebProgressListener.h"
+#include "nsNSSCertHelper.h"
 #include "nsNSSCertificate.h"
 #include "nsNSSComponent.h"
 #include "nsNSSIOLayer.h"
 #include "nsNetUtil.h"
 #include "nsProtectedAuthThread.h"
 #include "nsProxyRelease.h"
+#include "nsStringStream.h"
 #include "pkix/pkixtypes.h"
 #include "ssl.h"
 #include "sslproto.h"
@@ -140,9 +142,8 @@ nsHTTPDownloadEvent::Run()
   if (mRequestSession->mHasPostData)
   {
     nsCOMPtr<nsIInputStream> uploadStream;
-    rv = NS_NewPostDataStream(getter_AddRefs(uploadStream),
-                              false,
-                              mRequestSession->mPostData);
+    rv = NS_NewCStringInputStream(getter_AddRefs(uploadStream),
+                                  mRequestSession->mPostData);
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsIUploadChannel> uploadChannel(do_QueryInterface(chan));
@@ -552,7 +553,9 @@ nsNSSHttpRequestSession::~nsNSSHttpRequestSession()
 }
 
 nsHTTPListener::nsHTTPListener()
-: mResultData(nullptr),
+: mHttpRequestSucceeded(false),
+  mHttpResponseCode(0),
+  mResultData(nullptr),
   mResultLen(0),
   mLock("nsHTTPListener.mLock"),
   mCondition(mLock, "nsHTTPListener.mCondition"),
@@ -761,8 +764,6 @@ PK11PasswordPromptRunnable::~PK11PasswordPromptRunnable()
 void
 PK11PasswordPromptRunnable::RunOnTargetThread()
 {
-  static NS_DEFINE_CID(kNSSComponentCID, NS_NSSCOMPONENT_CID);
-
   nsNSSShutDownPreventionLock locker;
   if (isAlreadyShutDown()) {
     return;
@@ -789,24 +790,17 @@ PK11PasswordPromptRunnable::RunOnTargetThread()
     return;
   }
 
-  nsCOMPtr<nsINSSComponent> nssComponent(do_GetService(kNSSComponentCID));
-  if (!nssComponent) {
-    return;
-  }
-
   nsAutoString promptString;
   if (PK11_IsInternal(mSlot)) {
-    rv = nssComponent->GetPIPNSSBundleString("CertPassPromptDefault",
-                                             promptString);
+    rv = GetPIPNSSBundleString("CertPassPromptDefault", promptString);
   } else {
     NS_ConvertUTF8toUTF16 tokenName(PK11_GetTokenName(mSlot));
     const char16_t* formatStrings[] = {
       tokenName.get(),
     };
-    rv = nssComponent->PIPBundleFormatStringFromName("CertPassPrompt",
-                                                     formatStrings,
-                                                     ArrayLength(formatStrings),
-                                                     promptString);
+    rv = PIPBundleFormatStringFromName("CertPassPrompt", formatStrings,
+                                       ArrayLength(formatStrings),
+                                       promptString);
   }
   if (NS_FAILED(rv)) {
     return;
@@ -1306,8 +1300,10 @@ IsCertificateDistrustImminent(nsIX509CertList* aCertList,
     return NS_OK;
   }
 
+  // We need an owning handle when calling nsIX509Cert::GetCert().
+  UniqueCERTCertificate nssRootCert(rootCert->GetCert());
   // If the root is not one of the Symantec roots, exit false
-  if (!CertDNIsInList(rootCert->GetCert(), RootSymantecDNs)) {
+  if (!CertDNIsInList(nssRootCert.get(), RootSymantecDNs)) {
     aResult = false;
     return NS_OK;
   }
@@ -1319,7 +1315,9 @@ IsCertificateDistrustImminent(nsIX509CertList* aCertList,
   intCertList->ForEachCertificateInChain(
     [&foundInWhitelist] (nsCOMPtr<nsIX509Cert> aCert, bool aHasMore,
                          /* out */ bool& aContinue) {
-      if (CertDNIsInList(aCert->GetCert(), RootAppleAndGoogleDNs)) {
+      // We need an owning handle when calling nsIX509Cert::GetCert().
+      UniqueCERTCertificate nssCert(aCert->GetCert());
+      if (CertDNIsInList(nssCert.get(), RootAppleAndGoogleDNs)) {
         foundInWhitelist = true;
         aContinue = false;
       }

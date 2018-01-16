@@ -25,7 +25,7 @@ use hyper_openssl;
 use msg::constellation_msg::TEST_PIPELINE_ID;
 use net::connector::create_ssl_client;
 use net::fetch::cors_cache::CorsCache;
-use net::fetch::methods::FetchContext;
+use net::fetch::methods::{CancellationListener, FetchContext};
 use net::filemanager_thread::FileManager;
 use net::hsts::HstsEntry;
 use net::test::HttpState;
@@ -510,6 +510,13 @@ fn test_fetch_with_local_urls_only() {
     assert!(server_response.is_network_error());
 }
 
+// NOTE(emilio): If this test starts failing:
+//
+// openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+//   -keyout resources/privatekey_for_testing.key       \
+//   -out resources/self_signed_certificate_for_testing.crt
+//
+// And make sure to specify `localhost` as the server name.
 #[test]
 fn test_fetch_with_hsts() {
     static MESSAGE: &'static [u8] = b"";
@@ -538,6 +545,7 @@ fn test_fetch_with_hsts() {
         user_agent: DEFAULT_USER_AGENT.into(),
         devtools_chan: None,
         filemanager: FileManager::new(),
+        cancellation_listener: Arc::new(Mutex::new(CancellationListener::new(None))),
     };
 
     {

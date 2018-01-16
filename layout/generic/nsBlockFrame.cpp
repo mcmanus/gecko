@@ -452,16 +452,6 @@ nsBlockFrame::GetFrameName(nsAString& aResult) const
 }
 #endif
 
-#ifdef DEBUG
-nsFrameState
-nsBlockFrame::GetDebugStateBits() const
-{
-  // We don't want to include our cursor flag in the bits the
-  // regression tester looks at
-  return nsContainerFrame::GetDebugStateBits() & ~NS_BLOCK_HAS_LINE_CURSOR;
-}
-#endif
-
 void
 nsBlockFrame::InvalidateFrame(uint32_t aDisplayItemKey)
 {
@@ -759,7 +749,7 @@ nsBlockFrame::GetMinISize(gfxContext *aRenderingContext)
           // behavior for calc(10%-3px).
           const nsStyleCoord &indent = StyleText()->mTextIndent;
           if (indent.ConvertsToLength())
-            data.mCurrentLine += nsRuleNode::ComputeCoordPercentCalc(indent, 0);
+            data.mCurrentLine += indent.ComputeCoordPercentCalc(0);
         }
         // XXX Bug NNNNNN Should probably handle percentage text-indent.
 
@@ -932,7 +922,7 @@ nsBlockFrame::GetPrefWidthTightBounds(gfxContext* aRenderingContext,
           // behavior for calc(10%-3px).
           const nsStyleCoord &indent = StyleText()->mTextIndent;
           if (indent.ConvertsToLength()) {
-            data.mCurrentLine += nsRuleNode::ComputeCoordPercentCalc(indent, 0);
+            data.mCurrentLine += indent.ComputeCoordPercentCalc(0);
           }
         }
         // XXX Bug NNNNNN Should probably handle percentage text-indent.
@@ -1244,8 +1234,6 @@ nsBlockFrame::Reflow(nsPresContext*           aPresContext,
   // and reflow them, but just in case it does, this is a safety precaution so
   // we don't end up with a placeholder pointing to frames that have already
   // been deleted as part of removing our next-in-flow.
-  // XXXmats maybe this code isn't needed anymore?
-  // XXXmats (layout/generic/crashtests/600100.xhtml doesn't crash without it)
   if (state.mReflowStatus.IsFullyComplete()) {
     nsBlockFrame* nif = static_cast<nsBlockFrame*>(GetNextInFlow());
     while (nif) {
@@ -3044,9 +3032,8 @@ nsBlockFrame::AttributeChanged(int32_t         aNameSpaceID,
       if (ancestor) {
         // XXX Not sure if this is necessary anymore
         if (ancestor->RenumberList()) {
-          PresContext()->PresShell()->
-            FrameNeedsReflow(ancestor, nsIPresShell::eStyleChange,
-                             NS_FRAME_HAS_DIRTY_CHILDREN);
+          PresShell()->FrameNeedsReflow(ancestor, nsIPresShell::eStyleChange,
+                                        NS_FRAME_HAS_DIRTY_CHILDREN);
         }
       }
     }
@@ -3076,8 +3063,8 @@ IsNonAutoNonZeroBSize(const nsStyleCoord& aCoord)
     // both nscoord_MAX and 0, and it's zero both ways, then it's a zero
     // length, percent, or combination thereof.  Test > 0 so we clamp
     // negative calc() results to 0.
-    return nsRuleNode::ComputeCoordPercentCalc(aCoord, nscoord_MAX) > 0 ||
-           nsRuleNode::ComputeCoordPercentCalc(aCoord, 0) > 0;
+    return aCoord.ComputeCoordPercentCalc(nscoord_MAX) > 0 ||
+           aCoord.ComputeCoordPercentCalc(0) > 0;
   }
   MOZ_ASSERT(false, "unexpected unit for height or min-height");
   return true;
@@ -4150,11 +4137,7 @@ nsBlockFrame::ReflowInlineFrame(BlockReflowInput& aState,
                                 nsIFrame* aFrame,
                                 LineReflowStatus* aLineReflowStatus)
 {
-  if (!aFrame) { // XXX change to MOZ_ASSERT(aFrame)
-    NS_ERROR("why call me?");
-    return;
-  }
-
+  MOZ_ASSERT(aFrame);
   *aLineReflowStatus = LineReflowStatus::OK;
 
 #ifdef NOISY_FIRST_LETTER
@@ -4172,7 +4155,7 @@ nsBlockFrame::ReflowInlineFrame(BlockReflowInput& aState,
 
   // Reflow the inline frame
   nsReflowStatus frameReflowStatus;
-  bool           pushedFrame;
+  bool pushedFrame;
   aLineLayout.ReflowFrame(aFrame, frameReflowStatus, nullptr, pushedFrame);
 
   if (frameReflowStatus.NextInFlowNeedsReflow()) {
@@ -5103,7 +5086,7 @@ nsBlockFrame::SetOverflowOutOfFlows(const nsFrameList& aList,
     nsFrameList* list = RemovePropTableFrames(OverflowOutOfFlowsProperty());
     NS_ASSERTION(aPropValue == list, "prop value mismatch");
     list->Clear();
-    list->Delete(PresContext()->PresShell());
+    list->Delete(PresShell());
     RemoveStateBits(NS_BLOCK_HAS_OVERFLOW_OUT_OF_FLOWS);
   }
   else if (GetStateBits() & NS_BLOCK_HAS_OVERFLOW_OUT_OF_FLOWS) {
@@ -5112,7 +5095,7 @@ nsBlockFrame::SetOverflowOutOfFlows(const nsFrameList& aList,
     *aPropValue = aList;
   }
   else {
-    SetPropTableFrames(new (PresContext()->PresShell()) nsFrameList(aList),
+    SetPropTableFrames(new (PresShell()) nsFrameList(aList),
                        OverflowOutOfFlowsProperty());
     AddStateBits(NS_BLOCK_HAS_OVERFLOW_OUT_OF_FLOWS);
   }
@@ -5170,7 +5153,7 @@ nsBlockFrame::EnsurePushedFloats()
   if (result)
     return result;
 
-  result = new (PresContext()->PresShell()) nsFrameList;
+  result = new (PresShell()) nsFrameList;
   SetProperty(PushedFloatProperty(), result);
   AddStateBits(NS_BLOCK_HAS_PUSHED_FLOATS);
 
@@ -5234,7 +5217,7 @@ nsBlockFrame::AppendFrames(ChildListID  aListID,
 
   AddFrames(aFrameList, lastKid);
   if (aListID != kNoReflowPrincipalList) {
-    PresContext()->PresShell()->
+    PresShell()->
       FrameNeedsReflow(this, nsIPresShell::eTreeChange,
                        NS_FRAME_HAS_DIRTY_CHILDREN); // XXX sufficient?
   }
@@ -5270,7 +5253,7 @@ nsBlockFrame::InsertFrames(ChildListID aListID,
 
   AddFrames(aFrameList, aPrevFrame);
   if (aListID != kNoReflowPrincipalList) {
-    PresContext()->PresShell()->
+    PresShell()->
       FrameNeedsReflow(this, nsIPresShell::eTreeChange,
                        NS_FRAME_HAS_DIRTY_CHILDREN); // XXX sufficient?
   }
@@ -5316,7 +5299,7 @@ nsBlockFrame::RemoveFrame(ChildListID aListID,
     MOZ_CRASH("unexpected child list");
   }
 
-  PresContext()->PresShell()->
+  PresShell()->
     FrameNeedsReflow(this, nsIPresShell::eTreeChange,
                      NS_FRAME_HAS_DIRTY_CHILDREN); // XXX sufficient?
 }
@@ -5828,19 +5811,6 @@ nsBlockInFlowLineIterator::FindValidLine()
   }
 }
 
-static void RemoveBlockChild(nsIFrame* aFrame,
-                             bool      aRemoveOnlyFluidContinuations)
-{
-  if (!aFrame) {
-    return;
-  }
-  nsBlockFrame* nextBlock = nsLayoutUtils::GetAsBlock(aFrame->GetParent());
-  NS_ASSERTION(nextBlock,
-               "Our child's continuation's parent is not a block?");
-  nextBlock->DoRemoveFrame(aFrame,
-      (aRemoveOnlyFluidContinuations ? 0 : nsBlockFrame::REMOVE_FIXED_CONTINUATIONS));
-}
-
 // This function removes aDeletedFrame and all its continuations.  It
 // is optimized for deleting a whole series of frames. The easy
 // implementation would invoke itself recursively on
@@ -5849,7 +5819,8 @@ static void RemoveBlockChild(nsIFrame* aFrame,
 // start by locating aDeletedFrame and then scanning from that point
 // on looking for continuations.
 void
-nsBlockFrame::DoRemoveFrame(nsIFrame* aDeletedFrame, uint32_t aFlags)
+nsBlockFrame::DoRemoveFrameInternal(nsIFrame* aDeletedFrame, uint32_t aFlags,
+                                    PostDestroyData& aPostDestroyData)
 {
   // Clear our line cursor, since our lines may change.
   ClearLineCursor();
@@ -5976,7 +5947,7 @@ nsBlockFrame::DoRemoveFrame(nsIFrame* aDeletedFrame, uint32_t aFlags)
       deletedNextContinuation = nullptr;
     }
 
-    aDeletedFrame->Destroy();
+    aDeletedFrame->DestroyFrom(aDeletedFrame, aPostDestroyData);
     aDeletedFrame = deletedNextContinuation;
 
     bool haveAdvancedToNextLine = false;
@@ -6077,8 +6048,15 @@ nsBlockFrame::DoRemoveFrame(nsIFrame* aDeletedFrame, uint32_t aFlags)
   VerifyOverflowSituation();
 #endif
 
-  // Advance to next flow block if the frame has more continuations
-  RemoveBlockChild(aDeletedFrame, !(aFlags & REMOVE_FIXED_CONTINUATIONS));
+  // Advance to next flow block if the frame has more continuations.
+  if (!aDeletedFrame) {
+    return;
+  }
+  nsBlockFrame* nextBlock = nsLayoutUtils::GetAsBlock(aDeletedFrame->GetParent());
+  NS_ASSERTION(nextBlock,
+               "Our child's continuation's parent is not a block?");
+  uint32_t flags = (aFlags & REMOVE_FIXED_CONTINUATIONS);
+  nextBlock->DoRemoveFrameInternal(aDeletedFrame, flags, aPostDestroyData);
 }
 
 static bool
@@ -6405,8 +6383,7 @@ nsBlockFrame::ReflowFloat(BlockReflowInput& aState,
                                                NS_FRAME_NO_MOVE_VIEW);
   }
   // Pass floatRS so the frame hierarchy can be used (redoFloatRS has the same hierarchy)
-  aFloat->DidReflow(aState.mPresContext, &floatRS,
-                    nsDidReflowStatus::FINISHED);
+  aFloat->DidReflow(aState.mPresContext, &floatRS);
 
 #ifdef NOISY_FLOAT
   printf("end ReflowFloat %p, sized to %d,%d\n",
@@ -7095,7 +7072,7 @@ void
 nsBlockFrame::CreateBulletFrameForListItem(bool aCreateBulletList,
                                            bool aListStylePositionInside)
 {
-  nsIPresShell* shell = PresContext()->PresShell();
+  nsIPresShell* shell = PresShell();
 
   CSSPseudoElementType pseudoType = aCreateBulletList ?
     CSSPseudoElementType::mozListBullet :
@@ -7256,8 +7233,7 @@ nsBlockFrame::ReflowBullet(nsIFrame* aBulletFrame,
                                         aMetrics.ISize(wm),
                                         aMetrics.BSize(wm)),
                         aState.ContainerSize());
-  aBulletFrame->DidReflow(aState.mPresContext, &aState.mReflowInput,
-                          nsDidReflowStatus::FINISHED);
+  aBulletFrame->DidReflow(aState.mPresContext, &aState.mReflowInput);
 }
 
 // This is used to scan frames for any float placeholders, add their
@@ -7492,10 +7468,9 @@ nsBlockFrame::ComputeFinalBSize(const ReflowInput& aReflowInput,
                          aBorderPadding.BEnd(wm));
 
   if (aStatus->IsIncomplete() &&
-      aFinalSize.BSize(wm) < aReflowInput.AvailableBSize()) {
-    // We fit in the available space - change status to OVERFLOW_INCOMPLETE.
-    // XXXmats why didn't Reflow report OVERFLOW_INCOMPLETE in the first place?
-    // XXXmats and why exclude the case when our size == AvailableBSize?
+      aFinalSize.BSize(wm) <= aReflowInput.AvailableBSize()) {
+    // We ran out of height on this page but we're incomplete.
+    // Set status to complete except for overflow.
     aStatus->SetOverflowIncomplete();
   }
 

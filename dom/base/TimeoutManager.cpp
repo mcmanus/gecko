@@ -395,7 +395,7 @@ int32_t gDisableOpenClickDelay;
 
 } // anonymous namespace
 
-TimeoutManager::TimeoutManager(nsGlobalWindow& aWindow)
+TimeoutManager::TimeoutManager(nsGlobalWindowInner& aWindow)
   : mWindow(aWindow),
     mExecutor(new TimeoutExecutor(this)),
     mNormalTimeouts(*this),
@@ -410,8 +410,6 @@ TimeoutManager::TimeoutManager(nsGlobalWindow& aWindow)
     mThrottleTrackingTimeouts(false),
     mBudgetThrottleTimeouts(false)
 {
-  MOZ_DIAGNOSTIC_ASSERT(aWindow.IsInnerWindow());
-
   MOZ_LOG(gLog, LogLevel::Debug,
           ("TimeoutManager %p created, tracking bucketing %s\n",
            this, gAnnotateTrackingChannels ? "enabled" : "disabled"));
@@ -587,7 +585,7 @@ TimeoutManager::SetTimeout(nsITimeoutHandler* aHandler,
   }
 
   if (gRunningTimeoutDepth == 0 &&
-      mWindow.GetPopupControlState() < openBlocked) {
+      nsContentUtils::GetPopupControlState() < openBlocked) {
     // This timeout is *not* set from another timeout and it's set
     // while popups are enabled. Propagate the state to the timeout if
     // its delay (interval) is equal to or less than what
@@ -597,7 +595,7 @@ TimeoutManager::SetTimeout(nsITimeoutHandler* aHandler,
     // because our lower bound for |realInterval| could be pretty high
     // in some cases.
     if (interval <= gDisableOpenClickDelay) {
-      timeout->mPopupState = mWindow.GetPopupControlState();
+      timeout->mPopupState = nsContentUtils::GetPopupControlState();
     }
   }
 
@@ -1194,10 +1192,9 @@ class ThrottleTimeoutsCallback final : public nsITimerCallback
                                      , public nsINamed
 {
 public:
-  explicit ThrottleTimeoutsCallback(nsGlobalWindow* aWindow)
+  explicit ThrottleTimeoutsCallback(nsGlobalWindowInner* aWindow)
     : mWindow(aWindow)
   {
-    MOZ_DIAGNOSTIC_ASSERT(aWindow->IsInnerWindow());
   }
 
   NS_DECL_ISUPPORTS
@@ -1215,7 +1212,7 @@ private:
 private:
   // The strong reference here keeps the Window and hence the TimeoutManager
   // object itself alive.
-  RefPtr<nsGlobalWindow> mWindow;
+  RefPtr<nsGlobalWindowInner> mWindow;
 };
 
 NS_IMPL_ISUPPORTS(ThrottleTimeoutsCallback, nsITimerCallback, nsINamed)

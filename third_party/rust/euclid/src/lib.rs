@@ -7,7 +7,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![cfg_attr(feature = "unstable", feature(asm, repr_simd, test))]
+#![cfg_attr(feature = "unstable", feature(asm, repr_simd, test, fn_must_use))]
 
 //! A collection of strongly typed math tools for computer graphics with an inclination
 //! towards 2d graphics and layout.
@@ -55,8 +55,6 @@
 //! assert_eq!(p.x, p.x_typed().get());
 //! ```
 
-extern crate heapsize;
-
 #[cfg_attr(test, macro_use)]
 extern crate log;
 extern crate serde;
@@ -68,7 +66,7 @@ extern crate test;
 extern crate num_traits;
 
 pub use length::Length;
-pub use scale_factor::ScaleFactor;
+pub use scale::TypedScale;
 pub use transform2d::{Transform2D, TypedTransform2D};
 pub use transform3d::{Transform3D, TypedTransform3D};
 pub use point::{
@@ -81,6 +79,7 @@ pub use vector::{
 };
 
 pub use rect::{Rect, TypedRect, rect};
+pub use rotation::{TypedRotation2D, Rotation2D, TypedRotation3D, Rotation3D, Angle};
 pub use side_offsets::{SideOffsets2D, TypedSideOffsets2D};
 #[cfg(feature = "unstable")] pub use side_offsets::SideOffsets2DSimdI32;
 pub use size::{Size2D, TypedSize2D, size2};
@@ -95,7 +94,8 @@ mod transform2d;
 mod transform3d;
 mod point;
 mod rect;
-mod scale_factor;
+mod rotation;
+mod scale;
 mod side_offsets;
 mod size;
 mod trig;
@@ -104,18 +104,6 @@ mod vector;
 /// The default unit.
 #[derive(Clone, Copy)]
 pub struct UnknownUnit;
-
-/// Unit for angles in radians.
-pub struct Rad;
-
-/// Unit for angles in degrees.
-pub struct Deg;
-
-/// A value in radians.
-pub type Radians<T> = Length<T, Rad>;
-
-/// A value in Degrees.
-pub type Degrees<T> = Length<T, Deg>;
 
 /// Temporary alias to facilitate the transition to the new naming scheme
 #[deprecated]
@@ -133,3 +121,10 @@ pub type Matrix4D<T> = Transform3D<T>;
 #[deprecated]
 pub type TypedMatrix4D<T, Src, Dst> = TypedTransform3D<T, Src, Dst>;
 
+/// Temporary alias to facilitate the transition to the new naming scheme
+#[deprecated]
+pub type ScaleFactor<T, Src, Dst> = TypedScale<T, Src, Dst>;
+
+/// Temporary alias to facilitate the transition to the new naming scheme
+#[deprecated]
+pub use Angle as Radians;

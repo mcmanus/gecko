@@ -1533,8 +1533,10 @@ RecordedDrawTargetCreation::Record(S &aStream) const
     MOZ_ASSERT(mExistingData);
     MOZ_ASSERT(mExistingData->GetSize() == mSize);
     RefPtr<DataSourceSurface> dataSurf = mExistingData->GetDataSurface();
+
+    DataSourceSurface::ScopedMap map(dataSurf, DataSourceSurface::READ);
     for (int y = 0; y < mSize.height; y++) {
-      aStream.write((const char*)dataSurf->GetData() + y * dataSurf->Stride(),
+      aStream.write((const char*)map.GetData() + y * map.GetStride(),
                     BytesPerPixel(mFormat) * mSize.width);
     }
   }
@@ -1559,8 +1561,9 @@ RecordedDrawTargetCreation::RecordedDrawTargetCreation(S &aStream)
       return;
     }
 
+    DataSourceSurface::ScopedMap map(dataSurf, DataSourceSurface::READ);
     for (int y = 0; y < mSize.height; y++) {
-      aStream.read((char*)dataSurf->GetData() + y * dataSurf->Stride(),
+      aStream.read((char*)map.GetData() + y * map.GetStride(),
                     BytesPerPixel(mFormat) * mSize.width);
     }
     mExistingData = dataSurf;
@@ -1737,7 +1740,7 @@ RecordedFillRect::RecordedFillRect(S &aStream)
 inline void
 RecordedFillRect::OutputSimpleEventInfo(std::stringstream &aStringStream) const
 {
-  aStringStream << "[" << mDT << "] FillRect (" << mRect.x << ", " << mRect.y << " - " << mRect.Width() << " x " << mRect.Height() << ") ";
+  aStringStream << "[" << mDT << "] FillRect (" << mRect.X() << ", " << mRect.Y() << " - " << mRect.Width() << " x " << mRect.Height() << ") ";
   OutputSimplePatternInfo(mPattern, aStringStream);
 }
 
@@ -1772,7 +1775,7 @@ RecordedStrokeRect::RecordedStrokeRect(S &aStream)
 inline void
 RecordedStrokeRect::OutputSimpleEventInfo(std::stringstream &aStringStream) const
 {
-  aStringStream << "[" << mDT << "] StrokeRect (" << mRect.x << ", " << mRect.y << " - " << mRect.Width() << " x " << mRect.Height()
+  aStringStream << "[" << mDT << "] StrokeRect (" << mRect.X() << ", " << mRect.Y() << " - " << mRect.Width() << " x " << mRect.Height()
                 << ") LineWidth: " << mStrokeOptions.mLineWidth << "px ";
   OutputSimplePatternInfo(mPattern, aStringStream);
 }
@@ -1990,7 +1993,7 @@ RecordedClearRect::RecordedClearRect(S &aStream)
 inline void
 RecordedClearRect::OutputSimpleEventInfo(std::stringstream &aStringStream) const
 {
-  aStringStream << "[" << mDT<< "] ClearRect (" << mRect.x << ", " << mRect.y << " - " << mRect.Width() << " x " << mRect.Height() << ") ";
+  aStringStream << "[" << mDT<< "] ClearRect (" << mRect.X() << ", " << mRect.Y() << " - " << mRect.Width() << " x " << mRect.Height() << ") ";
 }
 
 inline bool
@@ -2079,7 +2082,7 @@ RecordedPushClipRect::RecordedPushClipRect(S &aStream)
 inline void
 RecordedPushClipRect::OutputSimpleEventInfo(std::stringstream &aStringStream) const
 {
-  aStringStream << "[" << mDT << "] PushClipRect (" << mRect.x << ", " << mRect.y << " - " << mRect.Width() << " x " << mRect.Height() << ") ";
+  aStringStream << "[" << mDT << "] PushClipRect (" << mRect.X() << ", " << mRect.Y() << " - " << mRect.Width() << " x " << mRect.Height() << ") ";
 }
 
 inline bool

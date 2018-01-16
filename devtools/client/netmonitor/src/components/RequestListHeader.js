@@ -4,11 +4,9 @@
 
 "use strict";
 
-const {
-  Component,
-  PropTypes,
-  DOM,
-} = require("devtools/client/shared/vendor/react");
+const { Component } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 const { connect } = require("devtools/client/shared/vendor/react-redux");
 const { getTheme, addThemeObserver, removeThemeObserver } =
   require("devtools/client/shared/theme");
@@ -17,10 +15,10 @@ const { HEADERS, REQUESTS_WATERFALL } = require("../constants");
 const { getWaterfallScale } = require("../selectors/index");
 const { getFormattedTime } = require("../utils/format-utils");
 const { L10N } = require("../utils/l10n");
-const WaterfallBackground = require("../waterfall-background");
-const RequestListHeaderContextMenu = require("../request-list-header-context-menu");
+const RequestListHeaderContextMenu = require("../widgets/RequestListHeaderContextMenu");
+const WaterfallBackground = require("../widgets/WaterfallBackground");
 
-const { div, button } = DOM;
+const { div, button } = dom;
 
 /**
  * Render the request list header with sorting arrows for columns.
@@ -78,7 +76,7 @@ class RequestListHeader extends Component {
 
   onContextMenu(evt) {
     evt.preventDefault();
-    this.contextMenu.open(evt);
+    this.contextMenu.open(evt, this.props.columns);
   }
 
   drawBackground() {
@@ -105,8 +103,11 @@ class RequestListHeader extends Component {
 
     return (
       div({ className: "devtools-toolbar requests-list-headers-wrapper" },
-        div({ className: "devtools-toolbar requests-list-headers" },
-          HEADERS.filter((header) => columns.get(header.name)).map((header) => {
+        div({
+          className: "devtools-toolbar requests-list-headers",
+          onContextMenu: this.onContextMenu
+        },
+          HEADERS.filter((header) => columns[header.name]).map((header) => {
             let name = header.name;
             let boxName = header.boxName || name;
             let label = header.noLocalization
@@ -129,7 +130,6 @@ class RequestListHeader extends Component {
                 ref: `${name}Header`,
                 // Used to style the next column.
                 "data-active": active,
-                onContextMenu: this.onContextMenu,
               },
                 button({
                   id: `requests-list-${name}-button`,

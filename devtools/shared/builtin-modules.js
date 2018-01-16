@@ -18,14 +18,16 @@ const promise = Cu.import("resource://gre/modules/Promise.jsm", {}).Promise;
 const jsmScope = Cu.import("resource://gre/modules/Services.jsm", {});
 const { Services } = jsmScope;
 // Steal various globals only available in JSM scope (and not Sandbox one)
-const { PromiseDebugging, ChromeUtils, ThreadSafeChromeUtils, HeapSnapshot,
+const { PromiseDebugging, ChromeUtils, HeapSnapshot,
         atob, btoa, TextEncoder, TextDecoder } = Cu.getGlobalForObject(jsmScope);
 
 // Create a single Sandbox to access global properties needed in this module.
 // Sandbox are memory expensive, so we should create as little as possible.
-const { CSS, FileReader, indexedDB, URL } =
+const { CSS, CSSRule, FileReader, indexedDB, InspectorUtils, URL } =
     Cu.Sandbox(CC("@mozilla.org/systemprincipal;1", "nsIPrincipal")(), {
-      wantGlobalProperties: ["CSS", "FileReader", "indexedDB", "URL"]
+      wantGlobalProperties: [
+        "CSS", "CSSRule", "FileReader", "indexedDB", "InspectorUtils", "URL",
+      ]
     });
 
 /**
@@ -178,8 +180,8 @@ exports.modules = {
   Promise,
   PromiseDebugging,
   ChromeUtils,
-  ThreadSafeChromeUtils,
   HeapSnapshot,
+  InspectorUtils,
   FileReader,
 };
 
@@ -220,6 +222,7 @@ exports.globals = {
   TextDecoder: TextDecoder,
   URL,
   CSS,
+  CSSRule,
   loader: {
     lazyGetter: defineLazyGetter,
     lazyImporter: defineLazyModuleGetter,
@@ -290,7 +293,6 @@ lazyGlobal("clearInterval", () => {
 lazyGlobal("setInterval", () => {
   return Cu.import("resource://gre/modules/Timer.jsm", {}).setInterval;
 });
-lazyGlobal("CSSRule", () => Ci.nsIDOMCSSRule);
 lazyGlobal("DOMParser", () => {
   return CC("@mozilla.org/xmlextras/domparser;1", "nsIDOMParser");
 });

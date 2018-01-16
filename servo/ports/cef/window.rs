@@ -14,12 +14,12 @@ use eutil::Downcast;
 use interfaces::CefApp;
 use interfaces::CefBrowser;
 use render_handler::CefRenderHandlerExtensions;
-use types::{cef_cursor_handle_t, cef_cursor_type_t, cef_rect_t};
+use types::{cef_cursor_handle_t, cef_cursor_type_t, cef_rect_t, CefScreenInfo};
 use wrappers::CefWrap;
 
 use compositing::compositor_thread::EventLoopWaker;
 use compositing::windowing::{WindowEvent, WindowMethods};
-use euclid::{Point2D, TypedPoint2D, Size2D, TypedSize2D, ScaleFactor};
+use euclid::{Point2D, TypedPoint2D, Size2D, TypedSize2D, TypedScale};
 use gleam::gl;
 use msg::constellation_msg::{Key, KeyModifiers};
 use net_traits::net_error_list::NetError;
@@ -169,6 +169,19 @@ impl Window {
     fn cursor_handle_for_cursor(&self, _: Cursor) -> cef_cursor_handle_t {
         0
     }
+
+    fn screen_info(&self) -> CefScreenInfo {
+        let mut screen_info = CefScreenInfo::default();
+        let browser = self.cef_browser.borrow();
+        if let Some(ref browser) = *browser {
+            browser.get_host()
+                   .get_client()
+                   .get_render_handler()
+                   .get_screen_info(browser.clone(), &mut screen_info);
+        }
+        screen_info
+    }
+
 }
 
 impl WindowMethods for Window {
@@ -263,11 +276,11 @@ impl WindowMethods for Window {
         }
     }
 
-    fn hidpi_factor(&self) -> ScaleFactor<f32, DeviceIndependentPixel, DevicePixel> {
+    fn hidpi_factor(&self) -> TypedScale<f32, DeviceIndependentPixel, DevicePixel> {
         if cfg!(target_os="macos") {
             let browser = self.cef_browser.borrow();
             match *browser {
-                None => ScaleFactor::new(1.0),
+                None => TypedScale::new(1.0),
                 Some(ref browser) => {
                     let mut view_rect = cef_rect_t::zero();
                     if check_ptr_exist!(browser.get_host().get_client(), get_render_handler) &&
@@ -285,13 +298,13 @@ impl WindowMethods for Window {
                                .get_render_handler()
                                .get_backing_rect((*browser).clone(), &mut backing_rect);
                     }
-                    ScaleFactor::new(backing_rect.width as f32 / view_rect.width as f32)
+                    TypedScale::new(backing_rect.width as f32 / view_rect.width as f32)
                 }
             }
         } else {
             // FIXME(zmike)
             // need to figure out a method for actually getting the scale factor instead of this nonsense
-            ScaleFactor::new(1.0 as f32)
+            TypedScale::new(1.0 as f32)
         }
     }
 
@@ -500,6 +513,16 @@ impl WindowMethods for Window {
 
     fn supports_clipboard(&self) -> bool {
         false
+    }
+
+    fn screen_size(&self, _: BrowserId) -> Size2D<u32> {
+        let screen_info = self.screen_info();
+        Size2D::new(screen_info.rect.width as u32, screen_info.rect.height as u32)
+    }
+
+    fn screen_avail_size(&self, _: BrowserId) -> Size2D<u32> {
+        let screen_info = self.screen_info();
+        Size2D::new(screen_info.available_rect.width as u32, screen_info.available_rect.height as u32)
     }
 }
 

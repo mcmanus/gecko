@@ -114,8 +114,13 @@
 }
 
 #canvas-notification-icon,
-.popup-notification-icon[popupid="canvas-permissions-prompt"] {
+.popup-notification-icon[popupid="canvas-permissions-prompt"],
+.canvas-icon {
   list-style-image: url(chrome://browser/skin/notification-icons/canvas.svg);
+}
+
+.canvas-icon.blocked-permission-icon {
+  list-style-image: url(chrome://browser/skin/notification-icons/canvas-blocked.svg);
 }
 
 #webRTC-preview:not([hidden]) {
@@ -223,12 +228,12 @@ html|*#webRTC-previewVideo {
 /* PLUGINS */
 
 .plugin-icon {
-  list-style-image: url(chrome://browser/skin/notification-icons/plugin.svg);
+  list-style-image: url(chrome://mozapps/skin/plugins/plugin.svg);
   transition: fill 1.5s;
 }
 
 .plugin-blocked-icon {
-  list-style-image: url(chrome://browser/skin/notification-icons/plugin-blocked.svg);
+  list-style-image: url(chrome://mozapps/skin/plugins/plugin-blocked.svg);
   transition: fill 1.5s;
 }
 
@@ -260,7 +265,7 @@ html|*#webRTC-previewVideo {
 }
 
 .plugin-blocked > .plugin-icon {
-  list-style-image: url(chrome://browser/skin/notification-icons/plugin-blocked.svg);
+  list-style-image: url(chrome://mozapps/skin/plugins/plugin-blocked.svg);
   fill: #d92215 !important;
 }
 
