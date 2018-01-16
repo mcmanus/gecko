@@ -8,6 +8,8 @@
 #define mozilla_net_TRR_h
 
 #include "nsIChannel.h"
+#include "nsIHttpPushListener.h"
+#include "nsIInterfaceRequestor.h"
 #include "nsIStreamListener.h"
 
 namespace mozilla { namespace net {
@@ -40,10 +42,15 @@ public:
 
 class TRR
   : public Runnable
+  , public nsIHttpPushListener
+  , public nsIInterfaceRequestor
+//  , public nsIRequestObserver from nsIStreamListener
   , public nsIStreamListener
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_NSIHTTPPUSHLISTENER
+  NS_DECL_NSIINTERFACEREQUESTOR
   NS_DECL_NSIREQUESTOBSERVER
   NS_DECL_NSISTREAMLISTENER
 
@@ -63,13 +70,16 @@ public:
     mPB = aRec->pb;
   }
 
+  explicit TRR(nsIHttpChannel *pushedChannel,
+               AHostResolver *aResolver,
+               bool aPB, nsHostRecord *pushedRec);
+
   explicit TRR(AHostResolver *aResolver,
                nsCString aHost,
                enum TrrType aType,
                bool aPB)
     : mozilla::Runnable("TRR")
     , mHost(aHost)
-    , mRec(nullptr)
     , mHostResolver(aResolver)
     , mTRRService(gTRRService)
     , mType(aType)
@@ -80,6 +90,7 @@ public:
 
   NS_IMETHOD Run() override;
   void Cancel();
+  enum TrrType Type() {return mType;}
   nsCString   mHost;
   RefPtr<nsHostRecord>   mRec;
   RefPtr<AHostResolver> mHostResolver;
@@ -93,6 +104,9 @@ private:
   nsresult ReturnData();
   nsresult FailData();
 
+  nsresult DohDecodeQuery(const nsCString &query,
+                          nsCString &host, enum TrrType &type);
+    
   nsCOMPtr<nsIChannel> mChannel;
   enum TrrType mType;
   TimeStamp mStartTime;
