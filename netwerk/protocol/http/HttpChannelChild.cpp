@@ -615,8 +615,6 @@ HttpChannelChild::OnStartRequest(const nsresult& channelStatus,
   DoOnStartRequest(this, mListenerContext);
 }
 
-namespace {
-
 class SyntheticDiversionListener final : public nsIStreamListener
 {
   RefPtr<HttpChannelChild> mChannel;
@@ -643,7 +641,10 @@ public:
   OnStopRequest(nsIRequest* aRequest, nsISupports* aContext,
                 nsresult aStatus) override
   {
-    mChannel->SendDivertOnStopRequest(aStatus);
+    if (mChannel->mIPCOpen) {
+      mChannel->SendDivertOnStopRequest(aStatus);
+      mChannel->SendDivertComplete();
+    }
     return NS_OK;
   }
 
@@ -652,6 +653,11 @@ public:
                   nsIInputStream* aInputStream, uint64_t aOffset,
                   uint32_t aCount) override
   {
+    if (!mChannel->mIPCOpen) {
+      aRequest->Cancel(NS_ERROR_ABORT);
+      return NS_ERROR_ABORT;
+    }
+
     nsAutoCString data;
     nsresult rv = NS_ConsumeStream(aInputStream, aCount, data);
     if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -667,8 +673,6 @@ public:
 };
 
 NS_IMPL_ISUPPORTS(SyntheticDiversionListener, nsIStreamListener);
-
-} // anonymous namespace
 
 void
 HttpChannelChild::DoOnStartRequest(nsIRequest* aRequest, nsISupports* aContext)
@@ -1500,7 +1504,9 @@ HttpChannelChild::OverrideRunnable::Run()
       mCallback = nullptr;
     }
     mChannel->CleanupRedirectingChannel(rv);
-    mNewChannel->Cancel(rv);
+    if (mNewChannel) {
+      mNewChannel->Cancel(rv);
+    }
     return NS_OK;
   }
 
@@ -1882,7 +1888,11 @@ HttpChannelChild::FlushedForDiversion()
   // received from the parent channel, nor dequeued from the ChannelEventQueue.
   mFlushedForDiversion = true;
 
-  SendDivertComplete();
+  // If we're synthesized, it's up to the SyntheticDiversionListener to invoke
+  // SendDivertComplete after it has sent the DivertOnStopRequestMessage.
+  if (!mSynthesizedResponse) {
+    SendDivertComplete();
+  }
 }
 
 void
@@ -2141,8 +2151,8 @@ NS_IMETHODIMP
 HttpChannelChild::OnRedirectVerifyCallback(nsresult result)
 {
   LOG(("HttpChannelChild::OnRedirectVerifyCallback [this=%p]\n", this));
-  nsresult rv;
   OptionalURIParams redirectURI;
+  nsresult rv;
 
   uint32_t referrerPolicy = REFERRER_POLICY_UNSET;
   OptionalURIParams referrerURI;
@@ -2162,18 +2172,9 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult result)
     result = NS_ERROR_DOM_BAD_URI;
   }
 
-  bool forceHSTSPriming = false;
-  bool mixedContentWouldBlock = false;
   if (newHttpChannel) {
     // Must not be called until after redirect observers called.
     newHttpChannel->SetOriginalURI(mOriginalURI);
-
-    nsCOMPtr<nsILoadInfo> newLoadInfo;
-    rv = newHttpChannel->GetLoadInfo(getter_AddRefs(newLoadInfo));
-    if (NS_SUCCEEDED(rv) && newLoadInfo) {
-      forceHSTSPriming = newLoadInfo->GetForceHSTSPriming();
-      mixedContentWouldBlock = newLoadInfo->GetMixedContentWouldBlock();
-    }
 
     rv = newHttpChannel->GetReferrerPolicy(&referrerPolicy);
     MOZ_ASSERT(NS_SUCCEEDED(rv));
@@ -2240,7 +2241,7 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult result)
       do_QueryInterface(mRedirectChannelChild);
     if (newHttpChannelInternal) {
       nsCOMPtr<nsIURI> apiRedirectURI;
-      nsresult rv = newHttpChannelInternal->GetApiRedirectToURI(
+      rv = newHttpChannelInternal->GetApiRedirectToURI(
         getter_AddRefs(apiRedirectURI));
       if (NS_SUCCEEDED(rv) && apiRedirectURI) {
         /* If there was an API redirect of this channel, we need to send it
@@ -2267,7 +2268,7 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult result)
   if (mIPCOpen)
     SendRedirect2Verify(result, *headerTuples, loadFlags, referrerPolicy,
                         referrerURI, redirectURI, corsPreflightArgs,
-                        forceHSTSPriming, mixedContentWouldBlock, chooseAppcache);
+                        chooseAppcache);
 
   return NS_OK;
 }
@@ -3864,6 +3865,21 @@ mozilla::ipc::IPCResult
 HttpChannelChild::RecvAttachStreamFilter(Endpoint<extensions::PStreamFilterParent>&& aEndpoint)
 {
   extensions::StreamFilterParent::Attach(this, Move(aEndpoint));
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+HttpChannelChild::RecvCancelDiversion()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  // This method is a very special case for cancellation of a diverted
+  // intercepted channel.  Normally we would go through the mEventQ in order to
+  // serialize event execution in the face of sync XHR and now background
+  // channels.  However, similar to how CancelOnMainThread describes, Cancel()
+  // pre-empts everything.  (And frankly, we want this stack frame on the stack
+  // if a crash happens.)
+  Cancel(NS_ERROR_ABORT);
   return IPC_OK();
 }
 

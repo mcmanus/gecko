@@ -2680,6 +2680,7 @@ struct GlobalProperties {
     bool DefineInXPCComponents(JSContext* cx, JS::HandleObject obj);
     bool DefineInSandbox(JSContext* cx, JS::HandleObject obj);
     bool CSS : 1;
+    bool CSSRule : 1;
     bool indexedDB : 1;
     bool XMLHttpRequest : 1;
     bool TextDecoder : 1;
@@ -2697,6 +2698,7 @@ struct GlobalProperties {
     bool caches : 1;
     bool fileReader: 1;
     bool messageChannel: 1;
+    bool inspectorUtils : 1;
 private:
     bool Define(JSContext* cx, JS::HandleObject obj);
 };

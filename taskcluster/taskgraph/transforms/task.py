@@ -93,6 +93,8 @@ task_description_schema = Schema({
     # method.
     Optional('dependencies'): {basestring: object},
 
+    Optional('requires'): Any('all-completed', 'all-resolved'),
+
     # expiration and deadline times, relative to task creation, with units
     # (e.g., "14 days").  Defaults are set based on the project.
     Optional('expires-after'): basestring,
@@ -571,6 +573,9 @@ task_description_schema = Schema({
 
             # Paths to the artifacts to sign
             Required('paths'): [basestring],
+
+            # Artifact is optional to run the task
+            Optional('optional', default=False): bool,
         }],
 
         # "Invalid" is a noop for try and other non-supported branches
@@ -711,13 +716,6 @@ def superseder_url(config, task):
     )
 
 
-JOB_NAME_WHITELIST_ERROR = """\
-The gecko-v2 job name {job_name} is not in the whitelist in `taskcluster/ci/config.yml`.
-If this job runs on Buildbot, please ensure that the job names match between
-Buildbot and TaskCluster, then add the job name to the whitelist.  If this is a
-new job, there is nothing to check -- just add the job to the whitelist.
-"""
-
 UNSUPPORTED_PRODUCT_ERROR = """\
 The gecko-v2 product {product} is not in the list of configured products in
 `taskcluster/ci/config.yml'.
@@ -725,11 +723,6 @@ The gecko-v2 product {product} is not in the list of configured products in
 
 
 def verify_index(config, index):
-    if 'job-names' in config.graph_config['index']:
-        job_name = index['job-name']
-        if job_name not in config.graph_config['index']['job-names']:
-            raise Exception(JOB_NAME_WHITELIST_ERROR.format(job_name=job_name))
-
     product = index['product']
     if product not in config.graph_config['index']['products']:
         raise Exception(UNSUPPORTED_PRODUCT_ERROR.format(product=product))
@@ -1470,6 +1463,9 @@ def build_task(config, tasks):
             'tags': tags,
             'priority': task['priority'],
         }
+
+        if task.get('requires', None):
+            task_def['requires'] = task['requires']
 
         if task_th:
             # link back to treeherder in description

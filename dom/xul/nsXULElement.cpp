@@ -53,7 +53,6 @@
 #include "XULDocument.h"
 #include "nsXULPopupListener.h"
 #include "nsRuleWalker.h"
-#include "nsIDOMCSSStyleDeclaration.h"
 #include "nsCSSParser.h"
 #include "ListBoxObject.h"
 #include "nsContentUtils.h"
@@ -1440,7 +1439,7 @@ nsXULElement::LoadSrc()
         }
     }
 
-    return frameLoader->LoadFrame();
+    return frameLoader->LoadFrame(false);
 }
 
 nsresult
