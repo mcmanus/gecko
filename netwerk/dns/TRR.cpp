@@ -35,9 +35,7 @@ namespace net {
 extern mozilla::LazyLogModule gHostResolverLog;
 #define LOG(args) MOZ_LOG(gHostResolverLog, mozilla::LogLevel::Debug, args)
 
-NS_IMPL_ISUPPORTS(TRR,
-                  nsIStreamListener,
-                  nsIRequestObserver)
+NS_IMPL_ISUPPORTS(TRR, nsIHttpPushListener, nsIInterfaceRequestor, nsIStreamListener)
 
 // convert a given host request to a DOH 'body'
 //
@@ -174,7 +172,7 @@ TRR::DNSoverHTTPS()
                 nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                 nsIContentPolicy::TYPE_OTHER,
                 nullptr, // aLoadGroup
-                nullptr, // aCallbacks
+                this,
                 nsIRequest::LOAD_ANONYMOUS, ios);
 
   nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(mChannel);
@@ -233,6 +231,130 @@ TRR::DNSoverHTTPS()
   }
   mChannel = nullptr;
   return NS_ERROR_UNEXPECTED;
+}
+
+NS_IMETHODIMP
+TRR::GetInterface(const nsIID &iid, void **result)
+{
+  if (!iid.Equals(NS_GET_IID(nsIHttpPushListener))) {
+    return NS_ERROR_NO_INTERFACE;
+  }
+    
+  nsCOMPtr<nsIHttpPushListener> copy(this);
+  *result = copy.forget().take();
+  return NS_OK;
+}
+
+nsresult
+TRR::DohDecodeQuery(const nsCString &query, nsCString &host, enum TrrType &type)
+{
+  FallibleTArray<uint8_t> binary;
+  nsresult rv = Base64URLDecode(query,
+                                Base64URLDecodePaddingPolicy::Ignore, binary);
+  NS_ENSURE_SUCCESS(rv, rv);
+  uint32_t avail = binary.Length();
+  if (avail < 12) {
+    return NS_ERROR_FAILURE;
+  }
+  // check the query bit and the opcode
+  if ((binary[2] & 0xf8) != 0) {
+    return NS_ERROR_FAILURE;
+  }
+  uint32_t qdcount = (binary[4] << 8) + binary[5];
+  if (!qdcount) {
+    return NS_ERROR_FAILURE;
+  }
+
+  uint32_t index = 12;
+  uint32_t length = 0;
+  host.Truncate();
+  do {
+    if (avail < (index + 1)) {
+      return NS_ERROR_UNEXPECTED;
+    }
+
+    length = binary[index];
+    if (length) {
+      if (host.Length()) {
+        host.Append(".");
+      }
+      if (avail < (index + 1 + length)) {
+        return NS_ERROR_UNEXPECTED;
+      }
+      host.Append((const char *)(&binary[0]) + index + 1, length);
+    }
+    index += 1 + length; // skip length byte + label
+  } while (length);
+
+  if (avail < (index + 2)) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  uint16_t i16 = 0;
+  i16 += binary[index] << 8;
+  i16 += binary[index + 1];
+  index += 4; // skip question's type, class
+  type = (enum TrrType)i16;
+
+  return NS_OK;
+}
+
+TRR::TRR(nsIHttpChannel *pushed, AHostResolver *aResolver, bool aPB,
+         nsHostRecord *pushedRec)
+  : mozilla::Runnable("TRR")
+  , mHostResolver(aResolver)
+  , mTRRService(gTRRService)
+  , mPB(aPB)
+{
+  if (!mHostResolver) {
+    return;
+  }
+
+  nsCOMPtr<nsIURI> uri;
+  pushed->GetURI(getter_AddRefs(uri));
+  nsAutoCString query;
+  if (uri) {
+    uri->GetQuery(query);
+  }
+
+  PRNetAddr tempAddr;
+  if (NS_FAILED(DohDecodeQuery(query, mHost, mType)) ||
+      (PR_StringToNetAddr(mHost.get(), &tempAddr) == PR_SUCCESS)) { // literal
+    return;
+  }
+
+  RefPtr<nsHostRecord> hostRecord;
+  if (NS_FAILED(mHostResolver->GetHostRecord(mHost.get(),
+                                             pushedRec->flags, pushedRec->af,
+                                             pushedRec->pb, pushedRec->netInterface,
+                                             pushedRec->originSuffix,
+                                             getter_AddRefs(hostRecord)))) {
+    return;
+  }
+  
+  if (NS_FAILED(mHostResolver->TrrLookup_unlocked(hostRecord, this))) {
+    return;
+  }
+
+  if (NS_FAILED(pushed->AsyncOpen2(this))) {
+    return;
+  }
+  
+  // OK!
+  mChannel = pushed;
+  mRec.swap(hostRecord);
+}
+
+NS_IMETHODIMP
+TRR::OnPush(nsIHttpChannel *associated, nsIHttpChannel *pushed)
+{
+  MOZ_ASSERT(associated == mChannel);
+  if (!mRec) {
+    return NS_ERROR_FAILURE;
+  }
+  
+  // make a trr
+  new TRR(pushed, mHostResolver, mPB, mRec);
+  return NS_ERROR_FAILURE;
 }
 
 NS_IMETHODIMP
