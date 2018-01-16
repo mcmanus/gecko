@@ -693,17 +693,19 @@ nsHostResolver::GetHostRecord(const char *host,
     MutexAutoLock lock(mLock);
     nsHostKey key(nsCString(host), flags, af, pb,
                   netInterface, originSuffix);
-    auto he = static_cast<nsHostDBEnt*>(mDB.Add(&key, fallible));
-    if (!he) {
+
+    RefPtr<nsHostRecord>& entry = mRecordDB.GetOrInsert(key);
+    if (!entry) {
+        entry = new nsHostRecord(key);
+    }
+
+    RefPtr<nsHostRecord> rec = entry;
+    if (rec->addr) {
         return NS_ERROR_FAILURE;
     }
-    if (he->rec->addr) {
+    if (rec->mResolving) {
         return NS_ERROR_FAILURE;
     }
-    if (he->rec->mResolving) {
-        return NS_ERROR_FAILURE;
-    }
-    RefPtr<nsHostRecord> rec(he->rec);
     *result = rec.forget().take();
     return NS_OK;
 }
