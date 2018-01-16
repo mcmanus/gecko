@@ -795,6 +795,31 @@ nsHostResolver::MoveQueue(nsHostRecord *aRec, PRCList &aDestQ)
 }
 
 nsresult
+nsHostResolver::GetHostRecord(const char *host,
+                              uint16_t flags, uint16_t af, bool pb,
+                              const nsCString &netInterface,
+                              const nsCString &originSuffix,
+                              nsHostRecord **result)
+{
+    MutexAutoLock lock(mLock);
+    nsHostKey key(nsCString(host), flags, af, pb,
+                  netInterface, originSuffix);
+    auto he = static_cast<nsHostDBEnt*>(mDB.Add(&key, fallible));
+    if (!he) {
+        return NS_ERROR_FAILURE;
+    }
+    if (he->rec->addr) {
+        return NS_ERROR_FAILURE;
+    }
+    if (he->rec->mResolving) {
+        return NS_ERROR_FAILURE;
+    }
+    RefPtr<nsHostRecord> rec(he->rec);
+    *result = rec.forget().take();
+    return NS_OK;
+}
+
+nsresult
 nsHostResolver::ResolveHost(const char             *host,
                             const OriginAttributes &aOriginAttributes,
                             uint16_t                flags,
@@ -1129,10 +1154,17 @@ nsHostResolver::ConditionallyCreateThread(nsHostRecord *rec)
 
 #define TRROutstanding() ((rec->mTrrA || rec->mTrrAAAA))
 
+nsresult
+nsHostResolver::TrrLookup_unlocked(nsHostRecord *rec, TRR *pushedTRR)
+{
+    MutexAutoLock lock(mLock);
+    return TrrLookup(rec, pushedTRR);
+}
+
 // returns error if no TRR resolve is issued
 // it is impt this is not called while a native lookup is going on
 nsresult
-nsHostResolver::TrrLookup(nsHostRecord *rec)
+nsHostResolver::TrrLookup(nsHostRecord *rec, TRR *pushedTRR)
 {
     mLock.AssertCurrentThreadOwns();
     MOZ_ASSERT(!TRROutstanding());
@@ -1162,20 +1194,23 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
     }
 
     rec->mTrrStart = TimeStamp::Now();
+    rec->mTRRUsed = true; // this record gets TRR treatment
 
     // If asking for AF_UNSPEC, issue both A and AAAA.
     // If asking for AF_INET6 or AF_INET, do only that single type
     enum TrrType rectype = (rec->af == AF_INET6)? TRRTYPE_AAAA : TRRTYPE_A;
+    if (pushedTRR) {
+        rectype = pushedTRR->Type();
+    }
     bool sendAgain;
-
-    rec->mTRRUsed = true; // this record gets TRR treatment
 
     bool madeQuery = false;
     do {
         sendAgain = false;
         LOG(("TRR Resolve %s type %d\n", rec->host.get(), (int)rectype));
-        RefPtr<TRR> trr = new TRR(this, rec, rectype);
-        if (NS_SUCCEEDED(NS_DispatchToMainThread(trr))) {
+        RefPtr<TRR> trr;
+        trr = pushedTRR ? pushedTRR : new TRR(this, rec, rectype);
+        if (pushedTRR || NS_SUCCEEDED(NS_DispatchToMainThread(trr))) {
             rec->mResolving++;
             if (rectype == TRRTYPE_A) {
                 MOZ_ASSERT(!rec->mTrrA);
@@ -1187,7 +1222,7 @@ nsHostResolver::TrrLookup(nsHostRecord *rec)
                 MOZ_ASSERT(0);
             }
             madeQuery = true;
-            if ((rec->af == AF_UNSPEC) && (rectype == TRRTYPE_A)) {
+            if (!pushedTRR && (rec->af == AF_UNSPEC) && (rectype == TRRTYPE_A)) {
                 rectype = TRRTYPE_AAAA;
                 sendAgain = true;
             }

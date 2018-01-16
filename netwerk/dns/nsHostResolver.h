@@ -272,6 +272,18 @@ public:
     };
 
     virtual LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *, bool pb) = 0;
+    virtual nsresult GetHostRecord(const char *host,
+                                   uint16_t flags, uint16_t af, bool pb,
+                                   const nsCString &netInterface,
+                                   const nsCString &originSuffix,
+                                   nsHostRecord **result) 
+    {
+        return NS_ERROR_FAILURE;
+    }
+    virtual nsresult TrrLookup_unlocked(nsHostRecord *, mozilla::net::TRR *pushedTRR = nullptr) 
+    {
+        return NS_ERROR_FAILURE;
+    }
 };
 
 /**
@@ -369,6 +381,12 @@ public:
     void FlushCache();
 
     LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *, bool pb) override;
+    nsresult GetHostRecord(const char *host,
+                           uint16_t flags, uint16_t af, bool pb,
+                           const nsCString &netInterface,
+                           const nsCString &originSuffix,
+                           nsHostRecord **result) override;
+    nsresult TrrLookup_unlocked(nsHostRecord *, mozilla::net::TRR *pushedTRR = nullptr) override;
 
 private:
    explicit nsHostResolver(uint32_t maxCacheEntries,
@@ -379,8 +397,8 @@ private:
     nsresult Init();
     void AssertOnQ(nsHostRecord *, PRCList *);
     mozilla::net::ResolverMode Mode();
-    nsresult TrrLookup(nsHostRecord *);
     nsresult NativeLookup(nsHostRecord *);
+    nsresult TrrLookup(nsHostRecord *, mozilla::net::TRR *pushedTRR = nullptr);
     nsresult NameLookup(nsHostRecord *);
     bool     GetHostToLookup(nsHostRecord **m);
 
