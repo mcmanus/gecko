@@ -3645,10 +3645,10 @@
     "releaseChannelCollection": "opt-out",
     "alert_emails": ["necko@mozilla.com", "pmcmanus@mozilla.com"],
     "n_buckets": 50,
-    "description": "Time for a successful DNS OS resolution (msec)"
+    "description": "Time for a successful DNS resolution (msec)"
   },
   "DNS_TRR_LOOKUP_TIME": {
-    "record_in_processes": ["main", "content"],
+    "record_in_processes": ["main"],
     "expires_in_version": "never",
     "kind": "exponential",
     "high": 60000,
@@ -3659,7 +3659,7 @@
     "description": "Time for a completed TRR resolution (msec)"
   },
   "DNS_NATIVE_LOOKUP_TIME": {
-    "record_in_processes": ["main", "content"],
+    "record_in_processes": ["main"],
     "expires_in_version": "never",
     "kind": "exponential",
     "high": 60000,
@@ -3670,13 +3670,21 @@
     "description": "Time for a completed native name resolution (msec)"
   },
   "DNS_TRR_RACE": {
-    "record_in_processes": ["main", "content"],
+    "record_in_processes": ["main"],
     "alert_emails": ["necko@mozilla.com"],
     "expires_in_version": "never",
     "kind": "enumerated",
     "bug_numbers": [9999999],
     "n_values": 10,
     "description": "DNS: TRR parallel resolve racing results"
+  },
+  "DNS_TRR_BLACKLISTED": {
+    "record_in_processes": ["main"],
+    "expires_in_version": "never",
+    "kind": "boolean",
+    "description": "DNS check for TRR blacklist",
+    "bug_numbers": [9999999],
+    "alert_emails": ["necko@mozilla.com", "dstenberg@mozilla.com"]
   },
   "DNS_RENEWAL_TIME": {
     "record_in_processes": ["main", "content"],

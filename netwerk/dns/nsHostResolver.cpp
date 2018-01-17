@@ -1080,9 +1080,12 @@ nsHostResolver::TrrLookup(nsHostRecord *rec, TRR *pushedTRR)
     rec->mTRRSuccess = 0; // bump for each successful TRR response
 
     if (gTRRService && gTRRService->IsTRRBlacklisted(rec->host, rec->pb, true)) {
+        Telemetry::Accumulate(Telemetry::DNS_TRR_BLACKLISTED, true);
         MOZ_ASSERT(!rec->mTRRUsed);
         // not really an error but no TRR is issued
         return NS_ERROR_UNKNOWN_HOST;
+    } else {
+        Telemetry::Accumulate(Telemetry::DNS_TRR_BLACKLISTED, false);
     }
 
     rec->mTrrStart = TimeStamp::Now();
