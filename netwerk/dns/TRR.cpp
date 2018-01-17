@@ -751,7 +751,12 @@ TRR::OnStopRequest(nsIRequest *aRequest,
     if (contentType.Length() &&
         !contentType.LowerCaseEqualsLiteral("application/dns-udpwireformat")) {
       // try and parse missing content-types, but otherwise require udpwireformat
-      return NS_ERROR_FAILURE;
+      LOG(("TRR:OnStopRequest %p %s %d should fail due to content type %s\n",
+           this, mHost.get(), mType, contentType.get()));
+
+      // Disable Hard Fail for interop
+      // FailData();
+      //  return NS_OK;
     }
 
     uint32_t httpStatus;
