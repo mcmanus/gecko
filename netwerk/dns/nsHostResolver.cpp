@@ -280,7 +280,25 @@ nsHostRecord::Complete()
             LOG(("nsHostRecord::Complete %s Dns Race: NATIVE\n", host.get()));
         }
     }
-    
+
+    switch(mResolverMode) {
+    case MODE_NATIVEONLY:
+        AccumulateCategorical(Telemetry::LABELS_DNS_LOOKUP_ALGORITHM::nativeOnly);
+        break;
+    case MODE_PARALLEL:
+        AccumulateCategorical(Telemetry::LABELS_DNS_LOOKUP_ALGORITHM::trrRace);
+        break;
+    case MODE_TRRFIRST:
+        AccumulateCategorical(Telemetry::LABELS_DNS_LOOKUP_ALGORITHM::trrFirst);
+        break;
+    case MODE_TRRONLY:
+        AccumulateCategorical(Telemetry::LABELS_DNS_LOOKUP_ALGORITHM::trrOnly);
+        break;
+    case MODE_SHADOW:
+        AccumulateCategorical(Telemetry::LABELS_DNS_LOOKUP_ALGORITHM::trrShadow);
+        break;
+    }
+
     if (mTRRUsed && !mTRRSuccess && mNativeSuccess && gTRRService) {
         gTRRService->TRRBlacklist(nsCString(host), pb, true);
     }
