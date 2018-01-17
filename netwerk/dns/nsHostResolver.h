@@ -426,13 +426,6 @@ private:
         METHOD_NETWORK_SHARED = 7
     };
 
-    // Options for Telemetry::DNS_NO_TRR_REASON
-    enum {
-        TRR_FAILED = 0,
-        TRR_HOST_BLACKLISTED = 1,
-        TRR_STS_DISABLED = 2
-    };
-
     uint32_t      mMaxCacheEntries;
     uint32_t      mDefaultCacheLifetime; // granularity seconds
     uint32_t      mDefaultGracePeriod; // granularity seconds

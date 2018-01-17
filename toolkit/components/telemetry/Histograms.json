@@ -3678,15 +3678,6 @@
     "n_values": 10,
     "description": "DNS: TRR parallel resolve racing results"
   },
-  "DNS_NO_TRR_REASON": {
-    "record_in_processes": ["main", "content"],
-    "alert_emails": ["necko@mozilla.com"],
-    "expires_in_version": "never",
-    "kind": "enumerated",
-    "bug_numbers": [9999999],
-    "n_values": 10,
-    "description": "DNS: When TRR was not used, this is the reason"
-  },
   "DNS_RENEWAL_TIME": {
     "record_in_processes": ["main", "content"],
     "expires_in_version": "never",
