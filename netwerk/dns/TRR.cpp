@@ -746,6 +746,14 @@ TRR::OnStopRequest(nsIRequest *aRequest,
       return NS_ERROR_UNEXPECTED;
     }
     nsresult rv = NS_OK;
+    nsAutoCString contentType;
+    httpChannel->GetContentType(contentType);
+    if (contentType.Length() &&
+        !contentType.LowerCaseEqualsLiteral("application/dns-udpwireformat")) {
+      // try and parse missing content-types, but otherwise require udpwireformat
+      return NS_ERROR_FAILURE;
+    }
+
     uint32_t httpStatus;
     rv = httpChannel->GetResponseStatus(&httpStatus);
     if (NS_SUCCEEDED(rv) && httpStatus == 200) {
