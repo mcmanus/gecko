@@ -267,11 +267,16 @@ nsHostRecord::Complete()
     }
 
     if (mTRRUsed && mNativeUsed) { // race or shadow!
+        static const TimeDuration k50ms = TimeDuration::FromMilliseconds(50);
         if (mTrrDuration <= mNativeDuration) {
-            Telemetry::Accumulate(Telemetry::DNS_TRR_RACE, DNS_RACE_TRR_WON);
+            AccumulateCategorical(((mNativeDuration - mTrrDuration) > k50ms) ?
+                                  Telemetry::LABELS_DNS_TRR_RACE::TRRFasterBy50 :
+                                  Telemetry::LABELS_DNS_TRR_RACE::TRRFaster);
             LOG(("nsHostRecord::Complete %s Dns Race: TRR\n", host.get()));
         } else {
-            Telemetry::Accumulate(Telemetry::DNS_TRR_RACE, DNS_RACE_NATIVE_WON);
+            AccumulateCategorical(((mTrrDuration - mNativeDuration) > k50ms) ?
+                                  Telemetry::LABELS_DNS_TRR_RACE::NativeFasterBy50 :
+                                  Telemetry::LABELS_DNS_TRR_RACE::NativeFaster);
             LOG(("nsHostRecord::Complete %s Dns Race: NATIVE\n", host.get()));
         }
     }

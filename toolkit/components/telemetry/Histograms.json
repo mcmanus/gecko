@@ -3671,18 +3671,18 @@
   },
   "DNS_TRR_RACE": {
     "record_in_processes": ["main"],
-    "alert_emails": ["necko@mozilla.com"],
+    "alert_emails": ["necko@mozilla.com", "dstenberg@mozilla.com"],
     "expires_in_version": "never",
-    "kind": "enumerated",
+    "kind": "categorical",
+    "labels": ["TRRFasterBy50", "TRRFaster", "NativeFaster", "NativeFasterBy50"],
     "bug_numbers": [9999999],
-    "n_values": 10,
     "description": "DNS: TRR parallel resolve racing results"
   },
   "DNS_TRR_BLACKLISTED": {
     "record_in_processes": ["main"],
     "expires_in_version": "never",
     "kind": "boolean",
-    "description": "DNS check for TRR blacklist",
+    "description": "DNS check for TRR was blocked by blacklist",
     "bug_numbers": [9999999],
     "alert_emails": ["necko@mozilla.com", "dstenberg@mozilla.com"]
   },

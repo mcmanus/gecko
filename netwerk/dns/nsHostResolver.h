@@ -162,12 +162,6 @@ public:
     mozilla::net::ResolverMode mResolverMode;
 
 private:
-    // Options for Telemetry::DNS_TRR_RACE
-    enum {
-        DNS_RACE_TRR_WON = 0,
-        DNS_RACE_NATIVE_WON = 1,
-    };
-
     friend class nsHostResolver;
 
     explicit nsHostRecord(const nsHostKey& key);
