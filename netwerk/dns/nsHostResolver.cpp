@@ -217,6 +217,8 @@ nsHostRecord::nsHostRecord(const nsHostKey& key)
 #if TTL_AVAILABLE
     , mGetTtl(false)
 #endif
+    , mTrrAUsed(INIT)
+    , mTrrAAAAUsed(INIT)
     , mBlacklistedCount(0)
     , mResolveAgain(false)
 {
@@ -259,11 +261,29 @@ nsHostRecord::Complete()
     if (mNativeUsed) {
         uint32_t millis = static_cast<uint32_t>(mNativeDuration.ToMilliseconds());
         Telemetry::Accumulate(Telemetry::DNS_NATIVE_LOOKUP_TIME, millis);
+        AccumulateCategorical(mNativeSuccess ?
+                              Telemetry::LABELS_DNS_LOOKUP_DISPOSITION::osOK :
+                              Telemetry::LABELS_DNS_LOOKUP_DISPOSITION::osFail);
     }
 
     if (mTRRUsed) {
         uint32_t millis = static_cast<uint32_t>(mTrrDuration.ToMilliseconds());
         Telemetry::Accumulate(Telemetry::DNS_TRR_LOOKUP_TIME, millis);
+        AccumulateCategorical(mTRRSuccess ?
+                              Telemetry::LABELS_DNS_LOOKUP_DISPOSITION::trrOK :
+                              Telemetry::LABELS_DNS_LOOKUP_DISPOSITION::trrFail);
+
+        if (mTrrAUsed == OK) {
+            AccumulateCategorical(Telemetry::LABELS_DNS_LOOKUP_DISPOSITION::trrAOK);
+        } else if (mTrrAUsed == FAILED) {
+            AccumulateCategorical(Telemetry::LABELS_DNS_LOOKUP_DISPOSITION::trrAFail);
+        }
+
+        if (mTrrAAAAUsed == OK) {
+            AccumulateCategorical(Telemetry::LABELS_DNS_LOOKUP_DISPOSITION::trrAAAAOK);
+        } else if (mTrrAAAAUsed == FAILED) {
+            AccumulateCategorical(Telemetry::LABELS_DNS_LOOKUP_DISPOSITION::trrAAAAFail);
+        }
     }
 
     if (mTRRUsed && mNativeUsed) { // race or shadow!
@@ -298,7 +318,7 @@ nsHostRecord::Complete()
         AccumulateCategorical(Telemetry::LABELS_DNS_LOOKUP_ALGORITHM::trrShadow);
         break;
     }
-
+    
     if (mTRRUsed && !mTRRSuccess && mNativeSuccess && gTRRService) {
         gTRRService->TRRBlacklist(nsCString(host), pb, true);
     }
@@ -1101,6 +1121,8 @@ nsHostResolver::TrrLookup(nsHostRecord *rec, TRR *pushedTRR)
     }
         
     rec->mTRRSuccess = 0; // bump for each successful TRR response
+    rec->mTrrAUsed = nsHostRecord::INIT;
+    rec->mTrrAAAAUsed = nsHostRecord::INIT;
 
     if (gTRRService && gTRRService->IsTRRBlacklisted(rec->host, rec->pb, true)) {
         Telemetry::Accumulate(Telemetry::DNS_TRR_BLACKLISTED, true);
@@ -1133,9 +1155,11 @@ nsHostResolver::TrrLookup(nsHostRecord *rec, TRR *pushedTRR)
             if (rectype == TRRTYPE_A) {
                 MOZ_ASSERT(!rec->mTrrA);
                 rec->mTrrA = trr;
+                rec->mTrrAUsed = nsHostRecord::STARTED;
             } else if (rectype == TRRTYPE_AAAA) {
                 MOZ_ASSERT(!rec->mTrrAAAA);
                 rec->mTrrAAAA = trr;
+                rec->mTrrAAAAUsed = nsHostRecord::STARTED;
             } else {
                 MOZ_ASSERT(0);
             }
@@ -1239,6 +1263,8 @@ nsHostResolver::NameLookup(nsHostRecord *rec)
     rec->mNativeSuccess = false;
     rec->mTRRSuccess = 0;
     rec->mDidCallbacks = false;
+    rec->mTrrAUsed = nsHostRecord::INIT;
+    rec->mTrrAAAAUsed = nsHostRecord::INIT;
 
     if (rec->flags & RES_DISABLE_TRR) {
         if (mode == MODE_TRRONLY) {
@@ -1493,9 +1519,11 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         if (newRRSet->isTRR() == TRRTYPE_A) {
             MOZ_ASSERT(rec->mTrrA);
             rec->mTrrA = nullptr;
+            rec->mTrrAUsed = NS_SUCCEEDED(status) ? nsHostRecord::OK : nsHostRecord::FAILED;
         } else if (newRRSet->isTRR() == TRRTYPE_AAAA) {
             MOZ_ASSERT(rec->mTrrAAAA);
             rec->mTrrAAAA = nullptr;
+            rec->mTrrAAAAUsed = NS_SUCCEEDED(status) ? nsHostRecord::OK : nsHostRecord::FAILED;
         } else {
             MOZ_ASSERT(0);
         }

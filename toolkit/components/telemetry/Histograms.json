@@ -3695,6 +3695,16 @@
     "bug_numbers": [9999999],
     "description": "DNS: lookup algorithm"
   },
+  "DNS_LOOKUP_DISPOSITION": {
+    "record_in_processes": ["main"],
+    "alert_emails": ["necko@mozilla.com", "dstenberg@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "categorical",
+    "labels": ["trrOK", "trrFail", "trrAOK", "trrAFail",
+	       "trrAAAAOK", "trrAAAAFail", "osOK", "osFail"],
+    "bug_numbers": [9999999],
+    "description": "DNS: lookup algorithm"
+  },
   "DNS_RENEWAL_TIME": {
     "record_in_processes": ["main"],
     "expires_in_version": "never",
