@@ -4986,7 +4986,7 @@ nsWindow::MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen)
     LOG(("nsWindow::MakeFullScreen [%p] aFullScreen %d\n",
          (void *)this, aFullScreen));
 
-    if (!IsFullscreenSupported(mShell)) {
+    if (mIsX11Display && !IsFullscreenSupported(mShell)) {
         return NS_ERROR_NOT_AVAILABLE;
     }
 
@@ -6876,6 +6876,8 @@ nsWindow::GetCSDSupportLevel() {
             sCSDSupportLevel = CSD_SUPPORT_NONE;
         } else if (strstr(currentDesktop, "MATE") != nullptr) {
             sCSDSupportLevel = CSD_SUPPORT_FLAT;
+        } else if (strstr(currentDesktop, "Unity") != nullptr) {
+            sCSDSupportLevel = CSD_SUPPORT_FLAT;
         } else {
             sCSDSupportLevel = CSD_SUPPORT_NONE;
         }
@@ -6912,22 +6914,10 @@ nsWindow::RoundsWidgetCoordinatesTo()
 
 void nsWindow::GetCompositorWidgetInitData(mozilla::widget::CompositorWidgetInitData* aInitData)
 {
-#ifdef MOZ_X11
-#ifdef MOZ_WAYLAND
-  if (!mIsX11Display) {
-    *aInitData = mozilla::widget::GtkCompositorWidgetInitData(
-                                  (uintptr_t)nullptr,
-                                  nsCString(nullptr),
-                                  GetClientSize());
-  } else
-#endif
-  {
-    *aInitData = mozilla::widget::GtkCompositorWidgetInitData(
-                                  mXWindow,
-                                  nsCString(XDisplayString(mXDisplay)),
-                                  GetClientSize());
-  }
-#endif
+  *aInitData = mozilla::widget::GtkCompositorWidgetInitData(
+                                (mXWindow != X11None) ? mXWindow : (uintptr_t)nullptr,
+                                mXDisplay ? nsCString(XDisplayString(mXDisplay)) : nsCString(),
+                                GetClientSize());
 }
 
 bool
@@ -6948,9 +6938,14 @@ nsWindow::IsComposited() const
 wl_display*
 nsWindow::GetWaylandDisplay()
 {
+  // Available as of GTK 3.8+
+  static auto sGdkWaylandDisplayGetWlDisplay =
+      (wl_display *(*)(GdkDisplay *))
+      dlsym(RTLD_DEFAULT, "gdk_wayland_display_get_wl_display");
+
   GdkDisplay* gdkDisplay = gdk_display_get_default();
   return mIsX11Display ? nullptr :
-                         gdk_wayland_display_get_wl_display(gdkDisplay);
+                         sGdkWaylandDisplayGetWlDisplay(gdkDisplay);
 }
 
 wl_surface*
