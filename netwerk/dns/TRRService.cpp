@@ -454,7 +454,7 @@ TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRS
     MOZ_ASSERT(mConfirmer);
     mConfirmationState = NS_SUCCEEDED(status) ? 2 : 3;
     LOG(("TRRService finishing confirmation test %s %d %X\n",
-         mPrivateURI.get(), (int)mConfirmationState, status));
+         mPrivateURI.get(), (int)mConfirmationState, (unsigned int)status));
     mConfirmer = nullptr;
     return LOOKUP_OK;
   }
