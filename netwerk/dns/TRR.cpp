@@ -838,7 +838,7 @@ DOHresp::Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
 class proxyCancel : public Runnable
 {
 public:
-  proxyCancel(TRR *aTRR)
+  explicit proxyCancel(TRR *aTRR)
     : Runnable("proxyTrrCancel")
     , mTRR(aTRR)
   { }
