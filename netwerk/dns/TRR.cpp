@@ -735,7 +735,7 @@ TRR::OnStopRequest(nsIRequest *aRequest,
 {
   // The dtor will be run after the function returns
   LOG(("TRR:OnStopRequest %p %s %d failed=%d code=%X\n",
-       this, mHost.get(), mType, mFailed, aStatusCode));
+       this, mHost.get(), mType, mFailed, (unsigned int)aStatusCode));
   nsCOMPtr<nsIChannel> channel;
   channel.swap(mChannel);
 
