@@ -186,7 +186,7 @@ private:
     bool    usingAnyThread; /* true if off queue and contributing to mActiveAnyThreadCount */
     bool    mDoomed; /* explicitly expired */
     bool    mDidCallbacks;
-#ifdef TTL_AVAILABLE
+#if TTL_AVAILABLE
     bool    mGetTtl;
 #endif
 
