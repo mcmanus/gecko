@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim:set ts=4 sw=4 sts=4 et cin: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -331,6 +333,26 @@ AddrInfo::AddrInfo(const char *host, unsigned int aTRR)
   , mFromTRR(aTRR)
 {
   Init(host, nullptr);
+}
+
+// deep copy constructor
+AddrInfo::AddrInfo(const AddrInfo *src)
+{
+  mHostName = nullptr;
+  if (src->mHostName) {
+    mHostName = strdup(src->mHostName);
+  }
+  mCanonicalName = nullptr;
+  if (src->mCanonicalName) {
+    mCanonicalName = strdup(src->mCanonicalName);
+  }
+  ttl = src->ttl;
+  mFromTRR = src->mFromTRR;
+
+  for (auto element = src->mAddresses.getFirst(); element;
+       element = element->getNext()) {
+    AddAddress(new NetAddrElement(*element));
+  }
 }
 
 AddrInfo::~AddrInfo()

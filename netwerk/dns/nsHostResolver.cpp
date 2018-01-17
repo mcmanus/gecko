@@ -259,16 +259,20 @@ void
 nsHostRecord::Complete()
 {
     if (mNativeUsed) {
-        uint32_t millis = static_cast<uint32_t>(mNativeDuration.ToMilliseconds());
-        Telemetry::Accumulate(Telemetry::DNS_NATIVE_LOOKUP_TIME, millis);
+        if (mNativeSuccess) {
+            uint32_t millis = static_cast<uint32_t>(mNativeDuration.ToMilliseconds());
+            Telemetry::Accumulate(Telemetry::DNS_NATIVE_LOOKUP_TIME, millis);
+        }
         AccumulateCategorical(mNativeSuccess ?
                               Telemetry::LABELS_DNS_LOOKUP_DISPOSITION::osOK :
                               Telemetry::LABELS_DNS_LOOKUP_DISPOSITION::osFail);
     }
 
     if (mTRRUsed) {
-        uint32_t millis = static_cast<uint32_t>(mTrrDuration.ToMilliseconds());
-        Telemetry::Accumulate(Telemetry::DNS_TRR_LOOKUP_TIME, millis);
+        if (mTRRSuccess) {
+            uint32_t millis = static_cast<uint32_t>(mTrrDuration.ToMilliseconds());
+            Telemetry::Accumulate(Telemetry::DNS_TRR_LOOKUP_TIME, millis);
+        }
         AccumulateCategorical(mTRRSuccess ?
                               Telemetry::LABELS_DNS_LOOKUP_DISPOSITION::trrOK :
                               Telemetry::LABELS_DNS_LOOKUP_DISPOSITION::trrFail);
@@ -286,7 +290,7 @@ nsHostRecord::Complete()
         }
     }
 
-    if (mTRRUsed && mNativeUsed) { // race or shadow!
+    if (mTRRUsed && mNativeUsed && mNativeSuccess && mTRRSuccess) { // race or shadow!
         static const TimeDuration k50ms = TimeDuration::FromMilliseconds(50);
         if (mTrrDuration <= mNativeDuration) {
             AccumulateCategorical(((mNativeDuration - mTrrDuration) > k50ms) ?
@@ -1505,9 +1509,9 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
 
     MOZ_ASSERT(rec->mResolving);
     rec->mResolving--;
-    LOG(("nsHostResolver::CompleteLookup %s %p %X trr=%d\n",
+    LOG(("nsHostResolver::CompleteLookup %s %p %X trr=%d stillResolving=%d\n",
          rec->host.get(), aNewRRSet, (unsigned int)status,
-         aNewRRSet ? aNewRRSet->isTRR() : 0));
+         aNewRRSet ? aNewRRSet->isTRR() : 0, rec->mResolving));
 
     bool trrResult = newRRSet && newRRSet->isTRR();
 
@@ -1527,19 +1531,34 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         } else {
             MOZ_ASSERT(0);
         }
+
         if (NS_SUCCEEDED(status)) {
+            if (rec->mTRRSuccess == 0) { // first one
+                rec->mTrrDuration = TimeStamp::Now() - rec->mTrrStart;
+            }
             rec->mTRRSuccess++;
         }
 
         if (TRROutstanding()) {
-            if (NS_SUCCEEDED(status)) {
-                // There's another TRR complete pending. Wait for it and keep
-                // this RRset around until then.
-                MOZ_ASSERT(!rec->mFirstTRR && newRRSet);
-                rec->mFirstTRR = newRRSet; // autoPtr.swap()
-                MOZ_ASSERT(rec->mFirstTRR && !newRRSet);
+            if (NS_FAILED(status)) {
+                return LOOKUP_OK; // wait for outstanding
             }
-            return LOOKUP_OK;
+
+            // There's another TRR complete pending. Wait for it and keep
+            // this RRset around until then.
+            MOZ_ASSERT(!rec->mFirstTRR && newRRSet);
+            rec->mFirstTRR = newRRSet; // autoPtr.swap()
+            MOZ_ASSERT(rec->mFirstTRR && !newRRSet);
+
+            if (rec->mDidCallbacks || rec->mResolverMode == MODE_SHADOW) {
+                return LOOKUP_OK;
+            }
+            
+            // we can do some callbacks with this partial result which requires
+            // a deep copy
+            newRRSet = new AddrInfo(rec->mFirstTRR);
+            MOZ_ASSERT(rec->mFirstTRR && newRRSet);
+
         } else {
             // no more outstanding TRRs
             // If mFirstTRR is set, merge those addresses into current set!
@@ -1552,11 +1571,11 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
                 }
                 rec->mFirstTRR = nullptr;
             }
+
             if (!rec->mTRRSuccess) {
                 // no TRR success
                 newRRSet = nullptr;
             }
-            rec->mTrrDuration = TimeStamp::Now() - rec->mTrrStart;
 
             if (!rec->mTRRSuccess && rec->mResolverMode == MODE_TRRFIRST) {
                 MOZ_ASSERT(!rec->mResolving);
@@ -1572,10 +1591,11 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
             rec->usingAnyThread = false;
         }
 
-
         rec->mNative = false;
         rec->mNativeSuccess = newRRSet ? true : false;
-        rec->mNativeDuration = TimeStamp::Now() - rec->mNativeStart;
+        if (rec->mNativeSuccess) {
+            rec->mNativeDuration = TimeStamp::Now() - rec->mNativeStart;
+        }
     }
 
     MOZ_ASSERT(rec->mResolverMode == MODE_PARALLEL ||
