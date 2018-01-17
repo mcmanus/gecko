@@ -214,7 +214,9 @@ nsHostRecord::nsHostRecord(const nsHostKey& key)
     , usingAnyThread(false)
     , mDoomed(false)
     , mDidCallbacks(false)
+#ifdef TTL_AVAILABLE
     , mGetTtl(false)
+#endif
     , mBlacklistedCount(0)
     , mResolveAgain(false)
 {

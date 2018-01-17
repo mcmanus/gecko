@@ -186,7 +186,9 @@ private:
     bool    usingAnyThread; /* true if off queue and contributing to mActiveAnyThreadCount */
     bool    mDoomed; /* explicitly expired */
     bool    mDidCallbacks;
+#ifdef TTL_AVAILABLE
     bool    mGetTtl;
+#endif
 
     RefPtr<mozilla::net::TRR> mTrrA;
     RefPtr<mozilla::net::TRR> mTrrAAAA;
