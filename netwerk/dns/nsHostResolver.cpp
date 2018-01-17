@@ -1680,7 +1680,7 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
 #if TTL_AVAILABLE
     if (!mShutdown && !rec->mGetTtl && !rec->mResolving && sGetTtlEnabled) {
         LOG(("Issuing second async lookup for TTL for host [%s%s%s].",
-             LOG_HOST(rec->host, rec->netInterface)));
+             LOG_HOST(rec->host.get(), rec->netInterface.get())));
         rec->flags =
             (rec->flags & ~RES_PRIORITY_MEDIUM) | RES_PRIORITY_LOW;
         DebugOnly<nsresult> rv = NameLookup(rec);
