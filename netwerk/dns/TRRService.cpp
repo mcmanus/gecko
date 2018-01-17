@@ -116,11 +116,12 @@ TRRService::ReadPrefs(const char *name)
     MutexAutoLock lock(mLock);
     nsCString old(mPrivateURI);
     Preferences::GetCString(TRR_PREF("uri"), mPrivateURI);
-    nsCOMPtr<nsIURI> dnsURI;
-    NS_NewURI(getter_AddRefs(dnsURI), mPrivateURI);
     nsAutoCString scheme;
-    if (dnsURI) {
-      dnsURI->GetScheme(scheme);
+    if (mPrivateURI.Length()) {
+      nsCOMPtr<nsIIOService> ios(do_GetIOService());
+      if (ios) {
+        ios->ExtractScheme(mPrivateURI, scheme);
+      }
     }
     if (mPrivateURI.Length() && !scheme.Equals("https")) {
       LOG(("TRRService TRR URI %s is not https. Not used.\n",
