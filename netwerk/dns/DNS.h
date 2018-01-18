@@ -145,8 +145,8 @@ public:
   AddrInfo(const char *host, unsigned int TRRType);
   ~AddrInfo();
 
-  AddrInfo(const AddrInfo *src); // copy
-  
+  explicit AddrInfo(const AddrInfo *src); // copy
+
   void AddAddress(NetAddrElement *address);
 
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
