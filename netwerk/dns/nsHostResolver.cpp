@@ -1398,6 +1398,7 @@ nsHostResolver::GetHostToLookup(nsHostRecord **result)
 void
 nsHostResolver::PrepareRecordExpiration(nsHostRecord* rec) const
 {
+    // NOTE: rec->addr_info_lock is already held by parent
     MOZ_ASSERT(((bool)rec->addr_info) != rec->negative);
     mLock.AssertCurrentThreadOwns();
     if (!rec->addr_info) {
@@ -1414,7 +1415,6 @@ nsHostResolver::PrepareRecordExpiration(nsHostRecord* rec) const
 #if TTL_AVAILABLE
     unsigned int ttl = mDefaultCacheLifetime;
     if (sGetTtlEnabled) {
-        MutexAutoLock lock(rec->addr_info_lock);
         if (rec->addr_info && rec->addr_info->ttl != AddrInfo::NO_TTL_DATA) {
             ttl = rec->addr_info->ttl;
         }
