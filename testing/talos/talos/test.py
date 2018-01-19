@@ -148,7 +148,7 @@ class ts_paint(TsBase):
 
 @register_test()
 class ts_paint_webext(ts_paint):
-    webextensions = '${talos}/webextensions/dummy/dummy-signed.xpi'
+    webextensions = '${talos}/webextensions/dummy/dummy.xpi'
     preferences = {'xpinstall.signatures.required': False}
 
 
@@ -569,7 +569,7 @@ class tp5o(PageloaderTest):
 
 @register_test()
 class tp5o_webext(tp5o):
-    webextensions = '${talos}/webextensions/dummy/dummy-signed.xpi'
+    webextensions = '${talos}/webextensions/dummy/dummy.xpi'
     preferences = {'xpinstall.signatures.required': False}
 
 
@@ -834,6 +834,21 @@ class speedometer(PageloaderTest):
     Speedometer benchmark used by many browser vendors (from webkit)
     """
     tpmanifest = '${talos}/tests/speedometer/speedometer.manifest'
+    tpcycles = 1
+    tppagecycles = 5
+    tpmozafterpaint = False
+    tpchrome = False
+    format_pagename = False
+    lower_is_better = False
+    unit = 'score'
+
+
+@register_test()
+class stylebench(PageloaderTest):
+    """
+    StyleBench benchmark used by many browser vendors (from webkit)
+    """
+    tpmanifest = '${talos}/tests/stylebench/stylebench.manifest'
     tpcycles = 1
     tppagecycles = 5
     tpmozafterpaint = False
