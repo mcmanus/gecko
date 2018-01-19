@@ -226,6 +226,9 @@ TRR::DNSoverHTTPS()
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
+  // set the *default* response content type
+  httpChannel->SetContentType(NS_LITERAL_CSTRING("application/dns-udpwireformat"));
+
   if (NS_SUCCEEDED(httpChannel->AsyncOpen2(this))) {
     return NS_OK;
   }
@@ -753,10 +756,8 @@ TRR::OnStopRequest(nsIRequest *aRequest,
       // try and parse missing content-types, but otherwise require udpwireformat
       LOG(("TRR:OnStopRequest %p %s %d should fail due to content type %s\n",
            this, mHost.get(), mType, contentType.get()));
-
-      // Disable Hard Fail for interop
-      // FailData();
-      //  return NS_OK;
+      FailData();
+      return NS_OK;
     }
 
     uint32_t httpStatus;
