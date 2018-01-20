@@ -1482,6 +1482,7 @@ nsIDocument::nsIDocument()
     mBufferingCSPViolations(false),
     mAllowPaymentRequest(false),
     mEncodingMenuDisabled(false),
+    mIsSVGGlyphsDocument(false),
     mIsScopedStyleEnabled(eScopedStyle_Unknown),
     mCompatMode(eCompatibility_FullStandards),
     mReadyState(ReadyState::READYSTATE_UNINITIALIZED),
@@ -4024,10 +4025,9 @@ nsDocument::CreateShell(nsPresContext* aContext, nsViewManager* aViewManager,
   }
 
   RefPtr<PresShell> shell = new PresShell;
-  shell->Init(this, aContext, aViewManager, aStyleSet);
-
   // Note: we don't hold a ref to the shell (it holds a ref to us)
   mPresShell = shell;
+  shell->Init(this, aContext, aViewManager, aStyleSet);
 
   // Make sure to never paint if we belong to an invisible DocShell.
   nsCOMPtr<nsIDocShell> docShell(mDocumentContainer);
