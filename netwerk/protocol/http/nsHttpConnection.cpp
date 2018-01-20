@@ -270,7 +270,7 @@ nsHttpConnection::Start0RTTSpdy(uint8_t spdyVersion)
 }
 
 void
-nsHttpConnection::StartSpdy(uint8_t spdyVersion)
+nsHttpConnection::StartSpdy(nsISSLSocketControl *sslControl, uint8_t spdyVersion)
 {
     LOG(("nsHttpConnection::StartSpdy [this=%p, mDid0RTTSpdy=%d]\n", this, mDid0RTTSpdy));
 
@@ -278,6 +278,9 @@ nsHttpConnection::StartSpdy(uint8_t spdyVersion)
 
     mUsingSpdyVersion = spdyVersion;
     mEverUsedSpdy = true;
+    if (sslControl) {
+        sslControl->SetDenyClientCert(true);
+    }
 
     if (!mDid0RTTSpdy) {
         mSpdySession = ASpdySession::NewSpdySession(spdyVersion, mSocketTransport,
@@ -541,7 +544,7 @@ nsHttpConnection::EnsureNPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
             uint32_t infoIndex;
             const SpdyInformation *info = gHttpHandler->SpdyInfo();
             if (NS_SUCCEEDED(info->GetNPNIndex(negotiatedNPN, &infoIndex))) {
-                StartSpdy(info->Version[infoIndex]);
+                StartSpdy(ssl, info->Version[infoIndex]);
             }
         } else {
           LOG(("nsHttpConnection::EnsureNPNComplete [this=%p] - %" PRId64 " bytes "
@@ -552,7 +555,7 @@ nsHttpConnection::EnsureNPNComplete(nsresult &aOut0RTTWriteHandshakeValue,
               // spdy, since we know we're sticking with it.
               LOG(("nsHttpConnection::EnsureNPNComplete [this=%p] - finishing "
                    "StartSpdy for 0rtt spdy session %p", this, mSpdySession.get()));
-              StartSpdy(mSpdySession->SpdyVersion());
+              StartSpdy(ssl, mSpdySession->SpdyVersion());
           }
         }
 
