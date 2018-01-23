@@ -1482,6 +1482,7 @@ nsIDocument::nsIDocument()
     mBufferingCSPViolations(false),
     mAllowPaymentRequest(false),
     mEncodingMenuDisabled(false),
+    mIsSVGGlyphsDocument(false),
     mIsScopedStyleEnabled(eScopedStyle_Unknown),
     mCompatMode(eCompatibility_FullStandards),
     mReadyState(ReadyState::READYSTATE_UNINITIALIZED),
@@ -6131,15 +6132,6 @@ nsIDocument::CreateProcessingInstruction(const nsAString& aTarget,
   return pi.forget();
 }
 
-NS_IMETHODIMP
-nsDocument::CreateAttribute(const nsAString& aName,
-                            nsIDOMAttr** aReturn)
-{
-  ErrorResult rv;
-  *aReturn = nsIDocument::CreateAttribute(aName, rv).take();
-  return rv.StealNSResult();
-}
-
 already_AddRefed<Attr>
 nsIDocument::CreateAttribute(const nsAString& aName, ErrorResult& rv)
 {
@@ -6173,17 +6165,6 @@ nsIDocument::CreateAttribute(const nsAString& aName, ErrorResult& rv)
   RefPtr<Attr> attribute = new Attr(nullptr, nodeInfo.forget(),
                                     EmptyString());
   return attribute.forget();
-}
-
-NS_IMETHODIMP
-nsDocument::CreateAttributeNS(const nsAString & aNamespaceURI,
-                              const nsAString & aQualifiedName,
-                              nsIDOMAttr **aResult)
-{
-  ErrorResult rv;
-  *aResult =
-    nsIDocument::CreateAttributeNS(aNamespaceURI, aQualifiedName, rv).take();
-  return rv.StealNSResult();
 }
 
 already_AddRefed<Attr>

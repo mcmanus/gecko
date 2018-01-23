@@ -1565,6 +1565,10 @@ nsSocketTransport::InitiateSocket()
         // event in order.
         mFastOpenLayerHasBufferedData = TCPFastOpenGetCurrentBufferSize(fd);
 
+        MOZ_ASSERT((mFastOpenStatus == TFO_NOT_TRIED) ||
+                   (mFastOpenStatus == TFO_DISABLED) ||
+                   (mFastOpenStatus == TFO_DATA_SENT) ||
+                   (mFastOpenStatus == TFO_TRIED));
         mFastOpenCallback->SetFastOpenStatus(mFastOpenStatus);
         SOCKET_LOG(("called StartFastOpen - code=%d; fastOpen is %s "
                     "supported.\n", code,

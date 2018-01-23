@@ -547,7 +547,7 @@ pub unsafe extern "C" fn wr_renderer_readback(renderer: &mut Renderer,
     renderer.read_pixels_into(DeviceUintRect::new(
                                 DeviceUintPoint::new(0, 0),
                                 DeviceUintSize::new(width, height)),
-                              ReadPixelsFormat::Bgra8,
+                              ReadPixelsFormat::Standard(ImageFormat::BGRA8),
                               &mut slice);
 }
 
@@ -2055,6 +2055,7 @@ pub extern "C" fn wr_add_ref_arc(arc: &ArcVecU8) -> *const VecU8 {
     Arc::into_raw(arc.clone())
 }
 
+/// cbindgen:postfix=WR_DESTRUCTOR_SAFE_FUNC
 #[no_mangle]
 pub unsafe extern "C" fn wr_dec_ref_arc(arc: *const VecU8) {
     Arc::from_raw(arc);
