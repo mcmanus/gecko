@@ -180,13 +180,12 @@ private:
     bool    usingAnyThread; /* true if off queue and contributing to mActiveAnyThreadCount */
     bool    mDoomed; /* explicitly expired */
     bool    mDidCallbacks;
-#if TTL_AVAILABLE
     bool    mGetTtl;
-#endif
+
     enum {
         INIT, STARTED, OK, FAILED
     } mTrrAUsed, mTrrAAAAUsed;
-    
+
     RefPtr<mozilla::net::TRR> mTrrA;
     RefPtr<mozilla::net::TRR> mTrrAAAA;
 

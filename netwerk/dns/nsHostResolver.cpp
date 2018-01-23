@@ -214,9 +214,7 @@ nsHostRecord::nsHostRecord(const nsHostKey& key)
     , usingAnyThread(false)
     , mDoomed(false)
     , mDidCallbacks(false)
-#if TTL_AVAILABLE
     , mGetTtl(false)
-#endif
     , mTrrAUsed(INIT)
     , mTrrAAAAUsed(INIT)
     , mBlacklistedCount(0)
@@ -322,7 +320,7 @@ nsHostRecord::Complete()
         AccumulateCategorical(Telemetry::LABELS_DNS_LOOKUP_ALGORITHM::trrShadow);
         break;
     }
-    
+
     if (mTRRUsed && !mTRRSuccess && mNativeSuccess && gTRRService) {
         gTRRService->TRRBlacklist(nsCString(host), pb, true);
     }
@@ -498,7 +496,6 @@ nsHostRecord::RemoveOrRefresh()
 
 //----------------------------------------------------------------------------
 
-#if TTL_AVAILABLE
 static const char kPrefGetTtl[] = "network.dns.get-ttl";
 static bool sGetTtlEnabled = false;
 
@@ -517,7 +514,6 @@ static void DnsPrefChanged(const char* aPref, void* aClosure)
 
     sGetTtlEnabled = Preferences::GetBool(kPrefGetTtl);
 }
-#endif
 
 NS_IMPL_ISUPPORTS0(nsHostResolver)
 
@@ -560,7 +556,6 @@ nsHostResolver::Init()
 
     mShutdown = false;
 
-#if TTL_AVAILABLE
     // The preferences probably haven't been loaded from the disk yet, so we
     // need to register a callback that will set up the experiment once they
     // are. We also need to explicitly set a value for the props otherwise the
@@ -571,7 +566,6 @@ nsHostResolver::Init()
         NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                              "Could not register DNS TTL pref callback.");
     }
-#endif
 
 #if defined(HAVE_RES_NINIT)
     // We want to make sure the system is using the correct resolver settings,
@@ -650,14 +644,12 @@ nsHostResolver::Shutdown()
 {
     LOG(("Shutting down host resolver.\n"));
 
-#if TTL_AVAILABLE
     {
         DebugOnly<nsresult> rv = Preferences::UnregisterCallback(
             &DnsPrefChanged, kPrefGetTtl, this);
         NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                              "Could not unregister DNS TTL pref callback.");
     }
-#endif
 
     PRCList pendingQHigh, pendingQMed, pendingQLow, evictionQ;
     PR_INIT_CLIST(&pendingQHigh);
@@ -1123,7 +1115,7 @@ nsHostResolver::TrrLookup(nsHostRecord *rec, TRR *pushedTRR)
         mEvictionQSize--;
         rec->Release();
     }
-        
+
     rec->mTRRSuccess = 0; // bump for each successful TRR response
     rec->mTrrAUsed = nsHostRecord::INIT;
     rec->mTrrAAAAUsed = nsHostRecord::INIT;
@@ -1333,12 +1325,7 @@ nsHostResolver::GetHostToLookup(nsHostRecord **result)
     while (!mShutdown) {
         // remove next record from Q; hand over owning reference. Check high, then med, then low
 
-#if TTL_AVAILABLE
-        #define SET_GET_TTL(var, val) \
-            (var)->mGetTtl = sGetTtlEnabled && (val)
-#else
-        #define SET_GET_TTL(var, val)
-#endif
+#define SET_GET_TTL(var, val) (var)->mGetTtl = sGetTtlEnabled && (val)
 
         if (!PR_CLIST_IS_EMPTY(&mHighQ)) {
             DeQueue (mHighQ, result);
@@ -1412,7 +1399,7 @@ nsHostResolver::PrepareRecordExpiration(nsHostRecord* rec) const
 
     unsigned int lifetime = mDefaultCacheLifetime;
     unsigned int grace = mDefaultGracePeriod;
-#if TTL_AVAILABLE
+
     unsigned int ttl = mDefaultCacheLifetime;
     if (sGetTtlEnabled) {
         if (rec->addr_info && rec->addr_info->ttl != AddrInfo::NO_TTL_DATA) {
@@ -1421,7 +1408,6 @@ nsHostResolver::PrepareRecordExpiration(nsHostRecord* rec) const
         lifetime = ttl;
         grace = 0;
     }
-#endif
 
     rec->SetExpiration(TimeStamp::NowLoRes(), lifetime, grace);
     LOG(("Caching host [%s%s%s] record for %u seconds (grace %d).",
@@ -1553,7 +1539,7 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
             if (rec->mDidCallbacks || rec->mResolverMode == MODE_SHADOW) {
                 return LOOKUP_OK;
             }
-            
+
             // we can do some callbacks with this partial result which requires
             // a deep copy
             newRRSet = new AddrInfo(rec->mFirstTRR);
@@ -1677,9 +1663,11 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         }
     }
 
-#if TTL_AVAILABLE
-    if (!mShutdown && !rec->mGetTtl && !rec->mResolving && sGetTtlEnabled) {
-        LOG(("Issuing second async lookup for TTL for host [%s%s%s].",
+#ifdef DNSQUERY_AVAILABLE
+    // Unless the result is from TRR, resolve again to get TTL
+    if (!rec->addr_info->isTRR() &&
+        !mShutdown && !rec->mGetTtl && !rec->mResolving && sGetTtlEnabled) {
+      LOG(("Issuing second async lookup for TTL for host [%s%s%s].",
              LOG_HOST(rec->host.get(), rec->netInterface.get())));
         rec->flags =
             (rec->flags & ~RES_PRIORITY_MEDIUM) | RES_PRIORITY_LOW;
@@ -1792,12 +1780,7 @@ nsHostResolver::ThreadFunc(void *arg)
              LOG_HOST(rec->host.get(), rec->netInterface.get())));
 
         TimeStamp startTime = TimeStamp::Now();
-#if TTL_AVAILABLE
         bool getTtl = rec->mGetTtl;
-#else
-        bool getTtl = false;
-#endif
-
         nsresult status = GetAddrInfo(rec->host.get(), rec->af,
                                       rec->flags,
                                       rec->netInterface.get(), &ai,
