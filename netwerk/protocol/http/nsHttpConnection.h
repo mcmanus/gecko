@@ -423,6 +423,7 @@ public:
     void BootstrapTimings(TimingStruct times);
 private:
     TimingStruct    mBootstrappedTimings;
+    bool            mBootstrappedTimingsSet;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsHttpConnection, NS_HTTPCONNECTION_IID)
