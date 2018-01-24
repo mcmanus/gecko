@@ -1665,7 +1665,14 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
 
 #ifdef DNSQUERY_AVAILABLE
     // Unless the result is from TRR, resolve again to get TTL
-    if (!rec->addr_info->isTRR() &&
+    bool fromTRR = false;
+    {
+        MutexAutoLock lock(rec->addr_info_lock);
+        if(rec->addr_info && rec->addr_info->isTRR()) {
+            fromTRR = true;
+        }
+    }
+    if (!fromTRR &&
         !mShutdown && !rec->mGetTtl && !rec->mResolving && sGetTtlEnabled) {
       LOG(("Issuing second async lookup for TTL for host [%s%s%s].",
              LOG_HOST(rec->host.get(), rec->netInterface.get())));
