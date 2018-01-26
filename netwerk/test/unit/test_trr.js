@@ -44,6 +44,7 @@ function run_test() {
     prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns");
     prefs.setIntPref("network.trr.mode", 3);
     prefs.setBoolPref("network.trr.wait-for-portal", false);
+    prefs.setCharPref("network.trr.confirmationNS", "skip");
 
     // The moz-http2 cert is for foo.example.com and is signed by CA.cert.der
     // so add that cert to the trust list as a signing cert.  // the foo.example.com domain name.

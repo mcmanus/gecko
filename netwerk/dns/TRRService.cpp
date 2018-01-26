@@ -275,10 +275,16 @@ TRRService::MaybeConfirm()
     MutexAutoLock lock(mLock);
     host = mConfirmationNS;
   }
-  LOG(("TRRService starting confirmation test %s %s\n",
-       mPrivateURI.get(), host.get()));
-  mConfirmer = new TRR(this, host, TRRTYPE_NS, false);
-  NS_DispatchToMainThread(mConfirmer);
+  if (host.Equals("skip")) {
+    LOG(("TRRService starting confirmation test %s SKIPPED\n",
+         mPrivateURI.get()));
+    mConfirmationNS = CONFIRM_OK;
+  } else {
+    LOG(("TRRService starting confirmation test %s %s\n",
+         mPrivateURI.get(), host.get()));
+    mConfirmer = new TRR(this, host, TRRTYPE_NS, false);
+    NS_DispatchToMainThread(mConfirmer);
+  }
 }
 
 bool
