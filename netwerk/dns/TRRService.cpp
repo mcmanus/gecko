@@ -42,7 +42,7 @@ TRRService::TRRService()
   , mCaptiveIsPassed(false)
   , mUseGET(false)
   , mClearStorage(false)
-  , mConfirmationState(0)
+  , mConfirmationState(CONFIRM_INIT)
 {
   MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
 }
@@ -81,15 +81,15 @@ TRRService::Init()
 bool
 TRRService::Enabled()
 {
-  if (mConfirmationState == 0 && !mWaitForCaptive) {
-    mConfirmationState = 1;
+  if (mConfirmationState == CONFIRM_INIT && !mWaitForCaptive) {
+    mConfirmationState = CONFIRM_TRYING;
   }
-    
-  if (mConfirmationState == 1) {
+
+  if (mConfirmationState == CONFIRM_TRYING) {
     MaybeConfirm();
   }
 
-  return (mConfirmationState == 2);
+  return (mConfirmationState == CONFIRM_OK);
 }
 
 void
@@ -221,10 +221,10 @@ TRRService::Observe(nsISupports *aSubject,
   if (!strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
     ReadPrefs(NS_ConvertUTF16toUTF8(aData).get());
 
-    if ((mConfirmationState == 0) &&
+    if ((mConfirmationState == CONFIRM_INIT) &&
         mBootstrapAddr.Length() &&
         (mMode == MODE_TRRONLY)) {
-      mConfirmationState = 1;
+      mConfirmationState = CONFIRM_TRYING;
       MaybeConfirm();
     }
 
@@ -249,7 +249,7 @@ TRRService::Observe(nsISupports *aSubject,
       }
     }
 
-    mConfirmationState = 1;
+    mConfirmationState = CONFIRM_TRYING;
     MaybeConfirm();
     mCaptiveIsPassed = true;
 
@@ -266,7 +266,8 @@ TRRService::Observe(nsISupports *aSubject,
 void
 TRRService::MaybeConfirm()
 {
-  if ((mMode == MODE_NATIVEONLY) || mConfirmer || mConfirmationState != 1) {
+  if ((mMode == MODE_NATIVEONLY) || mConfirmer ||
+      mConfirmationState != CONFIRM_TRYING) {
     return;
   }
   nsCString host;
@@ -283,7 +284,7 @@ TRRService::MaybeConfirm()
 bool
 TRRService::MaybeBootstrap(const nsACString &aPossible, nsACString &aResult)
 {
-  if (mConfirmationState != 1) {
+  if (mConfirmationState != CONFIRM_TRYING) {
     return false;
   }
 
@@ -291,7 +292,7 @@ TRRService::MaybeBootstrap(const nsACString &aPossible, nsACString &aResult)
   if (!mBootstrapAddr.Length()) {
     return false;
   }
-  
+
   RefPtr<nsStandardURL> url = new nsStandardURL();
   url->Init(nsIStandardURL::URLTYPE_AUTHORITY, 443,
             mPrivateURI, nullptr, nullptr);
@@ -316,13 +317,13 @@ TRRService::IsTRRBlacklisted(const nsACString &aHost, bool privateBrowsing,
   if (mMode == MODE_TRRONLY) {
     return false; // might as well try
   }
-  
+
   // hardcode these so as to not worry about expiration
   if (StringEndsWith(aHost, NS_LITERAL_CSTRING(".local")) ||
       aHost.Equals(NS_LITERAL_CSTRING("localhost"))) {
     return true;
   }
-    
+
   if (!Enabled()) {
     return true;
   }
@@ -450,10 +451,10 @@ TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRS
   nsAutoPtr<AddrInfo> newRRSet(aNewRRSet);
   MOZ_ASSERT(newRRSet && newRRSet->isTRR() == TRRTYPE_NS);
 
-  MOZ_ASSERT(!mConfirmer || (mConfirmationState == 1));
-  if (mConfirmationState == 1) {
+  MOZ_ASSERT(!mConfirmer || (mConfirmationState == CONFIRM_TRYING));
+  if (mConfirmationState == CONFIRM_TRYING) {
     MOZ_ASSERT(mConfirmer);
-    mConfirmationState = NS_SUCCEEDED(status) ? 2 : 3;
+    mConfirmationState = NS_SUCCEEDED(status) ? CONFIRM_OK : CONFIRM_FAILED;
     LOG(("TRRService finishing confirmation test %s %d %X\n",
          mPrivateURI.get(), (int)mConfirmationState, (unsigned int)status));
     mConfirmer = nullptr;

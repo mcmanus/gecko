@@ -67,8 +67,13 @@ private:
   RefPtr<DataStorage> mStorage;
   bool                mClearStorage;
 
-  // 0 = init, 1 = trying, 2 = ok, 3 = failed
-  Atomic<int, Relaxed>  mConfirmationState;
+  enum confirmationState {
+    CONFIRM_INIT = 0,
+    CONFIRM_TRYING = 1,
+    CONFIRM_OK = 2,
+    CONFIRM_FAILED = 3
+  };
+  Atomic<confirmationState, Relaxed>  mConfirmationState;
   RefPtr<TRR>           mConfirmer;
 };
 
