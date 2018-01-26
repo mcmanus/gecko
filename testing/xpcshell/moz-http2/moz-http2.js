@@ -526,6 +526,14 @@ function handleRequest(req, res) {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Alt-Svc', 'h2=' + req.headers['x-altsvc']);
   }
+  // for use with test_trr.js
+  else if (u.pathname === "/dns") {
+    res.setHeader('Content-Type', 'application/dns-udpwireformat');
+    res.writeHead(200);
+    // return to tell that foo.example.com has IP address 127.0.0.1  
+    content="\x00\x00\x01\x00\x00\x00\x00\x01\x00\x00\x00\x00\x03\x66\x6F\x6F\x07\x65\x78\x61\x6D\x70\x6C\x65\x03\x63\x6F\x6D\x00\x00\x01\x00\x01\xC0\x0C\x00\x01\x00\x01\x00\x00\x00\x37\x00\x04\x7F\x00\x00\x01";
+    res.write(content);
+  }
 
   else if (u.pathname === "/.well-known/http-opportunistic") {
     res.setHeader('Cache-Control', 'no-cache');
