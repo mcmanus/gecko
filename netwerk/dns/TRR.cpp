@@ -171,6 +171,7 @@ TRR::DNSoverHTTPS()
                 nsContentUtils::GetSystemPrincipal(),
                 nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                 nsIContentPolicy::TYPE_OTHER,
+                nullptr,   // PerformanceStorage
                 nullptr, // aLoadGroup
                 this,
                 nsIRequest::LOAD_ANONYMOUS, ios);
