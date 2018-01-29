@@ -278,7 +278,7 @@ TRRService::MaybeConfirm()
   if (host.Equals("skip")) {
     LOG(("TRRService starting confirmation test %s SKIPPED\n",
          mPrivateURI.get()));
-    mConfirmationNS = CONFIRM_OK;
+    mConfirmationState = CONFIRM_OK;
   } else {
     LOG(("TRRService starting confirmation test %s %s\n",
          mPrivateURI.get(), host.get()));
