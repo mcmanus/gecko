@@ -279,14 +279,21 @@ Attr::GetChildAt_Deprecated(uint32_t aIndex) const
 }
 
 int32_t
-Attr::IndexOf(const nsINode* aPossibleChild) const
+Attr::ComputeIndexOf(const nsINode* aPossibleChild) const
 {
   return -1;
 }
 
 nsresult
-Attr::InsertChildAt(nsIContent* aKid, uint32_t aIndex,
-                              bool aNotify)
+Attr::InsertChildBefore(nsIContent* aKid, nsIContent* aBeforeThis,
+                        bool aNotify)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+nsresult
+Attr::InsertChildAt_Deprecated(nsIContent* aKid, uint32_t aIndex,
+                               bool aNotify)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }

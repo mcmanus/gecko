@@ -553,30 +553,44 @@ RetainedDisplayListBuilder::MergeDisplayLists(nsDisplayList* aNewList,
 }
 
 static void
-TakeAndAddModifiedFramesFromRootFrame(nsTArray<nsIFrame*>& aFrames,
-                                      nsIFrame* aRootFrame)
+TakeAndAddModifiedAndFramesWithPropsFromRootFrame(
+  nsTArray<nsIFrame*>* aModifiedFrames,
+  nsTArray<nsIFrame*>* aFramesWithProps,
+  nsIFrame* aRootFrame)
 {
   MOZ_ASSERT(aRootFrame);
 
   nsTArray<nsIFrame*>* frames =
     aRootFrame->GetProperty(nsIFrame::ModifiedFrameList());
 
-  if (!frames) {
-    return;
-  }
-
-  for (nsIFrame* f : *frames) {
-    if (f) {
-      aFrames.AppendElement(f);
+  if (frames) {
+    for (nsIFrame* f : *frames) {
+      if (f) {
+        aModifiedFrames->AppendElement(f);
+      }
     }
+
+    frames->Clear();
   }
 
-  frames->Clear();
+  frames =
+    aRootFrame->GetProperty(nsIFrame::OverriddenDirtyRectFrameList());
+
+  if (frames) {
+    for (nsIFrame* f : *frames) {
+      if (f) {
+        aFramesWithProps->AppendElement(f);
+      }
+    }
+
+    frames->Clear();
+  }
 }
 
 struct CbData {
   nsDisplayListBuilder* builder;
-  nsTArray<nsIFrame*> modifiedFrames;
+  nsTArray<nsIFrame*>* modifiedFrames;
+  nsTArray<nsIFrame*>* framesWithProps;
 };
 
 static bool
@@ -614,7 +628,9 @@ SubDocEnumCb(nsIDocument* aDocument, void* aData)
       nsIFrame* rootFrame = presShell ? presShell->GetRootFrame() : nullptr;
 
       if (rootFrame) {
-        TakeAndAddModifiedFramesFromRootFrame(data->modifiedFrames, rootFrame);
+        TakeAndAddModifiedAndFramesWithPropsFromRootFrame(data->modifiedFrames,
+                                                          data->framesWithProps,
+                                                          rootFrame);
       }
     }
   }
@@ -623,22 +639,28 @@ SubDocEnumCb(nsIDocument* aDocument, void* aData)
   return true;
 }
 
-static nsTArray<nsIFrame*>
-GetModifiedFrames(nsDisplayListBuilder* aBuilder)
+static void
+GetModifiedAndFramesWithProps(nsDisplayListBuilder* aBuilder,
+                              nsTArray<nsIFrame*>* aOutModifiedFrames,
+                              nsTArray<nsIFrame*>* aOutFramesWithProps)
 {
   MOZ_ASSERT(aBuilder->RootReferenceFrame());
 
-  CbData data;
-  data.builder = aBuilder;
-  TakeAndAddModifiedFramesFromRootFrame(data.modifiedFrames, aBuilder->RootReferenceFrame());
+  TakeAndAddModifiedAndFramesWithPropsFromRootFrame(aOutModifiedFrames,
+                                                    aOutFramesWithProps,
+                                                    aBuilder->RootReferenceFrame());
 
   nsIDocument* rootdoc = aBuilder->RootReferenceFrame()->PresContext()->Document();
 
   if (rootdoc) {
+    CbData data = {
+      aBuilder,
+      aOutModifiedFrames,
+      aOutFramesWithProps
+    };
+
     rootdoc->EnumerateSubDocuments(SubDocEnumCb, &data);
   }
-
-  return Move(data.modifiedFrames);
 }
 
 // ComputeRebuildRegion  debugging
@@ -664,6 +686,8 @@ HandlePreserve3D(nsIFrame* aFrame, nsRect& aOverflow)
   }
   if (last != aFrame) {
     aOverflow = last->GetVisualOverflowRectRelativeToParent();
+    CRR_LOG("HandlePreserve3D() Updated overflow rect to: %d %d %d %d\n",
+             aOverflow.x, aOverflow.y, aOverflow.width, aOverflow.height);
   }
 
   return aFrame;
@@ -678,31 +702,28 @@ ProcessFrame(nsIFrame* aFrame, nsDisplayListBuilder& aBuilder,
   nsIFrame* currentFrame = aFrame;
 
   while (currentFrame != aStopAtFrame) {
-    currentFrame = HandlePreserve3D(currentFrame, aOverflow);
+    CRR_LOG("currentFrame: %p (placeholder=%d), aOverflow: %d %d %d %d\n",
+             currentFrame, !aStopAtStackingContext,
+             aOverflow.x, aOverflow.y, aOverflow.width, aOverflow.height);
 
-    // Convert 'aOverflow' into the coordinate space of the nearest stacking context
-    // or display port ancestor and update 'currentFrame' to point to that frame.
-    nsIFrame* previousFrame = currentFrame;
-    aOverflow = nsLayoutUtils::TransformFrameRectToAncestor(currentFrame, aOverflow, aStopAtFrame,
-                                                           nullptr, nullptr,
-                                                           /* aStopAtStackingContextAndDisplayPortAndOOFFrame = */ true,
-                                                           &currentFrame);
-    MOZ_ASSERT(currentFrame);
+    currentFrame = HandlePreserve3D(currentFrame, aOverflow);
 
     // If the current frame is an OOF frame, DisplayListBuildingData needs to be
     // set on all the ancestor stacking contexts of the  placeholder frame, up
     // to the containing block of the OOF frame. This is done to ensure that the
     // content that might be behind the OOF frame is built for merging.
-    nsIFrame* placeholder = previousFrame->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW)
-                          ? previousFrame->GetPlaceholderFrame()
+    nsIFrame* placeholder = currentFrame->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW)
+                          ? currentFrame->GetPlaceholderFrame()
                           : nullptr;
 
     if (placeholder) {
+      // The rect aOverflow is in the coordinate space of the containing block.
+      // Convert it to a coordinate space of the placeholder frame.
       nsRect placeholderOverflow =
-        aOverflow + previousFrame->GetOffsetTo(placeholder);
+        aOverflow + currentFrame->GetOffsetTo(placeholder);
 
       CRR_LOG("Processing placeholder %p for OOF frame %p\n",
-              placeholder, previousFrame);
+              placeholder, currentFrame);
 
       CRR_LOG("OOF frame draw area: %d %d %d %d\n",
               placeholderOverflow.x, placeholderOverflow.y,
@@ -716,12 +737,20 @@ ProcessFrame(nsIFrame* aFrame, nsDisplayListBuilder& aBuilder,
       // TODO: It might be possible to write a more specific and efficient
       // function for this.
       nsIFrame* ancestor =
-        nsLayoutUtils::FindNearestCommonAncestorFrame(previousFrame->GetParent(),
+        nsLayoutUtils::FindNearestCommonAncestorFrame(currentFrame->GetParent(),
                                                       placeholder->GetParent());
 
       ProcessFrame(placeholder, aBuilder, &dummyAGR, placeholderOverflow,
                    ancestor, aOutFramesWithProps, false);
     }
+
+    // Convert 'aOverflow' into the coordinate space of the nearest stacking context
+    // or display port ancestor and update 'currentFrame' to point to that frame.
+    aOverflow = nsLayoutUtils::TransformFrameRectToAncestor(currentFrame, aOverflow, aStopAtFrame,
+                                                           nullptr, nullptr,
+                                                           /* aStopAtStackingContextAndDisplayPortAndOOFFrame = */ true,
+                                                           &currentFrame);
+    MOZ_ASSERT(currentFrame);
 
     if (nsLayoutUtils::FrameHasDisplayPort(currentFrame)) {
       CRR_LOG("Frame belongs to displayport frame %p\n", currentFrame);
@@ -943,12 +972,14 @@ ClearFrameProps(nsTArray<nsIFrame*>& aFrames)
 }
 
 void
-RetainedDisplayListBuilder::ClearModifiedFrameProps()
+RetainedDisplayListBuilder::ClearFramesWithProps()
 {
-  nsTArray<nsIFrame*> modifiedFrames =
-    GetModifiedFrames(&mBuilder);
+  nsTArray<nsIFrame*> modifiedFrames;
+  nsTArray<nsIFrame*> framesWithProps;
+  GetModifiedAndFramesWithProps(&mBuilder, &modifiedFrames, &framesWithProps);
 
   ClearFrameProps(modifiedFrames);
+  ClearFrameProps(framesWithProps);
 }
 
 bool
@@ -961,8 +992,9 @@ RetainedDisplayListBuilder::AttemptPartialUpdate(nscolor aBackstop)
 
   mBuilder.EnterPresShell(mBuilder.RootReferenceFrame());
 
-  nsTArray<nsIFrame*> modifiedFrames =
-    GetModifiedFrames(&mBuilder);
+  nsTArray<nsIFrame*> modifiedFrames;
+  nsTArray<nsIFrame*> framesWithProps;
+  GetModifiedAndFramesWithProps(&mBuilder, &modifiedFrames, &framesWithProps);
 
   // Do not allow partial builds if the retained display list is empty, or if
   // ShouldBuildPartial heuristic fails.
@@ -986,7 +1018,6 @@ RetainedDisplayListBuilder::AttemptPartialUpdate(nscolor aBackstop)
 
   nsRect modifiedDirty;
   AnimatedGeometryRoot* modifiedAGR = nullptr;
-  nsTArray<nsIFrame*> framesWithProps;
   bool merged = false;
   if (shouldBuildPartial &&
       ComputeRebuildRegion(modifiedFrames, &modifiedDirty,

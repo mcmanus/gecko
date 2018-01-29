@@ -1390,7 +1390,7 @@ nsLayoutUtils::InvalidateForDisplayPortChange(nsIContent* aContent,
     // rect properties on so we can find the frame later to remove the properties.
     frame->SchedulePaint();
 
-    if (!gfxPrefs::LayoutRetainDisplayList()) {
+    if (!nsLayoutUtils::AreRetainedDisplayListsEnabled()) {
       return;
     }
 
@@ -1409,6 +1409,19 @@ nsLayoutUtils::InvalidateForDisplayPortChange(nsIContent* aContent,
       rect = new nsRect();
       frame->SetProperty(nsDisplayListBuilder::DisplayListBuildingDisplayPortRect(), rect);
       frame->SetHasOverrideDirtyRegion(true);
+
+      nsIFrame* rootFrame = frame->PresContext()->PresShell()->GetRootFrame();
+      MOZ_ASSERT(rootFrame);
+
+      nsTArray<nsIFrame*>* frames =
+        rootFrame->GetProperty(nsIFrame::OverriddenDirtyRectFrameList());
+
+      if (!frames) {
+        frames = new nsTArray<nsIFrame*>();
+        rootFrame->SetProperty(nsIFrame::OverriddenDirtyRectFrameList(), frames);
+      }
+
+      frames->AppendElement(frame);
     }
 
     if (aHadDisplayPort) {
@@ -1862,8 +1875,8 @@ nsLayoutUtils::DoCompareTreePosition(nsIContent* aContent1,
     return 0;
   }
 
-  int32_t index1 = parent->IndexOf(content1Ancestor);
-  int32_t index2 = parent->IndexOf(content2Ancestor);
+  int32_t index1 = parent->ComputeIndexOf(content1Ancestor);
+  int32_t index2 = parent->ComputeIndexOf(content2Ancestor);
   if (index1 < 0 || index2 < 0) {
     // one of them must be anonymous; we can't determine the order
     return 0;
@@ -3686,7 +3699,7 @@ nsLayoutUtils::PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
   // Retained builder exists, but display list retaining is disabled.
   if (!useRetainedBuilder && retainedBuilder) {
     // Clear the modified frames lists and frame properties.
-    retainedBuilder->ClearModifiedFrameProps();
+    retainedBuilder->ClearFramesWithProps();
 
     // Clear the retained display list.
     retainedBuilder->List()->DeleteAll(retainedBuilder->Builder());

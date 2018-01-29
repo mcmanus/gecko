@@ -2181,14 +2181,14 @@ LIRGenerator::visitToFloat32(MToFloat32* convert)
 }
 
 void
-LIRGenerator::visitToInt32(MToInt32* convert)
+LIRGenerator::visitToNumberInt32(MToNumberInt32* convert)
 {
     MDefinition* opd = convert->input();
 
     switch (opd->type()) {
       case MIRType::Value:
       {
-        LValueToInt32* lir =
+        auto* lir =
             new(alloc()) LValueToInt32(useBox(opd), tempDouble(), temp(), LValueToInt32::NORMAL);
         assignSnapshot(lir, Bailout_NonPrimitiveInput);
         define(lir, convert);
@@ -3224,7 +3224,7 @@ LIRGenerator::visitLoadElementHole(MLoadElementHole* ins)
     MOZ_ASSERT(ins->type() == MIRType::Value);
 
     LLoadElementHole* lir = new(alloc()) LLoadElementHole(useRegister(ins->elements()),
-                                                          useRegisterOrConstant(ins->index()),
+                                                          useRegister(ins->index()),
                                                           useRegister(ins->initLength()));
     if (ins->needsNegativeIntCheck())
         assignSnapshot(lir, Bailout_NegativeIndex);
@@ -3654,9 +3654,10 @@ LIRGenerator::visitLoadTypedArrayElementHole(MLoadTypedArrayElementHole* ins)
     MOZ_ASSERT(ins->type() == MIRType::Value);
 
     const LUse object = useRegister(ins->object());
-    const LAllocation index = useRegisterOrConstant(ins->index());
+    const LAllocation index = useRegister(ins->index());
 
-    LLoadTypedArrayElementHole* lir = new(alloc()) LLoadTypedArrayElementHole(object, index);
+    LLoadTypedArrayElementHole* lir = new(alloc()) LLoadTypedArrayElementHole(object, index,
+                                                                              temp());
     if (ins->fallible())
         assignSnapshot(lir, Bailout_Overflow);
     defineBox(lir, ins);

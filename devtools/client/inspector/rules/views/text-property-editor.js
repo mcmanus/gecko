@@ -316,6 +316,7 @@ TextPropertyEditor.prototype = {
         multiline: true,
         maxWidth: () => this.container.getBoundingClientRect().width,
         cssProperties: this.cssProperties,
+        cssVariables: this.rule.elementStyle.variables,
       });
 
       this.ruleView.highlighters.on("hover-shape-point", this._onHoverShapePoint);
@@ -678,7 +679,8 @@ TextPropertyEditor.prototype = {
       computed.name, computed.value, {
         colorSwatchClass: "ruleview-swatch ruleview-colorswatch",
         urlClass: "theme-link",
-        baseURI: this.sheetHref
+        baseURI: this.sheetHref,
+        fontFamilyClass: "ruleview-font-family"
       }
     );
 

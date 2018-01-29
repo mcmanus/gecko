@@ -1191,6 +1191,7 @@ nsExternalResourceMap::PendingLoad::StartLoad(nsIURI* aURI,
                      aRequestingNode,
                      nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS,
                      nsIContentPolicy::TYPE_OTHER,
+                     nullptr, // aPerformanceStorage
                      loadGroup);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -1483,6 +1484,7 @@ nsIDocument::nsIDocument()
     mAllowPaymentRequest(false),
     mEncodingMenuDisabled(false),
     mIsSVGGlyphsDocument(false),
+    mAllowUnsafeHTML(false),
     mIsScopedStyleEnabled(eScopedStyle_Unknown),
     mCompatMode(eCompatibility_FullStandards),
     mReadyState(ReadyState::READYSTATE_UNINITIALIZED),
@@ -4351,7 +4353,7 @@ nsDocument::GetChildAt_Deprecated(uint32_t aIndex) const
 }
 
 int32_t
-nsDocument::IndexOf(const nsINode* aPossibleChild) const
+nsDocument::ComputeIndexOf(const nsINode* aPossibleChild) const
 {
   return mChildren.IndexOfChild(aPossibleChild);
 }
@@ -4363,8 +4365,23 @@ nsDocument::GetChildCount() const
 }
 
 nsresult
-nsDocument::InsertChildAt(nsIContent* aKid, uint32_t aIndex,
-                          bool aNotify)
+nsDocument::InsertChildBefore(nsIContent* aKid, nsIContent* aBeforeThis,
+                            bool aNotify)
+{
+  if (aKid->IsElement() && GetRootElement()) {
+    NS_WARNING("Inserting root element when we already have one");
+    return NS_ERROR_DOM_HIERARCHY_REQUEST_ERR;
+  }
+
+  int32_t index = aBeforeThis ? ComputeIndexOf(aBeforeThis) : GetChildCount();
+  MOZ_ASSERT(index >= 0);
+
+  return doInsertChildAt(aKid, index, aNotify, mChildren);
+}
+
+nsresult
+nsDocument::InsertChildAt_Deprecated(nsIContent* aKid, uint32_t aIndex,
+                                     bool aNotify)
 {
   if (aKid->IsElement() && GetRootElement()) {
     NS_WARNING("Inserting root element when we already have one");
@@ -4417,7 +4434,7 @@ nsDocument::RemoveChildNode(nsIContent* aKid, bool aNotify)
   // Any call before that point would restore this soon-to-be-obsolete cached
   // answer, and our clearing here would be fruitless.)
   mCachedRootElement = nullptr;
-  doRemoveChildAt(IndexOf(aKid), aNotify, aKid, mChildren);
+  doRemoveChildAt(ComputeIndexOf(aKid), aNotify, aKid, mChildren);
   MOZ_ASSERT(mCachedRootElement != aKid,
              "Stale pointer in mCachedRootElement, after we tried to clear it "
              "(maybe somebody called GetRootElement() too early?)");
@@ -6187,6 +6204,13 @@ nsIDocument::CreateAttributeNS(const nsAString& aNamespaceURI,
   return attribute.forget();
 }
 
+bool
+nsIDocument::AllowUnsafeHTML() const
+{
+  return (!nsContentUtils::IsSystemPrincipal(NodePrincipal()) ||
+          mAllowUnsafeHTML);
+}
+
 void
 nsDocument::ScheduleSVGForPresAttrEvaluation(nsSVGElement* aSVG)
 {
@@ -6881,7 +6905,7 @@ nsDocument::SetTitle(const nsAString& aTitle)
       if (!title) {
         return NS_OK;
       }
-      rootElement->InsertChildAt(title, 0, true);
+      rootElement->InsertChildBefore(title, rootElement->GetFirstChild(), true);
     }
   } else if (rootElement->IsHTMLElement()) {
     if (!title) {

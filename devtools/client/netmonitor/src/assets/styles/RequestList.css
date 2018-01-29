@@ -65,10 +65,7 @@
 .requests-list-contents {
   display: table-row-group;
   position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  width: 100%;
   overflow-x: hidden;
   overflow-y: auto;
   --timings-scale: 1;
@@ -78,7 +75,6 @@
 .requests-list-column {
   display: table-cell;
   cursor: default;
-  text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -231,6 +227,8 @@
   padding: 0 2px;
   border-radius: 3px;
   font-family: var(--monospace-font-family);
+  /* prevent status code from having full line height width from .request-list-item */
+  line-height: normal;
 }
 
 .status-code[data-code^="1"] {
@@ -375,13 +373,13 @@
 
 /* Duration column */
 
-.requests-list-duration {
+.requests-list-duration-time {
   width: 8%;
 }
 
 /* Latency column */
 
-.requests-list-latency {
+.requests-list-latency-time {
   width: 8%;
 }
 
@@ -406,7 +404,7 @@
   width: 16px;
   height: 16px;
   margin: 0 4px;
-  vertical-align: top;
+  vertical-align: text-bottom;
 }
 
 .request-list-item.selected .requests-security-state-icon {
@@ -549,9 +547,6 @@
 }
 
 .requests-list-timings {
-  display: flex;
-  flex: none;
-  align-items: center;
   transform: scaleX(var(--timings-scale));
 }
 
@@ -609,6 +604,7 @@
   white-space: nowrap;
   /* This node should not be scaled - apply a reversed transformation */
   transform: scaleX(var(--timings-rev-scale));
+  text-align: left;
 }
 
 .requests-list-timings-total:dir(ltr) {
@@ -623,8 +619,14 @@
 
 .request-list-item {
   position: relative;
+/*
   display: table-row;
+  Bug 1431132: Disabling this rule is surprising as we no longer have "rows".
+  But this helps preventing reflowing the whole requests list anytime we append
+  a new request/row.
+*/
   height: 24px;
+  line-height: 24px;
 }
 
 .request-list-item.selected {

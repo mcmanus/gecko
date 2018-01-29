@@ -155,7 +155,7 @@ const TOOLKIT_ID                      = "toolkit@mozilla.org";
 
 const XPI_SIGNATURE_CHECK_PERIOD      = 24 * 60 * 60;
 
-XPCOMUtils.defineConstant(this, "DB_SCHEMA", 23);
+XPCOMUtils.defineConstant(this, "DB_SCHEMA", 24);
 
 XPCOMUtils.defineLazyPreferenceGetter(this, "ALLOW_NON_MPC", PREF_ALLOW_NON_MPC);
 
@@ -300,7 +300,7 @@ function loadLazyObjects() {
   let uri = "resource://gre/modules/addons/XPIProviderUtils.js";
   let scope = Cu.Sandbox(Services.scriptSecurityManager.getSystemPrincipal(), {
     sandboxName: uri,
-    wantGlobalProperties: ["TextDecoder"],
+    wantGlobalProperties: ["ChromeUtils", "TextDecoder"],
   });
 
   Object.assign(scope, {
@@ -407,10 +407,7 @@ function getRelativePath(file, dir) {
 }
 
 /**
- * Converts the given opaque descriptor string into an ordinary path
- * string. In practice, the path string is always exactly equal to the
- * descriptor string, but theoretically may not have been on some legacy
- * systems.
+ * Converts the given opaque descriptor string into an ordinary path string.
  *
  * @param {string} descriptor
  *        The opaque descriptor string to convert.
@@ -3626,7 +3623,7 @@ this.XPIProvider = {
     // WebExtension themes are installed as disabled, fix that here.
     addon.userDisabled = false;
 
-    addon = XPIDatabase.addAddonMetadata(addon, file.persistentDescriptor);
+    addon = XPIDatabase.addAddonMetadata(addon, file.path);
 
     XPIStates.addAddon(addon);
     XPIDatabase.saveChanges();
@@ -4237,6 +4234,7 @@ this.XPIProvider = {
       activeAddon.bootstrapScope =
         new Cu.Sandbox(principal, { sandboxName: aFile.path,
                                     addonId: aId,
+                                    wantGlobalProperties: ["ChromeUtils"],
                                     metadata: { addonID: aId } });
       logger.error("Attempted to load bootstrap scope from missing directory " + aFile.path);
       return;
@@ -4256,6 +4254,7 @@ this.XPIProvider = {
       activeAddon.bootstrapScope =
         new Cu.Sandbox(principal, { sandboxName: uri,
                                     addonId: aId,
+                                    wantGlobalProperties: ["ChromeUtils"],
                                     metadata: { addonID: aId, URI: uri } });
 
       try {

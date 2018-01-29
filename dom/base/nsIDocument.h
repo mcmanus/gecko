@@ -182,6 +182,7 @@ enum class CallerType : uint32_t;
 } // namespace dom
 } // namespace mozilla
 
+// Must be kept in sync with xpcom/rust/xpcom/src/interfaces/nonidl.rs
 #define NS_IDOCUMENT_IID \
 { 0xce1f7627, 0x7109, 0x4977, \
   { 0xba, 0x77, 0x49, 0x0f, 0xfd, 0xe0, 0x7a, 0xaa } }
@@ -2872,6 +2873,8 @@ public:
     CreateAttributeNS(const nsAString& aNamespaceURI,
                       const nsAString& aQualifiedName,
                       mozilla::ErrorResult& rv);
+  void SetAllowUnsafeHTML(bool aAllow) { mAllowUnsafeHTML = aAllow; }
+  bool AllowUnsafeHTML() const;
   void GetInputEncoding(nsAString& aInputEncoding) const;
   already_AddRefed<mozilla::dom::Location> GetLocation() const;
   void GetReferrer(nsAString& aReferrer) const;
@@ -3554,6 +3557,10 @@ protected:
 
   // True if this document is for an SVG-in-OpenType font.
   bool mIsSVGGlyphsDocument : 1;
+
+  // True if unsafe HTML fragments should be allowed in chrome-privileged
+  // documents.
+  bool mAllowUnsafeHTML : 1;
 
   // Whether <style scoped> support is enabled in this document.
   enum { eScopedStyle_Unknown, eScopedStyle_Disabled, eScopedStyle_Enabled };

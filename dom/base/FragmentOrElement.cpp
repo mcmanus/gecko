@@ -554,7 +554,7 @@ int32_t
 nsAttrChildContentList::IndexOf(nsIContent* aContent)
 {
   if (mNode) {
-    return mNode->IndexOf(aContent);
+    return mNode->ComputeIndexOf(aContent);
   }
 
   return -1;
@@ -1157,9 +1157,22 @@ nsIContent::SetXBLInsertionPoint(nsIContent* aContent)
 }
 
 nsresult
-FragmentOrElement::InsertChildAt(nsIContent* aKid,
-                                uint32_t aIndex,
-                                bool aNotify)
+FragmentOrElement::InsertChildBefore(nsIContent* aKid,
+                                     nsIContent* aBeforeThis,
+                                     bool aNotify)
+{
+  NS_PRECONDITION(aKid, "null ptr");
+
+  int32_t index = aBeforeThis ? ComputeIndexOf(aBeforeThis) : GetChildCount();
+  MOZ_ASSERT(index >= 0);
+
+  return doInsertChildAt(aKid, index, aNotify, mAttrsAndChildren);
+}
+
+nsresult
+FragmentOrElement::InsertChildAt_Deprecated(nsIContent* aKid,
+                                            uint32_t aIndex,
+                                            bool aNotify)
 {
   NS_PRECONDITION(aKid, "null ptr");
 
@@ -1182,7 +1195,7 @@ FragmentOrElement::RemoveChildNode(nsIContent* aKid, bool aNotify)
 {
   // Let's keep the node alive.
   nsCOMPtr<nsIContent> kungFuDeathGrip = aKid;
-  doRemoveChildAt(IndexOf(aKid), aNotify, aKid, mAttrsAndChildren);
+  doRemoveChildAt(ComputeIndexOf(aKid), aNotify, aKid, mAttrsAndChildren);
 }
 
 void
@@ -2140,7 +2153,7 @@ FragmentOrElement::GetChildAt_Deprecated(uint32_t aIndex) const
 }
 
 int32_t
-FragmentOrElement::IndexOf(const nsINode* aPossibleChild) const
+FragmentOrElement::ComputeIndexOf(const nsINode* aPossibleChild) const
 {
   return mAttrsAndChildren.IndexOfChild(aPossibleChild);
 }
@@ -2274,7 +2287,8 @@ ContainsMarkup(const nsAString& aStr)
 }
 
 void
-FragmentOrElement::SetInnerHTMLInternal(const nsAString& aInnerHTML, ErrorResult& aError)
+FragmentOrElement::SetInnerHTMLInternal(const nsAString& aInnerHTML, ErrorResult& aError,
+                                        bool aNeverSanitize)
 {
   FragmentOrElement* target = this;
   // Handle template case.
@@ -2326,6 +2340,9 @@ FragmentOrElement::SetInnerHTMLInternal(const nsAString& aInnerHTML, ErrorResult
     contextNameSpaceID = shadowRoot->GetHost()->GetNameSpaceID();
   }
 
+  auto sanitize = (aNeverSanitize ? nsContentUtils::NeverSanitize
+                                  : nsContentUtils::SanitizeSystemPrivileged);
+
   if (doc->IsHTMLDocument()) {
     int32_t oldChildCount = target->GetChildCount();
     aError = nsContentUtils::ParseFragmentHTML(aInnerHTML,
@@ -2334,14 +2351,16 @@ FragmentOrElement::SetInnerHTMLInternal(const nsAString& aInnerHTML, ErrorResult
                                                contextNameSpaceID,
                                                doc->GetCompatibilityMode() ==
                                                  eCompatibility_NavQuirks,
-                                               true);
+                                               true,
+                                               sanitize);
     mb.NodesAdded();
     // HTML5 parser has notified, but not fired mutation events.
     nsContentUtils::FireMutationEventsForDirectParsing(doc, target,
                                                        oldChildCount);
   } else {
     RefPtr<DocumentFragment> df =
-      nsContentUtils::CreateContextualFragment(target, aInnerHTML, true, aError);
+      nsContentUtils::CreateContextualFragment(target, aInnerHTML, true,
+                                               sanitize, aError);
     if (!aError.Failed()) {
       // Suppress assertion about node removal mutation events that can't have
       // listeners anyway, because no one has had the chance to register mutation

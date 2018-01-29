@@ -4375,9 +4375,9 @@ class LValueToInt32 : public LInstructionHelper<1, BOX_PIECES, 2>
     const LDefinition* temp() {
         return getTemp(1);
     }
-    MToInt32* mirNormal() const {
+    MToNumberInt32* mirNormal() const {
         MOZ_ASSERT(mode_ == NORMAL);
-        return mir_->toToInt32();
+        return mir_->toToNumberInt32();
     }
     MTruncateToInt32* mirTruncate() const {
         MOZ_ASSERT(mode_ == TRUNCATE);
@@ -4401,8 +4401,8 @@ class LDoubleToInt32 : public LInstructionHelper<1, 1, 0>
         setOperand(0, in);
     }
 
-    MToInt32* mir() const {
-        return mir_->toToInt32();
+    MToNumberInt32* mir() const {
+        return mir_->toToNumberInt32();
     }
 };
 
@@ -4419,8 +4419,8 @@ class LFloat32ToInt32 : public LInstructionHelper<1, 1, 0>
         setOperand(0, in);
     }
 
-    MToInt32* mir() const {
-        return mir_->toToInt32();
+    MToNumberInt32* mir() const {
+        return mir_->toToNumberInt32();
     }
 };
 
@@ -6210,14 +6210,16 @@ class LLoadUnboxedScalar : public LInstructionHelper<1, 2, 1>
     }
 };
 
-class LLoadTypedArrayElementHole : public LInstructionHelper<BOX_PIECES, 2, 0>
+class LLoadTypedArrayElementHole : public LInstructionHelper<BOX_PIECES, 2, 1>
 {
   public:
     LIR_HEADER(LoadTypedArrayElementHole)
 
-    LLoadTypedArrayElementHole(const LAllocation& object, const LAllocation& index) {
+    LLoadTypedArrayElementHole(const LAllocation& object, const LAllocation& index,
+                               const LDefinition& temp) {
         setOperand(0, object);
         setOperand(1, index);
+        setTemp(0, temp);
     }
     const MLoadTypedArrayElementHole* mir() const {
         return mir_->toLoadTypedArrayElementHole();
@@ -6227,6 +6229,9 @@ class LLoadTypedArrayElementHole : public LInstructionHelper<BOX_PIECES, 2, 0>
     }
     const LAllocation* index() {
         return getOperand(1);
+    }
+    const LDefinition* temp() {
+        return getTemp(0);
     }
 };
 

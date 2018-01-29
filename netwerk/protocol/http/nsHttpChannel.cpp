@@ -85,7 +85,7 @@
 #include "nsString.h"
 #include "nsCRT.h"
 #include "CacheObserver.h"
-#include "mozilla/dom/Performance.h"
+#include "mozilla/dom/PerformanceStorage.h"
 #include "mozilla/Telemetry.h"
 #include "AlternateServices.h"
 #include "InterceptedChannel.h"
@@ -2842,6 +2842,7 @@ nsHttpChannel::StartRedirectChannelToURI(nsIURI *upgradedURI, uint32_t flags)
     rv = NS_NewChannelInternal(getter_AddRefs(newChannel),
                                upgradedURI,
                                redirectLoadInfo,
+                               nullptr, // PerformanceStorage
                                nullptr, // aLoadGroup
                                nullptr, // aCallbacks
                                nsIRequest::LOAD_NORMAL,
@@ -5598,6 +5599,7 @@ nsHttpChannel::ContinueProcessRedirectionAfterFallback(nsresult rv)
     rv = NS_NewChannelInternal(getter_AddRefs(newChannel),
                                mRedirectURI,
                                redirectLoadInfo,
+                               nullptr, // PerformanceStorage
                                nullptr, // aLoadGroup
                                nullptr, // aCallbacks
                                nsIRequest::LOAD_NORMAL,
@@ -7336,10 +7338,10 @@ nsHttpChannel::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult st
 
     ReportRcwnStats(isFromNet);
 
-    // Register entry to the Performance resource timing
-    mozilla::dom::Performance* documentPerformance = GetPerformance();
-    if (documentPerformance) {
-        documentPerformance->AddEntry(this, this);
+    // Register entry to the PerformanceStorage resource timing
+    mozilla::dom::PerformanceStorage* performanceStorage = GetPerformanceStorage();
+    if (performanceStorage) {
+        performanceStorage->AddEntry(this, this);
     }
 
     if (mListener) {
@@ -8513,6 +8515,7 @@ nsHttpChannel::OnPush(const nsACString &url, Http2PushedStream *pushedStream)
     rv = NS_NewChannelInternal(getter_AddRefs(pushChannel),
                                pushResource,
                                mLoadInfo,
+                               nullptr, // PerformanceStorage
                                nullptr, // aLoadGroup
                                nullptr, // aCallbacks
                                nsIRequest::LOAD_NORMAL,

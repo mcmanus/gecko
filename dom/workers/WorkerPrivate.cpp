@@ -64,6 +64,7 @@
 #include "mozilla/dom/MessagePortBinding.h"
 #include "mozilla/dom/nsCSPUtils.h"
 #include "mozilla/dom/Performance.h"
+#include "mozilla/dom/PerformanceStorageWorker.h"
 #include "mozilla/dom/PMessagePort.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseDebugging.h"
@@ -1851,6 +1852,7 @@ WorkerLoadInfo::StealFrom(WorkerLoadInfo& aOther)
   mStorageAllowed = aOther.mStorageAllowed;
   mServiceWorkersTestingInWindow = aOther.mServiceWorkersTestingInWindow;
   mOriginAttributes = aOther.mOriginAttributes;
+  mParentController = aOther.mParentController;
 }
 
 nsresult
@@ -1916,6 +1918,19 @@ WorkerLoadInfo::GetPrincipalAndLoadGroupFromChannel(nsIChannel* aChannel,
   nsCOMPtr<nsIPrincipal> channelPrincipal;
   nsresult rv = ssm->GetChannelResultPrincipal(aChannel, getter_AddRefs(channelPrincipal));
   NS_ENSURE_SUCCESS(rv, rv);
+
+  // Every time we call GetChannelResultPrincipal() it will return a different
+  // null principal for a data URL.  We don't want to change the worker's
+  // principal again, though.  Instead just keep the original null principal we
+  // first got from the channel.
+  //
+  // Note, we don't do this by setting principalToInherit on the channel's
+  // load info because we don't yet have the first null principal when we
+  // create the channel.
+  if (mPrincipal && mPrincipal->GetIsNullPrincipal() &&
+                    channelPrincipal->GetIsNullPrincipal()) {
+    channelPrincipal = mPrincipal;
+  }
 
   nsCOMPtr<nsILoadGroup> channelLoadGroup;
   rv = aChannel->GetLoadGroup(getter_AddRefs(channelLoadGroup));
@@ -4790,6 +4805,7 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
     loadInfo.mOriginAttributes = aParent->GetOriginAttributes();
     loadInfo.mServiceWorkersTestingInWindow =
       aParent->ServiceWorkersTestingInWindow();
+    loadInfo.mParentController = aParent->GetController();
   } else {
     AssertIsOnMainThread();
 
@@ -4830,6 +4846,7 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
     }
 
     nsCOMPtr<nsIDocument> document;
+    Maybe<ClientInfo> clientInfo;
 
     if (globalWindow) {
       // Only use the current inner window, and only use it if the caller can
@@ -4861,6 +4878,8 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
       loadInfo.mBaseURI = document->GetDocBaseURI();
       loadInfo.mLoadGroup = document->GetDocumentLoadGroup();
       NS_ENSURE_TRUE(loadInfo.mLoadGroup, NS_ERROR_FAILURE);
+
+      clientInfo = globalWindow->GetClientInfo();
 
       // Use the document's NodePrincipal as loading principal if we're not being
       // called from chrome.
@@ -4917,6 +4936,7 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
         nsContentUtils::StorageAllowedForWindow(globalWindow);
       loadInfo.mStorageAllowed = access > nsContentUtils::StorageAccess::eDeny;
       loadInfo.mOriginAttributes = nsContentUtils::GetOriginAttributes(document);
+      loadInfo.mParentController = globalWindow->GetController();
     } else {
       // Not a window
       MOZ_ASSERT(isChrome);
@@ -4977,6 +4997,7 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
                                         loadInfo.mBaseURI,
                                         document, loadInfo.mLoadGroup,
                                         aScriptURL,
+                                        clientInfo,
                                         ContentPolicyType(aWorkerType),
                                         useDefaultEncoding,
                                         getter_AddRefs(loadInfo.mChannel));
@@ -7190,6 +7211,18 @@ WorkerPrivate::DumpCrashInformation(nsACString& aString)
     aString.Append("|");
     aString.Append(holder->Name());
   }
+}
+
+PerformanceStorage*
+WorkerPrivate::GetPerformanceStorage()
+{
+  AssertIsOnMainThread();
+
+  if (!mPerformanceStorage) {
+    mPerformanceStorage = PerformanceStorageWorker::Create(this);
+  }
+
+  return mPerformanceStorage;
 }
 
 NS_IMPL_ISUPPORTS_INHERITED0(ExternalRunnableWrapper, WorkerRunnable)

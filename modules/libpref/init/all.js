@@ -1855,6 +1855,7 @@ pref("network.http.active_tab_priority", true);
 // per Section 4.7 "Low-Latency Data Service Class".
 pref("network.ftp.data.qos", 0);
 pref("network.ftp.control.qos", 0);
+pref("network.ftp.enabled", true);
 
 // The max time to spend on xpcom events between two polls in ms.
 pref("network.sts.max_time_for_events_between_two_polls", 100);
@@ -4825,11 +4826,14 @@ pref("network.tcp.keepalive.retry_interval", 1); // seconds
 pref("network.tcp.keepalive.probe_count", 4);
 #endif
 
-#if defined(XP_WIN) || defined(XP_MACOSX)
+#if !defined(EARLY_BETA_OR_EARLIER)
+pref("network.tcp.tcp_fastopen_enable", false);
+#elif  defined(XP_WIN) || defined(XP_MACOSX)
 pref("network.tcp.tcp_fastopen_enable", true);
 #else
 pref("network.tcp.tcp_fastopen_enable", false);
 #endif
+
 pref("network.tcp.tcp_fastopen_consecutive_failure_limit", 5);
 // We are trying to detect stalled tcp connections that use TFO and TLS
 // (bug 1395494).
