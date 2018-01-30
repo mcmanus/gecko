@@ -124,7 +124,7 @@ TRR::DNSoverHTTPS()
     // these types
     return NS_ERROR_FAILURE;
   }
-  
+
   // 'host' should be converted to a DNS query packet for QTYPE "A" or
   // "AAAA" (based on af), then base64url-encoded and inserted into the URL
   //
@@ -243,7 +243,7 @@ TRR::GetInterface(const nsIID &iid, void **result)
   if (!iid.Equals(NS_GET_IID(nsIHttpPushListener))) {
     return NS_ERROR_NO_INTERFACE;
   }
-    
+
   nsCOMPtr<nsIHttpPushListener> copy(this);
   *result = copy.forget().take();
   return NS_OK;
@@ -334,7 +334,7 @@ TRR::TRR(nsIHttpChannel *pushed, AHostResolver *aResolver, bool aPB,
                                              getter_AddRefs(hostRecord)))) {
     return;
   }
-  
+
   if (NS_FAILED(mHostResolver->TrrLookup_unlocked(hostRecord, this))) {
     return;
   }
@@ -342,7 +342,7 @@ TRR::TRR(nsIHttpChannel *pushed, AHostResolver *aResolver, bool aPB,
   if (NS_FAILED(pushed->AsyncOpen2(this))) {
     return;
   }
-  
+
   // OK!
   mChannel = pushed;
   mRec.swap(hostRecord);
@@ -355,7 +355,7 @@ TRR::OnPush(nsIHttpChannel *associated, nsIHttpChannel *pushed)
   if (!mRec) {
     return NS_ERROR_FAILURE;
   }
-  
+
   // make a trr
   new TRR(pushed, mHostResolver, mPB, mRec);
   return NS_ERROR_FAILURE;
@@ -443,7 +443,7 @@ TRR::DohDecode()
     index += 4; // skip question's type, class
     questionRecords--;
   }
-  
+
   // Figure out the number of answer records from ANCOUNT
   uint16_t answerRecords = get16bit(mResponse, 6);
 
@@ -451,8 +451,8 @@ TRR::DohDecode()
        answerRecords, mUsed, host.get(), index));
 
   while (answerRecords) {
-
     if (mUsed < (index + 1)) {
+      LOG(("TRR: Dohdecode:%d fail at index %d\n", __LINE__, index));
       return NS_ERROR_UNEXPECTED;
     }
     length = static_cast<uint8_t>(mResponse[index]);
@@ -474,14 +474,15 @@ TRR::DohDecode()
         }
         length = static_cast<uint8_t>(mResponse[index]);
         if (mUsed < (index + 1 + length)) {
+          LOG(("TRR: Dohdecode:%d fail at index %d\n", __LINE__, index));
           return NS_ERROR_UNEXPECTED;
         }
         index += 1 + length;
-        LOG(("TRR: move over %d bytes\n", 1 + length));
       } while (length);
     }
     // 16 bit TYPE
     if (mUsed < (index + 2)) {
+      LOG(("TRR: Dohdecode:%d fail at index %d\n", __LINE__, index + 2));
       return NS_ERROR_UNEXPECTED;
     }
     uint16_t TYPE = get16bit(mResponse, index);
@@ -489,17 +490,19 @@ TRR::DohDecode()
 
     // 16 bit class
     if (mUsed < (index + 2)) {
+      LOG(("TRR: Dohdecode:%d fail at index %d\n", __LINE__, index + 2));
       return NS_ERROR_UNEXPECTED;
     }
     uint16_t CLASS = get16bit(mResponse, index);
     if (1 != CLASS) {
-      LOG(("TRR bad CLASS (%u)\n", CLASS));
+      LOG(("TRR bad CLASS (%u) at index %d\n", CLASS, index));
       return NS_ERROR_UNEXPECTED;
     }
     index += 2;
 
     // 32 bit TTL (seconds)
     if (mUsed < (index + 4)) {
+      LOG(("TRR: Dohdecode:%d fail at index %d\n", __LINE__, index));
       return NS_ERROR_UNEXPECTED;
     }
     uint32_t TTL = get32bit(mResponse, index);
@@ -507,12 +510,15 @@ TRR::DohDecode()
 
     // 16 bit RDLENGTH
     if (mUsed < (index + 2)) {
+      LOG(("TRR: Dohdecode:%d fail at index %d\n", __LINE__, index));
       return NS_ERROR_UNEXPECTED;
     }
     uint16_t RDLENGTH = get16bit(mResponse, index);
     index += 2;
 
     if (mUsed < (index + RDLENGTH)) {
+      LOG(("TRR: Dohdecode:%d fail RDLENGTH=%d at index %d\n", __LINE__,
+           RDLENGTH, index));
       return NS_ERROR_UNEXPECTED;
     }
 
@@ -673,7 +679,7 @@ TRR::DohDecode()
     LOG(("done with additional rr now %u of %u\n", index, mUsed));
     arRecords--;
   }
-  
+
   if (index != mUsed) {
     LOG(("TRRRRRR: bad DNS parser (%u != %d)!\n", index, (int)mUsed));
     // failed to parse 100%, do not continue
@@ -851,7 +857,7 @@ public:
     mTRR = nullptr;
     return NS_OK;
   }
-    
+
 private:
   RefPtr<TRR> mTRR;
 };
