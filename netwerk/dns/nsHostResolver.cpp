@@ -1674,10 +1674,11 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
     }
     if (!fromTRR &&
         !mShutdown && !rec->mGetTtl && !rec->mResolving && sGetTtlEnabled) {
-      LOG(("Issuing second async lookup for TTL for host [%s%s%s].",
+        LOG(("Issuing second async lookup for TTL for host [%s%s%s].",
              LOG_HOST(rec->host.get(), rec->netInterface.get())));
         rec->flags =
-            (rec->flags & ~RES_PRIORITY_MEDIUM) | RES_PRIORITY_LOW;
+            (rec->flags & ~RES_PRIORITY_MEDIUM) | RES_PRIORITY_LOW |
+            RES_DISABLE_TRR;
         DebugOnly<nsresult> rv = NameLookup(rec);
         NS_WARNING_ASSERTION(
             NS_SUCCEEDED(rv),
