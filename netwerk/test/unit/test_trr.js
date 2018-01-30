@@ -36,15 +36,19 @@ function run_test() {
     
     prefs.setBoolPref("network.http.spdy.enabled", true);
     prefs.setBoolPref("network.http.spdy.enabled.http2", true);
-    prefs.setCharPref("network.dns.localDomains", "foo.example.com, bar.example.com");
+    // make 'foo.example.com' equal localhost so that we can reach that DNS
+    // server
+    prefs.setCharPref("network.dns.localDomains", "foo.example.com");
     // Disable rcwn to make cache behavior deterministic.
     prefs.setBoolPref("network.http.rcwn.enabled", false);
 
     // use the h2 server as DOH provider
     prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns");
-    prefs.setIntPref("network.trr.mode", 3);
+    prefs.setIntPref("network.trr.mode", 1); // Race
     prefs.setBoolPref("network.trr.wait-for-portal", false);
+    // don't confirm that TRR is working, just go!
     prefs.setCharPref("network.trr.confirmationNS", "skip");
+    //prefs.setBoolPref("network.trr.useGET", true);
 
     // The moz-http2 cert is for foo.example.com and is signed by CA.cert.der
     // so add that cert to the trust list as a signing cert.  // the foo.example.com domain name.
@@ -52,8 +56,9 @@ function run_test() {
         .getService(Ci.nsIX509CertDB);
     addCertFromFile(certdb, "CA.cert.der", "CTu,u,u");
 
-    // get data from the same host we use as DOH server
-    origin = "https://foo.example.com:" + h2Port;
+    // get data from bar.example.com which will only resolve fine via DOH as
+    // the native resolver won't know about it
+    origin = "https://bar.example.com:" + h2Port;
     dump ("origin - " + origin + "\n");
     doTest1();
 }
