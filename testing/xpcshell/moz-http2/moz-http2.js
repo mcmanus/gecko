@@ -529,7 +529,7 @@ function handleRequest(req, res) {
   // for use with test_trr.js
   else if (u.pathname === "/dns") {
     // bar.example.com has A entry 127.0.0.1
-    content="\x00\x00\x01\x00\x00\x01\x00\x01\x00\x00\x00\x00\x03\x62\x61\x72\x07\x65\x78\x61\x6D\x70\x6C\x65\x03\x63\x6F\x6D\x00\x00\x01\x00\x01\xC0\x0C\x00\x01\x00\x01\x00\x00\x00\x37\x00\x04\x7F\x00\x00\x01";
+    var content= new Buffer("00000100000100010000000003626172076578616D706C6503636F6D0000010001C00C000100010000003700047F000001", "hex");
     res.setHeader('Content-Type', 'application/dns-udpwireformat');
     res.setHeader('Content-Length', content.length);
     res.writeHead(200);
