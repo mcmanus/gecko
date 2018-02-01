@@ -53,7 +53,8 @@ function run_test() {
 
     // use the h2 server as DOH provider
     prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns");
-    prefs.setIntPref("network.trr.mode", 1); // Race
+    // 0 - off, 1 - race, 2 TRR first, 3 TRR only, 4 shadow
+    prefs.setIntPref("network.trr.mode", 2); // TRR first
     prefs.setBoolPref("network.trr.wait-for-portal", false);
     // don't confirm that TRR is working, just go!
     prefs.setCharPref("network.trr.confirmationNS", "skip");
