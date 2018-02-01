@@ -1584,6 +1584,7 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
 
     MOZ_ASSERT(rec->mResolverMode == MODE_PARALLEL ||
                rec->mResolverMode == MODE_SHADOW ||
+               rec->mResolverMode == MODE_TRRFIRST ||
                !rec->mDidCallbacks);
     LOG(("nsHostResolver record %p calling back dns users\n", rec));
 
@@ -1594,9 +1595,10 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
     }
 
     // update record fields.  We might have a rec->addr_info already if a
-    // previous lookup result expired and we're reresolving it..
+    // previous lookup result expired and we're reresolving it or we get
+    // a late second TRR response.
     // note that we don't update the addr_info if this is trr shadow results
-    if (!rec->mDidCallbacks && !mShutdown &&
+    if (!mShutdown &&
         !(trrResult && rec->mResolverMode == MODE_SHADOW)) {
         MutexAutoLock lock(rec->addr_info_lock);
         nsAutoPtr<AddrInfo> old_addr_info;
@@ -1613,6 +1615,11 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         }
         rec->negative = !rec->addr_info;
         PrepareRecordExpiration(rec);
+    }
+
+    if ((rec->mResolverMode == MODE_TRRFIRST) && rec->mDidCallbacks) {
+        // already callback'ed on the first TRR response
+        return LOOKUP_OK;
     }
 
     bool doCallbacks = true;
