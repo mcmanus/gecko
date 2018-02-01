@@ -34,6 +34,7 @@ namespace net {
 #undef LOG
 extern mozilla::LazyLogModule gHostResolverLog;
 #define LOG(args) MOZ_LOG(gHostResolverLog, mozilla::LogLevel::Debug, args)
+#define LOG_ENABLED() MOZ_LOG_TEST(mozilla::net::gHostResolverLog, mozilla::LogLevel::Debug)
 
   NS_IMPL_ISUPPORTS(TRR, nsIHttpPushListener, nsIInterfaceRequestor, nsIStreamListener, nsIRunnable)
 
@@ -387,7 +388,7 @@ static uint32_t get32bit(unsigned char *aData, int index)
 // DohDecode() collects the TTL and the IP addresses in the response
 //
 nsresult
-TRR::DohDecode()
+TRR::DohDecode(enum TrrType aType)
 {
   // The response has a 12 byte header followed by the question (returned)
   // and then the answer. The answer section itself contains the name, type
@@ -486,6 +487,13 @@ TRR::DohDecode()
       return NS_ERROR_UNEXPECTED;
     }
     uint16_t TYPE = get16bit(mResponse, index);
+
+    if (TYPE != static_cast<uint16_t>(mType)) {
+      // Not the same type as was asked for!
+      LOG(("TRR: Dohdecode:%d asked for type %d got %d\n", __LINE__,
+           aType, TYPE));
+      return NS_ERROR_UNEXPECTED;
+    }
     index += 2;
 
     // 16 bit class
@@ -771,7 +779,7 @@ TRR::OnStopRequest(nsIRequest *aRequest,
     rv = httpChannel->GetResponseStatus(&httpStatus);
     if (NS_SUCCEEDED(rv) && httpStatus == 200) {
       // decode body and create an AddrInfo struct for the response
-      rv = DohDecode();
+      rv = DohDecode(mType);
 
       if (NS_SUCCEEDED(rv)) {
         // pass back the response data
@@ -840,6 +848,11 @@ DOHresp::Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
   doh->mTtl = TTL;
   mAddresses.insertBack(doh);
 
+  if (LOG_ENABLED()) {
+    char buf[128];
+    NetAddrToString(addr, buf, sizeof(buf));
+    LOG(("DOHresp:Add %s\n", buf));
+  }
   return NS_OK;
 }
 

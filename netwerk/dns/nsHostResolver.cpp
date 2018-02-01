@@ -1422,8 +1422,6 @@ merge_rrset(AddrInfo *rrto, AddrInfo *rrfrom)
     }
     NetAddrElement *element;
     while ((element = rrfrom->mAddresses.getFirst())) {
-        char buf[128];
-        NetAddrToString(&element->mAddress, buf, sizeof(buf));
         element->remove(); // unlist from old
         rrto->AddAddress(element); // enlist on new
     }
@@ -1624,6 +1622,21 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         doCallbacks = false;
         LOG(("nsHostResolver Suppressing TRR %s because it is first shadow result\n",
              rec->host.get()));
+    }
+
+    if (LOG_ENABLED()) {
+        MutexAutoLock lock(rec->addr_info_lock);
+        NetAddrElement *element;
+        if (rec->addr_info) {
+            for (element = rec->addr_info->mAddresses.getFirst();
+                 element; element = element->getNext()) {
+                char buf[128];
+                NetAddrToString(&element->mAddress, buf, sizeof(buf));
+                LOG(("CompleteLookup: %s has %s\n", rec->host.get(), buf));
+            }
+        } else {
+            LOG(("CompleteLookup: %s has NO address\n", rec->host.get()));
+        }
     }
 
     if (doCallbacks) {

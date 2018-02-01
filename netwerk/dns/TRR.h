@@ -100,13 +100,13 @@ private:
   ~TRR() {}
   nsresult DNSoverHTTPS();
   nsresult DohEncode(nsCString &target);
-  nsresult DohDecode();
+  nsresult DohDecode(enum TrrType aType);
   nsresult ReturnData();
   nsresult FailData();
 
   nsresult DohDecodeQuery(const nsCString &query,
                           nsCString &host, enum TrrType &type);
-    
+
   nsCOMPtr<nsIChannel> mChannel;
   enum TrrType mType;
   TimeStamp mStartTime;
