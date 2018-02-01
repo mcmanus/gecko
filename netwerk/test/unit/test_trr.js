@@ -12,6 +12,13 @@ var getpref;
 var confirmationpref;
 var origin;
 
+XPCOMUtils.defineLazyGetter(this, "URL", function() {
+  return "http://bar.example.com:" + httpserver.identity.primaryPort;
+});
+
+var httpserver = new HttpServer();
+var testPathBase = "/trr";
+
 function run_test() {
     dump ("start!\n");
     
@@ -19,6 +26,8 @@ function run_test() {
     var h2Port = env.get("MOZHTTP2_PORT");
     Assert.notEqual(h2Port, null);
     Assert.notEqual(h2Port, "");
+
+    httpserver.start(-1);
 
     // Set to allow the cert presented by our H2 server
     do_get_profile();
@@ -58,9 +67,10 @@ function run_test() {
 
     // get data from bar.example.com which will only resolve fine via DOH as
     // the native resolver won't know about it
-    origin = "https://bar.example.com:" + h2Port;
+    origin = "https://localhost:" + httpserver.identity.primaryPort;
     dump ("origin - " + origin + "\n");
-    doTest1();
+    do_test_pending();
+    test1();
 }
 
 function resetTRRPrefs() {
@@ -94,38 +104,15 @@ function addCertFromFile(certdb, filename, trustString) {
   certdb.addCert(der, trustString);
 }
 
-function makeChan(origin, path) {
-  return NetUtil.newChannel({
-    uri: origin + path,
+function setupChannel(url)
+{
+  var chan = NetUtil.newChannel({
+    uri: URL + url,
     loadUsingSystemPrincipal: true
-  }).QueryInterface(Ci.nsIHttpChannel);
+  });
+  var httpChan = chan.QueryInterface(Components.interfaces.nsIHttpChannel);
+  return httpChan;
 }
-
-var nextTest;
-var expectPass = true;
-
-var Listener = function() {};
-Listener.prototype = {
-  onStartRequest: function testOnStartRequest(request, ctx) {
-    Assert.ok(request instanceof Components.interfaces.nsIHttpChannel);
-
- //   if (expectPass) {
- //     Assert.equal(request.responseStatus, 200);
- //   } else {
- //     Assert.equal(Components.isSuccessCode(request.status), false);
- //   }
-  },
-
-  onDataAvailable: function testOnDataAvailable(request, ctx, stream, off, cnt) {
-    read_stream(stream, cnt);
-  },
-
-  onStopRequest: function testOnStopRequest(request, ctx, status) {
-      Assert.equal(request.responseStatus, 200);
-      nextTest();
-      do_test_finished();
-  }
-};
 
 function testsDone()
 {
@@ -133,22 +120,32 @@ function testsDone()
   resetPrefs();
 }
 
-function doTest1()
+function completeTest1(request, data, ctx)
 {
-  dump("execute doTest1 - basic TRR\n");
-  do_test_pending();
-  var chan = makeChan(origin, "/basic-trr");
-  var listener = new Listener();
-  nextTest = doTest2;
-  chan.asyncOpen2(listener);
+  Assert.equal(request.status, Components.results.NS_OK);
+
+  httpserver.stop(do_test_finished);
+  testsDone();    
+}
+function handler1(metadata, response)
+{
+  response.seizePower();
+  response.write("HTTP/1.1 200 OK\r\n");
+  response.write("Content-Type: text/plain\r\n");
+  response.write("Content-Length: 9\r\n");
+  response.write("\r\n");
+  response.write("blablabla");
+  response.finish();
 }
 
-function doTest2()
+function test1()
 {
-  dump("execute doTest2 - cached DNS response\n");
-  do_test_pending();
-  var chan = makeChan(origin, "/trr-again");
-  var listener = new Listener();
-  nextTest = testsDone;
-  chan.asyncOpen2(listener);
+  num = 1;  
+  dump("execute doTest1 - basic TRR\n");
+  testPath = testPathBase + num;
+  httpserver.registerPathHandler(testPath, "handler" + num);
+  var channel = setupChannel(testPath);
+  flags = 0;
+  channel.asyncOpen2(new ChannelListener(eval("completeTest" + num),
+                                         channel, flags));
 }
