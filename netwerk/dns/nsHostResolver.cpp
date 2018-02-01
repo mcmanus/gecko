@@ -1125,9 +1125,8 @@ nsHostResolver::TrrLookup(nsHostRecord *rec, TRR *pushedTRR)
         MOZ_ASSERT(!rec->mTRRUsed);
         // not really an error but no TRR is issued
         return NS_ERROR_UNKNOWN_HOST;
-    } else {
-        Telemetry::Accumulate(Telemetry::DNS_TRR_BLACKLISTED, false);
     }
+    Telemetry::Accumulate(Telemetry::DNS_TRR_BLACKLISTED, false);
 
     rec->mTrrStart = TimeStamp::Now();
     rec->mTRRUsed = true; // this record gets TRR treatment
