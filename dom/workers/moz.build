@@ -9,7 +9,13 @@ with Files("**"):
 
 # Public stuff.
 EXPORTS.mozilla.dom += [
-    'FileReaderSync.h',
+    'SharedWorker.h',
+    'WorkerCommon.h',
+    'WorkerDebugger.h',
+    'WorkerDebuggerManager.h',
+    'WorkerHolder.h',
+    'WorkerHolderToken.h',
+    'WorkerLoadInfo.h',
     'WorkerLocation.h',
     'WorkerNavigator.h',
     'WorkerPrivate.h',
@@ -17,17 +23,11 @@ EXPORTS.mozilla.dom += [
     'WorkerScope.h',
 ]
 
-EXPORTS.mozilla.dom.workers += [
+# Private stuff.
+EXPORTS.mozilla.dom.workerinternals += [
+    'JSSettings.h',
+    'Queue.h',
     'RuntimeService.h',
-    'WorkerDebuggerManager.h',
-    'Workers.h',
-]
-
-# Stuff needed for the bindings, not really public though.
-EXPORTS.mozilla.dom.workers.bindings += [
-    'SharedWorker.h',
-    'WorkerHolder.h',
-    'WorkerHolderToken.h',
 ]
 
 XPIDL_MODULE = 'dom_workers'
@@ -39,15 +39,19 @@ XPIDL_SOURCES += [
 
 UNIFIED_SOURCES += [
     'ChromeWorkerScope.cpp',
-    'FileReaderSync.cpp',
+    'MessageEventRunnable.cpp',
     'Principal.cpp',
     'RegisterBindings.cpp',
     'RuntimeService.cpp',
     'ScriptLoader.cpp',
     'SharedWorker.cpp',
+    'WorkerDebugger.cpp',
     'WorkerDebuggerManager.cpp',
+    'WorkerError.cpp',
+    'WorkerEventTarget.cpp',
     'WorkerHolder.cpp',
     'WorkerHolderToken.cpp',
+    'WorkerLoadInfo.cpp',
     'WorkerLocation.cpp',
     'WorkerNavigator.cpp',
     'WorkerPrivate.cpp',

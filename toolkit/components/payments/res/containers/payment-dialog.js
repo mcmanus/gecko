@@ -26,15 +26,32 @@ class PaymentDialog extends PaymentStateSubscriberMixin(HTMLElement) {
     this._payButton = contents.querySelector("#pay");
     this._payButton.addEventListener("click", this.pay);
 
+    this._viewAllButton = contents.querySelector("#view-all");
+    this._viewAllButton.addEventListener("click", this);
+
+    this._orderDetailsOverlay = contents.querySelector("#order-details-overlay");
+
     this.appendChild(contents);
 
     super.connectedCallback();
   }
 
   disconnectedCallback() {
-    this._cancelButtonEl.removeEventListener("click", this.cancelRequest);
-    this._cancelButtonEl.removeEventListener("click", this.pay);
+    this._cancelButton.removeEventListener("click", this.cancelRequest);
+    this._payButton.removeEventListener("click", this.pay);
+    this._viewAllButton.removeEventListener("click", this);
     super.disconnectedCallback();
+  }
+
+  handleEvent(event) {
+    if (event.type == "click") {
+      switch (event.target) {
+        case this._viewAllButton:
+          let orderDetailsShowing = !this.requestStore.getState().orderDetailsShowing;
+          this.requestStore.setState({ orderDetailsShowing });
+          break;
+      }
+    }
   }
 
   cancelRequest() {
@@ -63,6 +80,30 @@ class PaymentDialog extends PaymentStateSubscriberMixin(HTMLElement) {
    */
   setStateFromParent(state) {
     this.requestStore.setState(state);
+
+    // Check if any foreign-key constraints were invalidated.
+    let {
+      savedAddresses,
+      savedBasicCards,
+      selectedPaymentCard,
+      selectedShippingAddress,
+    } = this.requestStore.getState();
+
+    // Ensure `selectedShippingAddress` never refers to a deleted address and refers
+    // to an address if one exists.
+    if (!savedAddresses[selectedShippingAddress]) {
+      this.requestStore.setState({
+        selectedShippingAddress: Object.keys(savedAddresses)[0] || null,
+      });
+    }
+
+    // Ensure `selectedPaymentCard` never refers to a deleted payment card and refers
+    // to a payment card if one exists.
+    if (!savedBasicCards[selectedPaymentCard]) {
+      this.requestStore.setState({
+        selectedPaymentCard: Object.keys(savedBasicCards)[0] || null,
+      });
+    }
   }
 
   render(state) {
@@ -73,6 +114,8 @@ class PaymentDialog extends PaymentStateSubscriberMixin(HTMLElement) {
     let totalAmountEl = this.querySelector("#total > currency-amount");
     totalAmountEl.value = totalItem.amount.value;
     totalAmountEl.currency = totalItem.amount.currency;
+
+    this._orderDetailsOverlay.hidden = !state.orderDetailsShowing;
   }
 }
 

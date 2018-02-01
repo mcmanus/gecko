@@ -323,7 +323,7 @@ CSSEditUtils::IsCSSEditableProperty(nsINode* aNode,
 
   nsINode* node = aNode;
   // we need an element node here
-  if (node->NodeType() == nsIDOMNode::TEXT_NODE) {
+  if (node->NodeType() == nsINode::TEXT_NODE) {
     node = node->GetParentNode();
     NS_ENSURE_TRUE(node, false);
   }
@@ -1325,7 +1325,7 @@ CSSEditUtils::GetInlineStyles(Element* aElement,
   MOZ_ASSERT(cssDecl);
 
   cssDecl.forget(aCssDecl);
-  (*aCssDecl)->GetLength(aLength);
+  *aLength = (*aCssDecl)->Length();
   return NS_OK;
 }
 
@@ -1333,7 +1333,7 @@ Element*
 CSSEditUtils::GetElementContainerOrSelf(nsINode* aNode)
 {
   MOZ_ASSERT(aNode);
-  if (nsIDOMNode::DOCUMENT_NODE == aNode->NodeType()) {
+  if (nsINode::DOCUMENT_NODE == aNode->NodeType()) {
     return nullptr;
   }
 

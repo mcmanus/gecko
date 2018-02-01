@@ -34,7 +34,6 @@
 #include "nsTableColFrame.h"
 #include "nsTableRowFrame.h"
 #include "nsTableCellFrame.h"
-#include "nsIDOMHTMLDocument.h"
 #include "nsHTMLParts.h"
 #include "nsIPresShell.h"
 #include "nsUnicharUtils.h"
@@ -1749,15 +1748,7 @@ nsCSSFrameConstructor::CreateGeneratedContent(nsFrameConstructorState& aState,
       // Create an image content object and pass it the image request.
       // XXX Check if it's an image type we can handle...
 
-      RefPtr<NodeInfo> nodeInfo;
-      nodeInfo = mDocument->NodeInfoManager()->
-        GetNodeInfo(nsGkAtoms::mozgeneratedcontentimage, nullptr,
-                    kNameSpaceID_XHTML, nsIDOMNode::ELEMENT_NODE);
-
-      nsCOMPtr<nsIContent> content;
-      NS_NewGenConImageContent(getter_AddRefs(content), nodeInfo.forget(),
-                               image);
-      return content.forget();
+      return CreateGenConImageContent(mDocument, image);
     }
 
     case eStyleContentType_String:
@@ -1918,7 +1909,7 @@ nsCSSFrameConstructor::CreateGeneratedContentItem(nsFrameConstructorState& aStat
     nsGkAtoms::mozgeneratedcontentbefore : nsGkAtoms::mozgeneratedcontentafter;
   nodeInfo = mDocument->NodeInfoManager()->GetNodeInfo(elemName, nullptr,
                                                        kNameSpaceID_None,
-                                                       nsIDOMNode::ELEMENT_NODE);
+                                                       nsINode::ELEMENT_NODE);
   nsCOMPtr<Element> container;
   nsresult rv = NS_NewXMLElement(getter_AddRefs(container), nodeInfo.forget());
   if (NS_FAILED(rv))

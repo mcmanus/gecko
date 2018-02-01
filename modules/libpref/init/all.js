@@ -481,6 +481,12 @@ pref("media.peerconnection.video.vp9_preferred", false);
 pref("media.getusermedia.aec", 1);
 pref("media.getusermedia.browser.enabled", false);
 pref("media.getusermedia.channels", 0);
+#if defined(ANDROID)
+pref("media.getusermedia.camera.off_while_disabled.enabled", false);
+#else
+pref("media.getusermedia.camera.off_while_disabled.enabled", true);
+#endif
+pref("media.getusermedia.camera.off_while_disabled.delay_ms", 3000);
 // Desktop is typically VGA capture or more; and qm_select will not drop resolution
 // below 1/2 in each dimension (or so), so QVGA (320x200) is the lowest here usually.
 pref("media.peerconnection.video.min_bitrate", 0);
@@ -635,13 +641,11 @@ pref("media.decoder.skip-to-next-key-frame.enabled", true);
 // "verbose", "normal" and "" (log disabled).
 pref("media.cubeb.logging_level", "");
 
-#ifdef NIGHTLY_BUILD
 // Cubeb sandbox (remoting) control
-#ifdef XP_MACOSX
-pref("media.cubeb.sandbox", false);
-#else
+#ifdef XP_LINUX
 pref("media.cubeb.sandbox", true);
-#endif
+#else
+pref("media.cubeb.sandbox", false);
 #endif
 
 // Set to true to force demux/decode warnings to be treated as errors.
@@ -899,7 +903,7 @@ pref("gfx.webrender.program-binary", true);
 
 pref("gfx.webrender.highlight-painted-layers", false);
 pref("gfx.webrender.blob-images", 2);
-pref("gfx.webrender.hit-test", false);
+pref("gfx.webrender.hit-test", true);
 
 // WebRender debugging utilities.
 pref("gfx.webrender.debug.texture-cache", false);
@@ -2931,6 +2935,9 @@ pref("layout.css.dpi", -1);
 // of a CSS "px". This is only used for windows on the screen, not for printing.
 pref("layout.css.devPixelsPerPx", "-1.0");
 
+// Is support for CSS individual transform enabled?
+pref("layout.css.individual-transform.enabled", false);
+
 // Is support for CSS initial-letter property enabled?
 pref("layout.css.initial-letter.enabled", false);
 
@@ -3012,6 +3019,10 @@ pref("layout.css.frames-timing.enabled", true);
 #ifndef RELEASE_OR_BETA
 pref("layout.css.emulate-moz-box-with-flex", false);
 #endif
+
+// Is the paint-order property supported for HTML text? (It is always supported
+// for SVG, provided it is enabled at all; see "svg.paint-order.enabled".)
+pref("layout.css.paint-order.enabled", false);
 
 // Are sets of prefixed properties supported?
 pref("layout.css.prefixes.border-image", true);
@@ -5472,11 +5483,7 @@ pref("browser.safebrowsing.id", "Firefox");
 #endif
 
 // Download protection
-#ifdef MOZILLA_OFFICIAL
 pref("browser.safebrowsing.downloads.enabled", true);
-#else
-pref("browser.safebrowsing.downloads.enabled", false);
-#endif
 pref("browser.safebrowsing.downloads.remote.enabled", true);
 pref("browser.safebrowsing.downloads.remote.timeout_ms", 10000);
 pref("browser.safebrowsing.downloads.remote.url", "https://sb-ssl.google.com/safebrowsing/clientreport/download?key=%GOOGLE_API_KEY%");
@@ -5826,9 +5833,6 @@ pref("media.block-autoplay-until-in-foreground", true);
 // Is Stylo CSS support built and enabled?
 // Only define these prefs if Stylo support is actually built in.
 #ifdef MOZ_STYLO
-// XXX: We should flip this pref to true once the blocked_domains is non-empty.
-pref("layout.css.stylo-blocklist.enabled", false);
-pref("layout.css.stylo-blocklist.blocked_domains", "");
 #ifdef MOZ_STYLO_ENABLE
 pref("layout.css.servo.enabled", true);
 #else

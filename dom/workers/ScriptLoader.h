@@ -7,7 +7,7 @@
 #ifndef mozilla_dom_workers_scriptloader_h__
 #define mozilla_dom_workers_scriptloader_h__
 
-#include "Workers.h"
+#include "WorkerCommon.h"
 #include "nsIContentPolicy.h"
 #include "nsStringFwd.h"
 
@@ -21,16 +21,17 @@ namespace mozilla {
 
 class ErrorResult;
 
-} // namespace mozilla
+namespace dom {
 
-BEGIN_WORKERS_NAMESPACE
+struct WorkerLoadInfo;
+class WorkerPrivate;
 
 enum WorkerScriptType {
   WorkerScript,
   DebuggerScript
 };
 
-namespace scriptloader {
+namespace workerinternals {
 
 nsresult
 ChannelFromScriptURLMainThread(nsIPrincipal* aPrincipal,
@@ -60,10 +61,11 @@ void LoadMainScript(WorkerPrivate* aWorkerPrivate,
 void Load(WorkerPrivate* aWorkerPrivate,
           const nsTArray<nsString>& aScriptURLs,
           WorkerScriptType aWorkerScriptType,
-          mozilla::ErrorResult& aRv);
+          ErrorResult& aRv);
 
-} // namespace scriptloader
+} // namespace workerinternals
 
-END_WORKERS_NAMESPACE
+} // dom namespace
+} // namespace mozilla
 
 #endif /* mozilla_dom_workers_scriptloader_h__ */

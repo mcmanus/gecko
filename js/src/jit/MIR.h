@@ -5682,10 +5682,10 @@ class MToNumberInt32
     public ToInt32Policy::Data
 {
     bool canBeNegativeZero_;
-    MacroAssembler::IntConversionInputKind conversion_;
+    IntConversionInputKind conversion_;
 
-    explicit MToNumberInt32(MDefinition* def, MacroAssembler::IntConversionInputKind conversion
-                                              = MacroAssembler::IntConversion_Any)
+    explicit MToNumberInt32(MDefinition* def, IntConversionInputKind conversion
+                                              = IntConversionInputKind::Any)
       : MUnaryInstruction(classOpcode, def),
         canBeNegativeZero_(true),
         conversion_(conversion)
@@ -5715,7 +5715,7 @@ class MToNumberInt32
         canBeNegativeZero_ = negativeZero;
     }
 
-    MacroAssembler::IntConversionInputKind conversion() const {
+    IntConversionInputKind conversion() const {
         return conversion_;
     }
 
@@ -12923,18 +12923,18 @@ class MInstanceOf
 };
 
 // Implementation for instanceof operator with unknown rhs.
-class MCallInstanceOf
+class MInstanceOfCache
   : public MBinaryInstruction,
     public MixPolicy<BoxPolicy<0>, ObjectPolicy<1> >::Data
 {
-    MCallInstanceOf(MDefinition* obj, MDefinition* proto)
+    MInstanceOfCache(MDefinition* obj, MDefinition* proto)
       : MBinaryInstruction(classOpcode, obj, proto)
     {
         setResultType(MIRType::Boolean);
     }
 
   public:
-    INSTRUCTION_HEADER(CallInstanceOf)
+    INSTRUCTION_HEADER(InstanceOfCache)
     TRIVIAL_NEW_WRAPPERS
 };
 
