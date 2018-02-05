@@ -1050,7 +1050,7 @@ nsHttpConnection::TimeToLive()
 {
     LOG(("nsHttpConnection::TTL: %p %s idle %d timeout %d\n",
          this, mConnInfo->Origin(), IdleTime(), mIdleTimeout));
-    
+
     if (IdleTime() >= mIdleTimeout) {
         return 0;
     }

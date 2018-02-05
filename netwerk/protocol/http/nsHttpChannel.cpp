@@ -3741,7 +3741,7 @@ nsHttpChannel::OpenCacheEntryInternal(bool isHttps,
                               MOZ_LIKELY(allowApplicationCache);
         // Try to race only if we use disk cache storage and we don't lookup
         // app cache first
-        maybeRCWN = (!lookupAppCache) && mRequestHead.IsSafeMethod();
+        maybeRCWN = !lookupAppCache;
         rv = cacheStorageService->DiskCacheStorage(
             info, lookupAppCache, getter_AddRefs(cacheStorage));
     }

@@ -108,10 +108,9 @@ nsDNSRecord::GetCanonicalName(nsACString &result)
 NS_IMETHODIMP
 nsDNSRecord::IsTRR(bool *retval)
 {
+    MutexAutoLock lock(mHostRecord->addr_info_lock);
     if (mHostRecord->addr_info) {
-        mHostRecord->addr_info_lock.Lock();
         *retval =  mHostRecord->addr_info->isTRR();
-        mHostRecord->addr_info_lock.Unlock();
     }
     else {
         *retval = false;
@@ -655,7 +654,7 @@ nsDNSService::Init()
     RegisterWeakMemoryReporter(this);
 
     mTrrService = new TRRService();
-    if (mTrrService && NS_FAILED(mTrrService->Init())) {
+    if (NS_FAILED(mTrrService->Init())) {
         mTrrService = nullptr;
     }
 

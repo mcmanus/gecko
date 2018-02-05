@@ -35,7 +35,6 @@ EXPORTS.mozilla.net += [
 SOURCES += [
     'nsEffectiveTLDService.cpp', # Excluded from UNIFIED_SOURCES due to special build flags.
     'nsHostResolver.cpp', # Redefines LOG
-    'TRR.cpp',
 ]
 
 UNIFIED_SOURCES += [
@@ -48,6 +47,7 @@ UNIFIED_SOURCES += [
     'nsDNSService2.cpp',
     'nsIDNService.cpp',
     'punycode.c',
+    'TRR.cpp',
     'TRRService.cpp',
 ]
 

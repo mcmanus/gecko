@@ -3645,7 +3645,7 @@
     "high": 60000,
     "releaseChannelCollection": "opt-out",
     "alert_emails": ["necko@mozilla.com", "dstenberg@mozilla.com"],
-    "bug_numbers": [9999999],
+    "bug_numbers": [1434852],
     "n_buckets": 50,
     "description": "Time for a completed TRR resolution (msec)"
   },
@@ -3656,7 +3656,7 @@
     "high": 60000,
     "releaseChannelCollection": "opt-out",
     "alert_emails": ["necko@mozilla.com", "dstenberg@mozilla.com"],
-    "bug_numbers": [9999999],
+    "bug_numbers": [1434852],
     "n_buckets": 50,
     "description": "Time for a completed native name resolution (msec)"
   },
@@ -3666,7 +3666,7 @@
     "expires_in_version": "never",
     "kind": "categorical",
     "labels": ["TRRFasterBy50", "TRRFaster", "NativeFaster", "NativeFasterBy50"],
-    "bug_numbers": [9999999],
+    "bug_numbers": [1434852],
     "description": "DNS: TRR parallel resolve racing results"
   },
   "DNS_TRR_BLACKLISTED": {
@@ -3674,7 +3674,7 @@
     "expires_in_version": "never",
     "kind": "boolean",
     "description": "DNS check for TRR was blocked by blacklist",
-    "bug_numbers": [9999999],
+    "bug_numbers": [1434852],
     "alert_emails": ["necko@mozilla.com", "dstenberg@mozilla.com"]
   },
   "DNS_LOOKUP_ALGORITHM": {
@@ -3683,7 +3683,7 @@
     "expires_in_version": "never",
     "kind": "categorical",
     "labels": ["nativeOnly", "trrRace", "trrFirst", "trrOnly", "trrShadow"],
-    "bug_numbers": [9999999],
+    "bug_numbers": [1434852],
     "description": "DNS: lookup algorithm"
   },
   "DNS_LOOKUP_DISPOSITION": {
@@ -3693,7 +3693,7 @@
     "kind": "categorical",
     "labels": ["trrOK", "trrFail", "trrAOK", "trrAFail",
 	       "trrAAAAOK", "trrAAAAFail", "osOK", "osFail"],
-    "bug_numbers": [9999999],
+    "bug_numbers": [1434852],
     "description": "DNS: lookup algorithm"
   },
   "DNS_RENEWAL_TIME": {

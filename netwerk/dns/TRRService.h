@@ -9,8 +9,8 @@
 #include "mozilla/Atomics.h"
 #include "mozilla/DataStorage.h"
 #include "nsHostResolver.h"
-#include "nsWeakReference.h"
 #include "nsIObserver.h"
+#include "nsWeakReference.h"
 
 class nsIPrefBranch;
 
@@ -43,7 +43,7 @@ public:
   bool IsTRRBlacklisted(const nsACString &host, bool privateBrowsing, bool fullhost);
 
   bool MaybeBootstrap(const nsACString &possible, nsACString &result);
-  
+
 private:
   virtual  ~TRRService();
   nsresult ReadPrefs(const char *name);
@@ -52,6 +52,7 @@ private:
 
   bool                      mInitialized;
   Atomic<uint32_t, Relaxed> mMode;
+  Atomic<uint32_t, Relaxed> mTRRBlacklistExpireTime;
 
   Mutex mLock; // protects mPrivate* string
   nsCString mPrivateURI; // main thread only
@@ -65,7 +66,7 @@ private:
   Atomic<bool, Relaxed> mUseGET;
 
   RefPtr<DataStorage> mStorage;
-  bool                mClearStorage;
+  Atomic<bool, Relaxed> mClearStorage;
 
   enum confirmationState {
     CONFIRM_INIT = 0,

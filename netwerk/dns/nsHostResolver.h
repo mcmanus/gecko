@@ -272,11 +272,11 @@ public:
                                    uint16_t flags, uint16_t af, bool pb,
                                    const nsCString &netInterface,
                                    const nsCString &originSuffix,
-                                   nsHostRecord **result) 
+                                   nsHostRecord **result)
     {
         return NS_ERROR_FAILURE;
     }
-    virtual nsresult TrrLookup_unlocked(nsHostRecord *, mozilla::net::TRR *pushedTRR = nullptr) 
+    virtual nsresult TrrLookup_unlocked(nsHostRecord *, mozilla::net::TRR *pushedTRR = nullptr)
     {
         return NS_ERROR_FAILURE;
     }

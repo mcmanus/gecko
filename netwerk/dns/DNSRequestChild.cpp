@@ -84,9 +84,8 @@ ChildDNSRecord::GetCanonicalName(nsACString &result)
 NS_IMETHODIMP
 ChildDNSRecord::IsTRR(bool *retval)
 {
-    fprintf(stderr, "TODO: ChildDNSRecord::IsTRR doesn't know!\n");
-    *retval = false;
-    return NS_OK;
+  *retval = false;
+  return NS_ERROR_NOT_AVAILABLE;
 }
 
 NS_IMETHODIMP

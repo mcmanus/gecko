@@ -14,7 +14,6 @@
 
 #include <stdlib.h>
 #include <ctime>
-#include "prtime.h"
 #include "nsHostResolver.h"
 #include "nsError.h"
 #include "nsISupportsBase.h"
@@ -827,19 +826,17 @@ nsHostResolver::ResolveHost(const char             *host,
                                           METHOD_NEGATIVE_HIT);
                     status = NS_ERROR_UNKNOWN_HOST;
                 }
-            }
-            // if the host name is an IP address literal and has been parsed,
-            // go ahead and use it.
-            else if (rec->addr) {
+            } else if (rec->addr) {
+                // if the host name is an IP address literal and has been parsed,
+                // go ahead and use it.
                 LOG(("  Using cached address for IP Literal [%s].\n", host));
                 Telemetry::Accumulate(Telemetry::DNS_LOOKUP_METHOD2,
                                       METHOD_LITERAL);
                 result = rec;
-            }
-            // try parsing the host name as an IP address literal to short
-            // circuit full host resolution.  (this is necessary on some
-            // platforms like Win9x.  see bug 219376 for more details.)
-            else if (PR_StringToNetAddr(host, &tempAddr) == PR_SUCCESS) {
+            } else if (PR_StringToNetAddr(host, &tempAddr) == PR_SUCCESS) {
+                // try parsing the host name as an IP address literal to short
+                // circuit full host resolution.  (this is necessary on some
+                // platforms like Win9x.  see bug 219376 for more details.)
                 LOG(("  Host is IP Literal [%s].\n", host));
                 // ok, just copy the result into the host record, and be done
                 // with it! ;-)
@@ -849,10 +846,9 @@ nsHostResolver::ResolveHost(const char             *host,
                 Telemetry::Accumulate(Telemetry::DNS_LOOKUP_METHOD2,
                                       METHOD_LITERAL);
                 result = rec;
-            }
-            else if (mPendingCount >= MAX_NON_PRIORITY_REQUESTS &&
-                     !IsHighPriority(flags) &&
-                     !rec->mResolving) {
+            } else if (mPendingCount >= MAX_NON_PRIORITY_REQUESTS &&
+                       !IsHighPriority(flags) &&
+                       !rec->mResolving) {
                 LOG(("  Lookup queue full: dropping %s priority request for "
                      "host [%s%s%s].\n",
                      IsMediumPriority(flags) ? "medium" : "low",
@@ -865,10 +861,10 @@ nsHostResolver::ResolveHost(const char             *host,
                 LOG(("  Offline request for host [%s%s%s]; ignoring.\n",
                      LOG_HOST(host, netInterface)));
                 rv = NS_ERROR_OFFLINE;
-            }
-            // If this is an IPV4 or IPV6 specific request, check if there is
-            // an AF_UNSPEC entry we can use. Otherwise, hit the resolver...
-            else if (!rec->mResolving) {
+            } else if (!rec->mResolving) {
+                // If this is an IPV4 or IPV6 specific request, check if there is
+                // an AF_UNSPEC entry we can use. Otherwise, hit the resolver...
+
                 if (!(flags & RES_BYPASS_CACHE) &&
                     ((af == PR_AF_INET) || (af == PR_AF_INET6))) {
                     // First, search for an entry with AF_UNSPEC
@@ -928,12 +924,11 @@ nsHostResolver::ResolveHost(const char             *host,
                             Telemetry::Accumulate(Telemetry::DNS_LOOKUP_METHOD2,
                                                   METHOD_HIT);
                             ConditionallyRefreshRecord(rec, host);
-                        }
-                        // For AF_INET6, a new lookup means another AF_UNSPEC
-                        // lookup. We have already iterated through the
-                        // AF_UNSPEC addresses, so we mark this record as
-                        // negative.
-                        else if (af == PR_AF_INET6) {
+                        } else if (af == PR_AF_INET6) {
+                            // For AF_INET6, a new lookup means another AF_UNSPEC
+                            // lookup. We have already iterated through the
+                            // AF_UNSPEC addresses, so we mark this record as
+                            // negative.
                             LOG(("  No AF_INET6 in AF_UNSPEC entry: "
                                  "host [%s%s%s] unknown host.",
                                  LOG_HOST(host, netInterface)));
@@ -959,8 +954,7 @@ nsHostResolver::ResolveHost(const char             *host,
                                           METHOD_NETWORK_FIRST);
                     if (NS_FAILED(rv) && callback->isInList()) {
                         callback->remove();
-                    }
-                    else {
+                    } else {
                         LOG(("  DNS lookup for host [%s%s%s] blocking "
                              "pending 'getaddrinfo' query: callback [%p]",
                              LOG_HOST(host, netInterface), callback.get()));
@@ -1156,6 +1150,7 @@ nsHostResolver::TrrLookup(nsHostRecord *rec, TRR *pushedTRR)
                 rec->mTrrAAAA = trr;
                 rec->mTrrAAAAUsed = nsHostRecord::STARTED;
             } else {
+                LOG(("TrrLookup called with bad type set: %d\n", rectype));
                 MOZ_ASSERT(0);
             }
             madeQuery = true;

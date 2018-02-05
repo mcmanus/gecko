@@ -36,7 +36,6 @@ public:
   virtual ~DOHresp() { }
   nsresult Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
                bool aLocalAllowed);
-  uint16_t mNumAddresses;
   LinkedList<DOHaddr> mAddresses;
 };
 
@@ -55,6 +54,8 @@ public:
   NS_DECL_NSISTREAMLISTENER
 
   static const unsigned int kMaxSize = 3200;
+
+  // when firing off a normal A or AAAA query
   explicit TRR(AHostResolver *aResolver,
                nsHostRecord *aRec,
                enum TrrType aType)
@@ -63,17 +64,19 @@ public:
     , mHostResolver(aResolver)
     , mTRRService(gTRRService)
     , mType(aType)
-    , mUsed(0)
+    , mBodySize(0)
     , mFailed(false)
   {
     mHost = aRec->host;
     mPB = aRec->pb;
   }
 
+  // used on push
   explicit TRR(nsIHttpChannel *pushedChannel,
                AHostResolver *aResolver,
                bool aPB, nsHostRecord *pushedRec);
 
+  // to verify a domain
   explicit TRR(AHostResolver *aResolver,
                nsCString aHost,
                enum TrrType aType,
@@ -83,7 +86,7 @@ public:
     , mHostResolver(aResolver)
     , mTRRService(gTRRService)
     , mType(aType)
-    , mUsed(0)
+    , mBodySize(0)
     , mFailed(false)
     , mPB(aPB)
   { }
@@ -111,7 +114,7 @@ private:
   enum TrrType mType;
   TimeStamp mStartTime;
   unsigned char mResponse[kMaxSize];
-  unsigned int mUsed;
+  unsigned int mBodySize;
   bool mFailed;
   bool mPB;
   DOHresp mDNS;

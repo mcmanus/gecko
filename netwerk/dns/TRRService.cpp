@@ -16,8 +16,6 @@ static const char kOpenCaptivePortalLoginEvent[] = "captive-portal-login";
 static const char kClearPrivateData[] = "clear-private-data";
 static const char kPurge[] = "browser:purge-session-history";
 
-const static uint32_t kTRRBlacklistExpireTime = 3600*24*3; // three days
-
 #define TRR_PREF_PREFIX           "network.trr."
 #define TRR_PREF(x)               TRR_PREF_PREFIX x
 
@@ -35,6 +33,7 @@ NS_IMPL_ISUPPORTS(TRRService, nsIObserver, nsISupportsWeakReference)
 TRRService::TRRService()
   : mInitialized(false)
   , mMode(0)
+  , mTRRBlacklistExpireTime(72 * 3600)
   , mLock("trrservice")
   , mConfirmationNS(NS_LITERAL_CSTRING("example.com"))
   , mWaitForCaptive(true)
@@ -105,14 +104,14 @@ TRRService::ReadPrefs(const char *name)
 {
   MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
   if (!name || !strcmp(name, TRR_PREF("mode"))) {
-    // 0 - off, 1 - parallel, 2 TRR first, 3 TRR only
+    // 0 - off, 1 - parallel, 2 - TRR first, 3 - TRR only, 4 - shadow
     uint32_t tmp;
     if (NS_SUCCEEDED(Preferences::GetUint(TRR_PREF("mode"), &tmp))) {
       mMode = tmp;
     }
   }
   if (!name || !strcmp(name, TRR_PREF("uri"))) {
-    // Base URI, appends "?ct&body=..."
+    // Base URI, appends "?ct&dns=..."
     MutexAutoLock lock(mLock);
     nsCString old(mPrivateURI);
     Preferences::GetCString(TRR_PREF("uri"), mPrivateURI);
@@ -165,6 +164,18 @@ TRRService::ReadPrefs(const char *name)
     bool tmp;
     if (NS_SUCCEEDED(Preferences::GetBool(TRR_PREF("useGET"), &tmp))) {
       mUseGET = tmp;
+    }
+  }
+  if (!name || !strcmp(name, TRR_PREF("blacklist-duration"))) {
+    // prefs is given in number of hours, convert to seconds
+    uint32_t hours;
+    if (NS_SUCCEEDED(Preferences::GetUint(TRR_PREF("blacklist-duration"), &hours))) {
+      if (hours > 10000) {
+        // capped to avoid integer overflow and mistakes; a full year is 8760
+        // hours
+        hours = 10000;
+      }
+      mTRRBlacklistExpireTime = hours * 360;
     }
   }
 
@@ -270,7 +281,7 @@ TRRService::MaybeConfirm()
       mConfirmationState != CONFIRM_TRYING) {
     return;
   }
-  nsCString host;
+  nsAutoCString host;
   {
     MutexAutoLock lock(mLock);
     host = mConfirmationNS;
@@ -363,7 +374,7 @@ TRRService::IsTRRBlacklisted(const nsACString &aHost, bool privateBrowsing,
 
   if (!val.IsEmpty()) {
     nsresult code;
-    int32_t until = val.ToInteger(&code) + kTRRBlacklistExpireTime;
+    int32_t until = val.ToInteger(&code) + mTRRBlacklistExpireTime;
     int32_t expire = NowInSeconds();
     if (NS_SUCCEEDED(code) && (until > expire)) {
       LOG(("Host [%s] is TRR blacklisted\n", nsCString(aHost).get()));
@@ -470,7 +481,6 @@ TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRS
   // when called without a host record, this is a domain name check response.
   if (NS_SUCCEEDED(status)) {
     LOG(("TRR verified %s to be fine!\n", newRRSet->mHostName));
-    // whitelist?
   } else {
     LOG(("TRR says %s doesn't resove as NS!\n", newRRSet->mHostName));
     TRRBlacklist(nsCString(newRRSet->mHostName), pb, false);

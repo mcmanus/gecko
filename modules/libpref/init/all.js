@@ -5397,7 +5397,7 @@ pref("network.captive-portal-service.enabled", false);
 // DNS Trusted Recursive Resolver
 // 0 - off, 1 - race, 2 TRR first, 3 TRR only, 4 shadow
 pref("network.trr.mode", 0);
-// DEBUG-only default URI
+// DNS-over-HTTP service to use, must be HTTPS://
 pref("network.trr.uri", "");
 // credentials to pass to DOH end-point
 pref("network.trr.credentials", "");
@@ -5413,6 +5413,8 @@ pref("network.trr.confirmationNS", "example.com");
 // hardcode the resolution of the hostname in network.trr.uri instead of
 // relying on the system resolver to do it for you
 pref("network.trr.bootstrapAddress", "");
+// TRR blacklist entry expire time (in hours)
+pref("network.trr.blacklist-duration", 72)
 
 pref("captivedetect.canonicalURL", "http://detectportal.firefox.com/success.txt");
 pref("captivedetect.canonicalContent", "success\n");
