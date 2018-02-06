@@ -122,6 +122,10 @@ function testsDone()
   resetPrefs();
 }
 
+function test_setup1()
+{
+}
+
 function handler1(metadata, response)
 {
   response.seizePower();
@@ -136,7 +140,12 @@ function handler1(metadata, response)
 function completeTest1(request, data, ctx)
 {
   Assert.equal(request.status, Components.results.NS_OK);
-  run_test(2);
+  test(2);
+}
+
+function test_setup2()
+{
+  prefs.setIntPref("network.trr.mode", 3); // TRR-only
 }
 
 function handler2(metadata, response)
@@ -160,6 +169,7 @@ function completeTest2(request, data, ctx)
 function test(num)
 {
   dump("execute test " + num + "\n");
+  eval("test_setup" + num + "();");
   var testPath = testPathBase + num;
   httpserver.registerPathHandler(testPath, "handler" + num);
   var channel = setupChannel(testPath);
