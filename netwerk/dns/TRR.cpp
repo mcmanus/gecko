@@ -690,6 +690,7 @@ TRR::DohDecode(enum TrrType aType)
 
   if (mType != TRRTYPE_NS && !mDNS.mAddresses.getFirst()) {
     // no entries were stored!
+    LOG(("TRR: No entries were stored!\n"));
     return NS_ERROR_FAILURE;
   }
   return NS_OK;
@@ -779,10 +780,17 @@ TRR::OnStopRequest(nsIRequest *aRequest,
         // pass back the response data
         ReturnData();
         return NS_OK;
+      } else {
+        LOG(("TRR:OnStopRequest:%d DohDecode %x\n", __LINE__, (int)rv));
       }
+    } else {
+      LOG(("TRR:OnStopRequest:%d %p rv %x httpStatus %d\n", __LINE__,
+           this, (int)rv, httpStatus));
     }
   }
 
+  LOG(("TRR:OnStopRequest %p status %x mFailed %d\n",
+       this, (int)aStatusCode, mFailed));
   FailData();
   return NS_OK;
 }
@@ -819,7 +827,7 @@ nsresult
 DOHresp::Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
              bool aLocalAllowed)
 {
-  nsAutoPtr<DOHaddr> doh(new DOHaddr);
+  DOHaddr *doh = new DOHaddr;
   NetAddr *addr = &doh->mNet;
   if (4 == len) {
     // IPv4
@@ -836,12 +844,12 @@ DOHresp::Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
       addr->inet6.ip.u8[i] = dns[index];
     }
   } else {
-    doh = nullptr;
+    delete doh;
     return NS_ERROR_UNEXPECTED;
   }
 
   if (IsIPAddrLocal(addr) && !aLocalAllowed) {
-    doh = nullptr;
+    delete doh;
     return NS_ERROR_FAILURE;
   }
   doh->mTtl = TTL;
@@ -852,7 +860,6 @@ DOHresp::Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
     NetAddrToString(addr, buf, sizeof(buf));
     LOG(("DOHresp:Add %s\n", buf));
   }
-  doh = nullptr;
   return NS_OK;
 }
 
