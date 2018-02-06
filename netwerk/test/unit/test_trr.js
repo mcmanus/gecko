@@ -21,7 +21,7 @@ var testPathBase = "/trr";
 
 function run_test() {
     dump ("start!\n");
-    
+
     var env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment);
     var h2Port = env.get("MOZHTTP2_PORT");
     Assert.notEqual(h2Port, null);
@@ -42,7 +42,7 @@ function run_test() {
     portalpref = prefs.getBoolPref("network.trr.wait-for-portal");
     getpref = prefs.getBoolPref("network.trr.useGET");
     confirmationpref = prefs.getCharPref("network.trr.confirmationNS");
-    
+
     prefs.setBoolPref("network.http.spdy.enabled", true);
     prefs.setBoolPref("network.http.spdy.enabled.http2", true);
     // make 'foo.example.com' equal localhost so that we can reach that DNS
@@ -71,7 +71,7 @@ function run_test() {
     origin = "https://localhost:" + httpserver.identity.primaryPort;
     dump ("origin - " + origin + "\n");
     do_test_pending();
-    test1();
+    test(1);
 }
 
 function resetTRRPrefs() {
@@ -118,16 +118,10 @@ function setupChannel(url)
 function testsDone()
 {
   dump("testDone\n");
+  httpserver.stop(do_test_finished);
   resetPrefs();
 }
 
-function completeTest1(request, data, ctx)
-{
-  Assert.equal(request.status, Components.results.NS_OK);
-
-  httpserver.stop(do_test_finished);
-  testsDone();    
-}
 function handler1(metadata, response)
 {
   response.seizePower();
@@ -139,11 +133,34 @@ function handler1(metadata, response)
   response.finish();
 }
 
-function test1()
+function completeTest1(request, data, ctx)
 {
-  num = 1;  
-  dump("execute doTest1 - basic TRR\n");
-  testPath = testPathBase + num;
+  Assert.equal(request.status, Components.results.NS_OK);
+  run_test(2);
+}
+
+function handler2(metadata, response)
+{
+  response.seizePower();
+  response.write("HTTP/1.1 200 OK\r\n");
+  response.write("Content-Type: text/plain\r\n");
+  response.write("Content-Length: 9\r\n");
+  response.write("\r\n");
+  response.write("blablabla");
+  response.finish();
+}
+
+function completeTest2(request, data, ctx)
+{
+  Assert.equal(request.status, Components.results.NS_OK);
+  testsDone();
+}
+
+
+function test(num)
+{
+  dump("execute test " + num + "\n");
+  var testPath = testPathBase + num;
   httpserver.registerPathHandler(testPath, "handler" + num);
   var channel = setupChannel(testPath);
   flags = 0;

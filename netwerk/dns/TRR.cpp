@@ -819,7 +819,7 @@ nsresult
 DOHresp::Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
              bool aLocalAllowed)
 {
-  nsAutoPtr<DOHaddr> doh;
+  nsAutoPtr<DOHaddr> doh(new DOHaddr);
   NetAddr *addr = &doh->mNet;
   if (4 == len) {
     // IPv4
@@ -846,13 +846,13 @@ DOHresp::Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
   }
   doh->mTtl = TTL;
   mAddresses.insertBack(doh);
-  doh = nullptr;
 
   if (LOG_ENABLED()) {
     char buf[128];
     NetAddrToString(addr, buf, sizeof(buf));
     LOG(("DOHresp:Add %s\n", buf));
   }
+  doh = nullptr;
   return NS_OK;
 }
 
