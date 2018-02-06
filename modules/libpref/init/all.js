@@ -5414,7 +5414,7 @@ pref("network.trr.confirmationNS", "example.com");
 // relying on the system resolver to do it for you
 pref("network.trr.bootstrapAddress", "");
 // TRR blacklist entry expire time (in hours)
-pref("network.trr.blacklist-duration", 72)
+pref("network.trr.blacklist-duration", 72);
 
 pref("captivedetect.canonicalURL", "http://detectportal.firefox.com/success.txt");
 pref("captivedetect.canonicalContent", "success\n");
