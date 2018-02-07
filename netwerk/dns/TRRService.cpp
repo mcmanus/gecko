@@ -167,15 +167,10 @@ TRRService::ReadPrefs(const char *name)
     }
   }
   if (!name || !strcmp(name, TRR_PREF("blacklist-duration"))) {
-    // prefs is given in number of hours, convert to seconds
-    uint32_t hours;
-    if (NS_SUCCEEDED(Preferences::GetUint(TRR_PREF("blacklist-duration"), &hours))) {
-      if (hours > 10000) {
-        // capped to avoid integer overflow and mistakes; a full year is 8760
-        // hours
-        hours = 10000;
-      }
-      mTRRBlacklistExpireTime = hours * 360;
+    // prefs is given in number of seconds
+    uint32_t secs;
+    if (NS_SUCCEEDED(Preferences::GetUint(TRR_PREF("blacklist-duration"), &secs))) {
+      mTRRBlacklistExpireTime = secs;
     }
   }
 

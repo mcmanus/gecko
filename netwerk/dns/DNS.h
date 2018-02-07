@@ -135,14 +135,14 @@ class AddrInfo {
 public:
   // Creates an AddrInfo object. It calls the AddrInfo(const char*, const char*)
   // to initialize the host and the cname.
-  AddrInfo(const char *host, const PRAddrInfo *prAddrInfo, bool disableIPv4,
-           bool filterNameCollision, const char *cname);
+  explicit AddrInfo(const char *host, const PRAddrInfo *prAddrInfo, bool disableIPv4,
+                    bool filterNameCollision, const char *cname);
 
   // Creates a basic AddrInfo object (initialize only the host and the cname).
-  AddrInfo(const char *host, const char *cname);
+  explicit AddrInfo(const char *host, const char *cname);
 
   // Creates a basic AddrInfo object (initialize only the host and TRR status).
-  AddrInfo(const char *host, unsigned int TRRType);
+  explicit AddrInfo(const char *host, unsigned int TRRType);
   ~AddrInfo();
 
   explicit AddrInfo(const AddrInfo *src); // copy

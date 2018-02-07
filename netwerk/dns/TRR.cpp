@@ -82,7 +82,7 @@ TRR::DohEncode(nsCString &aBody)
     }
     if (labelLength > 63) {
       // too long label!
-      return NS_ERROR_FAILURE;
+      return NS_ERROR_ILLEGAL_VALUE;
     }
     aBody += static_cast<unsigned char>(labelLength);
     nsDependentCSubstring label = Substring(mHost, offset, labelLength);
@@ -538,7 +538,7 @@ TRR::DohDecode(enum TrrType aType)
       rv = mDNS.Add(TTL, mResponse, index, RDLENGTH,
                     mTRRService->AllowRFC1918());
       if (NS_FAILED(rv)) {
-        // got local IP addresses or unknown IP family
+        LOG(("TRR:DohDecode failed: local IP addresses or unknown IP family\n"));
         return rv;
       }
       break;

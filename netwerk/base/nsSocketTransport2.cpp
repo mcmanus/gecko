@@ -1806,7 +1806,7 @@ nsSocketTransport::RecoverFromError()
                 tryAgain = true;
             } else if (!(mConnectionFlags & DISABLE_TRR)) {
                 bool trrEnabled;
-                mDNSRecord->IsTRR( &trrEnabled);
+                mDNSRecord->IsTRR(&trrEnabled);
                 if (trrEnabled) {
                     // Drop state to closed.  This will trigger a new round of
                     // DNS resolving.
