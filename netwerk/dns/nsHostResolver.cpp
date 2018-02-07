@@ -253,7 +253,7 @@ nsHostRecord::CopyExpirationTimesAndFlagsFrom(const nsHostRecord *aFromHostRecor
 }
 
 void
-nsHostRecord::Complete()
+nsHostRecord::ResolveComplete()
 {
     if (mNativeUsed) {
         if (mNativeSuccess) {
@@ -1237,6 +1237,7 @@ nsHostResolver::Mode()
     return MODE_NATIVEONLY;
 }
 
+// Kick-off a name resolve operation, using native resolver and/or TRR
 nsresult
 nsHostResolver::NameLookup(nsHostRecord *rec)
 {
@@ -1652,7 +1653,7 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
     }
 
     if (!rec->mResolving && !mShutdown) {
-        rec->Complete();
+        rec->ResolveComplete();
 
         // add to mEvictionQ
         MOZ_ASSERT(rec->next == rec && rec->prev == rec); // not on a queue

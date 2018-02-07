@@ -388,10 +388,10 @@ TRRService::IsTRRBlacklisted(const nsACString &aHost, bool privateBrowsing,
   return false;
 }
 
-class proxyBlacklist : public Runnable
+class ProxyBlacklist : public Runnable
 {
 public:
-  proxyBlacklist(TRRService *service, const nsACString &aHost, bool pb, bool aParentsToo)
+  ProxyBlacklist(TRRService *service, const nsACString &aHost, bool pb, bool aParentsToo)
     : mozilla::Runnable("proxyBlackList")
     , mService(service), mHost(aHost), mPB(pb), mParentsToo(aParentsToo)
   { }
@@ -418,7 +418,7 @@ TRRService::TRRBlacklist(const nsACString &aHost, bool privateBrowsing, bool aPa
   }
 
   if (!NS_IsMainThread()) {
-    NS_DispatchToMainThread(new proxyBlacklist(this, aHost,
+    NS_DispatchToMainThread(new ProxyBlacklist(this, aHost,
                                                privateBrowsing, aParentsToo));
     return;
   }

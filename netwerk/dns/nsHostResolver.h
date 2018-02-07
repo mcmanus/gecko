@@ -156,7 +156,7 @@ public:
     bool RemoveOrRefresh(); // Mark records currently being resolved as needed
                             // to resolve again.
     bool IsTRR() { return mTRRUsed; }
-    void Complete();
+    void ResolveComplete();
     void Cancel();
 
     mozilla::net::ResolverMode mResolverMode;
@@ -167,18 +167,18 @@ private:
     explicit nsHostRecord(const nsHostKey& key);
     mozilla::LinkedList<RefPtr<nsResolveHostCallback>> mCallbacks;
 
-    int     mResolving;  /* counter of outstanding resolving calls */
-    bool    mNative;    /* true if this record is being resolved "natively",
-                         * which means that it is either on the pending queue
-                         * or owned by one of the worker threads. */
-    int     mTRRSuccess; /* number of successful TRR responses */
-    bool    mTRRUsed;   /* TRR was used on this record */
+    int     mResolving;  // counter of outstanding resolving calls
+    bool    mNative;     // true if this record is being resolved "natively",
+                         // which means that it is either on the pending queue
+                         // or owned by one of the worker threads. */
+    int     mTRRSuccess; // number of successful TRR responses
+    bool    mTRRUsed;    // TRR was used on this record
     bool    mNativeUsed;
-    int     mNativeSuccess; /* number of native lookup responses */
-    nsAutoPtr<mozilla::net::AddrInfo> mFirstTRR; /* partial TRR storage */
-    bool    onQueue;  /* true if pending and on the queue (not yet given to getaddrinfo())*/
-    bool    usingAnyThread; /* true if off queue and contributing to mActiveAnyThreadCount */
-    bool    mDoomed; /* explicitly expired */
+    int     mNativeSuccess; // number of native lookup responses
+    nsAutoPtr<mozilla::net::AddrInfo> mFirstTRR; // partial TRR storage
+    bool    onQueue; // true if pending and on the queue (not yet given to getaddrinfo())
+    bool    usingAnyThread; // true if off queue and contributing to mActiveAnyThreadCount
+    bool    mDoomed; // explicitly expired
     bool    mDidCallbacks;
     bool    mGetTtl;
 
@@ -395,6 +395,8 @@ private:
     mozilla::net::ResolverMode Mode();
     nsresult NativeLookup(nsHostRecord *);
     nsresult TrrLookup(nsHostRecord *, mozilla::net::TRR *pushedTRR = nullptr);
+
+    // Kick-off a name resolve operation, using native resolver and/or TRR
     nsresult NameLookup(nsHostRecord *);
     bool     GetHostToLookup(nsHostRecord **m);
 
