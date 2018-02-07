@@ -302,15 +302,11 @@ TRR::DohDecodeQuery(const nsCString &query, nsCString &host, enum TrrType &type)
   return NS_OK;
 }
 
-TRR::TRR(nsIHttpChannel *pushed, AHostResolver *aResolver, bool aPB,
-         nsHostRecord *pushedRec)
-  : mozilla::Runnable("TRR")
-  , mHostResolver(aResolver)
-  , mTRRService(gTRRService)
-  , mPB(aPB)
+nsresult
+TRR::ReceivePush(nsIHttpChannel *pushed, nsHostRecord *pushedRec)
 {
   if (!mHostResolver) {
-    return;
+    return NS_ERROR_UNEXPECTED;
   }
 
   nsCOMPtr<nsIURI> uri;
@@ -323,29 +319,35 @@ TRR::TRR(nsIHttpChannel *pushed, AHostResolver *aResolver, bool aPB,
   PRNetAddr tempAddr;
   if (NS_FAILED(DohDecodeQuery(query, mHost, mType)) ||
       (PR_StringToNetAddr(mHost.get(), &tempAddr) == PR_SUCCESS)) { // literal
-    return;
+    return NS_ERROR_UNEXPECTED;
   }
 
   RefPtr<nsHostRecord> hostRecord;
-  if (NS_FAILED(mHostResolver->GetHostRecord(mHost.get(),
-                                             pushedRec->flags, pushedRec->af,
-                                             pushedRec->pb, pushedRec->netInterface,
-                                             pushedRec->originSuffix,
-                                             getter_AddRefs(hostRecord)))) {
-    return;
+  nsresult rv;
+  rv = mHostResolver->GetHostRecord(mHost.get(),
+                                    pushedRec->flags, pushedRec->af,
+                                    pushedRec->pb, pushedRec->netInterface,
+                                    pushedRec->originSuffix,
+                                    getter_AddRefs(hostRecord));
+  if (NS_FAILED(rv)) {
+    return rv;
   }
 
-  if (NS_FAILED(mHostResolver->TrrLookup_unlocked(hostRecord, this))) {
-    return;
+  rv = mHostResolver->TrrLookup_unlocked(hostRecord, this);
+  if (NS_FAILED(rv)) {
+    return rv;
   }
 
-  if (NS_FAILED(pushed->AsyncOpen2(this))) {
-    return;
+  rv = pushed->AsyncOpen2(this);
+  if (NS_FAILED(rv)) {
+    return rv;
   }
 
   // OK!
   mChannel = pushed;
   mRec.swap(hostRecord);
+
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -356,9 +358,8 @@ TRR::OnPush(nsIHttpChannel *associated, nsIHttpChannel *pushed)
     return NS_ERROR_FAILURE;
   }
 
-  // make a trr
-  new TRR(pushed, mHostResolver, mPB, mRec);
-  return NS_ERROR_FAILURE;
+  RefPtr<TRR> trr = new TRR(mHostResolver, mPB);
+  return trr->ReceivePush(pushed, mRec);
 }
 
 NS_IMETHODIMP

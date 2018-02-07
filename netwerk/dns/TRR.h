@@ -73,9 +73,12 @@ public:
   }
 
   // used on push
-  explicit TRR(nsIHttpChannel *pushedChannel,
-               AHostResolver *aResolver,
-               bool aPB, nsHostRecord *pushedRec);
+  explicit TRR(AHostResolver *aResolver, bool aPB)
+    : mozilla::Runnable("TRR")
+    , mHostResolver(aResolver)
+    , mTRRService(gTRRService)
+    , mPB(aPB)
+  { }
 
   // to verify a domain
   explicit TRR(AHostResolver *aResolver,
@@ -107,9 +110,9 @@ private:
   nsresult DohDecode(enum TrrType aType);
   nsresult ReturnData();
   nsresult FailData();
-
   nsresult DohDecodeQuery(const nsCString &query,
                           nsCString &host, enum TrrType &type);
+  nsresult ReceivePush(nsIHttpChannel *pushed, nsHostRecord *pushedRec);
 
   nsCOMPtr<nsIChannel> mChannel;
   enum TrrType mType;
