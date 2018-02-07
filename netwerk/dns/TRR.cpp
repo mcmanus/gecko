@@ -373,16 +373,13 @@ TRR::OnStartRequest(nsIRequest *aRequest,
 
 static uint16_t get16bit(unsigned char *aData, int index)
 {
-  return (static_cast<uint8_t>(aData[index]) << 8) |
-    static_cast<uint8_t>(aData[index + 1]);
+  return ((aData[index] << 8) | aData[index + 1]);
 }
 
 static uint32_t get32bit(unsigned char *aData, int index)
 {
-  return (static_cast<uint8_t>(aData[index]) << 24) |
-    (static_cast<uint8_t>(aData[index+1])<<16) |
-    (static_cast<uint8_t>(aData[index+2]) << 8) |
-    static_cast<uint8_t>(aData[index+3]);
+  return (aData[index] << 24) | (aData[index+1] << 16) |
+    (aData[index+2] << 8) | aData[index+3];
 }
 
 //
