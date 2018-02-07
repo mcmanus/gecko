@@ -33,7 +33,7 @@ extern TRRService *gTRRService;
 
 class DOHresp {
 public:
-  virtual ~DOHresp() { }
+  virtual ~DOHresp() = default;
   nsresult Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
                bool aLocalAllowed);
   LinkedList<DOHaddr> mAddresses;

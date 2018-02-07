@@ -333,6 +333,7 @@ AddrInfo::AddrInfo(const char *host, unsigned int aTRR)
   , ttl(NO_TTL_DATA)
   , mFromTRR(aTRR)
 {
+  MOZ_ASSERT((aTRR == 1) || (aTRR == 2) || (aTRR == 5) || (aTRR == 28));
   Init(host, nullptr);
 }
 
