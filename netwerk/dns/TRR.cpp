@@ -107,7 +107,7 @@ TRR::Run()
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(mTRRService);
-  if (NS_FAILED(DNSoverHTTPS())) {
+  if (NS_FAILED(SendHTTPRequest())) {
     FailData();
     // The dtor will now be run
   }
@@ -115,13 +115,13 @@ TRR::Run()
 }
 
 nsresult
-TRR::DNSoverHTTPS()
+TRR::SendHTTPRequest()
 {
   // This is essentially the "run" method - created from nsHostResolver
   MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
 
   if ((mType != TRRTYPE_A) && (mType != TRRTYPE_AAAA) && (mType != TRRTYPE_NS)) {
-    // limit the calling interface becase nsHostResolver has explicit slots for
+    // limit the calling interface because nsHostResolver has explicit slots for
     // these types
     return NS_ERROR_FAILURE;
   }
@@ -145,29 +145,37 @@ TRR::DNSoverHTTPS()
                          Base64URLEncodePaddingPolicy::Omit, body);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCString uri;
+    nsAutoCString uri;
     mTRRService->GetURI(uri);
     uri.Append(NS_LITERAL_CSTRING("?ct&dns="));
     uri.Append(body);
-    NS_NewURI(getter_AddRefs(dnsURI), uri);
+    rv = NS_NewURI(getter_AddRefs(dnsURI), uri);
   } else {
     rv = DohEncode(body);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCString uri;
+    nsAutoCString uri;
     mTRRService->GetURI(uri);
-    NS_NewURI(getter_AddRefs(dnsURI), uri);
+    rv = NS_NewURI(getter_AddRefs(dnsURI), uri);
+  }
+  if (NS_FAILED(rv)) {
+    LOG(("TRR:SendHTTPRequest: NewURI failed!\n"));
+    return rv;
   }
 
-  NS_NewChannel(getter_AddRefs(mChannel),
-                dnsURI,
-                nsContentUtils::GetSystemPrincipal(),
-                nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                nsIContentPolicy::TYPE_OTHER,
-                nullptr,   // PerformanceStorage
-                nullptr, // aLoadGroup
-                this,
-                nsIRequest::LOAD_ANONYMOUS, ios);
+  rv = NS_NewChannel(getter_AddRefs(mChannel),
+                     dnsURI,
+                     nsContentUtils::GetSystemPrincipal(),
+                     nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
+                     nsIContentPolicy::TYPE_OTHER,
+                     nullptr,   // PerformanceStorage
+                     nullptr, // aLoadGroup
+                     this,
+                     nsIRequest::LOAD_ANONYMOUS, ios);
+  if (NS_FAILED(rv)) {
+    LOG(("TRR:SendHTTPRequest: NewChannel failed!\n"));
+    return rv;
+  }
 
   nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(mChannel);
   if (!httpChannel) {
@@ -179,9 +187,9 @@ TRR::DNSoverHTTPS()
                                      false);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCString cred;
+  nsAutoCString cred;
   mTRRService->GetCredentials(cred);
-  if (cred.Length()){
+  if (!cred.IsEmpty()){
     rv = httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Authorization"), cred, false);
     NS_ENSURE_SUCCESS(rv, rv);
   }
@@ -221,9 +229,8 @@ TRR::DNSoverHTTPS()
   }
 
   // set the *default* response content type
-  httpChannel->SetContentType(NS_LITERAL_CSTRING("application/dns-udpwireformat"));
-
-  if (NS_SUCCEEDED(httpChannel->AsyncOpen2(this))) {
+  if (NS_SUCCEEDED(httpChannel->SetContentType(NS_LITERAL_CSTRING("application/dns-udpwireformat"))) &&
+      NS_SUCCEEDED(httpChannel->AsyncOpen2(this))) {
     return NS_OK;
   }
   mChannel = nullptr;

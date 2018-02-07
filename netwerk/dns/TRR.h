@@ -79,7 +79,7 @@ public:
 
   // to verify a domain
   explicit TRR(AHostResolver *aResolver,
-               nsCString aHost,
+               nsACString &aHost,
                enum TrrType aType,
                bool aPB)
     : mozilla::Runnable("TRR")
@@ -102,7 +102,7 @@ public:
 
 private:
   ~TRR() = default;
-  nsresult DNSoverHTTPS();
+  nsresult SendHTTPRequest();
   nsresult DohEncode(nsCString &target);
   nsresult DohDecode(enum TrrType aType);
   nsresult ReturnData();
