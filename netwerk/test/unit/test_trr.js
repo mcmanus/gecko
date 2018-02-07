@@ -75,20 +75,20 @@ function run_test() {
 }
 
 function resetTRRPrefs() {
-    prefs.setIntPref("network.trr.mode", modepref);
-    prefs.setCharPref("network.trr.uri", uripref);
-    prefs.setBoolPref("network.trr.wait-for-portal", portalpref);
-    prefs.setBoolPref("network.trr.useGET", getpref);
-    prefs.setCharPref("network.trr.confirmationNS", confirmationpref);
+    prefs.clearUserPref("network.trr.mode");
+    prefs.clearUserPref("network.trr.uri");
+    prefs.clearUserPref("network.trr.wait-for-portal");
+    prefs.clearUserPref("network.trr.useGET");
+    prefs.clearUserPref("network.trr.confirmationNS");
 }
 
-function resetPrefs() {
-    prefs.setBoolPref("network.http.spdy.enabled", spdypref);
-    prefs.setBoolPref("network.http.spdy.enabled.http2", http2pref);
-    prefs.setBoolPref("network.http.rcwn.enabled", rcwnpref);
+registerCleanupFunction(() => {
+    prefs.clearUserPref("network.http.spdy.enabled");
+    prefs.clearUserPref("network.http.spdy.enabled.http2");
+    prefs.clearUserPref("network.http.rcwn.enabled");
     prefs.clearUserPref("network.dns.localDomains");
     resetTRRPrefs();
-}
+});
 
 function readFile(file) {
   let fstream = Cc["@mozilla.org/network/file-input-stream;1"]
@@ -119,7 +119,6 @@ function testsDone()
 {
   dump("testDone\n");
   httpserver.stop(do_test_finished);
-  resetPrefs();
 }
 
 function test_setup1()
