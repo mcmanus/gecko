@@ -29,7 +29,6 @@ public:
   TRRService();
   nsresult Init();
   nsresult Start();
-  nsresult Stop();
   bool Enabled();
 
   uint32_t Mode() { return mMode; }
@@ -60,21 +59,22 @@ private:
   nsCString mConfirmationNS;
   nsCString mBootstrapAddr;
 
-  Atomic<bool, Relaxed> mWaitForCaptive;
-  Atomic<bool, Relaxed> mRfc1918;
-  Atomic<bool, Relaxed> mCaptiveIsPassed;
-  Atomic<bool, Relaxed> mUseGET;
+  Atomic<bool, Relaxed> mWaitForCaptive; // wait for the captive portal to say OK before using TRR
+  Atomic<bool, Relaxed> mRfc1918; // okay with local IP addresses in DOH responses?
+  Atomic<bool, Relaxed> mCaptiveIsPassed; // set when captive portal check is passed
+  Atomic<bool, Relaxed> mUseGET; // do DOH using GET requests (instead of POST)
 
-  RefPtr<DataStorage> mStorage;
-  Atomic<bool, Relaxed> mClearStorage;
+  // TRR Blacklist storage
+  RefPtr<DataStorage> mTRRBLStorage;
+  Atomic<bool, Relaxed> mClearTRRBLStorage;
 
-  enum confirmationState {
+  enum ConfirmationState {
     CONFIRM_INIT = 0,
     CONFIRM_TRYING = 1,
     CONFIRM_OK = 2,
     CONFIRM_FAILED = 3
   };
-  Atomic<confirmationState, Relaxed>  mConfirmationState;
+  Atomic<ConfirmationState, Relaxed>  mConfirmationState;
   RefPtr<TRR>           mConfirmer;
 };
 

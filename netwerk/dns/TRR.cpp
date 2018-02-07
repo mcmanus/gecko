@@ -866,10 +866,10 @@ DOHresp::Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
   return NS_OK;
 }
 
-class proxyCancel : public Runnable
+class ProxyCancel : public Runnable
 {
 public:
-  explicit proxyCancel(TRR *aTRR)
+  explicit ProxyCancel(TRR *aTRR)
     : Runnable("proxyTrrCancel")
     , mTRR(aTRR)
   { }
@@ -889,7 +889,7 @@ void
 TRR::Cancel()
 {
   if (!NS_IsMainThread()) {
-    NS_DispatchToMainThread(new proxyCancel(this));
+    NS_DispatchToMainThread(new ProxyCancel(this));
     return;
   }
   if (mChannel) {

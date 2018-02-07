@@ -40,7 +40,7 @@ TRRService::TRRService()
   , mRfc1918(false)
   , mCaptiveIsPassed(false)
   , mUseGET(false)
-  , mClearStorage(false)
+  , mClearTRRBLStorage(false)
   , mConfirmationState(CONFIRM_INIT)
 {
   MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
@@ -131,7 +131,7 @@ TRRService::ReadPrefs(const char *name)
       LOG(("TRRService TRR URI %s\n", mPrivateURI.get()));
     }
     if (old.Length() && !mPrivateURI.Equals(old)) {
-      mClearStorage = true;
+      mClearTRRBLStorage = true;
       LOG(("TRRService clearing blacklist because of change is uri service\n"));
     }
   }
@@ -203,13 +203,6 @@ TRRService::Start()
   return NS_OK;
 }
 
-nsresult
-TRRService::Stop()
-{
-  MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
-  return NS_OK;
-}
-
 TRRService::~TRRService()
 {
   MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
@@ -241,16 +234,16 @@ TRRService::Observe(nsISupports *aSubject,
   } else if (!strcmp(aTopic, NS_CAPTIVE_PORTAL_CONNECTIVITY)) {
     nsAutoCString data = NS_ConvertUTF16toUTF8(aData);
     LOG(("TRRservice captive portal was %s\n", data.get()));
-    if (!mStorage) {
-      mStorage = DataStorage::Get(DataStorageClass::TRRBlacklist);
-      if (mStorage) {
+    if (!mTRRBLStorage) {
+      mTRRBLStorage = DataStorage::Get(DataStorageClass::TRRBlacklist);
+      if (mTRRBLStorage) {
         bool storageWillPersist = true;
-        if (NS_FAILED(mStorage->Init(storageWillPersist))) {
-          mStorage = nullptr;
+        if (NS_FAILED(mTRRBLStorage->Init(storageWillPersist))) {
+          mTRRBLStorage = nullptr;
         }
-        if (mClearStorage) {
-          mStorage->Clear();
-          mClearStorage = false;
+        if (mClearTRRBLStorage) {
+          mTRRBLStorage->Clear();
+          mClearTRRBLStorage = false;
         }
       }
     }
@@ -262,8 +255,8 @@ TRRService::Observe(nsISupports *aSubject,
   } else if (!strcmp(aTopic, kClearPrivateData) ||
              !strcmp(aTopic, kPurge)) {
     // flush the TRR blacklist, both in-memory and on-disk
-    if (mStorage) {
-      mStorage->Clear();
+    if (mTRRBLStorage) {
+      mTRRBLStorage->Clear();
     }
   }
   return NS_OK;
@@ -321,9 +314,9 @@ bool
 TRRService::IsTRRBlacklisted(const nsACString &aHost, bool privateBrowsing,
                              bool aParentsToo) // false if domain
 {
-  if (mClearStorage) {
-    mStorage->Clear();
-    mClearStorage = false;
+  if (mClearTRRBLStorage) {
+    mTRRBLStorage->Clear();
+    mClearTRRBLStorage = false;
   }
 
   if (mMode == MODE_TRRONLY) {
@@ -339,7 +332,7 @@ TRRService::IsTRRBlacklisted(const nsACString &aHost, bool privateBrowsing,
   if (!Enabled()) {
     return true;
   }
-  if (!mStorage) {
+  if (!mTRRBLStorage) {
     return false;
   }
 
@@ -364,7 +357,7 @@ TRRService::IsTRRBlacklisted(const nsACString &aHost, bool privateBrowsing,
   MutexAutoLock lock(mLock);
   // use a unified casing for the hashkey
   nsAutoCString hashkey(aHost);
-  nsCString val(mStorage->Get(hashkey, privateBrowsing ?
+  nsCString val(mTRRBLStorage->Get(hashkey, privateBrowsing ?
                               DataStorage_Private : DataStorage_Persistent));
 
   if (!val.IsEmpty()) {
@@ -376,7 +369,7 @@ TRRService::IsTRRBlacklisted(const nsACString &aHost, bool privateBrowsing,
       return true;
     } else {
       // the blacklisted entry has expired
-      mStorage->Remove(hashkey, privateBrowsing ?
+      mTRRBLStorage->Remove(hashkey, privateBrowsing ?
                        DataStorage_Private : DataStorage_Persistent);
     }
   }
@@ -408,7 +401,7 @@ private:
 void
 TRRService::TRRBlacklist(const nsACString &aHost, bool privateBrowsing, bool aParentsToo)
 {
-  if (!mStorage) {
+  if (!mTRRBLStorage) {
     return;
   }
 
@@ -426,8 +419,8 @@ TRRService::TRRBlacklist(const nsACString &aHost, bool privateBrowsing, bool aPa
   // this overwrites any existing entry
   {
     MutexAutoLock lock(mLock);
-    mStorage->Put(hashkey, val, privateBrowsing ?
-                  DataStorage_Private : DataStorage_Persistent);
+    mTRRBLStorage->Put(hashkey, val, privateBrowsing ?
+                       DataStorage_Private : DataStorage_Persistent);
   }
 
   if (aParentsToo) {
