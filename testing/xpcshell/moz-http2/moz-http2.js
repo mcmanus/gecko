@@ -535,7 +535,7 @@ function handleRequest(req, res) {
     res.writeHead(200);
     res.write(content);
     res.end("");
-    return; 
+    return;
   }
 
   else if (u.pathname === "/.well-known/http-opportunistic") {
