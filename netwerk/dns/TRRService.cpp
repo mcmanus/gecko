@@ -5,6 +5,7 @@
 
 #include "nsICaptivePortalService.h"
 #include "nsIObserverService.h"
+#include "nsIURIMutator.h"
 #include "nsNetUtil.h"
 #include "nsStandardURL.h"
 #include "TRR.h"
@@ -298,9 +299,18 @@ TRRService::MaybeBootstrap(const nsACString &aPossible, nsACString &aResult)
     return false;
   }
 
-  RefPtr<nsStandardURL> url = new nsStandardURL();
-  url->Init(nsIStandardURL::URLTYPE_AUTHORITY, 443,
-            mPrivateURI, nullptr, nullptr);
+  nsCOMPtr<nsIURI> url;
+  nsresult rv = NS_MutateURI(NS_STANDARDURLMUTATOR_CONTRACTID)
+    .Apply<nsIStandardURLMutator>(&nsIStandardURLMutator::Init,
+                                  nsIStandardURL::URLTYPE_NO_AUTHORITY, 443,
+                                  mPrivateURI, nullptr, nullptr,
+                                  nullptr)
+    .Finalize(url);
+  if (NS_FAILED(rv)) {
+    LOG(("TRRService::MaybeBootstrap failed to create URI!\n"));
+    return false;
+  }
+
   nsAutoCString host;
   url->GetHost(host);
   if (!aPossible.Equals(host)) {
