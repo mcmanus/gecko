@@ -827,7 +827,7 @@ nsresult
 DOHresp::Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
              bool aLocalAllowed)
 {
-  DOHaddr *doh = new DOHaddr;
+  nsAutoPtr<DOHaddr> doh(new DOHaddr);
   NetAddr *addr = &doh->mNet;
   if (4 == len) {
     // IPv4
@@ -844,22 +844,20 @@ DOHresp::Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
       addr->inet6.ip.u8[i] = dns[index];
     }
   } else {
-    delete doh;
     return NS_ERROR_UNEXPECTED;
   }
 
   if (IsIPAddrLocal(addr) && !aLocalAllowed) {
-    delete doh;
     return NS_ERROR_FAILURE;
   }
   doh->mTtl = TTL;
-  mAddresses.insertBack(doh);
 
   if (LOG_ENABLED()) {
     char buf[128];
     NetAddrToString(addr, buf, sizeof(buf));
     LOG(("DOHresp:Add %s\n", buf));
   }
+  mAddresses.insertBack(doh.forget());
   return NS_OK;
 }
 
