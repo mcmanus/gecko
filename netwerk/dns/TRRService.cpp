@@ -320,6 +320,8 @@ TRRService::MaybeBootstrap(const nsACString &aPossible, nsACString &aResult)
   return true;
 }
 
+// When running in TRR-only mode, the blacklist is not used and it will also
+// try resolving the localhost / .local names.
 bool
 TRRService::IsTRRBlacklisted(const nsACString &aHost, bool privateBrowsing,
                              bool aParentsToo) // false if domain
