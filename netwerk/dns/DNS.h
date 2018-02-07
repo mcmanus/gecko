@@ -157,7 +157,7 @@ public:
   static const uint32_t NO_TTL_DATA = (uint32_t) -1;
 
   LinkedList<NetAddrElement> mAddresses;
-  unsigned int isTRR() { return mFromTRR; }
+  unsigned int IsTRR() { return mFromTRR; }
 private:
   unsigned int mFromTRR;
   void Init(const char *host, const char *cname);

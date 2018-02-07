@@ -461,7 +461,7 @@ TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRS
   MOZ_ASSERT(!rec);
 
   nsAutoPtr<AddrInfo> newRRSet(aNewRRSet);
-  MOZ_ASSERT(newRRSet && newRRSet->isTRR() == TRRTYPE_NS);
+  MOZ_ASSERT(newRRSet && newRRSet->IsTRR() == TRRTYPE_NS);
 
   MOZ_ASSERT(!mConfirmer || (mConfirmationState == CONFIRM_TRYING));
   if (mConfirmationState == CONFIRM_TRYING) {

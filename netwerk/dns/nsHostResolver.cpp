@@ -475,7 +475,7 @@ nsHostRecord::RemoveOrRefresh()
 {
     // no need to flush TRRed names, they're not resolved "locally"
     Cancel();
-    if (addr_info && addr_info->isTRR()) {
+    if (addr_info && addr_info->IsTRR()) {
         return false;
     }
     if (mNative) {
@@ -1489,20 +1489,20 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
     rec->mResolving--;
     LOG(("nsHostResolver::CompleteLookup %s %p %X trr=%d stillResolving=%d\n",
          rec->host.get(), aNewRRSet, (unsigned int)status,
-         aNewRRSet ? aNewRRSet->isTRR() : 0, rec->mResolving));
+         aNewRRSet ? aNewRRSet->IsTRR() : 0, rec->mResolving));
 
-    bool trrResult = newRRSet && newRRSet->isTRR();
+    bool trrResult = newRRSet && newRRSet->IsTRR();
 
     if (trrResult) {
         LOG(("TRR lookup Complete (%d) %s %s\n",
-             newRRSet->isTRR(), newRRSet->mHostName,
+             newRRSet->IsTRR(), newRRSet->mHostName,
              NS_SUCCEEDED(status) ? "OK" : "FAILED"));
         MOZ_ASSERT(TRROutstanding());
-        if (newRRSet->isTRR() == TRRTYPE_A) {
+        if (newRRSet->IsTRR() == TRRTYPE_A) {
             MOZ_ASSERT(rec->mTrrA);
             rec->mTrrA = nullptr;
             rec->mTrrAUsed = NS_SUCCEEDED(status) ? nsHostRecord::OK : nsHostRecord::FAILED;
-        } else if (newRRSet->isTRR() == TRRTYPE_AAAA) {
+        } else if (newRRSet->IsTRR() == TRRTYPE_AAAA) {
             MOZ_ASSERT(rec->mTrrAAAA);
             rec->mTrrAAAA = nullptr;
             rec->mTrrAAAAUsed = NS_SUCCEEDED(status) ? nsHostRecord::OK : nsHostRecord::FAILED;
@@ -1682,7 +1682,7 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
     bool fromTRR = false;
     {
         MutexAutoLock lock(rec->addr_info_lock);
-        if(rec->addr_info && rec->addr_info->isTRR()) {
+        if(rec->addr_info && rec->addr_info->IsTRR()) {
             fromTRR = true;
         }
     }

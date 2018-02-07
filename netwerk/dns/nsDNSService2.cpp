@@ -110,7 +110,7 @@ nsDNSRecord::IsTRR(bool *retval)
 {
     MutexAutoLock lock(mHostRecord->addr_info_lock);
     if (mHostRecord->addr_info) {
-        *retval =  mHostRecord->addr_info->isTRR();
+        *retval =  mHostRecord->addr_info->IsTRR();
     }
     else {
         *retval = false;
