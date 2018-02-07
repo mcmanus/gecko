@@ -43,7 +43,6 @@ class TRR
   : public Runnable
   , public nsIHttpPushListener
   , public nsIInterfaceRequestor
-//  , public nsIRequestObserver from nsIStreamListener
   , public nsIStreamListener
 {
 public:
@@ -53,6 +52,8 @@ public:
   NS_DECL_NSIREQUESTOBSERVER
   NS_DECL_NSISTREAMLISTENER
 
+  // Never accept larger DOH responses than this as that would indicate
+  // something is wrong. Typical ones are much smaller.
   static const unsigned int kMaxSize = 3200;
 
   // when firing off a normal A or AAAA query
@@ -93,14 +94,14 @@ public:
 
   NS_IMETHOD Run() override;
   void Cancel();
-  enum TrrType Type() {return mType;}
-  nsCString   mHost;
-  RefPtr<nsHostRecord>   mRec;
+  enum TrrType Type() { return mType; }
+  nsCString mHost;
+  RefPtr<nsHostRecord> mRec;
   RefPtr<AHostResolver> mHostResolver;
   TRRService *mTRRService;
 
 private:
-  ~TRR() {}
+  ~TRR() = default;
   nsresult DNSoverHTTPS();
   nsresult DohEncode(nsCString &target);
   nsresult DohDecode(enum TrrType aType);

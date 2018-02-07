@@ -36,7 +36,7 @@ extern mozilla::LazyLogModule gHostResolverLog;
 #define LOG(args) MOZ_LOG(gHostResolverLog, mozilla::LogLevel::Debug, args)
 #define LOG_ENABLED() MOZ_LOG_TEST(mozilla::net::gHostResolverLog, mozilla::LogLevel::Debug)
 
-  NS_IMPL_ISUPPORTS(TRR, nsIHttpPushListener, nsIInterfaceRequestor, nsIStreamListener, nsIRunnable)
+NS_IMPL_ISUPPORTS(TRR, nsIHttpPushListener, nsIInterfaceRequestor, nsIStreamListener, nsIRunnable)
 
 const uint8_t kDNS_CLASS_IN = 1;
 
@@ -68,11 +68,11 @@ TRR::DohEncode(nsCString &aBody)
   // null label of the root.
   // Followed by 16 bit QTYPE and 16 bit QCLASS
 
-  PRInt32 index = 0;
-  PRInt32 offset = 0;
+  int32_t index = 0;
+  int32_t offset = 0;
   do {
     bool dotFound = false;
-    PRInt32 labelLength;
+    int32_t labelLength;
     index = mHost.FindChar('.', offset);
     if (kNotFound != index) {
       dotFound = true;
