@@ -705,7 +705,7 @@ nsresult
 TRR::ReturnData()
 {
   // create and populate an AddrInfo instance to pass on
-  AddrInfo *ai = new AddrInfo(mHost.get(), mType);
+  nsAutoPtr<AddrInfo> ai(new AddrInfo(mHost.get(), mType));
   DOHaddr *item;
   uint32_t ttl = AddrInfo::NO_TTL_DATA;
   while ((item = static_cast<DOHaddr*>(mDNS.mAddresses.popFirst()))) {
@@ -724,7 +724,7 @@ TRR::ReturnData()
   if (!mHostResolver) {
     return NS_ERROR_FAILURE;
   }
-  (void)mHostResolver->CompleteLookup(mRec, NS_OK, ai, mPB);
+  (void)mHostResolver->CompleteLookup(mRec, NS_OK, ai.forget(), mPB);
   mHostResolver = nullptr;
   mRec = nullptr;
   return NS_OK;
@@ -738,9 +738,9 @@ TRR::FailData()
   }
   // create and populate an TRR AddrInfo instance to pass on to signal that
   // this comes from TRR
-  AddrInfo *ai = new AddrInfo(mHost.get(), mType);
+  nsAutoPtr<AddrInfo> ai(new AddrInfo(mHost.get(), mType));
 
-  (void)mHostResolver->CompleteLookup(mRec, NS_ERROR_FAILURE, ai, mPB);
+  (void)mHostResolver->CompleteLookup(mRec, NS_ERROR_FAILURE, ai.forget(), mPB);
   mHostResolver = nullptr;
   mRec = nullptr;
   return NS_OK;
