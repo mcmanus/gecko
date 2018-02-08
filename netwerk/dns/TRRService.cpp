@@ -243,7 +243,9 @@ TRRService::Observe(nsISupports *aSubject,
           mTRRBLStorage = nullptr;
         }
         if (mClearTRRBLStorage) {
-          mTRRBLStorage->Clear();
+          if (mTRRBLStorage) {
+            mTRRBLStorage->Clear();
+          }
           mClearTRRBLStorage = false;
         }
       }
@@ -327,7 +329,9 @@ TRRService::IsTRRBlacklisted(const nsACString &aHost, bool privateBrowsing,
                              bool aParentsToo) // false if domain
 {
   if (mClearTRRBLStorage) {
-    mTRRBLStorage->Clear();
+    if (mTRRBLStorage) {
+      mTRRBLStorage->Clear();
+    }
     mClearTRRBLStorage = false;
   }
 
@@ -370,7 +374,7 @@ TRRService::IsTRRBlacklisted(const nsACString &aHost, bool privateBrowsing,
   // use a unified casing for the hashkey
   nsAutoCString hashkey(aHost);
   nsCString val(mTRRBLStorage->Get(hashkey, privateBrowsing ?
-                              DataStorage_Private : DataStorage_Persistent));
+                                   DataStorage_Private : DataStorage_Persistent));
 
   if (!val.IsEmpty()) {
     nsresult code;
@@ -382,7 +386,7 @@ TRRService::IsTRRBlacklisted(const nsACString &aHost, bool privateBrowsing,
     } else {
       // the blacklisted entry has expired
       mTRRBLStorage->Remove(hashkey, privateBrowsing ?
-                       DataStorage_Private : DataStorage_Persistent);
+                            DataStorage_Private : DataStorage_Persistent);
     }
   }
   return false;
