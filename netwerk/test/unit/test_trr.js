@@ -2,14 +2,6 @@ Cu.import("resource://testing-common/httpd.js");
 Cu.import("resource://gre/modules/NetUtil.jsm");
 
 var prefs;
-var spdypref;
-var http2pref;
-var rcwnpref;
-var modepref;
-var uripref;
-var portalpref;
-var getpref;
-var confirmationpref;
 var origin;
 
 XPCOMUtils.defineLazyGetter(this, "URL", function() {
@@ -18,12 +10,19 @@ XPCOMUtils.defineLazyGetter(this, "URL", function() {
 
 var httpserver = new HttpServer();
 var testPathBase = "/trr";
+var h2Port;
+
+var dns = Cc["@mozilla.org/network/dns-service;1"].getService(Ci.nsIDNSService);
+var threadManager = Cc["@mozilla.org/thread-manager;1"].getService(Ci.nsIThreadManager);
+var mainThread = threadManager.currentThread;
+
+const defaultOriginAttributes = {};
 
 function run_test() {
     dump ("start!\n");
 
     var env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment);
-    var h2Port = env.get("MOZHTTP2_PORT");
+    h2Port = env.get("MOZHTTP2_PORT");
     Assert.notEqual(h2Port, null);
     Assert.notEqual(h2Port, "");
 
@@ -32,16 +31,6 @@ function run_test() {
     // Set to allow the cert presented by our H2 server
     do_get_profile();
     prefs = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefBranch);
-
-    spdypref = prefs.getBoolPref("network.http.spdy.enabled");
-    http2pref = prefs.getBoolPref("network.http.spdy.enabled.http2");
-    rcwnpref = prefs.getBoolPref("network.http.rcwn.enabled");
-
-    modepref = prefs.getIntPref("network.trr.mode");
-    uripref = prefs.getCharPref("network.trr.uri");
-    portalpref = prefs.getBoolPref("network.trr.wait-for-portal");
-    getpref = prefs.getBoolPref("network.trr.useGET");
-    confirmationpref = prefs.getCharPref("network.trr.confirmationNS");
 
     prefs.setBoolPref("network.http.spdy.enabled", true);
     prefs.setBoolPref("network.http.spdy.enabled.http2", true);
@@ -145,6 +134,7 @@ function completeTest1(request, data, ctx)
 function test_setup2()
 {
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/404");
 }
 
 function handler2(metadata, response)
@@ -161,10 +151,10 @@ function handler2(metadata, response)
 function completeTest2(request, data, ctx)
 {
   Assert.equal(request.status, Components.results.NS_OK);
-  testsDone();
+  run_dns_tests();
 }
 
-
+// isseus HTTP requests
 function test(num)
 {
   dump("execute test " + num + "\n");
@@ -175,4 +165,121 @@ function test(num)
   flags = 0;
   channel.asyncOpen2(new ChannelListener(eval("completeTest" + num),
                                          channel, flags));
+}
+
+var test_answer="127.0.0.1";
+var nexttest;
+
+// check that we do lookup the name fine
+var listenerFine = {
+  onLookupComplete: function(inRequest, inRecord, inStatus) {
+    var answer = inRecord.getNextAddrAsString();
+    Assert.ok(answer == test_answer);
+    eval("test" + nexttest + "();");
+  },
+  QueryInterface: function(aIID) {
+    if (aIID.equals(Ci.nsIDNSListener) ||
+        aIID.equals(Ci.nsISupports)) {
+      return this;
+    }
+    throw Cr.NS_ERROR_NO_INTERFACE;
+  }
+};
+
+// check that the name lookup fails
+var listenerFails = {
+  onLookupComplete: function(inRequest, inRecord, inStatus) {
+    Assert.ok(!Components.isSuccessCode(inStatus));
+    eval("test" + nexttest + "();");
+  },
+  QueryInterface: function(aIID) {
+    if (aIID.equals(Ci.nsIDNSListener) ||
+        aIID.equals(Ci.nsISupports)) {
+      return this;
+    }
+    throw Cr.NS_ERROR_NO_INTERFACE;
+  }
+};
+
+// verify working credentials in DOH request
+function test3()
+{
+  dump("execute test3\n");
+  nexttest=4;
+  prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-auth");
+  prefs.setCharPref("network.trr.credentials", "user:password");
+  dns.asyncResolve("auth.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+}
+
+// verify failing credentials in DOH request
+function test4()
+{
+  dump("execute test4\n");
+  nexttest=6; // skips the push test for now
+  prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-auth");
+  prefs.setCharPref("network.trr.credentials", "evil:person");
+  dns.asyncResolve("wrong.example.com", 0, listenerFails, mainThread, defaultOriginAttributes);
+}
+
+// verify DOH push, part A
+function test5()
+{
+  dump("execute test5\n");
+  nexttest="5b";
+  prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-push");
+  dns.asyncResolve("first.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+}
+
+function test5b()
+{
+  dump("execute test5b\n");
+  nexttest="sDone";
+  // At this point the second host name should've been pushed and we can resolve it using
+  // cache only. Set back the URI to a path that fails.
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/404");
+  dump("test5b - resolve push.example.now please\n");
+  test_answer="2018::2018";
+  dns.asyncResolve("push.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+}
+
+// verify AAAA entry
+function test6()
+{
+  dump("execute test6\n");
+  nexttest=7;
+  prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-aaaa");
+  test_answer="2020:2020::2020";
+  dns.asyncResolve("aaaa.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+}
+
+// verify RFC1918 address from the server is rejected
+function test7()
+{
+  dump("execute test7\n");
+  nexttest=8;
+  prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-rfc1918");
+  dns.asyncResolve("rfc1918.example.com", 0, listenerFails, mainThread, defaultOriginAttributes);
+}
+
+// verify RFC1918 address from the server is fine when told so
+function test8()
+{
+  dump("execute test8\n");
+  nexttest="sDone";
+  prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-rfc1918");
+  prefs.setBoolPref("network.trr.allow-rfc1918", true);
+  test_answer="192.168.0.1";
+  dns.asyncResolve("rfc1918.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+}
+
+function run_dns_tests()
+{
+  test3();
+  //test5();
 }

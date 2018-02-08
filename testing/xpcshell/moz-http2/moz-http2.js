@@ -537,6 +537,72 @@ function handleRequest(req, res) {
     res.end("");
     return;
   }
+  // for use with test_trr.js
+  else if (u.pathname === "/dns-aaaa") {
+    // aaaa.example.com has AAAA entry 2020:2020::2020
+    var content= new Buffer("0000010000010001000000000461616161076578616D706C6503636F6D00001C0001C00C001C000100000037001020202020000000000000000000002020", "hex");
+    res.setHeader('Content-Type', 'application/dns-udpwireformat');
+    res.setHeader('Content-Length', content.length);
+    res.writeHead(200);
+    res.write(content);
+    res.end("");
+    return;
+  }
+  else if (u.pathname === "/dns-rfc1918") {
+    // rfc1918.example.com has A entry 192.168.0.1
+    var content= new Buffer("0000010000010001000000000772666331393138076578616D706C6503636F6D0000010001C00C00010001000000370004C0A80001", "hex");
+    res.setHeader('Content-Type', 'application/dns-udpwireformat');
+    res.setHeader('Content-Length', content.length);
+    res.writeHead(200);
+    res.write(content);
+    res.end("");
+    return;
+  }
+  // for use with test_trr.js
+  else if (u.pathname === "/dns-push") {
+    // first.example.com has A entry 127.0.0.1
+    var content= new Buffer("000001000001000100000000056669727374076578616D706C6503636F6D0000010001C00C000100010000003700047F000001", "hex");
+    // push.example.com has AAAA entry 2018::2018
+    var pcontent= new Buffer("0000010000010001000000000470757368076578616D706C6503636F6D00001C0001C00C001C000100000037001020180000000000000000000000002018", "hex");
+    push = res.push({
+      hostname: 'first.example.com' + serverPort,
+      port: serverPort,
+      path: '/dns-push',
+      method: 'GET',
+      headers: {
+        'accept' : 'application/dns-udpwireformat'
+      }
+    });
+    push.writeHead(200, {
+      'content-type': 'application/dns-udpwireformat',
+      'pushed' : 'yes',
+      'content-length' : pcontent.length,
+      'X-Connection-Http2': 'yes'
+    });
+    push.end(pcontent);
+    res.setHeader('Content-Type', 'application/dns-udpwireformat');
+    res.setHeader('Content-Length', content.length);
+    res.writeHead(200);
+    res.write(content);
+    res.end("");
+    return;
+  }
+  // for use with test_trr.js
+  else if (u.pathname === "/dns-auth") {
+    if (req.headers['authorization'] != "user:password") {
+      res.writeHead(401);
+      res.end("bad boy!");
+      return;
+    }
+    // bar.example.com has A entry 127.0.0.1
+    var content= new Buffer("00000100000100010000000003626172076578616D706C6503636F6D0000010001C00C000100010000003700047F000001", "hex");
+    res.setHeader('Content-Type', 'application/dns-udpwireformat');
+    res.setHeader('Content-Length', content.length);
+    res.writeHead(200);
+    res.write(content);
+    res.end("");
+    return;
+  }
 
   else if (u.pathname === "/.well-known/http-opportunistic") {
     res.setHeader('Cache-Control', 'no-cache');
