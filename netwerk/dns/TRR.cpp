@@ -309,6 +309,8 @@ TRR::ReceivePush(nsIHttpChannel *pushed, nsHostRecord *pushedRec)
     return NS_ERROR_UNEXPECTED;
   }
 
+  LOG(("TRR::ReceivePush: PUSH incoming!\n"));
+
   nsCOMPtr<nsIURI> uri;
   pushed->GetURI(getter_AddRefs(uri));
   nsAutoCString query;
@@ -353,6 +355,7 @@ TRR::ReceivePush(nsIHttpChannel *pushed, nsHostRecord *pushedRec)
 NS_IMETHODIMP
 TRR::OnPush(nsIHttpChannel *associated, nsIHttpChannel *pushed)
 {
+  LOG(("TRR::OnPush entry\n"));
   MOZ_ASSERT(associated == mChannel);
   if (!mRec) {
     return NS_ERROR_FAILURE;
