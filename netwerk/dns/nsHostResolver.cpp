@@ -1577,12 +1577,6 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         }
     }
 
-    MOZ_ASSERT(rec->mResolverMode == MODE_PARALLEL ||
-               rec->mResolverMode == MODE_SHADOW ||
-               rec->mResolverMode == MODE_TRRFIRST ||
-               !rec->mDidCallbacks);
-    LOG(("nsHostResolver record %p calling back dns users\n", rec));
-
     if (rec->mResolveAgain && (status != NS_ERROR_ABORT)) {
         LOG(("nsHostResolver record %p resolve again due to flushcache\n", rec));
         rec->mResolveAgain = false;
@@ -1612,11 +1606,6 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         PrepareRecordExpiration(rec);
     }
 
-    if ((rec->mResolverMode == MODE_TRRFIRST) && rec->mDidCallbacks) {
-        // already callback'ed on the first TRR response
-        return LOOKUP_OK;
-    }
-
     bool doCallbacks = true;
 
     if (trrResult && (rec->mResolverMode == MODE_SHADOW) && !rec->mDidCallbacks) {
@@ -1624,7 +1613,13 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         doCallbacks = false;
         LOG(("nsHostResolver Suppressing TRR %s because it is first shadow result\n",
              rec->host.get()));
+    } else if(trrResult && rec->mDidCallbacks) {
+        // already callback'ed on the first TRR response
+        LOG(("nsHostResolver Suppressing callback for second TRR response for %s\n",
+             rec->host.get()));
+        doCallbacks = false;
     }
+
 
     if (LOG_ENABLED()) {
         MutexAutoLock lock(rec->addr_info_lock);
@@ -1645,6 +1640,8 @@ nsHostResolver::CompleteLookup(nsHostRecord* rec, nsresult status, AddrInfo* aNe
         // get the list of pending callbacks for this lookup, and notify
         // them that the lookup is complete.
         mozilla::LinkedList<RefPtr<nsResolveHostCallback>> cbs = mozilla::Move(rec->mCallbacks);
+
+        LOG(("nsHostResolver record %p calling back dns users\n", rec));
 
         for (nsResolveHostCallback* c = cbs.getFirst(); c; c = c->removeAndGetNext()) {
             c->OnResolveHostComplete(this, rec, status);
