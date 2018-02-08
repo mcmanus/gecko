@@ -37,7 +37,6 @@ function run_test() {
   prefs.setBoolPref("network.trr.wait-for-portal", false);
   // don't confirm that TRR is working, just go!
   prefs.setCharPref("network.trr.confirmationNS", "skip");
-  //prefs.setBoolPref("network.trr.useGET", true);
 
   // The moz-http2 cert is for foo.example.com and is signed by CA.cert.der
   // so add that cert to the trust list as a signing cert.  // the foo.example.com domain name.
@@ -45,7 +44,7 @@ function run_test() {
       .getService(Ci.nsIX509CertDB);
   addCertFromFile(certdb, "CA.cert.der", "CTu,u,u");
   do_test_pending();
-  test1();
+  run_dns_tests();
 }
 
 function resetTRRPrefs() {
@@ -91,6 +90,7 @@ var nexttest;
 // check that we do lookup the name fine
 var listenerFine = {
   onLookupComplete: function(inRequest, inRecord, inStatus) {
+    Assert.notEqual(inRecord, null);
     var answer = inRecord.getNextAddrAsString();
     Assert.ok(answer == test_answer);
     do_test_finished();
@@ -125,7 +125,7 @@ var listenerFails = {
 function test1()
 {
   dump("execute test1\n");
-  nexttest=2;
+  nexttest=9;
   prefs.setIntPref("network.trr.mode", 2); // TRR-first
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns");
   do_test_pending();
@@ -218,13 +218,27 @@ function test7()
 function test8()
 {
   dump("execute test8\n");
-  nexttest="sDone";
+  nexttest=9;
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-rfc1918");
   prefs.setBoolPref("network.trr.allow-rfc1918", true);
   test_answer="192.168.0.1";
   do_test_pending();
   dns.asyncResolve("rfc1918.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+}
+
+// use GET
+function test9()
+{
+  dump("execute test9\n");
+  nexttest="sDone";
+  prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-get");
+  prefs.clearUserPref("network.trr.allow-rfc1918");
+  prefs.setBoolPref("network.trr.useGET", true);
+  test_answer="1.2.3.4";
+  do_test_pending();
+  dns.asyncResolve("get.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
 function run_dns_tests()

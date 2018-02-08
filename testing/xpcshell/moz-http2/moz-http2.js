@@ -527,6 +527,20 @@ function handleRequest(req, res) {
     res.setHeader('Alt-Svc', 'h2=' + req.headers['x-altsvc']);
   }
   // for use with test_trr.js
+  else if (u.path === "/dns-get?ct&dns=AAAAAAABAAAAAAAAA2dldAdleGFtcGxlA2NvbQAAAQAB") {
+    // the query string asks for an A entry for get.example.com
+    // get.example.com has A entry 1.2.3.4
+    var content= new Buffer("00000100000100010000000003676574076578616D706C6503636F6D0000010001C00C0001000100000037000401020304", "hex");
+    res.setHeader('Content-Type', 'application/dns-udpwireformat');
+    res.setHeader('Content-Length', content.length);
+    //res.setHeader('X-path', u.path);
+    //res.setHeader('X-pathname', u.pathname);
+    res.writeHead(200);
+    res.write(content);
+    res.end("");
+    return;
+  }
+  // for use with test_trr.js
   else if (u.pathname === "/dns") {
     // bar.example.com has A entry 127.0.0.1
     var content= new Buffer("00000100000100010000000003626172076578616D706C6503636F6D0000010001C00C000100010000003700047F000001", "hex");
@@ -567,7 +581,7 @@ function handleRequest(req, res) {
     push = res.push({
       hostname: 'first.example.com' + serverPort,
       port: serverPort,
-      path: '/dns-push',
+      path: '/dns-pushed-response',
       method: 'GET',
       headers: {
         'accept' : 'application/dns-udpwireformat'
