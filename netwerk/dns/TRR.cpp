@@ -229,8 +229,10 @@ TRR::SendHTTPRequest()
   }
 
   // set the *default* response content type
-  if (NS_SUCCEEDED(httpChannel->SetContentType(NS_LITERAL_CSTRING("application/dns-udpwireformat"))) &&
-      NS_SUCCEEDED(httpChannel->AsyncOpen2(this))) {
+  if (NS_FAILED(httpChannel->SetContentType(NS_LITERAL_CSTRING("application/dns-udpwireformat")))) {
+    LOG(("TRR::SendHTTPRequest: couldn't set content-type!\n"));
+  }
+  if (NS_SUCCEEDED(httpChannel->AsyncOpen2(this))) {
     return NS_OK;
   }
   mChannel = nullptr;
@@ -741,9 +743,9 @@ TRR::FailData()
   }
   // create and populate an TRR AddrInfo instance to pass on to signal that
   // this comes from TRR
-  nsAutoPtr<AddrInfo> ai(new AddrInfo(mHost.get(), mType));
+  AddrInfo *ai = new AddrInfo(mHost.get(), mType);
 
-  (void)mHostResolver->CompleteLookup(mRec, NS_ERROR_FAILURE, ai.forget(), mPB);
+  (void)mHostResolver->CompleteLookup(mRec, NS_ERROR_FAILURE, ai, mPB);
   mHostResolver = nullptr;
   mRec = nullptr;
   return NS_OK;
