@@ -80,21 +80,20 @@ function addCertFromFile(certdb, filename, trustString) {
 
 function testsDone()
 {
-  dump("testDone\n");
   do_test_finished();
 }
 
 var test_answer="127.0.0.1";
-var nexttest;
 
 // check that we do lookup the name fine
 var listenerFine = {
   onLookupComplete: function(inRequest, inRecord, inStatus) {
     Assert.notEqual(inRecord, null);
+    Assert.ok(!inStatus);
     var answer = inRecord.getNextAddrAsString();
     Assert.equal(answer, test_answer);
     do_test_finished();
-    eval("test" + nexttest + "();");
+    run_dns_tests();
   },
   QueryInterface: function(aIID) {
     if (aIID.equals(Ci.nsIDNSListener) ||
@@ -110,7 +109,7 @@ var listenerFails = {
   onLookupComplete: function(inRequest, inRecord, inStatus) {
     Assert.ok(!Components.isSuccessCode(inStatus));
     do_test_finished();
-    eval("test" + nexttest + "();");
+    run_dns_tests();
   },
   QueryInterface: function(aIID) {
     if (aIID.equals(Ci.nsIDNSListener) ||
@@ -124,64 +123,47 @@ var listenerFails = {
 // verify basic A record
 function test1()
 {
-  dump("execute test1\n");
-  nexttest=2;
   prefs.setIntPref("network.trr.mode", 2); // TRR-first
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns");
-  do_test_pending();
   dns.asyncResolve("bar.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
 // verify that the name was put in cache - it works with bad DNS URI
 function test2()
 {
-  dump("execute test1\n");
-  nexttest=3;
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/404");
-  do_test_pending();
   dns.asyncResolve("bar.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
 // verify working credentials in DOH request
 function test3()
 {
-  dump("execute test3\n");
-  nexttest=4;
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-auth");
   prefs.setCharPref("network.trr.credentials", "user:password");
-  do_test_pending();
   dns.asyncResolve("auth.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
 // verify failing credentials in DOH request
 function test4()
 {
-  dump("execute test4\n");
-  nexttest=6; // skips the push test for now
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-auth");
   prefs.setCharPref("network.trr.credentials", "evil:person");
-  do_test_pending();
   dns.asyncResolve("wrong.example.com", 0, listenerFails, mainThread, defaultOriginAttributes);
 }
 
 // verify DOH push, part A
 function test5()
 {
-  dump("execute test5\n");
-  nexttest="5b";
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-push");
-  do_test_pending();
   dns.asyncResolve("first.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
 function test5b()
 {
-  dump("execute test5b\n");
-  nexttest="sDone";
   // At this point the second host name should've been pushed and we can resolve it using
   // cache only. Set back the URI to a path that fails.
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/404");
@@ -194,55 +176,63 @@ function test5b()
 // verify AAAA entry
 function test6()
 {
-  dump("execute test6\n");
-  nexttest=7;
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-aaaa");
   test_answer="2020:2020::2020";
-  do_test_pending();
   dns.asyncResolve("aaaa.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
 // verify RFC1918 address from the server is rejected
 function test7()
 {
-  dump("execute test7\n");
-  nexttest=8;
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-rfc1918");
-  do_test_pending();
   dns.asyncResolve("rfc1918.example.com", 0, listenerFails, mainThread, defaultOriginAttributes);
 }
 
 // verify RFC1918 address from the server is fine when told so
 function test8()
 {
-  dump("execute test8\n");
-  nexttest=9;
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-rfc1918");
   prefs.setBoolPref("network.trr.allow-rfc1918", true);
   test_answer="192.168.0.1";
-  do_test_pending();
   dns.asyncResolve("rfc1918.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
 // use GET
 function test9()
 {
-  dump("execute test9\n");
-  nexttest="sDone";
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-get");
   prefs.clearUserPref("network.trr.allow-rfc1918");
   prefs.setBoolPref("network.trr.useGET", true);
   test_answer="1.2.3.4";
-  do_test_pending();
   dns.asyncResolve("get.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
+
+var tests = [ test1,
+              test2,
+              test3,
+              test4,
+              //test5, test5b, // must stick together
+              test6,
+              test7,
+              test8,
+              test9,
+              testsDone
+            ];
+
+var current_test = 0;
+
 function run_dns_tests()
 {
-  test1();
-  //test5();
+  if (current_test < tests.length) {
+    dump("starting test " + current_test + "\n");
+    tests[current_test]();
+    current_test++;
+    do_test_pending();
+  }
 }
+
