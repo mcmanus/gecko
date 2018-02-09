@@ -125,7 +125,7 @@ var listenerFails = {
 function test1()
 {
   dump("execute test1\n");
-  nexttest=9;
+  nexttest=2;
   prefs.setIntPref("network.trr.mode", 2); // TRR-first
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns");
   do_test_pending();
