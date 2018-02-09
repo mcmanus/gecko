@@ -92,7 +92,7 @@ var listenerFine = {
   onLookupComplete: function(inRequest, inRecord, inStatus) {
     Assert.notEqual(inRecord, null);
     var answer = inRecord.getNextAddrAsString();
-    Assert.ok(answer == test_answer);
+    Assert.equal(answer, test_answer);
     do_test_finished();
     eval("test" + nexttest + "();");
   },
