@@ -142,7 +142,13 @@ TRRService::ReadPrefs(const char *name)
   }
   if (!name || !strcmp(name, TRR_PREF("confirmationNS"))) {
     MutexAutoLock lock(mLock);
+    nsCString old(mConfirmationNS);
     Preferences::GetCString(TRR_PREF("confirmationNS"), mConfirmationNS);
+    if (name && old.Length() && !mConfirmationNS.Equals(old) &&
+        (mConfirmationState > CONFIRM_TRYING)) {
+      LOG(("TRR::ReadPrefs: restart confirmationNS state\n"));
+      mConfirmationState = CONFIRM_TRYING;
+    }
   }
   if (!name || !strcmp(name, TRR_PREF("bootstrapAddress"))) {
     MutexAutoLock lock(mLock);
@@ -464,7 +470,7 @@ TRRService::TRRBlacklist(const nsACString &aHost, bool privateBrowsing, bool aPa
 AHostResolver::LookupStatus
 TRRService::CompleteLookup(nsHostRecord *rec, nsresult status, AddrInfo *aNewRRSet, bool pb)
 {
-  // this is an NS check for the TRR blacklist
+  // this is an NS check for the TRR blacklist or confirmationNS check
 
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(!rec);
