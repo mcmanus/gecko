@@ -77,6 +77,8 @@ public:
     : mozilla::Runnable("TRR")
     , mHostResolver(aResolver)
     , mTRRService(gTRRService)
+    , mBodySize(0)
+    , mFailed(false)
     , mPB(aPB)
   { }
 
