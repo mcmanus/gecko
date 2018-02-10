@@ -194,6 +194,8 @@ var didRst = false;
 var rstConnection = null;
 var illegalheader_conn = null;
 
+var ns_confirm = 0;
+
 function handleRequest(req, res) {
   // We do this first to ensure nothing goes wonky in our tests that don't want
   // the headers to have something illegal in them
@@ -552,6 +554,24 @@ function handleRequest(req, res) {
     return;
   }
   // for use with test_trr.js
+  else if (u.pathname === "/dns-confirm") {
+    if (0 == ns_confirm) {
+      // confirm.example.com has NS entry ns.example.com
+      var content= new Buffer("00000100000100010000000007636F6E6669726D076578616D706C6503636F6D0000020001C00C00020001000000370012026E73076578616D706C6503636F6D010A00", "hex");
+      ns_confirm++;
+    } else {
+      // next response: wrong.example.com has AAAA entry 1::FFFF
+      var content= new Buffer("0000010000010001000000000577726F6E67076578616D706C6503636F6D00001C0001C00C001C00010000003700100001000000000000000000000000FFFF", "hex");
+      ns_confirm = 0; // back to first reply again
+    }
+    res.setHeader('Content-Type', 'application/dns-udpwireformat');
+    res.setHeader('Content-Length', content.length);
+    res.writeHead(200);
+    res.write(content);
+    res.end("");
+    return;
+  }
+  // for use with test_trr.js
   else if (u.pathname === "/dns-aaaa") {
     // aaaa.example.com has AAAA entry 2020:2020::2020
     var content= new Buffer("0000010000010001000000000461616161076578616D706C6503636F6D00001C0001C00C001C000100000037001020202020000000000000000000002020", "hex");
@@ -579,9 +599,9 @@ function handleRequest(req, res) {
     // push.example.com has AAAA entry 2018::2018
     var pcontent= new Buffer("0000010000010001000000000470757368076578616D706C6503636F6D00001C0001C00C001C000100000037001020180000000000000000000000002018", "hex");
     push = res.push({
-      hostname: 'first.example.com' + serverPort,
+      hostname: 'foo.example.com:' + serverPort,
       port: serverPort,
-      path: '/dns-pushed-response',
+      path: '/dns-pushed-response?AAAAAAABAAAAAAAABHB1c2gHZXhhbXBsZQNjb20AABwAAQ',
       method: 'GET',
       headers: {
         'accept' : 'application/dns-udpwireformat'

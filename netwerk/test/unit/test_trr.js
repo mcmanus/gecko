@@ -48,19 +48,19 @@ function run_test() {
 }
 
 function resetTRRPrefs() {
-    prefs.clearUserPref("network.trr.mode");
-    prefs.clearUserPref("network.trr.uri");
-    prefs.clearUserPref("network.trr.wait-for-portal");
-    prefs.clearUserPref("network.trr.useGET");
-    prefs.clearUserPref("network.trr.confirmationNS");
+  prefs.clearUserPref("network.trr.mode");
+  prefs.clearUserPref("network.trr.uri");
+  prefs.clearUserPref("network.trr.wait-for-portal");
+  prefs.clearUserPref("network.trr.useGET");
+  prefs.clearUserPref("network.trr.confirmationNS");
 }
 
 registerCleanupFunction(() => {
-    prefs.clearUserPref("network.http.spdy.enabled");
-    prefs.clearUserPref("network.http.spdy.enabled.http2");
-    prefs.clearUserPref("network.http.rcwn.enabled");
-    prefs.clearUserPref("network.dns.localDomains");
-    resetTRRPrefs();
+  prefs.clearUserPref("network.http.spdy.enabled");
+  prefs.clearUserPref("network.http.spdy.enabled.http2");
+  prefs.clearUserPref("network.http.rcwn.enabled");
+  prefs.clearUserPref("network.dns.localDomains");
+  resetTRRPrefs();
 });
 
 function readFile(file) {
@@ -130,6 +130,7 @@ function test1()
 {
   prefs.setIntPref("network.trr.mode", 2); // TRR-first
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns");
+  test_answer="127.0.0.1";
   listen = dns.asyncResolve("bar.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
@@ -138,6 +139,7 @@ function test2()
 {
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/404");
+  test_answer="127.0.0.1";
   listen = dns.asyncResolve("bar.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
@@ -147,6 +149,7 @@ function test3()
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-auth");
   prefs.setCharPref("network.trr.credentials", "user:password");
+  test_answer="127.0.0.1";
   listen = dns.asyncResolve("auth.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
@@ -156,6 +159,7 @@ function test4()
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-auth");
   prefs.setCharPref("network.trr.credentials", "evil:person");
+  test_answer="127.0.0.1";
   listen = dns.asyncResolve("wrong.example.com", 0, listenerFails, mainThread, defaultOriginAttributes);
 }
 
@@ -164,7 +168,11 @@ function test5()
 {
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-push");
+  test_answer="127.0.0.1";
+  do_test_pending()
+  do_timeout(1000, test5b);
   listen = dns.asyncResolve("first.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+  // this resolve may complete before the pushed resource has landed in the DNS cache!
 }
 
 function test5b()
@@ -174,8 +182,8 @@ function test5b()
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/404");
   dump("test5b - resolve push.example.now please\n");
   test_answer="2018::2018";
-  do_test_pending();
   listen = dns.asyncResolve("push.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+  do_test_finished();
 }
 
 // verify AAAA entry
@@ -216,16 +224,28 @@ function test9()
   listen = dns.asyncResolve("get.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
+// confirmationNS
+function test10()
+{
+  prefs.setIntPref("network.trr.mode", 2); // TRR-first
+  prefs.clearUserPref("network.trr.useGET");
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-confirm");
+  prefs.setCharPref("network.trr.confirmationNS", "confirm.example.com");
+  test_answer="127.0.0.1";
+  listen = dns.asyncResolve("local.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+}
+
 
 var tests = [ test1,
               test2,
               test3,
               test4,
-              //test5, test5b, // must stick together
+              test5,              
               test6,
               test7,
               test8,
               test9,
+              //test10, // can't figure out how to write this test without using a non-local host
               testsDone
             ];
 
@@ -240,4 +260,3 @@ function run_dns_tests()
     do_test_pending();
   }
 }
-
