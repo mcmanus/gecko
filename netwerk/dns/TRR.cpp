@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "DNS.h"
+#include "nsCharSeparatedTokenizer.h"
 #include "nsContentUtils.h"
 #include "nsHostResolver.h"
 #include "nsIHttpChannel.h"
@@ -27,6 +28,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TimeStamp.h"
+#include "mozilla/Tokenizer.h"
 
 namespace mozilla {
 namespace net {
@@ -255,9 +257,29 @@ nsresult
 TRR::DohDecodeQuery(const nsCString &query, nsCString &host, enum TrrType &type)
 {
   FallibleTArray<uint8_t> binary;
-
+  bool found_dns = false;
   LOG(("TRR::DohDecodeQuery %s!\n", query.get()));
-  nsresult rv = Base64URLDecode(query,
+
+  // extract "dns=" from the query string
+  nsCCharSeparatedTokenizer tokenizer(query, '&');
+  nsAutoCString data;
+  while (tokenizer.hasMoreTokens()) {
+    const nsACString& token = tokenizer.nextToken();
+    nsDependentCSubstring dns = Substring(token, 0, 4);
+    nsAutoCString check(dns);
+    if (check.Equals("dns=")) {
+      nsDependentCSubstring q = Substring(token, 4, -1);
+      data = q;
+      found_dns = true;
+      break;
+    }
+  }
+  if (!found_dns) {
+    LOG(("TRR::DohDecodeQuery no dns= in pushed URI query string\n"));
+    return NS_ERROR_ILLEGAL_VALUE;
+  }
+
+  nsresult rv = Base64URLDecode(data,
                                 Base64URLDecodePaddingPolicy::Ignore, binary);
   NS_ENSURE_SUCCESS(rv, rv);
   uint32_t avail = binary.Length();

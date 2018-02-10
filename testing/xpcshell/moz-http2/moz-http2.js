@@ -601,7 +601,7 @@ function handleRequest(req, res) {
     push = res.push({
       hostname: 'foo.example.com:' + serverPort,
       port: serverPort,
-      path: '/dns-pushed-response?AAAAAAABAAAAAAAABHB1c2gHZXhhbXBsZQNjb20AABwAAQ',
+      path: '/dns-pushed-response?ct&dns=AAAAAAABAAAAAAAABHB1c2gHZXhhbXBsZQNjb20AABwAAQ',
       method: 'GET',
       headers: {
         'accept' : 'application/dns-udpwireformat'
