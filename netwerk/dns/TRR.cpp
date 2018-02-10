@@ -255,6 +255,8 @@ nsresult
 TRR::DohDecodeQuery(const nsCString &query, nsCString &host, enum TrrType &type)
 {
   FallibleTArray<uint8_t> binary;
+
+  LOG(("TRR::DohDecodeQuery %s!\n", query.get()));
   nsresult rv = Base64URLDecode(query,
                                 Base64URLDecodePaddingPolicy::Ignore, binary);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -292,6 +294,8 @@ TRR::DohDecodeQuery(const nsCString &query, nsCString &host, enum TrrType &type)
     index += 1 + length; // skip length byte + label
   } while (length);
 
+  LOG(("TRR::DohDecodeQuery host %s\n", host.get()));
+
   if (avail < (index + 2)) {
     return NS_ERROR_UNEXPECTED;
   }
@@ -300,6 +304,8 @@ TRR::DohDecodeQuery(const nsCString &query, nsCString &host, enum TrrType &type)
   i16 += binary[index + 1];
   index += 4; // skip question's type, class
   type = (enum TrrType)i16;
+
+  LOG(("TRR::DohDecodeQuery type %d\n", (int)type));
 
   return NS_OK;
 }
@@ -323,6 +329,7 @@ TRR::ReceivePush(nsIHttpChannel *pushed, nsHostRecord *pushedRec)
   PRNetAddr tempAddr;
   if (NS_FAILED(DohDecodeQuery(query, mHost, mType)) ||
       (PR_StringToNetAddr(mHost.get(), &tempAddr) == PR_SUCCESS)) { // literal
+    LOG(("TRR::ReceivePush failed to decode %s\n", mHost.get()));
     return NS_ERROR_UNEXPECTED;
   }
 
@@ -818,6 +825,7 @@ TRR::OnDataAvailable(nsIRequest *aRequest,
   }
 
   if (aCount + mBodySize > kMaxSize) {
+    LOG(("TRR::OnDataAvailable:%d fail\n",  __LINE__));
     mFailed = true;
     return NS_ERROR_FAILURE;
   }
@@ -825,6 +833,7 @@ TRR::OnDataAvailable(nsIRequest *aRequest,
   uint32_t count;
   nsresult rv = aInputStream->Read((char *)mResponse + mBodySize, aCount, &count);
   if (NS_FAILED(rv)) {
+    LOG(("TRR::OnDataAvailable:%d fail\n",  __LINE__));
     mFailed = true;
     return rv;
   }
