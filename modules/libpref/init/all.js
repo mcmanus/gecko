@@ -5415,6 +5415,8 @@ pref("network.trr.confirmationNS", "example.com");
 pref("network.trr.bootstrapAddress", "");
 // TRR blacklist entry expire time (in seconds). Default is 72 hours.
 pref("network.trr.blacklist-duration", 259200);
+// Single TRR request timeout, in milliseconds
+pref("network.trr.request-timeout", 3000);
 
 pref("captivedetect.canonicalURL", "http://detectportal.firefox.com/success.txt");
 pref("captivedetect.canonicalContent", "success\n");

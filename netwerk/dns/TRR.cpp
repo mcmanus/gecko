@@ -42,6 +42,22 @@ NS_IMPL_ISUPPORTS(TRR, nsIHttpPushListener, nsIInterfaceRequestor, nsIStreamList
 
 const uint8_t kDNS_CLASS_IN = 1;
 
+NS_IMETHODIMP
+TRR::Observe(nsISupports *subject,
+             const char *topic,
+             const char16_t *data)
+{
+  if (!strcmp(topic, NS_TIMER_CALLBACK_TOPIC)) {
+    nsCOMPtr<nsITimer> timer = do_QueryInterface(subject);
+    if (timer == mTimeout) {
+      LOG(("TRR request for %s timed out\n", mHost.get()));
+      mTimeout = nullptr;
+      Cancel();
+    }
+  }
+  return NS_OK;
+}
+
 // convert a given host request to a DOH 'body'
 //
 nsresult
@@ -235,6 +251,9 @@ TRR::SendHTTPRequest()
     LOG(("TRR::SendHTTPRequest: couldn't set content-type!\n"));
   }
   if (NS_SUCCEEDED(httpChannel->AsyncOpen2(this))) {
+    NS_NewTimerWithObserver(getter_AddRefs(mTimeout), this,
+                            mTRRService->GetRequestTimeout(),
+                            nsITimer::TYPE_ONE_SHOT);
     return NS_OK;
   }
   mChannel = nullptr;
@@ -931,6 +950,10 @@ TRR::Cancel()
   if (mChannel) {
     LOG(("TRR: %p canceling Channel %p %s %d\n", this,
          mChannel.get(), mHost.get(), mType));
+    if (mTimeout) {
+      mTimeout->Cancel();
+      mTimeout = nullptr;
+    }
     mChannel->Cancel(NS_ERROR_ABORT);
   }
 }

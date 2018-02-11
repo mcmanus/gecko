@@ -10,6 +10,7 @@
 #include "nsIChannel.h"
 #include "nsIHttpPushListener.h"
 #include "nsIInterfaceRequestor.h"
+#include "nsIObserver.h"
 #include "nsIStreamListener.h"
 
 namespace mozilla { namespace net {
@@ -41,6 +42,7 @@ public:
 
 class TRR
   : public Runnable
+  , public nsIObserver
   , public nsIHttpPushListener
   , public nsIInterfaceRequestor
   , public nsIStreamListener
@@ -51,6 +53,7 @@ public:
   NS_DECL_NSIINTERFACEREQUESTOR
   NS_DECL_NSIREQUESTOBSERVER
   NS_DECL_NSISTREAMLISTENER
+  NS_DECL_NSIOBSERVER
 
   // Never accept larger DOH responses than this as that would indicate
   // something is wrong. Typical ones are much smaller.
@@ -106,7 +109,7 @@ public:
   TRRService *mTRRService;
 
 private:
-  ~TRR() = default;
+  ~TRR() { if (mTimeout) { mTimeout->Cancel(); } };
   nsresult SendHTTPRequest();
   nsresult DohEncode(nsCString &target);
   nsresult DohDecode(enum TrrType aType);
@@ -124,6 +127,7 @@ private:
   bool mFailed;
   bool mPB;
   DOHresp mDNS;
+  nsCOMPtr<nsITimer> mTimeout;
 };
 
 } // namespace net

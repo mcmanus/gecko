@@ -36,6 +36,7 @@ public:
   bool UseGET() { return mUseGET; }
   nsresult GetURI(nsCString &result);
   nsresult GetCredentials(nsCString &result);
+  uint32_t GetRequestTimeout() { return mTRRTimeout; }
 
   LookupStatus CompleteLookup(nsHostRecord *, nsresult, mozilla::net::AddrInfo *, bool pb) override;
   void TRRBlacklist(const nsACString &host, bool privateBrowsing, bool aParentsToo);
@@ -52,6 +53,7 @@ private:
   bool                      mInitialized;
   Atomic<uint32_t, Relaxed> mMode;
   Atomic<uint32_t, Relaxed> mTRRBlacklistExpireTime;
+  Atomic<uint32_t, Relaxed> mTRRTimeout;
 
   Mutex mLock; // protects mPrivate* string
   nsCString mPrivateURI; // main thread only

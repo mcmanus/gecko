@@ -35,6 +35,7 @@ TRRService::TRRService()
   : mInitialized(false)
   , mMode(0)
   , mTRRBlacklistExpireTime(72 * 3600)
+  , mTRRTimeout(3000)
   , mLock("trrservice")
   , mConfirmationNS(NS_LITERAL_CSTRING("example.com"))
   , mWaitForCaptive(true)
@@ -178,6 +179,13 @@ TRRService::ReadPrefs(const char *name)
     uint32_t secs;
     if (NS_SUCCEEDED(Preferences::GetUint(TRR_PREF("blacklist-duration"), &secs))) {
       mTRRBlacklistExpireTime = secs;
+    }
+  }
+  if (!name || !strcmp(name, TRR_PREF("request-timeout"))) {
+    // number of milliseconds
+    uint32_t ms;
+    if (NS_SUCCEEDED(Preferences::GetUint(TRR_PREF("request-timeout"), &ms))) {
+      mTRRTimeout = ms;
     }
   }
 
