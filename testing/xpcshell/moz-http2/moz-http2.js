@@ -553,6 +553,14 @@ function handleRequest(req, res) {
     res.end("");
     return;
   }
+  if (u.pathname === '/dns-750ms') {
+    // it's just meant to be this slow - the test doesn't care about the actual response
+    var rl = new runlater();
+    rl.req = req;
+    rl.resp = res;
+    setTimeout(executeRunLater, 750, rl);
+    return;
+  }
   // for use with test_trr.js
   else if (u.pathname === "/dns-confirm") {
     if (0 == ns_confirm) {

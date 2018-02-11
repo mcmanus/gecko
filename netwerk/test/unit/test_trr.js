@@ -169,7 +169,6 @@ function test5()
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-push");
   test_answer="127.0.0.1";
-  do_test_pending()
   do_timeout(1000, test5b);
   listen = dns.asyncResolve("first.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
   // this resolve may complete before the pushed resource has landed in the DNS cache!
@@ -177,6 +176,7 @@ function test5()
 
 function test5b()
 {
+  do_test_pending()
   // At this point the second host name should've been pushed and we can resolve it using
   // cache only. Set back the URI to a path that fails.
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/404");
@@ -235,6 +235,15 @@ function test10()
   listen = dns.asyncResolve("local.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
+// use a slow server and short timeout!
+function test11()
+{
+  prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-750ms");
+  prefs.setIntPref("network.trr.request-timeout", 10);
+  listen = dns.asyncResolve("test11.example.com", 0, listenerFails, mainThread, defaultOriginAttributes);
+}
+
 
 var tests = [ test1,
               test2,
@@ -245,7 +254,7 @@ var tests = [ test1,
               test7,
               test8,
               test9,
-              //test10, // can't figure out how to write this test without using a non-local host
+              test11,
               testsDone
             ];
 
