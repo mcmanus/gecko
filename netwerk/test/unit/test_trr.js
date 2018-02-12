@@ -258,18 +258,32 @@ function test11()
   listen = dns.asyncResolve("test11.example.com", 0, listenerFails, mainThread, defaultOriginAttributes);
 }
 
+// gets a CNAME back
+function test12()
+{
+  prefs.setIntPref("network.trr.mode", 2); // TRR-first
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-cname");
+  prefs.setIntPref("network.trr.request-timeout", 10);
+  listen = dns.asyncResolve("test12.example.com", 0, listenerFails, mainThread, defaultOriginAttributes);
+}
+
+function test11post()
+{
+  do_test_finished();
+}
 
 var tests = [ test1,
               test1b,
               test2,
               test3,
               test4,
-              test5,              
+              test5,
               test6,
               test7,
               test8,
               test9,
               test11,
+              test12,
               testsDone
             ];
 
