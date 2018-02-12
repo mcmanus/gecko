@@ -115,24 +115,24 @@ TRRService::ReadPrefs(const char *name)
   if (!name || !strcmp(name, TRR_PREF("uri"))) {
     // Base URI, appends "?ct&dns=..."
     MutexAutoLock lock(mLock);
-    nsCString old(mPrivateURI);
+    nsAutoCString old(mPrivateURI);
     Preferences::GetCString(TRR_PREF("uri"), mPrivateURI);
     nsAutoCString scheme;
-    if (mPrivateURI.Length()) {
+    if (!mPrivateURI.IsEmpty()) {
       nsCOMPtr<nsIIOService> ios(do_GetIOService());
       if (ios) {
         ios->ExtractScheme(mPrivateURI, scheme);
       }
     }
-    if (mPrivateURI.Length() && !scheme.Equals("https")) {
+    if (!mPrivateURI.IsEmpty() && !scheme.Equals("https")) {
       LOG(("TRRService TRR URI %s is not https. Not used.\n",
            mPrivateURI.get()));
       mPrivateURI.Truncate();
     }
-    if (mPrivateURI.Length()) {
+    if (!mPrivateURI.IsEmpty()) {
       LOG(("TRRService TRR URI %s\n", mPrivateURI.get()));
     }
-    if (old.Length() && !mPrivateURI.Equals(old)) {
+    if (!old.IsEmpty() && !mPrivateURI.Equals(old)) {
       mClearTRRBLStorage = true;
       LOG(("TRRService clearing blacklist because of change is uri service\n"));
     }
@@ -143,9 +143,9 @@ TRRService::ReadPrefs(const char *name)
   }
   if (!name || !strcmp(name, TRR_PREF("confirmationNS"))) {
     MutexAutoLock lock(mLock);
-    nsCString old(mConfirmationNS);
+    nsAutoCString old(mConfirmationNS);
     Preferences::GetCString(TRR_PREF("confirmationNS"), mConfirmationNS);
-    if (name && old.Length() && !mConfirmationNS.Equals(old) &&
+    if (name && !old.IsEmpty() && !mConfirmationNS.Equals(old) &&
         (mConfirmationState > CONFIRM_TRYING)) {
       LOG(("TRR::ReadPrefs: restart confirmationNS state\n"));
       mConfirmationState = CONFIRM_TRYING;
@@ -236,7 +236,7 @@ TRRService::Observe(nsISupports *aSubject,
     ReadPrefs(NS_ConvertUTF16toUTF8(aData).get());
 
     if ((mConfirmationState == CONFIRM_INIT) &&
-        mBootstrapAddr.Length() &&
+        !mBootstrapAddr.IsEmpty() &&
         (mMode == MODE_TRRONLY)) {
       mConfirmationState = CONFIRM_TRYING;
       MaybeConfirm();
@@ -307,7 +307,7 @@ bool
 TRRService::MaybeBootstrap(const nsACString &aPossible, nsACString &aResult)
 {
   MutexAutoLock lock(mLock);
-  if ((mMode == MODE_NATIVEONLY) || !mBootstrapAddr.Length()) {
+  if ((mMode == MODE_NATIVEONLY) || mBootstrapAddr.IsEmpty()) {
     return false;
   }
 
