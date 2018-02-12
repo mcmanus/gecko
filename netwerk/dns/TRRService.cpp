@@ -306,19 +306,15 @@ TRRService::MaybeConfirm()
 bool
 TRRService::MaybeBootstrap(const nsACString &aPossible, nsACString &aResult)
 {
-  if (mConfirmationState != CONFIRM_TRYING) {
-    return false;
-  }
-
   MutexAutoLock lock(mLock);
-  if (!mBootstrapAddr.Length()) {
+  if ((mMode == MODE_NATIVEONLY) || !mBootstrapAddr.Length()) {
     return false;
   }
 
   nsCOMPtr<nsIURI> url;
   nsresult rv = NS_MutateURI(NS_STANDARDURLMUTATOR_CONTRACTID)
     .Apply<nsIStandardURLMutator>(&nsIStandardURLMutator::Init,
-                                  nsIStandardURL::URLTYPE_NO_AUTHORITY, 443,
+                                  nsIStandardURL::URLTYPE_STANDARD, 443,
                                   mPrivateURI, nullptr, nullptr,
                                   nullptr)
     .Finalize(url);
@@ -332,6 +328,8 @@ TRRService::MaybeBootstrap(const nsACString &aPossible, nsACString &aResult)
   if (!aPossible.Equals(host)) {
     return false;
   }
+  LOG(("TRRService::MaybeBootstrap: use %s instead of %s\n",
+       mBootstrapAddr.get(), host.get()));
   aResult = mBootstrapAddr;
   return true;
 }

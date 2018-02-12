@@ -24,11 +24,8 @@ function run_test() {
 
   prefs.setBoolPref("network.http.spdy.enabled", true);
   prefs.setBoolPref("network.http.spdy.enabled.http2", true);
-  // make 'foo.example.com' equal localhost so that we can reach that DNS
-  // server
-  prefs.setCharPref("network.dns.localDomains", "foo.example.com");
-  // Disable rcwn to make cache behavior deterministic.
-  prefs.setBoolPref("network.http.rcwn.enabled", false);
+  // the TRR server is on 127.0.0.1
+  prefs.setCharPref("network.trr.bootstrapAddress", "127.0.0.1");
 
   // use the h2 server as DOH provider
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns");
@@ -50,15 +47,19 @@ function run_test() {
 function resetTRRPrefs() {
   prefs.clearUserPref("network.trr.mode");
   prefs.clearUserPref("network.trr.uri");
+  prefs.clearUserPref("network.trr.credentials");
   prefs.clearUserPref("network.trr.wait-for-portal");
+  prefs.clearUserPref("network.trr.allow-rfc1918");
   prefs.clearUserPref("network.trr.useGET");
   prefs.clearUserPref("network.trr.confirmationNS");
+  prefs.clearUserPref("network.trr.bootstrapAddress");
+  prefs.clearUserPref("network.trr.blacklist-duration");
+  prefs.clearUserPref("network.trr.request-timeout");
 }
 
 registerCleanupFunction(() => {
   prefs.clearUserPref("network.http.spdy.enabled");
   prefs.clearUserPref("network.http.spdy.enabled.http2");
-  prefs.clearUserPref("network.http.rcwn.enabled");
   prefs.clearUserPref("network.dns.localDomains");
   resetTRRPrefs();
 });
@@ -134,10 +135,23 @@ function test1()
   listen = dns.asyncResolve("bar.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
+// verify basic A record - without bootstrapping
+function test1b()
+{
+  prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns");
+  prefs.clearUserPref("network.trr.bootstrapAddress");
+  prefs.setCharPref("network.dns.localDomains", "foo.example.com");
+  test_answer="127.0.0.1";
+  listen = dns.asyncResolve("bar.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+}
+
 // verify that the name was put in cache - it works with bad DNS URI
 function test2()
 {
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  //prefs.clearUserPref("network.trr.bootstrapAddress");
+  //prefs.setCharPref("network.dns.localDomains", "foo.example.com");
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/404");
   test_answer="127.0.0.1";
   listen = dns.asyncResolve("bar.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
@@ -246,6 +260,7 @@ function test11()
 
 
 var tests = [ test1,
+              test1b,
               test2,
               test3,
               test4,
