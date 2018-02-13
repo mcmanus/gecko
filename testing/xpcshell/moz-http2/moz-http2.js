@@ -535,8 +535,6 @@ function handleRequest(req, res) {
     var content= new Buffer("00000100000100010000000003676574076578616D706C6503636F6D0000010001C00C0001000100000037000401020304", "hex");
     res.setHeader('Content-Type', 'application/dns-udpwireformat');
     res.setHeader('Content-Length', content.length);
-    //res.setHeader('X-path', u.path);
-    //res.setHeader('X-pathname', u.pathname);
     res.writeHead(200);
     res.write(content);
     res.end("");
