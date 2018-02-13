@@ -1787,8 +1787,8 @@ nsHostResolver::ThreadFunc(void *arg)
 
     do {
         if (!rec) {
-            nsHostRecord *tmpRec = nullptr;
-            if (!resolver->GetHostToLookup(&tmpRec)) {
+            RefPtr<nsHostRecord> tmpRec;
+            if (!resolver->GetHostToLookup(getter_AddRefs(tmpRec))) {
                 break; // thread shutdown signal
             }
             // GetHostToLookup() returns an owning reference
