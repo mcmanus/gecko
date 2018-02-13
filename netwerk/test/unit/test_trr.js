@@ -142,7 +142,7 @@ function test1b()
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns");
   prefs.clearUserPref("network.trr.bootstrapAddress");
   prefs.setCharPref("network.dns.localDomains", "foo.example.com");
-  test_answer="127.0.0.1";
+  test_answer = "127.0.0.1";
   listen = dns.asyncResolve("bar.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
@@ -153,7 +153,7 @@ function test2()
   //prefs.clearUserPref("network.trr.bootstrapAddress");
   //prefs.setCharPref("network.dns.localDomains", "foo.example.com");
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/404");
-  test_answer="127.0.0.1";
+  test_answer = "127.0.0.1";
   listen = dns.asyncResolve("bar.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
@@ -163,7 +163,7 @@ function test3()
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-auth");
   prefs.setCharPref("network.trr.credentials", "user:password");
-  test_answer="127.0.0.1";
+  test_answer = "127.0.0.1";
   listen = dns.asyncResolve("auth.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
@@ -173,7 +173,7 @@ function test4()
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-auth");
   prefs.setCharPref("network.trr.credentials", "evil:person");
-  test_answer="127.0.0.1";
+  test_answer = "127.0.0.1";
   listen = dns.asyncResolve("wrong.example.com", 0, listenerFails, mainThread, defaultOriginAttributes);
 }
 
@@ -182,7 +182,7 @@ function test5()
 {
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-push");
-  test_answer="127.0.0.1";
+  test_answer = "127.0.0.1";
   do_timeout(1000, test5b);
   listen = dns.asyncResolve("first.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
   // this resolve may complete before the pushed resource has landed in the DNS cache!
@@ -195,7 +195,7 @@ function test5b()
   // cache only. Set back the URI to a path that fails.
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/404");
   dump("test5b - resolve push.example.now please\n");
-  test_answer="2018::2018";
+  test_answer = "2018::2018";
   listen = dns.asyncResolve("push.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
   do_test_finished();
 }
@@ -205,7 +205,7 @@ function test6()
 {
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-aaaa");
-  test_answer="2020:2020::2020";
+  test_answer = "2020:2020::2020";
   listen = dns.asyncResolve("aaaa.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
@@ -223,7 +223,7 @@ function test8()
   prefs.setIntPref("network.trr.mode", 3); // TRR-only
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-rfc1918");
   prefs.setBoolPref("network.trr.allow-rfc1918", true);
-  test_answer="192.168.0.1";
+  test_answer = "192.168.0.1";
   listen = dns.asyncResolve("rfc1918.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
@@ -234,7 +234,7 @@ function test9()
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-get");
   prefs.clearUserPref("network.trr.allow-rfc1918");
   prefs.setBoolPref("network.trr.useGET", true);
-  test_answer="1.2.3.4";
+  test_answer = "1.2.3.4";
   listen = dns.asyncResolve("get.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
@@ -245,7 +245,7 @@ function test10()
   prefs.clearUserPref("network.trr.useGET");
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-confirm");
   prefs.setCharPref("network.trr.confirmationNS", "confirm.example.com");
-  test_answer="127.0.0.1";
+  test_answer = "127.0.0.1";
   listen = dns.asyncResolve("local.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
@@ -265,11 +265,6 @@ function test12()
   prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-cname");
   prefs.setIntPref("network.trr.request-timeout", 10);
   listen = dns.asyncResolve("test12.example.com", 0, listenerFails, mainThread, defaultOriginAttributes);
-}
-
-function test11post()
-{
-  do_test_finished();
 }
 
 var tests = [ test1,
