@@ -315,11 +315,11 @@ function test11()
   listen = dns.asyncResolve("test11.example.com", 0, listenerFails, mainThread, defaultOriginAttributes);
 }
 
-// gets a CNAME back from DOH
+// gets an NS back from DOH
 function test12()
 {
   prefs.setIntPref("network.trr.mode", 2); // TRR-first
-  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-cname");
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-ns");
   prefs.clearUserPref("network.trr.request-timeout");
   test_answer = "127.0.0.1";
   listen = dns.asyncResolve("test12.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
@@ -363,6 +363,51 @@ function test16()
   listen = dns.asyncResolve("test16.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
 }
 
+// TRR-only and chase CNAME
+function test17()
+{
+  prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-cname");
+  prefs.clearUserPref("network.trr.request-timeout");
+  test_answer = "99.88.77.66";
+  listen = dns.asyncResolve("cname.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+}
+
+// TRR-only and a CNAME loop
+function test18()
+{
+  prefs.setIntPref("network.trr.mode", 3); // TRR-only
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-cname-loop");
+  listen = dns.asyncResolve("test18.example.com", 0, listenerFails, mainThread, defaultOriginAttributes);
+}
+
+// TRR-race and a CNAME loop
+function test19()
+{
+  prefs.setIntPref("network.trr.mode", 1); // Race them!
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-cname-loop");
+  test_answer = "127.0.0.1";
+  listen = dns.asyncResolve("test19.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+}
+
+// TRR-first and a CNAME loop
+function test20()
+{
+  prefs.setIntPref("network.trr.mode", 2); // TRR-first
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-cname-loop");
+  test_answer = "127.0.0.1";
+  listen = dns.asyncResolve("test20.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+}
+
+// TRR-shadow and a CNAME loop
+function test21()
+{
+  prefs.setIntPref("network.trr.mode", 4); // TRR-first
+  prefs.setCharPref("network.trr.uri", "https://foo.example.com:" + h2Port + "/dns-cname-loop");
+  test_answer = "127.0.0.1";
+  listen = dns.asyncResolve("test21.example.com", 0, listenerFine, mainThread, defaultOriginAttributes);
+}
+
 var tests = [ test1,
               test1b,
               test2,
@@ -382,6 +427,11 @@ var tests = [ test1,
               test14,
               test15,
               test16,
+              test17,
+              test18,
+              test19,
+              test20,
+              test21,
               testsDone
             ];
 

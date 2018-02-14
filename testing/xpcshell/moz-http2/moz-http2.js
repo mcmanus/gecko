@@ -195,6 +195,7 @@ var rstConnection = null;
 var illegalheader_conn = null;
 
 var ns_confirm = 0;
+var cname_confirm = 0;
 
 function handleRequest(req, res) {
   // We do this first to ensure nothing goes wonky in our tests that don't want
@@ -529,6 +530,41 @@ function handleRequest(req, res) {
     res.setHeader('Alt-Svc', 'h2=' + req.headers['x-altsvc']);
   }
   // for use with test_trr.js
+  else if (u.pathname === "/dns-cname") {
+    // asking for cname.example.com
+    var content;
+    if(0 == cname_confirm) {
+      // ... this sends a CNAME back to pointing-elsewhere.example.com
+      content = new Buffer("00000100000100010000000005636E616D65076578616D706C6503636F6D0000050001C00C0005000100000037002012706F696E74696E672D656C73657768657265076578616D706C6503636F6D00", "hex");
+      cname_confirm++;
+    }
+    else {
+      // ... this sends an A 99.88.77.66 entry back for pointing-elsewhere.example.com
+      content = new Buffer("00000100000100010000000012706F696E74696E672D656C73657768657265076578616D706C6503636F6D0000010001C00C0001000100000037000463584D42", "hex");
+    }
+    res.setHeader('Content-Type', 'application/dns-udpwireformat');
+    res.setHeader('Content-Length', content.length);
+    res.writeHead(200);
+    res.write(content);
+    res.end("");
+    return;
+
+  }
+  else if (u.pathname === "/dns-cname-loop") {
+    // asking for cname.example.com
+    var content;
+    // ... this always sends a CNAME back to pointing-elsewhere.example.com. Loop time!
+    content = new Buffer("00000100000100010000000005636E616D65076578616D706C6503636F6D0000050001C00C0005000100000037002012706F696E74696E672D656C73657768657265076578616D706C6503636F6D00", "hex");
+    res.setHeader('Content-Type', 'application/dns-udpwireformat');
+    res.setHeader('Content-Length', content.length);
+    res.writeHead(200);
+    res.write(content);
+    res.end("");
+    return;
+
+  }
+
+  // for use with test_trr.js
   else if (u.path === "/dns-get?ct&dns=AAAAAAABAAAAAAAAA2dldAdleGFtcGxlA2NvbQAAAQAB") {
     // the query string asks for an A entry for get.example.com
     // get.example.com has A entry 1.2.3.4
@@ -539,6 +575,7 @@ function handleRequest(req, res) {
     res.write(content);
     res.end("");
     ns_confirm = 0; // back to first reply for dns-confirm
+    cname_confirm = 0; // back to first reply for dns-cname
     return;
   }
   // for use with test_trr.js
@@ -552,7 +589,7 @@ function handleRequest(req, res) {
     res.end("");
     return;
   }
-  else if (u.pathname === "/dns-cname") {
+  else if (u.pathname === "/dns-ns") {
     // confirm.example.com has NS entry ns.example.com
     var content= new Buffer("00000100000100010000000007636F6E6669726D076578616D706C6503636F6D0000020001C00C00020001000000370012026E73076578616D706C6503636F6D010A00", "hex");
     res.setHeader('Content-Type', 'application/dns-udpwireformat');
