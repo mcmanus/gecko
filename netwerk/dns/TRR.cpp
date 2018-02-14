@@ -441,7 +441,7 @@ static uint32_t get32bit(unsigned char *aData, int index)
 // DohDecode() collects the TTL and the IP addresses in the response
 //
 nsresult
-TRR::DohDecode(enum TrrType aType)
+TRR::DohDecode()
 {
   // The response has a 12 byte header followed by the question (returned)
   // and then the answer. The answer section itself contains the name, type
@@ -461,6 +461,8 @@ TRR::DohDecode(enum TrrType aType)
   nsAutoCString host;
 
   LOG(("doh decode %s %d bytes\n", mHost.get(), mBodySize));
+
+  mCname.Truncate();
 
   if (mBodySize < 12 || mResponse[0] || mResponse[1]) {
     LOG(("TRR bad incoming DOH, eject!\n"));
@@ -541,10 +543,11 @@ TRR::DohDecode(enum TrrType aType)
     }
     uint16_t TYPE = get16bit(mResponse, index);
 
-    if (TYPE != static_cast<uint16_t>(mType)) {
-      // Not the same type as was asked for!
+    if ((TYPE != TRRTYPE_CNAME) &&
+        (TYPE != static_cast<uint16_t>(mType))) {
+      // Not the same type as was asked for nor CNAME
       LOG(("TRR: Dohdecode:%d asked for type %d got %d\n", __LINE__,
-           aType, TYPE));
+           mType, TYPE));
       return NS_ERROR_UNEXPECTED;
     }
     index += 2;
@@ -618,8 +621,39 @@ TRR::DohDecode(enum TrrType aType)
     case TRRTYPE_NS:
       break;
     case TRRTYPE_CNAME:
-      break;
+      if (mCname.IsEmpty()) {
+        uint8_t clength = 0;
+        unsigned int cindex = index;
+        do {
+          clength = static_cast<uint8_t>(mResponse[cindex]);
+          if ((clength & 0xc0) == 0xc0) {
+            // name pointer, get the new offset (14 bits)
+            uint16_t newpos = (clength & 0x3f) << 8 | mResponse[cindex+1];
+            if (newpos >= mBodySize) {
+              LOG(("TRR: bad cname packet\n"));
+              return NS_ERROR_ILLEGAL_VALUE;
+            }
+            cindex = newpos;
+            continue;
+          } else {
+            cindex++;
+          }
+          if (clength) {
+            if (!mCname.IsEmpty()) {
+              mCname.Append(".");
+            }
+            mCname.Append((const char *)(&mResponse[cindex]), clength);
+            cindex += clength; // skip label
+          }
+        } while (clength);
 
+        LOG(("TRR::DohDecode CNAME host %s => %s\n",
+             host.get(), mCname.get()));
+      }
+      else {
+        LOG(("TRR::DohDecode CNAME - ignoring another entry\n"));
+      }
+      break;
     default:
       // skip unknown record types
       LOG(("TRR unsupported TYPE (%u) RDLENGTH %u\n", TYPE, RDLENGTH));
@@ -748,7 +782,8 @@ TRR::DohDecode(enum TrrType aType)
     return NS_ERROR_ILLEGAL_VALUE;
   }
 
-  if (mType != TRRTYPE_NS && !mDNS.mAddresses.getFirst()) {
+  if ((mType != TRRTYPE_NS) && mCname.IsEmpty() &&
+      !mDNS.mAddresses.getFirst()) {
     // no entries were stored!
     LOG(("TRR: No entries were stored!\n"));
     return NS_ERROR_FAILURE;
@@ -842,12 +877,27 @@ TRR::OnStopRequest(nsIRequest *aRequest,
     rv = httpChannel->GetResponseStatus(&httpStatus);
     if (NS_SUCCEEDED(rv) && httpStatus == 200) {
       // decode body and create an AddrInfo struct for the response
-      rv = DohDecode(mType);
+      rv = DohDecode();
 
       if (NS_SUCCEEDED(rv)) {
-        // pass back the response data
-        ReturnData();
-        return NS_OK;
+        if (!mCname.IsEmpty()) {
+          if (!--mCnameLoop) {
+            LOG(("TRR: CNAME loop, eject!\n"));
+          } else  {
+            LOG(("TRR: chase CNAME %s => %s (%u)\n", mHost.get(), mCname.get(),
+                 mCnameLoop));
+            RefPtr<TRR> trr = new TRR(mHostResolver, mRec, mCname,
+                                      mType, mCnameLoop, mPB);
+            rv = NS_DispatchToMainThread(trr);
+            if (NS_SUCCEEDED(rv)) {
+              return rv;
+            }
+          }
+        } else {
+          // pass back the response data
+          ReturnData();
+          return NS_OK;
+        }
       } else {
         LOG(("TRR:OnStopRequest:%d DohDecode %x\n", __LINE__, (int)rv));
       }

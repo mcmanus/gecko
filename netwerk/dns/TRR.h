@@ -34,7 +34,12 @@ extern TRRService *gTRRService;
 
 class DOHresp {
 public:
-  virtual ~DOHresp() = default;
+  ~DOHresp() {
+    DOHaddr *el;
+    while ((el = mAddresses.popLast())) {
+      delete el;
+    }
+  }
   nsresult Add(uint32_t TTL, unsigned char *dns, int index, uint16_t len,
                bool aLocalAllowed);
   LinkedList<DOHaddr> mAddresses;
@@ -59,6 +64,9 @@ public:
   // something is wrong. Typical ones are much smaller.
   static const unsigned int kMaxSize = 3200;
 
+  // Number of "steps" we follow CNAME chains
+  static const unsigned int kCnameChaseMax = 64;
+
   // when firing off a normal A or AAAA query
   explicit TRR(AHostResolver *aResolver,
                nsHostRecord *aRec,
@@ -70,9 +78,31 @@ public:
     , mType(aType)
     , mBodySize(0)
     , mFailed(false)
+    , mCnameLoop(kCnameChaseMax)
   {
     mHost = aRec->host;
     mPB = aRec->pb;
+  }
+
+  // when following CNAMEs
+  explicit TRR(AHostResolver *aResolver,
+               nsHostRecord *aRec,
+               nsCString &aHost,
+               enum TrrType & aType,
+               unsigned int aLoopCount,
+               bool aPB)
+    : mozilla::Runnable("TRR")
+    , mHost(aHost)
+    , mRec(aRec)
+    , mHostResolver(aResolver)
+    , mTRRService(gTRRService)
+    , mType(aType)
+    , mBodySize(0)
+    , mFailed(false)
+    , mPB(aPB)
+    , mCnameLoop(aLoopCount)
+  {
+
   }
 
   // used on push
@@ -83,6 +113,7 @@ public:
     , mBodySize(0)
     , mFailed(false)
     , mPB(aPB)
+    , mCnameLoop(kCnameChaseMax)
   { }
 
   // to verify a domain
@@ -98,6 +129,7 @@ public:
     , mBodySize(0)
     , mFailed(false)
     , mPB(aPB)
+    , mCnameLoop(kCnameChaseMax)
   { }
 
   NS_IMETHOD Run() override;
@@ -112,7 +144,7 @@ private:
   ~TRR() { if (mTimeout) { mTimeout->Cancel(); } };
   nsresult SendHTTPRequest();
   nsresult DohEncode(nsCString &target);
-  nsresult DohDecode(enum TrrType aType);
+  nsresult DohDecode();
   nsresult ReturnData();
   nsresult FailData();
   nsresult DohDecodeQuery(const nsCString &query,
@@ -128,6 +160,8 @@ private:
   bool mPB;
   DOHresp mDNS;
   nsCOMPtr<nsITimer> mTimeout;
+  nsCString mCname;
+  uint32_t mCnameLoop; // loop detection counter
 };
 
 } // namespace net
