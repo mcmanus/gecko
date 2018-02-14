@@ -2082,6 +2082,9 @@ pref("network.dnsCacheExpiration", 60);
 // Get TTL; not supported on all platforms; nop on the unsupported ones.
 pref("network.dns.get-ttl", true);
 
+// Makes the native resolver resolve "localhost" instead of the actual given name
+pref("network.dns.native-is-localhost", false);
+
 // The grace period allows the DNS cache to use expired entries, while kicking off
 // a revalidation in the background.
 pref("network.dnsCacheExpirationGracePeriod", 60);

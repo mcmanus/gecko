@@ -33,6 +33,7 @@
 #include "TRR.h"
 #include "TRRService.h"
 
+#include "mozilla/Atomics.h"
 #include "mozilla/HashFunctions.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Telemetry.h"
@@ -496,22 +497,23 @@ nsHostRecord::RemoveOrRefresh()
 //----------------------------------------------------------------------------
 
 static const char kPrefGetTtl[] = "network.dns.get-ttl";
+static const char kPrefNativeIsLocalhost[] = "network.dns.native-is-localhost";
 static bool sGetTtlEnabled = false;
+mozilla::Atomic<bool, mozilla::Relaxed> sNativeIsLocalhost;
 
 static void DnsPrefChanged(const char* aPref, void* aClosure)
 {
     MOZ_ASSERT(NS_IsMainThread(),
                "Should be getting pref changed notification on main thread!");
 
-    if (strcmp(aPref, kPrefGetTtl) != 0) {
-        LOG(("DnsPrefChanged ignoring pref \"%s\"", aPref));
-        return;
-    }
-
     DebugOnly<nsHostResolver*> self = static_cast<nsHostResolver*>(aClosure);
     MOZ_ASSERT(self);
 
-    sGetTtlEnabled = Preferences::GetBool(kPrefGetTtl);
+    if (!strcmp(aPref, kPrefGetTtl)) {
+        sGetTtlEnabled = Preferences::GetBool(kPrefGetTtl);
+    } else if (!strcmp(aPref, kPrefNativeIsLocalhost)) {
+        sNativeIsLocalhost = Preferences::GetBool(kPrefNativeIsLocalhost);
+    }
 }
 
 NS_IMPL_ISUPPORTS0(nsHostResolver)
@@ -564,6 +566,10 @@ nsHostResolver::Init()
             &DnsPrefChanged, kPrefGetTtl, this);
         NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                              "Could not register DNS TTL pref callback.");
+        rv = Preferences::RegisterCallbackAndCall(
+            &DnsPrefChanged, kPrefNativeIsLocalhost, this);
+        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                             "Could not register DNS pref callback.");
     }
 
 #if defined(HAVE_RES_NINIT)

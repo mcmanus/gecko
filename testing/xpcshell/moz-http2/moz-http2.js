@@ -538,6 +538,7 @@ function handleRequest(req, res) {
     res.writeHead(200);
     res.write(content);
     res.end("");
+    ns_confirm = 0; // back to first reply for dns-confirm
     return;
   }
   // for use with test_trr.js
@@ -574,7 +575,6 @@ function handleRequest(req, res) {
     } else {
       // next response: wrong.example.com has AAAA entry 1::FFFF
       var content= new Buffer("0000010000010001000000000577726F6E67076578616D706C6503636F6D00001C0001C00C001C00010000003700100001000000000000000000000000FFFF", "hex");
-      ns_confirm = 0; // back to first reply again
     }
     res.setHeader('Content-Type', 'application/dns-udpwireformat');
     res.setHeader('Content-Length', content.length);

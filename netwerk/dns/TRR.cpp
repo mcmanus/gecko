@@ -152,6 +152,8 @@ TRR::SendHTTPRequest()
   nsAutoCString body;
   nsCOMPtr<nsIURI> dnsURI;
 
+  LOG(("TRR::SendHTTPRequest resolve %s type %u\n", mHost.get(), mType));
+
   if (useGet) {
     nsAutoCString tmp;
     rv = DohEncode(tmp);
@@ -778,6 +780,10 @@ TRR::ReturnData()
     return NS_ERROR_FAILURE;
   }
   (void)mHostResolver->CompleteLookup(mRec, NS_OK, ai.forget(), mPB);
+  if (mTimeout) {
+    mTimeout->Cancel();
+    mTimeout = nullptr;
+  }
   mHostResolver = nullptr;
   mRec = nullptr;
   return NS_OK;
@@ -794,6 +800,10 @@ TRR::FailData()
   AddrInfo *ai = new AddrInfo(mHost.get(), mType);
 
   (void)mHostResolver->CompleteLookup(mRec, NS_ERROR_FAILURE, ai, mPB);
+  if (mTimeout) {
+    mTimeout->Cancel();
+    mTimeout = nullptr;
+  }
   mHostResolver = nullptr;
   mRec = nullptr;
   return NS_OK;
@@ -860,6 +870,8 @@ TRR::OnDataAvailable(nsIRequest *aRequest,
                      uint64_t aOffset,
                      const uint32_t aCount)
 {
+  LOG(("TRR:OnDataAvailable %p %s %d failed=%d aCount=%u\n",
+       this, mHost.get(), mType, mFailed, (unsigned int)aCount));
   // receive DNS response into the local buffer
   if (mFailed) {
     return NS_ERROR_FAILURE;

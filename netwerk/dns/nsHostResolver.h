@@ -19,6 +19,7 @@
 #include "GetAddrInfo.h"
 #include "mozilla/net/DNS.h"
 #include "mozilla/net/DashboardTypes.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
@@ -36,6 +37,8 @@ enum ResolverMode {
   MODE_SHADOW      // race for stats, but always use native result
 };
 } }
+
+extern mozilla::Atomic<bool, mozilla::Relaxed> sNativeIsLocalhost;
 
 #define MAX_RESOLVER_THREADS_FOR_ANY_PRIORITY  3
 #define MAX_RESOLVER_THREADS_FOR_HIGH_PRIORITY 5

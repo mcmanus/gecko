@@ -335,6 +335,11 @@ GetAddrInfo(const char* aHost, uint16_t aAddressFamily, uint16_t aFlags,
   }
 #endif
 
+  if (sNativeIsLocalhost) {
+    // pretend we use the given host but use localhost instead!
+    aHost = "localhost";
+  }
+
   *aAddrInfo = nullptr;
   nsresult rv = _GetAddrInfo_Portable(aHost, aAddressFamily, aFlags,
                                       aNetworkInterface, aAddrInfo);
