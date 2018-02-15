@@ -150,6 +150,7 @@ private:
   nsresult DohDecodeQuery(const nsCString &query,
                           nsCString &host, enum TrrType &type);
   nsresult ReceivePush(nsIHttpChannel *pushed, nsHostRecord *pushedRec);
+  nsresult On200Response();
 
   nsCOMPtr<nsIChannel> mChannel;
   enum TrrType mType;

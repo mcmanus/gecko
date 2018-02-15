@@ -844,6 +844,38 @@ TRR::FailData()
   return NS_OK;
 }
 
+nsresult
+TRR::On200Response()
+{
+  // decode body and create an AddrInfo struct for the response
+  nsresult rv = DohDecode();
+
+  if (NS_SUCCEEDED(rv)) {
+    if (!mCname.IsEmpty()) {
+      if (!--mCnameLoop) {
+        LOG(("TRR::On200Response CNAME loop, eject!\n"));
+      } else  {
+        LOG(("TRR::On200Response CNAME %s => %s (%u)\n", mHost.get(), mCname.get(),
+             mCnameLoop));
+        RefPtr<TRR> trr = new TRR(mHostResolver, mRec, mCname,
+                                  mType, mCnameLoop, mPB);
+        rv = NS_DispatchToMainThread(trr);
+        if (NS_SUCCEEDED(rv)) {
+          return rv;
+        }
+      }
+    } else {
+      // pass back the response data
+      ReturnData();
+      return NS_OK;
+    }
+  } else {
+    LOG(("TRR::On200Response DohDecode %x\n", (int)rv));
+  }
+  return NS_ERROR_FAILURE;
+}
+
+
 NS_IMETHODIMP
 TRR::OnStopRequest(nsIRequest *aRequest,
                    nsISupports *aContext,
@@ -876,30 +908,9 @@ TRR::OnStopRequest(nsIRequest *aRequest,
     uint32_t httpStatus;
     rv = httpChannel->GetResponseStatus(&httpStatus);
     if (NS_SUCCEEDED(rv) && httpStatus == 200) {
-      // decode body and create an AddrInfo struct for the response
-      rv = DohDecode();
-
+      rv = On200Response();
       if (NS_SUCCEEDED(rv)) {
-        if (!mCname.IsEmpty()) {
-          if (!--mCnameLoop) {
-            LOG(("TRR: CNAME loop, eject!\n"));
-          } else  {
-            LOG(("TRR: chase CNAME %s => %s (%u)\n", mHost.get(), mCname.get(),
-                 mCnameLoop));
-            RefPtr<TRR> trr = new TRR(mHostResolver, mRec, mCname,
-                                      mType, mCnameLoop, mPB);
-            rv = NS_DispatchToMainThread(trr);
-            if (NS_SUCCEEDED(rv)) {
-              return rv;
-            }
-          }
-        } else {
-          // pass back the response data
-          ReturnData();
-          return NS_OK;
-        }
-      } else {
-        LOG(("TRR:OnStopRequest:%d DohDecode %x\n", __LINE__, (int)rv));
+        return rv;
       }
     } else {
       LOG(("TRR:OnStopRequest:%d %p rv %x httpStatus %d\n", __LINE__,
