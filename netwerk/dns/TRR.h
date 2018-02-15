@@ -10,7 +10,6 @@
 #include "nsIChannel.h"
 #include "nsIHttpPushListener.h"
 #include "nsIInterfaceRequestor.h"
-#include "nsIObserver.h"
 #include "nsIStreamListener.h"
 
 namespace mozilla { namespace net {
@@ -47,7 +46,7 @@ public:
 
 class TRR
   : public Runnable
-  , public nsIObserver
+  , public nsITimerCallback
   , public nsIHttpPushListener
   , public nsIInterfaceRequestor
   , public nsIStreamListener
@@ -58,7 +57,7 @@ public:
   NS_DECL_NSIINTERFACEREQUESTOR
   NS_DECL_NSIREQUESTOBSERVER
   NS_DECL_NSISTREAMLISTENER
-  NS_DECL_NSIOBSERVER
+  NS_DECL_NSITIMERCALLBACK
 
   // Never accept larger DOH responses than this as that would indicate
   // something is wrong. Typical ones are much smaller.

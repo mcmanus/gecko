@@ -43,18 +43,16 @@ NS_IMPL_ISUPPORTS(TRR, nsIHttpPushListener, nsIInterfaceRequestor, nsIStreamList
 const uint8_t kDNS_CLASS_IN = 1;
 
 NS_IMETHODIMP
-TRR::Observe(nsISupports *subject,
-             const char *topic,
-             const char16_t *data)
+TRR::Notify(nsITimer *aTimer)
 {
-  if (!strcmp(topic, NS_TIMER_CALLBACK_TOPIC)) {
-    nsCOMPtr<nsITimer> timer = do_QueryInterface(subject);
-    if (timer == mTimeout) {
-      LOG(("TRR request for %s timed out\n", mHost.get()));
-      mTimeout = nullptr;
-      Cancel();
-    }
+  if (aTimer == mTimeout) {
+    LOG(("TRR request for %s timed out\n", mHost.get()));
+    mTimeout = nullptr;
+    Cancel();
+  } else {
+    MOZ_CRASH("Unknown timer");
   }
+
   return NS_OK;
 }
 
@@ -253,8 +251,8 @@ TRR::SendHTTPRequest()
     LOG(("TRR::SendHTTPRequest: couldn't set content-type!\n"));
   }
   if (NS_SUCCEEDED(httpChannel->AsyncOpen2(this))) {
-    NS_NewTimerWithObserver(getter_AddRefs(mTimeout), this,
-                            mTRRService->GetRequestTimeout(),
+    NS_NewTimerWithCallback(getter_AddRefs(mTimeout),
+                            this, mTRRService->GetRequestTimeout(),
                             nsITimer::TYPE_ONE_SHOT);
     return NS_OK;
   }
@@ -625,22 +623,33 @@ TRR::DohDecode()
         uint8_t clength = 0;
         unsigned int cindex = index;
         do {
+          if (cindex >= mBodySize) {
+            LOG(("TRR: bad cname packet\n"));
+            return NS_ERROR_ILLEGAL_VALUE;
+          }
           clength = static_cast<uint8_t>(mResponse[cindex]);
           if ((clength & 0xc0) == 0xc0) {
             // name pointer, get the new offset (14 bits)
-            uint16_t newpos = (clength & 0x3f) << 8 | mResponse[cindex+1];
-            if (newpos >= mBodySize) {
-              LOG(("TRR: bad cname packet\n"));
+            if (cindex >= (mBodySize-1)) {
               return NS_ERROR_ILLEGAL_VALUE;
             }
+            // extract the new index position for the next label
+            uint16_t newpos = (clength & 0x3f) << 8 | mResponse[cindex+1];
             cindex = newpos;
             continue;
+          } else if (clength & 0xc0) {
+            // any of those bits set individually is an error
+            LOG(("TRR: bad cname packet\n"));
+            return NS_ERROR_ILLEGAL_VALUE;
           } else {
             cindex++;
           }
           if (clength) {
             if (!mCname.IsEmpty()) {
               mCname.Append(".");
+            }
+            if ((cindex + clength) >= mBodySize) {
+              return NS_ERROR_ILLEGAL_VALUE;
             }
             mCname.Append((const char *)(&mResponse[cindex]), clength);
             cindex += clength; // skip label

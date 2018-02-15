@@ -335,7 +335,7 @@ GetAddrInfo(const char* aHost, uint16_t aAddressFamily, uint16_t aFlags,
   }
 #endif
 
-  if (sNativeIsLocalhost) {
+  if (gNativeIsLocalhost) {
     // pretend we use the given host but use IPv4 localhost instead!
     aHost = "localhost";
     aAddressFamily = PR_AF_INET;

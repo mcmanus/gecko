@@ -499,7 +499,7 @@ nsHostRecord::RemoveOrRefresh()
 static const char kPrefGetTtl[] = "network.dns.get-ttl";
 static const char kPrefNativeIsLocalhost[] = "network.dns.native-is-localhost";
 static bool sGetTtlEnabled = false;
-mozilla::Atomic<bool, mozilla::Relaxed> sNativeIsLocalhost;
+mozilla::Atomic<bool, mozilla::Relaxed> gNativeIsLocalhost;
 
 static void DnsPrefChanged(const char* aPref, void* aClosure)
 {
@@ -512,7 +512,7 @@ static void DnsPrefChanged(const char* aPref, void* aClosure)
     if (!strcmp(aPref, kPrefGetTtl)) {
         sGetTtlEnabled = Preferences::GetBool(kPrefGetTtl);
     } else if (!strcmp(aPref, kPrefNativeIsLocalhost)) {
-        sNativeIsLocalhost = Preferences::GetBool(kPrefNativeIsLocalhost);
+        gNativeIsLocalhost = Preferences::GetBool(kPrefNativeIsLocalhost);
     }
 }
 

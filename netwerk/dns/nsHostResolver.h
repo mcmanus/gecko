@@ -38,7 +38,7 @@ enum ResolverMode {
 };
 } }
 
-extern mozilla::Atomic<bool, mozilla::Relaxed> sNativeIsLocalhost;
+extern mozilla::Atomic<bool, mozilla::Relaxed> gNativeIsLocalhost;
 
 #define MAX_RESOLVER_THREADS_FOR_ANY_PRIORITY  3
 #define MAX_RESOLVER_THREADS_FOR_HIGH_PRIORITY 5
