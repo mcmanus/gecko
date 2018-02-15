@@ -64,6 +64,7 @@ registerCleanupFunction(() => {
   prefs.clearUserPref("network.http.spdy.enabled");
   prefs.clearUserPref("network.http.spdy.enabled.http2");
   prefs.clearUserPref("network.dns.localDomains");
+  prefs.clearUserPref("network.dns.native-is-localhost");
   resetTRRPrefs();
 });
 
